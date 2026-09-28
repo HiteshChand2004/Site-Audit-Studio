@@ -1,14 +1,27 @@
-import { Download, Info, Sparkles } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, Info, Sparkles } from 'lucide-react';
 import Button from '../components/common/Button.jsx';
 import Badge from '../components/common/Badge.jsx';
 import PreviewFrame from '../components/preview/PreviewFrame.jsx';
 import FixChecklist from '../components/recreate/FixChecklist.jsx';
+import AnalyzeProgress from '../components/audit/AnalyzeProgress.jsx';
 import { stackById } from '../constants.js';
+import { useProjects } from '../store/useProjects.js';
 import styles from './Panel.module.css';
 import own from './NewPanel.module.css';
 
+const STALE_DAYS = 7;
+
+function ageDays(iso) {
+  return iso ? (Date.now() - new Date(iso).getTime()) / 86400000 : 0;
+}
+
 export default function NewPanel({ project, audit }) {
   const stack = stackById(project.stack);
+  const job = useProjects((s) => s.recreates[project.id]);
+  const dismissJob = useProjects((s) => s.dismissJob);
+  const latest = useProjects((s) => s.recreateResults[project.id]);
+  const result = latest?.result;
+  const staleDays = audit && !audit.isDummy ? ageDays(audit.analyzedAt) : 0;
 
   return (
     <section className={`${styles.panel} ${styles.new}`} aria-label="Recreated website">
@@ -21,6 +34,26 @@ export default function NewPanel({ project, audit }) {
       </header>
 
       <div className={`${styles.body} scroll`}>
+        {staleDays > STALE_DAYS && (
+          <p className={own.warn} role="status">
+            <AlertTriangle size={13} aria-hidden="true" />
+            The latest analysis is {Math.floor(staleDays)} days old. Run Analyze again before recreating if the site
+            has changed.
+          </p>
+        )}
+
+        {job && job.status !== 'done' && (
+          <AnalyzeProgress analysis={job} kind="recreate" onDismiss={() => dismissJob('recreate', project.id)} />
+        )}
+
+        {result && (
+          <p className={styles.dummyNote}>
+            <CheckCircle2 size={13} aria-hidden="true" />
+            Last recreated {new Date(result.createdAt).toLocaleString()} · {result.pages.length}{' '}
+            {result.pages.length === 1 ? 'page' : 'pages'} · base URL <span className="mono">{result.baseUrl}</span>
+          </p>
+        )}
+
         <PreviewFrame address="localhost:51xx · not started" tone="new">
           <div className={own.empty}>
             <Sparkles size={18} aria-hidden="true" />

@@ -25,6 +25,9 @@ export const STACKS = [
   },
 ];
 
+// Stacks the recreate pipeline can generate so far (the others arrive in Phase 6).
+export const RECREATE_STACKS = ['html'];
+
 export const stackById = (id) => STACKS.find((s) => s.id === id) ?? STACKS[0];
 
 export function hostOf(url) {

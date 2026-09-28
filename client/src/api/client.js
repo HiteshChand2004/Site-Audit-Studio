@@ -25,11 +25,11 @@ async function request(path, { method = 'GET', body } = {}) {
 }
 
 /**
- * Streams Analyze progress over SSE. Handlers: progress(job), done(job), failed(job).
+ * Streams job progress (Analyze or Recreate) over SSE. Handlers: progress(job), done(job), failed(job).
  * Returns a function that closes the stream.
  */
-function subscribeAnalysis(projectId, analysisId, { progress, done, failed }) {
-  const source = new EventSource(`/api/projects/${projectId}/analyze/${analysisId}/events`);
+function subscribe(url, { progress, done, failed }) {
+  const source = new EventSource(url);
   const parse = (e) => JSON.parse(e.data);
   source.addEventListener('progress', (e) => progress?.(parse(e)));
   source.addEventListener('done', (e) => {
@@ -56,5 +56,9 @@ export const api = {
   getAudit: (id) => request(`/projects/${id}/audit`),
   startAnalyze: (id, body = {}) => request(`/projects/${id}/analyze`, { method: 'POST', body }),
   getCurrentAnalysis: (id) => request(`/projects/${id}/analyze/current`),
-  subscribeAnalysis,
+  subscribeAnalysis: (id, analysisId, handlers) => subscribe(`/api/projects/${id}/analyze/${analysisId}/events`, handlers),
+  startRecreate: (id) => request(`/projects/${id}/recreate`, { method: 'POST' }),
+  getCurrentRecreate: (id) => request(`/projects/${id}/recreate/current`),
+  getRecreate: (id) => request(`/projects/${id}/recreate`),
+  subscribeRecreate: (id, recreateId, handlers) => subscribe(`/api/projects/${id}/recreate/${recreateId}/events`, handlers),
 };

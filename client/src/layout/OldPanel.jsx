@@ -7,8 +7,8 @@ import SitePreview, { liveAvailability, ModeToggle } from '../components/preview
 import MetricsBar from '../components/audit/MetricsBar.jsx';
 import AuditReport from '../components/audit/AuditReport.jsx';
 import AnalyzeProgress from '../components/audit/AnalyzeProgress.jsx';
-import { stackById } from '../constants.js';
-import { isAnalysisActive, useProjects } from '../store/useProjects.js';
+import { RECREATE_STACKS, stackById } from '../constants.js';
+import { isAnalysisActive, isJobActive, useProjects } from '../store/useProjects.js';
 import styles from './Panel.module.css';
 
 const Spinner = (props) => <Loader2 {...props} className={styles.spin} />;
@@ -24,6 +24,14 @@ function timeAgo(iso) {
 // The preview viewport and the metrics device follow each other (tablet has no Lighthouse run).
 const DEVICE_OF = { 1440: 'desktop', 375: 'mobile' };
 const VIEWPORT_OF = { desktop: 1440, mobile: 375 };
+
+// Why Recreate can't start right now, or null when it can.
+function recreateBlocker({ audit, project, analyzing }) {
+  if (!audit || audit.isDummy) return 'Run Analyze first: Recreate works from a completed analysis.';
+  if (analyzing) return 'Wait for the analysis to finish.';
+  if (!RECREATE_STACKS.includes(project.stack)) return 'Only Plain HTML / CSS / JS can be recreated for now. Change the output stack.';
+  return null;
+}
 
 function previewOverlay({ audit, mode, slow }) {
   if (!audit) return null;
@@ -75,6 +83,10 @@ export default function OldPanel({ project, audit, loading, onOpenStack }) {
   const update = useProjects((s) => s.update);
   const dismissAnalysis = useProjects((s) => s.dismissAnalysis);
   const running = isAnalysisActive(analysis);
+  const recreateJob = useProjects((s) => s.recreates[project.id]);
+  const recreate = useProjects((s) => s.recreate);
+  const recreating = isJobActive(recreateJob);
+  const blocker = recreateBlocker({ audit, project, analyzing: running });
 
   const [viewport, setViewport] = useState(1440);
   const [device, setDevice] = useState('desktop');
@@ -230,8 +242,14 @@ export default function OldPanel({ project, audit, loading, onOpenStack }) {
       </div>
 
       <footer className={styles.footer}>
-        <Button variant="primary" icon={Sparkles} disabled title="Available in Phase 4">
-          Recreate
+        <Button
+          variant="primary"
+          icon={recreating ? Spinner : Sparkles}
+          disabled={Boolean(blocker) || recreating}
+          title={blocker ?? 'Recreate an improved version of this site'}
+          onClick={() => recreate(project.id)}
+        >
+          {recreating ? 'Recreating…' : 'Recreate'}
         </Button>
         <Button icon={Settings2} iconOnly onClick={onOpenStack} title="Output stack settings">
           Output stack settings

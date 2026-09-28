@@ -12,6 +12,7 @@ export const projectDir = (projectId) => path.join(DATA_DIR, 'projects', project
 export const db = new DatabaseSync(path.join(DATA_DIR, 'app.db'));
 
 db.exec(`
+  PRAGMA busy_timeout = 5000;
   PRAGMA journal_mode = WAL;
   PRAGMA foreign_keys = ON;
 
@@ -37,6 +38,19 @@ db.exec(`
     result_json  TEXT
   );
   CREATE INDEX IF NOT EXISTS analyses_project ON analyses(project_id, started_at);
+
+  CREATE TABLE IF NOT EXISTS recreates (
+    id           TEXT PRIMARY KEY,
+    project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    status       TEXT NOT NULL DEFAULT 'queued',
+    step         TEXT,
+    progress     INTEGER NOT NULL DEFAULT 0,
+    error        TEXT,
+    started_at   TEXT NOT NULL,
+    finished_at  TEXT,
+    result_json  TEXT
+  );
+  CREATE INDEX IF NOT EXISTS recreates_project ON recreates(project_id, started_at);
 `);
 
 // Idempotent column migrations for databases created by earlier phases.
@@ -47,9 +61,14 @@ function addColumn(table, column, definition) {
   }
 }
 addColumn('projects', 'max_pages', 'INTEGER NOT NULL DEFAULT 25');
+// Recreate: pages besides the homepage, and an optional origin for canonical/sitemap/OG URLs.
+addColumn('projects', 'recreate_pages', 'INTEGER NOT NULL DEFAULT 5');
+addColumn('projects', 'target_domain', 'TEXT');
 
 // Jobs live in memory, so anything still "running" after a restart can never finish.
-db.prepare(`
-  UPDATE analyses SET status = 'failed', error = 'Server restarted', finished_at = ?
-  WHERE status IN ('queued', 'running')
-`).run(new Date().toISOString());
+for (const table of ['analyses', 'recreates']) {
+  db.prepare(`
+    UPDATE ${table} SET status = 'failed', error = 'Server restarted', finished_at = ?
+    WHERE status IN ('queued', 'running')
+  `).run(new Date().toISOString());
+}

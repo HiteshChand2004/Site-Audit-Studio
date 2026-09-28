@@ -20,15 +20,23 @@ function recall() {
   }
 }
 
-// Open SSE streams, keyed by project id. Kept outside the store: they are not render state.
+// Open SSE streams, keyed by "<kind>:<projectId>". Kept outside the store: they are not render state.
 const streams = new Map();
 
-function closeStream(projectId) {
-  streams.get(projectId)?.close();
-  streams.delete(projectId);
+function closeStream(kind, projectId) {
+  const key = `${kind}:${projectId}`;
+  streams.get(key)?.close();
+  streams.delete(key);
 }
 
-export const isAnalysisActive = (a) => Boolean(a) && ['starting', 'queued', 'running'].includes(a.status);
+// Background job kinds: where their state lives in the store and how they are reached.
+const KINDS = {
+  analysis: { stateKey: 'analyses', subscribe: api.subscribeAnalysis, current: api.getCurrentAnalysis, failed: 'Analysis failed.' },
+  recreate: { stateKey: 'recreates', subscribe: api.subscribeRecreate, current: api.getCurrentRecreate, failed: 'Recreate failed.' },
+};
+
+export const isJobActive = (job) => Boolean(job) && ['starting', 'queued', 'running'].includes(job.status);
+export const isAnalysisActive = isJobActive;
 
 export const useProjects = create((set, get) => ({
   projects: [],
@@ -39,10 +47,18 @@ export const useProjects = create((set, get) => ({
   auditLoading: false,
   // projectId → { id, status, step, pct, message, error, steps }
   analyses: {},
+  recreates: {},
+  // projectId → { last, result } from GET /recreate
+  recreateResults: {},
+
+  setJob(kind, projectId, patch) {
+    const key = KINDS[kind].stateKey;
+    const current = get()[key][projectId] ?? {};
+    set({ [key]: { ...get()[key], [projectId]: { ...current, ...patch } } });
+  },
 
   setAnalysis(projectId, patch) {
-    const current = get().analyses[projectId] ?? {};
-    set({ analyses: { ...get().analyses, [projectId]: { ...current, ...patch } } });
+    get().setJob('analysis', projectId, patch);
   },
 
   async load() {
@@ -61,12 +77,18 @@ export const useProjects = create((set, get) => ({
     if (get().selectedId === id && get().audit) return;
     set({ selectedId: id, audit: null, auditLoading: true });
     remember(id);
-    await get().reloadAudit(id);
-    // Reattach to an analysis that is still running (after a reload or a project switch).
-    if (!streams.has(id)) {
-      const current = await api.getCurrentAnalysis(id).catch(() => null);
-      if (current) get().attach(id, current.job, current.steps);
+    await Promise.all([get().reloadAudit(id), get().reloadRecreate(id)]);
+    // Reattach to jobs that are still running (after a reload or a project switch).
+    for (const kind of Object.keys(KINDS)) {
+      if (streams.has(`${kind}:${id}`)) continue;
+      const current = await KINDS[kind].current(id).catch(() => null);
+      if (current) get().attachJob(kind, id, current.job, current.steps);
     }
+  },
+
+  async reloadRecreate(id) {
+    const data = await api.getRecreate(id).catch(() => null);
+    if (data) set({ recreateResults: { ...get().recreateResults, [id]: data } });
   },
 
   async reloadAudit(id) {
@@ -78,22 +100,29 @@ export const useProjects = create((set, get) => ({
     }
   },
 
-  attach(projectId, job, steps) {
-    closeStream(projectId);
-    get().setAnalysis(projectId, { ...job, steps: steps ?? get().analyses[projectId]?.steps ?? [] });
-    const close = api.subscribeAnalysis(projectId, job.id, {
-      progress: (data) => get().setAnalysis(projectId, data),
+  attachJob(kind, projectId, job, steps) {
+    const { stateKey, subscribe, failed: failedMessage } = KINDS[kind];
+    closeStream(kind, projectId);
+    get().setJob(kind, projectId, { ...job, steps: steps ?? get()[stateKey][projectId]?.steps ?? [] });
+    const close = subscribe(projectId, job.id, {
+      progress: (data) => get().setJob(kind, projectId, data),
       done: async (data) => {
-        streams.delete(projectId);
-        get().setAnalysis(projectId, { ...data, status: 'done', pct: 100 });
-        if (get().selectedId === projectId) await get().reloadAudit(projectId);
+        streams.delete(`${kind}:${projectId}`);
+        get().setJob(kind, projectId, { ...data, status: 'done', pct: 100 });
+        if (kind === 'recreate') await get().reloadRecreate(projectId);
+        else if (get().selectedId === projectId) await get().reloadAudit(projectId);
       },
       failed: (data) => {
-        streams.delete(projectId);
-        get().setAnalysis(projectId, { status: 'failed', error: data.error || 'Analysis failed.' });
+        streams.delete(`${kind}:${projectId}`);
+        get().setJob(kind, projectId, { status: 'failed', error: data.error || failedMessage });
+        if (kind === 'recreate') get().reloadRecreate(projectId);
       },
     });
-    streams.set(projectId, { close });
+    streams.set(`${kind}:${projectId}`, { close });
+  },
+
+  attach(projectId, job, steps) {
+    get().attachJob('analysis', projectId, job, steps);
   },
 
   async analyze(id, url) {
@@ -113,9 +142,28 @@ export const useProjects = create((set, get) => ({
     }
   },
 
+  async recreate(id) {
+    get().setJob('recreate', id, { status: 'starting', pct: 0, step: null, error: null, message: 'Starting…' });
+    try {
+      const { job, steps } = await api.startRecreate(id);
+      get().attachJob('recreate', id, job, steps);
+    } catch (err) {
+      if (err.status === 409 && err.data?.recreateId) {
+        const current = await api.getCurrentRecreate(id).catch(() => null);
+        if (current) return get().attachJob('recreate', id, current.job, current.steps);
+      }
+      get().setJob('recreate', id, { status: 'failed', error: err.message });
+    }
+  },
+
+  dismissJob(kind, id) {
+    const key = KINDS[kind].stateKey;
+    const { [id]: _, ...rest } = get()[key];
+    set({ [key]: rest });
+  },
+
   dismissAnalysis(id) {
-    const { [id]: _, ...rest } = get().analyses;
-    set({ analyses: rest });
+    get().dismissJob('analysis', id);
   },
 
   async create(input) {
@@ -133,10 +181,12 @@ export const useProjects = create((set, get) => ({
 
   async remove(id) {
     await api.deleteProject(id);
-    closeStream(id);
+    for (const kind of Object.keys(KINDS)) {
+      closeStream(kind, id);
+      get().dismissJob(kind, id);
+    }
     const projects = get().projects.filter((p) => p.id !== id);
     set({ projects });
-    get().dismissAnalysis(id);
     if (get().selectedId === id) {
       set({ selectedId: null, audit: null });
       remember(null);

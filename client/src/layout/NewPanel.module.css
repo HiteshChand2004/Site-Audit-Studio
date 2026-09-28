@@ -22,3 +22,21 @@
   color: var(--muted);
   font-size: var(--fs-sm);
 }
+
+.warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--warn-strong);
+  border-radius: var(--radius);
+  background: var(--warn-tint);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.warn svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warn);
+}

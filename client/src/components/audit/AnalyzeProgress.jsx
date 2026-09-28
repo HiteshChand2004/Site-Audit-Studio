@@ -2,14 +2,20 @@ import { AlertCircle, Check, Loader2, X } from 'lucide-react';
 import Button from '../common/Button.jsx';
 import styles from './AnalyzeProgress.module.css';
 
-// Live progress of an Analyze job (fed by SSE), or its failure message.
-export default function AnalyzeProgress({ analysis, onDismiss }) {
+const LABELS = {
+  analysis: { running: 'Analyzing', failed: 'Analysis failed' },
+  recreate: { running: 'Recreating', failed: 'Recreate failed' },
+};
+
+// Live progress of a background job (Analyze or Recreate, fed by SSE), or its failure message.
+export default function AnalyzeProgress({ analysis, kind = 'analysis', onDismiss }) {
+  const labels = LABELS[kind];
   if (analysis.status === 'failed') {
     return (
       <div className={styles.failed} role="alert">
         <AlertCircle size={15} aria-hidden="true" />
         <div className={styles.failedText}>
-          <strong>Analysis failed</strong>
+          <strong>{labels.failed}</strong>
           <span>{analysis.error}</span>
         </div>
         <Button variant="ghost" size="sm" icon={X} iconOnly onClick={onDismiss}>
@@ -27,7 +33,7 @@ export default function AnalyzeProgress({ analysis, onDismiss }) {
       <div className={styles.head}>
         <span className={styles.title}>
           <Loader2 size={14} className={styles.spin} aria-hidden="true" />
-          {analysis.status === 'queued' ? 'Queued' : 'Analyzing'}
+          {analysis.status === 'queued' ? 'Queued' : labels.running}
         </span>
         <span className={`${styles.pct} mono`}>{analysis.pct ?? 0}%</span>
       </div>

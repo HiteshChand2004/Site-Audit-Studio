@@ -65,3 +65,24 @@
   color: var(--bad);
   font-size: var(--fs-sm);
 }
+
+.settings {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-3);
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 560px) {
+  .settings {
+    grid-template-columns: 1fr;
+  }
+}
+
+.hint {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}

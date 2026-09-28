@@ -5,6 +5,7 @@ import { db, projectDir } from '../db/index.js';
 import { parseMaxPages } from './analyze.js';
 import { buildDummyAudit } from '../dummy/audit.js';
 import { precheckUrl } from '../security/netGuard.js';
+import { MAX_RECREATE_PAGES, parseRecreatePages, parseTargetDomain } from '../recreate/inputs.js';
 
 export const STACKS = ['html', 'react-vite', 'nextjs', 'mern'];
 
@@ -68,8 +69,15 @@ router.patch('/:id', (req, res) => {
   const project = selectOne.get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found.' });
 
-  const { name, stack, url, max_pages: maxPages } = req.body ?? {};
-  const next = { name: project.name, stack: project.stack, url: project.url, maxPages: project.max_pages };
+  const { name, stack, url, max_pages: maxPages, recreate_pages: recreatePages, target_domain: targetDomain } = req.body ?? {};
+  const next = {
+    name: project.name,
+    stack: project.stack,
+    url: project.url,
+    maxPages: project.max_pages,
+    recreatePages: project.recreate_pages,
+    targetDomain: project.target_domain,
+  };
 
   if (name !== undefined) {
     if (typeof name !== 'string' || !name.trim()) return badRequest(res, 'Name cannot be empty.');
@@ -91,9 +99,21 @@ router.patch('/:id', (req, res) => {
     if (!parsed) return badRequest(res, 'Max pages must be a whole number from 1 to 100.');
     next.maxPages = parsed;
   }
+  if (recreatePages !== undefined) {
+    const parsed = parseRecreatePages(recreatePages);
+    if (parsed === null) return badRequest(res, `Recreate pages must be a whole number from 0 to ${MAX_RECREATE_PAGES}.`);
+    next.recreatePages = parsed;
+  }
+  if (targetDomain !== undefined) {
+    const parsed = parseTargetDomain(targetDomain);
+    if (!parsed.ok) return badRequest(res, 'Target domain must be a domain or an http(s) origin, for example https://example.com.');
+    next.targetDomain = parsed.value;
+  }
 
-  db.prepare('UPDATE projects SET name = ?, stack = ?, url = ?, max_pages = ?, updated_at = ? WHERE id = ?')
-    .run(next.name, next.stack, next.url, next.maxPages, new Date().toISOString(), project.id);
+  db.prepare(`
+    UPDATE projects SET name = ?, stack = ?, url = ?, max_pages = ?, recreate_pages = ?, target_domain = ?, updated_at = ?
+    WHERE id = ?
+  `).run(next.name, next.stack, next.url, next.maxPages, next.recreatePages, next.targetDomain, new Date().toISOString(), project.id);
   res.json(toProject(selectOne.get(project.id)));
 });
 
