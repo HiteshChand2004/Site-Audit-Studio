@@ -3,7 +3,7 @@ export const STACKS = [
     id: 'html',
     name: 'Plain HTML / CSS / JS',
     short: 'HTML',
-    detail: 'Static, zero-dependency output. Fastest load, kahin bhi host ho jaata hai.',
+    detail: 'Static, zero-dependency output. Fastest load, hosts anywhere.',
   },
   {
     id: 'react-vite',
@@ -21,7 +21,7 @@ export const STACKS = [
     id: 'mern',
     name: 'MERN',
     short: 'MERN',
-    detail: 'React client + Express API + MongoDB. Forms ke liye stub endpoints milenge.',
+    detail: 'React client + Express API + MongoDB. Includes stub endpoints for forms.',
   },
 ];
 

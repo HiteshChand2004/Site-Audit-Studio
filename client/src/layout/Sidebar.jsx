@@ -17,7 +17,7 @@ export default function Sidebar({ onNewProject }) {
 
   const confirmDelete = (e, project) => {
     e.stopPropagation();
-    if (window.confirm(`"${project.name}" project delete karna hai?`)) remove(project.id);
+    if (window.confirm(`Delete project "${project.name}"?`)) remove(project.id);
   };
 
   return (
@@ -45,10 +45,10 @@ export default function Sidebar({ onNewProject }) {
       <nav className={`${styles.list} scroll`}>
         {loading && <p className={styles.hint}>Loading…</p>}
         {!loading && projects.length === 0 && (
-          <p className={styles.hint}>Abhi koi website nahi. “New Project” se pehli site add karein.</p>
+          <p className={styles.hint}>No websites yet. Add your first site with “New Project”.</p>
         )}
         {!loading && projects.length > 0 && filtered.length === 0 && (
-          <p className={styles.hint}>“{query}” se koi match nahi.</p>
+          <p className={styles.hint}>No matches for “{query}”.</p>
         )}
         {filtered.map((p) => {
           const host = hostOf(p.url);

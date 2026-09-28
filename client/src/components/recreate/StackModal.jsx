@@ -37,7 +37,7 @@ export default function StackModal({ open, onClose, project }) {
       onClose={onClose}
       width={560}
       title="Output stack"
-      description="Recreate kis stack me generate ho. Har project ki apni setting hoti hai."
+      description="Choose the stack the recreated site is generated in. Saved per project."
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>

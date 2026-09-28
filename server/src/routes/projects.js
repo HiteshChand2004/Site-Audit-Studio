@@ -42,9 +42,9 @@ router.get('/', (_req, res) => {
 router.post('/', (req, res) => {
   const { name, url, authorized } = req.body ?? {};
   const normalized = normalizeUrl(url);
-  if (!normalized) return badRequest(res, 'Valid http(s) URL chahiye.');
+  if (!normalized) return badRequest(res, 'A valid http(s) URL is required.');
   if (authorized !== true) {
-    return badRequest(res, 'Confirm karein ki is site ka audit/recreate karne ki permission hai.');
+    return badRequest(res, 'Please confirm you are authorized to audit and recreate this site.');
   }
   const displayName = (typeof name === 'string' && name.trim()) || new URL(normalized).hostname;
   const now = new Date().toISOString();
@@ -55,28 +55,28 @@ router.post('/', (req, res) => {
 
 router.get('/:id', (req, res) => {
   const project = selectOne.get(req.params.id);
-  if (!project) return res.status(404).json({ error: 'Project nahi mila.' });
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
   res.json(toProject(project));
 });
 
 router.patch('/:id', (req, res) => {
   const project = selectOne.get(req.params.id);
-  if (!project) return res.status(404).json({ error: 'Project nahi mila.' });
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
 
   const { name, stack, url } = req.body ?? {};
   const next = { name: project.name, stack: project.stack, url: project.url };
 
   if (name !== undefined) {
-    if (typeof name !== 'string' || !name.trim()) return badRequest(res, 'Name khaali nahi ho sakta.');
+    if (typeof name !== 'string' || !name.trim()) return badRequest(res, 'Name cannot be empty.');
     next.name = name.trim().slice(0, 120);
   }
   if (stack !== undefined) {
-    if (!STACKS.includes(stack)) return badRequest(res, `Stack in me se ek hona chahiye: ${STACKS.join(', ')}`);
+    if (!STACKS.includes(stack)) return badRequest(res, `Stack must be one of: ${STACKS.join(', ')}`);
     next.stack = stack;
   }
   if (url !== undefined) {
     const normalized = normalizeUrl(url);
-    if (!normalized) return badRequest(res, 'Valid http(s) URL chahiye.');
+    if (!normalized) return badRequest(res, 'A valid http(s) URL is required.');
     next.url = normalized;
   }
 
@@ -87,14 +87,14 @@ router.patch('/:id', (req, res) => {
 
 router.delete('/:id', (req, res) => {
   const result = remove.run(req.params.id);
-  if (result.changes === 0) return res.status(404).json({ error: 'Project nahi mila.' });
+  if (result.changes === 0) return res.status(404).json({ error: 'Project not found.' });
   res.status(204).end();
 });
 
-// Phase 1: dummy data. Phase 2 me real audit pipeline isko replace karega.
+// Phase 1: dummy data. The real audit pipeline replaces this in Phase 2.
 router.get('/:id/audit', (req, res) => {
   const project = selectOne.get(req.params.id);
-  if (!project) return res.status(404).json({ error: 'Project nahi mila.' });
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
   res.json(buildDummyAudit(project));
 });
 

@@ -1,5 +1,5 @@
-// Phase 1 dummy audit. Shape wahi rakha hai jo Phase 2 ka real pipeline return karega,
-// taaki UI ko baad me badalna na pade. Data hostname se deterministic hai.
+// Phase 1 dummy audit. The shape matches what the real Phase 2 pipeline will return,
+// so the UI will not need to change later. Data is deterministic per hostname.
 
 function hashString(str) {
   let h = 2166136261;
@@ -24,13 +24,13 @@ const PLATFORMS = [
     name: 'Framer',
     evidence: ['framerusercontent.com assets', '<meta name="generator" content="Framer …">'],
     limitations: [
-      ['high', 'Heavy JS runtime', 'Framer ka React runtime har page par load hota hai; TBT aur LCP badh jaate hain.'],
-      ['medium', 'Auto-generated markup', 'framer-xxxx class names aur deep wrappers se markup control limited hai.'],
-      ['medium', 'Hosting lock-in', 'CMS aur hosting Framer se bahar move karna mushkil.'],
+      ['high', 'Heavy JS runtime', 'Framer’s React runtime loads on every page, which pushes up TBT and LCP.'],
+      ['medium', 'Auto-generated markup', 'framer-xxxx class names and deeply nested wrappers limit control over the markup.'],
+      ['medium', 'Hosting lock-in', 'CMS content and hosting are hard to move off Framer.'],
     ],
     manual: [
-      ['cms', 'Framer CMS collections', 'Blog/collection items static snapshot banenge; CMS manually set karna hoga.'],
-      ['form', 'Contact form backend', 'Framer forms ka submission endpoint recreate nahi hota.'],
+      ['cms', 'Framer CMS collections', 'Blog/collection items become a static snapshot; the CMS must be set up manually.'],
+      ['form', 'Contact form backend', 'The Framer forms submission endpoint cannot be recreated.'],
     ],
   },
   {
@@ -38,13 +38,13 @@ const PLATFORMS = [
     name: 'WordPress',
     evidence: ['/wp-content/ asset paths', '/wp-json/ REST endpoint reachable'],
     limitations: [
-      ['high', 'Plugin / theme bloat', '14 plugins ke CSS/JS har page par load ho rahe hain.'],
-      ['medium', 'Render-blocking resources', 'jQuery + theme CSS head me render-blocking hain.'],
-      ['low', 'Security surface', 'Outdated plugins aur xmlrpc.php exposed.'],
+      ['high', 'Plugin / theme bloat', 'CSS/JS from 14 plugins loads on every page.'],
+      ['medium', 'Render-blocking resources', 'jQuery and theme CSS in <head> are render-blocking.'],
+      ['low', 'Security surface', 'Outdated plugins and an exposed xmlrpc.php.'],
     ],
     manual: [
-      ['form', 'Contact Form 7 submissions', 'Form UI recreate hoga, submission handler manually lagana hoga.'],
-      ['cms', 'Posts database', 'Sirf crawled pages recreate honge; baaki posts wp-json export se import karne honge.'],
+      ['form', 'Contact Form 7 submissions', 'The form UI is recreated; the submission handler must be wired up manually.'],
+      ['cms', 'Posts database', 'Only crawled pages are recreated; remaining posts must be imported from the wp-json export.'],
     ],
   },
   {
@@ -52,13 +52,13 @@ const PLATFORMS = [
     name: 'Webflow',
     evidence: ['data-wf-site attribute', 'assets-global.website-files.com'],
     limitations: [
-      ['medium', 'Hosting lock-in', 'Interactions aur CMS Webflow hosting se bandhe hain.'],
-      ['medium', 'Webflow interactions runtime', 'IX2 animations ke liye webflow.js load hota hai.'],
-      ['low', 'Generic class names', 'w-* utility classes aur combo classes se markup noisy.'],
+      ['medium', 'Hosting lock-in', 'Interactions and CMS are tied to Webflow hosting.'],
+      ['medium', 'Webflow interactions runtime', 'webflow.js loads to power IX2 animations.'],
+      ['low', 'Generic class names', 'w-* utility classes and combo classes make the markup noisy.'],
     ],
     manual: [
-      ['cms', 'Webflow CMS collections', 'Collection lists static banenge.'],
-      ['form', 'Webflow form submissions', 'Form backend manually lagana hoga.'],
+      ['cms', 'Webflow CMS collections', 'Collection lists become static.'],
+      ['form', 'Webflow form submissions', 'The form backend must be set up manually.'],
     ],
   },
 ];
@@ -125,23 +125,23 @@ export function buildDummyAudit(project) {
 
     seo: [
       { status: 'pass', title: 'Title tag', detail: `"${project.name}" — 34 characters` },
-      { status: 'fail', title: 'Meta description', detail: 'Missing on homepage aur 3 aur pages par.' },
-      { status: 'warn', title: 'Canonical URL', detail: 'Canonical tag nahi hai; www/non-www duplicate ho sakte hain.' },
-      { status: 'fail', title: 'Open Graph tags', detail: 'og:image aur og:description missing.' },
-      { status: 'warn', title: 'Headings', detail: '2 <h1> tags mile; ek hi hona chahiye.' },
-      { status: 'fail', title: 'Image alt text', detail: `${pick(6, 18)} images me alt attribute nahi hai.` },
+      { status: 'fail', title: 'Meta description', detail: 'Missing on the homepage and 3 other pages.' },
+      { status: 'warn', title: 'Canonical URL', detail: 'No canonical tag; www and non-www may be indexed as duplicates.' },
+      { status: 'fail', title: 'Open Graph tags', detail: 'og:image and og:description are missing.' },
+      { status: 'warn', title: 'Headings', detail: 'Found 2 <h1> tags; there should be exactly one.' },
+      { status: 'fail', title: 'Image alt text', detail: `${pick(6, 18)} images have no alt attribute.` },
     ],
 
     aeo: [
-      { status: 'fail', title: 'JSON-LD schema', detail: 'Koi structured data nahi mila.' },
-      { status: 'fail', title: 'FAQ schema', detail: 'FAQ section hai par FAQPage schema nahi.' },
-      { status: 'warn', title: 'Heading hierarchy', detail: 'h2 → h4 jump (h3 skip) 3 jagah.' },
-      { status: 'warn', title: 'Structured answers', detail: 'Questions ke direct, short answers nahi hain.' },
+      { status: 'fail', title: 'JSON-LD schema', detail: 'No structured data found.' },
+      { status: 'fail', title: 'FAQ schema', detail: 'An FAQ section exists but has no FAQPage schema.' },
+      { status: 'warn', title: 'Heading hierarchy', detail: 'h2 → h4 jumps (h3 skipped) in 3 places.' },
+      { status: 'warn', title: 'Structured answers', detail: 'Questions lack direct, concise answers.' },
     ],
 
     crawl: {
       sitemap: { status: 'fail', detail: '/sitemap.xml → 404' },
-      robots: { status: 'warn', detail: 'robots.txt hai par Sitemap: directive missing' },
+      robots: { status: 'warn', detail: 'robots.txt exists but has no Sitemap: directive' },
       metaTags: { status: 'warn', detail: 'viewport ✓, charset ✓, twitter:card ✗, theme-color ✗' },
     },
 
@@ -163,13 +163,13 @@ export function buildDummyAudit(project) {
 
     manualRebuild: [
       ...platform.manual.map(([kind, title, detail]) => ({ kind, title, detail })),
-      { kind: 'integration', title: 'Chat widget (third-party)', detail: 'Script embed dobara lagana hoga; behaviour recreate nahi hota.' },
+      { kind: 'integration', title: 'Chat widget (third-party)', detail: 'The script embed must be re-added; its behaviour is not recreated.' },
     ],
 
     recreate: {
       status: 'not-started',
       checklist: [
-        { status: 'fixed', title: 'Meta description har page par' },
+        { status: 'fixed', title: 'Meta description on every page' },
         { status: 'fixed', title: 'Open Graph + Twitter tags' },
         { status: 'fixed', title: 'sitemap.xml + robots.txt generated' },
         { status: 'fixed', title: 'JSON-LD (Organization, WebSite, FAQPage)' },

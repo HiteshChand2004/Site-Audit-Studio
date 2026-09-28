@@ -96,7 +96,7 @@
 }
 
 .meter[data-tone='ok'] span { background: var(--ok); }
-.meter[data-tone='warn'] span { background: #d97706; }
+.meter[data-tone='warn'] span { background: var(--warn-strong); }
 .meter[data-tone='bad'] span { background: var(--bad); }
 
 .evidence {

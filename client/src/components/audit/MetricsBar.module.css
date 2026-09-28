@@ -37,7 +37,7 @@
 }
 
 .dot[data-tone='ok'] { background: var(--ok); }
-.dot[data-tone='warn'] { background: #d97706; }
+.dot[data-tone='warn'] { background: var(--warn-strong); }
 .dot[data-tone='bad'] { background: var(--bad); }
 
 .value {
@@ -107,7 +107,7 @@
 }
 
 .ring[data-tone='ok'] .arc { stroke: var(--ok); }
-.ring[data-tone='warn'] .arc { stroke: #d97706; }
+.ring[data-tone='warn'] .arc { stroke: var(--warn-strong); }
 .ring[data-tone='bad'] .arc { stroke: var(--bad); }
 
 .ringValue {

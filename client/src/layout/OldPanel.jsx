@@ -33,7 +33,7 @@ export default function OldPanel({ project, audit, loading, onOpenStack }) {
               aria-label="Website URL"
             />
           </label>
-          <Button type="submit" icon={Play} disabled title="Phase 2 me available hoga">
+          <Button type="submit" icon={Play} disabled title="Available in Phase 2">
             Analyze
           </Button>
         </form>
@@ -55,7 +55,7 @@ export default function OldPanel({ project, audit, loading, onOpenStack }) {
           <Wireframe />
         </PreviewFrame>
 
-        {loading && <p className={styles.dummyNote}>Audit load ho raha hai…</p>}
+        {loading && <p className={styles.dummyNote}>Loading audit…</p>}
 
         {audit && (
           <>
@@ -70,7 +70,7 @@ export default function OldPanel({ project, audit, loading, onOpenStack }) {
             {audit.isDummy && (
               <p className={styles.dummyNote}>
                 <Info size={13} aria-hidden="true" />
-                Sample report — real audit Phase 2 me “Analyze” se aayega.
+                Sample report — the real audit arrives in Phase 2 via “Analyze”.
               </p>
             )}
             <AuditReport audit={audit} />
@@ -79,7 +79,7 @@ export default function OldPanel({ project, audit, loading, onOpenStack }) {
       </div>
 
       <footer className={styles.footer}>
-        <Button variant="primary" icon={Sparkles} disabled title="Phase 4 me available hoga">
+        <Button variant="primary" icon={Sparkles} disabled title="Available in Phase 4">
           Recreate
         </Button>
         <Button icon={Settings2} iconOnly onClick={onOpenStack} title="Output stack settings">

@@ -51,8 +51,8 @@ export default function AppShell() {
               <span className={styles.emptyIcon}>
                 <Globe size={20} />
               </span>
-              <h1>Koi project select nahi hai</h1>
-              <p>Website add karein — uska audit OLD panel me aur recreated version NEW panel me dikhega.</p>
+              <h1>No project selected</h1>
+              <p>Add a website — its audit appears in the OLD panel and the recreated version in the NEW panel.</p>
               <Button variant="primary" icon={Plus} onClick={() => setNewOpen(true)}>
                 New Project
               </Button>

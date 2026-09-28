@@ -187,7 +187,7 @@ export default function AuditReport({ audit }) {
 
       <SectionCard icon={Wrench} title="Manual rebuild needed" meta={<Badge tone="warn">{audit.manualRebuild.length}</Badge>}>
         <p className={styles.note}>
-          Ye functionality automatically recreate nahi hogi — inhe manually rebuild karna hoga.
+          This functionality can’t be recreated automatically and must be rebuilt manually.
         </p>
         <ul className={styles.rows}>
           {audit.manualRebuild.map((m) => (

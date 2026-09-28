@@ -24,9 +24,9 @@ export default function NewPanel({ project, audit }) {
         <PreviewFrame address="localhost:51xx · not started" tone="new">
           <div className={own.empty}>
             <Sparkles size={18} aria-hidden="true" />
-            <p className={own.emptyTitle}>Abhi koi recreated version nahi</p>
+            <p className={own.emptyTitle}>No recreated version yet</p>
             <p className={own.emptyText}>
-              OLD panel me “Recreate” chalane ke baad naya site yahan live preview hoga.
+              Run “Recreate” from the OLD panel and a live preview of the new site will appear here.
             </p>
           </div>
         </PreviewFrame>
@@ -38,7 +38,7 @@ export default function NewPanel({ project, audit }) {
             </div>
             <p className={styles.dummyNote}>
               <Info size={13} aria-hidden="true" />
-              Sample checklist — real ✓/✗ Recreate ke baad re-audit se aayega.
+              Sample checklist — real ✓/✗ results come from re-auditing after Recreate.
             </p>
             <FixChecklist items={audit.recreate.checklist} />
           </>
@@ -46,10 +46,10 @@ export default function NewPanel({ project, audit }) {
       </div>
 
       <footer className={styles.footer}>
-        <Button icon={Download} disabled title="Phase 6 me available hoga">
+        <Button icon={Download} disabled title="Available in Phase 6">
           Download .zip
         </Button>
-        <span className={styles.footerNote}>Preview production build par chalega.</span>
+        <span className={styles.footerNote}>Preview runs on the production build.</span>
       </footer>
     </section>
   );

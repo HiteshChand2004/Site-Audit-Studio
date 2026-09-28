@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import styles from './Modal.module.css';
 
-// Native <dialog>: focus trap, Esc-to-close aur backdrop browser khud handle karta hai.
+// Native <dialog>: the browser handles focus trapping, Esc-to-close and the backdrop.
 export default function Modal({ open, onClose, title, description, footer, width = 480, children }) {
   const ref = useRef(null);
 

@@ -8,7 +8,7 @@ const VIEWPORTS = [
   { id: 375, icon: Smartphone, label: 'Phone 375' },
 ];
 
-// Browser-chrome frame. Phase 1 me content placeholder hai; Phase 3/5 me iframe/screenshot aayega.
+// Browser-chrome frame. Content is a placeholder in Phase 1; Phase 3/5 add the iframe/screenshot.
 export default function PreviewFrame({ address, tone = 'old', overlay, children }) {
   const [viewport, setViewport] = useState(1440);
 

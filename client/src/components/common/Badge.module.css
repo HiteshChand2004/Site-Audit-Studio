@@ -54,5 +54,5 @@
 .old {
   background: var(--old-chip-bg);
   color: var(--old-chip);
-  border-color: #dde3ea;
+  border-color: var(--old-chip-border);
 }

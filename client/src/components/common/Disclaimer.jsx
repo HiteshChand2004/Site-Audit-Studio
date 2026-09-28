@@ -6,11 +6,11 @@ export default function Disclaimer() {
     <p
       className={styles.bar}
       role="note"
-      title="Audit aur Recreate sirf company ki apni ya authorized websites par use karein."
+      title="Use Audit and Recreate only on company-owned or authorized websites."
     >
       <ShieldCheck size={14} aria-hidden="true" />
       <span>
-        Audit aur Recreate sirf company ki apni ya authorized websites par use karein.
+        Use Audit and Recreate only on company-owned or authorized websites.
       </span>
     </p>
   );

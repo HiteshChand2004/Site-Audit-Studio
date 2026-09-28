@@ -39,7 +39,7 @@ export default function NewProjectModal({ open, onClose }) {
       open={open}
       onClose={close}
       title="New project"
-      description="Website add karein. Analyze aur Recreate baad me is project se chalenge."
+      description="Add a website. Analyze and Recreate will run from this project."
       footer={
         <>
           <Button variant="ghost" onClick={close}>
@@ -81,8 +81,8 @@ export default function NewProjectModal({ open, onClose }) {
             onChange={(e) => setForm({ ...form, authorized: e.target.checked })}
           />
           <span>
-            Main confirm karta/karti hoon ki ye website hamari company ki hai, ya iska audit aur
-            recreate karne ki permission hai.
+            I confirm this website belongs to our company, or we have permission to audit and
+            recreate it.
           </span>
         </label>
         {error && <p className={styles.error}>{error}</p>}

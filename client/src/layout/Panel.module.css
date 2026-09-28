@@ -1,4 +1,4 @@
-/* Shared panel chrome. OLD = neutral slate rail, NEW = maroon rail + tinted header. */
+/* Shared panel chrome. OLD = neutral slate rail, NEW = accent rail + tinted header. */
 .panel {
   display: flex;
   flex-direction: column;

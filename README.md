@@ -1,12 +1,12 @@
 # Site Audit Studio — Website Audit & Recreate Platform
 
-Company ki saari websites ek jagah: audit (performance, SEO, AEO, accessibility, broken links, tech stack) aur improved version ka automatic recreate.
+Manage all company websites in one place: audit them (performance, SEO, AEO, accessibility, broken links, tech stack) and automatically recreate an improved version.
 
-> ⚠️ Sirf company ki apni ya authorized websites par use karein.
+> ⚠️ Use this tool only on company-owned or authorized websites.
 
 ## Prerequisites
 
-- **Node.js ≥ 22.13** (built-in `node:sqlite` use hota hai, koi native build nahi)
+- **Node.js ≥ 22.13** (uses the built-in `node:sqlite`; no native build step)
 - npm 10+
 
 ## Setup
@@ -21,18 +21,18 @@ npm install
 npm run dev
 ```
 
-Ye ek saath dono start karta hai:
+This starts both services together:
 
 | Service | URL | Notes |
 |---|---|---|
-| Client (React + Vite) | http://localhost:5173 | Browser me yahi kholein |
-| Server (Express API) | http://localhost:4000 | `/api/*`; client Vite proxy se call karta hai |
+| Client (React + Vite) | http://localhost:5173 | Open this in the browser |
+| Server (Express API) | http://localhost:4000 | `/api/*`; the client calls it through the Vite proxy |
 
-Alag-alag chalana ho to:
+To run them separately:
 
 ```bash
-npm run dev:server   # sirf API, port 4000 (auto-restart on file change)
-npm run dev:client   # sirf UI, port 5173
+npm run dev:server   # API only, port 4000 (restarts on file change)
+npm run dev:client   # UI only, port 5173
 ```
 
 Other commands:
@@ -56,7 +56,7 @@ server/          Express API
   src/db/            node:sqlite setup + schema
   src/routes/        /api/projects
   src/dummy/         Phase 1 dummy audit data
-data/            SQLite DB (app.db) — auto-created, gitignored
+data/            SQLite database (app.db), auto-created and gitignored
 ```
 
 ## API (Phase 1)
@@ -66,7 +66,7 @@ data/            SQLite DB (app.db) — auto-created, gitignored
 | GET | `/api/projects` | — |
 | POST | `/api/projects` | `{ url, name?, authorized: true }` |
 | GET | `/api/projects/:id` | — |
-| PATCH | `/api/projects/:id` | `{ name?, url?, stack? }` — stack: `html`, `react-vite`, `nextjs`, `mern` |
+| PATCH | `/api/projects/:id` | `{ name?, url?, stack? }`, where stack is `html`, `react-vite`, `nextjs` or `mern` |
 | DELETE | `/api/projects/:id` | — |
 | GET | `/api/projects/:id/audit` | — (Phase 1: dummy data) |
 
@@ -81,4 +81,4 @@ data/            SQLite DB (app.db) — auto-created, gitignored
 | 5 | NEW panel preview server + fix checklist | ⏳ |
 | 6 | Other stacks + Download zip | ⏳ |
 
-Phase 1 me audit report, metrics, preview aur fix checklist **dummy data** hain. Analyze, Recreate aur Download buttons disabled hain.
+In Phase 1 the audit report, metrics, preview and fix checklist use **dummy data**. The Analyze, Recreate and Download buttons are disabled.
