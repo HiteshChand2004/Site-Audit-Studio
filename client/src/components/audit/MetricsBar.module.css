@@ -1,0 +1,143 @@
+.wrap {
+  display: grid;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.metric {
+  display: grid;
+  gap: 2px;
+  padding: 10px var(--sp-3);
+}
+
+.metric + .metric {
+  border-left: 1px solid var(--border);
+}
+
+.label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.dot[data-tone='ok'] { background: var(--ok); }
+.dot[data-tone='warn'] { background: #d97706; }
+.dot[data-tone='bad'] { background: var(--bad); }
+
+.value {
+  font-size: var(--fs-lg);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+.scores {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 8px var(--sp-3);
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+.toggle {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-3);
+}
+
+.toggle button {
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+
+.toggle button[aria-pressed='true'] {
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--text);
+}
+
+.rings {
+  display: flex;
+  gap: var(--sp-3);
+}
+
+.ring {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 1px;
+}
+
+.track {
+  fill: none;
+  stroke: var(--surface-3);
+  stroke-width: 3.2;
+}
+
+.arc {
+  fill: none;
+  stroke-width: 3.2;
+  stroke-linecap: round;
+}
+
+.ring[data-tone='ok'] .arc { stroke: var(--ok); }
+.ring[data-tone='warn'] .arc { stroke: #d97706; }
+.ring[data-tone='bad'] .arc { stroke: var(--bad); }
+
+.ringValue {
+  position: absolute;
+  top: 0;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.ringLabel {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+@media (max-width: 1400px) {
+  .metrics {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .metric:nth-child(3) {
+    border-left: 0;
+  }
+  .metric:nth-child(n + 3) {
+    border-top: 1px solid var(--border);
+  }
+  .scores {
+    flex-wrap: wrap;
+  }
+}

@@ -1,0 +1,152 @@
+/* Shared panel chrome. OLD = neutral slate rail, NEW = maroon rail + tinted header. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.panel + .panel {
+  border-left: 1px solid var(--border);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 44px;
+  flex: none;
+  padding: 0 var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: inset 0 2px 0 var(--rail);
+}
+
+.old {
+  --rail: var(--old-rail);
+}
+
+.new {
+  --rail: var(--accent);
+}
+
+.new .header {
+  background: linear-gradient(180deg, var(--accent-tint) 0%, var(--surface) 100%);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+
+.old .chip {
+  background: var(--old-chip-bg);
+  color: var(--old-chip);
+}
+
+.new .chip {
+  background: var(--accent);
+  color: #fff;
+}
+
+.headerSub {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.headerRight {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: none;
+  padding: 10px var(--sp-4);
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.footerNote {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.sectionTitle {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: var(--sp-2);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.urlRow {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.urlInput {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--faint);
+}
+
+.urlInput:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.urlInput input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+}
+
+.dummyNote {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}

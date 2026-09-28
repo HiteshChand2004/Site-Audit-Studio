@@ -1,0 +1,19 @@
+.bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--accent-tint);
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+@media (max-width: 900px) {
+  .bar span {
+    display: none;
+  }
+}

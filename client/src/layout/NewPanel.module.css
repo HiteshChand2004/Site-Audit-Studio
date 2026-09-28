@@ -1,0 +1,24 @@
+.empty {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 6px;
+  height: 100%;
+  padding: var(--sp-4);
+  border: 1.5px dashed var(--accent-border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--accent-text);
+  text-align: center;
+}
+
+.emptyTitle {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.emptyText {
+  max-width: 280px;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}

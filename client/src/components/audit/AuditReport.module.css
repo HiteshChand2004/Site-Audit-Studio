@@ -1,0 +1,147 @@
+.report {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.rows {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 56px minmax(120px, 0.8fr) 1.6fr;
+  align-items: baseline;
+  gap: var(--sp-3);
+  padding: 7px 0;
+  border-top: 1px solid var(--border);
+}
+
+.row:first-child {
+  border-top: 0;
+}
+
+.status {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  transform: translateY(3px);
+}
+
+.status[data-tone='ok'] { background: var(--ok-tint); color: var(--ok); }
+.status[data-tone='warn'] { background: var(--warn-tint); color: var(--warn); }
+.status[data-tone='bad'] { background: var(--bad-tint); color: var(--bad); }
+
+.sev {
+  justify-self: start;
+  text-transform: capitalize;
+}
+
+.rowTitle {
+  font-weight: 500;
+}
+
+.rowDetail {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+@media (max-width: 1400px) {
+  .row {
+    grid-template-columns: 56px 1fr;
+  }
+  .rowDetail {
+    grid-column: 2;
+  }
+}
+
+.stack {
+  display: grid;
+  gap: var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stackItem {
+  display: grid;
+  gap: 6px;
+}
+
+.stackHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.stackName {
+  font-weight: 600;
+}
+
+.meter {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.meter span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.meter[data-tone='ok'] span { background: var(--ok); }
+.meter[data-tone='warn'] span { background: #d97706; }
+.meter[data-tone='bad'] span { background: var(--bad); }
+
+.evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.evidence li {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+
+.table th {
+  padding: 4px 0 6px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  text-align: left;
+}
+
+.table td {
+  padding: 6px 8px 6px 0;
+  border-top: 1px solid var(--border);
+  vertical-align: middle;
+  word-break: break-all;
+}
+
+.note {
+  margin-bottom: 4px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--warn-tint);
+  color: var(--warn);
+  font-size: var(--fs-sm);
+}
