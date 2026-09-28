@@ -33,7 +33,23 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 | 5 | PreviewManager (ports 5100–5199), NEW iframe, re-audit → fix checklist | ⏳ |
 | 6 | React+Vite / Next.js / MERN emitters + Download zip | ⏳ |
 
-**Current status:** Phase 3 complete. Next: Phase 4a, which starts only after the user approves its plan.
+**Current status:** Phases 1, 2 and 3 are complete. Next: Phase 4a, which starts only after the user approves its plan.
+
+### Phase 3 summary
+- **OLD panel preview**: the live site in a sandboxed iframe when it allows framing; when X-Frame-Options/CSP
+  blocks it, the screenshot taken during Analyze is shown instead. A Live/Shot toggle is always available.
+- **Screenshots** at desktop/tablet/mobile (1440/768/375), fold + full page, WebP.
+- **Viewport toggle** renders the page at the real width and scales it to the panel; it stays in sync with the
+  metrics Mobile/Desktop toggle.
+- **Metrics chips** (load time = TTI, LCP, TBT, page size) show real Lighthouse data for mobile or desktop (`audit.metricsByDevice`).
+- **SSRF guard** on every server-side request made for a user URL (see rules below).
+
+### Phase 3 decisions
+- Live view (remote browser / CDP screencast) is **not built**; it is deferred to Phase 3b. A reverse proxy
+  that strips framing headers is rejected for security reasons (the site's JS would run on the app origin).
+- Screenshots are taken on **every** analysis, not only when framing is blocked (they also feed the Phase 4b visual diff).
+- Each project keeps the screenshots of its **latest 3** completed analyses; older ones are deleted automatically.
+- No intranet allowlist for user URLs for now.
 
 **Workflow rule:** implement one phase at a time, and only after the user says "go ahead". Commit at the end of each phase.
 
@@ -109,12 +125,15 @@ data/        app.db + projects/<id>/audit/<analysisId>/{crawl,axe,lighthouse-*}.
 ```
 
 ## Run
+Ports: client **5173**, API **4000**, fixture site **4100**, Phase 5 previews **5100–5199** (planned).
+For local testing, create `server/.env` (gitignored) with `SAS_ALLOW_LOCALHOST=1` so the fixture site can be analyzed.
+If the frontend says "Cannot reach the API server", the server on 4000 is not running (or something else holds the port).
 ```bash
 npm install
 npm run dev          # client :5173 + server :4000 (concurrently)
 npm run dev:server   # or: npm run dev:client
 npm run build        # client production build
-npm test -w server   # unit tests
+npm test -w server   # unit tests (analyzers, crawl, detection, frame check, SSRF guard, screenshots route/retention)
 npm run fixture-site -w server   # seeded test site on :4100 (analyzing it needs SAS_ALLOW_LOCALHOST=1)
 npx -w server playwright install chromium   # one-time
 ```
@@ -129,6 +148,11 @@ API: `GET/POST /api/projects`, `GET/PATCH/DELETE /api/projects/:id` (PATCH takes
   Recreate (Phase 4) and Download (Phase 6) stay disabled.
 - A mobile Lighthouse run takes ~40s+, and screenshots add 5–30s, so a full analysis usually takes 1.5–3 minutes.
 - Audits from before Phase 3 have no screenshots and no desktop metrics; the UI asks to run Analyze again.
+- Some frameable sites still render blank in the iframe (frame-busting, cookie walls); use "Shot". Cookie banners
+  appear in screenshots as real visitors see them. Full-page screenshots stop at 8,000 CSS px.
+- The SSRF guard pins the first resolved IPv4 address, so Node's IPv6→IPv4 fallback is not used. Requests
+  a page makes to blocked addresses are listed in `audit.blockedHosts`.
+- No live view yet (Phase 3b).
 - Bot-protected sites (Cloudflare challenge) fail with a clear message; they are never bypassed.
 - Jobs live in memory; a server restart marks running analyses as failed.
 - Project delete uses `window.confirm`. Git shows LF→CRLF warnings on Windows, which are harmless.

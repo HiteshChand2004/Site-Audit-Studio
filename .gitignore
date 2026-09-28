@@ -7,3 +7,9 @@ data/
 .DS_Store
 .vscode/
 .idea/
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+coverage/
+.vite/
