@@ -31,6 +31,8 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 | 5 | PreviewManager (ports 5100–5199), NEW iframe, re-audit → fix checklist | ⏳ |
 | 6 | React+Vite / Next.js / MERN emitters + Download zip | ⏳ |
 
+**Current status:** Phase 2 complete (commit 1eb955e). Next: Phase 3, which starts only after the user approves its plan.
+
 **Workflow rule:** implement one phase at a time, and only after the user says "go ahead". Commit at the end of each phase.
 
 ## Key decisions
@@ -50,6 +52,16 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 - Page limit for recreate is configurable (default: homepage + 5 pages).
 - Things that can't be automated (form backends, login, cart/checkout, CMS data, plugin behaviour, WebGL)
   are reported under "Manual rebuild needed" and never faked.
+
+## Analyze (Phase 2) rules
+- **Time limit:** 5 minutes per analysis. A step that would start after the limit is skipped and listed in
+  `audit.errors`. One analysis runs at a time; others queue.
+- **Links:** 4xx/5xx, DNS failure, connection refused and bad TLS count as **broken**. 401, 403, 429, 999 and
+  timeouts go to **unverified**, not broken. The check covers at most 500 unique links.
+- **Stack detection rules** are JSON files in `server/src/detection/rules/<id>.json` (signals + weights,
+  limitations, cleanup, manualRebuild). A new platform means a new file, with no engine change. No match → "Custom/Unknown".
+- **Scope:** Lighthouse (mobile + desktop), axe and stack detection run on the **homepage only**. SEO, AEO,
+  meta checks and the link check cover all crawled pages (`max_pages`, default 25, depth 3).
 
 ## Conventions
 - **All product text in English** (UI, API errors, dummy data, comments, docs), even though the user chats in Hinglish.
@@ -89,9 +101,7 @@ API: `GET/POST /api/projects`, `GET/PATCH/DELETE /api/projects/:id` (PATCH takes
 - Analyze is real. Projects that were never analyzed still get the **dummy** audit (`isDummy: true`, "Dummy data" badge).
 - Still dummy: the OLD preview wireframe (Phase 3), the NEW preview and the fix checklist (`audit.recreate`, which has `isDummy: true`; Phase 5).
   Recreate (Phase 4) and Download (Phase 6) stay disabled.
-- Lighthouse, axe and stack detection run on the **homepage only**. SEO/AEO/links cover the crawled pages (max_pages, default 25, depth 3).
-- Link check cap: 500 unique links. 401/403/429/999 and timeouts are `unverified`, not broken.
-- Time budget: 5 min per analysis, one analysis at a time (others queue). A mobile Lighthouse run takes ~40s+.
+- A mobile Lighthouse run takes ~40s+, so a full analysis usually takes 1.5–2 minutes.
 - Bot-protected sites (Cloudflare challenge) fail with a clear message; they are never bypassed.
 - Jobs live in memory; a server restart marks running analyses as failed.
 - Project delete uses `window.confirm`. Git shows LF→CRLF warnings on Windows, which are harmless.
