@@ -31,6 +31,11 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Server error.' });
 });
 
-app.listen(PORT, () => {
+// Express 5 passes listen errors (such as a port conflict) to this callback.
+app.listen(PORT, (err) => {
+  if (err) {
+    console.error(err.code === 'EADDRINUSE' ? `Port ${PORT} is already in use. Stop the other server or set PORT.` : err);
+    process.exit(1);
+  }
   console.log(`API ready on http://localhost:${PORT}`);
 });

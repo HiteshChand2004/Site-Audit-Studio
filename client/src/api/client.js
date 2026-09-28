@@ -1,15 +1,24 @@
+const API_DOWN = 'Cannot reach the API server (port 4000). Start it with npm run dev.';
+
 async function request(path, { method = 'GET', body } = {}) {
-  const res = await fetch(`/api${path}`, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(`/api${path}`, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw Object.assign(new Error(API_DOWN), { status: 0 });
+  }
   if (res.status === 204) return null;
-  const data = await res.json().catch(() => ({}));
+  const data = await res.json().catch(() => null);
   if (!res.ok) {
-    const err = new Error(data.error || `Request failed (${res.status})`);
+    // The Vite dev proxy answers 5xx without a JSON body when the API server is not running.
+    const message = data?.error || (res.status >= 500 && !data ? API_DOWN : `Request failed (${res.status})`);
+    const err = new Error(message);
     err.status = res.status;
-    err.data = data;
+    err.data = data ?? {};
     throw err;
   }
   return data;
