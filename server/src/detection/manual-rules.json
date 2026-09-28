@@ -1,0 +1,15 @@
+[
+  { "kind": "integration", "title": "Intercom chat widget", "detail": "The script embed must be re-added; its behaviour is not recreated.", "when": { "type": "request", "pattern": "widget\\.intercom\\.io|js\\.intercomcdn\\.com" } },
+  { "kind": "integration", "title": "Tawk.to chat widget", "detail": "The script embed must be re-added; its behaviour is not recreated.", "when": { "type": "request", "pattern": "embed\\.tawk\\.to" } },
+  { "kind": "integration", "title": "Crisp chat widget", "detail": "The script embed must be re-added; its behaviour is not recreated.", "when": { "type": "request", "pattern": "client\\.crisp\\.chat" } },
+  { "kind": "integration", "title": "Drift chat widget", "detail": "The script embed must be re-added; its behaviour is not recreated.", "when": { "type": "request", "pattern": "js\\.driftt\\.com|drift\\.com/include" } },
+  { "kind": "integration", "title": "HubSpot scripts (chat / forms / tracking)", "detail": "Re-add the HubSpot embed code; forms and chat keep running on HubSpot.", "when": { "type": "request", "pattern": "js\\.hs-scripts\\.com|js\\.hsforms\\.net|js\\.usemessages\\.com" } },
+  { "kind": "integration", "title": "Zendesk widget", "detail": "The script embed must be re-added; its behaviour is not recreated.", "when": { "type": "request", "pattern": "static\\.zdassets\\.com" } },
+  { "kind": "integration", "title": "WhatsApp chat button", "detail": "The link/widget is recreated as a plain link; any third-party widget logic is not.", "when": { "type": "html", "pattern": "wa\\.me/|api\\.whatsapp\\.com/send" } },
+  { "kind": "embed", "title": "Google Maps embed", "detail": "The map iframe is kept as an embed; custom map logic or API keys must be configured manually.", "when": { "type": "request", "pattern": "google\\.com/maps/embed|maps\\.googleapis\\.com" } },
+  { "kind": "embed", "title": "Booking / scheduling widget", "detail": "The booking provider embed must be re-added and reconnected to your account.", "when": { "type": "request", "pattern": "calendly\\.com|cal\\.com/embed|acuityscheduling\\.com|setmore\\.com|simplybook" } },
+  { "kind": "embed", "title": "Payment buttons", "detail": "Payment provider buttons need your own keys and server-side verification.", "when": { "type": "request", "pattern": "js\\.stripe\\.com|paypal\\.com/sdk|checkout\\.razorpay\\.com" } },
+  { "kind": "integration", "title": "Site search service", "detail": "Hosted search (Algolia and similar) needs its index and keys configured manually.", "when": { "type": "request", "pattern": "algolia(net)?\\.(com|net)|algolianet" } },
+  { "kind": "integration", "title": "reCAPTCHA / hCaptcha", "detail": "Captcha keys are domain-bound and must be re-issued for the new site.", "when": { "type": "request", "pattern": "google\\.com/recaptcha|hcaptcha\\.com" } },
+  { "kind": "commerce", "title": "Cart / checkout flow", "detail": "Cart and checkout need a real commerce backend; they are never simulated.", "when": { "type": "dom", "selector": "a[href*=\"/cart\"], a[href*=\"/checkout\"], [class*=\"add-to-cart\" i], [data-add-to-cart]" } }
+]

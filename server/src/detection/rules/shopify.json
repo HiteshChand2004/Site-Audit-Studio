@@ -1,0 +1,71 @@
+{
+  "id": "shopify",
+  "name": "Shopify",
+  "category": "ecommerce",
+  "signals": [
+    {
+      "type": "header",
+      "name": "x-shopid",
+      "weight": 0.8,
+      "label": "x-shopid header"
+    },
+    {
+      "type": "header",
+      "name": "powered-by",
+      "pattern": "Shopify",
+      "weight": 0.8,
+      "label": "powered-by: Shopify header"
+    },
+    {
+      "type": "request",
+      "pattern": "cdn\\.shopify\\.com|/cdn/shop/",
+      "weight": 0.7,
+      "label": "Shopify CDN assets"
+    },
+    {
+      "type": "global",
+      "name": "Shopify.shop",
+      "weight": 0.8,
+      "label": "window.Shopify.shop present"
+    },
+    {
+      "type": "cookie",
+      "pattern": "^_shopify_|^cart_currency",
+      "weight": 0.4,
+      "label": "Shopify cookies"
+    }
+  ],
+  "limitations": [
+    {
+      "severity": "medium",
+      "title": "App script overhead",
+      "detail": "Each installed Shopify app usually injects its own scripts on every page."
+    },
+    {
+      "severity": "medium",
+      "title": "Checkout lock-in",
+      "detail": "Checkout and payments run on Shopify and cannot be self-hosted."
+    }
+  ],
+  "cleanup": {
+    "classPatterns": [
+      "^shopify-"
+    ],
+    "cdnHosts": [
+      "cdn.shopify.com",
+      "shopifycdn.com"
+    ]
+  },
+  "manualRebuild": [
+    {
+      "kind": "commerce",
+      "title": "Cart, checkout and payments",
+      "detail": "Storefront pages are recreated statically. Cart and checkout need Shopify (for example via the Storefront API) or another commerce backend."
+    },
+    {
+      "kind": "cms",
+      "title": "Product catalogue and inventory",
+      "detail": "Only crawled products are captured. The catalogue, variants and stock live in Shopify."
+    }
+  ]
+}

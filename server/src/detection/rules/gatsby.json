@@ -1,0 +1,41 @@
+{
+  "id": "gatsby",
+  "name": "Gatsby",
+  "category": "framework",
+  "signals": [
+    {
+      "type": "meta",
+      "name": "generator",
+      "pattern": "Gatsby ?([\\d.]+)?",
+      "version": 1,
+      "weight": 0.8,
+      "label": "<meta name=\"generator\" content=\"Gatsby\">"
+    },
+    {
+      "type": "html",
+      "pattern": "id=\"___gatsby\"",
+      "weight": 0.8,
+      "label": "#___gatsby root element"
+    },
+    {
+      "type": "request",
+      "pattern": "/page-data/",
+      "weight": 0.3,
+      "label": "/page-data/ requests"
+    }
+  ],
+  "limitations": [
+    {
+      "severity": "low",
+      "title": "Hydration cost",
+      "detail": "Pages ship React plus page data JSON that has to hydrate before the page is fully interactive."
+    }
+  ],
+  "cleanup": {
+    "classPatterns": [
+      "^gatsby-"
+    ],
+    "cdnHosts": []
+  },
+  "manualRebuild": []
+}

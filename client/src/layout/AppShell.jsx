@@ -35,7 +35,7 @@ export default function AppShell() {
             <i />
           </span>
           <span className={styles.brandName}>Site Audit Studio</span>
-          <span className={`${styles.version} mono`}>v0.1 · phase 1</span>
+          <span className={`${styles.version} mono`}>v0.2 · phase 2</span>
         </div>
         <Disclaimer />
       </header>

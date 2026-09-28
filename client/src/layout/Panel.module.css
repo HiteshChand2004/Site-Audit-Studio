@@ -150,3 +150,70 @@
   color: var(--muted);
   font-size: var(--fs-sm);
 }
+
+.pagesInput {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  height: 32px;
+  padding: 0 4px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+
+.pagesInput:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.pagesInput input {
+  width: 44px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+}
+
+.sectionMeta {
+  color: var(--faint);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.stepErrors {
+  display: flex;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--warn-tint);
+  color: var(--warn);
+  font-size: var(--fs-sm);
+}
+
+.stepErrors > svg {
+  flex: none;
+  margin-top: 3px;
+}
+
+.stepErrors ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  color: var(--text-2);
+}
+
+.spin {
+  animation: panel-spin 900ms linear infinite;
+}
+
+@keyframes panel-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

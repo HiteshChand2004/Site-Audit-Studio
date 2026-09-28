@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import projectsRouter from './routes/projects.js';
+import analyzeRouter from './routes/analyze.js';
 
 const PORT = Number(process.env.PORT) || 4000;
 const app = express();
@@ -9,10 +10,11 @@ app.use(cors({ origin: ['http://localhost:5173', 'http://127.0.0.1:5173'] }));
 app.use(express.json({ limit: '1mb' }));
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, phase: 1, time: new Date().toISOString() });
+  res.json({ ok: true, phase: 2, time: new Date().toISOString() });
 });
 
 app.use('/api/projects', projectsRouter);
+app.use('/api/projects', analyzeRouter);
 
 app.use('/api', (_req, res) => {
   res.status(404).json({ error: 'Route not found.' });

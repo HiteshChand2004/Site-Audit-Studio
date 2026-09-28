@@ -1,0 +1,67 @@
+{
+  "id": "squarespace",
+  "name": "Squarespace",
+  "category": "builder",
+  "signals": [
+    {
+      "type": "html",
+      "pattern": "This is Squarespace",
+      "weight": 0.8,
+      "label": "\"This is Squarespace\" comment"
+    },
+    {
+      "type": "global",
+      "name": "Static.SQUARESPACE_CONTEXT",
+      "weight": 0.8,
+      "label": "window.Static.SQUARESPACE_CONTEXT present"
+    },
+    {
+      "type": "request",
+      "pattern": "static1\\.squarespace\\.com|images\\.squarespace-cdn\\.com",
+      "weight": 0.7,
+      "label": "Squarespace CDN assets"
+    }
+  ],
+  "limitations": [
+    {
+      "severity": "medium",
+      "title": "Template-bound layout",
+      "detail": "Layouts are limited to what the template and blocks support."
+    },
+    {
+      "severity": "medium",
+      "title": "Hosting lock-in",
+      "detail": "Squarespace has no full code export; commerce and member areas stay on the platform."
+    }
+  ],
+  "cleanup": {
+    "classPatterns": [
+      "^sqs-",
+      "^sqsrte-"
+    ],
+    "cdnHosts": [
+      "squarespace.com",
+      "squarespace-cdn.com"
+    ]
+  },
+  "manualRebuild": [
+    {
+      "kind": "form",
+      "title": "Squarespace form blocks",
+      "detail": "The form backend must be set up manually.",
+      "when": {
+        "type": "dom",
+        "selector": ".sqs-block-form, form"
+      }
+    },
+    {
+      "kind": "commerce",
+      "title": "Squarespace Commerce",
+      "detail": "Cart and checkout need a real commerce backend.",
+      "when": {
+        "type": "dom",
+        "selector": "[class*=\"sqs-add-to-cart\"], .sqs-block-product"
+      }
+    }
+  ]
+}

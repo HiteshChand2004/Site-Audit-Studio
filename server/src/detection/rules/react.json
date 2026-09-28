@@ -1,0 +1,50 @@
+{
+  "id": "react",
+  "name": "React",
+  "category": "framework",
+  "excludedBy": [
+    "nextjs",
+    "gatsby",
+    "framer",
+    "wix",
+    "shopify"
+  ],
+  "signals": [
+    {
+      "type": "dom",
+      "selector": "[data-reactroot]",
+      "weight": 0.6,
+      "label": "data-reactroot attribute"
+    },
+    {
+      "type": "script",
+      "pattern": "react(-dom)?(\\.production)?(\\.min)?\\.js",
+      "weight": 0.5,
+      "label": "react / react-dom bundle"
+    },
+    {
+      "type": "script",
+      "pattern": "/static/js/main\\.[a-f0-9]{6,}\\.(chunk\\.)?js",
+      "weight": 0.4,
+      "label": "Create React App bundle"
+    },
+    {
+      "type": "html",
+      "pattern": "<div id=\"root\"></div>",
+      "weight": 0.25,
+      "label": "Empty #root mount point in the raw HTML"
+    }
+  ],
+  "limitations": [
+    {
+      "severity": "medium",
+      "title": "Client-side rendering",
+      "detail": "Content only appears after JavaScript runs, which hurts LCP and hides content from crawlers that do not run JS."
+    }
+  ],
+  "cleanup": {
+    "classPatterns": [],
+    "cdnHosts": []
+  },
+  "manualRebuild": []
+}

@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
-import { db } from '../db/index.js';
+import { rm } from 'node:fs/promises';
+import { db, projectDir } from '../db/index.js';
+import { parseMaxPages } from './analyze.js';
 import { buildDummyAudit } from '../dummy/audit.js';
 
 export const STACKS = ['html', 'react-vite', 'nextjs', 'mern'];
@@ -63,8 +65,8 @@ router.patch('/:id', (req, res) => {
   const project = selectOne.get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found.' });
 
-  const { name, stack, url } = req.body ?? {};
-  const next = { name: project.name, stack: project.stack, url: project.url };
+  const { name, stack, url, max_pages: maxPages } = req.body ?? {};
+  const next = { name: project.name, stack: project.stack, url: project.url, maxPages: project.max_pages };
 
   if (name !== undefined) {
     if (typeof name !== 'string' || !name.trim()) return badRequest(res, 'Name cannot be empty.');
@@ -79,23 +81,36 @@ router.patch('/:id', (req, res) => {
     if (!normalized) return badRequest(res, 'A valid http(s) URL is required.');
     next.url = normalized;
   }
+  if (maxPages !== undefined) {
+    const parsed = parseMaxPages(maxPages);
+    if (!parsed) return badRequest(res, 'Max pages must be a whole number from 1 to 100.');
+    next.maxPages = parsed;
+  }
 
-  db.prepare('UPDATE projects SET name = ?, stack = ?, url = ?, updated_at = ? WHERE id = ?')
-    .run(next.name, next.stack, next.url, new Date().toISOString(), project.id);
+  db.prepare('UPDATE projects SET name = ?, stack = ?, url = ?, max_pages = ?, updated_at = ? WHERE id = ?')
+    .run(next.name, next.stack, next.url, next.maxPages, new Date().toISOString(), project.id);
   res.json(toProject(selectOne.get(project.id)));
 });
 
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   const result = remove.run(req.params.id);
   if (result.changes === 0) return res.status(404).json({ error: 'Project not found.' });
+  await rm(projectDir(req.params.id), { recursive: true, force: true }).catch(() => {});
   res.status(204).end();
 });
 
-// Phase 1: dummy data. The real audit pipeline replaces this in Phase 2.
+const latestAudit = db.prepare(`
+  SELECT result_json FROM analyses
+  WHERE project_id = ? AND status = 'done' AND result_json IS NOT NULL
+  ORDER BY started_at DESC LIMIT 1
+`);
+
+// Latest completed analysis. Projects that were never analyzed get the labelled dummy audit.
 router.get('/:id/audit', (req, res) => {
   const project = selectOne.get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found.' });
-  res.json(buildDummyAudit(project));
+  const row = latestAudit.get(project.id);
+  res.json(row ? JSON.parse(row.result_json) : buildDummyAudit(project));
 });
 
 export default router;

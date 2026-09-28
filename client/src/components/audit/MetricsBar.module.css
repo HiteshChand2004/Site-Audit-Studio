@@ -141,3 +141,11 @@
     flex-wrap: wrap;
   }
 }
+
+.dot[data-tone='none'] { background: var(--border-strong); }
+.ring[data-tone='none'] .arc { stroke: transparent; }
+
+.noScores {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}

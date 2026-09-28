@@ -1,0 +1,47 @@
+{
+  "id": "nextjs",
+  "name": "Next.js",
+  "category": "framework",
+  "signals": [
+    {
+      "type": "header",
+      "name": "x-powered-by",
+      "pattern": "Next\\.js",
+      "weight": 0.8,
+      "label": "x-powered-by: Next.js header"
+    },
+    {
+      "type": "html",
+      "pattern": "/_next/static/",
+      "weight": 0.7,
+      "label": "/_next/static/ assets"
+    },
+    {
+      "type": "global",
+      "name": "__NEXT_DATA__",
+      "weight": 0.6,
+      "label": "window.__NEXT_DATA__ present"
+    },
+    {
+      "type": "global",
+      "name": "__next_f",
+      "weight": 0.6,
+      "label": "App Router payload (window.__next_f)"
+    }
+  ],
+  "limitations": [
+    {
+      "severity": "low",
+      "title": "Hydration cost",
+      "detail": "Pages ship React plus page JavaScript that has to hydrate before the page is fully interactive."
+    }
+  ],
+  "cleanup": {
+    "classPatterns": [
+      "^__next",
+      "^jsx-\\d+$"
+    ],
+    "cdnHosts": []
+  },
+  "manualRebuild": []
+}

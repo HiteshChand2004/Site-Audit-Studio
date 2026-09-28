@@ -145,3 +145,27 @@
   color: var(--warn);
   font-size: var(--fs-sm);
 }
+
+.empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.hint {
+  margin: var(--sp-2) 0 4px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.rowTitle a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
+}
+
+.rowTitle a:hover {
+  color: var(--accent-text);
+  text-decoration-color: currentColor;
+}

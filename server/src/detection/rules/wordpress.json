@@ -1,0 +1,109 @@
+{
+  "id": "wordpress",
+  "name": "WordPress",
+  "category": "cms",
+  "signals": [
+    {
+      "type": "meta",
+      "name": "generator",
+      "pattern": "WordPress ?([\\d.]+)?",
+      "version": 1,
+      "weight": 0.6,
+      "label": "<meta name=\"generator\" content=\"WordPress\">"
+    },
+    {
+      "type": "html",
+      "pattern": "/wp-content/",
+      "weight": 0.5,
+      "label": "/wp-content/ asset paths"
+    },
+    {
+      "type": "html",
+      "pattern": "/wp-includes/",
+      "weight": 0.4,
+      "label": "/wp-includes/ asset paths"
+    },
+    {
+      "type": "header",
+      "name": "link",
+      "pattern": "api\\.w\\.org|wp-json",
+      "weight": 0.4,
+      "label": "Link header points to the WP REST API"
+    },
+    {
+      "type": "endpoint",
+      "path": "/wp-json/",
+      "expect": {
+        "status": 200,
+        "json": true
+      },
+      "weight": 0.4,
+      "label": "/wp-json/ REST endpoint reachable"
+    }
+  ],
+  "limitations": [
+    {
+      "severity": "medium",
+      "title": "Plugin and theme overhead",
+      "detail": "Plugins and themes typically load their CSS/JS on every page, whether the page uses them or not."
+    },
+    {
+      "severity": "medium",
+      "title": "Server-rendered on every request",
+      "detail": "Without full-page caching, each visit runs PHP and database queries, which slows down TTFB."
+    },
+    {
+      "severity": "low",
+      "title": "Ongoing security maintenance",
+      "detail": "Core, theme and plugin updates are needed regularly to stay secure."
+    }
+  ],
+  "cleanup": {
+    "classPatterns": [
+      "^wp-",
+      "^elementor",
+      "^et_pb",
+      "^has-.*-color$"
+    ],
+    "cdnHosts": [
+      "i0.wp.com",
+      "i1.wp.com",
+      "i2.wp.com",
+      "s.w.org"
+    ]
+  },
+  "manualRebuild": [
+    {
+      "kind": "cms",
+      "title": "Posts and pages database",
+      "detail": "Only crawled pages are recreated. Other posts have to be imported (for example from /wp-json/wp/v2/)."
+    },
+    {
+      "kind": "form",
+      "title": "Contact Form 7 submissions",
+      "detail": "The form UI is recreated; the submission handler must be wired up manually.",
+      "when": {
+        "type": "dom",
+        "selector": ".wpcf7"
+      }
+    },
+    {
+      "kind": "form",
+      "title": "Gravity Forms submissions",
+      "detail": "The form UI is recreated; the submission handler must be wired up manually.",
+      "when": {
+        "type": "dom",
+        "selector": ".gform_wrapper"
+      }
+    },
+    {
+      "kind": "form",
+      "title": "WPForms submissions",
+      "detail": "The form UI is recreated; the submission handler must be wired up manually.",
+      "when": {
+        "type": "dom",
+        "selector": ".wpforms-container"
+      }
+    }
+  ]
+}

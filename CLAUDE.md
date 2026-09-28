@@ -17,14 +17,15 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 - Server: Express 5 (ESM, `"type": "module"`). Port **4000**.
 - DB: SQLite via Node's built-in **`node:sqlite`** (`DatabaseSync`). No native build, so it's safe on Windows.
   Needs Node ≥ 22.13. The ExperimentalWarning is silenced with `--disable-warning=ExperimentalWarning`.
-- Planned (Phase 2+): Playwright, Lighthouse, cheerio, @axe-core/playwright, sharp, archiver, get-port, execa.
+- Analyze (Phase 2): playwright (Chromium), lighthouse + chrome-launcher (run in a forked worker), @axe-core/playwright, cheerio, robots-parser.
+- Planned (Phase 3+): sharp, archiver, get-port, execa.
 
 ## Phases
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Layout, sidebar, project CRUD (SQLite), stack modal, dummy audit | ✅ Done |
-| 2 | Analyze job + SSE progress: Lighthouse (mobile+desktop), stack detection, crawler (broken links, sitemap, robots, meta), SEO, AEO, axe a11y, manual-rebuild detector | ⏳ Next |
-| 3 | OLD iframe + X-Frame-Options/CSP check + screenshot fallback + live view (CDP screencast) | ⏳ |
+| 2 | Analyze job + SSE progress: Lighthouse (mobile+desktop), stack detection, crawler (broken links, sitemap, robots, meta), SEO, AEO, axe a11y, manual-rebuild detector | ✅ Done |
+| 3 | OLD iframe + screenshot fallback + live view (CDP screencast). The X-Frame-Options/CSP check already exists (`audit.frame`) | ⏳ Next |
 | 4a | Recreate → plain HTML: page discovery (sitemap, limit), Playwright capture, local assets, IR, variant merge, semantic classes, fixers | ⏳ |
 | 4b | Motion + responsive fidelity: hover, scroll reveal, continuous animations, widget JS, visual diff score | ⏳ |
 | 5 | PreviewManager (ports 5100–5199), NEW iframe, re-audit → fix checklist | ⏳ |
@@ -55,15 +56,20 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 - Theme: light, indigo accent `#4F46E5`, slate neutrals, Inter + JetBrains Mono (local via @fontsource).
   Colors only via tokens.
 - OLD panel = slate rail/chip; NEW panel = indigo rail/chip.
-- The audit JSON shape (`server/src/dummy/audit.js`) is the contract the UI renders. Keep it when adding the real pipeline.
+- The audit JSON shape (`server/src/dummy/audit.js`) is the contract the UI renders. `server/src/audit/assemble.js` produces it; new fields must be additive (`test/analyzers.test.js` checks the keys).
 
 ## Structure
 ```
 client/src/  layout/ (AppShell, Sidebar, OldPanel, NewPanel)
              components/{common,audit,preview,project,recreate}/
              store/useProjects.js, api/client.js, constants.js (STACKS), styles/
-server/src/  index.js, db/index.js (schema), routes/projects.js, dummy/audit.js
-data/        app.db (gitignored); later data/projects/<id>/{capture,audit,output}
+server/src/  index.js, db/index.js (schema + migrations), routes/{projects,analyze}.js, dummy/audit.js
+             audit/ index.js (pipeline + STEPS), jobs.js (queue, 1 at a time), http.js, robots.js, sitemap.js,
+                    crawler.js, extract.js, linkChecker.js, render.js, frame.js, assemble.js,
+                    lighthouse/{run,worker}.js, analyzers/{seo,aeo,crawlChecks,a11y,metrics,weaknesses}.js
+             detection/ engine.js, manual.js, manual-rules.json, rules/<platform>.json (15 platforms)
+server/test/ *.test.js (node --test), serve-fixture.js + fixtures/site (seeded issues, port 4100)
+data/        app.db + projects/<id>/audit/<analysisId>/{crawl,axe,lighthouse-*}.json (gitignored)
 ```
 
 ## Run
@@ -72,13 +78,20 @@ npm install
 npm run dev          # client :5173 + server :4000 (concurrently)
 npm run dev:server   # or: npm run dev:client
 npm run build        # client production build
+npm test -w server   # unit tests
+npm run fixture-site -w server   # seeded test site on :4100
+npx -w server playwright install chromium   # one-time
 ```
-API: `GET/POST /api/projects`, `GET/PATCH/DELETE /api/projects/:id`, `GET /api/projects/:id/audit`, `GET /api/health`
+API: `GET/POST /api/projects`, `GET/PATCH/DELETE /api/projects/:id` (PATCH takes `max_pages`), `GET /api/projects/:id/audit`,
+`POST /api/projects/:id/analyze`, `GET /api/projects/:id/analyze/current`, `GET /api/projects/:id/analyze/:analysisId/events` (SSE: progress/done/failed), `GET /api/health`
 
 ## Currently dummy / known issues
-- The audit report, metrics, "iframe blocked" notice, preview wireframe and fix checklist are **dummy**
-  (deterministic per hostname, from `server/src/dummy/audit.js`). The UI labels them "Dummy data"/"Sample".
-- The Analyze (Phase 2), Recreate (Phase 4) and Download (Phase 6) buttons are disabled.
-- Edits to the OLD panel URL input are not saved yet.
-- Playwright/Lighthouse are not installed yet. Phase 2 needs `npx playwright install chromium`.
+- Analyze is real. Projects that were never analyzed still get the **dummy** audit (`isDummy: true`, "Dummy data" badge).
+- Still dummy: the OLD preview wireframe (Phase 3), the NEW preview and the fix checklist (`audit.recreate`, which has `isDummy: true`; Phase 5).
+  Recreate (Phase 4) and Download (Phase 6) stay disabled.
+- Lighthouse, axe and stack detection run on the **homepage only**. SEO/AEO/links cover the crawled pages (max_pages, default 25, depth 3).
+- Link check cap: 500 unique links. 401/403/429/999 and timeouts are `unverified`, not broken.
+- Time budget: 5 min per analysis, one analysis at a time (others queue). A mobile Lighthouse run takes ~40s+.
+- Bot-protected sites (Cloudflare challenge) fail with a clear message; they are never bypassed.
+- Jobs live in memory; a server restart marks running analyses as failed.
 - Project delete uses `window.confirm`. Git shows LF→CRLF warnings on Windows, which are harmless.

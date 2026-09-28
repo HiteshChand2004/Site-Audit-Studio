@@ -1,0 +1,70 @@
+{
+  "id": "framer",
+  "name": "Framer",
+  "category": "builder",
+  "signals": [
+    {
+      "type": "meta",
+      "name": "generator",
+      "pattern": "^Framer",
+      "weight": 0.8,
+      "label": "<meta name=\"generator\" content=\"Framer\">"
+    },
+    {
+      "type": "request",
+      "pattern": "framerusercontent\\.com",
+      "weight": 0.7,
+      "label": "framerusercontent.com assets"
+    },
+    {
+      "type": "html",
+      "pattern": "data-framer-",
+      "weight": 0.6,
+      "label": "data-framer-* attributes"
+    },
+    {
+      "type": "script",
+      "pattern": "framer\\.com/(m|edit)/|events\\.framer\\.com",
+      "weight": 0.4,
+      "label": "Framer runtime scripts"
+    }
+  ],
+  "limitations": [
+    {
+      "severity": "high",
+      "title": "Heavy JS runtime",
+      "detail": "Framer’s React runtime loads on every page, which pushes up TBT and LCP."
+    },
+    {
+      "severity": "medium",
+      "title": "Auto-generated markup",
+      "detail": "framer-xxxx class names and deeply nested wrappers limit control over the markup."
+    },
+    {
+      "severity": "medium",
+      "title": "Hosting lock-in",
+      "detail": "CMS content and hosting are hard to move off Framer."
+    }
+  ],
+  "cleanup": {
+    "classPatterns": [
+      "^framer-"
+    ],
+    "cdnHosts": [
+      "framerusercontent.com",
+      "framer.com",
+      "framer.website"
+    ]
+  },
+  "manualRebuild": [
+    {
+      "kind": "form",
+      "title": "Framer form submissions",
+      "detail": "The Framer forms submission endpoint cannot be recreated; connect a form backend.",
+      "when": {
+        "type": "dom",
+        "selector": "form"
+      }
+    }
+  ]
+}

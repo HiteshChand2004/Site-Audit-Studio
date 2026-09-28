@@ -1,0 +1,135 @@
+.wrap {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.pct {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.bar {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--old-rail);
+  transition: width 400ms ease;
+}
+
+.message {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-sm);
+}
+
+.steps li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--faint);
+}
+
+.steps li[data-state='done'] {
+  color: var(--text-2);
+}
+
+.steps li[data-state='active'] {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.marker {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+}
+
+[data-state='done'] > .marker {
+  border-color: var(--ok);
+  background: var(--ok-tint);
+  color: var(--ok);
+}
+
+[data-state='active'] > .marker {
+  border-color: var(--old-chip);
+  color: var(--old-chip);
+}
+
+.spin {
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.failed {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: 10px var(--sp-3);
+  border: 1px solid var(--bad-tint);
+  border-radius: var(--radius-lg);
+  background: var(--bad-tint);
+  color: var(--bad);
+}
+
+.failed > svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.failedText {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  font-size: var(--fs-sm);
+}
+
+.failedText span {
+  color: var(--text-2);
+}

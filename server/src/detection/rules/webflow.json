@@ -1,0 +1,94 @@
+{
+  "id": "webflow",
+  "name": "Webflow",
+  "category": "builder",
+  "signals": [
+    {
+      "type": "meta",
+      "name": "generator",
+      "pattern": "Webflow",
+      "weight": 0.8,
+      "label": "<meta name=\"generator\" content=\"Webflow\">"
+    },
+    {
+      "type": "html",
+      "pattern": "data-wf-site",
+      "weight": 0.8,
+      "label": "data-wf-site attribute"
+    },
+    {
+      "type": "html",
+      "pattern": "data-wf-page",
+      "weight": 0.4,
+      "label": "data-wf-page attribute"
+    },
+    {
+      "type": "request",
+      "pattern": "website-files\\.com|assets\\.website-files|uploads-ssl\\.webflow\\.com",
+      "weight": 0.6,
+      "label": "Webflow asset CDN (website-files.com)"
+    },
+    {
+      "type": "script",
+      "pattern": "webflow[.\\w-]*\\.js",
+      "weight": 0.3,
+      "label": "webflow.js runtime"
+    }
+  ],
+  "limitations": [
+    {
+      "severity": "medium",
+      "title": "Hosting lock-in",
+      "detail": "Interactions and CMS are tied to Webflow hosting."
+    },
+    {
+      "severity": "medium",
+      "title": "Webflow interactions runtime",
+      "detail": "webflow.js loads on every page to power IX2 animations."
+    },
+    {
+      "severity": "low",
+      "title": "Generic class names",
+      "detail": "w-* utility classes and combo classes make the markup noisy."
+    }
+  ],
+  "cleanup": {
+    "classPatterns": [
+      "^w-",
+      "^wf-"
+    ],
+    "cdnHosts": [
+      "website-files.com",
+      "webflow.com"
+    ]
+  },
+  "manualRebuild": [
+    {
+      "kind": "cms",
+      "title": "Webflow CMS collections",
+      "detail": "Collection lists become static snapshots; the CMS must be set up manually.",
+      "when": {
+        "type": "dom",
+        "selector": ".w-dyn-list, .w-dyn-items"
+      }
+    },
+    {
+      "kind": "form",
+      "title": "Webflow form submissions",
+      "detail": "The form backend must be set up manually.",
+      "when": {
+        "type": "dom",
+        "selector": ".w-form"
+      }
+    },
+    {
+      "kind": "commerce",
+      "title": "Webflow Ecommerce",
+      "detail": "Cart and checkout need a real commerce backend.",
+      "when": {
+        "type": "dom",
+        "selector": "[class*=\"w-commerce\"]"
+      }
+    }
+  ]
+}

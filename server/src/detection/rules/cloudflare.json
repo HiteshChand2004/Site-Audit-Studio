@@ -1,0 +1,32 @@
+{
+  "id": "cloudflare",
+  "name": "Cloudflare CDN",
+  "category": "cdn",
+  "signals": [
+    {
+      "type": "header",
+      "name": "cf-ray",
+      "weight": 0.7,
+      "label": "cf-ray response header"
+    },
+    {
+      "type": "header",
+      "name": "server",
+      "pattern": "cloudflare",
+      "weight": 0.6,
+      "label": "server: cloudflare header"
+    },
+    {
+      "type": "cookie",
+      "pattern": "^__cf_bm$|^cf_clearance$",
+      "weight": 0.3,
+      "label": "Cloudflare bot-management cookie"
+    }
+  ],
+  "limitations": [],
+  "cleanup": {
+    "classPatterns": [],
+    "cdnHosts": []
+  },
+  "manualRebuild": []
+}

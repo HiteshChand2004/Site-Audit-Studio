@@ -6,10 +6,18 @@
   "main": "src/index.js",
   "scripts": {
     "dev": "node --disable-warning=ExperimentalWarning --watch src/index.js",
-    "start": "node --disable-warning=ExperimentalWarning src/index.js"
+    "start": "node --disable-warning=ExperimentalWarning src/index.js",
+    "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.js\"",
+    "fixture-site": "node test/serve-fixture.js"
   },
   "dependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "cheerio": "^1.2.0",
+    "chrome-launcher": "^1.2.1",
     "cors": "^2.8.5",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "lighthouse": "^12.8.2",
+    "playwright": "^1.63.0",
+    "robots-parser": "^3.0.1"
   }
 }

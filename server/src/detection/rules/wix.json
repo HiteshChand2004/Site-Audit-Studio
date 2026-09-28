@@ -1,0 +1,77 @@
+{
+  "id": "wix",
+  "name": "Wix",
+  "category": "builder",
+  "signals": [
+    {
+      "type": "meta",
+      "name": "generator",
+      "pattern": "Wix\\.com",
+      "weight": 0.8,
+      "label": "<meta name=\"generator\" content=\"Wix.com\">"
+    },
+    {
+      "type": "header",
+      "name": "x-wix-request-id",
+      "weight": 0.8,
+      "label": "x-wix-request-id header"
+    },
+    {
+      "type": "request",
+      "pattern": "static\\.parastorage\\.com|static\\.wixstatic\\.com",
+      "weight": 0.7,
+      "label": "Wix static CDN (parastorage / wixstatic)"
+    },
+    {
+      "type": "global",
+      "name": "wixBiSession",
+      "weight": 0.5,
+      "label": "window.wixBiSession present"
+    }
+  ],
+  "limitations": [
+    {
+      "severity": "high",
+      "title": "Heavy client runtime",
+      "detail": "Wix pages ship a large JS runtime that delays interactivity, especially on mobile."
+    },
+    {
+      "severity": "medium",
+      "title": "No code or hosting export",
+      "detail": "Wix does not export site code, so the site cannot be moved without a rebuild."
+    },
+    {
+      "severity": "medium",
+      "title": "Generated IDs and markup",
+      "detail": "comp-xxxx IDs and absolutely positioned wrappers make the markup hard to maintain."
+    }
+  ],
+  "cleanup": {
+    "classPatterns": [
+      "^comp-",
+      "^wixui-",
+      "^_[a-zA-Z0-9]{5}$"
+    ],
+    "cdnHosts": [
+      "wixstatic.com",
+      "parastorage.com",
+      "wix.com"
+    ]
+  },
+  "manualRebuild": [
+    {
+      "kind": "integration",
+      "title": "Wix apps and Velo code",
+      "detail": "Wix apps (bookings, members, stores) and any Velo code do not carry over and must be rebuilt."
+    },
+    {
+      "kind": "form",
+      "title": "Wix form submissions",
+      "detail": "The form backend must be set up manually.",
+      "when": {
+        "type": "dom",
+        "selector": "form"
+      }
+    }
+  ]
+}

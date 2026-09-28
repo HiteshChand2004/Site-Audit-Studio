@@ -1,0 +1,37 @@
+{
+  "id": "google-tag-manager",
+  "name": "Google Tag Manager / gtag.js",
+  "category": "analytics",
+  "signals": [
+    {
+      "type": "request",
+      "pattern": "googletagmanager\\.com/gtm\\.js",
+      "weight": 0.8,
+      "label": "gtm.js container loaded"
+    },
+    {
+      "type": "request",
+      "pattern": "googletagmanager\\.com/gtag/js",
+      "weight": 0.6,
+      "label": "gtag.js loaded"
+    },
+    {
+      "type": "global",
+      "name": "google_tag_manager",
+      "weight": 0.6,
+      "label": "window.google_tag_manager present"
+    }
+  ],
+  "limitations": [],
+  "cleanup": {
+    "classPatterns": [],
+    "cdnHosts": []
+  },
+  "manualRebuild": [
+    {
+      "kind": "integration",
+      "title": "Analytics and tag manager",
+      "detail": "Tracking scripts are not copied. Re-add the GTM/GA container ID and check consent settings."
+    }
+  ]
+}

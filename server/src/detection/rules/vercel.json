@@ -1,0 +1,32 @@
+{
+  "id": "vercel",
+  "name": "Vercel",
+  "category": "hosting",
+  "signals": [
+    {
+      "type": "header",
+      "name": "x-vercel-id",
+      "weight": 0.8,
+      "label": "x-vercel-id header"
+    },
+    {
+      "type": "header",
+      "name": "server",
+      "pattern": "^Vercel",
+      "weight": 0.7,
+      "label": "server: Vercel header"
+    },
+    {
+      "type": "header",
+      "name": "x-vercel-cache",
+      "weight": 0.5,
+      "label": "x-vercel-cache header"
+    }
+  ],
+  "limitations": [],
+  "cleanup": {
+    "classPatterns": [],
+    "cdnHosts": []
+  },
+  "manualRebuild": []
+}

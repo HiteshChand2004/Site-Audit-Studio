@@ -3,6 +3,9 @@ import styles from './MetricsBar.module.css';
 
 const fmtMs = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`);
 const fmtBytes = (b) => (b >= 1024 * 1024 ? `${(b / 1024 / 1024).toFixed(1)} MB` : `${Math.round(b / 1024)} KB`);
+// Lighthouse can fail on a site; its metrics are then null and render as a dash.
+const show = (v, fmt) => (v == null ? '—' : fmt(v));
+const toneOf = (v, fn) => (v == null ? 'none' : fn(v));
 
 // Lighthouse thresholds (good / needs-improvement)
 const grade = {
@@ -24,7 +27,7 @@ function Ring({ value, label }) {
   const r = 15;
   const c = 2 * Math.PI * r;
   return (
-    <div className={styles.ring} data-tone={scoreTone(value)}>
+    <div className={styles.ring} data-tone={value == null ? 'none' : scoreTone(value)}>
       <svg viewBox="0 0 36 36" width="40" height="40" aria-hidden="true">
         <circle cx="18" cy="18" r={r} className={styles.track} />
         <circle
@@ -32,11 +35,11 @@ function Ring({ value, label }) {
           cy="18"
           r={r}
           className={styles.arc}
-          strokeDasharray={`${(value / 100) * c} ${c}`}
+          strokeDasharray={`${((value ?? 0) / 100) * c} ${c}`}
           transform="rotate(-90 18 18)"
         />
       </svg>
-      <span className={`${styles.ringValue} mono`}>{value}</span>
+      <span className={`${styles.ringValue} mono`}>{value ?? '—'}</span>
       <span className={styles.ringLabel}>{label}</span>
     </div>
   );
@@ -45,10 +48,10 @@ function Ring({ value, label }) {
 export default function MetricsBar({ metrics, scores }) {
   const [device, setDevice] = useState('mobile');
   const items = [
-    ['Load time', fmtMs(metrics.loadTime), grade.loadTime(metrics.loadTime)],
-    ['LCP', fmtMs(metrics.lcp), grade.lcp(metrics.lcp)],
-    ['TBT', fmtMs(metrics.tbt), grade.tbt(metrics.tbt)],
-    ['Page size', fmtBytes(metrics.pageSize), grade.pageSize(metrics.pageSize)],
+    ['Load time', show(metrics.loadTime, fmtMs), toneOf(metrics.loadTime, grade.loadTime)],
+    ['LCP', show(metrics.lcp, fmtMs), toneOf(metrics.lcp, grade.lcp)],
+    ['TBT', show(metrics.tbt, fmtMs), toneOf(metrics.tbt, grade.tbt)],
+    ['Page size', show(metrics.pageSize, fmtBytes), toneOf(metrics.pageSize, grade.pageSize)],
   ];
 
   return (
@@ -73,9 +76,11 @@ export default function MetricsBar({ metrics, scores }) {
           ))}
         </div>
         <div className={styles.rings}>
-          {SCORE_LABELS.map(([key, label]) => (
-            <Ring key={key} value={scores[device][key]} label={label} />
-          ))}
+          {scores[device] ? (
+            SCORE_LABELS.map(([key, label]) => <Ring key={key} value={scores[device][key]} label={label} />)
+          ) : (
+            <span className={styles.noScores}>Lighthouse did not finish for {device}.</span>
+          )}
         </div>
       </div>
     </div>

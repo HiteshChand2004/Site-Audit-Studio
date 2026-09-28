@@ -54,7 +54,12 @@ function CheckRows({ items }) {
   );
 }
 
+function Empty({ children }) {
+  return <p className={styles.empty}>{children}</p>;
+}
+
 function confidenceLevel(c) {
+  if (c == null) return ['No match', 'neutral'];
   if (c >= 80) return ['High', 'ok'];
   if (c >= 40) return ['Medium', 'warn'];
   return ['Low', 'bad'];
@@ -67,6 +72,8 @@ export default function AuditReport({ audit }) {
     { title: 'Meta tags', ...audit.crawl.metaTags },
   ];
   const primary = audit.techStack[0];
+  const unverified = audit.brokenLinks.unverified ?? [];
+  const a11yFailed = audit.errors?.some((e) => e.step === 'render');
 
   return (
     <div className={styles.report}>
@@ -83,12 +90,20 @@ export default function AuditReport({ audit }) {
                 <div className={styles.stackHead}>
                   <span className={styles.stackName}>{t.name}</span>
                   <Badge tone={tone} dot>
-                    {level} · <span className="mono">{t.confidence}%</span>
+                    {level}
+                    {t.confidence != null && (
+                      <>
+                        {' · '}
+                        <span className="mono">{t.confidence}%</span>
+                      </>
+                    )}
                   </Badge>
                 </div>
-                <div className={styles.meter} data-tone={tone}>
-                  <span style={{ width: `${t.confidence}%` }} />
-                </div>
+                {t.confidence != null && (
+                  <div className={styles.meter} data-tone={tone}>
+                    <span style={{ width: `${t.confidence}%` }} />
+                  </div>
+                )}
                 <ul className={styles.evidence}>
                   {t.evidence.map((e) => (
                     <li key={e} className="mono">
@@ -107,6 +122,7 @@ export default function AuditReport({ audit }) {
         title="Weaknesses & platform limits"
         meta={<Badge>{audit.weaknesses.length}</Badge>}
       >
+        {audit.weaknesses.length === 0 && <Empty>No platform limits or measured performance problems found.</Empty>}
         <ul className={styles.rows}>
           {audit.weaknesses.map((w) => (
             <li key={w.title} className={styles.row}>
@@ -142,6 +158,13 @@ export default function AuditReport({ audit }) {
         }
         defaultOpen={false}
       >
+        {audit.brokenLinks.broken.length === 0 && <Empty>No broken links found.</Empty>}
+        {audit.brokenLinks.total > audit.brokenLinks.checked && (
+          <p className={styles.hint}>
+            Checked the first {audit.brokenLinks.checked} of {audit.brokenLinks.total} unique links.
+          </p>
+        )}
+        {audit.brokenLinks.broken.length > 0 && (
         <table className={styles.table}>
           <thead>
             <tr>
@@ -164,6 +187,29 @@ export default function AuditReport({ audit }) {
             ))}
           </tbody>
         </table>
+        )}
+        {unverified.length > 0 && (
+          <>
+            <p className={styles.hint}>
+              Unverified — these servers refused or timed out on the automated check. Open them manually.
+            </p>
+            <table className={styles.table}>
+              <tbody>
+                {unverified.map((l) => (
+                  <tr key={l.url}>
+                    <td className="mono">{l.url.replace(/^https?:\/\//, '')}</td>
+                    <td>
+                      <Badge tone="warn" mono>
+                        {l.status}
+                      </Badge>
+                    </td>
+                    <td>{l.reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
       </SectionCard>
 
       <SectionCard
@@ -172,13 +218,24 @@ export default function AuditReport({ audit }) {
         meta={<Badge>{audit.accessibility.reduce((n, a) => n + a.count, 0)} issues</Badge>}
         defaultOpen={false}
       >
+        {audit.accessibility.length === 0 && (
+          <Empty>{a11yFailed ? 'The accessibility scan did not run.' : 'No axe-core violations found on the homepage.'}</Empty>
+        )}
         <ul className={styles.rows}>
           {audit.accessibility.map((a) => (
-            <li key={a.title} className={styles.row}>
+            <li key={a.id ?? a.title} className={styles.row}>
               <Badge tone={IMPACT_TONE[a.impact]} className={styles.sev}>
                 {a.impact}
               </Badge>
-              <span className={styles.rowTitle}>{a.title}</span>
+              <span className={styles.rowTitle}>
+                {a.helpUrl ? (
+                  <a href={a.helpUrl} target="_blank" rel="noreferrer">
+                    {a.title}
+                  </a>
+                ) : (
+                  a.title
+                )}
+              </span>
               <span className={`${styles.rowDetail} mono`}>×{a.count}</span>
             </li>
           ))}
@@ -186,9 +243,13 @@ export default function AuditReport({ audit }) {
       </SectionCard>
 
       <SectionCard icon={Wrench} title="Manual rebuild needed" meta={<Badge tone="warn">{audit.manualRebuild.length}</Badge>}>
-        <p className={styles.note}>
-          This functionality can’t be recreated automatically and must be rebuilt manually.
-        </p>
+        {audit.manualRebuild.length === 0 ? (
+          <Empty>Nothing detected that needs a manual rebuild.</Empty>
+        ) : (
+          <p className={styles.note}>
+            This functionality can’t be recreated automatically and must be rebuilt manually.
+          </p>
+        )}
         <ul className={styles.rows}>
           {audit.manualRebuild.map((m) => (
             <li key={m.title} className={styles.row}>

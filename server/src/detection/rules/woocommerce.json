@@ -1,0 +1,59 @@
+{
+  "id": "woocommerce",
+  "name": "WooCommerce",
+  "category": "ecommerce",
+  "signals": [
+    {
+      "type": "meta",
+      "name": "generator",
+      "pattern": "WooCommerce ?([\\d.]+)?",
+      "version": 1,
+      "weight": 0.7,
+      "label": "<meta name=\"generator\" content=\"WooCommerce\">"
+    },
+    {
+      "type": "script",
+      "pattern": "/plugins/woocommerce/",
+      "weight": 0.6,
+      "label": "WooCommerce plugin scripts"
+    },
+    {
+      "type": "html",
+      "pattern": "class=\"[^\"]*\\bwoocommerce\\b",
+      "weight": 0.4,
+      "label": "woocommerce CSS classes"
+    },
+    {
+      "type": "cookie",
+      "pattern": "^woocommerce_|^wp_woocommerce_session",
+      "weight": 0.5,
+      "label": "WooCommerce session cookie"
+    }
+  ],
+  "limitations": [
+    {
+      "severity": "medium",
+      "title": "Cart fragments on every page",
+      "detail": "WooCommerce’s cart-fragment AJAX call often runs on every page and delays interactivity."
+    }
+  ],
+  "cleanup": {
+    "classPatterns": [
+      "^woocommerce",
+      "^wc-"
+    ],
+    "cdnHosts": []
+  },
+  "manualRebuild": [
+    {
+      "kind": "commerce",
+      "title": "Cart, checkout and payments",
+      "detail": "Product pages are recreated statically. Cart, checkout, payment gateways and orders need a real commerce backend."
+    },
+    {
+      "kind": "cms",
+      "title": "Product catalogue",
+      "detail": "Only crawled products are captured. The full catalogue, stock and prices live in the WooCommerce database."
+    }
+  ]
+}

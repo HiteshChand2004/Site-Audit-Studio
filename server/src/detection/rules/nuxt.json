@@ -1,0 +1,44 @@
+{
+  "id": "nuxt",
+  "name": "Nuxt",
+  "category": "framework",
+  "signals": [
+    {
+      "type": "header",
+      "name": "x-powered-by",
+      "pattern": "Nuxt",
+      "weight": 0.8,
+      "label": "x-powered-by: Nuxt header"
+    },
+    {
+      "type": "global",
+      "name": "__NUXT__",
+      "weight": 0.7,
+      "label": "window.__NUXT__ present"
+    },
+    {
+      "type": "html",
+      "pattern": "/_nuxt/",
+      "weight": 0.6,
+      "label": "/_nuxt/ assets"
+    },
+    {
+      "type": "html",
+      "pattern": "id=\"__nuxt\"",
+      "weight": 0.5,
+      "label": "#__nuxt root element"
+    }
+  ],
+  "limitations": [
+    {
+      "severity": "low",
+      "title": "Hydration cost",
+      "detail": "Pages ship Vue plus page JavaScript that has to hydrate before the page is fully interactive."
+    }
+  ],
+  "cleanup": {
+    "classPatterns": [],
+    "cdnHosts": []
+  },
+  "manualRebuild": []
+}

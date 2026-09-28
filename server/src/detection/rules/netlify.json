@@ -1,0 +1,26 @@
+{
+  "id": "netlify",
+  "name": "Netlify",
+  "category": "hosting",
+  "signals": [
+    {
+      "type": "header",
+      "name": "x-nf-request-id",
+      "weight": 0.8,
+      "label": "x-nf-request-id header"
+    },
+    {
+      "type": "header",
+      "name": "server",
+      "pattern": "^Netlify",
+      "weight": 0.7,
+      "label": "server: Netlify header"
+    }
+  ],
+  "limitations": [],
+  "cleanup": {
+    "classPatterns": [],
+    "cdnHosts": []
+  },
+  "manualRebuild": []
+}
