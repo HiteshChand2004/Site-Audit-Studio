@@ -1,5 +1,7 @@
-// The Analyze pipeline: fetch → robots/sitemap → render + axe → crawl → link check →
+// The Analyze pipeline: fetch → robots/sitemap → render + axe → screenshots → crawl → link check →
 // Lighthouse mobile/desktop → stack detection, analyzers and report assembly.
+// All outbound traffic runs under one SSRF policy: Node fetches check it at connect time, and
+// Chromium/Lighthouse go through a local egress proxy that checks it (security/).
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { projectDir } from '../db/index.js';
@@ -20,6 +22,9 @@ import { runLighthouse } from './lighthouse/run.js';
 import { checkLinks } from './linkChecker.js';
 import { launchBrowser, renderHome, renderHtml } from './render.js';
 import { loadLlmsTxt, loadRobots, parseRobots } from './robots.js';
+import { captureScreenshots } from './screenshots.js';
+import { startEgressProxy } from '../security/egressProxy.js';
+import { userPolicy, withNetPolicy } from '../security/netGuard.js';
 import { loadSitemaps } from './sitemap.js';
 import { withTimeout } from './util.js';
 
@@ -28,6 +33,7 @@ export const STEPS = [
   { key: 'fetch', label: 'Fetching homepage', weight: 3, max: 25000 },
   { key: 'robots', label: 'robots.txt & sitemap', weight: 3, max: 30000 },
   { key: 'render', label: 'Rendering + accessibility', weight: 14, max: 75000, expected: 15000 },
+  { key: 'screenshots', label: 'Screenshots (desktop, tablet, mobile)', weight: 8, max: 60000, expected: 25000 },
   { key: 'crawl', label: 'Crawling pages', weight: 18, max: 75000 },
   { key: 'links', label: 'Checking links', weight: 14, max: 50000 },
   { key: 'lighthouse-mobile', label: 'Lighthouse · mobile', weight: 20, max: 95000, expected: 40000 },
@@ -60,8 +66,25 @@ const NETWORK_ERRORS = {
   'too-many-redirects': 'The homepage redirects too many times.',
 };
 
+/** Public URL of a stored screenshot (routes/screens.js). */
+export const screenUrl = (projectId, analysisId, file) => `/api/projects/${projectId}/analyses/${analysisId}/screens/${file}`;
+
+function publicScreenshots(projectId, analysisId, shots) {
+  if (!shots || !Object.keys(shots.views).length) return null;
+  const views = {};
+  for (const [id, v] of Object.entries(shots.views)) {
+    views[id] = {
+      ...v,
+      fold: { ...v.fold, url: screenUrl(projectId, analysisId, v.fold.file) },
+      full: { ...v.full, url: screenUrl(projectId, analysisId, v.full.file) },
+    };
+  }
+  return { analysisId, capturedAt: shots.capturedAt, views };
+}
+
 async function fetchHome(url) {
   const home = await fetchPage(url, { timeout: 20000 });
+  if (home.error === 'blocked') throw new AnalysisError(home.message);
   if (home.error) throw new AnalysisError(`Could not reach ${url}. ${NETWORK_ERRORS[home.error] ?? 'Network error.'}`);
   if (isBotChallenge(home)) {
     throw new AnalysisError(
@@ -79,9 +102,15 @@ async function fetchHome(url) {
  * @param {string} o.analysisId
  * @param {number} o.maxPages
  * @param {(step:string, fraction:number, message?:string)=>void} o.progress
+ * @param {object} [o.netPolicy]  SSRF policy. User projects always get the default user policy;
+ *   only platform code (Phase 5 re-audit of its own preview servers) passes an internal one.
  * @returns {Promise<object>} the audit JSON
  */
-export async function runAnalysis({ project, analysisId, maxPages, progress }) {
+export function runAnalysis({ netPolicy = userPolicy(), ...opts }) {
+  return withNetPolicy(netPolicy, () => analyze({ ...opts, netPolicy }));
+}
+
+async function analyze({ project, analysisId, maxPages, progress, netPolicy }) {
   const deadline = Date.now() + TOTAL_BUDGET_MS;
   const errors = [];
   const outDir = path.join(projectDir(project.id), 'audit', analysisId);
@@ -123,6 +152,15 @@ export async function runAnalysis({ project, analysisId, maxPages, progress }) {
   const origin = new URL(home.url).origin;
   progress('fetch', 1);
 
+  const proxy = await startEgressProxy(netPolicy);
+  try {
+    return await analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy });
+  } finally {
+    await proxy.close();
+  }
+}
+
+async function analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy }) {
   // 2. robots.txt, sitemap, llms.txt
   const emptyRobots = { status: 'error', sitemaps: [], blockedAiCrawlers: [], blocksAll: false, isAllowed: parseRobots(`${origin}/robots.txt`, '').isAllowed };
   const { robots, sitemap, llms } = await step(
@@ -138,14 +176,20 @@ export async function runAnalysis({ project, analysisId, maxPages, progress }) {
   // 3 + 4. Render the homepage (with axe), then crawl, sharing one browser.
   let browser = null;
   let render = null;
+  let shots = null;
   let crawlResult;
   try {
     render = await step('render', async () => {
-      browser = await launchBrowser();
+      browser = await launchBrowser({ proxy: proxy.url });
       return renderHome(browser, home.url, { globals: globalNames() });
     });
     if (render?.axeError) errors.push({ step: 'render', message: `Accessibility scan failed: ${render.axeError}` });
     if (render?.axe) save('axe.json', render.axe);
+
+    shots = browser
+      ? await step('screenshots', (_signal, budget) => captureScreenshots(browser, home.url, outDir, { timeout: Math.max(5000, Math.min(30000, budget - 5000)) }))
+      : (errors.push({ step: 'screenshots', message: 'Skipped: the browser could not be started.' }), null);
+    for (const e of shots?.errors ?? []) errors.push({ step: 'screenshots', message: `${e.view}: ${e.message}` });
 
     const renderForCrawl = browser
       ? (url) => (render && url === home.url ? Promise.resolve({ html: render.html }) : renderHtml(browser, url))
@@ -181,10 +225,10 @@ export async function runAnalysis({ project, analysisId, maxPages, progress }) {
 
   // 6. Lighthouse (sequential: parallel runs would distort each other's performance numbers)
   const mobile = await step('lighthouse-mobile', (_signal, budget) =>
-    runLighthouse(home.url, 'mobile', { timeout: budget, outFile: path.join(outDir, 'lighthouse-mobile.json') }),
+    runLighthouse(home.url, 'mobile', { timeout: budget, outFile: path.join(outDir, 'lighthouse-mobile.json'), proxy: proxy.url }),
   );
   const desktop = await step('lighthouse-desktop', (_signal, budget) =>
-    runLighthouse(home.url, 'desktop', { timeout: budget, outFile: path.join(outDir, 'lighthouse-desktop.json') }),
+    runLighthouse(home.url, 'desktop', { timeout: budget, outFile: path.join(outDir, 'lighthouse-desktop.json'), proxy: proxy.url }),
   );
 
   // 7. Detection, analyzers, report
@@ -211,8 +255,10 @@ export async function runAnalysis({ project, analysisId, maxPages, progress }) {
     project,
     analysisId,
     url: home.url,
-    frame: computeFrame(home.headers),
-    metrics: buildMetrics(mobile),
+    frame: computeFrame(home.headers, { url: home.url, html: render?.html || home.body }),
+    screenshots: publicScreenshots(project.id, analysisId, shots),
+    metrics: buildMetrics(mobile, 'mobile'),
+    metricsByDevice: { mobile: buildMetrics(mobile, 'mobile'), desktop: buildMetrics(desktop, 'desktop') },
     scores: buildScores(mobile, desktop),
     techStack: toTechStack(detections),
     weaknesses: buildWeaknesses(detections, mobile),
@@ -223,6 +269,7 @@ export async function runAnalysis({ project, analysisId, maxPages, progress }) {
     accessibility: analyzeA11y(render?.axe),
     manualRebuild,
     pagesCrawled: pages.length,
+    blockedHosts: proxy.blocked(),
     errors,
   });
   progress('report', 1);

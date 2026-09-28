@@ -71,6 +71,14 @@ export function buildDummyAudit(project) {
 
   const lcp = pick(2600, 5200);
   const brokenCount = pick(2, 6);
+  const metrics = {
+    loadTime: pick(2800, 6400),
+    lcp,
+    tbt: pick(240, 1100),
+    cls: Number((rand() * 0.25).toFixed(2)),
+    pageSize: pick(1800, 5600) * 1024,
+    requests: pick(48, 140),
+  };
 
   return {
     isDummy: true,
@@ -80,15 +88,23 @@ export function buildDummyAudit(project) {
     frame: {
       frameable: false,
       reason: 'X-Frame-Options: SAMEORIGIN',
+      confidence: 'high',
+      notes: [],
     },
 
-    metrics: {
-      loadTime: pick(2800, 6400),
-      lcp,
-      tbt: pick(240, 1100),
-      cls: Number((rand() * 0.25).toFixed(2)),
-      pageSize: pick(1800, 5600) * 1024,
-      requests: pick(48, 140),
+    // No screenshots until the site is analyzed; the preview shows a wireframe.
+    screenshots: null,
+
+    metrics,
+    metricsByDevice: {
+      mobile: { ...metrics, device: 'mobile' },
+      desktop: {
+        ...metrics,
+        loadTime: Math.round(metrics.loadTime * 0.45),
+        lcp: Math.round(lcp * 0.5),
+        tbt: Math.round(metrics.tbt * 0.3),
+        device: 'desktop',
+      },
     },
 
     scores: {
@@ -160,6 +176,8 @@ export function buildDummyAudit(project) {
       { impact: 'moderate', title: 'Links not distinguishable', count: pick(2, 8) },
       { impact: 'minor', title: 'Missing <html lang>', count: 1 },
     ],
+
+    blockedHosts: [],
 
     manualRebuild: [
       ...platform.manual.map(([kind, title, detail]) => ({ kind, title, detail })),

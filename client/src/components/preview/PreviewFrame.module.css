@@ -91,6 +91,11 @@
     var(--surface-2);
 }
 
+.stage[data-fit] {
+  height: 440px;
+  padding: 0;
+}
+
 .page {
   position: relative;
   width: 100%;

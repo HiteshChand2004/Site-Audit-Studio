@@ -3,14 +3,17 @@ import { buildDummyAudit } from '../dummy/audit.js';
 /**
  * Shapes the analysis into the audit JSON contract the UI renders (same keys as buildDummyAudit).
  * Fields beyond the dummy's are additive: analysisId, pagesCrawled, brokenLinks.total/unverified,
- * errors, and techStack[].category.
+ * errors, and techStack[].category. Phase 3 added screenshots, metricsByDevice, blockedHosts and
+ * frame.confidence/notes/appOrigin/checkedAt.
  */
 export function assembleAudit({
   project,
   analysisId,
   url,
   frame,
+  screenshots,
   metrics,
+  metricsByDevice,
   scores,
   techStack,
   weaknesses,
@@ -21,6 +24,7 @@ export function assembleAudit({
   accessibility,
   manualRebuild,
   pagesCrawled,
+  blockedHosts = [],
   errors,
 }) {
   return {
@@ -30,7 +34,9 @@ export function assembleAudit({
     analyzedAt: new Date().toISOString(),
     pagesCrawled,
     frame,
+    screenshots,
     metrics,
+    metricsByDevice,
     scores,
     techStack,
     weaknesses,
@@ -45,6 +51,7 @@ export function assembleAudit({
     },
     accessibility,
     manualRebuild,
+    blockedHosts,
     errors,
     // The fix checklist is produced by re-auditing the recreated site (Phase 5). Until then it stays a sample.
     recreate: { ...buildDummyAudit(project).recreate, isDummy: true },

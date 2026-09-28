@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, Globe, Info, Loader2, Play, Settings2, Sparkles, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, Clock, Globe, Info, Loader2, Play, Settings2, Sparkles, ShieldAlert } from 'lucide-react';
 import Button from '../components/common/Button.jsx';
 import Badge from '../components/common/Badge.jsx';
 import PreviewFrame, { Wireframe } from '../components/preview/PreviewFrame.jsx';
+import SitePreview, { liveAvailability, ModeToggle } from '../components/preview/SitePreview.jsx';
 import MetricsBar from '../components/audit/MetricsBar.jsx';
 import AuditReport from '../components/audit/AuditReport.jsx';
 import AnalyzeProgress from '../components/audit/AnalyzeProgress.jsx';
@@ -20,6 +21,49 @@ function timeAgo(iso) {
   return new Date(iso).toLocaleDateString();
 }
 
+// The preview viewport and the metrics device follow each other (tablet has no Lighthouse run).
+const DEVICE_OF = { 1440: 'desktop', 375: 'mobile' };
+const VIEWPORT_OF = { desktop: 1440, mobile: 375 };
+
+function previewOverlay({ audit, mode, slow }) {
+  if (!audit) return null;
+  if (audit.isDummy) {
+    return (
+      <>
+        <Info size={13} aria-hidden="true" />
+        <span>Sample preview — run Analyze to load the real site</span>
+      </>
+    );
+  }
+  if (mode === 'live' && slow) {
+    return (
+      <>
+        <Clock size={13} color="var(--warn)" aria-hidden="true" />
+        <span>Still loading — switch to “Shot” if the page stays blank</span>
+      </>
+    );
+  }
+  if (mode === 'live' && audit.frame.confidence === 'uncertain') {
+    return (
+      <>
+        <AlertTriangle size={13} color="var(--warn)" aria-hidden="true" />
+        <span title={audit.frame.notes.join(' ')}>May render blank when framed · try “Shot”</span>
+      </>
+    );
+  }
+  if (!audit.frame.frameable) {
+    return (
+      <>
+        <ShieldAlert size={13} color="var(--warn)" aria-hidden="true" />
+        <span>
+          Iframe blocked · <span className="mono">{audit.frame.reason}</span>
+        </span>
+      </>
+    );
+  }
+  return null;
+}
+
 export default function OldPanel({ project, audit, loading, onOpenStack }) {
   const [url, setUrl] = useState(project.url);
   const [maxPages, setMaxPages] = useState(String(project.max_pages ?? 25));
@@ -31,6 +75,28 @@ export default function OldPanel({ project, audit, loading, onOpenStack }) {
   const update = useProjects((s) => s.update);
   const dismissAnalysis = useProjects((s) => s.dismissAnalysis);
   const running = isAnalysisActive(analysis);
+
+  const [viewport, setViewport] = useState(1440);
+  const [device, setDevice] = useState('desktop');
+  const [slow, setSlow] = useState(false);
+  const previewUrl = audit?.url ?? project.url;
+  const live = liveAvailability(audit, previewUrl);
+  const hasScreens = Boolean(audit?.screenshots);
+  const [mode, setMode] = useState('screenshot');
+  // A new analysis (or project) picks its default: live when the site can be framed.
+  useEffect(() => {
+    setMode(live.ok ? 'live' : 'screenshot');
+  }, [audit?.analysisId, audit?.isDummy, previewUrl, live.ok]);
+
+  const changeViewport = (v) => {
+    setViewport(v);
+    if (DEVICE_OF[v]) setDevice(DEVICE_OF[v]);
+  };
+  const changeDevice = (d) => {
+    setDevice(d);
+    setViewport(VIEWPORT_OF[d]);
+  };
+  const realPreview = audit && !audit.isDummy;
 
   const saveMaxPages = () => {
     const n = Number(maxPages);
@@ -92,21 +158,26 @@ export default function OldPanel({ project, audit, loading, onOpenStack }) {
         )}
 
         <PreviewFrame
-          address={project.url}
+          address={previewUrl}
           tone="old"
-          overlay={
-            audit && !audit.frame.frameable ? (
-              <>
-                <ShieldAlert size={13} color="var(--warn)" aria-hidden="true" />
-                <span>
-                  Iframe blocked · <span className="mono">{audit.frame.reason}</span>
-                </span>
-              </>
-            ) : null
-          }
+          viewport={viewport}
+          onViewportChange={changeViewport}
+          fit={Boolean(realPreview)}
+          toolbar={realPreview && <ModeToggle mode={mode} onChange={setMode} live={live} hasScreens={hasScreens} />}
+          overlay={previewOverlay({ audit, mode, slow })}
         >
-          <Wireframe />
+          {realPreview ? (
+            <SitePreview url={previewUrl} audit={audit} mode={mode} viewport={viewport} onSlow={setSlow} />
+          ) : (
+            <Wireframe />
+          )}
         </PreviewFrame>
+        {realPreview && audit.blockedHosts?.length > 0 && (
+          <p className={styles.dummyNote}>
+            <ShieldAlert size={13} aria-hidden="true" />
+            Requests to private network addresses were blocked during Analyze: {audit.blockedHosts.join(', ')}
+          </p>
+        )}
 
         {loading && <p className={styles.dummyNote}>Loading audit…</p>}
 
@@ -116,7 +187,13 @@ export default function OldPanel({ project, audit, loading, onOpenStack }) {
               <span>Performance</span>
               {!audit.isDummy && audit.metrics?.device && <span className={styles.sectionMeta}>Lighthouse · homepage</span>}
             </div>
-            <MetricsBar metrics={audit.metrics} scores={audit.scores} />
+            <MetricsBar
+              metrics={audit.metrics}
+              metricsByDevice={audit.metricsByDevice}
+              scores={audit.scores}
+              device={device}
+              onDeviceChange={changeDevice}
+            />
 
             <div className={styles.sectionTitle}>
               <span>Audit report</span>

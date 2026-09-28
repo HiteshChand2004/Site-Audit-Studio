@@ -4,6 +4,7 @@ import { rm } from 'node:fs/promises';
 import { db, projectDir } from '../db/index.js';
 import { parseMaxPages } from './analyze.js';
 import { buildDummyAudit } from '../dummy/audit.js';
+import { precheckUrl } from '../security/netGuard.js';
 
 export const STACKS = ['html', 'react-vite', 'nextjs', 'mern'];
 
@@ -45,6 +46,8 @@ router.post('/', (req, res) => {
   const { name, url, authorized } = req.body ?? {};
   const normalized = normalizeUrl(url);
   if (!normalized) return badRequest(res, 'A valid http(s) URL is required.');
+  const blocked = precheckUrl(normalized);
+  if (blocked) return badRequest(res, blocked);
   if (authorized !== true) {
     return badRequest(res, 'Please confirm you are authorized to audit and recreate this site.');
   }
@@ -79,6 +82,8 @@ router.patch('/:id', (req, res) => {
   if (url !== undefined) {
     const normalized = normalizeUrl(url);
     if (!normalized) return badRequest(res, 'A valid http(s) URL is required.');
+    const blocked = precheckUrl(normalized);
+    if (blocked) return badRequest(res, blocked);
     next.url = normalized;
   }
   if (maxPages !== undefined) {

@@ -111,7 +111,8 @@ test('link classification', () => {
 });
 
 test('frame check from headers', () => {
-  assert.deepEqual(computeFrame({ 'x-frame-options': 'sameorigin' }), { frameable: false, reason: 'X-Frame-Options: SAMEORIGIN' });
+  const frame = computeFrame({ 'x-frame-options': 'sameorigin' });
+  assert.deepEqual([frame.frameable, frame.reason, frame.confidence], [false, 'X-Frame-Options: SAMEORIGIN', 'high']);
   assert.equal(computeFrame({ 'content-security-policy': "default-src 'self'; frame-ancestors 'self'" }).frameable, false);
   assert.equal(computeFrame({ 'content-security-policy': 'frame-ancestors *' }).frameable, true);
   assert.equal(computeFrame({}).frameable, true);

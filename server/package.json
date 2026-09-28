@@ -5,8 +5,8 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "dev": "node --disable-warning=ExperimentalWarning --watch src/index.js",
-    "start": "node --disable-warning=ExperimentalWarning src/index.js",
+    "dev": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env --watch src/index.js",
+    "start": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/index.js",
     "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.js\"",
     "fixture-site": "node test/serve-fixture.js"
   },
@@ -18,6 +18,8 @@
     "express": "^5.1.0",
     "lighthouse": "^12.8.2",
     "playwright": "^1.63.0",
-    "robots-parser": "^3.0.1"
+    "robots-parser": "^3.0.1",
+    "sharp": "^0.34.5",
+    "undici": "^7.30.0"
   }
 }

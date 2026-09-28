@@ -2,7 +2,7 @@ import { useState } from 'react';
 import styles from './MetricsBar.module.css';
 
 const fmtMs = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`);
-const fmtBytes = (b) => (b >= 1024 * 1024 ? `${(b / 1024 / 1024).toFixed(1)} MB` : `${Math.round(b / 1024)} KB`);
+const fmtBytes = (b) => (b >= 1024 * 1024 ? `${(b / 1024 / 1024).toFixed(1)} MB` : b >= 1024 ? `${Math.round(b / 1024)} KB` : `${b} B`);
 // Lighthouse can fail on a site; its metrics are then null and render as a dash.
 const show = (v, fmt) => (v == null ? '—' : fmt(v));
 const toneOf = (v, fn) => (v == null ? 'none' : fn(v));
@@ -15,6 +15,15 @@ const grade = {
   pageSize: (v) => (v <= 1.6 * 1024 * 1024 ? 'ok' : v <= 4 * 1024 * 1024 ? 'warn' : 'bad'),
 };
 const scoreTone = (s) => (s >= 90 ? 'ok' : s >= 50 ? 'warn' : 'bad');
+
+const HINTS = {
+  'Load time': 'Time to Interactive (Lighthouse). Good ≤ 3s, poor > 5s',
+  LCP: 'Largest Contentful Paint. Good ≤ 2.5s, poor > 4s',
+  TBT: 'Total Blocking Time. Good ≤ 200ms, poor > 600ms',
+  'Page size': 'Total transfer size of the homepage. Good ≤ 1.6 MB, poor > 4 MB',
+};
+
+const EMPTY = { loadTime: null, lcp: null, tbt: null, pageSize: null };
 
 const SCORE_LABELS = [
   ['performance', 'Perf'],
@@ -45,8 +54,17 @@ function Ring({ value, label }) {
   );
 }
 
-export default function MetricsBar({ metrics, scores }) {
-  const [device, setDevice] = useState('mobile');
+/**
+ * Lighthouse metrics and scores for one device. `metricsByDevice` holds both runs; audits from
+ * before it existed only have the mobile `metrics`. The device can be controlled by the parent
+ * (it follows the preview's viewport) or left to this component.
+ */
+export default function MetricsBar({ metrics: mobileOnly, metricsByDevice, scores, device: controlled, onDeviceChange }) {
+  const [ownDevice, setOwnDevice] = useState('mobile');
+  const device = controlled ?? ownDevice;
+  const setDevice = onDeviceChange ?? setOwnDevice;
+  const metrics = metricsByDevice?.[device] ?? (device === 'mobile' ? mobileOnly : null) ?? EMPTY;
+  const noDesktop = device === 'desktop' && !metricsByDevice;
   const items = [
     ['Load time', show(metrics.loadTime, fmtMs), toneOf(metrics.loadTime, grade.loadTime)],
     ['LCP', show(metrics.lcp, fmtMs), toneOf(metrics.lcp, grade.lcp)],
@@ -58,7 +76,7 @@ export default function MetricsBar({ metrics, scores }) {
     <div className={styles.wrap}>
       <div className={styles.metrics}>
         {items.map(([label, value, tone]) => (
-          <div key={label} className={styles.metric}>
+          <div key={label} className={styles.metric} title={HINTS[label]}>
             <span className={styles.label}>
               <span className={styles.dot} data-tone={tone} aria-hidden="true" />
               {label}
@@ -67,6 +85,7 @@ export default function MetricsBar({ metrics, scores }) {
           </div>
         ))}
       </div>
+      {noDesktop && <p className={styles.note}>Desktop metrics are available for analyses run after this update. Run Analyze again to see them.</p>}
       <div className={styles.scores}>
         <div className={styles.toggle} role="group" aria-label="Device">
           {['mobile', 'desktop'].map((d) => (

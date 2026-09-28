@@ -5,6 +5,7 @@ import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { db } from '../db/index.js';
 import { overallPct, runAnalysis, STEPS } from './index.js';
+import { pruneScreenshots } from './retention.js';
 
 const insertRow = db.prepare(
   `INSERT INTO analyses (id, project_id, status, progress, started_at) VALUES (?, ?, 'queued', 0, ?)`,
@@ -126,6 +127,8 @@ class JobManager extends EventEmitter {
       finishRow.run('failed', job.pct, job.error, new Date().toISOString(), null, job.id);
       this.#emit(job, 'failed');
     }
+    // Keep screenshots of the latest analyses only (failed ones never count).
+    await pruneScreenshots(project.id).catch((err) => console.error(`[retention ${project.id}]`, err));
     setTimeout(() => this.#jobs.delete(job.id), RETAIN_MS).unref();
   }
 }

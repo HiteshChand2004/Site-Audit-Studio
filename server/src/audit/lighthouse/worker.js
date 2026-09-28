@@ -4,6 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import lighthouse from 'lighthouse';
 import desktopConfig from 'lighthouse/core/config/desktop-config.js';
 import * as chromeLauncher from 'chrome-launcher';
+import { proxyChromeFlags } from '../../security/egressProxy.js';
 
 const CATEGORIES = ['performance', 'seo', 'accessibility', 'best-practices'];
 
@@ -31,12 +32,12 @@ function summarize(lhr) {
   };
 }
 
-process.once('message', async ({ url, formFactor, chromePath, outFile }) => {
+process.once('message', async ({ url, formFactor, chromePath, outFile, proxy }) => {
   let chrome;
   try {
     chrome = await chromeLauncher.launch({
       chromePath,
-      chromeFlags: ['--headless=new', '--disable-gpu', '--no-first-run', '--disable-extensions'],
+      chromeFlags: ['--headless=new', '--disable-gpu', '--no-first-run', '--disable-extensions', ...(proxy ? proxyChromeFlags(proxy) : [])],
       logLevel: 'silent',
     });
     process.send({ type: 'chrome', pid: chrome.pid });

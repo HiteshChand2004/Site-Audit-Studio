@@ -5,8 +5,8 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 
 ## Layout (3 columns)
 - **Sidebar**: "New Project" button + saved websites list. Clicking one loads it into the OLD panel.
-- **OLD panel**: URL + Analyze → original site preview (iframe, or screenshot/live-view fallback
-  when blocked) → performance metrics → audit report (tech stack + confidence, weaknesses,
+- **OLD panel**: URL + Analyze → original site preview (sandboxed iframe, or the Analyze screenshot
+  when framing is blocked; Live/Shot toggle, 1440/768/375 viewports) → performance metrics → audit report (tech stack + confidence, weaknesses,
   SEO, AEO, meta/sitemap/robots, broken links, a11y, "manual rebuild needed") → Recreate + stack settings.
 - **NEW panel**: preview of the recreated site (own localhost port) → fix checklist
   (fixed / still open / manual) → Download .zip.
@@ -18,20 +18,22 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 - DB: SQLite via Node's built-in **`node:sqlite`** (`DatabaseSync`). No native build, so it's safe on Windows.
   Needs Node ≥ 22.13. The ExperimentalWarning is silenced with `--disable-warning=ExperimentalWarning`.
 - Analyze (Phase 2): playwright (Chromium), lighthouse + chrome-launcher (run in a forked worker), @axe-core/playwright, cheerio, robots-parser.
-- Planned (Phase 3+): sharp, archiver, get-port, execa.
+- Preview + security (Phase 3): sharp (WebP screenshots), undici (fetch with a connect-time SSRF check).
+- Planned (Phase 4+): archiver, get-port, execa.
 
 ## Phases
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Layout, sidebar, project CRUD (SQLite), stack modal, dummy audit | ✅ Done |
 | 2 | Analyze job + SSE progress: Lighthouse (mobile+desktop), stack detection, crawler (broken links, sitemap, robots, meta), SEO, AEO, axe a11y, manual-rebuild detector | ✅ Done |
-| 3 | OLD iframe + screenshot fallback + live view (CDP screencast). The X-Frame-Options/CSP check already exists (`audit.frame`) | ⏳ Next |
+| 3 | OLD preview: frame check (XFO + CSP3 frame-ancestors), sandboxed iframe, screenshots 1440/768/375 (fold + full, WebP, keep latest 3), per-device metrics, SSRF guard | ✅ Done |
+| 3b | Live view (CDP screencast, view + scroll + click, no keyboard) — deferred by the user | ⏳ Later |
 | 4a | Recreate → plain HTML: page discovery (sitemap, limit), Playwright capture, local assets, IR, variant merge, semantic classes, fixers | ⏳ |
 | 4b | Motion + responsive fidelity: hover, scroll reveal, continuous animations, widget JS, visual diff score | ⏳ |
 | 5 | PreviewManager (ports 5100–5199), NEW iframe, re-audit → fix checklist | ⏳ |
 | 6 | React+Vite / Next.js / MERN emitters + Download zip | ⏳ |
 
-**Current status:** Phase 2 complete (commit 1eb955e). Next: Phase 3, which starts only after the user approves its plan.
+**Current status:** Phase 3 complete. Next: Phase 4a, which starts only after the user approves its plan.
 
 **Workflow rule:** implement one phase at a time, and only after the user says "go ahead". Commit at the end of each phase.
 
@@ -63,6 +65,27 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 - **Scope:** Lighthouse (mobile + desktop), axe and stack detection run on the **homepage only**. SEO, AEO,
   meta checks and the link check cover all crawled pages (`max_pages`, default 25, depth 3).
 
+## Preview & network security (Phase 3) rules
+- **SSRF guard** (`server/src/security/`): user URLs may only reach **public** addresses. Loopback, private
+  (RFC 1918, CGNAT, ULA), link-local (cloud metadata) and reserved ranges are blocked, including IPv4 embedded in IPv6.
+  The check runs on the **resolved IP at connect time** (defeats DNS rebinding) and on **every redirect hop**.
+  Node fetches use an undici Agent whose connector resolves, checks and pins the IP. Playwright and Lighthouse
+  Chrome run behind a per-analysis local egress proxy (`egressProxy.js`) that does the same for every request.
+- **Dev flag** `SAS_ALLOW_LOCALHOST=1` (for example in `server/.env`, which is gitignored) allows loopback only, never the API
+  port 4000. Private/intranet ranges have no allowlist.
+- **Internal allowlist**: `createNetPolicy({ internalPorts })` lets platform code (Phase 5 PreviewManager) reach
+  its own loopback preview ports. It is passed as `runAnalysis({ netPolicy })` and is never derived from user input;
+  the analyze route always uses the default user policy.
+- **Frame check** (`audit/frame.js`) follows browsers: CSP `frame-ancestors` (all policies must allow
+  `APP_ORIGIN`, default `http://localhost:5173`) overrides X-Frame-Options; Report-Only and `<meta>` are ignored;
+  ALLOW-FROM and frame-busting scripts only set `confidence: 'uncertain'`.
+- **Iframe**: `sandbox="allow-scripts allow-same-origin"` (no top navigation, forms or popups), `allow=""`, no referrer.
+  The app never frames its own origin. A manual Live/Shot toggle is always available.
+- **Screenshots**: captured every analysis at 1440×900 (DPR 1), 768×1024 (DPR 1) and 375×812 (DPR 2, mobile UA),
+  one fold and one full-page shot each, full page capped at 8,000 CSS px, WebP q75. Stored in
+  `data/projects/<id>/audit/<analysisId>/screens/`, served by a whitelisted route with immutable caching.
+  After each analysis only the latest **3** completed analyses of a project keep their `screens/`.
+
 ## Conventions
 - **All product text in English** (UI, API errors, dummy data, comments, docs), even though the user chats in Hinglish.
 - Theme: light, indigo accent `#4F46E5`, slate neutrals, Inter + JetBrains Mono (local via @fontsource).
@@ -73,15 +96,16 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 ## Structure
 ```
 client/src/  layout/ (AppShell, Sidebar, OldPanel, NewPanel)
-             components/{common,audit,preview,project,recreate}/
+             components/{common,audit,preview,project,recreate}/  (preview/SitePreview.jsx = iframe/screenshot)
              store/useProjects.js, api/client.js, constants.js (STACKS), styles/
-server/src/  index.js, db/index.js (schema + migrations), routes/{projects,analyze}.js, dummy/audit.js
+server/src/  index.js, db/index.js (schema + migrations), routes/{projects,analyze,screens}.js, dummy/audit.js
+             security/ netGuard.js (address classes, policies, resolveChecked), egressProxy.js (Chromium proxy)
              audit/ index.js (pipeline + STEPS), jobs.js (queue, 1 at a time), http.js, robots.js, sitemap.js,
-                    crawler.js, extract.js, linkChecker.js, render.js, frame.js, assemble.js,
+                    crawler.js, extract.js, linkChecker.js, render.js, screenshots.js, retention.js, frame.js, assemble.js,
                     lighthouse/{run,worker}.js, analyzers/{seo,aeo,crawlChecks,a11y,metrics,weaknesses}.js
              detection/ engine.js, manual.js, manual-rules.json, rules/<platform>.json (15 platforms)
 server/test/ *.test.js (node --test), serve-fixture.js + fixtures/site (seeded issues, port 4100)
-data/        app.db + projects/<id>/audit/<analysisId>/{crawl,axe,lighthouse-*}.json (gitignored)
+data/        app.db + projects/<id>/audit/<analysisId>/{crawl,axe,lighthouse-*}.json + screens/*.webp (gitignored)
 ```
 
 ## Run
@@ -91,17 +115,20 @@ npm run dev          # client :5173 + server :4000 (concurrently)
 npm run dev:server   # or: npm run dev:client
 npm run build        # client production build
 npm test -w server   # unit tests
-npm run fixture-site -w server   # seeded test site on :4100
+npm run fixture-site -w server   # seeded test site on :4100 (analyzing it needs SAS_ALLOW_LOCALHOST=1)
 npx -w server playwright install chromium   # one-time
 ```
 API: `GET/POST /api/projects`, `GET/PATCH/DELETE /api/projects/:id` (PATCH takes `max_pages`), `GET /api/projects/:id/audit`,
-`POST /api/projects/:id/analyze`, `GET /api/projects/:id/analyze/current`, `GET /api/projects/:id/analyze/:analysisId/events` (SSE: progress/done/failed), `GET /api/health`
+`POST /api/projects/:id/analyze`, `GET /api/projects/:id/analyze/current`, `GET /api/projects/:id/analyze/:analysisId/events` (SSE: progress/done/failed),
+`GET /api/projects/:id/analyses/:analysisId/screens/:file` (`{desktop,tablet,mobile}-{fold,full}.webp`), `GET /api/health`
 
 ## Currently dummy / known issues
 - Analyze is real. Projects that were never analyzed still get the **dummy** audit (`isDummy: true`, "Dummy data" badge).
-- Still dummy: the OLD preview wireframe (Phase 3), the NEW preview and the fix checklist (`audit.recreate`, which has `isDummy: true`; Phase 5).
+- Never-analyzed projects show a wireframe in the OLD preview. Still dummy: the NEW preview and the fix checklist
+  (`audit.recreate`, which has `isDummy: true`; Phase 5).
   Recreate (Phase 4) and Download (Phase 6) stay disabled.
-- A mobile Lighthouse run takes ~40s+, so a full analysis usually takes 1.5–2 minutes.
+- A mobile Lighthouse run takes ~40s+, and screenshots add 5–30s, so a full analysis usually takes 1.5–3 minutes.
+- Audits from before Phase 3 have no screenshots and no desktop metrics; the UI asks to run Analyze again.
 - Bot-protected sites (Cloudflare challenge) fail with a clear message; they are never bypassed.
 - Jobs live in memory; a server restart marks running analyses as failed.
 - Project delete uses `window.confirm`. Git shows LF→CRLF warnings on Windows, which are harmless.

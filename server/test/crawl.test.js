@@ -8,6 +8,9 @@ import { checkLinks } from '../src/audit/linkChecker.js';
 import { loadRobots } from '../src/audit/robots.js';
 import { loadSitemaps } from '../src/audit/sitemap.js';
 
+// The fixture runs on localhost, which the SSRF guard blocks unless this dev flag is set.
+process.env.SAS_ALLOW_LOCALHOST = '1';
+
 const PORT = 4199;
 const origin = `http://localhost:${PORT}`;
 let server;

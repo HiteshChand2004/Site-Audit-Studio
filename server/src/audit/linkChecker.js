@@ -7,11 +7,12 @@ const PER_HOST = 2;
 
 /**
  * broken      → the link is dead for real visitors (4xx/5xx, DNS failure, refused, bad TLS)
- * unverified  → the server would not answer an automated check (rate limits, bot walls, auth, timeouts)
+ * unverified  → the server would not answer an automated check (rate limits, bot walls, auth, timeouts),
+ *               or the link points at a private network address the SSRF guard does not let us request
  * ok          → 2xx
  */
 export function classifyLink(status, error) {
-  if (error) return ['timeout', 'error', 'too-many-redirects'].includes(error) ? 'unverified' : 'broken';
+  if (error) return ['timeout', 'error', 'too-many-redirects', 'blocked'].includes(error) ? 'unverified' : 'broken';
   if (status >= 200 && status < 400) return 'ok';
   if ([401, 403, 407, 429, 999].includes(status)) return 'unverified';
   if (status >= 400) return 'broken';
@@ -97,7 +98,12 @@ export async function checkLinks({ pages, onProgress, signal }) {
       .map((r) => ({
         url: r.url,
         status: r.error ? r.error.toUpperCase() : r.status,
-        reason: r.error === 'timeout' ? 'Timed out' : UNVERIFIED_REASON[r.status] || 'Could not verify',
+        reason:
+          r.error === 'timeout'
+            ? 'Timed out'
+            : r.error === 'blocked'
+              ? 'Private network address (not requested)'
+              : UNVERIFIED_REASON[r.status] || 'Could not verify',
         foundOn: r.foundOn,
       })),
   };

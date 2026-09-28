@@ -4,8 +4,12 @@ import { USER_AGENT } from './http.js';
 
 const VIEWPORT = { width: 1440, height: 900 };
 
-export async function launchBrowser() {
-  return chromium.launch({ headless: true });
+/**
+ * @param {{ proxy?: string }} [opts]  egress proxy URL (security/egressProxy.js). Playwright also
+ *   sends localhost traffic through it, so every connection is checked by the SSRF guard.
+ */
+export async function launchBrowser({ proxy } = {}) {
+  return chromium.launch({ headless: true, ...(proxy && { proxy: { server: proxy } }) });
 }
 
 // Records WebGL context creation, which a DOM snapshot alone cannot reveal.

@@ -9,10 +9,10 @@ const WORKER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'worker.j
  * Runs Lighthouse for one form factor in a forked worker.
  * @param {string} url
  * @param {'mobile'|'desktop'} formFactor
- * @param {{ timeout?: number, outFile?: string }} [opts]
+ * @param {{ timeout?: number, outFile?: string, proxy?: string }} [opts]  proxy: egress proxy URL (SSRF guard)
  * @returns {Promise<object>} the trimmed summary built by worker.js
  */
-export function runLighthouse(url, formFactor, { timeout = 90000, outFile } = {}) {
+export function runLighthouse(url, formFactor, { timeout = 90000, outFile, proxy } = {}) {
   return new Promise((resolve, reject) => {
     const child = fork(WORKER, [], {
       stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
@@ -55,6 +55,6 @@ export function runLighthouse(url, formFactor, { timeout = 90000, outFile } = {}
       finish(reject, new Error(`Lighthouse ${formFactor} worker exited (code ${code}) ${stderr.trim().split('\n').pop() || ''}`.trim()));
     });
 
-    child.send({ url, formFactor, chromePath: chromium.executablePath(), outFile });
+    child.send({ url, formFactor, chromePath: chromium.executablePath(), outFile, proxy });
   });
 }

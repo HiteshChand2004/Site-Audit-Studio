@@ -2,15 +2,21 @@ import { Lock, Monitor, Smartphone, Tablet } from 'lucide-react';
 import { useState } from 'react';
 import styles from './PreviewFrame.module.css';
 
-const VIEWPORTS = [
-  { id: 1440, icon: Monitor, label: 'Desktop 1440' },
-  { id: 768, icon: Tablet, label: 'Tablet 768' },
-  { id: 375, icon: Smartphone, label: 'Phone 375' },
+export const VIEWPORTS = [
+  { id: 1440, view: 'desktop', icon: Monitor, label: 'Desktop 1440' },
+  { id: 768, view: 'tablet', icon: Tablet, label: 'Tablet 768' },
+  { id: 375, view: 'mobile', icon: Smartphone, label: 'Phone 375' },
 ];
 
-// Browser-chrome frame. Content is a placeholder in Phase 1; Phase 3/5 add the iframe/screenshot.
-export default function PreviewFrame({ address, tone = 'old', overlay, children }) {
-  const [viewport, setViewport] = useState(1440);
+/**
+ * Browser-chrome frame. The viewport can be controlled (`viewport` + `onViewportChange`) or left
+ * to the frame. With `fit`, children fill the stage and size themselves to the viewport (the real
+ * site preview); without it, the placeholder content is squeezed to hint at the width.
+ */
+export default function PreviewFrame({ address, tone = 'old', overlay, toolbar, viewport, onViewportChange, fit = false, children }) {
+  const [ownViewport, setOwnViewport] = useState(1440);
+  const current = viewport ?? ownViewport;
+  const select = onViewportChange ?? setOwnViewport;
 
   return (
     <div className={styles.frame} data-tone={tone}>
@@ -24,25 +30,24 @@ export default function PreviewFrame({ address, tone = 'old', overlay, children 
           <Lock size={11} aria-hidden="true" />
           <span>{address}</span>
         </span>
+        {toolbar}
         <span className={styles.viewports} role="group" aria-label="Viewport">
           {VIEWPORTS.map(({ id, icon: Icon, label }) => (
-            <button
-              key={id}
-              type="button"
-              aria-pressed={viewport === id}
-              title={label}
-              onClick={() => setViewport(id)}
-            >
+            <button key={id} type="button" aria-pressed={current === id} title={label} onClick={() => select(id)}>
               <Icon size={13} aria-hidden="true" />
               <span className="visually-hidden">{label}</span>
             </button>
           ))}
         </span>
       </div>
-      <div className={styles.stage}>
-        <div className={styles.page} style={{ maxWidth: viewport === 1440 ? '100%' : viewport === 768 ? 300 : 150 }}>
-          {children}
-        </div>
+      <div className={styles.stage} data-fit={fit || undefined}>
+        {fit ? (
+          children
+        ) : (
+          <div className={styles.page} style={{ maxWidth: current === 1440 ? '100%' : current === 768 ? 300 : 150 }}>
+            {children}
+          </div>
+        )}
         {overlay && <div className={styles.overlay}>{overlay}</div>}
       </div>
     </div>
