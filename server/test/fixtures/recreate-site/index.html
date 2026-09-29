@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Recreate Co — fixture for page discovery and capture</title>
+    <meta name="description" content="A small responsive site used to test Recreate page discovery and capture." />
+    <meta property="og:title" content="Recreate Co" />
+    <link rel="icon" href="/img/hero-bg.svg" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"Organization","name":"Recreate Co"}</script>
+  </head>
+  <body>
+    <!-- Discovery seeds: nav pages first, then sitemap pages (blog, team); login/cart/query/PDF/robots-blocked
+         links are skipped with a reason. Capture seeds: CSS background, lazy image, inline SVG, pseudo-elements,
+         a menu button that only shows on mobile and a 3/2/1-column grid. -->
+    <header class="site-header">
+      <a href="/" class="logo">
+        <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#0f766e" /></svg>
+        Recreate Co
+      </a>
+      <nav>
+        <a href="/">Home</a>
+        <a href="/about.html">About</a>
+        <a href="/services/">Services</a>
+        <a href="/contact.html">Contact</a>
+        <a href="/login.html">Log in</a>
+        <a href="/cart">Cart</a>
+      </nav>
+      <button class="menu-button" type="button" aria-label="Open menu">☰</button>
+    </header>
+    <main>
+      <section class="hero">
+        <h1>We build fast websites</h1>
+        <p>Discovery and capture fixture.</p>
+        <a class="cta" href="/contact.html">Get in touch</a>
+      </section>
+      <section class="features">
+        <div class="feature"><h2>Design</h2><p>Clean layouts.</p></div>
+        <div class="feature"><h2>Build</h2><p>Plain HTML and CSS.</p></div>
+        <div class="feature"><h2>Grow</h2><p>SEO that works.</p></div>
+      </section>
+      <section class="gallery" style="margin-top: 1400px">
+        <img data-src="/img/photo.svg" alt="A lazy-loaded photo" width="800" height="400" />
+      </section>
+    </main>
+    <footer class="site-footer">
+      <a href="/?ref=footer">Home (tracked)</a>
+      <a href="/brochure.pdf">Brochure</a>
+      <a href="/private/secret.html">Private</a>
+      <a href="https://example.org/">Partner</a>
+    </footer>
+    <script src="/lazy.js"></script>
+  </body>
+</html>

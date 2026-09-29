@@ -28,14 +28,14 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 | 2 | Analyze job + SSE progress: Lighthouse (mobile+desktop), stack detection, crawler (broken links, sitemap, robots, meta), SEO, AEO, axe a11y, manual-rebuild detector | ✅ Done |
 | 3 | OLD preview: frame check (XFO + CSP3 frame-ancestors), sandboxed iframe, screenshots 1440/768/375 (fold + full, WebP, keep latest 3), per-device metrics, SSRF guard | ✅ Done |
 | 3b | Live view (CDP screencast, view + scroll + click, no keyboard) — deferred by the user | ⏳ Later |
-| 4a | Recreate → plain HTML: page discovery (sitemap, limit), Playwright capture, local assets, IR, variant merge, semantic classes, fixers | 🚧 4a.1 done |
+| 4a | Recreate → plain HTML: page discovery (sitemap, limit), Playwright capture, local assets, IR, variant merge, semantic classes, fixers | 🚧 4a.2 done |
 | 4b | Motion + responsive fidelity: hover, scroll reveal, continuous animations, widget JS, visual diff score | ⏳ |
 | 5 | PreviewManager (ports 5100–5199), NEW iframe, re-audit → fix checklist | ⏳ |
 | 6 | React+Vite / Next.js / MERN emitters + Download zip | ⏳ |
 
 **Current status:** Phases 1, 2 and 3 are complete. Phase 4a is in progress on branch `phase-4a`, one sub-step at a time
 (stop after each, WIP commit, wait for the user's "next"; never push):
-4a.1 job foundation ✅ · 4a.2 discovery + capture · 4a.3 assets · 4a.4 IR + HTML emitter · 4a.5 fixers + WP REST · 4a.6 build, verify, fidelity, preview · 4a.7 tuning + docs.
+4a.1 job foundation ✅ · 4a.2 discovery + capture ✅ · 4a.3 assets · 4a.4 IR + HTML emitter · 4a.5 fixers + WP REST · 4a.6 build, verify, fidelity, preview · 4a.7 tuning + docs.
 
 ### Phase 4a decisions (approved)
 - Minimal static preview server in 4a (one active preview, ports 5100–5199); full PreviewManager in Phase 5.
@@ -46,6 +46,14 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 - Time limit 10 minutes, configurable with `SAS_RECREATE_MINUTES` (1–60).
 - canonical/sitemap/OG use the original origin unless the project's `target_domain` is set.
 - Tests use only the fixture site (localhost:4100); never send requests to external sites from tests.
+- Discovery (4a.2): a fresh SSRF-guarded mini crawl (robots respected). Order: homepage, pages the homepage links to
+  (link order), sitemap, rest of the crawl. Login/cart/checkout/account/admin paths are skipped and listed under
+  "Manual rebuild needed"; query-string URLs, non-HTML files and robots-blocked pages are skipped with a reason.
+  Pages keep their URLs: `/` → `index.html`, `/about.html` → `about.html`, `/about/` → `about/index.html`.
+- Capture (4a.2): every page at 1440/768/375 → `capture/<slug>/<view>.json` (DOM tree with computed styles stored as
+  diffs: inherited props vs parent, others vs the tag's browser default; element width/height left out, `rect` kept;
+  pseudo-elements, inline SVG, lazy attrs, head, :root custom props, @font-face, @keyframes, media queries, resources)
+  plus fold/full WebP screenshots, and `capture/manifest.json`. The desktop view is required per page.
 - Output: `data/projects/<id>/recreate/<recreateId>/` (written as `<recreateId>.tmp`, renamed on success,
   deleted on failure/timeout); the latest 2 completed recreates are kept.
 
@@ -130,13 +138,15 @@ client/src/  layout/ (AppShell, Sidebar, OldPanel, NewPanel)
              store/useProjects.js, api/client.js, constants.js (STACKS), styles/
 server/src/  index.js, db/index.js (schema + migrations), routes/{projects,analyze,screens,recreate}.js, dummy/audit.js
              jobs/ manager.js (JobManager + global one-job lock), sse.js
-             recreate/ index.js (pipeline + STEPS + budget), jobs.js, inputs.js, workspace.js (tmp → final, retention)
+             recreate/ index.js (pipeline + STEPS + budget), jobs.js, inputs.js, workspace.js (tmp → final, retention),
+                    errors.js, discover.js (page selection), inspect.js (step 1), capture/{index,snapshot}.js (Playwright capture)
              security/ netGuard.js (address classes, policies, resolveChecked), egressProxy.js (Chromium proxy)
              audit/ index.js (pipeline + STEPS), jobs.js (queue, 1 at a time), http.js, robots.js, sitemap.js,
                     crawler.js, extract.js, linkChecker.js, render.js, screenshots.js, retention.js, frame.js, assemble.js,
                     lighthouse/{run,worker}.js, analyzers/{seo,aeo,crawlChecks,a11y,metrics,weaknesses}.js
              detection/ engine.js, manual.js, manual-rules.json, rules/<platform>.json (15 platforms)
-server/test/ *.test.js (node --test), serve-fixture.js + fixtures/site (seeded issues, port 4100)
+server/test/ *.test.js (node --test via run-tests.js + setup-data-dir.js: temp DB per test file),
+             serve-fixture.js + fixtures/site (seeded audit issues) and fixtures/recreate-site (responsive site for Recreate)
 data/        app.db + projects/<id>/audit/<analysisId>/{crawl,axe,lighthouse-*}.json + screens/*.webp (gitignored)
 ```
 
@@ -152,6 +162,7 @@ npm run build        # client production build
 npm test -w server   # unit tests; each test file gets its own temp DB (OS temp folder, deleted after the run), never data/app.db
 npm test -w server -- test/crawl.test.js   # a single file
 npm run fixture-site -w server   # seeded test site on :4100 (analyzing it needs SAS_ALLOW_LOCALHOST=1)
+npm run fixture-site -w server -- recreate   # the Recreate fixture site on :4100 instead
 npx -w server playwright install chromium   # one-time
 ```
 API: `GET/POST /api/projects`, `GET/PATCH/DELETE /api/projects/:id` (PATCH takes `max_pages`), `GET /api/projects/:id/audit`,

@@ -6,7 +6,7 @@ import path from 'node:path';
 import sharp from 'sharp';
 import { USER_AGENT } from './http.js';
 
-const MOBILE_UA =
+export const MOBILE_UA =
   'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Mobile Safari/537.36 SiteAuditStudio/0.3';
 
 export const VIEWS = [
@@ -16,13 +16,13 @@ export const VIEWS = [
 ];
 
 // 8000 CSS px × DPR 2 = 16000 px, which stays under WebP's 16383 px limit.
-const MAX_HEIGHT = 8000;
+export const MAX_HEIGHT = 8000;
 const WEBP = { quality: 75, effort: 4 };
 
 export const SCREEN_FILE = /^(desktop|tablet|mobile)-(fold|full)\.webp$/;
 export const screensDir = (analysisDir) => path.join(analysisDir, 'screens');
 
-async function encode(png, file) {
+export async function encode(png, file) {
   const info = await sharp(png).webp(WEBP).toFile(file);
   return { width: info.width, height: info.height, bytes: info.size };
 }

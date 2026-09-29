@@ -10,7 +10,11 @@ import path from 'node:path';
 import { userPolicy, withNetPolicy } from '../security/netGuard.js';
 import { TimeoutError, withTimeout } from '../audit/util.js';
 import { analysisWarnings, baseUrlOf, latestAnalysis } from './inputs.js';
+import { RecreateError } from './errors.js';
+import { inspectStage } from './inspect.js';
 import { commitWorkspace, discardWorkspace, openWorkspace } from './workspace.js';
+
+export { RecreateError };
 
 // weight = share of the progress bar; max = the step's own time limit.
 export const STEPS = [
@@ -38,13 +42,11 @@ export function recreateBudgetMs(env = process.env) {
   return (Number.isFinite(minutes) && minutes >= 1 && minutes <= 60 ? minutes : 10) * 60000;
 }
 
-/** Thrown for problems that are the input's fault; the message is shown to the user as is. */
-export class RecreateError extends Error {}
 
-// Stages are filled in by the Phase 4a sub-steps; until then they only report progress.
+// Stages still to be built in later Phase 4a sub-steps only report progress.
 const noop = async () => {};
 export const STAGES = {
-  inspect: noop,
+  inspect: inspectStage,
   assets: noop,
   generate: noop,
   build: noop,

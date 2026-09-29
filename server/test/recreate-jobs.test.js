@@ -33,6 +33,8 @@ function makeProject({ authorized = 1, stack = 'html', analyzedDaysAgo = 0, anal
 let server;
 let base;
 const savedStages = { ...STAGES };
+// Pipeline tests replace every stage: the real ones launch a browser and reach the network.
+const stubStages = Object.fromEntries(Object.keys(STAGES).map((key) => [key, async () => {}]));
 
 before(async () => {
   const app = express();
@@ -98,7 +100,7 @@ test('a successful run publishes the workspace with a report', async () => {
     project,
     recreateId,
     progress: (step, f) => f === 0 && steps.push(step),
-    stages: { ...savedStages, generate: async (ctx) => ctx.report.pages.push({ path: '/' }) },
+    stages: { ...stubStages, generate: async (ctx) => ctx.report.pages.push({ path: '/' }) },
   });
   assert.deepEqual(steps, ['inspect', 'assets', 'generate', 'build', 'preview']);
   assert.equal(report.baseUrl, 'https://www.example.com');
@@ -118,7 +120,7 @@ test('a failing step discards the workspace and runs cleanups', async () => {
       recreateId,
       progress: () => {},
       stages: {
-        ...savedStages,
+        ...stubStages,
         inspect: async (ctx) => ctx.defer(async () => { disposed = true; }),
         assets: async () => { throw new Error('boom'); },
       },
@@ -141,7 +143,7 @@ test('the time limit stops the job and aborts the running stage', async () => {
       progress: () => {},
       budgetMs: 150,
       stages: {
-        ...savedStages,
+        ...stubStages,
         inspect: (ctx) => new Promise((resolve) => ctx.signal.addEventListener('abort', () => { aborted = true; resolve(); })),
       },
     }),
