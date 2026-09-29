@@ -28,14 +28,14 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 | 2 | Analyze job + SSE progress: Lighthouse (mobile+desktop), stack detection, crawler (broken links, sitemap, robots, meta), SEO, AEO, axe a11y, manual-rebuild detector | ✅ Done |
 | 3 | OLD preview: frame check (XFO + CSP3 frame-ancestors), sandboxed iframe, screenshots 1440/768/375 (fold + full, WebP, keep latest 3), per-device metrics, SSRF guard | ✅ Done |
 | 3b | Live view (CDP screencast, view + scroll + click, no keyboard) — deferred by the user | ⏳ Later |
-| 4a | Recreate → plain HTML: page discovery (sitemap, limit), Playwright capture, local assets, IR, variant merge, semantic classes, fixers | 🚧 4a.3 done |
+| 4a | Recreate → plain HTML: page discovery (sitemap, limit), Playwright capture, local assets, IR, variant merge, semantic classes, fixers | 🚧 4a.4 done |
 | 4b | Motion + responsive fidelity: hover, scroll reveal, continuous animations, widget JS, visual diff score | ⏳ |
 | 5 | PreviewManager (ports 5100–5199), NEW iframe, re-audit → fix checklist | ⏳ |
 | 6 | React+Vite / Next.js / MERN emitters + Download zip | ⏳ |
 
 **Current status:** Phases 1, 2 and 3 are complete. Phase 4a is in progress on branch `phase-4a`, one sub-step at a time
 (stop after each, WIP commit, wait for the user's "next"; never push):
-4a.1 job foundation ✅ · 4a.2 discovery + capture ✅ · 4a.3 assets ✅ · 4a.4 IR + HTML emitter · 4a.5 fixers + WP REST · 4a.6 build, verify, fidelity, preview · 4a.7 tuning + docs.
+4a.1 job foundation ✅ · 4a.2 discovery + capture ✅ · 4a.3 assets ✅ · 4a.4 IR + HTML emitter ✅ · 4a.5 fixers + WP REST · 4a.6 build, verify, fidelity, preview · 4a.7 tuning + docs.
 
 ### Phase 4a progress
 | Step | Status | Commits | Summary |
@@ -43,10 +43,12 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 | 4a.1 Job foundation | ✅ Done | `64a559f`, `6464957` | Recreate job + SSE progress, global one-job lock shared with Analyze, 10-min budget (`SAS_RECREATE_MINUTES`), tmp → final workspace with keep-latest-2 retention, stale-analysis warning, `recreate_pages`/`target_domain` settings, Recreate button. Tests run on a temp DB per test file (`test/run-tests.js`), never `data/app.db`. |
 | 4a.2 Discovery + capture | ✅ Done | `385c00d` | `discover.js` (homepage → homepage links → sitemap → crawl, limit, skip reasons, links-to-live), `capture/` (DOM + computed-style diffs, pseudo-elements, SVG, head, tokens, fonts, resources, fold/full WebP at 1440/768/375), `inspect.js` = step 1; `fixtures/recreate-site` + `recreate-capture.test.js`. |
 | 4a.3 Assets | ✅ Done | `26bfff5` | Images, icons, fonts and media downloaded into `assets/` (no platform CDN links left; skipped files are reported, never linked live). SSRF guard on every download: URL precheck + connect-time IP check on every redirect hop (defeats DNS rebinding) via `guardedFetch` in `http.js`. Dedupe by URL and by content hash (sha256). Per-file size/time limits by kind plus a per-recreate budget (800 files, 300 MB). Cross-origin stylesheets downloaded and parsed (@font-face, @keyframes, @import). Modules: `assets/{index,collect,css,download,cdn}.js`; fixture `/cdn/` second origin + `recreate-assets.test.js`. **SVG sanitization pending → 4a.5.** |
-| 4a.4 IR + HTML emitter | ⏳ Next | — | |
+| 4a.4 IR + HTML emitter | ✅ Done | `1bdd007` | `ir/` (tree: view alignment, variant merge, wrapper cleanup; styles: base + tablet/mobile overrides, sizes from captured boxes; names: semantic classes; head: kept or filled + auto-generated marks; links), `emit/` (pages at original paths, `css/site.css`, hard-linked assets), `ir/site.json`. Generate step = IR + emit + fit pass; build step = basic fidelity (`verify/`: local render, box comparison, rough screenshot comparison). Fixture `work.html` (builder-style Desktop/Tablet/Phone copies) + `recreate-generate.test.js`. |
+| 4a.5 Fixers + WP REST | ⏳ Next | — | |
 
-**Pending (do not forget):** downloaded SVG files are not sanitized yet. In **4a.5** (fixers) strip `<script>`,
-`on*` event attributes, `javascript:` URLs and external references from every SVG in `assets/` before it is emitted.
+**Pending (do not forget):** SVG is not sanitized yet. In **4a.5** (fixers) strip `<script>`, `on*` event attributes,
+`javascript:` URLs and external references from every SVG in `assets/` **and from the inline SVG in the IR** (`raw` of
+`svg` nodes, emitted into the pages) before it is emitted. Until then the generated site is only rendered with page JS off.
 
 Known issue: 2 `netGuard` tests fail on this Windows machine because `*.localhost` names don't resolve (DNS ENOTFOUND);
 environmental, not a regression.
@@ -77,8 +79,46 @@ environmental, not a regression.
   Cross-origin stylesheets the browser could not read are downloaded and parsed (@font-face, @keyframes, @import).
   Skipped files are **never linked live**: they are listed in `report.assets.skipped`; oversized video/audio and
   undownloadable platform-CDN files also go to "Manual rebuild needed". Platform CDN hosts = `cleanup.cdnHosts` of the rules.
+- IR (4a.4, `recreate/ir/`): one merged tree per page. Views are aligned child by child (same tag sequence → by index,
+  else LCS on tag + text); elements only one view has are kept and hidden in the others. Sibling copies with the same
+  content and disjoint visibility (builder Desktop/Tablet/Phone variants) are merged into one element. Plain wrappers
+  (no style, one child, same box) are removed; `div[role=navigation|banner|contentinfo|main|complementary]` become
+  `nav|header|footer|main|aside`. `ir/site.json` = `{ version, baseUrl, breakpoints, tokens, fontFaces, keyframes,
+  boxSizingReset, rules, files, pages[{ head, body }] }`; references are `{asset}`, `{page,hash}`, `{live}`, `{external}`,
+  `{anchor}` and `url("asset:…")`, so later stack emitters only resolve them.
+- Styles (4a.4): one class per distinct style (elements with identical styles share it), desktop-first: base + `@media
+  (max-width)` tablet and mobile overrides. Breakpoints come from the site's own media queries (widest boundary between
+  the captured widths), default 1023.98 / 767.98. A value missing in a later view is written as `inherit` (inherited
+  props) or `revert`; a reset makes links, headings and form controls inherit so "same as parent" stays true.
+  Computed px lose intent, so captured boxes restore it: equal side margins → `margin: auto` + max-width; a block
+  narrower than its parent → `%` width when the ratio is equal in every view, else `max-width` px; images/SVG/video/fields
+  → `100%` or px; empty boxes keep their size; absolute boxes keep one anchor per axis + size; px grid tracks that fill
+  the container → `fr`; containers taller than their content → `min-height`. Sizes respect content-box vs border-box.
+  `* { box-sizing: border-box }` is written once when most elements use it. Colours → hex; colours equal to a `:root`
+  colour token → `var(--token)` (builder token names are renamed `--color-N`). Only used `@keyframes` and `@font-face`.
+- Class names (4a.4): an original class name is reused only when it reads as human-written; builder patterns
+  (`cleanup.classPatterns` of every rule), hashed CSS-in-JS names, utility and visibility classes never are. Otherwise the
+  name is the role (`site-header`, `main-nav`, `title`, `button`, `card-image`, …) prefixed with the nearest named block.
+  Ids are kept when meaningful or referenced (`for`, `aria-*`, `#anchor`).
+- Head (4a.4): original title/description/canonical/OG/Twitter/icons/robots/JSON-LD are kept (generator and platform
+  meta dropped). Missing ones are filled only from the page: title ← first h1 (+ site name), description ← og:description
+  or the first paragraph ≥ 50 chars (clipped at 160), canonical ← target domain or original origin + page path, og:* ←
+  title/description/canonical/first image ≥ 200 px, icon ← the homepage icon, or a generated letter favicon when the
+  site has none. Every filled field is in `report.autoGenerated` (`page`, `field`, `value`, `source`); a missing `lang`
+  is reported (`pages[].head.missing`), never guessed. Site name: og:site_name → JSON-LD → logo text → host.
+- Links (4a.4): recreated pages → relative paths in their original form (`about/`, `../`); other same-site links keep the
+  live URL and are listed in `report.generate.liveLinks` with the reason; `www.` and bare host count as one site;
+  `javascript:`/`data:` hrefs are dropped; `target=_blank` gets `noopener`. Images whose file was not downloaded are
+  left out; forms keep their markup, lose `action`, and are listed under "Manual rebuild needed".
+- Fit pass + fidelity (4a.4, `recreate/verify/`): the site is served from 127.0.0.1 (random port) and rendered with page
+  JS off and every other request aborted. The generate step renders every page and view, compares each element box with
+  the capture (`data-sas-id` only in the in-memory measurement build) and adds widths (top-down, only under a matching
+  parent) and min-heights (bottom-up) for up to 2 rounds; a round that lowers the score is undone. The build step then
+  scores each page/view: `sizes` (w/h within ±3 px / 3–5 %), `boxes` (IoU ≥ 0.6) and a rough `visual` (full-page shots
+  scaled to 96 px wide); score = 35/25/40 %. Generated shots go to `fidelity/<slug>/<view>-full.webp`.
 - Output: `data/projects/<id>/recreate/<recreateId>/` (written as `<recreateId>.tmp`, renamed on success,
-  deleted on failure/timeout); the latest 2 completed recreates are kept.
+  deleted on failure/timeout); the latest 2 completed recreates are kept. Inside: `capture/`, `assets/`, `site/` (the
+  generated site), `ir/site.json`, `fidelity/`, `report.json`. Site assets are hard links to `assets/` (copy fallback).
 
 ### Phase 3 summary
 - **OLD panel preview**: the live site in a sandboxed iframe when it allows framing; when X-Frame-Options/CSP
@@ -163,7 +203,9 @@ server/src/  index.js, db/index.js (schema + migrations), routes/{projects,analy
              jobs/ manager.js (JobManager + global one-job lock), sse.js
              recreate/ index.js (pipeline + STEPS + budget), jobs.js, inputs.js, workspace.js (tmp → final, retention),
                     errors.js, discover.js (page selection), inspect.js (step 1), capture/{index,snapshot}.js (Playwright capture),
-                    assets/{index,collect,css,download,cdn}.js (step 2: local assets)
+                    assets/{index,collect,css,download,cdn}.js (step 2: local assets),
+                    ir/{index,tree,styles,names,head,links}.js (IR), emit/{html,css}.js (plain HTML emitter),
+                    generate.js (step 3: IR + emit + fit pass), verify/{server,layout,fidelity}.js (local render, fidelity = step 4)
              security/ netGuard.js (address classes, policies, resolveChecked), egressProxy.js (Chromium proxy)
              audit/ index.js (pipeline + STEPS), jobs.js (queue, 1 at a time), http.js, robots.js, sitemap.js,
                     crawler.js, extract.js, linkChecker.js, render.js, screenshots.js, retention.js, frame.js, assemble.js,
@@ -200,6 +242,8 @@ API: `GET/POST /api/projects`, `GET/PATCH/DELETE /api/projects/:id` (PATCH takes
 - Never-analyzed projects show a wireframe in the OLD preview. Still dummy: the NEW preview and the fix checklist
   (`audit.recreate`, which has `isDummy: true`; Phase 5).
   Recreate (Phase 4) and Download (Phase 6) stay disabled.
+- Recreate output (4a.4): font sizes and line heights are px per breakpoint (no fluid type yet); between the three
+  captured widths the layout relies on the %/max-width/fr heuristics. Hover, focus and scroll states come in 4b.
 - A mobile Lighthouse run takes ~40s+, and screenshots add 5–30s, so a full analysis usually takes 1.5–3 minutes.
 - Audits from before Phase 3 have no screenshots and no desktop metrics; the UI asks to run Analyze again.
 - Some frameable sites still render blank in the iframe (frame-busting, cookie walls); use "Shot". Cookie banners
