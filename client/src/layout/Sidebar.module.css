@@ -1,9 +1,29 @@
 .sidebar {
   display: flex;
   flex-direction: column;
+  width: var(--sidebar-w);
   min-height: 0;
+  /* Clips the content while the width animates between the rail and the full sidebar. */
+  overflow: hidden;
   border-right: 1px solid var(--border);
   background: var(--surface-2);
+  transition: width 200ms ease;
+}
+
+.sidebar[data-collapsed='true'] {
+  width: var(--sidebar-rail-w);
+  align-items: center;
+}
+
+/* The expanded content keeps its width while the sidebar grows, instead of reflowing each frame. */
+.sidebar[data-collapsed='false'] > * {
+  min-width: calc(var(--sidebar-w) - 1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
+  }
 }
 
 .top {
@@ -12,8 +32,152 @@
   padding: var(--sp-3);
 }
 
+.topRow {
+  display: flex;
+  gap: 6px;
+}
+
 .newBtn {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.iconBtn {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 100ms ease, color 100ms ease;
+}
+
+.iconBtn:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.iconBtn:focus-visible,
+.railItem:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Collapsed rail */
+.railTop {
+  display: grid;
+  justify-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) 0 var(--sp-2);
+  border-bottom: 1px solid var(--border);
   width: 100%;
+}
+
+.railNew {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+}
+
+.railNew:hover {
+  background: var(--accent-hover);
+  color: var(--surface);
+}
+
+.railList {
+  display: grid;
+  flex: 1;
+  align-content: start;
+  justify-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 0;
+  padding: var(--sp-2) 0 var(--sp-3);
+}
+
+.railItem {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  cursor: pointer;
+}
+
+.railItem:hover {
+  background: var(--surface-3);
+}
+
+.railItem[data-active='true'] {
+  background: var(--surface);
+  box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--border);
+}
+
+/* The selected website keeps its accent bar in the rail too. */
+.railItem[data-active='true']::before {
+  content: '';
+  position: absolute;
+  left: -9px;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+}
+
+.railItem[data-active='true'] .avatar {
+  border-color: var(--accent-border);
+  background: var(--accent-tint);
+  color: var(--accent-text);
+}
+
+/* Stacked layout on small screens: the rail becomes a row. */
+@media (max-width: 760px) {
+  .sidebar,
+  .sidebar[data-collapsed='true'] {
+    width: auto;
+  }
+
+  .sidebar[data-collapsed='false'] > * {
+    min-width: 0;
+  }
+
+  .sidebar[data-collapsed='true'] {
+    flex-direction: row;
+  }
+
+  .railTop {
+    display: flex;
+    width: auto;
+    padding: var(--sp-2);
+    border-bottom: 0;
+    border-right: 1px solid var(--border);
+  }
+
+  .railList {
+    display: flex;
+    overflow-x: auto;
+    padding: var(--sp-2);
+  }
+
+  .railItem[data-active='true']::before {
+    left: 7px;
+    right: 7px;
+    top: auto;
+    bottom: -6px;
+    width: auto;
+    height: 3px;
+    border-radius: 3px 3px 0 0;
+  }
 }
 
 .search {

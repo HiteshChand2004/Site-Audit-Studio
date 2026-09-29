@@ -57,9 +57,10 @@
   font-size: var(--fs-xs);
 }
 
+/* The sidebar column follows the sidebar's own (animated) width; the OLD and NEW panels take the rest. */
 .main {
   display: grid;
-  grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   min-height: 0;
 }
 

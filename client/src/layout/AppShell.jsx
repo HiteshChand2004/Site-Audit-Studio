@@ -10,6 +10,38 @@ import StackModal from '../components/recreate/StackModal.jsx';
 import { useProjects, useSelectedProject } from '../store/useProjects.js';
 import styles from './AppShell.module.css';
 
+const SIDEBAR_KEY = 'wa:sidebarCollapsed';
+
+// Collapsed sidebar, remembered per browser. Storage can be unavailable: then it is not remembered.
+function useSidebarCollapsed() {
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem(SIDEBAR_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : '0');
+    } catch {
+      /* storage unavailable — ignore */
+    }
+  }, [collapsed]);
+  // Ctrl+B / ⌘B toggles it (the common editor shortcut).
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        setCollapsed((c) => !c);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  return [collapsed, setCollapsed];
+}
+
 export default function AppShell() {
   const load = useProjects((s) => s.load);
   const error = useProjects((s) => s.error);
@@ -20,6 +52,7 @@ export default function AppShell() {
   const [newOpen, setNewOpen] = useState(false);
   const [stackOpen, setStackOpen] = useState(false);
   const [tab, setTab] = useState('old'); // narrow screens only
+  const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed();
 
   useEffect(() => {
     load();
@@ -41,7 +74,11 @@ export default function AppShell() {
       </header>
 
       <div className={styles.main}>
-        <Sidebar onNewProject={() => setNewOpen(true)} />
+        <Sidebar
+          onNewProject={() => setNewOpen(true)}
+          collapsed={sidebarCollapsed}
+          onToggle={() => setSidebarCollapsed((c) => !c)}
+        />
 
         {error && !project && <div className={styles.center}>API error: {error}</div>}
 
