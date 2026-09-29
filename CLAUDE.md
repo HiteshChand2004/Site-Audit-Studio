@@ -149,7 +149,8 @@ npm install
 npm run dev          # client :5173 + server :4000 (concurrently)
 npm run dev:server   # or: npm run dev:client
 npm run build        # client production build
-npm test -w server   # unit tests (analyzers, crawl, detection, frame check, SSRF guard, screenshots route/retention)
+npm test -w server   # unit tests; each test file gets its own temp DB (OS temp folder, deleted after the run), never data/app.db
+npm test -w server -- test/crawl.test.js   # a single file
 npm run fixture-site -w server   # seeded test site on :4100 (analyzing it needs SAS_ALLOW_LOCALHOST=1)
 npx -w server playwright install chromium   # one-time
 ```

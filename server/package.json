@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env --watch src/index.js",
     "start": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/index.js",
-    "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.js\"",
+    "test": "node test/run-tests.js",
     "fixture-site": "node test/serve-fixture.js"
   },
   "dependencies": {

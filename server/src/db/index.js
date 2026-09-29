@@ -4,7 +4,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-export const DATA_DIR = path.resolve(here, '../../../data');
+// SAS_DATA_DIR moves the database and project files elsewhere (the test suite points it at an OS temp folder).
+// Under the node test runner it is required, so tests can never touch the real data/app.db.
+if (process.env.NODE_TEST_CONTEXT && !process.env.SAS_DATA_DIR) {
+  throw new Error('Tests must run with SAS_DATA_DIR set (use "npm test -w server"); refusing to open data/app.db');
+}
+export const DATA_DIR = process.env.SAS_DATA_DIR
+  ? path.resolve(process.env.SAS_DATA_DIR)
+  : path.resolve(here, '../../../data');
 mkdirSync(DATA_DIR, { recursive: true });
 
 export const projectDir = (projectId) => path.join(DATA_DIR, 'projects', projectId);
