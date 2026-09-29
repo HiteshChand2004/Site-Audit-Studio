@@ -11,7 +11,10 @@ export { VIEWS };
 export const captureDir = (workspace, slug) => path.join(workspace, 'capture', slug);
 
 // Scrolls through the page so lazy images and scroll-triggered sections load, waits for pending
-// images and fonts, then returns to the top. Runs in the page.
+// images and fonts, then returns to the top (settle, below). The scrolling is real input (the mouse
+// wheel), because many sites let a script own the scroll position (smooth-scroll libraries) and undo
+// programmatic scrolling: window.scrollTo alone left those pages at the top, so nothing below the
+// first screen ever loaded or revealed. The wheel falls back to scrollTo when it does not move.
 //
 // Scroll-reveal ("appear") effects: many sites (Framer appear effects, Webflow interactions, AOS,
 // GSAP ScrollTrigger) start sections at opacity 0 and show them only while they are in view; some
@@ -22,7 +25,9 @@ export const captureDir = (workspace, slug) => path.join(workspace, 'capture', s
 // again and not entirely inside the first screen. Elements the page never shows (menus, dialogs) stay as they are, and
 // hidden siblings stacked on the same box (carousel or tab slides) are left alone. The motion itself
 // is recreated in Phase 4b.
-async function settle(cap) {
+//
+// In the page: installs window.__sasReveal { dwell(), finalize() } (the reveal tracker).
+function installRevealTracker() {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const HIDDEN = 0.05;
   const seenHidden = new Set();
@@ -63,77 +68,129 @@ async function settle(cap) {
     return stable;
   };
 
-  sample(true);
-  // Steps below one viewport, so every element passes through the view.
-  const step = Math.max(400, Math.floor(window.innerHeight * 0.85));
-  for (let y = 0; y < document.documentElement.scrollHeight && y < cap; y += step) {
-    window.scrollTo(0, y);
+  // After each scroll step: let observers fire, then wait only while revealed elements are still
+  // animating (at most 1.5 s); pages without reveal effects move on at once.
+  const dwell = async () => {
     await sleep(150);
-    // Wait only while revealed elements are still animating (at most 1.5 s per step); pages
-    // without reveal effects move on at once.
     let changing = !sample(true);
     const until = Date.now() + 1500;
     while (changing && Date.now() < until) {
       await sleep(120);
       changing = !sample(false);
     }
-  }
-  window.scrollTo(0, document.documentElement.scrollHeight);
-  await sleep(250);
+  };
   sample(true);
-  window.scrollTo(0, 0);
-  await sleep(300);
+  window.__sasReveal = { dwell, finalize: () => finalize() };
 
-  // Pin the revealed state on elements that are hidden again below the first screen.
-  const candidates = [];
-  for (const [el, final] of revealed) {
-    if (!el.isConnected || final.opacity < HIDDEN) continue;
-    const cs = getComputedStyle(el);
-    const r = el.getBoundingClientRect();
-    // Entirely in the first screen: what the visitor sees now (a hidden element there is more likely
-    // a carousel or timed effect). One that crosses the fold is re-hidden by a scroll trigger.
-    if (r.top >= 0 && r.bottom <= window.innerHeight) continue;
-    if (parseFloat(cs.opacity) < final.opacity - 0.05 || cs.transform !== final.transform || cs.filter !== final.filter) {
-      candidates.push({ el, final, rect: [r.left, r.top, r.width, r.height] });
+  // Back at the top: pin the revealed state on elements that are hidden again below the first screen.
+  const finalize = async () => {
+    await sleep(300);
+    const candidates = [];
+    for (const [el, final] of revealed) {
+      if (!el.isConnected || final.opacity < HIDDEN) continue;
+      const cs = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      // Entirely in the first screen: what the visitor sees now (a hidden element there is more likely
+      // a carousel or timed effect). One that crosses the fold is re-hidden by a scroll trigger.
+      if (r.top >= 0 && r.bottom <= window.innerHeight) continue;
+      if (parseFloat(cs.opacity) < final.opacity - 0.05 || cs.transform !== final.transform || cs.filter !== final.filter) {
+        candidates.push({ el, final, rect: [r.left, r.top, r.width, r.height] });
+      }
     }
-  }
-  const overlap = (a, b) => {
-    const x = Math.max(0, Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0]));
-    const y = Math.max(0, Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]));
-    return x * y > 0.5 * Math.min(a[2] * a[3], b[2] * b[3]);
+    const overlap = (a, b) => {
+      const x = Math.max(0, Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0]));
+      const y = Math.max(0, Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]));
+      return x * y > 0.5 * Math.min(a[2] * a[3], b[2] * b[3]);
+    };
+    const stacked = new Set();
+    for (const a of candidates) {
+      for (const b of candidates) {
+        if (a !== b && a.el.parentElement === b.el.parentElement && a.rect[2] * a.rect[3] > 0 && overlap(a.rect, b.rect)) stacked.add(a.el);
+      }
+    }
+    const pinned = candidates.filter((c) => !stacked.has(c.el));
+    const pin = ({ el, final }) => {
+      el.style.setProperty('opacity', String(final.opacity), 'important');
+      el.style.setProperty('transform', final.transform, 'important');
+      el.style.setProperty('filter', final.filter, 'important');
+      finish(el); // the change starts the site's own transition; jump to its end
+    };
+    pinned.forEach(pin);
+    const byEl = new Map(pinned.map((c) => [c.el, c]));
+    // Some runtimes write the style again (for example when the element leaves the view).
+    const observer = new MutationObserver((records) => {
+      for (const rec of records) {
+        const c = byEl.get(rec.target);
+        if (c && rec.target.style.getPropertyPriority('opacity') !== 'important') pin(c);
+      }
+    });
+    for (const c of pinned) observer.observe(c.el, { attributes: true, attributeFilter: ['style'] });
+  
+    const pending = [...document.images].filter((img) => !img.complete);
+    await Promise.all(pending.map((img) => new Promise((r) => {
+      img.addEventListener('load', r, { once: true });
+      img.addEventListener('error', r, { once: true });
+      setTimeout(r, 3000);
+    })));
+    await document.fonts?.ready;
+    return { revealed: revealed.size, pinned: pinned.length, stacked: stacked.size };
   };
-  const stacked = new Set();
-  for (const a of candidates) {
-    for (const b of candidates) {
-      if (a !== b && a.el.parentElement === b.el.parentElement && a.rect[2] * a.rect[3] > 0 && overlap(a.rect, b.rect)) stacked.add(a.el);
-    }
-  }
-  const pinned = candidates.filter((c) => !stacked.has(c.el));
-  const pin = ({ el, final }) => {
-    el.style.setProperty('opacity', String(final.opacity), 'important');
-    el.style.setProperty('transform', final.transform, 'important');
-    el.style.setProperty('filter', final.filter, 'important');
-    finish(el); // the change starts the site's own transition; jump to its end
-  };
-  pinned.forEach(pin);
-  const byEl = new Map(pinned.map((c) => [c.el, c]));
-  // Some runtimes write the style again (for example when the element leaves the view).
-  const observer = new MutationObserver((records) => {
-    for (const rec of records) {
-      const c = byEl.get(rec.target);
-      if (c && rec.target.style.getPropertyPriority('opacity') !== 'important') pin(c);
-    }
-  });
-  for (const c of pinned) observer.observe(c.el, { attributes: true, attributeFilter: ['style'] });
+}
 
-  const pending = [...document.images].filter((img) => !img.complete);
-  await Promise.all(pending.map((img) => new Promise((r) => {
-    img.addEventListener('load', r, { once: true });
-    img.addEventListener('error', r, { once: true });
-    setTimeout(r, 3000);
-  })));
-  await document.fonts?.ready;
-  return { revealed: revealed.size, pinned: pinned.length, stacked: stacked.size };
+const waitStill = async (page) => {
+  // Smooth-scroll libraries animate towards the target: wait until the position stops changing.
+  let y = await page.evaluate(() => scrollY);
+  for (let i = 0; i < 12; i++) {
+    await page.waitForTimeout(80);
+    const next = await page.evaluate(() => scrollY);
+    if (Math.abs(next - y) < 1) break;
+    y = next;
+  }
+  return Math.round(y);
+};
+
+/** Scrolls to `target` like a visitor (mouse wheel), else with scrollTo. Returns the new position. */
+async function scrollToY(page, target) {
+  const before = Math.round(await page.evaluate(() => scrollY));
+  if (Math.abs(before - target) < 2) return before;
+  await page.mouse.wheel(0, target - before).catch(() => {});
+  let y = await waitStill(page);
+  if (Math.abs(y - before) < 2) {
+    await page.evaluate((t) => window.scrollTo(0, t), target);
+    y = await waitStill(page);
+  }
+  return y;
+}
+
+/**
+ * Scrolls through the page in steps below one viewport (so every element passes through the view),
+ * lets the reveal tracker record each step, then returns to the top and pins revealed content.
+ * @returns {Promise<{ revealed: number, pinned: number, stacked: number, scrolled: number }>}
+ */
+async function settle(page, view, cap) {
+  await page.evaluate(installRevealTracker);
+  // Near the left edge: less likely over an element with its own scroll area (carousels, maps).
+  await page.mouse.move(Math.min(20, view.width / 4), Math.round(view.height / 2)).catch(() => {});
+  const step = Math.max(400, Math.floor(view.height * 0.85));
+  let y = 0;
+  let max = 0;
+  for (let i = 0; i < 80; i++) {
+    const height = await page.evaluate(() => document.documentElement.scrollHeight);
+    const end = Math.max(0, Math.min(height, cap) - view.height);
+    if (y >= end) break;
+    const next = await scrollToY(page, Math.min(y + step, end));
+    if (next <= y) break; // the page does not scroll any further
+    y = next;
+    max = Math.max(max, y);
+    await page.evaluate(() => window.__sasReveal.dwell());
+  }
+  // Back to the top (a large wheel step, else scrollTo), then pin what was revealed.
+  if ((await scrollToY(page, 0)) > 1) {
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await waitStill(page);
+  }
+  const stats = await page.evaluate(() => window.__sasReveal.finalize());
+  return { ...stats, scrolled: max };
 }
 
 async function captureView(browser, pageInfo, view, dir, { timeout }) {
@@ -170,7 +227,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout }) {
     const page = await context.newPage();
     const response = await page.goto(pageInfo.url, { waitUntil: 'load', timeout });
     await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
-    const reveal = await page.evaluate(settle, MAX_HEIGHT);
+    const reveal = await settle(page, view, MAX_HEIGHT);
     await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
     await page.waitForTimeout(300);
 

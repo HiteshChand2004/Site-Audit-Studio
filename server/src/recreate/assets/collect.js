@@ -34,6 +34,32 @@ function fontRank({ url, format }) {
   return { woff2: 0, woff: 1, ttf: 2, otf: 2 }[ext] ?? 5;
 }
 
+/**
+ * The srcset candidates worth downloading for one image in one captured view. A srcset can list a
+ * dozen widths per image (Next.js /_next/image, CDNs, builders); downloading all of them fills the
+ * per-recreate asset budget with copies nobody sees, so later images are skipped. The browser shows
+ * one candidate per view: `currentSrc` (node.src, added by the caller). When the image did not load
+ * (lazy, never in view), the smallest candidate covering its rendered width at the view's pixel
+ * density is taken, else the largest. The emitted srcset keeps only the downloaded candidates.
+ * @param {{ url: string, descriptor: string }[]} cands
+ * @param {{ src?: string, rect?: number[] }} img  the <img> the candidates belong to
+ */
+export function pickCandidates(cands, img, dpr = 1) {
+  if (!cands.length) return [];
+  if (img?.src && cands.some((c) => assetKey(c.url) === assetKey(img.src))) return [];
+  const width = img?.rect?.[2] ?? 0;
+  const sized = cands.map((c) => {
+    const d = String(c.descriptor ?? '').trim();
+    if (/^\d+(\.\d+)?w$/i.test(d)) return { c, w: parseFloat(d) };
+    if (/^\d+(\.\d+)?x$/i.test(d)) return { c, w: parseFloat(d) * width };
+    return { c, w: d ? null : width };
+  });
+  if (sized.some((s) => s.w == null)) return [cands[0]];
+  sized.sort((a, b) => a.w - b.w);
+  const need = width * dpr;
+  return [(sized.find((s) => s.w >= need) ?? sized.at(-1)).c];
+}
+
 const faceKey = (f) => JSON.stringify([f.family.toLowerCase(), String(f.weight), f.style, f.unicodeRange, f.src.map((s) => s.url)]);
 
 /**
@@ -76,23 +102,26 @@ export function collectAssets(captures, extra = {}) {
       if (IMAGE_META.test(m.property ?? m.name ?? '') && m.content) add(m.content, 'image', 'meta', slug, base);
     }
 
-    const walk = (node) => {
+    const dpr = data.viewport?.dpr ?? 1;
+    const walk = (node, parent) => {
       if (!node || !node.tag) return;
       const { tag, attrs = {}, lazy = {} } = node;
       if (tag === 'img' || (tag === 'input' && /^image$/i.test(attrs.type ?? ''))) {
-        // currentSrc (what the browser picked at this width) and the fallback src attribute.
+        // currentSrc (what the browser picked at this width) and the fallback src attribute; of the
+        // srcset only what this view needs (pickCandidates).
         if (node.src) add(node.src, 'image', 'img', slug);
-        if (attrs.src) add(attrs.src, 'image', 'img', slug, base);
-        for (const c of parseSrcset(attrs.srcset, base)) add(c.url, 'image', 'srcset', slug);
+        if (attrs.src && !node.src) add(attrs.src, 'image', 'img', slug, base);
+        for (const c of pickCandidates(parseSrcset(attrs.srcset, base), node, dpr)) add(c.url, 'image', 'srcset', slug);
       } else if (tag === 'source') {
-        // <picture><source srcset> is an image; <video><source src> is media.
-        if (attrs.srcset) for (const c of parseSrcset(attrs.srcset, base)) add(c.url, 'image', 'srcset', slug);
+        // <picture><source srcset> is an image (its <img> shows the pick); <video><source src> is media.
+        const img = parent?.children?.find((c) => c.tag === 'img');
+        if (attrs.srcset) for (const c of pickCandidates(parseSrcset(attrs.srcset, base), img, dpr)) add(c.url, 'image', 'srcset', slug);
         else if (node.src) add(node.src, 'media', 'media', slug);
       }
       if ((tag === 'video' || tag === 'audio') && node.src) add(node.src, 'media', 'media', slug);
       if (tag === 'video' && node.poster) add(node.poster, 'image', 'poster', slug);
       for (const [name, value] of Object.entries(lazy)) {
-        if (LAZY_SRCSET.test(name)) for (const c of parseSrcset(value, base)) add(c.url, 'image', 'lazy', slug);
+        if (LAZY_SRCSET.test(name)) for (const c of pickCandidates(parseSrcset(value, base), node, dpr)) add(c.url, 'image', 'lazy', slug);
         else if (value && !value.startsWith('data:')) add(value.trim(), 'image', 'lazy', slug, base);
       }
       if (node.svg) {
@@ -103,7 +132,7 @@ export function collectAssets(captures, extra = {}) {
       for (const pseudo of [node.before, node.after]) {
         for (const m of pseudo?.content?.matchAll(CSS_URL) ?? []) if (!m[2].startsWith('data:')) add(m[2], 'image', 'pseudo', slug, base);
       }
-      for (const child of node.children ?? []) walk(child);
+      for (const child of node.children ?? []) walk(child, node);
     };
     walk(data.body);
 

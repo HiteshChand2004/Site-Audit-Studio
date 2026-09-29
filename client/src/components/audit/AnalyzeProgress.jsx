@@ -40,7 +40,11 @@ export default function AnalyzeProgress({ analysis, kind = 'analysis', onDismiss
       <div className={styles.bar} role="progressbar" aria-valuenow={analysis.pct ?? 0} aria-valuemin={0} aria-valuemax={100}>
         <span style={{ width: `${analysis.pct ?? 0}%` }} />
       </div>
-      {analysis.message && <p className={styles.message}>{analysis.message}</p>}
+      {analysis.reconnecting ? (
+        <p className={styles.message}>Connection to the server dropped — reconnecting…</p>
+      ) : (
+        analysis.message && <p className={styles.message}>{analysis.message}</p>
+      )}
       <ol className={styles.steps}>
         {steps.map((s, i) => {
           const state = activeIndex === -1 ? 'pending' : i < activeIndex ? 'done' : i === activeIndex ? 'active' : 'pending';

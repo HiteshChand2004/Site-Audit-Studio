@@ -75,7 +75,7 @@ addColumn('projects', 'target_domain', 'TEXT');
 // Jobs live in memory, so anything still "running" after a restart can never finish.
 for (const table of ['analyses', 'recreates']) {
   db.prepare(`
-    UPDATE ${table} SET status = 'failed', error = 'Server restarted', finished_at = ?
+    UPDATE ${table} SET status = 'failed', error = 'The server restarted while this job was running. Run it again.', finished_at = ?
     WHERE status IN ('queued', 'running')
   `).run(new Date().toISOString());
 }

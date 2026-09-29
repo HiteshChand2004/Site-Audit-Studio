@@ -24,28 +24,71 @@ async function request(path, { method = 'GET', body } = {}) {
   return data;
 }
 
+// How long a dropped progress stream keeps trying to reconnect before the job is shown as lost.
+const RECONNECT_FOR_MS = 120000;
+const RECONNECT_MAX_DELAY_MS = 10000;
+
 /**
- * Streams job progress (Analyze or Recreate) over SSE. Handlers: progress(job), done(job), failed(job).
- * Returns a function that closes the stream.
+ * Streams job progress (Analyze or Recreate) over SSE. Handlers: progress(job), done(job),
+ * failed(job), reconnecting(boolean). Returns a function that closes the stream.
+ *
+ * A dropped connection (API server restarting, proxy error, network blip) is not an error: the
+ * stream reconnects with backoff for up to 2 minutes and the server replays the job's current
+ * state on connect (or its final state, if it ended meanwhile). Only then is the job reported lost.
  */
-function subscribe(url, { progress, done, failed }) {
-  const source = new EventSource(url);
+function subscribe(url, { progress, done, failed, reconnecting }) {
   const parse = (e) => JSON.parse(e.data);
-  source.addEventListener('progress', (e) => progress?.(parse(e)));
-  source.addEventListener('done', (e) => {
-    source.close();
-    done?.(parse(e));
-  });
-  source.addEventListener('failed', (e) => {
-    source.close();
-    failed?.(parse(e));
-  });
-  // Built-in connection error. While the stream is reconnecting, the server replays the job
-  // state on reconnect; once the stream is closed for good, report it.
-  source.onerror = () => {
-    if (source.readyState === EventSource.CLOSED) failed?.({ status: 'failed', error: 'Lost connection to the server.' });
+  let source = null;
+  let timer = null;
+  let closed = false;
+  let attempt = 0;
+  let downSince = null;
+  const stop = () => {
+    closed = true;
+    clearTimeout(timer);
+    source?.close();
   };
-  return () => source.close();
+  const connected = () => {
+    if (downSince != null) reconnecting?.(false);
+    attempt = 0;
+    downSince = null;
+  };
+
+  const open = () => {
+    source = new EventSource(url);
+    source.addEventListener('open', connected);
+    source.addEventListener('progress', (e) => {
+      connected();
+      progress?.(parse(e));
+    });
+    source.addEventListener('done', (e) => {
+      stop();
+      done?.(parse(e));
+    });
+    source.addEventListener('failed', (e) => {
+      stop();
+      failed?.(parse(e));
+    });
+    source.onerror = () => {
+      if (closed) return;
+      if (downSince == null) {
+        downSince = Date.now();
+        reconnecting?.(true);
+      }
+      // CONNECTING: the browser retries on its own. CLOSED: the server or proxy answered with an
+      // error (for example while the API restarts); retry ourselves.
+      if (source.readyState !== EventSource.CLOSED) return;
+      source.close();
+      if (Date.now() - downSince > RECONNECT_FOR_MS) {
+        stop();
+        failed?.({ status: 'failed', error: 'Lost connection to the server. Reload the page to see the latest state.' });
+        return;
+      }
+      timer = setTimeout(open, Math.min(1000 * 2 ** attempt++, RECONNECT_MAX_DELAY_MS));
+    };
+  };
+  open();
+  return stop;
 }
 
 export const api = {

@@ -124,7 +124,9 @@ export const useProjects = create((set, get) => ({
     closeStream(kind, projectId);
     get().setJob(kind, projectId, { ...job, steps: steps ?? get()[stateKey][projectId]?.steps ?? [] });
     const close = subscribe(projectId, job.id, {
-      progress: (data) => get().setJob(kind, projectId, data),
+      progress: (data) => get().setJob(kind, projectId, { ...data, reconnecting: false }),
+      // The stream dropped and is reconnecting (shown as a note, not an error).
+      reconnecting: (on) => get().setJob(kind, projectId, { reconnecting: on }),
       done: async (data) => {
         streams.delete(`${kind}:${projectId}`);
         get().setJob(kind, projectId, { ...data, status: 'done', pct: 100 });

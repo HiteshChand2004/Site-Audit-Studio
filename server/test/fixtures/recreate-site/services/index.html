@@ -33,6 +33,11 @@
       .dot { flex-shrink: 0; width: 6px; height: 6px; }
       .dot svg { display: block; width: 100%; height: 100%; }
       .highlight-text { flex: 1 0 0px; }
+      /* A grid of tiles sized by their width (justify-self: start; width: 100%), each holding an
+         absolutely positioned image: without the width the tiles collapse to 0. */
+      .badges { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 32px; }
+      .badge { position: relative; justify-self: start; width: 100%; aspect-ratio: 1 / 1; border-radius: 12px; overflow: hidden; background: #e2e8f0; }
+      .badge img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
       @media (max-width: 600px) {
         .split { flex-direction: column; }
         .frame { width: 100%; }
@@ -56,6 +61,11 @@
               <div class="highlight"><span class="dot"><svg viewBox="0 0 6 6" aria-hidden="true"><circle cx="3" cy="3" r="3" fill="#0f766e"/></svg></span><div class="highlight-text"><p>Clean workflows.</p></div></div>
             </div></div>
           </div></div>
+        </div>
+        <div class="badges">
+          <div class="badge"><img src="/img/photo.svg" alt="Badge one" /></div>
+          <div class="badge"><img src="/img/hero-bg.svg" alt="Badge two" /></div>
+          <div class="badge"><img src="/img/team.png" alt="Badge three" /></div>
         </div>
       </section>
     </main>

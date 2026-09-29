@@ -370,6 +370,11 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   // back to 300 px and squeezes the text).
   const dotRule = baseRule(classOf(/<span class="([\w-]+)"[^>]*><svg[^>]*>(?:(?!<\/span>)[^])*<\/span><div[^>]*>\s*<p[^>]*>Fast onboarding/));
   assert.match(dotRule, /(^|\s)width: 6px;/);
+  // A grid tile sized by its width (justify-self: start) around an absolutely positioned image keeps
+  // its width; without it the tile and its image collapse to 0.
+  const badgeRule = baseRule(classOf(/<div class="([\w-]+)">\s*<img[^>]* alt="Badge one"/));
+  assert.match(badgeRule, /(^|\s)width: (100%|\d+px);/);
+  assert.doesNotMatch(badgeRule, /(^|\s)width: 0/);
   assert.doesNotMatch(css, /@keyframes brand-pulse/); // not used by any page
 
   // Report: auto-generated head fields, the form, the IR and the generation stats.

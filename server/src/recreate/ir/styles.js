@@ -229,14 +229,21 @@ export function normalizeView(node, v, chain, opts) {
       style['margin-left'] = 'auto';
       style['margin-right'] = 'auto';
     }
-  } else if (!fix?.w && /flex/.test(pDisplay) && (position === 'static' || position === 'relative') && w > 0
+  } else if (!fix?.w && /flex|grid/.test(pDisplay) && (position === 'static' || position === 'relative') && w > 0
     && !REPLACED.has(node.tag) && !FORM_CONTROL.has(node.tag) && display !== 'contents') {
-    // A flex item sized by its content (row: no flex-grow; column: not stretched) whose text wraps
-    // had a definite width (builders set width: 50% or px on it). Without it the item grows to its
-    // max-content width: the text stops wrapping and pushes its siblings out of the row.
-    const row = !/column/.test(pd.style['flex-direction'] ?? '');
-    const alignSelf = style['align-self'] && style['align-self'] !== 'auto' ? style['align-self'] : pd.style['align-items'] ?? 'normal';
-    const contentSized = row ? !(parseFloat(style['flex-grow'] ?? '0') > 0) : !/^(normal|stretch)$/.test(alignSelf);
+    // A flex or grid item sized by its content (flex row: no flex-grow; flex column: not stretched;
+    // grid: justify-self other than stretch) had a definite width (builders set width: 50%, 100% or
+    // px on it), which the capture leaves out. Without it the item shrinks or grows to its content:
+    // text stops wrapping and pushes siblings out, or an image frame collapses to 0.
+    let contentSized;
+    if (/grid/.test(pDisplay)) {
+      const justifySelf = style['justify-self'] && !/^(auto|normal)$/.test(style['justify-self']) ? style['justify-self'] : pd.style['justify-items'] ?? 'normal';
+      contentSized = !/^(normal|stretch|legacy)$/.test(justifySelf);
+    } else {
+      const row = !/column/.test(pd.style['flex-direction'] ?? '');
+      const alignSelf = style['align-self'] && style['align-self'] !== 'auto' ? style['align-self'] : pd.style['align-items'] ?? 'normal';
+      contentSized = row ? !(parseFloat(style['flex-grow'] ?? '0') > 0) : !/^(normal|stretch)$/.test(alignSelf);
+    }
     // Hinted in every view where it holds text; applied when the text wraps in any view, or when the
     // item is a flex row around a zero-basis growing child (flex: 1 0 0): browsers size such a row
     // from that basis, so without a width it shrinks to its min-content width (one word per line).

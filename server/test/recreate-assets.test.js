@@ -9,7 +9,7 @@ import path from 'node:path';
 import { db, projectDir } from '../src/db/index.js';
 import { ASSET_BUDGET, ASSET_LIMITS, assetsStage, downloadAssets } from '../src/recreate/assets/index.js';
 import { findPlatformCdnRefs, PLATFORM_CDN_HOSTS, platformCdnHost } from '../src/recreate/assets/cdn.js';
-import { assetKey, collectAssets } from '../src/recreate/assets/collect.js';
+import { assetKey, collectAssets, pickCandidates } from '../src/recreate/assets/collect.js';
 import { parseSrcset, parseStylesheet } from '../src/recreate/assets/css.js';
 import { runRecreate, STAGES } from '../src/recreate/index.js';
 import { recreateDir } from '../src/recreate/workspace.js';
@@ -143,7 +143,6 @@ test('collection: one entry per URL, kinds, download order and used fonts only',
     'https://site.test/og.png': 'image',
     'https://site.test/favicon.svg': 'image', // icon and CSS background: the larger limit wins
     'https://cdn.test/a.jpg?w=800': 'image',
-    'https://cdn.test/a.jpg?w=400': 'image',
     'https://site.test/lazy.png': 'image',
     'https://site.test/lazy@2x.png': 'image',
     'https://site.test/p.avif': 'image',
@@ -173,6 +172,21 @@ test('collection: same-origin font sources captured as bare URL strings (before 
   const { assets, fontFaces } = collectAssets([{ slug: 'index', view: 'desktop', data }]);
   assert.deepEqual(fontFaces[0].src, [{ url: 'https://site.test/f.woff2', format: null }, { url: 'https://site.test/f.ttf', format: null }]);
   assert.deepEqual(assets.filter((a) => a.kind === 'font').map((a) => a.url), ['https://site.test/f.woff2']);
+});
+
+test('srcset: only the candidate each view needs is downloaded', () => {
+  const c = (w) => ({ url: `https://cdn.test/i.jpg?w=${w}`, descriptor: `${w}w` });
+  const set = [16, 32, 64, 128, 256, 384, 640, 750, 828, 1080, 1200, 1920, 2048, 3840].map(c);
+  // The browser showed one of them (currentSrc): nothing more is needed for this view.
+  assert.deepEqual(pickCandidates(set, { src: 'https://cdn.test/i.jpg?w=828', rect: [0, 0, 391, 230] }, 2), []);
+  // Not loaded (lazy): the smallest that covers the rendered width at the pixel density.
+  assert.deepEqual(pickCandidates(set, { rect: [0, 0, 391, 230] }, 2), [c(828)]);
+  assert.deepEqual(pickCandidates(set, { rect: [0, 0, 391, 230] }, 1), [c(640)]);
+  assert.deepEqual(pickCandidates(set, { rect: [0, 0, 5000, 10] }, 1), [c(3840)]); // none is wide enough
+  // Density descriptors; and a candidate list without descriptors takes the first.
+  const x = [{ url: 'https://s.test/a.png', descriptor: '1x' }, { url: 'https://s.test/a@2x.png', descriptor: '2x' }];
+  assert.deepEqual(pickCandidates(x, { rect: [0, 0, 100, 100] }, 2), [x[1]]);
+  assert.deepEqual(pickCandidates([{ url: 'https://s.test/b.png', descriptor: '' }], { rect: [0, 0, 10, 10] }, 1), [{ url: 'https://s.test/b.png', descriptor: '' }]);
 });
 
 test('downloads: dedupe, redirects, size and time limits, SSRF on every hop', async () => {
@@ -283,7 +297,9 @@ test('the assets step localizes every asset of the captured pages', async () => 
   assert.ok(local(`${origin}/img/photo.svg`));
   const team = local(`${cdn}/img/team.png?w=800`);
   assert.ok(team);
-  for (const q of ['w=400', 'w=1200', 'poster']) assert.equal(local(`${cdn}/img/team.png?${q}`), team, q);
+  assert.equal(local(`${cdn}/img/team.png?poster`), team); // same bytes, one file
+  // A srcset candidate no captured view used is not downloaded (every view showed w=800).
+  assert.equal(local(`${cdn}/img/team.png?w=400`), undefined);
   assert.ok(local(`${cdn}/r/img/photo.svg`));
   assert.ok(local(`${cdn}/fonts/mono.woff2`));
   assert.equal(Object.keys(manifest.map).some((u) => u.includes('unused')), false);
