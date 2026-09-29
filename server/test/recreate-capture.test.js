@@ -85,7 +85,7 @@ test('discovery on the fixture: nav pages first, skips with reasons, the rest li
     '/brochure.pdf': 'not-html',
     '/private/secret.html': 'robots',
   });
-  assert.deepEqual(result.beyondLimit.map((p) => new URL(p.url).pathname).sort(), ['/blog/first-post.html', '/blog/second-post.html', '/team.html']);
+  assert.deepEqual(result.beyondLimit.map((p) => new URL(p.url).pathname).sort(), ['/blog/first-post.html', '/blog/second-post.html', '/team.html', '/work.html']);
   assert.equal(result.sitemap.status, 'found');
 });
 

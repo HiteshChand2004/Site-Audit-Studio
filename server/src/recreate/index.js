@@ -12,7 +12,9 @@ import { TimeoutError, withTimeout } from '../audit/util.js';
 import { analysisWarnings, baseUrlOf, latestAnalysis } from './inputs.js';
 import { RecreateError } from './errors.js';
 import { assetsStage } from './assets/index.js';
+import { generateStage } from './generate.js';
 import { inspectStage } from './inspect.js';
+import { fidelityStage } from './verify/fidelity.js';
 import { commitWorkspace, discardWorkspace, openWorkspace } from './workspace.js';
 
 export { RecreateError };
@@ -21,7 +23,7 @@ export { RecreateError };
 export const STEPS = [
   { key: 'inspect', label: 'Inspecting pages', weight: 35, max: 5 * 60000 },
   { key: 'assets', label: 'Extracting assets', weight: 25, max: 4 * 60000 },
-  { key: 'generate', label: 'Generating site', weight: 15, max: 2 * 60000 },
+  { key: 'generate', label: 'Generating site', weight: 15, max: 3 * 60000 },
   { key: 'build', label: 'Building & verifying', weight: 20, max: 3 * 60000 },
   { key: 'preview', label: 'Starting preview', weight: 5, max: 30000 },
 ];
@@ -44,13 +46,14 @@ export function recreateBudgetMs(env = process.env) {
 }
 
 
-// Stages still to be built in later Phase 4a sub-steps only report progress.
+// Stages still to be built in later Phase 4a sub-steps only report progress. The build step runs the
+// basic fidelity check for now; 4a.6 adds the build verification around it.
 const noop = async () => {};
 export const STAGES = {
   inspect: inspectStage,
   assets: assetsStage,
-  generate: noop,
-  build: noop,
+  generate: generateStage,
+  build: fidelityStage,
   preview: noop,
 };
 

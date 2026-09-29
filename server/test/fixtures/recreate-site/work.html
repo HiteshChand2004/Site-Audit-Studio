@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="/styles.css" />
+    <style>
+      /* Builder-style markup (like Framer): the content exists once per breakpoint and media queries
+         hide the other copies. Class names are generated. */
+      @media (min-width: 1025px) { .hidden-desktop { display: none !important; } }
+      @media (min-width: 601px) and (max-width: 1024px) { .hidden-tablet { display: none !important; } }
+      @media (max-width: 600px) { .hidden-phone { display: none !important; } }
+      .framer-Xk2p9 { padding: 48px; }
+      .framer-a1b2c3 h1 { font-size: 48px; margin: 0 0 12px; }
+      .framer-7h8j9k h1 { font-size: 36px; margin: 0 0 10px; }
+      .framer-4r5t6y h1 { font-size: 28px; margin: 0 0 8px; }
+      .work-intro { max-width: 640px; margin: 0 auto 32px; }
+      .framer-grid-d { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+      .framer-grid-t { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+      .framer-grid-p { display: grid; grid-template-columns: 1fr; gap: 16px; }
+      .card { padding: 16px; border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc; }
+      .card img { display: block; width: 100%; height: auto; }
+      .card h3 { margin: 12px 0 0; font-size: 18px; }
+      .newsletter { display: flex; gap: 8px; align-items: center; margin-top: 32px; }
+      .newsletter button { padding: 8px 16px; border: 0; border-radius: 8px; background: var(--brand); color: #fff; }
+    </style>
+  </head>
+  <body>
+    <!-- No <title> and no meta description: the generate step fills them from the page (marked auto-generated). -->
+    <header class="site-header"><a href="/" class="logo">Recreate Co</a><nav><a href="/">Home</a><a href="/about.html">About</a><a href="/work.html">Work</a></nav></header>
+    <main class="framer-Xk2p9 framer-v-1abc">
+      <div class="framer-1x2y3z hidden-tablet hidden-phone">
+        <section class="framer-a1b2c3 work-hero">
+          <h1>Selected work</h1>
+          <p class="work-intro">We design and build fast marketing sites for small teams, from the first sketch to launch day.</p>
+        </section>
+        <div class="framer-grid-d w-dyn-list">
+          <div class="card wp-block-group"><img src="/img/team.png" alt="Project one" width="400" height="200" /><h3>Project one</h3></div>
+          <div class="card wp-block-group"><img src="/img/team.png" alt="Project two" width="400" height="200" /><h3>Project two</h3></div>
+          <div class="card wp-block-group"><img src="/img/team.png" alt="Project three" width="400" height="200" /><h3>Project three</h3></div>
+        </div>
+      </div>
+      <div class="framer-7h8j9k hidden-desktop hidden-phone">
+        <section class="framer-a1b2c3-t work-hero">
+          <h1>Selected work</h1>
+          <p class="work-intro">We design and build fast marketing sites for small teams, from the first sketch to launch day.</p>
+        </section>
+        <div class="framer-grid-t w-dyn-list">
+          <div class="card wp-block-group"><img src="/img/team.png" alt="Project one" width="400" height="200" /><h3>Project one</h3></div>
+          <div class="card wp-block-group"><img src="/img/team.png" alt="Project two" width="400" height="200" /><h3>Project two</h3></div>
+          <div class="card wp-block-group"><img src="/img/team.png" alt="Project three" width="400" height="200" /><h3>Project three</h3></div>
+        </div>
+      </div>
+      <div class="framer-4r5t6y hidden-desktop hidden-tablet">
+        <section class="framer-a1b2c3-p work-hero">
+          <h1>Selected work</h1>
+          <p class="work-intro">We design and build fast marketing sites for small teams, from the first sketch to launch day.</p>
+        </section>
+        <div class="framer-grid-p w-dyn-list">
+          <div class="card wp-block-group"><img src="/img/team.png" alt="Project one" width="400" height="200" /><h3>Project one</h3></div>
+          <div class="card wp-block-group"><img src="/img/team.png" alt="Project two" width="400" height="200" /><h3>Project two</h3></div>
+          <div class="card wp-block-group"><img src="/img/team.png" alt="Project three" width="400" height="200" /><h3>Project three</h3></div>
+        </div>
+      </div>
+      <div class="framer-wrap-1"><div class="framer-wrap-2"><p id="framer-9x8y7z" class="note">All projects shipped as plain HTML and CSS.</p></div></div>
+      <form class="newsletter" action="https://api.framer.com/forms/abc123" method="post">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" />
+        <button type="submit">Subscribe</button>
+      </form>
+    </main>
+    <footer class="site-footer"><a href="/team.html">Team</a> <a href="/login.html">Log in</a> <a href="#top">Top</a></footer>
+  </body>
+</html>
