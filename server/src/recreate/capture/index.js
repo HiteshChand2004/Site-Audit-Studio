@@ -9,6 +9,8 @@ import { snapshotPage } from './snapshot.js';
 
 export { VIEWS };
 export const captureDir = (workspace, slug) => path.join(workspace, 'capture', slug);
+// How long a page gets to fire its load event after the document arrived.
+const LOAD_WAIT = 20000;
 
 // Scrolls through the page so lazy images and scroll-triggered sections load, waits for pending
 // images and fonts, then returns to the top (settle, below). The scrolling is real input (the mouse
@@ -225,7 +227,11 @@ async function captureView(browser, pageInfo, view, dir, { timeout }) {
 
   try {
     const page = await context.newPage();
-    const response = await page.goto(pageInfo.url, { waitUntil: 'load', timeout });
+    // The document must arrive in time; the load event (every image, tracker and embed) and a quiet
+    // network only get a bounded wait. A slow third-party request must not lose the page: the
+    // scroll-through below loads lazy content anyway, and pending images are awaited at the end.
+    const response = await page.goto(pageInfo.url, { waitUntil: 'domcontentloaded', timeout });
+    await page.waitForLoadState('load', { timeout: LOAD_WAIT }).catch(() => {});
     await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
     const reveal = await settle(page, view, MAX_HEIGHT);
     await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});

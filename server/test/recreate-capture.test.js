@@ -99,6 +99,27 @@ test('discovery refuses a blocked homepage without the dev flag', async () => {
   }
 });
 
+test('near its time limit the inspect step keeps the pages captured so far instead of failing', async () => {
+  const id = randomUUID();
+  projectIds.push(id);
+  const now = new Date().toISOString();
+  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at) VALUES (?, 'fixture', ?, 'html', 1, 1, ?, ?)`)
+    .run(id, `${origin}/`, now, now);
+  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
+    .run(randomUUID(), id, now, now, JSON.stringify({ url: `${origin}/`, analyzedAt: now }));
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+  const stubs = Object.fromEntries(Object.keys(STAGES).map((key) => [key, async () => {}]));
+  // The step has (almost) no time left: the homepage is still captured, the other page is not.
+  const inspect = (ctx) => {
+    ctx.stepDeadline = Date.now() + 1000;
+    return STAGES.inspect(ctx);
+  };
+  const report = await runRecreate({ project, recreateId: randomUUID(), progress: () => {}, stages: { ...stubs, inspect } });
+  assert.deepEqual(report.pages.map((p) => p.path), ['/']);
+  assert.ok(report.discovery.linksToLive.some((l) => l.url === `${origin}/about.html` && l.reason === 'time-limit'));
+  assert.match(report.warnings.join('\n'), /1 page was not captured within the time limit of the inspect step \(\/about\.html\); links to it point to the live site/);
+});
+
 test('the inspect step captures every selected page at desktop, tablet and mobile', async () => {
   const id = randomUUID();
   projectIds.push(id);

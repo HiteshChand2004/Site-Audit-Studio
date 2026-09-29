@@ -9,6 +9,9 @@ import { capturePage } from './capture/index.js';
 import { discoverPages, SKIP_LABELS } from './discover.js';
 import { RecreateError } from './errors.js';
 
+// Captures stop starting new pages this long before the step's time limit.
+const INSPECT_MARGIN = 15000;
+
 const once = (fn) => {
   let done = null;
   return () => (done ??= fn());
@@ -34,13 +37,28 @@ export async function inspectStage(ctx) {
 
   const pages = [];
   const failedPages = [];
+  const notCaptured = [];
   try {
     browser = await launchBrowser({ proxy: proxy.url });
     const total = discovery.pages.length;
+    // Pages are captured while they still fit in the step's time limit (judged by the slowest page
+    // so far): a slow site or a high page limit then keeps the pages captured so far instead of
+    // failing the whole job. The homepage is always captured.
+    const deadline = (ctx.stepDeadline ?? Infinity) - INSPECT_MARGIN;
+    let slowest = 0;
     for (const [i, info] of discovery.pages.entries()) {
       if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
+      if (i > 0 && Date.now() + slowest > deadline) {
+        for (const rest of discovery.pages.slice(i)) {
+          notCaptured.push(rest.path);
+          failedPages.push({ url: rest.url, source: rest.source, reason: 'time-limit' });
+        }
+        break;
+      }
       ctx.progress(0.2 + 0.8 * (i / total), `Capturing ${info.path} (${i + 1} of ${total})`);
+      const started = Date.now();
       const { views, errors } = await capturePage(browser, info, ctx.dir);
+      slowest = Math.max(slowest, Date.now() - started);
       for (const e of errors) report.errors.push({ step: 'inspect', message: `${info.path} (${e.view}): ${e.message}` });
       if (!views.desktop) {
         // The desktop capture is the base layout; without it the page cannot be rebuilt.
@@ -55,6 +73,9 @@ export async function inspectStage(ctx) {
     await closeProxy();
   }
 
+  if (notCaptured.length) {
+    report.warnings.push(`${notCaptured.length} ${notCaptured.length === 1 ? 'page was' : 'pages were'} not captured within the time limit of the inspect step (${notCaptured.slice(0, 5).join(', ')}${notCaptured.length > 5 ? ', …' : ''}); links to ${notCaptured.length === 1 ? 'it' : 'them'} point to the live site. Lower the page limit or run Recreate again.`);
+  }
   ctx.discovery = discovery;
   ctx.pages = pages;
   // Links to these pages keep pointing at the live site (Phase 4a decision).
