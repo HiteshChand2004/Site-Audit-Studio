@@ -305,6 +305,14 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.match(home, new RegExp(`href="${origin}/login\\.html">Log in<`));
   assert.match(home, /<link rel="canonical" href="http:\/\/localhost:4196\/">/);
   const services = await read('services/index.html');
+
+  // 4a.7 — builder-style seeds on /services/ (below the first screen).
+  // Scroll-reveal content is captured in its revealed state: visible text, no leftover opacity 0 / offset.
+  assert.match(services, /<h2 class="[\w-]+">Revealed on scroll<\/h2>/);
+  assert.match(services, /fades in when it scrolls into view/);
+  const servicesInfo = report.pages.find((p) => p.path === '/services/');
+  assert.ok(servicesInfo.revealPinned.desktop >= 3, JSON.stringify(servicesInfo.revealPinned));
+  assert.ok(report.warnings.some((w) => /^Scroll-reveal content on \d+ pages? was captured in its revealed state \(.*\/services\//.test(w)));
   assert.match(services, /href="\.\.\/">Home</);
   assert.match(services, /<link rel="icon" href="\.\.\/assets\/images\/hero-bg-[0-9a-f]{10}\.svg">/);
   assert.match(await read('about.html'), new RegExp(`href="${origin}/team\\.html">Our team<`));
@@ -334,6 +342,34 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.match(css, /--brand: #0f766e;/);
   assert.match(css, /@font-face \{\n {2}font-family: "Brand Mono";\n {2}src: url\("\.\.\/assets\/fonts\/mono-[0-9a-f]{10}\.woff2"\) format\("woff2"\);/);
   assert.match(css, /@keyframes brand-fade/);
+  // 4a.7 — a same-origin @font-face (inline <style>, read by the capture) gets its local file.
+  assert.match(css, /@font-face \{\n {2}font-family: "Fixture Mono";\n {2}src: url\("\.\.\/assets\/fonts\/mono-[0-9a-f]{10}\.woff2"\) format\("woff2"\);/);
+  const classOf = (re) => services.match(re)[1];
+  const baseRule = (cls) => rules(cls)[0] ?? '';
+  // The fold card crosses the fold and is hidden again at the top (too little of it in view): pinned too.
+  const foldCard = classOf(/<div class="([\w-]+)">\s*<p[^>]*>Crossing the fold/);
+  for (const cls of [foldCard, classOf(/<h2 class="([\w-]+)">Revealed on scroll/), classOf(/<p class="([\w-]+)">This paragraph fades/)]) {
+    // Nothing hidden, half-faded or still offset (a state captured mid-animation).
+    assert.doesNotMatch(baseRule(cls), /opacity: 0[;\s.]|translateY|matrix\(1, 0, 0, 1, 0, [1-9]/, cls);
+  }
+  // 4a.7 — an image frame whose image is absolutely positioned keeps its size; the copy column in a
+  // flex row (inside a display: contents wrapper) keeps its width, so its text keeps wrapping.
+  const frameRule = baseRule(classOf(/<div class="([\w-]+)"><img class="[\w-]+"[^>]* src="\.\.\/assets\/images\/team-/));
+  assert.match(frameRule, /height: 300px/);
+  assert.match(frameRule, /width: 400px/);
+  const copyRule = baseRule(classOf(/<div class="([\w-]+)">\s*<h2 class="[\w-]+">Revealed on scroll/));
+  assert.match(copyRule, /(^|\s)width: (50%|480px);/); // a width, never only max-width
+  // A row around a zero-basis growing text (flex: 1 0 0) in a centred column keeps its width even
+  // though its text fits on one line; without it the row shrinks to one word per line.
+  const highlightRule = baseRule(classOf(/<div class="([\w-]+)"><span[^>]*>(?:(?!<\/span>)[^])*<\/span><div[^>]*>\s*<p[^>]*>Fast onboarding/));
+  assert.match(highlightRule, /(^|\s)width: (100%|\d+px);/);
+  // Its centred wrapper, content-sized too, keeps filling its parent: the row's 100% needs that.
+  const innerRule = baseRule(classOf(/<div class="([\w-]+)">\s*<div class="[\w-]+"><span[^>]*>(?:(?!<\/span>)[^])*<\/span><div[^>]*>\s*<p[^>]*>Fast onboarding/));
+  assert.match(innerRule, /(^|\s)width: 100%;/);
+  // The bullet box holds only an SVG at width: 100%: it keeps its own width (else the SVG falls
+  // back to 300 px and squeezes the text).
+  const dotRule = baseRule(classOf(/<span class="([\w-]+)"[^>]*><svg[^>]*>(?:(?!<\/span>)[^])*<\/span><div[^>]*>\s*<p[^>]*>Fast onboarding/));
+  assert.match(dotRule, /(^|\s)width: 6px;/);
   assert.doesNotMatch(css, /@keyframes brand-pulse/); // not used by any page
 
   // Report: auto-generated head fields, the form, the IR and the generation stats.

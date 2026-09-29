@@ -48,7 +48,8 @@
   ],
   "cleanup": {
     "classPatterns": [
-      "^framer-"
+      "^framer-",
+      "^ssr-variant$"
     ],
     "cdnHosts": [
       "framerusercontent.com",

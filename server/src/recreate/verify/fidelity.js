@@ -13,6 +13,9 @@ import { measureSite, siteRenderer } from '../generate.js';
 import { compareLayout, SCORE_WEIGHTS, viewScore, visualSimilarity } from './layout.js';
 
 export const FIDELITY_THRESHOLD = 80;
+// Scoring stops starting new pages this long before the build step's time limit: an unscored page
+// is reported, never a reason to fail the job.
+const DEADLINE_MARGIN = 20000;
 
 const exists = (p) => access(p).then(() => true, () => false);
 const mean = (xs) => (xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : null);
@@ -57,8 +60,9 @@ export async function measureFidelity(ctx, { root, progress = ctx.progress } = {
   const total = site.pages.reduce((n, t) => n + t.views.length, 0);
   progress(0, 'Comparing with the original');
 
-  await measureSite(renderer, ir, site, {
+  const rendered = await measureSite(renderer, ir, site, {
     screenshot: true,
+    deadline: (ctx.stepDeadline ?? Infinity) - DEADLINE_MARGIN,
     onView: async (tree, view, result) => {
       const layout = compareLayout(tree.root, view, result.rects);
       const dir = path.join(ctx.dir, 'fidelity', tree.info.slug);
@@ -84,11 +88,16 @@ export async function measureFidelity(ctx, { root, progress = ctx.progress } = {
     const views = results.get(t) ?? {};
     return { path: t.info.path, outPath: t.info.outPath, score: mean(Object.values(views).map((v) => v.score)), views };
   });
+  const unscored = pages.slice(rendered).map((p) => p.path);
+  if (unscored.length) {
+    ctx.report.warnings.push(`Fidelity was not measured for ${unscored.length} ${unscored.length === 1 ? 'page' : 'pages'} (time limit of the build step): ${unscored.slice(0, 5).join(', ')}${unscored.length > 5 ? ', …' : ''}.`);
+  }
   const fidelity = {
     method: 'Rough, structure-level: element boxes (sizes and positions) and a scaled-down full-page screenshot comparison per view, rendered from the production build.',
     weights: SCORE_WEIGHTS,
     score: mean(pages.map((p) => p.score).filter((s) => s != null)),
     pages,
+    unscored,
   };
   ctx.report.warnings.push(...flagFidelity(fidelity));
   ctx.report.fidelity = fidelity;

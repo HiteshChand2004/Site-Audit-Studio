@@ -67,7 +67,13 @@ export async function inspectStage(ctx) {
     title: p.title,
     source: p.source,
     views: Object.keys(p.views),
+    // Scroll-reveal elements captured in their revealed state, per view (capture/index.js).
+    revealPinned: Object.fromEntries(Object.entries(p.views).map(([v, x]) => [v, x.reveal?.pinned ?? 0])),
   }));
+  const revealPages = report.pages.filter((p) => Object.values(p.revealPinned).some((n) => n > 0));
+  if (revealPages.length) {
+    report.warnings.push(`Scroll-reveal content on ${revealPages.length} ${revealPages.length === 1 ? 'page' : 'pages'} was captured in its revealed state (${revealPages.map((p) => p.path).slice(0, 5).join(', ')}); the reveal animation itself comes in Phase 4b.`);
+  }
   report.discovery = {
     pageLimit: ctx.pageLimit,
     crawled: discovery.crawled,

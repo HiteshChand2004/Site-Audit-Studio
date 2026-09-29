@@ -6,10 +6,60 @@
     <title>Services</title>
     <meta name="description" content="What we do." />
     <link rel="stylesheet" href="/styles.css" />
+    <!-- Builder-style seeds (Framer and friends), all below the first screen:
+         - a same-origin @font-face in an inline <style> (read by the capture itself, not the assets step);
+         - scroll-reveal ("appear") elements: hidden until in view and hidden again when they leave (reveal.js);
+           one crosses the fold in every view and only shows when half of it is in view;
+         - a flex row whose items sit in display: contents variant wrappers: an image frame whose image is
+           absolutely positioned (inset 0), and a copy column with a definite width and wrapping text. -->
+    <style>
+      @font-face {
+        font-family: "Fixture Mono";
+        src: url("/fonts/mono.woff2") format("woff2");
+        font-display: swap;
+      }
+      .fold-card { box-sizing: border-box; margin: 480px auto 0; max-width: 600px; height: 600px; padding: 24px; background: #f1f5f9; }
+      .showcase { margin: 1400px auto 80px; max-width: 1000px; padding: 0 20px; }
+      .variant { display: contents; }
+      .split { display: flex; align-items: flex-start; gap: 40px; }
+      .frame { position: relative; flex-shrink: 0; width: 400px; height: 300px; border-radius: 16px; overflow: hidden; background: #e2e8f0; }
+      .frame-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+      .copy { width: 50%; flex-shrink: 0; }
+      .copy p { font-family: "Fixture Mono", monospace; font-size: 18px; line-height: 28px; margin: 0; }
+      /* A centred column of rows, each a dot plus a zero-basis growing text: the row needs its width. */
+      .highlights { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 16px; }
+      .highlights-inner { display: flex; flex-direction: column; align-items: center; gap: 8px; width: 100%; }
+      .highlight { display: flex; align-items: center; gap: 10px; width: 100%; }
+      .dot { flex-shrink: 0; width: 6px; height: 6px; }
+      .dot svg { display: block; width: 100%; height: 100%; }
+      .highlight-text { flex: 1 0 0px; }
+      @media (max-width: 600px) {
+        .split { flex-direction: column; }
+        .frame { width: 100%; }
+        .copy { width: 100%; }
+      }
+    </style>
   </head>
   <body>
     <header class="site-header"><a href="/" class="logo">Recreate Co</a><nav><a href="/">Home</a><a href="/about.html">About</a></nav></header>
-    <main><h1>Services</h1><ul><li>Design</li><li>Build</li></ul></main>
+    <main>
+      <h1>Services</h1><ul><li>Design</li><li>Build</li></ul>
+      <div class="fold-card appear-half"><p>Crossing the fold, shown when half of it is in view.</p></div>
+      <section class="showcase">
+        <div class="split">
+          <div class="variant"><div class="frame appear"><img class="frame-image" src="/img/team.png" alt="Team at work" /></div></div>
+          <div class="variant"><div class="copy">
+            <h2 class="appear">Revealed on scroll</h2>
+            <p class="appear">This paragraph fades in when it scrolls into view and fades out again when it leaves, like builder appear effects. It is long enough to wrap onto several lines inside its column.</p>
+            <div class="highlights"><div class="highlights-inner">
+              <div class="highlight"><span class="dot"><svg viewBox="0 0 6 6" aria-hidden="true"><circle cx="3" cy="3" r="3" fill="#0f766e"/></svg></span><div class="highlight-text"><p>Fast onboarding.</p></div></div>
+              <div class="highlight"><span class="dot"><svg viewBox="0 0 6 6" aria-hidden="true"><circle cx="3" cy="3" r="3" fill="#0f766e"/></svg></span><div class="highlight-text"><p>Clean workflows.</p></div></div>
+            </div></div>
+          </div></div>
+        </div>
+      </section>
+    </main>
     <footer class="site-footer"><a href="/">Home</a></footer>
+    <script src="/reveal.js"></script>
   </body>
 </html>

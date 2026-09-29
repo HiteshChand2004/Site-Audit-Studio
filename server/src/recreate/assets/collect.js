@@ -117,7 +117,11 @@ export function collectAssets(captures, extra = {}) {
       }
     }
     for (const f of data.loadedFonts ?? []) usedFamilies.add(f.family.toLowerCase());
-    for (const f of data.fontFaces ?? []) faces.set(faceKey(f), f);
+    for (const f of data.fontFaces ?? []) {
+      // Captures before 4a.7 stored same-origin sources as bare URL strings.
+      const face = { ...f, src: f.src.map((s) => (typeof s === 'string' ? { url: s, format: null } : s)) };
+      faces.set(faceKey(face), face);
+    }
   }
   for (const f of extra.fontFaces ?? []) faces.set(faceKey(f), f);
 

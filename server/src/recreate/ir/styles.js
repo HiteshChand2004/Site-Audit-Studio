@@ -14,7 +14,7 @@
 // - absolutely positioned boxes keep one anchor per axis plus their size;
 // - px grid tracks that fill the container become fr tracks;
 // - containers taller than their content keep a min-height.
-import { BLOCK_TAGS, displayOf, isElement, isText, VIEW_IDS } from './tree.js';
+import { BLOCK_TAGS, deepText, displayOf, isElement, isText, VIEW_IDS } from './tree.js';
 import { ClassNamer, nameHint } from './names.js';
 
 // Must match the inherited set of capture/snapshot.js.
@@ -118,6 +118,32 @@ function gridTracks(value, contentW, gap) {
   return tracks.map((t) => `minmax(0, ${round(t / min)}fr)`).join(' ');
 }
 
+const lineHeightPx = (fontSize, lineHeight) => (!lineHeight || lineHeight === 'normal' ? fontSize * 1.2 : px(lineHeight) ?? parseFloat(lineHeight) * fontSize);
+
+/**
+ * True when text inside `node` wrapped in view `v`: an element with its own text is taller than
+ * about 1.6 lines. Inherited font-size / line-height come from the nearest element that sets them
+ * (captured styles are diffs against the parent for inherited properties).
+ */
+export function wrapsText(node, v, chain = []) {
+  let fontSize = null;
+  let lineHeight = null;
+  for (const n of [...chain, node].reverse()) {
+    const s = n.views[v]?.style ?? {};
+    fontSize ??= px(s['font-size']);
+    lineHeight ??= s['line-height'] ?? null;
+  }
+  const walk = (n, fs, lh) => {
+    const d = n.views[v];
+    if (!d || d.hidden) return false;
+    const f = px(d.style['font-size']) ?? fs;
+    const l = d.style['line-height'] ?? lh;
+    if (n.children.some((c) => isText(c) && c.text.trim()) && d.rect[3] > 1.6 * lineHeightPx(f, l)) return true;
+    return n.tag !== 'svg' && n.children.some((c) => isElement(c) && walk(c, f, l));
+  };
+  return walk(node, fontSize ?? 16, lineHeight);
+}
+
 /**
  * The declarations of one node in one view, with sizing hints (@w, @rw, @fw) that are resolved
  * across views afterwards.
@@ -126,7 +152,11 @@ export function normalizeView(node, v, chain, opts) {
   const d = node.views[v];
   const style = { ...d.style };
   const [x, , w, h] = d.rect;
-  const parent = chain[chain.length - 1];
+  // The layout parent: display: contents wrappers (builder variant wrappers) generate no box, so
+  // the element is laid out by the nearest ancestor that does.
+  let pi = chain.length - 1;
+  while (pi > 0 && chain[pi].views[v] && displayOf(chain[pi], v) === 'contents') pi--;
+  const parent = chain[pi];
   const pd = parent?.views[v];
   const display = style.display ?? displayOf(node, v);
   const position = style.position ?? 'static';
@@ -199,13 +229,42 @@ export function normalizeView(node, v, chain, opts) {
       style['margin-left'] = 'auto';
       style['margin-right'] = 'auto';
     }
+  } else if (!fix?.w && /flex/.test(pDisplay) && (position === 'static' || position === 'relative') && w > 0
+    && !REPLACED.has(node.tag) && !FORM_CONTROL.has(node.tag) && display !== 'contents') {
+    // A flex item sized by its content (row: no flex-grow; column: not stretched) whose text wraps
+    // had a definite width (builders set width: 50% or px on it). Without it the item grows to its
+    // max-content width: the text stops wrapping and pushes its siblings out of the row.
+    const row = !/column/.test(pd.style['flex-direction'] ?? '');
+    const alignSelf = style['align-self'] && style['align-self'] !== 'auto' ? style['align-self'] : pd.style['align-items'] ?? 'normal';
+    const contentSized = row ? !(parseFloat(style['flex-grow'] ?? '0') > 0) : !/^(normal|stretch)$/.test(alignSelf);
+    // Hinted in every view where it holds text; applied when the text wraps in any view, or when the
+    // item is a flex row around a zero-basis growing child (flex: 1 0 0): browsers size such a row
+    // from that basis, so without a width it shrinks to its min-content width (one word per line).
+    const zeroBasisRow = /flex/.test(display) && !/column/.test(style['flex-direction'] ?? '') && node.children.some((c) => {
+      const cs = c.views?.[v]?.style;
+      return cs && !c.views[v].hidden && parseFloat(cs['flex-grow'] ?? '0') > 0 && /^0(px|%)?$/.test(cs['flex-basis'] ?? '');
+    });
+    // An item that fills its parent's width keeps doing so (width: 100%): a content-sized ancestor
+    // would otherwise leave the percentages of its descendants nothing to resolve against.
+    const ratio = ratioOf(w);
+    const fills = ratio != null && ratio >= 0.995 && ratio <= 1.005;
+    // Without text (icon boxes, image frames) the content cannot size the item reliably: an SVG or
+    // image at width: 100% inside it falls back to its default size (300 px for SVG). Keep the width.
+    const text = deepText(node).trim();
+    if (contentSized) style['@cw'] = { px: size.w(w), ratio, wraps: !text || fills || zeroBasisRow || wrapsText(node, v, chain) };
   }
 
   const elements = node.children.filter(isElement);
   const hasText = node.children.some((c) => isText(c) && c.text.trim());
+  // Children that take up space in this view (absolutely positioned or hidden ones do not).
+  const inFlow = elements.filter((c) => {
+    const cd = c.views[v];
+    return cd && !cd.hidden && !/^(absolute|fixed)$/.test(cd.style.position ?? '');
+  });
   if (!REPLACED.has(node.tag) && !FORM_CONTROL.has(node.tag) && display !== 'inline' && h > 0) {
-    if (!elements.length && !hasText) {
-      // An empty box (divider, colour block, image holder) only has the size it was given.
+    if (!inFlow.length && !hasText) {
+      // An empty box (divider, colour block, image holder) only has the size it was given. Builders
+      // often place the image of a frame absolutely (inset 0) inside it: the frame is empty too.
       if (!style.height) style.height = `${size.h(h)}px`;
       if (!style.width && !style['@w'] && !BLOCK_PARENT.has(pDisplay) && w > 0) style['@rw'] = { px: size.w(w), ratio: ratioOf(w) };
     } else if (elements.length && !hasText && !style['min-height'] && !style.height) {
@@ -234,6 +293,29 @@ export function normalizeView(node, v, chain, opts) {
  * 100% when the element fills its parent, else px.
  */
 export function resolveHints(decls, present, tag) {
+  // @cw: a content-sized flex item with text. When its text wraps in any view it had a definite
+  // width: `width` in every hinted view (a percentage when the ratio holds everywhere), never only
+  // max-width, which cannot stop a flex container from shrinking to its min-content width.
+  const cw = present.filter((v) => decls[v]?.['@cw']);
+  if (cw.length) {
+    const apply = cw.some((v) => decls[v]['@cw'].wraps);
+    const ratios = cw.map((v) => decls[v]['@cw'].ratio);
+    const pxs = cw.map((v) => decls[v]['@cw'].px);
+    // The same px in every view is a fixed size (an icon box), not a share of the parent.
+    const fixed = cw.length > 1 && Math.max(...pxs) - Math.min(...pxs) <= 1;
+    const consistent = !fixed && cw.length === present.length && ratios.every((r) => r != null && Number.isFinite(r) && r > 0)
+      && Math.max(...ratios) - Math.min(...ratios) <= 0.01;
+    for (const v of cw) {
+      const hint = decls[v]['@cw'];
+      delete decls[v]['@cw'];
+      if (!apply || decls[v].width) continue;
+      if (consistent) decls[v].width = hint.ratio >= 0.995 && hint.ratio <= 1.005 ? '100%' : pct(hint.ratio);
+      else {
+        decls[v].width = `${Math.round(hint.px)}px`;
+        decls[v]['max-width'] ??= '100%';
+      }
+    }
+  }
   for (const key of ['@w', '@rw', '@fw']) {
     const hinted = present.filter((v) => decls[v]?.[key]);
     if (!hinted.length) continue;

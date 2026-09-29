@@ -48,18 +48,22 @@ export async function siteRenderer(ctx) {
 /**
  * Renders every page of the measurement build (with data-sas-id) in every captured view.
  * @param {(page:object, view:string, result:object)=>Promise<void>|void} onView
+ * @param {number} [deadline]  no new page is started after this time (ms since epoch)
+ * @returns {Promise<number>} the number of pages rendered
  */
-export async function measureSite(renderer, ir, site, { screenshot = false, onView } = {}) {
+export async function measureSite(renderer, ir, site, { screenshot = false, onView, deadline = Infinity } = {}) {
   const measured = emitSite(ir, { ids: true });
   for (const page of ir.pages) renderer.server.overrides.set(page.outPath, measured.files.get(page.outPath));
   try {
     for (const [i, page] of ir.pages.entries()) {
+      if (Date.now() > deadline) return i;
       const tree = site.pages[i];
       await Promise.all(tree.views.map(async (view) => {
         const result = await renderPage(renderer, page.outPath, view, { screenshot });
         await onView(tree, view, result);
       }));
     }
+    return ir.pages.length;
   } finally {
     renderer.server.overrides.clear();
   }

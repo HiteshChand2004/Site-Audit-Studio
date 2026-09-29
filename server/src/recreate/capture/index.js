@@ -12,15 +12,120 @@ export const captureDir = (workspace, slug) => path.join(workspace, 'capture', s
 
 // Scrolls through the page so lazy images and scroll-triggered sections load, waits for pending
 // images and fonts, then returns to the top. Runs in the page.
+//
+// Scroll-reveal ("appear") effects: many sites (Framer appear effects, Webflow interactions, AOS,
+// GSAP ScrollTrigger) start sections at opacity 0 and show them only while they are in view; some
+// hide them again when they leave. Capturing that state recreates invisible content. So while
+// scrolling, every element that starts hidden (opacity ≈ 0) and is then shown by the page itself is
+// recorded with the opacity / transform / filter it settles at. Back at the top, those values are
+// pinned (inline !important, re-applied if the page rewrites the style) on elements that are hidden
+// again and not entirely inside the first screen. Elements the page never shows (menus, dialogs) stay as they are, and
+// hidden siblings stacked on the same box (carousel or tab slides) are left alone. The motion itself
+// is recreated in Phase 4b.
 async function settle(cap) {
-  const step = Math.max(400, Math.floor(window.innerHeight * 0.8));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const HIDDEN = 0.05;
+  const seenHidden = new Set();
+  const revealed = new Map(); // element → { opacity, transform, filter } once it settles visible
+  const last = new Map(); // element → "opacity|transform|filter" at the previous sample
+
+  const state = (cs) => `${cs.opacity}|${cs.transform}|${cs.filter}`;
+  // CSS transitions and Web Animations (which most builders use for appear effects) are finished at
+  // once, so the element is read in its end state; polling alone can read a frame mid-animation.
+  const finish = (el) => {
+    for (const a of el.getAnimations?.() ?? []) {
+      if (a.playState !== 'running' || !Number.isFinite(a.effect?.getComputedTiming().endTime)) continue;
+      try {
+        a.finish();
+      } catch { /* not finishable */ }
+    }
+  };
+  // Samples tracked elements (all elements when `full`); returns true when none of them changed.
+  const sample = (full) => {
+    let stable = true;
+    const els = full ? document.body?.getElementsByTagName('*') ?? [] : [...seenHidden];
+    for (const el of els) {
+      if (seenHidden.has(el)) finish(el);
+      const cs = getComputedStyle(el);
+      const opacity = parseFloat(cs.opacity);
+      if (opacity < HIDDEN) {
+        seenHidden.add(el);
+        continue;
+      }
+      if (!seenHidden.has(el)) continue;
+      const s = state(cs);
+      const settled = last.get(el) === s; // same state as the previous sample: not mid-animation
+      if (!settled) stable = false;
+      last.set(el, s);
+      const prev = revealed.get(el);
+      if (settled && (!prev || opacity >= prev.opacity - 0.01)) revealed.set(el, { opacity, transform: cs.transform, filter: cs.filter });
+    }
+    return stable;
+  };
+
+  sample(true);
+  // Steps below one viewport, so every element passes through the view.
+  const step = Math.max(400, Math.floor(window.innerHeight * 0.85));
   for (let y = 0; y < document.documentElement.scrollHeight && y < cap; y += step) {
     window.scrollTo(0, y);
-    await new Promise((r) => setTimeout(r, 120));
+    await sleep(150);
+    // Wait only while revealed elements are still animating (at most 1.5 s per step); pages
+    // without reveal effects move on at once.
+    let changing = !sample(true);
+    const until = Date.now() + 1500;
+    while (changing && Date.now() < until) {
+      await sleep(120);
+      changing = !sample(false);
+    }
   }
   window.scrollTo(0, document.documentElement.scrollHeight);
-  await new Promise((r) => setTimeout(r, 150));
+  await sleep(250);
+  sample(true);
   window.scrollTo(0, 0);
+  await sleep(300);
+
+  // Pin the revealed state on elements that are hidden again below the first screen.
+  const candidates = [];
+  for (const [el, final] of revealed) {
+    if (!el.isConnected || final.opacity < HIDDEN) continue;
+    const cs = getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    // Entirely in the first screen: what the visitor sees now (a hidden element there is more likely
+    // a carousel or timed effect). One that crosses the fold is re-hidden by a scroll trigger.
+    if (r.top >= 0 && r.bottom <= window.innerHeight) continue;
+    if (parseFloat(cs.opacity) < final.opacity - 0.05 || cs.transform !== final.transform || cs.filter !== final.filter) {
+      candidates.push({ el, final, rect: [r.left, r.top, r.width, r.height] });
+    }
+  }
+  const overlap = (a, b) => {
+    const x = Math.max(0, Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0]));
+    const y = Math.max(0, Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]));
+    return x * y > 0.5 * Math.min(a[2] * a[3], b[2] * b[3]);
+  };
+  const stacked = new Set();
+  for (const a of candidates) {
+    for (const b of candidates) {
+      if (a !== b && a.el.parentElement === b.el.parentElement && a.rect[2] * a.rect[3] > 0 && overlap(a.rect, b.rect)) stacked.add(a.el);
+    }
+  }
+  const pinned = candidates.filter((c) => !stacked.has(c.el));
+  const pin = ({ el, final }) => {
+    el.style.setProperty('opacity', String(final.opacity), 'important');
+    el.style.setProperty('transform', final.transform, 'important');
+    el.style.setProperty('filter', final.filter, 'important');
+    finish(el); // the change starts the site's own transition; jump to its end
+  };
+  pinned.forEach(pin);
+  const byEl = new Map(pinned.map((c) => [c.el, c]));
+  // Some runtimes write the style again (for example when the element leaves the view).
+  const observer = new MutationObserver((records) => {
+    for (const rec of records) {
+      const c = byEl.get(rec.target);
+      if (c && rec.target.style.getPropertyPriority('opacity') !== 'important') pin(c);
+    }
+  });
+  for (const c of pinned) observer.observe(c.el, { attributes: true, attributeFilter: ['style'] });
+
   const pending = [...document.images].filter((img) => !img.complete);
   await Promise.all(pending.map((img) => new Promise((r) => {
     img.addEventListener('load', r, { once: true });
@@ -28,6 +133,7 @@ async function settle(cap) {
     setTimeout(r, 3000);
   })));
   await document.fonts?.ready;
+  return { revealed: revealed.size, pinned: pinned.length, stacked: stacked.size };
 }
 
 async function captureView(browser, pageInfo, view, dir, { timeout }) {
@@ -64,7 +170,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout }) {
     const page = await context.newPage();
     const response = await page.goto(pageInfo.url, { waitUntil: 'load', timeout });
     await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
-    await page.evaluate(settle, MAX_HEIGHT);
+    const reveal = await page.evaluate(settle, MAX_HEIGHT);
     await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
     await page.waitForTimeout(300);
 
@@ -88,6 +194,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout }) {
       status: response?.status() ?? 0,
       finalUrl: page.url(),
       capturedAt: new Date().toISOString(),
+      reveal,
       ...snapshot,
       resources: [...resources.values()],
       failedRequests: failed,
@@ -104,6 +211,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout }) {
       nodeCount: data.nodeCount,
       truncated: data.truncated,
       scrollHeight: data.scrollHeight,
+      reveal,
       resources: data.resources,
     };
   } finally {

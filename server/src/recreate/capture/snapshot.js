@@ -196,7 +196,10 @@ export function snapshotPage(opts) {
           style: s.getPropertyValue('font-style') || 'normal',
           display: s.getPropertyValue('font-display') || null,
           unicodeRange: s.getPropertyValue('unicode-range') || null,
-          src: [...src.matchAll(URL_IN_CSS)].map((m) => new URL(m[2], href || document.baseURI).href),
+          // { url, format } like the stylesheet parser of the assets step (assets/css.js).
+          src: [...src.matchAll(/url\((['"]?)(.*?)\1\)\s*(?:format\((['"]?)([^'")]+)\3\))?/g)]
+            .filter((m) => m[2] && !m[2].startsWith('data:'))
+            .map((m) => ({ url: new URL(m[2], href || document.baseURI).href, format: m[4]?.toLowerCase() ?? null })),
         });
       } else if (rule.type === CSSRule.KEYFRAMES_RULE) {
         keyframes.push({ name: rule.name, css: rule.cssText.length > 4000 ? null : rule.cssText });

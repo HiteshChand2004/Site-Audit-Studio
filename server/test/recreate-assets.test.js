@@ -161,6 +161,20 @@ test('collection: one entry per URL, kinds, download order and used fonts only',
   assert.equal(assetKey('javascript:alert(1)'), null);
 });
 
+test('collection: same-origin font sources captured as bare URL strings (before 4a.7) still map to files', () => {
+  const data = {
+    url: 'https://site.test/',
+    head: { links: [], meta: [] },
+    body: { tag: 'body', children: [] },
+    resources: [{ url: 'https://site.test/f.woff2', type: 'font', status: 200 }],
+    loadedFonts: [{ family: 'Inline Sans' }],
+    fontFaces: [{ family: 'Inline Sans', weight: '400', style: 'normal', unicodeRange: null, src: ['https://site.test/f.woff2', 'https://site.test/f.ttf'] }],
+  };
+  const { assets, fontFaces } = collectAssets([{ slug: 'index', view: 'desktop', data }]);
+  assert.deepEqual(fontFaces[0].src, [{ url: 'https://site.test/f.woff2', format: null }, { url: 'https://site.test/f.ttf', format: null }]);
+  assert.deepEqual(assets.filter((a) => a.kind === 'font').map((a) => a.url), ['https://site.test/f.woff2']);
+});
+
 test('downloads: dedupe, redirects, size and time limits, SSRF on every hop', async () => {
   const root = await tempRoot();
   const list = [
