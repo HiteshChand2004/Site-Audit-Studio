@@ -30,14 +30,37 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 | 2 | Analyze job + SSE progress: Lighthouse (mobile+desktop), stack detection, crawler (broken links, sitemap, robots, meta), SEO, AEO, axe a11y, manual-rebuild detector | ✅ Done |
 | 3 | OLD preview: frame check (XFO + CSP3 frame-ancestors), sandboxed iframe, screenshots 1440/768/375 (fold + full, WebP, keep latest 3), per-device metrics, SSRF guard | ✅ Done |
 | 3b | Live view (CDP screencast, view + scroll + click, no keyboard) — deferred by the user | ⏳ Later |
-| 4a | Recreate → plain HTML: page discovery (sitemap, limit), Playwright capture, local assets, IR, variant merge, semantic classes, fixers | 🚧 4a.5 done |
+| 4a | Recreate → plain HTML: page discovery (sitemap, limit), Playwright capture, local assets, IR, variant merge, semantic classes, fixers, build + verify, preview | 🚧 4a.6 done, real-site testing pending before 4a.7 |
 | 4b | Motion + responsive fidelity: hover, scroll reveal, continuous animations, widget JS, visual diff score | ⏳ |
 | 5 | PreviewManager (ports 5100–5199), NEW iframe, re-audit → fix checklist | ⏳ |
 | 6 | React+Vite / Next.js / MERN emitters + Download zip | ⏳ |
 
 **Current status:** Phases 1, 2 and 3 are complete. Phase 4a is in progress on branch `phase-4a`, one sub-step at a time
 (stop after each, WIP commit, wait for the user's "next"; never push):
-4a.1 job foundation ✅ · 4a.2 discovery + capture ✅ · 4a.3 assets ✅ · 4a.4 IR + HTML emitter ✅ · 4a.5 fixers + WP REST ✅ · 4a.6 build, verify, fidelity, preview ✅ · 4a.7 tuning + docs.
+4a.1 job foundation ✅ · 4a.2 discovery + capture ✅ · 4a.3 assets ✅ · 4a.4 IR + HTML emitter ✅ · 4a.5 fixers + WP REST ✅ · 4a.6 build, verify, fidelity, preview ✅ · 4a.7 tuning + docs (small scope, see below).
+
+**Status: 4a.6 done, real-site testing pending before 4a.7.** The user is testing Analyze + Recreate from the UI on real,
+authorized sites (one Framer site, one WordPress/custom site). 4a.7 scope (approved): fix the issues that testing finds;
+if it finds none, 4a.7 is only a small polish + docs pass. Do not start 4a.7, Phase 4b or Phase 5 without the user's go.
+
+### Phase 4a summary (4a.1–4a.6)
+From a completed Analyze, **Recreate** produces a clean static HTML/CSS copy of an authorized site:
+1. **Job foundation**: SSE progress, one job at a time (shared lock with Analyze), 10-minute budget, nothing kept on
+   failure (tmp → final workspace), the latest 2 recreates kept.
+2. **Discovery + capture**: homepage + up to N pages (login/cart/checkout/account/admin skipped and reported), each
+   captured at 1440/768/375.
+3. **Assets**: every image, font, icon and media file downloaded locally, SSRF-guarded; no links back to platform CDNs;
+   files that could not be downloaded are reported, never linked live.
+4. **Rebuild (IR + emitter)**: builder Desktop/Tablet/Phone copies merged into one responsive layout, readable semantic
+   class names instead of builder names, missing titles/descriptions filled from the page and marked "auto-generated",
+   forms go to "Manual rebuild needed".
+5. **Fixes + safety**: alt text, accessible names, heading order, broken links, image loading, fonts; WordPress content
+   from its REST API when reachable; SVG and HTML sanitized so no script remains; minified `dist/`.
+6. **Build check, fidelity threshold, live preview**: atomic `dist/` build, safety gate, verification (files, links,
+   assets, HTML), fidelity per page and overall with a threshold of 80, a static preview on 5100–5199 shown in the NEW
+   panel with a fidelity + verification report card.
+
+Output stack is plain HTML only for now; the fix checklist stays sample data until Phase 5; Download waits for Phase 6.
 
 ### Phase 4a progress
 | Step | Status | Commits | Summary |
@@ -50,6 +73,8 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 | 4a.6 Build, verify, preview | ✅ Done | `fd8d826` | **Build step** (`build/index.js`): atomic `dist/` build (`dist.tmp` → `dist`, a failure names the file), safety gate (moved here from generate), **verification** of `dist/` (`verify/site.js`: every emitted file present, internal links + anchors, local assets in HTML/CSS/SVG, no remote asset, **html-validate**; emitter-only HTML errors fail the job, markup carried over from the original is a warning), **fidelity** rendered from `dist/` with a **threshold of 80** (views, pages and site flagged `low`, warnings). **Preview** (`preview.js`): one recreate's `dist/` on `127.0.0.1:5100–5199`, one active preview, Host check, realpath containment, no dotfiles, strict CSP (`frame-ancestors` = the app); step 5 serves every page through it; started after the job and by `POST /preview`. NEW panel: sandboxed iframe (no scripts), viewport + page picker, report card. Fixture: fidelity **98**, 28 links / 27 assets / 6 pages valid; `recreate-build.test.js`. |
 
 4a.5 manually verified via UI end-to-end on fixture (recreate cc12277c) — site renders correctly in browser, dist/ minified build confirmed.
+4a.6 verified end-to-end on the fixture through the running app (analysis 220fc9e7, recreate 0adc3a7d): fidelity 98/100,
+28 links / 27 assets / 6 pages valid, preview on 127.0.0.1:5100 renders correctly at desktop and phone widths.
 
 > ✅ **SAFETY — resolved in 4a.5:** the generated site contains no script and no external reference. Every SVG file and
 > every inline SVG is rewritten by the allowlist sanitizer; `on*`/`srcdoc`/`formaction`/script-URL attributes and active
@@ -63,6 +88,9 @@ Known issue: 2 `netGuard` tests fail on this Windows machine because `*.localhos
 environmental, not a regression.
 
 ### Phase 4a decisions (approved)
+- Verification severity (4a.6, confirmed by the user): only generator mistakes fail the job (missing build files, broken
+  internal links, missing or remote assets, emitter-only HTML errors). Markup problems carried over from the original
+  site (e.g. a button inside a link) and links to a missing `#anchor` are warnings only.
 - Minimal static preview server in 4a (one active preview, ports 5100–5199); full PreviewManager in Phase 5.
 - Internal links to pages beyond the page limit point to the original live URL and are marked in the report.
 - Missing text (meta description, alt) is generated by heuristics only (no LLM) and marked "auto-generated".
