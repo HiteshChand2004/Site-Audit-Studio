@@ -1,5 +1,5 @@
-// fetch wrapper for crawling: timeouts, a redirect cap, a body size cap and error codes
-// the report can show. Never throws for network errors; returns { status: 0, error } instead.
+// fetch wrapper for crawling and asset downloads: timeouts, a redirect cap, a body size cap and error
+// codes the report can show. Never throws for network errors; returns { status: 0, error } instead.
 // Every hop is checked by the SSRF guard: the URL before the request, and the resolved IP when
 // the socket connects (see security/netGuard.js).
 import { Agent, buildConnector, fetch } from 'undici';
@@ -9,6 +9,7 @@ export const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36 SiteAuditStudio/0.2';
 
 const MAX_REDIRECTS = 5;
+const HTML_ACCEPT = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
 
 export function errorCode(err) {
   const code = err?.cause?.code || err?.code || '';
@@ -61,48 +62,61 @@ async function readCapped(res, maxBytes) {
 }
 
 /**
- * @returns {Promise<{ url: string, requestedUrl: string, status: number, headers: object,
- *   contentType: string, body: string|null, redirects: string[], error?: string }>}
+ * One SSRF-guarded request that follows redirects itself (at most MAX_REDIRECTS), so every hop gets the
+ * URL precheck and the connect-time IP check. Never throws for network errors.
+ * @returns {Promise<{ res?: Response, url: string, redirects: string[], error?: string, message?: string }>}
+ *   `res` is the final response with its body unread; the caller must read or cancel it.
  */
-export async function fetchPage(url, { method = 'GET', timeout = 15000, maxBytes = 5 * 1024 * 1024, readBody = true, signal } = {}) {
+export async function guardedFetch(url, { method = 'GET', signal, headers = {} } = {}) {
   const redirects = [];
   const policy = currentPolicy();
   let current = url;
-  const timeoutSignal = AbortSignal.timeout(timeout);
-  const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-
   try {
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
       const protocol = new URL(current).protocol;
-      if (protocol !== 'http:' && protocol !== 'https:') {
-        return { url: current, requestedUrl: url, status: 0, headers: {}, contentType: '', body: null, redirects, error: 'unsupported-protocol' };
-      }
+      if (protocol !== 'http:' && protocol !== 'https:') return { url: current, redirects, error: 'unsupported-protocol' };
       const blocked = precheckUrl(current, policy);
-      if (blocked) {
-        return { url: current, requestedUrl: url, status: 0, headers: {}, contentType: '', body: null, redirects, error: 'blocked', message: blocked };
-      }
+      if (blocked) return { url: current, redirects, error: 'blocked', message: blocked };
       const res = await fetch(current, {
         method,
         redirect: 'manual',
-        signal: combined,
+        signal,
         dispatcher: agentFor(policy),
-        headers: { 'User-Agent': USER_AGENT, Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' },
+        headers: { 'User-Agent': USER_AGENT, ...headers },
       });
-      const headers = headersToObject(res.headers);
-      if (res.status >= 300 && res.status < 400 && headers.location) {
+      const location = res.headers.get('location');
+      if (res.status >= 300 && res.status < 400 && location) {
         await res.body?.cancel().catch(() => {});
         redirects.push(current);
-        current = new URL(headers.location, current).toString();
+        current = new URL(location, current).toString();
         continue;
       }
-      const body = readBody && method !== 'HEAD' ? await readCapped(res, maxBytes) : (await res.body?.cancel().catch(() => {}), null);
-      return { url: current, requestedUrl: url, status: res.status, headers, contentType: headers['content-type'] || '', body, redirects };
+      return { res, url: current, redirects };
     }
-    return { url: current, requestedUrl: url, status: 0, headers: {}, contentType: '', body: null, redirects, error: 'too-many-redirects' };
+    return { url: current, redirects, error: 'too-many-redirects' };
   } catch (err) {
     const error = errorCode(err);
-    const message = error === 'blocked' ? (err.cause ?? err).message : undefined;
-    return { url: current, requestedUrl: url, status: 0, headers: {}, contentType: '', body: null, redirects, error, message };
+    return { url: current, redirects, error, message: error === 'blocked' ? (err.cause ?? err).message : undefined };
+  }
+}
+
+/**
+ * @returns {Promise<{ url: string, requestedUrl: string, status: number, headers: object,
+ *   contentType: string, body: string|null, redirects: string[], error?: string }>}
+ */
+export async function fetchPage(url, { method = 'GET', timeout = 15000, maxBytes = 5 * 1024 * 1024, readBody = true, signal, accept = HTML_ACCEPT } = {}) {
+  const timeoutSignal = AbortSignal.timeout(timeout);
+  const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+  const hop = await guardedFetch(url, { method, signal: combined, headers: { Accept: accept } });
+  const failed = { url: hop.url, requestedUrl: url, status: 0, headers: {}, contentType: '', body: null, redirects: hop.redirects };
+  if (hop.error) return { ...failed, error: hop.error, ...(hop.message && { message: hop.message }) };
+  const { res } = hop;
+  try {
+    const headers = headersToObject(res.headers);
+    const body = readBody && method !== 'HEAD' ? await readCapped(res, maxBytes) : (await res.body?.cancel().catch(() => {}), null);
+    return { url: hop.url, requestedUrl: url, status: res.status, headers, contentType: headers['content-type'] || '', body, redirects: hop.redirects };
+  } catch (err) {
+    return { ...failed, error: errorCode(err) };
   }
 }
 

@@ -28,21 +28,22 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 | 2 | Analyze job + SSE progress: Lighthouse (mobile+desktop), stack detection, crawler (broken links, sitemap, robots, meta), SEO, AEO, axe a11y, manual-rebuild detector | ✅ Done |
 | 3 | OLD preview: frame check (XFO + CSP3 frame-ancestors), sandboxed iframe, screenshots 1440/768/375 (fold + full, WebP, keep latest 3), per-device metrics, SSRF guard | ✅ Done |
 | 3b | Live view (CDP screencast, view + scroll + click, no keyboard) — deferred by the user | ⏳ Later |
-| 4a | Recreate → plain HTML: page discovery (sitemap, limit), Playwright capture, local assets, IR, variant merge, semantic classes, fixers | 🚧 4a.2 done |
+| 4a | Recreate → plain HTML: page discovery (sitemap, limit), Playwright capture, local assets, IR, variant merge, semantic classes, fixers | 🚧 4a.3 done |
 | 4b | Motion + responsive fidelity: hover, scroll reveal, continuous animations, widget JS, visual diff score | ⏳ |
 | 5 | PreviewManager (ports 5100–5199), NEW iframe, re-audit → fix checklist | ⏳ |
 | 6 | React+Vite / Next.js / MERN emitters + Download zip | ⏳ |
 
 **Current status:** Phases 1, 2 and 3 are complete. Phase 4a is in progress on branch `phase-4a`, one sub-step at a time
 (stop after each, WIP commit, wait for the user's "next"; never push):
-4a.1 job foundation ✅ · 4a.2 discovery + capture ✅ · 4a.3 assets · 4a.4 IR + HTML emitter · 4a.5 fixers + WP REST · 4a.6 build, verify, fidelity, preview · 4a.7 tuning + docs.
+4a.1 job foundation ✅ · 4a.2 discovery + capture ✅ · 4a.3 assets ✅ · 4a.4 IR + HTML emitter · 4a.5 fixers + WP REST · 4a.6 build, verify, fidelity, preview · 4a.7 tuning + docs.
 
 ### Phase 4a progress
 | Step | Status | Commits | Summary |
 |---|---|---|---|
 | 4a.1 Job foundation | ✅ Done | `64a559f`, `6464957` | Recreate job + SSE progress, global one-job lock shared with Analyze, 10-min budget (`SAS_RECREATE_MINUTES`), tmp → final workspace with keep-latest-2 retention, stale-analysis warning, `recreate_pages`/`target_domain` settings, Recreate button. Tests run on a temp DB per test file (`test/run-tests.js`), never `data/app.db`. |
 | 4a.2 Discovery + capture | ✅ Done | `385c00d` | `discover.js` (homepage → homepage links → sitemap → crawl, limit, skip reasons, links-to-live), `capture/` (DOM + computed-style diffs, pseudo-elements, SVG, head, tokens, fonts, resources, fold/full WebP at 1440/768/375), `inspect.js` = step 1; `fixtures/recreate-site` + `recreate-capture.test.js`. |
-| 4a.3 Assets | ⏳ Next | — | |
+| 4a.3 Assets | ✅ Done | (WIP commit) | `assets/` = step 2: `collect.js` (asset list from captures), `css.js` (srcset + cross-origin stylesheet parsing), `download.js` (guarded streaming download), `cdn.js` (platform CDN hosts from the rules), `index.js` (stage, limits, content dedupe, `assets/manifest.json`). `http.js` gained `guardedFetch`. Fixture `/cdn/` second origin + `recreate-assets.test.js`. |
+| 4a.4 IR + HTML emitter | ⏳ Next | — | |
 
 Known issue: 2 `netGuard` tests fail on this Windows machine because `*.localhost` names don't resolve (DNS ENOTFOUND);
 environmental, not a regression.
@@ -64,6 +65,15 @@ environmental, not a regression.
   diffs: inherited props vs parent, others vs the tag's browser default; element width/height left out, `rect` kept;
   pseudo-elements, inline SVG, lazy attrs, head, :root custom props, @font-face, @keyframes, media queries, resources)
   plus fold/full WebP screenshots, and `capture/manifest.json`. The desktop view is required per page.
+- Assets (4a.3): images (img, srcset, lazy attrs, CSS backgrounds, pseudo content, posters, og:image, svg href), icons,
+  fonts and media from the captures go to `assets/{images,icons,fonts,media}/<name>-<sha256:10>.<ext>` with
+  `assets/manifest.json` (`map` URL → file, `files`, `skipped` with reasons, `fontFaces` with local files, `keyframes`).
+  Every download uses `guardedFetch` (`audit/http.js`): precheck + connect-time IP check on **every redirect hop**.
+  Dedupe by URL (fragment stripped, query kept) and by content hash. Limits per file: image 15 MB/20s, icon 1 MB/15s,
+  font 5 MB/20s, media 40 MB/60s; per recreate: 800 files, 300 MB, 6 parallel. Only fonts of families the pages used.
+  Cross-origin stylesheets the browser could not read are downloaded and parsed (@font-face, @keyframes, @import).
+  Skipped files are **never linked live**: they are listed in `report.assets.skipped`; oversized video/audio and
+  undownloadable platform-CDN files also go to "Manual rebuild needed". Platform CDN hosts = `cleanup.cdnHosts` of the rules.
 - Output: `data/projects/<id>/recreate/<recreateId>/` (written as `<recreateId>.tmp`, renamed on success,
   deleted on failure/timeout); the latest 2 completed recreates are kept.
 
@@ -149,7 +159,8 @@ client/src/  layout/ (AppShell, Sidebar, OldPanel, NewPanel)
 server/src/  index.js, db/index.js (schema + migrations), routes/{projects,analyze,screens,recreate}.js, dummy/audit.js
              jobs/ manager.js (JobManager + global one-job lock), sse.js
              recreate/ index.js (pipeline + STEPS + budget), jobs.js, inputs.js, workspace.js (tmp → final, retention),
-                    errors.js, discover.js (page selection), inspect.js (step 1), capture/{index,snapshot}.js (Playwright capture)
+                    errors.js, discover.js (page selection), inspect.js (step 1), capture/{index,snapshot}.js (Playwright capture),
+                    assets/{index,collect,css,download,cdn}.js (step 2: local assets)
              security/ netGuard.js (address classes, policies, resolveChecked), egressProxy.js (Chromium proxy)
              audit/ index.js (pipeline + STEPS), jobs.js (queue, 1 at a time), http.js, robots.js, sitemap.js,
                     crawler.js, extract.js, linkChecker.js, render.js, screenshots.js, retention.js, frame.js, assemble.js,

@@ -5,11 +5,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>About Recreate Co</title>
     <meta name="description" content="Who we are." />
+    <meta property="og:image" content="{{cdn}}/cdn/img/team.png?w=1200" />
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="{{cdn}}/cdn/brand.css" />
   </head>
   <body>
+    <!-- Asset seeds, served from a second origin ({{cdn}}, standing in for a platform CDN): a cross-origin
+         stylesheet with a web font, one image under several query strings (same bytes), a redirect, a 404,
+         and a video larger than the test's media limit. -->
     <header class="site-header"><a href="/" class="logo">Recreate Co</a><nav><a href="/">Home</a><a href="/about.html">About</a></nav></header>
-    <main><h1>About us</h1><p>A small team that builds websites.</p><a href="/team.html">Our team</a></main>
+    <main>
+      <h1>About us</h1>
+      <p class="brand">A small team that builds websites.</p>
+      <img src="{{cdn}}/cdn/img/team.png?w=800" srcset="{{cdn}}/cdn/img/team.png?w=400 400w, {{cdn}}/cdn/img/team.png?w=800 800w" sizes="100vw" alt="Our team" width="400" height="200" />
+      <img src="{{cdn}}/cdn/r/img/photo.svg" alt="Photo behind a redirect" width="200" height="100" />
+      <img src="{{cdn}}/cdn/img/missing.png" alt="A missing image" width="10" height="10" />
+      <video src="{{cdn}}/cdn/big.mp4" poster="{{cdn}}/cdn/img/team.png?poster" preload="none" muted></video>
+      <a href="/team.html">Our team</a>
+    </main>
     <footer class="site-footer"><a href="/">Home</a></footer>
   </body>
 </html>

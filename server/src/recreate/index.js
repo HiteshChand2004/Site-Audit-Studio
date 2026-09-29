@@ -11,6 +11,7 @@ import { userPolicy, withNetPolicy } from '../security/netGuard.js';
 import { TimeoutError, withTimeout } from '../audit/util.js';
 import { analysisWarnings, baseUrlOf, latestAnalysis } from './inputs.js';
 import { RecreateError } from './errors.js';
+import { assetsStage } from './assets/index.js';
 import { inspectStage } from './inspect.js';
 import { commitWorkspace, discardWorkspace, openWorkspace } from './workspace.js';
 
@@ -47,7 +48,7 @@ export function recreateBudgetMs(env = process.env) {
 const noop = async () => {};
 export const STAGES = {
   inspect: inspectStage,
-  assets: noop,
+  assets: assetsStage,
   generate: noop,
   build: noop,
   preview: noop,
@@ -119,6 +120,8 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new RecreateError(`Recreate stopped: the ${minutes}-minute time limit was reached.`);
       const limit = Math.min(def.max, remaining);
+      // A stage may use this to wind down on its own (skip remaining work) before the hard timeout.
+      ctx.stepDeadline = Date.now() + limit;
       try {
         await withTimeout(stages[def.key](ctx), limit, def.label);
       } catch (err) {

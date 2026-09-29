@@ -1,0 +1,20 @@
+/* Served from the fake CDN origin without CORS, so the browser cannot read it: the assets step
+   downloads and parses it for @font-face and @keyframes. */
+@import url("brand-extra.css");
+
+@font-face {
+  font-family: "Brand Mono";
+  src: url("fonts/mono.woff2") format("woff2"), url("fonts/mono.woff") format("woff");
+  font-weight: 400;
+  font-display: swap;
+}
+/* Never used by a page: must not be downloaded. */
+@font-face {
+  font-family: "Unused Serif";
+  src: url("fonts/unused.woff2") format("woff2");
+}
+@keyframes brand-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.brand { font-family: "Brand Mono", monospace; animation: brand-fade 1s ease-out; }
