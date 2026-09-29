@@ -36,7 +36,11 @@ export function fromCapture(node, view) {
   return m;
 }
 
-const textCache = new WeakMap();
+let textCache = new WeakMap();
+/** Forgets cached texts, after a fixer changed the text of a tree. */
+export function resetTextCache() {
+  textCache = new WeakMap();
+}
 /** All text inside a node, whitespace collapsed. */
 export function deepText(node) {
   if (isText(node)) return node.text;

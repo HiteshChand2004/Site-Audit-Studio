@@ -247,7 +247,7 @@ test('emitter: colours, tokens, shorthands, escaping and no measurement ids in t
   assert.match(html, /<title>A &lt;b&gt; &amp; "c"<\/title>/);
   assert.match(html, /<link rel="icon" href="\.\.\/assets\/icons\/f\.svg">/);
   assert.match(html, /<link rel="stylesheet" href="\.\.\/css\/site\.css">/);
-  assert.match(html, /<script type="application\/ld\+json">\{"a":"<\\\/script>"\}<\/script>/);
+  assert.match(html, /<script type="application\/ld\+json">\{"a":"\\u003c\/script\\u003e"\}<\/script>/);
   assert.match(html, /<p>1 &lt; 2 &amp; 3<a href="\.\.\/">Home<\/a><\/p>/);
   assert.match(html, /<img src="\.\.\/assets\/images\/a\.png" srcset="\.\.\/assets\/images\/a\.png 1x" alt="">/);
   assert.doesNotMatch(html, /data-sas-id/);
@@ -260,8 +260,15 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   const now = new Date().toISOString();
   db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at) VALUES (?, 'fixture', ?, 'html', 1, 4, ?, ?)`)
     .run(id, `${origin}/`, now, now);
+  // The analysis detected WordPress (the fixture serves a small /wp-json/wp/v2/) and one broken link.
+  const audit = {
+    url: `${origin}/`,
+    analyzedAt: now,
+    techStack: [{ id: 'wordpress', name: 'WordPress', confidence: 90 }],
+    brokenLinks: { checked: 10, broken: [{ url: `${origin}/old-work.html`, status: 404, foundOn: '/work.html' }], unverified: [] },
+  };
   db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), id, now, now, JSON.stringify({ url: `${origin}/`, analyzedAt: now }));
+    .run(randomUUID(), id, now, now, JSON.stringify(audit));
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
   const recreateId = randomUUID();
   const report = await runRecreate({ project, recreateId, progress: () => {} });
@@ -307,7 +314,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   // The builder-style page: one copy of the content, restyled per breakpoint.
   const work = await read('work.html');
   assert.equal(work.match(/<h1/g).length, 1);
-  assert.equal(work.match(/<h3[^>]*>Project one/g).length, 1);
+  assert.equal(work.match(/<h2[^>]*>Project one/g).length, 1); // h1 → h3 fixed to h1 → h2
   assert.doesNotMatch(work, /action=/);
   assert.match(work, /<label class="[\w-]+" for="email">/);
   assert.match(work, /<input id="email"/);
@@ -340,6 +347,63 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   const ir = JSON.parse(await readFile(path.join(dir, 'ir', 'site.json'), 'utf8'));
   assert.equal(ir.version, 1);
   assert.equal(ir.pages.length, 5);
+
+  // 4a.5 — safety: no script, handler, script URL or external reference in any page or SVG file.
+  assert.equal(report.safety.safe, true, JSON.stringify(report.safety.issues));
+  assert.deepEqual(report.safety.issues, []);
+  for (const [f, body] of texts) assert.doesNotMatch(body, /<script(?![^>]*application\/ld\+json)|\son\w+=|javascript:|example\.org\/(tracker|sprite|p\.svg)/i, f);
+  const svgFiles = files.filter((f) => f.endsWith('.svg'));
+  const searchIcon = svgFiles.find((f) => f.includes('search-'));
+  assert.ok(searchIcon);
+  const icon = await read(searchIcon);
+  assert.doesNotMatch(icon, /script|onload|javascript:|@import|https?:\/\/example/i);
+  assert.match(icon, /<line x1="11"/); // the drawing itself is kept
+  assert.ok(report.safety.sanitized.svgFiles.changed >= 1);
+  assert.ok(report.safety.sanitized.inlineSvg.removed.scripts >= 1);
+  const inline = work.match(/<svg class="[\w-]+" width="16"[^]*?<\/svg>/)[0];
+  assert.doesNotMatch(inline, /script|onload|foreignObject|javascript:|https?:/i);
+  assert.match(inline, /<circle cx="8" cy="8" r="7" fill="#0f766e"\/>/);
+
+  // 4a.5 — fixers.
+  const fix = Object.fromEntries(report.fixes.map((f) => [f.id, f]));
+  assert.match(work, /<a class="[\w-]+">Archive<\/a>/); // broken link unlinked, text kept
+  assert.deepEqual(fix['broken-links'].items.map((i) => [i.page, new URL(i.url).pathname, i.status]), [['/work.html', '/old-work.html', 404]]);
+  assert.match(work, /<img[^>]* alt="Our studio in Lisbon"/);
+  assert.match(work, /<a class="[\w-]+" aria-label="GitHub" href="https:\/\/github\.com\/recreate-co">/);
+  assert.match(work, /<button class="[\w-]+" type="button"><img[^>]* alt="Search"/);
+  assert.equal(fix['accessible-names'].count, 2);
+  assert.deepEqual(fix.headings.items.map((h) => [h.from, h.to, h.text]), [['h3', 'h2', 'Project one'], ['h3', 'h2', 'Project two'], ['h3', 'h2', 'Project three']]);
+  assert.match(work, /<img[^>]* fetchpriority="high" loading="eager"/);
+  assert.match(home, /<img[^>]* alt="A lazy-loaded photo"[^>]* loading="lazy" decoding="async"/);
+  assert.match(await read('about.html'), /<link rel="preload" href="assets\/fonts\/mono-[0-9a-f]{10}\.woff2" as="font" type="font\/woff2" crossorigin>/);
+  assert.match(css, /font-display: swap;/);
+  for (const a of ['alt', 'aria-label']) assert.ok(report.autoGenerated.some((x) => x.page === '/work.html' && x.field === a), a);
+
+  // 4a.5 — WordPress REST: text and description from the API, clean content in the IR.
+  const contact = await read('contact.html');
+  assert.match(contact, /<p>Email hello@example\.org and we reply within one working day\.<\/p>/);
+  assert.doesNotMatch(contact, /\[at\]/);
+  assert.match(contact, /<meta name="description" content="Email hello@example\.org and we reply within one working day\. Our studio is open Monday to Friday…">/);
+  assert.ok(report.autoGenerated.some((a) => a.page === '/contact.html' && a.field === 'description' && a.source === 'WordPress REST API (excerpt)'));
+  assert.deepEqual(report.wordpress.totals, { pages: 2, posts: 2 });
+  assert.deepEqual(report.wordpress.recreated, { page: 2, post: 0 });
+  assert.ok(report.manual.some((m) => m.kind === 'cms' && /2 WordPress posts and pages were not recreated/.test(m.title)));
+  const contactIr = ir.pages.find((p) => p.path === '/contact.html').content;
+  assert.equal(contactIr.source, 'wordpress-rest');
+  assert.equal(contactIr.id, 11);
+  assert.doesNotMatch(contactIr.html, /script|onclick|javascript:|style=|class=/i);
+  assert.match(contactIr.html, /<a href="\/about\.html">read about us<\/a>/);
+  assert.equal(ir.pages.find((p) => p.path === '/').content, null);
+
+  // 4a.5 — production build: dist/ has the same pages and a minified stylesheet.
+  const distCss = await readFile(path.join(dir, 'dist', 'css', 'site.css'), 'utf8');
+  assert.ok(distCss.length < css.length * 0.9, `${distCss.length} vs ${css.length}`);
+  assert.doesNotMatch(distCss, /\n {2}/);
+  assert.match(distCss, /@media ?\(max-width: ?1024\.98px\)/);
+  assert.equal(report.minify.css.files, 1);
+  assert.ok(report.minify.css.minBytes < report.minify.css.bytes);
+  for (const f of ['index.html', 'work.html', 'services/index.html']) assert.ok(await exists(path.join(dir, 'dist', f)), f);
+  assert.ok(await exists(path.join(dir, 'dist', searchIcon)));
 
   // Fidelity: rough, but the fixture is plain CSS and should come out close to the original.
   assert.ok(report.fidelity.score >= 90, `fidelity ${report.fidelity.score}`);

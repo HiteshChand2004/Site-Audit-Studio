@@ -84,6 +84,7 @@ test('discovery on the fixture: nav pages first, skips with reasons, the rest li
     '/?ref=footer': 'query',
     '/brochure.pdf': 'not-html',
     '/private/secret.html': 'robots',
+    '/old-work.html': 'error', // the broken link on /work.html (a 4a.5 fixer seed)
   });
   assert.deepEqual(result.beyondLimit.map((p) => new URL(p.url).pathname).sort(), ['/blog/first-post.html', '/blog/second-post.html', '/team.html', '/work.html']);
   assert.equal(result.sitemap.status, 'found');

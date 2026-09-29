@@ -1,18 +1,27 @@
-// Recreate step 3, "Generating site": builds the IR from the captures and the local assets, writes
-// the plain HTML site to site/ (pages at their original paths, css/site.css, assets/), then runs a
-// short fit pass: the site is rendered at the three views, elements whose box is off get a size fix,
-// and the site is written again. A round that lowers the layout score is undone.
+// Recreate step 3, "Generating site": builds the IR from the captures and the local assets (with the
+// WordPress REST content when the site is WordPress), applies the fixers (fixers/), writes the plain
+// HTML site to site/ (pages at their original paths, css/site.css, assets/), then runs a short fit
+// pass: the site is rendered at the three views, elements whose box is off get a size fix, and the
+// site is written again. A round that lowers the layout score is undone. Finally the production build
+// (dist/, minified) is written and both builds go through the safety check (verify/safety.js).
 // Writes ir/site.json (the IR the other stack emitters will use) and sets ctx.generated.
 import { copyFile, link, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { buildDist } from './build/minify.js';
 import { emitSite } from './emit/html.js';
+import { RecreateError } from './errors.js';
+import { applyIrFixes, applyTreeFixes, fixReport } from './fixers/index.js';
+import { fetchWordPress, isWordPress } from './fixers/wordpress.js';
 import { buildIR, prepareSite, readPageCaptures } from './ir/index.js';
 import { isElement } from './ir/tree.js';
 import { compareLayout, openRenderer, planFixes, renderPage, viewScore } from './verify/layout.js';
+import { scanSite } from './verify/safety.js';
 
 export const FIT_ROUNDS = 2;
 // The fit pass stops starting new rounds this long before the step's time limit.
 const FIT_MARGIN = 25000;
+// Time for the WordPress REST lookup.
+const WP_BUDGET = 30000;
 
 async function writeSite(siteDir, out, assetsDir, known) {
   for (const [file, content] of out.files) {
@@ -86,22 +95,41 @@ export async function generateStage(ctx) {
   const assetsDir = path.join(ctx.dir, 'assets');
   const known = new Set((ctx.assets?.files ?? []).map((f) => f.file));
 
-  ctx.progress(0, 'Reading captured pages');
+  const origin = ctx.discovery?.origin ?? new URL(ctx.audit.url ?? ctx.project.url).origin;
+
+  // WordPress: clean content from the REST API, when the analysis detected WordPress.
+  let wp = null;
+  if (isWordPress(ctx.audit)) {
+    ctx.progress(0, 'Reading WordPress content');
+    wp = await fetchWordPress({ origin, pages: ctx.pages, signal: ctx.signal, deadline: Math.min(Date.now() + WP_BUDGET, ctx.stepDeadline - FIT_MARGIN * 2) });
+  }
+
+  ctx.progress(0.05, 'Reading captured pages');
   const pages = [];
   for (const info of ctx.pages) pages.push({ info, captures: await readPageCaptures(ctx.dir, info) });
   const site = prepareSite({
     pages,
     assets: ctx.assets ?? { map: {} },
     baseUrl: ctx.baseUrl,
-    origin: ctx.discovery?.origin ?? new URL(ctx.audit.url ?? ctx.project.url).origin,
+    origin,
     livePages: ctx.livePages,
     skipped: ctx.discovery?.skipped,
+    wp,
   });
   pages.length = 0;
   for (const t of site.pages) delete t.captures; // large; everything needed is in the trees now
 
+  ctx.progress(0.12, 'Fixing audit issues');
+  const treeFixes = applyTreeFixes(site, { audit: ctx.audit, skipped: ctx.discovery?.skipped });
+  let irFixes;
+  const build = () => {
+    const built = buildIR(site);
+    irFixes = applyIrFixes(built.ir);
+    return built;
+  };
+
   ctx.progress(0.15, 'Writing pages');
-  let { ir, stats } = buildIR(site);
+  let { ir, stats } = build();
   let out = emitSite(ir);
   await writeSite(siteDir, out, assetsDir, known);
 
@@ -126,7 +154,7 @@ export async function generateStage(ctx) {
     if (saved && score < fit.layoutAfter) {
       // The last round made things worse: undo it.
       restoreFixes(site, saved);
-      ({ ir, stats } = buildIR(site));
+      ({ ir, stats } = build());
       out = emitSite(ir);
       await writeSite(siteDir, out, assetsDir, known);
       fit.undone = true;
@@ -147,15 +175,67 @@ export async function generateStage(ctx) {
     fit.rounds++;
     fit.widthFixes += widths;
     fit.heightFixes += heights;
-    ({ ir, stats } = buildIR(site));
+    ({ ir, stats } = build());
     out = emitSite(ir);
     await writeSite(siteDir, out, assetsDir, known);
   }
 
-  ctx.progress(0.95, 'Saving the IR');
+  // Production build: minified CSS/JS in dist/.
+  ctx.progress(0.92, 'Minifying the production build');
+  const distDir = path.join(ctx.dir, 'dist');
+  const siteAssets = [...out.assets].filter((f) => known.has(f));
+  const minify = await buildDist({ files: out.files, assets: siteAssets, assetsDir, distDir });
+
+  // Safety gate: both builds are parsed again; anything that could run script or load from another
+  // origin fails the job, so an unsafe site is never kept or previewed.
+  ctx.progress(0.95, 'Checking the site is safe to preview');
+  const safety = { site: await scanSite(siteDir), dist: await scanSite(distDir) };
+  report.safety = {
+    safe: safety.site.safe && safety.dist.safe,
+    checked: safety.site.checked,
+    issues: [...safety.site.issues, ...safety.dist.issues.map((i) => ({ ...i, file: `dist/${i.file}` }))],
+    sanitized: {
+      svgFiles: ctx.assets?.svg ?? null,
+      inlineSvg: { changed: stats.safety.svgChanged, removed: stats.safety.svg },
+      htmlAttributes: stats.safety.attrs,
+      htmlElements: stats.safety.elements,
+    },
+  };
+  if (!report.safety.safe) {
+    const first = report.safety.issues[0];
+    throw new RecreateError(`The generated site failed the safety check (${first.file}: ${first.detail}); it was not kept.`);
+  }
+
+  ctx.progress(0.97, 'Saving the IR');
   await mkdir(path.join(ctx.dir, 'ir'), { recursive: true });
   await writeFile(path.join(ctx.dir, 'ir', 'site.json'), JSON.stringify(ir));
-  ctx.generated = { site, ir, siteDir };
+  ctx.generated = { site, ir, siteDir, distDir };
+
+  // Fixes and the production build.
+  const fixed = fixReport(treeFixes, irFixes);
+  report.fixes.push(...fixed.fixes);
+  report.minify = { dir: 'dist', ...minify };
+  if (wp) {
+    const recreated = { page: 0, post: 0 };
+    for (const t of site.pages) if (t.wp) recreated[t.wp.item.type === 'post' ? 'post' : 'page']++;
+    report.wordpress = {
+      api: wp.api,
+      reachable: wp.reachable,
+      ...(wp.error && { error: wp.error }),
+      totals: wp.totals,
+      recreated,
+      pages: treeFixes.wordpress.map((w) => ({ page: w.page, blocks: w.blocks, matched: w.matched, updated: w.updated.length, keptWithMarkup: w.kept, notRendered: w.missing })),
+    };
+    if (!wp.reachable) report.warnings.push(`WordPress was detected but its REST API did not answer (${wp.error}); the rendered text was used.`);
+    const notRecreated = (wp.totals.posts ?? 0) - recreated.post + (wp.totals.pages ?? 0) - recreated.page;
+    if (wp.reachable && notRecreated > 0) {
+      report.manual.push({
+        kind: 'cms',
+        title: `${notRecreated} WordPress ${notRecreated === 1 ? 'entry was' : 'posts and pages were'} not recreated`,
+        detail: `The REST API lists ${wp.totals.posts ?? 0} posts and ${wp.totals.pages ?? 0} pages; ${recreated.post + recreated.page} of them were recreated (page limit). Import the rest from ${wp.api}.`,
+      });
+    }
+  }
 
   // Report.
   const treeStats = site.pages.reduce((a, t) => ({
@@ -197,6 +277,7 @@ export async function generateStage(ctx) {
     };
   });
   for (const t of site.pages) for (const a of t.headAuto) report.autoGenerated.push({ page: t.info.path, ...a });
+  report.autoGenerated.push(...fixed.auto);
   for (const page of ir.pages.filter((x) => x.stats.forms)) {
     report.manual.push({
       kind: 'form',

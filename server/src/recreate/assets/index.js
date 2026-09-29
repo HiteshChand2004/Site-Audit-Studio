@@ -17,6 +17,7 @@ import { platformCdnHost } from './cdn.js';
 import { assetKey, collectAssets } from './collect.js';
 import { parseStylesheet } from './css.js';
 import { downloadAsset, reasonDetail } from './download.js';
+import { addRemoved, emptyRemoved, sanitizeSvg } from '../fixers/svg.js';
 
 const MB = 1024 * 1024;
 
@@ -195,6 +196,42 @@ export async function downloadAssets(list, root, { signal, referer, deadline = I
   return { files, map, skipped, reused, bytes };
 }
 
+const looksLikeSvg = (buf) => /^\s*(<\?xml|<!--|<!doctype svg|<svg)/i.test(buf.subarray(0, 512).toString('utf8'));
+
+/**
+ * Every downloaded SVG is rewritten through the sanitizer (fixers/svg.js) before any page links it:
+ * no scripts, event handlers, javascript: URLs or external references stay in assets/. A file that
+ * is not an SVG after all (no <svg> root) is deleted and its URLs are reported as skipped.
+ * Mutates `result` (files, map, skipped). Exported for tests.
+ */
+export async function sanitizeSvgFiles(root, result) {
+  const summary = { files: 0, changed: 0, removedFiles: 0, removed: emptyRemoved() };
+  for (const record of [...result.files]) {
+    if (!record.file.endsWith('.svg') && record.mime !== 'image/svg+xml') continue;
+    const target = path.join(root, record.file);
+    const buf = await readFile(target);
+    if (!record.file.endsWith('.svg') && !looksLikeSvg(buf)) continue;
+    summary.files++;
+    const clean = sanitizeSvg(buf.toString('utf8'));
+    if (!clean.svg) {
+      await rm(target, { force: true });
+      result.files.splice(result.files.indexOf(record), 1);
+      for (const [url, file] of Object.entries(result.map)) {
+        if (file !== record.file) continue;
+        delete result.map[url];
+        result.skipped.push({ url, kind: record.kind, reason: 'not-an-asset', detail: 'Served as SVG but has no <svg> root; removed.' });
+      }
+      summary.removedFiles++;
+      continue;
+    }
+    addRemoved(summary.removed, clean.removed);
+    record.sanitized = true;
+    if (clean.changed) summary.changed++;
+    await writeFile(target, `${clean.svg}\n`);
+  }
+  return summary;
+}
+
 /**
  * The pipeline stage.
  * @param {object} ctx  pipeline context (recreate/index.js): needs ctx.pages from the inspect step
@@ -229,6 +266,9 @@ export async function assetsStage(ctx, opts = {}) {
     onProgress: (f) => ctx.progress(0.1 + 0.88 * f, `Downloading assets (${Math.round(f * assets.length)} of ${assets.length})`),
   });
 
+  ctx.progress(0.98, 'Sanitizing SVG files');
+  const svg = await sanitizeSvgFiles(root, result);
+
   const faces = fontFaces.map((f) => {
     const src = f.src.map((s) => ({ ...s, file: result.map[assetKey(s.url)] ?? null }));
     return { ...f, src, local: src.some((s) => s.file) };
@@ -247,7 +287,7 @@ export async function assetsStage(ctx, opts = {}) {
     path.join(root, 'manifest.json'),
     JSON.stringify({ files: result.files, map: result.map, skipped: result.skipped, fontFaces: faces, keyframes: foreign.keyframes, sheets: foreign.sheets }, null, 1),
   );
-  ctx.assets = { dir: root, map: result.map, files: result.files, skipped: result.skipped, fontFaces: faces, keyframes: foreign.keyframes };
+  ctx.assets = { dir: root, map: result.map, files: result.files, skipped: result.skipped, fontFaces: faces, keyframes: foreign.keyframes, svg };
 
   report.assets = {
     found: assets.length,
@@ -261,6 +301,7 @@ export async function assetsStage(ctx, opts = {}) {
     fontFacesWithoutFile: faces.filter((f) => !f.local).map((f) => f.family),
     unusedFontFaces,
     stylesheets: foreign.sheets,
+    svg,
     platformCdn: {
       hosts: [...new Set(cdnUrls.map((a) => platformCdnHost(a.url)))],
       localized: cdnUrls.length - cdnMissing.length,

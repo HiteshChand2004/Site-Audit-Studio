@@ -56,6 +56,19 @@ function emitNode(node, ctx, depth, pretty) {
   return `${open}${kids.map((c) => emitNode(c, ctx, depth + 1, false)).join('')}</${node.t}>`;
 }
 
+/**
+ * Structured data as compact JSON that cannot end the script element early: parsed and written
+ * again, with <, > and & as \u escapes. Invalid JSON-LD is left out (null).
+ */
+const JSON_ESCAPES = { '<': '\\u003c', '>': '\\u003e', '&': '\\u0026' };
+export function safeJsonLd(json) {
+  try {
+    return JSON.stringify(JSON.parse(json)).replace(/[<>&]/g, (c) => JSON_ESCAPES[c]);
+  } catch {
+    return null;
+  }
+}
+
 function headMarkup(page, ctx) {
   const h = page.head;
   const lines = ['<meta charset="utf-8">', '<meta name="viewport" content="width=device-width, initial-scale=1">'];
@@ -66,14 +79,21 @@ function headMarkup(page, ctx) {
     const key = m.property ? `property="${escAttr(m.property)}"` : `name="${escAttr(m.name)}"`;
     lines.push(`<meta ${key} content="${escAttr(m.content)}">`);
   }
-  for (const a of h.alternates) lines.push(`<link rel="alternate" hreflang="${escAttr(a.hreflang)}" href="${escAttr(a.href)}">`);
+  for (const a of h.alternates) if (/^https?:\/\//i.test(a.href)) lines.push(`<link rel="alternate" hreflang="${escAttr(a.hreflang)}" href="${escAttr(a.href)}">`);
   for (const i of h.icons) {
     ctx.useAsset(i.asset);
     const extra = `${i.sizes ? ` sizes="${escAttr(i.sizes)}"` : ''}${i.type ? ` type="${escAttr(i.type)}"` : ''}`;
     lines.push(`<link rel="${escAttr(i.rel)}" href="${relFile(page.outPath, `assets/${i.asset}`)}"${extra}>`);
   }
+  for (const p of h.preload ?? []) {
+    ctx.useAsset(p.asset);
+    lines.push(`<link rel="preload" href="${relFile(page.outPath, `assets/${p.asset}`)}" as="${p.as}"${p.type ? ` type="${escAttr(p.type)}"` : ''}${p.as === 'font' ? ' crossorigin' : ''}>`);
+  }
   lines.push(`<link rel="stylesheet" href="${relFile(page.outPath, CSS_FILE)}">`);
-  for (const json of h.jsonLd) lines.push(`<script type="application/ld+json">${json.replace(/<\/(script)/gi, '<\\/$1')}</script>`);
+  for (const json of h.jsonLd) {
+    const safe = safeJsonLd(json);
+    if (safe) lines.push(`<script type="application/ld+json">${safe}</script>`);
+  }
   return lines.map((l) => `  ${l}`).join('\n');
 }
 

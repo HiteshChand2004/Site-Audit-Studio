@@ -15,6 +15,7 @@
     "cheerio": "^1.2.0",
     "chrome-launcher": "^1.2.1",
     "cors": "^2.8.5",
+    "esbuild": "^0.25.12",
     "express": "^5.1.0",
     "lighthouse": "^12.8.2",
     "playwright": "^1.63.0",

@@ -63,12 +63,18 @@
         </div>
       </div>
       <div class="framer-wrap-1"><div class="framer-wrap-2"><p id="framer-9x8y7z" class="note">All projects shipped as plain HTML and CSS.</p></div></div>
+      <figure class="studio"><img src="/img/team.png" width="400" height="200" /><figcaption>Our studio in Lisbon</figcaption></figure>
       <form class="newsletter" action="https://api.framer.com/forms/abc123" method="post">
         <label for="email">Email</label>
         <input id="email" name="email" type="email" />
         <button type="submit">Subscribe</button>
       </form>
     </main>
-    <footer class="site-footer"><a href="/team.html">Team</a> <a href="/login.html">Log in</a> <a href="#top">Top</a></footer>
+    <!-- Fixer seeds (4a.5): card headings skip a level (h1 → h3), a figure image without alt, a broken
+         link, an icon link and an icon button without names, an unsafe inline SVG and an unsafe SVG file. -->
+    <footer class="site-footer"><a href="/team.html">Team</a> <a href="/login.html">Log in</a> <a href="#top">Top</a> <a href="/old-work.html">Archive</a>
+      <a class="social-link" href="https://github.com/recreate-co"><svg width="16" height="16" viewBox="0 0 16 16" onload="window.__svgInline = 1"><script>window.__svgInlineScript = 1;</script><a href="javascript:alert(1)"><circle cx="8" cy="8" r="7" fill="#0f766e"></circle></a><image href="https://example.org/tracker.png" width="1" height="1"></image><use href="https://example.org/sprite.svg#icon"></use><foreignObject width="1" height="1"><div>x</div></foreignObject><rect width="4" height="4" fill="url(https://example.org/p.svg#g)"></rect></svg></a>
+      <button class="search-toggle" type="button" onclick="window.__clicked = 1"><img src="/img/search.svg" width="16" height="16" /></button>
+    </footer>
   </body>
 </html>

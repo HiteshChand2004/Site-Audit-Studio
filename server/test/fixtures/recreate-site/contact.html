@@ -4,12 +4,20 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Contact</title>
-    <meta name="description" content="Get in touch." />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <!-- WordPress-style page for the REST content test (served at /wp-json/wp/v2/pages/11): no meta
+         description (the REST excerpt fills it) and an email address a "plugin" obfuscated in the
+         rendered text (the REST text replaces it). -->
     <header class="site-header"><a href="/" class="logo">Recreate Co</a><nav><a href="/">Home</a><a href="/about.html">About</a></nav></header>
-    <main><h1>Contact</h1><p>Email hello@example.org.</p></main>
+    <main>
+      <h1>Contact</h1>
+      <div class="entry-content">
+        <p>Email hello [at] example [dot] org and we reply within one working day.</p>
+        <p>Our studio is open Monday to Friday, 9:00 to 17:00.</p>
+      </div>
+    </main>
     <footer class="site-footer"><a href="/">Home</a></footer>
   </body>
 </html>

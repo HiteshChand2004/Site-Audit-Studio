@@ -4,7 +4,9 @@
 //   { version, baseUrl, breakpoints: { tablet, mobile }, tokens, fontFaces, keyframes, boxSizingReset,
 //     rules: [{ selector, parts: { base, tablet?, mobile? } }],
 //     files: [{ path, content }],                  generated files (a favicon when the site has none)
-//     pages: [{ url, path, outPath, slug, head, html: { class }, body: IRNode }] }
+//     pages: [{ url, path, outPath, slug, head, html: { class }, body: IRNode,
+//               content: null | { source: 'wordpress-rest', type, id, slug, title, excerpt, html, date, modified } }] }
+// head.preload lists the font files the page preloads (fixers/perf.js).
 //
 // IRNode = { text } | { t: tag, sid, class?, id?, b?, attrs, children, raw? (inline SVG) }. Attribute values
 // are plain strings or references the emitter resolves per page: { asset } (a file under assets/),
@@ -17,6 +19,9 @@ import { buildHead, generatedFavicon, siteNameOf } from './head.js';
 import { createAssetResolver, createLinkResolver } from './links.js';
 import { meaningful, PLATFORM_CLASS_PATTERNS } from './names.js';
 import { buildStyles, mapUrls } from './styles.js';
+import { DROP_TAGS, guardAttributes } from '../fixers/html.js';
+import { contentRecord, headHints, itemFor } from '../fixers/wordpress.js';
+import { addRemoved, emptyRemoved, sanitizeSvg } from '../fixers/svg.js';
 import { BLOCK_TAGS, buildPageTree, displayOf, isElement, isText, VIEW_IDS } from './tree.js';
 
 export const IR_VERSION = 1;
@@ -153,7 +158,7 @@ function numberNodes(root) {
  * @param {object[]} [o.livePages]
  * @param {object[]} [o.skipped]
  */
-export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], skipped = [] }) {
+export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], skipped = [], wp = null }) {
   const assetResolve = createAssetResolver(assets.map ?? {});
   const resolveLink = createLinkResolver({ pages: pages.map((p) => p.info), livePages, skipped, origin });
 
@@ -193,7 +198,10 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
   }
 
   for (const t of trees) {
+    const item = itemFor(wp, t.info.url);
+    if (item) t.wp = { item, content: contentRecord(item) };
     const built = buildHead({
+      rest: headHints(item),
       head: t.captures.desktop.head ?? {},
       page: t.info,
       root: t.root,
@@ -233,6 +241,8 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
 }
 
 const SKIP_ATTRS = new Set(['class', 'style', 'id', 'src', 'srcset', 'href', 'poster', 'action']);
+
+const newSafetyStats = () => ({ elements: 0, attrs: { handlers: 0, scriptUrls: 0, other: 0 }, svg: emptyRemoved(), svgChanged: 0 });
 
 // Inline SVG: builder class names removed, external references pointed at the local copy (or dropped).
 function rewriteSvg(svg, pageUrl, assetResolve) {
@@ -281,8 +291,13 @@ function pageBody(t, site, stats) {
   const keepIds = referencedIds(t.root);
   const convert = (n) => {
     if (isText(n)) return { text: n.text };
+    if (DROP_TAGS.has(n.tag)) {
+      stats.safety.elements++;
+      return null;
+    }
     const attrs = {};
     for (const [k, v] of Object.entries(n.attrs)) if (!SKIP_ATTRS.has(k) && !k.startsWith('data-')) attrs[k] = v;
+    guardAttributes(attrs, stats.safety.attrs);
     const out = { t: n.tag, sid: n.sid, attrs, children: [] };
     if (n.class) out.class = n.class;
     const id = n.attrs.id;
@@ -350,9 +365,15 @@ function pageBody(t, site, stats) {
           if (file) attrs.src = { asset: file };
         }
         break;
-      case 'svg':
-        out.raw = rewriteSvg(n.svg ?? '<svg></svg>', pageUrl, assetResolve);
+      case 'svg': {
+        // Sanitized here, so no IR (ir/site.json) and no emitted page ever holds the original markup.
+        const clean = sanitizeSvg(rewriteSvg(n.svg ?? '<svg></svg>', pageUrl, assetResolve), { inline: true });
+        if (!clean.svg) return null;
+        out.raw = clean.svg;
+        addRemoved(stats.safety.svg, clean.removed);
+        if (clean.changed) stats.safety.svgChanged++;
         return out;
+      }
       default:
     }
     for (const c of n.children) {
@@ -370,9 +391,10 @@ function pageBody(t, site, stats) {
  */
 export function buildIR(site) {
   const styles = buildStyles(site.pages, { assetFile: (url) => site.assetResolve(url) });
-  const stats = { links: { internal: 0, live: 0, external: 0 }, liveLinks: new Map(), droppedImages: [], droppedMedia: [], forms: 0 };
+  const safety = newSafetyStats();
+  const stats = { links: { internal: 0, live: 0, external: 0 }, liveLinks: new Map(), droppedImages: [], droppedMedia: [], forms: 0, safety };
   const pages = site.pages.map((t) => {
-    const s = { links: { internal: 0, live: 0, external: 0 }, liveLinks: new Map(), droppedMedia: [], forms: 0 };
+    const s = { links: { internal: 0, live: 0, external: 0 }, liveLinks: new Map(), droppedMedia: [], forms: 0, safety };
     const body = pageBody(t, site, s);
     for (const k of ['internal', 'live', 'external']) stats.links[k] += s.links[k];
     for (const [u, r] of s.liveLinks) stats.liveLinks.set(u, r);
@@ -388,6 +410,7 @@ export function buildIR(site) {
       head: t.head,
       html: { class: t.htmlNode.class ?? null },
       body,
+      content: t.wp?.content ?? null,
       stats: { links: s.links, liveLinks: [...s.liveLinks].map(([url, reason]) => ({ url, reason })), forms: s.forms, droppedImages: t.droppedImages.length },
     };
   });

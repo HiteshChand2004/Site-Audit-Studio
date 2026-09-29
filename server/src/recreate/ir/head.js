@@ -65,9 +65,10 @@ export function siteNameOf(head, root, url) {
  * @param {string} o.baseUrl    origin used for canonical and og:url (target domain or original origin)
  * @param {{ value: string, source: string }} o.siteName
  * @param {{ rel: string, asset: string }[]} o.siteIcons  icons of the homepage, used when a page has none
+ * @param {{ title?: string, excerpt?: string }|null} [o.rest]  WordPress REST title/excerpt, preferred over page heuristics
  * @returns {{ head: object, auto: { field: string, value: string, source: string }[], missing: string[] }}
  */
-export function buildHead({ head, page, root, assetFile, baseUrl, siteName, siteIcons = [] }) {
+export function buildHead({ head, page, root, assetFile, baseUrl, siteName, siteIcons = [], rest = null }) {
   const auto = [];
   const missing = [];
   const fill = (field, value, source) => {
@@ -83,7 +84,10 @@ export function buildHead({ head, page, root, assetFile, baseUrl, siteName, site
 
   let title = clean(head.title);
   if (!title) {
-    if (h1) {
+    if (rest?.title) {
+      const withSite = `${rest.title} | ${siteName.value}`;
+      title = fill('title', withSite.length <= TITLE_MAX && !rest.title.includes(siteName.value) ? withSite : clip(rest.title, TITLE_MAX), 'WordPress REST API (title)');
+    } else if (h1) {
       const text = clean(deepText(h1));
       const withSite = `${text} | ${siteName.value}`;
       title = fill('title', withSite.length <= TITLE_MAX && !text.includes(siteName.value) ? withSite : clip(text, TITLE_MAX), 'first heading');
@@ -95,6 +99,7 @@ export function buildHead({ head, page, root, assetFile, baseUrl, siteName, site
   if (!description) {
     const og = clean(metaOf('og:description'));
     if (og) description = fill('description', clip(og), 'og:description');
+    else if (rest?.excerpt) description = fill('description', clip(rest.excerpt), 'WordPress REST API (excerpt)');
     else if (paragraph) description = fill('description', clip(deepText(paragraph)), 'first paragraph');
     else missing.push('description');
   }

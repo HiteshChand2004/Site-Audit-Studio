@@ -69,10 +69,47 @@ function cdnRoute(pathname, res) {
   }
 }
 
+// A small WordPress REST API for the recreate site (/wp-json/wp/v2/): the contact page as a WP page
+// (its content differs from the rendered text and carries unsafe markup) and two posts that are not
+// recreated. Nothing links to it, so discovery and capture are not affected.
+function wpItems(o) {
+  const item = (id, type, slug, link, title, excerpt, content) => ({
+    id, type, slug, link: `${o}${link}`, date: '2026-01-05T10:00:00', modified: '2026-03-01T09:30:00',
+    title: { rendered: title }, excerpt: { rendered: excerpt, protected: false }, content: { rendered: content, protected: false },
+  });
+  return {
+    pages: [
+      item(11, 'page', 'contact', '/contact.html', 'Contact',
+        '<p>Email hello@example.org and we reply within one working day. Our studio is open Monday to Friday &hellip;</p>\n',
+        '<p>Email hello@example.org and we reply within one working day.</p>\n<p>Our studio is open Monday to Friday, 9:00 to 17:00.</p>\n'
+        + '<script>window.__wp = 1</script>\n<p onclick="x()" class="wp-block-paragraph" style="color:red">Visit us <a href="javascript:alert(1)">here</a> or <a href="/about.html">read about us</a>.</p>\n'),
+      item(12, 'page', 'services', '/services/', 'Services', '<p>What we do.</p>', '<ul><li>Design</li><li>Build</li></ul>'),
+    ],
+    posts: [
+      item(21, 'post', 'first-post', '/blog/first-post.html', 'First post', '<p>First.</p>', '<p>First.</p>'),
+      item(22, 'post', 'second-post', '/blog/second-post.html', 'Second post', '<p>Second.</p>', '<p>Second.</p>'),
+    ],
+  };
+}
+
+function wpRoute(url, host, res) {
+  const m = url.pathname.match(/^\/wp-json\/wp\/v2\/(pages|posts)(?:\/(\d+))?\/?$/);
+  if (!m) return false;
+  const list = wpItems(`http://${host}`)[m[1]];
+  const json = (status, body, headers = {}) => (res.writeHead(status, { 'Content-Type': 'application/json; charset=UTF-8', ...headers }), res.end(JSON.stringify(body)));
+  if (m[2]) {
+    const hit = list.find((x) => x.id === Number(m[2]));
+    return hit ? json(200, hit) : json(404, { code: 'rest_post_invalid_id' }), true;
+  }
+  return json(200, Number(url.searchParams.get('page') ?? 1) > 1 ? [] : list, { 'X-WP-Total': String(list.length), 'X-WP-TotalPages': '1' }), true;
+}
+
 export function startFixtureServer(port = PORT, { site = 'audit' } = {}) {
   const ROOT = path.join(FIXTURES, SITES[site]);
   const server = createServer(async (req, res) => {
-    let { pathname } = new URL(req.url, 'http://localhost');
+    const url = new URL(req.url, 'http://localhost');
+    let { pathname } = url;
+    if (site === 'recreate' && wpRoute(url, req.headers.host, res)) return;
     if (site === 'recreate' && pathname.startsWith('/cdn/')) {
       if (cdnRoute(pathname, res)) return;
       pathname = pathname.slice(4);
