@@ -4,6 +4,7 @@
 import { mkdir, readdir, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { db, projectDir } from '../db/index.js';
+import { stopPreview } from './preview.js';
 
 export const KEEP_RECREATES = 2;
 
@@ -47,6 +48,7 @@ export async function pruneRecreates(projectId, { keep = KEEP_RECREATES } = {}) 
   const removed = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || kept.has(entry.name)) continue;
+    await stopPreview({ projectId, recreateId: entry.name }); // never serve a folder being removed
     await rm(path.join(root, entry.name), { recursive: true, force: true }).catch(() => {});
     removed.push(entry.name);
   }

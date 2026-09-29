@@ -4,6 +4,9 @@ import { VIEWPORTS } from './PreviewFrame.jsx';
 import styles from './SitePreview.module.css';
 
 const LOAD_HINT_MS = 15000;
+const noop = () => {};
+// The original site may need its own script to render; it runs sandboxed, never on the app origin.
+const LIVE_SANDBOX = 'allow-scripts allow-same-origin';
 
 // Framing our own app would let the page script this UI (allow-scripts + allow-same-origin).
 const APP_PORTS = new Set(['5173', '4000']);
@@ -62,7 +65,11 @@ function useStageSize() {
   return [setEl, size];
 }
 
-function LiveFrame({ url, width, onSlow }) {
+/**
+ * A page in a sandboxed iframe, rendered at its real width and scaled to the stage.
+ * The NEW panel uses it with a sandbox without scripts (the recreated site has none).
+ */
+export function LiveFrame({ url, width, onSlow = noop, sandbox = LIVE_SANDBOX, title = `Live preview of ${url}`, loadingText = 'Loading live page…' }) {
   const [ref, stage] = useStageSize();
   const [loaded, setLoaded] = useState(false);
 
@@ -80,13 +87,13 @@ function LiveFrame({ url, width, onSlow }) {
     <div ref={ref} className={styles.stage}>
       {scale > 0 && (
         <div className={styles.scaled} style={{ width: width * scale, height: stage.height }}>
-          {!loaded && <div className={styles.loading}>Loading live page…</div>}
+          {!loaded && <div className={styles.loading}>{loadingText}</div>}
           <iframe
             className={styles.iframe}
             src={url}
-            title={`Live preview of ${url}`}
+            title={title}
             // No allow-top-navigation (defeats frame-busting), no forms or popups, no device permissions.
-            sandbox="allow-scripts allow-same-origin"
+            sandbox={sandbox}
             allow=""
             referrerPolicy="no-referrer"
             style={{ width, height: stage.height / scale, transform: `scale(${scale})` }}

@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-const TYPES = {
+export const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.gif': 'image/gif',
   '.webp': 'image/webp', '.avif': 'image/avif', '.ico': 'image/x-icon', '.bmp': 'image/bmp', '.woff2': 'font/woff2',
@@ -16,11 +16,12 @@ const TYPES = {
 
 /**
  * @param {string} root  folder to serve
- * @returns {Promise<{ origin: string, overrides: Map<string, string>, close: () => Promise<void> }>}
+ * @returns {Promise<{ origin: string, overrides: Map<string, string>, setRoot: (dir: string) => void, close: () => Promise<void> }>}
  *   overrides: site path ("about.html") → body served instead of the file
+ *   setRoot: serve another folder from now on (the fidelity check renders dist/)
  */
 export async function startSiteServer(root) {
-  const base = path.resolve(root);
+  let base = path.resolve(root);
   const overrides = new Map();
   const server = createServer(async (req, res) => {
     let pathname;
@@ -57,6 +58,9 @@ export async function startSiteServer(root) {
   return {
     origin: `http://127.0.0.1:${server.address().port}`,
     overrides,
+    setRoot: (dir) => {
+      base = path.resolve(dir);
+    },
     close: () => new Promise((resolve) => {
       server.closeAllConnections?.();
       server.close(() => resolve());

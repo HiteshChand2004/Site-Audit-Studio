@@ -1,3 +1,5 @@
+import { stat } from 'node:fs/promises';
+import path from 'node:path';
 import { Router } from 'express';
 import { db } from '../db/index.js';
 import { ConflictError } from '../jobs/manager.js';
@@ -5,6 +7,8 @@ import { streamJob } from '../jobs/sse.js';
 import { PUBLIC_STEPS } from '../recreate/index.js';
 import { analysisWarnings, latestAnalysis } from '../recreate/inputs.js';
 import { recreateJobs } from '../recreate/jobs.js';
+import { activePreview, PreviewError, startPreview, stopPreview } from '../recreate/preview.js';
+import { recreateDir } from '../recreate/workspace.js';
 
 // Stacks the recreate pipeline can emit so far (Phase 6 adds the others).
 export const RECREATE_STACKS = ['html'];
@@ -68,6 +72,47 @@ router.get('/:id/recreate', (req, res) => {
     } : null,
     result: done ? JSON.parse(done.result_json) : null,
   });
+});
+
+// Preview of the latest completed recreate (its dist/ folder). One preview is active at a time, so
+// starting one for this project stops any other.
+const latestDoneId = db.prepare(`
+  SELECT id FROM recreates WHERE project_id = ? AND status = 'done' ORDER BY started_at DESC LIMIT 1
+`);
+
+async function latestBuild(projectId) {
+  const row = latestDoneId.get(projectId);
+  if (!row) return null;
+  const root = path.join(recreateDir(projectId, row.id), 'dist');
+  return (await stat(root).catch(() => null))?.isDirectory() ? { recreateId: row.id, root } : null;
+}
+
+const previewOf = (projectId) => {
+  const p = activePreview();
+  return p?.projectId === projectId ? p : null;
+};
+
+router.get('/:id/preview', (req, res) => {
+  if (!selectProject.get(req.params.id)) return res.status(404).json({ error: 'Project not found.' });
+  res.json({ preview: previewOf(req.params.id) });
+});
+
+router.post('/:id/preview', async (req, res) => {
+  const { id } = req.params;
+  if (!selectProject.get(id)) return res.status(404).json({ error: 'Project not found.' });
+  const build = await latestBuild(id);
+  if (!build) return res.status(404).json({ error: 'There is no recreated site to preview yet. Run Recreate first.' });
+  try {
+    res.json({ preview: await startPreview({ projectId: id, ...build }) });
+  } catch (err) {
+    if (err instanceof PreviewError) return res.status(503).json({ error: err.message });
+    throw err;
+  }
+});
+
+router.delete('/:id/preview', async (req, res) => {
+  await stopPreview({ projectId: req.params.id });
+  res.status(204).end();
 });
 
 router.get('/:id/recreate/:recreateId/events', (req, res) => {

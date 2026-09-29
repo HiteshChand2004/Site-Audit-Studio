@@ -6,6 +6,7 @@ import { parseMaxPages } from './analyze.js';
 import { buildDummyAudit } from '../dummy/audit.js';
 import { precheckUrl } from '../security/netGuard.js';
 import { MAX_RECREATE_PAGES, parseRecreatePages, parseTargetDomain } from '../recreate/inputs.js';
+import { stopPreview } from '../recreate/preview.js';
 
 export const STACKS = ['html', 'react-vite', 'nextjs', 'mern'];
 
@@ -120,6 +121,7 @@ router.patch('/:id', (req, res) => {
 router.delete('/:id', async (req, res) => {
   const result = remove.run(req.params.id);
   if (result.changes === 0) return res.status(404).json({ error: 'Project not found.' });
+  await stopPreview({ projectId: req.params.id });
   await rm(projectDir(req.params.id), { recursive: true, force: true }).catch(() => {});
   res.status(204).end();
 });

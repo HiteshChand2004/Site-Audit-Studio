@@ -50,6 +50,9 @@ export const useProjects = create((set, get) => ({
   recreates: {},
   // projectId → { last, result } from GET /recreate
   recreateResults: {},
+  // projectId → { url, port, recreateId, loading, error }: the preview of the latest recreate.
+  // Only one preview runs at a time, so it follows the selected project.
+  previews: {},
 
   setJob(kind, projectId, patch) {
     const key = KINDS[kind].stateKey;
@@ -89,6 +92,22 @@ export const useProjects = create((set, get) => ({
   async reloadRecreate(id) {
     const data = await api.getRecreate(id).catch(() => null);
     if (data) set({ recreateResults: { ...get().recreateResults, [id]: data } });
+    if (data?.result && get().selectedId === id) await get().ensurePreview(id);
+  },
+
+  setPreview(id, patch) {
+    set({ previews: { ...get().previews, [id]: { ...get().previews[id], ...patch } } });
+  },
+
+  /** Starts (or finds) the preview server of the project's latest recreate. */
+  async ensurePreview(id) {
+    get().setPreview(id, { loading: true, error: null });
+    try {
+      const { preview } = await api.startPreview(id);
+      get().setPreview(id, { ...preview, loading: false });
+    } catch (err) {
+      get().setPreview(id, { url: null, loading: false, error: err.message });
+    }
   },
 
   async reloadAudit(id) {

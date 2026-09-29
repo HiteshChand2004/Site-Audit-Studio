@@ -2,20 +2,17 @@
 // WordPress REST content when the site is WordPress), applies the fixers (fixers/), writes the plain
 // HTML site to site/ (pages at their original paths, css/site.css, assets/), then runs a short fit
 // pass: the site is rendered at the three views, elements whose box is off get a size fix, and the
-// site is written again. A round that lowers the layout score is undone. Finally the production build
-// (dist/, minified) is written and both builds go through the safety check (verify/safety.js).
+// site is written again. A round that lowers the layout score is undone. The production build, the
+// safety gate and the verification of dist/ follow in the build step (build/index.js).
 // Writes ir/site.json (the IR the other stack emitters will use) and sets ctx.generated.
 import { copyFile, link, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { buildDist } from './build/minify.js';
 import { emitSite } from './emit/html.js';
-import { RecreateError } from './errors.js';
 import { applyIrFixes, applyTreeFixes, fixReport } from './fixers/index.js';
 import { fetchWordPress, isWordPress } from './fixers/wordpress.js';
 import { buildIR, prepareSite, readPageCaptures } from './ir/index.js';
 import { isElement } from './ir/tree.js';
 import { compareLayout, openRenderer, planFixes, renderPage, viewScore } from './verify/layout.js';
-import { scanSite } from './verify/safety.js';
 
 export const FIT_ROUNDS = 2;
 // The fit pass stops starting new rounds this long before the step's time limit.
@@ -180,41 +177,14 @@ export async function generateStage(ctx) {
     await writeSite(siteDir, out, assetsDir, known);
   }
 
-  // Production build: minified CSS/JS in dist/.
-  ctx.progress(0.92, 'Minifying the production build');
-  const distDir = path.join(ctx.dir, 'dist');
-  const siteAssets = [...out.assets].filter((f) => known.has(f));
-  const minify = await buildDist({ files: out.files, assets: siteAssets, assetsDir, distDir });
-
-  // Safety gate: both builds are parsed again; anything that could run script or load from another
-  // origin fails the job, so an unsafe site is never kept or previewed.
-  ctx.progress(0.95, 'Checking the site is safe to preview');
-  const safety = { site: await scanSite(siteDir), dist: await scanSite(distDir) };
-  report.safety = {
-    safe: safety.site.safe && safety.dist.safe,
-    checked: safety.site.checked,
-    issues: [...safety.site.issues, ...safety.dist.issues.map((i) => ({ ...i, file: `dist/${i.file}` }))],
-    sanitized: {
-      svgFiles: ctx.assets?.svg ?? null,
-      inlineSvg: { changed: stats.safety.svgChanged, removed: stats.safety.svg },
-      htmlAttributes: stats.safety.attrs,
-      htmlElements: stats.safety.elements,
-    },
-  };
-  if (!report.safety.safe) {
-    const first = report.safety.issues[0];
-    throw new RecreateError(`The generated site failed the safety check (${first.file}: ${first.detail}); it was not kept.`);
-  }
-
-  ctx.progress(0.97, 'Saving the IR');
+  ctx.progress(0.95, 'Saving the IR');
   await mkdir(path.join(ctx.dir, 'ir'), { recursive: true });
   await writeFile(path.join(ctx.dir, 'ir', 'site.json'), JSON.stringify(ir));
-  ctx.generated = { site, ir, siteDir, distDir };
+  const siteAssets = [...out.assets].filter((f) => known.has(f));
+  ctx.generated = { site, ir, out, stats, siteDir, siteAssets, assetsDir };
 
-  // Fixes and the production build.
   const fixed = fixReport(treeFixes, irFixes);
   report.fixes.push(...fixed.fixes);
-  report.minify = { dir: 'dist', ...minify };
   if (wp) {
     const recreated = { page: 0, post: 0 };
     for (const t of site.pages) if (t.wp) recreated[t.wp.item.type === 'post' ? 'post' : 'page']++;
@@ -255,7 +225,7 @@ export async function generateStage(ctx) {
     liveLinks: [...stats.liveLinks].slice(0, 100).map(([url, reason]) => ({ url, reason })),
     droppedImages: stats.droppedImages.length,
     droppedMedia: stats.droppedMedia.length,
-    assetFiles: [...out.assets].filter((f) => known.has(f)).length,
+    assetFiles: siteAssets.length,
     generatedFiles: ir.files.map((f) => f.path),
     fit,
   };

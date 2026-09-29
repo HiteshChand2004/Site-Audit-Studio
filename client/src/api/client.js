@@ -61,4 +61,6 @@ export const api = {
   getCurrentRecreate: (id) => request(`/projects/${id}/recreate/current`),
   getRecreate: (id) => request(`/projects/${id}/recreate`),
   subscribeRecreate: (id, recreateId, handlers) => subscribe(`/api/projects/${id}/recreate/${recreateId}/events`, handlers),
+  getPreview: (id) => request(`/projects/${id}/preview`),
+  startPreview: (id) => request(`/projects/${id}/preview`, { method: 'POST' }),
 };

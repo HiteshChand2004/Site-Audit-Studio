@@ -15,6 +15,7 @@ import { ClassNamer, meaningful, originalName } from '../src/recreate/ir/names.j
 import { cascade, resolveHints } from '../src/recreate/ir/styles.js';
 import { buildPageTree, deepText, isElement } from '../src/recreate/ir/tree.js';
 import { runRecreate } from '../src/recreate/index.js';
+import { startPreview, stopPreview } from '../src/recreate/preview.js';
 import { recreateDir } from '../src/recreate/workspace.js';
 import { startFixtureServer } from './serve-fixture.js';
 
@@ -30,6 +31,7 @@ before(async () => {
   server = await startFixtureServer(PORT, { site: 'recreate' });
 });
 after(async () => {
+  await stopPreview();
   server.close();
   for (const id of projectIds) {
     db.prepare('DELETE FROM projects WHERE id = ?').run(id);
@@ -409,9 +411,39 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.ok(report.fidelity.score >= 90, `fidelity ${report.fidelity.score}`);
   for (const p of report.fidelity.pages) {
     assert.ok(p.score >= 85, `${p.path}: ${p.score}`);
+    assert.equal(p.low, false, p.path);
     for (const [view, v] of Object.entries(p.views)) {
       assert.ok(v.sizes >= 0.9, `${p.path} ${view} sizes ${v.sizes}`);
       assert.ok(await exists(path.join(dir, v.screenshot)), v.screenshot);
     }
   }
+  // 4a.6 — the fidelity threshold: nothing flagged on the fixture.
+  assert.deepEqual([report.fidelity.threshold, report.fidelity.status, report.fidelity.lowPages], [80, 'ok', []]);
+  assert.equal(report.warnings.some((w) => /fidelity/i.test(w)), false);
+
+  // 4a.6 — build verification of dist/: every file there, links and assets resolve, valid HTML.
+  assert.equal(report.verify.ok, true, JSON.stringify(report.verify));
+  assert.equal(report.verify.dir, 'dist');
+  assert.deepEqual([report.verify.missingFiles, report.verify.brokenLinks, report.verify.missingAssets, report.verify.externalAssets, report.verify.anchors], [[], [], [], [], []]);
+  assert.deepEqual(report.verify.html, { valid: true, errors: 0, warnings: 0, pages: [] });
+  assert.equal(report.verify.checked.pages, 5);
+  assert.ok(report.verify.checked.links >= 15, `links ${report.verify.checked.links}`);
+  assert.ok(report.verify.checked.assets >= 10, `assets ${report.verify.checked.assets}`);
+  assert.equal(await exists(path.join(dir, 'dist.tmp')), false);
+  // The same checks hold for the readable site/.
+  const { verifySite } = await import('../src/recreate/verify/site.js');
+  assert.equal((await verifySite(site)).ok, true);
+
+  // 4a.6 — preview: the pipeline served every page and the stylesheet; the real preview serves dist/.
+  assert.equal(report.preview.checked, 6);
+  assert.deepEqual(report.preview.pages, ['index.html', 'about.html', 'services/index.html', 'contact.html', 'work.html']);
+  const preview = await startPreview({ projectId: id, recreateId, root: path.join(dir, 'dist') });
+  assert.ok(preview.port >= 5100 && preview.port <= 5199);
+  const res = await fetch(`${preview.url}services/`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-security-policy'), /frame-ancestors/);
+  assert.equal(await res.text(), await readFile(path.join(dir, 'dist', 'services', 'index.html'), 'utf8'));
+  assert.equal((await fetch(`${preview.url}ir/site.json`)).status, 404); // only dist/ is served
+  assert.equal((await fetch(`${preview.url}../report.json`)).status, 404);
+  await stopPreview();
 });

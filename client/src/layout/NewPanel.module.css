@@ -18,9 +18,28 @@
 }
 
 .emptyText {
+  display: grid;
+  justify-items: center;
+  gap: var(--sp-2);
   max-width: 280px;
   color: var(--muted);
   font-size: var(--fs-sm);
+}
+
+.pageSelect {
+  max-width: 140px;
+  height: 24px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.pageSelect:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .warn {

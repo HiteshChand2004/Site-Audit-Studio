@@ -12,9 +12,10 @@ import { TimeoutError, withTimeout } from '../audit/util.js';
 import { analysisWarnings, baseUrlOf, latestAnalysis } from './inputs.js';
 import { RecreateError } from './errors.js';
 import { assetsStage } from './assets/index.js';
+import { buildStage } from './build/index.js';
 import { generateStage } from './generate.js';
 import { inspectStage } from './inspect.js';
-import { fidelityStage } from './verify/fidelity.js';
+import { previewStage } from './preview.js';
 import { commitWorkspace, discardWorkspace, openWorkspace } from './workspace.js';
 
 export { RecreateError };
@@ -45,16 +46,12 @@ export function recreateBudgetMs(env = process.env) {
   return (Number.isFinite(minutes) && minutes >= 1 && minutes <= 60 ? minutes : 10) * 60000;
 }
 
-
-// Stages still to be built in later Phase 4a sub-steps only report progress. The build step runs the
-// basic fidelity check for now; 4a.6 adds the build verification around it.
-const noop = async () => {};
 export const STAGES = {
   inspect: inspectStage,
   assets: assetsStage,
   generate: generateStage,
-  build: fidelityStage,
-  preview: noop,
+  build: buildStage,
+  preview: previewStage,
 };
 
 /**

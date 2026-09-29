@@ -1,0 +1,150 @@
+.card {
+  display: grid;
+  gap: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  padding: var(--sp-3);
+}
+
+.section {
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin-bottom: 6px;
+}
+
+.title {
+  font-weight: 600;
+}
+
+.meta {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.score {
+  margin-left: auto;
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.score small {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+}
+
+.score[data-tone='ok'] { color: var(--ok); }
+.score[data-tone='warn'] { color: var(--warn); }
+
+.pages,
+.checks,
+.warnings {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px 26px auto;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 5px 0;
+  border-top: 1px solid var(--border);
+}
+
+.page:first-child {
+  border-top: 0;
+}
+
+.path {
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ok);
+}
+
+.bar span[data-tone='warn'] {
+  background: var(--warn-strong);
+}
+
+.pageScore {
+  font-size: var(--fs-sm);
+  text-align: right;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+}
+
+.mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+}
+
+.check[data-ok='true'] .mark { background: var(--ok); color: var(--surface); }
+.check[data-ok='false'] .mark { background: var(--bad-tint); color: var(--bad); }
+
+.checkLabel {
+  font-weight: 500;
+}
+
+.checkDetail {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.warnings {
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--warn-strong);
+  border-radius: var(--radius);
+  background: var(--warn-tint);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.warnings li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.warnings svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warn);
+}
