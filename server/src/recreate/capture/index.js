@@ -230,7 +230,12 @@ async function captureView(browser, pageInfo, view, dir, { timeout }) {
     // The document must arrive in time; the load event (every image, tracker and embed) and a quiet
     // network only get a bounded wait. A slow third-party request must not lose the page: the
     // scroll-through below loads lazy content anyway, and pending images are awaited at the end.
-    const response = await page.goto(pageInfo.url, { waitUntil: 'domcontentloaded', timeout });
+    // A slow or briefly overloaded server gets one more attempt before the view is given up.
+    const go = () => page.goto(pageInfo.url, { waitUntil: 'domcontentloaded', timeout });
+    const response = await go().catch((err) => {
+      if (!/timeout/i.test(err.message)) throw err;
+      return go();
+    });
     await page.waitForLoadState('load', { timeout: LOAD_WAIT }).catch(() => {});
     await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
     const reveal = await settle(page, view, MAX_HEIGHT);
