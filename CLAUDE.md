@@ -42,8 +42,11 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 |---|---|---|---|
 | 4a.1 Job foundation | ✅ Done | `64a559f`, `6464957` | Recreate job + SSE progress, global one-job lock shared with Analyze, 10-min budget (`SAS_RECREATE_MINUTES`), tmp → final workspace with keep-latest-2 retention, stale-analysis warning, `recreate_pages`/`target_domain` settings, Recreate button. Tests run on a temp DB per test file (`test/run-tests.js`), never `data/app.db`. |
 | 4a.2 Discovery + capture | ✅ Done | `385c00d` | `discover.js` (homepage → homepage links → sitemap → crawl, limit, skip reasons, links-to-live), `capture/` (DOM + computed-style diffs, pseudo-elements, SVG, head, tokens, fonts, resources, fold/full WebP at 1440/768/375), `inspect.js` = step 1; `fixtures/recreate-site` + `recreate-capture.test.js`. |
-| 4a.3 Assets | ✅ Done | (WIP commit) | `assets/` = step 2: `collect.js` (asset list from captures), `css.js` (srcset + cross-origin stylesheet parsing), `download.js` (guarded streaming download), `cdn.js` (platform CDN hosts from the rules), `index.js` (stage, limits, content dedupe, `assets/manifest.json`). `http.js` gained `guardedFetch`. Fixture `/cdn/` second origin + `recreate-assets.test.js`. |
+| 4a.3 Assets | ✅ Done | `26bfff5` | Images, icons, fonts and media downloaded into `assets/` (no platform CDN links left; skipped files are reported, never linked live). SSRF guard on every download: URL precheck + connect-time IP check on every redirect hop (defeats DNS rebinding) via `guardedFetch` in `http.js`. Dedupe by URL and by content hash (sha256). Per-file size/time limits by kind plus a per-recreate budget (800 files, 300 MB). Cross-origin stylesheets downloaded and parsed (@font-face, @keyframes, @import). Modules: `assets/{index,collect,css,download,cdn}.js`; fixture `/cdn/` second origin + `recreate-assets.test.js`. **SVG sanitization pending → 4a.5.** |
 | 4a.4 IR + HTML emitter | ⏳ Next | — | |
+
+**Pending (do not forget):** downloaded SVG files are not sanitized yet. In **4a.5** (fixers) strip `<script>`,
+`on*` event attributes, `javascript:` URLs and external references from every SVG in `assets/` before it is emitted.
 
 Known issue: 2 `netGuard` tests fail on this Windows machine because `*.localhost` names don't resolve (DNS ENOTFOUND);
 environmental, not a regression.
