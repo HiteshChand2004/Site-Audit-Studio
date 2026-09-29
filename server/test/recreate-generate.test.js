@@ -12,7 +12,7 @@ import { buildHead, clip, generatedFavicon } from '../src/recreate/ir/head.js';
 import { pickBreakpoints } from '../src/recreate/ir/index.js';
 import { createLinkResolver, relFile, relPage } from '../src/recreate/ir/links.js';
 import { ClassNamer, meaningful, originalName } from '../src/recreate/ir/names.js';
-import { cascade, resolveHints } from '../src/recreate/ir/styles.js';
+import { cascade, resolveHints, wrapsText } from '../src/recreate/ir/styles.js';
 import { buildPageTree, deepText, isElement } from '../src/recreate/ir/tree.js';
 import { runRecreate } from '../src/recreate/index.js';
 import { startPreview, stopPreview } from '../src/recreate/preview.js';
@@ -146,6 +146,18 @@ test('styles cascade from desktop with inherit / revert for values a view does n
   const img = { desktop: { '@rw': { px: 1000, ratio: 1 } }, mobile: { '@rw': { px: 120, ratio: 0.4 } } };
   resolveHints(img, ['desktop', 'mobile'], 'img');
   assert.deepEqual(img, { desktop: { width: '100%' }, mobile: { width: '120px', 'max-width': '100%' } });
+});
+
+test('wrapped text is measured on the content box: padding is not a second line', () => {
+  const node = (style, rect) => ({ tag: 'a', attrs: {}, views: { desktop: { style, rect, hidden: false } }, children: [{ text: 'Contact Us' }] });
+  // A pill button: 40 px tall, 12 px padding top and bottom, 14 px text (one line).
+  assert.equal(wrapsText(node({ 'font-size': '14px', 'padding-top': '12px', 'padding-bottom': '12px' }, [0, 0, 114, 40]), 'desktop'), false);
+  // The same height without padding holds two lines.
+  assert.equal(wrapsText(node({ 'font-size': '14px' }, [0, 0, 114, 40]), 'desktop'), true);
+  // A line height set on an ancestor is inherited.
+  const parent = { tag: 'div', views: { desktop: { style: { 'line-height': '24px' }, rect: [0, 0, 200, 48] } } };
+  assert.equal(wrapsText(node({}, [0, 0, 114, 48]), 'desktop', [parent]), true);
+  assert.equal(wrapsText(node({}, [0, 0, 114, 24]), 'desktop', [parent]), false);
 });
 
 test('breakpoints come from the original media queries', () => {
@@ -358,7 +370,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.match(frameRule, /height: 300px/);
   assert.match(frameRule, /width: 400px/);
   const copyRule = baseRule(classOf(/<div class="([\w-]+)">\s*<h2 class="[\w-]+">Revealed on scroll/));
-  assert.match(copyRule, /(^|\s)width: (50%|480px);/); // a width, never only max-width
+  assert.match(copyRule, /(^|\s)width: (50%|481px);/); // a width (text: 1 px of slack), never only max-width
   // A row around a zero-basis growing text (flex: 1 0 0) in a centred column keeps its width even
   // though its text fits on one line; without it the row shrinks to one word per line.
   const highlightRule = baseRule(classOf(/<div class="([\w-]+)"><span[^>]*>(?:(?!<\/span>)[^])*<\/span><div[^>]*>\s*<p[^>]*>Fast onboarding/));

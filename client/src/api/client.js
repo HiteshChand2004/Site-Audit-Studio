@@ -27,38 +27,68 @@ async function request(path, { method = 'GET', body } = {}) {
 // How long a dropped progress stream keeps trying to reconnect before the job is shown as lost.
 const RECONNECT_FOR_MS = 120000;
 const RECONNECT_MAX_DELAY_MS = 10000;
+// The server sends a ping every 15 s; a stream silent for longer is treated as dropped (a proxy can
+// keep the browser's connection open after the API behind it has gone).
+const SILENT_MS = 40000;
 
 /**
  * Streams job progress (Analyze or Recreate) over SSE. Handlers: progress(job), done(job),
  * failed(job), reconnecting(boolean). Returns a function that closes the stream.
  *
- * A dropped connection (API server restarting, proxy error, network blip) is not an error: the
- * stream reconnects with backoff for up to 2 minutes and the server replays the job's current
- * state on connect (or its final state, if it ended meanwhile). Only then is the job reported lost.
+ * A dropped connection (API server restarting, proxy error, network blip, a silent stream) is not
+ * an error: the stream reconnects with backoff for up to 2 minutes and the server replays the job's
+ * current state on connect (or its final state, if it ended meanwhile). Only then is the job
+ * reported lost.
  */
 function subscribe(url, { progress, done, failed, reconnecting }) {
   const parse = (e) => JSON.parse(e.data);
   let source = null;
   let timer = null;
+  let watchdog = null;
   let closed = false;
   let attempt = 0;
   let downSince = null;
   const stop = () => {
     closed = true;
     clearTimeout(timer);
+    clearTimeout(watchdog);
     source?.close();
   };
-  const connected = () => {
+  const alive = () => {
     if (downSince != null) reconnecting?.(false);
     attempt = 0;
     downSince = null;
+    clearTimeout(watchdog);
+    watchdog = setTimeout(() => drop(true), SILENT_MS);
+  };
+  // force: reopen ourselves even while the browser would keep retrying (a silent stream).
+  const drop = (force) => {
+    if (closed) return;
+    if (downSince == null) {
+      downSince = Date.now();
+      reconnecting?.(true);
+    }
+    // CONNECTING: the browser retries on its own. CLOSED: the server or proxy answered with an
+    // error (for example while the API restarts); retry ourselves.
+    if (!force && source.readyState !== EventSource.CLOSED) return;
+    source.close();
+    clearTimeout(watchdog);
+    if (Date.now() - downSince > RECONNECT_FOR_MS) {
+      stop();
+      failed?.({ status: 'failed', error: 'Lost connection to the server. Reload the page to see the latest state.' });
+      return;
+    }
+    timer = setTimeout(open, Math.min(1000 * 2 ** attempt++, RECONNECT_MAX_DELAY_MS));
   };
 
   const open = () => {
     source = new EventSource(url);
-    source.addEventListener('open', connected);
+    clearTimeout(watchdog);
+    watchdog = setTimeout(() => drop(true), SILENT_MS);
+    source.addEventListener('open', alive);
+    source.addEventListener('ping', alive);
     source.addEventListener('progress', (e) => {
-      connected();
+      alive();
       progress?.(parse(e));
     });
     source.addEventListener('done', (e) => {
@@ -69,23 +99,7 @@ function subscribe(url, { progress, done, failed, reconnecting }) {
       stop();
       failed?.(parse(e));
     });
-    source.onerror = () => {
-      if (closed) return;
-      if (downSince == null) {
-        downSince = Date.now();
-        reconnecting?.(true);
-      }
-      // CONNECTING: the browser retries on its own. CLOSED: the server or proxy answered with an
-      // error (for example while the API restarts); retry ourselves.
-      if (source.readyState !== EventSource.CLOSED) return;
-      source.close();
-      if (Date.now() - downSince > RECONNECT_FOR_MS) {
-        stop();
-        failed?.({ status: 'failed', error: 'Lost connection to the server. Reload the page to see the latest state.' });
-        return;
-      }
-      timer = setTimeout(open, Math.min(1000 * 2 ** attempt++, RECONNECT_MAX_DELAY_MS));
-    };
+    source.onerror = () => drop(false);
   };
   open();
   return stop;

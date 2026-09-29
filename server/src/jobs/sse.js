@@ -35,7 +35,9 @@ export function streamJob(req, res, manager, jobId, loadRow) {
     return res.end();
   }
 
-  const heartbeat = setInterval(() => res.write(': ping\n\n'), HEARTBEAT_MS);
+  // A named event, not an SSE comment: browsers never hand comments to the page, and the client
+  // uses the ping to notice a stream that went silent (a proxy can keep it open after the API died).
+  const heartbeat = setInterval(() => send('ping', {}), HEARTBEAT_MS);
   const cleanup = () => {
     clearInterval(heartbeat);
     manager.off(jobId, listener);

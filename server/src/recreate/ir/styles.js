@@ -120,10 +120,15 @@ function gridTracks(value, contentW, gap) {
 
 const lineHeightPx = (fontSize, lineHeight) => (!lineHeight || lineHeight === 'normal' ? fontSize * 1.2 : px(lineHeight) ?? parseFloat(lineHeight) * fontSize);
 
+// Height of the content box: padding and borders are not lines of text (a 40 px button with 14 px
+// text is one line).
+const contentHeight = (d) => d.rect[3]
+  - num(d.style['padding-top']) - num(d.style['padding-bottom']) - num(d.style['border-top-width']) - num(d.style['border-bottom-width']);
+
 /**
- * True when text inside `node` wrapped in view `v`: an element with its own text is taller than
- * about 1.6 lines. Inherited font-size / line-height come from the nearest element that sets them
- * (captured styles are diffs against the parent for inherited properties).
+ * True when text inside `node` wrapped in view `v`: an element with its own text has a content box
+ * taller than about 1.6 lines. Inherited font-size / line-height come from the nearest element that
+ * sets them (captured styles are diffs against the parent for inherited properties).
  */
 export function wrapsText(node, v, chain = []) {
   let fontSize = null;
@@ -138,7 +143,7 @@ export function wrapsText(node, v, chain = []) {
     if (!d || d.hidden) return false;
     const f = px(d.style['font-size']) ?? fs;
     const l = d.style['line-height'] ?? lh;
-    if (n.children.some((c) => isText(c) && c.text.trim()) && d.rect[3] > 1.6 * lineHeightPx(f, l)) return true;
+    if (n.children.some((c) => isText(c) && c.text.trim()) && contentHeight(d) > 1.6 * lineHeightPx(f, l)) return true;
     return n.tag !== 'svg' && n.children.some((c) => isElement(c) && walk(c, f, l));
   };
   return walk(node, fontSize ?? 16, lineHeight);
@@ -258,7 +263,7 @@ export function normalizeView(node, v, chain, opts) {
     // Without text (icon boxes, image frames) the content cannot size the item reliably: an SVG or
     // image at width: 100% inside it falls back to its default size (300 px for SVG). Keep the width.
     const text = deepText(node).trim();
-    if (contentSized) style['@cw'] = { px: size.w(w), ratio, wraps: !text || fills || zeroBasisRow || wrapsText(node, v, chain) };
+    if (contentSized) style['@cw'] = { px: size.w(w), ratio, text: !!text, wraps: !text || fills || zeroBasisRow || wrapsText(node, v, chain) };
   }
 
   const elements = node.children.filter(isElement);
@@ -318,7 +323,9 @@ export function resolveHints(decls, present, tag) {
       if (!apply || decls[v].width) continue;
       if (consistent) decls[v].width = hint.ratio >= 0.995 && hint.ratio <= 1.005 ? '100%' : pct(hint.ratio);
       else {
-        decls[v].width = `${Math.round(hint.px)}px`;
+        // Text gets a pixel of slack: the same label can measure a fraction wider here than in the
+        // original, and a width cut to the pixel would wrap it onto a second line.
+        decls[v].width = `${hint.text ? Math.ceil(hint.px) + 1 : Math.round(hint.px)}px`;
         decls[v]['max-width'] ??= '100%';
       }
     }
