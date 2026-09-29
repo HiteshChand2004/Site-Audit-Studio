@@ -37,6 +37,16 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 (stop after each, WIP commit, wait for the user's "next"; never push):
 4a.1 job foundation ✅ · 4a.2 discovery + capture ✅ · 4a.3 assets · 4a.4 IR + HTML emitter · 4a.5 fixers + WP REST · 4a.6 build, verify, fidelity, preview · 4a.7 tuning + docs.
 
+### Phase 4a progress
+| Step | Status | Commits | Summary |
+|---|---|---|---|
+| 4a.1 Job foundation | ✅ Done | `64a559f`, `6464957` | Recreate job + SSE progress, global one-job lock shared with Analyze, 10-min budget (`SAS_RECREATE_MINUTES`), tmp → final workspace with keep-latest-2 retention, stale-analysis warning, `recreate_pages`/`target_domain` settings, Recreate button. Tests run on a temp DB per test file (`test/run-tests.js`), never `data/app.db`. |
+| 4a.2 Discovery + capture | ✅ Done | `385c00d` | `discover.js` (homepage → homepage links → sitemap → crawl, limit, skip reasons, links-to-live), `capture/` (DOM + computed-style diffs, pseudo-elements, SVG, head, tokens, fonts, resources, fold/full WebP at 1440/768/375), `inspect.js` = step 1; `fixtures/recreate-site` + `recreate-capture.test.js`. |
+| 4a.3 Assets | ⏳ Next | — | |
+
+Known issue: 2 `netGuard` tests fail on this Windows machine because `*.localhost` names don't resolve (DNS ENOTFOUND);
+environmental, not a regression.
+
 ### Phase 4a decisions (approved)
 - Minimal static preview server in 4a (one active preview, ports 5100–5199); full PreviewManager in Phase 5.
 - Internal links to pages beyond the page limit point to the original live URL and are marked in the report.
