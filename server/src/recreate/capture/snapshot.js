@@ -94,8 +94,17 @@ export function snapshotPage(opts) {
     return { content, style: styleDiff(cs, parentValues, defaultStyle('span', ''), true).style };
   }
 
+  // The box of an element. A rotated or scaled element's bounding box depends on the animation frame
+  // it was caught in (a 45 px square measures up to 64 px while it spins); its layout size does not.
+  // Such elements get their untransformed size, centred where the bounding box is.
   const rectOf = (el) => {
     const r = el.getBoundingClientRect();
+    const t = el instanceof HTMLElement ? getComputedStyle(el).transform : 'none';
+    if (t && t !== 'none' && !/^matrix\(1, 0, 0, 1, [^,]+, [^)]+\)$/.test(t)) {
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      return [Math.round(r.left + r.width / 2 + scrollX - w / 2), Math.round(r.top + r.height / 2 + scrollY - h / 2), w, h];
+    }
     return [Math.round(r.left + scrollX), Math.round(r.top + scrollY), Math.round(r.width), Math.round(r.height)];
   };
 

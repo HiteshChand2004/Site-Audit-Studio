@@ -387,6 +387,16 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   const badgeRule = baseRule(classOf(/<div class="([\w-]+)">\s*<img[^>]* alt="Badge one"/));
   assert.match(badgeRule, /(^|\s)width: (100%|\d+px);/);
   assert.doesNotMatch(badgeRule, /(^|\s)width: 0/);
+  // A spinning element is captured with its layout size, not the bounding box of the frame it was
+  // caught in, in every view; the generated rule keeps 40 px.
+  for (const view of ['desktop', 'tablet', 'mobile']) {
+    const snap = JSON.parse(await readFile(path.join(dir, 'capture', 'services', `${view}.json`), 'utf8'));
+    const findNode = (n) => (n.attrs?.class ?? '').split(' ').includes('spinner') ? n : (n.children ?? []).reduce((hit, c) => hit ?? (c.tag ? findNode(c) : null), null);
+    assert.deepEqual(findNode(snap.body).rect.slice(2), [40, 40], view);
+  }
+  const spinnerRule = baseRule(classOf(/<span class="([\w-]+)" aria-hidden="true"><\/span>/));
+  assert.match(spinnerRule, /(^|\s)(max-)?width: 40px;/, spinnerRule);
+  assert.match(spinnerRule, /(^|\s)height: 40px;/);
   assert.doesNotMatch(css, /@keyframes brand-pulse/); // not used by any page
 
   // Report: auto-generated head fields, the form, the IR and the generation stats.

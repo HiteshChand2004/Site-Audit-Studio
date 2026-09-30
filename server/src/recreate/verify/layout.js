@@ -60,12 +60,20 @@ export async function openRenderer(root) {
   }
 }
 
-// Runs in the page.
+// Runs in the page. Boxes are measured like the capture measures them (capture/snapshot.js rectOf):
+// rotated or scaled elements by their untransformed size, centred on their bounding box.
 function collectRects() {
   const rects = {};
   for (const el of document.querySelectorAll('[data-sas-id]')) {
     const r = el.getBoundingClientRect();
-    rects[el.getAttribute('data-sas-id')] = [Math.round(r.left + scrollX), Math.round(r.top + scrollY), Math.round(r.width), Math.round(r.height)];
+    const t = el instanceof HTMLElement ? getComputedStyle(el).transform : 'none';
+    let box = [Math.round(r.left + scrollX), Math.round(r.top + scrollY), Math.round(r.width), Math.round(r.height)];
+    if (t && t !== 'none' && !/^matrix\(1, 0, 0, 1, [^,]+, [^)]+\)$/.test(t)) {
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      box = [Math.round(r.left + r.width / 2 + scrollX - w / 2), Math.round(r.top + r.height / 2 + scrollY - h / 2), w, h];
+    }
+    rects[el.getAttribute('data-sas-id')] = box;
   }
   return { rects, scrollHeight: document.documentElement.scrollHeight };
 }

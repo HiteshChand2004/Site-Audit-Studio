@@ -317,6 +317,8 @@ export function resolveHints(decls, present, tag) {
     const fixed = cw.length > 1 && Math.max(...pxs) - Math.min(...pxs) <= 1;
     const consistent = !fixed && cw.length === present.length && ratios.every((r) => r != null && Number.isFinite(r) && r > 0)
       && Math.max(...ratios) - Math.min(...ratios) <= 0.01;
+    // An item wider than its parent on purpose (a marquee track, a scroller) must not be clamped.
+    const overflows = ratios.some((r) => r != null && r > 1.01);
     for (const v of cw) {
       const hint = decls[v]['@cw'];
       delete decls[v]['@cw'];
@@ -326,7 +328,7 @@ export function resolveHints(decls, present, tag) {
         // Text gets a pixel of slack: the same label can measure a fraction wider here than in the
         // original, and a width cut to the pixel would wrap it onto a second line.
         decls[v].width = `${hint.text ? Math.ceil(hint.px) + 1 : Math.round(hint.px)}px`;
-        decls[v]['max-width'] ??= '100%';
+        if (!overflows) decls[v]['max-width'] ??= '100%';
       }
     }
   }

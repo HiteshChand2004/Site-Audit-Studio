@@ -43,12 +43,16 @@
         .frame { width: 100%; }
         .copy { width: 100%; }
       }
+      /* A 40 px icon that keeps spinning: its bounding box changes every frame (up to ~57 px). */
+      .spinner { display: block; width: 40px; height: 40px; margin: 24px 0; background: #0f766e; animation: spin 3s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
     </style>
   </head>
   <body>
     <header class="site-header"><a href="/" class="logo">Recreate Co</a><nav><a href="/">Home</a><a href="/about.html">About</a></nav></header>
     <main>
       <h1>Services</h1><ul><li>Design</li><li>Build</li></ul>
+      <span class="spinner" aria-hidden="true"></span>
       <div class="fold-card appear-half"><p>Crossing the fold, shown when half of it is in view.</p></div>
       <section class="showcase">
         <div class="split">
