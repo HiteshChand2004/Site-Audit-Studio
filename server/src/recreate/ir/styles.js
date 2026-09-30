@@ -118,6 +118,9 @@ function gridTracks(value, contentW, gap) {
   return tracks.map((t) => `minmax(0, ${round(t / min)}fr)`).join(' ');
 }
 
+// Badges, chips, labels and icon buttons: small, and narrower than their parent.
+const isSmallBox = (w, h, ratio) => w <= 400 && h <= 200 && (ratio == null || ratio < 0.95);
+
 const lineHeightPx = (fontSize, lineHeight) => (!lineHeight || lineHeight === 'normal' ? fontSize * 1.2 : px(lineHeight) ?? parseFloat(lineHeight) * fontSize);
 
 // Height of the content box: padding and borders are not lines of text (a 40 px button with 14 px
@@ -269,7 +272,9 @@ export function normalizeView(node, v, chain, opts) {
     if (contentSized) style['@cw'] = { px: size.w(w), ratio, text: !!text, wraps: !text || fills || zeroBasisRow || wrapsText(node, v, chain) };
     // A content-sized item with text can still have a fixed size larger than its text (a 22 px badge
     // around 6 px letters, a 52 px label): minimums restore it without ever cutting or wrapping text.
-    if (contentSized && text && h > 0) {
+    // Only small boxes that do not fill their parent: a minimum on a large container would keep it
+    // from shrinking between the captured widths.
+    if (contentSized && text && h > 0 && isSmallBox(w, h, ratio)) {
       const minW = Math.floor(size.w(w)) - 1;
       const minH = Math.round(size.h(h));
       if (minW > 0 && !style['min-width']) style['min-width'] = `${minW}px`;
@@ -281,7 +286,7 @@ export function normalizeView(node, v, chain, opts) {
   // text; without it they shrink to the text. Minimums restore it and can never cut or wrap content
   // (the width one pixel under the captured one, so boxes sharing a line never overflow it).
   if (/^inline-(block|flex|grid)$/.test(display) && !REPLACED.has(node.tag) && !FORM_CONTROL.has(node.tag)
-    && (position === 'static' || position === 'relative') && w > 0 && h > 0 && !fix?.w) {
+    && (position === 'static' || position === 'relative') && w > 0 && h > 0 && !fix?.w && isSmallBox(w, h, ratioOf(w))) {
     const minW = Math.floor(size.w(w)) - 1;
     const minH = Math.round(size.h(h));
     if (minW > 0 && !style.width && !style['min-width']) style['min-width'] = `${minW}px`;
