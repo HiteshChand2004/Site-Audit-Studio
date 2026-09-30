@@ -22,7 +22,9 @@ export { RecreateError };
 
 // weight = share of the progress bar; max = the step's own time limit.
 export const STEPS = [
-  { key: 'inspect', label: 'Inspecting pages', weight: 35, max: 5 * 60000 },
+  // Capture is the slow part on slow sites (a page can take 50 s); it stops starting pages in time to
+  // leave the later steps their reserve (inspect.js).
+  { key: 'inspect', label: 'Inspecting pages', weight: 35, max: 7 * 60000 },
   { key: 'assets', label: 'Extracting assets', weight: 25, max: 4 * 60000 },
   { key: 'generate', label: 'Generating site', weight: 15, max: 3 * 60000 },
   { key: 'build', label: 'Building & verifying', weight: 20, max: 3 * 60000 },
@@ -122,6 +124,7 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
       const limit = Math.min(def.max, remaining);
       // A stage may use this to wind down on its own (skip remaining work) before the hard timeout.
       ctx.stepDeadline = Date.now() + limit;
+      ctx.jobDeadline = deadline;
       try {
         await withTimeout(stages[def.key](ctx), limit, def.label);
       } catch (err) {

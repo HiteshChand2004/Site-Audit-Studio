@@ -11,6 +11,8 @@ import { RecreateError } from './errors.js';
 
 // Captures stop starting new pages this long before the step's time limit.
 const INSPECT_MARGIN = 15000;
+// Time of the whole job kept for the steps after capture (assets, generate, build, preview).
+const LATER_STEPS_RESERVE = 150000;
 
 const once = (fn) => {
   let done = null;
@@ -44,7 +46,7 @@ export async function inspectStage(ctx) {
     // Pages are captured while they still fit in the step's time limit (judged by the slowest page
     // so far): a slow site or a high page limit then keeps the pages captured so far instead of
     // failing the whole job. The homepage is always captured.
-    const deadline = (ctx.stepDeadline ?? Infinity) - INSPECT_MARGIN;
+    const deadline = Math.min(ctx.stepDeadline ?? Infinity, (ctx.jobDeadline ?? Infinity) - LATER_STEPS_RESERVE) - INSPECT_MARGIN;
     let slowest = 0;
     for (const [i, info] of discovery.pages.entries()) {
       if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
