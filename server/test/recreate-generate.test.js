@@ -294,6 +294,14 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.deepEqual(report.errors, []);
   const files = (await readdir(site, { recursive: true })).map((f) => f.replaceAll('\\', '/')).filter((f) => /\.\w+$/.test(f)).sort();
   for (const f of ['index.html', 'about.html', 'services/index.html', 'contact.html', 'work.html', 'css/site.css']) assert.ok(files.includes(f), f);
+  // Crawl files (Phase 5): sitemap.xml and robots.txt generated, the original llms.txt copied as it is.
+  for (const f of ['sitemap.xml', 'robots.txt', 'llms.txt']) assert.ok(files.includes(f), f);
+  assert.equal(await read('llms.txt'), await readFile(new URL('./fixtures/recreate-site/llms.txt', import.meta.url), 'utf8'));
+  assert.match(await read('robots.txt'), /^Sitemap: https?:\/\/[^\s]+\/sitemap\.xml$/m);
+  assert.equal((await read('sitemap.xml')).match(/<loc>/g).length, 5);
+  const crawlFix = report.fixes.find((f) => f.id === 'crawl-files');
+  assert.equal(crawlFix.title, 'sitemap.xml and robots.txt generated, llms.txt copied');
+  assert.deepEqual(crawlFix.items.map((i) => i.file), ['sitemap.xml', 'robots.txt', 'llms.txt']);
 
   // No builder class names, no measurement ids and no reference to the stand-in CDN origin anywhere.
   const texts = await Promise.all(files.filter((f) => /\.(html|css)$/.test(f)).map(async (f) => [f, await read(f)]));

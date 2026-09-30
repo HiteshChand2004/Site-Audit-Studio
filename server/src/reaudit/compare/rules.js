@@ -3,7 +3,13 @@
 
 // changed: a CPU-timing measurement moved the wrong way; local timings vary with machine load, so it is
 // not counted as a regression (isCpuTiming).
-export const STATUSES = ['regressed', 'open', 'changed', 'improved', 'fixed', 'manual', 'na', 'pass'];
+// recheck: links that failed only at network level on this run (connection refused, DNS, timeout) although
+// they were not broken on the original analysis; often temporary or bot protection, never a regression.
+export const STATUSES = ['regressed', 'open', 'changed', 'recheck', 'improved', 'fixed', 'manual', 'na', 'pass'];
+
+/** Link-check results that are network-level failures (linkChecker: the error in upper case). */
+export const NETWORK_FAILURES = new Set(['REFUSED', 'DNS', 'TIMEOUT']);
+export const RECHECK_NOTE = 'These links could not be reached on this run (connection refused, DNS or timeout) but were not broken on the original analysis. This is often temporary or bot protection; recheck them before treating them as broken.';
 
 export const CATEGORIES = [
   { id: 'performance', label: 'Performance' },
@@ -68,6 +74,7 @@ export const EVIDENCE = {
   'aeo.ai-crawler-access': { auto: ['robots.txt'] },
   // The meta-tag row checks viewport, charset, twitter:card, theme-color and favicon.
   'crawl.meta-tags': { auto: ['twitter:card', 'icon'] },
+  'aeo.llms-txt': { fixes: ['crawl-files'] },
   'links.broken': { fixes: ['broken-links'] },
   'axe.image-alt': ALT,
   'axe.role-img-alt': ALT,
@@ -121,8 +128,9 @@ export function classify(before, after) {
   if (!after.rank) return 'fixed';
   if (!before.rank || after.rank > before.rank) return 'regressed';
   if (after.rank < before.rank) return 'improved';
-  // Same severity: fewer affected things (or a better Lighthouse score) is an improvement.
+  // Same severity: fewer affected things (or a better Lighthouse score) is an improvement, more is a regression.
   if (before.count != null && after.count != null && after.count < before.count) return 'improved';
+  if (before.count != null && after.count != null && after.count > before.count) return 'regressed';
   if (before.score != null && after.score != null && after.score - before.score >= 0.05) return 'improved';
   return 'open';
 }

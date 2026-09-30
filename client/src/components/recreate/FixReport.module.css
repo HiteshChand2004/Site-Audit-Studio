@@ -207,6 +207,7 @@
 .mark[data-status='open'] { background: var(--bad-tint); color: var(--bad); }
 .mark[data-status='regressed'] { background: var(--bad); color: var(--surface); }
 .mark[data-status='changed'] { background: var(--info-tint); color: var(--info); }
+.mark[data-status='recheck'] { background: var(--warn-tint); color: var(--warn); }
 .mark[data-status='manual'] { background: var(--warn-tint); color: var(--warn); }
 .mark[data-status='na'] { background: var(--surface-2); color: var(--muted); }
 .mark[data-status='pass'] { background: var(--surface-2); color: var(--faint); }

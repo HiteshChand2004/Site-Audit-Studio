@@ -1,0 +1,8 @@
+# Recreate Co
+
+> A small studio that designs and builds fast marketing sites.
+
+## Pages
+
+- [About](http://localhost:4100/about.html): who we are
+- [Work](http://localhost:4100/work.html): selected projects

@@ -6,7 +6,7 @@
 // Eligible pages beyond the page limit are listed so their links can point to the live site.
 import { crawl } from '../audit/crawler.js';
 import { fetchPage, isBotChallenge, isHtml } from '../audit/http.js';
-import { loadRobots } from '../audit/robots.js';
+import { fetchLlmsTxt, loadRobots } from '../audit/robots.js';
 import { loadSitemaps } from '../audit/sitemap.js';
 import { sameSite, urlKey } from '../audit/util.js';
 import { RecreateError } from './errors.js';
@@ -157,7 +157,7 @@ export async function discoverPages({ url, limit, signal, onProgress }) {
   if (!isHtml(home)) throw new RecreateError('The homepage is not an HTML page.');
 
   const origin = new URL(home.url).origin;
-  const robots = await loadRobots(origin);
+  const [robots, llms] = await Promise.all([loadRobots(origin), fetchLlmsTxt(origin)]);
   const sitemap = await loadSitemaps(origin, robots.sitemaps);
   onProgress?.(0.2, 'Finding pages');
   const result = await crawl({
@@ -177,6 +177,8 @@ export async function discoverPages({ url, limit, signal, onProgress }) {
     sitemap: { status: sitemap.status, count: sitemap.urls.length },
     // The original robots.txt rules the recreated robots.txt keeps (ir/crawlFiles.js).
     robots: { status: robots.status, blocksAll: robots.blocksAll, blockedAiCrawlers: robots.blockedAiCrawlers },
+    // The original /llms.txt, copied as it is (ir/crawlFiles.js); text is null when absent or too large.
+    llms: { found: llms.found, text: llms.text, tooLarge: llms.tooLarge },
     crawled: result.pages.length,
   };
 }

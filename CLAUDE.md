@@ -48,14 +48,15 @@ on a throwaway loopback port) and compares it check by check with the analysis t
 panel shows the result as the **fix checklist**: Lighthouse scores before → after, status chips (fixed, improved, still
 open, regressed, changed, manual, N/A), category sections with before / now, the recreate's evidence and review flags
 for auto-generated text. Only recreated pages are compared; deploy-dependent checks are N/A; CPU-timing audits never
-count as regressions. Every recreate now also ships `sitemap.xml` + `robots.txt`. A Re-audit button re-runs it; stale
+count as regressions; links that fail only at network level are "recheck". Every recreate now also ships `sitemap.xml` +
+`robots.txt`, and a copy of the original `llms.txt` when the site publishes one. A Re-audit button re-runs it; stale
 results (newer recreate / newer analysis) are flagged. Everything is general: no site- or platform-specific code.
 
 **Real-site verification (5.5, authorized sites, API on a temp data dir, default page limit):**
 | Site | Platform | Fidelity | Checklist | Lighthouse (mobile) before → after | Notes |
 |---|---|---|---|---|---|
-| parchaa.com | Framer | 89 | 48 rows: 13 fixed, 1 improved, 13 open, 1 regressed, 2 manual, 4 N/A | perf 51 → 70, SEO 92 → 100, a11y 89 → 91 | Framer + GTM runtime gone; headings (23 skipped levels, several h1) fixed; link names fixed (review); regression: unused CSS (one shared stylesheet) |
-| panscience.xyz | Next.js | 80 | 38 rows: 5 fixed, 1 improved, 6 open, 4 regressed, 3 N/A | perf 83 → 83, SEO 100 → 100, a11y 91 → 91 | Next.js runtime gone; broken link unlinked; regressions: render-blocking + unused CSS (shared stylesheet), llms.txt not carried over, one external link refused on that run (medium.com) |
+| parchaa.com | Framer | 89 | 48 rows: 13 fixed, 1 improved, 13 open, 1 regressed, 2 manual, 4 N/A | perf 51 → 70, SEO 92 → 100, a11y 89 → 91 | Framer + GTM runtime gone; headings (23 skipped levels, several h1) fixed; link names fixed (review); regression: unused CSS (shared stylesheet, deferred); no llms.txt on the original → still open |
+| panscience.xyz | Next.js | 80 | 38 rows: 6 fixed, 5 open, 3 regressed, 1 recheck, 3 N/A | perf 83 → 83, SEO 100 → 100, a11y 91 → 91 | Next.js runtime gone; broken link unlinked; llms.txt copied (passes on both); regressions: render-blocking + unused CSS (shared stylesheet, deferred), colour contrast 14 → 27 elements; recheck: medium.com refused the connection on one run |
 | Recreate fixture | — | 98 | 35 rows | SEO 100 → 100 | |
 | Seeded Analyze fixture | — | 98 | 33 rows: 11 fixed | SEO 83 → 100, a11y 86 → 100 | real regression: render-blocking CSS/font preload |
 
@@ -64,12 +65,20 @@ results (newer recreate / newer analysis) are flagged. Everything is general: no
 no link-only attribute (`href`, `target`, `rel`, `hreflang`, `download`, `ping`, `referrerpolicy`, `type`, `aria-label`);
 the `a` reset already rendered them like parent text, so the look is unchanged (panscience fidelity 80 → 80, SEO back to 100).
 
-**Open items (decisions pending, not blockers):**
-- Original `/llms.txt` is not carried over by Recreate → `aeo.llms-txt` regresses on sites that publish one.
-- Same-severity rows whose count grows (panscience colour contrast 14 → 27) are "still open", not "regressed".
-- External links that fail only at network level on one run (refused / DNS / timeout) show as "New broken links" (regressed).
-- One shared `css/site.css` for all pages → Lighthouse "Reduce unused CSS" / render-blocking regressions (a per-page or
-  critical-CSS split belongs to a later phase).
+**Decisions from 5.5 real-site verification (approved by the user, implemented):**
+1. **llms.txt copied**: discovery reads the original `/llms.txt` (`fetchLlmsTxt`, SSRF-guarded, soft 404 ignored, 256 KB
+   limit: a file that reaches it is never copied cut — `report.warnings` asks to copy it by hand) and
+   `ir/crawlFiles.js` ships it as it is in `ir.files` (so every stack emitter gets it). `report.fixes` `crawl-files` lists
+   it ("…, llms.txt copied"); it is the evidence of `aeo.llms-txt`.
+2. **More affected at the same severity = regressed**: `classify` returns `regressed` when the rank is equal and the
+   count grew (e.g. colour contrast 14 → 27 elements), `improved` when it shrank.
+3. **Network-level link failures = recheck**: a NEW-only broken link whose result is `REFUSED`, `DNS` or `TIMEOUT`
+   (`NETWORK_FAILURES`) goes to a `links.broken-recheck` row, status **`recheck`** ("Links to recheck", `RECHECK_NOTE`),
+   never `regressed`; HTTP errors stay in `links.broken-new` (regressed). `recheck` is counted in `summary.recheck`, left
+   out of the 3-status list, shown with its own chip and link list in the UI.
+4. **Deferred to a later phase**: one shared `css/site.css` for every page causes Lighthouse "Reduce unused CSS" and
+   render-blocking regressions (parchaa, panscience, seeded fixture). A per-page / critical-CSS split is planned later;
+   until then the checklist reports these honestly as regressions.
 
 ### Phase 5 plan (approved)
 The fix checklist = the same Analyze pipeline run again on the recreated site (NEW), compared item by item with the
@@ -88,7 +97,7 @@ real sites (parchaa.com, panscience.xyz, …) are verification sites, never targ
 Decisions (approved by the user):
 - **Trigger**: automatic after every successful Recreate (a separate job queued from the Recreate job's `after` hook, so a
   failed re-audit never discards a recreate) **plus** a manual Re-audit button (retry, or after the recreate/analysis changed).
-- **Statuses**: ✓ fixed · ◐ improved · ✗ still open · ↓ regressed (new in NEW) · ~ changed (CPU timing, noisy locally) · ⚠ manual (never ✓) ·
+- **Statuses**: ✓ fixed · ◐ improved · ✗ still open · ↓ regressed (new in NEW) · ~ changed (CPU timing, noisy locally) · ⟳ recheck (network-level link failure) · ⚠ manual (never ✓) ·
   n/a (deploy check: not measurable on a local preview, e.g. HTTPS, TTFB). Items passing on both sides are grouped.
 - **Scope matching**: only pages recreated on both sides are compared; OLD issues on pages that were not recreated are
   "out of scope", never "fixed". OLD is re-scored with the same analyzers on its saved per-page facts (`crawl.json`).
@@ -137,14 +146,15 @@ Decisions (approved by the user):
   `crawl.metaTags.count` = missing tags. All additive.
 - **Rows**: SEO/AEO by key or part; crawl files (`crawl.sitemap|robots|meta-tags`); axe by rule id + count (critical /
   serious = fail); broken links: OLD broken links found on paired pages vs NEW broken links (`links.broken` with
-  `links.fixed/open`, plus `links.broken-new` = regressed); Lighthouse **performance + best-practices** audits (worst of
+  `links.fixed/open`, plus `links.broken-new` = regressed, and since 5.5 `links.broken-recheck` = recheck for new
+  network-level failures); Lighthouse **performance + best-practices** audits (worst of
   mobile/desktop, by score; binary/numeric/metricSavings only; `metrics`/`hidden` groups left to the score strip; its
   SEO/a11y audits repeat our own checks), rows only when failing on a side; platforms: every OLD `techStack` id (not
   `custom`) → "No <name> runtime or CDN left" (fixed when NEW no longer detects it); manual: OLD `manualRebuild` +
   `report.manual` (status `manual`, never fixed).
 - **Classification** (`rules.js classify`): rank pass 0 / warn 1 / fail 2 (Lighthouse: ≥0.9 / ≥0.5 / else). fixed =
   was failing, passes now; improved = lower rank, or same rank with a lower count / score +0.05; open = still failing;
-  regressed = passed before or got worse in rank; pass = passes on both; na = `DEPLOY_CHECKS` (HTTPS, text compression,
+  regressed = passed before, got worse in rank, or same rank with a higher count (5.5); pass = passes on both; na = `DEPLOY_CHECKS` (HTTPS, text compression,
   cache TTL, HTTP/2, server response time, redirects, CSP/HSTS/COOP/XFO, bf-cache — preview headers decide them) or not
   measured on NEW. Performance rows carry "Measured on a local preview with simulated throttling".
 - **Evidence** (`rules.js EVIDENCE`): check key → our fixer ids (`report.fixes`) and auto-generated fields
@@ -191,7 +201,7 @@ Decisions (approved by the user):
   ids): a Lighthouse audit whose `numericUnit` is `millisecond` and whose details are not an `opportunity` reports a
   measured CPU duration (today: main-thread work, JS boot-up time). When such a row would be `regressed` it becomes
   **`changed`** ("noisy locally", `NOISY_NOTE`), counted in `summary.changed`, left out of the 3-status list. Improvements
-  keep their status. Status order: regressed, open, changed, improved, fixed, manual, na, pass.
+  keep their status. Status order: regressed, open, changed, recheck, improved, fixed, manual, na, pass.
 
 5.4 details (client):
 - Store (`useProjects.js`): third job kind `reaudit` (`reaudits` state, `startReaudit` / `getCurrentReaudit` /

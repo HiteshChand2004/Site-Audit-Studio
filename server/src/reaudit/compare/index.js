@@ -16,7 +16,8 @@ import { analyzeCrawl } from '../../audit/analyzers/crawlChecks.js';
 import { analyzeSeo, crawlErrorsItem } from '../../audit/analyzers/seo.js';
 import { examples, itemKey, pathOf, plural } from '../../audit/util.js';
 import {
-  CATEGORIES, classify, DEPLOY_CHECKS, DEPLOY_NOTE, evidenceFor, isCpuTiming, LOCAL_PERF_NOTE, NOISY_NOTE, rankOfImpact, rankOfScore, rankOfStatus, STATUSES,
+  CATEGORIES, classify, DEPLOY_CHECKS, DEPLOY_NOTE, evidenceFor, isCpuTiming, LOCAL_PERF_NOTE, NETWORK_FAILURES, NOISY_NOTE, rankOfImpact,
+  rankOfScore, rankOfStatus, RECHECK_NOTE, STATUSES,
 } from './rules.js';
 import { normUrl, pairPages, toOriginalUrl } from './scope.js';
 
@@ -117,7 +118,10 @@ function linkItems({ oldLinks, newLinks, oldScopeLinks, map }) {
   }
   const fixed = [...oldBroken].filter(([k]) => !newBroken.has(k)).map(([, l]) => l);
   const open = [...oldBroken].filter(([k]) => newBroken.has(k)).map(([, l]) => l);
-  const added = [...newBroken].filter(([k]) => !oldBroken.has(k)).map(([, l]) => l);
+  const newOnly = [...newBroken].filter(([k]) => !oldBroken.has(k)).map(([, l]) => l);
+  // A new failure that is only a network error (refused, DNS, timeout) is not trusted as a regression.
+  const recheck = newOnly.filter((l) => NETWORK_FAILURES.has(String(l.status).toUpperCase()));
+  const added = newOnly.filter((l) => !recheck.includes(l));
   const list = (ls) => ls.map((l) => ({ url: l.url, status: l.status, foundOn: l.foundOn ?? null }));
   const side = (n, ls) => ({ status: n ? 'fail' : 'pass', detail: n ? `${plural(n, 'broken link')}: ${examples(ls.map((l) => l.url))}.` : 'No broken links.', count: n, rank: n ? 2 : 0 });
   const items = [{
@@ -136,6 +140,18 @@ function linkItems({ oldLinks, newLinks, oldScopeLinks, map }) {
       before: side(0, []),
       after: side(added.length, added),
       links: { new: list(added) },
+    });
+  }
+  if (recheck.length) {
+    items.push({
+      key: 'links.broken-recheck',
+      category: 'links',
+      title: 'Links to recheck',
+      status: 'recheck',
+      note: RECHECK_NOTE,
+      before: { status: 'pass', detail: 'Not broken on the original analysis.', count: 0 },
+      after: { status: 'warn', detail: `${plural(recheck.length, 'link')} could not be reached on this run: ${examples(recheck.map((l) => l.url))}.`, count: recheck.length },
+      links: { recheck: list(recheck) },
     });
   }
   return items;
@@ -221,6 +237,7 @@ function manualItems(oldManual = [], reportManual = []) {
 
 function finish(item, report) {
   if (item.status === 'manual') return item;
+  if (item.status === 'recheck') return item;
   let status = DEPLOY_CHECKS.has(item.key) ? 'na' : classify(item.before, item.after);
   const out = { ...item, status };
   if (DEPLOY_CHECKS.has(item.key)) out.note = DEPLOY_NOTE;

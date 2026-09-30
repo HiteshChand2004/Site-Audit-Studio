@@ -18,7 +18,7 @@ test('classify: fixed, improved, open, regressed, pass, n/a', () => {
   assert.equal(classify(r(1, { score: 0.6 }), r(1, { score: 0.7 })), 'improved');
   assert.equal(classify(r(1, { score: 0.6 }), r(1, { score: 0.62 })), 'open');
   assert.equal(classify(r(2, { count: 2 }), r(2, { count: 2 })), 'open');
-  assert.equal(classify(r(2, { count: 2 }), r(2, { count: 4 })), 'open');
+  assert.equal(classify(r(2, { count: 2 }), r(2, { count: 4 })), 'regressed'); // same severity, more affected
   assert.equal(classify(r(1), r(2)), 'regressed');
   assert.equal(classify(r(0), r(1)), 'regressed');
   assert.equal(classify(r(0), r(0)), 'pass');
@@ -160,7 +160,11 @@ test('sitemap.xml lists indexable pages at the site origin; robots.txt keeps the
     { info: { path: '/private/' }, head: head({ meta: [{ name: 'robots', content: 'noindex, follow' }] }) },
     { info: { path: '/a&b/' }, head: head() },
   ];
-  const out = crawlFiles({ pages, baseUrl: 'https://new.test/', robots: { status: 'found', blocksAll: false, blockedAiCrawlers: ['GPTBot', 'GPTBot', 'ClaudeBot'] } });
+  const llmsText = ['# Site', '> About it.', ''].join('\n');
+  const out = crawlFiles({ pages, baseUrl: 'https://new.test/', robots: { status: 'found', blocksAll: false, blockedAiCrawlers: ['GPTBot', 'GPTBot', 'ClaudeBot'] }, llms: { found: true, text: llmsText } });
+  // The original llms.txt is copied as it is.
+  assert.equal(out.files.find((f) => f.path === 'llms.txt').content, llmsText);
+  assert.deepEqual(out.llms, { copied: true, bytes: Buffer.byteLength(llmsText), tooLarge: false });
   assert.deepEqual(out.sitemap.urls, ['https://new.test/', 'https://new.test/about/', 'https://new.test/a&b/']);
   assert.deepEqual(out.sitemap.excluded, ['/private/']);
   const sitemap = out.files.find((f) => f.path === 'sitemap.xml').content;
@@ -175,14 +179,16 @@ test('sitemap.xml lists indexable pages at the site origin; robots.txt keeps the
   const closed = crawlFiles({ pages, baseUrl: 'https://new.test', robots: { status: 'found', blocksAll: true, blockedAiCrawlers: ['GPTBot'] } });
   assert.match(closed.files[1].content, /User-agent: \*\nDisallow: \//);
   assert.ok(!/GPTBot/.test(closed.files[1].content));
-  const none = crawlFiles({ pages, baseUrl: 'https://new.test', robots: { status: 'missing' } });
+  const none = crawlFiles({ pages, baseUrl: 'https://new.test', robots: { status: 'missing' }, llms: { found: true, text: null, tooLarge: true } });
+  assert.ok(!none.files.some((f) => f.path === 'llms.txt'));
+  assert.deepEqual(none.llms, { copied: false, bytes: 0, tooLarge: true });
   assert.match(none.robots.source, /no robots\.txt/);
   assert.match(none.files[1].content, /Allow: \//);
 });
 
 test('legacy checklist: the original fixed / open / manual list, pass and n/a left out', async () => {
   const { legacyChecklist } = await import('../src/reaudit/contract.js');
-  const items = ['fixed', 'improved', 'open', 'regressed', 'changed', 'manual', 'na', 'pass'].map((status) => ({ key: `k.${status}`, status, title: status, after: { detail: `${status} now` } }));
+  const items = ['fixed', 'improved', 'open', 'regressed', 'changed', 'recheck', 'manual', 'na', 'pass'].map((status) => ({ key: `k.${status}`, status, title: status, after: { detail: `${status} now` } }));
   assert.deepEqual(legacyChecklist(items).map((i) => [i.key, i.status, i.detail]), [
     ['k.fixed', 'fixed', 'fixed now'],
     ['k.improved', 'open', 'improved now'],
@@ -212,5 +218,31 @@ test('CPU-timing audits: a worse local measurement is "changed (noisy locally)",
   assert.equal(item('lighthouse.cpu-b').status, 'fixed');
   assert.equal(item('lighthouse.savings').status, 'regressed');
   assert.equal(c.summary.changed, 1);
+  assert.equal(c.summary.regressed, 1);
+});
+
+test('links: a new network-level failure is "recheck", a new HTTP error is a regression', () => {
+  const audit = (url, broken) => ({ url, seo: [], aeo: [], crawl: {}, accessibility: [], brokenLinks: { broken }, techStack: [], manualRebuild: [] });
+  const c = compareAudits({
+    old: { audit: audit('https://site.test/', []), crawl: null, lighthouse: {} },
+    next: {
+      audit: audit('http://127.0.0.1:5100/', [
+        { url: 'https://social.test/@team', status: 'REFUSED', foundOn: '/' },
+        { url: 'https://gone.test/', status: 'DNS', foundOn: '/' },
+        { url: 'http://127.0.0.1:5100/missing.html', status: 404, foundOn: '/' },
+      ]),
+      crawl: null,
+      lighthouse: {},
+    },
+    report: { pages: [] },
+    newOrigin: 'http://127.0.0.1:5100',
+  });
+  const item = (key) => c.items.find((i) => i.key === key);
+  assert.equal(item('links.broken-recheck').status, 'recheck');
+  assert.match(item('links.broken-recheck').note, /recheck them/);
+  assert.deepEqual(item('links.broken-recheck').links.recheck.map((l) => l.url), ['https://social.test/@team', 'https://gone.test/']);
+  assert.equal(item('links.broken-new').status, 'regressed');
+  assert.deepEqual(item('links.broken-new').links.new.map((l) => l.url), ['https://site.test/missing.html']);
+  assert.equal(c.summary.recheck, 1);
   assert.equal(c.summary.regressed, 1);
 });

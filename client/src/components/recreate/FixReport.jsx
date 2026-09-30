@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, Check, ChevronRight, Hand, Minus, RotateCw, X } from 'lucide-react';
+import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, Check, ChevronRight, Hand, Minus, RefreshCw, RotateCw, X } from 'lucide-react';
 import Badge from '../common/Badge.jsx';
 import Button from '../common/Button.jsx';
 import styles from './FixReport.module.css';
@@ -9,13 +9,14 @@ const STATUS = {
   regressed: { icon: ArrowDownRight, label: 'Regressed', chip: 'Regressed' },
   open: { icon: X, label: 'Still open', chip: 'Still open' },
   changed: { icon: Activity, label: 'Changed (noisy locally)', chip: 'Changed' },
+  recheck: { icon: RefreshCw, label: 'Recheck (network error)', chip: 'Recheck' },
   improved: { icon: ArrowUpRight, label: 'Improved', chip: 'Improved' },
   fixed: { icon: Check, label: 'Fixed', chip: 'Fixed' },
   manual: { icon: Hand, label: 'Manual rebuild', chip: 'Manual' },
   na: { icon: Minus, label: 'N/A · deploy check', chip: 'N/A' },
   pass: { icon: Check, label: 'Passing', chip: 'Passing' },
 };
-const CHIPS = ['fixed', 'improved', 'open', 'regressed', 'changed', 'manual', 'na'];
+const CHIPS = ['fixed', 'improved', 'open', 'regressed', 'changed', 'recheck', 'manual', 'na'];
 // A category opens on its own when it holds something to act on.
 const NEEDS_ACTION = new Set(['regressed', 'open']);
 
@@ -190,6 +191,7 @@ function Row({ item }) {
           <LinkList title="Fixed" links={item.links?.fixed} />
           <LinkList title="Still broken" links={item.links?.open} />
           <LinkList title="New" links={item.links?.new} />
+          <LinkList title="Could not be reached on this run" links={item.links?.recheck} />
           <Evidence evidence={item.evidence} />
           {item.review && <p className={styles.review}>Text was generated from the page; check that it reads right.</p>}
           {item.note && <p className={styles.note}>{item.note}</p>}

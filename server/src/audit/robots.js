@@ -35,7 +35,20 @@ export async function loadRobots(origin) {
   };
 }
 
+const LLMS_MAX_BYTES = 256 * 1024;
+
+/**
+ * /llms.txt with its text (Recreate copies it). A soft 404 (an HTML page) does not count. The read stops
+ * at the size limit, so a file that reaches it has no `text` (never a cut copy) and `tooLarge` is set.
+ */
+export async function fetchLlmsTxt(origin) {
+  const res = await fetchPage(`${origin}/llms.txt`, { timeout: 8000, maxBytes: LLMS_MAX_BYTES });
+  const found = res.status === 200 && !looksLikeHtml(res.body) && Boolean(res.body?.trim());
+  const tooLarge = found && Buffer.byteLength(res.body) >= LLMS_MAX_BYTES;
+  return { found, httpStatus: res.status, text: found && !tooLarge ? res.body : null, tooLarge };
+}
+
 export async function loadLlmsTxt(origin) {
-  const res = await fetchPage(`${origin}/llms.txt`, { timeout: 8000, maxBytes: 256 * 1024 });
-  return { found: res.status === 200 && !looksLikeHtml(res.body) && Boolean(res.body?.trim()), httpStatus: res.status };
+  const { found, httpStatus } = await fetchLlmsTxt(origin);
+  return { found, httpStatus };
 }

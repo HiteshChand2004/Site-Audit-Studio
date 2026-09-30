@@ -159,8 +159,9 @@ function numberNodes(root) {
  * @param {object[]} [o.livePages]
  * @param {object[]} [o.skipped]
  * @param {object|null} [o.robots]  the original robots.txt as discovery parsed it (for robots.txt)
+ * @param {object|null} [o.llms]  the original /llms.txt as discovery read it (copied as it is)
  */
-export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], skipped = [], wp = null, robots = null }) {
+export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], skipped = [], wp = null, robots = null, llms = null }) {
   const assetResolve = createAssetResolver(assets.map ?? {});
   const resolveLink = createLinkResolver({ pages: pages.map((p) => p.info), livePages, skipped, origin });
 
@@ -218,7 +219,7 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
   }
 
   // sitemap.xml + robots.txt (after the heads: canonical and robots meta decide what is listed).
-  const { files: crawlFileList, ...crawl } = crawlFiles({ pages: trees, baseUrl, robots });
+  const { files: crawlFileList, ...crawl } = crawlFiles({ pages: trees, baseUrl, robots, llms });
   files.push(...crawlFileList);
 
   const fontFaces = (assets.fontFaces ?? []).filter((f) => f.local).map((f) => ({
