@@ -23,6 +23,7 @@ import { DROP_TAGS, guardAttributes } from '../fixers/html.js';
 import { contentRecord, headHints, itemFor } from '../fixers/wordpress.js';
 import { addRemoved, emptyRemoved, sanitizeSvg } from '../fixers/svg.js';
 import { BLOCK_TAGS, buildPageTree, displayOf, isElement, isText, VIEW_IDS } from './tree.js';
+import { crawlFiles } from './crawlFiles.js';
 
 export const IR_VERSION = 1;
 export const GENERATED_FAVICON = 'icons/favicon-generated.svg';
@@ -157,8 +158,9 @@ function numberNodes(root) {
  * @param {string} o.origin
  * @param {object[]} [o.livePages]
  * @param {object[]} [o.skipped]
+ * @param {object|null} [o.robots]  the original robots.txt as discovery parsed it (for robots.txt)
  */
-export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], skipped = [], wp = null }) {
+export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], skipped = [], wp = null, robots = null }) {
   const assetResolve = createAssetResolver(assets.map ?? {});
   const resolveLink = createLinkResolver({ pages: pages.map((p) => p.info), livePages, skipped, origin });
 
@@ -215,6 +217,10 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
     t.headMissing = built.missing;
   }
 
+  // sitemap.xml + robots.txt (after the heads: canonical and robots meta decide what is listed).
+  const { files: crawlFileList, ...crawl } = crawlFiles({ pages: trees, baseUrl, robots });
+  files.push(...crawlFileList);
+
   const fontFaces = (assets.fontFaces ?? []).filter((f) => f.local).map((f) => ({
     family: f.family,
     weight: f.weight,
@@ -234,6 +240,7 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
     keyframes,
     fontFaces,
     files,
+    crawlFiles: crawl,
     truncated,
     assetResolve,
     resolveLink,

@@ -60,6 +60,16 @@ export function makeOverallPct(steps) {
 
 export const overallPct = makeOverallPct(STEPS);
 
+/** `url` moved from origin `from` to origin `to` (unchanged when it is on another origin). */
+function rebaseOrigin(url, from, to) {
+  try {
+    const u = new URL(url);
+    return u.origin === new URL(from).origin ? `${to}${u.pathname}${u.search}` : url;
+  } catch {
+    return url;
+  }
+}
+
 /** Thrown when the site cannot be analyzed at all; the job is marked failed. */
 export class AnalysisError extends Error {}
 
@@ -114,13 +124,15 @@ async function fetchHome(url) {
  * @param {string} [o.outDir]  where the raw results go (default: data/projects/<id>/audit/<analysisId>/)
  * @param {string[]} [o.skip]  step keys to leave out without an error (for example 'screenshots')
  * @param {string[]} [o.seedUrls]  pages the crawl must visit besides the ones it finds itself
+ * @param {string} [o.deployOrigin]  the origin the analyzed site will be published at: sitemaps that
+ *   robots.txt lists there are read from the analyzed site instead (a recreate names its future home)
  * @returns {Promise<object>} the audit JSON
  */
 export function runAnalysis({ netPolicy = userPolicy(), ...opts }) {
   return withNetPolicy(netPolicy, () => analyze({ ...opts, netPolicy }));
 }
 
-async function analyze({ project, analysisId, maxPages, progress, netPolicy, url = project.url, outDir: dir, skip = [], seedUrls = [] }) {
+async function analyze({ project, analysisId, maxPages, progress, netPolicy, url = project.url, outDir: dir, skip = [], seedUrls = [], deployOrigin = null }) {
   const deadline = Date.now() + TOTAL_BUDGET_MS;
   const errors = [];
   const skipped = new Set(skip);
@@ -167,13 +179,13 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
 
   const proxy = await startEgressProxy(netPolicy);
   try {
-    return await analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls });
+    return await analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin });
   } finally {
     await proxy.close();
   }
 }
 
-async function analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls }) {
+async function analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin }) {
   // 2. robots.txt, sitemap, llms.txt
   const emptyRobots = { status: 'error', sitemaps: [], blockedAiCrawlers: [], blocksAll: false, isAllowed: parseRobots(`${origin}/robots.txt`, '').isAllowed };
   const { robots, sitemap, llms } = await step(
@@ -181,7 +193,8 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     async () => {
       const [r, l] = await Promise.all([loadRobots(origin), loadLlmsTxt(origin)]);
       progress('robots', 0.5, 'Reading sitemap');
-      return { robots: r, llms: l, sitemap: await loadSitemaps(origin, r.sitemaps) };
+      const sitemaps = deployOrigin ? r.sitemaps.map((u) => rebaseOrigin(u, deployOrigin, origin)) : r.sitemaps;
+      return { robots: r, llms: l, sitemap: await loadSitemaps(origin, sitemaps) };
     },
     { robots: emptyRobots, sitemap: { status: 'missing', urls: [], sources: [], fromRobots: false }, llms: { found: false } },
   );
@@ -265,6 +278,8 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     sitemap,
     llms,
     links,
+    // Homepage text after JavaScript (the "Content without JavaScript" check; the fix checklist re-scores it).
+    renderedTextLength: render?.textLength ?? null,
   });
 
   const audit = assembleAudit({

@@ -83,6 +83,21 @@ export function pathOf(url) {
 
 export const plural = (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
 
+/**
+ * Stable id of an audit check: its section plus its title as a slug ("seo.meta-description").
+ * Items of stored audits that predate the key get the same id from their title (reaudit/compare).
+ */
+export const itemKey = (section, title) => `${section}.${String(title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
+
+/** An analyzer row; `count` (affected pages, images, …) is set when the check counts something. */
+export const auditItem = (section, status, title, detail, count) => ({
+  key: itemKey(section, title),
+  status,
+  title,
+  detail,
+  ...(count != null && { count }),
+});
+
 // "/a, /b, /c and 4 more"
 export function examples(list, max = 3) {
   const shown = list.slice(0, max).join(', ');

@@ -36,6 +36,7 @@ export function analyzeCrawl({ robots, sitemap, homeFacts }) {
   const metaTags = {
     status: essentialsMissing ? 'fail' : allPresent ? 'pass' : 'warn',
     detail: tags.map(([name, ok]) => `${name} ${ok ? '✓' : '✗'}`).join(', '),
+    count: tags.filter(([, ok]) => !ok).length,
   };
 
   return { sitemap: sitemapItem, robots: robotsItem, metaTags };

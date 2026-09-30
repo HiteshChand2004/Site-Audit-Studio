@@ -1,6 +1,6 @@
-import { examples, pathOf, plural } from '../util.js';
+import { auditItem, examples, pathOf, plural } from '../util.js';
 
-const item = (status, title, detail) => ({ status, title, detail });
+const item = (...args) => auditItem('aeo', ...args);
 const CONCISE_WORDS = 60;
 
 /**
@@ -23,7 +23,7 @@ export function analyzeAeo({ pages, home, robots, llms, renderedTextLength }) {
   if (!withSchema.length && !invalid.length) {
     out.push(item('fail', 'JSON-LD schema', 'No structured data found.'));
   } else if (invalid.length) {
-    out.push(item('warn', 'JSON-LD schema', `Invalid JSON-LD on ${plural(invalid.length, 'page')}: ${examples(invalid.map((p) => pathOf(p.url)))}.`));
+    out.push(item('warn', 'JSON-LD schema', `Invalid JSON-LD on ${plural(invalid.length, 'page')}: ${examples(invalid.map((p) => pathOf(p.url)))}.`, invalid.length));
   } else {
     const missingCore = ['Organization', 'WebSite'].filter((t) => !allTypes.has(t) && !(t === 'Organization' && allTypes.has('LocalBusiness')));
     out.push(
@@ -40,7 +40,7 @@ export function analyzeAeo({ pages, home, robots, llms, renderedTextLength }) {
     const faqPages = pages.filter((p) => p.facts.faqSignals > 0 || p.facts.questionHeadings.length >= 2);
     if (!faqPages.length) out.push(item('pass', 'FAQ schema', 'No FAQ-style content found, so no FAQPage schema is needed.'));
     else if (allTypes.has('FAQPage')) out.push(item('pass', 'FAQ schema', 'FAQ content is marked up with FAQPage schema.'));
-    else out.push(item('fail', 'FAQ schema', `FAQ-style content on ${plural(faqPages.length, 'page')} (${examples(faqPages.map((p) => pathOf(p.url)))}) has no FAQPage schema.`));
+    else out.push(item('fail', 'FAQ schema', `FAQ-style content on ${plural(faqPages.length, 'page')} (${examples(faqPages.map((p) => pathOf(p.url)))}) has no FAQPage schema.`, faqPages.length));
   }
 
   // Heading hierarchy
@@ -58,8 +58,8 @@ export function analyzeAeo({ pages, home, robots, llms, renderedTextLength }) {
     }
     out.push(
       skips
-        ? item('warn', 'Heading hierarchy', `Heading levels are skipped (e.g. h2 → h4) in ${plural(skips, 'place')} on ${examples([...where])}.`)
-        : item('pass', 'Heading hierarchy', 'Heading levels are nested without skips.'),
+        ? item('warn', 'Heading hierarchy', `Heading levels are skipped (e.g. h2 → h4) in ${plural(skips, 'place')} on ${examples([...where])}.`, skips)
+        : item('pass', 'Heading hierarchy', 'Heading levels are nested without skips.', 0),
     );
   }
 

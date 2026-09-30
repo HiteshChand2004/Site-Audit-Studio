@@ -175,6 +175,8 @@ export async function discoverPages({ url, limit, signal, onProgress }) {
     origin,
     ...selection,
     sitemap: { status: sitemap.status, count: sitemap.urls.length },
+    // The original robots.txt rules the recreated robots.txt keeps (ir/crawlFiles.js).
+    robots: { status: robots.status, blocksAll: robots.blocksAll, blockedAiCrawlers: robots.blockedAiCrawlers },
     crawled: result.pages.length,
   };
 }

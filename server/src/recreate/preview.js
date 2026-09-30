@@ -30,10 +30,17 @@ export function appOrigins(appOrigin = APP_ORIGIN) {
   return origins;
 }
 
-export function previewHeaders(frameAncestors = appOrigins()) {
+/**
+ * @param {string[]} [frameAncestors]
+ * @param {{ connectSelf?: boolean }} [o]  connectSelf: fetches to the preview itself are allowed. Only the
+ *   re-audit's throwaway server sets it (Lighthouse reads robots.txt from inside the page); the site has
+ *   no script, so it opens nothing to the site itself.
+ */
+export function previewHeaders(frameAncestors = appOrigins(), { connectSelf = false } = {}) {
   return {
     'Content-Security-Policy': [
       "default-src 'none'",
+      ...(connectSelf ? ["connect-src 'self'"] : []),
       "img-src 'self' data:",
       "media-src 'self'",
       "font-src 'self'",
@@ -54,9 +61,9 @@ export function previewHeaders(frameAncestors = appOrigins()) {
 const inside = (base, file) => file === base || file.startsWith(base + path.sep);
 
 /** A preview server for `root` (not listening yet). `port()` is read on each request. */
-function createPreviewServer(root, { port, frameAncestors = appOrigins() }) {
+function createPreviewServer(root, { port, frameAncestors = appOrigins(), connectSelf = false }) {
   const base = path.resolve(root);
-  const headers = previewHeaders(frameAncestors);
+  const headers = previewHeaders(frameAncestors, { connectSelf });
   let realBase = null;
   return createServer(async (req, res) => {
     const send = (status, body, extra = {}) => {
@@ -117,9 +124,9 @@ const closeServer = (server) => new Promise((resolve) => {
  * Serves `root` on `port` (0 = any free port; a range = the first free port in it).
  * @returns {Promise<{ port: number, origin: string, close: () => Promise<void> }>}
  */
-export async function servePreview(root, { port = 0, range = null, frameAncestors } = {}) {
+export async function servePreview(root, { port = 0, range = null, frameAncestors, connectSelf = false } = {}) {
   let bound = null;
-  const server = createPreviewServer(root, { port: () => bound, frameAncestors });
+  const server = createPreviewServer(root, { port: () => bound, frameAncestors, connectSelf });
   if (range) {
     for (let p = range.first; p <= range.last && bound == null; p++) {
       try {

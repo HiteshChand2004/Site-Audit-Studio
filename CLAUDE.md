@@ -37,8 +37,8 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 | 6 | React+Vite / Next.js / MERN emitters + Download zip | ⏳ |
 
 **Current status: Phase 5 in progress** on branch `phase-5` (git worktree `../Website-Audit-phase5`, never pushed).
-Phases 1, 2, 3 and 4a are done and merged on `phase-4a`. 5.1 re-audit job foundation ✅ (WIP commit) — waiting for the
-user's "next" before 5.2. Phase 4b (motion + responsive fidelity) stays planned. Same workflow: one step at a time, WIP
+Phases 1, 2, 3 and 4a are done and merged on `phase-4a`. 5.1 re-audit job foundation ✅ · 5.2 comparator +
+sitemap/robots emitter ✅ (WIP commits) — waiting for the user's "next" before 5.3. Phase 4b (motion + responsive fidelity) stays planned. Same workflow: one step at a time, WIP
 commit, wait for the user's "next"; never push; while the user tests, work in a git worktree and merge only when asked.
 
 ### Phase 5 plan (approved)
@@ -50,7 +50,7 @@ real sites (parchaa.com, panscience.xyz, …) are verification sites, never targ
 | Step | Scope | Status |
 |---|---|---|
 | 5.1 Job foundation | `reaudits` table, JobManager, routes + SSE, throwaway server on `dist/`, internal net policy, `runAnalysis` options, auto-trigger after Recreate, retention | ✅ WIP |
-| 5.2 Comparator + sitemap/robots emitter | stable analyzer `key`s, page mapping OLD URL → NEW path, OLD re-scored on the recreated pages only, category matchers, classification, `report.fixes` evidence; `sitemap.xml` + `robots.txt` in the recreate (target_domain or original origin) | ⏳ |
+| 5.2 Comparator + sitemap/robots emitter | stable analyzer `key`s, page mapping OLD URL → NEW path, OLD re-scored on the recreated pages only, category matchers, classification, `report.fixes` evidence; `sitemap.xml` + `robots.txt` in the recreate (target_domain or original origin) | ✅ WIP |
 | 5.3 API + contract | real `audit.recreate` (additive: checklist, summary, scores before/after, stale) | ⏳ |
 | 5.4 UI | score strip before → after, summary chips, category accordions, progress, Re-audit button, states | ⏳ |
 | 5.5 Verification + docs | fixture + real sites through the UI | ⏳ |
@@ -88,6 +88,56 @@ Decisions (approved by the user):
 - Fixture end-to-end (API on a temp data dir): Analyze → Recreate (fidelity 98) → auto re-audit in ~25 s with Lighthouse:
   6/6 pages, 11 links, 0 broken, axe clean, Lighthouse 100/92/100/100, stack Custom/Unknown; expected open items for
   5.2: HTTPS (n/a on preview), sitemap.xml/robots.txt 404 (emitter in 5.2).
+
+5.2 details (`server/src/reaudit/compare/{index,scope,rules}.js`, `recreate/ir/crawlFiles.js`):
+- **Re-audit step `compare`** (last step): loads OLD (`analyses` row of `report.analysisId` + `audit/<analysisId>/`
+  crawl.json, lighthouse-*.json) and NEW (the re-audit audit + its folder), `compareAudits()` → `result.checklist`.
+  A missing OLD analysis fails the job ("Run Analyze and Recreate again").
+- **Scope** (`scope.js`): each recreate report page (original URL + outPath) is paired with its OLD and NEW crawl page
+  (`normUrl`: host without www, no protocol/hash/trailing slash). Both sides are re-scored with the same analyzers
+  (`analyzeSeo`, `crawlErrorsItem`, `analyzeAeo`, `analyzeCrawl`) on the paired pages only → `scope.mode: 'pages'`;
+  `scope.outOfScope` = OLD pages not recreated, `missingInNew/Old` = recreated pages one crawl missed. Without both
+  crawls or the homepage pair → `mode: 'site'` (stored rows compared, with a note). A check the re-score cannot repeat
+  (older analyses have no `renderedTextLength`) keeps its stored row. NEW URLs map back to the original
+  (`toOriginalUrl`: recreated page → its original URL, other preview paths → original origin).
+- **Analyzer keys**: SEO/AEO items carry `key` (`itemKey(section, title)`, e.g. `seo.meta-description`; stored audits
+  without keys get the same id from their title) and `count` (affected pages/images/places). Multi-problem checks list
+  `parts` (Title tag and Meta description: `missing` / `duplicate` / `length`; Headings: `none` / `many`), and the
+  checklist compares **part by part** (`seo.title-tag.missing`, …) so a fix is never hidden behind an older problem.
+  `crawl.metaTags.count` = missing tags. All additive.
+- **Rows**: SEO/AEO by key or part; crawl files (`crawl.sitemap|robots|meta-tags`); axe by rule id + count (critical /
+  serious = fail); broken links: OLD broken links found on paired pages vs NEW broken links (`links.broken` with
+  `links.fixed/open`, plus `links.broken-new` = regressed); Lighthouse **performance + best-practices** audits (worst of
+  mobile/desktop, by score; binary/numeric/metricSavings only; `metrics`/`hidden` groups left to the score strip; its
+  SEO/a11y audits repeat our own checks), rows only when failing on a side; platforms: every OLD `techStack` id (not
+  `custom`) → "No <name> runtime or CDN left" (fixed when NEW no longer detects it); manual: OLD `manualRebuild` +
+  `report.manual` (status `manual`, never fixed).
+- **Classification** (`rules.js classify`): rank pass 0 / warn 1 / fail 2 (Lighthouse: ≥0.9 / ≥0.5 / else). fixed =
+  was failing, passes now; improved = lower rank, or same rank with a lower count / score +0.05; open = still failing;
+  regressed = passed before or got worse in rank; pass = passes on both; na = `DEPLOY_CHECKS` (HTTPS, text compression,
+  cache TTL, HTTP/2, server response time, redirects, CSP/HSTS/COOP/XFO, bf-cache — preview headers decide them) or not
+  measured on NEW. Performance rows carry "Measured on a local preview with simulated throttling".
+- **Evidence** (`rules.js EVIDENCE`): check key → our fixer ids (`report.fixes`) and auto-generated fields
+  (`report.autoGenerated`); a fixed/improved row with auto-generated values gets `review: true`.
+- Checklist JSON: `{ version, comparedAt, analysisId, recreateId, scope, summary{regressed,open,improved,fixed,manual,na,
+  pass,total}, scores{before,after}, metrics{before,after}, categories[{id,label}], items[{ key, category, title, status,
+  before{status,detail,count?,score?}, after{…}, note?, evidence?, review?, links?, helpUrl? }], notes[] }`; items sorted by
+  category (performance, seo, aeo, accessibility, links, crawl, best-practices, platform, manual) then status.
+- **sitemap.xml / robots.txt** (`ir/crawlFiles.js`, in `prepareSite` after the heads → `ir.files`, so every stack
+  emitter gets them): sitemap = recreated pages without noindex at `baseUrl` (canonical when it is on that origin), no
+  invented lastmod/priority; robots.txt = `Allow: /` (or `Disallow: /` when the original blocked everything) + the
+  original's AI-crawler blocks (from discovery's `robots`) + `Sitemap: <baseUrl>/sitemap.xml`. Reported in
+  `report.fixes` (`crawl-files`) and `report.autoGenerated` (`sitemap.xml`, `robots.txt`).
+- **Re-audit fidelity to the future site**: `runAnalysis({ deployOrigin })` reads sitemaps that robots.txt lists at the
+  site's future home (`report.baseUrl`) from the build instead (never fetched from the live site). The re-audit's
+  throwaway server adds `connect-src 'self'` (`servePreview({ connectSelf })`): Lighthouse reads robots.txt from inside
+  the page, and the site has no script. The app preview keeps the strict CSP.
+- Analyze's `crawl.json` also stores `renderedTextLength` (for the "Content without JavaScript" re-score).
+- Verified through the API (temp data dir): Recreate fixture → 35 rows (fixed 10, improved 2, open 5, manual 4, n/a 4;
+  title/description length problems of the original correctly still open; Lighthouse SEO 100 → 100 after the CSP fix);
+  seeded Analyze fixture → 33 rows (fixed 11 incl. axe image-alt, sitemap, robots, broken links; Lighthouse SEO 83 → 100,
+  a11y 86 → 100; one real regression: render-blocking CSS/font preload ~70 ms). Tests: `reaudit.test.js` (a real
+  analysis of a local "original" + a recreated build → checklist), `reaudit-compare.test.js` (rules, scope, emitter).
 
 ### Phase 4a final summary
 From a completed Analyze, **Recreate** produces a clean static HTML/CSS copy of an authorized site:
@@ -415,7 +465,9 @@ client/src/  layout/ (AppShell, Sidebar, OldPanel, NewPanel)
              recreate/RecreateReport.jsx = fidelity + verification card)
              store/useProjects.js, api/client.js, constants.js (STACKS), styles/
 server/src/  index.js, db/index.js (schema + migrations), routes/{projects,analyze,screens,recreate,reaudit}.js, dummy/audit.js
-             reaudit/ index.js (serve dist/ + runAnalysis on it, STEPS), jobs.js (job, auto-trigger target, retention)
+             reaudit/ index.js (serve dist/ + runAnalysis on it + compare, STEPS), jobs.js (job, auto-trigger target, retention),
+                    compare/{index,scope,rules}.js (fix checklist: OLD vs NEW)
+             recreate/ir/crawlFiles.js (sitemap.xml + robots.txt)
              jobs/ manager.js (JobManager + global one-job lock), sse.js
              recreate/ index.js (pipeline + STEPS + budget), jobs.js, inputs.js, workspace.js (tmp → final, retention),
                     errors.js, discover.js (page selection), inspect.js (step 1), capture/{index,snapshot}.js (Playwright capture),
