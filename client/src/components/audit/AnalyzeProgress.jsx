@@ -5,9 +5,10 @@ import styles from './AnalyzeProgress.module.css';
 const LABELS = {
   analysis: { running: 'Analyzing', failed: 'Analysis failed' },
   recreate: { running: 'Recreating', failed: 'Recreate failed' },
+  reaudit: { running: 'Re-auditing the recreated site', failed: 'Re-audit failed' },
 };
 
-// Live progress of a background job (Analyze or Recreate, fed by SSE), or its failure message.
+// Live progress of a background job (Analyze, Recreate or Re-audit, fed by SSE), or its failure message.
 export default function AnalyzeProgress({ analysis, kind = 'analysis', onDismiss }) {
   const labels = LABELS[kind];
   if (analysis.status === 'failed') {

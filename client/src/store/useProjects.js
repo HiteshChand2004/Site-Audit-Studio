@@ -33,6 +33,8 @@ function closeStream(kind, projectId) {
 const KINDS = {
   analysis: { stateKey: 'analyses', subscribe: api.subscribeAnalysis, current: api.getCurrentAnalysis, failed: 'Analysis failed.' },
   recreate: { stateKey: 'recreates', subscribe: api.subscribeRecreate, current: api.getCurrentRecreate, failed: 'Recreate failed.' },
+  // The fix checklist: the recreated site audited again (queued by the server after every Recreate).
+  reaudit: { stateKey: 'reaudits', subscribe: api.subscribeReaudit, current: api.getCurrentReaudit, failed: 'Re-audit failed.' },
 };
 
 export const isJobActive = (job) => Boolean(job) && ['starting', 'queued', 'running'].includes(job.status);
@@ -48,6 +50,7 @@ export const useProjects = create((set, get) => ({
   // projectId → { id, status, step, pct, message, error, steps }
   analyses: {},
   recreates: {},
+  reaudits: {},
   // projectId → { last, result } from GET /recreate
   recreateResults: {},
   // projectId → { url, port, recreateId, loading, error }: the preview of the latest recreate.
@@ -130,13 +133,18 @@ export const useProjects = create((set, get) => ({
       done: async (data) => {
         streams.delete(`${kind}:${projectId}`);
         get().setJob(kind, projectId, { ...data, status: 'done', pct: 100 });
-        if (kind === 'recreate') await get().reloadRecreate(projectId);
-        else if (get().selectedId === projectId) await get().reloadAudit(projectId);
+        if (kind === 'recreate') {
+          await get().reloadRecreate(projectId);
+          // The server queues a re-audit of the new site: follow it (and show the checklist as stale meanwhile).
+          await get().followReaudit(projectId);
+        }
+        if (kind !== 'recreate' && get().selectedId === projectId) await get().reloadAudit(projectId);
       },
       failed: (data) => {
         streams.delete(`${kind}:${projectId}`);
         get().setJob(kind, projectId, { status: 'failed', error: data.error || failedMessage });
         if (kind === 'recreate') get().reloadRecreate(projectId);
+        if (kind === 'reaudit' && get().selectedId === projectId) get().reloadAudit(projectId);
       },
     });
     streams.set(`${kind}:${projectId}`, { close });
@@ -174,6 +182,27 @@ export const useProjects = create((set, get) => ({
         if (current) return get().attachJob('recreate', id, current.job, current.steps);
       }
       get().setJob('recreate', id, { status: 'failed', error: err.message });
+    }
+  },
+
+  /** Attaches to the project's queued or running re-audit, if any. */
+  async followReaudit(id) {
+    const current = await api.getCurrentReaudit(id).catch(() => null);
+    if (current) get().attachJob('reaudit', id, current.job, current.steps);
+    if (get().selectedId === id) await get().reloadAudit(id);
+  },
+
+  async reaudit(id) {
+    get().setJob('reaudit', id, { status: 'starting', pct: 0, step: null, error: null, message: 'Starting…' });
+    try {
+      const { job, steps } = await api.startReaudit(id);
+      get().attachJob('reaudit', id, job, steps);
+    } catch (err) {
+      if (err.status === 409 && err.data?.reauditId) {
+        const current = await api.getCurrentReaudit(id).catch(() => null);
+        if (current) return get().attachJob('reaudit', id, current.job, current.steps);
+      }
+      get().setJob('reaudit', id, { status: 'failed', error: err.message });
     }
   },
 

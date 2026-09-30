@@ -1,15 +1,16 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Download, Info, RotateCw, Sparkles } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, Info, ListChecks, RotateCw, Sparkles } from 'lucide-react';
 import Button from '../components/common/Button.jsx';
 import Badge from '../components/common/Badge.jsx';
 import PreviewFrame from '../components/preview/PreviewFrame.jsx';
 import { FullPageFrame, LiveFrame } from '../components/preview/SitePreview.jsx';
 import { VIEWPORTS } from '../components/preview/PreviewFrame.jsx';
 import FixChecklist from '../components/recreate/FixChecklist.jsx';
+import FixReport from '../components/recreate/FixReport.jsx';
 import RecreateReport from '../components/recreate/RecreateReport.jsx';
 import AnalyzeProgress from '../components/audit/AnalyzeProgress.jsx';
 import { stackById } from '../constants.js';
-import { useProjects } from '../store/useProjects.js';
+import { isJobActive, useProjects } from '../store/useProjects.js';
 import styles from './Panel.module.css';
 import own from './NewPanel.module.css';
 
@@ -42,6 +43,10 @@ export default function NewPanel({ project, audit, syncScroll = false, onFrameSc
   const latest = useProjects((s) => s.recreateResults[project.id]);
   const result = latest?.result;
   const staleDays = audit && !audit.isDummy ? ageDays(audit.analyzedAt) : 0;
+  const reauditJob = useProjects((s) => s.reaudits[project.id]);
+  const startReaudit = useProjects((s) => s.reaudit);
+  // One job at a time on the server: no re-audit while a recreate or re-audit of this project runs.
+  const busy = isJobActive(job) || isJobActive(reauditJob);
   const preview = useProjects((s) => s.previews[project.id]);
   const ensurePreview = useProjects((s) => s.ensurePreview);
   const [viewport, setViewport] = useState(1440);
@@ -158,15 +163,38 @@ export default function NewPanel({ project, audit, syncScroll = false, onFrameSc
         {audit && (
           <>
             <div className={styles.sectionTitle}>
-              <span>What gets fixed</span>
+              <span>{audit.recreate.isDummy ? 'What gets fixed' : 'Fix checklist'}</span>
             </div>
-            {audit.recreate.isDummy && (
-              <p className={styles.dummyNote}>
-                <Info size={13} aria-hidden="true" />
-                Sample checklist — real ✓/✗ results come from re-auditing after Recreate.
-              </p>
+            {reauditJob && reauditJob.status !== 'done' && (
+              <AnalyzeProgress analysis={reauditJob} kind="reaudit" onDismiss={() => dismissJob('reaudit', project.id)} />
             )}
-            <FixChecklist items={audit.recreate.checklist} />
+            {audit.recreate.isDummy ? (
+              <>
+                {audit.recreate.recreateId && !isJobActive(reauditJob) && (
+                  <div className={own.cta}>
+                    <ListChecks size={16} aria-hidden="true" />
+                    <div className={own.ctaText}>
+                      <strong>No fix checklist for this recreate yet</strong>
+                      <span>
+                        {audit.recreate.lastError
+                          ? `The last re-audit failed: ${audit.recreate.lastError}`
+                          : 'Audit the recreated site and compare it with the original analysis.'}
+                      </span>
+                    </div>
+                    <Button variant="primary" size="sm" icon={RotateCw} disabled={busy} onClick={() => startReaudit(project.id)}>
+                      Re-audit now
+                    </Button>
+                  </div>
+                )}
+                <p className={styles.dummyNote}>
+                  <Info size={13} aria-hidden="true" />
+                  Sample checklist — real results come from re-auditing the recreated site.
+                </p>
+                <FixChecklist items={audit.recreate.checklist} />
+              </>
+            ) : (
+              <FixReport data={audit.recreate} busy={busy} onReaudit={() => startReaudit(project.id)} />
+            )}
           </>
         )}
       </div>

@@ -32,7 +32,7 @@ const RECONNECT_MAX_DELAY_MS = 10000;
 const SILENT_MS = 40000;
 
 /**
- * Streams job progress (Analyze or Recreate) over SSE. Handlers: progress(job), done(job),
+ * Streams job progress (Analyze, Recreate or Re-audit) over SSE. Handlers: progress(job), done(job),
  * failed(job), reconnecting(boolean). Returns a function that closes the stream.
  *
  * A dropped connection (API server restarting, proxy error, network blip, a silent stream) is not
@@ -118,6 +118,9 @@ export const api = {
   getCurrentRecreate: (id) => request(`/projects/${id}/recreate/current`),
   getRecreate: (id) => request(`/projects/${id}/recreate`),
   subscribeRecreate: (id, recreateId, handlers) => subscribe(`/api/projects/${id}/recreate/${recreateId}/events`, handlers),
+  startReaudit: (id) => request(`/projects/${id}/reaudit`, { method: 'POST' }),
+  getCurrentReaudit: (id) => request(`/projects/${id}/reaudit/current`),
+  subscribeReaudit: (id, reauditId, handlers) => subscribe(`/api/projects/${id}/reaudit/${reauditId}/events`, handlers),
   getPreview: (id) => request(`/projects/${id}/preview`),
   startPreview: (id) => request(`/projects/${id}/preview`, { method: 'POST' }),
 };
