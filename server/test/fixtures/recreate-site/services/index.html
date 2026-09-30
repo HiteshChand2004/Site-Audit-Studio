@@ -51,6 +51,9 @@
       .stage { position: relative; height: 200px; margin-top: 32px; background: #e2e8f0; }
       .stage-card { position: absolute; left: 0; right: 50%; bottom: 0; height: 120px; padding: 16px; background: #ffffff; }
       .stage-tag { position: absolute; right: 16px; top: 16px; }
+      /* Fixed-size chips larger than their text, in a flex row (badges, ticker symbols). */
+      .chips { display: flex; align-items: center; gap: 8px; margin-top: 24px; }
+      .chip { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 60px; height: 24px; font-size: 8px; background: #0f766e; color: #ffffff; }
       /* A 40 px icon that keeps spinning: its bounding box changes every frame (up to ~57 px). */
       .spinner { display: block; width: 40px; height: 40px; margin: 24px 0; background: #0f766e; animation: spin 3s linear infinite; }
       @keyframes spin { to { transform: rotate(360deg); } }
@@ -83,6 +86,7 @@
           <a class="deck-card" href="/about.html"><span class="deck-icon"></span><span>Deck card one</span></a>
           <a class="deck-card" href="/about.html"><span class="deck-icon"></span><span>Deck card two</span></a>
         </div>
+        <div class="chips"><span class="chip">JPM</span><span class="chip">TSLA</span></div>
         <div class="stage">
           <div class="variant"><span class="stage-tag">New</span></div>
           <div class="stage-card">Anchored to the bottom</div>

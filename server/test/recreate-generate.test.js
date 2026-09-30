@@ -404,6 +404,10 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   // height, so the bottom-anchored card stays where it was.
   const stageRule = baseRule(classOf(/<div class="([\w-]+)">\s*<div class="[\w-]+">\s*<span class="[\w-]+">New<\/span>/));
   assert.match(stageRule, /(^|\s)height: 200px;/, stageRule);
+  // Fixed-size chips larger than their text keep their size through minimums (never cutting text).
+  const chipRule = baseRule(classOf(/<span class="([\w-]+)">JPM<\/span>/));
+  assert.match(chipRule, /(^|\s)(min-)?width: (59|60)px;/, chipRule);
+  assert.match(chipRule, /(^|\s)(min-)?height: 24px;/, chipRule);
   assert.match(spinnerRule, /(^|\s)height: 40px;/);
   assert.doesNotMatch(css, /@keyframes brand-pulse/); // not used by any page
 

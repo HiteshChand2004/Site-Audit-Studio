@@ -267,6 +267,25 @@ export function normalizeView(node, v, chain, opts) {
     // image at width: 100% inside it falls back to its default size (300 px for SVG). Keep the width.
     const text = deepText(node).trim();
     if (contentSized) style['@cw'] = { px: size.w(w), ratio, text: !!text, wraps: !text || fills || zeroBasisRow || wrapsText(node, v, chain) };
+    // A content-sized item with text can still have a fixed size larger than its text (a 22 px badge
+    // around 6 px letters, a 52 px label): minimums restore it without ever cutting or wrapping text.
+    if (contentSized && text && h > 0) {
+      const minW = Math.floor(size.w(w)) - 1;
+      const minH = Math.round(size.h(h));
+      if (minW > 0 && !style['min-width']) style['min-width'] = `${minW}px`;
+      if (minH > 0 && !style.height && !style['min-height']) style['min-height'] = `${minH}px`;
+    }
+  }
+
+  // Inline-level boxes (badges, chips, avatars, labels) often have a fixed size larger than their
+  // text; without it they shrink to the text. Minimums restore it and can never cut or wrap content
+  // (the width one pixel under the captured one, so boxes sharing a line never overflow it).
+  if (/^inline-(block|flex|grid)$/.test(display) && !REPLACED.has(node.tag) && !FORM_CONTROL.has(node.tag)
+    && (position === 'static' || position === 'relative') && w > 0 && h > 0 && !fix?.w) {
+    const minW = Math.floor(size.w(w)) - 1;
+    const minH = Math.round(size.h(h));
+    if (minW > 0 && !style.width && !style['min-width']) style['min-width'] = `${minW}px`;
+    if (minH > 0 && !style.height && !style['min-height']) style['min-height'] = `${minH}px`;
   }
 
   const elements = node.children.filter(isElement);
