@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Globe, Plus } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Globe, Link2, Link2Off, Plus } from 'lucide-react';
 import Sidebar from './Sidebar.jsx';
 import OldPanel from './OldPanel.jsx';
 import NewPanel from './NewPanel.jsx';
@@ -9,6 +9,7 @@ import NewProjectModal from '../components/project/NewProjectModal.jsx';
 import StackModal from '../components/recreate/StackModal.jsx';
 import { useProjects, useSelectedProject } from '../store/useProjects.js';
 import styles from './AppShell.module.css';
+import { useSyncScroll } from './useSyncScroll.js';
 
 const SIDEBAR_KEY = 'wa:sidebarCollapsed';
 
@@ -53,6 +54,11 @@ export default function AppShell() {
   const [stackOpen, setStackOpen] = useState(false);
   const [tab, setTab] = useState('old'); // narrow screens only
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed();
+  // Sync scroll: off by default and not remembered; the OLD and NEW panels scroll by the same share.
+  const [syncScroll, setSyncScroll] = useState(false);
+  const oldBody = useRef(null);
+  const newBody = useRef(null);
+  useSyncScroll(oldBody, newBody, syncScroll, project?.id);
 
   useEffect(() => {
     load();
@@ -99,6 +105,16 @@ export default function AppShell() {
 
         {project && (
           <div className={styles.panels} data-tab={tab}>
+            <button
+              type="button"
+              className={styles.syncToggle}
+              aria-pressed={syncScroll}
+              aria-label="Sync scroll"
+              title={syncScroll ? 'Sync scroll is on: OLD and NEW scroll together. Click to scroll them separately.' : 'Sync scroll is off. Click to scroll OLD and NEW together.'}
+              onClick={() => setSyncScroll((on) => !on)}
+            >
+              {syncScroll ? <Link2 size={13} aria-hidden="true" /> : <Link2Off size={13} aria-hidden="true" />}
+            </button>
             <div className={styles.tabs} role="tablist" aria-label="Panels">
               {['old', 'new'].map((t) => (
                 <button key={t} role="tab" type="button" aria-selected={tab === t} onClick={() => setTab(t)}>
@@ -112,8 +128,9 @@ export default function AppShell() {
               audit={audit}
               loading={auditLoading}
               onOpenStack={() => setStackOpen(true)}
+              bodyRef={oldBody}
             />
-            <NewPanel key={`new-${project.id}`} project={project} audit={audit} />
+            <NewPanel key={`new-${project.id}`} project={project} audit={audit} bodyRef={newBody} />
           </div>
         )}
       </div>

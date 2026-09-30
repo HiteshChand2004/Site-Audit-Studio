@@ -34,7 +34,7 @@ function PreviewEmpty({ icon: Icon = Sparkles, title, children }) {
   );
 }
 
-export default function NewPanel({ project, audit }) {
+export default function NewPanel({ project, audit, bodyRef }) {
   const stack = stackById(project.stack);
   const job = useProjects((s) => s.recreates[project.id]);
   const dismissJob = useProjects((s) => s.dismissJob);
@@ -61,7 +61,7 @@ export default function NewPanel({ project, audit }) {
         </span>
       </header>
 
-      <div className={`${styles.body} scroll`}>
+      <div ref={bodyRef} className={`${styles.body} scroll`}>
         {staleDays > STALE_DAYS && (
           <p className={own.warn} role="status">
             <AlertTriangle size={13} aria-hidden="true" />

@@ -65,11 +65,49 @@
 }
 
 .panels {
+  position: relative;
   display: grid;
   grid-template-columns: 1fr 1fr;
   grid-template-rows: 1fr;
   min-width: 0;
   min-height: 0;
+}
+
+/* Sync scroll toggle: a small round button on the divider, in the panel header row. */
+.syncToggle {
+  position: absolute;
+  top: 9px;
+  left: 50%;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--muted);
+  box-shadow: var(--shadow-sm);
+  transform: translateX(-50%);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.syncToggle:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.syncToggle[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+}
+
+.syncToggle:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .tabs {
@@ -115,6 +153,11 @@
 
 /* Narrow screens: OLD/NEW tabs instead of side-by-side */
 @media (max-width: 1180px) {
+  /* Only one panel is visible: nothing to sync. */
+  .syncToggle {
+    display: none;
+  }
+
   .panels {
     grid-template-columns: 1fr;
     grid-template-rows: auto 1fr;

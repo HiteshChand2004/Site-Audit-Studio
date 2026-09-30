@@ -72,7 +72,7 @@ function previewOverlay({ audit, mode, slow }) {
   return null;
 }
 
-export default function OldPanel({ project, audit, loading, onOpenStack }) {
+export default function OldPanel({ project, audit, loading, onOpenStack, bodyRef }) {
   const [url, setUrl] = useState(project.url);
   const [maxPages, setMaxPages] = useState(String(project.max_pages ?? 25));
   useEffect(() => setUrl(project.url), [project.url]);
@@ -134,7 +134,7 @@ export default function OldPanel({ project, audit, loading, onOpenStack }) {
         </span>
       </header>
 
-      <div className={`${styles.body} scroll`}>
+      <div ref={bodyRef} className={`${styles.body} scroll`}>
         <form className={styles.urlRow} onSubmit={onSubmit}>
           <label className={styles.urlInput}>
             <Globe size={14} aria-hidden="true" />
