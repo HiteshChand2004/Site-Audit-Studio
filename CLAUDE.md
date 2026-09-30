@@ -32,12 +32,12 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 | 3b | Live view (CDP screencast, view + scroll + click, no keyboard) — deferred by the user | ⏳ Later |
 | 4a | Recreate → plain HTML: page discovery (sitemap, limit), Playwright capture, local assets, IR, variant merge, semantic classes, fixers, build + verify, preview | ✅ Done (verified on real sites) |
 | 4b | Motion + responsive fidelity: hover, scroll reveal, continuous animations, widget JS, visual diff score | ⏳ |
-| 5 | Re-audit of the NEW site → real fix checklist (OLD vs NEW), sitemap/robots emitter | ✅ Done (verified on real sites; awaiting the user's merge approval) |
+| 5 | Re-audit of the NEW site → real fix checklist (OLD vs NEW), sitemap/robots emitter | ✅ Done (verified on real sites; merged into `phase-4a` (99ebc2f)) |
 | 5b | Full PreviewManager (several previews on 5100–5199) — deferred by the user | ⏳ Later |
 | 6 | React+Vite / Next.js / MERN emitters + Download zip | ⏳ |
 
-**Current status: Phase 5 COMPLETE** on branch `phase-5` (git worktree `../Website-Audit-phase5`, never pushed), waiting for
-the user's final approval before merging into `phase-4a`. Phases 1, 2, 3 and 4a are done and merged on `phase-4a`.
+**Current status: Phase 5 COMPLETE, merged into `phase-4a` (99ebc2f)** (never pushed). Phases 1, 2, 3 and 4a are done
+and merged on `phase-4a`.
 5.1 re-audit job foundation ✅ · 5.2 comparator + sitemap/robots emitter ✅ · 5.3 API + `audit.recreate` contract ✅ ·
 5.4 UI ✅ · 5.5 real-site verification + docs ✅. Phase 4b (motion + responsive fidelity) stays planned. Same workflow: one step at a time, WIP
 commit, wait for the user's "next"; never push; while the user tests, work in a git worktree and merge only when asked.
