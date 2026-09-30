@@ -160,10 +160,12 @@ export default function NewPanel({ project, audit, syncScroll = false, onFrameSc
             <div className={styles.sectionTitle}>
               <span>What gets fixed</span>
             </div>
-            <p className={styles.dummyNote}>
-              <Info size={13} aria-hidden="true" />
-              Sample checklist — real ✓/✗ results come from re-auditing after Recreate.
-            </p>
+            {audit.recreate.isDummy && (
+              <p className={styles.dummyNote}>
+                <Info size={13} aria-hidden="true" />
+                Sample checklist — real ✓/✗ results come from re-auditing after Recreate.
+              </p>
+            )}
             <FixChecklist items={audit.recreate.checklist} />
           </>
         )}

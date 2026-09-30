@@ -14,6 +14,7 @@ import { overallPct, pagePath, runReaudit, STEPS } from '../src/reaudit/index.js
 import { JOB_OPTIONS } from '../src/reaudit/jobs.js';
 import { previewHeaders, servePreview } from '../src/recreate/preview.js';
 import { recreateDir } from '../src/recreate/workspace.js';
+import projectsRouter from '../src/routes/projects.js';
 import reauditRouter from '../src/routes/reaudit.js';
 import { createNetPolicy } from '../src/security/netGuard.js';
 
@@ -137,6 +138,7 @@ before(async () => {
   await writeSite(originalRoot, ORIGINAL);
   const app = express();
   app.use(express.json());
+  app.use('/api/projects', projectsRouter);
   app.use('/api/projects', reauditRouter);
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', resolve);
@@ -283,6 +285,15 @@ test('routes: validation, one job per project, result, stale flag, retention', {
 
   const analysis = await makeAnalysis(project);
   const recreateId = await makeRecreate(project, { analysis, startedAt: new Date(Date.now() - 60000).toISOString() });
+  // Before any re-audit: the labelled sample, with the state the app needs to offer a run.
+  const auditOf = async () => (await fetch(`${base}/${project.id}/audit`)).json();
+  let rec = (await auditOf()).recreate;
+  assert.equal(rec.isDummy, true);
+  assert.equal(rec.status, 'not-started');
+  assert.equal(rec.recreateId, recreateId);
+  assert.equal(rec.job, null);
+  assert.ok(rec.checklist.length > 0);
+
   // A leftover folder from an earlier run is removed after the job.
   const leftover = path.join(recreateDir(project.id, recreateId), 'reaudit', 'old-run');
   await mkdir(leftover, { recursive: true });
@@ -314,7 +325,60 @@ test('routes: validation, one job per project, result, stale flag, retention', {
   const events = await (await fetch(`${base}/${project.id}/reaudit/${started.reauditId}/events`)).text();
   assert.match(events, /event: done/);
 
+  // audit.recreate: the real checklist, the original 3-status list plus the full comparison.
+  rec = (await auditOf()).recreate;
+  assert.equal(rec.isDummy, false);
+  assert.equal(rec.status, 'done');
+  assert.equal(rec.reauditId, started.reauditId);
+  assert.equal(rec.recreateId, recreateId);
+  assert.equal(rec.analysisId, analysis.analysisId);
+  assert.equal(rec.stale, false);
+  assert.deepEqual(rec.staleReasons, []);
+  assert.equal(rec.lastError, null);
+  assert.ok(rec.checklist.length > 0);
+  assert.ok(rec.checklist.every((i) => ['fixed', 'open', 'manual'].includes(i.status)), JSON.stringify(rec.checklist));
+  assert.ok(rec.checklist.some((i) => i.key === 'links.broken-new' && i.status === 'open'));
+  assert.ok(rec.checklist.some((i) => i.key === 'seo.meta-description.missing' && i.status === 'fixed'));
+  assert.ok(!rec.checklist.some((i) => i.key === 'seo.https'));
+  assert.equal(rec.items.length, rec.summary.total);
+  assert.equal(rec.scope.mode, 'pages');
+  assert.ok(rec.categories.length && Array.isArray(rec.notes));
+  assert.ok('scores' in rec && 'metrics' in rec);
+
   // A newer recreate makes the result stale until it is re-audited.
   await makeRecreate(project, { build: false });
   assert.equal((await (await fetch(`${base}/${project.id}/reaudit`)).json()).stale, true);
+  assert.deepEqual((await auditOf()).recreate.staleReasons, ['recreate']);
+
+  // So does a newer analysis: the audit shown is not the one the checklist compared against.
+  const later = new Date(Date.now() + 1000).toISOString();
+  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
+    .run(randomUUID(), project.id, later, later, JSON.stringify({ ...analysis.audit, analysisId: 'newer' }));
+  rec = (await auditOf()).recreate;
+  assert.equal(rec.isDummy, false);
+  assert.deepEqual(rec.staleReasons, ['recreate', 'analysis']);
+
+  // A failed attempt after the result is reported without hiding the last good checklist.
+  const failedAt = new Date(Date.now() + 2000).toISOString();
+  db.prepare(`INSERT INTO reaudits (id, project_id, status, progress, error, started_at, finished_at) VALUES (?, ?, 'failed', 10, 'Boom.', ?, ?)`)
+    .run(randomUUID(), project.id, failedAt, failedAt);
+  rec = (await auditOf()).recreate;
+  assert.equal(rec.isDummy, false);
+  assert.equal(rec.lastError, 'Boom.');
+});
+
+test('audit.recreate: a failed re-audit without an earlier result keeps the sample and reports the error', { timeout: 60000 }, async () => {
+  const project = makeProject();
+  const now = new Date().toISOString();
+  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
+    .run(randomUUID(), project.id, now, now, JSON.stringify({ url: 'https://example.com/', analysisId: 'other', seo: [] }));
+  // The recreate names an analysis that does not exist, so the job fails.
+  await makeRecreate(project);
+  assert.equal((await fetch(`${base}/${project.id}/reaudit`, { method: 'POST' })).status, 202);
+  const body = await waitForDone(project.id);
+  assert.equal(body.last.status, 'failed');
+  const rec = (await (await fetch(`${base}/${project.id}/audit`)).json()).recreate;
+  assert.equal(rec.isDummy, true);
+  assert.equal(rec.status, 'failed');
+  assert.match(rec.lastError, /analysis this recreate was built from/);
 });

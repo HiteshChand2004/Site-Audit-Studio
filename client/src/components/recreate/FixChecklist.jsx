@@ -9,7 +9,7 @@ const META = {
 
 export default function FixChecklist({ items }) {
   const fixed = items.filter((i) => i.status === 'fixed').length;
-  const pct = Math.round((fixed / items.length) * 100);
+  const pct = items.length ? Math.round((fixed / items.length) * 100) : 0;
 
   return (
     <div className={styles.card}>
@@ -26,7 +26,7 @@ export default function FixChecklist({ items }) {
         {items.map((it) => {
           const { icon: Icon, label } = META[it.status];
           return (
-            <li key={it.title} className={styles.item} data-status={it.status}>
+            <li key={it.key ?? it.title} className={styles.item} data-status={it.status}>
               <span className={styles.mark} aria-label={label}>
                 <Icon size={11} strokeWidth={3} />
               </span>

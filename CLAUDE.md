@@ -38,7 +38,7 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 
 **Current status: Phase 5 in progress** on branch `phase-5` (git worktree `../Website-Audit-phase5`, never pushed).
 Phases 1, 2, 3 and 4a are done and merged on `phase-4a`. 5.1 re-audit job foundation ✅ · 5.2 comparator +
-sitemap/robots emitter ✅ (WIP commits) — waiting for the user's "next" before 5.3. Phase 4b (motion + responsive fidelity) stays planned. Same workflow: one step at a time, WIP
+sitemap/robots emitter ✅ · 5.3 API + `audit.recreate` contract ✅ (WIP commits) — waiting for the user's "next" before 5.4. Phase 4b (motion + responsive fidelity) stays planned. Same workflow: one step at a time, WIP
 commit, wait for the user's "next"; never push; while the user tests, work in a git worktree and merge only when asked.
 
 ### Phase 5 plan (approved)
@@ -51,7 +51,7 @@ real sites (parchaa.com, panscience.xyz, …) are verification sites, never targ
 |---|---|---|
 | 5.1 Job foundation | `reaudits` table, JobManager, routes + SSE, throwaway server on `dist/`, internal net policy, `runAnalysis` options, auto-trigger after Recreate, retention | ✅ WIP |
 | 5.2 Comparator + sitemap/robots emitter | stable analyzer `key`s, page mapping OLD URL → NEW path, OLD re-scored on the recreated pages only, category matchers, classification, `report.fixes` evidence; `sitemap.xml` + `robots.txt` in the recreate (target_domain or original origin) | ✅ WIP |
-| 5.3 API + contract | real `audit.recreate` (additive: checklist, summary, scores before/after, stale) | ⏳ |
+| 5.3 API + contract | real `audit.recreate` (additive: checklist, summary, scores before/after, stale) | ✅ WIP |
 | 5.4 UI | score strip before → after, summary chips, category accordions, progress, Re-audit button, states | ⏳ |
 | 5.5 Verification + docs | fixture + real sites through the UI | ⏳ |
 
@@ -138,6 +138,27 @@ Decisions (approved by the user):
   seeded Analyze fixture → 33 rows (fixed 11 incl. axe image-alt, sitemap, robots, broken links; Lighthouse SEO 83 → 100,
   a11y 86 → 100; one real regression: render-blocking CSS/font preload ~70 ms). Tests: `reaudit.test.js` (a real
   analysis of a local "original" + a recreated build → checklist), `reaudit-compare.test.js` (rules, scope, emitter).
+
+5.3 details (`server/src/reaudit/contract.js`, `routes/projects.js`):
+- `GET /api/projects/:id/audit` builds `audit.recreate` **at read time** (`recreateSection`) from the latest completed
+  re-audit of the project, the latest completed recreate and the running re-audit job; stored analyses keep the sample
+  they were written with (`assembleAudit` unchanged). Never-analyzed projects keep the whole dummy audit.
+- **Real** (a re-audit finished): `{ isDummy: false, status: 'done'|'queued'|'running' (a re-run), reauditId, recreateId,
+  analysisId, reauditedAt, stale, staleReasons, job, lastError, checklist, version, summary, scores, metrics, categories,
+  items, scope, notes }`. `staleReasons`: `'recreate'` (a newer completed recreate exists) and/or `'analysis'` (the audit
+  shown is newer than the analysis the checklist compared against). `lastError`: the latest attempt failed after the
+  result (the last good checklist stays). `job`: `{ id, status, step, pct, message }` of a queued/running re-audit.
+- `checklist` keeps the **original 3-status contract** (`fixed` / `open` / `manual`, + `key`, `detail` = NEW detail):
+  improved and regressed are `open`, pass and n/a are left out (`legacyChecklist`). The full statuses are in `items`.
+- **Sample** (no re-audit finished): the dummy checklist with `isDummy: true` plus `status` (`not-started` | `queued` |
+  `running` | `failed`), `recreateId` (latest completed recreate or null: a run is possible), `job`, `lastError`.
+- Client compatibility only (the real UI is 5.4): `FixChecklist` survives an empty list and keys rows by `key`; the
+  "Sample checklist" note shows only when `audit.recreate.isDummy`.
+- Verified through the API on the Recreate fixture: after Analyze → sample `not-started`; during the auto re-audit →
+  sample `running` with job progress; after → real, 35 rows, legacy list 21 rows, not stale.
+- **Known (not fixed, needs a decision)**: Lighthouse CPU-timing diagnostics are noisy on this machine. Right after a
+  Recreate, "Minimize main-thread work" measured 5.2 s on the NEW site (regressed); a re-run seconds later passed on both
+  sides. Performance rows can flip between runs.
 
 ### Phase 4a final summary
 From a completed Analyze, **Recreate** produces a clean static HTML/CSS copy of an authorized site:
@@ -466,6 +487,7 @@ client/src/  layout/ (AppShell, Sidebar, OldPanel, NewPanel)
              store/useProjects.js, api/client.js, constants.js (STACKS), styles/
 server/src/  index.js, db/index.js (schema + migrations), routes/{projects,analyze,screens,recreate,reaudit}.js, dummy/audit.js
              reaudit/ index.js (serve dist/ + runAnalysis on it + compare, STEPS), jobs.js (job, auto-trigger target, retention),
+                    contract.js (audit.recreate for GET /audit),
                     compare/{index,scope,rules}.js (fix checklist: OLD vs NEW)
              recreate/ir/crawlFiles.js (sitemap.xml + robots.txt)
              jobs/ manager.js (JobManager + global one-job lock), sse.js
@@ -510,13 +532,14 @@ API: `GET/POST /api/projects`, `GET/PATCH/DELETE /api/projects/:id` (PATCH takes
 `GET /api/projects/:id/recreate/:recreateId/events` (SSE), `GET/POST/DELETE /api/projects/:id/preview` (preview of the latest
 completed recreate: `{ preview: { url, port, recreateId, … } | null }`; POST 404 without a recreate, 503 without a free port),
 `POST /api/projects/:id/reaudit` (re-audit of the latest completed recreate; 409 without one or while one runs),
-`GET /api/projects/:id/reaudit` (`{ last, result, stale }`), `GET /api/projects/:id/reaudit/current`,
+`GET /api/projects/:id/reaudit` (`{ last, result, stale }`; `result.checklist` = the full comparison), `GET /api/projects/:id/reaudit/current`,
 `GET /api/projects/:id/reaudit/:reauditId/events` (SSE), `GET /api/health`. PATCH `/api/projects/:id` also takes `recreate_pages` (0–20) and `target_domain`.
 
 ## Currently dummy / known issues
 - Analyze is real. Projects that were never analyzed still get the **dummy** audit (`isDummy: true`, "Dummy data" badge).
 - Never-analyzed projects show a wireframe in the OLD preview. The NEW preview is real since 4a.6 (the latest recreate's
-  `dist/`). Still dummy: the fix checklist (`audit.recreate`, which has `isDummy: true`; Phase 5 re-audit).
+  `dist/`). The fix checklist (`audit.recreate`) is real once a re-audit finished (5.3); before that it is the sample
+  (`isDummy: true`) plus the re-audit state. The NEW panel still renders only the 3-status list until 5.4.
   Download (Phase 6) stays disabled.
 - Only one preview runs at a time: selecting another project with a recreate moves the preview to it. Clicking a link
   to a page that was not recreated opens the live original inside the preview frame (without script).

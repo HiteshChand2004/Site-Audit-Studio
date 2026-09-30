@@ -179,3 +179,16 @@ test('sitemap.xml lists indexable pages at the site origin; robots.txt keeps the
   assert.match(none.robots.source, /no robots\.txt/);
   assert.match(none.files[1].content, /Allow: \//);
 });
+
+test('legacy checklist: the original fixed / open / manual list, pass and n/a left out', async () => {
+  const { legacyChecklist } = await import('../src/reaudit/contract.js');
+  const items = ['fixed', 'improved', 'open', 'regressed', 'manual', 'na', 'pass'].map((status) => ({ key: `k.${status}`, status, title: status, after: { detail: `${status} now` } }));
+  assert.deepEqual(legacyChecklist(items).map((i) => [i.key, i.status, i.detail]), [
+    ['k.fixed', 'fixed', 'fixed now'],
+    ['k.improved', 'open', 'improved now'],
+    ['k.open', 'open', 'open now'],
+    ['k.regressed', 'open', 'regressed now'],
+    ['k.manual', 'manual', 'manual now'],
+  ]);
+  assert.deepEqual(legacyChecklist(), []);
+});

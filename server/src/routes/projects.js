@@ -7,6 +7,7 @@ import { buildDummyAudit } from '../dummy/audit.js';
 import { precheckUrl } from '../security/netGuard.js';
 import { MAX_RECREATE_PAGES, parseRecreatePages, parseTargetDomain } from '../recreate/inputs.js';
 import { stopPreview } from '../recreate/preview.js';
+import { recreateSection } from '../reaudit/contract.js';
 
 export const STACKS = ['html', 'react-vite', 'nextjs', 'mern'];
 
@@ -133,11 +134,15 @@ const latestAudit = db.prepare(`
 `);
 
 // Latest completed analysis. Projects that were never analyzed get the labelled dummy audit.
+// audit.recreate is the fix checklist of the latest re-audit (or the sample plus the re-audit state),
+// built at read time: a stored analysis keeps the sample it was written with.
 router.get('/:id/audit', (req, res) => {
   const project = selectOne.get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found.' });
   const row = latestAudit.get(project.id);
-  res.json(row ? JSON.parse(row.result_json) : buildDummyAudit(project));
+  if (!row) return res.json(buildDummyAudit(project));
+  const audit = JSON.parse(row.result_json);
+  res.json({ ...audit, recreate: recreateSection(project, audit) });
 });
 
 export default router;
