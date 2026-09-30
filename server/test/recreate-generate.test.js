@@ -396,6 +396,14 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   }
   const spinnerRule = baseRule(classOf(/<span class="([\w-]+)" aria-hidden="true"><\/span>/));
   assert.match(spinnerRule, /(^|\s)(max-)?width: 40px;/, spinnerRule);
+  // A space-between card stretched by an explicit grid row keeps its height (its last child sits at
+  // the bottom edge, so "where the content ends" would call it full).
+  const deckRule = baseRule(classOf(/<a class="([\w-]+)" href="\.\.\/about\.html">\s*<span[^>]*><\/span>\s*<span[^>]*>Deck card one/));
+  assert.match(deckRule, /(^|\s)(min-)?height: 220px;/, deckRule);
+  // A box holding only absolute content, part of it inside a display: contents wrapper, keeps its
+  // height, so the bottom-anchored card stays where it was.
+  const stageRule = baseRule(classOf(/<div class="([\w-]+)">\s*<div class="[\w-]+">\s*<span class="[\w-]+">New<\/span>/));
+  assert.match(stageRule, /(^|\s)height: 200px;/, stageRule);
   assert.match(spinnerRule, /(^|\s)height: 40px;/);
   assert.doesNotMatch(css, /@keyframes brand-pulse/); // not used by any page
 

@@ -192,7 +192,10 @@ export function normalizeView(node, v, chain, opts) {
   }
 
   if (position === 'absolute' || position === 'fixed') {
-    const sized = isTranslateOnly(style.transform);
+    // Captured boxes are layout sizes, also for rotated or scaled elements (capture/snapshot.js), so
+    // an absolutely positioned box keeps its size whatever its transform; without it, a rotated or
+    // floating tile shrinks to its content.
+    const sized = true;
     for (const [a, b, prop, value] of [['left', 'right', 'width', size.w(w)], ['top', 'bottom', 'height', size.h(h)]]) {
       const va = px(style[a]);
       const vb = px(style[b]);
@@ -268,11 +271,15 @@ export function normalizeView(node, v, chain, opts) {
 
   const elements = node.children.filter(isElement);
   const hasText = node.children.some((c) => isText(c) && c.text.trim());
-  // Children that take up space in this view (absolutely positioned or hidden ones do not).
-  const inFlow = elements.filter((c) => {
+  // Children that take up space in this view (absolutely positioned or hidden ones do not). A
+  // display: contents wrapper has no box: its own children count in its place.
+  const flowChildren = (n) => n.children.filter(isElement).flatMap((c) => {
     const cd = c.views[v];
-    return cd && !cd.hidden && !/^(absolute|fixed)$/.test(cd.style.position ?? '');
+    if (!cd || cd.hidden || /^(absolute|fixed)$/.test(cd.style.position ?? '')) return [];
+    if (displayOf(c, v) === 'contents') return [...flowChildren(c), ...(c.children.some((t) => isText(t) && t.text.trim()) ? [c] : [])];
+    return [c];
   });
+  const inFlow = flowChildren(node);
   if (!REPLACED.has(node.tag) && !FORM_CONTROL.has(node.tag) && display !== 'inline' && h > 0) {
     if (!inFlow.length && !hasText) {
       // An empty box (divider, colour block, image holder) only has the size it was given. Builders
@@ -288,7 +295,17 @@ export function normalizeView(node, v, chain, opts) {
         if (cp === 'absolute' || cp === 'fixed') continue;
         bottom = Math.max(bottom, cd.rect[1] + cd.rect[3] + Math.max(0, num(cd.style['margin-bottom'])));
       }
-      const extent = bottom - d.rect[1] + num(style['padding-bottom']) + num(style['border-bottom-width']);
+      let extent = bottom - d.rect[1] + num(style['padding-bottom']) + num(style['border-bottom-width']);
+      // A flex column can spread its children (space-between, center, end): the last child then sits
+      // at the bottom edge although the content is shorter. Its content is the sum of the children.
+      if (/flex/.test(display) && /column/.test(style['flex-direction'] ?? '') && inFlow.length) {
+        const sum = inFlow.reduce((n, c) => {
+          const cd = c.views[v];
+          return n + cd.rect[3] + Math.max(0, num(cd.style['margin-top'])) + Math.max(0, num(cd.style['margin-bottom']));
+        }, 0);
+        extent = Math.min(extent, sum + num(style['row-gap']) * (inFlow.length - 1)
+          + num(style['padding-top']) + num(style['padding-bottom']) + num(style['border-top-width']) + num(style['border-bottom-width']));
+      }
       if (bottom > 0 && h - extent > 8 && h > extent * 1.05) style['min-height'] = `${size.h(h)}px`;
     }
   }

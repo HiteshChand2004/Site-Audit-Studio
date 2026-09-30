@@ -43,6 +43,14 @@
         .frame { width: 100%; }
         .copy { width: 100%; }
       }
+      /* Cards whose height comes from explicit grid rows, with their content spread (space-between). */
+      .deck { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: 220px; gap: 16px; margin-top: 32px; }
+      .deck-card { display: flex; flex-direction: column; justify-content: space-between; padding: 20px; border-radius: 12px; background: #f1f5f9; color: inherit; text-decoration: none; }
+      .deck-icon { display: block; width: 24px; height: 24px; background: #0f766e; }
+      /* A box holding only absolutely positioned content, part of it in a display: contents wrapper. */
+      .stage { position: relative; height: 200px; margin-top: 32px; background: #e2e8f0; }
+      .stage-card { position: absolute; left: 0; right: 50%; bottom: 0; height: 120px; padding: 16px; background: #ffffff; }
+      .stage-tag { position: absolute; right: 16px; top: 16px; }
       /* A 40 px icon that keeps spinning: its bounding box changes every frame (up to ~57 px). */
       .spinner { display: block; width: 40px; height: 40px; margin: 24px 0; background: #0f766e; animation: spin 3s linear infinite; }
       @keyframes spin { to { transform: rotate(360deg); } }
@@ -70,6 +78,14 @@
           <div class="badge"><img src="/img/photo.svg" alt="Badge one" /></div>
           <div class="badge"><img src="/img/hero-bg.svg" alt="Badge two" /></div>
           <div class="badge"><img src="/img/team.png" alt="Badge three" /></div>
+        </div>
+        <div class="deck">
+          <a class="deck-card" href="/about.html"><span class="deck-icon"></span><span>Deck card one</span></a>
+          <a class="deck-card" href="/about.html"><span class="deck-icon"></span><span>Deck card two</span></a>
+        </div>
+        <div class="stage">
+          <div class="variant"><span class="stage-tag">New</span></div>
+          <div class="stage-card">Anchored to the bottom</div>
         </div>
       </section>
     </main>
