@@ -367,7 +367,7 @@ If the frontend says "Cannot reach the API server", the server on 4000 is not ru
 ```bash
 npm install
 npm run dev          # client :5173 + server :4000 (concurrently)
-npm run dev:server   # or: npm run dev:client
+npm run dev:server   # or: npm run dev:client (server: scripts/dev.js restarts only on real content changes in src/ or .env)
 npm run build        # client production build
 npm test -w server   # unit tests; each test file gets its own temp DB (OS temp folder, deleted after the run), never data/app.db
 npm test -w server -- test/crawl.test.js   # a single file
@@ -399,5 +399,10 @@ completed recreate: `{ preview: { url, port, recreateId, … } | null }`; POST 4
   a page makes to blocked addresses are listed in `audit.blockedHosts`.
 - No live view yet (Phase 3b).
 - Bot-protected sites (Cloudflare challenge) fail with a clear message; they are never bypassed.
-- Jobs live in memory; a server restart marks running analyses as failed.
+- Jobs live in memory; a server restart marks running analyses as failed. The dev server therefore does **not** use
+  `node --watch`: on Windows it restarted with nothing edited (it watches every imported file, node_modules included,
+  and NTFS last-access updates from other processes reading them count as changes — starting Vite, a Lighthouse worker
+  or a test run was enough). `server/scripts/dev.js` watches only `src/` and `.env` and restarts only when a file's
+  content hash changed. Note for agents: editing `server/src` still restarts the user's dev server; work in a git
+  worktree while the user runs jobs.
 - Project delete uses `window.confirm`. Git shows LF→CRLF warnings on Windows, which are harmless.
