@@ -87,6 +87,8 @@ export async function inspectStage(ctx) {
     url: p.url,
     path: p.path,
     outPath: p.outPath,
+    // Folder of the page's capture (capture/<slug>/), also used for its screenshots in the app.
+    slug: p.slug,
     title: p.title,
     source: p.source,
     views: Object.keys(p.views),

@@ -221,9 +221,12 @@ function Empty({ icon: Icon, title, children }) {
  * The OLD site preview: the live page in a sandboxed iframe when the site allows framing, else the
  * screenshot taken during Analyze. Rendered at the real viewport width and scaled to the panel.
  */
-export default function SitePreview({ url, audit, mode, viewport, onSlow, scrollRef }) {
+export default function SitePreview({ url, audit, mode, viewport, onSlow, scrollRef, pageShot }) {
   const vp = VIEWPORTS.find((v) => v.id === viewport) ?? VIEWPORTS[0];
   if (mode === 'live') return <LiveFrame url={url} width={vp.id} onSlow={onSlow} />;
+  // Another page than the homepage: its screenshot from the Recreate capture (Analyze only shoots
+  // the homepage).
+  if (pageShot) return <Screenshot shot={pageShot(vp)} viewport={vp} url={url} scrollRef={scrollRef} />;
   if (!audit?.screenshots) {
     return (
       <Empty icon={Camera} title="No screenshots yet">

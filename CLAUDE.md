@@ -132,7 +132,10 @@ environmental, not a regression.
   of their height: the app cannot scroll a frame from another origin, so OLD shows its Analyze screenshot (Shot; Live
   comes back when sync is turned off) and NEW draws the recreated page at full height (height from the report) inside
   an app-owned scroll box; the wheel stays inside the websites. Off (default, not remembered) = everything as before.
-  OLD screenshots exist for the homepage only, so other NEW pages are compared with the OLD homepage shot.
+- Matching page (UI): the OLD preview follows the NEW page picker. For another page than the homepage, OLD Live
+  frames that page's original URL and OLD Shot shows the screenshot the Recreate capture took of it
+  (`capture/<slug>/<view>-full.webp`, served by `GET …/recreate/:recreateId/captures/:slug/:file`; `report.pages[].slug`,
+  filled in for older reports by the GET route). The homepage keeps the Analyze screenshots.
 - canonical/sitemap/OG use the original origin unless the project's `target_domain` is set.
 - Tests use only the fixture site (localhost:4100); never send requests to external sites from tests.
 - Discovery (4a.2): a fresh SSRF-guarded mini crawl (robots respected). Order: homepage, pages the homepage links to
@@ -387,6 +390,7 @@ API: `GET/POST /api/projects`, `GET/PATCH/DELETE /api/projects/:id` (PATCH takes
 `POST /api/projects/:id/analyze`, `GET /api/projects/:id/analyze/current`, `GET /api/projects/:id/analyze/:analysisId/events` (SSE: progress/done/failed),
 `GET /api/projects/:id/analyses/:analysisId/screens/:file` (`{desktop,tablet,mobile}-{fold,full}.webp`),
 `POST /api/projects/:id/recreate`, `GET /api/projects/:id/recreate` (latest attempt + latest report), `GET /api/projects/:id/recreate/current`,
+`GET /api/projects/:id/recreate/:recreateId/captures/:slug/:file` (per-page capture shots of a completed recreate, same file names),
 `GET /api/projects/:id/recreate/:recreateId/events` (SSE), `GET/POST/DELETE /api/projects/:id/preview` (preview of the latest
 completed recreate: `{ preview: { url, port, recreateId, … } | null }`; POST 404 without a recreate, 503 without a free port), `GET /api/health`. PATCH `/api/projects/:id` also takes `recreate_pages` (0–20) and `target_domain`.
 

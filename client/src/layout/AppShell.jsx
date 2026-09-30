@@ -60,6 +60,8 @@ export default function AppShell() {
   const [oldScroller, setOldScroller] = useState(null);
   const [newScroller, setNewScroller] = useState(null);
   useSyncScroll(oldScroller, newScroller, syncScroll);
+  // The page the NEW preview shows: the OLD preview shows the same page of the original.
+  const [comparePage, setComparePage] = useState(null);
 
   useEffect(() => {
     load();
@@ -131,8 +133,16 @@ export default function AppShell() {
               onOpenStack={() => setStackOpen(true)}
               syncScroll={syncScroll}
               onShotScroller={setOldScroller}
+              comparePage={comparePage}
             />
-            <NewPanel key={`new-${project.id}`} project={project} audit={audit} syncScroll={syncScroll} onFrameScroller={setNewScroller} />
+            <NewPanel
+              key={`new-${project.id}`}
+              project={project}
+              audit={audit}
+              syncScroll={syncScroll}
+              onFrameScroller={setNewScroller}
+              onPageChange={setComparePage}
+            />
           </div>
         )}
       </div>

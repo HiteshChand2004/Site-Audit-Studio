@@ -9,6 +9,7 @@ import { analysisWarnings, latestAnalysis } from '../recreate/inputs.js';
 import { recreateJobs } from '../recreate/jobs.js';
 import { activePreview, PreviewError, startPreview, stopPreview } from '../recreate/preview.js';
 import { recreateDir } from '../recreate/workspace.js';
+import { slugFor } from '../recreate/discover.js';
 
 // Stacks the recreate pipeline can emit so far (Phase 6 adds the others).
 export const RECREATE_STACKS = ['html'];
@@ -57,6 +58,9 @@ router.get('/:id/recreate/current', (req, res) => {
   res.json(job ? { job, steps: PUBLIC_STEPS } : null);
 });
 
+// Reports written before pages carried their capture folder get it here (additive).
+const withSlugs = (report) => ({ ...report, pages: (report.pages ?? []).map((p) => ({ ...p, slug: p.slug ?? slugFor(p.outPath) })) });
+
 // Latest attempt (any status) plus the report of the latest successful recreate.
 router.get('/:id/recreate', (req, res) => {
   if (!selectProject.get(req.params.id)) return res.status(404).json({ error: 'Project not found.' });
@@ -70,7 +74,7 @@ router.get('/:id/recreate', (req, res) => {
       startedAt: last.started_at,
       finishedAt: last.finished_at,
     } : null,
-    result: done ? JSON.parse(done.result_json) : null,
+    result: done ? withSlugs(JSON.parse(done.result_json)) : null,
   });
 });
 
@@ -113,6 +117,31 @@ router.post('/:id/preview', async (req, res) => {
 router.delete('/:id/preview', async (req, res) => {
   await stopPreview({ projectId: req.params.id });
   res.status(204).end();
+});
+
+// Screenshots the Recreate capture took of each page (the OLD panel shows the page the NEW preview
+// shows). Only fold/full WebP files of a completed recreate of this project; the recreate id is in
+// the path, so a file never changes. Recreates past the retention (latest 2) are gone: 404.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CAPTURE_FILE = /^(desktop|tablet|mobile)-(fold|full)\.webp$/;
+// A capture folder name (discover.js slugFor): letters, digits, _ . - only; never "." or "..".
+const CAPTURE_SLUG = /^(?!\.{1,2}$)[\w.-]{1,200}$/;
+const doneRecreate = db.prepare(`SELECT id FROM recreates WHERE id = ? AND project_id = ? AND status = 'done'`);
+
+router.get('/:id/recreate/:recreateId/captures/:slug/:file', (req, res) => {
+  const { id, recreateId, slug, file } = req.params;
+  if (!UUID.test(id) || !UUID.test(recreateId) || !CAPTURE_SLUG.test(slug) || !CAPTURE_FILE.test(file)) {
+    return res.status(404).json({ error: 'Capture not found.' });
+  }
+  if (!doneRecreate.get(recreateId, id)) return res.status(404).json({ error: 'Recreate not found.' });
+  res.sendFile(
+    path.join(recreateDir(id, recreateId), 'capture', slug, file),
+    { headers: { 'Content-Type': 'image/webp', 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' } },
+    (err) => {
+      if (!err || res.headersSent) return;
+      res.status(404).json({ error: 'Capture not found. Only the latest 2 recreates of a project keep their files.' });
+    },
+  );
 });
 
 router.get('/:id/recreate/:recreateId/events', (req, res) => {

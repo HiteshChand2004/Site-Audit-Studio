@@ -284,3 +284,57 @@ test('preview routes start, report and stop the preview of the latest completed 
     server.close();
   }
 });
+
+test('capture screenshots of a completed recreate are served per page, and nothing else', async () => {
+  const app = express();
+  app.use('/api/projects', recreateRouter);
+  const server = await new Promise((resolve) => {
+    const s = app.listen(0, '127.0.0.1', () => resolve(s));
+  });
+  const base = `http://127.0.0.1:${server.address().port}/api/projects`;
+  try {
+    const now = new Date().toISOString();
+    const makeProject = () => {
+      const id = randomUUID();
+      projectIds.push(id);
+      db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://example.com/', 'html', 1, ?, ?)`).run(id, now, now);
+      return id;
+    };
+    const id = makeProject();
+    const other = makeProject();
+    const recreateId = randomUUID();
+    // An older report without page slugs: GET /recreate fills them in.
+    const report = { recreateId, pages: [{ path: '/', outPath: 'index.html' }, { path: '/blog/post', outPath: 'blog/post/index.html' }] };
+    db.prepare(`INSERT INTO recreates (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`).run(recreateId, id, now, now, JSON.stringify(report));
+    const running = randomUUID();
+    db.prepare(`INSERT INTO recreates (id, project_id, status, progress, started_at) VALUES (?, ?, 'running', 10, ?)`).run(running, id, now);
+    const dir = recreateDir(id, recreateId);
+    await writeTree(dir, { 'capture/index/desktop-full.webp': 'WEBP-home', 'capture/blog__post/mobile-fold.webp': 'WEBP-post', 'report.json': '{"secret":1}' });
+    await writeTree(recreateDir(id, running), { 'capture/index/desktop-full.webp': 'WEBP-running' });
+
+    const latest = await (await fetch(`${base}/${id}/recreate`)).json();
+    assert.deepEqual(latest.result.pages.map((p) => p.slug), ['index', 'blog__post']);
+
+    const home = await fetch(`${base}/${id}/recreate/${recreateId}/captures/index/desktop-full.webp`);
+    assert.equal(home.status, 200);
+    assert.equal(home.headers.get('content-type'), 'image/webp');
+    assert.equal(await home.text(), 'WEBP-home');
+    assert.equal(await (await fetch(`${base}/${id}/recreate/${recreateId}/captures/blog__post/mobile-fold.webp`)).text(), 'WEBP-post');
+
+    for (const bad of [
+      `${id}/recreate/${recreateId}/captures/index/desktop-full.png`, // not a capture screenshot name
+      `${id}/recreate/${recreateId}/captures/index/desktop.json`,
+      `${id}/recreate/${recreateId}/captures/..%2F..%2Freport.json/desktop-full.webp`, // encoded path tricks
+      `${id}/recreate/${recreateId}/captures/%2E%2E/desktop-full.webp`,
+      `${id}/recreate/${recreateId}/captures/blog__post/desktop-full.webp`, // file does not exist
+      `${other}/recreate/${recreateId}/captures/index/desktop-full.webp`, // another project's recreate
+      `${id}/recreate/${running}/captures/index/desktop-full.webp`, // not completed
+    ]) {
+      const res = await fetch(`${base}/${bad}`);
+      assert.equal(res.status, 404, bad);
+      assert.doesNotMatch(await res.text(), /secret|WEBP/);
+    }
+  } finally {
+    server.close();
+  }
+});

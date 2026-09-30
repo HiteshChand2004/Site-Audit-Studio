@@ -72,7 +72,7 @@ function previewOverlay({ audit, mode, slow }) {
   return null;
 }
 
-export default function OldPanel({ project, audit, loading, onOpenStack, syncScroll = false, onShotScroller }) {
+export default function OldPanel({ project, audit, loading, onOpenStack, syncScroll = false, onShotScroller, comparePage = null }) {
   const [url, setUrl] = useState(project.url);
   const [maxPages, setMaxPages] = useState(String(project.max_pages ?? 25));
   useEffect(() => setUrl(project.url), [project.url]);
@@ -91,14 +91,25 @@ export default function OldPanel({ project, audit, loading, onOpenStack, syncScr
   const [viewport, setViewport] = useState(1440);
   const [device, setDevice] = useState('desktop');
   const [slow, setSlow] = useState(false);
-  const previewUrl = audit?.url ?? project.url;
+  const siteUrl = audit?.url ?? project.url;
+  // The page the NEW preview shows (another than the homepage): the OLD preview shows the same page
+  // of the original, live or as the screenshot the Recreate capture took of it.
+  const recreateResult = useProjects((s) => s.recreateResults[project.id]?.result);
+  const pageInfo = comparePage ? recreateResult?.pages?.find((p) => p.outPath === comparePage) : null;
+  const otherPage = pageInfo && pageInfo.path !== '/' && pageInfo.url ? pageInfo : null;
+  const previewUrl = otherPage?.url ?? siteUrl;
+  const pageShot = otherPage
+    ? (vp) => (otherPage.views?.includes(vp.view) && otherPage.slug
+      ? { viewport: { width: vp.id }, full: { url: `/api/projects/${project.id}/recreate/${recreateResult.recreateId}/captures/${otherPage.slug}/${vp.view}-full.webp` } }
+      : null)
+    : undefined;
   const live = liveAvailability(audit, previewUrl);
-  const hasScreens = Boolean(audit?.screenshots);
+  const hasScreens = otherPage ? (otherPage.views?.length ?? 0) > 0 : Boolean(audit?.screenshots);
   const [mode, setMode] = useState('screenshot');
   // A new analysis (or project) picks its default: live when the site can be framed.
   useEffect(() => {
     setMode(live.ok ? 'live' : 'screenshot');
-  }, [audit?.analysisId, audit?.isDummy, previewUrl, live.ok]);
+  }, [audit?.analysisId, audit?.isDummy, siteUrl, live.ok]);
   // Sync scroll works on the screenshot (the app cannot scroll a live site from another origin):
   // turning it on shows Shot, turning it off brings back the mode shown before.
   const modeBeforeSync = useRef(null);
@@ -193,7 +204,7 @@ export default function OldPanel({ project, audit, loading, onOpenStack, syncScr
           overlay={previewOverlay({ audit, mode, slow })}
         >
           {realPreview ? (
-            <SitePreview url={previewUrl} audit={audit} mode={mode} viewport={viewport} onSlow={setSlow} scrollRef={syncScroll ? onShotScroller : undefined} />
+            <SitePreview url={previewUrl} audit={audit} mode={mode} viewport={viewport} onSlow={setSlow} scrollRef={syncScroll ? onShotScroller : undefined} pageShot={pageShot} />
           ) : (
             <Wireframe />
           )}

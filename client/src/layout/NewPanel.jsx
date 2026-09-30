@@ -35,7 +35,7 @@ function PreviewEmpty({ icon: Icon = Sparkles, title, children }) {
   );
 }
 
-export default function NewPanel({ project, audit, syncScroll = false, onFrameScroller }) {
+export default function NewPanel({ project, audit, syncScroll = false, onFrameScroller, onPageChange }) {
   const stack = stackById(project.stack);
   const job = useProjects((s) => s.recreates[project.id]);
   const dismissJob = useProjects((s) => s.dismissJob);
@@ -49,6 +49,8 @@ export default function NewPanel({ project, audit, syncScroll = false, onFrameSc
   const pages = result?.preview?.pages ?? result?.pages?.map((p) => p.outPath) ?? [];
   // A new recreate opens on its homepage.
   useEffect(() => setPage(pages[0] ?? 'index.html'), [result?.recreateId]);
+  // The OLD panel shows the same page of the original.
+  useEffect(() => onPageChange?.(page), [page, onPageChange]);
   const live = Boolean(result && preview?.url && preview.recreateId === result.recreateId);
   const src = live ? `${preview.url}${pageUrl(page)}` : null;
   // Sync scroll needs the page drawn at full height (the app cannot scroll a frame from another
