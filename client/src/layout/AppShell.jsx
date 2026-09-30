@@ -108,16 +108,21 @@ export default function AppShell() {
 
         {project && (
           <div className={styles.panels} data-tab={tab}>
-            <button
-              type="button"
-              className={styles.syncToggle}
-              aria-pressed={syncScroll}
-              title={syncScroll ? 'OLD and NEW websites scroll together (OLD shows its screenshot). Click to scroll them separately.' : 'Scroll the OLD and NEW websites together, to compare the same section side by side.'}
-              onClick={() => setSyncScroll((on) => !on)}
-            >
-              <ArrowUpDown size={16} aria-hidden="true" />
-              <span>{syncScroll ? 'Sync on' : 'Sync scroll'}</span>
-            </button>
+            <div className={styles.sync}>
+              <button
+                type="button"
+                className={styles.syncToggle}
+                aria-pressed={syncScroll}
+                aria-describedby="sync-scroll-hint"
+                onClick={() => setSyncScroll((on) => !on)}
+              >
+                <ArrowUpDown size={16} aria-hidden="true" />
+                <span>{syncScroll ? 'Sync on' : 'Sync scroll'}</span>
+              </button>
+              <span id="sync-scroll-hint" role="tooltip" className={styles.syncHint}>
+                Sync scroll works in Shot mode only (Live sites can't be controlled due to browser security).
+              </span>
+            </div>
             <div className={styles.tabs} role="tablist" aria-label="Panels">
               {['old', 'new'].map((t) => (
                 <button key={t} role="tab" type="button" aria-selected={tab === t} onClick={() => setTab(t)}>

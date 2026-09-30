@@ -75,11 +75,43 @@
 
 /* Sync scroll toggle: a labelled pill on the divider, in the panel header row (the headers keep
    room for it, Panel.module.css). */
-.syncToggle {
+.sync {
   position: absolute;
   top: 6px;
   left: 50%;
   z-index: 2;
+  display: grid;
+  justify-items: center;
+  transform: translateX(-50%);
+}
+
+/* Hint under the toggle, shown on hover and keyboard focus. */
+.syncHint {
+  position: absolute;
+  top: calc(100% + 6px);
+  width: max-content;
+  max-width: 260px;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--text);
+  color: var(--surface);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  text-align: center;
+  box-shadow: var(--shadow);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease, visibility 120ms ease;
+}
+
+.sync:hover .syncHint,
+.sync:focus-within .syncHint {
+  opacity: 1;
+  visibility: visible;
+}
+
+.syncToggle {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -93,7 +125,6 @@
   font-weight: 600;
   white-space: nowrap;
   box-shadow: var(--shadow);
-  transform: translateX(-50%);
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 }
@@ -157,7 +188,7 @@
 /* Narrow screens: OLD/NEW tabs instead of side-by-side */
 @media (max-width: 1180px) {
   /* Only one panel is visible: nothing to sync. */
-  .syncToggle {
+  .sync {
     display: none;
   }
 
