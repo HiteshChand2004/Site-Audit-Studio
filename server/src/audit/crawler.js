@@ -13,11 +13,12 @@ const CONCURRENCY = 4;
  * @param {number} [o.maxDepth]
  * @param {{isAllowed:(url:string)=>boolean}} o.robots
  * @param {string[]} [o.sitemapUrls]
+ * @param {string[]} [o.seedUrls]  pages crawled first, before the homepage's links (re-audit: the recreated pages)
  * @param {(url:string)=>Promise<{html:string}|null>} [o.render]  used for client-rendered pages
  * @param {(done:number,total:number,url:string)=>void} [o.onProgress]
  * @param {AbortSignal} [o.signal]  stops starting new pages; partial results are returned
  */
-export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls = [], render, onProgress, signal }) {
+export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls = [], seedUrls = [], render, onProgress, signal }) {
   const pages = [];
   const seen = new Set();
   const queue = [];
@@ -60,6 +61,7 @@ export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls 
   seen.add(urlKey(home.requestedUrl || home.url));
   const homePage = await toPage(home, 0);
   pages.push(homePage);
+  for (const u of seedUrls) enqueue(u, 1);
   homePage.facts?.links.forEach((l) => enqueue(l.href, 1));
   for (const u of sitemapUrls.slice(0, maxPages * 3)) enqueue(u, 1);
   onProgress?.(1, Math.min(maxPages, 1 + queue.length), home.url);

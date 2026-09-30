@@ -45,15 +45,20 @@ export const PUBLIC_STEPS = STEPS.map(({ key, label }) => ({ key, label }));
 // Hard cap for one analysis. Steps that would start after it are skipped and reported.
 const TOTAL_BUDGET_MS = 5 * 60 * 1000;
 
-export function overallPct(stepKey, fraction) {
-  const total = STEPS.reduce((n, s) => n + s.weight, 0);
-  let before = 0;
-  for (const s of STEPS) {
-    if (s.key === stepKey) return Math.round(((before + s.weight * Math.min(1, Math.max(0, fraction))) / total) * 100);
-    before += s.weight;
-  }
-  return 0;
+/** Progress (0–100) through a list of weighted steps. */
+export function makeOverallPct(steps) {
+  const total = steps.reduce((n, s) => n + s.weight, 0);
+  return (stepKey, fraction) => {
+    let before = 0;
+    for (const s of steps) {
+      if (s.key === stepKey) return Math.round(((before + s.weight * Math.min(1, Math.max(0, fraction))) / total) * 100);
+      before += s.weight;
+    }
+    return 0;
+  };
 }
+
+export const overallPct = makeOverallPct(STEPS);
 
 /** Thrown when the site cannot be analyzed at all; the job is marked failed. */
 export class AnalysisError extends Error {}
@@ -104,21 +109,29 @@ async function fetchHome(url) {
  * @param {(step:string, fraction:number, message?:string)=>void} o.progress
  * @param {object} [o.netPolicy]  SSRF policy. User projects always get the default user policy;
  *   only platform code (Phase 5 re-audit of its own preview servers) passes an internal one.
+ * The options below are for the re-audit of a recreated site (reaudit/); Analyze never sets them.
+ * @param {string} [o.url]  the site to analyze (default: the project URL)
+ * @param {string} [o.outDir]  where the raw results go (default: data/projects/<id>/audit/<analysisId>/)
+ * @param {string[]} [o.skip]  step keys to leave out without an error (for example 'screenshots')
+ * @param {string[]} [o.seedUrls]  pages the crawl must visit besides the ones it finds itself
  * @returns {Promise<object>} the audit JSON
  */
 export function runAnalysis({ netPolicy = userPolicy(), ...opts }) {
   return withNetPolicy(netPolicy, () => analyze({ ...opts, netPolicy }));
 }
 
-async function analyze({ project, analysisId, maxPages, progress, netPolicy }) {
+async function analyze({ project, analysisId, maxPages, progress, netPolicy, url = project.url, outDir: dir, skip = [], seedUrls = [] }) {
   const deadline = Date.now() + TOTAL_BUDGET_MS;
   const errors = [];
-  const outDir = path.join(projectDir(project.id), 'audit', analysisId);
+  const skipped = new Set(skip);
+  const outDir = dir ?? path.join(projectDir(project.id), 'audit', analysisId);
   await mkdir(outDir, { recursive: true });
   const save = (name, data) => writeFile(path.join(outDir, name), JSON.stringify(data, null, 1)).catch(() => {});
 
   // Runs one step with its time limit. Failures are recorded and the pipeline continues with `fallback`.
+  // A step the caller skips returns `fallback` without an error or progress.
   async function step(key, fn, fallback = null) {
+    if (skipped.has(key)) return fallback;
     const def = STEPS.find((s) => s.key === key);
     progress(key, 0);
     const budget = Math.min(def.max, deadline - Date.now());
@@ -147,20 +160,20 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy }) {
   }
 
   // 1. Homepage. Failing here fails the whole analysis.
-  progress('fetch', 0, `Fetching ${project.url}`);
-  const home = await fetchHome(project.url);
+  progress('fetch', 0, `Fetching ${url}`);
+  const home = await fetchHome(url);
   const origin = new URL(home.url).origin;
   progress('fetch', 1);
 
   const proxy = await startEgressProxy(netPolicy);
   try {
-    return await analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy });
+    return await analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls });
   } finally {
     await proxy.close();
   }
 }
 
-async function analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy }) {
+async function analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls }) {
   // 2. robots.txt, sitemap, llms.txt
   const emptyRobots = { status: 'error', sitemaps: [], blockedAiCrawlers: [], blocksAll: false, isAllowed: parseRobots(`${origin}/robots.txt`, '').isAllowed };
   const { robots, sitemap, llms } = await step(
@@ -186,9 +199,11 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     if (render?.axeError) errors.push({ step: 'render', message: `Accessibility scan failed: ${render.axeError}` });
     if (render?.axe) save('axe.json', render.axe);
 
-    shots = browser
-      ? await step('screenshots', (_signal, budget) => captureScreenshots(browser, home.url, outDir, { timeout: Math.max(5000, Math.min(30000, budget - 5000)) }))
-      : (errors.push({ step: 'screenshots', message: 'Skipped: the browser could not be started.' }), null);
+    if (browser) {
+      shots = await step('screenshots', (_signal, budget) => captureScreenshots(browser, home.url, outDir, { timeout: Math.max(5000, Math.min(30000, budget - 5000)) }));
+    } else if (!skipped.has('screenshots')) {
+      errors.push({ step: 'screenshots', message: 'Skipped: the browser could not be started.' });
+    }
     for (const e of shots?.errors ?? []) errors.push({ step: 'screenshots', message: `${e.view}: ${e.message}` });
 
     const renderForCrawl = browser
@@ -200,6 +215,7 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
         maxPages,
         robots,
         sitemapUrls: sitemap.urls,
+        seedUrls,
         render: renderForCrawl,
         signal,
         onProgress: (done, total) => progress('crawl', done / Math.max(total, 1), `Crawled ${done} of ${total} pages`),

@@ -32,16 +32,62 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 | 3b | Live view (CDP screencast, view + scroll + click, no keyboard) — deferred by the user | ⏳ Later |
 | 4a | Recreate → plain HTML: page discovery (sitemap, limit), Playwright capture, local assets, IR, variant merge, semantic classes, fixers, build + verify, preview | ✅ Done (verified on real sites) |
 | 4b | Motion + responsive fidelity: hover, scroll reveal, continuous animations, widget JS, visual diff score | ⏳ |
-| 5 | PreviewManager (ports 5100–5199), NEW iframe, re-audit → fix checklist | ⏳ |
+| 5 | Re-audit of the NEW site → real fix checklist (OLD vs NEW), sitemap/robots emitter | 🚧 In progress |
+| 5b | Full PreviewManager (several previews on 5100–5199) — deferred by the user | ⏳ Later |
 | 6 | React+Vite / Next.js / MERN emitters + Download zip | ⏳ |
 
-**Current status: Phase 4a COMPLETE.** Phases 1, 2, 3 and 4a are done, verified and merged on branch `phase-4a`
-(never pushed): 4a.1 job foundation ✅ · 4a.2 discovery + capture ✅ · 4a.3 assets ✅ · 4a.4 IR + HTML emitter ✅ ·
-4a.5 fixers + WP REST ✅ · 4a.6 build, verify, fidelity, preview ✅ · 4a.7 real-site fixes + UI polish ✅.
+**Current status: Phase 5 in progress** on branch `phase-5` (git worktree `../Website-Audit-phase5`, never pushed).
+Phases 1, 2, 3 and 4a are done and merged on `phase-4a`. 5.1 re-audit job foundation ✅ (WIP commit) — waiting for the
+user's "next" before 5.2. Phase 4b (motion + responsive fidelity) stays planned. Same workflow: one step at a time, WIP
+commit, wait for the user's "next"; never push; while the user tests, work in a git worktree and merge only when asked.
 
-**Next: Phase 5** (PreviewManager, re-audit of the NEW site → real fix checklist). Do not start it without the user's
-"go ahead". Phase 4b (motion + responsive fidelity) stays planned. Same workflow: one step at a time, WIP commit, wait
-for the user's "next"; never push; while the user tests, work in a git worktree and merge only when asked.
+### Phase 5 plan (approved)
+The fix checklist = the same Analyze pipeline run again on the recreated site (NEW), compared item by item with the
+analysis the recreate was built from (OLD). Nothing hardcoded, and **nothing site-specific**: the comparator, the page
+mapping and the sitemap/robots emitter work from general data only (the recreate report, analyzer keys, URL paths);
+real sites (parchaa.com, panscience.xyz, …) are verification sites, never targets of special-case code.
+
+| Step | Scope | Status |
+|---|---|---|
+| 5.1 Job foundation | `reaudits` table, JobManager, routes + SSE, throwaway server on `dist/`, internal net policy, `runAnalysis` options, auto-trigger after Recreate, retention | ✅ WIP |
+| 5.2 Comparator + sitemap/robots emitter | stable analyzer `key`s, page mapping OLD URL → NEW path, OLD re-scored on the recreated pages only, category matchers, classification, `report.fixes` evidence; `sitemap.xml` + `robots.txt` in the recreate (target_domain or original origin) | ⏳ |
+| 5.3 API + contract | real `audit.recreate` (additive: checklist, summary, scores before/after, stale) | ⏳ |
+| 5.4 UI | score strip before → after, summary chips, category accordions, progress, Re-audit button, states | ⏳ |
+| 5.5 Verification + docs | fixture + real sites through the UI | ⏳ |
+
+Decisions (approved by the user):
+- **Trigger**: automatic after every successful Recreate (a separate job queued from the Recreate job's `after` hook, so a
+  failed re-audit never discards a recreate) **plus** a manual Re-audit button (retry, or after the recreate/analysis changed).
+- **Statuses**: ✓ fixed · ◐ improved · ✗ still open · ↓ regressed (new in NEW) · ⚠ manual (never ✓) ·
+  n/a (deploy check: not measurable on a local preview, e.g. HTTPS, TTFB). Items passing on both sides are grouped.
+- **Scope matching**: only pages recreated on both sides are compared; OLD issues on pages that were not recreated are
+  "out of scope", never "fixed". OLD is re-scored with the same analyzers on its saved per-page facts (`crawl.json`).
+- **Matching**: SEO/AEO/crawl by stable item key; axe by rule id + count (class names change, so no selector matching);
+  broken links by normalized URL; Lighthouse by category score and by failing audit id; manual from OLD `manualRebuild`
+  + the recreate's "Manual rebuild needed". Performance is labelled "measured on local preview, simulated throttling".
+- **sitemap.xml / robots.txt**: a small emitter in the recreate (target_domain or original origin).
+- **Job lock**: Analyze, Recreate and Re-audit share the one global lock (all drive Chromium; parallel Lighthouse runs
+  distort each other). One re-audit per project at a time; the 5-minute Analyze budget.
+- **Full PreviewManager**: deferred (Phase 5b); the re-audit uses its own throwaway server.
+
+5.1 details (`server/src/reaudit/`, `routes/reaudit.js`):
+- `runReaudit` serves the recreate's `dist/` through the preview handler (`servePreview`, CSP/Host checks included) on a
+  throwaway 127.0.0.1 port — never the app's active preview, which moves when another project is selected — and runs
+  `runAnalysis` with `createNetPolicy({ internalPorts: [thatPort], allowLoopback: <user flag> })`: only that port is
+  reachable on loopback, everything else keeps the user SSRF policy (Lighthouse Chrome reaches it through the egress
+  proxy, `<-loopback>`). Steps: `serve` + the Analyze steps without `screenshots` (the recreate has fidelity shots).
+  Stack detection runs (5.2 can check that no platform runtime is left).
+- `runAnalysis` options (Analyze never sets them): `url`, `outDir`, `skip` (step keys, no error), `seedUrls` (crawled
+  first, before the homepage links — the recreated pages from the report, so unlinked pages are audited and the page
+  limit (= recreated page count) is never spent on a broken internal link).
+- Storage: raw results in `recreate/<recreateId>/reaudit/<reauditId>/` (crawl, axe, Lighthouse), never in `audit/`;
+  the latest completed re-audit per recreate is kept (after hook), a removed recreate takes its re-audits with it.
+  `reaudits` row: `recreate_id`, `analysis_id` (the OLD analysis from the recreate report), `result_json` =
+  `{ reauditId, recreateId, analysisId, origin, pages, reauditedAt, audit }` (`audit` without the sample `recreate`).
+- The JobManager `after` hook now also gets `payload`. Tests leave Lighthouse out via `JOB_OPTIONS.skip` / `skip`.
+- Fixture end-to-end (API on a temp data dir): Analyze → Recreate (fidelity 98) → auto re-audit in ~25 s with Lighthouse:
+  6/6 pages, 11 links, 0 broken, axe clean, Lighthouse 100/92/100/100, stack Custom/Unknown; expected open items for
+  5.2: HTTPS (n/a on preview), sitemap.xml/robots.txt 404 (emitter in 5.2).
 
 ### Phase 4a final summary
 From a completed Analyze, **Recreate** produces a clean static HTML/CSS copy of an authorized site:
@@ -368,7 +414,8 @@ client/src/  layout/ (AppShell, Sidebar, OldPanel, NewPanel)
              components/{common,audit,preview,project,recreate}/  (preview/SitePreview.jsx = iframe/screenshot,
              recreate/RecreateReport.jsx = fidelity + verification card)
              store/useProjects.js, api/client.js, constants.js (STACKS), styles/
-server/src/  index.js, db/index.js (schema + migrations), routes/{projects,analyze,screens,recreate}.js, dummy/audit.js
+server/src/  index.js, db/index.js (schema + migrations), routes/{projects,analyze,screens,recreate,reaudit}.js, dummy/audit.js
+             reaudit/ index.js (serve dist/ + runAnalysis on it, STEPS), jobs.js (job, auto-trigger target, retention)
              jobs/ manager.js (JobManager + global one-job lock), sse.js
              recreate/ index.js (pipeline + STEPS + budget), jobs.js, inputs.js, workspace.js (tmp → final, retention),
                     errors.js, discover.js (page selection), inspect.js (step 1), capture/{index,snapshot}.js (Playwright capture),
@@ -409,7 +456,10 @@ API: `GET/POST /api/projects`, `GET/PATCH/DELETE /api/projects/:id` (PATCH takes
 `POST /api/projects/:id/recreate`, `GET /api/projects/:id/recreate` (latest attempt + latest report), `GET /api/projects/:id/recreate/current`,
 `GET /api/projects/:id/recreate/:recreateId/captures/:slug/:file` (per-page capture shots of a completed recreate, same file names),
 `GET /api/projects/:id/recreate/:recreateId/events` (SSE), `GET/POST/DELETE /api/projects/:id/preview` (preview of the latest
-completed recreate: `{ preview: { url, port, recreateId, … } | null }`; POST 404 without a recreate, 503 without a free port), `GET /api/health`. PATCH `/api/projects/:id` also takes `recreate_pages` (0–20) and `target_domain`.
+completed recreate: `{ preview: { url, port, recreateId, … } | null }`; POST 404 without a recreate, 503 without a free port),
+`POST /api/projects/:id/reaudit` (re-audit of the latest completed recreate; 409 without one or while one runs),
+`GET /api/projects/:id/reaudit` (`{ last, result, stale }`), `GET /api/projects/:id/reaudit/current`,
+`GET /api/projects/:id/reaudit/:reauditId/events` (SSE), `GET /api/health`. PATCH `/api/projects/:id` also takes `recreate_pages` (0–20) and `target_domain`.
 
 ## Currently dummy / known issues
 - Analyze is real. Projects that were never analyzed still get the **dummy** audit (`isDummy: true`, "Dummy data" badge).

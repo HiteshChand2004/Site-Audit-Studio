@@ -1,5 +1,5 @@
-// In-memory background job manager shared by Analyze and Recreate. Both drive Chromium and are
-// memory-heavy, so one global lock runs a single job at a time across both kinds; the rest wait
+// In-memory background job manager shared by Analyze, Recreate and Re-audit. All drive Chromium and
+// are memory-heavy, so one global lock runs a single job at a time across every kind; the rest wait
 // in FIFO order. Each manager allows one active job per project, mirrors state to its table and
 // pushes it to SSE subscribers as events on the job id.
 import { EventEmitter } from 'node:events';
@@ -49,12 +49,12 @@ export class JobManager extends EventEmitter {
 
   /**
    * @param {object} o
-   * @param {'analyses'|'recreates'} o.table  rows: id, project_id, status, step, progress, error, started_at, finished_at, result_json
+   * @param {'analyses'|'recreates'|'reaudits'} o.table  rows: id, project_id, status, step, progress, error, started_at, finished_at, result_json
    * @param {string} o.noun  "an analysis", used in messages
    * @param {{key:string,label:string}[]} o.steps
    * @param {(step:string, fraction:number)=>number} o.overallPct
    * @param {(o:{job:object, project:object, payload:object, progress:Function})=>Promise<object>} o.run
-   * @param {(o:{job:object, project:object, ok:boolean})=>Promise<void>} [o.after]  cleanup after every job
+   * @param {(o:{job:object, project:object, payload:object, ok:boolean})=>Promise<void>} [o.after]  cleanup after every job
    * @param {string} o.doneMessage
    */
   constructor(opts) {
@@ -142,7 +142,7 @@ export class JobManager extends EventEmitter {
       this.#rows.finish.run('failed', job.pct, job.error, new Date().toISOString(), null, job.id);
       this.#emit(job, 'failed');
     }
-    await after?.({ job, project, ok }).catch((err) => console.error(`[${this.#opts.table} cleanup ${job.id}]`, err));
+    await after?.({ job, project, payload, ok }).catch((err) => console.error(`[${this.#opts.table} cleanup ${job.id}]`, err));
     setTimeout(() => this.#jobs.delete(job.id), RETAIN_MS).unref();
   }
 }

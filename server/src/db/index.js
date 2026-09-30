@@ -58,6 +58,23 @@ db.exec(`
     result_json  TEXT
   );
   CREATE INDEX IF NOT EXISTS recreates_project ON recreates(project_id, started_at);
+
+  -- Phase 5: the audit run again on a recreated site (its dist/ build). analysis_id is the analysis
+  -- the recreate was built from, which the fix checklist compares against.
+  CREATE TABLE IF NOT EXISTS reaudits (
+    id           TEXT PRIMARY KEY,
+    project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    recreate_id  TEXT,
+    analysis_id  TEXT,
+    status       TEXT NOT NULL DEFAULT 'queued',
+    step         TEXT,
+    progress     INTEGER NOT NULL DEFAULT 0,
+    error        TEXT,
+    started_at   TEXT NOT NULL,
+    finished_at  TEXT,
+    result_json  TEXT
+  );
+  CREATE INDEX IF NOT EXISTS reaudits_project ON reaudits(project_id, started_at);
 `);
 
 // Idempotent column migrations for databases created by earlier phases.
@@ -73,7 +90,7 @@ addColumn('projects', 'recreate_pages', 'INTEGER NOT NULL DEFAULT 5');
 addColumn('projects', 'target_domain', 'TEXT');
 
 // Jobs live in memory, so anything still "running" after a restart can never finish.
-for (const table of ['analyses', 'recreates']) {
+for (const table of ['analyses', 'recreates', 'reaudits']) {
   db.prepare(`
     UPDATE ${table} SET status = 'failed', error = 'The server restarted while this job was running. Run it again.', finished_at = ?
     WHERE status IN ('queued', 'running')
