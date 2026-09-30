@@ -46,7 +46,16 @@ export function brokenTargets(audit, skipped = []) {
   return out;
 }
 
-/** Removes the href of links to broken targets. @returns {object[]} the unlinked links */
+// Attributes that only mean something on a link; an unlinked element keeps none of them.
+const LINK_ONLY_ATTRS = ['href', 'target', 'rel', 'hreflang', 'download', 'ping', 'referrerpolicy', 'type', 'aria-label'];
+
+/**
+ * Unlinks links to broken targets: the element becomes a <span> with the same text, classes and id, and
+ * loses every link-only attribute. An <a> left without href is flagged by crawlers ("not crawlable"),
+ * and aria-label is not allowed on a plain span. The stylesheet reset already renders a link like its
+ * parent text (color, decoration, cursor), so the span looks the same.
+ * @returns {object[]} the unlinked links
+ */
 export function fixBrokenLinks(t, broken, origin) {
   const fixed = [];
   if (!broken.size) return fixed;
@@ -63,8 +72,8 @@ export function fixBrokenLinks(t, broken, origin) {
     const hit = broken.get(urlKey(abs.href));
     if (!hit) return;
     delete n.href;
-    delete n.attrs.href;
-    delete n.attrs.target;
+    for (const attr of LINK_ONLY_ATTRS) delete n.attrs[attr];
+    n.tag = 'span';
     const text = n.children.filter(isText).map((c) => c.text).join(' ').replace(/\s+/g, ' ').trim();
     fixed.push({ page: t.info.path, url: hit.url, status: hit.status, internal: new URL(hit.url).host.replace(/^www\./, '') === new URL(origin).host.replace(/^www\./, ''), text });
   });

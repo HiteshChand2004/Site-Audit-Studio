@@ -200,19 +200,22 @@ test('headings: one h1, no skipped levels, siblings stay siblings, margins kept'
   assert.deepEqual(fixHeadings(page(noH1)).map((c) => [c.text, c.from, c.to]), [['Welcome', 'h2', 'h1'], ['More', 'h3', 'h2']]);
 });
 
-test('broken links lose their href; loading priorities follow the first screen', () => {
+test('broken links become plain text (a span without link attributes); loading priorities follow the first screen', () => {
   const broken = brokenTargets(
     { brokenLinks: { broken: [{ url: 'https://s.test/old/', status: 404 }] } },
     [{ url: 'https://s.test/gone', reason: 'error', status: 410 }, { url: 'https://s.test/slow', reason: 'error', status: 200 }, { url: 'https://s.test/login', reason: 'backend' }],
   );
   assert.deepEqual([...broken.values()].map((b) => [b.url, b.source]), [['https://s.test/old/', 'audit'], ['https://s.test/gone', 'discovery']]);
   const root = node('body', {}, [
-    node('a', { href: '/old', target: '_blank' }, [text('Old page')], { href: 'https://s.test/old' }),
+    node('a', { href: '/old', target: '_blank', rel: 'noopener noreferrer', class: 'footer-link', 'aria-label': 'Old page' }, [text('Old page')], { href: 'https://s.test/old' }),
     node('a', { href: '/fine' }, [text('Fine')], { href: 'https://s.test/fine' }),
   ]);
   const fixed = fixBrokenLinks(page(root), broken, 'https://s.test');
   assert.deepEqual(fixed.map((f) => [f.text, f.status, f.internal]), [['Old page', 404, true]]);
-  assert.deepEqual(root.children[0].attrs, {});
+  assert.equal(root.children[0].tag, 'span');
+  assert.equal(root.children[0].href, undefined);
+  assert.deepEqual(root.children[0].attrs, { class: 'footer-link' });
+  assert.equal(root.children[1].tag, 'a');
   assert.equal(root.children[1].attrs.href, '/fine');
 
   const img = (y, w, h, extra = {}) => node('img', { ...extra }, [], { views: { desktop: view([0, y, w, h]), mobile: view([0, y, Math.min(w, 375), h]) } });

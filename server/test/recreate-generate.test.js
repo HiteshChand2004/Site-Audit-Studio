@@ -443,7 +443,8 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
 
   // 4a.5 — fixers.
   const fix = Object.fromEntries(report.fixes.map((f) => [f.id, f]));
-  assert.match(work, /<a class="[\w-]+">Archive<\/a>/); // broken link unlinked, text kept
+  assert.match(work, /<span class="[\w-]+">Archive<\/span>/); // broken link unlinked: plain text, no <a> left without href
+  assert.ok(!/<a(?![^>]*\shref=)[^>]*>Archive/.test(work));
   assert.deepEqual(fix['broken-links'].items.map((i) => [i.page, new URL(i.url).pathname, i.status]), [['/work.html', '/old-work.html', 404]]);
   assert.match(work, /<img[^>]* alt="Our studio in Lisbon"/);
   assert.match(work, /<a class="[\w-]+" aria-label="GitHub" href="https:\/\/github\.com\/recreate-co">/);

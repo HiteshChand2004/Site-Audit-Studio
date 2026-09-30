@@ -32,14 +32,44 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 | 3b | Live view (CDP screencast, view + scroll + click, no keyboard) — deferred by the user | ⏳ Later |
 | 4a | Recreate → plain HTML: page discovery (sitemap, limit), Playwright capture, local assets, IR, variant merge, semantic classes, fixers, build + verify, preview | ✅ Done (verified on real sites) |
 | 4b | Motion + responsive fidelity: hover, scroll reveal, continuous animations, widget JS, visual diff score | ⏳ |
-| 5 | Re-audit of the NEW site → real fix checklist (OLD vs NEW), sitemap/robots emitter | 🚧 In progress |
+| 5 | Re-audit of the NEW site → real fix checklist (OLD vs NEW), sitemap/robots emitter | ✅ Done (verified on real sites; awaiting the user's merge approval) |
 | 5b | Full PreviewManager (several previews on 5100–5199) — deferred by the user | ⏳ Later |
 | 6 | React+Vite / Next.js / MERN emitters + Download zip | ⏳ |
 
-**Current status: Phase 5 in progress** on branch `phase-5` (git worktree `../Website-Audit-phase5`, never pushed).
-Phases 1, 2, 3 and 4a are done and merged on `phase-4a`. 5.1 re-audit job foundation ✅ · 5.2 comparator +
-sitemap/robots emitter ✅ · 5.3 API + `audit.recreate` contract ✅ · 5.4 UI ✅ (WIP commits) — waiting for the user's "next" before 5.5. Phase 4b (motion + responsive fidelity) stays planned. Same workflow: one step at a time, WIP
+**Current status: Phase 5 COMPLETE** on branch `phase-5` (git worktree `../Website-Audit-phase5`, never pushed), waiting for
+the user's final approval before merging into `phase-4a`. Phases 1, 2, 3 and 4a are done and merged on `phase-4a`.
+5.1 re-audit job foundation ✅ · 5.2 comparator + sitemap/robots emitter ✅ · 5.3 API + `audit.recreate` contract ✅ ·
+5.4 UI ✅ · 5.5 real-site verification + docs ✅. Phase 4b (motion + responsive fidelity) stays planned. Same workflow: one step at a time, WIP
 commit, wait for the user's "next"; never push; while the user tests, work in a git worktree and merge only when asked.
+
+### Phase 5 final summary
+After every successful Recreate the server audits the recreated site again (same Analyze pipeline on its `dist/`, served
+on a throwaway loopback port) and compares it check by check with the analysis the recreate was built from. The NEW
+panel shows the result as the **fix checklist**: Lighthouse scores before → after, status chips (fixed, improved, still
+open, regressed, changed, manual, N/A), category sections with before / now, the recreate's evidence and review flags
+for auto-generated text. Only recreated pages are compared; deploy-dependent checks are N/A; CPU-timing audits never
+count as regressions. Every recreate now also ships `sitemap.xml` + `robots.txt`. A Re-audit button re-runs it; stale
+results (newer recreate / newer analysis) are flagged. Everything is general: no site- or platform-specific code.
+
+**Real-site verification (5.5, authorized sites, API on a temp data dir, default page limit):**
+| Site | Platform | Fidelity | Checklist | Lighthouse (mobile) before → after | Notes |
+|---|---|---|---|---|---|
+| parchaa.com | Framer | 89 | 48 rows: 13 fixed, 1 improved, 13 open, 1 regressed, 2 manual, 4 N/A | perf 51 → 70, SEO 92 → 100, a11y 89 → 91 | Framer + GTM runtime gone; headings (23 skipped levels, several h1) fixed; link names fixed (review); regression: unused CSS (one shared stylesheet) |
+| panscience.xyz | Next.js | 80 | 38 rows: 5 fixed, 1 improved, 6 open, 4 regressed, 3 N/A | perf 83 → 83, SEO 100 → 100, a11y 91 → 91 | Next.js runtime gone; broken link unlinked; regressions: render-blocking + unused CSS (shared stylesheet), llms.txt not carried over, one external link refused on that run (medium.com) |
+| Recreate fixture | — | 98 | 35 rows | SEO 100 → 100 | |
+| Seeded Analyze fixture | — | 98 | 33 rows: 11 fixed | SEO 83 → 100, a11y 86 → 100 | real regression: render-blocking CSS/font preload |
+
+**Found by the checklist and fixed in 5.5 (general):** the broken-links fixer left `<a>` without `href` (Lighthouse
+"Links are not crawlable", panscience SEO 100 → 92). Unlinked links now become a `<span>` with the same text/class/id and
+no link-only attribute (`href`, `target`, `rel`, `hreflang`, `download`, `ping`, `referrerpolicy`, `type`, `aria-label`);
+the `a` reset already rendered them like parent text, so the look is unchanged (panscience fidelity 80 → 80, SEO back to 100).
+
+**Open items (decisions pending, not blockers):**
+- Original `/llms.txt` is not carried over by Recreate → `aeo.llms-txt` regresses on sites that publish one.
+- Same-severity rows whose count grows (panscience colour contrast 14 → 27) are "still open", not "regressed".
+- External links that fail only at network level on one run (refused / DNS / timeout) show as "New broken links" (regressed).
+- One shared `css/site.css` for all pages → Lighthouse "Reduce unused CSS" / render-blocking regressions (a per-page or
+  critical-CSS split belongs to a later phase).
 
 ### Phase 5 plan (approved)
 The fix checklist = the same Analyze pipeline run again on the recreated site (NEW), compared item by item with the
@@ -53,7 +83,7 @@ real sites (parchaa.com, panscience.xyz, …) are verification sites, never targ
 | 5.2 Comparator + sitemap/robots emitter | stable analyzer `key`s, page mapping OLD URL → NEW path, OLD re-scored on the recreated pages only, category matchers, classification, `report.fixes` evidence; `sitemap.xml` + `robots.txt` in the recreate (target_domain or original origin) | ✅ WIP |
 | 5.3 API + contract | real `audit.recreate` (additive: checklist, summary, scores before/after, stale) | ✅ WIP |
 | 5.4 UI | score strip before → after, summary chips, category accordions, progress, Re-audit button, states | ✅ WIP |
-| 5.5 Verification + docs | fixture + real sites through the UI | ⏳ |
+| 5.5 Verification + docs | fixture + real sites through the UI | ✅ |
 
 Decisions (approved by the user):
 - **Trigger**: automatic after every successful Recreate (a separate job queued from the Recreate job's `after` hook, so a
@@ -382,8 +412,9 @@ environmental, not a regression.
   - **headings**: one h1 (extra h1 → h2; no h1 → the first heading in `main` is promoted); skipped levels are fixed by
     outline (a heading goes one below the nearest earlier heading of a higher original level, so siblings stay
     siblings). Headings before the first h1 are left alone. The old tag's UA margins are written explicitly.
-  - **broken links**: targets in `audit.brokenLinks.broken` or discovery skips with an HTTP error lose `href`/`target`;
-    the text stays. Unverified links (401/403/429/timeouts) are kept.
+  - **broken links**: links to targets in `audit.brokenLinks.broken` or discovery skips with an HTTP error become a
+    `<span>` (text, class and id kept; every link-only attribute dropped, since 5.5). Unverified links (401/403/429/
+    timeouts) are kept.
   - **loading**: per desktop and mobile view the largest image in the first screen (≥ 150×100) gets
     `fetchpriority="high" loading="eager"`; images below the first screen in every view get `loading="lazy"
     decoding="async"`; iframes below it `loading="lazy"`.
