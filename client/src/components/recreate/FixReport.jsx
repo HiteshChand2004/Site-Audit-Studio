@@ -28,7 +28,7 @@ const SCORES = [
 
 const STALE = {
   recreate: 'A newer recreate exists; this checklist is about the previous one. Re-audit to check the latest site.',
-  analysis: 'The original site was analyzed again after this recreate; the checklist compares against the earlier analysis.',
+  analysis: 'The original site was analyzed again after this recreate; the checklist compares against the earlier analysis. Recreate to compare with the new analysis.',
 };
 
 const seconds = (ms) => (ms == null ? '—' : `${(ms / 1000).toFixed(1)} s`);
