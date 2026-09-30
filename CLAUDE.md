@@ -128,8 +128,11 @@ environmental, not a regression.
   stops starting pages when one more (at the slowest pace so far) would not fit before a 2.5-minute reserve for the later
   steps; uncaptured pages link to the live site with a warning. Capturing pages in parallel and shorter load waits were
   tried and rejected (they broke captures of animation-heavy pages).
-- Sync scroll (UI): a round toggle on the OLD/NEW divider; on = both panels scroll by the same share of their height,
-  off (default, not remembered) = independent; hidden on narrow screens.
+- Sync scroll (UI): a labelled pill on the OLD/NEW divider. On = the two WEBSITES scroll together by the same share
+  of their height: the app cannot scroll a frame from another origin, so OLD shows its Analyze screenshot (Shot; Live
+  comes back when sync is turned off) and NEW draws the recreated page at full height (height from the report) inside
+  an app-owned scroll box; the wheel stays inside the websites. Off (default, not remembered) = everything as before.
+  OLD screenshots exist for the homepage only, so other NEW pages are compared with the OLD homepage shot.
 - canonical/sitemap/OG use the original origin unless the project's `target_domain` is set.
 - Tests use only the fixture site (localhost:4100); never send requests to external sites from tests.
 - Discovery (4a.2): a fresh SSRF-guarded mini crawl (robots respected). Order: homepage, pages the homepage links to

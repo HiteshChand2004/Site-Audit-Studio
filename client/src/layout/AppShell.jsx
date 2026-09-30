@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { Globe, Link2, Link2Off, Plus } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ArrowUpDown, Globe, Plus } from 'lucide-react';
 import Sidebar from './Sidebar.jsx';
 import OldPanel from './OldPanel.jsx';
 import NewPanel from './NewPanel.jsx';
@@ -54,11 +54,12 @@ export default function AppShell() {
   const [stackOpen, setStackOpen] = useState(false);
   const [tab, setTab] = useState('old'); // narrow screens only
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed();
-  // Sync scroll: off by default and not remembered; the OLD and NEW panels scroll by the same share.
+  // Sync scroll: off by default and not remembered. The OLD screenshot and the NEW page (drawn at full
+  // height) scroll by the same share of their height, so both show the same part of the site.
   const [syncScroll, setSyncScroll] = useState(false);
-  const oldBody = useRef(null);
-  const newBody = useRef(null);
-  useSyncScroll(oldBody, newBody, syncScroll, project?.id);
+  const [oldScroller, setOldScroller] = useState(null);
+  const [newScroller, setNewScroller] = useState(null);
+  useSyncScroll(oldScroller, newScroller, syncScroll);
 
   useEffect(() => {
     load();
@@ -109,11 +110,11 @@ export default function AppShell() {
               type="button"
               className={styles.syncToggle}
               aria-pressed={syncScroll}
-              aria-label="Sync scroll"
-              title={syncScroll ? 'Sync scroll is on: OLD and NEW scroll together. Click to scroll them separately.' : 'Sync scroll is off. Click to scroll OLD and NEW together.'}
+              title={syncScroll ? 'OLD and NEW websites scroll together (OLD shows its screenshot). Click to scroll them separately.' : 'Scroll the OLD and NEW websites together, to compare the same section side by side.'}
               onClick={() => setSyncScroll((on) => !on)}
             >
-              {syncScroll ? <Link2 size={13} aria-hidden="true" /> : <Link2Off size={13} aria-hidden="true" />}
+              <ArrowUpDown size={16} aria-hidden="true" />
+              <span>{syncScroll ? 'Sync on' : 'Sync scroll'}</span>
             </button>
             <div className={styles.tabs} role="tablist" aria-label="Panels">
               {['old', 'new'].map((t) => (
@@ -128,9 +129,10 @@ export default function AppShell() {
               audit={audit}
               loading={auditLoading}
               onOpenStack={() => setStackOpen(true)}
-              bodyRef={oldBody}
+              syncScroll={syncScroll}
+              onShotScroller={setOldScroller}
             />
-            <NewPanel key={`new-${project.id}`} project={project} audit={audit} bodyRef={newBody} />
+            <NewPanel key={`new-${project.id}`} project={project} audit={audit} syncScroll={syncScroll} onFrameScroller={setNewScroller} />
           </div>
         )}
       </div>

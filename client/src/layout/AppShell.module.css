@@ -73,30 +73,33 @@
   min-height: 0;
 }
 
-/* Sync scroll toggle: a small round button on the divider, in the panel header row. */
+/* Sync scroll toggle: a labelled pill on the divider, in the panel header row (the headers keep
+   room for it, Panel.module.css). */
 .syncToggle {
   position: absolute;
-  top: 9px;
+  top: 6px;
   left: 50%;
   z-index: 2;
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px 0 11px;
+  border: 1.5px solid var(--accent);
+  border-radius: 999px;
   background: var(--surface);
-  color: var(--muted);
-  box-shadow: var(--shadow-sm);
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: var(--shadow);
   transform: translateX(-50%);
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 }
 
 .syncToggle:hover {
-  color: var(--text);
-  border-color: var(--border-strong);
+  background: var(--accent-tint);
 }
 
 .syncToggle[aria-pressed='true'] {

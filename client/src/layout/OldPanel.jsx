@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Clock, Globe, Info, Loader2, Play, Settings2, Sparkles, ShieldAlert } from 'lucide-react';
 import Button from '../components/common/Button.jsx';
 import Badge from '../components/common/Badge.jsx';
@@ -72,7 +72,7 @@ function previewOverlay({ audit, mode, slow }) {
   return null;
 }
 
-export default function OldPanel({ project, audit, loading, onOpenStack, bodyRef }) {
+export default function OldPanel({ project, audit, loading, onOpenStack, syncScroll = false, onShotScroller }) {
   const [url, setUrl] = useState(project.url);
   const [maxPages, setMaxPages] = useState(String(project.max_pages ?? 25));
   useEffect(() => setUrl(project.url), [project.url]);
@@ -99,6 +99,20 @@ export default function OldPanel({ project, audit, loading, onOpenStack, bodyRef
   useEffect(() => {
     setMode(live.ok ? 'live' : 'screenshot');
   }, [audit?.analysisId, audit?.isDummy, previewUrl, live.ok]);
+  // Sync scroll works on the screenshot (the app cannot scroll a live site from another origin):
+  // turning it on shows Shot, turning it off brings back the mode shown before.
+  const modeBeforeSync = useRef(null);
+  useEffect(() => {
+    if (syncScroll && hasScreens) {
+      setMode((current) => {
+        modeBeforeSync.current = current;
+        return 'screenshot';
+      });
+    } else if (!syncScroll && modeBeforeSync.current) {
+      setMode(modeBeforeSync.current);
+      modeBeforeSync.current = null;
+    }
+  }, [syncScroll, hasScreens]);
 
   const changeViewport = (v) => {
     setViewport(v);
@@ -134,7 +148,7 @@ export default function OldPanel({ project, audit, loading, onOpenStack, bodyRef
         </span>
       </header>
 
-      <div ref={bodyRef} className={`${styles.body} scroll`}>
+      <div className={`${styles.body} scroll`}>
         <form className={styles.urlRow} onSubmit={onSubmit}>
           <label className={styles.urlInput}>
             <Globe size={14} aria-hidden="true" />
@@ -179,7 +193,7 @@ export default function OldPanel({ project, audit, loading, onOpenStack, bodyRef
           overlay={previewOverlay({ audit, mode, slow })}
         >
           {realPreview ? (
-            <SitePreview url={previewUrl} audit={audit} mode={mode} viewport={viewport} onSlow={setSlow} />
+            <SitePreview url={previewUrl} audit={audit} mode={mode} viewport={viewport} onSlow={setSlow} scrollRef={syncScroll ? onShotScroller : undefined} />
           ) : (
             <Wireframe />
           )}

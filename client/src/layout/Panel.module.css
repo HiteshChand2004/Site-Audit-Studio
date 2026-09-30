@@ -31,6 +31,25 @@
   --rail: var(--accent);
 }
 
+/* Room for the Sync scroll toggle on the divider between the two headers (AppShell.module.css). */
+.old .header {
+  padding-right: 76px;
+}
+
+.new .header {
+  padding-left: 76px;
+}
+
+@media (max-width: 1180px) {
+  .old .header {
+    padding-right: var(--sp-4);
+  }
+
+  .new .header {
+    padding-left: var(--sp-4);
+  }
+}
+
 .new .header {
   background: linear-gradient(180deg, var(--accent-tint) 0%, var(--surface) 100%);
 }

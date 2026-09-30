@@ -3,7 +3,8 @@ import { AlertTriangle, CheckCircle2, Download, Info, RotateCw, Sparkles } from 
 import Button from '../components/common/Button.jsx';
 import Badge from '../components/common/Badge.jsx';
 import PreviewFrame from '../components/preview/PreviewFrame.jsx';
-import { LiveFrame } from '../components/preview/SitePreview.jsx';
+import { FullPageFrame, LiveFrame } from '../components/preview/SitePreview.jsx';
+import { VIEWPORTS } from '../components/preview/PreviewFrame.jsx';
 import FixChecklist from '../components/recreate/FixChecklist.jsx';
 import RecreateReport from '../components/recreate/RecreateReport.jsx';
 import AnalyzeProgress from '../components/audit/AnalyzeProgress.jsx';
@@ -34,7 +35,7 @@ function PreviewEmpty({ icon: Icon = Sparkles, title, children }) {
   );
 }
 
-export default function NewPanel({ project, audit, bodyRef }) {
+export default function NewPanel({ project, audit, syncScroll = false, onFrameScroller }) {
   const stack = stackById(project.stack);
   const job = useProjects((s) => s.recreates[project.id]);
   const dismissJob = useProjects((s) => s.dismissJob);
@@ -50,6 +51,11 @@ export default function NewPanel({ project, audit, bodyRef }) {
   useEffect(() => setPage(pages[0] ?? 'index.html'), [result?.recreateId]);
   const live = Boolean(result && preview?.url && preview.recreateId === result.recreateId);
   const src = live ? `${preview.url}${pageUrl(page)}` : null;
+  // Sync scroll needs the page drawn at full height (the app cannot scroll a frame from another
+  // origin); the height of each page and width comes from the recreate report.
+  const view = VIEWPORTS.find((v) => v.id === viewport)?.view;
+  const pageHeight = result?.fidelity?.pages?.find((p) => p.outPath === page)?.views?.[view]?.height?.generated ?? null;
+  const fullPage = syncScroll && live && pageHeight > 0;
 
   return (
     <section className={`${styles.panel} ${styles.new}`} aria-label="Recreated website">
@@ -61,7 +67,7 @@ export default function NewPanel({ project, audit, bodyRef }) {
         </span>
       </header>
 
-      <div ref={bodyRef} className={`${styles.body} scroll`}>
+      <div className={`${styles.body} scroll`}>
         {staleDays > STALE_DAYS && (
           <p className={own.warn} role="status">
             <AlertTriangle size={13} aria-hidden="true" />
@@ -100,7 +106,18 @@ export default function NewPanel({ project, audit, bodyRef }) {
             )
           }
         >
-          {live ? (
+          {fullPage ? (
+            <FullPageFrame
+              key={`${preview.recreateId}-${page}-${viewport}`}
+              url={src}
+              width={viewport}
+              height={pageHeight}
+              scrollRef={onFrameScroller}
+              sandbox={PREVIEW_SANDBOX}
+              title="Preview of the recreated site"
+              loadingText="Loading preview…"
+            />
+          ) : live ? (
             <LiveFrame
               key={preview.recreateId}
               url={src}

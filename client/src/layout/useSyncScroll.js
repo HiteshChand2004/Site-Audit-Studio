@@ -11,18 +11,16 @@ const follow = (from, to) => {
 };
 
 /**
- * While `enabled`, scrolling either element scrolls the other to the same share of its own height
- * (the two panels have different content lengths, so pixels would drift apart). When turned on, the
- * second element is aligned to the first. `key` rebinds the listeners when the elements are replaced.
- * @param {import('react').RefObject<HTMLElement>} aRef
- * @param {import('react').RefObject<HTMLElement>} bRef
+ * While `enabled`, scrolling either element scrolls the other to the same share of its own height,
+ * so both show the same part of the page even when they are drawn at different sizes. When turned
+ * on (or when an element is replaced), the second element is aligned to the first.
+ * @param {HTMLElement|null} a  the OLD scroller (the screenshot)
+ * @param {HTMLElement|null} b  the NEW scroller (the recreated page at full height)
  */
-export function useSyncScroll(aRef, bRef, enabled, key) {
+export function useSyncScroll(a, b, enabled) {
   useEffect(() => {
-    const a = aRef.current;
-    const b = bRef.current;
     if (!enabled || !a || !b) return undefined;
-    // The panel the user is scrolling; scroll events of the other one are our own updates.
+    // The element the user is scrolling; scroll events of the other one are our own updates.
     let leader = null;
     let frame = 0;
     let release = 0;
@@ -33,7 +31,7 @@ export function useSyncScroll(aRef, bRef, enabled, key) {
       cancelAnimationFrame(release);
       frame = requestAnimationFrame(() => {
         follow(from, to);
-        // Let the follower's own scroll event pass before either panel may lead again.
+        // Let the follower's own scroll event pass before either element may lead again.
         release = requestAnimationFrame(() => {
           leader = null;
         });
@@ -50,5 +48,5 @@ export function useSyncScroll(aRef, bRef, enabled, key) {
       cancelAnimationFrame(frame);
       cancelAnimationFrame(release);
     };
-  }, [aRef, bRef, enabled, key]);
+  }, [a, b, enabled]);
 }

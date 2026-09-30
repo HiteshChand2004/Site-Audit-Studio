@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { Camera, Globe, ImageOff } from 'lucide-react';
 import { VIEWPORTS } from './PreviewFrame.jsx';
 import styles from './SitePreview.module.css';
@@ -108,8 +108,13 @@ export function LiveFrame({ url, width, onSlow = noop, sandbox = LIVE_SANDBOX, t
   );
 }
 
-function Screenshot({ shot, viewport, url }) {
-  const [ref, stage] = useStageSize();
+function Screenshot({ shot, viewport, url, scrollRef }) {
+  const [stageRef, stage] = useStageSize();
+  // The scroll box is also handed to Sync scroll (it follows the recreated page, or leads it).
+  const ref = useCallback((el) => {
+    stageRef(el);
+    scrollRef?.(el);
+  }, [stageRef, scrollRef]);
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [shot?.full.url]);
 
@@ -129,7 +134,14 @@ function Screenshot({ shot, viewport, url }) {
   }
   const width = Math.min(stage.width, shot.viewport.width);
   return (
-    <div ref={ref} className={`${styles.stage} ${styles.scroll} scroll`} tabIndex={0} aria-label="Screenshot, scrollable">
+    <div
+      ref={ref}
+      className={`${styles.stage} ${styles.scroll} scroll`}
+      // While synced, the wheel stays in the screenshot instead of scrolling the panel at its ends.
+      style={scrollRef ? { overscrollBehavior: 'contain' } : undefined}
+      tabIndex={0}
+      aria-label="Screenshot, scrollable"
+    >
       {width > 0 && (
         <img
           className={styles.shot}
@@ -151,6 +163,50 @@ function Screenshot({ shot, viewport, url }) {
   );
 }
 
+/**
+ * A page drawn at its full height inside a scroll box the app owns: the frame itself never scrolls
+ * (it is as tall as the page), the box around it does. The app cannot scroll or read a frame from
+ * another origin, but it can scroll this box, so Sync scroll can follow it. Needs the page height.
+ */
+export function FullPageFrame({ url, width, height, scrollRef, sandbox, title, loadingText = 'Loading…' }) {
+  const [stageRef, stage] = useStageSize();
+  const [loaded, setLoaded] = useState(false);
+  const ref = useCallback((el) => {
+    stageRef(el);
+    scrollRef?.(el);
+  }, [stageRef, scrollRef]);
+  useEffect(() => setLoaded(false), [url]);
+
+  const scale = stage.width ? Math.min(1, stage.width / width) : 0;
+  return (
+    <div
+      ref={ref}
+      className={`${styles.stage} ${styles.scroll} scroll`}
+      // The wheel stays in the page instead of scrolling the panel once the page end is reached.
+      style={{ overscrollBehavior: 'contain' }}
+      tabIndex={0}
+      aria-label={`${title}, scrollable`}
+    >
+      {scale > 0 && (
+        <div className={styles.scaled} style={{ width: width * scale, height: height * scale }}>
+          {!loaded && <div className={styles.loading}>{loadingText}</div>}
+          <iframe
+            className={styles.iframe}
+            src={url}
+            title={title}
+            sandbox={sandbox}
+            allow=""
+            referrerPolicy="no-referrer"
+            scrolling="no"
+            style={{ width, height, transform: `scale(${scale})` }}
+            onLoad={() => setLoaded(true)}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Empty({ icon: Icon, title, children }) {
   return (
     <div className={styles.empty}>
@@ -165,7 +221,7 @@ function Empty({ icon: Icon, title, children }) {
  * The OLD site preview: the live page in a sandboxed iframe when the site allows framing, else the
  * screenshot taken during Analyze. Rendered at the real viewport width and scaled to the panel.
  */
-export default function SitePreview({ url, audit, mode, viewport, onSlow }) {
+export default function SitePreview({ url, audit, mode, viewport, onSlow, scrollRef }) {
   const vp = VIEWPORTS.find((v) => v.id === viewport) ?? VIEWPORTS[0];
   if (mode === 'live') return <LiveFrame url={url} width={vp.id} onSlow={onSlow} />;
   if (!audit?.screenshots) {
@@ -175,5 +231,5 @@ export default function SitePreview({ url, audit, mode, viewport, onSlow }) {
       </Empty>
     );
   }
-  return <Screenshot shot={audit.screenshots.views[vp.view]} viewport={vp} url={url} />;
+  return <Screenshot shot={audit.screenshots.views[vp.view]} viewport={vp} url={url} scrollRef={scrollRef} />;
 }
