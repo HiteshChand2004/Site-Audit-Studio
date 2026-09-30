@@ -58,7 +58,7 @@ real sites (parchaa.com, panscience.xyz, …) are verification sites, never targ
 Decisions (approved by the user):
 - **Trigger**: automatic after every successful Recreate (a separate job queued from the Recreate job's `after` hook, so a
   failed re-audit never discards a recreate) **plus** a manual Re-audit button (retry, or after the recreate/analysis changed).
-- **Statuses**: ✓ fixed · ◐ improved · ✗ still open · ↓ regressed (new in NEW) · ⚠ manual (never ✓) ·
+- **Statuses**: ✓ fixed · ◐ improved · ✗ still open · ↓ regressed (new in NEW) · ~ changed (CPU timing, noisy locally) · ⚠ manual (never ✓) ·
   n/a (deploy check: not measurable on a local preview, e.g. HTTPS, TTFB). Items passing on both sides are grouped.
 - **Scope matching**: only pages recreated on both sides are compared; OLD issues on pages that were not recreated are
   "out of scope", never "fixed". OLD is re-scored with the same analyzers on its saved per-page facts (`crawl.json`).
@@ -156,9 +156,12 @@ Decisions (approved by the user):
   "Sample checklist" note shows only when `audit.recreate.isDummy`.
 - Verified through the API on the Recreate fixture: after Analyze → sample `not-started`; during the auto re-audit →
   sample `running` with job progress; after → real, 35 rows, legacy list 21 rows, not stale.
-- **Known (not fixed, needs a decision)**: Lighthouse CPU-timing diagnostics are noisy on this machine. Right after a
-  Recreate, "Minimize main-thread work" measured 5.2 s on the NEW site (regressed); a re-run seconds later passed on both
-  sides. Performance rows can flip between runs.
+- **CPU-timing noise (decision: option 1, approved)**: right after a Recreate, "Minimize main-thread work" measured 5.2 s on
+  the NEW site (regressed); a re-run seconds later passed on both sides. Rule (`rules.js isCpuTiming`, general, no audit
+  ids): a Lighthouse audit whose `numericUnit` is `millisecond` and whose details are not an `opportunity` reports a
+  measured CPU duration (today: main-thread work, JS boot-up time). When such a row would be `regressed` it becomes
+  **`changed`** ("noisy locally", `NOISY_NOTE`), counted in `summary.changed`, left out of the 3-status list. Improvements
+  keep their status. Status order: regressed, open, changed, improved, fixed, manual, na, pass.
 
 ### Phase 4a final summary
 From a completed Analyze, **Recreate** produces a clean static HTML/CSS copy of an authorized site:

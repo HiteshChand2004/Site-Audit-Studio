@@ -16,7 +16,7 @@ import { analyzeCrawl } from '../../audit/analyzers/crawlChecks.js';
 import { analyzeSeo, crawlErrorsItem } from '../../audit/analyzers/seo.js';
 import { examples, itemKey, pathOf, plural } from '../../audit/util.js';
 import {
-  CATEGORIES, classify, DEPLOY_CHECKS, DEPLOY_NOTE, evidenceFor, LOCAL_PERF_NOTE, rankOfImpact, rankOfScore, rankOfStatus, STATUSES,
+  CATEGORIES, classify, DEPLOY_CHECKS, DEPLOY_NOTE, evidenceFor, isCpuTiming, LOCAL_PERF_NOTE, NOISY_NOTE, rankOfImpact, rankOfScore, rankOfStatus, STATUSES,
 } from './rules.js';
 import { normUrl, pairPages, toOriginalUrl } from './scope.js';
 
@@ -158,7 +158,7 @@ function lighthouseAudits(lh) {
         if (!a || !LH_MODES.has(a.scoreDisplayMode) || typeof a.score !== 'number') continue;
         const prev = out.get(ref.id);
         if (!prev || a.score < prev.score) {
-          out.set(ref.id, { score: a.score, title: a.title, detail: a.displayValue || null, category });
+          out.set(ref.id, { score: a.score, title: a.title, detail: a.displayValue || null, category, cpuTiming: isCpuTiming(a) });
         }
       }
     }
@@ -178,7 +178,14 @@ function lighthouseItems(oldLh, newLh) {
     const after = side(n.get(id));
     if (!before?.rank && !after?.rank) continue; // passing on both sides: not worth a row
     const a = n.get(id) ?? o.get(id);
-    items.push({ key: `lighthouse.${id}`, category: a.category, title: a.title, before: o.size ? before ?? { status: 'pass', rank: 0 } : null, after: n.size ? after ?? { status: 'pass', rank: 0 } : null });
+    items.push({
+      key: `lighthouse.${id}`,
+      category: a.category,
+      title: a.title,
+      before: o.size ? before ?? { status: 'pass', rank: 0 } : null,
+      after: n.size ? after ?? { status: 'pass', rank: 0 } : null,
+      ...((o.get(id)?.cpuTiming || n.get(id)?.cpuTiming) && { cpuTiming: true }),
+    });
   }
   return items;
 }
@@ -220,6 +227,11 @@ function finish(item, report) {
   else if (!item.after) out.note = 'Not measured on the recreated site.';
   else if (!item.before) out.note = 'Not measured on the original site.';
   if (item.category === 'performance' && status !== 'na') out.note = LOCAL_PERF_NOTE;
+  if (item.cpuTiming && status === 'regressed') {
+    status = 'changed';
+    out.status = status;
+    out.note = NOISY_NOTE;
+  }
   const ev = evidenceFor(item.key, report);
   if (ev) {
     out.evidence = ev.evidence;

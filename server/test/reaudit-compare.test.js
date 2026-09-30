@@ -182,7 +182,7 @@ test('sitemap.xml lists indexable pages at the site origin; robots.txt keeps the
 
 test('legacy checklist: the original fixed / open / manual list, pass and n/a left out', async () => {
   const { legacyChecklist } = await import('../src/reaudit/contract.js');
-  const items = ['fixed', 'improved', 'open', 'regressed', 'manual', 'na', 'pass'].map((status) => ({ key: `k.${status}`, status, title: status, after: { detail: `${status} now` } }));
+  const items = ['fixed', 'improved', 'open', 'regressed', 'changed', 'manual', 'na', 'pass'].map((status) => ({ key: `k.${status}`, status, title: status, after: { detail: `${status} now` } }));
   assert.deepEqual(legacyChecklist(items).map((i) => [i.key, i.status, i.detail]), [
     ['k.fixed', 'fixed', 'fixed now'],
     ['k.improved', 'open', 'improved now'],
@@ -191,4 +191,26 @@ test('legacy checklist: the original fixed / open / manual list, pass and n/a le
     ['k.manual', 'manual', 'manual now'],
   ]);
   assert.deepEqual(legacyChecklist(), []);
+});
+
+test('CPU-timing audits: a worse local measurement is "changed (noisy locally)", never a regression', () => {
+  const refs = { performance: [{ id: 'cpu-a' }, { id: 'cpu-b' }, { id: 'savings' }] };
+  const timing = (score, ms) => ({ title: `CPU ${ms}`, score, scoreDisplayMode: 'metricSavings', numericUnit: 'millisecond', displayValue: `${ms} ms`, details: { type: 'table' } });
+  const saving = (score) => ({ title: 'Savings', score, scoreDisplayMode: 'metricSavings', numericUnit: 'millisecond', details: { type: 'opportunity' } });
+  const oldLh = lhr({ 'cpu-a': timing(1, 400), 'cpu-b': timing(0.2, 3000), savings: saving(1) }, refs);
+  const newLh = lhr({ 'cpu-a': timing(0, 5200), 'cpu-b': timing(1, 300), savings: saving(0.2) }, refs);
+  const audit = (url) => ({ url, seo: [], aeo: [], crawl: {}, accessibility: [], brokenLinks: { broken: [] }, techStack: [], manualRebuild: [] });
+  const c = compareAudits({
+    old: { audit: audit('https://site.test/'), crawl: null, lighthouse: { mobile: oldLh, desktop: null } },
+    next: { audit: audit('http://127.0.0.1:5100/'), crawl: null, lighthouse: { mobile: newLh, desktop: null } },
+    report: { pages: [] },
+    newOrigin: 'http://127.0.0.1:5100',
+  });
+  const item = (key) => c.items.find((i) => i.key === key);
+  assert.equal(item('lighthouse.cpu-a').status, 'changed');
+  assert.match(item('lighthouse.cpu-a').note, /noisy locally/);
+  assert.equal(item('lighthouse.cpu-b').status, 'fixed');
+  assert.equal(item('lighthouse.savings').status, 'regressed');
+  assert.equal(c.summary.changed, 1);
+  assert.equal(c.summary.regressed, 1);
 });
