@@ -30,20 +30,20 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 | 2 | Analyze job + SSE progress: Lighthouse (mobile+desktop), stack detection, crawler (broken links, sitemap, robots, meta), SEO, AEO, axe a11y, manual-rebuild detector | ✅ Done |
 | 3 | OLD preview: frame check (XFO + CSP3 frame-ancestors), sandboxed iframe, screenshots 1440/768/375 (fold + full, WebP, keep latest 3), per-device metrics, SSRF guard | ✅ Done |
 | 3b | Live view (CDP screencast, view + scroll + click, no keyboard) — deferred by the user | ⏳ Later |
-| 4a | Recreate → plain HTML: page discovery (sitemap, limit), Playwright capture, local assets, IR, variant merge, semantic classes, fixers, build + verify, preview | 🚧 4a.6 done, real-site testing pending before 4a.7 |
+| 4a | Recreate → plain HTML: page discovery (sitemap, limit), Playwright capture, local assets, IR, variant merge, semantic classes, fixers, build + verify, preview | ✅ Done (verified on real sites) |
 | 4b | Motion + responsive fidelity: hover, scroll reveal, continuous animations, widget JS, visual diff score | ⏳ |
 | 5 | PreviewManager (ports 5100–5199), NEW iframe, re-audit → fix checklist | ⏳ |
 | 6 | React+Vite / Next.js / MERN emitters + Download zip | ⏳ |
 
-**Current status:** Phases 1, 2 and 3 are complete. Phase 4a is in progress on branch `phase-4a`, one sub-step at a time
-(stop after each, WIP commit, wait for the user's "next"; never push):
-4a.1 job foundation ✅ · 4a.2 discovery + capture ✅ · 4a.3 assets ✅ · 4a.4 IR + HTML emitter ✅ · 4a.5 fixers + WP REST ✅ · 4a.6 build, verify, fidelity, preview ✅ · 4a.7 tuning + docs (small scope, see below).
+**Current status: Phase 4a COMPLETE.** Phases 1, 2, 3 and 4a are done, verified and merged on branch `phase-4a`
+(never pushed): 4a.1 job foundation ✅ · 4a.2 discovery + capture ✅ · 4a.3 assets ✅ · 4a.4 IR + HTML emitter ✅ ·
+4a.5 fixers + WP REST ✅ · 4a.6 build, verify, fidelity, preview ✅ · 4a.7 real-site fixes + UI polish ✅.
 
-**Status: 4a.6 done, real-site testing pending before 4a.7.** The user is testing Analyze + Recreate from the UI on real,
-authorized sites (one Framer site, one WordPress/custom site). 4a.7 scope (approved): fix the issues that testing finds;
-if it finds none, 4a.7 is only a small polish + docs pass. Do not start 4a.7, Phase 4b or Phase 5 without the user's go.
+**Next: Phase 5** (PreviewManager, re-audit of the NEW site → real fix checklist). Do not start it without the user's
+"go ahead". Phase 4b (motion + responsive fidelity) stays planned. Same workflow: one step at a time, WIP commit, wait
+for the user's "next"; never push; while the user tests, work in a git worktree and merge only when asked.
 
-### Phase 4a summary (4a.1–4a.6)
+### Phase 4a final summary
 From a completed Analyze, **Recreate** produces a clean static HTML/CSS copy of an authorized site:
 1. **Job foundation**: SSE progress, one job at a time (shared lock with Analyze), 10-minute budget, nothing kept on
    failure (tmp → final workspace), the latest 2 recreates kept.
@@ -59,6 +59,23 @@ From a completed Analyze, **Recreate** produces a clean static HTML/CSS copy of 
 6. **Build check, fidelity threshold, live preview**: atomic `dist/` build, safety gate, verification (files, links,
    assets, HTML), fidelity per page and overall with a threshold of 80, a static preview on 5100–5199 shown in the NEW
    panel with a fidelity + verification report card.
+7. **Real-site fixes (4a.7)**: scroll-reveal content captured in its revealed state, same-origin `@font-face`, builder
+   flex/grid sizing, wheel-driven capture scroll, srcset per view, robust navigation waits, a 7-minute inspect limit with
+   a 2.5-minute reserve, SSE ping + reconnect. All fixes are general (no per-site code).
+8. **Compare UI**: collapsible sidebar; Sync scroll (OLD screenshot + NEW full-height page scroll together, with a hint
+   that it works in Shot mode only); the OLD preview follows the NEW page picker (per-page Recreate capture shots);
+   the dev runner restarts the API only on real source changes and never during a job.
+
+**Real-site verification (authorized sites, through the UI):**
+| Site | Platform | Fidelity | Notes |
+|---|---|---|---|
+| parchaa.com | Framer | **88–89** / 100 (was 55) | 10/10 pages; homepage 68 → 84; /contact and /platform captured within the time limit |
+| panscience.xyz | Next.js | **80** / 100 (was 75) | all images on /media |
+| Framer test site | Framer | 97–98 / 100 | |
+| Fixture (`fixtures/recreate-site`) | — | 98 / 100 | 28 links / 27 assets / 6 pages valid |
+
+Known open items (not blockers): parchaa /solutions mobile (view alignment mixes list items across breakpoints),
+panscience /ventures tablet/desktop drift.
 
 Output stack is plain HTML only for now; the fix checklist stays sample data until Phase 5; Download waits for Phase 6.
 
@@ -71,8 +88,8 @@ Output stack is plain HTML only for now; the fix checklist stays sample data unt
 | 4a.4 IR + HTML emitter | ✅ Done | `1bdd007` | Fixture fidelity **99/100** (every page 96–100). `ir/` (tree: view alignment, **responsive merge** of builder Desktop/Tablet/Phone copies into one element with base + tablet/mobile media queries, wrapper cleanup; styles: one class per distinct style, sizes restored from captured boxes; names: **semantic classes**, original names only when human-written, never builder/hashed/utility names; head: original tags kept, missing ones **auto-filled from the page and listed in `report.autoGenerated`**, missing `lang` reported not guessed; links: recreated pages relative, others live + reported), `emit/` (pages at original paths, `css/site.css`, **assets linked by relative local paths**, hard-linked files), `ir/site.json`. **Forms** keep markup, lose `action`, go to **Manual rebuild needed**. Generate step = IR + emit + fit pass; build step = basic fidelity (`verify/`). Fixture `work.html` + `recreate-generate.test.js`. Inline SVG is sanitized in the IR build since 4a.5. |
 | 4a.5 Fixers + WP REST | ✅ Done | `f21f10d`, `813dd37` | **SVG sanitizer** (`fixers/svg.js`, allowlist rewrite) on every downloaded SVG file (assets step) and every inline SVG (IR build); HTML attribute guard (`fixers/html.js`); JSON-LD re-serialized; **safety gate** (`verify/safety.js`) re-parses `site/` and `dist/` and fails the job on any finding. Fixers (`fixers/`): alt text, accessible names, heading hierarchy, broken links, LCP `fetchpriority` + lazy loading, `font-display: swap`, font preloads → `report.fixes` + `report.autoGenerated`. **WordPress REST** (`fixers/wordpress.js`): clean text + head fields, IR `pages[].content`, post/page totals. **Production build** `dist/` (esbuild-minified CSS/JS, `build/minify.js`). Fixture: `/wp-json/wp/v2/`, WP-style contact page, fixer + unsafe-SVG seeds on `/work.html`; `recreate-fixers.test.js`. |
 | 4a.6 Build, verify, preview | ✅ Done | `fd8d826` | **Build step** (`build/index.js`): atomic `dist/` build (`dist.tmp` → `dist`, a failure names the file), safety gate (moved here from generate), **verification** of `dist/` (`verify/site.js`: every emitted file present, internal links + anchors, local assets in HTML/CSS/SVG, no remote asset, **html-validate**; emitter-only HTML errors fail the job, markup carried over from the original is a warning), **fidelity** rendered from `dist/` with a **threshold of 80** (views, pages and site flagged `low`, warnings). **Preview** (`preview.js`): one recreate's `dist/` on `127.0.0.1:5100–5199`, one active preview, Host check, realpath containment, no dotfiles, strict CSP (`frame-ancestors` = the app); step 5 serves every page through it; started after the job and by `POST /preview`. NEW panel: sandboxed iframe (no scripts), viewport + page picker, report card. Fixture: fidelity **98**, 28 links / 27 assets / 6 pages valid; `recreate-build.test.js`. |
-
-| 4a.7 Real-site fixes | 🚧 In progress | `9d129c3` | From real-site testing (parchaa.com, Framer test site). **Scroll-reveal capture**: content hidden by appear effects (opacity 0 until in view, hidden again after) is captured in its revealed end state (animations finished, state pinned). **Same-origin `@font-face`** sources were bare strings → no `@font-face` emitted; fixed. **Builder flex sizing** (frames with absolute-only children, `display: contents` wrappers, content-sized flex items). parchaa.com fidelity 55 → 83 (/platform 47 → 86; homepage 68 still low), Framer test site 98. **Round 2** (branch `phase-4a-fix`, worktree, `4657970`…`1ef3342`; compared with the originals on parchaa.com (Framer) and panscience.xyz (Next.js)): wheel-driven capture scroll, srcset per view, grid item widths, wrap detection on the content box, capture waits for the document (retry, no `load` requirement), inspect winds down near its limit, untransformed boxes for rotated elements, sized transformed absolute boxes, `display: contents` in flow checks, spread flex columns, minimum sizes for small boxes, SSE watchdog + reconnect. parchaa.com 83 → **88** (10/10 pages; homepage 68 → 84), panscience.xyz 75 → **80** (all images on /media), Framer test site 97–98. Open: parchaa /solutions mobile (view alignment mixes list items across breakpoints), panscience /ventures tablet/desktop drift. |
+| 4a.7 Real-site fixes | ✅ Done | `9d129c3`, `4657970`…`1ef3342`, `e8a23c2` | From real-site testing (parchaa.com, Framer test site). **Scroll-reveal capture**: content hidden by appear effects (opacity 0 until in view, hidden again after) is captured in its revealed end state (animations finished, state pinned). **Same-origin `@font-face`** sources were bare strings → no `@font-face` emitted; fixed. **Builder flex sizing** (frames with absolute-only children, `display: contents` wrappers, content-sized flex items). parchaa.com fidelity 55 → 83 (/platform 47 → 86; homepage 68 still low), Framer test site 98. **Round 2** (branch `phase-4a-fix`, worktree, `4657970`…`1ef3342`; compared with the originals on parchaa.com (Framer) and panscience.xyz (Next.js)): wheel-driven capture scroll, srcset per view, grid item widths, wrap detection on the content box, capture waits for the document (retry, no `load` requirement), inspect winds down near its limit, untransformed boxes for rotated elements, sized transformed absolute boxes, `display: contents` in flow checks, spread flex columns, minimum sizes for small boxes, SSE watchdog + reconnect. parchaa.com 83 → **88** (10/10 pages; homepage 68 → 84), panscience.xyz 75 → **80** (all images on /media), Framer test site 97–98. Open: parchaa /solutions mobile (view alignment mixes list items across breakpoints), panscience /ventures tablet/desktop drift. Inspect limit 7 min with a 2.5-min reserve (`e8a23c2`): parchaa 6/6 pages, **89**. |
+| 4a.7 UI + dev polish | ✅ Done | `82f0ece`, `5814686`, `b387d39`, `08b3daf`, `959577d`, `06355f7`, `15a62da` | Collapsible sidebar; dev runner (`server/scripts/dev.js`, restarts only on real changes, waits for jobs); Sync scroll of the websites inside the previews (+ Shot-mode hint); OLD preview follows the NEW page picker via `GET …/recreate/:recreateId/captures/:slug/:file`. |
 
 4a.5 manually verified via UI end-to-end on fixture (recreate cc12277c) — site renders correctly in browser, dist/ minified build confirmed.
 4a.6 verified end-to-end on the fixture through the running app (analysis 220fc9e7, recreate 0adc3a7d): fidelity 98/100,
