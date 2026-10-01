@@ -161,9 +161,15 @@ test('wrapped text is measured on the content box: padding is not a second line'
 });
 
 test('breakpoints come from the original media queries', () => {
-  assert.deepEqual(pickBreakpoints(['(max-width: 1024px)', '(max-width: 600px)']), { tablet: 1024, mobile: 600, source: 'site' });
-  assert.deepEqual(pickBreakpoints(['(min-width: 992px)', '(min-width: 40em)', 'print']), { tablet: 991.98, mobile: 639.98, source: 'site' });
-  assert.deepEqual(pickBreakpoints([]), { tablet: 1023.98, mobile: 767.98, source: 'default' });
+  // Four captured views (4b.6.3): the laptop boundary is the widest one between 1024 and 1440, tablet between 768 and 1024, mobile between 375 and 768.
+  assert.deepEqual(pickBreakpoints(['(max-width: 1024px)', '(max-width: 600px)']), { laptop: 1024, tablet: 1023.98, mobile: 600, source: 'site' });
+  assert.deepEqual(pickBreakpoints(['(min-width: 992px)', '(min-width: 40em)', 'print']), { laptop: 1279.98, tablet: 991.98, mobile: 639.98, source: 'site' });
+  assert.deepEqual(pickBreakpoints([]), { laptop: 1279.98, tablet: 1023.98, mobile: 767.98, source: 'default' });
+  // A builder with tablet 810–1199 and phone below 810: the 1024 capture is its tablet layout, the 768 capture its phone layout.
+  assert.deepEqual(pickBreakpoints(['(min-width: 810px) and (max-width: 1199.98px)', '(max-width: 809.98px)', '(min-width: 1200px)']), { laptop: 1199.98, tablet: 809.98, mobile: 767.98, source: 'site' });
+  // Without a laptop capture the tablet boundary is the widest between 768 and 1440, as before.
+  assert.deepEqual(pickBreakpoints(['(max-width: 1024px)', '(max-width: 600px)'], { laptop: false }), { tablet: 1024, mobile: 600, source: 'site' });
+  assert.deepEqual(pickBreakpoints([], { laptop: false }), { tablet: 1023.98, mobile: 767.98, source: 'default' });
 });
 
 test('head: kept when present, filled from the page when missing, and marked auto-generated', () => {
@@ -428,7 +434,11 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.ok(report.manual.some((m) => m.kind === 'form' && m.title === 'Form on /work.html needs a backend'));
   assert.equal(report.generate.variantsMerged, 2);
   assert.ok(report.generate.wrappersRemoved >= 2);
-  assert.deepEqual(report.generate.breakpoints, { tablet: 1024.98, mobile: 600.98, source: 'site' });
+  // The site's own queries (laptop 1024.98, mobile 600.98); the responsive sweep may move the tablet boundary.
+  const bp = report.generate.breakpoints;
+  assert.equal(bp.laptop, 1024.98);
+  assert.equal(bp.mobile, 600.98);
+  assert.ok(bp.tablet === 1023.98 ? bp.source === 'site' : bp.source === 'sweep', JSON.stringify(bp));
   const ir = JSON.parse(await readFile(path.join(dir, 'ir', 'site.json'), 'utf8'));
   assert.equal(ir.version, 1);
   assert.equal(ir.pages.length, 5);

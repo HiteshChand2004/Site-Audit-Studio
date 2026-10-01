@@ -120,7 +120,7 @@ test('near its time limit the inspect step keeps the pages captured so far inste
   assert.match(report.warnings.join('\n'), /1 page was not captured within the time limit of the inspect step \(\/about\.html\); links to it point to the live site/);
 });
 
-test('the inspect step captures every selected page at desktop, tablet and mobile', async () => {
+test('the inspect step captures every selected page at desktop, laptop, tablet and mobile', async () => {
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
@@ -134,8 +134,8 @@ test('the inspect step captures every selected page at desktop, tablet and mobil
 
   const report = await runRecreate({ project, recreateId, progress: () => {}, stages: { ...stubs, inspect: STAGES.inspect } });
   assert.deepEqual(report.pages.map((p) => [p.path, p.views]), [
-    ['/', ['desktop', 'tablet', 'mobile']],
-    ['/about.html', ['desktop', 'tablet', 'mobile']],
+    ['/', ['desktop', 'laptop', 'tablet', 'mobile']],
+    ['/about.html', ['desktop', 'laptop', 'tablet', 'mobile']],
   ]);
   assert.deepEqual(report.errors, []);
   assert.deepEqual(report.manual.map((m) => m.title), ['/login.html was not recreated', '/cart was not recreated']);
@@ -144,7 +144,7 @@ test('the inspect step captures every selected page at desktop, tablet and mobil
   const dir = path.join(recreateDir(id, recreateId), 'capture');
   const manifest = JSON.parse(await readFile(path.join(dir, 'manifest.json'), 'utf8'));
   assert.equal(manifest.pages.length, 2);
-  for (const file of ['desktop.json', 'tablet.json', 'mobile.json', 'desktop-fold.webp', 'mobile-full.webp']) {
+  for (const file of ['desktop.json', 'laptop.json', 'tablet.json', 'mobile.json', 'desktop-fold.webp', 'mobile-full.webp']) {
     assert.ok(await exists(path.join(dir, 'index', file)), file);
   }
   assert.ok(await exists(path.join(dir, 'about', 'desktop.json')));

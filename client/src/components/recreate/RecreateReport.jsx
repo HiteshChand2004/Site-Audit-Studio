@@ -2,7 +2,7 @@ import { AlertTriangle, Check, X } from 'lucide-react';
 import Badge from '../common/Badge.jsx';
 import styles from './RecreateReport.module.css';
 
-const VIEW_LABEL = { desktop: 'desktop', tablet: 'tablet', mobile: 'phone' };
+const VIEW_LABEL = { desktop: 'desktop', laptop: 'laptop', tablet: 'tablet', mobile: 'phone' };
 
 const kb = (bytes) => `${(bytes / 1024).toFixed(1)} KB`;
 const plural = (n, one, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
@@ -26,7 +26,7 @@ function CheckRow({ ok, label, detail }) {
 }
 
 const bandTone = (score) => (score >= 0.85 ? 'ok' : score >= 0.65 ? 'mid' : 'bad');
-const VIEW_ORDER = ['desktop', 'tablet', 'mobile'];
+const VIEW_ORDER = ['desktop', 'laptop', 'tablet', 'mobile'];
 
 /** The page top to bottom in ten bands, coloured by how much the recreate differs from the original there. */
 function BandStrip({ bands, label }) {

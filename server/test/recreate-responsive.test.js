@@ -221,3 +221,34 @@ test('the recreated page is rendered with its lazy images loaded (no flat holes 
     await renderer.close();
   }
 });
+
+test('overflow costs by how far it sticks out, so a partial fix shows in the score', () => {
+  const orig = { height: 2000, scrollWidth: 320 };
+  const small = compareWidth(320, orig, { height: 2000, scrollWidth: 344 }, 0.99);
+  const big = compareWidth(320, orig, { height: 2000, scrollWidth: 440 }, 0.99);
+  const none = compareWidth(320, orig, { height: 2000, scrollWidth: 320 }, 0.99);
+  assert.equal(small.overflowPx, 22);
+  assert.equal(big.overflowPx, 118);
+  assert.ok(none.score > small.score && small.score > big.score, `${none.score} > ${small.score} > ${big.score}`);
+  assert.ok(none.score - small.score >= 1);
+  assert.ok(none.score - big.score <= 15, 'the penalty has a ceiling');
+  for (const m of [small, big]) {
+    assert.ok(m.flags.includes('overflow'));
+    assert.equal(m.low, true);
+  }
+  // Overflow the original has too is not charged; only the part beyond it is.
+  const both = compareWidth(320, { height: 2000, scrollWidth: 400 }, { height: 2000, scrollWidth: 430 }, 0.99);
+  assert.equal(both.overflowPx, 30);
+});
+
+test('fluid type with the laptop view: all four captured values must be on the line', () => {
+  const on = { d: '64px', l: '51.5px', t: '43.8px', m: '32px' };
+  assert.match(fluidValue(on, { laptop: true }).value, /^clamp\(32px,/);
+  // A stepped laptop value breaks it; without the laptop view the value is not looked at.
+  assert.equal(fluidValue({ ...on, l: '64px' }, { laptop: true }), null);
+  assert.match(fluidValue({ ...on, l: '64px' }).value, /^clamp\(32px,/);
+  const rules = [{ selector: '.t', parts: { base: { 'font-size': '64px' }, laptop: { 'font-size': '51.5px' }, tablet: { 'font-size': '43.8px' }, mobile: { 'font-size': '32px' } } }];
+  const out = applyFluidType(rules, { laptop: true });
+  assert.equal(out.changed, 1);
+  assert.deepEqual(Object.keys(out.rules[0].parts), ['base'], 'every stepped override it replaces is gone');
+});

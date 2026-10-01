@@ -453,7 +453,7 @@ export function cascade(decls, pageViews, tag, hideProp = 'display') {
 }
 
 const pseudoDecl = (p, assetFile) => (p ? { content: mapUrls(p.content, assetFile), ...p.style } : null);
-const isEmpty = (parts) => !parts || (!Object.keys(parts.base).length && !parts.tablet && !parts.mobile);
+const isEmpty = (parts) => !parts || (!Object.keys(parts.base).length && !parts.laptop && !parts.tablet && !parts.mobile);
 
 /**
  * Computes rules and class names for every page tree. Sets `node.class` on elements that need one.

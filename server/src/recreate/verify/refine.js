@@ -15,14 +15,23 @@ import { applyFluidType, applyPhoneShrink } from '../ir/fluid.js';
 import { compareWidth, openSweepRenderer, renderSweepPage } from './responsive.js';
 import { visualDiff } from './visualDiff.js';
 
-// The sweep widths each breakpoint decides: the tablet overrides (captured at 768) apply up to `tablet`, so
-// 900 / 1024 / 1280 are tablet or desktop; the mobile overrides (captured at 375) up to `mobile`, so 480 / 600
-// are mobile or tablet. 320 and 1920 are the same whatever the breakpoint.
-const TABLET_WIDTHS = [900, 1024, 1280];
-const MOBILE_WIDTHS = [480, 600];
-// One alternative per outcome (how many of those widths get the narrower overrides), at the usual values.
-const TABLET_ALTERNATIVES = [899.98, 1023.98, 1279.98, 1439.98];
-const MOBILE_ALTERNATIVES = [479.98, 599.98, 767.98];
+// The sweep widths each breakpoint decides: the overrides of a view (captured at its width) apply up to its
+// breakpoint, so the sweep widths between that view and the next wider one get either its styles or the wider
+// view's. With the laptop view (1024, 4b.6.3): laptop decides 1280 (laptop or desktop), tablet decides 900
+// (tablet or laptop), mobile decides 480 / 600 (mobile or tablet). Without it the tablet view (768) decides
+// 900 / 1024 / 1280. 320 and 1920 are the same whatever the breakpoint. One alternative per outcome (how many
+// of those widths get the narrower overrides), at the usual values.
+const SPECS = {
+  laptop: [
+    ['laptop', [1280], [1279.98, 1439.98]],
+    ['tablet', [900], [899.98, 1023.98]],
+    ['mobile', [480, 600], [479.98, 599.98, 767.98]],
+  ],
+  tablet: [
+    ['tablet', [900, 1024, 1280], [899.98, 1023.98, 1279.98, 1439.98]],
+    ['mobile', [480, 600], [479.98, 599.98, 767.98]],
+  ],
+};
 export const BREAKPOINT_MARGIN = 3;
 export const FLUID_MARGIN = 1;
 export const SHRINK_MARGIN = 1;
@@ -52,13 +61,14 @@ export async function refineResponsive({ ir, siteDir, workspace, sweep, deadline
 
   const renderer = await openSweepRenderer(siteDir, sweep.widths);
   const cache = new Map();
-  const fluid = applyFluidType(ir.rules);
+  const hasLaptop = ir.breakpoints.laptop != null;
+  const fluid = applyFluidType(ir.rules, { laptop: hasLaptop });
   const shrink = { stepped: applyPhoneShrink(ir.rules), fluid: applyPhoneShrink(fluid.rules) };
   const rulesOf = (cfg) => {
     const kind = cfg.fluid ? 'fluid' : 'stepped';
     return cfg.shrink ? shrink[kind].rules : cfg.fluid ? fluid.rules : ir.rules;
   };
-  const cssOf = (cfg) => emitCss({ ...ir, breakpoints: { ...ir.breakpoints, tablet: cfg.tablet, mobile: cfg.mobile }, rules: rulesOf(cfg) });
+  const cssOf = (cfg) => emitCss({ ...ir, breakpoints: { ...ir.breakpoints, ...(cfg.laptop != null && { laptop: cfg.laptop }), tablet: cfg.tablet, mobile: cfg.mobile }, rules: rulesOf(cfg) });
 
   // Mean score of a variant over `widths` (the original's sweep widths only), or null when nothing was measured.
   async function score(cfg, widths) {
@@ -71,7 +81,7 @@ export async function refineResponsive({ ir, siteDir, workspace, sweep, deadline
       const results = await Promise.all(usable.map(async (w) => {
         const o = original.widths[w];
         if (!o) return null;
-        const key = `${cfg.tablet}|${cfg.mobile}|${cfg.fluid}|${cfg.shrink ?? false}|${page.slug}|${w}`;
+        const key = `${cfg.laptop}|${cfg.tablet}|${cfg.mobile}|${cfg.fluid}|${cfg.shrink ?? false}|${page.slug}|${w}`;
         if (cache.has(key)) return cache.get(key);
         if (Date.now() > deadline) throw new OutOfTime();
         summary.renders++;
@@ -86,12 +96,12 @@ export async function refineResponsive({ ir, siteDir, workspace, sweep, deadline
     return mean(scores);
   }
 
-  const current = { tablet: ir.breakpoints.tablet, mobile: ir.breakpoints.mobile, fluid: false, shrink: false };
+  const current = { ...(hasLaptop && { laptop: ir.breakpoints.laptop }), tablet: ir.breakpoints.tablet, mobile: ir.breakpoints.mobile, fluid: false, shrink: false };
   let chosen = { ...current };
   try {
-    const bp = { tablet: null, mobile: null };
-    // Each breakpoint is tried on its own widths, the other one as it is.
-    for (const [key, widths, alternatives] of [['tablet', TABLET_WIDTHS, TABLET_ALTERNATIVES], ['mobile', MOBILE_WIDTHS, MOBILE_ALTERNATIVES]]) {
+    const bp = {};
+    // Each breakpoint is tried on its own widths, the others as they are.
+    for (const [key, widths, alternatives] of SPECS[hasLaptop ? 'laptop' : 'tablet']) {
       const usable = widths.filter((w) => sweep.widths.includes(w));
       if (!usable.length) continue;
       const own = outcome(usable, chosen[key]);
@@ -143,9 +153,9 @@ export async function refineResponsive({ ir, siteDir, workspace, sweep, deadline
     await renderer.close().catch(() => {});
   }
 
-  const changed = chosen.tablet !== current.tablet || chosen.mobile !== current.mobile;
+  const changed = chosen.laptop !== current.laptop || chosen.tablet !== current.tablet || chosen.mobile !== current.mobile;
   return {
-    breakpoints: changed ? { tablet: chosen.tablet, mobile: chosen.mobile, source: 'sweep' } : ir.breakpoints,
+    breakpoints: changed ? { ...(hasLaptop && { laptop: chosen.laptop }), tablet: chosen.tablet, mobile: chosen.mobile, source: 'sweep' } : ir.breakpoints,
     rules: rulesOf(chosen),
     fluid: chosen.fluid,
     shrink: chosen.shrink,

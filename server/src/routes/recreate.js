@@ -134,7 +134,7 @@ router.delete('/:id/preview', async (req, res) => {
 // shows). Only fold/full WebP files of a completed recreate of this project; the recreate id is in
 // the path, so a file never changes. Recreates past the retention (latest 2) are gone: 404.
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const CAPTURE_FILE = /^(desktop|tablet|mobile)-(fold|full)\.webp$/;
+const CAPTURE_FILE = /^(desktop|laptop|tablet|mobile)-(fold|full)\.webp$/;
 // A capture folder name (discover.js slugFor): letters, digits, _ . - only; never "." or "..".
 const CAPTURE_SLUG = /^(?!\.{1,2}$)[\w.-]{1,200}$/;
 const doneRecreate = db.prepare(`SELECT id FROM recreates WHERE id = ? AND project_id = ? AND status = 'done'`);
@@ -156,7 +156,7 @@ router.get('/:id/recreate/:recreateId/captures/:slug/:file', (req, res) => {
 });
 
 // Screenshots of the recreated pages and the heatmaps of the visual diff (fidelity/<slug>/<view>-{full,diff}.webp).
-const FIDELITY_FILE = /^(desktop|tablet|mobile)-(full|diff).webp$/;
+const FIDELITY_FILE = /^(desktop|laptop|tablet|mobile)-(full|diff)\.webp$/;
 
 router.get('/:id/recreate/:recreateId/fidelity/:slug/:file', (req, res) => {
   const { id, recreateId, slug, file } = req.params;

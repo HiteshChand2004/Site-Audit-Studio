@@ -1,8 +1,8 @@
 // The platform-free intermediate representation (IR) of the recreated site. Every stack emitter
 // (plain HTML now, React / Next.js later) works from it:
 //
-//   { version, baseUrl, breakpoints: { tablet, mobile }, tokens, fontFaces, keyframes, boxSizingReset,
-//     rules: [{ selector, parts: { base, tablet?, mobile? } }],
+//   { version, baseUrl, breakpoints: { laptop?, tablet, mobile }, tokens, fontFaces, keyframes, boxSizingReset,
+//     rules: [{ selector, parts: { base, laptop?, tablet?, mobile? } }],
 //     files: [{ path, content }],                  generated files (a favicon when the site has none)
 //     pages: [{ url, path, outPath, slug, head, html: { class }, body: IRNode,
 //               content: null | { source: 'wordpress-rest', type, id, slug, title, excerpt, html, date, modified } }] }
@@ -22,13 +22,13 @@ import { buildStyles, mapUrls } from './styles.js';
 import { DROP_TAGS, guardAttributes } from '../fixers/html.js';
 import { contentRecord, headHints, itemFor } from '../fixers/wordpress.js';
 import { addRemoved, emptyRemoved, sanitizeSvg } from '../fixers/svg.js';
+import { VIEW_WIDTHS } from '../views.js';
 import { BLOCK_TAGS, buildPageTree, displayOf, isElement, isText, VIEW_IDS } from './tree.js';
 import { crawlFiles } from './crawlFiles.js';
 
 export const IR_VERSION = 1;
 export const GENERATED_FAVICON = 'icons/favicon-generated.svg';
-const DEFAULT_BREAKPOINTS = { tablet: 1023.98, mobile: 767.98 };
-const VIEW_WIDTHS = { desktop: 1440, tablet: 768, mobile: 375 };
+export const DEFAULT_BREAKPOINTS = { laptop: 1279.98, tablet: 1023.98, mobile: 767.98 };
 const BLOCK_DISPLAY = /^(block|flex|grid|flow-root|list-item|table)$/;
 const ICON_REL = /(^|\s)(icon|shortcut|apple-touch-icon(-precomposed)?|mask-icon)(\s|$)/i;
 
@@ -42,11 +42,12 @@ export async function readPageCaptures(dir, page) {
 }
 
 /**
- * Media query boundaries for the tablet and mobile overrides, taken from the original site's own
- * breakpoints when it has them: the widest boundary between the tablet (768) and desktop (1440)
- * captures, and between the mobile (375) and tablet captures.
+ * Media query boundaries for the laptop, tablet and mobile overrides, taken from the original site's own
+ * breakpoints when it has them: for each view the widest boundary between its capture width and the next
+ * wider capture (laptop 1024 → 1440, tablet 768 → 1024, mobile 375 → 768). Without a laptop capture the
+ * tablet boundary is the widest one between 768 and 1440, as before 4b.6.3.
  */
-export function pickBreakpoints(queries) {
+export function pickBreakpoints(queries, { laptop: hasLaptop = true } = {}) {
   const bounds = [];
   for (const q of queries) {
     for (const m of String(q).matchAll(/\((max|min)-width:\s*([\d.]+)(px|em|rem)\)/g)) {
@@ -55,12 +56,15 @@ export function pickBreakpoints(queries) {
     }
   }
   const within = (lo, hi) => bounds.filter((b) => b >= lo && b < hi);
-  const tablet = Math.max(...within(VIEW_WIDTHS.tablet, VIEW_WIDTHS.desktop), -1);
-  const mobile = Math.max(...within(VIEW_WIDTHS.mobile, VIEW_WIDTHS.tablet), -1);
+  const widest = (lo, hi) => Math.max(...within(lo, hi), -1);
+  const laptop = hasLaptop ? widest(VIEW_WIDTHS.laptop, VIEW_WIDTHS.desktop) : -1;
+  const tablet = widest(VIEW_WIDTHS.tablet, hasLaptop ? VIEW_WIDTHS.laptop : VIEW_WIDTHS.desktop);
+  const mobile = widest(VIEW_WIDTHS.mobile, VIEW_WIDTHS.tablet);
   return {
+    ...(hasLaptop && { laptop: laptop > 0 ? laptop : DEFAULT_BREAKPOINTS.laptop }),
     tablet: tablet > 0 ? tablet : DEFAULT_BREAKPOINTS.tablet,
     mobile: mobile > 0 ? mobile : DEFAULT_BREAKPOINTS.mobile,
-    source: tablet > 0 || mobile > 0 ? 'site' : 'default',
+    source: laptop > 0 || tablet > 0 || mobile > 0 ? 'site' : 'default',
   };
 }
 
@@ -236,7 +240,7 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
     baseUrl,
     origin,
     siteName,
-    breakpoints: pickBreakpoints(queries),
+    breakpoints: pickBreakpoints(queries, { laptop: pages.some(({ captures }) => captures.laptop) }),
     tokens: colorTokens(home.captures.desktop.customProps),
     keyframes,
     fontFaces,

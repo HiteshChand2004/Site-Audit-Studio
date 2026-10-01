@@ -1,10 +1,11 @@
-// Captures one page at the three recreate breakpoints (1440 / 768 / 375): the rendered DOM with
+// Captures one page at the recreate views (1440 / 1024 / 768 / 375, views.js): the rendered DOM with
 // computed styles (snapshot.js), the network resources it loaded, and fold + full-page screenshots.
 // Output per page: capture/<slug>/<view>.json and capture/<slug>/<view>-{fold,full}.webp.
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { USER_AGENT } from '../../audit/http.js';
-import { encode, MAX_HEIGHT, MOBILE_UA, VIEWS } from '../../audit/screenshots.js';
+import { encode, MAX_HEIGHT, MOBILE_UA } from '../../audit/screenshots.js';
+import { RECREATE_VIEWS as VIEWS } from '../views.js';
 import { snapshotPage } from './snapshot.js';
 
 export { VIEWS };

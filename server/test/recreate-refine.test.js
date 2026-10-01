@@ -223,3 +223,46 @@ test('fields and buttons with a px width never grow past their parent', async ()
   resolveHints(div, ['desktop'], 'div');
   assert.equal(div.desktop['max-width'], undefined);
 });
+
+test('with the laptop view the sweep moves the laptop breakpoint to where the original switches layout', async () => {
+  const body = '<div class="row"><div class="box">One</div><div class="box">Two</div><div class="box">Three</div></div>';
+  // The original stacks its boxes up to 1200 px: the 1024 capture is stacked, the 1440 capture is a row.
+  const { original, site } = await setup(
+    '*{box-sizing:border-box}body{margin:0;font:16px sans-serif}.row{display:flex}.box{flex:1 1 0%;background:#4F46E5;color:#fff;padding:90px 12px}@media (max-width:1200px){.row{flex-direction:column}}',
+    body,
+  );
+  const rules = [
+    { selector: '.row', parts: { base: { display: 'flex' }, laptop: { 'flex-direction': 'column' } } },
+    { selector: '.box', parts: { base: { flex: '1 1 0%', 'background-color': '#4f46e5', color: '#ffffff', 'padding-top': '90px', 'padding-bottom': '90px', 'padding-left': '12px', 'padding-right': '12px' } } },
+  ];
+  const live = await startSiteServer(original);
+  try {
+    const { dir, sweep } = await sweepOf(`${live.origin}/`);
+    // The laptop styles reach up to 1440 px: 1280 px is stacked here and a row in the original.
+    const wrong = await refineResponsive({ ir: irFor(rules, { laptop: 1439.98, tablet: 1023.98, mobile: 767.98, source: 'default' }), siteDir: site, workspace: dir, sweep });
+    assert.equal(wrong.breakpoints.laptop, 1279.98);
+    assert.equal(wrong.breakpoints.source, 'sweep');
+    assert.equal(wrong.summary.breakpoints.laptop.changed, true);
+    assert.deepEqual(wrong.summary.breakpoints.laptop.widths, [1280]);
+    assert.equal(wrong.breakpoints.tablet, 1023.98);
+    // Already right: nothing to change, and the laptop boundary stays in the result.
+    const right = await refineResponsive({ ir: irFor(rules, { laptop: 1199.98, tablet: 1023.98, mobile: 767.98, source: 'site' }), siteDir: site, workspace: dir, sweep });
+    assert.equal(right.breakpoints.laptop, 1199.98);
+    assert.equal(right.breakpoints.source, 'site');
+  } finally {
+    await live.close();
+  }
+});
+
+test('the stylesheet writes a media query per captured view, widest first', async () => {
+  const { emitCss } = await import('../src/recreate/emit/css.js');
+  const ir = irFor([{ selector: '.a', parts: { base: { color: '#000000' }, laptop: { color: '#111111' }, tablet: { color: '#222222' }, mobile: { color: '#333333' } } }], { laptop: 1199.98, tablet: 809.98, mobile: 767.98, source: 'site' });
+  const css = emitCss(ir);
+  const at = (needle) => css.indexOf(needle);
+  assert.ok(at('max-width: 1199.98px') > 0 && at('max-width: 1199.98px') < at('max-width: 809.98px') && at('max-width: 809.98px') < at('max-width: 767.98px'), css);
+  // A stored IR from before the laptop view has no laptop rules and no laptop breakpoint: nothing changes for it.
+  const old = emitCss(irFor([{ selector: '.a', parts: { base: { color: '#000000' }, tablet: { color: '#222222' } } }], { tablet: 1023.98, mobile: 767.98, source: 'default' }));
+  assert.ok(!/1279\.98/.test(old));
+  // Laptop rules without a laptop breakpoint fall back to the default.
+  assert.ok(/max-width: 1279\.98px/.test(emitCss(irFor([{ selector: '.a', parts: { base: { color: '#000000' }, laptop: { color: '#111111' } } }], { tablet: 1023.98, mobile: 767.98 }))));
+});

@@ -11,10 +11,11 @@
 //   <link rel="preload"> for the font files of the (at most two) families that carry most of each
 //   page's text.
 import { urlKey } from '../../audit/util.js';
-import { VIEWS } from '../../audit/screenshots.js';
 import { isElement, isText } from '../ir/tree.js';
+import { RECREATE_VIEWS } from '../views.js';
 
-const FOLD = Object.fromEntries(VIEWS.map((v) => [v.id, v.height]));
+// The first screen of each captured view (a view missing here would count every image as "below the fold").
+const FOLD = Object.fromEntries(RECREATE_VIEWS.map((v) => [v.id, v.height]));
 // An image smaller than this (CSS px²) is an icon, not an LCP candidate.
 const MIN_LCP_AREA = 150 * 100;
 const MAX_FONT_PRELOADS = 2;

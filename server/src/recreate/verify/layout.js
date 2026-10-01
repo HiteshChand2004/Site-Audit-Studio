@@ -16,8 +16,9 @@ import { readFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import { USER_AGENT } from '../../audit/http.js';
 import { launchBrowser } from '../../audit/render.js';
-import { MAX_HEIGHT, MOBILE_UA, VIEWS } from '../../audit/screenshots.js';
+import { MAX_HEIGHT, MOBILE_UA } from '../../audit/screenshots.js';
 import { contentBox } from '../ir/styles.js';
+import { RECREATE_VIEWS as VIEWS } from '../views.js';
 import { displayOf, isElement, isText } from '../ir/tree.js';
 import { startSiteServer } from './server.js';
 

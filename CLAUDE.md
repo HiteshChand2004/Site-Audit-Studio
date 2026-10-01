@@ -55,8 +55,8 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
 |---|---|---|
 | 4b.6.1 | Responsive sweep: measure the original vs the recreate at the 7 sweep widths (`report.responsive`) | ✅ WIP |
 | 4b.6.2 | Corrections driven by the sweep (breakpoint refinement, fluid type, phone shrink, width fixes) | ✅ WIP (long tail open, see below) |
-| 4b.6.3 | A 4th captured view between 768 and 1440 (IR views 3 → N): the layout-at-width problem the breakpoint search cannot solve (decided: separate sub-step, later) | ⏳ |
-| 4b.6.x | Small follow-ups: overflow penalty continuous (px-based, so partial fixes show in the score); sweep time budget raised where pages are left out (parchaa `/platform`, panscience's 6th page) | ⏳ |
+| 4b.6.3 | A 4th captured view (laptop, 1024) between 768 and 1440 (IR views 3 → 4) + continuous overflow penalty | ✅ WIP |
+| 4b.6.x | Remaining small follow-up: sweep time budget where pages are still left out (the step max was raised to 4 min in 4b.6.2; panscience's 6th page / `/media` is still lost in **inspect**) | ⏳ |
 | 4b.7 | Visual diff score (perceptual SSIM-style diff, bands, heatmaps, NEW-panel cards) | ✅ WIP |
 | 4b.1–4b.5 | Motion capture (hover/focus, reveal, continuous), IR `motion`, HTML emitter + `motion.js`, all stacks | ⏳ |
 | 4b.8–4b.9 | Re-audit rows + UI, real-site verification, docs | ⏳ |
@@ -109,6 +109,23 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
   and the recreate was scored down for pictures it has (since 4a.6). `layout.js loadLazyImages` (eager + decode, ≤ 6 s) now runs before the fidelity screenshot and in the sweep render (the fit pass is unchanged).
 - **API/UI**: `GET /api/projects/:id/recreate/:recreateId/fidelity/:slug/:file` (`{desktop,tablet,mobile}-{full,diff}.webp`). NEW panel report card: **Visual difference** (per page: band strip of the worst view,
   score, heatmap link per view, low ones in warn colour) and **Between the captured widths** (sweep score per width, drift count, breakpoints the sweep adjusted, fluid type). Tests: `recreate-visualdiff.test.js`.
+
+4b.6.3 details (a 4th captured view + continuous overflow penalty; asked for before 4b.7, done after it):
+- **Views** (`recreate/views.js`): `RECREATE_VIEWS` = desktop 1440, **laptop 1024**, tablet 768, mobile 375 (laptop: not a mobile viewport, 768 px high). `VIEW_IDS` (ir/tree.js), the capture (`capture/index.js`, 4 contexts per page
+  in parallel), the fit/fidelity renderer (`verify/layout.js`) and the first-screen heights of the loading fixer (`fixers/perf.js`) use it. The analysis screenshots and the stack **equivalence** check keep the original three
+  views (`audit/screenshots.js VIEWS`). A page without a laptop capture works as before (the cascade skips a missing view); the desktop view is still the only required one.
+- **IR / CSS**: rules get `parts.laptop`; each view's styles are a diff against the next wider one, so the media queries stack: `@media (max-width: laptop)`, then tablet, then mobile (`emit/css.js` writes one per view,
+  widest first; a laptop rule without a laptop breakpoint falls back to `DEFAULT_BREAKPOINTS.laptop` 1279.98). `ir.breakpoints = { laptop?, tablet, mobile, source }`; every stack gets it (all use `emitCss`).
+- **Breakpoints from the site** (`pickBreakpoints(queries, { laptop })`): laptop = widest query boundary in [1024, 1440), tablet in [768, 1024), mobile in [375, 768) (defaults 1279.98 / 1023.98 / 767.98). A builder with a tablet variant
+  at 810–1199 (Framer) now maps exactly: the 1024 capture is its tablet layout up to 1199.98, the 768 capture its phone layout up to 809.98. Without a laptop capture: the old rule (tablet = widest in [768, 1440)).
+- **Fluid type / refinement**: `fluidValue(…, { laptop })` requires the laptop value on the line too; `refine.js` searches the laptop boundary on 1280 (alternatives 1279.98 / 1439.98), the tablet boundary on 900
+  (899.98 / 1023.98) and mobile on 480 / 600; without a laptop view the 4b.6.2 search is unchanged.
+- **Overflow penalty is continuous** (`verify/responsive.js compareWidth`): `overflowPx` = how far the recreate sticks out sideways beyond what the original does (minus 2 px slack); penalty = 15 × min(1, overflowPx / (0.15 × width)),
+  at least 1 point, so a partial fix shows in the score (the 320 px overflow of panscience could not show progress before). `overflow` stays a drift flag.
+- **Bug found by the extra view**: the loading fixer looked up the first-screen height per view from the three analysis views; a `laptop` view had none, so no image was ever lazy (found by the pipeline test).
+- **Real sites** (parchaa.com, 6 pages, default limit, API on `C:sasd`): homepage visual score (perceptual, ×100) at 900 / 1024 / 1280 px **48 / 48 / 48 → 81 / 84 / 74**, contact 64 / 67 / 68 → 89 / 97 / 84, a blog page
+  47 / 46 / 54 → 55 / 99 / 56; fidelity 88 → 91, visual diff 86; the sweep reached all 6 pages; breakpoints now laptop 1319.98 (the site's), tablet 809.98 (the site's), mobile 599.98 (sweep). Still weak: the blog pages at 900 / 1280 (~55) and
+  the phone widths 480 / 600 of the blog pages (shorter / taller): between 375 and 768 there is still only the 375 capture.
 
 ### Phase 6 final summary
 Every recreate can be built as **four stacks**, all from the same saved IR and all checked against the plain-HTML build: Plain HTML / CSS / JS (the

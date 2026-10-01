@@ -1,5 +1,5 @@
-// Builds one responsive element tree per page from the three captured views (desktop / tablet /
-// mobile). Every merged node keeps the captured data of each view it appears in (`views[view]`:
+// Builds one responsive element tree per page from the captured views (desktop / laptop / tablet /
+// mobile, views.js). Every merged node keeps the captured data of each view it appears in (`views[view]`:
 // style diff, box, pseudo-elements), so the stylesheet can be written as a base plus two media queries.
 //
 // 1. Alignment: the tablet and mobile trees are matched to the desktop tree child by child (same tag
@@ -10,7 +10,9 @@
 //    content and disjoint visibility are merged into one element that is restyled per view.
 // 3. Cleanup: empty wrappers (no style, one child, same box) are removed; ARIA landmark divs become
 //    the matching HTML element.
-export const VIEW_IDS = ['desktop', 'tablet', 'mobile'];
+import { VIEW_IDS } from '../views.js';
+
+export { VIEW_IDS };
 
 export const isText = (n) => n && 'text' in n;
 export const isElement = (n) => n && !('text' in n);

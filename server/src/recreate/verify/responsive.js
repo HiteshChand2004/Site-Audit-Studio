@@ -19,6 +19,8 @@ import { startSiteServer } from './server.js';
 
 export const SWEEP_WEIGHTS = { visual: 0.65, height: 0.35 };
 const OVERFLOW_PENALTY = 15;
+// An overflow this share of the screen width (or more) costs the whole penalty.
+const OVERFLOW_FULL = 0.15;
 // A page taller or shorter by more than this share (and 80 px) is flagged.
 const HEIGHT_TOLERANCE = 0.08;
 const OVERFLOW_SLACK = 2;
@@ -93,13 +95,14 @@ export async function renderSweepPage(renderer, outPath, width, { timeout = 1500
 export function compareWidth(width, original, generated, visual, threshold = DIFF_THRESHOLD) {
   const ratio = original.height > 0 ? generated.height / original.height : 1;
   const heightScore = Math.max(0, 1 - Math.abs(1 - ratio) * 4);
-  const overflow = {
-    original: original.scrollWidth > width + OVERFLOW_SLACK,
-    generated: generated.scrollWidth > width + OVERFLOW_SLACK,
-  };
-  const newOverflow = overflow.generated && !overflow.original;
+  // Sideways overflow the recreate has and the original does not, in px. The penalty grows with it (up to
+  // OVERFLOW_PENALTY at OVERFLOW_FULL of the screen width, at least 1 point for any), so a partial fix shows.
+  const excess = (m) => Math.max(0, m.scrollWidth - width - OVERFLOW_SLACK);
+  const overflowPx = Math.max(0, excess(generated) - excess(original));
+  const newOverflow = overflowPx > 0;
+  const penalty = newOverflow ? Math.max(1, Math.round(OVERFLOW_PENALTY * Math.min(1, overflowPx / (OVERFLOW_FULL * width)))) : 0;
   const raw = visual == null ? heightScore : visual * SWEEP_WEIGHTS.visual + heightScore * SWEEP_WEIGHTS.height;
-  const score = Math.max(0, Math.round(raw * 100) - (newOverflow ? OVERFLOW_PENALTY : 0));
+  const score = Math.max(0, Math.round(raw * 100) - penalty);
   const flags = [];
   if (Math.abs(generated.height - original.height) > 80 && Math.abs(1 - ratio) > HEIGHT_TOLERANCE) flags.push(ratio > 1 ? 'taller' : 'shorter');
   if (newOverflow) flags.push('overflow');
@@ -110,6 +113,7 @@ export function compareWidth(width, original, generated, visual, threshold = DIF
     visual,
     height: { original: original.height, generated: generated.height, ratio: Math.round(ratio * 1000) / 1000 },
     scrollWidth: { original: original.scrollWidth, generated: generated.scrollWidth },
+    overflowPx,
     flags,
     low: flags.length > 0,
   };
