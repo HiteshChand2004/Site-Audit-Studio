@@ -44,11 +44,12 @@ async function writeTree(root, files) {
   }
 }
 
-test('the registry lists every stack: html is ready, the others are planned', () => {
+test('the registry lists every stack: html and react-vite are ready, the others are planned', () => {
   assert.deepEqual(stackIds(), ['html', 'react-vite', 'nextjs', 'mern']);
   assert.deepEqual(STACKS, stackIds()); // projects accept exactly the registered stacks
   assert.equal(isReadyStack('html'), true);
-  for (const id of ['react-vite', 'nextjs', 'mern']) assert.equal(isReadyStack(id), false);
+  assert.equal(isReadyStack('react-vite'), true);
+  for (const id of ['nextjs', 'mern']) assert.equal(isReadyStack(id), false);
   assert.equal(isReadyStack('nope'), false);
   assert.equal(getEmitter('nope'), null);
   const list = listStacks();
@@ -57,6 +58,7 @@ test('the registry lists every stack: html is ready, the others are planned', ()
   assert.deepEqual(list.find((s) => s.id === 'nextjs'), { id: 'nextjs', label: 'Next.js', status: 'planned', toolchain: 'next', scripts: true });
   assert.equal(getEmitter('html').scripts, false);
   assert.equal(getEmitter('html').assetsTarget, 'assets');
+  assert.deepEqual([getEmitter('react-vite').scripts, getEmitter('react-vite').assetsTarget], [true, 'public/assets']);
 });
 
 test('refValue resolves every reference kind through the emitter-supplied targets', () => {
@@ -282,7 +284,9 @@ test('export from the saved IR: emit, write, record the output; idempotent; fail
     assert.equal((await fail.json()).error, 'The build failed on src/App.jsx.');
     assert.equal(await exists(path.join(dir, 'stacks', 'fake-fail')), false);
     assert.equal(await exists(path.join(dir, 'stacks', 'fake-fail.tmp')), false);
-    assert.deepEqual(Object.keys(JSON.parse(db.prepare('SELECT result_json FROM recreates WHERE id = ?').get(recreateId).result_json).outputs), ['html', 'fake-ok']);
+    const afterFail = JSON.parse(db.prepare('SELECT result_json FROM recreates WHERE id = ?').get(recreateId).result_json).outputs;
+    assert.deepEqual(Object.keys(afterFail), ['html', 'fake-ok', 'fake-fail']);
+    assert.deepEqual([afterFail['fake-fail'].status, afterFail['fake-fail'].error], ['failed', 'The build failed on src/App.jsx.']); // remembered, so the app can say why
 
     // The IR gone (retention): a clear message.
     await rm(path.join(dir, 'ir'), { recursive: true });
@@ -312,7 +316,7 @@ test('Recreate refuses a stack that is not ready, naming the ones that are', asy
     db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://example.com/', 'nextjs', 1, ?, ?)`).run(id, now, now);
     const res = await post(`${base}/projects/${id}/recreate`, {});
     assert.equal(res.status, 400);
-    assert.match((await res.json()).error, /^Only Plain HTML \/ CSS \/ JS can be recreated for now/);
+    assert.match((await res.json()).error, /^Only Plain HTML \/ CSS \/ JS, React \+ Vite can be recreated for now/);
   } finally {
     server.close();
   }

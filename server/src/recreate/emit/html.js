@@ -58,6 +58,9 @@ function headMarkup(page, ctx) {
   return lines.map((l) => `  ${l}`).join('\n');
 }
 
+/** The head tags of a page as HTML lines, with the references of the stack that calls it. */
+export const headHtml = (page, refs) => headMarkup(page, { refs });
+
 /** One page as an HTML document. */
 export function emitPage(page, { ids = false, useAsset = () => true } = {}) {
   const ctx = { outPath: page.outPath, ids, refs: relativeRefs(page.outPath, useAsset) };

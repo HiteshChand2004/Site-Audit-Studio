@@ -36,16 +36,22 @@ function checkCss(css, add, where) {
   }
 }
 
-function checkElements($, nodes, add, { inSvg = false } = {}) {
+// An app build (a stack with JavaScript) may load its own bundles: module scripts and preloads from /_app/.
+const APP_BUNDLE = /^\/_app\/[\w.-]+\.js$/;
+
+function checkElements($, nodes, add, { inSvg = false, app = false } = {}) {
   nodes.each((_, el) => {
     const tag = el.name.toLowerCase();
     const svg = inSvg || tag === 'svg' || $(el).parents('svg').length > 0;
     if (tag === 'script') {
       const type = String(el.attribs.type ?? '').toLowerCase();
-      if (svg || type !== 'application/ld+json') add('script', '<script> element');
+      if (app && !svg && type === 'module' && APP_BUNDLE.test(el.attribs.src ?? '') && !$(el).text().trim()) {
+        // the app's own bundle
+      } else if (svg || type !== 'application/ld+json') add('script', '<script> element');
       else if (/<\/script|<!--/i.test($(el).text())) add('script', 'JSON-LD can end its script element');
     }
     if (ACTIVE_TAGS.has(tag)) add('script', `<${el.name}> element`);
+    if (app && tag === 'link' && /modulepreload/i.test(el.attribs.rel ?? '') && !APP_BUNDLE.test(el.attribs.href ?? '')) add('external', `modulepreload ${String(el.attribs.href).slice(0, 80)}`);
     if (tag === 'meta' && /refresh/i.test(el.attribs['http-equiv'] ?? '')) add('script', 'meta refresh');
     for (const [name, value] of Object.entries(el.attribs ?? {})) {
       const lname = name.toLowerCase();
@@ -61,7 +67,7 @@ function checkElements($, nodes, add, { inSvg = false } = {}) {
 }
 
 /** Checks one file's content; `kind` is html | svg | css. */
-export function checkContent(kind, content) {
+export function checkContent(kind, content, { app = false } = {}) {
   const issues = [];
   const add = (type, detail) => issues.push({ type, detail });
   if (kind === 'css') checkCss(content, add, 'stylesheet');
@@ -71,8 +77,24 @@ export function checkContent(kind, content) {
     checkElements($, $('*'), add, { inSvg: true });
   } else {
     const $ = load(content);
-    checkElements($, $('*'), add);
+    checkElements($, $('*'), add, { app });
   }
+  return issues;
+}
+
+// JavaScript of an app build. The bundle is our own code plus React; it needs none of these, and all of
+// them are how script reaches data or code from somewhere else. URL strings are not checked: the page
+// components carry the site's own links as text, and without a request or import sink a string is inert.
+const JS_BANNED = [
+  [/\beval\s*\(/, 'eval()'], [/\bnew\s+Function\s*\(/, 'new Function()'], [/\bdocument\.write(ln)?\s*\(/, 'document.write()'],
+  [/\bimportScripts\s*\(/, 'importScripts()'], [/\bXMLHttpRequest\b/, 'XMLHttpRequest'], [/\bWebSocket\b/, 'WebSocket'],
+  [/\bEventSource\b/, 'EventSource'], [/\bsendBeacon\b/, 'sendBeacon'], [/\bfetch\s*\(/, 'fetch()'],
+  [/\bimport\s*\(\s*["'`]\s*(?:https?:)?\/\//, 'import() of another origin'],
+];
+
+export function checkScript(content) {
+  const issues = [];
+  for (const [re, name] of JS_BANNED) if (re.test(content)) issues.push({ type: 'script', detail: `${name} in script` });
   return issues;
 }
 
@@ -85,16 +107,39 @@ async function listFiles(dir) {
  * Scans a generated site folder.
  * @returns {Promise<{ safe: boolean, checked: { html: number, svg: number, css: number }, issues: object[] }>}
  */
-export async function scanSite(dir) {
-  const checked = { html: 0, svg: 0, css: 0 };
+export async function scanSite(dir, { app = false, contentChunk = () => false } = {}) {
+  const checked = { html: 0, svg: 0, css: 0, ...(app && { js: 0 }) };
   const issues = [];
   for (const file of await listFiles(dir)) {
     const ext = path.extname(file).toLowerCase();
-    const kind = ext === '.html' || ext === '.htm' ? 'html' : ext === '.svg' ? 'svg' : ext === '.css' ? 'css' : null;
+    const kind = ext === '.html' || ext === '.htm' ? 'html' : ext === '.svg' ? 'svg' : ext === '.css' ? 'css' : app && (ext === '.js' || ext === '.mjs') ? 'js' : null;
     if (!kind) continue;
     checked[kind]++;
     const rel = path.relative(dir, file).replaceAll('\\', '/');
-    for (const issue of checkContent(kind, await readFile(file, 'utf8'))) {
+    const content = await readFile(file, 'utf8');
+    // Page and component chunks carry the site's own text; they are covered by the DOM equivalence with the scanned HTML build.
+    if (kind === 'js' && contentChunk(rel)) continue;
+    for (const issue of kind === 'js' ? checkScript(content) : checkContent(kind, content, { app })) {
+      if (issues.length < MAX_ISSUES) issues.push({ file: rel, ...issue });
+    }
+  }
+  return { safe: issues.length === 0, checked, issues };
+}
+
+/**
+ * The code we write around an app's pages (entry points, route table, build scripts, config): the same
+ * script rules. Page and component files carry the site's content (any text may mention `fetch(`); their
+ * markup is covered by the DOM equivalence with the HTML build, which the HTML safety gate scanned.
+ */
+export async function scanProject(dir) {
+  const issues = [];
+  let checked = 0;
+  const files = [...(await listFiles(path.join(dir, 'src'))), ...(await listFiles(path.join(dir, 'scripts')).catch(() => [])), path.join(dir, 'vite.config.js')];
+  for (const file of files) {
+    const rel = path.relative(dir, file).replaceAll('\\', '/');
+    if (!/\.(jsx?|mjs)$/.test(rel) || /^src\/(pages|components)\//.test(rel)) continue;
+    checked++;
+    for (const issue of checkScript(await readFile(file, 'utf8'))) {
       if (issues.length < MAX_ISSUES) issues.push({ file: rel, ...issue });
     }
   }

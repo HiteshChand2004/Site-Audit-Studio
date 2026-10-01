@@ -32,14 +32,16 @@ export function appOrigins(appOrigin = APP_ORIGIN) {
 
 /**
  * @param {string[]} [frameAncestors]
- * @param {{ connectSelf?: boolean }} [o]  connectSelf: fetches to the preview itself are allowed. Only the
+ * @param {{ connectSelf?: boolean, scripts?: boolean }} [o]  scripts: the site is an app whose own bundles (script-src 'self')
+ *   may run (a stack with JavaScript; the Recreate verification scanned them). connectSelf: fetches to the preview itself are allowed. Only the
  *   re-audit's throwaway server sets it (Lighthouse reads robots.txt from inside the page); the site has
  *   no script, so it opens nothing to the site itself.
  */
-export function previewHeaders(frameAncestors = appOrigins(), { connectSelf = false } = {}) {
+export function previewHeaders(frameAncestors = appOrigins(), { connectSelf = false, scripts = false } = {}) {
   return {
     'Content-Security-Policy': [
       "default-src 'none'",
+      ...(scripts ? ["script-src 'self'"] : []),
       ...(connectSelf ? ["connect-src 'self'"] : []),
       "img-src 'self' data:",
       "media-src 'self'",
@@ -61,9 +63,9 @@ export function previewHeaders(frameAncestors = appOrigins(), { connectSelf = fa
 const inside = (base, file) => file === base || file.startsWith(base + path.sep);
 
 /** A preview server for `root` (not listening yet). `port()` is read on each request. */
-function createPreviewServer(root, { port, frameAncestors = appOrigins(), connectSelf = false }) {
+function createPreviewServer(root, { port, frameAncestors = appOrigins(), connectSelf = false, scripts = false }) {
   const base = path.resolve(root);
-  const headers = previewHeaders(frameAncestors, { connectSelf });
+  const headers = previewHeaders(frameAncestors, { connectSelf, scripts });
   let realBase = null;
   return createServer(async (req, res) => {
     const send = (status, body, extra = {}) => {
@@ -124,9 +126,9 @@ const closeServer = (server) => new Promise((resolve) => {
  * Serves `root` on `port` (0 = any free port; a range = the first free port in it).
  * @returns {Promise<{ port: number, origin: string, close: () => Promise<void> }>}
  */
-export async function servePreview(root, { port = 0, range = null, frameAncestors, connectSelf = false } = {}) {
+export async function servePreview(root, { port = 0, range = null, frameAncestors, connectSelf = false, scripts = false } = {}) {
   let bound = null;
-  const server = createPreviewServer(root, { port: () => bound, frameAncestors, connectSelf });
+  const server = createPreviewServer(root, { port: () => bound, frameAncestors, connectSelf, scripts });
   if (range) {
     for (let p = range.first; p <= range.last && bound == null; p++) {
       try {
@@ -151,25 +153,26 @@ const serial = (fn) => {
   return run;
 };
 
-const info = (p) => ({ projectId: p.projectId, recreateId: p.recreateId, port: p.port, url: `${p.origin}/`, startedAt: p.startedAt });
+const info = (p) => ({ projectId: p.projectId, recreateId: p.recreateId, port: p.port, url: `${p.origin}/`, scripts: Boolean(p.scripts), startedAt: p.startedAt });
 
 /** The active preview, or null. */
 export const activePreview = () => (active ? info(active) : null);
 
 /**
  * Starts (or keeps) the preview of one recreate's dist/ folder; any other preview is stopped first.
- * @param {{ projectId: string, recreateId: string, root: string }} o
+ * @param {{ projectId: string, recreateId: string, root: string, scripts?: boolean }} o  one recreate can have several
+ *   outputs (stacks): the preview is kept only while it serves the same folder with the same script policy
  */
-export function startPreview({ projectId, recreateId, root }) {
+export function startPreview({ projectId, recreateId, root, scripts = false }) {
   return serial(async () => {
-    if (active?.projectId === projectId && active.recreateId === recreateId) return info(active);
+    if (active?.projectId === projectId && active.recreateId === recreateId && active.root === root && active.scripts === scripts) return info(active);
     if (!(await stat(root).catch(() => null))?.isDirectory()) throw new PreviewError('This recreate has no production build to preview.');
     if (active) {
       await active.close();
       active = null;
     }
-    const served = await servePreview(root, { range: PREVIEW_PORTS });
-    active = { projectId, recreateId, root, ...served, startedAt: new Date().toISOString() };
+    const served = await servePreview(root, { range: PREVIEW_PORTS, scripts });
+    active = { projectId, recreateId, root, scripts, ...served, startedAt: new Date().toISOString() };
     return info(active);
   });
 }

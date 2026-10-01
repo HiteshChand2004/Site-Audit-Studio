@@ -24,8 +24,9 @@ function ageDays(iso) {
 // "services/index.html" → "services/": the URL the preview server answers for a page file.
 const pageUrl = (outPath) => outPath.replace(/(^|\/)index\.html$/, '$1');
 
-// The recreated site is static HTML/CSS: it is framed without scripts, forms, popups or top navigation.
-const PREVIEW_SANDBOX = 'allow-same-origin';
+// A plain-HTML site is framed without scripts, forms, popups or top navigation. A stack with JavaScript (React)
+// may run its own bundles: the preview server sends script-src 'self' for it and says so (preview.scripts).
+const sandboxFor = (preview) => (preview?.scripts ? 'allow-same-origin allow-scripts' : 'allow-same-origin');
 
 function PreviewEmpty({ icon: Icon = Sparkles, title, children }) {
   return (
@@ -138,7 +139,7 @@ export default function NewPanel({ project, audit, syncScroll = false, onFrameSc
               width={viewport}
               height={pageHeight}
               scrollRef={onFrameScroller}
-              sandbox={PREVIEW_SANDBOX}
+              sandbox={sandboxFor(preview)}
               title="Preview of the recreated site"
               loadingText="Loading preview…"
             />
@@ -147,7 +148,7 @@ export default function NewPanel({ project, audit, syncScroll = false, onFrameSc
               key={preview.recreateId}
               url={src}
               width={viewport}
-              sandbox={PREVIEW_SANDBOX}
+              sandbox={sandboxFor(preview)}
               title="Preview of the recreated site"
               loadingText="Loading preview…"
             />

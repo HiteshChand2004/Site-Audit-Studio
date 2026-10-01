@@ -53,7 +53,7 @@ Mongo; export to another stack from the saved IR without recapture; order 6.1 fi
 |---|---|---|
 | 6.1 | Download zip for HTML (`recreate/export/zip.js`, `GET …/recreate/:recreateId/download`, UI button) | ✅ WIP |
 | 6.2 | Foundation: emitter registry, shared IR walker, stack in job/report, export from saved IR, toolchain setup | ✅ WIP |
-| 6.3 | React+Vite | ⏳ |
+| 6.3 | React+Vite | ✅ WIP |
 | 6.4 | Next.js | ⏳ |
 | 6.5 | MERN | ⏳ |
 | 6.6 | Re-audit (target-stack-aware runtime rows) + UI | ⏳ |
@@ -87,6 +87,39 @@ first and shows `X-Download-Error`. Test: `recreate-export.test.js`.
   plugin-react 4.5.0, react/react-dom 19.1.0) and `next` (next 15.3.3 + react 19.1.0). `npm run setup:toolchains -w server -- react-vite`
   installs on demand (`--ignore-scripts`); no argument lists the status. `src/toolchains/index.js toolchainStatus(id)`.
   Tests: `recreate-stacks.test.js` (registry, walker, golden HTML, writeProject, toolchain, export route with fake emitters).
+
+6.3 details (React + Vite, `status: 'ready'`, `scripts: true`, toolchain `react-vite`):
+- **Emitter** (`recreate/emit/react/`): `jsx.js` (IR → JSX: React prop names, boolean attrs, `defaultValue`/`defaultChecked` instead of
+  controlled inputs, `style` strings → objects, text and attribute values written as JS strings whenever JSX would change them,
+  adjacent text merged, inline SVG = its own `<svg>` with props + `dangerouslySetInnerHTML`, no wrapper), `components.js` (element subtrees
+  identical on ≥ 2 pages and ≥ 6 nodes → one shared component; structural signature, maximal subtrees, named from the semantic class),
+  `scaffold.js` (package.json pinned from the toolchain, vite.config, dev shell, `src/pages.js` route table, `main.jsx`, `entry-server.jsx`,
+  `scripts/prerender.mjs`, README), `index.js` (`emitReact`). URLs are **root-relative** (`/assets/…`, `/about/`): deploy at a domain root.
+  `npm run build` = `vite build` + `vite build --ssr` + prerender: every page is written as HTML at its original path (`dist/about/index.html`),
+  then hydrated by `src/main.jsx` (no top-level await: a page chunk imports the shared chunk, awaiting it there deadlocks). Page `<head>`s
+  come from `headTags` as `src/page-meta.json`; `#root { display: contents }` keeps the wrapper out of the layout; React 19's preload hints for
+  high-priority images are stripped from the markup (the `fetchpriority` attribute stays).
+- **Build** (`build/toolchain.js runToolchain`): junction `node_modules` → `server/toolchains/react-vite/node_modules`, `node vite.js` as a child process
+  (minimal env, 4-minute limit, output tail in the error), junction removed with `rmdir` (never recursive into the toolchain). No download, no scripts.
+- **Verification** (`emit/react/build.js buildReact`, the emitter's `build` hook): (1) `scanProject` on the code around the pages; (2) build;
+  (3) **safety v2** `scanSite(dist, { app: true })`: only `<script type=module src=/_app/*.js>` and `modulepreload` of `/_app` are allowed, JS must not use
+  eval / new Function / document.write / importScripts / XHR / WebSocket / EventSource / sendBeacon / fetch / import() of another origin
+  (page and component chunks carry the site's own text and are skipped: they are covered by the DOM equivalence with the scanned HTML build);
+  (4) `verifySite(dist)`; (5) **equivalence with the plain-HTML build** (`verify/equivalence.js`): DOM signature (URLs resolved, whitespace between
+  elements ignored) must be equal on every page, full-page screenshots ≥ 0.97 similar on all three views (lazy images loaded first), and with JS on the
+  pages must hydrate without errors and without DOM change (a hydration problem is a **warning**: React renders the page again). DOM or visual
+  difference = emitter mistake = the export fails and is recorded as `outputs[stack] = { status: 'failed', error }`.
+- **Fidelity**: not measured a second time; `outputs[stack].fidelity = { score: <the HTML build's>, basis: 'equivalent-to-html' }` (the equivalence is the proof).
+  Output entry also has `build` (steps, JS/CSS bytes + gzip), `safety`, `verify`, `equivalence`, `hydration`, `warnings`, `dist: 'dist'`.
+- **Wiring**: Recreate with a non-HTML project stack queues `exportStack` right after the job (`recreate/jobs.js queueStackExport`; a failure never
+  discards the recreate) and moves the project's preview onto the stack build. The preview serves the project's stack output when ready, else
+  `dist` (`routes/recreate.js latestBuild`); `previewHeaders({ scripts })` adds `script-src 'self'` and `info.scripts` tells the app to frame it with
+  `allow-scripts`; `startPreview` is keyed by recreate + folder + script policy. The re-audit still audits the HTML build (6.6 makes it stack-aware).
+  The download zip of a stack = the project source (no `dist`, `.ssr`, `node_modules`) + `RECREATE-REPORT.md` with a build section. Client:
+  `RECREATE_STACKS` now has `react-vite`.
+- Verified on saved IRs of real sites (all DOM-equal, visual 1.0, hydration clean): panscience.xyz (Next.js, 2 shared components, JS 98 KB gz),
+  parchaa.com (Framer, 6 components, 97 KB gz), a clone (42 components, 107 KB gz), the fixture. Tests: `recreate-react.test.js` (JSX, components,
+  project files, app safety, preview CSP, project zip, a real build with form/SVG/entity/srcset constructs, a deliberate emitter bug is caught).
 
 ### Phase 5 final summary
 After every successful Recreate the server audits the recreated site again (same Analyze pipeline on its `dist/`, served

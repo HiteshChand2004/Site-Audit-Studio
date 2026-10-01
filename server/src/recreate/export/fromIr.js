@@ -49,7 +49,8 @@ async function runExport({ projectId, recreateId, stack }) {
   try {
     const out = emitter.emit(ir, {});
     await writeProject(tmp, out, { assetsDir: path.join(dir, 'assets'), known, assetsTarget: emitter.assetsTarget });
-    const built = (await emitter.build?.({ dir: tmp, ir, out, report, signal: undefined })) ?? {};
+    const assets = [...out.assets].filter((f) => known.has(f));
+    const built = (await emitter.build?.({ dir: tmp, ir, out, assets, report, htmlDist: path.join(dir, 'dist') })) ?? {};
     await rm(target, { recursive: true, force: true });
     await rename(tmp, target);
     const output = { status: 'ready', dir: `stacks/${stack}`, from: 'ir', exportedAt: new Date().toISOString(), files: out.files.size, ...built };
@@ -60,6 +61,13 @@ async function runExport({ projectId, recreateId, stack }) {
     return { report, output, created: true };
   } catch (err) {
     await rm(tmp, { recursive: true, force: true }).catch(() => {});
+    // A failed emit or build is remembered (the app shows why and offers a retry); nothing else is kept.
+    if (err instanceof RecreateError) {
+      const failed = { status: 'failed', error: err.message, at: new Date().toISOString() };
+      report.outputs = { ...outputs, [stack]: failed };
+      updateRow.run(JSON.stringify(report), recreateId);
+      await writeFile(path.join(dir, 'report.json'), JSON.stringify(report, null, 1)).catch(() => {});
+    }
     throw err;
   }
 }

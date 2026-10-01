@@ -83,14 +83,22 @@ router.get('/:id/recreate', (req, res) => {
 // Preview of the latest completed recreate (its dist/ folder). One preview is active at a time, so
 // starting one for this project stops any other.
 const latestDoneId = db.prepare(`
-  SELECT id FROM recreates WHERE project_id = ? AND status = 'done' ORDER BY started_at DESC LIMIT 1
+  SELECT id, result_json FROM recreates WHERE project_id = ? AND status = 'done' ORDER BY started_at DESC LIMIT 1
 `);
 
-async function latestBuild(projectId) {
-  const row = latestDoneId.get(projectId);
+/**
+ * The build to preview: the project's own stack when that output is ready (an app: its scripts may run
+ * under the preview's `script-src 'self'`), the plain-HTML build otherwise.
+ */
+async function latestBuild(project) {
+  const row = latestDoneId.get(project.id);
   if (!row) return null;
-  const root = path.join(recreateDir(projectId, row.id), 'dist');
-  return (await stat(root).catch(() => null))?.isDirectory() ? { recreateId: row.id, root } : null;
+  const dir = recreateDir(project.id, row.id);
+  const outputs = reportOutputs(row.result_json ? JSON.parse(row.result_json) : {});
+  const stack = outputs[project.stack]?.status === 'ready' && project.stack !== 'html' ? project.stack : 'html';
+  const root = stack === 'html' ? path.join(dir, 'dist') : path.join(dir, outputs[stack].dir, outputs[stack].dist ?? '');
+  if (!(await stat(root).catch(() => null))?.isDirectory()) return null;
+  return { recreateId: row.id, root, scripts: Boolean(getEmitter(stack)?.scripts) };
 }
 
 const previewOf = (projectId) => {
@@ -105,8 +113,9 @@ router.get('/:id/preview', (req, res) => {
 
 router.post('/:id/preview', async (req, res) => {
   const { id } = req.params;
-  if (!selectProject.get(id)) return res.status(404).json({ error: 'Project not found.' });
-  const build = await latestBuild(id);
+  const project = selectProject.get(id);
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  const build = await latestBuild(project);
   if (!build) return res.status(404).json({ error: 'There is no recreated site to preview yet. Run Recreate first.' });
   try {
     res.json({ preview: await startPreview({ projectId: id, ...build }) });

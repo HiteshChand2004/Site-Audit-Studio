@@ -12,6 +12,7 @@ import { lstat, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { ZipArchive } from 'archiver';
 import { RecreateError } from '../errors.js';
+import { reportOutputs } from './fromIr.js';
 
 const refuse = (status, message) => Object.assign(new RecreateError(message), { status });
 
@@ -22,11 +23,11 @@ const STORED = /\.(?:webp|png|jpe?g|gif|avif|woff2?|mp4|webm|mov|mp3|m4a|ogg|zip
 const READABLE = /\.(?:css|js)$/i;
 
 /** Every regular file under `root` (no dotfiles, no links): [{ rel, abs, size }], sorted. */
-async function listFiles(root) {
+async function listFiles(root, { allowDot = [] } = {}) {
   const out = [];
   async function walk(dir, prefix) {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
-      if (entry.name.startsWith('.')) continue;
+      if (entry.name.startsWith('.') && !allowDot.includes(entry.name)) continue;
       const abs = path.join(dir, entry.name);
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
       if (entry.isDirectory()) await walk(abs, rel);
@@ -54,7 +55,7 @@ const list = (items, render, max = 50) => {
 };
 
 /** RECREATE-REPORT.md, from the recreate report only. */
-export function reportMarkdown(report) {
+export function reportMarkdown(report, stack = 'html') {
   const lines = ['# Recreate report', ''];
   lines.push(`Created: ${report.createdAt ?? 'unknown'}`);
   if (report.baseUrl) lines.push(`Original site: ${report.baseUrl}`);
@@ -80,6 +81,14 @@ export function reportMarkdown(report) {
   const manual = report.manual ?? [];
   if (manual.length) {
     lines.push('', '## Manual rebuild needed', '', 'These could not be automated and are not faked in the recreated site.', '', list(manual, (m) => `- **${m.title}**${m.detail ? ` — ${m.detail}` : ''}`));
+  }
+  const out = stack === 'html' ? null : reportOutputs(report)[stack];
+  if (out?.build) {
+    const kb = (n) => `${Math.round(n / 1024)} KB`;
+    lines.push('', `## ${stack} build`, '', `Built with ${out.build.toolchain}; verified against the plain-HTML build (same DOM and pixels on ${out.equivalence?.dom?.equal}/${out.equivalence?.dom?.total} pages, lowest visual match ${out.equivalence?.visual?.min}).`);
+    lines.push(`JavaScript: ${kb(out.build.js.bytes)} (${kb(out.build.js.gzipBytes)} gzipped); CSS: ${kb(out.build.css.bytes)}. The plain-HTML build ships no JavaScript.`);
+    if (out.fidelity?.score != null) lines.push(`Fidelity to the original: ${out.fidelity.score} / 100 (same as the plain-HTML build it is equivalent to).`);
+    for (const w of out.warnings ?? []) lines.push(`- ${w}`);
   }
   const warnings = report.warnings ?? [];
   if (warnings.length) lines.push('', '## Warnings', '', list(warnings, (w) => `- ${w}`));
@@ -115,7 +124,7 @@ There is no build step and no JavaScript. To check it locally:
  * @returns {Promise<{ entries: object[], bytes: number, name: string }>}
  */
 export async function planZip({ dir, report, stack = report.stack }) {
-  if (stack !== 'html') throw refuse(400, `Download for the ${stack} stack is not available yet.`);
+  if (stack !== 'html') return planProjectZip({ dir, report, stack });
   const dist = await listFiles(path.join(dir, 'dist')).catch(() => []);
   if (!dist.length) throw refuse(404, 'The production build of this recreate is gone. Run Recreate again.');
   const distSizes = new Map(dist.map((f) => [f.rel, f.size]));
@@ -129,14 +138,7 @@ export async function planZip({ dir, report, stack = report.stack }) {
     ...dist.map((f) => ({ name: `${root}/site/${f.rel}`, file: f.abs, size: f.size, store: STORED.test(f.rel) })),
     ...readable.map((f) => ({ name: `${root}/unminified/${f.rel}`, file: f.abs, size: f.size, store: false })),
   ];
-  const bytes = entries.reduce((n, e) => n + (e.size ?? Buffer.byteLength(e.content)), 0);
-  if (entries.length > ZIP_MAX_FILES) {
-    throw refuse(413, `This recreate has ${entries.length} files; a download is limited to ${ZIP_MAX_FILES}.`);
-  }
-  if (bytes > ZIP_MAX_BYTES) {
-    throw refuse(413, `This recreate is ${Math.round(bytes / 1048576)} MB; a download is limited to ${Math.round(ZIP_MAX_BYTES / 1048576)} MB. Recreate fewer pages.`);
-  }
-  return { entries, bytes, name: `${root}.zip` };
+  return finishPlan(entries, root);
 }
 
 /** Streams the planned entries as a zip into `out` (a writable); resolves when finished. */
@@ -160,4 +162,33 @@ export function writeZip(plan, out) {
     }
     archive.finalize().catch(reject);
   });
+}
+
+// Folders of a stack project that are build output or dependencies: never part of the zip.
+const PROJECT_SKIP = new Set(['dist', '.ssr', 'node_modules']);
+
+/** A stack project: its source as it is (the user installs and builds it), plus the report. */
+async function planProjectZip({ dir, report, stack }) {
+  const output = reportOutputs(report)[stack];
+  if (output?.status !== 'ready') throw refuse(400, `This recreate has no ${stack} output.`);
+  const project = path.join(dir, output.dir);
+  const files = (await listFiles(project, { allowDot: ['.gitignore'] }).catch(() => [])).filter((f) => !PROJECT_SKIP.has(f.rel.split('/')[0]));
+  if (!files.length) throw refuse(404, `The ${stack} project of this recreate is gone. Run Recreate again.`);
+  const root = zipBaseName(report, stack);
+  const entries = [
+    { name: `${root}/RECREATE-REPORT.md`, content: reportMarkdown(report, stack) },
+    ...files.map((f) => ({ name: `${root}/${f.rel}`, file: f.abs, size: f.size, store: STORED.test(f.rel) })),
+  ];
+  return finishPlan(entries, root);
+}
+
+function finishPlan(entries, root) {
+  const bytes = entries.reduce((n, e) => n + (e.size ?? Buffer.byteLength(e.content)), 0);
+  if (entries.length > ZIP_MAX_FILES) {
+    throw refuse(413, `This recreate has ${entries.length} files; a download is limited to ${ZIP_MAX_FILES}.`);
+  }
+  if (bytes > ZIP_MAX_BYTES) {
+    throw refuse(413, `This recreate is ${Math.round(bytes / 1048576)} MB; a download is limited to ${Math.round(ZIP_MAX_BYTES / 1048576)} MB. Recreate fewer pages.`);
+  }
+  return { entries, bytes, name: `${root}.zip` };
 }
