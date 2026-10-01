@@ -244,3 +244,70 @@
     grid-column: 1 / -1;
   }
 }
+/* ---- Aurora polish (UI redesign) ---- */
+.card {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(10px);
+  transition: box-shadow var(--dur) ease, border-color var(--dur) ease;
+}
+
+.card:hover {
+  border-color: var(--accent-border);
+  box-shadow: var(--shadow);
+}
+
+.title {
+  font-weight: 700;
+  font-size: var(--fs-md);
+}
+
+.score {
+  font-size: 30px;
+  font-weight: 750;
+  letter-spacing: -0.03em;
+}
+
+.score[data-tone='ok'] {
+  background: var(--grad-ok);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.score[data-tone='warn'] {
+  background: var(--grad-warn);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.page {
+  margin: 0 -8px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  transition: background 160ms ease;
+}
+
+.page:hover,
+.diffPage:hover {
+  background: var(--accent-tint);
+}
+
+.bar {
+  height: 6px;
+}
+
+.bar span {
+  background: var(--grad-ok);
+}
+
+.bar span[data-tone='warn'] {
+  background: var(--grad-warn);
+}
+
+.warnings {
+  gap: 6px;
+  padding: var(--sp-3);
+  border-radius: var(--radius);
+  background: var(--warn-tint);
+}

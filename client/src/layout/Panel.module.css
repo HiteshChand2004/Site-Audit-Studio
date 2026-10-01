@@ -1,10 +1,12 @@
-/* Shared panel chrome. OLD = neutral slate rail, NEW = accent rail + tinted header. */
+/* Shared panel chrome. OLD = sky-blue gradient rail, NEW = violet-to-pink gradient rail + tinted header. */
 .panel {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  background: var(--bg);
+  background: transparent;
 }
 
 .panel + .panel {
@@ -12,23 +14,37 @@
 }
 
 .header {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  height: 44px;
+  height: 52px;
   flex: none;
   padding: 0 var(--sp-4);
   border-bottom: 1px solid var(--border);
-  background: var(--surface);
-  box-shadow: inset 0 2px 0 var(--rail);
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(14px);
+}
+
+/* The coloured rail along the top edge of the header. */
+.header::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: var(--rail-grad);
+  background-size: 200% 100%;
+  animation: var(--k-gradient-shift) 8s ease-in-out infinite;
 }
 
 .old {
   --rail: var(--old-rail);
+  --rail-grad: var(--grad-old);
 }
 
 .new {
   --rail: var(--accent);
+  --rail-grad: var(--grad-brand);
 }
 
 /* Room for the Sync scroll toggle on the divider between the two headers (AppShell.module.css). */
@@ -51,30 +67,33 @@
 }
 
 .new .header {
-  background: linear-gradient(180deg, var(--accent-tint) 0%, var(--surface) 100%);
+  background: linear-gradient(180deg, rgba(240, 236, 255, 0.9) 0%, rgba(255, 255, 255, 0.78) 100%);
 }
 
 .chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 22px;
-  padding: 0 8px;
-  border-radius: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
-  font-weight: 500;
-  letter-spacing: 0.04em;
+  font-weight: 700;
+  letter-spacing: 0.08em;
 }
 
 .old .chip {
   background: var(--old-chip-bg);
   color: var(--old-chip);
+  box-shadow: inset 0 0 0 1px var(--old-chip-border);
 }
 
 .new .chip {
-  background: var(--accent);
+  background: var(--grad-brand);
   color: #fff;
+  box-shadow: 0 4px 12px rgba(109, 74, 255, 0.35);
+  animation: var(--k-pulse) 2.6s ease-out infinite;
 }
 
 .headerSub {
@@ -92,11 +111,23 @@
 .body {
   flex: 1;
   min-height: 0;
-  padding: var(--sp-4);
+  padding: var(--sp-5);
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
+  gap: var(--sp-4);
 }
+
+/* Everything in a panel fades up one after the other when a project is opened. */
+.body > * {
+  animation: var(--k-fade-up) 560ms var(--ease) both;
+}
+
+.body > *:nth-child(2) { animation-delay: 60ms; }
+.body > *:nth-child(3) { animation-delay: 110ms; }
+.body > *:nth-child(4) { animation-delay: 160ms; }
+.body > *:nth-child(5) { animation-delay: 210ms; }
+.body > *:nth-child(6) { animation-delay: 260ms; }
+.body > *:nth-child(n + 7) { animation-delay: 310ms; }
 
 .footer {
   display: flex;
@@ -105,7 +136,8 @@
   flex: none;
   padding: 10px var(--sp-4);
   border-top: 1px solid var(--border);
-  background: var(--surface);
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(14px);
 }
 
 .footerNote {
@@ -115,14 +147,28 @@
 
 .sectionTitle {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   margin-top: var(--sp-2);
-  color: var(--muted);
+  color: var(--text-2);
   font-size: var(--fs-xs);
-  font-weight: 600;
-  letter-spacing: 0.06em;
+  font-weight: 700;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.sectionTitle > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sectionTitle > span:first-child::before {
+  content: '';
+  width: 14px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--rail-grad);
 }
 
 .urlRow {
@@ -136,18 +182,24 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  height: 32px;
-  padding: 0 10px;
+  height: 38px;
+  padding: 0 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
   color: var(--faint);
+  transition: border-color 160ms ease, box-shadow 200ms ease;
+}
+
+.urlInput:hover {
+  border-color: var(--accent-border);
 }
 
 .urlInput:focus-within {
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
+  color: var(--accent);
 }
 
 .urlInput input {
@@ -175,8 +227,8 @@
   align-items: center;
   gap: 6px;
   flex: none;
-  height: 32px;
-  padding: 0 4px 0 10px;
+  height: 38px;
+  padding: 0 4px 0 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
@@ -228,11 +280,5 @@
 }
 
 .spin {
-  animation: panel-spin 900ms linear infinite;
-}
-
-@keyframes panel-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: var(--k-spin) 900ms linear infinite;
 }

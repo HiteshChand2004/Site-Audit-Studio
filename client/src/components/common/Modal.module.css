@@ -2,25 +2,27 @@
   max-width: calc(100vw - 32px);
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: 22px;
   background: var(--surface);
   color: var(--text);
   box-shadow: var(--shadow-lg);
+  overflow: hidden;
 }
 
 .dialog[open] {
-  animation: pop 140ms ease-out;
+  animation: pop 320ms var(--ease);
 }
 
 .dialog::backdrop {
-  background: rgba(15, 23, 42, 0.32);
-  backdrop-filter: blur(2px);
+  background: radial-gradient(800px 500px at 50% 30%, rgba(109, 74, 255, 0.28), rgba(23, 23, 58, 0.5));
+  backdrop-filter: blur(6px);
+  animation: var(--k-fade-in) 260ms ease both;
 }
 
 @keyframes pop {
   from {
     opacity: 0;
-    transform: translateY(6px) scale(0.985);
+    transform: translateY(18px) scale(0.96);
   }
 }
 
@@ -33,9 +35,9 @@
 }
 
 .title {
-  font-size: var(--fs-lg);
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-size: var(--fs-xl);
+  font-weight: 750;
+  letter-spacing: -0.02em;
 }
 
 .description {
@@ -71,5 +73,4 @@
   padding: var(--sp-3) var(--sp-5);
   border-top: 1px solid var(--border);
   background: var(--surface-2);
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
 }

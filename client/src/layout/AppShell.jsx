@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { ArrowUpDown, Globe, Plus } from 'lucide-react';
+import { ArrowUpDown, FileText, Globe, Plus } from 'lucide-react';
 import Sidebar from './Sidebar.jsx';
 import OldPanel from './OldPanel.jsx';
 import NewPanel from './NewPanel.jsx';
 import Disclaimer from '../components/common/Disclaimer.jsx';
 import Button from '../components/common/Button.jsx';
 import NewProjectModal from '../components/project/NewProjectModal.jsx';
+import ReportModal from '../components/report/ReportModal.jsx';
 import StackModal from '../components/recreate/StackModal.jsx';
 import { useProjects, useSelectedProject } from '../store/useProjects.js';
 import styles from './AppShell.module.css';
@@ -52,6 +53,7 @@ export default function AppShell() {
 
   const [newOpen, setNewOpen] = useState(false);
   const [stackOpen, setStackOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const [tab, setTab] = useState('old'); // narrow screens only
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed();
   // Sync scroll: off by default and not remembered. The OLD screenshot and the NEW page (drawn at full
@@ -69,6 +71,11 @@ export default function AppShell() {
 
   return (
     <div className={styles.app}>
+      <div className={styles.aurora} aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </div>
       <header className={styles.topbar}>
         <div className={styles.brand}>
           <span className={styles.logo} aria-hidden="true">
@@ -79,7 +86,14 @@ export default function AppShell() {
           <span className={styles.brandName}>Site Audit Studio</span>
           <span className={`${styles.version} mono`}>v0.3 · phase 3</span>
         </div>
-        <Disclaimer />
+        <div className={styles.topActions}>
+          {project && (
+            <Button variant="primary" icon={FileText} onClick={() => setReportOpen(true)} title="Build the complete report of the original and the recreated site">
+              Generate report
+            </Button>
+          )}
+          <Disclaimer />
+        </div>
       </header>
 
       <div className={styles.main}>
@@ -154,6 +168,7 @@ export default function AppShell() {
 
       <NewProjectModal open={newOpen} onClose={() => setNewOpen(false)} />
       {project && <StackModal open={stackOpen} onClose={() => setStackOpen(false)} project={project} />}
+      {project && <ReportModal key={project.id} open={reportOpen} onClose={() => setReportOpen(false)} project={project} />}
     </div>
   );
 }

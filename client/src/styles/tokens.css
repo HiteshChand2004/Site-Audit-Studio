@@ -1,51 +1,68 @@
+/* Aurora light theme: soft lavender / sky / blush backgrounds, white glass cards, vibrant violet-pink accents.
+   Colours are used through these tokens only. */
 :root {
-  /* Neutrals (cool slate greys) */
-  --bg: #f8fafc;
+  /* Neutrals (indigo-tinted greys) */
+  --bg: #f5f6ff;
   --surface: #ffffff;
-  --surface-2: #f1f5f9;
-  --surface-3: #e9eef4;
-  --border: #e2e8f0;
-  --border-strong: #cbd5e1;
-  --text: #0f172a;
-  --text-2: #334155;
-  --muted: #64748b;
-  --faint: #94a3b8;
+  --surface-2: #f3f2ff;
+  --surface-3: #e8e7fb;
+  --border: #e4e5f7;
+  --border-strong: #cfd2ee;
+  --text: #17173a;
+  --text-2: #363863;
+  --muted: #666a94;
+  --faint: #9a9dc2;
 
-  /* Accent: indigo */
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
-  --accent-press: #3730a3;
-  --accent-tint: #eef2ff;
-  --accent-tint-2: #e0e7ff;
-  --accent-border: #c7d2fe;
-  --accent-text: #4338ca;
+  /* Accent: vibrant violet */
+  --accent: #6d4aff;
+  --accent-hover: #5b38f0;
+  --accent-press: #4b2bd3;
+  --accent-tint: #f0ecff;
+  --accent-tint-2: #e2dbff;
+  --accent-border: #cdc2ff;
+  --accent-text: #5a3aea;
+
+  /* Supporting brand colours */
+  --pink: #ec4899;
+  --cyan: #06b6d4;
+  --sky: #0ea5e9;
+  --mint: #10b981;
+  --sun: #f59e0b;
 
   /* Status */
-  --ok: #15803d;
-  --ok-tint: #ecfdf3;
-  --warn: #b45309;
-  --warn-strong: #d97706;
-  --warn-tint: #fff7ed;
-  --bad: #b91c1c;
-  --bad-tint: #fef2f2;
-  --info: #475569;
-  --info-tint: #f1f5f9;
+  --ok: #0b9a69;
+  --ok-tint: #e6faf2;
+  --warn: #c2570c;
+  --warn-strong: #f59e0b;
+  --warn-tint: #fff3df;
+  --bad: #e11d48;
+  --bad-tint: #fff0f3;
+  --info: #2563eb;
+  --info-tint: #eaf1ff;
 
-  /* OLD panel (neutral slate) vs NEW panel (indigo accent) */
-  --old-chip: #475569;
-  --old-chip-bg: #f1f5f9;
-  --old-chip-border: #dde3ea;
-  --old-rail: #94a3b8;
+  /* OLD panel (sky blue) vs NEW panel (violet to pink) */
+  --old-chip: #0369a1;
+  --old-chip-bg: #e0f3ff;
+  --old-chip-border: #b3e0fa;
+  --old-rail: #38bdf8;
+
+  /* Gradients */
+  --grad-brand: linear-gradient(120deg, #6d4aff 0%, #a24cf5 55%, #ec4899 100%);
+  --grad-brand-soft: linear-gradient(120deg, #f0ecff 0%, #fbeaff 60%, #ffe9f3 100%);
+  --grad-old: linear-gradient(120deg, #0ea5e9 0%, #6366f1 100%);
+  --grad-ok: linear-gradient(120deg, #10b981 0%, #06b6d4 100%);
+  --grad-warn: linear-gradient(120deg, #f59e0b 0%, #f97316 100%);
+  --grad-bad: linear-gradient(120deg, #f43f5e 0%, #ec4899 100%);
 
   /* Type */
   --font-sans: 'Inter Variable', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', Consolas, monospace;
-  --fs-xs: 11px;
-  --fs-sm: 12px;
-  --fs-base: 13px;
-  --fs-md: 14px;
-  --fs-lg: 16px;
-  --fs-xl: 20px;
+  --fs-xs: 11.5px;
+  --fs-sm: 12.5px;
+  --fs-base: 13.5px;
+  --fs-md: 15px;
+  --fs-lg: 17px;
+  --fs-xl: 22px;
   --lh-tight: 1.25;
   --lh: 1.5;
 
@@ -58,16 +75,31 @@
   --sp-6: 24px;
   --sp-8: 32px;
 
-  --radius-sm: 5px;
-  --radius: 7px;
-  --radius-lg: 10px;
+  --radius-sm: 8px;
+  --radius: 11px;
+  --radius-lg: 16px;
 
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
-  --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 12px rgba(15, 23, 42, 0.05);
-  --shadow-lg: 0 12px 40px rgba(15, 23, 42, 0.16), 0 2px 6px rgba(15, 23, 42, 0.06);
-  --focus-ring: 0 0 0 3px rgba(79, 70, 229, 0.25);
+  --shadow-sm: 0 1px 2px rgba(60, 50, 140, 0.06);
+  --shadow: 0 2px 4px rgba(60, 50, 140, 0.05), 0 10px 28px rgba(80, 60, 200, 0.09);
+  --shadow-lg: 0 24px 64px rgba(60, 40, 160, 0.26), 0 4px 12px rgba(60, 40, 160, 0.1);
+  --shadow-glow: 0 8px 22px rgba(109, 74, 255, 0.34);
+  --focus-ring: 0 0 0 3px rgba(109, 74, 255, 0.28);
 
-  --topbar-h: 48px;
-  --sidebar-w: 264px;
-  --sidebar-rail-w: 56px;
+  /* Motion. The keyframes live in global.css; CSS modules cannot refer to them by name, so they are
+     referenced through these variables: animation: var(--k-fade-up) 500ms ... */
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur: 220ms;
+  --k-fade-up: sas-fade-up;
+  --k-fade-in: sas-fade-in;
+  --k-pop: sas-pop;
+  --k-shimmer: sas-shimmer;
+  --k-float: sas-float;
+  --k-gradient-shift: sas-gradient-shift;
+  --k-ring-draw: sas-ring-draw;
+  --k-pulse: sas-pulse;
+  --k-spin: sas-spin;
+
+  --topbar-h: 58px;
+  --sidebar-w: 276px;
+  --sidebar-rail-w: 60px;
 }

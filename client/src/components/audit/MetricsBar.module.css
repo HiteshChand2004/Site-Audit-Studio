@@ -157,3 +157,120 @@
   color: var(--muted);
   font-size: var(--fs-xs);
 }
+/* ---- Aurora polish (UI redesign) ---- */
+.wrap {
+  flex: none; /* overflow: hidden would let the flex column squash it to nothing */
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  transition: box-shadow var(--dur) ease, border-color var(--dur) ease;
+}
+
+.wrap:hover {
+  border-color: var(--accent-border);
+  box-shadow: var(--shadow);
+}
+
+.metric {
+  position: relative;
+  padding: 14px var(--sp-4) 16px;
+  transition: background 180ms ease;
+}
+
+.metric:hover {
+  background: var(--accent-tint);
+}
+
+.metric::after {
+  content: '';
+  position: absolute;
+  left: var(--sp-4);
+  bottom: 0;
+  width: 28px;
+  height: 3px;
+  border-radius: 3px 3px 0 0;
+  background: var(--border-strong);
+  transition: width 360ms var(--ease);
+}
+
+.metric:hover::after {
+  width: calc(100% - 2 * var(--sp-4));
+}
+
+.metric:has(.dot[data-tone='ok'])::after { background: var(--grad-ok); }
+.metric:has(.dot[data-tone='warn'])::after { background: var(--grad-warn); }
+.metric:has(.dot[data-tone='bad'])::after { background: var(--grad-bad); }
+
+.label {
+  font-weight: 600;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+}
+
+.dot[data-tone='ok'] { box-shadow: 0 0 0 4px rgba(11, 154, 105, 0.16); }
+.dot[data-tone='warn'] { box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.2); }
+.dot[data-tone='bad'] { box-shadow: 0 0 0 4px rgba(225, 29, 72, 0.16); }
+
+.value {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.scores {
+  padding: 12px var(--sp-4);
+  background: var(--grad-brand-soft);
+}
+
+.toggle {
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.toggle button {
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-weight: 600;
+  transition: background 180ms ease, color 180ms ease, box-shadow 180ms ease;
+}
+
+.toggle button[aria-pressed='true'] {
+  background: var(--grad-brand);
+  box-shadow: 0 4px 10px rgba(109, 74, 255, 0.35);
+  color: #fff;
+}
+
+.track {
+  stroke: rgba(109, 74, 255, 0.12);
+  stroke-width: 3.8;
+}
+
+.arc {
+  stroke-width: 3.8;
+  animation: var(--k-ring-draw) 1100ms var(--ease) both;
+}
+
+.ring {
+  transition: transform var(--dur) var(--ease);
+}
+
+.ring:hover {
+  transform: translateY(-3px) scale(1.1);
+}
+
+.ring[data-tone='ok'] .arc { filter: drop-shadow(0 0 3px rgba(11, 154, 105, 0.5)); }
+.ring[data-tone='warn'] .arc { filter: drop-shadow(0 0 3px rgba(245, 158, 11, 0.55)); }
+.ring[data-tone='bad'] .arc { filter: drop-shadow(0 0 3px rgba(225, 29, 72, 0.5)); }
+
+.ringValue {
+  font-weight: 700;
+}
+
+.ringLabel {
+  font-weight: 650;
+}

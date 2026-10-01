@@ -46,6 +46,16 @@ and merged on `phase-4a`.
 5.4 UI ✅ · 5.5 real-site verification + docs ✅. Phase 4b (motion + responsive fidelity) stays planned. Same workflow: one step at a time, WIP
 commit, wait for the user's "next"; never push; while the user tests, work in a git worktree and merge only when asked.
 
+### Complete report (UI redesign task, after 4b.1)
+"Generate report" (top bar, when a project is selected) builds one report of the **original site (OLD panel), the recreated site (NEW panel) and the fix checklist**, shows it in a modal (animated steps, then a preview) and offers
+**Download HTML** (self-contained, no script, no external request, print-ready: "Print / Save as PDF"), **Download JSON** (the data) and Regenerate.
+- API: `GET /api/projects/:id/report[?format=html|json][&download=1]` (`routes/report.js`; built on request from what is stored, nothing is kept; CSP `default-src 'none'; img-src data:; sandbox`, no-store).
+- `server/src/report/collect.js` (project, latest analysis → `audit` incl. `audit.recreate` = fix checklist, latest completed recreate report, small WebP thumbnails: original first screens from the analysis, recreated pages and the
+  visual-diff heatmap from the recreate folder), `report/render.js` (`renderReportHtml`; every value from the sites goes through `esc()`). Sections: cover + KPIs; **OLD** performance (rings + metrics), screenshots, tech stack,
+  weaknesses, SEO, AEO, meta/sitemap/robots, broken links, accessibility, manual rebuild; **NEW** overview, side-by-side screenshots, fidelity + visual difference per page/view (+ heatmap), layout between widths, build/verification/safety,
+  fixes, auto-generated content, manual rebuild, hover/focus counts, other stacks, warnings; **Fix checklist** (Lighthouse before → after, summary, rows per category). A project without analysis / recreate still gets a report that says so.
+- Client: `components/report/ReportModal.jsx` (+ css), `api.getReportHtml/getReportJson`. Tests: `server/test/report.test.js` (404, empty project, all sections + HTML escaping, download/JSON, thumbnails).
+
 ### Phase 4b plan (approved) — branch `phase-4b` (worktree `../Website-Audit-4b`)
 Decisions: CSS-first motion + one small generated `motion.js` (IntersectionObserver, safety-gated); sweep widths 320/480/600/900/1024/1280/1920; order:
 4b.6 + 4b.7 (responsive + visual diff) → 4b.1–4b.5 (motion capture/emit, all stacks) → 4b.8–4b.9 (re-audit/UI, real-site verification). Everything general, nothing site-specific.
@@ -864,9 +874,13 @@ environmental, not a regression.
 
 ## Conventions
 - **All product text in English** (UI, API errors, dummy data, comments, docs), even though the user chats in Hinglish.
-- Theme: light, indigo accent `#4F46E5`, slate neutrals, Inter + JetBrains Mono (local via @fontsource).
+- Theme ("Aurora light", UI redesign): light, vibrant. Violet accent `#6D4AFF` with a violet-to-pink brand gradient, indigo-tinted neutrals, soft lavender / sky / blush mesh background with slowly drifting blurred blobs
+  (`AppShell .aurora`), white glass cards (blur + soft coloured shadows), Inter + JetBrains Mono (local via @fontsource). All colours, gradients (`--grad-*`), radii, shadows and motion (`--ease`, `--dur`) are tokens in
+  `client/src/styles/tokens.css`. Keyframes live in `styles/global.css` and are used from CSS modules through variables (`animation: var(--k-fade-up) …`; `:global()` in `animation` is not accepted by the build).
+  Motion: staggered fade-up of panel content and cards, hover lifts, gradient buttons with a shine sweep, animated score rings and count-up numbers (`components/common/CountUp.jsx`), shimmering progress bars, pulse on the NEW chip,
+  all switched off by `prefers-reduced-motion`. Gotcha: a flex child with `overflow: hidden` gets min-height 0 and is squashed in the panels' flex column: give it `flex: none`.
   Colors only via tokens.
-- OLD panel = slate rail/chip; NEW panel = indigo rail/chip.
+- OLD panel = sky-blue gradient rail/chip; NEW panel = violet-to-pink gradient rail/chip.
 - The audit JSON shape (`server/src/dummy/audit.js`) is the contract the UI renders. `server/src/audit/assemble.js` produces it; new fields must be additive (`test/analyzers.test.js` checks the keys).
 
 ## Structure

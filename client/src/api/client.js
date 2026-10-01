@@ -105,7 +105,25 @@ function subscribe(url, { progress, done, failed, reconnecting }) {
   return stop;
 }
 
+// The report comes back as text (HTML or JSON), not as the JSON the other calls return.
+async function requestText(path) {
+  let res;
+  try {
+    res = await fetch(`/api${path}`);
+  } catch {
+    throw Object.assign(new Error(API_DOWN), { status: 0 });
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new Error(data?.error || (res.status >= 500 ? API_DOWN : `Request failed (${res.status})`));
+  }
+  return res.text();
+}
+
 export const api = {
+  // The complete report of a project (original site, recreated site, fix checklist).
+  getReportHtml: (id) => requestText(`/projects/${id}/report`),
+  getReportJson: (id) => requestText(`/projects/${id}/report?format=json`),
   listProjects: () => request('/projects'),
   createProject: (input) => request('/projects', { method: 'POST', body: input }),
   updateProject: (id, patch) => request(`/projects/${id}`, { method: 'PATCH', body: patch }),

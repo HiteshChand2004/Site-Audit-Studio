@@ -133,3 +133,23 @@
 .failedText span {
   color: var(--text-2);
 }
+/* ---- Aurora polish (UI redesign) ---- */
+.wrap {
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+}
+
+.bar {
+  height: 8px;
+}
+
+.bar span {
+  background: var(--grad-brand);
+  background-size: 200% 100%;
+  animation: var(--k-shimmer) 1.6s linear infinite;
+  box-shadow: 0 0 12px rgba(109, 74, 255, 0.5);
+}
+
+.title {
+  font-weight: 700;
+}

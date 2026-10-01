@@ -169,3 +169,41 @@
   color: var(--accent-text);
   text-decoration-color: currentColor;
 }
+/* ---- Aurora polish (UI redesign) ---- */
+.row {
+  margin: 0 -8px;
+  padding: 9px 8px;
+  border-top-style: dashed;
+  border-radius: 10px;
+  transition: background 160ms ease;
+}
+
+.row:hover {
+  background: var(--accent-tint);
+}
+
+.status {
+  width: 22px;
+  height: 22px;
+  border-radius: 8px;
+}
+
+.rowTitle {
+  font-weight: 600;
+}
+
+.meter {
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface-3);
+}
+
+.meter span {
+  border-radius: inherit;
+  transition: width 900ms var(--ease);
+}
+
+.meter[data-tone='ok'] span { background: var(--grad-ok); }
+.meter[data-tone='warn'] span { background: var(--grad-warn); }
+.meter[data-tone='bad'] span { background: var(--grad-bad); }

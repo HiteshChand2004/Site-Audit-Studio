@@ -1,5 +1,6 @@
 import { AlertTriangle, Check, X } from 'lucide-react';
 import Badge from '../common/Badge.jsx';
+import CountUp from '../common/CountUp.jsx';
 import styles from './RecreateReport.module.css';
 
 const VIEW_LABEL = { desktop: 'desktop', laptop: 'laptop', tablet: 'tablet', mobile: 'phone' };
@@ -50,7 +51,7 @@ function VisualDiff({ result, projectId }) {
         <span className={styles.title}>Visual difference</span>
         <span className={styles.meta}>perceptual · threshold {threshold}</span>
         <span className={`${styles.score} mono`} data-tone={scoreTone(diff.score, threshold)}>
-          {diff.score ?? '—'}
+          {diff.score == null ? '—' : <CountUp value={diff.score} />}
           <small>/100</small>
         </span>
       </div>
@@ -91,7 +92,7 @@ function Responsive({ result }) {
         <span className={styles.title}>Between the captured widths</span>
         <span className={styles.meta}>{r.widths.length} widths · threshold {r.threshold}</span>
         <span className={`${styles.score} mono`} data-tone={scoreTone(r.score, r.threshold)}>
-          {r.score ?? '—'}
+          {r.score == null ? '—' : <CountUp value={r.score} />}
           <small>/100</small>
         </span>
       </div>
@@ -126,7 +127,7 @@ export default function RecreateReport({ result, projectId }) {
             <span className={styles.title}>Fidelity</span>
             <span className={styles.meta}>vs. the original · threshold {threshold}</span>
             <span className={`${styles.score} mono`} data-tone={scoreTone(fidelity.score, threshold)}>
-              {fidelity.score ?? '—'}
+              {fidelity.score == null ? '—' : <CountUp value={fidelity.score} />}
               <small>/100</small>
             </span>
           </div>

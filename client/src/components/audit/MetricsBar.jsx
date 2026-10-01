@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import CountUp from '../common/CountUp.jsx';
 import styles from './MetricsBar.module.css';
 
 const fmtMs = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`);
@@ -48,7 +49,7 @@ function Ring({ value, label }) {
           transform="rotate(-90 18 18)"
         />
       </svg>
-      <span className={`${styles.ringValue} mono`}>{value ?? '—'}</span>
+      <span className={`${styles.ringValue} mono`}>{value == null ? '—' : <CountUp value={value} />}</span>
       <span className={styles.ringLabel}>{label}</span>
     </div>
   );

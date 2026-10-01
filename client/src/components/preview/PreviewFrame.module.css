@@ -201,3 +201,33 @@
   white-space: nowrap;
   backdrop-filter: blur(4px);
 }
+/* ---- Aurora polish (UI redesign) ---- */
+.frame {
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  transition: box-shadow var(--dur) ease, transform var(--dur) var(--ease);
+}
+
+.frame:hover {
+  box-shadow: 0 6px 12px rgba(60, 50, 140, 0.06), 0 18px 44px rgba(80, 60, 200, 0.16);
+}
+
+.chrome {
+  height: 40px;
+  background: linear-gradient(180deg, #ffffff, var(--surface-2));
+}
+
+.dots i:nth-child(1) { background: #ff6b6b; }
+.dots i:nth-child(2) { background: #ffc94d; }
+.dots i:nth-child(3) { background: #3dd68c; }
+
+.dots i {
+  width: 10px;
+  height: 10px;
+}
+
+.address {
+  height: 26px;
+  border-radius: 999px;
+  padding: 0 12px;
+}
