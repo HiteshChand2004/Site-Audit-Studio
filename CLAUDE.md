@@ -58,7 +58,8 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
 | 4b.6.3 | A 4th captured view (laptop, 1024) between 768 and 1440 (IR views 3 → 4) + continuous overflow penalty | ✅ WIP |
 | 4b.6.x | Remaining small follow-up: sweep time budget where pages are still left out (the step max was raised to 4 min in 4b.6.2; panscience's 6th page / `/media` is still lost in **inspect**) | ⏳ |
 | 4b.7 | Visual diff score (perceptual SSIM-style diff, bands, heatmaps, NEW-panel cards) | ✅ WIP |
-| 4b.1–4b.5 | Motion capture (hover/focus, reveal, continuous), IR `motion`, HTML emitter + `motion.js`, all stacks | ⏳ |
+| 4b.1 | Motion capture: hover / focus (`capture/interactions.js`, `motion.json`) | ✅ WIP |
+| 4b.2–4b.5 | Motion capture (scroll reveal, continuous), IR `motion`, HTML emitter + `motion.js`, all stacks | ⏳ |
 | 4b.8–4b.9 | Re-audit rows + UI, real-site verification, docs | ⏳ |
 
 4b.6.1 details (**measures only, never fails a job**):
@@ -126,6 +127,28 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
 - **Real sites** (parchaa.com, 6 pages, default limit, API on `C:sasd`): homepage visual score (perceptual, ×100) at 900 / 1024 / 1280 px **48 / 48 / 48 → 81 / 84 / 74**, contact 64 / 67 / 68 → 89 / 97 / 84, a blog page
   47 / 46 / 54 → 55 / 99 / 56; fidelity 88 → 91, visual diff 86; the sweep reached all 6 pages; breakpoints now laptop 1319.98 (the site's), tablet 809.98 (the site's), mobile 599.98 (sweep). Still weak: the blog pages at 900 / 1280 (~55) and
   the phone widths 480 / 600 of the blog pages (shorter / taller): between 375 and 768 there is still only the 375 capture.
+
+4b.1 details (hover / focus capture - capture only, nothing is emitted yet):
+- **Where**: desktop view only, in `captureView` after the screenshots and the DOM snapshot (`capture/interactions.js captureInteractions`), budget 8 s per page (`inspect.js MOTION_BUDGET`; skipped when the inspect
+  step has no time to spare). Output `capture/<slug>/motion.json`; `report.pages[].motion` = counts, `report.motion` = { status, pages, hover, focus, rules, errors, notProbed }.
+- **Two paths, both general**: (1) *CSS-first* - every `:hover` / `:focus` / `:focus-visible` / `:focus-within` / `:active` rule of every readable stylesheet, as authored (`rules[]`: selector, state, media condition, declarations;
+  unreadable cross-origin sheets are counted - the assets step downloads them); (2) *probe* - the mouse moves onto the element and computed styles are compared with the state just before, so a hover driven by a script
+  (builder runtimes, `mouseenter` handlers) is found with or without a rule.
+- **Probe details**: candidates = links, buttons, fields, roles, `tabindex`, then `cursor: pointer` tops, then plain transition hosts (not inside a chosen element, 3 levels); equal elements (tag + role + classes + parent) are probed
+  3 times (`groups[]` counts the rest); `limit` 40. Compared: ~45 visual properties (colour, background, border, outline, shadow, opacity, transform/translate/scale/rotate, filter, text-decoration, weight, letter-spacing, fill, stroke,
+  display, visibility, cursor) for the element, its ::before / ::after (+ size / position) and its descendants (3 levels, ≤ 24). Each entry: `path` (the snapshot's `body>div:1>a:2`, so a later step finds the IR node),
+  `changes {prop: [from, to]}`, `pseudo`, `kids[{path, changes, transition}]`, `transition` (hover-in; `transitionOut` when different), `layout` + `rect` delta (from offset* boxes: a transform is not a layout change), `domDelta`.
+  Covered elements (something on top at the pointer) are skipped and counted; no-change elements are counted, not listed.
+- **Scroll is not hover** (found on panscience.xyz: scroll-reveal hosts looked like 1.4 s opacity hovers): the rest state is read with the mouse out, after the scroll, and re-read until it holds still; an element already on screen is not
+  scrolled at all. **Focus**: Tab from the top of the page (the Tab starting point is reset by focusing the body); at each stop the focused state is compared with the same element **blurred** (same scroll position, same reveal state);
+  the browser's own default ring (`outline-style: auto`) is not a change. Hover may use 60 % of the budget, focus the rest; up to 80 Tab stops (non-probed stops are skipped cheaply).
+- **Tests** (`recreate-motion.test.js`, 8; fixture in `recreate-capture.test.js`): link colour + transition, card shadow/transform + a fading child, an underline pseudo-element, no-change and covered elements, 8 equal elements → 3 probed,
+  a script-only hover (no rule) and a scroll-reveal host that must not be listed, custom focus style vs default ring, rules with media, paths in the snapshot, the time budget. Fixture: `:hover` rule on the nav links and `hover.js` (script-only
+  hover on the logo, the case only the probe can find).
+- **Real site** (panscience.xyz, 6 pages): rules 20 per page (120), hover found on the nav links (colour 0.2 s, 3 links), "Contact Us" (transform 0.25 s), the scroll-reveal false positives gone; the site has no custom focus styles
+  (every Tab stop is the browser's ring). Probing was slow there (only ~6 probes in 8 s) before the "do not scroll what is on screen" change; not re-measured on the real site after it. parchaa.com (an earlier run, before the scroll fix:
+  118 hover entries, 111 focus entries, 99 rules over 5 pages) is verified in 4b.9. That panscience run took the whole 12-minute budget (the final responsive step skipped 4 pages): the cost of motion capture itself should be about
+  8 s × pages; check the total again in 4b.9.
 
 ### Phase 6 final summary
 Every recreate can be built as **four stacks**, all from the same saved IR and all checked against the plain-HTML build: Plain HTML / CSS / JS (the

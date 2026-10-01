@@ -31,3 +31,7 @@ body { margin: 0; font-family: system-ui, sans-serif; color: var(--ink); line-he
   .hero h1 { font-size: 32px; }
   .features { grid-template-columns: 1fr; padding: 32px 16px; }
 }
+
+/* Hover effect for the Recreate motion capture (4b.1). */
+.site-header nav a { transition: color 0.2s; }
+.site-header nav a:hover { color: #b45309; }

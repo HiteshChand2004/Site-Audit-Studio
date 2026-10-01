@@ -149,6 +149,22 @@ test('the inspect step captures every selected page at desktop, laptop, tablet a
   }
   assert.ok(await exists(path.join(dir, 'about', 'desktop.json')));
 
+  // Hover / focus capture (4b.1): motion.json for the desktop view, the nav link hover found, counts in the report.
+  const motion = JSON.parse(await readFile(path.join(dir, 'index', 'motion.json'), 'utf8'));
+  const navLink = motion.hover.find((h) => /About/i.test(h.text));
+  assert.ok(navLink, JSON.stringify(motion.hover.map((h) => h.text)));
+  assert.equal(navLink.changes.color[1], 'rgb(180, 83, 9)');
+  assert.ok(motion.rules.some((r) => /nav a:hover/.test(r.selector)));
+  // The seeded script-only hover (fixtures/recreate-site/hover.js) has no :hover rule: only the probe finds it.
+  const logo = motion.hover.find((h) => h.tag === 'a' && /Recreate Co/.test(h.text));
+  assert.equal(logo.changes['letter-spacing'][1], '2px');
+  assert.ok(!motion.rules.some((r) => /logo/.test(r.selector)));
+  assert.equal(report.motion.status, 'captured');
+  assert.equal(report.motion.pages, 2);
+  assert.ok(report.motion.hover >= 2 && report.motion.rules >= 2);
+  assert.equal(report.pages[0].motion.hover, motion.hover.length);
+  assert.ok(!(await exists(path.join(dir, 'index', 'laptop-motion.json'))), 'only the desktop view is probed');
+
   const load = async (view) => JSON.parse(await readFile(path.join(dir, 'index', `${view}.json`), 'utf8'));
   const [desktop, mobile] = [await load('desktop'), await load('mobile')];
   const find = (node, fn) => {
@@ -187,7 +203,7 @@ test('the inspect step captures every selected page at desktop, laptop, tablet a
   assert.deepEqual(img.lazy, { 'data-src': '/img/photo.svg' });
   assert.deepEqual(desktop.cssUrls, [`${origin}/img/hero-bg.svg`]);
   const resources = desktop.resources.map((r) => `${r.type} ${new URL(r.url).pathname}`).sort();
-  assert.deepEqual(resources, ['document /', 'image /img/hero-bg.svg', 'image /img/photo.svg', 'script /lazy.js', 'stylesheet /styles.css']);
+  assert.deepEqual(resources, ['document /', 'image /img/hero-bg.svg', 'image /img/photo.svg', 'script /hover.js', 'script /lazy.js', 'stylesheet /styles.css']);
   assert.deepEqual(desktop.screenshots.fold.width, 1440);
   assert.deepEqual(mobile.screenshots.fold.width, 750); // DPR 2
 });

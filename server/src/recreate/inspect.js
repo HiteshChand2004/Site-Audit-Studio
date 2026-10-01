@@ -11,6 +11,8 @@ import { RecreateError } from './errors.js';
 
 // Captures stop starting new pages this long before the step's time limit.
 const INSPECT_MARGIN = 15000;
+// Time per page for the hover / focus probing of the desktop view.
+const MOTION_BUDGET = 8000;
 // Time of the whole job kept for the steps after capture (assets, generate, build, preview).
 export const LATER_STEPS_RESERVE = 150000;
 
@@ -59,7 +61,9 @@ export async function inspectStage(ctx) {
       }
       ctx.progress(0.2 + 0.8 * (i / total), `Capturing ${info.path} (${i + 1} of ${total})`);
       const started = Date.now();
-      const { views, errors } = await capturePage(browser, info, ctx.dir);
+      // Hover / focus probing (4b.1) takes a few seconds per page: only while the step has time to spare.
+      const spare = deadline - Date.now() - slowest * 2;
+      const { views, errors } = await capturePage(browser, info, ctx.dir, { motionBudgetMs: spare > MOTION_BUDGET * 2 ? MOTION_BUDGET : 0 });
       slowest = Math.max(slowest, Date.now() - started);
       for (const e of errors) report.errors.push({ step: 'inspect', message: `${info.path} (${e.view}): ${e.message}` });
       if (!views.desktop) {
@@ -94,7 +98,19 @@ export async function inspectStage(ctx) {
     views: Object.keys(p.views),
     // Scroll-reveal elements captured in their revealed state, per view (capture/index.js).
     revealPinned: Object.fromEntries(Object.entries(p.views).map(([v, x]) => [v, x.reveal?.pinned ?? 0])),
+    // Hover / focus effects found on the desktop view (capture/<slug>/motion.json, 4b.1); null = not probed.
+    motion: p.views.desktop?.motion ?? null,
   }));
+  const probed = report.pages.filter((p) => p.motion && !p.motion.error);
+  report.motion = {
+    status: probed.length ? 'captured' : 'skipped',
+    pages: probed.length,
+    hover: probed.reduce((n, p) => n + p.motion.hover, 0),
+    focus: probed.reduce((n, p) => n + p.motion.focus, 0),
+    rules: probed.reduce((n, p) => n + p.motion.rules, 0),
+    errors: report.pages.filter((p) => p.motion?.error).map((p) => ({ page: p.path, error: p.motion.error })),
+    notProbed: report.pages.filter((p) => !p.motion).map((p) => p.path),
+  };
   const revealPages = report.pages.filter((p) => Object.values(p.revealPinned).some((n) => n > 0));
   if (revealPages.length) {
     report.warnings.push(`Scroll-reveal content on ${revealPages.length} ${revealPages.length === 1 ? 'page' : 'pages'} was captured in its revealed state (${revealPages.map((p) => p.path).slice(0, 5).join(', ')}); the reveal animation itself comes in Phase 4b.`);

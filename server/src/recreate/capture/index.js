@@ -6,6 +6,7 @@ import path from 'node:path';
 import { USER_AGENT } from '../../audit/http.js';
 import { encode, MAX_HEIGHT, MOBILE_UA } from '../../audit/screenshots.js';
 import { RECREATE_VIEWS as VIEWS } from '../views.js';
+import { captureInteractions } from './interactions.js';
 import { snapshotPage } from './snapshot.js';
 
 export { VIEWS };
@@ -196,7 +197,7 @@ export async function settle(page, view, cap) {
   return { ...stats, scrolled: max };
 }
 
-async function captureView(browser, pageInfo, view, dir, { timeout }) {
+async function captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs = 0 }) {
   const context = await browser.newContext({
     viewport: { width: view.width, height: view.height },
     deviceScaleFactor: view.dpr,
@@ -257,6 +258,18 @@ async function captureView(browser, pageInfo, view, dir, { timeout }) {
       encode(full, path.join(dir, `${view.id}-full.webp`)),
     ]);
 
+    // Hover and focus effects (4b.1), on the desktop view only, after everything else was captured from the page.
+    let motion = null;
+    if (view.id === 'desktop' && motionBudgetMs > 0) {
+      try {
+        const found = await captureInteractions(page, { budgetMs: motionBudgetMs });
+        await writeFile(path.join(dir, 'motion.json'), JSON.stringify(found));
+        motion = { hover: found.hover.length, focus: found.focus.length, rules: found.rules.length, rulesTotal: found.stats.rulesTotal, probed: found.stats.probed, ms: found.stats.ms, timedOut: found.stats.timedOut };
+      } catch (err) {
+        motion = { error: String(err?.message ?? err).split(/\r?\n/)[0] };
+      }
+    }
+
     const data = {
       view: view.id,
       viewport: { width: view.width, height: view.height, dpr: view.dpr, mobile: view.mobile },
@@ -281,6 +294,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout }) {
       truncated: data.truncated,
       scrollHeight: data.scrollHeight,
       reveal,
+      ...(motion && { motion }),
       resources: data.resources,
     };
   } finally {
@@ -296,10 +310,10 @@ async function captureView(browser, pageInfo, view, dir, { timeout }) {
  * @param {string} workspace  the recreate workspace folder
  * @returns {Promise<{ views: Record<string, object>, errors: { view: string, message: string }[] }>}
  */
-export async function capturePage(browser, pageInfo, workspace, { timeout = 30000 } = {}) {
+export async function capturePage(browser, pageInfo, workspace, { timeout = 30000, motionBudgetMs = 0 } = {}) {
   const dir = captureDir(workspace, pageInfo.slug);
   await mkdir(dir, { recursive: true });
-  const results = await Promise.allSettled(VIEWS.map((view) => captureView(browser, pageInfo, view, dir, { timeout })));
+  const results = await Promise.allSettled(VIEWS.map((view) => captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs })));
   const views = {};
   const errors = [];
   results.forEach((r, i) => {

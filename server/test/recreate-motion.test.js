@@ -1,0 +1,188 @@
+// Recreate 4b.1: hover / focus capture (capture/interactions.js) on a local page with known effects.
+import { after, before, test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { launchBrowser } from '../src/audit/render.js';
+import { captureInteractions, diffStates } from '../src/recreate/capture/interactions.js';
+import { snapshotPage } from '../src/recreate/capture/snapshot.js';
+import { startSiteServer } from '../src/recreate/verify/server.js';
+
+const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Motion</title>
+<style>
+body { margin: 0; font: 16px sans-serif; }
+a.link { color: #111111; text-decoration: none; transition: color 0.2s; }
+a.link:hover { color: #e11d48; }
+.card { display: block; width: 200px; padding: 20px; margin: 10px; background: #ffffff; color: #111111; box-shadow: 0 0 0 rgba(0,0,0,0); transition: box-shadow 0.2s, transform 0.2s; }
+.card:hover { box-shadow: 0 8px 20px rgba(0,0,0,0.25); transform: translateY(-4px); }
+.card .arrow { opacity: 0; transition: opacity 0.2s; }
+.card:hover .arrow { opacity: 1; }
+.under { position: relative; display: inline-block; }
+.under::after { content: ''; position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: #000000; transform: scaleX(0); transition: transform 0.2s; }
+.under:hover::after { transform: scaleX(1); }
+button.b:focus-visible { outline: 3px solid #2563eb; outline-offset: 2px; background: #dbeafe; }
+.ptr { cursor: pointer; width: 100px; height: 40px; background: #eeeeee; }
+.dup { display: block; width: 120px; height: 30px; margin: 4px; background: #cccccc; transition: background-color 0.1s; }
+.dup:hover { background: #999999; }
+.rev { transform: translateY(60px); transition: transform 0.3s; }
+.jsh { display: inline-block; }
+@media (hover: hover) { .only-hover:hover { color: red; } }
+</style></head><body>
+<nav><a class="link" href="#a">First link</a> <a class="plain" href="#b">Plain link</a></nav>
+<a class="card" href="#c"><span>Card title</span> <span class="arrow">go</span></a>
+<p><a class="under" href="#d">Underline</a></p>
+<p><button class="b" type="button">Focus me</button></p>
+<div class="ptr">pointer only</div>
+<div style="position: relative; width: 150px; height: 40px"><a class="link" href="#e">Covered link</a><div style="position: absolute; inset: 0"></div></div>
+<div style="height: 900px"></div>
+<div class="rev">reveal host (moves when scrolled into view)</div>
+<p><a class="jsh" href="#j">JS hover</a></p>
+<script>
+new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) e.target.style.transform = 'none'; }), { threshold: 0.5 }).observe(document.querySelector('.rev'));
+const j = document.querySelector('.jsh');
+j.addEventListener('mouseenter', () => { j.style.letterSpacing = '3px'; j.style.color = 'rgb(0, 128, 0)'; });
+j.addEventListener('mouseleave', () => { j.style.letterSpacing = ''; j.style.color = ''; });
+</script>
+<div id="dups">${Array.from({ length: 8 }, (_, i) => `<a class="dup" href="#x${i}">dup ${i}</a>`).join('')}</div>
+</body></html>`;
+
+let dir;
+let site;
+let browser;
+before(async () => {
+  dir = await mkdtemp(path.join(os.tmpdir(), 'sas-motion-'));
+  await writeFile(path.join(dir, 'index.html'), PAGE);
+  site = await startSiteServer(dir);
+  browser = await launchBrowser();
+});
+after(async () => {
+  await browser?.close();
+  await site?.close();
+  if (dir) await rm(dir, { recursive: true, force: true });
+});
+
+async function openPage() {
+  const page = await (await browser.newContext({ viewport: { width: 1000, height: 700 } })).newPage();
+  await page.goto(`${site.origin}/`, { waitUntil: 'load' });
+  return page;
+}
+
+test('hover effects are captured as style changes with their transition', async () => {
+  const page = await openPage();
+  const found = await captureInteractions(page, { budgetMs: 20000 });
+  const byText = (t) => found.hover.find((h) => h.text.startsWith(t));
+
+  const link = byText('First link');
+  assert.deepEqual(link.changes.color, ['rgb(17, 17, 17)', 'rgb(225, 29, 72)']);
+  assert.match(link.transition.duration, /0\.2s/);
+  assert.match(link.transition.property, /color/);
+
+  const card = byText('Card title');
+  assert.ok(card.changes['box-shadow'] && card.changes.transform, JSON.stringify(card.changes));
+  // The arrow inside the card fades in: a descendant change, found through its path.
+  const arrow = card.kids.find((k) => k.changes.opacity);
+  assert.deepEqual(arrow.changes.opacity, ['0', '1']);
+
+  const under = byText('Underline');
+  assert.ok(under.pseudo.after.transform, JSON.stringify(under.pseudo));
+  assert.notEqual(under.pseudo.after.transform[0], under.pseudo.after.transform[1]);
+
+  // Nothing changes on hover: not listed, but counted. An element under another one cannot be hovered.
+  assert.ok(found.hover.every((h) => !h.text.startsWith('pointer only')));
+  assert.ok(found.stats.noChange >= 1);
+  assert.ok(found.stats.covered >= 1);
+  assert.ok(found.hover.every((h) => !h.text.startsWith('Covered link')));
+
+  // Layout does not move on these hovers (the transform of the card is not a layout change).
+  assert.equal(link.layout, false);
+  assert.equal(card.layout, false);
+  await page.context().close();
+});
+
+test('a hover effect driven by script is found without any :hover rule; a scroll-reveal is not mistaken for a hover', async () => {
+  const page = await openPage();
+  const found = await captureInteractions(page, { budgetMs: 30000 });
+  const js = found.hover.find((h) => h.text === 'JS hover');
+  assert.equal(js.changes['letter-spacing'][1], '3px');
+  assert.equal(js.changes.color[1], 'rgb(0, 128, 0)');
+  assert.ok(!found.rules.some((r) => /jsh/.test(r.selector)), 'no authored rule for it: only the probe can know');
+  // The reveal host moved because it was scrolled into view, not because of the mouse.
+  assert.ok(found.hover.every((h) => !h.text.startsWith('reveal host')), JSON.stringify(found.hover.map((h) => h.text)));
+  await page.context().close();
+});
+
+test('equal elements are probed a few times and counted as a group', async () => {
+  const page = await openPage();
+  const found = await captureInteractions(page, { budgetMs: 20000, perSignature: 3 });
+  const dups = found.hover.filter((h) => h.text.startsWith('dup'));
+  assert.equal(dups.length, 3);
+  assert.ok(dups.every((d) => d.changes['background-color']));
+  const group = found.groups.find((g) => g.count === 8);
+  assert.equal(group.probed, 3);
+  assert.ok(found.stats.skipped.duplicate >= 5);
+  await page.context().close();
+});
+
+test('keyboard focus: a custom focus style is captured, the browser default ring is not', async () => {
+  const page = await openPage();
+  const found = await captureInteractions(page, { budgetMs: 20000 });
+  const button = found.focus.find((f) => f.tag === 'button');
+  assert.equal(button.changes['outline-style'][1], 'solid');
+  assert.equal(button.changes['outline-color'][1], 'rgb(37, 99, 235)');
+  assert.equal(button.changes['background-color'][1], 'rgb(219, 234, 254)');
+  // The plain link only gets the browser's own ring.
+  assert.ok(found.focus.every((f) => f.text !== 'Plain link'));
+  assert.ok(found.stats.focused >= 3);
+  await page.context().close();
+});
+
+test('the authored :hover / :focus rules are listed, with their media condition', async () => {
+  const page = await openPage();
+  const found = await captureInteractions(page, { budgetMs: 20000 });
+  const rule = (sel) => found.rules.find((r) => r.selector === sel);
+  assert.equal(rule('a.link:hover').state, 'hover');
+  assert.equal(rule('a.link:hover').decls.color, 'rgb(225, 29, 72)');
+  assert.equal(rule('button.b:focus-visible').state, 'focus-visible');
+  assert.match(rule('.only-hover:hover').media, /hover:\s*hover/);
+  assert.equal(found.stats.unreadableSheets, 0);
+  assert.equal(found.stats.rulesTotal, found.rules.length);
+  await page.context().close();
+});
+
+test('captured paths are the paths of the DOM snapshot', async () => {
+  const page = await openPage();
+  const found = await captureInteractions(page, { budgetMs: 20000 });
+  const snap = await page.evaluate(snapshotPage, {});
+  const paths = new Set();
+  const walk = (n) => {
+    if (n.path) paths.add(n.path);
+    (n.children ?? []).forEach(walk);
+  };
+  walk(snap.body);
+  assert.ok(found.hover.length >= 4);
+  for (const e of [...found.hover, ...found.focus]) {
+    assert.ok(paths.has(e.path), `hover/focus path ${e.path} is in the snapshot`);
+    for (const k of e.kids ?? []) assert.ok(paths.has(k.path), `descendant path ${k.path} is in the snapshot`);
+  }
+  await page.context().close();
+});
+
+test('the time budget stops the probing and says so', async () => {
+  const page = await openPage();
+  const found = await captureInteractions(page, { budgetMs: 1 });
+  assert.equal(found.stats.timedOut, true);
+  assert.ok(found.stats.probed <= 1);
+  await page.context().close();
+});
+
+test('diffStates: no change is null, a UA focus ring is not a change, a shifted box is a layout change', () => {
+  const state = (values, rect = [0, 0, 100, 20]) => ({ values, tr: { duration: '0s' }, rect, kids: [], pseudo: {}, domCount: 10 });
+  const rest = state({ color: 'red', 'outline-style': 'none', 'outline-color': 'x', 'outline-width': '0px' });
+  assert.equal(diffStates(rest, state({ ...rest.values })), null);
+  assert.equal(diffStates(rest, state({ ...rest.values, 'outline-style': 'auto', 'outline-color': 'blue', 'outline-width': '1px' })), null);
+  const moved = diffStates(rest, state({ ...rest.values, color: 'blue' }, [0, 6, 100, 20]));
+  assert.deepEqual(moved.changes, { color: ['red', 'blue'] });
+  assert.equal(moved.layout, true);
+  assert.deepEqual(moved.rect, [0, 6, 0, 0]);
+});
