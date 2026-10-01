@@ -38,10 +38,10 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 | 4b | Motion + responsive fidelity: hover, scroll reveal, continuous animations, widget JS, visual diff score | ⏳ |
 | 5 | Re-audit of the NEW site → real fix checklist (OLD vs NEW), sitemap/robots emitter | ✅ Done (verified on real sites; merged into `phase-4a` (99ebc2f)) |
 | 5b | Full PreviewManager (several previews on 5100–5199) — deferred by the user | ⏳ Later |
-| 6 | React+Vite / Next.js / MERN emitters + Download zip + stack-aware re-audit and UI | ✅ Done (branch `phase-6`, verified on real sites; merge pending the user's approval) |
+| 6 | React+Vite / Next.js / MERN emitters + Download zip + stack-aware re-audit and UI | ✅ Done (verified on real sites, merged into `phase-4a` (d25444d)) |
 
-**Current status: Phase 6 COMPLETE on branch `phase-6` (6.1–6.7, not merged, never pushed; the user approves the merge). Phase 5 is merged into
-`phase-4a` (99ebc2f).** Phases 1, 2, 3, 4a and 5 are done and merged on `phase-4a`.
+**Current status: Phase 6 COMPLETE, merged into `phase-4a` (d25444d, fast-forward from `phase-6`; never pushed).** Phases 1, 2, 3, 4a, 5 and 6 are done
+and merged on `phase-4a`.
 5.1 re-audit job foundation ✅ · 5.2 comparator + sitemap/robots emitter ✅ · 5.3 API + `audit.recreate` contract ✅ ·
 5.4 UI ✅ · 5.5 real-site verification + docs ✅. Phase 4b (motion + responsive fidelity) stays planned. Same workflow: one step at a time, WIP
 commit, wait for the user's "next"; never push; while the user tests, work in a git worktree and merge only when asked.
