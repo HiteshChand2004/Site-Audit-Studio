@@ -21,7 +21,11 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 - Preview + security (Phase 3): sharp (WebP screenshots), undici (fetch with a connect-time SSRF check).
 - Recreate build (4a.5): esbuild (CSS/JS minification of the `dist/` production build).
 - Recreate verify (4a.6): html-validate (standard + document presets, offline) for the generated HTML.
-- Planned (Phase 4+): archiver, get-port, execa.
+- Download + stacks (Phase 6): archiver (zip streamed on demand). Build toolchains are NOT server dependencies: `server/toolchains/<id>/` (own
+  `package.json`, own `node_modules`, gitignored) installed on demand with `npm run setup:toolchains -w server -- <react-vite|next|mern>`:
+  `react-vite` (vite 6.3.5, plugin-react 4.5.0, react 19.1.0), `next` (next 15.5.27, react 19.1.9), `mern` (react-vite's + express 5.2.1, compression
+  1.8.2, mongodb 7.7.0). The generated projects pin the same versions.
+- Planned: get-port, execa.
 
 ## Phases
 | Phase | Scope | Status |
@@ -34,13 +38,58 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 | 4b | Motion + responsive fidelity: hover, scroll reveal, continuous animations, widget JS, visual diff score | ⏳ |
 | 5 | Re-audit of the NEW site → real fix checklist (OLD vs NEW), sitemap/robots emitter | ✅ Done (verified on real sites; merged into `phase-4a` (99ebc2f)) |
 | 5b | Full PreviewManager (several previews on 5100–5199) — deferred by the user | ⏳ Later |
-| 6 | React+Vite / Next.js / MERN emitters + Download zip | ⏳ |
+| 6 | React+Vite / Next.js / MERN emitters + Download zip + stack-aware re-audit and UI | ✅ Done (branch `phase-6`, verified on real sites; merge pending the user's approval) |
 
-**Current status: Phase 5 COMPLETE, merged into `phase-4a` (99ebc2f)** (never pushed). Phases 1, 2, 3 and 4a are done
-and merged on `phase-4a`.
+**Current status: Phase 6 COMPLETE on branch `phase-6` (6.1–6.7, not merged, never pushed; the user approves the merge). Phase 5 is merged into
+`phase-4a` (99ebc2f).** Phases 1, 2, 3, 4a and 5 are done and merged on `phase-4a`.
 5.1 re-audit job foundation ✅ · 5.2 comparator + sitemap/robots emitter ✅ · 5.3 API + `audit.recreate` contract ✅ ·
 5.4 UI ✅ · 5.5 real-site verification + docs ✅. Phase 4b (motion + responsive fidelity) stays planned. Same workflow: one step at a time, WIP
 commit, wait for the user's "next"; never push; while the user tests, work in a git worktree and merge only when asked.
+
+### Phase 6 final summary
+Every recreate can be built as **four stacks**, all from the same saved IR and all checked against the plain-HTML build: Plain HTML / CSS / JS (the
+reference), React + Vite, Next.js (App Router, static export) and MERN (the React client + an Express server that serves it and stores form
+submissions in MongoDB). The project's stack is built right after the recreate; any other stack can be built later from the saved recreate without
+capturing the site again; each stack has its own preview, zip download and re-audit.
+- **Architecture**: emitter registry (`recreate/emit/index.js`; one entry per stack: `emit(ir)` + optional `build()`), a stack-neutral IR walker
+  (`emit/walk.js`: references, node and head descriptors) shared by every emitter, `emit/write.js`, `report.outputs[stack]`, export from the saved IR
+  (`export/fromIr.js`, `POST …/recreate/:id/export`, under the global job lock), toolchains in `server/toolchains/`, `build/toolchain.js` (junction to the
+  toolchain's `node_modules`, minimal env, time limit), download zip (`export/zip.js`).
+- **How every stack is verified** (nothing is kept if it fails): the code around the pages is scanned; the build runs with the pinned toolchain; the build
+  is scanned with the app rules (`verify/appProfiles.js`: only the framework's own scripts, never `unsafe-inline`); links/assets/HTML are verified; then
+  **equivalence with the plain-HTML build** (`verify/equivalence.js`): same DOM (URLs resolved, moved pages mapped) and ≥ 97 % same pixels on every page and
+  view with JavaScript off, and the pages hydrate without errors or DOM changes with it on (hydration problems are warnings). Deviation from the plan:
+  fidelity is not measured a second time (that needs the in-memory trees); `outputs[stack].fidelity = { score: <the HTML build's>, basis: 'equivalent-to-html' }`.
+- **Decisions (approved)**: toolchains installed on demand; React/Next hydrate and the checklist shows the JS cost; MERN v1 = form endpoint + MongoDB (no e-mail,
+  CMS or accounts; logins, search and file-upload forms are left alone and reported); export without recapture; Next.js uses `trailingSlash: true` (`about.html` →
+  `/about/`, with `_redirects` + `vercel.json`, canonical/sitemap on the new URLs); Next.js is pinned to 15.5.27 (15.3.3 was flagged vulnerable).
+- **Re-audit and UI** (6.6): the re-audit audits the stack output the preview shows (scripts allowed, pages at their output URLs); the framework runtime the stack
+  ships on purpose is `N/A`; a `JavaScript shipped` row compares the original's script transfer size with the build's gzipped bundles; stale reason `stack`.
+  NEW panel: stack chip, build state (building / failed / not built / ready) with the verification card, the forms note under a MERN preview, a stack picker next to
+  Download ("Build & download" for a stack that is not built yet).
+
+**Real-site verification (6.7, authorized sites, API on a temp data dir, default page limit, through the API like the app: Analyze → Recreate with an app stack so the
+automatic build + re-audit path runs → the other stacks exported → every stack re-audited and downloaded; 0 errors on both sites):**
+| Site (original) | Stack | Build | JS gzipped | Equivalence (DOM / pixels / hydration) | Lighthouse mobile perf · SEO · a11y (original → now) | Checklist (fixed / regressed / open) | `JavaScript shipped` |
+|---|---|---|---|---|---|---|---|
+| parchaa.com (Framer, GTM; recreate fidelity 88, 6 pages) | HTML | reference | none | reference | 38·92·89 → 40·100·91 | 13 / 2 / 14 | fixed (655 KB → 0) |
+| | React + Vite | 41 s | 103 KB | 6/6 · 1.0 · 6/6 | → 58·92·91 | 12 / 2 / 14 | improved (→ 103 KB) |
+| | Next.js | 70 s | 237 KB | 6/6 · 1.0 · 6/6 | → 65·100·91 | 10 / 3 / 15 | improved (→ 237 KB) |
+| | MERN | 40 s | 103 KB | 6/6 · 1.0 · 6/6 | → 59·92·91 | 12 / 2 / 14 | improved; 1 real form stored, server tests 15/15 |
+| panscience.xyz (Next.js; fidelity 80, 6 pages) | HTML | reference | none | reference | 76·100·91 → 78·100·91 | 7 / 3 / 6 | fixed (160 KB → 0) |
+| | React + Vite | 48 s | 96 KB | 6/6 · 1.0 · 6/6 | → 69·100·91 | 6 / 3 / 6 | improved (→ 96 KB); "No Next.js runtime left": fixed |
+| | Next.js | 78 s | 237 KB | 6/6 · 1.0 · 6/6 | → 68·100·91 | 3 / 5 / 7 | **regressed** (160 → 237 KB); "Next.js runtime kept on purpose": N/A |
+| | MERN | 47 s | 96 KB | 6/6 · 1.0 · 6/6 | → 69·100·91 | 6 / 3 / 6 | improved; no text form, server tests 15/15 |
+Every downloaded zip (parchaa 3.1 MB, panscience 9.7 MB each) was also unpacked and used as a standalone project: React + Vite `npm install` 11–17 s + `npm run build` 6–8 s;
+Next.js install ~52 s + build ~66 s (8 HTML files: the pages plus `404` and `_not-found`); MERN `npm run install:all` 25–42 s, `npm run build`, `npm test` (the
+server tests, now including the built-site test) all passed. Regressions the checklist reports honestly: render-blocking and unused CSS (the shared stylesheet, deferred since
+5.5), colour contrast 14 → 27 elements on panscience, and for Next.js "Avoid serving legacy JavaScript to modern browsers". Local Lighthouse timings move by several points between
+runs (parchaa HTML 40 vs React 58 is mostly noise), so compare stacks by the JavaScript row and the audits, not by the performance score.
+
+**Known open items (not blockers)**: the MERN preview shows the client only (forms need `npm start`); only the latest 2 recreates keep their saved IR, so a stack can only be
+built from those; Next.js ships ~237 KB gzipped of framework runtime (React + Vite ~100 KB, HTML none); the re-audit measures stacks on a local preview without compression and
+compares against the original's real transfer size (the build's gzipped size is used for the stack side); a second app stack builds one at a time under the global job lock
+(Next.js ~70 s, React/MERN ~45 s); the per-page / critical-CSS split (4b/later) would remove the CSS regressions; hover/scroll motion stays Phase 4b.
 
 ### Phase 6 plan (approved) — branch `phase-6`
 
@@ -51,13 +100,13 @@ Mongo; export to another stack from the saved IR without recapture; order 6.1 fi
 
 | Step | Scope | Status |
 |---|---|---|
-| 6.1 | Download zip for HTML (`recreate/export/zip.js`, `GET …/recreate/:recreateId/download`, UI button) | ✅ WIP |
-| 6.2 | Foundation: emitter registry, shared IR walker, stack in job/report, export from saved IR, toolchain setup | ✅ WIP |
-| 6.3 | React+Vite | ✅ WIP |
-| 6.4 | Next.js | ✅ WIP |
-| 6.5 | MERN | ✅ WIP |
-| 6.6 | Re-audit (target-stack-aware runtime rows) + UI | ✅ WIP |
-| 6.7 | Real-site verification + docs | ⏳ |
+| 6.1 | Download zip for HTML (`recreate/export/zip.js`, `GET …/recreate/:recreateId/download`, UI button) | ✅ |
+| 6.2 | Foundation: emitter registry, shared IR walker, stack in job/report, export from saved IR, toolchain setup | ✅ |
+| 6.3 | React+Vite | ✅ |
+| 6.4 | Next.js | ✅ |
+| 6.5 | MERN | ✅ |
+| 6.6 | Re-audit (target-stack-aware runtime rows) + UI | ✅ |
+| 6.7 | Real-site verification + docs | ✅ |
 
 6.1 details: zip streamed on demand (archiver, nothing stored or buffered); layout `<host>-<stack>/{README.md, RECREATE-REPORT.md,
 site/ (= dist/), unminified/ (readable css/js that differ from dist)}`; never capture/, fidelity/, ir/, report.json, dotfiles or links.
@@ -84,7 +133,7 @@ first and shows `X-Download-Error`. Test: `recreate-export.test.js`.
   200 vs 201), under the global job lock, 409 for a planned stack or a missing toolchain, 404 when the IR/assets were pruned,
   nothing left behind on a failed build. Lives inside the recreate folder, so retention covers it.
 - **Toolchains** (`server/toolchains/<id>/package.json`, own `node_modules`, gitignored): pinned `react-vite` (vite 6.3.5,
-  plugin-react 4.5.0, react/react-dom 19.1.0) and `next` (next 15.3.3 + react 19.1.0). `npm run setup:toolchains -w server -- react-vite`
+  plugin-react 4.5.0, react/react-dom 19.1.0) and `next` (next 15.5.27 + react 19.1.9; first pinned at 15.3.3, replaced because that version is flagged vulnerable). `npm run setup:toolchains -w server -- react-vite`
   installs on demand (`--ignore-scripts`); no argument lists the status. `src/toolchains/index.js toolchainStatus(id)`.
   Tests: `recreate-stacks.test.js` (registry, walker, golden HTML, writeProject, toolchain, export route with fake emitters).
 
@@ -704,8 +753,10 @@ environmental, not a regression.
 client/src/  layout/ (AppShell, Sidebar, OldPanel, NewPanel)
              components/{common,audit,preview,project,recreate}/  (preview/SitePreview.jsx = iframe/screenshot,
              recreate/RecreateReport.jsx = fidelity + verification card, recreate/FixReport.jsx = fix checklist)
-             store/useProjects.js, api/client.js, constants.js (STACKS), styles/
-server/src/  index.js, db/index.js (schema + migrations), routes/{projects,analyze,screens,recreate,reaudit}.js, dummy/audit.js
+             recreate/StackOutput.jsx = the stack build card (building / failed / ready + what was verified)
+             store/useProjects.js, api/client.js, constants.js (STACKS), stacks.js (outputs of a recreate), styles/
+server/src/  index.js, db/index.js (schema + migrations), routes/{projects,analyze,screens,recreate,reaudit,stacks}.js, dummy/audit.js
+             toolchains/index.js (status of server/toolchains/<id>, pinned versions)
              reaudit/ index.js (serve dist/ + runAnalysis on it + compare, STEPS), jobs.js (job, auto-trigger target, retention),
                     contract.js (audit.recreate for GET /audit),
                     compare/{index,scope,rules}.js (fix checklist: OLD vs NEW)
@@ -715,6 +766,11 @@ server/src/  index.js, db/index.js (schema + migrations), routes/{projects,analy
                     errors.js, discover.js (page selection), inspect.js (step 1), capture/{index,snapshot}.js (Playwright capture),
                     assets/{index,collect,css,download,cdn}.js (step 2: local assets),
                     ir/{index,tree,styles,names,head,links}.js (IR), emit/{html,css}.js (plain HTML emitter),
+                    emit/{index,walk,write}.js (emitter registry, stack-neutral IR walker, project writer),
+                    emit/react/{index,jsx,components,scaffold,build}.js, emit/next/{index,routes,build}.js,
+                    emit/mern/{index,forms,build}.js + template/ (the fixed Express server + its tests),
+                    export/{fromIr,zip}.js (build another stack from the saved IR, download zip), inlineScripts.js (CSP hashes),
+                    build/toolchain.js (runs a pinned toolchain), verify/{equivalence,appProfiles}.js (stack vs HTML build, app script rules),
                     fixers/{index,svg,html,a11y,perf,wordpress}.js (sanitizers + audit fixers + WP REST), build/{index,minify}.js (step 4 + dist/),
                     generate.js (step 3: IR + fixers + emit + fit pass), preview.js (static preview + step 5),
                     verify/{server,layout,fidelity,safety,site}.js (local render, fidelity, safety gate, build verification)
@@ -723,6 +779,7 @@ server/src/  index.js, db/index.js (schema + migrations), routes/{projects,analy
                     crawler.js, extract.js, linkChecker.js, render.js, screenshots.js, retention.js, frame.js, assemble.js,
                     lighthouse/{run,worker}.js, analyzers/{seo,aeo,crawlChecks,a11y,metrics,weaknesses}.js
              detection/ engine.js, manual.js, manual-rules.json, rules/<platform>.json (15 platforms)
+server/toolchains/ react-vite, next, mern: package.json each (pinned), node_modules installed on demand (gitignored)
 server/test/ *.test.js (node --test via run-tests.js + setup-data-dir.js: temp DB per test file),
              serve-fixture.js + fixtures/site (seeded audit issues) and fixtures/recreate-site (responsive site for Recreate,
              plus a small /wp-json/wp/v2/ API and unsafe-SVG / fixer seeds)
@@ -743,6 +800,7 @@ npm test -w server -- test/crawl.test.js   # a single file
 npm run fixture-site -w server   # seeded test site on :4100 (analyzing it needs SAS_ALLOW_LOCALHOST=1)
 npm run fixture-site -w server -- recreate   # the Recreate fixture site on :4100 instead
 npx -w server playwright install chromium   # one-time
+npm run setup:toolchains -w server -- react-vite next mern   # build toolchains of the non-HTML stacks, on demand (no argument: list the status)
 ```
 API: `GET/POST /api/projects`, `GET/PATCH/DELETE /api/projects/:id` (PATCH takes `max_pages`), `GET /api/projects/:id/audit`,
 `POST /api/projects/:id/analyze`, `GET /api/projects/:id/analyze/current`, `GET /api/projects/:id/analyze/:analysisId/events` (SSE: progress/done/failed),
@@ -760,7 +818,9 @@ completed recreate: `{ preview: { url, port, recreateId, … } | null }`; POST 4
 - Never-analyzed projects show a wireframe in the OLD preview. The NEW preview is real since 4a.6 (the latest recreate's
   `dist/`). The fix checklist (`audit.recreate`) is real once a re-audit finished (5.3); before that it is the sample
   (`isDummy: true`) plus the re-audit state; the NEW panel renders it with `FixReport` (5.4).
-  Download (Phase 6) stays disabled.
+  Download (6.1) streams the zip of the selected stack; a stack that is not built yet is built from the saved recreate first.
+- Phase 6: the MERN preview serves the client only (its forms need the server); the saved IR (so "build another stack") exists for the latest 2 recreates only;
+  an app stack's JavaScript runtime is a real cost (Next.js ~237 KB gzipped, React ~100 KB) that the `JavaScript shipped` row shows.
 - Only one preview runs at a time: selecting another project with a recreate moves the preview to it. Clicking a link
   to a page that was not recreated opens the live original inside the preview frame (without script).
 - Recreate output (4a.4): font sizes and line heights are px per breakpoint (no fluid type yet); between the three
