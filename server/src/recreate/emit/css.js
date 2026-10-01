@@ -46,6 +46,13 @@ function compact(decl) {
   return out;
 }
 
+// A shorthand reset with `revert` / `revert-layer` is written as its longhands. Both mean the same to a browser, but
+// build tools that rewrite CSS do not all know these keywords on a shorthand: Next.js's postcss-flexbugs-fixes turns
+// `flex: revert` into `flex: revert 1`, which is invalid, so the reset was dropped and the base value stayed (a
+// flex-basis of 450px at tablet width). Longhands pass through every tool unchanged.
+const LONGHANDS = { flex: ['flex-grow', 'flex-shrink', 'flex-basis'] };
+const TOOL_UNSAFE = /^(revert|revert-layer)$/;
+
 /**
  * @param {object} decl  property → value
  * @param {object} o     { tokenOf: Map<hex, name>, from: the file the CSS is written to }
@@ -53,6 +60,10 @@ function compact(decl) {
 export function declarations(decl, { tokenOf, from, indent = '  ' }) {
   const lines = [];
   for (const [prop, raw] of Object.entries(compact(decl))) {
+    if (LONGHANDS[prop] && TOOL_UNSAFE.test(String(raw).trim())) {
+      for (const longhand of LONGHANDS[prop]) lines.push(`${indent}${longhand}: ${String(raw).trim()};`);
+      continue;
+    }
     let value = tidyColors(String(raw)).replace(/url\("asset:([^"]+)"\)/g, (all, file) => `url("${relFile(from, `assets/${file}`)}")`);
     if (COLOR_PROPS.test(prop) && tokenOf.has(value)) value = `var(${tokenOf.get(value)})`;
     lines.push(`${indent}${prop}: ${value};`);

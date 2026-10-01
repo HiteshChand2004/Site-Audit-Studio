@@ -86,6 +86,8 @@ server tests, now including the built-site test) all passed. Regressions the che
 5.5), colour contrast 14 → 27 elements on panscience, and for Next.js "Avoid serving legacy JavaScript to modern browsers". Local Lighthouse timings move by several points between
 runs (parchaa HTML 40 vs React 58 is mostly noise), so compare stacks by the JavaScript row and the audits, not by the performance score.
 
+**Found after the merge (nyaayai.com: the Next.js build failed the equivalence check, /platform/ tablet view 71 % match; fixed, general):** the IR resets a shorthand in a later view with `revert` (`flex: revert`); Next.js's bundled `postcss-flexbugs-fixes` rewrites `flex: revert` to `flex: revert 1` (invalid, so the reset was dropped and the base `flex: 0 1 450px` stayed at tablet width). `emit/css.js` now writes a `revert` / `revert-layer` reset of `flex` as its longhands (same meaning, left alone by every tool). Re-exporting that recreate from its saved IR passes (DOM 6/6, pixels ≥ 0.991, hydration clean). The equivalence check did its job: the broken build was not kept. A failed stack build is not retried by itself: "Build <stack> again" in the NEW panel (or `POST …/export`) rebuilds it from the saved recreate.
+
 **Known open items (not blockers)**: the MERN preview shows the client only (forms need `npm start`); only the latest 2 recreates keep their saved IR, so a stack can only be
 built from those; Next.js ships ~237 KB gzipped of framework runtime (React + Vite ~100 KB, HTML none); the re-audit measures stacks on a local preview without compression and
 compares against the original's real transfer size (the build's gzipped size is used for the stack side); a second app stack builds one at a time under the global job lock

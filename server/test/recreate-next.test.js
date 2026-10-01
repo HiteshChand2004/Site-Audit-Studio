@@ -19,7 +19,7 @@ import { previewHeaders, servePreview } from '../src/recreate/preview.js';
 import { checkScript, scanProject, scanSite } from '../src/recreate/verify/safety.js';
 import { recreateDir } from '../src/recreate/workspace.js';
 import recreateRouter from '../src/routes/recreate.js';
-import { toolchainStatus } from '../src/toolchains/index.js';
+import { toolchainDir, toolchainStatus } from '../src/toolchains/index.js';
 
 const exists = (p) => access(p).then(() => true, () => false);
 const temps = [];
@@ -250,6 +250,30 @@ test('the Next project zip leaves out build output and dependencies', async () =
   assert.deepEqual(plan.entries.map((e) => e.name).sort(), [
     'example.com-nextjs/RECREATE-REPORT.md', 'example.com-nextjs/app/(site)/page.jsx', 'example.com-nextjs/package.json', 'example.com-nextjs/public/_redirects',
   ]);
+});
+
+test('a `revert` reset of the flex shorthand is written as longhands (Next.js postcss-flexbugs-fixes turns `flex: revert` into `flex: revert 1`)', async (t) => {
+  const { emitCss } = await import('../src/recreate/emit/css.js');
+  const ir = {
+    siteName: 'x', tokens: {}, fontFaces: [], keyframes: [], boxSizingReset: false, breakpoints: { tablet: 1023.98, mobile: 767.98 },
+    rules: [{ selector: '.stack', parts: { base: { display: 'flex', flex: '0 1 450px' }, tablet: { flex: 'revert', width: '672px' }, mobile: { flex: 'revert-layer', 'flex-grow': '1' } } }],
+  };
+  const css = emitCss(ir);
+  assert.doesNotMatch(css, /flex:\s*revert/);
+  const tablet = css.slice(css.indexOf('@media (max-width: 1023.98px)'), css.indexOf('@media (max-width: 767.98px)'));
+  assert.deepEqual(tablet.match(/flex-[a-z]+: revert;/g), ['flex-grow: revert;', 'flex-shrink: revert;', 'flex-basis: revert;']);
+  assert.match(tablet, /width: 672px;/);
+  assert.match(css, /flex-basis: revert-layer;/);
+  assert.match(css, /flex: 0 1 450px;/); // a real flex value stays a shorthand
+  if (!(await toolchainStatus('next')).installed) return t.diagnostic('next toolchain not installed: the postcss check was skipped');
+  // The same CSS through the plugin that broke it: nothing is rewritten, the control still shows the bug.
+  const { createRequire } = await import('node:module');
+  const require = createRequire(path.join(toolchainDir('next'), 'node_modules', 'next', 'package.json'));
+  const postcss = require('postcss');
+  const flexbugs = require('next/dist/compiled/postcss-flexbugs-fixes');
+  const run = async (input) => (await postcss([flexbugs()]).process(input, { from: undefined })).css;
+  assert.match(await run('.a{flex:revert}'), /flex:revert 1/); // the control: this is what the shorthand turned into
+  assert.equal(await run(css), css);
 });
 
 // ---- a real export (needs the next toolchain: npm run setup:toolchains -w server -- next) ----
