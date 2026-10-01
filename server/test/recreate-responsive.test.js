@@ -1,5 +1,5 @@
-// Recreate 4b.6: responsive sweep (widths between the three captured ones), against the local recreate
-// fixture site only.
+// Recreate 4b.6: responsive sweep (widths between the three captured ones), breakpoint refinement and fluid
+// type, against local sites only.
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { access, cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -7,7 +7,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { captureSweep, SWEEP_WIDTHS, sweepView } from '../src/recreate/capture/sweep.js';
+import { applyFluidType, fluidValue } from '../src/recreate/ir/fluid.js';
 import { responsiveStage } from '../src/recreate/responsive.js';
+import { sweepStage } from '../src/recreate/sweep.js';
 import { compareWidth, summarizeSweep } from '../src/recreate/verify/responsive.js';
 import { userPolicy, withNetPolicy } from '../src/security/netGuard.js';
 import { launchBrowser } from '../src/audit/render.js';
@@ -124,7 +126,8 @@ test('the step compares the original with the recreated build at each width and 
       pages: [{ url: `${live.origin}/`, path: '/', outPath: 'index.html', slug: 'home' }],
       report: { outputs: { html: { status: 'ready', dir: 'dist' } }, warnings: [] },
     };
-    await withNetPolicy(userPolicy(), () => responsiveStage(ctx, { widths: [320, 900] }));
+    await withNetPolicy(userPolicy(), () => sweepStage(ctx, { widths: [320, 900] }));
+    await responsiveStage(ctx);
     const r = ctx.report.responsive;
     assert.equal(r.status, 'done', JSON.stringify(r));
     assert.deepEqual(r.widths, [320, 900]);
@@ -137,8 +140,8 @@ test('the step compares the original with the recreated build at each width and 
 
     // A fixed-width container (what a desktop-only layout does) overflows on a phone: drift is flagged.
     await writeFile(path.join(faithful, 's.css'), CSS('width:700px;margin:0 auto;padding:16px'));
-    const drift = { ...ctx, report: { outputs: { html: { status: 'ready' } }, warnings: [] } };
-    await withNetPolicy(userPolicy(), () => responsiveStage(drift, { widths: [320, 900] }));
+    const drift = { ...ctx, sweep: ctx.sweep, report: { outputs: { html: { status: 'ready' } }, warnings: [] } };
+    await responsiveStage(drift);
     const d = drift.report.responsive;
     assert.ok(d.driftCount >= 1);
     assert.deepEqual(d.worst[0].path, '/');
@@ -147,18 +150,56 @@ test('the step compares the original with the recreated build at each width and 
     assert.match(drift.report.warnings.join('\n'), /drifts from the original at \d+ of 2 measured page widths.*\/ at 320px/);
 
     // Without time the step skips itself with a warning.
-    const late = { ...ctx, stepDeadline: Date.now() + 5000, report: { outputs: { html: {} }, warnings: [] } };
-    await responsiveStage(late, { widths: [320] });
-    assert.equal(late.report.responsive.status, 'skipped');
+    const late = { ...ctx, sweep: null, stepDeadline: Date.now() + 5000, report: { outputs: { html: {} }, warnings: [] } };
+    await sweepStage(late, { widths: [320] });
+    assert.equal(late.report.sweep.status, 'skipped');
     assert.match(late.report.warnings[0], /skipped/);
+    await responsiveStage(late);
+    assert.equal(late.report.responsive.status, 'skipped');
 
     // A build that is missing the page is a note per width, not an error.
     await rm(path.join(faithful, 'index.html'));
-    const missing = { ...ctx, report: { outputs: { html: {} }, warnings: [] } };
-    await withNetPolicy(userPolicy(), () => responsiveStage(missing, { widths: [320] }));
+    const missing = { ...ctx, sweep: ctx.sweep, report: { outputs: { html: {} }, warnings: [] } };
+    await responsiveStage(missing);
     assert.equal(missing.report.responsive.status, 'failed');
     assert.match(missing.report.responsive.error, /recreated page could not be rendered.*HTTP 404/);
   } finally {
     await live.close();
   }
 });
+
+test('fluid type: three values on one line become one clamp(); stepped values stay as they are', () => {
+  const line = fluidValue({ d: '64px', t: '43.8px', m: '32px' });
+  assert.match(line.value, /^clamp\(32px, calc\(20\.7\d*px \+ 3\.00\d*vw\), 64px\)$/);
+  // The formula gives the captured sizes back at 375 / 768 / 1440.
+  const [, a, b] = line.value.match(/calc\(([\d.]+)px \+ ([\d.]+)vw\)/).map(Number);
+  for (const [w, px] of [[375, 32], [768, 43.8], [1440, 64]]) assert.ok(Math.abs(a + (b * w) / 100 - px) < 0.2, `${w}px`);
+  // Falling sizes work the other way round.
+  assert.match(fluidValue({ d: '16px', t: '21.05px', m: '24px' }).value, /^clamp\(16px, calc\(.*\), 24px\)$/);
+  // A design that steps at a breakpoint, a tiny change, and non-px values are left alone.
+  assert.equal(fluidValue({ d: '64px', t: '48px', m: '32px' }), null);
+  assert.equal(fluidValue({ d: '17px', t: '16px', m: '16px' }), null);
+  assert.equal(fluidValue({ d: '64px', t: 'inherit', m: '32px' }), null);
+  assert.equal(fluidValue({ d: undefined, t: undefined, m: undefined }), null);
+});
+
+test('fluid type is applied per rule and removes the stepped overrides it replaces', () => {
+  const rules = [
+    { selector: '.title', parts: { base: { 'font-size': '64px', 'line-height': '76px', color: '#111' }, tablet: { 'font-size': '43.8px', 'line-height': '52px' }, mobile: { 'font-size': '32px', 'line-height': '38px', 'text-align': 'left' } } },
+    { selector: '.step', parts: { base: { 'font-size': '40px' }, tablet: { 'font-size': '32px' }, mobile: { 'font-size': '20px' } } },
+    { selector: '.plain', parts: { base: { color: '#000' } } },
+  ];
+  const copy = structuredClone(rules);
+  const { rules: out, changed, properties } = applyFluidType(rules);
+  assert.deepEqual(rules, copy, 'the input is not modified');
+  assert.equal(changed, 1);
+  assert.deepEqual(properties, { 'font-size': 1, 'line-height': 1 });
+  assert.match(out[0].parts.base['font-size'], /^clamp\(32px,/);
+  assert.match(out[0].parts.base['line-height'], /^clamp\(38px,/);
+  assert.equal(out[0].parts.base.color, '#111');
+  assert.equal(out[0].parts.tablet, undefined, 'nothing else changed at tablet width: the override is gone');
+  assert.deepEqual(out[0].parts.mobile, { 'text-align': 'left' });
+  assert.equal(out[1], rules[1]);
+  assert.equal(out[2], rules[2]);
+});
+

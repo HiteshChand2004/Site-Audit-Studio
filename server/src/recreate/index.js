@@ -17,6 +17,7 @@ import { generateStage } from './generate.js';
 import { inspectStage } from './inspect.js';
 import { previewStage } from './preview.js';
 import { responsiveStage } from './responsive.js';
+import { sweepStage } from './sweep.js';
 import { commitWorkspace, discardWorkspace, openWorkspace } from './workspace.js';
 
 export { RecreateError };
@@ -26,12 +27,14 @@ export const STEPS = [
   // Capture is the slow part on slow sites (a page can take 50 s); it stops starting pages in time to
   // leave the later steps their reserve (inspect.js).
   { key: 'inspect', label: 'Inspecting pages', weight: 35, max: 7 * 60000 },
+  // Original screenshots at more widths (4b.6): collects only, uses the extra minutes of the budget, never fails the job.
+  { key: 'sweep', label: 'Capturing more widths', weight: 8, max: 150000, optional: true },
   { key: 'assets', label: 'Extracting assets', weight: 25, max: 4 * 60000 },
   { key: 'generate', label: 'Generating site', weight: 15, max: 3 * 60000 },
   { key: 'build', label: 'Building & verifying', weight: 20, max: 3 * 60000 },
   { key: 'preview', label: 'Starting preview', weight: 5, max: 30000 },
-  // Measures only (4b.6): uses the time the other steps leave, never fails the job.
-  { key: 'responsive', label: 'Checking responsive layout', weight: 10, max: 150000 },
+  // Measures the finished build against the sweep screenshots (4b.6): never fails the job.
+  { key: 'responsive', label: 'Checking responsive layout', weight: 4, max: 60000, optional: true },
 ];
 export const PUBLIC_STEPS = STEPS.map(({ key, label }) => ({ key, label }));
 
@@ -53,6 +56,7 @@ export function recreateBudgetMs(env = process.env) {
 
 export const STAGES = {
   inspect: inspectStage,
+  sweep: sweepStage,
   assets: assetsStage,
   generate: generateStage,
   build: buildStage,
@@ -125,7 +129,15 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
       progress(def.key, 0);
       ctx.progress = (fraction, message) => progress(def.key, fraction, message);
       const remaining = deadline - Date.now();
-      if (remaining <= 0) throw new RecreateError(`Recreate stopped: the ${minutes}-minute time limit was reached.`);
+      if (remaining <= 0) {
+        // An optional step (a measurement) is skipped, never a reason to lose the recreate.
+        if (def.optional) {
+          ctx.report.warnings.push(`“${def.label}” was skipped: the time limit was reached.`);
+          progress(def.key, 1);
+          continue;
+        }
+        throw new RecreateError(`Recreate stopped: the ${minutes}-minute time limit was reached.`);
+      }
       const limit = Math.min(def.max, remaining);
       // A stage may use this to wind down on its own (skip remaining work) before the hard timeout.
       ctx.stepDeadline = Date.now() + limit;
@@ -133,6 +145,12 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
       try {
         await withTimeout(stages[def.key](ctx), limit, def.label);
       } catch (err) {
+        if (def.optional && !controller.signal.aborted) {
+          const reason = err instanceof TimeoutError ? 'did not finish in time' : `failed (${String(err.message).split(/\r?\n/)[0]})`;
+          ctx.report.warnings.push(`“${def.label}” ${reason} and was skipped.`);
+          progress(def.key, 1);
+          continue;
+        }
         if (!(err instanceof TimeoutError)) throw err;
         throw new RecreateError(
           limit < def.max

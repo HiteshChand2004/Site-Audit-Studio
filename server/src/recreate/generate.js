@@ -14,12 +14,15 @@ import { fetchWordPress, isWordPress } from './fixers/wordpress.js';
 import { buildIR, prepareSite, readPageCaptures } from './ir/index.js';
 import { isElement } from './ir/tree.js';
 import { compareLayout, openRenderer, planFixes, renderPage, viewScore } from './verify/layout.js';
+import { refineResponsive } from './verify/refine.js';
 
 export const FIT_ROUNDS = 2;
 // The fit pass stops starting new rounds this long before the step's time limit.
 const FIT_MARGIN = 25000;
 // Time for the WordPress REST lookup.
 const WP_BUDGET = 30000;
+// Time for the breakpoint / fluid type check against the original's sweep.
+const REFINE_BUDGET = 90000;
 
 const writeSite = (siteDir, out, assetsDir, known) => writeProject(siteDir, out, { assetsDir, known });
 
@@ -171,6 +174,30 @@ export async function generateStage(ctx) {
     await writeSite(siteDir, out, assetsDir, known);
   }
 
+  // Breakpoints and fluid type, checked against the original's sweep screenshots (verify/refine.js). Only
+  // css/site.css changes, so the pages and the fit fixes above stay as they are.
+  let refined = null;
+  if (ctx.sweep) {
+    ctx.progress(0.9, 'Checking the layout between the captured widths');
+    try {
+      refined = await refineResponsive({
+        ir,
+        siteDir,
+        workspace: ctx.dir,
+        sweep: ctx.sweep,
+        deadline: Math.min(Date.now() + REFINE_BUDGET, ctx.stepDeadline - FIT_MARGIN),
+      });
+    } catch (err) {
+      report.warnings.push(`The breakpoints could not be checked against the original: ${err.message.split('\n')[0]}`);
+    }
+    if (refined && (refined.breakpoints !== ir.breakpoints || refined.fluid)) {
+      ir.breakpoints = refined.breakpoints;
+      ir.rules = refined.rules;
+      out = emitSite(ir);
+      await writeSite(siteDir, out, assetsDir, known);
+    }
+  }
+
   ctx.progress(0.95, 'Saving the IR');
   await mkdir(path.join(ctx.dir, 'ir'), { recursive: true });
   await writeFile(path.join(ctx.dir, 'ir', 'site.json'), JSON.stringify(ir));
@@ -222,6 +249,7 @@ export async function generateStage(ctx) {
     assetFiles: siteAssets.length,
     generatedFiles: ir.files.map((f) => f.path),
     fit,
+    responsive: refined?.summary ?? null,
   };
   const byPath = new Map(site.pages.map((t) => [t.info.path, t]));
   report.pages = report.pages.map((p) => {

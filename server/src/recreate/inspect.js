@@ -12,7 +12,7 @@ import { RecreateError } from './errors.js';
 // Captures stop starting new pages this long before the step's time limit.
 const INSPECT_MARGIN = 15000;
 // Time of the whole job kept for the steps after capture (assets, generate, build, preview).
-const LATER_STEPS_RESERVE = 150000;
+export const LATER_STEPS_RESERVE = 150000;
 
 const once = (fn) => {
   let done = null;
