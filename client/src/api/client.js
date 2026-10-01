@@ -116,6 +116,12 @@ export const api = {
   subscribeAnalysis: (id, analysisId, handlers) => subscribe(`/api/projects/${id}/analyze/${analysisId}/events`, handlers),
   startRecreate: (id) => request(`/projects/${id}/recreate`, { method: 'POST' }),
   getCurrentRecreate: (id) => request(`/projects/${id}/recreate/current`),
+  downloadUrl: (id, recreateId) => `/api/projects/${id}/recreate/${recreateId}/download`,
+  // HEAD first: it plans the zip without streaming it, so a refusal comes back as a message.
+  async checkDownload(id, recreateId) {
+    const res = await fetch(api.downloadUrl(id, recreateId), { method: 'HEAD' });
+    return res.ok ? null : res.headers.get('X-Download-Error') ?? `Download failed (${res.status}).`;
+  },
   getRecreate: (id) => request(`/projects/${id}/recreate`),
   subscribeRecreate: (id, recreateId, handlers) => subscribe(`/api/projects/${id}/recreate/${recreateId}/events`, handlers),
   startReaudit: (id) => request(`/projects/${id}/reaudit`, { method: 'POST' }),

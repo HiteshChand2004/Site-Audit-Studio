@@ -10,6 +10,7 @@ import FixReport from '../components/recreate/FixReport.jsx';
 import RecreateReport from '../components/recreate/RecreateReport.jsx';
 import AnalyzeProgress from '../components/audit/AnalyzeProgress.jsx';
 import { stackById } from '../constants.js';
+import { api } from '../api/client.js';
 import { isJobActive, useProjects } from '../store/useProjects.js';
 import styles from './Panel.module.css';
 import own from './NewPanel.module.css';
@@ -49,6 +50,8 @@ export default function NewPanel({ project, audit, syncScroll = false, onFrameSc
   const busy = isJobActive(job) || isJobActive(reauditJob);
   const preview = useProjects((s) => s.previews[project.id]);
   const ensurePreview = useProjects((s) => s.ensurePreview);
+  const [downloadError, setDownloadError] = useState(null);
+  const [downloading, setDownloading] = useState(false);
   const [viewport, setViewport] = useState(1440);
   const [page, setPage] = useState('index.html');
   const pages = result?.preview?.pages ?? result?.pages?.map((p) => p.outPath) ?? [];
@@ -56,6 +59,21 @@ export default function NewPanel({ project, audit, syncScroll = false, onFrameSc
   useEffect(() => setPage(pages[0] ?? 'index.html'), [result?.recreateId]);
   // The OLD panel shows the same page of the original.
   useEffect(() => onPageChange?.(page), [page, onPageChange]);
+  useEffect(() => setDownloadError(null), [result?.recreateId, project.id]);
+  const canDownload = Boolean(result?.recreateId && result.safety?.safe && !busy);
+  async function download() {
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      const problem = await api.checkDownload(project.id, result.recreateId);
+      if (problem) setDownloadError(problem);
+      else window.location.assign(api.downloadUrl(project.id, result.recreateId));
+    } catch {
+      setDownloadError('Cannot reach the API server.');
+    } finally {
+      setDownloading(false);
+    }
+  }
   const live = Boolean(result && preview?.url && preview.recreateId === result.recreateId);
   const src = live ? `${preview.url}${pageUrl(page)}` : null;
   // Sync scroll needs the page drawn at full height (the app cannot scroll a frame from another
@@ -200,10 +218,17 @@ export default function NewPanel({ project, audit, syncScroll = false, onFrameSc
       </div>
 
       <footer className={styles.footer}>
-        <Button icon={Download} disabled title="Available in Phase 6">
+        <Button
+          icon={Download}
+          disabled={!canDownload || downloading}
+          onClick={download}
+          title={canDownload ? 'Download the recreated site as a .zip' : 'Run Recreate first'}
+        >
           Download .zip
         </Button>
-        <span className={styles.footerNote}>Preview runs on the production build.</span>
+        <span className={styles.footerNote} role={downloadError ? 'alert' : undefined}>
+          {downloadError ?? 'Preview runs on the production build.'}
+        </span>
       </footer>
     </section>
   );

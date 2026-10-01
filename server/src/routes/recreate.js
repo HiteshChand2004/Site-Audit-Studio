@@ -10,6 +10,8 @@ import { recreateJobs } from '../recreate/jobs.js';
 import { activePreview, PreviewError, startPreview, stopPreview } from '../recreate/preview.js';
 import { recreateDir } from '../recreate/workspace.js';
 import { slugFor } from '../recreate/discover.js';
+import { planZip, writeZip } from '../recreate/export/zip.js';
+import { RecreateError } from '../recreate/errors.js';
 
 // Stacks the recreate pipeline can emit so far (Phase 6 adds the others).
 export const RECREATE_STACKS = ['html'];
@@ -142,6 +144,50 @@ router.get('/:id/recreate/:recreateId/captures/:slug/:file', (req, res) => {
       res.status(404).json({ error: 'Capture not found. Only the latest 2 recreates of a project keep their files.' });
     },
   );
+});
+
+// Download zip of a completed recreate, streamed from its folder. The stack is the one the recreate
+// was built for; only a recreate that passed the safety gate is offered.
+const doneReport = db.prepare(`SELECT result_json FROM recreates WHERE id = ? AND project_id = ? AND status = 'done'`);
+
+router.get('/:id/recreate/:recreateId/download', async (req, res) => {
+  const { id, recreateId } = req.params;
+  if (!UUID.test(id) || !UUID.test(recreateId)) return res.status(404).json({ error: 'Recreate not found.' });
+  const row = doneReport.get(recreateId, id);
+  if (!row?.result_json) return res.status(404).json({ error: 'Recreate not found.' });
+  const report = JSON.parse(row.result_json);
+  const stack = req.query.stack ?? report.stack;
+  if (stack !== report.stack) {
+    const error = `This recreate was built for the ${report.stack} stack.`;
+    return res.status(400).set('X-Download-Error', error).json({ error });
+  }
+  if (report.safety?.safe !== true) {
+    const error = 'This recreate has no passed safety check, so it cannot be downloaded. Run Recreate again.';
+    return res.status(409).set('X-Download-Error', error).json({ error });
+  }
+  let plan;
+  try {
+    plan = await planZip({ dir: recreateDir(id, recreateId), report, stack });
+  } catch (err) {
+    if (err instanceof RecreateError) {
+      // The app checks with HEAD first (a failed download would otherwise navigate to a JSON page).
+      return res.status(err.status ?? 404).set('X-Download-Error', err.message).json({ error: err.message });
+    }
+    throw err;
+  }
+  res.status(200).set({
+    'Content-Type': 'application/zip',
+    'Content-Disposition': `attachment; filename="${plan.name}"`,
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  if (req.method === 'HEAD') return res.end();
+  try {
+    await writeZip(plan, res);
+  } catch (err) {
+    console.error('Download failed:', err.message);
+    res.destroy(); // headers are sent: a cut stream is the only honest signal
+  }
 });
 
 router.get('/:id/recreate/:recreateId/events', (req, res) => {

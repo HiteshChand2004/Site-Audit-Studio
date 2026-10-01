@@ -42,6 +42,29 @@ and merged on `phase-4a`.
 5.4 UI ✅ · 5.5 real-site verification + docs ✅. Phase 4b (motion + responsive fidelity) stays planned. Same workflow: one step at a time, WIP
 commit, wait for the user's "next"; never push; while the user tests, work in a git worktree and merge only when asked.
 
+### Phase 6 plan (approved) — branch `phase-6`
+
+Stack emitters (React+Vite, Next.js, MERN) + Download zip. The plain-HTML pipeline stays the reference (fit pass, `dist/`, fidelity);
+stack emitters run after it from the saved IR (`ir/site.json`), general, no site-specific code. Decisions: toolchains in
+`server/toolchains/` installed on demand; React/Next hydrate (checklist shows the JS cost honestly); MERN v1 has a form endpoint +
+Mongo; export to another stack from the saved IR without recapture; order 6.1 first.
+
+| Step | Scope | Status |
+|---|---|---|
+| 6.1 | Download zip for HTML (`recreate/export/zip.js`, `GET …/recreate/:recreateId/download`, UI button) | ✅ WIP |
+| 6.2 | Foundation: emitter registry, shared IR walker, stack in job/report, export from saved IR, toolchain setup | ⏳ |
+| 6.3 | React+Vite | ⏳ |
+| 6.4 | Next.js | ⏳ |
+| 6.5 | MERN | ⏳ |
+| 6.6 | Re-audit (target-stack-aware runtime rows) + UI | ⏳ |
+| 6.7 | Real-site verification + docs | ⏳ |
+
+6.1 details: zip streamed on demand (archiver, nothing stored or buffered); layout `<host>-<stack>/{README.md, RECREATE-REPORT.md,
+site/ (= dist/), unminified/ (readable css/js that differ from dist)}`; never capture/, fidelity/, ir/, report.json, dotfiles or links.
+Limits 350 MB / 5000 files (413 before the first byte); webp/png/woff2/mp4… stored, the rest deflated. Only a recreate with
+`report.safety.safe` and the stack it was built for (`?stack=` must match). HEAD plans without streaming: the app checks with HEAD
+first and shows `X-Download-Error`. Test: `recreate-export.test.js`.
+
 ### Phase 5 final summary
 After every successful Recreate the server audits the recreated site again (same Analyze pipeline on its `dist/`, served
 on a throwaway loopback port) and compares it check by check with the analysis the recreate was built from. The NEW
