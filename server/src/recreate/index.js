@@ -4,7 +4,7 @@
 //
 // Each step is a stage function that reads and extends a shared context. A failing step fails
 // the job: later steps need its output. The whole job has one time budget
-// (SAS_RECREATE_MINUTES, default 10); the workspace is discarded when anything goes wrong.
+// (SAS_RECREATE_MINUTES, default 12); the workspace is discarded when anything goes wrong.
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { userPolicy, withNetPolicy } from '../security/netGuard.js';
@@ -16,6 +16,7 @@ import { buildStage } from './build/index.js';
 import { generateStage } from './generate.js';
 import { inspectStage } from './inspect.js';
 import { previewStage } from './preview.js';
+import { responsiveStage } from './responsive.js';
 import { commitWorkspace, discardWorkspace, openWorkspace } from './workspace.js';
 
 export { RecreateError };
@@ -29,6 +30,8 @@ export const STEPS = [
   { key: 'generate', label: 'Generating site', weight: 15, max: 3 * 60000 },
   { key: 'build', label: 'Building & verifying', weight: 20, max: 3 * 60000 },
   { key: 'preview', label: 'Starting preview', weight: 5, max: 30000 },
+  // Measures only (4b.6): uses the time the other steps leave, never fails the job.
+  { key: 'responsive', label: 'Checking responsive layout', weight: 10, max: 150000 },
 ];
 export const PUBLIC_STEPS = STEPS.map(({ key, label }) => ({ key, label }));
 
@@ -42,10 +45,10 @@ export function overallPct(stepKey, fraction) {
   return 0;
 }
 
-/** Total time limit in ms. SAS_RECREATE_MINUTES accepts 1–60; anything else means 10. */
+/** Total time limit in ms. SAS_RECREATE_MINUTES accepts 1–60; anything else means 12 (the 10 of Phase 4a + 2 for the responsive sweep). */
 export function recreateBudgetMs(env = process.env) {
   const minutes = Number(env.SAS_RECREATE_MINUTES);
-  return (Number.isFinite(minutes) && minutes >= 1 && minutes <= 60 ? minutes : 10) * 60000;
+  return (Number.isFinite(minutes) && minutes >= 1 && minutes <= 60 ? minutes : 12) * 60000;
 }
 
 export const STAGES = {
@@ -54,6 +57,7 @@ export const STAGES = {
   generate: generateStage,
   build: buildStage,
   preview: previewStage,
+  responsive: responsiveStage,
 };
 
 /**

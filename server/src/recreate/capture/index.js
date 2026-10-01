@@ -169,7 +169,7 @@ async function scrollToY(page, target) {
  * lets the reveal tracker record each step, then returns to the top and pins revealed content.
  * @returns {Promise<{ revealed: number, pinned: number, stacked: number, scrolled: number }>}
  */
-async function settle(page, view, cap) {
+export async function settle(page, view, cap) {
   await page.evaluate(installRevealTracker);
   // Near the left edge: less likely over an element with its own scroll area (carousels, maps).
   await page.mouse.move(Math.min(20, view.width / 4), Math.round(view.height / 2)).catch(() => {});

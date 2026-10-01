@@ -79,11 +79,11 @@ test('settings parsers and the budget', () => {
   assert.equal(parseTargetDomain('ftp://example.com').ok, false);
   assert.equal(parseTargetDomain('https://user:pw@example.com').ok, false);
   assert.equal(parseTargetDomain('nodot').ok, false);
-  assert.equal(recreateBudgetMs({}), 600000);
+  assert.equal(recreateBudgetMs({}), 720000);
   assert.equal(recreateBudgetMs({ SAS_RECREATE_MINUTES: '3' }), 180000);
-  assert.equal(recreateBudgetMs({ SAS_RECREATE_MINUTES: '0' }), 600000);
+  assert.equal(recreateBudgetMs({ SAS_RECREATE_MINUTES: '0' }), 720000);
   assert.equal(overallPct('inspect', 0), 0);
-  assert.equal(overallPct('preview', 1), 100);
+  assert.equal(overallPct('responsive', 1), 100);
 });
 
 test('stale analyses produce a warning', () => {
@@ -103,7 +103,7 @@ test('a successful run publishes the workspace with a report', async () => {
     progress: (step, f) => f === 0 && steps.push(step),
     stages: { ...stubStages, generate: async (ctx) => ctx.report.pages.push({ path: '/' }) },
   });
-  assert.deepEqual(steps, ['inspect', 'assets', 'generate', 'build', 'preview']);
+  assert.deepEqual(steps, ['inspect', 'assets', 'generate', 'build', 'preview', 'responsive']);
   assert.equal(report.baseUrl, 'https://www.example.com');
   assert.deepEqual(report.pages, [{ path: '/' }]);
   const saved = JSON.parse(await readFile(`${recreateDir(project.id, recreateId)}/report.json`, 'utf8'));
@@ -194,7 +194,7 @@ test('POST /recreate runs a job, streams events and exposes the result', async (
   const res = await fetch(`${base}/${project.id}/recreate`, { method: 'POST' });
   assert.equal(res.status, 202);
   const { recreateId, job, steps } = await res.json();
-  assert.equal(steps.length, 5);
+  assert.equal(steps.length, 6);
   assert.match(job.warnings[0], /8 days old/);
 
   const events = await (await fetch(`${base}/${project.id}/recreate/${recreateId}/events`)).text();
