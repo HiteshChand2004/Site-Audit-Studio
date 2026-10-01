@@ -40,7 +40,7 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 | 5b | Full PreviewManager (several previews on 5100–5199) — deferred by the user | ⏳ Later |
 | 6 | React+Vite / Next.js / MERN emitters + Download zip + stack-aware re-audit and UI | ✅ Done (verified on real sites, merged into `phase-4a` (d25444d)) |
 
-**Current status: Phase 6 COMPLETE, merged into `phase-4a` (d25444d, fast-forward from `phase-6`; never pushed).** Phases 1, 2, 3, 4a, 5 and 6 are done
+**Current status: Phase 6 COMPLETE, merged into `phase-4a` (d25444d, fast-forward from `phase-6`) plus the post-merge `flex: revert` fix (c1d4ca3); never pushed.** Phases 1, 2, 3, 4a, 5 and 6 are done
 and merged on `phase-4a`.
 5.1 re-audit job foundation ✅ · 5.2 comparator + sitemap/robots emitter ✅ · 5.3 API + `audit.recreate` contract ✅ ·
 5.4 UI ✅ · 5.5 real-site verification + docs ✅. Phase 4b (motion + responsive fidelity) stays planned. Same workflow: one step at a time, WIP
@@ -86,7 +86,22 @@ server tests, now including the built-site test) all passed. Regressions the che
 5.5), colour contrast 14 → 27 elements on panscience, and for Next.js "Avoid serving legacy JavaScript to modern browsers". Local Lighthouse timings move by several points between
 runs (parchaa HTML 40 vs React 58 is mostly noise), so compare stacks by the JavaScript row and the audits, not by the performance score.
 
-**Found after the merge (nyaayai.com: the Next.js build failed the equivalence check, /platform/ tablet view 71 % match; fixed, general):** the IR resets a shorthand in a later view with `revert` (`flex: revert`); Next.js's bundled `postcss-flexbugs-fixes` rewrites `flex: revert` to `flex: revert 1` (invalid, so the reset was dropped and the base `flex: 0 1 450px` stayed at tablet width). `emit/css.js` now writes a `revert` / `revert-layer` reset of `flex` as its longhands (same meaning, left alone by every tool). Re-exporting that recreate from its saved IR passes (DOM 6/6, pixels ≥ 0.991, hydration clean). The equivalence check did its job: the broken build was not kept. A failed stack build is not retried by itself: "Build <stack> again" in the NEW panel (or `POST …/export`) rebuilds it from the saved recreate.
+**Post-merge bug: `flex: revert` broken by Next.js's CSS pipeline (found on nyaayai.com, fixed in `c1d4ca3`, general).**
+- *Symptom*: the Next.js build of nyaayai.com was rejected by the equivalence check: `/platform/`, tablet view, 71 % pixel match (the page was 10859 px tall instead of
+  10303 px). It failed the same way on both recreates of that project, so a Next.js build of it had never succeeded; the React + Vite build was fine.
+- *Root cause*: the IR resets a shorthand in a later view with a CSS-wide keyword (`flex: revert`, undoing the base `flex: 0 1 450px` at tablet width). Next.js's bundled
+  `postcss-flexbugs-fixes` rewrites `flex: revert` to `flex: revert 1` (and `revert-layer` to `revert-layer 1`), which is invalid CSS: the browser dropped the reset and the
+  base `flex-basis: 450px` stayed at tablet width. Our CSS was valid; esbuild (Vite) and the HTML build keep it as written, so only the Next.js stack was hit.
+- *Fix*: `emit/css.js declarations()` writes a `revert` / `revert-layer` reset of `flex` as its longhands (`flex-grow`, `flex-shrink`, `flex-basis`: same meaning, left
+  untouched by every tool). Regression test in `recreate-next.test.js`: the emitted CSS through Next's own plugin is unchanged, and a control shows what the shorthand turned into.
+- *The check did its job*: the equivalence check (not a person) found the problem. The broken build was rejected and not kept (`outputs.nextjs = { status: 'failed', error }`);
+  nothing wrong was ever shown, previewed or downloaded. A failed stack build is not retried by itself: "Build <stack> again" in the NEW panel, or `POST …/recreate/:id/export`,
+  rebuilds it from the saved IR (no new capture).
+- *Re-export verification (nyaayai.com, Next.js, from the saved IR, API run on the fixed code)*: build 97 s, **fidelity 83** (`equivalent-to-html`, threshold 80), DOM 6/6
+  identical, **pixels ≥ 0.988** (mean 0.999, threshold 0.97), **hydration 6/6 clean**, safety passed, 0 URL changes, 0 warnings, JS 237 KB gzipped; `out/` has 8 HTML files
+  (6 pages + `404`, `_not-found`); the download plan answers 200 (`nyaayai.clone.com-nextjs.zip`); no `node_modules` / `.next` left in the output.
+- *Lesson*: two real sites (parchaa.com, panscience.xyz) did not exercise this combination; a bundler's own CSS plugins can change valid CSS, so every stack's output stays
+  behind the equivalence check rather than being trusted because its input was valid.
 
 **Known open items (not blockers)**: the MERN preview shows the client only (forms need `npm start`); only the latest 2 recreates keep their saved IR, so a stack can only be
 built from those; Next.js ships ~237 KB gzipped of framework runtime (React + Vite ~100 KB, HTML none); the re-audit measures stacks on a local preview without compression and
