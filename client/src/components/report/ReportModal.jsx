@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Check, FileJson, FileText, Loader2, Printer, RefreshCw, Sparkles } from 'lucide-react';
+import { AlertTriangle, Check, FileDown, FileJson, FileText, Loader2, RefreshCw, Sparkles } from 'lucide-react';
 import Modal from '../common/Modal.jsx';
 import Button from '../common/Button.jsx';
 import { api } from '../../api/client.js';
@@ -22,9 +22,9 @@ const hostOf = (url) => {
 };
 const kb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
 
-/** Saves text as a file through a temporary link: no second request, the report is already here. */
-function save(text, mime, name) {
-  const url = URL.createObjectURL(new Blob([text], { type: mime }));
+/** Saves text (or a Blob) as a file through a temporary link. */
+function save(content, mime, name) {
+  const url = URL.createObjectURL(content instanceof Blob ? content : new Blob([content], { type: mime }));
   const a = document.createElement('a');
   a.href = url;
   a.download = name;
@@ -43,8 +43,7 @@ export default function ReportModal({ open, onClose, project }) {
   const [step, setStep] = useState(0);
   const [html, setHtml] = useState('');
   const [error, setError] = useState(null);
-  const [busyJson, setBusyJson] = useState(false);
-  const frame = useRef(null);
+  const [busy, setBusy] = useState(null); // 'pdf' | 'json' while that file is being prepared
   const run = useRef(0);
 
   const generate = useCallback(async () => {
@@ -79,22 +78,16 @@ export default function ReportModal({ open, onClose, project }) {
   const stamp = new Date().toISOString().slice(0, 10);
   const base = `${hostOf(project.url)}-audit-report-${stamp}`;
 
-  const downloadJson = async () => {
-    setBusyJson(true);
+  const download = async (kind) => {
+    setBusy(kind);
+    setError(null);
     try {
-      save(await api.getReportJson(project.id), 'application/json', `${base}.json`);
+      if (kind === 'pdf') save(await api.getReportPdf(project.id), 'application/pdf', `${base}.pdf`);
+      else save(await api.getReportJson(project.id), 'application/json', `${base}.json`);
     } catch (err) {
       setError(err.message);
     } finally {
-      setBusyJson(false);
-    }
-  };
-
-  const print = () => {
-    const win = frame.current?.contentWindow;
-    if (win) {
-      win.focus();
-      win.print();
+      setBusy(null);
     }
   };
 
@@ -144,14 +137,14 @@ export default function ReportModal({ open, onClose, project }) {
                 <Check size={14} strokeWidth={3} /> Report ready · {kb(html.length)}
               </span>
               <div className={styles.buttons}>
-                <Button variant="primary" icon={FileText} onClick={() => save(html, 'text/html', `${base}.html`)}>
-                  Download HTML
+                <Button variant="primary" icon={busy === 'pdf' ? Loader2 : FileDown} onClick={() => download('pdf')} disabled={busy !== null}>
+                  {busy === 'pdf' ? 'Building PDF…' : 'Download PDF'}
                 </Button>
-                <Button icon={Printer} onClick={print}>
-                  Print / Save as PDF
+                <Button icon={FileText} onClick={() => save(html, 'text/html', `${base}.html`)}>
+                  HTML
                 </Button>
-                <Button icon={FileJson} onClick={downloadJson} disabled={busyJson}>
-                  {busyJson ? 'Preparing…' : 'Download JSON'}
+                <Button icon={FileJson} onClick={() => download('json')} disabled={busy !== null}>
+                  {busy === 'json' ? 'Preparing…' : 'JSON'}
                 </Button>
                 <Button variant="ghost" icon={RefreshCw} onClick={generate}>
                   Regenerate
@@ -159,8 +152,8 @@ export default function ReportModal({ open, onClose, project }) {
               </div>
             </div>
             {error && <p className={styles.inlineError}>{error}</p>}
-            <iframe ref={frame} className={styles.preview} title="Report preview" srcDoc={html} sandbox="allow-same-origin allow-modals" />
-            <p className={styles.hint}>The HTML file is self-contained (no internet needed). To get a PDF: Print / Save as PDF, then choose “Save as PDF”.</p>
+            <iframe className={styles.preview} title="Report preview" srcDoc={html} sandbox="allow-same-origin" />
+            <p className={styles.hint}>The PDF is built on the server and downloads directly. The HTML file is self-contained (it opens offline); the JSON holds the complete data.</p>
           </>
         )}
       </div>

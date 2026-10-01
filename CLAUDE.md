@@ -48,13 +48,17 @@ commit, wait for the user's "next"; never push; while the user tests, work in a 
 
 ### Complete report (UI redesign task, after 4b.1)
 "Generate report" (top bar, when a project is selected) builds one report of the **original site (OLD panel), the recreated site (NEW panel) and the fix checklist**, shows it in a modal (animated steps, then a preview) and offers
-**Download HTML** (self-contained, no script, no external request, print-ready: "Print / Save as PDF"), **Download JSON** (the data) and Regenerate.
-- API: `GET /api/projects/:id/report[?format=html|json][&download=1]` (`routes/report.js`; built on request from what is stored, nothing is kept; CSP `default-src 'none'; img-src data:; sandbox`, no-store).
+**Download PDF** (made by the server, direct download, no print dialog), **HTML** (self-contained, no script, no external request) and **JSON** (the complete data), plus Regenerate.
+- API: `GET /api/projects/:id/report[?format=html|pdf|json][&download=1]` (`routes/report.js`; built on request from what is stored, nothing is kept; CSP `default-src 'none'; img-src data:; sandbox`, no-store).
+  The PDF (`report/pdf.js`) is the HTML report printed by the app's Chromium (A4, print media, page numbers in the footer, one at a time, no network); the print CSS lets cards break across pages, so there are no blank gaps (5 pages for a 6-page site, pages 85–100 % full).
 - `server/src/report/collect.js` (project, latest analysis → `audit` incl. `audit.recreate` = fix checklist, latest completed recreate report, small WebP thumbnails: original first screens from the analysis, recreated pages and the
-  visual-diff heatmap from the recreate folder), `report/render.js` (`renderReportHtml`; every value from the sites goes through `esc()`). Sections: cover + KPIs; **OLD** performance (rings + metrics), screenshots, tech stack,
-  weaknesses, SEO, AEO, meta/sitemap/robots, broken links, accessibility, manual rebuild; **NEW** overview, side-by-side screenshots, fidelity + visual difference per page/view (+ heatmap), layout between widths, build/verification/safety,
-  fixes, auto-generated content, manual rebuild, hover/focus counts, other stacks, warnings; **Fix checklist** (Lighthouse before → after, summary, rows per category). A project without analysis / recreate still gets a report that says so.
-- Client: `components/report/ReportModal.jsx` (+ css), `api.getReportHtml/getReportJson`. Tests: `server/test/report.test.js` (404, empty project, all sections + HTML escaping, download/JSON, thumbnails).
+  visual-diff heatmap from the recreate folder), `report/render.js` (`renderReportHtml`; every value from the sites goes through `esc()`). The report is short on purpose and written for a client: numbered sections, a summary of plain sentences, then **At a glance** charts (inline SVG / CSS, no script):
+  Lighthouse scores original vs recreated (grouped bars), SEO/AEO/crawl checks (donut), fix checklist (donut), fidelity by page (bars with the threshold line); small screenshots (desktop ~220 px, tablet ~115 px, phone ~70 px, in one row, original and recreated);
+  **Original site** (performance rings + metrics, platform and weaknesses, SEO/AEO/crawl **issues only** with the passing count, broken links + accessibility, manual rebuild); **Recreated site** (fidelity / visual difference per page, layout between
+  widths as a bar chart, built / fixed / to review, manual rebuild, warnings); **Fix checklist** (Lighthouse before → after, the status counts, "Needs attention", the list of fixed checks). Long lists show 8–20 rows and say "+N more in the JSON download".
+  A project without analysis / recreate still gets a report that says so.
+- Screenshots of the analysis are taken with `animations: 'allow'` (`audit/screenshots.js`): `'disabled'` reset running animations and stacked every word of a cycling headline on top of each other (seen on panscience.xyz). Analyses from before this need Analyze again.
+- Client: `components/report/ReportModal.jsx` (+ css), `api.getReportHtml/getReportJson/getReportPdf`. Tests: `server/test/report.test.js` (404, empty project, all sections + HTML escaping, download/JSON, thumbnails, a real PDF).
 
 ### Phase 4b plan (approved) — branch `phase-4b` (worktree `../Website-Audit-4b`)
 Decisions: CSS-first motion + one small generated `motion.js` (IntersectionObserver, safety-gated); sweep widths 320/480/600/900/1024/1280/1920; order:

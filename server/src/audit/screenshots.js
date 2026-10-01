@@ -55,12 +55,15 @@ async function captureView(browser, url, view, dir, timeout) {
     await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
     await page.waitForTimeout(300);
 
-    const fold = await page.screenshot({ type: 'png', animations: 'disabled' });
+    // animations "allow": "disabled" resets running animations to their start, which stacks every word of a
+    // cycling headline (or every slide of a rotating banner) on top of each other. The screenshot shows the
+    // frame a visitor would see at this moment instead.
+    const fold = await page.screenshot({ type: 'png', animations: 'allow' });
     const fullHeight = Math.min(pageHeight, MAX_HEIGHT);
     const full = await page.screenshot({
       type: 'png',
       fullPage: true,
-      animations: 'disabled',
+      animations: 'allow',
       clip: { x: 0, y: 0, width: view.width, height: fullHeight },
     });
 

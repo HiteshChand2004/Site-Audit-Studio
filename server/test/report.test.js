@@ -120,7 +120,7 @@ test('the report holds the original, the recreated site and the checklist, and e
   const res = await fetch(`${base}/${id}/report`);
   const html = await res.text();
   // Parts and sections
-  for (const anchor of ['id="old"', 'id="new"', 'id="fix"', 'id="old-perf"', 'id="old-seo"', 'id="old-links"', 'id="new-fidelity"', 'id="new-resp"', 'id="new-fixes"', 'id="new-manual"', 'id="new-stacks"']) {
+  for (const anchor of ['id="old"', 'id="new"', 'id="fix"', 'id="old-perf"', 'id="old-checks"', 'id="old-links"', 'id="new-fidelity"', 'id="new-build"', 'id="new-manual"']) {
     assert.ok(html.includes(anchor), anchor);
   }
   // Values
@@ -129,9 +129,7 @@ test('the report holds the original, the recreated site and the checklist, and e
   assert.match(html, /Missing on 3 pages/);
   assert.match(html, /https:\/\/www\.acme\.test\/old/);
   assert.match(html, /Fidelity/);
-  assert.match(html, /laptop ≤ 1279 px|laptop ≤ 1280 px/);
   assert.match(html, /react-vite/);
-  assert.match(html, /1 of 1 pages identical|1\/1 pages identical/);
   // Escaping: neither the project name nor a detail text becomes markup.
   assert.doesNotMatch(html, /<img src=x/);
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt; Acme/);
@@ -167,16 +165,32 @@ test('screenshots are embedded as small data URIs; a missing file is simply left
     const uri = await thumbnail(file, 'desktop');
     assert.match(uri, /^data:image\/webp;base64,/);
     const meta = await sharp(Buffer.from(uri.split(',')[1], 'base64')).metadata();
-    assert.equal(meta.width, 560);
-    assert.equal(meta.height, 350, 'the first screen only (900 / 1440 of the width)');
+    assert.equal(meta.width, 480);
+    assert.equal(meta.height, 300, 'the first screen only (900 / 1440 of the width)');
+    assert.ok(uri.length < 60000, 'small: the report must not get heavy');
     assert.equal(await thumbnail(path.join(dir, 'nope.png'), 'mobile'), null);
     // The recreated pictures come from the recreate folder of the latest recreate.
     const html = renderReportHtml({
       generatedAt: now(), project: { name: 'X', url: 'https://x.test/' }, audit: { ...AUDIT, recreate: null }, analyzed: true, recreate: RECREATE,
-      images: { old: { desktop: uri }, new: { desktop: uri }, diff: uri },
+      images: { old: { desktop: uri }, new: { desktop: uri } },
     });
-    assert.equal(html.split('data:image/webp;base64,').length - 1, 4, 'original once in part 1, original and recreated in the comparison, the heatmap');
+    assert.equal(html.split('data:image/webp;base64,').length - 1, 2, 'one small picture of the original and one of the recreate, nothing else');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('PDF: a real PDF made by the server, no print dialog, a few pages', async () => {
+  const id = makeProject('Pdf Co', 'https://pdf.example/');
+  addAnalysis(id, { ...AUDIT, url: 'https://pdf.example/' });
+  addRecreate(id);
+  const res = await fetch(`${base}/${id}/report?format=pdf&download=1`);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'application/pdf');
+  assert.match(res.headers.get('content-disposition'), /^attachment; filename="pdf\.example-audit-report-\d{4}-\d{2}-\d{2}\.pdf"$/);
+  const body = Buffer.from(await res.arrayBuffer());
+  assert.equal(body.subarray(0, 5).toString(), '%PDF-');
+  assert.ok(body.length > 8000, `${body.length} bytes`);
+  const pages = body.toString('latin1').match(/\/Type \/Page[^s]/g) ?? [];
+  assert.ok(pages.length >= 1 && pages.length <= 5, `${pages.length} pages: the report is short`);
 });

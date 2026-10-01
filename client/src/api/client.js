@@ -124,6 +124,20 @@ export const api = {
   // The complete report of a project (original site, recreated site, fix checklist).
   getReportHtml: (id) => requestText(`/projects/${id}/report`),
   getReportJson: (id) => requestText(`/projects/${id}/report?format=json`),
+  // The PDF is made by the server (the same Chromium that draws the pages): a Blob to save, no print dialog.
+  async getReportPdf(id) {
+    let res;
+    try {
+      res = await fetch(`/api/projects/${id}/report?format=pdf`);
+    } catch {
+      throw Object.assign(new Error(API_DOWN), { status: 0 });
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new Error(data?.error || (res.status >= 500 ? 'The PDF could not be built.' : `Request failed (${res.status})`));
+    }
+    return res.blob();
+  },
   listProjects: () => request('/projects'),
   createProject: (input) => request('/projects', { method: 'POST', body: input }),
   updateProject: (id, patch) => request(`/projects/${id}`, { method: 'PATCH', body: patch }),

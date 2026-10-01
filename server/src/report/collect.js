@@ -17,11 +17,12 @@ const latestRecreate = db.prepare(`
   SELECT id, result_json FROM recreates WHERE project_id = ? AND status = 'done' AND result_json IS NOT NULL ORDER BY started_at DESC LIMIT 1
 `);
 
-// Report thumbnails: width per view and the share of the width that makes the first screen.
+// Report thumbnails: small (the report shows them at half this width, so they stay sharp on high-density screens
+// without making the file or the page big): the width in px and the share of the width that makes the first screen.
 const THUMB = {
-  desktop: { width: 560, ratio: 900 / 1440 },
-  tablet: { width: 360, ratio: 1024 / 768 },
-  mobile: { width: 240, ratio: 812 / 375 },
+  desktop: { width: 480, ratio: 900 / 1440 },
+  tablet: { width: 250, ratio: 1024 / 768 },
+  mobile: { width: 152, ratio: 812 / 375 },
 };
 
 /** A WebP data URI of the top of a screenshot, or null when the file is missing. */
@@ -33,17 +34,6 @@ export async function thumbnail(file, view) {
     const resized = await sharp(buffer).resize({ width }).toBuffer({ resolveWithObject: true });
     const height = Math.min(resized.info.height, Math.round(width * ratio));
     const out = await sharp(resized.data).extract({ left: 0, top: 0, width, height }).webp({ quality: 72 }).toBuffer();
-    return `data:image/webp;base64,${out.toString('base64')}`;
-  } catch {
-    return null;
-  }
-}
-
-/** The heatmap (red = differs) of one view, small, as a data URI. */
-async function heatmap(file) {
-  try {
-    const buffer = await readFile(file);
-    const out = await sharp(buffer).resize({ width: 280 }).extract({ left: 0, top: 0, width: 280, height: 700 }).webp({ quality: 70 }).toBuffer();
     return `data:image/webp;base64,${out.toString('base64')}`;
   } catch {
     return null;
@@ -65,19 +55,18 @@ export async function collectReport(projectId) {
 
   const rec = latestRecreate.get(projectId);
   const recreate = rec ? { ...JSON.parse(rec.result_json), recreateId: rec.id } : null;
-  const images = { old: {}, new: {}, diff: null };
+  const images = { old: {}, new: {} };
 
   // The original: the first-screen shots of the analysis (screens/<view>-fold.webp).
   if (analyzed && audit.screenshots?.analysisId) {
     const dir = path.join(projectDir(projectId), 'audit', audit.screenshots.analysisId, 'screens');
     for (const view of Object.keys(THUMB)) images.old[view] = await thumbnail(path.join(dir, `${view}-fold.webp`), view);
   }
-  // The recreated homepage: its screenshots from the fidelity check, and the visual-diff heatmap.
+  // The recreated homepage: its screenshots from the fidelity check.
   if (recreate?.pages?.length) {
     const home = recreate.pages[0];
     const dir = path.join(recreateDir(projectId, rec.id), 'fidelity', home.slug ?? '');
     for (const view of Object.keys(THUMB)) images.new[view] = await thumbnail(path.join(dir, `${view}-full.webp`), view);
-    images.diff = await heatmap(path.join(dir, 'desktop-diff.webp'));
   }
 
   return {
