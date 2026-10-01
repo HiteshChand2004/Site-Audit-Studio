@@ -44,18 +44,19 @@ async function writeTree(root, files) {
   }
 }
 
-test('the registry lists every stack: html and react-vite are ready, the others are planned', () => {
+test('the registry lists every stack: html, react-vite and nextjs are ready, mern is planned', () => {
   assert.deepEqual(stackIds(), ['html', 'react-vite', 'nextjs', 'mern']);
   assert.deepEqual(STACKS, stackIds()); // projects accept exactly the registered stacks
   assert.equal(isReadyStack('html'), true);
-  assert.equal(isReadyStack('react-vite'), true);
-  for (const id of ['nextjs', 'mern']) assert.equal(isReadyStack(id), false);
+  for (const id of ['react-vite', 'nextjs']) assert.equal(isReadyStack(id), true);
+  assert.equal(isReadyStack('mern'), false);
   assert.equal(isReadyStack('nope'), false);
   assert.equal(getEmitter('nope'), null);
   const list = listStacks();
   assert.equal(list.length, 4);
   assert.ok(list.every((s) => Object.values(s).every((v) => typeof v !== 'function')));
-  assert.deepEqual(list.find((s) => s.id === 'nextjs'), { id: 'nextjs', label: 'Next.js', status: 'planned', toolchain: 'next', scripts: true });
+  assert.deepEqual(list.find((s) => s.id === 'nextjs'), { id: 'nextjs', label: 'Next.js', status: 'ready', toolchain: 'next', scripts: 'inline' });
+  assert.deepEqual(list.find((s) => s.id === 'mern'), { id: 'mern', label: 'MERN', status: 'planned', toolchain: 'react-vite', scripts: true });
   assert.equal(getEmitter('html').scripts, false);
   assert.equal(getEmitter('html').assetsTarget, 'assets');
   assert.deepEqual([getEmitter('react-vite').scripts, getEmitter('react-vite').assetsTarget], [true, 'public/assets']);
@@ -244,9 +245,9 @@ test('export from the saved IR: emit, write, record the output; idempotent; fail
     assert.equal((await html.json()).created, false);
 
     // A stack that is not built yet, an unknown one, bad input and a missing toolchain.
-    const planned = await post(url, { stack: 'nextjs' });
+    const planned = await post(url, { stack: 'mern' });
     assert.equal(planned.status, 409);
-    assert.match((await planned.json()).error, /Next\.js stack is not available yet/);
+    assert.match((await planned.json()).error, /MERN stack is not available yet/);
     assert.equal((await post(url, { stack: 'nope' })).status, 400);
     assert.equal((await post(url, {})).status, 400);
     const tool = await post(url, { stack: 'fake-tool' });
@@ -298,7 +299,7 @@ test('export from the saved IR: emit, write, record the output; idempotent; fail
     // The stack list the app reads.
     const stacks = (await (await fetch(`${base}/stacks`)).json()).stacks;
     assert.equal(stacks.find((s) => s.id === 'html').toolchainInstalled, true);
-    const next = stacks.find((s) => s.id === 'nextjs');
+    const next = stacks.find((s) => s.id === 'mern');
     assert.equal(next.status, 'planned');
     assert.equal(typeof next.toolchainInstalled, 'boolean');
   } finally {
@@ -313,10 +314,10 @@ test('Recreate refuses a stack that is not ready, naming the ones that are', asy
     const id = randomUUID();
     projectIds.push(id);
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://example.com/', 'nextjs', 1, ?, ?)`).run(id, now, now);
+    db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://example.com/', 'mern', 1, ?, ?)`).run(id, now, now);
     const res = await post(`${base}/projects/${id}/recreate`, {});
     assert.equal(res.status, 400);
-    assert.match((await res.json()).error, /^Only Plain HTML \/ CSS \/ JS, React \+ Vite can be recreated for now/);
+    assert.match((await res.json()).error, /^Only Plain HTML \/ CSS \/ JS, React \+ Vite, Next\.js can be recreated for now/);
   } finally {
     server.close();
   }

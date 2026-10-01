@@ -6,7 +6,8 @@
 //   id, label            the stack id (as stored in projects.stack) and its name
 //   status               'ready' (can emit) | 'planned' (listed, not built yet)
 //   toolchain            id of the build toolchain in server/toolchains/, or null
-//   scripts              true when the output runs JavaScript (its preview needs a script CSP)
+//   scripts              true when the output runs JavaScript (its preview needs a script CSP); 'inline' when its pages also
+//                        carry inline data scripts (Next.js): the preview allows each by hash, never 'unsafe-inline'
 //   assetsTarget         folder of the project that holds the assets ("assets", "public/assets", …)
 //   emit(ir, opts)       → { files: Map<path, string>, assets: Set<file> }  (pure, synchronous)
 //   build?(o)            optional async step after the files are written (install-free build, verify)
@@ -15,6 +16,8 @@
 //   measured against.
 import { emitSite } from './html.js';
 import { buildReact } from './react/build.js';
+import { buildNext } from './next/build.js';
+import { emitNext } from './next/index.js';
 import { emitReact } from './react/index.js';
 
 const registry = new Map();
@@ -34,5 +37,5 @@ export const listStacks = () => [...registry.values()].map(({ id, label, status,
 
 registerEmitter({ id: 'html', label: 'Plain HTML / CSS / JS', status: 'ready', emit: emitSite });
 registerEmitter({ id: 'react-vite', label: 'React + Vite', status: 'ready', toolchain: 'react-vite', scripts: true, assetsTarget: 'public/assets', emit: emitReact, build: buildReact });
-registerEmitter({ id: 'nextjs', label: 'Next.js', status: 'planned', toolchain: 'next', scripts: true, assetsTarget: 'public/assets' });
+registerEmitter({ id: 'nextjs', label: 'Next.js', status: 'ready', toolchain: 'next', scripts: 'inline', assetsTarget: 'public/assets', emit: emitNext, build: buildNext });
 registerEmitter({ id: 'mern', label: 'MERN', status: 'planned', toolchain: 'react-vite', scripts: true, assetsTarget: 'client/public/assets' });

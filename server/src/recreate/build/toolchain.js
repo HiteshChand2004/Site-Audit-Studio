@@ -15,6 +15,8 @@ const env = () => ({
   NODE_ENV: 'production',
   CI: '1',
   NO_COLOR: '1',
+  NEXT_TELEMETRY_DISABLED: '1', // no network calls from the toolchain
+  NEXT_IGNORE_INCORRECT_LOCKFILE: '1', // never patch a lockfile (the repository's own sits above the data folder)
 });
 
 /** One node process; resolves with its output, rejects with a RecreateError carrying the output's tail. */

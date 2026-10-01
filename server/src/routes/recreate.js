@@ -98,7 +98,7 @@ async function latestBuild(project) {
   const stack = outputs[project.stack]?.status === 'ready' && project.stack !== 'html' ? project.stack : 'html';
   const root = stack === 'html' ? path.join(dir, 'dist') : path.join(dir, outputs[stack].dir, outputs[stack].dist ?? '');
   if (!(await stat(root).catch(() => null))?.isDirectory()) return null;
-  return { recreateId: row.id, root, scripts: Boolean(getEmitter(stack)?.scripts) };
+  return { recreateId: row.id, root, scripts: getEmitter(stack)?.scripts ?? false };
 }
 
 const previewOf = (projectId) => {

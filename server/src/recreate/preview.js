@@ -14,6 +14,7 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { APP_ORIGIN } from '../audit/frame.js';
 import { RecreateError } from './errors.js';
+import { inlineScriptHashes } from './inlineScripts.js';
 import { TYPES } from './verify/server.js';
 
 export const PREVIEW_PORTS = { first: 5100, last: 5199 };
@@ -32,16 +33,17 @@ export function appOrigins(appOrigin = APP_ORIGIN) {
 
 /**
  * @param {string[]} [frameAncestors]
- * @param {{ connectSelf?: boolean, scripts?: boolean }} [o]  scripts: the site is an app whose own bundles (script-src 'self')
- *   may run (a stack with JavaScript; the Recreate verification scanned them). connectSelf: fetches to the preview itself are allowed. Only the
+ * @param {{ connectSelf?: boolean, scripts?: boolean|'inline', scriptHashes?: string[] }} [o]  scripts: the site is an app whose own
+ *   bundles (script-src 'self') may run (a stack with JavaScript; the Recreate verification scanned them); 'inline' also
+ *   serves each page with the hashes of its inline scripts (scriptHashes) - never 'unsafe-inline'. connectSelf: fetches to the preview itself are allowed. Only the
  *   re-audit's throwaway server sets it (Lighthouse reads robots.txt from inside the page); the site has
  *   no script, so it opens nothing to the site itself.
  */
-export function previewHeaders(frameAncestors = appOrigins(), { connectSelf = false, scripts = false } = {}) {
+export function previewHeaders(frameAncestors = appOrigins(), { connectSelf = false, scripts = false, scriptHashes = [] } = {}) {
   return {
     'Content-Security-Policy': [
       "default-src 'none'",
-      ...(scripts ? ["script-src 'self'"] : []),
+      ...(scripts ? [['script-src', "'self'", ...scriptHashes].join(' ')] : []),
       ...(connectSelf ? ["connect-src 'self'"] : []),
       "img-src 'self' data:",
       "media-src 'self'",
@@ -100,7 +102,11 @@ function createPreviewServer(root, { port, frameAncestors = appOrigins(), connec
       const real = await realpath(file);
       if (!inside(realBase, real)) return send(404, 'Not found');
       const body = await readFile(real);
-      res.writeHead(200, { ...headers, 'Content-Type': TYPES[path.extname(real).toLowerCase()] ?? 'application/octet-stream' });
+      const ext = path.extname(real).toLowerCase();
+      const sent = scripts === 'inline' && ext === '.html'
+        ? previewHeaders(frameAncestors, { connectSelf, scripts, scriptHashes: inlineScriptHashes(body.toString('utf8')) })
+        : headers;
+      res.writeHead(200, { ...sent, 'Content-Type': TYPES[ext] ?? 'application/octet-stream' });
       res.end(req.method === 'HEAD' ? undefined : body);
     } catch {
       send(404, 'Not found');
@@ -160,7 +166,7 @@ export const activePreview = () => (active ? info(active) : null);
 
 /**
  * Starts (or keeps) the preview of one recreate's dist/ folder; any other preview is stopped first.
- * @param {{ projectId: string, recreateId: string, root: string, scripts?: boolean }} o  one recreate can have several
+ * @param {{ projectId: string, recreateId: string, root: string, scripts?: boolean|'inline' }} o  one recreate can have several
  *   outputs (stacks): the preview is kept only while it serves the same folder with the same script policy
  */
 export function startPreview({ projectId, recreateId, root, scripts = false }) {

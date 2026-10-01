@@ -11,6 +11,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { load } from 'cheerio';
+import { appProfile } from './appProfiles.js';
 
 const SCRIPT_URL = /(java|vb|live)script:|^data:(text\/html|application\/(x?html|javascript)|text\/(x?javascript))/i;
 const RASTER_DATA = /^data:image\/(png|jpe?g|gif|webp|avif)[;,]/i;
@@ -36,22 +37,21 @@ function checkCss(css, add, where) {
   }
 }
 
-// An app build (a stack with JavaScript) may load its own bundles: module scripts and preloads from /_app/.
-const APP_BUNDLE = /^\/_app\/[\w.-]+\.js$/;
-
+// An app build (a stack with JavaScript) may run its own framework's bundles (verify/appProfiles.js).
 function checkElements($, nodes, add, { inSvg = false, app = false } = {}) {
+  const profile = appProfile(app);
   nodes.each((_, el) => {
     const tag = el.name.toLowerCase();
     const svg = inSvg || tag === 'svg' || $(el).parents('svg').length > 0;
     if (tag === 'script') {
       const type = String(el.attribs.type ?? '').toLowerCase();
-      if (app && !svg && type === 'module' && APP_BUNDLE.test(el.attribs.src ?? '') && !$(el).text().trim()) {
-        // the app's own bundle
+      if (profile && !svg && profile.scriptAllowed({ src: el.attribs.src, type, text: $(el).text() })) {
+        // the framework's own bundle or data
       } else if (svg || type !== 'application/ld+json') add('script', '<script> element');
       else if (/<\/script|<!--/i.test($(el).text())) add('script', 'JSON-LD can end its script element');
     }
     if (ACTIVE_TAGS.has(tag)) add('script', `<${el.name}> element`);
-    if (app && tag === 'link' && /modulepreload/i.test(el.attribs.rel ?? '') && !APP_BUNDLE.test(el.attribs.href ?? '')) add('external', `modulepreload ${String(el.attribs.href).slice(0, 80)}`);
+    if (profile && tag === 'link' && /modulepreload/i.test(el.attribs.rel ?? '') && !profile.bundleLink.test(el.attribs.href ?? '')) add('external', `modulepreload ${String(el.attribs.href).slice(0, 80)}`);
     if (tag === 'meta' && /refresh/i.test(el.attribs['http-equiv'] ?? '')) add('script', 'meta refresh');
     for (const [name, value] of Object.entries(el.attribs ?? {})) {
       const lname = name.toLowerCase();
@@ -92,9 +92,10 @@ const JS_BANNED = [
   [/\bimport\s*\(\s*["'`]\s*(?:https?:)?\/\//, 'import() of another origin'],
 ];
 
-export function checkScript(content) {
+/** @param {{ allow?: string[] }} [o]  allow: sink names (as reported) the framework's own runtime contains */
+export function checkScript(content, { allow = [] } = {}) {
   const issues = [];
-  for (const [re, name] of JS_BANNED) if (re.test(content)) issues.push({ type: 'script', detail: `${name} in script` });
+  for (const [re, name] of JS_BANNED) if (!allow.includes(name) && re.test(content)) issues.push({ type: 'script', detail: `${name} in script` });
   return issues;
 }
 
@@ -108,6 +109,7 @@ async function listFiles(dir) {
  * @returns {Promise<{ safe: boolean, checked: { html: number, svg: number, css: number }, issues: object[] }>}
  */
 export async function scanSite(dir, { app = false, contentChunk = () => false } = {}) {
+  const profile = appProfile(app);
   const checked = { html: 0, svg: 0, css: 0, ...(app && { js: 0 }) };
   const issues = [];
   for (const file of await listFiles(dir)) {
@@ -118,8 +120,8 @@ export async function scanSite(dir, { app = false, contentChunk = () => false } 
     const rel = path.relative(dir, file).replaceAll('\\', '/');
     const content = await readFile(file, 'utf8');
     // Page and component chunks carry the site's own text; they are covered by the DOM equivalence with the scanned HTML build.
-    if (kind === 'js' && contentChunk(rel)) continue;
-    for (const issue of kind === 'js' ? checkScript(content) : checkContent(kind, content, { app })) {
+    if (kind === 'js' && (contentChunk(rel) || profile?.contentChunk(rel))) continue;
+    for (const issue of kind === 'js' ? checkScript(content, { allow: profile?.jsAllow }) : checkContent(kind, content, { app })) {
       if (issues.length < MAX_ISSUES) issues.push({ file: rel, ...issue });
     }
   }
@@ -134,10 +136,14 @@ export async function scanSite(dir, { app = false, contentChunk = () => false } 
 export async function scanProject(dir) {
   const issues = [];
   let checked = 0;
-  const files = [...(await listFiles(path.join(dir, 'src'))), ...(await listFiles(path.join(dir, 'scripts')).catch(() => [])), path.join(dir, 'vite.config.js')];
+  const list = (sub) => listFiles(path.join(dir, sub)).catch(() => []);
+  const root = (await readdir(dir, { withFileTypes: true })).filter((e) => e.isFile()).map((e) => path.join(dir, e.name));
+  const files = [...(await list('src')), ...(await list('scripts')), ...(await list('app')), ...root];
+  // Content: page components, shared components and Next pages (app/**/page.jsx).
+  const content = /^(src\/)?(pages|components)\/|(^|\/)page\.jsx$|^components\//;
   for (const file of files) {
     const rel = path.relative(dir, file).replaceAll('\\', '/');
-    if (!/\.(jsx?|mjs)$/.test(rel) || /^src\/(pages|components)\//.test(rel)) continue;
+    if (!/\.(jsx?|mjs)$/.test(rel) || content.test(rel)) continue;
     checked++;
     for (const issue of checkScript(await readFile(file, 'utf8'))) {
       if (issues.length < MAX_ISSUES) issues.push({ file: rel, ...issue });

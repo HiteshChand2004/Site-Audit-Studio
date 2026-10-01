@@ -16,15 +16,29 @@ export const VISUAL_MIN = 0.97;
 
 // Runs in the page. The markup lives in <div id="root"> in an app (display: contents) and directly in
 // <body> in the plain-HTML build: both give the same list.
-function domSignature() {
+function domSignature(map) {
   const lines = [];
+  // `map`: a stack that moves pages (Next.js: about.html -> /about/) tells where the reference's URLs go.
+  const moved = map ?? { paths: {}, absolute: {} };
   const resolve = (v) => {
     try {
-      return new URL(v, document.baseURI).href;
+      const u = new URL(v, document.baseURI);
+      const absolute = moved.absolute[u.origin + u.pathname];
+      if (absolute) return absolute + u.search + u.hash;
+      if (u.origin === location.origin) {
+        if (moved.paths[u.pathname]) u.pathname = moved.paths[u.pathname];
+        // /about/ and /about/index.html are one page (which of them a build is opened at must not matter).
+        u.pathname = u.pathname.replace(/(^|\/)index\.html$/, '$1');
+      }
+      return u.href;
     } catch {
       return v;
     }
   };
+  // Framework furniture that is not page content: scripts (data and bundles), Next's route announcer and its
+  // empty hidden metadata container.
+  const furniture = (n) => n.localName === 'script' || n.localName === 'next-route-announcer'
+    || (n.localName === 'div' && n.hasAttribute('hidden') && !n.children.length && !n.textContent.trim());
   const walk = (node, depth) => {
     const attrs = [...node.attributes].map((a) => {
       const name = a.name.toLowerCase();
@@ -45,7 +59,7 @@ function domSignature() {
     };
     for (const c of parent.childNodes) {
       if (c.nodeType === 3) text += c.nodeValue;
-      else if (c.nodeType === 1) {
+      else if (c.nodeType === 1 && !furniture(c)) {
         flush();
         walk(c, depth);
       }
@@ -56,9 +70,18 @@ function domSignature() {
   lines.push(`html lang=${html.getAttribute('lang') ?? ''} class=${html.getAttribute('class') ?? ''}`);
   lines.push(`body class=${document.body.getAttribute('class') ?? ''}`);
   lines.push(`title ${document.title}`);
-  for (const m of document.head.querySelectorAll('meta[name], meta[property]')) lines.push(`meta ${m.getAttribute('name') ?? m.getAttribute('property')}=${m.getAttribute('content')}`);
+  const content = (v) => {
+    try {
+      const u = new URL(v);
+      return moved.absolute[u.origin + u.pathname] ? moved.absolute[u.origin + u.pathname] + u.search + u.hash : v;
+    } catch {
+      return v;
+    }
+  };
+  for (const m of document.head.querySelectorAll('meta[name], meta[property]')) lines.push(`meta ${m.getAttribute('name') ?? m.getAttribute('property')}=${content(m.getAttribute('content'))}`);
   for (const l of document.head.querySelectorAll('link[rel=canonical], link[rel=alternate], link[rel*=icon], link[rel=preload][as=font]')) lines.push(`link ${l.getAttribute('rel')} ${resolve(l.getAttribute('href'))}`);
-  for (const s of document.head.querySelectorAll('script[type="application/ld+json"]')) lines.push(`jsonld ${s.textContent}`);
+  // JSON-LD may sit in <head> or, in a framework that renders it with the page, in <body>.
+  for (const s of document.querySelectorAll('script[type="application/ld+json"]')) lines.push(`jsonld ${s.textContent}`);
   const body = document.body;
   const root = body.children.length === 1 && body.children[0].id === 'root' ? body.children[0] : body;
   children(root, 0);
@@ -72,12 +95,12 @@ export function firstDifference(a, b) {
   return null;
 }
 
-async function snapshot(renderer, outPath, viewId) {
+async function snapshot(renderer, outPath, viewId, urlMap = null) {
   const page = await renderer.contexts[viewId].newPage();
   try {
     await page.goto(`${renderer.server.origin}/${outPath}`, { waitUntil: 'load', timeout: 20000 });
     await page.evaluate(() => document.fonts.ready.then(() => true));
-    const sig = await page.evaluate(domSignature);
+    const sig = await page.evaluate(domSignature, urlMap);
     // Lazy images below the fold load when scrolled to; load them all, so both builds are shot fully loaded.
     await page.evaluate(() => Promise.race([
       Promise.all([...document.images].map((img) => { img.loading = 'eager'; return img.decode().catch(() => null); })),
@@ -103,7 +126,8 @@ async function hydrationCheck(origin, outPath, browser) {
   try {
     await page.goto(`${origin}/${outPath}`, { waitUntil: 'load', timeout: 20000 });
     const hydrated = await page.waitForFunction(
-      () => Object.keys(document.getElementById('root') ?? {}).some((k) => k.startsWith('__reactContainer')),
+      // React marks its container: #root (Vite app) or the document itself (Next.js hydrates the whole document).
+      () => [document, document.getElementById('root')].some((n) => n && Object.keys(n).some((k) => k.startsWith('__reactContainer'))),
       null,
       { timeout: 10000 },
     ).then(() => true, () => false);
@@ -116,10 +140,11 @@ async function hydrationCheck(origin, outPath, browser) {
 }
 
 /**
- * @param {{ referenceRoot: string, candidateRoot: string, pages: { path: string, outPath: string }[],
+ * @param {{ referenceRoot: string, candidateRoot: string, pages: { path: string, outPath: string, candidateOutPath?: string }[],
+ *   urlMap?: { paths: object, absolute: object },
  *   hydrate?: boolean, progress?: (fraction: number, message?: string) => void }} o
  */
-export async function compareBuilds({ referenceRoot, candidateRoot, pages, hydrate = true, progress = () => {} }) {
+export async function compareBuilds({ referenceRoot, candidateRoot, pages, urlMap = null, hydrate = true, progress = () => {} }) {
   const renderer = await openRenderer(referenceRoot);
   let browser;
   try {
@@ -130,18 +155,18 @@ export async function compareBuilds({ referenceRoot, candidateRoot, pages, hydra
     const reference = new Map();
     for (const p of pages) {
       for (const v of VIEWS) {
-        reference.set(`${p.outPath}|${v.id}`, await snapshot(renderer, p.outPath, v.id));
+        reference.set(`${p.outPath}|${v.id}`, await snapshot(renderer, p.outPath, v.id, urlMap));
         tick('Rendering the plain-HTML build');
       }
     }
     renderer.server.setRoot(candidateRoot);
     const results = [];
     for (const p of pages) {
-      const entry = { path: p.path, outPath: p.outPath, dom: 'equal', difference: null, views: {} };
+      const entry = { path: p.path, outPath: p.outPath, ...(p.candidateOutPath && { candidateOutPath: p.candidateOutPath }), dom: 'equal', difference: null, views: {} };
       let jsOffSig = null;
       for (const v of VIEWS) {
         const ref = reference.get(`${p.outPath}|${v.id}`);
-        const cand = await snapshot(renderer, p.outPath, v.id);
+        const cand = await snapshot(renderer, p.candidateOutPath ?? p.outPath, v.id);
         if (v.id === 'desktop') jsOffSig = cand.sig;
         const diff = firstDifference(ref.sig, cand.sig);
         if (diff && entry.dom === 'equal') {
@@ -158,7 +183,7 @@ export async function compareBuilds({ referenceRoot, candidateRoot, pages, hydra
     if (hydrate) {
       browser = await launchBrowser();
       for (const { entry, jsOffSig } of results) {
-        const h = await hydrationCheck(renderer.server.origin, entry.outPath, browser);
+        const h = await hydrationCheck(renderer.server.origin, entry.candidateOutPath ?? entry.outPath, browser);
         const changed = firstDifference(jsOffSig, h.sig);
         const ok = h.hydrated && !h.errors.length && !changed;
         hydration.checked++;

@@ -29,7 +29,7 @@ const VIEWPORT_OF = { desktop: 1440, mobile: 375 };
 function recreateBlocker({ audit, project, analyzing }) {
   if (!audit || audit.isDummy) return 'Run Analyze first: Recreate works from a completed analysis.';
   if (analyzing) return 'Wait for the analysis to finish.';
-  if (!RECREATE_STACKS.includes(project.stack)) return 'Only Plain HTML / CSS / JS and React + Vite can be recreated for now. Change the output stack.';
+  if (!RECREATE_STACKS.includes(project.stack)) return 'Only Plain HTML / CSS / JS, React + Vite and Next.js can be recreated for now. Change the output stack.';
   return null;
 }
 

@@ -174,7 +174,7 @@ test('POST /recreate checks authorization, stack and a completed analysis', asyn
   const post = (id) => fetch(`${base}/${id}/recreate`, { method: 'POST' });
   assert.equal((await post(randomUUID())).status, 404);
   assert.equal((await post(makeProject({ authorized: 0 }).id)).status, 403);
-  assert.equal((await post(makeProject({ stack: 'nextjs' }).id)).status, 400);
+  assert.equal((await post(makeProject({ stack: 'mern' }).id)).status, 400);
   const noAnalysis = await post(makeProject({ analysis: false }).id);
   assert.equal(noAnalysis.status, 409);
   assert.match((await noAnalysis.json()).error, /Run Analyze first/);

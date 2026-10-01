@@ -176,3 +176,6 @@ export function jsxNode(node, refs, depth = 0, components = null, used = null) {
   const inner = kids.map((c) => jsxNode(c, refs, depth + 1, components, used)).join('\n');
   return `${pad}<${open}>\n${inner}\n${pad}</${d.tag}>`;
 }
+
+/** An attribute as JSX (shared with emitters that write head tags as elements). */
+export { attr as jsxAttr };

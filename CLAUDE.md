@@ -54,7 +54,7 @@ Mongo; export to another stack from the saved IR without recapture; order 6.1 fi
 | 6.1 | Download zip for HTML (`recreate/export/zip.js`, `GET …/recreate/:recreateId/download`, UI button) | ✅ WIP |
 | 6.2 | Foundation: emitter registry, shared IR walker, stack in job/report, export from saved IR, toolchain setup | ✅ WIP |
 | 6.3 | React+Vite | ✅ WIP |
-| 6.4 | Next.js | ⏳ |
+| 6.4 | Next.js | ✅ WIP |
 | 6.5 | MERN | ⏳ |
 | 6.6 | Re-audit (target-stack-aware runtime rows) + UI | ⏳ |
 | 6.7 | Real-site verification + docs | ⏳ |
@@ -120,6 +120,31 @@ first and shows `X-Download-Error`. Test: `recreate-export.test.js`.
 - Verified on saved IRs of real sites (all DOM-equal, visual 1.0, hydration clean): panscience.xyz (Next.js, 2 shared components, JS 98 KB gz),
   parchaa.com (Framer, 6 components, 97 KB gz), a clone (42 components, 107 KB gz), the fixture. Tests: `recreate-react.test.js` (JSX, components,
   project files, app safety, preview CSP, project zip, a real build with form/SVG/entity/srcset constructs, a deliberate emitter bug is caught).
+
+6.4 details (Next.js, `status: 'ready'`, `scripts: 'inline'`, toolchain `next` = next 15.5.27 + react 19.1.9; 15.3.3 was dropped: flagged vulnerable, CVE-2025-66478):
+- **Emitter** (`recreate/emit/next/`): App Router, `output: 'export'`, `trailingSlash: true` (every page is `<route>/index.html`, so plain static servers, the
+  preview and the verification work unchanged). `index.js emitNext`: pages `app/<group>/<route>/page.jsx`, shared components `components/*.jsx`
+  (same `findShared`, imported as `@/components/…` via jsconfig), `app/site.css` imported by each root layout, plain `<a>` links (no client router).
+  **Root layouts**: no `app/layout`; one route group `(site)`, `(site-2)`… per distinct `<html lang class>` + `<body class>` (a plain site gets one).
+  **Head**: each page writes `<title>/<meta>/<link>` and its JSON-LD as elements (React hoists them into `<head>`; JSON-LD stays in `<body>`); charset
+  and viewport are left to Next. Bare attributes (`crossorigin`) are written as `""`, or hydration adds a duplicate preload.
+- **URL changes** (`next/routes.js`): `about.html` → `/about/`, `blog/first-post.html` → `/blog/first-post/`; folder pages and `/` keep theirs. Segments are made
+  router-safe (no leading `_`/`.`, brackets, parentheses, spaces); route collisions get `-2`. `outputs.nextjs.urlChanges = [{ from, to }]` + a warning;
+  `public/_redirects` (Netlify, Cloudflare Pages) and `vercel.json` (redirects + trailingSlash) are shipped only when something moved; canonical, `og:url` and
+  `sitemap.xml` use the new URLs (`robots.txt`, `llms.txt`, JSON-LD are copied as they are). README lists the moves.
+- **Build** (`next/build.js buildNext`): `next build` with the pinned toolchain (6-minute limit; env `NEXT_TELEMETRY_DISABLED`, `NEXT_IGNORE_INCORRECT_LOCKFILE` so it never
+  patches the repository's lockfile), `.next` removed, output `out/` (`outputs.nextjs.dist = 'out'`). Same stages as React: source scan, build, safety, `verifySite`,
+  equivalence + hydration; pages that moved are compared at their new URL and the HTML build's links are read through the same move (`urlMap`).
+- **Safety profile `next`** (`verify/appProfiles.js`, `scanSite(dir, { app: 'next' })`): allowed `<script src=/_next/static/…js>` (no `type`) and inline
+  `self.__next_f.push(<JSON array>)` data pushes (the argument must parse as a JSON array); everything else is a finding. JS sink scan: same ban list except
+  `fetch()` and `XMLHttpRequest` (Next's own client router and polyfills; the exported pages use plain `<a>`); `chunks/app/*` (page content) skipped.
+  `scanProject` now also covers `app/` layouts and root config, never `page.jsx` / `components/`.
+- **Preview**: `scripts: 'inline'` — each HTML response gets `script-src 'self' 'sha256-…'` for exactly its inline scripts (`recreate/inlineScripts.js`), never
+  `'unsafe-inline'`. `info.scripts` stays boolean for the app (it frames the preview with `allow-scripts`).
+- **Equivalence changes**: the DOM signature ignores `<script>` (Next's data pushes sit in `<body>`), `next-route-announcer` and an empty `div[hidden]`; JSON-LD is read
+  from the whole document; `/x/` and `/x/index.html` are one URL; hydration is detected on `#root` or the `document`. Zip: `out`, `.next` are never included.
+- Verified on saved IRs: fixture (4 URL moves, DOM 6/6, hydration clean), panscience.xyz (Next.js → Next.js, 0 moves, 2 shared components); JS is ~243 KB gzip for
+  Next vs ~98 KB for React + Vite (the framework runtime): the re-audit (6.6) will report it. Tests: `recreate-next.test.js`.
 
 ### Phase 5 final summary
 After every successful Recreate the server audits the recreated site again (same Analyze pipeline on its `dist/`, served

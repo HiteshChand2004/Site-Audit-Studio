@@ -165,7 +165,7 @@ export function writeZip(plan, out) {
 }
 
 // Folders of a stack project that are build output or dependencies: never part of the zip.
-const PROJECT_SKIP = new Set(['dist', '.ssr', 'node_modules']);
+const PROJECT_SKIP = new Set(['dist', 'out', '.ssr', '.next', 'node_modules']);
 
 /** A stack project: its source as it is (the user installs and builds it), plus the report. */
 async function planProjectZip({ dir, report, stack }) {
