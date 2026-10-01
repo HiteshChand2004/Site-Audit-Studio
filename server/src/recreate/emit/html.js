@@ -1,7 +1,11 @@
 // Plain HTML emitter: one .html file per recreated page (same URL layout as the original), the shared
 // stylesheet and the generated files. References in the IR become paths relative to each page.
+// Resolving references and describing nodes/head tags is shared with every stack (walk.js); this file
+// only writes them as HTML text.
 import { CSS_FILE, emitCss } from './css.js';
-import { relFile, relPage } from '../ir/links.js';
+import { describeNode, headTags, relativeRefs, safeJsonLd } from './walk.js';
+
+export { safeJsonLd };
 
 const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
 const RAW_TEXT = new Set(['pre', 'textarea']);
@@ -9,97 +13,54 @@ const RAW_TEXT = new Set(['pre', 'textarea']);
 const escText = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const escAttr = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
-function attrValue(value, ctx) {
-  if (typeof value === 'string') return value;
-  if (Array.isArray(value)) return value.map((c) => `${relFile(ctx.outPath, `assets/${c.asset}`)}${c.d ? ` ${c.d}` : ''}`).join(', ');
-  if (value.asset) return ctx.useAsset(value.asset) && relFile(ctx.outPath, `assets/${value.asset}`);
-  if (value.page) return relPage(ctx.outPath, value.page) + (value.hash ?? '');
-  if (value.anchor) return value.anchor;
-  if (value.live) return value.live;
-  if (value.external) return value.external;
-  return '';
-}
-
-function attributes(node, ctx) {
+function attributes(d, ctx) {
   const parts = [];
-  if (node.id) parts.push(`id="${escAttr(node.id)}"`);
-  if (node.class) parts.push(`class="${node.class}"`);
-  for (const [k, v] of Object.entries(node.attrs ?? {})) {
-    if (Array.isArray(v)) v.forEach((c) => ctx.useAsset(c.asset));
-    const value = attrValue(v, ctx);
-    parts.push(value === '' && !['alt', 'value'].includes(k) ? k : `${k}="${escAttr(value)}"`);
-  }
-  if (ctx.ids && node.sid) parts.push(`data-sas-id="${node.sid}"`);
+  if (d.id) parts.push(`id="${escAttr(d.id)}"`);
+  if (d.class) parts.push(`class="${d.class}"`);
+  for (const a of d.attrs) parts.push(a.bare ? a.name : `${a.name}="${escAttr(a.value)}"`);
+  if (ctx.ids && d.sid) parts.push(`data-sas-id="${d.sid}"`);
   return parts.length ? ` ${parts.join(' ')}` : '';
 }
 
-function svgMarkup(node, ctx) {
-  const raw = node.raw.replace(/asset:([^"#]+)/g, (all, file) => (ctx.useAsset(file), relFile(ctx.outPath, `assets/${file}`)));
-  const extra = [node.class && `class="${node.class}"`, ctx.ids && `data-sas-id="${node.sid}"`].filter(Boolean).join(' ');
-  return extra ? raw.replace(/^<svg\b/, `<svg ${extra}`) : raw;
+function svgMarkup(d, ctx) {
+  const extra = [d.class && `class="${d.class}"`, ctx.ids && `data-sas-id="${d.sid}"`].filter(Boolean).join(' ');
+  return extra ? d.markup.replace(/^<svg\b/, `<svg ${extra}`) : d.markup;
 }
 
 function emitNode(node, ctx, depth, pretty) {
-  if ('text' in node) return escText(node.text);
-  if (node.t === 'svg') return svgMarkup(node, ctx);
-  const open = `<${node.t}${attributes(node, ctx)}>`;
-  if (VOID.has(node.t)) return open;
-  const kids = node.children ?? [];
+  const d = describeNode(node, ctx.refs);
+  if (d.kind === 'text') return escText(d.text);
+  if (d.kind === 'svg') return svgMarkup(d, ctx);
+  const open = `<${d.tag}${attributes(d, ctx)}>`;
+  if (VOID.has(d.tag)) return open;
+  const kids = d.children;
   // Indent only when every child is a block and there is no loose text, so no inline spacing changes.
-  const blocky = pretty && !RAW_TEXT.has(node.t) && kids.length > 0
+  const blocky = pretty && !RAW_TEXT.has(d.tag) && kids.length > 0
     && kids.every((c) => ('text' in c ? !c.text.trim() : c.b));
   if (blocky) {
     const pad = '  '.repeat(depth + 1);
     const inner = kids.filter((c) => !('text' in c)).map((c) => pad + emitNode(c, ctx, depth + 1, true)).join('\n');
-    return `${open}\n${inner}\n${'  '.repeat(depth)}</${node.t}>`;
+    return `${open}\n${inner}\n${'  '.repeat(depth)}</${d.tag}>`;
   }
-  return `${open}${kids.map((c) => emitNode(c, ctx, depth + 1, false)).join('')}</${node.t}>`;
-}
-
-/**
- * Structured data as compact JSON that cannot end the script element early: parsed and written
- * again, with <, > and & as \u escapes. Invalid JSON-LD is left out (null).
- */
-const JSON_ESCAPES = { '<': '\\u003c', '>': '\\u003e', '&': '\\u0026' };
-export function safeJsonLd(json) {
-  try {
-    return JSON.stringify(JSON.parse(json)).replace(/[<>&]/g, (c) => JSON_ESCAPES[c]);
-  } catch {
-    return null;
-  }
+  return `${open}${kids.map((c) => emitNode(c, ctx, depth + 1, false)).join('')}</${d.tag}>`;
 }
 
 function headMarkup(page, ctx) {
-  const h = page.head;
-  const lines = ['<meta charset="utf-8">', '<meta name="viewport" content="width=device-width, initial-scale=1">'];
-  if (h.title) lines.push(`<title>${escText(h.title)}</title>`);
-  if (h.description) lines.push(`<meta name="description" content="${escAttr(h.description)}">`);
-  lines.push(`<link rel="canonical" href="${escAttr(h.canonical)}">`);
-  for (const m of h.meta) {
-    const key = m.property ? `property="${escAttr(m.property)}"` : `name="${escAttr(m.name)}"`;
-    lines.push(`<meta ${key} content="${escAttr(m.content)}">`);
-  }
-  for (const a of h.alternates) if (/^https?:\/\//i.test(a.href)) lines.push(`<link rel="alternate" hreflang="${escAttr(a.hreflang)}" href="${escAttr(a.href)}">`);
-  for (const i of h.icons) {
-    ctx.useAsset(i.asset);
-    const extra = `${i.sizes ? ` sizes="${escAttr(i.sizes)}"` : ''}${i.type ? ` type="${escAttr(i.type)}"` : ''}`;
-    lines.push(`<link rel="${escAttr(i.rel)}" href="${relFile(page.outPath, `assets/${i.asset}`)}"${extra}>`);
-  }
-  for (const p of h.preload ?? []) {
-    ctx.useAsset(p.asset);
-    lines.push(`<link rel="preload" href="${relFile(page.outPath, `assets/${p.asset}`)}" as="${p.as}"${p.type ? ` type="${escAttr(p.type)}"` : ''}${p.as === 'font' ? ' crossorigin' : ''}>`);
-  }
-  lines.push(`<link rel="stylesheet" href="${relFile(page.outPath, CSS_FILE)}">`);
-  for (const json of h.jsonLd) {
-    const safe = safeJsonLd(json);
-    if (safe) lines.push(`<script type="application/ld+json">${safe}</script>`);
-  }
+  const lines = headTags(page, ctx.refs).map((t) => {
+    const attrs = t.attrs.map(([k, v]) => (v === null ? ` ${k}` : ` ${k}="${escAttr(v)}"`)).join('');
+    if (t.tag === 'title') return `<title>${escText(t.text)}</title>`;
+    if (t.tag === 'script') {
+      const safe = safeJsonLd(t.jsonLd);
+      return safe ? `<script${attrs}>${safe}</script>` : null;
+    }
+    return `<${t.tag}${attrs}>`;
+  }).filter(Boolean);
   return lines.map((l) => `  ${l}`).join('\n');
 }
 
 /** One page as an HTML document. */
 export function emitPage(page, { ids = false, useAsset = () => true } = {}) {
-  const ctx = { outPath: page.outPath, ids, useAsset };
+  const ctx = { outPath: page.outPath, ids, refs: relativeRefs(page.outPath, useAsset) };
   const htmlAttrs = [page.head.lang && `lang="${escAttr(page.head.lang)}"`, page.html.class && `class="${page.html.class}"`].filter(Boolean).join(' ');
   return [
     '<!doctype html>',

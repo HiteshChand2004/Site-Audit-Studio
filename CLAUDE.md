@@ -52,7 +52,7 @@ Mongo; export to another stack from the saved IR without recapture; order 6.1 fi
 | Step | Scope | Status |
 |---|---|---|
 | 6.1 | Download zip for HTML (`recreate/export/zip.js`, `GET …/recreate/:recreateId/download`, UI button) | ✅ WIP |
-| 6.2 | Foundation: emitter registry, shared IR walker, stack in job/report, export from saved IR, toolchain setup | ⏳ |
+| 6.2 | Foundation: emitter registry, shared IR walker, stack in job/report, export from saved IR, toolchain setup | ✅ WIP |
 | 6.3 | React+Vite | ⏳ |
 | 6.4 | Next.js | ⏳ |
 | 6.5 | MERN | ⏳ |
@@ -64,6 +64,29 @@ site/ (= dist/), unminified/ (readable css/js that differ from dist)}`; never ca
 Limits 350 MB / 5000 files (413 before the first byte); webp/png/woff2/mp4… stored, the rest deflated. Only a recreate with
 `report.safety.safe` and the stack it was built for (`?stack=` must match). HEAD plans without streaming: the app checks with HEAD
 first and shows `X-Download-Error`. Test: `recreate-export.test.js`.
+
+6.2 details (foundation, no new stack yet — `html` is the only `ready` emitter):
+- **Emitter registry** (`recreate/emit/index.js`): one entry per stack id (`html`, `react-vite`, `nextjs`, `mern`; the last three
+  `status: 'planned'`): `{ id, label, status, toolchain, scripts, assetsTarget, emit(ir, opts) → { files: Map, assets: Set }, build?(o) }`.
+  `projects.js STACKS` and the Recreate route gate (`isReadyStack`) come from it; `GET /api/stacks` lists them with
+  `toolchainInstalled` (+ the `setup` command). The client still has its own `RECREATE_STACKS` (switched over in 6.6).
+- **Shared IR walker** (`emit/walk.js`): `refValue` (resolves `{asset,page,anchor,live,external}` through the emitter's
+  `refs`: `assetHref`, `pageHref`, `stylesheetHref`, `useAsset`), `describeNode` (text / svg / element as plain data),
+  `headTags` (the head as ordered tag descriptors), `safeJsonLd`, `relativeRefs`. `emit/html.js` only serialises them;
+  its output is byte-identical to before (checked on 8 saved real IRs, with and without measurement ids).
+  `emit/write.js writeProject` (was `generate.js writeSite`) writes files + hard-linked assets to `assetsTarget`.
+- **Report**: `report.stack` = the project's stack; `report.outputs[stackId] = { status:'ready', dir, … }` (`html` → `dist`, set by
+  the build step; others by an export). Reports from before 6.2 count as `{ [stack]: dist }` (`reportOutputs`). The download
+  route accepts any stack that has a ready output (the zip itself is still HTML only: `planZip`).
+- **Export without recapture** (`recreate/export/fromIr.js`, `POST /api/projects/:id/recreate/:recreateId/export { stack }`):
+  reads `ir/site.json` + `assets/manifest.json`, `emitter.emit` → `stacks/<stack>.tmp` → optional `emitter.build` → renamed to
+  `stacks/<stack>/`; `report.outputs[stack]` is written to the DB row and `report.json`. Idempotent (existing output returned,
+  200 vs 201), under the global job lock, 409 for a planned stack or a missing toolchain, 404 when the IR/assets were pruned,
+  nothing left behind on a failed build. Lives inside the recreate folder, so retention covers it.
+- **Toolchains** (`server/toolchains/<id>/package.json`, own `node_modules`, gitignored): pinned `react-vite` (vite 6.3.5,
+  plugin-react 4.5.0, react/react-dom 19.1.0) and `next` (next 15.3.3 + react 19.1.0). `npm run setup:toolchains -w server -- react-vite`
+  installs on demand (`--ignore-scripts`); no argument lists the status. `src/toolchains/index.js toolchainStatus(id)`.
+  Tests: `recreate-stacks.test.js` (registry, walker, golden HTML, writeProject, toolchain, export route with fake emitters).
 
 ### Phase 5 final summary
 After every successful Recreate the server audits the recreated site again (same Analyze pipeline on its `dist/`, served
@@ -623,7 +646,7 @@ API: `GET/POST /api/projects`, `GET/PATCH/DELETE /api/projects/:id` (PATCH takes
 completed recreate: `{ preview: { url, port, recreateId, … } | null }`; POST 404 without a recreate, 503 without a free port),
 `POST /api/projects/:id/reaudit` (re-audit of the latest completed recreate; 409 without one or while one runs),
 `GET /api/projects/:id/reaudit` (`{ last, result, stale }`; `result.checklist` = the full comparison), `GET /api/projects/:id/reaudit/current`,
-`GET /api/projects/:id/reaudit/:reauditId/events` (SSE), `GET /api/health`. PATCH `/api/projects/:id` also takes `recreate_pages` (0–20) and `target_domain`.
+`GET /api/projects/:id/reaudit/:reauditId/events` (SSE), `GET /api/projects/:id/recreate/:recreateId/download[?stack=]` (zip), `POST …/recreate/:recreateId/export` (stack from the saved IR), `GET /api/stacks`, `GET /api/health`. PATCH `/api/projects/:id` also takes `recreate_pages` (0–20) and `target_domain`.
 
 ## Currently dummy / known issues
 - Analyze is real. Projects that were never analyzed still get the **dummy** audit (`isDummy: true`, "Dummy data" badge).

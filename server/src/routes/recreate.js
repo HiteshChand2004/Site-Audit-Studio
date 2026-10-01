@@ -10,11 +10,10 @@ import { recreateJobs } from '../recreate/jobs.js';
 import { activePreview, PreviewError, startPreview, stopPreview } from '../recreate/preview.js';
 import { recreateDir } from '../recreate/workspace.js';
 import { slugFor } from '../recreate/discover.js';
+import { getEmitter, isReadyStack, listStacks } from '../recreate/emit/index.js';
+import { exportStack, reportOutputs } from '../recreate/export/fromIr.js';
 import { planZip, writeZip } from '../recreate/export/zip.js';
 import { RecreateError } from '../recreate/errors.js';
-
-// Stacks the recreate pipeline can emit so far (Phase 6 adds the others).
-export const RECREATE_STACKS = ['html'];
 
 const router = Router();
 
@@ -36,8 +35,9 @@ router.post('/:id/recreate', (req, res) => {
   if (!project.authorized) {
     return res.status(403).json({ error: 'This project is not confirmed as authorized for recreating.' });
   }
-  if (!RECREATE_STACKS.includes(project.stack)) {
-    return res.status(400).json({ error: 'Only the Plain HTML / CSS / JS stack can be recreated for now. Change the output stack.' });
+  if (!isReadyStack(project.stack)) {
+    const names = listStacks().filter((s) => s.status === 'ready').map((s) => s.label).join(', ');
+    return res.status(400).json({ error: `Only ${names} can be recreated for now. Change the output stack.` });
   }
   const analysis = latestAnalysis(project.id);
   if (!analysis) {
@@ -157,8 +157,9 @@ router.get('/:id/recreate/:recreateId/download', async (req, res) => {
   if (!row?.result_json) return res.status(404).json({ error: 'Recreate not found.' });
   const report = JSON.parse(row.result_json);
   const stack = req.query.stack ?? report.stack;
-  if (stack !== report.stack) {
-    const error = `This recreate was built for the ${report.stack} stack.`;
+  if (reportOutputs(report)[stack]?.status !== 'ready') {
+    const have = Object.keys(reportOutputs(report)).join(', ');
+    const error = `This recreate has no ${stack} output (available: ${have}).`;
     return res.status(400).set('X-Download-Error', error).json({ error });
   }
   if (report.safety?.safe !== true) {
@@ -187,6 +188,22 @@ router.get('/:id/recreate/:recreateId/download', async (req, res) => {
   } catch (err) {
     console.error('Download failed:', err.message);
     res.destroy(); // headers are sent: a cut stream is the only honest signal
+  }
+});
+
+// Export a completed recreate as another stack from its saved IR (no new capture). Idempotent: an
+// existing output is returned. The emit runs under the global job lock.
+router.post('/:id/recreate/:recreateId/export', async (req, res) => {
+  const { id, recreateId } = req.params;
+  const stack = req.body?.stack;
+  if (!UUID.test(id) || !UUID.test(recreateId)) return res.status(404).json({ error: 'Recreate not found.' });
+  if (typeof stack !== 'string' || !getEmitter(stack)) return res.status(400).json({ error: 'Choose one of the listed stacks.' });
+  try {
+    const { output, created } = await exportStack({ projectId: id, recreateId, stack });
+    res.status(created ? 201 : 200).json({ stack, output, created });
+  } catch (err) {
+    if (err instanceof RecreateError) return res.status(err.status ?? 500).json({ error: err.message });
+    throw err;
   }
 });
 

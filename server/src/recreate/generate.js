@@ -5,9 +5,10 @@
 // site is written again. A round that lowers the layout score is undone. The production build, the
 // safety gate and the verification of dist/ follow in the build step (build/index.js).
 // Writes ir/site.json (the IR the other stack emitters will use) and sets ctx.generated.
-import { copyFile, link, mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { emitSite } from './emit/html.js';
+import { writeProject } from './emit/write.js';
 import { applyIrFixes, applyTreeFixes, fixReport } from './fixers/index.js';
 import { fetchWordPress, isWordPress } from './fixers/wordpress.js';
 import { buildIR, prepareSite, readPageCaptures } from './ir/index.js';
@@ -20,20 +21,7 @@ const FIT_MARGIN = 25000;
 // Time for the WordPress REST lookup.
 const WP_BUDGET = 30000;
 
-async function writeSite(siteDir, out, assetsDir, known) {
-  for (const [file, content] of out.files) {
-    const target = path.join(siteDir, file);
-    await mkdir(path.dirname(target), { recursive: true });
-    await writeFile(target, content);
-  }
-  // Downloaded files are hard-linked (no second copy on disk); a copy when linking is not possible.
-  for (const file of out.assets) {
-    if (!known.has(file)) continue;
-    const target = path.join(siteDir, 'assets', file);
-    await mkdir(path.dirname(target), { recursive: true });
-    await link(path.join(assetsDir, file), target).catch((err) => (err.code === 'EEXIST' ? null : copyFile(path.join(assetsDir, file), target)));
-  }
-}
+const writeSite = (siteDir, out, assetsDir, known) => writeProject(siteDir, out, { assetsDir, known });
 
 /** Opens the shared renderer for the generated site once per job (closed when the job ends). */
 export async function siteRenderer(ctx) {

@@ -99,7 +99,8 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     report: {
       recreateId,
       analysisId: analysis.id,
-      stack: 'html',
+      stack: project.stack ?? 'html',
+      outputs: {},
       createdAt: new Date().toISOString(),
       baseUrl: null,
       pages: [],

@@ -7,9 +7,10 @@ import { buildDummyAudit } from '../dummy/audit.js';
 import { precheckUrl } from '../security/netGuard.js';
 import { MAX_RECREATE_PAGES, parseRecreatePages, parseTargetDomain } from '../recreate/inputs.js';
 import { stopPreview } from '../recreate/preview.js';
+import { stackIds } from '../recreate/emit/index.js';
 import { recreateSection } from '../reaudit/contract.js';
 
-export const STACKS = ['html', 'react-vite', 'nextjs', 'mern'];
+export const STACKS = stackIds();
 
 const router = Router();
 

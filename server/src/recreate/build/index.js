@@ -24,6 +24,8 @@ export async function buildStage(ctx) {
   ctx.progress(0, 'Building the production site');
   const minify = await buildDist({ files: out.files, assets: siteAssets, assetsDir, distDir });
   report.minify = { dir: 'dist', ...minify };
+  // The plain-HTML build is the reference every stack is measured against (and the html output).
+  report.outputs = { ...report.outputs, html: { status: 'ready', dir: 'dist' } };
 
   // Safety gate: anything that could run script or load from another origin fails the job.
   ctx.progress(0.06, 'Checking the site is safe to preview');

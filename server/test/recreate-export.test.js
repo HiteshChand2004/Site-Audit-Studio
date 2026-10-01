@@ -150,7 +150,7 @@ test('download route streams a valid zip, and refuses unsafe, unknown and wrong-
     // Wrong stack, unsafe build, other states.
     const wrong = await fetch(`${base}/${id}/recreate/${ok}/download?stack=next`);
     assert.equal(wrong.status, 400);
-    assert.match(wrong.headers.get('x-download-error'), /built for the html stack/);
+    assert.match(wrong.headers.get('x-download-error'), /no next output \(available: html\)/);
     const unsafe = await addRecreate(report({ safety: { safe: false } }));
     const u = await fetch(`${base}/${id}/recreate/${unsafe}/download`, { method: 'HEAD' });
     assert.equal(u.status, 409);

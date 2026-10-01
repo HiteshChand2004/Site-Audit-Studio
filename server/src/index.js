@@ -5,6 +5,7 @@ import analyzeRouter from './routes/analyze.js';
 import screensRouter from './routes/screens.js';
 import recreateRouter from './routes/recreate.js';
 import reauditRouter from './routes/reaudit.js';
+import stacksRouter from './routes/stacks.js';
 import { lockBusy } from './jobs/manager.js';
 
 const PORT = Number(process.env.PORT) || 4000;
@@ -23,6 +24,7 @@ app.use('/api/projects', analyzeRouter);
 app.use('/api/projects', screensRouter);
 app.use('/api/projects', recreateRouter);
 app.use('/api/projects', reauditRouter);
+app.use('/api/stacks', stacksRouter);
 
 app.use('/api', (_req, res) => {
   res.status(404).json({ error: 'Route not found.' });
