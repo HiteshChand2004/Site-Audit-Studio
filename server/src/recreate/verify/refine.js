@@ -13,7 +13,7 @@ import path from 'node:path';
 import { emitCss, CSS_FILE } from '../emit/css.js';
 import { applyFluidType, applyPhoneShrink } from '../ir/fluid.js';
 import { compareWidth, openSweepRenderer, renderSweepPage } from './responsive.js';
-import { visualSimilarity } from './layout.js';
+import { visualDiff } from './visualDiff.js';
 
 // The sweep widths each breakpoint decides: the tablet overrides (captured at 768) apply up to `tablet`, so
 // 900 / 1024 / 1280 are tablet or desktop; the mobile overrides (captured at 375) up to `mobile`, so 480 / 600
@@ -76,7 +76,7 @@ export async function refineResponsive({ ir, siteDir, workspace, sweep, deadline
         if (Date.now() > deadline) throw new OutOfTime();
         summary.renders++;
         const g = await renderSweepPage(renderer, page.outPath, w);
-        const visual = await visualSimilarity(path.join(workspace, 'capture', page.slug, o.file), g.png).catch(() => null);
+        const visual = await visualDiff(path.join(workspace, 'capture', page.slug, o.file), g.png).then((d) => d.score, () => null);
         const s = compareWidth(w, o, g, visual).score;
         cache.set(key, s);
         return s;

@@ -55,7 +55,9 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
 |---|---|---|
 | 4b.6.1 | Responsive sweep: measure the original vs the recreate at the 7 sweep widths (`report.responsive`) | ✅ WIP |
 | 4b.6.2 | Corrections driven by the sweep (breakpoint refinement, fluid type, phone shrink, width fixes) | ✅ WIP (long tail open, see below) |
-| 4b.7 | Visual diff score (perceptual diff, section heatmap) | ⏳ |
+| 4b.6.3 | A 4th captured view between 768 and 1440 (IR views 3 → N): the layout-at-width problem the breakpoint search cannot solve (decided: separate sub-step, later) | ⏳ |
+| 4b.6.x | Small follow-ups: overflow penalty continuous (px-based, so partial fixes show in the score); sweep time budget raised where pages are left out (parchaa `/platform`, panscience's 6th page) | ⏳ |
+| 4b.7 | Visual diff score (perceptual SSIM-style diff, bands, heatmaps, NEW-panel cards) | ✅ WIP |
 | 4b.1–4b.5 | Motion capture (hover/focus, reveal, continuous), IR `motion`, HTML emitter + `motion.js`, all stacks | ⏳ |
 | 4b.8–4b.9 | Re-audit rows + UI, real-site verification, docs | ⏳ |
 
@@ -66,7 +68,7 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
   capped at 8000 px, DPR 1, widths < 600 as a mobile viewport (both sides alike), 4 contexts at a time → `capture/<slug>/sweep/<width>-full.webp`; height and horizontal `scrollWidth` recorded.
 - Recreated side (`verify/responsive.js`): `dist/` served locally and rendered at the same widths, JavaScript off, other origins aborted → `fidelity/<slug>/sweep/<width>-full.webp`. HTTP ≥ 400 = error for that width.
 - Per width: `visual` (the fidelity check's 96 px similarity) 65 % + `height` score 35 % (`1 − 4·|ratio − 1|`), −15 for a horizontal overflow the original does not have. `low` = score < 80
-  (`FIDELITY_THRESHOLD`) or a new overflow; flags `taller` / `shorter` / `overflow` / `visual`. Thresholds are first guesses to be calibrated on real sites (4b.9).
+  (`FIDELITY_THRESHOLD`; since 4b.7: visual < 65) or a new overflow; flags `taller` / `shorter` / `overflow` / `visual`. Thresholds are first guesses to be calibrated on real sites (4b.9).
 - `report.responsive = { status: done|skipped|failed, widths, threshold, score, byWidth, driftCount, measured, worst[], pages[{ path, outPath, slug, score, drift[], widths{} }], skipped[] }`
   + warnings. Nothing measured → `failed` (+ warning). Tests: `recreate-responsive.test.js` (scoring, summary, original capture, the step on a local site: faithful copy ≥ 95, fixed-width container flagged as overflow at 320).
 
@@ -91,6 +93,22 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
   needs its own captured view (a 4th view between 768 and 1440); the breakpoint search only picks the lesser evil. panscience `/` and `/ventures` at 320 px: still a horizontal overflow (document 344 px wide)
   although the causes found (a 375 px wide absolute box, a nowrap 38 px heading, a 312 px button) were fixed one by one — the score is all-or-nothing on overflow, so shrink was not adopted. The known cases
   from 4a (parchaa `/solutions` mobile view alignment, panscience `/ventures` tablet/desktop drift) are alignment / layout-at-width problems: not solved here; `/solutions` is not in parchaa's default page set.
+
+4b.7 details (perceptual visual diff):
+- **Metric** (`verify/visualDiff.js`, `visualDiff(original, generated, { heatmap })`): both full-page screenshots scaled to the same width, compared block by block on luma (SSIM: mean, contrast, structure)
+  times a mean-colour factor (a hue or image that is wrong counts although the brightness is alike), at two scales: **detail** (8 px blocks at 384 px wide, after a sigma 2 blur so text lines a few px
+  apart are the same text) and **layout** (4 px blocks at 96 px wide, forgiving about shifts), 50/50. Rows only one page has count as different (a wrong page height costs). Result 0–1, `scales`,
+  10 `bands` top to bottom (fractions of the page, score each), `worst` bands (< 0.7), `heightOnlyOne`, and a heatmap WebP (red = differs).
+- **Where it is used**: *fidelity* keeps its formula and threshold 80 (old colour-distance `visual`, so numbers stay comparable with earlier phases) and **adds** `views[v].diff`
+  (`score` 0–100, `scales`, `bands`, `worst`, `heatmap` = `fidelity/<slug>/<view>-diff.webp`), `pages[].diff`, `fidelity.diff` (`score`, `threshold` **65**, `status`, `lowPages`; `flagDiff`) + warnings.
+  The *responsive sweep* (and its refinement) now uses the perceptual score as its visual term; a width is drift when visual < 65, the height is off, or a new overflow appears (`low = flags.length > 0`;
+  the 80 threshold of 4b.6 was too strict for the new scale: 34 of 42 widths flagged). `verify/equivalence.js` (stack vs HTML build, ≥ 97 % pixels) still uses the old `visualSimilarity` on purpose.
+- **Calibration** (111 real pairs from parchaa.com and panscience.xyz, fidelity views + sweep widths): the perceptual score ranks like the old one but is stricter (mean 0.695 vs 0.847): near-identical pages
+  0.95–0.999, decent 0.75–0.9, visibly broken ≤ 0.55 (e.g. parchaa `/` at 900 px: 0.52). Thresholds are first guesses to be confirmed in 4b.9. ~0.1–1 s per view.
+- **Bug found by the heatmap and fixed (general)**: the fidelity render and the sweep render took a full-page screenshot without loading `loading="lazy"` images, so photos below the fold were flat holes
+  and the recreate was scored down for pictures it has (since 4a.6). `layout.js loadLazyImages` (eager + decode, ≤ 6 s) now runs before the fidelity screenshot and in the sweep render (the fit pass is unchanged).
+- **API/UI**: `GET /api/projects/:id/recreate/:recreateId/fidelity/:slug/:file` (`{desktop,tablet,mobile}-{full,diff}.webp`). NEW panel report card: **Visual difference** (per page: band strip of the worst view,
+  score, heatmap link per view, low ones in warn colour) and **Between the captured widths** (sweep score per width, drift count, breakpoints the sweep adjusted, fluid type). Tests: `recreate-visualdiff.test.js`.
 
 ### Phase 6 final summary
 Every recreate can be built as **four stacks**, all from the same saved IR and all checked against the plain-HTML build: Plain HTML / CSS / JS (the

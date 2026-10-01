@@ -155,6 +155,25 @@ router.get('/:id/recreate/:recreateId/captures/:slug/:file', (req, res) => {
   );
 });
 
+// Screenshots of the recreated pages and the heatmaps of the visual diff (fidelity/<slug>/<view>-{full,diff}.webp).
+const FIDELITY_FILE = /^(desktop|tablet|mobile)-(full|diff).webp$/;
+
+router.get('/:id/recreate/:recreateId/fidelity/:slug/:file', (req, res) => {
+  const { id, recreateId, slug, file } = req.params;
+  if (!UUID.test(id) || !UUID.test(recreateId) || !CAPTURE_SLUG.test(slug) || !FIDELITY_FILE.test(file)) {
+    return res.status(404).json({ error: 'Image not found.' });
+  }
+  if (!doneRecreate.get(recreateId, id)) return res.status(404).json({ error: 'Recreate not found.' });
+  res.sendFile(
+    path.join(recreateDir(id, recreateId), 'fidelity', slug, file),
+    { headers: { 'Content-Type': 'image/webp', 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' } },
+    (err) => {
+      if (!err || res.headersSent) return;
+      res.status(404).json({ error: 'Image not found. Only the latest 2 recreates of a project keep their files.' });
+    },
+  );
+});
+
 // Download zip of a completed recreate, streamed from its folder. The stack is the one the recreate
 // was built for; only a recreate that passed the safety gate is offered.
 const doneReport = db.prepare(`SELECT result_json FROM recreates WHERE id = ? AND project_id = ? AND status = 'done'`);

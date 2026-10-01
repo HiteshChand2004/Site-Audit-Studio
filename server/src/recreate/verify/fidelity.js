@@ -11,8 +11,12 @@ import path from 'node:path';
 import { encode } from '../../audit/screenshots.js';
 import { measureSite, siteRenderer } from '../generate.js';
 import { compareLayout, SCORE_WEIGHTS, viewScore, visualSimilarity } from './layout.js';
+import { BANDS, SCALE_WEIGHTS, visualDiff } from './visualDiff.js';
 
 export const FIDELITY_THRESHOLD = 80;
+// The perceptual visual diff (visualDiff.js) is stricter than the rough score above: a decent recreate lands at 80–95,
+// a visibly broken layout at 55 or less. A view, page or the site under this is flagged (first calibration, 4b.7).
+export const DIFF_THRESHOLD = 65;
 // Scoring stops starting new pages this long before the build step's time limit: an unscored page
 // is reported, never a reason to fail the job.
 const DEADLINE_MARGIN = 20000;
@@ -47,6 +51,31 @@ export function flagFidelity(fidelity, threshold = FIDELITY_THRESHOLD) {
 }
 
 /**
+ * Flags of the perceptual visual diff (fidelity.diff, same idea as flagFidelity) and the warnings to report.
+ * @param {{ diff: { score: number|null }, pages: object[] }} fidelity
+ */
+export function flagDiff(fidelity, threshold = DIFF_THRESHOLD) {
+  const diff = fidelity.diff;
+  diff.threshold = threshold;
+  for (const page of fidelity.pages) {
+    if (!page.diff) continue;
+    for (const v of Object.values(page.views)) if (v.diff) v.diff.low = isLow(v.diff.score, threshold);
+    page.diff.low = isLow(page.diff.score, threshold);
+    page.diff.lowViews = Object.entries(page.views).filter(([, v]) => v.diff?.low).map(([id]) => id);
+  }
+  diff.low = isLow(diff.score, threshold);
+  diff.lowPages = fidelity.pages.filter((p) => p.diff?.low).map((p) => p.path);
+  diff.status = diff.score == null ? 'unknown' : diff.low ? 'low' : diff.lowPages.length ? 'mixed' : 'ok';
+  const warnings = [];
+  if (diff.low) warnings.push(`The visual difference score is ${diff.score}/100, below ${threshold}: the recreated pages look clearly different from the originals. See the heatmaps in the report.`);
+  else if (diff.lowPages.length) {
+    const list = diff.lowPages.slice(0, 5).map((p) => `${p} (${fidelity.pages.find((x) => x.path === p).diff.score})`).join(', ');
+    warnings.push(`The visual difference score is below ${threshold} on ${diff.lowPages.length} ${diff.lowPages.length === 1 ? 'page' : 'pages'}: ${list}${diff.lowPages.length > 5 ? ', …' : ''}.`);
+  }
+  return warnings;
+}
+
+/**
  * Scores the site rendered from `root` and sets ctx.report.fidelity.
  * @param {object} ctx  needs ctx.generated (generate step)
  * @param {{ root?: string, progress?: (fraction:number, message?:string)=>void }} [o]
@@ -70,12 +99,18 @@ export async function measureFidelity(ctx, { root, progress = ctx.progress } = {
       const file = `${view}-full.webp`;
       await encode(result.png, path.join(dir, file));
       const original = path.join(ctx.dir, 'capture', tree.info.slug, file);
-      const visual = (await exists(original)) ? await visualSimilarity(original, result.png).catch(() => null) : null;
+      const has = await exists(original);
+      const visual = has ? await visualSimilarity(original, result.png).catch(() => null) : null;
+      // Perceptual diff with a heatmap of where the pages differ (fidelity/<slug>/<view>-diff.webp).
+      const diff = has ? await visualDiff(original, result.png, { heatmap: path.join(dir, `${view}-diff.webp`) }).catch(() => null) : null;
       const entry = results.get(tree) ?? {};
       entry[view] = {
         score: viewScore(layout, visual),
         ...layout,
         visual,
+        ...(diff && {
+          diff: { score: Math.round(diff.score * 100), scales: diff.scales, bands: diff.bands, worst: diff.worst, heightOnlyOne: diff.heightOnlyOne, heatmap: `fidelity/${tree.info.slug}/${view}-diff.webp` },
+        }),
         height: { original: tree.htmlNode.views[view]?.rect[3] ?? null, generated: result.scrollHeight },
         screenshot: `fidelity/${tree.info.slug}/${file}`,
       };
@@ -86,7 +121,8 @@ export async function measureFidelity(ctx, { root, progress = ctx.progress } = {
 
   const pages = site.pages.map((t) => {
     const views = results.get(t) ?? {};
-    return { path: t.info.path, outPath: t.info.outPath, score: mean(Object.values(views).map((v) => v.score)), views };
+    const diffs = Object.values(views).map((v) => v.diff?.score).filter((s) => s != null);
+    return { path: t.info.path, outPath: t.info.outPath, score: mean(Object.values(views).map((v) => v.score)), ...(diffs.length && { diff: { score: mean(diffs) } }), views };
   });
   const unscored = pages.slice(rendered).map((p) => p.path);
   if (unscored.length) {
@@ -98,7 +134,14 @@ export async function measureFidelity(ctx, { root, progress = ctx.progress } = {
     score: mean(pages.map((p) => p.score).filter((s) => s != null)),
     pages,
     unscored,
+    diff: {
+      method: 'Perceptual (SSIM-style) comparison of the full-page screenshots: luma structure and mean colour per block at two scales; rows only one page has count as different.',
+      scales: SCALE_WEIGHTS,
+      bands: BANDS,
+      score: mean(pages.map((p) => p.diff?.score).filter((s) => s != null)),
+    },
   };
   ctx.report.warnings.push(...flagFidelity(fidelity));
+  ctx.report.warnings.push(...flagDiff(fidelity));
   ctx.report.fidelity = fidelity;
 }

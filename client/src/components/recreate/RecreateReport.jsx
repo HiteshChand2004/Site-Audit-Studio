@@ -25,8 +25,94 @@ function CheckRow({ ok, label, detail }) {
   );
 }
 
-/** Fidelity (overall + per page, flagged below the threshold), build verification and warnings. */
-export default function RecreateReport({ result }) {
+const bandTone = (score) => (score >= 0.85 ? 'ok' : score >= 0.65 ? 'mid' : 'bad');
+const VIEW_ORDER = ['desktop', 'tablet', 'mobile'];
+
+/** The page top to bottom in ten bands, coloured by how much the recreate differs from the original there. */
+function BandStrip({ bands, label }) {
+  return (
+    <span className={styles.strip} role="img" aria-label={label}>
+      {bands.map((b) => (
+        <span key={b.from} data-tone={bandTone(b.score)} title={`${Math.round(b.from * 100)}–${Math.round(b.to * 100)}% of the page: ${Math.round(b.score * 100)}`} />
+      ))}
+    </span>
+  );
+}
+
+/** Perceptual visual difference per page: where it differs (bands of the worst view) and a heatmap per view. */
+function VisualDiff({ result, projectId }) {
+  const diff = result.fidelity.diff;
+  const threshold = diff.threshold ?? 65;
+  const slugOf = Object.fromEntries((result.pages ?? []).map((p) => [p.path, p.slug]));
+  return (
+    <section aria-label="Visual difference" className={styles.section}>
+      <div className={styles.head}>
+        <span className={styles.title}>Visual difference</span>
+        <span className={styles.meta}>perceptual · threshold {threshold}</span>
+        <span className={`${styles.score} mono`} data-tone={scoreTone(diff.score, threshold)}>
+          {diff.score ?? '—'}
+          <small>/100</small>
+        </span>
+      </div>
+      <ul className={styles.pages}>
+        {result.fidelity.pages.filter((p) => p.diff).map((p) => {
+          const views = VIEW_ORDER.filter((v) => p.views[v]?.diff);
+          const worst = views.reduce((a, v) => (a == null || p.views[v].diff.score < p.views[a].diff.score ? v : a), null);
+          const slug = slugOf[p.path];
+          return (
+            <li key={p.path} className={styles.diffPage}>
+              <span className={`${styles.path} mono`} title={p.path}>{p.path}</span>
+              <BandStrip bands={p.views[worst].diff.bands} label={`Where the ${VIEW_LABEL[worst]} view differs, top to bottom`} />
+              <span className={`${styles.pageScore} mono`}>{p.diff.score}</span>
+              <span className={styles.links}>
+                {slug && views.map((v) => (
+                  <a key={v} href={`/api/projects/${projectId}/recreate/${result.recreateId}/fidelity/${slug}/${v}-diff.webp`} target="_blank" rel="noopener noreferrer" title={`Heatmap of the ${VIEW_LABEL[v]} view (red = differs)`} data-low={p.views[v].diff.low}>
+                    {VIEW_LABEL[v]} {p.views[v].diff.score}
+                  </a>
+                ))}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+/** The layout between the captured widths: score per sweep width and what the sweep changed. */
+function Responsive({ result }) {
+  const r = result.responsive;
+  const bp = result.generate?.responsive?.breakpoints;
+  const changed = ['tablet', 'mobile'].filter((k) => bp?.[k]?.changed);
+  const fluid = result.generate?.responsive?.fluid?.adopted;
+  return (
+    <section aria-label="Responsive layout" className={styles.section}>
+      <div className={styles.head}>
+        <span className={styles.title}>Between the captured widths</span>
+        <span className={styles.meta}>{r.widths.length} widths · threshold {r.threshold}</span>
+        <span className={`${styles.score} mono`} data-tone={scoreTone(r.score, r.threshold)}>
+          {r.score ?? '—'}
+          <small>/100</small>
+        </span>
+      </div>
+      <ul className={styles.chips}>
+        {r.widths.map((w) => (
+          <li key={w} data-tone={scoreTone(r.byWidth[w], r.threshold)} title={`Mean score at ${w} px`}>
+            <span className="mono">{w}</span> {r.byWidth[w] ?? '—'}
+          </li>
+        ))}
+      </ul>
+      <p className={styles.note}>
+        {r.driftCount ? `${r.driftCount} of ${r.measured} page widths drift from the original.` : 'No page width drifts from the original.'}
+        {changed.length > 0 && ` Breakpoints adjusted to the original: ${changed.map((k) => `${k === 'mobile' ? 'phone' : k} up to ${Math.round(bp[k].chosen)} px`).join(', ')}.`}
+        {fluid && ' Type scales with the screen.'}
+      </p>
+    </section>
+  );
+}
+
+/** Fidelity (overall + per page, flagged below the threshold), visual difference, build verification and warnings. */
+export default function RecreateReport({ result, projectId }) {
   const fidelity = result.fidelity;
   const threshold = fidelity?.threshold ?? 80;
   const verify = result.verify;
@@ -68,6 +154,10 @@ export default function RecreateReport({ result }) {
           </ul>
         </section>
       )}
+
+      {result.fidelity?.diff?.score != null && projectId && <VisualDiff result={result} projectId={projectId} />}
+
+      {result.responsive?.status === 'done' && <Responsive result={result} />}
 
       {verify && (
         <section aria-label="Build verification" className={styles.section}>

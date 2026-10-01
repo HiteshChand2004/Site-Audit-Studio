@@ -79,6 +79,18 @@ function collectRects() {
 }
 
 /**
+ * Makes images below the fold load (loading="lazy" images wait for a scroll that a full-page screenshot never makes)
+ * and waits for them, at most `limit` ms. Without it the screenshot shows flat holes where the photos are, and the
+ * recreate is scored down for pictures it does have.
+ */
+export async function loadLazyImages(page, limit = 6000) {
+  await page.evaluate((ms) => Promise.race([
+    Promise.all([...document.images].map((img) => { img.loading = 'eager'; return img.decode().catch(() => null); })),
+    new Promise((resolve) => setTimeout(resolve, ms)),
+  ]), limit).catch(() => {});
+}
+
+/**
  * Renders one page of the measurement build (served through `renderer.server.overrides`).
  * @returns {Promise<{ rects: Record<string, number[]>, scrollHeight: number, png: Buffer|null }>}
  */
@@ -87,6 +99,7 @@ export async function renderPage(renderer, outPath, viewId, { screenshot = false
   try {
     await page.goto(`${renderer.server.origin}/${outPath}`, { waitUntil: 'load', timeout });
     await page.evaluate(() => document.fonts.ready.then(() => true));
+    if (screenshot) await loadLazyImages(page);
     const data = await page.evaluate(collectRects);
     let png = null;
     if (screenshot) {

@@ -244,7 +244,7 @@ export default function NewPanel({ project, audit, syncScroll = false, onFrameSc
             <div className={styles.sectionTitle}>
               <span>Recreate report</span>
             </div>
-            <RecreateReport result={result} />
+            <RecreateReport result={result} projectId={project.id} />
           </>
         )}
 

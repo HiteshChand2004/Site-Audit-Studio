@@ -1,18 +1,20 @@
 // Responsive sweep, recreated side and comparison. The recreated site (dist/) is rendered at the same
 // widths as the original was screenshotted (capture/sweep.js): locally only, page JavaScript off, like
 // the fidelity check. Per width the two full-page screenshots are compared by
-//   visual   = the rough 96 px-wide similarity of the fidelity check (layout.js visualSimilarity),
+//   visual   = the perceptual score of the visual diff (visualDiff.js),
 //   height   = generated page height against the original's,
 //   overflow = a horizontal scrollbar the recreate has and the original does not.
-// A width scoring below the fidelity threshold is flagged as drift; the sweep never fails a job.
+// A width is flagged as drift when its visual score is under the visual-diff threshold (fidelity.js DIFF_THRESHOLD),
+// its page height is off, or the recreate overflows sideways where the original does not; the sweep never fails a job.
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { USER_AGENT } from '../../audit/http.js';
 import { launchBrowser } from '../../audit/render.js';
 import { encode, MAX_HEIGHT, MOBILE_UA } from '../../audit/screenshots.js';
 import { sweepFile, sweepView } from '../capture/sweep.js';
-import { FIDELITY_THRESHOLD } from './fidelity.js';
-import { visualSimilarity } from './layout.js';
+import { DIFF_THRESHOLD } from './fidelity.js';
+import { loadLazyImages } from './layout.js';
+import { visualDiff } from './visualDiff.js';
 import { startSiteServer } from './server.js';
 
 export const SWEEP_WEIGHTS = { visual: 0.65, height: 0.35 };
@@ -64,6 +66,7 @@ export async function renderSweepPage(renderer, outPath, width, { timeout = 1500
     const response = await page.goto(`${renderer.server.origin}/${outPath}`, { waitUntil: 'load', timeout });
     if (!response || response.status() >= 400) throw new Error(`HTTP ${response?.status() ?? 0}`);
     await page.evaluate(() => document.fonts.ready.then(() => true));
+    await loadLazyImages(page);
     const size = await page.evaluate(() => ({
       height: document.documentElement.scrollHeight,
       scrollWidth: Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth ?? 0),
@@ -87,7 +90,7 @@ export async function renderSweepPage(renderer, outPath, width, { timeout = 1500
  * @param {{ height: number, scrollWidth: number }} generated
  * @param {number|null} visual  0–1, null when a screenshot is missing
  */
-export function compareWidth(width, original, generated, visual, threshold = FIDELITY_THRESHOLD) {
+export function compareWidth(width, original, generated, visual, threshold = DIFF_THRESHOLD) {
   const ratio = original.height > 0 ? generated.height / original.height : 1;
   const heightScore = Math.max(0, 1 - Math.abs(1 - ratio) * 4);
   const overflow = {
@@ -100,7 +103,7 @@ export function compareWidth(width, original, generated, visual, threshold = FID
   const flags = [];
   if (Math.abs(generated.height - original.height) > 80 && Math.abs(1 - ratio) > HEIGHT_TOLERANCE) flags.push(ratio > 1 ? 'taller' : 'shorter');
   if (newOverflow) flags.push('overflow');
-  if (visual != null && score < threshold) flags.push('visual');
+  if (visual != null && visual * 100 < threshold) flags.push('visual');
   return {
     width,
     score,
@@ -108,7 +111,7 @@ export function compareWidth(width, original, generated, visual, threshold = FID
     height: { original: original.height, generated: generated.height, ratio: Math.round(ratio * 1000) / 1000 },
     scrollWidth: { original: original.scrollWidth, generated: generated.scrollWidth },
     flags,
-    low: score < threshold || newOverflow,
+    low: flags.length > 0,
   };
 }
 
@@ -126,7 +129,7 @@ export async function compareSweepPage({ renderer, workspace, page, original, wi
     try {
       const g = await renderSweepPage(renderer, page.outPath, width);
       await encode(g.png, path.join(dir, sweepFile(width)));
-      const visual = await visualSimilarity(path.join(workspace, 'capture', page.slug, o.file), g.png).catch(() => null);
+      const visual = await visualDiff(path.join(workspace, 'capture', page.slug, o.file), g.png).then((d) => d.score, () => null);
       out[width] = { ...compareWidth(width, o, g, visual), original: o.file, generatedFile: `fidelity/${page.slug}/sweep/${sweepFile(width)}`, truncated: o.truncated };
     } catch (err) {
       out[width] = { width, error: `The recreated page could not be rendered at this width: ${err.message.split('\n')[0]}` };
@@ -142,7 +145,7 @@ const mean = (xs) => (xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.
  * @param {{ path: string, outPath: string, slug: string, widths: Record<number, object> }[]} pages
  * @returns {{ responsive: object, warnings: string[] }}
  */
-export function summarizeSweep(pages, widths, { skipped = [], threshold = FIDELITY_THRESHOLD } = {}) {
+export function summarizeSweep(pages, widths, { skipped = [], threshold = DIFF_THRESHOLD } = {}) {
   const rows = pages.map((p) => {
     const measured = Object.values(p.widths).filter((w) => w.score != null);
     return {

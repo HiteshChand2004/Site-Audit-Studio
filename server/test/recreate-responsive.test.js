@@ -203,3 +203,21 @@ test('fluid type is applied per rule and removes the stepped overrides it replac
   assert.equal(out[2], rules[2]);
 });
 
+
+test('the recreated page is rendered with its lazy images loaded (no flat holes below the fold)', async () => {
+  const sharp = (await import('sharp')).default;
+  const { openSweepRenderer, renderSweepPage } = await import('../src/recreate/verify/responsive.js');
+  const dir = await tempDir();
+  await writeFile(path.join(dir, 'red.png'), await sharp({ create: { width: 300, height: 200, channels: 3, background: { r: 220, g: 20, b: 20 } } }).png().toBuffer());
+  await writeFile(path.join(dir, 'index.html'), '<!doctype html><html><head><meta charset="utf-8"><title>T</title></head><body style="margin:0"><div style="height:3000px;background:#fff"></div><img src="red.png" width="300" height="200" loading="lazy" alt=""></body></html>');
+  const renderer = await openSweepRenderer(dir, [600]);
+  try {
+    const { png, height } = await renderSweepPage(renderer, 'index.html', 600);
+    assert.ok(height >= 3200);
+    const { data, info } = await sharp(png).extract({ left: 10, top: 3050, width: 100, height: 100 }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    assert.equal(info.channels, 3);
+    assert.ok(data[0] > 180 && data[1] < 80, `the image is drawn (rgb ${data[0]},${data[1]},${data[2]})`);
+  } finally {
+    await renderer.close();
+  }
+});
