@@ -103,6 +103,7 @@ export async function buildNext({ dir, ir, out, assets, report, htmlDist, signal
   progress(1, 'Next.js build verified');
   return {
     dist: 'out',
+    pages: out.routes.map((r) => ({ outPath: r.outPath, path: r.route, file: r.nextOutPath })),
     build: { toolchain: 'next', ms: Date.now() - started, steps: built.steps, ...bundle },
     safety: { safe: true, source: { checked: source.checked }, dist: safety.checked },
     verify: { ok: true, checked: verify.checked, html: verify.html, anchors: verify.anchors.length },

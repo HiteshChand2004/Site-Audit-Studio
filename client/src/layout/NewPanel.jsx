@@ -9,7 +9,9 @@ import FixChecklist from '../components/recreate/FixChecklist.jsx';
 import FixReport from '../components/recreate/FixReport.jsx';
 import RecreateReport from '../components/recreate/RecreateReport.jsx';
 import AnalyzeProgress from '../components/audit/AnalyzeProgress.jsx';
-import { stackById } from '../constants.js';
+import { STACKS, stackById } from '../constants.js';
+import StackOutput from '../components/recreate/StackOutput.jsx';
+import { outputsOf, outputState, pageOf, shownStack } from '../stacks.js';
 import { api } from '../api/client.js';
 import { isJobActive, useProjects } from '../store/useProjects.js';
 import styles from './Panel.module.css';
@@ -53,6 +55,11 @@ export default function NewPanel({ project, audit, syncScroll = false, onFrameSc
   const ensurePreview = useProjects((s) => s.ensurePreview);
   const [downloadError, setDownloadError] = useState(null);
   const [downloading, setDownloading] = useState(false);
+  // The stack the zip is for (default: the project's); a build that does not exist yet is made on demand.
+  const [zipStack, setZipStack] = useState(project.stack);
+  const [building, setBuilding] = useState(false);
+  const reloadRecreate = useProjects((s) => s.reloadRecreate);
+  const reloadAudit = useProjects((s) => s.reloadAudit);
   const [viewport, setViewport] = useState(1440);
   const [page, setPage] = useState('index.html');
   const pages = result?.preview?.pages ?? result?.pages?.map((p) => p.outPath) ?? [];
@@ -60,23 +67,64 @@ export default function NewPanel({ project, audit, syncScroll = false, onFrameSc
   useEffect(() => setPage(pages[0] ?? 'index.html'), [result?.recreateId]);
   // The OLD panel shows the same page of the original.
   useEffect(() => onPageChange?.(page), [page, onPageChange]);
-  useEffect(() => setDownloadError(null), [result?.recreateId, project.id]);
-  const canDownload = Boolean(result?.recreateId && result.safety?.safe && !busy);
+  const outputs = outputsOf(result);
+  const stackState = outputState(result, project.stack);
+  const shown = shownStack(result, project.stack);
+  const shownOutput = outputs[shown];
+  useEffect(() => {
+    setDownloadError(null);
+    setZipStack(project.stack);
+  }, [result?.recreateId, project.id, project.stack]);
+
+  // The app stack's build is made right after the recreate; follow it until it is ready (or failed), then move the preview onto it.
+  useEffect(() => {
+    if (stackState !== 'building') return undefined;
+    let stopped = false;
+    const timer = setInterval(async () => {
+      const data = await api.getRecreate(project.id).catch(() => null);
+      if (stopped || !data?.result || !outputsOf(data.result)[project.stack]) return;
+      await reloadRecreate(project.id);
+      await reloadAudit(project.id);
+    }, 4000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [stackState, project.id, project.stack, reloadRecreate, reloadAudit]);
+
+  // A preview of another build than the one shown (the stack was changed, or its build just finished): start the right one.
+  const previewStale = Boolean(result && preview?.url && preview.recreateId === result.recreateId && !preview.loading && (preview.stack ?? 'html') !== shown);
+  useEffect(() => {
+    if (previewStale) ensurePreview(project.id);
+  }, [previewStale, project.id, ensurePreview]);
+
+  const zipReady = outputs[zipStack]?.status === 'ready';
+  const canDownload = Boolean(result?.recreateId && result.safety?.safe && !busy && !building);
   async function download() {
     setDownloading(true);
     setDownloadError(null);
     try {
-      const problem = await api.checkDownload(project.id, result.recreateId);
+      if (!zipReady) {
+        // Built from the saved recreate (no new capture); it waits for any running job.
+        setBuilding(true);
+        await api.exportStack(project.id, result.recreateId, zipStack);
+        await reloadRecreate(project.id);
+        await reloadAudit(project.id);
+        setBuilding(false);
+      }
+      const problem = await api.checkDownload(project.id, result.recreateId, zipStack);
       if (problem) setDownloadError(problem);
-      else window.location.assign(api.downloadUrl(project.id, result.recreateId));
-    } catch {
-      setDownloadError('Cannot reach the API server.');
+      else window.location.assign(api.downloadUrl(project.id, result.recreateId, zipStack));
+    } catch (err) {
+      setBuilding(false);
+      setDownloadError(err.message || 'Cannot reach the API server.');
+      await reloadRecreate(project.id).catch(() => {});
     } finally {
       setDownloading(false);
     }
   }
   const live = Boolean(result && preview?.url && preview.recreateId === result.recreateId);
-  const src = live ? `${preview.url}${pageUrl(page)}` : null;
+  const src = live ? `${preview.url}${pageUrl(pageOf(result, shown, page).file)}` : null;
   // Sync scroll needs the page drawn at full height (the app cannot scroll a frame from another
   // origin); the height of each page and width comes from the recreate report.
   const view = VIEWPORTS.find((v) => v.id === viewport)?.view;
@@ -89,7 +137,18 @@ export default function NewPanel({ project, audit, syncScroll = false, onFrameSc
         <span className={styles.chip}>NEW</span>
         <span className={styles.headerSub}>Recreated site</span>
         <span className={styles.headerRight}>
-          <Badge tone="accent">{stack.name}</Badge>
+          {stackState === 'building' && (
+            <span title="The build of this stack is being made; the plain-HTML build is shown until it is ready">
+              <Badge tone="neutral">Building…</Badge>
+            </span>
+          )}
+          <span
+            title={shown !== project.stack && result
+              ? `Showing the plain-HTML build: the ${stack.name} build is ${stackState === 'failed' ? 'not available (it failed)' : 'not ready'}`
+              : `Output stack: ${stack.name}`}
+          >
+            <Badge tone={shown !== project.stack && result ? 'warn' : 'accent'}>{stackById(result ? shown : project.stack).name}</Badge>
+          </span>
         </span>
       </header>
 
@@ -125,7 +184,7 @@ export default function NewPanel({ project, audit, syncScroll = false, onFrameSc
               <select className={`${own.pageSelect} mono`} value={page} onChange={(e) => setPage(e.target.value)} aria-label="Page to preview">
                 {pages.map((p) => (
                   <option key={p} value={p}>
-                    /{pageUrl(p)}
+                    {pageOf(result, shown, p).path}
                   </option>
                 ))}
               </select>
@@ -170,6 +229,16 @@ export default function NewPanel({ project, audit, syncScroll = false, onFrameSc
           )}
         </PreviewFrame>
 
+        {live && shownOutput?.forms?.stored?.length > 0 && (
+          <p className={styles.dummyNote} role="note">
+            <Info size={13} aria-hidden="true" />
+            <span>
+              Forms need the server: this preview shows the client only. Run <span className="mono">npm start</span> in the downloaded
+              project (see its README) to try them.
+            </span>
+          </p>
+        )}
+
         {result && (result.fidelity || result.verify) && (
           <>
             <div className={styles.sectionTitle}>
@@ -177,6 +246,27 @@ export default function NewPanel({ project, audit, syncScroll = false, onFrameSc
             </div>
             <RecreateReport result={result} />
           </>
+        )}
+
+        {result && project.stack !== 'html' && (
+          <StackOutput
+            stack={project.stack}
+            state={stackState}
+            output={outputs[project.stack]}
+            busy={busy || building}
+            onBuild={() => {
+              setZipStack(project.stack);
+              setBuilding(true);
+              setDownloadError(null);
+              api.exportStack(project.id, result.recreateId, project.stack)
+                .catch((err) => setDownloadError(err.message))
+                .finally(async () => {
+                  await reloadRecreate(project.id);
+                  await reloadAudit(project.id);
+                  setBuilding(false);
+                });
+            }}
+          />
         )}
 
         {audit && (
@@ -219,16 +309,30 @@ export default function NewPanel({ project, audit, syncScroll = false, onFrameSc
       </div>
 
       <footer className={styles.footer}>
+        <select
+          className={`${own.stackSelect} mono`}
+          value={zipStack}
+          onChange={(e) => setZipStack(e.target.value)}
+          disabled={!result || building}
+          aria-label="Stack to download"
+        >
+          {STACKS.map((x) => (
+            <option key={x.id} value={x.id}>
+              {x.name}
+              {outputs[x.id]?.status === 'ready' ? '' : ' — build first'}
+            </option>
+          ))}
+        </select>
         <Button
-          icon={Download}
+          icon={building ? RotateCw : Download}
           disabled={!canDownload || downloading}
           onClick={download}
-          title={canDownload ? 'Download the recreated site as a .zip' : 'Run Recreate first'}
+          title={canDownload ? (zipReady ? 'Download the recreated site as a .zip' : `Build the ${stackById(zipStack).name} version, then download it`) : 'Run Recreate first'}
         >
-          Download .zip
+          {building ? 'Building…' : zipReady ? 'Download .zip' : 'Build & download'}
         </Button>
         <span className={styles.footerNote} role={downloadError ? 'alert' : undefined}>
-          {downloadError ?? 'Preview runs on the production build.'}
+          {downloadError ?? (building ? 'Building from the saved recreate; this can take a couple of minutes.' : 'Preview runs on the production build.')}
         </span>
       </footer>
     </section>

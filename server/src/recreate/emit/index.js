@@ -38,6 +38,7 @@ export const isReadyStack = (id) => getEmitter(id)?.status === 'ready';
 export const listStacks = () => [...registry.values()].map(({ id, label, status, toolchain, scripts }) => ({ id, label, status, toolchain, scripts }));
 
 registerEmitter({ id: 'html', label: 'Plain HTML / CSS / JS', status: 'ready', emit: emitSite });
-registerEmitter({ id: 'react-vite', label: 'React + Vite', status: 'ready', toolchain: 'react-vite', scripts: true, assetsTarget: 'public/assets', emit: emitReact, build: buildReact });
-registerEmitter({ id: 'nextjs', label: 'Next.js', status: 'ready', toolchain: 'next', scripts: 'inline', assetsTarget: 'public/assets', emit: emitNext, build: buildNext });
-registerEmitter({ id: 'mern', label: 'MERN', status: 'ready', toolchain: 'mern', scripts: true, assetsTarget: 'client/public/assets', emit: emitMern, build: buildMern });
+// `runtimes`: the platform detection ids (detection/rules) of the framework the output ships on purpose.
+registerEmitter({ id: 'react-vite', label: 'React + Vite', status: 'ready', toolchain: 'react-vite', scripts: true, runtimes: ['react'], assetsTarget: 'public/assets', emit: emitReact, build: buildReact });
+registerEmitter({ id: 'nextjs', label: 'Next.js', status: 'ready', toolchain: 'next', scripts: 'inline', runtimes: ['nextjs', 'react'], assetsTarget: 'public/assets', emit: emitNext, build: buildNext });
+registerEmitter({ id: 'mern', label: 'MERN', status: 'ready', toolchain: 'mern', scripts: true, runtimes: ['react'], assetsTarget: 'client/public/assets', emit: emitMern, build: buildMern });

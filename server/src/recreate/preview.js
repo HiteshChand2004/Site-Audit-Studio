@@ -159,17 +159,17 @@ const serial = (fn) => {
   return run;
 };
 
-const info = (p) => ({ projectId: p.projectId, recreateId: p.recreateId, port: p.port, url: `${p.origin}/`, scripts: Boolean(p.scripts), startedAt: p.startedAt });
+const info = (p) => ({ projectId: p.projectId, recreateId: p.recreateId, port: p.port, url: `${p.origin}/`, scripts: Boolean(p.scripts), stack: p.stack ?? 'html', startedAt: p.startedAt });
 
 /** The active preview, or null. */
 export const activePreview = () => (active ? info(active) : null);
 
 /**
  * Starts (or keeps) the preview of one recreate's dist/ folder; any other preview is stopped first.
- * @param {{ projectId: string, recreateId: string, root: string, scripts?: boolean|'inline' }} o  one recreate can have several
+ * @param {{ projectId: string, recreateId: string, root: string, scripts?: boolean|'inline', stack?: string }} o  stack: which build the folder is (the app shows it)  one recreate can have several
  *   outputs (stacks): the preview is kept only while it serves the same folder with the same script policy
  */
-export function startPreview({ projectId, recreateId, root, scripts = false }) {
+export function startPreview({ projectId, recreateId, root, scripts = false, stack = 'html' }) {
   return serial(async () => {
     if (active?.projectId === projectId && active.recreateId === recreateId && active.root === root && active.scripts === scripts) return info(active);
     if (!(await stat(root).catch(() => null))?.isDirectory()) throw new PreviewError('This recreate has no production build to preview.');
@@ -178,7 +178,7 @@ export function startPreview({ projectId, recreateId, root, scripts = false }) {
       active = null;
     }
     const served = await servePreview(root, { range: PREVIEW_PORTS, scripts });
-    active = { projectId, recreateId, root, scripts, ...served, startedAt: new Date().toISOString() };
+    active = { projectId, recreateId, root, scripts, stack, ...served, startedAt: new Date().toISOString() };
     return info(active);
   });
 }

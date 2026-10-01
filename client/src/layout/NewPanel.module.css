@@ -37,6 +37,22 @@
   font-size: var(--fs-xs);
 }
 
+.stackSelect {
+  width: 200px;
+  height: 28px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-xs);
+}
+
+.stackSelect:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .pageSelect:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);

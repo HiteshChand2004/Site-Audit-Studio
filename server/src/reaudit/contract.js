@@ -3,20 +3,24 @@
 //
 // Real (a re-audit finished):
 //   { isDummy: false, status: 'done'|'queued'|'running', reauditId, recreateId, analysisId, reauditedAt,
-//     stale, staleReasons: ('recreate'|'analysis')[], job, lastError,
+//     stack, stackLabel (the build that was audited: html, react-vite, nextjs, mern),
+//     stale, staleReasons: ('recreate'|'analysis'|'stack')[], job, lastError,
 //     checklist: [{ key, status: 'fixed'|'open'|'manual', title, detail }],   ← the original 3-status contract
 //     version, summary, scores, metrics, categories, items, scope, notes }      ← the full comparison (compare/)
 //   stale 'recreate': a newer recreate exists that this checklist is not about;
-//   stale 'analysis': the audit shown is a newer analysis than the one the checklist compared against.
+//   stale 'analysis': the audit shown is a newer analysis than the one the checklist compared against;
+//   stale 'stack': the project's stack output is ready (or changed) since the build this checklist audited.
+//   `checklist.stack` (in `items` metadata below) is { id, label, jsBytes: { before, after } }, additive.
 // Sample (no re-audit finished yet): the labelled dummy checklist plus the re-audit state, so the app can
 // show progress or offer a run: { isDummy: true, status: 'not-started'|'queued'|'running'|'failed',
 //   recreateId (latest completed recreate, or null), job, lastError, checklist }.
 import { db } from '../db/index.js';
 import { buildDummyAudit } from '../dummy/audit.js';
+import { targetStack } from '../recreate/export/fromIr.js';
 import { reauditJobs } from './jobs.js';
 
 const latestDoneRecreate = db.prepare(`
-  SELECT id FROM recreates WHERE project_id = ? AND status = 'done' ORDER BY started_at DESC LIMIT 1
+  SELECT id, result_json FROM recreates WHERE project_id = ? AND status = 'done' ORDER BY started_at DESC LIMIT 1
 `);
 const latestDoneReaudit = db.prepare(`
   SELECT id, started_at, result_json FROM reaudits
@@ -46,7 +50,8 @@ const jobView = (job) => job && { id: job.id, status: job.status, step: job.step
  * @returns {object} audit.recreate
  */
 export function recreateSection(project, audit) {
-  const recreateId = latestDoneRecreate.get(project.id)?.id ?? null;
+  const latestRecreate = latestDoneRecreate.get(project.id);
+  const recreateId = latestRecreate?.id ?? null;
   const job = jobView(reauditJobs.active(project.id));
   const done = latestDoneReaudit.get(project.id);
   const attempt = latestAttempt.get(project.id);
@@ -70,10 +75,17 @@ export function recreateSection(project, audit) {
   const staleReasons = [];
   if (result.recreateId !== recreateId) staleReasons.push('recreate');
   if (audit?.analysisId && result.analysisId && audit.analysisId !== result.analysisId) staleReasons.push('analysis');
+  // The same recreate, but the build the project would be audited on now is not the one that was audited.
+  if (result.recreateId === recreateId && latestRecreate?.result_json) {
+    const now = targetStack(JSON.parse(latestRecreate.result_json), project.stack);
+    if ((result.stack ?? 'html') !== now) staleReasons.push('stack');
+  }
   return {
     isDummy: false,
     status: job?.status ?? 'done',
     reauditId: result.reauditId,
+    stack: result.stack ?? 'html',
+    stackLabel: result.stackLabel ?? null,
     recreateId: result.recreateId,
     analysisId: result.analysisId,
     reauditedAt: result.reauditedAt,
@@ -89,6 +101,7 @@ export function recreateSection(project, audit) {
     categories: c.categories ?? [],
     items: c.items ?? [],
     scope: c.scope ?? null,
+    output: c.stack ?? null,
     notes: c.notes ?? [],
   };
 }

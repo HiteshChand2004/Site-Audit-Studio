@@ -56,7 +56,7 @@ Mongo; export to another stack from the saved IR without recapture; order 6.1 fi
 | 6.3 | React+Vite | ✅ WIP |
 | 6.4 | Next.js | ✅ WIP |
 | 6.5 | MERN | ✅ WIP |
-| 6.6 | Re-audit (target-stack-aware runtime rows) + UI | ⏳ |
+| 6.6 | Re-audit (target-stack-aware runtime rows) + UI | ✅ WIP |
 | 6.7 | Real-site verification + docs | ⏳ |
 
 6.1 details: zip streamed on demand (archiver, nothing stored or buffered); layout `<host>-<stack>/{README.md, RECREATE-REPORT.md,
@@ -169,6 +169,31 @@ first and shows `X-Download-Error`. Test: `recreate-export.test.js`.
 - Tests: `recreate-mern.test.js` (form detection + rewiring, project files, the shipped validator and a stand-in MongoDB driver, the generated server tests, a real
   export with a contact form + login + search form); the shipped tests are `template/server/test/*.test.js`. Real sites checked: fixture (1 form), panscience.xyz,
   parchaa.com (no text forms in the captured pages): client equivalent, hydration clean, 15/15 server tests.
+
+6.6 details (re-audit and UI know the stack):
+- **What is audited**: `export/fromIr.js` has `outputRoot`, `targetStack(report, projectStack)` (the project's stack when its output is ready, else the plain-HTML
+  build — the same rule the preview uses) and `outputPages(report, stack)` (`[{ outPath, path }]`: where the output serves each page; builds record `pages`).
+  `runReaudit` serves that folder (`servePreview({ connectSelf, scripts: emitter.scripts })`: an app's own scripts run, so Lighthouse measures what visitors get),
+  seeds the crawl with the output's own URLs, and stores `stack` / `stackLabel` in its result. `compareAudits({ output })` pairs pages at their new URL
+  (`scope.js pathOnNew`: Next.js moves `about.html` to `/about/`).
+- **Runtime rows**: `platformItems` is target-aware — an OLD platform whose runtime the output stack ships on purpose (`emitter.runtimes`: react-vite `react`, nextjs
+  `nextjs`+`react`, mern `react`) becomes `na` with "<Name> runtime kept on purpose (<Stack> output)"; every other platform is still `fixed` when its runtime is gone.
+  `finish()` honours a `preset` status (rows decided by their own rule) and `statusLabel`.
+- **JavaScript shipped** (`stack.javascript`, category performance): always a row when a side has JavaScript. Before = Lighthouse `resource-summary` script transfer size
+  of the original; after = the build's **gzipped** bundle size (`outputs[stack].build.js.gzipBytes`; a local preview does not compress, so Lighthouse's number would
+  overstate the cost), or Lighthouse's own figure for a build without bundles. `fixed` (none left), `improved` (< 90 %), `regressed` (> 110 %), else `changed`
+  (labelled "About the same" / "Not compared" in the app). `checklist.stack = { id, label, jsBytes }`.
+- **Contract** (`reaudit/contract.js`): `audit.recreate.stack`, `stackLabel`, `output` (= `checklist.stack`); stale reason `'stack'` when the project's target build is not the one
+  the checklist audited (its stack changed, or the build finished after the re-audit).
+- **Preview** reports `stack` (`startPreview({ stack })`, `info.stack`). `exportStack` now records every failure as `outputs[stack] = { status: 'failed', error }`.
+- **UI**: `client/src/stacks.js` (`outputsOf`, `outputState` ready | failed | building | none, `shownStack`, `pageOf`). NEW panel: stack chip (the build shown; warn tone +
+  title when it is the plain-HTML fallback; "Building…" chip), page picker and preview URL follow the output's own page URLs, polling of the build queued after a recreate
+  (then the preview moves onto it and the audit reloads), `StackOutput` card (building / failed with "Build again" / not built with "Build" / ready: equivalence, hydration,
+  safety, JavaScript shipped, fidelity, URL changes, forms + server tests, warnings), **forms note** under the preview of a MERN build with stored forms ("this preview shows the
+  client only; run `npm start`"), footer **stack picker + Download** (a stack that is not built yet reads "Build & download": it is built from the saved recreate, then downloaded).
+  `FixReport`: stack badge in the header, footnote naming the audited build, stale text for `stack`. `RECREATE_STACKS` has all four stacks.
+- Tests: `reaudit-stack.test.js` (output selection, moved-page pairing, JS rows incl. regressions, kept runtimes, a real re-audit of a Next-style output, stale `stack`).
+  Seen in the real app (scratch API + Vite, Playwright) with projects in each state: Next.js ready + re-audit, MERN with forms, building, failed, never built.
 
 ### Phase 5 final summary
 After every successful Recreate the server audits the recreated site again (same Analyze pipeline on its `dist/`, served

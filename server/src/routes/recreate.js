@@ -11,7 +11,7 @@ import { activePreview, PreviewError, startPreview, stopPreview } from '../recre
 import { recreateDir } from '../recreate/workspace.js';
 import { slugFor } from '../recreate/discover.js';
 import { getEmitter, isReadyStack, listStacks } from '../recreate/emit/index.js';
-import { exportStack, reportOutputs } from '../recreate/export/fromIr.js';
+import { exportStack, outputRoot, reportOutputs, targetStack } from '../recreate/export/fromIr.js';
 import { planZip, writeZip } from '../recreate/export/zip.js';
 import { RecreateError } from '../recreate/errors.js';
 
@@ -94,11 +94,11 @@ async function latestBuild(project) {
   const row = latestDoneId.get(project.id);
   if (!row) return null;
   const dir = recreateDir(project.id, row.id);
-  const outputs = reportOutputs(row.result_json ? JSON.parse(row.result_json) : {});
-  const stack = outputs[project.stack]?.status === 'ready' && project.stack !== 'html' ? project.stack : 'html';
-  const root = stack === 'html' ? path.join(dir, 'dist') : path.join(dir, outputs[stack].dir, outputs[stack].dist ?? '');
+  const report = row.result_json ? JSON.parse(row.result_json) : {};
+  const stack = targetStack(report, project.stack);
+  const root = outputRoot(dir, report, stack);
   if (!(await stat(root).catch(() => null))?.isDirectory()) return null;
-  return { recreateId: row.id, root, scripts: getEmitter(stack)?.scripts ?? false };
+  return { recreateId: row.id, root, scripts: getEmitter(stack)?.scripts ?? false, stack };
 }
 
 const previewOf = (projectId) => {

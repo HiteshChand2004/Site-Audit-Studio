@@ -116,10 +116,12 @@ export const api = {
   subscribeAnalysis: (id, analysisId, handlers) => subscribe(`/api/projects/${id}/analyze/${analysisId}/events`, handlers),
   startRecreate: (id) => request(`/projects/${id}/recreate`, { method: 'POST' }),
   getCurrentRecreate: (id) => request(`/projects/${id}/recreate/current`),
-  downloadUrl: (id, recreateId) => `/api/projects/${id}/recreate/${recreateId}/download`,
+  downloadUrl: (id, recreateId, stack) => `/api/projects/${id}/recreate/${recreateId}/download${stack ? `?stack=${encodeURIComponent(stack)}` : ''}`,
+  // Builds another stack from the saved recreate (no new capture): resolves when it is ready, rejects with why it failed.
+  exportStack: (id, recreateId, stack) => request(`/projects/${id}/recreate/${recreateId}/export`, { method: 'POST', body: { stack } }),
   // HEAD first: it plans the zip without streaming it, so a refusal comes back as a message.
-  async checkDownload(id, recreateId) {
-    const res = await fetch(api.downloadUrl(id, recreateId), { method: 'HEAD' });
+  async checkDownload(id, recreateId, stack) {
+    const res = await fetch(api.downloadUrl(id, recreateId, stack), { method: 'HEAD' });
     return res.ok ? null : res.headers.get('X-Download-Error') ?? `Download failed (${res.status}).`;
   },
   getRecreate: (id) => request(`/projects/${id}/recreate`),

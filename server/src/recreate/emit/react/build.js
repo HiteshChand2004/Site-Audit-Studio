@@ -100,6 +100,7 @@ export async function buildReact({ dir, ir, assets, report, htmlDist, signal, pr
   progress(1, 'React build verified');
   return {
     dist: 'dist',
+    pages: ir.pages.map((p) => ({ outPath: p.outPath, path: pagePath(p.outPath), file: p.outPath })),
     build: { toolchain, ms: Date.now() - started, steps: built.steps, ...bundle },
     safety: { safe: true, source: { checked: source.checked }, dist: safety.checked },
     verify: { ok: true, checked: verify.checked, html: verify.html, anchors: verify.anchors.length },

@@ -17,6 +17,9 @@ export function normUrl(url) {
 /** URL path of an emitted page: "about/index.html" → "/about/", "index.html" → "/". */
 export const newPathOf = (outPath) => `/${outPath.replace(/(^|\/)index\.html$/, '$1')}`;
 
+// A page's path on the recreated site: the one its output recorded (Next.js moves about.html to /about/), else the original layout.
+const pathOnNew = (page) => page.newPath ?? newPathOf(page.outPath);
+
 /**
  * Pairs every recreated page with its page in the OLD crawl and in the NEW crawl.
  * @param {object} o
@@ -44,7 +47,7 @@ export function pairPages({ reportPages, oldPages, newPages, newOrigin }) {
   const missingInOld = [];
   const used = new Set();
   for (const rp of reportPages) {
-    const path = newPathOf(rp.outPath);
+    const path = pathOnNew(rp);
     const oldPage = oldByUrl.get(normUrl(rp.url));
     const newPage = newByUrl.get(normUrl(`${newOrigin}${path}`));
     if (!newPage) missingInNew.push(path);
@@ -72,6 +75,6 @@ export function toOriginalUrl(url, { newOrigin, oldOrigin, reportPages }) {
   }
   if (u.origin !== newOrigin) return url;
   const key = normUrl(`${newOrigin}${u.pathname}`);
-  const page = reportPages.find((p) => normUrl(`${newOrigin}${newPathOf(p.outPath)}`) === key);
+  const page = reportPages.find((p) => normUrl(`${newOrigin}${pathOnNew(p)}`) === key);
   return page ? page.url : `${oldOrigin}${u.pathname}${u.search}`;
 }

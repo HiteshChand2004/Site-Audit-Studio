@@ -18,6 +18,25 @@ const refuse = (status, message) => Object.assign(new RecreateError(message), { 
 /** The stacks a stored report can be downloaded as: reports from before Phase 6 only know their own. */
 export const reportOutputs = (report) => report.outputs ?? { [report.stack ?? 'html']: { status: 'ready', dir: 'dist' } };
 
+/** The folder an output is served, previewed and audited from (the plain-HTML build is `dist`, an app's is e.g. `stacks/nextjs/out`). */
+export function outputRoot(dir, report, stack) {
+  const out = reportOutputs(report)[stack];
+  return path.join(dir, out?.dir ?? 'dist', out?.dist ?? '');
+}
+
+/** The output to preview and re-audit: `wanted` (the project's stack) when it is ready, the plain-HTML build otherwise. */
+export const targetStack = (report, wanted = report.stack) => (reportOutputs(report)[wanted]?.status === 'ready' ? wanted : 'html');
+
+/**
+ * The pages of an output: [{ outPath (in the original site), path (its URL path in this output, "/about/") }].
+ * Stacks that move a page (Next.js: about.html → /about/) record the mapping; for the others it is the original layout.
+ */
+export function outputPages(report, stack) {
+  const given = reportOutputs(report)[stack]?.pages;
+  if (given?.length) return given.map(({ outPath, path: urlPath }) => ({ outPath, path: urlPath }));
+  return (report.pages ?? []).map((p) => ({ outPath: p.outPath, path: `/${p.outPath.replace(/(^|\/)index\.html$/, '$1')}` }));
+}
+
 const selectRow = db.prepare(`SELECT result_json FROM recreates WHERE id = ? AND project_id = ? AND status = 'done'`);
 const updateRow = db.prepare('UPDATE recreates SET result_json = ? WHERE id = ?');
 
@@ -62,8 +81,9 @@ async function runExport({ projectId, recreateId, stack }) {
   } catch (err) {
     await rm(tmp, { recursive: true, force: true }).catch(() => {});
     // A failed emit or build is remembered (the app shows why and offers a retry); nothing else is kept.
-    if (err instanceof RecreateError) {
-      const failed = { status: 'failed', error: err.message, at: new Date().toISOString() };
+    {
+      if (!(err instanceof RecreateError)) console.error(`[export ${stack}] ${err.stack ?? err}`);
+      const failed = { status: 'failed', error: err instanceof RecreateError ? err.message : 'The build failed unexpectedly (see the server log).', at: new Date().toISOString() };
       report.outputs = { ...outputs, [stack]: failed };
       updateRow.run(JSON.stringify(report), recreateId);
       await writeFile(path.join(dir, 'report.json'), JSON.stringify(report, null, 1)).catch(() => {});

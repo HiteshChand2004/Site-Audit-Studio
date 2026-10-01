@@ -1,6 +1,7 @@
 // Re-audit (Phase 5): the Analyze pipeline run again on a recreated site, then the fix checklist:
 // the recreated site (NEW) compared with the analysis it was built from (OLD) (compare/).
-// The recreate's dist/ build is served on a throwaway 127.0.0.1 port through the preview handler
+// The recreate's build of the project's stack (the plain-HTML dist/, or an app's own output: React, Next.js, MERN client)
+// is served on a throwaway 127.0.0.1 port through the preview handler
 // (never the app's active preview, which moves when another project is selected). Only that port is
 // reachable on loopback: the SSRF policy of the run allows it as an internal port, and everything
 // else keeps the user policy (public addresses; loopback only with SAS_ALLOW_LOCALHOST).
@@ -8,6 +9,8 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { makeOverallPct, runAnalysis, STEPS as AUDIT_STEPS } from '../audit/index.js';
 import { db, projectDir } from '../db/index.js';
+import { getEmitter } from '../recreate/emit/index.js';
+import { outputPages, outputRoot, reportOutputs, targetStack } from '../recreate/export/fromIr.js';
 import { servePreview } from '../recreate/preview.js';
 import { recreateDir } from '../recreate/workspace.js';
 import { createNetPolicy, userPolicy } from '../security/netGuard.js';
@@ -50,7 +53,10 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
   const row = selectRecreate.get(recreateId, project.id);
   if (!row) throw new ReauditError('This recreate is no longer available. Run Recreate again.');
   const report = JSON.parse(row.result_json);
-  const root = path.join(recreateDir(project.id, recreateId), 'dist');
+  // What the user sees and downloads: the project's stack when its output is ready, the plain-HTML build otherwise.
+  const stack = targetStack(report, project.stack);
+  const emitter = getEmitter(stack);
+  const root = outputRoot(recreateDir(project.id, recreateId), report, stack);
   if (!(await stat(root).catch(() => null))?.isDirectory()) {
     throw new ReauditError('The recreated site has no production build to audit. Run Recreate again.');
   }
@@ -60,9 +66,13 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
   }
 
   // connect-src 'self': Lighthouse fetches robots.txt from inside the page (previewHeaders).
-  const served = await servePreview(root, { connectSelf: true });
+  // An app's own scripts run (Lighthouse measures what its visitors get); the CSP still allows only the build's own.
+  const served = await servePreview(root, { connectSelf: true, scripts: emitter?.scripts ?? false });
   try {
-    const pages = (report.pages ?? []).map((p) => pagePath(p.outPath));
+    // Pages at the URL the output serves them (a stack may move some).
+    const outputPageList = outputPages(report, stack);
+    const pages = outputPageList.map((p) => p.path.replace(/^\//, ''));
+    const output = { stack, label: emitter?.label ?? stack, runtimes: emitter?.runtimes ?? [], pages: outputPageList, build: reportOutputs(report)[stack]?.build };
     const netPolicy = createNetPolicy({ allowLoopback: userPolicy().allowLoopback, internalPorts: [served.port] });
     progress('serve', 1);
     const audit = await runAnalysis({
@@ -89,6 +99,7 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
       next: await loadSide(reauditDir(project.id, recreateId, reauditId), audit),
       report,
       newOrigin: served.origin,
+      output,
     });
     progress('compare', 1);
     return {
@@ -98,6 +109,9 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
       // The throwaway origin the audit ran against (URLs in `audit` use it); it is closed now.
       origin: served.origin,
       pages,
+      // Which build was audited (the app shows it, and flags the result stale when the project's stack changes).
+      stack,
+      stackLabel: output.label,
       reauditedAt: new Date().toISOString(),
       audit,
       checklist,

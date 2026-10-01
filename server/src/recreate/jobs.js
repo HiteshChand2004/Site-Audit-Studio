@@ -59,7 +59,7 @@ function queueStackExport(project, recreateId) {
       // The app shows the stack's own build when it is ready: move this project's preview onto it.
       if (activePreview()?.projectId !== project.id) return;
       const root = path.join(recreateDir(project.id, recreateId), output.dir, output.dist ?? '');
-      await startPreview({ projectId: project.id, recreateId, root, scripts: getEmitter(stack)?.scripts ?? false });
+      await startPreview({ projectId: project.id, recreateId, root, scripts: getEmitter(stack)?.scripts ?? false, stack });
     })
     .catch((err) => console.warn(`[recreates ${recreateId}] ${stack} output not built: ${err.message}`));
 }

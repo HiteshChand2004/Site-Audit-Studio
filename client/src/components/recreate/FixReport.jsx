@@ -30,6 +30,7 @@ const SCORES = [
 const STALE = {
   recreate: 'A newer recreate exists; this checklist is about the previous one. Re-audit to check the latest site.',
   analysis: 'The original site was analyzed again after this recreate; the checklist compares against the earlier analysis. Recreate to compare with the new analysis.',
+  stack: 'This checklist audited a different build of the site than the one the project uses now (its stack changed, or its build finished since). Re-audit to check the current one.',
 };
 
 const seconds = (ms) => (ms == null ? '—' : `${(ms / 1000).toFixed(1)} s`);
@@ -46,7 +47,7 @@ function scoreTone(score) {
   return score >= 90 ? 'ok' : score >= 50 ? 'warn' : 'bad';
 }
 
-function ScoreStrip({ scores, metrics }) {
+function ScoreStrip({ scores, metrics, stackLabel = null }) {
   const [device, setDevice] = useState('mobile');
   if (!scores?.before && !scores?.after) return null;
   const before = scores.before?.[device];
@@ -99,7 +100,10 @@ function ScoreStrip({ scores, metrics }) {
           ))}
         </p>
       )}
-      <p className={styles.footnote}>* The recreated site is measured on a local preview; confirm performance after deploying.</p>
+      <p className={styles.footnote}>
+        * The recreated site is measured on a local preview; confirm performance after deploying.
+        {stackLabel && ` Audited build: ${stackLabel}. Its JavaScript runtime is part of these numbers; the “JavaScript shipped” row shows the cost.`}
+      </p>
     </section>
   );
 }
@@ -176,7 +180,7 @@ function Row({ item }) {
           <StatusMark status={item.status} />
           <span className={styles.rowTitle}>{item.title}</span>
           {item.review && <Badge tone="warn">Review</Badge>}
-          <span className={styles.rowTag}>{meta.label}</span>
+          <span className={styles.rowTag}>{item.statusLabel ?? meta.label}</span>
           <ChevronRight size={14} className={styles.chevron} aria-hidden="true" />
         </summary>
         <div className={styles.rowBody}>
@@ -259,7 +263,9 @@ export default function FixReport({ data, busy, onReaudit }) {
     <div className={styles.card}>
       <div className={styles.head}>
         <div className={styles.headText}>
-          <span className={styles.title}>Original vs recreated</span>
+          <span className={styles.title}>
+            Original vs recreated{data.stackLabel && <Badge tone={data.stack === 'html' ? 'neutral' : 'accent'}>{data.stackLabel}</Badge>}
+          </span>
           <span className={styles.meta}>
             Re-audited {data.reauditedAt ? new Date(data.reauditedAt).toLocaleString() : '—'}
             {compared > 0 && ` · ${compared} ${compared === 1 ? 'page' : 'pages'} compared`}
@@ -288,7 +294,7 @@ export default function FixReport({ data, busy, onReaudit }) {
         </div>
       )}
 
-      <ScoreStrip scores={data.scores} metrics={data.metrics} />
+      <ScoreStrip scores={data.scores} metrics={data.metrics} stackLabel={data.stack && data.stack !== 'html' ? data.stackLabel : null} />
 
       <div className={styles.chips} role="group" aria-label="Filter by status">
         {CHIPS.map((s) =>
