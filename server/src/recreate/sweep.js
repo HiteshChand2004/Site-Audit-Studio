@@ -15,6 +15,7 @@ import { LATER_STEPS_RESERVE } from './inspect.js';
 
 // Stop starting pages this long before the step's time limit; the page in progress gets the time left.
 const MARGIN = 8000;
+const HARD_MARGIN = 1500;
 // Less time than this left at the start: the sweep is skipped (one page needs about this long).
 const MIN_TIME = 20000;
 
@@ -53,7 +54,7 @@ export async function sweepStage(ctx, { widths = SWEEP_WIDTHS } = {}) {
       ctx.progress(i / pages.length, `Capturing ${page.path} (${i + 1} of ${pages.length})`);
       const started = Date.now();
       try {
-        captured[page.slug] = await withTimeout(captureSweep(browser, page, ctx.dir, { widths }), Math.max(5000, deadline - Date.now()), `Responsive capture of ${page.path}`);
+        captured[page.slug] = await withTimeout(captureSweep(browser, page, ctx.dir, { widths }), Math.max(1000, (ctx.stepDeadline ?? Infinity) - HARD_MARGIN - Date.now()), `Responsive capture of ${page.path}`);
       } catch (err) {
         if (!(err instanceof TimeoutError)) throw err;
         notCaptured.push(page.path);

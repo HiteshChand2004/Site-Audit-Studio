@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { launchBrowser } from '../src/audit/render.js';
 import { captureSweep, SWEEP_WIDTHS } from '../src/recreate/capture/sweep.js';
+import { applyPhoneShrink } from '../src/recreate/ir/fluid.js';
 import { refineResponsive } from '../src/recreate/verify/refine.js';
 import { startSiteServer } from '../src/recreate/verify/server.js';
 import { userPolicy, withNetPolicy } from '../src/security/netGuard.js';
@@ -136,4 +137,89 @@ test('refinement stops at its deadline and leaves the IR choices as they were', 
   assert.equal(refined.fluid, false);
   const none = await refineResponsive({ ir, siteDir: site, workspace: dir, sweep: { widths: SWEEP_WIDTHS, pages: {} } });
   assert.equal(none.summary.status, 'skipped');
+});
+
+// Absolute / fixed boxes (Phase 4b.6.2): a px width taken from the 375 px capture overflows on a 320 px screen.
+test('absolutely positioned boxes: stretched by their insets, or as wide as their containing block, stay fluid', async () => {
+  const { normalizeView } = await import('../src/recreate/ir/styles.js');
+  const node = (tag, rect, style, children = []) => ({ tag, attrs: {}, children, views: { mobile: { rect, hidden: false, style } } });
+  const html = node('html', [0, 0, 375, 2000], { display: 'block' });
+  const section = node('div', [0, 100, 375, 600], { display: 'block', position: 'relative' });
+  const chain = [html, section];
+  const opts = { assetFile: () => null, boxSizingReset: false };
+  const run = (n, ch = chain) => normalizeView(n, 'mobile', ch, opts);
+
+  // A fixed header with 16 px on each side: 375 − 16 − 15.5 = 343.5 wide, no width of its own.
+  const header = node('header', [16, 0, 343.5, 60], { display: 'block', position: 'fixed', left: '16px', right: '15.5px', top: '0px' });
+  const fixed = run(header, [html]);
+  assert.equal(fixed.width, undefined);
+  assert.equal(fixed.left, '16px');
+  assert.equal(fixed.right, '15.5px');
+
+  // An absolute box as wide as its positioned parent keeps filling it.
+  const full = run(node('div', [0, 100, 375, 200], { display: 'block', position: 'absolute', left: '0px', top: '0px' }));
+  assert.equal(full.width, '100%');
+
+  // A box narrower than its parent, or fixed in size, keeps its px width.
+  const badge = run(node('div', [20, 120, 120, 40], { display: 'block', position: 'absolute', left: '20px', top: '20px' }));
+  assert.equal(badge.width, '120px');
+  assert.equal(badge.left, '20px');
+  // Stretched (inset 0 on both sides) was already free of a width.
+  const inset = run(node('div', [0, 100, 375, 200], { display: 'block', position: 'absolute', left: '0px', right: '0px', top: '0px' }));
+  assert.equal(inset.width, undefined);
+});
+
+test('phone shrink scales large phone-view type down below 375 px, and only large type', () => {
+  const rules = [
+    { selector: '.hero', parts: { base: { 'font-size': '64px' }, mobile: { 'font-size': '38px' } } },
+    { selector: '.body', parts: { base: { 'font-size': '18px' }, mobile: { 'font-size': '16px' } } },
+    { selector: '.inherits', parts: { base: { 'font-size': '40px' }, mobile: { 'font-size': 'inherit' } } },
+    { selector: '.keeps', parts: { base: { 'font-size': '30px' } } },
+  ];
+  const copy = structuredClone(rules);
+  const { rules: out, changed } = applyPhoneShrink(rules);
+  assert.deepEqual(rules, copy, 'the input is not modified');
+  assert.equal(changed, 2);
+  assert.equal(out[0].parts.mobile['font-size'], 'min(38px, 10.133vw)');
+  assert.equal(out[1], rules[1]);
+  assert.equal(out[2], rules[2]);
+  // Without a phone override the size that applies there is the base one.
+  assert.equal(out[3].parts.mobile['font-size'], 'min(30px, 8vw)');
+});
+
+test('the sweep takes phone shrink when a one-line heading runs out of a 320 px screen', async () => {
+  const body = '<h1 class="hero">artificial intelligence.</h1><p>Short text.</p>';
+  // The original's heading scales with the screen (10.133vw = 38 px at 375 px) and does not wrap.
+  const { original, site } = await setup('body{margin:0;font-family:sans-serif}h1{margin:0;white-space:nowrap;font-weight:400;font-size:10.133vw}@media (min-width:768px){h1{font-size:64px}}p{margin:0;font-size:16px}', body);
+  const rules = [
+    { selector: '.hero', parts: { base: { margin: '0', 'white-space': 'nowrap', 'font-weight': '400', 'font-size': '64px' }, mobile: { 'font-size': '38px' } } },
+    { selector: 'p', parts: { base: { margin: '0', 'font-size': '16px' } } },
+  ];
+  const live = await startSiteServer(original);
+  try {
+    const { dir, sweep } = await sweepOf(`${live.origin}/`);
+    const refined = await refineResponsive({ ir: irFor(rules, { tablet: 1023.98, mobile: 767.98, source: 'default' }), siteDir: site, workspace: dir, sweep });
+    assert.equal(refined.summary.shrink?.adopted, true, JSON.stringify(refined.summary.shrink));
+    assert.equal(refined.shrink, true);
+    assert.match(refined.rules[0].parts.mobile['font-size'], /^min\(38px, /);
+  } finally {
+    await live.close();
+  }
+});
+
+test('fields and buttons with a px width never grow past their parent', async () => {
+  const { resolveHints } = await import('../src/recreate/ir/styles.js');
+  for (const tag of ['button', 'input', 'select', 'textarea', 'img']) {
+    const decls = { desktop: { '@rw': { px: 200, ratio: 0.5 } }, mobile: { '@rw': { px: 312.4, ratio: 0.9 } } };
+    resolveHints(decls, ['desktop', 'mobile'], tag);
+    assert.equal(decls.mobile.width, '312px', tag);
+    assert.equal(decls.mobile['max-width'], '100%', tag);
+  }
+  // One that fills its parent is 100% wide and needs no cap; other elements are not touched.
+  const full = { desktop: { '@rw': { px: 300, ratio: 1 } } };
+  resolveHints(full, ['desktop'], 'button');
+  assert.deepEqual(full.desktop, { width: '100%' });
+  const div = { desktop: { '@rw': { px: 200, ratio: 0.5 } } };
+  resolveHints(div, ['desktop'], 'div');
+  assert.equal(div.desktop['max-width'], undefined);
 });

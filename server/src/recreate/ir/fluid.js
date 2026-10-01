@@ -70,3 +70,31 @@ export function applyFluidType(rules) {
   });
   return { rules: out, changed, properties };
 }
+
+// Phone shrink: the mobile styles are captured at 375 px, and a screen narrower than that (320 px phones) gets
+// the same px sizes. Large type that does not wrap (a one-line heading, a button label) then runs out of the
+// screen, where the original's type scales down with the viewport. Large font sizes of the mobile styles are
+// written as min(X px, Y vw): the captured size at 375 px and above, proportionally smaller below. Like fluid
+// type it is only used when the responsive sweep scores it better (verify/refine.js).
+const SHRINK_FROM = 24; // px; smaller type stays legible and is left alone
+const shrinkValue = (v) => {
+  const m = PX.exec(String(v ?? ''));
+  if (!m || Number(m[1]) < SHRINK_FROM) return null;
+  return `min(${m[1]}px, ${round((Number(m[1]) / WIDTHS.mobile) * 100)}vw)`;
+};
+
+/**
+ * Rules with the large font sizes of the phone view as min(px, vw). The input is not modified.
+ * @returns {{ rules: object[], changed: number }}
+ */
+export function applyPhoneShrink(rules) {
+  let changed = 0;
+  const out = rules.map((rule) => {
+    const { m } = effective(rule.parts, 'font-size');
+    const value = shrinkValue(m);
+    if (!value) return rule;
+    changed++;
+    return { ...rule, parts: { ...rule.parts, mobile: { ...rule.parts.mobile, 'font-size': value } } };
+  });
+  return { rules: out, changed };
+}

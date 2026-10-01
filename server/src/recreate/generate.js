@@ -190,7 +190,7 @@ export async function generateStage(ctx) {
     } catch (err) {
       report.warnings.push(`The breakpoints could not be checked against the original: ${err.message.split('\n')[0]}`);
     }
-    if (refined && (refined.breakpoints !== ir.breakpoints || refined.fluid)) {
+    if (refined && (refined.breakpoints !== ir.breakpoints || refined.fluid || refined.shrink)) {
       ir.breakpoints = refined.breakpoints;
       ir.rules = refined.rules;
       out = emitSite(ir);

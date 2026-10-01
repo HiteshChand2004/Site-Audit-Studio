@@ -54,13 +54,13 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
 | Step | Scope | Status |
 |---|---|---|
 | 4b.6.1 | Responsive sweep: measure the original vs the recreate at the 7 sweep widths (`report.responsive`) | ✅ WIP |
-| 4b.6.2 | Corrections driven by the sweep (breakpoint refinement, fluid type, known drift cases) | ⏳ |
+| 4b.6.2 | Corrections driven by the sweep (breakpoint refinement, fluid type, phone shrink, width fixes) | ✅ WIP (long tail open, see below) |
 | 4b.7 | Visual diff score (perceptual diff, section heatmap) | ⏳ |
 | 4b.1–4b.5 | Motion capture (hover/focus, reveal, continuous), IR `motion`, HTML emitter + `motion.js`, all stacks | ⏳ |
 | 4b.8–4b.9 | Re-audit rows + UI, real-site verification, docs | ⏳ |
 
 4b.6.1 details (**measures only, never fails a job**):
-- New last Recreate step `responsive` ("Checking responsive layout", `recreate/responsive.js`, max 150 s). Default job budget **10 → 12 minutes** (`recreateBudgetMs`): the 2 extra
+- Last Recreate step `responsive` ("Checking responsive layout", `recreate/responsive.js`). Default job budget **10 → 12 minutes** (`recreateBudgetMs`): the 2 extra
   minutes are the sweep's, the other steps' limits are unchanged. No time left (< ~33 s) → skipped with a warning; the homepage is measured first, other pages only while one more fits.
 - Original side (`capture/sweep.js`): each page is screenshotted at every sweep width the same way as the 3 captures (`settle`: lazy content, scroll-reveal pinned), full page
   capped at 8000 px, DPR 1, widths < 600 as a mobile viewport (both sides alike), 4 contexts at a time → `capture/<slug>/sweep/<width>-full.webp`; height and horizontal `scrollWidth` recorded.
@@ -69,6 +69,28 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
   (`FIDELITY_THRESHOLD`) or a new overflow; flags `taller` / `shorter` / `overflow` / `visual`. Thresholds are first guesses to be calibrated on real sites (4b.9).
 - `report.responsive = { status: done|skipped|failed, widths, threshold, score, byWidth, driftCount, measured, worst[], pages[{ path, outPath, slug, score, drift[], widths{} }], skipped[] }`
   + warnings. Nothing measured → `failed` (+ warning). Tests: `recreate-responsive.test.js` (scoring, summary, original capture, the step on a local site: faithful copy ≥ 95, fixed-width container flagged as overflow at 320).
+
+4b.6.2 details (the sweep now **decides**, still never fails a job; the 4b.6.1 step was split in two):
+- **Steps** (7 now): `inspect` → **`sweep`** ("Capturing more widths", `recreate/sweep.js`: the original at the 7 widths, `capture/sweep.json`, `ctx.sweep`; max 4 min but never into
+  the time the later steps need — `jobDeadline − LATER_STEPS_RESERVE`) → `assets` → `generate` (now also refines) → `build` → `preview` → **`responsive`** (renders `dist/`, compares with the stored
+  originals, `report.responsive`, max 90 s). `sweep` and `responsive` are `optional` in `STEPS`: out of time, a timeout or an error is a warning, never a failed recreate.
+- **Refinement** (`verify/refine.js`, in `generate`, after the fit pass, ≤ 90 s, first 3 pages): variants of `css/site.css` are served as an override of that one file and scored at the sweep widths
+  with the 4b.6.1 score; nothing is rebuilt and the IR is not touched until a variant wins.
+  1. *Breakpoints*: tablet ∈ {899.98, 1023.98, 1279.98, 1439.98} judged on 900 / 1024 / 1280, mobile ∈ {479.98, 599.98, 767.98} on 480 / 600 (one alternative per outcome); the site's own
+     value (`source: 'site'`) is replaced only when an alternative scores ≥ 3 points higher → `ir.breakpoints = { …, source: 'sweep' }`.
+  2. *Fluid type* (`ir/fluid.js`): font size / line height whose 3 captured px values lie on one line over the width (±max(0.5 px, 2 % of the range)) become `clamp(min, calc(a + b vw), max)`;
+     the stepped overrides it replaces are dropped; taken only when the whole sweep scores ≥ 1 point higher.
+  3. *Phone shrink*: mobile font sizes ≥ 24 px as `min(X px, Y vw)` (smaller than 375 px screens), judged on the 320 px width, ≥ 1 point.
+  Result in `report.generate.responsive` (candidates with scores, chosen values, renders, `stopped`) and `report.responsive.refined`. The IR carries the result, so every stack gets it.
+- **General fixes found by the sweep** (`ir/styles.js`): an absolute / fixed box is no longer written with a px width when its two insets stretch it (a fixed header with side margins) or when it is as wide as
+  its containing block (`width: 100%`); form controls and buttons with a px width get `max-width: 100%` (like images).
+- **Real sites** (authorized, through the API, temp data dir `C:\sasd`; a short path is needed: the scratchpad path exceeded Windows' 260 characters):
+  parchaa.com — own tablet breakpoint (1319.98) scored 54.1 against 77.7 for 899.98, mobile 767.98 → 599.98 (58.3 → 66.5); fidelity 88–89 as before (re-run after all fixes: 88; shrink 70.7 → 68 correctly rejected). panscience.xyz — tablet 1024.98 → 899.98 (54.9 → 69), mobile kept;
+  fidelity unchanged (80). No page of either site has a fluid-type rule on one line, so fluid type and phone shrink were not adopted there (shrink 76.3 vs 76.3).
+- **Still open (not breakpoints)**: parchaa `/` at 900 px: the original shows its stacked (tablet-style) layout, the recreate squeezes the 1440 layout (sections wrap letter by letter): a layout at that width
+  needs its own captured view (a 4th view between 768 and 1440); the breakpoint search only picks the lesser evil. panscience `/` and `/ventures` at 320 px: still a horizontal overflow (document 344 px wide)
+  although the causes found (a 375 px wide absolute box, a nowrap 38 px heading, a 312 px button) were fixed one by one — the score is all-or-nothing on overflow, so shrink was not adopted. The known cases
+  from 4a (parchaa `/solutions` mobile view alignment, panscience `/ventures` tablet/desktop drift) are alignment / layout-at-width problems: not solved here; `/solutions` is not in parchaa's default page set.
 
 ### Phase 6 final summary
 Every recreate can be built as **four stacks**, all from the same saved IR and all checked against the plain-HTML build: Plain HTML / CSS / JS (the

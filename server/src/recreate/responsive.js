@@ -6,8 +6,10 @@ import { TimeoutError, withTimeout } from '../audit/util.js';
 import { RecreateError } from './errors.js';
 import { compareSweepPage, openSweepRenderer, summarizeSweep } from './verify/responsive.js';
 
-// Stop starting pages this long before the step's time limit; the page in progress gets the time left.
+// Stop starting pages this long before the step's time limit; the page in progress gets the time left, and the
+// step always ends before its limit (a step that hits the limit loses its result).
 const MARGIN = 5000;
+const HARD_MARGIN = 1500;
 
 /** @param {object} ctx  needs ctx.sweep (sweep step), ctx.pages and the finished dist/ */
 export async function responsiveStage(ctx) {
@@ -19,6 +21,7 @@ export async function responsiveStage(ctx) {
   const widths = sweep.widths;
   const pages = (ctx.pages ?? []).filter((p) => sweep.pages[p.slug]);
   const deadline = (ctx.stepDeadline ?? Infinity) - MARGIN;
+  const hardDeadline = (ctx.stepDeadline ?? Infinity) - HARD_MARGIN;
 
   ctx.progress(0, 'Measuring the layout between the captured widths');
   const done = [];
@@ -36,7 +39,7 @@ export async function responsiveStage(ctx) {
       try {
         const result = await withTimeout(
           compareSweepPage({ renderer, workspace: ctx.dir, page, original: sweep.pages[page.slug], widths }),
-          Math.max(5000, deadline - Date.now()),
+          Math.max(1000, hardDeadline - Date.now()),
           `Responsive check of ${page.path}`,
         );
         done.push({ path: page.path, outPath: page.outPath, slug: page.slug, widths: result });

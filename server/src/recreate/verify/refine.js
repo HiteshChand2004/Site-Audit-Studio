@@ -5,11 +5,13 @@
 //      scored against the original; one is taken only when it beats the current by BREAKPOINT_MARGIN points.
 //   2. fluid type - font sizes and line heights that lie on one line over the viewport width are written as
 //      clamp()/vw (ir/fluid.js); taken only when the whole sweep scores better with them.
+//   3. phone shrink - large phone-view type as min(px, vw), so it scales down on screens narrower than 375 px;
+//      taken only when the 320 px sweep scores better with it.
 // Only css/site.css differs between the variants, so a variant is a served override of that one file:
 // nothing is rebuilt, the IR is not touched until a variant has won. Never fails the job.
 import path from 'node:path';
 import { emitCss, CSS_FILE } from '../emit/css.js';
-import { applyFluidType } from '../ir/fluid.js';
+import { applyFluidType, applyPhoneShrink } from '../ir/fluid.js';
 import { compareWidth, openSweepRenderer, renderSweepPage } from './responsive.js';
 import { visualSimilarity } from './layout.js';
 
@@ -23,6 +25,7 @@ const TABLET_ALTERNATIVES = [899.98, 1023.98, 1279.98, 1439.98];
 const MOBILE_ALTERNATIVES = [479.98, 599.98, 767.98];
 export const BREAKPOINT_MARGIN = 3;
 export const FLUID_MARGIN = 1;
+export const SHRINK_MARGIN = 1;
 // Pages scored per variant (the first pages: the homepage, then the pages it links to).
 const MAX_PAGES = 3;
 
@@ -43,14 +46,19 @@ const round1 = (n) => (n == null ? null : Math.round(n * 10) / 10);
  */
 export async function refineResponsive({ ir, siteDir, workspace, sweep, deadline = Infinity }) {
   const pages = ir.pages.filter((p) => sweep.pages[p.slug]?.widths && Object.keys(sweep.pages[p.slug].widths).length).slice(0, MAX_PAGES);
-  const summary = { status: 'done', pages: pages.length, renders: 0, breakpoints: null, fluid: null, stopped: null };
-  const keep = { breakpoints: ir.breakpoints, rules: ir.rules, fluid: false, summary };
+  const summary = { status: 'done', pages: pages.length, renders: 0, breakpoints: null, fluid: null, shrink: null, stopped: null };
+  const keep = { breakpoints: ir.breakpoints, rules: ir.rules, fluid: false, shrink: false, summary };
   if (!pages.length) return { ...keep, summary: { ...summary, status: 'skipped', reason: 'no-sweep-pages' } };
 
   const renderer = await openSweepRenderer(siteDir, sweep.widths);
   const cache = new Map();
   const fluid = applyFluidType(ir.rules);
-  const cssOf = (cfg) => emitCss({ ...ir, breakpoints: { ...ir.breakpoints, tablet: cfg.tablet, mobile: cfg.mobile }, rules: cfg.fluid ? fluid.rules : ir.rules });
+  const shrink = { stepped: applyPhoneShrink(ir.rules), fluid: applyPhoneShrink(fluid.rules) };
+  const rulesOf = (cfg) => {
+    const kind = cfg.fluid ? 'fluid' : 'stepped';
+    return cfg.shrink ? shrink[kind].rules : cfg.fluid ? fluid.rules : ir.rules;
+  };
+  const cssOf = (cfg) => emitCss({ ...ir, breakpoints: { ...ir.breakpoints, tablet: cfg.tablet, mobile: cfg.mobile }, rules: rulesOf(cfg) });
 
   // Mean score of a variant over `widths` (the original's sweep widths only), or null when nothing was measured.
   async function score(cfg, widths) {
@@ -63,7 +71,7 @@ export async function refineResponsive({ ir, siteDir, workspace, sweep, deadline
       const results = await Promise.all(usable.map(async (w) => {
         const o = original.widths[w];
         if (!o) return null;
-        const key = `${cfg.tablet}|${cfg.mobile}|${cfg.fluid}|${page.slug}|${w}`;
+        const key = `${cfg.tablet}|${cfg.mobile}|${cfg.fluid}|${cfg.shrink ?? false}|${page.slug}|${w}`;
         if (cache.has(key)) return cache.get(key);
         if (Date.now() > deadline) throw new OutOfTime();
         summary.renders++;
@@ -78,7 +86,7 @@ export async function refineResponsive({ ir, siteDir, workspace, sweep, deadline
     return mean(scores);
   }
 
-  const current = { tablet: ir.breakpoints.tablet, mobile: ir.breakpoints.mobile, fluid: false };
+  const current = { tablet: ir.breakpoints.tablet, mobile: ir.breakpoints.mobile, fluid: false, shrink: false };
   let chosen = { ...current };
   try {
     const bp = { tablet: null, mobile: null };
@@ -112,6 +120,16 @@ export async function refineResponsive({ ir, siteDir, workspace, sweep, deadline
       summary.fluid = { rules: fluid.changed, properties: fluid.properties, stepped: round1(stepped), fluid: round1(smooth), adopted };
       if (adopted) chosen = { ...chosen, fluid: true };
     }
+
+    // Phone shrink, judged on the narrowest sweep width (the only one it changes).
+    const narrow = sweep.widths.filter((w) => w < 375);
+    if (narrow.length && shrink[chosen.fluid ? 'fluid' : 'stepped'].changed) {
+      const without = await score(chosen, narrow);
+      const withShrink = without == null ? null : await score({ ...chosen, shrink: true }, narrow);
+      const adopted = withShrink != null && withShrink >= without + SHRINK_MARGIN;
+      summary.shrink = { rules: shrink[chosen.fluid ? 'fluid' : 'stepped'].changed, widths: narrow, without: round1(without), with: round1(withShrink), adopted };
+      if (adopted) chosen = { ...chosen, shrink: true };
+    }
   } catch (err) {
     if (!(err instanceof OutOfTime)) {
       summary.status = 'failed';
@@ -128,8 +146,9 @@ export async function refineResponsive({ ir, siteDir, workspace, sweep, deadline
   const changed = chosen.tablet !== current.tablet || chosen.mobile !== current.mobile;
   return {
     breakpoints: changed ? { tablet: chosen.tablet, mobile: chosen.mobile, source: 'sweep' } : ir.breakpoints,
-    rules: chosen.fluid ? fluid.rules : ir.rules,
+    rules: rulesOf(chosen),
     fluid: chosen.fluid,
+    shrink: chosen.shrink,
     summary,
   };
 }

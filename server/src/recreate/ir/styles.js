@@ -153,6 +153,23 @@ export function wrapsText(node, v, chain = []) {
 }
 
 /**
+ * Width of the containing block of an absolutely positioned (or fixed) box in view `v`: the viewport for a fixed box
+ * and when no ancestor is positioned, else the padding box of the nearest positioned ancestor.
+ */
+function containingWidth(chain, v, position) {
+  const viewport = chain[0]?.views[v]?.rect[2] ?? 0;
+  if (position === 'fixed') return viewport;
+  for (let i = chain.length - 1; i > 0; i--) {
+    const d = chain[i].views[v];
+    if (!d || d.hidden) continue;
+    if (/^(relative|absolute|fixed|sticky)$/.test(d.style.position ?? '')) {
+      return d.rect[2] - num(d.style['border-left-width']) - num(d.style['border-right-width']);
+    }
+  }
+  return viewport;
+}
+
+/**
  * The declarations of one node in one view, with sizing hints (@w, @rw, @fw) that are resolved
  * across views afterwards.
  */
@@ -199,12 +216,20 @@ export function normalizeView(node, v, chain, opts) {
     // an absolutely positioned box keeps its size whatever its transform; without it, a rotated or
     // floating tile shrinks to its content.
     const sized = true;
+    const cbW = containingWidth(chain, v, position);
     for (const [a, b, prop, value] of [['left', 'right', 'width', size.w(w)], ['top', 'bottom', 'height', size.h(h)]]) {
       const va = px(style[a]);
       const vb = px(style[b]);
       if (va != null && vb != null && Math.abs(va) <= 1 && Math.abs(vb) <= 1) continue; // stretched: inset 0
+      // A box that fills the width between its two insets (a fixed header with a margin on each side) is stretched
+      // by them: with a px width it would overflow on every screen narrower than the captured one.
+      if (prop === 'width' && va != null && vb != null && cbW > 0 && !REPLACED.has(node.tag) && Math.abs(cbW - va - vb - w) <= 1.5) continue;
       if (va != null && vb != null) delete style[Math.abs(va) <= Math.abs(vb) ? b : a];
-      if (sized && value > 0 && !REPLACED.has(node.tag)) style[prop] = `${value}px`;
+      if (sized && value > 0 && !REPLACED.has(node.tag)) {
+        // A box as wide as its containing block stays that wide on other screens.
+        const full = prop === 'width' && cbW > 0 && value / cbW >= 0.995 && value / cbW <= 1.005 && (va == null || Math.abs(va) <= 1) && (vb == null || Math.abs(vb) <= 1);
+        style[prop] = full ? '100%' : `${value}px`;
+      }
     }
   }
 
@@ -386,7 +411,8 @@ export function resolveHints(decls, present, tag) {
       const pxValue = `${Math.round(hint.px)}px`;
       if (key === '@rw') {
         decls[v].width = full ? '100%' : pxValue;
-        if (!full && /^(img|video|iframe)$/.test(tag)) decls[v]['max-width'] = '100%';
+        // Never wider than the parent: a px width taken from one captured view overflows on a narrower screen.
+        if (!full && /^(img|video|iframe|input|select|textarea|button)$/.test(tag)) decls[v]['max-width'] = '100%';
         continue;
       }
       const value = consistent ? (full ? '100%' : pct(hint.ratio)) : pxValue;

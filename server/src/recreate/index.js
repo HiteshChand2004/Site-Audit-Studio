@@ -28,13 +28,13 @@ export const STEPS = [
   // leave the later steps their reserve (inspect.js).
   { key: 'inspect', label: 'Inspecting pages', weight: 35, max: 7 * 60000 },
   // Original screenshots at more widths (4b.6): collects only, uses the extra minutes of the budget, never fails the job.
-  { key: 'sweep', label: 'Capturing more widths', weight: 8, max: 150000, optional: true },
+  { key: 'sweep', label: 'Capturing more widths', weight: 8, max: 4 * 60000, optional: true },
   { key: 'assets', label: 'Extracting assets', weight: 25, max: 4 * 60000 },
   { key: 'generate', label: 'Generating site', weight: 15, max: 3 * 60000 },
   { key: 'build', label: 'Building & verifying', weight: 20, max: 3 * 60000 },
   { key: 'preview', label: 'Starting preview', weight: 5, max: 30000 },
   // Measures the finished build against the sweep screenshots (4b.6): never fails the job.
-  { key: 'responsive', label: 'Checking responsive layout', weight: 4, max: 60000, optional: true },
+  { key: 'responsive', label: 'Checking responsive layout', weight: 4, max: 90000, optional: true },
 ];
 export const PUBLIC_STEPS = STEPS.map(({ key, label }) => ({ key, label }));
 
