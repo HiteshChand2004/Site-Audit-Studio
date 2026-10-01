@@ -55,7 +55,7 @@ Mongo; export to another stack from the saved IR without recapture; order 6.1 fi
 | 6.2 | Foundation: emitter registry, shared IR walker, stack in job/report, export from saved IR, toolchain setup | ✅ WIP |
 | 6.3 | React+Vite | ✅ WIP |
 | 6.4 | Next.js | ✅ WIP |
-| 6.5 | MERN | ⏳ |
+| 6.5 | MERN | ✅ WIP |
 | 6.6 | Re-audit (target-stack-aware runtime rows) + UI | ⏳ |
 | 6.7 | Real-site verification + docs | ⏳ |
 
@@ -145,6 +145,30 @@ first and shows `X-Download-Error`. Test: `recreate-export.test.js`.
   from the whole document; `/x/` and `/x/index.html` are one URL; hydration is detected on `#root` or the `document`. Zip: `out`, `.next` are never included.
 - Verified on saved IRs: fixture (4 URL moves, DOM 6/6, hydration clean), panscience.xyz (Next.js → Next.js, 0 moves, 2 shared components); JS is ~243 KB gzip for
   Next vs ~98 KB for React + Vite (the framework runtime): the re-audit (6.6) will report it. Tests: `recreate-next.test.js`.
+
+6.5 details (MERN, `status: 'ready'`, `scripts: true`, toolchain `mern` = vite 6.3.5 + plugin-react 4.5.0 + react/react-dom 19.1.0 + express 5.2.1 + compression 1.8.2 + mongodb 7.7.0):
+- **Layout** (`recreate/emit/mern/`): `client/` = the React + Vite emitter's project (`emitReact` on the IR with forms rewired), `server/` = fixed template files
+  (`template/server/**`, read at emit time, the same for every site) + generated `server/forms.json` and `server/package.json` (pins from the toolchain), root
+  `package.json` (`install:all`, `build`, `start`, `dev:client`, `dev:server`, `test`), `docker-compose.yml` (a local MongoDB), `README.md`, `.gitignore`.
+- **Backend scope (v1, as approved)**: Express serves `client/dist` (CSP, nosniff, Referrer-Policy, X-Frame-Options, COOP, Permissions-Policy, compression, immutable
+  caching for `/assets` and `/_app`, `404.html`), `GET /api/health`, `POST /api/forms/:id`, `GET /thanks`. No e-mail, CMS or accounts. Env: `PORT`, `SITE_DIR`,
+  `MONGODB_URI`, `FORMS_DB`, `FORMS_COLLECTION`, `FORMS_STORE=memory`, `TRUST_PROXY`. Without `MONGODB_URI` (or when MongoDB is unreachable at start) the site is
+  served and the endpoint answers 503; a failing write is a 503 that does not leak the reason.
+- **Forms** (`mern/forms.js`): a `<form>` that collects named fields becomes `{ id: <page>-<n>, page, fields }` and posts to `/api/forms/<id>` (`action` + `method=post`
+  added to the client markup, `enctype` dropped; a no-JavaScript browser is redirected to `/thanks`). Skipped and reported: GET / `role=search` / `type=search`
+  forms, forms with a password field (login) or a file input, forms without named fields. Hidden inputs are never stored. Server validation (`forms.js`): only the
+  defined fields, required, type (email, url, number with min/max), choices for select/radio/checkbox groups, length caps (maxlength, 2000 / 10000), non-string
+  values rejected, control characters removed, `pattern` is not evaluated (ReDoS); same-site `Origin` check (403), in-memory rate limit 20/hour/address (429 +
+  Retry-After), 100 KB body limit. Stored document: `{ formId, page, values, receivedAt, userAgent }`.
+- **Build** (`mern/build.js buildMern`): the client goes through `buildReact` (toolchain `mern`, `sigOptions: { ignoreFormActions }` so action/method/enctype on forms
+  are not an equivalence difference), then the generated server tests run with the pinned toolchain (`node --test` in `server/`, junction `node_modules`): 15 tests —
+  validation, the store against a stand-in MongoDB driver, the app (headers, static serving, JSON + browser posts, 422/404/403/400/413/503/429), and
+  `site.test.js`: every page of the real `client/dist` is served and every form of `forms.json` is on its page with `action="/api/forms/<id>"`. Output entry:
+  `dist: 'client/dist'`, `forms: { stored, skipped }`, `server.tests`, plus the React fields. Zip: `client/` + `server/` sources, `.gitignore` and `.env.example` kept,
+  `node_modules`/`.ssr`/`.next` anywhere and `dist`/`out` at the top or under `client/`/`server/` left out; the report has a forms section.
+- Tests: `recreate-mern.test.js` (form detection + rewiring, project files, the shipped validator and a stand-in MongoDB driver, the generated server tests, a real
+  export with a contact form + login + search form); the shipped tests are `template/server/test/*.test.js`. Real sites checked: fixture (1 form), panscience.xyz,
+  parchaa.com (no text forms in the captured pages): client equivalent, hydration clean, 15/15 server tests.
 
 ### Phase 5 final summary
 After every successful Recreate the server audits the recreated site again (same Analyze pipeline on its `dist/`, served

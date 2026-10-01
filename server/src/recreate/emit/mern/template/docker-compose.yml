@@ -1,0 +1,11 @@
+# A MongoDB for local development: docker compose up -d
+# then: MONGODB_URI=mongodb://localhost:27017 npm start --prefix server
+services:
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+volumes:
+  mongo-data:

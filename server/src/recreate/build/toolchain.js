@@ -52,7 +52,7 @@ function runNode(args, { cwd, label, timeoutMs, signal }) {
 
 /**
  * Runs `steps` (node scripts, relative to the project) with the toolchain's node_modules linked into `dir`.
- * @param {{ dir: string, toolchain: string, steps: { label: string, args: string[] }[], timeoutMs?: number, signal?: AbortSignal }} o
+ * @param {{ dir: string, toolchain: string, steps: { label: string, args: string[], keepOutput?: boolean }[], timeoutMs?: number, signal?: AbortSignal }} o
  *   args: node arguments; "vite" in args[0] is resolved to the toolchain's vite binary
  * @returns {Promise<{ steps: { label: string, ms: number }[] }>}
  */
@@ -67,8 +67,8 @@ export async function runToolchain({ dir, toolchain, steps, timeoutMs = 180000, 
     for (const step of steps) {
       const started = Date.now();
       const args = step.args.map((a, i) => (i === 0 && a === 'vite' ? path.join(modules, 'vite', 'bin', 'vite.js') : a));
-      await runNode(args, { cwd: dir, label: step.label, timeoutMs: Math.max(1000, deadline - started), signal });
-      done.push({ label: step.label, ms: Date.now() - started });
+      const output = await runNode(args, { cwd: dir, label: step.label, timeoutMs: Math.max(1000, deadline - started), signal });
+      done.push({ label: step.label, ms: Date.now() - started, ...(step.keepOutput && { output: output.slice(-TAIL) }) });
     }
   } finally {
     // Remove the link itself (rmdir/unlink never follow it), never what it points to.

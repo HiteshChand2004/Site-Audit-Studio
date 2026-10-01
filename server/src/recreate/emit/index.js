@@ -16,6 +16,8 @@
 //   measured against.
 import { emitSite } from './html.js';
 import { buildReact } from './react/build.js';
+import { buildMern } from './mern/build.js';
+import { emitMern } from './mern/index.js';
 import { buildNext } from './next/build.js';
 import { emitNext } from './next/index.js';
 import { emitReact } from './react/index.js';
@@ -38,4 +40,4 @@ export const listStacks = () => [...registry.values()].map(({ id, label, status,
 registerEmitter({ id: 'html', label: 'Plain HTML / CSS / JS', status: 'ready', emit: emitSite });
 registerEmitter({ id: 'react-vite', label: 'React + Vite', status: 'ready', toolchain: 'react-vite', scripts: true, assetsTarget: 'public/assets', emit: emitReact, build: buildReact });
 registerEmitter({ id: 'nextjs', label: 'Next.js', status: 'ready', toolchain: 'next', scripts: 'inline', assetsTarget: 'public/assets', emit: emitNext, build: buildNext });
-registerEmitter({ id: 'mern', label: 'MERN', status: 'planned', toolchain: 'react-vite', scripts: true, assetsTarget: 'client/public/assets' });
+registerEmitter({ id: 'mern', label: 'MERN', status: 'ready', toolchain: 'mern', scripts: true, assetsTarget: 'client/public/assets', emit: emitMern, build: buildMern });

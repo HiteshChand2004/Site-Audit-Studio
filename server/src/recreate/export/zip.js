@@ -88,6 +88,11 @@ export function reportMarkdown(report, stack = 'html') {
     lines.push('', `## ${stack} build`, '', `Built with ${out.build.toolchain}; verified against the plain-HTML build (same DOM and pixels on ${out.equivalence?.dom?.equal}/${out.equivalence?.dom?.total} pages, lowest visual match ${out.equivalence?.visual?.min}).`);
     lines.push(`JavaScript: ${kb(out.build.js.bytes)} (${kb(out.build.js.gzipBytes)} gzipped); CSS: ${kb(out.build.css.bytes)}. The plain-HTML build ships no JavaScript.`);
     if (out.fidelity?.score != null) lines.push(`Fidelity to the original: ${out.fidelity.score} / 100 (same as the plain-HTML build it is equivalent to).`);
+    if (out.forms) {
+      lines.push('', `Forms: ${out.forms.stored.length} stored in MongoDB (set MONGODB_URI), ${out.forms.skipped.length} left as they are. Server tests: ${out.server?.tests?.pass}/${out.server?.tests?.tests} passed.`);
+      for (const f of out.forms.stored) lines.push(`- \`${f.id}\` on \`${f.page}\` (${f.fields} fields)`);
+      for (const f of out.forms.skipped) lines.push(`- not rewired: \`${f.page}\` — ${f.reason}`);
+    }
     for (const w of out.warnings ?? []) lines.push(`- ${w}`);
   }
   const warnings = report.warnings ?? [];
@@ -164,15 +169,21 @@ export function writeZip(plan, out) {
   });
 }
 
-// Folders of a stack project that are build output or dependencies: never part of the zip.
-const PROJECT_SKIP = new Set(['dist', 'out', '.ssr', '.next', 'node_modules']);
+// Build output and dependencies are never part of the zip: node_modules, .ssr and .next anywhere; dist and out at the top
+// of the project or of its client/ and server/ folders (MERN).
+const SKIP_ANYWHERE = new Set(['node_modules', '.ssr', '.next']);
+const SKIP_TOP = new Set(['dist', 'out']);
+const skippedInProject = (rel) => {
+  const seg = rel.split('/');
+  return seg.some((s) => SKIP_ANYWHERE.has(s)) || SKIP_TOP.has(seg[0]) || (['client', 'server'].includes(seg[0]) && SKIP_TOP.has(seg[1]));
+};
 
 /** A stack project: its source as it is (the user installs and builds it), plus the report. */
 async function planProjectZip({ dir, report, stack }) {
   const output = reportOutputs(report)[stack];
   if (output?.status !== 'ready') throw refuse(400, `This recreate has no ${stack} output.`);
   const project = path.join(dir, output.dir);
-  const files = (await listFiles(project, { allowDot: ['.gitignore'] }).catch(() => [])).filter((f) => !PROJECT_SKIP.has(f.rel.split('/')[0]));
+  const files = (await listFiles(project, { allowDot: ['.gitignore', '.env.example'] }).catch(() => [])).filter((f) => !skippedInProject(f.rel));
   if (!files.length) throw refuse(404, `The ${stack} project of this recreate is gone. Run Recreate again.`);
   const root = zipBaseName(report, stack);
   const entries = [

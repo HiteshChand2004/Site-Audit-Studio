@@ -44,7 +44,7 @@ async function bundleSizes(dist) {
  *   assets: asset files written into the project (relative to assets/)
  * @returns {Promise<object>} fields for the stack's report entry
  */
-export async function buildReact({ dir, ir, assets, report, htmlDist, signal, progress = () => {}, toolchain = 'react-vite' }) {
+export async function buildReact({ dir, ir, assets, report, htmlDist, signal, progress = () => {}, toolchain = 'react-vite', sigOptions = null }) {
   progress(0, 'Checking the generated source');
   const source = await scanProject(dir);
   if (!source.safe) throw new RecreateError(`The generated React source failed the safety check (${firstIssue(source, 'source')}); it was not kept.`);
@@ -79,6 +79,7 @@ export async function buildReact({ dir, ir, assets, report, htmlDist, signal, pr
     referenceRoot: htmlDist,
     candidateRoot: dist,
     pages,
+    sigOptions,
     progress: (f, message) => progress(0.5 + 0.5 * f, message),
   });
   if (!equivalence.ok) {

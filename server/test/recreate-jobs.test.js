@@ -7,6 +7,7 @@ import { rm } from 'node:fs/promises';
 import express from 'express';
 import { db, projectDir } from '../src/db/index.js';
 import { exclusive } from '../src/jobs/manager.js';
+import { registerEmitter, unregisterEmitter } from '../src/recreate/emit/index.js';
 import { overallPct, recreateBudgetMs, RecreateError, runRecreate, STAGES } from '../src/recreate/index.js';
 import { analysisWarnings, parseRecreatePages, parseTargetDomain } from '../src/recreate/inputs.js';
 import { pruneRecreates, recreateDir, recreateRoot } from '../src/recreate/workspace.js';
@@ -174,7 +175,13 @@ test('POST /recreate checks authorization, stack and a completed analysis', asyn
   const post = (id) => fetch(`${base}/${id}/recreate`, { method: 'POST' });
   assert.equal((await post(randomUUID())).status, 404);
   assert.equal((await post(makeProject({ authorized: 0 }).id)).status, 403);
-  assert.equal((await post(makeProject({ stack: 'mern' }).id)).status, 400);
+  // A stack that is listed but not built yet is refused.
+  registerEmitter({ id: 'planned-x', label: 'Planned X', status: 'planned' });
+  try {
+    assert.equal((await post(makeProject({ stack: 'planned-x' }).id)).status, 400);
+  } finally {
+    unregisterEmitter('planned-x');
+  }
   const noAnalysis = await post(makeProject({ analysis: false }).id);
   assert.equal(noAnalysis.status, 409);
   assert.match((await noAnalysis.json()).error, /Run Analyze first/);

@@ -42,11 +42,13 @@ function domSignature(map) {
   const walk = (node, depth) => {
     const attrs = [...node.attributes].map((a) => {
       const name = a.name.toLowerCase();
+      // A stack that wires its forms to a backend (MERN) adds action/method; the form itself is the same.
+      if (moved.ignoreFormActions && node.localName === 'form' && ['action', 'method', 'enctype'].includes(name)) return null;
       let value = a.value;
       if (name === 'srcset') value = value.split(',').map((c) => { const [u, ...d] = c.trim().split(/\s+/); return [resolve(u), ...d].join(' '); }).join(', ');
       else if (['href', 'xlink:href', 'src', 'poster', 'action', 'data'].includes(name)) value = resolve(value);
       return `${name}=${value}`;
-    }).sort().join(' ');
+    }).filter(Boolean).sort().join(' ');
     lines.push(`${depth} <${node.localName}${attrs ? ` ${attrs}` : ''}>`);
     children(node, depth + 1);
   };
@@ -116,7 +118,7 @@ async function snapshot(renderer, outPath, viewId, urlMap = null) {
 }
 
 /** JavaScript on, only the local server reachable: hydrates? errors? does the DOM stay the same? */
-async function hydrationCheck(origin, outPath, browser) {
+async function hydrationCheck(origin, outPath, browser, sigMap = null) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, javaScriptEnabled: true, serviceWorkers: 'block' });
   await context.route('**/*', (route) => (route.request().url().startsWith(`${origin}/`) ? route.continue() : route.abort('blockedbyclient')));
   const page = await context.newPage();
@@ -133,7 +135,7 @@ async function hydrationCheck(origin, outPath, browser) {
     ).then(() => true, () => false);
     await page.waitForTimeout(250);
     await page.evaluate(() => document.fonts.ready.then(() => true));
-    return { hydrated, errors, sig: await page.evaluate(domSignature) };
+    return { hydrated, errors, sig: await page.evaluate(domSignature, sigMap) };
   } finally {
     await context.close().catch(() => {});
   }
@@ -141,10 +143,13 @@ async function hydrationCheck(origin, outPath, browser) {
 
 /**
  * @param {{ referenceRoot: string, candidateRoot: string, pages: { path: string, outPath: string, candidateOutPath?: string }[],
- *   urlMap?: { paths: object, absolute: object },
+ *   urlMap?: { paths: object, absolute: object }, sigOptions?: { ignoreFormActions?: boolean },
  *   hydrate?: boolean, progress?: (fraction: number, message?: string) => void }} o
  */
-export async function compareBuilds({ referenceRoot, candidateRoot, pages, urlMap = null, hydrate = true, progress = () => {} }) {
+export async function compareBuilds({ referenceRoot, candidateRoot, pages, urlMap = null, sigOptions = null, hydrate = true, progress = () => {} }) {
+  // What the signature may normalise: moved URLs (reference side) and form wiring (both sides).
+  const refMap = urlMap || sigOptions ? { paths: {}, absolute: {}, ...urlMap, ...sigOptions } : null;
+  const candMap = sigOptions ? { paths: {}, absolute: {}, ...sigOptions } : null;
   const renderer = await openRenderer(referenceRoot);
   let browser;
   try {
@@ -155,7 +160,7 @@ export async function compareBuilds({ referenceRoot, candidateRoot, pages, urlMa
     const reference = new Map();
     for (const p of pages) {
       for (const v of VIEWS) {
-        reference.set(`${p.outPath}|${v.id}`, await snapshot(renderer, p.outPath, v.id, urlMap));
+        reference.set(`${p.outPath}|${v.id}`, await snapshot(renderer, p.outPath, v.id, refMap));
         tick('Rendering the plain-HTML build');
       }
     }
@@ -166,7 +171,7 @@ export async function compareBuilds({ referenceRoot, candidateRoot, pages, urlMa
       let jsOffSig = null;
       for (const v of VIEWS) {
         const ref = reference.get(`${p.outPath}|${v.id}`);
-        const cand = await snapshot(renderer, p.candidateOutPath ?? p.outPath, v.id);
+        const cand = await snapshot(renderer, p.candidateOutPath ?? p.outPath, v.id, candMap);
         if (v.id === 'desktop') jsOffSig = cand.sig;
         const diff = firstDifference(ref.sig, cand.sig);
         if (diff && entry.dom === 'equal') {
@@ -183,7 +188,7 @@ export async function compareBuilds({ referenceRoot, candidateRoot, pages, urlMa
     if (hydrate) {
       browser = await launchBrowser();
       for (const { entry, jsOffSig } of results) {
-        const h = await hydrationCheck(renderer.server.origin, entry.candidateOutPath ?? entry.outPath, browser);
+        const h = await hydrationCheck(renderer.server.origin, entry.candidateOutPath ?? entry.outPath, browser, candMap);
         const changed = firstDifference(jsOffSig, h.sig);
         const ok = h.hydrated && !h.errors.length && !changed;
         hydration.checked++;

@@ -26,7 +26,7 @@ export const STACKS = [
 ];
 
 // Stacks the recreate pipeline can generate so far (the others arrive in Phase 6).
-export const RECREATE_STACKS = ['html', 'react-vite', 'nextjs'];
+export const RECREATE_STACKS = ['html', 'react-vite', 'nextjs', 'mern'];
 
 export const stackById = (id) => STACKS.find((s) => s.id === id) ?? STACKS[0];
 
