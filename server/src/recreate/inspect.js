@@ -110,6 +110,11 @@ export async function inspectStage(ctx) {
     rules: probed.reduce((n, p) => n + p.motion.rules, 0),
     // Scroll reveals (4b.2): how many elements were measured, by what (declared animation vs sampled frames).
     reveal: ['revealed', 'declared', 'sampled', 'unmeasured', 'replay', 'timed', 'groups', 'staggered'].reduce((o, k) => ({ ...o, [k]: probed.reduce((n, p) => n + (p.motion.reveal?.[k] ?? 0), 0) }), {}),
+    // Continuous motion (4b.3): loops found by kind and by what they do.
+    loops: {
+      ...['css', 'waapi', 'script', 'scrollLinked', 'paused'].reduce((o, k) => ({ ...o, [k]: probed.reduce((n, p) => n + (p.motion.loops?.[k] ?? 0), 0) }), {}),
+      patterns: probed.reduce((o, p) => { for (const [k, n] of Object.entries(p.motion.loops?.patterns ?? {})) o[k] = (o[k] ?? 0) + n; return o; }, {}),
+    },
     errors: report.pages.filter((p) => p.motion?.error).map((p) => ({ page: p.path, error: p.motion.error })),
     notProbed: report.pages.filter((p) => !p.motion).map((p) => p.path),
   };

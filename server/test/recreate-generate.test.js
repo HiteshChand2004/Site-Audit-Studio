@@ -352,6 +352,15 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.equal(heading.replay, true);
   assert.ok(servicesMotion.reveal.stats.revealed >= 3 && servicesMotion.reveal.stats.declared >= 3);
   assert.ok(report.motion.reveal.revealed >= 3 && report.motion.reveal.replay >= 1, JSON.stringify(report.motion.reveal));
+  // 4b.3 — the seeded infinite CSS spinner is a loop (read before the screenshots would cancel it).
+  const spinner = servicesMotion.loops.loops.find((l) => l.name === 'spin');
+  assert.ok(spinner, JSON.stringify(servicesMotion.loops.loops.map((l) => [l.name, l.pattern])));
+  assert.equal(spinner.source, 'css-animation');
+  assert.equal(spinner.pattern, 'spin');
+  assert.equal(spinner.timing.duration, 3000);
+  assert.equal(spinner.timing.iterations, 'infinite');
+  assert.equal(spinner.inStylesheet, true);
+  assert.ok(report.motion.loops.css >= 1 && report.motion.loops.patterns.spin >= 1, JSON.stringify(report.motion.loops));
   assert.match(services, /href="\.\.\/">Home</);
   assert.match(services, /<link rel="icon" href="\.\.\/assets\/images\/hero-bg-[0-9a-f]{10}\.svg">/);
   assert.match(await read('about.html'), new RegExp(`href="${origin}/team\\.html">Our team<`));

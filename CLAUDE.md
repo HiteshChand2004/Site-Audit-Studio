@@ -74,7 +74,8 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
 | 4b.7 | Visual diff score (perceptual SSIM-style diff, bands, heatmaps, NEW-panel cards) | ✅ WIP |
 | 4b.1 | Motion capture: hover / focus (`capture/interactions.js`, `motion.json`) | ✅ WIP |
 | 4b.2 | Scroll-reveal capture: from-state, duration, easing, delay, stagger, trigger (`capture/reveal.js`, `motion.json.reveal`) | ✅ WIP |
-| 4b.3–4b.5 | Continuous motion capture, IR `motion`, HTML emitter + `motion.js`, all stacks | ⏳ |
+| 4b.3 | Continuous motion capture: CSS animations / WAAPI loops, script-driven loops (`capture/loops.js`, `motion.json.loops`) | ✅ WIP |
+| 4b.4–4b.5 | IR `motion`, HTML emitter + `motion.js`, all stacks | ⏳ |
 | 4b.8–4b.9 | Re-audit rows + UI, real-site verification, docs | ⏳ |
 
 4b.6.1 details (**measures only, never fails a job**):
@@ -180,7 +181,22 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
 - **Cost**: elements animated by script are waited for (≤ 1.5 s per scroll step, as before); declared animations are finished at once. Fidelity unchanged.
 - **Real site** (panscience.xyz, 6 pages, API on `C:sasd`): 130 reveals (124 declared, 6 sampled), 59 groups, 9 staggered; every section uses `700 ms cubic-bezier(0.16, 1, 0.3, 1)` from opacity 0 + translateY(16px), list items staggered ~50-70 ms
   (CSS transitions started one by one by a script, found through the start times); hero headline words (timer-driven, sampled, trigger 'timed') flagged; `/media` has no reveals. Fidelity 80, as before. parchaa.com is covered in 4b.9.
+- **To verify in 4b.9**: the `timed` trigger kind and the ≥ 3 members stagger rule were added after the panscience run (unit tests only); re-run on panscience.xyz / parchaa.com.
 - Tests: `recreate-reveal.test.js` (bezier/easing fit/matrix/path order; grouping + stagger; CSS transition, CSS animation, WAAPI, rAF-driven and a staggered list on a local page; no observe = no events), plus the services fixture in `recreate-generate.test.js`.
+
+4b.3 details (continuous motion capture - capture only, nothing is emitted yet):
+- **Where**: `capture/loops.js`, desktop view with motion budget, read **after the DOM snapshot and before the screenshots** (a screenshot with `animations: 'disabled'` cancels infinite animations). ~1.9 s per page outside the hover/focus budget.
+  Result in `capture/<slug>/motion.json` → `loops = { version, loops[], stats }`; `report.pages[].motion.loops` = stats, `report.motion.loops` = totals (css, waapi, script, scrollLinked, paused, patterns{}).
+- **Declared** (`scanAnimations`): `document.getAnimations()` minus CSS transitions: animations with iterations > 1 (usually infinite) or on a scroll/view timeline. Exact timing (duration, delay, iterations, direction, fill, easing, playbackRate, playState), keyframes as authored
+  (`translateX(-50%)` keeps its %), pseudo-element target (`::after`), `inStylesheet` (its @keyframes is in a readable stylesheet = already carried by the recreate's CSS; false = WAAPI / unreadable sheet, to be rebuilt by a later step).
+- **Script-driven** (`findScriptLoops`): computed transform / opacity / rotate / translate / scale of all elements (≤ 6000) compared 450 ms apart; changing ones that have no animation object are recorded per frame for 1.4 s (≤ 40, biggest first)
+  and analysed (`analyzeSeries`): `spin` (deg/s), `drift` (px/s, wrap-around distance, period), `oscillate` (period, amplitude), `ramp` / `move`. SMIL `<animate>` and canvas / video are not visible to either path.
+- **Pattern** (`classifyKeyframes`): spin, sway, marquee / ticker (one way, ≥ 20 px or 10 %), float / sway (alternate or a round trip back to the start, ≥ 4 px), pulse (scale), blink (opacity), dash (stroke-dash*), background-scroll,
+  cycle (keyframes with holds: word / slide rotators), jiggle, other. Each loop: `path`, `pseudo?`, `source` (css-animation | waapi | script), `name`, `pattern`, `params`, `timing`, `keyframes`, `rect`.
+- **Real site** (panscience.xyz, 6 pages): 32 CSS loops + 2 script; hero word rotator (cycle, 6 words with 8.77 s keyframes), drifting marquees (`psi-drift-l/r`, translateX ±50 % linear 36 / 52 s), spinners (80 s / 60 s), dashed spokes, node float (6 px round trip),
+  blink dot; all `inStylesheet`. Fidelity 80, 0 errors, same page set as 4b.2. Note: the first real run was classified before the cycle / round-trip rules; re-classifying the saved keyframes gives cycle for the rotator and float for the nodes (the page itself was not re-run).
+- Tests: `recreate-loops.test.js` (classification incl. cycle and round trip, series analysis, a local page with CSS spin / marquee / pulse / pseudo / paused / finite / WAAPI float / three script loops and controls: one-shot animation and transition are not loops),
+  plus the services fixture's spinner in `recreate-generate.test.js`.
 
 ### Phase 6 final summary
 Every recreate can be built as **four stacks**, all from the same saved IR and all checked against the plain-HTML build: Plain HTML / CSS / JS (the

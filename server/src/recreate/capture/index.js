@@ -7,6 +7,7 @@ import { USER_AGENT } from '../../audit/http.js';
 import { encode, MAX_HEIGHT, MOBILE_UA } from '../../audit/screenshots.js';
 import { RECREATE_VIEWS as VIEWS } from '../views.js';
 import { captureInteractions } from './interactions.js';
+import { captureLoops } from './loops.js';
 import { installRevealTracker, processReveal } from './reveal.js';
 import { snapshotPage } from './snapshot.js';
 
@@ -140,6 +141,16 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     await page.waitForTimeout(300);
 
     const snapshot = await page.evaluate(snapshotPage, {});
+    // Continuous motion (4b.3) is read before the screenshots: a screenshot with animations disabled cancels the infinite ones.
+    let loops = null;
+    let loopsError = null;
+    if (observeReveal) {
+      try {
+        loops = await captureLoops(page);
+      } catch (err) {
+        loopsError = firstLine(err);
+      }
+    }
     const fold = await page.screenshot({ type: 'png', animations: 'disabled' });
     const fullHeight = Math.max(1, Math.min(snapshot.scrollHeight, MAX_HEIGHT));
     const full = await page.screenshot({
@@ -166,6 +177,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       }
       try {
         found.reveal = processReveal(revealEvents ?? []);
+        if (loops) found.loops = loops;
       } catch (err) {
         error ??= firstLine(err);
       }
@@ -173,7 +185,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
         await writeFile(path.join(dir, 'motion.json'), JSON.stringify(found));
         motion = {
           hover: found.hover.length, focus: found.focus.length, rules: found.rules.length, rulesTotal: found.stats.rulesTotal, probed: found.stats.probed,
-          ms: found.stats.ms, timedOut: found.stats.timedOut, reveal: found.reveal?.stats ?? null, ...(error && { error }),
+          ms: found.stats.ms, timedOut: found.stats.timedOut, reveal: found.reveal?.stats ?? null, loops: loops?.stats ?? null, ...((error ?? loopsError) && { error: error ?? loopsError }),
         };
       } catch (err) {
         motion = { error: firstLine(err) };
