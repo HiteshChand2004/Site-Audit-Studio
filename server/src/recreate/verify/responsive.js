@@ -16,6 +16,7 @@ import { DIFF_THRESHOLD } from './fidelity.js';
 import { loadLazyImages } from './layout.js';
 import { visualDiff } from './visualDiff.js';
 import { startSiteServer } from './server.js';
+import { gotoLocal } from './goto.js';
 
 export const SWEEP_WEIGHTS = { visual: 0.65, height: 0.35 };
 const OVERFLOW_PENALTY = 15;
@@ -65,7 +66,7 @@ export async function openSweepRenderer(root, widths) {
 export async function renderSweepPage(renderer, outPath, width, { timeout = 15000 } = {}) {
   const page = await renderer.contexts[width].newPage();
   try {
-    const response = await page.goto(`${renderer.server.origin}/${outPath}`, { waitUntil: 'load', timeout });
+    const response = await gotoLocal(page, `${renderer.server.origin}/${outPath}`, timeout);
     if (!response || response.status() >= 400) throw new Error(`HTTP ${response?.status() ?? 0}`);
     await page.evaluate(() => document.fonts.ready.then(() => true));
     await loadLazyImages(page);

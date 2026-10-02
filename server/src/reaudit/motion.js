@@ -97,7 +97,8 @@ export function summarize(motion) {
   return {
     reveal: { count: reveal.length, durations: reveal.map((e) => e.timing?.duration), replay: reveal.filter((e) => e.replay).length },
     hover: { keys: hover.map((h) => `${h.tag}|${h.text ?? ''}`), props: new Map(hover.map((h) => [`${h.tag}|${h.text ?? ''}`, Object.keys(h.changes ?? {})])) },
-    loops: { keys: loops.map((l) => `${l.pattern}|${l.timing?.duration ? Math.round(l.timing.duration / 100) : ''}`), count: loops.length },
+    // By pattern only: a loop the original drove with script has no duration, while its rebuilt CSS animation has one.
+    loops: { keys: loops.map((l) => l.pattern), count: loops.length },
   };
 }
 

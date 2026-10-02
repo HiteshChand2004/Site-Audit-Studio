@@ -110,6 +110,12 @@ test('processReveal groups siblings and finds a constant stagger', () => {
   const timed = processReveal([{ ...ev(1), rect: [0, 300, 100, 40] }]);
   assert.equal(timed.elements[0].trigger.kind, 'timed');
   assert.equal(timed.stats.timed, 1);
+  // Revealed while still far below the screen (a failsafe timer, "reveal all on the first scroll"): not a scroll reveal.
+  const far = processReveal([{ ...ev(1), y: 200, rect: [0, 2600, 100, 40] }]);
+  assert.equal(far.elements[0].trigger.kind, 'timed');
+  assert.equal(far.stats.timed, 1);
+  // Just below the bottom edge when it started (a preloading margin) is still a scroll reveal.
+  assert.equal(processReveal([{ ...ev(1), y: 700, rect: [0, 1700, 100, 40], prevY: 100 }]).elements[0].trigger.kind, 'scroll');
   // Two neighbours are not enough to call it a stagger.
   assert.equal(processReveal([1, 2].map(ev)).groups[0].stagger, null);
 });

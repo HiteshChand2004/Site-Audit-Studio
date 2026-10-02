@@ -21,6 +21,7 @@ import { contentBox } from '../ir/styles.js';
 import { RECREATE_VIEWS as VIEWS } from '../views.js';
 import { displayOf, isElement, isText } from '../ir/tree.js';
 import { startSiteServer } from './server.js';
+import { gotoLocal } from './goto.js';
 
 const VISUAL_WIDTH = 96;
 const COLOR_TOLERANCE = 32;
@@ -98,7 +99,7 @@ export async function loadLazyImages(page, limit = 6000) {
 export async function renderPage(renderer, outPath, viewId, { screenshot = false, timeout = 15000 } = {}) {
   const page = await renderer.contexts[viewId].newPage();
   try {
-    await page.goto(`${renderer.server.origin}/${outPath}`, { waitUntil: 'load', timeout });
+    await gotoLocal(page, `${renderer.server.origin}/${outPath}`, timeout);
     await page.evaluate(() => document.fonts.ready.then(() => true));
     if (screenshot) await loadLazyImages(page);
     const data = await page.evaluate(collectRects);

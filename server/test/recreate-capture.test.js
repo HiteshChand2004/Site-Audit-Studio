@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { access, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { db, projectDir } from '../src/db/index.js';
+import { capturePage } from '../src/recreate/capture/index.js';
 import { discoverPages, outPathFor, selectPages, skipReason, slugFor } from '../src/recreate/discover.js';
 import { runRecreate, STAGES } from '../src/recreate/index.js';
 import { recreateDir } from '../src/recreate/workspace.js';
@@ -118,6 +119,30 @@ test('near its time limit the inspect step keeps the pages captured so far inste
   assert.deepEqual(report.pages.map((p) => p.path), ['/']);
   assert.ok(report.discovery.linksToLive.some((l) => l.url === `${origin}/about.html` && l.reason === 'time-limit'));
   assert.match(report.warnings.join('\n'), /1 page was not captured within the time limit of the inspect step \(\/about\.html\); links to it point to the live site/);
+});
+
+test('a page that stalls is abandoned before the step limit: the pages captured so far are kept, the job does not fail', async () => {
+  const id = randomUUID();
+  projectIds.push(id);
+  const now = new Date().toISOString();
+  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at) VALUES (?, 'fixture', ?, 'html', 1, 1, ?, ?)`)
+    .run(id, `${origin}/`, now, now);
+  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
+    .run(randomUUID(), id, now, now, JSON.stringify({ url: `${origin}/`, analyzedAt: now }));
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+  const stubs = Object.fromEntries(Object.keys(STAGES).map((key) => [key, async () => {}]));
+  // The second page never finishes. Without the page limit the step would run into its own limit and fail the whole job.
+  const inspect = (ctx) => {
+    ctx.stepDeadline = Date.now() + 24000;
+    ctx.capturePage = (browser, info, ...rest) => (info.path === '/about.html' ? new Promise(() => {}) : capturePage(browser, info, ...rest));
+    return STAGES.inspect(ctx);
+  };
+  const started = Date.now();
+  const report = await runRecreate({ project, recreateId: randomUUID(), progress: () => {}, stages: { ...stubs, inspect } });
+  assert.ok(Date.now() - started < 30000, 'abandoned before the step limit');
+  assert.deepEqual(report.pages.map((p) => p.path), ['/']);
+  assert.ok(report.discovery.linksToLive.some((l) => l.url === `${origin}/about.html` && l.reason === 'time-limit'));
+  assert.match(report.warnings.join('\n'), /1 page was not captured within the time limit of the inspect step \(\/about\.html\)/);
 });
 
 test('the inspect step captures every selected page at desktop, laptop, tablet and mobile', async () => {

@@ -434,12 +434,17 @@ export function comparePaths(a, b) {
 }
 
 // Where the element was before / after the scroll step that revealed it (fractions of the viewport height, 1 = bottom
-// edge). One that was already on screen (or above it) before the step was not revealed by scrolling: a timer or a
-// loop (rotating headline) did it - kind 'timed'.
+// edge). A scroll reveal starts when the element comes into view: it was below the screen before the step and is on the
+// screen (or just below it, for a preloading margin) after it. Anything else is 'timed': an element already on screen
+// before the step (rotating headline, timer), or one revealed while it was still far below the screen (a failsafe timer,
+// "reveal everything on the first scroll"): it was not triggered by coming into view, and whether the capture sees it
+// before or after the timer fires depends on timing, so it is never rebuilt as a scroll reveal.
+export const SCROLL_REVEAL_MAX_TOP_AFTER = 1.35;
 function triggerOf(ev) {
   const topBefore = r2((ev.rect[1] - ev.prevY) / ev.vh);
   const topAfter = r2((ev.rect[1] - ev.y) / ev.vh);
-  return { kind: topBefore > 1 ? 'scroll' : 'timed', step: ev.step, topBefore, topAfter };
+  const entering = topBefore > 1 && topAfter <= SCROLL_REVEAL_MAX_TOP_AFTER;
+  return { kind: entering ? 'scroll' : 'timed', step: ev.step, topBefore, topAfter };
 }
 
 /**
@@ -503,7 +508,7 @@ export function processReveal(events) {
     const dt = decomposeTransform(to.transform);
     stats.revealed++;
     if (ev.replay) stats.replay++;
-    if (ev.rect[1] - ev.prevY <= ev.vh) stats.timed++;
+    if (triggerOf(ev).kind === 'timed') stats.timed++;
     elements.push({
       path: ev.path, tag: ev.tag, ...(ev.text && { text: ev.text }), rect: ev.rect,
       from: { ...from, ...(df && { motion: df }) }, to: { ...to, ...(dt && { motion: dt }) },

@@ -35,7 +35,7 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 | 3 | OLD preview: frame check (XFO + CSP3 frame-ancestors), sandboxed iframe, screenshots 1440/768/375 (fold + full, WebP, keep latest 3), per-device metrics, SSRF guard | ✅ Done |
 | 3b | Live view (CDP screencast, view + scroll + click, no keyboard) — deferred by the user | ⏳ Later |
 | 4a | Recreate → plain HTML: page discovery (sitemap, limit), Playwright capture, local assets, IR, variant merge, semantic classes, fixers, build + verify, preview | ✅ Done (verified on real sites) |
-| 4b | Motion + responsive fidelity: hover, scroll reveal, continuous animations, widget JS, visual diff score | 🚧 In progress (branch `phase-4b`, plan below) |
+| 4b | Responsive fidelity + visual diff + motion (hover, focus, scroll reveal, loops) in all four stacks, with re-audit rows | ✅ Done, verified on real sites (branch `phase-4b`, **not merged**: waiting for the user's approval) |
 | 5 | Re-audit of the NEW site → real fix checklist (OLD vs NEW), sitemap/robots emitter | ✅ Done (verified on real sites; merged into `phase-4a` (99ebc2f)) |
 | 5b | Full PreviewManager (several previews on 5100–5199) — deferred by the user | ⏳ Later |
 | 6 | React+Vite / Next.js / MERN emitters + Download zip + stack-aware re-audit and UI | ✅ Done (verified on real sites, merged into `phase-4a` (d25444d)) |
@@ -43,7 +43,7 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 **Current status: Phase 6 COMPLETE, merged into `phase-4a` (d25444d, fast-forward from `phase-6`) plus the post-merge `flex: revert` fix (c1d4ca3); never pushed.** Phases 1, 2, 3, 4a, 5 and 6 are done
 and merged on `phase-4a`.
 5.1 re-audit job foundation ✅ · 5.2 comparator + sitemap/robots emitter ✅ · 5.3 API + `audit.recreate` contract ✅ ·
-5.4 UI ✅ · 5.5 real-site verification + docs ✅. Phase 4b (motion + responsive fidelity) stays planned. Same workflow: one step at a time, WIP
+5.4 UI ✅ · 5.5 real-site verification + docs ✅. Phase 4b (responsive fidelity, visual diff, motion) is done on branch `phase-4b` and waits for the user's approval to merge (see its final summary). Same workflow: one step at a time, WIP
 commit, wait for the user's "next"; never push; while the user tests, work in a git worktree and merge only when asked.
 
 ### Complete report (UI redesign task, after 4b.1)
@@ -70,7 +70,7 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
 | 4b.6.1 | Responsive sweep: measure the original vs the recreate at the 7 sweep widths (`report.responsive`) | ✅ WIP |
 | 4b.6.2 | Corrections driven by the sweep (breakpoint refinement, fluid type, phone shrink, width fixes) | ✅ WIP (long tail open, see below) |
 | 4b.6.3 | A 4th captured view (laptop, 1024) between 768 and 1440 (IR views 3 → 4) + continuous overflow penalty | ✅ WIP |
-| 4b.6.x | Remaining small follow-up: sweep time budget where pages are still left out (the step max was raised to 4 min in 4b.6.2; panscience's 6th page / `/media` is still lost in **inspect**) | ⏳ |
+| 4b.6.x | Sweep time budget / pages lost in **inspect** | ✅ Done in 4b.9 (panscience captures all 6 pages in every run; a page that stalls is abandoned 5 s before the step limit instead of failing the job) |
 | 4b.7 | Visual diff score (perceptual SSIM-style diff, bands, heatmaps, NEW-panel cards) | ✅ WIP |
 | 4b.1 | Motion capture: hover / focus (`capture/interactions.js`, `motion.json`) | ✅ WIP |
 | 4b.2 | Scroll-reveal capture: from-state, duration, easing, delay, stagger, trigger (`capture/reveal.js`, `motion.json.reveal`) | ✅ WIP |
@@ -78,7 +78,7 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
 | 4b.4 | IR `motion` (hover, focus, scroll reveal, loops) + plain-HTML emission: CSS rules, generated `js/motion.js`, safety profile, preview | ✅ WIP |
 | 4b.5 | The same motion in React + Vite / Next.js / MERN (ship `motion.js`, safety, equivalence ignores its classes) | ✅ WIP |
 | 4b.8 | Re-audit rows (Motion category), NEW-panel Motion card, report row, hover control step | ✅ WIP |
-| 4b.9 | Real-site verification (parchaa.com + panscience.xyz), calibration, docs | ⏳ |
+| 4b.9 | Real-site verification (parchaa.com + panscience.xyz, all four stacks), calibration, docs | ✅ WIP |
 
 4b.6.1 details (**measures only, never fails a job**):
 - Last Recreate step `responsive` ("Checking responsive layout", `recreate/responsive.js`). Default job budget **10 → 12 minutes** (`recreateBudgetMs`): the 2 extra
@@ -250,6 +250,38 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
 - **Open / 4b.9**: reveal 81/94 (the rest are effects the recreate cannot rebuild: page-load entrances, script-driven); loops in inline SVG; `/ventures` and `/media` reveal capture varies between runs; re-verify `timed` / stagger rules and the Next `/` first-measure flake on panscience.xyz and parchaa.com.
 - Tests: `reaudit-motion.test.js` (summaries, rows and thresholds, real measurement of an original and two recreates with other markup: same effects found / all lost, unmeasurable page, checklist category); `recreate-motion.test.js` (entrance animation is no hover, real hover kept, a looping child does not hide the card's hover, `keepReverting`).
 
+4b.9 details (final verification on two real sites, all four stacks, and what it found):
+- **Method**: fresh Recreate of each site with the final code (default page set, API on `C:\sasd`), the three app stacks exported from the saved IR, then every stack (HTML, React + Vite, Next.js, MERN client) served under the real preview policy
+  (`servePreview`, `script-src 'self'` / hashes for Next) and measured with the re-audit's own probes (`reaudit/motion.js`) against the original's capture, plus a real-browser pass (reveal elements hidden at the start, none left hidden after scrolling through, no page errors).
+  The HTML build also went through the normal automatic re-audit.
+- **parchaa.com** (Framer; recreate 4b2bf82a, 6 pages): fidelity 91, visual difference 89, between widths 73. Original motion: 15 hover + 13 focus elements, 44 reveals tracked (41 started by scrolling into view; Framer drives them by script, so all are *sampled*, typical 1130 ms), 20 loops (19 script-driven, 15 of them spinners).
+  Rebuilt: 15 hover (6 effects), 13 focus, 41 reveals (38 distinct effects, 4 repeat), 16 loops (script spins become CSS `@keyframes`); 4 script-driven drifts / moves are not rebuilt. Checklist (HTML): reveal 38/41 **pass**, hover 12/15 open, loops 16/20 open; Lighthouse mobile performance 48 → 70, SEO 92 → 100.
+  All four stacks: identical motion numbers, DOM 6/6 equal, pixels 1.0, hydration 6/6 clean, safety passed; JS gzipped 107 KB (React, MERN) / 243 KB (Next.js).
+- **panscience.xyz** (Next.js; recreate 22f9e1a0, 6 pages): fidelity 80, visual difference 79, between widths 76. Original motion: 23 hover, 34 scroll reveals (+ 81 elements revealed by timers / "first scroll", not rebuilt), 34 loops (26 CSS carried by the page's own CSS, 8 dashed SVG spokes / script fades not rebuilt).
+  Checklist rows on every stack: reveal 34/34 **pass**, hover 22/23 **pass**, loops 27/34 open. DOM 6/6 equal, pixels 1.0, hydration 6/6 clean, safety passed; JS gzipped 99 KB (React, MERN) / 244 KB (Next.js).
+  In the browser the reveal elements start hidden and none stays hidden after scrolling (a page's `rp` elements hide again when they leave the view, as in the original); no page errors in any stack.
+- **Found and fixed during 4b.9 (all general)**: (1) the re-audit paired loops by pattern + duration, but a loop the original drove with script has no duration while its rebuilt CSS animation has one (parchaa showed 1 of 20 loops): now by pattern;
+  (2) scroll-reveal capture was **not deterministic** on pages whose reveals are started by a timer or by the first scroll (panscience `/media`, `/ecosystem`, `/ventures`: 0 or 18-49 tracked depending on whether the timer had fired before the tracker installed, and the ones caught were called "scroll"): a reveal now counts as a scroll reveal only
+  when the element comes into view (below the screen before the step, at most 1.35 viewport heights below the top after it, `SCROLL_REVEAL_MAX_TOP_AFTER`); everything else is `timed` and is never rebuilt; (3) one stalled page killed the whole inspect step at its 420 s limit and discarded the job (seen once): a page started in time is now abandoned 5 s before the limit
+  (`inspect.js PAGE_LIMIT_MARGIN`; pages captured so far are kept, the rest link to the live site); (4) a local page that did not reach `load` in 15 s failed the job in the fit pass (seen once): our own local renders (`verify/goto.js gotoLocal`) now retry once with twice the time.
+  (3) and (4) happened on a machine with ~1.8 of 8 GB RAM free (several browsers at once); they are about robustness, not about motion.
+- **Determinism after the fix (two fresh panscience recreates)**: hover 23 / 24, loops 34 / 34, fidelity 80 / 80, visual difference 79 / 79 (stable); scroll reveals 34 / 76: the *number* of reveals the capture finds on timer-driven pages still depends on timing (`/media` 0 or 27, `/ecosystem` 0 or 3 scroll reveals), because whether an element is still hidden when the tracker installs depends on when the page's own timer fires.
+  The recreate and its checklist stay consistent within one run (the re-audit compares against the capture of the same recreate).
+- **Calibration**: the Motion row thresholds (pass ≥ 90 %, open 50-90 %, regressed < 50 %) separate the real cases: reveals and hover pass at 86-100 %, loops sit at 79-80 % for reasons that are real limits (script-driven marquees, dashed strokes inside inline SVG). The visual-diff (65) and fidelity (80) thresholds of earlier steps were not changed:
+  the final recreates sit at fidelity 80-91, visual difference 79-89, between-widths 73-76. The generated motion CSS is small (parchaa: 11 KB of 318 KB, 38 reveal effects for 41 elements because fitted easings differ slightly; not clustered).
+- **Timing**: a Recreate of the six panscience pages takes ~9.5 min of the 12-minute budget (inspect ~2 min, sweep ~3.5 min, responsive ~1.5 min); the motion capture adds ~7-8 s per page (hover budget 8 s, loops 2.2 s, reveal tracking inside the scroll-through). Re-audit motion step: ≤ 10 s hover budget + ~25 s per page, ≤ 6 pages.
+
+### Phase 4b final summary
+Recreate now carries the motion of the original, not only its still layout:
+- **Responsive fidelity** (4b.6): a fourth captured view (laptop 1024), a sweep of the original and the recreate at 7 widths, breakpoint refinement, fluid type, phone shrink, continuous overflow penalty (`report.responsive`).
+- **Perceptual visual difference** (4b.7): SSIM-style score with bands and heatmaps per view, used by fidelity and the sweep.
+- **Motion capture** (4b.1-4b.3, desktop view → `capture/<slug>/motion.json`): hover and keyboard focus (CSS rules + a mouse/Tab probe; a hover must revert when the mouse leaves), scroll reveals (declared timing from the Web Animations API, sampled timing with a fitted easing for script-driven effects, stagger, trigger, replay), and continuous loops (CSS animations, Web Animations, script-driven spin / drift / oscillation).
+- **IR and emitters** (4b.4-4b.5): motion tokens in one `data-motion` attribute, one CSS rule per distinct effect (hover under `@media (hover: hover)`, focus, reveal under `.js-motion`, rebuilt loops), and **one fixed generated script** (`js/motion.js`, ~1 KB, the same for every site) for scroll reveal only. Without script, or with reduced motion, the page shows finished. The same output in the plain-HTML build and in React + Vite, Next.js and MERN; every stack stays behind the equivalence check (DOM equal, pixels ≥ 97 %, clean hydration) and the safety gate allows exactly that file.
+- **Re-audit, UI and report** (4b.8): a Motion category in the fix checklist (reveal / hover / loops reproduced, same probes on both sides), a Motion section in the NEW-panel report card, a Motion row and the script-aware Safety row in the complete report.
+- **Verified on parchaa.com and panscience.xyz** through all four stacks (4b.9, above).
+- **Known limits**: effects that run at page load (entrance animations) and effects started by a timer or the first scroll are not rebuilt; script-driven drifts / marquees and loops inside inline SVG are not rebuilt; the number of reveals found on timer-driven pages varies between captures; hover coverage is limited by the probe budget (about 10 elements per page); no exit animation for `rp` reveals; Live view (3b) and the full PreviewManager (5b) stay deferred.
+- **Branch state**: `phase-4b` (worktree `../Website-Audit-4b`), WIP commits only, **not merged and never pushed**: merging into `phase-4a` needs the user's explicit approval.
+
 ### Phase 6 final summary
 Every recreate can be built as **four stacks**, all from the same saved IR and all checked against the plain-HTML build: Plain HTML / CSS / JS (the
 reference), React + Vite, Next.js (App Router, static export) and MERN (the React client + an Express server that serves it and stores form
@@ -310,7 +342,7 @@ runs (parchaa HTML 40 vs React 58 is mostly noise), so compare stacks by the Jav
 **Known open items (not blockers)**: the MERN preview shows the client only (forms need `npm start`); only the latest 2 recreates keep their saved IR, so a stack can only be
 built from those; Next.js ships ~237 KB gzipped of framework runtime (React + Vite ~100 KB, HTML none); the re-audit measures stacks on a local preview without compression and
 compares against the original's real transfer size (the build's gzipped size is used for the stack side); a second app stack builds one at a time under the global job lock
-(Next.js ~70 s, React/MERN ~45 s); the per-page / critical-CSS split (4b/later) would remove the CSS regressions; hover/scroll motion stays Phase 4b.
+(Next.js ~70 s, React/MERN ~45 s); the per-page / critical-CSS split (4b/later) would remove the CSS regressions; hover/scroll motion came in Phase 4b.
 
 ### Phase 6 plan (approved) — branch `phase-6`
 
@@ -1049,7 +1081,7 @@ completed recreate: `{ preview: { url, port, recreateId, … } | null }`; POST 4
 - Only one preview runs at a time: selecting another project with a recreate moves the preview to it. Clicking a link
   to a page that was not recreated opens the live original inside the preview frame (without script).
 - Recreate output (4a.4): font sizes and line heights are px per breakpoint (no fluid type yet); between the three
-  captured widths the layout relies on the %/max-width/fr heuristics. Hover, focus and scroll states come in 4b.
+  captured widths the layout relies on the %/max-width/fr heuristics. Hover, focus, scroll-reveal and loop motion came in Phase 4b (see its final summary).
 - A mobile Lighthouse run takes ~40s+, and screenshots add 5–30s, so a full analysis usually takes 1.5–3 minutes.
 - Audits from before Phase 3 have no screenshots and no desktop metrics; the UI asks to run Analyze again.
 - Some frameable sites still render blank in the iframe (frame-busting, cookie walls); use "Shot". Cookie banners

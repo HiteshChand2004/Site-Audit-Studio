@@ -11,6 +11,7 @@
 import { launchBrowser } from '../../audit/render.js';
 import { MAX_HEIGHT, VIEWS } from '../../audit/screenshots.js';
 import { openRenderer, visualSimilarity } from './layout.js';
+import { gotoLocal } from './goto.js';
 
 export const VISUAL_MIN = 0.97;
 
@@ -105,7 +106,7 @@ export function firstDifference(a, b) {
 async function snapshot(renderer, outPath, viewId, urlMap = null) {
   const page = await renderer.contexts[viewId].newPage();
   try {
-    await page.goto(`${renderer.server.origin}/${outPath}`, { waitUntil: 'load', timeout: 20000 });
+    await gotoLocal(page, `${renderer.server.origin}/${outPath}`, 20000);
     await page.evaluate(() => document.fonts.ready.then(() => true));
     const sig = await page.evaluate(domSignature, urlMap);
     // Lazy images below the fold load when scrolled to; load them all, so both builds are shot fully loaded.

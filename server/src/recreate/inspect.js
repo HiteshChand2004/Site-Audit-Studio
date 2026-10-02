@@ -11,6 +11,9 @@ import { RecreateError } from './errors.js';
 
 // Captures stop starting new pages this long before the step's time limit.
 const INSPECT_MARGIN = 15000;
+// A page still being captured is abandoned this long before the limit (shorter than INSPECT_MARGIN, so a page that was
+// started in time and is merely slow still gets its chance).
+const PAGE_LIMIT_MARGIN = 5000;
 // Time per page for the hover / focus probing of the desktop view.
 const MOTION_BUDGET = 8000;
 // Time of the whole job kept for the steps after capture (assets, generate, build, preview).
@@ -49,6 +52,8 @@ export async function inspectStage(ctx) {
     // so far): a slow site or a high page limit then keeps the pages captured so far instead of
     // failing the whole job. The homepage is always captured.
     const deadline = Math.min(ctx.stepDeadline ?? Infinity, (ctx.jobDeadline ?? Infinity) - LATER_STEPS_RESERVE) - INSPECT_MARGIN;
+    // A started page is abandoned a little before the step's own limit (which would fail the job).
+    const pageLimit = Math.min(ctx.stepDeadline ?? Infinity, (ctx.jobDeadline ?? Infinity) - LATER_STEPS_RESERVE) - PAGE_LIMIT_MARGIN;
     let slowest = 0;
     for (const [i, info] of discovery.pages.entries()) {
       if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
@@ -63,7 +68,25 @@ export async function inspectStage(ctx) {
       const started = Date.now();
       // Hover / focus probing (4b.1) takes a few seconds per page: only while the step has time to spare.
       const spare = deadline - Date.now() - slowest * 2;
-      const { views, errors } = await capturePage(browser, info, ctx.dir, { motionBudgetMs: spare > MOTION_BUDGET * 2 ? MOTION_BUDGET : 0 });
+      const capture = (ctx.capturePage ?? capturePage)(browser, info, ctx.dir, { motionBudgetMs: spare > MOTION_BUDGET * 2 ? MOTION_BUDGET : 0 });
+      // A page that stalls (a slow server, an animation that never settles) must not take the pages captured so far down
+      // with it: the step's own limit would fail the whole job. Past this point only the homepage still waits.
+      let result = null;
+      if (i > 0 && Number.isFinite(pageLimit)) {
+        let timer;
+        const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), Math.max(1000, pageLimit - Date.now())); });
+        result = await Promise.race([capture, timeout]);
+        clearTimeout(timer);
+        if (result === null) {
+          capture.catch(() => {}); // abandoned: the browser is closed below
+          notCaptured.push(info.path);
+          failedPages.push({ url: info.url, source: info.source, reason: 'time-limit' });
+          continue; // the check above then moves the remaining pages to "links to live"
+        }
+      } else {
+        result = await capture;
+      }
+      const { views, errors } = result;
       slowest = Math.max(slowest, Date.now() - started);
       for (const e of errors) report.errors.push({ step: 'inspect', message: `${info.path} (${e.view}): ${e.message}` });
       if (!views.desktop) {

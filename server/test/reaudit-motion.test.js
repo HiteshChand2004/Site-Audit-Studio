@@ -1,5 +1,5 @@
 // Re-audit 4b.8: motion in the fix checklist (reaudit/motion.js). The recreated pages are measured with the same probes the
-// capture ran on the original and compared by kind: scroll reveals by count, hover by tag + text, loops by pattern + duration.
+// capture ran on the original and compared by kind: scroll reveals by count, hover by tag + text, loops by pattern.
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -64,7 +64,7 @@ after(async () => {
 
 const measure = async (i) => (await measureNewMotion({ origin: servers[i].origin, pages: [{ slug: 'index', urlPath: '' }] })).pages;
 
-test('summarize counts scroll reveals, hover elements by tag + text, and loops by pattern + duration', () => {
+test('summarize counts scroll reveals, hover elements by tag + text, and loops by pattern', () => {
   const s = summarize({
     reveal: { elements: [{ trigger: { kind: 'scroll' }, timing: { duration: 700 }, replay: true }, { trigger: { kind: 'timed' }, timing: { duration: 700 } }] },
     hover: [{ tag: 'a', text: 'Home', changes: { color: ['a', 'b'] } }],
@@ -72,7 +72,7 @@ test('summarize counts scroll reveals, hover elements by tag + text, and loops b
   });
   assert.deepEqual([s.reveal.count, s.reveal.replay], [1, 1]);
   assert.deepEqual(s.hover.keys, ['a|Home']);
-  assert.deepEqual(s.loops.keys, ['spin|20']);
+  assert.deepEqual(s.loops.keys, ['spin']);
 });
 
 test('motionItems: reproduced = pass, partly = open, mostly lost = regressed; nothing in the original = no row', () => {
