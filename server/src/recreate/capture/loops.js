@@ -6,7 +6,7 @@
 //               the page wrote them (translateX(-50%) stays a percentage). CSS transitions are not loops.
 //   script    - motion with no animation object behind it (requestAnimationFrame loops of GSAP, framer-motion, a
 //               hand-written marquee): the computed transform / opacity of all elements is compared 450 ms apart,
-//               the changing ones (not explained by an animation) are recorded frame by frame for ~1.4 s and
+//               the changing ones (not explained by an animation) are recorded frame by frame for ~2.2 s (a window of one period always holds a maximum and a minimum) and
 //               analysed: spin (deg/s), linear movement with wrap-around (px/s, period), oscillation (period, amplitude).
 // Reveal effects (one-shot, scroll-triggered) are 4b.2; hover is 4b.1. Elements are identified by the `path` of the DOM
 // snapshot (body>div:1>a:2). Output: `loops` in capture/<slug>/motion.json.
@@ -104,7 +104,7 @@ export function scanAnimations(opts) {
  * @returns {Promise<{ candidates: object[], scanned: number, changed: number }>}
  */
 export async function findScriptLoops(opts) {
-  const { maxCandidates = 40, probeMs = 450, recordMs = 1400 } = opts || {};
+  const { maxCandidates = 40, probeMs = 450, recordMs = 2200 } = opts || {};
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const SKIP_TAGS = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE', 'DEFS', 'TITLE', 'DESC']);
   const pathOf = (el) => {
@@ -387,7 +387,7 @@ export function processLoops({ scan, script }) {
  * Reads the continuous motion of a page (desktop view). Never throws for a page function failing: the part that failed is left out.
  * @param {import('playwright').Page} page
  */
-export async function captureLoops(page, { script = true, recordMs = 1400 } = {}) {
+export async function captureLoops(page, { script = true, recordMs = 2200 } = {}) {
   const scan = await page.evaluate(scanAnimations, {}).catch(() => ({ items: [], total: 0, definedKeyframes: [] }));
   const found = script ? await page.evaluate(findScriptLoops, { recordMs }).catch(() => null) : null;
   return processLoops({ scan, script: found ?? undefined });
