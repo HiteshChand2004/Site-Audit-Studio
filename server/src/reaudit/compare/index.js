@@ -333,7 +333,7 @@ const categoryOrder = (c) => {
  *   the output that was audited (its stack, the framework runtimes it ships on purpose, where it put each page, its bundle sizes)
  * @returns {object} the checklist
  */
-export function compareAudits({ old, next, report, newOrigin, output = null }) {
+export function compareAudits({ old, next, report, newOrigin, output = null, motion = null }) {
   // Pages as the recreated output has them (Next.js moves some URLs); without an output, the original layout.
   const moved = new Map((output?.pages ?? []).map((p) => [p.outPath, p.path]));
   const reportPages = (report.pages ?? []).map((p) => (moved.has(p.outPath) ? { ...p, newPath: moved.get(p.outPath) } : p));
@@ -385,6 +385,7 @@ export function compareAudits({ old, next, report, newOrigin, output = null }) {
     ...linkItems({ oldLinks: old.audit.brokenLinks, newLinks: next.audit.brokenLinks, oldScopeLinks, map }),
     ...platformItems(old.audit.techStack, next.audit.techStack, output),
     ...scriptItem(old.lighthouse, next.lighthouse, output),
+    ...(motion?.items ?? []),
     ...manualItems(old.audit.manualRebuild, report.manual),
   ];
   const items = raw
@@ -395,6 +396,8 @@ export function compareAudits({ old, next, report, newOrigin, output = null }) {
   for (const it of items) summary[it.status]++;
   summary.total = items.length;
   if (items.some((it) => it.category === 'performance')) notes.push(LOCAL_PERF_NOTE);
+  if (motion?.failed?.length) notes.push(`Motion could not be measured on ${plural(motion.failed.length, 'recreated page')} (${motion.failed.slice(0, 3).map((f) => f.error).join('; ')}).`);
+  if (motion?.skipped?.length) notes.push(`Motion was measured on ${plural(motion.summary?.pages ?? 0, 'page')} only; ${plural(motion.skipped.length, 'page')} skipped to stay within the time limit.`);
 
   return {
     version: CHECKLIST_VERSION,
@@ -406,6 +409,8 @@ export function compareAudits({ old, next, report, newOrigin, output = null }) {
     stack: output ? { id: output.stack, label: output.label, jsBytes: { before: scriptBytes(old.lighthouse), after: output.build?.js?.gzipBytes ?? scriptBytes(next.lighthouse) } } : null,
     scores: { before: old.audit.scores ?? null, after: next.audit.scores ?? null },
     metrics: { before: old.audit.metricsByDevice ?? null, after: next.audit.metricsByDevice ?? null },
+    // Motion (reaudit/motion.js): pages measured on both sides and the totals; null when it was not measured.
+    motion: motion ? { ...(motion.summary ?? {}), failed: motion.failed ?? [], skipped: motion.skipped ?? [] } : null,
     categories: CATEGORIES.filter((c) => items.some((it) => it.category === c.id)),
     items,
     notes,

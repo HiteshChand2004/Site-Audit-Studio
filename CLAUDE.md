@@ -77,7 +77,8 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
 | 4b.3 | Continuous motion capture: CSS animations / WAAPI loops, script-driven loops (`capture/loops.js`, `motion.json.loops`) | ✅ WIP |
 | 4b.4 | IR `motion` (hover, focus, scroll reveal, loops) + plain-HTML emission: CSS rules, generated `js/motion.js`, safety profile, preview | ✅ WIP |
 | 4b.5 | The same motion in React + Vite / Next.js / MERN (ship `motion.js`, safety, equivalence ignores its classes) | ✅ WIP |
-| 4b.8–4b.9 | Re-audit rows + UI, real-site verification, docs | ⏳ |
+| 4b.8 | Re-audit rows (Motion category), NEW-panel Motion card, report row, hover control step | ✅ WIP |
+| 4b.9 | Real-site verification (parchaa.com + panscience.xyz), calibration, docs | ⏳ |
 
 4b.6.1 details (**measures only, never fails a job**):
 - Last Recreate step `responsive` ("Checking responsive layout", `recreate/responsive.js`). Default job budget **10 → 12 minutes** (`recreateBudgetMs`): the 2 extra
@@ -232,6 +233,22 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
 - **Real sites**: panscience.xyz recreate re-exported (fresh builds) as React + Vite, Next.js and MERN: DOM 6/6 identical, pixels 1.0, hydration 6/6 clean, safety passed, no warnings from the script; in a browser the three builds start with all 50 / 28 reveal elements hidden on `/` and `/approach/`
   and none left hidden after scrolling through, no page errors. Gotcha when re-testing: `POST …/export` returns the existing output recorded in the report, so removing `stacks/` by hand is not a rebuild (delete `outputs.<stack>` from the report/DB row first).
 - Tests: the real-export tests of `recreate-react/next/mern.test.js` carry a reveal effect (IR with `motion.script`): script file and tag in the build, equivalence + hydration still clean, and in a browser under the preview's policy `<html>` gets `js-motion` and the heading in view `is-in`.
+
+4b.8 details (motion in the re-audit, the NEW panel and the complete report):
+- **Hover control step (4b.1 refinement, found by this step)**: after a hover shows a change, the mouse leaves and the state is read again (`interactions.js keepReverting`, one extra read per positive finding): a real hover effect reverts; a change that stays or goes on (an entrance animation, a timer, a
+  loop that ran while the mouse was there) is dropped, counted in `stats.notReverted` (`report.pages[].motion.notReverted`). Judged part by part: the element's own changes, its pseudo-elements and each descendant are kept or dropped separately, so a looping child does not hide the card's real hover.
+  panscience: the original's hover count went 31 → 24 (page-title labels and the hero heading were entrance animations).
+- **Re-audit step `motion`** (`reaudit/motion.js`, between the Analyze steps and `compare`, weight 5, never fails a re-audit): the original's `capture/<slug>/motion.json` is read; each recreated page (≤ 6, 40 s each, 150 s total) is opened on the throwaway server (JavaScript on, only that origin
+  reachable) and measured with the same probes as the capture (`capture/measure.js measureMotion`: scroll reveal, loops, hover; hover budget 10 s = a little more than the capture's 8 s, because the probes walk the candidates in the same order and a recreate that gets less time would look like it lost elements).
+  `skip: ['motion']` leaves it out.
+- **Rows** (category `motion`, label "Motion", between Best practices and Platform): `motion.reveal` (scroll reveals by count + typical duration), `motion.hover` (paired by tag + text, with how many have the same changed properties), `motion.loops` (paired by pattern + duration). The original has the effect, so
+  reproduced ≥ 90 % = `pass`, 50-90 % = `open`, < 50 % = `regressed`; a kind the original does not have has no row. `checklist.motion = { pages, reveal, hover, loops (before/after), failed[], skipped[] }`, also in `audit.recreate.motion`; pages that failed or were skipped become a note.
+- **NEW panel**: the recreate card has a **Motion** section (hover / focus / scroll reveal / loops counts, the generated script, what was not rebuilt and why, timed effects left to the page's own CSS); the Safety row says "only the generated reveal script" when the build carries `js/motion.js`.
+  The fix checklist shows the Motion category like any other. The complete report (HTML / PDF / JSON) has a Motion row under "Built, fixed and left to review" and the Safety row names the script.
+- **Real site** (panscience.xyz, new Recreate + re-audits): scroll reveal 81 of 94 (typical 700 ms, same as the original) = open; hover 23 of 24 = **pass** (the one missing is the home page's `Ventures` nav link); loops 26 of 34 = open (8 are dashed spokes inside an inline SVG, which is not part of the IR).
+  Gotcha found on the way: with the first 5 s hover budget the recreate was probed only as far as 7 candidates and looked like it had lost 7 hover effects - budgets must not be shorter than the capture's.
+- **Open / 4b.9**: reveal 81/94 (the rest are effects the recreate cannot rebuild: page-load entrances, script-driven); loops in inline SVG; `/ventures` and `/media` reveal capture varies between runs; re-verify `timed` / stagger rules and the Next `/` first-measure flake on panscience.xyz and parchaa.com.
+- Tests: `reaudit-motion.test.js` (summaries, rows and thresholds, real measurement of an original and two recreates with other markup: same effects found / all lost, unmeasurable page, checklist category); `recreate-motion.test.js` (entrance animation is no hover, real hover kept, a looping child does not hide the card's hover, `keepReverting`).
 
 ### Phase 6 final summary
 Every recreate can be built as **four stacks**, all from the same saved IR and all checked against the plain-HTML build: Plain HTML / CSS / JS (the

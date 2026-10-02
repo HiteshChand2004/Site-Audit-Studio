@@ -112,6 +112,48 @@ function Responsive({ result }) {
   );
 }
 
+const SKIP_REASON = {
+  'script-driven': 'driven by script',
+  'scroll-linked': 'scroll-linked',
+  'pseudo-element': 'on a pseudo-element',
+  'no-keyframes': 'without keyframes',
+  'url-in-keyframes': 'with an image in the keyframes',
+  unmapped: 'inside an inline graphic or on an element that was not recreated',
+};
+
+/** What the recreate rebuilt of the original's motion: hover and focus states, scroll reveals, looping animations. */
+function Motion({ result }) {
+  const m = result.generate.motion;
+  const hover = m.hover?.elements ?? 0;
+  const focus = m.focus?.elements ?? 0;
+  const reveal = m.reveal?.elements ?? 0;
+  const loops = (m.loops?.carried ?? 0) + (m.loops?.rebuilt ?? 0);
+  if (!hover && !focus && !reveal && !loops && !m.loops?.skipped?.length) return null;
+  const notRebuilt = {};
+  for (const s of m.loops?.skipped ?? []) notRebuilt[s.reason] = (notRebuilt[s.reason] ?? 0) + 1;
+  const timed = m.reveal?.skipped?.timed ?? 0;
+  const scripts = result.outputs?.html?.scripts;
+  return (
+    <section aria-label="Motion" className={styles.section}>
+      <div className={styles.head}>
+        <span className={styles.title}>Motion</span>
+        <span className={styles.meta}>captured from the original · {plural(m.pages ?? 0, 'page')}</span>
+      </div>
+      <ul className={styles.chips}>
+        {hover > 0 && <li data-tone="ok" title={`${m.hover.effects} distinct hover effects`}>Hover <span className="mono">{hover}</span></li>}
+        {focus > 0 && <li data-tone="ok">Focus <span className="mono">{focus}</span></li>}
+        {reveal > 0 && <li data-tone="ok" title={`${m.reveal.effects} distinct reveal effects${m.reveal.replay ? `, ${m.reveal.replay} repeat` : ''}`}>Scroll reveal <span className="mono">{reveal}</span></li>}
+        {loops > 0 && <li data-tone="ok" title={`${m.loops.carried} already in the page's CSS, ${m.loops.rebuilt} rebuilt`}>Loops <span className="mono">{loops}</span></li>}
+      </ul>
+      <p className={styles.note}>
+        {scripts ? 'Scroll reveal needs one small generated script (js/motion.js); without script, or with reduced motion, the page shows finished. ' : ''}
+        {Object.keys(notRebuilt).length > 0 && `Not rebuilt: ${Object.entries(notRebuilt).map(([reason, n]) => `${plural(n, 'loop')} ${SKIP_REASON[reason] ?? reason}`).join(', ')}. `}
+        {timed > 0 && `${plural(timed, 'timed effect')} (rotating headlines, timers) left as the page's own CSS. `}
+      </p>
+    </section>
+  );
+}
+
 /** Fidelity (overall + per page, flagged below the threshold), visual difference, build verification and warnings. */
 export default function RecreateReport({ result, projectId }) {
   const fidelity = result.fidelity;
@@ -160,6 +202,8 @@ export default function RecreateReport({ result, projectId }) {
 
       {result.responsive?.status === 'done' && <Responsive result={result} />}
 
+      {result.generate?.motion && <Motion result={result} />}
+
       {verify && (
         <section aria-label="Build verification" className={styles.section}>
           <div className={styles.head}>
@@ -182,7 +226,7 @@ export default function RecreateReport({ result, projectId }) {
               detail={verify.html.valid ? `valid · ${plural(verify.checked.pages, 'page')}` : `${plural(verify.html.warnings, 'warning')}`}
             />
             {result.safety && (
-              <CheckRow ok={result.safety.safe} label="Safety" detail="no script, no external reference" />
+              <CheckRow ok={result.safety.safe} label="Safety" detail={result.outputs?.html?.scripts ? 'only the generated reveal script, no external reference' : 'no script, no external reference'} />
             )}
           </ul>
         </section>

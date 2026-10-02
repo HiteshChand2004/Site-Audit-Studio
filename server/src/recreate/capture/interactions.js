@@ -336,6 +336,41 @@ export function diffStates(rest, after) {
 }
 
 /**
+ * Does the effect found by a hover go away again when the mouse leaves? `back` is the state read after the mouse left,
+ * `rest` the state before the hover, `d` the effect (diffStates(rest, hovered)). A real hover effect reverts; a change that
+ * a timer, an entrance animation or a loop makes (it also happens without the mouse) does not, so it is not a hover effect.
+ * Judged part by part: a looping child inside a hovered card keeps changing, but the card's own hover is real, so only the
+ * parts that did not revert are dropped from the effect.
+ * @returns {object|null} the effect without the parts that stayed, or null when nothing of it reverted
+ */
+export function keepReverting(rest, back, d) {
+  const gone = diffStates(rest, back);
+  if (!gone) return d;
+  const out = { ...d, changes: Object.fromEntries(Object.entries(d.changes).filter(([k]) => !(k in gone.changes))) };
+  const pseudo = {};
+  for (const [which, changes] of Object.entries(d.pseudo ?? {})) {
+    const kept = Object.fromEntries(Object.entries(changes).filter(([k]) => !(k in (gone.pseudo?.[which] ?? {}))));
+    if (Object.keys(kept).length) pseudo[which] = kept;
+  }
+  if (Object.keys(pseudo).length) out.pseudo = pseudo;
+  else delete out.pseudo;
+  const kids = [];
+  for (const kid of d.kids ?? []) {
+    const left = gone.kids?.find((x) => x.path === kid.path);
+    const kept = Object.fromEntries(Object.entries(kid.changes).filter(([k]) => !(k in (left?.changes ?? {}))));
+    if (Object.keys(kept).length) kids.push({ ...kid, changes: kept });
+  }
+  if (kids.length) out.kids = kids;
+  else delete out.kids;
+  if (d.layout && gone.layout) {
+    out.layout = false;
+    delete out.rect;
+  }
+  const nothing = !Object.keys(out.changes).length && !out.pseudo && !out.kids && !out.layout && !out.domDelta;
+  return nothing ? null : out;
+}
+
+/**
  * Probes a page (desktop view) for hover and focus effects. Hover may use up to 60 % of the budget, focus the rest.
  * @param {import('playwright').Page} page
  * @param {{ limit?: number, perSignature?: number, focusStops?: number, budgetMs?: number }} [o]
@@ -348,7 +383,7 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
   const scan = await page.evaluate(scanRules, {});
   const picked = await page.evaluate(install, { limit, perSignature });
   const args = (i) => ({ i, props: MOTION_PROPS, pseudoProps: PSEUDO_EXTRA });
-  const stats = { candidates: picked.candidates.length, focusable: picked.focusable, probed: 0, hovered: 0, focused: 0, noChange: 0, covered: 0, skipped: picked.skipped, timedOut: false };
+  const stats = { candidates: picked.candidates.length, focusable: picked.focusable, probed: 0, hovered: 0, focused: 0, noChange: 0, notReverted: 0, covered: 0, skipped: picked.skipped, timedOut: false };
   const settle = (state) => Math.min(700, Math.max(80, (state ? transitionMs(state) : 200) + 60));
 
   const hover = [];
@@ -391,8 +426,18 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
       stats.noChange++;
       continue;
     }
+    // Control: a hover effect goes away when the mouse leaves. A change that stays (or goes on) is an entrance animation,
+    // a timer or a loop that happened to run while the mouse was there - not a hover effect.
+    await page.mouse.move(-20, -20).catch(() => {});
+    await page.waitForTimeout(Math.min(600, settle(before) + 100));
+    const back = await page.evaluate(readState, args(c.i));
+    const kept = back ? keepReverting(before, back, d) : d;
+    if (!kept) {
+      stats.notReverted++;
+      continue;
+    }
     stats.hovered++;
-    hover.push({ path: c.path, tag: c.tag, text: c.text, sig: c.sig, reasons: c.reasons, rect: c.rect, cursor: c.cursor, ...d });
+    hover.push({ path: c.path, tag: c.tag, text: c.text, sig: c.sig, reasons: c.reasons, rect: c.rect, cursor: c.cursor, ...kept });
   }
   await page.mouse.move(-20, -20).catch(() => {});
 

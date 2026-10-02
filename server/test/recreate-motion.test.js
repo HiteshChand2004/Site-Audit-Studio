@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { launchBrowser } from '../src/audit/render.js';
-import { captureInteractions, diffStates } from '../src/recreate/capture/interactions.js';
+import { captureInteractions, diffStates, keepReverting } from '../src/recreate/capture/interactions.js';
 import { snapshotPage } from '../src/recreate/capture/snapshot.js';
 import { startSiteServer } from '../src/recreate/verify/server.js';
 
@@ -47,12 +47,32 @@ j.addEventListener('mouseleave', () => { j.style.letterSpacing = ''; j.style.col
 <div id="dups">${Array.from({ length: 8 }, (_, i) => `<a class="dup" href="#x${i}">dup ${i}</a>`).join('')}</div>
 </body></html>`;
 
+// An entrance animation that is still running while the mouse is probed (it also changes without the mouse), a loop with a
+// real hover on the same element, and a plain hover.
+const ENTRANCE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Entrance</title>
+<style>
+body { margin: 0; font: 16px sans-serif; }
+.ent { cursor: pointer; width: 200px; height: 40px; background: #eeeeee; animation: ent-in 3s linear both; }
+@keyframes ent-in { from { opacity: 0.1; } to { opacity: 1; } }
+.real { display: block; width: 200px; color: #111111; transition: color 0.2s; }
+.real:hover { color: #e11d48; }
+.spinwrap { display: block; width: 200px; padding: 10px; transition: background-color 0.2s; }
+.spinwrap:hover { background-color: #dbeafe; }
+.spinner { display: inline-block; width: 14px; height: 14px; background: #333333; animation: turn 1.5s linear infinite; }
+@keyframes turn { to { transform: rotate(360deg); } }
+</style></head><body>
+<div class="ent">Entrance</div>
+<a class="real" href="#r">Real link</a>
+<a class="spinwrap" href="#s"><span class="spinner"></span> Spin card</a>
+</body></html>`;
+
 let dir;
 let site;
 let browser;
 before(async () => {
   dir = await mkdtemp(path.join(os.tmpdir(), 'sas-motion-'));
   await writeFile(path.join(dir, 'index.html'), PAGE);
+  await writeFile(path.join(dir, 'entrance.html'), ENTRANCE);
   site = await startSiteServer(dir);
   browser = await launchBrowser();
 });
@@ -110,6 +130,41 @@ test('a hover effect driven by script is found without any :hover rule; a scroll
   // The reveal host moved because it was scrolled into view, not because of the mouse.
   assert.ok(found.hover.every((h) => !h.text.startsWith('reveal host')), JSON.stringify(found.hover.map((h) => h.text)));
   await page.context().close();
+});
+
+test('a change that stays when the mouse leaves is no hover effect (entrance animation, timer, loop)', async () => {
+  const page = await (await browser.newContext({ viewport: { width: 1000, height: 700 } })).newPage();
+  await page.goto(`${site.origin}/entrance.html`, { waitUntil: 'load' });
+  const found = await captureInteractions(page, { budgetMs: 20000 });
+  const texts = found.hover.map((h) => h.text);
+  assert.ok(!texts.includes('Entrance'), `the entrance animation is not a hover: ${JSON.stringify(texts)}`);
+  assert.ok(found.stats.notReverted >= 1, JSON.stringify(found.stats));
+  assert.ok(texts.includes('Real link'), 'a real hover still reverts and is kept');
+  // A loop inside the element does not hide its real hover: only the properties the hover changed must revert.
+  const card = found.hover.find((h) => h.text.includes('Spin card'));
+  assert.ok(card && card.changes['background-color'], JSON.stringify(found.hover.map((h) => [h.text, Object.keys(h.changes)])));
+  await page.context().close();
+});
+
+test('keepReverting: what stays after the mouse left is dropped from the effect, a fully stuck change is null', () => {
+  const kid = (transform) => ({ path: 'p>k:1', values: { transform }, tr: {} });
+  const state = (values, kids = []) => ({ values, tr: {}, rect: [0, 0, 10, 10], pseudo: {}, kids, domCount: 5 });
+  const rest = state({ color: 'a', opacity: '1' }, [kid('none')]);
+  const d = diffStates(rest, state({ color: 'b', opacity: '1' }, [kid('x')]));
+  // Everything is back: the effect as it was.
+  assert.deepEqual(keepReverting(rest, state({ color: 'a', opacity: '1' }, [kid('none')]), d), d);
+  // The child keeps moving (a loop): the card's own colour change stays, the child part goes.
+  const loop = keepReverting(rest, state({ color: 'a', opacity: '1' }, [kid('x')]), d);
+  assert.deepEqual(loop.changes, { color: ['a', 'b'] });
+  assert.equal(loop.kids, undefined);
+  // The colour stayed and the child is back: only the child part is left.
+  const stuck = keepReverting(rest, state({ color: 'b', opacity: '1' }, [kid('none')]), d);
+  assert.deepEqual(stuck.changes, {});
+  assert.equal(stuck.kids.length, 1);
+  // Nothing reverted: not a hover effect.
+  assert.equal(keepReverting(rest, state({ color: 'b', opacity: '1' }, [kid('x')]), d), null);
+  // An unrelated property moving on does not matter.
+  assert.deepEqual(keepReverting(rest, state({ color: 'a', opacity: '0.4' }, [kid('none')]), d).changes, { color: ['a', 'b'] });
 });
 
 test('equal elements are probed a few times and counted as a group', async () => {

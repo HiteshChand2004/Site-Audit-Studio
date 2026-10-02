@@ -103,5 +103,7 @@ export function recreateSection(project, audit) {
     scope: c.scope ?? null,
     output: c.stack ?? null,
     notes: c.notes ?? [],
+    // Motion measured on both sides (4b.8): { pages, reveal, hover, loops, failed, skipped } or null.
+    motion: c.motion ?? null,
   };
 }

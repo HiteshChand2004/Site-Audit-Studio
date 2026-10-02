@@ -19,6 +19,7 @@ export const CATEGORIES = [
   { id: 'links', label: 'Links' },
   { id: 'crawl', label: 'Meta & crawl' },
   { id: 'best-practices', label: 'Best practices' },
+  { id: 'motion', label: 'Motion' },
   { id: 'platform', label: 'Platform' },
   { id: 'manual', label: 'Manual rebuild' },
 ];

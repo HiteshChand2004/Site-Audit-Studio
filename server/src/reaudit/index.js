@@ -15,6 +15,7 @@ import { servePreview } from '../recreate/preview.js';
 import { recreateDir } from '../recreate/workspace.js';
 import { createNetPolicy, userPolicy } from '../security/netGuard.js';
 import { compareAudits, loadSide } from './compare/index.js';
+import { measureNewMotion, motionItems, readOldMotion } from './motion.js';
 
 /** Thrown when a re-audit cannot run at all; the job is marked failed. */
 export class ReauditError extends Error {}
@@ -25,6 +26,7 @@ export const SKIPPED_STEPS = ['screenshots'];
 export const STEPS = [
   { key: 'serve', label: 'Serving the recreated site', weight: 2 },
   ...AUDIT_STEPS.filter((s) => !SKIPPED_STEPS.includes(s.key)),
+  { key: 'motion', label: 'Checking the motion', weight: 5 },
   { key: 'compare', label: 'Comparing with the original', weight: 3 },
 ];
 export const PUBLIC_STEPS = STEPS.map(({ key, label }) => ({ key, label }));
@@ -93,6 +95,24 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
     // The analysis contract carries a sample checklist for the OLD site; it means nothing here.
     delete audit.recreate;
 
+    // Motion (4b.8): the recreated pages measured with the probes the capture ran on the original. Never fails a re-audit.
+    progress('motion', 0);
+    let motion = null;
+    if (!skip.includes('motion')) {
+      try {
+        const folder = recreateDir(project.id, recreateId);
+        const oldMotion = await readOldMotion(folder, report.pages);
+        const slugOf = new Map((report.pages ?? []).map((p) => [p.outPath, p.slug]));
+        const targets = outputPageList.filter((p) => slugOf.has(p.outPath) && oldMotion.has(slugOf.get(p.outPath)))
+          .map((p) => ({ slug: slugOf.get(p.outPath), urlPath: p.path.replace(/^\//, '') }));
+        const measured = await measureNewMotion({ origin: served.origin, pages: targets, deadline: Date.now() + 150000 });
+        motion = { ...motionItems(oldMotion, measured.pages), failed: measured.failed, skipped: measured.skipped };
+      } catch (err) {
+        motion = { items: [], summary: null, failed: [{ slug: '*', error: String(err?.message ?? err).split('\n')[0] }], skipped: [] };
+      }
+    }
+    progress('motion', 1);
+
     progress('compare', 0);
     const checklist = compareAudits({
       old: await loadSide(path.join(projectDir(project.id), 'audit', report.analysisId), JSON.parse(analysis.result_json)),
@@ -100,6 +120,7 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
       report,
       newOrigin: served.origin,
       output,
+      motion,
     });
     progress('compare', 1);
     return {

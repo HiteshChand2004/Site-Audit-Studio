@@ -184,7 +184,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       try {
         await writeFile(path.join(dir, 'motion.json'), JSON.stringify(found));
         motion = {
-          hover: found.hover.length, focus: found.focus.length, rules: found.rules.length, rulesTotal: found.stats.rulesTotal, probed: found.stats.probed,
+          hover: found.hover.length, focus: found.focus.length, rules: found.rules.length, rulesTotal: found.stats.rulesTotal, probed: found.stats.probed, notReverted: found.stats.notReverted ?? 0,
           ms: found.stats.ms, timedOut: found.stats.timedOut, reveal: found.reveal?.stats ?? null, loops: loops?.stats ?? null, ...((error ?? loopsError) && { error: error ?? loopsError }),
         };
       } catch (err) {
