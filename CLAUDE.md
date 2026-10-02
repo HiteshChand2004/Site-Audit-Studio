@@ -46,7 +46,9 @@ and merged on `phase-4a`.
 5.4 UI ✅ · 5.5 real-site verification + docs ✅. Phase 4b (responsive fidelity, visual diff, motion) is done and merged into `phase-4a` (53652dd, fast-forward from `phase-4b`; see its final summary). Same workflow: one step at a time, WIP
 commit, wait for the user's "next"; never push; while the user tests, work in a git worktree and merge only when asked.
 
-### Speed and robustness of the jobs (after Phase 4b) — branch `perf-robustness` (worktree `../Website-Audit-perf`), WIP, not merged
+### Speed and robustness of the jobs (after Phase 4b) — ✅ merged into `phase-4a` (d1b09e8, fast-forward from `perf-robustness`, approved by the user); never pushed
+Final check before the merge: full server suite 238 / 238; panscience.xyz end to end through the API (Analyze 102 s, Recreate 491 s, re-audit 174 s, 0 errors, fidelity 80, visual difference 79,
+6 / 6 pages, 42 / 42 widths, safety passed). The worktree `../Website-Audit-perf` and the branch `perf-robustness` can be removed.
 Reported by the user on panscience.xyz: Analyze took very long, stopped at 43 % and ended with "render timed out after 85s, screenshots timed out after 70s, links /
 Lighthouse skipped: the time budget ran out". On a quiet machine the same analysis took 82 s without an error: the pipeline was fragile on a slow network or a busy machine
 (every step one after the other, one total budget, the most valuable step — Lighthouse — last). Everything below is general, nothing site-specific.
