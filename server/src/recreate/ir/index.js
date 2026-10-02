@@ -1,7 +1,7 @@
 // The platform-free intermediate representation (IR) of the recreated site. Every stack emitter
 // (plain HTML now, React / Next.js later) works from it:
 //
-//   { version, baseUrl, breakpoints: { laptop?, tablet, mobile }, tokens, fontFaces, keyframes, boxSizingReset,
+//   { version, baseUrl, breakpoints: { laptop?, tablet, mobile }, tokens, fontFaces, keyframes, boxSizingReset, motion? (ir/motion.js),
 //     rules: [{ selector, parts: { base, laptop?, tablet?, mobile? } }],
 //     files: [{ path, content }],                  generated files (a favicon when the site has none)
 //     pages: [{ url, path, outPath, slug, head, html: { class }, body: IRNode,
@@ -310,6 +310,8 @@ function pageBody(t, site, stats) {
     const attrs = {};
     for (const [k, v] of Object.entries(n.attrs)) if (!SKIP_ATTRS.has(k) && !k.startsWith('data-')) attrs[k] = v;
     guardAttributes(attrs, stats.safety.attrs);
+    // Motion tokens (ir/motion.js): the stylesheet's hover / reveal / loop rules select on them.
+    if (n.motionTokens?.length) attrs['data-motion'] = n.motionTokens.join(' ');
     const out = { t: n.tag, sid: n.sid, attrs, children: [] };
     if (n.class) out.class = n.class;
     const id = n.attrs.id;
@@ -445,6 +447,7 @@ export function buildIR(site) {
     fontFaces: site.fontFaces.filter((f) => families.has(f.family.toLowerCase())),
     keyframes: [...site.keyframes].filter(([name]) => animationNames.has(name)).map(([name, css]) => ({ name, css: mapUrls(css, (u) => site.assetResolve(u)) })),
     boxSizingReset: styles.boxSizingReset,
+    ...(site.motion && { motion: site.motion }),
     rules: styles.rules,
     files: site.files,
     pages,

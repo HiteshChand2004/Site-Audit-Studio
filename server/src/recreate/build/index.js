@@ -25,11 +25,15 @@ export async function buildStage(ctx) {
   const minify = await buildDist({ files: out.files, assets: siteAssets, assetsDir, distDir });
   report.minify = { dir: 'dist', ...minify };
   // The plain-HTML build is the reference every stack is measured against (and the html output).
-  report.outputs = { ...report.outputs, html: { status: 'ready', dir: 'dist' } };
+  // `scripts`: the build carries the generated reveal script (js/motion.js), so its preview needs a script policy.
+  const scripts = Boolean(ctx.generated.ir?.motion?.script);
+  report.outputs = { ...report.outputs, html: { status: 'ready', dir: 'dist', ...(scripts && { scripts: true }) } };
 
-  // Safety gate: anything that could run script or load from another origin fails the job.
+  // Safety gate: anything that could run script or load from another origin fails the job. The one script allowed
+  // is the fixed reveal script (verify/appProfiles.js `motion`).
   ctx.progress(0.06, 'Checking the site is safe to preview');
-  const safety = { site: await scanSite(siteDir), dist: await scanSite(distDir) };
+  const scanOpts = scripts ? { app: 'motion' } : {};
+  const safety = { site: await scanSite(siteDir, scanOpts), dist: await scanSite(distDir, scanOpts) };
   report.safety = {
     safe: safety.site.safe && safety.dist.safe,
     checked: safety.site.checked,

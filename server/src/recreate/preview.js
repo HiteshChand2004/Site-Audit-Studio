@@ -202,11 +202,13 @@ export function stopPreview({ projectId, recreateId } = {}) {
  */
 export async function previewStage(ctx) {
   const { ir } = ctx.generated;
-  const served = await servePreview(path.join(ctx.dir, 'dist'));
+  const motionScript = Boolean(ir.motion?.script);
+  const served = await servePreview(path.join(ctx.dir, 'dist'), { scripts: motionScript });
   try {
     const targets = [
       ...ir.pages.map((p) => ({ path: p.outPath.replace(/(^|\/)index\.html$/, '$1'), type: 'text/html' })),
       { path: 'css/site.css', type: 'text/css' },
+      ...(motionScript ? [{ path: 'js/motion.js', type: 'text/javascript' }] : []),
     ];
     let bytes = 0;
     for (const [i, t] of targets.entries()) {

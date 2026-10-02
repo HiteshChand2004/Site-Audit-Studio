@@ -118,6 +118,10 @@ export async function scanSite(dir, { app = false, contentChunk = () => false } 
     if (!kind) continue;
     checked[kind]++;
     const rel = path.relative(dir, file).replaceAll('\\', '/');
+    if (kind === 'js' && profile?.onlyFile && rel !== profile.onlyFile) {
+      if (issues.length < MAX_ISSUES) issues.push({ file: rel, type: 'script', detail: 'unexpected script file' });
+      continue;
+    }
     const content = await readFile(file, 'utf8');
     // Page and component chunks carry the site's own text; they are covered by the DOM equivalence with the scanned HTML build.
     if (kind === 'js' && (contentChunk(rel) || profile?.contentChunk(rel))) continue;

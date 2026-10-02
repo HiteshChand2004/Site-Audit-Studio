@@ -22,7 +22,7 @@ export const recreateJobs = new JobManager({
     const report = await runRecreate({ project, recreateId: job.id, progress, warnings: job.warnings });
     // The preview is runtime state: its port is not part of the report. The app asks for it
     // (GET/POST /preview), which also starts it again after a server restart.
-    await startPreview({ projectId: project.id, recreateId: job.id, root: path.join(recreateDir(project.id, job.id), 'dist') }).catch(() => {});
+    await startPreview({ projectId: project.id, recreateId: job.id, root: path.join(recreateDir(project.id, job.id), 'dist'), scripts: Boolean(report.outputs?.html?.scripts) }).catch(() => {});
     return report;
   },
   // Keep the latest completed recreates only; also removes any leftover temporary workspace.

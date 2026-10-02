@@ -98,7 +98,8 @@ async function latestBuild(project) {
   const stack = targetStack(report, project.stack);
   const root = outputRoot(dir, report, stack);
   if (!(await stat(root).catch(() => null))?.isDirectory()) return null;
-  return { recreateId: row.id, root, scripts: getEmitter(stack)?.scripts ?? false, stack };
+  // The plain-HTML build carries a script only when it has scroll-reveal effects (js/motion.js, recorded by the build step).
+  return { recreateId: row.id, root, scripts: getEmitter(stack)?.scripts || reportOutputs(report)[stack]?.scripts || false, stack };
 }
 
 const previewOf = (projectId) => {

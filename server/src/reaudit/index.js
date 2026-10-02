@@ -67,7 +67,7 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
 
   // connect-src 'self': Lighthouse fetches robots.txt from inside the page (previewHeaders).
   // An app's own scripts run (Lighthouse measures what its visitors get); the CSP still allows only the build's own.
-  const served = await servePreview(root, { connectSelf: true, scripts: emitter?.scripts ?? false });
+  const served = await servePreview(root, { connectSelf: true, scripts: emitter?.scripts || reportOutputs(report)[stack]?.scripts || false });
   try {
     // Pages at the URL the output serves them (a stack may move some).
     const outputPageList = outputPages(report, stack);

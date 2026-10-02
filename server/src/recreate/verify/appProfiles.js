@@ -19,7 +19,19 @@ function jsonArray(text) {
   }
 }
 
+// The plain-HTML build with scroll reveal (emit/motionScript.js): the one fixed script `js/motion.js`, loaded by <script src defer>
+// from each page (a relative path), and nothing else.
+const MOTION_SCRIPT = /^(\.\.\/)*js\/motion\.js$/;
+
 export const APP_PROFILES = {
+  motion: {
+    bundleLink: /$^/,
+    scriptAllowed: ({ src, type, text }) => !type && MOTION_SCRIPT.test(src ?? '') && !text.trim(),
+    jsAllow: [],
+    contentChunk: () => false,
+    // Only this file may be JavaScript at all.
+    onlyFile: 'js/motion.js',
+  },
   vite: {
     bundleLink: VITE_BUNDLE,
     scriptAllowed: ({ src, type, text }) => type === 'module' && VITE_BUNDLE.test(src ?? '') && !text.trim(),

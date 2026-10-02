@@ -8,6 +8,7 @@ import path from 'node:path';
 import { db, projectDir } from '../src/db/index.js';
 import { declarations, tidyColors } from '../src/recreate/emit/css.js';
 import { emitPage } from '../src/recreate/emit/html.js';
+import { MOTION_JS } from '../src/recreate/emit/motionScript.js';
 import { buildHead, clip, generatedFavicon } from '../src/recreate/ir/head.js';
 import { pickBreakpoints } from '../src/recreate/ir/index.js';
 import { createLinkResolver, relFile, relPage } from '../src/recreate/ir/links.js';
@@ -294,7 +295,9 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   const report = await runRecreate({ project, recreateId, progress: () => {} });
   const dir = recreateDir(id, recreateId);
   const site = path.join(dir, 'site');
-  const read = (file) => readFile(path.join(site, file), 'utf8');
+  const readRaw = (file) => readFile(path.join(site, file), 'utf8');
+  // Structure assertions below look at the markup without the motion tokens (4b.4: data-motion="…" on animated elements).
+  const read = async (file) => (await readRaw(file)).replace(/ data-motion="[^"]*"/g, '');
 
   assert.deepEqual(report.pages.map((p) => p.outPath), ['index.html', 'about.html', 'services/index.html', 'contact.html', 'work.html']);
   assert.deepEqual(report.errors, []);
@@ -326,7 +329,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
 
   // Links: recreated pages relative, the others live and reported.
   const home = await read('index.html');
-  assert.match(home, /<a class="[\w-]+" href="about\.html">About<\/a>/);
+  assert.match(home, /<a class="[\w-]+"(?: data-motion="[^"]*")? href="about\.html">About<\/a>/);
   assert.match(home, /href="services\/">Services</);
   assert.match(home, new RegExp(`href="${origin}/login\\.html">Log in<`));
   assert.match(home, /<link rel="canonical" href="http:\/\/localhost:4196\/">/);
@@ -334,7 +337,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
 
   // 4a.7 — builder-style seeds on /services/ (below the first screen).
   // Scroll-reveal content is captured in its revealed state: visible text, no leftover opacity 0 / offset.
-  assert.match(services, /<h2 class="[\w-]+">Revealed on scroll<\/h2>/);
+  assert.match(services, /<h2 class="[\w-]+"(?: data-motion="[^"]*")?>Revealed on scroll<\/h2>/);
   assert.match(services, /fades in when it scrolls into view/);
   const servicesInfo = report.pages.find((p) => p.path === '/services/');
   assert.ok(servicesInfo.revealPinned.desktop >= 3, JSON.stringify(servicesInfo.revealPinned));
@@ -361,6 +364,24 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.equal(spinner.timing.iterations, 'infinite');
   assert.equal(spinner.inStylesheet, true);
   assert.ok(report.motion.loops.css >= 1 && report.motion.loops.patterns.spin >= 1, JSON.stringify(report.motion.loops));
+
+  // 4b.4 — the IR carries the motion: tokens on the elements, rules in the stylesheet, the fixed reveal script.
+  const rawServices = await readRaw('services/index.html');
+  assert.match(rawServices, /<h2 class="[\w-]+" data-motion="rv r\d+( d\d+)? rp">Revealed on scroll<\/h2>/);
+  assert.match(rawServices, /<script src="\.\.\/js\/motion\.js" defer><\/script>\s*<\/head>/);
+  assert.equal(await readRaw('js/motion.js'), MOTION_JS);
+  const motionCssText = await readRaw('css/site.css');
+  assert.match(motionCssText, /@media \(prefers-reduced-motion: no-preference\) \{[\s\S]*\.js-motion \[data-motion~="r1"\]:not\(\.is-in\) \{\n {4}opacity: 0;\n {4}translate: 0px 40px;/);
+  assert.match(motionCssText, /\.js-motion \[data-motion~="r1"\]\.is-in \{\n {4}animation: m-r1 400ms ease var\(--md, 0ms\) backwards;/);
+  assert.match(motionCssText, / {2}@keyframes m-r1 \{\n {4}from \{\n {6}opacity: 0;/);
+  assert.match(motionCssText, /@media \(hover: hover\) \{[\s\S]*\[data-motion~="h1"\]:hover \{/);
+  assert.match(await readRaw('index.html'), /<script src="js\/motion\.js" defer><\/script>/);
+  assert.equal(report.generate.motion.script, true);
+  assert.ok(report.generate.motion.reveal.elements >= 3 && report.generate.motion.hover.elements >= 1, JSON.stringify(report.generate.motion));
+  assert.ok(report.generate.motion.loops.carried >= 1, 'the fixture spinner is carried by the page CSS');
+  assert.equal(report.outputs.html.scripts, true);
+  assert.equal(report.safety.safe, true);
+  assert.match(await readFile(path.join(dir, 'dist', 'js', 'motion.js'), 'utf8'), /IntersectionObserver/);
   assert.match(services, /href="\.\.\/">Home</);
   assert.match(services, /<link rel="icon" href="\.\.\/assets\/images\/hero-bg-[0-9a-f]{10}\.svg">/);
   assert.match(await read('about.html'), new RegExp(`href="${origin}/team\\.html">Our team<`));
@@ -434,7 +455,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.match(spinnerRule, /(^|\s)(max-)?width: 40px;/, spinnerRule);
   // A space-between card stretched by an explicit grid row keeps its height (its last child sits at
   // the bottom edge, so "where the content ends" would call it full).
-  const deckRule = baseRule(classOf(/<a class="([\w-]+)" href="\.\.\/about\.html">\s*<span[^>]*><\/span>\s*<span[^>]*>Deck card one/));
+  const deckRule = baseRule(classOf(/<a class="([\w-]+)"(?: data-motion="[^"]*")? href="\.\.\/about\.html">\s*<span[^>]*><\/span>\s*<span[^>]*>Deck card one/));
   assert.match(deckRule, /(^|\s)(min-)?height: 220px;/, deckRule);
   // A box holding only absolute content, part of it inside a display: contents wrapper, keeps its
   // height, so the bottom-anchored card stays where it was.
@@ -468,7 +489,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   // 4a.5 — safety: no script, handler, script URL or external reference in any page or SVG file.
   assert.equal(report.safety.safe, true, JSON.stringify(report.safety.issues));
   assert.deepEqual(report.safety.issues, []);
-  for (const [f, body] of texts) assert.doesNotMatch(body, /<script(?![^>]*application\/ld\+json)|\son\w+=|javascript:|example\.org\/(tracker|sprite|p\.svg)/i, f);
+  for (const [f, body] of texts) assert.doesNotMatch(body, /<script(?![^>]*application\/ld\+json)(?![^>]*src="(\.\.\/)*js\/motion\.js" defer>)|\son\w+=|javascript:|example\.org\/(tracker|sprite|p\.svg)/i, f);
   const svgFiles = files.filter((f) => f.endsWith('.svg'));
   const searchIcon = svgFiles.find((f) => f.includes('search-'));
   assert.ok(searchIcon);
@@ -487,7 +508,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.ok(!/<a(?![^>]*\shref=)[^>]*>Archive/.test(work));
   assert.deepEqual(fix['broken-links'].items.map((i) => [i.page, new URL(i.url).pathname, i.status]), [['/work.html', '/old-work.html', 404]]);
   assert.match(work, /<img[^>]* alt="Our studio in Lisbon"/);
-  assert.match(work, /<a class="[\w-]+" aria-label="GitHub" href="https:\/\/github\.com\/recreate-co">/);
+  assert.match(work, /<a class="[\w-]+" aria-label="GitHub"(?: data-motion="[^"]*")? href="https:\/\/github\.com\/recreate-co">/);
   assert.match(work, /<button class="[\w-]+" type="button"><img[^>]* alt="Search"/);
   assert.equal(fix['accessible-names'].count, 2);
   assert.deepEqual(fix.headings.items.map((h) => [h.from, h.to, h.text]), [['h3', 'h2', 'Project one'], ['h3', 'h2', 'Project two'], ['h3', 'h2', 'Project three']]);
@@ -551,7 +572,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.equal((await verifySite(site)).ok, true);
 
   // 4a.6 — preview: the pipeline served every page and the stylesheet; the real preview serves dist/.
-  assert.equal(report.preview.checked, 6);
+  assert.equal(report.preview.checked, 7); // five pages, the stylesheet and js/motion.js
   assert.deepEqual(report.preview.pages, ['index.html', 'about.html', 'services/index.html', 'contact.html', 'work.html']);
   const preview = await startPreview({ projectId: id, recreateId, root: path.join(dir, 'dist') });
   assert.ok(preview.port >= 5100 && preview.port <= 5199);

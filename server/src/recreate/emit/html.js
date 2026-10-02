@@ -2,7 +2,9 @@
 // stylesheet and the generated files. References in the IR become paths relative to each page.
 // Resolving references and describing nodes/head tags is shared with every stack (walk.js); this file
 // only writes them as HTML text.
+import { relFile } from '../ir/links.js';
 import { CSS_FILE, emitCss } from './css.js';
+import { MOTION_FILE, MOTION_JS } from './motionScript.js';
 import { describeNode, headTags, relativeRefs, safeJsonLd } from './walk.js';
 
 export { safeJsonLd };
@@ -62,7 +64,7 @@ function headMarkup(page, ctx) {
 export const headHtml = (page, refs) => headMarkup(page, { refs });
 
 /** One page as an HTML document. */
-export function emitPage(page, { ids = false, useAsset = () => true } = {}) {
+export function emitPage(page, { ids = false, useAsset = () => true, motionScript = false } = {}) {
   const ctx = { outPath: page.outPath, ids, refs: relativeRefs(page.outPath, useAsset) };
   const htmlAttrs = [page.head.lang && `lang="${escAttr(page.head.lang)}"`, page.html.class && `class="${page.html.class}"`].filter(Boolean).join(' ');
   return [
@@ -70,6 +72,7 @@ export function emitPage(page, { ids = false, useAsset = () => true } = {}) {
     `<html${htmlAttrs ? ` ${htmlAttrs}` : ''}>`,
     '<head>',
     headMarkup(page, ctx),
+    ...(motionScript ? [`  <script src="${relFile(page.outPath, MOTION_FILE)}" defer></script>`] : []),
     '</head>',
     emitNode(page.body, ctx, 0, true),
     '</html>',
@@ -86,7 +89,10 @@ export function emitSite(ir, { ids = false } = {}) {
   const assets = new Set();
   const useAsset = (file) => (assets.add(file), true);
   const files = new Map();
-  for (const page of ir.pages) files.set(page.outPath, emitPage(page, { ids, useAsset }));
+  // The reveal script (emit/motionScript.js) only when the IR has reveal effects; hover, focus and loops are CSS.
+  const motionScript = Boolean(ir.motion?.script);
+  for (const page of ir.pages) files.set(page.outPath, emitPage(page, { ids, useAsset, motionScript }));
+  if (motionScript) files.set(MOTION_FILE, MOTION_JS);
   const css = emitCss(ir);
   for (const m of css.matchAll(/url\("(?:\.\.\/)+assets\/([^"]+)"\)/g)) assets.add(m[1]);
   files.set(CSS_FILE, css);

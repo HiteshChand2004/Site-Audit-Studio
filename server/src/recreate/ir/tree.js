@@ -35,6 +35,8 @@ export function fromCapture(node, view) {
     children: (node.children ?? []).map((c) => fromCapture(c, view)),
   };
   for (const key of ['lazy', 'src', 'href', 'poster', 'natural', 'svg']) if (node[key] != null) m[key] = node[key];
+  // The desktop path of the snapshot (body>div:1>a:2): the motion capture (4b) names its elements by it.
+  if (view === 'desktop' && node.path) m.cpath = node.path;
   return m;
 }
 
@@ -129,7 +131,7 @@ function clearViews(node, views) {
  */
 export function alignInto(a, b, views) {
   for (const v of views) if (b.views[v]) a.views[v] = b.views[v];
-  for (const key of ['src', 'href', 'poster', 'natural', 'svg', 'lazy']) if (a[key] == null && b[key] != null) a[key] = b[key];
+  for (const key of ['src', 'href', 'poster', 'natural', 'svg', 'lazy', 'cpath']) if (a[key] == null && b[key] != null) a[key] = b[key];
   const ae = a.children.filter(isElement);
   const be = b.children.filter(isElement);
   const partner = new Map();
@@ -258,6 +260,8 @@ export function cleanTree(node, views = VIEW_IDS, parentDisplay = 'block') {
         return cd && !Object.keys(d.style).some((k) => k !== 'box-sizing') && !d.before && !d.after && sameRect(d.rect, cd.rect);
       });
     if (plain) {
+      // What the motion capture said about the wrapper now applies to the element that took its place.
+      if (c.cpath) inner[0].cpathAlt = [...(inner[0].cpathAlt ?? []), c.cpath];
       node.children.splice(i, 1, inner[0]);
       removed++;
       i--;

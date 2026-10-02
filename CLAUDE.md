@@ -75,7 +75,8 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
 | 4b.1 | Motion capture: hover / focus (`capture/interactions.js`, `motion.json`) | ✅ WIP |
 | 4b.2 | Scroll-reveal capture: from-state, duration, easing, delay, stagger, trigger (`capture/reveal.js`, `motion.json.reveal`) | ✅ WIP |
 | 4b.3 | Continuous motion capture: CSS animations / WAAPI loops, script-driven loops (`capture/loops.js`, `motion.json.loops`) | ✅ WIP |
-| 4b.4–4b.5 | IR `motion`, HTML emitter + `motion.js`, all stacks | ⏳ |
+| 4b.4 | IR `motion` (hover, focus, scroll reveal, loops) + plain-HTML emission: CSS rules, generated `js/motion.js`, safety profile, preview | ✅ WIP |
+| 4b.5 | The same motion in React + Vite / Next.js / MERN (ship `motion.js`, safety, equivalence ignores its classes) | ⏳ |
 | 4b.8–4b.9 | Re-audit rows + UI, real-site verification, docs | ⏳ |
 
 4b.6.1 details (**measures only, never fails a job**):
@@ -197,6 +198,30 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
   blink dot; all `inStylesheet`. Fidelity 80, 0 errors, same page set as 4b.2. Note: the first real run was classified before the cycle / round-trip rules; re-classifying the saved keyframes gives cycle for the rotator and float for the nodes (the page itself was not re-run).
 - Tests: `recreate-loops.test.js` (classification incl. cycle and round trip, series analysis, a local page with CSS spin / marquee / pulse / pseudo / paused / finite / WAAPI float / three script loops and controls: one-shot animation and transition are not loops),
   plus the services fixture's spinner in `recreate-generate.test.js`.
+
+4b.4 details (IR `motion` + the plain-HTML build; the other stacks follow in 4b.5):
+- **IR** (`ir/motion.js`, called in `generateStage` right after `prepareSite`): `capture/<slug>/motion.json` is matched to the merged tree by the desktop snapshot path (`tree.js` keeps it as `cpath`; a wrapper removed by `cleanTree` hands its path
+  on as `cpathAlt`). A matched element gets motion tokens in ONE attribute, `data-motion="h1 rv r2 d70 rp"`; equal effects share a token, so the CSS has one rule per distinct effect and no original class name is needed.
+  `ir.motion = { version, hover[], focus[], reveal[], delays[], loops[], script }` (absent when the page has no usable motion); `report.generate.motion` = per-kind counts, skipped reasons, `script`.
+- **Hover / focus** (CSS only): `[data-motion~=hN]:hover { changed values }` (+ `::before/::after`, + descendants through `hNkM` tokens) inside `@media (hover: hover)`; focus as `:focus-visible`. Values are the captured *end* values (the element's base style already
+  carries the transition). Skipped and counted: effects that add or remove DOM (a script), effects with no usable value; a `url()` that was not downloaded is dropped, never linked live.
+- **Scroll reveal** (`scroll` triggers only; `timed` ones - rotating headlines, timers - are skipped): the from-state is written with the individual `opacity` / `translate` / `scale` / `rotate` / `filter` properties relative to the element's own style, hidden under
+  `.js-motion [data-motion~=rN]:not(.is-in)` and animated by `@keyframes m-rN { from {…} }` on `.is-in` (duration + easing from the capture, `animation-delay: var(--md)` from a `dNN` token = the stagger offset, `backwards` fill). Everything sits in
+  `@media (prefers-reduced-motion: no-preference)`. The end state is never written: it is the element as styled.
+- **`js/motion.js`** (`emit/motionScript.js`, one fixed ~1 KB file, the same for every site; written only when there are reveal effects, `<script src defer>` in each page's head): sets `js-motion` on `<html>` (so a visitor without script, or with reduced motion, sees
+  the finished page), adds `is-in` on `[data-motion~=rv]` elements when 10 % is in view (rootMargin -8 % bottom), removes it again for `rp` elements. Hover, focus and loops need no script.
+- **Loops**: a CSS animation whose `animation-name` the element's captured style already carries is counted as `carried` (nothing written twice); Web Animations and script-driven spin / oscillation are rebuilt as `@keyframes m-lN` + `[data-motion~=lN]`.
+  Skipped with a reason: drift / marquee driven by script (needs duplicated content), scroll-linked timelines, pseudo-element loops not in the stylesheet, `url()` in keyframes, elements the IR does not have.
+- **Safety / preview**: the safety gate has a `motion` profile (`verify/appProfiles.js`): exactly `<script src="(../)*js/motion.js" defer>` and no other script, and the only JavaScript file is `js/motion.js` (also sink-scanned). `report.outputs.html.scripts = true` when the build carries it; the preview
+  (`routes/recreate.js latestBuild`, `jobs.js`, `reaudit/index.js`) then gets `script-src 'self'` and the app frames it with `allow-scripts`. The preview step also requests `js/motion.js`. Fidelity, the fit pass, the sweep and the stack equivalence render with JavaScript off,
+  so their numbers do not depend on the script.
+- **Other stacks (until 4b.5)**: they share the IR, the `data-motion` attributes and the stylesheet, so hover, focus and CSS loops already work there; they do not ship `motion.js`, so reveals never hide. Verified: React + Vite and Next.js exports of the panscience
+  recreate are DOM-equal to the HTML build on every page and view (pixels 1.0).
+- **Real site** (panscience.xyz, 6 pages): safety passed, fidelity 81 (80 before), 109 reveals mapped to ONE shared effect (700 ms `cubic-bezier(0.16, 1, 0.3, 1)`, translateY 16 px) with stagger delays (70 / 120 / 130 / 220 ms), 27 hover elements in 9 effects, 26 CSS loops carried;
+  in a browser the pages start with all reveal elements hidden and none is left hidden after scrolling through, no page errors; React and Next exports equivalent; the re-audit ran against the scripted build (preview `scripts: true`).
+- **Open**: `/ventures` and `/media` tracked 0 reveals in this run (10 on `/ventures` in the 4b.2 run): the reveal capture varies between runs there (check in 4b.9). Elements revealed on load (first screen) are not captured, so they have no entrance animation.
+- Tests: `recreate-motion-ir.test.js` (applyMotion tokens / sharing / skips, the CSS, the script tag, safety profile, and a real browser: hidden only with script, shown on scroll, `rp` repeats, nothing hidden without script or with reduced motion); `recreate-generate.test.js` (pipeline on the
+  fixture: tokens, CSS, script file, safety, preview count 7); the structure assertions there read the markup without the `data-motion` attributes.
 
 ### Phase 6 final summary
 Every recreate can be built as **four stacks**, all from the same saved IR and all checked against the plain-HTML build: Plain HTML / CSS / JS (the

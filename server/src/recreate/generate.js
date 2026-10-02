@@ -12,6 +12,7 @@ import { writeProject } from './emit/write.js';
 import { applyIrFixes, applyTreeFixes, fixReport } from './fixers/index.js';
 import { fetchWordPress, isWordPress } from './fixers/wordpress.js';
 import { buildIR, prepareSite, readPageCaptures } from './ir/index.js';
+import { applyMotion, readPageMotion } from './ir/motion.js';
 import { isElement } from './ir/tree.js';
 import { compareLayout, openRenderer, planFixes, renderPage, viewScore } from './verify/layout.js';
 import { refineResponsive } from './verify/refine.js';
@@ -112,6 +113,15 @@ export async function generateStage(ctx) {
   });
   pages.length = 0;
   for (const t of site.pages) delete t.captures; // large; everything needed is in the trees now
+
+  // Motion (4b.4): hover, focus, scroll reveal and loops from the motion capture become tokens on the nodes + ir.motion.
+  const motionByPath = new Map();
+  for (const info of ctx.pages) {
+    const found = await readPageMotion(ctx.dir, info);
+    if (found) motionByPath.set(info.path, found);
+  }
+  const motion = applyMotion(site, motionByPath);
+  site.motion = motion.motion;
 
   ctx.progress(0.12, 'Fixing audit issues');
   const treeFixes = applyTreeFixes(site, { audit: ctx.audit, skipped: ctx.discovery?.skipped });
@@ -250,6 +260,7 @@ export async function generateStage(ctx) {
     generatedFiles: ir.files.map((f) => f.path),
     fit,
     responsive: refined?.summary ?? null,
+    motion: { ...motion.stats, script: Boolean(ir.motion?.script) },
   };
   const byPath = new Map(site.pages.map((t) => [t.info.path, t]));
   report.pages = report.pages.map((p) => {
