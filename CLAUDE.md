@@ -76,7 +76,7 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
 | 4b.2 | Scroll-reveal capture: from-state, duration, easing, delay, stagger, trigger (`capture/reveal.js`, `motion.json.reveal`) | ✅ WIP |
 | 4b.3 | Continuous motion capture: CSS animations / WAAPI loops, script-driven loops (`capture/loops.js`, `motion.json.loops`) | ✅ WIP |
 | 4b.4 | IR `motion` (hover, focus, scroll reveal, loops) + plain-HTML emission: CSS rules, generated `js/motion.js`, safety profile, preview | ✅ WIP |
-| 4b.5 | The same motion in React + Vite / Next.js / MERN (ship `motion.js`, safety, equivalence ignores its classes) | ⏳ |
+| 4b.5 | The same motion in React + Vite / Next.js / MERN (ship `motion.js`, safety, equivalence ignores its classes) | ✅ WIP |
 | 4b.8–4b.9 | Re-audit rows + UI, real-site verification, docs | ⏳ |
 
 4b.6.1 details (**measures only, never fails a job**):
@@ -222,6 +222,16 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
 - **Open**: `/ventures` and `/media` tracked 0 reveals in this run (10 on `/ventures` in the 4b.2 run): the reveal capture varies between runs there (check in 4b.9). Elements revealed on load (first screen) are not captured, so they have no entrance animation.
 - Tests: `recreate-motion-ir.test.js` (applyMotion tokens / sharing / skips, the CSS, the script tag, safety profile, and a real browser: hidden only with script, shown on scroll, `rp` repeats, nothing hidden without script or with reduced motion); `recreate-generate.test.js` (pipeline on the
   fixture: tokens, CSS, script file, safety, preview count 7); the structure assertions there read the markup without the `data-motion` attributes.
+
+4b.5 details (the same motion in the app stacks):
+- **What ships**: when `ir.motion.script` is set, React + Vite, Next.js and MERN (its client) each carry the same fixed `js/motion.js` as a plain file from the site root (`public/js/motion.js`, built to `/js/motion.js`) and load it with a deferred script tag
+  in every page's head: React/MERN through the page head string (`page-meta.json` → prerender), Next.js as `<script src="/js/motion.js" defer />` in each `page.jsx` (React only hoists *async* scripts, so it stays in place; the exported HTML has `defer=""`).
+  Hover, focus and CSS loops already worked in every stack since 4b.4 (shared stylesheet).
+- **Safety**: the `vite` and `next` app profiles also allow exactly `<script src="/js/motion.js">` (no `type`, no inline text); the file is sink-scanned like every other script of the build. No other change to the rules; MERN's server CSP is `script-src 'self'`.
+- **Equivalence / hydration** (`verify/equivalence.js`): the DOM signature ignores `js-motion` (on `<html>`/`<body>`) and `is-in` in `class` values (an element whose only class is `is-in` has no class), so the script's own classes are neither a DOM difference nor a hydration change.
+- **Real sites**: panscience.xyz recreate re-exported (fresh builds) as React + Vite, Next.js and MERN: DOM 6/6 identical, pixels 1.0, hydration 6/6 clean, safety passed, no warnings from the script; in a browser the three builds start with all 50 / 28 reveal elements hidden on `/` and `/approach/`
+  and none left hidden after scrolling through, no page errors. Gotcha when re-testing: `POST …/export` returns the existing output recorded in the report, so removing `stacks/` by hand is not a rebuild (delete `outputs.<stack>` from the report/DB row first).
+- Tests: the real-export tests of `recreate-react/next/mern.test.js` carry a reveal effect (IR with `motion.script`): script file and tag in the build, equivalence + hydration still clean, and in a browser under the preview's policy `<html>` gets `js-motion` and the heading in view `is-in`.
 
 ### Phase 6 final summary
 Every recreate can be built as **four stacks**, all from the same saved IR and all checked against the plain-HTML build: Plain HTML / CSS / JS (the

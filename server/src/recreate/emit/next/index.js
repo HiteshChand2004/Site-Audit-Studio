@@ -13,6 +13,7 @@
 //   already use the new URLs.
 // - Links are plain <a> elements (full page loads, no client router), root-relative: deploy at a domain root.
 import { emitCss } from '../css.js';
+import { MOTION_FILE, MOTION_JS, MOTION_SRC } from '../motionScript.js';
 import { findShared } from '../react/components.js';
 import { jsxAttr, jsxNode, propName, visibleChildren } from '../react/jsx.js';
 import { pageName } from '../react/index.js';
@@ -132,7 +133,9 @@ export function emitNext(ir) {
     };
     const body = visibleChildren(page.body.children ?? [], 'body').map((c) => jsxNode(c, refs, 3, shared, used)).join('\n');
     const imports = [...used].sort().map((n) => `import ${n} from '@/components/${n}.jsx';`);
-    const content = [...headJsx(headTags({ ...page, head }, refs), '      '), ...(body ? [body] : [])].join('\n');
+    // The reveal script (emit/motionScript.js): a plain deferred script, in place (React only hoists async ones).
+    const motion = ir.motion?.script ? [`      <script src="${MOTION_SRC}" defer />`] : [];
+    const content = [...headJsx(headTags({ ...page, head }, refs), '      '), ...motion, ...(body ? [body] : [])].join('\n');
     const dir = route.segments.length ? `app/${groupOf(page)}/${route.segments.join('/')}` : `app/${groupOf(page)}`;
     files.set(`${dir}/page.jsx`, `${imports.join('\n')}${imports.length ? '\n\n' : ''}export default function ${names[i]}() {\n  return (\n    <>\n${content}\n    </>\n  );\n}\n`);
   });
@@ -142,6 +145,7 @@ export function emitNext(ir) {
   files.set('app/site.css', css.replace(/url\("(?:\.\.\/)+assets\//g, 'url("/assets/'));
 
   for (const f of ir.files) files.set(`public/${f.path}`, publicFile(f, urlMap));
+  if (ir.motion?.script) files.set(`public/${MOTION_FILE}`, MOTION_JS);
   if (plan.urlChanges.length) {
     files.set('public/_redirects', plan.urlChanges.map((c) => `${c.from} ${c.to} 301`).join('\n') + '\n');
     files.set('vercel.json', `${JSON.stringify({ trailingSlash: true, redirects: plan.urlChanges.map((c) => ({ source: c.from, destination: c.to, permanent: true })) }, null, 2)}\n`);

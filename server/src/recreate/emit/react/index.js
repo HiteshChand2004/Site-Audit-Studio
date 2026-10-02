@@ -7,6 +7,7 @@
 // shared by pages at different depths renders the same markup on each of them.
 import { emitCss, CSS_FILE } from '../css.js';
 import { headHtml } from '../html.js';
+import { MOTION_FILE, MOTION_JS, MOTION_TAG } from '../motionScript.js';
 import { headTags, safeJsonLd } from '../walk.js';
 import { pinnedVersions } from '../../../toolchains/index.js';
 import { findShared, pascal } from './components.js';
@@ -65,6 +66,7 @@ export function emitReact(ir, opts = {}) {
     files.set(fileOf(c.name, 'components'), `export default function ${c.name}() {\n  return (\n${jsxNode(c.node, refs, 2, own)}\n  );\n}\n`);
   }
   const meta = [];
+  const motionScript = Boolean(ir.motion?.script);
   ir.pages.forEach((page, i) => {
     const name = names[i];
     const used = new Set();
@@ -78,7 +80,8 @@ export function emitReact(ir, opts = {}) {
       lang: page.head.lang ?? null,
       htmlClass: page.html?.class ?? null,
       bodyClass: page.body.class ?? null,
-      head: headHtml(page, refs),
+      // The generated reveal script (emit/motionScript.js) when the site has scroll-reveal effects.
+      head: motionScript ? [headHtml(page, refs), `  ${MOTION_TAG}`].join('\n') : headHtml(page, refs),
     });
   });
 
@@ -92,6 +95,7 @@ export function emitReact(ir, opts = {}) {
   files.set('src/styles/site.css', styles);
   files.set('src/page-meta.json', `${JSON.stringify(meta, null, 2)}\n`);
   for (const f of ir.files) files.set(`public/${f.path}`, f.content);
+  if (motionScript) files.set(`public/${MOTION_FILE}`, MOTION_JS);
 
   return { files, assets, stats: { pages: ir.pages.length, components: components.length, sharedInstances: shared.size } };
 }

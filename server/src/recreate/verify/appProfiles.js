@@ -22,6 +22,8 @@ function jsonArray(text) {
 // The plain-HTML build with scroll reveal (emit/motionScript.js): the one fixed script `js/motion.js`, loaded by <script src defer>
 // from each page (a relative path), and nothing else.
 const MOTION_SCRIPT = /^(\.\.\/)*js\/motion\.js$/;
+// The app stacks (React + Vite, Next.js, MERN) serve the same file from the site root, and may carry it next to their bundles.
+const MOTION_ROOT = '/js/motion.js';
 
 export const APP_PROFILES = {
   motion: {
@@ -34,14 +36,14 @@ export const APP_PROFILES = {
   },
   vite: {
     bundleLink: VITE_BUNDLE,
-    scriptAllowed: ({ src, type, text }) => type === 'module' && VITE_BUNDLE.test(src ?? '') && !text.trim(),
+    scriptAllowed: ({ src, type, text }) => !text.trim() && ((type === 'module' && VITE_BUNDLE.test(src ?? '')) || (!type && src === MOTION_ROOT)),
     jsAllow: [],
     contentChunk: () => false,
   },
   next: {
     bundleLink: NEXT_BUNDLE,
     scriptAllowed: ({ src, type, text }) => {
-      if (src) return !type && NEXT_BUNDLE.test(src) && !text.trim();
+      if (src) return !type && (NEXT_BUNDLE.test(src) || src === MOTION_ROOT) && !text.trim();
       const m = NEXT_PUSH.exec(text);
       return !type && Boolean(m) && jsonArray(m[1]);
     },

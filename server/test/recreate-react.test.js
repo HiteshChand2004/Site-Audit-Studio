@@ -9,7 +9,9 @@ import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
 import { db, projectDir } from '../src/db/index.js';
+import { launchBrowser } from '../src/audit/render.js';
 import { emitSite } from '../src/recreate/emit/html.js';
+import { MOTION_JS } from '../src/recreate/emit/motionScript.js';
 import { findShared } from '../src/recreate/emit/react/components.js';
 import { emitReact, pageName, pagePath } from '../src/recreate/emit/react/index.js';
 import { jsxNode, jsxText, propName, styleObject, svgPropName, visibleChildren } from '../src/recreate/emit/react/jsx.js';
@@ -287,12 +289,14 @@ test('real export: build, verify, equivalence with the HTML build, hydration', {
   const base = `http://127.0.0.1:${server.address().port}/api/projects`;
   try {
     const pages = [
-      page('index.html', headerNode(), el('main', { b: 1 }, el('h1', {}, text('Home')), ...tricky())),
+      page('index.html', headerNode(), el('main', { b: 1 }, el('h1', { attrs: { 'data-motion': 'rv r1' } }, text('Home')), ...tricky())),
       page('about.html', headerNode(), el('main', { b: 1 }, el('h1', {}, text('About')), el('p', {}, text('Hello')))),
     ];
     const ir = {
       version: 1, baseUrl: 'https://www.example.com', siteName: 'Example', pages, tokens: {}, rules: [], fontFaces: [], keyframes: [],
       breakpoints: { tablet: 1023.98, mobile: 767.98 }, files: [{ path: 'robots.txt', content: 'User-agent: *\n' }],
+      // 4b.5: the reveal script ships with the app (scroll reveal on the Home heading).
+      motion: { version: 1, hover: [], focus: [], reveal: [{ token: 'r1', opacity: 0, translate: [0, 16], duration: 300, easing: 'ease' }], delays: [], loops: [], script: true },
     };
 
     const id = randomUUID();
@@ -329,9 +333,12 @@ test('real export: build, verify, equivalence with the HTML build, hydration', {
     assert.equal(await exists(path.join(project, '.ssr')), false);
     assert.equal((await toolchainStatus('react-vite')).installed, true);
     const home = await readFile(path.join(project, 'dist', 'index.html'), 'utf8');
-    assert.match(home, /<div id="root">.*<h1>Home<\/h1>/s);
+    assert.match(home, /<div id="root">.*<h1 data-motion="rv r1">Home<\/h1>/s);
     assert.match(home, /<script type="module" crossorigin src="\/_app\/index-[\w-]+\.js"><\/script>/);
     assert.match(home, /<link rel="stylesheet" crossorigin href="\/_app\/style-[\w-]+\.css">/);
+    // 4b.5: the reveal script is a plain file from the site root, loaded by every page; the safety rules let it through.
+    assert.match(home, /<script src="\/js\/motion\.js" defer><\/script>/);
+    assert.equal(await readFile(path.join(project, 'dist', 'js', 'motion.js'), 'utf8'), MOTION_JS);
     assert.equal(await exists(path.join(project, 'dist', 'about.html')), true);
     assert.equal(await exists(path.join(project, 'dist', 'robots.txt')), true);
     assert.equal(await exists(path.join(project, 'dist', 'assets', 'images', 'a.png')), true);
@@ -343,6 +350,16 @@ test('real export: build, verify, equivalence with the HTML build, hydration', {
     const served = await fetch(`${preview.preview.url}about.html`);
     assert.equal(served.status, 200);
     assert.match(served.headers.get('content-security-policy'), /script-src 'self'/);
+    // The script runs under that policy: <html> gets js-motion and the heading in view is revealed.
+    const browser = await launchBrowser();
+    try {
+      const motionPage = await (await browser.newContext({ viewport: { width: 1000, height: 700 } })).newPage();
+      await motionPage.goto(preview.preview.url, { waitUntil: 'load' });
+      await motionPage.waitForFunction(() => document.querySelector('h1').classList.contains('is-in'), null, { timeout: 5000 });
+      assert.equal(await motionPage.evaluate(() => document.documentElement.classList.contains('js-motion')), true);
+    } finally {
+      await browser.close();
+    }
     await fetch(`${base}/${id}/preview`, { method: 'DELETE' });
     const head = await fetch(`${base}/${id}/recreate/${recreateId}/download?stack=react-vite`, { method: 'HEAD' });
     assert.equal(head.status, 200);

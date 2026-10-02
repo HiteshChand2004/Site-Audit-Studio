@@ -11,7 +11,9 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import express from 'express';
 import { db, projectDir } from '../src/db/index.js';
+import { launchBrowser } from '../src/audit/render.js';
 import { emitSite } from '../src/recreate/emit/html.js';
+import { MOTION_JS } from '../src/recreate/emit/motionScript.js';
 import { describeForm, collectForms } from '../src/recreate/emit/mern/forms.js';
 import { emitMern } from '../src/recreate/emit/mern/index.js';
 import { writeProject } from '../src/recreate/emit/write.js';
@@ -203,10 +205,12 @@ test('real export: client verified against the HTML build, server tests run, for
   const base = `http://127.0.0.1:${server.address().port}/api/projects`;
   try {
     const pages = [
-      page('index.html', el('main', { b: 1 }, el('h1', {}, text('Home')), el('img', { attrs: { src: { asset: 'images/a.png' }, alt: 'A' } }), searchForm())),
+      page('index.html', el('main', { b: 1 }, el('h1', { attrs: { 'data-motion': 'rv r1' } }, text('Home')), el('img', { attrs: { src: { asset: 'images/a.png' }, alt: 'A' } }), searchForm())),
       page('contact.html', el('main', { b: 1 }, el('h1', {}, text('Contact')), contactForm(), loginForm())),
     ];
     const ir = irOf(pages, [{ path: 'robots.txt', content: 'User-agent: *\n' }]);
+    // 4b.5: the reveal script ships with the client (scroll reveal on the Home heading).
+    ir.motion = { version: 1, hover: [], focus: [], reveal: [{ token: 'r1', opacity: 0, translate: [0, 16], duration: 300, easing: 'ease' }], delays: [], loops: [], script: true };
     const id = randomUUID();
     projectIds.push(id);
     const now = new Date().toISOString();
@@ -253,6 +257,17 @@ test('real export: client verified against the HTML build, server tests run, for
     const preview = await (await fetch(`${base}/${id}/preview`, { method: 'POST' })).json();
     assert.equal(preview.preview.scripts, true);
     assert.equal((await fetch(`${preview.preview.url}contact.html`)).status, 200);
+    // 4b.5: the reveal script is part of the client build and runs under the preview's script policy.
+    assert.equal(await readFile(path.join(project, 'client', 'dist', 'js', 'motion.js'), 'utf8'), MOTION_JS);
+    assert.match(await readFile(path.join(project, 'client', 'dist', 'index.html'), 'utf8'), /<script src="\/js\/motion\.js" defer><\/script>/);
+    const browser = await launchBrowser();
+    try {
+      const motionPage = await (await browser.newContext({ viewport: { width: 1000, height: 700 } })).newPage();
+      await motionPage.goto(preview.preview.url, { waitUntil: 'load' });
+      await motionPage.waitForFunction(() => document.querySelector('h1').classList.contains('is-in'), null, { timeout: 5000 });
+    } finally {
+      await browser.close();
+    }
     await fetch(`${base}/${id}/preview`, { method: 'DELETE' });
     const head = await fetch(`${base}/${id}/recreate/${recreateId}/download?stack=mern`, { method: 'HEAD' });
     assert.equal(head.status, 200);

@@ -29,3 +29,8 @@ export const MOTION_JS = `(function () {
   for (var i = 0; i < items.length; i++) observer.observe(items[i]);
 })();
 `;
+
+/** Where the app stacks (React + Vite, Next.js, MERN) serve it from: the root of the site, like their assets. */
+export const MOTION_SRC = `/${MOTION_FILE}`;
+/** The tag the app stacks put in each page's head (the plain-HTML build uses a path relative to the page). */
+export const MOTION_TAG = `<script src="${MOTION_SRC}" defer></script>`;

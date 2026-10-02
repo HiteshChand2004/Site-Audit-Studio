@@ -37,6 +37,8 @@ function domSignature(map) {
   };
   // Framework furniture that is not page content: scripts (data and bundles), Next's route announcer and its
   // empty hidden metadata container.
+  // The reveal script (js/motion.js) adds `js-motion` to <html> and `is-in` to elements: classes of the script, not of the page.
+  const pageClasses = (v) => String(v ?? '').split(/\s+/).filter((c) => c && c !== 'js-motion' && c !== 'is-in').join(' ');
   const furniture = (n) => n.localName === 'script' || n.localName === 'next-route-announcer'
     || (n.localName === 'div' && n.hasAttribute('hidden') && !n.children.length && !n.textContent.trim());
   const walk = (node, depth) => {
@@ -45,7 +47,10 @@ function domSignature(map) {
       // A stack that wires its forms to a backend (MERN) adds action/method; the form itself is the same.
       if (moved.ignoreFormActions && node.localName === 'form' && ['action', 'method', 'enctype'].includes(name)) return null;
       let value = a.value;
-      if (name === 'srcset') value = value.split(',').map((c) => { const [u, ...d] = c.trim().split(/\s+/); return [resolve(u), ...d].join(' '); }).join(', ');
+      if (name === 'class') {
+        value = pageClasses(value);
+        if (!value) return null;
+      } else if (name === 'srcset') value = value.split(',').map((c) => { const [u, ...d] = c.trim().split(/\s+/); return [resolve(u), ...d].join(' '); }).join(', ');
       else if (['href', 'xlink:href', 'src', 'poster', 'action', 'data'].includes(name)) value = resolve(value);
       return `${name}=${value}`;
     }).filter(Boolean).sort().join(' ');
@@ -69,8 +74,8 @@ function domSignature(map) {
     flush();
   };
   const html = document.documentElement;
-  lines.push(`html lang=${html.getAttribute('lang') ?? ''} class=${html.getAttribute('class') ?? ''}`);
-  lines.push(`body class=${document.body.getAttribute('class') ?? ''}`);
+  lines.push(`html lang=${html.getAttribute('lang') ?? ''} class=${pageClasses(html.getAttribute('class'))}`);
+  lines.push(`body class=${pageClasses(document.body.getAttribute('class'))}`);
   lines.push(`title ${document.title}`);
   const content = (v) => {
     try {

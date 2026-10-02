@@ -9,7 +9,9 @@ import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
 import { db, projectDir } from '../src/db/index.js';
+import { launchBrowser } from '../src/audit/render.js';
 import { emitSite } from '../src/recreate/emit/html.js';
+import { MOTION_JS } from '../src/recreate/emit/motionScript.js';
 import { emitNext } from '../src/recreate/emit/next/index.js';
 import { originalPath, planRoutes, routeSegment, urlMapFor } from '../src/recreate/emit/next/routes.js';
 import { writeProject } from '../src/recreate/emit/write.js';
@@ -292,7 +294,7 @@ test('real export: static export, moved URLs, equivalence through the moves, hyd
   try {
     const form = el('form', { b: 1 }, el('label', { attrs: { for: 'n' } }, text('Name')), el('input', { attrs: { id: 'n', type: 'text', value: 'Ada' } }), el('button', { attrs: { type: 'submit' } }, text('Send')));
     const pages = [
-      page('index.html', { jsonLd: ['{"@type":"Organization","name":"A & B <x>"}'] }, headerNode(), el('main', { b: 1 }, el('h1', {}, text('Home')),
+      page('index.html', { jsonLd: ['{"@type":"Organization","name":"A & B <x>"}'] }, headerNode(), el('main', { b: 1 }, el('h1', { attrs: { 'data-motion': 'rv r1' } }, text('Home')),
         el('p', {}, text('Fish & chips <b>not bold</b> {braces}')), el('img', { attrs: { src: { asset: 'images/a.png' }, alt: 'A' } }),
         el('a', { attrs: { href: { anchor: '#top' } } }, text('Top')), form)),
       page('about.html', { meta: [{ property: 'og:url', content: 'https://www.example.com/about.html' }] }, headerNode(), el('main', { b: 1 }, el('h1', {}, text('About')))),
@@ -302,6 +304,8 @@ test('real export: static export, moved URLs, equivalence through the moves, hyd
       { path: 'robots.txt', content: 'User-agent: *\n' },
       { path: 'sitemap.xml', content: '<urlset><url><loc>https://www.example.com/about.html</loc></url></urlset>\n' },
     ]);
+    // 4b.5: the reveal script ships with the app (scroll reveal on the Home heading).
+    ir.motion = { version: 1, hover: [], focus: [], reveal: [{ token: 'r1', opacity: 0, translate: [0, 16], duration: 300, easing: 'ease' }], delays: [], loops: [], script: true };
 
     const id = randomUUID();
     projectIds.push(id);
@@ -353,6 +357,18 @@ test('real export: static export, moved URLs, equivalence through the moves, hyd
     const csp = served.headers.get('content-security-policy');
     assert.match(csp, /script-src 'self' 'sha256-/);
     assert.doesNotMatch(csp, /unsafe-inline.*script-src|script-src[^;]*unsafe-inline/);
+    // 4b.5: the reveal script is a file in public/, loaded by the page, and runs under that policy.
+    assert.equal(await readFile(path.join(site, 'js', 'motion.js'), 'utf8'), MOTION_JS);
+    assert.match(await readFile(path.join(site, 'index.html'), 'utf8'), /<script src="\/js\/motion\.js" defer=""><\/script>/);
+    const browser = await launchBrowser();
+    try {
+      const motionPage = await (await browser.newContext({ viewport: { width: 1000, height: 700 } })).newPage();
+      await motionPage.goto(preview.preview.url, { waitUntil: 'load' });
+      await motionPage.waitForFunction(() => document.querySelector('h1').classList.contains('is-in'), null, { timeout: 5000 });
+      assert.equal(await motionPage.evaluate(() => document.documentElement.classList.contains('js-motion')), true);
+    } finally {
+      await browser.close();
+    }
     await fetch(`${base}/${id}/preview`, { method: 'DELETE' });
     const head = await fetch(`${base}/${id}/recreate/${recreateId}/download?stack=nextjs`, { method: 'HEAD' });
     assert.equal(head.status, 200);
