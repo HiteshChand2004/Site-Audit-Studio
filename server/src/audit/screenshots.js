@@ -29,7 +29,7 @@ export async function encode(png, file) {
   return { width: info.width, height: info.height, bytes: info.size };
 }
 
-async function captureView(browser, url, view, dir, timeout) {
+async function captureView(browser, url, view, dir, timeout, cache) {
   const context = await browser.newContext({
     viewport: { width: view.width, height: view.height },
     deviceScaleFactor: view.dpr,
@@ -39,6 +39,7 @@ async function captureView(browser, url, view, dir, timeout) {
     ignoreHTTPSErrors: true,
   });
   try {
+    await cache?.attach(context);
     const page = await context.newPage();
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
     await waitSettled(page, { loadMs: 10000, idleMs: 4000 });
@@ -90,11 +91,12 @@ async function captureView(browser, url, view, dir, timeout) {
  * @param {import('playwright').Browser} browser
  * @param {string} url
  * @param {string} analysisDir  data/projects/<id>/audit/<analysisId>
- * @param {{ timeout?: number, parallel?: number, deadline?: number }} [o]  parallel: views captured at once; deadline (ms since
- *   epoch): a view not finished by then is given up and reported, so the views already taken are returned in time
+ * @param {{ timeout?: number, parallel?: number, deadline?: number, cache?: object }} [o]  parallel: views captured at once; deadline (ms since
+ *   epoch): a view not finished by then is given up and reported, so the views already taken are returned in time; cache: the
+ *   job's shared cache of static files (sharedCache.js)
  * @returns {Promise<{ capturedAt: string, views: Record<string, object>, errors: {view:string, message:string}[] }>}
  */
-export async function captureScreenshots(browser, url, analysisDir, { timeout = 30000, parallel = VIEWS.length, deadline = Infinity } = {}) {
+export async function captureScreenshots(browser, url, analysisDir, { timeout = 30000, parallel = VIEWS.length, deadline = Infinity, cache = null } = {}) {
   const dir = screensDir(analysisDir);
   await mkdir(dir, { recursive: true });
   const inTime = (capture) => {
@@ -108,7 +110,7 @@ export async function captureScreenshots(browser, url, analysisDir, { timeout = 
   };
   // `parallel` views at a time: all three side by side when the machine has room, one after the other when memory is short.
   const results = await mapLimit(VIEWS, Math.max(1, parallel), (view) =>
-    (Date.now() >= deadline ? Promise.reject(new Error('Not captured within the time limit of the screenshots step.')) : inTime(captureView(browser, url, view, dir, timeout)))
+    (Date.now() >= deadline ? Promise.reject(new Error('Not captured within the time limit of the screenshots step.')) : inTime(captureView(browser, url, view, dir, timeout, cache)))
       .then((value) => ({ value }), (reason) => ({ reason })));
   const views = {};
   const errors = [];

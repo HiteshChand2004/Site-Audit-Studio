@@ -24,8 +24,10 @@ function installProbes() {
   };
 }
 
-async function openPage(browser, url, { timeout = 30000 } = {}) {
+// cache: the job's shared cache of static files (sharedCache.js); a file another context already loaded is not downloaded again.
+async function openPage(browser, url, { timeout = 30000, cache = null } = {}) {
   const context = await browser.newContext({ viewport: VIEWPORT, userAgent: USER_AGENT, ignoreHTTPSErrors: true });
+  await cache?.attach(context);
   const page = await context.newPage();
   const requests = [];
   page.on('request', (req) => requests.push(req.url()));
@@ -47,8 +49,8 @@ export async function waitSettled(page, { loadMs = 10000, idleMs = 4000 } = {}) 
 }
 
 // Lightweight render used by the crawler for client-rendered pages.
-export async function renderHtml(browser, url) {
-  const { context, page } = await openPage(browser, url, { timeout: 20000 });
+export async function renderHtml(browser, url, { cache = null } = {}) {
+  const { context, page } = await openPage(browser, url, { timeout: 20000, cache });
   try {
     return { html: await page.content() };
   } finally {
@@ -63,8 +65,8 @@ export async function renderHtml(browser, url) {
  * @param {string} url
  * @param {{ globals?: string[] }} [opts]  window paths to test, e.g. "Shopify" or "__NEXT_DATA__"
  */
-export async function renderHome(browser, url, { globals = [] } = {}) {
-  const { context, page, response, requests } = await openPage(browser, url, { timeout: 45000 });
+export async function renderHome(browser, url, { globals = [], cache = null } = {}) {
+  const { context, page, response, requests } = await openPage(browser, url, { timeout: 45000, cache });
   try {
     // Scroll once so lazy-loaded sections and widgets initialise.
     await page.evaluate(async () => {

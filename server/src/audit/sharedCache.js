@@ -16,6 +16,8 @@
 // each browser, so a file is never missing because of the cache.
 //
 // Bodies are stored as files in a temporary folder (not in memory, not in the job's workspace) and removed by close().
+// Server-side steps of the same job may read what the browsers loaded (lookup): Recreate's asset step takes its files
+// from here instead of downloading each one a twelfth time.
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -51,12 +53,14 @@ export function isStorable(status, headers) {
 
 /**
  * @param {{ maxEntryBytes?: number, maxTotalBytes?: number, waitMs?: number }} [o]
- * @returns {{ attach: (context: import('playwright').BrowserContext) => Promise<void>, stats: () => object, close: () => Promise<void> }}
+ * @returns {{ attach: (context: import('playwright').BrowserContext) => Promise<void>, lookup: (url: string) => object|null, stats: () => object, close: () => Promise<void> }}
  */
 export function createSharedCache({ maxEntryBytes = MAX_ENTRY_BYTES, maxTotalBytes = MAX_TOTAL_BYTES, waitMs = WAIT_MS } = {}) {
   // url → Promise<{ status, headers, file, bytes } | null>; null = not shared, every context asks the network itself.
   const entries = new Map();
-  const stats = { requests: 0, served: 0, servedBytes: 0, loaded: 0, stored: 0, storedBytes: 0, notShared: 0, failed: 0 };
+  // url → entry, for the files that are stored (lookup).
+  const ready = new Map();
+  const stats = { requests: 0, served: 0, servedBytes: 0, loaded: 0, stored: 0, storedBytes: 0, notShared: 0, failed: 0, reused: 0, reusedBytes: 0 };
   let dir = null;
   let files = 0;
   let closed = false;
@@ -81,7 +85,9 @@ export function createSharedCache({ maxEntryBytes = MAX_ENTRY_BYTES, maxTotalByt
     stats.stored++;
     stats.storedBytes += body.length;
     const kept = Object.fromEntries(Object.entries(headers).filter(([name]) => !DROPPED_HEADERS.has(name.toLowerCase())));
-    return { status: response.status(), headers: kept, file, bytes: body.length };
+    const entry = { status: response.status(), headers: kept, file, bytes: body.length };
+    ready.set(request.url(), entry);
+    return entry;
   }
 
   /** Routes the context's requests through the cache. Call before the first page of the context is opened. */
@@ -149,10 +155,23 @@ export function createSharedCache({ maxEntryBytes = MAX_ENTRY_BYTES, maxTotalByt
 
   return {
     attach,
+    /**
+     * The stored response of `url`, for a step that would otherwise download the file again: { status, headers, file, bytes },
+     * or null when no browser context loaded it (or it was not kept). `file` holds the decoded body until close().
+     */
+    lookup(url) {
+      const entry = closed ? null : ready.get(url) ?? null;
+      if (entry) {
+        stats.reused++;
+        stats.reusedBytes += entry.bytes;
+      }
+      return entry;
+    },
     stats: () => ({ ...stats, files }),
     async close() {
       closed = true;
       entries.clear();
+      ready.clear();
       if (dir) await rm(await dir, { recursive: true, force: true }).catch(() => {});
       dir = null;
     },

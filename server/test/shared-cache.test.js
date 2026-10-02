@@ -3,11 +3,12 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { access } from 'node:fs/promises';
+import { access, mkdtemp, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
-import { readdir } from 'node:fs/promises';
+import path from 'node:path';
 import { gzipSync } from 'node:zlib';
 import sharp from 'sharp';
+import { runAnalysis } from '../src/audit/index.js';
 import { launchBrowser } from '../src/audit/render.js';
 import { createSharedCache, isShareable, isStorable, sharedCacheEnabled } from '../src/audit/sharedCache.js';
 import { startEgressProxy } from '../src/security/egressProxy.js';
@@ -224,5 +225,37 @@ test('a context does not wait long for a file another context is still loading',
     await cache.close();
     await browser.close();
     await proxy.close();
+  }
+});
+
+test('an analysis loads the homepage in four browser contexts and its static files once', async () => {
+  const outDir = await mkdtemp(path.join(os.tmpdir(), 'sas-cache-test-'));
+  const before = { home: count('/'), css: count('/style.css'), js: count('/app.js'), img: count('/img.png'), api: count('/api') };
+  const folders = await cacheFolders();
+  try {
+    const audit = await runAnalysis({
+      project: { id: 'cache', url: `${origin}/`, name: 'cache' },
+      analysisId: 'a1',
+      maxPages: 1,
+      outDir,
+      skip: ['lighthouse-mobile', 'lighthouse-desktop'],
+      netPolicy: createNetPolicy({ internalPorts: [site.address().port] }),
+      progress: () => {},
+    });
+    assert.deepEqual(audit.errors, [], JSON.stringify(audit.errors));
+    for (const view of ['desktop', 'tablet', 'mobile']) assert.ok(await exists(path.join(outDir, 'screens', `${view}-full.webp`)), view);
+    assert.ok(await exists(path.join(outDir, 'axe.json')));
+    // The render and the three screenshot views each opened the page and made their own API call…
+    assert.ok(count('/') - before.home >= 4, `home ${count('/') - before.home}`);
+    assert.equal(count('/api') - before.api, 4);
+    // …and the stylesheet, the script and the image were downloaded once for all of them.
+    assert.equal(count('/style.css') - before.css, 1);
+    assert.equal(count('/app.js') - before.js, 1);
+    assert.equal(count('/img.png') - before.img, 1);
+    // The address the policy does not allow was never reached, and the cache's folder is gone.
+    assert.deepEqual(otherHits, []);
+    assert.deepEqual((await cacheFolders()).filter((n) => !folders.includes(n) && n !== path.basename(outDir)), []);
+  } finally {
+    await rm(outDir, { recursive: true, force: true });
   }
 });

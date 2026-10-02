@@ -3,7 +3,7 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { db, projectDir } from '../src/db/index.js';
@@ -267,6 +267,46 @@ test('downloads are blocked for loopback without the dev flag', async () => {
   }
 });
 
+test('a file the browsers of the job already loaded comes from the shared cache, not from the network', async () => {
+  // The network is closed (loopback without the dev flag), so whatever is saved cannot have been downloaded.
+  delete process.env.SAS_ALLOW_LOCALHOST;
+  try {
+    const root = await tempRoot();
+    const store = await tempRoot();
+    const png = await readFile(new URL('./fixtures/recreate-site/img/team.png', import.meta.url));
+    await writeFile(path.join(store, 'team'), png);
+    await writeFile(path.join(store, 'page'), '<!doctype html><html><body>Not found</body></html>');
+    const asked = [];
+    const entry = (file, bytes, type) => ({ status: 200, headers: { 'content-type': type }, file: path.join(store, file), bytes });
+    const held = {
+      [`${cdn}/img/team.png`]: entry('team', png.length, 'image/png'),
+      // An error page that was served as an image, and a file that is gone: neither is taken from the cache.
+      [`${cdn}/img/page.png`]: entry('page', 50, 'image/png'),
+      [`${cdn}/img/lost.png`]: entry('lost', 10, 'image/png'),
+    };
+    const cache = { lookup: (url) => (asked.push(url), held[url] ?? null) };
+    const list = ['img/team.png', 'img/page.png', 'img/lost.png', 'img/photo.svg'].map((p) => ({ url: `${cdn}/${p}`, kind: 'image' }));
+    const result = await withNetPolicy(userPolicy(), () => downloadAssets(list, root, { cache }));
+
+    assert.equal(result.fromCache, 1);
+    assert.match(result.map[`${cdn}/img/team.png`], /^images\/team-[0-9a-f]{10}\.png$/);
+    assert.deepEqual(await readFile(path.join(root, result.map[`${cdn}/img/team.png`])), png);
+    assert.equal(result.files[0].bytes, png.length);
+    assert.equal(result.files[0].mime, 'image/png');
+    // The others went to the download, which decides as always (here: the guard refuses the address).
+    assert.deepEqual(Object.fromEntries(result.skipped.map((s) => [s.url.slice(cdn.length + 1), s.reason])), {
+      'img/page.png': 'blocked',
+      'img/lost.png': 'blocked',
+      'img/photo.svg': 'blocked',
+    });
+    assert.deepEqual(asked.sort(), list.map((a) => a.url).sort());
+    const all = await readdir(root, { recursive: true });
+    assert.deepEqual(all.filter((f) => f.includes('.part-')), []);
+  } finally {
+    process.env.SAS_ALLOW_LOCALHOST = '1';
+  }
+});
+
 test('the assets step localizes every asset of the captured pages', async () => {
   const id = randomUUID();
   projectIds.push(id);
@@ -312,11 +352,15 @@ test('the assets step localizes every asset of the captured pages', async () => 
   assert.deepEqual(manifest.keyframes.map((k) => k.name).sort(), ['brand-fade', 'brand-pulse']);
 
   // Nothing referenced is left pointing at the original hosts: every asset URL is either local or skipped.
-  assert.deepEqual(report.assets.skipped.map((s) => [s.url, s.reason]), [
-    [`${cdn}/img/missing.png`, 'http-404'],
+  // (In the order the downloads ended, which is not fixed.)
+  assert.deepEqual(report.assets.skipped.map((s) => [s.url, s.reason]).sort(), [
     [`${cdn}/big.mp4`, 'too-large'],
+    [`${cdn}/img/missing.png`, 'http-404'],
   ]);
   assert.equal(report.assets.found, Object.keys(manifest.map).length + report.assets.skippedCount);
+  // Files the capture's browsers had loaded were taken from the job's shared cache instead of being downloaded again.
+  assert.ok(report.assets.fromCache >= 3, `from cache: ${report.assets.fromCache}`);
+  assert.ok(report.sharedCache.reused >= report.assets.fromCache);
   // Unique files only: the font, team.png (4 URLs), photo.svg (3 URLs, one via a redirect) and hero-bg.svg.
   assert.equal(report.assets.downloaded, 4);
   assert.deepEqual(Object.keys(report.assets.byKind).sort(), ['font', 'image']);

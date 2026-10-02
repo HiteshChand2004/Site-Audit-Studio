@@ -2,8 +2,10 @@
 // precheck and the connect-time IP check run on every redirect hop). Enforces a byte limit (the
 // Content-Length header first, then the bytes actually received) and a time limit that covers the
 // whole transfer, and hashes the body while it streams, so the caller can dedupe by content.
+// A file the browsers of the job already loaded (the shared cache, audit/sharedCache.js) is taken from there instead:
+// it is the response the captured pages were rendered with, and it passes the same checks as a download.
 import { createHash, randomUUID } from 'node:crypto';
-import { open, rm } from 'node:fs/promises';
+import { open, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { errorCode, guardedFetch } from '../../audit/http.js';
 
@@ -36,6 +38,27 @@ export const REASONS = {
 };
 export const reasonDetail = (reason) => REASONS[reason] ?? (reason.startsWith('http-') ? `The server answered HTTP ${reason.slice(5)}.` : REASONS.error);
 
+// The file as the job's browsers received it, when it is one this step would accept. Anything else (not kept, too large,
+// a web page in place of a file, a read error) is left to the download below, which decides and reports as always.
+async function fromCache(url, { cache, dir, kind, maxBytes }) {
+  const entry = cache?.lookup(url);
+  if (!entry || entry.status !== 200 || !entry.bytes || entry.bytes > maxBytes) return null;
+  const mime = (entry.headers['content-type'] || '').split(';')[0].trim().toLowerCase() || null;
+  if (mime && NOT_AN_ASSET.test(mime) && kind !== 'stylesheet') return null;
+  let tmp;
+  try {
+    const body = await readFile(entry.file);
+    if (!body.length || body.length > maxBytes) return null;
+    if (kind !== 'stylesheet' && HTML_START.test(body.subarray(0, 64).toString('latin1'))) return null;
+    tmp = path.join(dir, `.part-${randomUUID()}`);
+    await writeFile(tmp, body);
+    return { ok: true, tmp, sha256: createHash('sha256').update(body).digest('hex'), bytes: body.length, mime, head: Buffer.from(body.subarray(0, 16)), finalUrl: url, redirects: [], cached: true };
+  } catch {
+    if (tmp) await rm(tmp, { force: true }).catch(() => {});
+    return null;
+  }
+}
+
 /**
  * @param {string} url
  * @param {object} o
@@ -45,10 +68,13 @@ export const reasonDetail = (reason) => REASONS[reason] ?? (reason.startsWith('h
  * @param {number} o.timeout     ms for the whole transfer, redirects included
  * @param {AbortSignal} [o.signal]
  * @param {string} [o.referer]   the site's own origin; some CDNs refuse hotlinked requests without it
- * @returns {Promise<{ ok: true, tmp: string, sha256: string, bytes: number, mime: string|null, head: Buffer, finalUrl: string, redirects: string[] }
+ * @param {object} [o.cache]     the job's shared cache: a file it holds is not downloaded again (`cached: true`)
+ * @returns {Promise<{ ok: true, tmp: string, sha256: string, bytes: number, mime: string|null, head: Buffer, finalUrl: string, redirects: string[], cached?: boolean }
  *   | { ok: false, reason: string, detail?: string, finalUrl: string, bytes?: number }>}
  */
-export async function downloadAsset(url, { dir, kind, maxBytes, timeout, signal, referer }) {
+export async function downloadAsset(url, { dir, kind, maxBytes, timeout, signal, referer, cache = null }) {
+  const cached = await fromCache(url, { cache, dir, kind, maxBytes });
+  if (cached) return cached;
   const timeoutSignal = AbortSignal.timeout(timeout);
   const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
   const hop = await guardedFetch(url, {

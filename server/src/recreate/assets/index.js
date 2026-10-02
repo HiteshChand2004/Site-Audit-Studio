@@ -92,8 +92,19 @@ async function readCaptures(ctx) {
   return captures;
 }
 
+// A stylesheet the job's browsers already loaded (the shared cache), in the shape fetchPage returns; null = download it.
+async function cachedSheet(cache, url, maxBytes) {
+  const entry = cache?.lookup(url);
+  if (!entry || entry.bytes > maxBytes) return null;
+  try {
+    return { status: entry.status, contentType: entry.headers['content-type'] ?? '', body: await readFile(entry.file, 'utf8'), url };
+  } catch {
+    return null;
+  }
+}
+
 // Cross-origin stylesheets (and their @imports) the capture could not read.
-async function readForeignSheets(urls, { signal, limits, maxSheets, deadline = Infinity }) {
+async function readForeignSheets(urls, { signal, limits, maxSheets, deadline = Infinity, cache = null }) {
   const queue = [...new Set(urls.filter(Boolean))];
   const seen = new Set(queue);
   const sheets = [];
@@ -106,7 +117,7 @@ async function readForeignSheets(urls, { signal, limits, maxSheets, deadline = I
       sheets.push({ url, status: 'failed', reason: 'time-limit' });
       continue;
     }
-    const res = await fetchPage(url, { timeout: Math.min(limits.timeout, left), maxBytes: limits.maxBytes, signal, accept: 'text/css,*/*;q=0.1' });
+    const res = (await cachedSheet(cache, url, limits.maxBytes)) ?? (await fetchPage(url, { timeout: Math.min(limits.timeout, left), maxBytes: limits.maxBytes, signal, accept: 'text/css,*/*;q=0.1' }));
     const ok = res.status === 200 && !/html/i.test(res.contentType);
     sheets.push({ url, status: ok ? 'read' : 'failed', ...(!ok && { reason: res.error ?? `http-${res.status}` }) });
     if (!ok) continue;
@@ -126,9 +137,9 @@ async function readForeignSheets(urls, { signal, limits, maxSheets, deadline = I
 
 /**
  * Downloads a collected asset list into `root`. Exported for tests; assetsStage() is the pipeline entry.
- * @returns {Promise<{ files: object[], map: Record<string,string>, skipped: object[], reused: number, bytes: number }>}
+ * @returns {Promise<{ files: object[], map: Record<string,string>, skipped: object[], reused: number, bytes: number, fromCache: number }>}
  */
-export async function downloadAssets(list, root, { signal, referer, deadline = Infinity, limits = ASSET_LIMITS, budget = ASSET_BUDGET, onProgress = () => {} } = {}) {
+export async function downloadAssets(list, root, { signal, referer, deadline = Infinity, limits = ASSET_LIMITS, budget = ASSET_BUDGET, onProgress = () => {}, cache = null } = {}) {
   await Promise.all(Object.values(FOLDERS).map((f) => mkdir(path.join(root, f), { recursive: true })));
   const byHash = new Map();
   const files = [];
@@ -138,6 +149,8 @@ export async function downloadAssets(list, root, { signal, referer, deadline = I
   let started = 0;
   let done = 0;
   let reused = 0;
+  // Files taken from the job's shared cache (what the browsers loaded) instead of the network.
+  let fromCache = 0;
 
   const skip = (asset, reason, extra = {}) => skipped.push({ url: asset.url, kind: asset.kind, reason, detail: extra.detail ?? reasonDetail(reason), ...(extra.bytes && { bytes: extra.bytes }) });
 
@@ -159,7 +172,9 @@ export async function downloadAssets(list, root, { signal, referer, deadline = I
         timeout: Math.min(limit.timeout, left),
         signal,
         referer,
+        cache,
       });
+      if (r.cached) fromCache++;
       if (!r.ok) {
         started--;
         let reason = r.reason;
@@ -193,7 +208,7 @@ export async function downloadAssets(list, root, { signal, referer, deadline = I
       onProgress(++done / list.length);
     }
   });
-  return { files, map, skipped, reused, bytes };
+  return { files, map, skipped, reused, bytes, fromCache };
 }
 
 const looksLikeSvg = (buf) => /^\s*(<\?xml|<!--|<!doctype svg|<svg)/i.test(buf.subarray(0, 512).toString('utf8'));
@@ -251,6 +266,7 @@ export async function assetsStage(ctx, opts = {}) {
     limits: limits.stylesheet,
     maxSheets: budget.maxSheets,
     deadline: ctx.stepDeadline,
+    cache: ctx.netCache,
   });
   const { assets, fontFaces, unusedFontFaces } = collectAssets(captures, { fontFaces: foreign.fontFaces });
   captures.length = 0; // the capture trees are large; only the asset list is needed from here
@@ -263,6 +279,7 @@ export async function assetsStage(ctx, opts = {}) {
     deadline: ctx.stepDeadline,
     limits,
     budget,
+    cache: ctx.netCache,
     onProgress: (f) => ctx.progress(0.1 + 0.88 * f, `Downloading assets (${Math.round(f * assets.length)} of ${assets.length})`),
   });
 
@@ -293,6 +310,7 @@ export async function assetsStage(ctx, opts = {}) {
     found: assets.length,
     downloaded: result.files.length,
     duplicates: result.reused,
+    fromCache: result.fromCache,
     bytes: result.bytes,
     byKind,
     skipped: result.skipped.slice(0, 100),

@@ -28,6 +28,7 @@ import { captureScreenshots, VIEWS } from './screenshots.js';
 import { startEgressProxy } from '../security/egressProxy.js';
 import { userPolicy, withNetPolicy } from '../security/netGuard.js';
 import { parallelism } from './resources.js';
+import { createSharedCache, sharedCacheEnabled } from './sharedCache.js';
 import { loadSitemaps } from './sitemap.js';
 import { limiter, withTimeout } from './util.js';
 
@@ -219,6 +220,9 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
   let browser = null;
   let browserTask = null;
   const getBrowser = () => (browserTask ??= launchBrowser({ proxy: proxy.url }).then((b) => (browser = b)));
+  // The homepage is loaded in four browser contexts (the render and three screenshot views) and the crawl may render more
+  // pages of the site: they share the static files, so a stylesheet, script, image or font is downloaded once.
+  const cache = sharedCacheEnabled() ? createSharedCache() : null;
   // Views captured at once: all three when the machine has the memory for them, fewer when it is already short of it.
   const viewsAtOnce = parallelism({ max: VIEWS.length });
   // Pages the crawl renders at once (client-rendered sites only): it runs while the screenshots are still being taken.
@@ -235,12 +239,12 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     { robots: emptyRobots, sitemap: { status: 'missing', urls: [], sources: [], fromRobots: false }, llms: { found: false } },
     reserve,
   );
-  const renderTask = step('render', async () => renderHome(await getBrowser(), home.url, { globals: globalNames() }), null, reserve);
+  const renderTask = step('render', async () => renderHome(await getBrowser(), home.url, { globals: globalNames(), cache }), null, reserve);
   // The views already taken are kept when the step runs out of time (deadline): one slow view must not lose the other two.
   const shotsTask = step(
     'screenshots',
     async (_signal, budget) =>
-      captureScreenshots(await getBrowser(), home.url, outDir, { timeout: Math.max(5000, Math.min(30000, budget - 5000)), parallel: viewsAtOnce, deadline: Date.now() + budget - 2000 }),
+      captureScreenshots(await getBrowser(), home.url, outDir, { timeout: Math.max(5000, Math.min(30000, budget - 5000)), parallel: viewsAtOnce, deadline: Date.now() + budget - 2000, cache }),
     null,
     reserve,
   );
@@ -259,7 +263,7 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     if (render?.axe) save('axe.json', render.axe);
 
     const renderForCrawl = browser
-      ? (url) => (render && url === home.url ? Promise.resolve({ html: render.html }) : renderSlot(() => renderHtml(browser, url)))
+      ? (url) => (render && url === home.url ? Promise.resolve({ html: render.html }) : renderSlot(() => renderHtml(browser, url, { cache })))
       : undefined;
     crawlResult = await step(
       'crawl',
@@ -294,6 +298,7 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     // The browser is closed before Lighthouse: it runs on a quiet machine.
     await shotsTask.catch(() => {});
     await browser?.close().catch(() => {});
+    await cache?.close();
   }
   const links = await linksTask;
   const allPages = crawlResult.pages;

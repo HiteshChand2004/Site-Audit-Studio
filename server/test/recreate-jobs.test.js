@@ -146,7 +146,8 @@ test('the time limit stops the job and aborts the running stage', async () => {
       project,
       recreateId,
       progress: () => {},
-      budgetMs: 150,
+      // Long enough for the job to reach its first step on a busy machine, short for the test.
+      budgetMs: 600,
       stages: {
         ...stubStages,
         inspect: (ctx) => new Promise((resolve) => ctx.signal.addEventListener('abort', () => { aborted = true; resolve(); })),
@@ -220,6 +221,9 @@ test('the sweep runs next to the steps after it and is awaited by the step that 
     await extra?.(ctx, local);
     log.push(`end ${name}`);
   };
+  // The sweep ends only after the build step has ended (not by a timer: the order must not depend on the machine's speed).
+  let buildEnded;
+  const afterBuild = new Promise((resolve) => { buildEnded = resolve; });
   const report = await runRecreate({
     project,
     recreateId: randomUUID(),
@@ -228,14 +232,20 @@ test('the sweep runs next to the steps after it and is awaited by the step that 
     stages: {
       ...stubStages,
       // Its own deadline and progress come as the second argument (the shared ones belong to the step in front).
-      sweep: stage('sweep', 120, (ctx, local) => {
+      sweep: stage('sweep', 120, async (ctx, local) => {
         assert.equal(typeof local.progress, 'function');
         assert.ok(local.stepDeadline > Date.now());
+        await afterBuild;
         ctx.sweep = { done: true };
       }),
       assets: stage('assets', 20),
       generate: stage('generate', 20),
-      build: stage('build', 20),
+      build: async () => {
+        log.push('start build');
+        await sleep(20);
+        log.push('end build');
+        buildEnded();
+      },
       responsive: stage('responsive', 5, (ctx) => assert.deepEqual(ctx.sweep, { done: true })),
     },
   });
@@ -249,9 +259,13 @@ test('the sweep runs next to the steps after it and is awaited by the step that 
 test('short of memory, the sweep is finished before the next step that renders pages', async () => {
   const project = makeProject();
   const log = [];
-  const stage = (name, ms) => async () => {
+  // The sweep ends only after the asset step has ended (not by a timer: the order must not depend on the machine's speed).
+  let assetsEnded;
+  const afterAssets = new Promise((resolve) => { assetsEnded = resolve; });
+  const stage = (name, ms, last) => async () => {
     log.push(`start ${name}`);
     await sleep(ms);
+    await last?.();
     log.push(`end ${name}`);
   };
   await runRecreate({
@@ -259,7 +273,17 @@ test('short of memory, the sweep is finished before the next step that renders p
     recreateId: randomUUID(),
     progress: () => {},
     canOverlap: () => false,
-    stages: { ...stubStages, sweep: stage('sweep', 80), assets: stage('assets', 10), generate: stage('generate', 10) },
+    stages: {
+      ...stubStages,
+      sweep: stage('sweep', 80, () => afterAssets),
+      assets: async () => {
+        log.push('start assets');
+        await sleep(10);
+        log.push('end assets');
+        assetsEnded();
+      },
+      generate: stage('generate', 10),
+    },
   });
   // It still overlaps the asset downloads (no browser), then generate waits for it.
   assert.deepEqual(log, ['start sweep', 'start assets', 'end assets', 'end sweep', 'start generate', 'end generate']);

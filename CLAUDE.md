@@ -93,10 +93,23 @@ Lighthouse skipped: the time budget ran out". On a quiet machine the same analys
 - **Full Recreate with the cache** (panscience.xyz, 6 pages, API on a scratch data dir): **446 s** (529 / 559 s before it, ~570 s in 4b.9), same results: fidelity 80, visual difference 79, between widths 74,
   6 / 6 pages, 42 / 42 widths, hover 24, loops 35, checklist motion rows as before. 2915 static requests, 2710 answered from the cache: 205 files (11 MB) loaded once instead of 142 MB downloaded again.
   That run also had more free memory (1.2 GB: four views at a time), so not all of the gain is the cache's.
-- **Open / next candidates**: the re-audit's motion step measures its ≤ 6 pages one after the other (~20 s each; 216 s for a re-audit in the last run). The asset step downloads every file again from Node
-  although the cache holds most of them (12–14 s normally, 174 s on the slow connection). Jobs still run one at a time under the global lock. Analyze does not use the cache yet (4 loads of the homepage).
+- **The asset step reads the cache** (`cache.lookup(url)` → the stored response; `assets/download.js fromCache`, `assets/index.js cachedSheet`): a file the job's browsers already loaded is taken from the
+  cache instead of being downloaded a twelfth time, and passes the same checks as a download (size limit of its kind, not a web page in place of a file, content hash, SVG sanitizer afterwards). Anything
+  the cache does not hold or that fails a check goes to the normal SSRF-guarded download, which decides and reports as before; cross-origin stylesheets are read from the cache the same way.
+  `report.assets.fromCache`, `report.sharedCache.reused / reusedBytes`. panscience.xyz: 189 of 207 files from the cache, the step 7.6 s (11.6–14.2 s before); the 207 files are **byte-identical** (same sha256
+  set) to a run that downloaded them from Node (the only differences: S3 signed URLs whose query changes per run, and which of two identical icons gives the file its name). The step that took 174 s on
+  the slow connection is the one this is for; not measured again on a slow connection.
+- **Analyze uses the cache too** (`audit/index.js`: one cache per analysis for the homepage render, the crawl's renders and the three screenshot views; `renderHome / renderHtml / captureScreenshots({ cache })`;
+  closed with the browser, before Lighthouse, which runs in its own Chrome and is not touched). The homepage is opened in four contexts and its static files are downloaded once (test). On panscience.xyz
+  the analysis took 80 s with no errors (68 s and 82 s in earlier runs): no measurable gain on a normal connection, the same picture as for Recreate; the point is the slow connection.
+- **Full chain after both** (panscience.xyz, new project, API on a scratch data dir): Analyze 80 s, Recreate **487 s** (inspect 170, assets 7.6, sweep 150, generate 77, build 37, responsive 54), re-audit 164 s;
+  fidelity 80, visual difference 78, between widths 74, 6 / 6 pages, 42 / 42 widths, 816 asset references verified, safety passed. The homepage's laptop view scored 77 instead of 86 in this run: the
+  capture found its scroll-reveal content in another state (timer-driven reveals, the known run-to-run variance), every other page and view is within one point.
+- **Open / next candidates**: the re-audit's motion step measures its ≤ 6 pages one after the other (~20 s each). Jobs still run one at a time under the global lock. What is left of a Recreate is the
+  scroll-through (8–11 s per context), the motion probing and the sweep's seven page loads per page; shortening those changes what is captured and needs the user's decision.
 - Tests: `shared-cache.test.js` (what may be shared; four contexts load a static file once while documents, API calls, redirects, cookies, `no-store`, `Vary: User-Agent` and errors still go to the server; an
-  address the policy blocks is never reached; the size limit; a slow first load does not hold the others; the temp folder is removed), `perf.test.js` (parallelism by memory, `stepBudget`, overlapping progress, an analysis of a local page whose image and frame never answer is complete, screenshot views kept at the deadline),
+  address the policy blocks is never reached; the size limit; a slow first load does not hold the others; the temp folder is removed; an analysis opens the homepage four times and downloads its static files once),
+  `recreate-assets.test.js` (with the network closed a cached file is saved, an error page or a lost cache file goes to the download; the pipeline takes its files from the cache), `perf.test.js` (parallelism by memory, `stepBudget`, overlapping progress, an analysis of a local page whose image and frame never answer is complete, screenshot views kept at the deadline),
   `recreate-jobs.test.js` (the sweep runs next to the later steps and is awaited by `responsive`; short of memory it is finished before generate; a failing sweep is a warning; a failing step ends a running sweep).
 
 ### Complete report (UI redesign task, after 4b.1)
