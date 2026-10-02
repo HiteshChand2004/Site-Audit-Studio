@@ -94,7 +94,7 @@ export async function settle(page, view, cap, { observe = false } = {}) {
   return { ...stats, scrolled: max };
 }
 
-async function captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs = 0 }) {
+async function captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs = 0, cache = null }) {
   const context = await browser.newContext({
     viewport: { width: view.width, height: view.height },
     deviceScaleFactor: view.dpr,
@@ -104,6 +104,8 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     ignoreHTTPSErrors: true,
     serviceWorkers: 'block',
   });
+  // Static files another view (or page) of this job already loaded come from the shared cache, not from the network again.
+  await cache?.attach(context);
   const resources = new Map();
   const failed = [];
   context.on('response', (res) => {
@@ -124,6 +126,15 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     if (!url.startsWith('data:')) failed.push({ url, type: req.resourceType(), error: req.failure()?.errorText ?? 'failed' });
   });
 
+  // Where the time of this view goes (ms per phase), for the report: what is worth speeding up differs from site to site.
+  const timing = {};
+  let mark = Date.now();
+  const lap = (phase) => {
+    const now = Date.now();
+    timing[phase] = (timing[phase] ?? 0) + now - mark;
+    mark = now;
+  };
+
   try {
     const page = await context.newPage();
     // The document must arrive in time; the load event (every image, tracker and embed) and a quiet
@@ -135,14 +146,20 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       if (!/timeout/i.test(err.message)) throw err;
       return go();
     });
+    lap('document');
     await page.waitForLoadState('load', { timeout: LOAD_WAIT }).catch(() => {});
+    lap('load');
     await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+    lap('idle');
     const observeReveal = view.id === 'desktop' && motionBudgetMs > 0;
     const { events: revealEvents, ...reveal } = await settle(page, view, MAX_HEIGHT, { observe: observeReveal });
+    lap('scroll');
     await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
     await page.waitForTimeout(300);
+    lap('idle');
 
     const snapshot = await page.evaluate(snapshotPage, {});
+    lap('snapshot');
     // Continuous motion (4b.3) is read before the screenshots: a screenshot with animations disabled cancels the infinite ones.
     let loops = null;
     let loopsError = null;
@@ -153,6 +170,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
         loopsError = firstLine(err);
       }
     }
+    lap('motion');
     const fold = await page.screenshot({ type: 'png', animations: 'disabled' });
     const fullHeight = Math.max(1, Math.min(snapshot.scrollHeight, MAX_HEIGHT));
     const full = await page.screenshot({
@@ -165,6 +183,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       encode(fold, path.join(dir, `${view.id}-fold.webp`)),
       encode(full, path.join(dir, `${view.id}-full.webp`)),
     ]);
+    lap('screenshots');
 
     // Hover and focus effects (4b.1) and how the scroll reveals run (4b.2), on the desktop view only, after
     // everything else was captured from the page.
@@ -194,12 +213,15 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       }
     }
 
+    lap('motion');
+
     const data = {
       view: view.id,
       viewport: { width: view.width, height: view.height, dpr: view.dpr, mobile: view.mobile },
       status: response?.status() ?? 0,
       finalUrl: page.url(),
       capturedAt: new Date().toISOString(),
+      timing,
       reveal,
       ...snapshot,
       resources: [...resources.values()],
@@ -217,6 +239,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       nodeCount: data.nodeCount,
       truncated: data.truncated,
       scrollHeight: data.scrollHeight,
+      timing,
       reveal,
       ...(motion && { motion }),
       resources: data.resources,
@@ -232,16 +255,17 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
  * @param {import('playwright').Browser} browser
  * @param {{ url: string, slug: string }} pageInfo  an entry from discoverPages()
  * @param {string} workspace  the recreate workspace folder
+ * @param {{ timeout?: number, motionBudgetMs?: number, cache?: object }} [o]  cache: the job's shared cache of static files (audit/sharedCache.js)
  * @returns {Promise<{ views: Record<string, object>, errors: { view: string, message: string }[] }>}
  */
-export async function capturePage(browser, pageInfo, workspace, { timeout = 30000, motionBudgetMs = 0 } = {}) {
+export async function capturePage(browser, pageInfo, workspace, { timeout = 30000, motionBudgetMs = 0, cache = null } = {}) {
   const dir = captureDir(workspace, pageInfo.slug);
   await mkdir(dir, { recursive: true });
   // All views side by side when the machine has the memory for four loaded pages, fewer (never under two) when it is short
   // of it: more contexts than fit make every one of them slow and the loads time out. The desktop view starts first.
   const atOnce = parallelism({ max: VIEWS.length, min: 2 });
   const results = await mapLimit(VIEWS, atOnce, (view) =>
-    captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs }).then((value) => ({ status: 'fulfilled', value }), (reason) => ({ status: 'rejected', reason })));
+    captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, cache }).then((value) => ({ status: 'fulfilled', value }), (reason) => ({ status: 'rejected', reason })));
   const views = {};
   const errors = [];
   results.forEach((r, i) => {

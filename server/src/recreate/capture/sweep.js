@@ -28,7 +28,7 @@ export const sweepView = (width) => ({
 
 export const sweepFile = (width) => `${width}-full.webp`;
 
-async function captureWidth(browser, pageInfo, width, dir, timeout) {
+async function captureWidth(browser, pageInfo, width, dir, timeout, cache) {
   const view = sweepView(width);
   const context = await browser.newContext({
     viewport: { width: view.width, height: view.height },
@@ -40,6 +40,9 @@ async function captureWidth(browser, pageInfo, width, dir, timeout) {
     serviceWorkers: 'block',
   });
   try {
+    // The page's static files were loaded by the main capture: they come from the job's shared cache.
+    await cache?.attach(context);
+    const started = Date.now();
     const page = await context.newPage();
     const go = () => page.goto(pageInfo.url, { waitUntil: 'domcontentloaded', timeout });
     await go().catch((err) => {
@@ -48,9 +51,11 @@ async function captureWidth(browser, pageInfo, width, dir, timeout) {
     });
     await page.waitForLoadState('load', { timeout: LOAD_WAIT }).catch(() => {});
     await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
+    const loaded = Date.now();
     await settle(page, view, MAX_HEIGHT);
     await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
     await page.waitForTimeout(300);
+    const scrolled = Date.now();
     const size = await page.evaluate(() => ({
       height: document.documentElement.scrollHeight,
       scrollWidth: Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth ?? 0),
@@ -62,7 +67,9 @@ async function captureWidth(browser, pageInfo, width, dir, timeout) {
       clip: { x: 0, y: 0, width, height: Math.max(1, Math.min(size.height, MAX_HEIGHT)) },
     });
     await encode(png, path.join(dir, sweepFile(width)));
-    return { width, height: size.height, scrollWidth: size.scrollWidth, file: `sweep/${sweepFile(width)}`, truncated: size.height > MAX_HEIGHT };
+    // timing: ms spent loading the page, scrolling through it and taking the screenshot.
+    const timing = { load: loaded - started, scroll: scrolled - loaded, screenshot: Date.now() - scrolled };
+    return { width, height: size.height, scrollWidth: size.scrollWidth, file: `sweep/${sweepFile(width)}`, truncated: size.height > MAX_HEIGHT, timing };
   } finally {
     await context.close().catch(() => {});
   }
@@ -72,10 +79,10 @@ async function captureWidth(browser, pageInfo, width, dir, timeout) {
  * Screenshots the original page at every sweep width. A failing width is reported and the others kept.
  * @returns {Promise<{ widths: Record<number, object>, errors: { width: number, message: string }[] }>}
  */
-export async function captureSweep(browser, pageInfo, workspace, { widths = SWEEP_WIDTHS, timeout = 30000, parallel = SWEEP_PARALLEL } = {}) {
+export async function captureSweep(browser, pageInfo, workspace, { widths = SWEEP_WIDTHS, timeout = 30000, parallel = SWEEP_PARALLEL, cache = null } = {}) {
   const dir = path.join(captureDir(workspace, pageInfo.slug), 'sweep');
   await mkdir(dir, { recursive: true });
-  const results = await mapLimit(widths, Math.max(1, parallel), (width) => captureWidth(browser, pageInfo, width, dir, timeout).then(
+  const results = await mapLimit(widths, Math.max(1, parallel), (width) => captureWidth(browser, pageInfo, width, dir, timeout, cache).then(
     (value) => ({ width, value }),
     (err) => ({ width, error: err?.message?.split('\n')[0] ?? 'Capture failed' }),
   ));

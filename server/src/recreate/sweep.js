@@ -91,7 +91,7 @@ export async function sweepStage(ctx, { widths = SWEEP_WIDTHS, stepDeadline = ct
       try {
         // Widths captured at once: by the memory that is free now (other steps of the job may be running next to this one).
         const parallel = parallelism({ max: SWEEP_PARALLEL, min: 2 });
-        captured[page.slug] = await withTimeout(captureSweep(browser, page, ctx.dir, { widths, parallel }), Math.max(1000, stepDeadline - HARD_MARGIN - Date.now()), `Responsive capture of ${page.path}`);
+        captured[page.slug] = await withTimeout(captureSweep(browser, page, ctx.dir, { widths, parallel, cache: ctx.netCache }), Math.max(1000, stepDeadline - HARD_MARGIN - Date.now()), `Responsive capture of ${page.path}`);
       } catch (err) {
         if (!(err instanceof TimeoutError)) throw err;
         notCaptured.push(page.path);

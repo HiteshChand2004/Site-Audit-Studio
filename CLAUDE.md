@@ -74,10 +74,29 @@ Lighthouse skipped: the time budget ran out". On a quiet machine the same analys
 - **A run on a slow connection** (plain requests took 6–12 s, ~450–700 MB free, overlap forced): the job still finished (510 s) and nothing timed out, but with less: 3 of 6 pages captured (inspect 251 s; the
   other pages link to the live site, with a warning), asset downloads 174 s instead of 12 s, the sweep captured nothing in its 4 minutes (warning), fidelity 76. So the overlap itself is **not measured yet**
   on a machine with memory to spare, and on a slow network Recreate degrades (fewer pages) rather than fails.
-- **Open / next candidates**: every captured view (4) and sweep width (7) loads the page from the network again (separate browser contexts share no cache): 11 full loads per page, the main cost on a slow
-  network; a shared read-only cache for sub-resources across the contexts of one page would remove most of it, but it changes how the capture loads pages and needs a full fidelity re-verification.
-  The re-audit's motion step measures its ≤ 6 pages one after the other (~20 s each). Jobs still run one at a time under the global lock.
-- Tests: `perf.test.js` (parallelism by memory, `stepBudget`, overlapping progress, an analysis of a local page whose image and frame never answer is complete, screenshot views kept at the deadline),
+- **Shared cache of static files** (`audit/sharedCache.js createSharedCache()`, one per Recreate job: `ctx.netCache`, created in the inspect step, used by the capture of every view and page and by
+  the sweep, removed at the end of the job; `SAS_SHARED_CACHE=0` turns it off): browser contexts share nothing, so each of the 11 contexts of a page (4 views + 7 sweep widths) downloaded the page's
+  stylesheets, scripts, images and fonts again. Now the first context that asks for a file loads it **itself, as before** (the browser's own request through the egress proxy; the cache never fetches
+  anything), the response is kept (`requestfinished` → body to a temp folder, never the workspace) and every other context is answered with it (`route.fulfill`); a context asking while the first is still
+  loading waits for it (≤ 15 s, then loads it itself). Shared: GET requests for stylesheet / script / image / font that answered 200. Never shared: documents and frames, XHR / fetch, media and range
+  requests, redirects and what they lead to (the browser does not route a redirect target), errors, responses with `Set-Cookie`, `no-store`, or a `Vary` other than Accept / Accept-Encoding / Origin;
+  25 MB per file, 500 MB per job. A failed or abandoned load is left to each browser. `report.sharedCache` = { requests, served, servedBytes, loaded, stored, storedBytes, notShared, failed, files }.
+  A first version fetched the file from Node (`route.fetch`): one connection per file instead of the browser's multiplexed one made the first load slower (2.7 s instead of ~1 s per view), so it was replaced.
+- **Where a capture's time goes** (`views[v].timing` in `capture/<slug>/<view>.json`: ms for document, load, idle, scroll, snapshot, motion, screenshots; the sweep's widths have `timing` { load, scroll, screenshot }):
+  panscience `/`, desktop view, normal network: document + load + idle ~4–5 s, the scroll-through 8–11 s, motion probing ~11 s, snapshot + screenshots ~3–4 s. So on a normal network the network is a small
+  part of a capture, and the earlier guess that the 11 loads per page are the main cost was wrong there; the scroll-through and motion waits are kept as they are (they are what makes the capture accurate).
+- **The cache, measured** (capture of views + sweep, same code path as the steps; slow connection = Chromium's network emulation "Fast 3G", 1.6 Mbit/s and 562 ms latency, in the measuring script only):
+  normal network, panscience `/`, alternating runs: 63.2 s without, 60.4 s with (the first pair, 80 vs 94 s, was machine noise: free memory 970 vs 394 MB); pictures as equal as two runs without the cache
+  are to each other. Slow connection: panscience 2 pages 138.6 → 130.1 s (network part of the sweep 103 → 57 s summed over its contexts); parchaa.com `/` 116.4 → 102.6 s (sweep 66.7 → 54.1 s), and the
+  capture without the cache was **incomplete** at the laptop width (5 images aborted; header, blog list, testimonials and call-to-action missing in the screenshot) while the one with it was complete,
+  same DOM (947 nodes) and height. So the gain is small on a fast connection, and on a slow one it is completeness more than seconds. One run per case: the direction is clear, the numbers are not exact.
+- **Full Recreate with the cache** (panscience.xyz, 6 pages, API on a scratch data dir): **446 s** (529 / 559 s before it, ~570 s in 4b.9), same results: fidelity 80, visual difference 79, between widths 74,
+  6 / 6 pages, 42 / 42 widths, hover 24, loops 35, checklist motion rows as before. 2915 static requests, 2710 answered from the cache: 205 files (11 MB) loaded once instead of 142 MB downloaded again.
+  That run also had more free memory (1.2 GB: four views at a time), so not all of the gain is the cache's.
+- **Open / next candidates**: the re-audit's motion step measures its ≤ 6 pages one after the other (~20 s each; 216 s for a re-audit in the last run). The asset step downloads every file again from Node
+  although the cache holds most of them (12–14 s normally, 174 s on the slow connection). Jobs still run one at a time under the global lock. Analyze does not use the cache yet (4 loads of the homepage).
+- Tests: `shared-cache.test.js` (what may be shared; four contexts load a static file once while documents, API calls, redirects, cookies, `no-store`, `Vary: User-Agent` and errors still go to the server; an
+  address the policy blocks is never reached; the size limit; a slow first load does not hold the others; the temp folder is removed), `perf.test.js` (parallelism by memory, `stepBudget`, overlapping progress, an analysis of a local page whose image and frame never answer is complete, screenshot views kept at the deadline),
   `recreate-jobs.test.js` (the sweep runs next to the later steps and is awaited by `responsive`; short of memory it is finished before generate; a failing sweep is a warning; a failing step ends a running sweep).
 
 ### Complete report (UI redesign task, after 4b.1)
@@ -1067,7 +1086,7 @@ server/src/  index.js, db/index.js (schema + migrations), routes/{projects,analy
                     generate.js (step 3: IR + fixers + emit + fit pass), preview.js (static preview + step 5),
                     verify/{server,layout,fidelity,safety,site}.js (local render, fidelity, safety gate, build verification)
              security/ netGuard.js (address classes, policies, resolveChecked), egressProxy.js (Chromium proxy)
-             audit/ index.js (pipeline + STEPS), jobs.js (queue, 1 at a time), resources.js (parallel work by free memory), http.js, robots.js, sitemap.js,
+             audit/ index.js (pipeline + STEPS), jobs.js (queue, 1 at a time), resources.js (parallel work by free memory), sharedCache.js (static files shared by a job's browser contexts), http.js, robots.js, sitemap.js,
                     crawler.js, extract.js, linkChecker.js, render.js, screenshots.js, retention.js, frame.js, assemble.js,
                     lighthouse/{run,worker}.js, analyzers/{seo,aeo,crawlChecks,a11y,metrics,weaknesses}.js
              detection/ engine.js, manual.js, manual-rules.json, rules/<platform>.json (15 platforms)

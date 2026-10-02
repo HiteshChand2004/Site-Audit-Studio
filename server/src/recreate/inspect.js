@@ -4,6 +4,7 @@
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { launchBrowser } from '../audit/render.js';
+import { createSharedCache, sharedCacheEnabled } from '../audit/sharedCache.js';
 import { startEgressProxy } from '../security/egressProxy.js';
 import { capturePage } from './capture/index.js';
 import { discoverPages, SKIP_LABELS } from './discover.js';
@@ -42,6 +43,13 @@ export async function inspectStage(ctx) {
   const closeBrowser = once(() => browser?.close().catch(() => {}));
   ctx.defer(closeBrowser);
 
+  // One cache of static files for every browser context of the job: the views of a page, the next pages, and the sweep
+  // of the original at more widths (which runs after this step) load a stylesheet, script, image or font once.
+  if (sharedCacheEnabled() && !ctx.netCache) {
+    ctx.netCache = createSharedCache();
+    ctx.defer(() => ctx.netCache.close());
+  }
+
   const pages = [];
   const failedPages = [];
   const notCaptured = [];
@@ -68,7 +76,7 @@ export async function inspectStage(ctx) {
       const started = Date.now();
       // Hover / focus probing (4b.1) takes a few seconds per page: only while the step has time to spare.
       const spare = deadline - Date.now() - slowest * 2;
-      const capture = (ctx.capturePage ?? capturePage)(browser, info, ctx.dir, { motionBudgetMs: spare > MOTION_BUDGET * 2 ? MOTION_BUDGET : 0 });
+      const capture = (ctx.capturePage ?? capturePage)(browser, info, ctx.dir, { motionBudgetMs: spare > MOTION_BUDGET * 2 ? MOTION_BUDGET : 0, cache: ctx.netCache });
       // A page that stalls (a slow server, an animation that never settles) must not take the pages captured so far down
       // with it: the step's own limit would fail the whole job. Past this point only the homepage still waits.
       let result = null;

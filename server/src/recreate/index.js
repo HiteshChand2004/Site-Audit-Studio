@@ -217,6 +217,8 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     }
     for (const key of [...background.keys()]) await join(key);
     ctx.report.timings = { ...timings, total: Date.now() - startedAt };
+    // What the shared cache of static files saved the captures (audit/sharedCache.js).
+    if (ctx.netCache) ctx.report.sharedCache = ctx.netCache.stats();
     await dispose();
     await writeFile(path.join(dir, 'report.json'), JSON.stringify(ctx.report, null, 1));
     await commitWorkspace(project.id, recreateId);
