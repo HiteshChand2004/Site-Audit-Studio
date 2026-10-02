@@ -73,7 +73,8 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
 | 4b.6.x | Remaining small follow-up: sweep time budget where pages are still left out (the step max was raised to 4 min in 4b.6.2; panscience's 6th page / `/media` is still lost in **inspect**) | ⏳ |
 | 4b.7 | Visual diff score (perceptual SSIM-style diff, bands, heatmaps, NEW-panel cards) | ✅ WIP |
 | 4b.1 | Motion capture: hover / focus (`capture/interactions.js`, `motion.json`) | ✅ WIP |
-| 4b.2–4b.5 | Motion capture (scroll reveal, continuous), IR `motion`, HTML emitter + `motion.js`, all stacks | ⏳ |
+| 4b.2 | Scroll-reveal capture: from-state, duration, easing, delay, stagger, trigger (`capture/reveal.js`, `motion.json.reveal`) | ✅ WIP |
+| 4b.3–4b.5 | Continuous motion capture, IR `motion`, HTML emitter + `motion.js`, all stacks | ⏳ |
 | 4b.8–4b.9 | Re-audit rows + UI, real-site verification, docs | ⏳ |
 
 4b.6.1 details (**measures only, never fails a job**):
@@ -163,6 +164,23 @@ Same workflow: one sub-step at a time, WIP commit, wait for "next"; never push.
   (every Tab stop is the browser's ring). Probing was slow there (only ~6 probes in 8 s) before the "do not scroll what is on screen" change; not re-measured on the real site after it. parchaa.com (an earlier run, before the scroll fix:
   118 hover entries, 111 focus entries, 99 rules over 5 pages) is verified in 4b.9. That panscience run took the whole 12-minute budget (the final responsive step skipped 4 pages): the cost of motion capture itself should be about
   8 s × pages; check the total again in 4b.9.
+
+4b.2 details (scroll-reveal capture - capture only, nothing is emitted yet):
+- **Where**: `capture/reveal.js` (the reveal tracker moved here from `capture/index.js`; `settle(page, view, cap, { observe })`). Desktop view with motion budget only (`observe`): other views only pin the end state as before.
+  Result in `capture/<slug>/motion.json` → `reveal = { version, elements[], groups[], stats }`; `report.pages[].motion.reveal` = stats, `report.motion.reveal` = totals (revealed, declared, sampled, unmeasured, replay, timed, groups, staggered).
+- **Two measurement paths, both general**: (1) *declared* - `getAnimations()` is read before the tracker finishes the animation: CSS transitions, CSS animations, Web Animations API give exact duration, delay, endDelay, easing and
+  keyframes (a keyframe's first/last transform and filter are resolved to matrices; they override the state read around it); (2) *sampled* - a rAF recorder reads opacity + transform of every element that starts hidden
+  (≤ 400 elements, ≤ 90 samples), so effects driven by script (GSAP, framer-motion JS, rAF loops) get a duration (to 99 % of progress) and an easing fitted to a cubic-bezier (named easings first, then a local search; `error` = RMSE).
+- **Element**: `path` (snapshot path), `tag`, `text`, `rect`, `from` / `to` { opacity, transform (matrix), filter, `motion` { translate, scale, rotate } }, `timing` { source: transition | animation | waapi | sampled | unmeasured, duration, delay (null when sampled),
+  easing { css, fit: declared | sampled, bezier?, error? }, `parts` when opacity and transform have their own timing }, optional `keyframes` (> 2), `trigger` { kind: scroll | timed, step, topBefore, topAfter } (position of the element's top as a viewport fraction
+  before / after the scroll step that revealed it; a 'timed' one was already on screen: rotating headlines, timers), `replay` (hidden again when it leaves = the reveal repeats), `group`, `offsetMs` (start after the group's first).
+- **Groups / stagger**: elements of one parent revealed by the same scroll step; singletons regroup by grandparent + same from/duration/easing (cards of a grid in separate columns). Stagger = ≥ 3 members whose consecutive start
+  times (animation start + delay, or first sampled change) differ by a constant step (|step| ≥ 15 ms, jitter ≤ max(30 ms, 35 %)); `group.stagger = { stepMs, jitterMs, order }`.
+- **Limits (by design)**: only opacity-hidden reveals (same as the end-state pinning); effects that run at page load (installed after load + idle) and looping/continuous motion (4b.3) are not covered; trigger is bounded by the scroll step (85 % of a viewport), not exact.
+- **Cost**: elements animated by script are waited for (≤ 1.5 s per scroll step, as before); declared animations are finished at once. Fidelity unchanged.
+- **Real site** (panscience.xyz, 6 pages, API on `C:sasd`): 130 reveals (124 declared, 6 sampled), 59 groups, 9 staggered; every section uses `700 ms cubic-bezier(0.16, 1, 0.3, 1)` from opacity 0 + translateY(16px), list items staggered ~50-70 ms
+  (CSS transitions started one by one by a script, found through the start times); hero headline words (timer-driven, sampled, trigger 'timed') flagged; `/media` has no reveals. Fidelity 80, as before. parchaa.com is covered in 4b.9.
+- Tests: `recreate-reveal.test.js` (bezier/easing fit/matrix/path order; grouping + stagger; CSS transition, CSS animation, WAAPI, rAF-driven and a staggered list on a local page; no observe = no events), plus the services fixture in `recreate-generate.test.js`.
 
 ### Phase 6 final summary
 Every recreate can be built as **four stacks**, all from the same saved IR and all checked against the plain-HTML build: Plain HTML / CSS / JS (the

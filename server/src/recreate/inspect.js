@@ -108,12 +108,14 @@ export async function inspectStage(ctx) {
     hover: probed.reduce((n, p) => n + p.motion.hover, 0),
     focus: probed.reduce((n, p) => n + p.motion.focus, 0),
     rules: probed.reduce((n, p) => n + p.motion.rules, 0),
+    // Scroll reveals (4b.2): how many elements were measured, by what (declared animation vs sampled frames).
+    reveal: ['revealed', 'declared', 'sampled', 'unmeasured', 'replay', 'timed', 'groups', 'staggered'].reduce((o, k) => ({ ...o, [k]: probed.reduce((n, p) => n + (p.motion.reveal?.[k] ?? 0), 0) }), {}),
     errors: report.pages.filter((p) => p.motion?.error).map((p) => ({ page: p.path, error: p.motion.error })),
     notProbed: report.pages.filter((p) => !p.motion).map((p) => p.path),
   };
   const revealPages = report.pages.filter((p) => Object.values(p.revealPinned).some((n) => n > 0));
   if (revealPages.length) {
-    report.warnings.push(`Scroll-reveal content on ${revealPages.length} ${revealPages.length === 1 ? 'page' : 'pages'} was captured in its revealed state (${revealPages.map((p) => p.path).slice(0, 5).join(', ')}); the reveal animation itself comes in Phase 4b.`);
+    report.warnings.push(`Scroll-reveal content on ${revealPages.length} ${revealPages.length === 1 ? 'page' : 'pages'} was captured in its revealed state (${revealPages.map((p) => p.path).slice(0, 5).join(', ')}); how they appear is recorded in motion.json (the animation is rebuilt in a later 4b step).`);
   }
   report.discovery = {
     pageLimit: ctx.pageLimit,

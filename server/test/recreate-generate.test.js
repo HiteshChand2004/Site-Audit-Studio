@@ -339,6 +339,19 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   const servicesInfo = report.pages.find((p) => p.path === '/services/');
   assert.ok(servicesInfo.revealPinned.desktop >= 3, JSON.stringify(servicesInfo.revealPinned));
   assert.ok(report.warnings.some((w) => /^Scroll-reveal content on \d+ pages? was captured in its revealed state \(.*\/services\//.test(w)));
+  // 4b.2 — how those elements appear (reveal.js fixture: inline opacity/transform transition 0.4s, replayed on leave).
+  const servicesMotion = JSON.parse(await readFile(path.join(dir, 'capture', servicesInfo.slug, 'motion.json'), 'utf8'));
+  const heading = servicesMotion.reveal.elements.find((e) => e.tag === 'h2' && /Revealed on scroll/.test(e.text));
+  assert.ok(heading, JSON.stringify(servicesMotion.reveal.elements.map((e) => `${e.tag}:${e.text}`)));
+  assert.equal(heading.timing.source, 'transition');
+  assert.equal(heading.timing.duration, 400);
+  assert.equal(heading.timing.easing.css, 'ease');
+  assert.equal(heading.from.opacity, 0);
+  assert.deepEqual(heading.from.motion.translate, [0, 40]);
+  assert.equal(heading.to.opacity, 1);
+  assert.equal(heading.replay, true);
+  assert.ok(servicesMotion.reveal.stats.revealed >= 3 && servicesMotion.reveal.stats.declared >= 3);
+  assert.ok(report.motion.reveal.revealed >= 3 && report.motion.reveal.replay >= 1, JSON.stringify(report.motion.reveal));
   assert.match(services, /href="\.\.\/">Home</);
   assert.match(services, /<link rel="icon" href="\.\.\/assets\/images\/hero-bg-[0-9a-f]{10}\.svg">/);
   assert.match(await read('about.html'), new RegExp(`href="${origin}/team\\.html">Our team<`));

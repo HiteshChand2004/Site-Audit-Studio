@@ -7,9 +7,11 @@ import { USER_AGENT } from '../../audit/http.js';
 import { encode, MAX_HEIGHT, MOBILE_UA } from '../../audit/screenshots.js';
 import { RECREATE_VIEWS as VIEWS } from '../views.js';
 import { captureInteractions } from './interactions.js';
+import { installRevealTracker, processReveal } from './reveal.js';
 import { snapshotPage } from './snapshot.js';
 
 export { VIEWS };
+const firstLine = (err) => String(err?.message ?? err).split('\n')[0].trim();
 export const captureDir = (workspace, slug) => path.join(workspace, 'capture', slug);
 // How long a page gets to fire its load event after the document arrived.
 const LOAD_WAIT = 20000;
@@ -30,116 +32,7 @@ const LOAD_WAIT = 20000;
 // hidden siblings stacked on the same box (carousel or tab slides) are left alone. The motion itself
 // is recreated in Phase 4b.
 //
-// In the page: installs window.__sasReveal { dwell(), finalize() } (the reveal tracker).
-function installRevealTracker() {
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const HIDDEN = 0.05;
-  const seenHidden = new Set();
-  const revealed = new Map(); // element → { opacity, transform, filter } once it settles visible
-  const last = new Map(); // element → "opacity|transform|filter" at the previous sample
-
-  const state = (cs) => `${cs.opacity}|${cs.transform}|${cs.filter}`;
-  // CSS transitions and Web Animations (which most builders use for appear effects) are finished at
-  // once, so the element is read in its end state; polling alone can read a frame mid-animation.
-  const finish = (el) => {
-    for (const a of el.getAnimations?.() ?? []) {
-      if (a.playState !== 'running' || !Number.isFinite(a.effect?.getComputedTiming().endTime)) continue;
-      try {
-        a.finish();
-      } catch { /* not finishable */ }
-    }
-  };
-  // Samples tracked elements (all elements when `full`); returns true when none of them changed.
-  const sample = (full) => {
-    let stable = true;
-    const els = full ? document.body?.getElementsByTagName('*') ?? [] : [...seenHidden];
-    for (const el of els) {
-      if (seenHidden.has(el)) finish(el);
-      const cs = getComputedStyle(el);
-      const opacity = parseFloat(cs.opacity);
-      if (opacity < HIDDEN) {
-        seenHidden.add(el);
-        continue;
-      }
-      if (!seenHidden.has(el)) continue;
-      const s = state(cs);
-      const settled = last.get(el) === s; // same state as the previous sample: not mid-animation
-      if (!settled) stable = false;
-      last.set(el, s);
-      const prev = revealed.get(el);
-      if (settled && (!prev || opacity >= prev.opacity - 0.01)) revealed.set(el, { opacity, transform: cs.transform, filter: cs.filter });
-    }
-    return stable;
-  };
-
-  // After each scroll step: let observers fire, then wait only while revealed elements are still
-  // animating (at most 1.5 s); pages without reveal effects move on at once.
-  const dwell = async () => {
-    await sleep(150);
-    let changing = !sample(true);
-    const until = Date.now() + 1500;
-    while (changing && Date.now() < until) {
-      await sleep(120);
-      changing = !sample(false);
-    }
-  };
-  sample(true);
-  window.__sasReveal = { dwell, finalize: () => finalize() };
-
-  // Back at the top: pin the revealed state on elements that are hidden again below the first screen.
-  const finalize = async () => {
-    await sleep(300);
-    const candidates = [];
-    for (const [el, final] of revealed) {
-      if (!el.isConnected || final.opacity < HIDDEN) continue;
-      const cs = getComputedStyle(el);
-      const r = el.getBoundingClientRect();
-      // Entirely in the first screen: what the visitor sees now (a hidden element there is more likely
-      // a carousel or timed effect). One that crosses the fold is re-hidden by a scroll trigger.
-      if (r.top >= 0 && r.bottom <= window.innerHeight) continue;
-      if (parseFloat(cs.opacity) < final.opacity - 0.05 || cs.transform !== final.transform || cs.filter !== final.filter) {
-        candidates.push({ el, final, rect: [r.left, r.top, r.width, r.height] });
-      }
-    }
-    const overlap = (a, b) => {
-      const x = Math.max(0, Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0]));
-      const y = Math.max(0, Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]));
-      return x * y > 0.5 * Math.min(a[2] * a[3], b[2] * b[3]);
-    };
-    const stacked = new Set();
-    for (const a of candidates) {
-      for (const b of candidates) {
-        if (a !== b && a.el.parentElement === b.el.parentElement && a.rect[2] * a.rect[3] > 0 && overlap(a.rect, b.rect)) stacked.add(a.el);
-      }
-    }
-    const pinned = candidates.filter((c) => !stacked.has(c.el));
-    const pin = ({ el, final }) => {
-      el.style.setProperty('opacity', String(final.opacity), 'important');
-      el.style.setProperty('transform', final.transform, 'important');
-      el.style.setProperty('filter', final.filter, 'important');
-      finish(el); // the change starts the site's own transition; jump to its end
-    };
-    pinned.forEach(pin);
-    const byEl = new Map(pinned.map((c) => [c.el, c]));
-    // Some runtimes write the style again (for example when the element leaves the view).
-    const observer = new MutationObserver((records) => {
-      for (const rec of records) {
-        const c = byEl.get(rec.target);
-        if (c && rec.target.style.getPropertyPriority('opacity') !== 'important') pin(c);
-      }
-    });
-    for (const c of pinned) observer.observe(c.el, { attributes: true, attributeFilter: ['style'] });
-  
-    const pending = [...document.images].filter((img) => !img.complete);
-    await Promise.all(pending.map((img) => new Promise((r) => {
-      img.addEventListener('load', r, { once: true });
-      img.addEventListener('error', r, { once: true });
-      setTimeout(r, 3000);
-    })));
-    await document.fonts?.ready;
-    return { revealed: revealed.size, pinned: pinned.length, stacked: stacked.size };
-  };
-}
+// The tracker lives in reveal.js (it also records how the effects run, 4b.2).
 
 const waitStill = async (page) => {
   // Smooth-scroll libraries animate towards the target: wait until the position stops changing.
@@ -171,13 +64,14 @@ async function scrollToY(page, target) {
  * lets the reveal tracker record each step, then returns to the top and pins revealed content.
  * @returns {Promise<{ revealed: number, pinned: number, stacked: number, scrolled: number }>}
  */
-export async function settle(page, view, cap) {
-  await page.evaluate(installRevealTracker);
+export async function settle(page, view, cap, { observe = false } = {}) {
+  await page.evaluate(installRevealTracker, { observe });
   // Near the left edge: less likely over an element with its own scroll area (carousels, maps).
   await page.mouse.move(Math.min(20, view.width / 4), Math.round(view.height / 2)).catch(() => {});
   const step = Math.max(400, Math.floor(view.height * 0.85));
   let y = 0;
   let max = 0;
+  let steps = 0;
   for (let i = 0; i < 80; i++) {
     const height = await page.evaluate(() => document.documentElement.scrollHeight);
     const end = Math.max(0, Math.min(height, cap) - view.height);
@@ -186,7 +80,7 @@ export async function settle(page, view, cap) {
     if (next <= y) break; // the page does not scroll any further
     y = next;
     max = Math.max(max, y);
-    await page.evaluate(() => window.__sasReveal.dwell());
+    await page.evaluate((n) => window.__sasReveal.dwell(n), steps++);
   }
   // Back to the top (a large wheel step, else scrollTo), then pin what was revealed.
   if ((await scrollToY(page, 0)) > 1) {
@@ -240,7 +134,8 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     });
     await page.waitForLoadState('load', { timeout: LOAD_WAIT }).catch(() => {});
     await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
-    const reveal = await settle(page, view, MAX_HEIGHT);
+    const observeReveal = view.id === 'desktop' && motionBudgetMs > 0;
+    const { events: revealEvents, ...reveal } = await settle(page, view, MAX_HEIGHT, { observe: observeReveal });
     await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
     await page.waitForTimeout(300);
 
@@ -258,15 +153,30 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       encode(full, path.join(dir, `${view.id}-full.webp`)),
     ]);
 
-    // Hover and focus effects (4b.1), on the desktop view only, after everything else was captured from the page.
+    // Hover and focus effects (4b.1) and how the scroll reveals run (4b.2), on the desktop view only, after
+    // everything else was captured from the page.
     let motion = null;
-    if (view.id === 'desktop' && motionBudgetMs > 0) {
+    if (observeReveal) {
+      let found = { version: 1, view: 'desktop', hover: [], focus: [], rules: [], groups: [], stats: { rulesTotal: 0, probed: 0, ms: 0, timedOut: false } };
+      let error = null;
       try {
-        const found = await captureInteractions(page, { budgetMs: motionBudgetMs });
-        await writeFile(path.join(dir, 'motion.json'), JSON.stringify(found));
-        motion = { hover: found.hover.length, focus: found.focus.length, rules: found.rules.length, rulesTotal: found.stats.rulesTotal, probed: found.stats.probed, ms: found.stats.ms, timedOut: found.stats.timedOut };
+        found = await captureInteractions(page, { budgetMs: motionBudgetMs });
       } catch (err) {
-        motion = { error: String(err?.message ?? err).split(/\r?\n/)[0] };
+        error = firstLine(err);
+      }
+      try {
+        found.reveal = processReveal(revealEvents ?? []);
+      } catch (err) {
+        error ??= firstLine(err);
+      }
+      try {
+        await writeFile(path.join(dir, 'motion.json'), JSON.stringify(found));
+        motion = {
+          hover: found.hover.length, focus: found.focus.length, rules: found.rules.length, rulesTotal: found.stats.rulesTotal, probed: found.stats.probed,
+          ms: found.stats.ms, timedOut: found.stats.timedOut, reveal: found.reveal?.stats ?? null, ...(error && { error }),
+        };
+      } catch (err) {
+        motion = { error: firstLine(err) };
       }
     }
 
