@@ -30,6 +30,29 @@ export class ConflictError extends Error {
   }
 }
 
+/**
+ * Progress of a job whose steps may run side by side (Analyze renders, screenshots and reads robots.txt at once; Recreate
+ * captures more widths while it downloads assets). Each step reports its own fraction; the job's percentage is the weighted
+ * sum of all of them, and the step shown is the earliest one still running, so the bar and the step list never jump back.
+ * Steps without weights fall back to `overallPct` (one step at a time).
+ * @param {{key:string, weight?:number}[]} steps
+ * @param {(step:string, fraction:number)=>number} [overallPct]
+ * @returns {(step:string, fraction:number)=>{ step:string, pct:number }}
+ */
+export function progressTracker(steps, overallPct) {
+  const weighted = steps.length > 0 && steps.every((s) => Number.isFinite(s.weight));
+  const total = weighted ? steps.reduce((n, s) => n + s.weight, 0) : 0;
+  const fractions = new Map();
+  return (step, fraction) => {
+    const f = Math.min(1, Math.max(0, Number(fraction) || 0));
+    fractions.set(step, Math.max(fractions.get(step) ?? 0, f));
+    const current = steps.find((s) => fractions.has(s.key) && fractions.get(s.key) < 1)?.key ?? step;
+    if (!weighted || !total) return { step: current, pct: overallPct ? overallPct(step, f) : 0 };
+    const sum = steps.reduce((n, s) => n + s.weight * (fractions.get(s.key) ?? 0), 0);
+    return { step: current, pct: Math.round((sum / total) * 100) };
+  };
+}
+
 const snapshot = (job) => ({
   id: job.id,
   projectId: job.projectId,
@@ -112,10 +135,13 @@ export class JobManager extends EventEmitter {
     let lastWrite = 0;
     let lastStep = null;
 
-    const progress = (step, fraction, message) => {
+    const track = progressTracker(steps, overallPct);
+    const progress = (reported, fraction, message) => {
+      const { step, pct } = track(reported, fraction);
       job.step = step;
-      job.pct = Math.max(job.pct, overallPct(step, fraction));
-      if (message) job.message = message;
+      job.pct = Math.max(job.pct, pct);
+      // A step running next to the one shown reports its own messages; only the shown step's are displayed.
+      if (message && reported === step) job.message = message;
       else if (step !== lastStep) job.message = steps.find((s) => s.key === step)?.label ?? step;
       const now = Date.now();
       if (step !== lastStep || now - lastWrite > DB_WRITE_INTERVAL) {

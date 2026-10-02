@@ -10,7 +10,9 @@ import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { USER_AGENT } from '../../audit/http.js';
 import { launchBrowser } from '../../audit/render.js';
+import { parallelism } from '../../audit/resources.js';
 import { encode, MAX_HEIGHT, MOBILE_UA } from '../../audit/screenshots.js';
+import { mapLimit } from '../../audit/util.js';
 import { sweepFile, sweepView } from '../capture/sweep.js';
 import { DIFF_THRESHOLD } from './fidelity.js';
 import { loadLazyImages } from './layout.js';
@@ -125,11 +127,13 @@ export async function compareSweepPage({ renderer, workspace, page, original, wi
   const dir = path.join(workspace, 'fidelity', page.slug, 'sweep');
   await mkdir(dir, { recursive: true });
   const out = {};
-  for (const width of widths) {
+  // Each width has its own browser context and the render is local and static (no script, no network), so the widths are
+  // rendered side by side: as many as the free memory allows. The result does not depend on how many run at once.
+  await mapLimit(widths, parallelism({ max: 4 }), async (width) => {
     const o = original.widths[width];
     if (!o) {
       out[width] = { width, error: original.errors.find((e) => e.width === width)?.message ?? 'The original could not be captured at this width.' };
-      continue;
+      return;
     }
     try {
       const g = await renderSweepPage(renderer, page.outPath, width);
@@ -139,8 +143,9 @@ export async function compareSweepPage({ renderer, workspace, page, original, wi
     } catch (err) {
       out[width] = { width, error: `The recreated page could not be rendered at this width: ${err.message.split('\n')[0]}` };
     }
-  }
-  return out;
+  });
+  // In the order of the widths, whatever order they finished in.
+  return Object.fromEntries(widths.filter((w) => out[w]).map((w) => [w, out[w]]));
 }
 
 const mean = (xs) => (xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : null);

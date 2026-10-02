@@ -15,7 +15,7 @@ import { buildIR, prepareSite, readPageCaptures } from './ir/index.js';
 import { applyMotion, readPageMotion } from './ir/motion.js';
 import { isElement } from './ir/tree.js';
 import { compareLayout, openRenderer, planFixes, renderPage, viewScore } from './verify/layout.js';
-import { refineResponsive } from './verify/refine.js';
+import { REFINE_PAGES, refineResponsive } from './verify/refine.js';
 
 export const FIT_ROUNDS = 2;
 // The fit pass stops starting new rounds this long before the step's time limit.
@@ -24,6 +24,8 @@ const FIT_MARGIN = 25000;
 const WP_BUDGET = 30000;
 // Time for the breakpoint / fluid type check against the original's sweep.
 const REFINE_BUDGET = 90000;
+// How long that check waits for the sweep's first pages when the sweep is still running.
+const SWEEP_WAIT = 75000;
 
 const writeSite = (siteDir, out, assetsDir, known) => writeProject(siteDir, out, { assetsDir, known });
 
@@ -187,14 +189,21 @@ export async function generateStage(ctx) {
   // Breakpoints and fluid type, checked against the original's sweep screenshots (verify/refine.js). Only
   // css/site.css changes, so the pages and the fit fixes above stay as they are.
   let refined = null;
-  if (ctx.sweep) {
+  // The sweep may still be running next to this step (recreate/index.js): the check needs its first pages only, so it
+  // waits for those (a bounded time) and works with the pages swept by then.
+  let sweep = ctx.sweep;
+  if (sweep === undefined && ctx.sweepPending) {
+    ctx.progress(0.9, 'Waiting for the screenshots of the original at more widths');
+    sweep = await ctx.sweepPending(REFINE_PAGES, Math.max(0, Math.min(SWEEP_WAIT, ctx.stepDeadline - FIT_MARGIN - REFINE_BUDGET - Date.now())));
+  }
+  if (sweep) {
     ctx.progress(0.9, 'Checking the layout between the captured widths');
     try {
       refined = await refineResponsive({
         ir,
         siteDir,
         workspace: ctx.dir,
-        sweep: ctx.sweep,
+        sweep,
         deadline: Math.min(Date.now() + REFINE_BUDGET, ctx.stepDeadline - FIT_MARGIN),
       });
     } catch (err) {

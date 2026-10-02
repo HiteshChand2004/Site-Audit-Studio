@@ -46,6 +46,40 @@ and merged on `phase-4a`.
 5.4 UI ✅ · 5.5 real-site verification + docs ✅. Phase 4b (responsive fidelity, visual diff, motion) is done and merged into `phase-4a` (53652dd, fast-forward from `phase-4b`; see its final summary). Same workflow: one step at a time, WIP
 commit, wait for the user's "next"; never push; while the user tests, work in a git worktree and merge only when asked.
 
+### Speed and robustness of the jobs (after Phase 4b) — branch `perf-robustness` (worktree `../Website-Audit-perf`), WIP, not merged
+Reported by the user on panscience.xyz: Analyze took very long, stopped at 43 % and ended with "render timed out after 85s, screenshots timed out after 70s, links /
+Lighthouse skipped: the time budget ran out". On a quiet machine the same analysis took 82 s without an error: the pipeline was fragile on a slow network or a busy machine
+(every step one after the other, one total budget, the most valuable step — Lighthouse — last). Everything below is general, nothing site-specific.
+- **Parallel work by free memory** (`audit/resources.js parallelism({ perUnitMB, max, min })`, `freeMemoryMB`): how many browser contexts run at once comes from the memory available
+  now (150 MB per page, 300 MB kept free; macOS = unknown = no cut). Deliberately lenient: with about 1 GB available, two views at a time instead of four made the capture of six pages
+  take 212 s instead of ~120 s with no gain, so work is only cut back when memory is really exhausted. Used by the Analyze screenshots (≤ 3 views), the crawl's renders (≤ 3), the Recreate
+  capture (4 views, never under 2), the sweep (4 widths, never under 2) and the responsive check (≤ 4 widths, was one at a time).
+- **Analyze** (`audit/index.js`): robots / sitemap, the homepage render (+ axe) and the screenshots start together; the screenshots go on next to the crawl and the link check; the browser is
+  closed before Lighthouse, which still runs alone (mobile, then desktop). `LIGHTHOUSE_RESERVE_MS` = 120 s is kept for Lighthouse: every step before it gets `stepBudget()` = its own limit, but
+  never the reserve (message "Skipped: the time that is left is kept for the checks after it"); the mobile run leaves half of it to the desktop run. Budget 5 → **6 minutes**. A Lighthouse run that
+  dies (not one that times out) is tried once more when ≥ 45 s are left. The homepage fetch is retried once after a timeout (30 s). Step limits: render 110 s, screenshots 80 s, Lighthouse 120 s each.
+- **Bounded waits** (`render.js waitSettled`): navigation waits for `domcontentloaded`; the `load` event gets at most 10 s and a quiet network 4 s more (only when `load` fired), so a tracker
+  or embed that never answers cannot use up a step. The axe scan has its own 40 s limit: when it runs out, the rest of the render is kept. Screenshots: a view not finished by the step's
+  deadline is given up and reported, the views already taken are kept (`captureScreenshots({ parallel, deadline })`). Lighthouse runs with `disableFullPageScreenshot` (its embedded screenshot was never used).
+- **Recreate** (`recreate/index.js`): the sweep is a `background` step (`after: 'inspect'`, `join: 'responsive'`): it always runs next to the asset downloads, and next to generate / build
+  (`browser: true` steps) only when a second browser fits in memory (`roomForSecondBrowser`: 900 MB beyond the 300 MB kept free; `SAS_RECREATE_OVERLAP=1` / `0` decides it for a machine whose capacity is
+  known); otherwise it is awaited first. A background stage gets its own `{ stepDeadline, progress }` as its second argument. The generate step takes the pages swept so far (`ctx.sweepPending(count, ms)`,
+  the first `REFINE_PAGES` = 3, waits ≤ 75 s) instead of the whole sweep; generate's limit 3 → 4 min. A failing step ends a running sweep before the workspace is discarded. `report.timings` = ms per step + `total`.
+- **Progress** (`jobs/manager.js progressTracker`): steps may overlap, so the percentage is the weighted sum of every step's own fraction and the step shown is the earliest one still running; only the
+  shown step's messages are displayed. The step lists are ordered by where a step is awaited (Analyze: screenshots after links; Recreate: sweep after preview), so the app's list only moves forward.
+- **Measured on panscience.xyz** (6 pages, through the API on a scratch data dir, an 8 GB machine with 1–1.7 GB free): Analyze 82 s → **68 s**, no errors (render + screenshots + robots side by side,
+  Lighthouse 29 + ~18 s); Recreate ~570 s (4b.9) → **529 / 559 s**, same results (fidelity 80, visual difference 79, between widths 74–75, hover 23–24, loops 34–36); re-audit 163 / 169 s (its motion step
+  is ~115 s of that). The Recreate gain is small on this machine: with ~1 GB free the sweep only overlaps the asset downloads. Lighthouse's mobile accessibility score moves between 91 and 96 from run to
+  run on this site with the old code too (which elements are revealed when axe runs), not because of this work.
+- **A run on a slow connection** (plain requests took 6–12 s, ~450–700 MB free, overlap forced): the job still finished (510 s) and nothing timed out, but with less: 3 of 6 pages captured (inspect 251 s; the
+  other pages link to the live site, with a warning), asset downloads 174 s instead of 12 s, the sweep captured nothing in its 4 minutes (warning), fidelity 76. So the overlap itself is **not measured yet**
+  on a machine with memory to spare, and on a slow network Recreate degrades (fewer pages) rather than fails.
+- **Open / next candidates**: every captured view (4) and sweep width (7) loads the page from the network again (separate browser contexts share no cache): 11 full loads per page, the main cost on a slow
+  network; a shared read-only cache for sub-resources across the contexts of one page would remove most of it, but it changes how the capture loads pages and needs a full fidelity re-verification.
+  The re-audit's motion step measures its ≤ 6 pages one after the other (~20 s each). Jobs still run one at a time under the global lock.
+- Tests: `perf.test.js` (parallelism by memory, `stepBudget`, overlapping progress, an analysis of a local page whose image and frame never answer is complete, screenshot views kept at the deadline),
+  `recreate-jobs.test.js` (the sweep runs next to the later steps and is awaited by `responsive`; short of memory it is finished before generate; a failing sweep is a warning; a failing step ends a running sweep).
+
 ### Complete report (UI redesign task, after 4b.1)
 "Generate report" (top bar, when a project is selected) builds one report of the **original site (OLD panel), the recreated site (NEW panel) and the fix checklist**, shows it in a modal (animated steps, then a preview) and offers
 **Download PDF** (made by the server, direct download, no print dialog), **HTML** (self-contained, no script, no external request) and **JSON** (the complete data), plus Regenerate.
@@ -964,7 +998,8 @@ environmental, not a regression.
   are reported under "Manual rebuild needed" and never faked.
 
 ## Analyze (Phase 2) rules
-- **Time limit:** 5 minutes per analysis. A step that would start after the limit is skipped and listed in
+- **Time limit:** 6 minutes per analysis (5 before the speed and robustness work), of which 2 are kept for Lighthouse: a step before it is cut short
+  or skipped rather than using them. A step that would start after the limit is skipped and listed in
   `audit.errors`. One analysis runs at a time; others queue.
 - **Links:** 4xx/5xx, DNS failure, connection refused and bad TLS count as **broken**. 401, 403, 429, 999 and
   timeouts go to **unverified**, not broken. The check covers at most 500 unique links.
@@ -1032,7 +1067,7 @@ server/src/  index.js, db/index.js (schema + migrations), routes/{projects,analy
                     generate.js (step 3: IR + fixers + emit + fit pass), preview.js (static preview + step 5),
                     verify/{server,layout,fidelity,safety,site}.js (local render, fidelity, safety gate, build verification)
              security/ netGuard.js (address classes, policies, resolveChecked), egressProxy.js (Chromium proxy)
-             audit/ index.js (pipeline + STEPS), jobs.js (queue, 1 at a time), http.js, robots.js, sitemap.js,
+             audit/ index.js (pipeline + STEPS), jobs.js (queue, 1 at a time), resources.js (parallel work by free memory), http.js, robots.js, sitemap.js,
                     crawler.js, extract.js, linkChecker.js, render.js, screenshots.js, retention.js, frame.js, assemble.js,
                     lighthouse/{run,worker}.js, analyzers/{seo,aeo,crawlChecks,a11y,metrics,weaknesses}.js
              detection/ engine.js, manual.js, manual-rules.json, rules/<platform>.json (15 platforms)
@@ -1082,7 +1117,7 @@ completed recreate: `{ preview: { url, port, recreateId, … } | null }`; POST 4
   to a page that was not recreated opens the live original inside the preview frame (without script).
 - Recreate output (4a.4): font sizes and line heights are px per breakpoint (no fluid type yet); between the three
   captured widths the layout relies on the %/max-width/fr heuristics. Hover, focus, scroll-reveal and loop motion came in Phase 4b (see its final summary).
-- A mobile Lighthouse run takes ~40s+, and screenshots add 5–30s, so a full analysis usually takes 1.5–3 minutes.
+- A Lighthouse run takes ~20–40 s each (mobile, then desktop), so a full analysis of a healthy site takes a little over a minute (render, screenshots and robots run side by side); slow sites and busy machines take longer, up to the 6-minute limit.
 - Audits from before Phase 3 have no screenshots and no desktop metrics; the UI asks to run Analyze again.
 - Some frameable sites still render blank in the iframe (frame-busting, cookie walls); use "Shot". Cookie banners
   appear in screenshots as real visitors see them. Full-page screenshots stop at 8,000 CSS px.

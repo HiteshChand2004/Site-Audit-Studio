@@ -1,8 +1,10 @@
 import { chromium } from 'playwright';
 import { AxeBuilder } from '@axe-core/playwright';
 import { USER_AGENT } from './http.js';
+import { withTimeout } from './util.js';
 
 const VIEWPORT = { width: 1440, height: 900 };
+const AXE_LIMIT_MS = 40000;
 
 /**
  * @param {{ proxy?: string }} [opts]  egress proxy URL (security/egressProxy.js). Playwright also
@@ -28,9 +30,20 @@ async function openPage(browser, url, { timeout = 30000 } = {}) {
   const requests = [];
   page.on('request', (req) => requests.push(req.url()));
   await page.addInitScript(installProbes);
-  const response = await page.goto(url, { waitUntil: 'load', timeout });
-  await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => {});
+  const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
+  await waitSettled(page);
   return { context, page, response, requests };
+}
+
+/**
+ * Waits for a page to be loaded, but only as long as it is worth it. The document is already there; the `load` event
+ * (every image, font, tracker and embed) and a quiet network only get a bounded wait, so one slow third-party request
+ * cannot use up the time of the whole step (the page content is what the audit needs, not the last pixel of a tracker).
+ */
+export async function waitSettled(page, { loadMs = 10000, idleMs = 4000 } = {}) {
+  const loaded = await page.waitForLoadState('load', { timeout: loadMs }).then(() => true, () => false);
+  // A request that kept the load event from firing keeps the network busy too: waiting for it to go quiet would only add time.
+  if (loaded) await page.waitForLoadState('networkidle', { timeout: idleMs }).catch(() => {});
 }
 
 // Lightweight render used by the crawler for client-rendered pages.
@@ -97,7 +110,9 @@ export async function renderHome(browser, url, { globals = [] } = {}) {
     let axe = null;
     let axeError = null;
     try {
-      axe = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
+      // The accessibility scan is the one slow part of this step (a heavy page on a busy machine can take minutes). It gets its
+      // own limit, so when it runs out the rest of the render (DOM, requests, detection globals) is still returned, not lost.
+      axe = await withTimeout(new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze(), AXE_LIMIT_MS, 'Accessibility scan');
     } catch (err) {
       axeError = err.message;
     }

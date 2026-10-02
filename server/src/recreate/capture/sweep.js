@@ -12,7 +12,7 @@ import { captureDir, settle } from './index.js';
 
 export const SWEEP_WIDTHS = [320, 480, 600, 900, 1024, 1280, 1920];
 // Contexts open at once for one page: seven Chromium contexts rendering a heavy page together is too much.
-const SWEEP_PARALLEL = 4;
+export const SWEEP_PARALLEL = 4;
 // Below this width the sweep renders like a phone (mobile viewport handling); both sides do the same.
 const MOBILE_BELOW = 600;
 const LOAD_WAIT = 20000;
@@ -72,10 +72,10 @@ async function captureWidth(browser, pageInfo, width, dir, timeout) {
  * Screenshots the original page at every sweep width. A failing width is reported and the others kept.
  * @returns {Promise<{ widths: Record<number, object>, errors: { width: number, message: string }[] }>}
  */
-export async function captureSweep(browser, pageInfo, workspace, { widths = SWEEP_WIDTHS, timeout = 30000 } = {}) {
+export async function captureSweep(browser, pageInfo, workspace, { widths = SWEEP_WIDTHS, timeout = 30000, parallel = SWEEP_PARALLEL } = {}) {
   const dir = path.join(captureDir(workspace, pageInfo.slug), 'sweep');
   await mkdir(dir, { recursive: true });
-  const results = await mapLimit(widths, SWEEP_PARALLEL, (width) => captureWidth(browser, pageInfo, width, dir, timeout).then(
+  const results = await mapLimit(widths, Math.max(1, parallel), (width) => captureWidth(browser, pageInfo, width, dir, timeout).then(
     (value) => ({ width, value }),
     (err) => ({ width, error: err?.message?.split('\n')[0] ?? 'Capture failed' }),
   ));

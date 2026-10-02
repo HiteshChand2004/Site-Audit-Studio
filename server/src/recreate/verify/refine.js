@@ -36,7 +36,7 @@ export const BREAKPOINT_MARGIN = 3;
 export const FLUID_MARGIN = 1;
 export const SHRINK_MARGIN = 1;
 // Pages scored per variant (the first pages: the homepage, then the pages it links to).
-const MAX_PAGES = 3;
+export const REFINE_PAGES = 3;
 
 class OutOfTime extends Error {}
 
@@ -54,7 +54,7 @@ const round1 = (n) => (n == null ? null : Math.round(n * 10) / 10);
  * @returns {Promise<{ breakpoints: object, rules: object[], fluid: boolean, summary: object }>}
  */
 export async function refineResponsive({ ir, siteDir, workspace, sweep, deadline = Infinity }) {
-  const pages = ir.pages.filter((p) => sweep.pages[p.slug]?.widths && Object.keys(sweep.pages[p.slug].widths).length).slice(0, MAX_PAGES);
+  const pages = ir.pages.filter((p) => sweep.pages[p.slug]?.widths && Object.keys(sweep.pages[p.slug].widths).length).slice(0, REFINE_PAGES);
   const summary = { status: 'done', pages: pages.length, renders: 0, breakpoints: null, fluid: null, shrink: null, stopped: null };
   const keep = { breakpoints: ir.breakpoints, rules: ir.rules, fluid: false, shrink: false, summary };
   if (!pages.length) return { ...keep, summary: { ...summary, status: 'skipped', reason: 'no-sweep-pages' } };

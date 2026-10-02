@@ -1,5 +1,7 @@
-// The Analyze pipeline: fetch → robots/sitemap → render + axe → screenshots → crawl → link check →
-// Lighthouse mobile/desktop → stack detection, analyzers and report assembly.
+// The Analyze pipeline: fetch → [robots/sitemap ‖ render + axe ‖ screenshots] → crawl → link check →
+// Lighthouse mobile/desktop → stack detection, analyzers and report assembly. Independent work runs side by side
+// (how much, by the free memory: resources.js); Lighthouse runs alone, with time kept for it, so a slow step
+// before it shortens that step instead of costing the scores.
 // All outbound traffic runs under one SSRF policy: Node fetches check it at connect time, and
 // Chromium/Lighthouse go through a local egress proxy that checks it (security/).
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -22,28 +24,43 @@ import { runLighthouse } from './lighthouse/run.js';
 import { checkLinks } from './linkChecker.js';
 import { launchBrowser, renderHome, renderHtml } from './render.js';
 import { loadLlmsTxt, loadRobots, parseRobots } from './robots.js';
-import { captureScreenshots } from './screenshots.js';
+import { captureScreenshots, VIEWS } from './screenshots.js';
 import { startEgressProxy } from '../security/egressProxy.js';
 import { userPolicy, withNetPolicy } from '../security/netGuard.js';
+import { parallelism } from './resources.js';
 import { loadSitemaps } from './sitemap.js';
-import { withTimeout } from './util.js';
+import { limiter, withTimeout } from './util.js';
 
 // weight = share of the progress bar; max = the step's own time limit.
 export const STEPS = [
   { key: 'fetch', label: 'Fetching homepage', weight: 3, max: 25000 },
   { key: 'robots', label: 'robots.txt & sitemap', weight: 3, max: 30000 },
-  { key: 'render', label: 'Rendering + accessibility', weight: 14, max: 75000, expected: 15000 },
-  { key: 'screenshots', label: 'Screenshots (desktop, tablet, mobile)', weight: 8, max: 60000, expected: 25000 },
+  // robots, render and screenshots start together and the screenshots go on next to the crawl and the link check (see
+  // analyzeSite), so their limits do not add up. The screenshots are listed where they are awaited: the step list of the
+  // app shows the earliest step still running and only ever moves forward.
+  { key: 'render', label: 'Rendering + accessibility', weight: 14, max: 110000, expected: 15000 },
   { key: 'crawl', label: 'Crawling pages', weight: 18, max: 75000 },
   { key: 'links', label: 'Checking links', weight: 14, max: 50000 },
-  { key: 'lighthouse-mobile', label: 'Lighthouse · mobile', weight: 20, max: 95000, expected: 40000 },
-  { key: 'lighthouse-desktop', label: 'Lighthouse · desktop', weight: 20, max: 95000, expected: 35000 },
+  { key: 'screenshots', label: 'Screenshots (desktop, tablet, mobile)', weight: 8, max: 80000, expected: 25000 },
+  { key: 'lighthouse-mobile', label: 'Lighthouse · mobile', weight: 20, max: 120000, expected: 40000 },
+  { key: 'lighthouse-desktop', label: 'Lighthouse · desktop', weight: 20, max: 120000, expected: 35000 },
   { key: 'report', label: 'Building report', weight: 8, max: 30000 },
 ];
 export const PUBLIC_STEPS = STEPS.map(({ key, label }) => ({ key, label }));
 
-// Hard cap for one analysis. Steps that would start after it are skipped and reported.
-const TOTAL_BUDGET_MS = 5 * 60 * 1000;
+// Cap for one analysis (a healthy site takes about a minute; this is for slow sites and busy machines). Steps that would start
+// after it are skipped and reported.
+const TOTAL_BUDGET_MS = 6 * 60 * 1000;
+// Time kept for the two Lighthouse runs, the most valuable part of an analysis and the last to run: every step before them
+// (including the crawl and the link check, which return what they have) is cut short instead of using it up.
+export const LIGHTHOUSE_RESERVE_MS = 120 * 1000;
+// A crashed Lighthouse run is tried once more only when at least this much time is left for it.
+const LIGHTHOUSE_RETRY_MIN_MS = 45 * 1000;
+
+/** Time a step may use: its own limit, but never the time kept for the steps that must still run after it. */
+export function stepBudget({ max, now, deadline, reserve = 0 }) {
+  return Math.min(max, deadline - now - reserve);
+}
 
 /** Progress (0–100) through a list of weighted steps. */
 export function makeOverallPct(steps) {
@@ -98,7 +115,9 @@ function publicScreenshots(projectId, analysisId, shots) {
 }
 
 async function fetchHome(url) {
-  const home = await fetchPage(url, { timeout: 20000 });
+  let home = await fetchPage(url, { timeout: 20000 });
+  // A server that is slow to wake up (a cold start, a busy moment) gets one more try before the analysis is given up.
+  if (home.error === 'timeout') home = await fetchPage(url, { timeout: 30000 });
   if (home.error === 'blocked') throw new AnalysisError(home.message);
   if (home.error) throw new AnalysisError(`Could not reach ${url}. ${NETWORK_ERRORS[home.error] ?? 'Network error.'}`);
   if (isBotChallenge(home)) {
@@ -142,13 +161,17 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
 
   // Runs one step with its time limit. Failures are recorded and the pipeline continues with `fallback`.
   // A step the caller skips returns `fallback` without an error or progress.
-  async function step(key, fn, fallback = null) {
+  // `reserve`: time that must stay for the steps after this one (Lighthouse); this step gets what is left of its own limit.
+  async function step(key, fn, fallback = null, { reserve = 0 } = {}) {
     if (skipped.has(key)) return fallback;
     const def = STEPS.find((s) => s.key === key);
     progress(key, 0);
-    const budget = Math.min(def.max, deadline - Date.now());
+    const budget = stepBudget({ max: def.max, now: Date.now(), deadline, reserve });
     if (budget < 5000) {
-      errors.push({ step: key, message: 'Skipped: the analysis time budget ran out.' });
+      errors.push({
+        step: key,
+        message: reserve && deadline - Date.now() >= 5000 ? 'Skipped: the time that is left is kept for the checks after it.' : 'Skipped: the analysis time budget ran out.',
+      });
       progress(key, 1);
       return fallback;
     }
@@ -186,9 +209,22 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
 }
 
 async function analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin }) {
-  // 2. robots.txt, sitemap, llms.txt
+  // The time kept for Lighthouse: the steps before it (and the crawl / link check, which can return what they have) never use it up.
+  const reserve = { reserve: LIGHTHOUSE_RESERVE_MS };
+
+  // 2-4. Independent work runs side by side. robots.txt / sitemap are plain HTTP; the homepage render (with axe) and the three
+  // screenshot views each have their own browser context; the crawl needs the robots rules and the rendered homepage. Run one
+  // after the other this was the longest part of an analysis, and every slow step pushed the later ones over the time limit.
   const emptyRobots = { status: 'error', sitemaps: [], blockedAiCrawlers: [], blocksAll: false, isAllowed: parseRobots(`${origin}/robots.txt`, '').isAllowed };
-  const { robots, sitemap, llms } = await step(
+  let browser = null;
+  let browserTask = null;
+  const getBrowser = () => (browserTask ??= launchBrowser({ proxy: proxy.url }).then((b) => (browser = b)));
+  // Views captured at once: all three when the machine has the memory for them, fewer when it is already short of it.
+  const viewsAtOnce = parallelism({ max: VIEWS.length });
+  // Pages the crawl renders at once (client-rendered sites only): it runs while the screenshots are still being taken.
+  const renderSlot = limiter(parallelism({ max: 3 }));
+
+  const robotsTask = step(
     'robots',
     async () => {
       const [r, l] = await Promise.all([loadRobots(origin), loadLlmsTxt(origin)]);
@@ -197,68 +233,90 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
       return { robots: r, llms: l, sitemap: await loadSitemaps(origin, sitemaps) };
     },
     { robots: emptyRobots, sitemap: { status: 'missing', urls: [], sources: [], fromRobots: false }, llms: { found: false } },
+    reserve,
+  );
+  const renderTask = step('render', async () => renderHome(await getBrowser(), home.url, { globals: globalNames() }), null, reserve);
+  // The views already taken are kept when the step runs out of time (deadline): one slow view must not lose the other two.
+  const shotsTask = step(
+    'screenshots',
+    async (_signal, budget) =>
+      captureScreenshots(await getBrowser(), home.url, outDir, { timeout: Math.max(5000, Math.min(30000, budget - 5000)), parallel: viewsAtOnce, deadline: Date.now() + budget - 2000 }),
+    null,
+    reserve,
   );
 
-  // 3 + 4. Render the homepage (with axe), then crawl, sharing one browser.
-  let browser = null;
-  let render = null;
-  let shots = null;
   let crawlResult;
+  let shots = null;
+  let linksTask = null;
+  let robots;
+  let sitemap;
+  let llms;
+  let render = null;
   try {
-    render = await step('render', async () => {
-      browser = await launchBrowser({ proxy: proxy.url });
-      return renderHome(browser, home.url, { globals: globalNames() });
-    });
+    ({ robots, sitemap, llms } = await robotsTask);
+    render = await renderTask;
     if (render?.axeError) errors.push({ step: 'render', message: `Accessibility scan failed: ${render.axeError}` });
     if (render?.axe) save('axe.json', render.axe);
 
-    if (browser) {
-      shots = await step('screenshots', (_signal, budget) => captureScreenshots(browser, home.url, outDir, { timeout: Math.max(5000, Math.min(30000, budget - 5000)) }));
-    } else if (!skipped.has('screenshots')) {
-      errors.push({ step: 'screenshots', message: 'Skipped: the browser could not be started.' });
-    }
-    for (const e of shots?.errors ?? []) errors.push({ step: 'screenshots', message: `${e.view}: ${e.message}` });
-
     const renderForCrawl = browser
-      ? (url) => (render && url === home.url ? Promise.resolve({ html: render.html }) : renderHtml(browser, url))
+      ? (url) => (render && url === home.url ? Promise.resolve({ html: render.html }) : renderSlot(() => renderHtml(browser, url)))
       : undefined;
-    crawlResult = await step('crawl', (signal) =>
-      crawl({
-        home,
-        maxPages,
-        robots,
-        sitemapUrls: sitemap.urls,
-        seedUrls,
-        render: renderForCrawl,
-        signal,
-        onProgress: (done, total) => progress('crawl', done / Math.max(total, 1), `Crawled ${done} of ${total} pages`),
-      }),
+    crawlResult = await step(
+      'crawl',
+      (signal) =>
+        crawl({
+          home,
+          maxPages,
+          robots,
+          sitemapUrls: sitemap.urls,
+          seedUrls,
+          render: renderForCrawl,
+          signal,
+          onProgress: (done, total) => progress('crawl', done / Math.max(total, 1), `Crawled ${done} of ${total} pages`),
+        }),
+      null,
+      reserve,
     );
+    if (!crawlResult) {
+      const facts = extractPage(home.body, home.url);
+      crawlResult = { pages: [{ url: home.url, status: home.status, depth: 0, facts: { ...facts, rawTextLength: facts.textLength } }], skippedByRobots: 0 };
+    }
+    // 5. Links: plain HTTP, so it runs while the last screenshots are still being taken.
+    linksTask = step(
+      'links',
+      (signal) => checkLinks({ pages: crawlResult.pages, signal, onProgress: (done, total) => progress('links', done / total, `Checked ${done} of ${total} links`) }),
+      { checked: 0, total: 0, broken: [], unverified: [] },
+      reserve,
+    );
+    shots = await shotsTask;
+    for (const e of shots?.errors ?? []) errors.push({ step: 'screenshots', message: `${e.view}: ${e.message}` });
   } finally {
+    // The browser is closed before Lighthouse: it runs on a quiet machine.
+    await shotsTask.catch(() => {});
     await browser?.close().catch(() => {});
   }
-  if (!crawlResult) {
-    const facts = extractPage(home.body, home.url);
-    crawlResult = { pages: [{ url: home.url, status: home.status, depth: 0, facts: { ...facts, rawTextLength: facts.textLength } }], skippedByRobots: 0 };
-  }
+  const links = await linksTask;
   const allPages = crawlResult.pages;
   const pages = allPages.filter((p) => p.facts);
   const homePage = { ...pages[0], headers: home.headers };
 
-  // 5. Links
-  const links = await step(
-    'links',
-    (signal) => checkLinks({ pages: allPages, signal, onProgress: (done, total) => progress('links', done / total, `Checked ${done} of ${total} links`) }),
-    { checked: 0, total: 0, broken: [], unverified: [] },
-  );
-
-  // 6. Lighthouse (sequential: parallel runs would distort each other's performance numbers)
-  const mobile = await step('lighthouse-mobile', (_signal, budget) =>
-    runLighthouse(home.url, 'mobile', { timeout: budget, outFile: path.join(outDir, 'lighthouse-mobile.json'), proxy: proxy.url }),
-  );
-  const desktop = await step('lighthouse-desktop', (_signal, budget) =>
-    runLighthouse(home.url, 'desktop', { timeout: budget, outFile: path.join(outDir, 'lighthouse-desktop.json'), proxy: proxy.url }),
-  );
+  // 6. Lighthouse (one at a time and nothing else running: parallel work would distort each other's performance numbers).
+  // A run that dies (not one that times out) usually died of memory pressure: it gets one more try when the time allows.
+  const lighthouse = (key, formFactor, reserveMs = 0) =>
+    step(key, async (_signal, budget) => {
+      const started = Date.now();
+      const options = (timeout) => ({ timeout, outFile: path.join(outDir, `lighthouse-${formFactor}.json`), proxy: proxy.url });
+      try {
+        return await runLighthouse(home.url, formFactor, options(budget));
+      } catch (err) {
+        const left = budget - (Date.now() - started) - 3000;
+        if (/timed out/i.test(err.message) || left < LIGHTHOUSE_RETRY_MIN_MS) throw err;
+        return runLighthouse(home.url, formFactor, options(left));
+      }
+    }, null, { reserve: reserveMs });
+  // The mobile run leaves half of the reserve to the desktop run, so a slow first run never costs the second one.
+  const mobile = await lighthouse('lighthouse-mobile', 'mobile', LIGHTHOUSE_RESERVE_MS / 2);
+  const desktop = await lighthouse('lighthouse-desktop', 'desktop');
 
   // 7. Detection, analyzers, report
   progress('report', 0, 'Detecting tech stack');

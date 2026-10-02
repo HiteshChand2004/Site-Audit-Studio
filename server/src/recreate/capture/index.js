@@ -4,7 +4,9 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { USER_AGENT } from '../../audit/http.js';
+import { parallelism } from '../../audit/resources.js';
 import { encode, MAX_HEIGHT, MOBILE_UA } from '../../audit/screenshots.js';
+import { mapLimit } from '../../audit/util.js';
 import { RECREATE_VIEWS as VIEWS } from '../views.js';
 import { captureInteractions } from './interactions.js';
 import { captureLoops } from './loops.js';
@@ -225,7 +227,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
 }
 
 /**
- * Captures one discovered page at all views, in parallel. A failing view is reported and the others
+ * Captures one discovered page at all views, side by side. A failing view is reported and the others
  * are kept; the caller decides whether the page is usable (the desktop view is required).
  * @param {import('playwright').Browser} browser
  * @param {{ url: string, slug: string }} pageInfo  an entry from discoverPages()
@@ -235,7 +237,11 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
 export async function capturePage(browser, pageInfo, workspace, { timeout = 30000, motionBudgetMs = 0 } = {}) {
   const dir = captureDir(workspace, pageInfo.slug);
   await mkdir(dir, { recursive: true });
-  const results = await Promise.allSettled(VIEWS.map((view) => captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs })));
+  // All views side by side when the machine has the memory for four loaded pages, fewer (never under two) when it is short
+  // of it: more contexts than fit make every one of them slow and the loads time out. The desktop view starts first.
+  const atOnce = parallelism({ max: VIEWS.length, min: 2 });
+  const results = await mapLimit(VIEWS, atOnce, (view) =>
+    captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs }).then((value) => ({ status: 'fulfilled', value }), (reason) => ({ status: 'rejected', reason })));
   const views = {};
   const errors = [];
   results.forEach((r, i) => {

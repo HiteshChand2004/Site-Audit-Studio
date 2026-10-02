@@ -5,6 +5,8 @@ import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
 import { USER_AGENT } from './http.js';
+import { waitSettled } from './render.js';
+import { mapLimit } from './util.js';
 
 export const MOBILE_UA =
   'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Mobile Safari/537.36 SiteAuditStudio/0.3';
@@ -38,8 +40,8 @@ async function captureView(browser, url, view, dir, timeout) {
   });
   try {
     const page = await context.newPage();
-    await page.goto(url, { waitUntil: 'load', timeout });
-    await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
+    await waitSettled(page, { loadMs: 10000, idleMs: 4000 });
 
     // Scroll through once so lazy images and scroll-triggered sections render, then return to the top.
     const pageHeight = await page.evaluate(async (cap) => {
@@ -84,21 +86,35 @@ async function captureView(browser, url, view, dir, timeout) {
 }
 
 /**
- * Captures all views in parallel with one shared browser. A failing view is reported, the rest are kept.
+ * Captures the views with one shared browser. A failing view is reported, the rest are kept.
  * @param {import('playwright').Browser} browser
  * @param {string} url
  * @param {string} analysisDir  data/projects/<id>/audit/<analysisId>
+ * @param {{ timeout?: number, parallel?: number, deadline?: number }} [o]  parallel: views captured at once; deadline (ms since
+ *   epoch): a view not finished by then is given up and reported, so the views already taken are returned in time
  * @returns {Promise<{ capturedAt: string, views: Record<string, object>, errors: {view:string, message:string}[] }>}
  */
-export async function captureScreenshots(browser, url, analysisDir, { timeout = 30000 } = {}) {
+export async function captureScreenshots(browser, url, analysisDir, { timeout = 30000, parallel = VIEWS.length, deadline = Infinity } = {}) {
   const dir = screensDir(analysisDir);
   await mkdir(dir, { recursive: true });
-  const results = await Promise.allSettled(VIEWS.map((view) => captureView(browser, url, view, dir, timeout)));
+  const inTime = (capture) => {
+    if (!Number.isFinite(deadline)) return capture;
+    let timer;
+    const late = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Not captured within the time limit of the screenshots step.')), Math.max(0, deadline - Date.now()));
+    });
+    capture.catch(() => {}); // a view given up may still fail later (its browser is closed)
+    return Promise.race([capture, late]).finally(() => clearTimeout(timer));
+  };
+  // `parallel` views at a time: all three side by side when the machine has room, one after the other when memory is short.
+  const results = await mapLimit(VIEWS, Math.max(1, parallel), (view) =>
+    (Date.now() >= deadline ? Promise.reject(new Error('Not captured within the time limit of the screenshots step.')) : inTime(captureView(browser, url, view, dir, timeout)))
+      .then((value) => ({ value }), (reason) => ({ reason })));
   const views = {};
   const errors = [];
   results.forEach((r, i) => {
     const id = VIEWS[i].id;
-    if (r.status === 'fulfilled') views[id] = r.value;
+    if (r.value) views[id] = r.value;
     else errors.push({ view: id, message: r.reason?.message?.split('\n')[0] ?? 'Screenshot failed' });
   });
   return { capturedAt: new Date().toISOString(), views, errors };

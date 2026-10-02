@@ -41,7 +41,9 @@ process.once('message', async ({ url, formFactor, chromePath, outFile, proxy }) 
       logLevel: 'silent',
     });
     process.send({ type: 'chrome', pid: chrome.pid });
-    const flags = { port: chrome.port, output: 'json', logLevel: 'error', onlyCategories: CATEGORIES, maxWaitForLoad: 45000 };
+    // The full-page screenshot Lighthouse embeds in its report is not used (the analysis takes its own screenshots): leaving
+    // it out saves a resize of the page to its full height and a large image, and changes no score.
+    const flags = { port: chrome.port, output: 'json', logLevel: 'error', onlyCategories: CATEGORIES, maxWaitForLoad: 45000, disableFullPageScreenshot: true };
     const result = await lighthouse(url, flags, formFactor === 'desktop' ? desktopConfig : undefined);
     if (!result?.lhr) throw new Error('Lighthouse returned no result');
     if (outFile) await writeFile(outFile, JSON.stringify(result.lhr));

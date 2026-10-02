@@ -8,7 +8,7 @@ import express from 'express';
 import { db, projectDir } from '../src/db/index.js';
 import { exclusive } from '../src/jobs/manager.js';
 import { registerEmitter, unregisterEmitter } from '../src/recreate/emit/index.js';
-import { overallPct, recreateBudgetMs, RecreateError, runRecreate, STAGES } from '../src/recreate/index.js';
+import { overallPct, recreateBudgetMs, RecreateError, roomForSecondBrowser, runRecreate, STAGES } from '../src/recreate/index.js';
 import { analysisWarnings, parseRecreatePages, parseTargetDomain } from '../src/recreate/inputs.js';
 import { pruneRecreates, recreateDir, recreateRoot } from '../src/recreate/workspace.js';
 import recreateRouter from '../src/routes/recreate.js';
@@ -84,6 +84,10 @@ test('settings parsers and the budget', () => {
   assert.equal(recreateBudgetMs({ SAS_RECREATE_MINUTES: '0' }), 720000);
   assert.equal(overallPct('inspect', 0), 0);
   assert.equal(overallPct('responsive', 1), 100);
+  // Running the sweep next to the steps that render pages: by free memory, or decided for the machine.
+  assert.equal(roomForSecondBrowser({ SAS_RECREATE_OVERLAP: '1' }), true);
+  assert.equal(roomForSecondBrowser({ SAS_RECREATE_OVERLAP: '0' }), false);
+  assert.equal(typeof roomForSecondBrowser({}), 'boolean');
 });
 
 test('stale analyses produce a warning', () => {
@@ -205,4 +209,88 @@ test('POST /recreate runs a job, streams events and exposes the result', async (
   assert.equal(latest.result.recreateId, recreateId);
   assert.match(latest.result.warnings[0], /8 days old/);
   Object.assign(STAGES, savedStages);
+});
+
+test('the sweep runs next to the steps after it and is awaited by the step that needs it', async () => {
+  const project = makeProject();
+  const log = [];
+  const stage = (name, ms, extra) => async (ctx, local) => {
+    log.push(`start ${name}`);
+    await sleep(ms);
+    await extra?.(ctx, local);
+    log.push(`end ${name}`);
+  };
+  const report = await runRecreate({
+    project,
+    recreateId: randomUUID(),
+    progress: () => {},
+    canOverlap: () => true,
+    stages: {
+      ...stubStages,
+      // Its own deadline and progress come as the second argument (the shared ones belong to the step in front).
+      sweep: stage('sweep', 120, (ctx, local) => {
+        assert.equal(typeof local.progress, 'function');
+        assert.ok(local.stepDeadline > Date.now());
+        ctx.sweep = { done: true };
+      }),
+      assets: stage('assets', 20),
+      generate: stage('generate', 20),
+      build: stage('build', 20),
+      responsive: stage('responsive', 5, (ctx) => assert.deepEqual(ctx.sweep, { done: true })),
+    },
+  });
+  assert.deepEqual(log, ['start sweep', 'start assets', 'end assets', 'start generate', 'end generate', 'start build', 'end build', 'end sweep', 'start responsive', 'end responsive']);
+  // Every step is timed; the steps that overlapped add up to more than the job took.
+  assert.deepEqual(Object.keys(report.timings).sort(), ['assets', 'build', 'generate', 'inspect', 'preview', 'responsive', 'sweep', 'total']);
+  assert.ok(report.timings.sweep >= 110);
+  assert.ok(report.timings.total < report.timings.sweep + report.timings.assets + report.timings.generate + report.timings.build);
+});
+
+test('short of memory, the sweep is finished before the next step that renders pages', async () => {
+  const project = makeProject();
+  const log = [];
+  const stage = (name, ms) => async () => {
+    log.push(`start ${name}`);
+    await sleep(ms);
+    log.push(`end ${name}`);
+  };
+  await runRecreate({
+    project,
+    recreateId: randomUUID(),
+    progress: () => {},
+    canOverlap: () => false,
+    stages: { ...stubStages, sweep: stage('sweep', 80), assets: stage('assets', 10), generate: stage('generate', 10) },
+  });
+  // It still overlaps the asset downloads (no browser), then generate waits for it.
+  assert.deepEqual(log, ['start sweep', 'start assets', 'end assets', 'end sweep', 'start generate', 'end generate']);
+});
+
+test('a failing sweep is a warning; a failing step ends a sweep that is still running before the workspace goes', async () => {
+  const project = makeProject();
+  const report = await runRecreate({
+    project,
+    recreateId: randomUUID(),
+    progress: () => {},
+    stages: { ...stubStages, sweep: async () => { throw new Error('no browser'); } },
+  });
+  assert.ok(report.warnings.some((w) => /Capturing more widths.*failed \(no browser\)/.test(w)), report.warnings.join(' | '));
+
+  const recreateId = randomUUID();
+  let sweepEnded = false;
+  await assert.rejects(
+    runRecreate({
+      project,
+      recreateId,
+      progress: () => {},
+      canOverlap: () => true,
+      stages: {
+        ...stubStages,
+        sweep: (ctx) => new Promise((resolve, reject) => ctx.signal.addEventListener('abort', () => { sweepEnded = true; reject(new Error('stopped')); })),
+        generate: async () => { throw new Error('boom'); },
+      },
+    }),
+    /boom/,
+  );
+  assert.equal(sweepEnded, true);
+  assert.equal(await exists(`${recreateDir(project.id, recreateId)}.tmp`), false);
 });

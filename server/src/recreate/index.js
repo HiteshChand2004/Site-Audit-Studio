@@ -5,9 +5,14 @@
 // Each step is a stage function that reads and extends a shared context. A failing step fails
 // the job: later steps need its output. The whole job has one time budget
 // (SAS_RECREATE_MINUTES, default 12); the workspace is discarded when anything goes wrong.
+//
+// Steps run one after the other, except a `background` step (the sweep of the original at more widths): it only
+// collects screenshots, so it runs next to the steps after it instead of making them wait, and is awaited by the step
+// that needs its whole result (`join`). On a machine short of memory it is awaited before the next browser step.
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { userPolicy, withNetPolicy } from '../security/netGuard.js';
+import { parallelism } from '../audit/resources.js';
 import { TimeoutError, withTimeout } from '../audit/util.js';
 import { analysisWarnings, baseUrlOf, latestAnalysis } from './inputs.js';
 import { RecreateError } from './errors.js';
@@ -27,12 +32,15 @@ export const STEPS = [
   // Capture is the slow part on slow sites (a page can take 50 s); it stops starting pages in time to
   // leave the later steps their reserve (inspect.js).
   { key: 'inspect', label: 'Inspecting pages', weight: 35, max: 7 * 60000 },
-  // Original screenshots at more widths (4b.6): collects only, uses the extra minutes of the budget, never fails the job.
-  { key: 'sweep', label: 'Capturing more widths', weight: 8, max: 4 * 60000, optional: true },
   { key: 'assets', label: 'Extracting assets', weight: 25, max: 4 * 60000 },
-  { key: 'generate', label: 'Generating site', weight: 15, max: 3 * 60000 },
-  { key: 'build', label: 'Building & verifying', weight: 20, max: 3 * 60000 },
+  // browser: the step renders pages itself, so it shares the machine with a background step only when memory allows.
+  { key: 'generate', label: 'Generating site', weight: 15, max: 4 * 60000, browser: true },
+  { key: 'build', label: 'Building & verifying', weight: 20, max: 3 * 60000, browser: true },
   { key: 'preview', label: 'Starting preview', weight: 5, max: 30000 },
+  // Original screenshots at more widths (4b.6): collects only, never fails the job. A background step: it starts right
+  // after the capture (`after`) and runs next to the steps above; the last step needs all of it (`join`). It is listed
+  // here, where the job waits for it, so the step list of the app only ever moves forward.
+  { key: 'sweep', label: 'Capturing more widths', weight: 8, max: 4 * 60000, optional: true, background: true, after: 'inspect', join: 'responsive' },
   // Measures the finished build against the sweep screenshots (4b.6): never fails the job.
   { key: 'responsive', label: 'Checking responsive layout', weight: 4, max: 90000, optional: true },
 ];
@@ -54,6 +62,16 @@ export function recreateBudgetMs(env = process.env) {
   return (Number.isFinite(minutes) && minutes >= 1 && minutes <= 60 ? minutes : 12) * 60000;
 }
 
+// Free memory (beyond what the machine keeps for itself, resources.js) a second browser needs: with less, a background
+// step is finished first instead of running next to a step that renders pages. SAS_RECREATE_OVERLAP=1 / 0 decides it
+// for a machine whose capacity is known (1: always side by side, 0: never).
+const SECOND_BROWSER_MB = 900;
+export function roomForSecondBrowser(env = process.env) {
+  if (env.SAS_RECREATE_OVERLAP === '1') return true;
+  if (env.SAS_RECREATE_OVERLAP === '0') return false;
+  return parallelism({ perUnitMB: SECOND_BROWSER_MB, max: 1, min: 0 }) > 0;
+}
+
 export const STAGES = {
   inspect: inspectStage,
   sweep: sweepStage,
@@ -72,6 +90,7 @@ export const STAGES = {
  * @param {string[]} [o.warnings]  shown in the report (for example a stale analysis)
  * @param {Record<string, (ctx:object)=>Promise<void>>} [o.stages]  injectable for tests
  * @param {number} [o.budgetMs]
+ * @param {() => boolean} [o.canOverlap]  may a background step run next to a browser step (default: by free memory)
  * @param {object} [o.netPolicy]  user projects always get the default user policy
  * @returns {Promise<object>} the recreate report
  */
@@ -79,7 +98,7 @@ export function runRecreate({ netPolicy = userPolicy(), ...opts }) {
   return withNetPolicy(netPolicy, () => recreate({ ...opts, netPolicy }));
 }
 
-async function recreate({ project, recreateId, progress, warnings = [], stages = STAGES, budgetMs = recreateBudgetMs(), netPolicy }) {
+async function recreate({ project, recreateId, progress, warnings = [], stages = STAGES, budgetMs = recreateBudgetMs(), canOverlap = () => roomForSecondBrowser(), netPolicy }) {
   const analysis = latestAnalysis(project.id);
   if (!analysis) throw new RecreateError('Run Analyze first: Recreate works from a completed analysis.');
 
@@ -101,6 +120,7 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     netPolicy,
     dir,
     signal: controller.signal,
+    jobDeadline: deadline,
     /** Registers cleanup (browsers, proxies) that runs when the job ends, in reverse order. */
     defer: (fn) => disposers.push(fn),
     progress: null,
@@ -124,42 +144,79 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
   ctx.report.baseUrl = ctx.baseUrl;
 
   const minutes = Math.round(budgetMs / 60000);
-  try {
-    for (const def of STEPS) {
-      progress(def.key, 0);
-      ctx.progress = (fraction, message) => progress(def.key, fraction, message);
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) {
-        // An optional step (a measurement) is skipped, never a reason to lose the recreate.
-        if (def.optional) {
-          ctx.report.warnings.push(`“${def.label}” was skipped: the time limit was reached.`);
-          progress(def.key, 1);
-          continue;
-        }
-        throw new RecreateError(`Recreate stopped: the ${minutes}-minute time limit was reached.`);
+  const startedAt = Date.now();
+  const timings = {};
+  // Background steps still running: key → { def, done } (done resolves to the step's error, or null).
+  const background = new Map();
+  const join = async (key) => {
+    const task = background.get(key);
+    if (!task) return;
+    background.delete(key);
+    const err = await task.done;
+    if (err) throw err;
+  };
+
+  // Runs one step within `limit` ms. An optional step that fails or runs out of time is a warning, never a failed recreate.
+  const runStep = async (def, local, limit) => {
+    const started = Date.now();
+    try {
+      await withTimeout(stages[def.key](ctx, local), limit, def.label);
+    } catch (err) {
+      if (def.optional && !controller.signal.aborted) {
+        const reason = err instanceof TimeoutError ? 'did not finish in time' : `failed (${String(err.message).split(/\r?\n/)[0]})`;
+        ctx.report.warnings.push(`“${def.label}” ${reason} and was skipped.`);
+        return;
       }
-      const limit = Math.min(def.max, remaining);
-      // A stage may use this to wind down on its own (skip remaining work) before the hard timeout.
-      ctx.stepDeadline = Date.now() + limit;
-      ctx.jobDeadline = deadline;
-      try {
-        await withTimeout(stages[def.key](ctx), limit, def.label);
-      } catch (err) {
-        if (def.optional && !controller.signal.aborted) {
-          const reason = err instanceof TimeoutError ? 'did not finish in time' : `failed (${String(err.message).split(/\r?\n/)[0]})`;
-          ctx.report.warnings.push(`“${def.label}” ${reason} and was skipped.`);
-          progress(def.key, 1);
-          continue;
-        }
-        if (!(err instanceof TimeoutError)) throw err;
-        throw new RecreateError(
-          limit < def.max
-            ? `Recreate stopped: the ${minutes}-minute time limit was reached during “${def.label}”.`
-            : `“${def.label}” did not finish within its ${Math.round(def.max / 1000)}s limit.`,
-        );
-      }
+      if (!(err instanceof TimeoutError)) throw err;
+      throw new RecreateError(
+        limit < def.max
+          ? `Recreate stopped: the ${minutes}-minute time limit was reached during “${def.label}”.`
+          : `“${def.label}” did not finish within its ${Math.round(def.max / 1000)}s limit.`,
+      );
+    } finally {
+      timings[def.key] = Date.now() - started;
       progress(def.key, 1);
     }
+  };
+
+  // Starts a step: in front (awaited) or in the background (awaited later, by `join`).
+  const start = async (def) => {
+    progress(def.key, 0);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      // An optional step (a measurement) is skipped, never a reason to lose the recreate.
+      if (def.optional) {
+        ctx.report.warnings.push(`“${def.label}” was skipped: the time limit was reached.`);
+        progress(def.key, 1);
+        return;
+      }
+      throw new RecreateError(`Recreate stopped: the ${minutes}-minute time limit was reached.`);
+    }
+    const limit = Math.min(def.max, remaining);
+    // A stage may use the deadline to wind down on its own (skip remaining work) before the hard timeout. A background
+    // stage gets its own deadline and progress as its second argument: the shared ones belong to the step in front.
+    const local = { stepDeadline: Date.now() + limit, progress: (fraction, message) => progress(def.key, fraction, message) };
+    if (def.background) {
+      background.set(def.key, { def, done: runStep(def, local, limit).then(() => null, (err) => err) });
+      return;
+    }
+    ctx.progress = local.progress;
+    ctx.stepDeadline = local.stepDeadline;
+    await runStep(def, local, limit);
+  };
+
+  try {
+    for (const def of STEPS.filter((s) => !s.background)) {
+      // Background steps this step needs in full are awaited first; all of them when it renders pages itself and the
+      // machine has no memory to spare for two browsers.
+      for (const [key, task] of [...background]) {
+        if (task.def.join === def.key || (def.browser && !canOverlap())) await join(key);
+      }
+      await start(def);
+      for (const next of STEPS.filter((s) => s.background && s.after === def.key)) await start(next);
+    }
+    for (const key of [...background.keys()]) await join(key);
+    ctx.report.timings = { ...timings, total: Date.now() - startedAt };
     await dispose();
     await writeFile(path.join(dir, 'report.json'), JSON.stringify(ctx.report, null, 1));
     await commitWorkspace(project.id, recreateId);
@@ -167,6 +224,8 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
   } catch (err) {
     controller.abort();
     await dispose();
+    // A background step may still be writing into the workspace: it ends on the abort (its browser was just closed).
+    await Promise.all([...background.values()].map((task) => task.done));
     await discardWorkspace(project.id, recreateId).catch(() => {});
     throw err;
   }
