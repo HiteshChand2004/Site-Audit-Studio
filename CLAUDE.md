@@ -35,7 +35,7 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 | 3 | OLD preview: frame check (XFO + CSP3 frame-ancestors), sandboxed iframe, screenshots 1440/768/375 (fold + full, WebP, keep latest 3), per-device metrics, SSRF guard | ✅ Done |
 | 3b | Live view (CDP screencast, view + scroll + click, no keyboard) — deferred by the user | ⏳ Later |
 | 4a | Recreate → plain HTML: page discovery (sitemap, limit), Playwright capture, local assets, IR, variant merge, semantic classes, fixers, build + verify, preview | ✅ Done (verified on real sites) |
-| 4b | Responsive fidelity + visual diff + motion (hover, focus, scroll reveal, loops) in all four stacks, with re-audit rows | ✅ Done, verified on real sites (branch `phase-4b`, **not merged**: waiting for the user's approval) |
+| 4b | Responsive fidelity + visual diff + motion (hover, focus, scroll reveal, loops) in all four stacks, with re-audit rows | ✅ Done, verified on real sites; merged into `phase-4a` (fast-forward from `phase-4b`, 53652dd, approved by the user); never pushed |
 | 5 | Re-audit of the NEW site → real fix checklist (OLD vs NEW), sitemap/robots emitter | ✅ Done (verified on real sites; merged into `phase-4a` (99ebc2f)) |
 | 5b | Full PreviewManager (several previews on 5100–5199) — deferred by the user | ⏳ Later |
 | 6 | React+Vite / Next.js / MERN emitters + Download zip + stack-aware re-audit and UI | ✅ Done (verified on real sites, merged into `phase-4a` (d25444d)) |
@@ -43,7 +43,7 @@ recreates an improved version in a chosen stack. For company-owned or authorized
 **Current status: Phase 6 COMPLETE, merged into `phase-4a` (d25444d, fast-forward from `phase-6`) plus the post-merge `flex: revert` fix (c1d4ca3); never pushed.** Phases 1, 2, 3, 4a, 5 and 6 are done
 and merged on `phase-4a`.
 5.1 re-audit job foundation ✅ · 5.2 comparator + sitemap/robots emitter ✅ · 5.3 API + `audit.recreate` contract ✅ ·
-5.4 UI ✅ · 5.5 real-site verification + docs ✅. Phase 4b (responsive fidelity, visual diff, motion) is done on branch `phase-4b` and waits for the user's approval to merge (see its final summary). Same workflow: one step at a time, WIP
+5.4 UI ✅ · 5.5 real-site verification + docs ✅. Phase 4b (responsive fidelity, visual diff, motion) is done and merged into `phase-4a` (53652dd, fast-forward from `phase-4b`; see its final summary). Same workflow: one step at a time, WIP
 commit, wait for the user's "next"; never push; while the user tests, work in a git worktree and merge only when asked.
 
 ### Complete report (UI redesign task, after 4b.1)
@@ -280,7 +280,7 @@ Recreate now carries the motion of the original, not only its still layout:
 - **Re-audit, UI and report** (4b.8): a Motion category in the fix checklist (reveal / hover / loops reproduced, same probes on both sides), a Motion section in the NEW-panel report card, a Motion row and the script-aware Safety row in the complete report.
 - **Verified on parchaa.com and panscience.xyz** through all four stacks (4b.9, above).
 - **Known limits**: effects that run at page load (entrance animations) and effects started by a timer or the first scroll are not rebuilt; script-driven drifts / marquees and loops inside inline SVG are not rebuilt; the number of reveals found on timer-driven pages varies between captures; hover coverage is limited by the probe budget (about 10 elements per page); no exit animation for `rp` reveals; Live view (3b) and the full PreviewManager (5b) stay deferred.
-- **Branch state**: `phase-4b` (worktree `../Website-Audit-4b`), WIP commits only, **not merged and never pushed**: merging into `phase-4a` needs the user's explicit approval.
+- **Branch state**: merged into `phase-4a` with the user's approval (fast-forward, 53652dd, 8 commits from `phase-4b`); never pushed. The worktree `../Website-Audit-4b` and the branch `phase-4b` can be removed.
 
 ### Phase 6 final summary
 Every recreate can be built as **four stacks**, all from the same saved IR and all checked against the plain-HTML build: Plain HTML / CSS / JS (the
