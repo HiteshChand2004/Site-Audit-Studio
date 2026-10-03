@@ -1035,6 +1035,12 @@ environmental, not a regression.
 - **Time limit:** 6 minutes per analysis (5 before the speed and robustness work), of which 2 are kept for Lighthouse: a step before it is cut short
   or skipped rather than using them. A step that would start after the limit is skipped and listed in
   `audit.errors`. One analysis runs at a time; others queue.
+- **Keep-awake during jobs** (`jobs/keepAwake.js`, branch `max-parallel`, WIP): found on the user's laptop (Pentium Gold 7505, 8 GB, Modern Standby): runs that ended in timeouts / "Connection to the server
+  dropped" lined up with the laptop entering Modern Standby mid-job (network off; one analysis took 31 min) or starting right after waking; four scratch runs on the same machine (normal, memory squeezed to
+  180 MB free, the app open next to it) all passed in 81–90 s with 0 errors, so RAM was not the cause. The global lock (`manager.js exclusive()`) now holds a keep-awake request while any job runs or is queued
+  and releases it 30 s after the last one: Windows = a hidden PowerShell helper calling `SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)` (the display flag stops the
+  screen-off → standby path) that exits by itself when the server process is gone; macOS `caffeinate -di -w <pid>`; Linux `systemd-inhibit`. Lid close / power button still sleep. `SAS_KEEP_AWAKE=0` turns it off
+  (the test suite does); a failure is logged once, never fails a job. `GET /api/health` → `keepAwake`. Tests: `keep-awake.test.js` (commands, real helper on Windows held during a job and released after).
 - **Concurrency cap** (`audit/resources.js maxParallel`, branch `max-parallel`, WIP): `SAS_MAX_PARALLEL` (whole number 1–8) caps the browser contexts every step runs at once
   (`parallelism()`: Analyze screenshots + crawl renders, Recreate capture views, sweep widths, responsive check), even below a step's own minimum (capture and sweep ask for ≥ 2);
   `1` also means no background sweep next to generate / build (unless `SAS_RECREATE_OVERLAP=1`). Unset = the memory rule as before. Slower (2 views instead of 4 at a time: ~212 s vs ~120 s for six pages), so pair it with more time.

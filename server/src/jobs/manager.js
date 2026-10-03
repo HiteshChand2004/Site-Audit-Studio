@@ -5,6 +5,7 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { db } from '../db/index.js';
+import { holdAwake, releaseAwake } from './keepAwake.js';
 
 const RETAIN_MS = 60000;
 const DB_WRITE_INTERVAL = 1000;
@@ -14,8 +15,11 @@ let tail = Promise.resolve();
 let pending = 0;
 
 export function exclusive(fn) {
-  pending++;
-  const run = tail.then(fn).finally(() => pending--);
+  // The computer is kept awake while any job runs or waits (a laptop that sleeps mid-job stalls it into timeouts).
+  if (pending++ === 0) holdAwake();
+  const run = tail.then(fn).finally(() => {
+    if (--pending === 0) releaseAwake();
+  });
   tail = run.catch(() => {});
   return run;
 }

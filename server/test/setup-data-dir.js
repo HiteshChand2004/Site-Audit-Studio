@@ -11,3 +11,5 @@ if (!root) {
   console.warn('SAS_TEST_ROOT is not set; run tests with "npm test -w server" so the temp data is deleted afterwards.');
 }
 process.env.SAS_DATA_DIR = mkdtempSync(path.join(root || os.tmpdir(), root ? 'file-' : 'sas-test-'));
+// Jobs in tests never ask the machine to stay awake (keep-awake.test.js turns it on where it tests it).
+process.env.SAS_KEEP_AWAKE ??= '0';
