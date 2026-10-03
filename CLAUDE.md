@@ -1035,6 +1035,10 @@ environmental, not a regression.
 - **Time limit:** 6 minutes per analysis (5 before the speed and robustness work), of which 2 are kept for Lighthouse: a step before it is cut short
   or skipped rather than using them. A step that would start after the limit is skipped and listed in
   `audit.errors`. One analysis runs at a time; others queue.
+- **Slow / busy machines** (`audit/index.js analyzeTiming`, `server/.env.example`): `SAS_TIMEOUT_SCALE` (1–4) multiplies every step limit, the page-load
+  and axe waits, the Lighthouse reserve and the total; `SAS_ANALYZE_MINUTES` (1–30) sets the total alone. With room for only one page in memory the
+  screenshots wait for the homepage render instead of running next to it. Timeouts with < 1 GB free at the start add a `memory` row to `audit.errors`
+  naming the cause. No `.env` is required; a missing one never shortens a limit.
 - **Links:** 4xx/5xx, DNS failure, connection refused and bad TLS count as **broken**. 401, 403, 429, 999 and
   timeouts go to **unverified**, not broken. The check covers at most 500 unique links.
 - **Stack detection rules** are JSON files in `server/src/detection/rules/<id>.json` (signals + weights,

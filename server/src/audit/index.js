@@ -27,7 +27,7 @@ import { loadLlmsTxt, loadRobots, parseRobots } from './robots.js';
 import { captureScreenshots, VIEWS } from './screenshots.js';
 import { startEgressProxy } from '../security/egressProxy.js';
 import { userPolicy, withNetPolicy } from '../security/netGuard.js';
-import { parallelism } from './resources.js';
+import { freeMemoryMB, parallelism } from './resources.js';
 import { createSharedCache, sharedCacheEnabled } from './sharedCache.js';
 import { loadSitemaps } from './sitemap.js';
 import { limiter, withTimeout } from './util.js';
@@ -52,11 +52,28 @@ export const PUBLIC_STEPS = STEPS.map(({ key, label }) => ({ key, label }));
 // Cap for one analysis (a healthy site takes about a minute; this is for slow sites and busy machines). Steps that would start
 // after it are skipped and reported.
 const TOTAL_BUDGET_MS = 6 * 60 * 1000;
+// Free memory under which the browser steps were probably starved (several browsers, an editor, other apps open): the
+// analysis then says so next to its timeouts, so the cause is visible in the report.
+const LOW_MEMORY_MB = 1000;
 // Time kept for the two Lighthouse runs, the most valuable part of an analysis and the last to run: every step before them
 // (including the crawl and the link check, which return what they have) is cut short instead of using it up.
 export const LIGHTHOUSE_RESERVE_MS = 120 * 1000;
 // A crashed Lighthouse run is tried once more only when at least this much time is left for it.
 const LIGHTHOUSE_RETRY_MIN_MS = 45 * 1000;
+
+/**
+ * Time limits of one analysis, from the environment (server/.env). The defaults suit a normal machine; a slow or busy one
+ * (little free memory, a slow connection) can give every limit more room instead of losing checks to timeouts.
+ * SAS_TIMEOUT_SCALE (1–4, default 1) multiplies every step limit, the page-load and accessibility-scan waits, the time kept for
+ * Lighthouse and the total; SAS_ANALYZE_MINUTES (1–30) sets the total on its own. Anything out of range means the default.
+ */
+export function analyzeTiming(env = process.env) {
+  const s = Number(env.SAS_TIMEOUT_SCALE);
+  const scale = Number.isFinite(s) && s >= 1 && s <= 4 ? s : 1;
+  const m = Number(env.SAS_ANALYZE_MINUTES);
+  const budgetMs = Number.isFinite(m) && m >= 1 && m <= 30 ? m * 60000 : Math.round(TOTAL_BUDGET_MS * scale);
+  return { scale, budgetMs, lighthouseReserveMs: Math.round(LIGHTHOUSE_RESERVE_MS * scale) };
+}
 
 /** Time a step may use: its own limit, but never the time kept for the steps that must still run after it. */
 export function stepBudget({ max, now, deadline, reserve = 0 }) {
@@ -115,10 +132,10 @@ function publicScreenshots(projectId, analysisId, shots) {
   return { analysisId, capturedAt: shots.capturedAt, views };
 }
 
-async function fetchHome(url) {
-  let home = await fetchPage(url, { timeout: 20000 });
+async function fetchHome(url, scale = 1) {
+  let home = await fetchPage(url, { timeout: 20000 * scale });
   // A server that is slow to wake up (a cold start, a busy moment) gets one more try before the analysis is given up.
-  if (home.error === 'timeout') home = await fetchPage(url, { timeout: 30000 });
+  if (home.error === 'timeout') home = await fetchPage(url, { timeout: 30000 * scale });
   if (home.error === 'blocked') throw new AnalysisError(home.message);
   if (home.error) throw new AnalysisError(`Could not reach ${url}. ${NETWORK_ERRORS[home.error] ?? 'Network error.'}`);
   if (isBotChallenge(home)) {
@@ -153,7 +170,9 @@ export function runAnalysis({ netPolicy = userPolicy(), ...opts }) {
 }
 
 async function analyze({ project, analysisId, maxPages, progress, netPolicy, url = project.url, outDir: dir, skip = [], seedUrls = [], deployOrigin = null }) {
-  const deadline = Date.now() + TOTAL_BUDGET_MS;
+  const timing = analyzeTiming();
+  const freeAtStart = freeMemoryMB();
+  const deadline = Date.now() + timing.budgetMs;
   const errors = [];
   const skipped = new Set(skip);
   const outDir = dir ?? path.join(projectDir(project.id), 'audit', analysisId);
@@ -167,7 +186,7 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
     if (skipped.has(key)) return fallback;
     const def = STEPS.find((s) => s.key === key);
     progress(key, 0);
-    const budget = stepBudget({ max: def.max, now: Date.now(), deadline, reserve });
+    const budget = stepBudget({ max: def.max * timing.scale, now: Date.now(), deadline, reserve });
     if (budget < 5000) {
       errors.push({
         step: key,
@@ -197,21 +216,34 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
 
   // 1. Homepage. Failing here fails the whole analysis.
   progress('fetch', 0, `Fetching ${url}`);
-  const home = await fetchHome(url);
+  const home = await fetchHome(url, timing.scale);
   const origin = new URL(home.url).origin;
   progress('fetch', 1);
 
   const proxy = await startEgressProxy(netPolicy);
   try {
-    return await analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin });
+    const audit = await analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing });
+    noteLowMemory(audit.errors, freeAtStart);
+    return audit;
   } finally {
     await proxy.close();
   }
 }
 
-async function analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin }) {
+/** Timeouts on a machine that was short of memory when the analysis started: the report names the likely cause and the remedy. */
+export function noteLowMemory(errors, freeMB) {
+  if (!(freeMB < LOW_MEMORY_MB)) return;
+  if (!errors.some((e) => /timed out|time limit|time budget|time that is left/i.test(e.message))) return;
+  errors.push({
+    step: 'memory',
+    message: `Only ${Math.round(freeMB)} MB of memory was free when the analysis started, so the browser steps were slowed down. Close other apps (browsers, editors, a running Recreate) and analyze again, or give a slow machine more time with SAS_TIMEOUT_SCALE in server/.env.`,
+  });
+}
+
+async function analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing }) {
   // The time kept for Lighthouse: the steps before it (and the crawl / link check, which can return what they have) never use it up.
-  const reserve = { reserve: LIGHTHOUSE_RESERVE_MS };
+  const reserve = { reserve: timing.lighthouseReserveMs };
+  const scale = timing.scale;
 
   // 2-4. Independent work runs side by side. robots.txt / sitemap are plain HTTP; the homepage render (with axe) and the three
   // screenshot views each have their own browser context; the crawl needs the robots rules and the rendered homepage. Run one
@@ -227,6 +259,9 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
   const viewsAtOnce = parallelism({ max: VIEWS.length });
   // Pages the crawl renders at once (client-rendered sites only): it runs while the screenshots are still being taken.
   const renderSlot = limiter(parallelism({ max: 3 }));
+  // Really short of memory (room for one page at a time): the screenshots wait for the homepage render instead of competing
+  // with it. Side by side, both slowed each other down until neither finished in its time limit.
+  const oneAtATime = viewsAtOnce === 1;
 
   const robotsTask = step(
     'robots',
@@ -239,15 +274,17 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     { robots: emptyRobots, sitemap: { status: 'missing', urls: [], sources: [], fromRobots: false }, llms: { found: false } },
     reserve,
   );
-  const renderTask = step('render', async () => renderHome(await getBrowser(), home.url, { globals: globalNames(), cache }), null, reserve);
+  const renderTask = step('render', async () => renderHome(await getBrowser(), home.url, { globals: globalNames(), cache, scale }), null, reserve);
   // The views already taken are kept when the step runs out of time (deadline): one slow view must not lose the other two.
-  const shotsTask = step(
-    'screenshots',
-    async (_signal, budget) =>
-      captureScreenshots(await getBrowser(), home.url, outDir, { timeout: Math.max(5000, Math.min(30000, budget - 5000)), parallel: viewsAtOnce, deadline: Date.now() + budget - 2000, cache }),
-    null,
-    reserve,
-  );
+  const shots$ = () =>
+    step(
+      'screenshots',
+      async (_signal, budget) =>
+        captureScreenshots(await getBrowser(), home.url, outDir, { timeout: Math.max(5000, Math.min(30000 * scale, budget - 5000)), parallel: viewsAtOnce, deadline: Date.now() + budget - 2000, cache }),
+      null,
+      reserve,
+    );
+  const shotsTask = oneAtATime ? renderTask.then(shots$, shots$) : shots$();
 
   let crawlResult;
   let shots = null;
@@ -263,7 +300,7 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     if (render?.axe) save('axe.json', render.axe);
 
     const renderForCrawl = browser
-      ? (url) => (render && url === home.url ? Promise.resolve({ html: render.html }) : renderSlot(() => renderHtml(browser, url, { cache })))
+      ? (url) => (render && url === home.url ? Promise.resolve({ html: render.html }) : renderSlot(() => renderHtml(browser, url, { cache, scale })))
       : undefined;
     crawlResult = await step(
       'crawl',
@@ -320,7 +357,7 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
       }
     }, null, { reserve: reserveMs });
   // The mobile run leaves half of the reserve to the desktop run, so a slow first run never costs the second one.
-  const mobile = await lighthouse('lighthouse-mobile', 'mobile', LIGHTHOUSE_RESERVE_MS / 2);
+  const mobile = await lighthouse('lighthouse-mobile', 'mobile', timing.lighthouseReserveMs / 2);
   const desktop = await lighthouse('lighthouse-desktop', 'desktop');
 
   // 7. Detection, analyzers, report

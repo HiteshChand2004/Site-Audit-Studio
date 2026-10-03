@@ -49,8 +49,9 @@ export async function waitSettled(page, { loadMs = 10000, idleMs = 4000 } = {}) 
 }
 
 // Lightweight render used by the crawler for client-rendered pages.
-export async function renderHtml(browser, url, { cache = null } = {}) {
-  const { context, page } = await openPage(browser, url, { timeout: 20000, cache });
+// scale: SAS_TIMEOUT_SCALE (audit/index.js analyzeTiming), more time for every wait on a slow machine.
+export async function renderHtml(browser, url, { cache = null, scale = 1 } = {}) {
+  const { context, page } = await openPage(browser, url, { timeout: 20000 * scale, cache });
   try {
     return { html: await page.content() };
   } finally {
@@ -65,8 +66,8 @@ export async function renderHtml(browser, url, { cache = null } = {}) {
  * @param {string} url
  * @param {{ globals?: string[] }} [opts]  window paths to test, e.g. "Shopify" or "__NEXT_DATA__"
  */
-export async function renderHome(browser, url, { globals = [], cache = null } = {}) {
-  const { context, page, response, requests } = await openPage(browser, url, { timeout: 45000, cache });
+export async function renderHome(browser, url, { globals = [], cache = null, scale = 1 } = {}) {
+  const { context, page, response, requests } = await openPage(browser, url, { timeout: 45000 * scale, cache });
   try {
     // Scroll once so lazy-loaded sections and widgets initialise.
     await page.evaluate(async () => {
@@ -114,7 +115,7 @@ export async function renderHome(browser, url, { globals = [], cache = null } = 
     try {
       // The accessibility scan is the one slow part of this step (a heavy page on a busy machine can take minutes). It gets its
       // own limit, so when it runs out the rest of the render (DOM, requests, detection globals) is still returned, not lost.
-      axe = await withTimeout(new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze(), AXE_LIMIT_MS, 'Accessibility scan');
+      axe = await withTimeout(new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze(), AXE_LIMIT_MS * scale, 'Accessibility scan');
     } catch (err) {
       axeError = err.message;
     }

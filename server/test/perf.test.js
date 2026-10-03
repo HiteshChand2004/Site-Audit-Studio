@@ -7,7 +7,7 @@ import http from 'node:http';
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { LIGHTHOUSE_RESERVE_MS, runAnalysis, stepBudget, STEPS } from '../src/audit/index.js';
+import { analyzeTiming, LIGHTHOUSE_RESERVE_MS, noteLowMemory, runAnalysis, stepBudget, STEPS } from '../src/audit/index.js';
 import { parallelism } from '../src/audit/resources.js';
 import { launchBrowser } from '../src/audit/render.js';
 import { captureScreenshots } from '../src/audit/screenshots.js';
@@ -80,6 +80,30 @@ test('a step never uses the time kept for the steps after it', () => {
   // The limits of the steps before Lighthouse fit in the budget in front of the reserve, even one after the other.
   const max = (key) => STEPS.find((s) => s.key === key).max;
   assert.ok(max('render') + max('crawl') + max('links') <= 6 * 60000 - LIGHTHOUSE_RESERVE_MS);
+});
+
+test('a slow machine can give the analysis more time (SAS_TIMEOUT_SCALE, SAS_ANALYZE_MINUTES)', () => {
+  assert.deepEqual(analyzeTiming({}), { scale: 1, budgetMs: 6 * 60000, lighthouseReserveMs: LIGHTHOUSE_RESERVE_MS });
+  assert.deepEqual(analyzeTiming({ SAS_TIMEOUT_SCALE: '2' }), { scale: 2, budgetMs: 12 * 60000, lighthouseReserveMs: 2 * LIGHTHOUSE_RESERVE_MS });
+  assert.equal(analyzeTiming({ SAS_TIMEOUT_SCALE: '1.5', SAS_ANALYZE_MINUTES: '8' }).budgetMs, 8 * 60000);
+  // Out of range or not a number: the default.
+  for (const v of ['0.5', '9', 'fast', '']) assert.equal(analyzeTiming({ SAS_TIMEOUT_SCALE: v }).scale, 1);
+  assert.equal(analyzeTiming({ SAS_ANALYZE_MINUTES: '90' }).budgetMs, 6 * 60000);
+});
+
+test('timeouts on a machine short of memory name the cause in the report', () => {
+  const timedOut = () => [{ step: 'render', message: 'Rendering + accessibility timed out after 120s' }];
+  const low = timedOut();
+  noteLowMemory(low, 480);
+  assert.equal(low.at(-1).step, 'memory');
+  assert.match(low.at(-1).message, /480 MB/);
+  // Enough memory, or no timeout: nothing added.
+  const plenty = timedOut();
+  noteLowMemory(plenty, 3000);
+  assert.equal(plenty.length, 1);
+  const other = [{ step: 'robots', message: 'HTTP 500' }];
+  noteLowMemory(other, 300);
+  assert.equal(other.length, 1);
 });
 
 test('progress of overlapping steps: the bar adds up and the step shown is the earliest one still running', () => {
