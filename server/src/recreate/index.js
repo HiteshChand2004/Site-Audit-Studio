@@ -13,7 +13,8 @@ import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { userPolicy, withNetPolicy } from '../security/netGuard.js';
 import { maxParallel, parallelism } from '../audit/resources.js';
-import { TimeoutError, withTimeout } from '../audit/util.js';
+import { TimeoutError } from '../audit/util.js';
+import { createInterrupts, extendableTimeout } from './interrupts.js';
 import { analysisWarnings, baseUrlOf, latestAnalysis } from './inputs.js';
 import { RecreateError } from './errors.js';
 import { assetsStage } from './assets/index.js';
@@ -104,12 +105,16 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
   const analysis = latestAnalysis(project.id);
   if (!analysis) throw new RecreateError('Run Analyze first: Recreate works from a completed analysis.');
 
-  const deadline = Date.now() + budgetMs;
+  // Moves later when time is given back after sleep or a network outage (recreate/interrupts.js), within its allowance.
+  let deadline = Date.now() + budgetMs;
   const controller = new AbortController();
   const disposers = [];
   const dispose = async () => {
     while (disposers.length) await disposers.pop()().catch(() => {});
   };
+  // Steps running now (the one in front and background ones): time given back extends their limits too.
+  const running = new Set();
+  let front = null;
 
   const dir = await openWorkspace(project.id, recreateId);
   const ctx = {
@@ -144,6 +149,21 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     },
   };
   ctx.report.baseUrl = ctx.baseUrl;
+  const interrupts = createInterrupts({
+    url: ctx.audit.url ?? project.url,
+    label: recreateId.slice(0, 8),
+    onGrant: (ms) => {
+      deadline += ms;
+      ctx.jobDeadline = deadline;
+      for (const r of running) {
+        r.timer.extend(ms);
+        r.local.stepDeadline += ms;
+      }
+      if (front) ctx.stepDeadline = front.stepDeadline;
+    },
+  });
+  ctx.interrupts = interrupts;
+  disposers.push(async () => interrupts.stop());
 
   const minutes = Math.round(budgetMs / 60000);
   const startedAt = Date.now();
@@ -159,10 +179,21 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
   };
 
   // Runs one step within `limit` ms. An optional step that fails or runs out of time is a warning, never a failed recreate.
+  // The limit moves later by the time the computer spent asleep (and by time given back after an outage): the timer lets the
+  // pause watcher look before it decides the time is up.
   const runStep = async (def, local, limit) => {
     const started = Date.now();
+    let entry = null;
     try {
-      await withTimeout(stages[def.key](ctx, local), limit, def.label);
+      await new Promise((resolve, reject) => {
+        const timer = extendableTimeout(limit, () => reject(new TimeoutError(def.label, limit)), interrupts.catchUp);
+        entry = { timer, local };
+        running.add(entry);
+        Promise.resolve()
+          .then(() => stages[def.key](ctx, local))
+          .then(resolve, reject)
+          .finally(() => timer.clear());
+      });
     } catch (err) {
       if (def.optional && !controller.signal.aborted) {
         const reason = err instanceof TimeoutError ? 'did not finish in time' : `failed (${String(err.message).split(/\r?\n/)[0]})`;
@@ -176,6 +207,10 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
           : `“${def.label}” did not finish within its ${Math.round(def.max / 1000)}s limit.`,
       );
     } finally {
+      if (entry) {
+        entry.timer.clear();
+        running.delete(entry);
+      }
       timings[def.key] = Date.now() - started;
       progress(def.key, 1);
     }
@@ -204,7 +239,9 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     }
     ctx.progress = local.progress;
     ctx.stepDeadline = local.stepDeadline;
+    front = local;
     await runStep(def, local, limit);
+    front = null;
   };
 
   try {
@@ -219,6 +256,8 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     }
     for (const key of [...background.keys()]) await join(key);
     ctx.report.timings = { ...timings, total: Date.now() - startedAt };
+    // Sleep / network outages during the job and what was done about them (recreate/interrupts.js).
+    ctx.report.interruptions = interrupts.summary();
     // What the shared cache of static files saved the captures (audit/sharedCache.js).
     if (ctx.netCache) ctx.report.sharedCache = ctx.netCache.stats();
     await dispose();

@@ -1046,6 +1046,17 @@ environmental, not a regression.
   nothing sent to the site) records outages, and a step that an outage overlapped is retried even when the network is back. Every decision is one line in the server log
   (`[analyze <id>] <step>: "<error>" — network down N s during the step … → trying again` / `… → not retried`). Recreate is not covered yet. Tests: `interruptions.test.js` (failure
   classes, pause detection, the decision table, waiting, and a real analysis whose homepage refuses connections at first and comes up 1.5 s later).
+- **Recreate: sleep and network outages** (`recreate/interrupts.js`, branch `recreate-retry`, WIP; builds on `audit/interruptions.js`): Recreate's steps are long (inspect up to 7 min), so a step is never run
+  again as a whole. (1) **Sleep does not count**: every pause the watcher finds (a 1-second timer ≥ 5 s late) is given back at once: the job deadline, `ctx.jobDeadline` and every running step's limit and
+  `stepDeadline` move later by its length (`runStep` uses `extendableTimeout`; when a step timer fires it first lets the watcher look (`tick()`), so the pause is seen before the time is declared up after a
+  wake-up). (2) **Only what was hit is repeated, once**: a page capture (inspect) or a page's sweep widths that overlapped an outage or a sleep, even when they reported no error (`recoverHit`; an abandoned capture
+  that may still be writing is never repeated); the asset downloads that failed at network level (`RETRYABLE_ASSET_REASONS`: timeout, time-limit, dns, refused, error) while an outage overlapped the downloads,
+  merged into the first round (`mergeDownloads`: same bytes = one file); discovery's homepage fetch (`recoverFailure`, the Analyze decision). Before a repeat the job waits until the site answers again (≤ 2 min,
+  `NETWORK_WAIT_MS`) and gives back the time the hit piece took. generate / build / preview / responsive work locally: only (1) applies. (3) **Capped**: ≤ 6 min given back per job (`ALLOWANCE_MS`, half of the
+  default 12). Every decision is a `[recreate <id>] <step>: <what> — <cause> → <outcome>` line in the server log; `report.interruptions` = { pauses, pausedMs, outages, grantedMs, allowanceMs, events[] }.
+  inspect and sweep read their limits live (they move). `SAS_NETWORK_WATCH=0` turns the DNS watcher off (the test suite does). Tests: `recreate-interrupts.test.js` (extendable timer, allowance, recover
+  decisions, merging downloads, a 7 s frozen event loop standing in for sleep does not time out a 3 s job, given-back time extends the running step, a page hit by an outage is captured twice and the others once).
+  Not covered: the cross-origin stylesheets read in the asset step and the WordPress REST fetch are not repeated.
 - **Keep-awake during jobs** (`jobs/keepAwake.js`, branch `max-parallel`, WIP): found on the user's laptop (Pentium Gold 7505, 8 GB, Modern Standby): runs that ended in timeouts / "Connection to the server
   dropped" lined up with the laptop entering Modern Standby mid-job (network off; one analysis took 31 min) or starting right after waking; four scratch runs on the same machine (normal, memory squeezed to
   180 MB free, the app open next to it) all passed in 81–90 s with 0 errors, so RAM was not the cause. The global lock (`manager.js exclusive()`) now holds a keep-awake request while any job runs or is queued

@@ -9,6 +9,7 @@ import { startEgressProxy } from '../security/egressProxy.js';
 import { capturePage } from './capture/index.js';
 import { discoverPages, SKIP_LABELS } from './discover.js';
 import { RecreateError } from './errors.js';
+import { causeText, recoverFailure, recoverHit } from './interrupts.js';
 
 // Captures stop starting new pages this long before the step's time limit.
 const INSPECT_MARGIN = 15000;
@@ -29,12 +30,25 @@ const once = (fn) => {
 export async function inspectStage(ctx) {
   const { report } = ctx;
   ctx.progress(0, 'Finding pages');
-  const discovery = await discoverPages({
-    url: ctx.audit.url ?? ctx.project.url,
-    limit: ctx.pageLimit,
-    signal: ctx.signal,
-    onProgress: (f, message) => ctx.progress(0.2 * f, message),
-  });
+  const discover = () =>
+    discoverPages({
+      url: ctx.audit.url ?? ctx.project.url,
+      limit: ctx.pageLimit,
+      signal: ctx.signal,
+      onProgress: (f, message) => ctx.progress(0.2 * f, message),
+    });
+  let discovery;
+  const discoverStarted = Date.now();
+  try {
+    discovery = await discover();
+  } catch (err) {
+    // The homepage could not be loaded because the computer slept or the network dropped: once more when it is back.
+    const network = /Could not load the homepage \((timeout|dns|refused|error)\)/.test(err.message);
+    const again = await recoverFailure(ctx, { step: 'inspect', what: 'finding pages', message: err.message, startedAt: discoverStarted, network, progress: (m) => ctx.progress(0, m) });
+    if (!again) throw err;
+    ctx.progress(0, `Finding pages again (${causeText(again)})`);
+    discovery = await discover();
+  }
 
   const proxy = await startEgressProxy(ctx.netPolicy);
   const closeProxy = once(() => proxy.close());
@@ -59,40 +73,54 @@ export async function inspectStage(ctx) {
     // Pages are captured while they still fit in the step's time limit (judged by the slowest page
     // so far): a slow site or a high page limit then keeps the pages captured so far instead of
     // failing the whole job. The homepage is always captured.
-    const deadline = Math.min(ctx.stepDeadline ?? Infinity, (ctx.jobDeadline ?? Infinity) - LATER_STEPS_RESERVE) - INSPECT_MARGIN;
+    // Read each time: the limits move later when time is given back after sleep or a network outage (recreate/interrupts.js).
+    const limitOf = (margin) => Math.min(ctx.stepDeadline ?? Infinity, (ctx.jobDeadline ?? Infinity) - LATER_STEPS_RESERVE) - margin;
+    const deadline = () => limitOf(INSPECT_MARGIN);
     // A started page is abandoned a little before the step's own limit (which would fail the job).
-    const pageLimit = Math.min(ctx.stepDeadline ?? Infinity, (ctx.jobDeadline ?? Infinity) - LATER_STEPS_RESERVE) - PAGE_LIMIT_MARGIN;
+    const pageLimit = () => limitOf(PAGE_LIMIT_MARGIN);
     let slowest = 0;
     for (const [i, info] of discovery.pages.entries()) {
       if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
-      if (i > 0 && Date.now() + slowest > deadline) {
+      if (i > 0 && Date.now() + slowest > deadline()) {
         for (const rest of discovery.pages.slice(i)) {
           notCaptured.push(rest.path);
           failedPages.push({ url: rest.url, source: rest.source, reason: 'time-limit' });
         }
         break;
       }
-      ctx.progress(0.2 + 0.8 * (i / total), `Capturing ${info.path} (${i + 1} of ${total})`);
-      const started = Date.now();
-      // Hover / focus probing (4b.1) takes a few seconds per page: only while the step has time to spare.
-      const spare = deadline - Date.now() - slowest * 2;
-      const capture = (ctx.capturePage ?? capturePage)(browser, info, ctx.dir, { motionBudgetMs: spare > MOTION_BUDGET * 2 ? MOTION_BUDGET : 0, cache: ctx.netCache });
-      // A page that stalls (a slow server, an animation that never settles) must not take the pages captured so far down
-      // with it: the step's own limit would fail the whole job. Past this point only the homepage still waits.
-      let result = null;
-      if (i > 0 && Number.isFinite(pageLimit)) {
+      const at = 0.2 + 0.8 * (i / total);
+      ctx.progress(at, `Capturing ${info.path} (${i + 1} of ${total})`);
+      // One capture of the page; null = abandoned because it stalled.
+      const captureOnce = async () => {
+        // Hover / focus probing (4b.1) takes a few seconds per page: only while the step has time to spare.
+        const spare = deadline() - Date.now() - slowest * 2;
+        const capture = (ctx.capturePage ?? capturePage)(browser, info, ctx.dir, { motionBudgetMs: spare > MOTION_BUDGET * 2 ? MOTION_BUDGET : 0, cache: ctx.netCache });
+        // A page that stalls (a slow server, an animation that never settles) must not take the pages captured so far down
+        // with it: the step's own limit would fail the whole job. Past this point only the homepage still waits.
+        if (!(i > 0 && Number.isFinite(pageLimit()))) return capture;
         let timer;
-        const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), Math.max(1000, pageLimit - Date.now())); });
-        result = await Promise.race([capture, timeout]);
+        const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), Math.max(1000, pageLimit() - Date.now())); });
+        const r = await Promise.race([capture, timeout]);
         clearTimeout(timer);
-        if (result === null) {
-          capture.catch(() => {}); // abandoned: the browser is closed below
-          notCaptured.push(info.path);
-          failedPages.push({ url: info.url, source: info.source, reason: 'time-limit' });
-          continue; // the check above then moves the remaining pages to "links to live"
+        if (r === null) capture.catch(() => {}); // abandoned: the browser is closed below
+        return r;
+      };
+      let started = Date.now();
+      let result = await captureOnce();
+      // Captured (or failed) while the network was down or the computer slept: the page may be incomplete although no
+      // error says so. Once more when the network is back. An abandoned capture is not repeated (it may still be writing).
+      if (result !== null) {
+        const hit = await recoverHit(ctx, { step: 'inspect', what: `capture of ${info.path}`, startedAt: started, progress: (m) => ctx.progress(at, m) });
+        if (hit) {
+          ctx.progress(at, `Capturing ${info.path} again (${causeText(hit)})`);
+          started = Date.now();
+          result = await captureOnce();
         }
-      } else {
-        result = await capture;
+      }
+      if (result === null) {
+        notCaptured.push(info.path);
+        failedPages.push({ url: info.url, source: info.source, reason: 'time-limit' });
+        continue; // the check above then moves the remaining pages to "links to live"
       }
       const { views, errors } = result;
       slowest = Math.max(slowest, Date.now() - started);

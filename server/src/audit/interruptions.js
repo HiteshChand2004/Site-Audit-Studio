@@ -33,18 +33,26 @@ export const networkFailure = (message = '') => NETWORK_ERROR.test(message);
  * Watches for pauses while a job runs. `pausedBetween(from, to)` = ms the machine was not running in that window.
  * @param {{ tickMs?: number, minPauseMs?: number, now?: () => number }} [o]
  */
-export function watchPauses({ tickMs = TICK_MS, minPauseMs = PAUSE_MIN_MS, now = Date.now } = {}) {
+export function watchPauses({ tickMs = TICK_MS, minPauseMs = PAUSE_MIN_MS, now = Date.now, onPause } = {}) {
   const pauses = [];
   let last = now();
-  const timer = setInterval(() => {
+  // Also called out of turn (tick()): after a wake-up every overdue timer fires at once, and a step's timeout must see the
+  // pause before it decides that its time is up.
+  const tick = () => {
     const t = now();
     const late = t - last - tickMs;
-    if (late >= minPauseMs) pauses.push({ from: last, to: t, ms: late });
     last = t;
-  }, tickMs);
+    if (late >= minPauseMs) {
+      const pause = { from: t - late, to: t, ms: late };
+      pauses.push(pause);
+      onPause?.(pause);
+    }
+  };
+  const timer = setInterval(tick, tickMs);
   timer.unref();
   return {
     pauses,
+    tick,
     pausedBetween(from, to = now()) {
       return pauses.reduce((sum, p) => sum + Math.max(0, Math.min(p.to, to) - Math.max(p.from, from)), 0);
     },
@@ -60,8 +68,11 @@ export function watchPauses({ tickMs = TICK_MS, minPauseMs = PAUSE_MIN_MS, now =
  * @param {string} host
  * @param {{ everyMs?: number, check?: (host: string) => Promise<boolean>, now?: () => number }} [o]
  */
-export function watchNetwork(host, { everyMs = NETWORK_CHECK_MS, check = (h) => resolverAnswers(h, { timeout: Math.min(2500, everyMs) }), now = Date.now } = {}) {
+export function watchNetwork(host, { everyMs = NETWORK_CHECK_MS, check, now = Date.now, env = process.env } = {}) {
   const outages = [];
+  // SAS_NETWORK_WATCH=0 (the test suite): no DNS queries, never an outage. A test passes its own `check`.
+  if (!check && env.SAS_NETWORK_WATCH === '0') return { outages, downBetween: () => 0, stop: () => {} };
+  check ??= (h) => resolverAnswers(h, { timeout: Math.min(2500, everyMs) });
   let lastUp = now();
   let down = null;
   let busy = false;
