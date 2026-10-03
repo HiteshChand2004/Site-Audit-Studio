@@ -12,7 +12,7 @@
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { userPolicy, withNetPolicy } from '../security/netGuard.js';
-import { parallelism } from '../audit/resources.js';
+import { maxParallel, parallelism } from '../audit/resources.js';
 import { TimeoutError, withTimeout } from '../audit/util.js';
 import { analysisWarnings, baseUrlOf, latestAnalysis } from './inputs.js';
 import { RecreateError } from './errors.js';
@@ -64,11 +64,13 @@ export function recreateBudgetMs(env = process.env) {
 
 // Free memory (beyond what the machine keeps for itself, resources.js) a second browser needs: with less, a background
 // step is finished first instead of running next to a step that renders pages. SAS_RECREATE_OVERLAP=1 / 0 decides it
-// for a machine whose capacity is known (1: always side by side, 0: never).
+// for a machine whose capacity is known (1: always side by side, 0: never). SAS_MAX_PARALLEL=1 (one browser context at a time)
+// also means never, unless SAS_RECREATE_OVERLAP=1 says otherwise.
 const SECOND_BROWSER_MB = 900;
 export function roomForSecondBrowser(env = process.env) {
   if (env.SAS_RECREATE_OVERLAP === '1') return true;
   if (env.SAS_RECREATE_OVERLAP === '0') return false;
+  if (maxParallel(env) === 1) return false;
   return parallelism({ perUnitMB: SECOND_BROWSER_MB, max: 1, min: 0 }) > 0;
 }
 

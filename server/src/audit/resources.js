@@ -23,13 +23,23 @@ export const PAGE_MB = 150;
 export const freeMemoryMB = () => (process.platform === 'darwin' ? Infinity : os.freemem() / MB);
 
 /**
- * How many units of work (a browser context, a page) to run at once.
- * @param {{ perUnitMB?: number, max?: number, min?: number, keepFreeMB?: number, free?: number }} [o]
- *   perUnitMB: memory one unit needs; keepFreeMB: memory that must stay free for the rest of the machine; free: override (tests)
- * @returns {number} between `min` and `max`
+ * A hard cap on the browser contexts any step runs at once, from SAS_MAX_PARALLEL (server/.env, a whole number 1–8). For a machine
+ * whose free memory looks fine on paper but loads still time out (8 GB with other apps open): the cap wins over every step's own
+ * minimum, so 1 means strictly one page at a time. Unset or out of range = no cap (the memory rule below decides).
  */
-export function parallelism({ perUnitMB = PAGE_MB, max = 4, min = 1, keepFreeMB = KEEP_FREE_MB, free = freeMemoryMB() } = {}) {
-  if (free === Infinity) return max;
-  const fit = Math.floor((free - keepFreeMB) / perUnitMB);
-  return Math.max(min, Math.min(max, Number.isFinite(fit) ? fit : min));
+export function maxParallel(env = process.env) {
+  const n = Number(env.SAS_MAX_PARALLEL);
+  return Number.isInteger(n) && n >= 1 && n <= 8 ? n : Infinity;
+}
+
+/**
+ * How many units of work (a browser context, a page) to run at once.
+ * @param {{ perUnitMB?: number, max?: number, min?: number, keepFreeMB?: number, free?: number, cap?: number }} [o]
+ *   perUnitMB: memory one unit needs; keepFreeMB: memory that must stay free for the rest of the machine; free, cap: overrides (tests)
+ * @returns {number} between `min` and `max`, and never above SAS_MAX_PARALLEL (which may go below `min`, but not below 1 unless `min` is 0)
+ */
+export function parallelism({ perUnitMB = PAGE_MB, max = 4, min = 1, keepFreeMB = KEEP_FREE_MB, free = freeMemoryMB(), cap = maxParallel() } = {}) {
+  const fit = free === Infinity ? max : Math.floor((free - keepFreeMB) / perUnitMB);
+  const n = Math.max(min, Math.min(max, Number.isFinite(fit) ? fit : min));
+  return Math.min(n, Math.max(cap, Math.min(min, 1)));
 }

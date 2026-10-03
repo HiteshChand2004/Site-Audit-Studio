@@ -1035,6 +1035,9 @@ environmental, not a regression.
 - **Time limit:** 6 minutes per analysis (5 before the speed and robustness work), of which 2 are kept for Lighthouse: a step before it is cut short
   or skipped rather than using them. A step that would start after the limit is skipped and listed in
   `audit.errors`. One analysis runs at a time; others queue.
+- **Concurrency cap** (`audit/resources.js maxParallel`, branch `max-parallel`, WIP): `SAS_MAX_PARALLEL` (whole number 1–8) caps the browser contexts every step runs at once
+  (`parallelism()`: Analyze screenshots + crawl renders, Recreate capture views, sweep widths, responsive check), even below a step's own minimum (capture and sweep ask for ≥ 2);
+  `1` also means no background sweep next to generate / build (unless `SAS_RECREATE_OVERLAP=1`). Unset = the memory rule as before. Slower (2 views instead of 4 at a time: ~212 s vs ~120 s for six pages), so pair it with more time.
 - **Slow / busy machines** (`audit/index.js analyzeTiming`, `server/.env.example`): `SAS_TIMEOUT_SCALE` (1–4) multiplies every step limit, the page-load
   and axe waits, the Lighthouse reserve and the total; `SAS_ANALYZE_MINUTES` (1–30) sets the total alone. With room for only one page in memory the
   screenshots wait for the homepage render instead of running next to it. Timeouts with < 1 GB free at the start add a `memory` row to `audit.errors`

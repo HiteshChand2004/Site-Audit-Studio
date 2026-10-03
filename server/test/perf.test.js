@@ -8,7 +8,7 @@ import { access, mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { analyzeTiming, LIGHTHOUSE_RESERVE_MS, noteLowMemory, runAnalysis, stepBudget, STEPS } from '../src/audit/index.js';
-import { parallelism } from '../src/audit/resources.js';
+import { maxParallel, parallelism } from '../src/audit/resources.js';
 import { launchBrowser } from '../src/audit/render.js';
 import { captureScreenshots } from '../src/audit/screenshots.js';
 import { progressTracker } from '../src/jobs/manager.js';
@@ -53,20 +53,42 @@ after(async () => {
 });
 
 test('parallel work is chosen from the free memory', () => {
-  assert.equal(parallelism({ free: 8000, perUnitMB: 350, max: 3 }), 3);
-  assert.equal(parallelism({ free: 1600, perUnitMB: 350, max: 4, keepFreeMB: 800 }), 2);
-  // About 1 GB available is enough for four pages at once; only a machine that has really run out is cut back.
-  assert.equal(parallelism({ free: 1000, max: 4 }), 4);
-  assert.equal(parallelism({ free: 620, max: 4 }), 2);
-  assert.equal(parallelism({ free: 200, max: 4 }), 1);
-  assert.equal(parallelism({ free: Infinity, max: 3 }), 3);
-  // Short of memory: one at a time, never zero (unless the caller asks whether anything fits at all).
-  assert.equal(parallelism({ free: 300, perUnitMB: 350, max: 4 }), 1);
-  assert.equal(parallelism({ free: 300, perUnitMB: 350, max: 4, min: 2 }), 2);
-  assert.equal(parallelism({ free: 300, perUnitMB: 1000, max: 1, min: 0 }), 0);
-  assert.equal(parallelism({ free: NaN }), 1);
-  const now = parallelism({ max: 4 });
-  assert.ok(now >= 1 && now <= 4);
+  const saved = process.env.SAS_MAX_PARALLEL;
+  delete process.env.SAS_MAX_PARALLEL;
+  try {
+    assert.equal(parallelism({ free: 8000, perUnitMB: 350, max: 3 }), 3);
+    assert.equal(parallelism({ free: 1600, perUnitMB: 350, max: 4, keepFreeMB: 800 }), 2);
+    // About 1 GB available is enough for four pages at once; only a machine that has really run out is cut back.
+    assert.equal(parallelism({ free: 1000, max: 4 }), 4);
+    assert.equal(parallelism({ free: 620, max: 4 }), 2);
+    assert.equal(parallelism({ free: 200, max: 4 }), 1);
+    assert.equal(parallelism({ free: Infinity, max: 3 }), 3);
+    // Short of memory: one at a time, never zero (unless the caller asks whether anything fits at all).
+    assert.equal(parallelism({ free: 300, perUnitMB: 350, max: 4 }), 1);
+    assert.equal(parallelism({ free: 300, perUnitMB: 350, max: 4, min: 2 }), 2);
+    assert.equal(parallelism({ free: 300, perUnitMB: 1000, max: 1, min: 0 }), 0);
+    assert.equal(parallelism({ free: NaN }), 1);
+    const now = parallelism({ max: 4 });
+    assert.ok(now >= 1 && now <= 4);
+  } finally {
+    if (saved === undefined) delete process.env.SAS_MAX_PARALLEL;
+    else process.env.SAS_MAX_PARALLEL = saved;
+  }
+});
+
+test('SAS_MAX_PARALLEL caps the browser contexts of every step, below their own minimum too', () => {
+  assert.equal(maxParallel({}), Infinity);
+  assert.equal(maxParallel({ SAS_MAX_PARALLEL: '2' }), 2);
+  for (const v of ['0', '9', '1.5', 'two', '']) assert.equal(maxParallel({ SAS_MAX_PARALLEL: v }), Infinity);
+  // Plenty of memory, but the cap decides.
+  assert.equal(parallelism({ free: 8000, max: 4, cap: 2 }), 2);
+  assert.equal(parallelism({ free: Infinity, max: 4, cap: 1 }), 1);
+  // A step that asks for at least two (Recreate capture, sweep) still gets one with a cap of 1.
+  assert.equal(parallelism({ free: 8000, max: 4, min: 2, cap: 1 }), 1);
+  // Below the cap the memory rule is unchanged; "does anything fit" (min 0) can still answer 0.
+  assert.equal(parallelism({ free: 620, max: 4, cap: 3 }), 2);
+  assert.equal(parallelism({ free: 300, perUnitMB: 1000, max: 1, min: 0, cap: 1 }), 0);
+  assert.equal(parallelism({ free: 8000, perUnitMB: 1000, max: 1, min: 0, cap: 1 }), 1);
 });
 
 test('a step never uses the time kept for the steps after it', () => {

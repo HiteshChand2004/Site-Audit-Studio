@@ -87,6 +87,9 @@ test('settings parsers and the budget', () => {
   // Running the sweep next to the steps that render pages: by free memory, or decided for the machine.
   assert.equal(roomForSecondBrowser({ SAS_RECREATE_OVERLAP: '1' }), true);
   assert.equal(roomForSecondBrowser({ SAS_RECREATE_OVERLAP: '0' }), false);
+  // One browser context at a time means no second browser either, unless the overlap is asked for.
+  assert.equal(roomForSecondBrowser({ SAS_MAX_PARALLEL: '1' }), false);
+  assert.equal(roomForSecondBrowser({ SAS_MAX_PARALLEL: '1', SAS_RECREATE_OVERLAP: '1' }), true);
   assert.equal(typeof roomForSecondBrowser({}), 'boolean');
 });
 
