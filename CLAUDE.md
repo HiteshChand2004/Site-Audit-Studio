@@ -1060,6 +1060,16 @@ time, WIP commit, wait for "next". Everything general (any website).
   with a plain explanation: hover, keyboard, tap), `Score.jsx` (ScoreRing with the rating in words, StatusIcon, Pill), `Tabs.jsx` (StepTabs with status per step,
   Segmented), `StepList` (job progress in plain words), `ConfirmDialog` (replaces `window.confirm`; Button variant `dangerSolid`), Button size `lg`.
   Sidebar: "Add a website", "Your websites", "Search your websites", removal through the app's dialog ("the real website is not affected"), no stack tag.
+- **U2 (WIP)**: the two side-by-side panels are gone. `layout/Workspace.jsx` = the website's name + address, **step tabs** (`StepTabs`, arrow keys) with a live status per step
+  (`stepStates`: "Checked 5 h ago" / "Checking · 40 %" / "The check failed"; "30 pages copied" / "Working · 12 %" / "Check the site first"; "30 pages side by side"; "3 fixed · 6 got worse"
+  in warn tone when something got worse) and the step's content; a project opens on the step where its work stands (`startStep`) until the user picks a tab; the follow-up of a
+  technology build (poll until `outputs[stack]` exists) moved here so it runs whatever tab is open. Steps in `layout/steps/`: **CheckStep** (address, pages to check, "Check now /
+  Check again", progress, speed + report on the left, the original site sticky on the right; single column under 1180 px), **CreateStep** (card with the settings in words —
+  technology, "Every page of the site", future address — one large "Create the copy" button, "Change settings" (the stack modal), stale-check alert, progress, "Last copy", the
+  technology build card), **CompareStep** (one toolbar: page, Computer / Tablet / Phone, "Scroll together" with its tip; original and copy side by side, the original page-aware as
+  before; empty state that leads to step 2), **ResultsStep** (download card with the technology picker + "Full report (PDF)", how the copy turned out, the before / after checklist
+  with "Compare now" when missing). `OldPanel.jsx` / `NewPanel.jsx` (+ css) removed; the top bar has "Full report" (secondary); the empty app says "Start with a website";
+  `format.js` (timeAgo, ageDays, plural); preview mode toggle says "Live / Picture". The wording inside the reports is still the old one (U3–U6).
 
 ### Full-site clone (after the robustness work) — branch `full-site` (worktree `../Website-Audit-par`), WIP
 Asked by the user: clone the whole site as it is (every page, no link back to the old site, hover / animations / buttons the same), no 20-page cap, no timeouts,

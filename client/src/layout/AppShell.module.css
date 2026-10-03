@@ -68,93 +68,6 @@
   min-height: 0;
 }
 
-.panels {
-  position: relative;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-template-rows: 1fr;
-  min-width: 0;
-  min-height: 0;
-}
-
-/* Sync scroll toggle: a labelled pill on the divider, in the panel header row (the headers keep
-   room for it, Panel.module.css). */
-.sync {
-  position: absolute;
-  top: 6px;
-  left: 50%;
-  z-index: 2;
-  display: grid;
-  justify-items: center;
-  transform: translateX(-50%);
-}
-
-/* Hint under the toggle, shown on hover and keyboard focus. */
-.syncHint {
-  position: absolute;
-  top: calc(100% + 6px);
-  width: max-content;
-  max-width: 260px;
-  padding: var(--sp-2) var(--sp-3);
-  border-radius: var(--radius-sm);
-  background: var(--text);
-  color: var(--surface);
-  font-size: var(--fs-xs);
-  line-height: 1.4;
-  text-align: center;
-  box-shadow: var(--shadow);
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity 120ms ease, visibility 120ms ease;
-}
-
-.sync:hover .syncHint,
-.sync:focus-within .syncHint {
-  opacity: 1;
-  visibility: visible;
-}
-
-.syncToggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 34px;
-  padding: 0 16px 0 12px;
-  border: 1.5px solid var(--accent-border);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.95);
-  color: var(--accent-text);
-  font-size: var(--fs-sm);
-  font-weight: 650;
-  white-space: nowrap;
-  box-shadow: var(--shadow);
-  cursor: pointer;
-  transition: transform var(--dur) var(--ease), background 160ms ease, color 160ms ease, border-color 160ms ease, box-shadow var(--dur) ease;
-}
-
-.syncToggle:hover {
-  border-color: var(--accent);
-  background: var(--accent-tint);
-  transform: translateY(-1px) scale(1.03);
-}
-
-.syncToggle[aria-pressed='true'] {
-  border-color: transparent;
-  background: var(--grad-brand);
-  color: #fff;
-  box-shadow: var(--shadow-glow);
-}
-
-.syncToggle:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.tabs {
-  display: none;
-}
-
 .center {
   display: grid;
   place-items: center;
@@ -162,89 +75,14 @@
   color: var(--muted);
 }
 
-.emptyCard {
-  display: grid;
-  justify-items: center;
-  gap: var(--sp-2);
-  max-width: 420px;
-  padding: var(--sp-8) var(--sp-8) var(--sp-6);
-  border: 1px solid var(--border);
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(12px);
-  box-shadow: var(--shadow);
-  text-align: center;
-  animation: var(--k-fade-up) 600ms var(--ease) both;
-}
+/* Narrow screens: the top bar wraps its actions. */
+@media (max-width: 900px) {
+  .topbar {
+    padding: 0 var(--sp-3);
+  }
 
-.emptyCard h1 {
-  margin-top: var(--sp-3);
-  color: var(--text);
-  font-size: var(--fs-xl);
-  font-weight: 750;
-  letter-spacing: -0.02em;
-}
-
-.emptyCard p {
-  margin-bottom: var(--sp-3);
-}
-
-.emptyIcon {
-  display: grid;
-  place-items: center;
-  width: 64px;
-  height: 64px;
-  border-radius: 20px;
-  background: var(--grad-brand);
-  color: #fff;
-  box-shadow: var(--shadow-glow);
-  animation: var(--k-float) 6s ease-in-out infinite;
-}
-
-/* Narrow screens: OLD/NEW tabs instead of side-by-side */
-@media (max-width: 1180px) {
-  /* Only one panel is visible: nothing to sync. */
-  .sync {
+  .topActions > p {
     display: none;
-  }
-
-  .panels {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
-  }
-
-  .tabs {
-    display: flex;
-    gap: 4px;
-    padding: 8px var(--sp-4) 0;
-    border-bottom: 1px solid var(--border);
-    background: rgba(255, 255, 255, 0.8);
-    backdrop-filter: blur(12px);
-  }
-
-  .tabs button {
-    height: 32px;
-    padding: 0 12px;
-    border: 0;
-    border-bottom: 2px solid transparent;
-    background: transparent;
-    color: var(--muted);
-    font-weight: 500;
-  }
-
-  .tabs button[aria-selected='true'] {
-    border-bottom-color: var(--accent);
-    color: var(--accent-text);
-    font-weight: 650;
-  }
-
-  .panels[data-tab='old'] > section:last-child,
-  .panels[data-tab='new'] > section:nth-of-type(1) {
-    display: none;
-  }
-
-  .panels > section {
-    border-left: 0 !important;
   }
 }
 
