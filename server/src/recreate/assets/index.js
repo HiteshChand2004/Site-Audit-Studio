@@ -28,13 +28,15 @@ export const ASSET_LIMITS = {
   font: { maxBytes: 5 * MB, timeout: 20000 },
   media: { maxBytes: 40 * MB, timeout: 60000 },
   stylesheet: { maxBytes: 2 * MB, timeout: 15000 },
+  // Files the pages link to (PDF, documents, archives).
+  document: { maxBytes: 25 * MB, timeout: 60000 },
 };
 // maxTotalBytes is checked before each download starts, so parallel downloads can pass it slightly.
 export const ASSET_BUDGET = { maxAssets: 800, maxTotalBytes: 300 * MB, concurrency: 6, maxSheets: 20 };
 // Downloads stop starting this long before the step's own time limit, so the step ends cleanly.
 const DEADLINE_MARGIN = 10000;
 
-const FOLDERS = { image: 'images', icon: 'icons', font: 'fonts', media: 'media' };
+const FOLDERS = { image: 'images', icon: 'icons', font: 'fonts', media: 'media', document: 'files' };
 
 const MIME_EXT = {
   'image/jpeg': '.jpg', 'image/jpg': '.jpg', 'image/pjpeg': '.jpg', 'image/png': '.png', 'image/apng': '.png', 'image/gif': '.gif',
@@ -43,8 +45,13 @@ const MIME_EXT = {
   'font/ttf': '.ttf', 'application/x-font-ttf': '.ttf', 'font/sfnt': '.ttf', 'font/otf': '.otf', 'application/x-font-opentype': '.otf',
   'application/vnd.ms-fontobject': '.eot', 'video/mp4': '.mp4', 'video/webm': '.webm', 'video/ogg': '.ogv', 'video/quicktime': '.mov',
   'audio/mpeg': '.mp3', 'audio/ogg': '.ogg', 'audio/wav': '.wav', 'audio/x-wav': '.wav', 'audio/mp4': '.m4a', 'audio/aac': '.aac',
+  'application/pdf': '.pdf', 'application/zip': '.zip', 'text/csv': '.csv', 'application/rtf': '.rtf', 'application/epub+zip': '.epub',
+  'application/msword': '.doc', 'application/vnd.ms-excel': '.xls', 'application/vnd.ms-powerpoint': '.ppt',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
 };
-const KNOWN_EXT = new Set(Object.values(MIME_EXT).concat(['.jpeg', '.m4v']));
+const KNOWN_EXT = new Set(Object.values(MIME_EXT).concat(['.jpeg', '.m4v', '.odt', '.ods', '.odp', '.rar', '.7z', '.gz', '.tgz']));
 
 // File type from the first bytes: servers often send application/octet-stream or a wrong type.
 function sniffExt(head) {

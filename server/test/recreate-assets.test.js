@@ -361,9 +361,10 @@ test('the assets step localizes every asset of the captured pages', async () => 
   // Files the capture's browsers had loaded were taken from the job's shared cache instead of being downloaded again.
   assert.ok(report.assets.fromCache >= 3, `from cache: ${report.assets.fromCache}`);
   assert.ok(report.sharedCache.reused >= report.assets.fromCache);
-  // Unique files only: the font, team.png (4 URLs), photo.svg (3 URLs, one via a redirect) and hero-bg.svg.
-  assert.equal(report.assets.downloaded, 4);
-  assert.deepEqual(Object.keys(report.assets.byKind).sort(), ['font', 'image']);
+  // Unique files only: the font, team.png (4 URLs), photo.svg (3 URLs, one via a redirect), hero-bg.svg and the brochure the
+  // homepage links to (a linked file is served by the new site, never by the old one).
+  assert.equal(report.assets.downloaded, 5);
+  assert.deepEqual(Object.keys(report.assets.byKind).sort(), ['document', 'font', 'image']);
   assert.deepEqual(report.manual.filter((m) => m.kind === 'asset').map((m) => [m.title, m.url]), [
     ['Video or audio file too large to bundle', `${cdn}/big.mp4`],
   ]);

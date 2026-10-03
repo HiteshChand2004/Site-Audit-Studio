@@ -25,6 +25,7 @@ import { addRemoved, emptyRemoved, sanitizeSvg } from '../fixers/svg.js';
 import { VIEW_WIDTHS } from '../views.js';
 import { BLOCK_TAGS, buildPageTree, displayOf, isElement, isText, VIEW_IDS } from './tree.js';
 import { crawlFiles } from './crawlFiles.js';
+import { noticePage } from './notice.js';
 
 export const IR_VERSION = 1;
 export const GENERATED_FAVICON = 'icons/favicon-generated.svg';
@@ -167,7 +168,7 @@ function numberNodes(root) {
  */
 export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], skipped = [], wp = null, robots = null, llms = null }) {
   const assetResolve = createAssetResolver(assets.map ?? {});
-  const resolveLink = createLinkResolver({ pages: pages.map((p) => p.info), livePages, skipped, origin });
+  const resolveLink = createLinkResolver({ pages: pages.map((p) => p.info), livePages, skipped, origin, assetFile: (url) => assetResolve(url) });
 
   const home = pages[0];
   const queries = [];
@@ -325,6 +326,10 @@ function pageBody(t, site, stats) {
         if (link) {
           attrs.href = link;
           if (link.page) stats.links.internal++;
+          else if (link.file) {
+            stats.links.notice++;
+            stats.notices.set(link.url, link.reason);
+          } else if (link.asset) stats.links.file++;
           else if (link.live) {
             stats.links.live++;
             stats.liveLinks.set(link.live, link.reason);
@@ -399,6 +404,16 @@ function pageBody(t, site, stats) {
   return convert(t.root);
 }
 
+/** The notice pages the links of the site need (ir/notice.js): static files, so every stack ships them. */
+function noticeFiles(site) {
+  const lang = site.pages[0]?.head?.lang ?? null;
+  return [...(site.resolveLink.notices ?? new Map())].map(([outPath, { url, reason }]) => ({
+    path: outPath,
+    content: noticePage({ outPath, url, reason, siteName: site.siteName?.value ?? null, lang }),
+    notice: { url, reason },
+  }));
+}
+
 /**
  * Builds the IR from a prepared site (after the latest fit pass).
  * @returns {{ ir: object, stats: object }}
@@ -406,12 +421,14 @@ function pageBody(t, site, stats) {
 export function buildIR(site) {
   const styles = buildStyles(site.pages, { assetFile: (url) => site.assetResolve(url) });
   const safety = newSafetyStats();
-  const stats = { links: { internal: 0, live: 0, external: 0 }, liveLinks: new Map(), droppedImages: [], droppedMedia: [], forms: 0, safety };
+  const links = () => ({ internal: 0, file: 0, notice: 0, live: 0, external: 0 });
+  const stats = { links: links(), liveLinks: new Map(), notices: new Map(), droppedImages: [], droppedMedia: [], forms: 0, safety };
   const pages = site.pages.map((t) => {
-    const s = { links: { internal: 0, live: 0, external: 0 }, liveLinks: new Map(), droppedMedia: [], forms: 0, safety };
+    const s = { links: links(), liveLinks: new Map(), notices: new Map(), droppedMedia: [], forms: 0, safety };
     const body = pageBody(t, site, s);
-    for (const k of ['internal', 'live', 'external']) stats.links[k] += s.links[k];
+    for (const k of Object.keys(stats.links)) stats.links[k] += s.links[k];
     for (const [u, r] of s.liveLinks) stats.liveLinks.set(u, r);
+    for (const [u, r] of s.notices) stats.notices.set(u, r);
     stats.droppedImages.push(...t.droppedImages);
     stats.droppedMedia.push(...s.droppedMedia);
     stats.forms += s.forms;
@@ -449,7 +466,7 @@ export function buildIR(site) {
     boxSizingReset: styles.boxSizingReset,
     ...(site.motion && { motion: site.motion }),
     rules: styles.rules,
-    files: site.files,
+    files: [...site.files, ...noticeFiles(site)],
     pages,
   };
   return { ir, stats: { ...stats, classes: styles.classCount, rules: styles.rules.length } };

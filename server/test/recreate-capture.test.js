@@ -118,7 +118,7 @@ test('near its time limit the inspect step keeps the pages captured so far inste
   const report = await runRecreate({ project, recreateId: randomUUID(), progress: () => {}, stages: { ...stubs, inspect } });
   assert.deepEqual(report.pages.map((p) => p.path), ['/']);
   assert.ok(report.discovery.linksToLive.some((l) => l.url === `${origin}/about.html` && l.reason === 'time-limit'));
-  assert.match(report.warnings.join('\n'), /1 page was not captured within the time limit of the inspect step \(\/about\.html\); links to it point to the live site/);
+  assert.match(report.warnings.join('\n'), /1 page was not captured within the time limit of the inspect step \(\/about\.html\); links to it open a notice page in the new site/);
 });
 
 test('a page that stalls is abandoned before the step limit: the pages captured so far are kept, the job does not fail', async () => {

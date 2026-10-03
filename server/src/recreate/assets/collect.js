@@ -1,13 +1,32 @@
 // Collects every asset the recreated pages need from the capture files (capture/<slug>/<view>.json):
 // images (img, srcset, lazy attributes, CSS backgrounds, pseudo-element content, video posters,
 // og:image), icons (link rel=icon and friends), fonts (the @font-face rules of families the page
-// actually used) and media (video/audio sources). Each URL appears once, whatever the number of
-// pages and views that use it.
+// actually used), media (video/audio sources) and the files the pages link to (a PDF, a document, an image or a video
+// opened by a link, on the site itself or on its platform's CDN), so no link of the new site leads back to the old one.
+// Each URL appears once, whatever the number of pages and views that use it.
+import { sameSite } from '../../audit/util.js';
+import { platformCdnHost } from './cdn.js';
 import { parseSrcset } from './css.js';
 
-export const KINDS = ['font', 'icon', 'image', 'media'];
-// When a URL is used as two kinds (an SVG as favicon and background), the kind with the larger limit wins.
-const MERGE_RANK = { media: 0, image: 1, font: 2, icon: 3 };
+export const KINDS = ['font', 'icon', 'image', 'media', 'document'];
+// When a URL is used as two kinds (an SVG as favicon and background), the kind with the larger limit wins; a file that is
+// also shown on the page keeps the kind it is shown as.
+const MERGE_RANK = { media: 0, image: 1, font: 2, icon: 3, document: 4 };
+// Files a link may open, by kind (the path's extension decides; anything else that is not a page gets a notice page).
+const LINKED_FILE = [
+  ['document', /\.(pdf|docx?|xlsx?|pptx?|odt|ods|odp|rtf|csv|epub|zip|rar|7z|gz|tgz)$/i],
+  ['image', /\.(jpe?g|png|gif|webp|avif|svg)$/i],
+  ['media', /\.(mp4|webm|mov|m4v|ogv|mp3|wav|ogg|m4a|aac)$/i],
+];
+/** The kind of file a link opens, or null when it is not a downloadable file. */
+export function linkedFileKind(url) {
+  try {
+    const { pathname } = new URL(url);
+    return LINKED_FILE.find(([, re]) => re.test(pathname))?.[0] ?? null;
+  } catch {
+    return null;
+  }
+}
 
 /** Dedupe key: the URL without its fragment. The query stays: image CDNs use it for size and format. */
 export function assetKey(url) {
@@ -128,6 +147,17 @@ export function collectAssets(captures, extra = {}) {
         for (const m of node.svg.matchAll(SVG_HREF)) {
           if (!/^(data|javascript):/i.test(m[1])) add(m[1], 'image', 'svg', slug, base);
         }
+      }
+      // A link to a file of the site (or of its platform's CDN): downloaded, so the new site serves it.
+      if ((tag === 'a' || tag === 'area') && (node.href || attrs.href)) {
+        let href = null;
+        try {
+          href = new URL(node.href || attrs.href, base).href;
+        } catch {
+          // not a URL
+        }
+        const kind = href && linkedFileKind(href);
+        if (kind && (sameSite(href, base) || platformCdnHost(href))) add(href, kind, 'link', slug);
       }
       for (const pseudo of [node.before, node.after]) {
         for (const m of pseudo?.content?.matchAll(CSS_URL) ?? []) if (!m[2].startsWith('data:')) add(m[2], 'image', 'pseudo', slug, base);

@@ -210,18 +210,27 @@ test('head: kept when present, filled from the page when missing, and marked aut
   assert.match(generatedFavicon('acme <co>', '#0f766e'), /fill="#0f766e".*>A<\/text>/);
 });
 
-test('links: recreated pages become relative paths, the rest stays live; relative asset paths', () => {
+test('links: recreated pages become relative paths, linked files local, the rest a local notice page (never live); relative asset paths', () => {
   const resolve = createLinkResolver({
     pages: [{ url: 'https://s.test/', outPath: 'index.html' }, { url: 'https://s.test/about/', outPath: 'about/index.html' }],
     livePages: [{ url: 'https://s.test/blog/' }],
     skipped: [{ url: 'https://s.test/login', reason: 'backend' }],
     origin: 'https://s.test',
+    assetFile: (url) => ({ 'https://s.test/files/brochure.pdf': 'files/brochure-1234567890.pdf', 'https://cdn.test/deck.pdf': 'files/deck-0987654321.pdf' })[url] ?? null,
   });
   assert.deepEqual(resolve('https://s.test/about', 'https://s.test/'), { page: 'about/index.html', hash: '' });
   assert.deepEqual(resolve('https://www.s.test/#team', 'https://s.test/about/'), { page: 'index.html', hash: '#team' });
   assert.deepEqual(resolve('https://s.test/about/#x', 'https://s.test/about/'), { anchor: '#x' });
-  assert.deepEqual(resolve('https://s.test/blog/', 'https://s.test/'), { live: 'https://s.test/blog/', reason: 'beyond-limit' });
-  assert.deepEqual(resolve('https://s.test/login', 'https://s.test/'), { live: 'https://s.test/login', reason: 'backend' });
+  // A query-string variant of a recreated page opens that page.
+  assert.deepEqual(resolve('https://s.test/about/?ref=nav', 'https://s.test/'), { page: 'about/index.html', hash: '' });
+  // Linked files that were downloaded are local, on the site or on another host.
+  assert.deepEqual(resolve('https://s.test/files/brochure.pdf', 'https://s.test/'), { asset: 'files/brochure-1234567890.pdf' });
+  assert.deepEqual(resolve('https://cdn.test/deck.pdf', 'https://s.test/'), { asset: 'files/deck-0987654321.pdf' });
+  // Everything else of the site opens a local notice page at the same path, never the live site.
+  assert.deepEqual(resolve('https://s.test/blog/', 'https://s.test/'), { file: 'blog/index.html', hash: '', url: 'https://s.test/blog/', reason: 'beyond-limit' });
+  assert.deepEqual(resolve('https://s.test/login', 'https://s.test/'), { file: 'login/index.html', hash: '', url: 'https://s.test/login', reason: 'backend' });
+  assert.deepEqual(resolve('https://s.test/files/missing.pdf', 'https://s.test/'), { file: 'files/missing.pdf/index.html', hash: '', url: 'https://s.test/files/missing.pdf', reason: 'not-recreated' });
+  assert.deepEqual([...resolve.notices.keys()], ['blog/index.html', 'login/index.html', 'files/missing.pdf/index.html']);
   assert.deepEqual(resolve('https://other.test/', 'https://s.test/'), { external: 'https://other.test/' });
   assert.deepEqual(resolve('mailto:hi@s.test', 'https://s.test/'), { external: 'mailto:hi@s.test' });
   assert.equal(resolve('javascript:void(0)', 'https://s.test/'), null);
@@ -327,11 +336,20 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
     }
   }
 
-  // Links: recreated pages relative, the others live and reported.
+  // Links: recreated pages relative; nothing points at the original site: the login page opens a local notice page, the
+  // brochure is downloaded.
   const home = await read('index.html');
   assert.match(home, /<a class="[\w-]+"(?: data-motion="[^"]*")? href="about\.html">About<\/a>/);
   assert.match(home, /href="services\/">Services</);
-  assert.match(home, new RegExp(`href="${origin}/login\\.html">Log in<`));
+  assert.match(home, /href="login\.html">Log in</);
+  assert.match(home, /href="assets\/files\/brochure-[0-9a-f]{10}\.pdf">Brochure</);
+  const toOld = [...home.matchAll(/<a [^>]*href="([^"]*)"/g)].map((m) => m[1]).filter((h) => h.startsWith(origin));
+  assert.deepEqual(toOld, [], 'no link to the original site');
+  const notice = await read('login.html');
+  assert.match(notice, /<meta name="robots" content="noindex">/);
+  assert.match(notice, /needs a server \(sign-in, sign-up, cart, checkout or account\)/);
+  assert.match(notice, /<a href="\.\/">Back to the homepage<\/a>/);
+  assert.doesNotMatch(notice, /<script/i);
   assert.match(home, /<link rel="canonical" href="http:\/\/localhost:4196\/">/);
   const services = await read('services/index.html');
 
@@ -384,11 +402,12 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.match(await readFile(path.join(dir, 'dist', 'js', 'motion.js'), 'utf8'), /IntersectionObserver/);
   assert.match(services, /href="\.\.\/">Home</);
   assert.match(services, /<link rel="icon" href="\.\.\/assets\/images\/hero-bg-[0-9a-f]{10}\.svg">/);
-  assert.match(await read('about.html'), new RegExp(`href="${origin}/team\\.html">Our team<`));
-  const live = Object.fromEntries(report.generate.liveLinks.map((l) => [new URL(l.url).pathname, l.reason]));
-  assert.equal(live['/team.html'], 'beyond-limit');
-  assert.equal(live['/login.html'], 'backend');
-  assert.equal(live['/brochure.pdf'], 'not-html');
+  assert.match(await read('about.html'), /href="team\.html">Our team</);
+  assert.deepEqual(report.generate.liveLinks, [], 'no same-site link stays live');
+  const notices = Object.fromEntries(report.generate.noticePages.map((l) => [new URL(l.url).pathname, l.reason]));
+  assert.equal(notices['/team.html'], 'beyond-limit');
+  assert.equal(notices['/login.html'], 'backend');
+  assert.equal(notices['/brochure.pdf'], undefined, 'downloaded, not a notice page');
 
   // The builder-style page: one copy of the content, restyled per breakpoint.
   const work = await read('work.html');
@@ -563,7 +582,9 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.equal(report.verify.dir, 'dist');
   assert.deepEqual([report.verify.missingFiles, report.verify.brokenLinks, report.verify.missingAssets, report.verify.externalAssets, report.verify.anchors], [[], [], [], [], []]);
   assert.deepEqual(report.verify.html, { valid: true, errors: 0, warnings: 0, pages: [] });
-  assert.equal(report.verify.checked.pages, 5);
+  // The 5 recreated pages and the notice pages their links need (login, team, …): all checked, all valid.
+  assert.equal(report.verify.checked.pages, 5 + report.generate.noticePageCount);
+  assert.ok(report.generate.noticePageCount >= 2);
   assert.ok(report.verify.checked.links >= 15, `links ${report.verify.checked.links}`);
   assert.ok(report.verify.checked.assets >= 10, `assets ${report.verify.checked.assets}`);
   assert.equal(await exists(path.join(dir, 'dist.tmp')), false);

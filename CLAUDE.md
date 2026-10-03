@@ -1060,6 +1060,15 @@ Decision: links to pages that cannot be cloned honestly (login, cart, checkout, 
   first one ends the stalled capture, so two captures never share a folder); only a page that stalls twice is reported (`reason: 'stalled'`). Gear dialog: an "Every page of the site"
   checkbox (on by default), a number only when it is off. Tests: `recreate-all-pages.test.js` (setting, discovery of the whole fixture site vs a limit, scaling of job / capture / later
   steps, fixed total, a stalled page captured again and kept); test fixture ports must be unique per file (files run in parallel: 4192–4199 are taken).
+- **A.2 (WIP)**: **no link of the new site leads to the original site.** `ir/links.js createLinkResolver({ assetFile })`: a same-site link that is not a recreated page becomes (1) the recreated page when
+  it is only a query-string variant of one, (2) a **downloaded file** (`{ asset }`) when the assets step has it, (3) else a **local notice page** at the same path (`{ file: outPathFor(path) }`, `resolve.notices`):
+  `ir/notice.js noticePage` = a static HTML file (no script, inline CSS, `noindex`, the reason in plain words, "Back to the homepage"), added to `ir.files` by `buildIR` so every stack ships it (HTML: `site/`,
+  apps: `public/`), never listed in sitemap.xml (it is not an IR page). Files on the platform's CDN that were downloaded are local too; other hosts stay external (they are not the old site).
+  `emit/walk.js`: new reference `{ file }` → `refs.fileHref` (HTML: relative; apps: root-relative `rootFileHref`). Assets: links (`<a>`, `<area>`) to files of the site or its platform CDN are collected
+  (`collect.js linkedFileKind`: PDF / Office / archives = kind **document** → `assets/files/`, 25 MB / 60 s; images and video / audio by their kind). Report: `generate.noticePages` (+ `noticePageCount`),
+  `generate.links.{file,notice}`; `liveLinks` is empty for same-site links. Verification checks the notice pages like every page (valid HTML, links). canonical / og:url still use the original origin
+  unless `target_domain` is set (not clickable links; set the target domain). Tests: `recreate-generate.test.js` (resolver table, pipeline: login → notice page, brochure → local PDF, no `<a>` to the old site,
+  notice pages verified), `recreate-assets.test.js` (the linked brochure is downloaded as a document). Not covered by a test yet: notice pages inside a real React / Next.js / MERN build (same path as sitemap.xml).
 - **Recreate: sleep and network outages** (`recreate/interrupts.js`, branch `recreate-retry`, WIP; builds on `audit/interruptions.js`): Recreate's steps are long (inspect up to 7 min), so a step is never run
   again as a whole. (1) **Sleep does not count**: every pause the watcher finds (a 1-second timer ≥ 5 s late) is given back at once: the job deadline, `ctx.jobDeadline` and every running step's limit and
   `stepDeadline` move later by its length (`runStep` uses `extendableTimeout`; when a step timer fires it first lets the watcher look (`tick()`), so the pause is seen before the time is declared up after a

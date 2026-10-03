@@ -263,6 +263,9 @@ export async function generateStage(ctx) {
     breakpoints: ir.breakpoints,
     links: stats.links,
     liveLinks: [...stats.liveLinks].slice(0, 100).map(([url, reason]) => ({ url, reason })),
+    // Same-site links to what is not part of the copy: each opens a local notice page (ir/notice.js), never the live site.
+    noticePages: [...stats.notices].slice(0, 200).map(([url, reason]) => ({ url, reason })),
+    noticePageCount: stats.notices.size,
     droppedImages: stats.droppedImages.length,
     droppedMedia: stats.droppedMedia.length,
     assetFiles: siteAssets.length,

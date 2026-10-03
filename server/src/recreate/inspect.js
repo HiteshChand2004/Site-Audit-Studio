@@ -187,11 +187,11 @@ export async function inspectStage(ctx) {
   const pages = [...captured.entries()].sort((a, b) => a[0] - b[0]).map(([, p]) => p);
 
   if (notCaptured.length) {
-    report.warnings.push(`${notCaptured.length} ${notCaptured.length === 1 ? 'page was' : 'pages were'} not captured within the time limit of the inspect step (${notCaptured.slice(0, 5).join(', ')}${notCaptured.length > 5 ? ', …' : ''}); links to ${notCaptured.length === 1 ? 'it' : 'them'} point to the live site. Lower the page limit or run Recreate again.`);
+    report.warnings.push(`${notCaptured.length} ${notCaptured.length === 1 ? 'page was' : 'pages were'} not captured within the time limit of the inspect step (${notCaptured.slice(0, 5).join(', ')}${notCaptured.length > 5 ? ', …' : ''}); links to ${notCaptured.length === 1 ? 'it' : 'them'} open a notice page in the new site (never the live site). Run Recreate again to try ${notCaptured.length === 1 ? 'it' : 'them'} once more.`);
   }
   ctx.discovery = discovery;
   ctx.pages = pages;
-  // Links to these pages keep pointing at the live site (Phase 4a decision).
+  // Links to these pages open a local notice page (ir/notice.js), never the live site.
   ctx.livePages = [...discovery.beyondLimit, ...failedPages];
 
   report.pages = pages.map((p) => ({
