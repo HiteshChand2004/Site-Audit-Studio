@@ -27,6 +27,7 @@ import { loadLlmsTxt, loadRobots, parseRobots } from './robots.js';
 import { captureScreenshots, VIEWS } from './screenshots.js';
 import { startEgressProxy } from '../security/egressProxy.js';
 import { userPolicy, withNetPolicy } from '../security/netGuard.js';
+import { explainFailure, watchPauses } from './interruptions.js';
 import { freeMemoryMB, parallelism } from './resources.js';
 import { createSharedCache, sharedCacheEnabled } from './sharedCache.js';
 import { loadSitemaps } from './sitemap.js';
@@ -58,6 +59,13 @@ const LOW_MEMORY_MB = 1000;
 // Time kept for the two Lighthouse runs, the most valuable part of an analysis and the last to run: every step before them
 // (including the crawl and the link check, which return what they have) is cut short instead of using it up.
 export const LIGHTHOUSE_RESERVE_MS = 120 * 1000;
+// A step that failed because the computer slept or the network dropped is tried once more when the network is back
+// (audit/interruptions.js). Waiting for the network: at most this long per failure (× SAS_TIMEOUT_SCALE; the homepage fetch
+// waits less, so a site that is really down still fails fast). The time lost to interruptions is given back to the analysis,
+// at most INTERRUPTION_EXTRA_MS in total, so a laptop that sleeps for hours never keeps a job alive for hours.
+const NETWORK_WAIT_MS = 120 * 1000;
+const HOME_NETWORK_WAIT_MS = 30 * 1000;
+const INTERRUPTION_EXTRA_MS = 5 * 60 * 1000;
 // A crashed Lighthouse run is tried once more only when at least this much time is left for it.
 const LIGHTHOUSE_RETRY_MIN_MS = 45 * 1000;
 
@@ -132,12 +140,17 @@ function publicScreenshots(projectId, analysisId, shots) {
   return { analysisId, capturedAt: shots.capturedAt, views };
 }
 
+// Network-level failures of the homepage fetch (not a blocked URL, not a TLS error): the ones an interruption can explain.
+const HOME_NETWORK_ERRORS = new Set(['timeout', 'dns', 'refused', 'error']);
+
 async function fetchHome(url, scale = 1) {
   let home = await fetchPage(url, { timeout: 20000 * scale });
   // A server that is slow to wake up (a cold start, a busy moment) gets one more try before the analysis is given up.
   if (home.error === 'timeout') home = await fetchPage(url, { timeout: 30000 * scale });
   if (home.error === 'blocked') throw new AnalysisError(home.message);
-  if (home.error) throw new AnalysisError(`Could not reach ${url}. ${NETWORK_ERRORS[home.error] ?? 'Network error.'}`);
+  if (home.error) {
+    throw Object.assign(new AnalysisError(`Could not reach ${url}. ${NETWORK_ERRORS[home.error] ?? 'Network error.'}`), { network: HOME_NETWORK_ERRORS.has(home.error) });
+  }
   if (isBotChallenge(home)) {
     throw new AnalysisError(
       'The site answered with a bot-protection challenge (for example Cloudflare). Allowlist this server or pause the challenge for the audit; Site Audit Studio does not bypass bot protection.',
@@ -172,7 +185,11 @@ export function runAnalysis({ netPolicy = userPolicy(), ...opts }) {
 async function analyze({ project, analysisId, maxPages, progress, netPolicy, url = project.url, outDir: dir, skip = [], seedUrls = [], deployOrigin = null }) {
   const timing = analyzeTiming();
   const freeAtStart = freeMemoryMB();
-  const deadline = Date.now() + timing.budgetMs;
+  const baseDeadline = Date.now() + timing.budgetMs;
+  // Moves later (never past the interruption allowance) when time was lost to sleep or a network outage.
+  let deadline = baseDeadline;
+  const maxDeadline = baseDeadline + INTERRUPTION_EXTRA_MS * timing.scale;
+  const pauses = watchPauses();
   const errors = [];
   const skipped = new Set(skip);
   const outDir = dir ?? path.join(projectDir(project.id), 'audit', analysisId);
@@ -184,15 +201,22 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
   // `reserve`: time that must stay for the steps after this one (Lighthouse); this step gets what is left of its own limit.
   async function step(key, fn, fallback = null, { reserve = 0 } = {}) {
     if (skipped.has(key)) return fallback;
-    const def = STEPS.find((s) => s.key === key);
     progress(key, 0);
+    const result = await attempt(key, fn, fallback, reserve);
+    progress(key, 1);
+    return result;
+  }
+
+  // One run of a step. A failure that the computer's sleep or a network outage explains gets one more run once the network
+  // is back (`retried` = what happened before the second run).
+  async function attempt(key, fn, fallback, reserve, retried = null) {
+    const def = STEPS.find((s) => s.key === key);
     const budget = stepBudget({ max: def.max * timing.scale, now: Date.now(), deadline, reserve });
     if (budget < 5000) {
       errors.push({
         step: key,
         message: reserve && deadline - Date.now() >= 5000 ? 'Skipped: the time that is left is kept for the checks after it.' : 'Skipped: the analysis time budget ran out.',
       });
-      progress(key, 1);
       return fallback;
     }
     const controller = new AbortController();
@@ -202,21 +226,61 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
     const ticker = def.expected
       ? setInterval(() => progress(key, Math.min(0.9, (Date.now() - started) / def.expected)), 1000)
       : null;
+    let failure;
     try {
       return await withTimeout(fn(controller.signal, budget), budget + 10000, def.label);
     } catch (err) {
-      errors.push({ step: key, message: err.message });
-      return fallback;
+      failure = err;
     } finally {
       clearTimeout(abortTimer);
       if (ticker) clearInterval(ticker);
-      progress(key, 1);
     }
+    if (!retried) {
+      const explained = await recover(key, failure.message, started, { remaining: deadline - started });
+      if (explained?.retry) {
+        progress(key, 0, `${def.label}: trying again (${causeText(explained)})`);
+        return attempt(key, fn, fallback, reserve, explained);
+      }
+      retried = explained;
+    }
+    errors.push({ step: key, message: retried ? `${failure.message} (${interruptionNote(retried)})` : failure.message });
+    return fallback;
   }
 
-  // 1. Homepage. Failing here fails the whole analysis.
+  // Was a failure caused by sleep or a network outage? Then wait for the network (bounded) and give the lost time back:
+  // the retry gets the time that was left when the failed run started. Steps that failed side by side in the same outage
+  // each set the same deadline, so their lost time is not counted twice.
+  async function recover(key, message, startedAt, { remaining, network, waitMs = NETWORK_WAIT_MS } = {}) {
+    const explained = await explainFailure(message, {
+      url,
+      startedAt,
+      pauses,
+      until: Math.min(maxDeadline, Date.now() + waitMs * timing.scale),
+      network,
+      onWait: (ms) => progress(key, 0, `The network is down; waiting for it to come back (${Math.round(ms / 1000)} s)…`),
+    });
+    if (explained?.retry) deadline = Math.max(deadline, Math.min(maxDeadline, Date.now() + remaining));
+    return explained;
+  }
+
+  // 1. Homepage. Failing here fails the whole analysis (after one more try when sleep or a network outage explains it).
   progress('fetch', 0, `Fetching ${url}`);
-  const home = await fetchHome(url, timing.scale);
+  let home;
+  try {
+    const fetchStarted = Date.now();
+    try {
+      home = await fetchHome(url, timing.scale);
+    } catch (err) {
+      if (!err.network) throw err;
+      const explained = await recover('fetch', err.message, fetchStarted, { remaining: deadline - fetchStarted, network: true, waitMs: HOME_NETWORK_WAIT_MS });
+      if (!explained?.retry) throw err;
+      progress('fetch', 0, `Fetching ${url} again (${causeText(explained)})`);
+      home = await fetchHome(url, timing.scale);
+    }
+  } catch (err) {
+    pauses.stop();
+    throw err;
+  }
   const origin = new URL(home.url).origin;
   progress('fetch', 1);
 
@@ -226,8 +290,19 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
     noteLowMemory(audit.errors, freeAtStart);
     return audit;
   } finally {
+    pauses.stop();
     await proxy.close();
   }
+}
+
+const causeText = ({ cause }) => (cause === 'sleep' ? 'the computer was asleep' : 'the network dropped');
+
+/** What happened before a step's last run, added to its error when it failed anyway. */
+export function interruptionNote(explained) {
+  const { cause, pausedMs = 0, waitedMs = 0, retry } = explained;
+  const what = cause === 'sleep' ? `the computer was asleep for ${Math.round(pausedMs / 1000)} s` : 'the network dropped';
+  if (!retry) return `${what}; the network did not come back in time`;
+  return `${what}${waitedMs ? `, waited ${Math.round(waitedMs / 1000)} s for the network` : ''}; tried again once`;
 }
 
 /** Timeouts on a machine that was short of memory when the analysis started: the report names the likely cause and the remedy. */

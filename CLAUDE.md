@@ -1035,6 +1035,14 @@ environmental, not a regression.
 - **Time limit:** 6 minutes per analysis (5 before the speed and robustness work), of which 2 are kept for Lighthouse: a step before it is cut short
   or skipped rather than using them. A step that would start after the limit is skipped and listed in
   `audit.errors`. One analysis runs at a time; others queue.
+- **Retry after sleep / a network outage** (`audit/interruptions.js`, Analyze only, branch `net-retry`, WIP): a step that fails with a timeout or a network-level error (Chromium `ERR_INTERNET_DISCONNECTED`,
+  `ERR_NETWORK_CHANGED`, `ERR_NAME_NOT_RESOLVED`, socket resets, …) is explained before it is reported: (1) a 1-second timer that fires ≥ 5 s late = the computer slept / the process froze during the step
+  (`watchPauses`); (2) a HEAD request to the site (any HTTP status = reachable); (3) when the site does not answer and nothing else says the network is down, a DNS query to the configured resolver (no OS cache):
+  an answer = this computer's network is up and the site itself hangs → reported as before, no waiting. Sleep or a network outage → wait for the site to answer again (probe every 5 s, ≤ 2 min × `SAS_TIMEOUT_SCALE`;
+  the homepage fetch ≤ 30 s, so a site that is really down still fails fast) and run the step **once more**, with the time that was left when the failed run started (the analysis deadline moves later, at
+  most 5 min × scale in total; parallel steps that failed in the same outage set the same deadline, not the sum). A second failure is reported with what happened ("… (the computer was asleep for 42 s; tried
+  again once)"). A timeout on a working network with no sleep is never retried (a slow site or machine is not helped by a second run). Recreate is not covered yet. Tests: `interruptions.test.js` (failure
+  classes, pause detection, the decision table, waiting, and a real analysis whose homepage refuses connections at first and comes up 1.5 s later).
 - **Keep-awake during jobs** (`jobs/keepAwake.js`, branch `max-parallel`, WIP): found on the user's laptop (Pentium Gold 7505, 8 GB, Modern Standby): runs that ended in timeouts / "Connection to the server
   dropped" lined up with the laptop entering Modern Standby mid-job (network off; one analysis took 31 min) or starting right after waking; four scratch runs on the same machine (normal, memory squeezed to
   180 MB free, the app open next to it) all passed in 81–90 s with 0 errors, so RAM was not the cause. The global lock (`manager.js exclusive()`) now holds a keep-awake request while any job runs or is queued
