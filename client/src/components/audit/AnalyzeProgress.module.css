@@ -147,7 +147,7 @@
   background: var(--grad-brand);
   background-size: 200% 100%;
   animation: var(--k-shimmer) 1.6s linear infinite;
-  box-shadow: 0 0 12px rgba(109, 74, 255, 0.5);
+  box-shadow: 0 0 12px rgba(37, 99, 235, 0.5);
 }
 
 .title {

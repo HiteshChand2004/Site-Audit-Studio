@@ -1046,6 +1046,21 @@ environmental, not a regression.
   nothing sent to the site) records outages, and a step that an outage overlapped is retried even when the network is back. Every decision is one line in the server log
   (`[analyze <id>] <step>: "<error>" — network down N s during the step … → trying again` / `… → not retried`). Recreate is not covered yet. Tests: `interruptions.test.js` (failure
   classes, pause detection, the decision table, waiting, and a real analysis whose homepage refuses connections at first and comes up 1.5 s later).
+### UI redesign (calm light theme, guided steps) — branch `ui-redesign` (worktree `../Website-Audit-ui`), WIP
+Asked by the user: the vibrant look and the crowded two-panel layout were hard to read; redesign with a light theme, organised data, tasteful motion, and
+wording a non-technical person understands. Decisions (user): **guided steps** layout (1 Check the site → 2 Create the copy → 3 Compare → 4 Results & download)
+and **calm blue** (#2563EB on white / soft grey). Steps: U1 foundation → U2 guided layout → U3 Check → U4 Create → U5 Compare → U6 Results → U7 polish; one at a
+time, WIP commit, wait for "next". Everything general (any website).
+- **U1 (WIP)**: `styles/tokens.css` keeps the token names with calm values (neutral greys, one blue accent, status colours with tint + border, neutral shadows,
+  larger type: base 14.5px; `--grad-*` are now flat colours, so older styles render calmly); no page gradients, aurora blobs, glass top bar, gradient logo text,
+  shine sweep, glowing / pulsing chips or moving rails (`AppShell`, `Panel`, `Button`, `Sidebar` CSS); violet rgba shadows in the modules replaced by neutral ones.
+  **`client/src/copy.js`**: the one place for plain-language labels and "what does this mean" texts (ratings Good / Needs work / Poor, the health areas, speed
+  metrics in everyday words, the four steps, friendly names for every server job step, result statuses, terms such as fidelity / notice pages / stack).
+  New shared building blocks in `components/common/`: `Surface.jsx` (Card with icon / title / explanation / tip / actions, Alert, EmptyState), `InfoTip` (the "i"
+  with a plain explanation: hover, keyboard, tap), `Score.jsx` (ScoreRing with the rating in words, StatusIcon, Pill), `Tabs.jsx` (StepTabs with status per step,
+  Segmented), `StepList` (job progress in plain words), `ConfirmDialog` (replaces `window.confirm`; Button variant `dangerSolid`), Button size `lg`.
+  Sidebar: "Add a website", "Your websites", "Search your websites", removal through the app's dialog ("the real website is not affected"), no stack tag.
+
 ### Full-site clone (after the robustness work) — branch `full-site` (worktree `../Website-Audit-par`), WIP
 Asked by the user: clone the whole site as it is (every page, no link back to the old site, hover / animations / buttons the same), no 20-page cap, no timeouts,
 as little waiting as possible. Plan (approved): **A** all pages + limits that follow the work + no live links (A.1, A.2) → **B** measure what differs on

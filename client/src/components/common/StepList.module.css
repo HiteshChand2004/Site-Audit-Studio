@@ -1,0 +1,62 @@
+.list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--sp-3);
+  align-items: start;
+  padding: 7px 0;
+}
+
+/* The line connecting the marks. */
+.item:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: 31px;
+  bottom: -5px;
+  left: 10px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--border);
+}
+
+.item[data-state='done']:not(:last-child)::after {
+  background: var(--ok-border);
+}
+
+.text {
+  display: grid;
+  gap: 2px;
+  padding-top: 1px;
+}
+
+.title {
+  color: var(--muted);
+}
+
+.item[data-state='done'] .title {
+  color: var(--text-2);
+}
+
+.item[data-state='active'] .title {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.item[data-state='failed'] .title {
+  color: var(--bad);
+  font-weight: 650;
+}
+
+.explain {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  animation: var(--k-fade-in) 240ms ease both;
+}

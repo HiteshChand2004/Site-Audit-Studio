@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { PanelLeftClose, PanelLeftOpen, Plus, Search, Trash2 } from 'lucide-react';
 import Button from '../components/common/Button.jsx';
+import ConfirmDialog from '../components/common/ConfirmDialog.jsx';
 import { useProjects } from '../store/useProjects.js';
-import { hostOf, stackById } from '../constants.js';
+import { hostOf } from '../constants.js';
 import styles from './Sidebar.module.css';
 
 const SHORTCUT = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘B' : 'Ctrl+B';
@@ -31,7 +32,7 @@ function Rail({ projects, selectedId, select, onNewProject, onToggle }) {
     <>
       <div className={styles.railTop}>
         <ToggleButton collapsed onToggle={onToggle} />
-        <button type="button" className={`${styles.iconBtn} ${styles.railNew}`} onClick={onNewProject} aria-label="New Project" title="New Project">
+        <button type="button" className={`${styles.iconBtn} ${styles.railNew}`} onClick={onNewProject} aria-label="Add a website" title="Add a website">
           <Plus size={16} aria-hidden="true" />
         </button>
       </div>
@@ -64,6 +65,7 @@ function Rail({ projects, selectedId, select, onNewProject, onToggle }) {
 export default function Sidebar({ onNewProject, collapsed = false, onToggle }) {
   const { projects, loading, selectedId, select, remove } = useProjects();
   const [query, setQuery] = useState('');
+  const [toDelete, setToDelete] = useState(null);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -73,12 +75,25 @@ export default function Sidebar({ onNewProject, collapsed = false, onToggle }) {
 
   const confirmDelete = (e, project) => {
     e.stopPropagation();
-    if (window.confirm(`Delete project "${project.name}"?`)) remove(project.id);
+    setToDelete(project);
   };
 
   // One <aside> in both states, so its width can animate between the rail and the full sidebar.
   return (
-    <aside id="project-sidebar" className={styles.sidebar} data-collapsed={collapsed} aria-label="Projects">
+    <aside id="project-sidebar" className={styles.sidebar} data-collapsed={collapsed} aria-label="Websites">
+      <ConfirmDialog
+        open={Boolean(toDelete)}
+        onClose={() => setToDelete(null)}
+        title="Remove this website?"
+        confirmLabel="Remove"
+        danger
+        onConfirm={() => remove(toDelete.id)}
+      >
+        <p>
+          <strong>{toDelete?.name}</strong> and everything saved for it (checks, copies, screenshots) will be removed from this app. The
+          real website is not affected.
+        </p>
+      </ConfirmDialog>
       {collapsed ? (
         <Rail projects={projects} selectedId={selectedId} select={select} onNewProject={onNewProject} onToggle={onToggle} />
       ) : (
@@ -86,30 +101,30 @@ export default function Sidebar({ onNewProject, collapsed = false, onToggle }) {
           <div className={styles.top}>
             <div className={styles.topRow}>
               <Button variant="primary" icon={Plus} onClick={onNewProject} className={styles.newBtn}>
-                New Project
+                Add a website
               </Button>
               {onToggle && <ToggleButton collapsed={false} onToggle={onToggle} />}
             </div>
             <label className={styles.search}>
               <Search size={14} aria-hidden="true" />
               <input
-                placeholder="Filter websites"
+                placeholder="Search your websites"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                aria-label="Filter websites"
+                aria-label="Search your websites"
               />
             </label>
           </div>
     
           <div className={styles.sectionLabel}>
-            <span>Websites</span>
+            <span>Your websites</span>
             <span className="mono">{projects.length}</span>
           </div>
     
           <nav className={`${styles.list} scroll`}>
             {loading && <p className={styles.hint}>Loading…</p>}
             {!loading && projects.length === 0 && (
-              <p className={styles.hint}>No websites yet. Add your first site with “New Project”.</p>
+              <p className={styles.hint}>No websites yet. Click “Add a website” to start.</p>
             )}
             {!loading && projects.length > 0 && filtered.length === 0 && (
               <p className={styles.hint}>No matches for “{query}”.</p>
@@ -139,13 +154,12 @@ export default function Sidebar({ onNewProject, collapsed = false, onToggle }) {
                     <span className={styles.name}>{p.name}</span>
                     <span className={`${styles.host} mono`}>{host}</span>
                   </span>
-                  <span className={styles.stack}>{stackById(p.stack).short}</span>
                   <button
                     type="button"
                     className={styles.delete}
                     onClick={(e) => confirmDelete(e, p)}
-                    aria-label={`Delete ${p.name}`}
-                    title="Delete"
+                    aria-label={`Remove ${p.name}`}
+                    title="Remove from the app"
                   >
                     <Trash2 size={13} />
                   </button>

@@ -241,12 +241,12 @@
 
 .toggle button[aria-pressed='true'] {
   background: var(--grad-brand);
-  box-shadow: 0 4px 10px rgba(109, 74, 255, 0.35);
+  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.35);
   color: #fff;
 }
 
 .track {
-  stroke: rgba(109, 74, 255, 0.12);
+  stroke: rgba(37, 99, 235, 0.12);
   stroke-width: 3.8;
 }
 

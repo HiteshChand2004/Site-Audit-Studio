@@ -209,7 +209,7 @@
 }
 
 .frame:hover {
-  box-shadow: 0 6px 12px rgba(60, 50, 140, 0.06), 0 18px 44px rgba(80, 60, 200, 0.16);
+  box-shadow: 0 6px 12px rgba(16, 24, 40, 0.06), 0 18px 44px rgba(16, 24, 40, 0.16);
 }
 
 .chrome {

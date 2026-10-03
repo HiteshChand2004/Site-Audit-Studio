@@ -14,7 +14,7 @@
 }
 
 .dialog::backdrop {
-  background: radial-gradient(800px 500px at 50% 30%, rgba(109, 74, 255, 0.28), rgba(23, 23, 58, 0.5));
+  background: radial-gradient(800px 500px at 50% 30%, rgba(37, 99, 235, 0.28), rgba(16, 24, 40, 0.5));
   backdrop-filter: blur(6px);
   animation: var(--k-fade-in) 260ms ease both;
 }

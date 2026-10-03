@@ -94,7 +94,7 @@
   border-radius: inherit;
   background: var(--grad-brand);
   background-size: 200% 100%;
-  box-shadow: 0 0 12px rgba(109, 74, 255, 0.5);
+  box-shadow: 0 0 12px rgba(37, 99, 235, 0.5);
   animation: var(--k-shimmer) 1.4s linear infinite;
   transition: width 500ms var(--ease);
 }

@@ -71,11 +71,6 @@ export default function AppShell() {
 
   return (
     <div className={styles.app}>
-      <div className={styles.aurora} aria-hidden="true">
-        <i />
-        <i />
-        <i />
-      </div>
       <header className={styles.topbar}>
         <div className={styles.brand}>
           <span className={styles.logo} aria-hidden="true">
@@ -84,7 +79,6 @@ export default function AppShell() {
             <i />
           </span>
           <span className={styles.brandName}>Site Audit Studio</span>
-          <span className={`${styles.version} mono`}>v0.3 · phase 3</span>
         </div>
         <div className={styles.topActions}>
           {project && (
