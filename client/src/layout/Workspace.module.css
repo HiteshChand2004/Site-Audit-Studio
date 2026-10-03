@@ -226,3 +226,8 @@
 .compareLabel[data-side='new']::before {
   background: var(--accent);
 }
+
+.plainList {
+  margin: 4px 0;
+  padding-left: 18px;
+}

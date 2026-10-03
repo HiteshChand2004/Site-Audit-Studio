@@ -1070,6 +1070,15 @@ time, WIP commit, wait for "next". Everything general (any website).
   before; empty state that leads to step 2), **ResultsStep** (download card with the technology picker + "Full report (PDF)", how the copy turned out, the before / after checklist
   with "Compare now" when missing). `OldPanel.jsx` / `NewPanel.jsx` (+ css) removed; the top bar has "Full report" (secondary); the empty app says "Start with a website";
   `format.js` (timeAgo, ageDays, plural); preview mode toggle says "Live / Picture". The wording inside the reports is still the old one (U3–U6).
+- **U3 (WIP)**: "Check the site" in plain language. `components/audit/HealthOverview.jsx`: **At a glance** card (a few generated sentences from the scores and findings —
+  speed, "especially on phones" when the phone score is ≥ 15 below the computer one, Google, accessibility count, links that lead nowhere — and "Built with X"), a Phone / Computer
+  switch, **five health cards** (Speed, Found on Google, Easy for everyone, Safe & modern = the Lighthouse categories; Ready for AI answers = share of the AEO checks that pass,
+  a warning counts half) with `ScoreRing` (Good / Needs work / Poor) and an "i" explanation incl. the expert term; **Speed in everyday words** (Main content shows in, Ready to use in,
+  Page freezes for, Page weight; Google's good / poor thresholds). `components/audit/FixList.jsx`: **What needs fixing** (SEO / AEO / site-file checks that fail or warn, weaknesses,
+  accessibility rules, links that lead nowhere as one row with the list; sorted Important / Worth fixing / Minor; each row opens to "Why it matters", "What the check found" and a
+  "How to fix this" link; "Usually fixed in the copy" where the copy step fixes it), **Already fine (n)** folded, **Needs a person** (manual rebuild). `copy.js CHECKS` (plain name,
+  why, area, fix flag per server check title) and `SEVERITY`. The old `AuditReport` stays under a folded **Details for experts**; `MetricsBar` removed. The check opens on phone
+  numbers (most visitors) and a phone-size preview.
 
 ### Full-site clone (after the robustness work) — branch `full-site` (worktree `../Website-Audit-par`), WIP
 Asked by the user: clone the whole site as it is (every page, no link back to the old site, hover / animations / buttons the same), no 20-page cap, no timeouts,

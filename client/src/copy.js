@@ -123,3 +123,46 @@ export const TERMS = {
 
 /** Screen sizes. */
 export const VIEWPORT_NAMES = { desktop: 'Computer', laptop: 'Laptop', tablet: 'Tablet', mobile: 'Phone' };
+
+/**
+ * Every check of the site in plain words: what it is called and why it matters. Keyed by the check's title as the
+ * server writes it (SEO, AI answers, site files) or its weakness title. `fix`: the copy usually solves it by itself
+ * (the Results step shows whether it really did).
+ */
+export const CHECKS = {
+  'Title tag': { title: 'Page titles', why: 'The title appears in Google results and on browser tabs.', area: 'Found on Google', fix: true },
+  'Meta description': { title: 'Page descriptions', why: 'The short text under the title in Google results; a good one gets more clicks.', area: 'Found on Google', fix: true },
+  Headings: { title: 'Main headings', why: 'Each page should have one clear main heading that says what it is about.', area: 'Found on Google', fix: true },
+  'Heading hierarchy': { title: 'Order of headings', why: 'Headings in a logical order help readers, screen readers and AI tools follow the page.', area: 'Ready for AI answers', fix: true },
+  'Image alt text': { title: 'Image descriptions', why: 'Short texts that describe images for blind visitors and for Google Images.', area: 'Easy for everyone', fix: true },
+  'Canonical URL': { title: 'Main address of each page', why: 'Tells Google which address is the real one when a page can be reached in several ways.', area: 'Found on Google', fix: true },
+  'Open Graph tags': { title: 'Link previews', why: 'What appears when someone shares a page on WhatsApp, LinkedIn or Facebook.', area: 'Found on Google', fix: true },
+  Indexability: { title: 'Allowed on Google', why: 'Whether the pages may appear in search results at all.', area: 'Found on Google' },
+  HTTPS: { title: 'Secure connection', why: 'Browsers warn visitors about sites without https, and Google ranks them lower.', area: 'Safe & modern' },
+  Language: { title: 'Page language', why: 'Tells browsers, translators and screen readers which language the page is in.', area: 'Easy for everyone' },
+  'Crawl errors': { title: 'Pages that fail to load', why: 'Visitors and Google hit an error instead of the page.', area: 'Found on Google' },
+  'JSON-LD schema': { title: 'Machine-readable facts', why: 'Structured facts (company, address, articles) that Google and AI assistants read directly.', area: 'Ready for AI answers' },
+  'FAQ schema': { title: 'Questions & answers marked up', why: 'Lets Google and AI assistants show your answers directly.', area: 'Ready for AI answers' },
+  'Structured answers': { title: 'Clear questions and answers', why: 'AI assistants prefer pages that answer a question directly under it.', area: 'Ready for AI answers' },
+  'Content without JavaScript': { title: 'Readable without scripts', why: 'Many AI tools read a page without running its scripts; text that needs them is invisible to those tools.', area: 'Ready for AI answers', fix: true },
+  'llms.txt': { title: 'Guide for AI tools', why: 'A small file (llms.txt) that tells AI assistants what the site offers.', area: 'Ready for AI answers' },
+  'AI crawler access': { title: 'AI tools allowed', why: 'Whether ChatGPT, Perplexity and similar tools may read the site.', area: 'Ready for AI answers' },
+  'sitemap.xml': { title: 'Site map for search engines', why: 'A list of all pages that helps Google find every one of them.', area: 'Found on Google', fix: true },
+  'robots.txt': { title: 'Instructions for search engines', why: 'A small file that tells search engines what they may read.', area: 'Found on Google', fix: true },
+  'Meta tags': { title: 'Basic page information', why: 'Titles, descriptions and other basics every page needs.', area: 'Found on Google', fix: true },
+  // Weaknesses (speed and platform)
+  'Heavy page weight': { title: 'Pages are heavy to download', why: 'Large pages load slowly, especially on phones and mobile data.', area: 'Speed', fix: true },
+  'Main-thread work': { title: 'The browser has a lot of work to show the page', why: 'Heavy scripts make the page freeze or react late to taps and clicks.', area: 'Speed', fix: true },
+  'Render-blocking resources': { title: 'Files that delay the first view', why: 'The page stays blank until these files have loaded.', area: 'Speed' },
+  'Third-party script cost': { title: 'Outside scripts slow the page', why: 'Trackers, chat widgets and similar add-ons cost loading time.', area: 'Speed', fix: true },
+  'Unoptimised images': { title: 'Images could be smaller', why: 'Images in a lighter format or size would load faster.', area: 'Speed' },
+  'Unused CSS': { title: 'Unused styling code', why: 'Visitors download styling the page never uses.', area: 'Speed' },
+  'Unused JavaScript': { title: 'Unused script code', why: 'Visitors download scripts the page never uses.', area: 'Speed', fix: true },
+};
+
+/** How serious a problem is, in words. */
+export const SEVERITY = {
+  high: { label: 'Important', tone: 'bad' },
+  medium: { label: 'Worth fixing', tone: 'warn' },
+  low: { label: 'Minor', tone: 'neutral' },
+};

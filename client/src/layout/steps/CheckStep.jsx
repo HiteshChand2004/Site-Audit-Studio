@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, Clock, Globe, Info, Loader2, Play, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, Clock, FileSearch, Globe, Info, Loader2, Play, ShieldAlert } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import PreviewFrame, { Wireframe } from '../../components/preview/PreviewFrame.jsx';
 import SitePreview, { liveAvailability, ModeToggle } from '../../components/preview/SitePreview.jsx';
-import MetricsBar from '../../components/audit/MetricsBar.jsx';
+import HealthOverview from '../../components/audit/HealthOverview.jsx';
+import FixList from '../../components/audit/FixList.jsx';
+import SectionCard from '../../components/common/SectionCard.jsx';
+import { Alert } from '../../components/common/Surface.jsx';
 import AuditReport from '../../components/audit/AuditReport.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import { isAnalysisActive, useProjects } from '../../store/useProjects.js';
@@ -67,8 +70,8 @@ export default function CheckStep({ project, audit, loading }) {
   const dismissAnalysis = useProjects((s) => s.dismissAnalysis);
   const running = isAnalysisActive(analysis);
 
-  const [viewport, setViewport] = useState(1440);
-  const [device, setDevice] = useState('desktop');
+  const [viewport, setViewport] = useState(375);
+  const [device, setDevice] = useState('mobile');
   const [slow, setSlow] = useState(false);
   const siteUrl = audit?.url ?? project.url;
   const live = liveAvailability(audit, siteUrl);
@@ -136,40 +139,32 @@ export default function CheckStep({ project, audit, loading }) {
           {loading && <p className={styles.dummyNote}>Loading the report…</p>}
           {audit && (
             <>
-              <div className={styles.sectionTitle}>
-                <span>Speed</span>
-                {!audit.isDummy && audit.metrics?.device && <span className={styles.sectionMeta}>Homepage, measured with Google Lighthouse</span>}
-              </div>
-              <MetricsBar metrics={audit.metrics} metricsByDevice={audit.metricsByDevice} scores={audit.scores} device={device} onDeviceChange={changeDevice} />
-
-              <div className={styles.sectionTitle}>
-                <span>Report</span>
-                {!audit.isDummy && (
-                  <span className={styles.sectionMeta}>
-                    Checked {timeAgo(audit.analyzedAt)} · {audit.pagesCrawled} {audit.pagesCrawled === 1 ? 'page' : 'pages'}
-                  </span>
-                )}
-              </div>
               {audit.isDummy && (
                 <p className={styles.dummyNote}>
                   <Info size={13} aria-hidden="true" />
                   Example report — click “Check now” to check the real site.
                 </p>
               )}
-              {audit.errors?.length > 0 && (
-                <div className={styles.stepErrors} role="status">
-                  <AlertTriangle size={13} aria-hidden="true" />
-                  <div>
-                    <strong>Some checks did not finish, so the report is incomplete.</strong>
-                    <ul>
-                      {audit.errors.map((e, i) => (
-                        <li key={i}>{e.message}</li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
+              {!audit.isDummy && (
+                <p className={ws.hint}>
+                  Checked {timeAgo(audit.analyzedAt)} · {audit.pagesCrawled} {audit.pagesCrawled === 1 ? 'page' : 'pages'} read · speed measured on the homepage
+                </p>
               )}
-              <AuditReport audit={audit} />
+              {audit.errors?.length > 0 && (
+                <Alert tone="warn" title="Some checks did not finish, so the report is incomplete">
+                  <ul className={ws.plainList}>
+                    {audit.errors.map((e, i) => (
+                      <li key={i}>{e.message}</li>
+                    ))}
+                  </ul>
+                  Checking again usually completes them.
+                </Alert>
+              )}
+              <HealthOverview audit={audit} device={device} onDeviceChange={changeDevice} />
+              <FixList audit={audit} />
+              <SectionCard icon={FileSearch} title="Details for experts" meta="Technology, every check, links, accessibility rules" defaultOpen={false}>
+                <AuditReport audit={audit} />
+              </SectionCard>
             </>
           )}
         </div>
