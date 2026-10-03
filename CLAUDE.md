@@ -1041,7 +1041,10 @@ environmental, not a regression.
   an answer = this computer's network is up and the site itself hangs → reported as before, no waiting. Sleep or a network outage → wait for the site to answer again (probe every 5 s, ≤ 2 min × `SAS_TIMEOUT_SCALE`;
   the homepage fetch ≤ 30 s, so a site that is really down still fails fast) and run the step **once more**, with the time that was left when the failed run started (the analysis deadline moves later, at
   most 5 min × scale in total; parallel steps that failed in the same outage set the same deadline, not the sum). A second failure is reported with what happened ("… (the computer was asleep for 42 s; tried
-  again once)"). A timeout on a working network with no sleep is never retried (a slow site or machine is not helped by a second run). Recreate is not covered yet. Tests: `interruptions.test.js` (failure
+  again once)"). A timeout on a working network with no sleep is never retried (a slow site or machine is not helped by a second run). **Short outages** (found by the user's Wi-Fi off/on test: Wi-Fi off 20–30 s during render, the goto timeout fired at 67.5 s after the network was back, so the first version
+  saw "network up, no sleep" and did not retry; the browser's connection that died in the outage never recovered): a DNS check of the site's host every 3 s for the whole analysis (`watchNetwork`,
+  nothing sent to the site) records outages, and a step that an outage overlapped is retried even when the network is back. Every decision is one line in the server log
+  (`[analyze <id>] <step>: "<error>" — network down N s during the step … → trying again` / `… → not retried`). Recreate is not covered yet. Tests: `interruptions.test.js` (failure
   classes, pause detection, the decision table, waiting, and a real analysis whose homepage refuses connections at first and comes up 1.5 s later).
 - **Keep-awake during jobs** (`jobs/keepAwake.js`, branch `max-parallel`, WIP): found on the user's laptop (Pentium Gold 7505, 8 GB, Modern Standby): runs that ended in timeouts / "Connection to the server
   dropped" lined up with the laptop entering Modern Standby mid-job (network off; one analysis took 31 min) or starting right after waking; four scratch runs on the same machine (normal, memory squeezed to

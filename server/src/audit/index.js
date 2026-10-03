@@ -27,7 +27,7 @@ import { loadLlmsTxt, loadRobots, parseRobots } from './robots.js';
 import { captureScreenshots, VIEWS } from './screenshots.js';
 import { startEgressProxy } from '../security/egressProxy.js';
 import { userPolicy, withNetPolicy } from '../security/netGuard.js';
-import { explainFailure, watchPauses } from './interruptions.js';
+import { explainFailure, watchNetwork, watchPauses } from './interruptions.js';
 import { freeMemoryMB, parallelism } from './resources.js';
 import { createSharedCache, sharedCacheEnabled } from './sharedCache.js';
 import { loadSitemaps } from './sitemap.js';
@@ -190,6 +190,8 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
   let deadline = baseDeadline;
   const maxDeadline = baseDeadline + INTERRUPTION_EXTRA_MS * timing.scale;
   const pauses = watchPauses();
+  // Short network outages during a step (a DNS check every 3 s; nothing is sent to the site).
+  const outages = watchNetwork(new URL(url).hostname);
   const errors = [];
   const skipped = new Set(skip);
   const outDir = dir ?? path.join(projectDir(project.id), 'audit', analysisId);
@@ -255,10 +257,18 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
       url,
       startedAt,
       pauses,
+      outages,
       until: Math.min(maxDeadline, Date.now() + waitMs * timing.scale),
       network,
       onWait: (ms) => progress(key, 0, `The network is down; waiting for it to come back (${Math.round(ms / 1000)} s)…`),
     });
+    // One line per decision in the server log, so a failed step can be traced to its cause.
+    const first = message.split('\n')[0];
+    console.log(
+      explained
+        ? `[analyze ${analysisId}] ${key}: "${first}" — ${explained.cause === 'sleep' ? `asleep ${Math.round(explained.pausedMs / 1000)} s` : `network down ${Math.round((explained.downMs ?? 0) / 1000)} s`} during the step, waited ${Math.round(explained.waitedMs / 1000)} s → ${explained.retry ? 'trying again' : 'network not back, giving up'}`
+        : `[analyze ${analysisId}] ${key}: "${first}" — network up the whole step and no sleep → not retried`,
+    );
     if (explained?.retry) deadline = Math.max(deadline, Math.min(maxDeadline, Date.now() + remaining));
     return explained;
   }
@@ -279,6 +289,7 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
     }
   } catch (err) {
     pauses.stop();
+    outages.stop();
     throw err;
   }
   const origin = new URL(home.url).origin;
@@ -291,6 +302,7 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
     return audit;
   } finally {
     pauses.stop();
+    outages.stop();
     await proxy.close();
   }
 }

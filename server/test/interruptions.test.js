@@ -4,7 +4,7 @@ import http from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { explainFailure, networkFailure, resolverAnswers, retryableFailure, waitForNetwork, watchPauses } from '../src/audit/interruptions.js';
+import { explainFailure, networkFailure, resolverAnswers, retryableFailure, waitForNetwork, watchNetwork, watchPauses } from '../src/audit/interruptions.js';
 import { interruptionNote, runAnalysis } from '../src/audit/index.js';
 import { createNetPolicy } from '../src/security/netGuard.js';
 
@@ -54,7 +54,7 @@ test('explainFailure: retry after sleep or a network outage, never for a real ti
   assert.equal(dnsAsked, 1);
   assert.ok(Date.now() - started < 500);
   // The computer slept during the step and the network is back: retry at once.
-  assert.deepEqual(await explainFailure('Render timed out after 110s', { ...base, pauses: slept, probe: up }), { retry: true, cause: 'sleep', pausedMs: 42000, waitedMs: 0 });
+  assert.deepEqual(await explainFailure("Render timed out after 110s", { ...base, pauses: slept, probe: up }), { retry: true, cause: "sleep", pausedMs: 42000, downMs: 0, waitedMs: 0 });
   // A network error that is gone now: retry.
   assert.equal((await explainFailure('net::ERR_NETWORK_CHANGED', { ...base, pauses: noPause, probe: up })).retry, true);
   // The network is down (DNS gets no answer): wait until the site answers again, then retry.
@@ -68,6 +68,33 @@ test('explainFailure: retry after sleep or a network outage, never for a real ti
   assert.equal(never.retry, false);
   assert.match(interruptionNote(never), /did not come back/);
   assert.match(interruptionNote({ cause: 'sleep', pausedMs: 42000, waitedMs: 0, retry: true }), /asleep for 42 s; tried again once/);
+});
+
+test('watchNetwork records an outage from the last answered check to the next one', async () => {
+  let up = true;
+  const watch = watchNetwork('example.test', { everyMs: 15, check: async () => up });
+  const start = Date.now();
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(watch.downBetween(start), 0);
+  up = false; // Wi-Fi off
+  await new Promise((r) => setTimeout(r, 90));
+  assert.ok(watch.downBetween(start) > 0, 'down while it lasts');
+  up = true; // Wi-Fi back
+  await new Promise((r) => setTimeout(r, 60));
+  watch.stop();
+  const down = watch.downBetween(start);
+  assert.equal(watch.outages.length, 1);
+  assert.ok(down >= 60 && down < 250, `down ${down}`);
+  assert.equal(watch.downBetween(Date.now()), 0, 'a step that started after the outage was not hit');
+});
+
+test('a step hit by a short outage is retried although the network is back when its timeout fires (the Wi-Fi off/on case)', async () => {
+  const base = { url: 'https://example.test/', startedAt: 0, until: Date.now() + 1000, pauses: { pausedBetween: () => 0 }, probe: async () => true };
+  // The page.goto timeout fired after the network came back: before, this was taken for a real timeout.
+  const r = await explainFailure('page.goto: Timeout 67500ms exceeded.', { ...base, outages: { downBetween: () => 25000 } });
+  assert.deepEqual(r, { retry: true, cause: 'network', pausedMs: 0, downMs: 25000, waitedMs: 0 });
+  // No outage during the step: still a real timeout.
+  assert.equal(await explainFailure('page.goto: Timeout 67500ms exceeded.', { ...base, outages: { downBetween: () => 0 } }), null);
 });
 
 test('waitForNetwork probes until the site answers or the time is up', async () => {
