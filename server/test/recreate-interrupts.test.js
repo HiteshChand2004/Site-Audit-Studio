@@ -8,7 +8,8 @@ import path from 'node:path';
 import { db, projectDir } from '../src/db/index.js';
 import { mergeDownloads } from '../src/recreate/assets/index.js';
 import { capturePage } from '../src/recreate/capture/index.js';
-import { runRecreate, STAGES } from '../src/recreate/index.js';
+import { progressTracker } from '../src/jobs/manager.js';
+import { runRecreate, STAGES, STEPS as RECREATE_STEPS } from '../src/recreate/index.js';
 import { createInterrupts, extendableTimeout, recoverFailure, recoverHit } from '../src/recreate/interrupts.js';
 import { startFixtureServer } from './serve-fixture.js';
 
@@ -138,6 +139,8 @@ test('time the computer spent asleep does not count against the step limit (a fr
     recreateId: randomUUID(),
     progress: () => {},
     budgetMs: 3000,
+    // Real sleep counts from 30 s (shorter freezes are an overloaded machine, not sleep); the test uses a shorter sleep.
+    interruptOptions: { minPauseMs: 5000 },
     stages: {
       ...stubs,
       inspect: async () => {
@@ -169,6 +172,26 @@ test('time given back after an outage extends the job and the running step', asy
     },
   });
   assert.equal(report.interruptions.grantedMs, 1500);
+});
+
+test('a step that waits for the background sweep is shown as that step, so the steps between are never ticked early', async () => {
+  const project = makeProject();
+  const tracker = progressTracker(RECREATE_STEPS);
+  const shown = [];
+  await runRecreate({
+    project,
+    recreateId: randomUUID(),
+    canOverlap: () => false, // no memory for a second browser: generate waits for the whole sweep
+    progress: (step, fraction, message) => shown.push({ ...tracker(step, fraction), message }),
+    stages: { ...stubs, sweep: () => sleep(300) },
+  });
+  const order = RECREATE_STEPS.map((s) => s.key);
+  const waiting = shown.find((s) => /^Waiting for “Capturing more widths”/.test(s.message ?? ''));
+  assert.ok(waiting, 'the wait is announced');
+  assert.equal(waiting.step, 'generate');
+  // The step shown only ever moves forward in the list (no tick then untick).
+  const indexes = shown.map((s) => order.indexOf(s.step));
+  assert.deepEqual(indexes, [...indexes].sort((a, b) => a - b));
 });
 
 test('inspect: a page captured while the network was down is captured once more; the others once', async () => {

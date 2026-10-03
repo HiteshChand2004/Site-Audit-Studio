@@ -13,8 +13,11 @@ import { isIP } from 'node:net';
 import { fetchPage } from './http.js';
 
 const TICK_MS = 1000;
-// A timer this late means the machine (or this process) was not running: sleep, standby, or a long freeze.
-const PAUSE_MIN_MS = 5000;
+// A timer this late means the machine was asleep (sleep, Modern Standby). Measured on the user's 2-core laptop: under a
+// heavy Recreate the process itself freezes for 5–10 s at a time (CPU and memory exhausted; 16 freezes, 142 s in one job),
+// with the network fine and keep-awake on. Those are not sleep: a page captured during one is complete, so they must not
+// make the job repeat work or stretch its limits. Real sleep and standby last minutes.
+export const PAUSE_MIN_MS = 30000;
 const PROBE_TIMEOUT_MS = 8000;
 const PROBE_EVERY_MS = 5000;
 
@@ -65,30 +68,37 @@ export function watchPauses({ tickMs = TICK_MS, minPauseMs = PAUSE_MIN_MS, now =
  * itself). A short outage (Wi-Fi off for 20 s) is usually over by the time a step's timeout fires, but the browser's
  * connection that died in it stays stuck: `downBetween(from, to)` tells the step it was hit. An outage counts from the last
  * check that got an answer to the next one that did.
+ * A single failed check is not an outage (`failsNeeded` in a row are), and a check that took far longer than its own timeout
+ * says nothing (this process froze while it ran: on a machine under heavy load a DNS answer can look missing).
  * @param {string} host
- * @param {{ everyMs?: number, check?: (host: string) => Promise<boolean>, now?: () => number }} [o]
+ * @param {{ everyMs?: number, check?: (host: string) => Promise<boolean>, now?: () => number, failsNeeded?: number, lateMs?: number }} [o]
  */
-export function watchNetwork(host, { everyMs = NETWORK_CHECK_MS, check, now = Date.now, env = process.env } = {}) {
+export function watchNetwork(host, { everyMs = NETWORK_CHECK_MS, check, now = Date.now, env = process.env, failsNeeded = 2, lateMs = 2000 } = {}) {
   const outages = [];
   // SAS_NETWORK_WATCH=0 (the test suite): no DNS queries, never an outage. A test passes its own `check`.
   if (!check && env.SAS_NETWORK_WATCH === '0') return { outages, downBetween: () => 0, stop: () => {} };
-  check ??= (h) => resolverAnswers(h, { timeout: Math.min(2500, everyMs) });
+  const timeout = Math.min(2500, everyMs);
+  check ??= (h) => resolverAnswers(h, { timeout });
   let lastUp = now();
   let down = null;
+  let fails = 0;
   let busy = false;
   const timer = setInterval(async () => {
     if (busy) return;
     busy = true;
     try {
+      const started = now();
       const up = await check(host);
       const t = now();
-      if (!up && !down) {
+      if (!up && t - started > timeout + lateMs) return; // the check itself was frozen: no answer either way
+      if (!up && ++fails >= failsNeeded && !down) {
         down = { from: lastUp, to: null };
         outages.push(down);
       }
       if (up) {
         if (down) down.to = t;
         down = null;
+        fails = 0;
         lastUp = t;
       }
     } finally {

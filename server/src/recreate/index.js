@@ -101,7 +101,7 @@ export function runRecreate({ netPolicy = userPolicy(), ...opts }) {
   return withNetPolicy(netPolicy, () => recreate({ ...opts, netPolicy }));
 }
 
-async function recreate({ project, recreateId, progress, warnings = [], stages = STAGES, budgetMs = recreateBudgetMs(), canOverlap = () => roomForSecondBrowser(), netPolicy }) {
+async function recreate({ project, recreateId, progress, warnings = [], stages = STAGES, budgetMs = recreateBudgetMs(), canOverlap = () => roomForSecondBrowser(), netPolicy, interruptOptions = {} }) {
   const analysis = latestAnalysis(project.id);
   if (!analysis) throw new RecreateError('Run Analyze first: Recreate works from a completed analysis.');
 
@@ -152,6 +152,7 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
   const interrupts = createInterrupts({
     url: ctx.audit.url ?? project.url,
     label: recreateId.slice(0, 8),
+    ...interruptOptions,
     onGrant: (ms) => {
       deadline += ms;
       ctx.jobDeadline = deadline;
@@ -249,7 +250,12 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
       // Background steps this step needs in full are awaited first; all of them when it renders pages itself and the
       // machine has no memory to spare for two browsers.
       for (const [key, task] of [...background]) {
-        if (task.def.join === def.key || (def.browser && !canOverlap())) await join(key);
+        if (task.def.join === def.key || (def.browser && !canOverlap())) {
+          // Shown as this step (not as the background one, which is listed later): the step list must not tick the steps in
+          // between while they have not run yet.
+          progress(def.key, 0, `Waiting for “${task.def.label}” to finish`);
+          await join(key);
+        }
       }
       await start(def);
       for (const next of STEPS.filter((s) => s.background && s.after === def.key)) await start(next);

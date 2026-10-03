@@ -1057,6 +1057,15 @@ environmental, not a regression.
   inspect and sweep read their limits live (they move). `SAS_NETWORK_WATCH=0` turns the DNS watcher off (the test suite does). Tests: `recreate-interrupts.test.js` (extendable timer, allowance, recover
   decisions, merging downloads, a 7 s frozen event loop standing in for sleep does not time out a 3 s job, given-back time extends the running step, a page hit by an outage is captured twice and the others once).
   Not covered: the cross-origin stylesheets read in the asset step and the WordPress REST fetch are not repeated.
+  **First real run (panscience.xyz, worktree server, 2-core laptop, `SAS_MAX_PARALLEL=1`, page limit 20)**: the process froze for 5–10 s at a time under the load (16 "pauses", 142 s; keep-awake on, network fine),
+  so the first threshold (5 s) took them for sleep: the homepage was captured twice and 305 s were given back (job 15.8 min instead of 12). No corruption: the second capture overwrote every file of the first
+  (all written within one minute), errors none, fidelity 75 (/ 78, /ventures 72, /approach 76; panscience was 80 with 6 pages before). Fixed: sleep counts from **30 s** (`PAUSE_MIN_MS`; real sleep / standby lasts
+  minutes), an outage needs **2 failed DNS checks in a row**, and a check that ran far past its timeout (the process froze) counts as no answer either way. The long inspect itself came from the page limit
+  (20 of the site's 21 pages: inspect ran to its 7-minute limit and captured 3–7 pages) and one view at a time (`SAS_MAX_PARALLEL=1`), not from retries.
+- **Step list ticked and unticked steps** (UI, all jobs): `progressTracker` showed the earliest *started* unfinished step; between two steps (and for minutes when a step waits for the background sweep: with
+  little memory or `SAS_MAX_PARALLEL=1`, generate / build wait for it) the sweep, listed later, was shown and the steps before it were ticked, then unticked when they started. Now the step shown is the
+  **first step of the list that has not finished**, started or not, and a step that waits for the sweep says so ("Waiting for “Capturing more widths” to finish"). Every listed step reports progress
+  (the re-audit leaves `screenshots` out of its list). Tests: `recreate-interrupts.test.js` (the step shown only moves forward), `perf.test.js`.
 - **Keep-awake during jobs** (`jobs/keepAwake.js`, branch `max-parallel`, WIP): found on the user's laptop (Pentium Gold 7505, 8 GB, Modern Standby): runs that ended in timeouts / "Connection to the server
   dropped" lined up with the laptop entering Modern Standby mid-job (network off; one analysis took 31 min) or starting right after waking; four scratch runs on the same machine (normal, memory squeezed to
   180 MB free, the app open next to it) all passed in 81–90 s with 0 errors, so RAM was not the cause. The global lock (`manager.js exclusive()`) now holds a keep-awake request while any job runs or is queued

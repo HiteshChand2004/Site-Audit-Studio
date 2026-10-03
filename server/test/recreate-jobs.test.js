@@ -107,7 +107,8 @@ test('a successful run publishes the workspace with a report', async () => {
   const report = await runRecreate({
     project,
     recreateId,
-    progress: (step, f) => f === 0 && steps.push(step),
+    // A step that first waits for the background sweep reports 0 twice (the wait, then the start): counted once.
+    progress: (step, f) => f === 0 && steps.at(-1) !== step && steps.push(step),
     stages: { ...stubStages, generate: async (ctx) => ctx.report.pages.push({ path: '/' }) },
   });
   assert.deepEqual(steps, ['inspect', 'sweep', 'assets', 'generate', 'build', 'preview', 'responsive']);

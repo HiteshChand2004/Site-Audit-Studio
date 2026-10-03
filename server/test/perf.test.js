@@ -128,7 +128,7 @@ test('timeouts on a machine short of memory name the cause in the report', () =>
   assert.equal(other.length, 1);
 });
 
-test('progress of overlapping steps: the bar adds up and the step shown is the earliest one still running', () => {
+test('progress of overlapping steps: the bar adds up and the step shown is the first one not finished', () => {
   const steps = [
     { key: 'a', weight: 10 },
     { key: 'b', weight: 30 },
@@ -136,7 +136,7 @@ test('progress of overlapping steps: the bar adds up and the step shown is the e
     { key: 'd', weight: 40 },
   ];
   const track = progressTracker(steps);
-  assert.deepEqual(track('a', 1), { step: 'a', pct: 10 });
+  assert.deepEqual(track('a', 1), { step: 'b', pct: 10 }); // a is done: the next step is shown
   // b and c run side by side.
   assert.deepEqual(track('b', 0), { step: 'b', pct: 10 });
   assert.deepEqual(track('c', 0.5), { step: 'b', pct: 20 });
@@ -144,7 +144,8 @@ test('progress of overlapping steps: the bar adds up and the step shown is the e
   assert.deepEqual(track('b', 0.5), { step: 'b', pct: 45 });
   // A step never goes back.
   assert.deepEqual(track('b', 0.2), { step: 'b', pct: 45 });
-  assert.deepEqual(track('b', 1), { step: 'b', pct: 60 });
+  // b is done: the next step is shown although it has not started (nothing else runs).
+  assert.deepEqual(track('b', 1), { step: 'd', pct: 60 });
   assert.deepEqual(track('d', 0), { step: 'd', pct: 60 });
   assert.deepEqual(track('d', 1), { step: 'd', pct: 100 });
   // Steps without weights: the caller's own percentage, one step at a time.

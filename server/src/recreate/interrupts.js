@@ -20,9 +20,9 @@ export const RETRYABLE_ASSET_REASONS = new Set(['timeout', 'time-limit', 'dns', 
 
 /**
  * @param {{ url: string, label: string, onGrant: (ms: number) => void, allowanceMs?: number, log?: (line: string) => void,
- *   pauses?: object, outages?: object }} o  pauses / outages: injectable watchers (tests)
+ *   pauses?: object, outages?: object, minPauseMs?: number }} o  pauses / outages: injectable watchers, minPauseMs: shortest sleep (tests)
  */
-export function createInterrupts({ url, label, onGrant, allowanceMs = ALLOWANCE_MS, log = console.log, pauses, outages }) {
+export function createInterrupts({ url, label, onGrant, allowanceMs = ALLOWANCE_MS, log = console.log, pauses, outages, minPauseMs }) {
   let granted = 0;
   const events = [];
   const grant = (ms) => {
@@ -31,7 +31,7 @@ export function createInterrupts({ url, label, onGrant, allowanceMs = ALLOWANCE_
     if (g) onGrant(g);
     return g;
   };
-  const pauseWatch = pauses ?? watchPauses({ onPause: (p) => grant(p.ms) });
+  const pauseWatch = pauses ?? watchPauses({ onPause: (p) => grant(p.ms), ...(minPauseMs && { minPauseMs }) });
   const netWatch = outages ?? watchNetwork(new URL(url).hostname);
   const line = (msg) => log(`[recreate ${label}] ${msg}`);
   return {

@@ -4,7 +4,7 @@ import http from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { explainFailure, networkFailure, resolverAnswers, retryableFailure, waitForNetwork, watchNetwork, watchPauses } from '../src/audit/interruptions.js';
+import { explainFailure, networkFailure, PAUSE_MIN_MS, resolverAnswers, retryableFailure, waitForNetwork, watchNetwork, watchPauses } from '../src/audit/interruptions.js';
 import { interruptionNote, runAnalysis } from '../src/audit/index.js';
 import { createNetPolicy } from '../src/security/netGuard.js';
 
@@ -95,6 +95,33 @@ test('a step hit by a short outage is retried although the network is back when 
   assert.deepEqual(r, { retry: true, cause: 'network', pausedMs: 0, downMs: 25000, waitedMs: 0 });
   // No outage during the step: still a real timeout.
   assert.equal(await explainFailure('page.goto: Timeout 67500ms exceeded.', { ...base, outages: { downBetween: () => 0 } }), null);
+});
+
+test('an overloaded machine is not asleep, and one missed DNS answer is not an outage', async () => {
+  // A 10 s freeze of the process (seen under a heavy Recreate on a 2-core laptop) is below the sleep threshold.
+  assert.equal(PAUSE_MIN_MS, 30000);
+  let offset = 0;
+  const watch = watchPauses({ tickMs: 20, now: () => Date.now() + offset });
+  const t0 = Date.now();
+  offset = 10000;
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(watch.pausedBetween(t0, Date.now() + offset), 0);
+  offset = 50000; // a real sleep
+  await new Promise((r) => setTimeout(r, 60));
+  watch.stop();
+  assert.ok(watch.pausedBetween(t0, Date.now() + offset) >= 39000);
+  // One failed check among answered ones: no outage.
+  let n = 0;
+  const one = watchNetwork('example.test', { everyMs: 15, check: async () => ++n !== 3 });
+  await new Promise((r) => setTimeout(r, 150));
+  one.stop();
+  assert.equal(one.outages.length, 0);
+  // A check that took far longer than its timeout (the process froze while it ran) says nothing.
+  let clock = 0;
+  const frozen = watchNetwork('example.test', { everyMs: 15, now: () => clock, check: async () => ((clock += 10000), false) });
+  await new Promise((r) => setTimeout(r, 100));
+  frozen.stop();
+  assert.equal(frozen.outages.length, 0);
 });
 
 test('waitForNetwork probes until the site answers or the time is up', async () => {
