@@ -217,9 +217,9 @@
   background: linear-gradient(180deg, #ffffff, var(--surface-2));
 }
 
-.dots i:nth-child(1) { background: #ff6b6b; }
-.dots i:nth-child(2) { background: #ffc94d; }
-.dots i:nth-child(3) { background: #3dd68c; }
+.dots i:nth-child(1) { background: var(--border-strong); }
+.dots i:nth-child(2) { background: var(--border-strong); }
+.dots i:nth-child(3) { background: var(--border-strong); }
 
 .dots i {
   width: 10px;

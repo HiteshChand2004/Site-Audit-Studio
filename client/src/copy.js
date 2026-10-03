@@ -166,3 +166,12 @@ export const SEVERITY = {
   medium: { label: 'Worth fixing', tone: 'warn' },
   low: { label: 'Minor', tone: 'neutral' },
 };
+
+/** How closely a page of the copy matches the original (fidelity 0–100; 80 is the bar the app uses). */
+export function matchRating(score) {
+  if (score == null) return { label: 'Not measured', tone: 'neutral' };
+  if (score >= 90) return { label: 'Almost identical', tone: 'ok' };
+  if (score >= 80) return { label: 'Very close', tone: 'ok' };
+  if (score >= 65) return { label: 'Close, worth a look', tone: 'warn' };
+  return { label: 'Clearly different, needs a look', tone: 'bad' };
+}

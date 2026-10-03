@@ -269,3 +269,54 @@
   color: var(--accent-text);
   font-weight: 700;
 }
+
+/* Compare: page picker with previous / next, and how closely the page matches. */
+.pagePicker {
+  display: flex;
+  flex: 1 1 420px;
+  align-items: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pagePicker .field {
+  flex: 1 1 auto;
+}
+
+.match {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-3) var(--sp-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  animation: var(--k-fade-in) 220ms ease both;
+}
+
+.matchLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.matchScore {
+  color: var(--text);
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.matchScore small {
+  color: var(--faint);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.match .hint {
+  margin: 0 0 0 auto;
+}

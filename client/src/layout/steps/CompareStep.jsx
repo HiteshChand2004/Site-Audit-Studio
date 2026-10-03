@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, ArrowUpDown, Columns2, Info, Monitor, RotateCw, Smartphone, Tablet } from 'lucide-react';
+import { AlertTriangle, ArrowUpDown, ChevronLeft, ChevronRight, Columns2, Info, Monitor, RotateCw, Smartphone, Tablet } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/Surface.jsx';
 import { Segmented } from '../../components/common/Tabs.jsx';
 import InfoTip from '../../components/common/InfoTip.jsx';
 import PreviewFrame, { VIEWPORTS } from '../../components/preview/PreviewFrame.jsx';
 import SitePreview, { FullPageFrame, liveAvailability, LiveFrame, ModeToggle } from '../../components/preview/SitePreview.jsx';
-import { TERMS } from '../../copy.js';
+import { Pill } from '../../components/common/Score.jsx';
+import { matchRating, TERMS, VIEWPORT_NAMES } from '../../copy.js';
 import { pageOf, shownStack, outputsOf } from '../../stacks.js';
 import { useProjects } from '../../store/useProjects.js';
 import { useSyncScroll } from '../useSyncScroll.js';
@@ -25,6 +26,35 @@ const SIZES = [
   { value: 768, label: 'Tablet', icon: Tablet },
   { value: 375, label: 'Phone', icon: Smartphone },
 ];
+
+/** How closely the selected page matches the original: one score and one plain verdict, plus the screen size shown. */
+function PageMatch({ fid, view }) {
+  if (!fid || fid.score == null) {
+    return <p className={ws.hint}>How closely this page matches was not measured (the copy ran out of time before that check).</p>;
+  }
+  const r = matchRating(fid.score);
+  const here = fid.views?.[view]?.score;
+  return (
+    <div className={ws.match}>
+      <span className={ws.matchLabel}>
+        {TERMS.fidelity.title}
+        <InfoTip label={TERMS.fidelity.title} align="start">
+          {TERMS.fidelity.explain}
+        </InfoTip>
+      </span>
+      <span className={ws.matchScore}>
+        {fid.score}
+        <small>/100</small>
+      </span>
+      <Pill tone={r.tone}>{r.label}</Pill>
+      {here != null && (
+        <span className={ws.hint}>
+          On this screen size ({VIEWPORT_NAMES[view] ?? view}): {here}/100
+        </span>
+      )}
+    </div>
+  );
+}
 
 /** Step 3: the original and the copy side by side, the same page and screen size on both. */
 export default function CompareStep({ project, audit, onGoCreate }) {
@@ -105,21 +135,37 @@ export default function CompareStep({ project, audit, onGoCreate }) {
   const pageHeight = result?.fidelity?.pages?.find((p) => p.outPath === page)?.views?.[view]?.height?.generated ?? null;
   const fullPage = sync && ready && pageHeight > 0;
   const realOriginal = audit && !audit.isDummy;
+  const fidByPage = new Map((result.fidelity?.pages ?? []).map((p) => [p.outPath, p]));
+  const pageIndex = Math.max(0, pages.indexOf(page));
 
   return (
     <div className={ws.stepBody}>
       <div className={ws.toolbar}>
         {pages.length > 1 && (
-          <label className={ws.field}>
-            <span>Page</span>
-            <select className="mono" value={page} onChange={(e) => setPage(e.target.value)} aria-label="Page to compare">
-              {pages.map((p) => (
-                <option key={p} value={p}>
-                  {pageOf(result, shown, p).path}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className={ws.pagePicker}>
+            <label className={ws.field}>
+              <span>
+                Page {pageIndex + 1} of {pages.length}
+              </span>
+              <select className="mono" value={page} onChange={(e) => setPage(e.target.value)} aria-label="Page to compare">
+                {pages.map((p) => {
+                  const score = fidByPage.get(p)?.score;
+                  return (
+                    <option key={p} value={p}>
+                      {pageOf(result, shown, p).path}
+                      {score != null ? `  ·  ${score}/100` : ''}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+            <Button icon={ChevronLeft} iconOnly disabled={pageIndex <= 0} onClick={() => setPage(pages[pageIndex - 1])}>
+              Previous page
+            </Button>
+            <Button icon={ChevronRight} iconOnly disabled={pageIndex >= pages.length - 1} onClick={() => setPage(pages[pageIndex + 1])}>
+              Next page
+            </Button>
+          </div>
         )}
         <Segmented options={SIZES} value={viewport} onChange={setViewport} label="Screen size" />
         <span className={ws.toolbarEnd}>
@@ -132,6 +178,8 @@ export default function CompareStep({ project, audit, onGoCreate }) {
         </span>
       </div>
 
+      <PageMatch fid={fidByPage.get(page)} view={view} />
+
       <div className={ws.compare}>
         <section aria-label={TERMS.original}>
           <p className={ws.compareLabel} data-side="old">
@@ -143,6 +191,7 @@ export default function CompareStep({ project, audit, onGoCreate }) {
             viewport={viewport}
             onViewportChange={setViewport}
             fit={Boolean(realOriginal)}
+            viewportButtons={false}
             toolbar={realOriginal && <ModeToggle mode={mode} onChange={setMode} live={live} hasScreens={hasScreens} />}
           >
             {realOriginal && (
@@ -161,6 +210,7 @@ export default function CompareStep({ project, audit, onGoCreate }) {
             viewport={viewport}
             onViewportChange={setViewport}
             fit={ready}
+            viewportButtons={false}
           >
             {fullPage ? (
               <FullPageFrame

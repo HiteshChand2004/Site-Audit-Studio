@@ -1087,6 +1087,10 @@ time, WIP commit, wait for "next". Everything general (any website).
   visitors" (gzipped JS), "Match with the original", "Some page addresses changed", "Contact forms"; building / failed / not built states in words. Create step: "What happens when
   you click" (four plain stages) while nothing runs. Settings dialog: "Settings for the copy", "Future address of the new site", technology choices described for non-developers
   (`constants.js STACKS.detail`).
+- **U5 (WIP)**: Compare. One toolbar controls both frames (`PreviewFrame viewportButtons={false}` hides the frames' own size buttons); page picker "Page n of N" whose options show each
+  page's match score, with previous / next buttons; under it **one match line** for the selected page (`copy.js matchRating`: Almost identical ≥ 90, Very close ≥ 80, Close, worth a
+  look ≥ 65, else Clearly different) + the score on the screen size shown, the explanation in the "i". Frame dots are grey. Kept deliberately small after the user asked not to make
+  the platform unnecessarily complicated (a second "looks the same" score and per-size chips were dropped again).
 
 ### Full-site clone (after the robustness work) — branch `full-site` (worktree `../Website-Audit-par`), WIP
 Asked by the user: clone the whole site as it is (every page, no link back to the old site, hover / animations / buttons the same), no 20-page cap, no timeouts,
