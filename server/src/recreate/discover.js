@@ -3,7 +3,8 @@
 // comes first, then pages the homepage links to (in link order, so the main navigation wins), then
 // sitemap pages, then anything else the crawl found. Pages that need a backend (login, cart,
 // checkout, account), URLs with a query string and non-HTML files are skipped with a reason.
-// Eligible pages beyond the page limit are listed so their links can point to the live site.
+// Eligible pages beyond the page limit are listed (their links get a local notice page). In "All pages" mode the crawl
+// reads the whole site (up to the safety cap) and follows links deeper.
 import { crawl } from '../audit/crawler.js';
 import { fetchPage, isBotChallenge, isHtml } from '../audit/http.js';
 import { fetchLlmsTxt, loadRobots } from '../audit/robots.js';
@@ -17,6 +18,9 @@ const BACKEND_PATH =
 const NON_PAGE = /\.(pdf|jpe?g|png|gif|webp|avif|svg|ico|mp4|webm|mov|mp3|wav|zip|rar|7z|gz|dmg|exe|docx?|xlsx?|pptx?|csv|json|xml|txt|css|js|woff2?|ttf)$/i;
 // Enough candidates to fill the limit after skips, without crawling the whole site.
 const crawlBudget = (limit) => Math.min(60, 1 + limit * 3 + 10);
+// "All pages": every page the crawl can reach, up to the safety cap (+ room for skipped URLs), any depth that matters.
+const ALL_PAGES_EXTRA = 50;
+const ALL_PAGES_DEPTH = 8;
 
 /**
  * Output file for a URL path: "/" → index.html, "/about.html" → about.html, "/about" and "/about/" →
@@ -142,12 +146,13 @@ export function selectPages({ pages, homeUrl, sitemapUrls = [], robots, limit })
  * @param {object} o
  * @param {string} o.url       the analyzed homepage URL
  * @param {number} o.limit     pages besides the homepage (projects.recreate_pages)
+ * @param {boolean} [o.all]    "All pages": crawl the whole site (up to `limit`, the safety cap) instead of a sample
  * @param {AbortSignal} [o.signal]
  * @param {(fraction:number, message?:string)=>void} [o.onProgress]
  * @returns {Promise<{ homeUrl: string, origin: string, pages: object[], skipped: object[], beyondLimit: object[],
  *   sitemap: { status: string, count: number }, crawled: number }>}
  */
-export async function discoverPages({ url, limit, signal, onProgress }) {
+export async function discoverPages({ url, limit, all = false, signal, onProgress }) {
   const home = await fetchPage(url, { timeout: 20000, signal });
   if (home.error === 'blocked') throw new RecreateError(home.message);
   if (home.error || home.status >= 400) throw new RecreateError(`Could not load the homepage (${home.error || `HTTP ${home.status}`}).`);
@@ -162,8 +167,8 @@ export async function discoverPages({ url, limit, signal, onProgress }) {
   onProgress?.(0.2, 'Finding pages');
   const result = await crawl({
     home,
-    maxPages: crawlBudget(limit),
-    maxDepth: 2,
+    maxPages: all ? limit + 1 + ALL_PAGES_EXTRA : crawlBudget(limit),
+    maxDepth: all ? ALL_PAGES_DEPTH : 2,
     robots,
     sitemapUrls: sitemap.urls.filter((u) => sameSite(u, origin)),
     signal,

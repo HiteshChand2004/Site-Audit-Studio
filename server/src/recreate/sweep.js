@@ -40,7 +40,7 @@ export async function sweepStage(ctx, local = {}) {
   const pages = ctx.pages ?? [];
   if (!pages.length) return skipped(ctx, 'no-pages');
   // The time the later steps need (assets, generate, build, preview) is never spent here.
-  const deadline = () => Math.min(stepDeadline(), (ctx.jobDeadline ?? Infinity) - LATER_STEPS_RESERVE) - MARGIN;
+  const deadline = () => Math.min(stepDeadline(), (ctx.jobDeadline ?? Infinity) - (ctx.laterReserve ?? LATER_STEPS_RESERVE)) - MARGIN;
   if (deadline() - Date.now() < MIN_TIME) {
     return skipped(ctx, 'time-limit', 'The responsive check was skipped: not enough of the time limit was left. Raise SAS_RECREATE_MINUTES to run it.');
   }

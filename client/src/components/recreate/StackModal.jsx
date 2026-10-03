@@ -7,12 +7,16 @@ import { useProjects } from '../../store/useProjects.js';
 import styles from './StackModal.module.css';
 import form from '../common/Form.module.css';
 
-const MAX_PAGES = 20;
+// Pages besides the homepage when a limit is set; -1 = every page of the site (the default, up to the server's safety cap).
+const MAX_PAGES = 300;
+const ALL_PAGES = -1;
+const isAll = (v) => v == null || v === ALL_PAGES;
 
 export default function StackModal({ open, onClose, project }) {
   const update = useProjects((s) => s.update);
   const [choice, setChoice] = useState(project?.stack ?? 'html');
-  const [pages, setPages] = useState(String(project?.recreate_pages ?? 5));
+  const [all, setAll] = useState(isAll(project?.recreate_pages));
+  const [pages, setPages] = useState(String(isAll(project?.recreate_pages) ? 5 : project.recreate_pages));
   const [domain, setDomain] = useState(project?.target_domain ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -20,15 +24,16 @@ export default function StackModal({ open, onClose, project }) {
   useEffect(() => {
     if (open) {
       setChoice(project?.stack ?? 'html');
-      setPages(String(project?.recreate_pages ?? 5));
+      setAll(isAll(project?.recreate_pages));
+      setPages(String(isAll(project?.recreate_pages) ? 5 : project.recreate_pages));
       setDomain(project?.target_domain ?? '');
       setError(null);
     }
   }, [open, project?.stack, project?.recreate_pages, project?.target_domain]);
 
   const save = async () => {
-    const n = Number(pages);
-    if (!Number.isInteger(n) || n < 0 || n > MAX_PAGES) {
+    const n = all ? ALL_PAGES : Number(pages);
+    if (!all && (!Number.isInteger(n) || n < 0 || n > MAX_PAGES)) {
       setError(`Pages must be a whole number from 0 to ${MAX_PAGES}.`);
       return;
     }
@@ -84,18 +89,30 @@ export default function StackModal({ open, onClose, project }) {
         })}
       </div>
       <div className={styles.settings}>
-        <label className={form.field}>
-          <span className={form.label}>Pages besides the homepage</span>
-          <input
-            className={`${form.input} mono`}
-            type="number"
-            min={0}
-            max={MAX_PAGES}
-            value={pages}
-            onChange={(e) => setPages(e.target.value)}
-          />
-          <span className={styles.hint}>Recreate copies the homepage plus this many pages (0–{MAX_PAGES}).</span>
-        </label>
+        <div className={form.field}>
+          <span className={form.label}>Pages</span>
+          <label className={form.check}>
+            <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} />
+            <span>
+              Every page of the site. Every link in the new site then opens a page of the new site; the time limit grows with
+              the number of pages.
+            </span>
+          </label>
+          {!all && (
+            <>
+              <input
+                className={`${form.input} mono`}
+                type="number"
+                min={0}
+                max={MAX_PAGES}
+                aria-label="Pages besides the homepage"
+                value={pages}
+                onChange={(e) => setPages(e.target.value)}
+              />
+              <span className={styles.hint}>The homepage plus this many pages (0–{MAX_PAGES}).</span>
+            </>
+          )}
+        </div>
         <label className={form.field}>
           <span className={form.label}>
             Target domain<span className={form.optional}>optional</span>

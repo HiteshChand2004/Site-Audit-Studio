@@ -15,7 +15,7 @@ import { startFixtureServer } from './serve-fixture.js';
 
 process.env.SAS_ALLOW_LOCALHOST = '1';
 
-const PORT = 4197;
+const PORT = 4193;
 const origin = `http://localhost:${PORT}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let server;

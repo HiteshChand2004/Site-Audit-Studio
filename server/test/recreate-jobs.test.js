@@ -70,7 +70,11 @@ test('the global lock runs jobs one at a time, in order', async () => {
 test('settings parsers and the budget', () => {
   assert.equal(parseRecreatePages(0), 0);
   assert.equal(parseRecreatePages('5'), 5);
-  assert.equal(parseRecreatePages(21), null);
+  assert.equal(parseRecreatePages(21), 21);
+  assert.equal(parseRecreatePages(301), null);
+  assert.equal(parseRecreatePages('all'), -1);
+  assert.equal(parseRecreatePages(-1), -1);
+  assert.equal(parseRecreatePages(-2), null);
   assert.equal(parseRecreatePages(1.5), null);
   assert.deepEqual(parseTargetDomain('example.com/some/path'), { ok: true, value: 'https://example.com' });
   assert.deepEqual(parseTargetDomain('http://new.example.org'), { ok: true, value: 'http://new.example.org' });

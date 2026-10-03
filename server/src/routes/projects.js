@@ -37,8 +37,8 @@ function badRequest(res, message) {
 const selectAll = db.prepare('SELECT * FROM projects ORDER BY updated_at DESC');
 const selectOne = db.prepare('SELECT * FROM projects WHERE id = ?');
 const insert = db.prepare(`
-  INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at)
-  VALUES (?, ?, ?, ?, 1, ?, ?)
+  INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at)
+  VALUES (?, ?, ?, ?, 1, -1, ?, ?)
 `);
 const remove = db.prepare('DELETE FROM projects WHERE id = ?');
 
@@ -104,7 +104,7 @@ router.patch('/:id', (req, res) => {
   }
   if (recreatePages !== undefined) {
     const parsed = parseRecreatePages(recreatePages);
-    if (parsed === null) return badRequest(res, `Recreate pages must be a whole number from 0 to ${MAX_RECREATE_PAGES}.`);
+    if (parsed === null) return badRequest(res, `Recreate pages must be "all" or a whole number from 0 to ${MAX_RECREATE_PAGES}.`);
     next.recreatePages = parsed;
   }
   if (targetDomain !== undefined) {

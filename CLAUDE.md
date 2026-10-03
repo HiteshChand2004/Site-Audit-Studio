@@ -1046,6 +1046,20 @@ environmental, not a regression.
   nothing sent to the site) records outages, and a step that an outage overlapped is retried even when the network is back. Every decision is one line in the server log
   (`[analyze <id>] <step>: "<error>" — network down N s during the step … → trying again` / `… → not retried`). Recreate is not covered yet. Tests: `interruptions.test.js` (failure
   classes, pause detection, the decision table, waiting, and a real analysis whose homepage refuses connections at first and comes up 1.5 s later).
+### Full-site clone (after the robustness work) — branch `full-site` (worktree `../Website-Audit-par`), WIP
+Asked by the user: clone the whole site as it is (every page, no link back to the old site, hover / animations / buttons the same), no 20-page cap, no timeouts,
+as little waiting as possible. Plan (approved): **A** all pages + limits that follow the work + no live links (A.1, A.2) → **B** measure what differs on
+panscience.xyz (hover, animations, buttons) → **C** fix it generally (incl. small generated scripts for menus / accordions / tabs / carousels) → **D** less waiting.
+Decision: links to pages that cannot be cloned honestly (login, cart, checkout, account, admin) get a **local notice page**; linked files (PDF, …) are downloaded.
+- **A.1 (WIP)**: `projects.recreate_pages = -1` = **All pages** (`inputs.js ALL_PAGES`; the default for new projects; `'all'` accepted by PATCH; a number 0–300 still limits).
+  Discovery in that mode crawls up to the safety cap `SITE_PAGE_CAP` = 300 pages (+50 for skipped URLs) at depth 8 (`discover.js`; a limit keeps the old sample crawl).
+  **Limits follow the work**: every step has `perPage` (inspect 150 s, assets 15 s, generate 45 s, build 45 s, preview 3 s, sweep 120 s, responsive 30 s; measured on the user's
+  2-core laptop with room to spare); the old limits cover `BASE_PAGES` = 6 pages. Once discovery knows the count, inspect calls `ctx.scaleToPages(n)`: the job deadline (unless
+  `SAS_RECREATE_MINUTES` fixes the total), the running capture, `ctx.laterReserve` (time the capture keeps for the later steps) and the limit every later step starts with grow per extra page.
+  **A stalled page** (not the homepage) is abandoned after max(4 min, 3 × the slowest page so far) and, at the end of the step, captured once more in a **fresh browser** (closing the
+  first one ends the stalled capture, so two captures never share a folder); only a page that stalls twice is reported (`reason: 'stalled'`). Gear dialog: an "Every page of the site"
+  checkbox (on by default), a number only when it is off. Tests: `recreate-all-pages.test.js` (setting, discovery of the whole fixture site vs a limit, scaling of job / capture / later
+  steps, fixed total, a stalled page captured again and kept); test fixture ports must be unique per file (files run in parallel: 4192–4199 are taken).
 - **Recreate: sleep and network outages** (`recreate/interrupts.js`, branch `recreate-retry`, WIP; builds on `audit/interruptions.js`): Recreate's steps are long (inspect up to 7 min), so a step is never run
   again as a whole. (1) **Sleep does not count**: every pause the watcher finds (a 1-second timer ≥ 5 s late) is given back at once: the job deadline, `ctx.jobDeadline` and every running step's limit and
   `stepDeadline` move later by its length (`runStep` uses `extendableTimeout`; when a step timer fires it first lets the watcher look (`tick()`), so the pause is seen before the time is declared up after a
