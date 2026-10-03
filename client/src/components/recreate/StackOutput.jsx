@@ -1,131 +1,104 @@
-import { AlertTriangle, Check, Hammer, RotateCw, X } from 'lucide-react';
+import { AlertTriangle, Hammer, Layers, Loader2 } from 'lucide-react';
 import Button from '../common/Button.jsx';
+import { Alert, Card } from '../common/Surface.jsx';
+import { StatusIcon } from '../common/Score.jsx';
 import { stackName } from '../../stacks.js';
-import styles from './RecreateReport.module.css';
-import panel from '../../layout/Panel.module.css';
+import styles from './StackOutput.module.css';
 
 const kb = (bytes) => `${Math.round(bytes / 1024)} KB`;
 const plural = (n, one, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
 
 function Row({ ok, label, detail }) {
-  const Icon = ok ? Check : X;
   return (
-    <li className={styles.check} data-ok={ok}>
-      <span className={styles.mark} aria-label={ok ? 'Passed' : 'Failed'}>
-        <Icon size={11} strokeWidth={3} />
-      </span>
-      <span className={styles.checkLabel}>{label}</span>
-      <span className={styles.checkDetail}>{detail}</span>
+    <li className={styles.row}>
+      <StatusIcon tone={ok ? 'ok' : 'bad'} size={22} label={ok ? 'OK' : 'Problem'} />
+      <span className={styles.label}>{label}</span>
+      <span className={styles.detail}>{detail}</span>
     </li>
   );
 }
 
 /**
- * The project's stack build of a recreate (React + Vite, Next.js, MERN): building / failed / not built, or what was
- * verified about it and what it costs. The plain-HTML build is the reference; an app build is checked against it.
+ * The version of the copy in the project's technology (React + Vite, Next.js, MERN): being built / failed / not built yet,
+ * or what was checked about it, in plain words. It is always checked against the simple (plain HTML) version.
  */
 export default function StackOutput({ stack, state, output, busy, onBuild }) {
   const name = stackName(stack);
 
   if (state === 'building') {
     return (
-      <div className={styles.card} role="status">
-        <div className={styles.head}>
-          <span className={styles.title}>{name} build</span>
-          <span className={styles.meta}>
-            <RotateCw size={12} className={panel.spin} aria-hidden="true" /> Building from the saved recreate… this can take a couple of minutes.
-          </span>
-        </div>
-        <p className={styles.meta}>The plain-HTML build is shown until it is ready.</p>
-      </div>
+      <Card icon={Layers} title={`Building the ${name} version`} sub="Made from the saved copy (the site is not visited again). This takes a couple of minutes; the simple version is shown meanwhile.">
+        <p className={styles.working}>
+          <Loader2 size={16} className={styles.spin} aria-hidden="true" /> Working…
+        </p>
+      </Card>
     );
   }
 
   if (state === 'failed' || state === 'none') {
     return (
-      <div className={styles.card}>
-        <div className={styles.head}>
-          <span className={styles.title}>{name} build</span>
-          <span className={styles.meta}>{state === 'failed' ? 'failed' : 'not built for this recreate'}</span>
-        </div>
+      <Card
+        icon={Layers}
+        title={state === 'failed' ? `The ${name} version could not be built` : `The ${name} version is not built yet`}
+        sub={`The simple version can be previewed and downloaded already. The ${name} version is made from the same copy, without visiting the site again.`}
+      >
         {state === 'failed' && (
-          <ul className={styles.warnings}>
-            <li>
-              <AlertTriangle size={12} aria-hidden="true" />
-              {output?.error ?? 'The build failed.'}
-            </li>
-          </ul>
+          <Alert tone="bad" title="What went wrong">
+            {output?.error ?? 'The build failed.'}
+          </Alert>
         )}
-        <p className={styles.meta}>The plain-HTML build is shown and downloadable; the {name} version is built from the same recreate, without capturing the site again.</p>
-        <div>
-          <Button size="sm" icon={Hammer} onClick={onBuild} disabled={busy}>
-            {state === 'failed' ? `Build ${name} again` : `Build ${name}`}
+        <div className={styles.actions}>
+          <Button icon={Hammer} onClick={onBuild} disabled={busy}>
+            {state === 'failed' ? `Try building ${name} again` : `Build the ${name} version`}
           </Button>
         </div>
-      </div>
+      </Card>
     );
   }
 
   const { build, equivalence, hydration, safety, urlChanges, forms, server } = output;
   const hydrated = hydration ? hydration.checked - hydration.failed : null;
   return (
-    <div className={styles.card}>
-      <section aria-label={`${name} build`}>
-        <div className={styles.head}>
-          <span className={styles.title}>{name} build</span>
-          <span className={styles.meta}>
-            {build?.toolchain} · {plural(output.pages?.length ?? 0, 'page')}
-            {build?.ms != null && ` · built in ${Math.round(build.ms / 1000)} s`}
-          </span>
-        </div>
-        <ul className={styles.checks}>
-          {equivalence && (
-            <Row
-              ok
-              label="Same as the plain-HTML build"
-              detail={`${equivalence.dom.equal}/${equivalence.dom.total} pages identical · pixels ≥ ${Math.round((equivalence.visual.min ?? 1) * 100)}%`}
-            />
-          )}
-          {hydration && (
-            <Row ok={!hydration.failed} label="Hydration" detail={`${hydrated}/${hydration.checked} pages hydrate cleanly`} />
-          )}
-          {safety && <Row ok={safety.safe} label="Safety" detail="only the build’s own scripts, no external reference" />}
-          {build?.js && (
-            <Row
-              ok
-              label="JavaScript shipped"
-              detail={`${kb(build.js.gzipBytes)} gzipped (${kb(build.js.bytes)}) · CSS ${kb(build.css?.bytes ?? 0)} · the plain-HTML build ships none`}
-            />
-          )}
-          {output.fidelity?.score != null && (
-            <Row ok label="Fidelity to the original" detail={`${output.fidelity.score}/100 — same as the plain-HTML build it is identical to`} />
-          )}
-          {urlChanges?.length > 0 && (
-            <Row
-              ok
-              label="URLs changed"
-              detail={`${plural(urlChanges.length, 'page')} moved (${urlChanges.slice(0, 2).map((c) => `${c.from} → ${c.to}`).join(', ')}${urlChanges.length > 2 ? ', …' : ''}); redirects are in the download`}
-            />
-          )}
-          {forms && (
-            <Row
-              ok
-              label="Forms"
-              detail={`${plural(forms.stored.length, 'form')} stored in MongoDB · ${forms.skipped.length} left as they are · server tests ${server?.tests?.pass}/${server?.tests?.tests}`}
-            />
-          )}
-        </ul>
-      </section>
+    <Card
+      icon={Layers}
+      title={`${name} version`}
+      sub={`${plural(output.pages?.length ?? 0, 'page')}${build?.ms != null ? ` · built in ${Math.round(build.ms / 1000)} s` : ''}. Checked against the simple version page by page.`}
+    >
+      <ul className={styles.rows}>
+        {equivalence && (
+          <Row ok label="Looks and works like the simple version" detail={`${equivalence.dom.equal} of ${equivalence.dom.total} pages identical`} />
+        )}
+        {hydration && <Row ok={!hydration.failed} label="Starts without errors in the browser" detail={`${hydrated} of ${hydration.checked} pages`} />}
+        {safety && <Row ok={safety.safe} label="Safe" detail="Only its own scripts; nothing is loaded from other sites" />}
+        {build?.js && (
+          <Row ok label="Extra download for visitors" detail={`${kb(build.js.gzipBytes)} of app code (the simple version needs none)`} />
+        )}
+        {output.fidelity?.score != null && <Row ok label="Match with the original" detail={`${output.fidelity.score} out of 100, the same as the simple version`} />}
+        {urlChanges?.length > 0 && (
+          <Row
+            ok
+            label="Some page addresses changed"
+            detail={`${plural(urlChanges.length, 'page')}, e.g. ${urlChanges.slice(0, 2).map((c) => `${c.from} → ${c.to}`).join(', ')}. Redirects from the old addresses are included.`}
+          />
+        )}
+        {forms && (
+          <Row
+            ok
+            label="Contact forms"
+            detail={`${plural(forms.stored.length, 'form')} save${forms.stored.length === 1 ? 's' : ''} what visitors send in its database · ${forms.skipped.length} left as ${forms.skipped.length === 1 ? 'it is' : 'they are'} · server checks ${server?.tests?.pass}/${server?.tests?.tests} passed`}
+          />
+        )}
+      </ul>
       {output.warnings?.length > 0 && (
         <ul className={styles.warnings}>
           {output.warnings.map((w) => (
             <li key={w}>
-              <AlertTriangle size={12} aria-hidden="true" />
+              <AlertTriangle size={14} aria-hidden="true" />
               {w}
             </li>
           ))}
         </ul>
       )}
-    </div>
+    </Card>
   );
 }

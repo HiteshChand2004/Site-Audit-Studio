@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CheckCircle2, Layers, Loader2, Settings2, Sparkles } from 'lucide-react';
+import { CheckCircle2, Loader2, Settings2, Sparkles } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import { Alert, Card } from '../../components/common/Surface.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
@@ -23,6 +23,14 @@ function blockerOf({ audit, project, analyzing }) {
   if (!RECREATE_STACKS.includes(project.stack)) return 'This technology cannot be used yet. Choose another one in the settings.';
   return null;
 }
+
+// The four stages of making a copy, in plain words (the live progress shows the detailed steps).
+const STAGES = [
+  ['Visit every page', 'Each page is opened at phone, tablet, laptop and computer size; its layout, text, hover effects and animations are recorded.'],
+  ['Save images and files', 'Images, fonts, videos and documents are downloaded, so the copy never depends on the old site.'],
+  ['Build the new pages', 'Clean pages are written and the problems the check found are fixed where that can be done automatically.'],
+  ['Check the result', 'Safety, broken links and how closely every page matches the original; then a private preview opens.'],
+];
 
 const pagesText = (n) => (n == null || n === ALL_PAGES ? 'Every page of the site' : n === 0 ? 'Only the homepage' : `The homepage + ${plural(n, 'page')}`);
 
@@ -91,6 +99,20 @@ export default function CreateStep({ project, audit, onOpenSettings }) {
         )}
       </Card>
 
+      {!running && (
+        <Card title="What happens when you click">
+          <ol className={ws.stages}>
+            {STAGES.map(([title, text], i) => (
+              <li key={title}>
+                <span className={ws.stageNum}>{i + 1}</span>
+                <strong>{title}</strong>
+                <span>{text}</span>
+              </li>
+            ))}
+          </ol>
+        </Card>
+      )}
+
       {staleDays > STALE_DAYS && !running && (
         <Alert tone="warn" title={`The check is ${Math.floor(staleDays)} days old`}>
           If the site has changed since then, check it again (step 1) before making the copy.
@@ -107,11 +129,6 @@ export default function CreateStep({ project, audit, onOpenSettings }) {
 
       {result && project.stack !== 'html' && (
         <>
-          <div className={styles.sectionTitle}>
-            <span>
-              <Layers size={14} aria-hidden="true" /> {stack.name} version
-            </span>
-          </div>
           <StackOutput
             stack={project.stack}
             state={stackState}

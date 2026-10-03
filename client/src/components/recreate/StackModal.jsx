@@ -53,8 +53,8 @@ export default function StackModal({ open, onClose, project }) {
       open={open}
       onClose={onClose}
       width={560}
-      title="Output stack"
-      description="Choose the stack the recreated site is generated in and how Recreate runs. Saved per project."
+      title="Settings for the copy"
+      description="Which technology the new site is built with, which pages are copied, and its future address. Saved for this website."
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
@@ -66,7 +66,7 @@ export default function StackModal({ open, onClose, project }) {
         </>
       }
     >
-      <div className={styles.grid} role="radiogroup" aria-label="Output stack">
+      <div className={styles.grid} role="radiogroup" aria-label="Technology of the new site">
         {STACKS.map((stack) => {
           const selected = choice === stack.id;
           return (
@@ -115,7 +115,7 @@ export default function StackModal({ open, onClose, project }) {
         </div>
         <label className={form.field}>
           <span className={form.label}>
-            Target domain<span className={form.optional}>optional</span>
+            Future address of the new site<span className={form.optional}>optional</span>
           </span>
           <input
             className={`${form.input} mono`}
@@ -123,7 +123,7 @@ export default function StackModal({ open, onClose, project }) {
             value={domain}
             onChange={(e) => setDomain(e.target.value)}
           />
-          <span className={styles.hint}>Used for canonical, sitemap.xml and Open Graph URLs. Empty = the original domain.</span>
+          <span className={styles.hint}>Where the new site will live. Search engines and link previews are told this address. Leave empty to keep the original address.</span>
         </label>
       </div>
       {error && <p className={styles.error}>{error}</p>}

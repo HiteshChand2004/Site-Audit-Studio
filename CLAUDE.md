@@ -1079,6 +1079,14 @@ time, WIP commit, wait for "next". Everything general (any website).
   "How to fix this" link; "Usually fixed in the copy" where the copy step fixes it), **Already fine (n)** folded, **Needs a person** (manual rebuild). `copy.js CHECKS` (plain name,
   why, area, fix flag per server check title) and `SEVERITY`. The old `AuditReport` stays under a folded **Details for experts**; `MetricsBar` removed. The check opens on phone
   numbers (most visitors) and a phone-size preview.
+- **U4 (WIP)**: "Create the copy" and every job's progress in plain words. `AnalyzeProgress` (same name, used by the check, the copy and the comparison) = a titled box
+  ("Checking the site" / "Creating the copy" / "Comparing the copy with the original"), percentage + **time so far** (from the job's `startedAt`), a bar with a soft sheen, a
+  "waiting" explanation when queued (one job at a time), a calm note when the event stream reconnects ("the work goes on"), and a `StepList` with the friendly step names of
+  `copy.js JOB_STEPS` and, under the current step, the server's live message or the step's explanation; a failure is an Alert ("Nothing was lost… start it again").
+  `StackOutput` rewritten as a Card with status marks: "Looks and works like the simple version", "Starts without errors in the browser" (hydration), "Safe", "Extra download for
+  visitors" (gzipped JS), "Match with the original", "Some page addresses changed", "Contact forms"; building / failed / not built states in words. Create step: "What happens when
+  you click" (four plain stages) while nothing runs. Settings dialog: "Settings for the copy", "Future address of the new site", technology choices described for non-developers
+  (`constants.js STACKS.detail`).
 
 ### Full-site clone (after the robustness work) — branch `full-site` (worktree `../Website-Audit-par`), WIP
 Asked by the user: clone the whole site as it is (every page, no link back to the old site, hover / animations / buttons the same), no 20-page cap, no timeouts,
