@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Download, FileText, ListChecks, Loader2, RotateCw, Trophy } from 'lucide-react';
+import { Download, FileText, ListChecks, Loader2, RotateCw, Ruler, Trophy } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import { Alert, Card, EmptyState } from '../../components/common/Surface.jsx';
-import FixChecklist from '../../components/recreate/FixChecklist.jsx';
 import FixReport from '../../components/recreate/FixReport.jsx';
 import RecreateReport from '../../components/recreate/RecreateReport.jsx';
+import Outcome from '../../components/recreate/Outcome.jsx';
+import SectionCard from '../../components/common/SectionCard.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import { STACKS, stackById } from '../../constants.js';
 import { api } from '../../api/client.js';
@@ -79,8 +80,29 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport }
     }
   }
 
+  const comparison = audit && !audit.isDummy && audit.recreate && !audit.recreate.isDummy ? audit.recreate : null;
+  const canCompare = audit?.recreate?.recreateId && !isJobActive(reauditJob);
+
   return (
     <div className={ws.stepBody}>
+      {reauditJob && reauditJob.status !== 'done' && <AnalyzeProgress analysis={reauditJob} kind="reaudit" onDismiss={() => dismissJob('reaudit', project.id)} />}
+
+      <Outcome result={result} comparison={comparison} />
+
+      {!comparison && canCompare && (
+        <Alert
+          tone="info"
+          title="The copy has not been compared with the original yet"
+          action={
+            <Button variant="primary" size="sm" icon={RotateCw} disabled={busy} onClick={() => startReaudit(project.id)}>
+              Compare now
+            </Button>
+          }
+        >
+          {audit.recreate.lastError ? `The last comparison failed: ${audit.recreate.lastError}` : 'Runs the same check on the copy and shows what got better. Takes a few minutes.'}
+        </Alert>
+      )}
+
       <Card
         icon={Download}
         title="Download the new site"
@@ -121,46 +143,15 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport }
         )}
       </Card>
 
-      {(result.fidelity || result.verify) && (
-        <>
-          <div className={styles.sectionTitle}>
-            <span>How the copy turned out</span>
-          </div>
-          <RecreateReport result={result} projectId={project.id} />
-        </>
+      {comparison && (
+        <SectionCard icon={ListChecks} title="Every check, before and after" meta="For a closer look" defaultOpen={false}>
+          <FixReport data={comparison} busy={busy} onReaudit={() => startReaudit(project.id)} />
+        </SectionCard>
       )}
-
-      {audit && (
-        <>
-          <div className={styles.sectionTitle}>
-            <span>{audit.recreate.isDummy ? 'What gets fixed' : 'Original vs copy, check by check'}</span>
-          </div>
-          {reauditJob && reauditJob.status !== 'done' && <AnalyzeProgress analysis={reauditJob} kind="reaudit" onDismiss={() => dismissJob('reaudit', project.id)} />}
-          {audit.recreate.isDummy ? (
-            <>
-              {audit.recreate.recreateId && !isJobActive(reauditJob) && (
-                <Alert
-                  tone="info"
-                  title="The copy has not been compared with the original yet"
-                  action={
-                    <Button variant="primary" size="sm" icon={RotateCw} disabled={busy} onClick={() => startReaudit(project.id)}>
-                      Compare now
-                    </Button>
-                  }
-                >
-                  {audit.recreate.lastError ? `The last comparison failed: ${audit.recreate.lastError}` : 'Runs the same check on the copy and lists what got better.'}
-                </Alert>
-              )}
-              <p className={styles.dummyNote}>
-                <ListChecks size={13} aria-hidden="true" />
-                Example list — the real one appears once the copy has been compared with the original.
-              </p>
-              <FixChecklist items={audit.recreate.checklist} />
-            </>
-          ) : (
-            <FixReport data={audit.recreate} busy={busy} onReaudit={() => startReaudit(project.id)} />
-          )}
-        </>
+      {(result.fidelity || result.verify) && (
+        <SectionCard icon={Ruler} title="Match per page and other measurements" meta="For a closer look" defaultOpen={false}>
+          <RecreateReport result={result} projectId={project.id} />
+        </SectionCard>
       )}
     </div>
   );

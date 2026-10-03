@@ -1091,6 +1091,12 @@ time, WIP commit, wait for "next". Everything general (any website).
   page's match score, with previous / next buttons; under it **one match line** for the selected page (`copy.js matchRating`: Almost identical ≥ 90, Very close ≥ 80, Close, worth a
   look ≥ 65, else Clearly different) + the score on the screen size shown, the explanation in the "i". Frame dots are grey. Kept deliberately small after the user asked not to make
   the platform unnecessarily complicated (a second "looks the same" score and per-size chips were dropped again).
+- **U6 (WIP, last step; U7 "polish" folded into it to keep things small)**: Results. `components/recreate/Outcome.jsx` **How the copy turned out**: one generated sentence (pages,
+  how closely it matches, how many things got better / worse / still need work), four counts with an "i" each (Better than the original = fixed + improved, Still needs work, Got
+  worse, Needs a person), the overall match with its verdict, and Speed / Found on Google / Easy for everyone **on phones** before → after with Better / Worse / Same; "Still needs
+  work" lists up to 6 items (got worse first; detail on one line). Then "Compare now" when no comparison exists, the **download** card, and two folded sections: "Every check, before
+  and after" (`FixReport`) and "Match per page and other measurements" (`RecreateReport`). The made-up sample checklist (`FixChecklist`) was removed. Checked in a browser (Results,
+  Create; no page errors).
 
 ### Full-site clone (after the robustness work) — branch `full-site` (worktree `../Website-Audit-par`), WIP
 Asked by the user: clone the whole site as it is (every page, no link back to the old site, hover / animations / buttons the same), no 20-page cap, no timeouts,
