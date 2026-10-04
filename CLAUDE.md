@@ -1110,6 +1110,11 @@ time, WIP commit, wait for "next". Everything general (any website).
   ("Measured on a computer"); older checks with only phone numbers still display them. Tests updated (desktop only), the four background-sweep tests are `skip`ped with the reason "parked".
   **To bring the other sizes back**: list the views in `ENABLED_VIEWS`, restore the two steps in `recreate/index.js`, the views in `audit/screenshots.js`, the `lighthouse-mobile` step in
   `audit/index.js`, the client toggles (git history of this change) and un-skip the sweep tests.
+  **Measured on panscience.xyz** (6 pages, same machine and day, through the API on scratch data dirs, one run each; "before" = `acc4b05`, four views + sweep): Analyze 59 → 69 s
+  (no gain: run-to-run noise around a minute), **Recreate 711 → 178 s** (inspect 161 → 148, generate 157 → 11, build 88 → 16; sweep 213 s + responsive 89 s gone; "before" used almost
+  the whole 12-minute budget and its sweep skipped 2 pages), **re-audit 196 → 141 s**; whole chain ~16 → ~6.5 min. Desktop quality unchanged: fidelity 80 → 81, visual difference
+  79 → 79, 6 / 6 pages, safety passed, hover 24 / 24 → 24 / 25. Cost: on a tablet or phone the copy shows the desktop layout. The first "before" run's server exited silently
+  ~5 min into its Recreate (no error logged; not reproduced on the second run).
 
 ### Full-site clone (after the robustness work) — branch `full-site` (worktree `../Website-Audit-par`), WIP
 Asked by the user: clone the whole site as it is (every page, no link back to the old site, hover / animations / buttons the same), no 20-page cap, no timeouts,
