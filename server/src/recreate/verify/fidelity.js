@@ -89,7 +89,7 @@ export async function measureFidelity(ctx, { root, progress = ctx.progress } = {
   const total = site.pages.reduce((n, t) => n + t.views.length, 0);
   progress(0, 'Comparing with the original');
 
-  const rendered = await measureSite(renderer, ir, site, {
+  const { started, failed } = await measureSite(renderer, ir, site, {
     screenshot: true,
     deadline: (ctx.stepDeadline ?? Infinity) - DEADLINE_MARGIN,
     onView: async (tree, view, result) => {
@@ -124,16 +124,26 @@ export async function measureFidelity(ctx, { root, progress = ctx.progress } = {
     const diffs = Object.values(views).map((v) => v.diff?.score).filter((s) => s != null);
     return { path: t.info.path, outPath: t.info.outPath, score: mean(Object.values(views).map((v) => v.score)), ...(diffs.length && { diff: { score: mean(diffs) } }), views };
   });
-  const unscored = pages.slice(rendered).map((p) => p.path);
-  if (unscored.length) {
-    ctx.report.warnings.push(`Fidelity was not measured for ${unscored.length} ${unscored.length === 1 ? 'page' : 'pages'} (time limit of the build step): ${unscored.slice(0, 5).join(', ')}${unscored.length > 5 ? ', …' : ''}.`);
+  const late = pages.slice(started).map((p) => p.path);
+  const list = (paths) => `${paths.slice(0, 5).join(', ')}${paths.length > 5 ? ', …' : ''}`;
+  const pagesWord = (n) => (n === 1 ? 'page' : 'pages');
+  if (late.length) {
+    ctx.report.warnings.push(`Fidelity was not measured for ${late.length} ${pagesWord(late.length)} (time limit of the build step): ${list(late)}.`);
   }
+  const broken = failed.map((f) => f.path);
+  if (broken.length) {
+    ctx.report.warnings.push(`Fidelity was not measured for ${broken.length} ${pagesWord(broken.length)} (the browser could not render ${broken.length === 1 ? 'it' : 'them'}, even in a new browser): ${list(broken)}.`);
+  }
+  const unscored = [...late, ...broken];
   const fidelity = {
     method: 'Rough, structure-level: element boxes (sizes and positions) and a scaled-down full-page screenshot comparison per view, rendered from the production build.',
     weights: SCORE_WEIGHTS,
     score: mean(pages.map((p) => p.score).filter((s) => s != null)),
     pages,
     unscored,
+    ...(failed.length && { failed }),
+    // Times the local browser crashed and was replaced during the fit pass and this check (pages were rendered again).
+    ...(renderer.recoveries && { browserRestarts: renderer.recoveries }),
     diff: {
       method: 'Perceptual (SSIM-style) comparison of the full-page screenshots: luma structure and mean colour per block at two scales; rows only one page has count as different.',
       scales: SCALE_WEIGHTS,

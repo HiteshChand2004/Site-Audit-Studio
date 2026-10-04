@@ -1115,6 +1115,13 @@ time, WIP commit, wait for "next". Everything general (any website).
   the whole 12-minute budget and its sweep skipped 2 pages), **re-audit 196 → 141 s**; whole chain ~16 → ~6.5 min. Desktop quality unchanged: fidelity 80 → 81, visual difference
   79 → 79, 6 / 6 pages, safety passed, hover 24 / 24 → 24 / 25. Cost: on a tablet or phone the copy shows the desktop layout. The first "before" run's server exited silently
   ~5 min into its Recreate (no error logged; not reproduced on the second run).
+- **A crashed local browser no longer fails a Recreate (WIP)**: found by the first all-pages run of panscience.xyz (99 pages, 8 GB machine, ~1.3 GB free): capture (~29 min) and assets
+  finished, then Chromium crashed in the fit pass (`browserContext.newPage: Target crashed`) and the whole job, 30 minutes of work, was discarded. `verify/layout.js`: `isBrowserCrash(err)`;
+  `openRenderer` can `recover(generation)` (a new Chromium with the same contexts, updated in place; renders that saw the same crash share one relaunch; `renderer.recoveries`);
+  `renderPage` and the equivalence `snapshot` go through `withBrowserRetry` (once more in a new browser). `generate.js measureSite` returns `{ started, failed }`: a page that still cannot
+  be rendered is listed and the other pages go on (only "no page rendered at all" throws); the fit pass keeps that page's layout as generated (`report.generate.fit.failed` + warning), fidelity
+  lists it (`fidelity.failed`, warning, counted in `unscored`) and records `fidelity.browserRestarts`. Equivalence never skips a page (it must prove every page). Tests: `recreate-crash.test.js`
+  (crash vs slow page, relaunch after a closed browser, one relaunch for two renders, a page that never loads is listed while the others are measured, a crash mid-site, all pages failing throws).
 
 ### Full-site clone (after the robustness work) — branch `full-site` (worktree `../Website-Audit-par`), WIP
 Asked by the user: clone the whole site as it is (every page, no link back to the old site, hover / animations / buttons the same), no 20-page cap, no timeouts,
