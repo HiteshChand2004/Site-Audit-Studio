@@ -1122,6 +1122,10 @@ time, WIP commit, wait for "next". Everything general (any website).
   be rendered is listed and the other pages go on (only "no page rendered at all" throws); the fit pass keeps that page's layout as generated (`report.generate.fit.failed` + warning), fidelity
   lists it (`fidelity.failed`, warning, counted in `unscored`) and records `fidelity.browserRestarts`. Equivalence never skips a page (it must prove every page). Tests: `recreate-crash.test.js`
   (crash vs slow page, relaunch after a closed browser, one relaunch for two renders, a page that never loads is listed while the others are measured, a crash mid-site, all pages failing throws).
+- **www. and bare host were two pages (WIP)**: the same all-pages run captured `about` and `about-2`, `index` and `index-2`, … : panscience.xyz links both `panscience.xyz/x` and `www.panscience.xyz/x`;
+  `sameSite` treats them as one site but the crawler and `selectPages` deduplicated with `urlKey` (full host), so every page was crawled, captured and built twice (99 "pages" for ~57; twice the
+  time and memory: the run ran the 8 GB machine down to ~230 MB free and the server process ended). `audit/util.js pageKey(url)` = `urlKey` without the scheme and with `siteHost` (no `www.`);
+  used by `audit/crawler.js` (Analyze too: no double-counted pages) and `recreate/discover.js`. `urlKey` itself is unchanged (asset dedupe). Test in `recreate-capture.test.js`.
 
 ### Full-site clone (after the robustness work) — branch `full-site` (worktree `../Website-Audit-par`), WIP
 Asked by the user: clone the whole site as it is (every page, no link back to the old site, hover / animations / buttons the same), no 20-page cap, no timeouts,

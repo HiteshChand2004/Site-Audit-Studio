@@ -9,7 +9,7 @@ import { crawl } from '../audit/crawler.js';
 import { fetchPage, isBotChallenge, isHtml } from '../audit/http.js';
 import { fetchLlmsTxt, loadRobots } from '../audit/robots.js';
 import { loadSitemaps } from '../audit/sitemap.js';
-import { sameSite, urlKey } from '../audit/util.js';
+import { pageKey, sameSite } from '../audit/util.js';
 import { RecreateError } from './errors.js';
 
 // Paths that only work with a real backend; they are reported under "Manual rebuild needed".
@@ -74,18 +74,18 @@ export function selectPages({ pages, homeUrl, sitemapUrls = [], robots, limit })
   const origin = new URL(homeUrl).origin;
   const byKey = new Map();
   for (const p of pages) {
-    byKey.set(urlKey(p.url), p);
-    if (p.requestedUrl) byKey.set(urlKey(p.requestedUrl), p);
+    byKey.set(pageKey(p.url), p);
+    if (p.requestedUrl) byKey.set(pageKey(p.requestedUrl), p);
   }
   const home = pages[0];
 
   // Candidate order: homepage links, sitemap, rest of the crawl. Each URL keeps its first source.
   const order = [];
-  const seen = new Set([urlKey(home.url)]);
+  const seen = new Set([pageKey(home.url)]);
   const add = (url, source) => {
     let key;
     try {
-      key = urlKey(url);
+      key = pageKey(url);
     } catch {
       return;
     }
@@ -117,7 +117,7 @@ export function selectPages({ pages, homeUrl, sitemapUrls = [], robots, limit })
       continue;
     }
     // A redirect can land on a page that is already selected.
-    if (selected.some((s) => urlKey(s.page.url) === urlKey(page.url))) continue;
+    if (selected.some((s) => pageKey(s.page.url) === pageKey(page.url))) continue;
     if (selected.length <= limit) selected.push({ page, source: c.source });
     else beyondLimit.push({ url: page.url, source: c.source });
   }

@@ -10,6 +10,7 @@ import { discoverPages, outPathFor, selectPages, skipReason, slugFor } from '../
 import { runRecreate, STAGES } from '../src/recreate/index.js';
 import { recreateDir } from '../src/recreate/workspace.js';
 import { userPolicy, withNetPolicy } from '../src/security/netGuard.js';
+import { pageKey } from '../src/audit/util.js';
 import { startFixtureServer } from './serve-fixture.js';
 
 // The fixture runs on localhost, which the SSRF guard blocks unless this dev flag is set.
@@ -72,6 +73,23 @@ test('selection: homepage links first, then sitemap, limit respected, duplicates
   assert.deepEqual(result.pages.map((p) => [p.path, p.source]), [['/', 'home'], ['/b', 'home-link'], ['/a', 'home-link']]);
   assert.deepEqual(result.beyondLimit.map((p) => new URL(p.url).pathname), ['/c', '/d']);
   assert.deepEqual(result.skipped.map((s) => [new URL(s.url).pathname, s.reason]), [['/gone', 'error']]);
+});
+
+test('selection: www. and bare host, http and https, trailing slash are one page (found on a site that links both forms)', () => {
+  assert.equal(pageKey('https://www.example.com/about/'), pageKey('http://example.com/about'));
+  assert.equal(pageKey('https://WWW.Example.com/#top'), pageKey('https://example.com/'));
+  assert.notEqual(pageKey('https://example.com/about'), pageKey('https://example.com/about?x=1'));
+  assert.notEqual(pageKey('https://example.com/about'), pageKey('https://blog.example.com/about'));
+  const page = (url, links = []) => ({ url, status: 200, depth: 1, facts: { title: url, links: links.map((href) => ({ href, internal: true })) } });
+  const pages = [
+    page('https://example.com/', ['https://www.example.com/', 'https://www.example.com/about', 'https://example.com/about/', 'https://example.com/contact']),
+    page('https://example.com/about'),
+    page('https://www.example.com/about'),
+    page('https://www.example.com/contact'),
+  ];
+  const result = selectPages({ pages, homeUrl: 'https://example.com/', sitemapUrls: ['https://www.example.com/contact', 'http://example.com/team'], robots: { isAllowed: () => true }, limit: 300 });
+  assert.deepEqual(result.pages.map((p) => p.outPath), ['index.html', 'about/index.html', 'contact/index.html']);
+  assert.deepEqual(result.beyondLimit.map((p) => p.url), ['http://example.com/team']);
 });
 
 test('discovery on the fixture: nav pages first, skips with reasons, the rest link to the live site', async () => {
