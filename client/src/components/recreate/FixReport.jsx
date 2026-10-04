@@ -48,8 +48,9 @@ function scoreTone(score) {
 }
 
 function ScoreStrip({ scores, metrics, stackLabel = null }) {
-  const [device, setDevice] = useState('mobile');
   if (!scores?.before && !scores?.after) return null;
+  // Desktop only for now: the computer scores (an older comparison may only have phone scores).
+  const device = scores.after?.desktop || scores.before?.desktop ? 'desktop' : 'mobile';
   const before = scores.before?.[device];
   const after = scores.after?.[device];
   const mBefore = metrics?.before?.[device];
@@ -57,14 +58,7 @@ function ScoreStrip({ scores, metrics, stackLabel = null }) {
   return (
     <section className={styles.strip} aria-label="Lighthouse scores before and after">
       <div className={styles.stripHead}>
-        <span className={styles.stripTitle}>Lighthouse · homepage</span>
-        <div className={styles.toggle} role="group" aria-label="Device">
-          {['mobile', 'desktop'].map((d) => (
-            <button key={d} type="button" aria-pressed={device === d} onClick={() => setDevice(d)}>
-              {d === 'mobile' ? 'Mobile' : 'Desktop'}
-            </button>
-          ))}
-        </div>
+        <span className={styles.stripTitle}>Lighthouse · homepage · {device === 'desktop' ? 'computer' : 'phone'}</span>
       </div>
       <div className={styles.scores}>
         {SCORES.map(([key, label]) => {

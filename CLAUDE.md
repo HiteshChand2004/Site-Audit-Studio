@@ -1097,6 +1097,19 @@ time, WIP commit, wait for "next". Everything general (any website).
   work" lists up to 6 items (got worse first; detail on one line). Then "Compare now" when no comparison exists, the **download** card, and two folded sections: "Every check, before
   and after" (`FixReport`) and "Match per page and other measurements" (`RecreateReport`). The made-up sample checklist (`FixChecklist`) was removed. Checked in a browser (Results,
   Create; no page errors).
+- **Desktop only for now (WIP, asked by the user: "remove tablet and mobile from frontend and backend, keep only desktop")**: one view everywhere, the rest **parked, not deleted**.
+  Server: `recreate/views.js` `ENABLED_VIEWS = ['desktop']` (`RECREATE_VIEWS`, `VIEW_IDS`, `MEDIA_VIEWS` follow it; `KNOWN_VIEWS` / `KNOWN_VIEW_IDS` / `KNOWN_MEDIA_VIEWS` = all four,
+  used by the IR tree, the CSS emitter and the loading fixer so a saved copy from before keeps its tablet / phone styles when another stack is built from it). Recreate steps: `sweep` and
+  `responsive` removed from `STEPS` / `STAGES` (5 steps; generate skips the breakpoint refinement without a sweep). Analyze: `audit/screenshots.js VIEWS` = desktop, the `lighthouse-mobile`
+  step is gone (the desktop run gets the whole Lighthouse reserve); `scores` / `metricsByDevice` hold desktop only, `audit.metrics` and the weaknesses come from the desktop run. IR with one
+  view: no breakpoints (`{ source: 'single-view' }`, no media queries); a builder's hidden copies of a section that have a visible twin are dropped (`tree.js dropHiddenVariants`; a hidden
+  menu without a twin stays); a single ratio is not taken as a share of the parent (`styles.js resolveHints`: px kept, 100 % only for an element that fills its parent; found by the
+  pipeline test: a 40 px spinner had become 2.78 %). Re-audit: Lighthouse audits are compared only on a device both sides measured (an old check's phone run never meets a new desktop
+  run); the `JavaScript shipped` row reads the full runs, desktop first. Report (HTML / PDF): desktop scores, metrics and one screenshot per side.
+  Client: no Phone / Computer toggles or screen-size buttons (`PreviewFrame VIEWPORTS` = 1440; size buttons hidden with one size), Check / Compare / Results show the computer numbers
+  ("Measured on a computer"); older checks with only phone numbers still display them. Tests updated (desktop only), the four background-sweep tests are `skip`ped with the reason "parked".
+  **To bring the other sizes back**: list the views in `ENABLED_VIEWS`, restore the two steps in `recreate/index.js`, the views in `audit/screenshots.js`, the `lighthouse-mobile` step in
+  `audit/index.js`, the client toggles (git history of this change) and un-skip the sweep tests.
 
 ### Full-site clone (after the robustness work) — branch `full-site` (worktree `../Website-Audit-par`), WIP
 Asked by the user: clone the whole site as it is (every page, no link back to the old site, hover / animations / buttons the same), no 20-page cap, no timeouts,

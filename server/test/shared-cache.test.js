@@ -228,7 +228,7 @@ test('a context does not wait long for a file another context is still loading',
   }
 });
 
-test('an analysis loads the homepage in four browser contexts and its static files once', async () => {
+test('an analysis loads the homepage in two browser contexts and its static files once', async () => {
   const outDir = await mkdtemp(path.join(os.tmpdir(), 'sas-cache-test-'));
   const before = { home: count('/'), css: count('/style.css'), js: count('/app.js'), img: count('/img.png'), api: count('/api') };
   const folders = await cacheFolders();
@@ -243,11 +243,12 @@ test('an analysis loads the homepage in four browser contexts and its static fil
       progress: () => {},
     });
     assert.deepEqual(audit.errors, [], JSON.stringify(audit.errors));
-    for (const view of ['desktop', 'tablet', 'mobile']) assert.ok(await exists(path.join(outDir, 'screens', `${view}-full.webp`)), view);
+    // Desktop only for now (audit/screenshots.js VIEWS): the render and one screenshot view.
+    for (const view of ['desktop']) assert.ok(await exists(path.join(outDir, 'screens', `${view}-full.webp`)), view);
     assert.ok(await exists(path.join(outDir, 'axe.json')));
-    // The render and the three screenshot views each opened the page and made their own API call…
-    assert.ok(count('/') - before.home >= 4, `home ${count('/') - before.home}`);
-    assert.equal(count('/api') - before.api, 4);
+    // The render and the screenshot view each opened the page and made their own API call…
+    assert.ok(count('/') - before.home >= 2, `home ${count('/') - before.home}`);
+    assert.equal(count('/api') - before.api, 2);
     // …and the stylesheet, the script and the image were downloaded once for all of them.
     assert.equal(count('/style.css') - before.css, 1);
     assert.equal(count('/app.js') - before.js, 1);

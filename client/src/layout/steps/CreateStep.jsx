@@ -26,7 +26,7 @@ function blockerOf({ audit, project, analyzing }) {
 
 // The four stages of making a copy, in plain words (the live progress shows the detailed steps).
 const STAGES = [
-  ['Visit every page', 'Each page is opened at phone, tablet, laptop and computer size; its layout, text, hover effects and animations are recorded.'],
+  ['Visit every page', 'Each page is opened like a visitor on a computer would see it; its layout, text, hover effects and animations are recorded.'],
   ['Save images and files', 'Images, fonts, videos and documents are downloaded, so the copy never depends on the old site.'],
   ['Build the new pages', 'Clean pages are written and the problems the check found are fixed where that can be done automatically.'],
   ['Check the result', 'Safety, broken links and how closely every page matches the original; then a private preview opens.'],
