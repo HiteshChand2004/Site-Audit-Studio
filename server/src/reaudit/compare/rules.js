@@ -57,7 +57,13 @@ const ALT = { fixes: ['img-alt'], auto: ['alt'] };
 const NAMES = { fixes: ['accessible-names'], auto: ['aria-label'] };
 const HEADINGS = { fixes: ['headings'] };
 const LOADING = { fixes: ['image-loading'] };
+// Full-site D.5: WebP, sized images.
+const IMAGES = { fixes: ['images'] };
 export const EVIDENCE = {
+  'lighthouse.uses-optimized-images': IMAGES,
+  'lighthouse.modern-image-formats': IMAGES,
+  'lighthouse.uses-responsive-images': IMAGES,
+  'lighthouse.total-byte-weight': IMAGES,
   'seo.title-tag': { auto: ['title'] },
   'seo.title-tag.missing': { auto: ['title'] },
   'seo.meta-description': { auto: ['description'] },

@@ -257,6 +257,19 @@ export async function generateStage(ctx) {
 
   const fixed = fixReport(treeFixes, irFixes);
   report.fixes.push(...fixed.fixes);
+  // Lighter images (D.5, assets/optimize.js): converted to WebP / shrunk to what the pages show.
+  const images = report.assets?.images;
+  if (images?.converted) {
+    report.fixes.push({
+      id: 'images',
+      title: 'Images made lighter (WebP, sized to how the pages show them)',
+      status: 'fixed',
+      count: images.converted,
+      open: 0,
+      detail: `${images.converted} of ${images.files} PNG / JPEG images re-encoded as WebP (${images.resized} also shrunk to twice their shown width): ${Math.round(images.bytesBefore / 1024)} KB → ${Math.round(images.bytesAfter / 1024)} KB.`,
+      items: [{ converted: images.converted, resized: images.resized, bytesBefore: images.bytesBefore, bytesAfter: images.bytesAfter }],
+    });
+  }
   if (wp) {
     const recreated = { page: 0, post: 0 };
     for (const t of site.pages) if (t.wp) recreated[t.wp.item.type === 'post' ? 'post' : 'page']++;

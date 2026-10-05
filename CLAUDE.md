@@ -243,6 +243,12 @@ Decision: links to pages that can't be cloned honestly (login, cart, checkout, a
   `frame-ancestors 'self'`, `upgrade-insecure-requests`) and `Cache-Control: immutable` for `/assets/*` (content-hashed names). The Next.js build drops the CSP line (its pages carry inline scripts; `emit/next publicFile`). The checklist
   keeps the deploy rows N/A (a local preview cannot measure them); `report.fixes` `deploy-headers` says what was prepared. Test in `recreate-headdata.test.js`.
 
+- **D.5 lighter images (WIP)** (`assets/optimize.js optimizeImages`, at the end of the assets step after the SVG sanitizer): every downloaded PNG / JPEG is re-encoded as WebP (quality 82, alpha kept, EXIF rotation applied) and,
+  when every use of it on the pages has a known width (an `<img>`: `collect.js add(…, width)` keeps `maxWidth` / `unsized`; the page's loaded-resource list does not count), shrunk to twice the widest shown width (never enlarged); a CSS
+  background or meta image of unknown size keeps its pixels. The new file replaces the old only when it is ≤ 90 % of its size; it keeps the naming scheme (`<name>-<sha256:10>.webp`) and every URL that mapped to the old file maps to
+  the new one, so the IR and every stack need no change. GIF (may be animated), SVG, WebP, AVIF and icons are left alone. `report.assets.images` = { files, converted, resized, bytesBefore, bytesAfter }; `report.fixes` `images`;
+  EVIDENCE for Lighthouse `uses-optimized-images`, `modern-image-formats`, `uses-responsive-images`, `total-byte-weight`. Test: `recreate-images.test.js`.
+
 ### Recreate: sleep and network outages (`recreate/interrupts.js`, branch `recreate-retry`, WIP, merged into `phase-4a`; builds on `audit/interruptions.js`)
 Steps are long, so a step is never re-run whole. (1) **Sleep does not count**: each pause the watcher finds is given back at once — job deadline, `ctx.jobDeadline`, every running step's limit and `stepDeadline` move later (`runStep` uses
 `extendableTimeout`; a firing step timer first lets the watcher look (`tick()`)). (2) **Only what was hit is repeated, once**: a page capture or a page's sweep widths overlapped by an outage/sleep, even without an error (`recoverHit`; an abandoned

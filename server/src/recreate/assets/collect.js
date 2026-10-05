@@ -89,7 +89,9 @@ const faceKey = (f) => JSON.stringify([f.family.toLowerCase(), String(f.weight),
  */
 export function collectAssets(captures, extra = {}) {
   const found = new Map();
-  const add = (url, kind, from, slug, base) => {
+  // width: the CSS px width the image is shown at (an <img>), else null (a background, a meta image: unknown) - D.5
+  // shrinks an image only when every use of it has a known width.
+  const add = (url, kind, from, slug, base, width = null) => {
     let abs;
     try {
       abs = base ? new URL(url, base).href : url;
@@ -99,10 +101,19 @@ export function collectAssets(captures, extra = {}) {
     const key = assetKey(abs);
     if (!key) return;
     const entry = found.get(key);
+    const shown = (e) => {
+      // The page's list of loaded resources says nothing about size; the uses on the page do.
+      if (from === 'resource' || from === 'link') return;
+      if (width == null || !(width > 0)) e.unsized = true;
+      else e.maxWidth = Math.max(e.maxWidth ?? 0, width);
+    };
     if (!entry) {
-      found.set(key, { url: key, kind, from, pages: new Set([slug]) });
+      const fresh = { url: key, kind, from, pages: new Set([slug]) };
+      shown(fresh);
+      found.set(key, fresh);
       return;
     }
+    shown(entry);
     entry.pages.add(slug);
     if (MERGE_RANK[kind] < MERGE_RANK[entry.kind]) Object.assign(entry, { kind, from });
   };
@@ -128,9 +139,10 @@ export function collectAssets(captures, extra = {}) {
       if (tag === 'img' || (tag === 'input' && /^image$/i.test(attrs.type ?? ''))) {
         // currentSrc (what the browser picked at this width) and the fallback src attribute; of the
         // srcset only what this view needs (pickCandidates).
-        if (node.src) add(node.src, 'image', 'img', slug);
-        if (attrs.src && !node.src) add(attrs.src, 'image', 'img', slug, base);
-        for (const c of pickCandidates(parseSrcset(attrs.srcset, base), node, dpr)) add(c.url, 'image', 'srcset', slug);
+        const w = node.rect?.[2] ?? null;
+        if (node.src) add(node.src, 'image', 'img', slug, undefined, w);
+        if (attrs.src && !node.src) add(attrs.src, 'image', 'img', slug, base, w);
+        for (const c of pickCandidates(parseSrcset(attrs.srcset, base), node, dpr)) add(c.url, 'image', 'srcset', slug, undefined, w);
       } else if (tag === 'source') {
         // <picture><source srcset> is an image (its <img> shows the pick); <video><source src> is media.
         const img = parent?.children?.find((c) => c.tag === 'img');
@@ -140,8 +152,8 @@ export function collectAssets(captures, extra = {}) {
       if ((tag === 'video' || tag === 'audio') && node.src) add(node.src, 'media', 'media', slug);
       if (tag === 'video' && node.poster) add(node.poster, 'image', 'poster', slug);
       for (const [name, value] of Object.entries(lazy)) {
-        if (LAZY_SRCSET.test(name)) for (const c of pickCandidates(parseSrcset(value, base), node, dpr)) add(c.url, 'image', 'lazy', slug);
-        else if (value && !value.startsWith('data:')) add(value.trim(), 'image', 'lazy', slug, base);
+        if (LAZY_SRCSET.test(name)) for (const c of pickCandidates(parseSrcset(value, base), node, dpr)) add(c.url, 'image', 'lazy', slug, undefined, tag === 'img' ? node.rect?.[2] : null);
+        else if (value && !value.startsWith('data:')) add(value.trim(), 'image', 'lazy', slug, base, tag === 'img' ? node.rect?.[2] : null);
       }
       if (node.svg) {
         for (const m of node.svg.matchAll(SVG_HREF)) {

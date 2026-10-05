@@ -10,6 +10,7 @@
 //   and @keyframes.
 // Writes assets/manifest.json and sets ctx.assets for the generate step.
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { optimizeImages } from './optimize.js';
 import path from 'node:path';
 import { fetchPage } from '../../audit/http.js';
 import { mapLimit } from '../../audit/util.js';
@@ -341,6 +342,9 @@ export async function assetsStage(ctx, opts = {}) {
 
   ctx.progress(0.98, 'Sanitizing SVG files');
   const svg = await sanitizeSvgFiles(root, result);
+  // Lighter images (D.5): PNG / JPEG shrunk to what the pages show (×2) and re-encoded as WebP when that is smaller.
+  ctx.progress(0.985, 'Making images lighter');
+  const images = await optimizeImages(root, result, new Map(assets.map((a) => [a.url, a])));
 
   const faces = fontFaces.map((f) => {
     const src = f.src.map((s) => ({ ...s, file: result.map[assetKey(s.url)] ?? null }));
@@ -365,6 +369,7 @@ export async function assetsStage(ctx, opts = {}) {
   report.assets = {
     found: assets.length,
     downloaded: result.files.length,
+    images,
     duplicates: result.reused,
     fromCache: result.fromCache,
     bytes: result.bytes,
