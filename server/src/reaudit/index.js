@@ -104,8 +104,9 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
         const oldMotion = await readOldMotion(folder, report.pages);
         const slugOf = new Map((report.pages ?? []).map((p) => [p.outPath, p.slug]));
         const targets = outputPageList.filter((p) => slugOf.has(p.outPath) && oldMotion.has(slugOf.get(p.outPath)))
-          .map((p) => ({ slug: slugOf.get(p.outPath), urlPath: p.path.replace(/^\//, '') }));
-        const measured = await measureNewMotion({ origin: served.origin, pages: targets, deadline: Date.now() + 150000 });
+          .map((p) => ({ slug: slugOf.get(p.outPath), urlPath: p.path.replace(/^\//, ''), clicks: (oldMotion.get(slugOf.get(p.outPath))?.clicks?.widgets?.length ?? 0) > 0 }));
+        // ≤ 6 pages: hover, loops and reveal (~25 s) plus the click probe on pages that have interactive parts (~17 s).
+        const measured = await measureNewMotion({ origin: served.origin, pages: targets, deadline: Date.now() + 240000 });
         motion = { ...motionItems(oldMotion, measured.pages), failed: measured.failed, skipped: measured.skipped };
       } catch (err) {
         motion = { items: [], summary: null, failed: [{ slug: '*', error: String(err?.message ?? err).split('\n')[0] }], skipped: [] };

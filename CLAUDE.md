@@ -196,7 +196,10 @@ Decision: links to pages that can't be cloned honestly (login, cart, checkout, a
   leave delay, Escape closes the last opened and returns focus, a click outside closes menus), dialog (Escape, click on the backdrop or on a close / dismiss / cancel / × control), tabs (click, ArrowLeft / ArrowRight), slider (one slide =
   distance between the first two children; scrolls when the track scrolls itself; wraps around). Nothing changes at load (hydration stays clean); without script the page looks as captured. A site with widgets gets `ir.motion.script = true`
   (an empty motion record when it had none), so every stack, the safety profile and the preview pick the file up unchanged. `verify/equivalence.js` ignores the `w-open` / `w-shut` classes (inside the page function).
-- **UI**: NEW report card section **Interactive parts** (`RecreateReport.jsx Interactive`: Menus and panels / Tabs / Sliders / Pop-up windows counts, what could not be rebuilt). Still to do: C.6 re-audit rows.
+- **UI**: NEW report card section **Interactive parts** (`RecreateReport.jsx Interactive`: Menus and panels / Tabs / Sliders / Pop-up windows counts, what could not be rebuilt).
+- **C.6 re-audit row** `motion.widgets` "Menus, tabs, sliders and pop-ups work" (category motion, same thresholds as the other motion rows): `capture/measure.js measureMotion({ clickBudgetMs })` runs the click probe on the recreated page last,
+  only where the original page had parts (`reaudit/index.js` passes `clicks`); budget 17 s (the capture had 15 s), page budget 40 → 60 s, motion step 150 → 240 s. Paired by `kind|text` (`state` toggles left out).
+  `checklist.motion.widgets` = before / after counts. Test in `reaudit-motion.test.js`.
 - Tests: `recreate-widgets.test.js` (a real Recreate of `fixtures/widgets-page.js`: tokens, ARIA, CSS states, safety; in a browser the menu opens / Escape closes, accordion, tabs, slider moves, dialog, hover dropdown, no page errors; without
   script panels closed and the first tab shown; React + Vite and Next.js exports equivalent, hydration clean, menu and tabs work). The page lives in `fixtures/widgets-page.js` (shared with `recreate-clicks.test.js`).
 

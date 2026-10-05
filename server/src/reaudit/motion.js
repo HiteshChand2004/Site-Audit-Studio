@@ -9,11 +9,13 @@ import path from 'node:path';
 import { launchBrowser } from '../audit/render.js';
 import { measureMotion } from '../recreate/capture/measure.js';
 
-const PAGE_BUDGET_MS = 40000;
+const PAGE_BUDGET_MS = 60000;
 const MAX_PAGES = 6;
 // A little more than the capture of the original had (8 s): the probes go through the candidates in the same order, so the
 // recreate must get at least as far, or an element the original reached would look missing just because time ran out.
 const HOVER_BUDGET_MS = 10000;
+// The same for the click probe (the capture had inspect.js CLICK_BUDGET = 15 s); only on pages where the original had parts.
+const CLICK_BUDGET_MS = 17000;
 
 /** The original's motion.json per page: Map<slug, object> (only pages that have one). */
 export async function readOldMotion(recreateFolder, reportPages) {
@@ -29,7 +31,7 @@ export async function readOldMotion(recreateFolder, reportPages) {
 
 /**
  * Measures the recreated pages. Never throws for one page failing: that page is left out (and listed in `failed`).
- * @param {{ origin: string, pages: { slug: string, urlPath: string }[], deadline?: number, signal?: AbortSignal }} o
+ * @param {{ origin: string, pages: { slug: string, urlPath: string, clicks?: boolean }[], deadline?: number, signal?: AbortSignal }} o
  * @returns {Promise<{ pages: Map<string, object>, failed: { slug: string, error: string }[], skipped: string[] }>}
  */
 export async function measureNewMotion({ origin, pages, deadline = Infinity, signal }) {
@@ -50,7 +52,7 @@ export async function measureNewMotion({ origin, pages, deadline = Infinity, sig
         await page.goto(`${origin}/${p.urlPath}`, { waitUntil: 'load', timeout: 20000 });
         await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
         const measured = await Promise.race([
-          measureMotion(page, { budgetMs: HOVER_BUDGET_MS }),
+          measureMotion(page, { budgetMs: HOVER_BUDGET_MS, clickBudgetMs: p.clicks ? CLICK_BUDGET_MS : 0 }),
           new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), PAGE_BUDGET_MS)),
         ]);
         result.pages.set(p.slug, measured);
@@ -99,6 +101,8 @@ export function summarize(motion) {
     hover: { keys: hover.map((h) => `${h.tag}|${h.text ?? ''}`), props: new Map(hover.map((h) => [`${h.tag}|${h.text ?? ''}`, Object.keys(h.changes ?? {})])) },
     // By pattern only: a loop the original drove with script has no duration, while its rebuilt CSS animation has one.
     loops: { keys: loops.map((l) => l.pattern), count: loops.length },
+    // Interactive parts (full-site C.6): paired by what they are and what they say.
+    widgets: { keys: (motion.clicks?.widgets ?? []).filter((w) => w.kind !== 'state').map((w) => `${w.kind}|${(w.text ?? '').trim().toLowerCase()}`) },
   };
 }
 
@@ -118,8 +122,8 @@ const row = (key, title, ratio, before, after, note) => ({
  */
 export function motionItems(oldPages, newPages) {
   const both = [...oldPages.keys()].filter((slug) => newPages.has(slug));
-  const o = { reveal: 0, replay: 0, hover: [], loops: [], durations: [], hoverProps: new Map() };
-  const n = { reveal: 0, replay: 0, hover: [], loops: [], durations: [] };
+  const o = { reveal: 0, replay: 0, hover: [], loops: [], durations: [], hoverProps: new Map(), widgets: [] };
+  const n = { reveal: 0, replay: 0, hover: [], loops: [], durations: [], widgets: [] };
   const matchedHover = { count: 0, agree: 0 };
   for (const slug of both) {
     const so = summarize(oldPages.get(slug));
@@ -146,9 +150,11 @@ export function motionItems(oldPages, newPages) {
     }
     o.loops.push(...so.loops.keys);
     n.loops.push(...sn.loops.keys);
+    o.widgets.push(...so.widgets.keys);
+    n.widgets.push(...sn.widgets.keys);
   }
   const items = [];
-  const summary = { pages: both.length, reveal: { before: o.reveal, after: n.reveal }, hover: { before: o.hover.length, after: n.hover.length }, loops: { before: o.loops.length, after: n.loops.length } };
+  const summary = { pages: both.length, reveal: { before: o.reveal, after: n.reveal }, hover: { before: o.hover.length, after: n.hover.length }, loops: { before: o.loops.length, after: n.loops.length }, widgets: { before: o.widgets.length, after: n.widgets.length } };
 
   if (o.reveal) {
     const ratio = Math.min(1, n.reveal / o.reveal);
@@ -175,6 +181,14 @@ export function motionItems(oldPages, newPages) {
       { detail: `${plural(o.loops.length, 'animation')} run continuously (spinners, tickers, pulses, …).`, count: o.loops.length },
       { detail: `${matched} of them run on the recreated site.`, count: matched },
       ratio < 0.9 ? 'Marquees driven by script, scroll-linked animations and some pseudo-element loops are not rebuilt.' : null));
+  }
+  if (o.widgets.length) {
+    const matched = overlap(o.widgets, n.widgets);
+    const ratio = matched / o.widgets.length;
+    items.push(row('motion.widgets', 'Menus, tabs, sliders and pop-ups work', ratio,
+      { detail: `${plural(o.widgets.length, 'part')} open, close or switch when clicked (menus, dropdowns, accordions, tabs, sliders, pop-ups).`, count: o.widgets.length },
+      { detail: `${matched} of them do the same on the recreated site.`, count: matched },
+      ratio < 0.9 ? 'Parts whose content the original builds with its own script, and sliders that swap slides instead of moving them, are not rebuilt.' : null));
   }
   return { items, summary };
 }

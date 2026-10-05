@@ -97,6 +97,19 @@ test('motionItems: reproduced = pass, partly = open, mostly lost = regressed; no
   assert.equal(motionItems(old, new Map()).items.length, 0, 'pages measured on only one side are not compared');
 });
 
+test('interactive parts: paired by kind + text; toggles that only change attributes are not counted', () => {
+  const w = (kind, text) => ({ kind, text });
+  const old = new Map([['index', { clicks: { widgets: [w('disclosure', 'Open menu'), w('tabs', 'Tab 2'), w('carousel', 'Next slide'), w('dialog', 'Book a demo'), w('state', 'Dark mode')] } }]]);
+  const all = new Map([['index', { clicks: { widgets: [w('disclosure', 'Open menu'), w('tabs', 'Tab 2'), w('carousel', 'Next slide'), w('dialog', 'Book a demo')] } }]]);
+  const half = new Map([['index', { clicks: { widgets: [w('disclosure', 'Open menu'), w('tabs', 'Tab 2')] } }]]);
+  const row = (m) => motionItems(old, m).items.find((i) => i.key === 'motion.widgets');
+  assert.equal(row(all).preset, 'pass');
+  assert.equal(row(all).before.count, 4, 'the attribute-only toggle is left out');
+  assert.equal(row(half).preset, 'open');
+  assert.equal(row(new Map([['index', { clicks: { widgets: [] } }]])).preset, 'regressed');
+  assert.equal(motionItems(new Map([['index', {}]]), all).items.find((i) => i.key === 'motion.widgets'), undefined, 'no parts on the original: no row');
+});
+
 test('the recreated pages are measured like the original: same effects found with other markup', async () => {
   const [original, recreated] = [await measure(0), await measure(1)];
   const a = summarize(original.get('index'));
