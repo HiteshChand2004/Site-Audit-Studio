@@ -185,6 +185,21 @@ Decision: links to pages that can't be cloned honestly (login, cart, checkout, a
   alternates, and the links in the copied `llms.txt` (`rebase.text`, sentence punctuation kept outside); `crawlFiles.rebased` = count. canonical / og:url / og:image / sitemap / robots already used `baseUrl`. Without an address
   (API callers) the report warns that these name the original address. Tests: `recreate-rebase.test.js`; the pipeline test compares llms.txt with its links on the copy's origin.
 
+- **C.1–C.5 + C.7 interactive parts rebuilt (WIP)**: `ir/widgets.js applyWidgets(site, clicksByPath)` (in `generateStage` after `applyMotion`, `readPageClicks`) matches the click capture to the merged tree by snapshot path (`cpath` /
+  `cpathAlt`, like `ir/motion.js`) and writes tokens in one attribute `data-w` (`ir/index.js pageBody`): `dtN` / `dhN` disclosure trigger (click / hover) + `dpN` panel, `mtN` + `mpN` dialog (`role=dialog aria-modal`), `btN:i` tab
+  (`role=tab`, `aria-selected` written in the HTML: the tab whose click changed nothing was the chosen one) + `bpN:i` panel (`role=tabpanel`), `ckN` slider track + `cnN` / `cvN` next / previous. Triggers get `aria-expanded` / `aria-controls`
+  (ids generated when the panel has none), `role=button` + `tabindex=0` when not focusable. States: a panel's open look = the style read with it open (`stateDecls`: display, visibility, opacity, transform, translate, max-height, clip-path,
+  pointer-events; not its size) under `.w-open`, a tab panel's closed look under `.w-shut` (`emit/widgetCss.js`, in the stylesheet after the motion rules); slider tracks get a 0.4 s transform transition (no-preference only).
+  `ir.widgets = { version, items[{ id, kind, mode?, open?, shut? }] }`, `report.generate.widgets` = { pages, found, rebuilt, byKind, skipped: { unmapped, scriptBuilt, state, noPanel } }. Not rebuilt: panels the page's script creates (not in the
+  snapshot), sliders that swap slides instead of moving a track, `state`-only toggles, equal triggers beyond the 3 probed.
+- **The script** (deviation from the plan: no second file): the widget code is a second, independent part of the same fixed `js/motion.js` (`emit/motionScript.js`): disclosure (click, Enter / Space on non-buttons, hover mode with a 150 ms
+  leave delay, Escape closes the last opened and returns focus, a click outside closes menus), dialog (Escape, click on the backdrop or on a close / dismiss / cancel / × control), tabs (click, ArrowLeft / ArrowRight), slider (one slide =
+  distance between the first two children; scrolls when the track scrolls itself; wraps around). Nothing changes at load (hydration stays clean); without script the page looks as captured. A site with widgets gets `ir.motion.script = true`
+  (an empty motion record when it had none), so every stack, the safety profile and the preview pick the file up unchanged. `verify/equivalence.js` ignores the `w-open` / `w-shut` classes (inside the page function).
+- **UI**: NEW report card section **Interactive parts** (`RecreateReport.jsx Interactive`: Menus and panels / Tabs / Sliders / Pop-up windows counts, what could not be rebuilt). Still to do: C.6 re-audit rows.
+- Tests: `recreate-widgets.test.js` (a real Recreate of `fixtures/widgets-page.js`: tokens, ARIA, CSS states, safety; in a browser the menu opens / Escape closes, accordion, tabs, slider moves, dialog, hover dropdown, no page errors; without
+  script panels closed and the first tab shown; React + Vite and Next.js exports equivalent, hydration clean, menu and tabs work). The page lives in `fixtures/widgets-page.js` (shared with `recreate-clicks.test.js`).
+
 ### Recreate: sleep and network outages (`recreate/interrupts.js`, branch `recreate-retry`, WIP, merged into `phase-4a`; builds on `audit/interruptions.js`)
 Steps are long, so a step is never re-run whole. (1) **Sleep does not count**: each pause the watcher finds is given back at once — job deadline, `ctx.jobDeadline`, every running step's limit and `stepDeadline` move later (`runStep` uses
 `extendableTimeout`; a firing step timer first lets the watcher look (`tick()`)). (2) **Only what was hit is repeated, once**: a page capture or a page's sweep widths overlapped by an outage/sleep, even without an error (`recoverHit`; an abandoned

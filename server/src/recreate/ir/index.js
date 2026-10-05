@@ -324,6 +324,8 @@ function pageBody(t, site, stats) {
     guardAttributes(attrs, stats.safety.attrs);
     // Motion tokens (ir/motion.js): the stylesheet's hover / reveal / loop rules select on them.
     if (n.motionTokens?.length) attrs['data-motion'] = n.motionTokens.join(' ');
+    // Interactive parts (ir/widgets.js): the generated script and the open / closed rules select on them.
+    if (n.widgetTokens?.length) attrs['data-w'] = n.widgetTokens.join(' ');
     const out = { t: n.tag, sid: n.sid, attrs, children: [] };
     if (n.class) out.class = n.class;
     const id = n.attrs.id;
@@ -476,6 +478,7 @@ export function buildIR(site) {
     keyframes: [...site.keyframes].filter(([name]) => animationNames.has(name)).map(([name, css]) => ({ name, css: mapUrls(css, (u) => site.assetResolve(u)) })),
     boxSizingReset: styles.boxSizingReset,
     ...(site.motion && { motion: site.motion }),
+    ...(site.widgets && { widgets: site.widgets }),
     rules: styles.rules,
     files: [...site.files, ...noticeFiles(site)],
     pages,

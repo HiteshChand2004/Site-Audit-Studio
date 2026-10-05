@@ -6,6 +6,7 @@ import { KNOWN_MEDIA_VIEWS as MEDIA_VIEWS } from '../views.js';
 import { RESET } from '../ir/styles.js';
 import { relFile } from '../ir/links.js';
 import { motionCss } from './motionCss.js';
+import { widgetCss } from './widgetCss.js';
 
 export const CSS_FILE = 'css/site.css';
 const CSS_WIDE = /^(inherit|initial|unset|revert|revert-layer)$/;
@@ -116,7 +117,7 @@ export function emitCss(ir) {
   const body = base.join('\n');
   const byView = Object.fromEntries(MEDIA_VIEWS.map((view) => [view, media(view)]));
   // Tokens are written only when a rule uses them.
-  const motion = motionCss(ir.motion, opts);
+  const motion = [motionCss(ir.motion, opts), widgetCss(ir.widgets, opts)].filter(Boolean).join('\n');
   const all = [body, motion, ...MEDIA_VIEWS.flatMap((view) => byView[view])].join('\n');
   const used = Object.entries(ir.tokens).filter(([name]) => all.includes(`var(${name})`));
   const sections = [

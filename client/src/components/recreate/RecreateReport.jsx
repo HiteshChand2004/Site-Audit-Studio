@@ -154,6 +154,34 @@ function Motion({ result }) {
   );
 }
 
+const WIDGET_LABEL = { disclosure: 'Menus and panels', tabs: 'Tabs', carousel: 'Sliders', dialog: 'Pop-up windows' };
+
+/** The interactive parts of the original (found by clicking) that work in the copy too. */
+function Interactive({ stats }) {
+  const kinds = Object.entries(stats.byKind ?? {}).filter(([, n]) => n > 0);
+  const notRebuilt = (stats.skipped?.unmapped ?? 0) + (stats.skipped?.scriptBuilt ?? 0) + (stats.skipped?.noPanel ?? 0);
+  if (!kinds.length && !notRebuilt) return null;
+  return (
+    <section aria-label="Interactive parts" className={styles.section}>
+      <div className={styles.head}>
+        <span className={styles.title}>Interactive parts</span>
+        <span className={styles.meta}>found by clicking the original · {plural(stats.pages ?? 0, 'page')}</span>
+      </div>
+      <ul className={styles.chips}>
+        {kinds.map(([kind, n]) => (
+          <li key={kind} data-tone="ok">
+            {WIDGET_LABEL[kind] ?? kind} <span className="mono">{n}</span>
+          </li>
+        ))}
+      </ul>
+      <p className={styles.note}>
+        They open, close and switch in the copy the way they did on the original (keyboard and Escape included), driven by the same small generated script.
+        {notRebuilt > 0 && ` ${plural(notRebuilt, 'part')} could not be rebuilt (made by the original's own script or not found in the copy).`}
+      </p>
+    </section>
+  );
+}
+
 /** Fidelity (overall + per page, flagged below the threshold), visual difference, build verification and warnings. */
 export default function RecreateReport({ result, projectId }) {
   const fidelity = result.fidelity;
@@ -203,6 +231,7 @@ export default function RecreateReport({ result, projectId }) {
       {result.responsive?.status === 'done' && <Responsive result={result} />}
 
       {result.generate?.motion && <Motion result={result} />}
+      {result.generate?.widgets && <Interactive stats={result.generate.widgets} />}
 
       {verify && (
         <section aria-label="Build verification" className={styles.section}>

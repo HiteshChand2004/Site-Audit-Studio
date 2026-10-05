@@ -13,6 +13,7 @@ import { applyIrFixes, applyTreeFixes, fixReport } from './fixers/index.js';
 import { fetchWordPress, isWordPress } from './fixers/wordpress.js';
 import { buildIR, prepareSite, readPageCaptures } from './ir/index.js';
 import { applyMotion, readPageMotion } from './ir/motion.js';
+import { applyWidgets, readPageClicks } from './ir/widgets.js';
 import { isElement } from './ir/tree.js';
 import { compareLayout, openRenderer, planFixes, renderPage, viewScore } from './verify/layout.js';
 import { REFINE_PAGES, refineResponsive } from './verify/refine.js';
@@ -138,6 +139,16 @@ export async function generateStage(ctx) {
   }
   const motion = applyMotion(site, motionByPath);
   site.motion = motion.motion;
+  // Interactive parts (full-site C.1): menus, dropdowns, accordions, tabs, sliders and dialogs the click capture found.
+  // They are driven by the same generated script as the scroll reveal, so a site with them carries js/motion.js.
+  const clicksByPath = new Map();
+  for (const info of ctx.pages) {
+    const found = await readPageClicks(ctx.dir, info);
+    if (found) clicksByPath.set(info.path, found);
+  }
+  const widgets = applyWidgets(site, clicksByPath);
+  site.widgets = widgets.widgets;
+  if (site.widgets) site.motion = { version: 1, hover: [], focus: [], reveal: [], delays: [], loops: [], ...(site.motion ?? {}), script: true };
 
   ctx.progress(0.12, 'Fixing audit issues');
   const treeFixes = applyTreeFixes(site, { audit: ctx.audit, skipped: ctx.discovery?.skipped });
@@ -289,6 +300,7 @@ export async function generateStage(ctx) {
     fit,
     responsive: refined?.summary ?? null,
     motion: { ...motion.stats, script: Boolean(ir.motion?.script) },
+    widgets: widgets.stats,
   };
   const byPath = new Map(site.pages.map((t) => [t.info.path, t]));
   report.pages = report.pages.map((p) => {

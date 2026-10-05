@@ -39,7 +39,9 @@ function domSignature(map) {
   // Framework furniture that is not page content: scripts (data and bundles), Next's route announcer and its
   // empty hidden metadata container.
   // The reveal script (js/motion.js) adds `js-motion` to <html> and `is-in` to elements: classes of the script, not of the page.
-  const pageClasses = (v) => String(v ?? '').split(/\s+/).filter((c) => c && c !== 'js-motion' && c !== 'is-in').join(' ');
+  // The same script opens and closes interactive parts with `w-open` / `w-shut` (ir/widgets.js).
+  const SCRIPT_CLASSES = new Set(['js-motion', 'is-in', 'w-open', 'w-shut']);
+  const pageClasses = (v) => String(v ?? '').split(/\s+/).filter((c) => c && !SCRIPT_CLASSES.has(c)).join(' ');
   const furniture = (n) => n.localName === 'script' || n.localName === 'next-route-announcer'
     || (n.localName === 'div' && n.hasAttribute('hidden') && !n.children.length && !n.textContent.trim());
   const walk = (node, depth) => {
