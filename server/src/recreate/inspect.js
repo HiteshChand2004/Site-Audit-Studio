@@ -18,6 +18,8 @@ const INSPECT_MARGIN = 15000;
 const PAGE_LIMIT_MARGIN = 5000;
 // Time per page for the hover / focus probing of the desktop view.
 const MOTION_BUDGET = 8000;
+// Clicking menus, tabs, sliders and dialogs (full-site B.1, capture/clicks.js), after the hover probe.
+const CLICK_BUDGET = 10000;
 // Time of the whole job kept for the steps after capture (assets, generate, build, preview), for BASE_PAGES pages; more pages
 // keep more (ctx.laterReserve, recreate/index.js).
 export const LATER_STEPS_RESERVE = 150000;
@@ -102,7 +104,11 @@ export async function inspectStage(ctx) {
     const captureOnce = async (info, i) => {
       // Hover / focus probing (4b.1) takes a few seconds per page: only while the step has time to spare.
       const spare = deadline() - Date.now() - slowest * 2;
-      const capture = (ctx.capturePage ?? capturePage)(browser, info, ctx.dir, { motionBudgetMs: spare > MOTION_BUDGET * 2 ? MOTION_BUDGET : 0, cache: ctx.netCache });
+      const capture = (ctx.capturePage ?? capturePage)(browser, info, ctx.dir, {
+        motionBudgetMs: spare > MOTION_BUDGET * 2 ? MOTION_BUDGET : 0,
+        clickBudgetMs: spare > (MOTION_BUDGET + CLICK_BUDGET) * 2 ? CLICK_BUDGET : 0,
+        cache: ctx.netCache,
+      });
       if (i === 0) return capture;
       const until = Math.min(pageLimit(), Date.now() + Math.max(ctx.pageCapMin ?? PAGE_CAP_MIN, slowest * PAGE_CAP_FACTOR));
       let timer;
@@ -221,6 +227,14 @@ export async function inspectStage(ctx) {
     loops: {
       ...['css', 'waapi', 'script', 'scrollLinked', 'paused'].reduce((o, k) => ({ ...o, [k]: probed.reduce((n, p) => n + (p.motion.loops?.[k] ?? 0), 0) }), {}),
       patterns: probed.reduce((o, p) => { for (const [k, n] of Object.entries(p.motion.loops?.patterns ?? {})) o[k] = (o[k] ?? 0) + n; return o; }, {}),
+    },
+    // Interactive parts found by clicking (full-site B.1): menus, tabs, sliders, dialogs by kind.
+    clicks: {
+      pages: probed.filter((p) => p.motion.clicks).length,
+      found: probed.reduce((n, p) => n + (p.motion.clicks?.found ?? 0), 0),
+      kinds: probed.reduce((o, p) => { for (const [k, n] of Object.entries(p.motion.clicks?.kinds ?? {})) o[k] = (o[k] ?? 0) + n; return o; }, {}),
+      notRestored: probed.reduce((n, p) => n + (p.motion.clicks?.notRestored ?? 0), 0),
+      left: probed.filter((p) => p.motion.clicks?.left).map((p) => p.path),
     },
     errors: report.pages.filter((p) => p.motion?.error).map((p) => ({ page: p.path, error: p.motion.error })),
     notProbed: report.pages.filter((p) => !p.motion).map((p) => p.path),

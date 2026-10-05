@@ -8,6 +8,7 @@ import { parallelism } from '../../audit/resources.js';
 import { encode, MAX_HEIGHT, MOBILE_UA } from '../../audit/screenshots.js';
 import { mapLimit } from '../../audit/util.js';
 import { RECREATE_VIEWS as VIEWS } from '../views.js';
+import { captureClicks } from './clicks.js';
 import { captureInteractions } from './interactions.js';
 import { captureLoops } from './loops.js';
 import { installRevealTracker, processReveal } from './reveal.js';
@@ -94,7 +95,7 @@ export async function settle(page, view, cap, { observe = false } = {}) {
   return { ...stats, scrolled: max };
 }
 
-async function captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs = 0, cache = null }) {
+async function captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs = 0, clickBudgetMs = 0, cache = null }) {
   const context = await browser.newContext({
     viewport: { width: view.width, height: view.height },
     deviceScaleFactor: view.dpr,
@@ -196,6 +197,15 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       } catch (err) {
         error = firstLine(err);
       }
+      // Clicks last (full-site B.1): they change the page (menus open, slides move), so nothing is read from it after them.
+      let clicksError = null;
+      if (clickBudgetMs > 0) {
+        try {
+          found.clicks = await captureClicks(page, { budgetMs: clickBudgetMs });
+        } catch (err) {
+          clicksError = firstLine(err);
+        }
+      }
       try {
         found.reveal = processReveal(revealEvents ?? []);
         if (loops) found.loops = loops;
@@ -206,7 +216,8 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
         await writeFile(path.join(dir, 'motion.json'), JSON.stringify(found));
         motion = {
           hover: found.hover.length, focus: found.focus.length, rules: found.rules.length, rulesTotal: found.stats.rulesTotal, probed: found.stats.probed, notReverted: found.stats.notReverted ?? 0,
-          ms: found.stats.ms, timedOut: found.stats.timedOut, reveal: found.reveal?.stats ?? null, loops: loops?.stats ?? null, ...((error ?? loopsError) && { error: error ?? loopsError }),
+          ms: found.stats.ms, timedOut: found.stats.timedOut, reveal: found.reveal?.stats ?? null, loops: loops?.stats ?? null, clicks: found.clicks?.stats ?? null,
+          ...((error ?? loopsError ?? clicksError) && { error: error ?? loopsError ?? clicksError }),
         };
       } catch (err) {
         motion = { error: firstLine(err) };
@@ -255,17 +266,17 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
  * @param {import('playwright').Browser} browser
  * @param {{ url: string, slug: string }} pageInfo  an entry from discoverPages()
  * @param {string} workspace  the recreate workspace folder
- * @param {{ timeout?: number, motionBudgetMs?: number, cache?: object }} [o]  cache: the job's shared cache of static files (audit/sharedCache.js)
+ * @param {{ timeout?: number, motionBudgetMs?: number, clickBudgetMs?: number, cache?: object }} [o]  cache: the job's shared cache of static files (audit/sharedCache.js)
  * @returns {Promise<{ views: Record<string, object>, errors: { view: string, message: string }[] }>}
  */
-export async function capturePage(browser, pageInfo, workspace, { timeout = 30000, motionBudgetMs = 0, cache = null } = {}) {
+export async function capturePage(browser, pageInfo, workspace, { timeout = 30000, motionBudgetMs = 0, clickBudgetMs = 0, cache = null } = {}) {
   const dir = captureDir(workspace, pageInfo.slug);
   await mkdir(dir, { recursive: true });
   // All views side by side when the machine has the memory for four loaded pages, fewer (never under two) when it is short
   // of it: more contexts than fit make every one of them slow and the loads time out. The desktop view starts first.
   const atOnce = parallelism({ max: VIEWS.length, min: 2 });
   const results = await mapLimit(VIEWS, atOnce, (view) =>
-    captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, cache }).then((value) => ({ status: 'fulfilled', value }), (reason) => ({ status: 'rejected', reason })));
+    captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, clickBudgetMs, cache }).then((value) => ({ status: 'fulfilled', value }), (reason) => ({ status: 'rejected', reason })));
   const views = {};
   const errors = [];
   results.forEach((r, i) => {

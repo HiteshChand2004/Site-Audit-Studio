@@ -27,7 +27,7 @@ export function snapshotPage(opts) {
     '-webkit-text-fill-color', '-webkit-text-stroke-color',
   ]);
   const SKIP_TAGS = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
-  const KEEP_ATTR = /^(id|class|href|src|srcset|sizes|alt|title|role|aria-[\w-]+|type|name|placeholder|value|for|action|method|target|rel|width|height|loading|poster|controls|autoplay|muted|loop|playsinline|colspan|rowspan|lang|dir|datetime|open|disabled|checked|selected|required|tabindex|download)$/;
+  const KEEP_ATTR = /^(id|class|href|src|srcset|sizes|alt|title|role|aria-[\w-]+|type|name|placeholder|value|for|action|method|target|rel|width|height|loading|poster|controls|autoplay|muted|loop|playsinline|colspan|rowspan|lang|dir|datetime|open|hidden|disabled|checked|selected|required|tabindex|download)$/;
   const LAZY_ATTR = /^data-(src|srcset|bg|background|lazy-src|original)$/;
   const URL_IN_CSS = /url\((['"]?)(.*?)\1\)/g;
 
