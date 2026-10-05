@@ -314,7 +314,10 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   for (const f of ['index.html', 'about.html', 'services/index.html', 'contact.html', 'work.html', 'css/site.css']) assert.ok(files.includes(f), f);
   // Crawl files (Phase 5): sitemap.xml and robots.txt generated, the original llms.txt copied as it is.
   for (const f of ['sitemap.xml', 'robots.txt', 'llms.txt']) assert.ok(files.includes(f), f);
-  assert.equal(await read('llms.txt'), await readFile(new URL('./fixtures/recreate-site/llms.txt', import.meta.url), 'utf8'));
+  // Copied with its page links moved onto the copy's own address (full-site E.1): nothing names the original site.
+  const llmsOriginal = await readFile(new URL('./fixtures/recreate-site/llms.txt', import.meta.url), 'utf8');
+  const llmsCopy = await read('llms.txt');
+  assert.equal(llmsCopy.replace(/http:\/\/localhost:\d+/g, 'ORIGIN'), llmsOriginal.replace(/http:\/\/localhost:\d+/g, 'ORIGIN'));
   assert.match(await read('robots.txt'), /^Sitemap: https?:\/\/[^\s]+\/sitemap\.xml$/m);
   assert.equal((await read('sitemap.xml')).match(/<loc>/g).length, 5);
   const crawlFix = report.fixes.find((f) => f.id === 'crawl-files');

@@ -51,7 +51,8 @@ export default function AppShell() {
   const project = useSelectedProject();
 
   const [newOpen, setNewOpen] = useState(false);
-  const [stackOpen, setStackOpen] = useState(false);
+  // The settings dialog: null = closed, 'settings' = Change settings, 'before-create' = the new site's address is asked before a copy is made.
+  const [stackMode, setStackMode] = useState(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed();
 
@@ -117,14 +118,16 @@ export default function AppShell() {
             project={project}
             audit={audit}
             auditLoading={auditLoading}
-            onOpenSettings={() => setStackOpen(true)}
+            onOpenSettings={(mode = 'settings') => setStackMode(mode)}
             onOpenReport={() => setReportOpen(true)}
           />
         )}
       </div>
 
       <NewProjectModal open={newOpen} onClose={() => setNewOpen(false)} />
-      {project && <StackModal open={stackOpen} onClose={() => setStackOpen(false)} project={project} />}
+      {project && (
+        <StackModal open={Boolean(stackMode)} askAddress={stackMode === 'before-create'} onClose={() => setStackMode(null)} project={project} />
+      )}
       {project && <ReportModal key={project.id} open={reportOpen} onClose={() => setReportOpen(false)} project={project} />}
     </div>
   );

@@ -157,6 +157,11 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     },
   };
   ctx.report.baseUrl = ctx.baseUrl;
+  // Without the new site's address the full addresses of the copy (canonical, sitemap, link previews, structured data)
+  // can only name the original site: said plainly (the app asks for the address before a copy is made, full-site E.1).
+  if (!project.target_domain) {
+    ctx.report.warnings.push(`No address was set for the new site, so its canonical links, sitemap, link previews and structured data name the original address (${ctx.baseUrl}). Set the new site's address in the settings and create the copy again.`);
+  }
   const interrupts = createInterrupts({
     url: ctx.audit.url ?? project.url,
     label: recreateId.slice(0, 8),

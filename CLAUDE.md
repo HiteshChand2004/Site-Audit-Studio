@@ -179,6 +179,12 @@ Decision: links to pages that can't be cloned honestly (login, cart, checkout, a
   hiding its own bar: fixed to disclosure); homepage ran out of probe time at 8 (budget 10 → 15 s, shorter waits). **No `<a href>` or `src` points at the original** (notice pages 3 on panscience). Still on the original domain (no target address
   set): canonical, og:url / og:image / twitter:image, sitemap.xml, robots.txt, llms.txt (copied), JSON-LD page URLs (copied). Decision (user): **ask the new site's address before Recreate**; every full URL then uses it (step E.1).
 
+- **E.1 nothing names the original site (WIP)**: user decision "ask before Recreate". Client: "Create the copy" without `target_domain` opens the settings dialog as **"Where will the new site live?"** (`StackModal askAddress`, address required,
+  "Save and create the copy" saves and starts the copy; `AppShell stackMode` null | 'settings' | 'before-create'). Server: `ir/rebase.js createRebaser({ resolveLink, baseUrl })` moves full addresses copied from the original onto the new site with the
+  page-link resolver (a copied page → baseUrl + `servedPath(outPath)`, a downloaded file → its local copy, any other page of the site → its notice page; other hosts unchanged): every string of the JSON-LD (`rebase.json`), hreflang
+  alternates, and the links in the copied `llms.txt` (`rebase.text`, sentence punctuation kept outside); `crawlFiles.rebased` = count. canonical / og:url / og:image / sitemap / robots already used `baseUrl`. Without an address
+  (API callers) the report warns that these name the original address. Tests: `recreate-rebase.test.js`; the pipeline test compares llms.txt with its links on the copy's origin.
+
 ### Recreate: sleep and network outages (`recreate/interrupts.js`, branch `recreate-retry`, WIP, merged into `phase-4a`; builds on `audit/interruptions.js`)
 Steps are long, so a step is never re-run whole. (1) **Sleep does not count**: each pause the watcher finds is given back at once — job deadline, `ctx.jobDeadline`, every running step's limit and `stepDeadline` move later (`runStep` uses
 `extendableTimeout`; a firing step timer first lets the watcher look (`tick()`)). (2) **Only what was hit is repeated, once**: a page capture or a page's sweep widths overlapped by an outage/sleep, even without an error (`recoverHit`; an abandoned

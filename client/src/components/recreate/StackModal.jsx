@@ -12,8 +12,9 @@ const MAX_PAGES = 300;
 const ALL_PAGES = -1;
 const isAll = (v) => v == null || v === ALL_PAGES;
 
-export default function StackModal({ open, onClose, project }) {
+export default function StackModal({ open, onClose, project, askAddress = false }) {
   const update = useProjects((s) => s.update);
+  const recreate = useProjects((s) => s.recreate);
   const [choice, setChoice] = useState(project?.stack ?? 'html');
   const [all, setAll] = useState(isAll(project?.recreate_pages));
   const [pages, setPages] = useState(String(isAll(project?.recreate_pages) ? 5 : project.recreate_pages));
@@ -37,10 +38,15 @@ export default function StackModal({ open, onClose, project }) {
       setError(`Pages must be a whole number from 0 to ${MAX_PAGES}.`);
       return;
     }
+    if (askAddress && !domain.trim()) {
+      setError('Enter the address the new site will live at, for example https://new.example.com.');
+      return;
+    }
     setSaving(true);
     try {
       await update(project.id, { stack: choice, recreate_pages: n, target_domain: domain.trim() || null });
       onClose();
+      if (askAddress) recreate(project.id);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -53,15 +59,19 @@ export default function StackModal({ open, onClose, project }) {
       open={open}
       onClose={onClose}
       width={560}
-      title="Settings for the copy"
-      description="Which technology the new site is built with, which pages are copied, and its future address. Saved for this website."
+      title={askAddress ? 'Where will the new site live?' : 'Settings for the copy'}
+      description={
+        askAddress
+          ? 'The copy names its own address in search-engine tags, the sitemap, link previews and structured data, so nothing points back to the original site. Enter it once; it is saved for this website.'
+          : 'Which technology the new site is built with, which pages are copied, and its future address. Saved for this website.'
+      }
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="primary" onClick={save} disabled={saving}>
-            {saving ? 'Saving…' : 'Save'}
+            {saving ? 'Saving…' : askAddress ? 'Save and create the copy' : 'Save'}
           </Button>
         </>
       }
@@ -115,7 +125,7 @@ export default function StackModal({ open, onClose, project }) {
         </div>
         <label className={form.field}>
           <span className={form.label}>
-            Future address of the new site<span className={form.optional}>optional</span>
+            Address of the new site{!askAddress && <span className={form.optional}>asked before the first copy</span>}
           </span>
           <input
             className={`${form.input} mono`}
@@ -123,7 +133,7 @@ export default function StackModal({ open, onClose, project }) {
             value={domain}
             onChange={(e) => setDomain(e.target.value)}
           />
-          <span className={styles.hint}>Where the new site will live. Search engines and link previews are told this address. Leave empty to keep the original address.</span>
+          <span className={styles.hint}>Where the new site will live. Search engines, link previews, the sitemap and structured data use this address; without it they would name the original site.</span>
         </label>
       </div>
       {error && <p className={styles.error}>{error}</p>}

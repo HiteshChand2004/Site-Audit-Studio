@@ -72,7 +72,7 @@ export default function CreateStep({ project, audit, onOpenSettings }) {
           </div>
           <div>
             <dt>Future address</dt>
-            <dd className="mono">{project.target_domain || 'Same as the original'}</dd>
+            <dd className="mono">{project.target_domain || 'Not set yet (asked when you create the copy)'}</dd>
           </div>
         </dl>
         <div className={ws.actions}>
@@ -82,11 +82,13 @@ export default function CreateStep({ project, audit, onOpenSettings }) {
             icon={running ? (p) => <Loader2 {...p} className={styles.spin} /> : Sparkles}
             disabled={Boolean(blocker) || running}
             title={blocker ?? undefined}
-            onClick={() => recreate(project.id)}
+            // Every full address in the copy (canonical, sitemap, link previews, structured data) uses the new site's address,
+            // never the original: it is asked once before the first copy.
+            onClick={() => (project.target_domain ? recreate(project.id) : onOpenSettings('before-create'))}
           >
             {running ? 'Creating the copy…' : result ? 'Create the copy again' : 'Create the copy'}
           </Button>
-          <Button icon={Settings2} onClick={onOpenSettings} disabled={running}>
+          <Button icon={Settings2} onClick={() => onOpenSettings('settings')} disabled={running}>
             Change settings
           </Button>
         </div>

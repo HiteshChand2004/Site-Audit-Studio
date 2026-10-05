@@ -17,6 +17,7 @@ import path from 'node:path';
 import { platformCdnHost } from '../assets/cdn.js';
 import { buildHead, generatedFavicon, siteNameOf } from './head.js';
 import { createAssetResolver, createLinkResolver } from './links.js';
+import { createRebaser } from './rebase.js';
 import { meaningful, PLATFORM_CLASS_PATTERNS } from './names.js';
 import { buildStyles, mapUrls } from './styles.js';
 import { DROP_TAGS, guardAttributes } from '../fixers/html.js';
@@ -223,8 +224,17 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
     t.headMissing = built.missing;
   }
 
+  // Full addresses copied from the original (structured data, hreflang alternates, llms.txt) name the new site (full-site E.1).
+  const rebase = createRebaser({ resolveLink, baseUrl });
+  for (const t of trees) {
+    t.head.jsonLd = (t.head.jsonLd ?? []).map((raw) => rebase.json(raw, t.info.url));
+    t.head.alternates = (t.head.alternates ?? []).map((a) => ({ ...a, href: rebase.url(a.href, t.info.url) }));
+  }
+  const llmsRebased = llms?.text ? { ...llms, text: rebase.text(llms.text, home.info.url) } : llms;
+
   // sitemap.xml + robots.txt (after the heads: canonical and robots meta decide what is listed).
-  const { files: crawlFileList, ...crawl } = crawlFiles({ pages: trees, baseUrl, robots, llms });
+  const { files: crawlFileList, ...crawl } = crawlFiles({ pages: trees, baseUrl, robots, llms: llmsRebased });
+  crawl.rebased = rebase.count();
   files.push(...crawlFileList);
 
   const fontFaces = (assets.fontFaces ?? []).filter((f) => f.local).map((f) => ({
