@@ -227,6 +227,17 @@ Decision: links to pages that can't be cloned honestly (login, cart, checkout, a
   (`# <home title>`, `> <home description>`, `## Pages` with `- [title](url): description` for each indexable page, ≤ 200); an original that was too large to copy is still left to copy by hand. `report.fixes` `head-data`;
   `crawl-files` says "llms.txt generated from the pages"; EVIDENCE `aeo.json-ld-schema`, `aeo.faq-schema`, `crawl.meta-tags` (theme-color), `aeo.llms-txt`. Tests: `recreate-headdata.test.js`.
 
+- **D.6 per-page CSS (WIP)** (the regression deferred since 5.5: one shared `css/site.css` = "Reduce unused CSS" + "render-blocking resources" on every site): the plain-HTML build no longer writes or links `css/site.css`. `emit/html.js emitSite`
+  builds the stylesheet once (`emitCss(ir)`, now `emitCss(ir, { from })`) and each page carries only the rules it uses (`emit/pageCss.js`: `usedBy(body)` = classes + `data-motion` / `data-w` tokens, plus the html / body classes; `pageCss`
+  keeps a rule when the page has every class and token its selector names — the script's `js-motion` / `is-in` / `w-open` / `w-shut` count as present —, element rules, `:root`, `@font-face`, at-rules that still hold rules, `@keyframes`
+  a kept rule names; compact, quoted text untouched). ≤ `INLINE_MAX` 40 000 characters → all inline in a `<style>` in the head (no CSS request); larger → the rules of the first screen inline (IR nodes with `f: 1`: desktop top
+  < `FOLD_PX` 1000) and the page's full rules in `css/pages/<outPath>.css` linked at the end of `<body>` (not render-blocking). url()s are rewritten for where each piece lives. `report.generate.cssBytes` sums both; the preview step
+  requests `css/pages/*.css` instead of `css/site.css`. The app stacks keep one stylesheet (their bundler links it; equivalence ignores stylesheets). **Note**: `verify/refine.js` (parked with the sweep) overrides `css/site.css`; it
+  must serve the pages' CSS instead when the sweep comes back. Tests: `recreate-pagecss.test.js`; the pipeline test builds the formatted stylesheet from the saved IR (`emitCss`) and checks the inline copy.
+- **Two capture fixes found by the all-pages panscience run (every page must be captured)**: (1) `audit/screenshots.js encode` and the visual-diff heatmap encode in memory and write with Node — sharp cannot open a path longer than
+  Windows' 260 characters, which a long page URL reaches inside the data folder ("unable to open for write" cost 2 pages); (2) `inspect.js`: a page whose capture failed with a network-level error (`networkFailure`, e.g.
+  `ERR_NETWORK_CHANGED`) that the outage watcher was too slow to see is captured once more after the site answers again (≤ 30 s wait).
+
 ### Recreate: sleep and network outages (`recreate/interrupts.js`, branch `recreate-retry`, WIP, merged into `phase-4a`; builds on `audit/interruptions.js`)
 Steps are long, so a step is never re-run whole. (1) **Sleep does not count**: each pause the watcher finds is given back at once — job deadline, `ctx.jobDeadline`, every running step's limit and `stepDeadline` move later (`runStep` uses
 `extendableTimeout`; a firing step timer first lets the watcher look (`tick()`)). (2) **Only what was hit is repeated, once**: a page capture or a page's sweep widths overlapped by an outage/sleep, even without an error (`recoverHit`; an abandoned

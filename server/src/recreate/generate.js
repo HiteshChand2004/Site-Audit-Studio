@@ -291,7 +291,8 @@ export async function generateStage(ctx) {
     pages: ir.pages.length,
     ...treeStats,
     classes: stats.classes,
-    cssBytes: Buffer.byteLength(out.files.get('css/site.css')),
+    // The CSS the pages carry (D.6: inline in each page, plus css/pages/*.css for large pages): page files and sheets.
+    cssBytes: [...out.files].reduce((n, [file, text]) => n + (file.endsWith('.css') ? Buffer.byteLength(text) : (/<style>([\s\S]*?)<\/style>/.exec(text)?.[1]?.length ?? 0)), 0),
     breakpoints: ir.breakpoints,
     links: stats.links,
     liveLinks: [...stats.liveLinks].slice(0, 100).map(([url, reason]) => ({ url, reason })),

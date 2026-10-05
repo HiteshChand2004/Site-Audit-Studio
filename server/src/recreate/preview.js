@@ -10,7 +10,7 @@
 // Recreate step 5 ("Starting preview") serves the new build on a throwaway port and requests every
 // page and the stylesheet through the same handler; after the job the preview is started for real.
 import { createServer } from 'node:http';
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { APP_ORIGIN } from '../audit/frame.js';
 import { RecreateError } from './errors.js';
@@ -205,9 +205,11 @@ export async function previewStage(ctx) {
   const motionScript = Boolean(ir.motion?.script);
   const served = await servePreview(path.join(ctx.dir, 'dist'), { scripts: motionScript });
   try {
+    // Pages carry their own CSS (D.6): inline, or a file under css/pages/ for a large page.
+    const pageSheets = await readdir(path.join(ctx.dir, 'dist', 'css', 'pages')).catch(() => []);
     const targets = [
       ...ir.pages.map((p) => ({ path: p.outPath.replace(/(^|\/)index\.html$/, '$1'), type: 'text/html' })),
-      { path: 'css/site.css', type: 'text/css' },
+      ...pageSheets.filter((f) => f.endsWith('.css')).map((f) => ({ path: `css/pages/${f}`, type: 'text/css' })),
       ...(motionScript ? [{ path: 'js/motion.js', type: 'text/javascript' }] : []),
     ];
     let bytes = 0;

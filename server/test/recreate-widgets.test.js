@@ -76,7 +76,7 @@ test('the copy carries the rebuilt parts: tokens, ARIA, open / closed rules and 
   assert.match(html, /aria-selected="true"/);
   assert.match(html, /data-w="ck\d+"/);
   assert.match(html, /<script src="js\/motion\.js" defer><\/script>/);
-  const css = await readFile(path.join(dist, 'css', 'site.css'), 'utf8');
+  const css = html.match(/<style>([\s\S]*?)<\/style>/)?.[1] ?? ''; // the page's own rules (D.6)
   assert.match(css, /\[data-w~="?dp\d+"?\]\.w-open/);
   assert.match(css, /\[data-w~="?bp\d+:\d+"?\]\.w-shut/);
   assert.doesNotMatch(html, new RegExp(original.origin.replace(/[.:/]/g, '\\$&')), 'nothing points at the original');

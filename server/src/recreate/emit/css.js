@@ -104,8 +104,7 @@ export function fontFaceCss(faces, from) {
 }
 
 /** The whole stylesheet as a string. */
-export function emitCss(ir) {
-  const from = CSS_FILE;
+export function emitCss(ir, { from = CSS_FILE } = {}) {
   const tokenOf = new Map(Object.entries(ir.tokens).map(([name, hex]) => [hex, name]));
   const opts = { tokenOf, from };
   const base = ir.rules.map((r) => block(r.selector, declarations(r.parts.base, opts))).filter(Boolean);

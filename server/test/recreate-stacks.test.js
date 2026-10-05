@@ -129,7 +129,10 @@ test('headTags lists the head as data, in order; the stylesheet can be left to t
 test('the HTML emitter writes the described head and body (golden output)', () => {
   const ir = { pages: [IR_PAGE], files: [{ path: 'robots.txt', content: 'x' }], fontFaces: [], keyframes: [], tokens: {}, rules: [], breakpoints: { tablet: 1023.98, mobile: 767.98 } };
   const out = emitSite(ir);
-  const html = out.files.get('index.html');
+  const page = out.files.get('index.html');
+  // D.6: the page carries its own rules inline (here only the reset), no shared stylesheet link.
+  assert.match(page, /\n {2}<style>a\{color: inherit;[^<]*<\/style>\n/);
+  const html = page.replace(/\n {2}<style>[^<]*<\/style>/, '');
   assert.equal(html, [
     '<!doctype html>',
     '<html lang="en">',
@@ -144,7 +147,6 @@ test('the HTML emitter writes the described head and body (golden output)', () =
     '  <link rel="alternate" hreflang="fr" href="https://x.test/fr">',
     '  <link rel="icon" href="assets/icons/f.png" sizes="32x32" type="image/png">',
     '  <link rel="preload" href="assets/fonts/f.woff2" as="font" type="font/woff2" crossorigin>',
-    '  <link rel="stylesheet" href="css/site.css">',
     '  <script type="application/ld+json">{"@type":"Thing","name":"\\u003cb\\u003e"}</script>',
     '</head>',
     '<body>',
@@ -156,7 +158,7 @@ test('the HTML emitter writes the described head and body (golden output)', () =
   assert.ok(html.includes('<h1>Hi &amp; &lt;you&gt;</h1>'));
   assert.deepEqual([...out.assets].sort(), ['fonts/f.woff2', 'icons/f.png']);
   assert.equal(out.files.get('robots.txt'), 'x');
-  assert.ok(out.files.has('css/site.css'));
+  assert.ok(!out.files.has('css/site.css'));
 });
 
 test('writeProject writes files, links only the known assets, and honours the assets folder', async () => {

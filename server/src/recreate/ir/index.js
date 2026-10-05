@@ -19,6 +19,7 @@ import { buildHead, fixHeadTexts, generatedFavicon, siteNameOf } from './head.js
 import { createAssetResolver, createLinkResolver } from './links.js';
 import { createRebaser } from './rebase.js';
 import { addHeadData } from './aeo.js';
+import { FOLD_PX } from '../emit/pageCss.js';
 import { meaningful, PLATFORM_CLASS_PATTERNS } from './names.js';
 import { buildStyles, mapUrls } from './styles.js';
 import { DROP_TAGS, guardAttributes } from '../fixers/html.js';
@@ -342,6 +343,9 @@ function pageBody(t, site, stats) {
     // Interactive parts (ir/widgets.js): the generated script and the open / closed rules select on them.
     if (n.widgetTokens?.length) attrs['data-w'] = n.widgetTokens.join(' ');
     const out = { t: n.tag, sid: n.sid, attrs, children: [] };
+    // In the first screen (desktop): its rules are inlined first when a page's CSS is large (emit/pageCss.js, D.6).
+    const top = n.views.desktop?.rect?.[1];
+    if (top != null && top < FOLD_PX) out.f = 1;
     if (n.class) out.class = n.class;
     const id = n.attrs.id;
     if (id && (keepIds.has(id) || meaningful(id))) out.id = id;

@@ -1,7 +1,7 @@
 // Rendered screenshots of the homepage at the three recreate breakpoints (1440 / 768 / 375).
 // Used as the OLD preview when the site cannot be framed, and later for visual diffs (Phase 4b).
 // Each view gets a first-screen ("fold") shot and a full-page shot capped at MAX_HEIGHT CSS px.
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
 import { USER_AGENT } from './http.js';
@@ -24,7 +24,10 @@ export const SCREEN_FILE = /^(desktop|tablet|mobile)-(fold|full)\.webp$/;
 export const screensDir = (analysisDir) => path.join(analysisDir, 'screens');
 
 export async function encode(png, file) {
-  const info = await sharp(png).webp(WEBP).toFile(file);
+  // Encoded in memory and written by Node: sharp cannot open a path longer than Windows' 260 characters, which a page
+  // with a long URL reaches inside the data folder (found on panscience.xyz); Node's own file functions can.
+  const { data, info } = await sharp(png).webp(WEBP).toBuffer({ resolveWithObject: true });
+  await writeFile(file, data);
   return { width: info.width, height: info.height, bytes: info.size };
 }
 

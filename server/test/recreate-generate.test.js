@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { access, readdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { db, projectDir } from '../src/db/index.js';
-import { declarations, tidyColors } from '../src/recreate/emit/css.js';
+import { declarations, emitCss, tidyColors } from '../src/recreate/emit/css.js';
 import { emitPage } from '../src/recreate/emit/html.js';
 import { MOTION_JS } from '../src/recreate/emit/motionScript.js';
 import { buildHead, clip, generatedFavicon } from '../src/recreate/ir/head.js';
@@ -311,7 +311,11 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.deepEqual(report.pages.map((p) => p.outPath), ['index.html', 'about.html', 'services/index.html', 'contact.html', 'work.html']);
   assert.deepEqual(report.errors, []);
   const files = (await readdir(site, { recursive: true })).map((f) => f.replaceAll('\\', '/')).filter((f) => /\.\w+$/.test(f)).sort();
-  for (const f of ['index.html', 'about.html', 'services/index.html', 'contact.html', 'work.html', 'css/site.css']) assert.ok(files.includes(f), f);
+  for (const f of ['index.html', 'about.html', 'services/index.html', 'contact.html', 'work.html']) assert.ok(files.includes(f), f);
+  // D.6: no shared stylesheet; every page carries the rules it uses (this small site: all inline in the head).
+  assert.ok(!files.includes('css/site.css'));
+  const siteCss = emitCss(JSON.parse(await readFile(path.join(dir, 'ir', 'site.json'), 'utf8')));
+  const inlineCss = (html) => html.match(/<style>([\s\S]*?)<\/style>/)?.[1] ?? '';
   // Crawl files (Phase 5): sitemap.xml and robots.txt generated, the original llms.txt copied as it is.
   for (const f of ['sitemap.xml', 'robots.txt', 'llms.txt']) assert.ok(files.includes(f), f);
   // Copied with its page links moved onto the copy's own address (full-site E.1): nothing names the original site.
@@ -391,7 +395,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.match(rawServices, /<h2 class="[\w-]+" data-motion="rv r\d+( d\d+)? rp">Revealed on scroll<\/h2>/);
   assert.match(rawServices, /<script src="\.\.\/js\/motion\.js" defer><\/script>\s*<\/head>/);
   assert.equal(await readRaw('js/motion.js'), MOTION_JS);
-  const motionCssText = await readRaw('css/site.css');
+  const motionCssText = siteCss;
   assert.match(motionCssText, /@media \(prefers-reduced-motion: no-preference\) \{[\s\S]*\.js-motion \[data-motion~="r1"\]:not\(\.is-in\) \{\n {4}opacity: 0;\n {4}translate: 0px 40px;/);
   assert.match(motionCssText, /\.js-motion \[data-motion~="r1"\]\.is-in \{\n {4}animation: m-r1 400ms ease var\(--md, 0ms\) backwards;/);
   assert.match(motionCssText, / {2}@keyframes m-r1 \{\n {4}from \{\n {6}opacity: 0;/);
@@ -421,7 +425,12 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.match(work, /<input id="email"/);
   assert.match(work, /<title>Selected work \| Recreate Co<\/title>/);
   assert.match(work, /<meta name="description" content="We design and build fast marketing sites for small teams, from the first sketch to launch day\.">/);
-  const css = await read('css/site.css');
+  const css = siteCss;
+  // The page's own copy of those rules: inline, compact, only what the page uses, no stylesheet request.
+  const workInline = inlineCss(await readRaw('work.html'));
+  assert.ok(workInline.length > 0 && workInline.length < css.length, `${workInline.length} vs ${css.length}`);
+  assert.doesNotMatch(workInline, /\n/);
+  assert.doesNotMatch(await readRaw('work.html'), /rel="stylesheet"/);
   const gridClass = work.match(/<div class="([\w-]+)">\s*<div class="card">/)[1];
   const rules = (selector) => [...css.matchAll(new RegExp(`\\.${selector} \\{([^}]*)\\}`, 'g'))].map((m) => m[1]);
   // Desktop only for now (views.js): one rule per class and no media queries.
@@ -554,12 +563,10 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.equal(ir.pages.find((p) => p.path === '/').content, null);
 
   // 4a.5 — production build: dist/ has the same pages and a minified stylesheet.
-  const distCss = await readFile(path.join(dir, 'dist', 'css', 'site.css'), 'utf8');
-  assert.ok(distCss.length < css.length * 0.9, `${distCss.length} vs ${css.length}`);
+  const distCss = inlineCss(await readFile(path.join(dir, 'dist', 'index.html'), 'utf8'));
+  assert.ok(distCss.length > 0 && distCss.length < css.length * 0.9, `${distCss.length} vs ${css.length}`);
   assert.doesNotMatch(distCss, /\n {2}/);
   assert.doesNotMatch(distCss, /@media ?\(max-width/); // desktop only for now: no media queries
-  assert.equal(report.minify.css.files, 1);
-  assert.ok(report.minify.css.minBytes < report.minify.css.bytes);
   for (const f of ['index.html', 'work.html', 'services/index.html']) assert.ok(await exists(path.join(dir, 'dist', f)), f);
   assert.ok(await exists(path.join(dir, 'dist', searchIcon)));
 
@@ -593,7 +600,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.equal((await verifySite(site)).ok, true);
 
   // 4a.6 — preview: the pipeline served every page and the stylesheet; the real preview serves dist/.
-  assert.equal(report.preview.checked, 7); // five pages, the stylesheet and js/motion.js
+  assert.equal(report.preview.checked, 6); // five pages and js/motion.js (D.6: the CSS is inside the pages)
   assert.deepEqual(report.preview.pages, ['index.html', 'about.html', 'services/index.html', 'contact.html', 'work.html']);
   const preview = await startPreview({ projectId: id, recreateId, root: path.join(dir, 'dist') });
   assert.ok(preview.port >= 5100 && preview.port <= 5199);

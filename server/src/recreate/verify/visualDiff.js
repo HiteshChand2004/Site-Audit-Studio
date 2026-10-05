@@ -10,7 +10,7 @@
 // wide, forgiving about small shifts: section positions, big colour areas). Rows only one page has count as
 // completely different, so a wrong page height costs score. Result 0–1, plus the page in horizontal bands
 // (where the difference is) and an optional heatmap image.
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import sharp from 'sharp';
 
 // `blur` (sigma, px at that scale) takes the edge off thin structure first: text lines a few px apart in the two pages
@@ -120,7 +120,8 @@ async function writeHeatmap({ scores, cols, rows }, file, scale) {
   await sharp(rgba, { raw: { width: cols, height: rows, channels: 4 } })
     .resize({ width: cols * scale, height: rows * scale, kernel: 'nearest' })
     .webp({ quality: 70 })
-    .toFile(file);
+    .toBuffer()
+    .then((data) => writeFile(file, data)); // Node writes long Windows paths; sharp cannot (see audit/screenshots.js encode)
 }
 
 /**
