@@ -249,6 +249,12 @@ Decision: links to pages that can't be cloned honestly (login, cart, checkout, a
   the new one, so the IR and every stack need no change. GIF (may be animated), SVG, WebP, AVIF and icons are left alone. `report.assets.images` = { files, converted, resized, bytesBefore, bytesAfter }; `report.fixes` `images`;
   EVIDENCE for Lighthouse `uses-optimized-images`, `modern-image-formats`, `uses-responsive-images`, `total-byte-weight`. Test: `recreate-images.test.js`.
 
+- **D.4 mechanical accessibility rules (WIP)** (`fixers/aria.js fixAria(tree)`, a tree fixer before the contrast one; nothing visible changes): `duplicate-id` (later uses become `<id>-2`, `-3`; references keep pointing at the first),
+  `frame-title` (an `<iframe>` without a title → "Embedded content from <host>"), `tabindex` (positive → 0), `aria-valid-attr-value` (a true / false / mixed ARIA attribute with another value is removed), `aria-hidden-focus`
+  (a focusable element inside `aria-hidden="true"` gets `tabindex="-1"`), and on a widget panel the script opens (`dp` / `mp` / `bp` tokens) a captured `aria-hidden` is removed (closed = `display: none`, hidden from
+  screen readers anyway; it would otherwise stay hidden once opened). `report.fixes` `aria`; EVIDENCE `axe.duplicate-id(-aria|-active)`, `axe.frame-title`, `axe.tabindex`, `axe.aria-valid-attr-value`, `axe.aria-hidden-focus`.
+  Left alone on purpose: rules that would change the layout or the content (list structure, landmarks, nested interactive controls). Test: `recreate-aria.test.js`.
+
 ### Recreate: sleep and network outages (`recreate/interrupts.js`, branch `recreate-retry`, WIP, merged into `phase-4a`; builds on `audit/interruptions.js`)
 Steps are long, so a step is never re-run whole. (1) **Sleep does not count**: each pause the watcher finds is given back at once — job deadline, `ctx.jobDeadline`, every running step's limit and `stepDeadline` move later (`runStep` uses
 `extendableTimeout`; a firing step timer first lets the watcher look (`tick()`)). (2) **Only what was hit is repeated, once**: a page capture or a page's sweep widths overlapped by an outage/sleep, even without an error (`recoverHit`; an abandoned

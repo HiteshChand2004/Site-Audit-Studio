@@ -59,7 +59,16 @@ const HEADINGS = { fixes: ['headings'] };
 const LOADING = { fixes: ['image-loading'] };
 // Full-site D.5: WebP, sized images.
 const IMAGES = { fixes: ['images'] };
+// Full-site D.4: mechanical accessibility rules.
+const ARIA = { fixes: ['aria'] };
 export const EVIDENCE = {
+  'axe.duplicate-id': ARIA,
+  'axe.duplicate-id-aria': ARIA,
+  'axe.duplicate-id-active': ARIA,
+  'axe.frame-title': ARIA,
+  'axe.tabindex': ARIA,
+  'axe.aria-valid-attr-value': ARIA,
+  'axe.aria-hidden-focus': ARIA,
   'lighthouse.uses-optimized-images': IMAGES,
   'lighthouse.modern-image-formats': IMAGES,
   'lighthouse.uses-responsive-images': IMAGES,
