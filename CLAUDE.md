@@ -166,6 +166,19 @@ Decision: links to pages that can't be cloned honestly (login, cart, checkout, a
   `generate.links.{file,notice}`; `liveLinks` empty for same-site links. Notice pages verified like pages. canonical / og:url still use the original origin unless `target_domain` is set. Tests: `recreate-generate.test.js`, `recreate-assets.test.js`.
   Not tested yet: notice pages inside a real React / Next.js / MERN build.
 
+- **B.1 click capture (WIP)** (`capture/clicks.js captureClicks`, desktop view, after the hover probe, own budget `inspect.js CLICK_BUDGET` 15 s when the step has time to spare): candidates = buttons (a button without
+  `type` is a submit button only inside a form), `summary`, `role=button|tab|switch`, `aria-expanded|controls|haspopup`, `#` / `javascript:` / empty-href anchors, `cursor: pointer` elements with a menu / toggle / slide / close… hint;
+  equal ones probed 3× (`groups`). Each: mouse rests on it (a panel that opens then = `opensOn: 'hover'`), click, the page is compared before / after (visibility, `aria-*` / `open` / `hidden` / class, sideways transform / scroll;
+  identity matrix = no move) → `classifyClick`: **dialog** (fixed layer ≥ 50 % of the screen), **disclosure** (shown / hidden; also a control that hides the block it sits in), **tabs** (sibling panels swapped, trigger has equal siblings),
+  **carousel** (track moved, or a swap by a next / prev / dot control), `state` (only attributes changed). Disclosure / dialog are closed again (same click → Escape → click outside; `closes`). Each target's open-state style is kept
+  (display, visibility, opacity, transform, height, max-height, overflow… for C.1). While probing: page links and form submissions are blocked (capture-phase `preventDefault`), `window.open` / `history.pushState|replaceState` are no-ops,
+  a script navigation is answered with 204 (an aborted one shows Chrome's error page). Output `motion.json.clicks = { version, widgets[{ kind, targets, trigger, tag, text, reasons, opensOn, closes, group, change }], groups, stats }`,
+  `report.pages[].motion.clicks`, `report.motion.clicks` (found, kinds, notRestored, left). `snapshot.js KEEP_ATTR` also keeps `hidden`. Tests: `recreate-clicks.test.js`.
+- **B.2 measured** (worktree API on `C:\sasb`, port 4010, all pages, desktop only): **panscience.xyz** 60 of 63 crawled pages captured (1 skipped: `/contact?tab=join`, a query variant), 23 min (inspect 19); 9 parts (tabs 1, disclosure 7, carousel 1);
+  the probe left `/` and `/contact` through Next.js script navigation (fixed afterwards: History API no-ops + 204). **parchaa.com** 10 / 10 pages, 5 min; 18 parts (dialog 2, disclosure 7, carousel 1, "tabs" 8 = a "Collapse search bar" button
+  hiding its own bar: fixed to disclosure); homepage ran out of probe time at 8 (budget 10 → 15 s, shorter waits). **No `<a href>` or `src` points at the original** (notice pages 3 on panscience). Still on the original domain (no target address
+  set): canonical, og:url / og:image / twitter:image, sitemap.xml, robots.txt, llms.txt (copied), JSON-LD page URLs (copied). Decision (user): **ask the new site's address before Recreate**; every full URL then uses it (step E.1).
+
 ### Recreate: sleep and network outages (`recreate/interrupts.js`, branch `recreate-retry`, WIP, merged into `phase-4a`; builds on `audit/interruptions.js`)
 Steps are long, so a step is never re-run whole. (1) **Sleep does not count**: each pause the watcher finds is given back at once — job deadline, `ctx.jobDeadline`, every running step's limit and `stepDeadline` move later (`runStep` uses
 `extendableTimeout`; a firing step timer first lets the watcher look (`tick()`)). (2) **Only what was hit is repeated, once**: a page capture or a page's sweep widths overlapped by an outage/sleep, even without an error (`recoverHit`; an abandoned

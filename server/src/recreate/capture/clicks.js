@@ -37,6 +37,9 @@ function installClicks(opts) {
     }, true);
     document.addEventListener('submit', (e) => e.preventDefault(), true);
     window.open = () => null;
+    // Client-side routers change the address with the History API: kept on this page while probing.
+    history.pushState = () => {};
+    history.replaceState = () => {};
   }
 
   const pathOf = (el) => {
@@ -208,7 +211,13 @@ function readClickState(opts) {
     return { rect: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)], fixed, position: cs.position };
   };
   const trigger = state.els[i];
-  const describe = (el) => ({ path: pathOf(el), tag: el.tagName.toLowerCase(), parent: el.parentElement ? pathOf(el.parentElement) : null, ...box(el), inTrigger: trigger ? trigger.contains(el) : false });
+  // The element's look in its new state (open panel, shown tab): what a rebuilt widget switches to (full-site C.1).
+  const OPEN_PROPS = ['display', 'visibility', 'opacity', 'transform', 'translate', 'height', 'max-height', 'overflow', 'clip-path', 'pointer-events', 'z-index'];
+  const styleOf = (el) => {
+    const cs = getComputedStyle(el);
+    return Object.fromEntries(OPEN_PROPS.map((p) => [p, cs.getPropertyValue(p)]));
+  };
+  const describe = (el) => ({ path: pathOf(el), tag: el.tagName.toLowerCase(), parent: el.parentElement ? pathOf(el.parentElement) : null, ...box(el), style: styleOf(el), inTrigger: trigger ? trigger.contains(el) : false, hasTrigger: trigger ? el !== trigger && el.contains(trigger) : false });
   return {
     shown: roots(shown).slice(0, 12).map(describe),
     hidden: roots(hidden).slice(0, 12).map(describe),
@@ -257,6 +266,9 @@ export function classifyClick(d, { text = '', group = null, triggerPath = null }
   if (layer) return { kind: 'dialog', targets: [layer.path] };
   const NAV = /next|prev|previous|arrow|›|‹|→|←|»|«|>|<|dot|bullet|slide/i;
   // Siblings swapped: one panel hidden, a sibling shown.
+  // A control that hides the block it sits in (a "close" or "collapse" button) is a toggle, not a tab.
+  const own = closed.find((c) => c.hasTrigger);
+  if (own) return { kind: 'disclosure', targets: [own.path, ...opened.map((o) => o.path)].slice(0, 6) };
   const swap = opened.find((o) => closed.some((c) => c.parent && c.parent === o.parent));
   if (swap) {
     const isNav = NAV.test(text) || (group && group.count >= 2 && !/tab/i.test(group.sig) && /dot|bullet|pagination/i.test(group.sig));
@@ -285,13 +297,17 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
   const started = Date.now();
   const deadline = started + budgetMs;
   const startUrl = page.url();
+  // A full page load started by a script (location.href = …) is answered with 204 No Content while probing: the browser
+  // then stays on the page (an aborted navigation would show an error page). Resources still load.
+  const blockNavigation = (route) => (route.request().isNavigationRequest() && route.request().frame() === page.mainFrame() ? route.fulfill({ status: 204, body: '' }) : route.fallback());
+  await page.route('**/*', blockNavigation);
   const picked = await page.evaluate(installClicks, { limit, perSignature, hint: HINT_SOURCE });
   const stats = { candidates: picked.candidates.length, probed: 0, found: 0, noChange: 0, covered: 0, notRestored: 0, left: false, timedOut: false, skipped: picked.skipped, kinds: {} };
   const groupOf = new Map();
   for (const g of picked.groups) for (const p of g.paths) groupOf.set(p, g);
   const read = (i) => page.evaluate(readClickState, { save: false, i });
   const save = () => page.evaluate(readClickState, { save: true });
-  const settleTime = 450;
+  const settleTime = 350;
 
   const widgets = [];
   for (const c of picked.candidates) {
@@ -317,13 +333,13 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
     stats.probed++;
     try {
       await page.mouse.move(-20, -20).catch(() => {});
-      await page.waitForTimeout(150);
+      await page.waitForTimeout(80);
       await save();
       // Hover first: a dropdown that opens when the mouse rests on its trigger.
       let opensOn = 'click';
       if (spot.reachable) {
         await page.mouse.move(spot.x, spot.y);
-        await page.waitForTimeout(350);
+        await page.waitForTimeout(280);
         const hovered = await read(c.i);
         if (visibleChange(hovered)) {
           const kind = classifyClick(hovered, { text: c.text, group: groupOf.get(c.path), triggerPath: c.path });
@@ -347,7 +363,7 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
       }
       let d = await read(c.i);
       // Read again while it is still moving (a slide or panel animating in).
-      const again = await page.waitForTimeout(250).then(() => read(c.i));
+      const again = await page.waitForTimeout(200).then(() => read(c.i));
       if (JSON.stringify(again) !== JSON.stringify(d)) d = again;
       const kind = classifyClick(d, { text: c.text, group: groupOf.get(c.path), triggerPath: c.path });
       if (!kind) {
@@ -375,6 +391,7 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
   }
   await page.mouse.move(-20, -20).catch(() => {});
   if (Date.now() > deadline) stats.timedOut = true;
+  await page.unroute('**/*', blockNavigation).catch(() => {});
   return { version: 1, view: 'desktop', widgets, groups: picked.groups, stats: { ...stats, ms: Date.now() - started } };
 }
 
@@ -405,7 +422,7 @@ async function restore(page, c, spot, read) {
 
 /** The parts of a change worth keeping in motion.json. */
 function compact(d) {
-  const slim = (x) => ({ path: x.path, rect: x.rect, ...(x.fixed && { fixed: true }) });
+  const slim = (x) => ({ path: x.path, rect: x.rect, style: x.style, ...(x.fixed && { fixed: true }) });
   return {
     shown: d.shown.map(slim),
     hidden: d.hidden.map(slim),

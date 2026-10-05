@@ -52,6 +52,8 @@ header { display: flex; gap: 16px; padding: 10px; }
 <button class="open-modal">Book a demo</button>
 <div class="modal"><div class="box">Dialog text <button class="close">Close</button></div></div>
 <button class="noop" type="button">Does nothing</button>
+<div class="search"><input aria-label="Search"><button class="collapse">Collapse search bar</button></div><div class="search-closed" style="display:none">Search closed</div>
+<button class="go-script">Go by script</button><button class="go-router">Go by router</button>
 <a href="/elsewhere.html" class="leave">A page link</a>
 <script>
 const burger = document.querySelector('.burger'), drawer = document.querySelector('#drawer');
@@ -68,6 +70,9 @@ const modal = document.querySelector('.modal');
 document.querySelector('.open-modal').addEventListener('click', () => modal.classList.add('open'));
 modal.querySelector('.close').addEventListener('click', () => modal.classList.remove('open'));
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') modal.classList.remove('open'); });
+document.querySelector('.collapse').addEventListener('click', () => { document.querySelector('.search').style.display = 'none'; document.querySelector('.search-closed').style.display = 'block'; });
+document.querySelector('.go-script').addEventListener('click', () => { location.href = '/elsewhere.html'; });
+document.querySelector('.go-router').addEventListener('click', () => { history.pushState({}, '', '/routed'); document.title = 'Routed'; });
 </script>
 </body></html>`;
 
@@ -97,13 +102,15 @@ test('classifyClick: dialog, tabs, carousel, disclosure, nothing', () => {
   assert.equal(classifyClick(swap, { text: 'Next slide' }).kind, 'carousel');
   assert.equal(classifyClick({ ...none, moved: [{ path: 'body>div:2', from: 'none', to: 'matrix(1,0,0,1,-400,0)' }] }).kind, 'carousel');
   assert.deepEqual(classifyClick({ ...none, shown: [box('body>nav:0', 'body')] }), { kind: 'disclosure', targets: ['body>nav:0'] });
+  const own = { ...none, shown: [box('body>div:4', 'body')], hidden: [{ ...box('body>div:3', 'body'), hasTrigger: true }] };
+  assert.equal(classifyClick(own, { group: { sig: 'button||collapse|div.search', count: 2 } }).kind, 'disclosure');
 });
 
 test('captureClicks finds menu, dropdown, accordion, details, tabs, slider and dialog; page links stay put', async () => {
   const page = await (await browser.newContext({ viewport: { width: 1000, height: 700 } })).newPage();
   await page.goto(`${site.origin}/`, { waitUntil: 'load' });
   const snap = await page.evaluate(snapshotPage, {});
-  const out = await captureClicks(page, { budgetMs: 20000 });
+  const out = await captureClicks(page, { budgetMs: 60000 });
   const byText = (t) => out.widgets.find((w) => w.text.includes(t));
 
   assert.equal(page.url(), `${site.origin}/`, 'no link left the page');
@@ -132,6 +139,8 @@ test('captureClicks finds menu, dropdown, accordion, details, tabs, slider and d
   assert.ok(dialog.closes, 'the dialog was closed again');
 
   assert.equal(byText('Does nothing'), undefined);
+  assert.equal(byText('Collapse search bar')?.kind, 'disclosure', 'a button that hides its own block is a toggle, not tabs');
+  assert.equal(byText('Go by script'), undefined, 'a script navigation is refused, nothing changed');
   assert.ok(out.stats.noChange >= 1);
   assert.ok(!out.widgets.some((w) => w.text === 'A page link'), 'links to pages are not candidates');
 

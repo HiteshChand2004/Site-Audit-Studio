@@ -19,7 +19,7 @@ const PAGE_LIMIT_MARGIN = 5000;
 // Time per page for the hover / focus probing of the desktop view.
 const MOTION_BUDGET = 8000;
 // Clicking menus, tabs, sliders and dialogs (full-site B.1, capture/clicks.js), after the hover probe.
-const CLICK_BUDGET = 10000;
+const CLICK_BUDGET = 15000;
 // Time of the whole job kept for the steps after capture (assets, generate, build, preview), for BASE_PAGES pages; more pages
 // keep more (ctx.laterReserve, recreate/index.js).
 export const LATER_STEPS_RESERVE = 150000;
