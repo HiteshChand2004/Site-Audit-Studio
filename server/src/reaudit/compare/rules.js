@@ -79,8 +79,11 @@ export const EVIDENCE = {
   // The recreated robots.txt keeps the original's AI crawler blocks on purpose; its entry says so.
   'aeo.ai-crawler-access': { auto: ['robots.txt'] },
   // The meta-tag row checks viewport, charset, twitter:card, theme-color and favicon.
-  'crawl.meta-tags': { auto: ['twitter:card', 'icon'] },
-  'aeo.llms-txt': { fixes: ['crawl-files'] },
+  'crawl.meta-tags': { fixes: ['head-data'], auto: ['twitter:card', 'icon', 'theme-color'] },
+  // Full-site D.3: Organization / WebSite / FAQPage added from the site itself.
+  'aeo.json-ld-schema': { fixes: ['head-data'], auto: ['json-ld'] },
+  'aeo.faq-schema': { fixes: ['head-data'], auto: ['json-ld'] },
+  'aeo.llms-txt': { fixes: ['crawl-files'], auto: ['llms.txt'] },
   'links.broken': { fixes: ['broken-links'] },
   'axe.image-alt': ALT,
   // Full-site D.2: text colours adjusted to WCAG AA.

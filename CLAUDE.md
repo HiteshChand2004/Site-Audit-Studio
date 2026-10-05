@@ -215,6 +215,13 @@ Decision: links to pages that can't be cloned honestly (login, cart, checkout, a
   element with a background image) that is not inside it — a hero photo behind a heading. `report.fixes` `contrast` (items: page, tag, text, from, to, background, before / after ratio); EVIDENCE `axe.color-contrast`.
   Tests: `recreate-contrast.test.js`.
 
+- **D.3 head data the original lacks (WIP)** (`ir/aeo.js addHeadData`, in `prepareSite` after the address rebase; everything from the site itself, listed as auto-generated with `review: true`): `Organization` (site name, the new
+  address, the site icon as logo — apple-touch-icon first) and `WebSite` JSON-LD on the homepage when no page has one (`LocalBusiness` / `Corporation` count as an organisation); `FAQPage` on a page that shows ≥ 2 question → answer pairs
+  (`faqPairs`: an h2–h6 ending in "?" followed by ≥ 20 characters of text before the next heading, or `<details><summary>…?</summary>answer</details>`; ≤ 20, answers ≤ 600 chars); `theme-color` = the site's most used strong colour
+  (`brandColor`) on every page without one. **llms.txt** (supersedes the Phase 5 "copied only, never generated" rule — user: every old problem solved): when the original has none, `crawlFiles` writes one from the pages
+  (`# <home title>`, `> <home description>`, `## Pages` with `- [title](url): description` for each indexable page, ≤ 200); an original that was too large to copy is still left to copy by hand. `report.fixes` `head-data`;
+  `crawl-files` says "llms.txt generated from the pages"; EVIDENCE `aeo.json-ld-schema`, `aeo.faq-schema`, `crawl.meta-tags` (theme-color), `aeo.llms-txt`. Tests: `recreate-headdata.test.js`.
+
 ### Recreate: sleep and network outages (`recreate/interrupts.js`, branch `recreate-retry`, WIP, merged into `phase-4a`; builds on `audit/interruptions.js`)
 Steps are long, so a step is never re-run whole. (1) **Sleep does not count**: each pause the watcher finds is given back at once — job deadline, `ctx.jobDeadline`, every running step's limit and `stepDeadline` move later (`runStep` uses
 `extendableTimeout`; a firing step timer first lets the watcher look (`tick()`)). (2) **Only what was hit is repeated, once**: a page capture or a page's sweep widths overlapped by an outage/sleep, even without an error (`recoverHit`; an abandoned

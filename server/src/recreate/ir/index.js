@@ -18,6 +18,7 @@ import { platformCdnHost } from '../assets/cdn.js';
 import { buildHead, fixHeadTexts, generatedFavicon, siteNameOf } from './head.js';
 import { createAssetResolver, createLinkResolver } from './links.js';
 import { createRebaser } from './rebase.js';
+import { addHeadData } from './aeo.js';
 import { meaningful, PLATFORM_CLASS_PATTERNS } from './names.js';
 import { buildStyles, mapUrls } from './styles.js';
 import { DROP_TAGS, guardAttributes } from '../fixers/html.js';
@@ -235,10 +236,20 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
   }
   const llmsRebased = llms?.text ? { ...llms, text: rebase.text(llms.text, home.info.url) } : llms;
 
+  // Structured data, FAQ schema and theme-color the original lacks (full-site D.3), on the new site's address.
+  const logoIcon = siteIcons.find((i) => /apple-touch-icon/i.test(i.rel)) ?? siteIcons[0];
+  const headData = addHeadData(trees, {
+    siteName,
+    baseUrl,
+    logo: logoIcon ? new URL(`assets/${logoIcon.asset}`, `${new URL(baseUrl).origin}/`).href : null,
+    themeColor: brandColor(trees[0].root),
+  });
+
   // sitemap.xml + robots.txt (after the heads: canonical and robots meta decide what is listed).
   const { files: crawlFileList, ...crawl } = crawlFiles({ pages: trees, baseUrl, robots, llms: llmsRebased });
   crawl.rebased = rebase.count();
   crawl.headTexts = headTexts;
+  crawl.headData = headData;
   files.push(...crawlFileList);
 
   const fontFaces = (assets.fontFaces ?? []).filter((f) => f.local).map((f) => ({

@@ -60,7 +60,21 @@ export function crawlFiles({ pages, baseUrl, robots = null, llms = null }) {
   for (const ua of blockedAiCrawlers) lines.push(`User-agent: ${ua}`, 'Disallow: /', '');
   lines.push(`Sitemap: ${origin}/sitemap.xml`, '');
 
-  const llmsText = llms?.text?.trim() ? llms.text : null;
+  // llms.txt: the original's own file (its links moved onto the new site, ir/rebase.js); when it has none, one is written
+  // from the pages (full-site D.3: name, description, the indexable pages with their titles and descriptions).
+  const copied = llms?.text?.trim() ? llms.text : null;
+  const home = pages.find((t) => t.info.outPath === 'index.html') ?? pages[0];
+  const generated = !copied && !llms?.tooLarge && home ? [
+    `# ${home.head.title ?? new URL(baseUrl).hostname}`,
+    '',
+    ...(home.head.description ? [`> ${home.head.description}`, ''] : []),
+    '## Pages',
+    '',
+    ...pages.filter((t) => sitemapUrl(t.info, t.head, origin)).slice(0, 200)
+      .map((t) => `- [${(t.head.title ?? t.info.path).replace(/[[\]]/g, '')}](${sitemapUrl(t.info, t.head, origin)})${t.head.description ? `: ${t.head.description}` : ''}`),
+    '',
+  ].join('\n') : null;
+  const llmsText = copied ?? generated;
   return {
     files: [
       { path: 'sitemap.xml', content: sitemap },
@@ -69,6 +83,6 @@ export function crawlFiles({ pages, baseUrl, robots = null, llms = null }) {
     ],
     sitemap: { urls, excluded },
     robots: { blocksAll, blockedAiCrawlers, source: found ? 'original robots.txt rules' : 'default (the original site has no robots.txt)' },
-    llms: { copied: Boolean(llmsText), bytes: llmsText ? Buffer.byteLength(llmsText) : 0, tooLarge: Boolean(llms?.tooLarge) },
+    llms: { copied: Boolean(copied), generated: Boolean(generated), bytes: llmsText ? Buffer.byteLength(llmsText) : 0, tooLarge: Boolean(llms?.tooLarge) },
   };
 }
