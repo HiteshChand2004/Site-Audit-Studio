@@ -83,6 +83,9 @@ export const EVIDENCE = {
   'aeo.llms-txt': { fixes: ['crawl-files'] },
   'links.broken': { fixes: ['broken-links'] },
   'axe.image-alt': ALT,
+  // Full-site D.2: text colours adjusted to WCAG AA.
+  'axe.color-contrast': { fixes: ['contrast'] },
+  'lighthouse.color-contrast': { fixes: ['contrast'] },
   'axe.role-img-alt': ALT,
   'axe.input-image-alt': ALT,
   'axe.link-name': NAMES,
