@@ -79,6 +79,7 @@ export function crawlFiles({ pages, baseUrl, robots = null, llms = null }) {
     files: [
       { path: 'sitemap.xml', content: sitemap },
       { path: 'robots.txt', content: lines.join('\n') },
+      { path: HEADERS_FILE, content: DEPLOY_HEADERS },
       ...(llmsText ? [{ path: 'llms.txt', content: llmsText }] : []),
     ],
     sitemap: { urls, excluded },
@@ -86,3 +87,21 @@ export function crawlFiles({ pages, baseUrl, robots = null, llms = null }) {
     llms: { copied: Boolean(copied), generated: Boolean(generated), bytes: llmsText ? Buffer.byteLength(llmsText) : 0, tooLarge: Boolean(llms?.tooLarge) },
   };
 }
+
+// Security and caching headers for the host (full-site D.7). A local preview cannot measure HTTPS, HSTS, CSP or caching
+// (the checklist keeps those rows N/A), so the copy ships them ready for static hosts that read `_headers` (Netlify,
+// Cloudflare Pages). Inline <style> is allowed (each page carries its own CSS, D.6); scripts only from the site itself
+// (js/motion.js). The Next.js build drops the CSP line (its pages carry inline scripts; emit/next/index.js publicFile).
+export const HEADERS_FILE = '_headers';
+export const DEPLOY_HEADERS = [
+  '/*',
+  '  Strict-Transport-Security: max-age=31536000; includeSubDomains',
+  '  X-Content-Type-Options: nosniff',
+  '  Referrer-Policy: strict-origin-when-cross-origin',
+  '  X-Frame-Options: SAMEORIGIN',
+  '  Permissions-Policy: camera=(), microphone=(), geolocation=()',
+  "  Content-Security-Policy: default-src 'self'; img-src 'self' data: https:; media-src 'self' https:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'; upgrade-insecure-requests",
+  '/assets/*',
+  '  Cache-Control: public, max-age=31536000, immutable',
+  '',
+].join('\n');

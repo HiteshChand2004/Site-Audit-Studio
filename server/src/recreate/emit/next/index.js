@@ -56,6 +56,8 @@ function followMoves(value, urlMap) {
 
 /** sitemap.xml with the URLs of pages that moved; every other generated file is copied as it is. */
 function publicFile(file, urlMap) {
+  // Next.js pages carry inline scripts: the CSP of _headers (ir/crawlFiles.js) would block them, so it is left to the host.
+  if (file.path === '_headers') return file.content.split('\n').filter((l) => !l.includes('Content-Security-Policy:')).join('\n');
   if (file.path !== 'sitemap.xml') return file.content;
   return file.content.replace(/<loc>([^<]*)<\/loc>/g, (all, loc) => `<loc>${followMoves(loc.trim(), urlMap)}</loc>`);
 }

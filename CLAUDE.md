@@ -238,6 +238,11 @@ Decision: links to pages that can't be cloned honestly (login, cart, checkout, a
   Windows' 260 characters, which a long page URL reaches inside the data folder ("unable to open for write" cost 2 pages); (2) `inspect.js`: a page whose capture failed with a network-level error (`networkFailure`, e.g.
   `ERR_NETWORK_CHANGED`) that the outage watcher was too slow to see is captured once more after the site answers again (≤ 30 s wait).
 
+- **D.7 deploy headers (WIP)** (`ir/crawlFiles.js HEADERS_FILE` = `_headers`, in `ir.files` so every stack ships it at the site root; read by Netlify and Cloudflare Pages): HSTS (1 year, subdomains), nosniff, `Referrer-Policy:
+  strict-origin-when-cross-origin`, `X-Frame-Options: SAMEORIGIN`, a Permissions-Policy, a CSP (`default-src 'self'`, images / media from https, inline style allowed — each page carries its own CSS since D.6 —, `script-src 'self'`,
+  `frame-ancestors 'self'`, `upgrade-insecure-requests`) and `Cache-Control: immutable` for `/assets/*` (content-hashed names). The Next.js build drops the CSP line (its pages carry inline scripts; `emit/next publicFile`). The checklist
+  keeps the deploy rows N/A (a local preview cannot measure them); `report.fixes` `deploy-headers` says what was prepared. Test in `recreate-headdata.test.js`.
+
 ### Recreate: sleep and network outages (`recreate/interrupts.js`, branch `recreate-retry`, WIP, merged into `phase-4a`; builds on `audit/interruptions.js`)
 Steps are long, so a step is never re-run whole. (1) **Sleep does not count**: each pause the watcher finds is given back at once — job deadline, `ctx.jobDeadline`, every running step's limit and `stepDeadline` move later (`runStep` uses
 `extendableTimeout`; a firing step timer first lets the watcher look (`tick()`)). (2) **Only what was hit is repeated, once**: a page capture or a page's sweep widths overlapped by an outage/sleep, even without an error (`recoverHit`; an abandoned

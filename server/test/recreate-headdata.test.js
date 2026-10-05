@@ -56,3 +56,11 @@ test('llms.txt is written from the pages when the original has none, never when 
   assert.equal(copied.files.find((f) => f.path === 'llms.txt').content, '# Own file\n');
   assert.equal(copied.llms.generated, false);
 });
+
+test('the copy ships security and caching headers for static hosts (_headers)', () => {
+  const made = crawlFiles({ pages: [page('index.html', '/', { title: 'Home', canonical: 'https://new.example.org/' })], baseUrl: 'https://new.example.org' });
+  const headers = made.files.find((f) => f.path === '_headers')?.content ?? '';
+  assert.match(headers, /^\/\*\n/);
+  for (const h of ['Strict-Transport-Security', 'X-Content-Type-Options: nosniff', "script-src 'self'", "style-src 'self' 'unsafe-inline'", 'Referrer-Policy']) assert.ok(headers.includes(h), h);
+  assert.match(headers, /\/assets\/\*\n {2}Cache-Control: public, max-age=31536000, immutable/);
+});
