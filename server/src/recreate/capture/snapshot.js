@@ -174,6 +174,18 @@ export function snapshotPage(opts) {
     return node;
   }
 
+  // One element only (full-site C.8): the content a click added to the page, in the same form as the page snapshot, its
+  // inherited styles diffed against the parent it was added to. `path` = the snapshot path it gets.
+  if (opts && opts.root) {
+    const el = opts.root;
+    const pcs = getComputedStyle(el.parentElement ?? document.documentElement);
+    const parentValues = {};
+    for (let i = 0; i < pcs.length; i++) parentValues[pcs[i]] = pcs.getPropertyValue(pcs[i]);
+    const node = walk(el, parentValues, opts.path ?? 'body');
+    frame.remove();
+    return { node };
+  }
+
   const rootValues = (() => {
     const cs = getComputedStyle(document.documentElement);
     const values = {};

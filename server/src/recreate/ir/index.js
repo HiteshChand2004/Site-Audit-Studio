@@ -144,7 +144,7 @@ function dropMissingImages(root, pageUrl, assetResolve) {
   return dropped;
 }
 
-function numberNodes(root) {
+export function numberNodes(root) {
   let sid = 0;
   const walk = (n) => {
     if (!isElement(n)) return;

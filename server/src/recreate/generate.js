@@ -11,7 +11,7 @@ import { emitSite } from './emit/html.js';
 import { writeProject } from './emit/write.js';
 import { applyIrFixes, applyTreeFixes, fixReport } from './fixers/index.js';
 import { fetchWordPress, isWordPress } from './fixers/wordpress.js';
-import { buildIR, prepareSite, readPageCaptures } from './ir/index.js';
+import { buildIR, numberNodes, prepareSite, readPageCaptures } from './ir/index.js';
 import { applyMotion, readPageMotion } from './ir/motion.js';
 import { applyWidgets, readPageClicks } from './ir/widgets.js';
 import { isElement } from './ir/tree.js';
@@ -148,6 +148,11 @@ export async function generateStage(ctx) {
   }
   const widgets = applyWidgets(site, clicksByPath);
   site.widgets = widgets.widgets;
+  // Content inserted for script-built panels (C.8) gets measurement ids like every other node.
+  for (const t of site.pages) if (t.renumber) {
+    t.nodes = numberNodes(t.root);
+    delete t.renumber;
+  }
   if (site.widgets) site.motion = { version: 1, hover: [], focus: [], reveal: [], delays: [], loops: [], ...(site.motion ?? {}), script: true };
 
   ctx.progress(0.12, 'Fixing audit issues');

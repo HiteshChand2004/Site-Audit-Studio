@@ -16,6 +16,8 @@
 //
 // Page functions below are self-contained (Playwright sends only their source).
 
+import { snapshotPage } from './snapshot.js';
+
 const HINT_SOURCE = 'menu|toggle|burger|hamburger|nav|drawer|offcanvas|dropdown|collapse|expand|accordion|faq|tab|slide|carousel|swiper|slick|next|prev|previous|arrow|dot|bullet|pagination|close|open|more|modal|dialog|popup|lightbox';
 
 /** Page function: blocks navigation while probing and picks the elements to click (window.__sasClick). */
@@ -211,6 +213,8 @@ function readClickState(opts) {
     return { rect: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)], fixed, position: cs.position };
   };
   const trigger = state.els[i];
+  // The new elements themselves, for a snapshot of what the click built (full-site C.8, captureAdded).
+  state.addedEls = roots(added).filter((el) => !(trigger && trigger.contains(el))).slice(0, 2);
   // The element's look in its new state (open panel, shown tab): what a rebuilt widget switches to (full-site C.1).
   const OPEN_PROPS = ['display', 'visibility', 'opacity', 'transform', 'translate', 'height', 'max-height', 'overflow', 'clip-path', 'pointer-events', 'z-index'];
   const styleOf = (el) => {
@@ -373,6 +377,11 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
       const entry = { ...kind, trigger: c.path, tag: c.tag, text: c.text, reasons: c.reasons, opensOn, change: compact(d) };
       const group = groupOf.get(c.path);
       if (group) entry.group = { sig: group.sig, count: group.count, paths: group.paths };
+      // Content the page's script built for this click (not in the snapshot): kept as a snapshot of its own (C.8).
+      if ((kind.kind === 'disclosure' || kind.kind === 'dialog') && d.added.some((a) => !a.inTrigger)) {
+        entry.built = await captureAdded(page).catch(() => []);
+        if (entry.built.length) stats.built = (stats.built ?? 0) + 1;
+      }
       // Put the page back: the same click (a toggle), then Escape, then a click outside.
       if (kind.kind === 'disclosure' || kind.kind === 'dialog') {
         entry.closes = await restore(page, c, spot, read);
@@ -393,6 +402,52 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
   if (Date.now() > deadline) stats.timedOut = true;
   await page.unroute('**/*', blockNavigation).catch(() => {});
   return { version: 1, view: 'desktop', widgets, groups: picked.groups, stats: { ...stats, ms: Date.now() - started } };
+}
+
+/** Page function: where each added element sits (its parent's snapshot path and its index among the parent's children). */
+function addedPlaces() {
+  const SKIP_TAGS = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
+  const pathOf = (el) => {
+    const parts = [];
+    for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+      if (n === document.body) {
+        parts.push('body');
+        break;
+      }
+      const tag = n.tagName.toLowerCase();
+      let index = 0;
+      for (const s of n.parentElement ? n.parentElement.children : []) {
+        if (SKIP_TAGS.has(s.tagName)) continue;
+        if (s.tagName === n.tagName) index++;
+        if (s === n) break;
+      }
+      parts.push(`${tag}:${index}`);
+    }
+    return parts.length && parts[parts.length - 1] === 'body' ? parts.reverse().join('>') : null;
+  };
+  return (window.__sasClick?.addedEls ?? []).map((el) => ({
+    parent: el.parentElement ? pathOf(el.parentElement) : null,
+    // Position among the parent's element children that existed before (the other added ones are not counted).
+    index: [...(el.parentElement?.children ?? [])].filter((c) => !SKIP_TAGS.has(c.tagName) && (c === el || window.__sasClick.base?.has(c))).indexOf(el),
+    path: pathOf(el),
+  }));
+}
+
+/** Snapshots of the elements the last click added: [{ parent, index, node }] (node in the page snapshot's form). */
+async function captureAdded(page) {
+  const places = await page.evaluate(addedPlaces);
+  const out = [];
+  for (let i = 0; i < places.length; i++) {
+    if (!places[i].parent) continue;
+    const handle = await page.evaluateHandle((n) => window.__sasClick.addedEls[n], i);
+    try {
+      const { node } = await page.evaluate(snapshotPage, { root: handle, path: places[i].path, maxNodes: 400 });
+      if (node) out.push({ parent: places[i].parent, index: places[i].index, node });
+    } finally {
+      await handle.dispose().catch(() => {});
+    }
+  }
+  return out;
 }
 
 /** Closes what a click opened; returns how ('toggle' | 'escape' | 'outside') or null when it stays open. */

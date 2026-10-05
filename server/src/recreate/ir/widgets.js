@@ -16,7 +16,7 @@
 // ir.widgets = { version, items: [{ id, kind, mode?, open?: [{ token, decls }], shut?: [{ token, decls }] }] }
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { isElement } from './tree.js';
+import { fromCapture, isElement } from './tree.js';
 
 export const WIDGETS_VERSION = 1;
 // The properties of an open / closed state that are written (the rest stays as styled).
@@ -135,7 +135,37 @@ export function applyWidgets(site, clicksByPath) {
 
       // Disclosure and dialog: the panel(s) the click opened, as they look open.
       const opened = [...(w.change?.shown ?? []), ...(w.change?.added ?? [])].map((x) => x.path).filter((p) => w.targets.includes(p));
-      const panels = opened.map((p) => [p, nodes.get(p)]).filter(([, n]) => n && n !== trigger);
+      let panels = opened.map((p) => [p, nodes.get(p)]).filter(([, n]) => n && n !== trigger);
+      // Content the page's script built on the click (C.8): its snapshot is inserted where it appeared, hidden until opened.
+      if (!panels.length && w.built?.length) {
+        for (const b of w.built) {
+          const parent = nodes.get(b.parent);
+          if (!parent || !b.node) continue;
+          const node = fromCapture(b.node, 'desktop');
+          const forget = (n) => {
+            if (!isElement(n)) return;
+            delete n.cpath;
+            n.children.forEach(forget);
+          };
+          forget(node); // its path belongs to the page with the panel open, not to the snapshot
+          const openStyle = stateDecls((w.change?.added ?? []).find((a) => a.path === b.node.path)?.style) ;
+          const view = node.views.desktop;
+          view.style = { ...view.style, display: 'none' };
+          view.hidden = true;
+          const kids = parent.children;
+          let at = 0;
+          for (let i = 0, seen = 0; i < kids.length; i++) {
+            if (seen === b.index) break;
+            if (isElement(kids[i])) seen++;
+            at = i + 1;
+          }
+          kids.splice(Math.min(at, kids.length), 0, node);
+          node.builtOpen = Object.keys(openStyle).length ? openStyle : { display: 'block' };
+          panels.push([b.node.path, node]);
+          stats.inserted = (stats.inserted ?? 0) + 1;
+          tree.renumber = true;
+        }
+      }
       if (!panels.length) {
         if (opened.length) stats.skipped.scriptBuilt++; // the panel was made by the page's script: not in the snapshot
         else stats.skipped.noPanel++;
@@ -152,7 +182,7 @@ export function applyWidgets(site, clicksByPath) {
       for (const [p, node] of panels) {
         tokenize(node, `${prefix}p${id}`);
         ids.push(ensureId(node, `w${id}-panel${ids.length ? `-${ids.length + 1}` : ''}`));
-        open.push({ token: `${prefix}p${id}`, decls: stateDecls(styleOf(w, p)) });
+        open.push({ token: `${prefix}p${id}`, decls: node.builtOpen ?? stateDecls(styleOf(w, p)) });
       }
       trigger.attrs['aria-expanded'] = 'false';
       trigger.attrs['aria-controls'] = ids.join(' ');

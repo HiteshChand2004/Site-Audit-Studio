@@ -76,6 +76,13 @@ test('captureClicks finds menu, dropdown, accordion, details, tabs, slider and d
   assert.ok(dialog.closes, 'the dialog was closed again');
 
   assert.equal(byText('Does nothing'), undefined);
+  // A menu the page's script builds on the click: its content is snapshotted where it appeared (C.8).
+  const svc = byText('Services');
+  assert.equal(svc?.kind, 'disclosure');
+  assert.equal(svc.built?.length, 1);
+  assert.equal(svc.built[0].node.tag, 'ul');
+  assert.match(svc.built[0].parent, /^body>div:\d+$/);
+  assert.equal(svc.closes, 'toggle');
   assert.equal(byText('Collapse search bar')?.kind, 'disclosure', 'a button that hides its own block is a toggle, not tabs');
   assert.equal(byText('Go by script'), undefined, 'a script navigation is refused, nothing changed');
   assert.ok(out.stats.noChange >= 1);

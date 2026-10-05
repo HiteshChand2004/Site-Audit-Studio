@@ -19,6 +19,7 @@ header { display: flex; gap: 16px; padding: 10px; }
 .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); }
 .modal.open { display: block; }
 .modal .box { background: #fff; margin: 100px auto; width: 300px; padding: 20px; }
+.svc-list { list-style: none; margin: 0; padding: 8px; background: #fafafa; border: 1px solid #ddd; }
 </style></head><body>
 <header>
   <button class="burger" aria-label="Open menu" aria-expanded="false" aria-controls="drawer">☰</button>
@@ -41,6 +42,7 @@ header { display: flex; gap: 16px; padding: 10px; }
 </div>
 <button class="open-modal">Book a demo</button>
 <div class="modal"><div class="box">Dialog text <button class="close">Close</button></div></div>
+<div class="svc-wrap"><button class="svc-btn">Services</button></div>
 <button class="noop" type="button">Does nothing</button>
 <div class="search"><input aria-label="Search"><button class="collapse">Collapse search bar</button></div><div class="search-closed" style="display:none">Search closed</div>
 <button class="go-script">Go by script</button><button class="go-router">Go by router</button>
@@ -61,6 +63,15 @@ document.querySelector('.open-modal').addEventListener('click', () => modal.clas
 modal.querySelector('.close').addEventListener('click', () => modal.classList.remove('open'));
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') modal.classList.remove('open'); });
 document.querySelector('.collapse').addEventListener('click', () => { document.querySelector('.search').style.display = 'none'; document.querySelector('.search-closed').style.display = 'block'; });
+const svcBtn = document.querySelector('.svc-btn');
+svcBtn.addEventListener('click', () => {
+  const open = document.querySelector('.svc-list');
+  if (open) return open.remove();
+  const ul = document.createElement('ul');
+  ul.className = 'svc-list';
+  ul.innerHTML = '<li><a href="/design.html">Design</a></li><li><a href="/build.html">Build</a></li>';
+  svcBtn.parentElement.appendChild(ul);
+});
 document.querySelector('.go-script').addEventListener('click', () => { location.href = '/elsewhere.html'; });
 document.querySelector('.go-router').addEventListener('click', () => { history.pushState({}, '', '/routed'); document.title = 'Routed'; });
 </script>

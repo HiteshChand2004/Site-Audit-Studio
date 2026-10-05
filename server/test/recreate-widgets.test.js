@@ -134,6 +134,13 @@ test('a visitor can use every part of the copy', async () => {
   await page.keyboard.press('Escape');
   assert.equal(await page.getByText('Dialog text').isVisible(), false);
 
+  // A menu the original's script built on the click: in the copy it is part of the page, hidden until opened.
+  assert.equal(await page.getByText('Design', { exact: true }).isVisible(), false);
+  await page.getByText('Services', { exact: true }).click();
+  assert.equal(await page.getByText('Design', { exact: true }).isVisible(), true);
+  await page.getByText('Services', { exact: true }).click();
+  assert.equal(await page.getByText('Design', { exact: true }).isVisible(), false);
+
   // Dropdown on hover.
   await page.getByText('Products').hover();
   await page.waitForTimeout(100);
