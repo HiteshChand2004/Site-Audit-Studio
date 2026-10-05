@@ -1,16 +1,15 @@
 import { useEffect, useState } from 'react';
-import { ArrowUpDown, FileText, Globe, Plus } from 'lucide-react';
+import { FileText, Globe, Plus } from 'lucide-react';
 import Sidebar from './Sidebar.jsx';
-import OldPanel from './OldPanel.jsx';
-import NewPanel from './NewPanel.jsx';
+import Workspace from './Workspace.jsx';
 import Disclaimer from '../components/common/Disclaimer.jsx';
 import Button from '../components/common/Button.jsx';
+import { EmptyState } from '../components/common/Surface.jsx';
 import NewProjectModal from '../components/project/NewProjectModal.jsx';
 import ReportModal from '../components/report/ReportModal.jsx';
 import StackModal from '../components/recreate/StackModal.jsx';
 import { useProjects, useSelectedProject } from '../store/useProjects.js';
 import styles from './AppShell.module.css';
-import { useSyncScroll } from './useSyncScroll.js';
 
 const SIDEBAR_KEY = 'wa:sidebarCollapsed';
 
@@ -54,16 +53,7 @@ export default function AppShell() {
   const [newOpen, setNewOpen] = useState(false);
   const [stackOpen, setStackOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
-  const [tab, setTab] = useState('old'); // narrow screens only
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed();
-  // Sync scroll: off by default and not remembered. The OLD screenshot and the NEW page (drawn at full
-  // height) scroll by the same share of their height, so both show the same part of the site.
-  const [syncScroll, setSyncScroll] = useState(false);
-  const [oldScroller, setOldScroller] = useState(null);
-  const [newScroller, setNewScroller] = useState(null);
-  useSyncScroll(oldScroller, newScroller, syncScroll);
-  // The page the NEW preview shows: the OLD preview shows the same page of the original.
-  const [comparePage, setComparePage] = useState(null);
 
   useEffect(() => {
     load();
@@ -71,11 +61,6 @@ export default function AppShell() {
 
   return (
     <div className={styles.app}>
-      <div className={styles.aurora} aria-hidden="true">
-        <i />
-        <i />
-        <i />
-      </div>
       <header className={styles.topbar}>
         <div className={styles.brand}>
           <span className={styles.logo} aria-hidden="true">
@@ -84,12 +69,11 @@ export default function AppShell() {
             <i />
           </span>
           <span className={styles.brandName}>Site Audit Studio</span>
-          <span className={`${styles.version} mono`}>v0.3 · phase 3</span>
         </div>
         <div className={styles.topActions}>
           {project && (
-            <Button variant="primary" icon={FileText} onClick={() => setReportOpen(true)} title="Build the complete report of the original and the recreated site">
-              Generate report
+            <Button icon={FileText} onClick={() => setReportOpen(true)} title="One report of the check, the copy and what got better (PDF, HTML or data)">
+              Full report
             </Button>
           )}
           <Disclaimer />
@@ -103,66 +87,39 @@ export default function AppShell() {
           onToggle={() => setSidebarCollapsed((c) => !c)}
         />
 
-        {error && !project && <div className={styles.center}>API error: {error}</div>}
+        {error && !project && (
+          <div className={styles.center}>
+            <EmptyState icon={Globe} title="The app cannot reach its server">
+              {error}
+            </EmptyState>
+          </div>
+        )}
 
         {!error && !project && (
           <div className={styles.center}>
-            <div className={styles.emptyCard}>
-              <span className={styles.emptyIcon}>
-                <Globe size={20} />
-              </span>
-              <h1>No project selected</h1>
-              <p>Add a website — its audit appears in the OLD panel and the recreated version in the NEW panel.</p>
-              <Button variant="primary" icon={Plus} onClick={() => setNewOpen(true)}>
-                New Project
-              </Button>
-            </div>
+            <EmptyState
+              icon={Globe}
+              title="Start with a website"
+              action={
+                <Button variant="primary" size="lg" icon={Plus} onClick={() => setNewOpen(true)}>
+                  Add a website
+                </Button>
+              }
+            >
+              Add one of your websites. The app checks how healthy it is, builds a clean copy, shows both side by side and lists what got better.
+            </EmptyState>
           </div>
         )}
 
         {project && (
-          <div className={styles.panels} data-tab={tab}>
-            <div className={styles.sync}>
-              <button
-                type="button"
-                className={styles.syncToggle}
-                aria-pressed={syncScroll}
-                aria-describedby="sync-scroll-hint"
-                onClick={() => setSyncScroll((on) => !on)}
-              >
-                <ArrowUpDown size={16} aria-hidden="true" />
-                <span>{syncScroll ? 'Sync on' : 'Sync scroll'}</span>
-              </button>
-              <span id="sync-scroll-hint" role="tooltip" className={styles.syncHint}>
-                Sync scroll works in Shot mode only (Live sites can't be controlled due to browser security).
-              </span>
-            </div>
-            <div className={styles.tabs} role="tablist" aria-label="Panels">
-              {['old', 'new'].map((t) => (
-                <button key={t} role="tab" type="button" aria-selected={tab === t} onClick={() => setTab(t)}>
-                  {t === 'old' ? 'OLD · Original' : 'NEW · Recreated'}
-                </button>
-              ))}
-            </div>
-            <OldPanel
-              key={`old-${project.id}`}
-              project={project}
-              audit={audit}
-              loading={auditLoading}
-              onOpenStack={() => setStackOpen(true)}
-              syncScroll={syncScroll}
-              onShotScroller={setOldScroller}
-              comparePage={comparePage}
-            />
-            <NewPanel
-              key={`new-${project.id}`}
-              project={project}
-              audit={audit}
-              syncScroll={syncScroll}
-              onFrameScroller={setNewScroller}
-              onPageChange={setComparePage}
-            />
-          </div>
+          <Workspace
+            key={project.id}
+            project={project}
+            audit={audit}
+            auditLoading={auditLoading}
+            onOpenSettings={() => setStackOpen(true)}
+            onOpenReport={() => setReportOpen(true)}
+          />
         )}
       </div>
 

@@ -10,7 +10,7 @@
 // as a warning, since React recovers by rendering the page again.
 import { launchBrowser } from '../../audit/render.js';
 import { MAX_HEIGHT, VIEWS } from '../../audit/screenshots.js';
-import { openRenderer, visualSimilarity } from './layout.js';
+import { openRenderer, visualSimilarity, withBrowserRetry } from './layout.js';
 import { gotoLocal } from './goto.js';
 
 export const VISUAL_MIN = 0.97;
@@ -103,7 +103,10 @@ export function firstDifference(a, b) {
   return null;
 }
 
-async function snapshot(renderer, outPath, viewId, urlMap = null) {
+// After a browser crash the page is rendered once more in a new browser (never skipped: equivalence must cover every page).
+const snapshot = (renderer, outPath, viewId, urlMap = null) => withBrowserRetry(renderer, () => snapshotOnce(renderer, outPath, viewId, urlMap));
+
+async function snapshotOnce(renderer, outPath, viewId, urlMap = null) {
   const page = await renderer.contexts[viewId].newPage();
   try {
     await gotoLocal(page, `${renderer.server.origin}/${outPath}`, 20000);

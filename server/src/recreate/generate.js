@@ -40,24 +40,38 @@ export async function siteRenderer(ctx) {
 }
 
 /**
- * Renders every page of the measurement build (with data-sas-id) in every captured view.
+ * Renders every page of the measurement build (with data-sas-id) in every captured view. A page that cannot be rendered
+ * (the browser crashed twice on it, or it never loaded) is listed in `failed` and the other pages go on: one page never
+ * throws away the work of the whole job. Only when no page renders at all is the error raised (the build itself is broken).
  * @param {(page:object, view:string, result:object)=>Promise<void>|void} onView
  * @param {number} [deadline]  no new page is started after this time (ms since epoch)
- * @returns {Promise<number>} the number of pages rendered
+ * @returns {Promise<{ started: number, failed: { path: string, error: string }[] }>} pages started before the deadline, pages that failed
  */
 export async function measureSite(renderer, ir, site, { screenshot = false, onView, deadline = Infinity } = {}) {
   const measured = emitSite(ir, { ids: true });
   for (const page of ir.pages) renderer.server.overrides.set(page.outPath, measured.files.get(page.outPath));
+  const failed = [];
+  let firstError = null;
   try {
+    let started = ir.pages.length;
     for (const [i, page] of ir.pages.entries()) {
-      if (Date.now() > deadline) return i;
+      if (Date.now() > deadline) {
+        started = i;
+        break;
+      }
       const tree = site.pages[i];
-      await Promise.all(tree.views.map(async (view) => {
-        const result = await renderPage(renderer, page.outPath, view, { screenshot });
-        await onView(tree, view, result);
-      }));
+      try {
+        await Promise.all(tree.views.map(async (view) => {
+          const result = await renderPage(renderer, page.outPath, view, { screenshot });
+          await onView(tree, view, result);
+        }));
+      } catch (err) {
+        firstError ??= err;
+        failed.push({ path: tree.info.path, error: String(err?.message ?? err).split('\n')[0].trim() });
+      }
     }
-    return ir.pages.length;
+    if (started && failed.length === started) throw firstError;
+    return { started, failed };
   } finally {
     renderer.server.overrides.clear();
   }
@@ -150,11 +164,13 @@ export async function generateStage(ctx) {
     }
     ctx.progress(0.3 + 0.6 * (round / (FIT_ROUNDS + 1)), round ? `Fitting layout (round ${round} of ${FIT_ROUNDS})` : 'Checking layout');
     const views = [];
-    await measureSite(renderer, ir, site, {
+    const { failed } = await measureSite(renderer, ir, site, {
       onView: (tree, view, result) => {
         views.push({ tree, view, rects: result.rects, score: viewScore(compareLayout(tree.root, view, result.rects), null) });
       },
     });
+    // A page the browser could not render keeps the layout it has (no fixes planned for it this round).
+    for (const f of failed) if (!fit.failed?.some((x) => x.path === f.path)) (fit.failed ??= []).push(f);
     const score = Math.round(views.reduce((n, x) => n + x.score, 0) / Math.max(1, views.length));
     if (round === 0) fit.layoutBefore = score;
     if (saved && score < fit.layoutAfter) {
@@ -263,6 +279,9 @@ export async function generateStage(ctx) {
     breakpoints: ir.breakpoints,
     links: stats.links,
     liveLinks: [...stats.liveLinks].slice(0, 100).map(([url, reason]) => ({ url, reason })),
+    // Same-site links to what is not part of the copy: each opens a local notice page (ir/notice.js), never the live site.
+    noticePages: [...stats.notices].slice(0, 200).map(([url, reason]) => ({ url, reason })),
+    noticePageCount: stats.notices.size,
     droppedImages: stats.droppedImages.length,
     droppedMedia: stats.droppedMedia.length,
     assetFiles: siteAssets.length,
@@ -318,5 +337,9 @@ export async function generateStage(ctx) {
   }
   if (site.truncated) report.warnings.push('A page has more elements than one capture keeps (6,000); only the first 6,000 were recreated.');
   if (fit.stopped) report.warnings.push('The layout fit pass stopped early because of the time limit.');
+  if (fit.failed?.length) {
+    const list = fit.failed.map((f) => f.path);
+    report.warnings.push(`The layout of ${list.length} ${list.length === 1 ? 'page' : 'pages'} could not be checked (the browser could not render ${list.length === 1 ? 'it' : 'them'}, even in a new browser): ${list.slice(0, 5).join(', ')}${list.length > 5 ? ', …' : ''}. ${list.length === 1 ? 'It keeps' : 'They keep'} the layout as generated.`);
+  }
   ctx.progress(1, `Generated ${ir.pages.length} ${ir.pages.length === 1 ? 'page' : 'pages'}`);
 }

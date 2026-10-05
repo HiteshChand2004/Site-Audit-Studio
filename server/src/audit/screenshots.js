@@ -11,11 +11,10 @@ import { mapLimit } from './util.js';
 export const MOBILE_UA =
   'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Mobile Safari/537.36 SiteAuditStudio/0.3';
 
-export const VIEWS = [
-  { id: 'desktop', width: 1440, height: 900, dpr: 1, mobile: false },
-  { id: 'tablet', width: 768, height: 1024, dpr: 1, mobile: true },
-  { id: 'mobile', width: 375, height: 812, dpr: 2, mobile: true },
-];
+// Desktop only for now (see recreate/views.js); the tablet and phone views are parked:
+//   { id: 'tablet', width: 768, height: 1024, dpr: 1, mobile: true },
+//   { id: 'mobile', width: 375, height: 812, dpr: 2, mobile: true },
+export const VIEWS = [{ id: 'desktop', width: 1440, height: 900, dpr: 1, mobile: false }];
 
 // 8000 CSS px × DPR 2 = 16000 px, which stays under WebP's 16383 px limit.
 export const MAX_HEIGHT = 8000;

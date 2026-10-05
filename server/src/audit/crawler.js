@@ -1,6 +1,6 @@
 import { extractPage, looksLikeShell } from './extract.js';
 import { fetchPage, isHtml } from './http.js';
-import { sameSite, urlKey } from './util.js';
+import { pageKey, sameSite } from './util.js';
 
 const NON_PAGE = /\.(pdf|jpe?g|png|gif|webp|avif|svg|ico|mp4|webm|mov|mp3|wav|zip|rar|7z|gz|dmg|exe|docx?|xlsx?|pptx?|csv|json|xml|txt|css|js|woff2?|ttf)$/i;
 const CONCURRENCY = 4;
@@ -25,7 +25,7 @@ export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls 
   let skippedByRobots = 0;
 
   const enqueue = (url, depth) => {
-    const key = urlKey(url);
+    const key = pageKey(url);
     if (seen.has(key) || depth > maxDepth) return;
     if (!sameSite(url, home.url) || NON_PAGE.test(new URL(url).pathname)) return;
     seen.add(key);
@@ -57,8 +57,8 @@ export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls 
     return page;
   }
 
-  seen.add(urlKey(home.url));
-  seen.add(urlKey(home.requestedUrl || home.url));
+  seen.add(pageKey(home.url));
+  seen.add(pageKey(home.requestedUrl || home.url));
   const homePage = await toPage(home, 0);
   pages.push(homePage);
   for (const u of seedUrls) enqueue(u, 1);
@@ -66,7 +66,7 @@ export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls 
   for (const u of sitemapUrls.slice(0, maxPages * 3)) enqueue(u, 1);
   onProgress?.(1, Math.min(maxPages, 1 + queue.length), home.url);
 
-  const crawledKeys = new Set([urlKey(home.url)]);
+  const crawledKeys = new Set([pageKey(home.url)]);
   const inflight = new Set();
   let started = 1;
   while (queue.length || inflight.size) {
@@ -77,7 +77,7 @@ export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls 
         const res = await fetchPage(url, { timeout: 12000 });
         const page = await toPage(res, depth).catch((err) => ({ url: res.url, status: res.status, depth, error: err.message, facts: null }));
         // A redirect can land on a page that was already crawled.
-        const key = urlKey(page.url);
+        const key = pageKey(page.url);
         if (crawledKeys.has(key)) return;
         crawledKeys.add(key);
         pages.push(page);

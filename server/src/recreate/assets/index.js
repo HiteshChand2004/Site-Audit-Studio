@@ -17,6 +17,7 @@ import { platformCdnHost } from './cdn.js';
 import { assetKey, collectAssets } from './collect.js';
 import { parseStylesheet } from './css.js';
 import { downloadAsset, reasonDetail } from './download.js';
+import { causeText, recoverHit, RETRYABLE_ASSET_REASONS } from '../interrupts.js';
 import { addRemoved, emptyRemoved, sanitizeSvg } from '../fixers/svg.js';
 
 const MB = 1024 * 1024;
@@ -27,13 +28,15 @@ export const ASSET_LIMITS = {
   font: { maxBytes: 5 * MB, timeout: 20000 },
   media: { maxBytes: 40 * MB, timeout: 60000 },
   stylesheet: { maxBytes: 2 * MB, timeout: 15000 },
+  // Files the pages link to (PDF, documents, archives).
+  document: { maxBytes: 25 * MB, timeout: 60000 },
 };
 // maxTotalBytes is checked before each download starts, so parallel downloads can pass it slightly.
 export const ASSET_BUDGET = { maxAssets: 800, maxTotalBytes: 300 * MB, concurrency: 6, maxSheets: 20 };
 // Downloads stop starting this long before the step's own time limit, so the step ends cleanly.
 const DEADLINE_MARGIN = 10000;
 
-const FOLDERS = { image: 'images', icon: 'icons', font: 'fonts', media: 'media' };
+const FOLDERS = { image: 'images', icon: 'icons', font: 'fonts', media: 'media', document: 'files' };
 
 const MIME_EXT = {
   'image/jpeg': '.jpg', 'image/jpg': '.jpg', 'image/pjpeg': '.jpg', 'image/png': '.png', 'image/apng': '.png', 'image/gif': '.gif',
@@ -42,8 +45,13 @@ const MIME_EXT = {
   'font/ttf': '.ttf', 'application/x-font-ttf': '.ttf', 'font/sfnt': '.ttf', 'font/otf': '.otf', 'application/x-font-opentype': '.otf',
   'application/vnd.ms-fontobject': '.eot', 'video/mp4': '.mp4', 'video/webm': '.webm', 'video/ogg': '.ogv', 'video/quicktime': '.mov',
   'audio/mpeg': '.mp3', 'audio/ogg': '.ogg', 'audio/wav': '.wav', 'audio/x-wav': '.wav', 'audio/mp4': '.m4a', 'audio/aac': '.aac',
+  'application/pdf': '.pdf', 'application/zip': '.zip', 'text/csv': '.csv', 'application/rtf': '.rtf', 'application/epub+zip': '.epub',
+  'application/msword': '.doc', 'application/vnd.ms-excel': '.xls', 'application/vnd.ms-powerpoint': '.ppt',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
 };
-const KNOWN_EXT = new Set(Object.values(MIME_EXT).concat(['.jpeg', '.m4v']));
+const KNOWN_EXT = new Set(Object.values(MIME_EXT).concat(['.jpeg', '.m4v', '.odt', '.ods', '.odp', '.rar', '.7z', '.gz', '.tgz']));
 
 // File type from the first bytes: servers often send application/octet-stream or a wrong type.
 function sniffExt(head) {
@@ -211,6 +219,34 @@ export async function downloadAssets(list, root, { signal, referer, deadline = I
   return { files, map, skipped, reused, bytes, fromCache };
 }
 
+/**
+ * Adds a second download round (the files that failed in the first) to the first result: same bytes as a file already saved
+ * = that file (the new copy is removed), the retried URLs leave `skipped` unless they failed again. Mutates `result`.
+ * Exported for tests.
+ */
+export async function mergeDownloads(result, second, root, retried) {
+  const bySha = new Map(result.files.map((f) => [f.sha256, f]));
+  const sameAs = new Map();
+  for (const f of second.files) {
+    const existing = bySha.get(f.sha256);
+    if (existing) {
+      existing.urls.push(...f.urls);
+      if (existing.file !== f.file) await rm(path.join(root, f.file), { force: true });
+      sameAs.set(f.file, existing.file);
+      result.reused++;
+    } else {
+      bySha.set(f.sha256, f);
+      result.files.push(f);
+      result.bytes += f.bytes;
+    }
+  }
+  for (const [url, file] of Object.entries(second.map)) result.map[url] ??= sameAs.get(file) ?? file;
+  result.skipped = [...result.skipped.filter((s) => !retried.has(s.url)), ...second.skipped];
+  result.reused += second.reused;
+  result.fromCache += second.fromCache;
+  return result;
+}
+
 const looksLikeSvg = (buf) => /^\s*(<\?xml|<!--|<!doctype svg|<svg)/i.test(buf.subarray(0, 512).toString('utf8'));
 
 /**
@@ -273,6 +309,7 @@ export async function assetsStage(ctx, opts = {}) {
 
   ctx.progress(0.1, `Downloading ${assets.length} assets`);
   const origin = ctx.discovery?.origin ?? new URL(ctx.audit.url ?? ctx.project.url).origin;
+  const downloadStarted = Date.now();
   const result = await downloadAssets(assets, root, {
     signal: ctx.signal,
     referer: `${origin}/`,
@@ -282,6 +319,25 @@ export async function assetsStage(ctx, opts = {}) {
     cache: ctx.netCache,
     onProgress: (f) => ctx.progress(0.1 + 0.88 * f, `Downloading assets (${Math.round(f * assets.length)} of ${assets.length})`),
   });
+  // Downloads that failed at network level while the network was down or the computer slept: once more, only those,
+  // when the network is back (the files already saved are kept).
+  const failedUrls = new Set(result.skipped.filter((s) => RETRYABLE_ASSET_REASONS.has(s.reason)).map((s) => s.url));
+  if (failedUrls.size && !ctx.signal?.aborted) {
+    const hit = await recoverHit(ctx, { step: 'assets', what: `${failedUrls.size} failed downloads`, startedAt: downloadStarted, progress: (m) => ctx.progress(0.97, m) });
+    if (hit) {
+      const again = assets.filter((a) => failedUrls.has(a.url));
+      ctx.progress(0.97, `Downloading ${again.length} assets again (${causeText(hit)})`);
+      const second = await downloadAssets(again, root, {
+        signal: ctx.signal,
+        referer: `${origin}/`,
+        deadline: ctx.stepDeadline,
+        limits,
+        budget: { ...budget, maxAssets: Math.max(0, budget.maxAssets - result.files.length), maxTotalBytes: Math.max(0, budget.maxTotalBytes - result.bytes) },
+        cache: ctx.netCache,
+      });
+      await mergeDownloads(result, second, root, failedUrls);
+    }
+  }
 
   ctx.progress(0.98, 'Sanitizing SVG files');
   const svg = await sanitizeSvgFiles(root, result);

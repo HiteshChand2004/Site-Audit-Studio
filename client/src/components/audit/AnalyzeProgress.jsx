@@ -1,65 +1,87 @@
-import { AlertCircle, Check, Loader2, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { X } from 'lucide-react';
 import Button from '../common/Button.jsx';
+import { Alert } from '../common/Surface.jsx';
+import StepList from '../common/StepList.jsx';
+import { JOB_STEPS, stepTitle } from '../../copy.js';
 import styles from './AnalyzeProgress.module.css';
 
 const LABELS = {
-  analysis: { running: 'Analyzing', failed: 'Analysis failed' },
-  recreate: { running: 'Recreating', failed: 'Recreate failed' },
-  reaudit: { running: 'Re-auditing the recreated site', failed: 'Re-audit failed' },
+  analysis: { running: 'Checking the site', queued: 'Waiting to check the site', failed: 'The check did not finish' },
+  recreate: { running: 'Creating the copy', queued: 'Waiting to create the copy', failed: 'The copy could not be finished' },
+  reaudit: { running: 'Comparing the copy with the original', queued: 'Waiting to compare the copy', failed: 'The comparison did not finish' },
 };
 
-// Live progress of a background job (Analyze, Recreate or Re-audit, fed by SSE), or its failure message.
+/** "4 min 12 s" since `iso`, updated every second while shown. */
+function useElapsed(iso) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!iso) return undefined;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [iso]);
+  if (!iso) return null;
+  const s = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
+  const m = Math.floor(s / 60);
+  return m ? `${m} min ${String(s % 60).padStart(2, '0')} s` : `${s} s`;
+}
+
+/**
+ * Live progress of a background job (check, copy or comparison; fed by the server's event stream), in plain words:
+ * what is happening now, a bar with the time so far, and the steps. Or, when it failed, why.
+ */
 export default function AnalyzeProgress({ analysis, kind = 'analysis', onDismiss }) {
   const labels = LABELS[kind];
+  const elapsed = useElapsed(analysis.status === 'failed' ? null : analysis.startedAt);
+
   if (analysis.status === 'failed') {
     return (
-      <div className={styles.failed} role="alert">
-        <AlertCircle size={15} aria-hidden="true" />
-        <div className={styles.failedText}>
-          <strong>{labels.failed}</strong>
-          <span>{analysis.error}</span>
-        </div>
-        <Button variant="ghost" size="sm" icon={X} iconOnly onClick={onDismiss}>
-          Dismiss
-        </Button>
-      </div>
+      <Alert
+        tone="bad"
+        title={labels.failed}
+        action={
+          <Button variant="ghost" size="sm" icon={X} iconOnly onClick={onDismiss}>
+            Close this message
+          </Button>
+        }
+      >
+        {analysis.error}
+        <p className={styles.after}>Nothing was lost: the last finished result is still there. You can simply start it again.</p>
+      </Alert>
     );
   }
 
   const steps = analysis.steps ?? [];
   const activeIndex = steps.findIndex((s) => s.key === analysis.step);
+  const queued = analysis.status === 'queued';
+  const pct = analysis.pct ?? 0;
+  const list = steps.map((s, i) => ({
+    key: s.key,
+    title: stepTitle(s.key, s.label),
+    explain: JOB_STEPS[s.key]?.explain,
+    detail: i === activeIndex ? analysis.message : null,
+    state: activeIndex === -1 ? 'pending' : i < activeIndex ? 'done' : i === activeIndex ? 'active' : 'pending',
+  }));
 
   return (
-    <div className={styles.wrap} aria-live="polite">
+    <section className={styles.wrap} aria-live="polite" aria-label={labels.running}>
       <div className={styles.head}>
-        <span className={styles.title}>
-          <Loader2 size={14} className={styles.spin} aria-hidden="true" />
-          {analysis.status === 'queued' ? 'Queued' : labels.running}
+        <span className={styles.title}>{queued ? labels.queued : labels.running}</span>
+        <span className={styles.meta}>
+          <strong>{pct} %</strong>
+          {elapsed && <span> · running for {elapsed}</span>}
         </span>
-        <span className={`${styles.pct} mono`}>{analysis.pct ?? 0}%</span>
       </div>
-      <div className={styles.bar} role="progressbar" aria-valuenow={analysis.pct ?? 0} aria-valuemin={0} aria-valuemax={100}>
-        <span style={{ width: `${analysis.pct ?? 0}%` }} />
+      <div className={styles.bar} role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={labels.running}>
+        <span style={{ width: `${pct}%` }} />
       </div>
-      {analysis.reconnecting ? (
-        <p className={styles.message}>Connection to the server dropped — reconnecting…</p>
-      ) : (
-        analysis.message && <p className={styles.message}>{analysis.message}</p>
+      {queued && <p className={styles.explain}>Another job is running first (only one runs at a time, to keep the measurements fair). This starts by itself.</p>}
+      {analysis.reconnecting && (
+        <Alert tone="info" title="The connection to the app's server dropped for a moment">
+          Reconnecting… The work goes on in the background.
+        </Alert>
       )}
-      <ol className={styles.steps}>
-        {steps.map((s, i) => {
-          const state = activeIndex === -1 ? 'pending' : i < activeIndex ? 'done' : i === activeIndex ? 'active' : 'pending';
-          return (
-            <li key={s.key} data-state={state}>
-              <span className={styles.marker} aria-hidden="true">
-                {state === 'done' && <Check size={10} strokeWidth={3} />}
-                {state === 'active' && <Loader2 size={10} strokeWidth={3} className={styles.spin} />}
-              </span>
-              {s.label}
-            </li>
-          );
-        })}
-      </ol>
-    </div>
+      {list.length > 0 && <StepList steps={list} />}
+    </section>
   );
 }

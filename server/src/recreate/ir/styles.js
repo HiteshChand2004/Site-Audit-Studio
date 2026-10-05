@@ -379,8 +379,10 @@ export function resolveHints(decls, present, tag) {
     const apply = cw.some((v) => decls[v]['@cw'].wraps);
     const ratios = cw.map((v) => decls[v]['@cw'].ratio);
     const pxs = cw.map((v) => decls[v]['@cw'].px);
-    // The same px in every view is a fixed size (an icon box), not a share of the parent.
-    const fixed = cw.length > 1 && Math.max(...pxs) - Math.min(...pxs) <= 1;
+    // The same px in every view is a fixed size (an icon box), not a share of the parent. With a single captured view
+    // (desktop only for now) nothing says the width is a share of the parent: the captured px is kept.
+    const single = present.length === 1;
+    const fixed = single || (cw.length > 1 && Math.max(...pxs) - Math.min(...pxs) <= 1);
     const consistent = !fixed && cw.length === present.length && ratios.every((r) => r != null && Number.isFinite(r) && r > 0)
       && Math.max(...ratios) - Math.min(...ratios) <= 0.01;
     // An item wider than its parent on purpose (a marquee track, a scroller) must not be clamped.
@@ -389,7 +391,9 @@ export function resolveHints(decls, present, tag) {
       const hint = decls[v]['@cw'];
       delete decls[v]['@cw'];
       if (!apply || decls[v].width) continue;
-      if (consistent) decls[v].width = hint.ratio >= 0.995 && hint.ratio <= 1.005 ? '100%' : pct(hint.ratio);
+      // One view: an item exactly as wide as its parent still fills it.
+      if (single && hint.ratio >= 0.995 && hint.ratio <= 1.005) decls[v].width = '100%';
+      else if (consistent) decls[v].width = hint.ratio >= 0.995 && hint.ratio <= 1.005 ? '100%' : pct(hint.ratio);
       else {
         // Text gets a pixel of slack: the same label can measure a fraction wider here than in the
         // original, and a width cut to the pixel would wrap it onto a second line.
@@ -402,12 +406,16 @@ export function resolveHints(decls, present, tag) {
     const hinted = present.filter((v) => decls[v]?.[key]);
     if (!hinted.length) continue;
     const ratios = hinted.map((v) => decls[v][key].ratio);
-    const consistent = hinted.length === present.length && ratios.every((r) => r != null && Number.isFinite(r) && r > 0)
+    // One captured view (desktop only for now): a single ratio is no evidence of a share of the parent, so the px is
+    // kept (a 40 px icon must not become 2.78 %); an element that fills its parent still gets 100 %.
+    const single = present.length === 1;
+    const consistentRatios = hinted.length === present.length && ratios.every((r) => r != null && Number.isFinite(r) && r > 0)
       && Math.max(...ratios) - Math.min(...ratios) <= 0.01;
     for (const v of hinted) {
       const hint = decls[v][key];
       delete decls[v][key];
       const full = hint.ratio != null && hint.ratio >= 0.995 && hint.ratio <= 1.005;
+      const consistent = consistentRatios && (!single || full);
       const pxValue = `${Math.round(hint.px)}px`;
       if (key === '@rw') {
         decls[v].width = full ? '100%' : pxValue;

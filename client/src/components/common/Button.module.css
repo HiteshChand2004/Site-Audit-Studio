@@ -3,101 +3,86 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  overflow: hidden;
+  gap: 8px;
   border: 1px solid transparent;
   border-radius: var(--radius);
   font-weight: 600;
   white-space: nowrap;
   transition:
-    transform var(--dur) var(--ease),
-    background 160ms ease,
-    border-color 160ms ease,
-    color 160ms ease,
-    box-shadow var(--dur) var(--ease);
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease,
+    transform 120ms var(--ease);
 }
 
 .btn:active:not(:disabled) {
-  transform: translateY(1px) scale(0.97);
+  transform: translateY(1px);
 }
 
 .btn:disabled {
   cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.btn svg {
-  transition: transform var(--dur) var(--ease);
-}
-
-.btn:hover:not(:disabled) svg {
-  transform: scale(1.12) rotate(-4deg);
+  opacity: 0.5;
 }
 
 .md {
-  height: 36px;
-  padding: 0 15px;
+  height: 38px;
+  padding: 0 16px;
   font-size: var(--fs-base);
 }
 
 .sm {
-  height: 28px;
-  padding: 0 11px;
+  height: 30px;
+  padding: 0 12px;
   font-size: var(--fs-sm);
   border-radius: var(--radius-sm);
 }
 
+/* The one main action of a screen. */
+.lg {
+  height: 46px;
+  padding: 0 22px;
+  font-size: var(--fs-md);
+  border-radius: var(--radius);
+}
+
 .iconOnly.md {
-  width: 36px;
+  width: 38px;
   padding: 0;
 }
 
 .iconOnly.sm {
-  width: 28px;
+  width: 30px;
   padding: 0;
 }
 
-/* Primary: violet to pink, glows on hover and a shine sweeps across. */
+/* Primary: solid blue. */
 .primary {
-  background: var(--grad-brand);
-  background-size: 160% 100%;
-  background-position: 0% 50%;
-  color: #fff;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 4px 12px rgba(109, 74, 255, 0.28);
-}
-
-.primary::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, 0.38) 50%, transparent 65%);
-  transform: translateX(-120%);
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-sm);
 }
 
 .primary:hover:not(:disabled) {
-  background-position: 100% 50%;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), var(--shadow-glow);
-  transform: translateY(-1px);
+  background: var(--accent-hover);
+  box-shadow: var(--shadow);
 }
 
-.primary:hover:not(:disabled)::after {
-  transform: translateX(120%);
-  transition: transform 700ms var(--ease);
+.primary:active:not(:disabled) {
+  background: var(--accent-press);
 }
 
 .secondary {
   background: var(--surface);
-  border-color: var(--border);
-  color: var(--text);
+  border-color: var(--border-strong);
+  color: var(--text-2);
   box-shadow: var(--shadow-sm);
 }
 
 .secondary:hover:not(:disabled) {
-  border-color: var(--accent-border);
-  background: var(--accent-tint);
-  color: var(--accent-text);
-  box-shadow: 0 4px 14px rgba(109, 74, 255, 0.14);
-  transform: translateY(-1px);
+  background: var(--surface-2);
+  border-color: var(--faint);
+  color: var(--text);
 }
 
 .ghost {
@@ -106,8 +91,8 @@
 }
 
 .ghost:hover:not(:disabled) {
-  background: var(--accent-tint);
-  color: var(--accent-text);
+  background: var(--surface-3);
+  color: var(--text);
 }
 
 .danger {
@@ -118,4 +103,15 @@
 .danger:hover:not(:disabled) {
   background: var(--bad-tint);
   color: var(--bad);
+}
+
+/* A destructive confirmation ("Delete"). */
+.dangerSolid {
+  background: var(--bad);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.dangerSolid:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bad) 88%, black);
 }

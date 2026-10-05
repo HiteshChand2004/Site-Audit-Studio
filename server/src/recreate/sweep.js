@@ -13,6 +13,7 @@ import { TimeoutError, withTimeout } from '../audit/util.js';
 import { startEgressProxy } from '../security/egressProxy.js';
 import { captureSweep, SWEEP_PARALLEL, SWEEP_WIDTHS } from './capture/sweep.js';
 import { RecreateError } from './errors.js';
+import { causeText, recoverHit } from './interrupts.js';
 import { LATER_STEPS_RESERVE } from './inspect.js';
 
 // Stop starting pages this long before the step's time limit; the page in progress gets the time left.
@@ -32,12 +33,15 @@ const skipped = (ctx, reason, warning) => {
  * @param {{ widths?: number[], stepDeadline?: number, progress?: Function }} [local]  the step's own time limit and progress
  *   (the pipeline runs this step next to the following ones, so the shared ctx.stepDeadline / ctx.progress are not its own)
  */
-export async function sweepStage(ctx, { widths = SWEEP_WIDTHS, stepDeadline = ctx.stepDeadline ?? Infinity, progress = ctx.progress } = {}) {
+export async function sweepStage(ctx, local = {}) {
+  const { widths = SWEEP_WIDTHS, progress = ctx.progress } = local;
+  // Read each time: the limits move later when time is given back after sleep or a network outage (recreate/interrupts.js).
+  const stepDeadline = () => local.stepDeadline ?? ctx.stepDeadline ?? Infinity;
   const pages = ctx.pages ?? [];
   if (!pages.length) return skipped(ctx, 'no-pages');
   // The time the later steps need (assets, generate, build, preview) is never spent here.
-  const deadline = Math.min(stepDeadline, (ctx.jobDeadline ?? Infinity) - LATER_STEPS_RESERVE) - MARGIN;
-  if (deadline - Date.now() < MIN_TIME) {
+  const deadline = () => Math.min(stepDeadline(), (ctx.jobDeadline ?? Infinity) - (ctx.laterReserve ?? LATER_STEPS_RESERVE)) - MARGIN;
+  if (deadline() - Date.now() < MIN_TIME) {
     return skipped(ctx, 'time-limit', 'The responsive check was skipped: not enough of the time limit was left. Raise SAS_RECREATE_MINUTES to run it.');
   }
 
@@ -82,16 +86,25 @@ export async function sweepStage(ctx, { widths = SWEEP_WIDTHS, stepDeadline = ct
     for (const [i, page] of pages.entries()) {
       if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
       // The homepage is always tried; the others only while one more page (at the slowest pace) fits.
-      if (i > 0 && Date.now() + slowest > deadline) {
+      if (i > 0 && Date.now() + slowest > deadline()) {
         notCaptured.push(...pages.slice(i).map((p) => p.path));
         break;
       }
       progress(i / pages.length, `Capturing ${page.path} (${i + 1} of ${pages.length})`);
       const started = Date.now();
+      // Widths captured at once: by the memory that is free now (other steps of the job may be running next to this one).
+      const sweepOnce = () =>
+        withTimeout(captureSweep(browser, page, ctx.dir, { widths, parallel: parallelism({ max: SWEEP_PARALLEL, min: 2 }), cache: ctx.netCache }), Math.max(1000, stepDeadline() - HARD_MARGIN - Date.now()), `Responsive capture of ${page.path}`);
       try {
-        // Widths captured at once: by the memory that is free now (other steps of the job may be running next to this one).
-        const parallel = parallelism({ max: SWEEP_PARALLEL, min: 2 });
-        captured[page.slug] = await withTimeout(captureSweep(browser, page, ctx.dir, { widths, parallel, cache: ctx.netCache }), Math.max(1000, stepDeadline - HARD_MARGIN - Date.now()), `Responsive capture of ${page.path}`);
+        let result = await sweepOnce();
+        // Taken while the network was down or the computer slept (widths may be missing or incomplete): once more when
+        // the network is back. A page that ran out of time is not repeated (its capture may still be writing).
+        const hit = await recoverHit(ctx, { step: 'sweep', what: `widths of ${page.path}`, startedAt: started, progress: (m) => progress(i / pages.length, m) });
+        if (hit) {
+          progress(i / pages.length, `Capturing ${page.path} again (${causeText(hit)})`);
+          result = await sweepOnce();
+        }
+        captured[page.slug] = result;
       } catch (err) {
         if (!(err instanceof TimeoutError)) throw err;
         notCaptured.push(page.path);

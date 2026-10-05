@@ -234,9 +234,9 @@ function platformItems(oldStack = [], newStack = [], output = null) {
 
 // ---------- JavaScript shipped (the honest cost of a stack with a runtime) ----------
 
-/** Script transfer size of a Lighthouse run's homepage (resource-summary), mobile first. */
+/** Script transfer size of a Lighthouse run's homepage (resource-summary), desktop first (desktop only for now). */
 function scriptBytes(lh) {
-  for (const lhr of [lh?.mobile, lh?.desktop]) {
+  for (const lhr of [lh?.desktop, lh?.mobile]) {
     const item = lhr?.audits?.['resource-summary']?.details?.items?.find((i) => i.resourceType === 'script');
     if (item && typeof item.transferSize === 'number') return item.transferSize;
   }
@@ -334,6 +334,13 @@ const categoryOrder = (c) => {
  * @returns {object} the checklist
  */
 export function compareAudits({ old, next, report, newOrigin, output = null, motion = null }) {
+  // Lighthouse audits are compared only on a device both sides were measured on (a check from before "desktop only" has
+  // a phone run, a new copy does not): otherwise "worst of phone / computer" on one side meets "computer" on the other.
+  const oldLh = { ...old.lighthouse };
+  const newLh = { ...next.lighthouse };
+  for (const device of ['mobile', 'desktop']) {
+    if (!oldLh[device] || !newLh[device]) oldLh[device] = newLh[device] = null;
+  }
   // Pages as the recreated output has them (Next.js moves some URLs); without an output, the original layout.
   const moved = new Map((output?.pages ?? []).map((p) => [p.outPath, p.path]));
   const reportPages = (report.pages ?? []).map((p) => (moved.has(p.outPath) ? { ...p, newPath: moved.get(p.outPath) } : p));
@@ -379,7 +386,7 @@ export function compareAudits({ old, next, report, newOrigin, output = null, mot
   }
 
   const raw = [
-    ...lighthouseItems(old.lighthouse ?? {}, next.lighthouse ?? {}),
+    ...lighthouseItems(oldLh, newLh),
     ...analyzerItems(oldRows, newRows),
     ...axeItems(old.audit.accessibility, next.audit.accessibility),
     ...linkItems({ oldLinks: old.audit.brokenLinks, newLinks: next.audit.brokenLinks, oldScopeLinks, map }),

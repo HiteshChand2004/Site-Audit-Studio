@@ -50,7 +50,7 @@ const CHECKS = [
     ids: ['mainthread-work-breakdown'],
     title: 'Main-thread work',
     grade: (a) => a.numericValue && (a.numericValue >= 8000 ? 'high' : a.numericValue >= 4000 ? 'medium' : null),
-    detail: (a) => `${fmtMs(a.numericValue)} of main-thread work on a mid-range mobile device.`,
+    detail: (a) => `${fmtMs(a.numericValue)} of main-thread work while the page loads.`,
   },
 ];
 
@@ -71,7 +71,7 @@ function fromLighthouse(run) {
 
 const ORDER = { high: 0, medium: 1, low: 2 };
 
-/** Platform limitations of confidently-detected techs, plus measured problems from Lighthouse mobile. */
+/** Platform limitations of confidently-detected techs, plus measured problems from a Lighthouse run (desktop for now). */
 export function buildWeaknesses(detections, mobile) {
   const platform = confident(detections).flatMap((t) =>
     (t.rule.limitations ?? []).map((l) => ({ ...l, source: t.id })),

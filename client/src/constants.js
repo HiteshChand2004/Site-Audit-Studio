@@ -3,25 +3,25 @@ export const STACKS = [
     id: 'html',
     name: 'Plain HTML / CSS / JS',
     short: 'HTML',
-    detail: 'Static, zero-dependency output. Fastest load, hosts anywhere.',
+    detail: 'The simplest choice: plain web pages that load fastest and can be put on any web host. Best for most sites.',
   },
   {
     id: 'react-vite',
     name: 'React + Vite',
     short: 'React',
-    detail: 'Component-based SPA with production build. Pre-rendered HTML for SEO.',
+    detail: 'For developer teams who work with React. Pages are ready for Google; visitors download a little app code.',
   },
   {
     id: 'nextjs',
     name: 'Next.js',
     short: 'Next',
-    detail: 'Static export / SSR, file-based routing, built-in image optimisation.',
+    detail: 'For developer teams who work with Next.js (React). Pages are ready for Google; visitors download more app code.',
   },
   {
     id: 'mern',
     name: 'MERN',
     short: 'MERN',
-    detail: 'React client + Express API + MongoDB. Includes stub endpoints for forms.',
+    detail: 'React pages plus a small server and database that store what visitors send through contact forms.',
   },
 ];
 

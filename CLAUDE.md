@@ -35,6 +35,7 @@ Company-owned or authorized sites only.
 | 6 | React+Vite / Next.js / MERN emitters + Download zip + stack-aware re-audit/UI | ✅ merged (d25444d) |
 
 **Current status**: Phase 6 complete, merged into `phase-4a` (d25444d, ff from `phase-6`) + post-merge `flex: revert` fix (c1d4ca3); never pushed. Phases 1, 2, 3, 4a, 4b, 5, 6 are all on `phase-4a`.
+After Phase 6, `ui-redesign` was merged into `phase-4a` (asked by the user, to see it on 5173); it brings the WIP work of `recreate-retry`, `full-site`, the UI redesign and **desktop only** (sections below).
 **Workflow**: one phase/step at a time, only after the user says "go ahead"; WIP commit per step, wait for "next"; commit at the end of each phase; never push;
 while the user tests, work in a git worktree and merge only when asked. Leftover worktrees/branches that can be removed: `../Website-Audit-4b` + `phase-4b`, `../Website-Audit-perf` + `perf-robustness`.
 
@@ -99,6 +100,84 @@ on slow networks / busy machines (all steps serial, one budget, Lighthouse last)
   A project without analysis/recreate still gets a report that says so.
 - Analysis screenshots use `animations: 'allow'` (`audit/screenshots.js`): `'disabled'` stacked every word of a cycling headline (panscience). Older analyses need Analyze again.
 - Client: `components/report/ReportModal.jsx` (+ css), `api.getReportHtml/getReportJson/getReportPdf`. Tests: `report.test.js` (404, empty project, all sections + escaping, download/JSON, thumbnails, real PDF).
+
+### UI redesign (calm light theme, guided steps) — branch `ui-redesign` (worktree `../Website-Audit-ui`), WIP, merged into `phase-4a`
+Asked by the user: the vibrant look and crowded two panels were hard to read → light theme, organised data, tasteful motion, wording a non-technical person understands. Decisions (user): **guided steps**
+(1 Check the site → 2 Create the copy → 3 Compare → 4 Results & download) and **calm blue** (#2563EB on white / soft grey). Steps U1–U6 (U7 polish folded into U6); one at a time, WIP commit, wait for "next". All general.
+- **U1 foundation**: `styles/tokens.css` keeps token names with calm values (neutral greys, one blue accent, status colours tint + border, neutral shadows, base type 14.5px; `--grad-*` now flat colours). No page gradients,
+  aurora blobs, glass top bar, gradient logo, shine, glowing/pulsing chips or moving rails; violet rgba shadows → neutral. **`client/src/copy.js`** = the one place for plain labels and "what does this mean" texts (ratings Good / Needs work / Poor,
+  health areas, speed metrics in everyday words, the four steps, friendly names for every server job step, result statuses, terms). New `components/common/`: `Surface.jsx` (Card with icon/title/explanation/tip/actions, Alert, EmptyState),
+  `InfoTip` (the "i": hover, keyboard, tap), `Score.jsx` (ScoreRing with rating in words, StatusIcon, Pill), `Tabs.jsx` (StepTabs, Segmented), `StepList`, `ConfirmDialog` (replaces `window.confirm`; Button `dangerSolid`), Button size `lg`.
+  Sidebar: "Add a website", "Your websites", "Search your websites", removal via the app dialog ("the real website is not affected"), no stack tag.
+- **U2 guided layout**: two panels gone (`OldPanel` / `NewPanel` removed). `layout/Workspace.jsx` = name + address, **step tabs** (arrow keys) with live status per step (`stepStates`: "Checked 5 h ago" / "Checking · 40 %" / "The check failed";
+  "30 pages copied" / "Working · 12 %" / "Check the site first"; "30 pages side by side"; "3 fixed · 6 got worse" in warn tone); a project opens on the step where its work stands (`startStep`) until the user picks a tab; the stack-build
+  polling moved here. `layout/steps/`: **CheckStep** (address, pages, "Check now / again", progress, report left, original site sticky right; one column < 1180 px), **CreateStep** (settings in words, one big "Create the copy", "Change settings"
+  = stack modal, stale alert, progress, "Last copy", build card), **CompareStep** (one toolbar: page, sizes, "Scroll together"; original page-aware; empty state → step 2), **ResultsStep** (download card + technology picker + "Full report (PDF)",
+  outcome, checklist, "Compare now" when missing). Top bar "Full report" (secondary); empty app "Start with a website"; `format.js` (timeAgo, ageDays, plural); preview toggle "Live / Picture".
+- **U3 Check**: `components/audit/HealthOverview.jsx`: **At a glance** (generated sentences: speed, "especially on phones" when phone ≥ 15 below computer, Google, a11y count, dead links, "Built with X"), Phone / Computer switch,
+  **five health cards** (Speed, Found on Google, Easy for everyone, Safe & modern = Lighthouse categories; Ready for AI answers = share of AEO checks passing, warning = half) with `ScoreRing` + "i" incl. the expert term;
+  **Speed in everyday words** (Main content shows in, Ready to use in, Page freezes for, Page weight; Google thresholds). `components/audit/FixList.jsx`: **What needs fixing** (failing/warning SEO/AEO/site-file checks, weaknesses, a11y rules,
+  dead links as one row; Important / Worth fixing / Minor; row opens to "Why it matters", "What the check found", "How to fix this"; "Usually fixed in the copy"), **Already fine (n)** folded, **Needs a person**. `copy.js CHECKS`
+  (plain name, why, area, fix flag per check title) + `SEVERITY`. Old `AuditReport` under folded **Details for experts**; `MetricsBar` removed.
+- **U4 Create + progress**: `AnalyzeProgress` (check, copy, comparison) = titled box, % + **time so far** (`startedAt`), bar with sheen, "waiting" note when queued, calm reconnect note, `StepList` with `copy.js JOB_STEPS` names + live message;
+  failure = Alert ("Nothing was lost… start it again"). `StackOutput` = Card with marks ("Looks and works like the simple version", "Starts without errors in the browser", "Safe", "Extra download for visitors", "Match with the original",
+  "Some page addresses changed", "Contact forms"). "What happens when you click" (four stages). Settings dialog: "Settings for the copy", "Future address of the new site", stacks described for non-developers (`constants.js STACKS.detail`).
+- **U5 Compare**: one toolbar for both frames (`PreviewFrame viewportButtons={false}`); "Page n of N" picker showing each page's match score + previous/next; **one match line** (`copy.js matchRating`: Almost identical ≥ 90, Very close ≥ 80,
+  Close, worth a look ≥ 65, else Clearly different) + "i". Grey frame dots. Kept small on purpose (user: don't make it unnecessarily complicated; a second score and per-size chips were dropped).
+- **U6 Results**: `components/recreate/Outcome.jsx` **How the copy turned out**: one sentence, four counts with "i" (Better = fixed + improved, Still needs work, Got worse, Needs a person), overall match + verdict, Speed / Google / Easy for everyone
+  before → after with Better/Worse/Same; "Still needs work" ≤ 6 items (worse first). Then "Compare now", **download** card, folded "Every check, before and after" (`FixReport`) and "Match per page and other measurements" (`RecreateReport`).
+  Sample checklist (`FixChecklist`) removed. Checked in a browser, no page errors.
+
+### Desktop only for now (WIP, user: "remove tablet and mobile from frontend and backend, keep only desktop") — merged into `phase-4a`
+One view everywhere; the rest **parked, not deleted**.
+- Server: `recreate/views.js ENABLED_VIEWS = ['desktop']` (`RECREATE_VIEWS`, `VIEW_IDS`, `MEDIA_VIEWS` follow it; `KNOWN_VIEWS` / `KNOWN_VIEW_IDS` / `KNOWN_MEDIA_VIEWS` = all four, used by IR tree, CSS emitter, loading fixer so an older
+  saved copy keeps its tablet/phone styles when another stack is built). Recreate: `sweep` and `responsive` removed from `STEPS` / `STAGES` (5 steps; no breakpoint refinement). Analyze: `audit/screenshots.js VIEWS` = desktop,
+  `lighthouse-mobile` step gone (desktop gets the whole reserve); `scores` / `metricsByDevice` desktop only; `audit.metrics` + weaknesses from desktop.
+- Single-view IR: no breakpoints (`{ source: 'single-view' }`, no media queries); a builder's hidden section copies with a visible twin dropped (`tree.js dropHiddenVariants`; a hidden menu without a twin stays); a single ratio is not
+  a share of the parent (`styles.js resolveHints`: px kept, 100 % only when filling the parent — a 40 px spinner had become 2.78 %).
+- Re-audit: Lighthouse audits compared only on a device both sides measured; `JavaScript shipped` reads full runs, desktop first. Report: desktop scores/metrics, one screenshot per side.
+- Client: no Phone/Computer toggles or size buttons (`PreviewFrame VIEWPORTS` = 1440; hidden with one size); "Measured on a computer"; older phone-only checks still display. Tests updated; the four background-sweep tests `skip`ped ("parked").
+- **To bring sizes back**: list views in `ENABLED_VIEWS`, restore the two steps in `recreate/index.js`, views in `audit/screenshots.js`, `lighthouse-mobile` in `audit/index.js`, client toggles (git history), un-skip the sweep tests.
+- **panscience.xyz** (6 pages, one run each, "before" = `acc4b05`): Analyze 59 → 69 s (noise), **Recreate 711 → 178 s** (inspect 161 → 148, generate 157 → 11, build 88 → 16; sweep 213 s + responsive 89 s gone; "before" used almost
+  the whole 12 min and skipped 2 sweep pages), **re-audit 196 → 141 s**; chain ~16 → ~6.5 min. Desktop quality same: fidelity 80 → 81, visual diff 79, 6/6, safety passed, hover 24/24 → 24/25. Cost: tablets/phones get the desktop layout.
+  The first "before" run's server exited silently ~5 min into Recreate (not reproduced).
+
+### Robustness found by the all-pages run (WIP, merged into `phase-4a`)
+- **Crashed local browser no longer fails a Recreate**: panscience all pages (99, 8 GB, ~1.3 GB free): capture (~29 min) + assets done, then Chromium crashed in the fit pass (`Target crashed`) and 30 min were discarded.
+  `verify/layout.js`: `isBrowserCrash(err)`; `openRenderer` `recover(generation)` (new Chromium, same contexts updated in place; renders hit by the same crash share one relaunch; `renderer.recoveries`); `renderPage` and equivalence `snapshot`
+  use `withBrowserRetry` (once more). `generate.js measureSite` → `{ started, failed }`: a page still failing is listed, the rest go on (only "no page rendered" throws); fit pass keeps it as generated (`report.generate.fit.failed` + warning);
+  fidelity lists it (`fidelity.failed`, in `unscored`) + `fidelity.browserRestarts`. Equivalence never skips a page. Tests: `recreate-crash.test.js`.
+- **www. and bare host were two pages**: panscience links both forms; `sameSite` saw one site but the crawler and `selectPages` deduplicated by `urlKey` (full host), so every page was done twice (99 "pages" for ~57, ran the machine
+  to ~230 MB free, server ended). `audit/util.js pageKey(url)` = `urlKey` without scheme + `siteHost` (no `www.`), used by `audit/crawler.js` and `recreate/discover.js`; `urlKey` unchanged (asset dedupe). Test in `recreate-capture.test.js`.
+
+### Full-site clone — branch `full-site` (worktree `../Website-Audit-par`), WIP, merged into `phase-4a`
+Asked by the user: clone the whole site as is (every page, no link back to the old site, hover / animations / buttons the same), no 20-page cap, no timeouts, little waiting. Plan (approved): **A** all pages + limits that follow the work
++ no live links (A.1, A.2) → **B** measure what differs on panscience (hover, animations, buttons) → **C** fix it generally (incl. small generated scripts for menus / accordions / tabs / carousels) → **D** less waiting.
+Decision: links to pages that can't be cloned honestly (login, cart, checkout, account, admin) → **local notice page**; linked files (PDF…) downloaded.
+- **A.1**: `projects.recreate_pages = -1` = **All pages** (`inputs.js ALL_PAGES`; default for new projects; PATCH accepts `'all'`; 0–300 still limits). Crawl up to `SITE_PAGE_CAP` = 300 (+50 skipped) at depth 8 (a limit keeps the old sample crawl).
+  **Limits follow the work**: `perPage` per step (inspect 150 s, assets 15, generate 45, build 45, preview 3, sweep 120, responsive 30; measured on the 2-core laptop with room); old limits cover `BASE_PAGES` = 6. After discovery, inspect calls
+  `ctx.scaleToPages(n)`: job deadline (unless `SAS_RECREATE_MINUTES` fixes it), running capture, `ctx.laterReserve` and every later step's limit grow per extra page. **Stalled page** (not the homepage) abandoned after max(4 min, 3 × slowest so far),
+  captured once more at the end in a **fresh browser** (closing the first ends the stalled capture, so no shared folder); only a double stall is reported (`reason: 'stalled'`). Gear dialog: "Every page of the site" checkbox (on), number only when off.
+  Tests: `recreate-all-pages.test.js`; fixture ports must be unique per test file (files run in parallel; 4192–4199 taken).
+- **A.2 no link leads to the original site**: `ir/links.js createLinkResolver({ assetFile })`: a same-site link that is not a recreated page → (1) the recreated page if only a query-string variant, (2) a **downloaded file** (`{ asset }`),
+  (3) else a **local notice page** at the same path (`{ file: outPathFor(path) }`, `resolve.notices`): `ir/notice.js noticePage` = static HTML (no script, inline CSS, `noindex`, reason in plain words, "Back to the homepage"), added to `ir.files`
+  by `buildIR` so every stack ships it (HTML `site/`, apps `public/`), never in sitemap.xml. Downloaded platform-CDN files are local; other hosts stay external. `emit/walk.js` reference `{ file }` → `refs.fileHref` (HTML relative; apps `rootFileHref`).
+  Assets: `<a>` / `<area>` to files of the site or its CDN collected (`collect.js linkedFileKind`: PDF / Office / archives = **document** → `assets/files/`, 25 MB / 60 s; images, media by kind). Report: `generate.noticePages` (+ `noticePageCount`),
+  `generate.links.{file,notice}`; `liveLinks` empty for same-site links. Notice pages verified like pages. canonical / og:url still use the original origin unless `target_domain` is set. Tests: `recreate-generate.test.js`, `recreate-assets.test.js`.
+  Not tested yet: notice pages inside a real React / Next.js / MERN build.
+
+### Recreate: sleep and network outages (`recreate/interrupts.js`, branch `recreate-retry`, WIP, merged into `phase-4a`; builds on `audit/interruptions.js`)
+Steps are long, so a step is never re-run whole. (1) **Sleep does not count**: each pause the watcher finds is given back at once — job deadline, `ctx.jobDeadline`, every running step's limit and `stepDeadline` move later (`runStep` uses
+`extendableTimeout`; a firing step timer first lets the watcher look (`tick()`)). (2) **Only what was hit is repeated, once**: a page capture or a page's sweep widths overlapped by an outage/sleep, even without an error (`recoverHit`; an abandoned
+capture that may still write is never repeated); asset downloads that failed at network level (`RETRYABLE_ASSET_REASONS`: timeout, time-limit, dns, refused, error) during an outage, merged into the first round (`mergeDownloads`: same bytes = one file);
+discovery's homepage fetch (`recoverFailure`). Before a repeat it waits for the site (≤ 2 min, `NETWORK_WAIT_MS`) and gives back the hit piece's time. generate / build / preview / responsive are local: only (1). (3) **Capped** at 6 min per job
+(`ALLOWANCE_MS`). Log line `[recreate <id>] <step>: <what> — <cause> → <outcome>`; `report.interruptions` = { pauses, pausedMs, outages, grantedMs, allowanceMs, events[] }. inspect and sweep read their limits live. `SAS_NETWORK_WATCH=0` = DNS watcher off
+(test suite). Tests: `recreate-interrupts.test.js`. Not covered: cross-origin stylesheets in the asset step and the WordPress REST fetch.
+- **First real run** (panscience, 2-core laptop, `SAS_MAX_PARALLEL=1`, limit 20): the overloaded process froze 5–10 s at a time (16 "pauses", 142 s; network fine), taken for sleep at the 5 s threshold: homepage captured twice, 305 s given back
+  (15.8 min instead of 12). No corruption (second capture overwrote all files), no errors, fidelity 75. Fixed: sleep counts from **30 s** (`PAUSE_MIN_MS`), an outage needs **2 failed DNS checks in a row**, a check that ran far past its timeout
+  (process froze) counts as no answer either way. The long inspect came from the page limit (20 of 21 pages, 7-min limit, 3–7 captured) and one view at a time, not from retries.
+- **Step list no longer ticks then unticks** (all jobs): `progressTracker` now shows the **first unfinished step of the list**, started or not; a step waiting for the background sweep says "Waiting for “Capturing more widths” to finish".
+  Every listed step reports progress (the re-audit leaves `screenshots` out). Tests: `recreate-interrupts.test.js`, `perf.test.js`.
 
 ### Phase 4b (approved plan, branch `phase-4b`, worktree `../Website-Audit-4b`) — merged
 Decisions: CSS-first motion + one small generated `motion.js` (IntersectionObserver, safety-gated); sweep widths 320/480/600/900/1024/1280/1920; order 4b.6 + 4b.7 → 4b.1–4b.5 → 4b.8–4b.9. All general.
@@ -520,7 +599,7 @@ Decisions: Live view (CDP screencast) deferred to 3b; a header-stripping reverse
 
 ## Conventions
 - **All product text in English** (UI, API errors, dummy data, comments, docs), though the user chats in Hinglish.
-- Theme "Aurora light": violet accent `#6D4AFF`, violet-to-pink brand gradient, indigo-tinted neutrals, lavender / sky / blush mesh background with drifting blurred blobs (`AppShell .aurora`), white glass cards (blur + coloured shadows), Inter + JetBrains Mono (local @fontsource).
+- Theme: **calm blue light theme since UI redesign U1** (see above; same token names). Before it, "Aurora light": violet accent `#6D4AFF`, violet-to-pink brand gradient, indigo-tinted neutrals, lavender / sky / blush mesh background with drifting blurred blobs (`AppShell .aurora`), white glass cards (blur + coloured shadows), Inter + JetBrains Mono (local @fontsource).
   Colours, gradients (`--grad-*`), radii, shadows, motion (`--ease`, `--dur`) are tokens in `client/src/styles/tokens.css`; **colours only via tokens**. Keyframes in `styles/global.css`, used from CSS modules via variables (`animation: var(--k-fade-up) …`; `:global()` in `animation` breaks the build).
   Motion: staggered fade-up, hover lifts, gradient buttons with shine, animated score rings + count-up (`components/common/CountUp.jsx`), shimmering progress, pulsing NEW chip; all off under `prefers-reduced-motion`.
   Gotcha: a flex child with `overflow: hidden` is squashed in the panels' flex column — give it `flex: none`.

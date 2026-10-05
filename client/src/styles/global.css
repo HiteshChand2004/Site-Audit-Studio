@@ -12,12 +12,7 @@ body,
 
 body {
   margin: 0;
-  background:
-    radial-gradient(1100px 620px at 6% -8%, #e4dbff 0%, transparent 62%),
-    radial-gradient(900px 520px at 100% 0%, #d3f1ff 0%, transparent 58%),
-    radial-gradient(1000px 640px at 55% 112%, #ffe1f0 0%, transparent 58%),
-    var(--bg);
-  background-attachment: fixed;
+  background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
   font-size: var(--fs-base);
@@ -79,7 +74,7 @@ a {
 .scroll {
   overflow-y: auto;
   scrollbar-width: thin;
-  scrollbar-color: var(--accent-border) transparent;
+  scrollbar-color: var(--border-strong) transparent;
 }
 
 .scroll::-webkit-scrollbar {
@@ -89,18 +84,18 @@ a {
 .scroll::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   border-radius: 999px;
-  background: var(--accent-border) padding-box;
+  background: var(--border-strong) padding-box;
 }
 
 .scroll::-webkit-scrollbar-thumb:hover {
-  background: var(--accent) padding-box;
+  background: var(--faint) padding-box;
 }
 
 /* Shared motion: keyframes used by the component styles (CSS modules cannot share keyframes). */
 @keyframes sas-fade-up {
   from {
     opacity: 0;
-    transform: translateY(12px);
+    transform: translateY(6px);
   }
 }
 
@@ -157,10 +152,10 @@ a {
 
 @keyframes sas-pulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(109, 74, 255, 0.45);
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.35);
   }
   100% {
-    box-shadow: 0 0 0 10px rgba(109, 74, 255, 0);
+    box-shadow: 0 0 0 8px rgba(37, 99, 235, 0);
   }
 }
 

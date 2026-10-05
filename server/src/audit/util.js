@@ -72,6 +72,20 @@ export function urlKey(url) {
   }
 }
 
+/**
+ * Dedupe key for the pages of one site: `urlKey` without the scheme and with the site host (`www.` dropped), so
+ * https://www.example.com/about and http://example.com/about/ are one page (sameSite already treats them as one site;
+ * without this the crawl and the recreate visited every page of a site that links both forms twice).
+ */
+export function pageKey(url) {
+  try {
+    const u = new URL(urlKey(url));
+    return `${siteHost(u.hostname)}${u.port ? `:${u.port}` : ''}${u.pathname}${u.search}`;
+  } catch {
+    return url;
+  }
+}
+
 export function pathOf(url) {
   try {
     const u = new URL(url);

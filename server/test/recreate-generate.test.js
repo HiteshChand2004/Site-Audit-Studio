@@ -210,18 +210,27 @@ test('head: kept when present, filled from the page when missing, and marked aut
   assert.match(generatedFavicon('acme <co>', '#0f766e'), /fill="#0f766e".*>A<\/text>/);
 });
 
-test('links: recreated pages become relative paths, the rest stays live; relative asset paths', () => {
+test('links: recreated pages become relative paths, linked files local, the rest a local notice page (never live); relative asset paths', () => {
   const resolve = createLinkResolver({
     pages: [{ url: 'https://s.test/', outPath: 'index.html' }, { url: 'https://s.test/about/', outPath: 'about/index.html' }],
     livePages: [{ url: 'https://s.test/blog/' }],
     skipped: [{ url: 'https://s.test/login', reason: 'backend' }],
     origin: 'https://s.test',
+    assetFile: (url) => ({ 'https://s.test/files/brochure.pdf': 'files/brochure-1234567890.pdf', 'https://cdn.test/deck.pdf': 'files/deck-0987654321.pdf' })[url] ?? null,
   });
   assert.deepEqual(resolve('https://s.test/about', 'https://s.test/'), { page: 'about/index.html', hash: '' });
   assert.deepEqual(resolve('https://www.s.test/#team', 'https://s.test/about/'), { page: 'index.html', hash: '#team' });
   assert.deepEqual(resolve('https://s.test/about/#x', 'https://s.test/about/'), { anchor: '#x' });
-  assert.deepEqual(resolve('https://s.test/blog/', 'https://s.test/'), { live: 'https://s.test/blog/', reason: 'beyond-limit' });
-  assert.deepEqual(resolve('https://s.test/login', 'https://s.test/'), { live: 'https://s.test/login', reason: 'backend' });
+  // A query-string variant of a recreated page opens that page.
+  assert.deepEqual(resolve('https://s.test/about/?ref=nav', 'https://s.test/'), { page: 'about/index.html', hash: '' });
+  // Linked files that were downloaded are local, on the site or on another host.
+  assert.deepEqual(resolve('https://s.test/files/brochure.pdf', 'https://s.test/'), { asset: 'files/brochure-1234567890.pdf' });
+  assert.deepEqual(resolve('https://cdn.test/deck.pdf', 'https://s.test/'), { asset: 'files/deck-0987654321.pdf' });
+  // Everything else of the site opens a local notice page at the same path, never the live site.
+  assert.deepEqual(resolve('https://s.test/blog/', 'https://s.test/'), { file: 'blog/index.html', hash: '', url: 'https://s.test/blog/', reason: 'beyond-limit' });
+  assert.deepEqual(resolve('https://s.test/login', 'https://s.test/'), { file: 'login/index.html', hash: '', url: 'https://s.test/login', reason: 'backend' });
+  assert.deepEqual(resolve('https://s.test/files/missing.pdf', 'https://s.test/'), { file: 'files/missing.pdf/index.html', hash: '', url: 'https://s.test/files/missing.pdf', reason: 'not-recreated' });
+  assert.deepEqual([...resolve.notices.keys()], ['blog/index.html', 'login/index.html', 'files/missing.pdf/index.html']);
   assert.deepEqual(resolve('https://other.test/', 'https://s.test/'), { external: 'https://other.test/' });
   assert.deepEqual(resolve('mailto:hi@s.test', 'https://s.test/'), { external: 'mailto:hi@s.test' });
   assert.equal(resolve('javascript:void(0)', 'https://s.test/'), null);
@@ -327,11 +336,20 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
     }
   }
 
-  // Links: recreated pages relative, the others live and reported.
+  // Links: recreated pages relative; nothing points at the original site: the login page opens a local notice page, the
+  // brochure is downloaded.
   const home = await read('index.html');
   assert.match(home, /<a class="[\w-]+"(?: data-motion="[^"]*")? href="about\.html">About<\/a>/);
   assert.match(home, /href="services\/">Services</);
-  assert.match(home, new RegExp(`href="${origin}/login\\.html">Log in<`));
+  assert.match(home, /href="login\.html">Log in</);
+  assert.match(home, /href="assets\/files\/brochure-[0-9a-f]{10}\.pdf">Brochure</);
+  const toOld = [...home.matchAll(/<a [^>]*href="([^"]*)"/g)].map((m) => m[1]).filter((h) => h.startsWith(origin));
+  assert.deepEqual(toOld, [], 'no link to the original site');
+  const notice = await read('login.html');
+  assert.match(notice, /<meta name="robots" content="noindex">/);
+  assert.match(notice, /needs a server \(sign-in, sign-up, cart, checkout or account\)/);
+  assert.match(notice, /<a href="\.\/">Back to the homepage<\/a>/);
+  assert.doesNotMatch(notice, /<script/i);
   assert.match(home, /<link rel="canonical" href="http:\/\/localhost:4196\/">/);
   const services = await read('services/index.html');
 
@@ -384,11 +402,12 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.match(await readFile(path.join(dir, 'dist', 'js', 'motion.js'), 'utf8'), /IntersectionObserver/);
   assert.match(services, /href="\.\.\/">Home</);
   assert.match(services, /<link rel="icon" href="\.\.\/assets\/images\/hero-bg-[0-9a-f]{10}\.svg">/);
-  assert.match(await read('about.html'), new RegExp(`href="${origin}/team\\.html">Our team<`));
-  const live = Object.fromEntries(report.generate.liveLinks.map((l) => [new URL(l.url).pathname, l.reason]));
-  assert.equal(live['/team.html'], 'beyond-limit');
-  assert.equal(live['/login.html'], 'backend');
-  assert.equal(live['/brochure.pdf'], 'not-html');
+  assert.match(await read('about.html'), /href="team\.html">Our team</);
+  assert.deepEqual(report.generate.liveLinks, [], 'no same-site link stays live');
+  const notices = Object.fromEntries(report.generate.noticePages.map((l) => [new URL(l.url).pathname, l.reason]));
+  assert.equal(notices['/team.html'], 'beyond-limit');
+  assert.equal(notices['/login.html'], 'backend');
+  assert.equal(notices['/brochure.pdf'], undefined, 'downloaded, not a notice page');
 
   // The builder-style page: one copy of the content, restyled per breakpoint.
   const work = await read('work.html');
@@ -402,12 +421,11 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   const css = await read('css/site.css');
   const gridClass = work.match(/<div class="([\w-]+)">\s*<div class="card">/)[1];
   const rules = (selector) => [...css.matchAll(new RegExp(`\\.${selector} \\{([^}]*)\\}`, 'g'))].map((m) => m[1]);
-  const [base, tablet, mobile] = rules(gridClass);
+  // Desktop only for now (views.js): one rule per class and no media queries.
+  const [base, ...others] = rules(gridClass);
   assert.match(base, /grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
-  assert.match(tablet, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
-  assert.match(mobile, /grid-template-columns: minmax\(0, 1fr\)/);
-  assert.match(css, /@media \(max-width: 1024\.98px\)/);
-  assert.match(css, /@media \(max-width: 600\.98px\)/);
+  assert.deepEqual(others, []);
+  assert.doesNotMatch(css, /@media \(max-width:/);
   assert.match(css, /--brand: #0f766e;/);
   assert.match(css, /@font-face \{\n {2}font-family: "Brand Mono";\n {2}src: url\("\.\.\/assets\/fonts\/mono-[0-9a-f]{10}\.woff2"\) format\("woff2"\);/);
   assert.match(css, /@keyframes brand-fade/);
@@ -446,7 +464,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.doesNotMatch(badgeRule, /(^|\s)width: 0/);
   // A spinning element is captured with its layout size, not the bounding box of the frame it was
   // caught in, in every view; the generated rule keeps 40 px.
-  for (const view of ['desktop', 'tablet', 'mobile']) {
+  for (const view of ['desktop']) {
     const snap = JSON.parse(await readFile(path.join(dir, 'capture', 'services', `${view}.json`), 'utf8'));
     const findNode = (n) => (n.attrs?.class ?? '').split(' ').includes('spinner') ? n : (n.children ?? []).reduce((hit, c) => hit ?? (c.tag ? findNode(c) : null), null);
     assert.deepEqual(findNode(snap.body).rect.slice(2), [40, 40], view);
@@ -475,13 +493,11 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.equal(report.autoGenerated.some((a) => a.page === '/' && a.field === 'title'), false);
   assert.deepEqual(report.pages.find((p) => p.path === '/work.html').head.autoGenerated.slice(0, 2), ['title', 'description']);
   assert.ok(report.manual.some((m) => m.kind === 'form' && m.title === 'Form on /work.html needs a backend'));
+  // The builder page's hidden tablet / phone copies are dropped (one visible copy kept).
   assert.equal(report.generate.variantsMerged, 2);
   assert.ok(report.generate.wrappersRemoved >= 2);
-  // The site's own queries (laptop 1024.98, mobile 600.98); the responsive sweep may move the tablet boundary.
-  const bp = report.generate.breakpoints;
-  assert.equal(bp.laptop, 1024.98);
-  assert.equal(bp.mobile, 600.98);
-  assert.ok(bp.tablet === 1023.98 ? bp.source === 'site' : bp.source === 'sweep', JSON.stringify(bp));
+  // One captured view: no breakpoints.
+  assert.deepEqual(report.generate.breakpoints, { source: 'single-view' });
   const ir = JSON.parse(await readFile(path.join(dir, 'ir', 'site.json'), 'utf8'));
   assert.equal(ir.version, 1);
   assert.equal(ir.pages.length, 5);
@@ -538,7 +554,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   const distCss = await readFile(path.join(dir, 'dist', 'css', 'site.css'), 'utf8');
   assert.ok(distCss.length < css.length * 0.9, `${distCss.length} vs ${css.length}`);
   assert.doesNotMatch(distCss, /\n {2}/);
-  assert.match(distCss, /@media ?\(max-width: ?1024\.98px\)/);
+  assert.doesNotMatch(distCss, /@media ?\(max-width/); // desktop only for now: no media queries
   assert.equal(report.minify.css.files, 1);
   assert.ok(report.minify.css.minBytes < report.minify.css.bytes);
   for (const f of ['index.html', 'work.html', 'services/index.html']) assert.ok(await exists(path.join(dir, 'dist', f)), f);
@@ -563,7 +579,9 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.equal(report.verify.dir, 'dist');
   assert.deepEqual([report.verify.missingFiles, report.verify.brokenLinks, report.verify.missingAssets, report.verify.externalAssets, report.verify.anchors], [[], [], [], [], []]);
   assert.deepEqual(report.verify.html, { valid: true, errors: 0, warnings: 0, pages: [] });
-  assert.equal(report.verify.checked.pages, 5);
+  // The 5 recreated pages and the notice pages their links need (login, team, …): all checked, all valid.
+  assert.equal(report.verify.checked.pages, 5 + report.generate.noticePageCount);
+  assert.ok(report.generate.noticePageCount >= 2);
   assert.ok(report.verify.checked.links >= 15, `links ${report.verify.checked.links}`);
   assert.ok(report.verify.checked.assets >= 10, `assets ${report.verify.checked.assets}`);
   assert.equal(await exists(path.join(dir, 'dist.tmp')), false);

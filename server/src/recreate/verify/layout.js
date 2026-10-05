@@ -27,12 +27,17 @@ const VISUAL_WIDTH = 96;
 const COLOR_TOLERANCE = 32;
 export const SCORE_WEIGHTS = { sizes: 0.35, boxes: 0.25, visual: 0.4 };
 
-/** Chromium plus one browser context per view, bound to a local server for `root`. */
-export async function openRenderer(root) {
-  const server = await startSiteServer(root);
-  let browser;
+/**
+ * A browser that crashed or was closed under us: Chromium out of memory (`Target crashed`), or its process ended. Not a
+ * slow page or a broken build: the same render in a new browser usually works.
+ */
+export const isBrowserCrash = (err) =>
+  /Target crashed|Page crashed|Target page, context or browser has been closed|Browser has been closed|browser has disconnected/i.test(String(err?.message ?? err));
+
+/** Launches Chromium with one browser context per view; every request outside `origin` is aborted. */
+async function launchContexts(origin) {
+  const browser = await launchBrowser();
   try {
-    browser = await launchBrowser();
     const contexts = {};
     for (const view of VIEWS) {
       const context = await browser.newContext({
@@ -44,21 +49,66 @@ export async function openRenderer(root) {
         javaScriptEnabled: false,
         serviceWorkers: 'block',
       });
-      await context.route('**/*', (route) => (route.request().url().startsWith(`${server.origin}/`) ? route.continue() : route.abort('blockedbyclient')));
+      await context.route('**/*', (route) => (route.request().url().startsWith(`${origin}/`) ? route.continue() : route.abort('blockedbyclient')));
       contexts[view.id] = context;
     }
-    return {
-      server,
-      contexts,
-      close: async () => {
-        await browser.close().catch(() => {});
-        await server.close();
-      },
-    };
+    return { browser, contexts };
   } catch (err) {
-    await browser?.close().catch(() => {});
+    await browser.close().catch(() => {});
+    throw err;
+  }
+}
+
+/**
+ * Chromium plus one browser context per view, bound to a local server for `root`. `recover(generation)` replaces a crashed
+ * browser with a new one (the contexts object is updated in place, so callers keep using `renderer.contexts`); renders
+ * that saw the same crash share one relaunch (`generation` = the browser they used).
+ */
+export async function openRenderer(root) {
+  const server = await startSiteServer(root);
+  let launched;
+  try {
+    launched = await launchContexts(server.origin);
+  } catch (err) {
     await server.close();
     throw err;
+  }
+  let pending = null;
+  const renderer = {
+    server,
+    contexts: launched.contexts,
+    generation: 0,
+    recoveries: 0,
+    recover: async (generation = renderer.generation) => {
+      if (generation !== renderer.generation) return pending;
+      pending ??= (async () => {
+        await launched.browser.close().catch(() => {});
+        launched = await launchContexts(server.origin);
+        for (const key of Object.keys(renderer.contexts)) delete renderer.contexts[key];
+        Object.assign(renderer.contexts, launched.contexts);
+        renderer.recoveries++;
+        renderer.generation++;
+      })().finally(() => { pending = null; });
+      return pending;
+    },
+    close: async () => {
+      await pending?.catch(() => {});
+      await launched.browser.close().catch(() => {});
+      await server.close();
+    },
+  };
+  return renderer;
+}
+
+/** Runs `fn(renderer)`; when the browser crashed under it, opens a new browser and runs it once more. */
+export async function withBrowserRetry(renderer, fn) {
+  const generation = renderer.generation ?? 0;
+  try {
+    return await fn(renderer);
+  } catch (err) {
+    if (!isBrowserCrash(err) || !renderer.recover) throw err;
+    await renderer.recover(generation);
+    return fn(renderer);
   }
 }
 
@@ -93,10 +143,15 @@ export async function loadLazyImages(page, limit = 6000) {
 }
 
 /**
- * Renders one page of the measurement build (served through `renderer.server.overrides`).
+ * Renders one page of the measurement build (served through `renderer.server.overrides`); after a browser crash the page is
+ * rendered once more in a new browser.
  * @returns {Promise<{ rects: Record<string, number[]>, scrollHeight: number, png: Buffer|null }>}
  */
-export async function renderPage(renderer, outPath, viewId, { screenshot = false, timeout = 15000 } = {}) {
+export function renderPage(renderer, outPath, viewId, options = {}) {
+  return withBrowserRetry(renderer, () => renderOnce(renderer, outPath, viewId, options));
+}
+
+async function renderOnce(renderer, outPath, viewId, { screenshot = false, timeout = 15000 } = {}) {
   const page = await renderer.contexts[viewId].newPage();
   try {
     await gotoLocal(page, `${renderer.server.origin}/${outPath}`, timeout);

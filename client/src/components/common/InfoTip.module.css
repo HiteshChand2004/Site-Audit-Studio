@@ -1,0 +1,76 @@
+.wrap {
+  position: relative;
+  display: inline-flex;
+  vertical-align: middle;
+}
+
+.button {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--faint);
+  transition: color 150ms ease, background 150ms ease;
+}
+
+.button:hover,
+.wrap[data-open] .button {
+  background: var(--surface-3);
+  color: var(--accent);
+}
+
+.tip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  z-index: 30;
+  width: max-content;
+  max-width: 280px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--text);
+  color: var(--surface);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: 0;
+  text-align: left;
+  text-transform: none;
+  white-space: normal;
+  box-shadow: var(--shadow-lg);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 4px);
+  transition: opacity 150ms ease, transform 150ms var(--ease);
+}
+
+.tip[data-align='start'] {
+  left: -6px;
+  transform: translate(0, 4px);
+}
+
+.tip[data-align='end'] {
+  right: -6px;
+  left: auto;
+  transform: translate(0, 4px);
+}
+
+.wrap:hover .tip,
+.button:focus-visible + .tip,
+.wrap[data-open] .tip {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.wrap:hover .tip[data-align='start'],
+.button:focus-visible + .tip[data-align='start'],
+.wrap[data-open] .tip[data-align='start'],
+.wrap:hover .tip[data-align='end'],
+.button:focus-visible + .tip[data-align='end'],
+.wrap[data-open] .tip[data-align='end'] {
+  transform: translate(0, 0);
+}

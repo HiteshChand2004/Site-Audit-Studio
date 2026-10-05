@@ -5,6 +5,7 @@
 // An emitter supplies the references' targets through `refs`:
 //   refs.assetHref(file)        URL of assets/<file> from the page being written
 //   refs.pageHref(outPath)      URL of another recreated page (folders keep their "/about/" form)
+//   refs.fileHref(path)         URL of a generated static file of the site (a notice page); default: root-relative
 //   refs.stylesheetHref()       URL of the shared stylesheet, or null when the stack imports it
 //   refs.useAsset(file)         called for every asset the page uses (the writer copies those)
 import { relFile, relPage } from '../ir/links.js';
@@ -17,9 +18,13 @@ export function relativeRefs(outPath, useAsset = () => true) {
     useAsset,
     assetHref: (file) => relFile(outPath, `assets/${file}`),
     pageHref: (target) => relPage(outPath, target),
+    fileHref: (target) => relPage(outPath, target),
     stylesheetHref: () => relFile(outPath, CSS_FILE),
   };
 }
+
+/** Root-relative URL of a static file of the site: "login/index.html" → "/login/" (the app stacks serve from the root). */
+export const rootFileHref = (file) => (file === 'index.html' ? '/' : file.endsWith('/index.html') ? `/${file.slice(0, -'index.html'.length)}` : `/${file}`);
 
 /** One IR attribute value → its string; asset references are reported through refs.useAsset. */
 export function refValue(value, refs) {
@@ -29,6 +34,7 @@ export function refValue(value, refs) {
   }
   if (value.asset) return refs.useAsset(value.asset) && refs.assetHref(value.asset);
   if (value.page) return refs.pageHref(value.page) + (value.hash ?? '');
+  if (value.file) return (refs.fileHref ?? rootFileHref)(value.file) + (value.hash ?? '');
   if (value.anchor) return value.anchor;
   if (value.live) return value.live;
   if (value.external) return value.external;

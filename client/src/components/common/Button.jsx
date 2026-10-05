@@ -14,7 +14,7 @@ export default function Button({
     .join(' ');
   return (
     <button type="button" className={cls} {...rest}>
-      {Icon && <Icon size={size === 'sm' ? 14 : 15} strokeWidth={2} aria-hidden="true" />}
+      {Icon && <Icon size={size === 'sm' ? 14 : size === 'lg' ? 18 : 16} strokeWidth={2} aria-hidden="true" />}
       {iconOnly ? <span className="visually-hidden">{children}</span> : children}
     </button>
   );

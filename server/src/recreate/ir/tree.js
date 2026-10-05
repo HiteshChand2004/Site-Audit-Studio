@@ -10,7 +10,8 @@
 //    content and disjoint visibility are merged into one element that is restyled per view.
 // 3. Cleanup: empty wrappers (no style, one child, same box) are removed; ARIA landmark divs become
 //    the matching HTML element.
-import { VIEW_IDS } from '../views.js';
+// Every known view: the trees follow the views the captures have (views.js).
+import { KNOWN_VIEW_IDS as VIEW_IDS } from '../views.js';
 
 export { VIEW_IDS };
 
@@ -226,6 +227,30 @@ export function mergeVariants(node, views = VIEW_IDS) {
   return merged;
 }
 
+/**
+ * One captured view only (desktop only for now, views.js): a site builder's copies of a section for other screen sizes
+ * (Framer / Webflow Desktop / Tablet / Phone variants) are in the page but hidden. Without the other views they can't be
+ * merged, and kept they would put hidden duplicate content (three main headings) into the copy. A hidden element is
+ * dropped only when a visible sibling has the same content (`sameContent`), so a menu or dialog that is merely hidden
+ * (no visible twin) stays.
+ * @returns {number} copies dropped
+ */
+export function dropHiddenVariants(node, view) {
+  let dropped = 0;
+  const kids = node.children;
+  const visible = kids.filter((c) => isElement(c) && shown(c, view));
+  for (let i = kids.length - 1; i >= 0; i--) {
+    const c = kids[i];
+    if (!isElement(c) || shown(c, view)) continue;
+    if (visible.some((v) => sameContent(v, c))) {
+      kids.splice(i, 1);
+      dropped++;
+    }
+  }
+  for (const c of kids) if (isElement(c)) dropped += dropHiddenVariants(c, view);
+  return dropped;
+}
+
 const LANDMARKS = { navigation: 'nav', banner: 'header', contentinfo: 'footer', main: 'main', complementary: 'aside' };
 const sameRect = (a, b) => a && b && a.every((x, i) => Math.abs(x - b[i]) <= 1);
 const BLOCKISH = new Set(['block', 'flow-root', 'list-item']);
@@ -301,7 +326,7 @@ export function buildPageTree(bodies) {
   if (!bodies.desktop) throw new Error('The desktop capture is required.');
   const root = fromCapture(bodies.desktop, 'desktop');
   for (const v of views.slice(1)) alignInto(root, fromCapture(bodies[v], v), [v]);
-  const variantsMerged = mergeVariants(root, views);
+  const variantsMerged = views.length > 1 ? mergeVariants(root, views) : dropHiddenVariants(root, views[0]);
   const wrappersRemoved = cleanTree(root, views);
   let viewOnly = 0;
   const count = (n) => {

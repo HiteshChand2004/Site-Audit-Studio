@@ -1,0 +1,162 @@
+/* Card, Alert and EmptyState: the plain surfaces every screen is built from. */
+.card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  animation: var(--k-fade-up) 320ms var(--ease) both;
+}
+
+.cardHead {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5) 0;
+}
+
+.cardIcon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: var(--accent-tint);
+  color: var(--accent-text);
+}
+
+.cardTitles {
+  min-width: 0;
+  flex: 1;
+}
+
+.cardTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 650;
+  line-height: var(--lh-tight);
+}
+
+.cardSub {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.cardActions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.cardBody {
+  padding: var(--sp-4) var(--sp-5) var(--sp-5);
+}
+
+.flush .cardBody {
+  padding: var(--sp-3) 0 0;
+}
+
+/* Alert: a calm coloured box with an icon. */
+.alert {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: var(--sp-3);
+  align-items: start;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  animation: var(--k-fade-in) 240ms ease both;
+}
+
+.alert > svg {
+  margin-top: 2px;
+}
+
+.alertTitle {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.alertTitle + .alertText {
+  margin-top: 2px;
+}
+
+.alert[data-tone='info'] {
+  border-color: var(--accent-border);
+  background: var(--accent-tint);
+}
+
+.alert[data-tone='info'] > svg {
+  color: var(--accent);
+}
+
+.alert[data-tone='ok'] {
+  border-color: var(--ok-border);
+  background: var(--ok-tint);
+}
+
+.alert[data-tone='ok'] > svg {
+  color: var(--ok);
+}
+
+.alert[data-tone='warn'] {
+  border-color: var(--warn-border);
+  background: var(--warn-tint);
+}
+
+.alert[data-tone='warn'] > svg {
+  color: var(--warn);
+}
+
+.alert[data-tone='bad'] {
+  border-color: var(--bad-border);
+  background: var(--bad-tint);
+}
+
+.alert[data-tone='bad'] > svg {
+  color: var(--bad);
+}
+
+/* EmptyState: what to do when there is nothing to show yet. */
+.empty {
+  display: grid;
+  justify-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-10) var(--sp-6);
+  text-align: center;
+  animation: var(--k-fade-up) 360ms var(--ease) both;
+}
+
+.emptyIcon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: var(--sp-2);
+  border-radius: 14px;
+  background: var(--accent-tint);
+  color: var(--accent);
+}
+
+.emptyTitle {
+  color: var(--text);
+  font-size: var(--fs-lg);
+  font-weight: 650;
+}
+
+.emptyText {
+  max-width: 46ch;
+  color: var(--muted);
+}
+
+.emptyAction {
+  margin-top: var(--sp-3);
+}

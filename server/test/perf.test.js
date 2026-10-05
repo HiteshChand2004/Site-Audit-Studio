@@ -128,7 +128,7 @@ test('timeouts on a machine short of memory name the cause in the report', () =>
   assert.equal(other.length, 1);
 });
 
-test('progress of overlapping steps: the bar adds up and the step shown is the earliest one still running', () => {
+test('progress of overlapping steps: the bar adds up and the step shown is the first one not finished', () => {
   const steps = [
     { key: 'a', weight: 10 },
     { key: 'b', weight: 30 },
@@ -136,7 +136,7 @@ test('progress of overlapping steps: the bar adds up and the step shown is the e
     { key: 'd', weight: 40 },
   ];
   const track = progressTracker(steps);
-  assert.deepEqual(track('a', 1), { step: 'a', pct: 10 });
+  assert.deepEqual(track('a', 1), { step: 'b', pct: 10 }); // a is done: the next step is shown
   // b and c run side by side.
   assert.deepEqual(track('b', 0), { step: 'b', pct: 10 });
   assert.deepEqual(track('c', 0.5), { step: 'b', pct: 20 });
@@ -144,7 +144,8 @@ test('progress of overlapping steps: the bar adds up and the step shown is the e
   assert.deepEqual(track('b', 0.5), { step: 'b', pct: 45 });
   // A step never goes back.
   assert.deepEqual(track('b', 0.2), { step: 'b', pct: 45 });
-  assert.deepEqual(track('b', 1), { step: 'b', pct: 60 });
+  // b is done: the next step is shown although it has not started (nothing else runs).
+  assert.deepEqual(track('b', 1), { step: 'd', pct: 60 });
   assert.deepEqual(track('d', 0), { step: 'd', pct: 60 });
   assert.deepEqual(track('d', 1), { step: 'd', pct: 100 });
   // Steps without weights: the caller's own percentage, one step at a time.
@@ -177,7 +178,8 @@ test('an analysis is complete when third-party resources of the page never answe
   assert.ok(seconds < 75, `took ${seconds}s`);
   assert.ok(overlapped, 'render and screenshots run side by side');
   assert.equal(audit.pagesCrawled, 2);
-  for (const view of ['desktop', 'tablet', 'mobile']) {
+  // Desktop only for now (audit/screenshots.js VIEWS).
+  for (const view of ['desktop']) {
     assert.ok(audit.screenshots?.views?.[view], `${view} screenshot`);
     assert.ok(await exists(path.join(outDir, 'screens', `${view}-full.webp`)));
   }
@@ -188,14 +190,14 @@ test('an analysis is complete when third-party resources of the page never answe
 test('screenshots: the views taken in time are kept when the step runs out of it', async () => {
   const browser = await launchBrowser();
   try {
-    // One view at a time and a deadline that only the first view can meet.
+    // A deadline that no view can meet (desktop only for now: one view).
     const shots = await captureScreenshots(browser, `${origin}/about.html`, path.join(dir, 'late'), { parallel: 1, deadline: Date.now() + 100 });
     assert.equal(Object.keys(shots.views).length, 0);
-    assert.equal(shots.errors.length, 3);
+    assert.equal(shots.errors.length, 1);
     assert.match(shots.errors[0].message, /time limit/);
 
     const some = await captureScreenshots(browser, `${origin}/about.html`, path.join(dir, 'some'), { parallel: 1, deadline: Date.now() + 60000 });
-    assert.deepEqual(Object.keys(some.views), ['desktop', 'tablet', 'mobile']);
+    assert.deepEqual(Object.keys(some.views), ['desktop']);
     assert.deepEqual(some.errors, []);
   } finally {
     await browser.close();

@@ -70,7 +70,11 @@ test('the global lock runs jobs one at a time, in order', async () => {
 test('settings parsers and the budget', () => {
   assert.equal(parseRecreatePages(0), 0);
   assert.equal(parseRecreatePages('5'), 5);
-  assert.equal(parseRecreatePages(21), null);
+  assert.equal(parseRecreatePages(21), 21);
+  assert.equal(parseRecreatePages(301), null);
+  assert.equal(parseRecreatePages('all'), -1);
+  assert.equal(parseRecreatePages(-1), -1);
+  assert.equal(parseRecreatePages(-2), null);
   assert.equal(parseRecreatePages(1.5), null);
   assert.deepEqual(parseTargetDomain('example.com/some/path'), { ok: true, value: 'https://example.com' });
   assert.deepEqual(parseTargetDomain('http://new.example.org'), { ok: true, value: 'http://new.example.org' });
@@ -83,7 +87,7 @@ test('settings parsers and the budget', () => {
   assert.equal(recreateBudgetMs({ SAS_RECREATE_MINUTES: '3' }), 180000);
   assert.equal(recreateBudgetMs({ SAS_RECREATE_MINUTES: '0' }), 720000);
   assert.equal(overallPct('inspect', 0), 0);
-  assert.equal(overallPct('responsive', 1), 100);
+  assert.equal(overallPct('preview', 1), 100);
   // Running the sweep next to the steps that render pages: by free memory, or decided for the machine.
   assert.equal(roomForSecondBrowser({ SAS_RECREATE_OVERLAP: '1' }), true);
   assert.equal(roomForSecondBrowser({ SAS_RECREATE_OVERLAP: '0' }), false);
@@ -107,10 +111,12 @@ test('a successful run publishes the workspace with a report', async () => {
   const report = await runRecreate({
     project,
     recreateId,
-    progress: (step, f) => f === 0 && steps.push(step),
+    // A step that first waits for the background sweep reports 0 twice (the wait, then the start): counted once.
+    progress: (step, f) => f === 0 && steps.at(-1) !== step && steps.push(step),
     stages: { ...stubStages, generate: async (ctx) => ctx.report.pages.push({ path: '/' }) },
   });
-  assert.deepEqual(steps, ['inspect', 'sweep', 'assets', 'generate', 'build', 'preview', 'responsive']);
+  // Desktop only for now: the sweep and responsive steps are parked (recreate/index.js).
+  assert.deepEqual(steps, ['inspect', 'assets', 'generate', 'build', 'preview']);
   assert.equal(report.baseUrl, 'https://www.example.com');
   assert.deepEqual(report.pages, [{ path: '/' }]);
   const saved = JSON.parse(await readFile(`${recreateDir(project.id, recreateId)}/report.json`, 'utf8'));
@@ -202,7 +208,7 @@ test('POST /recreate runs a job, streams events and exposes the result', async (
   const res = await fetch(`${base}/${project.id}/recreate`, { method: 'POST' });
   assert.equal(res.status, 202);
   const { recreateId, job, steps } = await res.json();
-  assert.equal(steps.length, 7);
+  assert.equal(steps.length, 5);
   assert.match(job.warnings[0], /8 days old/);
 
   const events = await (await fetch(`${base}/${project.id}/recreate/${recreateId}/events`)).text();
@@ -215,7 +221,7 @@ test('POST /recreate runs a job, streams events and exposes the result', async (
   Object.assign(STAGES, savedStages);
 });
 
-test('the sweep runs next to the steps after it and is awaited by the step that needs it', async () => {
+test('the sweep runs next to the steps after it and is awaited by the step that needs it', { skip: 'the width sweep is parked (desktop only for now, recreate/views.js)' }, async () => {
   const project = makeProject();
   const log = [];
   const stage = (name, ms, extra) => async (ctx, local) => {
@@ -259,7 +265,7 @@ test('the sweep runs next to the steps after it and is awaited by the step that 
   assert.ok(report.timings.total < report.timings.sweep + report.timings.assets + report.timings.generate + report.timings.build);
 });
 
-test('short of memory, the sweep is finished before the next step that renders pages', async () => {
+test('short of memory, the sweep is finished before the next step that renders pages', { skip: 'the width sweep is parked (desktop only for now, recreate/views.js)' }, async () => {
   const project = makeProject();
   const log = [];
   // The sweep ends only after the asset step has ended (not by a timer: the order must not depend on the machine's speed).
@@ -292,7 +298,7 @@ test('short of memory, the sweep is finished before the next step that renders p
   assert.deepEqual(log, ['start sweep', 'start assets', 'end assets', 'end sweep', 'start generate', 'end generate']);
 });
 
-test('a failing sweep is a warning; a failing step ends a sweep that is still running before the workspace goes', async () => {
+test('a failing sweep is a warning; a failing step ends a sweep that is still running before the workspace goes', { skip: 'the width sweep is parked (desktop only for now, recreate/views.js)' }, async () => {
   const project = makeProject();
   const report = await runRecreate({
     project,

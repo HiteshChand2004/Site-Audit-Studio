@@ -491,7 +491,7 @@ details[open] > summary > .chevron {
 
 .chip:hover {
   transform: translateY(-2px);
-  box-shadow: 0 6px 14px rgba(109, 74, 255, 0.18);
+  box-shadow: 0 6px 14px rgba(37, 99, 235, 0.18);
 }
 
 .row summary:hover,

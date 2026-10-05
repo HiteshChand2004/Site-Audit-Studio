@@ -10,6 +10,7 @@ import { discoverPages, outPathFor, selectPages, skipReason, slugFor } from '../
 import { runRecreate, STAGES } from '../src/recreate/index.js';
 import { recreateDir } from '../src/recreate/workspace.js';
 import { userPolicy, withNetPolicy } from '../src/security/netGuard.js';
+import { pageKey } from '../src/audit/util.js';
 import { startFixtureServer } from './serve-fixture.js';
 
 // The fixture runs on localhost, which the SSRF guard blocks unless this dev flag is set.
@@ -74,6 +75,23 @@ test('selection: homepage links first, then sitemap, limit respected, duplicates
   assert.deepEqual(result.skipped.map((s) => [new URL(s.url).pathname, s.reason]), [['/gone', 'error']]);
 });
 
+test('selection: www. and bare host, http and https, trailing slash are one page (found on a site that links both forms)', () => {
+  assert.equal(pageKey('https://www.example.com/about/'), pageKey('http://example.com/about'));
+  assert.equal(pageKey('https://WWW.Example.com/#top'), pageKey('https://example.com/'));
+  assert.notEqual(pageKey('https://example.com/about'), pageKey('https://example.com/about?x=1'));
+  assert.notEqual(pageKey('https://example.com/about'), pageKey('https://blog.example.com/about'));
+  const page = (url, links = []) => ({ url, status: 200, depth: 1, facts: { title: url, links: links.map((href) => ({ href, internal: true })) } });
+  const pages = [
+    page('https://example.com/', ['https://www.example.com/', 'https://www.example.com/about', 'https://example.com/about/', 'https://example.com/contact']),
+    page('https://example.com/about'),
+    page('https://www.example.com/about'),
+    page('https://www.example.com/contact'),
+  ];
+  const result = selectPages({ pages, homeUrl: 'https://example.com/', sitemapUrls: ['https://www.example.com/contact', 'http://example.com/team'], robots: { isAllowed: () => true }, limit: 300 });
+  assert.deepEqual(result.pages.map((p) => p.outPath), ['index.html', 'about/index.html', 'contact/index.html']);
+  assert.deepEqual(result.beyondLimit.map((p) => p.url), ['http://example.com/team']);
+});
+
 test('discovery on the fixture: nav pages first, skips with reasons, the rest link to the live site', async () => {
   const result = await withNetPolicy(userPolicy(), () => discoverPages({ url: `${origin}/`, limit: 3 }));
   assert.deepEqual(result.pages.map((p) => p.path), ['/', '/about.html', '/services/', '/contact.html']);
@@ -118,7 +136,7 @@ test('near its time limit the inspect step keeps the pages captured so far inste
   const report = await runRecreate({ project, recreateId: randomUUID(), progress: () => {}, stages: { ...stubs, inspect } });
   assert.deepEqual(report.pages.map((p) => p.path), ['/']);
   assert.ok(report.discovery.linksToLive.some((l) => l.url === `${origin}/about.html` && l.reason === 'time-limit'));
-  assert.match(report.warnings.join('\n'), /1 page was not captured within the time limit of the inspect step \(\/about\.html\); links to it point to the live site/);
+  assert.match(report.warnings.join('\n'), /1 page was not captured within the time limit of the inspect step \(\/about\.html\); links to it open a notice page in the new site/);
 });
 
 test('a page that stalls is abandoned before the step limit: the pages captured so far are kept, the job does not fail', async () => {
@@ -145,7 +163,7 @@ test('a page that stalls is abandoned before the step limit: the pages captured 
   assert.match(report.warnings.join('\n'), /1 page was not captured within the time limit of the inspect step \(\/about\.html\)/);
 });
 
-test('the inspect step captures every selected page at desktop, laptop, tablet and mobile', async () => {
+test('the inspect step captures every selected page at desktop size only', async () => {
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
@@ -159,8 +177,8 @@ test('the inspect step captures every selected page at desktop, laptop, tablet a
 
   const report = await runRecreate({ project, recreateId, progress: () => {}, stages: { ...stubs, inspect: STAGES.inspect } });
   assert.deepEqual(report.pages.map((p) => [p.path, p.views]), [
-    ['/', ['desktop', 'laptop', 'tablet', 'mobile']],
-    ['/about.html', ['desktop', 'laptop', 'tablet', 'mobile']],
+    ['/', ['desktop']],
+    ['/about.html', ['desktop']],
   ]);
   assert.deepEqual(report.errors, []);
   assert.deepEqual(report.manual.map((m) => m.title), ['/login.html was not recreated', '/cart was not recreated']);
@@ -169,8 +187,12 @@ test('the inspect step captures every selected page at desktop, laptop, tablet a
   const dir = path.join(recreateDir(id, recreateId), 'capture');
   const manifest = JSON.parse(await readFile(path.join(dir, 'manifest.json'), 'utf8'));
   assert.equal(manifest.pages.length, 2);
-  for (const file of ['desktop.json', 'laptop.json', 'tablet.json', 'mobile.json', 'desktop-fold.webp', 'mobile-full.webp']) {
+  for (const file of ['desktop.json', 'desktop-fold.webp', 'desktop-full.webp']) {
     assert.ok(await exists(path.join(dir, 'index', file)), file);
+  }
+  // Desktop only for now (recreate/views.js): no laptop, tablet or phone capture.
+  for (const file of ['laptop.json', 'tablet.json', 'mobile.json', 'mobile-full.webp']) {
+    assert.ok(!(await exists(path.join(dir, 'index', file))), file);
   }
   assert.ok(await exists(path.join(dir, 'about', 'desktop.json')));
 
@@ -191,7 +213,7 @@ test('the inspect step captures every selected page at desktop, laptop, tablet a
   assert.ok(!(await exists(path.join(dir, 'index', 'laptop-motion.json'))), 'only the desktop view is probed');
 
   const load = async (view) => JSON.parse(await readFile(path.join(dir, 'index', `${view}.json`), 'utf8'));
-  const [desktop, mobile] = [await load('desktop'), await load('mobile')];
+  const desktop = await load('desktop');
   const find = (node, fn) => {
     if (fn(node)) return node;
     for (const c of node.children ?? []) {
@@ -209,12 +231,9 @@ test('the inspect step captures every selected page at desktop, laptop, tablet a
   assert.deepEqual(desktop.mediaQueries, ['(max-width: 1024px)', '(max-width: 600px)']);
   assert.equal(desktop.head.jsonLd.length, 1);
 
-  // Computed styles differ per breakpoint; the mobile menu swap is visible.
+  // Computed styles of the desktop layout.
   assert.equal(byClass(desktop, 'features').style['grid-template-columns'].split(' ').length, 3);
-  assert.equal(byClass(mobile, 'features').style['grid-template-columns'].split(' ').length, 1);
   assert.equal(find(desktop.body, (n) => n.tag === 'nav').hidden, undefined);
-  assert.equal(find(mobile.body, (n) => n.tag === 'nav').hidden, true);
-  assert.equal(byClass(mobile, 'menu-button').style.display, 'block');
   // Style diffs stay small: currentColor defaults are not repeated.
   assert.equal(byClass(desktop, 'site-header').style['border-top-color'], undefined);
   assert.equal(byClass(desktop, 'site-header').style['border-bottom-color'], 'rgb(226, 232, 240)');
@@ -230,5 +249,4 @@ test('the inspect step captures every selected page at desktop, laptop, tablet a
   const resources = desktop.resources.map((r) => `${r.type} ${new URL(r.url).pathname}`).sort();
   assert.deepEqual(resources, ['document /', 'image /img/hero-bg.svg', 'image /img/photo.svg', 'script /hover.js', 'script /lazy.js', 'stylesheet /styles.css']);
   assert.deepEqual(desktop.screenshots.fold.width, 1440);
-  assert.deepEqual(mobile.screenshots.fold.width, 750); // DPR 2
 });

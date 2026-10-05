@@ -1,70 +1,76 @@
-/* Aurora light theme: soft lavender / sky / blush backgrounds, white glass cards, vibrant violet-pink accents.
-   Colours are used through these tokens only. */
+/* Calm light theme: white and soft grey surfaces, one blue accent, and status colours only where something is good,
+   needs work or is a problem. No gradients or glow: hierarchy comes from spacing, type and borders.
+   Colours are used through these tokens only (the names are kept from the earlier theme, so every component follows). */
 :root {
-  /* Neutrals (indigo-tinted greys) */
-  --bg: #f5f6ff;
+  /* Neutrals (cool greys) */
+  --bg: #f5f7fa;
   --surface: #ffffff;
-  --surface-2: #f3f2ff;
-  --surface-3: #e8e7fb;
-  --border: #e4e5f7;
-  --border-strong: #cfd2ee;
-  --text: #17173a;
-  --text-2: #363863;
-  --muted: #666a94;
-  --faint: #9a9dc2;
+  --surface-2: #f8fafc;
+  --surface-3: #eef2f6;
+  --border: #e4e7ec;
+  --border-strong: #d0d5dd;
+  --text: #101828;
+  --text-2: #344054;
+  --muted: #5d6879;
+  --faint: #98a2b3;
 
-  /* Accent: vibrant violet */
-  --accent: #6d4aff;
-  --accent-hover: #5b38f0;
-  --accent-press: #4b2bd3;
-  --accent-tint: #f0ecff;
-  --accent-tint-2: #e2dbff;
-  --accent-border: #cdc2ff;
-  --accent-text: #5a3aea;
+  /* Accent: calm blue */
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-press: #1e40af;
+  --accent-tint: #eff5ff;
+  --accent-tint-2: #dbe8fe;
+  --accent-border: #b9d0fb;
+  --accent-text: #1d4ed8;
+  --on-accent: #ffffff;
 
-  /* Supporting brand colours */
-  --pink: #ec4899;
-  --cyan: #06b6d4;
-  --sky: #0ea5e9;
-  --mint: #10b981;
-  --sun: #f59e0b;
+  /* Supporting colours (charts and small markers only) */
+  --pink: #db2777;
+  --cyan: #0891b2;
+  --sky: #0284c7;
+  --mint: #059669;
+  --sun: #d97706;
 
-  /* Status */
-  --ok: #0b9a69;
-  --ok-tint: #e6faf2;
-  --warn: #c2570c;
-  --warn-strong: #f59e0b;
-  --warn-tint: #fff3df;
-  --bad: #e11d48;
-  --bad-tint: #fff0f3;
-  --info: #2563eb;
-  --info-tint: #eaf1ff;
+  /* Status: good / needs work / problem / information */
+  --ok: #067647;
+  --ok-tint: #ecfdf3;
+  --ok-border: #abefc6;
+  --warn: #b54708;
+  --warn-strong: #f79009;
+  --warn-tint: #fffaeb;
+  --warn-border: #fedf89;
+  --bad: #b42318;
+  --bad-tint: #fef3f2;
+  --bad-border: #fecdca;
+  --info: #175cd3;
+  --info-tint: #eff8ff;
 
-  /* OLD panel (sky blue) vs NEW panel (violet to pink) */
-  --old-chip: #0369a1;
-  --old-chip-bg: #e0f3ff;
-  --old-chip-border: #b3e0fa;
-  --old-rail: #38bdf8;
+  /* Original site (neutral slate) vs the new copy (blue) */
+  --old-chip: #475467;
+  --old-chip-bg: #f2f4f7;
+  --old-chip-border: #e4e7ec;
+  --old-rail: #98a2b3;
 
-  /* Gradients */
-  --grad-brand: linear-gradient(120deg, #6d4aff 0%, #a24cf5 55%, #ec4899 100%);
-  --grad-brand-soft: linear-gradient(120deg, #f0ecff 0%, #fbeaff 60%, #ffe9f3 100%);
-  --grad-old: linear-gradient(120deg, #0ea5e9 0%, #6366f1 100%);
-  --grad-ok: linear-gradient(120deg, #10b981 0%, #06b6d4 100%);
-  --grad-warn: linear-gradient(120deg, #f59e0b 0%, #f97316 100%);
-  --grad-bad: linear-gradient(120deg, #f43f5e 0%, #ec4899 100%);
+  /* Former gradients, now flat: kept as names so older styles render calmly. */
+  --grad-brand: linear-gradient(var(--accent), var(--accent));
+  --grad-brand-soft: linear-gradient(var(--accent-tint), var(--accent-tint));
+  --grad-old: linear-gradient(var(--old-rail), var(--old-rail));
+  --grad-ok: linear-gradient(var(--ok), var(--ok));
+  --grad-warn: linear-gradient(var(--warn-strong), var(--warn-strong));
+  --grad-bad: linear-gradient(var(--bad), var(--bad));
 
-  /* Type */
+  /* Type: larger than before, easier to read */
   --font-sans: 'Inter Variable', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', Consolas, monospace;
-  --fs-xs: 11.5px;
-  --fs-sm: 12.5px;
-  --fs-base: 13.5px;
-  --fs-md: 15px;
-  --fs-lg: 17px;
-  --fs-xl: 22px;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 14.5px;
+  --fs-md: 16px;
+  --fs-lg: 18px;
+  --fs-xl: 24px;
+  --fs-2xl: 30px;
   --lh-tight: 1.25;
-  --lh: 1.5;
+  --lh: 1.55;
 
   /* Spacing (4px scale) */
   --sp-1: 4px;
@@ -74,21 +80,24 @@
   --sp-5: 20px;
   --sp-6: 24px;
   --sp-8: 32px;
+  --sp-10: 40px;
 
   --radius-sm: 8px;
-  --radius: 11px;
-  --radius-lg: 16px;
+  --radius: 10px;
+  --radius-lg: 14px;
 
-  --shadow-sm: 0 1px 2px rgba(60, 50, 140, 0.06);
-  --shadow: 0 2px 4px rgba(60, 50, 140, 0.05), 0 10px 28px rgba(80, 60, 200, 0.09);
-  --shadow-lg: 0 24px 64px rgba(60, 40, 160, 0.26), 0 4px 12px rgba(60, 40, 160, 0.1);
-  --shadow-glow: 0 8px 22px rgba(109, 74, 255, 0.34);
-  --focus-ring: 0 0 0 3px rgba(109, 74, 255, 0.28);
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow: 0 1px 3px rgba(16, 24, 40, 0.08), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-md: 0 6px 16px -4px rgba(16, 24, 40, 0.1), 0 2px 6px -2px rgba(16, 24, 40, 0.05);
+  --shadow-lg: 0 20px 40px -8px rgba(16, 24, 40, 0.18), 0 6px 12px -4px rgba(16, 24, 40, 0.06);
+  --shadow-glow: 0 1px 2px rgba(16, 24, 40, 0.08);
+  --focus-ring: 0 0 0 3px rgba(37, 99, 235, 0.28);
+  --overlay: rgba(16, 24, 40, 0.45);
 
   /* Motion. The keyframes live in global.css; CSS modules cannot refer to them by name, so they are
-     referenced through these variables: animation: var(--k-fade-up) 500ms ... */
+     referenced through these variables: animation: var(--k-fade-up) 500ms ... Kept short and subtle. */
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --dur: 220ms;
+  --dur: 200ms;
   --k-fade-up: sas-fade-up;
   --k-fade-in: sas-fade-in;
   --k-pop: sas-pop;
@@ -99,7 +108,7 @@
   --k-pulse: sas-pulse;
   --k-spin: sas-spin;
 
-  --topbar-h: 58px;
-  --sidebar-w: 276px;
+  --topbar-h: 60px;
+  --sidebar-w: 264px;
   --sidebar-rail-w: 60px;
 }

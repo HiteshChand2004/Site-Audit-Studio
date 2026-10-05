@@ -1,7 +1,8 @@
 // Writes the site stylesheet (css/site.css) from the IR: design tokens, local @font-face rules, the
 // reset, one rule per class, used @keyframes, then the tablet and mobile overrides.
 import { DEFAULT_BREAKPOINTS, hexColor } from '../ir/index.js';
-import { MEDIA_VIEWS } from '../views.js';
+// Every known view with rules gets its media query: saved copies from before "desktop only" keep their tablet / phone styles.
+import { KNOWN_MEDIA_VIEWS as MEDIA_VIEWS } from '../views.js';
 import { RESET } from '../ir/styles.js';
 import { relFile } from '../ir/links.js';
 import { motionCss } from './motionCss.js';

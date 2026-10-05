@@ -30,7 +30,7 @@ export function liveAvailability(audit, url) {
 export function ModeToggle({ mode, onChange, live, hasScreens }) {
   return (
     <span className={styles.modes} role="group" aria-label="Preview mode">
-      <button type="button" aria-pressed={mode === 'live'} disabled={!live.ok} title={live.why ?? 'Live page in an iframe'} onClick={() => onChange('live')}>
+      <button type="button" aria-pressed={mode === 'live'} disabled={!live.ok} title={live.why ?? 'The real site, live'} onClick={() => onChange('live')}>
         <Globe size={12} aria-hidden="true" />
         Live
       </button>
@@ -38,11 +38,11 @@ export function ModeToggle({ mode, onChange, live, hasScreens }) {
         type="button"
         aria-pressed={mode === 'screenshot'}
         disabled={!hasScreens}
-        title={hasScreens ? 'Rendered screenshot' : 'No screenshots for this analysis'}
+        title={hasScreens ? 'A picture taken during the check' : 'No pictures for this check'}
         onClick={() => onChange('screenshot')}
       >
         <Camera size={12} aria-hidden="true" />
-        Shot
+        Picture
       </button>
     </span>
   );
@@ -230,7 +230,7 @@ export default function SitePreview({ url, audit, mode, viewport, onSlow, scroll
   if (!audit?.screenshots) {
     return (
       <Empty icon={Camera} title="No screenshots yet">
-        This analysis has no screenshots. Run Analyze again to capture desktop, tablet and phone views.
+        This check has no picture of the site. Check the site again to take one.
       </Empty>
     );
   }
