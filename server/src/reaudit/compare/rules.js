@@ -62,6 +62,11 @@ export const EVIDENCE = {
   'seo.title-tag.missing': { auto: ['title'] },
   'seo.meta-description': { auto: ['description'] },
   'seo.meta-description.missing': { auto: ['description'] },
+  // Full-site D.1: too long / too short / duplicated titles and descriptions rewritten from the page (marked for review).
+  'seo.title-tag.length': { fixes: ['head-texts'], auto: ['title'] },
+  'seo.title-tag.duplicate': { fixes: ['head-texts'], auto: ['title'] },
+  'seo.meta-description.length': { fixes: ['head-texts'], auto: ['description'] },
+  'seo.meta-description.duplicate': { fixes: ['head-texts'], auto: ['description'] },
   'seo.canonical-url': { auto: ['canonical'] },
   'seo.open-graph-tags': { auto: ['og:title', 'og:description', 'og:image'] },
   'seo.image-alt-text': ALT,

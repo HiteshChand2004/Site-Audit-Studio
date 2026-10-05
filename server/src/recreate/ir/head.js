@@ -183,3 +183,98 @@ export function generatedFavicon(name, color) {
   const letter = (clean(name).match(/[\p{L}\p{N}]/u)?.[0] ?? 'S').toUpperCase().replace(/[<&>]/g, '');
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="${color}"/><text x="32" y="44" font-family="system-ui, sans-serif" font-size="36" font-weight="700" fill="#fff" text-anchor="middle">${letter}</text></svg>\n`;
 }
+
+// ---- titles and descriptions that break the SEO checks (full-site D.1) ------------------------------------------------
+// The Analyze check wants titles of 10–60 characters and descriptions of 50–160, each unique. The original's own text is
+// changed only as much as needed and only from the page itself (no AI): a long title loses its trailing parts (site name,
+// tagline) or is cut at a word; a short one gets the site name; a short description becomes the page's own first paragraph;
+// duplicates get the page's heading. Every change is listed (auto-generated, with the original text) for a person to review.
+const TITLE_MIN = 10;
+const DESCRIPTION_MIN = 50;
+const SEPARATOR = /\s+[|\-–—:·•]\s+/;
+
+/** A title of at most 60 characters: trailing parts dropped first, then cut at a word. */
+export function shortenTitle(title) {
+  const t = clean(title);
+  if (t.length <= TITLE_MAX) return t;
+  const parts = t.split(SEPARATOR);
+  for (let n = parts.length - 1; n >= 1; n--) {
+    const joined = t.slice(0, t.indexOf(parts[n - 1]) + parts[n - 1].length);
+    if (joined.length <= TITLE_MAX && joined.length >= TITLE_MIN) return joined;
+  }
+  return clip(t, TITLE_MAX);
+}
+
+const humanize = (urlPath) => {
+  const seg = decodeURIComponent(urlPath.replace(/\/+$/, '').split('/').pop() || '').replace(/\.[a-z0-9]+$/i, '').replace(/[-_]+/g, ' ').trim();
+  return seg ? seg[0].toUpperCase() + seg.slice(1) : '';
+};
+
+/**
+ * Fixes titles and descriptions across the pages (they must be unique, so this looks at all of them at once).
+ * @param {{ head: object, headAuto: object[], root: object, info: { path: string } }[]} trees  after buildHead
+ * @param {{ value: string }} siteName
+ * @returns {{ titles: number, descriptions: number }}
+ */
+export function fixHeadTexts(trees, siteName) {
+  const done = { titles: 0, descriptions: 0 };
+  const set = (t, field, value, source) => {
+    const before = t.head[field];
+    if (!value || value === before) return;
+    t.head[field] = value;
+    // A field filled from the page earlier keeps one entry: the latest value.
+    t.headAuto = t.headAuto.filter((a) => a.field !== field);
+    t.headAuto.push({ field, value, source, ...(before && { original: before }), review: true });
+    done[field === 'title' ? 'titles' : 'descriptions']++;
+  };
+  const textOf = (t) => {
+    const h1 = find(t.root, (n) => n.tag === 'h1' && visibleOnDesktop(n) && clean(deepText(n)));
+    const main = find(t.root, (n) => n.tag === 'main') ?? t.root;
+    const paragraph = find(main, (n) => n.tag === 'p' && visibleOnDesktop(n) && clean(deepText(n)).length >= DESCRIPTION_MIN);
+    return { h1: h1 ? clean(deepText(h1)) : '', paragraph: paragraph ? clean(deepText(paragraph)) : '' };
+  };
+  const site = siteName?.value ?? '';
+  const withSite = (text) => (site && !text.includes(site) && `${text} | ${site}`.length <= TITLE_MAX ? `${text} | ${site}` : shortenTitle(text));
+
+  // Length first.
+  for (const t of trees) {
+    const title = t.head.title;
+    if (title && title.length > TITLE_MAX) set(t, 'title', shortenTitle(title), `the original title shortened (it had ${title.length} characters, the limit is ${TITLE_MAX})`);
+    else if (title && title.length < TITLE_MIN) {
+      const longer = withSite(title);
+      if (longer.length >= TITLE_MIN) set(t, 'title', longer, `the original title completed with the site name (it had ${title.length} characters)`);
+    }
+    const desc = t.head.description;
+    if (desc && desc.length > DESCRIPTION_MAX) set(t, 'description', clip(desc), `the original description shortened (it had ${desc.length} characters, the limit is ${DESCRIPTION_MAX})`);
+    else if (desc && desc.length < DESCRIPTION_MIN) {
+      const { paragraph } = textOf(t);
+      if (paragraph) set(t, 'description', clip(paragraph), `the page's first paragraph (the original description had ${desc.length} characters)`);
+    }
+  }
+
+  // Then duplicates: the first page keeps its text, the others get their own heading / first paragraph.
+  for (const field of ['title', 'description']) {
+    const seen = new Map();
+    for (const t of trees) {
+      const v = t.head[field];
+      if (!v) continue;
+      const key = v.toLowerCase();
+      if (!seen.has(key)) {
+        seen.set(key, t);
+        continue;
+      }
+      const { h1, paragraph } = textOf(t);
+      let next = null;
+      if (field === 'title') {
+        const own = h1 && h1.toLowerCase() !== key ? h1 : humanize(t.info.path);
+        if (own) next = withSite(own);
+      } else if (paragraph && !seen.has(clip(paragraph).toLowerCase())) next = clip(paragraph);
+      else if (h1) next = clip(`${h1}: ${v}`);
+      if (next && !seen.has(next.toLowerCase())) {
+        set(t, field, next, field === 'title' ? "made unique with the page's own heading (the original title was used on another page too)" : "made unique from the page's own text (the original description was used on another page too)");
+        seen.set(next.toLowerCase(), t);
+      }
+    }
+  }
+  return done;
+}

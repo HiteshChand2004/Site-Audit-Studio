@@ -15,7 +15,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { platformCdnHost } from '../assets/cdn.js';
-import { buildHead, generatedFavicon, siteNameOf } from './head.js';
+import { buildHead, fixHeadTexts, generatedFavicon, siteNameOf } from './head.js';
 import { createAssetResolver, createLinkResolver } from './links.js';
 import { createRebaser } from './rebase.js';
 import { meaningful, PLATFORM_CLASS_PATTERNS } from './names.js';
@@ -224,6 +224,9 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
     t.headMissing = built.missing;
   }
 
+  // Titles and descriptions that break the SEO checks (too long, too short, used twice) are fixed across the pages (D.1).
+  const headTexts = fixHeadTexts(trees, siteName);
+
   // Full addresses copied from the original (structured data, hreflang alternates, llms.txt) name the new site (full-site E.1).
   const rebase = createRebaser({ resolveLink, baseUrl });
   for (const t of trees) {
@@ -235,6 +238,7 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
   // sitemap.xml + robots.txt (after the heads: canonical and robots meta decide what is listed).
   const { files: crawlFileList, ...crawl } = crawlFiles({ pages: trees, baseUrl, robots, llms: llmsRebased });
   crawl.rebased = rebase.count();
+  crawl.headTexts = headTexts;
   files.push(...crawlFileList);
 
   const fontFaces = (assets.fontFaces ?? []).filter((f) => f.local).map((f) => ({
