@@ -217,6 +217,18 @@ records them, nothing consumed them) → **3** script-driven hovers (probe budge
        (a 76 px `min-height` kept the line taller than the 68 px of the shrunk text).
     11. Centred one-line boxes (the message) get `width: max-content` (+ `max-width: 100%`), not a px width a slightly wider rendering wraps in.
     12. The locked cards were the last of 27 (cap was 12): notices now try up to 30 controls in 30 s, the next one clicked right away (waiting only when the message did not change).
+    13. Filter chips that render only the chosen category's section (/media "All / News / Videos…"): the chips' signature also matched a look-alike
+       button inside a filtered section (inline-styled site, no classes), which stretched the set over `main`, and > 3 controls over a broad area were
+       skipped. Now a control with the set's signature inside what the set switches (not on the triggers' row) is content (`planSets`); a broad area
+       whose parts can't hold (> 3 or < 2) is copied whole per state, with > 3 controls only while controls × elements ≤ `MAX_STATE_NODES` (3000).
+    14. Equal controls group only within one top-level block (child of body / main, `clicks.js region` in the signature): a "View more" below the chips
+       was skipped as a duplicate chip. After a probe reloads the page it waits for a quiet network (≤ 5 s) before stopping timers: a hydrating
+       Next.js page left the next button dead ("no change").
+    15. A button that adds content and takes it away on the next click ("View more" / "View less"): a two-state set of the part holding it
+       (`planSets` toggle plan, `captureStates`: click, snapshot, click again must restore), the button leading from each state to the other.
+       `ir/states.js` expands sets inside sets and gives a nested set to the same content (tag + text) in the outer set's other states.
+       Test: `recreate-widgets.test.js` (filter + "View more" in the copy). Note: /initiatives cards and "Know more" are plain links; in a copy
+       limited to 10 pages the uncopied initiative pages open the local notice page.
   - Autoplay timing measured inside the page (`watchText`: visible text every 100 ms, page clock); from Node a snapshot per reading took up to 0.5 s under load (1.5 s read as 2 s).
   - Verified (fresh capture home + 9 pages, then rebuilt from it; `scratch-checkall.mjs`): all 12 of the user's points OK (contact headline at 1280: 66.56 px, top 233, height 68 = original);
     fidelity 88 → 93, visual diff 89 → 94; React / Next / MERN: DOM 10/10, pixels 1.0, hydration clean, safety passed. Full suite: 288 pass, 2 fail (known `netGuard`), 4 skipped.

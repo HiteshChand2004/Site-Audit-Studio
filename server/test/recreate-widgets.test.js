@@ -235,6 +235,83 @@ test('a carousel whose content the original re-renders: every state is in the co
   await ctx.close();
 });
 
+// A media page styled inline (no classes): category chips render only the chosen category's section (the others are
+// removed from the page), and the videos section has a look-alike "View more" button that adds a card and becomes
+// "View less" (a second click takes it away).
+const FILTER = `<!doctype html><html><head><style>body { margin: 0; font: 16px sans-serif }</style></head><body><main>
+<section><div id="chips"></div></section><div id="list"></div>
+<section><p>Footer text</p></section></main>
+<script>
+var cats = { News: ['Funding news'], Videos: ['Video one', 'Video two'], Blogs: ['Essay'] };
+var cur = 'All', more = false;
+var chips = document.getElementById('chips');
+['All', 'News', 'Videos', 'Blogs'].forEach(function (c) { var b = document.createElement('button'); b.textContent = c; b.style.cssText = 'margin:4px;padding:6px'; b.onclick = function () { cur = c; more = false; render(); }; chips.appendChild(b); });
+function render() {
+  [].forEach.call(chips.children, function (b) { b.style.background = b.textContent === cur ? '#06f' : '#eee'; });
+  var html = '';
+  Object.keys(cats).forEach(function (c) {
+    if (cur !== 'All' && cur !== c) return;
+    html += '<section><h2>' + c + '</h2><div>' + cats[c].map(function (t) { return '<div style="padding:8px;border:1px solid #ccc">' + t + '</div>'; }).join('') + '</div>' +
+      (c === 'Videos' ? '<div><button style="margin:4px;padding:6px" id="more">View more</button></div>' : '') + '</section>';
+  });
+  document.getElementById('list').innerHTML = html;
+  // Like a framework updating in place: only the extra card is added or removed, and the button's label changes.
+  var m = document.getElementById('more'); if (m) m.onclick = function () {
+    more = !more; m.textContent = more ? 'View less' : 'View more';
+    var list = m.parentElement.previousElementSibling;
+    if (more) { var d = document.createElement('div'); d.style.cssText = 'padding:8px;border:1px solid #ccc'; d.textContent = 'Video three'; list.appendChild(d); } else list.lastElementChild.remove();
+  };
+}
+render();
+</script></body></html>`;
+
+test('a filter that renders only the chosen section, and a "View more" that adds a card: both work in the copy', async () => {
+  pages.set('/filter', FILTER);
+  const context = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const page = await context.newPage();
+  await page.goto(`${base}/filter`);
+  const snapshot = await page.evaluate(snapshotPage, {});
+  const clicks = await captureClicks(page, { budgetMs: 20000 });
+  const states = await captureStates(page, clicks, snapshot.body, { budgetMs: 30000 });
+  await context.close();
+  assert.ok(clicks.widgets.some((w) => w.text === 'View more'), 'the look-alike button is probed on its own');
+  assert.equal(states.sets, 2, JSON.stringify(states.skipped));
+
+  const tree = buildPageTree({ desktop: snapshot.body });
+  const site = { pages: [{ info: { path: '/filter', url: `${base}/filter` }, root: tree.root }], assetResolve: () => null };
+  const { motion } = applyMotion(site, new Map([['/filter', { clicks }]]));
+  assert.ok(motion.script);
+  const css = motionCss(motion, { tokenOf: new Map(), from: '' });
+  const html = (n) => {
+    if (!isElement(n)) return n.text.replace(/</g, '&lt;');
+    const all = { ...n.attrs, ...n.stateAttrs, ...(n.motionTokens?.length && { 'data-motion': n.motionTokens.join(' ') }) };
+    const attrs = Object.entries(all).map(([k, v]) => (v === '' ? ` ${k}` : ` ${k}="${String(v).replace(/"/g, '&quot;')}"`)).join('');
+    return `<${n.tag}${attrs}>${n.children.map(html).join('')}</${n.tag}>`;
+  };
+  pages.set('/filter-copy', `<!doctype html><html><head><style>${css}</style><script src="/js/motion.js" defer></script></head>${html(tree.root)}</html>`);
+
+  const ctx = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const p = await ctx.newPage();
+  const errors = [];
+  p.on('pageerror', (e) => errors.push(e.message));
+  await p.goto(`${base}/filter-copy`);
+  const headings = () => p.evaluate(() => [...document.querySelectorAll('h2')].filter((h) => h.getClientRects().length).map((h) => h.textContent));
+  const items = () => p.evaluate(() => [...document.querySelectorAll('div')].filter((d) => /^(Video|Funding|Essay)/.test(d.textContent) && !d.children.length && d.getClientRects().length).map((d) => d.textContent));
+  assert.deepEqual(await headings(), ['News', 'Videos', 'Blogs']);
+  await p.locator('button:visible', { hasText: 'Videos' }).click();
+  assert.deepEqual(await headings(), ['Videos'], 'a chip shows only its section');
+  await p.locator('button:visible', { hasText: 'View more' }).click();
+  assert.deepEqual(await items(), ['Video one', 'Video two', 'Video three'], 'View more adds the card in the filtered state too');
+  await p.locator('button:visible', { hasText: 'View less' }).click();
+  assert.deepEqual(await items(), ['Video one', 'Video two'], 'View less takes it away');
+  await p.locator('button:visible', { hasText: 'All' }).click();
+  assert.deepEqual(await headings(), ['News', 'Videos', 'Blogs']);
+  await p.locator('button:visible', { hasText: 'View more' }).click();
+  assert.ok((await items()).includes('Video three'), 'and in the first state');
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
 // Cards whose click shows a short fixed message with their own name, gone again after a moment (no site to open yet).
 const NOTICE = `<!doctype html><html><head><style>
 body { margin: 0; font: 16px sans-serif } .cards { display: flex; gap: 20px; padding: 40px }

@@ -123,6 +123,9 @@ export function expandStates(root) {
       // A carousel that moves on by itself (capture/states.js): js/motion.js advances it on the same interval.
       if (s.autoplay?.ms > 0) n.stateAttrs['data-w-auto'] = `${s.autoplay.ms}:${s.autoplay.step}`;
       const own = relMap(n);
+      // Sets inside this area (a "View more" toggle inside a filtered section): the same content in another state (same
+      // tag and text) works the same, so it gets the same states; all of them are expanded below with the copies.
+      const inner = [...own.values()].filter((x) => x !== n && x.states);
       const copies = [];
       for (const v of s.variants) {
         const copy = v.node;
@@ -142,11 +145,16 @@ export function expandStates(root) {
             if (o.vp && !t.vp) t.vp = o.vp;
           }
         }
+        for (const x of inner) {
+          const twin = [...relMap(copy).values()].find((t) => t.tag === x.tag && !t.states && textOf(t) === textOf(x));
+          if (twin) twin.states = JSON.parse(JSON.stringify(x.states));
+        }
         copies.push(copy);
         states++;
       }
       parent.children.splice(i + 1, 0, ...copies);
       i += copies.length;
+      for (const area of [n, ...copies]) walk(area);
     }
   };
   walk(root);

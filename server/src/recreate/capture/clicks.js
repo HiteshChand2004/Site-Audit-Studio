@@ -63,7 +63,14 @@ function installClicks(opts) {
   // equal and one was skipped as a duplicate of the other.
   const aria = (el) => ['aria-expanded', 'aria-controls', 'aria-selected', 'aria-pressed'].filter((a) => el.hasAttribute(a)).join(',');
   const up = (el) => (el ? `${el.tagName.toLowerCase()}.${cls(el)}` : '');
-  const sigOf = (el) => `${el.tagName.toLowerCase()}|${el.getAttribute('role') || ''}|${cls(el)}|${aria(el)}|${up(el.parentElement)}|${up(el.parentElement?.parentElement)}`;
+  // The top-level block (a child of body or main) holding the control: equal controls are one row, list or grid, so a
+  // look-alike in another section (a "View more" button below a row of category chips) is a control of its own.
+  const region = (el) => {
+    let n = el;
+    while (n.parentElement && n.parentElement !== document.body && n.parentElement.tagName !== 'MAIN') n = n.parentElement;
+    return pathOf(n) ?? '';
+  };
+  const sigOf = (el) => `${el.tagName.toLowerCase()}|${el.getAttribute('role') || ''}|${cls(el)}|${aria(el)}|${up(el.parentElement)}|${up(el.parentElement?.parentElement)}|${region(el)}`;
   const labelOf = (el) => [el.getAttribute('aria-label'), el.getAttribute('title'), el.id, typeof el.className === 'string' ? el.className : '', el.textContent.trim().slice(0, 40)].filter(Boolean).join(' ');
 
   const reasonsOf = (el, cs) => {
@@ -534,6 +541,9 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
     // The address the probe started on: a tab may have written its own state into the current one (?tab=join).
     await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForLoadState('load', { timeout: 10000 }).catch(() => {});
+    // The page's script must be running before its timers are stopped and its controls clicked: a framework that hydrates
+    // after load (code chunks still loading) leaves the buttons dead until then.
+    await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
     await page.waitForTimeout(800);
     await page.evaluate(stopTimers).catch(() => {});
     const again = await page.evaluate(installClicks, { limit, perSignature, hint: HINT_SOURCE });

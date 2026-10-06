@@ -19,6 +19,8 @@ import { snapshotPage } from './snapshot.js';
 const NAV = /next|prev|previous|arrow|›|‹|→|←|»|«|^>$|^<$/i;
 const MAX_CONTROLS = 30;
 const SETTLE_MS = 450;
+const MAX_STATE_NODES = 3000; // elements of all state copies of a many-part set (controls × parts' elements)
+const countNodes = (n) => (!n || 'text' in n ? 0 : 1 + (n.children ?? []).reduce((a, c) => a + countNodes(c), 0));
 
 /** Page function: clicks the element at a snapshot path (no mouse: the control may be covered or scrolled away). */
 function clickPath(p) {
@@ -326,9 +328,17 @@ export function planSets(widgets, noise = []) {
       continue;
     }
     const key = w.group?.sig ?? w.trigger;
-    const set = sets.get(key) ?? { controls: [...controls], changed: new Set(), nav: [] };
+    const set = sets.get(key) ?? { controls: [...controls], changed: new Set(), nav: [], triggers: new Set() };
     changed.forEach((p) => set.changed.add(p));
+    set.triggers.add(w.trigger);
     sets.set(key, set);
+  }
+  const parentOf = (p) => (p.includes('>') ? p.slice(0, p.lastIndexOf('>')) : null);
+  // A control with the clicked ones' signature that lies inside what they switch (a button in a filtered section, on a
+  // site without classes) belongs to that content, not to the row of controls: it would stretch the area over the page.
+  for (const s of sets.values()) {
+    const rows = new Set([...s.triggers].map(parentOf));
+    s.controls = s.controls.filter((c) => rows.has(parentOf(c)) || ![...s.changed].some((p) => c.startsWith(`${p}>`)));
   }
   for (const n of navs) {
     const set = [...sets.values()].find((s) => n.changed.some((p) => [...s.changed].some((q) => related(p, q))));
@@ -337,7 +347,6 @@ export function planSets(widgets, noise = []) {
   // Controls that are part of what another set switches (the cards a filter shows) are content, not a set of their own.
   const all = [...sets.values()];
   const isContent = (s) => all.some((t) => t !== s && s.controls.some((c) => [...t.changed].some((p) => c === p || c.startsWith(`${p}>`))));
-  const parentOf = (p) => (p.includes('>') ? p.slice(0, p.lastIndexOf('>')) : null);
   const out = [];
   for (const s of all.filter((x) => !isContent(x))) {
     // The area grows from the controls only until it holds something they changed: a change far away (anything the noise
@@ -351,13 +360,12 @@ export function planSets(widgets, noise = []) {
     if (area.split('>').length < 3) {
       const childOf = (p) => (p.startsWith(`${area}>`) ? `${area}>${p.slice(area.length + 1).split('>')[0]}` : null);
       parts = [...new Set([...s.controls, ...s.changed, ...s.nav].map(childOf).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
-      // A tab that adds or removes whole sections shifts the ones after it: no fixed set of parts describes that. With a
-      // few tabs (≤ 3) the whole common area is the area (each state a full copy of it); more would weigh too much.
-      if (parts.length > 3 || parts.length < 2) {
-        if (s.controls.length > 3) continue;
-        parts = [area];
-      }
+      // A tab that adds or removes whole sections shifts the ones after it: no fixed set of parts describes that. The whole
+      // common area is then the area, each state a full copy of it: always with a few tabs (≤ 3), with more (a filter that
+      // renders only the chosen category's section) while the copies stay small (weighed in captureStates).
+      if (parts.length > 3 || parts.length < 2) parts = [area];
     }
+    const weigh = parts.length === 1 && parts[0].split('>').length < 3 && s.controls.length > 3;
     const nav = s.nav.filter((p) => p.startsWith(`${area}>`));
     // Next / previous that act on the same content but sit just outside: the area takes them in.
     const outside = s.nav.filter((p) => !p.startsWith(`${area}>`));
@@ -376,7 +384,18 @@ export function planSets(widgets, noise = []) {
       for (const c of s.controls) if (!same.controls.includes(c)) same.controls.push(c);
       for (const n of nav) if (!same.nav.includes(n)) same.nav.push(n);
       same.controls.sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
-    } else out.push({ area, parts, controls: [...s.controls], nav });
+    } else out.push({ area, parts, controls: [...s.controls], nav, ...(weigh && { weigh }) });
+  }
+  // A button that adds content and takes it away again on the next click ("View more" / "View less", "Read more"): the
+  // content does not exist before the click, so no open / closed styles can rebuild it. Two states of the part holding the
+  // button and what it added, the button leading from each to the other.
+  for (const w of widgets) {
+    if (w.opensOn !== 'click' || w.kind !== 'disclosure' || w.closes !== 'toggle') continue;
+    const added = (w.change?.added ?? []).filter((x) => !x.fixed && !x.inTrigger).map((x) => x.path).filter(quiet);
+    if (!added.length || out.some((o) => o.controls.includes(w.trigger))) continue;
+    const area = commonPath([w.trigger, ...added]);
+    if (!area || area === 'body' || out.some((o) => o.area === area)) continue;
+    out.push({ area, parts: [area], controls: [], nav: [], toggle: w.trigger, weigh: true });
   }
   return out;
 }
@@ -468,8 +487,25 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
       });
     };
     try {
+      if (plan.toggle) {
+        if (2 * countNodes(node) > MAX_STATE_NODES) throw new Error('too large to copy per state');
+        const initialSig = stateSignature(node);
+        if (!(await page.evaluate(clickPath, plan.toggle))) throw new Error('control gone');
+        await settle();
+        const open = await snap(plan);
+        if (!open || stateSignature(open) === initialSig) throw new Error('the control does not change the content');
+        await page.evaluate(clickPath, plan.toggle);
+        await settle();
+        if (stateSignature(await snap(plan)) !== initialSig) throw new Error('the second click does not undo the first');
+        nodes[0].states = { initial: 0, count: 2, controls: [], nav: [{ rel: plan.toggle.slice(plan.area.length + 1), offset: 1 }], variants: [{ index: 1, body: open }] };
+        stats.sets++;
+        stats.states += 2;
+        continue;
+      }
       plan.controls = (await page.evaluate(rowControls, plan.controls)).slice(0, MAX_CONTROLS);
       if (plan.controls.length < 2) throw new Error('a single control');
+      // Many controls over a whole broad area (a filter over sections): every state is a full copy, so only while small.
+      if (plan.weigh && plan.controls.length * nodes.reduce((n, x) => n + countNodes(x), 0) > MAX_STATE_NODES) throw new Error('too large to copy per state');
       const initialSig = stateSignature(node);
       // A carousel that moves on a timer may have moved on since the page snapshot: the state it shows now, as a fallback.
       const nowSig = stateSignature(await snap(plan));
