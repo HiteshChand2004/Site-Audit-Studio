@@ -171,10 +171,11 @@ export const useProjects = create((set, get) => ({
     }
   },
 
-  async recreate(id) {
+  /** @param {{ reuseCapture?: boolean }} [options]  reuseCapture: rebuild from the last capture, without opening the site */
+  async recreate(id, options = null) {
     get().setJob('recreate', id, { status: 'starting', pct: 0, step: null, error: null, message: 'Starting…' });
     try {
-      const { job, steps } = await api.startRecreate(id);
+      const { job, steps } = await api.startRecreate(id, options);
       get().attachJob('recreate', id, job, steps);
     } catch (err) {
       if (err.status === 409 && err.data?.recreateId) {

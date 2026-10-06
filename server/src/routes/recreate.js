@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { Router } from 'express';
@@ -29,6 +30,13 @@ const latestDone = db.prepare(`
   ORDER BY started_at DESC LIMIT 1
 `);
 
+// Finished recreates, newest first: the latest one whose capture is still on disk can be rebuilt from.
+const latestReplayable = db.prepare(`
+  SELECT id, started_at FROM recreates
+  WHERE project_id = ? AND status = 'done'
+  ORDER BY started_at DESC LIMIT 5
+`);
+
 router.post('/:id/recreate', (req, res) => {
   const project = selectProject.get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found.' });
@@ -44,9 +52,19 @@ router.post('/:id/recreate', (req, res) => {
     return res.status(409).json({ error: 'Run Analyze first: Recreate works from a completed analysis.' });
   }
 
+  // `reuseCapture`: rebuild from the capture of the latest finished recreate (recreate/replay.js) instead of opening the
+  // site again: only generate → build → preview run, for trying a change to the generated site quickly.
+  let payload = {};
+  if (req.body?.reuseCapture) {
+    const source = latestReplayable.all(project.id).find((r) => r && existsSync(path.join(recreateDir(project.id, r.id), 'capture', 'manifest.json'))
+      && existsSync(path.join(recreateDir(project.id, r.id), 'assets', 'manifest.json')));
+    if (!source) return res.status(409).json({ error: 'There is no saved capture to rebuild from: run a full Recreate first.' });
+    payload = { reuseFrom: { recreateId: source.id, createdAt: source.started_at } };
+  }
+
   try {
-    const job = recreateJobs.start(project, {}, { warnings: analysisWarnings(analysis) });
-    res.status(202).json({ recreateId: job.id, job, steps: PUBLIC_STEPS });
+    const job = recreateJobs.start(project, payload, { warnings: analysisWarnings(analysis) });
+    res.status(202).json({ recreateId: job.id, job, steps: PUBLIC_STEPS, ...(payload.reuseFrom && { reuseFrom: payload.reuseFrom }) });
   } catch (err) {
     if (err instanceof ConflictError) {
       return res.status(409).json({ error: err.message, recreateId: err.job.id });

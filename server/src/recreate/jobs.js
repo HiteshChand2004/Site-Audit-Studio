@@ -6,7 +6,8 @@ import path from 'node:path';
 import { db } from '../db/index.js';
 import { JobManager } from '../jobs/manager.js';
 import { startReaudit } from '../reaudit/jobs.js';
-import { overallPct, runRecreate, STEPS } from './index.js';
+import { overallPct, runRecreate, STAGES, STEPS } from './index.js';
+import { replayStages } from './replay.js';
 import { getEmitter } from './emit/index.js';
 import { exportStack } from './export/fromIr.js';
 import { activePreview, startPreview } from './preview.js';
@@ -18,8 +19,12 @@ export const recreateJobs = new JobManager({
   steps: STEPS,
   overallPct,
   doneMessage: 'Recreate complete',
-  run: async ({ job, project, progress }) => {
-    const report = await runRecreate({ project, recreateId: job.id, progress, warnings: job.warnings });
+  run: async ({ job, project, payload, progress }) => {
+    // A rebuild from a saved capture (recreate/replay.js): the site is not opened again, only generate → build → preview run.
+    const stages = payload?.reuseFrom
+      ? { ...STAGES, ...replayStages(recreateDir(project.id, payload.reuseFrom.recreateId), payload.reuseFrom) }
+      : undefined;
+    const report = await runRecreate({ project, recreateId: job.id, progress, warnings: job.warnings, ...(stages && { stages }) });
     // The preview is runtime state: its port is not part of the report. The app asks for it
     // (GET/POST /preview), which also starts it again after a server restart.
     await startPreview({ projectId: project.id, recreateId: job.id, root: path.join(recreateDir(project.id, job.id), 'dist'), scripts: Boolean(report.outputs?.html?.scripts) }).catch(() => {});

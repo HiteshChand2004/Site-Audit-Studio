@@ -146,7 +146,8 @@ export const api = {
   startAnalyze: (id, body = {}) => request(`/projects/${id}/analyze`, { method: 'POST', body }),
   getCurrentAnalysis: (id) => request(`/projects/${id}/analyze/current`),
   subscribeAnalysis: (id, analysisId, handlers) => subscribe(`/api/projects/${id}/analyze/${analysisId}/events`, handlers),
-  startRecreate: (id) => request(`/projects/${id}/recreate`, { method: 'POST' }),
+  // { reuseCapture: true }: rebuild from the last capture (the site is not opened again).
+  startRecreate: (id, options = null) => request(`/projects/${id}/recreate`, { method: 'POST', ...(options && { body: options }) }),
   getCurrentRecreate: (id) => request(`/projects/${id}/recreate/current`),
   downloadUrl: (id, recreateId, stack) => `/api/projects/${id}/recreate/${recreateId}/download${stack ? `?stack=${encodeURIComponent(stack)}` : ''}`,
   // Builds another stack from the saved recreate (no new capture): resolves when it is ready, rejects with why it failed.

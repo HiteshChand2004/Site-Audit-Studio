@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CheckCircle2, Loader2, Settings2, Sparkles } from 'lucide-react';
+import { CheckCircle2, Loader2, RefreshCw, Settings2, Sparkles } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import { Alert, Card } from '../../components/common/Surface.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
@@ -86,6 +86,16 @@ export default function CreateStep({ project, audit, onOpenSettings }) {
           >
             {running ? 'Creating the copy…' : result ? 'Create the copy again' : 'Create the copy'}
           </Button>
+          {result && (
+            <Button
+              icon={RefreshCw}
+              disabled={Boolean(blocker) || running}
+              title="Builds the copy again from what the last visit recorded, without opening the site again: quick, for trying an improvement."
+              onClick={() => recreate(project.id, { reuseCapture: true })}
+            >
+              Rebuild from the last visit
+            </Button>
+          )}
           <Button icon={Settings2} onClick={onOpenSettings} disabled={running}>
             Change settings
           </Button>
@@ -95,6 +105,7 @@ export default function CreateStep({ project, audit, onOpenSettings }) {
           <p className={ws.hint}>
             This can take a while for a large site (several minutes per page on a slow computer). The computer is kept awake while it works; keep the
             laptop plugged in and its lid open.
+            {result && ' “Rebuild from the last visit” takes well under a minute: it reuses what was recorded and does not open the site again.'}
           </p>
         )}
       </Card>
