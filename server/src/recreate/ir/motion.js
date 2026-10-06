@@ -191,18 +191,20 @@ export function applyMotion(site, byPath) {
   // Areas with click-switched states (ir/states.js): they need the script, and the rule that keeps hidden states hidden.
   let stateSets = 0;
   let notices = 0;
+  let hoverCards = 0;
   for (const tree of site.pages) {
     const ids = new Set();
     const walk = (n) => {
       if (!isElement(n)) return;
       if (n.stateAttrs?.['data-w-set']) ids.add(n.stateAttrs['data-w-set']);
       if (n.stateAttrs?.['data-w-note-of']) notices++;
+      if (n.stateAttrs && 'data-w-hcopy' in n.stateAttrs) hoverCards++;
       n.children.forEach(walk);
     };
     walk(tree.root);
     stateSets += ids.size;
   }
-  stats.states = { sets: stateSets, notices };
+  stats.states = { sets: stateSets, notices, hoverCards };
 
   for (const tree of site.pages) {
     const motion = byPath.get(tree.info.path);
@@ -217,10 +219,18 @@ export function applyMotion(site, byPath) {
     };
     walk(tree.root);
     const assetFile = (url) => site.assetResolve(url, tree.info.url);
+    // Hover / focus effects of content only a tab / filter state shows (ir/states.js `stateEffects` on its copies).
+    const extra = { hover: [], focus: [] };
+    const gather = (n) => {
+      if (!isElement(n)) return;
+      for (const kind of ['hover', 'focus']) extra[kind].push(...(n.stateEffects?.[kind] ?? []));
+      n.children.forEach(gather);
+    };
+    gather(tree.root);
 
     // Hover and focus: one effect per distinct set of changed values.
     const pseudoDecls = (pseudo) => Object.fromEntries(Object.entries(pseudo ?? {}).map(([which, c]) => [which, changeDecls(c, assetFile)]).filter(([, d]) => Object.keys(d).length));
-    for (const [kind, found, prefix, s] of [['hover', motion.hover ?? [], 'h', stats.hover], ['focus', motion.focus ?? [], 'f', stats.focus]]) {
+    for (const [kind, found, prefix, s] of [['hover', [...(motion.hover ?? []), ...extra.hover], 'h', stats.hover], ['focus', [...(motion.focus ?? []), ...extra.focus], 'f', stats.focus]]) {
       const { list, spread } = spreadToGroups(found, motion.groups);
       s.spread += spread;
       for (const entry of list) {
@@ -383,8 +393,16 @@ export function applyMotion(site, byPath) {
     const done = new Set();
     for (const w of motion.clicks?.widgets ?? []) {
       const ws = stats.widgets;
-      if (w.kind !== 'disclosure' || w.opensOn !== 'click') {
+      // A part a hover opens (a card unfolding its details, a dropdown) is rebuilt with CSS :hover, no script.
+      const onHover = w.opensOn === 'hover' && (w.kind === 'disclosure' || w.kind === 'carousel');
+      if (!onHover && (w.kind !== 'disclosure' || w.opensOn !== 'click')) {
         ws.skipped.kinds[`${w.kind}${w.opensOn === 'hover' ? ' (hover)' : ''}`] = (ws.skipped.kinds[`${w.kind}${w.opensOn === 'hover' ? ' (hover)' : ''}`] ?? 0) + 1;
+        continue;
+      }
+      // A card replaced by its hovered snapshot on hover (ir/states.js expandHoverCards) needs no rebuilt styles.
+      const tn = onHover ? nodes.get(w.trigger) : null;
+      if (tn?.stateAttrs && 'data-w-hrest' in tn.stateAttrs) {
+        ws.skipped.hoverCard = (ws.skipped.hoverCard ?? 0) + 1;
         continue;
       }
       if (!w.state) {
@@ -407,15 +425,17 @@ export function applyMotion(site, byPath) {
         ws.skipped.empty++;
         continue;
       }
-      const key = JSON.stringify(parts);
+      const depth = w.trigger.split('>').length - w.state.root.split('>').length;
+      // On hover: the area itself is hovered when the control is the area; else the area opens while its control is hovered.
+      const on = onHover ? (depth === 0 ? 'hover' : 'hover-control') : 'click';
+      const key = JSON.stringify([on, parts]);
       let effect = reg.widgets.get(key);
       if (!effect) {
         const token = `w${reg.widgets.size + 1}`;
-        effect = { token, kind: 'disclosure', parts: parts.map((p, i) => ({ ...p, token: p.rel === '' ? token : `${token}p${i + 1}` })) };
+        effect = { token, kind: 'disclosure', ...(on !== 'click' && { on }), parts: parts.map((p, i) => ({ ...p, token: p.rel === '' ? token : `${token}p${i + 1}` })) };
         reg.widgets.set(key, effect);
         ws.effects++;
       }
-      const depth = w.trigger.split('>').length - w.state.root.split('>').length;
       // One panel at a time (an accordion, capture/clicks.js): the list holding all its controls is marked; js/motion.js
       // closes the other open panels in it.
       if (w.exclusive && w.group?.paths?.length > 1) {
@@ -435,7 +455,9 @@ export function applyMotion(site, byPath) {
           continue;
         }
         tokenize(rootNode, effect.token);
-        tokenize(triggerNode, 'wt');
+        // `wt` = a control js/motion.js toggles on click; `wh` = a control whose hover opens its area (CSS only).
+        if (on === 'click') tokenize(triggerNode, 'wt');
+        else if (on === 'hover-control') tokenize(triggerNode, 'wh');
         for (const p of effect.parts) {
           if (p.rel === '') continue;
           const partNode = nodes.get(`${rootPath}>${p.rel}`);
@@ -452,7 +474,7 @@ export function applyMotion(site, byPath) {
   const loops = reg.loops.map(({ key, ...rest }) => rest);
   const widgets = [...reg.widgets.values()];
   const scrolled = [...reg.scrolled.values()];
-  const any = hover.length || focus.length || reveal.length || loops.length || widgets.length || stateSets || scrolled.length || notices;
+  const any = hover.length || focus.length || reveal.length || loops.length || widgets.length || stateSets || scrolled.length || notices || hoverCards;
   const motion = any ? {
     version: MOTION_VERSION,
     hover,
@@ -463,10 +485,11 @@ export function applyMotion(site, byPath) {
     widgets,
     states: stateSets,
     notices,
+    hoverCards,
     scrolled,
     // The generated script is needed for the reveal (IntersectionObserver), the click widgets, the switched states and the
     // scroll states; hover, focus and loops are CSS.
-    script: reveal.length > 0 || widgets.length > 0 || stateSets > 0 || scrolled.length > 0 || notices > 0,
+    script: reveal.length > 0 || widgets.some((w) => !w.on) || stateSets > 0 || scrolled.length > 0 || notices > 0,
   } : null;
   return { motion, stats };
 }

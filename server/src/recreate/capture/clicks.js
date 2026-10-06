@@ -595,15 +595,36 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
         await page.waitForTimeout(350);
         const hovered = await read(c.i);
         if (visibleChange(hovered)) {
-          const kind = classifyClick(hovered, { text: c.text, group: groupOf.get(c.path), triggerPath: c.path });
+          let kind = classifyClick(hovered, { text: c.text, group: groupOf.get(c.path), triggerPath: c.path });
+          // A card or link whose hover shows a sizeable layer inside itself (a dark overlay with a description) changes how
+          // it looks, not just its own colour: kept as a hover panel (a button's own icon or tint is not).
+          if ((!kind || kind.kind === 'state') && c.tag !== 'button') {
+            const inside = [...hovered.shown, ...hovered.added].filter((x) => x.inTrigger && x.rect[2] * x.rect[3] >= 2500);
+            if (inside.length) kind = { kind: 'disclosure', targets: inside.map((x) => x.path).slice(0, 6) };
+          }
           if (kind && kind.kind !== 'state') {
             opensOn = 'hover';
-            widgets.push({ ...kind, trigger: c.path, tag: c.tag, text: c.text, reasons: c.reasons, opensOn, change: compact(hovered) });
-            stats.found++;
-            stats.kinds[kind.kind] = (stats.kinds[kind.kind] ?? 0) + 1;
+            const entry = { ...kind, trigger: c.path, tag: c.tag, text: c.text, reasons: c.reasons, opensOn, change: compact(hovered) };
+            // What the hover opened, as styles of the part holding the control and what it showed (a card that unfolds
+            // its details, a dropdown): read open now and closed once the mouse has left, like a click's panel.
+            const common = kind.kind === 'disclosure' || kind.kind === 'carousel' ? commonPath([c.path, ...kind.targets]) : null;
+            const root = common && common !== 'body' ? common : null;
+            const open = root ? await page.evaluate(readRegion, { rootPath: root }).catch(() => null) : null;
             await page.mouse.move(-20, -20).catch(() => {});
             await page.waitForTimeout(350);
-            continue;
+            if (open) {
+              const closed = await page.evaluate(readRegion, { rootPath: root }).catch(() => null);
+              const parts = closed ? regionDiff(closed, open) : [];
+              if (parts.length) entry.state = { root, parts, ...(Object.keys(open).length > Object.keys(closed).length && { added: true }) };
+            }
+            widgets.push(entry);
+            stats.found++;
+            stats.kinds[kind.kind] = (stats.kinds[kind.kind] ?? 0) + 1;
+            // A button can change something on hover and still do its real work on click ("View more" below a list):
+            // it is clicked as well. Other hover controls (menu links, cards) are left after their hover.
+            if (!(c.tag === 'button' || c.reasons.includes('role:button'))) continue;
+            opensOn = 'click';
+            await save();
           }
         }
       }

@@ -165,6 +165,8 @@ export function collectAssets(captures, extra = {}) {
       for (const child of node.children ?? []) walk(child, node);
       // The other states of a tab panel / carousel / filtered list (capture/states.js): shown when a visitor clicks.
       for (const s of node.states?.variants ?? []) walk(s.body, parent);
+      // A card's look while hovered (capture/states.js): shown in its place on hover.
+      if (node.hoverState?.body) walk(node.hoverState.body, parent);
       for (const n of node.notices ?? []) for (const item of n.items) walk(item.body, node);
     };
     walk(data.body);

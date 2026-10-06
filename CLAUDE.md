@@ -229,6 +229,20 @@ records them, nothing consumed them) → **3** script-driven hovers (probe budge
        `ir/states.js` expands sets inside sets and gives a nested set to the same content (tag + text) in the outer set's other states.
        Test: `recreate-widgets.test.js` (filter + "View more" in the copy). Note: /initiatives cards and "Know more" are plain links; in a copy
        limited to 10 pages the uncopied initiative pages open the local notice page.
+    16. Slow floating shapes (parchaa hero icons, 15–25 px over 4–12 s, moved by script) looked one-way in the 2.2 s loop recording (`drift` / `move`,
+       not rebuilt): small movers that didn't turn are recorded again by path for up to 9 s (`loops.js recordPaths`, `SLOW_MOVER_PX` 60) → `oscillate`
+       → the existing `@keyframes m-lN`. Only pages with such movers pay the extra seconds.
+    17. Cards whose hover look the page's script draws (parchaa product cards: dark layer + screenshot + white text added on mouseenter; a builder's hover
+       variant): the hover probe counts a sizeable layer shown inside a non-button control; `captureStates` snapshots each such card while hovered
+       (`node.hoverState`, ≤ 24 per page); `ir/states.js expandHoverCards` puts the snapshot right after the card (`data-w-hcopy`, card `data-w-hrest`,
+       cell `data-w-hv`, only when the card is its cell's only element); CSS swaps them on `:hover` / `:focus-within`, no script; fit / fidelity skip the copy.
+       Panels a hover opens elsewhere are rebuilt from their open / closed styles with `:hover` (`wN` + `wh`, `@media (hover: hover)`).
+       A button that changes on hover is still clicked (the panscience "View More" had been recorded as a hover only).
+    18. States are read once their reveals ended (`revealArea` finishes running animations in the area and waits ≤ 1.5 s for faint elements): the
+       contact "— APPLICATION" label had been captured at opacity 0 mid-fade.
+    19. Hover / focus rules of content only a tab / filter state shows (contact "What we look for" cards, `.hoverLiftSm:hover`): read while each state
+       is shown (`interactions.js cssStateEffects`, ≤ 12 states), stored per part on the variant (`effects`), the copy's nodes get their own paths
+       (`<area>#v<i>>…`) and `stateEffects`, which `ir/motion.js` adds to the page's hover / focus list.
   - Autoplay timing measured inside the page (`watchText`: visible text every 100 ms, page clock); from Node a snapshot per reading took up to 0.5 s under load (1.5 s read as 2 s).
   - Verified (fresh capture home + 9 pages, then rebuilt from it; `scratch-checkall.mjs`): all 12 of the user's points OK (contact headline at 1280: 66.56 px, top 233, height 68 = original);
     fidelity 88 → 93, visual diff 89 → 94; React / Next / MERN: DOM 10/10, pixels 1.0, hydration clean, safety passed. Full suite: 288 pass, 2 fail (known `netGuard`), 4 skipped.

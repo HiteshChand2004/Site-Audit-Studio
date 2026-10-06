@@ -168,7 +168,63 @@ export async function findScriptLoops(opts) {
   };
 }
 
+/**
+ * Page function: records the elements at `paths` (snapshot paths) for up to `ms`, a sample every `every` ms, and stops
+ * early once each has turned around twice. For slow movers a short recording saw going one way only (a shape floating
+ * up and down over several seconds).
+ */
+export async function recordPaths({ paths, ms = 9000, every = 50 }) {
+  const SKIP = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
+  const byPath = (p) => {
+    let el = document.body;
+    for (const part of p.split('>').slice(1)) {
+      const [tag, n] = part.split(':');
+      let k = 0;
+      el = [...(el ? el.children : [])].find((c) => !SKIP.has(c.tagName) && c.tagName.toLowerCase() === tag && ++k === Number(n)) ?? null;
+      if (!el) return null;
+    }
+    return el;
+  };
+  const read = (el) => {
+    const cs = getComputedStyle(el);
+    return [cs.transform, cs.opacity, cs.rotate, cs.translate, cs.scale];
+  };
+  // The position along both axes, enough to see a turn (the full reading is kept for the analysis).
+  const pos = (el) => {
+    const r = el.getBoundingClientRect();
+    return [r.left + scrollX, r.top + scrollY];
+  };
+  const els = paths.map(byPath);
+  const series = els.map(() => []);
+  const turns = els.map(() => ({ last: null, dir: [0, 0], count: 0 }));
+  const t0 = performance.now();
+  while (performance.now() - t0 < ms) {
+    const t = Math.round(performance.now() - t0);
+    els.forEach((el, i) => {
+      if (!el || series[i].length >= 200) return;
+      series[i].push([t, ...read(el)]);
+      const p = pos(el);
+      const s = turns[i];
+      if (s.last) {
+        for (const a of [0, 1]) {
+          const d = Math.sign(Math.round((p[a] - s.last[a]) * 4) / 4);
+          if (d && s.dir[a] && d !== s.dir[a]) s.count++;
+          if (d) s.dir[a] = d;
+        }
+      }
+      s.last = p;
+    });
+    // Early stop only after clear turns (a jittering position counts many small ones).
+    if (turns.every((s, i) => !els[i] || s.count >= 6)) break;
+    await new Promise((r) => setTimeout(r, every));
+  }
+  return series;
+}
+
 // ---- Node side ------------------------------------------------------------------------------------------------
+
+const SLOW_MOVER_PX = 60; // a one-way move smaller than this in the short recording may be a slow float
+const SLOW_WATCH_MS = 9000; // watched again for up to this long (stops once each one turned twice)
 
 const num = (s) => {
   const n = parseFloat(s);
@@ -390,5 +446,18 @@ export function processLoops({ scan, script }) {
 export async function captureLoops(page, { script = true, recordMs = 2200 } = {}) {
   const scan = await page.evaluate(scanAnimations, {}).catch(() => ({ items: [], total: 0, definedKeyframes: [] }));
   const found = script ? await page.evaluate(findScriptLoops, { recordMs }).catch(() => null) : null;
+  // A small, slow one-way move that never turned in the short recording is often a shape floating up and down over
+  // several seconds: watched again longer (only these), it shows its turns and becomes an oscillation.
+  const slow = (found?.candidates ?? []).filter((c) => {
+    const a = analyzeSeries(c.series);
+    // One way (drift), or one turn only (move): not enough of it was seen.
+    return (a?.pattern === 'drift' || a?.pattern === 'move') && !a.wrap && (a.channel === 'x' || a.channel === 'y') && a.range < SLOW_MOVER_PX;
+  }).slice(0, 12);
+  if (slow.length) {
+    const longer = await page.evaluate(recordPaths, { paths: slow.map((c) => c.path), ms: SLOW_WATCH_MS }).catch(() => null);
+    slow.forEach((c, i) => {
+      if (longer?.[i]?.length >= 8) c.series = longer[i];
+    });
+  }
   return processLoops({ scan, script: found ?? undefined });
 }

@@ -312,6 +312,91 @@ test('a filter that renders only the chosen section, and a "View more" that adds
   await ctx.close();
 });
 
+// Product cards whose hover look the page's script draws (like a site builder's hover variant): on mouseenter a dark
+// layer with a description is added inside the card, on mouseleave it is removed. Each card sits in its own grid cell.
+const HOVER_CARDS = `<!doctype html><html><head><style>
+body { margin: 0; font: 16px sans-serif } .cards { display: grid; grid-template-columns: repeat(3, 240px); gap: 20px; padding: 40px }
+.card { display: block; position: relative; height: 160px; padding: 16px; border: 1px solid #ccc; background: #fff; color: #111; text-decoration: none }
+.layer { position: absolute; inset: 0; background: #333; color: #fff; padding: 16px }
+</style></head><body><main><section class="cards">
+<div class="cell"><a class="card" href="#"><h3>Clinic</h3></a></div>
+<div class="cell"><a class="card" href="#"><h3>Hospital</h3></a></div>
+<div class="cell"><a class="card" href="#"><h3>Lab</h3></a></div>
+</section></main>
+<script>document.querySelectorAll('.card').forEach(function (c) {
+  c.addEventListener('mouseenter', function () { var d = document.createElement('div'); d.className = 'layer'; d.textContent = 'All about ' + c.querySelector('h3').textContent; c.appendChild(d); });
+  c.addEventListener('mouseleave', function () { var d = c.querySelector('.layer'); if (d) d.remove(); });
+});</script></body></html>`;
+
+test('cards whose hover look the script draws show that look in the copy, with CSS only', async () => {
+  pages.set('/hover-cards', HOVER_CARDS);
+  const context = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const page = await context.newPage();
+  await page.goto(`${base}/hover-cards`);
+  const snapshot = await page.evaluate(snapshotPage, {});
+  const clicks = await captureClicks(page, { budgetMs: 15000 });
+  const states = await captureStates(page, clicks, snapshot.body, { budgetMs: 15000 });
+  await context.close();
+  assert.ok(clicks.widgets.some((w) => w.opensOn === 'hover'), JSON.stringify(clicks.widgets.map((w) => [w.kind, w.opensOn])));
+  assert.ok(states.hoverCards >= 1, JSON.stringify(states));
+
+  const tree = buildPageTree({ desktop: snapshot.body });
+  assert.equal(tree.stats.hoverCards, states.hoverCards);
+  const site = { pages: [{ info: { path: '/hover-cards', url: `${base}/hover-cards` }, root: tree.root }], assetResolve: () => null };
+  const { motion } = applyMotion(site, new Map([['/hover-cards', { clicks }]]));
+  assert.equal(motion.script, false, 'no script needed');
+  const css = motionCss(motion, { tokenOf: new Map(), from: '' });
+  const html = (n) => {
+    if (!isElement(n)) return n.text.replace(/</g, '&lt;');
+    const all = { ...n.attrs, ...n.stateAttrs, ...(n.motionTokens?.length && { 'data-motion': n.motionTokens.join(' ') }) };
+    const attrs = Object.entries(all).map(([k, v]) => (v === '' ? ` ${k}` : ` ${k}="${String(v).replace(/"/g, '&quot;')}"`)).join('');
+    return `<${n.tag}${attrs}>${n.children.map(html).join('')}</${n.tag}>`;
+  };
+  const style = HOVER_CARDS.match(/<style>([\s\S]*?)<\/style>/)[1];
+  pages.set('/hover-cards-copy', `<!doctype html><html><head><style>${style}\n${css}</style></head>${html(tree.root)}</html>`);
+  const ctx = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const p = await ctx.newPage();
+  await p.goto(`${base}/hover-cards-copy`);
+  const layers = () => p.evaluate(() => [...document.querySelectorAll('.layer')].filter((e) => e.getClientRects().length).map((e) => e.textContent));
+  assert.deepEqual(await layers(), [], 'no layer at first');
+  // A real mouse move (the card hides itself once hovered, its hovered copy takes its place).
+  const box = await p.locator('h3:visible', { hasText: 'Hospital' }).boundingBox();
+  await p.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  assert.deepEqual(await layers(), ['All about Hospital'], 'the hovered look shows on hover');
+  await p.mouse.move(5, 5);
+  assert.deepEqual(await layers(), [], 'and the card is back when the mouse leaves');
+  await ctx.close();
+});
+
+// Tabs whose second tab shows cards with a stylesheet hover (a lift): the cards exist only in that state, so their hover
+// is read while the state is shown and reaches the copy's hidden state.
+const TAB_HOVER = `<!doctype html><html><head><style>
+body { margin: 0; font: 16px sans-serif } .tabs button { padding: 8px } .card { display: inline-block; width: 200px; height: 80px; margin: 10px; border: 1px solid #ccc; transition: transform .2s }
+.card:hover { transform: translateY(-3px); box-shadow: 0 10px 20px rgba(0, 0, 0, .1) }
+</style></head><body><main><section><div class="tabs"><button>Partner</button><button>Join</button></div></section>
+<section id="panel"><p>Partner form here.</p></section></main>
+<script>var bs = document.querySelectorAll('.tabs button'); var panel = document.getElementById('panel');
+bs[0].onclick = function () { panel.innerHTML = '<p>Partner form here.</p>'; };
+bs[1].onclick = function () { panel.innerHTML = '<div class="card">One</div><div class="card">Two</div>'; };</script></body></html>`;
+
+test('hover effects of content only another tab shows reach the copy of that tab', async () => {
+  pages.set('/tab-hover', TAB_HOVER);
+  const context = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const page = await context.newPage();
+  await page.goto(`${base}/tab-hover`);
+  const snapshot = await page.evaluate(snapshotPage, {});
+  const clicks = await captureClicks(page, { budgetMs: 15000 });
+  const states = await captureStates(page, clicks, snapshot.body, { budgetMs: 20000 });
+  await context.close();
+  assert.equal(states.sets, 1, JSON.stringify(states));
+  const tree = buildPageTree({ desktop: snapshot.body });
+  const site = { pages: [{ info: { path: '/tab-hover', url: `${base}/tab-hover` }, root: tree.root }], assetResolve: () => null };
+  const { motion, stats } = applyMotion(site, new Map([['/tab-hover', { clicks, hover: [], focus: [] }]]));
+  assert.ok(stats.hover.elements >= 2, `the two cards of the hidden tab get the hover: ${JSON.stringify(stats.hover)}`);
+  const css = motionCss(motion, { tokenOf: new Map(), from: '' });
+  assert.match(css, /:hover[^{]*\{[^}]*translate|:hover[^{]*\{[^}]*transform/);
+});
+
 // Cards whose click shows a short fixed message with their own name, gone again after a moment (no site to open yet).
 const NOTICE = `<!doctype html><html><head><style>
 body { margin: 0; font: 16px sans-serif } .cards { display: flex; gap: 20px; padding: 40px }

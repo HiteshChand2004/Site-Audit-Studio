@@ -355,6 +355,16 @@ function forceRuleStates(opts) {
 }
 
 /**
+ * The stylesheet's hover / focus effects of the elements the page shows right now (forceRuleStates), for content that
+ * only exists in another state of a tab or filter (capture/states.js reads them while that state is shown).
+ * @returns {Promise<{ hover: object[], focus: object[] }>}
+ */
+export async function cssStateEffects(page, { budgetMs = 1500 } = {}) {
+  return page.evaluate(forceRuleStates, { props: [...MOTION_PROPS, ...RULE_EXTRA], pseudoProps: PSEUDO_EXTRA, maxHosts: 300, maxKids: 40, budgetMs })
+    .catch(() => ({ hover: [], focus: [] }));
+}
+
+/**
  * Page function: picks the elements to probe and remembers them (window.__sasMotion). Links, buttons, fields and
  * roles come first, then cursor: pointer elements, then plain transition hosts; each group of equal elements is
  * probed `perSignature` times; the chosen ones are kept in document order. Elements whose effect the stylesheet

@@ -58,16 +58,25 @@ export function motionCss(m, opts) {
   // Switched states (ir/states.js): the states not shown stay hidden whatever display their own class gives them.
   if (m.states || m.notices) out.push('/* Tab / carousel states and short messages not shown (js/motion.js shows them) */\n[data-w-set][hidden],\n[data-w-note-of][hidden] {\n  display: none !important;\n}');
 
+  // Cards whose hover look the page drew by script: the hovered copy replaces the card while its box is hovered or
+  // focused (ir/states.js expandHoverCards); no script.
+  if (m.hoverCards) out.push('/* Cards shown in their hovered look while the mouse is on them */\n[data-w-hv]:not(:hover):not(:focus-within) > [data-w-hcopy],\n[data-w-hv]:is(:hover, :focus-within) > [data-w-hrest] {\n  display: none !important;\n}');
+
   // Click widgets: js/motion.js toggles `is-open` on the area (`wN`) when its control (`wt`) is clicked.
   const widgets = [];
+  const hovered = [];
   for (const w of m.widgets ?? []) {
+    // Open: `.is-open` (clicked, js/motion.js), or the area hovered / holding keyboard focus, or its control hovered.
+    const states = !w.on ? ['.is-open'] : w.on === 'hover' ? [':hover', ':focus-within'] : [`:has(${sel('wh')}:hover)`, ':focus-within'];
+    const list = w.on ? hovered : widgets;
     for (const p of w.parts) {
-      const target = p.token === w.token ? `${sel(w.token)}.is-open` : `${sel(w.token)}.is-open ${sel(p.token)}`;
-      widgets.push(block(target, D(p.decls)));
-      for (const [which, decl] of Object.entries(p.pseudo ?? {})) widgets.push(block(`${target}::${which}`, D(decl)));
+      const targets = states.map((s) => (p.token === w.token ? `${sel(w.token)}${s}` : `${sel(w.token)}${s} ${sel(p.token)}`));
+      list.push(block(targets.join(',\n'), D(p.decls)));
+      for (const [which, decl] of Object.entries(p.pseudo ?? {})) list.push(block(targets.map((t) => `${t}::${which}`).join(',\n'), D(decl)));
     }
   }
   if (widgets.some(Boolean)) out.push(`/* Open panels (js/motion.js adds .is-open to the area of a clicked control) */\n${widgets.filter(Boolean).join('\n')}`);
+  if (hovered.some(Boolean)) out.push(`/* Parts that open on hover (and keyboard focus) */\n@media (hover: hover) {\n${hovered.filter(Boolean).join('\n')}\n}`);
 
   if (m.reveal.length) {
     const rules = [];

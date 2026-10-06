@@ -15,11 +15,34 @@
 // Page functions below are self-contained (Playwright sends only their source).
 import { samePage } from './clicks.js';
 import { snapshotPage } from './snapshot.js';
+import { cssStateEffects } from './interactions.js';
 
 const NAV = /next|prev|previous|arrow|›|‹|→|←|»|«|^>$|^<$/i;
 const MAX_CONTROLS = 30;
 const SETTLE_MS = 450;
-const MAX_STATE_NODES = 3000; // elements of all state copies of a many-part set (controls × parts' elements)
+const MAX_HOVER_CARDS = 24; // cards snapshotted while hovered, per page
+const HOVER_CARDS_MS = 20000; // time they may take beyond the states' own limit
+const HOVER_SETTLE_MS = 700; // a hover animation (fade, slide) runs out
+const MAX_STATE_NODES = 3000;
+const MAX_EFFECT_STATES = 12; // states whose hover / focus rules are read (a long carousel's slides share them anyway)
+
+/** Hover / focus effects of the page split by the part holding them, paths made relative to it (null when none). */
+function effectsByPart(effects, parts) {
+  const rel = (path, part) => (path === part ? '' : path.startsWith(`${part}>`) ? path.slice(part.length + 1) : null);
+  return parts.map((part) => {
+    const out = {};
+    for (const kind of ['hover', 'focus']) {
+      const list = (effects[kind] ?? []).map((e) => {
+        const r = rel(e.path, part);
+        if (r == null) return null;
+        const { path, rect, ...rest } = e;
+        return { ...rest, rel: r, ...(e.kids && { kids: e.kids.map((k) => ({ ...k, rel: rel(k.path, part) })).filter((k) => k.rel != null) }) };
+      }).filter(Boolean);
+      if (list.length) out[kind] = list;
+    }
+    return Object.keys(out).length ? out : null;
+  });
+} // elements of all state copies of a many-part set (controls × parts' elements)
 const countNodes = (n) => (!n || 'text' in n ? 0 : 1 + (n.children ?? []).reduce((a, c) => a + countNodes(c), 0));
 
 /** Page function: clicks the element at a snapshot path (no mouse: the control may be covered or scrolled away). */
@@ -112,6 +135,23 @@ async function revealArea(p) {
   }
   window.scrollTo({ top: Math.max(0, top - innerHeight * 0.2), behavior: 'instant' });
   await pause(350);
+  // Reveals started by the scroll are still running (a 700 ms fade): finished at once, so the state is read as a visitor
+  // sees it once it has appeared, not at its hidden start. Script-driven ones get a short while to arrive.
+  const finish = () => {
+    for (const a of el.getAnimations ? el.getAnimations({ subtree: true }) : []) {
+      try {
+        if (a.effect?.getTiming?.().iterations !== Infinity) a.finish();
+      } catch {
+        // an animation that can't be finished (infinite, or already removed)
+      }
+    }
+  };
+  finish();
+  const faint = () => [el, ...el.querySelectorAll('*')].some((n) => parseFloat(getComputedStyle(n).opacity) < 0.05 && n.getBoundingClientRect().width > 2);
+  for (let t = 0; t < 1500 && faint(); t += 150) {
+    await pause(150);
+    finish();
+  }
   return true;
 }
 
@@ -438,7 +478,7 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
   const stats = { sets: 0, states: 0, skipped: [], ms: 0, timedOut: false, cssUrls: [] };
   // What moves by itself was measured by the click probe (clicks.noise) and is never evidence.
   const plans = planSets(clicks?.widgets ?? [], clicks?.noise ?? []);
-  if (!plans.length) return { ...stats, ms: Date.now() - started };
+  if (!plans.length && !(clicks?.widgets ?? []).some((w) => w.opensOn === 'hover')) return { ...stats, ms: Date.now() - started };
   // The limit follows the work: a few seconds per control to click, scroll through and snapshot, within bounds.
   const b = typeof budgetMs === 'number' ? { min: budgetMs, max: budgetMs, perControl: 0 } : budgetMs;
   const controls = plans.reduce((n, p) => n + Math.max(p.controls.length, 2) + p.nav.length, 0);
@@ -522,7 +562,10 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
         const sig = stateSignature(state);
         sigs.push(sig);
         if (initial < 0 && sig === initialSig) initial = j;
-        variants.push({ index: j, body: state });
+        // The stylesheet's hover / focus effects of what this state shows (cards that only exist in it), per part, with
+        // paths relative to the part (the copy names its elements that way, ir/states.js).
+        const effects = plan.controls.length <= MAX_EFFECT_STATES ? await cssStateEffects(page, { budgetMs: 800 }) : null;
+        variants.push({ index: j, body: state, ...(effects && { effects: effectsByPart(effects, plan.parts) }) });
       }
       if (initial < 0) {
         // The page snapshot caught the area between two states: the copy starts at the state it showed just now.
@@ -576,7 +619,7 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
           controls: plan.controls.map(rel),
           nav: nav.map((n) => ({ ...n, rel: rel(`${plan.area}>${n.rel}`) })).filter((n) => n.rel != null),
           ...(autoplay && pi === 0 && { autoplay }),
-          variants: variants.filter((v) => v.index !== initial).map((v) => ({ index: v.index, body: partsOf(v.body, plan)[pi] })),
+          variants: variants.filter((v) => v.index !== initial).map((v) => ({ index: v.index, body: partsOf(v.body, plan)[pi], ...(v.effects?.[pi] && { effects: v.effects[pi] }) })),
         };
       });
       stats.sets++;
@@ -586,6 +629,49 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
       stats.skipped.push({ area: plan.area, reason: err.message });
     }
   }
+  // Cards whose hover look the page draws by script (a dark layer, a picture and light text rendered only while the mouse
+  // is on them): the card is snapshotted while hovered; the copy shows that snapshot in its place on hover (ir/states.js).
+  stats.hoverCards = 0;
+  const cards = (clicks?.widgets ?? []).filter((w) => w.opensOn === 'hover' && !(w.tag === 'button' || w.reasons?.includes('role:button'))
+    && [...(w.change?.shown ?? []), ...(w.change?.added ?? [])].some((x) => x.path?.startsWith(`${w.trigger}>`)));
+  for (const w of cards.slice(0, MAX_HOVER_CARDS)) {
+    if (Date.now() > deadline + HOVER_CARDS_MS) break;
+    const node = findNode(body, w.trigger);
+    if (!node || node.hoverState) continue;
+    try {
+      const spot = await page.evaluate(spotOf, w.trigger);
+      if (!spot) continue;
+      await page.mouse.move(spot.x, spot.y);
+      await page.waitForTimeout(HOVER_SETTLE_MS);
+      const res = await page.evaluate(snapshotPage, { rootPath: w.trigger });
+      await page.mouse.move(-20, -20);
+      await page.waitForTimeout(250);
+      for (const u of res?.cssUrls ?? []) stats.cssUrls.push(u);
+      if (!res?.body || stateSignature(res.body) === stateSignature(node)) continue;
+      const { path, ...hovered } = res.body;
+      carryProbes(node, hovered);
+      node.hoverState = { body: hovered };
+      stats.hoverCards++;
+    } catch {
+      await page.mouse.move(-20, -20).catch(() => {});
+    }
+  }
   stats.ms = Date.now() - started;
   return stats;
+}
+
+/** Page function: scrolls the element at a snapshot path into view and returns its centre, or null. */
+function spotOf(p) {
+  const SKIP = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
+  let el = document.body;
+  for (const part of p.split('>').slice(1)) {
+    const [tag, n] = part.split(':');
+    let k = 0;
+    el = [...(el ? el.children : [])].find((c) => !SKIP.has(c.tagName) && c.tagName.toLowerCase() === tag && ++k === Number(n)) ?? null;
+    if (!el) return null;
+  }
+  el.scrollIntoView({ block: 'center', inline: 'nearest' });
+  const r = el.getBoundingClientRect();
+  if (r.width < 4 || r.height < 4) return null;
+  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + Math.min(r.height / 2, innerHeight / 2)) };
 }

@@ -12,7 +12,7 @@
 //    the matching HTML element.
 // Every known view: the trees follow the views the captures have (views.js).
 import { KNOWN_VIEW_IDS as VIEW_IDS } from '../views.js';
-import { expandNotices, expandStates } from './states.js';
+import { expandHoverCards, expandNotices, expandStates } from './states.js';
 
 export { VIEW_IDS };
 
@@ -43,7 +43,8 @@ export function fromCapture(node, view) {
   // The desktop path of the snapshot (body>div:1>a:2): the motion capture (4b) names its elements by it.
   if (view === 'desktop' && node.path) m.cpath = node.path;
   // The other states of a tab panel / carousel (capture/states.js); ir/states.js puts them into the tree.
-  if (node.states) m.states = { ...node.states, variants: node.states.variants.map((v) => ({ index: v.index, node: fromCapture(v.body, view) })) };
+  if (node.states) m.states = { ...node.states, variants: node.states.variants.map((v) => ({ index: v.index, node: fromCapture(v.body, view), ...(v.effects && { effects: v.effects }) })) };
+  if (node.hoverState?.body) m.hoverState = { node: fromCapture(node.hoverState.body, view) };
   // Short messages a click shows (capture/notices.js), on the body; ir/states.js expandNotices puts them into the tree.
   if (node.notices) m.notices = node.notices.map((n) => ({ ...n, items: n.items.map((it) => ({ control: it.control, node: fromCapture(it.body, view) })) }));
   return m;
@@ -338,6 +339,7 @@ export function buildPageTree(bodies) {
   // Tab / carousel / filter states as hidden copies of their area, while the capture's relative paths still hold.
   const states = expandStates(root);
   const notices = expandNotices(root);
+  const hoverCards = expandHoverCards(root);
   const variantsMerged = views.length > 1 ? mergeVariants(root, views) : dropHiddenVariants(root, views[0]);
   const wrappersRemoved = cleanTree(root, views);
   let viewOnly = 0;
@@ -347,5 +349,5 @@ export function buildPageTree(bodies) {
     n.children.forEach(count);
   };
   count(root);
-  return { root, views, stats: { variantsMerged, wrappersRemoved, viewOnly, stateSets: states.sets, states: states.states, notices } };
+  return { root, views, stats: { variantsMerged, wrappersRemoved, viewOnly, stateSets: states.sets, states: states.states, notices, hoverCards } };
 }

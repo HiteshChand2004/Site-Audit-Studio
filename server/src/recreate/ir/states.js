@@ -82,6 +82,43 @@ export function expandNotices(root) {
 }
 
 /**
+ * Cards whose hover look the page draws by script (capture/states.js `hoverState`): the hovered snapshot goes right after
+ * the card, `data-w-hcopy`; the card is `data-w-hrest`, their box `data-w-hv`. The stylesheet shows the copy instead of
+ * the card while the box is hovered or holds keyboard focus; no script. Only where the card is its box's only element
+ * (a grid cell), so hovering anything else never swaps it.
+ * @returns {number} cards
+ */
+export function expandHoverCards(root) {
+  let k = 0;
+  const walk = (parent) => {
+    for (let i = 0; i < parent.children.length; i++) {
+      const n = parent.children[i];
+      if (!isElement(n)) continue;
+      if (!n.hoverState) {
+        walk(n);
+        continue;
+      }
+      const copy = n.hoverState.node;
+      delete n.hoverState;
+      if (parent === root || parent.children.filter(isElement).length !== 1 || !copy || copy.tag !== n.tag) {
+        walk(n);
+        continue;
+      }
+      forget(copy);
+      parent.stateAttrs = { ...parent.stateAttrs, 'data-w-hv': '' };
+      n.stateAttrs = { ...n.stateAttrs, 'data-w-hrest': '' };
+      copy.stateAttrs = { ...copy.stateAttrs, 'data-w-hcopy': '' };
+      parent.children.splice(i + 1, 0, copy);
+      i++;
+      k++;
+      walk(n);
+    }
+  };
+  walk(root);
+  return k;
+}
+
+/**
  * Puts the captured states into a page tree (mutates it). Run before the tree is cleaned (wrappers removed), so the
  * relative paths of the capture still hold.
  * @returns {{ sets: number, states: number }}
@@ -130,6 +167,16 @@ export function expandStates(root) {
       for (const v of s.variants) {
         const copy = v.node;
         forget(copy);
+        // The copy's own paths (the area's, marked with the state) so the stylesheet's hover / focus effects of what only
+        // this state shows reach its elements (ir/motion.js reads `stateEffects`).
+        if (v.effects && n.cpath) {
+          const base = `${n.cpath}#v${v.index}`;
+          for (const [rel, node] of relMap(copy)) node.cpath = rel ? `${base}>${rel}` : base;
+          const at = (rel) => (rel ? `${base}>${rel}` : base);
+          copy.stateEffects = Object.fromEntries(Object.entries(v.effects).map(([kind, list]) => [kind, list.map(({ rel, kids, ...e }) => ({
+            ...e, path: at(rel), ...(kids && { kids: kids.map(({ rel: kr, ...k }) => ({ ...k, path: at(kr) })) }),
+          }))]));
+        }
         mark(copy, id, v.index, s);
         copy.stateAttrs = { ...copy.stateAttrs, hidden: '' };
         for (const [rel, twin] of relMap(copy)) {

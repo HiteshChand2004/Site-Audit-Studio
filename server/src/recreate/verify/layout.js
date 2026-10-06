@@ -186,7 +186,7 @@ function iou(a, b) {
 
 // A state of a tab panel / carousel the page does not start in (ir/states.js): hidden until a visitor clicks, so neither
 // measured nor fixed (its boxes are those of its own state).
-const stateCopy = (n) => !!n.stateAttrs && 'hidden' in n.stateAttrs;
+const stateCopy = (n) => !!n.stateAttrs && ('hidden' in n.stateAttrs || 'data-w-hcopy' in n.stateAttrs);
 const visibleIn = (n, v) => {
   const d = n.views[v];
   return !stateCopy(n) && !!d && !d.hidden && d.rect[2] > 0 && d.rect[3] > 0;
