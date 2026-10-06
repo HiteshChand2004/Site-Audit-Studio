@@ -6,7 +6,7 @@ import { CHECKS, HEALTH, matchRating, RESULT_STATUS, TERMS } from '../../copy.js
 import { plural } from '../../format.js';
 import styles from './Outcome.module.css';
 
-// Before → after scores shown (computer measurements: desktop only for now).
+// Before → after scores shown (phone measurements: most visitors).
 const SCORES = [
   ['performance', 'performance'],
   ['seo', 'seo'],
@@ -25,8 +25,8 @@ export default function Outcome({ result, comparison }) {
   const s = comparison?.summary ?? null;
   const better = s ? (s.fixed ?? 0) + (s.improved ?? 0) : 0;
   const todo = (comparison?.items ?? []).filter((i) => i.status === 'regressed' || i.status === 'open').sort((a, b) => (a.status === 'regressed' ? 0 : 1) - (b.status === 'regressed' ? 0 : 1));
-  const before = comparison?.scores?.before?.desktop ?? comparison?.scores?.before?.mobile;
-  const after = comparison?.scores?.after?.desktop ?? comparison?.scores?.after?.mobile;
+  const before = comparison?.scores?.before?.mobile;
+  const after = comparison?.scores?.after?.mobile;
 
   const sentence = [
     `The copy has ${plural(result.pages.length, 'page')}`,
@@ -75,7 +75,7 @@ export default function Outcome({ result, comparison }) {
           SCORES.map(([key, h]) =>
             before[key] != null && after[key] != null ? (
               <div key={key} className={styles.fact}>
-                <span className={styles.factLabel}>{HEALTH[h].title}</span>
+                <span className={styles.factLabel}>{HEALTH[h].title} on phones</span>
                 <span className={styles.factValue}>
                   {before[key]} <ArrowRight size={14} aria-label="to" /> {after[key]}
                 </span>

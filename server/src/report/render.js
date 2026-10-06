@@ -84,11 +84,10 @@ function glance(d) {
   const c = a.recreate;
   const charts = [];
   const LABEL = { performance: 'Performance', seo: 'SEO', accessibility: 'Accessibility', bestPractices: 'Best practices' };
-  // Desktop only for now (recreate/views.js): the computer scores lead; an older check may only have phone scores.
-  const mobile = a.scores?.desktop ?? a.scores?.mobile;
-  const after = c && !c.isDummy ? c.scores?.after?.desktop ?? c.scores?.after?.mobile : null;
+  const mobile = a.scores?.mobile;
+  const after = c && !c.isDummy ? c.scores?.after?.mobile : null;
   if (d.analyzed && mobile) {
-    charts.push(chartCard('Lighthouse scores', groupedBars(Object.keys(LABEL).map((k) => ({ label: LABEL[k], before: mobile[k], after: after?.[k] })), ['Original', 'Recreated']), after ? 'desktop, original vs recreated' : 'desktop'));
+    charts.push(chartCard('Lighthouse scores', groupedBars(Object.keys(LABEL).map((k) => ({ label: LABEL[k], before: mobile[k], after: after?.[k] })), ['Original', 'Recreated']), after ? 'mobile, original vs recreated' : 'mobile'));
   }
   if (d.analyzed) {
     const crawl = a.crawl ?? {};
@@ -115,7 +114,7 @@ function glance(d) {
 // Small pictures: the width a view is shown at (px); the picture itself has twice that for sharpness.
 const SHOT_WIDTH = { desktop: 220, tablet: 115, mobile: 70 };
 const shot = (src, label, view) => (src ? `<figure style="flex:0 0 ${SHOT_WIDTH[view]}px"><img src="${src}" alt="${esc(label)}"/></figure>` : '');
-const shotRow = (images, name) => `<div class="shots">${['desktop'].map((v) => shot(images[v], `${name} · ${v}`, v)).join('')}</div>`;
+const shotRow = (images, name) => `<div class="shots">${['desktop', 'tablet', 'mobile'].map((v) => shot(images[v], `${name} · ${v}`, v)).join('')}</div>`;
 const hasShots = (images) => Object.values(images ?? {}).some(Boolean);
 
 /** The first screen of the original and (when there is one) of the recreate, at three sizes, small. */
@@ -135,11 +134,11 @@ function highlights(d) {
   const c = a.recreate;
   const out = [];
   if (d.analyzed) {
-    const m = a.scores?.desktop ?? a.scores?.mobile;
+    const m = a.scores?.mobile;
     const checks = [...(a.seo ?? []), ...(a.aeo ?? [])];
     const issues = checks.filter((i) => i.status !== 'pass').length;
     const names = (a.techStack ?? []).map((t) => t.name).slice(0, 3).join(', ');
-    out.push({ tone: scoreTone(m?.performance), text: `The original site${names ? ` (${names})` : ''} scores ${m?.performance ?? '—'} for performance, ${m?.seo ?? '—'} for SEO and ${m?.accessibility ?? '—'} for accessibility on desktop (Lighthouse).` });
+    out.push({ tone: scoreTone(m?.performance), text: `The original site${names ? ` (${names})` : ''} scores ${m?.performance ?? '—'} for performance, ${m?.seo ?? '—'} for SEO and ${m?.accessibility ?? '—'} for accessibility on mobile (Lighthouse).` });
     out.push({ tone: issues || a.brokenLinks?.broken?.length ? 'warn' : 'ok', text: `${issues} SEO / AEO ${issues === 1 ? 'issue' : 'issues'}, ${a.brokenLinks?.broken?.length ?? 0} broken ${a.brokenLinks?.broken?.length === 1 ? 'link' : 'links'} and ${a.accessibility?.length ?? 0} accessibility ${a.accessibility?.length === 1 ? 'issue type' : 'issue types'} were found across ${num(a.pagesCrawled)} crawled pages.` });
   } else {
     out.push({ tone: 'none', text: 'The original site has not been analyzed yet.' });
@@ -174,8 +173,8 @@ function oldPart(d) {
   const md = a.metricsByDevice ?? { mobile: a.metrics, desktop: null };
   const metricRow = (m) => (m ? [ms(m.loadTime), ms(m.lcp), ms(m.tbt), m.cls ?? '—', bytes(m.pageSize)] : ['—', '—', '—', '—', '—']);
   parts.push(section('old-perf', 'Performance', `
-    <div class="rings">${rings(sc.desktop)}</div>
-    ${table(['Device', 'Load time', 'LCP', 'TBT', 'CLS', 'Page size'], [['Desktop', ...metricRow(md.desktop)]])}`,
+    <div class="rings2"><div><h4>Mobile</h4><div class="rings">${rings(sc.mobile)}</div></div><div><h4>Desktop</h4><div class="rings">${rings(sc.desktop)}</div></div></div>
+    ${table(['Device', 'Load time', 'LCP', 'TBT', 'CLS', 'Page size'], [['Mobile', ...metricRow(md.mobile)], ['Desktop', ...metricRow(md.desktop)]])}`,
   `Lighthouse, homepage · analyzed ${date(a.analyzedAt)} · ${num(a.pagesCrawled)} pages crawled`));
 
   // Platform and weaknesses.
@@ -289,7 +288,7 @@ function checklistPart(d) {
     const delta = a != null && b != null ? ` <b class="${a - b >= 0 ? 'okt' : 'badt'}">${a - b >= 0 ? '+' : ''}${a - b}</b>` : '';
     return `${pill(b ?? '—', scoreTone(b))} → ${pill(a ?? '—', scoreTone(a))}${delta}`;
   };
-  parts.push(section('fix-scores', 'Lighthouse, before and after', `${table(['', 'Desktop'], Object.keys(LABEL).map((k) => [esc(LABEL[k]), cell('desktop', k)]))}
+  parts.push(section('fix-scores', 'Lighthouse, before and after', `${table(['', 'Mobile', 'Desktop'], Object.keys(LABEL).map((k) => [esc(LABEL[k]), cell('mobile', k), cell('desktop', k)]))}
     <div class="chips">${['fixed', 'improved', 'open', 'regressed', 'changed', 'recheck', 'manual', 'na'].filter((k) => s[k]).map((k) => pill(`${STATUS_LABEL[k]} · ${s[k]}`, STATUS_TONE[k])).join('')}${pill(`Passing on both sides · ${s.pass ?? 0}`, 'ok')}</div>
     <p class="note">${c.scope?.pages?.length ? `${c.scope.pages.length} pages compared` : ''}${c.scope?.outOfScope?.length ? `, ${c.scope.outOfScope.length} original pages were not recreated` : ''}. The recreate is measured on a local preview with simulated throttling: confirm the performance after deploying.</p>`));
 
@@ -447,10 +446,10 @@ export function renderReportHtml(d) {
   const a = d.audit;
   const r = d.recreate;
   const c = a.recreate;
-  const m = a.scores?.desktop ?? a.scores?.mobile;
+  const m = a.scores?.mobile;
   const kpis = [
-    d.analyzed && kpi('Performance', `${m?.performance ?? '—'}`, scoreTone(m?.performance), 'Lighthouse, desktop'),
-    d.analyzed && kpi('SEO', `${m?.seo ?? '—'}`, scoreTone(m?.seo), 'Lighthouse, desktop'),
+    d.analyzed && kpi('Performance', `${m?.performance ?? '—'}`, scoreTone(m?.performance), 'Lighthouse, mobile'),
+    d.analyzed && kpi('SEO', `${m?.seo ?? '—'}`, scoreTone(m?.seo), 'Lighthouse, mobile'),
     r?.fidelity && kpi('Fidelity', `${r.fidelity.score ?? '—'}`, fidTone(r.fidelity.score, r.fidelity.threshold), 'recreate vs original'),
     r?.fidelity?.diff && kpi('Visual difference', `${r.fidelity.diff.score ?? '—'}`, fidTone(r.fidelity.diff.score, r.fidelity.diff.threshold ?? 65), 'recreate vs original'),
     c?.summary && !c.isDummy && kpi('Fixed', `${c.summary.fixed ?? 0}`, 'ok', `${c.summary.open ?? 0} still open`),

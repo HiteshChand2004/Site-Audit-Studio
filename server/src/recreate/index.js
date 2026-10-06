@@ -22,6 +22,8 @@ import { buildStage } from './build/index.js';
 import { generateStage } from './generate.js';
 import { inspectStage, LATER_STEPS_RESERVE } from './inspect.js';
 import { previewStage } from './preview.js';
+import { responsiveStage } from './responsive.js';
+import { sweepStage } from './sweep.js';
 import { commitWorkspace, discardWorkspace, openWorkspace } from './workspace.js';
 
 export { RecreateError };
@@ -40,10 +42,12 @@ export const STEPS = [
   { key: 'generate', label: 'Generating site', weight: 15, max: 4 * 60000, browser: true, perPage: 45000 },
   { key: 'build', label: 'Building & verifying', weight: 20, max: 3 * 60000, browser: true, perPage: 45000 },
   { key: 'preview', label: 'Starting preview', weight: 5, max: 30000, perPage: 3000 },
-  // Desktop only for now (views.js): the width sweep and the responsive check are parked. To bring them back:
-  //   { key: 'sweep', label: 'Capturing more widths', weight: 8, max: 4 * 60000, optional: true, background: true, after: 'inspect', join: 'responsive', perPage: 120000 },
-  //   { key: 'responsive', label: 'Checking responsive layout', weight: 4, max: 90000, optional: true, perPage: 30000 },
-  // (and sweep: sweepStage, responsive: responsiveStage in STAGES). Without a sweep, generate skips the breakpoint refinement.
+  // Original screenshots at more widths (4b.6): collects only, never fails the job. A background step: it starts right
+  // after the capture (`after`) and runs next to the steps above; the last step needs all of it (`join`). It is listed
+  // here, where the job waits for it, so the step list of the app only ever moves forward.
+  { key: 'sweep', label: 'Capturing more widths', weight: 8, max: 4 * 60000, optional: true, background: true, after: 'inspect', join: 'responsive', perPage: 120000 },
+  // Measures the finished build against the sweep screenshots (4b.6): never fails the job.
+  { key: 'responsive', label: 'Checking responsive layout', weight: 4, max: 90000, optional: true, perPage: 30000 },
 ];
 // What each page beyond BASE_PAGES adds to the whole job, and to the time the capture keeps for the steps after it.
 const JOB_PER_PAGE = STEPS.reduce((n, s) => n + (s.perPage ?? 0), 0);
@@ -86,10 +90,12 @@ export function roomForSecondBrowser(env = process.env) {
 
 export const STAGES = {
   inspect: inspectStage,
+  sweep: sweepStage,
   assets: assetsStage,
   generate: generateStage,
   build: buildStage,
   preview: previewStage,
+  responsive: responsiveStage,
 };
 
 /**

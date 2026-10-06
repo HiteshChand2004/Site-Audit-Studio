@@ -174,7 +174,7 @@ test('time given back after an outage extends the job and the running step', asy
   assert.equal(report.interruptions.grantedMs, 1500);
 });
 
-test('a step that waits for the background sweep is shown as that step, so the steps between are never ticked early', { skip: 'the width sweep is parked (desktop only for now, recreate/views.js)' }, async () => {
+test('a step that waits for the background sweep is shown as that step, so the steps between are never ticked early', async () => {
   const project = makeProject();
   const tracker = progressTracker(RECREATE_STEPS);
   const shown = [];

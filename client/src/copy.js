@@ -70,12 +70,12 @@ export const JOB_STEPS = {
   render: { title: 'Loading the page like a visitor', explain: 'Opening the homepage in a real browser and checking accessibility.' },
   crawl: { title: 'Finding all pages', explain: 'Following links to discover the pages of the site.' },
   links: { title: 'Checking links', explain: 'Testing every link to find broken ones.' },
-  screenshots: { title: 'Taking a picture', explain: 'Taking a picture of the homepage as visitors see it on a computer.' },
+  screenshots: { title: 'Taking screenshots', explain: 'Capturing the site on desktop, tablet and phone screens.' },
   'lighthouse-mobile': { title: 'Measuring speed on a phone', explain: 'A standard speed test with a phone and a slower connection.' },
-  'lighthouse-desktop': { title: 'Measuring speed', explain: 'A standard speed test of the homepage on a computer.' },
+  'lighthouse-desktop': { title: 'Measuring speed on a computer', explain: 'The same speed test on a desktop screen.' },
   report: { title: 'Writing the report', explain: 'Putting the results together.' },
   // Create (Recreate)
-  inspect: { title: 'Visiting every page', explain: 'Opening each page and recording its layout, text, hover effects and animations.' },
+  inspect: { title: 'Visiting every page', explain: 'Opening each page at four screen sizes and recording its layout, text, hover effects and animations.' },
   assets: { title: 'Downloading images and files', explain: 'Saving images, fonts, videos and documents so the copy never depends on the old site.' },
   generate: { title: 'Building the new pages', explain: 'Writing clean pages and fixing the problems found in the check.' },
   build: { title: 'Checking the new site', explain: 'Safety check, broken links, valid code, and how closely each page matches the original.' },
@@ -110,6 +110,7 @@ export const TERMS = {
   copy: 'New copy',
   fidelity: { title: 'Match with the original', explain: 'How closely each page of the copy matches the original in sizes, positions and look (100 = identical). 80 or more is good.' },
   visual: { title: 'Looks the same', explain: 'How alike the two pages look to the eye, compared section by section (100 = identical).' },
+  widths: { title: 'Other screen sizes', explain: 'How well the copy follows the original at screen widths between phone, tablet, laptop and desktop.' },
   motion: { title: 'Hover effects & animations', explain: 'Effects when you point at buttons and links, and things that move or fade in while you scroll.' },
   stack: { title: 'Technology of the new site', explain: 'What the new site is built with. Plain HTML is the simplest; React, Next.js and MERN are for developer teams.' },
   pages: { title: 'Pages', explain: 'Which pages of the site are copied. "Every page" copies the whole site.' },
@@ -121,6 +122,7 @@ export const TERMS = {
 };
 
 /** Screen sizes. */
+export const VIEWPORT_NAMES = { desktop: 'Computer', laptop: 'Laptop', tablet: 'Tablet', mobile: 'Phone' };
 
 /**
  * Every check of the site in plain words: what it is called and why it matters. Keyed by the check's title as the

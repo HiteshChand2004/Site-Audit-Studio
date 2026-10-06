@@ -13,6 +13,8 @@ import { motionCss } from '../src/recreate/emit/motionCss.js';
 import { MOTION_JS } from '../src/recreate/emit/motionScript.js';
 import { applyMotion, openDecls } from '../src/recreate/ir/motion.js';
 import { buildPageTree, isElement } from '../src/recreate/ir/tree.js';
+import { buildStyles } from '../src/recreate/ir/styles.js';
+import { emitCss } from '../src/recreate/emit/css.js';
 
 const ORIGINAL = `<!doctype html><html><head><style>
 body { margin: 0; font: 16px sans-serif }
@@ -233,6 +235,79 @@ test('a carousel whose content the original re-renders: every state is in the co
   await p.goto(`${base}/carousel-copy-no-js`);
   assert.deepEqual(await visibleTitles(), ['Choice AI'], 'without script: the first state only');
   await ctx.close();
+});
+
+// Step 4 (phone and tablet back): the states are snapshotted at the desktop window only. Built with the generated stylesheet
+// from a desktop and a phone capture, the copies must take the phone layout of the area they copy (a node missing in a
+// view is hidden there), so on a phone the dots and next / previous still switch the item.
+test('a carousel copied from a desktop and a phone capture still switches on a phone (state copies are not hidden there)', async () => {
+  pages.set('/carousel', CAROUSEL);
+  const context = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const page = await context.newPage();
+  await page.goto(`${base}/carousel`);
+  const desktop = await page.evaluate(snapshotPage, {});
+  const clicks = await captureClicks(page, { budgetMs: 15000 });
+  const states = await captureStates(page, clicks, desktop.body, { budgetMs: 20000 });
+  await context.close();
+  assert.equal(states.sets, 1, JSON.stringify(states.skipped));
+  const phoneContext = await browser.newContext({ viewport: { width: 375, height: 812 } });
+  const phonePage = await phoneContext.newPage();
+  await phonePage.goto(`${base}/carousel`);
+  const mobile = await phonePage.evaluate(snapshotPage, {});
+  await phoneContext.close();
+
+  const tree = buildPageTree({ desktop: desktop.body, mobile: mobile.body });
+  assert.equal(tree.stats.states, 3);
+  const copies = [];
+  (function walk(n) {
+    if (!isElement(n)) return;
+    if (n.stateAttrs && 'hidden' in n.stateAttrs) copies.push(n);
+    n.children.forEach(walk);
+  })(tree.root);
+  assert.equal(copies.length, 3);
+  const everyNode = (n, fn) => !isElement(n) || (fn(n) && n.children.every((c) => everyNode(c, fn)));
+  assert.ok(copies.every((c) => everyNode(c, (n) => n.views.mobile)), 'every node of a copy has phone data');
+
+  const site = { pages: [{ info: { path: '/carousel', url: `${base}/carousel` }, root: tree.root }], assetResolve: () => null };
+  const { motion } = applyMotion(site, new Map([['/carousel', { clicks }]]));
+  const { rules, boxSizingReset } = buildStyles([tree], { assetFile: () => null });
+  const ir = { rules, breakpoints: { source: 'default' }, tokens: {}, fontFaces: [], keyframes: [], boxSizingReset, pages: [] };
+  const siteCss = emitCss(ir);
+  assert.match(typeof siteCss === 'string' ? siteCss : siteCss.css, /@media \(max-width: 767\.98px\)/, 'the copy has phone rules');
+  const css = `${typeof siteCss === 'string' ? siteCss : siteCss.css}\n${motionCss(motion, { tokenOf: new Map(), from: '' })}`;
+  const html = (n) => {
+    if (!isElement(n)) return n.text.replace(/</g, '&lt;');
+    const all = { ...n.attrs, ...(n.class && { class: n.class }), ...n.stateAttrs, ...(n.motionTokens?.length && { 'data-motion': n.motionTokens.join(' ') }) };
+    const attrs = Object.entries(all).map(([k, v]) => (v === '' ? ` ${k}` : ` ${k}="${String(v).replace(/"/g, '&quot;')}"`)).join('');
+    return `<${n.tag}${attrs}>${n.children.map(html).join('')}</${n.tag}>`;
+  };
+  const doc = (extra = '') => `<!doctype html><html><head><meta name="viewport" content="width=device-width"><style>${css}\n${extra}</style><script src="/js/motion.js" defer></script></head>${html(tree.root)}</html>`;
+  pages.set('/carousel-phone', doc());
+  // The safety net of js/motion.js: a state the stylesheet does not show at this width is not switched to.
+  pages.set('/carousel-phone-hidden', doc('@media (max-width: 767.98px) { [data-w-set][data-w-i="0"] { display: none } }'));
+
+  for (const width of [375, 1200]) {
+    const ctx = await browser.newContext({ viewport: { width, height: 800 } });
+    const p = await ctx.newPage();
+    const errors = [];
+    p.on('pageerror', (e) => errors.push(e.message));
+    const visibleTitles = () => p.evaluate(() => [...document.querySelectorAll('h3')].filter((h) => h.getClientRects().length).map((h) => h.textContent));
+    await p.goto(`${base}/carousel-phone`);
+    assert.deepEqual(await visibleTitles(), ['Choice AI'], `${width}: starts where the original started`);
+    await p.locator('button[aria-label="Go to Accern"]:visible').click();
+    assert.deepEqual(await visibleTitles(), ['Accern'], `${width}: a dot shows its item`);
+    await p.locator('button[aria-label="Next venture"]:visible').click();
+    assert.deepEqual(await visibleTitles(), ['Botza'], `${width}: next goes one on`);
+    if (width === 375) {
+      await p.goto(`${base}/carousel-phone-hidden`);
+      await p.locator('button[aria-label="Go to Accern"]:visible').click();
+      assert.deepEqual(await visibleTitles(), ['Choice AI'], 'a state not shown at this width is not switched to (nothing goes blank)');
+      await p.locator('button[aria-label="Go to DreamHire"]:visible').click();
+      assert.deepEqual(await visibleTitles(), ['DreamHire'], 'the others still switch');
+    }
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  }
 });
 
 // A media page styled inline (no classes): category chips render only the chosen category's section (the others are

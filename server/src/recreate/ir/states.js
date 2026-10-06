@@ -38,6 +38,39 @@ function relMap(root) {
 
 const textOf = (n) => ('text' in n ? n.text : n.children.map(textOf).join(' ')).replace(/\s+/g, ' ').trim();
 
+const cloneView = (d) => structuredClone(d);
+
+/**
+ * A state is snapshotted at the desktop window only (capture/states.js), so its copy has no laptop / tablet / phone data,
+ * and a node missing in a view is hidden there (styles.js cascade): on a phone the tab content or slide would disappear
+ * once a control showed it. The copy shows the same area in another state, so each of its nodes takes the other views of
+ * the original's node at the same place: same tag and the same position among the siblings of that tag, or the last such
+ * sibling when the state has more of them (a filter showing a card the first state lacks takes the layout of the cards
+ * before it). A node with no counterpart at all keeps its own desktop data in those views (shown as on a computer rather
+ * than hidden). Views the copy already has are left alone. Mutates `copy`.
+ */
+export function borrowViews(orig, copy) {
+  for (const v of Object.keys(orig.views ?? {})) if (!copy.views[v]) copy.views[v] = cloneView(orig.views[v]);
+  const theirs = orig.children.filter(isElement);
+  const seen = {};
+  for (const c of copy.children) {
+    if (!isElement(c)) continue;
+    seen[c.tag] = (seen[c.tag] ?? 0) + 1;
+    const same = theirs.filter((o) => o.tag === c.tag);
+    const partner = same[seen[c.tag] - 1] ?? same.at(-1);
+    if (partner) borrowViews(partner, c);
+    else ownViews(c, Object.keys(copy.views));
+  }
+}
+
+/** Gives a subtree its own desktop data in the given views it lacks (shown as captured on a computer). */
+export function ownViews(node, views) {
+  if (!isElement(node)) return;
+  const own = node.views.desktop;
+  if (own) for (const v of views) if (!node.views[v]) node.views[v] = cloneView(own);
+  node.children.forEach((c) => ownViews(c, views));
+}
+
 const forget = (n) => {
   if (!isElement(n)) return;
   delete n.cpath;
@@ -74,6 +107,8 @@ export function expandNotices(root) {
       const same = (control.stateTwins ?? []).filter((t) => textOf(t) === textOf(control));
       for (const c of [control, ...same]) c.stateAttrs = { ...c.stateAttrs, 'data-w-note': `${id}:${notice.ms ?? 0}` };
       forget(item.node);
+      // Snapshotted at the desktop window only: shown the same way at every width rather than hidden on phones.
+      ownViews(item.node, Object.keys(root.views ?? {}));
       item.node.stateAttrs = { ...item.node.stateAttrs, 'data-w-note-of': id, hidden: '' };
       root.children.push(item.node);
     }
@@ -105,6 +140,8 @@ export function expandHoverCards(root) {
         continue;
       }
       forget(copy);
+      // Snapshotted at the desktop window only: the other views come from the card itself (else the copy would be hidden there).
+      borrowViews(n, copy);
       parent.stateAttrs = { ...parent.stateAttrs, 'data-w-hv': '' };
       n.stateAttrs = { ...n.stateAttrs, 'data-w-hrest': '' };
       copy.stateAttrs = { ...copy.stateAttrs, 'data-w-hcopy': '' };
@@ -167,6 +204,8 @@ export function expandStates(root) {
       for (const v of s.variants) {
         const copy = v.node;
         forget(copy);
+        // The views the capture did not snapshot the state in (laptop, tablet, phone): from the original area.
+        borrowViews(n, copy);
         // The copy's own paths (the area's, marked with the state) so the stylesheet's hover / focus effects of what only
         // this state shows reach its elements (ir/motion.js reads `stateEffects`).
         if (v.effects && n.cpath) {

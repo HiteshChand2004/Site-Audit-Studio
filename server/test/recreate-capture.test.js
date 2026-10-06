@@ -168,7 +168,7 @@ test('a page that stalls is abandoned before the step limit: the pages captured 
   assert.match(report.warnings.join('\n'), /1 page was not captured within the time limit of the inspect step \(\/about\.html\)/);
 });
 
-test('the inspect step captures every selected page at desktop size only', async () => {
+test('the inspect step captures every selected page at desktop, laptop, tablet and mobile', async () => {
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
@@ -182,8 +182,8 @@ test('the inspect step captures every selected page at desktop size only', async
 
   const report = await runRecreate({ project, recreateId, progress: () => {}, stages: { ...stubs, inspect: STAGES.inspect } });
   assert.deepEqual(report.pages.map((p) => [p.path, p.views]), [
-    ['/', ['desktop']],
-    ['/about.html', ['desktop']],
+    ['/', ['desktop', 'laptop', 'tablet', 'mobile']],
+    ['/about.html', ['desktop', 'laptop', 'tablet', 'mobile']],
   ]);
   assert.deepEqual(report.errors, []);
   assert.deepEqual(report.manual.map((m) => m.title), ['/login.html was not recreated', '/cart was not recreated']);
@@ -192,12 +192,8 @@ test('the inspect step captures every selected page at desktop size only', async
   const dir = path.join(recreateDir(id, recreateId), 'capture');
   const manifest = JSON.parse(await readFile(path.join(dir, 'manifest.json'), 'utf8'));
   assert.equal(manifest.pages.length, 2);
-  for (const file of ['desktop.json', 'desktop-fold.webp', 'desktop-full.webp']) {
+  for (const file of ['desktop.json', 'laptop.json', 'tablet.json', 'mobile.json', 'desktop-fold.webp', 'mobile-full.webp']) {
     assert.ok(await exists(path.join(dir, 'index', file)), file);
-  }
-  // Desktop only for now (recreate/views.js): no laptop, tablet or phone capture.
-  for (const file of ['laptop.json', 'tablet.json', 'mobile.json', 'mobile-full.webp']) {
-    assert.ok(!(await exists(path.join(dir, 'index', file))), file);
   }
   assert.ok(await exists(path.join(dir, 'about', 'desktop.json')));
 
@@ -218,7 +214,7 @@ test('the inspect step captures every selected page at desktop size only', async
   assert.ok(!(await exists(path.join(dir, 'index', 'laptop-motion.json'))), 'only the desktop view is probed');
 
   const load = async (view) => JSON.parse(await readFile(path.join(dir, 'index', `${view}.json`), 'utf8'));
-  const desktop = await load('desktop');
+  const [desktop, mobile] = [await load('desktop'), await load('mobile')];
   const find = (node, fn) => {
     if (fn(node)) return node;
     for (const c of node.children ?? []) {
@@ -236,9 +232,12 @@ test('the inspect step captures every selected page at desktop size only', async
   assert.deepEqual(desktop.mediaQueries, ['(max-width: 1024px)', '(max-width: 600px)']);
   assert.equal(desktop.head.jsonLd.length, 1);
 
-  // Computed styles of the desktop layout.
+  // Computed styles differ per breakpoint; the mobile menu swap is visible.
   assert.equal(byClass(desktop, 'features').style['grid-template-columns'].split(' ').length, 3);
+  assert.equal(byClass(mobile, 'features').style['grid-template-columns'].split(' ').length, 1);
   assert.equal(find(desktop.body, (n) => n.tag === 'nav').hidden, undefined);
+  assert.equal(find(mobile.body, (n) => n.tag === 'nav').hidden, true);
+  assert.equal(byClass(mobile, 'menu-button').style.display, 'block');
   // Style diffs stay small: currentColor defaults are not repeated.
   assert.equal(byClass(desktop, 'site-header').style['border-top-color'], undefined);
   assert.equal(byClass(desktop, 'site-header').style['border-bottom-color'], 'rgb(226, 232, 240)');
@@ -254,4 +253,5 @@ test('the inspect step captures every selected page at desktop size only', async
   const resources = desktop.resources.map((r) => `${r.type} ${new URL(r.url).pathname}`).sort();
   assert.deepEqual(resources, ['document /', 'image /img/hero-bg.svg', 'image /img/photo.svg', 'script /hover.js', 'script /lazy.js', 'stylesheet /styles.css']);
   assert.deepEqual(desktop.screenshots.fold.width, 1440);
+  assert.deepEqual(mobile.screenshots.fold.width, 750); // DPR 2
 });

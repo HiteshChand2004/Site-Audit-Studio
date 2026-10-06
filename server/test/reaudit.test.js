@@ -159,9 +159,7 @@ test('steps: serve first, no screenshots, compare last, progress reaches 100', (
   assert.equal(STEPS[0].key, 'serve');
   assert.equal(STEPS.at(-1).key, 'compare');
   assert.ok(!STEPS.some((s) => s.key === 'screenshots'));
-  // Desktop only for now: the phone Lighthouse run is parked.
-  assert.ok(STEPS.some((s) => s.key === 'lighthouse-desktop'));
-  assert.ok(!STEPS.some((s) => s.key === 'lighthouse-mobile'));
+  assert.ok(STEPS.some((s) => s.key === 'lighthouse-mobile'));
   assert.equal(overallPct('compare', 1), 100);
   assert.equal(overallPct('serve', 0), 0);
   assert.equal(pagePath('index.html'), '');
