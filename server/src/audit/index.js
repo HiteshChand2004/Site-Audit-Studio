@@ -427,6 +427,13 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
   const links = await linksTask;
   const allPages = crawlResult.pages;
   const pages = allPages.filter((p) => p.facts);
+  const hasQuery = (url) => {
+    try {
+      return new URL(url).search.length > 1;
+    } catch {
+      return false;
+    }
+  };
   const homePage = { ...pages[0], headers: home.headers };
 
   // 6. Lighthouse (one at a time and nothing else running: parallel work would distort each other's performance numbers).
@@ -485,7 +492,10 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     links,
     accessibility: analyzeA11y(render?.axe),
     manualRebuild,
-    pagesCrawled: pages.length,
+    // Pages counted like Recreate counts them (recreate/discover.js): an address with a query string (/contact?tab=join)
+    // is a variant of a page, not a page of its own. The checks above still read every address.
+    pagesCrawled: pages.filter((p) => !hasQuery(p.url)).length || pages.length,
+    pageVariants: pages.filter((p) => hasQuery(p.url)).length,
     blockedHosts: proxy.blocked(),
     errors,
   });

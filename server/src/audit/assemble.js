@@ -24,6 +24,7 @@ export function assembleAudit({
   accessibility,
   manualRebuild,
   pagesCrawled,
+  pageVariants = 0,
   blockedHosts = [],
   errors,
 }) {
@@ -33,6 +34,7 @@ export function assembleAudit({
     url,
     analyzedAt: new Date().toISOString(),
     pagesCrawled,
+    pageVariants,
     frame,
     screenshots,
     metrics,

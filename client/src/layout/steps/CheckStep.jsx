@@ -135,7 +135,9 @@ export default function CheckStep({ project, audit, loading }) {
               )}
               {!audit.isDummy && (
                 <p className={ws.hint}>
-                  Checked {timeAgo(audit.analyzedAt)} · {audit.pagesCrawled} {audit.pagesCrawled === 1 ? 'page' : 'pages'} read · speed measured on the homepage
+                  Checked {timeAgo(audit.analyzedAt)} · {audit.pagesCrawled} {audit.pagesCrawled === 1 ? 'page' : 'pages'} read
+                  {audit.pageVariants > 0 && ` (+${audit.pageVariants} ${audit.pageVariants === 1 ? 'address' : 'addresses'} with “?…” counted as the same page)`}
+                  {' '}· speed measured on the homepage
                 </p>
               )}
               {audit.errors?.length > 0 && (
