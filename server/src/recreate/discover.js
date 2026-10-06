@@ -5,6 +5,7 @@
 // checkout, account), URLs with a query string and non-HTML files are skipped with a reason.
 // Eligible pages beyond the page limit are listed (their links get a local notice page). In "All pages" mode the crawl
 // reads the whole site (up to the safety cap) and follows links deeper.
+import { createHash } from 'node:crypto';
 import { crawl } from '../audit/crawler.js';
 import { fetchPage, isBotChallenge, isHtml } from '../audit/http.js';
 import { fetchLlmsTxt, loadRobots } from '../audit/robots.js';
@@ -40,8 +41,18 @@ export function outPathFor(pathname) {
   return [...segments, 'index.html'].join('/');
 }
 
-/** Folder name for a page's capture files: "index", "about", "blog__first-post". */
-export const slugFor = (outPath) => outPath.replace(/(^|\/)index\.html$/, '').replace(/\.html$/, '').replaceAll('/', '__') || 'index';
+// Longest folder name. Windows refuses paths over 260 characters to the image library (sharp: "unable to open for write"),
+// and data/projects/<id>/recreate/<id>.tmp/capture/<slug>/desktop-full.webp already takes ~170 of them: a page with a long
+// address (a blog post title) failed its capture and was linked to the original site.
+const MAX_SLUG = 48;
+
+/** Folder name for a page's capture files: "index", "about", "blog__first-post"; a long one is cut and ends in a short hash. */
+export const slugFor = (outPath) => {
+  const slug = outPath.replace(/(^|\/)index\.html$/, '').replace(/\.html$/, '').replaceAll('/', '__') || 'index';
+  if (slug.length <= MAX_SLUG) return slug;
+  const hash = createHash('sha256').update(slug).digest('hex').slice(0, 8);
+  return `${slug.slice(0, MAX_SLUG - 9).replace(/[-_.]+$/, '')}-${hash}`;
+};
 
 /** Why a URL cannot be a recreated page, or null when it can. */
 export function skipReason(url, origin) {

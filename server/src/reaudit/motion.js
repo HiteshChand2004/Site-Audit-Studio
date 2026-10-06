@@ -8,6 +8,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { launchBrowser } from '../audit/render.js';
 import { measureMotion } from '../recreate/capture/measure.js';
+import { isScrollReveal } from '../recreate/ir/motion.js';
 
 const PAGE_BUDGET_MS = 40000;
 const MAX_PAGES = 6;
@@ -91,7 +92,8 @@ function overlap(a, b) {
 
 /** What the comparison counts on one side. */
 export function summarize(motion) {
-  const reveal = (motion.reveal?.elements ?? []).filter((e) => e.trigger?.kind === 'scroll');
+  // The reveals the recreate rebuilds (ir/motion.js isScrollReveal), counted the same way on both sides.
+  const reveal = (motion.reveal?.elements ?? []).filter(isScrollReveal);
   const hover = motion.hover ?? [];
   const loops = (motion.loops?.loops ?? motion.loops ?? []).filter((l) => !l.timeline);
   return {

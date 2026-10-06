@@ -52,7 +52,7 @@ const motionFile = () => ({
       reveal('body>section:1>p:1', { offsetMs: 70, replay: true }),
       reveal('body>section:1>p:2', { offsetMs: 140 }),
       reveal('body>div:8'),
-      reveal('body>div:1', { trigger: { kind: 'timed', step: 0, topBefore: 0.2, topAfter: 0.1 } }),
+      reveal('body>div:1', { rect: [0, 200, 100, 40], trigger: { kind: 'timed', step: 0, topBefore: 0.2, topAfter: 0.1 } }),
       reveal('body>div:77'),
       { ...reveal('body>section:1'), from: { opacity: 1, transform: 'none', filter: 'none', motion: { translate: [0, 0], scale: [1, 1], rotate: 0 } } },
     ],

@@ -43,6 +43,11 @@ test('output paths keep the original URLs', () => {
   assert.equal(slugFor('index.html'), 'index');
   assert.equal(slugFor('services/index.html'), 'services');
   assert.equal(slugFor('blog/first-post.html'), 'blog__first-post');
+  // A long address is cut and keeps a hash (Windows: capture files under a long folder could not be written).
+  const long = slugFor('media/news/panscience-innovations-partners-with-bits-law-school-to-launch-palette-centre/index.html');
+  assert.ok(long.length <= 48, long);
+  assert.match(long, /^media__news__panscience-innovations-par.*-[0-9a-f]{8}$/);
+  assert.notEqual(long, slugFor('media/news/panscience-innovations-partners-with-bits-law-school-to-launch-palette-centre-2/index.html'));
 });
 
 test('backend pages, query URLs and files are not recreated', () => {

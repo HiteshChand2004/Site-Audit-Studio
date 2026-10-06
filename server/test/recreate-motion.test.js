@@ -7,6 +7,7 @@ import path from 'node:path';
 import { launchBrowser } from '../src/audit/render.js';
 import { captureInteractions, diffStates, keepReverting } from '../src/recreate/capture/interactions.js';
 import { snapshotPage } from '../src/recreate/capture/snapshot.js';
+import { isScrollReveal, spreadToGroups } from '../src/recreate/ir/motion.js';
 import { startSiteServer } from '../src/recreate/verify/server.js';
 
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Motion</title>
@@ -108,11 +109,13 @@ test('hover effects are captured as style changes with their transition', async 
   assert.ok(under.pseudo.after.transform, JSON.stringify(under.pseudo));
   assert.notEqual(under.pseudo.after.transform[0], under.pseudo.after.transform[1]);
 
-  // Nothing changes on hover: not listed, but counted. An element under another one cannot be hovered.
+  // Nothing changes on hover: not listed, but counted. Effects the stylesheet declares are read from the rules on every
+  // element they apply to (no mouse), so they are found and the mouse probe does not try them again.
   assert.ok(found.hover.every((h) => !h.text.startsWith('pointer only')));
   assert.ok(found.stats.noChange >= 1);
-  assert.ok(found.stats.covered >= 1);
-  assert.ok(found.hover.every((h) => !h.text.startsWith('Covered link')));
+  assert.equal(link.source, 'css');
+  assert.equal(found.hover.find((h) => h.text.startsWith('Covered link'))?.source, 'css');
+  assert.ok(found.stats.fromRules.hover >= 4, JSON.stringify(found.stats.fromRules));
 
   // Layout does not move on these hovers (the transform of the card is not a layout change).
   assert.equal(link.layout, false);
@@ -167,14 +170,26 @@ test('keepReverting: what stays after the mouse left is dropped from the effect,
   assert.deepEqual(keepReverting(rest, state({ color: 'a', opacity: '0.4' }, [kid('none')]), d).changes, { color: ['a', 'b'] });
 });
 
-test('equal elements are probed a few times and counted as a group', async () => {
+test('a hover the stylesheet declares is found on every equal element, not only the few the mouse probes', async () => {
   const page = await openPage();
   const found = await captureInteractions(page, { budgetMs: 20000, perSignature: 3 });
   const dups = found.hover.filter((h) => h.text.startsWith('dup'));
-  assert.equal(dups.length, 3);
-  assert.ok(dups.every((d) => d.changes['background-color']));
+  assert.equal(dups.length, 8);
+  assert.ok(dups.every((d) => d.source === 'css' && d.changes['background-color'][1] === 'rgb(153, 153, 153)'));
+  // Its transition is the element's own, read before transitions were switched off for the comparison.
+  assert.match(dups[0].transition.duration, /0\.1s/);
+  await page.context().close();
+});
+
+test('equal elements with a script-driven hover are probed a few times; the group lists every member', async () => {
+  const page = await (await browser.newContext({ viewport: { width: 1000, height: 700 } })).newPage();
+  await page.setContent(`<!doctype html><body style="margin:0">${Array.from({ length: 8 }, (_, i) => `<a class="js" href="#j${i}" style="display:block;width:120px;height:30px">js ${i}</a>`).join('')}
+<script>document.querySelectorAll('.js').forEach((a) => { a.onmouseenter = () => { a.style.color = 'rgb(0, 128, 0)'; }; a.onmouseleave = () => { a.style.color = ''; }; });</script></body>`);
+  const found = await captureInteractions(page, { budgetMs: 20000, perSignature: 3 });
+  assert.equal(found.hover.filter((h) => h.text.startsWith('js')).length, 3);
   const group = found.groups.find((g) => g.count === 8);
   assert.equal(group.probed, 3);
+  assert.equal(group.paths.length, 8);
   assert.ok(found.stats.skipped.duplicate >= 5);
   await page.context().close();
 });
@@ -240,4 +255,22 @@ test('diffStates: no change is null, a UA focus ring is not a change, a shifted 
   assert.deepEqual(moved.changes, { color: ['red', 'blue'] });
   assert.equal(moved.layout, true);
   assert.deepEqual(moved.rect, [0, 6, 0, 0]);
+});
+
+test('spreadToGroups: a probed effect reaches the other members of its group, with its descendants rebased', () => {
+  const groups = [{ sig: 'a|x', count: 3, paths: ['body>a:1', 'body>a:2', 'body>a:3'] }];
+  const probe = { path: 'body>a:1', sig: 'a|x', source: 'probe', changes: { color: ['a', 'b'] }, kids: [{ path: 'body>a:1>span:1', changes: { opacity: ['0', '1'] } }] };
+  const css = { path: 'body>div:1', sig: 'div|', source: 'css', changes: { color: ['a', 'b'] } };
+  const { list, spread } = spreadToGroups([probe, css], groups);
+  assert.equal(spread, 2);
+  assert.deepEqual(list.map((e) => e.path), ['body>a:1', 'body>div:1', 'body>a:2', 'body>a:3']);
+  assert.equal(list[3].kids[0].path, 'body>a:3>span:1');
+  // Old captures (groups without paths) are left as they are.
+  assert.equal(spreadToGroups([probe], [{ sig: 'a|x', count: 3 }]).spread, 0);
+});
+
+test('isScrollReveal: scroll triggers, and timed ones below the first screen; timed ones in the first screen are not', () => {
+  assert.equal(isScrollReveal({ trigger: { kind: 'scroll' }, rect: [0, 100, 10, 10] }), true);
+  assert.equal(isScrollReveal({ trigger: { kind: 'timed' }, rect: [0, 2400, 10, 10] }), true);
+  assert.equal(isScrollReveal({ trigger: { kind: 'timed' }, rect: [0, 400, 10, 10] }), false);
 });
