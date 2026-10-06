@@ -36,13 +36,31 @@ export const MOTION_JS = `(function () {
 (function () {
   var AREA = /(^| )w[0-9]+( |$)/;
   var touched = {};
-  // Shows state \`index\` of set \`id\` and hides the others.
+  var rendered = function (el) {
+    return el.getClientRects().length > 0 || window.getComputedStyle(el).display === 'contents';
+  };
+  // Shows state \`index\` of set \`id\` and hides the others. A state the stylesheet does not show at this window width
+  // (the original rendered that area differently there) is not switched to: the visible one stays.
   var show = function (id, index) {
     var states = document.querySelectorAll('[data-w-set="' + id + '"]');
+    var target = [];
+    var shownBefore = false;
     for (var i = 0; i < states.length; i++) {
-      if (states[i].getAttribute('data-w-i') === String(index)) states[i].removeAttribute('hidden');
-      else states[i].setAttribute('hidden', '');
+      if (states[i].getAttribute('data-w-i') === String(index)) target.push(states[i]);
+      else if (!states[i].hasAttribute('hidden') && rendered(states[i])) shownBefore = true;
     }
+    var wasHidden = [];
+    for (var j = 0; j < target.length; j++) {
+      if (target[j].hasAttribute('hidden')) wasHidden.push(target[j]);
+      target[j].removeAttribute('hidden');
+    }
+    var visible = false;
+    for (var k = 0; k < target.length; k++) if (rendered(target[k])) visible = true;
+    if (!visible && shownBefore) {
+      for (var w = 0; w < wasHidden.length; w++) wasHidden[w].setAttribute('hidden', '');
+      return 0;
+    }
+    for (var h = 0; h < states.length; h++) if (target.indexOf(states[h]) < 0) states[h].setAttribute('hidden', '');
     return states.length;
   };
   // Carousels that move on by themselves (data-w-auto="ms:step"); a click restarts the wait.

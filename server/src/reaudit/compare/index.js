@@ -234,7 +234,7 @@ function platformItems(oldStack = [], newStack = [], output = null) {
 
 // ---------- JavaScript shipped (the honest cost of a stack with a runtime) ----------
 
-/** Script transfer size of a Lighthouse run's homepage (resource-summary), desktop first (desktop only for now). */
+/** Script transfer size of a Lighthouse run's homepage (resource-summary), desktop first (the same on both sides when one of them was checked while only desktop was measured). */
 function scriptBytes(lh) {
   for (const lhr of [lh?.desktop, lh?.mobile]) {
     const item = lhr?.audits?.['resource-summary']?.details?.items?.find((i) => i.resourceType === 'script');
@@ -334,8 +334,8 @@ const categoryOrder = (c) => {
  * @returns {object} the checklist
  */
 export function compareAudits({ old, next, report, newOrigin, output = null, motion = null }) {
-  // Lighthouse audits are compared only on a device both sides were measured on (a check from before "desktop only" has
-  // a phone run, a new copy does not): otherwise "worst of phone / computer" on one side meets "computer" on the other.
+  // Lighthouse audits are compared only on a device both sides were measured on (a check made while only desktop was measured
+  // has no phone run): otherwise "worst of phone / computer" on one side meets "computer" on the other.
   const oldLh = { ...old.lighthouse };
   const newLh = { ...next.lighthouse };
   for (const device of ['mobile', 'desktop']) {

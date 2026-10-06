@@ -236,7 +236,7 @@ export function mergeVariants(node, views = VIEW_IDS) {
 }
 
 /**
- * One captured view only (desktop only for now, views.js): a site builder's copies of a section for other screen sizes
+ * One captured view only (a capture made while only desktop was on, views.js): a site builder's copies of a section for other screen sizes
  * (Framer / Webflow Desktop / Tablet / Phone variants) are in the page but hidden. Without the other views they can't be
  * merged, and kept they would put hidden duplicate content (three main headings) into the copy. A hidden element is
  * dropped only when a visible sibling has the same content (`sameContent`), so a menu or dialog that is merely hidden

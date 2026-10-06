@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, ArrowUpDown, ChevronLeft, ChevronRight, Columns2, Info, RotateCw } from 'lucide-react';
+import { AlertTriangle, ArrowUpDown, ChevronLeft, ChevronRight, Columns2, Info, Monitor, RotateCw, Smartphone, Tablet } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/Surface.jsx';
+import { Segmented } from '../../components/common/Tabs.jsx';
 import InfoTip from '../../components/common/InfoTip.jsx';
 import PreviewFrame, { VIEWPORTS } from '../../components/preview/PreviewFrame.jsx';
 import SitePreview, { FullPageFrame, liveAvailability, LiveFrame, ModeToggle } from '../../components/preview/SitePreview.jsx';
 import { Pill } from '../../components/common/Score.jsx';
-import { matchRating, TERMS } from '../../copy.js';
+import { matchRating, TERMS, VIEWPORT_NAMES } from '../../copy.js';
 import { pageOf, shownStack, outputsOf } from '../../stacks.js';
 import { useProjects } from '../../store/useProjects.js';
 import { useSyncScroll } from '../useSyncScroll.js';
@@ -20,12 +21,19 @@ const pageUrl = (outPath) => outPath.replace(/(^|\/)index\.html$/, '$1');
 // may run its own bundles: the preview server sends script-src 'self' for it and says so (preview.scripts).
 const sandboxFor = (preview) => (preview?.scripts ? 'allow-same-origin allow-scripts' : 'allow-same-origin');
 
-/** How closely the selected page matches the original: one score and one plain verdict. */
-function PageMatch({ fid }) {
+const SIZES = [
+  { value: 1440, label: 'Computer', icon: Monitor },
+  { value: 768, label: 'Tablet', icon: Tablet },
+  { value: 375, label: 'Phone', icon: Smartphone },
+];
+
+/** How closely the selected page matches the original: one score and one plain verdict, plus the screen size shown. */
+function PageMatch({ fid, view }) {
   if (!fid || fid.score == null) {
     return <p className={ws.hint}>How closely this page matches was not measured (the copy ran out of time before that check).</p>;
   }
   const r = matchRating(fid.score);
+  const here = fid.views?.[view]?.score;
   return (
     <div className={ws.match}>
       <span className={ws.matchLabel}>
@@ -39,6 +47,11 @@ function PageMatch({ fid }) {
         <small>/100</small>
       </span>
       <Pill tone={r.tone}>{r.label}</Pill>
+      {here != null && (
+        <span className={ws.hint}>
+          On this screen size ({VIEWPORT_NAMES[view] ?? view}): {here}/100
+        </span>
+      )}
     </div>
   );
 }
@@ -49,8 +62,7 @@ export default function CompareStep({ project, audit, onGoCreate }) {
   const result = latest?.result;
   const preview = useProjects((s) => s.previews[project.id]);
   const ensurePreview = useProjects((s) => s.ensurePreview);
-  // Desktop only for now (the computer view is the only one captured).
-  const viewport = 1440;
+  const [viewport, setViewport] = useState(1440);
   const [page, setPage] = useState('index.html');
   const [sync, setSync] = useState(false);
   const [oldScroller, setOldScroller] = useState(null);
@@ -155,6 +167,7 @@ export default function CompareStep({ project, audit, onGoCreate }) {
             </Button>
           </div>
         )}
+        <Segmented options={SIZES} value={viewport} onChange={setViewport} label="Screen size" />
         <span className={ws.toolbarEnd}>
           <Button icon={ArrowUpDown} variant={sync ? 'primary' : 'secondary'} aria-pressed={sync} onClick={() => setSync((on) => !on)}>
             {sync ? 'Scrolling together' : TERMS.sync.title}
@@ -165,7 +178,7 @@ export default function CompareStep({ project, audit, onGoCreate }) {
         </span>
       </div>
 
-      <PageMatch fid={fidByPage.get(page)} />
+      <PageMatch fid={fidByPage.get(page)} view={view} />
 
       <div className={ws.compare}>
         <section aria-label={TERMS.original}>
@@ -176,6 +189,7 @@ export default function CompareStep({ project, audit, onGoCreate }) {
             address={originalUrl}
             tone="old"
             viewport={viewport}
+            onViewportChange={setViewport}
             fit={Boolean(realOriginal)}
             viewportButtons={false}
             toolbar={realOriginal && <ModeToggle mode={mode} onChange={setMode} live={live} hasScreens={hasScreens} />}
@@ -194,6 +208,7 @@ export default function CompareStep({ project, audit, onGoCreate }) {
             address={src ? src.replace(/^https?:\/\//, '') : 'starting the preview…'}
             tone="new"
             viewport={viewport}
+            onViewportChange={setViewport}
             fit={ready}
             viewportButtons={false}
           >

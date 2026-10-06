@@ -13,6 +13,15 @@ const tolerance = (v) => Math.max(0.35, Math.abs(v) * 0.01);
  * @param {(number|null)[]} values
  */
 export function fluidLength(widths, values) {
+  return fluidFit(widths, values)?.css ?? null;
+}
+
+/**
+ * The fit behind fluidLength: `{ css, at(width) }` (`at` = the px the written CSS gives at a window width), or null.
+ * @param {number[]} widths
+ * @param {(number|null)[]} values
+ */
+export function fluidFit(widths, values) {
   const pts = widths.map((w, i) => [w, values[i]]).filter(([, v]) => v != null);
   if (pts.length < 3) return null;
   const vs = pts.map((p) => p[1]);
@@ -42,10 +51,14 @@ export function fluidLength(widths, values) {
   const vw = r(best.b * 100, 4);
   const a = r(best.a);
   const expr = Math.abs(a) < 0.05 ? `${vw}vw` : `calc(${vw}vw ${a < 0 ? '-' : '+'} ${Math.abs(a)}px)`;
-  if (best.hi != null && best.lo != null) return `clamp(${r(best.lo)}px, ${expr}, ${r(best.hi)}px)`;
-  if (best.hi != null) return `min(${expr}, ${r(best.hi)}px)`;
-  if (best.lo != null) return `max(${r(best.lo)}px, ${expr})`;
-  return expr;
+  const hi = best.hi != null ? r(best.hi) : null;
+  const lo = best.lo != null ? r(best.lo) : null;
+  // What the written CSS gives (rounded as written), so a check at another width matches the browser.
+  const at = (w) => Math.min(hi ?? Infinity, Math.max(lo ?? -Infinity, (Math.abs(a) < 0.05 ? 0 : a) + (vw / 100) * w));
+  if (hi != null && lo != null) return { css: `clamp(${lo}px, ${expr}, ${hi}px)`, at };
+  if (hi != null) return { css: `min(${expr}, ${hi}px)`, at };
+  if (lo != null) return { css: `max(${lo}px, ${expr})`, at };
+  return { css: expr, at };
 }
 
 const constantRatio = (a, b) => {
@@ -82,5 +95,42 @@ export function fluidType(ty) {
       if (fluidLs) out['letter-spacing'] = fluidLs;
     }
   }
+  return out;
+}
+
+const pxOf = (v) => {
+  const m = /^(-?[\d.]+)px$/.exec(String(v ?? '').trim());
+  return m ? parseFloat(m[1]) : null;
+};
+
+/**
+ * The fluid declarations of the desktop probe (`ty`) that still hold in a narrower view (laptop, tablet, phone): a view
+ * has its own captured px, written in its media query; where the desktop's fluid size gives that same px at the view's
+ * width, the fluid value is kept there too, so the text keeps following the window between the captured widths (1024 to
+ * 1280 px used the laptop's px, too small for 1200). Only what matches the captured value: a site that switches to
+ * another size on phones keeps its px.
+ * @param {object} ty     the desktop probe
+ * @param {number} width  the view's window width
+ * @param {object} style  the view's captured (own) declarations
+ */
+export function fluidTypeAt(ty, width, style) {
+  if (!ty?.widths || !width) return {};
+  const fs = pxOf(style?.['font-size']);
+  const fit = fs != null ? fluidFit(ty.widths, ty['font-size']) : null;
+  if (!fit || Math.abs(fit.at(width) - fs) > tolerance(fs)) return {};
+  const all = fluidType(ty);
+  const out = { 'font-size': fit.css };
+  const follows = (prop) => {
+    const value = all[prop];
+    const own = pxOf(style[prop]);
+    if (value == null || own == null) return;
+    let expected = null;
+    // A ratio to the font size (unitless / em), else a fluid length of its own.
+    if (/^-?[\d.]+(em)?$/.test(value)) expected = parseFloat(value) * fs;
+    else expected = fluidFit(ty.widths, ty[prop])?.at(width) ?? null;
+    if (expected != null && Math.abs(expected - own) <= Math.max(0.5, Math.abs(own) * 0.015)) out[prop] = value;
+  };
+  follows('line-height');
+  follows('letter-spacing');
   return out;
 }

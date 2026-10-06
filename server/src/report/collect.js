@@ -19,9 +19,10 @@ const latestRecreate = db.prepare(`
 
 // Report thumbnails: small (the report shows them at half this width, so they stay sharp on high-density screens
 // without making the file or the page big): the width in px and the share of the width that makes the first screen.
-// Desktop only for now (recreate/views.js); tablet { width: 250, ratio: 1024 / 768 } and mobile { width: 152, ratio: 812 / 375 } are parked.
 const THUMB = {
   desktop: { width: 480, ratio: 900 / 1440 },
+  tablet: { width: 250, ratio: 1024 / 768 },
+  mobile: { width: 152, ratio: 812 / 375 },
 };
 
 /** A WebP data URI of the top of a screenshot, or null when the file is missing. */

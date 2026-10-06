@@ -233,13 +233,32 @@ records them, nothing consumed them) → **3** script-driven hovers (probe budge
   - Verified (fresh capture home + 9 pages, then rebuilt from it; `scratch-checkall.mjs`): all 12 of the user's points OK (contact headline at 1280: 66.56 px, top 233, height 68 = original);
     fidelity 88 → 93, visual diff 89 → 94; React / Next / MERN: DOM 10/10, pixels 1.0, hydration clean, safety passed. Full suite: 288 pass, 2 fail (known `netGuard`), 4 skipped.
     `recreate-mern.test.js` now asks `node --test` for TAP (Node 24 prints "spec"; the test had been skipped while the toolchains were missing).
+- **Step 4 (phone + tablet back)** — branch `step4-mobile` (worktree `../Website-Audit-step4`, from `as-is-fixes`), WIP, not merged. "Desktop only" (below) undone: copies are responsive again (320–1920).
+  - Restored from 6bb0f55 (reverse patch): `views.js ENABLED_VIEWS` = desktop, laptop, tablet, mobile; Recreate `sweep` + `responsive` steps (7 steps, breakpoint refinement back); Analyze 3 screenshot views +
+    `lighthouse-mobile` (mobile metrics/weaknesses again); report thumbnails/scores for both devices; client Phone / Computer toggles and size buttons; tests (sweep tests un-skipped). Kept: `KNOWN_*` views,
+    the single-view IR path (`dropHiddenVariants`, `resolveHints` single, `{ source: 'single-view' }`) for captures saved while only desktop was on, the re-audit "same device on both sides" rule.
+  - The step 1–3 probes stay desktop-only (typography, scroll state, clicks, states, notices; the window-height probe runs on every view), so the IR fills the gaps:
+    - **State copies** (`ir/states.js borrowViews`): a tab / carousel / filter state is snapshotted at the desktop window only and a node missing in a view is hidden there (`styles.js cascade`), so on a phone the
+      shown state went blank. Each copy node takes the other views of the original area's node at the same place (same tag + index among same-tag siblings, else the last such sibling: a card the first state
+      lacks takes the previous card's layout); no counterpart → its own desktop data (`ownViews`). Done right after the copy is made, before `mergeVariants`, so copies merge like the original.
+      Notices (`expandNotices`) get their own desktop data in every view.
+    - **Safety net** (`js/motion.js show`): a state the stylesheet does not render at the current width (e.g. a builder's phone variant of the area has no captured states) is not switched to; the visible one stays (autoplay too).
+    - **Fluid text in media queries** (`ir/typography.js fluidFit` / `fluidTypeAt`, `styles.js fluidDecls`): laptop / tablet / phone keep the desktop's fluid font-size (+ line-height / letter-spacing ratio) where it
+      gives that view's captured px at its width; else their px (a phone size of its own). Without it 1024–1279 used the laptop px (h1 51 px at 1200 instead of 60).
+    - Not done: the click / state / notice / scroll-state probes do not run on the phone view, so a **phone-only hamburger menu does not open** in the copy (needs a click probe on the mobile capture);
+      `is-scrolled` / open-panel CSS is written for every width from the desktop values.
+  - Tests: `recreate-widgets.test.js` (carousel built from a desktop + phone capture with the generated stylesheet: switches at 375 and 1200; a state hidden at a width is not switched to),
+    `recreate-typography.test.js` (`fluidTypeAt`; four captures: copy = original font sizes at 1920 / 1366 / 1200 / 1100 / 1024 / 768 / 375).
+  - Expected cost (from the desktop-only measurement on panscience, 6 pages: 178 s vs 711 s with all views): ~+90 s per page Recreate (sweep ~35, responsive ~15, generate fit/refine ~25, build fidelity ~12,
+    inspect ~2 since views run side by side), Analyze +~30 s (phone Lighthouse, two more screenshots), re-audit +~55 s. Not re-measured on a live site.
 - **Added to the plan by the user during step 2** (not started): fonts look bigger in the copy than in the original (match sizes); the new site must fix every problem of the old site's audit
   (fix checklist). **Testing rule (user)**: while fixing, run only the test file of the feature touched; the full suite only when a step is complete (before its commit) and before a merge.
   **Fast iteration (asked)**: capture once, then regenerate from the saved capture (generate + build only) for steps that do not change the capture; full fresh Recreate only for the final check.
   - Tests: `recreate-widgets.test.js` (accordion: every item incl. unprobed ones opens/closes, aria-expanded, no-script closed; React-like carousel: re-rendered panel, dots, next/previous wrap, noise counter).
 
-### Desktop only for now (WIP, user: "remove tablet and mobile from frontend and backend, keep only desktop") — merged into `phase-4a`
-One view everywhere; the rest **parked, not deleted**.
+### Desktop only (WIP, user: "remove tablet and mobile from frontend and backend, keep only desktop") — merged into `phase-4a`; **UNDONE in as-is step 4** (branch `step4-mobile`, see above)
+History: one view everywhere, the rest parked, not deleted. Step 4 listed all four views again and restored what is below; what stays from it: `KNOWN_*` views, the single-view IR path for older
+desktop-only captures, the re-audit "same device on both sides" rule.
 - Server: `recreate/views.js ENABLED_VIEWS = ['desktop']` (`RECREATE_VIEWS`, `VIEW_IDS`, `MEDIA_VIEWS` follow it; `KNOWN_VIEWS` / `KNOWN_VIEW_IDS` / `KNOWN_MEDIA_VIEWS` = all four, used by IR tree, CSS emitter, loading fixer so an older
   saved copy keeps its tablet/phone styles when another stack is built). Recreate: `sweep` and `responsive` removed from `STEPS` / `STAGES` (5 steps; no breakpoint refinement). Analyze: `audit/screenshots.js VIEWS` = desktop,
   `lighthouse-mobile` step gone (desktop gets the whole reserve); `scores` / `metricsByDevice` desktop only; `audit.metrics` + weaknesses from desktop.

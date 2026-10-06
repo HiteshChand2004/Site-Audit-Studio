@@ -1,6 +1,7 @@
-import { Bot, Gauge, Search, ShieldCheck, Sparkles, Users } from 'lucide-react';
+import { Bot, Gauge, Monitor, Search, ShieldCheck, Smartphone, Sparkles, Users } from 'lucide-react';
 import { Card } from '../common/Surface.jsx';
 import { ScoreRing, Pill } from '../common/Score.jsx';
+import { Segmented } from '../common/Tabs.jsx';
 import InfoTip from '../common/InfoTip.jsx';
 import { AEO, HEALTH, METRICS, rating } from '../../copy.js';
 import { plural } from '../../format.js';
@@ -36,9 +37,13 @@ export function aeoScore(items = []) {
 export function summarize(audit, device) {
   const out = [];
   const perf = audit.scores?.[device]?.performance;
+  const phone = audit.scores?.mobile?.performance;
+  const computer = audit.scores?.desktop?.performance;
   if (perf != null) {
     const r = rating(perf);
-    out.push(`${r.tone === 'ok' ? 'The site loads fast' : r.tone === 'warn' ? 'The site loads at an acceptable speed but could be faster' : 'The site loads slowly'}.`);
+    let s = r.tone === 'ok' ? 'The site loads fast' : r.tone === 'warn' ? 'The site loads at an acceptable speed but could be faster' : 'The site loads slowly';
+    if (phone != null && computer != null && computer - phone >= 15) s += ', especially on phones';
+    out.push(`${s}.`);
   }
   const seo = audit.scores?.[device]?.seo;
   if (seo != null) out.push(seo >= 90 ? 'Google can read it well.' : 'Some basics that help Google list it are missing.');
@@ -49,12 +54,8 @@ export function summarize(audit, device) {
   return out;
 }
 
-/**
- * "At a glance": the summary, the health cards and speed in everyday words. Desktop only for now (the check measures
- * the computer view); an older check without computer numbers shows its phone numbers.
- */
-export default function HealthOverview({ audit }) {
-  const device = audit.scores?.desktop || !audit.scores?.mobile ? 'desktop' : 'mobile';
+/** "At a glance": the summary, the health cards and speed in everyday words, for phones or computers. */
+export default function HealthOverview({ audit, device, onDeviceChange }) {
   const scores = audit.scores?.[device] ?? null;
   const metrics = audit.metricsByDevice?.[device] ?? (device === 'mobile' ? audit.metrics : null);
   const primary = audit.techStack?.find((t) => t.id !== 'custom' && t.confidence != null);
@@ -65,7 +66,18 @@ export default function HealthOverview({ audit }) {
       <Card
         icon={Sparkles}
         title="At a glance"
-        sub={`${primary ? `Built with ${primary.name}. ` : ''}Measured on a computer.`}
+        sub={primary ? `Built with ${primary.name}.` : undefined}
+        actions={
+          <Segmented
+            label="Measured on"
+            value={device}
+            onChange={onDeviceChange}
+            options={[
+              { value: 'mobile', label: 'Phone', icon: Smartphone },
+              { value: 'desktop', label: 'Computer', icon: Monitor },
+            ]}
+          />
+        }
       >
         <p className={styles.summary}>{summarize(audit, device).join(' ')}</p>
 
@@ -99,10 +111,10 @@ export default function HealthOverview({ audit }) {
             <p className={styles.question}>Can AI assistants quote it correctly?</p>
           </div>
         </div>
-        {!scores && <p className={styles.note}>The speed test did not finish; check the site again to measure it.</p>}
+        {!scores && <p className={styles.note}>The speed test did not finish for {device === 'mobile' ? 'phones' : 'computers'}; check the site again to measure it.</p>}
       </Card>
 
-      <Card icon={Gauge} title="Speed in everyday words" sub="The homepage on a computer.">
+      <Card icon={Gauge} title="Speed in everyday words" sub={`The homepage on a ${device === 'mobile' ? 'phone with a mobile connection' : 'computer'}.`}>
         <ul className={styles.speed}>
           {SPEED.map((m) => {
             const value = metrics?.[m.field] ?? null;

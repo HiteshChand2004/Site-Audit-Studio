@@ -9,7 +9,7 @@ import { snapshotPage } from '../src/recreate/capture/snapshot.js';
 import { emitCss } from '../src/recreate/emit/css.js';
 import { buildPageTree, isElement } from '../src/recreate/ir/tree.js';
 import { buildStyles } from '../src/recreate/ir/styles.js';
-import { fluidLength, fluidType } from '../src/recreate/ir/typography.js';
+import { fluidLength, fluidType, fluidTypeAt } from '../src/recreate/ir/typography.js';
 
 const STYLE = `body { margin: 0; font-family: sans-serif }
 h1 { font-size: clamp(40px, 5vw, 76px); line-height: 1.1; letter-spacing: -0.02em; margin: 0 }
@@ -48,6 +48,54 @@ test('fluidLength: constant, a line, and lines capped at either end', () => {
   assert.match(fluidLength(W, W.map((w) => Math.min(70, Math.max(60, w * 0.05)))), /^clamp\(60px, .+vw.*, 70px\)$/);
   assert.deepEqual(fluidType({ widths: W, 'font-size': W.map((w) => Math.min(76, w * 0.05)), 'line-height': W.map((w) => Math.min(76, w * 0.05) * 1.1), 'letter-spacing': W.map((w) => Math.min(76, w * 0.05) * -0.02) }),
     { 'font-size': 'min(5vw, 76px)', 'line-height': '1.1', 'letter-spacing': '-0.02em' });
+});
+
+test('fluidTypeAt: the desktop fluid size is kept in a narrower view only where it gives that view\'s captured px', () => {
+  const W = [1920, 1600, 1440, 1280, 1100];
+  const ty = { widths: W, 'font-size': W.map((w) => Math.min(76, w * 0.05)), 'line-height': W.map((w) => Math.min(76, w * 0.05) * 1.1) };
+  assert.deepEqual(fluidTypeAt(ty, 1024, { 'font-size': '51.2px', 'line-height': '56.32px' }), { 'font-size': 'min(5vw, 76px)', 'line-height': '1.1' });
+  assert.deepEqual(fluidTypeAt(ty, 1024, { 'font-size': '51.2px', 'line-height': '60px' }), { 'font-size': 'min(5vw, 76px)' }, 'a line height of its own stays px');
+  assert.deepEqual(fluidTypeAt(ty, 375, { 'font-size': '40px' }), {}, 'a phone size the line does not give stays px');
+  assert.deepEqual(fluidTypeAt(ty, 1024, {}), {}, 'no own size: the parent decides');
+});
+
+// Step 4 (phone and tablet back): the probe runs on the desktop view only; the laptop / tablet / phone captures have their
+// own px in their media queries. Where the fluid size still holds at a view's width it is kept there, so the text follows
+// the window between the captured widths too.
+test('with laptop, tablet and phone captures the copy has the same text sizes from 375 to 1920 px', async () => {
+  const snap = async (width, height, probe) => {
+    const ctx = await browser.newContext({ viewport: { width, height } });
+    const page = await ctx.newPage();
+    await page.goto(`${base}/`);
+    const snapshot = await page.evaluate(snapshotPage, {});
+    if (probe) attachType(snapshot.body, (await probeTypography(page, { width, height })).changed);
+    await ctx.close();
+    return snapshot.body;
+  };
+  const bodies = { desktop: await snap(1440, 900, true), laptop: await snap(1024, 768), tablet: await snap(768, 1024), mobile: await snap(375, 812) };
+  const tree = buildPageTree(bodies);
+  const { rules, boxSizingReset } = buildStyles([tree], { assetFile: () => null });
+  const css = emitCss({ rules, breakpoints: { source: 'default' }, tokens: {}, fontFaces: [], keyframes: [], boxSizingReset, pages: [] });
+  const html = (n) => {
+    if (!isElement(n)) return n.text;
+    const attrs = [n.class && ` class="${n.class}"`, n.attrs.id && ` id="${n.attrs.id}"`].filter(Boolean).join('');
+    return `<${n.tag}${attrs}>${n.children.map(html).join('')}</${n.tag}>`;
+  };
+  pages.set('/copy-views', `<!doctype html><html><head><style>${typeof css === 'string' ? css : css.css}</style></head>${html(tree.root)}</html>`);
+  // Inside each captured range (the phone's 375-767 is one value per breakpoint unless the size is fluid there too).
+  for (const width of [1920, 1366, 1200, 1100, 1024, 768, 375]) {
+    const sizes = async (url) => {
+      const c = await browser.newContext({ viewport: { width, height: 900 } });
+      const p = await c.newPage();
+      await p.goto(url);
+      const out = await p.evaluate(() => Object.fromEntries(['t', 'lead', 'h2', 'small'].map((id) => [id, parseFloat(getComputedStyle(document.getElementById(id)).fontSize)])));
+      await c.close();
+      return out;
+    };
+    const o = await sizes(`${base}/`);
+    const c = await sizes(`${base}/copy-views`);
+    for (const id of Object.keys(o)) assert.ok(Math.abs(o[id] - c[id]) <= 0.5, `${id} at ${width}: font-size ${o[id]} vs ${c[id]}`);
+  }
 });
 
 test('the copy has the same text sizes as the original at every window width', async () => {

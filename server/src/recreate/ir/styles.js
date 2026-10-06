@@ -16,7 +16,8 @@
 // - containers taller than their content keep a min-height.
 import { BLOCK_TAGS, deepText, displayOf, isElement, isText, VIEW_IDS } from './tree.js';
 import { ClassNamer, nameHint } from './names.js';
-import { fluidType } from './typography.js';
+import { fluidType, fluidTypeAt } from './typography.js';
+import { VIEW_WIDTHS } from '../views.js';
 
 // Must match the inherited set of capture/snapshot.js.
 export const INHERITED = new Set([
@@ -316,6 +317,17 @@ export function viewportStyle(style, node, v, chain) {
 }
 
 /**
+ * Fluid text declarations of a node in view `v` (capture/typography.js probes the desktop view only): the desktop's fluid
+ * values, and in a narrower view the ones that give that view's captured px at its width (ir/typography.js fluidTypeAt).
+ */
+function fluidDecls(node, v) {
+  const d = node.views[v];
+  if (v === 'desktop') return d?.ty ? fluidType(d.ty) : {};
+  const ty = node.views.desktop?.ty;
+  return ty && d ? fluidTypeAt(ty, VIEW_WIDTHS[v], d.style) : {};
+}
+
+/**
  * The declarations of one node in one view, with sizing hints (@w, @rw, @fw) that are resolved
  * across views afterwards.
  */
@@ -351,7 +363,7 @@ export function normalizeView(node, v, chain, opts) {
   const ratioOf = (bw) => (pBox.w > 0 ? size.w(bw) / pBox.w : null);
   // Text sized with the window (capture/typography.js): px minimums taken from its size at the captured width would keep
   // the box at that size on other screens (a headline line 76 px tall where the text has shrunk to 68).
-  const fluidText = v === 'desktop' && Boolean(fluidType(d.ty)['font-size']);
+  const fluidText = Boolean(fluidDecls(node, v)['font-size']);
 
   if (/grid/.test(display)) {
     const box = contentBox(node, v);
@@ -544,7 +556,7 @@ export function normalizeView(node, v, chain, opts) {
   if (fix?.w) style['@fw'] = { ...fix.w, px: size.w(fix.w.px), ratio: fix.w.ratio == null ? null : fix.w.ratio * (size.w(fix.w.px) / fix.w.px) };
   if (fix?.mh && !(px(style['min-height']) >= size.h(fix.mh))) style['min-height'] = `${size.h(fix.mh)}px`;
   // Text sized with the window (capture/typography.js): the fluid value instead of the px of the captured width.
-  if (v === 'desktop' && d.ty) Object.assign(style, fluidType(d.ty));
+  Object.assign(style, fluidDecls(node, v));
   return viewportStyle(style, node, v, chain);
 }
 
@@ -564,7 +576,7 @@ export function resolveHints(decls, present, tag) {
     const ratios = cw.map((v) => decls[v]['@cw'].ratio);
     const pxs = cw.map((v) => decls[v]['@cw'].px);
     // The same px in every view is a fixed size (an icon box), not a share of the parent. With a single captured view
-    // (desktop only for now) nothing says the width is a share of the parent: the captured px is kept.
+    // (a capture made while only desktop was on) nothing says the width is a share of the parent: the captured px is kept.
     const single = present.length === 1;
     const fixed = single || (cw.length > 1 && Math.max(...pxs) - Math.min(...pxs) <= 1);
     const consistent = !fixed && cw.length === present.length && ratios.every((r) => r != null && Number.isFinite(r) && r > 0)
@@ -590,7 +602,7 @@ export function resolveHints(decls, present, tag) {
     const hinted = present.filter((v) => decls[v]?.[key]);
     if (!hinted.length) continue;
     const ratios = hinted.map((v) => decls[v][key].ratio);
-    // One captured view (desktop only for now): a single ratio is no evidence of a share of the parent, so the px is
+    // One captured view (a capture made while only desktop was on): a single ratio is no evidence of a share of the parent, so the px is
     // kept (a 40 px icon must not become 2.78 %); an element that fills its parent still gets 100 %.
     const single = present.length === 1;
     const consistentRatios = hinted.length === present.length && ratios.every((r) => r != null && Number.isFinite(r) && r > 0)

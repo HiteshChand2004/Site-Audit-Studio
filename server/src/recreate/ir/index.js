@@ -241,7 +241,7 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
     baseUrl,
     origin,
     siteName,
-    // No breakpoints when the pages were captured in one view only (desktop only for now, views.js): no media queries.
+    // No breakpoints when the pages were captured in one view only (a capture made while only desktop was on, views.js): no media queries.
     breakpoints: pages.some(({ captures }) => Object.keys(captures).length > 1) ? pickBreakpoints(queries, { laptop: pages.some(({ captures }) => captures.laptop) }) : { source: 'single-view' },
     tokens: colorTokens(home.captures.desktop.customProps),
     keyframes,

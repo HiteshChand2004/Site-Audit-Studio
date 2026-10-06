@@ -43,9 +43,9 @@ export const STEPS = [
   { key: 'render', label: 'Rendering + accessibility', weight: 14, max: 110000, expected: 15000 },
   { key: 'crawl', label: 'Crawling pages', weight: 18, max: 75000 },
   { key: 'links', label: 'Checking links', weight: 14, max: 50000 },
-  { key: 'screenshots', label: 'Screenshot (desktop)', weight: 8, max: 80000, expected: 15000 },
-  // Desktop only for now (recreate/views.js); the phone run ('lighthouse-mobile', 'mobile') is parked.
-  { key: 'lighthouse-desktop', label: 'Lighthouse · desktop', weight: 40, max: 120000, expected: 35000 },
+  { key: 'screenshots', label: 'Screenshots (desktop, tablet, mobile)', weight: 8, max: 80000, expected: 25000 },
+  { key: 'lighthouse-mobile', label: 'Lighthouse · mobile', weight: 20, max: 120000, expected: 40000 },
+  { key: 'lighthouse-desktop', label: 'Lighthouse · desktop', weight: 20, max: 120000, expected: 35000 },
   { key: 'report', label: 'Building report', weight: 8, max: 30000 },
 ];
 export const PUBLIC_STEPS = STEPS.map(({ key, label }) => ({ key, label }));
@@ -348,7 +348,7 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
   const renderSlot = limiter(parallelism({ max: 3 }));
   // Really short of memory (room for one page at a time): the screenshots wait for the homepage render instead of competing
   // with it. Side by side, both slowed each other down until neither finished in its time limit.
-  const oneAtATime = parallelism({ max: 3 }) === 1;
+  const oneAtATime = viewsAtOnce === 1;
 
   const robotsTask = step(
     'robots',
@@ -450,7 +450,8 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
         return runLighthouse(home.url, formFactor, options(left));
       }
     }, null, { reserve: reserveMs });
-  // Desktop only for now (recreate/views.js): the phone run is parked, so the desktop run has the whole reserve.
+  // The mobile run leaves half of the reserve to the desktop run, so a slow first run never costs the second one.
+  const mobile = await lighthouse('lighthouse-mobile', 'mobile', timing.lighthouseReserveMs / 2);
   const desktop = await lighthouse('lighthouse-desktop', 'desktop');
 
   // 7. Detection, analyzers, report
@@ -481,11 +482,11 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     url: home.url,
     frame: computeFrame(home.headers, { url: home.url, html: render?.html || home.body }),
     screenshots: publicScreenshots(project.id, analysisId, shots),
-    metrics: buildMetrics(desktop, 'desktop'),
-    metricsByDevice: { desktop: buildMetrics(desktop, 'desktop') },
-    scores: buildScores(null, desktop),
+    metrics: buildMetrics(mobile, 'mobile'),
+    metricsByDevice: { mobile: buildMetrics(mobile, 'mobile'), desktop: buildMetrics(desktop, 'desktop') },
+    scores: buildScores(mobile, desktop),
     techStack: toTechStack(detections),
-    weaknesses: buildWeaknesses(detections, desktop),
+    weaknesses: buildWeaknesses(detections, mobile),
     seo: [...analyzeSeo(pages, homePage), crawlErrorsItem(allPages)],
     aeo: analyzeAeo({ pages, home: homePage, robots, llms, renderedTextLength: render?.textLength ?? null }),
     crawl: analyzeCrawl({ robots, sitemap, homeFacts: homePage.facts }),
