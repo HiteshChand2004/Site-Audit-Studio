@@ -184,9 +184,12 @@ function iou(a, b) {
   return inter / (a[2] * a[3] + b[2] * b[3] - inter);
 }
 
+// A state of a tab panel / carousel the page does not start in (ir/states.js): hidden until a visitor clicks, so neither
+// measured nor fixed (its boxes are those of its own state).
+const stateCopy = (n) => !!n.stateAttrs && 'hidden' in n.stateAttrs;
 const visibleIn = (n, v) => {
   const d = n.views[v];
-  return !!d && !d.hidden && d.rect[2] > 0 && d.rect[3] > 0;
+  return !stateCopy(n) && !!d && !d.hidden && d.rect[2] > 0 && d.rect[3] > 0;
 };
 
 /** Layout comparison of one page in one view. */
@@ -196,7 +199,7 @@ export function compareLayout(root, v, rects) {
   let boxes = 0;
   let missing = 0;
   const walk = (n) => {
-    if (!isElement(n)) return;
+    if (!isElement(n) || stateCopy(n)) return;
     if (visibleIn(n, v)) {
       total++;
       const o = n.views[v].rect;
