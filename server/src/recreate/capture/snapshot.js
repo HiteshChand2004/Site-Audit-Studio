@@ -66,7 +66,14 @@ export function snapshotPage(opts) {
     const values = {};
     for (let i = 0; i < cs.length; i++) {
       const prop = cs[i];
-      if (prop.startsWith('--')) continue;
+      // Custom properties inherit: kept where they differ from the parent's, i.e. where they are set (by a script, a
+      // style attribute or a rule). Animations read them (a headline shifted by the measured width of its word).
+      if (prop.startsWith('--')) {
+        const value = cs.getPropertyValue(prop);
+        values[prop] = value;
+        if (parentValues && parentValues[prop] !== value && value.trim() && value.length <= 400) style[prop] = value.trim();
+        continue;
+      }
       if (SKIP_PROP.test(prop) && !(keepSize && (prop === 'width' || prop === 'height'))) continue;
       const value = cs.getPropertyValue(prop);
       values[prop] = value;
@@ -181,6 +188,33 @@ export function snapshotPage(opts) {
     return values;
   })();
   const htmlDiff = styleDiff(getComputedStyle(document.documentElement), null, defaultStyle('html', ''));
+  // One part of the page only (`rootPath`, a snapshot path): the states of a tab panel or carousel (capture/states.js).
+  // It inherits from its real parent, so its styles diff exactly like they would in a whole-page snapshot.
+  if (opts?.rootPath) {
+    let el = document.body;
+    for (const part of opts.rootPath.split('>').slice(1)) {
+      const [tag, n] = part.split(':');
+      let k = 0;
+      let next = null;
+      for (const c of el ? el.children : []) {
+        if (SKIP_TAGS.has(c.tagName) || c === frame || c.tagName.toLowerCase() !== tag) continue;
+        if (++k === Number(n)) {
+          next = c;
+          break;
+        }
+      }
+      el = next;
+    }
+    let sub = null;
+    if (el) {
+      const pcs = getComputedStyle(el.parentElement || document.documentElement);
+      const parentValues = {};
+      for (let i = 0; i < pcs.length; i++) parentValues[pcs[i]] = pcs.getPropertyValue(pcs[i]);
+      sub = walk(el, parentValues, opts.rootPath);
+    }
+    frame.remove();
+    return { body: sub, cssUrls: [...cssUrls], nodeCount: count, truncated };
+  }
   const body = document.body ? walk(document.body, rootValues, 'body') : null;
 
   // Custom properties on :root (design tokens), and @font-face / @keyframes from readable sheets.

@@ -12,6 +12,7 @@
 //    the matching HTML element.
 // Every known view: the trees follow the views the captures have (views.js).
 import { KNOWN_VIEW_IDS as VIEW_IDS } from '../views.js';
+import { expandNotices, expandStates } from './states.js';
 
 export { VIEW_IDS };
 
@@ -29,6 +30,9 @@ export function fromCapture(node, view) {
         style: node.style ?? {},
         rect: node.rect ?? [0, 0, 0, 0],
         hidden: !!node.hidden,
+        ...(node.vp && { vp: node.vp }),
+        ...(node.ty && { ty: node.ty }),
+        ...(node.scrolled && { scrolled: node.scrolled }),
         ...(node.before && { before: node.before }),
         ...(node.after && { after: node.after }),
       },
@@ -38,6 +42,10 @@ export function fromCapture(node, view) {
   for (const key of ['lazy', 'src', 'href', 'poster', 'natural', 'svg']) if (node[key] != null) m[key] = node[key];
   // The desktop path of the snapshot (body>div:1>a:2): the motion capture (4b) names its elements by it.
   if (view === 'desktop' && node.path) m.cpath = node.path;
+  // The other states of a tab panel / carousel (capture/states.js); ir/states.js puts them into the tree.
+  if (node.states) m.states = { ...node.states, variants: node.states.variants.map((v) => ({ index: v.index, node: fromCapture(v.body, view) })) };
+  // Short messages a click shows (capture/notices.js), on the body; ir/states.js expandNotices puts them into the tree.
+  if (node.notices) m.notices = node.notices.map((n) => ({ ...n, items: n.items.map((it) => ({ control: it.control, node: fromCapture(it.body, view) })) }));
   return m;
 }
 
@@ -277,6 +285,7 @@ export function cleanTree(node, views = VIEW_IDS, parentDisplay = 'block') {
       inner.length === 1 &&
       !c.children.some((t) => isText(t) && t.text.trim()) &&
       !Object.keys(c.attrs).some((k) => k !== 'class') &&
+      !c.stateAttrs && // an area or control of a tab panel / carousel (ir/states.js)
       views.every((v) => {
         const d = c.views[v];
         const cd = inner[0].views[v];
@@ -326,6 +335,9 @@ export function buildPageTree(bodies) {
   if (!bodies.desktop) throw new Error('The desktop capture is required.');
   const root = fromCapture(bodies.desktop, 'desktop');
   for (const v of views.slice(1)) alignInto(root, fromCapture(bodies[v], v), [v]);
+  // Tab / carousel / filter states as hidden copies of their area, while the capture's relative paths still hold.
+  const states = expandStates(root);
+  const notices = expandNotices(root);
   const variantsMerged = views.length > 1 ? mergeVariants(root, views) : dropHiddenVariants(root, views[0]);
   const wrappersRemoved = cleanTree(root, views);
   let viewOnly = 0;
@@ -335,5 +347,5 @@ export function buildPageTree(bodies) {
     n.children.forEach(count);
   };
   count(root);
-  return { root, views, stats: { variantsMerged, wrappersRemoved, viewOnly } };
+  return { root, views, stats: { variantsMerged, wrappersRemoved, viewOnly, stateSets: states.sets, states: states.states, notices } };
 }

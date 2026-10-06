@@ -44,6 +44,31 @@ export function motionCss(m, opts) {
   }
   if (focus.some(Boolean)) out.push(`/* Keyboard focus */\n${focus.filter(Boolean).join('\n')}`);
 
+  // Scroll states of bars: js/motion.js adds `is-scrolled` to the bar (`sN`) past its data-scroll-at.
+  const scrolled = [];
+  for (const s of m.scrolled ?? []) {
+    for (const p of s.parts) {
+      const target = p.token === s.token ? `${sel(s.token)}.is-scrolled` : `${sel(s.token)}.is-scrolled ${sel(p.token)}`;
+      scrolled.push(block(target, D(p.decls)));
+      for (const [which, decl] of Object.entries(p.pseudo ?? {})) scrolled.push(block(`${target}::${which}`, D(decl)));
+    }
+  }
+  if (scrolled.some(Boolean)) out.push(`/* Bars once the page is scrolled (js/motion.js adds .is-scrolled) */\n${scrolled.filter(Boolean).join('\n')}`);
+
+  // Switched states (ir/states.js): the states not shown stay hidden whatever display their own class gives them.
+  if (m.states || m.notices) out.push('/* Tab / carousel states and short messages not shown (js/motion.js shows them) */\n[data-w-set][hidden],\n[data-w-note-of][hidden] {\n  display: none !important;\n}');
+
+  // Click widgets: js/motion.js toggles `is-open` on the area (`wN`) when its control (`wt`) is clicked.
+  const widgets = [];
+  for (const w of m.widgets ?? []) {
+    for (const p of w.parts) {
+      const target = p.token === w.token ? `${sel(w.token)}.is-open` : `${sel(w.token)}.is-open ${sel(p.token)}`;
+      widgets.push(block(target, D(p.decls)));
+      for (const [which, decl] of Object.entries(p.pseudo ?? {})) widgets.push(block(`${target}::${which}`, D(decl)));
+    }
+  }
+  if (widgets.some(Boolean)) out.push(`/* Open panels (js/motion.js adds .is-open to the area of a clicked control) */\n${widgets.filter(Boolean).join('\n')}`);
+
   if (m.reveal.length) {
     const rules = [];
     for (const r of m.reveal) {

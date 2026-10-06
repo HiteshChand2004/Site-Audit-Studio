@@ -1,5 +1,9 @@
-// The one script the recreated site may carry (Phase 4b.4): shows scroll-reveal elements when they come into view.
-// Everything else about motion (hover, focus, loops, the reveal animation itself) is CSS; this file only
+// The one script the recreated site may carry (Phase 4b.4): shows scroll-reveal elements when they come into view, and
+// (step 2 of the "as is" fixes) opens and closes panels: a click on a `wt` control toggles `is-open` on its area (the
+// nearest ancestor with a `wN` token) and keeps the control's aria-expanded in step; the open state is CSS (emit/motionCss.js).
+// It also adds `is-scrolled` to a bar (`data-scroll-at`: px, or a share of the window height `0.92vh`) once the page is scrolled
+// that far, and shows the state a `data-w-go` control points to (tabs, carousels, filters).
+// Everything else about motion (hover, focus, loops, the reveal animation itself) is CSS; for the reveal this file only
 //   1. adds `js-motion` to <html> - the reveal rules apply only then, so a visitor without script (or with
 //      prefers-reduced-motion) sees the finished page, never hidden content;
 //   2. adds `is-in` to a `data-motion~="rv"` element when it scrolls into view (and removes it again when it leaves,
@@ -9,6 +13,108 @@
 export const MOTION_FILE = 'js/motion.js';
 
 export const MOTION_JS = `(function () {
+  var bars = document.querySelectorAll('[data-scroll-at]');
+  if (!bars.length) return;
+  var limit = function (el) {
+    var v = el.getAttribute('data-scroll-at') || '0';
+    return /vh$/.test(v) ? parseFloat(v) * window.innerHeight : parseFloat(v);
+  };
+  var queued = false;
+  var update = function () {
+    queued = false;
+    for (var i = 0; i < bars.length; i++) bars[i].classList.toggle('is-scrolled', window.scrollY >= limit(bars[i]));
+  };
+  window.addEventListener('scroll', function () {
+    if (!queued) {
+      queued = true;
+      window.requestAnimationFrame(update);
+    }
+  }, { passive: true });
+  window.addEventListener('resize', update);
+  update();
+})();
+(function () {
+  var AREA = /(^| )w[0-9]+( |$)/;
+  var touched = {};
+  // Shows state \`index\` of set \`id\` and hides the others.
+  var show = function (id, index) {
+    var states = document.querySelectorAll('[data-w-set="' + id + '"]');
+    for (var i = 0; i < states.length; i++) {
+      if (states[i].getAttribute('data-w-i') === String(index)) states[i].removeAttribute('hidden');
+      else states[i].setAttribute('hidden', '');
+    }
+    return states.length;
+  };
+  // Carousels that move on by themselves (data-w-auto="ms:step"); a click restarts the wait.
+  var autos = document.querySelectorAll('[data-w-auto]');
+  for (var a = 0; a < autos.length; a++) {
+    (function (el) {
+      var id = el.getAttribute('data-w-set');
+      var parts = (el.getAttribute('data-w-auto') || '').split(':');
+      var ms = parseInt(parts[0], 10);
+      var step = parseInt(parts[1], 10) || 1;
+      if (!(ms > 0)) return;
+      window.setInterval(function () {
+        if (document.hidden || Date.now() - (touched[id] || 0) < ms) return;
+        var states = document.querySelectorAll('[data-w-set="' + id + '"]');
+        var n = states.length;
+        var current = 0;
+        for (var i = 0; i < n; i++) if (!states[i].hasAttribute('hidden')) current = parseInt(states[i].getAttribute('data-w-i'), 10);
+        show(id, (((current + step) % n) + n) % n);
+      }, ms);
+    })(autos[a]);
+  }
+  var noteTimer = null;
+  document.addEventListener('click', function (e) {
+    // A short message (data-w-note="id:ms"): shown on click, hidden again after ms (0 = until the next one).
+    var note = e.target && e.target.closest ? e.target.closest('[data-w-note]') : null;
+    if (note) {
+      var spec = (note.getAttribute('data-w-note') || '').split(':');
+      var all = document.querySelectorAll('[data-w-note-of]');
+      for (var m = 0; m < all.length; m++) {
+        if (all[m].getAttribute('data-w-note-of') === spec[0]) all[m].removeAttribute('hidden');
+        else all[m].setAttribute('hidden', '');
+      }
+      if (note.tagName === 'A' && /^#?$/.test(note.getAttribute('href') || '')) e.preventDefault();
+      if (noteTimer) window.clearTimeout(noteTimer);
+      var ms = parseInt(spec[1], 10);
+      if (ms > 0) {
+        noteTimer = window.setTimeout(function () {
+          for (var q = 0; q < all.length; q++) all[q].setAttribute('hidden', '');
+        }, ms);
+      }
+      return;
+    }
+    var go = e.target && e.target.closest ? e.target.closest('[data-w-go]') : null;
+    if (go) {
+      var to = (go.getAttribute('data-w-go') || '').split(':');
+      if (go.tagName === 'A' && /^#?$/.test(go.getAttribute('href') || '')) e.preventDefault();
+      touched[to[0]] = Date.now();
+      show(to[0], to[1]);
+      return;
+    }
+    var t = e.target && e.target.closest ? e.target.closest('[data-motion~="wt"]') : null;
+    if (!t) return;
+    var area = t;
+    while (area && !(area.getAttribute && AREA.test(area.getAttribute('data-motion') || ''))) area = area.parentElement;
+    if (!area) return;
+    if (t.tagName === 'A' && /^#?$/.test(t.getAttribute('href') || '')) e.preventDefault();
+    var open = area.classList.toggle('is-open');
+    if (t.hasAttribute('aria-expanded')) t.setAttribute('aria-expanded', open ? 'true' : 'false');
+    // One panel at a time in a list marked data-w-one (an accordion): the others close.
+    var list = open && area.closest ? area.closest('[data-w-one]') : null;
+    if (list) {
+      var others = list.querySelectorAll('.is-open');
+      for (var k = 0; k < others.length; k++) {
+        if (others[k] === area || !AREA.test(others[k].getAttribute('data-motion') || '')) continue;
+        others[k].classList.remove('is-open');
+        var c = others[k].querySelector('[data-motion~="wt"][aria-expanded]');
+        if (c) c.setAttribute('aria-expanded', 'false');
+      }
+    }
+  });
+})();
+(function () {
   var root = document.documentElement;
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   if (!('IntersectionObserver' in window) || reduce) return;

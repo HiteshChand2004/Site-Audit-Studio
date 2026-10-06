@@ -19,7 +19,7 @@ const PAGE_LIMIT_MARGIN = 5000;
 // Time per page for the hover / focus probing of the desktop view.
 const MOTION_BUDGET = 8000;
 // Clicking menus, tabs, sliders and dialogs (full-site B.1, capture/clicks.js), after the hover probe.
-const CLICK_BUDGET = 10000;
+const CLICK_BUDGET = 20000;
 // Time of the whole job kept for the steps after capture (assets, generate, build, preview), for BASE_PAGES pages; more pages
 // keep more (ctx.laterReserve, recreate/index.js).
 export const LATER_STEPS_RESERVE = 150000;
@@ -257,7 +257,8 @@ export async function inspectStage(ctx) {
 
   await writeFile(
     path.join(ctx.dir, 'capture', 'manifest.json'),
-    JSON.stringify({ homeUrl: discovery.homeUrl, origin: discovery.origin, pages, discovery: report.discovery }, null, 1),
+    // robots / llms too: a rebuild from this capture (recreate/replay.js) writes robots.txt and llms.txt from them.
+    JSON.stringify({ homeUrl: discovery.homeUrl, origin: discovery.origin, pages, discovery: { ...report.discovery, robots: discovery.robots ?? null, llms: discovery.llms ?? null } }, null, 1),
   );
   ctx.progress(1, `Captured ${pages.length} ${pages.length === 1 ? 'page' : 'pages'}`);
 }

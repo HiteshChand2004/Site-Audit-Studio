@@ -13,7 +13,7 @@ function slug(ir) {
 }
 
 /** @returns {Map<string, string>} */
-export function scaffold({ ir, meta, pinned, siteName }) {
+export function scaffold({ ir, meta, pinned, overrides = {}, siteName }) {
   const name = `${slug(ir)}-site`;
   const home = meta[0];
   const files = new Map();
@@ -30,6 +30,8 @@ export function scaffold({ ir, meta, pinned, siteName }) {
     },
     dependencies: { react: pinned.react, 'react-dom': pinned['react-dom'] },
     devDependencies: { '@vitejs/plugin-react': pinned['@vitejs/plugin-react'], vite: pinned.vite },
+    // The transitive versions the server built with (a newer Rollup made the build minutes long).
+    ...(Object.keys(overrides).length && { overrides }),
   }, null, 2)}\n`);
 
   files.set('vite.config.js', lines(

@@ -11,8 +11,10 @@ import { buildReact } from '../react/build.js';
 
 const TOOLCHAIN = 'mern';
 
-function parseTests(output) {
-  const n = (key) => Number(new RegExp(`^# ${key} (\\d+)`, 'm').exec(output)?.[1] ?? 0);
+// The summary lines of `node --test`: TAP (`# pass 15`, requested below) or the spec reporter (`ℹ pass 15`, the default for
+// non-TTY output since Node 23, which read as 0 of 0 before).
+export function parseTests(output) {
+  const n = (key) => Number(new RegExp(`^(?:#|ℹ) ${key} (\\d+)`, 'm').exec(output)?.[1] ?? 0);
   return { tests: n('tests'), pass: n('pass'), fail: n('fail'), skipped: n('skipped') };
 }
 
@@ -41,7 +43,7 @@ export async function buildMern({ dir, out, assets, report, htmlDist, signal, pr
       toolchain: TOOLCHAIN,
       timeoutMs: 120000,
       signal,
-      steps: [{ label: 'The server tests', args: ['--test'], keepOutput: true }],
+      steps: [{ label: 'The server tests', args: ['--test', '--test-reporter=tap'], keepOutput: true }],
     });
   } catch (err) {
     throw new RecreateError(`${err.message} The MERN project was not kept.`);

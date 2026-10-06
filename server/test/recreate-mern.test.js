@@ -184,7 +184,8 @@ test('the generated server tests pass as shipped', { timeout: 120000 }, async (t
   // Not inside this test run's context: a nested `node --test` would report to it instead of printing.
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
-  const run = spawnSync(process.execPath, ['--test'], { cwd: path.join(dir, 'server'), encoding: 'utf8', env });
+  // TAP explicitly: since Node 23 the default reporter of a non-terminal run is "spec" (ℹ pass 14), not TAP.
+  const run = spawnSync(process.execPath, ['--test', '--test-reporter=tap'], { cwd: path.join(dir, 'server'), encoding: 'utf8', env });
   assert.equal(run.status, 0, run.stdout.slice(-1500));
   assert.match(run.stdout, /# fail 0/);
   assert.match(run.stdout, /# pass 1[4-9]|# pass [2-9]\d/);

@@ -29,6 +29,9 @@ export const MOTION_PROPS = [
 ];
 // Pseudo-elements also change their size and position (an underline that grows).
 const PSEUDO_EXTRA = ['width', 'height', 'left', 'right', 'top', 'bottom'];
+// Also compared when the stylesheets' state rules are applied (forceRuleStates), together with every property those rules
+// declare: an animation that starts on hover, a marquee that pauses, a gap that widens.
+const RULE_EXTRA = ['animation-name', 'animation-duration', 'animation-timing-function', 'animation-delay', 'animation-iteration-count', 'animation-direction', 'animation-fill-mode', 'animation-play-state', 'row-gap', 'column-gap'];
 
 /** Page function: the :hover / :focus / :active rules of the readable stylesheets. */
 function scanRules(opts) {
@@ -65,13 +68,302 @@ function scanRules(opts) {
 }
 
 /**
+ * Page function: the hover / focus effects the readable stylesheets declare, on every element they apply to (not only
+ * the few the mouse probe has time for). Each state rule is copied with its state pseudo-class replaced by an attribute
+ * (`.card:hover .title` → `.card[data-sas-hover] .title`) and inserted right after the original, so media, layer and
+ * order stay the same. Then, element by element, the attribute is set and the computed styles of the element, its
+ * ::before / ::after and the descendants a copied rule now matches are compared with the same element without it.
+ * Transitions are switched off and both reads happen in the same task, so neither a transition nor a running
+ * animation shows up as a difference, and nothing has to scroll or wait. Everything is removed again afterwards.
+ * A selector with the state inside :not() / :is() / :has(), or with two states, is left to the mouse probe.
+ */
+function forceRuleStates(opts) {
+  const { props, pseudoProps, maxHosts, maxKids, budgetMs } = opts;
+  const t0 = performance.now();
+  const SKIP_TAGS = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
+  const ATTR = { hover: 'data-sas-hover', focus: 'data-sas-focus' };
+  const STATE = /^:(hover|focus-visible|focus-within|focus)(?![\w-])/;
+  const PSEUDO_EL = /::?(before|after|first-line|first-letter|marker|placeholder|selection)\b|::[\w-]+(\([^)]*\))?/g;
+  const pathOf = (el) => {
+    const parts = [];
+    for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+      if (n === document.body) {
+        parts.push('body');
+        break;
+      }
+      const tag = n.tagName.toLowerCase();
+      let index = 0;
+      for (const s of n.parentElement ? n.parentElement.children : []) {
+        if (SKIP_TAGS.has(s.tagName)) continue;
+        if (s.tagName === n.tagName) index++;
+        if (s === n) break;
+      }
+      parts.push(`${tag}:${index}`);
+    }
+    return parts.length && parts[parts.length - 1] === 'body' ? parts.reverse().join('>') : null;
+  };
+  const inSvg = (el) => el.tagName.toLowerCase() !== 'svg' && !!el.closest('svg');
+
+  // The top-level parts of a selector list.
+  const splitList = (s) => {
+    const out = [];
+    let depth = 0;
+    let quote = null;
+    let start = 0;
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (quote) {
+        if (c === '\\') i++;
+        else if (c === quote) quote = null;
+      } else if (c === '"' || c === "'") quote = c;
+      else if (c === '(' || c === '[') depth++;
+      else if (c === ')' || c === ']') depth--;
+      else if (c === ',' && depth === 0) {
+        out.push(s.slice(start, i).trim());
+        start = i + 1;
+      }
+    }
+    out.push(s.slice(start).trim());
+    return out.filter(Boolean);
+  };
+  // One complex selector: its copy with the state as an attribute, and the selector of the element that holds the state.
+  const convert = (part) => {
+    let depth = 0;
+    let quote = null;
+    const states = [];
+    for (let i = 0; i < part.length; i++) {
+      const c = part[i];
+      if (quote) {
+        if (c === '\\') i++;
+        else if (c === quote) quote = null;
+        continue;
+      }
+      if (c === '"' || c === "'") quote = c;
+      else if (c === '(' || c === '[') depth++;
+      else if (c === ')' || c === ']') depth--;
+      else if (c === ':' && part[i + 1] !== ':') {
+        const m = STATE.exec(part.slice(i));
+        if (m) {
+          if (depth > 0) return null;
+          states.push({ at: i, len: m[0].length, kind: m[1] === 'hover' ? 'hover' : 'focus' });
+        }
+      }
+    }
+    if (states.length !== 1 || part.includes('&')) return null;
+    const { at, len, kind } = states[0];
+    const clone = `${part.slice(0, at)}[${ATTR[kind]}]${part.slice(at + len)}`;
+    // The compound that holds the state ends at the next combinator outside brackets.
+    let end = at + len;
+    depth = 0;
+    for (; end < part.length; end++) {
+      const c = part[end];
+      if (c === '(' || c === '[') depth++;
+      else if (c === ')' || c === ']') depth--;
+      else if (depth === 0 && /[\s>+~]/.test(c)) break;
+    }
+    let host = `${part.slice(0, at)}${part.slice(at + len, end)}`.replace(PSEUDO_EL, '').trim();
+    if (!host || /[\s>+~]$/.test(host)) host = `${host} *`.trim();
+    return { clone, host, kind };
+  };
+
+  // 1. The state rules of the readable sheets, copied right after themselves.
+  const tasks = [];
+  const declared = new Set();
+  const stats = { rules: 0, parts: 0, unsupported: 0, hosts: 0, skippedHosts: 0, effects: 0, timedOut: false };
+  const visit = (list, container) => {
+    for (let i = 0; i < list.length; i++) {
+      const rule = list[i];
+      if (rule.type === CSSRule.STYLE_RULE) {
+        const text = rule.selectorText || '';
+        if (/:(hover|focus)/.test(text)) {
+          stats.rules++;
+          const parts = [];
+          for (const p of splitList(text)) {
+            const c = convert(p);
+            if (!c) {
+              stats.unsupported++;
+              continue;
+            }
+            try {
+              document.querySelector(c.host);
+              document.querySelector(c.clone);
+              parts.push(c);
+            } catch {
+              stats.unsupported++;
+            }
+          }
+          if (parts.length && container.insertRule) {
+            tasks.push({ container, index: i, parts, body: rule.style.cssText });
+            for (let d = 0; d < rule.style.length && declared.size < 120; d++) {
+              const name = rule.style[d];
+              if (!name.startsWith('--') && !name.startsWith('transition')) declared.add(name);
+            }
+          }
+        }
+      } else if (rule.type === CSSRule.IMPORT_RULE && rule.styleSheet) {
+        try {
+          visit(rule.styleSheet.cssRules, rule.styleSheet);
+        } catch {
+          /* unreadable */
+        }
+      } else if (rule.cssRules && rule.insertRule) {
+        visit(rule.cssRules, rule);
+      }
+    }
+  };
+  for (const sheet of document.styleSheets) {
+    try {
+      visit(sheet.cssRules, sheet);
+    } catch {
+      /* a cross-origin sheet cannot be read */
+    }
+  }
+  const inserted = [];
+  // Highest index first, so the positions of the ones still to insert do not move.
+  for (const t of [...tasks].sort((a, b) => b.index - a.index)) {
+    try {
+      t.container.insertRule(`${t.parts.map((p) => p.clone).join(', ')} { ${t.body} }`, t.index + 1);
+      inserted.push({ container: t.container, rule: t.container.cssRules[t.index + 1] });
+      stats.parts += t.parts.length;
+    } catch {
+      stats.unsupported += t.parts.length;
+      t.parts = [];
+    }
+  }
+  const parts = tasks.flatMap((t) => t.parts);
+  const hosts = new Map();
+  for (const p of parts) {
+    let found = [];
+    try {
+      found = document.querySelectorAll(p.host);
+    } catch {
+      continue;
+    }
+    for (const el of found) {
+      if (SKIP_TAGS.has(el.tagName) || inSvg(el) || el === document.body || el === document.documentElement) continue;
+      let kinds = hosts.get(el);
+      if (!kinds) {
+        if (hosts.size >= maxHosts) {
+          stats.skippedHosts++;
+          continue;
+        }
+        kinds = new Set();
+        hosts.set(el, kinds);
+      }
+      kinds.add(p.kind);
+    }
+  }
+  stats.hosts = hosts.size;
+  // How each element animates into the state, read before transitions are switched off for the comparison.
+  const transitionOf = new Map();
+  for (const el of hosts.keys()) {
+    const cs = getComputedStyle(el);
+    transitionOf.set(el, { property: cs.transitionProperty, duration: cs.transitionDuration, delay: cs.transitionDelay, timing: cs.transitionTimingFunction });
+  }
+  const noTransition = document.createElement('style');
+  noTransition.textContent = '*, *::before, *::after { transition: none !important; }';
+  (document.head || document.documentElement).appendChild(noTransition);
+  const cloneList = { hover: parts.filter((p) => p.kind === 'hover').map((p) => p.clone), focus: parts.filter((p) => p.kind === 'focus').map((p) => p.clone) };
+
+  const pick = (cs, list) => {
+    const o = {};
+    for (const p of list) o[p] = cs.getPropertyValue(p);
+    return o;
+  };
+  const list = [...new Set([...props, ...declared])];
+  const pseudoList = [...new Set([...list, ...pseudoProps])];
+  const read = (el, kids) => {
+    const pseudo = {};
+    for (const w of ['before', 'after']) {
+      const pcs = getComputedStyle(el, `::${w}`);
+      if (pcs.content && pcs.content !== 'none' && pcs.content !== 'normal') pseudo[w] = pick(pcs, pseudoList);
+    }
+    return { values: pick(getComputedStyle(el), list), pseudo, kids: kids.map((k) => pick(getComputedStyle(k), list)) };
+  };
+  const diff = (a, b) => {
+    const out = {};
+    for (const k of Object.keys(b)) if (a[k] !== b[k]) out[k] = [a[k], b[k]];
+    return out;
+  };
+  // The descendants a copied rule matches while the element holds the state.
+  const kidsOf = (el, kind) => {
+    const list = [];
+    for (const sel of cloneList[kind]) {
+      let found = [];
+      try {
+        found = el.querySelectorAll(sel);
+      } catch {
+        continue;
+      }
+      for (const k of found) {
+        if (list.length >= maxKids) break;
+        if (!list.includes(k) && !inSvg(k)) list.push(k);
+      }
+    }
+    return list;
+  };
+
+  const out = { hover: [], focus: [] };
+  try {
+    for (const [el, kinds] of hosts) {
+      if (performance.now() - t0 > budgetMs) {
+        stats.timedOut = true;
+        break;
+      }
+      for (const kind of kinds) {
+        el.setAttribute(ATTR[kind], '');
+        const kids = kidsOf(el, kind);
+        const on = read(el, kids);
+        el.removeAttribute(ATTR[kind]);
+        const off = read(el, kids);
+        const changes = diff(off.values, on.values);
+        const pseudo = {};
+        for (const w of new Set([...Object.keys(off.pseudo), ...Object.keys(on.pseudo)])) {
+          if (!on.pseudo[w]) pseudo[w] = { content: ['present', 'none'] };
+          else {
+            const c = off.pseudo[w] ? diff(off.pseudo[w], on.pseudo[w]) : Object.fromEntries(Object.entries(on.pseudo[w]).map(([k, v]) => [k, [null, v]]));
+            if (Object.keys(c).length) pseudo[w] = c;
+          }
+        }
+        const kidChanges = [];
+        kids.forEach((k, i) => {
+          const c = diff(off.kids[i], on.kids[i]);
+          const p = Object.keys(c).length ? pathOf(k) : null;
+          if (p) kidChanges.push({ path: p, changes: c });
+        });
+        if (!Object.keys(changes).length && !Object.keys(pseudo).length && !kidChanges.length) continue;
+        const path = pathOf(el);
+        if (!path) continue;
+        const r = el.getBoundingClientRect();
+        out[kind].push({
+          path, tag: el.tagName.toLowerCase(), text: (el.getAttribute('aria-label') || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60),
+          rect: [Math.round(r.left + scrollX), Math.round(r.top + scrollY), Math.round(r.width), Math.round(r.height)],
+          source: 'css', changes, ...(Object.keys(pseudo).length && { pseudo }), ...(kidChanges.length && { kids: kidChanges }), transition: transitionOf.get(el), layout: false, domDelta: 0,
+        });
+        stats.effects++;
+      }
+    }
+  } finally {
+    noTransition.remove();
+    for (const { container, rule } of inserted) {
+      const i = Array.prototype.indexOf.call(container.cssRules, rule);
+      if (i >= 0) container.deleteRule(i);
+    }
+  }
+  stats.ms = Math.round(performance.now() - t0);
+  return { ...out, stats };
+}
+
+/**
  * Page function: picks the elements to probe and remembers them (window.__sasMotion). Links, buttons, fields and
  * roles come first, then cursor: pointer elements, then plain transition hosts; each group of equal elements is
- * probed `perSignature` times; the chosen ones are kept in document order.
+ * probed `perSignature` times; the chosen ones are kept in document order. Elements whose effect the stylesheet
+ * already gave (`skip`, paths) are not probed again.
  * @returns {{ candidates: object[], groups: object[], skipped: object, focusable: number }}
  */
 function install(opts) {
   const { limit, perSignature } = opts;
+  const skip = new Set(opts.skip || []);
   const SKIP_TAGS = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
   const INTERACTIVE = new Set(['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'SUMMARY', 'LABEL']);
   const ROLES = /^(button|link|tab|menuitem|option|switch|checkbox|radio|combobox)$/;
@@ -137,11 +429,13 @@ function install(opts) {
     if (dur > 0 && cs.transitionProperty !== 'none') reasons.push('transition');
     if (!reasons.length) continue;
     const path = pathOf(el);
-    if (!path) continue;
+    if (!path || skip.has(path)) continue;
     const sig = sigOf(el);
-    const group = bySig.get(sig) || { sig, count: 0, probed: 0 };
+    const group = bySig.get(sig) || { sig, count: 0, probed: 0, paths: [] };
     bySig.set(sig, group);
     group.count++;
+    // All members, so an effect the probe finds on a few of them can be given to the rest (ir/motion.js).
+    if (group.paths.length < 120) group.paths.push(path);
     const priority = reasons.includes('focusable') || reasons.includes('interactive') || reasons.includes('role') ? 0 : reasons.includes('pointer') ? 1 : 2;
     found.push({
       order: found.length, priority, el, path, tag: el.tagName.toLowerCase(), sig, reasons, cursor: cs.cursor,
@@ -175,7 +469,7 @@ function install(opts) {
   window.__sasMotion = { chosen: chosen.map((c) => c.el), index: new Map(chosen.map((c, i) => [c.el, i])), pathOf };
   return {
     candidates: chosen.map((c, i) => ({ i, path: c.path, tag: c.tag, sig: c.sig, reasons: c.reasons, cursor: c.cursor, text: c.text, rect: docRect(c.el) })),
-    groups: [...bySig.values()].filter((g) => g.count > 1).sort((a, b) => b.count - a.count).slice(0, 20),
+    groups: [...bySig.values()].filter((g) => g.count > 1).sort((a, b) => b.count - a.count).slice(0, 40),
     skipped,
     focusable,
   };
@@ -376,12 +670,26 @@ export function keepReverting(rest, back, d) {
  * @param {{ limit?: number, perSignature?: number, focusStops?: number, budgetMs?: number }} [o]
  * @returns {Promise<object>} the content of motion.json
  */
-export async function captureInteractions(page, { limit = 40, perSignature = 3, focusStops = 80, budgetMs = 10000 } = {}) {
+export async function captureInteractions(page, { limit = 40, perSignature = 3, focusStops = 80, budgetMs = 10000, perCandidateMs = 900, maxHoverMs = Math.min(15000, budgetMs * 2) } = {}) {
   const started = Date.now();
-  const hoverDeadline = started + budgetMs * 0.6;
-  const deadline = started + budgetMs;
+  // Set once the candidates are known: the mouse probe gets time per element to probe (within bounds), focus the rest.
+  let hoverDeadline = started + budgetMs * 0.6;
+  let deadline = started + budgetMs;
   const scan = await page.evaluate(scanRules, {});
-  const picked = await page.evaluate(install, { limit, perSignature });
+  // What the stylesheets declare first (every element, no mouse, ~1 s); the mouse probe then looks for the rest
+  // (script-driven effects) on the elements the stylesheets do not cover.
+  let forced = { hover: [], focus: [], stats: { error: null } };
+  try {
+    forced = await page.evaluate(forceRuleStates, { props: [...MOTION_PROPS, ...RULE_EXTRA], pseudoProps: PSEUDO_EXTRA, maxHosts: 600, maxKids: 40, budgetMs: Math.max(500, Math.min(4000, budgetMs * 0.3)) });
+  } catch (err) {
+    forced.stats.error = String(err?.message ?? err).split('\n')[0];
+  }
+  const picked = await page.evaluate(install, { limit, perSignature, skip: forced.hover.map((h) => h.path) });
+  // A fixed share of the budget probed ~6 elements of 30 on a busy page: script-driven hovers further down were never
+  // reached. The hover time follows the elements to probe (~0.9 s each: scroll, settle, hover, check it reverts).
+  const hoverMs = Math.max(budgetMs * 0.6, Math.min(maxHoverMs, picked.candidates.length * perCandidateMs));
+  hoverDeadline = started + hoverMs;
+  deadline = hoverDeadline + budgetMs * 0.4;
   const args = (i) => ({ i, props: MOTION_PROPS, pseudoProps: PSEUDO_EXTRA });
   const stats = { candidates: picked.candidates.length, focusable: picked.focusable, probed: 0, hovered: 0, focused: 0, noChange: 0, notReverted: 0, covered: 0, skipped: picked.skipped, timedOut: false };
   const settle = (state) => Math.min(700, Math.max(80, (state ? transitionMs(state) : 200) + 60));
@@ -393,7 +701,7 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
       stats.timedOut = true;
       break;
     }
-    const spot = await page.evaluate(aim, c.i);
+    let spot = await page.evaluate(aim, c.i);
     if (!spot || !spot.reachable) {
       stats.covered++;
       continue;
@@ -416,6 +724,15 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
     }
     if (!before) continue;
     lastWait = settle(before);
+    // A smooth scroll (a script owning the scroll) moved the element after the first aim: aim again where it settled.
+    if (spot.scrolled) {
+      const again = await page.evaluate(aim, c.i);
+      if (!again?.reachable) {
+        stats.covered++;
+        continue;
+      }
+      spot = again;
+    }
     await page.mouse.move(spot.x, spot.y);
     // The effect needs its transition to run (plus a frame); JavaScript-driven effects get the same time.
     await page.waitForTimeout(lastWait);
@@ -437,7 +754,7 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
       continue;
     }
     stats.hovered++;
-    hover.push({ path: c.path, tag: c.tag, text: c.text, sig: c.sig, reasons: c.reasons, rect: c.rect, cursor: c.cursor, ...kept });
+    hover.push({ path: c.path, tag: c.tag, text: c.text, sig: c.sig, reasons: c.reasons, rect: c.rect, cursor: c.cursor, source: 'probe', ...kept });
   }
   await page.mouse.move(-20, -20).catch(() => {});
 
@@ -445,6 +762,7 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
   // element blurred (same scroll position, same reveal state); a stop is probed once per element.
   const focus = [];
   const seen = new Set();
+  const focusByRule = new Set(forced.focus.map((f) => f.path));
   await page.evaluate(resetFocus);
   for (let n = 0; n < focusStops && Date.now() <= deadline; n++) {
     await page.keyboard.press('Tab');
@@ -463,7 +781,7 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
     const d = focusedState && blurred && diffStates(blurred, focusedState);
     const c = picked.candidates[i];
     stats.focused++;
-    if (d) focus.push({ path: c.path, tag: c.tag, text: c.text, sig: c.sig, rect: c.rect, ...d });
+    if (d && !focusByRule.has(c.path)) focus.push({ path: c.path, tag: c.tag, text: c.text, sig: c.sig, rect: c.rect, ...d });
   }
   if (Date.now() > deadline) stats.timedOut = true;
 
@@ -472,10 +790,13 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
     view: 'desktop',
     capturedAt: new Date().toISOString(),
     props: MOTION_PROPS,
-    hover,
-    focus,
+    hover: [...forced.hover, ...hover],
+    focus: [...forced.focus, ...focus],
     groups: picked.groups,
     rules: scan.rules,
-    stats: { ...stats, rules: scan.rules.length, rulesTotal: scan.total, unreadableSheets: scan.unreadable.length, ms: Date.now() - started },
+    stats: {
+      ...stats, rules: scan.rules.length, rulesTotal: scan.total, unreadableSheets: scan.unreadable.length,
+      fromRules: { hover: forced.hover.length, focus: forced.focus.length, ...forced.stats }, ms: Date.now() - started,
+    },
   };
 }

@@ -13,6 +13,15 @@ import { captureInteractions } from './interactions.js';
 import { captureLoops } from './loops.js';
 import { installRevealTracker, processReveal } from './reveal.js';
 import { snapshotPage } from './snapshot.js';
+import { captureNotices } from './notices.js';
+import { captureStates } from './states.js';
+import { probeScrollStates } from './scrollstate.js';
+import { attachType, probeTypography } from './typography.js';
+import { attachProbe, probeViewportHeight } from './viewport.js';
+
+// Clicking through the states of tabs / carousels / filtered lists of one page (most pages have none: no time used). The
+// limit follows the work (capture/states.js, ~3 s per control) within these bounds.
+const STATES_BUDGET_MS = { min: 30000, max: 60000, perControl: 4000 };
 
 export { VIEWS };
 const firstLine = (err) => String(err?.message ?? err).split('\n')[0].trim();
@@ -51,7 +60,7 @@ const waitStill = async (page) => {
 };
 
 /** Scrolls to `target` like a visitor (mouse wheel), else with scrollTo. Returns the new position. */
-async function scrollToY(page, target) {
+export async function scrollToY(page, target) {
   const before = Math.round(await page.evaluate(() => scrollY));
   if (Math.abs(before - target) < 2) return before;
   await page.mouse.wheel(0, target - before).catch(() => {});
@@ -186,6 +195,34 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     ]);
     lap('screenshots');
 
+    // Which boxes follow the window height (full-screen heroes, boxes centred at 50 %), read with a taller window.
+    let viewportProbe = null;
+    try {
+      const probe = await probeViewportHeight(page, view);
+      viewportProbe = { height: Math.round(view.height * 1.3), nodes: attachProbe(snapshot.body, probe.changed), ms: probe.ms };
+    } catch (err) {
+      viewportProbe = { error: firstLine(err) };
+    }
+    // Text sized with the window (font-size: clamp(…, 5vw, …)): read again at a few other widths (desktop view; the other
+    // views have their own widths and media queries).
+    let typeProbe = null;
+    let scrollProbe = null;
+    if (view.id === 'desktop') {
+      try {
+        const probe = await probeTypography(page, view);
+        typeProbe = { nodes: attachType(snapshot.body, probe.changed), ms: probe.ms };
+      } catch (err) {
+        typeProbe = { error: firstLine(err) };
+      }
+      // Bars that change their look once the page is scrolled (a header turning light past the hero).
+      try {
+        scrollProbe = await probeScrollStates(page, snapshot.body, view);
+      } catch (err) {
+        scrollProbe = { error: firstLine(err) };
+      }
+    }
+    lap('viewport');
+
     // Hover and focus effects (4b.1) and how the scroll reveals run (4b.2), on the desktop view only, after
     // everything else was captured from the page.
     let motion = null;
@@ -202,6 +239,13 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       if (clickBudgetMs > 0) {
         try {
           found.clicks = await captureClicks(page, { budgetMs: clickBudgetMs });
+          // The other states of tabs, carousels and filtered lists, onto the page snapshot (capture/states.js).
+          const { cssUrls, ...states } = await captureStates(page, found.clicks, snapshot.body, { budgetMs: STATES_BUDGET_MS });
+          found.states = states;
+          // Short messages a click shows for a moment (a fresh first visit, capture/notices.js).
+          const { cssUrls: noticeUrls, ...notices } = await captureNotices(page, found.clicks, snapshot.body);
+          found.notices = notices;
+          snapshot.cssUrls = [...new Set([...(snapshot.cssUrls ?? []), ...cssUrls, ...noticeUrls])];
         } catch (err) {
           clicksError = firstLine(err);
         }
@@ -234,6 +278,9 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       capturedAt: new Date().toISOString(),
       timing,
       reveal,
+      viewportProbe,
+      typeProbe,
+      scrollProbe,
       ...snapshot,
       resources: [...resources.values()],
       failedRequests: failed,

@@ -128,6 +128,104 @@ Asked by the user: the vibrant look and crowded two panels were hard to read →
   before → after with Better/Worse/Same; "Still needs work" ≤ 6 items (worse first). Then "Compare now", **download** card, folded "Every check, before and after" (`FixReport`) and "Match per page and other measurements" (`RecreateReport`).
   Sample checklist (`FixChecklist`) removed. Checked in a browser, no page errors.
 
+### "As is" fixes (user, after the panscience all-pages run) — WIP, no git repo in this copy (no WIP commits / worktree)
+User: hero too big, some buttons do nothing, some hovers missing, FAQ open by default, Analyze 63 pages vs 62 copied; the copy must also be **mobile responsive**. All fixes general.
+Plan (approved): **1** screen-height units + collapsed panels + page count → **2** working controls (accordions, menus, tabs, carousels, filters; small generated script, all 4 stacks; `capture/clicks.js` already
+records them, nothing consumed them) → **3** script-driven hovers (probe budget ran out on every page: index 6 of 32) → **4** mobile: bring back the parked tablet + phone captures (user's choice, slower) →
+**5** shortest possible waiting for Analyze, Recreate and Re-audit (user, added during step 1; done after 2–4 because they add capture work) → **6** full panscience run + a second site.
+- **Step 1 (done, waiting for "next")**: causes were a 900 px capture window (hero `min-height: 100dvh` → `min-height: 900px; height: 900px`; content centred with `top/left: 50%` + `translate(-50%,-50%)` → `top: 450px; left: 720px`),
+  `styles.js` dropping every `grid-template-rows` (accordion `0fr` → open), and `?query` addresses counted as pages.
+  - `capture/viewport.js` (every view, after the screenshots, ~0.3–0.4 s): page re-read with the window 1.3× taller, same width, then put back; boxes whose height / min-height / top / bottom (positioned) changed get `node.vp = { vh, h, top, bottom, mh }`
+    in `<view>.json` (`viewportProbe` = { height, nodes, ms }); `ir/tree.js fromCapture` carries `vp`.
+  - `ir/styles.js viewportStyle` (end of `normalizeView`): centring idiom → `left/top: 50%` + `translate(-50%…)` (width `100%` at its max-width, else px + `max-width: 100%`); with `vp`: min-height following the window → `Ndvh` / `calc(Ndvh ± Cpx)` (`followWindow`)
+    and the guessed px height dropped; px height following → dvh; box held by two unmoved insets → no px height; an unmoved inset is the anchor, a share of the containing block → `%`.
+  - Collapsed panels: rows all `0px` → `grid-template-rows: 0fr`; a box of no height with `overflow: hidden|clip` and content (parent not collapsed) → `height: 0px`.
+  - Analyze `pagesCrawled` = addresses without a query string (Recreate's rule), `pageVariants` = the rest (additive); Check step shows "(+N addresses with “?…” counted as the same page)". Old analyses keep their count until checked again.
+  - Verified on live panscience (`/`, `/about`, `/ventures`, `/contact`): hero `min-height: 100dvh`, content centred at 50 %, FAQ grids `0fr`. Tests: `recreate-viewport.test.js`.
+    Suite: 269 pass, 3 fail = the 2 known `netGuard` + `recreate-reveal` "timing, easing…" ('sampled' vs 'transition', load-dependent: 3/3 pass alone; the test only uses `settle()`, untouched).
+    Temporary diagnostics `server/scratch-*.mjs` (hover original vs copy, probe + IR on live pages, test-server driver `scratch-run.mjs` on PORT 4010 / `SAS_DATA_DIR=C:\sasd2`,
+    preview checkers `scratch-faq.mjs` / `scratch-states.mjs`, live click probe `scratch-clicks.mjs`, original's behaviour `scratch-orig.mjs`): delete when the plan is done.
+  - Not a bug of ours (2026-10-06): panscience itself dropped to 17 sitemap URLs and "News 0 / Blogs 0" on /media (posts still online, unlinked), so Analyze finds 21 pages, not 62.
+- **Step 2 (working controls)**: all general, in all four stacks (same fixed `js/motion.js`, same CSS).
+  - **Panels that open on click** (accordions, dropdowns): `capture/clicks.js` reads the panel's area (`commonPath` of the control and what it opened, never `body`) open and closed again
+    (`readRegion`: display / visibility / opacity / transforms / height / max-height / grid rows / paddings / margins / colours + ::before/::after) → `widget.state = { root, parts[{ rel, changes }], added? }`.
+    `ir/motion.js openDecls`: collapsed sizes open to their content (`height: auto`, `max-height: none`, rows `1fr`), other size changes left out; equal controls (signature group) get the effect at the same
+    relative places → tokens `wN` (area), `wt` (control), `wNpK` (part); `motionCss`: `[data-motion~=wN].is-open [data-motion~=wNpK] { … }`; `js/motion.js` toggles `is-open` + `aria-expanded` on click.
+    `added` (panel rendered only when open) → skipped + counted. `report.generate.motion.widgets`.
+  - **Tabs / carousels / filtered lists** (`capture/states.js`, after the click probe, ≤ 30 s per page, nothing on pages without switching controls): groups of equal controls (`planSets`; the selected
+    dot/tab is added back from its row, `rowControls`) are clicked in turn and the area that changes is snapshotted per state (`snapshotPage({ rootPath })`, inherits from its real parent); next /
+    previous are matched to the state they lead to (offset ±1); elements that change without a click (rotators, marquees, counters: `selfChanging` 1.2 s) are never evidence. On the area's snapshot node:
+    `states = { initial, count, controls[rel], nav[{ rel, offset }], variants[{ index, body }] }` (a page snapshot caught between two timer states takes the current one). Assets of the states are collected
+    (`assets/collect.js`). `ir/states.js expandStates` (in `buildPageTree`, before cleanup; cleanup keeps elements with `stateAttrs`): each state = a `hidden` copy of the area right after it,
+    `data-w-set` / `data-w-i` on areas, `data-w-go="sN:i"` on controls (next/previous → neighbour state), copies' nodes linked as `stateTwins` (hover / reveal tokens reach them).
+    CSS `[data-w-set][hidden] { display: none !important }`; script shows the state a `data-w-go` control points to. No script = first state only.
+  - Probe fixes: a control inside a control skipped as duplicate is not a separate control (FAQ arrow spans); signature = tag | role | classes | ARIA state attributes | parent | grandparent (inline-styled
+    sites: FAQ buttons and category chips had the same signature, so the FAQ was never probed); a query / hash change on the same path (`?tab=join`) is not leaving the page (`samePage`).
+    Pending page timers cleared when the probe starts (`stopTimers`: autoplay changed the page mid-probe → false "hover" panels, panels "not closing"); what moves by itself (own transform /
+    opacity only, 1.5 s, `selfMoving` → `clicks.noise`) is removed from every reading (the hero word rotator made FAQ items look like tabs); visibility counts clipping by a collapsed overflow
+    parent (accordion answers keep their own size); removed elements count as hidden (paths kept with the "before" reading; filters remove cards); fixed / sticky bars and sub-pixel translates are
+    not moves (header sliding on scroll, reveals finishing); after scrolling a control into view: settle 700 ms and aim again (smooth scroll). A probe that leaves the remaining controls at other
+    paths (a tab inserting a section) → the start address is loaded again before the next probe and at the end (`controlsInPlace`, `stats.reloads`). Click budget 10 → 20 s per page.
+  - States: a set needs a change outside its own controls (a card expanding is its own panel); sets whose controls lie inside what another set switches are content; same-area sets merge only on the
+    same row; state budget follows the work (4 s per control, 30–60 s). A carousel (has next / previous) starts at what a **first-time visitor** sees right after load (`firstVisit`: fresh context,
+    intervals and ≥ 1 s timers disabled by an init script; panscience remembers the last slide in storage and autoplays after ~5 s), matched exactly or by visible text (`closestByText` ≥ 0.9).
+  - The fit pass and fidelity skip state copies (`verify/layout.js stateCopy`): /ventures fidelity 53 → 70 again. Toggles (`aria-expanded`, `<summary>`) are probed first (a page whose chips need
+    reloads used up the budget before its FAQ). The window-height probe reads layout sizes (`offsetWidth/Height`): a spinning box's bounding box looked like a size following the window (caught by
+    `recreate-generate.test.js`).
+  - Verified (test server, panscience, 9 pages + home): FAQ opens/closes on /, /about, /approach, /contact (and /ventures captured after the toggle-first fix, live probe); homepage carousel 24 states,
+    starts at Accern like a first visit, dots / next / previous identical to the original; /ventures chips 26 → 8 → 2 → 26 cards (original 27 → 8 → 2 → 27: one card fewer in "All", open);
+    safety passed, fidelity 88, visual diff 89, no page errors. Recreate 426 s for 10 pages (was 271 s before step 2: click budget 20 s + state capture ~35 s on the homepage, ~20 s on /ventures).
+    Full suite: 274 pass, 2 fail (known `netGuard`), 9 skipped.
+- **Rebuild from the last visit (regenerate from saved capture)** — `recreate/replay.js`: `POST …/recreate { reuseCapture: true }` takes the latest finished recreate whose `capture/manifest.json` +
+  `assets/manifest.json` exist; the job (`recreate/jobs.js`, `payload.reuseFrom`) runs with `replayStages` in place of inspect / assets: both folders hard-linked (copy fallback), `ctx.pages` /
+  `ctx.discovery` (origin, skipped, robots, llms) / `ctx.livePages` / `ctx.assets` from the manifests, report pages / motion / discovery / assets / page+asset manual items carried, warning
+  "Rebuilt from the capture of …". The capture manifest now keeps `discovery.robots` / `llms` (older ones: robots from the earlier report's `crawl-files` fix, llms from its `site/llms.txt`).
+  Generate → build → preview → re-audit as usual; the new recreate can be the source of the next. panscience 10 pages: **34 s instead of 426 s**, identical results. App: step 2 "Rebuild from
+  the last visit" (shown once a copy exists). Tests: `recreate-replay.test.js`.
+- **Step 3 (fonts + hovers)**:
+  - Fonts: the copy was right at 1440 (182/200 identical) but the original sizes text with the window (panscience `h1` = min(5vw, 76px), h2 / p too): on any narrower laptop window the copy's
+    text was bigger. `capture/typography.js probeTypography` (desktop view, after the height probe): font-size / line-height / letter-spacing of every element with own text read again at
+    1920 / 1600 / 1280 / 1100 → `node.ty` when they change; `ir/typography.js fluidType` (in `normalizeView`, desktop): `fluidLength` fits `Nvw` / `calc(Nvw ± Apx)` with caps → `min()` / `max()`
+    / `clamp()` (a cap only where the line would pass the value the page stopped at); line-height / letter-spacing with a constant ratio to a fluid size → unitless ratio / `em`. Test
+    `recreate-typography.test.js`: copy = original at 1920 / 1366 / 1280 / 1024.
+  - Hovers: CSS hovers were complete (8 pages, totals equal; "extra" findings were the diagnostic missing the original's smooth-scrolled elements). The mouse probe aimed before a smooth
+    scroll settled (script-owned scroll) → re-aim after the settle; hover time follows the candidates (0.9 s each, ≤ min(15 s, 2 × budget)) instead of 60 % of 8 s (6 of 32 probed).
+    Test `recreate-hover-probe.test.js` (20 script-only hovers on a long smooth-scrolling page, all found).
+  - **The user's list during step 3** (all general):
+    1. Tabs whose content is another section that a tab inserts (contact "Partner with us / Join us"): `planSets` takes, under a broad common ancestor, the 2–3 child parts holding controls
+       / changes (`parts`, one virtual node, per-part `states` sharing `group`); when a tab adds/removes sections (paths shift) and the row has ≤ 3 controls, the whole common area (`main`).
+    3. Short messages a click shows ("X's website hasn't been added yet"): `capture/notices.js` (fixed element shown, not undone by the click; fresh first visit with timers on; ≤ 30
+       controls, 30 s; message snapshotted per control, duration measured) → `body.notices`; `ir/states.js expandNotices`: hidden copies at the end of body `data-w-note-of`, controls (+ twins
+       with the same text) `data-w-note="nK:ms"`; script shows / hides. A bare `href="#"` stays `#` (`ir/index.js`; was resolved to "./" → the click reloaded the page). Fixed elements are not
+       evidence for state sets.
+    4. Flex-column items narrower than a stretching column (an "Apply now" button 140 px became 319 px): `width: fit-content` (one line of text) or `min(Npx, 100%)`; not when its own max-width explains it.
+    5. One FAQ answer at a time: after the probe, open A then B of a list of equal panels; A closed by itself → `exclusive`; the list container (common path of the group) `data-w-one`
+       (+ twins); the script closes the other open panels in it.
+    6. Small boxes taller than their one line of text (26 px numbered circles became 26 × 17 ovals): `min-height` = captured height (`styles.js`, `inheritedPx`).
+    7. Carousels that move on by themselves: `watchAutoplay` (fresh first visit, timers on, ≤ 13 s, ≥ 2 steps; none in 7 s = no autoplay) → `states.autoplay { ms, step }` → `data-w-auto`;
+       the script advances it, a click restarts the wait (panscience 4.8 s).
+    8. Bars that change once the page is scrolled (header white with dark links past the hero): `capture/scrollstate.js` (fixed / sticky bars ≥ half the width, read at the top and down
+       the page with the mouse wheel — a script-owned scroll ignores scrollTo — threshold to ~10 px, what a small scroll back up undoes is left out) → `node.scrolled`; IR `sN` tokens +
+       `data-scroll-at` (`0.9vh` when near one window height); CSS `.is-scrolled`; script toggles it.
+  - Stacks: a fresh toolchain install got Rollup 4.64 (Vite 6.3.5 only asks ^4.34): its tree-shaking took 3–5 min on a React bundle (4.40.2: 2 s) → `overrides: { rollup: 4.40.2 }` in the
+    react-vite / mern toolchains and the generated package.json (`pinnedOverrides`; `toolchainStatus` checks the pinned copy, also nested `vite/node_modules/rollup`). MERN server tests:
+    `--test-reporter=tap` + parser for both formats (Node 24's default "spec" output read as 0 of 0).
+    9. Hero word rotator shifted by the measured word width (`heroCycleShift` keyframes read custom properties the page sets per element): the snapshot now keeps custom properties
+       where they differ from the parent's (set on that element), so they reach its rule.
+    10. Contact headline in the tab states: states are snapshotted at 1440 × 900 only → twins with the same text take the original's `ty` / `vp` (`ir/states.js`), and a state replacing
+       the page snapshot carries them over (`carryProbes`); px minimums from text size (small boxes, inline-level boxes, one-line boxes) are not written for fluid text
+       (a 76 px `min-height` kept the line taller than the 68 px of the shrunk text).
+    11. Centred one-line boxes (the message) get `width: max-content` (+ `max-width: 100%`), not a px width a slightly wider rendering wraps in.
+    12. The locked cards were the last of 27 (cap was 12): notices now try up to 30 controls in 30 s, the next one clicked right away (waiting only when the message did not change).
+  - Autoplay timing measured inside the page (`watchText`: visible text every 100 ms, page clock); from Node a snapshot per reading took up to 0.5 s under load (1.5 s read as 2 s).
+  - Verified (fresh capture home + 9 pages, then rebuilt from it; `scratch-checkall.mjs`): all 12 of the user's points OK (contact headline at 1280: 66.56 px, top 233, height 68 = original);
+    fidelity 88 → 93, visual diff 89 → 94; React / Next / MERN: DOM 10/10, pixels 1.0, hydration clean, safety passed. Full suite: 288 pass, 2 fail (known `netGuard`), 4 skipped.
+    `recreate-mern.test.js` now asks `node --test` for TAP (Node 24 prints "spec"; the test had been skipped while the toolchains were missing).
+- **Added to the plan by the user during step 2** (not started): fonts look bigger in the copy than in the original (match sizes); the new site must fix every problem of the old site's audit
+  (fix checklist). **Testing rule (user)**: while fixing, run only the test file of the feature touched; the full suite only when a step is complete (before its commit) and before a merge.
+  **Fast iteration (asked)**: capture once, then regenerate from the saved capture (generate + build only) for steps that do not change the capture; full fresh Recreate only for the final check.
+  - Tests: `recreate-widgets.test.js` (accordion: every item incl. unprobed ones opens/closes, aria-expanded, no-script closed; React-like carousel: re-rendered panel, dots, next/previous wrap, noise counter).
+
 ### Desktop only for now (WIP, user: "remove tablet and mobile from frontend and backend, keep only desktop") — merged into `phase-4a`
 One view everywhere; the rest **parked, not deleted**.
 - Server: `recreate/views.js ENABLED_VIEWS = ['desktop']` (`RECREATE_VIEWS`, `VIEW_IDS`, `MEDIA_VIEWS` follow it; `KNOWN_VIEWS` / `KNOWN_VIEW_IDS` / `KNOWN_MEDIA_VIEWS` = all four, used by IR tree, CSS emitter, loading fixer so an older

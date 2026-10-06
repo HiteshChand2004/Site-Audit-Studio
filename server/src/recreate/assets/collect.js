@@ -163,6 +163,9 @@ export function collectAssets(captures, extra = {}) {
         for (const m of pseudo?.content?.matchAll(CSS_URL) ?? []) if (!m[2].startsWith('data:')) add(m[2], 'image', 'pseudo', slug, base);
       }
       for (const child of node.children ?? []) walk(child, node);
+      // The other states of a tab panel / carousel / filtered list (capture/states.js): shown when a visitor clicks.
+      for (const s of node.states?.variants ?? []) walk(s.body, parent);
+      for (const n of node.notices ?? []) for (const item of n.items) walk(item.body, node);
     };
     walk(data.body);
 

@@ -15,11 +15,15 @@
 // ir.motion = { version, hover: [{ token, decls, pseudo?, kids? }], focus: [...], reveal: [{ token, opacity?, translate?,
 //   scale?, rotate?, filter?, duration, easing }], delays: [ms], loops: [{ token, name, keyframes, timing }], script: boolean }
 import { readFile } from 'node:fs/promises';
+import { commonPath } from '../capture/clicks.js';
 import path from 'node:path';
+import { KNOWN_VIEWS } from '../views.js';
 import { mapUrls } from './styles.js';
 import { isElement } from './tree.js';
 
 export const MOTION_VERSION = 1;
+// The height of the first screen of the desktop capture: a reveal below it is seen by a visitor who scrolls to it.
+const FIRST_SCREEN = KNOWN_VIEWS.find((v) => v.id === 'desktop')?.height ?? 900;
 const EASING = /^(linear|ease|ease-in|ease-out|ease-in-out|cubic-bezier\(\s*-?[\d.]+(\s*,\s*-?[\d.]+){3}\s*\)|steps\(\s*\d+\s*(,\s*[\w-]+\s*)?\))$/;
 const MAX_DELAY = 2000;
 const NO_VALUE = /^(null|undefined)$/;
@@ -53,6 +57,31 @@ function changeDecls(changes, assetFile) {
   return out;
 }
 
+const isZero = (v) => /^0(\.0+)?(px)?$/.test(String(v ?? '').trim());
+
+/**
+ * The open state of a panel as declarations: the value each changed property has when open. A size that was collapsed
+ * opens to its content (height auto, max-height none, grid rows 1fr), never to the px the capture measured, which is
+ * right for one screen width only; other size changes are the consequence of the panel opening and left out.
+ */
+export function openDecls(changes, assetFile) {
+  const out = {};
+  for (const [prop, [closed, open]] of Object.entries(changes ?? {})) {
+    if (open == null || NO_VALUE.test(String(open))) continue;
+    if (prop === 'height' || prop === 'max-height') {
+      if (isZero(closed)) out[prop] = prop === 'height' ? 'auto' : 'none';
+      continue;
+    }
+    if (prop === 'grid-template-rows') {
+      const rows = String(closed ?? '').trim().split(/\s+/);
+      if (rows.length && rows.every(isZero)) out[prop] = String(open).trim().split(/\s+/).map((r) => (isZero(r) ? '0fr' : '1fr')).join(' ');
+      continue;
+    }
+    Object.assign(out, changeDecls({ [prop]: [closed, open] }, assetFile));
+  }
+  return out;
+}
+
 /** A reveal as a from-state: what the element starts at, relative to where it ends (its own styles). */
 export function revealSpec(el) {
   const from = el.from;
@@ -78,6 +107,43 @@ export function revealSpec(el) {
   if (e && EASING.test(e)) spec.easing = e;
   return spec;
 }
+
+/**
+ * The mouse probe tries a few members of a group of equal elements (same tag, role, classes and parent: the same
+ * styles and the same handlers); the effect it found is given to the other members too, with the descendants it
+ * changed found at the same place inside each member. Effects the stylesheets declare (`source: 'css'`) are already
+ * read on every element they apply to.
+ */
+export function spreadToGroups(list, groups) {
+  const bySig = new Map((groups ?? []).filter((g) => g.paths?.length).map((g) => [g.sig, g]));
+  if (!bySig.size) return { list, spread: 0 };
+  const have = new Set(list.map((e) => e.path));
+  const out = [...list];
+  let spread = 0;
+  for (const e of list) {
+    const g = e.source !== 'css' && e.sig ? bySig.get(e.sig) : null;
+    if (!g) continue;
+    for (const p of g.paths) {
+      if (have.has(p)) continue;
+      have.add(p);
+      const kids = (e.kids ?? []).filter((k) => k.path.startsWith(`${e.path}>`)).map((k) => ({ ...k, path: p + k.path.slice(e.path.length) }));
+      const entry = { ...e, path: p, spreadFrom: e.path };
+      if (kids.length) entry.kids = kids;
+      else delete entry.kids;
+      out.push(entry);
+      spread++;
+    }
+  }
+  return { list: out, spread };
+}
+
+/**
+ * Is this reveal one a visitor sees by scrolling to it? A scroll trigger is; so is a reveal the capture called 'timed'
+ * (a timer or "reveal on the first scroll" fired while the element was still far below the screen) when the element sits
+ * below the first screen: the visitor who scrolls there sees it come in. A timed one in the first screen (rotating
+ * headline, page-load entrance) is not a scroll effect.
+ */
+export const isScrollReveal = (el) => el.trigger?.kind === 'scroll' || (el.trigger?.kind === 'timed' && Number(el.rect?.[1]) >= FIRST_SCREEN);
 
 const specKey = (s) => JSON.stringify([s.opacity ?? null, s.translate ?? null, s.scale ?? null, s.rotate ?? null, s.filter ?? null, s.duration, s.easing]);
 
@@ -105,18 +171,38 @@ function scriptLoop(loop) {
  * @param {Map<string, object>} byPath  page path → its motion.json
  */
 export function applyMotion(site, byPath) {
-  const reg = { hover: new Map(), focus: new Map(), reveal: new Map(), loops: [], delays: new Set() };
+  const reg = { hover: new Map(), focus: new Map(), reveal: new Map(), loops: [], delays: new Set(), widgets: new Map(), scrolled: new Map() };
   const stats = {
     pages: 0,
-    hover: { elements: 0, effects: 0, skipped: { script: 0, unmapped: 0, empty: 0 } },
-    focus: { elements: 0, effects: 0, skipped: { unmapped: 0, empty: 0 } },
-    reveal: { elements: 0, effects: 0, replay: 0, skipped: { timed: 0, unmapped: 0, flat: 0 } },
+    scrolled: { bars: 0 },
+    widgets: { elements: 0, effects: 0, skipped: { noState: 0, renderedOnOpen: 0, unmapped: 0, empty: 0, kinds: {} } },
+    hover: { elements: 0, effects: 0, fromRules: 0, spread: 0, skipped: { script: 0, unmapped: 0, empty: 0 } },
+    focus: { elements: 0, effects: 0, fromRules: 0, spread: 0, skipped: { unmapped: 0, empty: 0 } },
+    reveal: { elements: 0, effects: 0, replay: 0, belowFold: 0, skipped: { timed: 0, unmapped: 0, flat: 0 } },
     loops: { carried: 0, rebuilt: 0, skipped: [] },
   };
   const tokenize = (node, token) => {
-    node.motionTokens ??= [];
-    if (!node.motionTokens.includes(token)) node.motionTokens.push(token);
+    // The same element in the other states of a tab panel / carousel (ir/states.js) gets the same effect.
+    for (const n of [node, ...(node.stateTwins ?? [])]) {
+      n.motionTokens ??= [];
+      if (!n.motionTokens.includes(token)) n.motionTokens.push(token);
+    }
   };
+  // Areas with click-switched states (ir/states.js): they need the script, and the rule that keeps hidden states hidden.
+  let stateSets = 0;
+  let notices = 0;
+  for (const tree of site.pages) {
+    const ids = new Set();
+    const walk = (n) => {
+      if (!isElement(n)) return;
+      if (n.stateAttrs?.['data-w-set']) ids.add(n.stateAttrs['data-w-set']);
+      if (n.stateAttrs?.['data-w-note-of']) notices++;
+      n.children.forEach(walk);
+    };
+    walk(tree.root);
+    stateSets += ids.size;
+  }
+  stats.states = { sets: stateSets, notices };
 
   for (const tree of site.pages) {
     const motion = byPath.get(tree.info.path);
@@ -134,7 +220,9 @@ export function applyMotion(site, byPath) {
 
     // Hover and focus: one effect per distinct set of changed values.
     const pseudoDecls = (pseudo) => Object.fromEntries(Object.entries(pseudo ?? {}).map(([which, c]) => [which, changeDecls(c, assetFile)]).filter(([, d]) => Object.keys(d).length));
-    for (const [kind, list, prefix, s] of [['hover', motion.hover ?? [], 'h', stats.hover], ['focus', motion.focus ?? [], 'f', stats.focus]]) {
+    for (const [kind, found, prefix, s] of [['hover', motion.hover ?? [], 'h', stats.hover], ['focus', motion.focus ?? [], 'f', stats.focus]]) {
+      const { list, spread } = spreadToGroups(found, motion.groups);
+      s.spread += spread;
       for (const entry of list) {
         const node = nodes.get(entry.path);
         if (!node) {
@@ -167,15 +255,18 @@ export function applyMotion(site, byPath) {
         tokenize(node, effect.token);
         kids.forEach((k, i) => tokenize(k.node, effect.kids[i].token));
         s.elements++;
+        if (entry.source === 'css') s.fromRules++;
       }
     }
 
-    // Scroll reveal: those the scroll started (timed ones - rotating headlines, timers - are not scroll effects).
+    // Scroll reveal: those the scroll started, and timed ones below the first screen (isScrollReveal); timed ones in the
+    // first screen (rotating headlines, timers) are not scroll effects.
     for (const el of motion.reveal?.elements ?? []) {
-      if (el.trigger?.kind !== 'scroll') {
+      if (!isScrollReveal(el)) {
         stats.reveal.skipped.timed++;
         continue;
       }
+      if (el.trigger.kind !== 'scroll') stats.reveal.belowFold++;
       const node = nodes.get(el.path);
       if (!node) {
         stats.reveal.skipped.unmapped++;
@@ -254,13 +345,114 @@ export function applyMotion(site, byPath) {
       tokenize(node, entry.token);
       stats.loops.rebuilt++;
     }
+
+    // Scroll states of fixed / sticky bars (capture/scrollstate.js): past `at` the bar gets `is-scrolled` (js/motion.js) and the
+    // stylesheet holds its look there. A threshold near the window height is kept as a share of it (the hero above is one screen).
+    for (const bar of [...nodes.values()].filter((n, i, all) => n.cpath && n.views?.desktop?.scrolled && all.indexOf(n) === i)) {
+      const sc = bar.views.desktop.scrolled;
+      const parts = sc.parts.map((p) => {
+        const pseudo = {};
+        for (const which of ['before', 'after']) {
+          const d = p[which] ? changeDecls(p[which], assetFile) : {};
+          if (Object.keys(d).length) pseudo[which] = d;
+        }
+        return { rel: p.rel, decls: changeDecls(p.changes, assetFile), ...(Object.keys(pseudo).length && { pseudo }) };
+      }).filter((p) => Object.keys(p.decls).length || p.pseudo);
+      if (!parts.length) continue;
+      const key = JSON.stringify(parts);
+      let effect = reg.scrolled.get(key);
+      if (!effect) {
+        const token = `s${reg.scrolled.size + 1}`;
+        effect = { token, parts: parts.map((p, i) => ({ ...p, token: p.rel === '' ? token : `${token}p${i + 1}` })) };
+        reg.scrolled.set(key, effect);
+      }
+      tokenize(bar, effect.token);
+      for (const p of effect.parts) {
+        if (p.rel === '') continue;
+        const partNode = nodes.get(`${bar.cpath}>${p.rel}`);
+        if (partNode) tokenize(partNode, p.token);
+      }
+      const share = sc.at / sc.viewport;
+      bar.stateAttrs = { ...bar.stateAttrs, 'data-scroll-at': share >= 0.5 && share <= 1.5 ? `${Math.round(share * 1000) / 1000}vh` : String(Math.round(sc.at)) };
+      stats.scrolled.bars++;
+    }
+
+    // Click widgets (capture/clicks.js). A panel a click opens (accordion answer, dropdown): its area gets `wN`, the
+    // control `wt`, each part the click changed `wNpK`; js/motion.js toggles `is-open` on the area, the stylesheet holds the
+    // open state. Equal controls (the other questions of the FAQ) get the same effect at the same places inside their area.
+    const done = new Set();
+    for (const w of motion.clicks?.widgets ?? []) {
+      const ws = stats.widgets;
+      if (w.kind !== 'disclosure' || w.opensOn !== 'click') {
+        ws.skipped.kinds[`${w.kind}${w.opensOn === 'hover' ? ' (hover)' : ''}`] = (ws.skipped.kinds[`${w.kind}${w.opensOn === 'hover' ? ' (hover)' : ''}`] ?? 0) + 1;
+        continue;
+      }
+      if (!w.state) {
+        ws.skipped.noState++;
+        continue;
+      }
+      if (w.state.added) {
+        ws.skipped.renderedOnOpen++; // the page renders the panel only when open: nothing in the copy to show
+        continue;
+      }
+      const parts = w.state.parts.map((p) => {
+        const pseudo = {};
+        for (const which of ['before', 'after']) {
+          const d = p[which] ? openDecls(p[which], assetFile) : {};
+          if (Object.keys(d).length) pseudo[which] = d;
+        }
+        return { rel: p.rel, decls: openDecls(p.changes, assetFile), ...(Object.keys(pseudo).length && { pseudo }) };
+      }).filter((p) => Object.keys(p.decls).length || p.pseudo);
+      if (!parts.length) {
+        ws.skipped.empty++;
+        continue;
+      }
+      const key = JSON.stringify(parts);
+      let effect = reg.widgets.get(key);
+      if (!effect) {
+        const token = `w${reg.widgets.size + 1}`;
+        effect = { token, kind: 'disclosure', parts: parts.map((p, i) => ({ ...p, token: p.rel === '' ? token : `${token}p${i + 1}` })) };
+        reg.widgets.set(key, effect);
+        ws.effects++;
+      }
+      const depth = w.trigger.split('>').length - w.state.root.split('>').length;
+      // One panel at a time (an accordion, capture/clicks.js): the list holding all its controls is marked; js/motion.js
+      // closes the other open panels in it.
+      if (w.exclusive && w.group?.paths?.length > 1) {
+        const list = nodes.get(commonPath(w.group.paths));
+        // Also in the other states of an area that holds the list (ir/states.js twins).
+        for (const n of list ? [list, ...(list.stateTwins ?? [])] : []) n.stateAttrs = { ...n.stateAttrs, 'data-w-one': '' };
+      }
+      for (const trigger of [w.trigger, ...(w.group?.paths ?? [])]) {
+        if (done.has(trigger)) continue;
+        done.add(trigger);
+        const segs = trigger.split('>');
+        const rootPath = segs.slice(0, segs.length - depth).join('>');
+        const rootNode = nodes.get(rootPath);
+        const triggerNode = nodes.get(trigger);
+        if (!rootNode || !triggerNode || depth < 0) {
+          ws.skipped.unmapped++;
+          continue;
+        }
+        tokenize(rootNode, effect.token);
+        tokenize(triggerNode, 'wt');
+        for (const p of effect.parts) {
+          if (p.rel === '') continue;
+          const partNode = nodes.get(`${rootPath}>${p.rel}`);
+          if (partNode) tokenize(partNode, p.token);
+        }
+        ws.elements++;
+      }
+    }
   }
 
   const hover = [...reg.hover.values()];
   const focus = [...reg.focus.values()];
   const reveal = [...reg.reveal.values()];
   const loops = reg.loops.map(({ key, ...rest }) => rest);
-  const any = hover.length || focus.length || reveal.length || loops.length;
+  const widgets = [...reg.widgets.values()];
+  const scrolled = [...reg.scrolled.values()];
+  const any = hover.length || focus.length || reveal.length || loops.length || widgets.length || stateSets || scrolled.length || notices;
   const motion = any ? {
     version: MOTION_VERSION,
     hover,
@@ -268,8 +460,13 @@ export function applyMotion(site, byPath) {
     reveal,
     delays: [...reg.delays].sort((a, b) => a - b),
     loops,
-    // The generated script is only needed for the reveal (IntersectionObserver); hover, focus and loops are CSS.
-    script: reveal.length > 0,
+    widgets,
+    states: stateSets,
+    notices,
+    scrolled,
+    // The generated script is needed for the reveal (IntersectionObserver), the click widgets, the switched states and the
+    // scroll states; hover, focus and loops are CSS.
+    script: reveal.length > 0 || widgets.length > 0 || stateSets > 0 || scrolled.length > 0 || notices > 0,
   } : null;
   return { motion, stats };
 }

@@ -9,7 +9,7 @@ import { emitCss, CSS_FILE } from '../css.js';
 import { headHtml } from '../html.js';
 import { MOTION_FILE, MOTION_JS, MOTION_TAG } from '../motionScript.js';
 import { headTags, safeJsonLd } from '../walk.js';
-import { pinnedVersions } from '../../../toolchains/index.js';
+import { pinnedOverrides, pinnedVersions } from '../../../toolchains/index.js';
 import { findShared, pascal } from './components.js';
 import { jsxNode, visibleChildren } from './jsx.js';
 import { scaffold } from './scaffold.js';
@@ -90,7 +90,7 @@ export function emitReact(ir, opts = {}) {
   for (const m of css.matchAll(/url\("(?:\.\.\/)+assets\/([^"]+)"\)/g)) assets.add(m[1]);
   const styles = `${css.replace(/url\("(?:\.\.\/)+assets\//g, 'url("/assets/')}\n/* The page markup lives in this wrapper; it must not become a box of its own. */\n#root {\n  display: contents;\n}\n`;
 
-  const project = scaffold({ ir, meta, names, pinned: pinnedVersions('react-vite'), siteName: opts.siteName ?? ir.siteName ?? null, stylesheet: CSS_FILE });
+  const project = scaffold({ ir, meta, names, pinned: pinnedVersions('react-vite'), overrides: pinnedOverrides('react-vite'), siteName: opts.siteName ?? ir.siteName ?? null, stylesheet: CSS_FILE });
   for (const [file, content] of project) files.set(file, content);
   files.set('src/styles/site.css', styles);
   files.set('src/page-meta.json', `${JSON.stringify(meta, null, 2)}\n`);

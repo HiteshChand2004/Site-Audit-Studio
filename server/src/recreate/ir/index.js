@@ -314,6 +314,8 @@ function pageBody(t, site, stats) {
     guardAttributes(attrs, stats.safety.attrs);
     // Motion tokens (ir/motion.js): the stylesheet's hover / reveal / loop rules select on them.
     if (n.motionTokens?.length) attrs['data-motion'] = n.motionTokens.join(' ');
+    // States of tabs / carousels / filtered lists (ir/states.js): which state an area is, which state a control shows.
+    if (n.stateAttrs) Object.assign(attrs, n.stateAttrs);
     const out = { t: n.tag, sid: n.sid, attrs, children: [] };
     if (n.class) out.class = n.class;
     const id = n.attrs.id;
@@ -323,6 +325,12 @@ function pageBody(t, site, stats) {
 
     switch (n.tag) {
       case 'a': {
+        // A bare "#" is a control that stays on the page (a script handles the click), not a link to the page itself:
+        // resolved, it became "./" and the click reloaded the page.
+        if (/^\s*#?\s*$/.test(n.attrs.href ?? 'x')) {
+          attrs.href = '#';
+          break;
+        }
         const link = resolveLink(n.href ?? n.attrs.href, pageUrl);
         if (link) {
           attrs.href = link;
@@ -454,6 +462,12 @@ export function buildIR(site) {
     for (const decl of Object.values(rule.parts)) {
       for (const name of (decl['animation-name'] ?? '').split(/,\s*/)) if (name) animationNames.add(name);
       for (const f of (decl['font-family'] ?? '').split(/,\s*/)) if (f) families.add(f.replace(/^["']|["']$/g, '').toLowerCase());
+    }
+  }
+  // An animation that starts on hover / focus (ir/motion.js) needs its keyframes too.
+  for (const effect of [...(site.motion?.hover ?? []), ...(site.motion?.focus ?? [])]) {
+    for (const decl of [effect.decls, ...Object.values(effect.pseudo ?? {}), ...(effect.kids ?? []).map((k) => k.decls)]) {
+      for (const name of (decl?.['animation-name'] ?? '').split(/,\s*/)) if (name && name !== 'none') animationNames.add(name);
     }
   }
   const ir = {

@@ -16,6 +16,7 @@
 // - containers taller than their content keep a min-height.
 import { BLOCK_TAGS, deepText, displayOf, isElement, isText, VIEW_IDS } from './tree.js';
 import { ClassNamer, nameHint } from './names.js';
+import { fluidType } from './typography.js';
 
 // Must match the inherited set of capture/snapshot.js.
 export const INHERITED = new Set([
@@ -123,6 +124,17 @@ const isSmallBox = (w, h, ratio) => w <= 400 && h <= 200 && (ratio == null || ra
 
 const lineHeightPx = (fontSize, lineHeight) => (!lineHeight || lineHeight === 'normal' ? fontSize * 1.2 : px(lineHeight) ?? parseFloat(lineHeight) * fontSize);
 
+// An inherited property of `node` in view `v`: its own captured value, else the nearest ancestor's (captured styles are
+// diffs against the parent for inherited properties).
+const inheritedValue = (node, chain, v, prop) => {
+  for (const n of [node, ...[...chain].reverse()]) {
+    const value = n.views?.[v]?.style?.[prop];
+    if (value != null) return value;
+  }
+  return null;
+};
+const inheritedPx = (node, chain, v, prop, dflt) => px(inheritedValue(node, chain, v, prop)) ?? dflt;
+
 // Height of the content box: padding and borders are not lines of text (a 40 px button with 14 px
 // text is one line).
 const contentHeight = (d) => d.rect[3]
@@ -170,6 +182,140 @@ function containingWidth(chain, v, position) {
 }
 
 /**
+ * Height of the containing block of an absolutely positioned (or fixed) box in view `v`, at the captured window height
+ * and at the taller one of the window-height probe (capture/viewport.js): [captured, probed]. The window itself when no
+ * ancestor is positioned (`windowHeights`, null when unknown).
+ */
+function containingHeights(chain, v, position, windowHeights) {
+  if (position !== 'fixed') {
+    for (let i = chain.length - 1; i > 0; i--) {
+      const d = chain[i].views[v];
+      if (!d || d.hidden) continue;
+      if (/^(relative|absolute|fixed|sticky)$/.test(d.style.position ?? '')) {
+        const borders = num(d.style['border-top-width']) + num(d.style['border-bottom-width']);
+        const [a, b] = d.vp?.h ?? [d.rect[3], d.rect[3]];
+        return [a - borders, b - borders];
+      }
+    }
+  }
+  return windowHeights;
+}
+
+/**
+ * A length that follows the window height: `a` at window height h1, `b` at h2 → `Ndvh` or `calc(Ndvh ± Cpx)`.
+ * Null when the change is not a steady share of the window (content that merely grew).
+ */
+export function followWindow(a, b, [h1, h2]) {
+  const k = (b - a) / (h2 - h1);
+  if (!(k >= 0.05 && k <= 2)) return null;
+  const share = Math.round(k * 1000) / 10;
+  const c = a - (share / 100) * h1;
+  if (Math.abs(b - ((share / 100) * h2 + c)) > 2) return null;
+  const unit = `${share}dvh`;
+  return Math.abs(c) <= 1.5 ? unit : `calc(${unit} ${c < 0 ? '-' : '+'} ${round(Math.abs(c))}px)`;
+}
+
+const TRANSLATE = /^matrix\(1, 0, 0, 1, ([-\d.e]+), ([-\d.e]+)\)$/;
+
+/**
+ * Screen-size-independent sizes and offsets (applied last, over the px values above). A capture reads everything in px
+ * at one window size, so a full-screen hero (min-height: 100vh) came out as 900 px and a box centred with
+ * `top: 50%; left: 50%; transform: translate(-50%, -50%)` as `top: 450px; left: 720px`, right on a 1440 × 900 screen
+ * only. Two kinds of evidence, both general:
+ *   - the centring idiom: an inset at half the containing block with a translate of minus half the own size;
+ *   - the window-height probe (`d.vp`): what changed when the window got taller - a min-height or height that is a
+ *     share of the window becomes dvh, an inset that is a share of its containing block becomes %, an inset that did
+ *     not move is the anchor, and a box held by two fixed insets gets no px height.
+ */
+export function viewportStyle(style, node, v, chain) {
+  const d = node.views[v];
+  const position = d.style.position ?? 'static';
+  const abs = position === 'absolute' || position === 'fixed';
+  const [, , w, h] = d.rect;
+  const size = sizer(node, d.style);
+  const vp = d.vp;
+
+  if (abs && !REPLACED.has(node.tag)) {
+    const m = TRANSLATE.exec(d.style.transform ?? '');
+    if (m) {
+      const [tx, ty] = [parseFloat(m[1]), parseFloat(m[2])];
+      const cbW = containingWidth(chain, v, position);
+      const cbH = containingHeights(chain, v, position, vp?.vh ?? null)?.[0] ?? 0;
+      const left = px(d.style.left);
+      const top = px(d.style.top);
+      const centreX = left != null && cbW > 0 && Math.abs(left - cbW / 2) <= 1 && w > 0 && Math.abs(tx + w / 2) <= 1;
+      const centreY = top != null && cbH > 0 && h > 0 && Math.abs(top - cbH / 2) <= 1 && Math.abs(ty + h / 2) <= 1;
+      if (centreX) {
+        style.left = '50%';
+        delete style.right;
+        // Without the right inset the box would shrink to its content in the room right of the middle: it keeps its
+        // width (100 % when it sits at its max-width, a capped full width; else the px, never wider than the room).
+        if (!style.width && w > 0) {
+          const maxW = px(style['max-width']);
+          if (maxW != null && Math.abs(maxW - size.w(w)) <= 1) style.width = '100%';
+          else {
+            // One line of text (a centred message, a badge): as wide as its text, never a px width a slightly wider
+            // rendering of the same text would wrap in.
+            const oneLine = deepText(node).trim() && !wrapsText(node, v, chain);
+            style.width = oneLine ? 'max-content' : `${Math.ceil(size.w(w))}px`;
+            style['max-width'] ??= '100%';
+          }
+        }
+      }
+      if (centreY) {
+        style.top = '50%';
+        delete style.bottom;
+      }
+      if (centreX || centreY) style.transform = `translate(${centreX ? '-50%' : `${round(tx)}px`}, ${centreY ? '-50%' : `${round(ty)}px`})`;
+    }
+  }
+
+  if (!vp) return style;
+  const [h1, h2] = vp.vh;
+  const heightChanged = Math.abs(vp.h[0] - vp.h[1]) > 1.5;
+
+  if (abs && vp.top && vp.bottom && style.top !== '50%') {
+    const cb = containingHeights(chain, v, position, vp.vh) ?? [0, 0];
+    const kind = ([a, b]) => {
+      if (a == null || b == null) return null;
+      if (Math.abs(a - b) <= 1) return { value: `${round(a)}px`, stable: true };
+      if (cb[0] > 0 && cb[1] > 0 && Math.abs(cb[0] - cb[1]) > 1.5 && Math.abs(a / cb[0] - b / cb[1]) <= 0.003) return { value: pct(a / cb[0]) };
+      return null;
+    };
+    const t = kind(vp.top);
+    const b = kind(vp.bottom);
+    if (t?.stable && b?.stable && heightChanged) {
+      // Held by both insets: the height comes from them, on every screen.
+      style.top = t.value;
+      style.bottom = b.value;
+      if (px(style.height) != null) delete style.height;
+    } else {
+      const anchor = t?.stable ? ['top', t] : b?.stable ? ['bottom', b] : t ? ['top', t] : b ? ['bottom', b] : null;
+      if (anchor) {
+        style[anchor[0]] = anchor[1].value;
+        delete style[anchor[0] === 'top' ? 'bottom' : 'top'];
+      }
+    }
+  }
+
+  if (vp.mh) {
+    const value = followWindow(vp.mh[0], vp.mh[1], [h1, h2]);
+    if (value) {
+      style['min-height'] = value;
+      // The px height the capture guessed for a box without in-flow content would cap it at the captured screen.
+      if (px(style.height) != null) delete style.height;
+    }
+  } else if (heightChanged && !(abs && style.top && style.bottom && style.height == null)) {
+    const value = followWindow(size.h(vp.h[0]), size.h(vp.h[1]), [h1, h2]);
+    if (value) {
+      if (px(style.height) != null) style.height = value;
+      if (px(style['min-height']) != null) style['min-height'] = value;
+    }
+  }
+  return style;
+}
+
+/**
  * The declarations of one node in one view, with sizing hints (@w, @rw, @fw) that are resolved
  * across views afterwards.
  */
@@ -203,12 +349,19 @@ export function normalizeView(node, v, chain, opts) {
   const pBox = contentBox(parent, v);
   const pDisplay = pd.style.display ?? displayOf(parent, v);
   const ratioOf = (bw) => (pBox.w > 0 ? size.w(bw) / pBox.w : null);
+  // Text sized with the window (capture/typography.js): px minimums taken from its size at the captured width would keep
+  // the box at that size on other screens (a headline line 76 px tall where the text has shrunk to 68).
+  const fluidText = v === 'desktop' && Boolean(fluidType(d.ty)['font-size']);
 
   if (/grid/.test(display)) {
     const box = contentBox(node, v);
     const gap = num(style['column-gap']);
     if (style['grid-template-columns']) style['grid-template-columns'] = gridTracks(style['grid-template-columns'], box.w, gap);
-    delete style['grid-template-rows'];
+    // Computed rows are the heights of the content, so they are left to the content, except rows collapsed to nothing:
+    // that is a closed panel (an accordion answer at grid-template-rows: 0fr), and without it the panel shows open.
+    const rows = (style['grid-template-rows'] ?? '').trim().split(/\s+/).filter(Boolean);
+    if (rows.length && rows.every((r) => /^0(\.0+)?px$/.test(r)) && node.children.some(isElement)) style['grid-template-rows'] = rows.map(() => '0fr').join(' ');
+    else delete style['grid-template-rows'];
   }
 
   if (position === 'absolute' || position === 'fixed') {
@@ -299,18 +452,29 @@ export function normalizeView(node, v, chain, opts) {
     // around 6 px letters, a 52 px label): minimums restore it without ever cutting or wrapping text.
     // Only small boxes that do not fill their parent: a minimum on a large container would keep it
     // from shrinking between the captured widths.
-    if (contentSized && text && h > 0 && isSmallBox(w, h, ratio)) {
+    if (contentSized && text && h > 0 && isSmallBox(w, h, ratio) && !fluidText) {
       const minW = Math.floor(size.w(w)) - 1;
       const minH = Math.round(size.h(h));
       if (minW > 0 && !style['min-width']) style['min-width'] = `${minW}px`;
       if (minH > 0 && !style.height && !style['min-height']) style['min-height'] = `${minH}px`;
+    }
+    // An item of a flex column that stretches its items, yet narrower than the column: it had a width of its own (a
+    // button at width: fit-content). Without it the copy stretched it across the column (a 140 px button became 319 px).
+    const column = /flex/.test(pDisplay) && /column/.test(pd.style['flex-direction'] ?? '');
+    if (column && !contentSized && !style.width && w > 0) {
+      const room = pBox.w - num(style['margin-left']) - num(style['margin-right']);
+      const maxW = px(style['max-width']);
+      const capped = maxW != null && Math.abs(maxW - size.w(w)) <= 1; // its own max-width already makes it narrower
+      if (room > 0 && w < room - 2 && !capped) {
+        style.width = text && !wrapsText(node, v, chain) ? 'fit-content' : `min(${Math.round(size.w(w))}px, 100%)`;
+      }
     }
   }
 
   // Inline-level boxes (badges, chips, avatars, labels) often have a fixed size larger than their
   // text; without it they shrink to the text. Minimums restore it and can never cut or wrap content
   // (the width one pixel under the captured one, so boxes sharing a line never overflow it).
-  if (/^inline-(block|flex|grid)$/.test(display) && !REPLACED.has(node.tag) && !FORM_CONTROL.has(node.tag)
+  if (/^inline-(block|flex|grid)$/.test(display) && !REPLACED.has(node.tag) && !FORM_CONTROL.has(node.tag) && !fluidText
     && (position === 'static' || position === 'relative') && w > 0 && h > 0 && !fix?.w && isSmallBox(w, h, ratioOf(w))) {
     const minW = Math.floor(size.w(w)) - 1;
     const minH = Math.round(size.h(h));
@@ -329,6 +493,24 @@ export function normalizeView(node, v, chain, opts) {
     return [c];
   });
   const inFlow = flowChildren(node);
+  // A closed panel (height: 0; overflow: hidden - an accordion answer, a collapsed menu): the capture leaves heights
+  // out, so without this the content shows open. A parent of no height holds the collapse itself (grid rows at 0fr).
+  if (h <= 1 && !REPLACED.has(node.tag) && display !== 'inline' && /^(hidden|clip)$/.test(style['overflow-y'] ?? '')
+    && (inFlow.length || hasText) && (pd.rect?.[3] ?? 0) > 1 && !style['max-height']) {
+    style.height = '0px';
+  }
+  // A small box holding one line of text but taller than that line (a numbered circle, a badge, a fixed-height chip): its
+  // height was set, and without it the box shrinks to the line (a 26 px circle became a 26 × 17 oval). A minimum, so text is
+  // never cut. One line: the text fits the content width at an average glyph width.
+  if (hasText && !fluidText && !inFlow.length && !REPLACED.has(node.tag) && !FORM_CONTROL.has(node.tag) && display !== 'inline' && h > 0 && w > 0
+    && isSmallBox(w, h, ratioOf(w)) && !style.height && !style['min-height']) {
+    const fontSize = inheritedPx(node, chain, v, 'font-size', 16);
+    const line = lineHeightPx(fontSize, inheritedValue(node, chain, v, 'line-height'));
+    const padY = num(style['padding-top']) + num(style['padding-bottom']) + num(style['border-top-width']) + num(style['border-bottom-width']);
+    const padX = num(style['padding-left']) + num(style['padding-right']) + num(style['border-left-width']) + num(style['border-right-width']);
+    const oneLine = deepText(node).trim().length * fontSize * 0.62 <= Math.max(0, w - padX);
+    if (oneLine && h - (line + padY) > 4) style['min-height'] = `${size.h(h)}px`;
+  }
   if (!REPLACED.has(node.tag) && !FORM_CONTROL.has(node.tag) && display !== 'inline' && h > 0) {
     if (!inFlow.length && !hasText) {
       // An empty box (divider, colour block, image holder) only has the size it was given. Builders
@@ -361,7 +543,9 @@ export function normalizeView(node, v, chain, opts) {
 
   if (fix?.w) style['@fw'] = { ...fix.w, px: size.w(fix.w.px), ratio: fix.w.ratio == null ? null : fix.w.ratio * (size.w(fix.w.px) / fix.w.px) };
   if (fix?.mh && !(px(style['min-height']) >= size.h(fix.mh))) style['min-height'] = `${size.h(fix.mh)}px`;
-  return style;
+  // Text sized with the window (capture/typography.js): the fluid value instead of the px of the captured width.
+  if (v === 'desktop' && d.ty) Object.assign(style, fluidType(d.ty));
+  return viewportStyle(style, node, v, chain);
 }
 
 /**
