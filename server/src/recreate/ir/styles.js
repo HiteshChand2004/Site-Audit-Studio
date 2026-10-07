@@ -529,6 +529,24 @@ export function normalizeView(node, v, chain, opts) {
       if (minW > 0 && !style['min-width']) style['min-width'] = `${minW}px`;
       if (minH > 0 && !style.height && !style['min-height']) style['min-height'] = `${minH}px`;
     }
+    // A growing item of a flex row narrower than something inside it (a ticker strip wider than its card): the original
+    // kept it from growing to that content (a builder's width: 1px / min-width: 0, which the capture leaves out). Without
+    // it the item takes the content's width (a testimonials box 18 px wider and off centre).
+    if (/flex/.test(pDisplay) && !/column/.test(pd.style['flex-direction'] ?? '') && parseFloat(style['flex-grow'] ?? '0') > 0 && !style['min-width']) {
+      // Something below it wider than its own parent's content box: that width reaches the item's minimum.
+      const innerOf = (n) => {
+        const s = n.views[v].style;
+        return n.views[v].rect[2] - num(s['padding-left']) - num(s['padding-right']) - num(s['border-left-width']) - num(s['border-right-width']);
+      };
+      // A display: contents wrapper has no box: its children count as children of `box` (the nearest real box).
+      const wider = (n, depth, box = n) => depth > 0 && n.children.filter(isElement).some((c) => {
+        const cd = c.views?.[v];
+        if (!cd || cd.hidden || /^(absolute|fixed)$/.test(cd.style.position ?? '')) return false;
+        if (displayOf(c, v) === 'contents') return wider(c, depth, box);
+        return cd.rect[2] > innerOf(box) + 1 || wider(c, depth - 1);
+      });
+      if (w > 0 && wider(node, 4)) style['min-width'] = '0px';
+    }
     // An item of a flex column that stretches its items, yet narrower than the column: it had a width of its own (a
     // button at width: fit-content). Without it the copy stretched it across the column (a 140 px button became 319 px).
     const column = /flex/.test(pDisplay) && /column/.test(pd.style['flex-direction'] ?? '');
