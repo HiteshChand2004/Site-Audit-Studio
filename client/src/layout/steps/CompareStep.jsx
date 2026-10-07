@@ -214,7 +214,7 @@ export default function CompareStep({ project, audit, onGoCreate }) {
           >
             {fullPage ? (
               <FullPageFrame
-                key={`${preview.recreateId}-${page}-${viewport}`}
+                key={`${preview.recreateId}-${preview.startedAt}-${page}-${viewport}`}
                 url={src}
                 width={viewport}
                 height={pageHeight}
@@ -224,7 +224,7 @@ export default function CompareStep({ project, audit, onGoCreate }) {
                 loadingText="Loading the copy…"
               />
             ) : ready ? (
-              <LiveFrame key={preview.recreateId} url={src} width={viewport} sandbox={sandboxFor(preview)} title="The new copy" loadingText="Loading the copy…" />
+              <LiveFrame key={`${preview.recreateId}-${preview.startedAt}`} url={src} width={viewport} sandbox={sandboxFor(preview)} title="The new copy" loadingText="Loading the copy…" />
             ) : preview?.error ? (
               <EmptyState icon={AlertTriangle} title="The preview could not start" action={<Button icon={RotateCw} onClick={() => ensurePreview(project.id)}>Try again</Button>}>
                 {preview.error}

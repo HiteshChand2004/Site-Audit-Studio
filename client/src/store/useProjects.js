@@ -107,7 +107,8 @@ export const useProjects = create((set, get) => ({
     if (data && changed(data, known)) {
       set({ recreateResults: { ...get().recreateResults, [id]: data } });
       if (data.result) await get().ensurePreview(id);
-    } else if (data?.result && get().previews[id]?.recreateId !== data.result.recreateId) {
+    } else if (data?.result) {
+      // Only one preview runs at a time: another tab may have moved it to another website meanwhile.
       await get().ensurePreview(id);
     }
     const shown = get().audit;
