@@ -313,6 +313,53 @@ records them, nothing consumed them) → **3** script-driven hovers (probe budge
   **Fast iteration (asked)**: capture once, then regenerate from the saved capture (generate + build only) for steps that do not change the capture; full fresh Recreate only for the final check.
   - Tests: `recreate-widgets.test.js` (accordion: every item incl. unprobed ones opens/closes, aria-expanded, no-script closed; React-like carousel: re-rendered panel, dots, next/previous wrap, noise counter).
 
+### Fix everything the audit found (branch `fix-all`, worktree `../Website-Audit-fixall`, from `as-is-fixes`) — WIP
+User: the copy must look and work exactly like the original, and change only where that removes a "Still needs work" / "Got worse"
+row; SEO, Performance, Accessibility and Best Practices must beat the original on phone and computer; every page Analyze found must
+be recreated. All general. Decisions (user): fix everything (contrast colours and bad / duplicate titles + descriptions rewritten,
+marked review); "Structured answers" is N/A when neither side has question headings. Diagnosis (real re-audits 2026-10-07): CSS
+render-blocking + unused on every site (one shared `css/site.css`, parchaa 480 KB of which 134 KB unread `--framer-*` properties);
+contrast "regressions" were axe scanning text mid fade-in (#445063 read as #8f9aaa); DOM size = hidden state copies (panscience 2033
+of 2809 elements) + hover-card copies; SEO / AEO / theme-color rows were copied over unchanged.
+- **All pages**: Recreate's discovery read only server HTML (a client-rendered site: 1 page vs Analyze's 22). `inspect.js` now
+  passes the analysis crawl's pages (`analysisPages`, its crawl.json) as `knownUrls` (crawl seeds + `selectPages` source
+  `analysis`) and a browser `render` for shells, like the analysis crawl.
+- **Head** (`ir/seoText.js refineHeadTexts`, after every head is built): titles outside 10–60 or duplicated → page heading /
+  address + site name; descriptions outside 50–160 or duplicated → paragraphs only that page has; homepage keeps valid own text;
+  `theme-color` = brand colour; missing `lang` from the text (`detectLang`, script then stop words, null unless clear).
+- **AEO** (`ir/structuredData.js`, after the tree fixers): WebSite + Organization (name, address, icon, social profiles) on the
+  homepage and FAQPage from question → answer pairs (headings / summary / dt / buttons, accordion panels included), never a type
+  twice; `llms.txt` generated (llmstxt.org) when the original has none (`ir/crawlFiles.js`). Comparator: `aeo.structured-answers`
+  N/A when both details are `NO_QUESTIONS` (`audit/analyzers/aeo.js`).
+- **CSS** (`emit/css.js emitCss(ir, { page })`, `usedCustomProps`): a page's stylesheet holds only its classes and the
+  @keyframes / @font-face they name; custom properties no var() reads are never written. HTML: inline `<style>` per page
+  (`emitSite({ inlineCss })`, only the final write in generate; fit pass and refine keep the shared file), minified in the build
+  (`build/minify.js minifyInlineStyles`). React / MERN: `page-meta.json` `css` inlined by the prerender, dev server imports the
+  whole sheet. Next.js: `app/**/page.css` per route + `experimental.inlineCss`. `report.fixes` `page-css`.
+- **DOM size**: a state the page does not start in (`out.tpl` = its set) and a card's hovered look (`tpl: 'hover'`) are written in
+  `<template data-w-tpl>` (HTML; JSX via `dangerouslySetInnerHTML` with `emitNode`); `js/motion.js` puts states in place on first
+  use (`materialize`, its reveal elements marked shown) and hover looks on first pointerover / focusin. No script: first state,
+  rest look. `report.fixes` `state-templates`.
+- **Images** (`assets/variants.js`): IR `<img>` carry the width shown per view (`rw`); WebP files at those widths and twice them
+  (never wider than the original, a variant not smaller than the original is not written, animated / SVG / < 12 KB left),
+  `srcset` with `w` + `sizes` from the breakpoints; added to `assets/manifest.json`. `report.fixes` `responsive-images`.
+- **Contrast** (`fixers/contrast.js`, tree fixer, per view): background = nearest backgrounds blended + opacity; below 4.5:1
+  (3:1 large) the colour mixes toward black or white by the smallest amount that passes (+0.08); text over a picture / gradient
+  left and listed. axe now waits ≤ 3 s for ending animations before scanning (`audit/render.js renderHome`, both sides).
+- **Names**: icon-only controls named from what they do (`stateRole` next / previous / item n of N, `wt` toggles "Open menu" /
+  "Show more", two icon buttons side by side = Previous / Next).
+- **Measurement parity**: the re-audit's throwaway server gzips text (`servePreview({ compress })`), as any host does.
+- **Motion rows** (diagnosed side by side on panscience / parchaa): 46 of 48 "missing" hovers were the pairing key — text with
+  vs without spaces between blocks, textContent vs innerText → `reaudit/motion.js hoverKey` (tag + lower-case text without white
+  space, 40 chars), CSS-rule probe reads visible text before aria-label; loop patterns paired by family (`PATTERN_FAMILY`:
+  oscillate = float, drift = marquee). Real losses fixed: a hover that also adds elements keeps its style part (`ir/motion.js`);
+  a DOM change that did not undo with the mouse out is not a hover (`keepReverting`); a loop host is never also a reveal (its
+  animation replaced the loop); loops inside inline SVG get their token on the element inside the markup (`svgTarget`,
+  `tokenizeInSvg`) with rebuilt keyframes. Re-audit page budget 40 → 90 s (a 6600 px page took 46 s and "timed out"), total
+  grows per page (≤ 6 × 75 s).
+- Fixed on the way: regexes that had lost their backslashes (`emit/html.js` pre-wrap detection `split(/s+/)`, `[w-]`;
+  `capture/loops.js repeatOf` `/s+/`). EVIDENCE entries for every new fixer. Tests: `recreate-fix-all.test.js`.
+
 ### Desktop only (WIP, user: "remove tablet and mobile from frontend and backend, keep only desktop") — merged into `phase-4a`; **UNDONE in as-is step 4** (branch `step4-mobile`, see above)
 History: one view everywhere, the rest parked, not deleted. Step 4 listed all four views again and restored what is below; what stays from it: `KNOWN_*` views, the single-view IR path for older
 desktop-only captures, the re-audit "same device on both sides" rule.

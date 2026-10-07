@@ -96,6 +96,17 @@ export const MOTION_JS = `(function () {
       }, ms);
     })(autos[a]);
   }
+  // A card's hovered look (data-w-hv box): put in place the first time the card is pointed at or focused; the stylesheet
+  // then swaps the two on :hover / :focus-within.
+  var hoverIn = function (e) {
+    var box = e.target && e.target.closest ? e.target.closest('[data-w-hv]') : null;
+    if (!box) return;
+    var tpls = [];
+    for (var c = box.firstElementChild; c; c = c.nextElementSibling) if (c.tagName === 'TEMPLATE' && c.getAttribute('data-w-tpl') === 'hover') tpls.push(c);
+    for (var i = 0; i < tpls.length; i++) box.replaceChild(tpls[i].content, tpls[i]);
+  };
+  document.addEventListener('pointerover', hoverIn, { passive: true });
+  document.addEventListener('focusin', hoverIn);
   var noteTimer = null;
   document.addEventListener('click', function (e) {
     // A short message (data-w-note="id:ms"): shown on click, hidden again after ms (0 = until the next one).

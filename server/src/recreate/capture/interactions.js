@@ -336,7 +336,8 @@ function forceRuleStates(opts) {
         if (!path) continue;
         const r = el.getBoundingClientRect();
         out[kind].push({
-          path, tag: el.tagName.toLowerCase(), text: (el.getAttribute('aria-label') || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60),
+          // Visible text first, like the mouse probe (an aria-label the copy adds to a control must not change its key).
+          path, tag: el.tagName.toLowerCase(), text: (el.textContent.trim() || el.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ').slice(0, 60),
           rect: [Math.round(r.left + scrollX), Math.round(r.top + scrollY), Math.round(r.width), Math.round(r.height)],
           source: 'css', changes, ...(Object.keys(pseudo).length && { pseudo }), ...(kidChanges.length && { kids: kidChanges }), transition: transitionOf.get(el), layout: false, domDelta: 0,
         });
@@ -670,6 +671,9 @@ export function keepReverting(rest, back, d) {
     out.layout = false;
     delete out.rect;
   }
+  // Elements added or removed that did not come back with the mouse out (a menu the previous probe opened closing, a
+  // timer re-rendering) were not this element's hover.
+  if (out.domDelta && gone.domDelta) out.domDelta = 0;
   const nothing = !Object.keys(out.changes).length && !out.pseudo && !out.kids && !out.layout && !out.domDelta;
   return nothing ? null : out;
 }

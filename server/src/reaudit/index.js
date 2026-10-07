@@ -69,7 +69,8 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
 
   // connect-src 'self': Lighthouse fetches robots.txt from inside the page (previewHeaders).
   // An app's own scripts run (Lighthouse measures what its visitors get); the CSP still allows only the build's own.
-  const served = await servePreview(root, { connectSelf: true, scripts: emitter?.scripts || reportOutputs(report)[stack]?.scripts || false });
+  // Text is gzipped like on any host, so sizes compare with the original's real transfer sizes.
+  const served = await servePreview(root, { connectSelf: true, compress: true, scripts: emitter?.scripts || reportOutputs(report)[stack]?.scripts || false });
   try {
     // Pages at the URL the output serves them (a stack may move some).
     const outputPageList = outputPages(report, stack);
@@ -105,7 +106,8 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
         const slugOf = new Map((report.pages ?? []).map((p) => [p.outPath, p.slug]));
         const targets = outputPageList.filter((p) => slugOf.has(p.outPath) && oldMotion.has(slugOf.get(p.outPath)))
           .map((p) => ({ slug: slugOf.get(p.outPath), urlPath: p.path.replace(/^\//, '') }));
-        const measured = await measureNewMotion({ origin: served.origin, pages: targets, deadline: Date.now() + 150000 });
+        // The time follows the pages measured (≤ 6): long pages take 40–60 s each.
+        const measured = await measureNewMotion({ origin: served.origin, pages: targets, deadline: Date.now() + Math.max(150000, Math.min(targets.length, 6) * 75000) });
         motion = { ...motionItems(oldMotion, measured.pages), failed: measured.failed, skipped: measured.skipped };
       } catch (err) {
         motion = { items: [], summary: null, failed: [{ slug: '*', error: String(err?.message ?? err).split('\n')[0] }], skipped: [] };

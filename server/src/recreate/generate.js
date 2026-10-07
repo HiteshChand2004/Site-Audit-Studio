@@ -5,8 +5,9 @@
 // site is written again. A round that lowers the layout score is undone. The production build, the
 // safety gate and the verification of dist/ follow in the build step (build/index.js).
 // Writes ir/site.json (the IR the other stack emitters will use) and sets ctx.generated.
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { applyImageVariants, makeImageVariants } from './assets/variants.js';
 import { emitSite } from './emit/html.js';
 import { writeProject } from './emit/write.js';
 import { applyIrFixes, applyTreeFixes, fixReport } from './fixers/index.js';
@@ -21,6 +22,8 @@ import { REFINE_PAGES, refineResponsive } from './verify/refine.js';
 export const FIT_ROUNDS = 2;
 // The fit pass stops starting new rounds this long before the step's time limit.
 const FIT_MARGIN = 25000;
+// Time for making the responsive image files.
+const IMAGES_BUDGET = 60000;
 // Time for the WordPress REST lookup.
 const WP_BUDGET = 30000;
 // Time for the breakpoint / fluid type check against the original's sweep.
@@ -98,6 +101,21 @@ const restoreFixes = (site, saved) => {
   site.pages.forEach((t) => walk(t.root));
 };
 
+const countTemplates = (n) => (!n || 'text' in n ? 0 : (n.tpl ? 1 : 0) + (n.children ?? []).reduce((s, c) => s + countTemplates(c), 0));
+
+// New files of the site's own (responsive images) join the downloaded ones: the build, the exports to other stacks and a
+// rebuild from the saved capture find them through assets/manifest.json.
+async function addToManifest(assetsDir, files, known, assets) {
+  const file = path.join(assetsDir, 'manifest.json');
+  const manifest = JSON.parse(await readFile(file, 'utf8'));
+  const have = new Set(manifest.files.map((f) => f.file));
+  const added = files.filter((f) => !have.has(f.file));
+  manifest.files.push(...added);
+  await writeFile(file, JSON.stringify(manifest, null, 2));
+  for (const f of files) known.add(f.file);
+  if (assets?.files) assets.files.push(...added.filter((f) => !assets.files.some((x) => x.file === f.file)));
+}
+
 /** @param {object} ctx  pipeline context: needs ctx.pages (inspect) and ctx.assets (assets) */
 export async function generateStage(ctx) {
   const { report } = ctx;
@@ -145,14 +163,24 @@ export async function generateStage(ctx) {
   // After the fixers: headings are final (FAQ questions are read from them).
   const structured = addStructuredData(site);
   let irFixes;
+  let imageVariants = new Map();
   const build = () => {
     const built = buildIR(site);
     irFixes = applyIrFixes(built.ir);
+    applyImageVariants(built.ir, imageVariants);
     return built;
   };
 
   ctx.progress(0.15, 'Writing pages');
   let { ir, stats } = build();
+  // Responsive image files (assets/variants.js), made once from the widths the first build shows each image at.
+  ctx.progress(0.17, 'Making responsive images');
+  const images = await makeImageVariants({ ir, assetsDir, deadline: Math.min(Date.now() + IMAGES_BUDGET, ctx.stepDeadline - FIT_MARGIN * 3) });
+  if (images.variants.size) {
+    imageVariants = images.variants;
+    await addToManifest(assetsDir, images.files, known, ctx.assets);
+    ({ ir, stats } = build());
+  }
   let out = emitSite(ir);
   await writeSite(siteDir, out, assetsDir, known);
 
@@ -297,7 +325,39 @@ export async function generateStage(ctx) {
     fit,
     responsive: refined?.summary ?? null,
     motion: { ...motion.stats, script: Boolean(ir.motion?.script) },
+    images: images.stats,
   };
+  // Each page's own CSS inline (emit/html.js inlineCss): what that changed, for the fix checklist.
+  const pageCss = ir.pages.map((p) => Buffer.byteLength(out.files.get(p.outPath).match(/<style>[\s\S]*?<\/style>/)?.[0] ?? ''));
+  report.fixes.push({
+    id: 'page-css',
+    title: 'Each page carries only its own CSS, inline (no render-blocking stylesheet)',
+    status: 'fixed',
+    count: ir.pages.length,
+    open: 0,
+    items: [{ sharedBytes: Buffer.byteLength(out.files.get('css/site.css')), largestPageBytes: Math.max(0, ...pageCss), averagePageBytes: Math.round(pageCss.reduce((a, b) => a + b, 0) / Math.max(1, pageCss.length)) }],
+  });
+  const templates = ir.pages.reduce((n, p) => n + countTemplates(p.body), 0);
+  if (templates) {
+    report.fixes.push({
+      id: 'state-templates',
+      title: `${templates} hidden ${templates === 1 ? 'part' : 'parts'} (other tabs / slides / filters, hovered card looks) kept out of the page until shown`,
+      status: 'fixed',
+      count: templates,
+      open: 0,
+      items: [],
+    });
+  }
+  if (images.stats.images) {
+    report.fixes.push({
+      id: 'responsive-images',
+      title: `Responsive WebP images for ${images.stats.images} ${images.stats.images === 1 ? 'picture' : 'pictures'}`,
+      status: 'fixed',
+      count: images.stats.images,
+      open: 0,
+      items: [{ files: images.stats.files, originalBytes: images.stats.originalBytes, largestServedBytes: images.stats.servedBytes }],
+    });
+  }
   const byPath = new Map(site.pages.map((t) => [t.info.path, t]));
   report.pages = report.pages.map((p) => {
     const t = byPath.get(p.path);

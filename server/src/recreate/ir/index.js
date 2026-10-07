@@ -268,6 +268,9 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
   };
 }
 
+// The template id of a hover card's hovered look (emitters write <template data-w-tpl="hover">).
+export const HOVER_TEMPLATE = 'hover';
+
 const SKIP_ATTRS = new Set(['class', 'style', 'id', 'src', 'srcset', 'href', 'poster', 'action']);
 
 const newSafetyStats = () => ({ elements: 0, attrs: { handlers: 0, scriptUrls: 0, other: 0 }, svg: emptyRemoved(), svgChanged: 0 });
@@ -334,6 +337,8 @@ function pageBody(t, site, stats) {
     // A state the page does not start in (another tab, slide or filter) is written inside a <template> (emitters): not part
     // of the page until the script shows it, so the page's element count stays the original's.
     if (n.stateAttrs?.['data-w-set'] && 'hidden' in n.stateAttrs) out.tpl = n.stateAttrs['data-w-set'];
+    // A card's hovered look (ir/states.js expandHoverCards) waits the same way until the card is first pointed at.
+    else if (n.stateAttrs && 'data-w-hcopy' in n.stateAttrs) out.tpl = HOVER_TEMPLATE;
     if (n.class) out.class = n.class;
     const id = n.attrs.id;
     if (id && (keepIds.has(id) || meaningful(id))) out.id = id;
@@ -372,6 +377,10 @@ function pageBody(t, site, stats) {
         attrs.src = { asset: src };
         if (srcset.length) attrs.srcset = srcset;
         if (!n.attrs.src && lazySrc && !attrs.loading) attrs.loading = 'lazy';
+        // The width it is shown at in each view: the responsive image files are made for these (assets/variants.js).
+        const rw = {};
+        for (const [v, d] of Object.entries(n.views)) if (d && !d.hidden && d.rect?.[2] > 0) rw[v] = Math.round(d.rect[2]);
+        if (Object.keys(rw).length) out.rw = rw;
         break;
       }
       case 'source': {

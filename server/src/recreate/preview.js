@@ -12,6 +12,7 @@
 import { createServer } from 'node:http';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { APP_ORIGIN } from '../audit/frame.js';
 import { RecreateError } from './errors.js';
 import { inlineScriptHashes } from './inlineScripts.js';
@@ -63,9 +64,10 @@ export function previewHeaders(frameAncestors = appOrigins(), { connectSelf = fa
 }
 
 const inside = (base, file) => file === base || file.startsWith(base + path.sep);
+const COMPRESSIBLE = /^\.(html?|css|m?js|json|svg|txt|xml|webmanifest)$/;
 
 /** A preview server for `root` (not listening yet). `port()` is read on each request. */
-function createPreviewServer(root, { port, frameAncestors = appOrigins(), connectSelf = false, scripts = false }) {
+function createPreviewServer(root, { port, frameAncestors = appOrigins(), connectSelf = false, scripts = false, compress = false }) {
   const base = path.resolve(root);
   const headers = previewHeaders(frameAncestors, { connectSelf, scripts });
   let realBase = null;
@@ -106,6 +108,12 @@ function createPreviewServer(root, { port, frameAncestors = appOrigins(), connec
       const sent = scripts === 'inline' && ext === '.html'
         ? previewHeaders(frameAncestors, { connectSelf, scripts, scriptHashes: inlineScriptHashes(body.toString('utf8')) })
         : headers;
+      // Text gzipped like any web host does (the re-audit measures what a visitor would download, as on the original).
+      if (compress && COMPRESSIBLE.test(ext) && body.length > 1024 && /\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''))) {
+        const zipped = gzipSync(body);
+        res.writeHead(200, { ...sent, 'Content-Type': TYPES[ext] ?? 'application/octet-stream', 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' });
+        return res.end(req.method === 'HEAD' ? undefined : zipped);
+      }
       res.writeHead(200, { ...sent, 'Content-Type': TYPES[ext] ?? 'application/octet-stream' });
       res.end(req.method === 'HEAD' ? undefined : body);
     } catch {
@@ -132,9 +140,9 @@ const closeServer = (server) => new Promise((resolve) => {
  * Serves `root` on `port` (0 = any free port; a range = the first free port in it).
  * @returns {Promise<{ port: number, origin: string, close: () => Promise<void> }>}
  */
-export async function servePreview(root, { port = 0, range = null, frameAncestors, connectSelf = false, scripts = false } = {}) {
+export async function servePreview(root, { port = 0, range = null, frameAncestors, connectSelf = false, scripts = false, compress = false } = {}) {
   let bound = null;
-  const server = createPreviewServer(root, { port: () => bound, frameAncestors, connectSelf, scripts });
+  const server = createPreviewServer(root, { port: () => bound, frameAncestors, connectSelf, scripts, compress });
   if (range) {
     for (let p = range.first; p <= range.last && bound == null; p++) {
       try {

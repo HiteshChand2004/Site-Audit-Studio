@@ -139,6 +139,17 @@ function deriveName(n, ctx) {
   }
   const hint = hintOf([n.attrs.class, n.attrs.id, n.attrs.name].filter(Boolean).join(' '));
   if (hint) return { value: hint, source: 'class or id of the original element' };
+  // What the control does in the copy (ir/states.js, ir/motion.js): previous / next, a dot of a slider, a toggle.
+  if (n.stateRole?.offset) return { value: n.stateRole.offset > 0 ? 'Next' : 'Previous', source: 'what the control does (next / previous)' };
+  if (n.stateRole?.index != null) return { value: `Show item ${n.stateRole.index + 1} of ${n.stateRole.count}`, source: 'what the control does (picks an item)' };
+  if (n.motionTokens?.includes('wt')) {
+    const inNav = ctx.ancestors?.some((a) => a.tag === 'nav' || a.tag === 'header');
+    return { value: inNav ? 'Open menu' : 'Show more', source: 'what the control does (opens a panel)' };
+  }
+  // Two icon-only buttons side by side (the arrows of a slider): the first goes back, the second forward.
+  const parent = ctx.ancestors?.[ctx.ancestors.length - 1];
+  const pair = parent?.children.filter((c) => isElement(c) && c.tag === n.tag && !clean(deepText(c)));
+  if (n.tag === 'button' && pair?.length === 2) return { value: pair[0] === n ? 'Previous' : 'Next', source: 'one of two arrow buttons side by side' };
   const file = iconFile(n);
   const fromFile = file && (hintOf(file.split('/').pop()) ?? fileLabel(file));
   if (fromFile) return { value: fromFile, source: 'icon file name' };
@@ -171,7 +182,7 @@ export function fixNames(t, ctx) {
     const control = n.tag === 'button' || (n.tag === 'a' && (n.href || n.attrs.href)) || (n.tag === 'input' && /^(button|submit|reset|image)$/i.test(n.attrs.type ?? ''));
     if (control) {
       if (accessibleName(n)) return;
-      const name = deriveName(n, ctx);
+      const name = deriveName(n, { ...ctx, ancestors });
       if (!name) {
         open.push({ page: t.info.path, element: n.tag, detail: 'No text, label or usable hint found' });
         return;

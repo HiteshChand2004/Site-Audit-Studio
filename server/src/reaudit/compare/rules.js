@@ -99,6 +99,14 @@ export const EVIDENCE = {
   'lighthouse.lcp-lazy-loaded': LOADING,
   'lighthouse.prioritize-lcp-image': LOADING,
   'lighthouse.font-display': { fixes: ['font-display'] },
+  'axe.color-contrast': { fixes: ['contrast'], auto: ['color'] },
+  'lighthouse.render-blocking-resources': { fixes: ['page-css'] },
+  'lighthouse.unused-css-rules': { fixes: ['page-css'] },
+  'lighthouse.uses-responsive-images': { fixes: ['responsive-images'] },
+  'lighthouse.modern-image-formats': { fixes: ['responsive-images'] },
+  'lighthouse.uses-optimized-images': { fixes: ['responsive-images'] },
+  'lighthouse.total-byte-weight': { fixes: ['responsive-images', 'page-css'] },
+  'lighthouse.dom-size': { fixes: ['state-templates'] },
 };
 
 /**

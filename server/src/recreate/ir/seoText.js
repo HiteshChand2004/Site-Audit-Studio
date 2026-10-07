@@ -101,12 +101,15 @@ export function refineHeadTexts(trees, siteName) {
     }
   };
 
+  // Duplicates are judged on the original texts (an earlier page's may already be rewritten below).
+  const titles = trees.map((t) => clean(t.head.title));
+  const descriptions = trees.map((t) => clean(t.head.description));
   const used = new Set();
   trees.forEach((t, i) => {
-    const original = clean(t.head.title);
+    const original = titles[i];
     const heading = firstHeading(t.root);
     const label = i === 0 ? '' : pathLabel(t.info.path);
-    const duplicate = original && trees.some((o, j) => j < i && clean(o.head.title) === original);
+    const duplicate = original && titles.some((o, j) => j < i && o === original);
     const candidates = [
       ...(duplicate ? [] : [fitTitle(original, siteName)]),
       heading && fitTitle(`${heading} | ${siteName}`, siteName),
@@ -127,8 +130,8 @@ export function refineHeadTexts(trees, siteName) {
 
   const usedDesc = new Set();
   trees.forEach((t, i) => {
-    const original = clean(t.head.description);
-    const duplicate = original && trees.some((o, j) => j < i && clean(o.head.description) === original);
+    const original = descriptions[i];
+    const duplicate = original && descriptions.some((o, j) => j < i && o === original);
     const heading = firstHeading(t.root);
     const candidates = [
       ...(duplicate || !original ? [] : [fitDescription([original, ...own[i]])]),

@@ -170,11 +170,17 @@ export function expandStates(root) {
     s.controls.forEach((rel, j) => {
       if (rel == null) return; // in another part of the area
       const c = atRel(area, rel);
-      if (c) c.stateAttrs = { ...c.stateAttrs, 'data-w-go': `${id}:${j}` };
+      if (c) {
+        c.stateAttrs = { ...c.stateAttrs, 'data-w-go': `${id}:${j}` };
+        c.stateRole = { index: j, count: s.count }; // a name for an icon-only control (fixers/a11y.js)
+      }
     });
     for (const nav of s.nav ?? []) {
       const c = atRel(area, nav.rel);
-      if (c) c.stateAttrs = { ...c.stateAttrs, 'data-w-go': `${id}:${(((index + nav.offset) % s.count) + s.count) % s.count}` };
+      if (c) {
+        c.stateAttrs = { ...c.stateAttrs, 'data-w-go': `${id}:${(((index + nav.offset) % s.count) + s.count) % s.count}` };
+        c.stateRole = { offset: nav.offset };
+      }
     }
   };
   const walk = (parent) => {

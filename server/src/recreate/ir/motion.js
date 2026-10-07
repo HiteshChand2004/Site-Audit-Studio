@@ -20,6 +20,33 @@ import path from 'node:path';
 import { KNOWN_VIEWS } from '../views.js';
 import { mapUrls } from './styles.js';
 import { isElement } from './tree.js';
+import { load } from 'cheerio';
+
+// The inline <svg> a capture path goes into ("…>svg:1>g:2>line:1"): { svg: its tree node, rest: ['g:2', 'line:1'] }.
+function svgTarget(capturePath, nodes) {
+  const parts = String(capturePath ?? '').split('>');
+  for (let k = parts.length - 1; k > 0; k--) {
+    const n = nodes.get(parts.slice(0, k).join('>'));
+    if (n) return n.tag === 'svg' && n.svg ? { svg: n, rest: parts.slice(k) } : null;
+  }
+  return null;
+}
+
+// Adds a motion token to the element `rest` points at inside the SVG's markup (tag:n = the n-th child with that tag).
+function tokenizeInSvg(svgNode, rest, token) {
+  const $ = load(svgNode.svg, { xml: { xmlMode: true } }, false);
+  let el = $.root().children().filter((i, x) => x.name?.toLowerCase() === 'svg').first();
+  for (const seg of rest) {
+    const [tag, n] = seg.split(':');
+    el = el.children().filter((i, x) => x.name?.toLowerCase() === tag).eq(Math.max(0, Number(n) - 1));
+    if (!el.length) return false;
+  }
+  const tokens = new Set(String(el.attr('data-motion') ?? '').split(/\s+/).filter(Boolean));
+  tokens.add(token);
+  el.attr('data-motion', [...tokens].join(' '));
+  svgNode.svg = $.xml();
+  return true;
+}
 
 export const MOTION_VERSION = 1;
 // The height of the first screen of the desktop capture: a reveal below it is seen by a visitor who scrolls to it.
@@ -256,10 +283,9 @@ export function applyMotion(site, byPath) {
           s.skipped.unmapped++;
           continue;
         }
-        if (entry.domDelta) {
-          s.skipped.script = (s.skipped.script ?? 0) + 1; // the effect adds or removes elements: a script, not styles
-          continue;
-        }
+        // The effect also adds or removes elements (a dropdown a script opens): that part is a script's, its own style changes
+        // (background, colours) are still rebuilt.
+        if (entry.domDelta) s.skipped.script = (s.skipped.script ?? 0) + 1;
         const decls = changeDecls(entry.changes, assetFile);
         const pseudo = pseudoDecls(entry.pseudo);
         const kids = [];
@@ -288,7 +314,14 @@ export function applyMotion(site, byPath) {
 
     // Scroll reveal: those the scroll started, and timed ones below the first screen (isScrollReveal); timed ones in the
     // first screen (rotating headlines, timers) are not scroll effects.
+    // An element that loops (a ticker strip) only seemed to "reveal" because it moves by itself; its loop is rebuilt instead
+    // (a reveal's animation on the same element would replace the loop's).
+    const loopHosts = new Set((motion.loops?.loops ?? []).filter((l) => !l.pseudo).map((l) => l.path));
     for (const el of motion.reveal?.elements ?? []) {
+      if (loopHosts.has(el.path)) {
+        stats.reveal.skipped.loop = (stats.reveal.skipped.loop ?? 0) + 1;
+        continue;
+      }
       // Timed ones in the first screen are the page's entrance (a hero fading in as the page opens): played once on load
       // with CSS alone (`rl`), unless the element carries an animation of its own (a word rotator, a loop) or repeats.
       const onLoad = !isScrollReveal(el);
@@ -331,7 +364,11 @@ export function applyMotion(site, byPath) {
 
     // Loops: a CSS animation the element's captured style carries is already in the stylesheet; the others are rebuilt.
     for (const loop of motion.loops?.loops ?? []) {
-      const node = nodes.get(loop.path);
+      let node = nodes.get(loop.path);
+      // A loop inside an inline SVG (dashes running along lines): the SVG is kept as markup, so the token goes on the
+      // element inside it (the SVG sanitizer keeps data-* attributes) and the keyframes are rebuilt like any other loop.
+      const inSvg = node ? null : svgTarget(loop.path, nodes);
+      if (inSvg && !loop.pseudo && !loop.timeline && loop.keyframes?.length >= 2) node = inSvg.svg;
       if (!node) {
         stats.loops.skipped.push({ pattern: loop.pattern, reason: 'unmapped' });
         continue;
@@ -341,7 +378,7 @@ export function applyMotion(site, byPath) {
         continue;
       }
       const own = loop.pseudo ? node.views.desktop?.[loop.pseudo === '::before' ? 'before' : 'after']?.style : node.views.desktop?.style;
-      if (loop.source === 'css-animation' && loop.inStylesheet && loop.name && String(own?.['animation-name'] ?? '').split(/,\s*/).includes(loop.name)) {
+      if (!inSvg && loop.source === 'css-animation' && loop.inStylesheet && loop.name && String(own?.['animation-name'] ?? '').split(/,\s*/).includes(loop.name)) {
         stats.loops.carried++;
         continue;
       }
@@ -373,7 +410,12 @@ export function applyMotion(site, byPath) {
         entry = { key, token: `l${reg.loops.length + 1}`, name: `m-l${reg.loops.length + 1}`, ...built };
         reg.loops.push(entry);
       }
-      tokenize(node, entry.token);
+      if (inSvg) {
+        if (!tokenizeInSvg(inSvg.svg, inSvg.rest, entry.token)) {
+          stats.loops.skipped.push({ pattern: loop.pattern, reason: 'unmapped' });
+          continue;
+        }
+      } else tokenize(node, entry.token);
       stats.loops.rebuilt++;
     }
 
@@ -525,9 +567,10 @@ export function applyMotion(site, byPath) {
     notices,
     hoverCards,
     scrolled,
-    // The generated script is needed for the reveal (IntersectionObserver), the click widgets, the switched states and the
-    // scroll states; hover, focus and loops are CSS.
-    script: reveal.length > 0 || widgets.some((w) => !w.on) || stateSets > 0 || scrolled.length > 0 || notices > 0,
+    // The generated script is needed for the reveal (IntersectionObserver), the click widgets, the switched states, the
+    // scroll states and the hover cards (their hovered look waits in a <template> until first pointed at); hover, focus
+    // and loops are CSS.
+    script: reveal.length > 0 || widgets.some((w) => !w.on) || stateSets > 0 || scrolled.length > 0 || notices > 0 || hoverCards > 0,
   } : null;
   return { motion, stats };
 }

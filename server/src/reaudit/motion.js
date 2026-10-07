@@ -10,7 +10,9 @@ import { launchBrowser } from '../audit/render.js';
 import { measureMotion } from '../recreate/capture/measure.js';
 import { isScrollReveal } from '../recreate/ir/motion.js';
 
-const PAGE_BUDGET_MS = 40000;
+// A long page: settling (≤ 8 s), loops (a scroll window at a time, ≤ 12 × 2.5 s, + ≤ 9 s of slow movers), hover (≤ 15 s) and
+// focus. 40 s was set before the loop probe scrolled the page; a 6600 px page took 46 s and was reported as failed.
+export const PAGE_BUDGET_MS = 90000;
 const MAX_PAGES = 6;
 // A little more than the capture of the original had (8 s): the probes go through the candidates in the same order, so the
 // recreate must get at least as far, or an element the original reached would look missing just because time ran out.
@@ -90,6 +92,13 @@ function overlap(a, b) {
   return matched;
 }
 
+// Tag + the first letters of the text without any white space: the original's markup often has no space between blocks
+// ("10+Government Agencies") where the copy's has one, and the CSS-rule probe reads textContent while the mouse probe reads
+// innerText. Neither is a different element.
+const hoverKey = (h) => `${h.tag}|${String(h.text ?? '').toLowerCase().replace(/\s+/g, '').slice(0, 40)}`;
+// Names the two loop probes give the same motion (a recorded path vs the rebuilt keyframes).
+const PATTERN_FAMILY = { oscillate: 'float', float: 'float', sway: 'float', drift: 'marquee', marquee: 'marquee', ticker: 'marquee', spin: 'spin' };
+
 /** What the comparison counts on one side. */
 export function summarize(motion) {
   // The reveals the recreate rebuilds (ir/motion.js isScrollReveal), counted the same way on both sides.
@@ -98,9 +107,10 @@ export function summarize(motion) {
   const loops = (motion.loops?.loops ?? motion.loops ?? []).filter((l) => !l.timeline);
   return {
     reveal: { count: reveal.length, durations: reveal.map((e) => e.timing?.duration), replay: reveal.filter((e) => e.replay).length },
-    hover: { keys: hover.map((h) => `${h.tag}|${h.text ?? ''}`), props: new Map(hover.map((h) => [`${h.tag}|${h.text ?? ''}`, Object.keys(h.changes ?? {})])) },
-    // By pattern only: a loop the original drove with script has no duration, while its rebuilt CSS animation has one.
-    loops: { keys: loops.map((l) => l.pattern), count: loops.length },
+    hover: { keys: hover.map(hoverKey), props: new Map(hover.map((h) => [hoverKey(h), Object.keys(h.changes ?? {})])) },
+    // By pattern family only: a loop the original drove with script has no duration (and is named from its recorded path),
+    // while its rebuilt CSS animation has one (and is named from its keyframes).
+    loops: { keys: loops.map((l) => PATTERN_FAMILY[l.pattern] ?? l.pattern), count: loops.length },
   };
 }
 

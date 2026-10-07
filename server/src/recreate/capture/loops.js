@@ -166,7 +166,7 @@ export async function findScriptLoops(opts) {
     const kids = [...el.children].filter((c) => c.getBoundingClientRect().width > 0);
     const n = kids.length;
     if (n < 2) return null;
-    const sig = kids.map((c) => [c.tagName, (c.textContent || '').trim().replace(/s+/g, ' ').slice(0, 60), c.querySelector('img')?.getAttribute('src') ?? '', c.childElementCount].join('|'));
+    const sig = kids.map((c) => [c.tagName, (c.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60), c.querySelector('img')?.getAttribute('src') ?? '', c.childElementCount].join('|'));
     for (let k = 1; k <= n / 2; k++) {
       let same = true;
       for (let i = 0; i + k < n && same; i++) same = sig[i] === sig[i + k];
