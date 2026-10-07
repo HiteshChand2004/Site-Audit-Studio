@@ -136,8 +136,11 @@ test('the stylesheet: hover for pointer devices, focus, reveal under .js-motion,
   assert.match(css, /\[data-motion~="h1"\]:hover::after \{\n {4}width: 100%;/);
   assert.match(css, /\[data-motion~="h1"\]:hover \[data-motion~="h1k1"\] \{\n {4}opacity: 1;/);
   assert.match(css, /\[data-motion~="f1"\]:focus-visible \{\n {2}outline-color: #2563eb;\n {2}outline-style: solid;/);
-  assert.match(css, /@media \(prefers-reduced-motion: no-preference\) \{\n {2}\.js-motion \[data-motion~="r1"\]:not\(\.is-in\) \{\n {4}opacity: 0;\n {4}translate: 0px 16px;/);
-  assert.match(css, /\.js-motion \[data-motion~="r1"\]\.is-in \{\n {4}animation: m-r1 700ms cubic-bezier\(0\.16, 1, 0\.3, 1\) var\(--md, 0ms\) backwards;/);
+  assert.match(css, /@media \(prefers-reduced-motion: no-preference\) \{\n {2}\.js-motion \[data-motion~="rv"\]\[data-motion~="r1"\]:not\(\.is-in\) \{\n {4}opacity: 0;\n {4}translate: 0px 16px;/);
+  assert.match(css, /\.js-motion \[data-motion~="rv"\]\[data-motion~="r1"\]\.is-in \{\n {4}animation: m-r1 700ms cubic-bezier\(0\.16, 1, 0\.3, 1\) var\(--md, 0ms\) backwards;/);
+  // The same effect as a first-screen entrance (`rl`): played once on load, no script and no hidden state.
+  assert.match(css, /\[data-motion~="rl"\]\[data-motion~="r1"\] \{\n {4}animation: m-r1 700ms/);
+  assert.doesNotMatch(css, /\[data-motion~="rl"\][^{]*:not\(\.is-in\)/);
   assert.match(css, /\[data-motion~="d70"\] \{\n {4}--md: 70ms;/);
   assert.match(css, / {2}@keyframes m-l1 \{\n {4}0% \{\n {6}transform: translateY\(0px\);\n {6}animation-timing-function: ease;/);
   assert.match(css, /\[data-motion~="l1"\] \{\n {4}animation: m-l1 1200ms ease-in-out infinite alternate;/);

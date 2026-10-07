@@ -21,7 +21,7 @@ import { attachProbe, probeViewportHeight } from './viewport.js';
 
 // Clicking through the states of tabs / carousels / filtered lists of one page (most pages have none: no time used). The
 // limit follows the work (capture/states.js, ~3 s per control) within these bounds.
-const STATES_BUDGET_MS = { min: 30000, max: 60000, perControl: 4000 };
+const STATES_BUDGET_MS = { min: 30000, max: 100000, perControl: 4000 }; // 24 carousel slides took ~51 s
 
 export { VIEWS };
 const firstLine = (err) => String(err?.message ?? err).split('\n')[0].trim();

@@ -243,6 +243,14 @@ records them, nothing consumed them) → **3** script-driven hovers (probe budge
     19. Hover / focus rules of content only a tab / filter state shows (contact "What we look for" cards, `.hoverLiftSm:hover`): read while each state
        is shown (`interactions.js cssStateEffects`, ≤ 12 states), stored per part on the variant (`effects`), the copy's nodes get their own paths
        (`<area>#v<i>>…`) and `stateEffects`, which `ir/motion.js` adds to the page's hover / focus list.
+    20. React / MERN dev mode (`npm run dev`): the shell has no page head, so `js/motion.js` (menus, tabs, reveals, notices…) never loaded and nothing
+       worked in a downloaded project run with the dev server. `src/main.jsx` now renders with `flushSync` and then adds the script when the site has
+       one (`scaffold.js`); a built page keeps it in its head.
+    21. The faint-element wait of `revealArea` (18) only continues while elements are still appearing: a carousel's hidden slides stay hidden, and
+       24 slides had run past the state limit (homepage carousel lost its states and autoplay). `STATES_BUDGET_MS.max` 60 → 100 s.
+    22. Page-load entrances (timed reveals in the first screen: a builder's hero fading in) are rebuilt: token `rl` + the effect's `rN`, the same
+       `@keyframes m-rN` played once on load with CSS only (no hidden state, no script); skipped when the element carries an animation of its own
+       (word rotators, loops) or repeats. Scroll reveals now use `[data-motion~=rv][data-motion~=rN]` so `rl` elements are never hidden.
   - Autoplay timing measured inside the page (`watchText`: visible text every 100 ms, page clock); from Node a snapshot per reading took up to 0.5 s under load (1.5 s read as 2 s).
   - Verified (fresh capture home + 9 pages, then rebuilt from it; `scratch-checkall.mjs`): all 12 of the user's points OK (contact headline at 1280: 66.56 px, top 233, height 68 = original);
     fidelity 88 → 93, visual diff 89 → 94; React / Next / MERN: DOM 10/10, pixels 1.0, hydration clean, safety passed. Full suite: 288 pass, 2 fail (known `netGuard`), 4 skipped.

@@ -147,10 +147,15 @@ async function revealArea(p) {
     }
   };
   finish();
-  const faint = () => [el, ...el.querySelectorAll('*')].some((n) => parseFloat(getComputedStyle(n).opacity) < 0.05 && n.getBoundingClientRect().width > 2);
-  for (let t = 0; t < 1500 && faint(); t += 150) {
+  // Waited for only while elements are still appearing: hidden on purpose (the other slides of a carousel) stays hidden.
+  const faint = () => [el, ...el.querySelectorAll('*')].filter((n) => parseFloat(getComputedStyle(n).opacity) < 0.05 && n.getBoundingClientRect().width > 2).length;
+  let before = faint();
+  for (let t = 0; t < 1500 && before; t += 150) {
     await pause(150);
     finish();
+    const now = faint();
+    if (now >= before) break;
+    before = now;
   }
   return true;
 }

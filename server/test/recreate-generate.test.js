@@ -389,8 +389,8 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.match(rawServices, /<script src="\.\.\/js\/motion\.js" defer><\/script>\s*<\/head>/);
   assert.equal(await readRaw('js/motion.js'), MOTION_JS);
   const motionCssText = await readRaw('css/site.css');
-  assert.match(motionCssText, /@media \(prefers-reduced-motion: no-preference\) \{[\s\S]*\.js-motion \[data-motion~="r1"\]:not\(\.is-in\) \{\n {4}opacity: 0;\n {4}translate: 0px 40px;/);
-  assert.match(motionCssText, /\.js-motion \[data-motion~="r1"\]\.is-in \{\n {4}animation: m-r1 400ms ease var\(--md, 0ms\) backwards;/);
+  assert.match(motionCssText, /@media \(prefers-reduced-motion: no-preference\) \{[\s\S]*\.js-motion \[data-motion~="rv"\]\[data-motion~="r1"\]:not\(\.is-in\) \{\n {4}opacity: 0;\n {4}translate: 0px 40px;/);
+  assert.match(motionCssText, /\.js-motion \[data-motion~="rv"\]\[data-motion~="r1"\]\.is-in \{\n {4}animation: m-r1 400ms ease var\(--md, 0ms\) backwards;/);
   assert.match(motionCssText, / {2}@keyframes m-r1 \{\n {4}from \{\n {6}opacity: 0;/);
   assert.match(motionCssText, /@media \(hover: hover\) \{[\s\S]*\[data-motion~="h1"\]:hover \{/);
   assert.match(await readRaw('index.html'), /<script src="js\/motion\.js" defer><\/script>/);

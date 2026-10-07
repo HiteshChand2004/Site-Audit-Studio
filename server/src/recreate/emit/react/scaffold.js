@@ -86,8 +86,12 @@ export function scaffold({ ir, meta, pinned, overrides = {}, siteName }) {
     '}',
   ));
 
+  // The dev server's shell has no page head, so the generated behaviour script (menus, tabs, reveals, js/motion.js) is
+  // loaded once the page is drawn; a built page has it in its head already.
+  const motion = Boolean(ir.motion?.script);
   files.set('src/main.jsx', lines(
     "import { hydrateRoot, createRoot } from 'react-dom/client';",
+    "import { flushSync } from 'react-dom';",
     "import './styles/site.css';",
     "import { pageForPath } from './pages.js';",
     '',
@@ -96,7 +100,17 @@ export function scaffold({ ir, meta, pinned, overrides = {}, siteName }) {
     '// No top-level await: a page chunk imports the shared chunk this module lives in, so waiting for it here would deadlock.',
     'pageForPath(window.location.pathname).load().then(({ default: Page }) => {',
     '  if (container.hasChildNodes()) hydrateRoot(container, <Page />);',
-    '  else createRoot(container).render(<Page />);',
+    '  else {',
+    '    const root = createRoot(container);',
+    '    flushSync(() => root.render(<Page />));',
+    ...(motion ? [
+      "    if (!document.querySelector('script[src=\"/js/motion.js\"]')) {",
+      "      const s = document.createElement('script');",
+      "      s.src = '/js/motion.js';",
+      '      document.head.appendChild(s);',
+      '    }',
+    ] : []),
+    '  }',
     '});',
   ));
 

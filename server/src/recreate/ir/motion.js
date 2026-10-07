@@ -272,12 +272,15 @@ export function applyMotion(site, byPath) {
     // Scroll reveal: those the scroll started, and timed ones below the first screen (isScrollReveal); timed ones in the
     // first screen (rotating headlines, timers) are not scroll effects.
     for (const el of motion.reveal?.elements ?? []) {
-      if (!isScrollReveal(el)) {
+      // Timed ones in the first screen are the page's entrance (a hero fading in as the page opens): played once on load
+      // with CSS alone (`rl`), unless the element carries an animation of its own (a word rotator, a loop) or repeats.
+      const onLoad = !isScrollReveal(el);
+      const node = nodes.get(el.path);
+      if (onLoad && (el.replay || !node || String(node.views?.desktop?.style?.['animation-name'] ?? 'none') !== 'none')) {
         stats.reveal.skipped.timed++;
         continue;
       }
-      if (el.trigger.kind !== 'scroll') stats.reveal.belowFold++;
-      const node = nodes.get(el.path);
+      if (!onLoad && el.trigger.kind !== 'scroll') stats.reveal.belowFold++;
       if (!node) {
         stats.reveal.skipped.unmapped++;
         continue;
@@ -294,8 +297,9 @@ export function applyMotion(site, byPath) {
         reg.reveal.set(key, effect);
         stats.reveal.effects++;
       }
-      tokenize(node, 'rv');
+      tokenize(node, onLoad ? 'rl' : 'rv');
       tokenize(node, effect.token);
+      if (onLoad) stats.reveal.onLoad = (stats.reveal.onLoad ?? 0) + 1;
       const delay = Math.min(MAX_DELAY, Math.round((el.offsetMs ?? 0) / 10) * 10);
       if (delay >= 20) {
         reg.delays.add(delay);

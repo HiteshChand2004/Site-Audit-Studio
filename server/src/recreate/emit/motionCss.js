@@ -82,8 +82,10 @@ export function motionCss(m, opts) {
     const rules = [];
     for (const r of m.reveal) {
       const from = revealFrom(r);
-      rules.push(block(`.js-motion ${sel(r.token)}:not(.is-in)`, D(from, '    '), '  '));
-      rules.push(block(`.js-motion ${sel(r.token)}.is-in`, `    animation: m-${r.token} ${r.duration}ms ${r.easing} var(--md, 0ms) backwards;`, '  '));
+      rules.push(block(`.js-motion ${sel('rv')}${sel(r.token)}:not(.is-in)`, D(from, '    '), '  '));
+      rules.push(block(`.js-motion ${sel('rv')}${sel(r.token)}.is-in`, `    animation: m-${r.token} ${r.duration}ms ${r.easing} var(--md, 0ms) backwards;`, '  '));
+      // An entrance of the first screen: played once as the page opens, no script needed.
+      rules.push(block(`${sel('rl')}${sel(r.token)}`, `    animation: m-${r.token} ${r.duration}ms ${r.easing} var(--md, 0ms) backwards;`, '  '));
       rules.push(`  @keyframes m-${r.token} {\n    from {\n${D(from, '      ')}\n    }\n  }`);
     }
     for (const ms of m.delays) rules.push(block(sel(`d${ms}`), `    --md: ${ms}ms;`, '  '));
