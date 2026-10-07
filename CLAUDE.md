@@ -835,7 +835,7 @@ API: `GET/POST /api/projects`, `GET/PATCH/DELETE /api/projects/:id` (PATCH: `max
 
 ## Currently dummy / known issues
 - Never-analyzed projects get the **dummy** audit (`isDummy: true`, "Dummy data" badge) and a wireframe OLD preview. The fix checklist is the sample (`isDummy: true`) + re-audit state until a re-audit finishes.
-- Only one preview at a time: selecting another project with a recreate moves it. A link to a non-recreated page opens the live original inside the preview frame (without script).
+- One preview per project (`recreate/preview.js`, own port each in 5100–5199): two tabs on two websites no longer take each other's preview (they did, every few seconds, once tab focus re-requested it). A newer recreate / stack build replaces only that project's preview. A link to a non-recreated page opens the live original inside the preview frame (without script).
 - Recreate CSS: font sizes / line heights are px per breakpoint unless fluid type was adopted; between captured widths layout relies on %/max-width/fr heuristics.
 - A Lighthouse run takes ~20–40 s (mobile, then desktop); a healthy site's analysis is a little over a minute; slow sites/machines up to the 6-min limit.
 - Pre-Phase-3 audits have no screenshots / desktop metrics (UI asks to re-run Analyze).
