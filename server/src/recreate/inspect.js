@@ -1,9 +1,10 @@
 // Recreate step 1, "Inspecting pages": page discovery, then a Playwright capture of every selected
 // page at 1440 / 768 / 375. Chromium runs behind the SSRF egress proxy, like Analyze.
 // Writes capture/manifest.json and sets ctx.pages / ctx.discovery for the later steps.
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { launchBrowser } from '../audit/render.js';
+import { launchBrowser, renderHtml } from '../audit/render.js';
+import { projectDir } from '../db/index.js';
 import { createSharedCache, sharedCacheEnabled } from '../audit/sharedCache.js';
 import { startEgressProxy } from '../security/egressProxy.js';
 import { capturePage } from './capture/index.js';
@@ -33,31 +34,21 @@ const once = (fn) => {
   return () => (done ??= fn());
 };
 
+// The pages the analysis this recreate comes from crawled (its crawl.json); none when it is gone or unreadable.
+async function analysisPages(ctx) {
+  if (!ctx.analysis?.id || !ctx.project?.id) return [];
+  try {
+    const crawl = JSON.parse(await readFile(path.join(projectDir(ctx.project.id), 'audit', ctx.analysis.id, 'crawl.json'), 'utf8'));
+    return (crawl.pages ?? []).filter((p) => p.facts && p.status >= 200 && p.status < 300).map((p) => p.url);
+  } catch {
+    return [];
+  }
+}
+
 /** @param {object} ctx  the pipeline context (recreate/index.js) */
 export async function inspectStage(ctx) {
   const { report } = ctx;
   ctx.progress(0, 'Finding pages');
-  const discover = () =>
-    discoverPages({
-      url: ctx.audit.url ?? ctx.project.url,
-      limit: ctx.pageLimit,
-      all: ctx.allPages,
-      signal: ctx.signal,
-      onProgress: (f, message) => ctx.progress(0.2 * f, message),
-    });
-  let discovery;
-  const discoverStarted = Date.now();
-  try {
-    discovery = await discover();
-  } catch (err) {
-    // The homepage could not be loaded because the computer slept or the network dropped: once more when it is back.
-    const network = /Could not load the homepage \((timeout|dns|refused|error)\)/.test(err.message);
-    const again = await recoverFailure(ctx, { step: 'inspect', what: 'finding pages', message: err.message, startedAt: discoverStarted, network, progress: (m) => ctx.progress(0, m) });
-    if (!again) throw err;
-    ctx.progress(0, `Finding pages again (${causeText(again)})`);
-    discovery = await discover();
-  }
-
   const proxy = await startEgressProxy(ctx.netPolicy);
   const closeProxy = once(() => proxy.close());
   ctx.defer(closeProxy);
@@ -77,6 +68,36 @@ export async function inspectStage(ctx) {
     ctx.defer(() => ctx.netCache.close());
   }
 
+  // Every page the analysis found is a candidate (its crawl renders pages whose links a script builds), and pages that
+  // arrive as an empty shell are rendered here too: no page of the site is missed because its links need JavaScript.
+  const knownUrls = await analysisPages(ctx);
+  const render = async (url) => {
+    browser ??= await launchBrowser({ proxy: proxy.url });
+    return renderHtml(browser, url, { cache: ctx.netCache });
+  };
+  const discover = () =>
+    discoverPages({
+      url: ctx.audit.url ?? ctx.project.url,
+      limit: ctx.pageLimit,
+      all: ctx.allPages,
+      knownUrls,
+      render,
+      signal: ctx.signal,
+      onProgress: (f, message) => ctx.progress(0.2 * f, message),
+    });
+  let discovery;
+  const discoverStarted = Date.now();
+  try {
+    discovery = await discover();
+  } catch (err) {
+    // The homepage could not be loaded because the computer slept or the network dropped: once more when it is back.
+    const network = /Could not load the homepage \((timeout|dns|refused|error)\)/.test(err.message);
+    const again = await recoverFailure(ctx, { step: 'inspect', what: 'finding pages', message: err.message, startedAt: discoverStarted, network, progress: (m) => ctx.progress(0, m) });
+    if (!again) throw err;
+    ctx.progress(0, `Finding pages again (${causeText(again)})`);
+    discovery = await discover();
+  }
+
   // The limits follow the work: every page beyond the base set extends this step, the job and the later steps (index.js).
   ctx.scaleToPages?.(discovery.pages.length);
 
@@ -86,7 +107,7 @@ export async function inspectStage(ctx) {
   const stalled = []; // pages abandoned the first time: { i, info }
   const abandoned = []; // their captures, which end when the browser closes
   try {
-    browser = await launchBrowser({ proxy: proxy.url });
+    browser ??= await launchBrowser({ proxy: proxy.url });
     const total = discovery.pages.length;
     // Pages are captured while they still fit in the step's time limit (judged by the slowest page
     // so far): a slow site or a high page limit then keeps the pages captured so far instead of
@@ -166,7 +187,7 @@ export async function inspectStage(ctx) {
     if (stalled.length && !ctx.signal.aborted) {
       await closeBrowser();
       await Promise.race([Promise.all(abandoned), new Promise((r) => setTimeout(r, 10000))]);
-      browser = await launchBrowser({ proxy: proxy.url });
+      browser ??= await launchBrowser({ proxy: proxy.url });
       for (const [n, { i, info }] of stalled.entries()) {
         if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
         if (Date.now() + slowest > deadline()) {

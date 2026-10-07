@@ -5,7 +5,7 @@
 //
 // URLs are root-relative (/assets/…, /about/): the site is meant for a domain root, and a component
 // shared by pages at different depths renders the same markup on each of them.
-import { emitCss, CSS_FILE } from '../css.js';
+import { emitCss, CSS_FILE, minifyCssSync, usedCustomProps } from '../css.js';
 import { headHtml } from '../html.js';
 import { MOTION_FILE, MOTION_JS, MOTION_TAG } from '../motionScript.js';
 import { headTags, safeJsonLd } from '../walk.js';
@@ -15,6 +15,8 @@ import { jsxNode, visibleChildren } from './jsx.js';
 import { scaffold } from './scaffold.js';
 
 export { safeJsonLd, headTags };
+
+const ROOT_RULE = '\n/* The page markup lives in this wrapper; it must not become a box of its own. */\n#root {\n  display: contents;\n}\n';
 
 /** "/about/" for about/index.html, "/" for index.html, "/about.html" for about.html. */
 export function pagePath(outPath) {
@@ -67,6 +69,8 @@ export function emitReact(ir, opts = {}) {
   }
   const meta = [];
   const motionScript = Boolean(ir.motion?.script);
+  const usedVars = usedCustomProps(ir);
+  const rootUrls = (css) => css.replace(/url\("(?:\.\.\/)*assets\//g, 'url("/assets/');
   ir.pages.forEach((page, i) => {
     const name = names[i];
     const used = new Set();
@@ -82,13 +86,15 @@ export function emitReact(ir, opts = {}) {
       bodyClass: page.body.class ?? null,
       // The generated reveal script (emit/motionScript.js) when the site has scroll-reveal effects.
       head: motionScript ? [headHtml(page, refs), `  ${MOTION_TAG}`].join('\n') : headHtml(page, refs),
+      // The page's own stylesheet, inlined in its head by the prerender (like the HTML site): no render-blocking request.
+      css: minifyCssSync(`${rootUrls(emitCss(ir, { page, usedVars }))}${ROOT_RULE}`),
     });
   });
 
-  // The stylesheet: the same CSS as the HTML site, its asset URLs pointing at /assets.
-  const css = emitCss(ir);
+  // The whole stylesheet (the dev server and readers of the project): the same CSS as the HTML site, asset URLs at /assets.
+  const css = emitCss(ir, { usedVars });
   for (const m of css.matchAll(/url\("(?:\.\.\/)+assets\/([^"]+)"\)/g)) assets.add(m[1]);
-  const styles = `${css.replace(/url\("(?:\.\.\/)+assets\//g, 'url("/assets/')}\n/* The page markup lives in this wrapper; it must not become a box of its own. */\n#root {\n  display: contents;\n}\n`;
+  const styles = `${rootUrls(css)}${ROOT_RULE}`;
 
   const project = scaffold({ ir, meta, names, pinned: pinnedVersions('react-vite'), overrides: pinnedOverrides('react-vite'), siteName: opts.siteName ?? ir.siteName ?? null, stylesheet: CSS_FILE });
   for (const [file, content] of project) files.set(file, content);

@@ -92,8 +92,10 @@ export function scaffold({ ir, meta, pinned, overrides = {}, siteName }) {
   files.set('src/main.jsx', lines(
     "import { hydrateRoot, createRoot } from 'react-dom/client';",
     "import { flushSync } from 'react-dom';",
-    "import './styles/site.css';",
     "import { pageForPath } from './pages.js';",
+    '',
+    '// A built page carries its own CSS inline in its head (scripts/prerender.mjs); the dev server loads the whole stylesheet.',
+    "if (import.meta.env.DEV) import('./styles/site.css');",
     '',
     "const container = document.getElementById('root');",
     '// A prerendered page (npm run build) is hydrated; the dev server renders into the empty shell.',
@@ -129,7 +131,8 @@ export function scaffold({ ir, meta, pinned, overrides = {}, siteName }) {
 
   files.set('scripts/prerender.mjs', lines(
     '// After `vite build` and the server build: writes every page as HTML at its original path (dist/about/index.html,',
-    '// dist/contact.html, …): the page head, the built stylesheet and scripts, and the rendered markup.',
+    '// dist/contact.html, …): the page head, its own stylesheet (inline: no render-blocking request), the built scripts',
+    '// and the rendered markup.',
     "import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';",
     "import path from 'node:path';",
     "import { pathToFileURL } from 'node:url';",
@@ -153,6 +156,7 @@ export function scaffold({ ir, meta, pinned, overrides = {}, siteName }) {
     "    '<html' + attr('lang', page.lang) + attr('class', page.htmlClass) + '>',",
     "    '<head>',",
     '    page.head,',
+    "    '  <style>' + page.css + '</style>',",
     "    ...built.map((tag) => '  ' + tag),",
     "    '</head>',",
     "    '<body' + attr('class', page.bodyClass) + '>',",

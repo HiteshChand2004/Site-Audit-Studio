@@ -11,7 +11,7 @@
 // General by design: nothing here knows a site or a platform.
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { analyzeAeo } from '../../audit/analyzers/aeo.js';
+import { analyzeAeo, NO_QUESTIONS } from '../../audit/analyzers/aeo.js';
 import { analyzeCrawl } from '../../audit/analyzers/crawlChecks.js';
 import { analyzeSeo, crawlErrorsItem } from '../../audit/analyzers/seo.js';
 import { examples, itemKey, pathOf, plural } from '../../audit/util.js';
@@ -82,6 +82,9 @@ function analyzerItems(oldRows, newRows) {
         const op = o.parts.find((x) => x.id === p.id);
         items.push({ key: `${key}.${p.id}`, category, title: `${title}: ${p.label}`, before: view(op), after: view(p) });
       }
+    } else if (key === 'aeo.structured-answers' && o?.detail === NO_QUESTIONS && n?.detail === NO_QUESTIONS) {
+      // Neither site has a question on its pages: there is nothing to answer, and content is never invented.
+      items.push({ key, category, title, before: view(o), after: view(n), preset: 'na', note: 'Neither site has question headings, so there is nothing to answer; content is never invented. Add an FAQ section to the site to use this.' });
     } else {
       items.push({ key, category, title, before: view(o), after: view(n) });
     }

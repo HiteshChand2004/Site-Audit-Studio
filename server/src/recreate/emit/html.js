@@ -3,7 +3,7 @@
 // Resolving references and describing nodes/head tags is shared with every stack (walk.js); this file
 // only writes them as HTML text.
 import { relFile } from '../ir/links.js';
-import { CSS_FILE, emitCss } from './css.js';
+import { CSS_FILE, emitCss, usedCustomProps } from './css.js';
 import { MOTION_FILE, MOTION_JS } from './motionScript.js';
 import { describeNode, headTags, relativeRefs, safeJsonLd } from './walk.js';
 
@@ -33,7 +33,7 @@ function svgMarkup(d, ctx) {
 const KEEPS_BREAKS = /^(pre|pre-wrap|pre-line|break-spaces|preserve|preserve-breaks)$/;
 function keepsBreaks(node, inherited, byClass) {
   // The emitted page knows its classes; their rules (base = the widest view) say what white space they set.
-  for (const c of String(node.class ?? '').split(/s+/)) if (c && byClass?.has(c)) return byClass.get(c);
+  for (const c of String(node.class ?? '').split(/\s+/)) if (c && byClass?.has(c)) return byClass.get(c);
   return inherited;
 }
 
@@ -41,7 +41,7 @@ function keepsBreaks(node, inherited, byClass) {
 export function whiteSpaceByClass(rules = []) {
   const out = new Map();
   for (const r of rules) {
-    const m = /^.([w-]+)$/.exec(String(r.selector ?? '').trim());
+    const m = /^\.([\w-]+)$/.exec(String(r.selector ?? '').trim());
     const base = r.parts?.base ?? {};
     const own = base['white-space-collapse'] ?? base['white-space'];
     if (m && own) out.set(m[1], KEEPS_BREAKS.test(String(own).trim()));
@@ -49,7 +49,12 @@ export function whiteSpaceByClass(rules = []) {
   return out;
 }
 
-function emitNode(node, ctx, depth, pretty, keep = false) {
+/** One IR node as HTML (exported for the app stacks, which write a state template's content as HTML). */
+export function emitNode(node, ctx, depth, pretty, keep = false) {
+  // A state the page does not start in: inert inside a <template> until js/motion.js shows it (no script: the first state).
+  if (node.tpl && !ctx.inTemplate) {
+    return `<template data-w-tpl="${escAttr(node.tpl)}">${emitNode(node, { ...ctx, inTemplate: true }, depth, false, keep)}</template>`;
+  }
   const d = describeNode(node, ctx.refs);
   if (d.kind === 'text') return escText(d.text);
   if (d.kind === 'svg') return svgMarkup(d, ctx);
@@ -86,15 +91,23 @@ function headMarkup(page, ctx) {
 /** The head tags of a page as HTML lines, with the references of the stack that calls it. */
 export const headHtml = (page, refs) => headMarkup(page, { refs });
 
-/** One page as an HTML document. */
-export function emitPage(page, { ids = false, useAsset = () => true, motionScript = false, wsByClass = null } = {}) {
-  const ctx = { outPath: page.outPath, ids, refs: relativeRefs(page.outPath, useAsset), wsByClass };
+// Inside <style>: a "</style" in a value would end the element early (never written by the IR, guarded anyway).
+const styleText = (css) => css.replace(/<\/style/gi, '<\\/style');
+
+/**
+ * One page as an HTML document. `css`: the page's own stylesheet, written inline in its head in place of the
+ * link to the shared one (no render-blocking request, no rules of other pages).
+ */
+export function emitPage(page, { ids = false, useAsset = () => true, motionScript = false, wsByClass = null, css = null } = {}) {
+  const refs = relativeRefs(page.outPath, useAsset);
+  const ctx = { outPath: page.outPath, ids, refs: css ? { ...refs, stylesheetHref: () => null } : refs, wsByClass };
   const htmlAttrs = [page.head.lang && `lang="${escAttr(page.head.lang)}"`, page.html.class && `class="${page.html.class}"`].filter(Boolean).join(' ');
   return [
     '<!doctype html>',
     `<html${htmlAttrs ? ` ${htmlAttrs}` : ''}>`,
     '<head>',
     headMarkup(page, ctx),
+    ...(css ? [`  <style>\n${styleText(css)}</style>`] : []),
     ...(motionScript ? [`  <script src="${relFile(page.outPath, MOTION_FILE)}" defer></script>`] : []),
     '</head>',
     emitNode(page.body, ctx, 0, true),
@@ -106,19 +119,27 @@ export function emitPage(page, { ids = false, useAsset = () => true, motionScrip
 /**
  * All text files of the site: { files: Map<path, string>, assets: Set<file under assets/> }.
  * @param {object} ir
- * @param {{ ids?: boolean }} [opts]  ids: add data-sas-id attributes (for layout measurement only)
+ * @param {{ ids?: boolean, inlineCss?: boolean }} [opts]  ids: add data-sas-id attributes (for layout measurement only);
+ *   inlineCss: each page carries its own stylesheet inline (the published site). The layout passes work on the shared
+ *   css/site.css (verify/refine.js overrides that one file), so it is always written too.
  */
-export function emitSite(ir, { ids = false } = {}) {
+export function emitSite(ir, { ids = false, inlineCss = false } = {}) {
   const assets = new Set();
   const useAsset = (file) => (assets.add(file), true);
   const files = new Map();
   // The reveal script (emit/motionScript.js) only when the IR has reveal effects; hover, focus and loops are CSS.
   const motionScript = Boolean(ir.motion?.script);
   const wsByClass = whiteSpaceByClass(ir.rules);
-  for (const page of ir.pages) files.set(page.outPath, emitPage(page, { ids, useAsset, motionScript, wsByClass }));
+  const usedVars = usedCustomProps(ir);
+  const assetRef = /url\("(?:\.\.\/)*assets\/([^"]+)"\)/g;
+  for (const page of ir.pages) {
+    const css = inlineCss ? emitCss(ir, { page, usedVars }) : null;
+    if (css) for (const m of css.matchAll(assetRef)) assets.add(m[1]);
+    files.set(page.outPath, emitPage(page, { ids, useAsset, motionScript, wsByClass, css }));
+  }
   if (motionScript) files.set(MOTION_FILE, MOTION_JS);
-  const css = emitCss(ir);
-  for (const m of css.matchAll(/url\("(?:\.\.\/)+assets\/([^"]+)"\)/g)) assets.add(m[1]);
+  const css = emitCss(ir, { usedVars });
+  for (const m of css.matchAll(assetRef)) assets.add(m[1]);
   files.set(CSS_FILE, css);
   for (const f of ir.files) files.set(f.path, f.content);
   return { files, assets };

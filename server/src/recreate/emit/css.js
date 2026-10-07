@@ -1,5 +1,9 @@
 // Writes the site stylesheet (css/site.css) from the IR: design tokens, local @font-face rules, the
-// reset, one rule per class, used @keyframes, then the tablet and mobile overrides.
+// reset, one rule per class, used @keyframes, then the tablet and mobile overrides. With a page, only what that
+// page uses (its classes, the @font-face / @keyframes those rules name), for a stylesheet inlined in the page:
+// no render-blocking request and no CSS of other pages. Custom properties nothing reads are never written
+// (builders set dozens on every element; a copied element keeps them only where a var() uses them).
+import { transformSync } from 'esbuild';
 import { DEFAULT_BREAKPOINTS, hexColor } from '../ir/index.js';
 // Every known view with rules gets its media query: saved copies from before "desktop only" keep their tablet / phone styles.
 import { KNOWN_MEDIA_VIEWS as MEDIA_VIEWS } from '../views.js';
@@ -60,9 +64,10 @@ const TOOL_UNSAFE = /^(revert|revert-layer)$/;
  * @param {object} decl  property → value
  * @param {object} o     { tokenOf: Map<hex, name>, from: the file the CSS is written to }
  */
-export function declarations(decl, { tokenOf, from, indent = '  ' }) {
+export function declarations(decl, { tokenOf, from, indent = '  ', usedVars = null }) {
   const lines = [];
   for (const [prop, raw] of Object.entries(compact(decl))) {
+    if (usedVars && prop.startsWith('--') && !usedVars.has(prop)) continue;
     if (LONGHANDS[prop] && TOOL_UNSAFE.test(String(raw).trim())) {
       for (const longhand of LONGHANDS[prop]) lines.push(`${indent}${longhand}: ${String(raw).trim()};`);
       continue;
@@ -102,13 +107,56 @@ export function fontFaceCss(faces, from) {
   }).join('\n');
 }
 
-/** The whole stylesheet as a string. */
-export function emitCss(ir) {
-  const from = CSS_FILE;
+/** Minified CSS (esbuild, no lowering), for stylesheets an emitter writes inline. */
+export const minifyCssSync = (css) => transformSync(css, { loader: 'css', minify: true, legalComments: 'none', logLevel: 'silent' }).code.trim();
+
+const VAR_REF = /var\(\s*(--[\w-]+)/g;
+
+/** Custom properties some value reads: rules, keyframes, motion effects, inline styles and inline SVG of the pages. */
+export function usedCustomProps(ir) {
+  const used = new Set();
+  const scan = (text) => {
+    for (const m of String(text ?? '').matchAll(VAR_REF)) used.add(m[1]);
+  };
+  for (const r of ir.rules) for (const part of Object.values(r.parts)) for (const v of Object.values(part ?? {})) scan(v);
+  for (const k of ir.keyframes) scan(k.css);
+  scan(JSON.stringify(ir.motion ?? {}));
+  const walk = (n) => {
+    if (!n || 'text' in n) return;
+    if (n.raw) scan(n.raw);
+    if (typeof n.attrs?.style === 'string') scan(n.attrs.style);
+    (n.children ?? []).forEach(walk);
+  };
+  for (const p of ir.pages) walk(p.body);
+  return used;
+}
+
+/** Every class a page uses (its body, html and body elements). */
+export function pageClasses(page) {
+  const classes = new Set(String(page.html?.class ?? '').split(/\s+/).filter(Boolean));
+  const walk = (n) => {
+    if (!n || 'text' in n) return;
+    for (const c of String(n.class ?? '').split(/\s+/)) if (c) classes.add(c);
+    (n.children ?? []).forEach(walk);
+  };
+  walk(page.body);
+  return classes;
+}
+
+const selectorClass = (selector) => selector.match(/^\.(-?[_a-zA-Z][\w-]*)/)?.[1] ?? null;
+
+/**
+ * The stylesheet as a string: the whole site's (css/site.css), or one page's when `page` is given (its url()s
+ * relative to the page, for a <style> in its head).
+ */
+export function emitCss(ir, { page = null, usedVars = usedCustomProps(ir) } = {}) {
+  const from = page ? page.outPath : CSS_FILE;
   const tokenOf = new Map(Object.entries(ir.tokens).map(([name, hex]) => [hex, name]));
-  const opts = { tokenOf, from };
-  const base = ir.rules.map((r) => block(r.selector, declarations(r.parts.base, opts))).filter(Boolean);
-  const media = (view) => ir.rules
+  const opts = { tokenOf, from, usedVars };
+  const classes = page && pageClasses(page);
+  const rules = classes ? ir.rules.filter((r) => { const c = selectorClass(r.selector); return !c || classes.has(c); }) : ir.rules;
+  const base = rules.map((r) => block(r.selector, declarations(r.parts.base, opts))).filter(Boolean);
+  const media = (view) => rules
     .filter((r) => r.parts[view])
     .map((r) => block(r.selector, declarations(r.parts[view], { ...opts, indent: '    ' }), '  '))
     .filter(Boolean);
@@ -119,13 +167,17 @@ export function emitCss(ir) {
   const motion = motionCss(ir.motion, opts);
   const all = [body, motion, ...MEDIA_VIEWS.flatMap((view) => byView[view])].join('\n');
   const used = Object.entries(ir.tokens).filter(([name]) => all.includes(`var(${name})`));
+  // A page's stylesheet keeps the @keyframes and @font-face its rules name.
+  const names = page && new Set(all.match(/[\w-]+/g));
+  const keyframes = page ? ir.keyframes.filter((k) => names.has(k.name)) : ir.keyframes;
+  const fontFaces = page ? ir.fontFaces.filter((f) => all.includes(f.family)) : ir.fontFaces;
   const sections = [
     `/* ${ir.siteName}: generated by Site Audit Studio from the rendered site. */`,
     used.length ? `:root {\n${used.map(([n, v]) => `  ${n}: ${v};`).join('\n')}\n}` : '',
-    fontFaceCss(ir.fontFaces, from),
+    fontFaceCss(fontFaces, from),
     resetCss(ir.boxSizingReset),
     body,
-    ir.keyframes.map((k) => k.css.replace(/url\("asset:([^"]+)"\)/g, (all, file) => `url("${relFile(from, `assets/${file}`)}")`)).join('\n'),
+    keyframes.map((k) => k.css.replace(/url\("asset:([^"]+)"\)/g, (all, file) => `url("${relFile(from, `assets/${file}`)}")`)).join('\n'),
     motion,
   ];
   // Widest first: each narrower media query builds on the wider ones.

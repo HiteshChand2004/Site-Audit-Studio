@@ -39,9 +39,22 @@ export const MOTION_JS = `(function () {
   var rendered = function (el) {
     return el.getClientRects().length > 0 || window.getComputedStyle(el).display === 'contents';
   };
+  // The states a page does not start in wait inside <template data-w-tpl> (kept out of the page until needed): the first
+  // time their set is used they are put in place. They take the place of an area already revealed, so they are shown as such.
+  var materialize = function (id) {
+    var tpls = document.querySelectorAll('template[data-w-tpl="' + id + '"]');
+    for (var i = 0; i < tpls.length; i++) {
+      var shown = tpls[i].content.querySelectorAll('[data-motion~="rv"]');
+      for (var r = 0; r < shown.length; r++) shown[r].classList.add('is-in');
+      var first = tpls[i].content.firstElementChild;
+      if (first && /(^| )rv( |$)/.test(first.getAttribute('data-motion') || '')) first.classList.add('is-in');
+      tpls[i].parentNode.replaceChild(tpls[i].content, tpls[i]);
+    }
+  };
   // Shows state \`index\` of set \`id\` and hides the others. A state the stylesheet does not show at this window width
   // (the original rendered that area differently there) is not switched to: the visible one stays.
   var show = function (id, index) {
+    materialize(id);
     var states = document.querySelectorAll('[data-w-set="' + id + '"]');
     var target = [];
     var shownBefore = false;
@@ -74,6 +87,7 @@ export const MOTION_JS = `(function () {
       if (!(ms > 0)) return;
       window.setInterval(function () {
         if (document.hidden || Date.now() - (touched[id] || 0) < ms) return;
+        materialize(id);
         var states = document.querySelectorAll('[data-w-set="' + id + '"]');
         var n = states.length;
         var current = 0;

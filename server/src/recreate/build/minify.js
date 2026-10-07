@@ -1,5 +1,5 @@
 // Production build of the generated site: dist/ is site/ with minified CSS and JavaScript
-// (esbuild) and compact JSON. HTML stays as emitted (its JSON-LD is already compact); assets are
+// (esbuild, also each page's inline <style>) and compact JSON. HTML stays as emitted otherwise (its JSON-LD is already compact); assets are
 // hard-linked from assets/ like in site/.
 //
 // The build is written to "dist.tmp" and renamed to dist/ only once every file is written, so a
@@ -19,6 +19,19 @@ export async function minifyCss(css) {
 export async function minifyJs(js) {
   const { code } = await transform(js, { loader: 'js', minify: true, legalComments: 'none', logLevel: 'silent' });
   return code;
+}
+
+// A page's own stylesheet, written inline in its head (emit/html.js), minified like css/site.css.
+async function minifyInlineStyles(html, sizes) {
+  const parts = html.split(/(<style>[\s\S]*?<\/style>)/);
+  for (let i = 1; i < parts.length; i += 2) {
+    const css = parts[i].slice('<style>'.length, -'</style>'.length);
+    const min = await minifyCss(css);
+    sizes.bytes += Buffer.byteLength(css);
+    sizes.minBytes += Buffer.byteLength(min);
+    parts[i] = `<style>${min.trim()}</style>`;
+  }
+  return parts.join('');
 }
 
 async function linkOrCopy(from, to) {
@@ -65,6 +78,7 @@ async function writeBuild({ files, assets, assetsDir, distDir }) {
     try {
       if (kind === 'css') out = await minifyCss(content);
       else if (kind === 'js') out = await minifyJs(content);
+      else if (ext === '.html' && content.includes('<style>')) out = await minifyInlineStyles(content, sizes.css);
     } catch (err) {
       throw buildError(file, err);
     }

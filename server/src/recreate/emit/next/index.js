@@ -12,7 +12,7 @@
 //   for Netlify / Cloudflare Pages (_redirects) and Vercel (vercel.json); canonical, og:url and sitemap.xml
 //   already use the new URLs.
 // - Links are plain <a> elements (full page loads, no client router), root-relative: deploy at a domain root.
-import { emitCss } from '../css.js';
+import { emitCss, usedCustomProps } from '../css.js';
 import { MOTION_FILE, MOTION_JS, MOTION_SRC } from '../motionScript.js';
 import { findShared } from '../react/components.js';
 import { jsxAttr, jsxNode, propName, visibleChildren } from '../react/jsx.js';
@@ -79,7 +79,7 @@ export function emitNext(ir) {
     useAsset: (file) => (assets.add(file), true),
     assetHref: (file) => `/assets/${file}`,
     pageHref: (outPath) => plan.byOutPath.get(outPath)?.route ?? '/',
-    stylesheetHref: () => null, // imported by each root layout
+    stylesheetHref: () => null, // each page imports its own stylesheet (page.css), inlined by Next (inlineCss)
   };
   const names = [];
   const taken = new Set();
@@ -109,8 +109,6 @@ export function emitNext(ir) {
       const html = [page.head.lang && jsxAttr('lang', page.head.lang), page.html?.class && jsxAttr('className', page.html.class)].filter(Boolean).join(' ');
       const body = page.body.class ? ` ${jsxAttr('className', page.body.class)}` : '';
       files.set(`app/${name}/layout.jsx`, lines(
-        "import '../site.css';",
-        '',
         'export default function RootLayout({ children }) {',
         '  return (',
         `    <html${html ? ` ${html}` : ''}>`,
@@ -123,6 +121,8 @@ export function emitNext(ir) {
     return groups.get(key);
   };
 
+  const usedVars = usedCustomProps(ir);
+  const rootUrls = (css) => css.replace(/url\("(?:\.\.\/)*assets\//g, 'url("/assets/');
   ir.pages.forEach((page, i) => {
     const route = plan.routes[i];
     const used = new Set();
@@ -137,12 +137,15 @@ export function emitNext(ir) {
     const motion = ir.motion?.script ? [`      <script src="${MOTION_SRC}" defer />`] : [];
     const content = [...headJsx(headTags({ ...page, head }, refs), '      '), ...motion, ...(body ? [body] : [])].join('\n');
     const dir = route.segments.length ? `app/${groupOf(page)}/${route.segments.join('/')}` : `app/${groupOf(page)}`;
+    // The page's own stylesheet (only its rules): Next writes it inline in the page's head (inlineCss), no blocking request.
+    files.set(`${dir}/page.css`, rootUrls(emitCss(ir, { page, usedVars })));
+    imports.unshift("import './page.css';");
     files.set(`${dir}/page.jsx`, `${imports.join('\n')}${imports.length ? '\n\n' : ''}export default function ${names[i]}() {\n  return (\n    <>\n${content}\n    </>\n  );\n}\n`);
   });
 
-  const css = emitCss(ir);
+  const css = emitCss(ir, { usedVars });
   for (const m of css.matchAll(/url\("(?:\.\.\/)+assets\/([^"]+)"\)/g)) assets.add(m[1]);
-  files.set('app/site.css', css.replace(/url\("(?:\.\.\/)+assets\//g, 'url("/assets/'));
+  files.set('app/site.css', rootUrls(css));
 
   for (const f of ir.files) files.set(`public/${f.path}`, publicFile(f, urlMap));
   if (ir.motion?.script) files.set(`public/${MOTION_FILE}`, MOTION_JS);
@@ -163,6 +166,8 @@ export function emitNext(ir) {
     '/** @type {import("next").NextConfig} */',
     'export default {',
     "  output: 'export',",
+    "  // Each page's stylesheet is written inline in its head: no render-blocking request.",
+    '  experimental: { inlineCss: true },',
     '  trailingSlash: true,',
     '  images: { unoptimized: true },',
     '};',
@@ -184,7 +189,7 @@ export function emitNext(ir) {
     '',
     '## How it is built',
     '- `app/<group>/**/page.jsx` — one page per URL; `components/*.jsx` — blocks that repeat on several pages.',
-    '- `app/site.css` — the shared stylesheet. `public/assets/` — every image, font and media file, local.',
+    "- `app/**/page.css` — each page's own stylesheet (inlined in its head); `app/site.css` — the whole stylesheet, for reference. `public/assets/` — every image, font and media file, local.",
     '- Each page writes its own `<title>`, description, canonical, Open Graph and JSON-LD; React hoists them into `<head>`.',
     '- `public/sitemap.xml`, `robots.txt` (and `llms.txt` when the original had one) are copied to the site root.',
     '',

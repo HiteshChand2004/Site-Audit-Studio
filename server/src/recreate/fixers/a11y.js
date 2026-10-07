@@ -20,7 +20,7 @@ const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 // stores margins as a diff against these values, so a missing margin means exactly this value.
 const HEADING_MARGIN = { h1: '21.44px', h2: '19.92px', h3: '18.72px', h4: '21.28px', h5: '22.1776px', h6: '24.9776px' };
 
-const SOCIAL = {
+export const SOCIAL = {
   'facebook.com': 'Facebook', 'fb.com': 'Facebook', 'instagram.com': 'Instagram', 'twitter.com': 'X (Twitter)', 'x.com': 'X (Twitter)',
   'linkedin.com': 'LinkedIn', 'youtube.com': 'YouTube', 'youtu.be': 'YouTube', 'github.com': 'GitHub', 'tiktok.com': 'TikTok',
   'pinterest.com': 'Pinterest', 'dribbble.com': 'Dribbble', 'behance.net': 'Behance', 'medium.com': 'Medium', 'threads.net': 'Threads',

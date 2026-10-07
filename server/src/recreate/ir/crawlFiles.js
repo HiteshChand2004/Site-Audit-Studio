@@ -5,8 +5,9 @@
 //   robots.txt   keeps the intent of the original robots.txt that discovery read: a site closed to all
 //                crawlers stays closed, and AI crawlers it blocked stay blocked; everything else allowed.
 //                Points to the sitemap.
-//   llms.txt     the original site's /llms.txt, copied as it is (the owner wrote it; nothing is generated).
-//                Not copied when it was missing or too large to read whole.
+//   llms.txt     the original site's /llms.txt, copied as it is (the owner wrote it). When the original has none,
+//                a plain one in the llmstxt.org format is generated from the pages' titles and descriptions (not
+//                when the original's was too large to read whole: a warning asks to copy it by hand).
 // Only general inputs: page heads, the parsed original robots.txt and its llms.txt. Nothing is site-specific.
 
 const xmlEscape = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
@@ -25,6 +26,22 @@ function sitemapUrl(page, head, origin) {
   }
 }
 
+// llms.txt (llmstxt.org): the site name, the homepage description, then one line per listed page.
+const mdText = (s) => String(s ?? '').replace(/\s+/g, ' ').replace(/[[\]]/g, '').trim();
+function llmsTxt(pages, urls, siteName, origin) {
+  if (!urls.length) return null;
+  const lines = [`# ${mdText(siteName || new URL(origin).hostname)}`, ''];
+  if (pages[0]?.head?.description) lines.push(`> ${mdText(pages[0].head.description)}`, '');
+  lines.push('## Pages', '');
+  for (const t of pages) {
+    const url = sitemapUrl(t.info, t.head, origin);
+    if (!url) continue;
+    const description = mdText(t.head.description);
+    lines.push(`- [${mdText(t.head.title) || t.info.path}](${url})${description ? `: ${description}` : ''}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
 /**
  * @param {object} o
  * @param {{ info: { path: string }, head: object }[]} o.pages  recreated pages with their final head
@@ -32,11 +49,12 @@ function sitemapUrl(page, head, origin) {
  * @param {{ status?: string, blocksAll?: boolean, blockedAiCrawlers?: string[] } | null} [o.robots]
  *   the original robots.txt as discovery parsed it (null when unknown)
  * @param {{ found?: boolean, text?: string|null, tooLarge?: boolean } | null} [o.llms]  the original /llms.txt
+ * @param {string|null} [o.siteName]  heading of a generated llms.txt
  * @returns {{ files: { path: string, content: string }[], sitemap: { urls: string[], excluded: string[] },
  *   robots: { blocksAll: boolean, blockedAiCrawlers: string[], source: string },
  *   llms: { copied: boolean, bytes: number, tooLarge: boolean } }}
  */
-export function crawlFiles({ pages, baseUrl, robots = null, llms = null }) {
+export function crawlFiles({ pages, baseUrl, robots = null, llms = null, siteName = null }) {
   const origin = new URL(baseUrl).origin;
   const urls = [];
   const excluded = [];
@@ -60,7 +78,9 @@ export function crawlFiles({ pages, baseUrl, robots = null, llms = null }) {
   for (const ua of blockedAiCrawlers) lines.push(`User-agent: ${ua}`, 'Disallow: /', '');
   lines.push(`Sitemap: ${origin}/sitemap.xml`, '');
 
-  const llmsText = llms?.text?.trim() ? llms.text : null;
+  const copied = llms?.text?.trim() ? llms.text : null;
+  const generated = copied || llms?.tooLarge ? null : llmsTxt(pages, urls, siteName, origin);
+  const llmsText = copied ?? generated;
   return {
     files: [
       { path: 'sitemap.xml', content: sitemap },
@@ -69,6 +89,6 @@ export function crawlFiles({ pages, baseUrl, robots = null, llms = null }) {
     ],
     sitemap: { urls, excluded },
     robots: { blocksAll, blockedAiCrawlers, source: found ? 'original robots.txt rules' : 'default (the original site has no robots.txt)' },
-    llms: { copied: Boolean(llmsText), bytes: llmsText ? Buffer.byteLength(llmsText) : 0, tooLarge: Boolean(llms?.tooLarge) },
+    llms: { copied: Boolean(copied), generated: Boolean(generated), bytes: llmsText ? Buffer.byteLength(llmsText) : 0, tooLarge: Boolean(llms?.tooLarge) },
   };
 }

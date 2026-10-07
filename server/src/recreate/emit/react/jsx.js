@@ -8,6 +8,7 @@
 //   - inline SVG keeps its own element: the root's attributes become props and the (sanitized) inner
 //     markup goes in dangerouslySetInnerHTML, so no wrapper element changes the layout.
 import { load } from 'cheerio';
+import { emitNode } from '../html.js';
 import { describeNode } from '../walk.js';
 
 const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
@@ -158,6 +159,12 @@ export function jsxNode(node, refs, depth = 0, components = null, used = null) {
   if (component) {
     used?.add(component);
     return `${pad}<${component} />`;
+  }
+  // A state the page does not start in: the same <template> as the HTML site, its content written as HTML (React renders
+  // it into the template's content and leaves it alone on hydration; js/motion.js puts it in place when it is shown).
+  if (node.tpl) {
+    const html = emitNode(node, { refs, ids: false, inTemplate: true }, 0, false);
+    return `${pad}<template data-w-tpl=${JSON.stringify(node.tpl)} dangerouslySetInnerHTML={{ __html: ${JSON.stringify(html)} }} />`;
   }
   const d = describeNode(node, refs);
   if (d.kind === 'text') return `${pad}${jsxText(d.text)}`;

@@ -16,6 +16,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { platformCdnHost } from '../assets/cdn.js';
 import { buildHead, generatedFavicon, siteNameOf } from './head.js';
+import { detectLang, refineHeadTexts } from './seoText.js';
 import { createAssetResolver, createLinkResolver } from './links.js';
 import { meaningful, PLATFORM_CLASS_PATTERNS } from './names.js';
 import { buildStyles, mapUrls } from './styles.js';
@@ -23,7 +24,7 @@ import { DROP_TAGS, guardAttributes } from '../fixers/html.js';
 import { contentRecord, headHints, itemFor } from '../fixers/wordpress.js';
 import { addRemoved, emptyRemoved, sanitizeSvg } from '../fixers/svg.js';
 import { VIEW_WIDTHS } from '../views.js';
-import { BLOCK_TAGS, buildPageTree, displayOf, isElement, isText, VIEW_IDS } from './tree.js';
+import { BLOCK_TAGS, buildPageTree, deepText, displayOf, isElement, isText, VIEW_IDS } from './tree.js';
 import { crawlFiles } from './crawlFiles.js';
 import { noticePage } from './notice.js';
 
@@ -205,6 +206,7 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
     faviconGenerated = true;
   }
 
+  const themeColor = brandColor(trees[0].root);
   for (const t of trees) {
     const item = itemFor(wp, t.info.url);
     if (item) t.wp = { item, content: contentRecord(item) };
@@ -217,14 +219,25 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
       baseUrl,
       siteName,
       siteIcons,
+      themeColor,
     });
     t.head = built.head;
     t.headAuto = built.auto.map((a) => (a.field === 'icon' && faviconGenerated ? { ...a, source: 'generated from the site name and brand colour' } : a));
     t.headMissing = built.missing;
+    if (t.headMissing.includes('lang')) {
+      const lang = detectLang(deepText(t.root));
+      if (lang) {
+        t.head.lang = lang;
+        t.headMissing = t.headMissing.filter((f) => f !== 'lang');
+        t.headAuto.push({ field: 'lang', value: lang, source: 'language of the page text' });
+      }
+    }
   }
+  // Titles / descriptions that are too short, too long or shared by several pages (needs every head).
+  const headTexts = refineHeadTexts(trees, siteName.value);
 
   // sitemap.xml + robots.txt (after the heads: canonical and robots meta decide what is listed).
-  const { files: crawlFileList, ...crawl } = crawlFiles({ pages: trees, baseUrl, robots, llms });
+  const { files: crawlFileList, ...crawl } = crawlFiles({ pages: trees, baseUrl, robots, llms, siteName: siteName.value });
   files.push(...crawlFileList);
 
   const fontFaces = (assets.fontFaces ?? []).filter((f) => f.local).map((f) => ({
@@ -248,6 +261,7 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
     fontFaces,
     files,
     crawlFiles: crawl,
+    headTexts,
     truncated,
     assetResolve,
     resolveLink,
@@ -317,6 +331,9 @@ function pageBody(t, site, stats) {
     // States of tabs / carousels / filtered lists (ir/states.js): which state an area is, which state a control shows.
     if (n.stateAttrs) Object.assign(attrs, n.stateAttrs);
     const out = { t: n.tag, sid: n.sid, attrs, children: [] };
+    // A state the page does not start in (another tab, slide or filter) is written inside a <template> (emitters): not part
+    // of the page until the script shows it, so the page's element count stays the original's.
+    if (n.stateAttrs?.['data-w-set'] && 'hidden' in n.stateAttrs) out.tpl = n.stateAttrs['data-w-set'];
     if (n.class) out.class = n.class;
     const id = n.attrs.id;
     if (id && (keepIds.has(id) || meaningful(id))) out.id = id;

@@ -78,10 +78,11 @@ export const SKIP_LABELS = {
  * @param {object[]} o.pages       crawler pages ({ url, requestedUrl, status, depth, facts })
  * @param {string} o.homeUrl
  * @param {string[]} o.sitemapUrls
+ * @param {string[]} [o.knownUrls]  pages the analysis found (its crawl renders pages that are built by script)
  * @param {{isAllowed:(url:string)=>boolean}} o.robots
  * @param {number} o.limit         pages besides the homepage
  */
-export function selectPages({ pages, homeUrl, sitemapUrls = [], robots, limit }) {
+export function selectPages({ pages, homeUrl, sitemapUrls = [], knownUrls = [], robots, limit }) {
   const origin = new URL(homeUrl).origin;
   const byKey = new Map();
   for (const p of pages) {
@@ -106,6 +107,7 @@ export function selectPages({ pages, homeUrl, sitemapUrls = [], robots, limit })
   };
   for (const l of home.facts?.links ?? []) if (l.internal) add(l.href, 'home-link');
   for (const u of sitemapUrls) add(u, 'sitemap');
+  for (const u of knownUrls) add(u, 'analysis');
   for (const p of pages.slice(1)) add(p.url, 'crawl');
 
   const selected = [{ page: home, source: 'home' }];
@@ -158,12 +160,15 @@ export function selectPages({ pages, homeUrl, sitemapUrls = [], robots, limit })
  * @param {string} o.url       the analyzed homepage URL
  * @param {number} o.limit     pages besides the homepage (projects.recreate_pages)
  * @param {boolean} [o.all]    "All pages": crawl the whole site (up to `limit`, the safety cap) instead of a sample
+ * @param {string[]} [o.knownUrls]  pages the analysis found: crawled first, so no page it saw is missed
+ * @param {(url:string)=>Promise<{html:string}|null>} [o.render]  a browser render for pages whose links are built by
+ *   script (the server sends an empty shell), as the analysis crawl does
  * @param {AbortSignal} [o.signal]
  * @param {(fraction:number, message?:string)=>void} [o.onProgress]
  * @returns {Promise<{ homeUrl: string, origin: string, pages: object[], skipped: object[], beyondLimit: object[],
  *   sitemap: { status: string, count: number }, crawled: number }>}
  */
-export async function discoverPages({ url, limit, all = false, signal, onProgress }) {
+export async function discoverPages({ url, limit, all = false, knownUrls = [], render, signal, onProgress }) {
   const home = await fetchPage(url, { timeout: 20000, signal });
   if (home.error === 'blocked') throw new RecreateError(home.message);
   if (home.error || home.status >= 400) throw new RecreateError(`Could not load the homepage (${home.error || `HTTP ${home.status}`}).`);
@@ -182,10 +187,12 @@ export async function discoverPages({ url, limit, all = false, signal, onProgres
     maxDepth: all ? ALL_PAGES_DEPTH : 2,
     robots,
     sitemapUrls: sitemap.urls.filter((u) => sameSite(u, origin)),
+    seedUrls: knownUrls.filter((u) => sameSite(u, origin)),
+    render,
     signal,
     onProgress: (done, total) => onProgress?.(0.2 + 0.8 * (done / Math.max(total, 1)), `Found ${done} pages`),
   });
-  const selection = selectPages({ pages: result.pages, homeUrl: home.url, sitemapUrls: sitemap.urls, robots, limit });
+  const selection = selectPages({ pages: result.pages, homeUrl: home.url, sitemapUrls: sitemap.urls, knownUrls, robots, limit });
   return {
     homeUrl: home.url,
     origin,
