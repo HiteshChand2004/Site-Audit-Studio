@@ -45,6 +45,19 @@ function useSidebarCollapsed() {
 
 export default function AppShell() {
   const load = useProjects((s) => s.load);
+  const refreshSelected = useProjects((s) => s.refreshSelected);
+  // Coming back to the tab shows the newest check and copy (work may have finished or been added meanwhile).
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshSelected();
+    };
+    window.addEventListener('focus', onVisible);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', onVisible);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [refreshSelected]);
   const error = useProjects((s) => s.error);
   const audit = useProjects((s) => s.audit);
   const auditLoading = useProjects((s) => s.auditLoading);

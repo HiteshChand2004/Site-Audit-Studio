@@ -80,7 +80,8 @@ export const useProjects = create((set, get) => ({
   },
 
   async select(id) {
-    if (get().selectedId === id && get().audit) return;
+    // Picking the open website again looks for newer work (a copy made or imported elsewhere).
+    if (get().selectedId === id && get().audit) return get().refreshSelected();
     set({ selectedId: id, audit: null, auditLoading: true });
     remember(id);
     await Promise.all([get().reloadAudit(id), get().reloadRecreate(id)]);
@@ -89,6 +90,29 @@ export const useProjects = create((set, get) => ({
       if (streams.has(`${kind}:${id}`)) continue;
       const current = await KINDS[kind].current(id).catch(() => null);
       if (current) get().attachJob(kind, id, current.job, current.steps);
+    }
+  },
+
+  /**
+   * The open website's check and copy as the server has them now: a copy finished, imported or rebuilt
+   * while this tab stayed open replaces the one shown (called when the tab comes back into view).
+   */
+  async refreshSelected() {
+    const id = get().selectedId;
+    if (!id) return;
+    const [data, audit] = await Promise.all([api.getRecreate(id).catch(() => null), api.getAudit(id).catch(() => null)]);
+    if (get().selectedId !== id) return;
+    const known = get().recreateResults[id];
+    const changed = (a, b) => (a?.result?.recreateId ?? null) !== (b?.result?.recreateId ?? null) || (a?.last?.id ?? null) !== (b?.last?.id ?? null) || (a?.last?.status ?? null) !== (b?.last?.status ?? null);
+    if (data && changed(data, known)) {
+      set({ recreateResults: { ...get().recreateResults, [id]: data } });
+      if (data.result) await get().ensurePreview(id);
+    } else if (data?.result && get().previews[id]?.recreateId !== data.result.recreateId) {
+      await get().ensurePreview(id);
+    }
+    const shown = get().audit;
+    if (audit && (audit.analysisId !== shown?.analysisId || audit.recreate?.reauditId !== shown?.recreate?.reauditId || audit.recreate?.recreateId !== shown?.recreate?.recreateId)) {
+      set({ audit });
     }
   },
 
