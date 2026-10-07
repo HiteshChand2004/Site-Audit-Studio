@@ -265,6 +265,18 @@ records them, nothing consumed them) → **3** script-driven hovers (probe budge
        script candidate carries `repeat` = distance from its first child to the child's next copy (`repeatOf`: equal tag + text + image + child count).
        `ir/motion.js scriptLoop`: a `drift` with a repeat (or a seen wrap) → `@keyframes m-lN` translate 0 → ∓repeat, linear, infinite, duration
        repeat / rate (seamless, CSS only). One-way moves without a repeat stay skipped. Cost ~+15–25 s on a long page. Tests: `recreate-loops`, `recreate-motion-ir`.
+    26. Found on nyaayai / parchaa (all in `ir/styles.js` / `emit/html.js`, so a rebuild from the capture applies them):
+       - A border side with a style but no captured width (the capture keeps only values that differ from the default, and 0 px looks like it) got
+         the browser's "medium" 3 px: a builder's 1 px divider `::after` drew a full grey box. `fillBorderWidths` writes 0 px for such sides
+         (elements and pseudo-elements, `border-style` shorthand expanded 1–4 values).
+       - An empty box (only absolute content) that is all its parent holds, where the parent is a flex / grid item (a logo frame in a ticker's
+         list item): own px width + `flex-shrink: 0`; without it both shrank to 0 once the row was fuller than the screen (logos vanished).
+       - Text that keeps line breaks (`white-space(-collapse)` pre / pre-wrap / preserve…, read from the class rules, inherited down): the HTML
+         emitter adds no indentation inside it (each list item had 2 blank lines above and below its text: 24 px items 120 px tall).
+       - An absolute box with both insets is "stretched" only when its insets stay the same across views; insets that move (right 370 at 1440,
+         566 at 1024 for a 340 px card) mean a box of its own width, which keeps it (parchaa cards overlapped at 1100–1279 px).
+       - A content-sized item filling its parent in one view while the views differ otherwise gets `100%` there, not the captured px (blog cards
+         stayed 817 px at 1200 instead of following the column).
   - Autoplay timing measured inside the page (`watchText`: visible text every 100 ms, page clock); from Node a snapshot per reading took up to 0.5 s under load (1.5 s read as 2 s).
   - Verified (fresh capture home + 9 pages, then rebuilt from it; `scratch-checkall.mjs`): all 12 of the user's points OK (contact headline at 1280: 66.56 px, top 233, height 68 = original);
     fidelity 88 → 93, visual diff 89 → 94; React / Next / MERN: DOM 10/10, pixels 1.0, hydration clean, safety passed. Full suite: 288 pass, 2 fail (known `netGuard`), 4 skipped.

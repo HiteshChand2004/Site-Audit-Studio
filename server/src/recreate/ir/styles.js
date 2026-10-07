@@ -169,6 +169,15 @@ export function wrapsText(node, v, chain = []) {
  * Width of the containing block of an absolutely positioned (or fixed) box in view `v`: the viewport for a fixed box
  * and when no ancestor is positioned, else the padding box of the nearest positioned ancestor.
  */
+/** Whether chain[pi] (the parent) is an item of a flex or grid container in view `v` (ancestors with display: contents skipped). */
+function isFlexOrGridItem(chain, pi, v) {
+  let gi = pi - 1;
+  while (gi > 0 && chain[gi].views[v] && displayOf(chain[gi], v) === 'contents') gi--;
+  const g = chain[gi];
+  if (!g?.views[v]) return false;
+  return /flex|grid/.test(g.views[v].style.display ?? displayOf(g, v));
+}
+
 function containingWidth(chain, v, position) {
   const viewport = chain[0]?.views[v]?.rect[2] ?? 0;
   if (position === 'fixed') return viewport;
@@ -387,8 +396,16 @@ export function normalizeView(node, v, chain, opts) {
       const vb = px(style[b]);
       if (va != null && vb != null && Math.abs(va) <= 1 && Math.abs(vb) <= 1) continue; // stretched: inset 0
       // A box that fills the width between its two insets (a fixed header with a margin on each side) is stretched
-      // by them: with a px width it would overflow on every screen narrower than the captured one.
-      if (prop === 'width' && va != null && vb != null && cbW > 0 && !REPLACED.has(node.tag) && Math.abs(cbW - va - vb - w) <= 1.5) continue;
+      // by them: with a px width it would overflow on every screen narrower than the captured one. The browser reports
+      // both insets of every absolute box, so this alone says nothing: an inset that moves between the captured views
+      // (right 370 px at 1440, 566 at 1024 for a 340 px card) belongs to a box of its own width, which keeps it.
+      const insetsMove = Object.entries(node.views).some(([k, od]) => {
+        if (k === v || !od || (od.style.position ?? 'static') !== position) return false;
+        const oa = px(od.style[a]);
+        const ob = px(od.style[b]);
+        return oa != null && ob != null && (Math.abs(oa - va) > 2 || Math.abs(ob - vb) > 2);
+      });
+      if (prop === 'width' && va != null && vb != null && cbW > 0 && !REPLACED.has(node.tag) && Math.abs(cbW - va - vb - w) <= 1.5 && !insetsMove) continue;
       if (va != null && vb != null) delete style[Math.abs(va) <= Math.abs(vb) ? b : a];
       if (sized && value > 0 && !REPLACED.has(node.tag)) {
         // A box as wide as its containing block stays that wide on other screens.
@@ -529,6 +546,13 @@ export function normalizeView(node, v, chain, opts) {
       // often place the image of a frame absolutely (inset 0) inside it: the frame is empty too.
       if (!style.height) style.height = `${size.h(h)}px`;
       if (!style.width && !style['@w'] && !BLOCK_PARENT.has(pDisplay) && w > 0) style['@rw'] = { px: size.w(w), ratio: ratioOf(w) };
+      // An empty box that is all its parent holds, where that parent is itself a flex / grid item (a logo frame in the list
+      // item of a ticker row): the parent's size comes from this box, so without its own px width both shrink to 0 as
+      // soon as the row is fuller than the screen (logos vanished).
+      else if (!style.width && !style['@w'] && w > 0 && BLOCK_PARENT.has(pDisplay) && Math.abs(w - pBox.w) <= 1 && isFlexOrGridItem(chain, pi, v)) {
+        style.width = `${size.w(w)}px`;
+        style['flex-shrink'] ??= '0';
+      }
     } else if (elements.length && !hasText && !style['min-height'] && !style.height) {
       let bottom = 0;
       for (const c of elements) {
@@ -590,6 +614,9 @@ export function resolveHints(decls, present, tag) {
       // One view: an item exactly as wide as its parent still fills it.
       if (single && hint.ratio >= 0.995 && hint.ratio <= 1.005) decls[v].width = '100%';
       else if (consistent) decls[v].width = hint.ratio >= 0.995 && hint.ratio <= 1.005 ? '100%' : pct(hint.ratio);
+      // Filling its parent in this view (a card in a one-column grid at laptop width) while the views differ otherwise:
+      // it keeps filling it between the captured widths instead of staying at the captured px (cards too narrow at 1200).
+      else if (!fixed && hint.ratio >= 0.995 && hint.ratio <= 1.005) decls[v].width = '100%';
       else {
         // Text gets a pixel of slack: the same label can measure a fraction wider here than in the
         // original, and a width cut to the pixel would wrap it onto a second line.
@@ -656,7 +683,22 @@ export function cascade(decls, pageViews, tag, hideProp = 'display') {
   return parts;
 }
 
-const pseudoDecl = (p, assetFile) => (p ? { content: mapUrls(p.content, assetFile), ...p.style } : null);
+// The capture keeps only values that differ from the default, and a border side of width 0 looks like the default. A side
+// with a border style but no width would then get the browser's "medium" (3 px): a builder's 1 px divider on one side of a
+// ::after drew a full box. Such sides are written as 0 px.
+export function fillBorderWidths(decl) {
+  if (!decl || decl.border != null || decl['border-width'] != null) return decl;
+  // border-style shorthand: 1 value = all sides, 2 = top/bottom + right/left, 3 = top + right/left + bottom, 4 = each.
+  const v = String(decl['border-style'] ?? '').split(/\s+/).filter(Boolean);
+  const short = v.length ? [v[0], v[1] ?? v[0], v[2] ?? v[0], v[3] ?? v[1] ?? v[0]] : [];
+  ['top', 'right', 'bottom', 'left'].forEach((side, i) => {
+    const style = decl[`border-${side}-style`] ?? short[i];
+    if (style && style !== 'none' && style !== 'hidden' && decl[`border-${side}-width`] == null) decl[`border-${side}-width`] = '0px';
+  });
+  return decl;
+}
+
+const pseudoDecl = (p, assetFile) => (p ? fillBorderWidths({ content: mapUrls(p.content, assetFile), ...p.style }) : null);
 const isEmpty = (parts) => !parts || (!Object.keys(parts.base).length && !parts.laptop && !parts.tablet && !parts.mobile);
 
 /**
@@ -688,7 +730,7 @@ export function buildStyles(pages, opts) {
     delete node.class;
     const present = pageViews.filter((v) => node.views[v]);
     const decls = {};
-    for (const v of pageViews) decls[v] = node.views[v] ? normalizeView(node, v, chain, o) : null;
+    for (const v of pageViews) decls[v] = node.views[v] ? fillBorderWidths(normalizeView(node, v, chain, o)) : null;
     resolveHints(decls, present, node.tag);
     const parts = cascade(decls, pageViews, node.tag);
     const pseudo = {};
