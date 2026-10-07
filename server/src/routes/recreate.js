@@ -120,10 +120,7 @@ async function latestBuild(project) {
   return { recreateId: row.id, root, scripts: getEmitter(stack)?.scripts || reportOutputs(report)[stack]?.scripts || false, stack };
 }
 
-const previewOf = (projectId) => {
-  const p = activePreview();
-  return p?.projectId === projectId ? p : null;
-};
+const previewOf = (projectId) => activePreview(projectId);
 
 router.get('/:id/preview', (req, res) => {
   if (!selectProject.get(req.params.id)) return res.status(404).json({ error: 'Project not found.' });

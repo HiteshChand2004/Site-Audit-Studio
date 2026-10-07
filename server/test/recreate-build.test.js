@@ -220,7 +220,7 @@ test('preview server: serves only its own folder, with strict headers', async ()
   assert.deepEqual(appOrigins('http://127.0.0.1:5173'), ['http://127.0.0.1:5173', 'http://localhost:5173']);
 });
 
-test('one active preview at a time, on a port in 5100–5199', async () => {
+test('one preview per project, each on its own port in 5100–5199', async () => {
   const root = await tempDir();
   await writeTree(root, { 'a/index.html': 'site A', 'b/index.html': 'site B' });
   const a = await startPreview({ projectId: 'pa', recreateId: 'ra', root: path.join(root, 'a') });
@@ -230,11 +230,18 @@ test('one active preview at a time, on a port in 5100–5199', async () => {
   // Same recreate again: the same preview.
   assert.equal((await startPreview({ projectId: 'pa', recreateId: 'ra', root: path.join(root, 'a') })).port, a.port);
 
-  // Another project replaces it; the first one no longer answers anywhere.
+  // Another project gets its own port; the first one keeps answering (two tabs side by side).
   const b = await startPreview({ projectId: 'pb', recreateId: 'rb', root: path.join(root, 'b') });
   assert.equal(activePreview().projectId, 'pb');
+  assert.equal(activePreview('pa').port, a.port);
+  assert.notEqual(b.port, a.port);
   assert.equal((await get(b.port, '/')).body, 'site B');
-  if (b.port !== a.port) await assert.rejects(get(a.port, '/'));
+  assert.equal((await get(a.port, '/')).body, 'site A');
+  // A newer recreate of the same project replaces that project's preview only.
+  const a2 = await startPreview({ projectId: 'pa', recreateId: 'ra2', root: path.join(root, 'b') });
+  assert.equal(activePreview('pa').recreateId, 'ra2');
+  assert.equal((await get(a2.port, '/')).body, 'site B');
+  assert.equal(activePreview('pb').port, b.port);
 
   // A port that is taken is skipped.
   const blocker = await servePreview(path.join(root, 'a'), { port: b.port + 1 <= PREVIEW_PORTS.last ? b.port + 1 : PREVIEW_PORTS.first });

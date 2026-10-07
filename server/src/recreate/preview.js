@@ -150,8 +150,9 @@ export async function servePreview(root, { port = 0, range = null, frameAncestor
   return { port: bound, origin: `http://${PREVIEW_HOST}:${bound}`, close: () => closeServer(server) };
 }
 
-// The active preview (one at a time). Starts and stops run one after another.
-let active = null;
+// One preview per project, each on its own port, so two websites open side by side (two tabs) never take
+// each other's preview. Starts and stops run one after another.
+const active = new Map();
 let chain = Promise.resolve();
 const serial = (fn) => {
   const run = chain.then(fn);
@@ -161,37 +162,47 @@ const serial = (fn) => {
 
 const info = (p) => ({ projectId: p.projectId, recreateId: p.recreateId, port: p.port, url: `${p.origin}/`, scripts: Boolean(p.scripts), stack: p.stack ?? 'html', startedAt: p.startedAt });
 
-/** The active preview, or null. */
-export const activePreview = () => (active ? info(active) : null);
+/** The preview of a project, or null. Without a project: the latest one started (or null). */
+export const activePreview = (projectId) => {
+  if (projectId) return active.has(projectId) ? info(active.get(projectId)) : null;
+  const all = [...active.values()];
+  return all.length ? info(all[all.length - 1]) : null;
+};
 
 /**
- * Starts (or keeps) the preview of one recreate's dist/ folder; any other preview is stopped first.
+ * Starts (or keeps) the preview of one recreate's dist/ folder; the project's previous preview (another recreate or
+ * build) is stopped first, other projects' previews keep running.
  * @param {{ projectId: string, recreateId: string, root: string, scripts?: boolean|'inline', stack?: string }} o  stack: which build the folder is (the app shows it)  one recreate can have several
  *   outputs (stacks): the preview is kept only while it serves the same folder with the same script policy
  */
 export function startPreview({ projectId, recreateId, root, scripts = false, stack = 'html' }) {
   return serial(async () => {
-    if (active?.projectId === projectId && active.recreateId === recreateId && active.root === root && active.scripts === scripts) return info(active);
+    const current = active.get(projectId);
+    if (current && current.recreateId === recreateId && current.root === root && current.scripts === scripts) return info(current);
     if (!(await stat(root).catch(() => null))?.isDirectory()) throw new PreviewError('This recreate has no production build to preview.');
-    if (active) {
-      await active.close();
-      active = null;
+    if (current) {
+      await current.close();
+      active.delete(projectId);
     }
     const served = await servePreview(root, { range: PREVIEW_PORTS, scripts });
-    active = { projectId, recreateId, root, scripts, stack, ...served, startedAt: new Date().toISOString() };
-    return info(active);
+    const entry = { projectId, recreateId, root, scripts, stack, ...served, startedAt: new Date().toISOString() };
+    active.set(projectId, entry);
+    return info(entry);
   });
 }
 
-/** Stops the active preview when it matches (no filter = any). Resolves to true when one was stopped. */
+/** Stops the previews that match (no filter = all). Resolves to true when one was stopped. */
 export function stopPreview({ projectId, recreateId } = {}) {
   return serial(async () => {
-    if (!active) return false;
-    if (projectId && active.projectId !== projectId) return false;
-    if (recreateId && active.recreateId !== recreateId) return false;
-    await active.close();
-    active = null;
-    return true;
+    let stopped = false;
+    for (const [id, p] of [...active]) {
+      if (projectId && id !== projectId) continue;
+      if (recreateId && p.recreateId !== recreateId) continue;
+      await p.close();
+      active.delete(id);
+      stopped = true;
+    }
+    return stopped;
   });
 }
 

@@ -62,7 +62,7 @@ function queueStackExport(project, recreateId) {
   exportStack({ projectId: project.id, recreateId, stack })
     .then(async ({ output }) => {
       // The app shows the stack's own build when it is ready: move this project's preview onto it.
-      if (activePreview()?.projectId !== project.id) return;
+      if (!activePreview(project.id)) return;
       const root = path.join(recreateDir(project.id, recreateId), output.dir, output.dist ?? '');
       await startPreview({ projectId: project.id, recreateId, root, scripts: getEmitter(stack)?.scripts ?? false, stack });
     })
