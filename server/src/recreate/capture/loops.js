@@ -104,7 +104,7 @@ export function scanAnimations(opts) {
  * @returns {Promise<{ candidates: object[], scanned: number, changed: number }>}
  */
 export async function findScriptLoops(opts) {
-  const { maxCandidates = 40, probeMs = 450, recordMs = 2200 } = opts || {};
+  const { maxCandidates = 40, probeMs = 450, recordMs = 2200, inView = false, minWidth = 0 } = opts || {};
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const SKIP_TAGS = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE', 'DEFS', 'TITLE', 'DESC']);
   const pathOf = (el) => {
@@ -137,7 +137,12 @@ export async function findScriptLoops(opts) {
     if (now.some((v, k) => v !== before[i][k])) changed.push(el);
   });
   // Animations (including a transition that is still running) explain a change; so does nothing else.
-  const loose = changed.filter((el) => !(el.getAnimations?.().length));
+  // Below the first screen (inView): only what the window shows now, and strips (minWidth), not a reveal finishing.
+  const shownNow = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width >= minWidth && (!inView || (r.bottom > 0 && r.top < innerHeight));
+  };
+  const loose = changed.filter((el) => !(el.getAnimations?.().length) && shownNow(el));
   const area = (el) => {
     const r = el.getBoundingClientRect();
     return r.width * r.height;
@@ -155,14 +160,33 @@ export async function findScriptLoops(opts) {
     };
     requestAnimationFrame(frame);
   });
+  // A ticker repeats its items (the page duplicates them so the strip never runs empty): the distance from the first item
+  // to its next copy is how far the strip moves before it looks the same again.
+  const repeatOf = (el) => {
+    const kids = [...el.children].filter((c) => c.getBoundingClientRect().width > 0);
+    const n = kids.length;
+    if (n < 2) return null;
+    const sig = kids.map((c) => [c.tagName, (c.textContent || '').trim().replace(/s+/g, ' ').slice(0, 60), c.querySelector('img')?.getAttribute('src') ?? '', c.childElementCount].join('|'));
+    for (let k = 1; k <= n / 2; k++) {
+      let same = true;
+      for (let i = 0; i + k < n && same; i++) same = sig[i] === sig[i + k];
+      if (!same) continue;
+      const a = kids[0].getBoundingClientRect();
+      const b = kids[k].getBoundingClientRect();
+      return { x: Math.round((b.left - a.left) * 10) / 10, y: Math.round((b.top - a.top) * 10) / 10, items: k };
+    }
+    return null;
+  };
   return {
     scanned: els.length,
     changed: changed.length,
     candidates: chosen.map((el, i) => {
       const r = el.getBoundingClientRect();
+      const repeat = repeatOf(el);
       return {
         path: pathOf(el), tag: el.tagName.toLowerCase(), text: (el.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 40),
         rect: [Math.round(r.left + scrollX), Math.round(r.top + scrollY), Math.round(r.width), Math.round(r.height)], series: series[i],
+        ...(repeat && { repeat }),
       };
     }).filter((c) => c.path),
   };
@@ -224,7 +248,8 @@ export async function recordPaths({ paths, ms = 9000, every = 50 }) {
 // ---- Node side ------------------------------------------------------------------------------------------------
 
 const SLOW_MOVER_PX = 60; // a one-way move smaller than this in the short recording may be a slow float
-const SLOW_WATCH_MS = 9000; // watched again for up to this long (stops once each one turned twice)
+const SLOW_WATCH_MS = 9000;
+const MAX_SCROLL_STEPS = 12; // windows scrolled through for strips that move only on screen // watched again for up to this long (stops once each one turned twice)
 
 const num = (s) => {
   const n = parseFloat(s);
@@ -432,7 +457,7 @@ export function processLoops({ scan, script }) {
   for (const c of script?.candidates ?? []) {
     const a = analyzeSeries(c.series);
     if (!a) continue;
-    loops.push({ path: c.path, tag: c.tag, ...(c.text && { text: c.text }), rect: c.rect, source: 'script', pattern: a.pattern, params: a, timing: { driver: 'script', ...(a.periodMs && { periodMs: a.periodMs }) } });
+    loops.push({ path: c.path, tag: c.tag, ...(c.text && { text: c.text }), rect: c.rect, source: 'script', pattern: a.pattern, params: { ...a, ...(c.repeat && { repeat: c.repeat }) }, timing: { driver: 'script', ...(a.periodMs && { periodMs: a.periodMs }) } });
     stats.script++;
     stats.patterns[a.pattern] = (stats.patterns[a.pattern] ?? 0) + 1;
   }
@@ -458,6 +483,23 @@ export async function captureLoops(page, { script = true, recordMs = 2200 } = {}
     slow.forEach((c, i) => {
       if (longer?.[i]?.length >= 8) c.series = longer[i];
     });
+  }
+  // Strips that move only while they are on screen (a ticker of testimonials further down pauses out of view): the page is
+  // scrolled a window at a time and what moves there by itself (strips, not a reveal finishing) is recorded too.
+  if (found && script) {
+    const seen = new Set(found.candidates.map((c) => c.path));
+    const { height, view } = await page.evaluate(() => ({ height: document.documentElement.scrollHeight, view: innerHeight })).catch(() => ({ height: 0, view: 0 }));
+    for (let y = Math.round(view * 0.8), steps = 0; view && y < height - view * 0.2 && steps < MAX_SCROLL_STEPS; y += Math.round(view * 0.8), steps++) {
+      await page.evaluate((top) => window.scrollTo(0, top), y).catch(() => {});
+      await page.waitForTimeout(700);
+      const more = await page.evaluate(findScriptLoops, { recordMs: 1200, maxCandidates: 6, inView: true, minWidth: 200 }).catch(() => null);
+      for (const c of more?.candidates ?? []) {
+        if (seen.has(c.path)) continue;
+        seen.add(c.path);
+        found.candidates.push(c);
+      }
+    }
+    await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
   }
   return processLoops({ scan, script: found ?? undefined });
 }

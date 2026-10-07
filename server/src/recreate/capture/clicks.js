@@ -267,7 +267,7 @@ function readClickState(opts) {
  * descendants (≤ 400), keyed by their path relative to it ('' = the element itself). Read with the panel open and again
  * closed; the difference is the open state (ir/motion.js widgets).
  */
-function readRegion({ rootPath }) {
+function readRegion({ rootPath, only = null }) {
   const SKIP_TAGS = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
   const PROPS = ['display', 'visibility', 'opacity', 'transform', 'rotate', 'translate', 'scale', 'height', 'max-height', 'grid-template-rows',
     'padding-top', 'padding-bottom', 'margin-top', 'margin-bottom', 'color', 'background-color', 'border-top-color', 'border-bottom-color'];
@@ -313,6 +313,23 @@ function readRegion({ rootPath }) {
       walk(c, `${rel ? `${rel}>` : ''}${t}:${tagIndex[t]}`);
     }
   };
+  // A panel far from its control (a phone drawer outside the header holding its button): the whole page is the area, but
+  // only the control and the panel are read, by their paths relative to it.
+  if (only) {
+    for (const p of only) {
+      if (!p.startsWith(`${rootPath}>`)) continue;
+      const rel = p.slice(rootPath.length + 1);
+      let n = el;
+      for (const part of rel.split('>')) {
+        const [tag, k] = part.split(':');
+        let count = 0;
+        n = [...(n ? n.children : [])].find((c) => !SKIP_TAGS.has(c.tagName) && c.tagName.toLowerCase() === tag && ++count === Number(k)) ?? null;
+        if (!n) break;
+      }
+      if (n) walk(n, rel);
+    }
+    return out;
+  }
   walk(el, '');
   return out;
 }
@@ -652,13 +669,14 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
         // The open state as styles (accordion answers, dropdowns): the part of the page that holds the trigger and what it
         // opened, read open now and closed again after the restoring click.
         const common = kind.kind === 'disclosure' ? commonPath([c.path, ...kind.targets]) : null;
-        const root = common && common !== 'body' ? common : null;
-        const open = root ? await page.evaluate(readRegion, { rootPath: root }).catch(() => null) : null;
+        const root = common || null;
+        const only = root === 'body' ? [c.path, ...kind.targets] : null;
+        const open = root ? await page.evaluate(readRegion, { rootPath: root, only }).catch(() => null) : null;
         entry.closes = await restore(page, c, spot, read);
         if (!entry.closes) stats.notRestored++;
         else if (open) {
           await page.waitForTimeout(200);
-          const closed = await page.evaluate(readRegion, { rootPath: root }).catch(() => null);
+          const closed = await page.evaluate(readRegion, { rootPath: root, only }).catch(() => null);
           const parts = closed ? regionDiff(closed, open) : [];
           if (parts.length) entry.state = { root, parts, ...(Object.keys(open).length > Object.keys(closed).length && { added: true }) };
         }

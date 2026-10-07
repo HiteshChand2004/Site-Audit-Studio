@@ -42,6 +42,8 @@ export function fromCapture(node, view) {
   for (const key of ['lazy', 'src', 'href', 'poster', 'natural', 'svg']) if (node[key] != null) m[key] = node[key];
   // The desktop path of the snapshot (body>div:1>a:2): the motion capture (4b) names its elements by it.
   if (view === 'desktop' && node.path) m.cpath = node.path;
+  // The phone snapshot path: controls only the phone layout has (a menu button) are named by it (mobile-clicks.json).
+  if (view === 'mobile' && node.path) m.mpath = node.path;
   // The other states of a tab panel / carousel (capture/states.js); ir/states.js puts them into the tree.
   if (node.states) m.states = { ...node.states, variants: node.states.variants.map((v) => ({ index: v.index, node: fromCapture(v.body, view), ...(v.effects && { effects: v.effects }) })) };
   if (node.hoverState?.body) m.hoverState = { node: fromCapture(node.hoverState.body, view) };
@@ -148,7 +150,7 @@ function clearViews(node, views) {
  */
 export function alignInto(a, b, views) {
   for (const v of views) if (b.views[v]) a.views[v] = b.views[v];
-  for (const key of ['src', 'href', 'poster', 'natural', 'svg', 'lazy', 'cpath']) if (a[key] == null && b[key] != null) a[key] = b[key];
+  for (const key of ['src', 'href', 'poster', 'natural', 'svg', 'lazy', 'cpath', 'mpath']) if (a[key] == null && b[key] != null) a[key] = b[key];
   const ae = a.children.filter(isElement);
   const be = b.children.filter(isElement);
   const partner = new Map();
@@ -304,6 +306,7 @@ export function cleanTree(node, views = VIEW_IDS, parentDisplay = 'block') {
     if (plain) {
       // What the motion capture said about the wrapper now applies to the element that took its place.
       if (c.cpath) inner[0].cpathAlt = [...(inner[0].cpathAlt ?? []), c.cpath];
+      if (c.mpath) inner[0].mpathAlt = [...(inner[0].mpathAlt ?? []), c.mpath];
       node.children.splice(i, 1, inner[0]);
       removed++;
       i--;

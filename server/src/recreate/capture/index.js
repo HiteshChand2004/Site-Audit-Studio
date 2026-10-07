@@ -21,7 +21,8 @@ import { attachProbe, probeViewportHeight } from './viewport.js';
 
 // Clicking through the states of tabs / carousels / filtered lists of one page (most pages have none: no time used). The
 // limit follows the work (capture/states.js, ~3 s per control) within these bounds.
-const STATES_BUDGET_MS = { min: 30000, max: 100000, perControl: 4000 }; // 24 carousel slides took ~51 s
+const MOBILE_CLICK_BUDGET_MS = 8000; // the phone layout's own controls (menu button)
+const STATES_BUDGET_MS ={ min: 30000, max: 100000, perControl: 4000 }; // 24 carousel slides took ~51 s
 
 export { VIEWS };
 const firstLine = (err) => String(err?.message ?? err).split('\n')[0].trim();
@@ -222,6 +223,18 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       }
     }
     lap('viewport');
+
+    // Controls only the phone layout has (a menu button, a drawer): the click probe on the phone view too, briefly and
+    // toggles first, after everything else was read from this page (it changes it). The copy rebuilds what it finds there.
+    if (view.id === 'mobile' && clickBudgetMs > 0) {
+      try {
+        const clicks = await captureClicks(page, { budgetMs: MOBILE_CLICK_BUDGET_MS, limit: 8 });
+        await writeFile(path.join(dir, 'mobile-clicks.json'), JSON.stringify({ version: 1, view: 'mobile', clicks }));
+      } catch {
+        // the phone probe never fails a capture
+      }
+      lap('clicks');
+    }
 
     // Hover and focus effects (4b.1) and how the scroll reveals run (4b.2), on the desktop view only, after
     // everything else was captured from the page.

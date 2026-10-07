@@ -255,6 +255,16 @@ records them, nothing consumed them) → **3** script-driven hovers (probe budge
        paired same-tag children by position, so items got each other's phone sizes (text squeezed to 26 px, the page 9397 px tall on a phone vs 6949).
        Same tags + the same items (tag + text) in a different order → matched by content (LCS); an item that moved is kept once per layout, each shown only
        where it belongs, so every layout keeps its own order. Same tags with different text still pair by position. Test in `recreate-generate.test.js`.
+    24. Controls only the phone layout shows (a hamburger menu): the click probe also runs on the phone view (`capture/index.js`, 8 s, ≤ 8 controls,
+       toggles first, after everything else was read) → `capture/<slug>/mobile-clicks.json`; `readPageMotion` adds it as `clicksMobile`; merged nodes keep
+       their phone snapshot path (`tree.js mpath` / `mpathAlt`), and `ir/motion.js` rebuilds those widgets like the desktop ones (skipped when the desktop
+       already rebuilt the same control: `skipped.phoneDone`; `widgets.phone` counts them). A panel far from its control (a drawer outside the header
+       holding its button) has the whole page as its area: `readRegion({ only })` reads just the control and the panel. Test in `recreate-widgets.test.js`.
+    25. Tickers moved by script (parchaa testimonials, a builder's ticker that only moves while on screen): `captureLoops` also scrolls a window at a
+       time (≤ 12 steps, 0.7 s settle) and records strips ≥ 200 px wide that move by themselves there (`findScriptLoops({ inView, minWidth })`); every
+       script candidate carries `repeat` = distance from its first child to the child's next copy (`repeatOf`: equal tag + text + image + child count).
+       `ir/motion.js scriptLoop`: a `drift` with a repeat (or a seen wrap) → `@keyframes m-lN` translate 0 → ∓repeat, linear, infinite, duration
+       repeat / rate (seamless, CSS only). One-way moves without a repeat stay skipped. Cost ~+15–25 s on a long page. Tests: `recreate-loops`, `recreate-motion-ir`.
   - Autoplay timing measured inside the page (`watchText`: visible text every 100 ms, page clock); from Node a snapshot per reading took up to 0.5 s under load (1.5 s read as 2 s).
   - Verified (fresh capture home + 9 pages, then rebuilt from it; `scratch-checkall.mjs`): all 12 of the user's points OK (contact headline at 1280: 66.56 px, top 233, height 68 = original);
     fidelity 88 → 93, visual diff 89 → 94; React / Next / MERN: DOM 10/10, pixels 1.0, hydration clean, safety passed. Full suite: 288 pass, 2 fail (known `netGuard`), 4 skipped.

@@ -7,7 +7,7 @@ import path from 'node:path';
 import { emitCss } from '../src/recreate/emit/css.js';
 import { emitPage, emitSite } from '../src/recreate/emit/html.js';
 import { MOTION_FILE, MOTION_JS } from '../src/recreate/emit/motionScript.js';
-import { applyMotion, revealSpec } from '../src/recreate/ir/motion.js';
+import { applyMotion, revealSpec, scriptLoop } from '../src/recreate/ir/motion.js';
 import { launchBrowser } from '../src/audit/render.js';
 import { scanSite } from '../src/recreate/verify/safety.js';
 import { startSiteServer } from '../src/recreate/verify/server.js';
@@ -67,6 +67,16 @@ const motionFile = () => ({
       { path: 'body>section:1', source: 'waapi', pattern: 'float', timing: { duration: 1, iterations: 'infinite' }, keyframes: [{ offset: 0, props: {} }, { offset: 1, props: {} }], timeline: 'ScrollTimeline' },
     ],
   },
+});
+
+test('a script-driven ticker with repeated items is rebuilt as an endless slide over one repeat', () => {
+  const built = scriptLoop({ pattern: 'drift', params: { pattern: 'drift', channel: 'x', rate: 50, direction: 'backward', repeat: { x: 400, y: 0, items: 1 } } });
+  assert.deepEqual(built.keyframes.map((k) => k.props.translate), ['0px 0', '-400px 0']);
+  assert.equal(built.timing.duration, 8000);
+  assert.equal(built.timing.iterations, 'infinite');
+  assert.equal(built.timing.easing, 'linear');
+  // Without a known repeat (a one-way move that may be anything) nothing is rebuilt.
+  assert.equal(scriptLoop({ pattern: 'drift', params: { pattern: 'drift', channel: 'x', rate: 50, direction: 'backward' } }), null);
 });
 
 test('revealSpec: a from-state relative to the element, timing and easing from the capture', () => {

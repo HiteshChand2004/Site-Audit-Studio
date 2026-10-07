@@ -30,11 +30,19 @@ const NO_VALUE = /^(null|undefined)$/;
 
 /** The motion capture of one page (capture/<slug>/motion.json), or null. */
 export async function readPageMotion(dir, page) {
+  let motion = null;
   try {
-    return JSON.parse(await readFile(path.join(dir, 'capture', page.slug, 'motion.json'), 'utf8'));
+    motion = JSON.parse(await readFile(path.join(dir, 'capture', page.slug, 'motion.json'), 'utf8'));
   } catch {
     return null;
   }
+  // The phone layout's own controls (capture/index.js mobile-clicks.json), named by phone snapshot paths.
+  try {
+    motion.clicksMobile = JSON.parse(await readFile(path.join(dir, 'capture', page.slug, 'mobile-clicks.json'), 'utf8')).clicks;
+  } catch {
+    // none captured
+  }
+  return motion;
 }
 
 const r1 = (n) => Math.round(n * 10) / 10;
@@ -151,7 +159,7 @@ const specKey = (s) => JSON.stringify([s.opacity ?? null, s.translate ?? null, s
 const loopKeyframes = (kfs) => kfs.map((k) => ({ offset: Math.round(k.offset * 10000) / 100, ...(k.easing && k.easing !== 'linear' && { easing: k.easing }), props: k.props }));
 
 /** Loops the page's CSS does not carry, from a script-driven analysis: a steady spin or an oscillation. */
-function scriptLoop(loop) {
+export function scriptLoop(loop) {
   const p = loop.params;
   if (loop.pattern === 'spin' && p.rate > 0.5) {
     const deg = p.direction === 'backward' ? -360 : 360;
@@ -161,6 +169,15 @@ function scriptLoop(loop) {
     const a = r1(p.amplitude);
     const v = (n) => (p.channel === 'x' ? `${n}px 0` : `0 ${n}px`);
     return { keyframes: [{ offset: 0, props: { translate: v(-a) } }, { offset: 100, props: { translate: v(a) } }], timing: { duration: Math.round(p.periodMs / 2), delay: 0, iterations: 'infinite', direction: 'alternate', fill: 'none', easing: 'ease-in-out' } };
+  }
+  // A ticker moved by script: its items repeat, so it slides by one repeat at the same speed, then starts over (seamless).
+  if (loop.pattern === 'drift' && (p.channel === 'x' || p.channel === 'y') && p.rate > 1) {
+    const period = Math.abs(Number(p.channel === 'x' ? p.repeat?.x : p.repeat?.y) || Number(p.wrap?.distance) || 0);
+    if (period >= 20) {
+      const end = r1(p.direction === 'backward' ? -period : period);
+      const v = (n) => (p.channel === 'x' ? `${n}px 0` : `0 ${n}px`);
+      return { keyframes: [{ offset: 0, props: { translate: v(0) } }, { offset: 100, props: { translate: v(end) } }], timing: { duration: Math.round((period / p.rate) * 1000), delay: 0, iterations: 'infinite', direction: 'normal', fill: 'none', easing: 'linear' } };
+    }
   }
   return null;
 }
@@ -394,9 +411,26 @@ export function applyMotion(site, byPath) {
     // Click widgets (capture/clicks.js). A panel a click opens (accordion answer, dropdown): its area gets `wN`, the
     // control `wt`, each part the click changed `wNpK`; js/motion.js toggles `is-open` on the area, the stylesheet holds the
     // open state. Equal controls (the other questions of the FAQ) get the same effect at the same places inside their area.
+    // Controls of the phone layout (mobile-clicks.json) are found by their phone snapshot path.
+    const phoneNodes = new Map();
+    const walkPhone = (n) => {
+      if (!isElement(n)) return;
+      if (n.mpath) phoneNodes.set(n.mpath, n);
+      for (const alt of n.mpathAlt ?? []) if (!phoneNodes.has(alt)) phoneNodes.set(alt, n);
+      n.children.forEach(walkPhone);
+    };
+    walkPhone(tree.root);
+    const desktopNodes = nodes;
     const done = new Set();
-    for (const w of motion.clicks?.widgets ?? []) {
+    const allWidgets = [...(motion.clicks?.widgets ?? []).map((w) => [w, desktopNodes, 'd']), ...(motion.clicksMobile?.widgets ?? []).map((w) => [w, phoneNodes, 'm'])];
+    for (const [w, nodes, src] of allWidgets) {
       const ws = stats.widgets;
+      // A phone control the desktop probe already rebuilt (the same element) needs nothing more.
+      if (src === 'm' && nodes.get(w.trigger)?.motionTokens?.includes('wt')) {
+        ws.skipped.phoneDone = (ws.skipped.phoneDone ?? 0) + 1;
+        continue;
+      }
+      if (src === 'm') ws.phone = (ws.phone ?? 0) + 1;
       // A part a hover opens (a card unfolding its details, a dropdown) is rebuilt with CSS :hover, no script.
       const onHover = w.opensOn === 'hover' && (w.kind === 'disclosure' || w.kind === 'carousel');
       if (!onHover && (w.kind !== 'disclosure' || w.opensOn !== 'click')) {
@@ -448,8 +482,8 @@ export function applyMotion(site, byPath) {
         for (const n of list ? [list, ...(list.stateTwins ?? [])] : []) n.stateAttrs = { ...n.stateAttrs, 'data-w-one': '' };
       }
       for (const trigger of [w.trigger, ...(w.group?.paths ?? [])]) {
-        if (done.has(trigger)) continue;
-        done.add(trigger);
+        if (done.has(src + trigger)) continue;
+        done.add(src + trigger);
         const segs = trigger.split('>');
         const rootPath = segs.slice(0, segs.length - depth).join('>');
         const rootNode = nodes.get(rootPath);

@@ -310,6 +310,67 @@ test('a carousel copied from a desktop and a phone capture still switches on a p
   }
 });
 
+// A menu button only the phone layout shows: the desktop probe never sees it (hidden there), so the phone view is probed
+// too (mobile-clicks.json) and the copy opens the drawer on a phone like the original.
+const PHONE_MENU = `<!doctype html><html><head><meta name="viewport" content="width=device-width"><style>
+body { margin: 0; font: 16px sans-serif } header { display: flex; justify-content: space-between; padding: 12px }
+.links a { margin: 0 8px } .burger { display: none; width: 44px; height: 32px }
+.drawer { display: none; padding: 12px; background: #eee } .drawer.open { display: block }
+@media (max-width: 600px) { .links { display: none } .burger { display: block } }
+</style></head><body><header><b>Logo</b><nav class="links"><a href="/a.html">Alpha</a><a href="/b.html">Beta</a></nav>
+<button class="burger" type="button" aria-label="Open menu" aria-expanded="false">=</button></header>
+<nav class="drawer" id="drawer"><a href="/a.html">Alpha page</a> <a href="/b.html">Beta page</a></nav>
+<main><p>Content</p></main>
+<script>var b = document.querySelector('.burger'), d = document.getElementById('drawer');
+b.addEventListener('click', function () { var o = d.classList.toggle('open'); b.setAttribute('aria-expanded', String(o)); });</script></body></html>`;
+
+test('a menu button only the phone layout shows opens its drawer in the copy on a phone', async () => {
+  pages.set('/phone-menu', PHONE_MENU);
+  pages.set('/js/motion.js', MOTION_JS);
+  const context = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const page = await context.newPage();
+  await page.goto(`${base}/phone-menu`);
+  const desktop = await page.evaluate(snapshotPage, {});
+  const clicks = await captureClicks(page, { budgetMs: 10000 });
+  await context.close();
+  assert.ok(!clicks.widgets.some((w) => /menu/i.test(w.text ?? '')), 'the desktop probe does not see the phone menu');
+  const phoneContext = await browser.newContext({ viewport: { width: 375, height: 812 } });
+  const phonePage = await phoneContext.newPage();
+  await phonePage.goto(`${base}/phone-menu`);
+  const mobile = await phonePage.evaluate(snapshotPage, {});
+  const phoneClicks = await captureClicks(phonePage, { budgetMs: 8000, limit: 8 });
+  await phoneContext.close();
+  assert.ok(phoneClicks.widgets.some((w) => w.kind === 'disclosure' && w.state), JSON.stringify(phoneClicks.widgets.map((w) => [w.kind, w.text, Boolean(w.state)])));
+
+  const tree = buildPageTree({ desktop: desktop.body, mobile: mobile.body });
+  const site = { pages: [{ info: { path: '/phone-menu', url: `${base}/phone-menu` }, root: tree.root }], assetResolve: () => null };
+  const { motion, stats } = applyMotion(site, new Map([['/phone-menu', { clicks, clicksMobile: phoneClicks }]]));
+  assert.ok(stats.widgets.phone >= 1 && motion.script, JSON.stringify(stats.widgets));
+  const { rules, boxSizingReset } = buildStyles([tree], { assetFile: () => null });
+  const siteCss = emitCss({ rules, breakpoints: { source: 'default' }, tokens: {}, fontFaces: [], keyframes: [], boxSizingReset, pages: [] });
+  const css = `${typeof siteCss === 'string' ? siteCss : siteCss.css}\n${motionCss(motion, { tokenOf: new Map(), from: '' })}`;
+  const html = (n) => {
+    if (!isElement(n)) return n.text.replace(/</g, '&lt;');
+    const all = { ...n.attrs, ...(n.class && { class: n.class }), ...n.stateAttrs, ...(n.motionTokens?.length && { 'data-motion': n.motionTokens.join(' ') }) };
+    const attrs = Object.entries(all).map(([k, v]) => (v === '' ? ` ${k}` : ` ${k}="${String(v).replace(/"/g, '&quot;')}"`)).join('');
+    return `<${n.tag}${attrs}>${n.children.map(html).join('')}</${n.tag}>`;
+  };
+  pages.set('/phone-menu-copy', `<!doctype html><html><head><meta name="viewport" content="width=device-width"><style>${css}</style><script src="/js/motion.js" defer></script></head>${html(tree.root)}</html>`);
+  const ctx = await browser.newContext({ viewport: { width: 375, height: 812 } });
+  const p = await ctx.newPage();
+  const errors = [];
+  p.on('pageerror', (e) => errors.push(e.message));
+  await p.goto(`${base}/phone-menu-copy`);
+  const drawerShown = () => p.evaluate(() => [...document.querySelectorAll('a')].some((a) => a.textContent === 'Alpha page' && a.getClientRects().length > 0));
+  assert.equal(await drawerShown(), false, 'closed at first');
+  await p.locator('button:visible').first().click();
+  assert.equal(await drawerShown(), true, 'the menu button opens the drawer');
+  await p.locator('button:visible').first().click();
+  assert.equal(await drawerShown(), false, 'and closes it');
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
 // A media page styled inline (no classes): category chips render only the chosen category's section (the others are
 // removed from the page), and the videos section has a look-alike "View more" button that adds a card and becomes
 // "View less" (a second click takes it away).
