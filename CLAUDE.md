@@ -251,6 +251,10 @@ records them, nothing consumed them) → **3** script-driven hovers (probe budge
     22. Page-load entrances (timed reveals in the first screen: a builder's hero fading in) are rebuilt: token `rl` + the effect's `rN`, the same
        `@keyframes m-rN` played once on load with CSS only (no hidden state, no script); skipped when the element carries an animation of its own
        (word rotators, loops) or repeats. Scroll reveals now use `[data-motion~=rv][data-motion~=rN]` so `rl` elements are never hidden.
+    23. Views listing the same items in another order (parchaa `/solutions`: the phone layout's list starts with another item): `tree.js matchChildren`
+       paired same-tag children by position, so items got each other's phone sizes (text squeezed to 26 px, the page 9397 px tall on a phone vs 6949).
+       Same tags + the same items (tag + text) in a different order → matched by content (LCS); an item that moved is kept once per layout, each shown only
+       where it belongs, so every layout keeps its own order. Same tags with different text still pair by position. Test in `recreate-generate.test.js`.
   - Autoplay timing measured inside the page (`watchText`: visible text every 100 ms, page clock); from Node a snapshot per reading took up to 0.5 s under load (1.5 s read as 2 s).
   - Verified (fresh capture home + 9 pages, then rebuilt from it; `scratch-checkall.mjs`): all 12 of the user's points OK (contact headline at 1280: 66.56 px, top 233, height 68 = original);
     fidelity 88 → 93, visual diff 89 → 94; React / Next / MERN: DOM 10/10, pixels 1.0, hydration clean, safety passed. Full suite: 288 pass, 2 fail (known `netGuard`), 4 skipped.

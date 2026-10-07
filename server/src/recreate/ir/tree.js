@@ -113,7 +113,14 @@ function lcs(a, b, key) {
 
 /** Pairs of matching element children, in order. Exported for tests. */
 export function matchChildren(a, b) {
-  if (a.length === b.length && a.every((x, i) => x.tag === b[i].tag)) return a.map((x, i) => [x, b[i]]);
+  if (a.length === b.length && a.every((x, i) => x.tag === b[i].tag)) {
+    // Same tags, same content, another order (a builder's phone variant puts a list item's text before its bullet):
+    // pairing by position would give the bullet the text's styles in that view; matched by content below instead.
+    const ka = a.map(matchKey);
+    const kb = b.map(matchKey);
+    const reordered = ka.some((k, i) => k !== kb[i]) && [...ka].sort().join('\n') === [...kb].sort().join('\n');
+    if (!reordered) return a.map((x, i) => [x, b[i]]);
+  }
   // Strong anchors first (tag + text), then the gaps between anchors by tag alone.
   const anchors = lcs(a, b, matchKey);
   const pairs = [];

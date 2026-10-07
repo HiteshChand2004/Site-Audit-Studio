@@ -14,7 +14,7 @@ import { pickBreakpoints } from '../src/recreate/ir/index.js';
 import { createLinkResolver, relFile, relPage } from '../src/recreate/ir/links.js';
 import { ClassNamer, meaningful, originalName } from '../src/recreate/ir/names.js';
 import { cascade, resolveHints, wrapsText } from '../src/recreate/ir/styles.js';
-import { buildPageTree, deepText, isElement } from '../src/recreate/ir/tree.js';
+import { buildPageTree, deepText, isElement, matchChildren } from '../src/recreate/ir/tree.js';
 import { runRecreate } from '../src/recreate/index.js';
 import { startPreview, stopPreview } from '../src/recreate/preview.js';
 import { recreateDir } from '../src/recreate/workspace.js';
@@ -58,6 +58,19 @@ const findAll = (node, test, out = []) => {
   node.children.forEach((c) => findAll(c, test, out));
   return out;
 };
+
+test('views are matched by content when a layout lists the same items in another order', () => {
+  const item = (text) => ({ tag: 'div', attrs: {}, views: {}, children: [{ tag: 'div', attrs: {}, views: {}, children: [] }, { tag: 'div', attrs: {}, views: {}, children: [{ text }] }] });
+  const desktop = [item('Clinical care'), item('Telemedicine'), item('OPD, IPD, emergency')];
+  const phone = [item('OPD, IPD, emergency'), item('Clinical care'), item('Telemedicine')];
+  const pairs = matchChildren(desktop, phone);
+  for (const [a, b] of pairs) assert.equal(deepText(a), deepText(b), 'each item pairs with the same item');
+  // An item moved to another place is kept once per layout (each shown only where it belongs), so every layout keeps its order.
+  assert.ok(pairs.length >= 2);
+  // Same tags but other content (text that differs between the views) still pairs by position.
+  const other = [item('A'), item('B'), item('C')];
+  assert.deepEqual(matchChildren(desktop, other).map(([a, b]) => [deepText(a), deepText(b)]), desktop.map((d, i) => [deepText(d), deepText(other[i])]));
+});
 
 test('original class names are hints only: builder, hashed and utility names are never reused', () => {
   for (const bad of ['framer-1x2y3z', 'framer-Xk2p9', 'w-dyn-list', 'wp-block-group', 'css-1a2b3c', 'sc-bdVaJa', 'jsx-1234', '_a1b2c',
