@@ -14,6 +14,42 @@
   background: var(--surface);
 }
 
+.head {
+  transition: gap var(--dur) var(--ease), padding var(--dur) var(--ease);
+}
+
+.head[data-tabs-hidden] {
+  gap: 0;
+  padding-bottom: var(--sp-3);
+}
+
+/* The step tabs fold away while scrolling down (grid rows 1fr → 0fr) and unfold on scrolling up. */
+.steps {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--dur) var(--ease), opacity var(--dur) var(--ease);
+}
+
+.steps[data-hidden] {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+.stepsInner {
+  min-height: 0;
+  overflow: hidden;
+  /* room for the selected tab's focus ring and shadow */
+  padding: 3px;
+  margin: -3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .head,
+  .steps {
+    transition: none;
+  }
+}
+
 .titles {
   display: flex;
   flex-wrap: wrap;

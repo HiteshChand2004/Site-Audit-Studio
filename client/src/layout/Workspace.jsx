@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { StepTabs } from '../components/common/Tabs.jsx';
 import { STEPS } from '../copy.js';
@@ -91,13 +91,38 @@ export default function Workspace({ project, audit, auditLoading, onOpenSettings
     };
   }, [stackState, project.id, project.stack, reloadRecreate, reloadAudit]);
 
+  // The step tabs step aside while the user scrolls down to read, and come back on the first scroll up.
+  const [tabsHidden, setTabsHidden] = useState(false);
+  const scrollState = useRef({ top: 0, until: 0 });
+  useEffect(() => {
+    setTabsHidden(false);
+    scrollState.current = { top: 0, until: 0 };
+  }, [step, project.id]);
+  const onScroll = (e) => {
+    const top = e.currentTarget.scrollTop;
+    const st = scrollState.current;
+    const delta = top - st.top;
+    // Hiding / showing the tabs resizes the scroll area, which moves scrollTop by itself near the end of the page: ignore it for a moment.
+    if (Date.now() < st.until) {
+      st.top = top;
+      return;
+    }
+    if (Math.abs(delta) < 6) return;
+    st.top = top;
+    const hide = top > 80 && delta > 0;
+    if (hide !== tabsHidden) {
+      st.until = Date.now() + 350;
+      setTabsHidden(hide);
+    }
+  };
+
   const states = stepStates({ audit, analysis, job, result, reauditJob });
   const tabs = ORDER.map((id) => ({ id, n: STEPS[id].n, title: STEPS[id].title, ...states[id] }));
   const props = { project, audit, onGoCreate: () => choose('create') };
 
   return (
     <div className={styles.workspace}>
-      <header className={styles.head}>
+      <header className={styles.head} data-tabs-hidden={tabsHidden || undefined}>
         <div className={styles.titles}>
           <h1 className={styles.name}>{project.name}</h1>
           <a className={`${styles.url} mono`} href={project.url} target="_blank" rel="noopener noreferrer">
@@ -105,10 +130,14 @@ export default function Workspace({ project, audit, auditLoading, onOpenSettings
             <ExternalLink size={12} aria-hidden="true" />
           </a>
         </div>
-        <StepTabs tabs={tabs} value={step} onChange={choose} label="Steps" />
+        <div className={styles.steps} data-hidden={tabsHidden || undefined} onFocus={() => setTabsHidden(false)}>
+          <div className={styles.stepsInner}>
+            <StepTabs tabs={tabs} value={step} onChange={choose} label="Steps" />
+          </div>
+        </div>
       </header>
 
-      <div className={`${styles.content} scroll`}>
+      <div className={`${styles.content} scroll`} onScroll={onScroll}>
         <div role="tabpanel" id={`panel-${step}`} aria-labelledby={`tab-${step}`} key={step} className={styles.panel}>
           <p className={styles.explain}>{STEPS[step].explain}</p>
           {step === 'check' && <CheckStep project={project} audit={audit} loading={auditLoading} />}
