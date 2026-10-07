@@ -120,6 +120,25 @@ function gridTracks(value, contentW, gap) {
   return tracks.map((t) => `minmax(0, ${round(t / min)}fr)`).join(' ');
 }
 
+// The width of one column of a grid (its captured px tracks, or n equal tracks of repeat(n, …) / 1fr lists), or null when
+// the columns differ in width (the item's own column is then not known).
+function gridColumnWidth(pStyle, contentW) {
+  const value = String(pStyle['grid-template-columns'] ?? '').trim();
+  if (!value || value === 'none' || value.includes('[')) return null;
+  const gap = num(pStyle['column-gap']);
+  const rep = /^repeat\(\s*(\d+)\s*,\s*(minmax\(\s*0(px)?\s*,\s*1fr\s*\)|1fr)\s*\)$/.exec(value);
+  let tracks;
+  if (rep) tracks = Array(Number(rep[1])).fill(null);
+  else {
+    tracks = value.split(/\s+(?![^(]*\))/);
+    const pxs = tracks.map(px);
+    if (pxs.every((t) => t != null)) return pxs.every((t) => Math.abs(t - pxs[0]) <= 1) ? pxs[0] : null;
+    if (!tracks.every((t) => /^(1fr|minmax\(\s*0(px)?\s*,\s*1fr\s*\))$/.test(t))) return null;
+  }
+  const n = tracks.length;
+  return n > 0 && contentW > 0 ? (contentW - gap * (n - 1)) / n : null;
+}
+
 // Badges, chips, labels and icon buttons: small, and narrower than their parent.
 const isSmallBox = (w, h, ratio) => w <= 400 && h <= 200 && (ratio == null || ratio < 0.95);
 
@@ -391,10 +410,18 @@ export function normalizeView(node, v, chain, opts) {
     // floating tile shrinks to its content.
     const sized = true;
     const cbW = containingWidth(chain, v, position);
+    let fullWidth = false;
     for (const [a, b, prop, value] of [['left', 'right', 'width', size.w(w)], ['top', 'bottom', 'height', size.h(h)]]) {
       const va = px(style[a]);
       const vb = px(style[b]);
-      if (va != null && vb != null && Math.abs(va) <= 1 && Math.abs(vb) <= 1) continue; // stretched: inset 0
+      if (va != null && vb != null && Math.abs(va) <= 1 && Math.abs(vb) <= 1) {
+        // Stretched: inset 0. A size another view sets (a centred 410 px box on desktop) must not carry over through the
+        // cascade, else the fit pass pins this view at its captured px (a card's dark layer stopped short of the card).
+        const sizedElsewhere = Object.entries(node.views).some(([k, od]) => k !== v && od && (od.style.position ?? 'static') === position
+          && !(Math.abs(px(od.style[a]) ?? 99) <= 1 && Math.abs(px(od.style[b]) ?? 99) <= 1));
+        if (sizedElsewhere && !REPLACED.has(node.tag)) style[prop] = 'auto';
+        continue;
+      }
       // A box that fills the width between its two insets (a fixed header with a margin on each side) is stretched
       // by them: with a px width it would overflow on every screen narrower than the captured one. The browser reports
       // both insets of every absolute box, so this alone says nothing: an inset that moves between the captured views
@@ -408,8 +435,14 @@ export function normalizeView(node, v, chain, opts) {
       if (prop === 'width' && va != null && vb != null && cbW > 0 && !REPLACED.has(node.tag) && Math.abs(cbW - va - vb - w) <= 1.5 && !insetsMove) continue;
       if (va != null && vb != null) delete style[Math.abs(va) <= Math.abs(vb) ? b : a];
       if (sized && value > 0 && !REPLACED.has(node.tag)) {
-        // A box as wide as its containing block stays that wide on other screens.
-        const full = prop === 'width' && cbW > 0 && value / cbW >= 0.995 && value / cbW <= 1.005 && (va == null || Math.abs(va) <= 1) && (vb == null || Math.abs(vb) <= 1);
+        // A box as wide as its containing block stays that wide on other screens: anchored at its left edge, or centred
+        // (left: 50% with a translate back by half its size - a hero picture as wide as the window).
+        const centred = va != null && cbW > 0 && Math.abs(va - cbW / 2) <= 1.5 && /translate|matrix/.test(style.transform ?? '');
+        const full = prop === 'width' && cbW > 0 && value / cbW >= 0.995 && value / cbW <= 1.005
+          && (centred || ((va == null || Math.abs(va) <= 1) && (vb == null || Math.abs(vb) <= 1)));
+        if (full) fullWidth = true;
+        // Its height then follows from its own aspect ratio (a px height would keep the captured window's size).
+        if (prop === 'height' && fullWidth && style['aspect-ratio'] && style['aspect-ratio'] !== 'auto') continue;
         style[prop] = full ? '100%' : `${value}px`;
       }
     }
@@ -423,6 +456,11 @@ export function normalizeView(node, v, chain, opts) {
       style['@rw'] = { px: size.w(w), ratio: ratioOf(w) };
       const [nw, nh] = node.natural ?? [];
       style.height = node.tag === 'img' && nw > 0 && nh > 0 && Math.abs(w / h - nw / nh) / (nw / nh) < 0.02 ? 'auto' : `${size.h(h)}px`;
+      // Filling a parent stretched over its own frame (absolute, top and bottom at 0): the picture takes that height, which
+      // follows the frame on every screen (a hero background 712 px tall in an 880 px frame at 1265).
+      const pAbs = /^(absolute|fixed)$/.test(pd.style.position ?? '');
+      const pStretchedY = pAbs && Math.abs(px(pd.style.top) ?? 99) <= 1 && Math.abs(px(pd.style.bottom) ?? 99) <= 1;
+      if (style.height !== 'auto' && pStretchedY && pBox.h > 0 && Math.abs(h - pBox.h) <= 1 && Math.abs(w - pBox.w) <= 1) style.height = '100%';
     }
   } else if (FORM_CONTROL.has(node.tag) && w > 0 && !/^(hidden|checkbox|radio)$/i.test(node.attrs.type ?? '')) {
     // Form fields keep their rendered width; their height comes from font and padding.
@@ -473,10 +511,14 @@ export function normalizeView(node, v, chain, opts) {
     // would otherwise leave the percentages of its descendants nothing to resolve against.
     const ratio = ratioOf(w);
     const fills = ratio != null && ratio >= 0.995 && ratio <= 1.005;
+    // A grid item as wide as its column (a card at justify-self: start with width: 100% in the builder): it fills its cell
+    // at every width, not the captured px (product cards stayed 397 px in 528 px columns at 1265).
+    const gridCol = /grid/.test(pDisplay) ? gridColumnWidth(pd.style, pBox.w) : null;
+    const cell = gridCol != null && gridCol > 0 && Math.abs(size.w(w) - gridCol) <= 1.5 && !fills;
     // Without text (icon boxes, image frames) the content cannot size the item reliably: an SVG or
     // image at width: 100% inside it falls back to its default size (300 px for SVG). Keep the width.
     const text = deepText(node).trim();
-    if (contentSized) style['@cw'] = { px: size.w(w), ratio, text: !!text, wraps: !text || fills || zeroBasisRow || wrapsText(node, v, chain) };
+    if (contentSized) style['@cw'] = { px: size.w(w), ratio, cell, text: !!text, wraps: !text || fills || cell || zeroBasisRow || wrapsText(node, v, chain) };
     // A content-sized item with text can still have a fixed size larger than its text (a 22 px badge
     // around 6 px letters, a 52 px label): minimums restore it without ever cutting or wrapping text.
     // Only small boxes that do not fill their parent: a minimum on a large container would keep it
@@ -544,8 +586,18 @@ export function normalizeView(node, v, chain, opts) {
     if (!inFlow.length && !hasText) {
       // An empty box (divider, colour block, image holder) only has the size it was given. Builders
       // often place the image of a frame absolutely (inset 0) inside it: the frame is empty too.
-      if (!style.height) style.height = `${size.h(h)}px`;
-      if (!style.width && !style['@w'] && !BLOCK_PARENT.has(pDisplay) && w > 0) style['@rw'] = { px: size.w(w), ratio: ratioOf(w) };
+      // An absolute box held by both insets of an axis at 0 (a dark layer over a card) takes that size from its containing
+      // block: a px size would keep the captured card's size on other screens.
+      const absBox = position === 'absolute' || position === 'fixed';
+      const atZero = (k) => style[k] != null && Math.abs(px(style[k]) ?? 99) <= 1;
+      const stretchedX = absBox && atZero('left') && atZero('right');
+      const stretchedY = absBox && atZero('top') && atZero('bottom');
+      // A box as wide as its containing block with an aspect ratio of its own gets its height from that ratio.
+      const ratioSized = style.width === '100%' && style['aspect-ratio'] && style['aspect-ratio'] !== 'auto';
+      if (!style.height && !stretchedY && !ratioSized) style.height = `${size.h(h)}px`;
+      if (stretchedX) {
+        // nothing: the insets size it
+      } else if (!style.width && !style['@w'] && !BLOCK_PARENT.has(pDisplay) && w > 0) style['@rw'] = { px: size.w(w), ratio: ratioOf(w) };
       // An empty box that is all its parent holds, where that parent is itself a flex / grid item (a logo frame in the list
       // item of a ticker row): the parent's size comes from this box, so without its own px width both shrink to 0 as
       // soon as the row is fuller than the screen (logos vanished).
@@ -607,12 +659,17 @@ export function resolveHints(decls, present, tag) {
       && Math.max(...ratios) - Math.min(...ratios) <= 0.01;
     // An item wider than its parent on purpose (a marquee track, a scroller) must not be clamped.
     const overflows = ratios.some((r) => r != null && r > 1.01);
+    const allCells = cw.every((v) => decls[v]['@cw'].cell || (decls[v]['@cw'].ratio >= 0.995 && decls[v]['@cw'].ratio <= 1.005));
     for (const v of cw) {
       const hint = decls[v]['@cw'];
       delete decls[v]['@cw'];
       if (!apply || decls[v].width) continue;
       // One view: an item exactly as wide as its parent still fills it.
       if (single && hint.ratio >= 0.995 && hint.ratio <= 1.005) decls[v].width = '100%';
+      // As wide as its grid column in this view: it fills its cell (a percentage of a grid item is of its grid area).
+      // Only when it does so in every view and its width changes between them (a fixed-size logo tile that happens to be
+      // as wide as its fixed column keeps its px).
+      else if (hint.cell && hint.text && allCells && !single && !fixed) decls[v].width = '100%';
       else if (consistent) decls[v].width = hint.ratio >= 0.995 && hint.ratio <= 1.005 ? '100%' : pct(hint.ratio);
       // Filling its parent in this view (a card in a one-column grid at laptop width) while the views differ otherwise:
       // it keeps filling it between the captured widths instead of staying at the captured px (cards too narrow at 1200).

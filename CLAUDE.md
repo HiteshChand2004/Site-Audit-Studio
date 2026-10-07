@@ -277,6 +277,15 @@ records them, nothing consumed them) → **3** script-driven hovers (probe budge
          566 at 1024 for a 340 px card) mean a box of its own width, which keeps it (parchaa cards overlapped at 1100–1279 px).
        - A content-sized item filling its parent in one view while the views differ otherwise gets `100%` there, not the captured px (blog cards
          stayed 817 px at 1200 instead of following the column).
+    27. Between the captured widths (parchaa at a 1265 px window, laptop rules captured at 1024; all in `ir/styles.js`):
+       - A grid item with text as wide as its column in every view (and of changing width) gets `width: 100%` of its cell
+         (`gridColumnWidth`), not the captured px: product cards stayed 397 px in 528 px columns. Logo tiles (no text) keep px.
+       - An absolute box as wide as its containing block while centred (`left: 50%` + translate) gets `width: 100%`, and its
+         height then comes from its aspect ratio (also not pinned by the empty-box rule): a hero picture stayed 1024 × 712.
+       - A box stretched by inset 0 in one view but sized in another gets `width/height: auto` there (no px carried by the cascade);
+         an empty absolute box stretched by both insets of an axis gets no px size on it (a card's dark layer stopped short).
+       - A picture filling a parent stretched by `top/bottom: 0` gets `height: 100%`.
+       Page height at 1265: 7094 vs original 7128 (the certificate logos stay at their 1024 size, 118 vs 152 px: open).
   - Autoplay timing measured inside the page (`watchText`: visible text every 100 ms, page clock); from Node a snapshot per reading took up to 0.5 s under load (1.5 s read as 2 s).
   - Verified (fresh capture home + 9 pages, then rebuilt from it; `scratch-checkall.mjs`): all 12 of the user's points OK (contact headline at 1280: 66.56 px, top 233, height 68 = original);
     fidelity 88 → 93, visual diff 89 → 94; React / Next / MERN: DOM 10/10, pixels 1.0, hydration clean, safety passed. Full suite: 288 pass, 2 fail (known `netGuard`), 4 skipped.
