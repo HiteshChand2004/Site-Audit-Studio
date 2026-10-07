@@ -308,6 +308,18 @@ records them, nothing consumed them) → **3** script-driven hovers (probe budge
     `recreate-typography.test.js` (`fluidTypeAt`; four captures: copy = original font sizes at 1920 / 1366 / 1200 / 1100 / 1024 / 768 / 375).
   - Expected cost (from the desktop-only measurement on panscience, 6 pages: 178 s vs 711 s with all views): ~+90 s per page Recreate (sweep ~35, responsive ~15, generate fit/refine ~25, build fidelity ~12,
     inspect ~2 since views run side by side), Analyze +~30 s (phone Lighthouse, two more screenshots), re-audit +~55 s. Not re-measured on a live site.
+- **Step 5 (shorter waiting)** — branch `step5-speed` (worktree `../Website-Audit-speed`, rebased on `as-is-fixes`), WIP, not merged. Only when / side by side, never what is captured or measured. All general.
+  - Re-audit motion (`reaudit/motion.js`): no Tab walk (`measureMotion({ focus: false })`; the checklist reads reveals, loops, hover only; hover keeps its time); network-quiet wait on the loopback build 3 → 1 s.
+  - Re-audit Lighthouse starts while the link check still runs (`runAnalysis({ linksBesideLighthouse })`, re-audit only; links awaited before the report). Analyze unchanged. `lighthouseRun` = tests' stand-in.
+  - Project stack built **inside** the Recreate (`recreate/stack.js`, background step `stack` after `build`, awaited at the end): only when a second browser fits (`canOverlap`), the
+    toolchain is installed and ≥ 3 min are left; stopped 5 s before its limit. `export/fromIr.js buildStackOutput` (shared with the export) writes `stacks/<stack>/` in the workspace, so the
+    committed folder and `report.outputs[stack]` are as before; a failed build = `outputs[stack]: failed`, never a failed recreate. Otherwise the export after the job, as before
+    (`report.stackBuild = { inJob, reason?, ms? }`). Preview starts on the stack output when ready; the re-audit no longer waits behind a queued export.
+  - Capture: `captureStates` and `captureNotices` side by side (notices use their own fresh context; page address / size / user agent read first; `motion.json statesNoticesMs`).
+  - `measureSite` (fit pass + fidelity) and the responsive step: 2 pages at a time when 600 MB per page fit (`PAGES_AT_ONCE`), results in page order, the deadline still leaves out the last pages.
+  - Measured on fixtures: states 1.9 s + notices 3.0 s → 3.0 s together; 4 pages measured 1.95 → 1.0 s (400 ms per page load); link check beside a stand-in Lighthouse 4.4 → 3.7 s;
+    re-audit motion on a one-link page ~0.35 s less (up to the 4 s focus share per page on real sites). Not measured on a live site yet.
+  - Tests: `reaudit-motion`, `perf`, `recreate-jobs` (stack in the job / after it / failed), `recreate-widgets` (states + notices side by side = same result), `recreate-crash`, `recreate-responsive`.
 - **Added to the plan by the user during step 2** (not started): fonts look bigger in the copy than in the original (match sizes); the new site must fix every problem of the old site's audit
   (fix checklist). **Testing rule (user)**: while fixing, run only the test file of the feature touched; the full suite only when a step is complete (before its commit) and before a merge.
   **Fast iteration (asked)**: capture once, then regenerate from the saved capture (generate + build only) for steps that do not change the capture; full fresh Recreate only for the final check.

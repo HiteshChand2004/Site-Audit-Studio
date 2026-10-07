@@ -7,6 +7,8 @@
 // Writes ir/site.json (the IR the other stack emitters will use) and sets ctx.generated.
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { parallelism } from '../audit/resources.js';
+import { mapLimit } from '../audit/util.js';
 import { emitSite } from './emit/html.js';
 import { writeProject } from './emit/write.js';
 import { applyIrFixes, applyTreeFixes, fixReport } from './fixers/index.js';
@@ -27,6 +29,10 @@ const REFINE_BUDGET = 90000;
 // How long that check waits for the sweep's first pages when the sweep is still running.
 const SWEEP_WAIT = 75000;
 
+// Pages measured at once (each with all its views): two when the memory allows four more tabs each.
+export const PAGES_AT_ONCE = 2;
+const PAGE_RENDER_MB = 600;
+
 const writeSite = (siteDir, out, assetsDir, known) => writeProject(siteDir, out, { assetsDir, known });
 
 /** Opens the shared renderer for the generated site once per job (closed when the job ends). */
@@ -44,32 +50,40 @@ export async function siteRenderer(ctx) {
  * (the browser crashed twice on it, or it never loaded) is listed in `failed` and the other pages go on: one page never
  * throws away the work of the whole job. Only when no page renders at all is the error raised (the build itself is broken).
  * @param {(page:object, view:string, result:object)=>Promise<void>|void} onView
+ * Pages are rendered two at a time when the memory allows (`pagesAtOnce`): each render has its own tab, the site is local
+ * and static (no script), so boxes and screenshots do not depend on how many render at once.
  * @param {number} [deadline]  no new page is started after this time (ms since epoch)
  * @returns {Promise<{ started: number, failed: { path: string, error: string }[] }>} pages started before the deadline, pages that failed
  */
-export async function measureSite(renderer, ir, site, { screenshot = false, onView, deadline = Infinity } = {}) {
+export async function measureSite(renderer, ir, site, { screenshot = false, onView, deadline = Infinity, pagesAtOnce = parallelism({ perUnitMB: PAGE_RENDER_MB, max: PAGES_AT_ONCE }) } = {}) {
   const measured = emitSite(ir, { ids: true });
   for (const page of ir.pages) renderer.server.overrides.set(page.outPath, measured.files.get(page.outPath));
-  const failed = [];
-  let firstError = null;
+  // Per page, in page order whatever order they finish in: undefined = not started (deadline), null = rendered, else its error.
+  const outcome = new Array(ir.pages.length);
   try {
-    let started = ir.pages.length;
-    for (const [i, page] of ir.pages.entries()) {
-      if (Date.now() > deadline) {
-        started = i;
-        break;
-      }
+    await mapLimit(ir.pages, pagesAtOnce, async (page, i) => {
+      // Pages start in order, so the ones left out by the deadline are the last ones.
+      if (Date.now() > deadline) return;
       const tree = site.pages[i];
+      outcome[i] = null;
       try {
         await Promise.all(tree.views.map(async (view) => {
           const result = await renderPage(renderer, page.outPath, view, { screenshot });
           await onView(tree, view, result);
         }));
       } catch (err) {
-        firstError ??= err;
-        failed.push({ path: tree.info.path, error: String(err?.message ?? err).split('\n')[0].trim() });
+        outcome[i] = err;
       }
-    }
+    });
+    const notStarted = outcome.findIndex((o) => o === undefined);
+    const started = notStarted < 0 ? ir.pages.length : notStarted;
+    const failed = [];
+    let firstError = null;
+    outcome.slice(0, started).forEach((err, i) => {
+      if (!err) return;
+      firstError ??= err;
+      failed.push({ path: site.pages[i].info.path, error: String(err?.message ?? err).split('\n')[0].trim() });
+    });
     if (started && failed.length === started) throw firstError;
     return { started, failed };
   } finally {

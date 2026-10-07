@@ -15,6 +15,8 @@ const MAX_PAGES = 6;
 // A little more than the capture of the original had (8 s): the probes go through the candidates in the same order, so the
 // recreate must get at least as far, or an element the original reached would look missing just because time ran out.
 const HOVER_BUDGET_MS = 10000;
+// The recreated site is served from loopback with nothing else to load: a quiet network shows within a second (was 3 s).
+const NETWORK_QUIET_MS = 1000;
 
 /** The original's motion.json per page: Map<slug, object> (only pages that have one). */
 export async function readOldMotion(recreateFolder, reportPages) {
@@ -49,9 +51,10 @@ export async function measureNewMotion({ origin, pages, deadline = Infinity, sig
       try {
         const page = await context.newPage();
         await page.goto(`${origin}/${p.urlPath}`, { waitUntil: 'load', timeout: 20000 });
-        await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+        await page.waitForLoadState('networkidle', { timeout: NETWORK_QUIET_MS }).catch(() => {});
         const measured = await Promise.race([
-          measureMotion(page, { budgetMs: HOVER_BUDGET_MS }),
+          // No focus pass: the comparison (motionItems) reads reveals, loops and hover only; the hover probe keeps its time.
+          measureMotion(page, { budgetMs: HOVER_BUDGET_MS, focus: false }),
           new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), PAGE_BUDGET_MS)),
         ]);
         result.pages.set(p.slug, measured);

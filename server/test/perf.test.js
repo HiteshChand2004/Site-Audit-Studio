@@ -34,6 +34,9 @@ before(async () => {
       return res.end(page('Slow third party', '<p>Hello</p><a href="/about.html">About</a><img src="/hang.png" alt="tracker" width="10" height="10"><iframe src="/hang-embed" title="embed" width="200" height="100"></iframe>'));
     }
     if (req.url === '/about.html') return res.end(page('About', '<p>About us</p><a href="/">Home</a>'));
+    // A page whose only link answers slowly (an outbound link of the re-audited site).
+    if (req.url === '/links/') return res.end(page('Links', '<p>Links</p><a href="/slow-link">Partner</a>'));
+    if (req.url === '/slow-link') return setTimeout(() => res.end('ok'), 2500);
     res.statusCode = 404;
     res.end('not found');
   });
@@ -201,4 +204,40 @@ test('screenshots: the views taken in time are kept when the step runs out of it
   } finally {
     await browser.close();
   }
+});
+
+test('re-audit: Lighthouse starts while the link check still runs; Analyze waits for the links first', async () => {
+  const run = async (linksBesideLighthouse) => {
+    const running = new Set();
+    const lighthouseStarts = [];
+    const started = Date.now();
+    const audit = await runAnalysis({
+      project: { id: 'perf', url: `${origin}/links/`, name: 'perf' },
+      analysisId: `lh-${linksBesideLighthouse}`,
+      maxPages: 1,
+      outDir: path.join(dir, `links-${linksBesideLighthouse}`),
+      skip: ['screenshots'],
+      netPolicy: createNetPolicy({ internalPorts: [server.address().port] }),
+      linksBesideLighthouse,
+      // Stands in for Lighthouse: notes whether the link check was still running when it started.
+      lighthouseRun: async (url, formFactor) => {
+        lighthouseStarts.push({ formFactor, linksRunning: running.has('links') });
+        await new Promise((r) => setTimeout(r, 300));
+        return null;
+      },
+      progress: (step, fraction) => (fraction < 1 ? running.add(step) : running.delete(step)),
+    });
+    console.log(`# links beside Lighthouse: ${linksBesideLighthouse}, ${Date.now() - started} ms`);
+    return { audit, lighthouseStarts };
+  };
+  const beside = await run(true);
+  assert.deepEqual(beside.lighthouseStarts.map((s) => s.formFactor), ['mobile', 'desktop']);
+  assert.equal(beside.lighthouseStarts[0].linksRunning, true);
+  // The report still has the link check's full result.
+  assert.ok(beside.audit.brokenLinks.checked >= 1, JSON.stringify(beside.audit.brokenLinks));
+  assert.deepEqual(beside.audit.brokenLinks.broken, []);
+
+  const after = await run(false);
+  assert.equal(after.lighthouseStarts[0].linksRunning, false);
+  assert.deepEqual(after.audit.brokenLinks, beside.audit.brokenLinks);
 });

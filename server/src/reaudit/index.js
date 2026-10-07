@@ -91,6 +91,8 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
       skip,
       netPolicy,
       progress,
+      // The link check (mostly the original's outbound links) runs on while Lighthouse measures the loopback build.
+      linksBesideLighthouse: true,
     });
     // The analysis contract carries a sample checklist for the OLD site; it means nothing here.
     delete audit.recreate;

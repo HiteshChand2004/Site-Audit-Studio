@@ -40,23 +40,35 @@ export function outputPages(report, stack) {
 const selectRow = db.prepare(`SELECT result_json FROM recreates WHERE id = ? AND project_id = ? AND status = 'done'`);
 const updateRow = db.prepare('UPDATE recreates SET result_json = ? WHERE id = ?');
 
-async function runExport({ projectId, recreateId, stack }) {
-  const row = selectRow.get(recreateId, projectId);
-  if (!row?.result_json) throw refuse(404, 'Recreate not found.');
-  const report = JSON.parse(row.result_json);
-  const outputs = reportOutputs(report);
+/** Can a recreate be built as `stack` right now (emitter ready, its toolchain installed)? Throws why not. */
+export async function checkStackReady(stack) {
   const emitter = getEmitter(stack);
   if (!emitter) throw refuse(400, `Unknown stack "${stack}".`);
-  if (outputs[stack]?.status === 'ready') return { report, output: outputs[stack], created: false };
   if (emitter.status !== 'ready' || !emitter.emit) throw refuse(409, `The ${emitter.label} stack is not available yet.`);
   if (emitter.toolchain) {
     const tool = await toolchainStatus(emitter.toolchain);
     if (!tool.installed) throw refuse(409, `The ${emitter.label} toolchain is not installed. Run: ${tool.setup}`);
   }
+  return emitter;
+}
 
-  const dir = recreateDir(projectId, recreateId);
-  const irFile = path.join(dir, 'ir', 'site.json');
-  const ir = await readFile(irFile, 'utf8').then(JSON.parse, () => null);
+/** The `outputs[stack]` entry of a failed emit or build: why, in words the app shows (an unexpected error goes to the log). */
+export function failedOutput(stack, err) {
+  if (!(err instanceof RecreateError)) console.error(`[export ${stack}] ${err.stack ?? err}`);
+  return { status: 'failed', error: err instanceof RecreateError ? err.message : 'The build failed unexpectedly (see the server log).', at: new Date().toISOString() };
+}
+
+/**
+ * Emits `stack` from the recreate folder `dir` (ir/site.json, assets/manifest.json, and the plain-HTML dist/ it is checked
+ * against) and builds it into <dir>/stacks/<stack>/ (written as <stack>.tmp, renamed once everything succeeded).
+ * Used by an export of a completed recreate and by the recreate job itself, inside its workspace (recreate/stack.js).
+ * A missing IR or asset manifest is refused with status 404 before anything is written.
+ * @param {{ dir: string, stack: string, report: object, signal?: AbortSignal, progress?: (fraction: number, message?: string) => void }} o
+ * @returns {Promise<object>} the `outputs[stack]` entry
+ */
+export async function buildStackOutput({ dir, stack, report, signal, progress }) {
+  const emitter = getEmitter(stack);
+  const ir = await readFile(path.join(dir, 'ir', 'site.json'), 'utf8').then(JSON.parse, () => null);
   if (!ir) throw refuse(404, 'The saved IR of this recreate is gone (only the latest recreates keep their files). Run Recreate again.');
   const manifest = await readFile(path.join(dir, 'assets', 'manifest.json'), 'utf8').then(JSON.parse, () => null);
   if (!manifest) throw refuse(404, 'The downloaded assets of this recreate are gone. Run Recreate again.');
@@ -69,25 +81,40 @@ async function runExport({ projectId, recreateId, stack }) {
     const out = emitter.emit(ir, {});
     await writeProject(tmp, out, { assetsDir: path.join(dir, 'assets'), known, assetsTarget: emitter.assetsTarget });
     const assets = [...out.assets].filter((f) => known.has(f));
-    const built = (await emitter.build?.({ dir: tmp, ir, out, assets, report, htmlDist: path.join(dir, 'dist') })) ?? {};
+    const built = (await emitter.build?.({ dir: tmp, ir, out, assets, report, htmlDist: path.join(dir, 'dist'), ...(signal && { signal }), ...(progress && { progress }) })) ?? {};
     await rm(target, { recursive: true, force: true });
     await rename(tmp, target);
-    const output = { status: 'ready', dir: `stacks/${stack}`, from: 'ir', exportedAt: new Date().toISOString(), files: out.files.size, ...built };
+    return { status: 'ready', dir: `stacks/${stack}`, from: 'ir', exportedAt: new Date().toISOString(), files: out.files.size, ...built };
+  } catch (err) {
+    await rm(tmp, { recursive: true, force: true }).catch(() => {});
+    throw err;
+  }
+}
+
+async function runExport({ projectId, recreateId, stack }) {
+  const row = selectRow.get(recreateId, projectId);
+  if (!row?.result_json) throw refuse(404, 'Recreate not found.');
+  const report = JSON.parse(row.result_json);
+  const outputs = reportOutputs(report);
+  if (!getEmitter(stack)) throw refuse(400, `Unknown stack "${stack}".`);
+  if (outputs[stack]?.status === 'ready') return { report, output: outputs[stack], created: false };
+  await checkStackReady(stack);
+
+  const dir = recreateDir(projectId, recreateId);
+  try {
+    const output = await buildStackOutput({ dir, stack, report });
     report.outputs = { ...outputs, [stack]: output };
     const json = JSON.stringify(report);
     updateRow.run(json, recreateId);
     await writeFile(path.join(dir, 'report.json'), JSON.stringify(report, null, 1));
     return { report, output, created: true };
   } catch (err) {
-    await rm(tmp, { recursive: true, force: true }).catch(() => {});
+    // The IR or the assets are gone: refused, nothing recorded (a retry cannot help).
+    if (err.status === 404) throw err;
     // A failed emit or build is remembered (the app shows why and offers a retry); nothing else is kept.
-    {
-      if (!(err instanceof RecreateError)) console.error(`[export ${stack}] ${err.stack ?? err}`);
-      const failed = { status: 'failed', error: err instanceof RecreateError ? err.message : 'The build failed unexpectedly (see the server log).', at: new Date().toISOString() };
-      report.outputs = { ...outputs, [stack]: failed };
-      updateRow.run(JSON.stringify(report), recreateId);
-      await writeFile(path.join(dir, 'report.json'), JSON.stringify(report, null, 1)).catch(() => {});
-    }
+    report.outputs = { ...outputs, [stack]: failedOutput(stack, err) };
+    updateRow.run(JSON.stringify(report), recreateId);
+    await writeFile(path.join(dir, 'report.json'), JSON.stringify(report, null, 1)).catch(() => {});
     throw err;
   }
 }

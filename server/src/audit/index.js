@@ -176,13 +176,16 @@ async function fetchHome(url, scale = 1) {
  * @param {string[]} [o.seedUrls]  pages the crawl must visit besides the ones it finds itself
  * @param {string} [o.deployOrigin]  the origin the analyzed site will be published at: sitemaps that
  *   robots.txt lists there are read from the analyzed site instead (a recreate names its future home)
+ * @param {boolean} [o.linksBesideLighthouse]  Lighthouse starts while the link check still runs (the link check is plain
+ *   HTTP to other hosts; a site served from loopback has nothing to share with it). Analyze waits for the links first.
+ * @param {Function} [o.lighthouseRun]  tests only: stands in for runLighthouse (url, formFactor, options)
  * @returns {Promise<object>} the audit JSON
  */
 export function runAnalysis({ netPolicy = userPolicy(), ...opts }) {
   return withNetPolicy(netPolicy, () => analyze({ ...opts, netPolicy }));
 }
 
-async function analyze({ project, analysisId, maxPages, progress, netPolicy, url = project.url, outDir: dir, skip = [], seedUrls = [], deployOrigin = null }) {
+async function analyze({ project, analysisId, maxPages, progress, netPolicy, url = project.url, outDir: dir, skip = [], seedUrls = [], deployOrigin = null, linksBesideLighthouse = false, lighthouseRun = runLighthouse }) {
   const timing = analyzeTiming();
   const freeAtStart = freeMemoryMB();
   const baseDeadline = Date.now() + timing.budgetMs;
@@ -297,7 +300,7 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
 
   const proxy = await startEgressProxy(netPolicy);
   try {
-    const audit = await analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing });
+    const audit = await analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing, linksBesideLighthouse, lighthouseRun });
     noteLowMemory(audit.errors, freeAtStart);
     return audit;
   } finally {
@@ -327,7 +330,7 @@ export function noteLowMemory(errors, freeMB) {
   });
 }
 
-async function analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing }) {
+async function analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing, linksBesideLighthouse, lighthouseRun }) {
   // The time kept for Lighthouse: the steps before it (and the crawl / link check, which can return what they have) never use it up.
   const reserve = { reserve: timing.lighthouseReserveMs };
   const scale = timing.scale;
@@ -424,7 +427,8 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     await browser?.close().catch(() => {});
     await cache?.close();
   }
-  const links = await linksTask;
+  // The re-audit lets the link check finish beside Lighthouse (linksBesideLighthouse); it is awaited before the report.
+  let links = linksBesideLighthouse ? null : await linksTask;
   const allPages = crawlResult.pages;
   const pages = allPages.filter((p) => p.facts);
   const hasQuery = (url) => {
@@ -436,23 +440,25 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
   };
   const homePage = { ...pages[0], headers: home.headers };
 
-  // 6. Lighthouse (one at a time and nothing else running: parallel work would distort each other's performance numbers).
+  // 6. Lighthouse (one at a time and no other browser running: parallel work would distort each other's performance numbers;
+  // in the re-audit only the link check's plain HTTP requests may still be running).
   // A run that dies (not one that times out) usually died of memory pressure: it gets one more try when the time allows.
   const lighthouse = (key, formFactor, reserveMs = 0) =>
     step(key, async (_signal, budget) => {
       const started = Date.now();
       const options = (timeout) => ({ timeout, outFile: path.join(outDir, `lighthouse-${formFactor}.json`), proxy: proxy.url });
       try {
-        return await runLighthouse(home.url, formFactor, options(budget));
+        return await lighthouseRun(home.url, formFactor, options(budget));
       } catch (err) {
         const left = budget - (Date.now() - started) - 3000;
         if (/timed out/i.test(err.message) || left < LIGHTHOUSE_RETRY_MIN_MS) throw err;
-        return runLighthouse(home.url, formFactor, options(left));
+        return lighthouseRun(home.url, formFactor, options(left));
       }
     }, null, { reserve: reserveMs });
   // The mobile run leaves half of the reserve to the desktop run, so a slow first run never costs the second one.
   const mobile = await lighthouse('lighthouse-mobile', 'mobile', timing.lighthouseReserveMs / 2);
   const desktop = await lighthouse('lighthouse-desktop', 'desktop');
+  links ??= await linksTask;
 
   // 7. Detection, analyzers, report
   progress('report', 0, 'Detecting tech stack');

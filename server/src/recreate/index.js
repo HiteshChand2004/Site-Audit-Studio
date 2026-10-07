@@ -6,9 +6,9 @@
 // the job: later steps need its output. The whole job has one time budget
 // (SAS_RECREATE_MINUTES, default 12); the workspace is discarded when anything goes wrong.
 //
-// Steps run one after the other, except a `background` step (the sweep of the original at more widths): it only
-// collects screenshots, so it runs next to the steps after it instead of making them wait, and is awaited by the step
-// that needs its whole result (`join`). On a machine short of memory it is awaited before the next browser step.
+// Steps run one after the other, except a `background` step (the sweep of the original at more widths, the build of the
+// project's stack): it runs next to the steps after it instead of making them wait, and is awaited by the step that needs
+// its whole result (`join`), or at the end. On a machine short of memory it is awaited before the next browser step.
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { userPolicy, withNetPolicy } from '../security/netGuard.js';
@@ -23,6 +23,7 @@ import { generateStage } from './generate.js';
 import { inspectStage, LATER_STEPS_RESERVE } from './inspect.js';
 import { previewStage } from './preview.js';
 import { responsiveStage } from './responsive.js';
+import { stackStage } from './stack.js';
 import { sweepStage } from './sweep.js';
 import { commitWorkspace, discardWorkspace, openWorkspace } from './workspace.js';
 
@@ -48,6 +49,9 @@ export const STEPS = [
   { key: 'sweep', label: 'Capturing more widths', weight: 8, max: 4 * 60000, optional: true, background: true, after: 'inspect', join: 'responsive', perPage: 120000 },
   // Measures the finished build against the sweep screenshots (4b.6): never fails the job.
   { key: 'responsive', label: 'Checking responsive layout', weight: 4, max: 90000, optional: true, perPage: 30000 },
+  // The project's stack (React + Vite, Next.js, MERN) built from what the build step left (recreate/stack.js): a background
+  // step next to the ones above when a second browser fits, else left to the export after the job. Never fails the job.
+  { key: 'stack', label: 'Building the chosen stack', weight: 6, max: 8 * 60000, optional: true, background: true, after: 'build', perPage: 20000 },
 ];
 // What each page beyond BASE_PAGES adds to the whole job, and to the time the capture keeps for the steps after it.
 const JOB_PER_PAGE = STEPS.reduce((n, s) => n + (s.perPage ?? 0), 0);
@@ -96,6 +100,7 @@ export const STAGES = {
   build: buildStage,
   preview: previewStage,
   responsive: responsiveStage,
+  stack: stackStage,
 };
 
 /**
@@ -144,6 +149,8 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     jobDeadline: deadline,
     /** Registers cleanup (browsers, proxies) that runs when the job ends, in reverse order. */
     defer: (fn) => disposers.push(fn),
+    /** May a background step run a second browser next to the steps still to come (free memory)? */
+    canOverlap,
     progress: null,
     report: {
       recreateId,
