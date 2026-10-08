@@ -33,6 +33,23 @@ export function limiter(concurrency) {
   };
 }
 
+/**
+ * Where the time of a step goes: `lap(name)` adds the ms since the previous lap (or the start) to `ms[name]`.
+ * Used for the report's per-phase timings (report.phaseMs), so what is worth speeding up can be read from a real run.
+ */
+export function lapTimer() {
+  const ms = {};
+  let mark = Date.now();
+  return {
+    ms,
+    lap(name) {
+      const now = Date.now();
+      ms[name] = (ms[name] ?? 0) + now - mark;
+      mark = now;
+    },
+  };
+}
+
 export class TimeoutError extends Error {
   constructor(label, ms) {
     super(`${label} timed out after ${Math.round(ms / 1000)}s`);

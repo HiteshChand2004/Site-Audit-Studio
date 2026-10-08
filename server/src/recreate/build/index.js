@@ -13,6 +13,7 @@ import { RecreateError } from '../errors.js';
 import { measureFidelity } from '../verify/fidelity.js';
 import { scanSite } from '../verify/safety.js';
 import { verifyFailure, verifySite } from '../verify/site.js';
+import { lapTimer } from '../../audit/util.js';
 import { buildDist } from './minify.js';
 
 /** @param {object} ctx  needs ctx.generated (generate step) */
@@ -21,6 +22,8 @@ export async function buildStage(ctx) {
   const { out, siteAssets, assetsDir, siteDir, stats } = ctx.generated;
   const distDir = path.join(ctx.dir, 'dist');
 
+  // Where the step's time goes (report.phaseMs.build).
+  const timer = lapTimer();
   ctx.progress(0, 'Building the production site');
   const minify = await buildDist({ files: out.files, assets: siteAssets, assetsDir, distDir });
   report.minify = { dir: 'dist', ...minify };
@@ -31,6 +34,7 @@ export async function buildStage(ctx) {
 
   // Safety gate: anything that could run script or load from another origin fails the job. The one script allowed
   // is the fixed reveal script (verify/appProfiles.js `motion`).
+  timer.lap('dist');
   ctx.progress(0.06, 'Checking the site is safe to preview');
   const scanOpts = scripts ? { app: 'motion' } : {};
   const safety = { site: await scanSite(siteDir, scanOpts), dist: await scanSite(distDir, scanOpts) };
@@ -50,6 +54,7 @@ export async function buildStage(ctx) {
     throw new RecreateError(`The generated site failed the safety check (${first.file}: ${first.detail}); it was not kept.`);
   }
 
+  timer.lap('safety');
   ctx.progress(0.1, 'Verifying links, assets and HTML');
   const expected = [...out.files.keys(), ...siteAssets.map((f) => `assets/${f}`)];
   const verify = await verifySite(distDir, { expected });
@@ -63,5 +68,8 @@ export async function buildStage(ctx) {
   }
 
   // Fidelity of the production build.
+  timer.lap('verify');
+  report.phaseMs = { ...report.phaseMs, build: timer.ms };
   await measureFidelity(ctx, { root: distDir, progress: (f, message) => ctx.progress(0.15 + 0.85 * f, message) });
+  timer.lap('fidelity');
 }

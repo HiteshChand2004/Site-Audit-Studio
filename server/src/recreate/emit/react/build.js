@@ -106,7 +106,7 @@ export async function buildReact({ dir, ir, assets, report, htmlDist, signal, pr
     build: { toolchain, ms: Date.now() - started, steps: built.steps, ...bundle },
     safety: { safe: true, source: { checked: source.checked }, dist: safety.checked },
     verify: { ok: true, checked: verify.checked, html: verify.html, anchors: verify.anchors.length },
-    equivalence: { dom: equivalence.dom, visual: equivalence.visual, pages: equivalence.pages },
+    equivalence: { dom: equivalence.dom, visual: equivalence.visual, pages: equivalence.pages, ms: equivalence.ms },
     hydration: equivalence.hydration,
     fidelity: { score: report.fidelity?.score ?? null, basis: 'equivalent-to-html', threshold: report.fidelity?.threshold ?? null },
     warnings,

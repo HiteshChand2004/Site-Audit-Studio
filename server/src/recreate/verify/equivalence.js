@@ -174,6 +174,10 @@ export async function compareBuilds({ referenceRoot, candidateRoot, pages, urlMa
     let done = 0;
     const tick = (msg) => progress(++done / total, msg);
 
+    // Where the check's time goes (ms): the reference renders, the candidate renders and the hydration check.
+    const ms = { reference: 0, candidate: 0, hydration: 0 };
+    let mark = Date.now();
+    const lap = (k) => { const now = Date.now(); ms[k] += now - mark; mark = now; };
     const reference = new Map();
     for (const p of pages) {
       for (const v of VIEWS) {
@@ -181,6 +185,7 @@ export async function compareBuilds({ referenceRoot, candidateRoot, pages, urlMa
         tick('Rendering the plain-HTML build');
       }
     }
+    lap('reference');
     renderer.server.setRoot(candidateRoot);
     const results = [];
     for (const p of pages) {
@@ -201,6 +206,7 @@ export async function compareBuilds({ referenceRoot, candidateRoot, pages, urlMa
       results.push({ entry, jsOffSig });
     }
 
+    lap('candidate');
     const hydration = { checked: 0, failed: 0, pages: [] };
     if (hydrate) {
       browser = await launchBrowser();
@@ -215,6 +221,7 @@ export async function compareBuilds({ referenceRoot, candidateRoot, pages, urlMa
       }
     }
 
+    lap('hydration');
     const visuals = results.flatMap(({ entry }) => Object.values(entry.views).map((x) => x.visual)).filter((x) => x != null);
     const dom = { equal: results.filter(({ entry }) => entry.dom === 'equal').length, total: results.length };
     const visual = { min: visuals.length ? Math.min(...visuals) : null, mean: visuals.length ? Math.round((visuals.reduce((a, b) => a + b, 0) / visuals.length) * 1000) / 1000 : null, threshold: VISUAL_MIN };
@@ -224,6 +231,7 @@ export async function compareBuilds({ referenceRoot, candidateRoot, pages, urlMa
       visual,
       pages: results.map((r) => r.entry),
       hydration: hydrate ? hydration : null,
+      ms,
     };
   } finally {
     await browser?.close().catch(() => {});

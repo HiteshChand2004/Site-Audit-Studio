@@ -11,7 +11,7 @@ import path from 'node:path';
 import sharp from 'sharp';
 import { parallelism } from '../audit/resources.js';
 import { projectDir } from '../db/index.js';
-import { mapLimit } from '../audit/util.js';
+import { lapTimer, mapLimit } from '../audit/util.js';
 import { applyImageVariants, makeImageVariants } from './assets/variants.js';
 import { emitSite } from './emit/html.js';
 import { writeProject } from './emit/write.js';
@@ -169,6 +169,8 @@ export async function generateStage(ctx) {
   const siteDir = path.join(ctx.dir, 'site');
   const assetsDir = path.join(ctx.dir, 'assets');
   const known = new Set((ctx.assets?.files ?? []).map((f) => f.file));
+  // Where the step's time goes (report.phaseMs.generate).
+  const timer = lapTimer();
 
   const origin = ctx.discovery?.origin ?? new URL(ctx.audit.url ?? ctx.project.url).origin;
 
@@ -179,6 +181,7 @@ export async function generateStage(ctx) {
     wp = await fetchWordPress({ origin, pages: ctx.pages, signal: ctx.signal, deadline: Math.min(Date.now() + WP_BUDGET, ctx.stepDeadline - FIT_MARGIN * 2) });
   }
 
+  timer.lap('wordpress');
   ctx.progress(0.05, 'Reading captured pages');
   const pages = [];
   for (const info of ctx.pages) pages.push({ info, captures: await readPageCaptures(ctx.dir, info) });
@@ -204,6 +207,7 @@ export async function generateStage(ctx) {
   }
   const motion = applyMotion(site, motionByPath);
   site.motion = motion.motion;
+  timer.lap('read');
 
   ctx.progress(0.12, 'Fixing audit issues');
   const axe = ctx.analysis?.id && ctx.project?.id
@@ -212,6 +216,7 @@ export async function generateStage(ctx) {
   // Outbound links of pages the analysis did not read: dead targets are unlinked like the ones the analysis found.
   ctx.progress(0.13, 'Checking the links of every page');
   const extraBroken = await deadLinks(site, { known: brokenTargets(ctx.audit, ctx.discovery?.skipped), ms: Math.max(10000, Math.min(LINK_CHECK_BUDGET, ctx.stepDeadline - Date.now() - FIT_MARGIN * 4)) });
+  timer.lap('linkCheck');
   const treeFixes = applyTreeFixes(site, { audit: ctx.audit, skipped: ctx.discovery?.skipped, axe, extraBroken });
   // Layout parts other window sizes show (fixers/perf.js markLayouts) are parked by the generated script.
   if (treeFixes.layouts) {
@@ -230,6 +235,7 @@ export async function generateStage(ctx) {
     return built;
   };
 
+  timer.lap('fixes');
   ctx.progress(0.15, 'Writing pages');
   let { ir, stats } = build();
   // Responsive image files (assets/variants.js), made once from the widths the first build shows each image at.
@@ -242,6 +248,7 @@ export async function generateStage(ctx) {
   }
   let out = emitSite(ir);
   await writeSite(siteDir, out, assetsDir, known);
+  timer.lap('irImages');
 
   // Fit pass.
   const fit = { rounds: 0, widthFixes: 0, heightFixes: 0, layoutBefore: null, layoutAfter: null, undone: false, stopped: null };
@@ -292,6 +299,7 @@ export async function generateStage(ctx) {
     await writeSite(siteDir, out, assetsDir, known);
   }
 
+  timer.lap('fit');
   // Breakpoints and fluid type, checked against the original's sweep screenshots (verify/refine.js). Only
   // css/site.css changes, so the pages and the fit fixes above stay as they are.
   let refined = null;
@@ -302,6 +310,7 @@ export async function generateStage(ctx) {
     ctx.progress(0.9, 'Waiting for the screenshots of the original at more widths');
     sweep = await ctx.sweepPending(REFINE_PAGES, Math.max(0, Math.min(SWEEP_WAIT, ctx.stepDeadline - FIT_MARGIN - REFINE_BUDGET - Date.now())));
   }
+  timer.lap('sweepWait');
   if (sweep) {
     ctx.progress(0.9, 'Checking the layout between the captured widths');
     try {
@@ -328,11 +337,14 @@ export async function generateStage(ctx) {
   out = emitSite(ir, { inlineCss: true });
   await writeSite(siteDir, out, assetsDir, known);
 
+  timer.lap('refine');
   ctx.progress(0.95, 'Saving the IR');
   await mkdir(path.join(ctx.dir, 'ir'), { recursive: true });
   await writeFile(path.join(ctx.dir, 'ir', 'site.json'), JSON.stringify(ir));
   const siteAssets = [...out.assets].filter((f) => known.has(f));
   ctx.generated = { site, ir, out, stats, siteDir, siteAssets, assetsDir };
+  timer.lap('write');
+  report.phaseMs = { ...report.phaseMs, generate: timer.ms };
 
   const fixed = fixReport(treeFixes, irFixes);
   report.fixes.push(...fixed.fixes);

@@ -80,6 +80,10 @@ export async function buildStackOutput({ dir, stack, report, signal, progress })
   const tmp = `${target}.tmp`;
   const reference = path.join(dir, 'stacks', `${stack}.html-ref.tmp`);
   await rm(tmp, { recursive: true, force: true });
+  // Where the time goes (outputs[stack].ms): writing the project, the plain-HTML reference, the stack's build + checks.
+  const ms = {};
+  let mark = Date.now();
+  const lap = (k) => { const now = Date.now(); ms[k] = now - mark; mark = now; };
   try {
     const out = emitter.emit(ir, {});
     await writeProject(tmp, out, { assetsDir: path.join(dir, 'assets'), known, assetsTarget: emitter.assetsTarget });
@@ -87,6 +91,7 @@ export async function buildStackOutput({ dir, stack, report, signal, progress })
     // The stack is checked against the plain-HTML build of the same IR written by this same code: the dist/ of the
     // recreate may come from an older version of the emitter (a copy made yesterday), and any change in how a page is
     // written would then look like a difference of the stack.
+    lap('emit');
     let htmlDist = path.join(dir, 'dist');
     if (emitter.build) {
       try {
@@ -97,10 +102,12 @@ export async function buildStackOutput({ dir, stack, report, signal, progress })
         // An IR the HTML emitter cannot write (none from a real recreate): the recreate's own dist/ stays the reference.
       }
     }
+    lap('htmlReference');
     const built = (await emitter.build?.({ dir: tmp, ir, out, assets, report, htmlDist, ...(signal && { signal }), ...(progress && { progress }) })) ?? {};
     await rm(target, { recursive: true, force: true });
     await rename(tmp, target);
-    return { status: 'ready', dir: `stacks/${stack}`, from: 'ir', exportedAt: new Date().toISOString(), files: out.files.size, ...built };
+    lap('build');
+    return { status: 'ready', dir: `stacks/${stack}`, from: 'ir', exportedAt: new Date().toISOString(), files: out.files.size, ...built, ms };
   } catch (err) {
     await rm(tmp, { recursive: true, force: true }).catch(() => {});
     throw err;
