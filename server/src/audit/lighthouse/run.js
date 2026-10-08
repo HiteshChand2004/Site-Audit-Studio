@@ -9,10 +9,11 @@ const WORKER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'worker.j
  * Runs Lighthouse for one form factor in a forked worker.
  * @param {string} url
  * @param {'mobile'|'desktop'} formFactor
- * @param {{ timeout?: number, outFile?: string, proxy?: string }} [opts]  proxy: egress proxy URL (SSRF guard)
+ * @param {{ timeout?: number, outFile?: string, proxy?: string, cpuSlowdown?: number }} [opts]  proxy: egress proxy URL (SSRF guard);
+ *   cpuSlowdown: simulated CPU slowdown instead of the form factor's default (a calibrated run)
  * @returns {Promise<object>} the trimmed summary built by worker.js
  */
-export function runLighthouse(url, formFactor, { timeout = 90000, outFile, proxy } = {}) {
+export function runLighthouse(url, formFactor, { timeout = 90000, outFile, proxy, cpuSlowdown } = {}) {
   return new Promise((resolve, reject) => {
     const child = fork(WORKER, [], {
       stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
@@ -55,6 +56,6 @@ export function runLighthouse(url, formFactor, { timeout = 90000, outFile, proxy
       finish(reject, new Error(`Lighthouse ${formFactor} worker exited (code ${code}) ${stderr.trim().split('\n').pop() || ''}`.trim()));
     });
 
-    child.send({ url, formFactor, chromePath: chromium.executablePath(), outFile, proxy });
+    child.send({ url, formFactor, chromePath: chromium.executablePath(), outFile, proxy, cpuSlowdown });
   });
 }

@@ -20,12 +20,13 @@ test('page size: unused hidden icon sheets go, used ones (and what they referenc
     svg('b', '<svg id="b"><path fill="url(#g)"/></svg>'),
     svg('g-host', '<svg id="g-host"><linearGradient id="g"/></svg>'),
     svg('c', '<svg id="c"><path/></svg>'),
+    svg('1353911669', '<svg id="1353911669"><path/></svg>'),
   ] };
-  const shown = { tag: 'svg', attrs: {}, svg: '<svg><use href="#b"/></svg>', views: v([0, 0, 20, 20]), children: [] };
+  const shown = { tag: 'svg', attrs: {}, svg: '<svg><use href="#b"/><use href="#1353911669"/></svg>', views: v([0, 0, 20, 20]), children: [] };
   const visibleWithId = { tag: 'svg', attrs: { id: 'logo' }, svg: '<svg id="logo"><path/></svg>', views: v([0, 0, 90, 30]), children: [] };
   const root = { tag: 'body', attrs: {}, views: v([0, 0, 1440, 900]), children: [sheet, shown, visibleWithId] };
   assert.equal(pruneSprites({ root }), 2);
-  assert.deepEqual(sheet.children.map((n) => n.attrs.id), ['b', 'g-host']);
+  assert.deepEqual(sheet.children.map((n) => n.attrs.id), ['b', 'g-host', '1353911669'], 'an id starting with a digit is a reference too');
   assert.equal(root.children.length, 3, 'a visible SVG with an id is never removed');
 });
 

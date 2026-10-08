@@ -200,7 +200,9 @@ const neverShown = (n, own) => {
 export function pruneSprites(t) {
   const refs = new Set();
   const scan = (text, into = refs) => {
-    for (const m of String(text).matchAll(/#([A-Za-z_][\w:.-]*)/g)) into.add(m[1]);
+    // Any id, also one starting with a digit (builders write ids like "1353911669"): a reference missed here would remove
+    // an icon the page shows. Colours (#aaa) only add references nothing has, which is harmless.
+    for (const m of String(text).matchAll(/#([\w:.-]+)/g)) into.add(m[1]);
   };
   const idsIn = (n) => [n.attrs.id, ...[...String(n.svg ?? '').matchAll(/\sid\s*=\s*["']([^"']+)["']/g)].map((m) => m[1])];
   const scanIdList = (text) => {

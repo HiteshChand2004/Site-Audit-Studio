@@ -73,6 +73,14 @@ function installClicks(opts) {
   const sigOf = (el) => `${el.tagName.toLowerCase()}|${el.getAttribute('role') || ''}|${cls(el)}|${aria(el)}|${up(el.parentElement)}|${up(el.parentElement?.parentElement)}|${region(el)}`;
   const labelOf = (el) => [el.getAttribute('aria-label'), el.getAttribute('title'), el.id, typeof el.className === 'string' ? el.className : '', el.textContent.trim().slice(0, 40)].filter(Boolean).join(' ');
 
+  // Inside a fixed / sticky bar at the top of the page (builders often draw the menu bar with plain divs).
+  const topBar = (el) => {
+    for (let n = el.parentElement; n && n !== document.body; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if ((cs.position === 'fixed' || cs.position === 'sticky') && n.getBoundingClientRect().top < 120) return true;
+    }
+    return false;
+  };
   const reasonsOf = (el, cs) => {
     const tag = el.tagName;
     const r = [];
@@ -87,7 +95,10 @@ function installClicks(opts) {
     if (tag === 'A') {
       const href = (el.getAttribute('href') || '').trim();
       if (href === '' || /^(#|javascript:)/i.test(href)) r.push('anchor');
-      else return []; // a link to a page is navigation, not a control
+      // A link to a page is navigation, not a control; in the site's top bar it may still open a menu while the mouse rests
+      // on it (a "Platforms" link listing the products): it is hovered, never clicked.
+      else if (el.closest('header, nav, [role="navigation"], [role="banner"]') || topBar(el)) return ['nav-hover'];
+      else return [];
     }
     if (!r.length && cs.cursor === 'pointer' && tag !== 'INPUT' && tag !== 'SELECT' && tag !== 'TEXTAREA' && tag !== 'LABEL' && HINT.test(labelOf(el))) r.push('hint');
     return r;
@@ -132,7 +143,8 @@ function installClicks(opts) {
   }
   // Controls that announce a toggle (aria-expanded, <summary>) first: they are quick and undo themselves, so a page whose
   // tabs or filters need reloads cannot use up the time before its accordion was probed.
-  const toggles = (f) => (f.reasons.includes('aria-expanded') || f.reasons.includes('summary') ? 0 : 1);
+  // Top-bar links next: only hovered, so quick, and a menu bar is what every page shares.
+  const toggles = (f) => (f.reasons.includes('aria-expanded') || f.reasons.includes('summary') ? 0 : f.reasons.includes('nav-hover') ? 1 : 2);
   found.sort((a, b) => toggles(a) - toggles(b));
   window.__sasClick = { els: found.map((f) => f.el), base: null };
   return {
@@ -644,6 +656,11 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
             await save();
           }
         }
+      }
+      // A top-bar link whose hover opened nothing: never clicked (it would leave the page).
+      if (c.reasons.includes('nav-hover')) {
+        stats.noChange++;
+        continue;
       }
       if (spot.reachable) await page.mouse.click(spot.x, spot.y);
       else await page.evaluate(clickIndex, c.i);

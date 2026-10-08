@@ -5,7 +5,7 @@
 // (never the app's active preview, which moves when another project is selected). Only that port is
 // reachable on loopback: the SSRF policy of the run allows it as an internal port, and everything
 // else keeps the user policy (public addresses; loopback only with SAS_ALLOW_LOCALHOST).
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { makeOverallPct, runAnalysis, STEPS as AUDIT_STEPS } from '../audit/index.js';
 import { db, projectDir } from '../db/index.js';
@@ -33,6 +33,17 @@ export const PUBLIC_STEPS = STEPS.map(({ key, label }) => ({ key, label }));
 export const overallPct = makeOverallPct(STEPS);
 
 /** Folder of one re-audit's raw results (crawl, axe, Lighthouse), inside its recreate. */
+/** How fast the computer was when the original's Lighthouse runs were made: { mobile, desktop } benchmark index. */
+export async function benchmarkOf(auditDir) {
+  const out = {};
+  for (const formFactor of ['mobile', 'desktop']) {
+    const lhr = await readFile(path.join(auditDir, `lighthouse-${formFactor}.json`), 'utf8').then(JSON.parse, () => null);
+    const index = lhr?.environment?.benchmarkIndex;
+    if (index > 0) out[formFactor] = index;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 export const reauditDir = (projectId, recreateId, reauditId) => path.join(recreateDir(projectId, recreateId), 'reaudit', reauditId);
 
 const selectRecreate = db.prepare(`SELECT result_json FROM recreates WHERE id = ? AND project_id = ? AND status = 'done'`);
@@ -94,6 +105,8 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
       progress,
       // The link check (mostly the original's outbound links) runs on while Lighthouse measures the loopback build.
       linksBesideLighthouse: true,
+      // Measured like the original was: a computer much busier now than then repeats a run with a scaled CPU slowdown.
+      lighthouseBaseline: await benchmarkOf(path.join(projectDir(project.id), 'audit', report.analysisId)),
     });
     // The analysis contract carries a sample checklist for the OLD site; it means nothing here.
     delete audit.recreate;

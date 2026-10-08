@@ -328,8 +328,13 @@ function finish(item, report) {
   if (item.status === 'manual') return item;
   if (item.status === 'recheck') return item;
   let status = DEPLOY_CHECKS.has(item.key) ? 'na' : classify(item.before, item.after);
-  // Same severity on both sides, but the measured value moved clearly (fewer elements, fewer KiB to save, …).
-  if (status === 'open' && item.trend) status = item.trend === 'better' ? 'improved' : 'regressed';
+  // Failing on both sides, but the measured value moved clearly (fewer elements, fewer KiB to save, …). A Lighthouse audit
+  // scored by its savings is 0 or 0.5 depending on whether its simulated metric gain is above zero, so its grade can flip
+  // between two runs: the measured value decides there, not the grade.
+  const failingBoth = item.before?.rank > 0 && item.after?.rank > 0;
+  if (item.trend && (status === 'open' || (failingBoth && (status === 'improved' || status === 'regressed')))) {
+    status = item.trend === 'better' ? 'improved' : 'regressed';
+  }
   const { trend, ...kept } = item;
   const out = { ...kept, status };
   if (DEPLOY_CHECKS.has(item.key)) out.note = DEPLOY_NOTE;

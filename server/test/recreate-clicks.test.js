@@ -151,3 +151,28 @@ test('captureClicks stops at its budget', async () => {
   assert.ok(out.widgets.length <= 1);
   await page.close();
 });
+
+test('a top-bar link whose hover adds a menu next to it is found by hovering, never clicked', async () => {
+  const context = await browser.newContext({ viewport: { width: 1000, height: 700 } });
+  // A builder's menu bar: plain divs in a fixed bar; the page's script adds the menu while the mouse is on the link.
+  await context.route('http://menu.test/**', (route) => route.fulfill({ contentType: 'text/html', body: `<!doctype html><html><body style="margin:0">
+    <div style="position:fixed;top:0;left:0;right:0;height:60px;display:flex;gap:20px;padding:20px">
+      <div class="item"><a href="/platform" id="p">Platforms</a></div>
+      <div class="item"><a href="/company">Company</a></div>
+    </div>
+    <main style="height:2000px;padding-top:100px">Content</main>
+    <script>
+      const item = document.querySelector('.item');
+      item.addEventListener('mouseenter', () => { const m = document.createElement('div'); m.className = 'menu'; m.style.cssText = 'position:absolute;top:50px;width:160px;height:120px;background:#fff'; m.innerHTML = '<a href="/a">HMIS</a><a href="/b">Clinic</a>'; item.appendChild(m); });
+      item.addEventListener('mouseleave', () => item.querySelector('.menu')?.remove());
+    </script></body></html>` }));
+  const page = await context.newPage();
+  await page.goto('http://menu.test/', { waitUntil: 'load' });
+  const out = await captureClicks(page, { budgetMs: 15000 });
+  assert.equal(page.url(), 'http://menu.test/', 'no top-bar link was clicked');
+  const menu = out.widgets.find((w) => w.text === 'Platforms');
+  assert.equal(menu?.opensOn, 'hover', JSON.stringify(out.widgets.map((w) => [w.text, w.opensOn])));
+  assert.ok((menu.change?.added ?? []).length >= 1, 'the menu the hover added is recorded');
+  assert.ok(!out.widgets.some((w) => w.text === 'Company'), 'a link whose hover adds nothing is not a widget');
+  await context.close();
+});

@@ -241,3 +241,38 @@ test('re-audit: Lighthouse starts while the link check still runs; Analyze waits
   assert.equal(after.lighthouseStarts[0].linksRunning, false);
   assert.deepEqual(after.audit.brokenLinks, beside.audit.brokenLinks);
 });
+
+test('re-audit: a computer much busier than during the original measurement repeats Lighthouse with a scaled CPU slowdown', async () => {
+  const calls = [];
+  // Stands in for Lighthouse: this computer runs at a third of the original's benchmark until the calibrated run.
+  const lighthouseRun = async (url, formFactor, options) => {
+    calls.push({ formFactor, cpuSlowdown: options.cpuSlowdown ?? null });
+    return { categories: { performance: 0.5 }, audits: {}, benchmarkIndex: 1000, cpuSlowdown: options.cpuSlowdown ?? (formFactor === 'mobile' ? 4 : 1) };
+  };
+  await runAnalysis({
+    project: { id: 'perf', url: `${origin}/links/`, name: 'perf' },
+    analysisId: 'lh-calibrate',
+    maxPages: 1,
+    outDir: path.join(dir, 'lh-calibrate'),
+    skip: ['screenshots'],
+    netPolicy: createNetPolicy({ internalPorts: [server.address().port] }),
+    lighthouseRun,
+    progress: () => {},
+    lighthouseBaseline: { mobile: 3000, desktop: 1100 },
+  });
+  // Mobile: 1000 / 3000 → slowdown 4 × 0.33 = 1.33, run again. Desktop: 1000 / 1100 is within the margin, one run.
+  assert.deepEqual(calls, [{ formFactor: 'mobile', cpuSlowdown: null }, { formFactor: 'mobile', cpuSlowdown: 1.33 }, { formFactor: 'desktop', cpuSlowdown: null }]);
+  // Without a baseline (a normal Analyze) nothing is repeated.
+  calls.length = 0;
+  await runAnalysis({
+    project: { id: 'perf', url: `${origin}/links/`, name: 'perf' },
+    analysisId: 'lh-plain',
+    maxPages: 1,
+    outDir: path.join(dir, 'lh-plain'),
+    skip: ['screenshots'],
+    netPolicy: createNetPolicy({ internalPorts: [server.address().port] }),
+    lighthouseRun,
+    progress: () => {},
+  });
+  assert.deepEqual(calls.map((c) => c.cpuSlowdown), [null, null]);
+});

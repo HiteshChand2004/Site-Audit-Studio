@@ -68,6 +68,11 @@ const HOME_NETWORK_WAIT_MS = 30 * 1000;
 const INTERRUPTION_EXTRA_MS = 5 * 60 * 1000;
 // A crashed Lighthouse run is tried once more only when at least this much time is left for it.
 const LIGHTHOUSE_RETRY_MIN_MS = 45 * 1000;
+// Calibration against an earlier measurement (o.lighthouseBaseline): repeated when this computer's benchmark index is below
+// this share of the earlier run's. The simulated slowdown never goes below the minimum.
+const CALIBRATE_BELOW = 0.75;
+const CALIBRATE_MIN_SLOWDOWN = 0.5;
+const DEFAULT_SLOWDOWN = { mobile: 4, desktop: 1 };
 
 /**
  * Time limits of one analysis, from the environment (server/.env). The defaults suit a normal machine; a slow or busy one
@@ -179,13 +184,15 @@ async function fetchHome(url, scale = 1) {
  * @param {boolean} [o.linksBesideLighthouse]  Lighthouse starts while the link check still runs (the link check is plain
  *   HTTP to other hosts; a site served from loopback has nothing to share with it). Analyze waits for the links first.
  * @param {Function} [o.lighthouseRun]  tests only: stands in for runLighthouse (url, formFactor, options)
+ * @param {{ mobile?: number, desktop?: number }} [o.lighthouseBaseline]  benchmark index of the runs this one is compared
+ *   with (re-audit only): a much slower computer now repeats the run with a scaled CPU slowdown
  * @returns {Promise<object>} the audit JSON
  */
 export function runAnalysis({ netPolicy = userPolicy(), ...opts }) {
   return withNetPolicy(netPolicy, () => analyze({ ...opts, netPolicy }));
 }
 
-async function analyze({ project, analysisId, maxPages, progress, netPolicy, url = project.url, outDir: dir, skip = [], seedUrls = [], deployOrigin = null, linksBesideLighthouse = false, lighthouseRun = runLighthouse }) {
+async function analyze({ project, analysisId, maxPages, progress, netPolicy, url = project.url, outDir: dir, skip = [], seedUrls = [], deployOrigin = null, linksBesideLighthouse = false, lighthouseRun = runLighthouse, lighthouseBaseline = null }) {
   const timing = analyzeTiming();
   const freeAtStart = freeMemoryMB();
   const baseDeadline = Date.now() + timing.budgetMs;
@@ -300,7 +307,7 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
 
   const proxy = await startEgressProxy(netPolicy);
   try {
-    const audit = await analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing, linksBesideLighthouse, lighthouseRun });
+    const audit = await analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing, linksBesideLighthouse, lighthouseRun, lighthouseBaseline });
     noteLowMemory(audit.errors, freeAtStart);
     return audit;
   } finally {
@@ -330,7 +337,7 @@ export function noteLowMemory(errors, freeMB) {
   });
 }
 
-async function analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing, linksBesideLighthouse, lighthouseRun }) {
+async function analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing, linksBesideLighthouse, lighthouseRun, lighthouseBaseline }) {
   // The time kept for Lighthouse: the steps before it (and the crawl / link check, which can return what they have) never use it up.
   const reserve = { reserve: timing.lighthouseReserveMs };
   const scale = timing.scale;
@@ -446,15 +453,30 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
   const lighthouse = (key, formFactor, reserveMs = 0) =>
     step(key, async (_signal, budget) => {
       const started = Date.now();
-      const options = (timeout) => ({ timeout, outFile: path.join(outDir, `lighthouse-${formFactor}.json`), proxy: proxy.url });
+      const options = (timeout, extra) => ({ timeout, outFile: path.join(outDir, `lighthouse-${formFactor}.json`), proxy: proxy.url, ...extra });
+      let result;
       try {
-        return await lighthouseRun(home.url, formFactor, options(budget));
+        result = await lighthouseRun(home.url, formFactor, options(budget));
       } catch (err) {
         const left = budget - (Date.now() - started) - 3000;
         if (/timed out/i.test(err.message) || left < LIGHTHOUSE_RETRY_MIN_MS) throw err;
-        return lighthouseRun(home.url, formFactor, options(left));
+        result = await lighthouseRun(home.url, formFactor, options(left));
       }
+      return calibrate(result, formFactor, () => budget - (Date.now() - started) - 3000, (extra, left) => lighthouseRun(home.url, formFactor, options(left, extra)));
     }, null, { reserve: reserveMs });
+  // A measurement compared with an earlier one (the re-audit against the original's analysis): when this computer is much
+  // slower now than during the earlier run (Lighthouse's benchmark index, e.g. other jobs keep it busy), the simulated
+  // phone CPU is scaled down by the same ratio and the run repeated, so both sides are measured on an equal footing.
+  const calibrate = async (result, formFactor, timeLeft, rerun) => {
+    const base = lighthouseBaseline?.[formFactor];
+    const now = result?.benchmarkIndex;
+    if (!(base > 0) || !(now > 0) || now >= base * CALIBRATE_BELOW) return result;
+    const multiplier = Math.max(CALIBRATE_MIN_SLOWDOWN, Math.round((result.cpuSlowdown ?? DEFAULT_SLOWDOWN[formFactor]) * (now / base) * 100) / 100);
+    if (timeLeft() < LIGHTHOUSE_RETRY_MIN_MS) return { ...result, calibration: { benchmarkIndex: now, baseline: base, skipped: 'no time left' } };
+    const again = await rerun({ cpuSlowdown: multiplier }, timeLeft()).catch(() => null);
+    if (!again) return { ...result, calibration: { benchmarkIndex: now, baseline: base, failed: true } };
+    return { ...again, calibration: { benchmarkIndex: now, baseline: base, cpuSlowdown: multiplier, rerunBenchmarkIndex: again.benchmarkIndex ?? null } };
+  };
   // The mobile run leaves half of the reserve to the desktop run, so a slow first run never costs the second one.
   const mobile = await lighthouse('lighthouse-mobile', 'mobile', timing.lighthouseReserveMs / 2);
   const desktop = await lighthouse('lighthouse-desktop', 'desktop');

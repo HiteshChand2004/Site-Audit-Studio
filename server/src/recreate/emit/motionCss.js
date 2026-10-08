@@ -60,7 +60,11 @@ export function motionCss(m, opts) {
 
   // Cards whose hover look the page drew by script: the hovered copy replaces the card while its box is hovered or
   // focused (ir/states.js expandHoverCards); no script.
-  if (m.hoverCards) out.push('/* Cards shown in their hovered look while the mouse is on them */\n[data-w-hv]:not(:hover):not(:focus-within) > [data-w-hcopy],\n[data-w-hv]:is(:hover, :focus-within) > [data-w-hrest] {\n  display: none !important;\n}');
+  // The hovered look comes in with a short fade (the original eased into it), not in one frame.
+  if (m.hoverCards) {
+    out.push('/* Cards shown in their hovered look while the mouse is on them */\n[data-w-hv]:not(:hover):not(:focus-within) > [data-w-hcopy],\n[data-w-hv]:is(:hover, :focus-within) > [data-w-hrest] {\n  display: none !important;\n}');
+    out.push('@media (prefers-reduced-motion: no-preference) {\n  [data-w-hv]:is(:hover, :focus-within) > [data-w-hcopy] {\n    animation: w-hover-in 300ms ease both;\n  }\n  @keyframes w-hover-in {\n    from {\n      opacity: 0;\n    }\n  }\n}');
+  }
 
   // Click widgets: js/motion.js toggles `is-open` on the area (`wN`) when its control (`wt`) is clicked.
   const widgets = [];

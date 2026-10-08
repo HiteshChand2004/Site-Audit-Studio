@@ -22,6 +22,7 @@ const MAX_CONTROLS = 30;
 const SETTLE_MS = 450;
 const MAX_HOVER_CARDS = 24; // cards snapshotted while hovered, per page
 const HOVER_CARDS_MS = 20000; // time they may take beyond the states' own limit
+const MENU_LEVELS = 4; // a hover menu's box: at most this many levels above its link
 const HOVER_SETTLE_MS = 700; // a hover animation (fade, slide) runs out
 const MAX_STATE_NODES = 3000;
 const MAX_EFFECT_STATES = 12; // states whose hover / focus rules are read (a long carousel's slides share them anyway)
@@ -637,18 +638,32 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
   // Cards whose hover look the page draws by script (a dark layer, a picture and light text rendered only while the mouse
   // is on them): the card is snapshotted while hovered; the copy shows that snapshot in its place on hover (ir/states.js).
   stats.hoverCards = 0;
+  const opened = (w) => [...(w.change?.shown ?? []), ...(w.change?.added ?? [])];
   const cards = (clicks?.widgets ?? []).filter((w) => w.opensOn === 'hover' && !(w.tag === 'button' || w.reasons?.includes('role:button'))
-    && [...(w.change?.shown ?? []), ...(w.change?.added ?? [])].some((x) => x.path?.startsWith(`${w.trigger}>`)));
-  for (const w of cards.slice(0, MAX_HOVER_CARDS)) {
+    && opened(w).some((x) => x.path?.startsWith(`${w.trigger}>`))).map((w) => ({ w, root: w.trigger }));
+  // Menus a hover adds next to its link (a top-bar "Platforms" listing the products, drawn by the page's script only while the
+  // mouse is there): the nearest box holding the link and the menu is snapshotted while hovered and swapped in the same way.
+  // Only a box close to the link (≤ MENU_LEVELS up), never a whole section.
+  for (const w of clicks?.widgets ?? []) {
+    if (w.opensOn !== 'hover' || cards.some((c) => c.w === w)) continue;
+    const outside = opened(w).map((x) => x.path).filter((p) => p && !p.startsWith(`${w.trigger}>`));
+    if (!outside.length) continue;
+    const root = commonPath([w.trigger, ...outside]);
+    const up = w.trigger.split('>').length - (root ? root.split('>').length : 0);
+    if (root && root !== 'body' && up >= 1 && up <= MENU_LEVELS) cards.push({ w, root, menu: true });
+  }
+  stats.hoverMenus = 0;
+  for (const { w, root, menu } of cards.slice(0, MAX_HOVER_CARDS)) {
     if (Date.now() > deadline + HOVER_CARDS_MS) break;
-    const node = findNode(body, w.trigger);
+    const node = findNode(body, root);
     if (!node || node.hoverState) continue;
     try {
-      const spot = await page.evaluate(spotOf, w.trigger);
+      // The mouse rests on the link itself for a menu (its box may be wider than the link).
+      const spot = await page.evaluate(spotOf, menu ? w.trigger : root);
       if (!spot) continue;
       await page.mouse.move(spot.x, spot.y);
       await page.waitForTimeout(HOVER_SETTLE_MS);
-      const res = await page.evaluate(snapshotPage, { rootPath: w.trigger });
+      const res = await page.evaluate(snapshotPage, { rootPath: root });
       await page.mouse.move(-20, -20);
       await page.waitForTimeout(250);
       for (const u of res?.cssUrls ?? []) stats.cssUrls.push(u);
@@ -657,6 +672,7 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
       carryProbes(node, hovered);
       node.hoverState = { body: hovered };
       stats.hoverCards++;
+      if (menu) stats.hoverMenus++;
     } catch {
       await page.mouse.move(-20, -20).catch(() => {});
     }

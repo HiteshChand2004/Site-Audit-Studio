@@ -119,10 +119,14 @@ export function expandNotices(root) {
 /**
  * Cards whose hover look the page draws by script (capture/states.js `hoverState`): the hovered snapshot goes right after
  * the card, `data-w-hcopy`; the card is `data-w-hrest`, their box `data-w-hv`. The stylesheet shows the copy instead of
- * the card while the box is hovered or holds keyboard focus; no script. Only where the card is its box's only element
- * (a grid cell), so hovering anything else never swaps it.
+ * the card while the box is hovered or holds keyboard focus; no script. Where the card is its box's only element (a grid
+ * cell) that box is used; otherwise (a menu link next to other links) a box that draws nothing is put around the two, so
+ * hovering anything else never swaps it.
  * @returns {number} cards
  */
+// The views of the box that draws nothing around a hover card: present where the card is, display: contents.
+const hoverBoxViews = (card) => Object.fromEntries(Object.entries(card.views ?? {}).map(([v, d]) => [v, d && { rect: d.rect, hidden: !!d.hidden, style: { display: 'contents' } }]));
+
 export function expandHoverCards(root) {
   let k = 0;
   const walk = (parent) => {
@@ -135,18 +139,26 @@ export function expandHoverCards(root) {
       }
       const copy = n.hoverState.node;
       delete n.hoverState;
-      if (parent === root || parent.children.filter(isElement).length !== 1 || !copy || copy.tag !== n.tag) {
+      if (!copy || copy.tag !== n.tag) {
         walk(n);
         continue;
       }
       forget(copy);
       // Snapshotted at the desktop window only: the other views come from the card itself (else the copy would be hidden there).
       borrowViews(n, copy);
-      parent.stateAttrs = { ...parent.stateAttrs, 'data-w-hv': '' };
       n.stateAttrs = { ...n.stateAttrs, 'data-w-hrest': '' };
       copy.stateAttrs = { ...copy.stateAttrs, 'data-w-hcopy': '' };
-      parent.children.splice(i + 1, 0, copy);
-      i++;
+      if (parent !== root && parent.children.filter(isElement).length === 1) {
+        // The card is all its cell holds: the cell is where the mouse is.
+        parent.stateAttrs = { ...parent.stateAttrs, 'data-w-hv': '' };
+        parent.children.splice(i + 1, 0, copy);
+        i++;
+      } else {
+        // Next to other items (a menu link in a row of links): both go in a box that draws nothing (display: contents), so
+        // the row's layout is unchanged and the mouse on either is the mouse on the box.
+        const box = { tag: 'div', attrs: {}, views: hoverBoxViews(n), children: [n, copy], stateAttrs: { 'data-w-hv': '' } };
+        parent.children.splice(i, 1, box);
+      }
       k++;
       walk(n);
     }

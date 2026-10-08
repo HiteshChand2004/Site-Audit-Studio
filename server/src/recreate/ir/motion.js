@@ -214,6 +214,77 @@ export function scriptLoop(loop) {
   return null;
 }
 
+// The scale / move of a captured transform (a computed matrix, or a scale() / translate() a minifier wrote).
+function entrancePose(transform) {
+  const t = String(transform ?? '').trim();
+  if (!t || t === 'none') return null;
+  const m = t.match(/^matrix\(([^)]+)\)$/);
+  if (m) {
+    const [a, b, , , e, f] = m[1].split(',').map(Number);
+    if (![a, b, e, f].every(Number.isFinite)) return null;
+    return { scale: Math.round(Math.hypot(a, b) * 100) / 100, translate: [r1(e), r1(f)] };
+  }
+  const s = t.match(/^scale\(\s*([\d.]+)\s*\)$/);
+  if (s) return { scale: Number(s[1]), translate: [0, 0] };
+  const tr = t.match(/^translate(?:3d)?\(\s*(-?[\d.]+)px(?:\s*,\s*(-?[\d.]+)px)?/);
+  if (tr) return { scale: 1, translate: [Number(tr[1]), Number(tr[2] ?? 0)] };
+  return null;
+}
+
+/**
+ * Boxes the capture caught in the first pose of an entrance the page never played while it was read (opacity 0 and moved
+ * or scaled, in every view that shows them: a builder's "appear" effect waiting for a scroll the capture did not give it).
+ * Left as captured they stay invisible in the copy (a blog row, a card list). They get the end state (the pose dropped)
+ * and a scroll reveal from that pose, timed like the page's other reveals. Boxes that are hidden on purpose are left alone:
+ * positioned layers (hover overlays, menus), anything the script switches or a hover / reveal already drives, empty boxes.
+ */
+function frozenEntrances(site, reg, stats) {
+  const durations = [...reg.reveal.values()].map((e) => `${e.duration}|${e.easing}`);
+  const common = durations.sort((a, b) => durations.filter((x) => x === b).length - durations.filter((x) => x === a).length)[0];
+  const [duration, easing] = common ? [Number(common.split('|')[0]), common.split('|')[1]] : [600, 'ease'];
+  const hasContent = (n) => n.children.some((c) => (isElement(c) ? ['img', 'svg', 'video', 'picture'].includes(c.tag) || hasContent(c) : String(c.text ?? '').trim()));
+  let count = 0;
+  // Mostly inside the parent's box in that view: a carousel's waiting slides sit further along their track, outside it.
+  const inside = (n, parent, v) => {
+    const r = n.views?.[v]?.rect;
+    const p = parent?.views?.[v]?.rect;
+    if (!r || !p || !(r[2] > 0)) return true;
+    const overlap = Math.min(r[0] + r[2], p[0] + p[2]) - Math.max(r[0], p[0]);
+    return overlap >= r[2] * 0.5;
+  };
+  const visit = (n, parent) => {
+    if (!isElement(n)) return;
+    const views = Object.entries(n.views ?? {}).filter(([, d]) => d && !d.hidden);
+    const shown = views.map(([, d]) => d);
+    const owned = (n.motionTokens ?? []).length || Object.keys(n.stateAttrs ?? {}).some((k) => k.startsWith('data-w-'));
+    const moved = (p) => p && (Math.abs(p.scale - 1) >= 0.01 || Math.abs(p.translate[0]) >= 1 || Math.abs(p.translate[1]) >= 1);
+    const poses = shown.map((d) => (Number(d.style?.opacity) < 0.05 && !/absolute|fixed/.test(d.style?.position ?? '') ? entrancePose(d.style?.transform) : null));
+    // Frozen in at least one view (others may have been read after the entrance played, like a laptop view read later).
+    const frozen = shown.filter((d, i) => moved(poses[i]) && inside(n, parent, views[i][0]));
+    if (!owned && frozen.length && hasContent(n)) {
+      const pose = poses.find(moved);
+      for (const d of frozen) {
+        const { opacity, transform, ...rest } = d.style;
+        d.style = rest;
+      }
+      const spec = { duration, easing, opacity: 0, ...(Math.abs(pose.scale - 1) >= 0.01 && { scale: [pose.scale, pose.scale] }), ...((Math.abs(pose.translate[0]) >= 1 || Math.abs(pose.translate[1]) >= 1) && { translate: pose.translate }) };
+      const key = specKey(spec);
+      let effect = reg.reveal.get(key);
+      if (!effect) {
+        effect = { token: `r${reg.reveal.size + 1}`, ...spec };
+        reg.reveal.set(key, effect);
+      }
+      n.motionTokens = [...(n.motionTokens ?? []), 'rv', effect.token];
+      count++;
+      return;
+    }
+    n.children.forEach((c) => visit(c, n));
+  };
+  for (const t of site.pages) visit(t.root, null);
+  stats.reveal.frozen = count;
+  stats.reveal.elements += count;
+}
+
 /**
  * Attaches motion tokens to the nodes of the page trees and returns the site-level motion (ir.motion) plus a report.
  * @param {{ pages: object[], assetResolve: Function }} site  the prepared site (trees with `info`, `root`)
@@ -552,6 +623,8 @@ export function applyMotion(site, byPath) {
       }
     }
   }
+
+  frozenEntrances(site, reg, stats);
 
   const hover = [...reg.hover.values()];
   const focus = [...reg.focus.values()];
