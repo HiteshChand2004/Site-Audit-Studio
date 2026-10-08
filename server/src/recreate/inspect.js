@@ -2,15 +2,18 @@
 // page at 1440 / 768 / 375. Chromium runs behind the SSRF egress proxy, like Analyze.
 // Writes capture/manifest.json and sets ctx.pages / ctx.discovery for the later steps.
 import { readFile, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { launchBrowser, renderHtml } from '../audit/render.js';
 import { projectDir } from '../db/index.js';
+import { maxParallel, PAGE_MB, parallelism } from '../audit/resources.js';
 import { createSharedCache, sharedCacheEnabled } from '../audit/sharedCache.js';
 import { startEgressProxy } from '../security/egressProxy.js';
 import { capturePage } from './capture/index.js';
 import { discoverPages, SKIP_LABELS } from './discover.js';
 import { RecreateError } from './errors.js';
 import { causeText, recoverFailure, recoverHit } from './interrupts.js';
+import { RECREATE_VIEWS } from './views.js';
 
 // Captures stop starting new pages this long before the step's time limit.
 const INSPECT_MARGIN = 15000;
@@ -28,6 +31,58 @@ export const LATER_STEPS_RESERVE = 150000;
 // more at the end of the step, in a fresh browser.
 const PAGE_CAP_MIN = 240000;
 const PAGE_CAP_FACTOR = 3;
+
+// Pages captured at the same time (see capturePagesAtOnce). Each page opens up to one browser context per view (4), and the
+// desktop one spends most of the page's time on probes (hover, clicks, tab states, loops) while the other views are already done,
+// so a second and third page fill otherwise idle time. Kept low: the probes measure timing (transitions, autoplay, reveals) and
+// must not be starved of CPU.
+export const CAPTURE_PAGES_MAX = 3;
+// CPU threads per page captured at once (a page's views + its probes keep about this many busy at their peak).
+const CPUS_PER_PAGE = 4;
+
+/**
+ * How many pages the inspect step captures at once.
+ * - SAS_CAPTURE_PAGES (1–8) fixes it; 1 = one page at a time, exactly the behaviour before page-level concurrency.
+ * - SAS_MAX_PARALLEL (the cap on browser contexts, audit/resources.js) allows floor(cap / views) pages, at least 1.
+ * - Else: up to CAPTURE_PAGES_MAX, one page per CPUS_PER_PAGE threads, and only as many as the free memory holds
+ *   (a page = one context per view). A 2–4-thread or short-of-memory machine captures one page at a time, as before.
+ * Free memory is checked again before every extra page starts (roomForAnotherPage), so a machine that runs short mid-step
+ * falls back to fewer pages at once.
+ * @param {{ env?: object, free?: number, cpus?: number }} [o]  overrides (tests)
+ */
+export function capturePagesAtOnce({ env = process.env, free, cpus = os.cpus()?.length || 1 } = {}) {
+  const forced = Number(env.SAS_CAPTURE_PAGES);
+  if (env.SAS_CAPTURE_PAGES !== undefined && env.SAS_CAPTURE_PAGES !== '' && Number.isInteger(forced) && forced >= 1 && forced <= 8) return forced;
+  const cap = maxParallel(env);
+  if (cap !== Infinity) return Math.max(1, Math.floor(cap / RECREATE_VIEWS.length));
+  const byCpu = Math.max(1, Math.floor(cpus / CPUS_PER_PAGE));
+  const byMemory = parallelism({ perUnitMB: PAGE_MB * RECREATE_VIEWS.length, max: CAPTURE_PAGES_MAX, min: 1, cap: Infinity, ...(free !== undefined && { free }) });
+  return Math.max(1, Math.min(CAPTURE_PAGES_MAX, byCpu, byMemory));
+}
+
+/** Whether the free memory holds one more page capture next to the running ones (one context per view). */
+export const roomForAnotherPage = ({ free } = {}) =>
+  parallelism({ perUnitMB: PAGE_MB * RECREATE_VIEWS.length, max: 1, min: 0, cap: Infinity, ...(free !== undefined && { free }) }) >= 1;
+
+// Runs at most `size()` tasks at once (read when a task wants to start); the rest wait in order.
+export function limiter(size) {
+  let running = 0;
+  const waiting = [];
+  const pump = () => {
+    while (waiting.length && running < Math.max(1, size())) {
+      running++;
+      const { task, resolve, reject } = waiting.shift();
+      Promise.resolve().then(task).then(resolve, reject).finally(() => {
+        running--;
+        pump();
+      });
+    }
+  };
+  return (task) => new Promise((resolve, reject) => {
+    waiting.push({ task, resolve, reject });
+    pump();
+  });
+}
 
 const once = (fn) => {
   let done = null;
@@ -71,10 +126,14 @@ export async function inspectStage(ctx) {
   // Every page the analysis found is a candidate (its crawl renders pages whose links a script builds), and pages that
   // arrive as an empty shell are rendered here too: no page of the site is missed because its links need JavaScript.
   const knownUrls = await analysisPages(ctx);
-  const render = async (url) => {
-    browser ??= await launchBrowser({ proxy: proxy.url });
+  // One browser for every render (launched once, reused by the capture below). Discovery fetches several pages at once
+  // (discover.js crawlConcurrency); the renders among them are limited to what the free memory holds (at most 4, as before).
+  const renderSlots = limiter(() => parallelism({ max: 4, min: 1 }));
+  let launching = null;
+  const render = (url) => renderSlots(async () => {
+    browser ??= await (launching ??= launchBrowser({ proxy: proxy.url }).finally(() => { launching = null; }));
     return renderHtml(browser, url, { cache: ctx.netCache });
-  };
+  });
   const discover = () =>
     discoverPages({
       url: ctx.audit.url ?? ctx.project.url,
@@ -154,13 +213,8 @@ export async function inspectStage(ctx) {
       failedPages.push({ url: info.url, source: info.source, reason: 'time-limit' });
     };
 
-    for (const [i, info] of discovery.pages.entries()) {
-      if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
-      if (i > 0 && Date.now() + slowest > deadline()) {
-        for (const rest of discovery.pages.slice(i)) outOfTime(rest);
-        break;
-      }
-      const at = 0.2 + 0.75 * (i / total);
+    // One page: captured, captured again when an outage or sleep overlapped it, then kept / reported / set aside as stalled.
+    const capturePageOnce = async (info, i, at) => {
       ctx.progress(at, `Capturing ${info.path} (${i + 1} of ${total})`);
       let started = Date.now();
       let result = await captureOnce(info, i);
@@ -176,11 +230,67 @@ export async function inspectStage(ctx) {
       }
       if (result === null) {
         stalled.push({ i, info });
-        continue;
+        return;
       }
       slowest = Math.max(slowest, Date.now() - started);
       keep(i, info, result);
+    };
+    // An unexpected error in one page (not the homepage, which the job needs) is reported for that page and never stops the
+    // others: the page is linked to a local notice page like any page that could not be captured.
+    const runPage = (info, i, at) => (i === 0 ? capturePageOnce(info, i, at) : capturePageOnce(info, i, at).catch((err) => {
+      if (err instanceof RecreateError || ctx.signal.aborted) throw err;
+      keep(i, info, { views: {}, errors: [{ view: 'desktop', message: String(err?.message ?? err).split('\n')[0] }] });
+    }));
+
+    // Several pages at once when the machine has room (capturePagesAtOnce); 1 = the original one-page-at-a-time loop.
+    const atOnce = Math.max(1, Math.min(total, ctx.capturePages ?? capturePagesAtOnce()));
+    // How the pages were captured (additive): pages at once, the most that ran together, starts held back for memory, and
+    // where the step's time went (finding pages vs capturing them).
+    report.capture = { pagesAtOnce: atOnce, peak: 1, heldBack: 0, discoverMs: Date.now() - discoverStarted, captureMs: null };
+    const captureStarted = Date.now();
+    if (atOnce === 1) {
+      for (const [i, info] of discovery.pages.entries()) {
+        if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
+        if (i > 0 && Date.now() + slowest > deadline()) {
+          for (const rest of discovery.pages.slice(i)) outOfTime(rest);
+          break;
+        }
+        await runPage(info, i, 0.2 + 0.75 * (i / total));
+      }
+    } else {
+      // Pages start in discovery order (the homepage first) while fewer than `atOnce` run and the free memory holds one more;
+      // each finished page frees its slot for the next. The same time checks as above apply to every start; the order of the
+      // captured pages (and of the manifest) stays the discovery order. A page that fails or stalls never stops the others;
+      // only a homepage that cannot be captured ends the step (as before), and the browser closing then ends the rest.
+      const room = ctx.roomForAnotherPage ?? roomForAnotherPage;
+      const inflight = new Set();
+      let next = 0;
+      let done = 0;
+      while (next < total || inflight.size) {
+        while (next < total && inflight.size < atOnce) {
+          if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
+          if (next > 0 && Date.now() + slowest > deadline()) {
+            for (const rest of discovery.pages.slice(next)) outOfTime(rest);
+            next = total;
+            break;
+          }
+          if (inflight.size > 0 && !room()) {
+            report.capture.heldBack++;
+            break; // short of memory: wait for a running page to finish
+          }
+          const i = next++;
+          const task = runPage(discovery.pages[i], i, 0.2 + 0.75 * (done / total)).finally(() => {
+            done++;
+            inflight.delete(task);
+          });
+          inflight.add(task);
+          report.capture.peak = Math.max(report.capture.peak, inflight.size);
+        }
+        if (!inflight.size) break;
+        await Promise.race(inflight);
+      }
     }
+    stalled.sort((a, b) => a.i - b.i);
 
     // Pages that stalled get one more try, in a fresh browser: closing the first one ends their captures, so a second
     // capture never shares its folder with one that is still writing.
@@ -207,6 +317,7 @@ export async function inspectStage(ctx) {
         keep(i, info, result);
       }
     }
+    report.capture.captureMs = Date.now() - captureStarted;
   } finally {
     await closeBrowser();
     await closeProxy();

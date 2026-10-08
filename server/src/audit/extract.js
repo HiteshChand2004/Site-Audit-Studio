@@ -146,3 +146,26 @@ export function extractPage(html, pageUrl) {
 
 // A client-rendered shell: almost no text or links until JavaScript runs.
 export const looksLikeShell = (facts) => facts.textLength < 300 && facts.links.length < 3;
+
+// Elements single-page apps mount into (React, Vue, Next.js, Nuxt, Gatsby, Svelte, Angular…): empty in the HTML the server sends.
+const APP_ROOTS = '#root, #app, #__next, #__nuxt, #___gatsby, #svelte, [data-reactroot], [ng-version], app-root';
+const NEEDS_JS = /enable javascript|requires javascript|javascript (is )?(required|disabled)|turn on javascript/i;
+
+/**
+ * Whether the HTML a server sent may not hold everything a visitor sees (links built by script), so a browser render is worth
+ * it. Broader than looksLikeShell on purpose, for Recreate's page discovery, where a missed link is a missed page: when in
+ * doubt, render. Site-agnostic signals only:
+ *  - a shell (looksLikeShell), or almost no text whatever the links (a header with a menu around an empty body);
+ *  - an app mount point that is (nearly) empty while the page has little text;
+ *  - a <noscript> asking for JavaScript while the page has little text.
+ * @param {{ textLength: number, links: object[] }} facts  extractPage() of the same HTML
+ * @param {string} html
+ */
+export function looksClientRendered(facts, html) {
+  if (looksLikeShell(facts) || facts.textLength < 300) return true;
+  if (facts.textLength >= 2000 || !html) return false;
+  const $ = cheerio.load(html);
+  const emptyRoot = $(APP_ROOTS).toArray().some((el) => clean($(el).text()).length < 50);
+  const askJs = $('noscript').toArray().some((el) => NEEDS_JS.test($(el).text()));
+  return emptyRoot || askJs;
+}

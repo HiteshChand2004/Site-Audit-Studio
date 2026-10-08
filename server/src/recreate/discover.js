@@ -7,6 +7,7 @@
 // reads the whole site (up to the safety cap) and follows links deeper.
 import { createHash } from 'node:crypto';
 import { crawl } from '../audit/crawler.js';
+import { looksClientRendered } from '../audit/extract.js';
 import { fetchPage, isBotChallenge, isHtml } from '../audit/http.js';
 import { fetchLlmsTxt, loadRobots } from '../audit/robots.js';
 import { loadSitemaps } from '../audit/sitemap.js';
@@ -22,6 +23,14 @@ const crawlBudget = (limit) => Math.min(60, 1 + limit * 3 + 10);
 // "All pages": every page the crawl can reach, up to the safety cap (+ room for skipped URLs), any depth that matters.
 const ALL_PAGES_EXTRA = 50;
 const ALL_PAGES_DEPTH = 8;
+// Pages discovery fetches at once (plain HTTP requests, cheap: browser renders are limited separately by the caller).
+export const CRAWL_CONCURRENCY = 8;
+
+/** Pages fetched at once while finding pages: SAS_CRAWL_CONCURRENCY (1–16), else CRAWL_CONCURRENCY. */
+export function crawlConcurrency(env = process.env) {
+  const n = Number(env.SAS_CRAWL_CONCURRENCY);
+  return Number.isInteger(n) && n >= 1 && n <= 16 ? n : CRAWL_CONCURRENCY;
+}
 
 /**
  * Output file for a URL path: "/" → index.html, "/about.html" → about.html, "/about" and "/about/" →
@@ -189,6 +198,10 @@ export async function discoverPages({ url, limit, all = false, knownUrls = [], r
     sitemapUrls: sitemap.urls.filter((u) => sameSite(u, origin)),
     seedUrls: knownUrls.filter((u) => sameSite(u, origin)),
     render,
+    // HTTP first: a page is parsed from the HTML the server sends; a browser render only when that HTML may lack what a
+    // visitor sees (an app shell, an empty mount point, a page asking for JavaScript): when in doubt, render.
+    needsRender: looksClientRendered,
+    concurrency: crawlConcurrency(),
     signal,
     onProgress: (done, total) => onProgress?.(0.2 + 0.8 * (done / Math.max(total, 1)), `Found ${done} pages`),
   });
