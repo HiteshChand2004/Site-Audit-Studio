@@ -22,6 +22,8 @@ import { RECREATE_VIEWS as VIEWS } from '../views.js';
 import { displayOf, isElement, isText } from '../ir/tree.js';
 import { startSiteServer } from './server.js';
 import { gotoLocal } from './goto.js';
+import { optimized } from '../optimize.js';
+import { scaledImage } from './visualDiff.js';
 
 const VISUAL_WIDTH = 96;
 const COLOR_TOLERANCE = 32;
@@ -260,7 +262,11 @@ export function planFixes(root, v, rects) {
   return { widths, heights };
 }
 
-async function thumb(input) {
+// The thumbnail is the visual diff's layout scale (96 px wide, no blur: the same decode), so with the image cache on
+// (imageCache.js) the two comparisons of one screenshot share one decode, and an original is decoded once per job.
+const thumb = (input) => (optimized('IMAGE_CACHE') ? scaledImage(input, { width: VISUAL_WIDTH, blur: 0 }) : decodeThumb(input));
+
+async function decodeThumb(input) {
   // Read files into memory first: sharp keeps a cached handle on files it opens by path, and Windows
   // cannot rename the workspace folder while a handle is open.
   const buffer = typeof input === 'string' ? await readFile(input) : input;

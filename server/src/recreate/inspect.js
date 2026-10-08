@@ -13,6 +13,8 @@ import { capturePage } from './capture/index.js';
 import { discoverPages, SKIP_LABELS } from './discover.js';
 import { RecreateError } from './errors.js';
 import { causeText, recoverFailure, recoverHit } from './interrupts.js';
+import { optimized } from './optimize.js';
+import { createSweeper } from './sweep.js';
 import { RECREATE_VIEWS } from './views.js';
 
 // Captures stop starting new pages this long before the step's time limit.
@@ -161,6 +163,10 @@ export async function inspectStage(ctx) {
   ctx.scaleToPages?.(discovery.pages.length);
 
   const captured = new Map(); // discovery index → page (kept in discovery order, the homepage first)
+  // The sweep of the original at more widths (sweep.js) gets each page as soon as it is kept, and may use the capture slots
+  // that are idle (no page left to start): the last pages of a capture leave most of the machine unused otherwise. The pipeline
+  // allows it only when its real sweep step follows (ctx.earlySweepAllowed); the sweep step takes it over (its own limits).
+  const early = ctx.earlySweepAllowed && optimized('SWEEP') ? (ctx.earlySweep = createSweeper(ctx)) : null;
   const failedPages = [];
   const notCaptured = [];
   const stalled = []; // pages abandoned the first time: { i, info }
@@ -207,6 +213,7 @@ export async function inspectStage(ctx) {
         return;
       }
       captured.set(i, { ...info, views });
+      early?.add(i, { ...info, views });
     };
     const outOfTime = (info) => {
       notCaptured.push(info.path);
@@ -265,6 +272,8 @@ export async function inspectStage(ctx) {
       const room = ctx.roomForAnotherPage ?? roomForAnotherPage;
       const inflight = new Set();
       let next = 0;
+      // Once every page has started, a slot a finished page leaves is lent to the sweep (while the memory holds one more page).
+      early?.setSlots(() => (next >= total && room() ? Math.max(0, atOnce - inflight.size) : 0));
       let done = 0;
       while (next < total || inflight.size) {
         while (next < total && inflight.size < atOnce) {
@@ -295,6 +304,8 @@ export async function inspectStage(ctx) {
     // Pages that stalled get one more try, in a fresh browser: closing the first one ends their captures, so a second
     // capture never shares its folder with one that is still writing.
     if (stalled.length && !ctx.signal.aborted) {
+      // Captured again one at a time: the other slots stay lent to the sweep.
+      early?.setSlots(() => (roomForAnotherPage() ? Math.max(0, atOnce - 1) : 0));
       await closeBrowser();
       await Promise.race([Promise.all(abandoned), new Promise((r) => setTimeout(r, 10000))]);
       browser ??= await launchBrowser({ proxy: proxy.url });
@@ -319,6 +330,8 @@ export async function inspectStage(ctx) {
     }
     report.capture.captureMs = Date.now() - captureStarted;
   } finally {
+    // The sweep step decides how many pages it sweeps from here on (it starts right after this step).
+    early?.setSlots(() => 0);
     await closeBrowser();
     await closeProxy();
   }

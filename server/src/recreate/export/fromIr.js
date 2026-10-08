@@ -13,6 +13,7 @@ import { getEmitter } from '../emit/index.js';
 import { writeProject } from '../emit/write.js';
 import { emitSite } from '../emit/html.js';
 import { buildDist } from '../build/minify.js';
+import { optimized } from '../optimize.js';
 import { recreateDir } from '../workspace.js';
 
 const refuse = (status, message) => Object.assign(new RecreateError(message), { status });
@@ -65,10 +66,14 @@ export function failedOutput(stack, err) {
  * against) and builds it into <dir>/stacks/<stack>/ (written as <stack>.tmp, renamed once everything succeeded).
  * Used by an export of a completed recreate and by the recreate job itself, inside its workspace (recreate/stack.js).
  * A missing IR or asset manifest is refused with status 404 before anything is written.
- * @param {{ dir: string, stack: string, report: object, signal?: AbortSignal, progress?: (fraction: number, message?: string) => void }} o
+ * @param {{ dir: string, stack: string, report: object, signal?: AbortSignal, progress?: (fraction: number, message?: string) => void,
+ *   built?: { files: Map<string, string>, assets: string[] } }} o
+ *   built: what the recreate job's own build step wrote to dist/ (its emitted files and assets): when the plain-HTML emit of the
+ *   saved IR is exactly that, dist/ is the reference as it stands instead of being built a second time (optimize-create-copy,
+ *   SAS_COPY_OPT_STACK_REF)
  * @returns {Promise<object>} the `outputs[stack]` entry
  */
-export async function buildStackOutput({ dir, stack, report, signal, progress }) {
+export async function buildStackOutput({ dir, stack, report, signal, progress, built: jobBuild = null }) {
   const emitter = getEmitter(stack);
   const ir = await readFile(path.join(dir, 'ir', 'site.json'), 'utf8').then(JSON.parse, () => null);
   if (!ir) throw refuse(404, 'The saved IR of this recreate is gone (only the latest recreates keep their files). Run Recreate again.');
@@ -96,8 +101,14 @@ export async function buildStackOutput({ dir, stack, report, signal, progress })
     if (emitter.build) {
       try {
         const html = emitSite(ir, { inlineCss: true });
-        await buildDist({ files: html.files, assets: [...html.assets].filter((f) => known.has(f)), assetsDir: path.join(dir, 'assets'), distDir: reference });
-        htmlDist = reference;
+        const htmlAssets = [...html.assets].filter((f) => known.has(f));
+        // Inside the job that has just built dist/ from this same IR with this same code: the same emitted files and assets
+        // make the same build, so dist/ is the reference as it stands (nothing writes it after the build step).
+        if (jobBuild && optimized('STACK_REF') && sameBuild(html.files, htmlAssets, jobBuild)) ms.htmlReferenceReused = true;
+        else {
+          await buildDist({ files: html.files, assets: htmlAssets, assetsDir: path.join(dir, 'assets'), distDir: reference });
+          htmlDist = reference;
+        }
       } catch {
         // An IR the HTML emitter cannot write (none from a real recreate): the recreate's own dist/ stays the reference.
       }
@@ -114,6 +125,14 @@ export async function buildStackOutput({ dir, stack, report, signal, progress })
   } finally {
     await rm(reference, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+/** Are the emitted files and assets of a plain-HTML build exactly those the job's build step wrote dist/ from? */
+function sameBuild(files, assets, built) {
+  if (files.size !== built.files.size || assets.length !== built.assets.length) return false;
+  for (const [file, text] of files) if (built.files.get(file) !== text) return false;
+  const have = new Set(built.assets);
+  return assets.every((f) => have.has(f));
 }
 
 async function runExport({ projectId, recreateId, stack }) {

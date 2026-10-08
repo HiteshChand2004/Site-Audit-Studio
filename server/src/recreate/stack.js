@@ -43,7 +43,9 @@ export async function stackStage(ctx, local) {
   const started = Date.now();
   try {
     local.progress(0, 'Building the chosen stack');
-    const output = await buildStackOutput({ dir: ctx.dir, stack, report: ctx.report, signal: controller.signal, progress: local.progress });
+    // What the build step wrote dist/ from: the stack's reference is dist/ itself when the same IR emits the same files.
+    const built = ctx.generated && { files: ctx.generated.out.files, assets: ctx.generated.siteAssets };
+    const output = await buildStackOutput({ dir: ctx.dir, stack, report: ctx.report, signal: controller.signal, progress: local.progress, built });
     ctx.report.outputs = { ...ctx.report.outputs, [stack]: output };
     ctx.report.stackBuild = { inJob: true, ms: Date.now() - started };
   } catch (err) {

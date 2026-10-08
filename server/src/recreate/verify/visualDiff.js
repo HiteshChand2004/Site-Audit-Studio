@@ -12,6 +12,7 @@
 // (where the difference is) and an optional heatmap image.
 import { readFile } from 'node:fs/promises';
 import sharp from 'sharp';
+import { decodeCached } from './imageCache.js';
 
 // `blur` (sigma, px at that scale) takes the edge off thin structure first: text lines a few px apart in the two pages
 // are the same text, not a different page.
@@ -26,7 +27,14 @@ const C2 = (0.03 * 255) ** 2;
 const COLOR_FREE = 12;
 const COLOR_FULL = 112;
 
-async function load(input, { width, blur }) {
+// A screenshot is decoded once per scale (imageCache.js): an original (a path) for the whole job, the copy's (a buffer) for
+// as long as that buffer lives (the similarity thumbnail of layout.js is the 96 px scale and shares it).
+const load = (input, scale) => decodeCached(input, `scaled:${scale.width}:${scale.blur}`, (x) => decode(x, scale));
+
+/** A screenshot scaled to `width` (and blurred by `blur`), RGB: { data, width, height }. Read-only. */
+export const scaledImage = load;
+
+async function decode(input, { width, blur }) {
   // Read files into memory first: sharp keeps a cached handle on files it opens by path, and Windows cannot
   // rename the workspace folder while a handle is open.
   const buffer = typeof input === 'string' ? await readFile(input) : input;

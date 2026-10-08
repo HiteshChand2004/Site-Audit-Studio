@@ -14,6 +14,9 @@ import { emitCss, CSS_FILE } from '../emit/css.js';
 import { applyFluidType, applyPhoneShrink } from '../ir/fluid.js';
 import { compareWidth, openSweepRenderer, renderSweepPage } from './responsive.js';
 import { visualDiff } from './visualDiff.js';
+import { parallelism } from '../../audit/resources.js';
+import { mapLimit } from '../../audit/util.js';
+import { optimized } from '../optimize.js';
 
 // The sweep widths each breakpoint decides: the overrides of a view (captured at its width) apply up to its
 // breakpoint, so the sweep widths between that view and the next wider one get either its styles or the wider
@@ -39,6 +42,12 @@ export const SHRINK_MARGIN = 1;
 export const REFINE_PAGES = 3;
 
 class OutOfTime extends Error {}
+
+// Pages a variant is rendered on at once (each renders its widths side by side, one tab per width): the site is local and
+// static, so a render does not depend on what renders next to it. 1 = one page after the other (as before the speed-up).
+const PAGES_AT_ONCE = 3;
+const PAGE_MB = 700;
+const pagesAtOnce = () => (optimized('REFINE') ? parallelism({ perUnitMB: PAGE_MB, max: PAGES_AT_ONCE }) : 1);
 
 const outcome = (widths, boundary) => widths.filter((w) => w <= boundary).length;
 const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
@@ -75,8 +84,8 @@ export async function refineResponsive({ ir, siteDir, workspace, sweep, deadline
     const usable = widths.filter((w) => sweep.widths.includes(w));
     const css = cssOf(cfg);
     renderer.server.overrides.set(CSS_FILE, css);
-    const scores = [];
-    for (const page of pages) {
+    // Per page (in page order whatever order they finish in, so the mean adds up the same way).
+    const perPage = await mapLimit(pages, pagesAtOnce(), async (page) => {
       const original = sweep.pages[page.slug];
       const results = await Promise.all(usable.map(async (w) => {
         const o = original.widths[w];
@@ -91,9 +100,9 @@ export async function refineResponsive({ ir, siteDir, workspace, sweep, deadline
         cache.set(key, s);
         return s;
       }));
-      scores.push(...results.filter((s) => s != null));
-    }
-    return mean(scores);
+      return results.filter((s) => s != null);
+    });
+    return mean(perPage.flat());
   }
 
   const current = { ...(hasLaptop && { laptop: ir.breakpoints.laptop }), tablet: ir.breakpoints.tablet, mobile: ir.breakpoints.mobile, fluid: false, shrink: false };

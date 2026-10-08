@@ -9,11 +9,23 @@
 // A DOM or visual difference is the emitter's fault (the output fails); a hydration problem is reported
 // as a warning, since React recovers by rendering the page again.
 import { launchBrowser } from '../../audit/render.js';
+import { parallelism } from '../../audit/resources.js';
+import { mapLimit } from '../../audit/util.js';
+import { optimized } from '../optimize.js';
 import { MAX_HEIGHT, VIEWS } from '../../audit/screenshots.js';
 import { openRenderer, visualSimilarity, withBrowserRetry } from './layout.js';
 import { gotoLocal } from './goto.js';
 
 export const VISUAL_MIN = 0.97;
+// Renders at once (each a tab of its own): both builds are local and static with JavaScript off, so a page renders the same
+// whatever else renders next to it. Memory per render: a loaded page plus its full-page screenshot.
+export const RENDERS_AT_ONCE = 4;
+const RENDER_MB = 300;
+// Hydration checks at once (JavaScript on: each its own context).
+const HYDRATIONS_AT_ONCE = 3;
+
+/** How many renders the check runs at once: by the free memory, 1 (one after the other, as before) when the speed-up is off. */
+export const rendersAtOnce = (max = RENDERS_AT_ONCE) => (optimized('EQUIVALENCE') ? parallelism({ perUnitMB: RENDER_MB, max }) : 1);
 
 // Runs in the page. The markup lives in <div id="root"> in a React app (display: contents; `map.appWrapper`) and
 // directly in <body> in the plain-HTML build and Next.js: all give the same list.
@@ -178,47 +190,59 @@ export async function compareBuilds({ referenceRoot, candidateRoot, pages, urlMa
     const ms = { reference: 0, candidate: 0, hydration: 0 };
     let mark = Date.now();
     const lap = (k) => { const now = Date.now(); ms[k] += now - mark; mark = now; };
+    // Every page in every view: the reference build first, then the candidate (one server, its root switched in between, so
+    // both are rendered at the same origin and their URLs compare). Renders run side by side (rendersAtOnce); results are
+    // assembled in page and view order, whatever order they finish in.
+    const jobs = pages.flatMap((p) => VIEWS.map((v) => ({ p, v })));
+    const atOnce = rendersAtOnce();
     const reference = new Map();
-    for (const p of pages) {
-      for (const v of VIEWS) {
-        reference.set(`${p.outPath}|${v.id}`, await snapshot(renderer, p.outPath, v.id, refMap));
-        tick('Rendering the plain-HTML build');
-      }
-    }
+    await mapLimit(jobs, atOnce, async ({ p, v }) => {
+      reference.set(`${p.outPath}|${v.id}`, await snapshot(renderer, p.outPath, v.id, refMap));
+      tick('Rendering the plain-HTML build');
+    });
     lap('reference');
     renderer.server.setRoot(candidateRoot);
-    const results = [];
-    for (const p of pages) {
+    const compared = await mapLimit(jobs, atOnce, async ({ p, v }) => {
+      const key = `${p.outPath}|${v.id}`;
+      const ref = reference.get(key);
+      const cand = await snapshot(renderer, p.candidateOutPath ?? p.outPath, v.id, candMap);
+      const visual = await visualSimilarity(ref.png, cand.png).catch(() => null);
+      // The pictures are not needed any more (signatures are): memory for the renders still to come.
+      reference.set(key, { ...ref, png: null });
+      tick('Comparing the stack build');
+      return { sig: cand.sig, diff: firstDifference(ref.sig, cand.sig), view: { visual, height: { reference: ref.height, candidate: cand.height } } };
+    });
+    const results = pages.map((p, i) => {
       const entry = { path: p.path, outPath: p.outPath, ...(p.candidateOutPath && { candidateOutPath: p.candidateOutPath }), dom: 'equal', difference: null, views: {} };
       let jsOffSig = null;
-      for (const v of VIEWS) {
-        const ref = reference.get(`${p.outPath}|${v.id}`);
-        const cand = await snapshot(renderer, p.candidateOutPath ?? p.outPath, v.id, candMap);
-        if (v.id === 'desktop') jsOffSig = cand.sig;
-        const diff = firstDifference(ref.sig, cand.sig);
-        if (diff && entry.dom === 'equal') {
+      VIEWS.forEach((v, j) => {
+        const c = compared[i * VIEWS.length + j];
+        if (v.id === 'desktop') jsOffSig = c.sig;
+        if (c.diff && entry.dom === 'equal') {
           entry.dom = 'different';
-          entry.difference = { view: v.id, ...diff };
+          entry.difference = { view: v.id, ...c.diff };
         }
-        entry.views[v.id] = { visual: await visualSimilarity(ref.png, cand.png).catch(() => null), height: { reference: ref.height, candidate: cand.height } };
-        tick('Comparing the stack build');
-      }
-      results.push({ entry, jsOffSig });
-    }
+        entry.views[v.id] = c.view;
+      });
+      return { entry, jsOffSig };
+    });
 
     lap('candidate');
     const hydration = { checked: 0, failed: 0, pages: [] };
     if (hydrate) {
       browser = await launchBrowser();
-      for (const { entry, jsOffSig } of results) {
+      const checked = await mapLimit(results, rendersAtOnce(HYDRATIONS_AT_ONCE), async ({ entry, jsOffSig }) => {
         const h = await hydrationCheck(renderer.server.origin, entry.candidateOutPath ?? entry.outPath, browser, candMap);
-        const changed = firstDifference(jsOffSig, h.sig);
+        tick('Checking hydration');
+        return { h, changed: firstDifference(jsOffSig, h.sig) };
+      });
+      results.forEach(({ entry }, i) => {
+        const { h, changed } = checked[i];
         const ok = h.hydrated && !h.errors.length && !changed;
         hydration.checked++;
         if (!ok) hydration.failed++;
         hydration.pages.push({ path: entry.path, outPath: entry.outPath, ok, hydrated: h.hydrated, errors: h.errors.slice(0, 3), ...(changed && { domChanged: changed }) });
-        tick('Checking hydration');
-      }
+      });
     }
 
     lap('hydration');

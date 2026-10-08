@@ -151,6 +151,8 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     defer: (fn) => disposers.push(fn),
     /** May a background step run a second browser next to the steps still to come (free memory)? */
     canOverlap,
+    // The capture may start sweeping captured pages early (sweep.js createSweeper) only when the real sweep step takes it over.
+    earlySweepAllowed: stages.sweep === sweepStage,
     progress: null,
     report: {
       recreateId,
