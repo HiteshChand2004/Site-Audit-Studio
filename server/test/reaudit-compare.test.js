@@ -164,7 +164,7 @@ test('sitemap.xml lists indexable pages at the site origin; robots.txt keeps the
   const out = crawlFiles({ pages, baseUrl: 'https://new.test/', robots: { status: 'found', blocksAll: false, blockedAiCrawlers: ['GPTBot', 'GPTBot', 'ClaudeBot'] }, llms: { found: true, text: llmsText } });
   // The original llms.txt is copied as it is.
   assert.equal(out.files.find((f) => f.path === 'llms.txt').content, llmsText);
-  assert.deepEqual(out.llms, { copied: true, bytes: Buffer.byteLength(llmsText), tooLarge: false });
+  assert.deepEqual(out.llms, { copied: true, generated: false, bytes: Buffer.byteLength(llmsText), tooLarge: false });
   assert.deepEqual(out.sitemap.urls, ['https://new.test/', 'https://new.test/about/', 'https://new.test/a&b/']);
   assert.deepEqual(out.sitemap.excluded, ['/private/']);
   const sitemap = out.files.find((f) => f.path === 'sitemap.xml').content;
@@ -181,7 +181,7 @@ test('sitemap.xml lists indexable pages at the site origin; robots.txt keeps the
   assert.ok(!/GPTBot/.test(closed.files[1].content));
   const none = crawlFiles({ pages, baseUrl: 'https://new.test', robots: { status: 'missing' }, llms: { found: true, text: null, tooLarge: true } });
   assert.ok(!none.files.some((f) => f.path === 'llms.txt'));
-  assert.deepEqual(none.llms, { copied: false, bytes: 0, tooLarge: true });
+  assert.deepEqual(none.llms, { copied: false, generated: false, bytes: 0, tooLarge: true }); // too large to read: never replaced by a generated one
   assert.match(none.robots.source, /no robots\.txt/);
   assert.match(none.files[1].content, /Allow: \//);
 });

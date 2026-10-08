@@ -324,7 +324,8 @@ test('real export: build, verify, equivalence with the HTML build, hydration', {
     assert.deepEqual([out.hydration.checked, out.hydration.failed], [2, 0], JSON.stringify(out.hydration));
     assert.equal(out.safety.safe, true);
     assert.deepEqual(out.fidelity, { score: 90, basis: 'equivalent-to-html', threshold: 80 });
-    assert.ok(out.build.js.bytes > 0 && out.build.css.bytes > 0);
+    // No stylesheet bundle: each page carries its own CSS inline (prerender), like the HTML site.
+    assert.ok(out.build.js.bytes > 0 && !out.build.css.bytes);
     assert.deepEqual(out.warnings, []);
 
     // The build left only the project's own files (no node_modules link) and the toolchain is intact.
@@ -335,7 +336,8 @@ test('real export: build, verify, equivalence with the HTML build, hydration', {
     const home = await readFile(path.join(project, 'dist', 'index.html'), 'utf8');
     assert.match(home, /<div id="root">.*<h1 data-motion="rv r1">Home<\/h1>/s);
     assert.match(home, /<script type="module" crossorigin src="\/_app\/index-[\w-]+\.js"><\/script>/);
-    assert.match(home, /<link rel="stylesheet" crossorigin href="\/_app\/style-[\w-]+\.css">/);
+    assert.doesNotMatch(home, /rel="stylesheet"/);
+    assert.match(home, /<style>[^<]*#root\{display:contents\}[^<]*<\/style>/);
     // 4b.5: the reveal script is a plain file from the site root, loaded by every page; the safety rules let it through.
     assert.match(home, /<script src="\/js\/motion\.js" defer><\/script>/);
     assert.equal(await readFile(path.join(project, 'dist', 'js', 'motion.js'), 'utf8'), MOTION_JS);

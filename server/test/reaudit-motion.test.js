@@ -73,7 +73,7 @@ test('summarize counts scroll reveals, hover elements by tag + text, and loops b
     loops: { loops: [{ pattern: 'spin', timing: { duration: 2000 } }, { pattern: 'dash', timeline: 'ScrollTimeline', timing: {} }] },
   });
   assert.deepEqual([s.reveal.count, s.reveal.replay], [1, 1]);
-  assert.deepEqual(s.hover.keys, ['a|Home']);
+  assert.deepEqual(s.hover.keys, ['a|home']); // tag + lower-case text without white space (hoverKey)
   assert.deepEqual(s.loops.keys, ['spin']);
 });
 
@@ -105,8 +105,8 @@ test('the recreated pages are measured like the original: same effects found wit
   const b = summarize(recreated.get('index'));
   assert.equal(a.reveal.count, 3, JSON.stringify(a.reveal));
   assert.equal(b.reveal.count, 3, JSON.stringify(b.reveal));
-  assert.deepEqual(a.hover.keys, ['a|Services']);
-  assert.deepEqual(b.hover.keys, ['a|Services']);
+  assert.deepEqual(a.hover.keys, ['a|services']);
+  assert.deepEqual(b.hover.keys, ['a|services']);
   assert.deepEqual(a.loops.keys, b.loops.keys);
   assert.equal(a.loops.count, 1);
 

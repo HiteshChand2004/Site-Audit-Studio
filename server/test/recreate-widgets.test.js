@@ -484,7 +484,9 @@ test('cards whose hover look the script draws show that look in the copy, with C
   assert.equal(tree.stats.hoverCards, states.hoverCards);
   const site = { pages: [{ info: { path: '/hover-cards', url: `${base}/hover-cards` }, root: tree.root }], assetResolve: () => null };
   const { motion } = applyMotion(site, new Map([['/hover-cards', { clicks }]]));
-  assert.equal(motion.script, false, 'no script needed');
+  // The hovered look waits in a <template> in the published page and the script puts it in place on the first pointerover
+  // (fewer elements); the swap itself is CSS, as this page (built without templates) shows.
+  assert.equal(motion.script, true, 'the script brings the hovered look in');
   const css = motionCss(motion, { tokenOf: new Map(), from: '' });
   const html = (n) => {
     if (!isElement(n)) return n.text.replace(/</g, '&lt;');

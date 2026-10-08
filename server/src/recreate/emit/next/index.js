@@ -166,10 +166,10 @@ export function emitNext(ir) {
     '/** @type {import("next").NextConfig} */',
     'export default {',
     "  output: 'export',",
-    "  // Each page's stylesheet is written inline in its head: no render-blocking request.",
-    '  experimental: { inlineCss: true },',
     '  trailingSlash: true,',
     '  images: { unoptimized: true },',
+    "  // Each page's stylesheet is written inline in its head: no render-blocking request.",
+    '  experimental: { inlineCss: true },',
     '};',
   ));
   files.set('jsconfig.json', `${JSON.stringify({ compilerOptions: { paths: { '@/*': ['./*'] } } }, null, 2)}\n`);

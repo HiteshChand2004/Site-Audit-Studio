@@ -101,13 +101,16 @@ test('emitNext writes the project: groups, pages with their head, components, re
   const sitemap = '<urlset><url><loc>https://www.example.com/about.html</loc></url><url><loc>https://www.example.com/</loc></url></urlset>';
   const out = emitNext(irOf(pages, [{ path: 'sitemap.xml', content: sitemap }, { path: 'robots.txt', content: 'User-agent: *' }]));
   assert.deepEqual([...out.files.keys()].filter((f) => /^(app|components)\//.test(f)).sort(), [
-    'app/(site)/about/page.jsx', 'app/(site)/layout.jsx', 'app/(site)/page.jsx', 'app/(site-2)/blog/first-post/page.jsx', 'app/(site-2)/layout.jsx', 'app/site.css', 'components/SiteHeader.jsx',
+    'app/(site)/about/page.css', 'app/(site)/about/page.jsx', 'app/(site)/layout.jsx', 'app/(site)/page.css', 'app/(site)/page.jsx', 'app/(site-2)/blog/first-post/page.css', 'app/(site-2)/blog/first-post/page.jsx', 'app/(site-2)/layout.jsx', 'app/site.css', 'components/SiteHeader.jsx',
   ]);
   for (const f of ['package.json', 'next.config.mjs', 'jsconfig.json', '.gitignore', 'README.md', 'public/robots.txt', 'public/sitemap.xml', 'public/_redirects', 'vercel.json']) assert.ok(out.files.has(f), f);
   // Root layouts: one per distinct <html lang> + <body class>.
   assert.match(out.files.get('app/(site)/layout.jsx'), /<html lang="en">\n\s+<body className="page">\{children\}<\/body>/);
   assert.match(out.files.get('app/(site-2)/layout.jsx'), /<html lang="fr">\n\s+<body className="post">/);
-  assert.match(out.files.get('app/(site)/layout.jsx'), /^import '\.\.\/site\.css';/);
+  // Each page imports only its own stylesheet (inlined by Next); the layout imports none.
+  assert.doesNotMatch(out.files.get('app/(site)/layout.jsx'), /import/);
+  assert.match(out.files.get('app/(site)/page.jsx'), /^import '\.\/page\.css';/);
+  assert.match(out.files.get('next.config.mjs'), /inlineCss: true/);
   // The head is written as elements; Next supplies charset and viewport; canonical and og:url follow the move.
   const about = out.files.get('app/(site)/about/page.jsx');
   assert.match(about, /import SiteHeader from '@\/components\/SiteHeader\.jsx';/);

@@ -316,7 +316,7 @@ export function applyMotion(site, byPath) {
     // first screen (rotating headlines, timers) are not scroll effects.
     // An element that loops (a ticker strip) only seemed to "reveal" because it moves by itself; its loop is rebuilt instead
     // (a reveal's animation on the same element would replace the loop's).
-    const loopHosts = new Set((motion.loops?.loops ?? []).filter((l) => !l.pseudo).map((l) => l.path));
+    const loopHosts = new Set((motion.loops?.loops ?? []).filter((l) => !l.pseudo && !l.timeline).map((l) => l.path));
     for (const el of motion.reveal?.elements ?? []) {
       if (loopHosts.has(el.path)) {
         stats.reveal.skipped.loop = (stats.reveal.skipped.loop ?? 0) + 1;

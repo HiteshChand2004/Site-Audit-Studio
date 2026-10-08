@@ -92,9 +92,10 @@ test('applyMotion: tokens on mapped elements, shared effects, skipped cases coun
 
   // Hover: two links with equal effects share one token; the kid and the pseudo-element ride along.
   assert.deepEqual(nodes.link.motionTokens, ['h1']);
-  assert.deepEqual(nodes.link2.motionTokens, ['h1', 'f1']);
+  // link2 also has an effect that adds elements (a script's): its style part is rebuilt (h2), the DOM part counted as skipped.
+  assert.deepEqual(nodes.link2.motionTokens, ['h1', 'h2', 'f1']);
   assert.deepEqual(nodes.arrow.motionTokens, ['h1k1']);
-  assert.equal(motion.hover.length, 1);
+  assert.equal(motion.hover.length, 2); // + link2's style part of the effect that also adds elements
   assert.deepEqual(motion.hover[0].decls, { color: 'rgb(225, 29, 72)' });
   assert.deepEqual(motion.hover[0].pseudo, { after: { width: '100%' } });
   assert.equal(stats.hover.skipped.unmapped, 1);

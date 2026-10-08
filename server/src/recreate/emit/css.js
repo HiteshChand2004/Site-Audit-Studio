@@ -118,8 +118,8 @@ export function usedCustomProps(ir) {
   const scan = (text) => {
     for (const m of String(text ?? '').matchAll(VAR_REF)) used.add(m[1]);
   };
-  for (const r of ir.rules) for (const part of Object.values(r.parts)) for (const v of Object.values(part ?? {})) scan(v);
-  for (const k of ir.keyframes) scan(k.css);
+  for (const r of ir.rules ?? []) for (const part of Object.values(r.parts)) for (const v of Object.values(part ?? {})) scan(v);
+  for (const k of ir.keyframes ?? []) scan(k.css);
   scan(JSON.stringify(ir.motion ?? {}));
   const walk = (n) => {
     if (!n || 'text' in n) return;
@@ -127,7 +127,7 @@ export function usedCustomProps(ir) {
     if (typeof n.attrs?.style === 'string') scan(n.attrs.style);
     (n.children ?? []).forEach(walk);
   };
-  for (const p of ir.pages) walk(p.body);
+  for (const p of ir.pages ?? []) walk(p.body);
   return used;
 }
 
