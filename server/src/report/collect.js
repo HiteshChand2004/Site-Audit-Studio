@@ -1,6 +1,7 @@
 // Everything the report needs, read from the database and the project folder: the project, the latest analysis
 // (the audit as the OLD panel shows it), the latest completed recreate (its report.json), the fix checklist of the
-// latest re-audit (audit.recreate) and small screenshots of the original and the recreated pages.
+// latest re-audit (audit.recreate), small screenshots of the original and the recreated pages, and the site's icon
+// as the report's logo.
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
@@ -42,6 +43,24 @@ export async function thumbnail(file, view) {
   }
 }
 
+// The website's own icon (kept by routes/favicon.js as favicon.bin + favicon.json): the report's logo, inline.
+const LOGO_TYPES = /^image\/(png|x-icon|vnd\.microsoft\.icon|svg\+xml|jpeg|gif|webp|avif)$/;
+const LOGO_MAX = 512 * 1024;
+
+/** The site's icon as a data URI, or null (the report then shows its first letter). */
+export async function logo(projectId) {
+  try {
+    const dir = projectDir(projectId);
+    const meta = JSON.parse(await readFile(path.join(dir, 'favicon.json'), 'utf8'));
+    if (!LOGO_TYPES.test(meta?.type ?? '')) return null;
+    const body = await readFile(path.join(dir, 'favicon.bin'));
+    if (!body.length || body.length > LOGO_MAX) return null;
+    return `data:${meta.type};base64,${body.toString('base64')}`;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * @param {string} projectId
  * @returns {Promise<null | { generatedAt: string, project: object, audit: object, analyzed: boolean, recreate: object|null, images: object }>}
@@ -57,7 +76,7 @@ export async function collectReport(projectId) {
 
   const rec = latestRecreate.get(projectId);
   const recreate = rec ? { ...JSON.parse(rec.result_json), recreateId: rec.id } : null;
-  const images = { old: {}, new: {} };
+  const images = { old: {}, new: {}, logo: await logo(projectId) };
 
   // The original: the first-screen shots of the analysis (screens/<view>-fold.webp).
   if (analyzed && audit.screenshots?.analysisId) {
