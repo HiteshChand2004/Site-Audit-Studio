@@ -1,14 +1,22 @@
 import { ShieldCheck } from 'lucide-react';
 import styles from './Disclaimer.module.css';
 
-export default function Disclaimer() {
+const FULL = 'Use Audit and Recreate only on company-owned or authorized websites.';
+
+/**
+ * The permanent authorization note, at the foot of the sidebar: a short line (the whole sentence on hover and for screen
+ * readers); in the collapsed rail only its shield.
+ */
+export default function Disclaimer({ compact = false }) {
   return (
-    <p className={styles.bar} role="note" title="Use Audit and Recreate only on company-owned or authorized websites.">
+    <p className={styles.note} data-compact={compact} role="note" title={FULL}>
       <ShieldCheck size={14} aria-hidden="true" />
-      <span className={styles.long}>Use Audit and Recreate only on company-owned or authorized websites.</span>
-      <span className={styles.short} aria-hidden="true">
-        Authorized websites only
-      </span>
+      <span className={styles.hidden}>{FULL}</span>
+      {!compact && (
+        <span aria-hidden="true">
+          Authorized websites only
+        </span>
+      )}
     </p>
   );
 }

@@ -847,7 +847,7 @@ Decisions: Live view (CDP screencast) deferred to 3b; a header-stripping reverse
   WordPress content from `/wp-json/wp/v2/` when reachable.
 - **Fixes are general, never site-specific** (no per-URL code); platform knowledge lives in the rule JSON files. Real sites only verify.
 - **Fix checklist** = same audit pipeline on NEW, diffed against OLD. Nothing hardcoded.
-- **Authorization**: New Project requires an "I'm authorized" checkbox (server rejects without `authorized: true`) + a permanent disclaimer in the top bar.
+- **Authorization**: New Project requires an "I'm authorized" checkbox (server rejects without `authorized: true`) + a permanent note at the foot of the sidebar (`Disclaimer.jsx`: "Authorized websites only" with the full sentence on hover and for screen readers; the shield alone in the collapsed rail; moved out of the top bar on the user's request, 2026-10-08).
 - Recreate page limit configurable (default homepage + 5).
 - Non-automatable things (form backends, login, cart/checkout, CMS data, plugin behaviour, WebGL) go to "Manual rebuild needed", never faked.
 - Tests use only the fixture site (localhost:4100); never external requests from tests.

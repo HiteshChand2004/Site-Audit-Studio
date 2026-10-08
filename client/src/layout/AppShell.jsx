@@ -3,7 +3,6 @@ import { ChevronRight, FileText, Globe } from 'lucide-react';
 import Sidebar from './Sidebar.jsx';
 import Workspace from './Workspace.jsx';
 import Home from './Home.jsx';
-import Disclaimer from '../components/common/Disclaimer.jsx';
 import Button from '../components/common/Button.jsx';
 import { EmptyState } from '../components/common/Surface.jsx';
 import { SiteIcon } from '../components/site/Site.jsx';
@@ -106,7 +105,6 @@ export default function AppShell() {
                 Full report
               </Button>
             )}
-            <Disclaimer />
           </div>
         </header>
 
