@@ -1,7 +1,8 @@
 // Recreate jobs. They share the global one-job-at-a-time lock with Analyze and Re-audit (jobs/manager.js).
 // A successful job starts the preview of its production build (the one active preview) and queues a
 // re-audit of that build (Phase 5 fix checklist). When the project's stack is not plain HTML, the stack
-// output is built from the saved IR right after (queued behind this job, never discarding the recreate).
+// output is built inside the job when a second browser fits (recreate/stack.js), else from the saved IR right
+// after (queued behind this job, never discarding the recreate).
 import path from 'node:path';
 import { db } from '../db/index.js';
 import { JobManager } from '../jobs/manager.js';
@@ -9,7 +10,7 @@ import { startReaudit } from '../reaudit/jobs.js';
 import { overallPct, runRecreate, STAGES, STEPS } from './index.js';
 import { replayStages } from './replay.js';
 import { getEmitter } from './emit/index.js';
-import { exportStack } from './export/fromIr.js';
+import { exportStack, outputRoot, targetStack } from './export/fromIr.js';
 import { activePreview, startPreview } from './preview.js';
 import { pruneRecreates, recreateDir } from './workspace.js';
 
@@ -26,20 +27,33 @@ export const recreateJobs = new JobManager({
       : undefined;
     const report = await runRecreate({ project, recreateId: job.id, progress, warnings: job.warnings, ...(stages && { stages }) });
     // The preview is runtime state: its port is not part of the report. The app asks for it
-    // (GET/POST /preview), which also starts it again after a server restart.
-    await startPreview({ projectId: project.id, recreateId: job.id, root: path.join(recreateDir(project.id, job.id), 'dist'), scripts: Boolean(report.outputs?.html?.scripts) }).catch(() => {});
+    // (GET/POST /preview), which also starts it again after a server restart. The stack's own build when the job built it.
+    const stack = targetStack(report, project.stack);
+    const dir = recreateDir(project.id, job.id);
+    await (stack === 'html'
+      ? startPreview({ projectId: project.id, recreateId: job.id, root: path.join(dir, 'dist'), scripts: Boolean(report.outputs?.html?.scripts) })
+      : startPreview({ projectId: project.id, recreateId: job.id, root: outputRoot(dir, report, stack), scripts: getEmitter(stack)?.scripts ?? false, stack })
+    ).catch(() => {});
     return report;
   },
   // Keep the latest completed recreates only; also removes any leftover temporary workspace.
-  // Then queue the re-audit (it runs after anything already waiting for the lock).
+  // Then queue the stack build the job left out (if any) and the re-audit (it runs after anything already waiting for the lock).
   after: async ({ job, project, ok }) => {
     await pruneRecreates(project.id);
-    if (ok) queueStackExport(project, job.id);
+    if (ok && !reportOf(job.id)?.outputs?.[project.stack]) queueStackExport(project, job.id);
     if (ok) queueReaudit(project.id, job.id);
   },
 });
 
 const selectProject = db.prepare('SELECT * FROM projects WHERE id = ?');
+const selectResult = db.prepare('SELECT result_json FROM recreates WHERE id = ?');
+const reportOf = (recreateId) => {
+  try {
+    return JSON.parse(selectResult.get(recreateId)?.result_json ?? 'null');
+  } catch {
+    return null;
+  }
+};
 
 function queueReaudit(projectId, recreateId) {
   const project = selectProject.get(projectId); // may have been deleted while the job ran

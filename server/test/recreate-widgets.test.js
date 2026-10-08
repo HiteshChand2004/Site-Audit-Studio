@@ -15,6 +15,10 @@ import { applyMotion, openDecls } from '../src/recreate/ir/motion.js';
 import { buildPageTree, isElement } from '../src/recreate/ir/tree.js';
 import { buildStyles } from '../src/recreate/ir/styles.js';
 import { emitCss } from '../src/recreate/emit/css.js';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { capturePage } from '../src/recreate/capture/index.js';
 
 const ORIGINAL = `<!doctype html><html><head><style>
 body { margin: 0; font: 16px sans-serif }
@@ -594,4 +598,66 @@ test('a short message a click shows: each control shows its own, gone again afte
   await p.waitForTimeout(ms + 400);
   assert.deepEqual(await shown(), [], 'gone again after the same time');
   await ctx.close();
+});
+
+// Dots switching a panel (a state set) and cards showing a short message (notices) on one page.
+const DOTS_AND_NOTICE = `<!doctype html><html><head><style>
+body { margin: 0; font: 16px sans-serif } .dots button { width: 12px; height: 12px; border-radius: 50%; border: 0; background: #ccc; cursor: pointer }
+.dots button.on { background: #06f } .cards { display: flex; gap: 20px; padding: 40px }
+.card { display: block; width: 200px; padding: 20px; border: 1px solid #ccc; color: #111; text-decoration: none }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #111; color: #fff; padding: 12px 18px; border-radius: 8px }
+</style></head><body><main><section class="ventures"><div class="panel"></div><div class="dots"></div></section>
+<section class="cards"><a class="card" href="#"><h3>Accern</h3></a><a class="card" href="#"><h3>Eigen</h3></a><a class="card" href="#"><h3>Botza</h3></a></section></main>
+<script>
+var items = ['Accern', 'Botza', 'Choice AI'];
+var dots = document.querySelector('.dots');
+items.forEach(function (name, i) { var b = document.createElement('button'); b.type = 'button'; b.setAttribute('aria-label', 'Go to ' + name); b.onclick = function () { show(i); }; dots.appendChild(b); });
+function show(i) {
+  document.querySelector('.panel').innerHTML = '<h3>' + items[i] + '</h3><p>About ' + items[i] + '.</p>';
+  [].forEach.call(dots.children, function (b, k) { b.className = k === i ? 'on' : ''; });
+}
+show(0);
+var timer;
+document.querySelectorAll('.card').forEach(function (c) { c.addEventListener('click', function (e) {
+  e.preventDefault();
+  var t = document.querySelector('.toast'); if (t) t.remove();
+  t = document.createElement('div'); t.className = 'toast'; t.textContent = c.textContent.trim() + "'s website hasn't been added yet.";
+  document.querySelector('.cards').appendChild(t);
+  clearTimeout(timer); timer = setTimeout(function () { t.remove(); }, 1200);
+}); });
+</script></body></html>`;
+
+test('the page capture reads the state sets and the notices side by side, with the same result as one after the other', async () => {
+  pages.set('/dots-notice', DOTS_AND_NOTICE);
+  // One after the other (what the capture did before).
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  await page.goto(`${base}/dots-notice`);
+  const snapshot = await page.evaluate(snapshotPage, {});
+  const clicks = await captureClicks(page, { budgetMs: 15000 });
+  const serial = { states: await captureStates(page, clicks, snapshot.body, { budgetMs: 20000 }), notices: await captureNotices(page, clicks, snapshot.body) };
+  await context.close();
+  assert.ok(serial.states.sets >= 1, JSON.stringify(serial.states.skipped));
+  assert.equal(serial.notices.items, 3);
+
+  // The page capture (capture/index.js): both at once.
+  const workspace = await mkdtemp(path.join(os.tmpdir(), 'sas-widgets-'));
+  try {
+    const result = await capturePage(browser, { url: `${base}/dots-notice`, path: '/dots-notice', slug: 'dots-notice' }, workspace, { motionBudgetMs: 3000, clickBudgetMs: 15000 });
+    assert.deepEqual(result.errors, []);
+    const dir = path.join(workspace, 'capture', 'dots-notice');
+    const motion = JSON.parse(await readFile(path.join(dir, 'motion.json'), 'utf8'));
+    assert.equal(motion.states.sets, serial.states.sets);
+    assert.equal(motion.states.states, serial.states.states);
+    assert.equal(motion.notices.notices, serial.notices.notices);
+    assert.equal(motion.notices.items, serial.notices.items);
+    const desktop = JSON.parse(await readFile(path.join(dir, 'desktop.json'), 'utf8'));
+    assert.equal(desktop.body.notices[0].items.length, 3);
+    // Side by side: both together take about as long as the longer one, not the sum.
+    const both = motion.statesNoticesMs;
+    console.log(`# states ${motion.states.ms} ms, notices ${motion.notices.ms} ms, both together ${both} ms`);
+    assert.ok(both < motion.states.ms + motion.notices.ms - 500, `${both} ms vs ${motion.states.ms} + ${motion.notices.ms} ms`);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 });

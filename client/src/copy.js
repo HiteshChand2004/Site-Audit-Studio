@@ -82,6 +82,7 @@ export const JOB_STEPS = {
   preview: { title: 'Opening the preview', explain: 'Starting a private preview of the new site.' },
   sweep: { title: 'Checking more screen sizes', explain: 'Capturing the original at extra screen widths to get the in-between sizes right.' },
   responsive: { title: 'Comparing all screen sizes', explain: 'Checking the copy at those extra widths against the original.' },
+  stack: { title: 'Building the chosen technology', explain: 'Turning the copy into the technology you picked (React, Next.js or MERN) and checking it matches the simple version.' },
   // Compare again (re-audit)
   serve: { title: 'Opening the new site', explain: 'Starting the new site privately so it can be checked.' },
   motion: { title: 'Checking animations', explain: 'Comparing hover effects and animations with the original.' },

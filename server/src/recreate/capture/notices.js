@@ -71,17 +71,19 @@ export function planNotices(widgets) {
 
 /**
  * Captures the notices of a page in a fresh context (first visit, timers running) and writes them onto `body`.
+ * `page` is only read for its address, window size and user agent (given as `url` / `userAgent` when another probe is
+ * driving it at the same time, capture/index.js); `body.notices` is the only field written.
  * @returns {Promise<{ notices: number, items: number, ms: number, cssUrls: string[] }>}
  */
-export async function captureNotices(page, clicks, body, { budgetMs = 30000 } = {}) {
+export async function captureNotices(page, clicks, body, { budgetMs = 30000, url = null, userAgent = null, viewport = null } = {}) {
   const started = Date.now();
   const plans = planNotices(clicks?.widgets);
   const stats = { notices: 0, items: 0, ms: 0, cssUrls: [] };
   if (!plans.length) return stats;
   const browser = page.context().browser();
   if (!browser) return stats;
-  const userAgent = await page.evaluate(() => navigator.userAgent);
-  const context = await browser.newContext({ viewport: page.viewportSize(), userAgent, ignoreHTTPSErrors: true, serviceWorkers: 'block' });
+  userAgent ??= await page.evaluate(() => navigator.userAgent);
+  const context = await browser.newContext({ viewport: viewport ?? page.viewportSize(), userAgent, ignoreHTTPSErrors: true, serviceWorkers: 'block' });
   const out = [];
   try {
     const fresh = await context.newPage();
@@ -90,7 +92,7 @@ export async function captureNotices(page, clicks, body, { budgetMs = 30000 } = 
       const a = e.target instanceof Element ? e.target.closest('a[href]') : null;
       if (a && !/^(#|javascript:)/i.test((a.getAttribute('href') || '').trim())) e.preventDefault();
     }, true));
-    await fresh.goto(page.url(), { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await fresh.goto(url ?? page.url(), { waitUntil: 'domcontentloaded', timeout: 30000 });
     await fresh.waitForLoadState('load', { timeout: 10000 }).catch(() => {});
     await fresh.waitForTimeout(800);
     for (const plan of plans) {

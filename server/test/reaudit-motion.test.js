@@ -7,6 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { measureNewMotion, motionItems, summarize } from '../src/reaudit/motion.js';
 import { compareAudits } from '../src/reaudit/compare/index.js';
+import { measureMotion } from '../src/recreate/capture/measure.js';
+import { launchBrowser } from '../src/audit/render.js';
 import { startSiteServer } from '../src/recreate/verify/server.js';
 
 const GAP = '<div style="height: 1300px">top</div>';
@@ -116,6 +118,34 @@ test('a recreate that lost its effects is reported as regressed', async () => {
   const { items } = motionItems(await measure(0), await measure(2));
   assert.deepEqual(items.map((i) => [i.key, i.preset]), [['motion.reveal', 'regressed'], ['motion.hover', 'regressed'], ['motion.loops', 'regressed']]);
   assert.match(items[0].after.detail, /^0 found/);
+});
+
+test('the re-audit probes hover without the Tab walk (the comparison never reads focus); the capture keeps it', async () => {
+  const browser = await launchBrowser();
+  try {
+    const run = async (i, focus) => {
+      const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+      await page.goto(`${servers[i].origin}/`, { waitUntil: 'load' });
+      const m = await measureMotion(page, { budgetMs: 10000, focus });
+      await page.close();
+      return m;
+    };
+    // The plain link of the static page is a Tab stop the walk probes (a link with a :hover rule is not a probe candidate).
+    assert.ok((await run(2, true)).stats.focused > 0);
+    assert.equal((await run(2, false)).stats.focused, 0);
+    // What the checklist compares is the same with or without it.
+    const [a, b] = [summarize(await run(1, true)), summarize(await run(1, false))];
+    assert.deepEqual(b.hover.keys, a.hover.keys);
+    assert.deepEqual(b.loops.keys, a.loops.keys);
+    assert.equal(b.reveal.count, a.reveal.count);
+  } finally {
+    await browser.close();
+  }
+  // measureNewMotion (the re-audit) runs without it.
+  const t0 = Date.now();
+  const measured = (await measure(2)).get('index');
+  console.log(`# re-audit motion of the static page: ${Date.now() - t0} ms`);
+  assert.equal(measured.stats.focused, 0);
 });
 
 test('a page that cannot be measured is listed, never thrown', async () => {

@@ -252,3 +252,40 @@ test('fluid type with the laptop view: all four captured values must be on the l
   assert.equal(out.changed, 1);
   assert.deepEqual(Object.keys(out.rules[0].parts), ['base'], 'every stepped override it replaces is gone');
 });
+
+test('several pages are checked side by side when the memory allows; the report keeps them in page order', async () => {
+  const dir = await tempDir();
+  const original = path.join(dir, 'original');
+  await mkdir(path.join(original, 'about'), { recursive: true });
+  await mkdir(path.join(original, 'team'), { recursive: true });
+  await writeFile(path.join(original, 's.css'), CSS('max-width:900px;margin:0 auto;padding:16px'));
+  for (const p of ['index.html', 'about/index.html', 'team/index.html']) await writeFile(path.join(original, p), PAGE);
+  await cp(original, path.join(dir, 'dist'), { recursive: true });
+  const live = await startSiteServer(original);
+  try {
+    const ctx = {
+      dir,
+      netPolicy: userPolicy(),
+      signal: new AbortController().signal,
+      stepDeadline: Date.now() + 180000,
+      progress: () => {},
+      pages: [
+        { url: `${live.origin}/`, path: '/', outPath: 'index.html', slug: 'home' },
+        { url: `${live.origin}/about/`, path: '/about/', outPath: 'about/index.html', slug: 'about' },
+        { url: `${live.origin}/team/`, path: '/team/', outPath: 'team/index.html', slug: 'team' },
+      ],
+      report: { outputs: { html: { status: 'ready', dir: 'dist' } }, warnings: [] },
+    };
+    await withNetPolicy(userPolicy(), () => sweepStage(ctx, { widths: [320, 900] }));
+    const started = Date.now();
+    await responsiveStage(ctx);
+    console.log(`# 3 pages × 2 widths checked in ${Date.now() - started} ms`);
+    const r = ctx.report.responsive;
+    assert.equal(r.status, 'done', JSON.stringify(r));
+    assert.deepEqual(r.pages.map((p) => p.path), ['/', '/about/', '/team/']);
+    for (const p of r.pages) assert.ok(p.score >= 95, `${p.path} ${p.score}`);
+    assert.deepEqual(ctx.report.warnings, []);
+  } finally {
+    await live.close();
+  }
+});

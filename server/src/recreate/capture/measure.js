@@ -8,13 +8,14 @@ import { processReveal } from './reveal.js';
 
 /**
  * @param {import('playwright').Page} page  a loaded page at the desktop size
- * @param {{ width?: number, height?: number, budgetMs?: number, cap?: number }} [o]
+ * @param {{ width?: number, height?: number, budgetMs?: number, cap?: number, focus?: boolean }} [o]  `focus: false` leaves out
+ *   the Tab walk (the hover probe keeps the same time): the fix checklist compares reveals, loops and hover only.
  * @returns {Promise<{ reveal: object, loops: object, hover: object[], focus: object[], stats: object }>}
  */
-export async function measureMotion(page, { width = 1440, height = 900, budgetMs = 6000, cap = 8000 } = {}) {
+export async function measureMotion(page, { width = 1440, height = 900, budgetMs = 6000, cap = 8000, focus = true } = {}) {
   const { events } = await settle(page, { width, height }, cap, { observe: true });
   await page.waitForTimeout(300);
   const loops = await captureLoops(page);
-  const found = await captureInteractions(page, { budgetMs });
+  const found = await captureInteractions(page, { budgetMs, ...(!focus && { focusStops: 0 }) });
   return { reveal: processReveal(events ?? []), loops, hover: found.hover, focus: found.focus, stats: found.stats };
 }

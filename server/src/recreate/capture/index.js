@@ -252,13 +252,32 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       if (clickBudgetMs > 0) {
         try {
           found.clicks = await captureClicks(page, { budgetMs: clickBudgetMs });
-          // The other states of tabs, carousels and filtered lists, onto the page snapshot (capture/states.js).
-          const { cssUrls, ...states } = await captureStates(page, found.clicks, snapshot.body, { budgetMs: STATES_BUDGET_MS });
-          found.states = states;
-          // Short messages a click shows for a moment (a fresh first visit, capture/notices.js).
-          const { cssUrls: noticeUrls, ...notices } = await captureNotices(page, found.clicks, snapshot.body);
-          found.notices = notices;
-          snapshot.cssUrls = [...new Set([...(snapshot.cssUrls ?? []), ...cssUrls, ...noticeUrls])];
+          // The other states of tabs, carousels and filtered lists, onto the page snapshot (capture/states.js), and short
+          // messages a click shows for a moment (capture/notices.js), side by side: both only need the click probe's result;
+          // the notices are read in a fresh context of their own (a first visit), never from this page, and write only
+          // `body.notices` while the states write onto the snapshot's nodes. What `page` says about itself is read first.
+          const fromPage = { url: page.url(), viewport: page.viewportSize(), userAgent: await page.evaluate(() => navigator.userAgent) };
+          const both = Date.now();
+          const [states, notices] = await Promise.allSettled([
+            captureStates(page, found.clicks, snapshot.body, { budgetMs: STATES_BUDGET_MS }),
+            captureNotices(page, found.clicks, snapshot.body, fromPage),
+          ]);
+          // Time of the two together (each also records its own `ms`).
+          found.statesNoticesMs = Date.now() - both;
+          const cssUrls = [];
+          if (states.status === 'fulfilled') {
+            const { cssUrls: urls, ...rest } = states.value;
+            found.states = rest;
+            cssUrls.push(...urls);
+          }
+          if (notices.status === 'fulfilled') {
+            const { cssUrls: urls, ...rest } = notices.value;
+            found.notices = rest;
+            cssUrls.push(...urls);
+          }
+          snapshot.cssUrls = [...new Set([...(snapshot.cssUrls ?? []), ...cssUrls])];
+          const failed = [states, notices].find((r) => r.status === 'rejected');
+          if (failed) throw failed.reason;
         } catch (err) {
           clicksError = firstLine(err);
         }
