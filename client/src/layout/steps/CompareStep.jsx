@@ -11,6 +11,7 @@ import { matchRating, TERMS, VIEWPORT_NAMES } from '../../copy.js';
 import { pageOf, shownStack, outputsOf } from '../../stacks.js';
 import { useProjects } from '../../store/useProjects.js';
 import { useSyncScroll } from '../useSyncScroll.js';
+import { captureShot } from '../../siteData.js';
 import styles from '../Panel.module.css';
 import ws from '../Workspace.module.css';
 
@@ -20,6 +21,41 @@ const pageUrl = (outPath) => outPath.replace(/(^|\/)index\.html$/, '$1');
 // A plain-HTML site is framed without scripts, forms, popups or top navigation. A stack with JavaScript (React)
 // may run its own bundles: the preview server sends script-src 'self' for it and says so (preview.scripts).
 const sandboxFor = (preview) => (preview?.scripts ? 'allow-same-origin allow-scripts' : 'allow-same-origin');
+
+// The copy's preview server lets only the app's own address frame it (frame-ancestors); opened from another address the
+// live frame stays blank, so the picture taken when the copy was measured is shown first.
+const COPY_MODE = typeof window !== 'undefined' && window.location.port === '5173' ? 'live' : 'screenshot';
+
+/** A strip of every copied page (a small picture of its first screen and its match), to jump between pages. */
+function PageStrip({ project, result, pages, page, onPick, fidByPage, label }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    ref.current?.querySelector('[aria-pressed="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [page]);
+  return (
+    <div className={ws.strip} ref={ref} role="group" aria-label="Pages of the copy">
+      {pages.map((p) => {
+        const info = result.pages?.find((x) => x.outPath === p);
+        const src = captureShot(project.id, result, info, 'desktop', 'fold');
+        const score = fidByPage.get(p)?.score;
+        const tone = matchRating(score).tone;
+        return (
+          <button key={p} type="button" aria-pressed={p === page} onClick={() => onPick(p)} title={label(p)}>
+            <span className={ws.stripShot}>{src ? <img src={src} alt="" loading="lazy" decoding="async" /> : null}</span>
+            <span className={ws.stripText}>
+              <span className="mono">{label(p)}</span>
+              {score != null && (
+                <span className={ws.stripScore} data-tone={tone}>
+                  {score}
+                </span>
+              )}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 const SIZES = [
   { value: 1440, label: 'Computer', icon: Monitor },
@@ -57,7 +93,7 @@ function PageMatch({ fid, view }) {
 }
 
 /** Step 3: the original and the copy side by side, the same page and screen size on both. */
-export default function CompareStep({ project, audit, onGoCreate }) {
+export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   const latest = useProjects((s) => s.recreateResults[project.id]);
   const result = latest?.result;
   const preview = useProjects((s) => s.previews[project.id]);
@@ -72,6 +108,10 @@ export default function CompareStep({ project, audit, onGoCreate }) {
   const pages = result?.preview?.pages ?? result?.pages?.map((p) => p.outPath) ?? [];
   // A new copy opens on its homepage.
   useEffect(() => setPage(pages[0] ?? 'index.html'), [result?.recreateId]);
+  // …or on the page picked elsewhere (the page pictures in Results).
+  useEffect(() => {
+    if (focusPage && pages.includes(focusPage)) setPage(focusPage);
+  }, [focusPage, result?.recreateId]);
   const shown = shownStack(result, project.stack);
   const shownOutput = outputsOf(result)[shown];
 
@@ -94,6 +134,7 @@ export default function CompareStep({ project, audit, onGoCreate }) {
   const live = liveAvailability(audit, originalUrl);
   const hasScreens = otherPage ? (otherPage.views?.length ?? 0) > 0 : Boolean(audit?.screenshots);
   const [mode, setMode] = useState('screenshot');
+  const [copyMode, setCopyMode] = useState(COPY_MODE);
   useEffect(() => {
     setMode(live.ok ? 'live' : 'screenshot');
   }, [audit?.analysisId, originalUrl, live.ok]);
@@ -137,6 +178,15 @@ export default function CompareStep({ project, audit, onGoCreate }) {
   const realOriginal = audit && !audit.isDummy;
   const fidByPage = new Map((result.fidelity?.pages ?? []).map((p) => [p.outPath, p]));
   const pageIndex = Math.max(0, pages.indexOf(page));
+  // The copy's own pictures (taken when its match was measured), per screen size.
+  const copyInfo = result.pages?.find((p) => p.outPath === page) ?? null;
+  const copyPageShot = (vp) => {
+    const fv = fidByPage.get(page)?.views?.[vp.view];
+    if (!fv || !copyInfo?.slug) return null;
+    return { viewport: { width: vp.id }, full: { url: `/api/projects/${project.id}/recreate/${result.recreateId}/fidelity/${copyInfo.slug}/${vp.view}-full.webp` } };
+  };
+  const copyHasShots = Boolean(copyInfo?.slug && fidByPage.get(page)?.views);
+  const copyPicture = copyMode === 'screenshot' && copyHasShots;
 
   return (
     <div className={ws.stepBody}>
@@ -178,6 +228,8 @@ export default function CompareStep({ project, audit, onGoCreate }) {
         </span>
       </div>
 
+      {pages.length > 1 && <PageStrip project={project} result={result} pages={pages} page={page} onPick={setPage} fidByPage={fidByPage} label={(p) => pageOf(result, shown, p).path} />}
+
       <PageMatch fid={fidByPage.get(page)} view={view} />
 
       <div className={ws.compare}>
@@ -209,10 +261,13 @@ export default function CompareStep({ project, audit, onGoCreate }) {
             tone="new"
             viewport={viewport}
             onViewportChange={setViewport}
-            fit={ready}
+            fit={ready || copyPicture}
             viewportButtons={false}
+            toolbar={copyHasShots && <ModeToggle mode={copyMode} onChange={setCopyMode} live={{ ok: true }} hasScreens={copyHasShots} />}
           >
-            {fullPage ? (
+            {copyPicture ? (
+              <SitePreview url={src ?? 'the copy'} audit={audit} mode="screenshot" viewport={viewport} scrollRef={sync ? setNewScroller : undefined} pageShot={copyPageShot} />
+            ) : fullPage ? (
               <FullPageFrame
                 key={`${preview.recreateId}-${preview.startedAt}-${page}-${viewport}`}
                 url={src}

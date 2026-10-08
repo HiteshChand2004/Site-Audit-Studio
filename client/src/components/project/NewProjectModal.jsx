@@ -38,15 +38,15 @@ export default function NewProjectModal({ open, onClose }) {
     <Modal
       open={open}
       onClose={close}
-      title="New project"
-      description="Add a website. Analyze and Recreate will run from this project."
+      title="Add a website"
+      description="Its address is all the app needs. Nothing is checked or copied until you start it."
       footer={
         <>
           <Button variant="ghost" onClick={close}>
             Cancel
           </Button>
           <Button variant="primary" type="submit" form="new-project" disabled={!canSubmit}>
-            {saving ? 'Creating…' : 'Create project'}
+            {saving ? 'Adding…' : 'Add website'}
           </Button>
         </>
       }

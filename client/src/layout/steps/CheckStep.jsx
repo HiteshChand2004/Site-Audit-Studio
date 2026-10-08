@@ -57,6 +57,13 @@ function previewOverlay({ audit, mode, slow }) {
   return null;
 }
 
+// Jump links of the report (the side column stays in view while the report scrolls).
+const TOC = [
+  ['check-glance', 'At a glance & speed'],
+  ['check-fix', 'What needs fixing'],
+  ['check-experts', 'Details for experts'],
+];
+
 /** Step 1: check the original site (Analyze) and read its report. */
 export default function CheckStep({ project, audit, loading }) {
   const [url, setUrl] = useState(project.url);
@@ -162,16 +169,32 @@ export default function CheckStep({ project, audit, loading }) {
                   Checking again usually completes them.
                 </Alert>
               )}
-              <HealthOverview audit={audit} device={device} onDeviceChange={changeDevice} />
-              <FixList audit={audit} />
-              <SectionCard icon={FileSearch} title="Details for experts" meta="Technology, every check, links, accessibility rules" defaultOpen={false}>
-                <AuditReport audit={audit} />
-              </SectionCard>
+              <div id="check-glance" className={ws.anchor}>
+                <HealthOverview audit={audit} device={device} onDeviceChange={changeDevice} />
+              </div>
+              <div id="check-fix" className={ws.anchor}>
+                <FixList audit={audit} />
+              </div>
+              <div id="check-experts" className={ws.anchor}>
+                <SectionCard icon={FileSearch} title="Details for experts" meta="Technology, every check, links, accessibility rules" defaultOpen={false}>
+                  <AuditReport audit={audit} />
+                </SectionCard>
+              </div>
             </>
           )}
         </div>
 
         <aside className={ws.splitSide} aria-label="The original site">
+          {audit && !loading && (
+            <nav className={ws.toc} aria-label="On this page">
+              <span className="eyebrow">On this page</span>
+              {TOC.map(([id, label]) => (
+                <button key={id} type="button" onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
+                  {label}
+                </button>
+              ))}
+            </nav>
+          )}
           <div className={styles.sectionTitle}>
             <span>The original site</span>
           </div>

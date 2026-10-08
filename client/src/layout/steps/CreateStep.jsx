@@ -1,12 +1,15 @@
 import { useState } from 'react';
-import { CheckCircle2, Loader2, RefreshCw, Settings2, Sparkles } from 'lucide-react';
+import { CheckCircle2, Columns2, Loader2, RefreshCw, Settings2, Sparkles, Trophy } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import { Alert, Card } from '../../components/common/Surface.jsx';
+import SectionCard from '../../components/common/SectionCard.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import StackOutput from '../../components/recreate/StackOutput.jsx';
+import { BrowserShot } from '../../components/site/Site.jsx';
+import { copyShot } from '../../siteData.js';
 import { RECREATE_STACKS, stackById } from '../../constants.js';
-import { TERMS } from '../../copy.js';
-import { ageDays, plural } from '../../format.js';
+import { matchRating, TERMS } from '../../copy.js';
+import { ageDays, plural, timeAgo } from '../../format.js';
 import { api } from '../../api/client.js';
 import { outputsOf, outputState } from '../../stacks.js';
 import { isAnalysisActive, isJobActive, useProjects } from '../../store/useProjects.js';
@@ -35,7 +38,7 @@ const STAGES = [
 const pagesText = (n) => (n == null || n === ALL_PAGES ? 'Every page of the site' : n === 0 ? 'Only the homepage' : `The homepage + ${plural(n, 'page')}`);
 
 /** Step 2: make the copy (Recreate). */
-export default function CreateStep({ project, audit, onOpenSettings }) {
+export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   const stack = stackById(project.stack);
   const analysis = useProjects((s) => s.analyses[project.id]);
   const job = useProjects((s) => s.recreates[project.id]);
@@ -54,8 +57,23 @@ export default function CreateStep({ project, audit, onOpenSettings }) {
   const [building, setBuilding] = useState(false);
   const [buildError, setBuildError] = useState(null);
 
+  const match = result?.fidelity?.score ?? null;
+  const stages = (
+    <ol className={ws.stages}>
+      {STAGES.map(([title, text], i) => (
+        <li key={title}>
+          <span className={ws.stageNum}>{i + 1}</span>
+          <strong>{title}</strong>
+          <span>{text}</span>
+        </li>
+      ))}
+    </ol>
+  );
   return (
     <div className={ws.stepBody}>
+      {job && job.status !== 'done' && <AnalyzeProgress analysis={job} kind="recreate" onDismiss={() => dismissJob('recreate', project.id)} />}
+
+      <div className={result ? ws.twoCol : undefined}>
       <Card
         icon={Sparkles}
         title="Make a clean copy of this site"
@@ -110,19 +128,41 @@ export default function CreateStep({ project, audit, onOpenSettings }) {
         )}
       </Card>
 
-      {!running && (
-        <Card title="What happens when you click">
-          <ol className={ws.stages}>
-            {STAGES.map(([title, text], i) => (
-              <li key={title}>
-                <span className={ws.stageNum}>{i + 1}</span>
-                <strong>{title}</strong>
-                <span>{text}</span>
-              </li>
-            ))}
-          </ol>
+      {result && (
+        <Card icon={Trophy} title="Last copy" sub={`Made ${new Date(result.createdAt).toLocaleString()} (${timeAgo(result.createdAt)})`}>
+          <div className={ws.lastCopy}>
+            <BrowserShot src={copyShot(project.id, result)} address="the copy" alt="The copy's homepage" ratio={16 / 10} />
+            <dl className={ws.miniFacts}>
+              <div>
+                <dt>Pages</dt>
+                <dd className="tabular">{result.pages.length}</dd>
+              </div>
+              <div>
+                <dt>Match</dt>
+                <dd className="tabular">{match != null ? `${match}/100` : '–'}</dd>
+              </div>
+              <div>
+                <dt>Verdict</dt>
+                <dd>{matchRating(match).label}</dd>
+              </div>
+            </dl>
+            {onGo && (
+              <div className={ws.actions}>
+                <Button size="sm" icon={Columns2} onClick={() => onGo('compare')}>
+                  Compare
+                </Button>
+                <Button size="sm" variant="ghost" icon={Trophy} onClick={() => onGo('results')}>
+                  Results
+                </Button>
+              </div>
+            )}
+          </div>
         </Card>
       )}
+      </div>
+
+
+      {!running && !result && <Card title="What happens when you click">{stages}</Card>}
 
       {staleDays > STALE_DAYS && !running && (
         <Alert tone="warn" title={`The check is ${Math.floor(staleDays)} days old`}>
@@ -130,13 +170,6 @@ export default function CreateStep({ project, audit, onOpenSettings }) {
         </Alert>
       )}
 
-      {job && job.status !== 'done' && <AnalyzeProgress analysis={job} kind="recreate" onDismiss={() => dismissJob('recreate', project.id)} />}
-
-      {result && (
-        <Alert tone="ok" title="Last copy">
-          Made {new Date(result.createdAt).toLocaleString()} · {plural(result.pages.length, 'page')}. See it in step 3, the results in step 4.
-        </Alert>
-      )}
 
       {result && project.stack !== 'html' && (
         <>
@@ -160,6 +193,12 @@ export default function CreateStep({ project, audit, onOpenSettings }) {
           />
           {buildError && <Alert tone="bad" title="The build did not finish">{buildError}</Alert>}
         </>
+      )}
+
+      {!running && result && (
+        <SectionCard title="What happens when you click" meta="The four stages of a copy" defaultOpen={false}>
+          {stages}
+        </SectionCard>
       )}
 
       {!result && !running && !blocker && (

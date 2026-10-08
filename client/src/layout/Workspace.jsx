@@ -67,6 +67,8 @@ export default function Workspace({ project, audit, auditLoading, onOpenSettings
   const result = latest?.result;
   const [step, setStep] = useState(() => startStep({ analysis, job }));
   const [chosen, setChosen] = useState(false);
+  // A page picked elsewhere (Results' page pictures) that Compare opens on.
+  const [comparePage, setComparePage] = useState(null);
   // Until the user picks a tab, the project opens where its work stands (jobs are found after the project loads).
   useEffect(() => {
     if (!chosen) setStep(startStep({ analysis, job }));
@@ -81,6 +83,11 @@ export default function Workspace({ project, audit, auditLoading, onOpenSettings
     const el = scroller.current;
     const bar = tabsRef.current;
     if (el && bar && el.scrollTop > bar.offsetTop) el.scrollTo({ top: bar.offsetTop, behavior: 'smooth' });
+  };
+
+  const openPage = (outPath) => {
+    setComparePage(outPath);
+    choose('compare');
   };
 
   // The app stack's build is made right after the copy; follow it until it is ready (or failed).
@@ -115,7 +122,7 @@ export default function Workspace({ project, audit, auditLoading, onOpenSettings
   return (
     <div className={`${styles.workspace} scroll`} ref={scroller} onScroll={onScroll} data-shot-scroll>
       <div className={styles.heroWrap}>
-        {auditLoading && !audit ? <HeroSkeleton /> : <SiteHero project={project} audit={audit} onGo={choose} />}
+        {auditLoading && !audit ? <HeroSkeleton /> : <SiteHero project={project} audit={audit} onGo={choose} compact={step !== 'overview'} />}
       </div>
 
       <div className={styles.tabsBar} ref={tabsRef} data-stuck={stuck || undefined}>
@@ -133,9 +140,9 @@ export default function Workspace({ project, audit, auditLoading, onOpenSettings
         )}
         {step === 'overview' && <OverviewStep project={project} audit={audit} loading={auditLoading} onGo={choose} />}
         {step === 'check' && <CheckStep project={project} audit={audit} loading={auditLoading} />}
-        {step === 'create' && <CreateStep project={project} audit={audit} onOpenSettings={onOpenSettings} />}
-        {step === 'compare' && <CompareStep {...props} />}
-        {step === 'results' && <ResultsStep {...props} onOpenReport={onOpenReport} />}
+        {step === 'create' && <CreateStep project={project} audit={audit} onOpenSettings={onOpenSettings} onGo={choose} />}
+        {step === 'compare' && <CompareStep {...props} focusPage={comparePage} />}
+        {step === 'results' && <ResultsStep {...props} onOpenReport={onOpenReport} onOpenPage={openPage} />}
       </div>
     </div>
   );

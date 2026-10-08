@@ -93,7 +93,9 @@ export default function Outcome({ result, comparison }) {
           <ul>
             {todo.slice(0, 6).map((item) => (
               <li key={item.key}>
-                <Pill tone={RESULT_STATUS[item.status]?.tone ?? 'warn'}>{RESULT_STATUS[item.status]?.label ?? item.status}</Pill>
+                <span className={styles.tone} data-tone={RESULT_STATUS[item.status]?.tone ?? 'warn'}>
+                  {RESULT_STATUS[item.status]?.label ?? item.status}
+                </span>
                 <span className={styles.todoName}>{titleOf(item)}</span>
                 {item.after?.detail && (
                   <span className={`${styles.todoDetail} ${styles.oneLine}`} title={item.after.detail}>

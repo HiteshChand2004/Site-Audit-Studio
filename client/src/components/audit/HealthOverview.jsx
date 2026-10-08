@@ -87,28 +87,32 @@ export default function HealthOverview({ audit, device, onDeviceChange }) {
             const score = scores?.[field ?? key] ?? null;
             return (
               <div key={key} className={styles.card}>
-                <div className={styles.cardHead}>
-                  <Icon size={16} aria-hidden="true" />
-                  <span className={styles.cardTitle}>{h.title}</span>
-                  <InfoTip label={h.title}>
-                    {h.explain} <em>({h.expert})</em>
-                  </InfoTip>
-                </div>
                 <ScoreRing score={score} label={h.title} />
-                <p className={styles.question}>{h.question}</p>
+                <div className={styles.cardText}>
+                  <div className={styles.cardHead}>
+                    <Icon size={15} aria-hidden="true" />
+                    <span className={styles.cardTitle}>{h.title}</span>
+                    <InfoTip label={h.title}>
+                      {h.explain} <em>({h.expert})</em>
+                    </InfoTip>
+                  </div>
+                  <p className={styles.question}>{h.question}</p>
+                </div>
               </div>
             );
           })}
           <div className={styles.card}>
-            <div className={styles.cardHead}>
-              <Bot size={16} aria-hidden="true" />
-              <span className={styles.cardTitle}>{AEO.title}</span>
-              <InfoTip label={AEO.title} align="end">
-                {AEO.explain} <em>({AEO.expert}; share of its checks that pass)</em>
-              </InfoTip>
-            </div>
             <ScoreRing score={aeo} label={AEO.title} />
-            <p className={styles.question}>Can AI assistants quote it correctly?</p>
+            <div className={styles.cardText}>
+              <div className={styles.cardHead}>
+                <Bot size={15} aria-hidden="true" />
+                <span className={styles.cardTitle}>{AEO.title}</span>
+                <InfoTip label={AEO.title} align="end">
+                  {AEO.explain} <em>({AEO.expert}; share of its checks that pass)</em>
+                </InfoTip>
+              </div>
+              <p className={styles.question}>Can AI assistants quote it correctly?</p>
+            </div>
           </div>
         </div>
         {!scores && <p className={styles.note}>The speed test did not finish for {device === 'mobile' ? 'phones' : 'computers'}; check the site again to measure it.</p>}

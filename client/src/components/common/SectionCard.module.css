@@ -1,46 +1,32 @@
-/* White glass card: lifts on hover, fades up when it appears (staggered by position). */
+/* A section that folds open: a quiet row with a chevron; the body appears below it. */
 .card {
   position: relative;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: rgba(255, 255, 255, 0.86);
-  backdrop-filter: blur(10px);
-  box-shadow: var(--shadow-sm);
-  animation: var(--k-fade-up) 520ms var(--ease) both;
-  transition: transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease), border-color var(--dur) ease;
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--hairline-strong), var(--elev-1);
+  animation: var(--k-rise) 420ms var(--ease) both;
+  transition: box-shadow var(--dur) var(--ease);
 }
 
-.card:nth-child(2) { animation-delay: 50ms; }
-.card:nth-child(3) { animation-delay: 100ms; }
-.card:nth-child(4) { animation-delay: 150ms; }
-.card:nth-child(5) { animation-delay: 200ms; }
-.card:nth-child(6) { animation-delay: 250ms; }
-.card:nth-child(n + 7) { animation-delay: 300ms; }
-
 .card:hover {
-  border-color: var(--accent-border);
-  box-shadow: var(--shadow);
-  transform: translateY(-2px);
+  box-shadow: 0 0 0 1px var(--border-strong), var(--elev-2);
 }
 
 .head {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
+  gap: var(--sp-3);
   width: 100%;
-  padding: 12px var(--sp-4);
+  min-height: 56px;
+  padding: 12px var(--sp-6);
   border: 0;
-  border-radius: var(--radius-lg);
+  border-radius: 16px;
   background: transparent;
   text-align: left;
-  transition: background 160ms ease;
-}
-
-.head:hover {
-  background: var(--accent-tint);
 }
 
 .chevron {
+  flex: none;
   color: var(--faint);
   transition: transform var(--dur) var(--ease), color 160ms ease;
 }
@@ -51,17 +37,13 @@
 }
 
 .icon {
-  display: grid;
-  place-items: center;
-  box-sizing: content-box;
-  padding: 5px;
-  border-radius: 9px;
-  background: var(--grad-brand-soft);
+  flex: none;
   color: var(--accent);
 }
 
 .title {
-  font-weight: 650;
+  color: var(--text);
+  font-weight: 700;
   font-size: var(--fs-md);
   letter-spacing: -0.01em;
 }
@@ -70,9 +52,13 @@
   display: inline-flex;
   gap: 6px;
   margin-left: auto;
+  color: var(--muted);
+  font-size: var(--fs-sm);
 }
 
 .body {
-  padding: 2px var(--sp-4) var(--sp-4);
+  padding: 0 var(--sp-6) var(--sp-6);
+  border-top: 1px solid var(--hairline);
+  padding-top: var(--sp-5);
   animation: var(--k-fade-in) 260ms ease both;
 }

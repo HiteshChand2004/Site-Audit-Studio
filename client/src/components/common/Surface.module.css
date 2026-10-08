@@ -1,28 +1,25 @@
 /* Card, Alert and EmptyState: the plain surfaces every screen is built from. */
 .card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: 16px;
   background: var(--surface);
-  box-shadow: var(--shadow-sm);
-  animation: var(--k-fade-up) 320ms var(--ease) both;
+  box-shadow: 0 0 0 1px var(--hairline-strong), var(--elev-1);
+  animation: var(--k-rise) 420ms var(--ease) both;
 }
 
 .cardHead {
   display: flex;
   align-items: flex-start;
   gap: var(--sp-3);
-  padding: var(--sp-4) var(--sp-5) 0;
+  padding: var(--sp-5) var(--sp-6) 0;
 }
 
 .cardIcon {
   display: grid;
   flex: none;
   place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
-  background: var(--accent-tint);
-  color: var(--accent-text);
+  width: 20px;
+  height: 22px;
+  color: var(--accent);
 }
 
 .cardTitles {
@@ -36,7 +33,8 @@
   gap: 6px;
   color: var(--text);
   font-size: var(--fs-md);
-  font-weight: 650;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   line-height: var(--lh-tight);
 }
 
@@ -54,7 +52,7 @@
 }
 
 .cardBody {
-  padding: var(--sp-4) var(--sp-5) var(--sp-5);
+  padding: var(--sp-4) var(--sp-6) var(--sp-6);
 }
 
 .flush .cardBody {

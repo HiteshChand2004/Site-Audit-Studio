@@ -74,7 +74,7 @@ function copyBlocker({ audit, project, analyzing }) {
  * The top of a website's dashboard: who it is, a picture of it (and of the copy), the headline scores before → after,
  * what changed, and the next thing to do.
  */
-export default function SiteHero({ project, audit, onGo }) {
+export default function SiteHero({ project, audit, onGo, compact = false }) {
   const analysis = useProjects((s) => s.analyses[project.id]);
   const job = useProjects((s) => s.recreates[project.id]);
   const reauditJob = useProjects((s) => s.reaudits[project.id]);
@@ -181,7 +181,7 @@ export default function SiteHero({ project, audit, onGo }) {
   }
 
   return (
-    <section className={styles.hero} aria-label={`${host} at a glance`}>
+    <section className={styles.hero} data-compact={compact || undefined} aria-label={`${host} at a glance`}>
       <div className={styles.top}>
         <div className={styles.identity}>
           <div className={styles.nameRow}>
@@ -244,6 +244,7 @@ export default function SiteHero({ project, audit, onGo }) {
           )}
         </div>
 
+        {!compact && (
         <div className={styles.media}>
           <BrowserShot src={shot} address={host} alt={`The original ${host}, first screen on a computer`} ratio={16 / 10} size="lg" emptyText={checked ? 'No picture of this check' : 'The first check takes a picture'} />
           {copy && (
@@ -253,9 +254,10 @@ export default function SiteHero({ project, audit, onGo }) {
             </button>
           )}
         </div>
+        )}
       </div>
 
-      {checked && (
+      {checked && !compact && (
         <div className={styles.scores}>
           <div className={styles.scoresHead}>
             <span className="eyebrow">{after ? 'Copy vs original' : 'Health of the original'}</span>

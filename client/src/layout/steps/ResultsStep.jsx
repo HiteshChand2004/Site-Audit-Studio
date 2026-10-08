@@ -5,6 +5,7 @@ import { Alert, Card, EmptyState } from '../../components/common/Surface.jsx';
 import FixReport from '../../components/recreate/FixReport.jsx';
 import RecreateReport from '../../components/recreate/RecreateReport.jsx';
 import Outcome from '../../components/recreate/Outcome.jsx';
+import PageGallery from '../../components/recreate/PageGallery.jsx';
 import SectionCard from '../../components/common/SectionCard.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import { STACKS, stackById } from '../../constants.js';
@@ -15,7 +16,7 @@ import styles from '../Panel.module.css';
 import ws from '../Workspace.module.css';
 
 /** Step 4: what got better, what still needs work, and the download. */
-export default function ResultsStep({ project, audit, onGoCreate, onOpenReport }) {
+export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, onOpenPage }) {
   const job = useProjects((s) => s.recreates[project.id]);
   const latest = useProjects((s) => s.recreateResults[project.id]);
   const result = latest?.result;
@@ -102,6 +103,8 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport }
           {audit.recreate.lastError ? `The last comparison failed: ${audit.recreate.lastError}` : 'Runs the same check on the copy and shows what got better. Takes a few minutes.'}
         </Alert>
       )}
+
+      <PageGallery projectId={project.id} result={result} onOpenPage={onOpenPage} />
 
       <Card
         icon={Download}

@@ -3,7 +3,7 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  scroll-padding-top: 64px;
+  scroll-padding-top: 88px;
 }
 
 .heroWrap {
@@ -138,7 +138,7 @@
 /* Main column + side column (the report next to the site preview). */
 .split {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 440px);
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
   gap: var(--sp-6);
   align-items: start;
 }
@@ -152,7 +152,47 @@
 
 .splitSide {
   position: sticky;
-  top: 0;
+  top: 84px;
+}
+
+.anchor {
+  display: grid;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+
+/* "On this page": jump links above the preview in the side column. */
+.toc {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--hairline-strong);
+}
+
+.toc :global(.eyebrow) {
+  width: 100%;
+  margin-bottom: 2px;
+}
+
+.toc button {
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  transition: background 150ms ease, color 150ms ease, box-shadow 150ms ease;
+}
+
+.toc button:hover {
+  background: var(--accent-tint);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+  color: var(--accent-press);
 }
 
 @media (max-width: 1180px) {
@@ -175,9 +215,9 @@
 
 .settings > div {
   padding: var(--sp-3) var(--sp-4);
-  border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--hairline);
 }
 
 .settings dt {
@@ -223,10 +263,105 @@
   flex-wrap: wrap;
   align-items: flex-end;
   gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  padding: var(--sp-4) var(--sp-5);
+  border-radius: 16px;
   background: var(--surface);
+  box-shadow: 0 0 0 1px var(--hairline-strong), var(--elev-1);
+}
+
+/* Compare: every page as a small picture with its match, scrolling sideways. */
+.strip {
+  display: flex;
+  gap: var(--sp-3);
+  padding: 4px 4px 10px;
+  margin: -4px -4px 0;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.strip button {
+  display: grid;
+  flex: none;
+  gap: 6px;
+  width: 152px;
+  padding: 6px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--hairline-strong);
+  scroll-snap-align: start;
+  text-align: left;
+  transition: box-shadow 180ms ease, transform 220ms var(--ease);
+}
+
+.strip button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 0 0 1px var(--border-strong), var(--elev-2);
+}
+
+.strip button[aria-pressed='true'] {
+  box-shadow: 0 0 0 2px var(--accent), var(--elev-2);
+}
+
+.stripShot {
+  display: block;
+  overflow: hidden;
+  aspect-ratio: 16 / 10;
+  border-radius: 7px;
+  background: var(--surface-3);
+}
+
+.stripShot img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+}
+
+.stripText {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 2px 2px;
+  font-size: 11.5px;
+}
+
+.stripText .mono,
+.stripText :global(.mono) {
+  overflow: hidden;
+  color: var(--text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stripScore {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  color: var(--muted);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.stripScore[data-tone='ok'] {
+  background: var(--ok-tint);
+  color: var(--ok);
+}
+
+.stripScore[data-tone='warn'] {
+  background: var(--warn-tint);
+  color: var(--warn);
+}
+
+.stripScore[data-tone='bad'] {
+  background: var(--bad-tint);
+  color: var(--bad);
 }
 
 .toolbarEnd {
@@ -313,14 +448,24 @@
 }
 
 .stages li {
+  position: relative;
   display: grid;
+  align-content: start;
   gap: 4px;
-  padding: var(--sp-3) var(--sp-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface-2);
+  padding: 0 var(--sp-4) 0 0;
   color: var(--muted);
   font-size: var(--fs-sm);
+}
+
+/* A hairline joins the numbered stages. */
+.stages li:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: 13px;
+  right: 8px;
+  left: 36px;
+  height: 1px;
+  background: var(--hairline-strong);
 }
 
 .stages strong {
@@ -331,13 +476,60 @@
 .stageNum {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
-  margin-bottom: 4px;
+  width: 26px;
+  height: 26px;
+  margin-bottom: 8px;
   border-radius: 50%;
-  background: var(--accent-tint);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
   color: var(--accent-text);
+  font-size: var(--fs-xs);
   font-weight: 700;
+}
+
+/* Copy section: the settings next to the last copy. */
+.twoCol {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr);
+  align-items: start;
+  gap: var(--sp-5);
+}
+
+.twoCol .settings {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.lastCopy {
+  display: grid;
+  gap: var(--sp-4);
+}
+
+.miniFacts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+}
+
+.miniFacts > div + div {
+  padding-left: var(--sp-3);
+  border-left: 1px solid var(--hairline);
+}
+
+.miniFacts dt {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.miniFacts dd {
+  margin: 2px 0 0;
+  color: var(--text);
+  font-weight: 650;
+}
+
+@media (max-width: 1100px) {
+  .twoCol {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* Compare: page picker with previous / next, and how closely the page matches. */
@@ -359,9 +551,9 @@
   align-items: center;
   gap: var(--sp-2) var(--sp-3);
   padding: var(--sp-3) var(--sp-5);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: 16px;
   background: var(--surface);
+  box-shadow: 0 0 0 1px var(--hairline-strong);
   animation: var(--k-fade-in) 220ms ease both;
 }
 

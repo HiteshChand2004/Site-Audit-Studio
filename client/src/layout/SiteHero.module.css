@@ -430,3 +430,59 @@
     border-left: 0;
   }
 }
+
+/* Compact: on the other sections the hero is one row (identity, facts, counts, actions), so the section's content is near
+   the top. */
+.hero[data-compact] .top {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 18px 28px;
+}
+
+.hero[data-compact] .identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3) var(--sp-6);
+}
+
+.hero[data-compact] .name {
+  font-size: var(--fs-xl);
+}
+
+.hero[data-compact] .nameRow > span:first-child {
+  width: 36px !important;
+  height: 36px !important;
+}
+
+.hero[data-compact] .facts {
+  display: none;
+}
+
+.hero[data-compact] .nameRow {
+  flex: 1 1 260px;
+}
+
+.hero[data-compact] .counts strong {
+  font-size: 22px;
+}
+
+.hero[data-compact] .counts li + li {
+  margin-left: 12px;
+  padding-left: 12px;
+}
+
+.hero[data-compact] .lead {
+  display: none;
+}
+
+.hero[data-compact] .actions button {
+  height: 38px;
+  padding: 0 14px;
+  font-size: var(--fs-sm);
+}
+
+.hero[data-compact] .actions svg {
+  width: 16px;
+  height: 16px;
+}
+
