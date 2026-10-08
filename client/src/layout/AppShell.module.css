@@ -1,9 +1,18 @@
+/* The app: sidebar on the left, and on the right a slim bar (where you are, the report, the authorization note) above
+   the home overview or one website's dashboard. */
 .app {
   position: relative;
   display: grid;
-  grid-template-rows: var(--topbar-h) 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   height: 100vh;
   overflow: hidden;
+}
+
+.main {
+  display: grid;
+  grid-template-rows: var(--topbar-h) minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
 }
 
 .topbar {
@@ -13,59 +22,61 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-4);
-  padding: 0 var(--sp-5);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  padding: 0 var(--sp-6);
+  border-bottom: 1px solid var(--hairline-strong);
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: saturate(1.4) blur(10px);
+}
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--fs-sm);
+}
+
+.crumbLink {
+  padding: 4px 6px;
+  margin-left: -6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font-weight: 550;
+}
+
+.crumbLink:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.crumbSep {
+  flex: none;
+  color: var(--faint);
+}
+
+.crumbHere {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crumbHere > span {
+  border-radius: 6px;
 }
 
 .topActions {
   display: flex;
+  flex: none;
   align-items: center;
-  gap: var(--sp-3);
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.logo {
-  display: grid;
-  gap: 2.5px;
-  align-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0 7px;
-  border-radius: 9px;
-  background: var(--accent);
-}
-
-.logo i {
-  display: block;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--on-accent);
-}
-
-.logo i:nth-child(2) {
-  width: 65%;
-}
-
-.brandName {
-  color: var(--text);
-  font-weight: 700;
-  font-size: var(--fs-lg);
-  letter-spacing: -0.02em;
-}
-
-/* The sidebar column follows the sidebar's own (animated) width; the OLD and NEW panels take the rest. */
-.main {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  min-height: 0;
+  gap: var(--sp-2);
 }
 
 .center {
@@ -75,31 +86,17 @@
   color: var(--muted);
 }
 
-/* Narrow screens: the top bar wraps its actions. */
-@media (max-width: 900px) {
-  .topbar {
-    padding: 0 var(--sp-3);
-  }
-
-  .topActions > p {
-    display: none;
-  }
-}
 
 @media (max-width: 760px) {
   .app {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
     height: auto;
     min-height: 100vh;
     overflow: visible;
   }
 
-  .main {
-    grid-template-columns: 1fr;
-  }
-
-  .main > aside {
-    max-height: 260px;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
+  .topbar {
+    padding: 0 var(--sp-4);
   }
 }

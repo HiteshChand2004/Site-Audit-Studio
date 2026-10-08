@@ -1,19 +1,38 @@
+/* The permanent authorization note in the top bar: quiet, never hidden. */
 .bar {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 30px;
-  padding: 0 14px;
-  border: 1px solid var(--accent-border);
-  border-radius: 999px;
-  background: var(--grad-brand-soft);
-  color: var(--accent-text);
-  font-size: var(--fs-sm);
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 7px;
+  background: var(--accent-tint);
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.18);
+  color: var(--accent-press);
+  font-size: var(--fs-xs);
   font-weight: 600;
+  white-space: nowrap;
 }
 
-@media (max-width: 900px) {
-  .bar span {
-    display: none;
+.bar svg {
+  flex: none;
+  color: var(--accent);
+}
+
+.short {
+  display: none;
+}
+
+@media (max-width: 1180px) {
+  .long {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .short {
+    display: inline;
   }
 }

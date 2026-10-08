@@ -109,7 +109,33 @@
   --k-pulse: sas-pulse;
   --k-spin: sas-spin;
 
-  --topbar-h: 60px;
-  --sidebar-w: 264px;
+  /* Dashboard (UI revamp): elevation, warm surface tints, display type, the hero's mesh. All built from the tokens above. */
+  --canvas: #f6f7f9;
+  --amber-rgb: 245, 158, 11;
+  --surface-warm: #fffcf8;
+  --hairline: rgba(16, 24, 40, 0.07);
+  --hairline-strong: rgba(16, 24, 40, 0.12);
+  --elev-1: 0 1px 0 rgba(16, 24, 40, 0.03), 0 1px 2px rgba(16, 24, 40, 0.06);
+  --elev-2: 0 1px 2px rgba(16, 24, 40, 0.05), 0 8px 24px -12px rgba(16, 24, 40, 0.14);
+  --elev-3: 0 2px 4px rgba(16, 24, 40, 0.05), 0 24px 48px -16px rgba(16, 24, 40, 0.22);
+  --elev-accent: 0 10px 30px -12px rgba(var(--accent-rgb), 0.45);
+  --mesh-hero:
+    radial-gradient(60% 90% at 100% 0%, rgba(var(--accent-rgb), 0.13), transparent 60%),
+    radial-gradient(50% 80% at 0% 100%, rgba(var(--amber-rgb), 0.12), transparent 60%),
+    radial-gradient(40% 60% at 60% 120%, rgba(var(--accent-rgb), 0.07), transparent 70%),
+    var(--surface-warm);
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .5 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  --fs-3xl: 38px;
+  --fs-display: 52px;
+  --ls-caps: 0.08em;
+  --radius-xl: 18px;
+  --k-rise: sas-rise;
+  --k-slide-in: sas-slide-in;
+  --k-mesh: sas-mesh;
+  --k-skeleton: sas-skeleton;
+  --k-draw: sas-draw;
+
+  --topbar-h: 56px;
+  --sidebar-w: 280px;
   --sidebar-rail-w: 60px;
 }

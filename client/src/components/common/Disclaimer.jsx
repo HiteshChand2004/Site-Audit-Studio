@@ -3,14 +3,11 @@ import styles from './Disclaimer.module.css';
 
 export default function Disclaimer() {
   return (
-    <p
-      className={styles.bar}
-      role="note"
-      title="Use Audit and Recreate only on company-owned or authorized websites."
-    >
+    <p className={styles.bar} role="note" title="Use Audit and Recreate only on company-owned or authorized websites.">
       <ShieldCheck size={14} aria-hidden="true" />
-      <span>
-        Use Audit and Recreate only on company-owned or authorized websites.
+      <span className={styles.long}>Use Audit and Recreate only on company-owned or authorized websites.</span>
+      <span className={styles.short} aria-hidden="true">
+        Authorized websites only
       </span>
     </p>
   );

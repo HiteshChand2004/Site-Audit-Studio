@@ -37,6 +37,18 @@ const KINDS = {
   reaudit: { stateKey: 'reaudits', subscribe: api.subscribeReaudit, current: api.getCurrentReaudit, failed: 'Re-audit failed.' },
 };
 
+// The screenshots of an analysis are served under the project that owns them now (an imported project keeps the URLs it was
+// saved with, which point at its old id).
+function normalizeAudit(id, audit) {
+  const views = audit?.screenshots?.views;
+  if (!views) return audit;
+  const fix = (shot) => (shot?.url ? { ...shot, url: shot.url.replace(/^\/api\/projects\/[^/]+\//, `/api/projects/${id}/`) } : shot);
+  const fixed = Object.fromEntries(Object.entries(views).map(([k, v]) => [k, v && { ...v, fold: fix(v.fold), full: fix(v.full) }]));
+  return { ...audit, screenshots: { ...audit.screenshots, views: fixed } };
+}
+
+export const HOME = 'home';
+
 export const isJobActive = (job) => Boolean(job) && ['starting', 'queued', 'running'].includes(job.status);
 export const isAnalysisActive = isJobActive;
 
@@ -56,6 +68,8 @@ export const useProjects = create((set, get) => ({
   // projectId → { url, port, recreateId, loading, error }: the preview of the latest recreate.
   // Only one preview runs at a time, so it follows the selected project.
   previews: {},
+  // projectId → { audit, recreate, loaded }: what the home gallery and the sidebar show for every website.
+  overviews: {},
 
   setJob(kind, projectId, patch) {
     const key = KINDS[kind].stateKey;
@@ -71,12 +85,31 @@ export const useProjects = create((set, get) => ({
     try {
       const projects = await api.listProjects();
       set({ projects, loading: false, error: null });
+      get().loadOverviews();
+      // The last website opened, or the home overview (also when nothing was opened yet).
       const last = recall();
-      const initial = projects.find((p) => p.id === last) ?? projects[0];
+      const initial = projects.find((p) => p.id === last);
       if (initial) get().select(initial.id);
     } catch (err) {
       set({ loading: false, error: err.message });
     }
+  },
+
+  /** The home overview: no website selected. */
+  goHome() {
+    set({ selectedId: null, audit: null, auditLoading: false });
+    remember(HOME);
+    get().loadOverviews();
+  },
+
+  /** Check + copy of every website, for the home gallery and the sidebar (read only). */
+  async loadOverviews() {
+    await Promise.all(get().projects.map((p) => get().loadOverview(p.id)));
+  },
+
+  async loadOverview(id) {
+    const [audit, recreate] = await Promise.all([api.getAudit(id).catch(() => null), api.getRecreate(id).catch(() => null)]);
+    set({ overviews: { ...get().overviews, [id]: { audit: normalizeAudit(id, audit), recreate, loaded: true } } });
   },
 
   async select(id) {
@@ -113,13 +146,13 @@ export const useProjects = create((set, get) => ({
     }
     const shown = get().audit;
     if (audit && (audit.analysisId !== shown?.analysisId || audit.recreate?.reauditId !== shown?.recreate?.reauditId || audit.recreate?.recreateId !== shown?.recreate?.recreateId)) {
-      set({ audit });
+      set({ audit: normalizeAudit(id, audit) });
     }
   },
 
   async reloadRecreate(id) {
     const data = await api.getRecreate(id).catch(() => null);
-    if (data) set({ recreateResults: { ...get().recreateResults, [id]: data } });
+    if (data) set({ recreateResults: { ...get().recreateResults, [id]: data }, overviews: { ...get().overviews, [id]: { ...get().overviews[id], recreate: data } } });
     if (data?.result && get().selectedId === id) await get().ensurePreview(id);
   },
 
@@ -140,8 +173,9 @@ export const useProjects = create((set, get) => ({
 
   async reloadAudit(id) {
     try {
-      const audit = await api.getAudit(id);
+      const audit = normalizeAudit(id, await api.getAudit(id));
       if (get().selectedId === id) set({ audit, auditLoading: false });
+      set({ overviews: { ...get().overviews, [id]: { ...get().overviews[id], audit, loaded: true } } });
     } catch (err) {
       if (get().selectedId === id) set({ auditLoading: false, error: err.message });
     }
@@ -245,6 +279,7 @@ export const useProjects = create((set, get) => ({
   async create(input) {
     const project = await api.createProject(input);
     set({ projects: [project, ...get().projects] });
+    get().loadOverview(project.id);
     await get().select(project.id);
     return project;
   },
@@ -265,8 +300,7 @@ export const useProjects = create((set, get) => ({
     set({ projects });
     if (get().selectedId === id) {
       set({ selectedId: null, audit: null });
-      remember(null);
-      if (projects[0]) get().select(projects[0].id);
+      remember(HOME);
     }
   },
 }));
