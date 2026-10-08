@@ -10,7 +10,8 @@ import { SOCIAL } from '../fixers/a11y.js';
 import { deepText, isElement } from './tree.js';
 
 const clean = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
-const QUESTION_TAGS = /^(h[2-6]|summary|dt|button)$/;
+// h1 too: a help-centre page is often one question (its title) and its answer.
+const QUESTION_TAGS = /^(h[1-6]|summary|dt|button)$/;
 const MAX_ANSWER = 1500;
 
 const isQuestion = (text) => /\?\s*$/.test(text) && text.length >= 8 && text.length < 200;
@@ -47,7 +48,7 @@ export function findQuestions(root) {
       const answer = answerOf(n, ancestors);
       if (answer) {
         seen.add(text.toLowerCase());
-        pairs.push({ question: text, answer });
+        pairs.push({ question: text, answer, ...(n.tag === 'h1' && { main: true }) });
       }
       return;
     }
@@ -140,7 +141,8 @@ export function addStructuredData(site) {
   for (const t of site.pages) {
     if (typesOf(t.head.jsonLd ?? []).has('FAQPage')) continue;
     const pairs = findQuestions(t.root);
-    if (pairs.length < 2) continue;
+    // Two or more questions, or a page that is one question (its main heading) with its answer.
+    if (pairs.length < 2 && !(pairs.length === 1 && pairs[0].main)) continue;
     t.head.jsonLd = [...(t.head.jsonLd ?? []), JSON.stringify({
       '@context': 'https://schema.org',
       '@type': 'FAQPage',

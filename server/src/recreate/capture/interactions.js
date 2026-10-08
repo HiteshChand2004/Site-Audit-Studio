@@ -170,9 +170,23 @@ function forceRuleStates(opts) {
   const tasks = [];
   const declared = new Set();
   const stats = { rules: 0, parts: 0, unsupported: 0, hosts: 0, skippedHosts: 0, effects: 0, timedOut: false };
+  // Rules for the opposite state (`.card:not(:hover) .panel { opacity: 0 }`) keep matching while a state is forced by
+  // attribute (the mouse is not really there) and win over the forced rule: until the probe ends they follow the attribute.
+  const negated = [];
+  const NEGATED = /:not\(\s*:(hover|focus(?:-visible|-within)?)\s*\)/g;
   const visit = (list, container) => {
     for (let i = 0; i < list.length; i++) {
       const rule = list[i];
+      if (rule.type === CSSRule.STYLE_RULE && NEGATED.test(rule.selectorText || '')) {
+        const before = rule.selectorText;
+        try {
+          rule.selectorText = before.replace(NEGATED, (all, s) => `:not([${s === 'hover' ? ATTR.hover : ATTR.focus}])`);
+          if (rule.selectorText !== before) negated.push({ rule, before });
+        } catch {
+          /* left as it is */
+        }
+      }
+      NEGATED.lastIndex = 0;
       if (rule.type === CSSRule.STYLE_RULE) {
         const text = rule.selectorText || '';
         if (/:(hover|focus)/.test(text)) {
@@ -349,6 +363,13 @@ function forceRuleStates(opts) {
     for (const { container, rule } of inserted) {
       const i = Array.prototype.indexOf.call(container.cssRules, rule);
       if (i >= 0) container.deleteRule(i);
+    }
+    for (const { rule, before } of negated) {
+      try {
+        rule.selectorText = before;
+      } catch {
+        /* the sheet is gone */
+      }
     }
   }
   stats.ms = Math.round(performance.now() - t0);

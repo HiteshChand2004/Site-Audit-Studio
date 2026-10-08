@@ -109,7 +109,9 @@ export function extractPage(html, pageUrl) {
   const faqSignals =
     $('details > summary').length +
     $('[class*="faq" i], [id*="faq" i], [class*="accordion" i]').length +
-    headings.filter((h) => /\b(faq|frequently asked)/i.test(h.text)).length;
+    // A heading that titles an FAQ section ("FAQ", "Frequently asked questions"), not one that mentions FAQs
+    // ("Instant FAQs & Troubleshooting" on a feature card).
+    headings.filter((h) => /^\s*(faqs?|f\.a\.q\.?s?|frequently asked( questions)?)\b/i.test(h.text)).length;
 
   const body = $('body').clone();
   body.find('script, style, noscript, template, svg').remove();

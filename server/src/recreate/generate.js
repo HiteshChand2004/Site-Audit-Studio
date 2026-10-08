@@ -5,9 +5,12 @@
 // site is written again. A round that lowers the layout score is undone. The production build, the
 // safety gate and the verification of dist/ follow in the build step (build/index.js).
 // Writes ir/site.json (the IR the other stack emitters will use) and sets ctx.generated.
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import sharp from 'sharp';
 import { parallelism } from '../audit/resources.js';
+import { projectDir } from '../db/index.js';
 import { mapLimit } from '../audit/util.js';
 import { applyImageVariants, makeImageVariants } from './assets/variants.js';
 import { emitSite } from './emit/html.js';
@@ -117,6 +120,33 @@ const restoreFixes = (site, saved) => {
 
 const countTemplates = (n) => (!n || 'text' in n ? 0 : (n.tpl ? 1 : 0) + (n.children ?? []).reduce((s, c) => s + countTemplates(c), 0));
 
+// A page without a usable og:image (none, or the original's could not be downloaded: another host, an error page) shares
+// a real picture of itself: the top of its captured desktop screen, cut to the 1200 × 630 social-card size.
+async function addSocialImages(site, ctx, assetsDir) {
+  const files = [];
+  const auto = [];
+  for (const t of site.pages) {
+    if (t.head.meta.some((m) => m.property === 'og:image')) continue;
+    const shot = path.join(ctx.dir, 'capture', t.info.slug, 'desktop-fold.webp');
+    try {
+      const body = await sharp(await readFile(shot)).resize(1200, 630, { fit: 'cover', position: 'top' }).webp({ quality: 82 }).toBuffer();
+      const sha256 = createHash('sha256').update(body).digest('hex');
+      const file = `images/og-${t.info.slug}-${sha256.slice(0, 10)}.webp`;
+      await mkdir(path.join(assetsDir, 'images'), { recursive: true });
+      await writeFile(path.join(assetsDir, file), body);
+      files.push({ file, kind: 'image', mime: 'image/webp', bytes: body.length, sha256, urls: [], generated: 'og-image' });
+      const url = new URL(`assets/${file}`, `${site.baseUrl}/`).href;
+      t.head.meta.push({ property: 'og:image', content: url });
+      if (!t.head.meta.some((m) => m.name === 'twitter:image')) t.head.meta.push({ name: 'twitter:image', content: url });
+      t.headAuto.push({ field: 'og:image', value: url, source: 'the page\'s own first screen (captured)' });
+      auto.push(t.info.path);
+    } catch {
+      // no capture picture for this page: it stays without one
+    }
+  }
+  return { files, pages: auto };
+}
+
 // New files of the site's own (responsive images) join the downloaded ones: the build, the exports to other stacks and a
 // rebuild from the saved capture find them through assets/manifest.json.
 async function addToManifest(assetsDir, files, known, assets) {
@@ -173,8 +203,13 @@ export async function generateStage(ctx) {
   site.motion = motion.motion;
 
   ctx.progress(0.12, 'Fixing audit issues');
-  const treeFixes = applyTreeFixes(site, { audit: ctx.audit, skipped: ctx.discovery?.skipped });
+  const axe = ctx.analysis?.id && ctx.project?.id
+    ? await readFile(path.join(projectDir(ctx.project.id), 'audit', ctx.analysis.id, 'axe.json'), 'utf8').then(JSON.parse, () => null)
+    : null;
+  const treeFixes = applyTreeFixes(site, { audit: ctx.audit, skipped: ctx.discovery?.skipped, axe });
   // After the fixers: headings are final (FAQ questions are read from them).
+  const social = await addSocialImages(site, ctx, assetsDir);
+  if (social.files.length) await addToManifest(assetsDir, social.files, known, ctx.assets);
   const structured = addStructuredData(site);
   let irFixes;
   let imageVariants = new Map();

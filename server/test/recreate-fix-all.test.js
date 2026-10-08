@@ -14,7 +14,7 @@ import { emitCss, usedCustomProps } from '../src/recreate/emit/css.js';
 import { emitSite } from '../src/recreate/emit/html.js';
 import { MOTION_JS } from '../src/recreate/emit/motionScript.js';
 import { jsxNode } from '../src/recreate/emit/react/jsx.js';
-import { fixContrast, passingColor, ratio } from '../src/recreate/fixers/contrast.js';
+import { axeContrastFindings, fixContrast, parseColor, passingColor, ratio } from '../src/recreate/fixers/contrast.js';
 import { crawlFiles } from '../src/recreate/ir/crawlFiles.js';
 import { detectLang, fitTitle, refineHeadTexts } from '../src/recreate/ir/seoText.js';
 import { addStructuredData, findQuestions } from '../src/recreate/ir/structuredData.js';
@@ -179,6 +179,34 @@ test('contrast: the smallest change toward black or white that passes, text over
   // Large text needs 3:1 only.
   const big = el('h1', [txt('Big')], { style: { color: 'rgb(130, 130, 130)', 'font-size': '32px' } });
   assert.equal(fixContrast({ info: { path: '/' }, root: el('body', [big], { style: { 'background-color': 'rgb(255, 255, 255)' } }) }).fixed.length, 0);
+});
+
+test('contrast on the scanned page follows the audit\'s measurements; decorative text is drawn by CSS', () => {
+  const axe = { violations: [{ id: 'color-contrast', nodes: [
+    { html: '<div class="stat-desc">Active deployments</div>', any: [{ id: 'color-contrast', data: { fgColor: '#5a6c00', bgColor: '#c8f000', contrastRatio: 4.44, expectedContrastRatio: '4.5:1' } }] },
+    { html: '<div class="ghost" aria-hidden="true">BRAND</div>', any: [{ id: 'color-contrast', data: { fgColor: '#232736', bgColor: '#1c2030', contrastRatio: 1.08, expectedContrastRatio: '3:1' } }] },
+  ] }] };
+  const findings = axeContrastFindings(axe);
+  assert.equal(findings.length, 2);
+  // Semi-transparent text the styles alone would misjudge: the measured colours decide.
+  const desc = el('div', [txt('Active deployments')], { attrs: { class: 'stat-desc' }, style: { color: 'rgba(0, 0, 0, 0.55)' } });
+  const ghost = el('div', [txt('BRAND')], { attrs: { class: 'ghost' }, style: { color: 'rgba(255, 255, 255, 0.03)', position: 'absolute' } });
+  const passing = el('p', [txt('Fine text')], { style: { color: 'rgb(110, 110, 110)' } });
+  const t = { info: { path: '/' }, root: el('body', [desc, ghost, passing], { style: { 'background-color': 'rgb(255, 255, 255)' } }) };
+  const out = fixContrast(t, { axe: findings });
+  assert.ok(ratio(parseColor(desc.views.desktop.style.color), [200, 240, 0, 1]) >= 4.5);
+  assert.equal(ghost.children.length, 0);
+  assert.equal(ghost.views.desktop.before.content, '"BRAND"');
+  assert.equal(ghost.attrs['aria-hidden'], 'true');
+  assert.equal(passing.views.desktop.style.color, 'rgb(110, 110, 110)', 'text that passes (4.98:1) is left as it is');
+  assert.equal(out.fixed.length, 2);
+});
+
+test('a help-centre page that is one question (its heading) and its answer gets FAQPage', () => {
+  const page = { info: { path: '/faq/1' }, root: el('body', [el('main', [el('div', [el('h1', [txt('Can we start with a pilot?')]), el('div', [el('p', [txt('Yes, every plan starts with a two-week pilot on your own data.')])])])])]), head: { jsonLd: [], icons: [], meta: [] } };
+  const home = { info: { path: '/' }, root: el('body', [el('h1', [txt('Welcome')])]), head: { jsonLd: [], icons: [], meta: [] } };
+  addStructuredData({ pages: [home, page], baseUrl: 'https://a.test', siteName: { value: 'A' } });
+  assert.match(page.head.jsonLd.join(''), /"FAQPage".*"Can we start with a pilot\?".*two-week pilot/);
 });
 
 test('pages the analysis found join the recreate even when the server HTML links none of them', () => {

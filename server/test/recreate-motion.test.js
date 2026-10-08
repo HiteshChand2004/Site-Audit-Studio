@@ -238,6 +238,28 @@ test('captured paths are the paths of the DOM snapshot', async () => {
   await page.context().close();
 });
 
+// A card whose panel shows on hover, hidden by a rule for the opposite state (`:not(:hover)`), as builders often write it.
+const NEGATED = `<!doctype html><html><head><style>
+body { margin: 0; font: 16px sans-serif } .card { display: block; width: 240px; height: 120px; position: relative; border: 1px solid #ccc }
+.panel { position: absolute; inset: 0; opacity: 0; background: #111; color: #fff; transition: opacity .3s }
+.card:hover .panel { opacity: 1; transition-delay: .2s }
+.card:not(:hover) .panel { opacity: 0; transition-delay: 0s }
+</style></head><body><div class="card" tabindex="0"><span>Label</span><div class="panel">Details shown on hover</div></div></body></html>`;
+
+test('a panel hidden by a :not(:hover) rule still counts as shown on hover', async () => {
+  await writeFile(path.join(dir, 'negated.html'), NEGATED);
+  const page = await (await browser.newContext({ viewport: { width: 1000, height: 700 } })).newPage();
+  await page.goto(`${site.origin}/negated.html`, { waitUntil: 'load' });
+  const found = await captureInteractions(page, { budgetMs: 20000 });
+  const card = found.hover.find((h) => h.text.startsWith('Label'));
+  assert.ok(card, JSON.stringify(found.hover.map((h) => h.text)));
+  const panel = (card.kids ?? []).find((k) => k.changes.opacity);
+  assert.deepEqual(panel?.changes.opacity, ['0', '1'], JSON.stringify(card));
+  // The page's own rules are back as they were.
+  assert.equal(await page.evaluate(() => [...document.styleSheets[0].cssRules].some((r) => r.selectorText === '.card:not(:hover) .panel')), true);
+  await page.context().close();
+});
+
 test('the time budget stops the probing and says so', async () => {
   const page = await openPage();
   const found = await captureInteractions(page, { budgetMs: 1 });
