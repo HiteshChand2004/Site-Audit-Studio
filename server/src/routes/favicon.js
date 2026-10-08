@@ -1,19 +1,24 @@
 // The website's own icon for the sidebar (GET /api/projects/:id/favicon), so websites are told apart at a glance.
 // Read once from the site (its <link rel="icon">, else /favicon.ico) through the SSRF-guarded fetch, kept in the project
 // folder (favicon.bin + favicon.json) and served from there; a site without one is remembered for a day (404, the app
-// shows the letter instead). Only images up to 256 KB; an SVG is sanitized and every icon is served with a
-// sandboxing CSP, so nothing in it can run on the app's origin.
+// shows the letter instead). Only images up to 2 MB (sites do ship half-megabyte PNG icons); a raster icon is kept as a
+// 64 px PNG, an SVG is sanitized, and every icon is served with a sandboxing CSP, so nothing in it can run on the app's
+// origin.
 import { Router } from 'express';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { load } from 'cheerio';
+import sharp from 'sharp';
 import { db, projectDir } from '../db/index.js';
 import { fetchPage, guardedFetch } from '../audit/http.js';
 import { sanitizeSvg } from '../recreate/fixers/svg.js';
 
 const router = Router();
-const MAX_BYTES = 256 * 1024;
+const MAX_BYTES = 2 * 1024 * 1024;
+const ICON_PX = 64;
 const RETRY_MS = 24 * 3600 * 1000;
+// Bumped when the rules change, so a "no icon" remembered under the old rules is checked again.
+const RULES = 2;
 const TYPES = /^image\/(png|x-icon|vnd\.microsoft\.icon|svg\+xml|jpeg|gif|webp|avif)$/;
 const inflight = new Map();
 
@@ -72,7 +77,14 @@ async function download(url) {
     const clean = sanitizeSvg(buf.toString('utf8')).svg;
     return clean ? { type, body: Buffer.from(clean) } : null;
   }
-  return { type, body: buf };
+  // .ico stays as it is (the image library cannot read it; browsers can); other pictures become a small PNG.
+  if (type === 'image/x-icon') return { type, body: buf };
+  try {
+    const body = await sharp(buf, { animated: false }).resize(ICON_PX, ICON_PX, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } }).png().toBuffer();
+    return { type: 'image/png', body };
+  } catch {
+    return buf.length <= 256 * 1024 ? { type, body: buf } : null;
+  }
 }
 
 /** The cached icon of a project, fetching it first when needed: { type, body } or null. */
@@ -83,7 +95,7 @@ async function iconOf(project) {
   if (meta?.type) {
     const body = await readFile(path.join(dir, 'favicon.bin')).catch(() => null);
     if (body) return { type: meta.type, body };
-  } else if (meta?.none && Date.now() - meta.checkedAt < RETRY_MS) return null;
+  } else if (meta?.none && meta.rules === RULES && Date.now() - meta.checkedAt < RETRY_MS) return null;
 
   let found = null;
   try {
@@ -97,9 +109,9 @@ async function iconOf(project) {
   await mkdir(dir, { recursive: true });
   if (found) {
     await writeFile(path.join(dir, 'favicon.bin'), found.body);
-    await writeFile(metaFile, JSON.stringify({ type: found.type, checkedAt: Date.now() }));
+    await writeFile(metaFile, JSON.stringify({ type: found.type, checkedAt: Date.now(), rules: RULES }));
   } else {
-    await writeFile(metaFile, JSON.stringify({ none: true, checkedAt: Date.now() }));
+    await writeFile(metaFile, JSON.stringify({ none: true, checkedAt: Date.now(), rules: RULES }));
   }
   return found;
 }
