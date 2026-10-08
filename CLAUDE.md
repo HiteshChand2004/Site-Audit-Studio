@@ -371,6 +371,12 @@ of 2809 elements) + hover-card copies; SEO / AEO / theme-color rows were copied 
   the hidden panel's `opacity: 1` had been lost to `.logo-silo:not(:hover) .silo-content { opacity: 0 }`). Not rebuilt yet:
   effects on siblings (`.card:hover ~ .card`).
 - **Measurement parity**: the re-audit's throwaway server gzips text (`servePreview({ compress })`), as any host does.
+- **Stack downloads never fail on our own changes**: an app stack (React / Next.js / MERN) is checked against a plain-HTML
+  build of the same `ir/site.json` made by the same code (`export/fromIr.js buildStackOutput`, a temporary
+  `stacks/<stack>.html-ref.tmp`), not the recreate's older `dist/`; framework mount ids (`ir/names.js MOUNT_IDS`: root,
+  __next, app, …) are never written and never count as a difference; equivalence skips `#root` only on the side whose stack
+  adds it (`compareBuilds({ appWrapper })`, React / MERN). botza (React original, content in its own `<div id="root">`):
+  Next.js export 32/32 DOM, pixels 1.0, hydration clean.
 - **Motion rows** (diagnosed side by side on panscience / parchaa): 46 of 48 "missing" hovers were the pairing key — text with
   vs without spaces between blocks, textContent vs innerText → `reaudit/motion.js hoverKey` (tag + lower-case text without white
   space, 40 chars), CSS-rule probe reads visible text before aria-label; loop patterns paired by family (`PATTERN_FAMILY`:
