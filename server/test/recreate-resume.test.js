@@ -18,6 +18,8 @@ import { startFixtureServer } from './serve-fixture.js';
 process.env.SAS_ALLOW_LOCALHOST = '1';
 
 const PORT = 4188;
+// Every test ends within this (a job waiting on an event that never comes fails instead of hanging the run).
+const TEST_TIMEOUT = 120000;
 const origin = `http://localhost:${PORT}`;
 const exists = (p) => access(p).then(() => true, () => false);
 let server;
@@ -64,7 +66,8 @@ function harness({ failOnCapture = 0, failIn = null } = {}) {
   let captureCalls = 0;
   const capturePage = async (_browser, info, workspace) => {
     captureCalls++;
-    if (failOnCapture && captureCalls === failOnCapture) throw new Error('simulated crash');
+    // A crash that ends the job (a failure of one page alone is reported for that page and never stops the others).
+    if (failOnCapture && captureCalls === failOnCapture) throw new RecreateError('simulated crash');
     n.captures.push(info.path);
     await mkdir(path.join(workspace, 'capture', info.slug), { recursive: true });
     await writeFile(path.join(workspace, 'capture', info.slug, 'desktop.json'), JSON.stringify({ url: info.url }));
@@ -75,6 +78,7 @@ function harness({ failOnCapture = 0, failIn = null } = {}) {
     ...stubs,
     inspect: (ctx) => {
       ctx.capturePage = capturePage;
+      ctx.capturePages = 1; // one page at a time: the crash hits a known page
       return savedStages.inspect(ctx);
     },
     sweep: async (ctx) => {
@@ -104,7 +108,7 @@ function harness({ failOnCapture = 0, failIn = null } = {}) {
 
 const run = (project, recreateId, stages, extra = {}) => runRecreate({ project, recreateId, progress: () => {}, stages, ...extra });
 
-test('a Recreate that crashes during the capture keeps its work and the resume captures only the missing pages', async () => {
+test('a Recreate that crashes during the capture keeps its work and the resume captures only the missing pages', { timeout: TEST_TIMEOUT }, async () => {
   const project = makeProject(3);
   // The uninterrupted run, for comparison.
   const clean = harness();
@@ -145,7 +149,7 @@ test('a Recreate that crashes during the capture keeps its work and the resume c
   for (const p of report.pages) assert.equal(await exists(path.join(recreateDir(project.id, resumedId), 'capture', p.slug, 'desktop.json')), true, p.slug);
 });
 
-test('a failure after the asset step resumes at generate: nothing captured, swept or downloaded again', async () => {
+test('a failure after the asset step resumes at generate: nothing captured, swept or downloaded again', { timeout: TEST_TIMEOUT }, async () => {
   const project = makeProject(2);
   const first = harness({ failIn: 'generate' });
   const stopped = randomUUID();
@@ -167,7 +171,7 @@ test('a failure after the asset step resumes at generate: nothing captured, swep
   assert.equal(report.resumed[0].fromStep, 'generate');
 });
 
-test('a Recreate interrupted by a server restart continues by itself when the server starts', async () => {
+test('a Recreate interrupted by a server restart continues by itself when the server starts', { timeout: TEST_TIMEOUT }, async () => {
   const project = makeProject(2);
   const first = harness({ failOnCapture: 2 });
   const stopped = randomUUID();
@@ -185,7 +189,12 @@ test('a Recreate interrupted by a server restart continues by itself when the se
   try {
     const [job] = await resumeInterruptedRecreates([{ id: stopped, project_id: project.id }]);
     assert.ok(job, 'a job was started');
-    const done = await new Promise((resolve) => recreateJobs.on(job.id, (type, snap) => (type === 'done' || type === 'failed') && resolve({ type, snap })));
+    // Finished already, or wait for its end.
+    const done = await new Promise((resolve) => {
+      recreateJobs.on(job.id, (type, snap) => (type === 'done' || type === 'failed') && resolve({ type, snap }));
+      const now = recreateJobs.get(job.id);
+      if (now?.status === 'done' || now?.status === 'failed') resolve({ type: now.status, snap: now });
+    });
     assert.equal(done.type, 'done', done.snap.error);
     const row = db.prepare('SELECT status, result_json FROM recreates WHERE id = ?').get(job.id);
     const report = JSON.parse(row.result_json);
@@ -195,19 +204,21 @@ test('a Recreate interrupted by a server restart continues by itself when the se
     assert.equal(second.n.captures.length, 2);
     assert.match(db.prepare('SELECT error FROM recreates WHERE id = ?').get(stopped).error, /continues where it stopped/);
     // At most a few times in a row: work already continued automatically MAX_AUTO_RESUMES times is left to the user.
+    // (Another project: the finished job's cleanup prunes stray workspaces of its own project while this runs.)
+    const other = makeProject(2);
     const tired = randomUUID();
-    await mkdir(tmpDir(project.id, tired), { recursive: true });
-    await writeFile(checkpointPath(tmpDir(project.id, tired)), JSON.stringify({ ...cp, autoResumes: MAX_AUTO_RESUMES }));
-    assert.deepEqual(await resumeInterruptedRecreates([{ id: tired, project_id: project.id }]), []);
+    await mkdir(tmpDir(other.id, tired), { recursive: true });
+    await writeFile(checkpointPath(tmpDir(other.id, tired)), JSON.stringify({ ...cp, autoResumes: MAX_AUTO_RESUMES }));
+    assert.deepEqual(await resumeInterruptedRecreates([{ id: tired, project_id: other.id }]), []);
     // A time-limit stop continues by itself only when that attempt got further.
-    await writeFile(checkpointPath(tmpDir(project.id, tired)), JSON.stringify({ ...cp, stopped: { reason: 'time-limit', progressed: false } }));
-    assert.equal(await autoResume(project, tired, 'time-limit'), null);
+    await writeFile(checkpointPath(tmpDir(other.id, tired)), JSON.stringify({ ...cp, stopped: { reason: 'time-limit', progressed: false } }));
+    assert.equal(await autoResume(other, tired, 'time-limit'), null);
   } finally {
     Object.assign(STAGES, savedStages);
   }
 });
 
-test('a newer successful recreate removes the kept work; until then retention keeps it', async () => {
+test('a newer successful recreate removes the kept work; until then retention keeps it', { timeout: TEST_TIMEOUT }, async () => {
   const project = makeProject(1);
   const stopped = randomUUID();
   insertRow(project.id, stopped, 'failed');
@@ -223,7 +234,7 @@ test('a newer successful recreate removes the kept work; until then retention ke
   assert.equal(await exists(recreateDir(project.id, newer)), true);
 });
 
-test('nothing to resume: clear errors', async () => {
+test('nothing to resume: clear errors', { timeout: TEST_TIMEOUT }, async () => {
   const project = makeProject(1);
   const res = await fetch(`${base}/${project.id}/recreate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resume: true }) });
   assert.equal(res.status, 409);
@@ -237,7 +248,7 @@ test('nothing to resume: clear errors', async () => {
   assert.equal(await exists(tmpDir(project.id, id)), false);
 });
 
-test('GET /recreate offers the stopped recreate and POST { resume: true } continues it', async () => {
+test('GET /recreate offers the stopped recreate and POST { resume: true } continues it', { timeout: TEST_TIMEOUT }, async () => {
   const project = makeProject(1);
   const stopped = randomUUID();
   insertRow(project.id, stopped, 'failed');

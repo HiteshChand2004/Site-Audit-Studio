@@ -23,7 +23,7 @@ export const MAX_AUTO_RESUMES = 2;
 export const REUSABLE_STEPS = ['inspect', 'sweep', 'assets'];
 // What each kept step leaves on the job context, and the report keys it sets (arrays it appends to are kept as appended).
 const STEP_CTX = { inspect: ['pages', 'discovery', 'livePages'], sweep: ['sweep'], assets: ['assets'] };
-const STEP_REPORT = { inspect: ['pages', 'motion', 'discovery', 'blockedHosts'], sweep: ['sweep'], assets: ['assets'] };
+const STEP_REPORT = { inspect: ['pages', 'motion', 'discovery', 'blockedHosts', 'capture'], sweep: ['sweep'], assets: ['assets'] };
 const APPENDED = ['warnings', 'manual', 'errors'];
 const VERSION = 1;
 
