@@ -176,3 +176,25 @@ export function matchRating(score) {
   if (score >= 65) return { label: 'Close, worth a look', tone: 'warn' };
   return { label: 'Clearly different, needs a look', tone: 'bad' };
 }
+
+/**
+ * A copy that stopped before it finished (the server kept its work: GET …/recreate `resumable`).
+ * @param {{ step: string, pagesDone: number, pagesTotal: number, reason: string, stoppedAt?: string }} r
+ */
+export function resumeText(r) {
+  const why = {
+    restart: 'the app was closed or restarted while it worked',
+    'time-limit': 'it ran out of time',
+    error: 'something went wrong',
+  }[r.reason] ?? 'it was interrupted';
+  const pages = r.pagesTotal ? `${r.pagesDone} of ${r.pagesTotal} pages` : null;
+  const kept = r.step === 'inspect'
+    ? `${pages ?? 'The pages'} visited so far are kept; only the rest are visited.`
+    : `every page${r.pagesTotal ? ` (${r.pagesTotal})` : ''} was already visited, so it goes straight on to “${stepTitle(r.step)}”.`;
+  return {
+    title: 'The last copy stopped before it finished',
+    text: `It stopped because ${why}. Nothing was lost: ${kept}`,
+    button: pages && r.step === 'inspect' ? `Continue where it stopped (${pages})` : 'Continue where it stopped',
+    short: 'Continue the copy',
+  };
+}

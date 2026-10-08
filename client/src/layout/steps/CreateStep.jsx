@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CheckCircle2, Columns2, Loader2, RefreshCw, Settings2, Sparkles, Trophy } from 'lucide-react';
+import { CheckCircle2, Columns2, Loader2, Play, RefreshCw, Settings2, Sparkles, Trophy } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import { Alert, Card } from '../../components/common/Surface.jsx';
 import SectionCard from '../../components/common/SectionCard.jsx';
@@ -8,7 +8,7 @@ import StackOutput from '../../components/recreate/StackOutput.jsx';
 import { BrowserShot } from '../../components/site/Site.jsx';
 import { copyShot } from '../../siteData.js';
 import { RECREATE_STACKS, stackById } from '../../constants.js';
-import { matchRating, TERMS } from '../../copy.js';
+import { matchRating, resumeText, TERMS } from '../../copy.js';
 import { ageDays, plural, timeAgo } from '../../format.js';
 import { api } from '../../api/client.js';
 import { outputsOf, outputState } from '../../stacks.js';
@@ -50,6 +50,9 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   const reauditJob = useProjects((s) => s.reaudits[project.id]);
   const result = latest?.result;
   const running = isJobActive(job);
+  // A copy that stopped before it finished, whose work the server kept: it can continue instead of starting over.
+  const resumable = !running ? latest?.resumable ?? null : null;
+  const resume = resumable ? resumeText(resumable) : null;
   const blocker = blockerOf({ audit, project, analyzing: isAnalysisActive(analysis) });
   const staleDays = audit && !audit.isDummy ? ageDays(audit.analyzedAt) : 0;
   const outputs = outputsOf(result);
@@ -73,6 +76,20 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
     <div className={ws.stepBody}>
       {job && job.status !== 'done' && <AnalyzeProgress analysis={job} kind="recreate" onDismiss={() => dismissJob('recreate', project.id)} />}
 
+      {resume && (
+        <Alert
+          tone="warn"
+          title={resume.title}
+          action={
+            <Button variant="primary" icon={Play} disabled={Boolean(blocker)} title={blocker ?? undefined} onClick={() => recreate(project.id, { resume: true })}>
+              {resume.button}
+            </Button>
+          }
+        >
+          {resume.text}
+        </Alert>
+      )}
+
       <div className={result ? ws.twoCol : undefined}>
       <Card
         icon={Sparkles}
@@ -95,14 +112,14 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
         </dl>
         <div className={ws.actions}>
           <Button
-            variant="primary"
+            variant={resume ? 'secondary' : 'primary'}
             size="lg"
             icon={running ? (p) => <Loader2 {...p} className={styles.spin} /> : Sparkles}
             disabled={Boolean(blocker) || running}
             title={blocker ?? undefined}
             onClick={() => recreate(project.id)}
           >
-            {running ? 'Creating the copy…' : result ? 'Create the copy again' : 'Create the copy'}
+            {running ? 'Creating the copy…' : resume ? 'Start over' : result ? 'Create the copy again' : 'Create the copy'}
           </Button>
           {result && (
             <Button

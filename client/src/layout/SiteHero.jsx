@@ -6,7 +6,7 @@ import InfoTip from '../components/common/InfoTip.jsx';
 import { Segmented } from '../components/common/Tabs.jsx';
 import { BrowserShot, SiteIcon } from '../components/site/Site.jsx';
 import { RECREATE_STACKS, hostOf, stackById } from '../constants.js';
-import { HEALTH, RESULT_STATUS, rating } from '../copy.js';
+import { HEALTH, RESULT_STATUS, rating, resumeText } from '../copy.js';
 import { plural, timeAgo } from '../format.js';
 import { api } from '../api/client.js';
 import { outputsOf } from '../stacks.js';
@@ -147,6 +147,23 @@ export default function SiteHero({ project, audit, onGo, compact = false }) {
         }}
       >
         Check the site
+      </Button>
+    );
+  } else if (latest?.resumable && !blocker) {
+    // The last copy stopped before it finished: continuing keeps what it had done.
+    const resume = resumeText(latest.resumable);
+    primary = (
+      <Button
+        variant="primary"
+        size="lg"
+        icon={Play}
+        title={resume.text}
+        onClick={() => {
+          recreate(project.id, { resume: true });
+          onGo('create');
+        }}
+      >
+        {resume.short}
       </Button>
     );
   } else if (!result) {

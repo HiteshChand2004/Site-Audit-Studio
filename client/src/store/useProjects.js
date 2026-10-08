@@ -202,7 +202,13 @@ export const useProjects = create((set, get) => ({
       failed: (data) => {
         streams.delete(`${kind}:${projectId}`);
         get().setJob(kind, projectId, { status: 'failed', error: data.error || failedMessage });
-        if (kind === 'recreate') get().reloadRecreate(projectId);
+        // A copy stopped by its time limit after getting further continues by itself (the server queues the next try):
+        // follow it, so the progress goes on instead of showing the failure. Asked again shortly after: the server decides
+        // that just after it reports the failure.
+        if (kind === 'recreate') {
+          get().reloadRecreate(projectId);
+          setTimeout(() => get().followRecreate(projectId).then(() => get().reloadRecreate(projectId)), 2000);
+        }
         if (kind === 'reaudit' && get().selectedId === projectId) get().reloadAudit(projectId);
       },
     });
@@ -230,7 +236,16 @@ export const useProjects = create((set, get) => ({
     }
   },
 
-  /** @param {{ reuseCapture?: boolean }} [options]  reuseCapture: rebuild from the last capture, without opening the site */
+  /** Attaches to the project's queued or running recreate, if any (e.g. one that continues a stopped copy by itself). */
+  async followRecreate(id) {
+    const current = await api.getCurrentRecreate(id).catch(() => null);
+    if (current && !streams.has(`recreate:${id}`)) get().attachJob('recreate', id, current.job, current.steps);
+  },
+
+  /**
+   * @param {{ reuseCapture?: boolean, resume?: boolean }} [options]  reuseCapture: rebuild from the last capture, without
+   *   opening the site; resume: continue the copy that stopped, keeping what it had done (GET …/recreate `resumable`)
+   */
   async recreate(id, options = null) {
     get().setJob('recreate', id, { status: 'starting', pct: 0, step: null, error: null, message: 'Starting…' });
     try {
