@@ -386,7 +386,9 @@ function pageBody(t, site, stats) {
           if (!d || d.hidden || !(d.rect?.[2] > 0)) continue;
           const [w, h] = [d.rect[2], d.rect[3]];
           const fit = d.style?.['object-fit'];
-          const drawn = ratio && h > 0 && (fit === 'contain' || fit === 'scale-down') ? Math.min(w, h * ratio) : ratio && h > 0 && fit === 'cover' ? Math.max(w, h * ratio) : w;
+          // cover: the file whose area equals the box's (speed tools judge an image by its pixels against the box's pixels;
+          // the full width of the cropped picture would be a file up to twice as large).
+          const drawn = ratio && h > 0 && (fit === 'contain' || fit === 'scale-down') ? Math.min(w, h * ratio) : ratio && h > 0 && fit === 'cover' ? Math.sqrt(w * h * ratio) : w;
           rw[v] = Math.round(drawn);
         }
         if (Object.keys(rw).length) out.rw = rw;

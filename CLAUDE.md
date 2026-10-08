@@ -440,6 +440,23 @@ of 2809 elements) + hover-card copies; SEO / AEO / theme-color rows were copied 
   grows per page (≤ 6 × 75 s).
 - Fixed on the way: regexes that had lost their backslashes (`emit/html.js` pre-wrap detection `split(/s+/)`, `[w-]`;
   `capture/loops.js repeatOf` `/s+/`). EVIDENCE entries for every new fixer. Tests: `recreate-fix-all.test.js`.
+- **parchaa round** (open after a fresh test: unused CSS 11 KiB, DOM 926 → 1100, LCP render delay, responsive images 427 → 82 KiB,
+  3 slow fades): (1) per-page `@font-face` keeps only subsets (unicode-range) holding a character the page draws and the
+  weights its rules use, picked like the browser's weight matching (400 / 700 always; `emit/css.js pageFontFaces`; homepage
+  94 → 19 faces); the font preload takes the subset with most of the page's text (`charsCovered`). (2) `fixers/perf.js
+  pruneSprites`: inline SVGs with an id that no view shows (0-size clipping box / hidden) and nothing references (`#id`,
+  `url(#id)`, ids inside them, transitively) are removed. (3) `markLayouts`: parts shown in some views only (≥ 3 elements, not
+  script-owned: states, notices, hover copies, `w` tokens, `hidden`) get `data-w-lay`; `js/motion.js` (last block) parks the ones
+  the stylesheet hides at the current width (comment placeholder) and swaps on resize; in React / Next.js pages only after
+  hydration (`__reactFiber` on a part); `window.__sasKeepLayouts` skips it (equivalence hydration check). The original builder
+  does the same with script; no-JS pages keep every part. Report fix `dom-size` { sprites, layouts }. (4) The LCP image and its
+  ancestors lose entrance tokens (`rv`, `rl`, `rp`, `rN`, `dN`; `fixLoading` → `unfaded`). (5) cover images: variant width
+  `sqrt(w·h·ratio)` (file area = box area, as Lighthouse judges). (6) Slow fades: one-way opacity ramps < 0.5 are recorded
+  longer (opacity turns count for the early stop), `analyzeSeries` counts turns across still samples, oscillations keep
+  `min` / `max`, `scriptLoop` rebuilds opacity oscillations (alternate keyframes); re-audit pairs them as family `fade`
+  (`oscillate` on opacity / `blink` / opacity-only `other`). (7) Checklist: a Lighthouse audit failing on both sides whose
+  measured value moved on every device (`numericValue`, else metric savings) is improved / regressed (`lighthouseTrend`:
+  10 % margin, 2 % for element counts). Tests: `recreate-dom-size.test.js`.
 
 ### Desktop only (WIP, user: "remove tablet and mobile from frontend and backend, keep only desktop") — merged into `phase-4a`; **UNDONE in as-is step 4** (branch `step4-mobile`, see above)
 History: one view everywhere, the rest parked, not deleted. Step 4 listed all four views again and restored what is below; what stays from it: `KNOWN_*` views, the single-view IR path for older

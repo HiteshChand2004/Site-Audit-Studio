@@ -19,7 +19,7 @@ import { applyIrFixes, applyTreeFixes, fixReport } from './fixers/index.js';
 import { brokenTargets, deadLinks } from './fixers/perf.js';
 import { fetchWordPress, isWordPress } from './fixers/wordpress.js';
 import { buildIR, prepareSite, readPageCaptures } from './ir/index.js';
-import { applyMotion, readPageMotion } from './ir/motion.js';
+import { MOTION_VERSION, applyMotion, readPageMotion } from './ir/motion.js';
 import { addStructuredData } from './ir/structuredData.js';
 import { isElement } from './ir/tree.js';
 import { compareLayout, openRenderer, planFixes, renderPage, viewScore } from './verify/layout.js';
@@ -213,6 +213,10 @@ export async function generateStage(ctx) {
   ctx.progress(0.13, 'Checking the links of every page');
   const extraBroken = await deadLinks(site, { known: brokenTargets(ctx.audit, ctx.discovery?.skipped), ms: Math.max(10000, Math.min(LINK_CHECK_BUDGET, ctx.stepDeadline - Date.now() - FIT_MARGIN * 4)) });
   const treeFixes = applyTreeFixes(site, { audit: ctx.audit, skipped: ctx.discovery?.skipped, axe, extraBroken });
+  // Layout parts other window sizes show (fixers/perf.js markLayouts) are parked by the generated script.
+  if (treeFixes.layouts) {
+    site.motion = { version: MOTION_VERSION, hover: [], focus: [], reveal: [], delays: [], loops: [], widgets: [], states: 0, notices: 0, hoverCards: 0, scrolled: [], ...site.motion, layouts: treeFixes.layouts, script: true };
+  }
   // After the fixers: headings are final (FAQ questions are read from them).
   const social = await addSocialImages(site, ctx, assetsDir);
   if (social.files.length) await addToManifest(assetsDir, social.files, known, ctx.assets);

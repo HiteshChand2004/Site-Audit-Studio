@@ -213,14 +213,15 @@ export async function recordPaths({ paths, ms = 9000, every = 50 }) {
     const cs = getComputedStyle(el);
     return [cs.transform, cs.opacity, cs.rotate, cs.translate, cs.scale];
   };
-  // The position along both axes, enough to see a turn (the full reading is kept for the analysis).
+  // The position along both axes and the opacity (×100, so a 0.01 step counts like a quarter pixel), enough to see a
+  // turn (the full reading is kept for the analysis).
   const pos = (el) => {
     const r = el.getBoundingClientRect();
-    return [r.left + scrollX, r.top + scrollY];
+    return [r.left + scrollX, r.top + scrollY, Number(getComputedStyle(el).opacity) * 100];
   };
   const els = paths.map(byPath);
   const series = els.map(() => []);
-  const turns = els.map(() => ({ last: null, dir: [0, 0], count: 0 }));
+  const turns = els.map(() => ({ last: null, dir: [0, 0, 0], count: 0 }));
   const t0 = performance.now();
   while (performance.now() - t0 < ms) {
     const t = Math.round(performance.now() - t0);
@@ -230,7 +231,7 @@ export async function recordPaths({ paths, ms = 9000, every = 50 }) {
       const p = pos(el);
       const s = turns[i];
       if (s.last) {
-        for (const a of [0, 1]) {
+        for (const a of [0, 1, 2]) {
           const d = Math.sign(Math.round((p[a] - s.last[a]) * 4) / 4);
           if (d && s.dir[a] && d !== s.dir[a]) s.count++;
           if (d) s.dir[a] = d;
@@ -248,6 +249,7 @@ export async function recordPaths({ paths, ms = 9000, every = 50 }) {
 // ---- Node side ------------------------------------------------------------------------------------------------
 
 const SLOW_MOVER_PX = 60; // a one-way move smaller than this in the short recording may be a slow float
+const SLOW_FADE = 0.5; // a one-way opacity change smaller than this in the short recording may be a slow pulse
 const SLOW_WATCH_MS = 9000;
 const MAX_SCROLL_STEPS = 12; // windows scrolled through for strips that move only on screen // watched again for up to this long (stops once each one turned twice)
 
@@ -424,10 +426,17 @@ export function analyzeSeries(series) {
   // Oscillation: the direction of movement reverses at least twice.
   const smooth = diffs.map((d, i) => d + (diffs[i + 1] ?? 0)); // two frames, steadier than one
   const turns = [];
-  for (let i = 1; i < smooth.length; i++) if (Math.sign(smooth[i]) !== 0 && Math.sign(smooth[i - 1]) !== 0 && Math.sign(smooth[i]) !== Math.sign(smooth[i - 1])) turns.push(ch[i].t);
+  // Against the last direction seen: a slow movement holds still for a few samples at each end (zero steps in between).
+  let last = 0;
+  for (let i = 0; i < smooth.length; i++) {
+    const s = Math.sign(smooth[i]);
+    if (!s) continue;
+    if (last && s !== last) turns.push(ch[i].t);
+    last = s;
+  }
   if (turns.length >= 2) {
     const half = median(turns.slice(1).map((t, i) => t - turns[i]));
-    return { pattern: 'oscillate', channel: key, unit, range: round(range), amplitude: round(range / 2), periodMs: Math.round(half * 2) };
+    return { pattern: 'oscillate', channel: key, unit, range: round(range), amplitude: round(range / 2), periodMs: Math.round(half * 2), min: round(Math.min(...vs), 3), max: round(Math.max(...vs), 3) };
   }
   return { pattern: 'move', channel: key, unit, range: round(range) };
 }
@@ -475,7 +484,9 @@ export async function captureLoops(page, { script = true, recordMs = 2200 } = {}
   // several seconds: watched again longer (only these), it shows its turns and becomes an oscillation.
   const slow = (found?.candidates ?? []).filter((c) => {
     const a = analyzeSeries(c.series);
-    // One way (drift), or one turn only (move): not enough of it was seen.
+    // One way (drift), or one turn only (move): not enough of it was seen. A slow fade that only went one way (a card
+    // "breathing" over several seconds: opacity 0.07 in 2 s) is watched longer too.
+    if (a?.pattern === 'ramp' && a.channel === 'opacity' && a.range < SLOW_FADE) return true;
     return (a?.pattern === 'drift' || a?.pattern === 'move') && !a.wrap && (a.channel === 'x' || a.channel === 'y') && a.range < SLOW_MOVER_PX;
   }).slice(0, 12);
   if (slow.length) {

@@ -2,7 +2,8 @@
 // (step 2 of the "as is" fixes) opens and closes panels: a click on a `wt` control toggles `is-open` on its area (the
 // nearest ancestor with a `wN` token) and keeps the control's aria-expanded in step; the open state is CSS (emit/motionCss.js).
 // It also adds `is-scrolled` to a bar (`data-scroll-at`: px, or a share of the window height `0.92vh`) once the page is scrolled
-// that far, and shows the state a `data-w-go` control points to (tabs, carousels, filters).
+// that far, and shows the state a `data-w-go` control points to (tabs, carousels, filters). Last, it takes the layout parts
+// the stylesheet hides at the current width (`data-w-lay`) out of the page until a resize needs them (a smaller DOM).
 // Everything else about motion (hover, focus, loops, the reveal animation itself) is CSS; for the reveal this file only
 //   1. adds `js-motion` to <html> - the reveal rules apply only then, so a visitor without script (or with
 //      prefers-reduced-motion) sees the finished page, never hidden content;
@@ -176,6 +177,55 @@ export const MOTION_JS = `(function () {
   }, { rootMargin: '0px 0px -8% 0px', threshold: 0.1 });
   root.classList.add('js-motion');
   for (var i = 0; i < items.length; i++) observer.observe(items[i]);
+})();
+(function () {
+  // Layout parts other window sizes show (data-w-lay, hidden here by the stylesheet) wait outside the page, like the
+  // original's other layouts: fewer elements to style and lay out. A resize puts them all back and parks again what
+  // the stylesheet hides at the new width. In a React / Next.js page this waits until the page is hydrated.
+  if (window.__sasKeepLayouts) return;
+  var parts = Array.prototype.slice.call(document.querySelectorAll('[data-w-lay]'));
+  if (!parts.length) return;
+  var parked = [];
+  var park = function () {
+    for (var i = 0; i < parts.length; i++) {
+      var el = parts[i];
+      if (!el.parentNode || window.getComputedStyle(el).display !== 'none') continue;
+      var mark = document.createComment('');
+      el.parentNode.replaceChild(mark, el);
+      parked.push([mark, el]);
+    }
+  };
+  var restore = function () {
+    for (var i = 0; i < parked.length; i++) if (parked[i][0].parentNode) parked[i][0].parentNode.replaceChild(parked[i][1], parked[i][0]);
+    parked = [];
+  };
+  var queued = false;
+  var start = function () {
+    park();
+    window.addEventListener('resize', function () {
+      if (queued) return;
+      queued = true;
+      window.requestAnimationFrame(function () {
+        queued = false;
+        restore();
+        park();
+      });
+    });
+  };
+  var app = document.querySelector('script[type="module"], script[src*="/_next/"]');
+  var hydrated = function () {
+    var keys = Object.keys(parts[0]);
+    for (var k = 0; k < keys.length; k++) if (keys[k].indexOf('__reactFiber') === 0) return true;
+    return false;
+  };
+  if (!app) return start();
+  var tries = 0;
+  var wait = window.setInterval(function () {
+    if (hydrated()) {
+      window.clearInterval(wait);
+      start();
+    } else if (++tries > 100) window.clearInterval(wait);
+  }, 100);
 })();
 `;
 
