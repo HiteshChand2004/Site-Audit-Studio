@@ -107,9 +107,11 @@ test('a project that was never analyzed or recreated still gets a report that sa
   assert.match(res.headers.get('content-security-policy'), /default-src 'none'/);
   assert.equal(res.headers.get('cache-control'), 'no-store');
   const html = await res.text();
-  assert.match(html, /Not analyzed yet/);
-  assert.match(html, /Not recreated yet/);
-  assert.match(html, /Not available/);
+  assert.match(html, /has not been checked yet/);
+  assert.match(html, /What to do next/);
+  assert.match(html, /Check the site/);
+  assert.equal(html.match(/>Not yet</g)?.length, 3, 'the three steps say they have not been done');
+  assert.doesNotMatch(html, /id="speed"/, 'no detail sections without a check');
   assert.doesNotMatch(html, /<script/i);
 });
 
@@ -120,7 +122,7 @@ test('the report holds the original, the recreated site and the checklist, and e
   const res = await fetch(`${base}/${id}/report`);
   const html = await res.text();
   // Parts and sections
-  for (const anchor of ['id="old"', 'id="new"', 'id="fix"', 'id="old-perf"', 'id="old-checks"', 'id="old-links"', 'id="new-fidelity"', 'id="new-build"', 'id="new-manual"']) {
+  for (const anchor of ['id="summary"', 'id="speed"', 'id="search"', 'id="access"', 'id="copy"', 'id="manual"', 'id="about"']) {
     assert.ok(html.includes(anchor), anchor);
   }
   // Values
@@ -128,8 +130,15 @@ test('the report holds the original, the recreated site and the checklist, and e
   assert.match(html, /Plugin bloat/);
   assert.match(html, /Missing on 3 pages/);
   assert.match(html, /https:\/\/www\.acme\.test\/old/);
-  assert.match(html, /Fidelity/);
-  assert.match(html, /react-vite/);
+  assert.match(html, /Match with the original/);
+  assert.match(html, /Almost identical/, 'fidelity 91 in words');
+  assert.ok(html.includes('React + Vite: ready, 88 KB of script'));
+  // Plain words with the expert term next to them, and everything a reader needs on page 1.
+  assert.match(html, /Page descriptions/);
+  assert.ok(html.includes('Main content shows in</b><small class="term">LCP, Largest Contentful Paint'));
+  assert.match(html, /What to do next/);
+  assert.match(html, /Compare the copy with the original/, 'no comparison yet: the next step asks for it');
+  assert.match(html, /Forms? on/);
   // Escaping: neither the project name nor a detail text becomes markup.
   assert.doesNotMatch(html, /<img src=x/);
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt; Acme/);
@@ -137,6 +146,46 @@ test('the report holds the original, the recreated site and the checklist, and e
   assert.match(html, /Many &lt;plugins&gt; load/);
   assert.doesNotMatch(html, /<b>warning<\/b>/);
   assert.doesNotMatch(html, /<script/i);
+});
+
+test('page 1 shows original → copy with Better / Same / Worse in words; the detail lists checks worst first in plain words', () => {
+  const items = [
+    { key: 'lighthouse.unused-css-rules', category: 'performance', title: 'Reduce unused CSS', status: 'regressed', before: { status: 'pass', detail: null }, after: { status: 'fail', detail: 'Est savings of 361 KiB' } },
+    { key: 'lighthouse.bootup-time', category: 'performance', title: 'JavaScript execution time', status: 'fixed', before: { status: 'fail', detail: '3,200 ms' }, after: { status: 'pass', detail: '12 ms' } },
+    { key: 'seo.meta-description.length', category: 'seo', title: 'Meta description: length', status: 'open', review: true, before: { status: 'warn', detail: '4 descriptions <too long>' }, after: { status: 'warn', detail: '2 descriptions' } },
+    { key: 'seo.language', category: 'seo', title: 'Language', status: 'pass', before: { status: 'pass' }, after: { status: 'pass' } },
+    { key: 'seo.https', category: 'seo', title: 'HTTPS', status: 'na', before: { status: 'pass' }, after: { status: 'fail' } },
+    { key: 'axe.color-contrast', category: 'accessibility', title: 'Elements must meet minimum color contrast ratio thresholds', status: 'improved', before: { status: 'fail', detail: '5 elements' }, after: { status: 'fail', detail: '2 elements' } },
+    { key: 'manual.form', category: 'manual', title: 'Form needs a backend', status: 'manual' },
+  ];
+  const checklist = {
+    isDummy: false, status: 'done', reauditedAt: '2026-09-30T12:00:00.000Z', stale: false, items,
+    summary: { regressed: 1, open: 1, changed: 0, recheck: 0, improved: 1, fixed: 1, manual: 1, na: 1, pass: 1 },
+    scores: {
+      before: { mobile: { performance: 61, seo: 92, accessibility: 88, bestPractices: 100 }, desktop: { performance: 80, seo: 92, accessibility: 88, bestPractices: 100 } },
+      after: { mobile: { performance: 50, seo: 100, accessibility: 89, bestPractices: 100 }, desktop: { performance: 95, seo: 100, accessibility: 96, bestPractices: 100 } },
+    },
+    metrics: { before: AUDIT.metricsByDevice, after: { mobile: { loadTime: 1800, lcp: 1500, tbt: 0, cls: 0, pageSize: 400000, requests: 9 }, desktop: null } },
+    scope: { pages: [{ path: '/' }], outOfScope: [] },
+    categories: [],
+  };
+  const html = renderReportHtml({ generatedAt: now(), project: { name: 'X', url: 'https://x.test/' }, audit: { ...AUDIT, recreate: checklist }, analyzed: true, recreate: RECREATE, images: { old: {}, new: {} } });
+  const has = (text, msg) => assert.ok(html.includes(text), msg ?? text);
+  assert.match(html, /61 <i>→<\/i> <b>50<\/b><\/span><svg[^>]*>.*?<\/svg><span class="chg bad">Worse <em>−11<\/em>/, 'phone speed got worse, said in words');
+  has('<span class="chg ok">Better <em>+8</em>');
+  has('<span class="chg none">Same <em>+1</em>', 'within 2 points is the same');
+  has('slower on phones but faster on computers', 'a mixed result is told as such');
+  has('Got worse');
+  has('Unused styling code</b><small class="term">Reduce unused CSS');
+  has('could save 361 KB', 'units made consistent');
+  has('3.2 s');
+  has('review the generated text');
+  has('Text with too little contrast');
+  has('Fine on both (1):</b> Page language');
+  has('Depends on hosting (1)');
+  assert.match(html, /4 descriptions &lt;too long&gt;/);
+  assert.ok(html.indexOf('Unused styling code') < html.indexOf('Time spent running scripts'), 'worse before fixed');
+  assert.match(html, /Look at the 1 check that got worse/);
 });
 
 test('download and JSON formats', async () => {
