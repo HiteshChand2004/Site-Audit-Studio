@@ -203,3 +203,29 @@ test('the equivalence check renders side by side and finds exactly what it finds
   assert.equal(sideBySide.changed.pages[2].difference.view, 'desktop');
   assert.deepEqual(sideBySide.changed.pages.slice(0, 2).map((p) => p.dom), ['equal', 'equal']);
 });
+
+test('responsive image files encoded several at once are the same files, in the same order, as one after the other', async () => {
+  const make = async (dir) => {
+    await mkdir(path.join(dir, 'images'), { recursive: true });
+    for (const [i, w] of [900, 1400, 700].entries()) {
+      // Noise does not compress: every file is well above the 12 KB the variants start at.
+      const raw = Buffer.alloc(w * 500 * 3);
+      for (let k = 0; k < raw.length; k++) raw[k] = (k * 2654435761 + i * 97) % 251;
+      await sharp(raw, { raw: { width: w, height: 500, channels: 3 } }).png().toFile(path.join(dir, 'images', `p${i}.png`));
+    }
+  };
+  const img = (i, rw) => ({ t: 'img', attrs: { src: { asset: `images/p${i}.png` } }, rw, children: [] });
+  const ir = { pages: [{ body: { t: 'body', children: [img(0, { desktop: 600, mobile: 300 }), img(1, { desktop: 1200, laptop: 800, mobile: 340 }), img(2, { desktop: 350 })] } }] };
+  const { makeImageVariants } = await import('../src/recreate/assets/variants.js');
+  const serialDir = await tempDir();
+  const fastDir = await tempDir();
+  await make(serialDir);
+  await make(fastDir);
+  const serial = await withEnv({ SAS_COPY_OPT_IMAGES: '0' }, () => makeImageVariants({ ir, assetsDir: serialDir }));
+  const fast = await makeImageVariants({ ir, assetsDir: fastDir });
+  assert.ok(serial.files.length >= 4, `${serial.files.length} files`);
+  assert.deepEqual(fast.stats, serial.stats);
+  assert.deepEqual([...fast.variants], [...serial.variants]);
+  assert.deepEqual(fast.files, serial.files);
+  for (const f of serial.files) assert.ok((await readFile(path.join(fastDir, f.file))).equals(await readFile(path.join(serialDir, f.file))), `${f.file} has the same bytes`);
+});

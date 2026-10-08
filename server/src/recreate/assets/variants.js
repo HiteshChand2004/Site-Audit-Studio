@@ -6,8 +6,11 @@
 // Animated images, SVG and tiny files are left as they are; a variant that would not be smaller is not written.
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
+import { limiter, mapLimit } from '../../audit/util.js';
+import { optimized } from '../optimize.js';
 
 const RASTER = /\.(jpe?g|png|webp|avif|tiff?)$/i;
 const MIN_BYTES = 12 * 1024; // smaller files gain little and cost a request each
@@ -15,6 +18,11 @@ const QUALITY = 80;
 const AVIF_QUALITY = 55; // AVIF at this quality looks like WebP at 80; an AVIF original stays AVIF (WebP of it is larger)
 const CLOSE = 0.12; // widths closer than this share one file
 const MAX_FILES = 600; // per recreate, a safety cap on the work
+// Images encoded at once (optimize-create-copy, IMAGES): one per CPU_PER_IMAGE threads, at most IMAGES_AT_ONCE. Encoding (AVIF
+// above all) is the slow part, and the images are independent: the files are the same whatever runs next to them.
+const IMAGES_AT_ONCE = 4;
+const CPU_PER_IMAGE = 3;
+const imagesAtOnce = () => Math.max(1, Math.min(IMAGES_AT_ONCE, Math.floor((os.cpus()?.length || 1) / CPU_PER_IMAGE)));
 
 /** Image nodes of the IR pages (outside <picture>, whose sources the page chose itself) with their shown widths. */
 export function imageUses(ir) {
@@ -55,6 +63,7 @@ function pickWidths(wanted, natural) {
  *   files: manifest entries of the new files (assets/manifest.json)
  */
 export async function makeImageVariants({ ir, assetsDir, deadline = Infinity }) {
+  if (optimized('IMAGES')) return makeImageVariantsAtOnce({ ir, assetsDir, deadline });
   const variants = new Map();
   const files = [];
   const stats = { images: 0, files: 0, originalBytes: 0, servedBytes: 0, skipped: 0 };
@@ -102,6 +111,83 @@ export async function makeImageVariants({ ir, assetsDir, deadline = Infinity }) 
     stats.images++;
     stats.originalBytes += input.length;
     stats.servedBytes += largest || input.length;
+  }
+  stats.files = files.length;
+  return { variants, files, stats };
+}
+
+/**
+ * makeImageVariants with several images encoded at once: the same files, written the same way (each encoded buffer goes
+ * through sharp's toFile once more, as above, so the bytes on disk are those of the serial version). An image starts only
+ * before the deadline and while the file cap holds, as above; images keep their order in the results (files, variants,
+ * stats) whatever order they finish in.
+ */
+async function makeImageVariantsAtOnce({ ir, assetsDir, deadline }) {
+  const uses = [...imageUses(ir)].filter(([asset]) => RASTER.test(asset));
+  let reserved = 0; // files the started images may write (their widths)
+  // One limit for every encode of the job (the widths of one image are independent too, and one large image would
+  // otherwise keep a single thread busy while the rest of the machine waits).
+  const encode = limiter(imagesAtOnce());
+  let stopped = false;
+  const results = await mapLimit(uses, imagesAtOnce(), async ([asset, wanted]) => {
+    if (stopped || Date.now() > deadline || reserved >= MAX_FILES) {
+      stopped = true;
+      return null;
+    }
+    const source = path.join(assetsDir, asset);
+    let input;
+    let meta;
+    try {
+      const { size } = await stat(source);
+      if (size < MIN_BYTES) return null;
+      input = await readFile(source);
+      meta = await sharp(input).metadata();
+    } catch {
+      return { skipped: 1 };
+    }
+    if (!meta.width || (meta.pages ?? 1) > 1) return null;
+    const widths = pickWidths(wanted, meta.width);
+    reserved += widths.length;
+    const out = { asset, input, list: [], files: [], largest: 0, skipped: 0 };
+    const avif = meta.format === 'heif' || /\.avif$/i.test(asset);
+    const ext = avif ? 'avif' : 'webp';
+    // Every width encoded and written under the shared limit; the results are taken in width order. A width whose encode or
+    // write fails is skipped, as above.
+    const done = await Promise.all(widths.map((w) => encode(async () => {
+      const resized = sharp(input).resize({ width: w, withoutEnlargement: true });
+      const body = await (avif ? resized.avif({ quality: AVIF_QUALITY, effort: 4 }) : resized.webp({ quality: QUALITY })).toBuffer();
+      // Not smaller than the original at full width: the original file serves that width.
+      if (w >= meta.width * (1 - CLOSE) && body.length >= input.length) return { w, original: true };
+      const file = `${asset.replace(/\.[^./]+$/, '')}-${w}w.${ext}`;
+      await sharp(body).toFile(path.join(assetsDir, file));
+      return { w, body, file };
+    }).catch(() => null)));
+    for (const r of done) {
+      if (!r) out.skipped++;
+      else if (r.original) out.list.push({ asset, w: meta.width });
+      else {
+        const sha256 = createHash('sha256').update(r.body).digest('hex');
+        out.files.push({ file: r.file, kind: 'image', mime: `image/${ext}`, bytes: r.body.length, sha256, urls: [], variantOf: asset, width: r.w });
+        out.list.push({ asset: r.file, w: r.w });
+        out.largest = Math.max(out.largest, r.body.length);
+      }
+    }
+    return out;
+  });
+
+  const variants = new Map();
+  const files = [];
+  const stats = { images: 0, files: 0, originalBytes: 0, servedBytes: 0, skipped: 0 };
+  for (const r of results) {
+    if (!r) continue;
+    stats.skipped += r.skipped;
+    if (!r.list) continue;
+    files.push(...r.files);
+    if (!r.list.length) continue;
+    variants.set(r.asset, r.list.filter((v, i, all) => all.findIndex((x) => x.w === v.w) === i));
+    stats.images++;
+    stats.originalBytes += r.input.length;
+    stats.servedBytes += r.largest || r.input.length;
   }
   stats.files = files.length;
   return { variants, files, stats };

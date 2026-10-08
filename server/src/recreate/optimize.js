@@ -8,7 +8,8 @@
 //   STACK_REF     the stack build inside the job uses the job's own plain-HTML build as its reference when it is the
 //                 same output (export/fromIr.js)
 //   REFINE        the breakpoint / fluid type check renders its pages side by side (verify/refine.js)
-export const OPTIMIZATIONS = ['IMAGE_CACHE', 'EQUIVALENCE', 'SWEEP', 'STACK_REF', 'REFINE'];
+//   IMAGES        responsive image files encoded several images at once (assets/variants.js)
+export const OPTIMIZATIONS = ['IMAGE_CACHE', 'EQUIVALENCE', 'SWEEP', 'STACK_REF', 'REFINE', 'IMAGES'];
 
 /** Is the speed-up `name` (one of OPTIMIZATIONS) on? */
 export const optimized = (name, env = process.env) => env.SAS_COPY_OPTIMIZE !== '0' && env[`SAS_COPY_OPT_${name}`] !== '0';

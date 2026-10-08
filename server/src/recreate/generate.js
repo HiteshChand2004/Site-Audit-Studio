@@ -238,9 +238,11 @@ export async function generateStage(ctx) {
   timer.lap('fixes');
   ctx.progress(0.15, 'Writing pages');
   let { ir, stats } = build();
+  timer.lap('ir');
   // Responsive image files (assets/variants.js), made once from the widths the first build shows each image at.
   ctx.progress(0.17, 'Making responsive images');
   const images = await makeImageVariants({ ir, assetsDir, deadline: Math.min(Date.now() + IMAGES_BUDGET, ctx.stepDeadline - FIT_MARGIN * 3) });
+  timer.lap('images');
   if (images.variants.size) {
     imageVariants = images.variants;
     await addToManifest(assetsDir, images.files, known, ctx.assets);
@@ -248,7 +250,7 @@ export async function generateStage(ctx) {
   }
   let out = emitSite(ir);
   await writeSite(siteDir, out, assetsDir, known);
-  timer.lap('irImages');
+  timer.lap('irWrite');
 
   // Fit pass.
   const fit = { rounds: 0, widthFixes: 0, heightFixes: 0, layoutBefore: null, layoutAfter: null, undone: false, stopped: null };
