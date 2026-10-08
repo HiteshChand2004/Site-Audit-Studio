@@ -197,6 +197,11 @@ export function scriptLoop(loop) {
     const v = (n) => (p.channel === 'x' ? `${n}px 0` : `0 ${n}px`);
     return { keyframes: [{ offset: 0, props: { translate: v(-a) } }, { offset: 100, props: { translate: v(a) } }], timing: { duration: Math.round(p.periodMs / 2), delay: 0, iterations: 'infinite', direction: 'alternate', fill: 'none', easing: 'ease-in-out' } };
   }
+  // A slow fade in and out (a "breathing" card or glow) between the opacities the recording saw.
+  if (loop.pattern === 'oscillate' && p.channel === 'opacity' && p.periodMs >= 400 && Number.isFinite(p.min) && Number.isFinite(p.max) && p.max - p.min >= 0.05) {
+    const o = (n) => String(Math.round(Math.min(1, Math.max(0, n)) * 1000) / 1000);
+    return { keyframes: [{ offset: 0, props: { opacity: o(p.min) } }, { offset: 100, props: { opacity: o(p.max) } }], timing: { duration: Math.round(p.periodMs / 2), delay: 0, iterations: 'infinite', direction: 'alternate', fill: 'none', easing: 'ease-in-out' } };
+  }
   // A ticker moved by script: its items repeat, so it slides by one repeat at the same speed, then starts over (seamless).
   if (loop.pattern === 'drift' && (p.channel === 'x' || p.channel === 'y') && p.rate > 1) {
     const period = Math.abs(Number(p.channel === 'x' ? p.repeat?.x : p.repeat?.y) || Number(p.wrap?.distance) || 0);

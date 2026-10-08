@@ -143,6 +143,116 @@ export function pageClasses(page) {
   return classes;
 }
 
+/** Every character a page can draw: its text, attribute texts a field shows, inline SVG text and CSS `content`. */
+export function pageChars(page, css = '') {
+  const chars = new Set();
+  const add = (s) => {
+    for (const ch of String(s ?? '')) chars.add(ch.codePointAt(0));
+  };
+  const walk = (n) => {
+    if (!n) return;
+    if ('text' in n) return add(n.text);
+    if (n.raw) add(n.raw.replace(/<[^>]*>/g, ' '));
+    for (const k of ['value', 'placeholder']) if (typeof n.attrs?.[k] === 'string') add(n.attrs[k]);
+    (n.children ?? []).forEach(walk);
+  };
+  walk(page.body);
+  for (const m of css.matchAll(/content:\s*("([^"]*)"|'([^']*)')/g)) add((m[2] ?? m[3] ?? '').replace(/\\([0-9a-fA-F]{1,6})\s?/g, (_, h) => String.fromCodePoint(parseInt(h, 16))));
+  return chars;
+}
+
+// "U+0000-00FF, U+0131, U+0??" → [[from, to], …]
+const parseRange = (text) => String(text).split(',').map((r) => r.trim().replace(/^U\+/i, '')).filter(Boolean).map((r) => {
+  if (r.includes('?')) return [parseInt(r.replace(/\?/g, '0'), 16), parseInt(r.replace(/\?/g, 'F'), 16)];
+  const [a, b = a] = r.split('-');
+  return [parseInt(a, 16), parseInt(b, 16)];
+}).filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b));
+
+const WEIGHT_WORDS = { normal: 400, bold: 700 };
+
+/** How many of the characters a face's unicode-range holds (all of them without a range). */
+export function charsCovered(face, chars) {
+  if (!face.unicodeRange) return chars.size;
+  const ranges = parseRange(face.unicodeRange);
+  if (!ranges.length) return chars.size;
+  let n = 0;
+  for (const c of chars) if (ranges.some(([a, b]) => c >= a && c <= b)) n++;
+  return n;
+}
+
+/**
+ * The @font-face rules a page's stylesheet needs: families its rules name, subsets (unicode-range) holding a character
+ * the page draws, and weights / styles its rules use (400 and 700 always: the defaults of text and headings; a relative
+ * weight keeps them all). A face left out is a face the page never loads.
+ */
+export function pageFontFaces(faces, page, sheet) {
+  const css = sheet + inlineStyles(page.body);
+  const named = faces.filter((f) => css.includes(f.family));
+  const chars = pageChars(page, css);
+  const weights = new Set([400, 700]);
+  let anyWeight = /font-weight:\s*(bolder|lighter|var\(|inherit|revert|unset|initial)/.test(css);
+  for (const m of css.matchAll(/font-weight:\s*([\w-]+)/g)) {
+    const w = WEIGHT_WORDS[m[1]] ?? Number(m[1]);
+    if (Number.isFinite(w)) weights.add(w);
+  }
+  for (const m of css.matchAll(/font:\s*([^;}]*)/g)) {
+    for (const t of m[1].split(/\s+/)) if (/^[1-9]00$/.test(t) || t in WEIGHT_WORDS) weights.add(WEIGHT_WORDS[t] ?? Number(t));
+  }
+  if (/font-variation-settings/.test(css)) anyWeight = true;
+  const italic = /font-style:\s*(italic|oblique)|font:[^;}]*\b(italic|oblique)\b/.test(css) || hasTag(page.body, /^(em|i|cite|var|dfn|address)$/);
+  const range = (f) => {
+    const [lo, hi = lo] = String(f.weight ?? 'normal').split(/\s+/).map((t) => WEIGHT_WORDS[t] ?? Number(t));
+    return Number.isFinite(lo) && Number.isFinite(hi) ? [lo, hi] : null;
+  };
+  // Per family and style: the faces the browser's weight matching picks for a used weight (a missing 300 falls back to
+  // the nearest lighter face, so that face stays).
+  const keepWeight = new Set();
+  const groups = new Map();
+  for (const f of named) {
+    const key = `${f.family}|${/italic|oblique/.test(f.style ?? '') ? 'i' : 'n'}`;
+    groups.set(key, [...(groups.get(key) ?? []), f]);
+  }
+  for (const list of groups.values()) {
+    if (anyWeight || list.some((f) => !range(f))) {
+      list.forEach((f) => keepWeight.add(f));
+      continue;
+    }
+    for (const w of weights) {
+      const lo = (f) => range(f)[0];
+      const hi = (f) => range(f)[1];
+      let pick = list.filter((f) => lo(f) <= w && w <= hi(f));
+      if (!pick.length) {
+        const below = list.filter((f) => hi(f) < w).sort((a, b) => hi(b) - hi(a));
+        const above = list.filter((f) => lo(f) > w).sort((a, b) => lo(a) - lo(b));
+        const near = (arr, end) => (arr.length ? arr.filter((f) => end(f) === end(arr[0])) : []);
+        if (w >= 400 && w <= 500) {
+          const upTo500 = above.filter((f) => lo(f) <= 500);
+          pick = upTo500.length ? near(upTo500, lo) : below.length ? near(below, hi) : near(above, lo);
+        } else if (w < 400) pick = below.length ? near(below, hi) : near(above, lo);
+        else pick = above.length ? near(above, lo) : near(below, hi);
+      }
+      pick.forEach((f) => keepWeight.add(f));
+    }
+  }
+  return named.filter((f) => {
+    if (f.unicodeRange && chars.size) {
+      const ranges = parseRange(f.unicodeRange);
+      if (ranges.length && ![...chars].some((c) => ranges.some(([a, b]) => c >= a && c <= b))) return false;
+    }
+    // Italic faces of a family that has upright ones are needed only for italic text.
+    if (/italic|oblique/.test(f.style ?? '') && !italic && named.some((g) => g.family === f.family && !/italic|oblique/.test(g.style ?? ''))) return false;
+    return keepWeight.has(f);
+  });
+}
+
+const inlineStyles = (n) => (!n || 'text' in n ? '' : `${typeof n.attrs?.style === 'string' ? `;${n.attrs.style}` : ''}${(n.children ?? []).map(inlineStyles).join('')}`);
+
+function hasTag(n, re) {
+  if (!n || 'text' in n) return false;
+  if (re.test(n.tag ?? '')) return true;
+  return (n.children ?? []).some((c) => hasTag(c, re));
+}
+
 const selectorClass = (selector) => selector.match(/^\.(-?[_a-zA-Z][\w-]*)/)?.[1] ?? null;
 
 /**
@@ -170,7 +280,7 @@ export function emitCss(ir, { page = null, usedVars = usedCustomProps(ir) } = {}
   // A page's stylesheet keeps the @keyframes and @font-face its rules name.
   const names = page && new Set(all.match(/[\w-]+/g));
   const keyframes = page ? ir.keyframes.filter((k) => names.has(k.name)) : ir.keyframes;
-  const fontFaces = page ? ir.fontFaces.filter((f) => all.includes(f.family)) : ir.fontFaces;
+  const fontFaces = page ? pageFontFaces(ir.fontFaces, page, all) : ir.fontFaces;
   const sections = [
     `/* ${ir.siteName}: generated by Site Audit Studio from the rendered site. */`,
     used.length ? `:root {\n${used.map(([n, v]) => `  ${n}: ${v};`).join('\n')}\n}` : '',

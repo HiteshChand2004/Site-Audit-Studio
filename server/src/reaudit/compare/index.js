@@ -165,10 +165,17 @@ function linkItems({ oldLinks, newLinks, oldScopeLinks, map }) {
 const LH_CATEGORIES = ['performance', 'best-practices'];
 const LH_MODES = new Set(['binary', 'numeric', 'metricSavings']);
 
-/** audit id → { score (worst of mobile/desktop), title, detail, category } for failing-capable audits. */
+// What an audit measured, lower = better: its value (elements, ms, bytes) or else the time it says could be saved.
+const measured = (a) => {
+  if (Number.isFinite(a.numericValue)) return { value: a.numericValue, unit: a.numericUnit ?? '' };
+  const saved = Object.values(a.metricSavings ?? {}).filter(Number.isFinite);
+  return saved.length ? { value: saved.reduce((x, y) => x + y, 0), unit: 'savings' } : null;
+};
+
+/** audit id → { score (worst of mobile/desktop), title, detail, category, values per device } for failing-capable audits. */
 function lighthouseAudits(lh) {
   const out = new Map();
-  for (const lhr of [lh.mobile, lh.desktop]) {
+  for (const [device, lhr] of [['mobile', lh.mobile], ['desktop', lh.desktop]]) {
     if (!lhr?.categories) continue;
     for (const category of LH_CATEGORIES) {
       for (const ref of lhr.categories[category]?.auditRefs ?? []) {
@@ -176,13 +183,32 @@ function lighthouseAudits(lh) {
         const a = lhr.audits?.[ref.id];
         if (!a || !LH_MODES.has(a.scoreDisplayMode) || typeof a.score !== 'number') continue;
         const prev = out.get(ref.id);
+        const values = { ...prev?.values, ...(measured(a) && { [device]: measured(a) }) };
         if (!prev || a.score < prev.score) {
-          out.set(ref.id, { score: a.score, title: a.title, detail: a.displayValue || null, category, cpuTiming: isCpuTiming(a) });
-        }
+          out.set(ref.id, { score: a.score, title: a.title, detail: a.displayValue || null, category, cpuTiming: isCpuTiming(a), values });
+        } else prev.values = values;
       }
     }
   }
   return out;
+}
+
+// A failing audit on both sides that still moved: lower on every device both measured by the margin or more = better,
+// higher on one by the margin = worse. Times and bytes vary from run to run (10 %); an element count does not (2 %).
+export function lighthouseTrend(before, after) {
+  const ratios = [];
+  let margin = 0.02;
+  for (const d of ['mobile', 'desktop']) {
+    const b = before?.values?.[d];
+    const a = after?.values?.[d];
+    if (!b || !a || b.unit !== a.unit || !(b.value > 0)) continue;
+    ratios.push(a.value / b.value);
+    if (b.unit !== 'element') margin = 0.1;
+  }
+  if (!ratios.length) return null;
+  if (ratios.some((r) => r >= 1 + margin)) return 'worse';
+  if (ratios.every((r) => r <= 1 - margin)) return 'better';
+  return null;
 }
 
 function lighthouseItems(oldLh, newLh) {
@@ -204,6 +230,7 @@ function lighthouseItems(oldLh, newLh) {
       before: o.size ? before ?? { status: 'pass', rank: 0 } : null,
       after: n.size ? after ?? { status: 'pass', rank: 0 } : null,
       ...((o.get(id)?.cpuTiming || n.get(id)?.cpuTiming) && { cpuTiming: true }),
+      ...(lighthouseTrend(o.get(id), n.get(id)) && { trend: lighthouseTrend(o.get(id), n.get(id)) }),
     });
   }
   return items;
@@ -301,7 +328,10 @@ function finish(item, report) {
   if (item.status === 'manual') return item;
   if (item.status === 'recheck') return item;
   let status = DEPLOY_CHECKS.has(item.key) ? 'na' : classify(item.before, item.after);
-  const out = { ...item, status };
+  // Same severity on both sides, but the measured value moved clearly (fewer elements, fewer KiB to save, …).
+  if (status === 'open' && item.trend) status = item.trend === 'better' ? 'improved' : 'regressed';
+  const { trend, ...kept } = item;
+  const out = { ...kept, status };
   if (DEPLOY_CHECKS.has(item.key)) out.note = DEPLOY_NOTE;
   else if (!item.after) out.note = 'Not measured on the recreated site.';
   else if (!item.before) out.note = 'Not measured on the original site.';

@@ -134,6 +134,8 @@ async function snapshotOnce(renderer, outPath, viewId, urlMap = null) {
 async function hydrationCheck(origin, outPath, browser, sigMap = null) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, javaScriptEnabled: true, serviceWorkers: 'block' });
   await context.route('**/*', (route) => (route.request().url().startsWith(`${origin}/`) ? route.continue() : route.abort('blockedbyclient')));
+  // Compared as rendered by the app: the generated script's layout parking (js/motion.js) is a later change of its own.
+  await context.addInitScript(() => { window.__sasKeepLayouts = true; });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e.message ?? e).slice(0, 300)));

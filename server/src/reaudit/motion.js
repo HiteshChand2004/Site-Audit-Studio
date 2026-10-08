@@ -101,6 +101,11 @@ function overlap(a, b) {
 const hoverKey = (h) => `${h.tag}|${String(h.text ?? '').toLowerCase().replace(/\s+/g, '').slice(0, 40)}`;
 // Names the two loop probes give the same motion (a recorded path vs the rebuilt keyframes).
 const PATTERN_FAMILY = { oscillate: 'float', float: 'float', sway: 'float', drift: 'marquee', marquee: 'marquee', ticker: 'marquee', spin: 'spin' };
+// A fade in and out: the original's script-driven opacity oscillation, rebuilt as an opacity-only CSS animation
+// (a small span classifies as 'other', a big one as 'blink').
+const fades = (l) => (l.pattern === 'oscillate' && l.params?.channel === 'opacity') || l.pattern === 'blink'
+  || (l.pattern === 'other' && (l.params?.properties ?? []).length > 0 && l.params.properties.every((p) => p === 'opacity'));
+const loopFamily = (l) => (fades(l) ? 'fade' : PATTERN_FAMILY[l.pattern] ?? l.pattern);
 
 /** What the comparison counts on one side. */
 export function summarize(motion) {
@@ -113,7 +118,7 @@ export function summarize(motion) {
     hover: { keys: hover.map(hoverKey), props: new Map(hover.map((h) => [hoverKey(h), Object.keys(h.changes ?? {})])) },
     // By pattern family only: a loop the original drove with script has no duration (and is named from its recorded path),
     // while its rebuilt CSS animation has one (and is named from its keyframes).
-    loops: { keys: loops.map((l) => PATTERN_FAMILY[l.pattern] ?? l.pattern), count: loops.length },
+    loops: { keys: loops.map(loopFamily), count: loops.length },
   };
 }
 

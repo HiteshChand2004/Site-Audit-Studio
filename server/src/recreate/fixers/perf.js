@@ -14,6 +14,7 @@ import { checkLinks } from '../../audit/linkChecker.js';
 import { urlKey } from '../../audit/util.js';
 import { isElement, isText } from '../ir/tree.js';
 import { KNOWN_VIEWS } from '../views.js';
+import { charsCovered, pageChars } from '../emit/css.js';
 
 // The first screen of each captured view (a view missing here would count every image as "below the fold").
 const FOLD = Object.fromEntries(KNOWN_VIEWS.map((v) => [v.id, v.height]));
@@ -155,8 +156,10 @@ export function fixLoading(t) {
     return views.length > 0 && views.every((v) => n.views[v].rect[1] >= FOLD[v]);
   };
   let lazy = 0;
+  let unfaded = 0;
   for (const img of images) {
     if (priority.has(img)) {
+      unfaded += dropEntrance(t.root, img);
       img.attrs.fetchpriority = 'high';
       img.attrs.loading = 'eager';
       delete img.attrs.decoding;
@@ -177,7 +180,136 @@ export function fixLoading(t) {
     priority: [...priority].map((img) => ({ page: t.info.path, src: img.src ?? img.attrs.src ?? null })),
     lazy,
     lazyFrames,
+    unfaded,
   };
+}
+
+const clips = (d) => ['overflow', 'overflow-x', 'overflow-y'].some((p) => /hidden|clip/.test(d.style?.[p] ?? '')) || /strict|paint|size/.test(d.style?.contain ?? '');
+// No view shows this box: hidden, or a box of no size that clips what it holds (a builder's sprite sheet).
+const neverShown = (n, own) => {
+  const views = Object.values(n.views ?? {}).filter(Boolean);
+  if (!views.length) return false;
+  return views.every((d) => d.hidden || (own ? !(d.rect?.[2] > 0 && d.rect?.[3] > 0) : (d.rect?.[2] <= 1 || d.rect?.[3] <= 1) && clips(d)));
+};
+
+/**
+ * Hidden icon sheets: inline SVGs with an id that no view shows (inside a clipping box of no size, or hidden) and that
+ * nothing on the page uses (`<use href="#id">`, `url(#id)`, a link or ARIA reference to an id inside them). The page
+ * draws the same; each removed SVG is DOM the browser no longer builds. Returns the number removed.
+ */
+export function pruneSprites(t) {
+  const refs = new Set();
+  const scan = (text, into = refs) => {
+    for (const m of String(text).matchAll(/#([A-Za-z_][\w:.-]*)/g)) into.add(m[1]);
+  };
+  const idsIn = (n) => [n.attrs.id, ...[...String(n.svg ?? '').matchAll(/\sid\s*=\s*["']([^"']+)["']/g)].map((m) => m[1])];
+  const scanIdList = (text) => {
+    for (const id of String(text).split(/\s+/)) if (id) refs.add(id);
+  };
+  const candidates = [];
+  const visit = (n, clipped) => {
+    if (!isElement(n)) return;
+    for (const [k, v] of Object.entries(n.attrs ?? {})) {
+      if (typeof v !== 'string') continue;
+      if (/^(for|list|form|headers|aria-[a-z]+)$/.test(k)) scanIdList(v);
+      else if (v.includes('#')) scan(v);
+    }
+    for (const d of Object.values(n.views ?? {})) for (const v of Object.values(d?.style ?? {})) if (String(v).includes('#')) scan(v);
+    if (n.tag === 'svg') {
+      // A sheet's own references (a gradient of one of its icons) count only once that icon is used.
+      if (n.attrs?.id && (clipped || neverShown(n, true))) {
+        const own = new Set();
+        scan(n.svg ?? '', own);
+        candidates.push({ n, own, ids: idsIn(n) });
+      } else scan(n.svg ?? '');
+      return;
+    }
+    const hides = clipped || neverShown(n, false);
+    for (const c of n.children ?? []) visit(c, hides);
+  };
+  visit(t.root, false);
+  const used = new Set();
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const c of candidates) {
+      if (used.has(c) || !c.ids.some((id) => refs.has(id))) continue;
+      used.add(c);
+      for (const r of c.own) refs.add(r);
+      grew = true;
+    }
+  }
+  const unused = new Set(candidates.filter((c) => !used.has(c)).map((c) => c.n));
+  if (!unused.size) return 0;
+  const drop = (n) => {
+    if (!isElement(n) || !n.children) return;
+    n.children = n.children.filter((c) => !unused.has(c));
+    for (const c of n.children) drop(c);
+  };
+  drop(t.root);
+  return unused.size;
+}
+
+const MIN_LAYOUT_PART = 3; // elements: smaller parts are not worth parking
+const SCRIPT_OWNED = /^data-w-(set|i|go|note|note-of|auto|hcopy|hrest|hv|one|tpl)$/;
+
+/**
+ * Parts of a layout only some window sizes show (a builder's desktop-only row, a phone-only menu button): marked
+ * `data-w-lay`, so the generated script takes the ones hidden at the visitor's width out of the page after it loads and
+ * puts them back when the window changes (js/motion.js). The original site's script does the same with its other
+ * layouts; without script the page keeps every part, hidden by the stylesheet as before. Parts the script switches
+ * (states, panels, notices, hover looks) are left alone. Returns how many parts were marked.
+ */
+export function markLayouts(t) {
+  const views = Object.keys(t.root.views ?? {});
+  if (views.length < 2) return 0;
+  const size = (n) => (isElement(n) ? 1 + n.children.reduce((s, c) => s + size(c), 0) : 0);
+  const owned = (n) => isElement(n) && (Object.keys(n.attrs ?? {}).some((k) => SCRIPT_OWNED.test(k) || k === 'hidden')
+    || (n.motionTokens ?? []).some((tok) => /^w/.test(tok)) || n.tag === 'template' || n.children.some(owned));
+  let marked = 0;
+  const visit = (n) => {
+    if (!isElement(n) || n.tag === 'svg' || n.tag === 'template') return;
+    const shownIn = views.filter((v) => n.views?.[v] && !n.views[v].hidden);
+    if (shownIn.length && shownIn.length < views.length && size(n) >= MIN_LAYOUT_PART && !owned(n)) {
+      n.attrs['data-w-lay'] = '';
+      marked++;
+      return;
+    }
+    for (const c of n.children) visit(c);
+  };
+  for (const c of t.root.children ?? []) visit(c);
+  return marked;
+}
+
+// Reveal / page-load entrance tokens (ir/motion.js): the effect, its stagger delay, replay.
+const ENTRANCE = /^(rv|rl|rp|r\d+|d\d+)$/;
+
+/**
+ * The main image of the first screen shows at once: an entrance fade on it or on a box around it holds the largest
+ * paint back until the fade ends (render delay of "main content shows in"). Returns how many boxes lost one.
+ */
+function dropEntrance(root, target) {
+  const chain = [];
+  const find = (n) => {
+    if (n === target) return true;
+    for (const c of n.children ?? []) {
+      if (c && typeof c === 'object' && find(c)) {
+        chain.push(c);
+        return true;
+      }
+    }
+    return false;
+  };
+  if (!find(root)) return 0;
+  chain.push(root);
+  let count = 0;
+  for (const n of chain) {
+    const before = n.motionTokens?.length ?? 0;
+    if (!before) continue;
+    n.motionTokens = n.motionTokens.filter((tok) => !ENTRANCE.test(tok));
+    if (n.motionTokens.length < before) count++;
+    if (!n.motionTokens.length) delete n.motionTokens;
+  }
+  return count;
 }
 
 const swappedFrom = new WeakMap();
@@ -223,9 +355,13 @@ export function fixFonts(ir) {
     visit(page.body, familyOf.get(page.html?.class ?? '') ?? null);
     const families = [...weight].sort((a, b) => b[1] - a[1]).slice(0, MAX_FONT_PRELOADS).map(([f]) => f);
     const list = [];
+    const chars = pageChars(page);
     for (const family of families) {
       const faces = ir.fontFaces.filter((f) => f.family.toLowerCase() === family && (!f.style || f.style === 'normal') && f.src.length);
-      const face = faces.sort((a, b) => Math.abs(Number(a.weight || 400) - 400) - Math.abs(Number(b.weight || 400) - 400))[0];
+      // The subset holding most of the page's text (a Latin face, not a Cyrillic one), then the weight nearest 400.
+      const cover = new Map(faces.map((f) => [f, charsCovered(f, chars)]));
+      const face = faces.sort((a, b) => cover.get(b) - cover.get(a) || Math.abs(Number(a.weight || 400) - 400) - Math.abs(Number(b.weight || 400) - 400))[0];
+      if (face && !cover.get(face) && chars.size) continue;
       if (!face) continue;
       const src = face.src.find((s) => /woff2/.test(s.format ?? s.asset)) ?? face.src[0];
       const type = /\.woff2$/.test(src.asset) ? 'font/woff2' : /\.woff$/.test(src.asset) ? 'font/woff' : null;
