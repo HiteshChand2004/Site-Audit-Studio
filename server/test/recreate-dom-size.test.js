@@ -83,8 +83,8 @@ test('layout parts other window sizes show are marked; the script parks them and
   const both = { tag: 'div', attrs: {}, views: views(true, true), children: [leaf(true, true), leaf(true, true)] };
   const root = { tag: 'body', attrs: {}, views: views(true, true), children: [desktopRow, state, both] };
   assert.equal(markLayouts({ root }), 1);
-  assert.ok('data-w-lay' in desktopRow.attrs);
-  assert.ok(!('data-w-lay' in state.attrs) && !('data-w-lay' in both.attrs));
+  assert.ok('data-w-lay' in desktopRow.stateAttrs);
+  assert.ok(!('data-w-lay' in (state.stateAttrs ?? {})) && !('data-w-lay' in (both.stateAttrs ?? {})));
 
   const browser = await chromium.launch();
   try {

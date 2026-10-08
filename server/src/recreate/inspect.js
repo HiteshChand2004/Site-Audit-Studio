@@ -193,8 +193,8 @@ export async function inspectStage(ctx) {
       const until = Math.min(pageLimit(), Date.now() + Math.max(ctx.pageCapMin ?? PAGE_CAP_MIN, slowest * PAGE_CAP_FACTOR));
       let timer;
       const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), Math.max(1000, until - Date.now())); });
-      const r = await Promise.race([capture, timeout]);
-      clearTimeout(timer);
+      // Cleared also when the capture throws (else its timer kept the process alive for minutes).
+      const r = await Promise.race([capture, timeout]).finally(() => clearTimeout(timer));
       if (r === null) abandoned.push(capture.catch(() => {}));
       return r;
     };

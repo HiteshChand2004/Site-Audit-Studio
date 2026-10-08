@@ -263,14 +263,14 @@ export function markLayouts(t) {
   const views = t.views ?? Object.keys(t.root.views ?? {});
   if (views.length < 2) return 0;
   const size = (n) => (isElement(n) ? 1 + n.children.reduce((s, c) => s + size(c), 0) : 0);
-  const owned = (n) => isElement(n) && (Object.keys(n.attrs ?? {}).some((k) => SCRIPT_OWNED.test(k) || k === 'hidden')
+  const owned = (n) => isElement(n) && (Object.keys({ ...n.attrs, ...n.stateAttrs }).some((k) => SCRIPT_OWNED.test(k) || k === 'hidden')
     || (n.motionTokens ?? []).some((tok) => /^w/.test(tok)) || n.tag === 'template' || n.children.some(owned));
   let marked = 0;
   const visit = (n) => {
     if (!isElement(n) || n.tag === 'svg' || n.tag === 'template') return;
     const shownIn = views.filter((v) => n.views?.[v] && !n.views[v].hidden);
     if (shownIn.length && shownIn.length < views.length && size(n) >= MIN_LAYOUT_PART && !owned(n)) {
-      n.attrs['data-w-lay'] = '';
+      n.stateAttrs = { ...n.stateAttrs, 'data-w-lay': '' }; // generated attributes reach the IR this way (ir/index.js)
       marked++;
       return;
     }
