@@ -2,6 +2,7 @@ import { ArrowRight, Trophy } from 'lucide-react';
 import { Card } from '../common/Surface.jsx';
 import { Pill } from '../common/Score.jsx';
 import InfoTip from '../common/InfoTip.jsx';
+import CountUp from '../common/CountUp.jsx';
 import { CHECKS, HEALTH, matchRating, RESULT_STATUS, TERMS } from '../../copy.js';
 import { plural } from '../../format.js';
 import styles from './Outcome.module.css';
@@ -47,7 +48,9 @@ export default function Outcome({ result, comparison }) {
             ['manual', s.manual ?? 0, 'neutral', RESULT_STATUS.manual.label, RESULT_STATUS.manual.explain],
           ].map(([id, n, tone, label, tip]) => (
             <li key={id} data-tone={tone}>
-              <strong>{n}</strong>
+              <strong>
+                <CountUp value={n} />
+              </strong>
               <span>
                 {label}
                 <InfoTip label={label}>{tip}</InfoTip>

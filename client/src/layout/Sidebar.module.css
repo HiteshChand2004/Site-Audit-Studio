@@ -495,3 +495,10 @@
     display: none;
   }
 }
+
+@media (max-width: 900px) {
+  .brandSub,
+  .legend {
+    display: none;
+  }
+}

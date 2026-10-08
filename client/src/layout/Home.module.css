@@ -279,12 +279,15 @@
   transform: translate(2px, -2px);
 }
 
+/* Hairlines between the scores come from the 1px gaps over a hairline background. */
 .scores {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
   border-radius: 10px;
-  background: var(--surface-2);
-  box-shadow: inset 0 0 0 1px var(--hairline);
+  background: var(--hairline-strong);
+  box-shadow: 0 0 0 1px var(--hairline-strong);
 }
 
 .mini {
@@ -295,8 +298,8 @@
   padding: 9px 10px 8px;
 }
 
-.mini + .mini {
-  border-left: 1px solid var(--hairline);
+.mini {
+  background: var(--surface-2);
 }
 
 .miniLabel {
@@ -408,8 +411,12 @@
   font-size: var(--fs-sm);
 }
 
+.card[data-featured] .scores {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .card[data-featured] .mini {
-  padding: 12px 12px 10px;
+  padding: 12px 14px 10px;
 }
 
 .card[data-featured] .miniValue {
@@ -536,6 +543,7 @@
   position: relative;
   min-width: 0;
   display: grid;
+  align-content: start;
   gap: var(--sp-4);
   animation: var(--k-rise) 520ms var(--ease) both;
 }
@@ -546,6 +554,7 @@
   justify-content: center;
   min-width: 0;
   aspect-ratio: 16 / 10;
+  overflow: hidden;
   padding: 18px 26px;
   border-radius: 14px;
   background:
@@ -563,6 +572,7 @@
 .howArt svg {
   width: 100%;
   max-width: 200px;
+  max-height: 100%;
 }
 
 .howText {
@@ -670,5 +680,19 @@
 
   .how {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .title {
+    font-size: 30px;
+  }
+
+  .kpi dd {
+    font-size: 28px;
+  }
+
+  .hero {
+    padding: 28px;
   }
 }

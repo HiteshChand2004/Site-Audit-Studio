@@ -75,7 +75,7 @@ function SiteCard({ project, featured = false, index }) {
       data-featured={featured || undefined}
       style={{ animationDelay: `${120 + index * 60}ms` }}
       onClick={() => select(project.id)}
-      aria-label={`Open ${host}`}
+      aria-label={`Open ${host}${loaded ? `, ${statusLine(data)}` : ""}`}
     >
       <div className={styles.cardMedia}>
         {loaded ? (

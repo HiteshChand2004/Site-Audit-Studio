@@ -3,7 +3,7 @@
 Internal tool: keeps all company websites in one place, audits them and recreates an improved version in a chosen stack.
 Company-owned or authorized sites only.
 
-## Layout (3 columns)
+## Layout (3 columns; since the UI revamp: sidebar + home gallery + one dashboard per website, see "UI revamp (dashboard)")
 - **Sidebar**: "New Project" + saved websites; clicking one loads it into OLD.
 - **OLD panel**: URL + Analyze → preview (sandboxed iframe, or the Analyze screenshot when framing is blocked; Live/Shot toggle; 1440/768/375) →
   performance metrics → audit report (tech stack + confidence, weaknesses, SEO, AEO, meta/sitemap/robots, broken links, a11y, "manual rebuild needed") → Recreate + stack settings.
@@ -100,6 +100,28 @@ on slow networks / busy machines (all steps serial, one budget, Lighthouse last)
   A project without analysis/recreate still gets a report that says so.
 - Analysis screenshots use `animations: 'allow'` (`audit/screenshots.js`): `'disabled'` stacked every word of a cycling headline (panscience). Older analyses need Analyze again.
 - Client: `components/report/ReportModal.jsx` (+ css), `api.getReportHtml/getReportJson/getReportPdf`. Tests: `report.test.js` (404, empty project, all sections + escaping, download/JSON, thumbnails, real PDF).
+
+### UI revamp (dashboard) — branch `ui-revamp` (worktree `../Website-Audit-uirevamp`, from `fix-all`), WIP, client only
+Asked by the user: look like a real, professionally built product (not AI-generated), images + motion, keep the orange theme, and above all **organised** content. Layout chosen: a **website dashboard**. Steps R1–R4, WIP commit each.
+- **Shell**: sidebar = mark (`common/Illustrations.jsx LogoMark`), "All websites" (home), "Add a website", search, each site's favicon + three progress marks
+  (`site/Site.jsx StageDots`: checked · copy made · compared; running = moving, got worse = amber), pulsing dot while a job runs; rail when collapsed (Ctrl+B).
+  Slim top bar in the main column: breadcrumb, Full report, the authorization note (short form < 1180 px, full text still read by screen readers).
+- **Data**: `store/useProjects.js` `overviews[id] = { audit, recreate }` for every site (GET only, refreshed by `goHome` and whenever the open site's audit / copy reloads); `goHome()` (remembered as
+  `wa:lastProject = 'home'`; the app opens on the last site or home). Screenshot URLs of an audit are rewritten to the project's current id (`normalizeAudit`: an imported project kept its old id in them, 404).
+  `siteData.js`: `originalShot` (Analyze desktop fold, else the copy step's capture), `captureShot`, `copyShot` (fidelity picture), `scoresOf`, `stagesOf`, `outcomeCounts`, `useSiteData(id)`.
+- **Home** (`layout/Home.jsx`): welcome band (warm mesh drifting slowly + grain, totals with count-up), gallery (most recent site with a copy = wide card with the copy overlapping its picture; cards = screenshot in a browser frame,
+  phone scores of the copy with the change against the original, progress marks), dashed "Add a website" card, "How it works" with four drawn illustrations (`CheckArt`, `CopyArt`, `CompareArt`, `ResultsArt`).
+- **Website dashboard** (`layout/Workspace.jsx` + `SiteHero.jsx`): one scroll area; hero (favicon, name, address, facts, counts better / still open / got worse / for a person, the next action: Check the site →
+  Create the copy → Download the site (direct when the project's stack build is ready and safe, else Results), Check again; real screenshot with the copy overlapping; scores copy vs original with Phone / Computer and bars).
+  Sticky section tabs **Overview | Check | Copy | Compare | Results** (`common/Tabs.jsx SectionTabs`, arrows / Home / End; status per tab from the same `stepStates`); on every section but Overview the hero is one compact row.
+  Opens on Overview unless a check / copy is running. `steps/OverviewStep.jsx`: plain summary, original vs copy pictures + match, what still needs a look (comparison, else the check's problems), progress timeline, facts;
+  a site not checked yet gets the four steps with "Check the site".
+- **Sections**: Check = health tiles (ring + meaning), speed in a hairline grid, "On this page" jump links above the sticky original preview. Copy = settings next to the last copy (picture, pages, match), stages joined by a line
+  (folded once a copy exists). Compare = strip of every page (capture picture + match), the copy frame has its own Live / Picture (picture = fidelity shot; picture first when the app is not on :5173, because the preview
+  server's frame-ancestors only allows the app's address). Results = `recreate/PageGallery.jsx` (original + copy picture per page, 6 then "Show all", click opens Compare on that page).
+- **Look**: tokens added (`--canvas`, `--surface-warm`, `--hairline(-strong)`, `--elev-1..3`, `--elev-accent`, `--mesh-hero`, `--grain`, `--fs-3xl`, `--fs-display`, `--radius-xl`, keyframes `sas-rise / slide-in / skeleton / draw`);
+  `.skeleton`, `.eyebrow`, `.tabular` in global.css. Cards = hairline + soft elevation, icons without tiles, folds quiet; modal backdrop neutral. All motion off under `prefers-reduced-motion`.
+- Checked with Playwright at 1440×900, 1024×768 and 768×1024 (home, every site and section, a site never checked, modals, collapsed rail, keyboard on the tabs): no console errors; `npm run build -w client` passes.
 
 ### UI redesign (calm light theme, guided steps) — branch `ui-redesign` (worktree `../Website-Audit-ui`), WIP, merged into `phase-4a`
 Asked by the user: the vibrant look and crowded two panels were hard to read → light theme, organised data, tasteful motion, wording a non-technical person understands. Decisions (user): **guided steps**
