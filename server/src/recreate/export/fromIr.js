@@ -11,6 +11,8 @@ import { toolchainStatus } from '../../toolchains/index.js';
 import { RecreateError } from '../errors.js';
 import { getEmitter } from '../emit/index.js';
 import { writeProject } from '../emit/write.js';
+import { emitSite } from '../emit/html.js';
+import { buildDist } from '../build/minify.js';
 import { recreateDir } from '../workspace.js';
 
 const refuse = (status, message) => Object.assign(new RecreateError(message), { status });
@@ -76,18 +78,34 @@ export async function buildStackOutput({ dir, stack, report, signal, progress })
 
   const target = path.join(dir, 'stacks', stack);
   const tmp = `${target}.tmp`;
+  const reference = path.join(dir, 'stacks', `${stack}.html-ref.tmp`);
   await rm(tmp, { recursive: true, force: true });
   try {
     const out = emitter.emit(ir, {});
     await writeProject(tmp, out, { assetsDir: path.join(dir, 'assets'), known, assetsTarget: emitter.assetsTarget });
     const assets = [...out.assets].filter((f) => known.has(f));
-    const built = (await emitter.build?.({ dir: tmp, ir, out, assets, report, htmlDist: path.join(dir, 'dist'), ...(signal && { signal }), ...(progress && { progress }) })) ?? {};
+    // The stack is checked against the plain-HTML build of the same IR written by this same code: the dist/ of the
+    // recreate may come from an older version of the emitter (a copy made yesterday), and any change in how a page is
+    // written would then look like a difference of the stack.
+    let htmlDist = path.join(dir, 'dist');
+    if (emitter.build) {
+      try {
+        const html = emitSite(ir, { inlineCss: true });
+        await buildDist({ files: html.files, assets: [...html.assets].filter((f) => known.has(f)), assetsDir: path.join(dir, 'assets'), distDir: reference });
+        htmlDist = reference;
+      } catch {
+        // An IR the HTML emitter cannot write (none from a real recreate): the recreate's own dist/ stays the reference.
+      }
+    }
+    const built = (await emitter.build?.({ dir: tmp, ir, out, assets, report, htmlDist, ...(signal && { signal }), ...(progress && { progress }) })) ?? {};
     await rm(target, { recursive: true, force: true });
     await rename(tmp, target);
     return { status: 'ready', dir: `stacks/${stack}`, from: 'ir', exportedAt: new Date().toISOString(), files: out.files.size, ...built };
   } catch (err) {
     await rm(tmp, { recursive: true, force: true }).catch(() => {});
     throw err;
+  } finally {
+    await rm(reference, { recursive: true, force: true }).catch(() => {});
   }
 }
 

@@ -48,6 +48,8 @@ function domSignature(map) {
       // A stack that wires its forms to a backend (MERN) adds action/method; the form itself is the same.
       if (moved.ignoreFormActions && node.localName === 'form' && ['action', 'method', 'enctype'].includes(name)) return null;
       let value = a.value;
+      // A framework's mount id (ir/names.js MOUNT_IDS) is not page content: never a difference between two builds.
+      if (name === 'id' && ['root', 'app', '__next', '__nuxt', '___gatsby', 'svelte', 'q-app', 'ember-application', '__layout'].includes(value)) return null;
       if (name === 'class') {
         value = pageClasses(value);
         if (!value) return null;
