@@ -39,7 +39,7 @@ async function bundleSizes(dist) {
 }
 
 /**
- * @param {{ dir: string, ir: object, assets: string[], report: object, htmlDist: string, signal?: AbortSignal,
+ * @param {{ dir: string, ir: object, assets: string[], report: object, htmlDist: string|Promise<string>, signal?: AbortSignal,
  *   progress?: (fraction: number, message?: string) => void, toolchain?: string }} o
  *   assets: asset files written into the project (relative to assets/)
  * @returns {Promise<object>} fields for the stack's report entry
@@ -76,7 +76,8 @@ export async function buildReact({ dir, ir, assets, report, htmlDist, signal, pr
 
   const pages = ir.pages.map((p) => ({ path: pagePath(p.outPath), outPath: p.outPath }));
   const equivalence = await compareBuilds({
-    referenceRoot: htmlDist,
+    // The plain-HTML reference may still be in the making (the job's own build step, recreate/stack.js): awaited here.
+    referenceRoot: await htmlDist,
     candidateRoot: dist,
     pages,
     sigOptions,

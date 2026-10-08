@@ -8,10 +8,10 @@
 //
 // Several pages at once (optimize-create-copy, `SWEEP`): a page's widths were already shot side by side, but the pages one
 // after the other, and the sweep, started only after the whole capture, was the longest step left (the job waited for it).
-// Now pages are swept side by side (sweepPagesAtOnce: by CPU threads and free memory, 1 on a small machine), and the capture
-// step hands each page over as soon as it is captured (createSweeper): it is swept while the capture still runs only when a
-// capture slot is idle (the last pages of a capture), so the capture's own CPU share never shrinks. What one page's sweep
-// takes and writes is unchanged. SAS_COPY_OPT_SWEEP=0 (or SAS_COPY_OPTIMIZE=0): the one-page-at-a-time step below.
+// Now pages are swept side by side (sweepPagesAtOnce: by CPU threads and free memory, 1 on a small machine). Opt-in
+// (SAS_COPY_OPT_SWEEP_EARLY=1): the capture step hands each page over as soon as it is captured (createSweeper), and it is
+// swept while the capture still runs when a capture slot is idle (the last pages of a capture). What one page's sweep takes
+// and writes is unchanged. SAS_COPY_OPT_SWEEP=0 (or SAS_COPY_OPTIMIZE=0): the one-page-at-a-time step below.
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { launchBrowser } from '../audit/render.js';

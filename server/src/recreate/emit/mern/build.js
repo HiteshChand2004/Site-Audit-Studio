@@ -20,7 +20,7 @@ export function parseTests(output) {
 
 /**
  * @param {{ dir: string, ir: object, out: { formIr: object, forms: object[], skippedForms: object[] }, assets: string[], report: object,
- *   htmlDist: string, signal?: AbortSignal, progress?: (fraction: number, message?: string) => void }} o
+ *   htmlDist: string|Promise<string>, signal?: AbortSignal, progress?: (fraction: number, message?: string) => void }} o
  */
 export async function buildMern({ dir, out, assets, report, htmlDist, signal, progress = () => {} }) {
   const client = await buildReact({

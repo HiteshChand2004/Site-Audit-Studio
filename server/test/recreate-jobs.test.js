@@ -395,6 +395,54 @@ test('the project stack is built inside the job, next to the steps after "build"
   }
 });
 
+test('the stack build may start right after generate, next to the build step; its check waits for the plain-HTML build', async () => {
+  const log = [];
+  let stackStarted;
+  const stackStart = new Promise((resolve) => { stackStarted = resolve; });
+  registerEmitter({
+    id: 'job-stack-early', label: 'Job stack early', status: 'ready',
+    emit: () => ({ files: new Map([['package.json', '{}']]), assets: new Set() }),
+    build: async ({ htmlDist }) => {
+      log.push('start stack');
+      stackStarted();
+      // The reference is a promise while the build step still runs: awaited only for the check.
+      const reference = await htmlDist;
+      log.push('reference ready');
+      assert.ok(await exists(reference), 'the HTML build it is checked against is there');
+      return { built: true };
+    },
+  });
+  try {
+    const run = (build) => runRecreate({
+      project: makeProject({ stack: 'job-stack-early' }),
+      recreateId: randomUUID(),
+      progress: () => {},
+      canOverlap: () => true,
+      stackEarly: true,
+      stages: { ...stubStages, ...stackInputs, stack: STAGES.stack, build },
+    });
+    const report = await run(async (ctx) => {
+      log.push('start build');
+      // The build step ends only once the stack build has started (not by a timer: the order must not depend on the machine).
+      await stackStart;
+      await stackInputs.build(ctx);
+      log.push('end build');
+    });
+    assert.deepEqual(log, ['start build', 'start stack', 'end build', 'reference ready'], log.join(', '));
+    assert.equal(report.outputs['job-stack-early'].status, 'ready');
+    assert.equal(report.outputs['job-stack-early'].built, true);
+
+    // A build step that fails ends the stack build that waits for it, and the job fails as before.
+    log.length = 0;
+    await assert.rejects(run(async () => {
+      await stackStart;
+      throw new RecreateError('The production build failed on index.html: broken');
+    }), /production build failed/);
+  } finally {
+    unregisterEmitter('job-stack-early');
+  }
+});
+
 test('the stack build is left to the export after the job without memory to spare; a failed build is recorded, the recreate kept', async () => {
   let builds = 0;
   registerEmitter({

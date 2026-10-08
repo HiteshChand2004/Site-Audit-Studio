@@ -46,7 +46,7 @@ async function bundleSizes(dist) {
 
 /**
  * @param {{ dir: string, ir: object, out: { routes: object[], urlChanges: object[], urlMap: object }, assets: string[], report: object,
- *   htmlDist: string, signal?: AbortSignal, progress?: (fraction: number, message?: string) => void }} o
+ *   htmlDist: string|Promise<string>, signal?: AbortSignal, progress?: (fraction: number, message?: string) => void }} o
  * @returns {Promise<object>} fields for the stack's report entry
  */
 export async function buildNext({ dir, ir, out, assets, report, htmlDist, signal, progress = () => {} }) {
@@ -76,7 +76,8 @@ export async function buildNext({ dir, ir, out, assets, report, htmlDist, signal
   if (!verify.ok) throw new RecreateError(verifyFailure(verify).replace('The generated site', 'The Next.js build'));
 
   const equivalence = await compareBuilds({
-    referenceRoot: htmlDist,
+    // The plain-HTML reference may still be in the making (the job's own build step, recreate/stack.js): awaited here.
+    referenceRoot: await htmlDist,
     candidateRoot: dist,
     pages: out.routes.map((r) => ({ path: r.route, outPath: r.outPath, candidateOutPath: r.nextOutPath })),
     urlMap: out.urlMap,

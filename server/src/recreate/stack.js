@@ -29,7 +29,10 @@ export async function stackStage(ctx, local) {
   } catch (err) {
     return later(err.message);
   }
-  if (ctx.report.outputs?.html?.status !== 'ready') return later('The plain-HTML build is missing.');
+  // Started right after generate (local.early, optimize-create-copy STACK_EARLY): the plain-HTML build is still being made
+  // by the build step; the stack's own build goes ahead and its check against dist/ waits for that step.
+  const waitsFor = local.early && ctx.stepDone ? local.early : null;
+  if (!waitsFor && ctx.report.outputs?.html?.status !== 'ready') return later('The plain-HTML build is missing.');
   if (!(ctx.canOverlap?.() ?? true)) return later('Not enough free memory for a second browser.');
   if (local.stepDeadline - Date.now() < STACK_MIN_MS) return later('Not enough time left in the job.');
 
@@ -45,7 +48,13 @@ export async function stackStage(ctx, local) {
     local.progress(0, 'Building the chosen stack');
     // What the build step wrote dist/ from: the stack's reference is dist/ itself when the same IR emits the same files.
     const built = ctx.generated && { files: ctx.generated.out.files, assets: ctx.generated.siteAssets };
-    const output = await buildStackOutput({ dir: ctx.dir, stack, report: ctx.report, signal: controller.signal, progress: local.progress, built });
+    const htmlReady = waitsFor
+      ? ctx.stepDone(waitsFor).then(() => {
+        if (ctx.report.outputs?.html?.status !== 'ready') throw new RecreateError('The plain-HTML build is missing.');
+      })
+      : null;
+    htmlReady?.catch(() => {}); // a build step that fails ends the job (and this build) anyway
+    const output = await buildStackOutput({ dir: ctx.dir, stack, report: ctx.report, signal: controller.signal, progress: local.progress, built, htmlReady });
     ctx.report.outputs = { ...ctx.report.outputs, [stack]: output };
     ctx.report.stackBuild = { inJob: true, ms: Date.now() - started };
   } catch (err) {

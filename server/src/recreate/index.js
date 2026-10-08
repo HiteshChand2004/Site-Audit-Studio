@@ -26,6 +26,7 @@ import { responsiveStage } from './responsive.js';
 import { stackStage } from './stack.js';
 import { sweepStage } from './sweep.js';
 import { commitWorkspace, discardWorkspace, openWorkspace } from './workspace.js';
+import { optimized } from './optimize.js';
 
 export { RecreateError };
 
@@ -51,7 +52,9 @@ export const STEPS = [
   { key: 'responsive', label: 'Checking responsive layout', weight: 4, max: 90000, optional: true, perPage: 30000 },
   // The project's stack (React + Vite, Next.js, MERN) built from what the build step left (recreate/stack.js): a background
   // step next to the ones above when a second browser fits, else left to the export after the job. Never fails the job.
-  { key: 'stack', label: 'Building the chosen stack', weight: 6, max: 8 * 60000, optional: true, background: true, after: 'build', perPage: 20000 },
+  // early / waitsFor (optimize-create-copy, STACK_EARLY): the stack's own build needs only the IR (written by generate); only its
+  // check against the plain-HTML build waits for the build step. So it may start right after generate, next to the build step.
+  { key: 'stack', label: 'Building the chosen stack', weight: 6, max: 8 * 60000, optional: true, background: true, after: 'build', early: 'generate', waitsFor: 'build', perPage: 20000 },
 ];
 // What each page beyond BASE_PAGES adds to the whole job, and to the time the capture keeps for the steps after it.
 const JOB_PER_PAGE = STEPS.reduce((n, s) => n + (s.perPage ?? 0), 0);
@@ -113,13 +116,14 @@ export const STAGES = {
  * @param {number} [o.budgetMs]
  * @param {() => boolean} [o.canOverlap]  may a background step run next to a browser step (default: by free memory)
  * @param {object} [o.netPolicy]  user projects always get the default user policy
+ * @param {boolean} [o.stackEarly]  start the stack build right after generate (default: with the real build and stack stages)
  * @returns {Promise<object>} the recreate report
  */
 export function runRecreate({ netPolicy = userPolicy(), ...opts }) {
   return withNetPolicy(netPolicy, () => recreate({ ...opts, netPolicy }));
 }
 
-async function recreate({ project, recreateId, progress, warnings = [], stages = STAGES, budgetMs = recreateBudgetMs(), autoBudget = !fixedBudget(), canOverlap = () => roomForSecondBrowser(), netPolicy, interruptOptions = {} }) {
+async function recreate({ project, recreateId, progress, warnings = [], stages = STAGES, budgetMs = recreateBudgetMs(), autoBudget = !fixedBudget(), canOverlap = () => roomForSecondBrowser(), netPolicy, interruptOptions = {}, stackEarly = stages.stack === STAGES.stack && stages.build === STAGES.build }) {
   const analysis = latestAnalysis(project.id);
   if (!analysis) throw new RecreateError('Run Analyze first: Recreate works from a completed analysis.');
 
@@ -214,6 +218,23 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
   const minutes = Math.round(budgetMs / 60000);
   const startedAt = Date.now();
   const timings = {};
+  // A background step with `early` starts after that step instead of `after` (the real stack stage with the real build step:
+  // the stack's build is then handed a promise of the plain-HTML build, which it awaits for its check). ctx.stepDone(key)
+  // resolves once a step in front has finished.
+  const early = (def) => Boolean(def.early) && optimized('STACK_EARLY') && stackEarly;
+  const afterOf = (def) => (early(def) ? def.early : def.after);
+  const finished = new Map(); // key → { promise, resolve, reject }
+  const finishedOf = (key) => {
+    if (!finished.has(key)) {
+      let resolve;
+      let reject;
+      const promise = new Promise((a, b) => { resolve = a; reject = b; });
+      promise.catch(() => {});
+      finished.set(key, { promise, resolve, reject });
+    }
+    return finished.get(key);
+  };
+  ctx.stepDone = (key) => finishedOf(key).promise;
   // Background steps still running: key → { def, done } (done resolves to the step's error, or null).
   const background = new Map();
   const join = async (key) => {
@@ -279,6 +300,8 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     // A stage may use the deadline to wind down on its own (skip remaining work) before the hard timeout. A background
     // stage gets its own deadline and progress as its second argument: the shared ones belong to the step in front.
     const local = { stepDeadline: Date.now() + limit, progress: (fraction, message) => progress(def.key, fraction, message) };
+    // Started before the step it waits for has ended (`early`): the stage awaits ctx.stepDone(def.waitsFor) where it needs it.
+    if (early(def)) local.early = def.waitsFor;
     if (def.background) {
       background.set(def.key, { def, done: runStep(def, local, limit).then(() => null, (err) => err) });
       return;
@@ -288,6 +311,7 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     front = local;
     await runStep(def, local, limit);
     front = null;
+    finishedOf(def.key).resolve();
   };
 
   try {
@@ -295,6 +319,8 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
       // Background steps this step needs in full are awaited first; all of them when it renders pages itself and the
       // machine has no memory to spare for two browsers.
       for (const [key, task] of [...background]) {
+        // A step that waits for this one is never awaited before it (it would wait for itself).
+        if (early(task.def) && task.def.waitsFor === def.key) continue;
         if (task.def.join === def.key || (def.browser && !canOverlap())) {
           // Shown as this step (not as the background one, which is listed later): the step list must not tick the steps in
           // between while they have not run yet.
@@ -303,7 +329,7 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
         }
       }
       await start(def);
-      for (const next of STEPS.filter((s) => s.background && s.after === def.key)) await start(next);
+      for (const next of STEPS.filter((s) => s.background && afterOf(s) === def.key)) await start(next);
     }
     for (const key of [...background.keys()]) await join(key);
     ctx.report.timings = { ...timings, total: Date.now() - startedAt };
@@ -317,6 +343,8 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     return ctx.report;
   } catch (err) {
     controller.abort();
+    // A background step waiting for a step that will never finish now (recreate/stack.js) ends with the job.
+    for (const def of STEPS) finishedOf(def.key).reject(err);
     await dispose();
     // A background step may still be writing into the workspace: it ends on the abort (its browser was just closed).
     await Promise.all([...background.values()].map((task) => task.done));

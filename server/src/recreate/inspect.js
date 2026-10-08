@@ -13,7 +13,7 @@ import { capturePage } from './capture/index.js';
 import { discoverPages, SKIP_LABELS } from './discover.js';
 import { RecreateError } from './errors.js';
 import { causeText, recoverFailure, recoverHit } from './interrupts.js';
-import { optimized } from './optimize.js';
+import { optedIn, optimized } from './optimize.js';
 import { createSweeper } from './sweep.js';
 import { RECREATE_VIEWS } from './views.js';
 
@@ -166,7 +166,8 @@ export async function inspectStage(ctx) {
   // The sweep of the original at more widths (sweep.js) gets each page as soon as it is kept, and may use the capture slots
   // that are idle (no page left to start): the last pages of a capture leave most of the machine unused otherwise. The pipeline
   // allows it only when its real sweep step follows (ctx.earlySweepAllowed); the sweep step takes it over (its own limits).
-  const early = ctx.earlySweepAllowed && optimized('SWEEP') ? (ctx.earlySweep = createSweeper(ctx)) : null;
+  // Opt-in (SAS_COPY_OPT_SWEEP_EARLY=1, optimize.js): the sweep's loads then run next to the last captures' probes.
+  const early = ctx.earlySweepAllowed && optimized('SWEEP') && optedIn('SWEEP_EARLY') ? (ctx.earlySweep = createSweeper(ctx)) : null;
   const failedPages = [];
   const notCaptured = [];
   const stalled = []; // pages abandoned the first time: { i, info }
