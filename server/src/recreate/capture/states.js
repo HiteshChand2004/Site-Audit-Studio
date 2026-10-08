@@ -650,10 +650,18 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
     if (!outside.length) continue;
     const root = commonPath([w.trigger, ...outside]);
     const up = w.trigger.split('>').length - (root ? root.split('>').length : 0);
-    if (root && root !== 'body' && up >= 1 && up <= MENU_LEVELS) cards.push({ w, root, menu: true });
+    if (root && root !== 'body' && up >= 1 && up <= MENU_LEVELS) {
+      cards.push({ w, root, menu: true });
+      continue;
+    }
+    // A menu the script draws as a layer of its own elsewhere in the page (a "portal": fixed or positioned at the end of the
+    // body, placed under the link): the link's box is snapshotted with that layer moved into it, at the same offset.
+    const layers = (w.change?.added ?? []).filter((x) => x.path && !x.path.startsWith(`${w.trigger}>`) && x.rect?.[2] * x.rect?.[3] >= 2500);
+    const box = w.trigger.split('>').slice(0, -1).join('>');
+    if (layers.length === 1 && box && box !== 'body') cards.push({ w, root: box, menu: true, layer: layers[0].path });
   }
   stats.hoverMenus = 0;
-  for (const { w, root, menu } of cards.slice(0, MAX_HOVER_CARDS)) {
+  for (const { w, root, menu, layer } of cards.slice(0, MAX_HOVER_CARDS)) {
     if (Date.now() > deadline + HOVER_CARDS_MS) break;
     const node = findNode(body, root);
     if (!node || node.hoverState) continue;
@@ -664,9 +672,14 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
       await page.mouse.move(spot.x, spot.y);
       await page.waitForTimeout(HOVER_SETTLE_MS);
       const res = await page.evaluate(snapshotPage, { rootPath: root });
+      const menuLayer = layer ? await page.evaluate(snapshotPage, { rootPath: layer }).catch(() => null) : null;
       await page.mouse.move(-20, -20);
       await page.waitForTimeout(250);
-      for (const u of res?.cssUrls ?? []) stats.cssUrls.push(u);
+      for (const u of [...(res?.cssUrls ?? []), ...(menuLayer?.cssUrls ?? [])]) stats.cssUrls.push(u);
+      if (layer) {
+        if (!res?.body || !menuLayer?.body) continue;
+        attachLayer(res.body, menuLayer.body);
+      }
       if (!res?.body || stateSignature(res.body) === stateSignature(node)) continue;
       const { path, ...hovered } = res.body;
       carryProbes(node, hovered);
@@ -679,6 +692,23 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
   }
   stats.ms = Date.now() - started;
   return stats;
+}
+
+/**
+ * Puts a menu layer snapshot into the snapshot of its link's box (mutates `box`): positioned absolutely at the offset it had
+ * from the box (the box becomes its containing block), its own insets, margins and translations dropped since the offset
+ * already holds them.
+ */
+export function attachLayer(box, layer) {
+  const [bx, by] = box.rect ?? [0, 0];
+  const [lx, ly] = layer.rect ?? [0, 0];
+  const style = { ...layer.style };
+  for (const k of ['position', 'top', 'left', 'right', 'bottom', 'inset', 'margin-top', 'margin-left', 'margin-right', 'margin-bottom', 'translate']) delete style[k];
+  if (/^(matrix\(1, 0, 0, 1,|translate)/.test(String(style.transform ?? ''))) delete style.transform;
+  const { path, ...rest } = layer;
+  box.style = { ...box.style, ...(!/relative|absolute|fixed|sticky/.test(box.style?.position ?? '') && { position: 'relative' }) };
+  box.children = [...(box.children ?? []), { ...rest, style: { ...style, position: 'absolute', left: `${Math.round(lx - bx)}px`, top: `${Math.round(ly - by)}px` } }];
+  return box;
 }
 
 /** Page function: scrolls the element at a snapshot path into view and returns its centre, or null. */

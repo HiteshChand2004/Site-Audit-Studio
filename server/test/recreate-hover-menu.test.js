@@ -50,3 +50,14 @@ test('a box caught invisible in the first pose of an entrance is shown and gets 
   assert.equal(motion.script, true, 'the reveal script is shipped');
   for (const n of [overlay, empty, slide]) assert.equal(n.views.desktop.style.opacity, '0', 'left as captured');
 });
+
+test('a menu drawn as a layer of its own is moved into its link box at the same offset', async () => {
+  const { attachLayer } = await import('../src/recreate/capture/states.js');
+  const box = { tag: 'div', style: {}, rect: [560, 50, 90, 33], children: [{ tag: 'a', style: {}, rect: [560, 50, 90, 33], children: [] }] };
+  const layer = { tag: 'div', path: 'body>div:2', style: { position: 'fixed', top: '83px', left: '0px', transform: 'matrix(1, 0, 0, 1, 555, 0)', 'z-index': '10' }, rect: [555, 83, 125, 248], children: [{ tag: 'a', style: {}, rect: [570, 95, 60, 20], children: [] }] };
+  attachLayer(box, layer);
+  assert.equal(box.style.position, 'relative', 'the link box holds the layer');
+  const moved = box.children[1];
+  assert.deepEqual([moved.style.position, moved.style.left, moved.style.top, moved.style.transform, moved.style['z-index']], ['absolute', '-5px', '33px', undefined, '10']);
+  assert.equal(moved.path, undefined);
+});
