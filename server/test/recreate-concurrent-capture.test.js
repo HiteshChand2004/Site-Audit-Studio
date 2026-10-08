@@ -17,6 +17,9 @@ import { userPolicy, withNetPolicy } from '../src/security/netGuard.js';
 import { startFixtureServer } from './serve-fixture.js';
 
 process.env.SAS_ALLOW_LOCALHOST = '1';
+// No shared static-file cache in this file (it is covered by shared-cache.test.js): every inspect step here would create and
+// remove a cache folder in the OS temp folder, which that file checks for while both run side by side.
+process.env.SAS_SHARED_CACHE = '0';
 
 const PORT = 4191;
 const origin = `http://localhost:${PORT}`;
