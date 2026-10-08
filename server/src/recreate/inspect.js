@@ -85,9 +85,12 @@ export async function inspectStage(ctx) {
       signal: ctx.signal,
       onProgress: (f, message) => ctx.progress(0.2 * f, message),
     });
-  let discovery;
+  // A job continuing after an interruption keeps the pages the stopped one found: the same pages, order and capture folders
+  // (recreate/checkpoint.js). Otherwise the pages are found, and kept for a resume.
+  const resumed = ctx.checkpoint?.discovery() ?? null;
+  let discovery = resumed;
   const discoverStarted = Date.now();
-  try {
+  if (!resumed) try {
     discovery = await discover();
   } catch (err) {
     // The homepage could not be loaded because the computer slept or the network dropped: once more when it is back.
@@ -97,6 +100,7 @@ export async function inspectStage(ctx) {
     ctx.progress(0, `Finding pages again (${causeText(again)})`);
     discovery = await discover();
   }
+  if (!resumed) await ctx.checkpoint?.saveDiscovery(discovery);
 
   // The limits follow the work: every page beyond the base set extends this step, the job and the later steps (index.js).
   ctx.scaleToPages?.(discovery.pages.length);
@@ -148,6 +152,8 @@ export async function inspectStage(ctx) {
         return;
       }
       captured.set(i, { ...info, views });
+      // Kept for a resume: a job that stops later does not capture this page again.
+      ctx.checkpoint?.savePage(i, captured.get(i));
     };
     const outOfTime = (info) => {
       notCaptured.push(info.path);
@@ -156,6 +162,13 @@ export async function inspectStage(ctx) {
 
     for (const [i, info] of discovery.pages.entries()) {
       if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
+      // Captured before the job was interrupted (checkpoint.js): reused as it is.
+      const done = ctx.checkpoint?.page(i, info.slug);
+      if (done) {
+        captured.set(i, done);
+        ctx.progress(0.2 + 0.75 * ((i + 1) / total), `Reusing ${info.path} (captured before the interruption)`);
+        continue;
+      }
       if (i > 0 && Date.now() + slowest > deadline()) {
         for (const rest of discovery.pages.slice(i)) outOfTime(rest);
         break;

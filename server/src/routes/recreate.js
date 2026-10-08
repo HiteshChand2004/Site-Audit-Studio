@@ -9,7 +9,7 @@ import { PUBLIC_STEPS } from '../recreate/index.js';
 import { analysisWarnings, latestAnalysis } from '../recreate/inputs.js';
 import { recreateJobs } from '../recreate/jobs.js';
 import { activePreview, PreviewError, startPreview, stopPreview } from '../recreate/preview.js';
-import { recreateDir } from '../recreate/workspace.js';
+import { findResumable, recreateDir } from '../recreate/workspace.js';
 import { slugFor } from '../recreate/discover.js';
 import { getEmitter, isReadyStack, listStacks } from '../recreate/emit/index.js';
 import { exportStack, outputRoot, reportOutputs, targetStack } from '../recreate/export/fromIr.js';
@@ -37,7 +37,7 @@ const latestReplayable = db.prepare(`
   ORDER BY started_at DESC LIMIT 5
 `);
 
-router.post('/:id/recreate', (req, res) => {
+router.post('/:id/recreate', async (req, res) => {
   const project = selectProject.get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found.' });
   if (!project.authorized) {
@@ -61,10 +61,19 @@ router.post('/:id/recreate', (req, res) => {
     if (!source) return res.status(409).json({ error: 'There is no saved capture to rebuild from: run a full Recreate first.' });
     payload = { reuseFrom: { recreateId: source.id, createdAt: source.started_at } };
   }
+  // `resume`: continue the stopped recreate whose work was kept (recreate/checkpoint.js) instead of starting over.
+  if (req.body?.resume) {
+    if (recreateJobs.active(project.id)) {
+      return res.status(409).json({ error: 'A recreate is already running for this project.', recreateId: recreateJobs.active(project.id).id });
+    }
+    const stopped = await findResumable(project.id);
+    if (!stopped) return res.status(409).json({ error: 'There is no stopped recreate to continue: start a new one.' });
+    payload = { resumeFrom: { recreateId: stopped.recreateId } };
+  }
 
   try {
     const job = recreateJobs.start(project, payload, { warnings: analysisWarnings(analysis) });
-    res.status(202).json({ recreateId: job.id, job, steps: PUBLIC_STEPS, ...(payload.reuseFrom && { reuseFrom: payload.reuseFrom }) });
+    res.status(202).json({ recreateId: job.id, job, steps: PUBLIC_STEPS, ...(payload.reuseFrom && { reuseFrom: payload.reuseFrom }), ...(payload.resumeFrom && { resumeFrom: payload.resumeFrom }) });
   } catch (err) {
     if (err instanceof ConflictError) {
       return res.status(409).json({ error: err.message, recreateId: err.job.id });
@@ -82,11 +91,14 @@ router.get('/:id/recreate/current', (req, res) => {
 const withSlugs = (report) => ({ ...report, pages: (report.pages ?? []).map((p) => ({ ...p, slug: p.slug ?? slugFor(p.outPath) })) });
 
 // Latest attempt (any status) plus the report of the latest successful recreate.
-router.get('/:id/recreate', (req, res) => {
+router.get('/:id/recreate', async (req, res) => {
   if (!selectProject.get(req.params.id)) return res.status(404).json({ error: 'Project not found.' });
   const last = latestRow.get(req.params.id);
   const done = latestDone.get(req.params.id);
+  // A stopped recreate whose work was kept: the app offers to continue it (POST { resume: true }).
+  const stopped = recreateJobs.active(req.params.id) ? null : await findResumable(req.params.id);
   res.json({
+    resumable: stopped?.summary ?? null,
     last: last ? {
       id: last.id,
       status: last.status,

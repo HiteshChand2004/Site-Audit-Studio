@@ -10,6 +10,7 @@ import reportRouter from './routes/report.js';
 import faviconRouter from './routes/favicon.js';
 import { lockBusy } from './jobs/manager.js';
 import { awakeHeld } from './jobs/keepAwake.js';
+import { resumeInterruptedRecreates } from './recreate/jobs.js';
 
 const PORT = Number(process.env.PORT) || 4000;
 const app = express();
@@ -52,4 +53,6 @@ app.listen(PORT, (err) => {
     process.exit(1);
   }
   console.log(`API ready on http://localhost:${PORT}`);
+  // A recreate the restart interrupted continues where it stopped (recreate/checkpoint.js).
+  resumeInterruptedRecreates().catch((e) => console.warn('Interrupted recreates not continued:', e.message));
 });

@@ -4,12 +4,13 @@
 //
 // Each step is a stage function that reads and extends a shared context. A failing step fails
 // the job: later steps need its output. The whole job has one time budget
-// (SAS_RECREATE_MINUTES, default 12); the workspace is discarded when anything goes wrong.
+// (SAS_RECREATE_MINUTES, default 12). When anything goes wrong the workspace is discarded, unless the pages were found:
+// then it is kept with its checkpoint, and a resume continues where the job stopped (recreate/checkpoint.js).
 //
 // Steps run one after the other, except a `background` step (the sweep of the original at more widths, the build of the
 // project's stack): it runs next to the steps after it instead of making them wait, and is awaited by the step that needs
 // its whole result (`join`), or at the end. On a machine short of memory it is awaited before the next browser step.
-import { writeFile } from 'node:fs/promises';
+import { rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { userPolicy, withNetPolicy } from '../security/netGuard.js';
 import { maxParallel, parallelism } from '../audit/resources.js';
@@ -25,7 +26,8 @@ import { previewStage } from './preview.js';
 import { responsiveStage } from './responsive.js';
 import { stackStage } from './stack.js';
 import { sweepStage } from './sweep.js';
-import { commitWorkspace, discardWorkspace, openWorkspace } from './workspace.js';
+import { CHECKPOINT_FILE, clearUnfinished, isReusable, openCheckpoint, readCheckpoint, reportMarks, restoreStep, resumeStep, REUSABLE_STEPS } from './checkpoint.js';
+import { adoptWorkspace, commitWorkspace, discardWorkspace, openWorkspace } from './workspace.js';
 
 export { RecreateError };
 
@@ -113,13 +115,15 @@ export const STAGES = {
  * @param {number} [o.budgetMs]
  * @param {() => boolean} [o.canOverlap]  may a background step run next to a browser step (default: by free memory)
  * @param {object} [o.netPolicy]  user projects always get the default user policy
+ * @param {{ recreateId: string, auto?: boolean }} [o.resumeFrom]  continue the stopped recreate whose workspace was kept
+ *   (recreate/checkpoint.js): its finished steps and captured pages are reused, the rest runs with a fresh time budget
  * @returns {Promise<object>} the recreate report
  */
 export function runRecreate({ netPolicy = userPolicy(), ...opts }) {
   return withNetPolicy(netPolicy, () => recreate({ ...opts, netPolicy }));
 }
 
-async function recreate({ project, recreateId, progress, warnings = [], stages = STAGES, budgetMs = recreateBudgetMs(), autoBudget = !fixedBudget(), canOverlap = () => roomForSecondBrowser(), netPolicy, interruptOptions = {} }) {
+async function recreate({ project, recreateId, progress, warnings = [], stages = STAGES, budgetMs = recreateBudgetMs(), autoBudget = !fixedBudget(), canOverlap = () => roomForSecondBrowser(), netPolicy, interruptOptions = {}, resumeFrom = null }) {
   const analysis = latestAnalysis(project.id);
   if (!analysis) throw new RecreateError('Run Analyze first: Recreate works from a completed analysis.');
 
@@ -134,7 +138,18 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
   const running = new Set();
   let front = null;
 
-  const dir = await openWorkspace(project.id, recreateId);
+  // A resume takes over the stopped job's workspace and its checkpoint; what the steps that run again would write is cleared.
+  const dir = resumeFrom ? await adoptWorkspace(project.id, resumeFrom.recreateId, recreateId) : await openWorkspace(project.id, recreateId);
+  let saved = null;
+  if (resumeFrom) {
+    saved = await readCheckpoint(dir);
+    if (!isReusable(saved)) {
+      await discardWorkspace(project.id, recreateId).catch(() => {});
+      throw new RecreateError('There is no saved work to continue from: start a new Recreate.');
+    }
+    await clearUnfinished(dir, saved);
+  }
+  const checkpoint = openCheckpoint(dir, { recreateId, analysisId: analysis.id, saved, auto: Boolean(resumeFrom?.auto) });
   const ctx = {
     project,
     recreateId,
@@ -151,6 +166,8 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     defer: (fn) => disposers.push(fn),
     /** May a background step run a second browser next to the steps still to come (free memory)? */
     canOverlap,
+    /** Pages, steps and sweep pages finished so far (recreate/checkpoint.js): a stopped job continues from them. */
+    checkpoint,
     progress: null,
     report: {
       recreateId,
@@ -209,11 +226,42 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     if (front) ctx.stepDeadline = front.stepDeadline;
   };
 
+  // Steps the stopped job finished are not run again: their results are put back (an inspect step or a sweep that stopped
+  // half-way continues from its saved pages instead, see inspect.js / sweep.js).
+  const restored = new Set();
+  if (saved) {
+    stages = { ...stages };
+    for (const key of REUSABLE_STEPS.filter((k) => saved.steps?.[k])) {
+      restored.add(key);
+      stages[key] = async (_ctx, local) => {
+        restoreStep(ctx, saved.steps[key]);
+        if (key === 'inspect') ctx.scaleToPages(saved.discovery.pages.length);
+        (local?.progress ?? ctx.progress)?.(1, 'Reused from before the interruption');
+      };
+    }
+    const pagesReused = Object.keys(saved.pages ?? {}).length;
+    const entry = {
+      at: new Date().toISOString(),
+      fromRecreateId: resumeFrom.recreateId,
+      fromStep: resumeStep(saved),
+      stoppedStep: saved.stopped?.step ?? null,
+      reason: saved.stopped?.reason ?? 'restart',
+      pagesReused,
+      stepsReused: [...restored],
+      auto: Boolean(resumeFrom.auto),
+    };
+    checkpoint.data.resumed = [...(saved.resumed ?? []), entry];
+    ctx.report.resumed = checkpoint.data.resumed;
+    ctx.report.warnings.push(`Continued after an interruption (${pagesReused} ${pagesReused === 1 ? 'page' : 'pages'} reused).`);
+    await checkpoint.save();
+  }
+
   const minutes = Math.round(budgetMs / 60000);
   const startedAt = Date.now();
   const timings = {};
   // Background steps still running: key → { def, done } (done resolves to the step's error, or null).
   const background = new Map();
+  let currentStep = null;
   const join = async (key) => {
     const task = background.get(key);
     if (!task) return;
@@ -227,6 +275,7 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
   // pause watcher look before it decides the time is up.
   const runStep = async (def, local, limit) => {
     const started = Date.now();
+    const marks = reportMarks(ctx.report);
     let entry = null;
     try {
       await new Promise((resolve, reject) => {
@@ -238,6 +287,8 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
           .then(resolve, reject)
           .finally(() => timer.clear());
       });
+      // A finished step the next attempt can reuse (the sweep only when it captured something).
+      if (!restored.has(def.key) && REUSABLE_STEPS.includes(def.key) && (def.key !== 'sweep' || ctx.sweep)) await checkpoint.saveStep(def.key, ctx, marks);
     } catch (err) {
       if (def.optional && !controller.signal.aborted) {
         const reason = err instanceof TimeoutError ? 'did not finish in time' : `failed (${String(err.message).split(/\r?\n/)[0]})`;
@@ -245,11 +296,11 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
         return;
       }
       if (!(err instanceof TimeoutError)) throw err;
-      throw new RecreateError(
+      throw Object.assign(new RecreateError(
         limit < def.max
           ? `Recreate stopped: the ${minutes}-minute time limit was reached during “${def.label}”.`
           : `“${def.label}” did not finish within its ${Math.round(def.max / 1000)}s limit.`,
-      );
+      ), { timeLimit: true });
     } finally {
       if (entry) {
         entry.timer.clear();
@@ -271,7 +322,7 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
         progress(def.key, 1);
         return;
       }
-      throw new RecreateError(`Recreate stopped: the ${minutes}-minute time limit was reached.`);
+      throw Object.assign(new RecreateError(`Recreate stopped: the ${minutes}-minute time limit was reached.`), { timeLimit: true });
     }
     const limit = Math.min(def.max + ctx.pageScale * (def.perPage ?? 0), remaining);
     // A stage may use the deadline to wind down on its own (skip remaining work) before the hard timeout. A background
@@ -283,6 +334,7 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     }
     ctx.progress = local.progress;
     ctx.stepDeadline = local.stepDeadline;
+    currentStep = def.key;
     front = local;
     await runStep(def, local, limit);
     front = null;
@@ -310,6 +362,9 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     // What the shared cache of static files saved the captures (audit/sharedCache.js).
     if (ctx.netCache) ctx.report.sharedCache = ctx.netCache.stats();
     await dispose();
+    // Finished: nothing to continue from any more.
+    await checkpoint.flush();
+    await rm(path.join(dir, CHECKPOINT_FILE), { force: true });
     await writeFile(path.join(dir, 'report.json'), JSON.stringify(ctx.report, null, 1));
     await commitWorkspace(project.id, recreateId);
     return ctx.report;
@@ -318,7 +373,14 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     await dispose();
     // A background step may still be writing into the workspace: it ends on the abort (its browser was just closed).
     await Promise.all([...background.values()].map((task) => task.done));
-    await discardWorkspace(project.id, recreateId).catch(() => {});
+    await checkpoint.flush();
+    // The work done so far is kept when the pages were found: the job can continue where it stopped (recreate/checkpoint.js).
+    if (checkpoint.reusable()) {
+      await checkpoint.stop({ step: currentStep, reason: err.timeLimit ? 'time-limit' : 'error', message: String(err.message ?? err).split('\n')[0].trim() });
+      err.resumable = true;
+    } else {
+      await discardWorkspace(project.id, recreateId).catch(() => {});
+    }
     throw err;
   }
 }
