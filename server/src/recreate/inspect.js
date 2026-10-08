@@ -244,7 +244,10 @@ export async function inspectStage(ctx) {
 
     // Several pages at once when the machine has room (capturePagesAtOnce); 1 = the original one-page-at-a-time loop.
     const atOnce = Math.max(1, Math.min(total, ctx.capturePages ?? capturePagesAtOnce()));
-    report.capture = { pagesAtOnce: atOnce, peak: 1, heldBack: 0 };
+    // How the pages were captured (additive): pages at once, the most that ran together, starts held back for memory, and
+    // where the step's time went (finding pages vs capturing them).
+    report.capture = { pagesAtOnce: atOnce, peak: 1, heldBack: 0, discoverMs: Date.now() - discoverStarted, captureMs: null };
+    const captureStarted = Date.now();
     if (atOnce === 1) {
       for (const [i, info] of discovery.pages.entries()) {
         if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
@@ -314,6 +317,7 @@ export async function inspectStage(ctx) {
         keep(i, info, result);
       }
     }
+    report.capture.captureMs = Date.now() - captureStarted;
   } finally {
     await closeBrowser();
     await closeProxy();
