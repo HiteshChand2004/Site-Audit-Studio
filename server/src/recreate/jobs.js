@@ -4,7 +4,7 @@
 // output is built inside the job when a second browser fits (recreate/stack.js), else from the saved IR right
 // after (queued behind this job, never discarding the recreate).
 import path from 'node:path';
-import { db } from '../db/index.js';
+import { db, interruptedRecreates } from '../db/index.js';
 import { JobManager } from '../jobs/manager.js';
 import { startReaudit } from '../reaudit/jobs.js';
 import { overallPct, runRecreate, STAGES, STEPS } from './index.js';
@@ -12,7 +12,9 @@ import { replayStages } from './replay.js';
 import { getEmitter } from './emit/index.js';
 import { exportStack, outputRoot, targetStack } from './export/fromIr.js';
 import { activePreview, startPreview } from './preview.js';
-import { pruneRecreates, recreateDir } from './workspace.js';
+import { MAX_AUTO_RESUMES, readCheckpoint } from './checkpoint.js';
+import { analysisWarnings, latestAnalysis } from './inputs.js';
+import { pruneRecreates, recreateDir, tmpDir } from './workspace.js';
 
 export const recreateJobs = new JobManager({
   table: 'recreates',
@@ -25,7 +27,8 @@ export const recreateJobs = new JobManager({
     const stages = payload?.reuseFrom
       ? { ...STAGES, ...replayStages(recreateDir(project.id, payload.reuseFrom.recreateId), payload.reuseFrom) }
       : undefined;
-    const report = await runRecreate({ project, recreateId: job.id, progress, warnings: job.warnings, ...(stages && { stages }) });
+    // A resume (recreate/checkpoint.js) continues the stopped recreate payload.resumeFrom names from its kept workspace.
+    const report = await runRecreate({ project, recreateId: job.id, progress, warnings: job.warnings, ...(stages && { stages }), ...(payload?.resumeFrom && { resumeFrom: payload.resumeFrom }) });
     // The preview is runtime state: its port is not part of the report. The app asks for it
     // (GET/POST /preview), which also starts it again after a server restart. The stack's own build when the job built it.
     const stack = targetStack(report, project.stack);
@@ -40,12 +43,48 @@ export const recreateJobs = new JobManager({
   // Then queue the stack build the job left out (if any) and the re-audit (it runs after anything already waiting for the lock).
   after: async ({ job, project, ok }) => {
     await pruneRecreates(project.id);
+    // Stopped by the time limit after making progress: it continues by itself with a fresh budget (a few times at most).
+    if (!ok) await autoResume(project, job.id, 'time-limit');
     if (ok && !reportOf(job.id)?.outputs?.[project.stack]) queueStackExport(project, job.id);
     if (ok) queueReaudit(project.id, job.id);
   },
 });
 
 const selectProject = db.prepare('SELECT * FROM projects WHERE id = ?');
+const noteResumed = db.prepare('UPDATE recreates SET error = ? WHERE id = ?');
+
+/**
+ * Continues a stopped recreate by itself when it stopped for a reason a new try can get past (`restart`: the server
+ * stopped while it ran; `time-limit`: its budget ran out after it made progress), at most MAX_AUTO_RESUMES times in a row.
+ * @returns {Promise<object|null>} the new job
+ */
+export async function autoResume(project, recreateId, reason) {
+  if (!project?.authorized) return null;
+  const checkpoint = await readCheckpoint(tmpDir(project.id, recreateId));
+  if (!checkpoint?.discovery?.pages?.length || (checkpoint.autoResumes ?? 0) >= MAX_AUTO_RESUMES) return null;
+  if (reason === 'time-limit' && !(checkpoint.stopped?.reason === 'time-limit' && checkpoint.stopped.progressed)) return null;
+  if (reason === 'restart' && checkpoint.stopped) return null; // it stopped on its own before the restart
+  try {
+    const analysis = latestAnalysis(project.id);
+    const job = recreateJobs.start(project, { resumeFrom: { recreateId, auto: true } }, { warnings: analysis ? analysisWarnings(analysis) : [] });
+    if (reason === 'restart') noteResumed.run('The server restarted while this job was running: it continues where it stopped.', recreateId);
+    console.log(`[recreates ${recreateId}] continues where it stopped (${reason}) as ${job.id}`);
+    return job;
+  } catch (err) {
+    console.warn(`[recreates ${recreateId}] not continued: ${err.message}`);
+    return null;
+  }
+}
+
+/** On server start: the recreates the restart interrupted continue where they stopped (queued under the global lock). */
+export async function resumeInterruptedRecreates(rows = interruptedRecreates) {
+  const jobs = [];
+  for (const row of rows) {
+    const job = await autoResume(selectProject.get(row.project_id), row.id, 'restart').catch(() => null);
+    if (job) jobs.push(job);
+  }
+  return jobs;
+}
 const selectResult = db.prepare('SELECT result_json FROM recreates WHERE id = ?');
 const reportOf = (recreateId) => {
   try {

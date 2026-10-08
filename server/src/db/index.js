@@ -89,7 +89,9 @@ addColumn('projects', 'max_pages', 'INTEGER NOT NULL DEFAULT 25');
 addColumn('projects', 'recreate_pages', 'INTEGER NOT NULL DEFAULT 5');
 addColumn('projects', 'target_domain', 'TEXT');
 
-// Jobs live in memory, so anything still "running" after a restart can never finish.
+// Jobs live in memory, so anything still "running" after a restart can never finish. A recreate that was running is
+// continued where it stopped once the server is up (recreate/jobs.js resumeInterruptedRecreates, recreate/checkpoint.js).
+export const interruptedRecreates = db.prepare(`SELECT id, project_id FROM recreates WHERE status = 'running'`).all();
 for (const table of ['analyses', 'recreates', 'reaudits']) {
   db.prepare(`
     UPDATE ${table} SET status = 'failed', error = 'The server restarted while this job was running. Run it again.', finished_at = ?

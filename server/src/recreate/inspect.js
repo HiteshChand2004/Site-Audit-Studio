@@ -144,9 +144,12 @@ export async function inspectStage(ctx) {
       signal: ctx.signal,
       onProgress: (f, message) => ctx.progress(0.2 * f, message),
     });
-  let discovery;
+  // A job continuing after an interruption keeps the pages the stopped one found: the same pages, order and capture folders
+  // (recreate/checkpoint.js). Otherwise the pages are found, and kept for a resume.
+  const resumed = ctx.checkpoint?.discovery() ?? null;
+  let discovery = resumed;
   const discoverStarted = Date.now();
-  try {
+  if (!resumed) try {
     discovery = await discover();
   } catch (err) {
     // The homepage could not be loaded because the computer slept or the network dropped: once more when it is back.
@@ -156,6 +159,7 @@ export async function inspectStage(ctx) {
     ctx.progress(0, `Finding pages again (${causeText(again)})`);
     discovery = await discover();
   }
+  if (!resumed) await ctx.checkpoint?.saveDiscovery(discovery);
 
   // The limits follow the work: every page beyond the base set extends this step, the job and the later steps (index.js).
   ctx.scaleToPages?.(discovery.pages.length);
@@ -207,6 +211,8 @@ export async function inspectStage(ctx) {
         return;
       }
       captured.set(i, { ...info, views });
+      // Kept for a resume: a job that stops later does not capture this page again.
+      ctx.checkpoint?.savePage(i, captured.get(i));
     };
     const outOfTime = (info) => {
       notCaptured.push(info.path);
@@ -242,20 +248,30 @@ export async function inspectStage(ctx) {
       keep(i, info, { views: {}, errors: [{ view: 'desktop', message: String(err?.message ?? err).split('\n')[0] }] });
     }));
 
+    // Pages captured before the job was interrupted (checkpoint.js) are reused as they are; only the rest is captured.
+    const todo = [];
+    for (const [i, info] of discovery.pages.entries()) {
+      const saved = ctx.checkpoint?.page(i, info.slug);
+      if (saved) captured.set(i, saved);
+      else todo.push({ i, info });
+    }
+    if (captured.size) ctx.progress(0.2 + 0.75 * (captured.size / total), `Reusing ${captured.size} ${captured.size === 1 ? 'page' : 'pages'} captured before the interruption`);
+    const base = captured.size;
+
     // Several pages at once when the machine has room (capturePagesAtOnce); 1 = the original one-page-at-a-time loop.
-    const atOnce = Math.max(1, Math.min(total, ctx.capturePages ?? capturePagesAtOnce()));
+    const atOnce = Math.max(1, Math.min(Math.max(1, todo.length), ctx.capturePages ?? capturePagesAtOnce()));
     // How the pages were captured (additive): pages at once, the most that ran together, starts held back for memory, and
     // where the step's time went (finding pages vs capturing them).
     report.capture = { pagesAtOnce: atOnce, peak: 1, heldBack: 0, discoverMs: Date.now() - discoverStarted, captureMs: null };
     const captureStarted = Date.now();
     if (atOnce === 1) {
-      for (const [i, info] of discovery.pages.entries()) {
+      for (const [n, { i, info }] of todo.entries()) {
         if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
         if (i > 0 && Date.now() + slowest > deadline()) {
-          for (const rest of discovery.pages.slice(i)) outOfTime(rest);
+          for (const rest of todo.slice(n)) outOfTime(rest.info);
           break;
         }
-        await runPage(info, i, 0.2 + 0.75 * (i / total));
+        await runPage(info, i, 0.2 + 0.75 * ((base + n) / total));
       }
     } else {
       // Pages start in discovery order (the homepage first) while fewer than `atOnce` run and the free memory holds one more;
@@ -266,20 +282,20 @@ export async function inspectStage(ctx) {
       const inflight = new Set();
       let next = 0;
       let done = 0;
-      while (next < total || inflight.size) {
-        while (next < total && inflight.size < atOnce) {
+      while (next < todo.length || inflight.size) {
+        while (next < todo.length && inflight.size < atOnce) {
           if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
-          if (next > 0 && Date.now() + slowest > deadline()) {
-            for (const rest of discovery.pages.slice(next)) outOfTime(rest);
-            next = total;
+          if (todo[next].i > 0 && Date.now() + slowest > deadline()) {
+            for (const rest of todo.slice(next)) outOfTime(rest.info);
+            next = todo.length;
             break;
           }
           if (inflight.size > 0 && !room()) {
             report.capture.heldBack++;
             break; // short of memory: wait for a running page to finish
           }
-          const i = next++;
-          const task = runPage(discovery.pages[i], i, 0.2 + 0.75 * (done / total)).finally(() => {
+          const { i, info } = todo[next++];
+          const task = runPage(info, i, 0.2 + 0.75 * ((base + done) / total)).finally(() => {
             done++;
             inflight.delete(task);
           });

@@ -85,6 +85,14 @@ export async function sweepStage(ctx, local = {}) {
     let slowest = 0;
     for (const [i, page] of pages.entries()) {
       if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
+      // Swept before the job was interrupted (recreate/checkpoint.js): reused as it is.
+      const done = ctx.checkpoint?.sweepPage(page.slug);
+      if (done) {
+        captured[page.slug] = done;
+        tried = i + 1;
+        wake();
+        continue;
+      }
       // The homepage is always tried; the others only while one more page (at the slowest pace) fits.
       if (i > 0 && Date.now() + slowest > deadline()) {
         notCaptured.push(...pages.slice(i).map((p) => p.path));
@@ -105,6 +113,8 @@ export async function sweepStage(ctx, local = {}) {
           result = await sweepOnce();
         }
         captured[page.slug] = result;
+        // Kept for a resume: a job that stops later does not sweep this page again.
+        ctx.checkpoint?.saveSweepPage(page.slug, result);
       } catch (err) {
         if (!(err instanceof TimeoutError)) throw err;
         notCaptured.push(page.path);

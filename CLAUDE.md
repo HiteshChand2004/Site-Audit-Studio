@@ -39,6 +39,28 @@ After Phase 6, `ui-redesign` was merged into `phase-4a` (asked by the user, to s
 **Workflow**: one phase/step at a time, only after the user says "go ahead"; WIP commit per step, wait for "next"; commit at the end of each phase; never push;
 while the user tests, work in a git worktree and merge only when asked. Leftover worktrees/branches that can be removed: `../Website-Audit-4b` + `phase-4b`, `../Website-Audit-perf` + `perf-robustness`.
 
+### Resume an interrupted Recreate — branch `resume-recreate` (worktree `../Website-Audit-resume`, from `fix-all` 7526d79, fix-all ce5e869 merged in), WIP
+User: a Recreate that fails or is interrupted (an error, the time limit, a server restart, a crash) must not throw away its work: continue where it stopped. All general.
+- **Checkpoint** (`recreate/checkpoint.js`): `checkpoint.json` in the job's `<recreateId>.tmp` workspace (written atomically, one write at a time): `discovery` (saved once: same pages, order, slugs),
+  `pages` (every finished page capture by discovery index; files under `capture/<slug>/`), `sweep` (finished sweep pages by slug), `steps` (inspect / sweep / assets once finished: their report keys,
+  appended warnings / manual / errors and ctx fields), `stopped` { at, step, reason `error` | `time-limit`, message, progressed } (none = the server died while it ran), `autoResumes`, `resumed[]`.
+- **Failure** (`recreate/index.js`): the workspace is kept when the pages were found (else discarded as before); time-limit errors carry `timeLimit`. Success removes the checkpoint.
+- **Resume** (`runRecreate({ resumeFrom: { recreateId, auto? } })`): `workspace.js adoptWorkspace` renames the old `.tmp` to the new job id, `clearUnfinished` removes what the steps that run again
+  would write (site, dist, ir, fidelity, stacks; assets unless finished; capture folders of unfinished pages); finished steps are restored, not run; `inspect.js` reuses the saved discovery and pages
+  (both capture loops skip them, only the rest is captured), `sweep.js` the swept pages; generate / build / preview / responsive run again (local, quick). Fresh time budget.
+  `report.resumed[]` = { at, fromRecreateId, fromStep, stoppedStep, reason, pagesReused, stepsReused, auto } + warning "Continued after an interruption (N pages reused).".
+- **Which one** (`workspace.js findResumable`): the newest failed recreate since the latest success whose workspace has a usable checkpoint, stopped < `RESUMABLE_DAYS` (7) ago; `pruneRecreates`
+  keeps that one `.tmp`, a newer success removes it.
+- **By itself** (`recreate/jobs.js autoResume`, ≤ `MAX_AUTO_RESUMES` = 2 in a row; a manual continue resets the count): after a server restart (`db/index.js interruptedRecreates` = rows still
+  `running` at start, `index.js` calls `resumeInterruptedRecreates`; the old row's error says it continues) and after a time-limit stop that made progress. Errors are left to the user.
+- **API**: `POST /api/projects/:id/recreate { resume: true }` (409 when nothing can be continued or a recreate runs; 202 + `resumeFrom`), `GET …/recreate` → `resumable` =
+  { recreateId, step (where it continues), stoppedStep, pagesDone, pagesTotal, stoppedAt, reason (`error` | `time-limit` | `restart`), message } or null (null while a recreate runs).
+- **App**: `copy.js resumeText`; Create step: warning box "The last copy stopped before it finished" (why, what is kept) + **"Continue where it stopped (N of M pages)"**, the main button becomes
+  "Start over"; dashboard hero main action "Continue the copy". After a failed copy the store asks again 2 s later (`followRecreate`) and follows the try the server started by itself.
+- Fixed on the way (general): the per-page stall timer of `inspect.js captureOnce` was not cleared when a capture threw (a 4-min ref'd timer kept a process alive).
+- Tests: `recreate-resume.test.js` (crash mid-capture → only the missing pages captured, same pages as an uninterrupted run; failure after assets → resumes at generate, nothing captured / swept /
+  downloaded again, restored items not doubled; restart → continues by itself, limits; retention; clear errors; GET resumable + POST resume). Not tried yet on a real site or in the browser.
+
 ### Faster "Visit every page" (Recreate inspect step) — branch `optimize-fast-crawler` (worktree `../Website-Audit-crawler`, from `fix-all` 46b36c8, checkpoint a777653), WIP
 User: make step 1 much faster for any site, keep the old crawler as fallback, miss nothing. All general (no site rule). Capture still needs a real browser
 (computed styles, screenshots, motion), so "HTTP first" applies to discovery only; the capture itself (views, probes, waits) is unchanged.
@@ -989,7 +1011,7 @@ npm run setup:toolchains -w server -- react-vite next mern   # no argument = sta
 ```
 API: `GET/POST /api/projects`, `GET/PATCH/DELETE /api/projects/:id` (PATCH: `max_pages`, `recreate_pages` 0–20, `target_domain`), `GET …/:id/audit`, `GET …/:id/report`,
 `POST …/:id/analyze`, `GET …/:id/analyze/current`, `GET …/:id/analyze/:analysisId/events` (SSE progress/done/failed), `GET …/:id/analyses/:analysisId/screens/:file` (`{desktop,tablet,mobile}-{fold,full}.webp`),
-`POST …/:id/recreate`, `GET …/:id/recreate` (latest attempt + report), `GET …/:id/recreate/current`, `GET …/:id/recreate/:recreateId/events` (SSE), `GET …/recreate/:recreateId/captures/:slug/:file`, `GET …/recreate/:recreateId/fidelity/:slug/:file`,
+`POST …/:id/recreate` (`{ resume: true }` continues a stopped one), `GET …/:id/recreate` (latest attempt + report + `resumable`), `GET …/:id/recreate/current`, `GET …/:id/recreate/:recreateId/events` (SSE), `GET …/recreate/:recreateId/captures/:slug/:file`, `GET …/recreate/:recreateId/fidelity/:slug/:file`,
 `GET/POST/DELETE …/:id/preview` (`{ preview: { url, port, recreateId, … } | null }`; POST 404 without a recreate, 503 without a free port),
 `POST …/:id/reaudit` (409 without a recreate or while one runs), `GET …/:id/reaudit` (`{ last, result, stale }`), `GET …/:id/reaudit/current`, `GET …/:id/reaudit/:reauditId/events` (SSE),
 `GET …/recreate/:recreateId/download[?stack=]` (zip), `POST …/recreate/:recreateId/export`, `GET /api/stacks`, `GET /api/health`.
