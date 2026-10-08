@@ -301,7 +301,8 @@ test('real export: static export, moved URLs, equivalence through the moves, hyd
         el('p', {}, text('Fish & chips <b>not bold</b> {braces}')), el('img', { attrs: { src: { asset: 'images/a.png' }, alt: 'A' } }),
         el('a', { attrs: { href: { anchor: '#top' } } }, text('Top')), form)),
       page('about.html', { meta: [{ property: 'og:url', content: 'https://www.example.com/about.html' }] }, headerNode(), el('main', { b: 1 }, el('h1', {}, text('About')))),
-      page('services/index.html', { bodyClass: 'services', lang: 'fr' }, el('main', { b: 1 }, el('h1', {}, text('Services')), el('a', { attrs: { href: { page: 'about.html', hash: '#team' } } }, text('Team')))),
+      // The original was a client-rendered app: everything in its own <div id="root"> (the mount id is never written).
+      page('services/index.html', { bodyClass: 'services', lang: 'fr' }, el('div', { id: 'root', class: 'box', b: 1 }, el('main', { b: 1 }, el('h1', {}, text('Services')), el('a', { attrs: { href: { page: 'about.html', hash: '#team' } } }, text('Team'))))),
     ];
     const ir = irOf(pages, [
       { path: 'robots.txt', content: 'User-agent: *\n' },
@@ -351,6 +352,7 @@ test('real export: static export, moved URLs, equivalence through the moves, hyd
     assert.match(await readFile(path.join(site, 'sitemap.xml'), 'utf8'), /<loc>https:\/\/www\.example\.com\/about\/<\/loc>/);
     assert.equal(await readFile(path.join(site, '_redirects'), 'utf8'), '/about.html /about/ 301\n');
     assert.match(await readFile(path.join(site, 'services', 'index.html'), 'utf8'), /<html lang="fr"><head>/);
+    assert.doesNotMatch(await readFile(path.join(site, 'services', 'index.html'), 'utf8'), /id="root"/, 'the original app\'s mount id is not written');
 
     // Preview: the stack's own output with its inline data scripts allowed by hash.
     const preview = await (await fetch(`${base}/${id}/preview`, { method: 'POST' })).json();

@@ -80,6 +80,8 @@ export async function buildReact({ dir, ir, assets, report, htmlDist, signal, pr
     candidateRoot: dist,
     pages,
     sigOptions,
+    // The prerender puts each page in <div id="root"> (scripts/prerender.mjs): not page content.
+    appWrapper: true,
     progress: (f, message) => progress(0.5 + 0.5 * f, message),
   });
   if (!equivalence.ok) {

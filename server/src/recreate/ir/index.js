@@ -18,7 +18,7 @@ import { platformCdnHost } from '../assets/cdn.js';
 import { buildHead, generatedFavicon, siteNameOf } from './head.js';
 import { detectLang, refineHeadTexts } from './seoText.js';
 import { createAssetResolver, createLinkResolver } from './links.js';
-import { meaningful, PLATFORM_CLASS_PATTERNS } from './names.js';
+import { meaningful, MOUNT_IDS, PLATFORM_CLASS_PATTERNS } from './names.js';
 import { buildStyles, mapUrls } from './styles.js';
 import { DROP_TAGS, guardAttributes } from '../fixers/html.js';
 import { contentRecord, headHints, itemFor } from '../fixers/wordpress.js';
@@ -341,7 +341,7 @@ function pageBody(t, site, stats) {
     else if (n.stateAttrs && 'data-w-hcopy' in n.stateAttrs) out.tpl = HOVER_TEMPLATE;
     if (n.class) out.class = n.class;
     const id = n.attrs.id;
-    if (id && (keepIds.has(id) || meaningful(id))) out.id = id;
+    if (id && !MOUNT_IDS.has(id) && (keepIds.has(id) || meaningful(id))) out.id = id;
     const display = n.views.desktop ? displayOf(n, 'desktop') : 'none';
     if (BLOCK_DISPLAY.test(display) || (display === 'none' && BLOCK_TAGS.has(n.tag))) out.b = 1;
 

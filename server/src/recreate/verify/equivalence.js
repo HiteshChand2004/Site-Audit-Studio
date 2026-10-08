@@ -15,8 +15,8 @@ import { gotoLocal } from './goto.js';
 
 export const VISUAL_MIN = 0.97;
 
-// Runs in the page. The markup lives in <div id="root"> in an app (display: contents) and directly in
-// <body> in the plain-HTML build: both give the same list.
+// Runs in the page. The markup lives in <div id="root"> in a React app (display: contents; `map.appWrapper`) and
+// directly in <body> in the plain-HTML build and Next.js: all give the same list.
 function domSignature(map) {
   const lines = [];
   // `map`: a stack that moves pages (Next.js: about.html -> /about/) tells where the reference's URLs go.
@@ -91,7 +91,9 @@ function domSignature(map) {
   // JSON-LD may sit in <head> or, in a framework that renders it with the page, in <body>.
   for (const s of document.querySelectorAll('script[type="application/ld+json"]')) lines.push(`jsonld ${s.textContent}`);
   const body = document.body;
-  const root = body.children.length === 1 && body.children[0].id === 'root' ? body.children[0] : body;
+  // Only the wrapper the stack itself adds (a React app's <div id="root">) is not page content; the reference build and a
+  // stack that renders into the document never skip one (the original page may have had its own #root).
+  const root = moved.appWrapper && body.children.length === 1 && body.children[0].id === 'root' ? body.children[0] : body;
   children(root, 0);
   return lines;
 }
@@ -153,12 +155,14 @@ async function hydrationCheck(origin, outPath, browser, sigMap = null) {
 /**
  * @param {{ referenceRoot: string, candidateRoot: string, pages: { path: string, outPath: string, candidateOutPath?: string }[],
  *   urlMap?: { paths: object, absolute: object }, sigOptions?: { ignoreFormActions?: boolean },
- *   hydrate?: boolean, progress?: (fraction: number, message?: string) => void }} o
+ *   appWrapper?: boolean, hydrate?: boolean, progress?: (fraction: number, message?: string) => void }} o
+ *   appWrapper: the candidate renders its page inside <body><div id="root"> (React / MERN prerender)
  */
-export async function compareBuilds({ referenceRoot, candidateRoot, pages, urlMap = null, sigOptions = null, hydrate = true, progress = () => {} }) {
-  // What the signature may normalise: moved URLs (reference side) and form wiring (both sides).
+export async function compareBuilds({ referenceRoot, candidateRoot, pages, urlMap = null, sigOptions = null, appWrapper = false, hydrate = true, progress = () => {} }) {
+  // What the signature may normalise: moved URLs (reference side), form wiring (both sides) and the wrapper element the
+  // candidate stack adds around the page (candidate side only).
   const refMap = urlMap || sigOptions ? { paths: {}, absolute: {}, ...urlMap, ...sigOptions } : null;
-  const candMap = sigOptions ? { paths: {}, absolute: {}, ...sigOptions } : null;
+  const candMap = sigOptions || appWrapper ? { paths: {}, absolute: {}, ...sigOptions, appWrapper } : null;
   const renderer = await openRenderer(referenceRoot);
   let browser;
   try {
