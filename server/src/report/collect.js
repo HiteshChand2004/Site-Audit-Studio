@@ -19,6 +19,8 @@ const latestRecreate = db.prepare(`
 
 // Report thumbnails: small (the report shows them at half this width, so they stay sharp on high-density screens
 // without making the file or the page big): the width in px and the share of the width that makes the first screen.
+// The report shows a computer and a phone view; the tablet size stays available to thumbnail().
+const SHOWN = ['desktop', 'mobile'];
 const THUMB = {
   desktop: { width: 480, ratio: 900 / 1440 },
   tablet: { width: 250, ratio: 1024 / 768 },
@@ -60,13 +62,13 @@ export async function collectReport(projectId) {
   // The original: the first-screen shots of the analysis (screens/<view>-fold.webp).
   if (analyzed && audit.screenshots?.analysisId) {
     const dir = path.join(projectDir(projectId), 'audit', audit.screenshots.analysisId, 'screens');
-    for (const view of Object.keys(THUMB)) images.old[view] = await thumbnail(path.join(dir, `${view}-fold.webp`), view);
+    for (const view of SHOWN) images.old[view] = await thumbnail(path.join(dir, `${view}-fold.webp`), view);
   }
   // The recreated homepage: its screenshots from the fidelity check.
   if (recreate?.pages?.length) {
     const home = recreate.pages[0];
     const dir = path.join(recreateDir(projectId, rec.id), 'fidelity', home.slug ?? '');
-    for (const view of Object.keys(THUMB)) images.new[view] = await thumbnail(path.join(dir, `${view}-full.webp`), view);
+    for (const view of SHOWN) images.new[view] = await thumbnail(path.join(dir, `${view}-full.webp`), view);
   }
 
   return {

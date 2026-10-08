@@ -87,19 +87,30 @@ on slow networks / busy machines (all steps serial, one budget, Lighthouse last)
   pipeline uses the cache), `perf.test.js` (parallelism, `stepBudget`, overlapping progress, a local page whose image and frame never answer completes, screenshot views kept at the deadline),
   `recreate-jobs.test.js` (sweep runs beside later steps, awaited by `responsive`; short of memory it finishes before generate; failing sweep = warning; failing step ends a running sweep).
 
-### Complete report (UI redesign task, after 4b.1)
+### Complete report (UI redesign task, after 4b.1; revamped on `report-revamp`)
 "Generate report" (top bar, project selected) builds one report of OLD, NEW and the fix checklist; modal (animated steps, then preview); **Download PDF** (server-made, direct download, no print dialog),
-**HTML** (self-contained, no script, no external request), **JSON** (complete data), Regenerate.
+**HTML** (self-contained, no script, no external request), **JSON** (complete data, shape unchanged), Regenerate.
 - API: `GET /api/projects/:id/report[?format=html|pdf|json][&download=1]` (`routes/report.js`; built on request from stored data, nothing kept; CSP `default-src 'none'; img-src data:; sandbox`, no-store).
-  PDF (`report/pdf.js`) = the HTML printed by the app's Chromium (A4, print media, page numbers in footer, one at a time, no network); cards may break across pages (no blank gaps; 5 pages for a 6-page site, 85–100 % full).
-- `report/collect.js` (project, latest analysis → `audit` incl. `audit.recreate`, latest completed recreate report, small WebP thumbnails: original first screens, recreated pages, visual-diff heatmap),
-  `report/render.js` (`renderReportHtml`; every site value through `esc()`). Short, client-facing: numbered sections, plain-sentence summary, **At a glance** charts (inline SVG/CSS, no script): Lighthouse original vs recreated
-  (grouped bars), SEO/AEO/crawl checks (donut), fix checklist (donut), fidelity by page (bars + threshold line); small screenshots (desktop ~220 px, tablet ~115, phone ~70, one row, original + recreated);
-  **Original site** (performance rings + metrics, platform + weaknesses, SEO/AEO/crawl **issues only** + passing count, broken links + a11y, manual rebuild); **Recreated site** (fidelity / visual diff per page, between-widths bar chart,
-  built / fixed / to review, manual rebuild, warnings); **Fix checklist** (Lighthouse before → after, status counts, "Needs attention", fixed list). Long lists 8–20 rows + "+N more in the JSON download".
-  A project without analysis/recreate still gets a report that says so.
+  PDF (`report/pdf.js`) = the HTML printed by the app's Chromium (A4, print media, "<site> · website report" + page numbers in the footer, one at a time, no network).
+- `report/collect.js` (project, latest analysis → `audit` incl. `audit.recreate`, latest completed recreate report, small WebP thumbnails of the homepage's first screen: original + copy, computer and phone only).
+- **Revamp (user: "anyone, technical or not, must understand it; don't add pages")**: `report/words.js` = plain names (mirrors `client/src/copy.js`): the four areas (Speed / Found on Google / Easy for everyone / Safe & modern),
+  `rating`, `matchRating`, result words (Fixed, Better, Still needs work, Got worse, Varies, Check again, Needs a person, Depends on hosting, Fine on both; original alone: Problem / Worth fixing / Fine; each with a mark, never colour alone),
+  speed measurements with their expert term and Google's target, `plainName(item)` (SEO/AEO/site-file checks by title, Lighthouse audits by id, axe rules by id; unknown → own title), generated-field names.
+  `report/render.js`: **page 1 = one-page summary** (`break-after: page` only when detail follows): name, URL, four step tiles (report made / site checked / copy made / compared, with "Not yet"), a 2–3 sentence verdict
+  (areas better / worse per device, match in words, counts), **health scores** table (phone + computer, original → copy, a small inline-SVG dumbbell on 0–100 with marks at 50 / 90, "Better +18 / Same ±0 / Worse −16";
+  ±2 = same; original only: score + Good / Needs work / Poor), **count tiles** (Fixed, Better, Still needs work, Got worse, Needs a person, Already fine; original only: Problems, Worth fixing, Already fine, accessibility issues, dead links, needs a person),
+  **How close is the copy** (match + word, looks the same, pages, technology, other screen sizes), screenshots original vs copy (computer + phone), **What to do next** (≤ 3, priority: compare again if stale, got worse,
+  copy / compare missing, needs a person, still needs work, generated texts to review). Then numbered sections grouped by meaning, each = heading + one-line intro explaining the terms + one plain sentence + compact tables:
+  **1 Speed and technology** (measurements table original/copy × phone/computer with "Good if", built with + confidence, "What holds the original back" = weaknesses, performance/platform/best-practices checks),
+  **2 Found on Google and by AI assistants** (seo/aeo/crawl), **3 Easy for everyone** (axe + links, dead-link table), **4 The copy** (match / looks the same / other sizes tiles, weakest 8 pages + range of the rest,
+  layout-per-width bar chart, "Built and checked": links and files, safety, notice pages, motion + motion checks, automatic fixes, generated values by kind, other technologies; warnings ≤ 5), **5 Needs a person**
+  (original + copy manual items; equal kind + reason merged with their pages, e.g. "Forms on 30 pages need a backend"), **About this report** (sources, scope, local preview, stale, checklist notes, analysis errors).
+  Check tables: worst first, ≤ 14 rows + "+N more in the JSON download"; "Fine on both" and "Depends on hosting" as one line each; details in consistent units (`detail()`: ms → s, KiB → KB, "Est savings of" → "could save").
+  Warm theme (accent #c2410c, neutral greys, hairlines, tabular numbers), print rules keep each section's head with its first rows. Never-checked project = page 1 only.
+  Pages (user's data, before → after): botza 6 → 5, parchaa 7 → 6, nyaayai 8 → 6, panscience.xyz 6 → 5, flexibench (never checked) 1 → 1.
 - Analysis screenshots use `animations: 'allow'` (`audit/screenshots.js`): `'disabled'` stacked every word of a cycling headline (panscience). Older analyses need Analyze again.
-- Client: `components/report/ReportModal.jsx` (+ css), `api.getReportHtml/getReportJson/getReportPdf`. Tests: `report.test.js` (404, empty project, all sections + escaping, download/JSON, thumbnails, real PDF).
+- Client: `components/report/ReportModal.jsx` (+ css; unchanged by the revamp), `api.getReportHtml/getReportJson/getReportPdf`. Tests: `report.test.js` (404, never-checked project, all sections + plain words + escaping,
+  Better / Same / Worse + worst-first + units on a synthetic checklist, download/JSON, thumbnails, real PDF).
 
 ### UI revamp (dashboard) — branch `ui-revamp` (worktree `../Website-Audit-uirevamp`, from `fix-all`), WIP, client only
 Asked by the user: look like a real, professionally built product (not AI-generated), images + motion, keep the orange theme, and above all **organised** content. Layout chosen: a **website dashboard**. Steps R1–R4, WIP commit each.

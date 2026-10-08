@@ -22,7 +22,7 @@ async function build(html, title) {
       margin: { top: '14mm', bottom: '16mm', left: '11mm', right: '11mm' },
       displayHeaderFooter: true,
       headerTemplate: '<span></span>',
-      footerTemplate: `<div style="width:100%;padding:0 11mm;font:9px 'Segoe UI',Arial,sans-serif;color:#666a94;display:flex;justify-content:space-between"><span>${esc(title)} · audit and recreate report</span><span><span class="pageNumber"></span> / <span class="totalPages"></span></span></div>`,
+      footerTemplate: `<div style="width:100%;padding:0 11mm;font:9px 'Segoe UI',Arial,sans-serif;color:#5d6879;display:flex;justify-content:space-between"><span>${esc(title)} · website report</span><span><span class="pageNumber"></span> / <span class="totalPages"></span></span></div>`,
       timeout: 60000,
     });
   } finally {
