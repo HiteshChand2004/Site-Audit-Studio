@@ -360,6 +360,16 @@ of 2809 elements) + hover-card copies; SEO / AEO / theme-color rows were copied 
   left and listed. axe now waits ≤ 3 s for ending animations before scanning (`audit/render.js renderHome`, both sides).
 - **Names**: icon-only controls named from what they do (`stateRole` next / previous / item n of N, `wt` toggles "Open menu" /
   "Show more", two icon buttons side by side = Previous / Next).
+- **From the first step-6 run (botza.panscience.ai, all four categories already ≥ the original)**: og:image of the
+  original unusable (another host answering with a page) → the page's own first screen (`capture/<slug>/desktop-fold.webp`,
+  1200 × 630, `generate.js addSocialImages`) as og:image + twitter:image; FAQPage also for a page that is one question (its
+  h1) and its answer; the FAQ heading signal only for headings that title an FAQ (`audit/extract.js`, both sides); contrast
+  rebuilt: the homepage's axe findings (real browser colours) decide for those elements (`axeContrastFindings`), decorative
+  text (aria-hidden, or a watermark ≤ 1.6:1 laid over the layout) drawn by `::before { content }`, the style-based pass only
+  for text that fails and not ≤ 1.6:1 (a misread background had turned a lime label olive; 330 needless tweaks before);
+  hover probe: `:not(:hover)` / `:not(:focus)` rules follow the forced state while probing (botza "Proven at scale" cards:
+  the hidden panel's `opacity: 1` had been lost to `.logo-silo:not(:hover) .silo-content { opacity: 0 }`). Not rebuilt yet:
+  effects on siblings (`.card:hover ~ .card`).
 - **Measurement parity**: the re-audit's throwaway server gzips text (`servePreview({ compress })`), as any host does.
 - **Motion rows** (diagnosed side by side on panscience / parchaa): 46 of 48 "missing" hovers were the pairing key — text with
   vs without spaces between blocks, textContent vs innerText → `reaudit/motion.js hoverKey` (tag + lower-case text without white
