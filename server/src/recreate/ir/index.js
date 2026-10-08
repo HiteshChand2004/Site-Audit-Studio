@@ -378,8 +378,17 @@ function pageBody(t, site, stats) {
         if (srcset.length) attrs.srcset = srcset;
         if (!n.attrs.src && lazySrc && !attrs.loading) attrs.loading = 'lazy';
         // The width it is shown at in each view: the responsive image files are made for these (assets/variants.js).
+        // In a box with object-fit the picture is drawn at its own proportions: inside the box (contain: a tall logo
+        // in a wide box is drawn narrower) or over it (cover: wider than the box).
         const rw = {};
-        for (const [v, d] of Object.entries(n.views)) if (d && !d.hidden && d.rect?.[2] > 0) rw[v] = Math.round(d.rect[2]);
+        const ratio = n.natural?.[0] > 0 && n.natural?.[1] > 0 ? n.natural[0] / n.natural[1] : null;
+        for (const [v, d] of Object.entries(n.views)) {
+          if (!d || d.hidden || !(d.rect?.[2] > 0)) continue;
+          const [w, h] = [d.rect[2], d.rect[3]];
+          const fit = d.style?.['object-fit'];
+          const drawn = ratio && h > 0 && (fit === 'contain' || fit === 'scale-down') ? Math.min(w, h * ratio) : ratio && h > 0 && fit === 'cover' ? Math.max(w, h * ratio) : w;
+          rw[v] = Math.round(drawn);
+        }
         if (Object.keys(rw).length) out.rw = rw;
         break;
       }

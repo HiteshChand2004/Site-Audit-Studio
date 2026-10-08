@@ -15,3 +15,5 @@ process.env.SAS_DATA_DIR = mkdtempSync(path.join(root || os.tmpdir(), root ? 'fi
 process.env.SAS_KEEP_AWAKE ??= '0';
 // Jobs in tests never poll DNS for outages (interruptions.test.js passes its own checks).
 process.env.SAS_NETWORK_WATCH ??= '0';
+// The copy's own check of its outbound links goes to other sites: never from tests.
+process.env.SAS_COPY_LINK_CHECK ??= '0';

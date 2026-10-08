@@ -10,6 +10,7 @@
 // - Fonts: font-display swap on every @font-face that blocks text (auto/block/missing), and a
 //   <link rel="preload"> for the font files of the (at most two) families that carry most of each
 //   page's text.
+import { checkLinks } from '../../audit/linkChecker.js';
 import { urlKey } from '../../audit/util.js';
 import { isElement, isText } from '../ir/tree.js';
 import { KNOWN_VIEWS } from '../views.js';
@@ -44,6 +45,47 @@ export function brokenTargets(audit, skipped = []) {
       out.set(urlKey(s.url), { url: s.url, status: s.status || 'error', source: 'discovery' });
     }
   }
+  return out;
+}
+
+// The copy has pages the analysis never read (it reads a sample; Recreate copies the whole site): their outbound links are
+// checked here, with the analysis's own rules. Only a target that answers "not there" (404, 410 and other 4xx except
+// login / bot walls) counts as dead; server errors and network failures are left alone (a short outage must never unlink
+// good links). Bounded in time; switched off with SAS_COPY_LINK_CHECK=0 (the test suite).
+const DEAD_STATUS = (s) => typeof s === 'number' && s >= 400 && s < 500 && ![401, 403, 407, 429].includes(s);
+
+/**
+ * @param {object} site  prepareSite() result (pages with trees, resolveLink)
+ * @param {{ known: Map<string, object>, ms?: number, check?: Function }} o  known: targets already decided (brokenTargets)
+ * @returns {Promise<Map<string, { url: string, status: number, source: string }>>}
+ */
+export async function deadLinks(site, { known = new Map(), ms = 60000, check = checkLinks } = {}) {
+  const out = new Map();
+  if (process.env.SAS_COPY_LINK_CHECK === '0') return out;
+  const pages = [];
+  for (const t of site.pages) {
+    const links = [];
+    walk(t.root, (n) => {
+      if (n.tag !== 'a') return;
+      const href = n.href ?? n.attrs.href;
+      if (typeof href !== 'string') return;
+      let u;
+      try {
+        u = new URL(href, t.info.url);
+      } catch {
+        return;
+      }
+      if (!/^https?:$/.test(u.protocol)) return;
+      const link = site.resolveLink?.(href, t.info.url);
+      if (link?.page || link?.anchor || link?.asset) return; // a page or file of the copy itself
+      if (known.has(urlKey(u.href))) return;
+      links.push({ href: u.href });
+    });
+    if (links.length) pages.push({ url: t.info.url, status: 200, facts: { links } });
+  }
+  if (!pages.length) return out;
+  const result = await check({ pages, signal: AbortSignal.timeout(ms) }).catch(() => null);
+  for (const b of result?.broken ?? []) if (DEAD_STATUS(b.status)) out.set(urlKey(b.url), { url: b.url, status: b.status, source: 'copy link check' });
   return out;
 }
 

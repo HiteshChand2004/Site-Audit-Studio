@@ -24,12 +24,14 @@ const ITEMS = 50;
  * @param {object|null} [o.axe]  the analysis's axe.json (the homepage's accessibility scan)
  * @returns {object} tree fix results, for fixReport()
  */
-export function applyTreeFixes(site, { audit, skipped = [], axe = null }) {
+export function applyTreeFixes(site, { audit, skipped = [], axe = null, extraBroken = new Map() }) {
   const wordpress = [];
   for (const t of site.pages) if (t.wp) wordpress.push({ page: t.info.path, ...syncText(t, t.wp.item) });
 
   const pageTitles = new Map(site.pages.map((t) => [t.info.outPath, t.head?.title ?? '']));
   const broken = brokenTargets(audit, skipped);
+  // Dead targets the copy found itself (links on pages the analysis did not read: deadLinks below).
+  for (const [key, b] of extraBroken) if (!broken.has(key)) broken.set(key, b);
   const out = { wordpress, names: { fixed: [], open: [] }, alt: { fixed: [], decorative: [] }, headings: [], links: [], loading: { priority: [], lazy: 0, lazyFrames: 0 }, contrast: { fixed: [], open: [] } };
   for (const t of site.pages) {
     out.links.push(...fixBrokenLinks(t, broken, site.origin));

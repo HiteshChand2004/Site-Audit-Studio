@@ -10,6 +10,7 @@ import { load } from 'cheerio';
 import sharp from 'sharp';
 import { applyImageVariants, makeImageVariants, sizesFor } from '../src/recreate/assets/variants.js';
 import { selectPages } from '../src/recreate/discover.js';
+import { deadLinks } from '../src/recreate/fixers/perf.js';
 import { emitCss, usedCustomProps } from '../src/recreate/emit/css.js';
 import { emitSite } from '../src/recreate/emit/html.js';
 import { MOTION_JS } from '../src/recreate/emit/motionScript.js';
@@ -207,6 +208,31 @@ test('a help-centre page that is one question (its heading) and its answer gets 
   const home = { info: { path: '/' }, root: el('body', [el('h1', [txt('Welcome')])]), head: { jsonLd: [], icons: [], meta: [] } };
   addStructuredData({ pages: [home, page], baseUrl: 'https://a.test', siteName: { value: 'A' } });
   assert.match(page.head.jsonLd.join(''), /"FAQPage".*"Can we start with a pilot\?".*two-week pilot/);
+});
+
+test('the copy checks the outbound links of every page: only "not there" answers count as dead', async () => {
+  const page = { info: { url: 'https://a.test/blog/1' }, root: el('body', [
+    el('a', [txt('Gone')], { href: 'https://old-staging.example/post' }),
+    el('a', [txt('Down')], { href: 'https://flaky.example/' }),
+    el('a', [txt('Login')], { href: 'https://members.example/' }),
+    el('a', [txt('Home')], { href: 'https://a.test/' }),
+  ]) };
+  const site = { pages: [page], resolveLink: (href) => (href === 'https://a.test/' ? { page: 'index.html' } : { external: href }) };
+  let asked = [];
+  const check = async ({ pages }) => {
+    asked = pages.flatMap((p) => p.facts.links.map((l) => l.href));
+    return { broken: [{ url: 'https://old-staging.example/post', status: 404 }, { url: 'https://flaky.example/', status: 503 }, { url: 'https://members.example/', status: 'REFUSED' }] };
+  };
+  const before = process.env.SAS_COPY_LINK_CHECK;
+  process.env.SAS_COPY_LINK_CHECK = '1';
+  try {
+    const dead = await deadLinks(site, { check });
+    assert.deepEqual(asked.sort(), ['https://flaky.example/', 'https://members.example/', 'https://old-staging.example/post']);
+    assert.deepEqual([...dead.values()].map((d) => d.url), ['https://old-staging.example/post']);
+  } finally {
+    process.env.SAS_COPY_LINK_CHECK = before;
+  }
+  assert.equal((await deadLinks(site, { check })).size, 0, 'off in the test suite');
 });
 
 test('pages the analysis found join the recreate even when the server HTML links none of them', () => {

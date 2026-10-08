@@ -16,6 +16,7 @@ import { applyImageVariants, makeImageVariants } from './assets/variants.js';
 import { emitSite } from './emit/html.js';
 import { writeProject } from './emit/write.js';
 import { applyIrFixes, applyTreeFixes, fixReport } from './fixers/index.js';
+import { brokenTargets, deadLinks } from './fixers/perf.js';
 import { fetchWordPress, isWordPress } from './fixers/wordpress.js';
 import { buildIR, prepareSite, readPageCaptures } from './ir/index.js';
 import { applyMotion, readPageMotion } from './ir/motion.js';
@@ -27,6 +28,8 @@ import { REFINE_PAGES, refineResponsive } from './verify/refine.js';
 export const FIT_ROUNDS = 2;
 // The fit pass stops starting new rounds this long before the step's time limit.
 const FIT_MARGIN = 25000;
+// Time for checking the outbound links of every page (fixers/perf.js deadLinks).
+const LINK_CHECK_BUDGET = 60000;
 // Time for making the responsive image files.
 const IMAGES_BUDGET = 60000;
 // Time for the WordPress REST lookup.
@@ -206,7 +209,10 @@ export async function generateStage(ctx) {
   const axe = ctx.analysis?.id && ctx.project?.id
     ? await readFile(path.join(projectDir(ctx.project.id), 'audit', ctx.analysis.id, 'axe.json'), 'utf8').then(JSON.parse, () => null)
     : null;
-  const treeFixes = applyTreeFixes(site, { audit: ctx.audit, skipped: ctx.discovery?.skipped, axe });
+  // Outbound links of pages the analysis did not read: dead targets are unlinked like the ones the analysis found.
+  ctx.progress(0.13, 'Checking the links of every page');
+  const extraBroken = await deadLinks(site, { known: brokenTargets(ctx.audit, ctx.discovery?.skipped), ms: Math.max(10000, Math.min(LINK_CHECK_BUDGET, ctx.stepDeadline - Date.now() - FIT_MARGIN * 4)) });
+  const treeFixes = applyTreeFixes(site, { audit: ctx.audit, skipped: ctx.discovery?.skipped, axe, extraBroken });
   // After the fixers: headings are final (FAQ questions are read from them).
   const social = await addSocialImages(site, ctx, assetsDir);
   if (social.files.length) await addToManifest(assetsDir, social.files, known, ctx.assets);
