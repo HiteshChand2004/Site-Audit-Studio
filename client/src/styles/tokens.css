@@ -1,4 +1,4 @@
-/* Calm light theme: white and soft grey surfaces, one blue accent, and status colours only where something is good,
+/* Calm light theme: white and soft grey surfaces, one warm orange accent, and status colours only where something is good,
    needs work or is a problem. No gradients or glow: hierarchy comes from spacing, type and borders.
    Colours are used through these tokens only (the names are kept from the earlier theme, so every component follows). */
 :root {
@@ -14,14 +14,15 @@
   --muted: #5d6879;
   --faint: #98a2b3;
 
-  /* Accent: calm blue */
-  --accent: #2563eb;
-  --accent-hover: #1d4ed8;
-  --accent-press: #1e40af;
-  --accent-tint: #eff5ff;
-  --accent-tint-2: #dbe8fe;
-  --accent-border: #b9d0fb;
-  --accent-text: #1d4ed8;
+  /* Accent: warm orange (deep enough that white text on it stays readable, 5.2:1), amber tints */
+  --accent: #c2410c;
+  --accent-hover: #9a3412;
+  --accent-press: #7c2d12;
+  --accent-tint: #fff7ed;
+  --accent-tint-2: #ffedd5;
+  --accent-border: #fdba74;
+  --accent-text: #c2410c;
+  --accent-rgb: 194, 65, 12;
   --on-accent: #ffffff;
 
   /* Supporting colours (charts and small markers only) */
@@ -45,7 +46,7 @@
   --info: #175cd3;
   --info-tint: #eff8ff;
 
-  /* Original site (neutral slate) vs the new copy (blue) */
+  /* Original site (neutral slate) vs the new copy (orange) */
   --old-chip: #475467;
   --old-chip-bg: #f2f4f7;
   --old-chip-border: #e4e7ec;
@@ -91,7 +92,7 @@
   --shadow-md: 0 6px 16px -4px rgba(16, 24, 40, 0.1), 0 2px 6px -2px rgba(16, 24, 40, 0.05);
   --shadow-lg: 0 20px 40px -8px rgba(16, 24, 40, 0.18), 0 6px 12px -4px rgba(16, 24, 40, 0.06);
   --shadow-glow: 0 1px 2px rgba(16, 24, 40, 0.08);
-  --focus-ring: 0 0 0 3px rgba(37, 99, 235, 0.28);
+  --focus-ring: 0 0 0 3px rgba(var(--accent-rgb), 0.3);
   --overlay: rgba(16, 24, 40, 0.45);
 
   /* Motion. The keyframes live in global.css; CSS modules cannot refer to them by name, so they are

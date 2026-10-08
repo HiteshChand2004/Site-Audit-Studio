@@ -7,6 +7,7 @@ import recreateRouter from './routes/recreate.js';
 import reauditRouter from './routes/reaudit.js';
 import stacksRouter from './routes/stacks.js';
 import reportRouter from './routes/report.js';
+import faviconRouter from './routes/favicon.js';
 import { lockBusy } from './jobs/manager.js';
 import { awakeHeld } from './jobs/keepAwake.js';
 
@@ -28,6 +29,7 @@ app.use('/api/projects', screensRouter);
 app.use('/api/projects', recreateRouter);
 app.use('/api/projects', reauditRouter);
 app.use('/api/projects', reportRouter);
+app.use('/api/projects', faviconRouter);
 app.use('/api/stacks', stacksRouter);
 
 app.use('/api', (_req, res) => {

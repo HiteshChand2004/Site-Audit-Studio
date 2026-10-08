@@ -26,7 +26,21 @@ function ToggleButton({ collapsed, onToggle }) {
   );
 }
 
-/** Collapsed sidebar content: a thin rail with the toggle, New Project and one initial per website. */
+/** The website's own icon (read and kept by the server), or its first letter when it has none or it cannot be loaded. */
+function SiteIcon({ project, host }) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <span className={styles.avatar} aria-hidden="true">
+      {failed ? (
+        host.charAt(0).toUpperCase()
+      ) : (
+        <img className={styles.favicon} src={`/api/projects/${project.id}/favicon`} alt="" loading="lazy" onError={() => setFailed(true)} />
+      )}
+    </span>
+  );
+}
+
+/** Collapsed sidebar content: a thin rail with the toggle, New Project and one icon per website. */
 function Rail({ projects, selectedId, select, onNewProject, onToggle }) {
   return (
     <>
@@ -51,9 +65,7 @@ function Rail({ projects, selectedId, select, onNewProject, onToggle }) {
               title={`${p.name} · ${host}`}
               onClick={() => select(p.id)}
             >
-              <span className={styles.avatar} aria-hidden="true">
-                {host.charAt(0).toUpperCase()}
-              </span>
+              <SiteIcon project={p} host={host} />
             </button>
           );
         })}
@@ -147,9 +159,7 @@ export default function Sidebar({ onNewProject, collapsed = false, onToggle }) {
                     }
                   }}
                 >
-                  <span className={styles.avatar} aria-hidden="true">
-                    {host.charAt(0).toUpperCase()}
-                  </span>
+                  <SiteIcon project={p} host={host} />
                   <span className={styles.text}>
                     <span className={styles.name}>{p.name}</span>
                     <span className={`${styles.host} mono`}>{host}</span>
