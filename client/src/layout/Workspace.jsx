@@ -1,26 +1,27 @@
 import { useEffect, useRef, useState } from 'react';
-import { ExternalLink } from 'lucide-react';
-import { StepTabs } from '../components/common/Tabs.jsx';
+import { SectionTabs } from '../components/common/Tabs.jsx';
 import { STEPS } from '../copy.js';
-import { hostOf } from '../constants.js';
 import { plural, timeAgo } from '../format.js';
 import { api } from '../api/client.js';
 import { outputsOf, outputState } from '../stacks.js';
 import { isJobActive, useProjects } from '../store/useProjects.js';
+import SiteHero from './SiteHero.jsx';
+import OverviewStep from './steps/OverviewStep.jsx';
 import CheckStep from './steps/CheckStep.jsx';
 import CompareStep from './steps/CompareStep.jsx';
 import CreateStep from './steps/CreateStep.jsx';
 import ResultsStep from './steps/ResultsStep.jsx';
 import styles from './Workspace.module.css';
 
-const ORDER = ['check', 'create', 'compare', 'results'];
+const ORDER = ['overview', 'check', 'create', 'compare', 'results'];
 const pct = (job) => (Number.isFinite(job?.pct) ? ` · ${job.pct} %` : '');
 
-/** Status line and mark of each step tab, from what the project has and what is running. */
+/** Status line and mark of each section tab, from what the project has and what is running. */
 function stepStates({ audit, analysis, job, result, reauditJob }) {
   const checked = audit && !audit.isDummy;
   const summary = audit && !audit.isDummy && audit.recreate && !audit.recreate.isDummy ? audit.recreate.summary : null;
   return {
+    overview: { status: checked ? 'Everything at a glance' : 'Start here' },
     check: isJobActive(analysis)
       ? { tone: 'running', status: `Checking${pct(analysis)}` }
       : analysis?.status === 'failed'
@@ -46,15 +47,16 @@ function stepStates({ audit, analysis, job, result, reauditJob }) {
   };
 }
 
-/** The step a project opens on: where its work stands. */
-function startStep({ audit, job, result }) {
+/** The section a project opens on: a running job's, else the overview. */
+function startStep({ analysis, job }) {
   if (isJobActive(job)) return 'create';
-  if (!audit || audit.isDummy) return 'check';
-  if (!result) return 'create';
-  return 'results';
+  if (isJobActive(analysis)) return 'check';
+  return 'overview';
 }
 
-/** One website: its name, the four steps, and the selected step's content. */
+const TAB_TITLES = { overview: 'Overview', check: 'Check', create: 'Copy', compare: 'Compare', results: 'Results' };
+
+/** One website: the dashboard hero, the section tabs (sticky) and the selected section. */
 export default function Workspace({ project, audit, auditLoading, onOpenSettings, onOpenReport }) {
   const analysis = useProjects((s) => s.analyses[project.id]);
   const job = useProjects((s) => s.recreates[project.id]);
@@ -63,15 +65,22 @@ export default function Workspace({ project, audit, auditLoading, onOpenSettings
   const reloadRecreate = useProjects((s) => s.reloadRecreate);
   const reloadAudit = useProjects((s) => s.reloadAudit);
   const result = latest?.result;
-  const [step, setStep] = useState(() => startStep({ audit, job, result }));
+  const [step, setStep] = useState(() => startStep({ analysis, job }));
   const [chosen, setChosen] = useState(false);
-  // Until the user picks a tab, the project opens where its work stands (the audit and the copy load after the project).
+  // Until the user picks a tab, the project opens where its work stands (jobs are found after the project loads).
   useEffect(() => {
-    if (!chosen) setStep(startStep({ audit, job, result }));
-  }, [audit?.analysisId, audit?.isDummy, result?.recreateId, chosen]);
+    if (!chosen) setStep(startStep({ analysis, job }));
+  }, [isJobActive(analysis), isJobActive(job), chosen]);
+
+  const scroller = useRef(null);
+  const tabsRef = useRef(null);
   const choose = (id) => {
     setChosen(true);
     setStep(id);
+    // Bring the section into view below the sticky tabs when it was scrolled past the hero.
+    const el = scroller.current;
+    const bar = tabsRef.current;
+    if (el && bar && el.scrollTop > bar.offsetTop) el.scrollTo({ top: bar.offsetTop, behavior: 'smooth' });
   };
 
   // The app stack's build is made right after the copy; follow it until it is ready (or failed).
@@ -91,61 +100,57 @@ export default function Workspace({ project, audit, auditLoading, onOpenSettings
     };
   }, [stackState, project.id, project.stack, reloadRecreate, reloadAudit]);
 
-  // The step tabs step aside while the user scrolls down to read, and come back on the first scroll up.
-  const [tabsHidden, setTabsHidden] = useState(false);
-  const scrollState = useRef({ top: 0, until: 0 });
-  useEffect(() => {
-    setTabsHidden(false);
-    scrollState.current = { top: 0, until: 0 };
-  }, [step, project.id]);
+  // The tab bar casts a shadow once it sticks to the top.
+  const [stuck, setStuck] = useState(false);
   const onScroll = (e) => {
-    const top = e.currentTarget.scrollTop;
-    const st = scrollState.current;
-    const delta = top - st.top;
-    // Hiding / showing the tabs resizes the scroll area, which moves scrollTop by itself near the end of the page: ignore it for a moment.
-    if (Date.now() < st.until) {
-      st.top = top;
-      return;
-    }
-    if (Math.abs(delta) < 6) return;
-    st.top = top;
-    const hide = top > 80 && delta > 0;
-    if (hide !== tabsHidden) {
-      st.until = Date.now() + 350;
-      setTabsHidden(hide);
-    }
+    const bar = tabsRef.current;
+    if (bar) setStuck(e.currentTarget.scrollTop >= bar.offsetTop - 1);
   };
 
   const states = stepStates({ audit, analysis, job, result, reauditJob });
-  const tabs = ORDER.map((id) => ({ id, n: STEPS[id].n, title: STEPS[id].title, ...states[id] }));
+  const tabs = ORDER.map((id) => ({ id, title: TAB_TITLES[id], ...states[id] }));
   const props = { project, audit, onGoCreate: () => choose('create') };
+  const intro = step === 'overview' ? null : STEPS[step];
 
   return (
-    <div className={styles.workspace}>
-      <header className={styles.head} data-tabs-hidden={tabsHidden || undefined}>
-        <div className={styles.titles}>
-          <h1 className={styles.name}>{project.name}</h1>
-          <a className={`${styles.url} mono`} href={project.url} target="_blank" rel="noopener noreferrer">
-            {hostOf(project.url)}
-            <ExternalLink size={12} aria-hidden="true" />
-          </a>
-        </div>
-        <div className={styles.steps} data-hidden={tabsHidden || undefined} onFocus={() => setTabsHidden(false)}>
-          <div className={styles.stepsInner}>
-            <StepTabs tabs={tabs} value={step} onChange={choose} label="Steps" />
-          </div>
-        </div>
-      </header>
+    <div className={`${styles.workspace} scroll`} ref={scroller} onScroll={onScroll} data-shot-scroll>
+      <div className={styles.heroWrap}>
+        {auditLoading && !audit ? <HeroSkeleton /> : <SiteHero project={project} audit={audit} onGo={choose} />}
+      </div>
 
-      <div className={`${styles.content} scroll`} onScroll={onScroll}>
-        <div role="tabpanel" id={`panel-${step}`} aria-labelledby={`tab-${step}`} key={step} className={styles.panel}>
-          <p className={styles.explain}>{STEPS[step].explain}</p>
-          {step === 'check' && <CheckStep project={project} audit={audit} loading={auditLoading} />}
-          {step === 'create' && <CreateStep project={project} audit={audit} onOpenSettings={onOpenSettings} />}
-          {step === 'compare' && <CompareStep {...props} />}
-          {step === 'results' && <ResultsStep {...props} onOpenReport={onOpenReport} />}
+      <div className={styles.tabsBar} ref={tabsRef} data-stuck={stuck || undefined}>
+        <div className={styles.tabsInner}>
+          <SectionTabs tabs={tabs} value={step} onChange={choose} label="Sections of this website" />
         </div>
       </div>
+
+      <div role="tabpanel" id={`panel-${step}`} aria-labelledby={`tab-${step}`} key={step} className={styles.panel}>
+        {intro && (
+          <header className={styles.intro}>
+            <h2 className={styles.introTitle}>{intro.title}</h2>
+            <p className={styles.introText}>{intro.explain}</p>
+          </header>
+        )}
+        {step === 'overview' && <OverviewStep project={project} audit={audit} loading={auditLoading} onGo={choose} />}
+        {step === 'check' && <CheckStep project={project} audit={audit} loading={auditLoading} />}
+        {step === 'create' && <CreateStep project={project} audit={audit} onOpenSettings={onOpenSettings} />}
+        {step === 'compare' && <CompareStep {...props} />}
+        {step === 'results' && <ResultsStep {...props} onOpenReport={onOpenReport} />}
+      </div>
+    </div>
+  );
+}
+
+function HeroSkeleton() {
+  return (
+    <div className={styles.heroSkeleton} aria-hidden="true">
+      <div>
+        <span className="skeleton" />
+        <span className="skeleton" />
+        <span className="skeleton" />
+        <span className="skeleton" />
+      </div>
+      <span className="skeleton" />
     </div>
   );
 }

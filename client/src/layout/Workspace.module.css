@@ -1,97 +1,131 @@
-/* The workspace of one website: its name, the four step tabs, and the selected step. */
+/* One website's dashboard: the hero, the sticky section tabs and the selected section, all in one scroll area. */
 .workspace {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
-}
-
-.head {
-  display: grid;
-  gap: var(--sp-4);
-  padding: var(--sp-5) var(--sp-6) var(--sp-4);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-}
-
-.head {
-  transition: gap var(--dur) var(--ease), padding var(--dur) var(--ease);
-}
-
-.head[data-tabs-hidden] {
-  gap: 0;
-  padding-bottom: var(--sp-3);
-}
-
-/* The step tabs fold away while scrolling down (grid rows 1fr → 0fr) and unfold on scrolling up. */
-.steps {
-  display: grid;
-  grid-template-rows: 1fr;
-  transition: grid-template-rows var(--dur) var(--ease), opacity var(--dur) var(--ease);
-}
-
-.steps[data-hidden] {
-  grid-template-rows: 0fr;
-  opacity: 0;
-}
-
-.stepsInner {
-  min-height: 0;
-  overflow: hidden;
-  /* room for the selected tab's focus ring and shadow */
-  padding: 3px;
-  margin: -3px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .head,
-  .steps {
-    transition: none;
-  }
-}
-
-.titles {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--sp-2) var(--sp-3);
-}
-
-.name {
-  color: var(--text);
-  font-size: var(--fs-xl);
-  font-weight: 700;
-  letter-spacing: -0.01em;
-}
-
-.url {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--muted);
-  font-size: var(--fs-sm);
-  text-decoration: none;
-}
-
-.url:hover {
-  color: var(--accent-text);
-}
-
-.content {
-  min-height: 0;
   overflow-y: auto;
+  scroll-padding-top: 64px;
+}
+
+.heroWrap {
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: var(--sp-6) var(--sp-8) 0;
+}
+
+.heroSkeleton {
+  display: grid;
+  grid-template-columns: 1fr 1.05fr;
+  gap: var(--sp-8);
+  padding: 40px;
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--hairline);
+}
+
+.heroSkeleton > div {
+  display: grid;
+  align-content: center;
+  gap: 14px;
+}
+
+.heroSkeleton > div > span:nth-child(1) { width: 60%; height: 36px; }
+.heroSkeleton > div > span:nth-child(2) { width: 40%; height: 14px; }
+.heroSkeleton > div > span:nth-child(3) { width: 80%; height: 40px; }
+.heroSkeleton > div > span:nth-child(4) { width: 50%; height: 44px; }
+.heroSkeleton > span { aspect-ratio: 16 / 10; border-radius: 12px; }
+
+/* Section tabs stick to the top of the scroll area; a shadow appears once they do. */
+.tabsBar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin-top: var(--sp-5);
+  background: rgba(246, 247, 249, 0.86);
+  backdrop-filter: saturate(1.4) blur(12px);
+  transition: box-shadow 200ms ease, background 200ms ease;
+}
+
+.tabsBar[data-stuck] {
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 1px 0 var(--hairline-strong), 0 8px 20px -14px rgba(16, 24, 40, 0.25);
+}
+
+.tabsInner {
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: 0 var(--sp-8);
+  border-bottom: 1px solid var(--hairline-strong);
+}
+
+.tabsBar[data-stuck] .tabsInner {
+  border-bottom-color: transparent;
 }
 
 .panel {
   max-width: 1360px;
   margin: 0 auto;
-  padding: var(--sp-5) var(--sp-6) var(--sp-10);
-  animation: var(--k-fade-up) 260ms var(--ease) both;
+  padding: var(--sp-6) var(--sp-8) 64px;
+  animation: var(--k-fade-up) 300ms var(--ease) both;
 }
 
-.explain {
-  margin-bottom: var(--sp-4);
+.intro {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px var(--sp-4);
+  margin-bottom: var(--sp-5);
+}
+
+.introTitle {
+  color: var(--text);
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.introText {
   color: var(--muted);
+}
+
+/* A titled group of content inside a section (with a hairline above). */
+.group {
+  display: grid;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+
+.groupHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px var(--sp-4);
+  padding-top: var(--sp-6);
+  border-top: 1px solid var(--hairline-strong);
+}
+
+.groupTitle {
+  color: var(--text);
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+.groupMeta {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+@media (max-width: 1180px) {
+  .heroWrap {
+    padding: var(--sp-5) var(--sp-5) 0;
+  }
+
+  .tabsInner,
+  .panel {
+    padding-right: var(--sp-5);
+    padding-left: var(--sp-5);
+  }
 }
 
 /* Inside a step */
