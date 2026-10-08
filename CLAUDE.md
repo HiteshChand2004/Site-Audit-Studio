@@ -39,6 +39,28 @@ After Phase 6, `ui-redesign` was merged into `phase-4a` (asked by the user, to s
 **Workflow**: one phase/step at a time, only after the user says "go ahead"; WIP commit per step, wait for "next"; commit at the end of each phase; never push;
 while the user tests, work in a git worktree and merge only when asked. Leftover worktrees/branches that can be removed: `../Website-Audit-4b` + `phase-4b`, `../Website-Audit-perf` + `perf-robustness`.
 
+### Faster "Visit every page" (Recreate inspect step) — branch `optimize-fast-crawler` (worktree `../Website-Audit-crawler`, from `fix-all` 46b36c8, checkpoint a777653), WIP
+User: make step 1 much faster for any site, keep the old crawler as fallback, miss nothing. All general (no site rule). Capture still needs a real browser
+(computed styles, screenshots, motion), so "HTTP first" applies to discovery only; the capture itself (views, probes, waits) is unchanged.
+- **Pages side by side** (`recreate/inspect.js`): `capturePagesAtOnce()` = `SAS_CAPTURE_PAGES` (1–8; **1 = the previous one-page-at-a-time loop, same code path**),
+  else `SAS_MAX_PARALLEL` → floor(cap / 4 views) (≥ 1), else min(`CAPTURE_PAGES_MAX` 3, CPU threads / 4, free memory / (4 × 150 MB)). A 2–4-thread or short-of-memory machine stays at 1.
+  Before each extra page starts, `roomForAnotherPage()` checks free memory again (else waits for a running page: `report.capture.heldBack`). Pages start in discovery order; captured
+  pages / manifest keep it. Per-page cap, stall → retry in a fresh browser, outage/sleep recovery (`recoverHit`, per page), `PAGE_LIMIT_MARGIN`, `scaleToPages` unchanged.
+  An unexpected error in one page (not the homepage) is reported for that page (notice page) instead of failing the step, in both paths. One browser, one egress proxy, one shared cache for all.
+  `report.capture = { pagesAtOnce, peak, heldBack, discoverMs, captureMs }` (additive). Outage grants of pages hit together may add up (still capped by `ALLOWANCE_MS`).
+- **Discovery** (`discover.js`, `audit/crawler.js`, `audit/extract.js`): fetch concurrency `SAS_CRAWL_CONCURRENCY` (1–16, default `CRAWL_CONCURRENCY` 8; Analyze keeps 4);
+  browser renders limited to free memory (≤ 4, `inspect.js limiter`) in one browser (fixes a race that could launch two); render rule `looksClientRendered` (shell, < 300 chars of text
+  whatever the links, an empty app mount point `#root/#app/#__next/…` or a `<noscript>` asking for JavaScript while text < 2000) — broader than `looksLikeShell`: when in doubt, render.
+  URL dedupe = existing `pageKey` (www / trailing slash / fragment). Discovery was already HTTP-first and takes ~1–2 s; the time is in capture.
+- Not changed on purpose: capture waits (`load` ≤ 20 s, quiet network ≤ 5 / 3 s, 300 ms) and probe timings — they decide what is captured (lazy content, hydration, reveals).
+- **Measured** (this machine: Ryzen 5 7535HS 12 threads, 15 GB, ~4.6 GB free; same limits; before = checkpoint worktree, after = branch; 3 pages at once):
+  fixture (8 pages): inspect 99 / 105 s → **36 / 36 s**, total 138 / 149 → 86 / 75 s, identical results (pages, motion counts, fidelity 99, per-page scores).
+  parchaa.com (Framer, 9 pages): inspect 667 / 658 s → **250 / 261 s**, total 896 / 907 → 501 / 518 s; same 9 pages, 0 errors; hover 151 / 136 → 152 / 153, reveal 76 / 70 → 81 / 72,
+  loops 37 / 33 → 28 / 37, clicks 15 / 15 → 16 / 16 (run-to-run noise of timer-driven pages; homepage loops 13–19 in every run), fidelity 95 / 95 → 94 / 94, visual diff 93 / 93 → 92 / 94.
+- Tests: `recreate-concurrent-capture.test.js` (limit honoured, order kept, failing pages isolated, memory fallback, `SAS_CAPTURE_PAGES=1`, homepage failure still fails, real captures
+  1 vs 2 at once equal, render rule, crawl concurrency + dedupe); `recreate-interrupts.test.js` (+ outage hitting two pages side by side; the order-based stand-in pins 1 page).
+- **Back to the old behaviour**: `SAS_CAPTURE_PAGES=1` (capture) + `SAS_CRAWL_CONCURRENCY=4`; or `git checkout fix-all` / `git reset --hard a777653` on this branch.
+
 ### Speed and robustness of the jobs (after 4b) — ✅ merged into `phase-4a` (d1b09e8, ff from `perf-robustness`, approved); never pushed
 Final check: server suite 238/238; panscience.xyz via API: Analyze 102 s, Recreate 491 s, re-audit 174 s, 0 errors, fidelity 80, visual diff 79, 6/6 pages, 42/42 widths, safety passed.
 Trigger: on panscience.xyz Analyze stopped at 43 % ("render timed out after 85s, screenshots after 70s, links / Lighthouse skipped"); on a quiet machine 82 s with no error. The pipeline was fragile
