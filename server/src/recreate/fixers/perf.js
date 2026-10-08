@@ -260,7 +260,7 @@ const SCRIPT_OWNED = /^data-w-(set|i|go|note|note-of|auto|hcopy|hrest|hv|one|tpl
  * (states, panels, notices, hover looks) are left alone. Returns how many parts were marked.
  */
 export function markLayouts(t) {
-  const views = Object.keys(t.root.views ?? {});
+  const views = t.views ?? Object.keys(t.root.views ?? {});
   if (views.length < 2) return 0;
   const size = (n) => (isElement(n) ? 1 + n.children.reduce((s, c) => s + size(c), 0) : 0);
   const owned = (n) => isElement(n) && (Object.keys(n.attrs ?? {}).some((k) => SCRIPT_OWNED.test(k) || k === 'hidden')

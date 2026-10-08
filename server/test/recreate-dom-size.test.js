@@ -49,11 +49,30 @@ test("per-page @font-face: only subsets holding the page's characters and the we
   const page = { body: { tag: 'body', attrs: {}, children: [{ text: 'Hello world' }] } };
   const kept = pageFontFaces(faces, page, '.a { font-family: "Inter"; font-weight: 500; } .b { font-family: "Inter"; font-weight: 200; }');
   const ids = kept.map((f) => `${f.weight}${f.style === 'italic' ? 'i' : ''}:${f.unicodeRange === cyr ? 'cyr' : 'lat'}`);
-  // 500 → 400 (no 500 face); 200 → nothing lighter, so the lightest above (300); 400 / 700 always; 600 / 800 unused;
-  // no Cyrillic text; no italic text.
-  assert.deepEqual(ids.sort(), ['300:lat', '400:lat', '700:lat']);
+  // 500 → 400 (no 500 face); 200 → nothing lighter, so the lightest above (300); 400 always; 600 / 700 / 800 unused
+  // (the copy's reset makes headings inherit); no Cyrillic text; no italic text.
+  assert.deepEqual(ids.sort(), ['300:lat', '400:lat']);
   const cyrillic = pageFontFaces(faces, { body: { tag: 'body', attrs: {}, children: [{ text: 'Привет' }] } }, '.a { font-family: "Inter"; }');
   assert.ok(cyrillic.some((f) => f.unicodeRange === cyr));
+  // A heading whose weight is reverted gets the browser's bold back: 700 stays.
+  const heading = { body: { tag: 'body', attrs: {}, children: [{ tag: 'h2', attrs: {}, children: [{ text: 'Hi there' }] }] } };
+  assert.ok(pageFontFaces(faces, heading, '.a { font-family: "Inter"; font-weight: revert; }').some((f) => f.weight === '700'));
+  // Inline styles count too.
+  const inline = { body: { tag: 'body', attrs: {}, children: [{ tag: 'p', attrs: { style: 'font-weight: 800' }, children: [{ text: 'x' }] }] } };
+  assert.ok(pageFontFaces(faces, inline, '.a { font-family: "Inter"; }').some((f) => f.weight === '800'));
+});
+
+test('per-page motion CSS: only the effects the page carries (also inside inline SVG)', async () => {
+  const { pageMotion } = await import('../src/recreate/emit/css.js');
+  const motion = { hover: [{ token: 'h1' }, { token: 'h2' }], focus: [{ token: 'f1' }], reveal: [{ token: 'r1' }, { token: 'r2' }], loops: [{ token: 'l1' }, { token: 'l2' }], delays: [70, 120], widgets: [{ token: 'w1' }] };
+  const page = { body: { tag: 'body', attrs: {}, children: [
+    { tag: 'a', attrs: { 'data-motion': 'h2 rv r1 d70' }, children: [] },
+    { tag: 'svg', attrs: {}, raw: '<svg><g data-motion="l2"></g></svg>', children: [] },
+  ] } };
+  const m = pageMotion(motion, page);
+  assert.deepEqual([m.hover, m.focus, m.reveal, m.loops].map((l) => l.map((e) => e.token)), [['h2'], [], ['r1'], ['l2']]);
+  assert.deepEqual(m.delays, [70]);
+  assert.equal(m.widgets.length, 1, 'widgets kept as they are');
 });
 
 test('layout parts other window sizes show are marked; the script parks them and brings them back on resize', async () => {

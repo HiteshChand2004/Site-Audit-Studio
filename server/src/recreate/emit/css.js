@@ -182,15 +182,18 @@ export function charsCovered(face, chars) {
 
 /**
  * The @font-face rules a page's stylesheet needs: families its rules name, subsets (unicode-range) holding a character
- * the page draws, and weights / styles its rules use (400 and 700 always: the defaults of text and headings; a relative
- * weight keeps them all). A face left out is a face the page never loads.
+ * the page draws, and weights / styles its rules use (400 always: text without a weight; a relative weight keeps them
+ * all), each picked like the browser's weight matching. A face left out is a face the page never loads.
  */
 export function pageFontFaces(faces, page, sheet) {
   const css = sheet + inlineStyles(page.body);
   const named = faces.filter((f) => css.includes(f.family));
   const chars = pageChars(page, css);
-  const weights = new Set([400, 700]);
-  let anyWeight = /font-weight:\s*(bolder|lighter|var\(|inherit|revert|unset|initial)/.test(css);
+  // 400: text without a weight of its own. The copy's reset makes headings, b / strong and th inherit their weight, and
+  // `inherit` / `unset` reuse a weight counted here; `revert` gives such a tag the browser's bold back.
+  const weights = new Set([400]);
+  if (/font-weight:\s*revert/.test(css) && hasTag(page.body, /^(h[1-6]|b|strong|th)$/)) weights.add(700);
+  let anyWeight = /font-weight:\s*(bolder|lighter|var\()/.test(css);
   for (const m of css.matchAll(/font-weight:\s*([\w-]+)/g)) {
     const w = WEIGHT_WORDS[m[1]] ?? Number(m[1]);
     if (Number.isFinite(w)) weights.add(w);
@@ -199,7 +202,9 @@ export function pageFontFaces(faces, page, sheet) {
     for (const t of m[1].split(/\s+/)) if (/^[1-9]00$/.test(t) || t in WEIGHT_WORDS) weights.add(WEIGHT_WORDS[t] ?? Number(t));
   }
   if (/font-variation-settings/.test(css)) anyWeight = true;
-  const italic = /font-style:\s*(italic|oblique)|font:[^;}]*\b(italic|oblique)\b/.test(css) || hasTag(page.body, /^(em|i|cite|var|dfn|address)$/);
+  // em / i / cite… inherit their style in the copy's reset; `revert` gives them the browser's italic back.
+  const italic = /font-style:\s*(italic|oblique)|font:[^;}]*\b(italic|oblique)\b/.test(css)
+    || (/font-style:\s*revert/.test(css) && hasTag(page.body, /^(em|i|cite|var|dfn|address)$/));
   const range = (f) => {
     const [lo, hi = lo] = String(f.weight ?? 'normal').split(/\s+/).map((t) => WEIGHT_WORDS[t] ?? Number(t));
     return Number.isFinite(lo) && Number.isFinite(hi) ? [lo, hi] : null;
@@ -253,6 +258,36 @@ function hasTag(n, re) {
   return (n.children ?? []).some((c) => hasTag(c, re));
 }
 
+/** Motion tokens a page carries: its elements' data-motion, inline SVG markup included (loops inside SVGs). */
+export function pageMotionTokens(page) {
+  const tokens = new Set();
+  const add = (v) => {
+    for (const t of String(v ?? '').split(/\s+/)) if (t) tokens.add(t);
+  };
+  const walk = (n) => {
+    if (!n || 'text' in n) return;
+    add(n.attrs?.['data-motion']);
+    if (n.raw) for (const m of n.raw.matchAll(/data-motion\s*=\s*["']([^"']*)["']/g)) add(m[1]);
+    (n.children ?? []).forEach(walk);
+  };
+  walk(page.body);
+  return tokens;
+}
+
+/** The site's motion with only the hover / focus / reveal / delay / loop effects this page's elements use. */
+export function pageMotion(motion, page) {
+  const tokens = pageMotionTokens(page);
+  const has = (e) => tokens.has(e.token);
+  return {
+    ...motion,
+    hover: (motion.hover ?? []).filter(has),
+    focus: (motion.focus ?? []).filter(has),
+    reveal: (motion.reveal ?? []).filter(has),
+    loops: (motion.loops ?? []).filter(has),
+    delays: (motion.delays ?? []).filter((ms) => tokens.has(`d${ms}`)),
+  };
+}
+
 const selectorClass = (selector) => selector.match(/^\.(-?[_a-zA-Z][\w-]*)/)?.[1] ?? null;
 
 /**
@@ -274,7 +309,7 @@ export function emitCss(ir, { page = null, usedVars = usedCustomProps(ir) } = {}
   const body = base.join('\n');
   const byView = Object.fromEntries(MEDIA_VIEWS.map((view) => [view, media(view)]));
   // Tokens are written only when a rule uses them.
-  const motion = motionCss(ir.motion, opts);
+  const motion = motionCss(page && ir.motion ? pageMotion(ir.motion, page) : ir.motion, opts);
   const all = [body, motion, ...MEDIA_VIEWS.flatMap((view) => byView[view])].join('\n');
   const used = Object.entries(ir.tokens).filter(([name]) => all.includes(`var(${name})`));
   // A page's stylesheet keeps the @keyframes and @font-face its rules name.

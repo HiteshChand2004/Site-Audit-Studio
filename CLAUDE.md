@@ -457,6 +457,13 @@ of 2809 elements) + hover-card copies; SEO / AEO / theme-color rows were copied 
   (`oscillate` on opacity / `blink` / opacity-only `other`). (7) Checklist: a Lighthouse audit failing on both sides whose
   measured value moved on every device (`numericValue`, else metric savings) is improved / regressed (`lighthouseTrend`:
   10 % margin, 2 % for element counts). Tests: `recreate-dom-size.test.js`.
+  First real run (fresh Create, all four categories ≥ original on both devices, loops/fades fixed) showed: `markLayouts`
+  marked nothing (views read from `t.root.views`, empty on real trees → `t.views`); per-page weights kept 400 + 700 + every
+  weight once any rule said `font-weight: inherit` (now: 400 + weights named; 700 / italic only when `revert` meets a
+  heading / b / em… tag, since the reset makes them inherit); each page carried the whole site's motion CSS → `pageMotion`
+  keeps hover / focus / reveal / loop / delay effects whose token the page (or its inline SVG) carries (parchaa homepage CSS
+  220 → 179 KB, blog pages 128 → 74 KB); an AVIF original got no smaller WebP variant (larger than the AVIF) so phones loaded
+  the 1988 px file → variants of an AVIF are AVIF (quality 55).
 
 ### Desktop only (WIP, user: "remove tablet and mobile from frontend and backend, keep only desktop") — merged into `phase-4a`; **UNDONE in as-is step 4** (branch `step4-mobile`, see above)
 History: one view everywhere, the rest parked, not deleted. Step 4 listed all four views again and restored what is below; what stays from it: `KNOWN_*` views, the single-view IR path for older

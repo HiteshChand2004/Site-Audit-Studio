@@ -12,6 +12,7 @@ import sharp from 'sharp';
 const RASTER = /\.(jpe?g|png|webp|avif|tiff?)$/i;
 const MIN_BYTES = 12 * 1024; // smaller files gain little and cost a request each
 const QUALITY = 80;
+const AVIF_QUALITY = 55; // AVIF at this quality looks like WebP at 80; an AVIF original stays AVIF (WebP of it is larger)
 const CLOSE = 0.12; // widths closer than this share one file
 const MAX_FILES = 600; // per recreate, a safety cap on the work
 
@@ -75,18 +76,21 @@ export async function makeImageVariants({ ir, assetsDir, deadline = Infinity }) 
     if (!meta.width || (meta.pages ?? 1) > 1) continue;
     const list = [];
     let largest = 0;
+    const avif = meta.format === 'heif' || /\.avif$/i.test(asset);
+    const ext = avif ? 'avif' : 'webp';
     for (const w of pickWidths(wanted, meta.width)) {
       try {
-        const out = await sharp(input).resize({ width: w, withoutEnlargement: true }).webp({ quality: QUALITY }).toBuffer();
+        const resized = sharp(input).resize({ width: w, withoutEnlargement: true });
+        const out = await (avif ? resized.avif({ quality: AVIF_QUALITY, effort: 4 }) : resized.webp({ quality: QUALITY })).toBuffer();
         // Not smaller than the original at full width: the original file serves that width.
         if (w >= meta.width * (1 - CLOSE) && out.length >= input.length) {
           list.push({ asset, w: meta.width });
           continue;
         }
         const sha256 = createHash('sha256').update(out).digest('hex');
-        const file = `${asset.replace(/\.[^./]+$/, '')}-${w}w.webp`;
+        const file = `${asset.replace(/\.[^./]+$/, '')}-${w}w.${ext}`;
         await sharp(out).toFile(path.join(assetsDir, file));
-        files.push({ file, kind: 'image', mime: 'image/webp', bytes: out.length, sha256, urls: [], variantOf: asset, width: w });
+        files.push({ file, kind: 'image', mime: `image/${ext}`, bytes: out.length, sha256, urls: [], variantOf: asset, width: w });
         list.push({ asset: file, w });
         largest = Math.max(largest, out.length);
       } catch {
