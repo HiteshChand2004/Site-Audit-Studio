@@ -24,6 +24,9 @@ const PAGE_LIMIT_MARGIN = 5000;
 const MOTION_BUDGET = 8000;
 // Clicking menus, tabs, sliders and dialogs (full-site B.1, capture/clicks.js), after the hover probe.
 const CLICK_BUDGET = 20000;
+// The least a probe is worth running for: below this it only costs time.
+const MOTION_BUDGET_MIN = 2500;
+const CLICK_BUDGET_MIN = 6000;
 // Time of the whole job kept for the steps after capture (assets, generate, build, preview), for BASE_PAGES pages; more pages
 // keep more (ctx.laterReserve, recreate/index.js).
 export const LATER_STEPS_RESERVE = 150000;
@@ -181,16 +184,36 @@ export async function inspectStage(ctx) {
     // A started page is abandoned a little before the step's own limit (which would fail the job).
     const pageLimit = () => limitOf(PAGE_LIMIT_MARGIN);
     let slowest = 0;
+    // How long the finished pages took. The slowest one decides when to stop starting pages (a conservative guess),
+    // the typical one decides how much time a page gets for its probes: with the slowest, one bad page took the hover,
+    // click and state probes away from every page after it.
+    const pageMs = [];
+    const typicalPageMs = () => {
+      if (!pageMs.length) return 0;
+      const sorted = [...pageMs].sort((a, b) => a - b);
+      return sorted[Math.floor(sorted.length / 2)];
+    };
 
     // One capture of a page; null = abandoned: it stalled past its own cap (a slow server, an animation that never settles)
     // or the step's limit. A stalled page must not hold up the others or take the pages captured so far down with it.
     // Only the homepage waits without a cap (the step's own limit still applies).
     const captureOnce = async (info, i) => {
       // Hover / focus probing (4b.1) takes a few seconds per page: only while the step has time to spare.
-      const spare = deadline() - Date.now() - slowest * 2;
+      const spare = deadline() - Date.now() - typicalPageMs() * 2;
+      // The budgets follow the time to spare instead of switching off at a threshold: a page with less time still gets
+      // a shorter hover and click probe. A full budget needs twice what it costs, as before; below the floor the probe
+      // is not worth its page load and is skipped.
+      const share = (full, min, need) => {
+        if (spare <= 0) return 0;
+        // Before any page has been measured the time that is left says little about what a page costs: the full budget
+        // only when it clearly fits, as it was. From the second page on the share follows the time to spare.
+        if (!pageMs.length) return spare > need * 2 ? full : 0;
+        const ms = Math.min(full, Math.round((spare / (need * 2)) * full));
+        return ms >= min ? ms : 0;
+      };
       const capture = (ctx.capturePage ?? capturePage)(browser, info, ctx.dir, {
-        motionBudgetMs: spare > MOTION_BUDGET * 2 ? MOTION_BUDGET : 0,
-        clickBudgetMs: spare > (MOTION_BUDGET + CLICK_BUDGET) * 2 ? CLICK_BUDGET : 0,
+        motionBudgetMs: share(MOTION_BUDGET, MOTION_BUDGET_MIN, MOTION_BUDGET),
+        clickBudgetMs: share(CLICK_BUDGET, CLICK_BUDGET_MIN, MOTION_BUDGET + CLICK_BUDGET),
         cache: ctx.netCache,
       });
       if (i === 0) return capture;
@@ -203,7 +226,9 @@ export async function inspectStage(ctx) {
       return r;
     };
     // A finished capture: kept when it has the desktop view (the base layout), else the page is reported.
-    const keep = (i, info, { views, errors }) => {
+    const keep = (i, info, { views, errors, retried = 0 }) => {
+      // Views the site refused at first and gave on a second try: a site that drops connections is visible in the report.
+      if (retried && report.capture) report.capture.retriedViews = (report.capture.retriedViews ?? 0) + retried;
       for (const e of errors) report.errors.push({ step: 'inspect', message: `${info.path} (${e.view}): ${e.message}` });
       if (!views.desktop) {
         if (i === 0) throw new RecreateError(`The homepage could not be captured: ${errors[0]?.message ?? 'unknown error'}`);
@@ -239,6 +264,7 @@ export async function inspectStage(ctx) {
         return;
       }
       slowest = Math.max(slowest, Date.now() - started);
+      pageMs.push(Date.now() - started);
       keep(i, info, result);
     };
     // An unexpected error in one page (not the homepage, which the job needs) is reported for that page and never stops the
@@ -330,6 +356,7 @@ export async function inspectStage(ctx) {
           continue;
         }
         slowest = Math.max(slowest, Date.now() - started);
+      pageMs.push(Date.now() - started);
         keep(i, info, result);
       }
     }

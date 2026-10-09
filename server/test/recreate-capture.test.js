@@ -255,3 +255,79 @@ test('the inspect step captures every selected page at desktop, laptop, tablet a
   assert.deepEqual(desktop.screenshots.fold.width, 1440);
   assert.deepEqual(mobile.screenshots.fold.width, 750); // DPR 2
 });
+
+// Step 1 of the capture-completeness work, on a server of its own (the static fixture cannot drop connections or
+// serve a 12 000 px page): a site that refuses a load, and a page taller than the screenshot limit.
+const STEP1_PORT = 4201;
+const TALL = `<!doctype html><html><head><title>Tall</title><style>
+body { margin: 0; font: 16px sans-serif }
+section { height: 2200px; padding: 40px }
+.late { opacity: 0; transition: opacity .2s linear }
+.late.seen { opacity: 1 }
+</style></head><body>
+<section><h1>Top</h1><p>The first screen of a page that is far taller than the screenshot limit.</p></section>
+<section><p>Filler two</p></section>
+<section><p>Filler three</p></section>
+<section><p>Filler four</p></section>
+<section id="deep"><h2 class="late">Deep heading</h2><p class="late">This sits past 8000 px.</p>
+<img class="late" id="deepimg" loading="lazy" width="120" height="60" alt="deep" src="/pixel.svg"></section>
+<script>
+var io = new IntersectionObserver(function (es) {
+  es.forEach(function (e) { if (e.isIntersecting) e.target.classList.add('seen'); });
+}, { threshold: 0.01 });
+document.querySelectorAll('.late').forEach(function (el) { io.observe(el); });
+</script>
+</body></html>`;
+
+test('a load the site refuses is tried again, and the scroll-through goes past the screenshot limit', async () => {
+  const { createServer } = await import('node:http');
+  const { launchBrowser } = await import('../src/audit/render.js');
+  let refusals = 0;
+  const srv = createServer((req, res) => {
+    // Every view's first load of /flaky is dropped without an answer (ERR_EMPTY_RESPONSE), then it works.
+    if (req.url === '/flaky' && refusals < 4) {
+      refusals++;
+      res.socket.destroy();
+      return;
+    }
+    if (req.url === '/pixel.svg') {
+      res.writeHead(200, { 'content-type': 'image/svg+xml' });
+      res.end('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"><rect width="120" height="60" fill="#444"/></svg>');
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(req.url === '/flaky' ? '<!doctype html><html><head><title>Flaky</title></head><body><h1>Flaky</h1><p>It answered this time.</p></body></html>' : TALL);
+  });
+  await new Promise((r) => srv.listen(STEP1_PORT, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${STEP1_PORT}`;
+  const dir = recreateDir(`step1-${randomUUID()}`, randomUUID());
+  const browser = await launchBrowser();
+  try {
+    // A site that drops the connection: every view failed and the page used to be lost.
+    const flaky = await capturePage(browser, { url: `${base}/flaky`, path: '/flaky', slug: 'flaky' }, dir, { timeout: 15000 });
+    assert.ok(refusals > 0, 'the server refused at least once');
+    assert.deepEqual(flaky.errors, [], JSON.stringify(flaky.errors));
+    assert.ok(flaky.views.desktop && flaky.retried > 0, `retried ${flaky.retried}`);
+
+    // A page taller than the screenshot limit: what sits past 8000 px is scrolled to, so its lazy image loads and
+    // its scroll-reveal fires instead of being captured at opacity 0.
+    const tall = await capturePage(browser, { url: `${base}/`, path: '/', slug: 'tall' }, dir, { timeout: 20000 });
+    assert.deepEqual(tall.errors, [], JSON.stringify(tall.errors));
+    const view = JSON.parse(await readFile(path.join(dir, 'capture', 'tall', tall.views.desktop.file), 'utf8'));
+    const find = (n, hit) => {
+      if (!n || typeof n !== 'object') return null;
+      if (hit(n)) return n;
+      for (const c of n.children ?? []) { const r = find(c, hit); if (r) return r; }
+      return null;
+    };
+    const deepText = find(view.body, (n) => (n.children ?? []).some((c) => c.text === 'This sits past 8000 px.'));
+    assert.ok(deepText, 'the section past 8000 px is in the snapshot');
+    assert.notEqual(deepText.style?.opacity, '0', 'it is not captured mid reveal');
+    const img = find(view.body, (n) => n.attrs?.id === 'deepimg');
+    assert.ok(img?.natural?.[0] > 0, `the lazy image past 8000 px loaded (${JSON.stringify(img?.natural)})`);
+  } finally {
+    await browser.close();
+    srv.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

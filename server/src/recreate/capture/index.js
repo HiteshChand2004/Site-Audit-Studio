@@ -29,6 +29,10 @@ const firstLine = (err) => String(err?.message ?? err).split('\n')[0].trim();
 export const captureDir = (workspace, slug) => path.join(workspace, 'capture', slug);
 // How long a page gets to fire its load event after the document arrived.
 const LOAD_WAIT = 20000;
+// How far down the page the scroll-through goes. The screenshot stops at MAX_HEIGHT (8000 px), but the scroll must
+// not: below that nothing loaded its lazy images and no scroll-reveal fired, so a tall page was captured with its
+// lower sections empty or at opacity 0. The 80-step loop in settle() is the real bound (a step is 0.85 screens).
+const SCROLL_CAP = 4 * MAX_HEIGHT;
 
 // Scrolls through the page so lazy images and scroll-triggered sections load, waits for pending
 // images and fonts, then returns to the top (settle, below). The scrolling is real input (the mouse
@@ -163,7 +167,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
     lap('idle');
     const observeReveal = view.id === 'desktop' && motionBudgetMs > 0;
-    const { events: revealEvents, ...reveal } = await settle(page, view, MAX_HEIGHT, { observe: observeReveal });
+    const { events: revealEvents, ...reveal } = await settle(page, view, SCROLL_CAP, { observe: observeReveal });
     lap('scroll');
     await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
     await page.waitForTimeout(300);
@@ -348,6 +352,10 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
  * @param {{ timeout?: number, motionBudgetMs?: number, clickBudgetMs?: number, cache?: object }} [o]  cache: the job's shared cache of static files (audit/sharedCache.js)
  * @returns {Promise<{ views: Record<string, object>, errors: { view: string, message: string }[] }>}
  */
+// Load failures worth one more try: the site refused or dropped the connection, which says nothing about the page.
+const REFUSED = /ERR_EMPTY_RESPONSE|ERR_CONNECTION_(RESET|CLOSED|REFUSED|ABORTED)|ERR_SOCKET_NOT_CONNECTED|ERR_HTTP2_PROTOCOL_ERROR|ERR_QUIC_PROTOCOL_ERROR/;
+const RETRY_WAIT_MS = 1500;
+
 export async function capturePage(browser, pageInfo, workspace, { timeout = 30000, motionBudgetMs = 0, clickBudgetMs = 0, cache = null } = {}) {
   const dir = captureDir(workspace, pageInfo.slug);
   await mkdir(dir, { recursive: true });
@@ -363,5 +371,25 @@ export async function capturePage(browser, pageInfo, workspace, { timeout = 3000
     if (r.status === 'fulfilled') views[id] = r.value;
     else errors.push({ view: id, message: r.reason?.message?.split('\n')[0] ?? 'Capture failed' });
   });
-  return { views, errors };
+  // A site that drops connections (ERR_EMPTY_RESPONSE and friends) failed every view of a page at once, and the page
+  // was lost although nothing was wrong with it. Those views are tried once more, one at a time and after a pause, so
+  // the retry paces the site instead of hammering it. The desktop view decides whether the page is usable at all, so
+  // it gets one attempt more than the others. Timeouts are not retried: they cost the step its remaining time.
+  let retried = 0;
+  for (const attempt of [1, 2]) {
+    const again = errors.filter((e) => REFUSED.test(e.message) && (attempt === 1 || e.view === VIEWS[0].id));
+    if (!again.length) break;
+    for (const e of again) {
+      await new Promise((r) => setTimeout(r, RETRY_WAIT_MS * attempt));
+      const view = VIEWS.find((v) => v.id === e.view);
+      try {
+        views[e.view] = await captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, clickBudgetMs, cache });
+        errors.splice(errors.indexOf(e), 1);
+        retried++;
+      } catch (err) {
+        e.message = firstLine(err) || e.message;
+      }
+    }
+  }
+  return { views, errors, ...(retried && { retried }) };
 }
