@@ -8,7 +8,7 @@
 //   - inline SVG keeps its own element: the root's attributes become props and the (sanitized) inner
 //     markup goes in dangerouslySetInnerHTML, so no wrapper element changes the layout.
 import { load } from 'cheerio';
-import { emitNode } from '../html.js';
+import { emitNode, keepsBreaks } from '../html.js';
 import { describeNode } from '../walk.js';
 
 const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
@@ -48,10 +48,46 @@ export function svgPropName(name) {
   return camel(name);
 }
 
-/** "color: red; --x: 1" → { color: 'red', '--x': '1' } (property names camelCased, custom properties kept). */
+/**
+ * The declarations of an inline style, split on the semicolons that separate them — never on one inside a
+ * value. A data URI carries its own (`url(data:image/svg+xml;base64,…)`), and splitting on those cut the
+ * declaration in half and dropped every declaration after it.
+ */
+export function declarations(css) {
+  const s = String(css);
+  const out = [];
+  let start = 0;
+  let depth = 0;
+  let quote = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (quote) {
+      if (c === quote && s[i - 1] !== '\\') quote = '';
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === '(') {
+      depth++;
+    } else if (c === ')') {
+      if (depth > 0) depth--;
+    } else if (c === ';' && depth === 0) {
+      out.push(s.slice(start, i));
+      start = i + 1;
+    }
+  }
+  out.push(s.slice(start));
+  return out;
+}
+
+/**
+ * "color: red; --x: 1" → { color: 'red', '--x': '1' } (property names camelCased, custom properties kept).
+ * An `!important` stays in the value: React's server render writes it exactly as the HTML emitter does, so
+ * both builds serialise the same `style` attribute. The browser drops the priority once React hydrates and
+ * assigns the property, so an inline `!important` is a known limitation of the app stacks, not something to
+ * rewrite here — rewriting it would make the two builds differ.
+ */
 export function styleObject(css) {
   const out = {};
-  for (const part of String(css).split(';')) {
+  for (const part of declarations(css)) {
     const i = part.indexOf(':');
     if (i < 0) continue;
     const key = part.slice(0, i).trim();
@@ -79,8 +115,16 @@ export function jsxText(text) {
 }
 
 function svgJsx(d, pad) {
-  const $ = load(d.markup, { xml: { xmlMode: true } }, false);
-  const root = $('svg').first();
+  let $ = load(d.markup, { xml: { xmlMode: true } }, false);
+  let root = $('svg').first();
+  if (!root.length) {
+    // An XML parse that finds no <svg> used to emit an empty `<svg />`: the icon disappeared from the app
+    // stacks while the HTML build wrote the markup as it is. Try the lenient parser, and if there is still no
+    // root, say so instead — a named failure beats a missing element nobody can trace.
+    $ = load(d.markup, null, false);
+    root = $('svg').first();
+    if (!root.length) throw new Error(`Inline SVG without an <svg> root cannot be written as JSX: ${d.markup.slice(0, 80)}`);
+  }
   const props = [];
   if (d.class) props.push(attr('className', d.class));
   for (const [name, value] of Object.entries(root.attr() ?? {})) {
@@ -136,8 +180,11 @@ function elementProps(d, node) {
 }
 
 /** The HTML emitter's rule: whitespace-only text between block children is dropped, otherwise all are kept. */
-export function visibleChildren(kids, tag) {
-  const blocky = !RAW_TEXT.has(tag) && kids.length > 0 && kids.every((c) => ('text' in c ? !c.text.trim() : c.b));
+export function visibleChildren(kids, tag, keep = false) {
+  // keep: the parent keeps its line breaks (white-space: pre*). The HTML emitter leaves such text alone
+  // (html.js keepsBreaks), so dropping the whitespace-only children here would lose the blank lines the
+  // HTML build keeps.
+  const blocky = !keep && !RAW_TEXT.has(tag) && kids.length > 0 && kids.every((c) => ('text' in c ? !c.text.trim() : c.b));
   if (blocky) return kids.filter((c) => !('text' in c));
   // Adjacent text nodes are one text node in HTML; as separate JSX lines they would be joined with a space.
   const merged = [];
@@ -153,7 +200,7 @@ export function visibleChildren(kids, tag) {
  * One IR node as JSX lines (without a trailing newline). `refs` as in walk.js. `components` maps IR nodes
  * to shared component names (recorded in `used`); children follow visibleChildren.
  */
-export function jsxNode(node, refs, depth = 0, components = null, used = null) {
+export function jsxNode(node, refs, depth = 0, components = null, used = null, { wsByClass = null, keep = false } = {}) {
   const pad = '  '.repeat(depth);
   const component = components?.get(node);
   if (component) {
@@ -178,9 +225,10 @@ export function jsxNode(node, refs, depth = 0, components = null, used = null) {
     const text = d.children.map((c) => c.text ?? '').join('');
     return `${pad}<${open}${text ? ` defaultValue={${JSON.stringify(text)}}` : ''} />`;
   }
-  const kids = visibleChildren(d.children, d.tag);
+  const keepHere = keepsBreaks(node, keep, wsByClass);
+  const kids = visibleChildren(d.children, d.tag, keepHere);
   if (!kids.length) return `${pad}<${open} />`;
-  const inner = kids.map((c) => jsxNode(c, refs, depth + 1, components, used)).join('\n');
+  const inner = kids.map((c) => jsxNode(c, refs, depth + 1, components, used, { wsByClass, keep: keepHere })).join('\n');
   return `${pad}<${open}>\n${inner}\n${pad}</${d.tag}>`;
 }
 

@@ -13,6 +13,7 @@
 //   already use the new URLs.
 // - Links are plain <a> elements (full page loads, no client router), root-relative: deploy at a domain root.
 import { emitCss, usedCustomProps } from '../css.js';
+import { whiteSpaceByClass } from '../html.js';
 import { MOTION_FILE, MOTION_JS, MOTION_SRC } from '../motionScript.js';
 import { findShared } from '../react/components.js';
 import { jsxAttr, jsxNode, propName, visibleChildren } from '../react/jsx.js';
@@ -92,11 +93,13 @@ export function emitNext(ir) {
   }
   const { names: shared, components } = findShared(ir.pages, new Set(names));
 
+  // Classes whose rules keep line breaks (white-space: pre*): the JSX emitter needs them, as the HTML one does.
+  const wsByClass = whiteSpaceByClass(ir.rules);
   const files = new Map();
   for (const c of components) {
     const own = new Map(shared);
     own.delete(c.node);
-    files.set(`components/${c.name}.jsx`, `export default function ${c.name}() {\n  return (\n${jsxNode(c.node, refs, 2, own)}\n  );\n}\n`);
+    files.set(`components/${c.name}.jsx`, `export default function ${c.name}() {\n  return (\n${jsxNode(c.node, refs, 2, own, null, { wsByClass })}\n  );\n}\n`);
   }
 
   // Root layouts: one route group per distinct <html lang class> + <body class>.
@@ -131,7 +134,7 @@ export function emitNext(ir) {
       canonical: page.head.canonical ? followMoves(page.head.canonical, urlMap) : page.head.canonical,
       meta: page.head.meta.map((m) => (m.property === 'og:url' ? { ...m, content: followMoves(m.content, urlMap) } : m)),
     };
-    const body = visibleChildren(page.body.children ?? [], 'body').map((c) => jsxNode(c, refs, 3, shared, used)).join('\n');
+    const body = visibleChildren(page.body.children ?? [], 'body').map((c) => jsxNode(c, refs, 3, shared, used, { wsByClass })).join('\n');
     const imports = [...used].sort().map((n) => `import ${n} from '@/components/${n}.jsx';`);
     // The reveal script (emit/motionScript.js): a plain deferred script, in place (React only hoists async ones).
     const motion = ir.motion?.script ? [`      <script src="${MOTION_SRC}" defer />`] : [];

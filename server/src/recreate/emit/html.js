@@ -31,7 +31,7 @@ function svgMarkup(d, ctx) {
 
 // White space a page keeps (pre, pre-wrap, pre-line, break-spaces): line breaks in the markup show as lines there.
 const KEEPS_BREAKS = /^(pre|pre-wrap|pre-line|break-spaces|preserve|preserve-breaks)$/;
-function keepsBreaks(node, inherited, byClass) {
+export function keepsBreaks(node, inherited, byClass) {
   // The emitted page knows its classes; their rules (base = the widest view) say what white space they set.
   for (const c of String(node.class ?? '').split(/\s+/)) if (c && byClass?.has(c)) return byClass.get(c);
   return inherited;

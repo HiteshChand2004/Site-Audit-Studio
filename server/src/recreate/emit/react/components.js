@@ -18,7 +18,9 @@ function signature(node) {
   else if (node.t === 'svg') result = { hash: `s${node.class ?? ''}|${node.raw}`, size: 1 };
   else {
     const kids = (node.children ?? []).map(signature);
-    const body = JSON.stringify([node.t, node.id ?? null, node.class ?? null, node.attrs ?? {}, node.b ? 1 : 0, kids.map((k) => k.hash)]);
+    // tpl (a state the page does not start in) decides whether the subtree is written as live markup or
+    // inside a template element: two otherwise identical blocks must never share one component.
+    const body = JSON.stringify([node.t, node.id ?? null, node.class ?? null, node.attrs ?? {}, node.b ? 1 : 0, node.tpl ?? null, kids.map((k) => k.hash)]);
     result = { hash: createHash('sha1').update(body).digest('hex'), size: 1 + kids.reduce((n, k) => n + k.size, 0) };
   }
   memo.set(node, result);

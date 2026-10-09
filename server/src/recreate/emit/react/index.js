@@ -6,7 +6,7 @@
 // URLs are root-relative (/assets/…, /about/): the site is meant for a domain root, and a component
 // shared by pages at different depths renders the same markup on each of them.
 import { emitCss, CSS_FILE, minifyCssSync, usedCustomProps } from '../css.js';
-import { headHtml } from '../html.js';
+import { headHtml, whiteSpaceByClass } from '../html.js';
 import { MOTION_FILE, MOTION_JS, MOTION_TAG } from '../motionScript.js';
 import { headTags, safeJsonLd } from '../walk.js';
 import { pinnedOverrides, pinnedVersions } from '../../../toolchains/index.js';
@@ -61,11 +61,14 @@ export function emitReact(ir, opts = {}) {
   const names = pageNames(ir.pages);
   const { names: shared, components } = findShared(ir.pages, new Set(names));
 
+  // Classes whose rules keep line breaks (white-space: pre*), for the same reason the HTML emitter reads
+  // them: a pre-wrap block must keep its blank lines in the app stacks too.
+  const wsByClass = whiteSpaceByClass(ir.rules);
   const files = new Map();
   for (const c of components) {
     const own = new Map(shared);
     own.delete(c.node);
-    files.set(fileOf(c.name, 'components'), `export default function ${c.name}() {\n  return (\n${jsxNode(c.node, refs, 2, own)}\n  );\n}\n`);
+    files.set(fileOf(c.name, 'components'), `export default function ${c.name}() {\n  return (\n${jsxNode(c.node, refs, 2, own, null, { wsByClass })}\n  );\n}\n`);
   }
   const meta = [];
   const motionScript = Boolean(ir.motion?.script);
@@ -74,7 +77,7 @@ export function emitReact(ir, opts = {}) {
   ir.pages.forEach((page, i) => {
     const name = names[i];
     const used = new Set();
-    const body = visibleChildren(page.body.children ?? [], 'body').map((c) => jsxNode(c, refs, 3, shared, used)).join('\n');
+    const body = visibleChildren(page.body.children ?? [], 'body').map((c) => jsxNode(c, refs, 3, shared, used, { wsByClass })).join('\n');
     const imports = [...used].sort().map((n) => `import ${n} from '../components/${n}.jsx';`);
     files.set(fileOf(name, 'pages'), `${imports.join('\n')}${imports.length ? '\n\n' : ''}export default function ${name}() {\n  return (\n    <>\n${body}\n    </>\n  );\n}\n`);
     meta.push({
