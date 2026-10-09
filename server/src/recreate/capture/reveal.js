@@ -438,7 +438,8 @@ export function comparePaths(a, b) {
 // screen (or just below it, for a preloading margin) after it. Anything else is 'timed': an element already on screen
 // before the step (rotating headline, timer), or one revealed while it was still far below the screen (a failsafe timer,
 // "reveal everything on the first scroll"): it was not triggered by coming into view, and whether the capture sees it
-// before or after the timer fires depends on timing, so it is never rebuilt as a scroll reveal.
+// before or after the timer fires depends on timing, so it is never rebuilt as a scroll reveal: one in the first screen
+// becomes a load entrance instead (ir/motion.js `rl`), one further down a reveal the visitor scrolls to (isScrollReveal).
 export const SCROLL_REVEAL_MAX_TOP_AFTER = 1.35;
 function triggerOf(ev) {
   const topBefore = r2((ev.rect[1] - ev.prevY) / ev.vh);

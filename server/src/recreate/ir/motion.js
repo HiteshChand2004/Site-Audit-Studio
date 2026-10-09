@@ -8,6 +8,8 @@
 //   fN  focus        [data-motion~=fN]:focus-visible { … }
 //   rv  scroll reveal marker (the generated script adds `is-in` when the element scrolls into view) + rN the effect
 //       (a from-state, duration, easing), dN a start delay (stagger), rp = hide again when it leaves the view
+//   rl  the same effect played once as the page opens, CSS alone (an entrance a timer or the first scroll started in
+//       the original, not the element coming into view: see isScrollReveal)
 //   lN  a loop the page's own CSS does not carry (a Web Animation, a script-driven spin / oscillation)
 // Without script nothing is hidden: the reveal rules only apply under `.js-motion`, which the script sets. CSS loops
 // the stylesheet already carries (animation-name in the element's captured style) are counted, not written twice.
@@ -19,7 +21,7 @@ import { commonPath } from '../capture/clicks.js';
 import path from 'node:path';
 import { KNOWN_VIEWS } from '../views.js';
 import { mapUrls } from './styles.js';
-import { isElement } from './tree.js';
+import { deepText, isElement } from './tree.js';
 import { load } from 'cheerio';
 
 // The inline <svg> a capture path goes into ("…>svg:1>g:2>line:1"): { svg: its tree node, rest: ['g:2', 'line:1'] }.
@@ -195,8 +197,61 @@ const specKey = (s) => JSON.stringify([s.opacity ?? null, s.translate ?? null, s
 // Keyframes of a loop (as authored) for @keyframes.
 const loopKeyframes = (kfs) => kfs.map((k) => ({ offset: Math.round(k.offset * 10000) / 100, ...(k.easing && k.easing !== 'linear' && { easing: k.easing }), props: k.props }));
 
-/** Loops the page's CSS does not carry, from a script-driven analysis: a steady spin or an oscillation. */
-export function scriptLoop(loop) {
+// One item of a strip as `repeatOf` (capture/loops.js) reads it in the page: enough to tell one item from the next and
+// to recognise its copy further along the strip.
+function itemSig(node) {
+  const image = (n) => {
+    if (!isElement(n)) return '';
+    if (n.tag === 'img') return String(n.attrs?.src ?? n.src ?? '');
+    for (const c of n.children) {
+      const found = image(c);
+      if (found) return found;
+    }
+    return '';
+  };
+  return [node.tag, deepText(node).slice(0, 60), image(node), node.children.filter(isElement).length].join('|');
+}
+
+export const MIN_REPEAT_PX = 20;
+const TRACK_DEPTH = 3;
+
+/**
+ * How far a script-driven strip moves before it looks the same again, read from the tree. The page function
+ * (capture/loops.js `repeatOf`) looks at the children of the element that moves, and a wrap-around is only seen when
+ * the short recording happens to cover one - so a ticker whose items sit in an inner track, or one that never wrapped
+ * while it was watched, reached the IR with no period at all and its loop was dropped. Here the element that holds the
+ * items is found first (a single element child is a track around them, not an item), then the items are matched by
+ * their content like `repeatOf` does, and the distance from the first item to its next copy is the period.
+ * @returns {number} px, 0 when the tree shows no repeat
+ */
+export function irRepeat(node, channel, view = 'desktop') {
+  const axis = channel === 'x' ? 0 : channel === 'y' ? 1 : -1;
+  if (axis < 0 || !isElement(node)) return 0;
+  let track = node;
+  for (let depth = 0; depth < TRACK_DEPTH; depth++) {
+    const kids = track.children.filter(isElement);
+    if (kids.length !== 1) break;
+    track = kids[0];
+  }
+  const items = track.children.filter((c) => isElement(c) && Number(c.views?.[view]?.rect?.[2]) > 0);
+  if (items.length < 2) return 0;
+  const sigs = items.map(itemSig);
+  for (let k = 1; k <= items.length / 2; k++) {
+    let same = true;
+    for (let i = 0; i + k < items.length && same; i++) same = sigs[i] === sigs[i + k];
+    if (!same) continue;
+    const distance = Math.abs(items[k].views[view].rect[axis] - items[0].views[view].rect[axis]);
+    return distance >= MIN_REPEAT_PX ? r1(distance) : 0;
+  }
+  return 0;
+}
+
+/**
+ * Loops the page's CSS does not carry, from a script-driven analysis: a steady spin or an oscillation.
+ * @param {object} loop  one entry of motion.json `loops`
+ * @param {object} [node]  the element in the merged tree, for a drift whose period the recording did not see
+ */
+export function scriptLoop(loop, node) {
   const p = loop.params;
   if (loop.pattern === 'spin' && p.rate > 0.5) {
     const deg = p.direction === 'backward' ? -360 : 360;
@@ -213,12 +268,19 @@ export function scriptLoop(loop) {
     return { keyframes: [{ offset: 0, props: { opacity: o(p.min) } }, { offset: 100, props: { opacity: o(p.max) } }], timing: { duration: Math.round(p.periodMs / 2), delay: 0, iterations: 'infinite', direction: 'alternate', fill: 'none', easing: 'ease-in-out' } };
   }
   // A ticker moved by script: its items repeat, so it slides by one repeat at the same speed, then starts over (seamless).
+  // What the recording measured comes first; without it the tree is asked how far one repeat of the strip is (irRepeat).
   if (loop.pattern === 'drift' && (p.channel === 'x' || p.channel === 'y') && p.rate > 1) {
-    const period = Math.abs(Number(p.channel === 'x' ? p.repeat?.x : p.repeat?.y) || Number(p.wrap?.distance) || 0);
-    if (period >= 20) {
+    const measured = Math.abs(Number(p.channel === 'x' ? p.repeat?.x : p.repeat?.y) || Number(p.wrap?.distance) || 0);
+    const fromTree = measured >= MIN_REPEAT_PX ? 0 : irRepeat(node, p.channel);
+    const period = measured >= MIN_REPEAT_PX ? measured : fromTree;
+    if (period >= MIN_REPEAT_PX) {
       const end = r1(p.direction === 'backward' ? -period : period);
       const v = (n) => (p.channel === 'x' ? `${n}px 0` : `0 ${n}px`);
-      return { keyframes: [{ offset: 0, props: { translate: v(0) } }, { offset: 100, props: { translate: v(end) } }], timing: { duration: Math.round((period / p.rate) * 1000), delay: 0, iterations: 'infinite', direction: 'normal', fill: 'none', easing: 'linear' } };
+      return {
+        ...(fromTree && { periodFrom: 'tree' }),
+        keyframes: [{ offset: 0, props: { translate: v(0) } }, { offset: 100, props: { translate: v(end) } }],
+        timing: { duration: Math.round((period / p.rate) * 1000), delay: 0, iterations: 'infinite', direction: 'normal', fill: 'none', easing: 'linear' },
+      };
     }
   }
   return null;
@@ -401,7 +463,7 @@ export function applyMotion(site, byPath) {
     }
 
     // Scroll reveal: those the scroll started, and timed ones below the first screen (isScrollReveal); timed ones in the
-    // first screen (rotating headlines, timers) are not scroll effects.
+    // first screen (an entrance a timer or the first scroll started) are not scroll effects and are rebuilt as `rl`.
     // An element that loops (a ticker strip) only seemed to "reveal" because it moves by itself; its loop is rebuilt instead
     // (a reveal's animation on the same element would replace the loop's).
     const loopHosts = new Set((motion.loops?.loops ?? []).filter((l) => !l.pseudo && !l.timeline).map((l) => l.path));
@@ -410,19 +472,20 @@ export function applyMotion(site, byPath) {
         stats.reveal.skipped.loop = (stats.reveal.skipped.loop ?? 0) + 1;
         continue;
       }
-      // Timed ones in the first screen are the page's entrance (a hero fading in as the page opens): played once on load
-      // with CSS alone (`rl`), unless the element carries an animation of its own (a word rotator, a loop) or repeats.
+      // Timed ones in the first screen are the page's entrance (a hero fading in as the page opens, an effect a timer or
+      // the first scroll started): played once on load with CSS alone (`rl`), nothing waiting for a scroll. An element
+      // that carries an animation of its own (a word rotator, a loop) keeps it - a second animation would replace it.
       const onLoad = !isScrollReveal(el);
       const node = nodes.get(el.path);
-      if (onLoad && (el.replay || !node || String(node.views?.desktop?.style?.['animation-name'] ?? 'none') !== 'none')) {
-        stats.reveal.skipped.timed++;
-        continue;
-      }
-      if (!onLoad && el.trigger.kind !== 'scroll') stats.reveal.belowFold++;
       if (!node) {
         stats.reveal.skipped.unmapped++;
         continue;
       }
+      if (onLoad && String(node.views?.desktop?.style?.['animation-name'] ?? 'none') !== 'none') {
+        stats.reveal.skipped.timed++;
+        continue;
+      }
+      if (!onLoad && el.trigger.kind !== 'scroll') stats.reveal.belowFold++;
       const spec = revealSpec(el);
       if (spec.opacity == null && !spec.translate && !spec.scale && spec.rotate == null && !spec.filter) {
         stats.reveal.skipped.flat++;
@@ -438,12 +501,18 @@ export function applyMotion(site, byPath) {
       tokenize(node, onLoad ? 'rl' : 'rv');
       tokenize(node, effect.token);
       if (onLoad) stats.reveal.onLoad = (stats.reveal.onLoad ?? 0) + 1;
-      const delay = Math.min(MAX_DELAY, Math.round((el.offsetMs ?? 0) / 10) * 10);
+      // A scroll reveal starts when it comes into view, so only its place in a stagger (`offsetMs`) is a delay. A load
+      // entrance starts with the page, so its own declared delay is the one a visitor sees (a hero coming in after the
+      // heading); without a measured one the stagger is used there too.
+      const own = onLoad ? Number(el.timing?.delay) : NaN;
+      const ms = Number.isFinite(own) && own > 0 ? own : (el.offsetMs ?? 0);
+      const delay = Math.min(MAX_DELAY, Math.round(ms / 10) * 10);
       if (delay >= 20) {
         reg.delays.add(delay);
         tokenize(node, `d${delay}`);
       }
-      if (el.replay) {
+      // Hidden again when it leaves the view: only a reveal the script watches can repeat; a load entrance plays once.
+      if (el.replay && !onLoad) {
         tokenize(node, 'rp');
         stats.reveal.replay++;
       }
@@ -475,8 +544,15 @@ export function applyMotion(site, byPath) {
         continue;
       }
       let built = null;
-      if (loop.source === 'script') built = scriptLoop(loop);
-      else if (loop.keyframes?.length >= 2) {
+      if (loop.source === 'script') {
+        built = scriptLoop(loop, node);
+        // A drift whose period only the tree showed (irRepeat): counted, and the note itself is not part of the loop.
+        if (built?.periodFrom === 'tree') {
+          stats.loops.repeatFromTree = (stats.loops.repeatFromTree ?? 0) + 1;
+          const { periodFrom: _from, ...rest } = built;
+          built = rest;
+        }
+      } else if (loop.keyframes?.length >= 2) {
         const t = loop.timing;
         const rate = t.playbackRate > 0 && t.playbackRate !== 1 ? t.playbackRate : 1;
         built = {
