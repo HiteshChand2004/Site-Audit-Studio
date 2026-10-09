@@ -10,8 +10,11 @@
 //                 next / previous / dot control;
 //   - dialog:     a fixed layer that covers most of the screen became visible (closed again with Escape).
 // Before the click the mouse rests on the element for a moment: a panel that opens then opens on hover (`opensOn: 'hover'`).
-// Links to other pages, form submissions and new windows are blocked while probing; a page that navigates anyway ends
-// the probe. Elements are identified by the `path` of the DOM snapshot (body>div:1>button:0), like the other probes.
+// Links to other pages, form submissions and new windows are blocked while probing, so a link is clicked like any other
+// control (many menus and dialogs only open on the click); whether the page itself stayed on the page is recorded as
+// `stay`, and only then may the copy rebuild the link as a control. A link that navigates anyway is a link: the page is
+// loaded again and the remaining controls are probed. A non-link that navigates ends the probe.
+// Elements are identified by the `path` of the DOM snapshot (body>div:1>button:0), like the other probes.
 // Output: `motion.json.clicks`.
 //
 // Page functions below are self-contained (Playwright sends only their source).
@@ -26,16 +29,25 @@ function installClicks(opts) {
   const MAX_NODES = 6000;
 
   if (!window.__sasClickGuard) {
-    window.__sasClickGuard = true;
+    const guard = { stay: false };
+    window.__sasClickGuard = guard;
+    // Did the page itself suppress the link? A link whose click opens a menu is rebuilt as a control, so the copy must
+    // know whether the original stayed on the page (its script called preventDefault) or followed the link as well. The
+    // guard's own call goes through the native method, so only the page's calls are recorded.
+    const native = Event.prototype.preventDefault;
+    Event.prototype.preventDefault = function sasPreventDefault() {
+      if (this.type === 'click') guard.stay = true;
+      return native.apply(this, arguments);
+    };
     // A link to another page or a form submission would leave the page: the default action is blocked, the page's own
     // click handlers still run (they decide what a menu button does).
     document.addEventListener('click', (e) => {
       const a = e.target instanceof Element ? e.target.closest('a[href]') : null;
       if (!a) return;
       const href = (a.getAttribute('href') || '').trim();
-      if (!/^(#|javascript:)/i.test(href)) e.preventDefault();
+      if (!/^(#|javascript:)/i.test(href)) native.call(e);
     }, true);
-    document.addEventListener('submit', (e) => e.preventDefault(), true);
+    document.addEventListener('submit', (e) => native.call(e), true);
     window.open = () => null;
   }
 
@@ -95,9 +107,13 @@ function installClicks(opts) {
     if (tag === 'A') {
       const href = (el.getAttribute('href') || '').trim();
       if (href === '' || /^(#|javascript:)/i.test(href)) r.push('anchor');
-      // A link to a page is navigation, not a control; in the site's top bar it may still open a menu while the mouse rests
-      // on it (a "Platforms" link listing the products): it is hovered, never clicked.
-      else if (el.closest('header, nav, [role="navigation"], [role="banner"]') || topBar(el)) return ['nav-hover'];
+      // A link to a page may still be a control: the site's script opens a menu or a dialog on the click and stays on the
+      // page. Navigation is blocked while probing, so clicking it is safe, and whether the page suppressed the link itself
+      // is recorded with the widget (`stay`) - only then does the copy rebuild it as a control.
+      // In the top bar the menu often opens on hover already: there the mouse rests on it first, then it is clicked.
+      else if (el.closest('header, nav, [role="navigation"], [role="banner"]') || topBar(el)) r.push('nav-hover', 'link');
+      // Elsewhere a link is navigation, unless it announces itself as a control (aria-expanded / -controls / -haspopup).
+      else if (r.length) r.push('link');
       else return [];
     }
     if (!r.length && cs.cursor === 'pointer' && tag !== 'INPUT' && tag !== 'SELECT' && tag !== 'TEXTAREA' && tag !== 'LABEL' && HINT.test(labelOf(el))) r.push('hint');
@@ -475,6 +491,19 @@ export function stopTimers() {
   return last;
 }
 
+/** Page function: forgets whether the page suppressed the default of the last click (before clicking a link). */
+export function clearStay() {
+  if (window.__sasClickGuard && typeof window.__sasClickGuard === 'object') window.__sasClickGuard.stay = false;
+}
+
+/**
+ * Page function: did the page itself suppress the click (its script called preventDefault)? A link whose click opens a
+ * menu does; a plain link does not, and the copy keeps it a link.
+ */
+export function readStay() {
+  return !!(window.__sasClickGuard && window.__sasClickGuard.stay);
+}
+
 /** A change list without what changes by itself (`noise`: elements moving on their own, and what is inside them). */
 export function withoutNoise(d, noise) {
   if (!d || !noise?.length) return d;
@@ -669,15 +698,21 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
           }
         }
       }
-      // A top-bar link whose hover opened nothing: never clicked (it would leave the page).
-      if (c.reasons.includes('nav-hover')) {
-        stats.noChange++;
-        continue;
-      }
+      // A link is clicked like any other control (its navigation is blocked): a menu or dialog that only opens on the
+      // click is found this way. Whether the page itself stayed is recorded below.
+      const isLink = c.reasons.includes('link');
+      if (isLink) await page.evaluate(clearStay).catch(() => {});
       if (spot.reachable) await page.mouse.click(spot.x, spot.y);
       else await page.evaluate(clickIndex, c.i);
       await page.waitForTimeout(settleTime);
+      const stay = isLink ? await page.evaluate(readStay).catch(() => false) : null;
       if (left()) {
+        // A link that navigated in spite of the guard (its script went to the page itself) is a link, not a control: the
+        // page is loaded again and the remaining controls are probed, instead of giving up on the page.
+        if (isLink) {
+          stats.navigated = (stats.navigated ?? 0) + 1;
+          if (await reset().catch(() => false)) continue;
+        }
         stats.left = true;
         break;
       }
@@ -690,14 +725,16 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
         stats.noChange++;
         continue;
       }
-      const entry = { ...kind, trigger: c.path, tag: c.tag, text: c.text, reasons: c.reasons, opensOn, change: compact(d) };
+      const entry = { ...kind, trigger: c.path, tag: c.tag, text: c.text, reasons: c.reasons, opensOn, change: compact(d), ...(stay != null && { stay }) };
       const group = groupOf.get(c.path);
       if (group) entry.group = { sig: group.sig, count: group.count, paths: group.paths };
       // Put the page back: the same click (a toggle), then Escape, then a click outside.
       if (kind.kind === 'disclosure' || kind.kind === 'dialog') {
-        // The open state as styles (accordion answers, dropdowns): the part of the page that holds the trigger and what it
-        // opened, read open now and closed again after the restoring click.
-        const common = kind.kind === 'disclosure' ? commonPath([c.path, ...kind.targets]) : null;
+        // The open state as styles (accordion answers, dropdowns, a dialog layer the page already holds): the part of the
+        // page that holds the trigger and what it opened, read open now and closed again after the restoring click.
+        // A dialog usually sits at the end of the body, far from its button: the area is then the body and only the two
+        // are read (`only`), never the whole page.
+        const common = commonPath([c.path, ...kind.targets]);
         const root = common || null;
         const only = root === 'body' ? [c.path, ...kind.targets] : null;
         const open = root ? await page.evaluate(readRegion, { rootPath: root, only }).catch(() => null) : null;

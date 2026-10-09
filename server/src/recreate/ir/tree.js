@@ -12,7 +12,7 @@
 //    the matching HTML element.
 // Every known view: the trees follow the views the captures have (views.js).
 import { KNOWN_VIEW_IDS as VIEW_IDS } from '../views.js';
-import { expandHoverCards, expandNotices, expandStates } from './states.js';
+import { expandHoverCards, expandNotices, expandPanels, expandStates } from './states.js';
 
 export { VIEW_IDS };
 
@@ -44,9 +44,13 @@ export function fromCapture(node, view) {
   if (view === 'desktop' && node.path) m.cpath = node.path;
   // The phone snapshot path: controls only the phone layout has (a menu button) are named by it (mobile-clicks.json).
   if (view === 'mobile' && node.path) m.mpath = node.path;
+  // The tablet snapshot path: controls only the tablet layout has (its own menu button), tablet-clicks.json.
+  if (view === 'tablet' && node.path) m.tpath = node.path;
   // The other states of a tab panel / carousel (capture/states.js); ir/states.js puts them into the tree.
   if (node.states) m.states = { ...node.states, variants: node.states.variants.map((v) => ({ index: v.index, node: fromCapture(v.body, view), ...(v.effects && { effects: v.effects }) })) };
   if (node.hoverState?.body) m.hoverState = { node: fromCapture(node.hoverState.body, view) };
+  // Panels a click opens away from their control (capture/states.js), on the body; expandPanels puts them into the tree.
+  if (node.panels) m.panels = node.panels.map(({ body, ...rest }) => ({ ...rest, node: fromCapture(body, view) }));
   // Short messages a click shows (capture/notices.js), on the body; ir/states.js expandNotices puts them into the tree.
   if (node.notices) m.notices = node.notices.map((n) => ({ ...n, items: n.items.map((it) => ({ control: it.control, node: fromCapture(it.body, view) })) }));
   return m;
@@ -150,7 +154,7 @@ function clearViews(node, views) {
  */
 export function alignInto(a, b, views) {
   for (const v of views) if (b.views[v]) a.views[v] = b.views[v];
-  for (const key of ['src', 'href', 'poster', 'natural', 'svg', 'lazy', 'cpath', 'mpath']) if (a[key] == null && b[key] != null) a[key] = b[key];
+  for (const key of ['src', 'href', 'poster', 'natural', 'svg', 'lazy', 'cpath', 'mpath', 'tpath']) if (a[key] == null && b[key] != null) a[key] = b[key];
   const ae = a.children.filter(isElement);
   const be = b.children.filter(isElement);
   const partner = new Map();
@@ -307,6 +311,7 @@ export function cleanTree(node, views = VIEW_IDS, parentDisplay = 'block') {
       // What the motion capture said about the wrapper now applies to the element that took its place.
       if (c.cpath) inner[0].cpathAlt = [...(inner[0].cpathAlt ?? []), c.cpath];
       if (c.mpath) inner[0].mpathAlt = [...(inner[0].mpathAlt ?? []), c.mpath];
+      if (c.tpath) inner[0].tpathAlt = [...(inner[0].tpathAlt ?? []), c.tpath];
       node.children.splice(i, 1, inner[0]);
       removed++;
       i--;
@@ -349,6 +354,7 @@ export function buildPageTree(bodies) {
   // Tab / carousel / filter states as hidden copies of their area, while the capture's relative paths still hold.
   const states = expandStates(root);
   const notices = expandNotices(root);
+  const panels = expandPanels(root);
   const hoverCards = expandHoverCards(root);
   const variantsMerged = views.length > 1 ? mergeVariants(root, views) : dropHiddenVariants(root, views[0]);
   const wrappersRemoved = cleanTree(root, views);
@@ -359,5 +365,5 @@ export function buildPageTree(bodies) {
     n.children.forEach(count);
   };
   count(root);
-  return { root, views, stats: { variantsMerged, wrappersRemoved, viewOnly, stateSets: states.sets, states: states.states, notices, hoverCards } };
+  return { root, views, stats: { variantsMerged, wrappersRemoved, viewOnly, stateSets: states.sets, states: states.states, notices, panels, hoverCards } };
 }

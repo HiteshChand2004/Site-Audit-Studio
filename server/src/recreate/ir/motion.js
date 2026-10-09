@@ -63,16 +63,26 @@ export async function readPageMotion(dir, page) {
   } catch {
     return null;
   }
-  // The phone layout's own controls (capture/index.js mobile-clicks.json), named by phone snapshot paths.
-  try {
-    motion.clicksMobile = JSON.parse(await readFile(path.join(dir, 'capture', page.slug, 'mobile-clicks.json'), 'utf8')).clicks;
-  } catch {
-    // none captured
+  // The controls of the narrow layouts (capture/index.js mobile-clicks.json / tablet-clicks.json): a menu button or a
+  // drawer the desktop layout does not have, named by that view's snapshot paths.
+  for (const [view, key] of [['mobile', 'clicksMobile'], ['tablet', 'clicksTablet']]) {
+    try {
+      motion[key] = JSON.parse(await readFile(path.join(dir, 'capture', page.slug, `${view}-clicks.json`), 'utf8')).clicks;
+    } catch {
+      // none captured
+    }
   }
   return motion;
 }
 
 const r1 = (n) => Math.round(n * 10) / 10;
+
+/** A link that would leave the page (not `#`, `javascript:` or empty). */
+function realHref(node) {
+  if (node?.tag !== 'a') return false;
+  const href = String(node.attrs?.href ?? '').trim();
+  return !!href && !/^(#|javascript:)/i.test(href);
+}
 
 // A hover / focus change as declarations: the value it changes to. Properties without a usable value are left out.
 function changeDecls(changes, assetFile) {
@@ -312,19 +322,21 @@ export function applyMotion(site, byPath) {
   let stateSets = 0;
   let notices = 0;
   let hoverCards = 0;
+  let panels = 0;
   for (const tree of site.pages) {
     const ids = new Set();
     const walk = (n) => {
       if (!isElement(n)) return;
       if (n.stateAttrs?.['data-w-set']) ids.add(n.stateAttrs['data-w-set']);
       if (n.stateAttrs?.['data-w-note-of']) notices++;
+      if (n.stateAttrs?.['data-w-panel-of']) panels++;
       if (n.stateAttrs && 'data-w-hcopy' in n.stateAttrs) hoverCards++;
       n.children.forEach(walk);
     };
     walk(tree.root);
     stateSets += ids.size;
   }
-  stats.states = { sets: stateSets, notices, hoverCards };
+  stats.states = { sets: stateSets, notices, hoverCards, panels };
 
   for (const tree of site.pages) {
     const motion = byPath.get(tree.info.path);
@@ -529,29 +541,43 @@ export function applyMotion(site, byPath) {
     // Click widgets (capture/clicks.js). A panel a click opens (accordion answer, dropdown): its area gets `wN`, the
     // control `wt`, each part the click changed `wNpK`; js/motion.js toggles `is-open` on the area, the stylesheet holds the
     // open state. Equal controls (the other questions of the FAQ) get the same effect at the same places inside their area.
-    // Controls of the phone layout (mobile-clicks.json) are found by their phone snapshot path.
-    const phoneNodes = new Map();
-    const walkPhone = (n) => {
-      if (!isElement(n)) return;
-      if (n.mpath) phoneNodes.set(n.mpath, n);
-      for (const alt of n.mpathAlt ?? []) if (!phoneNodes.has(alt)) phoneNodes.set(alt, n);
-      n.children.forEach(walkPhone);
+    // Controls of the narrow layouts (mobile-clicks.json, tablet-clicks.json) are found by that view's snapshot path.
+    const viewNodes = (key, alt) => {
+      const map = new Map();
+      const walk = (n) => {
+        if (!isElement(n)) return;
+        if (n[key]) map.set(n[key], n);
+        for (const a of n[alt] ?? []) if (!map.has(a)) map.set(a, n);
+        n.children.forEach(walk);
+      };
+      walk(tree.root);
+      return map;
     };
-    walkPhone(tree.root);
     const desktopNodes = nodes;
     const done = new Set();
-    const allWidgets = [...(motion.clicks?.widgets ?? []).map((w) => [w, desktopNodes, 'd']), ...(motion.clicksMobile?.widgets ?? []).map((w) => [w, phoneNodes, 'm'])];
+    const tabletWidgets = motion.clicksTablet?.widgets ?? [];
+    const phoneWidgets = motion.clicksMobile?.widgets ?? [];
+    const tabletNodes = tabletWidgets.length ? viewNodes('tpath', 'tpathAlt') : null;
+    const phoneNodes = phoneWidgets.length ? viewNodes('mpath', 'mpathAlt') : null;
+    const allWidgets = [
+      ...(motion.clicks?.widgets ?? []).map((w) => [w, desktopNodes, 'd']),
+      ...tabletWidgets.map((w) => [w, tabletNodes, 't']),
+      ...phoneWidgets.map((w) => [w, phoneNodes, 'm']),
+    ];
     for (const [w, nodes, src] of allWidgets) {
       const ws = stats.widgets;
-      // A phone control the desktop probe already rebuilt (the same element) needs nothing more.
-      if (src === 'm' && nodes.get(w.trigger)?.motionTokens?.includes('wt')) {
-        ws.skipped.phoneDone = (ws.skipped.phoneDone ?? 0) + 1;
+      // A control another view's probe already rebuilt (the same element) needs nothing more.
+      if (src !== 'd' && nodes.get(w.trigger)?.motionTokens?.includes('wt')) {
+        ws.skipped.viewDone = (ws.skipped.viewDone ?? 0) + 1;
         continue;
       }
       if (src === 'm') ws.phone = (ws.phone ?? 0) + 1;
+      if (src === 't') ws.tablet = (ws.tablet ?? 0) + 1;
       // A part a hover opens (a card unfolding its details, a dropdown) is rebuilt with CSS :hover, no script.
       const onHover = w.opensOn === 'hover' && (w.kind === 'disclosure' || w.kind === 'carousel');
-      if (!onHover && (w.kind !== 'disclosure' || w.opensOn !== 'click')) {
+      // A dialog the page already holds (a modal layer at the end of the body, hidden until a click shows it) is a panel
+      // that opens like any other: its open state is in the stylesheet, the click adds `is-open`.
+      if (!onHover && !((w.kind === 'disclosure' || w.kind === 'dialog') && w.opensOn === 'click')) {
         ws.skipped.kinds[`${w.kind}${w.opensOn === 'hover' ? ' (hover)' : ''}`] = (ws.skipped.kinds[`${w.kind}${w.opensOn === 'hover' ? ' (hover)' : ''}`] ?? 0) + 1;
         continue;
       }
@@ -563,6 +589,12 @@ export function applyMotion(site, byPath) {
       }
       if (!w.state) {
         ws.skipped.noState++;
+        continue;
+      }
+      // A link whose click opened the panel is rebuilt as a control only when the original stayed on the page (its script
+      // suppressed the link, capture/clicks.js `stay`). A link that also navigates stays a plain link in the copy.
+      if (!onHover && w.stay === false) {
+        ws.skipped.navigates = (ws.skipped.navigates ?? 0) + 1;
         continue;
       }
       if (w.state.added) {
@@ -614,6 +646,31 @@ export function applyMotion(site, byPath) {
         // `wt` = a control js/motion.js toggles on click; `wh` = a control whose hover opens its area (CSS only).
         if (on === 'click') tokenize(triggerNode, 'wt');
         else if (on === 'hover-control') tokenize(triggerNode, 'wh');
+        if (on === 'click') {
+          // A link keeps its href (where it would lead) but must not follow it: the original stayed on the page.
+          if (realHref(triggerNode)) {
+            for (const n of [triggerNode, ...(triggerNode.stateTwins ?? [])]) n.stateAttrs = { ...n.stateAttrs, 'data-w-stay': '' };
+          }
+          // How the original closed it again: Escape and a click outside for a dialog (a layer over the whole screen,
+          // whose own control it covers), else what the probe recorded. The control inside it that closed it (a × in the
+          // corner, capture/states.js) closes it in the copy too.
+          const ways = [];
+          if (w.closes === 'escape' || w.kind === 'dialog') ways.push('esc');
+          if (w.closes === 'outside' || w.kind === 'dialog') ways.push('out');
+          if (ways.length) {
+            for (const n of [rootNode, ...(rootNode.stateTwins ?? [])]) n.stateAttrs = { ...n.stateAttrs, 'data-w-dismiss': ways.join(' ') };
+            // The layer itself (the dialog box): "outside" means outside it, not outside its area - a dialog's area is the
+            // whole body, since that is the only element holding both the layer and its control.
+            const layerNode = w.targets?.length ? nodes.get(w.targets[0]) : null;
+            if (layerNode) {
+              for (const n of [layerNode, ...(layerNode.stateTwins ?? [])]) n.stateAttrs = { ...n.stateAttrs, 'data-w-layer': '' };
+            }
+          }
+          const closeNode = w.closePath ? nodes.get(w.closePath) : null;
+          if (closeNode) {
+            for (const n of [closeNode, ...(closeNode.stateTwins ?? [])]) n.stateAttrs = { ...n.stateAttrs, 'data-w-x': '' };
+          }
+        }
         for (const p of effect.parts) {
           if (p.rel === '') continue;
           const partNode = nodes.get(`${rootPath}>${p.rel}`);
@@ -632,7 +689,7 @@ export function applyMotion(site, byPath) {
   const loops = reg.loops.map(({ key, ...rest }) => rest);
   const widgets = [...reg.widgets.values()];
   const scrolled = [...reg.scrolled.values()];
-  const any = hover.length || focus.length || reveal.length || loops.length || widgets.length || stateSets || scrolled.length || notices || hoverCards;
+  const any = hover.length || focus.length || reveal.length || loops.length || widgets.length || stateSets || scrolled.length || notices || panels || hoverCards;
   const motion = any ? {
     version: MOTION_VERSION,
     hover,
@@ -643,12 +700,13 @@ export function applyMotion(site, byPath) {
     widgets,
     states: stateSets,
     notices,
+    panels,
     hoverCards,
     scrolled,
     // The generated script is needed for the reveal (IntersectionObserver), the click widgets, the switched states, the
-    // scroll states and the hover cards (their hovered look waits in a <template> until first pointed at); hover, focus
-    // and loops are CSS.
-    script: reveal.length > 0 || widgets.some((w) => !w.on) || stateSets > 0 || scrolled.length > 0 || notices > 0 || hoverCards > 0,
+    // scroll states, the panels a click opens (dialogs the page only renders when open) and the hover cards (their
+    // hovered look waits in a <template> until first pointed at); hover, focus and loops are CSS.
+    script: reveal.length > 0 || widgets.some((w) => !w.on) || stateSets > 0 || scrolled.length > 0 || notices > 0 || panels > 0 || hoverCards > 0,
   } : null;
   return { motion, stats };
 }

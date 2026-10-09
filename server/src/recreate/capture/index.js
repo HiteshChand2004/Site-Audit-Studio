@@ -21,7 +21,8 @@ import { attachProbe, probeViewportHeight } from './viewport.js';
 
 // Clicking through the states of tabs / carousels / filtered lists of one page (most pages have none: no time used). The
 // limit follows the work (capture/states.js, ~3 s per control) within these bounds.
-const MOBILE_CLICK_BUDGET_MS = 8000; // the phone layout's own controls (menu button)
+const NARROW_CLICK_BUDGET_MS = 8000; // the controls of a narrow layout (its own menu button)
+const NARROW_CLICK_VIEWS = ['tablet', 'mobile']; // views probed for controls the desktop layout does not have
 const STATES_BUDGET_MS ={ min: 30000, max: 100000, perControl: 4000 }; // 24 carousel slides took ~51 s
 
 export { VIEWS };
@@ -228,14 +229,16 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     }
     lap('viewport');
 
-    // Controls only the phone layout has (a menu button, a drawer): the click probe on the phone view too, briefly and
-    // toggles first, after everything else was read from this page (it changes it). The copy rebuilds what it finds there.
-    if (view.id === 'mobile' && clickBudgetMs > 0) {
+    // Controls only a narrow layout has (a menu button, a drawer): the click probe on the phone and the tablet view too,
+    // briefly and toggles first, after everything else was read from this page (it changes it). A tablet often collapses
+    // the menu into a button of its own, which neither the desktop nor the phone probe sees. The copy rebuilds what it
+    // finds there (ir/motion.js, by that view's snapshot paths).
+    if (NARROW_CLICK_VIEWS.includes(view.id) && clickBudgetMs > 0) {
       try {
-        const clicks = await captureClicks(page, { budgetMs: MOBILE_CLICK_BUDGET_MS, limit: 8 });
-        await writeFile(path.join(dir, 'mobile-clicks.json'), JSON.stringify({ version: 1, view: 'mobile', clicks }));
+        const clicks = await captureClicks(page, { budgetMs: NARROW_CLICK_BUDGET_MS, limit: 8 });
+        await writeFile(path.join(dir, `${view.id}-clicks.json`), JSON.stringify({ version: 1, view: view.id, clicks }));
       } catch {
-        // the phone probe never fails a capture
+        // the probe of a narrow view never fails a capture
       }
       lap('clicks');
     }

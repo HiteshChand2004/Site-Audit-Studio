@@ -7,8 +7,15 @@
 // Elements that move by themselves (word rotators, marquees; measured by the click probe, clicks.noise) never count as a change,
 // and the area grows from the controls only until it holds what they changed.
 //
+// Last, panels a click opens away from their control (a dialog or a drawer the page draws at the end of the body, over
+// the whole screen): the body is the only element holding both, so there is no small area to rebuild in place. The panel
+// is snapshotted open and shipped as a hidden element of the copy (`body.panels`, ir/states.js expandPanels); the control
+// opens it, and it closes the way the original closed it (its own control again, Escape, a click outside, or the close
+// control inside it, which is probed here).
+//
 // Output, on the area's node of the page snapshot (capture/<slug>/desktop.json):
 //   node.states = { initial, count, controls: [rel], nav: [{ rel, offset }], variants: [{ index, body }] }
+//   body.panels = [{ control, closes, closeRel?, body }]
 // `rel` = snapshot path relative to the area; `body` = the area snapshotted in state `index` (the initial state is the node
 // itself and has no variant). ir/states.js turns this into hidden copies of the area that js/motion.js switches between.
 //
@@ -25,6 +32,9 @@ const HOVER_CARDS_MS = 20000; // time they may take beyond the states' own limit
 const MENU_LEVELS = 4; // a hover menu's box: at most this many levels above its link
 const HOVER_SETTLE_MS = 700; // a hover animation (fade, slide) runs out
 const MAX_STATE_NODES = 3000;
+const MAX_PANELS = 4; // panels a click opens away from their control (dialogs, drawers), per page
+const PANELS_MS = 15000; // time they may take beyond the states' own limit
+const MIN_PANEL_AREA = 2500; // px²: smaller than that it is an icon or a tooltip, not a panel
 const MAX_EFFECT_STATES = 12; // states whose hover / focus rules are read (a long carousel's slides share them anyway)
 
 /** Hover / focus effects of the page split by the part holding them, paths made relative to it (null when none). */
@@ -485,7 +495,9 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
   const stats = { sets: 0, states: 0, openPanels: 0, skipped: [], ms: 0, timedOut: false, cssUrls: [] };
   // What moves by itself was measured by the click probe (clicks.noise) and is never evidence.
   const plans = planSets(clicks?.widgets ?? [], clicks?.noise ?? []);
-  if (!plans.length && !(clicks?.widgets ?? []).some((w) => w.opensOn === 'hover')) return { ...stats, ms: Date.now() - started };
+  // Panels the body alone holds (a dialog, a drawer): captured at the end, but they decide whether there is work at all.
+  const panelPlans = planPanels(clicks?.widgets ?? [], body);
+  if (!plans.length && !panelPlans.length && !(clicks?.widgets ?? []).some((w) => w.opensOn === 'hover')) return { ...stats, ms: Date.now() - started };
   // The limit follows the work: a few seconds per control to click, scroll through and snapshot, within bounds.
   const b = typeof budgetMs === 'number' ? { min: budgetMs, max: budgetMs, perControl: 0 } : budgetMs;
   const controls = plans.reduce((n, p) => n + Math.max(p.controls.length, 2) + p.nav.length, 0);
@@ -698,8 +710,184 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
       await page.mouse.move(-20, -20).catch(() => {});
     }
   }
+
+  // Panels a click opens away from their control: a dialog, a drawer or a menu the page draws at the end of the body
+  // (over the whole screen), so the deepest element holding both is the body itself and there is no small area to
+  // rebuild in place. A panel the page renders only when it opens is snapshotted here and shipped as a hidden element
+  // of the copy (ir/states.js expandPanels); one that is already in the page needs no copy (its open state is in the
+  // stylesheet, ir/motion.js) and only its close control is looked for.
+  stats.panels = 0;
+  stats.panelCloses = 0; // panels whose own close control was found (both kinds)
+  stats.panelsSkipped = [];
+  for (const plan of panelPlans.slice(0, MAX_PANELS)) {
+    if (Date.now() > deadline + PANELS_MS) {
+      stats.panelsSkipped.push({ control: plan.w.trigger, reason: 'time' });
+      break;
+    }
+    const closeIt = () => closePanel({ closes: plan.w.closes, toggle: plan.w.trigger }).catch(() => {});
+    try {
+      if (!(await page.evaluate(clickPath, plan.w.trigger))) continue;
+      await page.waitForTimeout(SETTLE_MS + 250);
+      if (!samePage(page.url(), startUrl)) {
+        stats.panelsSkipped.push({ control: plan.w.trigger, reason: 'the page navigated' });
+        break;
+      }
+      if (!(await page.evaluate(shownAt, plan.panel))) {
+        stats.panelsSkipped.push({ control: plan.w.trigger, reason: 'it did not open again' });
+        await closeIt();
+        continue;
+      }
+      // The panel as it stands open (only when the page does not hold it while closed).
+      let snapped = null;
+      if (!plan.inPage) {
+        await page.evaluate(revealArea, plan.panel).catch(() => {});
+        const res = await page.evaluate(snapshotPage, { rootPath: plan.panel });
+        if (!res?.body) {
+          await closeIt();
+          continue;
+        }
+        for (const u of res.cssUrls ?? []) stats.cssUrls.push(u);
+        snapped = res.body;
+      }
+      // Which control inside it closes it (a × in a corner): clicked, and the panel must be gone afterwards.
+      let closeRel = null;
+      for (const cand of await page.evaluate(closeCandidates, plan.panel).catch(() => [])) {
+        if (!(await page.evaluate(clickPath, cand))) continue;
+        await page.waitForTimeout(SETTLE_MS);
+        if (!(await page.evaluate(shownAt, plan.panel))) {
+          closeRel = cand.slice(plan.panel.length + 1);
+          break;
+        }
+      }
+      if (closeRel == null) await closeIt();
+      else stats.panelCloses++;
+      await page.waitForTimeout(SETTLE_MS);
+      // A panel already in the page keeps its path, so the close control is named by its own path in the snapshot.
+      if (closeRel != null && plan.inPage) plan.w.closePath = `${plan.panel}>${closeRel}`;
+      if (snapped) {
+        const { path, ...rest } = snapped;
+        (body.panels ??= []).push({
+          control: plan.w.trigger,
+          closes: plan.w.closes,
+          ...(closeRel != null && { closeRel }),
+          body: rest,
+        });
+        stats.panels++;
+      }
+    } catch (err) {
+      stats.panelsSkipped.push({ control: plan.w.trigger, reason: err.message });
+      await closeIt();
+    }
+  }
+
   stats.ms = Date.now() - started;
   return stats;
+}
+
+/**
+ * The panels worth capturing: a click that opened something big outside its control, with the body as the only element
+ * holding both (a dialog layer, a drawer, a menu drawn at the end of the page). `inPage` = the page holds it while
+ * closed, so the copy has it already and only its close control is probed.
+ * @returns {{ w: object, panel: string, inPage: boolean }[]}
+ */
+export function planPanels(widgets, body) {
+  const out = [];
+  const inSnapshot = (p) => !!findNode(body, p);
+  for (const w of widgets ?? []) {
+    if (w.opensOn !== 'click' || !w.closes || (w.kind !== 'dialog' && w.kind !== 'disclosure')) continue;
+    // A link that followed its link as well is a link, not a control (capture/clicks.js `stay`).
+    if (w.stay === false) continue;
+    const big = [...(w.change?.shown ?? []), ...(w.change?.added ?? [])]
+      .filter((x) => x.path && x.path !== w.trigger && !x.path.startsWith(`${w.trigger}>`) && x.rect?.[2] * x.rect?.[3] >= MIN_PANEL_AREA)
+      .sort((a, b) => b.rect[2] * b.rect[3] - a.rect[2] * a.rect[3]);
+    if (!big.length) continue;
+    const panel = big[0].path;
+    // A panel close to its control is rebuilt in place (the open state as styles, ir/motion.js; or a state of the area,
+    // planSets above): only the ones the body alone holds are left.
+    const area = commonPath([w.trigger, panel]);
+    if (area && area !== 'body') continue;
+    if (out.some((o) => o.panel === panel || o.w.trigger === w.trigger)) continue;
+    out.push({ w, panel, inPage: inSnapshot(panel) });
+  }
+  return out;
+}
+
+/** Page function: is the element at a snapshot path drawn on screen? */
+function shownAt(p) {
+  const SKIP = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
+  let el = document.body;
+  for (const part of p.split('>').slice(1)) {
+    const [tag, n] = part.split(':');
+    let k = 0;
+    let next = null;
+    for (const c of el ? el.children : []) {
+      if (SKIP.has(c.tagName) || c.tagName.toLowerCase() !== tag) continue;
+      if (++k === Number(n)) {
+        next = c;
+        break;
+      }
+    }
+    el = next;
+  }
+  if (!el) return false;
+  const r = el.getBoundingClientRect();
+  if (r.width < 3 || r.height < 3) return false;
+  if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
+  return parseFloat(getComputedStyle(el).opacity) > 0.02;
+}
+
+/**
+ * Page function: the controls inside a panel that say they close it (their name or their only text), as snapshot paths,
+ * at most three. Nothing is identified by class name.
+ */
+function closeCandidates(rootPath) {
+  const SKIP = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
+  const pathOf = (el) => {
+    const parts = [];
+    for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+      if (n === document.body) {
+        parts.push('body');
+        break;
+      }
+      let index = 0;
+      for (const s of n.parentElement ? n.parentElement.children : []) {
+        if (SKIP.has(s.tagName)) continue;
+        if (s.tagName === n.tagName) index++;
+        if (s === n) break;
+      }
+      parts.push(`${n.tagName.toLowerCase()}:${index}`);
+    }
+    return parts.length && parts[parts.length - 1] === 'body' ? parts.reverse().join('>') : null;
+  };
+  let el = document.body;
+  for (const part of rootPath.split('>').slice(1)) {
+    const [tag, n] = part.split(':');
+    let k = 0;
+    let next = null;
+    for (const c of el ? el.children : []) {
+      if (SKIP.has(c.tagName) || c.tagName.toLowerCase() !== tag) continue;
+      if (++k === Number(n)) {
+        next = c;
+        break;
+      }
+    }
+    el = next;
+  }
+  if (!el) return [];
+  const NAME = /close|dismiss|cancel/i;
+  const GLYPH = /^(x|×|✕|✖|╳|⨯|close|cancel)$/i;
+  const out = [];
+  for (const c of el.querySelectorAll('button, a, [role="button"]')) {
+    const name = `${c.getAttribute('aria-label') || ''} ${c.getAttribute('title') || ''}`;
+    const text = (c.textContent || '').trim();
+    if (!(NAME.test(name) || GLYPH.test(text))) continue;
+    const r = c.getBoundingClientRect();
+    if (r.width < 3 || r.height < 3) continue;
+    const p = pathOf(c);
+    if (p && p.startsWith(`${rootPath}>`) && !out.includes(p)) out.push(p);
+    if (out.length >= 3) break;
+  }
+  return out;
 }
 
 /**

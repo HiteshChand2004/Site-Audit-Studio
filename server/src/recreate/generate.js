@@ -215,7 +215,7 @@ export async function generateStage(ctx) {
   const treeFixes = applyTreeFixes(site, { audit: ctx.audit, skipped: ctx.discovery?.skipped, axe, extraBroken });
   // Layout parts other window sizes show (fixers/perf.js markLayouts) are parked by the generated script.
   if (treeFixes.layouts) {
-    site.motion = { version: MOTION_VERSION, hover: [], focus: [], reveal: [], delays: [], loops: [], widgets: [], states: 0, notices: 0, hoverCards: 0, scrolled: [], ...site.motion, layouts: treeFixes.layouts, script: true };
+    site.motion = { version: MOTION_VERSION, hover: [], focus: [], reveal: [], delays: [], loops: [], widgets: [], states: 0, notices: 0, panels: 0, hoverCards: 0, scrolled: [], ...site.motion, layouts: treeFixes.layouts, script: true };
   }
   // After the fixers: headings are final (FAQ questions are read from them).
   const social = await addSocialImages(site, ctx, assetsDir);

@@ -7,7 +7,7 @@ import http from 'node:http';
 import { launchBrowser } from '../src/audit/render.js';
 import { captureClicks, commonPath, regionDiff } from '../src/recreate/capture/clicks.js';
 import { snapshotPage } from '../src/recreate/capture/snapshot.js';
-import { captureStates, planSets } from '../src/recreate/capture/states.js';
+import { captureStates, planPanels, planSets } from '../src/recreate/capture/states.js';
 import { captureNotices } from '../src/recreate/capture/notices.js';
 import { motionCss } from '../src/recreate/emit/motionCss.js';
 import { MOTION_JS } from '../src/recreate/emit/motionScript.js';
@@ -36,6 +36,14 @@ ${[1, 2, 3, 4, 5].map((i) => `<div class="item"><button class="q" type="button" 
   if (opening) it.classList.add('open'); b.setAttribute('aria-expanded', opening);
 }); });</script>
 </body></html>`;
+
+/** The tree as HTML, like the emitter does for these tests: attributes, state attributes and motion tokens. */
+const serialize = (n) => {
+  if (!isElement(n)) return n.text.replace(/</g, '&lt;');
+  const all = { ...n.attrs, ...(n.class && { class: n.class }), ...n.stateAttrs, ...(n.motionTokens?.length && { 'data-motion': n.motionTokens.join(' ') }) };
+  const attrs = Object.entries(all).map(([k, v]) => (v === '' ? ' ' + k : ' ' + k + '="' + String(v).replace(/"/g, '&quot;') + '"')).join('');
+  return '<' + n.tag + attrs + '>' + n.children.map(serialize).join('') + '</' + n.tag + '>';
+};
 
 let server;
 let browser;
@@ -735,6 +743,320 @@ test('a panel a click renders and Escape closes is captured, and the copy opens 
   assert.equal(await shown(), true, 'the control opens the panel');
   await p.getByRole('button', { name: 'Filters' }).first().click();
   assert.equal(await shown(), false, 'and closes it again');
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
+// --- Step 2 of the gap plan: interactions ------------------------------------------------------------------------
+
+// A top bar whose links are controls: "Platforms" opens a menu on click and the page stays where it is (its script
+// suppresses the link); "About us" shows a flyout but follows its link as well. Only the first may become a control in
+// the copy - the second has to stay a link.
+const NAV_LINKS = `<!doctype html><html><head><style>
+body { margin: 0; font: 16px sans-serif }
+header { display: flex; gap: 24px; padding: 12px; position: relative }
+.has, .card { position: relative }
+.menu { display: none; position: absolute; top: 28px; left: 0; width: 260px; height: 150px; background: #eee; padding: 12px }
+.has.open .menu { display: block }
+.flyout { display: none; position: absolute; top: 28px; left: 0; width: 240px; height: 120px; background: #ddd; padding: 12px }
+.card.open .flyout { display: block }
+</style></head><body><header><b>Logo</b>
+<div class="has"><a href="/platforms.html" id="pl">Platforms</a><div class="menu"><a href="/one.html">One</a> <a href="/two.html">Two</a></div></div>
+<div class="card"><a href="/about.html" id="ab">About us</a><div class="flyout"><p>Quick look</p></div></div>
+</header><main><p>Content</p></main>
+<script>
+var pl = document.getElementById('pl');
+pl.addEventListener('click', function (e) { e.preventDefault(); pl.parentElement.classList.toggle('open'); });
+var ab = document.getElementById('ab');
+ab.addEventListener('click', function () { ab.parentElement.classList.toggle('open'); });
+</script></body></html>`;
+
+test('a nav link whose click opens a menu becomes a control; one that follows its link stays a link', async () => {
+  pages.set('/nav-links', NAV_LINKS);
+  pages.set('/js/motion.js', MOTION_JS);
+  const context = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const page = await context.newPage();
+  await page.goto(`${base}/nav-links`);
+  const snapshot = await page.evaluate(snapshotPage, {});
+  const clicks = await captureClicks(page, { budgetMs: 15000 });
+  await context.close();
+
+  const menu = clicks.widgets.find((w) => /Platforms/.test(w.text ?? ''));
+  const flyout = clicks.widgets.find((w) => /About/.test(w.text ?? ''));
+  assert.ok(menu, `the link is clicked, not only hovered: ${JSON.stringify(clicks.widgets.map((w) => [w.text, w.kind]))}`);
+  assert.equal(menu.kind, 'disclosure');
+  assert.equal(menu.stay, true, 'the page suppressed the link itself');
+  assert.ok(menu.state?.parts?.length, 'with its open state');
+  assert.ok(flyout, 'the second link is probed too');
+  assert.equal(flyout.stay, false, 'that one follows its link as well');
+
+  const tree = buildPageTree({ desktop: snapshot.body });
+  const site = { pages: [{ info: { path: '/nav-links', url: `${base}/nav-links` }, root: tree.root }], assetResolve: () => null };
+  const { motion, stats } = applyMotion(site, new Map([['/nav-links', { clicks }]]));
+  assert.equal(stats.widgets.skipped.navigates, 1, 'the link that navigates is not rebuilt');
+  const find = (n, test) => {
+    if (!isElement(n)) return null;
+    if (test(n)) return n;
+    for (const c of n.children) {
+      const hit = find(c, test);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  const link = find(tree.root, (n) => n.tag === 'a' && /platforms/.test(String(n.attrs?.href ?? '')));
+  assert.ok(link?.motionTokens?.includes('wt'), 'the link is the control of its panel');
+  assert.ok(link.stateAttrs && 'data-w-stay' in link.stateAttrs, 'and does not follow its href');
+  const other = find(tree.root, (n) => n.tag === 'a' && /about/.test(String(n.attrs?.href ?? '')));
+  assert.ok(other, 'the other link is still in the page');
+  assert.ok(!other.stateAttrs?.['data-w-stay'] && !other.motionTokens?.includes('wt'), 'untouched');
+
+  const { rules, boxSizingReset } = buildStyles([tree], { assetFile: () => null });
+  const siteCss = emitCss({ rules, breakpoints: { source: 'default' }, tokens: {}, fontFaces: [], keyframes: [], boxSizingReset, pages: [] });
+  const css = `${typeof siteCss === 'string' ? siteCss : siteCss.css}\n${motionCss(motion, { tokenOf: new Map(), from: '' })}`;
+  pages.set('/nav-links-copy', `<!doctype html><html><head><style>${css}</style><script src="/js/motion.js" defer></script></head>${serialize(tree.root)}</html>`);
+  const ctx = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const p = await ctx.newPage();
+  const errors = [];
+  p.on('pageerror', (e) => errors.push(e.message));
+  await p.goto(`${base}/nav-links-copy`);
+  const menuShown = () => p.evaluate(() => [...document.querySelectorAll('a')].some((a) => a.textContent === 'One' && a.getClientRects().length > 0));
+  assert.equal(await menuShown(), false, 'the menu starts closed');
+  await p.locator('a[href="/platforms.html"]').click();
+  assert.equal(await menuShown(), true, 'the link opens the menu');
+  assert.equal(p.url(), `${base}/nav-links-copy`, 'and stays on the page');
+  await p.locator('a[href="/platforms.html"]').click();
+  assert.equal(await menuShown(), false, 'clicking it again closes the menu');
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
+// A dialog the page draws only while it is open, appended to the body (a "portal"): the body is the only element holding
+// both it and its button, so there is no area to rebuild in place. The copy ships the dialog as a hidden element of the
+// page and opens it on the same button; Escape and its own × close it again.
+const BODY_MODAL = `<!doctype html><html><head><style>
+body { margin: 0; font: 16px sans-serif }
+.sheet { position: fixed; inset: 0; background: rgba(0, 0, 0, .5) }
+.box { position: absolute; top: 80px; left: 50%; margin-left: -180px; width: 360px; height: 220px; background: #fff; padding: 24px }
+.x { position: absolute; top: 8px; right: 8px; width: 32px; height: 32px }
+</style></head><body><header><button id="open" type="button" aria-expanded="false">Sign in</button></header>
+<main><p>Welcome</p></main>
+<script>
+var btn = document.getElementById('open');
+var sheet = null;
+function close() { if (sheet) { sheet.remove(); sheet = null; btn.setAttribute('aria-expanded', 'false'); } }
+btn.addEventListener('click', function () {
+  if (sheet) return close();
+  sheet = document.createElement('div');
+  sheet.className = 'sheet';
+  sheet.innerHTML = '<div class="box"><h2>Sign in</h2><p>Use your company account.</p><button class="x" type="button" aria-label="Close">\\u00d7</button></div>';
+  document.body.appendChild(sheet);
+  sheet.querySelector('.x').addEventListener('click', close);
+  btn.setAttribute('aria-expanded', 'true');
+});
+document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
+</script></body></html>`;
+
+test('a dialog the original appends to the body opens in the copy and closes with its × and with Escape', async () => {
+  pages.set('/body-modal', BODY_MODAL);
+  pages.set('/js/motion.js', MOTION_JS);
+  const context = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const page = await context.newPage();
+  await page.goto(`${base}/body-modal`);
+  const snapshot = await page.evaluate(snapshotPage, {});
+  const clicks = await captureClicks(page, { budgetMs: 15000 });
+  const states = await captureStates(page, clicks, snapshot.body, { budgetMs: 20000 });
+  await context.close();
+
+  const dialog = clicks.widgets.find((w) => w.kind === 'dialog');
+  assert.ok(dialog, `the click opens a layer over the page: ${JSON.stringify(clicks.widgets.map((w) => [w.text, w.kind]))}`);
+  assert.ok(dialog.closes, 'and the page closes it again');
+  assert.equal(planPanels(clicks.widgets, snapshot.body).length, 1, 'it is a panel the body alone holds');
+  assert.equal(states.panels, 1, JSON.stringify(states.panelsSkipped));
+  const panel = snapshot.body.panels[0];
+  assert.equal(panel.control, dialog.trigger);
+  assert.ok(panel.closeRel, 'the control inside it that closes it was found');
+  assert.ok(JSON.stringify(panel.body).includes('company account'), 'the dialog is snapshotted open');
+
+  const tree = buildPageTree({ desktop: snapshot.body });
+  const site = { pages: [{ info: { path: '/body-modal', url: `${base}/body-modal` }, root: tree.root }], assetResolve: () => null };
+  const { motion, stats } = applyMotion(site, new Map([['/body-modal', { clicks }]]));
+  assert.equal(stats.states.panels, 1);
+  assert.ok(motion.script, 'the panel needs the script');
+  const { rules, boxSizingReset } = buildStyles([tree], { assetFile: () => null });
+  const siteCss = emitCss({ rules, breakpoints: { source: 'default' }, tokens: {}, fontFaces: [], keyframes: [], boxSizingReset, pages: [] });
+  const css = `${typeof siteCss === 'string' ? siteCss : siteCss.css}\n${motionCss(motion, { tokenOf: new Map(), from: '' })}`;
+  assert.match(css, /\[data-w-panel-of\]\[hidden\]/, 'a panel not shown stays hidden without script');
+  const copy = serialize(tree.root);
+  assert.match(copy, /data-w-panel="p1"/);
+  assert.match(copy, /data-w-panel-of="p1"/);
+  assert.match(copy, /data-w-x/);
+  pages.set('/body-modal-copy', `<!doctype html><html><head><style>${css}</style><script src="/js/motion.js" defer></script></head>${copy}</html>`);
+  pages.set('/body-modal-nojs', `<!doctype html><html><head><style>${css}</style></head>${copy}</html>`);
+
+  const ctx = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const p = await ctx.newPage();
+  const errors = [];
+  p.on('pageerror', (e) => errors.push(e.message));
+  await p.goto(`${base}/body-modal-copy`);
+  const dialogShown = () => p.evaluate(() => [...document.querySelectorAll('p')].some((x) => /company account/.test(x.textContent) && x.getClientRects().length > 0));
+  assert.equal(await dialogShown(), false, 'the dialog starts closed');
+  await p.getByRole('button', { name: 'Sign in' }).click();
+  assert.equal(await dialogShown(), true, 'the button opens it');
+  assert.equal(await p.getByRole('button', { name: 'Sign in' }).getAttribute('aria-expanded'), 'true');
+  await p.getByRole('button', { name: 'Close' }).click();
+  assert.equal(await dialogShown(), false, 'its × closes it');
+  await p.getByRole('button', { name: 'Sign in' }).click();
+  assert.equal(await dialogShown(), true);
+  await p.keyboard.press('Escape');
+  assert.equal(await dialogShown(), false, 'Escape closes it');
+  assert.deepEqual(errors, []);
+  // Without script the page is as captured: the dialog is not shown, nothing covers the page.
+  await p.goto(`${base}/body-modal-nojs`);
+  assert.equal(await dialogShown(), false);
+  await ctx.close();
+});
+
+// A control only the tablet layout has: a "Filters" button between 601 and 1024 px (the computer shows the filters
+// themselves, the phone a different drawer). The desktop and phone probes never see it, so the tablet view is probed too.
+const TABLET_ONLY = `<!doctype html><html><head><meta name="viewport" content="width=device-width"><style>
+body { margin: 0; font: 16px sans-serif } .bar { display: flex; gap: 12px; padding: 12px }
+.filters { display: flex; gap: 12px } .ft { display: none; width: 120px; height: 36px }
+.panel { display: none; padding: 12px; background: #eee; height: 120px } .open .panel { display: block }
+@media (max-width: 1024px) and (min-width: 601px) { .filters { display: none } .ft { display: block } }
+</style></head><body><div class="wrap"><div class="bar"><b>Shop</b>
+<div class="filters"><label><input type="checkbox"> In stock</label><label><input type="checkbox"> On sale</label></div>
+<button class="ft" type="button" aria-expanded="false">Filters</button></div>
+<div class="panel"><label><input type="checkbox"> In stock</label> <label><input type="checkbox"> On sale</label></div></div>
+<main><p>Products</p></main>
+<script>var b = document.querySelector('.ft'), w = document.querySelector('.wrap');
+b.addEventListener('click', function () { var o = w.classList.toggle('open'); b.setAttribute('aria-expanded', String(o)); });</script></body></html>`;
+
+test('a control only the tablet layout shows opens its panel in the copy on a tablet', async () => {
+  pages.set('/tablet-only', TABLET_ONLY);
+  pages.set('/js/motion.js', MOTION_JS);
+  const shot = async (width, height) => {
+    const context = await browser.newContext({ viewport: { width, height } });
+    const page = await context.newPage();
+    await page.goto(`${base}/tablet-only`);
+    const snapshot = await page.evaluate(snapshotPage, {});
+    const clicks = await captureClicks(page, { budgetMs: 10000, limit: 8 });
+    await context.close();
+    return { body: snapshot.body, clicks };
+  };
+  const desktop = await shot(1440, 900);
+  const tablet = await shot(768, 1024);
+  assert.ok(!desktop.clicks.widgets.some((w) => /Filters/.test(w.text ?? '')), 'the desktop probe does not see the tablet button');
+  assert.ok(tablet.clicks.widgets.some((w) => w.kind === 'disclosure' && w.state), JSON.stringify(tablet.clicks.widgets.map((w) => [w.kind, w.text, Boolean(w.state)])));
+
+  const tree = buildPageTree({ desktop: desktop.body, tablet: tablet.body });
+  const site = { pages: [{ info: { path: '/tablet-only', url: `${base}/tablet-only` }, root: tree.root }], assetResolve: () => null };
+  const { motion, stats } = applyMotion(site, new Map([['/tablet-only', { clicks: desktop.clicks, clicksTablet: tablet.clicks }]]));
+  assert.ok(stats.widgets.tablet >= 1, JSON.stringify(stats.widgets));
+  assert.ok(motion.script);
+  const { rules, boxSizingReset } = buildStyles([tree], { assetFile: () => null });
+  const siteCss = emitCss({ rules, breakpoints: { source: 'default' }, tokens: {}, fontFaces: [], keyframes: [], boxSizingReset, pages: [] });
+  const css = `${typeof siteCss === 'string' ? siteCss : siteCss.css}\n${motionCss(motion, { tokenOf: new Map(), from: '' })}`;
+  pages.set('/tablet-only-copy', `<!doctype html><html><head><meta name="viewport" content="width=device-width"><style>${css}</style><script src="/js/motion.js" defer></script></head>${serialize(tree.root)}</html>`);
+
+  const ctx = await browser.newContext({ viewport: { width: 768, height: 1024 } });
+  const p = await ctx.newPage();
+  const errors = [];
+  p.on('pageerror', (e) => errors.push(e.message));
+  await p.goto(`${base}/tablet-only-copy`);
+  const panelShown = () => p.evaluate(() => {
+    const panels = [...document.querySelectorAll('div')].filter((d) => d.querySelector('input') && d.getClientRects().length > 0);
+    return panels.some((d) => d.getBoundingClientRect().height > 60);
+  });
+  assert.equal(await panelShown(), false, 'the panel starts closed');
+  await p.getByRole('button', { name: 'Filters' }).first().click();
+  assert.equal(await panelShown(), true, 'the tablet button opens it');
+  await p.getByRole('button', { name: 'Filters' }).first().click();
+  assert.equal(await panelShown(), false, 'and closes it again');
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
+
+// A dialog the page already holds at the end of the body, hidden until a class on <body> shows it (a very common
+// pattern): the body is the only element holding it and its button, so the open state is the stylesheet's and the copy
+// toggles it there. Its × and Escape close it, as in the original.
+const PAGE_MODAL = `<!doctype html><html><head><style>
+body { margin: 0; font: 16px sans-serif }
+.sheet { position: fixed; inset: 0; background: rgba(0, 0, 0, .5); visibility: hidden; opacity: 0 }
+body.show .sheet { visibility: visible; opacity: 1 }
+.box { position: absolute; top: 80px; left: 50%; margin-left: -180px; width: 360px; height: 200px; background: #fff; padding: 24px }
+.x { position: absolute; top: 8px; right: 8px; width: 32px; height: 32px }
+</style></head><body><header><button id="open" type="button" aria-expanded="false">Sign in</button></header>
+<main><p>Welcome</p></main>
+<div class="sheet"><div class="box"><h2>Sign in</h2><p>Use your company account.</p><button class="x" type="button" aria-label="Close">×</button></div></div>
+<script>
+var btn = document.getElementById('open');
+function set(on) { document.body.classList.toggle('show', on); btn.setAttribute('aria-expanded', String(on)); }
+btn.addEventListener('click', function () { set(!document.body.classList.contains('show')); });
+document.querySelector('.x').addEventListener('click', function () { set(false); });
+document.addEventListener('keydown', function (e) { if (e.key === 'Escape') set(false); });
+</script></body></html>`;
+
+test('a dialog the page already holds is opened by its button in the copy, and its × and Escape close it', async () => {
+  pages.set('/page-modal', PAGE_MODAL);
+  pages.set('/js/motion.js', MOTION_JS);
+  const context = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const page = await context.newPage();
+  await page.goto(`${base}/page-modal`);
+  const snapshot = await page.evaluate(snapshotPage, {});
+  const clicks = await captureClicks(page, { budgetMs: 15000 });
+  const states = await captureStates(page, clicks, snapshot.body, { budgetMs: 20000 });
+  await context.close();
+
+  const dialog = clicks.widgets.find((w) => w.kind === 'dialog');
+  assert.ok(dialog, `the click shows a layer over the page: ${JSON.stringify(clicks.widgets.map((w) => [w.text, w.kind]))}`);
+  assert.equal(dialog.state?.root, 'body', 'the body is the only element holding the layer and its button');
+  assert.ok(dialog.state.parts.length, 'its open state is read as styles');
+  assert.equal(states.panels, 0, 'nothing to copy: the page holds the dialog itself');
+  assert.equal(states.panelCloses, 1, 'its close control was found');
+  assert.ok(dialog.closePath, JSON.stringify(dialog.closePath));
+
+  const tree = buildPageTree({ desktop: snapshot.body });
+  const site = { pages: [{ info: { path: '/page-modal', url: `${base}/page-modal` }, root: tree.root }], assetResolve: () => null };
+  const { motion, stats } = applyMotion(site, new Map([['/page-modal', { clicks }]]));
+  assert.ok(stats.widgets.effects >= 1, JSON.stringify(stats.widgets));
+  assert.ok(tree.root.stateAttrs?.['data-w-dismiss']?.includes('esc'), 'Escape closes it, like the original');
+  const find = (n, pick) => {
+    if (!isElement(n)) return null;
+    if (pick(n)) return n;
+    for (const c of n.children) {
+      const hit = find(c, pick);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  assert.ok(find(tree.root, (n) => n.stateAttrs && 'data-w-layer' in n.stateAttrs), 'the layer itself is marked');
+  assert.ok(find(tree.root, (n) => n.stateAttrs && 'data-w-x' in n.stateAttrs), 'and its close control');
+
+  const { rules, boxSizingReset } = buildStyles([tree], { assetFile: () => null });
+  const siteCss = emitCss({ rules, breakpoints: { source: 'default' }, tokens: {}, fontFaces: [], keyframes: [], boxSizingReset, pages: [] });
+  const css = `${typeof siteCss === 'string' ? siteCss : siteCss.css}\n${motionCss(motion, { tokenOf: new Map(), from: '' })}`;
+  pages.set('/page-modal-copy', `<!doctype html><html><head><style>${css}</style><script src="/js/motion.js" defer></script></head>${serialize(tree.root)}</html>`);
+
+  const ctx = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const p = await ctx.newPage();
+  const errors = [];
+  p.on('pageerror', (e) => errors.push(e.message));
+  await p.goto(`${base}/page-modal-copy`);
+  const shown = () => p.evaluate(() => {
+    const el = [...document.querySelectorAll('p')].find((x) => /company account/.test(x.textContent));
+    if (!el) return false;
+    const cs = getComputedStyle(el);
+    return el.getClientRects().length > 0 && cs.visibility === 'visible' && parseFloat(cs.opacity) > 0.5;
+  });
+  assert.equal(await shown(), false, 'the dialog starts closed');
+  await p.getByRole('button', { name: 'Sign in' }).click();
+  assert.equal(await shown(), true, 'the button opens it');
+  await p.getByRole('button', { name: 'Close' }).click();
+  assert.equal(await shown(), false, 'its × closes it');
+  await p.getByRole('button', { name: 'Sign in' }).click();
+  assert.equal(await shown(), true);
+  await p.keyboard.press('Escape');
+  assert.equal(await shown(), false, 'Escape closes it');
   assert.deepEqual(errors, []);
   await ctx.close();
 });

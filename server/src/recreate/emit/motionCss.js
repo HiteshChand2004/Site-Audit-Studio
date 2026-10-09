@@ -56,7 +56,7 @@ export function motionCss(m, opts) {
   if (scrolled.some(Boolean)) out.push(`/* Bars once the page is scrolled (js/motion.js adds .is-scrolled) */\n${scrolled.filter(Boolean).join('\n')}`);
 
   // Switched states (ir/states.js): the states not shown stay hidden whatever display their own class gives them.
-  if (m.states || m.notices) out.push('/* Tab / carousel states and short messages not shown (js/motion.js shows them) */\n[data-w-set][hidden],\n[data-w-note-of][hidden] {\n  display: none !important;\n}');
+  if (m.states || m.notices || m.panels) out.push('/* States, short messages and panels not shown (js/motion.js shows them) */\n[data-w-set][hidden],\n[data-w-note-of][hidden],\n[data-w-panel-of][hidden] {\n  display: none !important;\n}');
 
   // Cards whose hover look the page drew by script: the hovered copy replaces the card while its box is hovered or
   // focused (ir/states.js expandHoverCards); no script.

@@ -117,6 +117,51 @@ export function expandNotices(root) {
 }
 
 /**
+ * Puts the captured panels (capture/states.js `body.panels`: a dialog or drawer the page renders only while open, away
+ * from its control) into a page tree: each panel a hidden element at the end of the body, where the original drew it
+ * (it is fixed on the screen, so nothing else about the page changes), `data-w-panel-of="pK"`; its control (and its
+ * twins in the other states of an area) `data-w-panel="pK"`. The panel closes the way the original closed it: its own
+ * control again, Escape or a click outside (`data-w-dismiss`), and the close control inside it (`data-w-x`).
+ * js/motion.js does the opening and closing; without script the page simply does not show it, as it does not now.
+ * Run after expandStates (the twins exist then).
+ * @returns {number} panels added
+ */
+export function expandPanels(root) {
+  const list = root.panels ?? [];
+  delete root.panels;
+  if (!list.length) return 0;
+  const byPath = new Map();
+  const walk = (n) => {
+    if (!isElement(n)) return;
+    if (n.cpath) byPath.set(n.cpath, n);
+    n.children.forEach(walk);
+  };
+  walk(root);
+  let k = 0;
+  for (const panel of list) {
+    const control = byPath.get(panel.control);
+    if (!control || !panel.node) continue;
+    const id = `p${++k}`;
+    const same = (control.stateTwins ?? []).filter((t) => textOf(t) === textOf(control));
+    for (const c of [control, ...same]) c.stateAttrs = { ...c.stateAttrs, 'data-w-panel': id };
+    const close = panel.closeRel != null ? atRel(panel.node, panel.closeRel) : null;
+    if (close) close.stateAttrs = { ...close.stateAttrs, 'data-w-x': '' };
+    forget(panel.node);
+    // Snapshotted at the desktop window only: shown the same way at every width rather than hidden on phones.
+    ownViews(panel.node, Object.keys(root.views ?? {}));
+    panel.node.stateAttrs = {
+      ...panel.node.stateAttrs,
+      'data-w-panel-of': id,
+      // A layer over the page closes with Escape and with a click outside it, whichever of the two the probe found first.
+      'data-w-dismiss': 'esc out',
+      hidden: '',
+    };
+    root.children.push(panel.node);
+  }
+  return k;
+}
+
+/**
  * Cards whose hover look the page draws by script (capture/states.js `hoverState`): the hovered snapshot goes right after
  * the card, `data-w-hcopy`; the card is `data-w-hrest`, their box `data-w-hv`. The stylesheet shows the copy instead of
  * the card while the box is hovered or holds keyboard focus; no script. Where the card is its box's only element (a grid
@@ -179,12 +224,19 @@ export function expandStates(root) {
   const groups = new Map();
   const mark = (area, id, index, s) => {
     area.stateAttrs = { ...area.stateAttrs, 'data-w-set': id, 'data-w-i': String(index) };
+    // A control that is a link to another page keeps its href but must not follow it: clicking it switched the state in
+    // place in the original (the capture proved it), so the copy stays on the page too (js/motion.js).
+    const stay = (c) => {
+      const href = String(c.attrs?.href ?? '').trim();
+      if (c.tag === 'a' && href && !/^(#|javascript:)/i.test(href)) c.stateAttrs = { ...c.stateAttrs, 'data-w-stay': '' };
+    };
     s.controls.forEach((rel, j) => {
       if (rel == null) return; // in another part of the area
       const c = atRel(area, rel);
       if (c) {
         c.stateAttrs = { ...c.stateAttrs, 'data-w-go': `${id}:${j}` };
         c.stateRole = { index: j, count: s.count }; // a name for an icon-only control (fixers/a11y.js)
+        stay(c);
       }
     });
     for (const nav of s.nav ?? []) {
@@ -192,6 +244,7 @@ export function expandStates(root) {
       if (c) {
         c.stateAttrs = { ...c.stateAttrs, 'data-w-go': `${id}:${(((index + nav.offset) % s.count) + s.count) % s.count}` };
         c.stateRole = { offset: nav.offset };
+        stay(c);
       }
     }
   };
