@@ -489,6 +489,18 @@ export function withoutNoise(d, noise) {
   };
 }
 
+/**
+ * Region parts without what moves by itself: the spinning and drifting boxes of a page (`noise`, absolute paths) differ
+ * between the open and the closed read for their own reasons, so they are not part of what the control opened. Without
+ * this, a nav link whose menu the page renders only when it opens looked "opened" by three decorative spinners
+ * elsewhere on the page, which stretched its area over the whole page and wrote a rule that moved nothing.
+ */
+export function quietParts(parts, noise, root) {
+  if (!parts?.length || !noise?.length) return parts ?? [];
+  const inNoise = (path) => noise.some((n) => path === n || path.startsWith(`${n}>`));
+  return parts.filter((part) => !inNoise(part.rel ? `${root}>${part.rel}` : root));
+}
+
 /** Same page: same origin and path (a query or hash the page writes itself, like ?tab=join, is not another page). */
 export function samePage(a, b) {
   try {
@@ -643,7 +655,7 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
             await page.waitForTimeout(350);
             if (open) {
               const closed = await page.evaluate(readRegion, { rootPath: root }).catch(() => null);
-              const parts = closed ? regionDiff(closed, open) : [];
+              const parts = closed ? quietParts(regionDiff(closed, open), noise, root) : [];
               if (parts.length) entry.state = { root, parts, ...(Object.keys(open).length > Object.keys(closed).length && { added: true }) };
             }
             widgets.push(entry);
@@ -694,7 +706,7 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
         else if (open) {
           await page.waitForTimeout(200);
           const closed = await page.evaluate(readRegion, { rootPath: root, only }).catch(() => null);
-          const parts = closed ? regionDiff(closed, open) : [];
+          const parts = closed ? quietParts(regionDiff(closed, open), noise, root) : [];
           if (parts.length) entry.state = { root, parts, ...(Object.keys(open).length > Object.keys(closed).length && { added: true }) };
         }
       }

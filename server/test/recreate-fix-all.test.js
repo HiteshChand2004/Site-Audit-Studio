@@ -245,3 +245,29 @@ test('pages the analysis found join the recreate even when the server HTML links
   assert.deepEqual(withKnown.pages.map((p) => p.path), ['/', '/faq/1']);
   assert.equal(withKnown.pages[1].source, 'analysis');
 });
+
+test('contrast: white text on a brand button darkens the button, not the text; a flip is left for a person', () => {
+  // White on #297bff reads 3.93:1. Moving the text passes only when it is nearly black (the design is gone), so the
+  // one box the text is read on is darkened instead.
+  const label = el('p', [txt('Contact Us')], { style: { 'font-size': '16px' } });
+  const button = el('a', [label], { attrs: { class: 'header-button' }, style: { 'background-color': 'rgb(41, 123, 255)', color: 'rgb(255, 255, 255)' } });
+  const t = { info: { path: '/' }, root: el('body', [button], { style: { 'background-color': 'rgb(255, 255, 255)' } }) };
+  const out = fixContrast(t);
+  assert.equal(label.views.desktop.style.color, undefined, 'the text keeps its colour');
+  const bg = parseColor(button.views.desktop.style['background-color']);
+  assert.notEqual(button.views.desktop.style['background-color'], 'rgb(41, 123, 255)');
+  assert.ok(ratio([255, 255, 255, 1], bg) >= 4.5, 'white now passes on the button');
+  // A small step: still the same blue, not black.
+  assert.ok(bg[2] > 200 && bg[2] > bg[0], 'still blue');
+  assert.equal(out.fixed.filter((f) => f.field === 'background-color').length, 1);
+
+  // The same button holding text of two colours is not touched: one background cannot suit both. The text would have to
+  // flip across the middle, so it is left for a person.
+  const white = el('p', [txt('Contact Us')], { style: { color: 'rgb(255, 255, 255)', 'font-size': '16px' } });
+  const dark = el('p', [txt('or call us')], { style: { color: 'rgb(0, 24, 73)', 'font-size': '16px' } });
+  const mixed = el('a', [white, dark], { style: { 'background-color': 'rgb(41, 123, 255)' } });
+  const out2 = fixContrast({ info: { path: '/' }, root: el('body', [mixed], { style: { 'background-color': 'rgb(255, 255, 255)' } }) });
+  assert.equal(mixed.views.desktop.style['background-color'], 'rgb(41, 123, 255)');
+  assert.equal(white.views.desktop.style.color, 'rgb(255, 255, 255)');
+  assert.equal(out2.open.length, 1);
+});

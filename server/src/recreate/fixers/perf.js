@@ -282,6 +282,52 @@ export function markLayouts(t) {
   return marked;
 }
 
+// Boxes that hide everything inside them (ir/states.js): a state copy, a message, a hovered look.
+const HIDDEN_SUBTREE = /^data-w-(set|i|note-of|hcopy|tpl)$/;
+const INVISIBLE = 0.05; // opacity at or below this: the box paints nothing a visitor can see
+// A box a dropdown, dialog or carousel keeps out of sight sits out of the flow, so its own opacity of 0 is meant.
+const OUT_OF_FLOW = /^(absolute|fixed)$/;
+
+/**
+ * A section the original fades in with its own script, which the capture never caught revealed, keeps `opacity: 0` from
+ * the snapshot — and with no reveal of ours on it nothing ever shows it again, so it stays invisible for good (parchaa's
+ * testimonials). Such a box is drawn as a visitor is meant to see it. Only a box that is clearly meant to be seen:
+ * in the flow, with a size and with content, whose opacity is 0 in every view that shows it, and which nothing of ours
+ * switches (no motion token, no click-switched state, notice, hover copy, parked layout or hidden box around it).
+ * Returns what was made visible. Runs after applyMotion, so every box a mechanism shows already carries its token.
+ */
+export function showFaded(t) {
+  const views = t.views ?? Object.keys(t.root.views ?? {});
+  // A box the copy keeps out of sight with everything in it: a state of a tab panel / carousel, a message, a hovered
+  // look, a <template>. Only these hide a whole subtree, so only these are passed down.
+  const hidesAll = (n) => n.tag === 'template'
+    || Object.keys({ ...n.attrs, ...n.stateAttrs }).some((k) => HIDDEN_SUBTREE.test(k) || k === 'hidden');
+  // The box itself: an effect of ours already decides what it looks like (a reveal's from-state, a panel that opens).
+  const switched = (n) => hidesAll(n) || (n.motionTokens?.length ?? 0) > 0;
+  const content = (n) => isElement(n)
+    && (n.children.some((c) => isText(c) && c.text.trim()) || /^(img|svg|video|canvas|picture)$/.test(n.tag) || n.children.some(content));
+  const out = [];
+  const visit = (n, owned) => {
+    if (!isElement(n) || n.tag === 'template' || n.tag === 'svg') return;
+    const mine = owned || switched(n);
+    // Per view: the capture caught the fade at one window size and not at another, so the same box can be invisible on
+    // a computer and shown on a phone.
+    const faded = views.filter((v) => {
+      const view = n.views?.[v];
+      if (!view || view.hidden) return false;
+      const { style = {}, rect = [] } = view;
+      return parseFloat(style.opacity) <= INVISIBLE && !OUT_OF_FLOW.test(style.position ?? '') && rect[2] > 0 && rect[3] > 0;
+    });
+    if (!mine && faded.length && content(n)) {
+      for (const v of faded) n.views[v].style = { ...n.views[v].style, opacity: '1' };
+      out.push({ page: t.info.path, element: n.tag, field: 'opacity', from: '0', value: '1', views: faded.join(', '), source: 'the box was captured before the original faded it in, and nothing would have shown it' });
+    }
+    for (const c of n.children) visit(c, owned || hidesAll(n));
+  };
+  for (const c of t.root.children ?? []) visit(c, false);
+  return out;
+}
+
 // Reveal / page-load entrance tokens (ir/motion.js): the effect, its stagger delay, replay.
 const ENTRANCE = /^(rv|rl|rp|r\d+|d\d+)$/;
 

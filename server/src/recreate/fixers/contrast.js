@@ -42,23 +42,75 @@ const over = (top, bottom, alpha = top[3]) => [0, 1, 2].map((i) => top[i] * alph
 const mix = (c, target, t) => [0, 1, 2].map((i) => Math.round(c[i] + (target[i] - c[i]) * t)).concat(1);
 const css = ([r, g, b]) => `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
 
-/** The smallest mix of `fg` toward black or white that reaches `need` against `bg` (fg drawn at `alpha`), or null. */
-export function passingColor(fg, bg, need, alpha = 1) {
-  const shown = (c) => over(c, bg, alpha);
-  if (ratio(shown(fg), bg) >= need) return null;
+/**
+ * The smallest mix of one side toward black or white that reaches `need`, with how far it had to move (`t`, 0–1).
+ * `side` 'text' moves the text colour (drawn at `alpha`) over the fixed background `other`; 'background' moves the
+ * background under the fixed text colour `other`.
+ */
+function bestMix(from, other, need, alpha, side) {
+  const reached = (c) => (side === 'text' ? ratio(over(c, other, alpha), other) : ratio(over(other, c, alpha), c));
+  if (reached(from) >= need) return null;
   let best = null;
   for (const target of [[0, 0, 0], [255, 255, 255]]) {
-    if (ratio(shown(mix(fg, target, 1)), bg) < need) continue;
+    if (reached(mix(from, target, 1)) < need) continue;
     let lo = 0;
     let hi = 1;
     for (let i = 0; i < 18; i++) {
       const mid = (lo + hi) / 2;
-      if (ratio(shown(mix(fg, target, mid)), bg) >= need) hi = mid;
+      if (reached(mix(from, target, mid)) >= need) hi = mid;
       else lo = mid;
     }
-    if (!best || hi < best.t) best = { t: hi, color: mix(fg, target, hi) };
+    if (!best || hi < best.t) best = { t: hi, color: mix(from, target, hi) };
   }
-  return best?.color ?? null;
+  return best;
+}
+
+/** The smallest mix of `fg` toward black or white that reaches `need` against `bg` (fg drawn at `alpha`), or null. */
+export function passingColor(fg, bg, need, alpha = 1) {
+  return bestMix(fg, bg, need, alpha, 'text')?.color ?? null;
+}
+
+// Moving the text further than this turns the design upside down (white button text ends up almost black): then the
+// background is darkened instead, and where that is not safe the case is left for a person.
+const MAX_TEXT_SHIFT = 0.5;
+
+/**
+ * The box whose own background colour the text is read on, when darkening (or lightening) that one box is safe: it is
+ * the only layer behind the text, and every piece of text drawn on it has this same colour, so one change fixes them
+ * all and spoils none. A box holding text of its own colours (a card with a heading in another colour) is not touched.
+ * Subtrees with their own opaque background are left out: their text sits on that one, not on this box.
+ */
+/**
+ * For a finding the audit measured (which carries colours, not boxes): the nearest box at or above the text that paints
+ * exactly the background axe measured, when darkening it is safe (sharedBackdrop). The desktop view decides.
+ */
+function backdropOf(node, ancestors, bg, fg) {
+  const chain = [node, ...[...ancestors].reverse()];
+  for (let k = 0; k < chain.length; k++) {
+    const own = parseColor(chain[k].views?.desktop?.style?.['background-color']);
+    if (!own || own[3] === 0) continue;
+    if (own[3] < 1 || own.join() !== bg.join()) return null; // a stack of layers, or not the colour axe read
+    const above = k === 0 ? [...ancestors] : ancestors.slice(0, Math.max(0, ancestors.length - k));
+    return sharedBackdrop(node, [own], chain[k], above, 'desktop', fg);
+  }
+  return null;
+}
+
+function sharedBackdrop(node, layers, bgNode, bgAncestors, v, fg) {
+  if (layers.length !== 1 || !bgNode?.views?.[v]) return null;
+  const same = (c) => c && c[0] === fg[0] && c[1] === fg[1] && c[2] === fg[2] && c[3] === fg[3];
+  let ok = true;
+  const visit = (n, ancestors) => {
+    if (!ok || !isElement(n)) return;
+    if (n !== bgNode) {
+      const own = parseColor(n.views?.[v]?.style?.['background-color']);
+      if (own && own[3] >= 1) return; // its text is read on its own background
+    }
+    if (ownText(n) && !same(parseColor(inherited(n, ancestors, v, 'color') ?? 'rgb(0, 0, 0)'))) ok = false;
+    for (const c of n.children) visit(c, [...ancestors, n]);
+  };
+  visit(bgNode, bgAncestors);
+  return ok ? bgNode : null;
 }
 
 const px = (v) => parseFloat(String(v ?? '')) || 0;
@@ -140,8 +192,24 @@ export function fixContrast(t, { axe = [] } = {}) {
       fixed.push({ page: t.info.path, element: n.tag, field: 'decorative-text', value: text.slice(0, 60), source: `decorative text (contrast ${f.ratio}) drawn by CSS` });
       return;
     }
-    const better = passingColor(f.fg, f.bg, f.need + MARGIN);
-    if (!better) return;
+    const want = f.need + MARGIN;
+    const textOpt = bestMix(f.fg, f.bg, want, 1, 'text');
+    // As in check(): rather than turning the text almost black, darken the one box it is read on when that is safe.
+    const box = backdropOf(n, ancestors, f.bg, f.fg);
+    const backdrop = box ? bestMix(f.bg, f.fg, want, 1, 'background') : null;
+    if (backdrop && (!textOpt || backdrop.t < textOpt.t)) {
+      for (const view of Object.values(box.views ?? {})) {
+        if (view && parseColor(view.style?.['background-color'])?.join() === f.bg.join()) view.style = { ...view.style, 'background-color': css(backdrop.color) };
+      }
+      fixed.push({ page: t.info.path, element: box.tag, field: 'background-color', from: css(f.bg), value: css(backdrop.color), source: `contrast ${f.ratio} → ${ratio(over(f.fg, backdrop.color, 1), backdrop.color).toFixed(2)} behind ${css(f.fg)} text (measured by the audit)` });
+      return;
+    }
+    if (!textOpt) return;
+    if (textOpt.t > MAX_TEXT_SHIFT) {
+      open.push({ page: t.info.path, element: n.tag, detail: `Light text on a background nearly as light (contrast ${f.ratio}, measured by the audit): only a new colour for one of them reads well, which is a design choice` });
+      return;
+    }
+    const better = textOpt.color;
     for (const view of Object.values(n.views ?? {})) if (view) view.style = { ...view.style, color: css(better) };
     fixed.push({ page: t.info.path, element: n.tag, field: 'color', from: css(f.fg), value: css(better), source: `contrast ${f.ratio} → ${ratio(better, f.bg).toFixed(2)} on ${css(f.bg)} (measured by the audit)` });
   };
@@ -158,7 +226,10 @@ export function fixContrast(t, { axe = [] } = {}) {
       const layers = [];
       let picture = false;
       let opacity = 1;
-      for (const x of [n, ...[...ancestors].reverse(), ...(t.htmlNode ? [t.htmlNode] : [])]) {
+      let bgNode = null;
+      let bgAncestors = [];
+      const chain = [n, ...[...ancestors].reverse(), ...(t.htmlNode ? [t.htmlNode] : [])];
+      for (const x of chain) {
         const s = x.views?.[v]?.style ?? {};
         if (s.opacity !== undefined) opacity *= parseFloat(s.opacity);
         if (s['background-image'] && s['background-image'] !== 'none') {
@@ -172,7 +243,14 @@ export function fixContrast(t, { axe = [] } = {}) {
         const c = parseColor(s['background-color']);
         if (c && c[3] > 0) {
           layers.push(c);
-          if (c[3] >= 1) break;
+          if (c[3] >= 1) {
+            bgNode = x;
+            // The ancestors of the box that paints the background, so inherited colours inside it can be read.
+            // chain is [n, parent, grandparent, …], so the box at chain index k is ancestors[length − k].
+            const k = chain.indexOf(x);
+            bgAncestors = k === 0 ? [...ancestors] : ancestors.slice(0, Math.max(0, ancestors.length - k));
+            break;
+          }
         }
       }
       if (picture) {
@@ -190,10 +268,27 @@ export function fixContrast(t, { axe = [] } = {}) {
       // Only text that fails; and text nearly the colour of what seems to be behind it is left alone: then what is really
       // behind it is something the styles do not show (an overlay, a layer below), and a guess would spoil the design.
       if (now >= need || now < 1.6) continue;
-      const better = passingColor(fg, bg, need + MARGIN, alpha);
-      if (!better) continue;
+      const want = need + MARGIN;
+      const text = bestMix(fg, bg, want, alpha, 'text');
+      // White text on a mid-tone brand colour (a button) only passes once it is almost black, which throws the design
+      // away. Darkening that one box instead is a far smaller change and keeps the text as designed, so whichever side
+      // moves less wins.
+      const box = sharedBackdrop(n, layers, bgNode, bgAncestors, v, fg);
+      const backdrop = box ? bestMix(bg, fg, want, alpha, 'background') : null;
+      const pick = backdrop && (!text || backdrop.t < text.t) ? 'background' : text ? 'text' : null;
+      if (!pick) continue;
+      if (pick === 'background') {
+        const bview = box.views[v];
+        bview.style = { ...bview.style, 'background-color': css(backdrop.color) };
+        changed ??= { page: t.info.path, element: box.tag, field: 'background-color', from: css(bg), value: css(backdrop.color), source: `contrast ${now.toFixed(2)} → ${ratio(over(fg, backdrop.color, alpha), backdrop.color).toFixed(2)} behind ${css(fg)} text` };
+        continue;
+      }
+      if (text.t > MAX_TEXT_SHIFT) {
+        open.push({ page: t.info.path, element: n.tag, detail: `Light text on a background nearly as light (contrast ${now.toFixed(2)}): only a new colour for one of them reads well, which is a design choice` });
+        continue;
+      }
       // Written as the colour it is seen as (alpha folded into it).
-      const shown = over(better, bg, alpha);
+      const shown = over(text.color, bg, alpha);
       view.style = { ...view.style, color: css(shown) };
       changed ??= { page: t.info.path, element: n.tag, field: 'color', from: css(fg), value: css(shown), source: `contrast ${now.toFixed(2)} → ${ratio(shown, bg).toFixed(2)} on ${css(bg)}` };
     }

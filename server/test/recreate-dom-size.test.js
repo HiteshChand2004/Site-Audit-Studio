@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
-import { fixLoading, markLayouts, pruneSprites } from '../src/recreate/fixers/perf.js';
+import { fixLoading, markLayouts, pruneSprites, showFaded } from '../src/recreate/fixers/perf.js';
 import { pageFontFaces } from '../src/recreate/emit/css.js';
 import { MOTION_JS } from '../src/recreate/emit/motionScript.js';
 import { scriptLoop } from '../src/recreate/ir/motion.js';
@@ -134,4 +134,26 @@ test('checklist: a failing Lighthouse audit that clearly moved is improved / reg
   assert.equal(lighthouseTrend(side(926, 1011), side(920, 1005)), null);
   assert.equal(lighthouseTrend(side(5500, 4000, 'millisecond'), side(5300, 3900, 'millisecond')), null);
   assert.equal(lighthouseTrend(side(5500, 4000, 'millisecond'), side(4100, 3000, 'millisecond')), 'better');
+});
+
+test('a section the original had not faded in yet is made visible; boxes a mechanism shows are left alone', () => {
+  const v = (style, rect = [0, 0, 1200, 400]) => ({ desktop: { rect, style, hidden: false } });
+  const faded = { tag: 'section', attrs: {}, views: v({ opacity: '0', position: 'relative' }), children: [
+    { tag: 'h2', attrs: {}, views: v({}, [0, 0, 600, 40]), children: [{ text: 'Real Stories, Real Impact' }] },
+  ] };
+  // Shown by a mechanism of ours: a scroll reveal, a click-switched state, a dropdown panel, a parked layout.
+  const reveal = { tag: 'section', attrs: {}, motionTokens: ['rv', 'r1'], views: v({ opacity: '0', position: 'relative' }), children: [{ tag: 'p', attrs: {}, views: v({}, [0, 0, 100, 20]), children: [{ text: 'Fades in' }] }] };
+  const state = { tag: 'div', attrs: {}, stateAttrs: { 'data-w-set': 's1', 'data-w-i': '1' }, views: v({ opacity: '0', position: 'relative' }), children: [{ tag: 'p', attrs: {}, views: v({}, [0, 0, 100, 20]), children: [{ text: 'Slide two' }] }] };
+  const panel = { tag: 'div', attrs: {}, views: v({ opacity: '0', position: 'absolute' }), children: [{ tag: 'a', attrs: {}, views: v({}, [0, 0, 100, 20]), children: [{ text: 'Menu item' }] }] };
+  const empty = { tag: 'div', attrs: {}, views: v({ opacity: '0', position: 'relative' }), children: [] };
+  const root = { tag: 'body', attrs: {}, views: v({}), children: [faded, reveal, state, panel, empty] };
+
+  const out = showFaded({ info: { path: '/' }, root, views: ['desktop'] });
+  assert.equal(out.length, 1);
+  assert.equal(faded.views.desktop.style.opacity, '1', 'the invisible section is drawn');
+  assert.equal(reveal.views.desktop.style.opacity, '0', 'a scroll reveal keeps its from-state');
+  assert.equal(state.views.desktop.style.opacity, '0', 'a hidden state keeps its own opacity');
+  assert.equal(panel.views.desktop.style.opacity, '0', 'a box out of the flow is meant to be hidden');
+  assert.equal(empty.views.desktop.style.opacity, '0', 'an empty box has nothing to show');
+  assert.equal(out[0].element, 'section');
 });
