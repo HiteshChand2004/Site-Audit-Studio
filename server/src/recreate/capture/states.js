@@ -432,16 +432,17 @@ export function planSets(widgets, noise = []) {
       same.controls.sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
     } else out.push({ area, parts, controls: [...s.controls], nav, ...(weigh && { weigh }) });
   }
-  // A button that adds content and takes it away again on the next click ("View more" / "View less", "Read more"): the
-  // content does not exist before the click, so no open / closed styles can rebuild it. Two states of the part holding the
-  // button and what it added, the button leading from each to the other.
+  // A control whose panel does not exist until it opens ("View more", a filter panel a script renders on demand):
+  // there are no open / closed styles to rebuild it from, so the opened DOM itself is captured as a second state of
+  // the part holding the control and what it added. However the page closes it again - the same control, Escape, a
+  // click outside (the click probe recorded which) - the copy closes it with the same control.
   for (const w of widgets) {
-    if (w.opensOn !== 'click' || w.kind !== 'disclosure' || w.closes !== 'toggle') continue;
+    if (w.opensOn !== 'click' || w.kind !== 'disclosure' || !w.closes) continue;
     const added = (w.change?.added ?? []).filter((x) => !x.fixed && !x.inTrigger).map((x) => x.path).filter(quiet);
     if (!added.length || out.some((o) => o.controls.includes(w.trigger))) continue;
     const area = commonPath([w.trigger, ...added]);
     if (!area || area === 'body' || out.some((o) => o.area === area)) continue;
-    out.push({ area, parts: [area], controls: [], nav: [], toggle: w.trigger, weigh: true });
+    out.push({ area, parts: [area], controls: [], nav: [], toggle: w.trigger, closes: w.closes, weigh: true });
   }
   return out;
 }
@@ -481,7 +482,7 @@ const findNode = (body, p) => {
 export async function captureStates(page, clicks, body, { budgetMs = { min: 30000, max: 60000, perControl: 3000 } } = {}) {
   const started = Date.now();
   const startUrl = page.url();
-  const stats = { sets: 0, states: 0, skipped: [], ms: 0, timedOut: false, cssUrls: [] };
+  const stats = { sets: 0, states: 0, openPanels: 0, skipped: [], ms: 0, timedOut: false, cssUrls: [] };
   // What moves by itself was measured by the click probe (clicks.noise) and is never evidence.
   const plans = planSets(clicks?.widgets ?? [], clicks?.noise ?? []);
   if (!plans.length && !(clicks?.widgets ?? []).some((w) => w.opensOn === 'hover')) return { ...stats, ms: Date.now() - started };
@@ -509,6 +510,12 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
   };
   const partsOf = (one, plan) => (plan.parts.length === 1 ? [one] : one.children);
   const settle = () => page.waitForTimeout(SETTLE_MS);
+  // Closing a panel the way the page closed it for the click probe, so the page is as it was for the next plan.
+  const closePanel = (plan) => {
+    if (plan.closes === 'escape') return page.keyboard.press('Escape').catch(() => {});
+    if (plan.closes === 'outside') return page.mouse.click(2, 2).catch(() => {});
+    return page.evaluate(clickPath, plan.toggle); // a toggle: the same control again
+  };
 
   for (const plan of plans) {
     if (Date.now() > deadline) {
@@ -540,9 +547,10 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
         await settle();
         const open = await snap(plan);
         if (!open || stateSignature(open) === initialSig) throw new Error('the control does not change the content');
-        await page.evaluate(clickPath, plan.toggle);
+        await closePanel(plan);
         await settle();
-        if (stateSignature(await snap(plan)) !== initialSig) throw new Error('the second click does not undo the first');
+        if (stateSignature(await snap(plan)) !== initialSig) throw new Error('the panel did not close again');
+        stats.openPanels++;
         nodes[0].states = { initial: 0, count: 2, controls: [], nav: [{ rel: plan.toggle.slice(plan.area.length + 1), offset: 1 }], variants: [{ index: 1, body: open }] };
         stats.sets++;
         stats.states += 2;

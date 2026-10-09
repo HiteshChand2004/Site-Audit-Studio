@@ -663,3 +663,78 @@ test('the page capture reads the state sets and the notices side by side, with t
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+// A panel a click renders on demand and the page closes with Escape, not by clicking the control again: its opened
+// DOM is the only way to rebuild it, and it used to be dropped because the second click did not undo the first.
+const ESCAPE_PANEL = `<!doctype html><html><head><style>
+body { margin: 0; font: 16px sans-serif; padding: 24px }
+.row { position: relative; display: flex; gap: 12px; align-items: center }
+.open { font: inherit; padding: 8px 14px; border: 1px solid #888; background: #fff; cursor: pointer }
+.panel { margin-top: 12px; border: 1px solid #ddd; padding: 12px; display: grid; gap: 6px; width: 240px }
+</style></head><body>
+<h1>Catalogue</h1>
+<div class="row"><button class="open" type="button">Filters</button></div>
+<main><p>A list of products with enough text on the page that the button is not all there is to read.</p></main>
+<script>
+var row = document.querySelector('.row');
+row.querySelector('.open').addEventListener('click', function () {
+  if (row.querySelector('.panel')) return;
+  var p = document.createElement('div');
+  p.className = 'panel';
+  p.innerHTML = '<label>In stock</label><label>On sale</label>';
+  row.appendChild(p);
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') { var p = row.querySelector('.panel'); if (p) p.remove(); }
+});
+</script>
+</body></html>`;
+
+test('a panel a click renders and Escape closes is captured, and the copy opens it with the same control', async () => {
+  pages.set('/escape-panel', ESCAPE_PANEL);
+  pages.set('/js/motion.js', MOTION_JS);
+  const context = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const page = await context.newPage();
+  await page.goto(`${base}/escape-panel`);
+  const snapshot = await page.evaluate(snapshotPage, {});
+  const clicks = await captureClicks(page, { budgetMs: 15000 });
+  const states = await captureStates(page, clicks, snapshot.body, { budgetMs: 20000 });
+  await context.close();
+
+  const widget = clicks.widgets.find((w) => w.text === 'Filters');
+  assert.ok(widget && widget.kind === 'disclosure' && widget.closes === 'escape',
+    JSON.stringify(clicks.widgets.map((w) => [w.kind, w.text, w.closes])));
+  assert.equal(states.openPanels, 1, JSON.stringify(states.skipped));
+
+  const tree = buildPageTree({ desktop: snapshot.body });
+  const site = { pages: [{ info: { path: '/escape-panel', url: `${base}/escape-panel` }, root: tree.root }], assetResolve: () => null };
+  const { motion } = applyMotion(site, new Map([['/escape-panel', { clicks }]]));
+  assert.ok(motion.script);
+  const { rules, boxSizingReset } = buildStyles([tree], { assetFile: () => null });
+  const siteCss = emitCss({ rules, breakpoints: { source: 'default' }, tokens: {}, fontFaces: [], keyframes: [], boxSizingReset, pages: [] });
+  const css = `${typeof siteCss === 'string' ? siteCss : siteCss.css}\n${motionCss(motion, { tokenOf: new Map(), from: '' })}`;
+  const html = (n) => {
+    if (!isElement(n)) return n.text.replace(/</g, '&lt;');
+    const all = { ...n.attrs, ...(n.class && { class: n.class }), ...n.stateAttrs, ...(n.motionTokens?.length && { 'data-motion': n.motionTokens.join(' ') }) };
+    const attrs = Object.entries(all).map(([k, v]) => (v === '' ? ` ${k}` : ` ${k}="${String(v).replace(/"/g, '&quot;')}"`)).join('');
+    return `<${n.tag}${attrs}>${n.children.map(html).join('')}</${n.tag}>`;
+  };
+  const copy = html(tree.root);
+  assert.match(copy, /In stock/); // the panel's markup is in the page, as a hidden state
+  assert.match(copy, /data-w-go/);
+  pages.set('/escape-panel-copy', `<!doctype html><html><head><style>${css}</style><script src="/js/motion.js" defer></script></head>${copy}</html>`);
+
+  const ctx = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const p = await ctx.newPage();
+  const errors = [];
+  p.on('pageerror', (e) => errors.push(e.message));
+  await p.goto(`${base}/escape-panel-copy`);
+  const shown = () => p.evaluate(() => [...document.querySelectorAll('label')].some((l) => l.textContent === 'In stock' && l.getClientRects().length > 0));
+  assert.equal(await shown(), false, 'closed at first');
+  await p.getByRole('button', { name: 'Filters' }).first().click();
+  assert.equal(await shown(), true, 'the control opens the panel');
+  await p.getByRole('button', { name: 'Filters' }).first().click();
+  assert.equal(await shown(), false, 'and closes it again');
+  assert.deepEqual(errors, []);
+  await ctx.close();
+});
