@@ -74,6 +74,42 @@ export async function readPageMotion(dir, page) {
       // none captured
     }
   }
+  // An exact copy probes every view in full instead of running the short click pass, and writes one file per view
+  // (capture/index.js motionFile). Its controls are the same data under another name, so the narrow-layout path above
+  // keeps working rather than quietly losing the menu button it used to find; and what else that view found is
+  // recorded, including the kinds this builder does not rebuild yet, so none of it is a silent loss.
+  for (const view of ['laptop', 'tablet', 'mobile']) {
+    let full = null;
+    try {
+      full = JSON.parse(await readFile(path.join(dir, 'capture', page.slug, `${view}-motion.json`), 'utf8'));
+    } catch {
+      continue; // that view was not probed
+    }
+    const key = view === 'mobile' ? 'clicksMobile' : view === 'tablet' ? 'clicksTablet' : null;
+    if (key && !motion[key] && full.clicks) motion[key] = full.clicks;
+    motion.byView = {
+      ...motion.byView,
+      [view]: {
+        hover: full.hover?.length ?? 0,
+        focus: full.focus?.length ?? 0,
+        clicks: full.clicks?.stats?.found ?? 0,
+        states: full.states?.sets ?? 0,
+        notices: full.notices?.notices ?? 0,
+        loops: full.loops?.stats?.total ?? 0,
+        reveal: full.reveal?.stats?.revealed ?? 0,
+        // What this builder can place from a narrow view: its controls, by that view's own paths (ir/tree.js
+        // mpath / tpath). Hover, focus, reveals and loops of a narrow view have no path map yet, so they are
+        // counted here instead of being quietly dropped.
+        rebuilt: key ? ['clicks'] : [],
+        notRebuilt: ['hover', 'focus', 'states', 'notices', 'loops', 'reveal', ...(key ? [] : ['clicks'])]
+          .filter((k) => (k === 'clicks' ? (full.clicks?.stats?.found ?? 0) : (Array.isArray(full[k]) ? full[k].length : 0)) > 0
+            || (k === 'states' && (full.states?.sets ?? 0) > 0)
+            || (k === 'notices' && (full.notices?.notices ?? 0) > 0)
+            || (k === 'loops' && (full.loops?.stats?.total ?? 0) > 0)
+            || (k === 'reveal' && (full.reveal?.stats?.revealed ?? 0) > 0)),
+      },
+    };
+  }
   return motion;
 }
 
@@ -380,6 +416,17 @@ function frozenEntrances(site, reg, stats) {
  * @param {{ pages: object[], assetResolve: Function }} site  the prepared site (trees with `info`, `root`)
  * @param {Map<string, object>} byPath  page path → its motion.json
  */
+/** One line per view for the report: what the probe found there, and what this builder could place from it. */
+function sumByView(out, byView) {
+  for (const [view, found] of Object.entries(byView ?? {})) {
+    const o = out[view] ??= { pages: 0, hover: 0, focus: 0, clicks: 0, states: 0, notices: 0, loops: 0, reveal: 0, rebuilt: [], notRebuilt: [] };
+    o.pages++;
+    for (const k of ['hover', 'focus', 'clicks', 'states', 'notices', 'loops', 'reveal']) o[k] += found[k] ?? 0;
+    for (const k of found.rebuilt ?? []) if (!o.rebuilt.includes(k)) o.rebuilt.push(k);
+    for (const k of found.notRebuilt ?? []) if (!o.notRebuilt.includes(k)) o.notRebuilt.push(k);
+  }
+}
+
 export function applyMotion(site, byPath) {
   const reg = { hover: new Map(), focus: new Map(), reveal: new Map(), loops: [], delays: new Set(), widgets: new Map(), scrolled: new Map() };
   const stats = {
@@ -390,6 +437,8 @@ export function applyMotion(site, byPath) {
     focus: { elements: 0, effects: 0, fromRules: 0, spread: 0, sibs: 0, skipped: { unmapped: 0, empty: 0, combinator: 0, kidNotDescendant: 0 } },
     reveal: { elements: 0, effects: 0, replay: 0, belowFold: 0, skipped: { timed: 0, unmapped: 0, flat: 0 } },
     loops: { carried: 0, rebuilt: 0, skipped: [] },
+    // An exact copy probes the narrow views too: what each found, and which kinds were placed from it.
+    byView: {},
   };
   const tokenize = (node, token) => {
     // The same element in the other states of a tab panel / carousel (ir/states.js) gets the same effect.
@@ -422,6 +471,7 @@ export function applyMotion(site, byPath) {
     const motion = byPath.get(tree.info.path);
     if (!motion) continue;
     stats.pages++;
+    sumByView(stats.byView, motion.byView);
     const nodes = new Map();
     const walk = (n) => {
       if (!isElement(n)) return;

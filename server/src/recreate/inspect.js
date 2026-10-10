@@ -392,6 +392,12 @@ export async function inspectStage(ctx) {
     revealPinned: Object.fromEntries(Object.entries(p.views).map(([v, x]) => [v, x.reveal?.pinned ?? 0])),
     // Hover / focus effects found on the desktop view (capture/<slug>/motion.json, 4b.1); null = not probed.
     motion: p.views.desktop?.motion ?? null,
+    // An exact copy probes every view (capture/<view>-motion.json): what each of the others found, by view.
+    ...(Object.values(p.views).some((v) => v?.motion && v.motion.view !== 'desktop') && {
+      motionByView: Object.fromEntries(Object.values(p.views)
+        .filter((v) => v?.motion && v.motion.view && v.motion.view !== 'desktop')
+        .map((v) => [v.motion.view, v.motion])),
+    }),
   }));
   const probed = report.pages.filter((p) => p.motion && !p.motion.error);
   report.motion = {
@@ -426,6 +432,26 @@ export async function inspectStage(ctx) {
     },
     errors: report.pages.filter((p) => p.motion?.error).map((p) => ({ page: p.path, error: p.motion.error })),
     notProbed: report.pages.filter((p) => !p.motion).map((p) => p.path),
+    // An exact copy probes every view, so what each narrow layout has of its own is a number rather than an
+    // assumption: a menu that only exists on a phone used to be invisible here.
+    ...(report.pages.some((p) => p.motionByView) && {
+      views: report.pages.reduce((out, p) => {
+        for (const [view, m] of Object.entries(p.motionByView ?? {})) {
+          const o = out[view] ??= { pages: 0, hover: 0, focus: 0, rules: 0, clicks: 0, states: 0, notices: 0, loops: 0, reveal: 0, errors: 0 };
+          o.pages++;
+          if (m.error) o.errors++;
+          o.hover += m.hover ?? 0;
+          o.focus += m.focus ?? 0;
+          o.rules += m.rules ?? 0;
+          o.clicks += m.clicks?.found ?? 0;
+          o.states += m.states?.states ?? 0;
+          o.notices += m.notices?.notices ?? 0;
+          o.loops += m.loops?.total ?? 0;
+          o.reveal += m.reveal?.revealed ?? 0;
+        }
+        return out;
+      }, {}),
+    }),
   };
   // Rules were recovered from a stylesheet the pages could not read and not one of them turned out to do anything:
   // either the parser or the way they are put back into the page has stopped working. Said out loud rather than

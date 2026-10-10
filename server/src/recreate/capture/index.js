@@ -169,7 +169,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     lap('load');
     await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
     lap('idle');
-    const observeReveal = view.id === 'desktop' && motionBudgetMs > 0;
+    const observeReveal = (exact || view.id === 'desktop') && motionBudgetMs > 0;
     const { events: revealEvents, ...reveal } = await settle(page, view, SCROLL_CAP, { observe: observeReveal });
     lap('scroll');
     await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
@@ -216,13 +216,17 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     let typeProbe = null;
     let scrollProbe = null;
     if (view.id === 'desktop') {
+      // (Typography is desktop-only by design, see below; the scroll-state probe follows the view in exact mode.)
       try {
         const probe = await probeTypography(page, view);
         typeProbe = { nodes: attachType(snapshot.body, probe.changed), ms: probe.ms };
       } catch (err) {
         typeProbe = { error: firstLine(err) };
       }
-      // Bars that change their look once the page is scrolled (a header turning light past the hero).
+    }
+    // Bars that change their look once the page is scrolled (a header turning light past the hero). A sticky bar
+    // often behaves differently once the layout is narrow, so an exact copy reads it per view.
+    if (exact || view.id === 'desktop') {
       try {
         scrollProbe = await probeScrollStates(page, snapshot.body, view);
       } catch (err) {
@@ -235,7 +239,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     // briefly and toggles first, after everything else was read from this page (it changes it). A tablet often collapses
     // the menu into a button of its own, which neither the desktop nor the phone probe sees. The copy rebuilds what it
     // finds there (ir/motion.js, by that view's snapshot paths).
-    if (NARROW_CLICK_VIEWS.includes(view.id) && clickBudgetMs > 0) {
+    if (!exact && NARROW_CLICK_VIEWS.includes(view.id) && clickBudgetMs > 0) {
       try {
         const clicks = await captureClicks(page, { budgetMs: NARROW_CLICK_BUDGET_MS, limit: 8 });
         await writeFile(path.join(dir, `${view.id}-clicks.json`), JSON.stringify({ version: 1, view: view.id, clicks }));
@@ -249,7 +253,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     // everything else was captured from the page.
     let motion = null;
     if (observeReveal) {
-      let found = { version: 1, view: 'desktop', hover: [], focus: [], rules: [], groups: [], stats: { rulesTotal: 0, probed: 0, ms: 0, timedOut: false } };
+      let found = { version: 1, view: view.id, hover: [], focus: [], rules: [], groups: [], stats: { rulesTotal: 0, probed: 0, ms: 0, timedOut: false } };
       let error = null;
       // The hover / focus rules of stylesheets the page may not read (a CDN-hosted design system without CORS).
       // The shared cache usually holds them already, because the browser loaded them to render the page, so this
@@ -316,8 +320,10 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
         error ??= firstLine(err);
       }
       try {
-        await writeFile(path.join(dir, 'motion.json'), JSON.stringify(found));
+        found.view = view.id;
+        await writeFile(path.join(dir, motionFile(view.id)), JSON.stringify(found));
         motion = {
+          view: view.id,
           hover: found.hover.length, focus: found.focus.length, rules: found.rules.length, rulesTotal: found.stats.rulesTotal, probed: found.stats.probed, notReverted: found.stats.notReverted ?? 0,
           // What shape the page's own state rules have: how many reach outside the hovered element at all, so the
           // number the copy rebuilds can be held against it (capture/selectorShape.js).
@@ -387,6 +393,8 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
 // Load failures worth one more try: the site refused or dropped the connection, which says nothing about the page.
 const REFUSED = /ERR_EMPTY_RESPONSE|ERR_CONNECTION_(RESET|CLOSED|REFUSED|ABORTED)|ERR_SOCKET_NOT_CONNECTED|ERR_HTTP2_PROTOCOL_ERROR|ERR_QUIC_PROTOCOL_ERROR/;
 const RETRY_WAIT_MS = 1500;
+/** Where a view's probe results go. The desktop keeps the plain name every consumer already reads. */
+export const motionFile = (viewId) => (viewId === 'desktop' ? 'motion.json' : `${viewId}-motion.json`);
 // A view the site gave up on in time, rather than refusing: worth another try only when the run has no limit.
 const TIMED_OUT = /Timeout|timed out|ERR_TIMED_OUT|ERR_NETWORK_CHANGED|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED/i;
 
