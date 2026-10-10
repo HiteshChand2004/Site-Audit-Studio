@@ -242,3 +242,28 @@ test('a resumed run visits only the slots it still needs', async () => {
   const want = [slotFor(1280), slotFor(768)].filter((s) => !have.has(s.id));
   assert.deepEqual(want.map((s) => s.id), ['768'], 'the slot already on disk is not visited again');
 });
+
+test('a slot the network refused is tried again, not counted and dropped', async () => {
+  const { isRetryableSlotError, SLOT_ATTEMPTS } = await import('../src/recreate/capture/exact.js');
+  // The error Chromium gives when the egress proxy refuses the tunnel, which is what cost the first live run
+  // eight of eighteen slots and then every page after it.
+  assert.equal(isRetryableSlotError('page.goto: net::ERR_TUNNEL_CONNECTION_FAILED at https://example.com/'), true);
+  assert.equal(isRetryableSlotError('net::ERR_CONNECTION_RESET'), true);
+  assert.equal(isRetryableSlotError('Timeout 90000ms exceeded'), true);
+  // Not everything is worth another go: a page that is simply not there is an answer.
+  assert.equal(isRetryableSlotError('net::ERR_BLOCKED_BY_CLIENT'), false);
+  assert.equal(isRetryableSlotError('Target page, context or browser has been closed'), false);
+  assert.equal(isRetryableSlotError(''), false);
+  assert.ok(SLOT_ATTEMPTS >= 2);
+});
+
+test('a page that lost every slot is measured again once the site answers', async () => {
+  // The whole page fails while the fixture server is refused, then succeeds once it is reachable again.
+  const slots = [slotFor(1280)];
+  // A closed port Chromium is willing to try (port 9 is on its blocked list and gives ERR_UNSAFE_PORT, which is a
+  // permanent refusal and rightly not retried).
+  const broken = await captureExactPage(browser, { path: '/x', slug: 'blip', url: 'http://127.0.0.1:4299/' }, dir, { slots, timeout: 3000 });
+  assert.equal(broken.slots.length, 0);
+  assert.ok(broken.retried >= 1, `it tried again rather than giving up at once (retried ${broken.retried})`);
+  assert.equal(broken.errors.length, 1, 'and reports the slot once, not once per attempt');
+});

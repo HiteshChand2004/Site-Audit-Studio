@@ -28,6 +28,19 @@ export const EXACT_DIR = 'exact';
 export const MAX_BANDS = 4;
 export const SLOT_TIMEOUT_MS = 90000;
 const MAX_CONSOLE = 20;
+/**
+ * A slot that failed at network level is tried again. Measured on flexibench: the egress proxy refused the tunnel
+ * part way through a page (one resolved address of that host is a NAT64 one this machine cannot route, and the
+ * proxy pins whichever came first), and because a failed slot was only counted, **one bad patch of network cost
+ * eight of eighteen slots and then every remaining page**. A transient refusal must cost seconds, not a run.
+ */
+export const SLOT_ATTEMPTS = 4;
+export const SLOT_BACKOFF_MS = 2000;
+const RETRYABLE = /ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED|ERR_CONNECTION_(RESET|CLOSED|REFUSED|ABORTED)|ERR_EMPTY_RESPONSE|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED|ERR_NETWORK_CHANGED|ERR_TIMED_OUT|ERR_SOCKET_NOT_CONNECTED|Timeout|timed out/i;
+
+export const isRetryableSlotError = (message) => RETRYABLE.test(String(message ?? ''));
+
+const wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms).unref(); });
 
 export const exactDir = (workspace, slug) => path.join(workspace, 'capture', slug, EXACT_DIR);
 export const bandFile = (slotId, band) => (band === 0 ? `${slotId}-full.webp` : `${slotId}-b${band}.webp`);
@@ -171,6 +184,8 @@ export async function captureExactPage(browser, pageInfo, workspace, {
   const errors = [];
   let fingerprint = null;
   let noiseFloor = null;
+  // Attempts a flaky network cost, so the report can say the run met one rather than looking simply slow.
+  let retried = 0;
 
   const queue = [...slots];
   const runner = async () => {
@@ -182,9 +197,23 @@ export async function captureExactPage(browser, pageInfo, workspace, {
         continue;
       }
       try {
-        const first = await visitSlot(browser, pageInfo.url, slot, dir, {
-          cache, timeout, deadline, fingerprint: !fingerprint,
-        });
+        let first = null;
+        let lastError = null;
+        for (let attempt = 1; attempt <= SLOT_ATTEMPTS; attempt++) {
+          if (attempt > 1) await wait(SLOT_BACKOFF_MS * 2 ** (attempt - 2));
+          try {
+            first = await visitSlot(browser, pageInfo.url, slot, dir, {
+              cache, timeout, deadline, fingerprint: !fingerprint,
+            });
+            if (attempt > 1) first.attempts = attempt;
+            break;
+          } catch (err) {
+            lastError = err;
+            if (!isRetryableSlotError(err.message) || Date.now() > deadline) break;
+            retried++;
+          }
+        }
+        if (!first) throw lastError ?? new Error('The slot could not be measured.');
         fingerprint ??= first.fingerprint ?? null;
         // The same original, visited twice and compared with itself: the floor below which a difference between
         // the original and the copy means nothing. Without it "under half a percent" is a number with no scale -
@@ -223,6 +252,7 @@ export async function captureExactPage(browser, pageInfo, workspace, {
     slots: done,
     errors,
     fingerprint,
+    ...(retried && { retried }),
     bytes: done.reduce((n, s) => n + s.bytes, 0),
   };
   await writeFile(path.join(dir, 'index.json'), JSON.stringify(manifest, null, 1));

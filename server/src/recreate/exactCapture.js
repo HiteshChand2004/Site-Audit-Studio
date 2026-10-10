@@ -9,6 +9,7 @@ import { readFile, statfs, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parallelism } from '../audit/resources.js';
 import { guardedFetch } from '../audit/http.js';
+import { waitForNetwork } from '../audit/interruptions.js';
 import { launchBrowser } from '../audit/render.js';
 import { startEgressProxy } from '../security/egressProxy.js';
 import { captureExactPage, exactDir } from './capture/exact.js';
@@ -27,6 +28,8 @@ export const NOISE_PAGES = 1;
 export const MIN_DISK_GB = 10;
 /** A baseline older than this is worth re-checking even when the page looks unchanged. */
 export const BASELINE_STALE_DAYS = 7;
+/** How long to wait for a site that stopped answering before giving a page up (recreate/interrupts.js uses the same). */
+export const NETWORK_WAIT_MS = 120000;
 
 const gb = (bytes) => Math.round((bytes / 1073741824) * 10) / 10;
 
@@ -96,6 +99,9 @@ export async function exactCaptureStage(ctx, local = {}) {
   const errors = [];
   let reusedPages = 0;
   let bytes = 0;
+  let blocked = null;
+  let waited = 0;
+  let recovered = 0;
   try {
     for (const [i, page] of pages.entries()) {
       if (ctx.signal?.aborted) break;
@@ -129,12 +135,32 @@ export async function exactCaptureStage(ctx, local = {}) {
         done.push(result);
         bytes += result.bytes ?? 0;
         for (const e of result.errors) errors.push({ page: page.path, ...e });
+        // A page that lost every slot means the site stopped answering, not that the page is unmeasurable. Waiting
+        // for it back costs minutes; carrying on costs every page that is left - which is what happened on the
+        // first live run, where one bad patch of network took ten of eleven pages with it.
+        if (!result.slots.length && want.length) {
+          const back = await waitForNetwork(page.url, { until: Math.min(deadline, Date.now() + NETWORK_WAIT_MS), onWait: (ms) => progress?.(i / pages.length, `Waiting for the site to answer again (${Math.round(ms / 1000)}s)`) });
+          waited += back.waitedMs;
+          if (back.back) {
+            // Back: this page is measured again before moving on, so the run does not lose it to a blip.
+            const again = await captureExactPage(browser, page, ctx.dir, {
+              slots: want, cache: ctx.netCache, deadline, atOnce: 1, noise: false,
+              progress: (f, message) => progress?.((i + f) / pages.length, message),
+            }).catch(() => null);
+            if (again?.slots.length) {
+              done[done.length - 1] = again;
+              bytes += again.bytes ?? 0;
+              recovered++;
+            }
+          }
+        }
       } catch (err) {
         errors.push({ page: page.path, message: String(err.message ?? err).split('\n')[0].slice(0, 200) });
       }
     }
   } finally {
     await browser.close().catch(() => {});
+    blocked = proxy.blocked();
     await proxy.close().catch(() => {});
   }
 
@@ -158,8 +184,12 @@ export async function exactCaptureStage(ctx, local = {}) {
       reusedPages,
       slotsPerPage: slots.length,
       measured,
+      retried: done.reduce((n, p) => n + (p.retried ?? 0), 0),
+      ...(waited && { waitedForSiteMs: waited, pagesRecovered: recovered }),
       errors: errors.slice(0, 40),
       errorCount: errors.length,
+      // Hosts the SSRF guard refused while measuring, so a run that lost slots to the network says why.
+      ...(blocked?.length && { blockedHosts: blocked }),
     },
     noiseFloor,
     disk: { bytes, perPage: done.length ? Math.round(bytes / done.length) : 0, freeBeforeGB: free, freeAfterGB: freeAfter },
