@@ -9,7 +9,13 @@
 // the element box is kept in `rect` instead. Pseudo-elements keep them. Logical duplicates (margin-inline-start, ...) are left out too.
 /* eslint-disable no-undef */
 export function snapshotPage(opts) {
-  const { maxNodes = 6000, maxTextLength = 2000 } = opts || {};
+  // `exact`: an exact copy is measured pixel for pixel, so the capture keeps what the normal one trades away to stay
+  // small - every pseudo-element that paints, the properties below that are otherwise skipped, and no truncation of
+  // big pages, long @keyframes or long custom properties.
+  const { exact = false } = opts || {};
+  const { maxNodes = exact ? 30000 : 6000, maxTextLength = exact ? 20000 : 2000 } = opts || {};
+  const KEYFRAME_CAP = exact ? 200000 : 4000;
+  const CUSTOM_PROP_CAP = exact ? 20000 : 400;
   const INHERITED = new Set([
     'color', 'cursor', 'direction', 'font-family', 'font-feature-settings', 'font-kerning', 'font-size', 'font-stretch',
     'font-style', 'font-variant', 'font-variant-caps', 'font-variant-ligatures', 'font-variant-numeric', 'font-weight',
@@ -19,7 +25,13 @@ export function snapshotPage(opts) {
     'word-spacing', 'writing-mode', 'border-collapse', 'border-spacing', 'caption-side', 'empty-cells',
     '-webkit-font-smoothing', 'accent-color', 'caret-color', 'paint-order', 'fill', 'stroke', 'stroke-width',
   ]);
-  const SKIP_PROP = /^(width|height|inline-size|block-size|min-inline-size|max-inline-size|min-block-size|max-block-size|(margin|padding|inset|border|scroll-margin|scroll-padding|overscroll-behavior|contain-intrinsic)-(inline|block)(-.*)?|border-(start|end)-(start|end)-radius|perspective-origin|-webkit-(?!font-smoothing|text-stroke|line-clamp|box-orient|background-clip|text-fill-color).*|d|r|rx|ry|cx|cy|x|y)$/;
+  // `-webkit-mask*` is carved out of the blanket -webkit- rule: a mask decides which pixels of an element are painted
+  // at all, and ir/styles.js already lists -webkit-mask-image among the properties whose url() it rewrites - that was
+  // dead code while this skipped it. `perspective-origin` is kept for the same reason transform-origin is: it decides
+  // where a 3D transform pivots.
+  const SKIP_PROP = exact
+    ? /^(width|height|inline-size|block-size|min-inline-size|max-inline-size|min-block-size|max-block-size|(margin|padding|inset|border|scroll-margin|scroll-padding|overscroll-behavior|contain-intrinsic)-(inline|block)(-.*)?|border-(start|end)-(start|end)-radius|-webkit-(?!font-smoothing|text-stroke|line-clamp|box-orient|background-clip|text-fill-color|mask).*|d|r|rx|ry|cx|cy|x|y)$/
+    : /^(width|height|inline-size|block-size|min-inline-size|max-inline-size|min-block-size|max-block-size|(margin|padding|inset|border|scroll-margin|scroll-padding|overscroll-behavior|contain-intrinsic)-(inline|block)(-.*)?|border-(start|end)-(start|end)-radius|perspective-origin|-webkit-(?!font-smoothing|text-stroke|line-clamp|box-orient|background-clip|text-fill-color).*|d|r|rx|ry|cx|cy|x|y)$/;
   // These default to currentColor; a value equal to the element's own color is that default.
   const CURRENT_COLOR = new Set([
     'border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color', 'outline-color',
@@ -71,7 +83,7 @@ export function snapshotPage(opts) {
       if (prop.startsWith('--')) {
         const value = cs.getPropertyValue(prop);
         values[prop] = value;
-        if (parentValues && parentValues[prop] !== value && value.trim() && value.length <= 400) style[prop] = value.trim();
+        if (parentValues && parentValues[prop] !== value && value.trim() && value.length <= CUSTOM_PROP_CAP) style[prop] = value.trim();
         continue;
       }
       if (SKIP_PROP.test(prop) && !(keepSize && (prop === 'width' || prop === 'height'))) continue;
@@ -83,10 +95,10 @@ export function snapshotPage(opts) {
       // "auto" is the initial value; the defaults frame reports 0px because it has no flex/grid parent.
       if ((prop === 'min-width' || prop === 'min-height') && value === 'auto') continue;
       // "auto W / H" comes from the width/height attributes, which are kept anyway.
-      if (prop === 'aspect-ratio' && value.startsWith('auto ')) continue;
+      if (prop === 'aspect-ratio' && value.startsWith('auto ') && !exact) continue;
       style[prop] = value;
     }
-    if (style['transform-origin'] && (cs.transform === 'none' || !cs.transform)) delete style['transform-origin'];
+    if (!exact && style['transform-origin'] && (cs.transform === 'none' || !cs.transform)) delete style['transform-origin'];
     collectUrls(style['background-image']);
     collectUrls(style['mask-image']);
     collectUrls(style['list-style-image']);
@@ -97,8 +109,32 @@ export function snapshotPage(opts) {
   function pseudo(el, which, parentValues) {
     const cs = getComputedStyle(el, which);
     const content = cs.content;
+    // `none` / `normal` means the browser generates no box for it at all, so there is nothing to carry. (A pseudo
+    // used purely as a sized box still has to set content, usually to "", which is neither of those.)
     if (!content || content === 'none' || content === 'normal') return null;
     return { content, style: styleDiff(cs, parentValues, defaultStyle('span', ''), true).style };
+  }
+
+  /**
+   * The pseudo-elements that have no `content` of their own but do change what is painted: a list marker, the grey
+   * text in an empty field, the first line or letter of a paragraph, and the colours of selected text. Each is only
+   * asked for where it can exist, because a getComputedStyle call per element per pseudo is not free.
+   */
+  function otherPseudos(el, tag, values, hasText) {
+    if (!exact) return null;
+    const out = {};
+    const take = (which, reference) => {
+      const { style } = styleDiff(getComputedStyle(el, which), values, reference, true);
+      if (Object.keys(style).length) out[which.replace(/^::/, '')] = { style };
+    };
+    const listish = tag === 'li' || tag === 'summary' || /(^|\s)(list-item)(\s|$)/.test(getComputedStyle(el).display);
+    if (listish) take('::marker', defaultStyle('li', ''));
+    if (tag === 'input' || tag === 'textarea') take('::placeholder', defaultStyle(tag, ''));
+    if (hasText) {
+      take('::first-line', defaultStyle('span', ''));
+      take('::first-letter', defaultStyle('span', ''));
+    }
+    return Object.keys(out).length ? out : null;
   }
 
   // The box of an element. A rotated or scaled element's bounding box depends on the animation frame
@@ -129,6 +165,23 @@ export function snapshotPage(opts) {
     const cs = getComputedStyle(el);
     const { style, values } = styleDiff(cs, parentValues, defaultStyle(tag, ns));
     const node = { tag, path, rect: rectOf(el) };
+    // An exact capture keeps transform-origin and perspective-origin (a hover or another view may transform the
+    // element later, and by then the reading is gone) - but only where they are not the centre of the box, which is
+    // what every element has by default. Without this, two declarations would land on every element of every page.
+    if (exact) {
+      for (const prop of ['transform-origin', 'perspective-origin']) {
+        const value = style[prop];
+        if (!value) continue;
+        const parts = value.split(' ');
+        const centre = [node.rect[2] / 2, node.rect[3] / 2];
+        const isCentre = parts.length <= 3 && parts.slice(0, 2).every((p, i) => {
+          if (p === '50%') return true;
+          const px = parseFloat(p);
+          return Number.isFinite(px) && Math.abs(px - centre[i]) < 0.51;
+        }) && (parts.length < 3 || parseFloat(parts[2]) === 0);
+        if (isCentre) delete style[prop];
+      }
+    }
     if (Object.keys(style).length) node.style = style;
 
     const attrs = {};
@@ -161,6 +214,13 @@ export function snapshotPage(opts) {
     const after = pseudo(el, '::after', values);
     if (before) node.before = before;
     if (after) node.after = after;
+    // Own text decides whether ::first-line / ::first-letter can apply to this element at all.
+    let ownText = false;
+    for (const child of el.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE && child.textContent && child.textContent.trim()) ownText = true;
+    }
+    const others = otherPseudos(el, tag, values, ownText);
+    if (others) node.pseudo = others;
 
     const children = [];
     const tagIndex = {};
@@ -230,6 +290,8 @@ export function snapshotPage(opts) {
   const mediaQueries = new Set();
   // condition → how many rules hang off it (see where it is filled below).
   const mediaRules = new Map();
+  // @supports / @layer / @container and friends: the condition a block of rules hangs off.
+  const atRules = [];
   const readRules = (rules, href) => {
     for (const rule of rules) {
       if (rule.type === CSSRule.FONT_FACE_RULE) {
@@ -247,7 +309,7 @@ export function snapshotPage(opts) {
             .map((m) => ({ url: new URL(m[2], href || document.baseURI).href, format: m[4]?.toLowerCase() ?? null })),
         });
       } else if (rule.type === CSSRule.KEYFRAMES_RULE) {
-        keyframes.push({ name: rule.name, css: rule.cssText.length > 4000 ? null : rule.cssText });
+        keyframes.push({ name: rule.name, css: rule.cssText.length > KEYFRAME_CAP ? null : rule.cssText });
       } else if (rule.type === CSSRule.MEDIA_RULE) {
         const condition = rule.conditionText || rule.media.mediaText;
         mediaQueries.add(condition);
@@ -257,6 +319,12 @@ export function snapshotPage(opts) {
         mediaRules.set(condition, (mediaRules.get(condition) ?? 0) + (rule.cssRules?.length ?? 0));
         readRules(rule.cssRules, href);
       } else if (rule.cssRules) {
+        // @supports / @layer / @container / @scope: the rules inside were always read, but the condition they hang
+        // off was not recorded anywhere, so a copy could not tell that a block only applies under it. The condition
+        // is kept here (the rules themselves still come from the computed styles, as they always did).
+        const kind = String(rule.constructor?.name ?? '').replace(/^CSS|Rule$/g, '').toLowerCase().replace(/^layer.*/, 'layer');
+        const condition = rule.conditionText ?? rule.name ?? null;
+        if (kind && kind !== 'style') atRules.push({ kind, condition, rules: rule.cssRules.length });
         readRules(rule.cssRules, href);
       }
     }
@@ -317,6 +385,7 @@ export function snapshotPage(opts) {
     // The same conditions with the weight of each: additive, so a capture made before this still loads and simply
     // ranks its breakpoints by nothing.
     mediaRules: [...mediaRules].map(([condition, rules]) => ({ condition, rules })),
+    atRules,
     unreadableSheets,
     cssUrls: [...cssUrls],
     body,

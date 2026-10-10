@@ -517,7 +517,7 @@ function noticeFiles(site) {
  *   @font-face the original declares. The flag is written onto the IR, so a stack built later from ir/site.json follows it.
  */
 export function buildIR(site, { asIs = false } = {}) {
-  const styles = buildStyles(site.pages, { assetFile: (url) => site.assetResolve(url) });
+  const styles = buildStyles(site.pages, { assetFile: (url) => site.assetResolve(url), asIs: asIs || Boolean(site.asIs) });
   const safety = newSafetyStats();
   const links = () => ({ internal: 0, file: 0, notice: 0, live: 0, external: 0 });
   const stats = { links: links(), liveLinks: new Map(), notices: new Map(), droppedImages: [], droppedMedia: [], forms: 0, safety };

@@ -61,6 +61,9 @@ const UA_MARGIN_X = { blockquote: [40, 40], figure: [40, 40], dd: [40, 0], body:
 const URL_PROPS = ['background-image', 'mask-image', '-webkit-mask-image', 'list-style-image', 'border-image-source'];
 // 'text-decoration' is a shorthand Chrome also lists; the captured longhands carry the same information.
 const DROP = new Set(['will-change', 'text-decoration']);
+// An exact copy keeps will-change: it decides whether an element gets its own compositing layer, and text in one is
+// rasterised differently. 'text-decoration' stays dropped either way - it is a shorthand whose longhands are kept.
+const DROP_EXACT = new Set(['text-decoration']);
 const FORM_CONTROL = new Set(['input', 'select', 'textarea']);
 // Tags whose browser default is border-box (so a missing box-sizing diff means border-box).
 const UA_BORDER_BOX = new Set(['button', 'select', 'meter', 'progress']);
@@ -376,7 +379,7 @@ export function normalizeView(node, v, chain, opts) {
   const position = style.position ?? 'static';
   const size = sizer(node, d.style);
 
-  for (const p of DROP) delete style[p];
+  for (const p of (opts.asIs ? DROP_EXACT : DROP)) delete style[p];
   if (style['view-transition-name'] === 'root') delete style['view-transition-name']; // the browser's value for <html>
   for (const p of URL_PROPS) if (style[p]) style[p] = mapUrls(style[p], opts.assetFile);
 
@@ -796,6 +799,18 @@ export function fillBorderWidths(decl) {
 }
 
 const pseudoDecl = (p, assetFile) => (p ? fillBorderWidths({ content: mapUrls(p.content, assetFile), ...p.style }) : null);
+
+// The pseudo-elements with no content of their own (capture/snapshot.js otherPseudos: ::marker, ::placeholder,
+// ::first-line, ::first-letter). CSS only lets a handful of properties through on these, so only those are written -
+// a browser would ignore the rest, and writing them would be noise in every stylesheet.
+const OTHER_PSEUDOS = ['marker', 'placeholder', 'first-line', 'first-letter'];
+const PSEUDO_PROPS = /^(color|opacity|background(-|$)|font(-|$)|line-height|letter-spacing|word-spacing|white-space|text-(transform|decoration|shadow|emphasis)|text-decoration-|vertical-align|content|-webkit-text-(fill|stroke)|animation(-|$)|transition(-|$)|margin(-|$)|padding(-|$)|border(-|$)|float)/;
+const otherPseudoDecl = (p) => {
+  if (!p?.style) return null;
+  const out = {};
+  for (const [prop, value] of Object.entries(p.style)) if (PSEUDO_PROPS.test(prop)) out[prop] = value;
+  return Object.keys(out).length ? out : null;
+};
 const isEmpty = (parts) => !parts || (!Object.keys(parts.base).length && !parts.laptop && !parts.tablet && !parts.mobile);
 
 /**
@@ -835,6 +850,12 @@ export function buildStyles(pages, opts) {
       const pd = {};
       for (const v of pageViews) pd[v] = pseudoDecl(node.views[v]?.[which], o.assetFile);
       if (Object.values(pd).some(Boolean)) pseudo[which] = cascade(pd, pageViews, 'span', 'content');
+    }
+    // Only an exact copy captures these, so for every other copy the loop finds nothing and costs nothing.
+    for (const which of OTHER_PSEUDOS) {
+      const pd = {};
+      for (const v of pageViews) pd[v] = otherPseudoDecl(node.views[v]?.pseudo?.[which]);
+      if (Object.values(pd).some(Boolean)) pseudo[which] = cascade(pd, pageViews, 'span');
     }
 
     const desktop = node.views.desktop ?? node.views[present[0]];

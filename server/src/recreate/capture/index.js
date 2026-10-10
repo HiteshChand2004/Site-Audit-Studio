@@ -112,7 +112,7 @@ export async function settle(page, view, cap, { observe = false } = {}) {
   return { ...stats, scrolled: max };
 }
 
-async function captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs = 0, clickBudgetMs = 0, cache = null }) {
+async function captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs = 0, clickBudgetMs = 0, cache = null, exact = false }) {
   const context = await browser.newContext({
     viewport: { width: view.width, height: view.height },
     deviceScaleFactor: view.dpr,
@@ -176,7 +176,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     await page.waitForTimeout(300);
     lap('idle');
 
-    const snapshot = await page.evaluate(snapshotPage, {});
+    const snapshot = await page.evaluate(snapshotPage, { exact });
     lap('snapshot');
     // Continuous motion (4b.3) is read before the screenshots: a screenshot with animations disabled cancels the infinite ones.
     let loops = null;
@@ -390,14 +390,14 @@ const RETRY_WAIT_MS = 1500;
 // A view the site gave up on in time, rather than refusing: worth another try only when the run has no limit.
 const TIMED_OUT = /Timeout|timed out|ERR_TIMED_OUT|ERR_NETWORK_CHANGED|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED/i;
 
-export async function capturePage(browser, pageInfo, workspace, { timeout = 30000, motionBudgetMs = 0, clickBudgetMs = 0, cache = null, patient = false } = {}) {
+export async function capturePage(browser, pageInfo, workspace, { timeout = 30000, motionBudgetMs = 0, clickBudgetMs = 0, cache = null, patient = false, exact = false } = {}) {
   const dir = captureDir(workspace, pageInfo.slug);
   await mkdir(dir, { recursive: true });
   // All views side by side when the machine has the memory for four loaded pages, fewer (never under two) when it is short
   // of it: more contexts than fit make every one of them slow and the loads time out. The desktop view starts first.
   const atOnce = parallelism({ max: VIEWS.length, min: 2 });
   const results = await mapLimit(VIEWS, atOnce, (view) =>
-    captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, clickBudgetMs, cache }).then((value) => ({ status: 'fulfilled', value }), (reason) => ({ status: 'rejected', reason })));
+    captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, clickBudgetMs, cache, exact }).then((value) => ({ status: 'fulfilled', value }), (reason) => ({ status: 'rejected', reason })));
   const views = {};
   const errors = [];
   results.forEach((r, i) => {
@@ -420,7 +420,7 @@ export async function capturePage(browser, pageInfo, workspace, { timeout = 3000
       await new Promise((r) => setTimeout(r, RETRY_WAIT_MS * attempt));
       const view = VIEWS.find((v) => v.id === e.view);
       try {
-        views[e.view] = await captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, clickBudgetMs, cache });
+        views[e.view] = await captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, clickBudgetMs, cache, exact });
         errors.splice(errors.indexOf(e), 1);
         retried++;
       } catch (err) {
