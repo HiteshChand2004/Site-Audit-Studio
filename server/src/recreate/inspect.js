@@ -396,6 +396,15 @@ export async function inspectStage(ctx) {
     hover: probed.reduce((n, p) => n + p.motion.hover, 0),
     focus: probed.reduce((n, p) => n + p.motion.focus, 0),
     rules: probed.reduce((n, p) => n + p.motion.rules, 0),
+    // The shapes of the original's state rules, added up over the pages: `sibling`, `adjacent` and `ancestorHas` are
+    // the effects that reach outside the hovered element, and ir/motion.js reports how many of them the copy carries.
+    shapes: probed.reduce((o, p) => { for (const [k, n] of Object.entries(p.motion.shapes ?? {})) o[k] = (o[k] ?? 0) + n; return o; }, {}),
+    // Stylesheets the pages themselves could not read, and what was recovered from them (capture/foreignCss.js).
+    unreadableSheets: probed.reduce((n, p) => n + (p.motion.unreadableSheets ?? 0), 0),
+    foreign: probed.reduce((o, p) => {
+      for (const [k, n] of Object.entries(p.motion.foreign ?? {})) o[k] = (o[k] ?? 0) + n;
+      return o;
+    }, {}),
     // Scroll reveals (4b.2): how many elements were measured, by what (declared animation vs sampled frames).
     reveal: ['revealed', 'declared', 'sampled', 'unmeasured', 'replay', 'timed', 'groups', 'staggered'].reduce((o, k) => ({ ...o, [k]: probed.reduce((n, p) => n + (p.motion.reveal?.[k] ?? 0), 0) }), {}),
     // Continuous motion (4b.3): loops found by kind and by what they do.
@@ -414,6 +423,16 @@ export async function inspectStage(ctx) {
     errors: report.pages.filter((p) => p.motion?.error).map((p) => ({ page: p.path, error: p.motion.error })),
     notProbed: report.pages.filter((p) => !p.motion).map((p) => p.path),
   };
+  // Rules were recovered from a stylesheet the pages could not read and not one of them turned out to do anything:
+  // either the parser or the way they are put back into the page has stopped working. Said out loud rather than
+  // left as a quietly empty result.
+  const foreign = report.motion.foreign ?? {};
+  if (foreign.rules > 0 && report.motion.hover === 0 && report.motion.focus === 0) {
+    report.warnings.push(`${foreign.rules} hover rules were read from ${foreign.sheets} stylesheet(s) the pages may not read themselves, and none of them changed anything: the copy may be missing those effects.`);
+  }
+  if (foreign.failed > 0) {
+    report.warnings.push(`${foreign.failed} stylesheet(s) the pages may not read could not be read here either; hover effects defined in them are not in the copy.`);
+  }
   const revealPages = report.pages.filter((p) => Object.values(p.revealPinned).some((n) => n > 0));
   if (revealPages.length) {
     report.warnings.push(`Scroll-reveal content on ${revealPages.length} ${revealPages.length === 1 ? 'page' : 'pages'} was captured in its revealed state (${revealPages.map((p) => p.path).slice(0, 5).join(', ')}); how they appear is recorded in motion.json (the animation is rebuilt in a later 4b step).`);

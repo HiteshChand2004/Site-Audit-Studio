@@ -51,6 +51,10 @@ export function replayStages(sourceDir, source) {
       const files = await linkTree(path.join(sourceDir, 'capture'), path.join(ctx.dir, 'capture'));
       const d = manifest.discovery ?? {};
       ctx.pages = manifest.pages;
+      // The limits follow the work, exactly as they do after a real discovery (inspect.js): without this a rebuild of
+      // a 64-page site gave every later step only its base limit, so the generate step ran out of time on the fit
+      // pass alone and everything after it was skipped.
+      ctx.scaleToPages?.(manifest.pages.length);
       // What the generate step reads from discovery; robots / llms are in manifests written since the rebuild mode exists.
       ctx.discovery = { origin: manifest.origin, homeUrl: manifest.homeUrl, skipped: d.skipped ?? [], robots: d.robots ?? null, llms: d.llms ?? null };
       // Captures made before robots / llms were kept in the manifest: the earlier build's own result stands in for them.

@@ -344,6 +344,9 @@ export function viewportStyle(style, node, v, chain) {
   return style;
 }
 
+// Properties that make the sizing hints (@w / @rw / @fw / @cw) pointless when a correction sets them directly.
+const SIZED = ['width', 'max-width', 'min-width', 'flex'];
+
 /**
  * Fluid text declarations of a node in view `v` (capture/typography.js probes the desktop view only): the desktop's fluid
  * values, and in a narrower view the ones that give that view's captured px at its width (ir/typography.js fluidTypeAt).
@@ -383,6 +386,16 @@ export function normalizeView(node, v, chain, opts) {
   }
   if (position === 'relative' || position === 'static') {
     for (const side of ['top', 'right', 'bottom', 'left']) if (position === 'static' || style[side] === '0px') delete style[side];
+  }
+  // A view the original does not reflow in: it stays wider than the screen and overflows sideways (ir/index.js
+  // noReflowViews). The copy's root keeps that width, so everything inside it is laid out against the same space
+  // the capture measured. Without it the root shrinks to the screen, every width below is clamped to that, and the
+  // text wraps the page two or three times too tall. `min-width`, not `width`: on a screen wider than the captured
+  // layout the root still fills it. Set before the return below, so it holds whether or not the page has an <html>
+  // node above the body.
+  if (node === opts.rootNode && opts.noReflow?.includes(v)) {
+    const rootWidth = d.rect?.[2];
+    if (rootWidth) style['min-width'] = `${Math.round(rootWidth)}px`;
   }
   if (display === 'none' || display === 'contents' || !pd) return style;
 
@@ -651,7 +664,16 @@ export function normalizeView(node, v, chain, opts) {
   if (fix?.mh && !(px(style['min-height']) >= size.h(fix.mh))) style['min-height'] = `${size.h(fix.mh)}px`;
   // Text sized with the window (capture/typography.js): the fluid value instead of the px of the captured width.
   Object.assign(style, fluidDecls(node, v));
-  return viewportStyle(style, node, v, chain);
+  const out = viewportStyle(style, node, v, chain);
+  // A correction the fidelity loop decided (verify/correct.js) has the last word. Everything above is inference from
+  // the capture; a correction was tried on a real render and kept only because the page measured closer to the
+  // original, so where the two disagree the measurement wins. The competing sizing hint is dropped as well, or
+  // resolveHints() would write the inferred width back over it.
+  if (fix?.decls) {
+    if (SIZED.some((p) => p in fix.decls)) for (const hint of ['@w', '@rw', '@fw', '@cw']) delete out[hint];
+    Object.assign(out, fix.decls);
+  }
+  return out;
 }
 
 /**
@@ -839,7 +861,13 @@ export function buildStyles(pages, opts) {
     };
     if (node.tag !== 'svg') for (const c of node.children) if (isElement(c)) walk(c, [...chain, node], pageViews, next);
   };
-  for (const page of pages) walk(page.htmlNode ?? page.root, [], page.views, { block: null, topLevel: true });
+  for (const page of pages) {
+    // Per page: the views the original does not reflow in, and the element that has to keep its width in them
+    // (ir/index.js noReflowViews).
+    o.noReflow = page.noReflow ?? [];
+    o.rootNode = page.root;
+    walk(page.htmlNode ?? page.root, [], page.views, { block: null, topLevel: true });
+  }
 
   return { rules: [...rules.values()], boxSizingReset, classCount: namer.used.size };
 }

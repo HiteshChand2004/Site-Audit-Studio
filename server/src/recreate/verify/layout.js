@@ -186,35 +186,65 @@ function iou(a, b) {
 
 // A state of a tab panel / carousel the page does not start in (ir/states.js): hidden until a visitor clicks, so neither
 // measured nor fixed (its boxes are those of its own state).
-const stateCopy = (n) => !!n.stateAttrs && ('hidden' in n.stateAttrs || 'data-w-hcopy' in n.stateAttrs);
-const visibleIn = (n, v) => {
+export const stateCopy = (n) => !!n.stateAttrs && ('hidden' in n.stateAttrs || 'data-w-hcopy' in n.stateAttrs);
+export const visibleIn = (n, v) => {
   const d = n.views[v];
   return !stateCopy(n) && !!d && !d.hidden && d.rect[2] > 0 && d.rect[3] > 0;
 };
 
-/** Layout comparison of one page in one view. */
-export function compareLayout(root, v, rects) {
+/**
+ * Layout comparison of one page in one view.
+ *
+ * With `pairs`, the expected-vs-actual box of every element that is NOT fine is handed back as well, in document
+ * order, instead of being thrown away after the counting. Only the elements that fail a check are listed: an element
+ * that is absent from `pairs` matched the capture within the tolerances, so its offset delta is ~0 by definition.
+ * The rows are keyed by `cpath` as well as `sid`, because `sid` is re-assigned whenever the IR is rebuilt.
+ * @param {{ pairs?: boolean }} [opts]
+ * @returns {{ elements: number, sizes: number, boxes: number, missing: number, pairs?: object[] }}
+ */
+export function compareLayout(root, v, rects, { pairs = false } = {}) {
   let total = 0;
   let sizes = 0;
   let boxes = 0;
   let missing = 0;
+  const rows = pairs ? [] : null;
   const walk = (n) => {
     if (!isElement(n) || stateCopy(n)) return;
     if (visibleIn(n, v)) {
       total++;
       const o = n.views[v].rect;
       const r = rects[n.sid];
-      if (!r || r[2] <= 0 || r[3] <= 0) missing++;
+      const gone = !r || r[2] <= 0 || r[3] <= 0;
+      let wOk = false;
+      let hOk = false;
+      let overlap = 0;
+      if (gone) missing++;
       else {
-        if (widthOk(r, o) && heightOk(r, o)) sizes++;
-        if (iou(r, o) >= 0.6) boxes++;
+        wOk = widthOk(r, o);
+        hOk = heightOk(r, o);
+        overlap = iou(r, o);
+        if (wOk && hOk) sizes++;
+        if (overlap >= 0.6) boxes++;
+      }
+      if (rows && (gone || !wOk || !hOk || overlap < 0.6)) {
+        rows.push({
+          sid: n.sid,
+          cpath: n.cpath ?? null,
+          tag: n.tag,
+          kind: gone ? 'missing' : !wOk || !hOk ? 'size' : 'offset',
+          expected: o,
+          actual: gone ? null : r,
+          widthOk: wOk,
+          heightOk: hOk,
+          iou: Math.round(overlap * 1000) / 1000,
+        });
       }
     }
     if (n.tag !== 'svg') n.children.forEach(walk);
   };
   walk(root);
   const share = (k) => (total ? Math.round((k / total) * 1000) / 1000 : 1);
-  return { elements: total, sizes: share(sizes), boxes: share(boxes), missing };
+  return { elements: total, sizes: share(sizes), boxes: share(boxes), missing, ...(rows && { pairs: rows }) };
 }
 
 const NO_WIDTH_FIX = /^(inline|inline-block|inline-flex|inline-grid|table|table-cell|table-row|contents|none)$/;

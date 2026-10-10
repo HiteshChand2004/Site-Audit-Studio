@@ -42,7 +42,10 @@ export const STEPS = [
   { key: 'inspect', label: 'Inspecting pages', weight: 35, max: 7 * 60000, perPage: 150000 },
   { key: 'assets', label: 'Extracting assets', weight: 25, max: 4 * 60000, perPage: 15000 },
   // browser: the step renders pages itself, so it shares the machine with a background step only when memory allows.
-  { key: 'generate', label: 'Generating site', weight: 15, max: 4 * 60000, browser: true, perPage: 45000 },
+  // The self-correction loop lives in this step (verify/correct.js, its own 90 s), so the limit grew from 4 to 6
+  // minutes rather than taking the time from the fit pass or the breakpoint check. Generate is local work - no
+  // network, no capture - so a longer limit here never changes what was captured.
+  { key: 'generate', label: 'Generating site', weight: 15, max: 6 * 60000, browser: true, perPage: 60000 },
   { key: 'build', label: 'Building & verifying', weight: 20, max: 3 * 60000, browser: true, perPage: 45000 },
   { key: 'preview', label: 'Starting preview', weight: 5, max: 30000, perPage: 3000 },
   // Original screenshots at more widths (4b.6): collects only, never fails the job. A background step: it starts right

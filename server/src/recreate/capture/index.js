@@ -16,6 +16,8 @@ import { snapshotPage } from './snapshot.js';
 import { captureNotices } from './notices.js';
 import { captureStates } from './states.js';
 import { probeScrollStates } from './scrollstate.js';
+import { FOREIGN_BUDGET_MS, foreignStyleText, harvestForeignStateRules } from './foreignCss.js';
+import { shapeCounts } from './selectorShape.js';
 import { attachType, probeTypography } from './typography.js';
 import { attachProbe, probeViewportHeight } from './viewport.js';
 
@@ -249,11 +251,29 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     if (observeReveal) {
       let found = { version: 1, view: 'desktop', hover: [], focus: [], rules: [], groups: [], stats: { rulesTotal: 0, probed: 0, ms: 0, timedOut: false } };
       let error = null;
+      // The hover / focus rules of stylesheets the page may not read (a CDN-hosted design system without CORS).
+      // The shared cache usually holds them already, because the browser loaded them to render the page, so this
+      // normally costs no request at all. They are put into the page below and probed like any other rule.
+      let foreign = { rules: [], stats: null };
       try {
-        found = await captureInteractions(page, { budgetMs: motionBudgetMs });
+        foreign = await harvestForeignStateRules(snapshot.unreadableSheets, {
+          cache,
+          deadline: Date.now() + FOREIGN_BUDGET_MS,
+        });
+      } catch {
+        /* a sheet that cannot be read leaves the page exactly as it was */
+      }
+      try {
+        found = await captureInteractions(page, {
+          budgetMs: motionBudgetMs,
+          ...(foreign.rules.length && { foreignCss: foreignStyleText(foreign.rules) }),
+        });
       } catch (err) {
         error = firstLine(err);
       }
+      // Kept with the readable ones, marked by where they came from, so nothing is counted twice and the evidence
+      // says which sheet a rule was in.
+      if (foreign.rules.length) found.rules = [...(found.rules ?? []), ...foreign.rules];
       // Clicks last (full-site B.1): they change the page (menus open, slides move), so nothing is read from it after them.
       let clicksError = null;
       if (clickBudgetMs > 0) {
@@ -299,6 +319,13 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
         await writeFile(path.join(dir, 'motion.json'), JSON.stringify(found));
         motion = {
           hover: found.hover.length, focus: found.focus.length, rules: found.rules.length, rulesTotal: found.stats.rulesTotal, probed: found.stats.probed, notReverted: found.stats.notReverted ?? 0,
+          // What shape the page's own state rules have: how many reach outside the hovered element at all, so the
+          // number the copy rebuilds can be held against it (capture/selectorShape.js).
+          shapes: shapeCounts(found.rules),
+          // Stylesheets the page itself could not read, and what was recovered from them server-side. Until now a
+          // sheet without CORS cost every state rule in it and there was no number saying so.
+          unreadableSheets: snapshot.unreadableSheets?.length ?? 0,
+          ...(foreign.stats && { foreign: foreign.stats }),
           ms: found.stats.ms, timedOut: found.stats.timedOut, reveal: found.reveal?.stats ?? null, loops: loops?.stats ?? null, clicks: found.clicks?.stats ?? null,
           ...((error ?? loopsError ?? clicksError) && { error: error ?? loopsError ?? clicksError }),
         };

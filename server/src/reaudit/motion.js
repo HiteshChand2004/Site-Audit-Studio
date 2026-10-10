@@ -115,7 +115,18 @@ export function summarize(motion) {
   const loops = (motion.loops?.loops ?? motion.loops ?? []).filter((l) => !l.timeline);
   return {
     reveal: { count: reveal.length, durations: reveal.map((e) => e.timing?.duration), replay: reveal.filter((e) => e.replay).length },
-    hover: { keys: hover.map(hoverKey), props: new Map(hover.map((h) => [hoverKey(h), Object.keys(h.changes ?? {})])) },
+    // Every channel of a hover is compared, each namespaced so a property the original changed on a neighbour is not
+    // counted as satisfied by the copy changing it on the hovered element itself. Without this, an effect that reaches
+    // outside the hovered element could be lost and the row would still read as passing.
+    hover: {
+      keys: hover.map(hoverKey),
+      props: new Map(hover.map((h) => [hoverKey(h), [
+        ...Object.keys(h.changes ?? {}),
+        ...(h.kids ?? []).flatMap((k) => Object.keys(k.changes ?? {}).map((p) => `kid:${p}`)),
+        ...(h.sibs ?? []).flatMap((x) => Object.keys(x.changes ?? {}).map((p) => `${x.rel ?? 'sib'}:${p}`)),
+        ...Object.entries(h.pseudo ?? {}).flatMap(([which, c]) => Object.keys(c ?? {}).map((p) => `${which}:${p}`)),
+      ]])),
+    },
     // By pattern family only: a loop the original drove with script has no duration (and is named from its recorded path),
     // while its rebuilt CSS animation has one (and is named from its keyframes).
     loops: { keys: loops.map(loopFamily), count: loops.length },

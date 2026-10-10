@@ -167,6 +167,30 @@ function numberNodes(root) {
  * @param {object|null} [o.robots]  the original robots.txt as discovery parsed it (for robots.txt)
  * @param {object|null} [o.llms]  the original /llms.txt as discovery read it (copied as it is)
  */
+// A page is a few pixels wider than the screen for all sorts of harmless reasons (a scrollbar, a rounding); this
+// much more means its layout simply does not fit, which is a different thing.
+const REFLOW_SLACK_PX = 16;
+
+/**
+ * The views in which the original does NOT reflow: its own layout stays wider than the screen, so the page
+ * overflows sideways instead of rearranging. Plenty of real sites have no phone layout at all and do exactly this.
+ *
+ * It matters because every width heuristic in the IR assumes the opposite. Left alone, the copy's root shrinks to
+ * the screen, every width inside it is clamped to that, the text wraps two or three times as often and the page
+ * comes out far too tall - which is the single biggest difference measured on real narrow views. The copy has to
+ * overflow where the original overflowed.
+ * @returns {string[]} view ids, in the page's own view order
+ */
+export function noReflowViews(tree) {
+  const out = [];
+  for (const view of tree.views ?? []) {
+    const width = tree.root?.views?.[view]?.rect?.[2];
+    const viewport = VIEW_WIDTHS[view];
+    if (width && viewport && width > viewport + REFLOW_SLACK_PX) out.push(view);
+  }
+  return out;
+}
+
 export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], skipped = [], wp = null, robots = null, llms = null }) {
   const assetResolve = createAssetResolver(assets.map ?? {});
   const resolveLink = createLinkResolver({ pages: pages.map((p) => p.info), livePages, skipped, origin, assetFile: (url) => assetResolve(url) });
@@ -186,7 +210,7 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
     }
     const droppedImages = dropMissingImages(tree.root, info.url, assetResolve);
     const nodes = numberNodes(tree.root);
-    trees.push({ info, captures, ...tree, nodes, droppedImages, htmlNode: htmlNode(captures, tree.views, tree.root) });
+    trees.push({ info, captures, ...tree, nodes, droppedImages, noReflow: noReflowViews(tree), htmlNode: htmlNode(captures, tree.views, tree.root) });
   }
   for (const k of assets.keyframes ?? []) if (k.css && !keyframes.has(k.name)) keyframes.set(k.name, k.css);
 

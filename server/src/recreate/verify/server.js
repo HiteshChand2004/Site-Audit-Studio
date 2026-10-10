@@ -58,6 +58,11 @@ export async function startSiteServer(root) {
   return {
     origin: `http://127.0.0.1:${server.address().port}`,
     overrides,
+    // The folder being served. Readable so a caller that repoints the server can put it back (measureFidelity
+    // serves dist/, while the generate step's renderer serves site/).
+    get root() {
+      return base;
+    },
     setRoot: (dir) => {
       base = path.resolve(dir);
     },

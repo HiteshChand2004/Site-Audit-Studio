@@ -77,6 +77,26 @@ test('summarize counts scroll reveals, hover elements by tag + text, and loops b
   assert.deepEqual(s.loops.keys, ['spin']);
 });
 
+test('every channel of a hover is compared, each kept apart from the others', () => {
+  // A hover that dims the cards beside it is an extra channel of the same entry, so the element count does not
+  // change - only what the copy has to reproduce. Without naming the channels, a copy that changed opacity on the
+  // hovered element instead of on its neighbours would have counted as a match.
+  const s = summarize({
+    reveal: { elements: [] },
+    loops: { loops: [] },
+    hover: [{
+      tag: 'a',
+      text: 'Card',
+      changes: { color: ['a', 'b'] },
+      kids: [{ path: 'body>a:1>span:1', changes: { opacity: ['0', '1'] } }],
+      sibs: [{ path: 'body>a:2', rel: 'next', changes: { opacity: ['1', '0.4'] } }],
+      pseudo: { after: { width: ['0px', '100%'] } },
+    }],
+  });
+  assert.deepEqual(s.hover.keys, ['a|card'], 'the entry count is unchanged');
+  assert.deepEqual(s.hover.props.get('a|card').sort(), ['after:width', 'color', 'kid:opacity', 'next:opacity']);
+});
+
 test('motionItems: reproduced = pass, partly = open, mostly lost = regressed; nothing in the original = no row', () => {
   const old = new Map([['index', {
     reveal: { elements: Array.from({ length: 10 }, () => ({ trigger: { kind: 'scroll' }, timing: { duration: 700 } })) },

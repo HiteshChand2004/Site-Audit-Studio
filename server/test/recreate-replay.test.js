@@ -68,3 +68,14 @@ test('an older capture without robots / llms in its manifest takes them from the
   assert.deepEqual(ctx.discovery.robots, { status: 'found', blocksAll: false, blockedAiCrawlers: ['CCBot'] });
   assert.equal(ctx.discovery.llms.text, '# Old site llms');
 });
+
+test('a rebuild scales the step limits to the page count, as a real discovery does', async () => {
+  // Found on a 64-page rebuild: the replay set ctx.pages but never scaled the limits, so every later step got only
+  // its base limit. The generate step then spent all of it on the fit pass and everything after it was skipped.
+  const src = await savedRecreate({ withRobots: true });
+  const ctx = await newCtx('scaled');
+  const scaled = [];
+  ctx.scaleToPages = (n) => scaled.push(n);
+  await replayStages(src, { recreateId: 'r3' }).inspect(ctx);
+  assert.deepEqual(scaled, [ctx.pages.length], 'the page count of the saved capture');
+});

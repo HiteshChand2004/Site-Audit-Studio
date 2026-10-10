@@ -78,8 +78,11 @@ function scanRules(opts) {
  * A selector with the state inside :not() / :is() / :has(), or with two states, is left to the mouse probe.
  */
 function forceRuleStates(opts) {
-  const { props, pseudoProps, maxHosts, maxKids, budgetMs } = opts;
+  const { props, pseudoProps, maxHosts, maxKids, budgetMs, foreignCss } = opts;
   const t0 = performance.now();
+  // Elements beside or around the hovered one that one rule may change, and how far up the tree "beside" reaches.
+  const MAX_SIBS = 12;
+  const SIB_UP = 3;
   const SKIP_TAGS = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
   const ATTR = { hover: 'data-sas-hover', focus: 'data-sas-focus' };
   const STATE = /^:(hover|focus-visible|focus-within|focus)(?![\w-])/;
@@ -127,9 +130,12 @@ function forceRuleStates(opts) {
     return out.filter(Boolean);
   };
   // One complex selector: its copy with the state as an attribute, and the selector of the element that holds the state.
-  const convert = (part) => {
-    let depth = 0;
+  // A state inside :has() is kept: the copy still matches the same element, because :has() describes what the element
+  // contains, so forcing the attribute on the contained element keeps the rule matching. A state inside :not() or
+  // :is() is left to the mouse probe - a forced attribute can never satisfy :not(:hover).
+  const convert = (part, reasons) => {
     let quote = null;
+    const open = [];
     const states = [];
     for (let i = 0; i < part.length; i++) {
       const c = part[i];
@@ -139,37 +145,74 @@ function forceRuleStates(opts) {
         continue;
       }
       if (c === '"' || c === "'") quote = c;
-      else if (c === '(' || c === '[') depth++;
-      else if (c === ')' || c === ']') depth--;
+      else if (c === '(') {
+        const fn = /:([\w-]+)$/.exec(part.slice(0, i));
+        open.push({ name: fn ? fn[1].toLowerCase() : '', arg: i + 1 });
+      } else if (c === '[') open.push({ name: '[', arg: i + 1 });
+      else if (c === ')' || c === ']') open.pop();
       else if (c === ':' && part[i + 1] !== ':') {
         const m = STATE.exec(part.slice(i));
         if (m) {
-          if (depth > 0) return null;
-          states.push({ at: i, len: m[0].length, kind: m[1] === 'hover' ? 'hover' : 'focus' });
+          if (open.length && !open.every((o) => o.name === 'has')) {
+            reasons.nesting++;
+            return null;
+          }
+          states.push({ at: i, len: m[0].length, kind: m[1] === 'hover' ? 'hover' : 'focus', inHas: open.length ? open[open.length - 1].arg : -1 });
         }
       }
     }
-    if (states.length !== 1 || part.includes('&')) return null;
-    const { at, len, kind } = states[0];
+    if (states.length !== 1 || part.includes('&')) {
+      if (states.length > 1) reasons.twoStates++;
+      else reasons.invalid++;
+      return null;
+    }
+    const { at, len, kind, inHas } = states[0];
     const clone = `${part.slice(0, at)}[${ATTR[kind]}]${part.slice(at + len)}`;
-    // The compound that holds the state ends at the next combinator outside brackets.
+    // The compound that holds the state: from the combinator before it to the one after it. Inside :has() it is the
+    // contained element - the one the visitor's mouse is really on - and that is the element to force the state on.
+    const stop = /[\s>+~,)]/;
+    let start = inHas >= 0 ? inHas : 0;
+    for (let i = at; i > start; i--) if (stop.test(part[i - 1])) { start = i; break; }
     let end = at + len;
-    depth = 0;
+    let depth = 0;
     for (; end < part.length; end++) {
       const c = part[end];
       if (c === '(' || c === '[') depth++;
+      else if (c === ')' && depth === 0) break;
       else if (c === ')' || c === ']') depth--;
-      else if (depth === 0 && /[\s>+~]/.test(c)) break;
+      else if (depth === 0 && stop.test(c)) break;
     }
-    let host = `${part.slice(0, at)}${part.slice(at + len, end)}`.replace(PSEUDO_EL, '').trim();
+    let host = `${part.slice(start, at)}${part.slice(at + len, end)}`.replace(PSEUDO_EL, '').trim();
     if (!host || /[\s>+~]$/.test(host)) host = `${host} *`.trim();
     return { clone, host, kind };
   };
 
+  // The state rules of stylesheets the page may not read, harvested server-side (capture/foreignCss.js) and put
+  // into the page as an ordinary sheet of its own, so everything below treats them exactly like a readable one:
+  // converted, copied with the state as an attribute, and measured by comparing computed styles. Only state rules
+  // are injected, so the page's resting look cannot change - a `:hover` rule matches nothing until it is forced.
+  let foreignSheet = null;
+  if (foreignCss) {
+    try {
+      foreignSheet = document.createElement('style');
+      foreignSheet.setAttribute('data-sas-foreign', '');
+      foreignSheet.textContent = foreignCss;
+      (document.head || document.documentElement).appendChild(foreignSheet);
+    } catch {
+      foreignSheet = null;
+    }
+  }
+
   // 1. The state rules of the readable sheets, copied right after themselves.
   const tasks = [];
   const declared = new Set();
-  const stats = { rules: 0, parts: 0, unsupported: 0, hosts: 0, skippedHosts: 0, effects: 0, timedOut: false };
+  // `unsupportedBy` says WHY a selector was left to the mouse probe. The single number it replaces is how a whole
+  // class of effects (anything with the state inside :has()) stayed invisible without anyone being able to see it.
+  const unsupportedBy = { nesting: 0, twoStates: 0, invalid: 0, insert: 0 };
+  const stats = {
+    rules: 0, parts: 0, unsupported: 0, unsupportedBy, hasRules: 0, hosts: 0, skippedHosts: 0, effects: 0,
+    sibs: 0, sibsUnrelated: 0, sibsCapped: 0, timedOut: false,
+  };
   // Rules for the opposite state (`.card:not(:hover) .panel { opacity: 0 }`) keep matching while a state is forced by
   // attribute (the mouse is not really there) and win over the forced rule: until the probe ends they follow the attribute.
   const negated = [];
@@ -191,9 +234,10 @@ function forceRuleStates(opts) {
         const text = rule.selectorText || '';
         if (/:(hover|focus)/.test(text)) {
           stats.rules++;
+          if (/:has\(/.test(text)) stats.hasRules++;
           const parts = [];
           for (const p of splitList(text)) {
-            const c = convert(p);
+            const c = convert(p, unsupportedBy);
             if (!c) {
               stats.unsupported++;
               continue;
@@ -204,6 +248,7 @@ function forceRuleStates(opts) {
               parts.push(c);
             } catch {
               stats.unsupported++;
+              unsupportedBy.invalid++;
             }
           }
           if (parts.length && container.insertRule) {
@@ -241,6 +286,7 @@ function forceRuleStates(opts) {
       stats.parts += t.parts.length;
     } catch {
       stats.unsupported += t.parts.length;
+      unsupportedBy.insert += t.parts.length;
       t.parts = [];
     }
   }
@@ -286,35 +332,77 @@ function forceRuleStates(opts) {
   };
   const list = [...new Set([...props, ...declared])];
   const pseudoList = [...new Set([...list, ...pseudoProps])];
-  const read = (el, kids) => {
+  const read = (el, kids, sibs) => {
     const pseudo = {};
     for (const w of ['before', 'after']) {
       const pcs = getComputedStyle(el, `::${w}`);
       if (pcs.content && pcs.content !== 'none' && pcs.content !== 'normal') pseudo[w] = pick(pcs, pseudoList);
     }
-    return { values: pick(getComputedStyle(el), list), pseudo, kids: kids.map((k) => pick(getComputedStyle(k), list)) };
+    return {
+      values: pick(getComputedStyle(el), list),
+      pseudo,
+      kids: kids.map((k) => pick(getComputedStyle(k), list)),
+      sibs: sibs.map((s) => pick(getComputedStyle(s.el), list)),
+    };
   };
   const diff = (a, b) => {
     const out = {};
     for (const k of Object.keys(b)) if (a[k] !== b[k]) out[k] = [a[k], b[k]];
     return out;
   };
-  // The descendants a copied rule matches while the element holds the state.
-  const kidsOf = (el, kind) => {
-    const list = [];
+  /**
+   * How an element the copied rule matches is related to the element holding the state: inside it, around it, or
+   * beside it. Only these three are rebuildable as CSS; anything further away is not worth a selector.
+   */
+  const relation = (host, m) => {
+    if (m === host) return null;
+    if (m.contains(host)) return 'ancestor';
+    if (host.contains(m)) return null;
+    let up = host;
+    for (let i = 0; i <= SIB_UP && up; i++, up = up.parentElement) {
+      if (up.contains(m)) return host.compareDocumentPosition(m) & Node.DOCUMENT_POSITION_FOLLOWING ? 'next' : 'prev';
+    }
+    return null;
+  };
+  /**
+   * Everything a copied rule matches while the element holds the state, split by where it is. The query runs on the
+   * document, not on the element: `.card:hover ~ .card` can never return a sibling from el.querySelectorAll, which
+   * is why every sibling and dimming effect on a navbar or a card grid used to be read as "nothing changed".
+   */
+  const relatedOf = (el, kind) => {
+    const kids = [];
+    const sibs = [];
     for (const sel of cloneList[kind]) {
       let found = [];
       try {
-        found = el.querySelectorAll(sel);
+        found = document.querySelectorAll(sel);
       } catch {
         continue;
       }
-      for (const k of found) {
-        if (list.length >= maxKids) break;
-        if (!list.includes(k) && !inSvg(k)) list.push(k);
+      for (const m of found) {
+        if (inSvg(m) || m === document.documentElement) continue;
+        if (el.contains(m)) {
+          if (m === el || kids.includes(m)) continue;
+          if (kids.length >= maxKids) continue;
+          kids.push(m);
+          continue;
+        }
+        if (sibs.some((s) => s.el === m)) continue;
+        const rel = relation(el, m);
+        if (!rel) {
+          stats.sibsUnrelated++;
+          continue;
+        }
+        // A selector like `.card:hover ~ .card` matches every later card: without a cap one hovered card in a grid
+        // would read a hundred elements inside the page's whole budget.
+        if (sibs.length >= MAX_SIBS) {
+          stats.sibsCapped++;
+          continue;
+        }
+        sibs.push({ el: m, rel });
       }
     }
-    return list;
+    return { kids, sibs };
   };
 
   const out = { hover: [], focus: [] };
@@ -326,10 +414,10 @@ function forceRuleStates(opts) {
       }
       for (const kind of kinds) {
         el.setAttribute(ATTR[kind], '');
-        const kids = kidsOf(el, kind);
-        const on = read(el, kids);
+        const { kids, sibs } = relatedOf(el, kind);
+        const on = read(el, kids, sibs);
         el.removeAttribute(ATTR[kind]);
-        const off = read(el, kids);
+        const off = read(el, kids, sibs);
         const changes = diff(off.values, on.values);
         const pseudo = {};
         for (const w of new Set([...Object.keys(off.pseudo), ...Object.keys(on.pseudo)])) {
@@ -345,7 +433,14 @@ function forceRuleStates(opts) {
           const p = Object.keys(c).length ? pathOf(k) : null;
           if (p) kidChanges.push({ path: p, changes: c });
         });
-        if (!Object.keys(changes).length && !Object.keys(pseudo).length && !kidChanges.length) continue;
+        // The elements beside or around the hovered one: a card grid dimming its other cards, a nav tinting the rest.
+        const sibChanges = [];
+        sibs.forEach((s, i) => {
+          const c = diff(off.sibs[i], on.sibs[i]);
+          const p = Object.keys(c).length ? pathOf(s.el) : null;
+          if (p) sibChanges.push({ path: p, rel: s.rel, changes: c });
+        });
+        if (!Object.keys(changes).length && !Object.keys(pseudo).length && !kidChanges.length && !sibChanges.length) continue;
         const path = pathOf(el);
         if (!path) continue;
         const r = el.getBoundingClientRect();
@@ -353,13 +448,16 @@ function forceRuleStates(opts) {
           // Visible text first, like the mouse probe (an aria-label the copy adds to a control must not change its key).
           path, tag: el.tagName.toLowerCase(), text: (el.textContent.trim() || el.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ').slice(0, 60),
           rect: [Math.round(r.left + scrollX), Math.round(r.top + scrollY), Math.round(r.width), Math.round(r.height)],
-          source: 'css', changes, ...(Object.keys(pseudo).length && { pseudo }), ...(kidChanges.length && { kids: kidChanges }), transition: transitionOf.get(el), layout: false, domDelta: 0,
+          source: 'css', changes, ...(Object.keys(pseudo).length && { pseudo }), ...(kidChanges.length && { kids: kidChanges }),
+          ...(sibChanges.length && { sibs: sibChanges }), transition: transitionOf.get(el), layout: false, domDelta: 0,
         });
         stats.effects++;
+        stats.sibs += sibChanges.length;
       }
     }
   } finally {
     noTransition.remove();
+    foreignSheet?.remove();
     for (const { container, rule } of inserted) {
       const i = Array.prototype.indexOf.call(container.cssRules, rule);
       if (i >= 0) container.deleteRule(i);
@@ -552,7 +650,22 @@ function readState(opts) {
       if (depth < 2 && c.tagName.toLowerCase() !== 'svg') queue.push([c, depth + 1]);
     }
   }
-  return { ...one(el, true), kids, domCount: document.getElementsByTagName('*').length };
+  // The elements beside and around it, for an effect the page's own script spreads outwards: hovering one card dims
+  // the others, hovering a nav item tints the bar. The rule-driven probe finds these from the selector; a scripted
+  // one has no selector to read, so the neighbours are sampled directly.
+  const sibs = [];
+  const near = [
+    [el.previousElementSibling, 'prev'],
+    [el.nextElementSibling, 'next'],
+    [el.parentElement, 'ancestor'],
+  ];
+  for (const [n, rel] of near) {
+    if (!n || n === document.body || n === document.documentElement) continue;
+    if (/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|LINK|META)$/.test(n.tagName)) continue;
+    const path = m.pathOf(n);
+    if (path) sibs.push({ path, rel, ...one(n, false) });
+  }
+  return { ...one(el, true), kids, sibs, domCount: document.getElementsByTagName('*').length };
 }
 
 /** Page function: moves the element to the middle of the screen and reports where to point the mouse. */
@@ -648,13 +761,23 @@ export function diffStates(rest, after) {
     const c = before ? changed(before.values, k.values) : { display: ['none', k.values.display] };
     if (Object.keys(c).length) kids.push({ path: k.path, changes: limitChanges(c), transition: k.tr });
   }
+  // The same comparison for the elements beside and around it.
+  const restSibs = new Map((rest.sibs ?? []).map((s) => [s.path, s]));
+  const sibs = [];
+  for (const s of after.sibs ?? []) {
+    const before = restSibs.get(s.path);
+    if (!before) continue;
+    const c = changed(before.values, s.values);
+    if (Object.keys(c).length) sibs.push({ path: s.path, rel: s.rel, changes: limitChanges(c), transition: s.tr });
+  }
   const dRect = after.rect.map((v, i) => v - rest.rect[i]);
   const rectChanged = dRect.some((v) => Math.abs(v) > 1);
   const domDelta = after.domCount - rest.domCount;
-  if (!Object.keys(changes).length && !Object.keys(pseudo).length && !kids.length && !rectChanged && !domDelta) return null;
+  if (!Object.keys(changes).length && !Object.keys(pseudo).length && !kids.length && !sibs.length && !rectChanged && !domDelta) return null;
   const out = { changes: limitChanges(changes), transition: after.tr, layout: rectChanged, domDelta };
   if (Object.keys(pseudo).length) out.pseudo = pseudo;
   if (kids.length) out.kids = kids.slice(0, 24);
+  if (sibs.length) out.sibs = sibs;
   if (rectChanged) out.rect = dRect;
   if (uaRing) out.uaRing = true;
   if (JSON.stringify(rest.tr) !== JSON.stringify(after.tr)) out.transitionOut = rest.tr;
@@ -688,6 +811,15 @@ export function keepReverting(rest, back, d) {
   }
   if (kids.length) out.kids = kids;
   else delete out.kids;
+  // A neighbour that keeps changing with the mouse away (a ticker in the next card) was never this element's hover.
+  const sibs = [];
+  for (const sib of d.sibs ?? []) {
+    const left = gone.sibs?.find((x) => x.path === sib.path);
+    const kept = Object.fromEntries(Object.entries(sib.changes).filter(([k]) => !(k in (left?.changes ?? {}))));
+    if (Object.keys(kept).length) sibs.push({ ...sib, changes: kept });
+  }
+  if (sibs.length) out.sibs = sibs;
+  else delete out.sibs;
   if (d.layout && gone.layout) {
     out.layout = false;
     delete out.rect;
@@ -695,7 +827,7 @@ export function keepReverting(rest, back, d) {
   // Elements added or removed that did not come back with the mouse out (a menu the previous probe opened closing, a
   // timer re-rendering) were not this element's hover.
   if (out.domDelta && gone.domDelta) out.domDelta = 0;
-  const nothing = !Object.keys(out.changes).length && !out.pseudo && !out.kids && !out.layout && !out.domDelta;
+  const nothing = !Object.keys(out.changes).length && !out.pseudo && !out.kids && !out.sibs && !out.layout && !out.domDelta;
   return nothing ? null : out;
 }
 
@@ -705,7 +837,7 @@ export function keepReverting(rest, back, d) {
  * @param {{ limit?: number, perSignature?: number, focusStops?: number, budgetMs?: number }} [o]
  * @returns {Promise<object>} the content of motion.json
  */
-export async function captureInteractions(page, { limit = 40, perSignature = 3, focusStops = 80, budgetMs = 10000, perCandidateMs = 900, maxHoverMs = Math.min(15000, budgetMs * 2) } = {}) {
+export async function captureInteractions(page, { limit = 40, perSignature = 3, focusStops = 80, budgetMs = 10000, perCandidateMs = 900, maxHoverMs = Math.min(15000, budgetMs * 2), foreignCss = null } = {}) {
   const started = Date.now();
   // Set once the candidates are known: the mouse probe gets time per element to probe (within bounds), focus the rest.
   let hoverDeadline = started + budgetMs * 0.6;
@@ -715,7 +847,7 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
   // (script-driven effects) on the elements the stylesheets do not cover.
   let forced = { hover: [], focus: [], stats: { error: null } };
   try {
-    forced = await page.evaluate(forceRuleStates, { props: [...MOTION_PROPS, ...RULE_EXTRA], pseudoProps: PSEUDO_EXTRA, maxHosts: 600, maxKids: 40, budgetMs: Math.max(500, Math.min(4000, budgetMs * 0.3)) });
+    forced = await page.evaluate(forceRuleStates, { props: [...MOTION_PROPS, ...RULE_EXTRA], pseudoProps: PSEUDO_EXTRA, maxHosts: 600, maxKids: 40, budgetMs: Math.max(500, Math.min(4000, budgetMs * 0.3)), foreignCss });
   } catch (err) {
     forced.stats.error = String(err?.message ?? err).split('\n')[0];
   }

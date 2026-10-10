@@ -16,7 +16,7 @@ import { decomposeTransform } from './reveal.js';
 
 /**
  * Page function: the repeating / scroll-linked animations of the document.
- * @returns {{ items: object[], total: number, definedKeyframes: string[] }}
+ * @returns {{ items: object[], total: number, unreadableSheets: number, definedKeyframes: string[] }}
  */
 export function scanAnimations(opts) {
   const { max = 120 } = opts || {};
@@ -46,10 +46,16 @@ export function scanAnimations(opts) {
       else if (rule.cssRules) readRules(rule.cssRules);
     }
   };
+  // A sheet the page may not read contributes no @keyframes name, so `inStylesheet` comes out false for an
+  // animation it defines - indistinguishable from a WAAPI one, and the loop is rebuilt from the recording instead
+  // of being carried. Counted so the guess is visible rather than silent.
+  let unreadableSheets = 0;
   for (const sheet of document.styleSheets) {
     try {
       readRules(sheet.cssRules);
-    } catch { /* cross-origin sheet */ }
+    } catch {
+      unreadableSheets++;
+    }
   }
   const kebab = (p) => (p === 'cssFloat' ? 'float' : p.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`));
   const items = [];
@@ -95,7 +101,7 @@ export function scanAnimations(opts) {
       }),
     });
   }
-  return { items, total, definedKeyframes: [...defined].slice(0, 100) };
+  return { items, total, unreadableSheets, definedKeyframes: [...defined].slice(0, 100) };
 }
 
 /**
@@ -446,7 +452,7 @@ export function analyzeSeries(series) {
  * @param {{ scan: object, script?: object }} raw
  */
 export function processLoops({ scan, script }) {
-  const stats = { css: 0, waapi: 0, script: 0, scrollLinked: 0, paused: 0, inStylesheet: 0, total: scan.total, truncated: scan.total > scan.items.length, scriptScanned: script?.scanned ?? 0, scriptChanged: script?.changed ?? 0, patterns: {} };
+  const stats = { css: 0, waapi: 0, script: 0, scrollLinked: 0, paused: 0, inStylesheet: 0, unreadableSheets: scan.unreadableSheets ?? 0, total: scan.total, truncated: scan.total > scan.items.length, scriptScanned: script?.scanned ?? 0, scriptChanged: script?.changed ?? 0, patterns: {} };
   const loops = [];
   for (const it of scan.items) {
     const { pattern, params } = classifyKeyframes(it.keyframes, it.timing);

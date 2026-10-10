@@ -27,12 +27,27 @@ export function motionCss(m, opts) {
   const D = (decl, indent) => declarations(decl, { ...opts, indent });
   const out = [];
 
+  /**
+   * An element the hovered one changes without containing it. All three forms are plain CSS and need no script:
+   *   next      the hovered element comes first, so the sibling combinator reaches it
+   *   prev      the sibling comes first, so it is "the element that has a hovered one after it"
+   *   ancestor  the element that has a hovered one inside it
+   * `prev` and `ancestor` are the shape the widget rules already ship ([wN]:has([wh]:hover) [wNpK]).
+   */
+  const sibSel = (hostToken, sib, state) => {
+    const host = `${sel(hostToken)}${state}`;
+    if (sib.rel === 'next') return `${host} ~ ${sel(sib.token)}`;
+    if (sib.rel === 'prev') return `${sel(sib.token)}:has(~ ${host})`;
+    return `${sel(sib.token)}:has(${host})`;
+  };
+
   // Hover, for pointer devices only (a touch screen would keep the state after a tap).
   const hover = [];
   for (const h of m.hover) {
     hover.push(block(`${sel(h.token)}:hover`, D(h.decls, '    '), '  '));
     for (const [which, decl] of Object.entries(h.pseudo ?? {})) hover.push(block(`${sel(h.token)}:hover::${which}`, D(decl, '    '), '  '));
     for (const k of h.kids ?? []) hover.push(block(`${sel(h.token)}:hover ${sel(k.token)}`, D(k.decls, '    '), '  '));
+    for (const x of h.sibs ?? []) hover.push(block(sibSel(h.token, x, ':hover'), D(x.decls, '    '), '  '));
   }
   if (hover.some(Boolean)) out.push(`/* Hover */\n@media (hover: hover) {\n${hover.filter(Boolean).join('\n')}\n}`);
 
@@ -41,6 +56,7 @@ export function motionCss(m, opts) {
     focus.push(block(`${sel(f.token)}:focus-visible`, D(f.decls)));
     for (const [which, decl] of Object.entries(f.pseudo ?? {})) focus.push(block(`${sel(f.token)}:focus-visible::${which}`, D(decl)));
     for (const k of f.kids ?? []) focus.push(block(`${sel(f.token)}:focus-visible ${sel(k.token)}`, D(k.decls)));
+    for (const x of f.sibs ?? []) focus.push(block(sibSel(f.token, x, ':focus-visible'), D(x.decls)));
   }
   if (focus.some(Boolean)) out.push(`/* Keyboard focus */\n${focus.filter(Boolean).join('\n')}`);
 

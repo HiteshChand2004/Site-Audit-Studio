@@ -10,10 +10,10 @@ import { declarations, tidyColors } from '../src/recreate/emit/css.js';
 import { emitPage } from '../src/recreate/emit/html.js';
 import { MOTION_JS } from '../src/recreate/emit/motionScript.js';
 import { buildHead, clip, generatedFavicon } from '../src/recreate/ir/head.js';
-import { pickBreakpoints } from '../src/recreate/ir/index.js';
+import { noReflowViews, pickBreakpoints } from '../src/recreate/ir/index.js';
 import { createLinkResolver, relFile, relPage } from '../src/recreate/ir/links.js';
 import { ClassNamer, meaningful, originalName } from '../src/recreate/ir/names.js';
-import { cascade, resolveHints, wrapsText } from '../src/recreate/ir/styles.js';
+import { buildStyles, cascade, resolveHints, wrapsText } from '../src/recreate/ir/styles.js';
 import { buildPageTree, deepText, isElement, matchChildren } from '../src/recreate/ir/tree.js';
 import { runRecreate } from '../src/recreate/index.js';
 import { startPreview, stopPreview } from '../src/recreate/preview.js';
@@ -184,6 +184,51 @@ test('breakpoints come from the original media queries', () => {
   // Without a laptop capture the tablet boundary is the widest between 768 and 1440, as before.
   assert.deepEqual(pickBreakpoints(['(max-width: 1024px)', '(max-width: 600px)'], { laptop: false }), { tablet: 1024, mobile: 600, source: 'site' });
   assert.deepEqual(pickBreakpoints([], { laptop: false }), { tablet: 1023.98, mobile: 767.98, source: 'default' });
+});
+
+test('a view the original does not reflow in is recognised from the capture', () => {
+  // The root's captured width against the width of the screen it was captured at. A page that reflows is as wide as
+  // the screen; one that does not keeps its own layout and overflows sideways, which plenty of sites with no phone
+  // layout do. A few pixels over (a scrollbar, a rounding) is not an overflowing layout.
+  const tree = (widths) => ({
+    views: Object.keys(widths),
+    root: { tag: 'body', children: [], views: Object.fromEntries(Object.entries(widths).map(([v, w]) => [v, { style: {}, rect: [0, 0, w, 1000] }])) },
+  });
+  assert.deepEqual(noReflowViews(tree({ desktop: 1440, laptop: 1024, tablet: 768, mobile: 375 })), []);
+  assert.deepEqual(noReflowViews(tree({ desktop: 1440, tablet: 1200, mobile: 1200 })), ['tablet', 'mobile']);
+  assert.deepEqual(noReflowViews(tree({ desktop: 1440, mobile: 385 })), [], 'ten pixels over is a scrollbar, not a layout');
+  assert.deepEqual(noReflowViews(tree({ desktop: 1456 })), [], 'the desktop view is judged the same way as the rest');
+  assert.deepEqual(noReflowViews({ views: ['mobile'], root: { tag: 'body', children: [], views: {} } }), [], 'no capture, no claim');
+});
+
+test('in a view the original does not reflow in, the copy keeps the width instead of shrinking to the screen', () => {
+  // Without this the copy's root shrinks to the screen, every width below it is clamped to that, and the text wraps
+  // the page two or three times too tall - the biggest single difference measured on real narrow views.
+  const body = (widths) => ({
+    tag: 'body', attrs: {}, children: [],
+    views: Object.fromEntries(Object.entries(widths).map(([v, w]) => [v, { style: {}, rect: [0, 0, w, 1000] }])),
+  });
+  const run = (widths) => {
+    const root = body(widths);
+    const page = { root, views: Object.keys(widths), noReflow: noReflowViews({ views: Object.keys(widths), root }) };
+    const { rules } = buildStyles([page], { assetFile: () => null });
+    return rules.find((r) => r.selector === `.${root.class}`)?.parts ?? {};
+  };
+
+  const overflowing = run({ desktop: 1440, tablet: 1200, mobile: 1200 });
+  assert.equal(overflowing.base?.['min-width'], undefined, 'the desktop view fits its own screen');
+  assert.equal(overflowing.tablet?.['min-width'], '1200px');
+  // The phone keeps the same width, so the cascade carries it down rather than repeating it.
+  assert.equal(overflowing.mobile?.['min-width'], undefined);
+
+  // Where the two narrow views overflow by different amounts, each gets its own.
+  const uneven = run({ desktop: 1440, tablet: 1200, mobile: 900 });
+  assert.equal(uneven.tablet?.['min-width'], '1200px');
+  assert.equal(uneven.mobile?.['min-width'], '900px');
+
+  // A page that reflows is left exactly as it was: no declaration anywhere.
+  const reflowing = run({ desktop: 1440, tablet: 768, mobile: 375 });
+  for (const part of Object.values(reflowing)) assert.equal(part['min-width'], undefined, JSON.stringify(reflowing));
 });
 
 test('head: kept when present, filled from the page when missing, and marked auto-generated', () => {

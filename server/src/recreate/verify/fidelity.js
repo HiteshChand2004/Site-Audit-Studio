@@ -83,13 +83,19 @@ export function flagDiff(fidelity, threshold = DIFF_THRESHOLD) {
 export async function measureFidelity(ctx, { root, progress = ctx.progress } = {}) {
   const { ir, site } = ctx.generated;
   const renderer = await siteRenderer(ctx);
+  // The renderer is shared with the generate step, which serves site/. Remember what it was serving so it can be put
+  // back: otherwise every later measurement through the same renderer silently reads dist/.
+  const prevRoot = renderer.server.root;
   if (root) renderer.server.setRoot(root);
   const results = new Map();
   let done = 0;
   const total = site.pages.reduce((n, t) => n + t.views.length, 0);
   progress(0, 'Comparing with the original');
 
-  const { started, failed } = await measureSite(renderer, ir, site, {
+  let started;
+  let failed;
+  try {
+    ({ started, failed } = await measureSite(renderer, ir, site, {
     screenshot: true,
     deadline: (ctx.stepDeadline ?? Infinity) - DEADLINE_MARGIN,
     onView: async (tree, view, result) => {
@@ -117,7 +123,10 @@ export async function measureFidelity(ctx, { root, progress = ctx.progress } = {
       results.set(tree, entry);
       progress(++done / total, `Compared ${done} of ${total} views`);
     },
-  });
+    }));
+  } finally {
+    if (root) renderer.server.setRoot(prevRoot);
+  }
 
   const pages = site.pages.map((t) => {
     const views = results.get(t) ?? {};

@@ -281,6 +281,37 @@ test('a `revert` reset of the flex shorthand is written as longhands (Next.js po
   assert.equal(await run(css), css);
 });
 
+test('the selectors that carry an effect outside the hovered element survive the Next.js CSS pipeline', async (t) => {
+  // Same lesson as `flex: revert` above: a bundler's CSS plugins can rewrite valid CSS, and a rewritten selector
+  // would quietly drop a whole class of hover effects. These three shapes are what emit/motionCss.js writes for a
+  // sibling, an earlier sibling and an ancestor.
+  const { motionCss } = await import('../src/recreate/emit/motionCss.js');
+  const css = motionCss({
+    hover: [{
+      token: 'h1',
+      decls: { color: 'rgb(225, 29, 72)' },
+      kids: [],
+      sibs: [
+        { token: 'h1s1', rel: 'next', decls: { opacity: '0.4' } },
+        { token: 'h1s2', rel: 'prev', decls: { opacity: '0.5' } },
+        { token: 'h1s3', rel: 'ancestor', decls: { 'background-color': 'rgb(241, 245, 249)' } },
+      ],
+    }],
+    focus: [], reveal: [], delays: [], loops: [],
+  }, { tokenOf: new Map(), from: 'index.html', usedVars: new Set() });
+  assert.match(css, /:hover ~ \[data-motion~="h1s1"\]/);
+  assert.match(css, /\[data-motion~="h1s2"\]:has\(~ /);
+  assert.match(css, /\[data-motion~="h1s3"\]:has\(\[data-motion~="h1"\]:hover\)/);
+
+  if (!(await toolchainStatus('next')).installed) return t.diagnostic('next toolchain not installed: the postcss check was skipped');
+  const { createRequire } = await import('node:module');
+  const require = createRequire(path.join(toolchainDir('next'), 'node_modules', 'next', 'package.json'));
+  const postcss = require('postcss');
+  const flexbugs = require('next/dist/compiled/postcss-flexbugs-fixes');
+  const out = (await postcss([flexbugs()]).process(css, { from: undefined })).css;
+  assert.equal(out, css, 'nothing in the selectors is rewritten');
+});
+
 // ---- a real export (needs the next toolchain: npm run setup:toolchains -w server -- next) ----
 
 const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');

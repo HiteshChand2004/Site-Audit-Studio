@@ -161,12 +161,25 @@ export function revealSpec(el) {
  * changed found at the same place inside each member. Effects the stylesheets declare (`source: 'css'`) are already
  * read on every element they apply to.
  */
+/**
+ * What two snapshot paths say about how their elements are related, or null when they cannot say. Only an ancestor
+ * is readable from a path: the index in `div:2` counts same-tag siblings, so it cannot order two elements of
+ * different tags, and which side of an element its neighbour is on is only ever taken from the capture's own
+ * reading of the document order (capture/interactions.js relation()).
+ * @returns {'ancestor'|null}
+ */
+export function relationOf(hostPath, otherPath) {
+  if (!hostPath || !otherPath || hostPath === otherPath) return null;
+  return hostPath.startsWith(`${otherPath}>`) ? 'ancestor' : null;
+}
+
 export function spreadToGroups(list, groups) {
   const bySig = new Map((groups ?? []).filter((g) => g.paths?.length).map((g) => [g.sig, g]));
   if (!bySig.size) return { list, spread: 0 };
   const have = new Set(list.map((e) => e.path));
   const out = [...list];
   let spread = 0;
+  let droppedSibs = 0;
   for (const e of list) {
     const g = e.source !== 'css' && e.sig ? bySig.get(e.sig) : null;
     if (!g) continue;
@@ -177,11 +190,16 @@ export function spreadToGroups(list, groups) {
       const entry = { ...e, path: p, spreadFrom: e.path };
       if (kids.length) entry.kids = kids;
       else delete entry.kids;
+      // A descendant's path is the host's path plus a tail, so it can be rebased onto the other member. A neighbour's
+      // cannot: nothing says which element sits beside THIS member. Carrying them over would point the effect at the
+      // first member's neighbours, so they are dropped and counted instead of guessed at.
+      if (e.sibs?.length) droppedSibs += e.sibs.length;
+      delete entry.sibs;
       out.push(entry);
       spread++;
     }
   }
-  return { list: out, spread };
+  return { list: out, spread, droppedSibs };
 }
 
 /**
@@ -368,8 +386,8 @@ export function applyMotion(site, byPath) {
     pages: 0,
     scrolled: { bars: 0 },
     widgets: { elements: 0, effects: 0, skipped: { noState: 0, renderedOnOpen: 0, unmapped: 0, empty: 0, kinds: {} } },
-    hover: { elements: 0, effects: 0, fromRules: 0, spread: 0, skipped: { script: 0, unmapped: 0, empty: 0 } },
-    focus: { elements: 0, effects: 0, fromRules: 0, spread: 0, skipped: { unmapped: 0, empty: 0 } },
+    hover: { elements: 0, effects: 0, fromRules: 0, spread: 0, sibs: 0, skipped: { script: 0, unmapped: 0, empty: 0, combinator: 0, kidNotDescendant: 0 } },
+    focus: { elements: 0, effects: 0, fromRules: 0, spread: 0, sibs: 0, skipped: { unmapped: 0, empty: 0, combinator: 0, kidNotDescendant: 0 } },
     reveal: { elements: 0, effects: 0, replay: 0, belowFold: 0, skipped: { timed: 0, unmapped: 0, flat: 0 } },
     loops: { carried: 0, rebuilt: 0, skipped: [] },
   };
@@ -425,8 +443,9 @@ export function applyMotion(site, byPath) {
     // Hover and focus: one effect per distinct set of changed values.
     const pseudoDecls = (pseudo) => Object.fromEntries(Object.entries(pseudo ?? {}).map(([which, c]) => [which, changeDecls(c, assetFile)]).filter(([, d]) => Object.keys(d).length));
     for (const [kind, found, prefix, s] of [['hover', [...(motion.hover ?? []), ...extra.hover], 'h', stats.hover], ['focus', [...(motion.focus ?? []), ...extra.focus], 'f', stats.focus]]) {
-      const { list, spread } = spreadToGroups(found, motion.groups);
+      const { list, spread, droppedSibs } = spreadToGroups(found, motion.groups);
       s.spread += spread;
+      if (droppedSibs) s.skipped.spreadSibs = (s.skipped.spreadSibs ?? 0) + droppedSibs;
       for (const entry of list) {
         const node = nodes.get(entry.path);
         if (!node) {
@@ -439,25 +458,57 @@ export function applyMotion(site, byPath) {
         const decls = changeDecls(entry.changes, assetFile);
         const pseudo = pseudoDecls(entry.pseudo);
         const kids = [];
+        const sibs = [];
         for (const k of entry.kids ?? []) {
           const kidNode = nodes.get(k.path);
           const d = changeDecls(k.changes, assetFile);
-          if (kidNode && Object.keys(d).length) kids.push({ node: kidNode, decls: d });
+          if (!kidNode || !Object.keys(d).length) continue;
+          // A "kid" that is not inside the hovered element would be emitted as a descendant selector matching
+          // nothing. Where the paths say what it really is, it is rebuilt as a neighbour instead of being lost.
+          if (!k.path.startsWith(`${entry.path}>`)) {
+            const rel = relationOf(entry.path, k.path);
+            if (rel) sibs.push({ node: kidNode, rel, decls: d });
+            else s.skipped.kidNotDescendant = (s.skipped.kidNotDescendant ?? 0) + 1;
+            continue;
+          }
+          kids.push({ node: kidNode, decls: d });
         }
-        if (!Object.keys(decls).length && !Object.keys(pseudo).length && !kids.length) {
+        // Elements beside or around the hovered one (capture/interactions.js relatedOf): a card grid dimming its
+        // other cards, a nav tinting the rest of the bar.
+        for (const sib of entry.sibs ?? []) {
+          const sibNode = nodes.get(sib.path);
+          const d = changeDecls(sib.changes, assetFile);
+          if (!sibNode || !Object.keys(d).length) continue;
+          const rel = sib.rel ?? relationOf(entry.path, sib.path);
+          if (!rel) {
+            s.skipped.combinator = (s.skipped.combinator ?? 0) + 1;
+            continue;
+          }
+          sibs.push({ node: sibNode, rel, decls: d });
+        }
+        if (!Object.keys(decls).length && !Object.keys(pseudo).length && !kids.length && !sibs.length) {
           s.skipped.empty++;
           continue;
         }
-        const key = JSON.stringify([decls, pseudo, kids.map((k) => k.decls)]);
+        const key = JSON.stringify([decls, pseudo, kids.map((k) => k.decls), sibs.map((x) => [x.rel, x.decls])]);
         let effect = reg[kind].get(key);
         if (!effect) {
-          effect = { token: `${prefix}${reg[kind].size + 1}`, decls, ...(Object.keys(pseudo).length && { pseudo }), kids: kids.map((k, i) => ({ token: `${prefix}${reg[kind].size + 1}k${i + 1}`, decls: k.decls })) };
+          const n = reg[kind].size + 1;
+          effect = {
+            token: `${prefix}${n}`,
+            decls,
+            ...(Object.keys(pseudo).length && { pseudo }),
+            kids: kids.map((k, i) => ({ token: `${prefix}${n}k${i + 1}`, decls: k.decls })),
+            ...(sibs.length && { sibs: sibs.map((x, i) => ({ token: `${prefix}${n}s${i + 1}`, rel: x.rel, decls: x.decls })) }),
+          };
           reg[kind].set(key, effect);
           s.effects++;
         }
         tokenize(node, effect.token);
         kids.forEach((k, i) => tokenize(k.node, effect.kids[i].token));
+        sibs.forEach((x, i) => tokenize(x.node, effect.sibs[i].token));
         s.elements++;
+        s.sibs = (s.sibs ?? 0) + sibs.length;
         if (entry.source === 'css') s.fromRules++;
       }
     }

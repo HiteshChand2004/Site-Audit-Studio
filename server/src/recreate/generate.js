@@ -22,7 +22,11 @@ import { buildIR, prepareSite, readPageCaptures } from './ir/index.js';
 import { MOTION_VERSION, applyMotion, readPageMotion } from './ir/motion.js';
 import { addStructuredData } from './ir/structuredData.js';
 import { isElement } from './ir/tree.js';
+import { VIEW_WIDTHS } from './views.js';
 import { compareLayout, openRenderer, planFixes, renderPage, viewScore } from './verify/layout.js';
+import { createLedger } from './verify/ledger.js';
+import { CORRECT_BUDGET, CORRECT_MIN, correctLayout } from './verify/correct.js';
+import { CSS_FILE } from './emit/css.js';
 import { REFINE_PAGES, refineResponsive } from './verify/refine.js';
 
 export const FIT_ROUNDS = 2;
@@ -36,6 +40,10 @@ const IMAGES_BUDGET = 60000;
 const WP_BUDGET = 30000;
 // Time for the breakpoint / fluid type check against the original's sweep.
 const REFINE_BUDGET = 90000;
+// The self-correction loop's own time. It is taken from the step's limit before the refine check, never from it:
+// generate is local work (no network, no capture), so a longer generate never changes what was captured.
+// SAS_CORRECT=0 turns the loop off; everything else behaves exactly as it did before.
+const correctOn = () => process.env.SAS_CORRECT !== '0';
 // How long that check waits for the sweep's first pages when the sweep is still running.
 const SWEEP_WAIT = 75000;
 
@@ -65,19 +73,32 @@ export async function siteRenderer(ctx) {
  * @param {number} [deadline]  no new page is started after this time (ms since epoch)
  * @returns {Promise<{ started: number, failed: { path: string, error: string }[] }>} pages started before the deadline, pages that failed
  */
-export async function measureSite(renderer, ir, site, { screenshot = false, onView, deadline = Infinity, pagesAtOnce = parallelism({ perUnitMB: PAGE_RENDER_MB, max: PAGES_AT_ONCE }) } = {}) {
+export async function measureSite(renderer, ir, site, {
+  screenshot = false, onView, deadline = Infinity, only = null, viewsOf = null, extraOverrides = null,
+  pagesAtOnce = parallelism({ perUnitMB: PAGE_RENDER_MB, max: PAGES_AT_ONCE }),
+} = {}) {
   const measured = emitSite(ir, { ids: true });
-  for (const page of ir.pages) renderer.server.overrides.set(page.outPath, measured.files.get(page.outPath));
+  // `only` (a Set of outPaths) measures a few pages instead of the whole site, and `viewsOf` a few views of each:
+  // the correction loop re-renders its decision pages many times, and `started` / `failed` are then about that
+  // selection. Without them nothing changes for the other callers.
+  // Paired by index, never by object identity: two entries of ir.pages may be the same object.
+  const selected = ir.pages
+    .map((page, i) => ({ page, tree: site.pages[i] }))
+    .filter(({ page }) => !only || only.has(page.outPath));
+  for (const { page } of selected) renderer.server.overrides.set(page.outPath, measured.files.get(page.outPath));
+  // Files to serve beside the pages, re-installed on every call because the override map is cleared below. This is
+  // how a candidate stylesheet is tried without rebuilding the IR or writing anything to disk.
+  for (const [file, body] of Object.entries(extraOverrides ?? {})) renderer.server.overrides.set(file, body);
   // Per page, in page order whatever order they finish in: undefined = not started (deadline), null = rendered, else its error.
-  const outcome = new Array(ir.pages.length);
+  const outcome = new Array(selected.length);
   try {
-    await mapLimit(ir.pages, pagesAtOnce, async (page, i) => {
+    await mapLimit(selected, pagesAtOnce, async ({ page, tree }, i) => {
       // Pages start in order, so the ones left out by the deadline are the last ones.
       if (Date.now() > deadline) return;
-      const tree = site.pages[i];
       outcome[i] = null;
       try {
-        await Promise.all(tree.views.map(async (view) => {
+        const views = viewsOf ? tree.views.filter((v) => viewsOf(tree).includes(v)) : tree.views;
+        await Promise.all(views.map(async (view) => {
           const result = await renderPage(renderer, page.outPath, view, { screenshot });
           await onView(tree, view, result);
         }));
@@ -86,13 +107,13 @@ export async function measureSite(renderer, ir, site, { screenshot = false, onVi
       }
     });
     const notStarted = outcome.findIndex((o) => o === undefined);
-    const started = notStarted < 0 ? ir.pages.length : notStarted;
+    const started = notStarted < 0 ? selected.length : notStarted;
     const failed = [];
     let firstError = null;
     outcome.slice(0, started).forEach((err, i) => {
       if (!err) return;
       firstError ??= err;
-      failed.push({ path: site.pages[i].info.path, error: String(err?.message ?? err).split('\n')[0].trim() });
+      failed.push({ path: selected[i].tree.info.path, error: String(err?.message ?? err).split('\n')[0].trim() });
     });
     if (started && failed.length === started) throw firstError;
     return { started, failed };
@@ -245,20 +266,37 @@ export async function generateStage(ctx) {
 
   // Fit pass.
   const fit = { rounds: 0, widthFixes: 0, heightFixes: 0, layoutBefore: null, layoutAfter: null, undone: false, stopped: null };
+  // What is still off, element by element. Lives on `site` so rebuilding the IR cannot lose it, and is filled from the
+  // measurements the fit pass already takes.
+  const ledger = (site.ledger ??= createLedger());
   const renderer = await siteRenderer(ctx);
   let saved = null;
+  // The last round's per-page/view measurements, so the correction loop can pick the worst pages without measuring
+  // the whole site again.
+  let lastViews = [];
+  // What this step still has to do after the fit pass: correct the layout against the original, then check the
+  // breakpoints. The fit pass used to run until FIT_MARGIN before the step's limit and leave them nothing - on a
+  // 64-page rebuild it used the whole step and the correction loop was skipped before it measured anything.
+  const afterFit = correctOn() ? CORRECT_BUDGET + REFINE_BUDGET : 0;
   for (let round = 0; round <= FIT_ROUNDS; round++) {
-    if (Date.now() > ctx.stepDeadline - FIT_MARGIN) {
+    // Round 0 only measures, and the correction loop picks its pages from what it measures, so it always runs.
+    if (Date.now() > ctx.stepDeadline - FIT_MARGIN - (round ? afterFit : 0)) {
       fit.stopped = 'time-limit';
       break;
     }
     ctx.progress(0.3 + 0.6 * (round / (FIT_ROUNDS + 1)), round ? `Fitting layout (round ${round} of ${FIT_ROUNDS})` : 'Checking layout');
     const views = [];
+    ledger.beginRound(round);
     const { failed } = await measureSite(renderer, ir, site, {
       onView: (tree, view, result) => {
-        views.push({ tree, view, rects: result.rects, score: viewScore(compareLayout(tree.root, view, result.rects), null) });
+        // The same comparison as before, with the per-element pairs kept instead of thrown away: the correction loop
+        // and the report both need to know WHICH elements are off, not only how many. No extra render.
+        const cmp = compareLayout(tree.root, view, result.rects, { pairs: true });
+        ledger.observe({ page: tree.info.path, view, rows: cmp.pairs });
+        views.push({ tree, view, rects: result.rects, scrollHeight: result.scrollHeight, score: viewScore(cmp, null) });
       },
     });
+    lastViews = views;
     // A page the browser could not render keeps the layout it has (no fixes planned for it this round).
     for (const f of failed) if (!fit.failed?.some((x) => x.path === f.path)) (fit.failed ??= []).push(f);
     const score = Math.round(views.reduce((n, x) => n + x.score, 0) / Math.max(1, views.length));
@@ -290,6 +328,41 @@ export async function generateStage(ctx) {
     ({ ir, stats } = build());
     out = emitSite(ir);
     await writeSite(siteDir, out, assetsDir, known);
+  }
+  fit.ledger = ledger.summary();
+
+  // The self-correction loop (verify/correct.js). The fit pass can only add a width or a min-height, and on a real
+  // site it runs out of things it is allowed to do long before the copy matches: this decides what else to change
+  // from the per-element differences the ledger now holds, tries each candidate as an override of css/site.css
+  // (no rebuild, nothing written), and keeps only what measured closer to the original on every page and view.
+  let correct = null;
+  if (correctOn()) {
+    const correctDeadline = Math.min(Date.now() + CORRECT_BUDGET, ctx.stepDeadline - FIT_MARGIN - REFINE_BUDGET);
+    if (correctDeadline - Date.now() >= CORRECT_MIN) {
+      ctx.progress(0.75, 'Correcting the layout against the original');
+      try {
+        correct = await correctLayout({
+          measure: (opts) => measureSite(renderer, ir, site, opts),
+          ir,
+          site,
+          ledger,
+          baseCss: out.files.get(CSS_FILE),
+          candidates: lastViews.map((x) => ({ path: x.tree.info.path, outPath: x.tree.info.outPath, view: x.view, score: x.score, scrollHeight: x.scrollHeight })),
+          shotOf: (tree, view) => path.join(ctx.dir, 'capture', tree.info.slug, `${view}-full.webp`),
+          deadline: correctDeadline,
+          progress: (f, message) => ctx.progress(0.75 + 0.1 * f, message),
+        });
+      } catch (err) {
+        // A correction pass that fails leaves the copy exactly as the fit pass left it.
+        correct = { stopped: 'error', error: err.message.split('\n')[0], rounds: 0, applied: 0, reverted: 0 };
+        report.warnings.push(`The layout could not be corrected against the original: ${correct.error}`);
+      }
+      if (correct?.applied) {
+        ({ ir, stats } = build());
+        out = emitSite(ir);
+        await writeSite(siteDir, out, assetsDir, known);
+      }
+    } else correct = { stopped: 'time-limit', rounds: 0, applied: 0, reverted: 0 };
   }
 
   // Breakpoints and fluid type, checked against the original's sweep screenshots (verify/refine.js). Only
@@ -382,6 +455,13 @@ export async function generateStage(ctx) {
     assetFiles: siteAssets.length,
     generatedFiles: ir.files.map((f) => f.path),
     fit,
+    correct,
+    // Pages and views where the original does not reflow - its layout stays wider than the screen and overflows
+    // sideways. The copy keeps those widths instead of shrinking to the screen (ir/index.js noReflowViews), which
+    // is the difference between a narrow page that matches and one two or three times too tall.
+    noReflow: site.pages.flatMap((t) => (t.noReflow ?? []).map((view) => ({
+      page: t.info.path, view, width: Math.round(t.root.views[view]?.rect?.[2] ?? 0), viewport: VIEW_WIDTHS[view] ?? null,
+    }))).slice(0, 100),
     responsive: refined?.summary ?? null,
     motion: { ...motion.stats, script: Boolean(ir.motion?.script) },
     images: images.stats,

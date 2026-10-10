@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
 import { flagDiff } from '../src/recreate/verify/fidelity.js';
-import { visualDiff } from '../src/recreate/verify/visualDiff.js';
+import { toPageBox, visualDiff } from '../src/recreate/verify/visualDiff.js';
 
 const temps = [];
 after(async () => {
@@ -127,4 +127,62 @@ test('diff flags: pages and views under the threshold are marked, with warnings'
   const w2 = flagDiff(ok, 65);
   assert.equal(ok.diff.status, 'mixed');
   assert.match(w2[0], /below 65 on 1 page: \/x \(60\)/);
+});
+
+// --- Per-block maps and mismatch regions (the correction loop's localization). ---
+
+test('the block scores and the regions are off unless asked for', async () => {
+  const a = await page();
+  const plain = await visualDiff(a, await page({ block: [255, 255, 255] }));
+  assert.equal(plain.regions, undefined, 'the existing callers get exactly what they got before');
+  assert.equal(plain.blocks, undefined);
+
+  const d = await visualDiff(a, a, { regions: true, blocks: true });
+  assert.deepEqual(d.regions, [], 'identical pages differ nowhere');
+  // 800 px wide scaled to 384 with 8 px blocks, 2000 px tall; the layout scale is 96 wide with 4 px blocks.
+  assert.deepEqual([d.blocks.detail.cols, d.blocks.detail.rows], [48, 120]);
+  assert.deepEqual([d.blocks.layout.cols, d.blocks.layout.rows], [24, 60]);
+  assert.equal(d.blocks.detail.scores.length, 48 * 120);
+  assert.equal(d.blocks.detail.both, 120, 'both pages have every row');
+});
+
+test('a missing hero is one coarse region, where the hero is', async () => {
+  const a = await page();
+  const d = await visualDiff(a, await page({ block: [255, 255, 255] }), { regions: true });
+  assert.equal(d.regions.length, 1, JSON.stringify(d.regions));
+  const [r] = d.regions;
+  assert.equal(r.coarse, true, 'a block that is not there is a difference of geometry, not of anti-aliasing');
+  assert.equal(r.onlyOne, false);
+  assert.ok(r.score < 0.3, `${r.score}`);
+  // The hero is y 300–700 of 2000 (0.15–0.35) and x 100–700 of 800 (0.125–0.875).
+  assert.ok(r.fy >= 0.1 && r.fy <= 0.2, `fy ${r.fy}`);
+  assert.ok(r.fy + r.fh >= 0.3 && r.fy + r.fh <= 0.4, `fy+fh ${r.fy + r.fh}`);
+  assert.ok(r.fx >= 0.05 && r.fx <= 0.15, `fx ${r.fx}`);
+  assert.ok(r.fx + r.fw >= 0.8 && r.fx + r.fw <= 0.95, `fx+fw ${r.fx + r.fw}`);
+
+  // Back in the page's own pixels, which is where the element boxes live.
+  const box = toPageBox(r, { width: W, height: H });
+  assert.ok(box.y >= 250 && box.y <= 320, `y ${box.y}`);
+  assert.ok(box.h >= 380 && box.h <= 480, `h ${box.h}`);
+  assert.ok(box.x >= 50 && box.x <= 130, `x ${box.x}`);
+});
+
+test('text shifted by 2 px is never a coarse region (nothing to correct)', async () => {
+  // The guard that keeps the loop from chasing font rendering: thin structure a couple of pixels out ruins the detail
+  // scale and leaves the layout scale alone, so no corrector may act on it.
+  const a = await page();
+  const d = await visualDiff(a, await page({ shiftY: 2 }), { regions: true });
+  assert.ok(d.scales.detail < d.scales.layout, `detail ${d.scales.detail} layout ${d.scales.layout}`);
+  assert.equal(d.regions.filter((r) => r.coarse).length, 0, JSON.stringify(d.regions));
+});
+
+test('a wrong page height is reported as one region, marked onlyOne', async () => {
+  const a = await page();
+  const d = await visualDiff(a, await page({ height: 2600 }), { regions: true });
+  const tail = d.regions.filter((r) => r.onlyOne);
+  assert.equal(tail.length, 1);
+  // 2000 of 2600 is 0.769 down the longer page.
+  assert.ok(tail[0].fy >= 0.73 && tail[0].fy <= 0.8, `fy ${tail[0].fy}`);
+  assert.ok(tail[0].fy + tail[0].fh >= 0.99);
+  assert.equal(tail[0].fw, 1, 'the whole width is missing, not a part of it');
 });

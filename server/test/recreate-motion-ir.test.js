@@ -7,6 +7,7 @@ import path from 'node:path';
 import { emitCss } from '../src/recreate/emit/css.js';
 import { emitPage, emitSite } from '../src/recreate/emit/html.js';
 import { MOTION_FILE, MOTION_JS } from '../src/recreate/emit/motionScript.js';
+import { motionCss } from '../src/recreate/emit/motionCss.js';
 import { applyMotion, irRepeat, revealSpec, scriptLoop } from '../src/recreate/ir/motion.js';
 import { launchBrowser } from '../src/audit/render.js';
 import { scanSite } from '../src/recreate/verify/safety.js';
@@ -18,7 +19,8 @@ const makeSite = () => {
   const spinner = node('body>div:3', 'div', [], { 'animation-name': 'spin' });
   const arrow = node('body>a:1>span:1', 'span');
   const link = node('body>a:1', 'a', [arrow]);
-  const link2 = node('body>a:2', 'a');
+  const arrow2 = node('body>a:2>span:1', 'span');
+  const link2 = node('body>a:2', 'a', [arrow2]);
   const h2 = node('body>section:1>h2:1', 'h2');
   const p = node('body>section:1>p:1', 'p');
   const p2 = node('body>section:1>p:2', 'p');
@@ -33,7 +35,7 @@ const makeSite = () => {
   const rotator = node('body>div:2', 'div', [], { 'animation-name': 'words' });
   const pinned = node('body>div:7', 'div');
   const root = node('body', 'body', [hero, rotator, link, link2, node('body>section:1', 'section', [h2, p, p2]), spinner, waapi, spin, sine, pinned, wrapped]);
-  return { site: { pages: [{ info: { path: '/', url: 'http://x.test/' }, root }], assetResolve: (u) => (/hero\.png$/.test(u) ? 'images/hero.png' : null) }, nodes: { link, link2, arrow, h2, p, p2, spinner, waapi, spin, sine, wrapped, hero, rotator, pinned } };
+  return { site: { pages: [{ info: { path: '/', url: 'http://x.test/' }, root }], assetResolve: (u) => (/hero\.png$/.test(u) ? 'images/hero.png' : null) }, nodes: { link, link2, arrow, arrow2, h2, p, p2, spinner, waapi, spin, sine, wrapped, hero, rotator, pinned } };
 };
 const reveal = (path, extra = {}) => ({
   path, tag: 'p', text: '', rect: [0, 900, 100, 40],
@@ -48,7 +50,7 @@ const timed = { kind: 'timed', step: 0, topBefore: 0.2, topAfter: 0.1 };
 const motionFile = () => ({
   hover: [
     { path: 'body>a:1', tag: 'a', changes: { color: ['rgb(17, 17, 17)', 'rgb(225, 29, 72)'] }, kids: [{ path: 'body>a:1>span:1', changes: { opacity: ['0', '1'] } }], pseudo: { after: { width: ['0px', '100%'] } }, domDelta: 0 },
-    { path: 'body>a:2', tag: 'a', changes: { color: ['rgb(17, 17, 17)', 'rgb(225, 29, 72)'] }, kids: [{ path: 'body>a:1>span:1', changes: { opacity: ['0', '1'] } }], pseudo: { after: { width: ['0px', '100%'] } }, domDelta: 0 },
+    { path: 'body>a:2', tag: 'a', changes: { color: ['rgb(17, 17, 17)', 'rgb(225, 29, 72)'] }, kids: [{ path: 'body>a:2>span:1', changes: { opacity: ['0', '1'] } }], pseudo: { after: { width: ['0px', '100%'] } }, domDelta: 0 },
     { path: 'body>a:9', tag: 'a', changes: { color: ['a', 'b'] }, domDelta: 0 },
     { path: 'body>a:1', tag: 'a', changes: { 'background-image': ['none', 'url("https://cdn.test/missing.png")'] }, domDelta: 0 },
     { path: 'body>a:2', tag: 'a', changes: { color: ['a', 'b'] }, domDelta: 2 },
@@ -138,6 +140,32 @@ test('revealSpec: a from-state relative to the element, timing and easing from t
   assert.equal(odd.easing, 'ease');
 });
 
+test('an effect reaching outside the hovered element becomes plain CSS, no script', () => {
+  const opts = { tokenOf: new Map(), from: 'index.html', usedVars: new Set() };
+  const css = motionCss({
+    hover: [{
+      token: 'h1',
+      decls: { color: 'rgb(225, 29, 72)' },
+      kids: [],
+      sibs: [
+        { token: 'h1s1', rel: 'next', decls: { opacity: '0.4' } },
+        { token: 'h1s2', rel: 'prev', decls: { opacity: '0.5' } },
+        { token: 'h1s3', rel: 'ancestor', decls: { 'background-color': 'rgb(241, 245, 249)' } },
+      ],
+    }],
+    focus: [],
+    reveal: [], delays: [], loops: [],
+  }, opts);
+  // Forwards the sibling combinator reaches it directly; backwards and upwards need :has(), which is the shape the
+  // widget rules already ship.
+  assert.match(css, /\[data-motion~="h1"\]:hover ~ \[data-motion~="h1s1"\]/);
+  assert.match(css, /\[data-motion~="h1s2"\]:has\(~ \[data-motion~="h1"\]:hover\)/);
+  assert.match(css, /\[data-motion~="h1s3"\]:has\(\[data-motion~="h1"\]:hover\)/);
+  assert.match(css, /@media \(hover: hover\)/, 'a touch screen would keep the state after a tap');
+  assert.ok(css.includes('opacity: 0.4'));
+  assert.equal(/script|js-motion/.test(css), false, 'nothing here needs the script');
+});
+
 test('applyMotion: tokens on mapped elements, shared effects, skipped cases counted', () => {
   const { site, nodes } = makeSite();
   const { motion, stats } = applyMotion(site, new Map([['/', motionFile()]]));
@@ -147,6 +175,7 @@ test('applyMotion: tokens on mapped elements, shared effects, skipped cases coun
   // link2 also has an effect that adds elements (a script's): its style part is rebuilt (h2), the DOM part counted as skipped.
   assert.deepEqual(nodes.link2.motionTokens, ['h1', 'h2', 'f1']);
   assert.deepEqual(nodes.arrow.motionTokens, ['h1k1']);
+  assert.deepEqual(nodes.arrow2.motionTokens, ['h1k1'], 'the shared effect puts the same kid token on the other link');
   assert.equal(motion.hover.length, 2); // + link2's style part of the effect that also adds elements
   assert.deepEqual(motion.hover[0].decls, { color: 'rgb(225, 29, 72)' });
   assert.deepEqual(motion.hover[0].pseudo, { after: { width: '100%' } });
