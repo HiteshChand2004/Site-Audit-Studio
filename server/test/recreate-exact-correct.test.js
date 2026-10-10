@@ -188,6 +188,32 @@ test('a round is judged on one width per view, and carries the other widths forw
   assert.deepEqual(firstRound.slots, []);
 });
 
+test('the opening measurement covers every slot, not only the four a round is judged on', async () => {
+  // It is the before of the whole run, and the per-page verification compares against it. Judge on four and
+  // measure the before on four, and a width inside a view has no number to be compared with - so harm there
+  // could not be detected at all. This is the guarantee the cheap rounds are affordable because of.
+  const widths = [1920, 1440, 1280, 1024, 768, 430, 375, 320];
+  const slots = widths.map((w) => ({ id: String(w), width: w, height: 800, dpr: 1, mobile: w < 768, hasTouch: w < 768 }));
+  const asked = [];
+  await correctExact({
+    renderer: {
+      origin: 'http://127.0.0.1:0',
+      server: { overrides: new Map() },
+      context: async (slot) => { asked.push(slot.id); throw new Error('no browser in this test'); },
+    },
+    baseline: {
+      slots,
+      pages: [{ path: '/', slug: 'index', slots: slots.map((s) => ({ id: s.id, pageHeight: 1000, bands: [{ file: 'b.webp', top: 0, height: 800 }], boxes: { file: 'b.json.gz' } })) }],
+    },
+    site: { pages: [{ info: { path: '/', slug: 'index', outPath: 'index.html' }, root: { tag: 'body', children: [] }, views: ['desktop'] }] },
+    ir: { pages: [], breakpoints: {} },
+    ledger: createLedger(),
+    baseCss: '',
+    workspace: '/nowhere',
+  });
+  assert.deepEqual(asked.sort(), [...widths].map(String).sort(), 'every slot of the page');
+});
+
 test('a page that does not hold up is put back exactly as it was', () => {
   // The revert has to be exact, or a refused page keeps half a correction.
   const leaf = { tag: 'p', children: [], fix: { desktop: { decls: { gap: '4px' } } } };

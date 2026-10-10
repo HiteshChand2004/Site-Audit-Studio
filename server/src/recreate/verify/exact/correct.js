@@ -272,8 +272,14 @@ export async function correctExact({
   const round = makeExactRound({ renderer, baseline, treeOf, workspace, cpathOf, deadline });
   const out = { pages: [], rounds: 0, applied: 0, reverted: 0, elements: 0, byCorrector: {}, stopped: null, scoreBefore: null, scoreAfter: null };
 
-  // Worst page first, measured once with no override, so the loop spends its rounds where they count.
-  const first = await round({ site, ledger, css: baseCss, round: 0, pages: [...treeOf.keys()].filter((p) => baseline.pages.some((b) => b.path === p)) });
+  // Worst page first, measured once with no override, so the loop spends its rounds where they count. This one
+  // measures **every** slot, not just the four a round is judged on: it is the before of the whole run, and the
+  // per-page verification compares against it. Judge on four and measure the before on four, and a width inside
+  // a view would have no number to be compared with - so harm there could not be detected at all.
+  const first = await round({
+    site, ledger, css: baseCss, round: 0, all: true,
+    pages: [...treeOf.keys()].filter((p) => baseline.pages.some((b) => b.path === p)),
+  });
   if (!first.slots.length) {
     out.stopped = 'nothing-to-measure';
     return out;
