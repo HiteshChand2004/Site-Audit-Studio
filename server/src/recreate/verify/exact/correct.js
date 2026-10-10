@@ -37,6 +37,26 @@ export const PIXEL_FLOOR_PCT = 5;
 /** A box within this many pixels is where it should be (the same tolerance the comparison reports). */
 export const BOX_TOLERANCE = 1;
 
+/**
+ * The slots a round is judged on: one width per view - the view's own capture width where the baseline has it,
+ * else the narrowest slot of that view, the width most likely to show a difference. Deterministic, so two runs
+ * judge on the same slots.
+ *
+ * Measuring all eighteen slots every round is what made one page cost twenty minutes on flexibench, and it is
+ * more than the judgement needs: a corrector writes its value for every view the element exists in, so one width
+ * per view already catches a change that helps one layout and hurts another. What a width *inside* a view does
+ * differently from its neighbour is caught by the full verification once per page, before anything is kept.
+ */
+export function judgingSlots(slots) {
+  const byView = new Map();
+  for (const slot of [...slots].sort((x, y) => x.width - y.width)) {
+    const view = viewForWidth(slot.width);
+    const current = byView.get(view);
+    if (!current || slot.width === VIEW_WIDTHS[view]) byView.set(view, slot);
+  }
+  return new Set([...byView.values()].map((s) => s.id));
+}
+
 /** Every node's per-view fixes for one page, so a page that does not hold up can be put back exactly. */
 export function snapshotFixes(tree) {
   const saved = new Map();
@@ -135,14 +155,14 @@ export function slotScore({ diffRaw, boxes, heightOriginal, heightCopy }) {
 export function makeExactRound({ renderer, baseline, treeOf, workspace, cpathOf = null, deadline = Infinity }) {
   const byPage = new Map(baseline.pages.map((p) => [p.path, p]));
   return async function exactRound({ site, ledger, css, round, pages, trials = [], base = null, all = false }) {
-    // A declaration is written for one view, so it can only change the slots that view governs: a laptop fix cannot
-    // move what a 375 px phone renders. Measuring all eighteen slots every round cost eleven minutes a round on a
-    // real site (flexibench, measured) and fifteen of those eighteen renders only proved that nothing else moved.
-    // So a round measures the views it touches and carries the rest forward from the previous measurement, and
-    // correctExact then checks the whole page once before keeping anything (verify(), below) - the same guarantee,
-    // paid once per page instead of once per round.
-    const touched = new Set(trials.flatMap((t) => Object.keys(t.byView ?? {})));
-    const wanted = (slot) => all || !touched.size || !base || touched.has(viewForWidth(slot.width));
+    // A declaration is written for one view, so it can only change the slots that view governs: a laptop fix
+    // cannot move what a 375 px phone renders. Measuring all eighteen slots every round cost eleven minutes a
+    // round on a real site (flexibench, measured) and most of those renders only proved that nothing else moved.
+    // So a round is judged on one slot per view and carries the rest forward from the previous measurement, and
+    // correctExact then checks every slot of the page once before keeping anything (the verification below) -
+    // the same guarantee, paid once per page instead of once per round.
+    const judging = judgingSlots(baseline.slots);
+    const wanted = (slot) => all || judging.has(slot.id);
     ledger.beginRound(round);
     const slots = [];
     const rects = new Map();
@@ -160,16 +180,16 @@ export function makeExactRound({ renderer, baseline, treeOf, workspace, cpathOf 
           const slot = baseline.slots.find((s) => s.id === slotBaseline.id);
           if (!slot || !slotBaseline.bands?.length) continue;
           const view = viewForWidth(slot.width);
-          // Not reachable by what is being tried: its previous numbers stand, marked as carried so the report can
-          // say which were re-measured.
+          // Not one of the slots this round is judged on: its previous numbers stand where there are any, marked
+          // as carried so the report can say which were re-measured.
           if (!wanted(slot)) {
-            const previous = base.slots.find((s) => s.page === pagePath && s.slot === slot.id);
+            const previous = base?.slots.find((s) => s.page === pagePath && s.slot === slot.id);
             if (previous) {
               slots.push({ ...previous, carried: true });
               const r = base.rects.get(slotKey(pagePath, view));
               if (r) rects.set(slotKey(pagePath, view), r);
-              continue;
             }
+            continue;
           }
           // A slot that cannot be measured is counted and skipped, never guessed at: a round judged on half its
           // slots could accept a change that made the others worse. With nothing measured at all the round scores

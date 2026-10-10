@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  correctExact, exactRows, makeExactRound, slotScore, viewForWidth, GOOD_ENOUGH_PCT, PIXEL_FLOOR_PCT, ROUNDS_PER_PAGE,
+  correctExact, exactRows, judgingSlots, makeExactRound, slotScore, viewForWidth, GOOD_ENOUGH_PCT, PIXEL_FLOOR_PCT, ROUNDS_PER_PAGE,
 } from '../src/recreate/verify/exact/correct.js';
 import { createLedger } from '../src/recreate/verify/ledger.js';
 import { restoreFixes, snapshotFixes } from '../src/recreate/verify/exact/correct.js';
@@ -74,7 +74,7 @@ test('the box differences are handed to the ledger in the vocabulary it already 
   assert.ok(ledger.summary());
 });
 
-test('a round reports one slot per page and view, the worst standing for the view', async () => {
+test('a round opens one width per view, the narrower where a view has two', async () => {
   // Two slots, 1025 and 1440, which are two different views - and 1280, which shares "laptop" with 1025.
   const slots = [
     { id: '1440', width: 1440, height: 900, dpr: 1, mobile: false, hasTouch: false },
@@ -99,8 +99,8 @@ test('a round reports one slot per page and view, the worst standing for the vie
   const ledger = createLedger();
   const round = makeExactRound({ renderer, baseline, treeOf, workspace: '/nowhere' });
   const r = await round({ site: { pages: [] }, ledger, css: 'body{}', round: 1, pages: ['/'] });
-  // Every slot was attempted, in the order the baseline holds them.
-  assert.deepEqual(asked, ['1440', '1280', '1025']);
+  // 1280 and 1025 are both the laptop view, so only the narrower of the two was opened.
+  assert.deepEqual(asked, ['1440', '1025']);
   // None could be measured here, so nothing is claimed: an empty round, not a perfect one.
   assert.deepEqual(r.slots, []);
   assert.equal(r.score, 0);
@@ -130,12 +130,14 @@ test('the budget is rounds, not a clock, and it is five per page', () => {
   assert.equal(GOOD_ENOUGH_PCT, 0.5);
 });
 
-test('a round measures only the slots the change can reach, and carries the rest forward', async () => {
-  // A declaration written for the laptop view cannot move what a 375 px phone renders, so re-measuring it proves
-  // nothing. On flexibench, measuring all eighteen slots cost eleven minutes a round and fifteen of those renders
-  // only confirmed that nothing else had moved.
+test('a round is judged on one width per view, and carries the other widths forward', async () => {
+  // Measuring all eighteen slots a round cost eleven minutes on flexibench, and most of those renders only
+  // confirmed that nothing else had moved. A corrector writes its value for every view the element exists in,
+  // so one width per view - the view's own capture width - already shows a change that helps one layout and
+  // hurts another; what a width inside a view does differently is caught by the verification pass below.
   const widths = [1920, 1440, 1280, 1279, 1024, 1023, 810, 768, 430, 375];
   const slots = widths.map((w) => ({ id: String(w), width: w, height: 800, dpr: 1, mobile: w < 768, hasTouch: w < 768 }));
+  assert.deepEqual([...judgingSlots(slots)].sort(), ['1024', '1440', '375', '768'], 'one per view');
   const asked = [];
   const renderer = {
     origin: 'http://127.0.0.1:0',
@@ -158,15 +160,15 @@ test('a round measures only the slots the change can reach, and carries the rest
     trials: [{ byView: { laptop: { gap: '8px' } } }],
     base,
   });
-  // Only the three laptop widths were opened; the other seven kept the numbers they had.
-  assert.deepEqual(asked.sort(), ['1024', '1279', '1280']);
-  assert.equal(r.carried, 7);
-  // In this test there is no browser, so those three could not be measured - and a round with a slot it could
-  // not measure is unjudgeable: its score is nothing, which is what makes the loop refuse it rather than read the
-  // carried slots as 'no worse'.
-  assert.equal(r.failed, 3);
+  // Only the four judged widths were opened; the other six kept the numbers they had.
+  assert.deepEqual(asked.sort(), ['1024', '1440', '375', '768']);
+  assert.equal(r.carried, 6);
+  // In this test there is no browser, so those four could not be measured - and a round with a slot it could
+  // not measure is unjudgeable: its score is nothing, which is what makes the loop refuse it rather than read
+  // the carried slots as 'no worse'.
+  assert.equal(r.failed, 4);
   assert.equal(r.score, 0);
-  assert.equal(r.slots.length, 7, 'the seven it could carry');
+  assert.equal(r.slots.length, 6, 'the six it could carry');
   assert.ok(r.slots.every((s) => s.carried && s.score === 50));
 
   // The verification pass asks for everything, whatever is being tried.
@@ -176,6 +178,14 @@ test('a round measures only the slots the change can reach, and carries the rest
     trials: [{ byView: { laptop: { gap: '8px' } } }], base, all: true,
   });
   assert.equal(asked.length, 10, 'every slot of the page');
+
+  // And a first round, with nothing to carry, is judged on the same four: a round that measured everything the
+  // first time and four slots afterwards could not compare the two.
+  asked.length = 0;
+  const firstRound = await round({ site: { pages: [] }, ledger: createLedger(), css: 'body{}', round: 0, pages: ['/'] });
+  assert.deepEqual(asked.sort(), ['1024', '1440', '375', '768']);
+  assert.equal(firstRound.carried, 0, 'nothing to carry, and nothing invented either');
+  assert.deepEqual(firstRound.slots, []);
 });
 
 test('a page that does not hold up is put back exactly as it was', () => {
