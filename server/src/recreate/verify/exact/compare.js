@@ -110,7 +110,7 @@ const maskAreas = (boxes) => boxes
  *   cpathOf?: Function, noise?: number }} o  baseline: the slot's entry from the capture's exact/index.json
  */
 export async function compareSlot({
-  renderer, slot, baseline, page, workspace, deadline = Infinity, cpathOf = null, noise = 0,
+  renderer, slot, baseline, page, workspace, deadline = Infinity, cpathOf = null, noise = 0, excludedTexts = null,
 }) {
   const started = Date.now();
   const outDir = fidelityExactDir(workspace, page.slug);
@@ -142,8 +142,27 @@ export async function compareSlot({
     // Shot by the same function as the original, into the fidelity folder, at the same band offsets.
     const bands = await shootBands(p, slot, recipe.height, outDir, `copy-${slot.id}`);
 
-    // Pixels, band by band, so a tall page never holds more than one band of each side in memory.
+    // The original's index, read before anything is compared: what the copy left out on purpose (ir/exclude.js)
+    // must not be counted against it, neither as a missing box nor as a differing pixel.
+    let theirs = null;
+    let excludedBoxes = 0;
     const exclude = maskAreas(index.boxes);
+    if (baseline.boxes?.file) {
+      const saved = JSON.parse(gunzipSync(await readFile(path.join(inDir, baseline.boxes.file))));
+      theirs = saved.boxes;
+      if (excludedTexts?.size) {
+        const keep = [];
+        for (const b of theirs) {
+          if (b.key && excludedTexts.has(b.key)) {
+            excludedBoxes++;
+            exclude.push({ x: b.rect[0], y: b.rect[1], w: b.rect[2], h: b.rect[3], cause: 'excluded' });
+          } else keep.push(b);
+        }
+        theirs = keep;
+      }
+    }
+
+    // Pixels, band by band, so a tall page never holds more than one band of each side in memory.
     let diff = 0;
     let antialiased = 0;
     let masked = 0;
@@ -171,11 +190,7 @@ export async function compareSlot({
     const diffRaw = total ? Math.round(((diff + heightOnlyOne) / total) * 1e6) / 1e4 : 0;
 
     // Boxes, against the index saved with the baseline.
-    let boxes = null;
-    if (baseline.boxes?.file) {
-      const saved = JSON.parse(gunzipSync(await readFile(path.join(inDir, baseline.boxes.file))));
-      boxes = compareBoxes(saved.boxes, index.boxes, { cpathOf });
-    }
+    const boxes = theirs ? compareBoxes(theirs, index.boxes, { cpathOf }) : null;
 
     // Only a slot that failed keeps pictures: a map of where, and the worst few places magnified.
     const limit = Math.max(DIFF_LIMIT_PCT, noise * 2);
@@ -223,6 +238,7 @@ export async function compareSlot({
       limit,
       noise,
       ...(boxes && { boxes }),
+      ...(excludedBoxes && { excludedBoxes }),
       heightOk,
       pixelsOk,
       boxesOk,
@@ -248,6 +264,7 @@ export async function compareSlot({
  */
 export async function compareExact({
   root, workspace, baseline, pages, scripts = true, cpathOf = null, deadline = Infinity, progress = null, noise = {},
+  excluded = [],
 }) {
   const renderer = await openExactRenderer(root, { scripts });
   const out = [];
@@ -270,6 +287,7 @@ export async function compareExact({
         try {
           slots.push(await compareSlot({
             renderer, slot, baseline: slotBaseline, page, workspace, deadline, cpathOf, noise: noise[slot.id] ?? 0,
+            excludedTexts: excludedFor(excluded, page.path),
           }));
         } catch (err) {
           errors.push({ page: page.path, slot: slotBaseline.id, message: String(err.message ?? err).split('\n')[0].slice(0, 200) });
@@ -283,6 +301,20 @@ export async function compareExact({
     await renderer.close();
   }
   return { pages: out, errors, ...summarise(out) };
+}
+
+/**
+ * The text an excluded part painted, as the box index keys it (ir/exclude.js records the text; boxes.js lowercases
+ * and collapses it). Used to take those boxes and their pixels out of the comparison on the original's side.
+ */
+export function excludedFor(excluded, pagePath) {
+  const texts = new Set();
+  for (const e of excluded ?? []) {
+    if (e.page && e.page !== pagePath) continue;
+    const key = String(e.text ?? '').replace(/s+/g, ' ').trim().toLowerCase();
+    if (key) texts.add(key.slice(0, 120));
+  }
+  return texts;
 }
 
 /** One honest set of numbers for the report, and the causes of what is left. */

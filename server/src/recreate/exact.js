@@ -37,6 +37,8 @@ export async function exactStage(ctx, local = {}) {
     pages,
     scripts,
     noise: baseline.noiseFloor ?? {},
+    // Parts of the page that are not the site and were left out on purpose (ir/exclude.js): not the copy's fault.
+    excluded: report.exact?.excluded ?? [],
     deadline,
     progress: (f, message) => progress?.(f, message),
   });

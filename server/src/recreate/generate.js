@@ -21,6 +21,7 @@ import { fetchWordPress, isWordPress } from './fixers/wordpress.js';
 import { buildIR, prepareSite, readPageCaptures } from './ir/index.js';
 import { MOTION_VERSION, applyMotion, readPageMotion } from './ir/motion.js';
 import { addStructuredData } from './ir/structuredData.js';
+import { applyExcludes, findExcludable } from './ir/exclude.js';
 import { isElement } from './ir/tree.js';
 import { VIEW_WIDTHS } from './views.js';
 import { compareLayout, openRenderer, planFixes, renderPage, viewScore } from './verify/layout.js';
@@ -230,6 +231,27 @@ export async function generateStage(ctx) {
   }
   const motion = applyMotion(site, motionByPath);
   site.motion = motion.motion;
+
+  // Parts of the page that are not the site: the builder's badge, a consent banner, a chat bubble (ir/exclude.js).
+  // Only for an exact copy, only on evidence the capture measured, and every one of them reported - the copy must
+  // not show someone else's branding, and a banner dismissed on one visit and not another is pixels that differ for
+  // no reason of ours.
+  const excluded = [];
+  if (asIs) {
+    for (const t of site.pages) {
+      const found = motionByPath.get(t.info.path);
+      // A control whose click did not restore the page changed something for good: that is what dismissing is.
+      const dismissed = new Set((found?.clicks?.widgets ?? []).filter((w) => w.closes === false).map((w) => w.path));
+      const list = findExcludable(t, { dismissed, viewWidths: VIEW_WIDTHS });
+      const removed = new Set(applyExcludes(t, list));
+      for (const e of list) if (removed.has(e.path)) excluded.push({ page: t.info.path, ...e });
+    }
+    if (excluded.length) {
+      report.exact = { ...report.exact, excluded };
+      const kinds = [...new Set(excluded.map((e) => e.reason))].join(', ');
+      report.warnings.push(`${excluded.length} ${excluded.length === 1 ? 'part' : 'parts'} of the page that are not the site were left out (${kinds}); each one is listed in the report with the evidence for it.`);
+    }
+  }
 
   ctx.progress(0.12, 'Fixing audit issues');
   const axe = ctx.analysis?.id && ctx.project?.id
