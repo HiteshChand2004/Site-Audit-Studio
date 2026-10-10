@@ -7,6 +7,7 @@ import {
   correctExact, exactRows, makeExactRound, slotScore, viewForWidth, GOOD_ENOUGH_PCT, PIXEL_FLOOR_PCT, ROUNDS_PER_PAGE,
 } from '../src/recreate/verify/exact/correct.js';
 import { createLedger } from '../src/recreate/verify/ledger.js';
+import { restoreFixes, snapshotFixes } from '../src/recreate/verify/exact/correct.js';
 
 test('a width is corrected in the view whose media query covers it', () => {
   // An exact slot is a width; a declaration has to live in the view that governs it or it will not apply there.
@@ -127,4 +128,69 @@ test('the budget is rounds, not a clock, and it is five per page', () => {
   assert.equal(ROUNDS_PER_PAGE, 5);
   // A page already matching everywhere is skipped rather than risked: the threshold is the acceptance number.
   assert.equal(GOOD_ENOUGH_PCT, 0.5);
+});
+
+test('a round measures only the slots the change can reach, and carries the rest forward', async () => {
+  // A declaration written for the laptop view cannot move what a 375 px phone renders, so re-measuring it proves
+  // nothing. On flexibench, measuring all eighteen slots cost eleven minutes a round and fifteen of those renders
+  // only confirmed that nothing else had moved.
+  const widths = [1920, 1440, 1280, 1279, 1024, 1023, 810, 768, 430, 375];
+  const slots = widths.map((w) => ({ id: String(w), width: w, height: 800, dpr: 1, mobile: w < 768, hasTouch: w < 768 }));
+  const asked = [];
+  const renderer = {
+    origin: 'http://127.0.0.1:0',
+    server: { overrides: new Map() },
+    context: async (slot) => { asked.push(slot.id); throw new Error('no browser in this test'); },
+  };
+  const baseline = {
+    slots,
+    pages: [{ path: '/', slug: 'index', slots: slots.map((s) => ({ id: s.id, pageHeight: 1000, bands: [{ file: 'b.webp', top: 0, height: 800 }], boxes: { file: 'b.json.gz' } })) }],
+  };
+  const treeOf = new Map([['/', { info: { path: '/', slug: 'index', outPath: 'index.html' } }]]);
+  const round = makeExactRound({ renderer, baseline, treeOf, workspace: '/nowhere' });
+  const base = {
+    slots: slots.map((s) => ({ page: '/', view: viewForWidth(s.width), slot: s.id, width: s.width, score: 50, layout: 50, pixel: 50, heightOff: false })),
+    rects: new Map(),
+  };
+
+  const r = await round({
+    site: { pages: [] }, ledger: createLedger(), css: 'body{}', round: 1, pages: ['/'],
+    trials: [{ byView: { laptop: { gap: '8px' } } }],
+    base,
+  });
+  // Only the three laptop widths were opened; the other seven kept the numbers they had.
+  assert.deepEqual(asked.sort(), ['1024', '1279', '1280']);
+  assert.equal(r.carried, 7);
+  // In this test there is no browser, so those three could not be measured - and a round with a slot it could
+  // not measure is unjudgeable: its score is nothing, which is what makes the loop refuse it rather than read the
+  // carried slots as 'no worse'.
+  assert.equal(r.failed, 3);
+  assert.equal(r.score, 0);
+  assert.equal(r.slots.length, 7, 'the seven it could carry');
+  assert.ok(r.slots.every((s) => s.carried && s.score === 50));
+
+  // The verification pass asks for everything, whatever is being tried.
+  asked.length = 0;
+  await round({
+    site: { pages: [] }, ledger: createLedger(), css: 'body{}', round: 'verify:/', pages: ['/'],
+    trials: [{ byView: { laptop: { gap: '8px' } } }], base, all: true,
+  });
+  assert.equal(asked.length, 10, 'every slot of the page');
+});
+
+test('a page that does not hold up is put back exactly as it was', () => {
+  // The revert has to be exact, or a refused page keeps half a correction.
+  const leaf = { tag: 'p', children: [], fix: { desktop: { decls: { gap: '4px' } } } };
+  const bare = { tag: 'span', children: [] };
+  const tree = { root: { tag: 'body', children: [leaf, bare] } };
+  const saved = snapshotFixes(tree);
+
+  // The loop writes new declarations on both.
+  leaf.fix.desktop.decls.gap = '12px';
+  leaf.fix.tablet = { decls: { 'flex-wrap': 'wrap' } };
+  bare.fix = { mobile: { decls: { width: '100%' } } };
+
+  restoreFixes(tree, saved);
+  assert.deepEqual(leaf.fix, { desktop: { decls: { gap: '4px' } } }, 'the fix it had is the fix it has');
+  assert.equal(bare.fix, undefined, 'and a node that had none has none');
 });

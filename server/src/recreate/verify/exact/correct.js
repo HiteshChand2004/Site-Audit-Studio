@@ -19,7 +19,7 @@ import { gunzipSync } from 'node:zlib';
 import { readFile } from 'node:fs/promises';
 import { MAX_HEIGHT } from '../../../audit/screenshots.js';
 import { collectRects } from '../layout.js';
-import { correctLayout, round1, slotKey, W_LAYOUT, W_PIXEL, HEIGHT_OFF } from '../correct.js';
+import { correctLayout, round1, slotKey, trialCss, SLOT_DROP, W_LAYOUT, W_PIXEL, HEIGHT_OFF } from '../correct.js';
 import { CSS_FILE } from '../../emit/css.js';
 import { VIEW_WIDTHS, RECREATE_VIEWS } from '../../views.js';
 import { bandFile, exactDir, MAX_BANDS } from '../../capture/exact.js';
@@ -36,6 +36,28 @@ export const GOOD_ENOUGH_PCT = 0.5;
 export const PIXEL_FLOOR_PCT = 5;
 /** A box within this many pixels is where it should be (the same tolerance the comparison reports). */
 export const BOX_TOLERANCE = 1;
+
+/** Every node's per-view fixes for one page, so a page that does not hold up can be put back exactly. */
+export function snapshotFixes(tree) {
+  const saved = new Map();
+  const walk = (n) => {
+    if (!n?.tag) return;
+    if (n.fix) saved.set(n, JSON.parse(JSON.stringify(n.fix)));
+    for (const c of n.children ?? []) walk(c);
+  };
+  walk(tree?.root);
+  return saved;
+}
+
+export function restoreFixes(tree, saved) {
+  const walk = (n) => {
+    if (!n?.tag) return;
+    if (saved.has(n)) n.fix = JSON.parse(JSON.stringify(saved.get(n)));
+    else delete n.fix;
+    for (const c of n.children ?? []) walk(c);
+  };
+  walk(tree?.root);
+}
 
 /**
  * The IR view that governs a width. An exact slot is a width (1025, 430); a declaration has to live in the view
@@ -112,7 +134,15 @@ export function slotScore({ diffRaw, boxes, heightOriginal, heightCopy }) {
  */
 export function makeExactRound({ renderer, baseline, treeOf, workspace, cpathOf = null, deadline = Infinity }) {
   const byPage = new Map(baseline.pages.map((p) => [p.path, p]));
-  return async function exactRound({ site, ledger, css, round, pages }) {
+  return async function exactRound({ site, ledger, css, round, pages, trials = [], base = null, all = false }) {
+    // A declaration is written for one view, so it can only change the slots that view governs: a laptop fix cannot
+    // move what a 375 px phone renders. Measuring all eighteen slots every round cost eleven minutes a round on a
+    // real site (flexibench, measured) and fifteen of those eighteen renders only proved that nothing else moved.
+    // So a round measures the views it touches and carries the rest forward from the previous measurement, and
+    // correctExact then checks the whole page once before keeping anything (verify(), below) - the same guarantee,
+    // paid once per page instead of once per round.
+    const touched = new Set(trials.flatMap((t) => Object.keys(t.byView ?? {})));
+    const wanted = (slot) => all || !touched.size || !base || touched.has(viewForWidth(slot.width));
     ledger.beginRound(round);
     const slots = [];
     const rects = new Map();
@@ -130,6 +160,17 @@ export function makeExactRound({ renderer, baseline, treeOf, workspace, cpathOf 
           const slot = baseline.slots.find((s) => s.id === slotBaseline.id);
           if (!slot || !slotBaseline.bands?.length) continue;
           const view = viewForWidth(slot.width);
+          // Not reachable by what is being tried: its previous numbers stand, marked as carried so the report can
+          // say which were re-measured.
+          if (!wanted(slot)) {
+            const previous = base.slots.find((s) => s.page === pagePath && s.slot === slot.id);
+            if (previous) {
+              slots.push({ ...previous, carried: true });
+              const r = base.rects.get(slotKey(pagePath, view));
+              if (r) rects.set(slotKey(pagePath, view), r);
+              continue;
+            }
+          }
           // A slot that cannot be measured is counted and skipped, never guessed at: a round judged on half its
           // slots could accept a change that made the others worse. With nothing measured at all the round scores
           // zero, so the loop refuses it rather than treating silence as success.
@@ -183,7 +224,12 @@ export function makeExactRound({ renderer, baseline, treeOf, workspace, cpathOf 
       slots,
       rects,
       ...(failed && { failed, error: lastError }),
-      score: round1(mean(slots.map((s) => s.score))),
+      measured: slots.filter((s) => !s.carried).length,
+      carried: slots.filter((s) => s.carried).length,
+      // A slot that could not be measured makes the round unjudgeable, and a score of nothing is what refuses it.
+      // Without this the carried slots alone would average out to "no worse" and a change nobody could measure
+      // would be accepted - which a stub in the tests found before a site did.
+      score: failed ? 0 : round1(mean(slots.map((s) => s.score))),
       layout: round1(mean(slots.map((s) => s.layout))),
       pixel: round1(mean(slots.map((s) => s.pixel))),
       // Keyed by page and view, as the loop expects; several slots can share a view, and the worst of them stands
@@ -229,6 +275,7 @@ export async function correctExact({
     const pageSlots = first.slots.filter((s) => s.page === slot.page);
     if (pageSlots.every((s) => s.pixel >= 100 - (GOOD_ENOUGH_PCT / PIXEL_FLOOR_PCT) * 100 && s.layout >= 100 && !s.heightOff)) continue;
     progress(i / order.length, `Correcting ${slot.page} against the original (${i + 1} of ${order.length})`);
+    const fixesBefore = snapshotFixes(treeOf.get(slot.page));
     const page = await correctLayout({
       ir,
       site,
@@ -243,9 +290,31 @@ export async function correctExact({
       minTime: 0,
       progress: (f, message) => progress((i + f) / order.length, message),
     });
+    // The guarantee the cheap rounds deferred: every slot of this page, measured once, with exactly the
+    // declarations that were accepted. A page that is worse anywhere goes back to how it was.
+    let verified = null;
+    if (page.applied) {
+      verified = await round({
+        site, ledger, css: baseCss + trialCss(page.trials ?? [], ir), round: `verify:${slot.page}`, pages: [slot.page], all: true,
+      });
+      const dropped = verified.slots.filter((s) => {
+        const was = pageSlots.find((p) => p.slot === s.slot);
+        return was && s.score < was.score - SLOT_DROP;
+      });
+      if (dropped.length || verified.score < (page.scoreBefore ?? 0) - 0.5) {
+        restoreFixes(treeOf.get(slot.page), fixesBefore);
+        out.reverted += page.applied;
+        out.applied -= 0;
+        page.applied = 0;
+        page.stopped = 'verification';
+        page.droppedSlots = dropped.map((s) => ({ slot: s.slot, score: s.score }));
+      }
+    }
     out.pages.push({
       page: slot.page, rounds: page.rounds, applied: page.applied, reverted: page.reverted,
-      scoreBefore: page.scoreBefore, scoreAfter: page.scoreAfter, stopped: page.stopped,
+      scoreBefore: page.scoreBefore, scoreAfter: verified?.score ?? page.scoreAfter, stopped: page.stopped,
+      ...(verified && { verifiedScore: verified.score, slotsMeasured: verified.measured }),
+      ...(page.droppedSlots && { droppedSlots: page.droppedSlots }),
       ...(page.rejected && { rejected: page.rejected }),
     });
     out.rounds += page.rounds;

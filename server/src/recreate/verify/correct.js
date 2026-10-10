@@ -434,7 +434,7 @@ export async function correctLayout({
 
   const cssWith = (list) => baseCss + trialCss(list, ir);
 
-  let base = await roundOf({ measure, only, site, ledger, css: cssWith(trials), shotOf, round: 0, pages: pagePaths });
+  let base = await roundOf({ measure, only, site, ledger, css: cssWith(trials), shotOf, round: 0, pages: pagePaths, trials });
   out.scoreBefore = base.score;
   out.scoreAfter = base.score;
   out.heightSlots = base.slots.filter((s) => s.heightOff).length;
@@ -459,7 +459,7 @@ export async function correctLayout({
     progress(Math.min(0.9, round / 6), `Correcting layout (round ${round}: ${kind})`);
     const started = Date.now();
     const candidateTrials = [...trials, ...plan];
-    const next = await roundOf({ measure, only, site, ledger, css: cssWith(candidateTrials), shotOf, round, pages: pagePaths });
+    const next = await roundOf({ measure, only, site, ledger, css: cssWith(candidateTrials), shotOf, round, pages: pagePaths, trials: candidateTrials, base });
     roundMs = Date.now() - started;
     out.rounds = round;
 
@@ -497,6 +497,7 @@ export async function correctLayout({
     }
   }
   out.elements = new Set(trials.map((t) => t.target)).size;
+  out.trials = trials;
   out.slots = base.slots.map((s) => ({
     page: s.page, view: s.view, score: s.score, layout: s.layout, pixel: s.pixel,
     ...(s.heightOff && { heightOff: true, capturedHeight: s.capturedHeight, renderedHeight: s.renderedHeight }),
