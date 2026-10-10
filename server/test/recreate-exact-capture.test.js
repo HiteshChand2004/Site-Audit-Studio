@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:http';
 import { launchBrowser } from '../src/audit/render.js';
-import { captureExactPage, exactDir, visitSlot, MAX_BANDS } from '../src/recreate/capture/exact.js';
+import { bandClips, captureExactPage, exactDir, visitSlot, MAX_BANDS } from '../src/recreate/capture/exact.js';
 import { checkBaseline, freeDiskGB, BASELINE_STALE_DAYS } from '../src/recreate/exactCapture.js';
 import { slotFor } from '../src/recreate/verify/exact/slots.js';
 import { RECIPE_VERSION } from '../src/recreate/verify/exact/recipe.js';
@@ -145,6 +145,30 @@ test('a slot that cannot be loaded is reported for that slot, not for the page',
   assert.equal(r.errors.length, 1);
   assert.equal(r.errors[0].slot, '1280');
   assert.ok(r.errors[0].message);
+});
+
+test('both sides band a tall page at the same offsets, and the cap is the tail that is reported', () => {
+  // One function decides the offsets, because the comparison lines band N of the copy up against band N of the
+  // original: two implementations that disagree by one band would compare different parts of the page and read
+  // as a total mismatch.
+  const slot = { width: 1440 };
+  assert.deepEqual(bandClips(slot, 3071), [{ band: 0, top: 0, height: 3071 }], 'a short page is one band');
+
+  // A homepage of 18,489 px - the case that found the bug: three bands, the last a part band.
+  const tall = bandClips(slot, 18489);
+  assert.equal(tall.length, 3);
+  assert.deepEqual(tall.map((c) => c.top), [0, 8000, 16000]);
+  assert.deepEqual(tall.map((c) => c.height), [8000, 8000, 2489]);
+  assert.equal(tall.reduce((n, c) => n + c.height, 0), 18489, 'every pixel is in exactly one band');
+
+  // Past the cap the rest is left out rather than squeezed in - the tail is reported, never silently cropped.
+  const over = bandClips(slot, 40000);
+  assert.equal(over.length, MAX_BANDS);
+  assert.equal(over.reduce((n, c) => n + c.height, 0), 32000);
+
+  // A page exactly on a band boundary does not get an empty extra band.
+  assert.equal(bandClips(slot, 16000).length, 2);
+  assert.equal(bandClips(slot, 8000).length, 1);
 });
 
 test('the band cap is four screens of 8000 px, and a page under it is one band', async () => {
