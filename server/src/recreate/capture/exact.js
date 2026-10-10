@@ -62,22 +62,37 @@ export async function pageFingerprint(response) {
 }
 
 /** The page in bands of MAX_HEIGHT CSS px, at the offsets the copy will be shot at too. */
-export async function shootBands(page, slot, pageHeight, dir, slotId) {
-  const bands = [];
+/**
+ * The bands of a page: the same offsets on both sides, capped at MAX_BANDS. One place, so a comparison can never
+ * line a band of the copy up against a different band of the original.
+ * @returns {{ band: number, top: number, height: number }[]}
+ */
+export function bandClips(slot, pageHeight) {
+  const clips = [];
   const wanted = Math.min(pageHeight, MAX_HEIGHT * MAX_BANDS);
   for (let band = 0; band * MAX_HEIGHT < wanted; band++) {
     const top = band * MAX_HEIGHT;
-    const height = Math.min(MAX_HEIGHT, wanted - top);
-    const png = await page.screenshot({
-      type: 'png',
-      fullPage: true,
-      scale: 'css',
-      animations: 'allow',
-      clip: { x: 0, y: top, width: slot.width, height },
-    });
-    const file = bandFile(slotId, band);
+    clips.push({ band, top, height: Math.min(MAX_HEIGHT, wanted - top) });
+  }
+  return clips;
+}
+
+/** One band as PNG bytes. Kept out of `shootBands` so a caller that only compares need not write a file. */
+export const shootBand = (page, slot, clip) => page.screenshot({
+  type: 'png',
+  fullPage: true,
+  scale: 'css',
+  animations: 'allow',
+  clip: { x: 0, y: clip.top, width: slot.width, height: clip.height },
+});
+
+export async function shootBands(page, slot, pageHeight, dir, slotId) {
+  const bands = [];
+  for (const clip of bandClips(slot, pageHeight)) {
+    const png = await shootBand(page, slot, clip);
+    const file = bandFile(slotId, clip.band);
     const info = await sharp(png).webp({ quality: 85 }).toFile(path.join(dir, file));
-    bands.push({ band, top, height, file, bytes: info.size });
+    bands.push({ ...clip, file, bytes: info.size });
   }
   return bands;
 }

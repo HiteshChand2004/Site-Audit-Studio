@@ -22,7 +22,7 @@ import { collectRects } from '../layout.js';
 import { correctLayout, round1, slotKey, trialCss, SLOT_DROP, W_LAYOUT, W_PIXEL, HEIGHT_OFF } from '../correct.js';
 import { CSS_FILE } from '../../emit/css.js';
 import { VIEW_WIDTHS, RECREATE_VIEWS } from '../../views.js';
-import { bandFile, exactDir, MAX_BANDS } from '../../capture/exact.js';
+import { bandClips, exactDir, shootBand, MAX_BANDS } from '../../capture/exact.js';
 import { collectExactBoxes, compareBoxes } from './boxes.js';
 import { exactDiff } from './pixels.js';
 import { freezePage } from './freeze.js';
@@ -208,18 +208,36 @@ export function makeExactRound({ renderer, baseline, treeOf, workspace, cpathOf 
             await freezePage(p);
             // The measurement build carries data-sas-id, so the boxes can be matched by path - which a production
             // build cannot do, and which is why the loop measures this build rather than dist/.
-            const [measured, index, png] = await Promise.all([
+            const [measured, index] = await Promise.all([
               p.evaluate(collectRects),
               p.evaluate(collectExactBoxes, {}),
-              p.screenshot({ type: 'png', fullPage: true, scale: 'css', animations: 'allow', clip: { x: 0, y: 0, width: slot.width, height: Math.min(recipe.height, MAX_HEIGHT) } }),
             ]);
             rects.set(slotKey(pagePath, view), measured.rects);
 
             const theirs = JSON.parse(gunzipSync(await readFile(path.join(inDir, slotBaseline.boxes.file))));
             const boxes = compareBoxes(theirs.boxes, index.boxes, { cpathOf });
-            const diff = await exactDiff(path.join(inDir, bandFile(slotBaseline.id, 0)), png).catch(() => null);
+
+            // Pixels band by band, at the offsets the baseline used, so a page taller than one band is judged on
+            // all of it. This used to compare the first band alone: on a homepage of 18,489 px that is under half
+            // the page, and a change that improved the top while spoiling the bottom would have been accepted.
+            // One band of each side is in memory at a time, as the report pass does it.
+            let diffPx = 0;
+            let compared = 0;
+            const clips = bandClips(slot, recipe.height);
+            const bandRows = Math.min(slotBaseline.bands.length, clips.length);
+            for (let band = 0; band < bandRows; band++) {
+              const ours = await shootBand(p, slot, clips[band]);
+              const r = await exactDiff(path.join(inDir, slotBaseline.bands[band].file), ours).catch(() => null);
+              if (!r) continue;
+              diffPx += r.diff;
+              compared += r.compared;
+            }
+            // The same formula as the report pass, so the loop chases the number it will be judged by: the rows
+            // only one side has count as different in full, rather than being left out of the denominator.
+            const heightOnlyOne = Math.abs(slotBaseline.pageHeight - recipe.height) * slot.width;
+            const total = compared + heightOnlyOne;
             const numbers = slotScore({
-              diffRaw: diff?.pct ?? 0,
+              diffRaw: total ? Math.round(((diffPx + heightOnlyOne) / total) * 1e6) / 1e4 : 0,
               boxes,
               heightOriginal: slotBaseline.pageHeight,
               heightCopy: recipe.height,
