@@ -27,6 +27,8 @@ import { VIEW_WIDTHS } from './views.js';
 import { compareLayout, openRenderer, planFixes, renderPage, viewScore } from './verify/layout.js';
 import { createLedger } from './verify/ledger.js';
 import { CORRECT_BUDGET, CORRECT_MIN, correctLayout, correctReport } from './verify/correct.js';
+import { correctExact } from './verify/exact/correct.js';
+import { openExactRenderer } from './verify/exact/compare.js';
 import { CSS_FILE } from './emit/css.js';
 import { REFINE_PAGES, refineResponsive } from './verify/refine.js';
 
@@ -393,6 +395,57 @@ export async function generateStage(ctx) {
         await writeSite(siteDir, out, assetsDir, known);
       }
     } else correct = { stopped: 'time-limit', rounds: 0, applied: 0, reverted: 0 };
+  }
+
+  // The same loop again, this time steered by the exact comparison (verify/exact/correct.js): every page, one at a
+  // time, worst first, five rounds each, measured at every exact viewport against the baseline taken at that same
+  // viewport rather than at the four captured views. It measures the build with data-sas-id, which is what lets a box
+  // be matched by path - a production build has no ids, which is why the reporting pass after `build` cannot.
+  let exactCorrect = null;
+  if (asIs && ctx.exactBaseline?.pages?.length) {
+    ctx.progress(0.78, 'Correcting the copy against the original at every size');
+    const idsOut = emitSite(ir, { ids: true });
+    // sid -> the original's own path, so the box comparison can pair by path instead of by content.
+    const sidToCpath = new Map();
+    for (const t of site.pages) {
+      const walk = (n) => {
+        if (!isElement(n)) return;
+        if (n.sid != null && (n.cpath || n.path)) sidToCpath.set(n.sid, n.cpath ?? n.path);
+        for (const c of n.children ?? []) walk(c);
+      };
+      walk(t.root);
+    }
+    const renderer = await openExactRenderer(siteDir, { scripts: Boolean(site.motion?.script) });
+    try {
+      // The pages with ids are served from memory; everything else (images, fonts, the stylesheet) comes off disk.
+      for (const p of ir.pages) {
+        const html = idsOut.files.get(p.outPath);
+        if (html) renderer.server.overrides.set(p.outPath, html);
+      }
+      exactCorrect = await correctExact({
+        renderer,
+        baseline: ctx.exactBaseline,
+        site,
+        ir,
+        ledger,
+        baseCss: idsOut.files.get(CSS_FILE),
+        workspace: ctx.dir,
+        cpathOf: (sid) => sidToCpath.get(sid) ?? null,
+        deadline: ctx.stepDeadline,
+        progress: (f, message) => ctx.progress(0.78 + 0.1 * f, message),
+      });
+    } catch (err) {
+      exactCorrect = { stopped: 'error', error: String(err.message ?? err).split('\n')[0], rounds: 0, applied: 0, reverted: 0, pages: [] };
+      report.warnings.push(`The copy could not be corrected against the original: ${exactCorrect.error}`);
+    } finally {
+      await renderer.close().catch(() => {});
+    }
+    if (exactCorrect?.applied) {
+      ({ ir, stats } = build());
+      out = emitSite(ir);
+      await writeSite(siteDir, out, assetsDir, known);
+    }
+    report.exact = { ...report.exact, correct: exactCorrect };
   }
 
   // Breakpoints and fluid type, checked against the original's sweep screenshots (verify/refine.js). Only

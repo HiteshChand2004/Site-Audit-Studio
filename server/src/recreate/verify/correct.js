@@ -49,8 +49,8 @@ export const SLOT_DROP = 2;
 export const HEIGHT_OFF = 0.15;
 export const TARGET = 100;
 // The score mixes the element boxes with the perceptual diff; boxes lead because they are the structural truth.
-const W_LAYOUT = 0.6;
-const W_PIXEL = 0.4;
+export const W_LAYOUT = 0.6;
+export const W_PIXEL = 0.4;
 const DEFAULT_BREAKPOINTS = { laptop: 1279.98, tablet: 1023.98, mobile: 767.98 };
 
 const px = (n) => `${Math.round(n)}px`;
@@ -387,7 +387,12 @@ const CORRECTORS = [missingElement, restoreDropped, wrapping, spacing, gridTrack
  * @param {(fraction: number, message?: string) => void} [o.progress]
  * @returns {Promise<object>} a summary for report.generate.correct
  */
-export async function correctLayout({ measure, ir, site, ledger, baseCss, candidates, shotOf = null, deadline = Infinity, progress = () => {} }) {
+export async function correctLayout({
+  measure, ir, site, ledger, baseCss, candidates, shotOf = null, deadline = Infinity, progress = () => {},
+  // Exact mode overrides these three: its own measurement (verify/exact/correct.js), one page at a time, and a
+  // round count instead of a clock.
+  round: roundOf = measureRound, pages: pageCount = CORRECT_PAGES, maxRounds = Infinity, minTime = CORRECT_MIN,
+} = {}) {
   const out = {
     rounds: 0, applied: 0, reverted: 0, elements: 0,
     scoreBefore: null, scoreAfter: null, pages: [], byCorrector: {}, stopped: null, heightSlots: 0,
@@ -396,7 +401,7 @@ export async function correctLayout({ measure, ir, site, ledger, baseCss, candid
     out.stopped = 'nothing-to-measure';
     return out;
   }
-  if (deadline - Date.now() < CORRECT_MIN) {
+  if (deadline - Date.now() < minTime) {
     out.stopped = 'time-limit';
     return out;
   }
@@ -409,7 +414,7 @@ export async function correctLayout({ measure, ir, site, ledger, baseCss, candid
     if (!cur || c.score < cur.score) worstOf.set(c.path, c);
   }
   const home = candidates.find((c) => c.path === '/');
-  const chosen = [...worstOf.values()].sort((a, b) => a.score - b.score).slice(0, CORRECT_PAGES);
+  const chosen = [...worstOf.values()].sort((a, b) => a.score - b.score).slice(0, pageCount);
   if (!chosen.length) {
     out.stopped = 'nothing-to-measure';
     return out;
@@ -429,7 +434,7 @@ export async function correctLayout({ measure, ir, site, ledger, baseCss, candid
 
   const cssWith = (list) => baseCss + trialCss(list, ir);
 
-  let base = await measureRound({ measure, only, site, ledger, css: cssWith(trials), shotOf, round: 0 });
+  let base = await roundOf({ measure, only, site, ledger, css: cssWith(trials), shotOf, round: 0, pages: pagePaths });
   out.scoreBefore = base.score;
   out.scoreAfter = base.score;
   out.heightSlots = base.slots.filter((s) => s.heightOff).length;
@@ -437,9 +442,10 @@ export async function correctLayout({ measure, ir, site, ledger, baseCss, candid
   let roundMs = 0;
   for (let round = 1; ; round++) {
     if (base.score >= TARGET) { out.stopped = 'target'; break; }
+    if (round > maxRounds) { out.stopped = 'rounds'; break; }
     const left = deadline - Date.now();
     // Never start a round that cannot finish: a half-measured round decides nothing.
-    if (left < Math.max(CORRECT_MIN / 2, roundMs * 1.3)) { out.stopped = 'time-limit'; break; }
+    if (left < Math.max(minTime / 2, roundMs * 1.3)) { out.stopped = 'time-limit'; break; }
 
     const planned = planRound({ ledger, pagePaths, treeOf, base, viewList, tried, touched, ir });
     if (!planned.length) { out.stopped = 'converged'; break; }
@@ -453,7 +459,7 @@ export async function correctLayout({ measure, ir, site, ledger, baseCss, candid
     progress(Math.min(0.9, round / 6), `Correcting layout (round ${round}: ${kind})`);
     const started = Date.now();
     const candidateTrials = [...trials, ...plan];
-    const next = await measureRound({ measure, only, site, ledger, css: cssWith(candidateTrials), shotOf, round });
+    const next = await roundOf({ measure, only, site, ledger, css: cssWith(candidateTrials), shotOf, round, pages: pagePaths });
     roundMs = Date.now() - started;
     out.rounds = round;
 
@@ -525,6 +531,8 @@ export const MANUAL_CAUSES = {
  * @param {object} correct  what correctLayout returned
  * @returns {{ fix: object|null, manual: object[] }}
  */
+export { slotKey, round1 };
+
 export function correctReport(correct) {
   if (!correct || correct.stopped === 'nothing-to-measure') return { fix: null, manual: [] };
   const ledger = correct.ledger ?? {};
@@ -589,7 +597,7 @@ export function trialCss(list, ir) {
 }
 
 /** Renders the chosen pages with a candidate stylesheet and scores every page/view. */
-async function measureRound({ measure, only, site, ledger, css, shotOf, round }) {
+export async function measureRound({ measure, only, site, ledger, css, shotOf, round }) {
   ledger.beginRound(round);
   const slots = [];
   const rects = new Map();

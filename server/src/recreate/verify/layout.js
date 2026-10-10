@@ -114,7 +114,7 @@ export async function withBrowserRetry(renderer, fn) {
 
 // Runs in the page. Boxes are measured like the capture measures them (capture/snapshot.js rectOf):
 // rotated or scaled elements by their untransformed size, centred on their bounding box.
-function collectRects() {
+export function collectRects() {
   const rects = {};
   for (const el of document.querySelectorAll('[data-sas-id]')) {
     const r = el.getBoundingClientRect();

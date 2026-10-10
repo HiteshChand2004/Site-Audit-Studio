@@ -57,7 +57,7 @@ export const STEPS = [
   // The original at every exact viewport (capture/exact.js), for an exact copy only: about twenty visits per page,
   // so it is the slowest step there is and it has no limit in that mode. A background step that starts right after
   // the capture, like the sweep, and is awaited by the comparison that needs it.
-  { key: 'exactCapture', label: 'Measuring the original', weight: 10, max: 10 * 60000, optional: true, background: true, after: 'inspect', join: 'exact', perPage: 600000 },
+  { key: 'exactCapture', label: 'Measuring the original', weight: 10, max: 10 * 60000, optional: true, background: true, after: 'inspect', join: 'generate', perPage: 600000 },
   // The copy at those same viewports, against what the original did (recreate/exact.js): measures only.
   { key: 'exact', label: 'Comparing with the original', weight: 6, max: 10 * 60000, optional: true, browser: true, perPage: 240000 },
   // Measures the finished build against the sweep screenshots (4b.6): never fails the job.

@@ -180,6 +180,18 @@ function ExactComparison({ result, projectId }) {
           ))}
         </ul>
       )}
+      {exact.correct && (
+        <p className={styles.note}>
+          The copy was corrected against the original over{' '}
+          {plural(exact.correct.rounds ?? 0, 'round')} across {plural(exact.correct.pages?.length ?? 0, 'page')}:{' '}
+          {exact.correct.applied ?? 0} {(exact.correct.applied ?? 0) === 1 ? 'change' : 'changes'} kept,{' '}
+          {exact.correct.reverted ?? 0} put back because they did not measure closer
+          {exact.correct.scoreBefore != null && exact.correct.scoreAfter != null
+            ? ` (match ${exact.correct.scoreBefore} → ${exact.correct.scoreAfter} of 100)`
+            : ''}
+          {exact.correct.stopped ? `. It stopped: ${exact.correct.stopped}.` : '.'}
+        </p>
+      )}
       {result.coverage && (
         <p className={styles.note}>
           Of the {plural(result.coverage.visible, 'interactive part')} a visitor can see across{' '}

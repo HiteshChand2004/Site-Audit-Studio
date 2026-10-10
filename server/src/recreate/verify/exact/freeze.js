@@ -89,8 +89,12 @@ function stopAnimations(max) {
         // anyway: left alone, and named as a residual.
         out.scrollLinked++;
       } else if (repeats) {
-        animation.currentTime = 0;
+        // Pause first, then set the time. Setting currentTime on a *running* animation moves its start time and it
+        // keeps going, so pausing afterwards captures however long the round trip took - one frame of drift, which
+        // is a pixel or two of a marquee and exactly the kind of difference this freeze exists to remove. A paused
+        // animation holds the time it is given.
         animation.pause();
+        animation.currentTime = 0;
         item.action = 'zeroed';
         out.zeroed++;
       } else {
