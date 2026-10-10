@@ -43,6 +43,32 @@ export async function readPageCaptures(dir, page) {
   return out;
 }
 
+// Conditions that say nothing about how wide the window is: a width written inside one belongs to that condition,
+// not to a breakpoint of the layout.
+const NOT_A_WIDTH = /\b(print|resolution|prefers-|hover\s*:|orientation|device-|container|aspect-ratio)/i;
+
+/**
+ * Every width boundary the site's own media queries declare, as the width the layout changes *at*: a max-width is that
+ * value, a min-width a hair below it (the same decision written the other way round). Shared by pickBreakpoints and by
+ * the exact compare's slot list (verify/exact/slots.js), so one regex decides what counts as a breakpoint.
+ * @param {{ condition: string, rules?: number }[]|string[]} queries  the capture's `mediaRules` (with rule counts) or
+ *   its `mediaQueries` (plain strings, which is all a capture saved before exact mode has)
+ * @returns {{ value: number, condition: string, rules: number }[]}
+ */
+export function mediaBounds(queries) {
+  const out = [];
+  for (const q of queries ?? []) {
+    const condition = typeof q === 'string' ? q : q?.condition ?? '';
+    const rules = typeof q === 'string' ? 0 : Number(q?.rules) || 0;
+    if (!condition || NOT_A_WIDTH.test(condition)) continue;
+    for (const m of condition.matchAll(/\((max|min)-width:\s*([\d.]+)(px|em|rem)\)/g)) {
+      const px = parseFloat(m[2]) * (m[3] === 'px' ? 1 : 16);
+      out.push({ value: m[1] === 'max' ? px : px - 0.02, condition, rules });
+    }
+  }
+  return out;
+}
+
 /**
  * Media query boundaries for the laptop, tablet and mobile overrides, taken from the original site's own
  * breakpoints when it has them: for each view the widest boundary between its capture width and the next
@@ -50,13 +76,7 @@ export async function readPageCaptures(dir, page) {
  * tablet boundary is the widest one between 768 and 1440, as before 4b.6.3.
  */
 export function pickBreakpoints(queries, { laptop: hasLaptop = true } = {}) {
-  const bounds = [];
-  for (const q of queries) {
-    for (const m of String(q).matchAll(/\((max|min)-width:\s*([\d.]+)(px|em|rem)\)/g)) {
-      const value = parseFloat(m[2]) * (m[3] === 'px' ? 1 : 16);
-      bounds.push(m[1] === 'max' ? value : value - 0.02);
-    }
-  }
+  const bounds = mediaBounds(queries).map((b) => b.value);
   const within = (lo, hi) => bounds.filter((b) => b >= lo && b < hi);
   const widest = (lo, hi) => Math.max(...within(lo, hi), -1);
   const laptop = hasLaptop ? widest(VIEW_WIDTHS.laptop, VIEW_WIDTHS.desktop) : -1;

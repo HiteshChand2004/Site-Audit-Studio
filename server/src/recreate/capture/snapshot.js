@@ -228,6 +228,8 @@ export function snapshotPage(opts) {
   const keyframes = [];
   const unreadableSheets = [];
   const mediaQueries = new Set();
+  // condition → how many rules hang off it (see where it is filled below).
+  const mediaRules = new Map();
   const readRules = (rules, href) => {
     for (const rule of rules) {
       if (rule.type === CSSRule.FONT_FACE_RULE) {
@@ -247,7 +249,12 @@ export function snapshotPage(opts) {
       } else if (rule.type === CSSRule.KEYFRAMES_RULE) {
         keyframes.push({ name: rule.name, css: rule.cssText.length > 4000 ? null : rule.cssText });
       } else if (rule.type === CSSRule.MEDIA_RULE) {
-        mediaQueries.add(rule.conditionText || rule.media.mediaText);
+        const condition = rule.conditionText || rule.media.mediaText;
+        mediaQueries.add(condition);
+        // How much hangs off this boundary. An exact copy is measured 1 px either side of the breakpoints the site
+        // declares, and a stylesheet may declare dozens of them: the ones carrying the most rules are the ones worth
+        // a slot (verify/exact/slots.js). Counted here because only the browser sees the rules of every sheet.
+        mediaRules.set(condition, (mediaRules.get(condition) ?? 0) + (rule.cssRules?.length ?? 0));
         readRules(rule.cssRules, href);
       } else if (rule.cssRules) {
         readRules(rule.cssRules, href);
@@ -307,6 +314,9 @@ export function snapshotPage(opts) {
     loadedFonts,
     keyframes,
     mediaQueries: [...mediaQueries],
+    // The same conditions with the weight of each: additive, so a capture made before this still loads and simply
+    // ranks its breakpoints by nothing.
+    mediaRules: [...mediaRules].map(([condition, rules]) => ({ condition, rules })),
     unreadableSheets,
     cssUrls: [...cssUrls],
     body,
