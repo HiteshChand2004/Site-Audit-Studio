@@ -10,7 +10,7 @@ import { maxParallel, PAGE_MB, parallelism } from '../audit/resources.js';
 import { createSharedCache, sharedCacheEnabled } from '../audit/sharedCache.js';
 import { startEgressProxy } from '../security/egressProxy.js';
 import { capturePage } from './capture/index.js';
-import { discoverPages, SKIP_LABELS } from './discover.js';
+import { discoverPages, probeNotFound, SKIP_LABELS } from './discover.js';
 import { RecreateError } from './errors.js';
 import { causeText, recoverFailure, recoverHit } from './interrupts.js';
 import { RECREATE_VIEWS } from './views.js';
@@ -147,6 +147,14 @@ export async function inspectStage(ctx) {
       signal: ctx.signal,
       onProgress: (f, message) => ctx.progress(0.2 * f, message),
     });
+  // What the site answers for an address that does not exist. Only an exact copy asks, and only an exact copy
+  // recreates that page, so the copy does not answer with a blank 200 where the original answers 404 with a page of
+  // its own design.
+  let notFound = null;
+  if (ctx.exact) {
+    notFound = await probeNotFound(ctx.audit.url ?? ctx.project.url, { signal: ctx.signal }).catch(() => null);
+  }
+
   // A job continuing after an interruption keeps the pages the stopped one found: the same pages, order and capture folders
   // (recreate/checkpoint.js). Otherwise the pages are found, and kept for a resume.
   const resumed = ctx.checkpoint?.discovery() ?? null;
@@ -161,6 +169,21 @@ export async function inspectStage(ctx) {
     if (!again) throw err;
     ctx.progress(0, `Finding pages again (${causeText(again)})`);
     discovery = await discover();
+  }
+  // A 404 page of the site's own design is a page, and an exact copy carries it: captured and rebuilt like any
+  // other, emitted as 404.html, which is the file every static host and the MERN server already look for. A bare
+  // server message is not worth rebuilding - the status is reported either way.
+  if (!resumed && notFound?.ownPage && !discovery.pages.some((p) => p.outPath === '404.html')) {
+    discovery.pages.push({
+      url: notFound.url,
+      path: new URL(notFound.url).pathname,
+      outPath: '404.html',
+      slug: 'not-found',
+      source: 'not-found',
+      title: notFound.title,
+      depth: 0,
+      notFound: true,
+    });
   }
   if (!resumed) await ctx.checkpoint?.saveDiscovery(discovery);
 
@@ -501,6 +524,8 @@ export async function inspectStage(ctx) {
     sitemap: discovery.sitemap,
     skipped: discovery.skipped.map((s) => ({ ...s, detail: SKIP_LABELS[s.reason] })),
     linksToLive: ctx.livePages.map((p) => ({ url: p.url, reason: p.reason ?? 'beyond-limit' })),
+    // What the original answers for an address that does not exist, and whether the copy carries that page.
+    ...(notFound && { notFound }),
   };
   report.blockedHosts = proxy.blocked();
   for (const s of discovery.skipped.filter((s) => s.reason === 'backend')) {

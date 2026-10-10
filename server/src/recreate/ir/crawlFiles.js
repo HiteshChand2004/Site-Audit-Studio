@@ -17,6 +17,8 @@ const noindex = (head) => (head.meta ?? []).some((m) => /^(robots|googlebot)$/i.
 /** The URL a page is listed under, or null when it must not be listed. */
 function sitemapUrl(page, head, origin) {
   if (noindex(head)) return null;
+  // The original's 404 page, rebuilt as 404.html: a real page of the site, and the one page that must not be listed.
+  if (page.info?.notFound || page.notFound || page.outPath === '404.html') return null;
   const own = new URL(page.path, origin).href;
   try {
     const canonical = new URL(head.canonical);

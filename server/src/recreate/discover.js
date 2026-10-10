@@ -177,7 +177,32 @@ export function selectPages({ pages, homeUrl, sitemapUrls = [], knownUrls = [], 
  * @returns {Promise<{ homeUrl: string, origin: string, pages: object[], skipped: object[], beyondLimit: object[],
  *   sitemap: { status: string, count: number }, crawled: number }>}
  */
-export async function discoverPages({ url, limit, all = false, knownUrls = [], render, signal, onProgress }) {
+/**
+ * What the site does with an address that does not exist. A copy that answers 200 with a blank page where the
+ * original answers 404 with its own design is wrong in a way no screenshot of a real page would ever show.
+ * Asked with one request for an address no site would have.
+ * @returns {Promise<{ url, status, html, ownPage, title, bytes } | null>}
+ */
+export async function probeNotFound(origin, { signal } = {}) {
+  const url = new URL(`/sas-no-such-page-${Math.random().toString(36).slice(2, 10)}`, origin).href;
+  const r = await fetchPage(url, { timeout: 15000, signal }).catch(() => null);
+  if (!r || r.error) return null;
+  const body = r.body ?? '';
+  const html = /text\/html/i.test(r.contentType ?? '') || /^\s*<(!doctype|html)/i.test(body);
+  // A page of the site's own, rather than a server's bare "Not Found": it has a head and some substance, which is
+  // what makes it worth capturing and rebuilding like any other page.
+  const ownPage = html && body.length > 500 && /<(head|title|link|style)[\s>]/i.test(body);
+  return {
+    url,
+    status: r.status,
+    html,
+    ownPage,
+    title: (body.match(/<title[^>]*>([^<]{1,200})</i) ?? [])[1]?.trim() ?? null,
+    bytes: body.length,
+  };
+}
+
+export async function discoverPages({ url, limit, all = false, knownUrls = [], render, signal, onProgress, notFound = false }) {
   const home = await fetchPage(url, { timeout: 20000, signal });
   if (home.error === 'blocked') throw new RecreateError(home.message);
   if (home.error || home.status >= 400) throw new RecreateError(`Could not load the homepage (${home.error || `HTTP ${home.status}`}).`);
