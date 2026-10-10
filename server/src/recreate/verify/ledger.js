@@ -10,6 +10,8 @@
 // new sids every time the IR is rebuilt, so a sid is only valid within one measurement build. `resolve(site)` walks
 // the trees again and re-attaches the live node and its current sid. An element the capture never saw on the desktop
 // view has no cpath and cannot be tracked between rounds; it is counted in `skipped.noKey` rather than guessed at.
+// The report keeps the biggest causes, not every one it ever saw.
+const MAX_CAUSES = 20;
 const round3 = (n) => Math.round(n * 1000) / 1000;
 
 const keyOf = (page, view, cpath) => `${page}|${view}|${cpath}`;
@@ -157,6 +159,9 @@ export function createLedger() {
         } else cleared++;
         if (e.cause) byCause[e.cause] = (byCause[e.cause] ?? 0) + 1;
       }
+      // A cause is the kind of difference, so there are a handful of them. Capped all the same: a cause that ever
+      // carried something per-element would otherwise put one row per element into report.json.
+      const causes = Object.fromEntries(Object.entries(byCause).sort((a, b) => b[1] - a[1]).slice(0, MAX_CAUSES));
       const rank = (e) => (e.lastSeen === round ? 10 : 0) + (e.kind === 'missing' ? 1 : 0) + e.blame + (1 - (e.iou ?? 0));
       const top = [...entries.values()].sort((a, b) => rank(b) - rank(a)).slice(0, worst).map((e) => ({
         page: e.page, view: e.view, cpath: e.cpath, tag: e.tag, kind: e.kind,
@@ -164,7 +169,7 @@ export function createLedger() {
         ...(e.expected && { expected: e.expected }),
         ...(e.actual && { actual: e.actual }),
       }));
-      return { elements: entries.size, open, cleared, rounds: round, byKind, byCause, skipped: { ...skipped }, worst: top };
+      return { elements: entries.size, open, cleared, rounds: round, byKind, byCause: causes, causeKinds: Object.keys(byCause).length, skipped: { ...skipped }, worst: top };
     },
   };
 }

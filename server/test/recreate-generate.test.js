@@ -662,4 +662,60 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.equal((await fetch(`${preview.url}ir/site.json`)).status, 404); // only dist/ is served
   assert.equal((await fetch(`${preview.url}../report.json`)).status, 404);
   await stopPreview();
+
+  // --- What the report has to carry, and in a shape report.json can hold -------------------------------------------
+  // The whole report is written with JSON.stringify, so a Set or a live node reference anywhere in it is a crash.
+  assert.doesNotThrow(() => JSON.stringify(report));
+  const saved = JSON.parse(await readFile(path.join(dir, 'report.json'), 'utf8'));
+
+  // Per-element differences, kept rather than thrown away after the counting (verify/ledger.js).
+  for (const ledger of [report.generate.fit.ledger, saved.generate.fit.ledger]) {
+    assert.ok(ledger, 'the fit pass records which elements are off, not only how many');
+    for (const key of ['elements', 'open', 'cleared', 'rounds']) assert.equal(typeof ledger[key], 'number', key);
+    assert.equal(typeof ledger.byKind, 'object');
+    assert.equal(typeof ledger.skipped.noKey, 'number');
+    assert.ok(Array.isArray(ledger.worst) && ledger.worst.length <= 10, 'bounded');
+  }
+
+  // The correction loop: either it ran and said what it did, or it says why it did not.
+  const correct = saved.generate.correct;
+  assert.ok(correct, 'report.generate.correct is always present when the loop is enabled');
+  assert.equal(typeof correct.stopped, 'string');
+  assert.equal(typeof correct.applied, 'number');
+  assert.equal(typeof correct.reverted, 'number');
+  if (correct.ledger) assert.ok(Array.isArray(correct.ledger.worst));
+  // Its report rows, when it had anything to do.
+  const layout = (saved.fixes ?? []).find((f) => f.id === 'layout-correct');
+  if (correct.rounds > 0 || correct.applied > 0) {
+    assert.ok(layout, `layout-correct missing; fixes: ${(saved.fixes ?? []).map((f) => f.id).join(', ')}`);
+    assert.ok(['fixed', 'partial', 'open'].includes(layout.status), layout.status);
+    assert.equal(typeof layout.count, 'number');
+    assert.ok(Array.isArray(layout.items));
+  }
+
+  // Views the original does not reflow in (ir/index.js noReflowViews). The fixture reflows, so the list is empty -
+  // which is the point: the field is always there, so "none" is a reported fact and not a missing number.
+  assert.ok(Array.isArray(saved.generate.noReflow));
+  for (const row of saved.generate.noReflow) {
+    assert.equal(typeof row.page, 'string');
+    assert.ok(row.width > row.viewport, 'only a layout wider than the screen is listed');
+  }
+
+  // The shapes of the original's own state rules, against what the copy rebuilt: the pair that makes a lost
+  // sibling or ancestor effect visible instead of silent (capture/selectorShape.js).
+  assert.equal(typeof saved.motion.shapes, 'object');
+  assert.ok(saved.motion.shapes.self >= 1, JSON.stringify(saved.motion.shapes));
+  assert.equal(typeof saved.motion.unreadableSheets, 'number');
+  const hover = saved.generate.motion.hover;
+  assert.equal(typeof hover.sibs, 'number');
+  assert.equal(typeof hover.skipped.combinator, 'number');
+  assert.equal(typeof hover.skipped.kidNotDescendant, 'number');
+  // Nothing outward-reaching may be dropped without being counted.
+  const outward = (saved.motion.shapes.sibling ?? 0) + (saved.motion.shapes.adjacent ?? 0) + (saved.motion.shapes.ancestorHas ?? 0);
+  assert.ok(hover.sibs + hover.skipped.combinator >= 0 && outward >= 0);
+
+  // Manual rows stay actionable: every one says what it is and what to do.
+  for (const row of saved.manual ?? []) {
+    assert.ok(row.kind && row.title, JSON.stringify(row));
+  }
 });

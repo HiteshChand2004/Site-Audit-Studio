@@ -25,7 +25,7 @@ import { isElement } from './ir/tree.js';
 import { VIEW_WIDTHS } from './views.js';
 import { compareLayout, openRenderer, planFixes, renderPage, viewScore } from './verify/layout.js';
 import { createLedger } from './verify/ledger.js';
-import { CORRECT_BUDGET, CORRECT_MIN, correctLayout } from './verify/correct.js';
+import { CORRECT_BUDGET, CORRECT_MIN, correctLayout, correctReport } from './verify/correct.js';
 import { CSS_FILE } from './emit/css.js';
 import { REFINE_PAGES, refineResponsive } from './verify/refine.js';
 
@@ -476,6 +476,12 @@ export async function generateStage(ctx) {
     open: 0,
     items: [{ sharedBytes: Buffer.byteLength(out.files.get('css/site.css')), largestPageBytes: Math.max(0, ...pageCss), averagePageBytes: Math.round(pageCss.reduce((a, b) => a + b, 0) / Math.max(1, pageCss.length)) }],
   });
+  // What the correction loop changed, and what is still different with the cause for it. The causes a person has to
+  // act on (a missing file, an image's own pixels) become manual rows; the rest are counted, never dropped.
+  const corrected = correctReport(correct);
+  if (corrected.fix) report.fixes.push(corrected.fix);
+  report.manual.push(...corrected.manual);
+
   const templates = ir.pages.reduce((n, p) => n + countTemplates(p.body), 0);
   if (templates) {
     report.fixes.push({

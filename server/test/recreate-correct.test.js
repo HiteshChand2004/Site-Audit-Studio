@@ -12,7 +12,7 @@ import { compareLayout, openRenderer, viewScore } from '../src/recreate/verify/l
 import { nodesInBox } from '../src/recreate/verify/locate.js';
 import { createLedger } from '../src/recreate/verify/ledger.js';
 import {
-  aspect, correctLayout, gridTracks, judge, missingElement, paintCause, restoreDropped, spacing, trialCss,
+  aspect, correctLayout, correctReport, drift, gridTracks, judge, missingElement, paintCause, restoreDropped, spacing, trialCss,
   wrapping, wrongHeight,
 } from '../src/recreate/verify/correct.js';
 import { buildStyles } from '../src/recreate/ir/styles.js';
@@ -157,6 +157,30 @@ test('the ledger separates what is still wrong from what went away', () => {
   assert.equal(s.rounds, 1);
   assert.deepEqual(s.byKind, { missing: 1, offset: 1 });
   assert.equal(s.elements, 3, 'the element that came good is remembered, not forgotten');
+});
+
+test('a cause names the kind of difference, never one element, so the histogram stays one row per kind', () => {
+  // Found on a real run: the drift corrector used to put the culprit's path in the cause, which made report.json
+  // carry one cause row per element instead of one per kind.
+  const culprit = cap('div', { desktop: [[0, 0, 100, 200], {}] }, [], { sid: 2, cpath: 'body>div:2' });
+  const node = cap('p', { desktop: [[0, 300, 100, 40], {}] }, [text('after it')], { sid: 3, cpath: 'body>p:1' });
+  const group = groupOf(node, { desktop: { kind: 'offset', expected: [0, 300, 100, 40], actual: [0, 150, 100, 40] } });
+  const out = drift(group, {
+    ...ctxOf({ rendered: { '2|desktop': [0, 0, 100, 50], '3|desktop': [0, 150, 100, 40] } }),
+    heightCulprit: () => culprit,
+  });
+  assert.equal(out.cause, 'drift', 'the kind, not body>div:2');
+  assert.equal(out.target, culprit, 'the culprit is identified by the target, which is where it belongs');
+
+  // And the summary caps the histogram even if some future cause were per-element.
+  const ledger = createLedger();
+  ledger.beginRound(0);
+  const rows = Array.from({ length: 40 }, (_, i) => ({ sid: i, cpath: `body>div:${i}`, kind: 'size', tag: 'div', expected: [0, 0, 10, 10], actual: [0, 0, 4, 10], widthOk: false, heightOk: true, iou: 0.4 }));
+  ledger.observe({ page: '/', view: V, rows });
+  [...ledger.entries.values()].forEach((e, i) => { e.cause = `kind-${i}`; });
+  const s = ledger.summary();
+  assert.equal(Object.keys(s.byCause).length, 20);
+  assert.equal(s.causeKinds, 40, 'how many there really were is still reported');
 });
 
 test('the ledger summary is bounded and JSON-safe', () => {
@@ -500,6 +524,83 @@ test('only the topmost element missing from a chain is corrected', () => {
   const group = groupOf(kid, { desktop: { kind: 'missing' } });
   const ctx = { ...ctxOf({}), missingAncestor: () => true };
   assert.equal(missingElement(group, ctx), null, 'fixing the ancestor brings the whole subtree back');
+});
+
+// --- What reaches the report ---------------------------------------------------------------------------------------
+
+test('the report names what each corrector did and what is still different, by cause', () => {
+  const { fix, manual } = correctReport({
+    rounds: 3,
+    applied: 28,
+    reverted: 13,
+    scoreBefore: 74.8,
+    scoreAfter: 81.2,
+    stopped: 'rejected',
+    rejected: [{ corrector: 'height', count: 11, why: 'score 74.6 is not 1 above 74.8' }],
+    byCorrector: {
+      'flex-collapse': { applied: 28, reverted: 0 },
+      height: { applied: 0, reverted: 11 },
+      'drift-height': { applied: 0, reverted: 2 },
+    },
+    ledger: { elements: 400, open: 61, byCause: { 'font-render': 40, 'asset-missing': 3, 'image-content': 2, 'taller-content': 16 } },
+  });
+
+  assert.equal(fix.id, 'layout-correct');
+  assert.equal(fix.count, 28);
+  assert.equal(fix.open, 61);
+  assert.equal(fix.status, 'partial', 'some corrected, some still different');
+  assert.match(fix.title, /28 layout corrections/);
+  // Per corrector, the one that paid off first.
+  assert.deepEqual(fix.items[0], { corrector: 'flex-collapse', applied: 28, reverted: 0 });
+  assert.equal(fix.items.length, 3);
+  // Per cause, biggest first, and marked when a person has to act on it.
+  assert.deepEqual(fix.openItems[0], { cause: 'font-render', elements: 40, manual: false });
+  assert.equal(fix.openItems.find((i) => i.cause === 'asset-missing').manual, true);
+  // A refused change set is on the record with the reason, not hidden.
+  assert.equal(fix.refused[0].corrector, 'height');
+  assert.deepEqual(fix.score, { before: 74.8, after: 81.2 });
+
+  // Only the causes a person can act on become manual rows: a file that is missing, an image's own pixels.
+  assert.deepEqual(manual.map((m) => m.cause).sort(), ['asset-missing', 'image-content']);
+  assert.equal(manual.every((m) => m.kind === 'asset'), true);
+  assert.match(manual.find((m) => m.cause === 'asset-missing').title, /\(3 elements\)/);
+  assert.match(manual.find((m) => m.cause === 'image-content').title, /\(2 elements\)/);
+  for (const row of manual) assert.ok(row.detail.length > 20, 'a manual row says what to do about it');
+  // Text drawn by a different font is an explanation, not a task.
+  assert.equal(manual.some((m) => m.cause === 'font-render'), false);
+});
+
+test('the report entry is honest when nothing was corrected, and absent when there was nothing to do', () => {
+  const nothingWorked = correctReport({
+    rounds: 2, applied: 0, reverted: 9, stopped: 'rejected',
+    byCorrector: { height: { applied: 0, reverted: 9 } },
+    ledger: { elements: 120, open: 120, byCause: {} },
+  });
+  assert.equal(nothingWorked.fix.status, 'open');
+  assert.equal(nothingWorked.fix.count, 0);
+  assert.match(nothingWorked.fix.title, /no change measured closer/);
+  assert.deepEqual(nothingWorked.manual, []);
+
+  // Everything matched: nothing open, so the entry reads as fixed.
+  const clean = correctReport({ rounds: 1, applied: 4, reverted: 0, byCorrector: { gap: { applied: 4, reverted: 0 } }, ledger: { elements: 4, open: 0, byCause: {} } });
+  assert.equal(clean.fix.status, 'fixed');
+
+  // The loop never ran, so it has nothing to say.
+  assert.deepEqual(correctReport({ stopped: 'nothing-to-measure' }), { fix: null, manual: [] });
+  assert.deepEqual(correctReport(null), { fix: null, manual: [] });
+});
+
+test('everything the report carries survives JSON, and stays bounded', () => {
+  // report.json is written with JSON.stringify: a Set or a live node reference would throw or bloat it.
+  const byCause = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`cause-${i}`, i + 1]));
+  const byCorrector = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`fixer-${i}`, { applied: i, reverted: 1 }]));
+  const { fix, manual } = correctReport({ applied: 5, reverted: 5, byCorrector, ledger: { elements: 900, open: 900, byCause } });
+  assert.equal(fix.items.length, 20, 'a report is not a place for 40 correctors');
+  assert.equal(fix.openItems.length, 20);
+  assert.doesNotThrow(() => JSON.stringify({ fix, manual }));
+  const back = JSON.parse(JSON.stringify({ fix, manual }));
+  assert.equal(back.fix.items.length, 20);
+  assert.equal(back.fix.id, 'layout-correct');
 });
 
 // --- The loop, against a real browser -----------------------------------------------------------------------------

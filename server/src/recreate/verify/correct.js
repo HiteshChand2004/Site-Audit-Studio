@@ -158,7 +158,9 @@ export function drift(group, ctx) {
       byView[v] = got < want ? { 'min-height': px(want) } : { height: px(want) };
     }
     if (Object.keys(byView).length) {
-      return { id: got_shorter(byView) ? 'drift-min-height' : 'drift-height', target: culprit, prop: 'min-height', byView, cause: `drift-from:${culprit.cpath ?? 'unknown'}` };
+      // The cause is the KIND of difference, never the culprit's path: a path per element would make the cause
+      // histogram in the report one row per element instead of one row per kind.
+      return { id: got_shorter(byView) ? 'drift-min-height' : 'drift-height', target: culprit, prop: 'min-height', byView, cause: 'drift' };
     }
   }
   return null;
@@ -496,6 +498,78 @@ export async function correctLayout({ measure, ir, site, ledger, baseCss, candid
   // What is still different, with a cause where there is one: the honest half of a 100% target.
   out.ledger = ledger.summary();
   return out;
+}
+
+// Causes a person can actually do something about: the copy is missing a file, or the difference is content no
+// stylesheet can carry (a canvas, a video, an image's own pixels). Everything else the ledger names is an
+// explanation, not a task, and belongs in the fix entry's counts rather than in the manual list.
+export const MANUAL_CAUSES = {
+  'asset-missing': {
+    kind: 'asset',
+    title: 'An image the copy could not download is missing from a background',
+    detail: 'The original paints it from a file the asset step could not fetch. Add the file and set it as the background, or the area stays plain.',
+  },
+  'image-content': {
+    kind: 'asset',
+    title: 'Pictures, video or canvas drawings differ from the original',
+    detail: 'What an image, video or canvas draws is its own content, not something a stylesheet can reproduce. Replace the file to match the original exactly.',
+  },
+};
+
+/**
+ * The report rows for a finished correction pass: one `report.fixes` entry naming what each corrector did and what
+ * is still different and why, and `report.manual` rows for the causes a person has to act on.
+ *
+ * This is the honest half of a 100 % target. A difference that was corrected is counted; one that was not is named
+ * with its cause instead of quietly disappearing into a score.
+ * @param {object} correct  what correctLayout returned
+ * @returns {{ fix: object|null, manual: object[] }}
+ */
+export function correctReport(correct) {
+  if (!correct || correct.stopped === 'nothing-to-measure') return { fix: null, manual: [] };
+  const ledger = correct.ledger ?? {};
+  const byCause = ledger.byCause ?? {};
+  const applied = correct.applied ?? 0;
+  const open = ledger.open ?? 0;
+
+  // What each corrector did, and what is still different, by cause.
+  const items = Object.entries(correct.byCorrector ?? {})
+    .map(([corrector, n]) => ({ corrector, applied: n.applied ?? 0, reverted: n.reverted ?? 0 }))
+    .sort((a, b) => b.applied - a.applied || b.reverted - a.reverted);
+  const openItems = Object.entries(byCause)
+    .map(([cause, elements]) => ({ cause, elements, manual: cause in MANUAL_CAUSES }))
+    .sort((a, b) => b.elements - a.elements);
+
+  const title = applied
+    ? `${applied} layout ${applied === 1 ? 'correction' : 'corrections'} measured against the original`
+    : 'The layout was checked against the original; no change measured closer';
+  const fix = {
+    id: 'layout-correct',
+    title,
+    status: open ? (applied ? 'partial' : 'open') : 'fixed',
+    count: applied,
+    open,
+    detail: 'Every change was tried on a real render and kept only where the page measured closer to the original on every page and view. What is still different is listed by cause.',
+    items: items.slice(0, 20),
+    ...(openItems.length && { openItems: openItems.slice(0, 20) }),
+    ...(correct.stopped && { stopped: correct.stopped }),
+    ...(correct.rejected?.length && { refused: correct.rejected }),
+    ...(correct.scoreBefore != null && { score: { before: correct.scoreBefore, after: correct.scoreAfter } }),
+  };
+
+  const manual = [];
+  for (const [cause, n] of Object.entries(byCause)) {
+    const spec = MANUAL_CAUSES[cause];
+    if (!spec || !n) continue;
+    manual.push({
+      kind: spec.kind,
+      title: `${spec.title} (${n} ${n === 1 ? 'element' : 'elements'})`,
+      detail: spec.detail,
+      cause,
+      elements: n,
+    });
+  }
+  return { fix, manual };
 }
 
 /** The trial stylesheet: one rule per element per view, in the same order the emitter writes its sections. */
