@@ -80,6 +80,116 @@ function VisualDiff({ result, projectId }) {
   );
 }
 
+const CAUSE_LABEL = {
+  'page-height': 'The page is a different height',
+  'missing-element': 'Something the original shows is missing',
+  'extra-element': 'Something the original does not show was added',
+  'box-out-of-place': 'Something sits in the wrong place',
+  pixels: 'The pixels differ, although the layout matches',
+  'console-error': 'The copy logged an error',
+  'failed-request': 'The copy tried to load something it could not',
+  'loop-missing': 'An animation of the original is not repeating in the copy',
+  'third-party-frame': 'A frame from another company (a map, a video, a booking widget)',
+  'image-content': 'What a picture, video or canvas draws is its own content',
+};
+
+/**
+ * Every route at every screen size: how tall each side is, how many pixels differ, and whether every element sits
+ * where it should. Only the sizes that are not an exact match are listed, with a magnified look at the worst places.
+ */
+function ExactComparison({ result, projectId }) {
+  const exact = result.exact;
+  if (!exact?.summary) return null;
+  const { summary, limit = 0.5, remaining = [], pages = [] } = exact;
+  const check = exact.baseline?.check;
+  const url = (slug, file) => `/api/projects/${projectId}/recreate/${result.recreateId}/exact/${slug}/${file}`;
+  const rows = pages.flatMap((p) => p.slots.filter((s) => !s.accepted).map((s) => ({ page: p.page, slug: p.slug, ...s })));
+  const noise = Object.entries(exact.noiseFloor ?? {}).filter(([, v]) => v > 0);
+
+  return (
+    <section aria-label="Exact comparison" className={styles.section}>
+      <div className={styles.head}>
+        <span className={styles.title}>Exact comparison</span>
+        <span className={styles.meta}>
+          {plural(summary.slots, 'size')} across {plural(summary.pages, 'page')} · an exact match is under {limit}% of pixels
+        </span>
+        <span className={`${styles.score} mono`} data-tone={summary.accepted === summary.slots ? 'ok' : 'warn'}>
+          {summary.accepted}<small>/{summary.slots}</small>
+        </span>
+      </div>
+      {check && check.status !== 'fresh' && (
+        <p className={styles.note}>
+          {check.status === 'stale' ? 'The original has changed since it was measured' : 'The measurement of the original may be out of date'}
+          {check.reasons?.length ? `: ${check.reasons.join('; ')}` : ''}. Create the exact copy again to measure it afresh.
+        </p>
+      )}
+      {!rows.length && <p className={styles.note}>Every page matches the original at every size measured.</p>}
+      {rows.length > 0 && (
+        <table className={styles.matrix}>
+          <thead>
+            <tr>
+              <th scope="col">Page</th>
+              <th scope="col">Size</th>
+              <th scope="col">Height</th>
+              <th scope="col">Pixels</th>
+              <th scope="col">Elements</th>
+              <th scope="col">Look</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.slice(0, 40).map((r) => (
+              <tr key={`${r.page}-${r.id}`}>
+                <td className={`${styles.path} mono`} title={r.page}>{r.page}</td>
+                <td className="mono">
+                  {r.id}
+                  {r.dpr > 1 && <small> ·{r.dpr}x</small>}
+                  {r.origin === 'breakpoint' && <small title="One pixel either side of a breakpoint the site itself declares"> ·bp</small>}
+                </td>
+                <td className="mono" data-ok={r.heightOk}>
+                  {r.heightOk ? 'same' : `${r.heightOriginal} → ${r.heightCopy}`}
+                </td>
+                <td className="mono" data-ok={r.pixelsOk}>{r.diffRaw}%</td>
+                <td className="mono" data-ok={r.boxesOk}>
+                  {r.boxes
+                    ? [
+                      r.boxes.missing ? `${r.boxes.missing} missing` : null,
+                      r.boxes.extra ? `${r.boxes.extra} extra` : null,
+                      r.boxes.paired - r.boxes.within ? `${r.boxes.paired - r.boxes.within} moved` : null,
+                    ].filter(Boolean).join(', ') || 'all in place'
+                    : '—'}
+                </td>
+                <td className={styles.links}>
+                  {r.map && <a href={url(r.slug, r.map)} target="_blank" rel="noopener noreferrer" title="Where the two differ (red)">map</a>}
+                  {(r.crops ?? []).map((c, i) => (
+                    <a key={c.file} href={url(r.slug, c.file)} target="_blank" rel="noopener noreferrer" title={`${c.zoom}x zoom: the original above, the copy below`}>
+                      zoom {i + 1}
+                    </a>
+                  ))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {remaining.length > 0 && (
+        <ul className={styles.chips} aria-label="Remaining differences">
+          {remaining.map((r) => (
+            <li key={r.cause} data-kind={r.kind} title={r.kind === 'needs-a-person' ? 'Someone has to decide about this' : 'Something for the tool to fix'}>
+              {CAUSE_LABEL[r.cause] ?? r.cause} · {r.count}
+            </li>
+          ))}
+        </ul>
+      )}
+      {noise.length > 0 && (
+        <p className={styles.note}>
+          The original differs from itself by up to {Math.max(...noise.map(([, v]) => v))}% between two visits (rotating
+          content), so a difference below that says nothing.
+        </p>
+      )}
+    </section>
+  );
+}
+
 /** The layout between the captured widths: score per sweep width and what the sweep changed. */
 function Responsive({ result }) {
   const r = result.responsive;
@@ -197,6 +307,8 @@ export default function RecreateReport({ result, projectId }) {
           </ul>
         </section>
       )}
+
+      {result.exact?.summary && projectId && <ExactComparison result={result} projectId={projectId} />}
 
       {result.fidelity?.diff?.score != null && projectId && <VisualDiff result={result} projectId={projectId} />}
 

@@ -205,6 +205,31 @@ router.get('/:id/recreate/:recreateId/captures/:slug/:file', (req, res) => {
   );
 });
 
+// The exact comparison's pictures: the original as it was measured (capture/<slug>/exact/) and the copy beside it,
+// with the map of where they differ and the magnified crops (fidelity/<slug>/exact/). A slot id is a width, or a
+// width and a height, so the file names are bounded by that.
+const EXACT_FILE = /^(copy-)?d{3,4}(xd{3,4})?(-b[1-3]|-full|-map|-crop[1-3]).webp$/;
+
+router.get('/:id/recreate/:recreateId/exact/:slug/:file', (req, res) => {
+  const { id, recreateId, slug, file } = req.params;
+  if (!UUID.test(id) || !UUID.test(recreateId) || !CAPTURE_SLUG.test(slug) || !EXACT_FILE.test(file)) {
+    return res.status(404).json({ error: 'Image not found.' });
+  }
+  if (!doneRecreate.get(recreateId, id)) return res.status(404).json({ error: 'Recreate not found.' });
+  // The original's own shots live with the capture; everything the comparison made lives with the fidelity output.
+  const dir = file.startsWith('copy-') || /-(map|crop[1-3]).webp$/.test(file)
+    ? path.join(recreateDir(id, recreateId), 'fidelity', slug, 'exact')
+    : path.join(recreateDir(id, recreateId), 'capture', slug, 'exact');
+  res.sendFile(
+    path.join(dir, file),
+    { headers: { 'Content-Type': 'image/webp', 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' } },
+    (err) => {
+      if (!err || res.headersSent) return;
+      res.status(404).json({ error: 'Image not found. Only the latest 2 recreates of a project keep their files.' });
+    },
+  );
+});
+
 // Screenshots of the recreated pages and the heatmaps of the visual diff (fidelity/<slug>/<view>-{full,diff}.webp).
 const FIDELITY_FILE = /^(desktop|laptop|tablet|mobile)-(full|diff)\.webp$/;
 

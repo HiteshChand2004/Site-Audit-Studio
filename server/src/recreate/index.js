@@ -27,6 +27,7 @@ import { responsiveStage } from './responsive.js';
 import { stackStage } from './stack.js';
 import { sweepStage } from './sweep.js';
 import { exactCaptureStage } from './exactCapture.js';
+import { exactStage } from './exact.js';
 import { CHECKPOINT_FILE, clearUnfinished, isReusable, openCheckpoint, readCheckpoint, reportMarks, restoreStep, resumeStep, REUSABLE_STEPS } from './checkpoint.js';
 import { adoptWorkspace, commitWorkspace, discardWorkspace, openWorkspace } from './workspace.js';
 
@@ -53,12 +54,14 @@ export const STEPS = [
   // after the capture (`after`) and runs next to the steps above; the last step needs all of it (`join`). It is listed
   // here, where the job waits for it, so the step list of the app only ever moves forward.
   { key: 'sweep', label: 'Capturing more widths', weight: 8, max: 4 * 60000, optional: true, background: true, after: 'inspect', join: 'responsive', perPage: 120000 },
-  // Measures the finished build against the sweep screenshots (4b.6): never fails the job.
-  { key: 'responsive', label: 'Checking responsive layout', weight: 4, max: 90000, optional: true, perPage: 30000 },
   // The original at every exact viewport (capture/exact.js), for an exact copy only: about twenty visits per page,
   // so it is the slowest step there is and it has no limit in that mode. A background step that starts right after
   // the capture, like the sweep, and is awaited by the comparison that needs it.
   { key: 'exactCapture', label: 'Measuring the original', weight: 10, max: 10 * 60000, optional: true, background: true, after: 'inspect', join: 'exact', perPage: 600000 },
+  // The copy at those same viewports, against what the original did (recreate/exact.js): measures only.
+  { key: 'exact', label: 'Comparing with the original', weight: 6, max: 10 * 60000, optional: true, browser: true, perPage: 240000 },
+  // Measures the finished build against the sweep screenshots (4b.6): never fails the job.
+  { key: 'responsive', label: 'Checking responsive layout', weight: 4, max: 90000, optional: true, perPage: 30000 },
   // The project's stack (React + Vite, Next.js, MERN) built from what the build step left (recreate/stack.js): a background
   // step next to the ones above when a second browser fits, else left to the export after the job. Never fails the job.
   { key: 'stack', label: 'Building the chosen stack', weight: 6, max: 8 * 60000, optional: true, background: true, after: 'build', perPage: 20000 },
@@ -106,6 +109,7 @@ export const STAGES = {
   inspect: inspectStage,
   sweep: sweepStage,
   exactCapture: exactCaptureStage,
+  exact: exactStage,
   assets: assetsStage,
   generate: generateStage,
   build: buildStage,

@@ -12,7 +12,7 @@
 // hard wall: WebP cannot hold an image past 16383 px, which at dpr 3 is reached by any page taller than 5461 CSS px.
 // A page taller than one band is stored as several, at the same offsets the copy will be shot at.
 import { gzipSync } from 'node:zlib';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
 import { MAX_HEIGHT, MOBILE_UA } from '../../audit/screenshots.js';
@@ -21,6 +21,7 @@ import { collectExactBoxes } from '../verify/exact/boxes.js';
 import { fingerprintOf } from '../verify/exact/fingerprint.js';
 import { freezePage, freezeTimers } from '../verify/exact/freeze.js';
 import { settleExact } from '../verify/exact/recipe.js';
+import { exactDiff } from '../verify/exact/pixels.js';
 
 export const EXACT_DIR = 'exact';
 /** Bands of MAX_HEIGHT CSS px each: four is 32 000 px of page, past which a tail is reported, never silently cut. */
@@ -48,7 +49,7 @@ export async function pageFingerprint(response) {
 }
 
 /** The page in bands of MAX_HEIGHT CSS px, at the offsets the copy will be shot at too. */
-async function shootBands(page, slot, pageHeight, dir, slotId) {
+export async function shootBands(page, slot, pageHeight, dir, slotId) {
   const bands = [];
   const wanted = Math.min(pageHeight, MAX_HEIGHT * MAX_BANDS);
   for (let band = 0; band * MAX_HEIGHT < wanted; band++) {
@@ -78,6 +79,7 @@ async function shootBands(page, slot, pageHeight, dir, slotId) {
  */
 export async function visitSlot(browser, url, slot, dir, {
   cache = null, timeout = SLOT_TIMEOUT_MS, deadline = Infinity, boxes = true, fingerprint = false, write = true,
+  prefix = '',
 } = {}) {
   const started = Date.now();
   const context = await browser.newContext({
@@ -114,7 +116,7 @@ export async function visitSlot(browser, url, slot, dir, {
     const print = fingerprint ? await pageFingerprint(response) : null;
 
     const pageHeight = recipe.height;
-    const bands = write ? await shootBands(page, slot, pageHeight, dir, slot.id) : [];
+    const bands = write ? await shootBands(page, slot, pageHeight, dir, `${prefix}${slot.id}`) : [];
     let index = null;
     if (boxes) {
       index = await page.evaluate(collectExactBoxes, {});
@@ -184,13 +186,24 @@ export async function captureExactPage(browser, pageInfo, workspace, {
           cache, timeout, deadline, fingerprint: !fingerprint,
         });
         fingerprint ??= first.fingerprint ?? null;
-        // The same original, visited twice: how much a page differs from itself is the floor below which no
-        // difference between the original and the copy means anything (recreate/exactCapture.js reads this).
+        // The same original, visited twice and compared with itself: the floor below which a difference between
+        // the original and the copy means nothing. Without it "under half a percent" is a number with no scale -
+        // a page with a rotating hero or a per-request banner differs from itself by more than that.
         if (noise) {
           const again = await visitSlot(browser, pageInfo.url, slot, dir, {
-            cache, timeout, deadline, boxes: false, write: false,
+            cache, timeout, deadline, boxes: false, prefix: 'noise-',
           });
-          first.noise = { pageHeight: again.pageHeight, sameHeight: again.pageHeight === first.pageHeight };
+          try {
+            const r = await exactDiff(
+              path.join(dir, bandFile(slot.id, 0)),
+              path.join(dir, bandFile(`noise-${slot.id}`, 0)),
+            );
+            first.noise = { pct: r.pct, pixels: r.diff, sameHeight: again.pageHeight === first.pageHeight };
+          } catch (err) {
+            first.noise = { error: String(err.message ?? err).slice(0, 120) };
+          }
+          // The second shot has done its job; only the number is kept.
+          for (const band of again.bands) await rm(path.join(dir, band.file), { force: true }).catch(() => {});
         }
         done.push(first);
         progress?.(done.length / slots.length, `Measuring the original at ${slot.width}px (${done.length} of ${slots.length})`);

@@ -19,6 +19,7 @@
 // calibrated on 111 real pairs, it feeds fidelity, responsive, refine and the correction loop's judge(), and its
 // `coarse` flag is what separates real geometry from font rasterisation. Two metrics, two jobs - this one for
 // acceptance, that one for where to look.
+import { readFile } from 'node:fs/promises';
 import sharp from 'sharp';
 
 /** The largest possible YIQ distance, which is what `threshold` is a fraction of (pixelmatch's constant). */
@@ -130,20 +131,27 @@ function hasManySiblings(img, x, y, width, height) {
   return false;
 }
 
-/** Read into memory first: sharp keeps a handle on a file it opened, and Windows cannot rename the workspace then. */
-const open = async (input) => sharp(Buffer.isBuffer(input) ? input : await sharp(input).toBuffer(), { limitInputPixels: false });
+/**
+ * Read into memory with Node, never with sharp: sharp keeps a handle on a file it opened, and Windows then refuses to
+ * rename or remove the workspace that holds it.
+ */
+const open = async (input) => sharp(Buffer.isBuffer(input) ? input : await readFile(input), { limitInputPixels: false });
 
 /**
  * Compares two full-page shots pixel for pixel.
  * @param {string|Buffer} original
  * @param {string|Buffer} generated
- * @param {{ threshold?: number, includeAntialiased?: boolean, bandRows?: number, block?: number }} [o]
+ * @param {{ threshold?: number, includeAntialiased?: boolean, bandRows?: number, block?: number,
+ *   exclude?: {x:number,y:number,w:number,h:number}[], offsetY?: number }} [o]  exclude: areas counted as masked
+ *   instead of as differences (a third-party frame, a canvas, a video); offsetY: where this band sits in the page,
+ *   so the areas can be given in page coordinates
  * @returns {Promise<{ pct: number, diff: number, antialiased: number, compared: number, total: number,
  *   width: number, height: number, heights: [number, number], heightOnlyOne: number, widthMismatch: boolean,
  *   blocks: { cols: number, rows: number, px: number, counts: Uint32Array } }>}
  */
 export async function exactDiff(original, generated, {
   threshold = DEFAULT_THRESHOLD, includeAntialiased = false, bandRows = BAND_ROWS, block = BLOCK_PX,
+  exclude = [], offsetY = 0,
 } = {}) {
   const a = await open(original);
   const b = await open(generated);
@@ -161,6 +169,12 @@ export async function exactDiff(original, generated, {
   const counts = new Uint32Array(cols * rows);
   let diff = 0;
   let anti = 0;
+  let masked = 0;
+  // In this band's own coordinates, and only the parts of an area that fall inside it.
+  const areas = exclude
+    .map((r) => ({ x0: Math.floor(r.x), y0: Math.floor(r.y - offsetY), x1: Math.ceil(r.x + r.w), y1: Math.ceil(r.y - offsetY + r.h) }))
+    .filter((r) => r.y1 > 0 && r.y0 < height && r.x1 > 0 && r.x0 < width);
+  const inside = (x, y) => areas.some((r) => x >= r.x0 && x < r.x1 && y >= r.y0 && y < r.y1);
 
   for (let top = 0; top < height; top += bandRows) {
     const rowsHere = Math.min(bandRows, height - top);
@@ -180,6 +194,10 @@ export async function exactDiff(original, generated, {
         const delta = colorDelta(bufA, bufB, pos, pos);
         if (delta === 0) continue;
         if (Math.abs(delta) <= maxDelta) continue;
+        if (areas.length && inside(x, pageY)) {
+          masked++;
+          continue;
+        }
         if (!includeAntialiased
           && (antialiased(bufA, x, y, width, haloRows, bufB) || antialiased(bufB, x, y, width, haloRows, bufA))) {
           anti++;
@@ -197,6 +215,7 @@ export async function exactDiff(original, generated, {
     pct: total ? Math.round(((diff + heightOnlyOne) / total) * 1e6) / 1e4 : 0,
     diff,
     antialiased: anti,
+    masked,
     compared,
     total,
     width,

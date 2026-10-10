@@ -139,8 +139,13 @@ export async function exactCaptureStage(ctx, local = {}) {
   }
 
   const measured = done.reduce((n, p) => n + p.slots.length, 0);
+  // How much the original differs from itself, per slot: the scale every later number is read against.
+  const noiseFloor = {};
+  for (const p of done) {
+    for (const s of p.slots) if (s.noise?.pct !== undefined) noiseFloor[s.id] = Math.max(noiseFloor[s.id] ?? 0, s.noise.pct);
+  }
   const freeAfter = await freeDiskGB(ctx.dir);
-  ctx.exactBaseline = { slots, pages: done };
+  ctx.exactBaseline = { slots, pages: done, noiseFloor };
   report.exact = {
     ...report.exact,
     recipeVersion: RECIPE_VERSION,
@@ -156,6 +161,7 @@ export async function exactCaptureStage(ctx, local = {}) {
       errors: errors.slice(0, 40),
       errorCount: errors.length,
     },
+    noiseFloor,
     disk: { bytes, perPage: done.length ? Math.round(bytes / done.length) : 0, freeBeforeGB: free, freeAfterGB: freeAfter },
   };
   if (errors.length) {

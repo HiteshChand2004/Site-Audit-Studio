@@ -116,7 +116,7 @@ test('a successful run publishes the workspace with a report', async () => {
     progress: (step, f) => f === 0 && steps.at(-1) !== step && steps.push(step),
     stages: { ...stubStages, generate: async (ctx) => ctx.report.pages.push({ path: '/' }) },
   });
-  assert.deepEqual(steps, ['inspect', 'sweep', 'assets', 'generate', 'build', 'stack', 'preview', 'responsive']);
+  assert.deepEqual(steps, ['inspect', 'sweep', 'exactCapture', 'assets', 'generate', 'build', 'stack', 'preview', 'exact', 'responsive']);
   assert.equal(report.baseUrl, 'https://www.example.com');
   assert.deepEqual(report.pages, [{ path: '/' }]);
   const saved = JSON.parse(await readFile(`${recreateDir(project.id, recreateId)}/report.json`, 'utf8'));
@@ -208,7 +208,7 @@ test('POST /recreate runs a job, streams events and exposes the result', async (
   const res = await fetch(`${base}/${project.id}/recreate`, { method: 'POST' });
   assert.equal(res.status, 202);
   const { recreateId, job, steps } = await res.json();
-  assert.equal(steps.length, 8);
+  assert.equal(steps.length, 10);
   assert.match(job.warnings[0], /8 days old/);
 
   const events = await (await fetch(`${base}/${project.id}/recreate/${recreateId}/events`)).text();
@@ -259,8 +259,9 @@ test('the sweep runs next to the steps after it and is awaited by the step that 
     },
   });
   assert.deepEqual(log, ['start sweep', 'start assets', 'end assets', 'start generate', 'end generate', 'start build', 'end build', 'end sweep', 'start responsive', 'end responsive']);
+  // The two exact-mode steps ran and did nothing, which is what they do for an ordinary copy.
   // Every step is timed; the steps that overlapped add up to more than the job took.
-  assert.deepEqual(Object.keys(report.timings).sort(), ['assets', 'build', 'generate', 'inspect', 'preview', 'responsive', 'stack', 'sweep', 'total']);
+  assert.deepEqual(Object.keys(report.timings).sort(), ['assets', 'build', 'exact', 'exactCapture', 'generate', 'inspect', 'preview', 'responsive', 'stack', 'sweep', 'total']);
   assert.ok(report.timings.sweep >= 110);
   assert.ok(report.timings.total < report.timings.sweep + report.timings.assets + report.timings.generate + report.timings.build);
 });
