@@ -1,0 +1,36 @@
+{
+ "note": "Saved captures rebuilt offline to prove nothing broke. Never proof that a fix is general: these are the sites the fixes were written against. dataDir is read-only; each fixture is copied before it is rebuilt.",
+ "dataDir": "C:/Users/urvas/Downloads/Site-Audit-Studio-main/data",
+ "fixtures": [
+  {
+   "name": "nyaayai",
+   "projectId": "1f98e132-7f60-45d7-8110-704d790a210c",
+   "recreateId": "2cd8b2ad-3fdc-40d7-8fbf-20ab3853a522",
+   "site": "www.nyaayai.com"
+  },
+  {
+   "name": "botza",
+   "projectId": "61401b96-a3fc-46a8-8c88-ad567a0298a4",
+   "recreateId": "4029dc72-1851-461b-8afb-59f5933f2261",
+   "site": "botza.panscience.ai"
+  },
+  {
+   "name": "panscience",
+   "projectId": "b210e06f-c1e7-4b78-9b83-512b93c60e36",
+   "recreateId": "9f2e79f3-c967-447c-8b2f-180c201a094c",
+   "site": "www.panscience.xyz"
+  },
+  {
+   "name": "flexibench",
+   "projectId": "caa38f97-330d-401e-bec9-059a9c3635b2",
+   "recreateId": "e862b91e-6d66-4075-9e3e-f68a6dcae30a",
+   "site": "www.flexibench.io"
+  },
+  {
+   "name": "parchaa",
+   "projectId": "d5691f4f-8b64-4244-a561-d467db3fcb8c",
+   "recreateId": "65503eed-898e-4290-b5e9-e0aa0beff930",
+   "site": "www.parchaa.com"
+  }
+ ]
+}
