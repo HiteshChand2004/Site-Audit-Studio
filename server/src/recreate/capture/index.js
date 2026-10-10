@@ -379,14 +379,18 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
  * @param {import('playwright').Browser} browser
  * @param {{ url: string, slug: string }} pageInfo  an entry from discoverPages()
  * @param {string} workspace  the recreate workspace folder
- * @param {{ timeout?: number, motionBudgetMs?: number, clickBudgetMs?: number, cache?: object }} [o]  cache: the job's shared cache of static files (audit/sharedCache.js)
+ * @param {{ timeout?: number, motionBudgetMs?: number, clickBudgetMs?: number, cache?: object, patient?: boolean }} [o]
+ *   cache: the job's shared cache of static files (audit/sharedCache.js); patient: a run with no time limit, which tries a
+ *   view that failed more often and also tries one that timed out (there is no remaining time for it to cost)
  * @returns {Promise<{ views: Record<string, object>, errors: { view: string, message: string }[] }>}
  */
 // Load failures worth one more try: the site refused or dropped the connection, which says nothing about the page.
 const REFUSED = /ERR_EMPTY_RESPONSE|ERR_CONNECTION_(RESET|CLOSED|REFUSED|ABORTED)|ERR_SOCKET_NOT_CONNECTED|ERR_HTTP2_PROTOCOL_ERROR|ERR_QUIC_PROTOCOL_ERROR/;
 const RETRY_WAIT_MS = 1500;
+// A view the site gave up on in time, rather than refusing: worth another try only when the run has no limit.
+const TIMED_OUT = /Timeout|timed out|ERR_TIMED_OUT|ERR_NETWORK_CHANGED|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED/i;
 
-export async function capturePage(browser, pageInfo, workspace, { timeout = 30000, motionBudgetMs = 0, clickBudgetMs = 0, cache = null } = {}) {
+export async function capturePage(browser, pageInfo, workspace, { timeout = 30000, motionBudgetMs = 0, clickBudgetMs = 0, cache = null, patient = false } = {}) {
   const dir = captureDir(workspace, pageInfo.slug);
   await mkdir(dir, { recursive: true });
   // All views side by side when the machine has the memory for four loaded pages, fewer (never under two) when it is short
@@ -405,9 +409,12 @@ export async function capturePage(browser, pageInfo, workspace, { timeout = 3000
   // was lost although nothing was wrong with it. Those views are tried once more, one at a time and after a pause, so
   // the retry paces the site instead of hammering it. The desktop view decides whether the page is usable at all, so
   // it gets one attempt more than the others. Timeouts are not retried: they cost the step its remaining time.
+  // With no time limit every view is tried again each round, four rounds, and a view that timed out is tried too:
+  // nothing is lost by waiting, and a page missing a view is a page the copy cannot be measured on.
   let retried = 0;
-  for (const attempt of [1, 2]) {
-    const again = errors.filter((e) => REFUSED.test(e.message) && (attempt === 1 || e.view === VIEWS[0].id));
+  for (const attempt of patient ? [1, 2, 3, 4] : [1, 2]) {
+    const again = errors.filter((e) => (REFUSED.test(e.message) || (patient && TIMED_OUT.test(e.message)))
+      && (patient || attempt === 1 || e.view === VIEWS[0].id));
     if (!again.length) break;
     for (const e of again) {
       await new Promise((r) => setTimeout(r, RETRY_WAIT_MS * attempt));

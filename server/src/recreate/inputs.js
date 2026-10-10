@@ -47,6 +47,20 @@ export const pageLimitOf = (recreatePages) => (recreatePages == null || recreate
 export const isAllPages = (recreatePages) => recreatePages == null || recreatePages === ALL_PAGES;
 
 /**
+ * Exact mode: the copy is measured against the original at every viewport until it matches, the run has no time limit, and
+ * everything that would change pixels on purpose (contrast rewriting, image re-encoding) is switched off, so the copy is the
+ * site "as it is" rather than an improved version of it.
+ */
+export const isExactMode = (project) => Boolean(project?.exact_mode);
+
+/** Exact mode from a PATCH body: a boolean, or 0/1 from a form. @returns {0|1|null} null = not a usable value */
+export function parseExactMode(value) {
+  if (value === true || value === 1 || value === '1' || value === 'true') return 1;
+  if (value === false || value === 0 || value === '0' || value === 'false') return 0;
+  return null;
+}
+
+/**
  * Optional origin used for canonical, sitemap and Open Graph URLs. Empty clears it.
  * @returns {{ ok: true, value: string|null } | { ok: false }}
  */

@@ -243,8 +243,9 @@ export const useProjects = create((set, get) => ({
   },
 
   /**
-   * @param {{ reuseCapture?: boolean, resume?: boolean }} [options]  reuseCapture: rebuild from the last capture, without
-   *   opening the site; resume: continue the copy that stopped, keeping what it had done (GET …/recreate `resumable`)
+   * @param {{ reuseCapture?: boolean, resume?: boolean, exact?: boolean }} [options]  reuseCapture: rebuild from the last
+   *   capture, without opening the site; resume: continue the copy that stopped, keeping what it had done
+   *   (GET …/recreate `resumable`); exact: this one copy is an exact one (the project's own setting decides otherwise)
    */
   async recreate(id, options = null) {
     get().setJob('recreate', id, { status: 'starting', pct: 0, step: null, error: null, message: 'Starting…' });
@@ -257,6 +258,19 @@ export const useProjects = create((set, get) => ({
         if (current) return get().attachJob('recreate', id, current.job, current.steps);
       }
       get().setJob('recreate', id, { status: 'failed', error: err.message });
+    }
+  },
+
+  /**
+   * Asks the copy that is running to stop. What it has done is kept, so the Copy step then offers to continue where it
+   * stopped. The job's own SSE stream reports the end, so nothing is set here beyond the "Stopping…" message.
+   */
+  async stopRecreate(id) {
+    try {
+      const { job } = await api.stopRecreate(id);
+      get().setJob('recreate', id, { status: job.status, message: job.message, pct: job.pct, step: job.step });
+    } catch {
+      // Already finished or stopped: its stream reports the real state.
     }
   },
 

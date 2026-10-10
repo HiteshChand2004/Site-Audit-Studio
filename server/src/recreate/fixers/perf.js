@@ -128,7 +128,7 @@ export function fixBrokenLinks(t, broken, origin) {
  * fetchpriority for the LCP candidate, lazy loading below the first screen.
  * @returns {{ priority: object[], lazy: number, lazyFrames: number }}
  */
-export function fixLoading(t) {
+export function fixLoading(t, { asIs = false } = {}) {
   const images = [];
   const frames = [];
   walk(t.root, (n) => {
@@ -159,7 +159,7 @@ export function fixLoading(t) {
   let unfaded = 0;
   for (const img of images) {
     if (priority.has(img)) {
-      unfaded += dropEntrance(t.root, img);
+      if (!asIs) unfaded += dropEntrance(t.root, img);
       img.attrs.fetchpriority = 'high';
       img.attrs.loading = 'eager';
       delete img.attrs.decoding;

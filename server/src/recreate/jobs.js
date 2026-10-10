@@ -13,7 +13,7 @@ import { getEmitter } from './emit/index.js';
 import { exportStack, outputRoot, targetStack } from './export/fromIr.js';
 import { activePreview, startPreview } from './preview.js';
 import { MAX_AUTO_RESUMES, readCheckpoint } from './checkpoint.js';
-import { analysisWarnings, latestAnalysis } from './inputs.js';
+import { analysisWarnings, isExactMode, latestAnalysis } from './inputs.js';
 import { pruneRecreates, recreateDir, tmpDir } from './workspace.js';
 
 export const recreateJobs = new JobManager({
@@ -22,13 +22,20 @@ export const recreateJobs = new JobManager({
   steps: STEPS,
   overallPct,
   doneMessage: 'Recreate complete',
-  run: async ({ job, project, payload, progress }) => {
+  run: async ({ job, project, payload, progress, signal }) => {
     // A rebuild from a saved capture (recreate/replay.js): the site is not opened again, only generate → build → preview run.
     const stages = payload?.reuseFrom
       ? { ...STAGES, ...replayStages(recreateDir(project.id, payload.reuseFrom.recreateId), payload.reuseFrom) }
       : undefined;
     // A resume (recreate/checkpoint.js) continues the stopped recreate payload.resumeFrom names from its kept workspace.
-    const report = await runRecreate({ project, recreateId: job.id, progress, warnings: job.warnings, ...(stages && { stages }), ...(payload?.resumeFrom && { resumeFrom: payload.resumeFrom }) });
+    // Exact mode: the project's setting, or this one run (POST …/recreate { exact: true }). It replicates the site as it
+    // is and has no time limit; `noLimit` lifts the limit for an ordinary run.
+    const exact = payload?.exact ?? isExactMode(project);
+    const report = await runRecreate({
+      project, recreateId: job.id, progress, warnings: job.warnings, signal, exact,
+      ...(payload?.noLimit && { unlimited: true }),
+      ...(stages && { stages }), ...(payload?.resumeFrom && { resumeFrom: payload.resumeFrom }),
+    });
     // The preview is runtime state: its port is not part of the report. The app asks for it
     // (GET/POST /preview), which also starts it again after a server restart. The stack's own build when the job built it.
     const stack = targetStack(report, project.stack);

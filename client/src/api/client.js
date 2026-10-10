@@ -158,6 +158,7 @@ export const api = {
     return res.ok ? null : res.headers.get('X-Download-Error') ?? `Download failed (${res.status}).`;
   },
   getRecreate: (id) => request(`/projects/${id}/recreate`),
+  stopRecreate: (id) => request(`/projects/${id}/recreate/stop`, { method: 'POST' }),
   subscribeRecreate: (id, recreateId, handlers) => subscribe(`/api/projects/${id}/recreate/${recreateId}/events`, handlers),
   startReaudit: (id) => request(`/projects/${id}/reaudit`, { method: 'POST' }),
   getCurrentReaudit: (id) => request(`/projects/${id}/reaudit/current`),

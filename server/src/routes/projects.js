@@ -5,7 +5,7 @@ import { db, projectDir } from '../db/index.js';
 import { parseMaxPages } from './analyze.js';
 import { buildDummyAudit } from '../dummy/audit.js';
 import { precheckUrl } from '../security/netGuard.js';
-import { MAX_RECREATE_PAGES, parseRecreatePages, parseTargetDomain } from '../recreate/inputs.js';
+import { MAX_RECREATE_PAGES, parseExactMode, parseRecreatePages, parseTargetDomain } from '../recreate/inputs.js';
 import { stopPreview } from '../recreate/preview.js';
 import { stackIds } from '../recreate/emit/index.js';
 import { recreateSection } from '../reaudit/contract.js';
@@ -14,7 +14,7 @@ export const STACKS = stackIds();
 
 const router = Router();
 
-const toProject = (row) => row && { ...row, authorized: Boolean(row.authorized) };
+const toProject = (row) => row && { ...row, authorized: Boolean(row.authorized), exact_mode: Boolean(row.exact_mode) };
 
 function normalizeUrl(input) {
   if (typeof input !== 'string' || !input.trim()) return null;
@@ -72,7 +72,9 @@ router.patch('/:id', (req, res) => {
   const project = selectOne.get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found.' });
 
-  const { name, stack, url, max_pages: maxPages, recreate_pages: recreatePages, target_domain: targetDomain } = req.body ?? {};
+  const {
+    name, stack, url, max_pages: maxPages, recreate_pages: recreatePages, target_domain: targetDomain, exact_mode: exactMode,
+  } = req.body ?? {};
   const next = {
     name: project.name,
     stack: project.stack,
@@ -80,6 +82,7 @@ router.patch('/:id', (req, res) => {
     maxPages: project.max_pages,
     recreatePages: project.recreate_pages,
     targetDomain: project.target_domain,
+    exactMode: project.exact_mode ?? 0,
   };
 
   if (name !== undefined) {
@@ -107,6 +110,11 @@ router.patch('/:id', (req, res) => {
     if (parsed === null) return badRequest(res, `Recreate pages must be "all" or a whole number from 0 to ${MAX_RECREATE_PAGES}.`);
     next.recreatePages = parsed;
   }
+  if (exactMode !== undefined) {
+    const parsed = parseExactMode(exactMode);
+    if (parsed === null) return badRequest(res, 'Exact mode must be true or false.');
+    next.exactMode = parsed;
+  }
   if (targetDomain !== undefined) {
     const parsed = parseTargetDomain(targetDomain);
     if (!parsed.ok) return badRequest(res, 'Target domain must be a domain or an http(s) origin, for example https://example.com.');
@@ -114,9 +122,13 @@ router.patch('/:id', (req, res) => {
   }
 
   db.prepare(`
-    UPDATE projects SET name = ?, stack = ?, url = ?, max_pages = ?, recreate_pages = ?, target_domain = ?, updated_at = ?
+    UPDATE projects
+    SET name = ?, stack = ?, url = ?, max_pages = ?, recreate_pages = ?, target_domain = ?, exact_mode = ?, updated_at = ?
     WHERE id = ?
-  `).run(next.name, next.stack, next.url, next.maxPages, next.recreatePages, next.targetDomain, new Date().toISOString(), project.id);
+  `).run(
+    next.name, next.stack, next.url, next.maxPages, next.recreatePages, next.targetDomain, next.exactMode,
+    new Date().toISOString(), project.id,
+  );
   res.json(toProject(selectOne.get(project.id)));
 });
 

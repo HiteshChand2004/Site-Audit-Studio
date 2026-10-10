@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CheckCircle2, Columns2, Loader2, Play, RefreshCw, Settings2, Sparkles, Trophy } from 'lucide-react';
+import { CheckCircle2, Columns2, Loader2, Play, RefreshCw, Settings2, Sparkles, StopCircle, Target, Trophy } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import { Alert, Card } from '../../components/common/Surface.jsx';
 import SectionCard from '../../components/common/SectionCard.jsx';
@@ -43,6 +43,7 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   const analysis = useProjects((s) => s.analyses[project.id]);
   const job = useProjects((s) => s.recreates[project.id]);
   const recreate = useProjects((s) => s.recreate);
+  const stopRecreate = useProjects((s) => s.stopRecreate);
   const dismissJob = useProjects((s) => s.dismissJob);
   const latest = useProjects((s) => s.recreateResults[project.id]);
   const reloadRecreate = useProjects((s) => s.reloadRecreate);
@@ -102,6 +103,10 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
             <dd>{stack.name}</dd>
           </div>
           <div>
+            <dt>How exact</dt>
+            <dd>{project.exact_mode ? 'Exact copy (as it is, no time limit)' : 'Normal copy'}</dd>
+          </div>
+          <div>
             <dt>Pages</dt>
             <dd>{pagesText(project.recreate_pages)}</dd>
           </div>
@@ -119,8 +124,33 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
             title={blocker ?? undefined}
             onClick={() => recreate(project.id)}
           >
-            {running ? 'Creating the copy…' : resume ? 'Start over' : result ? 'Create the copy again' : 'Create the copy'}
+            {running
+              ? 'Creating the copy…'
+              : resume
+                ? 'Start over'
+                : project.exact_mode
+                  ? (result ? 'Create the exact copy again' : 'Create the exact copy')
+                  : (result ? 'Create the copy again' : 'Create the copy')}
           </Button>
+          {running && (
+            <Button
+              icon={StopCircle}
+              title="Stops the copy. Everything it has finished is kept, so it can carry on where it stopped."
+              onClick={() => stopRecreate(project.id)}
+            >
+              Stop
+            </Button>
+          )}
+          {!project.exact_mode && !running && (
+            <Button
+              icon={Target}
+              disabled={Boolean(blocker)}
+              title="Measures every page against the original at every screen size until it matches, and copies the site as it is. It takes hours, and it does not change this project's settings."
+              onClick={() => recreate(project.id, { exact: true })}
+            >
+              Create an exact copy
+            </Button>
+          )}
           {result && (
             <Button
               icon={RefreshCw}

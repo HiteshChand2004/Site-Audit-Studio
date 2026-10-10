@@ -6,7 +6,7 @@ import { db } from '../db/index.js';
 import { ConflictError } from '../jobs/manager.js';
 import { streamJob } from '../jobs/sse.js';
 import { PUBLIC_STEPS } from '../recreate/index.js';
-import { analysisWarnings, latestAnalysis } from '../recreate/inputs.js';
+import { analysisWarnings, latestAnalysis, parseExactMode } from '../recreate/inputs.js';
 import { recreateJobs } from '../recreate/jobs.js';
 import { activePreview, PreviewError, startPreview, stopPreview } from '../recreate/preview.js';
 import { findResumable, recreateDir } from '../recreate/workspace.js';
@@ -54,6 +54,9 @@ router.post('/:id/recreate', async (req, res) => {
 
   // `reuseCapture`: rebuild from the capture of the latest finished recreate (recreate/replay.js) instead of opening the
   // site again: only generate → build → preview run, for trying a change to the generated site quickly.
+  if (req.body?.resume && req.body?.reuseCapture) {
+    return res.status(400).json({ error: 'Choose one: continue the stopped copy, or rebuild from the last visit.' });
+  }
   let payload = {};
   if (req.body?.reuseCapture) {
     const source = latestReplayable.all(project.id).find((r) => r && existsSync(path.join(recreateDir(project.id, r.id), 'capture', 'manifest.json'))
@@ -70,16 +73,35 @@ router.post('/:id/recreate', async (req, res) => {
     if (!stopped) return res.status(409).json({ error: 'There is no stopped recreate to continue: start a new one.' });
     payload = { resumeFrom: { recreateId: stopped.recreateId } };
   }
+  // `exact`: this one run is an exact copy (the project's own setting decides when this is not given).
+  if (req.body?.exact !== undefined) {
+    const parsed = parseExactMode(req.body.exact);
+    if (parsed === null) return res.status(400).json({ error: 'Exact mode must be true or false.' });
+    payload.exact = Boolean(parsed);
+  }
+  // `noLimit`: an ordinary run that is allowed to take as long as its work needs.
+  if (req.body?.noLimit) payload.noLimit = true;
 
   try {
     const job = recreateJobs.start(project, payload, { warnings: analysisWarnings(analysis) });
-    res.status(202).json({ recreateId: job.id, job, steps: PUBLIC_STEPS, ...(payload.reuseFrom && { reuseFrom: payload.reuseFrom }), ...(payload.resumeFrom && { resumeFrom: payload.resumeFrom }) });
+    res.status(202).json({
+      recreateId: job.id, job, steps: PUBLIC_STEPS,
+      ...(payload.reuseFrom && { reuseFrom: payload.reuseFrom }),
+      ...(payload.resumeFrom && { resumeFrom: payload.resumeFrom }),
+      ...(payload.exact !== undefined && { exact: payload.exact }),
+    });
   } catch (err) {
     if (err instanceof ConflictError) {
       return res.status(409).json({ error: err.message, recreateId: err.job.id });
     }
     throw err;
   }
+});
+
+router.post('/:id/recreate/stop', (req, res) => {
+  const job = recreateJobs.stop(req.params.id);
+  if (!job) return res.status(409).json({ error: 'No copy is running for this project.' });
+  res.json({ job, steps: PUBLIC_STEPS });
 });
 
 router.get('/:id/recreate/current', (req, res) => {

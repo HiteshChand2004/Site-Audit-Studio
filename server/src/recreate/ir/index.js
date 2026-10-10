@@ -191,7 +191,7 @@ export function noReflowViews(tree) {
   return out;
 }
 
-export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], skipped = [], wp = null, robots = null, llms = null }) {
+export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], skipped = [], wp = null, robots = null, llms = null, asIs = false }) {
   const assetResolve = createAssetResolver(assets.map ?? {});
   const resolveLink = createLinkResolver({ pages: pages.map((p) => p.info), livePages, skipped, origin, assetFile: (url) => assetResolve(url) });
 
@@ -258,7 +258,9 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
     }
   }
   // Titles / descriptions that are too short, too long or shared by several pages (needs every head).
-  const headTexts = refineHeadTexts(trees, siteName.value);
+  // As is: a title or description of the original is never rewritten, however short, long or duplicated it is. The
+  // re-audit still measures them, so what they cost is reported rather than lost.
+  const headTexts = asIs ? { titles: 0, descriptions: 0, skipped: 'as-is' } : refineHeadTexts(trees, siteName.value);
 
   // sitemap.xml + robots.txt (after the heads: canonical and robots meta decide what is listed).
   const { files: crawlFileList, ...crawl } = crawlFiles({ pages: trees, baseUrl, robots, llms, siteName: siteName.value });
@@ -280,6 +282,7 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
     siteName,
     // No breakpoints when the pages were captured in one view only (a capture made while only desktop was on, views.js): no media queries.
     breakpoints: pages.some(({ captures }) => Object.keys(captures).length > 1) ? pickBreakpoints(queries, { laptop: pages.some(({ captures }) => captures.laptop) }) : { source: 'single-view' },
+    ...(asIs && { asIs: true }),
     tokens: colorTokens(home.captures.desktop.customProps),
     keyframes,
     fontFaces,
@@ -488,7 +491,12 @@ function noticeFiles(site) {
  * Builds the IR from a prepared site (after the latest fit pass).
  * @returns {{ ir: object, stats: object }}
  */
-export function buildIR(site) {
+/**
+ * @param {object} site
+ * @param {{ asIs?: boolean }} [o]  asIs (exact mode): head texts are copied as they are and the stylesheet keeps every
+ *   @font-face the original declares. The flag is written onto the IR, so a stack built later from ir/site.json follows it.
+ */
+export function buildIR(site, { asIs = false } = {}) {
   const styles = buildStyles(site.pages, { assetFile: (url) => site.assetResolve(url) });
   const safety = newSafetyStats();
   const links = () => ({ internal: 0, file: 0, notice: 0, live: 0, external: 0 });
@@ -537,6 +545,7 @@ export function buildIR(site) {
     siteName: site.siteName.value,
     breakpoints: site.breakpoints,
     tokens: site.tokens,
+    ...((asIs || site.asIs) && { asIs: true }),
     fontFaces: site.fontFaces.filter((f) => families.has(f.family.toLowerCase())),
     keyframes: [...site.keyframes].filter(([name]) => animationNames.has(name)).map(([name, css]) => ({ name, css: mapUrls(css, (u) => site.assetResolve(u)) })),
     boxSizingReset: styles.boxSizingReset,

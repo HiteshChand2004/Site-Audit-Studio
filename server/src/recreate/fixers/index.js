@@ -24,7 +24,13 @@ const ITEMS = 50;
  * @param {object|null} [o.axe]  the analysis's axe.json (the homepage's accessibility scan)
  * @returns {object} tree fix results, for fixReport()
  */
-export function applyTreeFixes(site, { audit, skipped = [], axe = null, extraBroken = new Map() }) {
+/**
+ * @param {object} site
+ * @param {{ audit: object, skipped?: object[], axe?: object|null, extraBroken?: Map, asIs?: boolean }} o
+ *   asIs (exact mode): the fixes that would change what the page looks like, or drop markup the original has, are left
+ *   out — the copy is the site as it is. What they would have fixed stays visible in the re-audit instead.
+ */
+export function applyTreeFixes(site, { audit, skipped = [], axe = null, extraBroken = new Map(), asIs = false }) {
   const wordpress = [];
   for (const t of site.pages) if (t.wp) wordpress.push({ page: t.info.path, ...syncText(t, t.wp.item) });
 
@@ -34,7 +40,8 @@ export function applyTreeFixes(site, { audit, skipped = [], axe = null, extraBro
   for (const [key, b] of extraBroken) if (!broken.has(key)) broken.set(key, b);
   const out = { wordpress, names: { fixed: [], open: [] }, alt: { fixed: [], decorative: [] }, headings: [], links: [], loading: { priority: [], lazy: 0, lazyFrames: 0, unfaded: 0 }, sprites: 0, layouts: 0, faded: [], contrast: { fixed: [], open: [] } };
   for (const t of site.pages) {
-    out.links.push(...fixBrokenLinks(t, broken, site.origin));
+    // As is: a dead link keeps its href (unlinking it changes the markup the original has).
+    if (!asIs) out.links.push(...fixBrokenLinks(t, broken, site.origin));
     const names = fixNames(t, { pageUrl: t.info.url, resolveLink: site.resolveLink, pageTitles, siteName: site.siteName.value });
     out.names.fixed.push(...names.fixed);
     out.names.open.push(...names.open);
@@ -43,13 +50,17 @@ export function applyTreeFixes(site, { audit, skipped = [], axe = null, extraBro
     out.alt.decorative.push(...alt.decorative);
     out.headings.push(...fixHeadings(t));
     // The analysis scanned the homepage in a real browser: its contrast findings decide there (exact colours).
-    const contrast = fixContrast(t, { axe: t === site.pages[0] ? axeContrastFindings(axe) : [] });
+    // As is: colours are copied, never corrected — this is the fix that changes pixels on purpose.
+    const contrast = asIs ? { fixed: [], open: [] } : fixContrast(t, { axe: t === site.pages[0] ? axeContrastFindings(axe) : [] });
     out.contrast.fixed.push(...contrast.fixed);
     out.contrast.open.push(...contrast.open);
-    out.sprites += pruneSprites(t);
-    out.layouts += markLayouts(t);
+    // As is: both of these drop markup the original has (unused sprites, parts another window size shows).
+    if (!asIs) {
+      out.sprites += pruneSprites(t);
+      out.layouts += markLayouts(t);
+    }
     out.faded.push(...showFaded(t));
-    const loading = fixLoading(t);
+    const loading = fixLoading(t, { asIs });
     out.loading.priority.push(...loading.priority);
     out.loading.lazy += loading.lazy;
     out.loading.lazyFrames += loading.lazyFrames;

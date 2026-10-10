@@ -187,6 +187,10 @@ async function addToManifest(assetsDir, files, known, assets) {
 /** @param {object} ctx  pipeline context: needs ctx.pages (inspect) and ctx.assets (assets) */
 export async function generateStage(ctx) {
   const { report } = ctx;
+  // Exact mode replicates the site as it is: the fixes that change pixels on purpose are left out (recreate/inputs.js
+  // isExactMode). Everything that does not touch a pixel - alt text, accessible names, lang, canonical / OG copying,
+  // sitemap and robots - still runs.
+  const asIs = Boolean(ctx.exact);
   const siteDir = path.join(ctx.dir, 'site');
   const assetsDir = path.join(ctx.dir, 'assets');
   const known = new Set((ctx.assets?.files ?? []).map((f) => f.file));
@@ -213,6 +217,7 @@ export async function generateStage(ctx) {
     wp,
     robots: ctx.discovery?.robots ?? null,
     llms: ctx.discovery?.llms ?? null,
+    asIs,
   });
   pages.length = 0;
   for (const t of site.pages) delete t.captures; // large; everything needed is in the trees now
@@ -233,7 +238,7 @@ export async function generateStage(ctx) {
   // Outbound links of pages the analysis did not read: dead targets are unlinked like the ones the analysis found.
   ctx.progress(0.13, 'Checking the links of every page');
   const extraBroken = await deadLinks(site, { known: brokenTargets(ctx.audit, ctx.discovery?.skipped), ms: Math.max(10000, Math.min(LINK_CHECK_BUDGET, ctx.stepDeadline - Date.now() - FIT_MARGIN * 4)) });
-  const treeFixes = applyTreeFixes(site, { audit: ctx.audit, skipped: ctx.discovery?.skipped, axe, extraBroken });
+  const treeFixes = applyTreeFixes(site, { audit: ctx.audit, skipped: ctx.discovery?.skipped, axe, extraBroken, asIs });
   // Layout parts other window sizes show (fixers/perf.js markLayouts) are parked by the generated script.
   if (treeFixes.layouts) {
     site.motion = { version: MOTION_VERSION, hover: [], focus: [], reveal: [], delays: [], loops: [], widgets: [], states: 0, notices: 0, panels: 0, hoverCards: 0, scrolled: [], ...site.motion, layouts: treeFixes.layouts, script: true };
@@ -245,7 +250,7 @@ export async function generateStage(ctx) {
   let irFixes;
   let imageVariants = new Map();
   const build = () => {
-    const built = buildIR(site);
+    const built = buildIR(site, { asIs });
     irFixes = applyIrFixes(built.ir);
     applyImageVariants(built.ir, imageVariants);
     return built;
@@ -254,8 +259,11 @@ export async function generateStage(ctx) {
   ctx.progress(0.15, 'Writing pages');
   let { ir, stats } = build();
   // Responsive image files (assets/variants.js), made once from the widths the first build shows each image at.
-  ctx.progress(0.17, 'Making responsive images');
-  const images = await makeImageVariants({ ir, assetsDir, deadline: Math.min(Date.now() + IMAGES_BUDGET, ctx.stepDeadline - FIT_MARGIN * 3) });
+  // As is: every picture is served as the original bytes, in the original format and size, so no pixel of it differs.
+  ctx.progress(0.17, asIs ? 'Keeping the original pictures' : 'Making responsive images');
+  const images = asIs
+    ? { variants: new Map(), files: [], stats: { images: 0, files: 0, originalBytes: 0, servedBytes: 0, skipped: 0, asIs: true } }
+    : await makeImageVariants({ ir, assetsDir, deadline: Math.min(Date.now() + IMAGES_BUDGET, ctx.stepDeadline - FIT_MARGIN * 3) });
   if (images.variants.size) {
     imageVariants = images.variants;
     await addToManifest(assetsDir, images.files, known, ctx.assets);
@@ -466,6 +474,25 @@ export async function generateStage(ctx) {
     motion: { ...motion.stats, script: Boolean(ir.motion?.script) },
     images: images.stats,
   };
+  if (asIs) {
+    report.exact = {
+      ...report.exact,
+      mode: 'exact',
+      asIs: {
+        on: true,
+        note: 'The copy replicates the site as it is. These fixes were left out on purpose, so the re-audit rows below are choices, not failures.',
+        disabled: [
+          { id: 'contrast', what: 'Text colours are copied, never corrected', cost: 'The contrast failures of the original stay' },
+          { id: 'responsive-images', what: 'Every picture is served as the original bytes, format and size', cost: 'Image size and format savings are not taken' },
+          { id: 'page-css', what: 'The stylesheet keeps every @font-face the original declares', cost: 'A larger stylesheet (unused CSS)' },
+          { id: 'dom-size', what: 'Unused sprites, and parts only another window size shows, are kept', cost: 'A larger page (DOM size)' },
+          { id: 'head-text', what: 'Titles and descriptions are copied as they are', cost: 'Head texts that are too short, too long or shared by several pages stay' },
+          { id: 'broken-links', what: 'A link whose target is dead keeps its href', cost: 'Dead links stay as the original has them' },
+          { id: 'image-loading', what: "The main image keeps the original's entrance animation", cost: 'The main image is painted a little later' },
+        ],
+      },
+    };
+  }
   // Each page's own CSS inline (emit/html.js inlineCss): what that changed, for the fix checklist.
   const pageCss = ir.pages.map((p) => Buffer.byteLength(out.files.get(p.outPath).match(/<style>[\s\S]*?<\/style>/)?.[0] ?? ''));
   report.fixes.push({

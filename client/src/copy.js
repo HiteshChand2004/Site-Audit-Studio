@@ -185,6 +185,7 @@ export function resumeText(r) {
   const why = {
     restart: 'the app was closed or restarted while it worked',
     'time-limit': 'it ran out of time',
+    stopped: 'you stopped it',
     error: 'something went wrong',
   }[r.reason] ?? 'it was interrupted';
   const pages = r.pagesTotal ? `${r.pagesDone} of ${r.pagesTotal} pages` : null;

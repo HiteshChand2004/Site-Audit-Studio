@@ -41,6 +41,9 @@ export class TimeoutError extends Error {
 }
 
 export function withTimeout(promise, ms, label) {
+  // No limit (a manual run the user asked to run to the end): a timer would fire immediately, since setTimeout cannot
+  // hold Infinity (Node clamps it to 1 ms).
+  if (!Number.isFinite(ms)) return promise;
   let timer;
   const timeout = new Promise((_, reject) => {
     timer = setTimeout(() => reject(new TimeoutError(label, ms)), ms);

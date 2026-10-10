@@ -215,6 +215,8 @@ export async function inspectStage(ctx) {
         motionBudgetMs: share(MOTION_BUDGET, MOTION_BUDGET_MIN, MOTION_BUDGET),
         clickBudgetMs: share(CLICK_BUDGET, CLICK_BUDGET_MIN, MOTION_BUDGET + CLICK_BUDGET),
         cache: ctx.netCache,
+        // A run with no time limit tries a view that failed or timed out more often (capture/index.js).
+        patient: Boolean(ctx.unlimited),
       });
       if (i === 0) return capture;
       const until = Math.min(pageLimit(), Date.now() + Math.max(ctx.pageCapMin ?? PAGE_CAP_MIN, slowest * PAGE_CAP_FACTOR));
