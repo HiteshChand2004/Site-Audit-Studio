@@ -13,6 +13,7 @@ import { captureInteractions } from './interactions.js';
 import { captureLoops } from './loops.js';
 import { installRevealTracker, processReveal } from './reveal.js';
 import { snapshotPage } from './snapshot.js';
+import { censusInteractive, coverageOf } from './census.js';
 import { captureNotices } from './notices.js';
 import { captureStates } from './states.js';
 import { probeScrollStates } from './scrollstate.js';
@@ -177,6 +178,9 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     lap('idle');
 
     const snapshot = await page.evaluate(snapshotPage, { exact });
+    // How many interactive things this view has at all, with nothing filtered out: the denominator the probes'
+    // own counts are missing (capture/census.js).
+    const census = await page.evaluate(censusInteractive, {}).catch(() => null);
     lap('snapshot');
     // Continuous motion (4b.3) is read before the screenshots: a screenshot with animations disabled cancels the infinite ones.
     let loops = null;
@@ -344,6 +348,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
 
     const data = {
       view: view.id,
+      ...(census && { census, coverage: coverageOf(census, motion) }),
       viewport: { width: view.width, height: view.height, dpr: view.dpr, mobile: view.mobile },
       status: response?.status() ?? 0,
       finalUrl: page.url(),

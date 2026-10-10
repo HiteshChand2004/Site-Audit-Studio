@@ -392,6 +392,13 @@ export async function inspectStage(ctx) {
     revealPinned: Object.fromEntries(Object.entries(p.views).map(([v, x]) => [v, x.reveal?.pinned ?? 0])),
     // Hover / focus effects found on the desktop view (capture/<slug>/motion.json, 4b.1); null = not probed.
     motion: p.views.desktop?.motion ?? null,
+    // How many interactive parts this page has, and how many the probes examined (capture/census.js).
+    coverage: p.views.desktop?.coverage ?? null,
+    ...(Object.values(p.views).some((v) => v?.coverage && v.view !== 'desktop') && {
+      coverageByView: Object.fromEntries(Object.values(p.views)
+        .filter((v) => v?.coverage && v.view !== 'desktop')
+        .map((v) => [v.view, v.coverage])),
+    }),
     // An exact copy probes every view (capture/<view>-motion.json): what each of the others found, by view.
     ...(Object.values(p.views).some((v) => v?.motion && v.motion.view !== 'desktop') && {
       motionByView: Object.fromEntries(Object.values(p.views)
@@ -400,6 +407,27 @@ export async function inspectStage(ctx) {
     }),
   }));
   const probed = report.pages.filter((p) => p.motion && !p.motion.error);
+  // What share of each page's interactive parts the probes examined, and why they did not reach the rest.
+  const covered = report.pages.map((p) => p.coverage).filter(Boolean);
+  if (covered.length) {
+    const sum = (k) => covered.reduce((n, c) => n + (c[k] ?? 0), 0);
+    const merge = (k) => covered.reduce((o, c) => {
+      for (const [name, n] of Object.entries(c[k] ?? {})) o[name] = (o[name] ?? 0) + n;
+      return o;
+    }, {});
+    report.coverage = {
+      pages: covered.length,
+      interactive: sum('interactive'),
+      visible: sum('visible'),
+      probed: sum('probed'),
+      understood: sum('understood'),
+      examined: sum('visible') ? Math.round((Math.min(sum('probed'), sum('visible')) / sum('visible')) * 100) : null,
+      byKind: merge('byKind'),
+      hidden: merge('hidden'),
+      // Every reason is one the capture recorded itself; nothing here is inferred.
+      reasons: merge('reasons'),
+    };
+  }
   report.motion = {
     status: probed.length ? 'captured' : 'skipped',
     pages: probed.length,

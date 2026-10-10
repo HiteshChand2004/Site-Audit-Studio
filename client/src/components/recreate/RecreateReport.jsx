@@ -180,6 +180,17 @@ function ExactComparison({ result, projectId }) {
           ))}
         </ul>
       )}
+      {result.coverage && (
+        <p className={styles.note}>
+          Of the {plural(result.coverage.visible, 'interactive part')} a visitor can see across{' '}
+          {plural(result.coverage.pages, 'page')}, {result.coverage.probed} were examined
+          {result.coverage.examined != null ? ` (${result.coverage.examined}%)` : ''} and{' '}
+          {result.coverage.understood} turned out to do something.
+          {Object.keys(result.coverage.reasons ?? {}).length > 0 && (
+            <> The rest were not: {Object.entries(result.coverage.reasons).map(([why, n]) => `${why} (${n})`).join(', ')}.</>
+          )}
+        </p>
+      )}
       {noise.length > 0 && (
         <p className={styles.note}>
           The original differs from itself by up to {Math.max(...noise.map(([, v]) => v))}% between two visits (rotating
