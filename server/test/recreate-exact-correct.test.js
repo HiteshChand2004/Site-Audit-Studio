@@ -7,7 +7,7 @@ import {
   correctExact, exactRows, judgingSlots, makeExactRound, slotScore, viewForWidth, GOOD_ENOUGH_PCT, PIXEL_FLOOR_PCT, ROUNDS_PER_PAGE,
 } from '../src/recreate/verify/exact/correct.js';
 import { createLedger } from '../src/recreate/verify/ledger.js';
-import { restoreFixes, snapshotFixes } from '../src/recreate/verify/exact/correct.js';
+import { applyFixesByPath, fixesByPath, restoreFixes, snapshotFixes } from '../src/recreate/verify/exact/correct.js';
 
 test('a width is corrected in the view whose media query covers it', () => {
   // An exact slot is a width; a declaration has to live in the view that governs it or it will not apply there.
@@ -212,6 +212,65 @@ test('the opening measurement covers every slot, not only the four a round is ju
     workspace: '/nowhere',
   });
   assert.deepEqual(asked.sort(), [...widths].map(String).sort(), 'every slot of the page');
+});
+
+test('the loop\'s fixes survive an interruption: keyed by place, checked against the element', () => {
+  // Half an hour of measuring used to live only in memory until the whole generate step finished, so an
+  // interruption a minute before the end threw all of it away. The key is the element's place in the tree, which a
+  // tree built again from the same capture reproduces exactly.
+  const tree = () => ({
+    info: { path: '/' },
+    root: {
+      tag: 'body',
+      children: [
+        { tag: 'header', cpath: 'body>header:1', children: [{ tag: 'h1', cpath: 'body>header:1>h1:1', children: [] }] },
+        { tag: 'main', cpath: 'body>main:1', children: [{ tag: 'p', cpath: 'body>main:1>p:1', children: [] }] },
+      ],
+    },
+  });
+
+  const a = tree();
+  a.root.children[0].children[0].fix = { desktop: { decls: { width: '320px' } } };
+  a.root.children[1].fix = { mobile: { decls: { 'min-height': '48px' } } };
+  const saved = fixesByPath(a);
+  assert.deepEqual(Object.keys(saved).sort(), ['0.0', '1']);
+  assert.equal(saved['1'].cpath, 'body>main:1', 'the original\'s own path travels with it as a check');
+  // It has to survive JSON, since that is what the checkpoint is.
+  const throughJson = JSON.parse(JSON.stringify(saved));
+
+  const b = tree();
+  const r = applyFixesByPath(b, throughJson);
+  assert.equal(r.applied, 2);
+  assert.deepEqual(r.mismatched, []);
+  assert.deepEqual(b.root.children[0].children[0].fix, { desktop: { decls: { width: '320px' } } });
+  assert.deepEqual(b.root.children[1].fix, { mobile: { decls: { 'min-height': '48px' } } });
+  // A copy, not the saved object: a later round must not write back into the checkpoint's data.
+  b.root.children[1].fix.mobile.decls['min-height'] = '0px';
+  assert.equal(throughJson['1'].fix.mobile.decls['min-height'], '48px');
+});
+
+test('fixes that do not fit the tree are refused rather than half-applied', () => {
+  // A tree that is not the same tree would take some of the fixes and not others, which is worse than taking none:
+  // the page would be corrected in parts that were never measured together.
+  const other = {
+    info: { path: '/' },
+    root: {
+      tag: 'body',
+      children: [
+        { tag: 'header', cpath: 'body>header:1', children: [{ tag: 'h2', cpath: 'body>header:1>h2:1', children: [] }] },
+        { tag: 'main', cpath: 'body>section:9', children: [] },
+      ],
+    },
+  };
+  const saved = {
+    '0.0': { fix: { desktop: { decls: { width: '320px' } } }, cpath: 'body>header:1>h1:1', tag: 'h1' },
+    1: { fix: { mobile: { decls: { 'min-height': '48px' } } }, cpath: 'body>main:1', tag: 'main' },
+    '7.7': { fix: { desktop: { decls: { gap: '8px' } } }, cpath: 'body>aside:1', tag: 'aside' },
+  };
+  const r = applyFixesByPath(other, saved);
+  assert.equal(r.mismatched.length, 3, 'a different tag, a different original path, and a place that is not there');
+  assert.deepEqual(r.mismatched.sort(), ['0.0', '1', '7.7']);
+  assert.equal(r.applied, 0);
 });
 
 test('a page that does not hold up is put back exactly as it was', () => {

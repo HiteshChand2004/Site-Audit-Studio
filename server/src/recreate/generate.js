@@ -27,7 +27,7 @@ import { VIEW_WIDTHS } from './views.js';
 import { compareLayout, openRenderer, planFixes, renderPage, viewScore } from './verify/layout.js';
 import { createLedger } from './verify/ledger.js';
 import { CORRECT_BUDGET, CORRECT_MIN, correctLayout, correctReport } from './verify/correct.js';
-import { correctExact } from './verify/exact/correct.js';
+import { applyFixesByPath, correctExact, fixesByPath } from './verify/exact/correct.js';
 import { openExactRenderer } from './verify/exact/compare.js';
 import { CSS_FILE } from './emit/css.js';
 import { REFINE_PAGES, refineResponsive } from './verify/refine.js';
@@ -403,43 +403,82 @@ export async function generateStage(ctx) {
   // be matched by path - a production build has no ids, which is why the reporting pass after `build` cannot.
   let exactCorrect = null;
   if (asIs && ctx.exactBaseline?.pages?.length) {
-    ctx.progress(0.78, 'Correcting the copy against the original at every size');
-    const idsOut = emitSite(ir, { ids: true });
-    // sid -> the original's own path, so the box comparison can pair by path instead of by content.
-    const sidToCpath = new Map();
-    for (const t of site.pages) {
-      const walk = (n) => {
-        if (!isElement(n)) return;
-        if (n.sid != null && (n.cpath || n.path)) sidToCpath.set(n.sid, n.cpath ?? n.path);
-        for (const c of n.children ?? []) walk(c);
-      };
-      walk(t.root);
-    }
-    const renderer = await openExactRenderer(siteDir, { scripts: Boolean(site.motion?.script) });
-    try {
-      // The pages with ids are served from memory; everything else (images, fonts, the stylesheet) comes off disk.
-      for (const p of ir.pages) {
-        const html = idsOut.files.get(p.outPath);
-        if (html) renderer.server.overrides.set(p.outPath, html);
+    // The loop is the longest part of an exact run, so a previous attempt that got through it and was interrupted
+    // afterwards (a crash, a restart, the machine running out of memory) leaves its result in the checkpoint, and the
+    // fixes are put back on the trees instead of being measured again. Only if every one of them lands on the element
+    // it was measured on: one that does not means this is not the same tree, and then the trees go back exactly as
+    // they were and the loop runs, because a half-corrected page is worse than an uncorrected one.
+    const kept = ctx.checkpoint?.corrections?.() ?? null;
+    if (kept?.pages) {
+      const before = snapshotFixes(site);
+      let applied = 0;
+      let mismatched = 0;
+      for (const tree of site.pages) {
+        const saved = kept.pages[tree.info.path];
+        if (!saved) continue;
+        const r = applyFixesByPath(tree, saved);
+        applied += r.applied;
+        mismatched += r.mismatched.length;
       }
-      exactCorrect = await correctExact({
-        renderer,
-        baseline: ctx.exactBaseline,
-        site,
-        ir,
-        ledger,
-        baseCss: idsOut.files.get(CSS_FILE),
-        workspace: ctx.dir,
-        cpathOf: (sid) => sidToCpath.get(sid) ?? null,
-        deadline: ctx.stepDeadline,
-        progress: (f, message) => ctx.progress(0.78 + 0.1 * f, message),
-      });
-    } catch (err) {
-      exactCorrect = { stopped: 'error', error: String(err.message ?? err).split('\n')[0], rounds: 0, applied: 0, reverted: 0, pages: [] };
-      report.warnings.push(`The copy could not be corrected against the original: ${exactCorrect.error}`);
-    } finally {
-      await renderer.close().catch(() => {});
+      if (mismatched) {
+        restoreFixes(site, before);
+        report.warnings.push(`The corrections kept from the interrupted attempt did not fit this copy (${mismatched} of ${applied + mismatched} elements), so they were measured again.`);
+      } else if (applied) {
+        exactCorrect = { ...kept.report, restoredFrom: { at: kept.at, elements: applied, pages: Object.keys(kept.pages).length } };
+        ctx.progress(0.88, 'Keeping the corrections measured before the interruption');
+        report.warnings.push(`Continued after an interruption: the ${applied} corrections measured for ${Object.keys(kept.pages).length} page(s) were kept instead of measured again.`);
+      }
     }
+
+    if (!exactCorrect) {
+      ctx.progress(0.78, 'Correcting the copy against the original at every size');
+      const idsOut = emitSite(ir, { ids: true });
+      // sid -> the original's own path, so the box comparison can pair by path instead of by content.
+      const sidToCpath = new Map();
+      for (const t of site.pages) {
+        const walk = (n) => {
+          if (!isElement(n)) return;
+          if (n.sid != null && (n.cpath || n.path)) sidToCpath.set(n.sid, n.cpath ?? n.path);
+          for (const c of n.children ?? []) walk(c);
+        };
+        walk(t.root);
+      }
+      const renderer = await openExactRenderer(siteDir, { scripts: Boolean(site.motion?.script) });
+      try {
+        // The pages with ids are served from memory; everything else (images, fonts, the stylesheet) comes off disk.
+        for (const p of ir.pages) {
+          const html = idsOut.files.get(p.outPath);
+          if (html) renderer.server.overrides.set(p.outPath, html);
+        }
+        exactCorrect = await correctExact({
+          renderer,
+          baseline: ctx.exactBaseline,
+          site,
+          ir,
+          ledger,
+          baseCss: idsOut.files.get(CSS_FILE),
+          workspace: ctx.dir,
+          cpathOf: (sid) => sidToCpath.get(sid) ?? null,
+          deadline: ctx.stepDeadline,
+          progress: (f, message) => ctx.progress(0.78 + 0.1 * f, message),
+        });
+      } catch (err) {
+        exactCorrect = { stopped: 'error', error: String(err.message ?? err).split('\n')[0], rounds: 0, applied: 0, reverted: 0, pages: [] };
+        report.warnings.push(`The copy could not be corrected against the original: ${exactCorrect.error}`);
+      } finally {
+        await renderer.close().catch(() => {});
+      }
+      // Written the moment the loop is done, before anything else can fail: half an hour of measuring was lost to an
+      // interruption a minute later, and the next run would have measured all of it again.
+      if (exactCorrect?.applied) {
+        await ctx.checkpoint?.saveCorrections?.({
+          at: new Date().toISOString(),
+          report: exactCorrect,
+          pages: Object.fromEntries(site.pages.map((tree) => [tree.info.path, fixesByPath(tree)])),
+        });
+      }
+    }
+
     if (exactCorrect?.applied) {
       ({ ir, stats } = build());
       out = emitSite(ir);

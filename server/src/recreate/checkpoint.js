@@ -6,10 +6,11 @@
 //   pages       every page whose capture finished (by discovery index); its files are under capture/<slug>/
 //   sweep       every page the sweep of the original at more widths finished (by slug); files under capture/<slug>/sweep/
 //   steps       inspect / sweep / assets once finished: what the step put on the report and on the job context
+//   corrections the fixes the correction loop accepted, written the moment it finishes (see saveCorrections)
 //   stopped     when, at which step and why the job stopped (none = the server died while it ran)
 // A resume (recreate/index.js) adopts the folder under its new job id, skips the finished steps (their results restored),
-// captures only the missing pages and sweeps only the missing ones. Generate, build and what follows run again: they are
-// local and quick next to the capture, and they keep their work in memory.
+// captures only the missing pages and sweeps only the missing ones. Generate, build and what follows run again, with
+// one exception: in exact mode the correction loop's own result is kept, because it is the longest part of a run.
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -82,11 +83,12 @@ export function openCheckpoint(dir, { recreateId, analysisId = null, saved = nul
         stopped: null,
         updatedAt: now,
       }
-    : { version: VERSION, recreateId, analysisId, createdAt: now, updatedAt: now, autoResumes: 0, resumed: [], discovery: null, pages: {}, sweep: {}, steps: {}, stopped: null };
+    : { version: VERSION, recreateId, analysisId, createdAt: now, updatedAt: now, autoResumes: 0, resumed: [], discovery: null, pages: {}, sweep: {}, steps: {}, corrections: null, stopped: null };
   data.pages ??= {};
   data.sweep ??= {};
   data.steps ??= {};
   data.resumed ??= [];
+  data.corrections ??= null;
   let chain = Promise.resolve();
   // Did this run add anything (a page, a sweep page, a step)? A job that stopped without progress is not resumed by itself.
   let progressed = false;
@@ -132,6 +134,12 @@ export function openCheckpoint(dir, { recreateId, analysisId = null, saved = nul
     sweepPage: (slug) => data.sweep[slug] ?? null,
     saveSweepPage: (slug, result) => {
       data.sweep[slug] = result;
+      return mark();
+    },
+    /** What the exact correction loop accepted, so a run interrupted after it does not measure it all again. */
+    corrections: () => data.corrections ?? null,
+    saveCorrections: (corrections) => {
+      data.corrections = corrections;
       return mark();
     },
     step: (key) => data.steps[key] ?? null,

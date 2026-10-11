@@ -57,6 +57,56 @@ export function judgingSlots(slots) {
   return new Set([...byView.values()].map((s) => s.id));
 }
 
+/**
+ * Every node's fixes keyed by its place in the tree, in a form that can be written to the checkpoint: the loop is the
+ * most expensive part of a run (half an hour on an eleven-page site) and its result lived only in memory until the
+ * whole generate step finished, so an interruption a minute before the end threw all of it away.
+ *
+ * The key is the element's index path from the root, which a tree built again from the same capture reproduces
+ * exactly. `cpath` and the tag travel with each entry as a check: a tree that is not the same tree has to be refused
+ * rather than half-corrected.
+ */
+export function fixesByPath(tree) {
+  const out = {};
+  const walk = (n, at) => {
+    if (!n?.tag) return;
+    if (n.fix) out[at] = { fix: n.fix, cpath: n.cpath ?? null, tag: n.tag };
+    const kids = (n.children ?? []).filter((c) => c?.tag);
+    kids.forEach((c, i) => walk(c, at === '' ? String(i) : `${at}.${i}`));
+  };
+  walk(tree.root, '');
+  return out;
+}
+
+/**
+ * Puts saved fixes back on a tree. Nothing is guessed at: an entry whose place now holds a different tag, or an
+ * element the original knew by another path, is counted as a mismatch so the caller can measure again instead of
+ * trusting a half-restored page.
+ * @returns {{ applied: number, mismatched: string[] }}
+ */
+export function applyFixesByPath(tree, saved) {
+  const nodes = new Map();
+  const walk = (n, at) => {
+    if (!n?.tag) return;
+    nodes.set(at, n);
+    const kids = (n.children ?? []).filter((c) => c?.tag);
+    kids.forEach((c, i) => walk(c, at === '' ? String(i) : `${at}.${i}`));
+  };
+  walk(tree.root, '');
+  let applied = 0;
+  const mismatched = [];
+  for (const [at, entry] of Object.entries(saved ?? {})) {
+    const node = nodes.get(at);
+    if (!node || node.tag !== entry.tag || (entry.cpath && node.cpath && node.cpath !== entry.cpath)) {
+      mismatched.push(at);
+      continue;
+    }
+    node.fix = JSON.parse(JSON.stringify(entry.fix));
+    applied++;
+  }
+  return { applied, mismatched };
+}
+
 /** Every node's per-view fixes for one page, so a page that does not hold up can be put back exactly. */
 export function snapshotFixes(tree) {
   const saved = new Map();
