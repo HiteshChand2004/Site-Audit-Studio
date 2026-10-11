@@ -334,10 +334,12 @@ export function makeExactRound({ renderer, baseline, treeOf, workspace, cpathOf 
  */
 export async function correctExact({
   renderer, baseline, site, ir, ledger, baseCss, workspace, cpathOf = null, deadline = Infinity,
-  progress = () => {}, rounds = ROUNDS_PER_PAGE,
+  progress = () => {}, rounds = ROUNDS_PER_PAGE, round: roundOf = null,
 }) {
   const treeOf = new Map(site.pages.map((t) => [t.info.path, t]));
-  const round = makeExactRound({ renderer, baseline, treeOf, workspace, cpathOf, deadline });
+  // The measurement, or one given to it: the scoring rules below are what decide whether a change is kept, and a
+  // test must be able to check them without a browser.
+  const round = roundOf ?? makeExactRound({ renderer, baseline, treeOf, workspace, cpathOf, deadline });
   const out = { pages: [], rounds: 0, applied: 0, reverted: 0, elements: 0, byCorrector: {}, stopped: null, scoreBefore: null, scoreAfter: null };
 
   // Worst page first, measured once with no override, so the loop spends its rounds where they count. This one
@@ -422,7 +424,22 @@ export async function correctExact({
     }
   }
   out.stopped ??= 'done';
-  out.scoreAfter = out.pages.length ? round1(out.pages.reduce((n, p) => n + (p.scoreAfter ?? 0), 0) / out.pages.length) : out.scoreBefore;
+  // `scoreBefore` is every slot of every page. A page's own `scoreAfter` is whatever its last round measured, which
+  // for an unchanged page is the four judging slots - a different set, and on a real site 8 points apart. Averaging
+  // the two together reads as an improvement the loop did not make, so a page that kept nothing contributes the
+  // score it started with, and only a verified page (all its slots, after the change) contributes a new one.
+  const pageBefore = new Map();
+  for (const s of first.slots) {
+    const at = pageBefore.get(s.page) ?? { sum: 0, n: 0 };
+    pageBefore.set(s.page, { sum: at.sum + s.score, n: at.n + 1 });
+  }
+  const beforeOf = (page) => {
+    const at = pageBefore.get(page);
+    return at?.n ? at.sum / at.n : null;
+  };
+  const after = out.pages.map((p) => (p.applied ? (p.verifiedScore ?? p.scoreAfter) : (beforeOf(p.page) ?? p.scoreBefore)));
+  out.scoreAfter = after.length ? round1(after.reduce((n, x) => n + (x ?? 0), 0) / after.length) : out.scoreBefore;
+  out.scoreBasis = 'every slot of every page, before and after';
   out.ledger = ledger.summary();
   return out;
 }

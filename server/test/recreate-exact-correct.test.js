@@ -284,6 +284,39 @@ test('fixes that do not fit the tree are refused rather than half-applied', () =
   assert.equal(r.applied, 0);
 });
 
+test('a loop that changed nothing reports the score it started with, not a better one', async () => {
+  // Measured on a real site: scoreBefore was every slot of every page (29.9) while each page's own scoreAfter came
+  // from its four judging slots (38.6), so averaging the two read as +8.7 points the loop had not earned. An
+  // unchanged page has to contribute the score it started with.
+  const widths = [1440, 1024, 768, 375];
+  const slots = widths.map((w) => ({ id: String(w), width: w, height: 800, dpr: 1, mobile: w < 768, hasTouch: w < 768 }));
+  const scores = { 1440: 60, 1024: 20, 768: 20, 375: 20 };   // mean 30; the judging slot alone would read 60
+  const page = { path: '/', slug: 'index', outPath: 'index.html' };
+  const baseline = {
+    slots,
+    pages: [{ ...page, slots: slots.map((s) => ({ id: s.id, pageHeight: 1000, bands: [{ file: 'b.webp', top: 0, height: 800 }], boxes: { file: 'b.json.gz' } })) }],
+  };
+  // A round that reports the scores above and never applies anything, standing in for the real measurement.
+  const round = async ({ pages, all }) => {
+    const used = all ? slots : slots.filter((s) => s.width === 1440);
+    const out = used.map((s) => ({ page: '/', view: viewForWidth(s.width), slot: s.id, width: s.width, score: scores[s.id], layout: scores[s.id], pixel: scores[s.id], heightOff: false }));
+    return { slots: out, rects: new Map(), measured: out.length, carried: 0, score: out.reduce((n, s) => n + s.score, 0) / out.length };
+  };
+  const out = await correctExact({
+    renderer: { origin: 'http://127.0.0.1:0', server: { overrides: new Map() }, close: async () => {} },
+    baseline,
+    site: { pages: [{ info: page, root: { tag: 'body', children: [] }, views: ['desktop'] }] },
+    ir: { pages: [], breakpoints: {} },
+    ledger: createLedger(),
+    baseCss: '',
+    workspace: '/nowhere',
+    round,
+  });
+  assert.equal(out.applied, 0, 'nothing was applied');
+  assert.equal(out.scoreBefore, 30, 'every slot of the page');
+  assert.equal(out.scoreAfter, 30, 'and the same number afterwards, not the judging slot\'s 60');
+});
+
 test('a page that does not hold up is put back exactly as it was', () => {
   // The revert has to be exact, or a refused page keeps half a correction.
   const leaf = { tag: 'p', children: [], fix: { desktop: { decls: { gap: '4px' } } } };
