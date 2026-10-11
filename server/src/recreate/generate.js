@@ -147,6 +147,24 @@ const restoreFixes = (site, saved) => {
 
 const countTemplates = (n) => (!n || 'text' in n ? 0 : (n.tpl ? 1 : 0) + (n.children ?? []).reduce((s, c) => s + countTemplates(c), 0));
 
+/**
+ * `sid` -> the path the element had in the original's own snapshot, for every page. This is what lets the exact
+ * comparison pair a box of the copy with the box of the original it was built from, rather than guessing from the
+ * text it happens to contain.
+ */
+export function cpathsOf(site) {
+  const out = {};
+  for (const tree of site.pages) {
+    const walk = (n) => {
+      if (!isElement(n)) return;
+      if (n.sid != null && (n.cpath || n.path)) out[n.sid] = n.cpath ?? n.path;
+      for (const c of n.children ?? []) walk(c);
+    };
+    walk(tree.root);
+  }
+  return out;
+}
+
 // A page without a usable og:image (none, or the original's could not be downloaded: another host, an error page) shares
 // a real picture of itself: the top of its captured desktop screen, cut to the 1200 × 630 social-card size.
 async function addSocialImages(site, ctx, assetsDir) {
@@ -534,6 +552,11 @@ export async function generateStage(ctx) {
   ctx.progress(0.95, 'Saving the IR');
   await mkdir(path.join(ctx.dir, 'ir'), { recursive: true });
   await writeFile(path.join(ctx.dir, 'ir', 'site.json'), JSON.stringify(ir));
+  // Which element of the original each element of the copy came from. The IR keeps `sid` but not `cpath` - four
+  // stack emitters read that file and none of them needs it - so the pairing the exact comparison runs on is saved
+  // beside it. Without this the comparison after the build can only pair boxes by their text, which on a real page
+  // paired 79 of 577 and reported the other 498 as missing and extra at once (`byPath: 0`).
+  if (asIs) await writeFile(path.join(ctx.dir, 'ir', 'cpaths.json'), JSON.stringify(cpathsOf(site)));
   const siteAssets = [...out.assets].filter((f) => known.has(f));
   ctx.generated = { site, ir, out, stats, siteDir, siteAssets, assetsDir };
 

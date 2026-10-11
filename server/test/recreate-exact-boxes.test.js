@@ -204,3 +204,33 @@ test('an element the copy adds is reported as extra, and named', () => {
   assert.equal(r.extraItems[0].key, 'cookie notice');
   assert.equal(r.missing, 0);
 });
+
+test('identity pairs boxes that identical text cannot, which is what the report pass was missing', () => {
+  // On a real page the comparison after the build paired 79 of 577 boxes and called the other 498 missing and extra
+  // at the same time, because the shipped HTML carries no identity and pairing fell back to the text an element
+  // contains. Three cards reading the same thing is all it takes.
+  const card = (n, y, extra = {}) => ({ kind: 'text', key: 'read more', tag: 'a', path: `body>ul:1>li:${n}>a:1`, parent: 'read more', rect: [0, y, 100, 20], n, ...extra });
+  const original = [card(1, 100), card(2, 200), card(3, 300)];
+  // The copy has them all, in place, but one extra wrapper shifted the middle one down by two pixels.
+  const copy = [
+    { ...card(1, 100), sid: 11 },
+    { ...card(2, 202), sid: 12 },
+    { ...card(3, 300), sid: 13 },
+  ];
+  const cpathOf = (sid) => ({ 11: 'body>ul:1>li:1>a:1', 12: 'body>ul:1>li:2>a:1', 13: 'body>ul:1>li:3>a:1' }[sid] ?? null);
+
+  const withIds = compareBoxes(original, copy, { cpathOf });
+  assert.equal(withIds.byPath, 3, 'every box paired by the element it came from');
+  assert.equal(withIds.paired, 3);
+  assert.equal(withIds.missing, 0);
+  assert.equal(withIds.extra, 0);
+  assert.equal(withIds.within, 2, 'and the one that really moved is the one reported');
+
+  // Without identity the same comparison has only the text to go on.
+  const withoutIds = compareBoxes(original, copy.map(({ sid, ...b }) => b), { cpathOf: null });
+  assert.equal(withoutIds.byPath, 0, 'nothing could be paired by identity');
+  assert.ok(
+    withoutIds.missing + withoutIds.extra >= withIds.missing + withIds.extra,
+    `identity pairs at least as well: ${JSON.stringify({ withIds, withoutIds })}`,
+  );
+});

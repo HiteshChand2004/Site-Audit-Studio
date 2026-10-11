@@ -5,12 +5,36 @@
 // the four stacks are built, which happens earlier; the loop that acts on these numbers therefore lives inside the
 // generate step (phase C) and calls the same compareExact against the pre-build site. One engine, two callers: this
 // one for the honest final report, that one for correcting.
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { emitSite } from './emit/html.js';
 import { compareExact, DIFF_LIMIT_PCT } from './verify/exact/compare.js';
 import { checkBaseline } from './exactCapture.js';
 
 /** Causes a person has to act on, as opposed to ones the engine could still fix. */
 const NEEDS_A_PERSON = new Set(['third-party-frame', 'image-content']);
+
+/**
+ * The shipped pages re-emitted with `data-sas-id`, plus the id -> original-path map generate saved beside the IR.
+ * Returns null when either is missing (a workspace from before this existed, or a pruned IR), and the comparison
+ * then pairs by content as it used to - reported as such, never silently.
+ * @returns {Promise<{ pages: Map<string, string>, cpaths: Record<string, string> }|null>}
+ */
+async function withIds(ctx) {
+  const dir = path.join(ctx.dir, 'ir');
+  const [ir, cpaths] = await Promise.all([
+    readFile(path.join(dir, 'site.json'), 'utf8').then(JSON.parse),
+    readFile(path.join(dir, 'cpaths.json'), 'utf8').then(JSON.parse),
+  ]);
+  if (!ir?.pages?.length || !cpaths || !Object.keys(cpaths).length) return null;
+  const out = emitSite(ir, { ids: true });
+  const pages = new Map();
+  for (const p of ir.pages) {
+    const html = out.files.get(p.outPath);
+    if (html) pages.set(p.outPath, html);
+  }
+  return pages.size ? { pages, cpaths } : null;
+}
 
 export async function exactStage(ctx, local = {}) {
   if (!ctx.exact) return;
@@ -29,6 +53,12 @@ export async function exactStage(ctx, local = {}) {
   // what puts states and parked layouts in place - so it runs, unless this build ships none or safety said no.
   const scripts = Boolean(report.outputs?.html?.scripts) && report.safety?.safe !== false;
 
+  // How a box of the copy is paired with the box of the original it was built from. The shipped HTML carries no
+  // identity, so pairing fell back to the text an element contains: on the homepage that paired 79 of 577 boxes and
+  // called the other 498 missing and extra at the same time. The same pages re-emitted with `data-sas-id` pair by
+  // that id instead. It is one attribute that cannot paint, every byte else - CSS, assets, markup - is the build
+  // itself, and `boxBasis` says so in the report rather than leaving it to be assumed.
+  const paired = await withIds(ctx).catch(() => null);
   progress?.(0, `Comparing the copy with the original at ${baseline.slots.length} sizes`);
   const result = await compareExact({
     root: path.join(ctx.dir, 'dist'),
@@ -36,6 +66,8 @@ export async function exactStage(ctx, local = {}) {
     baseline,
     pages,
     scripts,
+    overrides: paired?.pages ?? null,
+    cpathOf: paired ? (sid) => paired.cpaths[sid] ?? null : null,
     noise: baseline.noiseFloor ?? {},
     // Parts of the page that are not the site and were left out on purpose (ir/exclude.js): not the copy's fault.
     excluded: report.exact?.excluded ?? [],
@@ -63,6 +95,7 @@ export async function exactStage(ctx, local = {}) {
   report.exact = {
     ...report.exact,
     jsMode: scripts ? 'on' : 'off',
+    boxBasis: paired ? 'the build, re-emitted with element ids so a box can be paired with the one it came from' : 'the build as shipped; boxes paired by the text they contain, which pairs fewer of them',
     limit: DIFF_LIMIT_PCT,
     summary: {
       slots: result.slots,

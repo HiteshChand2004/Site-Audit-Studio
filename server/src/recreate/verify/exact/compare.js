@@ -268,9 +268,13 @@ export async function compareSlot({
  */
 export async function compareExact({
   root, workspace, baseline, pages, scripts = true, cpathOf = null, deadline = Infinity, progress = null, noise = {},
-  excluded = [], done = null, onPage = null,
+  excluded = [], done = null, onPage = null, overrides = null,
 }) {
   const renderer = await openExactRenderer(root, { scripts });
+  // Pages served from memory instead of from disk: the same build with element ids added, so a box can be paired
+  // with the one it was built from. Everything else - the stylesheet, the images, the fonts - still comes from the
+  // build on disk, and the attribute cannot paint.
+  for (const [outPath, html] of overrides ?? []) renderer.server.overrides.set(outPath, html);
   const out = [];
   const errors = [];
   let reused = 0;
