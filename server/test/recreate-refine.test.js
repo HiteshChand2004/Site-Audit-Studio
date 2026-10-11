@@ -8,6 +8,7 @@ import { launchBrowser } from '../src/audit/render.js';
 import { captureSweep, SWEEP_WIDTHS } from '../src/recreate/capture/sweep.js';
 import { applyPhoneShrink } from '../src/recreate/ir/fluid.js';
 import { refineResponsive } from '../src/recreate/verify/refine.js';
+import { refineBudget } from '../src/recreate/generate.js';
 import { startSiteServer } from '../src/recreate/verify/server.js';
 import { userPolicy, withNetPolicy } from '../src/security/netGuard.js';
 
@@ -265,4 +266,19 @@ test('the stylesheet writes a media query per captured view, widest first', asyn
   assert.ok(!/1279\.98/.test(old));
   // Laptop rules without a laptop breakpoint fall back to the default.
   assert.ok(/max-width: 1279\.98px/.test(emitCss(irFor([{ selector: '.a', parts: { base: { color: '#000000' }, laptop: { color: '#111111' } } }], { tablet: 1023.98, mobile: 767.98 }))));
+});
+
+test('the breakpoint check gets time for the widths it has to judge', () => {
+  // A live exact run ended with `stopped: 'time-limit'`, 76 renders and no verdict at all: the check renders a page
+  // at each judged width for every candidate, and the widths a site's own boundaries add took it past the flat
+  // ninety seconds. An exact run has no overall limit, so this one follows the work.
+  const fixed = [320, 480, 600, 900, 1024, 1280, 1920];
+  const wider = [320, 480, 600, 639, 640, 767, 768, 900, 1024, 1280, 1920];
+  assert.equal(refineBudget(fixed, { exact: true }), refineBudget(fixed), 'the fixed widths earn the base time');
+  assert.ok(refineBudget(wider, { exact: true }) > refineBudget(fixed, { exact: true }), 'four more widths, more time');
+  // Normal mode is untouched: it has an overall limit to respect, and this time comes out of it.
+  assert.equal(refineBudget(wider), refineBudget(fixed));
+  // Nothing swept, nothing odd: the base time, never zero or NaN.
+  assert.equal(refineBudget([], { exact: true }), refineBudget(fixed));
+  assert.equal(refineBudget(undefined, { exact: true }), refineBudget(fixed));
 });

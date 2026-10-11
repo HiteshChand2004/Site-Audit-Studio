@@ -30,6 +30,7 @@ import { CORRECT_BUDGET, CORRECT_MIN, correctLayout, correctReport } from './ver
 import { applyFixesByPath, correctExact, fixesByPath } from './verify/exact/correct.js';
 import { openExactRenderer } from './verify/exact/compare.js';
 import { CSS_FILE } from './emit/css.js';
+import { SWEEP_WIDTHS } from './capture/sweep.js';
 import { REFINE_PAGES, refineResponsive } from './verify/refine.js';
 
 export const FIT_ROUNDS = 2;
@@ -41,8 +42,16 @@ const LINK_CHECK_BUDGET = 60000;
 const IMAGES_BUDGET = 60000;
 // Time for the WordPress REST lookup.
 const WP_BUDGET = 30000;
-// Time for the breakpoint / fluid type check against the original's sweep.
-const REFINE_BUDGET = 90000;
+// Time for the breakpoint / fluid type check against the original's sweep. It renders a page at each judged width
+// for every candidate, so the work grows with the widths the sweep captured: a site that declares its own
+// boundaries is judged at more of them, and on flexibench that took the check past ninety seconds and it ended
+// with `stopped: 'time-limit'` and no verdict at all - the quiet failure this scaling exists to prevent. An exact
+// run has no overall limit (recreate/index.js), so this one follows the work instead of standing still.
+const REFINE_BASE = 90000;
+const REFINE_PER_WIDTH = 15000;
+export const refineBudget = (widths = [], { exact = false } = {}) => (exact
+  ? REFINE_BASE + REFINE_PER_WIDTH * Math.max(0, widths.length - SWEEP_WIDTHS.length)
+  : REFINE_BASE);
 // The self-correction loop's own time. It is taken from the step's limit before the refine check, never from it:
 // generate is local work (no network, no capture), so a longer generate never changes what was captured.
 // SAS_CORRECT=0 turns the loop off; everything else behaves exactly as it did before.
@@ -327,7 +336,8 @@ export async function generateStage(ctx) {
   // What this step still has to do after the fit pass: correct the layout against the original, then check the
   // breakpoints. The fit pass used to run until FIT_MARGIN before the step's limit and leave them nothing - on a
   // 64-page rebuild it used the whole step and the correction loop was skipped before it measured anything.
-  const afterFit = correctOn() ? CORRECT_BUDGET + REFINE_BUDGET : 0;
+  const refineTime = refineBudget(ctx.sweep?.widths ?? SWEEP_WIDTHS, { exact: asIs });
+  const afterFit = correctOn() ? CORRECT_BUDGET + refineTime : 0;
   for (let round = 0; round <= FIT_ROUNDS; round++) {
     // Round 0 only measures, and the correction loop picks its pages from what it measures, so it always runs.
     if (Date.now() > ctx.stepDeadline - FIT_MARGIN - (round ? afterFit : 0)) {
@@ -387,7 +397,7 @@ export async function generateStage(ctx) {
   // (no rebuild, nothing written), and keeps only what measured closer to the original on every page and view.
   let correct = null;
   if (correctOn()) {
-    const correctDeadline = Math.min(Date.now() + CORRECT_BUDGET, ctx.stepDeadline - FIT_MARGIN - REFINE_BUDGET);
+    const correctDeadline = Math.min(Date.now() + CORRECT_BUDGET, ctx.stepDeadline - FIT_MARGIN - refineTime);
     if (correctDeadline - Date.now() >= CORRECT_MIN) {
       ctx.progress(0.75, 'Correcting the layout against the original');
       try {
@@ -520,7 +530,7 @@ export async function generateStage(ctx) {
   let sweep = ctx.sweep;
   if (sweep === undefined && ctx.sweepPending) {
     ctx.progress(0.9, 'Waiting for the screenshots of the original at more widths');
-    sweep = await ctx.sweepPending(REFINE_PAGES, Math.max(0, Math.min(SWEEP_WAIT, ctx.stepDeadline - FIT_MARGIN - REFINE_BUDGET - Date.now())));
+    sweep = await ctx.sweepPending(REFINE_PAGES, Math.max(0, Math.min(SWEEP_WAIT, ctx.stepDeadline - FIT_MARGIN - refineTime - Date.now())));
   }
   if (sweep) {
     ctx.progress(0.9, 'Checking the layout between the captured widths');
@@ -531,10 +541,13 @@ export async function generateStage(ctx) {
         workspace: ctx.dir,
         sweep,
         bounds: ir.mediaBounds ?? [],
-        deadline: Math.min(Date.now() + REFINE_BUDGET, ctx.stepDeadline - FIT_MARGIN),
+        deadline: Math.min(Date.now() + refineBudget(sweep?.widths ?? SWEEP_WIDTHS, { exact: asIs }), ctx.stepDeadline - FIT_MARGIN),
       });
     } catch (err) {
       report.warnings.push(`The breakpoints could not be checked against the original: ${err.message.split('\n')[0]}`);
+    }
+    if (refined?.summary?.stopped === 'time-limit' && !refined.summary.breakpoints) {
+      report.warnings.push(`The breakpoints were not checked against the original: the check ran out of time after ${refined.summary.renders} renders. The copy keeps the breakpoints it read from the site's own stylesheets.`);
     }
     if (refined && (refined.breakpoints !== ir.breakpoints || refined.fluid || refined.shrink)) {
       ir.breakpoints = refined.breakpoints;
