@@ -49,26 +49,6 @@ export const marginForNoise = (noise = {}) => {
 export const BOX_TOLERANCE = 1;
 
 /**
- * The slots a round is judged on: one width per view - the view's own capture width where the baseline has it,
- * else the narrowest slot of that view, the width most likely to show a difference. Deterministic, so two runs
- * judge on the same slots.
- *
- * Measuring all eighteen slots every round is what made one page cost twenty minutes on flexibench, and it is
- * more than the judgement needs: a corrector writes its value for every view the element exists in, so one width
- * per view already catches a change that helps one layout and hurts another. What a width *inside* a view does
- * differently from its neighbour is caught by the full verification once per page, before anything is kept.
- */
-export function judgingSlots(slots) {
-  const byView = new Map();
-  for (const slot of [...slots].sort((x, y) => x.width - y.width)) {
-    const view = viewForWidth(slot.width);
-    const current = byView.get(view);
-    if (!current || slot.width === VIEW_WIDTHS[view]) byView.set(view, slot);
-  }
-  return new Set([...byView.values()].map((s) => s.id));
-}
-
-/**
  * Every node's fixes keyed by its place in the tree, in a form that can be written to the checkpoint: the loop is the
  * most expensive part of a run (half an hour on an eleven-page site) and its result lived only in memory until the
  * whole generate step finished, so an interruption a minute before the end threw all of it away.
@@ -222,8 +202,12 @@ export function makeExactRound({ renderer, baseline, treeOf, workspace, cpathOf 
     // So a round is judged on one slot per view and carries the rest forward from the previous measurement, and
     // correctExact then checks every slot of the page once before keeping anything (the verification below) -
     // the same guarantee, paid once per page instead of once per round.
-    const judging = judgingSlots(baseline.slots);
-    const wanted = (slot) => all || judging.has(slot.id);
+    // Every slot of the pages asked for. Judging a round on one width per view was affordable and wrong: a
+    // corrector writes its value for every view an element appears in, and the phone view alone governs nine of
+    // these eighteen widths - 320 to 767. On a real site that let six changes through which the full check then
+    // found cost 13 to 21 points at widths like 639, 430 and 390, every one of them inside the view that had been
+    // judged on 375 alone. A view is not one width, so it is not judged as one.
+    const wanted = () => true;
     ledger.beginRound(round);
     const slots = [];
     const rects = new Map();
@@ -398,8 +382,11 @@ export async function correctExact({
       margin: marginForNoise(baseline.noiseFloor),
       progress: (f, message) => progress((i + f) / order.length, message),
     });
-    // The guarantee the cheap rounds deferred: every slot of this page, measured once, with exactly the
-    // declarations that were accepted. A page that is worse anywhere goes back to how it was.
+    // A last look at the whole page with exactly the declarations that were accepted, compared slot by slot with
+    // how it started: anything worse anywhere and the page goes back to how it was. The rounds now measure every
+    // slot themselves, so this re-renders what they already saw - it is kept because it is the only check that
+    // reads the *committed* stylesheet rather than a trial override, and because a page quietly made worse is the
+    // one failure this mode exists to prevent. It costs eighteen renders on a page that kept something.
     let verified = null;
     if (page.applied) {
       verified = await round({
