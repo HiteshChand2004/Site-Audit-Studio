@@ -11,16 +11,44 @@ import { applyFixesByPath, fixesByPath, restoreFixes, snapshotFixes } from '../s
 
 test('a width is corrected in the view whose media query covers it', () => {
   // An exact slot is a width; a declaration has to live in the view that governs it or it will not apply there.
-  assert.equal(viewForWidth(1920), 'desktop');
-  assert.equal(viewForWidth(1440), 'desktop');
-  assert.equal(viewForWidth(1439), 'laptop');
-  assert.equal(viewForWidth(1025), 'laptop');
-  assert.equal(viewForWidth(1024), 'laptop');
-  assert.equal(viewForWidth(1023), 'tablet');
-  assert.equal(viewForWidth(810), 'tablet');
-  assert.equal(viewForWidth(768), 'tablet');
-  assert.equal(viewForWidth(767), 'mobile');
-  assert.equal(viewForWidth(320), 'mobile');
+  // Without the copy's breakpoints the view widths are the guess, which is what this has always done. The four
+  // views are named because the registry now also holds the one an exact run captures at 700.
+  const four = ['desktop', 'laptop', 'tablet', 'mobile'];
+  assert.equal(viewForWidth(1920, four), 'desktop');
+  assert.equal(viewForWidth(1440, four), 'desktop');
+  assert.equal(viewForWidth(1439, four), 'laptop');
+  assert.equal(viewForWidth(1025, four), 'laptop');
+  assert.equal(viewForWidth(1024, four), 'laptop');
+  assert.equal(viewForWidth(1023, four), 'tablet');
+  assert.equal(viewForWidth(810, four), 'tablet');
+  assert.equal(viewForWidth(768, four), 'tablet');
+  assert.equal(viewForWidth(767, four), 'mobile');
+  assert.equal(viewForWidth(320, four), 'mobile');
+});
+
+test('given the copy\'s breakpoints, a width is mapped by the query that really covers it', () => {
+  // The media queries stack widest first, so the narrowest one that still matches has the last word. Guessing from
+  // the view widths is close but not exact, and the difference is a declaration that never applies.
+  const four = ['desktop', 'laptop', 'tablet', 'mobile'];
+  const bpFour = { laptop: 1279.98, tablet: 1023.98, mobile: 767.98 };
+  // At exactly 1280 the laptop query (max-width 1279.98) does not match, so the base view governs. The view-width
+  // guess said laptop, and a declaration written there would have done nothing at that width.
+  assert.equal(viewForWidth(1280, four), 'laptop', 'what the guess says');
+  assert.equal(viewForWidth(1280, four, bpFour), 'desktop', 'what the stylesheet does');
+  // Everywhere else the two agree, which is why the guess has been good enough until now.
+  for (const w of [1920, 1440, 1279, 1024, 1023, 768, 767, 430, 320]) {
+    assert.equal(viewForWidth(w, four, bpFour), viewForWidth(w, four), `${w}px`);
+  }
+
+  // Five views: 640-767 belongs to the view captured at 700, and 639 and below to the phone - which is the whole
+  // point of capturing that band. The view-width guess cannot express it: it would name the phone, whose query
+  // ends at 639.98.
+  const five = ['desktop', 'laptop', 'tablet', 'large-phone', 'mobile'];
+  const bpFive = { laptop: 1279.98, tablet: 1023.98, 'large-phone': 767.98, mobile: 639.98 };
+  for (const w of [767, 700, 699, 640]) assert.equal(viewForWidth(w, five, bpFive), 'large-phone', `${w}px`);
+  for (const w of [639, 430, 375, 320]) assert.equal(viewForWidth(w, five, bpFive), 'mobile', `${w}px`);
+  assert.equal(viewForWidth(768, five, bpFive), 'tablet');
+  assert.equal(viewForWidth(640, five), 'mobile', 'and the guess alone would have written it where it cannot apply');
 });
 
 test('a slot that matches scores 100, and every way of being wrong lowers it', () => {
@@ -118,7 +146,7 @@ test('a round measures every width of the page, because a view is not one width'
   const treeOf = new Map([['/', { info: { path: '/', slug: 'index', outPath: 'index.html' } }]]);
   const round = makeExactRound({ renderer, baseline, treeOf, workspace: '/nowhere' });
   const base = {
-    slots: slots.map((s) => ({ page: '/', view: viewForWidth(s.width), slot: s.id, width: s.width, score: 50, layout: 50, pixel: 50, heightOff: false })),
+    slots: slots.map((s) => ({ page: '/', view: viewForWidth(s.width, ['desktop', 'laptop', 'tablet', 'mobile']), slot: s.id, width: s.width, score: 50, layout: 50, pixel: 50, heightOff: false })),
     rects: new Map(),
   };
 
@@ -137,7 +165,7 @@ test('a round measures every width of the page, because a view is not one width'
   assert.equal(r.score, 0);
 
   // And the phone view really does govern half the widths, which is why one of them could not stand for it.
-  const mobile = widths.filter((w) => viewForWidth(w) === 'mobile');
+  const mobile = widths.filter((w) => viewForWidth(w, ['desktop', 'laptop', 'tablet', 'mobile']) === 'mobile');
   assert.deepEqual(mobile, [767, 640, 639, 430, 414, 390, 375, 360, 320]);
   assert.ok(mobile.length > widths.length / 2);
 });

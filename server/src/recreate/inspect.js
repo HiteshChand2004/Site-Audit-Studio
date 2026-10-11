@@ -13,7 +13,7 @@ import { capturePage } from './capture/index.js';
 import { discoverPages, probeNotFound, SKIP_LABELS } from './discover.js';
 import { RecreateError } from './errors.js';
 import { causeText, recoverFailure, recoverHit } from './interrupts.js';
-import { RECREATE_VIEWS } from './views.js';
+import { viewsFor } from './views.js';
 
 // Captures stop starting new pages this long before the step's time limit.
 const INSPECT_MARGIN = 15000;
@@ -53,19 +53,22 @@ const CPUS_PER_PAGE = 4;
  * falls back to fewer pages at once.
  * @param {{ env?: object, free?: number, cpus?: number }} [o]  overrides (tests)
  */
-export function capturePagesAtOnce({ env = process.env, free, cpus = os.cpus()?.length || 1 } = {}) {
+export function capturePagesAtOnce({ env = process.env, free, cpus = os.cpus()?.length || 1, exact = false } = {}) {
+  // One browser context per view, so the views this run captures decide what a page costs: an exact run opens a
+  // fifth (views.js EXACT_ONLY_VIEWS) and fewer pages fit beside it.
+  const perPage = viewsFor({ exact }).length;
   const forced = Number(env.SAS_CAPTURE_PAGES);
   if (env.SAS_CAPTURE_PAGES !== undefined && env.SAS_CAPTURE_PAGES !== '' && Number.isInteger(forced) && forced >= 1 && forced <= 8) return forced;
   const cap = maxParallel(env);
-  if (cap !== Infinity) return Math.max(1, Math.floor(cap / RECREATE_VIEWS.length));
+  if (cap !== Infinity) return Math.max(1, Math.floor(cap / perPage));
   const byCpu = Math.max(1, Math.floor(cpus / CPUS_PER_PAGE));
-  const byMemory = parallelism({ perUnitMB: PAGE_MB * RECREATE_VIEWS.length, max: CAPTURE_PAGES_MAX, min: 1, cap: Infinity, ...(free !== undefined && { free }) });
+  const byMemory = parallelism({ perUnitMB: PAGE_MB * perPage, max: CAPTURE_PAGES_MAX, min: 1, cap: Infinity, ...(free !== undefined && { free }) });
   return Math.max(1, Math.min(CAPTURE_PAGES_MAX, byCpu, byMemory));
 }
 
 /** Whether the free memory holds one more page capture next to the running ones (one context per view). */
-export const roomForAnotherPage = ({ free } = {}) =>
-  parallelism({ perUnitMB: PAGE_MB * RECREATE_VIEWS.length, max: 1, min: 0, cap: Infinity, ...(free !== undefined && { free }) }) >= 1;
+export const roomForAnotherPage = ({ free, exact = false } = {}) =>
+  parallelism({ perUnitMB: PAGE_MB * viewsFor({ exact }).length, max: 1, min: 0, cap: Infinity, ...(free !== undefined && { free }) }) >= 1;
 
 // Runs at most `size()` tasks at once (read when a task wants to start); the rest wait in order.
 export function limiter(size) {
@@ -312,7 +315,7 @@ export async function inspectStage(ctx) {
     const base = captured.size;
 
     // Several pages at once when the machine has room (capturePagesAtOnce); 1 = the original one-page-at-a-time loop.
-    const atOnce = Math.max(1, Math.min(Math.max(1, todo.length), ctx.capturePages ?? capturePagesAtOnce()));
+    const atOnce = Math.max(1, Math.min(Math.max(1, todo.length), ctx.capturePages ?? capturePagesAtOnce({ exact: Boolean(ctx.exact) })));
     // How the pages were captured (additive): pages at once, the most that ran together, starts held back for memory, and
     // where the step's time went (finding pages vs capturing them).
     report.capture = { pagesAtOnce: atOnce, peak: 1, heldBack: 0, discoverMs: Date.now() - discoverStarted, captureMs: null };
@@ -331,7 +334,7 @@ export async function inspectStage(ctx) {
       // each finished page frees its slot for the next. The same time checks as above apply to every start; the order of the
       // captured pages (and of the manifest) stays the discovery order. A page that fails or stalls never stops the others;
       // only a homepage that cannot be captured ends the step (as before), and the browser closing then ends the rest.
-      const room = ctx.roomForAnotherPage ?? roomForAnotherPage;
+      const room = ctx.roomForAnotherPage ?? ((o) => roomForAnotherPage({ ...o, exact: Boolean(ctx.exact) }));
       const inflight = new Set();
       let next = 0;
       let done = 0;

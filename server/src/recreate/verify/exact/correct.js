@@ -123,14 +123,28 @@ export function restoreFixes(tree, saved) {
 /**
  * The IR view that governs a width. An exact slot is a width (1025, 430); a declaration has to live in the view
  * whose media query covers it, or it will not apply there.
+ *
+ * `views` is the set the copy actually has, which is not always the registry: an exact run captures a view between
+ * the tablet and the phone, so 700-767 belongs to that view when it exists and to the phone when it does not.
+ * Passing the registry to a copy built from four views would write declarations into a media query the copy has no
+ * styles for, which is why the callers pass the views of the page in hand.
  */
-export function viewForWidth(width, views = RECREATE_VIEWS) {
-  const ordered = [...views].sort((a, b) => VIEW_WIDTHS[b.id ?? b] - VIEW_WIDTHS[a.id ?? a]);
-  for (const v of ordered) {
-    const id = v.id ?? v;
-    if (width >= VIEW_WIDTHS[id]) return id;
+export function viewForWidth(width, views = RECREATE_VIEWS, breakpoints = null) {
+  const ids = [...views]
+    .map((v) => v.id ?? v)
+    .sort((a, b) => VIEW_WIDTHS[b] - VIEW_WIDTHS[a]);
+  // With the copy's own breakpoints the answer is exact: the media queries stack widest first, so the narrowest one
+  // that still matches has the last word. Without them the view widths are the best guess, and they give the same
+  // answer for the four-view set, where each breakpoint sits a hundredth below the next view's width. They do not
+  // for a set with a view at 700: a width of 640 is governed by that view's query (max-width 767.98), while its own
+  // width would have named the phone - whose query ends at 639.98, so the declaration would never have applied.
+  if (breakpoints) {
+    const matching = ids.filter((id) => breakpoints[id] != null && width <= breakpoints[id]);
+    if (matching.length) return matching.sort((a, b) => breakpoints[a] - breakpoints[b])[0];
+    return ids[0] ?? 'desktop';
   }
-  return (ordered.at(-1)?.id ?? ordered.at(-1)) ?? 'mobile';
+  for (const id of ids) if (width >= VIEW_WIDTHS[id]) return id;
+  return ids.at(-1) ?? 'mobile';
 }
 
 /**
@@ -193,7 +207,7 @@ export function slotScore({ diffRaw, boxes, heightOriginal, heightCopy }) {
  * Measures the copy at every exact slot of the chosen pages, against the baselines taken at those same slots, with
  * one stylesheet override in place. Same return shape as verify/correct.js measureRound, so the loop is unchanged.
  */
-export function makeExactRound({ renderer, baseline, treeOf, workspace, cpathOf = null, deadline = Infinity }) {
+export function makeExactRound({ renderer, baseline, treeOf, workspace, cpathOf = null, deadline = Infinity, views = null, breakpoints = null }) {
   const byPage = new Map(baseline.pages.map((p) => [p.path, p]));
   return async function exactRound({ site, ledger, css, round, pages, trials = [], base = null, all = false }) {
     // A declaration is written for one view, so it can only change the slots that view governs: a laptop fix
@@ -224,7 +238,8 @@ export function makeExactRound({ renderer, baseline, treeOf, workspace, cpathOf 
           if (Date.now() > deadline) break;
           const slot = baseline.slots.find((s) => s.id === slotBaseline.id);
           if (!slot || !slotBaseline.bands?.length) continue;
-          const view = viewForWidth(slot.width);
+          // The views this page has, not the registry: a copy built from four views has no fifth media query.
+          const view = viewForWidth(slot.width, views ?? tree.views ?? RECREATE_VIEWS, breakpoints);
           // Not one of the slots this round is judged on: its previous numbers stand where there are any, marked
           // as carried so the report can say which were re-measured.
           if (!wanted(slot)) {
@@ -332,9 +347,15 @@ export async function correctExact({
   progress = () => {}, rounds = ROUNDS_PER_PAGE, round: roundOf = null,
 }) {
   const treeOf = new Map(site.pages.map((t) => [t.info.path, t]));
+  // Which views this copy was built from: the width a declaration has to be written for depends on it.
+  const siteViews = [...new Set(site.pages.flatMap((t) => t.views ?? []))];
   // The measurement, or one given to it: the scoring rules below are what decide whether a change is kept, and a
   // test must be able to check them without a browser.
-  const round = roundOf ?? makeExactRound({ renderer, baseline, treeOf, workspace, cpathOf, deadline });
+  const round = roundOf ?? makeExactRound({
+    renderer, baseline, treeOf, workspace, cpathOf, deadline,
+    views: siteViews.length ? siteViews : null,
+    breakpoints: ir?.breakpoints ?? null,
+  });
   const out = { pages: [], rounds: 0, applied: 0, reverted: 0, elements: 0, byCorrector: {}, stopped: null, scoreBefore: null, scoreAfter: null, margin: round1(marginForNoise(baseline.noiseFloor)) };
 
   // Worst page first, measured once with no override, so the loop spends its rounds where they count. This one
