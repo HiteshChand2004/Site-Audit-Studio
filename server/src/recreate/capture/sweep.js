@@ -13,6 +13,43 @@ import { captureDir, settle } from './index.js';
 export const SWEEP_WIDTHS = [320, 480, 600, 900, 1024, 1280, 1920];
 // Contexts open at once for one page: seven Chromium contexts rendering a heavy page together is too much.
 export const SWEEP_PARALLEL = 4;
+/** Site boundaries the sweep will add widths for, most-used first, and the most widths it will end up with. */
+export const SWEEP_BOUNDS_MAX = 3;
+export const SWEEP_WIDTHS_MAX = 13;
+// A boundary this close to a width already in the list adds nothing.
+const NEAR = 8;
+
+/**
+ * The widths to sweep: the fixed list plus the two widths that straddle each boundary the site declares itself.
+ *
+ * Why the site's own boundaries matter here. The fixed widths are evenly spread, and a boundary can sit between
+ * two of them - flexibench changes layout at 640, between 600 and 900 - so no swept width can tell whether the
+ * copy's own breakpoint belongs above or below it. `verify/refine.js` judges breakpoints on these widths, so a
+ * boundary it cannot see is a boundary it cannot get right; on flexibench that cost 12% of the page height
+ * across 640-767px. Both sides of the boundary are needed, because the question is which band a width falls in.
+ *
+ * @param {{ value: number, rules?: number }[]} bounds  from `ir/index.js mediaBounds`
+ * @returns {number[]} ascending, deduped, capped
+ */
+export function sweepWidths(bounds = [], base = SWEEP_WIDTHS) {
+  const widths = [...base];
+  const ranked = [...bounds]
+    .filter((b) => Number.isFinite(b?.value) && b.value > base[0] && b.value < base[base.length - 1])
+    .sort((a, b) => (b.rules ?? 0) - (a.rules ?? 0) || a.value - b.value);
+  const seen = new Set();
+  let taken = 0;
+  for (const b of ranked) {
+    const key = Math.round(b.value);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // A boundary of 639.98 is the last width of one band and the first of the next: 639 and 640.
+    const pair = [Math.floor(b.value), Math.ceil(b.value)];
+    if (pair.every((w) => widths.some((x) => Math.abs(x - w) <= NEAR))) continue;
+    for (const w of pair) if (!widths.includes(w)) widths.push(w);
+    if (++taken >= SWEEP_BOUNDS_MAX || widths.length >= SWEEP_WIDTHS_MAX) break;
+  }
+  return widths.sort((a, b) => a - b).slice(0, SWEEP_WIDTHS_MAX);
+}
 // Below this width the sweep renders like a phone (mobile viewport handling); both sides do the same.
 const MOBILE_BELOW = 600;
 const LOAD_WAIT = 20000;

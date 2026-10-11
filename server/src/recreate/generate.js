@@ -512,6 +512,7 @@ export async function generateStage(ctx) {
         siteDir,
         workspace: ctx.dir,
         sweep,
+        bounds: ir.mediaBounds ?? [],
         deadline: Math.min(Date.now() + REFINE_BUDGET, ctx.stepDeadline - FIT_MARGIN),
       });
     } catch (err) {

@@ -302,6 +302,10 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
     siteName,
     // No breakpoints when the pages were captured in one view only (a capture made while only desktop was on, views.js): no media queries.
     breakpoints: pages.some(({ captures }) => Object.keys(captures).length > 1) ? pickBreakpoints(queries, { laptop: pages.some(({ captures }) => captures.laptop) }) : { source: 'single-view' },
+    // The boundaries the site declares itself, kept as measured: refine offers them as candidates and judges them
+    // on the widths either side (verify/refine.js specsFor), which is how a boundary between two swept widths is
+    // found at all.
+    mediaBounds: mediaBounds(queries),
     ...(asIs && { asIs: true }),
     tokens: colorTokens(home.captures.desktop.customProps),
     keyframes,
@@ -564,6 +568,7 @@ export function buildIR(site, { asIs = false } = {}) {
     baseUrl: site.baseUrl,
     siteName: site.siteName.value,
     breakpoints: site.breakpoints,
+    ...(site.mediaBounds?.length && { mediaBounds: site.mediaBounds }),
     tokens: site.tokens,
     ...((asIs || site.asIs) && { asIs: true }),
     fontFaces: site.fontFaces.filter((f) => families.has(f.family.toLowerCase())),
