@@ -7,11 +7,12 @@
 //   sweep       every page the sweep of the original at more widths finished (by slug); files under capture/<slug>/sweep/
 //   steps       inspect / sweep / assets once finished: what the step put on the report and on the job context
 //   corrections the fixes the correction loop accepted, written the moment it finishes (see saveCorrections)
+//   exactCompare every page the exact comparison finished (by slug), with the evidence it wrote under fidelity/
 //   stopped     when, at which step and why the job stopped (none = the server died while it ran)
 // A resume (recreate/index.js) adopts the folder under its new job id, skips the finished steps (their results restored),
 // captures only the missing pages and sweeps only the missing ones. Generate, build and what follows run again, with
 // one exception: in exact mode the correction loop's own result is kept, because it is the longest part of a run.
-import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
@@ -83,12 +84,13 @@ export function openCheckpoint(dir, { recreateId, analysisId = null, saved = nul
         stopped: null,
         updatedAt: now,
       }
-    : { version: VERSION, recreateId, analysisId, createdAt: now, updatedAt: now, autoResumes: 0, resumed: [], discovery: null, pages: {}, sweep: {}, steps: {}, corrections: null, stopped: null };
+    : { version: VERSION, recreateId, analysisId, createdAt: now, updatedAt: now, autoResumes: 0, resumed: [], discovery: null, pages: {}, sweep: {}, steps: {}, corrections: null, exactCompare: {}, stopped: null };
   data.pages ??= {};
   data.sweep ??= {};
   data.steps ??= {};
   data.resumed ??= [];
   data.corrections ??= null;
+  data.exactCompare ??= {};
   let chain = Promise.resolve();
   // Did this run add anything (a page, a sweep page, a step)? A job that stopped without progress is not resumed by itself.
   let progressed = false;
@@ -142,6 +144,12 @@ export function openCheckpoint(dir, { recreateId, analysisId = null, saved = nul
       data.corrections = corrections;
       return mark();
     },
+    /** A page the exact comparison finished, by slug: the pass costs about four minutes a page and had no memory. */
+    exactPage: (slug) => data.exactCompare[slug] ?? null,
+    saveExactPage: (slug, result) => {
+      data.exactCompare[slug] = result;
+      return mark();
+    },
     step: (key) => data.steps[key] ?? null,
     /** A kept step finished: its report keys and context fields (`before` = the report's array lengths when it started). */
     saveStep: (key, ctx, before) => {
@@ -177,13 +185,53 @@ export function restoreStep(ctx, saved) {
 }
 
 /**
+ * Empties `fidelity/`, keeping `fidelity/<slug>/exact` for the slugs named - the evidence of comparisons whose
+ * numbers a resume is keeping. With none named the whole folder goes, which is what every run before exact mode did.
+ */
+export async function clearFidelity(dir, keep = new Set()) {
+  const root = path.join(dir, 'fidelity');
+  if (!keep.size) {
+    await rm(root, { recursive: true, force: true }).catch(() => {});
+    return;
+  }
+  let entries = [];
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const at = path.join(root, entry.name);
+    if (!entry.isDirectory() || !keep.has(entry.name)) {
+      await rm(at, { recursive: true, force: true }).catch(() => {});
+      continue;
+    }
+    // A kept page: everything but its `exact` folder is re-made.
+    let inner = [];
+    try {
+      inner = await readdir(at, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const sub of inner) {
+      if (sub.name === 'exact' && sub.isDirectory()) continue;
+      await rm(path.join(at, sub.name), { recursive: true, force: true }).catch(() => {});
+    }
+  }
+}
+
+/**
  * Before a resume runs: removes what the steps that run again would write (half-written by the stopped job), and the
  * capture folders of pages that did not finish (they are captured again).
  */
 export async function clearUnfinished(dir, data) {
-  for (const name of ['site', 'dist', 'dist.tmp', 'ir', 'fidelity', 'stacks', 'report.json']) {
+  for (const name of ['site', 'dist', 'dist.tmp', 'ir', 'stacks', 'report.json']) {
     await rm(path.join(dir, name), { recursive: true, force: true }).catch(() => {});
   }
+  // `fidelity/` is written again by the fit pass and the fidelity check, so it goes - except the exact comparison's
+  // own evidence (the diff maps and the magnified crops) for pages whose numbers are being kept. The report links to
+  // those files by name, so deleting them while keeping the numbers would leave the app pointing at nothing.
+  await clearFidelity(dir, new Set(Object.keys(data.exactCompare ?? {})));
   if (!data.steps?.assets) await rm(path.join(dir, 'assets'), { recursive: true, force: true }).catch(() => {});
   if (!data.steps?.inspect) {
     const done = new Set(Object.values(data.pages ?? {}).map((p) => p.slug));

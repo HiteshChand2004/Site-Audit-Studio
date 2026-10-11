@@ -135,6 +135,42 @@ test('the copy is held to loading nothing from anywhere else', async () => {
   assert.match(slot.failedRequests[0].url, /outside\.png/);
 });
 
+test('a page measured on an earlier attempt is handed back instead of measured again', async () => {
+  // The pass costs about four minutes a page on a real site, and an interruption on the last page used to throw
+  // away every page before it. So a finished page goes to `onPage` and comes back through `done`.
+  const root = await copyAt('dist-reuse', body());
+  const base = await baselineOf();
+
+  const kept = new Map();
+  const first = await compareExact({
+    root, workspace: work, baseline: base, pages: [page], scripts: false,
+    onPage: (result) => { kept.set(result.slug, result); },
+  });
+  assert.equal(first.reused, 0, 'nothing to reuse on the first attempt');
+  assert.equal(kept.size, 1, 'the page was written as soon as it was done');
+  assert.equal(kept.get(page.slug).slots.length, first.pages[0].slots.length);
+
+  // The second attempt opens no page: the numbers come from what was kept, and they are the same numbers.
+  let opened = 0;
+  const second = await compareExact({
+    root, workspace: work, baseline: base, pages: [page], scripts: false,
+    done: (slug) => { opened++; return kept.get(slug) ?? null; },
+  });
+  assert.equal(opened, 1, 'it asked');
+  assert.equal(second.reused, 1);
+  assert.equal(second.slots, first.slots, 'the same sizes are accounted for');
+  assert.equal(second.accepted, first.accepted);
+  assert.deepEqual(second.causes, first.causes);
+  assert.equal(second.pages[0].reused, true, 'and the report says it was not measured again');
+
+  // What was never kept is measured: a `done` that answers nothing behaves like the first attempt.
+  const third = await compareExact({
+    root, workspace: work, baseline: base, pages: [page], scripts: false, done: () => null,
+  });
+  assert.equal(third.reused, 0);
+  assert.equal(third.accepted, first.accepted);
+});
+
 test('a page the original was never measured at is said so, not skipped quietly', async () => {
   const root = await copyAt('dist-same', body());
   const r = await compareExact({

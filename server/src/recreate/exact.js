@@ -41,6 +41,10 @@ export async function exactStage(ctx, local = {}) {
     excluded: report.exact?.excluded ?? [],
     deadline,
     progress: (f, message) => progress?.(f, message),
+    // A page at a time into the checkpoint: this pass costs about four minutes a page, and an interruption on the
+    // last page used to throw away every page before it.
+    done: (slug) => ctx.checkpoint?.exactPage?.(slug) ?? null,
+    onPage: (result) => ctx.checkpoint?.saveExactPage?.(result.slug, result),
   });
 
   // Is the baseline still what the live site looks like? One conditional request per page, no browser.
@@ -75,6 +79,9 @@ export async function exactStage(ctx, local = {}) {
     ...(staleness && { baseline: { ...report.exact?.baseline, check: staleness } }),
   };
 
+  if (result.reused) {
+    report.warnings.push(`Continued after an interruption: ${result.reused} of ${result.pages.length} page(s) kept the comparison measured before it, and were not measured again.`);
+  }
   if (result.accepted < result.slots) {
     const left = result.slots - result.accepted;
     report.warnings.push(`${left} of ${result.slots} page sizes are not an exact match yet (worst ${result.diffWorst}% of pixels); see "Exact comparison" in the report.`);

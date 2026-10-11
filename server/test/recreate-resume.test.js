@@ -6,9 +6,10 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import express from 'express';
 import { db, projectDir } from '../src/db/index.js';
-import { checkpointPath, MAX_AUTO_RESUMES, readCheckpoint } from '../src/recreate/checkpoint.js';
+import { checkpointPath, clearFidelity, MAX_AUTO_RESUMES, readCheckpoint } from '../src/recreate/checkpoint.js';
 import { RecreateError, runRecreate, STAGES } from '../src/recreate/index.js';
 import { autoResume, recreateJobs, resumeInterruptedRecreates } from '../src/recreate/jobs.js';
 import { findResumable, pruneRecreates, recreateDir, tmpDir } from '../src/recreate/workspace.js';
@@ -274,4 +275,33 @@ test('GET /recreate offers the stopped recreate and POST { resume: true } contin
   } finally {
     Object.assign(STAGES, savedStages);
   }
+});
+
+test('a resume keeps the evidence of the comparisons whose numbers it keeps', async (t) => {
+  // The report links to the diff maps and crops by name. Keeping a page's numbers while deleting its pictures would
+  // leave the app pointing at nothing - so fidelity/<slug>/exact stays for exactly the kept slugs, and nothing else
+  // in fidelity/ does, because the fit pass and the fidelity check write it again.
+  const dir = path.join(os.tmpdir(), `sas-clearfid-${randomUUID().slice(0, 8)}`);
+  const write = async (rel) => {
+    await mkdir(path.dirname(path.join(dir, rel)), { recursive: true });
+    await writeFile(path.join(dir, rel), 'x');
+  };
+  await write('fidelity/index/exact/1440-map.webp');
+  await write('fidelity/index/desktop-full.webp');
+  await write('fidelity/contact/exact/1440-map.webp');
+  await write('fidelity/contact/desktop-full.webp');
+  await write('fidelity/terms/exact/1440-map.webp');
+  t.after(() => rm(dir, { recursive: true, force: true }));
+
+  await clearFidelity(dir, new Set(['index', 'contact']));
+  const there = async (rel) => access(path.join(dir, rel)).then(() => true, () => false);
+  assert.equal(await there('fidelity/index/exact/1440-map.webp'), true, 'kept page: its exact evidence stays');
+  assert.equal(await there('fidelity/contact/exact/1440-map.webp'), true);
+  assert.equal(await there('fidelity/index/desktop-full.webp'), false, 'but not the shots that are made again');
+  assert.equal(await there('fidelity/contact/desktop-full.webp'), false);
+  assert.equal(await there('fidelity/terms/exact/1440-map.webp'), false, 'a page that is not kept goes entirely');
+
+  // With nothing kept the whole folder goes, which is what every run before exact mode did.
+  await clearFidelity(dir, new Set());
+  assert.equal(await there('fidelity'), false);
 });

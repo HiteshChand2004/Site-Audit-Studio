@@ -259,21 +259,35 @@ export async function compareSlot({
 
 /**
  * Every page at every slot the baseline has.
+ *
+ * A page costs about four minutes here, so a finished one can be handed to `onPage` and given back through `done` on
+ * a later attempt: a pass interrupted on its last page then costs that page instead of all of them.
  * @param {{ root: string, workspace: string, baseline: object, pages: object[], scripts?: boolean,
- *   cpathOf?: Function, deadline?: number, progress?: Function, noise?: object }} o
+ *   cpathOf?: Function, deadline?: number, progress?: Function, noise?: object,
+ *   done?: (slug: string) => object|null, onPage?: (result: object) => Promise<void> }} o
  */
 export async function compareExact({
   root, workspace, baseline, pages, scripts = true, cpathOf = null, deadline = Infinity, progress = null, noise = {},
-  excluded = [],
+  excluded = [], done = null, onPage = null,
 }) {
   const renderer = await openExactRenderer(root, { scripts });
   const out = [];
   const errors = [];
+  let reused = 0;
   try {
     for (const [i, page] of pages.entries()) {
       const saved = baseline.pages.find((b) => b.slug === page.slug);
       if (!saved) {
         errors.push({ page: page.path, message: 'The original was not measured for this page.' });
+        continue;
+      }
+      // Measured on an earlier attempt, with its evidence still on disk (checkpoint.js clearFidelity keeps it).
+      const already = done?.(page.slug);
+      if (already?.slots?.length) {
+        out.push({ ...already, reused: true });
+        for (const e of already.errors ?? []) errors.push(e);
+        reused++;
+        progress?.((i + 1) / pages.length, `Keeping the comparison of ${page.path} from the interrupted attempt`);
         continue;
       }
       const slots = [];
@@ -295,12 +309,16 @@ export async function compareExact({
         progress?.((i + slots.length / Math.max(1, saved.slots.length)) / pages.length,
           `Comparing ${page.path} at ${slot?.width ?? ''}px`);
       }
-      out.push({ page: page.path, slug: page.slug, outPath: page.outPath, slots });
+      const result = { page: page.path, slug: page.slug, outPath: page.outPath, slots };
+      out.push(result);
+      // Written before the next page starts, so an interruption costs this pass one page at most. Its own errors
+      // travel with it, or a kept page would come back looking cleaner than it was.
+      if (slots.length) await onPage?.({ ...result, errors: errors.filter((e) => e.page === page.path) });
     }
   } finally {
     await renderer.close();
   }
-  return { pages: out, errors, ...summarise(out) };
+  return { pages: out, errors, reused, ...summarise(out) };
 }
 
 /**
