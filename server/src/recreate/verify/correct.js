@@ -44,6 +44,15 @@ export const MAX_REJECTED_ROUNDS = 3;
 export const ACCEPT_MARGIN = 1;
 export const COMPONENT_DROP = 1;
 export const SLOT_DROP = 2;
+/**
+ * The smallest gain worth keeping when the measurement is known to be quiet. The flat margin of 1 point exists to
+ * stop the loop chasing noise, and for the fast pass - a perceptual diff of four views, which does move between
+ * renders - 1 point is about right. The exact loop measures against saved screenshots of a frozen page, and on a
+ * real site the noise floor came back at **zero** at all eighteen widths; there a margin of 1 threw away five true
+ * gains of +0.3 to +0.4 in one run. So a caller that has measured its own noise passes the margin it has earned,
+ * and this is the floor: small enough to keep a one-element fix, large enough that nothing is kept for free.
+ */
+export const MIN_ACCEPT_MARGIN = 0.05;
 // A rendered page this far from the captured height is a gross failure: it puts every box below it in the wrong
 // place at once, so those elements are worked on first.
 export const HEIGHT_OFF = 0.15;
@@ -392,6 +401,9 @@ export async function correctLayout({
   // Exact mode overrides these three: its own measurement (verify/exact/correct.js), one page at a time, and a
   // round count instead of a clock.
   round: roundOf = measureRound, pages: pageCount = CORRECT_PAGES, maxRounds = Infinity, minTime = CORRECT_MIN,
+  // The smallest gain worth keeping. The fast pass holds to a flat point; a caller that has measured its own
+  // noise passes the margin that noise earns (verify/exact/correct.js marginForNoise).
+  margin = ACCEPT_MARGIN,
 } = {}) {
   const out = {
     rounds: 0, applied: 0, reverted: 0, elements: 0,
@@ -463,7 +475,7 @@ export async function correctLayout({
     roundMs = Date.now() - started;
     out.rounds = round;
 
-    const verdict = judge(base, next);
+    const verdict = judge(base, next, { margin });
     for (const p of plan) {
       const stat = (out.byCorrector[p.id] ??= { applied: 0, reverted: 0 });
       stat[verdict.ok ? 'applied' : 'reverted']++;
@@ -478,7 +490,7 @@ export async function correctLayout({
     // This kind of correction made things worse somewhere. Put it back, leave those elements alone, and try the
     // next kind: one refused change set costs a round, not the whole pass.
     out.reverted += plan.length;
-    (out.rejected ??= []).push({ corrector: kind, count: plan.length, why: verdict.why });
+    (out.rejected ??= []).push({ corrector: kind, count: plan.length, why: verdict.why, ...(verdict.same && { noEffect: true }) });
     ledger.freeze(plan.flatMap((p) => p.entries));
     if ((out.rejected?.length ?? 0) >= MAX_REJECTED_ROUNDS) {
       out.stopped = 'rejected';
@@ -497,6 +509,7 @@ export async function correctLayout({
     }
   }
   out.elements = new Set(trials.map((t) => t.target)).size;
+  out.margin = margin;
   out.trials = trials;
   out.slots = base.slots.map((s) => ({
     page: s.page, view: s.view, score: s.score, layout: s.layout, pixel: s.pixel,
@@ -652,8 +665,13 @@ export async function measureRound({ measure, only, site, ledger, css, shotOf, r
 }
 
 /** Accept only an all-round improvement: better overall, no component down, no single page/view down. */
-export function judge(base, next) {
-  if (next.score < base.score + ACCEPT_MARGIN) return { ok: false, why: `score ${next.score} is not ${ACCEPT_MARGIN} above ${base.score}` };
+export function judge(base, next, { margin = ACCEPT_MARGIN } = {}) {
+  // A change with no measurable effect is refused like any other, but it is not the same event as a change that
+  // made things worse, and the report should not read as though it were.
+  if (next.score < base.score + margin) {
+    const same = Math.abs(next.score - base.score) < MIN_ACCEPT_MARGIN;
+    return { ok: false, same, why: same ? `score ${next.score} did not move` : `score ${next.score} is not ${margin} above ${base.score}` };
+  }
   if (next.layout < base.layout - COMPONENT_DROP) return { ok: false, why: `element boxes fell ${round1(base.layout - next.layout)}` };
   if (base.pixel != null && next.pixel != null && next.pixel < base.pixel - COMPONENT_DROP) {
     return { ok: false, why: `the visual diff fell ${round1(base.pixel - next.pixel)}` };

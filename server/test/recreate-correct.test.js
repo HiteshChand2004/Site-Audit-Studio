@@ -13,8 +13,9 @@ import { nodesInBox } from '../src/recreate/verify/locate.js';
 import { createLedger } from '../src/recreate/verify/ledger.js';
 import {
   aspect, correctLayout, correctReport, drift, gridTracks, judge, missingElement, paintCause, restoreDropped, spacing, trialCss,
-  wrapping, wrongHeight,
+  wrapping, wrongHeight, MIN_ACCEPT_MARGIN,
 } from '../src/recreate/verify/correct.js';
+import { marginForNoise } from '../src/recreate/verify/exact/correct.js';
 import { buildStyles } from '../src/recreate/ir/styles.js';
 
 const V = 'desktop';
@@ -748,7 +749,10 @@ test('a round that does not help is put back, and those elements are left alone'
   // kind rather than giving up: a refused change set costs a round, not the whole pass.
   assert.equal(out.rejected.length, 1);
   assert.equal(out.rejected[0].corrector, 'empty-box');
-  assert.match(out.rejected[0].why, /is not 1 above/);
+  // This change moved the score by nothing at all, which the refusal now says in those words and flags:
+  // "did not move" and "made it worse" are different findings about a corrector.
+  assert.match(out.rejected[0].why, /did not move/);
+  assert.equal(out.rejected[0].noEffect, true);
   assert.equal(out.stopped, 'converged', 'nothing else was left to try once those elements were frozen');
 });
 
@@ -793,4 +797,50 @@ test('the loop does nothing at all when there is no time for a round', async () 
   assert.equal(out.rounds, 0);
   assert.equal(out.applied, 0);
   assert.equal(spacer.fix, undefined);
+});
+
+test('the bar a change must clear follows the noise that was measured, not a fixed guess', () => {
+  // The five gains a real run threw away, and the three harms it rightly refused. The flat margin of one point
+  // refused all eight; with the noise floor measured at zero, the bar is the floor and only the harms are refused.
+  const at = (s) => ({ score: s, layout: s, pixel: s, by: new Map() });
+  const quiet = marginForNoise({ 320: 0, 768: 0, 1440: 0 });
+  assert.equal(quiet, MIN_ACCEPT_MARGIN, 'nothing moved between two captures, so the bar is the floor');
+
+  for (const [before, after] of [[85.6, 85.9], [84.7, 85.1], [84.7, 85], [56.4, 56.7], [11.6, 11.7]]) {
+    assert.equal(judge(at(before), at(after), { margin: quiet }).ok, true, `${before} -> ${after} is a real gain`);
+    assert.equal(judge(at(before), at(after)).ok, false, `${before} -> ${after} was refused by the flat point`);
+  }
+  for (const [before, after] of [[24.7, 10.4], [18, 14.6], [12.6, 11.9]]) {
+    assert.equal(judge(at(before), at(after), { margin: quiet }).ok, false, `${before} -> ${after} is a regression`);
+  }
+
+  // A loud measurement earns a wide bar - the point of measuring it rather than assuming.
+  assert.ok(marginForNoise({ 320: 0.25 }) > 1, 'a quarter percent of pixel noise is worth more than a point');
+  assert.ok(marginForNoise({ 320: 1 }) > marginForNoise({ 320: 0.25 }), 'and more noise, more bar');
+  // One loud width is enough to raise it: the bar is the worst case, not the average.
+  assert.equal(marginForNoise({ 320: 0, 768: 0.25 }), marginForNoise({ 768: 0.25 }));
+
+  // Every protection stays exactly as it was, whatever the bar.
+  const dropped = judge({ score: 50, layout: 50, pixel: 50, by: new Map() },
+    { score: 60, layout: 40, pixel: 80, by: new Map() }, { margin: quiet });
+  assert.equal(dropped.ok, false, 'a big score rise cannot buy a fall in the element boxes');
+  const slot = judge({ score: 50, layout: 50, pixel: 50, by: new Map([['/|desktop', { score: 90 }]]) },
+    { score: 60, layout: 60, pixel: 60, by: new Map([['/|desktop', { score: 80 }]]) }, { margin: quiet });
+  assert.equal(slot.ok, false, 'nor a single page and view falling more than two points');
+});
+
+test('a change with no measurable effect is named as such, not reported as harm', () => {
+  // Eleven of a real run's twenty-two refusals were one-element proposals that moved the score by nothing at all.
+  // They are still refused - CSS added for no measured gain is a risk taken for free - but "did not move" and
+  // "made it worse" are different findings and the report should not read as though they were the same.
+  const at = (s) => ({ score: s, layout: s, pixel: s, by: new Map() });
+  const flat = judge(at(24.7), at(24.7), { margin: MIN_ACCEPT_MARGIN });
+  assert.equal(flat.ok, false);
+  assert.equal(flat.same, true);
+  assert.match(flat.why, /did not move/);
+
+  const worse = judge(at(24.7), at(10.4), { margin: MIN_ACCEPT_MARGIN });
+  assert.equal(worse.ok, false);
+  assert.notEqual(worse.same, true);
+  assert.match(worse.why, /is not/);
 });

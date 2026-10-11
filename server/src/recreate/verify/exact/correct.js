@@ -19,7 +19,7 @@ import { gunzipSync } from 'node:zlib';
 import { readFile } from 'node:fs/promises';
 import { MAX_HEIGHT } from '../../../audit/screenshots.js';
 import { collectRects } from '../layout.js';
-import { correctLayout, round1, slotKey, trialCss, SLOT_DROP, W_LAYOUT, W_PIXEL, HEIGHT_OFF } from '../correct.js';
+import { correctLayout, round1, slotKey, trialCss, MIN_ACCEPT_MARGIN, SLOT_DROP, W_LAYOUT, W_PIXEL, HEIGHT_OFF } from '../correct.js';
 import { CSS_FILE } from '../../emit/css.js';
 import { VIEW_WIDTHS, RECREATE_VIEWS } from '../../views.js';
 import { bandClips, exactDir, shootBand, MAX_BANDS } from '../../capture/exact.js';
@@ -34,6 +34,17 @@ export const ROUNDS_PER_PAGE = 5;
 export const GOOD_ENOUGH_PCT = 0.5;
 /** How a pixel percentage becomes a score out of 100: 0 % is 100, this much or worse is 0. */
 export const PIXEL_FLOOR_PCT = 5;
+/**
+ * The smallest gain the exact loop keeps, set from the noise the capture measured rather than guessed at. The
+ * noise floor is the original captured twice at the same width: on a real site it came back **zero** at all
+ * eighteen, and against a flat margin of one point that cost five true gains of +0.3 to +0.4 in a single run.
+ * A loud measurement still earns a wide margin, which is the point of measuring it.
+ */
+export const marginForNoise = (noise = {}) => {
+  const worst = Math.max(0, ...Object.values(noise).filter((n) => Number.isFinite(n)));
+  return Math.max(MIN_ACCEPT_MARGIN, 2 * W_PIXEL * (worst / PIXEL_FLOOR_PCT) * 100);
+};
+
 /** A box within this many pixels is where it should be (the same tolerance the comparison reports). */
 export const BOX_TOLERANCE = 1;
 
@@ -340,7 +351,7 @@ export async function correctExact({
   // The measurement, or one given to it: the scoring rules below are what decide whether a change is kept, and a
   // test must be able to check them without a browser.
   const round = roundOf ?? makeExactRound({ renderer, baseline, treeOf, workspace, cpathOf, deadline });
-  const out = { pages: [], rounds: 0, applied: 0, reverted: 0, elements: 0, byCorrector: {}, stopped: null, scoreBefore: null, scoreAfter: null };
+  const out = { pages: [], rounds: 0, applied: 0, reverted: 0, elements: 0, byCorrector: {}, stopped: null, scoreBefore: null, scoreAfter: null, margin: round1(marginForNoise(baseline.noiseFloor)) };
 
   // Worst page first, measured once with no override, so the loop spends its rounds where they count. This one
   // measures **every** slot, not just the four a round is judged on: it is the before of the whole run, and the
@@ -384,6 +395,7 @@ export async function correctExact({
       pages: 1,
       maxRounds: rounds,
       minTime: 0,
+      margin: marginForNoise(baseline.noiseFloor),
       progress: (f, message) => progress((i + f) / order.length, message),
     });
     // The guarantee the cheap rounds deferred: every slot of this page, measured once, with exactly the
