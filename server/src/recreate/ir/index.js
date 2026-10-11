@@ -75,6 +75,20 @@ export function mediaBounds(queries) {
  * wider capture (laptop 1024 → 1440, tablet 768 → 1024, mobile 375 → 768). Without a laptop capture the
  * tablet boundary is the widest one between 768 and 1440, as before 4b.6.3.
  */
+/**
+ * One entry per distinct boundary, keeping the largest rule count seen for it. The same query is captured once per
+ * page and once per view, so the raw list says 639.98 eighty-eight times for a site that declares it once.
+ */
+export function distinctBounds(bounds) {
+  const by = new Map();
+  for (const b of bounds ?? []) {
+    if (!Number.isFinite(b?.value)) continue;
+    const at = by.get(b.value);
+    if (!at || (b.rules ?? 0) > (at.rules ?? 0)) by.set(b.value, { value: b.value, rules: b.rules ?? 0, condition: b.condition });
+  }
+  return [...by.values()].sort((x, y) => x.value - y.value);
+}
+
 export function pickBreakpoints(queries, { laptop: hasLaptop = true } = {}) {
   const bounds = mediaBounds(queries).map((b) => b.value);
   const within = (lo, hi) => bounds.filter((b) => b >= lo && b < hi);
@@ -302,10 +316,11 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
     siteName,
     // No breakpoints when the pages were captured in one view only (a capture made while only desktop was on, views.js): no media queries.
     breakpoints: pages.some(({ captures }) => Object.keys(captures).length > 1) ? pickBreakpoints(queries, { laptop: pages.some(({ captures }) => captures.laptop) }) : { source: 'single-view' },
-    // The boundaries the site declares itself, kept as measured: refine offers them as candidates and judges them
-    // on the widths either side (verify/refine.js specsFor), which is how a boundary between two swept widths is
-    // found at all.
-    mediaBounds: mediaBounds(queries),
+    // The boundaries the site declares itself: refine offers them as candidates and judges them on the widths
+    // either side (verify/refine.js specsFor), which is how a boundary between two swept widths is found at all.
+    // One entry per distinct boundary, carrying how many rules hang off it - the queries arrive once per page and
+    // view, so the raw list repeats the same value scores of times and would travel into the IR that way.
+    mediaBounds: distinctBounds(mediaBounds(queries)),
     ...(asIs && { asIs: true }),
     tokens: colorTokens(home.captures.desktop.customProps),
     keyframes,

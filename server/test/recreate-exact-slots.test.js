@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   exactSlots, FIXED_WIDTHS, MAX_BREAKPOINT_SLOTS, PHONE_BELOW, pickBounds, slotFor, SHORT_WINDOW, TABLET_BELOW,
 } from '../src/recreate/verify/exact/slots.js';
-import { mediaBounds, pickBreakpoints } from '../src/recreate/ir/index.js';
+import { distinctBounds, mediaBounds, pickBreakpoints } from '../src/recreate/ir/index.js';
 
 const q = (condition, rules = 0) => ({ condition, rules });
 
@@ -108,4 +108,21 @@ test('slotFor: a height of its own earns a name of its own', () => {
   assert.equal(slotFor(1440).id, '1440');
   assert.equal(slotFor(1440, { height: 600 }).id, '1440x600');
   assert.equal(slotFor(1440, { height: 900 }).id, '1440', 'the usual height is not spelled out');
+});
+
+test('the boundaries the site declares are kept once each, with the rules that hang off them', () => {
+  // The same query is captured once per page and once per view, so on an eleven-page site the raw list said
+  // 639.98 eighty-eight times. It travels into the IR, and the sweep ranks boundaries by how many rules use them.
+  const raw = [
+    ...Array.from({ length: 88 }, () => ({ value: 639.98, rules: 3, condition: '(min-width: 640px)' })),
+    ...Array.from({ length: 44 }, () => ({ value: 767.98, rules: 9, condition: '(min-width: 768px)' })),
+    { value: 767.98, rules: 2, condition: '(min-width: 768px)' },
+    { value: NaN, rules: 1 },
+    null,
+  ];
+  const got = distinctBounds(raw);
+  assert.deepEqual(got.map((b) => b.value), [639.98, 767.98], 'one entry each, in order, nothing invented');
+  assert.equal(got.find((b) => b.value === 767.98).rules, 9, 'the largest rule count seen for it');
+  assert.deepEqual(distinctBounds([]), []);
+  assert.deepEqual(distinctBounds(), []);
 });
