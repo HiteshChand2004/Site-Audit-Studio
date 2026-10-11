@@ -23,7 +23,7 @@ import { buildStyles, mapUrls } from './styles.js';
 import { DROP_TAGS, guardAttributes } from '../fixers/html.js';
 import { contentRecord, headHints, itemFor } from '../fixers/wordpress.js';
 import { addRemoved, emptyRemoved, sanitizeSvg } from '../fixers/svg.js';
-import { VIEW_WIDTHS } from '../views.js';
+import { EXACT_ONLY_VIEWS, KNOWN_VIEW_IDS, VIEW_WIDTHS } from '../views.js';
 import { BLOCK_TAGS, buildPageTree, deepText, displayOf, isElement, isText, VIEW_IDS } from './tree.js';
 import { crawlFiles } from './crawlFiles.js';
 import { noticePage } from './notice.js';
@@ -89,19 +89,32 @@ export function distinctBounds(bounds) {
   return [...by.values()].sort((x, y) => x.value - y.value);
 }
 
-export function pickBreakpoints(queries, { laptop: hasLaptop = true } = {}) {
+const round2 = (n) => Math.round(n * 100) / 100;
+
+export function pickBreakpoints(queries, { laptop: hasLaptop = true, views = null } = {}) {
   const bounds = mediaBounds(queries).map((b) => b.value);
-  const within = (lo, hi) => bounds.filter((b) => b >= lo && b < hi);
-  const widest = (lo, hi) => Math.max(...within(lo, hi), -1);
-  const laptop = hasLaptop ? widest(VIEW_WIDTHS.laptop, VIEW_WIDTHS.desktop) : -1;
-  const tablet = widest(VIEW_WIDTHS.tablet, hasLaptop ? VIEW_WIDTHS.laptop : VIEW_WIDTHS.desktop);
-  const mobile = widest(VIEW_WIDTHS.mobile, VIEW_WIDTHS.tablet);
-  return {
-    ...(hasLaptop && { laptop: laptop > 0 ? laptop : DEFAULT_BREAKPOINTS.laptop }),
-    tablet: tablet > 0 ? tablet : DEFAULT_BREAKPOINTS.tablet,
-    mobile: mobile > 0 ? mobile : DEFAULT_BREAKPOINTS.mobile,
-    source: laptop > 0 || tablet > 0 || mobile > 0 ? 'site' : 'default',
-  };
+  // The views in play, widest first. A view's styles were measured at its own width and apply from there up to the
+  // next wider view, so its breakpoint is the widest boundary the site declares inside that gap. Taken from the
+  // view list rather than named one by one, because exact mode captures a view between the tablet and the phone
+  // and a breakpoint nobody computes for it would leave its media query at a default that no page was measured at.
+  const list = (views ?? KNOWN_VIEW_IDS.filter((id) => !EXACT_ONLY_VIEWS.includes(id) && (id !== 'laptop' || hasLaptop)))
+    .filter((id) => VIEW_WIDTHS[id] != null)
+    .sort((a, b) => VIEW_WIDTHS[b] - VIEW_WIDTHS[a]);
+  const out = {};
+  let found = false;
+  for (const [i, id] of list.entries()) {
+    if (i === 0) continue;                          // the widest view is the base, it has no media query
+    const lo = VIEW_WIDTHS[id];
+    const hi = VIEW_WIDTHS[list[i - 1]];
+    const widest = Math.max(...bounds.filter((b) => b >= lo && b < hi), -1);
+    if (widest > 0) found = true;
+    // No boundary declared in the gap: the narrower of what the default table says for this view and the next
+    // wider view's width less a hundredth. The table's own laptop value (1279.98) is deliberately below the
+    // desktop width, so it cannot simply be derived; and its mobile value assumes the tablet view comes next, so
+    // it cannot simply be trusted once a view sits between them. Taking the narrower is right in both cases.
+    out[id] = widest > 0 ? widest : Math.min(DEFAULT_BREAKPOINTS[id] ?? Infinity, round2(hi - 0.02));
+  }
+  return { ...out, source: found ? 'site' : 'default' };
 }
 
 // Colour normalisation shared with the emitter: rgb() → #rrggbb, #abc → #aabbcc.
@@ -315,7 +328,7 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
     origin,
     siteName,
     // No breakpoints when the pages were captured in one view only (a capture made while only desktop was on, views.js): no media queries.
-    breakpoints: pages.some(({ captures }) => Object.keys(captures).length > 1) ? pickBreakpoints(queries, { laptop: pages.some(({ captures }) => captures.laptop) }) : { source: 'single-view' },
+    breakpoints: pages.some(({ captures }) => Object.keys(captures).length > 1) ? pickBreakpoints(queries, { views: [...new Set(pages.flatMap(({ captures }) => Object.keys(captures)))] }) : { source: 'single-view' },
     // The boundaries the site declares itself: refine offers them as candidates and judges them on the widths
     // either side (verify/refine.js specsFor), which is how a boundary between two swept widths is found at all.
     // One entry per distinct boundary, carrying how many rules hang off it - the queries arrive once per page and

@@ -6,7 +6,7 @@
 // that reproduces the captured values exactly at 375 / 768 / 1440 and interpolates between them.
 // Whether it is used at all is decided by the responsive sweep (verify/refine.js): the fluid
 // stylesheet has to score better against the original than the stepped one.
-import { VIEW_WIDTHS as WIDTHS } from '../views.js';
+import { KNOWN_MEDIA_VIEWS, VIEW_WIDTHS as WIDTHS } from '../views.js';
 const PROPS = ['font-size', 'line-height'];
 // Values on the line within max(0.5 px, 2 % of the range) count as collinear: wide enough for rounding,
 // too narrow for a design that steps at a breakpoint.
@@ -57,7 +57,9 @@ export function applyFluidType(rules, { laptop = false } = {}) {
       if (!fluid) continue;
       parts ??= { ...rule.parts, base: { ...rule.parts.base } };
       parts.base[prop] = fluid.value;
-      for (const view of ['laptop', 'tablet', 'mobile']) {
+      // Every view but the widest: named one by one, a view added later would keep its own px value here and
+      // quietly contradict the fluid one written on the base.
+      for (const view of KNOWN_MEDIA_VIEWS) {
         if (!parts[view] || !(prop in parts[view])) continue;
         const { [prop]: dropped, ...rest } = parts[view];
         if (Object.keys(rest).length) parts[view] = rest;

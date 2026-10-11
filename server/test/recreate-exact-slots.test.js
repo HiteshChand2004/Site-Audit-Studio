@@ -5,6 +5,7 @@ import {
   exactSlots, FIXED_WIDTHS, MAX_BREAKPOINT_SLOTS, PHONE_BELOW, pickBounds, slotFor, SHORT_WINDOW, TABLET_BELOW,
 } from '../src/recreate/verify/exact/slots.js';
 import { distinctBounds, mediaBounds, pickBreakpoints } from '../src/recreate/ir/index.js';
+import { EXACT_ONLY_VIEWS, VIEW_WIDTHS, viewsFor } from '../src/recreate/views.js';
 
 const q = (condition, rules = 0) => ({ condition, rules });
 
@@ -125,4 +126,41 @@ test('the boundaries the site declares are kept once each, with the rules that h
   assert.equal(got.find((b) => b.value === 767.98).rules, 9, 'the largest rule count seen for it');
   assert.deepEqual(distinctBounds([]), []);
   assert.deepEqual(distinctBounds(), []);
+});
+
+test('an exact run captures the band between a phone and a tablet; an ordinary run does not', () => {
+  // Measured on a real site: the original had three layouts below 1024 - under 640, 640-767, then 768 up - and the
+  // copy had two, so its 375 px styles governed 640-767 and the page was 12-14% too short across that band. No
+  // breakpoint can fix that: whichever side of 640 wins, one regime gets styles never measured for it. The band
+  // needs its own capture, and a fifth view costs a fifth of the capture again, which only an exact run can spend.
+  const ordinary = viewsFor({}).map((v) => v.id);
+  const exact = viewsFor({ exact: true }).map((v) => v.id);
+  assert.deepEqual(ordinary, ['desktop', 'laptop', 'tablet', 'mobile'], 'unchanged from every run before this');
+  assert.deepEqual(exact, ['desktop', 'laptop', 'tablet', 'large-phone', 'mobile']);
+  assert.deepEqual(exact.filter((v) => !ordinary.includes(v)), EXACT_ONLY_VIEWS);
+  // Widest first, because the CSS is a base plus one max-width query per narrower view.
+  const widths = viewsFor({ exact: true }).map((v) => v.width);
+  assert.deepEqual(widths, [...widths].sort((a, b) => b - a));
+  assert.ok(VIEW_WIDTHS['large-phone'] > 640 && VIEW_WIDTHS['large-phone'] < 768, 'inside the band it is there for');
+});
+
+test('each view gets the breakpoint of the gap above it, whatever the view set', () => {
+  const four = ['desktop', 'laptop', 'tablet', 'mobile'];
+  const five = ['desktop', 'laptop', 'tablet', 'large-phone', 'mobile'];
+  const tailwindish = ['(min-width: 640px)', '(min-width: 768px)', '(min-width: 1024px)', '(min-width: 1280px)'];
+
+  // Four views: exactly what this has always produced, declared boundaries or not.
+  assert.deepEqual(pickBreakpoints([], { views: four }), { laptop: 1279.98, tablet: 1023.98, mobile: 767.98, source: 'default' });
+  assert.deepEqual(pickBreakpoints([]), { laptop: 1279.98, tablet: 1023.98, mobile: 767.98, source: 'default' });
+  assert.deepEqual(pickBreakpoints([], { laptop: false }), { tablet: 1023.98, mobile: 767.98, source: 'default' });
+  assert.deepEqual(pickBreakpoints(tailwindish, { views: four }), { laptop: 1279.98, tablet: 1023.98, mobile: 767.98, source: 'site' });
+
+  // Five: the phone keeps what the site declares at 640 and the new view takes the band above it. This is the
+  // three regimes the original had, which four views could not express at all.
+  assert.deepEqual(pickBreakpoints(tailwindish, { views: five }), {
+    laptop: 1279.98, tablet: 1023.98, 'large-phone': 767.98, mobile: 639.98, source: 'site',
+  });
+  // With nothing declared, the phone's boundary is the new view's width less a hundredth - not the stale 767.98
+  // that assumed the tablet came next.
+  assert.equal(pickBreakpoints([], { views: five }).mobile, 699.98);
 });

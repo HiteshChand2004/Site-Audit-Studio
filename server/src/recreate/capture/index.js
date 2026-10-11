@@ -7,7 +7,7 @@ import { USER_AGENT } from '../../audit/http.js';
 import { parallelism } from '../../audit/resources.js';
 import { encode, MAX_HEIGHT, MOBILE_UA } from '../../audit/screenshots.js';
 import { mapLimit } from '../../audit/util.js';
-import { RECREATE_VIEWS as VIEWS } from '../views.js';
+import { RECREATE_VIEWS as VIEWS, viewsFor } from '../views.js';
 import { captureClicks } from './clicks.js';
 import { captureInteractions } from './interactions.js';
 import { captureLoops } from './loops.js';
@@ -406,15 +406,17 @@ const TIMED_OUT = /Timeout|timed out|ERR_TIMED_OUT|ERR_NETWORK_CHANGED|ERR_NAME_
 export async function capturePage(browser, pageInfo, workspace, { timeout = 30000, motionBudgetMs = 0, clickBudgetMs = 0, cache = null, patient = false, exact = false } = {}) {
   const dir = captureDir(workspace, pageInfo.slug);
   await mkdir(dir, { recursive: true });
-  // All views side by side when the machine has the memory for four loaded pages, fewer (never under two) when it is short
-  // of it: more contexts than fit make every one of them slow and the loads time out. The desktop view starts first.
-  const atOnce = parallelism({ max: VIEWS.length, min: 2 });
-  const results = await mapLimit(VIEWS, atOnce, (view) =>
+  // All views side by side when the machine has the memory for the loaded pages, fewer (never under two) when it is
+  // short of it: more contexts than fit make every one of them slow and the loads time out. The desktop view starts
+  // first. An exact run visits one more view than an ordinary one (views.js EXACT_ONLY_VIEWS).
+  const wanted = viewsFor({ exact });
+  const atOnce = parallelism({ max: wanted.length, min: 2 });
+  const results = await mapLimit(wanted, atOnce, (view) =>
     captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, clickBudgetMs, cache, exact }).then((value) => ({ status: 'fulfilled', value }), (reason) => ({ status: 'rejected', reason })));
   const views = {};
   const errors = [];
   results.forEach((r, i) => {
-    const id = VIEWS[i].id;
+    const id = wanted[i].id;
     if (r.status === 'fulfilled') views[id] = r.value;
     else errors.push({ view: id, message: r.reason?.message?.split('\n')[0] ?? 'Capture failed' });
   });
@@ -427,7 +429,7 @@ export async function capturePage(browser, pageInfo, workspace, { timeout = 3000
   let retried = 0;
   for (const attempt of patient ? [1, 2, 3, 4] : [1, 2]) {
     const again = errors.filter((e) => (REFUSED.test(e.message) || (patient && TIMED_OUT.test(e.message)))
-      && (patient || attempt === 1 || e.view === VIEWS[0].id));
+      && (patient || attempt === 1 || e.view === wanted[0].id));
     if (!again.length) break;
     for (const e of again) {
       await new Promise((r) => setTimeout(r, RETRY_WAIT_MS * attempt));

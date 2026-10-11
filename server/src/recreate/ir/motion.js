@@ -19,7 +19,7 @@
 import { readFile } from 'node:fs/promises';
 import { commonPath } from '../capture/clicks.js';
 import path from 'node:path';
-import { KNOWN_VIEWS } from '../views.js';
+import { KNOWN_MEDIA_VIEWS, KNOWN_VIEWS } from '../views.js';
 import { mapUrls } from './styles.js';
 import { deepText, isElement } from './tree.js';
 import { load } from 'cheerio';
@@ -78,7 +78,7 @@ export async function readPageMotion(dir, page) {
   // (capture/index.js motionFile). Its controls are the same data under another name, so the narrow-layout path above
   // keeps working rather than quietly losing the menu button it used to find; and what else that view found is
   // recorded, including the kinds this builder does not rebuild yet, so none of it is a silent loss.
-  for (const view of ['laptop', 'tablet', 'mobile']) {
+  for (const view of KNOWN_MEDIA_VIEWS) {
     let full = null;
     try {
       full = JSON.parse(await readFile(path.join(dir, 'capture', page.slug, `${view}-motion.json`), 'utf8'));
