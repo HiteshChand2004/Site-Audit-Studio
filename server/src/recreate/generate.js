@@ -405,12 +405,14 @@ export async function generateStage(ctx) {
   if (asIs && ctx.exactBaseline?.pages?.length) {
     // The loop is the longest part of an exact run, so a previous attempt that got through it and was interrupted
     // afterwards (a crash, a restart, the machine running out of memory) leaves its result in the checkpoint, and the
-    // fixes are put back on the trees instead of being measured again. Only if every one of them lands on the element
-    // it was measured on: one that does not means this is not the same tree, and then the trees go back exactly as
-    // they were and the loop runs, because a half-corrected page is worse than an uncorrected one.
+    // fixes are put back on the trees instead of being measured again - but only if every saved fix lands on the
+    // element it was measured on. One that does not means this is not the same tree, and then the trees go back
+    // exactly as they were and the loop runs: a page corrected in parts that were never measured together is worse
+    // than an uncorrected one.
     const kept = ctx.checkpoint?.corrections?.() ?? null;
     if (kept?.pages) {
       const before = snapshotFixes(site);
+      const expected = Object.values(kept.pages).reduce((n, m) => n + Object.keys(m).length, 0);
       let applied = 0;
       let mismatched = 0;
       for (const tree of site.pages) {
@@ -420,13 +422,17 @@ export async function generateStage(ctx) {
         applied += r.applied;
         mismatched += r.mismatched.length;
       }
-      if (mismatched) {
+      if (mismatched || applied !== expected) {
         restoreFixes(site, before);
-        report.warnings.push(`The corrections kept from the interrupted attempt did not fit this copy (${mismatched} of ${applied + mismatched} elements), so they were measured again.`);
-      } else if (applied) {
+        report.warnings.push(`The corrections kept from the interrupted attempt did not fit this copy (${mismatched || expected - applied} of ${expected}), so they were measured again.`);
+      } else {
+        // Nothing to put back is a result too: the loop can run for half an hour and accept nothing, and reaching
+        // that answer cost the same half hour as reaching any other.
         exactCorrect = { ...kept.report, restoredFrom: { at: kept.at, elements: applied, pages: Object.keys(kept.pages).length } };
-        ctx.progress(0.88, 'Keeping the corrections measured before the interruption');
-        report.warnings.push(`Continued after an interruption: the ${applied} corrections measured for ${Object.keys(kept.pages).length} page(s) were kept instead of measured again.`);
+        ctx.progress(0.88, 'Keeping what was measured before the interruption');
+        report.warnings.push(applied
+          ? `Continued after an interruption: the ${applied} corrections measured for ${Object.keys(kept.pages).length} page(s) were kept instead of measured again.`
+          : 'Continued after an interruption: the correction loop had already run and accepted nothing, so it was not run again.');
       }
     }
 
@@ -469,8 +475,9 @@ export async function generateStage(ctx) {
         await renderer.close().catch(() => {});
       }
       // Written the moment the loop is done, before anything else can fail: half an hour of measuring was lost to an
-      // interruption a minute later, and the next run would have measured all of it again.
-      if (exactCorrect?.applied) {
+      // interruption a minute later, and the next run measured all of it again. Saved whenever the loop reached the
+      // end of its work, even having applied nothing, because that answer cost the same half hour as any other.
+      if (exactCorrect && !exactCorrect.error && (exactCorrect.stopped === 'done' || exactCorrect.applied)) {
         await ctx.checkpoint?.saveCorrections?.({
           at: new Date().toISOString(),
           report: exactCorrect,

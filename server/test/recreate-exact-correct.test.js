@@ -249,6 +249,17 @@ test('the loop\'s fixes survive an interruption: keyed by place, checked against
   assert.equal(throughJson['1'].fix.mobile.decls['min-height'], '48px');
 });
 
+test('a loop that accepted nothing saves and restores as cleanly as one that did', () => {
+  // The expensive thing is that the loop ran, not that it changed something: on a real site it measured for
+  // twenty-seven minutes and accepted nothing, and a resume must not pay that again to reach the same answer.
+  const tree = { info: { path: '/' }, root: { tag: 'body', children: [{ tag: 'main', cpath: 'body>main:1', children: [] }] } };
+  const saved = fixesByPath(tree);
+  assert.deepEqual(saved, {}, 'no fixes, so nothing is keyed');
+  const r = applyFixesByPath(tree, JSON.parse(JSON.stringify(saved)));
+  assert.equal(r.applied, 0);
+  assert.deepEqual(r.mismatched, [], 'and nothing is a mismatch either, so the caller can accept it');
+});
+
 test('fixes that do not fit the tree are refused rather than half-applied', () => {
   // A tree that is not the same tree would take some of the fixes and not others, which is worse than taking none:
   // the page would be corrected in parts that were never measured together.
