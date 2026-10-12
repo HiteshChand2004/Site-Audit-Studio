@@ -92,6 +92,42 @@ test('the sweep moves the tablet breakpoint to where the original switches layou
   }
 });
 
+test('a breakpoint the sweep does not judge survives the sweep', async () => {
+  // The check rebuilt the breakpoints from its own three key names, so every view it does not judge was dropped.
+  // An exact run captures a view between the tablet and the phone; losing its breakpoint left that view with no
+  // media query at all, its styles never written, and the band it exists for falling to the next view up - the
+  // layout it was added precisely because it is not. Seen on a live run: the copy emitted 1279.98, 1023.98 and
+  // 639.98, and nothing for 767.98.
+  const body = '<div class="row"><div class="box">One</div><div class="box">Two</div><div class="box">Three</div></div>';
+  const { original, site } = await setup(
+    '*{box-sizing:border-box}body{margin:0;font:16px sans-serif}.row{display:flex}.box{flex:1 1 0%;background:#4F46E5;color:#fff;padding:90px 12px}@media (max-width:1200px){.row{flex-direction:column}}',
+    body,
+  );
+  const rules = [
+    { selector: '.row', parts: { base: { display: 'flex' }, tablet: { 'flex-direction': 'column' } } },
+    { selector: '.box', parts: { base: { flex: '1 1 0%', 'background-color': '#4f46e5', color: '#ffffff', 'padding-top': '90px', 'padding-bottom': '90px', 'padding-left': '12px', 'padding-right': '12px' } } },
+  ];
+  const live = await startSiteServer(original);
+  try {
+    const { dir, sweep } = await sweepOf(`${live.origin}/`);
+    // A view the check knows nothing about, with a breakpoint of its own.
+    const ir = irFor(rules, { tablet: 1023.98, 'large-phone': 767.98, mobile: 639.98, source: 'site' });
+    const refined = await refineResponsive({ ir, siteDir: site, workspace: dir, sweep });
+    assert.equal(refined.summary.status, 'done');
+    assert.equal(refined.breakpoints.source, 'sweep', 'it did change something');
+    assert.equal(refined.breakpoints.tablet, 1279.98, 'the key it judges moves');
+    assert.equal(refined.breakpoints['large-phone'], 767.98, 'and the key it does not judge is still there');
+    assert.equal(refined.breakpoints.mobile, 639.98);
+    // Nothing invented either: it returns the keys it was given, no more.
+    assert.deepEqual(
+      Object.keys(refined.breakpoints).filter((k) => k !== 'source').sort(),
+      ['large-phone', 'mobile', 'tablet'],
+    );
+  } finally {
+    await live.close();
+  }
+});
+
 test('the sweep takes fluid type only when it matches the original better', async () => {
   const text = 'Fluid type scales smoothly with the width of the screen and wraps differently at every size. '.repeat(30);
   const body = `<h1 class="title">${text}</h1>`;

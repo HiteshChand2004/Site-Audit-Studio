@@ -193,8 +193,15 @@ export async function refineResponsive({ ir, siteDir, workspace, sweep, bounds =
   }
 
   const changed = chosen.laptop !== current.laptop || chosen.tablet !== current.tablet || chosen.mobile !== current.mobile;
+  // Built from the breakpoints that came in, not from this function's own three keys. Listing them lost every view
+  // it does not judge: an exact run captures one between the tablet and the phone, and rebuilding the object
+  // without it left that view with no media query at all - so its styles were never written and the band it was
+  // captured for fell to the next view up, which is the layout it was added because it is not.
+  const judged = Object.fromEntries(
+    Object.keys(current).filter((k) => k !== 'fluid' && k !== 'shrink').map((k) => [k, chosen[k]]),
+  );
   return {
-    breakpoints: changed ? { ...(hasLaptop && { laptop: chosen.laptop }), tablet: chosen.tablet, mobile: chosen.mobile, source: 'sweep' } : ir.breakpoints,
+    breakpoints: changed ? { ...ir.breakpoints, ...judged, source: 'sweep' } : ir.breakpoints,
     rules: rulesOf(chosen),
     fluid: chosen.fluid,
     shrink: chosen.shrink,
