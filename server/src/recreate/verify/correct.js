@@ -404,6 +404,8 @@ export async function correctLayout({
   // The smallest gain worth keeping. The fast pass holds to a flat point; a caller that has measured its own
   // noise passes the margin that noise earns (verify/exact/correct.js marginForNoise).
   margin = ACCEPT_MARGIN,
+  // A measurement of these pages with the base stylesheet that the caller already has (see below).
+  base: baseGiven = null,
 } = {}) {
   const out = {
     rounds: 0, applied: 0, reverted: 0, elements: 0,
@@ -446,7 +448,12 @@ export async function correctLayout({
 
   const cssWith = (list) => baseCss + trialCss(list, ir);
 
-  let base = await roundOf({ measure, only, site, ledger, css: cssWith(trials), shotOf, round: 0, pages: pagePaths, trials });
+  // The starting measurement. A caller that has already measured these pages with this very stylesheet can hand it
+  // in: the exact loop measures every slot of every page before it picks an order, and then this round measured the
+  // same page again with `cssWith([])` - the identical CSS - for 198 renders a run and about forty wasted minutes.
+  // Two measurements of one stylesheet are also two chances to disagree.
+  let base = baseGiven ?? await roundOf({ measure, only, site, ledger, css: cssWith(trials), shotOf, round: 0, pages: pagePaths, trials });
+  out.baseMeasured = !baseGiven;
   out.scoreBefore = base.score;
   out.scoreAfter = base.score;
   out.heightSlots = base.slots.filter((s) => s.heightOff).length;
@@ -513,6 +520,9 @@ export async function correctLayout({
   out.trials = trials;
   out.slots = base.slots.map((s) => ({
     page: s.page, view: s.view, score: s.score, layout: s.layout, pixel: s.pixel,
+    // The width this is, where the measurement had one: without it a caller can only compare per view, and a view
+    // can cover nine of eighteen widths.
+    ...(s.slot != null && { slot: s.slot, width: s.width }),
     ...(s.heightOff && { heightOff: true, capturedHeight: s.capturedHeight, renderedHeight: s.renderedHeight }),
   }));
   // What is still different, with a cause where there is one: the honest half of a 100% target.

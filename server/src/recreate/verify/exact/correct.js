@@ -19,7 +19,7 @@ import { gunzipSync } from 'node:zlib';
 import { readFile } from 'node:fs/promises';
 import { MAX_HEIGHT } from '../../../audit/screenshots.js';
 import { collectRects } from '../layout.js';
-import { correctLayout, round1, slotKey, trialCss, MIN_ACCEPT_MARGIN, SLOT_DROP, W_LAYOUT, W_PIXEL, HEIGHT_OFF } from '../correct.js';
+import { correctLayout, round1, slotKey, MIN_ACCEPT_MARGIN, SLOT_DROP, W_LAYOUT, W_PIXEL, HEIGHT_OFF } from '../correct.js';
 import { CSS_FILE } from '../../emit/css.js';
 import { VIEW_WIDTHS, RECREATE_VIEWS } from '../../views.js';
 import { bandClips, exactDir, shootBand, MAX_BANDS } from '../../capture/exact.js';
@@ -29,7 +29,7 @@ import { freezePage } from './freeze.js';
 import { settleExact } from './recipe.js';
 
 /** Rounds one page may spend being corrected (the user's number). */
-export const ROUNDS_PER_PAGE = 5;
+export const ROUNDS_PER_PAGE = 3;
 /** A page whose pixels differ by this much or less at every slot is not worth a round. */
 export const GOOD_ENOUGH_PCT = 0.5;
 /** How a pixel percentage becomes a score out of 100: 0 % is 100, this much or worse is 0. */
@@ -45,8 +45,46 @@ export const marginForNoise = (noise = {}) => {
   return Math.max(MIN_ACCEPT_MARGIN, 2 * W_PIXEL * (worst / PIXEL_FLOOR_PCT) * 100);
 };
 
+/** ", 4m12s so far" - a measurement of eighteen widths takes minutes, and silence reads as a hang. */
+const elapsed = (since) => {
+  const s = Math.round((Date.now() - since) / 1000);
+  return s < 10 ? '' : `, ${s < 90 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`} so far`;
+};
+
 /** A box within this many pixels is where it should be (the same tolerance the comparison reports). */
 export const BOX_TOLERANCE = 1;
+
+/**
+ * One page's slice of a measurement, in the shape `correctLayout` takes as its starting round. The slots and rects
+ * are that page's; the scores are recomputed over them, because a whole-run mean is not this page's mean.
+ *
+ * This is what stops the same stylesheet being measured twice. `correctExact` measures every slot of every page to
+ * pick an order, and `correctLayout` then opened its own round 0 over the same widths with the identical CSS - 198
+ * renders a run, about forty minutes, and two chances for one stylesheet to produce two answers.
+ */
+export function pageBase(measured, page) {
+  const slots = (measured?.slots ?? []).filter((s) => s.page === page);
+  if (!slots.length) return null;
+  const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+  const rects = new Map();
+  for (const [k, v] of measured.rects ?? []) if (k.startsWith(`${page}|`)) rects.set(k, v);
+  const worstPerView = new Map();
+  for (const s of slots) {
+    const k = slotKey(s.page, s.view);
+    const cur = worstPerView.get(k);
+    if (!cur || s.score < cur.score) worstPerView.set(k, s);
+  }
+  return {
+    slots,
+    rects,
+    measured: slots.length,
+    carried: 0,
+    score: round1(mean(slots.map((s) => s.score))),
+    layout: round1(mean(slots.map((s) => s.layout))),
+    pixel: round1(mean(slots.map((s) => s.pixel))),
+    by: worstPerView,
+  };
+}
 
 /**
  * Every node's fixes keyed by its place in the tree, in a form that can be written to the checkpoint: the loop is the
@@ -207,26 +245,48 @@ export function slotScore({ diffRaw, boxes, heightOriginal, heightCopy }) {
  * Measures the copy at every exact slot of the chosen pages, against the baselines taken at those same slots, with
  * one stylesheet override in place. Same return shape as verify/correct.js measureRound, so the loop is unchanged.
  */
-export function makeExactRound({ renderer, baseline, treeOf, workspace, cpathOf = null, deadline = Infinity, views = null, breakpoints = null }) {
+export function makeExactRound({
+  renderer, baseline, treeOf, workspace, cpathOf = null, deadline = Infinity, views = null, breakpoints = null,
+  progress = null,
+}) {
   const byPage = new Map(baseline.pages.map((p) => [p.path, p]));
-  return async function exactRound({ site, ledger, css, round, pages, trials = [], base = null, all = false }) {
-    // A declaration is written for one view, so it can only change the slots that view governs: a laptop fix
-    // cannot move what a 375 px phone renders. Measuring all eighteen slots every round cost eleven minutes a
-    // round on a real site (flexibench, measured) and most of those renders only proved that nothing else moved.
-    // So a round is judged on one slot per view and carries the rest forward from the previous measurement, and
-    // correctExact then checks every slot of the page once before keeping anything (the verification below) -
-    // the same guarantee, paid once per page instead of once per round.
+  // The original's band screenshots, read once each. A page is measured over several rounds and every round reads
+  // the same eighteen-or-so files; the bytes are small (a few hundred KB each) and the cache is emptied between
+  // pages so a run never holds more than one page's worth.
+  const bytes = new Map();
+  const bandBytes = async (file) => {
+    let got = bytes.get(file);
+    if (!got) {
+      got = await readFile(file);
+      bytes.set(file, got);
+    }
+    return got;
+  };
+  // Emptied when the round moves to another page, so a run never holds more than one page's bands.
+  let bytesFor = null;
+
+  return async function exactRound({ site, ledger, css, round, pages, trials = [], base = null, all = false, label = null }) {
     // Every slot of the pages asked for. Judging a round on one width per view was affordable and wrong: a
     // corrector writes its value for every view an element appears in, and the phone view alone governs nine of
     // these eighteen widths - 320 to 767. On a real site that let six changes through which the full check then
     // found cost 13 to 21 points at widths like 639, 430 and 390, every one of them inside the view that had been
     // judged on 375 alone. A view is not one width, so it is not judged as one.
-    const wanted = () => true;
+    const key = pages.join('|');
+    if (bytesFor !== key) {
+      bytes.clear();
+      bytesFor = key;
+    }
     ledger.beginRound(round);
     const slots = [];
     const rects = new Map();
     let failed = 0;
     let lastError = null;
+    // What this round has to get through, so it can say where it is. A round of eighteen widths takes minutes and
+    // used to report nothing at all until it ended, which is indistinguishable from a job that has hung - and is
+    // what one looked like.
+    const total = pages.reduce((n, p) => n + (byPage.get(p)?.slots?.length ?? 0), 0);
+    const startedAt = Date.now();
+    let done = 0;
     renderer.server.overrides.set(CSS_FILE, css);
     try {
       for (const pagePath of pages) {
@@ -240,17 +300,9 @@ export function makeExactRound({ renderer, baseline, treeOf, workspace, cpathOf 
           if (!slot || !slotBaseline.bands?.length) continue;
           // The views this page has, not the registry: a copy built from four views has no fifth media query.
           const view = viewForWidth(slot.width, views ?? tree.views ?? RECREATE_VIEWS, breakpoints);
-          // Not one of the slots this round is judged on: its previous numbers stand where there are any, marked
-          // as carried so the report can say which were re-measured.
-          if (!wanted(slot)) {
-            const previous = base?.slots.find((s) => s.page === pagePath && s.slot === slot.id);
-            if (previous) {
-              slots.push({ ...previous, carried: true });
-              const r = base.rects.get(slotKey(pagePath, view));
-              if (r) rects.set(slotKey(pagePath, view), r);
-            }
-            continue;
-          }
+          done += 1;
+          progress?.((done - 1) / Math.max(1, total),
+            `${label ?? 'Measuring'}: ${slot.width}px (${done} of ${total}${elapsed(startedAt)})`);
           // A slot that cannot be measured is counted and skipped, never guessed at: a round judged on half its
           // slots could accept a change that made the others worse. With nothing measured at all the round scores
           // zero, so the loop refuses it rather than treating silence as success.
@@ -287,7 +339,10 @@ export function makeExactRound({ renderer, baseline, treeOf, workspace, cpathOf 
             const bandRows = Math.min(slotBaseline.bands.length, clips.length);
             for (let band = 0; band < bandRows; band++) {
               const ours = await shootBand(p, slot, clips[band]);
-              const r = await exactDiff(path.join(inDir, slotBaseline.bands[band].file), ours).catch(() => null);
+              // The original's band is the same file on every round of this page, so it is read once and kept as
+              // bytes: `exactDiff` takes either, and given a path it reads the file again on every call.
+              const r = await exactDiff(await bandBytes(path.join(inDir, slotBaseline.bands[band].file)), ours)
+                .catch(() => null);
               if (!r) continue;
               diffPx += r.diff;
               compared += r.compared;
@@ -355,15 +410,17 @@ export async function correctExact({
     renderer, baseline, treeOf, workspace, cpathOf, deadline,
     views: siteViews.length ? siteViews : null,
     breakpoints: ir?.breakpoints ?? null,
+    // Per width, so a stage of eighteen renders says where it is instead of looking like a hang for minutes.
+    progress: (f, message) => progress(f, message),
   });
   const out = { pages: [], rounds: 0, applied: 0, reverted: 0, elements: 0, byCorrector: {}, stopped: null, scoreBefore: null, scoreAfter: null, margin: round1(marginForNoise(baseline.noiseFloor)) };
 
-  // Worst page first, measured once with no override, so the loop spends its rounds where they count. This one
-  // measures **every** slot, not just the four a round is judged on: it is the before of the whole run, and the
-  // per-page verification compares against it. Judge on four and measure the before on four, and a width inside
-  // a view would have no number to be compared with - so harm there could not be detected at all.
+  // Worst page first, measured once with no override. This measures **every** slot of every page: it is the before
+  // of the whole run, the order comes out of it, and each page's rounds are read against it - so a width that is
+  // never measured here is a width whose harm could never be detected.
   const first = await round({
     site, ledger, css: baseCss, round: 0, all: true,
+    label: 'Measuring the copy against the original',
     pages: [...treeOf.keys()].filter((p) => baseline.pages.some((b) => b.path === p)),
   });
   if (!first.slots.length) {
@@ -376,7 +433,15 @@ export async function correctExact({
     const cur = worst.get(s.page);
     if (!cur || s.score < cur.score) worst.set(s.page, s);
   }
+  // Worst width first, so the rounds are spent where the copy is furthest off - but the homepage goes first or
+  // second whatever it scores. The fast pass forces it in because it only corrects three pages; exact mode dropped
+  // that when it started correcting every page, and the result was that an interrupted run could leave the one
+  // page anybody looks at untouched. On the last run it was tenth of eleven.
+  const home = site.pages[0]?.info?.path;
   const order = [...worst.values()].sort((a, b) => a.score - b.score);
+  const homeAt = order.findIndex((s) => s.page === home);
+  if (homeAt > 0) order.unshift(...order.splice(homeAt, 1));
+  out.order = order.map((s) => ({ page: s.page, worstSlot: s.slot, worstWidth: s.width, worstScore: s.score }));
 
   for (const [i, slot] of order.entries()) {
     if (Date.now() > deadline) {
@@ -386,7 +451,8 @@ export async function correctExact({
     // A page already matching at every slot is left alone: a round on it can only risk what is right.
     const pageSlots = first.slots.filter((s) => s.page === slot.page);
     if (pageSlots.every((s) => s.pixel >= 100 - (GOOD_ENOUGH_PCT / PIXEL_FLOOR_PCT) * 100 && s.layout >= 100 && !s.heightOff)) continue;
-    progress(i / order.length, `Correcting ${slot.page} against the original (${i + 1} of ${order.length})`);
+    const where = `${slot.page} (${i + 1} of ${order.length})`;
+    progress(i / order.length, `Correcting ${where} against the original`);
     const fixesBefore = snapshotFixes(treeOf.get(slot.page));
     const page = await correctLayout({
       ir,
@@ -401,23 +467,23 @@ export async function correctExact({
       maxRounds: rounds,
       minTime: 0,
       margin: marginForNoise(baseline.noiseFloor),
-      progress: (f, message) => progress((i + f) / order.length, message),
+      // This page's slice of the measurement above, with the stylesheet it was measured on. correctLayout would
+      // otherwise open its own round 0 over the same eighteen widths with the identical CSS.
+      base: pageBase(first, slot.page),
+      progress: (f, message) => progress((i + f) / order.length, `${where}: ${message}`),
     });
-    // A last look at the whole page with exactly the declarations that were accepted, compared slot by slot with
-    // how it started: anything worse anywhere and the page goes back to how it was. The rounds now measure every
-    // slot themselves, so this re-renders what they already saw - it is kept because it is the only check that
-    // reads the *committed* stylesheet rather than a trial override, and because a page quietly made worse is the
-    // one failure this mode exists to prevent. It costs eighteen renders on a page that kept something.
+    // What the rounds already established, read slot by slot against how the page started: anything worse anywhere
+    // and the page goes back to how it was. There is no separate verification render - the last accepted round
+    // measured every width of this page with exactly the declarations that were kept, which is the same stylesheet
+    // a verification pass would have built and the same eighteen widths it would have measured.
     let verified = null;
     if (page.applied) {
-      verified = await round({
-        site, ledger, css: baseCss + trialCss(page.trials ?? [], ir), round: `verify:${slot.page}`, pages: [slot.page], all: true,
-      });
+      verified = { slots: page.slots ?? [], score: page.scoreAfter };
       const dropped = verified.slots.filter((s) => {
         const was = pageSlots.find((p) => p.slot === s.slot);
         return was && s.score < was.score - SLOT_DROP;
       });
-      if (dropped.length || verified.score < (page.scoreBefore ?? 0) - 0.5) {
+      if (dropped.length || (verified.score ?? 0) < (page.scoreBefore ?? 0) - 0.5) {
         restoreFixes(treeOf.get(slot.page), fixesBefore);
         out.reverted += page.applied;
         out.applied -= 0;

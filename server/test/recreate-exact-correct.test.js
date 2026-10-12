@@ -4,9 +4,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  correctExact, exactRows, makeExactRound, slotScore, viewForWidth, GOOD_ENOUGH_PCT, PIXEL_FLOOR_PCT, ROUNDS_PER_PAGE,
+  correctExact, exactRows, pageBase, makeExactRound, slotScore, viewForWidth, GOOD_ENOUGH_PCT, PIXEL_FLOOR_PCT, ROUNDS_PER_PAGE,
 } from '../src/recreate/verify/exact/correct.js';
 import { createLedger } from '../src/recreate/verify/ledger.js';
+import { correctLayout } from '../src/recreate/verify/correct.js';
 import { applyFixesByPath, fixesByPath, restoreFixes, snapshotFixes } from '../src/recreate/verify/exact/correct.js';
 
 test('a width is corrected in the view whose media query covers it', () => {
@@ -119,11 +120,55 @@ test('with nothing measurable the loop says so instead of reporting success', as
   assert.deepEqual(out.pages, []);
 });
 
-test('the budget is rounds, not a clock, and it is five per page', () => {
-  assert.equal(ROUNDS_PER_PAGE, 5);
-  // A page already matching everywhere is skipped rather than risked: the threshold is the acceptance number.
-  assert.equal(GOOD_ENOUGH_PCT, 0.5);
+test('the page the loop starts on is the one with the worst width, except the homepage goes first', () => {
+  // The order is by each page's single worst width, which is right - but it left the homepage tenth of eleven on a
+  // real run, and an interrupted run would then never have corrected the page anybody looks at. The fast pass
+  // forces the homepage in because it only does three pages; exact mode dropped that when it took on every page.
+  const slots = [
+    { page: '/about', slot: '640', width: 640, score: 3, view: 'mobile', layout: 3, pixel: 3 },
+    { page: '/about', slot: '1440', width: 1440, score: 80, view: 'desktop', layout: 80, pixel: 80 },
+    { page: '/', slot: '375', width: 375, score: 40, view: 'mobile', layout: 40, pixel: 40 },
+    { page: '/deep', slot: '768', width: 768, score: 9, view: 'tablet', layout: 9, pixel: 9 },
+  ];
+  // pageBase is what each page's rounds are read against, and it must describe that page only.
+  const about = pageBase({ slots, rects: new Map([['/about|mobile', 'x'], ['/|mobile', 'y']]) }, '/about');
+  assert.deepEqual(about.slots.map((s) => s.slot), ['640', '1440'], 'its own widths, nobody else\'s');
+  assert.equal(about.score, 41.5, 'and its own mean, not the whole run\'s');
+  assert.equal(about.measured, 2);
+  assert.equal(about.carried, 0);
+  assert.deepEqual([...about.rects.keys()], ['/about|mobile'], 'and its own rects');
+  // The worst width of the view stands for the view, which is what judge() reads to refuse a per-slot drop.
+  assert.equal(about.by.get('/about|mobile').slot, '640');
+  assert.equal(pageBase({ slots }, '/nothing-here'), null, 'a page with no measurement has no base');
 });
+
+test('the budget is three rounds, and the loop never measures one stylesheet twice', () => {
+  // Three, not five: of 66 proposals in the last full run none survived, and all six that passed the round gate
+  // were reverted. At eighteen widths a round, rounds four and five were twelve minutes a page for nothing.
+  assert.equal(ROUNDS_PER_PAGE, 3);
+  // And correctLayout no longer opens its own starting round when the caller hands one in. That round measured the
+  // same page with the identical stylesheet - 198 renders a run, about forty minutes, and two chances to disagree.
+  const base = { slots: [{ page: '/', slot: '1440', width: 1440, view: 'desktop', score: 50, layout: 50, pixel: 50 }], rects: new Map(), score: 50, layout: 50, pixel: 50, by: new Map() };
+  let measured = 0;
+  const round = async () => { measured += 1; return { ...base, slots: [...base.slots] }; };
+  return correctLayout({
+    ir: { pages: [], breakpoints: {} },
+    site: { pages: [{ info: { path: '/', outPath: 'index.html' }, root: { tag: 'body', children: [] }, views: ['desktop'] }] },
+    ledger: createLedger(),
+    baseCss: '',
+    candidates: [{ path: '/', outPath: 'index.html', score: 50, view: 'desktop' }],
+    round,
+    pages: 1,
+    maxRounds: 0,
+    minTime: 0,
+    base,
+  }).then((out) => {
+    assert.equal(measured, 0, 'the given measurement was used as it stands');
+    assert.equal(out.baseMeasured, false);
+    assert.equal(out.scoreBefore, 50);
+  });
+});
+
 
 
 test('a round measures every width of the page, because a view is not one width', async () => {
