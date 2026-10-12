@@ -757,6 +757,21 @@ export async function generateStage(ctx) {
     });
   }
   if (site.truncated) report.warnings.push('A page has more elements than one capture keeps (6,000); only the first 6,000 were recreated.');
+  // An animation whose keyframes could not be carried over is a visible loss - the element still asks for the
+  // animation and nothing happens - so it is named here and goes to "needs a person" rather than disappearing.
+  if (site.keyframesClash?.length) {
+    const names = site.keyframesClash.map((k) => k.name).join(', ');
+    report.warnings.push(`${site.keyframesClash.length} animation name(s) mean different things on different pages (${names}); the copy has one stylesheet, so the first definition is used everywhere.`);
+  }
+  if (site.keyframesLost?.length) {
+    const names = site.keyframesLost.map((k) => k.name).join(', ');
+    report.warnings.push(`${site.keyframesLost.length} animation(s) could not be copied because their keyframes are longer than one capture keeps (${names}); the elements that use them will not move.`);
+    report.manual.push({
+      kind: 'motion',
+      title: `${site.keyframesLost.length} animation${site.keyframesLost.length === 1 ? '' : 's'} could not be copied`,
+      detail: `These @keyframes are longer than one capture keeps, so anything using them stays still: ${names}. Copy them from the original stylesheet by hand.`,
+    });
+  }
   if (fit.stopped) report.warnings.push('The layout fit pass stopped early because of the time limit.');
   if (fit.failed?.length) {
     const list = fit.failed.map((f) => f.path);

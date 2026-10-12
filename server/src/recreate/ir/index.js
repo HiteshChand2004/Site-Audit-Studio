@@ -245,6 +245,11 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
   const home = pages[0];
   const queries = [];
   const keyframes = new Map();
+  // An animation whose keyframes could not be carried over: the element keeps its `animation: <name> …`, the rule
+  // it names never ships, and the animation does nothing at all. That used to happen without a word anywhere.
+  const keyframesLost = new Map();
+  // Same name, a different body on another page: one stylesheet cannot hold both.
+  const keyframesClash = new Map();
   const trees = [];
   let truncated = false;
   for (const { info, captures } of pages) {
@@ -252,14 +257,27 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
     const tree = buildPageTree(bodies);
     for (const c of Object.values(captures)) {
       queries.push(...(c.mediaQueries ?? []));
-      for (const k of c.keyframes ?? []) if (k.css && !keyframes.has(k.name)) keyframes.set(k.name, k.css);
+      for (const k of c.keyframes ?? []) {
+        if (k.css) {
+          if (!keyframes.has(k.name)) keyframes.set(k.name, k.css);
+          // One stylesheet for the whole site, so the first definition of a name wins. Where two pages define the
+          // same name differently, every page after the first gets the wrong motion - silently, until now.
+          else if (keyframes.get(k.name) !== k.css) keyframesClash.set(k.name, { name: k.name, page: info.path });
+        } else if (!keyframesLost.has(k.name)) keyframesLost.set(k.name, { name: k.name, bytes: k.bytes ?? null, page: info.path });
+      }
       truncated ||= !!c.truncated;
     }
     const droppedImages = dropMissingImages(tree.root, info.url, assetResolve);
     const nodes = numberNodes(tree.root);
     trees.push({ info, captures, ...tree, nodes, droppedImages, noReflow: noReflowViews(tree), htmlNode: htmlNode(captures, tree.views, tree.root) });
   }
-  for (const k of assets.keyframes ?? []) if (k.css && !keyframes.has(k.name)) keyframes.set(k.name, k.css);
+  for (const k of assets.keyframes ?? []) {
+    if (k.css) {
+      if (!keyframes.has(k.name)) keyframes.set(k.name, k.css);
+    } else if (!keyframesLost.has(k.name)) keyframesLost.set(k.name, { name: k.name, bytes: k.bytes ?? null, page: null });
+  }
+  // One that came through from somewhere else is not lost after all.
+  for (const name of keyframes.keys()) keyframesLost.delete(name);
 
   const homeHead = home.captures.desktop.head ?? {};
   const siteName = siteNameOf(homeHead, trees[0].root, home.info.url);
@@ -342,6 +360,8 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
     crawlFiles: crawl,
     headTexts,
     truncated,
+    keyframesLost: [...keyframesLost.values()],
+    keyframesClash: [...keyframesClash.values()],
     assetResolve,
     resolveLink,
   };

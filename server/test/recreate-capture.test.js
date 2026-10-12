@@ -6,6 +6,7 @@ import { access, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { db, projectDir } from '../src/db/index.js';
 import { capturePage } from '../src/recreate/capture/index.js';
+import { EXACT_PROBE_FACTOR, probeBudget } from '../src/recreate/inspect.js';
 import { discoverPages, outPathFor, selectPages, skipReason, slugFor } from '../src/recreate/discover.js';
 import { runRecreate, STAGES } from '../src/recreate/index.js';
 import { recreateDir } from '../src/recreate/workspace.js';
@@ -330,4 +331,26 @@ test('a load the site refuses is tried again, and the scroll-through goes past t
     srv.close();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('an exact copy probes every control: the budget follows the work, not a flat twenty seconds', () => {
+  // "No limit" did not reach the probes. `full` was a ceiling whatever the mode, so on a real site the homepage's
+  // click probe stopped after 10 of its 23 controls with `timedOut: true` - and a control that was never clicked
+  // has no recorded open state, so thirteen menus and panels could not be rebuilt as working controls. Every one
+  // of them is a dynamic transition the copy simply does not have.
+  const CLICK = 20000;
+  const MIN = 6000;
+  const NEED = 28000;
+  const exact = probeBudget(CLICK, MIN, NEED, { spare: Infinity, measured: true, exact: true });
+  assert.equal(exact, CLICK * EXACT_PROBE_FACTOR);
+  assert.ok(exact >= 300000, `${exact}ms is enough for a page full of controls`);
+  // It is a ceiling, not a duration: a page with two controls still finishes in seconds, because the probe stops
+  // when it runs out of controls.
+
+  // An ordinary copy is unchanged in every case.
+  assert.equal(probeBudget(CLICK, MIN, NEED, { spare: 200000, measured: false }), CLICK, 'first page, room to spare');
+  assert.equal(probeBudget(CLICK, MIN, NEED, { spare: 1000, measured: false }), 0, 'first page, not enough room');
+  assert.equal(probeBudget(CLICK, MIN, NEED, { spare: -1, measured: true }), 0, 'no time left at all');
+  assert.equal(probeBudget(CLICK, MIN, NEED, { spare: 20000, measured: true }), 7143, 'a share of what is left');
+  assert.equal(probeBudget(CLICK, MIN, NEED, { spare: 8000, measured: true }), 0, 'below the floor it is skipped');
 });

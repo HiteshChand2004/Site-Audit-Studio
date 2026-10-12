@@ -14,7 +14,12 @@ export function snapshotPage(opts) {
   // big pages, long @keyframes or long custom properties.
   const { exact = false } = opts || {};
   const { maxNodes = exact ? 30000 : 6000, maxTextLength = exact ? 20000 : 2000 } = opts || {};
-  const KEYFRAME_CAP = exact ? 200000 : 4000;
+  // A keyframe body over the cap used to be stored as null and then dropped without a word, while the element kept
+  // its `animation: <name> …`: the copy shipped an animation pointing at keyframes that were not there, so it
+  // simply never ran, with nothing in the report to say so. 4,000 characters is also easy to exceed - a hundred-step
+  // path animation is several times that - so the ordinary cap is now large enough for a real animation, and
+  // whatever still goes past it is counted and named rather than lost.
+  const KEYFRAME_CAP = exact ? 200000 : 40000;
   const CUSTOM_PROP_CAP = exact ? 20000 : 400;
   const INHERITED = new Set([
     'color', 'cursor', 'direction', 'font-family', 'font-feature-settings', 'font-kerning', 'font-size', 'font-stretch',
@@ -345,7 +350,10 @@ export function snapshotPage(opts) {
             .map((m) => ({ url: new URL(m[2], href || document.baseURI).href, format: m[4]?.toLowerCase() ?? null })),
         });
       } else if (rule.type === CSSRule.KEYFRAMES_RULE) {
-        keyframes.push({ name: rule.name, css: rule.cssText.length > KEYFRAME_CAP ? null : rule.cssText });
+        // `bytes` travels with a body that was too long, so the loss can be counted and named downstream instead of
+        // the animation quietly doing nothing in the copy.
+        const over = rule.cssText.length > KEYFRAME_CAP;
+        keyframes.push({ name: rule.name, css: over ? null : rule.cssText, ...(over && { bytes: rule.cssText.length }) });
       } else if (rule.type === CSSRule.MEDIA_RULE) {
         const condition = rule.conditionText || rule.media.mediaText;
         mediaQueries.add(condition);
