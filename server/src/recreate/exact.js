@@ -10,30 +10,38 @@ import path from 'node:path';
 import { emitSite } from './emit/html.js';
 import { compareExact, DIFF_LIMIT_PCT } from './verify/exact/compare.js';
 import { checkBaseline } from './exactCapture.js';
+import { BOX_TOLERANCE_PX, boxLookups, TEXT_BUDGET_PX } from './verify/exact/boxes.js';
+import { viewForWidth } from './verify/exact/correct.js';
 
 /** Causes a person has to act on, as opposed to ones the engine could still fix. */
 const NEEDS_A_PERSON = new Set(['third-party-frame', 'image-content']);
 
 /**
- * The shipped pages re-emitted with `data-sas-id`, plus the id -> original-path map generate saved beside the IR.
+ * The shipped pages re-emitted with `data-sas-id`, plus what generate saved beside the IR about every one of those
+ * ids: the original path it came from, which of its two sizes the copy wrote itself, and the pixel or two it asked
+ * for on purpose. The first pairs a box with the one it was built from; the other two decide how exactly that box
+ * can be held to it.
  * Returns null when either is missing (a workspace from before this existed, or a pruned IR), and the comparison
  * then pairs by content as it used to - reported as such, never silently.
- * @returns {Promise<{ pages: Map<string, string>, cpaths: Record<string, string> }|null>}
+ * @returns {Promise<{ pages: Map<string, string>, lookups: object, views: string[], breakpoints: object }|null>}
  */
 async function withIds(ctx) {
   const dir = path.join(ctx.dir, 'ir');
-  const [ir, cpaths] = await Promise.all([
+  const [ir, saved] = await Promise.all([
     readFile(path.join(dir, 'site.json'), 'utf8').then(JSON.parse),
     readFile(path.join(dir, 'cpaths.json'), 'utf8').then(JSON.parse),
   ]);
-  if (!ir?.pages?.length || !cpaths || !Object.keys(cpaths).length) return null;
+  const lookups = boxLookups(saved);
+  if (!ir?.pages?.length || !lookups.pairs) return null;
   const out = emitSite(ir, { ids: true });
   const pages = new Map();
   for (const p of ir.pages) {
     const html = out.files.get(p.outPath);
     if (html) pages.set(p.outPath, html);
   }
-  return pages.size ? { pages, cpaths } : null;
+  // The views this copy was built from, not the registry: a copy built from four has no fifth media query.
+  const views = [...new Set(ir.pages.flatMap((p) => p.views ?? []))];
+  return pages.size ? { pages, lookups, views, breakpoints: ir.breakpoints ?? null } : null;
 }
 
 export async function exactStage(ctx, local = {}) {
@@ -67,7 +75,10 @@ export async function exactStage(ctx, local = {}) {
     pages,
     scripts,
     overrides: paired?.pages ?? null,
-    cpathOf: paired ? (sid) => paired.cpaths[sid] ?? null : null,
+    cpathOf: paired?.lookups.cpathOf ?? null,
+    sizedOf: paired?.lookups.sizedOf ?? null,
+    slackOf: paired?.lookups.slackOf ?? null,
+    viewAt: paired ? (width) => viewForWidth(width, paired.views.length ? paired.views : undefined, paired.breakpoints) : null,
     noise: baseline.noiseFloor ?? {},
     // Parts of the page that are not the site and were left out on purpose (ir/exclude.js): not the copy's fault.
     excluded: report.exact?.excluded ?? [],
@@ -97,6 +108,12 @@ export async function exactStage(ctx, local = {}) {
     jsMode: scripts ? 'on' : 'off',
     boxBasis: paired ? 'the build, re-emitted with element ids so a box can be paired with the one it came from' : 'the build as shipped; boxes paired by the text they contain, which pairs fewer of them',
     limit: DIFF_LIMIT_PCT,
+    // How the boxes were graded, in plain terms, because the acceptance rule cannot be read without it: a length
+    // the copy wrote itself has to be within a pixel, a length the text inside the box decides is held to a
+    // budget and counted under the cause `font-metric`. Without the map the second is all there is.
+    boxGrading: paired?.lookups.graded
+      ? `${paired.lookups.graded} element(s) carry what the copy wrote for their own size, so those are held to ${BOX_TOLERANCE_PX} px; a size the text decides is held to ${TEXT_BUDGET_PX} px and counted as font-metric`
+      : 'not available for this build: every text box is held to the font-metric budget, and only images, frames and video to the pixel',
     summary: {
       slots: result.slots,
       accepted: result.accepted,
@@ -104,6 +121,7 @@ export async function exactStage(ctx, local = {}) {
       diffWorst: result.diffWorst,
       diffMean: result.diffMean,
       pages: result.pages.length,
+      boxes: result.boxes,
     },
     pages: result.pages,
     remaining,

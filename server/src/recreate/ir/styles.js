@@ -71,6 +71,10 @@ const BORDER_BOX_INPUT = /^(button|submit|reset|image|checkbox|radio|color|file|
 
 export const px = (value) => (typeof value === 'string' && /^-?[\d.]+px$/.test(value) ? parseFloat(value) : null);
 const num = (value, dflt = 0) => px(value) ?? dflt;
+// Two decimals - the precision the capture keeps and the exact comparison grades at. These numbers go out as CSS,
+// so rounding them to whole pixels here was the last of three roundings between the browser and the stylesheet: one
+// of three columns in a 1000 px row measured 333.33, was stored as 333 and written back as 333px, and the copy was
+// told to be a third of a pixel narrower than the original it was copying.
 const round = (n) => Math.round(n * 100) / 100;
 export const pct = (ratio) => `${round(ratio * 100)}%`;
 
@@ -102,10 +106,12 @@ const uaBorderBox = (node) => UA_BORDER_BOX.has(node.tag) || (node.tag === 'inpu
  * element: the same with border-box, minus padding and border with content-box.
  */
 function sizer(node, s) {
-  if ((s['box-sizing'] ?? (uaBorderBox(node) ? 'border-box' : 'content-box')) === 'border-box') return { w: (w) => w, h: (h) => h };
+  // Two decimals on the way out: these numbers go straight into CSS, and subtracting fractional padding from a
+  // fractional width leaves float noise (333.33 - 16 is 317.32999999999998) that would be written as it stands.
+  if ((s['box-sizing'] ?? (uaBorderBox(node) ? 'border-box' : 'content-box')) === 'border-box') return { w: round, h: round };
   const dx = num(s['padding-left'], UA_PADDING_LEFT[node.tag] ?? 0) + num(s['padding-right']) + num(s['border-left-width']) + num(s['border-right-width']);
   const dy = num(s['padding-top']) + num(s['padding-bottom']) + num(s['border-top-width']) + num(s['border-bottom-width']);
-  return { w: (w) => Math.max(0, w - dx), h: (h) => Math.max(0, h - dy) };
+  return { w: (w) => round(Math.max(0, w - dx)), h: (h) => round(Math.max(0, h - dy)) };
 }
 
 const isTranslateOnly = (t) => !t || t === 'none' || /^matrix\(1, 0, 0, 1, [-\d.e]+, [-\d.e]+\)$/.test(t);
@@ -289,7 +295,12 @@ export function viewportStyle(style, node, v, chain) {
             // One line of text (a centred message, a badge): as wide as its text, never a px width a slightly wider
             // rendering of the same text would wrap in.
             const oneLine = deepText(node).trim() && !wrapsText(node, v, chain);
-            style.width = oneLine ? 'max-content' : `${Math.ceil(size.w(w))}px`;
+            if (!oneLine) {
+              // Rounded up on purpose: a width cut to the pixel wraps a slightly wider rendering of the same text.
+              const written = Math.ceil(size.w(w));
+              style.width = `${written}px`;
+              askedFor(node, v, 'w', 0, written - size.w(w));
+            } else style.width = 'max-content';
             style['max-width'] ??= '100%';
           }
         }
@@ -365,7 +376,46 @@ function fluidDecls(node, v) {
  * The declarations of one node in one view, with sizing hints (@w, @rw, @fw) that are resolved
  * across views afterwards.
  */
+/**
+ * Slack the copy asks for on purpose, recorded on the node so the exact comparison can expect it. A width cut to
+ * the pixel wraps the same label onto a second line, and a minimum set to the pixel lets two boxes sharing a line
+ * overflow it - so a text width is written a pixel wide and a minimum a pixel narrow, deliberately. Until this was
+ * recorded, every such box measured about a pixel from the original and was reported as a defect on every run, at
+ * every width, by construction.
+ * @param {object} node  @param {string} v  @param {'w'|'h'} axis  @param {number} lo  @param {number} hi
+ */
+function askedFor(node, v, axis, lo, hi) {
+  const view = ((node.slack ??= {})[v] ??= {});
+  const [l, h] = view[axis] ?? [0, 0];
+  view[axis] = [Math.min(l, lo), Math.max(h, hi)];
+}
+
+/** A length the copy decided, as opposed to one the content decides (`auto`, `fit-content`, `max-content`). */
+const definiteLength = (value) => value != null && /^(-?[0-9.]+(px|%|r?em|v[hwib]|ch|ex)$|calc[(]|clamp[(]|min[(]|max[(])/.test(String(value).trim());
+
+/**
+ * Which of a box's two sizes the copy wrote itself, per view: 'wh' both, 'w' or 'h' one, null neither. The exact
+ * comparison holds a box it wrote both of to a pixel, and puts the rest - boxes as big as the text inside them -
+ * under a reported budget, because no declaration the copy can write changes how a font shapes a string.
+ * `min-height` deliberately does not count: it governs only while the content is shorter, so the copy cannot be
+ * said to have decided the height.
+ */
+function sizedViews(decls, present) {
+  const out = {};
+  for (const v of present) {
+    const d = decls[v];
+    if (!d) continue;
+    const w = definiteLength(d.width);
+    const h = definiteLength(d.height);
+    if (w && h) out[v] = 'wh';
+    else if (w) out[v] = 'w';
+    else if (h) out[v] = 'h';
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 export function normalizeView(node, v, chain, opts) {
+  if (node.slack) delete node.slack[v]; // rebuilt from this view's declarations, never carried over a re-emit
   const d = node.views[v];
   const style = { ...d.style };
   const [x, , w, h] = d.rect;
@@ -398,7 +448,7 @@ export function normalizeView(node, v, chain, opts) {
   // node above the body.
   if (node === opts.rootNode && opts.noReflow?.includes(v)) {
     const rootWidth = d.rect?.[2];
-    if (rootWidth) style['min-width'] = `${Math.round(rootWidth)}px`;
+    if (rootWidth) style['min-width'] = `${round(rootWidth)}px`;
   }
   if (display === 'none' || display === 'contents' || !pd) return style;
 
@@ -541,8 +591,11 @@ export function normalizeView(node, v, chain, opts) {
     // from shrinking between the captured widths.
     if (contentSized && text && h > 0 && isSmallBox(w, h, ratio) && !fluidText) {
       const minW = Math.floor(size.w(w)) - 1;
-      const minH = Math.round(size.h(h));
-      if (minW > 0 && !style['min-width']) style['min-width'] = `${minW}px`;
+      const minH = round(size.h(h));
+      if (minW > 0 && !style['min-width']) {
+        style['min-width'] = `${minW}px`;
+        askedFor(node, v, 'w', minW - size.w(w), 0);
+      }
       if (minH > 0 && !style.height && !style['min-height']) style['min-height'] = `${minH}px`;
     }
     // A growing item of a flex row narrower than something inside it (a ticker strip wider than its card): the original
@@ -571,7 +624,7 @@ export function normalizeView(node, v, chain, opts) {
       const maxW = px(style['max-width']);
       const capped = maxW != null && Math.abs(maxW - size.w(w)) <= 1; // its own max-width already makes it narrower
       if (room > 0 && w < room - 2 && !capped) {
-        style.width = text && !wrapsText(node, v, chain) ? 'fit-content' : `min(${Math.round(size.w(w))}px, 100%)`;
+        style.width = text && !wrapsText(node, v, chain) ? 'fit-content' : `min(${round(size.w(w))}px, 100%)`;
       }
     }
   }
@@ -582,8 +635,11 @@ export function normalizeView(node, v, chain, opts) {
   if (/^inline-(block|flex|grid)$/.test(display) && !REPLACED.has(node.tag) && !FORM_CONTROL.has(node.tag) && !fluidText
     && (position === 'static' || position === 'relative') && w > 0 && h > 0 && !fix?.w && isSmallBox(w, h, ratioOf(w))) {
     const minW = Math.floor(size.w(w)) - 1;
-    const minH = Math.round(size.h(h));
-    if (minW > 0 && !style.width && !style['min-width']) style['min-width'] = `${minW}px`;
+    const minH = round(size.h(h));
+    if (minW > 0 && !style.width && !style['min-width']) {
+      style['min-width'] = `${minW}px`;
+      askedFor(node, v, 'w', minW - size.w(w), 0);
+    }
     if (minH > 0 && !style.height && !style['min-height']) style['min-height'] = `${minH}px`;
   }
 
@@ -685,7 +741,7 @@ export function normalizeView(node, v, chain, opts) {
  * ratio to the parent is the same in every view, else a px value. @rw (images, SVG, fields) is
  * 100% when the element fills its parent, else px.
  */
-export function resolveHints(decls, present, tag) {
+export function resolveHints(decls, present, tag, node = null) {
   // @cw: a content-sized flex item with text. When its text wraps in any view it had a definite
   // width: `width` in every hinted view (a percentage when the ratio holds everywhere), never only
   // max-width, which cannot stop a flex container from shrinking to its min-content width.
@@ -720,7 +776,13 @@ export function resolveHints(decls, present, tag) {
       else {
         // Text gets a pixel of slack: the same label can measure a fraction wider here than in the
         // original, and a width cut to the pixel would wrap it onto a second line.
-        decls[v].width = `${hint.text ? Math.ceil(hint.px) + 1 : Math.round(hint.px)}px`;
+        const written = hint.text ? Math.ceil(hint.px) + 1 : round(hint.px);
+        decls[v].width = `${written}px`;
+        // A definite width replaces whatever a minimum asked for in this view, so the slack is this one, not both.
+        if (node) {
+          if (node.slack?.[v]) delete node.slack[v].w;
+          if (written !== hint.px) askedFor(node, v, 'w', Math.min(0, written - hint.px), Math.max(0, written - hint.px));
+        }
         if (!overflows) decls[v]['max-width'] ??= '100%';
       }
     }
@@ -739,7 +801,7 @@ export function resolveHints(decls, present, tag) {
       delete decls[v][key];
       const full = hint.ratio != null && hint.ratio >= 0.995 && hint.ratio <= 1.005;
       const consistent = consistentRatios && (!single || full);
-      const pxValue = `${Math.round(hint.px)}px`;
+      const pxValue = `${round(hint.px)}px`;
       if (key === '@rw') {
         decls[v].width = full ? '100%' : pxValue;
         // Never wider than the parent: a px width taken from one captured view overflows on a narrower screen.
@@ -843,7 +905,8 @@ export function buildStyles(pages, opts) {
     const present = pageViews.filter((v) => node.views[v]);
     const decls = {};
     for (const v of pageViews) decls[v] = node.views[v] ? fillBorderWidths(normalizeView(node, v, chain, o)) : null;
-    resolveHints(decls, present, node.tag);
+    resolveHints(decls, present, node.tag, node);
+    node.sized = sizedViews(decls, present);
     const parts = cascade(decls, pageViews, node.tag);
     const pseudo = {};
     for (const which of ['before', 'after']) {

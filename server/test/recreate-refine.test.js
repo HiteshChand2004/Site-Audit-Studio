@@ -249,7 +249,10 @@ test('fields and buttons with a px width never grow past their parent', async ()
   for (const tag of ['button', 'input', 'select', 'textarea', 'img']) {
     const decls = { desktop: { '@rw': { px: 200, ratio: 0.5 } }, mobile: { '@rw': { px: 312.4, ratio: 0.9 } } };
     resolveHints(decls, ['desktop', 'mobile'], tag);
-    assert.equal(decls.mobile.width, '312px', tag);
+    // Two decimals, not a whole pixel: the captured box was 312.4 px wide and that is what the copy is asked for.
+    // Rounding it here was the last of three roundings between the browser and the stylesheet, and the exact
+    // comparison - which grades to a hundredth of a pixel - then charged the copy for the 0.4 px it had removed.
+    assert.equal(decls.mobile.width, '312.4px', tag);
     assert.equal(decls.mobile['max-width'], '100%', tag);
   }
   // One that fills its parent is 100% wide and needs no cap; other elements are not touched.

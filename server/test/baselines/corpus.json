@@ -23,9 +23,9 @@
   {
    "name": "flexibench",
    "projectId": "caa38f97-330d-401e-bec9-059a9c3635b2",
-   "recreateId": "bfae4d0b-4f3c-481e-8db8-113bf38e585c",
+   "recreateId": "43d7caa4-a26c-4bc5-aed8-1e9b08708b52",
    "site": "www.flexibench.io",
-   "note": "repointed 2026-10-12: the previous recreate was pruned (retention keeps the latest two per project)"
+   "note": "repointed 2026-10-12 (second time): retention keeps the latest two recreates per project, so a registered id goes stale after two runs. This one is the five-view exact run."
   },
   {
    "name": "parchaa",

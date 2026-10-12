@@ -16,12 +16,13 @@ process.env.SAS_ALLOW_LOCALHOST = '1';
 const PORT = 4206;
 const origin = `http://127.0.0.1:${PORT}`;
 
-const body = (extra = '', cellHeight = 120) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
+const body = (extra = '', cellHeight = 120, tagWidth = 200) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>Original</title><meta name="viewport" content="width=device-width, initial-scale=1"><style>
   body { margin: 0; font: 16px/1.5 system-ui; background: #fff; }
   .bar { height: 60px; background: #123; color: #fff; }
   .cell { height: ${cellHeight}px; background: #eef; }
   .note { padding: 12px; }
+  .tag { display: inline-block; width: ${tagWidth}px; background: #fe6; }
   @media (max-width: 700px) { .bar { height: 40px; } }
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   .spinner { width: 30px; height: 30px; background: #c33; animation: spin 1s linear infinite; }
@@ -31,6 +32,7 @@ const body = (extra = '', cellHeight = 120) => `<!doctype html><html lang="en"><
   <div class="cell">Panel one</div>
   <div class="note">Some words that fill a line or two of text on this page.</div>
   <div style="height: 1200px; background: linear-gradient(#fff, #f6f6f6)"></div>
+  <div class="tagwrap"><span class="tag">Tag</span></div>
   ${extra}
 <script>var n = 0; setInterval(function tick() { n++; }, 200);</script>
 </body></html>`;
@@ -197,7 +199,17 @@ test('summarise counts the sizes that matched and groups what is left by cause',
     page: '/',
     slots: [
       { id: '1440', accepted: true, diffRaw: 0.1 },
-      { id: '375', accepted: false, diffRaw: 3.2, heightOk: true, pixelsOk: false, boxes: { missing: 2, extra: 0, paired: 10, within: 8 }, frozen: { loopsOnlyOriginal: 1 } },
+      {
+        id: '375',
+        accepted: false,
+        diffRaw: 3.2,
+        heightOk: true,
+        pixelsOk: false,
+        // Eight of ten boxes within a pixel; of the two that are not, one is a length the copy wrote itself and
+        // one is a text length past its budget. They are different findings and are counted as such.
+        boxes: { missing: 2, extra: 0, paired: 10, within: 8, hard: 1, textBeyond: 1, beyondCorrectors: 6, slackUsed: 3 },
+        frozen: { loopsOnlyOriginal: 1 },
+      },
     ],
   }]);
   assert.equal(s.slots, 2);
@@ -205,8 +217,74 @@ test('summarise counts the sizes that matched and groups what is left by cause',
   assert.equal(s.pct, 50);
   assert.equal(s.diffWorst, 3.2);
   assert.equal(s.causes['missing-element'], 2);
-  assert.equal(s.causes['box-out-of-place'], 2);
+  assert.equal(s.causes['box-out-of-place'], 1, 'a length the copy decided and got wrong');
+  assert.equal(s.causes['font-metric'], 1, 'a text length past what type can explain, named separately');
   assert.equal(s.causes.pixels, 1);
   assert.equal(s.causes['loop-missing'], 1);
   assert.equal(s.worst[0].slot, '375');
+  // What the box check was able to ask of the copy, which is the number "nothing was kept" has to be read against.
+  assert.deepEqual(s.boxes, {
+    paired: 10, within: 8, hard: 1, textBeyond: 1, beyondCorrectors: 6, slackUsed: 3, budget: 2, tolerance: 1,
+  });
+});
+
+test('a box inside the text budget is not a cause at all: it is the one thing no corrector may touch', () => {
+  // The whole point of the grading. Before it, every box that was not within a pixel counted against the slot -
+  // including the boxes whose size is the text inside them, which every corrector refuses to touch by design
+  // (verify/correct.js hasOwnText). A copy differing by a fraction of a pixel of type was scored as a failure.
+  const s = summarise([{
+    page: '/',
+    slots: [{
+      id: '1440', accepted: false, diffRaw: 0.17, heightOk: true, pixelsOk: true,
+      boxes: { missing: 0, extra: 0, paired: 45, within: 41, hard: 0, textBeyond: 0, beyondCorrectors: 40 },
+    }],
+  }]);
+  assert.equal(s.causes['box-out-of-place'], undefined);
+  assert.equal(s.causes['font-metric'], undefined);
+  assert.equal(s.boxes.beyondCorrectors, 40);
+});
+
+test('the gate holds the copy to a pixel where the copy chose the size, and to a budget where the text did', async () => {
+  // The whole of step 1, through a real browser. One text box is a pixel and a half wider in the copy: the page is
+  // the same height, the pixels differ by a sliver, and the only thing that can decide the slot is the box rule.
+  //
+  // Which answer is right depends on something the box itself cannot say. If the copy wrote that width, the number
+  // is the copy's own and being 1.5 px out is its error. If the width is whatever the text inside came to, no
+  // declaration the copy can write changes it - and every corrector refuses to touch such a box
+  // (verify/correct.js hasOwnText), so failing the slot for it asks the engine for something it is forbidden to
+  // attempt. That is what made a copy differing by 0.17 % of its pixels score as 0 of 198.
+  const root = await copyAt('dist-wider-tag', body('', 120, 201.5));
+  const ids = (html) => html.replace('<span class="tag">', '<span class="tag" data-sas-id="7">');
+  const overrides = new Map([['index.html', ids(body('', 120, 201.5))]]);
+  const cpathOf = (sid) => (Number(sid) === 7 ? 'body>div:6>span:1' : null);
+  const base = await baselineOf();
+  const run = (extra) => compareExact({ root, workspace: work, baseline: base, pages: [page], scripts: false, overrides, cpathOf, ...extra });
+
+  const sized = await run({ sizedOf: () => 'wh', viewAt: () => 'desktop' });
+  const slot = sized.pages[0].slots.find((s) => s.id === '1280');
+  assert.equal(slot.boxes.byPath, 1, 'the box was paired by the element it came from');
+  assert.equal(slot.heightOk, true, 'the page is the same height');
+  assert.equal(slot.boxes.hard, 1, JSON.stringify(slot.boxes.worst));
+  assert.equal(slot.boxesOk, false, 'a width the copy wrote and got wrong fails the size');
+  assert.equal(sized.causes['box-out-of-place'] >= 1, true);
+
+  // The same difference on a box whose width is its text: reported, under its own name, and not charged.
+  const text = await run({});
+  const same = text.pages[0].slots.find((s) => s.id === '1280');
+  assert.equal(same.boxes.hard, 0);
+  assert.equal(same.boxes.textBeyond, 0, 'a pixel and a half is inside what type explains');
+  assert.ok(same.boxes.beyondCorrectors >= 1, 'and the report says the loop was never allowed to try it');
+  assert.equal(same.boxesOk, true);
+  assert.equal(text.causes['font-metric'], undefined);
+
+  // And the pixel the emitter asks for on purpose is expected rather than charged, through the same path.
+  const asked = await run({ sizedOf: () => 'wh', slackOf: () => ({ w: [0, 1.5] }), viewAt: () => 'desktop' });
+  const excused = asked.pages[0].slots.find((s) => s.id === '1280');
+  assert.equal(excused.boxes.hard, 0, JSON.stringify(excused.boxes.worst));
+  assert.equal(excused.boxes.slackUsed, 1);
+
+  // The numbers the report needs to be read at all.
+  assert.ok(sized.boxes.paired > 0);
+  assert.equal(sized.boxes.tolerance, 1);
+  assert.equal(sized.boxes.budget, 2);
 });

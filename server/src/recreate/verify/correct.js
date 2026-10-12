@@ -62,7 +62,9 @@ export const W_LAYOUT = 0.6;
 export const W_PIXEL = 0.4;
 const DEFAULT_BREAKPOINTS = { laptop: 1279.98, tablet: 1023.98, mobile: 767.98 };
 
-const px = (n) => `${Math.round(n)}px`;
+// Two decimals: a correction is measured against a sub-pixel box, so writing it back as a whole pixel throws away
+// part of what was measured - and the exact comparison then grades the copy on the difference that created.
+const px = (n) => `${Math.round(n * 100) / 100}px`;
 const slotKey = (page, view) => `${page}|${view}`;
 const round1 = (n) => Math.round(n * 10) / 10;
 

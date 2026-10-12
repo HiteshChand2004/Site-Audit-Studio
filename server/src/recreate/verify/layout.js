@@ -112,18 +112,35 @@ export async function withBrowserRetry(renderer, fn) {
   }
 }
 
-// Runs in the page. Boxes are measured like the capture measures them (capture/snapshot.js rectOf):
+// Runs in the page. Boxes are measured exactly as the capture measures them (capture/snapshot.js rectOf):
 // rotated or scaled elements by their untransformed size, centred on their bounding box.
 export function collectRects() {
+  // Two decimals, like the capture, and the same untransformed box: the two sides have to be measured by one
+  // definition or the difference between them is partly the measuring.
+  const dp2 = (n) => Math.round(n * 100) / 100;
+  const untransformed = (el, cs) => {
+    const n = (v) => {
+      const x = parseFloat(v);
+      return Number.isFinite(x) ? x : 0;
+    };
+    // The resolved width respects the element's own box-sizing: with border-box it already is the border box, with
+    // content-box the padding and border have to be added. Checked against ground truth (the same element measured
+    // with its transform taken off) on nine cases - fixed sizes, auto widths, flex thirds, an inline-block and an
+    // SVG: exact to a hundredth of a pixel, where offsetWidth is half a pixel out and is not even defined for the SVG.
+    const border = cs.boxSizing === 'border-box';
+    const w = n(cs.width) + (border ? 0 : n(cs.paddingLeft) + n(cs.paddingRight) + n(cs.borderLeftWidth) + n(cs.borderRightWidth));
+    const h = n(cs.height) + (border ? 0 : n(cs.paddingTop) + n(cs.paddingBottom) + n(cs.borderTopWidth) + n(cs.borderBottomWidth));
+    return [w > 0 ? w : el.offsetWidth ?? 0, h > 0 ? h : el.offsetHeight ?? 0];
+  };
   const rects = {};
   for (const el of document.querySelectorAll('[data-sas-id]')) {
     const r = el.getBoundingClientRect();
-    const t = el instanceof HTMLElement ? getComputedStyle(el).transform : 'none';
-    let box = [Math.round(r.left + scrollX), Math.round(r.top + scrollY), Math.round(r.width), Math.round(r.height)];
+    const cs = el instanceof HTMLElement ? getComputedStyle(el) : null;
+    const t = cs ? cs.transform : 'none';
+    let box = [dp2(r.left + scrollX), dp2(r.top + scrollY), dp2(r.width), dp2(r.height)];
     if (t && t !== 'none' && !/^matrix\(1, 0, 0, 1, [^,]+, [^)]+\)$/.test(t)) {
-      const w = el.offsetWidth;
-      const h = el.offsetHeight;
-      box = [Math.round(r.left + r.width / 2 + scrollX - w / 2), Math.round(r.top + r.height / 2 + scrollY - h / 2), w, h];
+      const [w, h] = untransformed(el, cs);
+      box = [dp2(r.left + r.width / 2 + scrollX - w / 2), dp2(r.top + r.height / 2 + scrollY - h / 2), dp2(w), dp2(h)];
     }
     rects[el.getAttribute('data-sas-id')] = box;
   }

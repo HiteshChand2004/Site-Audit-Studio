@@ -29,6 +29,7 @@ import { createLedger } from './verify/ledger.js';
 import { CORRECT_BUDGET, CORRECT_MIN, correctLayout, correctReport } from './verify/correct.js';
 import { applyFixesByPath, correctExact, fixesByPath } from './verify/exact/correct.js';
 import { openExactRenderer } from './verify/exact/compare.js';
+import { boxLookups } from './verify/exact/boxes.js';
 import { CSS_FILE } from './emit/css.js';
 import { SWEEP_WIDTHS } from './capture/sweep.js';
 import { REFINE_PAGES, refineResponsive } from './verify/refine.js';
@@ -162,16 +163,26 @@ const countTemplates = (n) => (!n || 'text' in n ? 0 : (n.tpl ? 1 : 0) + (n.chil
  * text it happens to contain.
  */
 export function cpathsOf(site) {
-  const out = {};
+  const cpaths = {};
+  const sized = {};
+  const slack = {};
   for (const tree of site.pages) {
     const walk = (n) => {
       if (!isElement(n)) return;
-      if (n.sid != null && (n.cpath || n.path)) out[n.sid] = n.cpath ?? n.path;
+      if (n.sid != null) {
+        if (n.cpath || n.path) cpaths[n.sid] = n.cpath ?? n.path;
+        // What the copy sized itself, and the pixel or two it asked for on purpose (ir/styles.js): the exact
+        // comparison holds a box the copy sized to a pixel, expects the slack it asked for, and puts the boxes
+        // that are as big as their text under a reported budget instead of calling each one a defect.
+        if (n.sized) sized[n.sid] = n.sized;
+        const asked = n.slack && Object.fromEntries(Object.entries(n.slack).filter(([, v]) => v && Object.keys(v).length));
+        if (asked && Object.keys(asked).length) slack[n.sid] = asked;
+      }
       for (const c of n.children ?? []) walk(c);
     };
     walk(tree.root);
   }
-  return out;
+  return { version: 2, cpaths, sized, slack };
 }
 
 // A page without a usable og:image (none, or the original's could not be downloaded: another host, an error page) shares
@@ -467,16 +478,10 @@ export async function generateStage(ctx) {
     if (!exactCorrect) {
       ctx.progress(0.78, 'Correcting the copy against the original at every size');
       const idsOut = emitSite(ir, { ids: true });
-      // sid -> the original's own path, so the box comparison can pair by path instead of by content.
-      const sidToCpath = new Map();
-      for (const t of site.pages) {
-        const walk = (n) => {
-          if (!isElement(n)) return;
-          if (n.sid != null && (n.cpath || n.path)) sidToCpath.set(n.sid, n.cpath ?? n.path);
-          for (const c of n.children ?? []) walk(c);
-        };
-        walk(t.root);
-      }
+      // Per sid: the original's own path, so a box pairs by path instead of by content; which of its two sizes the
+      // copy wrote itself; and the pixel or two it asked for on purpose. One definition, shared with the report
+      // pass - the loop has to judge by the same ruler the report does, or it chases a number nobody reads.
+      const lookups = boxLookups(cpathsOf(site));
       const renderer = await openExactRenderer(siteDir, { scripts: Boolean(site.motion?.script) });
       try {
         // The pages with ids are served from memory; everything else (images, fonts, the stylesheet) comes off disk.
@@ -492,7 +497,9 @@ export async function generateStage(ctx) {
           ledger,
           baseCss: idsOut.files.get(CSS_FILE),
           workspace: ctx.dir,
-          cpathOf: (sid) => sidToCpath.get(sid) ?? null,
+          cpathOf: lookups.cpathOf,
+          sizedOf: lookups.sizedOf,
+          slackOf: lookups.slackOf,
           deadline: ctx.stepDeadline,
           progress: (f, message) => ctx.progress(0.78 + 0.1 * f, message),
         });

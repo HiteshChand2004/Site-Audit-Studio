@@ -4,7 +4,7 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { launchBrowser } from '../src/audit/render.js';
-import { collectExactBoxes, compareBoxes, pairBoxes, MAX_PAIR_NODES } from '../src/recreate/verify/exact/boxes.js';
+import { boxLookups, collectExactBoxes, compareBoxes, pairBoxes, MAX_PAIR_NODES } from '../src/recreate/verify/exact/boxes.js';
 import { slotFor } from '../src/recreate/verify/exact/slots.js';
 
 const PORT = 4204;
@@ -233,4 +233,87 @@ test('identity pairs boxes that identical text cannot, which is what the report 
     withoutIds.missing + withoutIds.extra >= withIds.missing + withIds.extra,
     `identity pairs at least as well: ${JSON.stringify({ withIds, withoutIds })}`,
   );
+});
+
+test('a length the text decides gets a budget; a length the copy wrote does not', () => {
+  // The defect this grading exists for: the comparison graded every box to a pixel, while every corrector refuses
+  // to touch a box with text of its own. The only boxes being graded were the ones nobody was allowed to fix, so
+  // 0 of 198 widths could ever be accepted, however good the copy was.
+  const original = [
+    { kind: 'text', key: 'heading', n: 1, tag: 'h1', path: 'body>h1:1', parent: '', rect: [0, 0, 300, 40] },
+    { kind: 'image', key: 'hero', n: 1, tag: 'img', path: 'body>img:1', parent: '', rect: [0, 60, 300, 200] },
+  ];
+  const copy = [
+    { kind: 'text', key: 'heading', n: 1, tag: 'h1', path: 'body>h1:1', parent: '', rect: [0, 0, 301.6, 40], sid: 1 },
+    { kind: 'image', key: 'hero', n: 1, tag: 'img', path: 'body>img:1', parent: '', rect: [0, 60, 301.6, 200], sid: 2 },
+  ];
+  const cpathOf = (sid) => ({ 1: 'body>h1:1', 2: 'body>img:1' }[sid] ?? null);
+  const r = compareBoxes(original, copy, { cpathOf });
+
+  // Both are reported as outside a pixel: the strict number is not softened.
+  assert.equal(r.within, 0);
+  assert.equal(r.paired, 2);
+  // But only the image is charged. The heading is as wide as its own text, which no declaration can change.
+  assert.equal(r.hard, 1, JSON.stringify(r.worst));
+  assert.equal(r.textBeyond, 0);
+  assert.equal(r.worst.find((w) => w.tag === 'img').grade, 'replaced');
+  assert.equal(r.worst.find((w) => w.tag === 'h1').grade, 'text');
+  assert.equal(r.beyondCorrectors, 1, 'and the report says how many boxes the loop was not allowed to try');
+
+  // The same heading once the copy writes its width: now it is the copy's own number and held to the pixel.
+  const written = compareBoxes(original, copy, { cpathOf, sizedOf: (sid) => (sid === 1 ? 'wh' : null) });
+  assert.equal(written.hard, 2);
+  assert.equal(written.beyondCorrectors, 0);
+});
+
+test('a text length further out than type can explain is still a defect, under its own name', () => {
+  const a = [{ kind: 'text', key: 'x', n: 1, tag: 'p', path: 'body>p:1', parent: '', rect: [0, 0, 100, 20] }];
+  const b = [{ kind: 'text', key: 'x', n: 1, tag: 'p', path: 'body>p:1', parent: '', rect: [0, 0, 118, 20], sid: 1 }];
+  const r = compareBoxes(a, b, { cpathOf: () => 'body>p:1' });
+  assert.equal(r.hard, 0, 'not the copy writing a wrong number');
+  assert.equal(r.textBeyond, 1, 'but eighteen pixels is not a font metric either');
+  assert.equal(r.dist.more, 1);
+});
+
+test('the pixel the copy asked for on purpose is expected, not counted as a defect', () => {
+  // ir/styles.js writes a text width a pixel wide, because a width cut to the pixel wraps the same label onto a
+  // second line. Until the node recorded that, the box measured about a pixel from the original and was reported as
+  // wrong on every run, at every width, by construction - a defect the engine had created in its own report.
+  const a = [{ kind: 'text', key: 'label', n: 1, tag: 'span', path: 'body>span:1', parent: '', rect: [0, 0, 80.4, 20] }];
+  const b = [{ kind: 'text', key: 'label', n: 1, tag: 'span', path: 'body>span:1', parent: '', rect: [0, 0, 82, 20], sid: 7 }];
+  const cpathOf = () => 'body>span:1';
+  const sizedOf = () => 'wh';
+
+  const blind = compareBoxes(a, b, { cpathOf, sizedOf });
+  assert.equal(blind.hard, 1, 'without the record it looks like a 1.6 px error');
+
+  const knowing = compareBoxes(a, b, { cpathOf, sizedOf, slackOf: () => ({ w: [0, 1.6] }) });
+  assert.equal(knowing.hard, 0);
+  assert.equal(knowing.within, 1, 'and the box counts as right, because it is exactly where it was asked to be');
+  assert.equal(knowing.slackUsed, 1, 'reported, so the allowance can never be silent');
+
+  // The allowance is a direction, not a free pixel: the other way round is still an error.
+  const wrongWay = compareBoxes(
+    [{ ...a[0], rect: [0, 0, 82, 20] }],
+    [{ ...b[0], rect: [0, 0, 80.4, 20] }],
+    { cpathOf, sizedOf, slackOf: () => ({ w: [0, 1.6] }) },
+  );
+  assert.equal(wrongWay.hard, 1);
+});
+
+test('the lookups read what generate saved, and what older runs saved', () => {
+  const now = boxLookups({ version: 2, cpaths: { 3: 'body>p:1' }, sized: { 3: { mobile: 'wh' } }, slack: { 3: { mobile: { w: [-1, 0] } } } });
+  assert.equal(now.cpathOf(3), 'body>p:1');
+  assert.equal(now.sizedOf(3, 'mobile'), 'wh');
+  assert.equal(now.sizedOf(3, 'desktop'), null, 'per view: a width written for the phone says nothing about the desktop');
+  assert.deepEqual(now.slackOf(3, 'mobile'), { w: [-1, 0] });
+  assert.equal(now.graded, 1);
+
+  // A workspace written before any of this still pairs boxes by path; it simply has nothing to grade them by.
+  const old = boxLookups({ 3: 'body>p:1' });
+  assert.equal(old.cpathOf(3), 'body>p:1');
+  assert.equal(old.sizedOf(3, 'mobile'), null);
+  assert.equal(old.slackOf(3, 'mobile'), null);
+  assert.equal(old.graded, 0);
+  assert.equal(old.pairs, 1);
 });

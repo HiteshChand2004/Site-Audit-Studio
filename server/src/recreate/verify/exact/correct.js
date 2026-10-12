@@ -247,7 +247,7 @@ export function slotScore({ diffRaw, boxes, heightOriginal, heightCopy }) {
  */
 export function makeExactRound({
   renderer, baseline, treeOf, workspace, cpathOf = null, deadline = Infinity, views = null, breakpoints = null,
-  progress = null,
+  progress = null, sizedOf = null, slackOf = null,
 }) {
   const byPage = new Map(baseline.pages.map((p) => [p.path, p]));
   // The original's band screenshots, read once each. A page is measured over several rounds and every round reads
@@ -327,7 +327,14 @@ export function makeExactRound({
             rects.set(slotKey(pagePath, view), measured.rects);
 
             const theirs = JSON.parse(gunzipSync(await readFile(path.join(inDir, slotBaseline.boxes.file))));
-            const boxes = compareBoxes(theirs.boxes, index.boxes, { cpathOf });
+            // The same grading the report pass uses, for the view that applies at this width: a length the copy
+            // wrote is held to a pixel, one the text decides to a budget. The two have to agree, or the loop
+            // chases boxes it is forbidden to touch and keeps nothing - which is what it did.
+            const boxes = compareBoxes(theirs.boxes, index.boxes, {
+              cpathOf,
+              sizedOf: sizedOf ? (sid) => sizedOf(sid, view) : null,
+              slackOf: slackOf ? (sid) => slackOf(sid, view) : null,
+            });
 
             // Pixels band by band, at the offsets the baseline used, so a page taller than one band is judged on
             // all of it. This used to compare the first band alone: on a homepage of 18,489 px that is under half
@@ -398,7 +405,8 @@ export function makeExactRound({
  * @returns {Promise<object>} one report row per page plus the totals
  */
 export async function correctExact({
-  renderer, baseline, site, ir, ledger, baseCss, workspace, cpathOf = null, deadline = Infinity,
+  renderer, baseline, site, ir, ledger, baseCss, workspace, cpathOf = null, sizedOf = null, slackOf = null,
+  deadline = Infinity,
   progress = () => {}, rounds = ROUNDS_PER_PAGE, round: roundOf = null,
 }) {
   const treeOf = new Map(site.pages.map((t) => [t.info.path, t]));
@@ -407,7 +415,7 @@ export async function correctExact({
   // The measurement, or one given to it: the scoring rules below are what decide whether a change is kept, and a
   // test must be able to check them without a browser.
   const round = roundOf ?? makeExactRound({
-    renderer, baseline, treeOf, workspace, cpathOf, deadline,
+    renderer, baseline, treeOf, workspace, cpathOf, sizedOf, slackOf, deadline,
     views: siteViews.length ? siteViews : null,
     breakpoints: ir?.breakpoints ?? null,
     // Per width, so a stage of eighteen renders says where it is instead of looking like a hang for minutes.

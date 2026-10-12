@@ -19,7 +19,7 @@ import { USER_AGENT } from '../../../audit/http.js';
 import { launchBrowser } from '../../../audit/render.js';
 import { startSiteServer } from '../server.js';
 import { bandFile, boxesFile, exactDir, shootBands, MAX_BANDS, SLOT_TIMEOUT_MS } from '../../capture/exact.js';
-import { collectExactBoxes, compareBoxes } from './boxes.js';
+import { BOX_TOLERANCE_PX, collectExactBoxes, compareBoxes, TEXT_BUDGET_PX } from './boxes.js';
 import { freezePage, freezeTimers, frozenSummary } from './freeze.js';
 import { settleExact } from './recipe.js';
 import { diffRegions, exactDiff, writeDiffMap } from './pixels.js';
@@ -111,6 +111,7 @@ const maskAreas = (boxes) => boxes
  */
 export async function compareSlot({
   renderer, slot, baseline, page, workspace, deadline = Infinity, cpathOf = null, noise = 0, excludedTexts = null,
+  sizedOf = null, slackOf = null, view = null,
 }) {
   const started = Date.now();
   const outDir = fidelityExactDir(workspace, page.slug);
@@ -190,13 +191,24 @@ export async function compareSlot({
     const diffRaw = total ? Math.round(((diff + heightOnlyOne) / total) * 1e6) / 1e4 : 0;
 
     // Boxes, against the index saved with the baseline.
-    const boxes = theirs ? compareBoxes(theirs, index.boxes, { cpathOf }) : null;
+    // Graded against what the copy wrote for the view that applies at this width, so a length the copy decided is
+    // held to a pixel and one the text decides is held to a budget - which is the only rule the correctors can
+    // actually meet: every one of them refuses a box with text of its own.
+    const boxes = theirs ? compareBoxes(theirs, index.boxes, {
+      cpathOf,
+      sizedOf: sizedOf && view ? (sid) => sizedOf(sid, view) : null,
+      slackOf: slackOf && view ? (sid) => slackOf(sid, view) : null,
+    }) : null;
 
     // Only a slot that failed keeps pictures: a map of where, and the worst few places magnified.
     const limit = Math.max(DIFF_LIMIT_PCT, noise * 2);
     const heightOk = Math.abs(heightOriginal - heightCopy) <= HEIGHT_TOLERANCE_PX;
     const pixelsOk = diffRaw <= limit;
-    const boxesOk = !boxes || (boxes.missing === 0 && boxes.extra === 0 && boxes.within === boxes.paired);
+    // Nothing missing, nothing added, every length the copy decided within a pixel, and no text length so far out
+    // that type cannot explain it. `boxes.within` - every box inside a pixel whatever sizes it - is still measured
+    // and still reported; it is not what the slot is held to, because a box the engine is forbidden to touch
+    // cannot be a condition of the engine succeeding.
+    const boxesOk = !boxes || (boxes.missing === 0 && boxes.extra === 0 && boxes.hard === 0 && boxes.textBeyond === 0);
     const accepted = heightOk && pixelsOk && boxesOk;
     const crops = [];
     let map = null;
@@ -268,7 +280,7 @@ export async function compareSlot({
  */
 export async function compareExact({
   root, workspace, baseline, pages, scripts = true, cpathOf = null, deadline = Infinity, progress = null, noise = {},
-  excluded = [], done = null, onPage = null, overrides = null,
+  excluded = [], done = null, onPage = null, overrides = null, sizedOf = null, slackOf = null, viewAt = null,
 }) {
   const renderer = await openExactRenderer(root, { scripts });
   // Pages served from memory instead of from disk: the same build with element ids added, so a box can be paired
@@ -306,6 +318,7 @@ export async function compareExact({
           slots.push(await compareSlot({
             renderer, slot, baseline: slotBaseline, page, workspace, deadline, cpathOf, noise: noise[slot.id] ?? 0,
             excludedTexts: excludedFor(excluded, page.path),
+            sizedOf, slackOf, view: viewAt?.(slot.width) ?? null,
           }));
         } catch (err) {
           errors.push({ page: page.path, slot: slotBaseline.id, message: String(err.message ?? err).split('\n')[0].slice(0, 200) });
@@ -350,7 +363,11 @@ export function summarise(pages) {
     if (!s.heightOk) bump('page-height');
     if (s.boxes?.missing) bump('missing-element', s.boxes.missing);
     if (s.boxes?.extra) bump('extra-element', s.boxes.extra);
-    if (s.boxes && s.boxes.within < s.boxes.paired) bump('box-out-of-place', s.boxes.paired - s.boxes.within);
+    // Two different things, named differently: a length the copy decided and got wrong, which the engine can fix,
+    // and a length the text decides which came out further off than type can explain. A box inside the text budget
+    // is neither, and counting it as a defect is what made every slot fail.
+    if (s.boxes?.hard) bump('box-out-of-place', s.boxes.hard);
+    if (s.boxes?.textBeyond) bump('font-metric', s.boxes.textBeyond);
     if (!s.pixelsOk && s.heightOk) bump('pixels');
     if (s.consoleErrors?.length) bump('console-error', s.consoleErrors.length);
     if (s.failedRequests?.length) bump('failed-request', s.failedRequests.length);
@@ -361,10 +378,23 @@ export function summarise(pages) {
     .sort((a, b) => b.diffRaw - a.diffRaw)
     .slice(0, 10)
     .map((s) => ({ slot: s.id, diffRaw: s.diffRaw, heightOriginal: s.heightOriginal, heightCopy: s.heightCopy, missing: s.boxes?.missing ?? 0 }));
+  // What the box check was actually able to ask of the copy. Without these three numbers "the loop kept nothing"
+  // reads as a failure, when most of what the check measures is boxes every corrector refuses to touch by design.
+  const boxes = slots.reduce((a, s) => {
+    if (!s.boxes) return a;
+    a.paired += s.boxes.paired;
+    a.within += s.boxes.within;
+    a.hard += s.boxes.hard ?? 0;
+    a.textBeyond += s.boxes.textBeyond ?? 0;
+    a.beyondCorrectors += s.boxes.beyondCorrectors ?? 0;
+    a.slackUsed += s.boxes.slackUsed ?? 0;
+    return a;
+  }, { paired: 0, within: 0, hard: 0, textBeyond: 0, beyondCorrectors: 0, slackUsed: 0 });
   return {
     slots: slots.length,
     accepted,
     pct: slots.length ? Math.round((accepted / slots.length) * 100) : 0,
+    boxes: { ...boxes, budget: TEXT_BUDGET_PX, tolerance: BOX_TOLERANCE_PX },
     diffWorst: slots.length ? Math.max(...slots.map((s) => s.diffRaw)) : 0,
     diffMean: slots.length ? Math.round((slots.reduce((n, s) => n + s.diffRaw, 0) / slots.length) * 1e4) / 1e4 : 0,
     causes,

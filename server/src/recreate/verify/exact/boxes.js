@@ -191,6 +191,45 @@ export function collectExactBoxes({ max = 6000 } = {}) {
   return { boxes, truncated, counts };
 }
 
+/**
+ * A box whose size is the text inside it may differ by this much before the slot is charged for it. The same
+ * string, shaped by the same font file, measures a fraction differently at two origins and rounds its line boxes
+ * the other way; a pixel of that per line box is not a layout error. `within` below stays at one pixel, so the
+ * strict number is still reported - this is only how much of it the slot is held to.
+ */
+export const TEXT_BUDGET_PX = 2;
+
+/** x, y, w, h of a box, in that order. */
+const AXES = [0, 1, 2, 3];
+
+/**
+ * What decides each of a box's four numbers, and so how exactly the copy can be held to it. See compareBoxes.
+ * A replaced element is all CSS and file; otherwise a length is `written` where the copy wrote one, and `text`
+ * where what is inside the box is what sizes it. x is graded with the width it belongs to, y with the height.
+ */
+const gradesFor = (a, b, sizedOf) => {
+  if (a.kind !== 'text') return ['replaced', 'replaced', 'replaced', 'replaced'];
+  const sid = b.sid ?? a.sid;
+  const sized = (sizedOf && sid != null && sizedOf(sid)) || '';
+  const w = sized.includes('w') ? 'written' : 'text';
+  const h = sized.includes('h') ? 'written' : 'text';
+  return [w, h, w, h];
+};
+
+/**
+ * Per-axis [lo, hi] the copy may differ by on purpose. ir/styles.js writes a text width one pixel wide (a width cut
+ * to the pixel wraps the label) and a minimum one pixel narrow (so two boxes sharing a line cannot overflow it);
+ * the node records what it asked for, and a box placed exactly as intended is then not reported as a pixel wrong.
+ * Only width and height carry it - a box grown a pixel about its centre moves half of one, which the tolerance holds.
+ */
+const allowance = (b, slackOf) => {
+  const s = slackOf && b.sid != null ? slackOf(b.sid) : null;
+  return [[0, 0], [0, 0], s?.w ?? [0, 0], s?.h ?? [0, 0]];
+};
+
+/** How much of a difference the copy is charged with: what falls outside the allowance, as a positive number. */
+const chargeable = (d, [lo, hi]) => (d > hi ? d - hi : d < lo ? lo - d : 0);
+
 const bandOf = (box) => Math.round(box.rect[1] / BAND_PX);
 const sameKind = (a, b) => a.kind === b.kind;
 const sameKey = (a, b) => a.key === b.key && sameKind(a, b);
@@ -294,23 +333,79 @@ export function pairBoxes(original, copy, { cpathOf = null } = {}) {
 
 /**
  * How far every paired box is from where it should be.
- * @returns {{ paired: number, within: number, missing: number, extra: number, worst: object[], fallback: boolean,
- *   byKind: object }}
+ *
+ * `within` is unchanged and unconditional: a box inside one pixel on all four numbers, whatever it is. It is the
+ * honest headline and nothing below softens it. What is added is a **grade per axis**, because the four numbers are
+ * not all the copy's to get right:
+ *
+ *  - `replaced` - an image, SVG, video or frame. Its size is the CSS and the file; nothing about it is inferred.
+ *  - `written`  - the copy wrote this length itself, so whatever it measures is what the copy asked for and a
+ *                 difference is the copy's own error.
+ *  - `text`     - the length is the text inside the box. The same string, shaped by the same font file at two
+ *                 origins, measures fractionally differently and rounds its line boxes the other way, and no
+ *                 declaration the copy can write changes that. It is also why every corrector refuses a box with
+ *                 text of its own (verify/correct.js `hasOwnText`) - so holding the slot to a pixel here asks the
+ *                 engine for something it is forbidden to attempt, which is how a copy differing by 0.17 % of its
+ *                 pixels came to be scored as a total failure.
+ *
+ * A box's left edge is graded with its own width and its top edge with its own height: a box whose width the text
+ * decides sits a fraction over when its parent centres it, while a box the copy sized is held to the pixel on both.
+ * Placement that comes from elsewhere - a section further down because something above it came out taller - is the
+ * pixel count's to judge and this index's to point at.
+ *
+ * @param {object[]} original
+ * @param {object[]} copy
+ * @param {{ cpathOf?: Function, sizedOf?: Function, slackOf?: Function, tolerance?: number, budget?: number,
+ *   worst?: number }} [o]  sizedOf(sid) -> 'wh' | 'w' | 'h' | null; slackOf(sid) -> { w?: [lo,hi], h?: [lo,hi] }
  */
-export function compareBoxes(original, copy, { cpathOf = null, tolerance = BOX_TOLERANCE_PX, worst = 10 } = {}) {
+export function compareBoxes(original, copy, {
+  cpathOf = null, sizedOf = null, slackOf = null, tolerance = BOX_TOLERANCE_PX, budget = TEXT_BUDGET_PX, worst = 10,
+} = {}) {
   const { pairs, missing, extra, byPath, bySequence, fallback } = pairBoxes(original, copy, { cpathOf });
   const rows = [];
   const byKind = {};
+  const byGrade = {};
+  const dist = {};
+  let slackUsed = 0;
+  let beyondCorrectors = 0;
   for (const [a, b] of pairs) {
-    const delta = [0, 1, 2, 3].map((i) => Math.round((b.rect[i] - a.rect[i]) * 100) / 100);
-    const off = Math.max(...delta.map(Math.abs));
-    const ok = off <= tolerance;
+    const grades = gradesFor(a, b, sizedOf);
+    const allow = allowance(b, slackOf);
+    const delta = AXES.map((i) => Math.round((b.rect[i] - a.rect[i]) * 100) / 100);
+    // What the copy is charged with: a difference it asked for on purpose (ir/styles.js writes a text width a pixel
+    // wide so the same label cannot wrap onto a second line) is not a defect, and used to be counted as one on every
+    // run at every width, by construction.
+    const charged = AXES.map((i) => chargeable(delta[i], allow[i]));
+    const off = Math.max(...charged);
+    if (off < Math.max(...delta.map(Math.abs))) slackUsed++;
+    let offHard = 0;
+    let offText = 0;
+    let blame = grades[0];
+    for (const i of AXES) {
+      const g = byGrade[grades[i]] ??= { axes: 0, within1: 0, beyond: 0, worstOff: 0 };
+      g.axes++;
+      if (charged[i] <= tolerance) g.within1++;
+      const limit = grades[i] === 'text' ? budget : tolerance;
+      if (charged[i] > limit) g.beyond++;
+      g.worstOff = Math.max(g.worstOff, charged[i]);
+      if (grades[i] === 'text') offText = Math.max(offText, charged[i]);
+      else offHard = Math.max(offHard, charged[i]);
+      if (charged[i] === off) blame = grades[i];
+    }
+    if (grades[2] === 'text' || grades[3] === 'text') beyondCorrectors++;
+
     byKind[a.kind] ??= { paired: 0, within: 0 };
     byKind[a.kind].paired++;
-    if (ok) byKind[a.kind].within++;
-    if (!ok) {
+    if (off <= tolerance) byKind[a.kind].within++;
+
+    const bucket = off <= 1 ? '1' : off <= 2 ? '2' : off <= 4 ? '4' : off <= 8 ? '8' : 'more';
+    dist[bucket] = (dist[bucket] ?? 0) + 1;
+
+    if (off > tolerance) {
+      const beyond = offHard > tolerance || offText > budget;
       rows.push({
-        kind: a.kind, key: a.key, n: a.n, tag: a.tag, path: a.path, expected: a.rect, actual: b.rect, delta, off,
+        kind: a.kind, grade: blame, key: a.key, n: a.n, tag: a.tag, path: a.path, expected: a.rect, actual: b.rect,
+        delta, off, offHard, offText, ...(beyond && { beyond: true }),
       });
     }
   }
@@ -324,9 +419,37 @@ export function compareBoxes(original, copy, { cpathOf = null, tolerance = BOX_T
     bySequence,
     fallback,
     byKind,
+    byGrade,
+    dist,
+    // What the slot is actually held to: a length the copy decided and got wrong, and a text length so far out that
+    // type cannot explain it.
+    hard: rows.filter((r) => r.offHard > tolerance).length,
+    textBeyond: rows.filter((r) => r.offHard <= tolerance && r.offText > budget).length,
+    // Boxes no corrector is allowed to touch, so "the loop kept nothing" can be read as "the loop was allowed to
+    // try N of M" instead of looking like a failure.
+    beyondCorrectors,
+    ...(slackUsed && { slackUsed }),
     worst: rows.slice(0, worst),
     missingItems: missing.slice(0, worst).map((a) => ({ kind: a.kind, key: a.key, n: a.n, tag: a.tag, path: a.path, rect: a.rect })),
     extraItems: extra.slice(0, worst).map((b) => ({ kind: b.kind, key: b.key, n: b.n, tag: b.tag, rect: b.rect })),
+  };
+}
+
+/**
+ * The three lookups the comparison needs from what generate saved beside the IR (ir/cpaths.json). Takes the current
+ * shape and the first one (a bare sid -> path map), so a workspace written before this still pairs by path.
+ * @param {object} saved
+ */
+export function boxLookups(saved) {
+  const cpaths = saved?.cpaths ?? saved ?? {};
+  const sized = saved?.sized ?? {};
+  const slack = saved?.slack ?? {};
+  return {
+    cpathOf: (sid) => cpaths[sid] ?? null,
+    sizedOf: (sid, view) => sized[sid]?.[view] ?? null,
+    slackOf: (sid, view) => slack[sid]?.[view] ?? null,
+    pairs: Object.keys(cpaths).length,
+    graded: Object.keys(sized).length,
   };
 }
 
