@@ -281,6 +281,7 @@ export async function compareSlot({
 export async function compareExact({
   root, workspace, baseline, pages, scripts = true, cpathOf = null, deadline = Infinity, progress = null, noise = {},
   excluded = [], done = null, onPage = null, overrides = null, sizedOf = null, slackOf = null, viewAt = null,
+  lookups = null,
 }) {
   const renderer = await openExactRenderer(root, { scripts });
   // Pages served from memory instead of from disk: the same build with element ids added, so a box can be paired
@@ -306,6 +307,9 @@ export async function compareExact({
         progress?.((i + 1) / pages.length, `Keeping the comparison of ${page.path} from the interrupted attempt`);
         continue;
       }
+      // This page's own ids: `sid` restarts at 1 in every page, so one map for the whole site let the last page
+      // written own every id and left the other ten pairing boxes by the text they happen to contain.
+      const per = lookups ? lookups.forPage(page.outPath) : { cpathOf, sizedOf, slackOf };
       const slots = [];
       for (const slotBaseline of saved.slots) {
         if (Date.now() > deadline) {
@@ -316,9 +320,9 @@ export async function compareExact({
         if (!slot) continue;
         try {
           slots.push(await compareSlot({
-            renderer, slot, baseline: slotBaseline, page, workspace, deadline, cpathOf, noise: noise[slot.id] ?? 0,
+            renderer, slot, baseline: slotBaseline, page, workspace, deadline, noise: noise[slot.id] ?? 0,
             excludedTexts: excludedFor(excluded, page.path),
-            sizedOf, slackOf, view: viewAt?.(slot.width) ?? null,
+            cpathOf: per.cpathOf, sizedOf: per.sizedOf, slackOf: per.slackOf, view: viewAt?.(slot.width) ?? null,
           }));
         } catch (err) {
           errors.push({ page: page.path, slot: slotBaseline.id, message: String(err.message ?? err).split('\n')[0].slice(0, 200) });

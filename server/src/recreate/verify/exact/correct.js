@@ -247,7 +247,7 @@ export function slotScore({ diffRaw, boxes, heightOriginal, heightCopy }) {
  */
 export function makeExactRound({
   renderer, baseline, treeOf, workspace, cpathOf = null, deadline = Infinity, views = null, breakpoints = null,
-  progress = null, sizedOf = null, slackOf = null,
+  progress = null, sizedOf = null, slackOf = null, lookups = null,
 }) {
   const byPage = new Map(baseline.pages.map((p) => [p.path, p]));
   // The original's band screenshots, read once each. A page is measured over several rounds and every round reads
@@ -294,6 +294,9 @@ export function makeExactRound({
         const saved = byPage.get(pagePath);
         if (!tree || !saved) continue;
         const inDir = exactDir(workspace, tree.info.slug);
+        // This page's own ids (`sid` restarts at 1 in every page), so the loop pairs boxes by identity exactly as
+        // the report pass does instead of by the text they happen to contain.
+        const per = lookups ? lookups.forPage(tree.info.outPath) : { cpathOf, sizedOf, slackOf };
         for (const slotBaseline of saved.slots) {
           if (Date.now() > deadline) break;
           const slot = baseline.slots.find((s) => s.id === slotBaseline.id);
@@ -331,9 +334,9 @@ export function makeExactRound({
             // wrote is held to a pixel, one the text decides to a budget. The two have to agree, or the loop
             // chases boxes it is forbidden to touch and keeps nothing - which is what it did.
             const boxes = compareBoxes(theirs.boxes, index.boxes, {
-              cpathOf,
-              sizedOf: sizedOf ? (sid) => sizedOf(sid, view) : null,
-              slackOf: slackOf ? (sid) => slackOf(sid, view) : null,
+              cpathOf: per.cpathOf,
+              sizedOf: per.sizedOf ? (sid) => per.sizedOf(sid, view) : null,
+              slackOf: per.slackOf ? (sid) => per.slackOf(sid, view) : null,
             });
 
             // Pixels band by band, at the offsets the baseline used, so a page taller than one band is judged on
@@ -406,7 +409,7 @@ export function makeExactRound({
  */
 export async function correctExact({
   renderer, baseline, site, ir, ledger, baseCss, workspace, cpathOf = null, sizedOf = null, slackOf = null,
-  deadline = Infinity,
+  lookups = null, deadline = Infinity,
   progress = () => {}, rounds = ROUNDS_PER_PAGE, round: roundOf = null,
 }) {
   const treeOf = new Map(site.pages.map((t) => [t.info.path, t]));
@@ -415,7 +418,7 @@ export async function correctExact({
   // The measurement, or one given to it: the scoring rules below are what decide whether a change is kept, and a
   // test must be able to check them without a browser.
   const round = roundOf ?? makeExactRound({
-    renderer, baseline, treeOf, workspace, cpathOf, sizedOf, slackOf, deadline,
+    renderer, baseline, treeOf, workspace, cpathOf, sizedOf, slackOf, lookups, deadline,
     views: siteViews.length ? siteViews : null,
     breakpoints: ir?.breakpoints ?? null,
     // Per width, so a stage of eighteen renders says where it is instead of looking like a hang for minutes.

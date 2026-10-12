@@ -64,8 +64,11 @@ export function emitNode(node, ctx, depth, pretty, keep = false) {
   // A builder's text sets white-space: pre-wrap: the indentation added for readability would become blank lines
   // (a 24 px list item 120 px tall), so inside such text nothing is added.
   const keepHere = keepsBreaks(node, keep, ctx.wsByClass);
-  // Indent only when every child is a block and there is no loose text, so no inline spacing changes.
-  const blocky = pretty && !keepHere && !RAW_TEXT.has(d.tag) && kids.length > 0
+  // Indent only when every child is a block and there is no loose text, so no inline spacing changes. There has to
+  // be a block child for that to mean anything: without the test the predicate is vacuously true for an element
+  // whose only child is a space, which is exactly what every gap of a split-text animation is.
+  const blocky = pretty && !keepHere && !RAW_TEXT.has(d.tag)
+    && kids.some((c) => !('text' in c) && c.b)
     && kids.every((c) => ('text' in c ? !c.text.trim() : c.b));
   if (blocky) {
     const pad = '  '.repeat(depth + 1);

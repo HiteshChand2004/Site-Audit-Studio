@@ -539,7 +539,20 @@ export function normalizeView(node, v, chain, opts) {
     const maxW = style['max-width'];
     const ratio = ratioOf(w);
     const limitedBy = (maxW && px(maxW) != null && Math.abs(px(maxW) - size.w(w)) <= 1) || (maxW?.endsWith('%') && ratio != null && Math.abs(parseFloat(maxW) / 100 - ratio) < 0.01);
-    if (ml > 0 && Math.abs(ml - mr) <= 1 && Math.abs(x - (pBox.x + ml)) <= 2) {
+    // Centring is read off the box, not off the margin. Chrome resolves an `auto` margin to its used value only
+    // some of the time: on one real site 95 of 130 containers with identical markup, identical geometry and the
+    // same class reported `margin-left: 80px` and the other 35 reported nothing at all. A capture therefore cannot
+    // tell `margin: auto` from `margin: 0`, and the 35 that lost it put their whole page content 80 px to the left.
+    // Equal space either side of a block in a block parent, with nothing else that could have put it there, is the
+    // declaration. The gate above already excludes floats, absolute boxes, flex and grid parents; the `ml - mr`
+    // test keeps an asymmetric declared margin out; and a relative box moved by its own `left`/`right` is not
+    // centred however even the gaps look.
+    // The free space either side, margin included: that is the quantity that is equal whether Chrome reported the
+    // used margin or reported nothing at all, which is the whole point of reading it off the box.
+    const leftGap = x - pBox.x;
+    const rightGap = (pBox.x + pBox.w) - (x + w);
+    const shifted = position === 'relative' && (px(style.left) || px(style.right));
+    if (Math.abs(ml - mr) <= 1 && !shifted && leftGap > 0.5 && Math.abs(leftGap - rightGap) <= 1) {
       style['margin-left'] = 'auto';
       style['margin-right'] = 'auto';
       if (!limitedBy) style['@w'] = { px: size.w(w), ratio };
@@ -584,7 +597,20 @@ export function normalizeView(node, v, chain, opts) {
     // Without text (icon boxes, image frames) the content cannot size the item reliably: an SVG or
     // image at width: 100% inside it falls back to its default size (300 px for SVG). Keep the width.
     const text = deepText(node).trim();
-    if (contentSized) style['@cw'] = { px: size.w(w), ratio, cell, text: !!text, wraps: !text || fills || cell || zeroBasisRow || wrapsText(node, v, chain) };
+    // A row that is allowed to wrap must stay as wide as the widths its children are *written* at, not as wide as
+    // it measured. Each text child is written a pixel wider than it measured, on purpose, so the same label cannot
+    // wrap onto a second line (see resolveHints and askedFor) - and nine of those pixels pushed the ninth link of
+    // a footer nav onto a second line of its own. That cost 53 px of page height (a 32 px row gap plus a 21 px
+    // line) on every page of the site, at every width from 1024 up, and page height is a condition of a size
+    // being exact, so it failed 66 of 198 sizes by itself. Only a wrapping row: a row that cannot wrap cannot
+    // change its line count, and the width only ever grows, which `max-width: 100%` already bounds.
+    const wrapRow = /flex/.test(display) && /wrap/.test(style['flex-wrap'] ?? '');
+    const childSlack = !wrapRow ? 0 : node.children.filter(isElement).reduce((n, c) => {
+      const cd = c.views?.[v];
+      if (!cd || cd.hidden || /^(absolute|fixed)$/.test(cd.style.position ?? '') || !deepText(c).trim()) return n;
+      return n + Math.max(0, Math.ceil(cd.rect[2]) + 1 - cd.rect[2]);
+    }, 0);
+    if (contentSized) style['@cw'] = { px: size.w(w), ratio, cell, text: !!text, childSlack, wraps: !text || fills || cell || zeroBasisRow || wrapsText(node, v, chain) };
     // A content-sized item with text can still have a fixed size larger than its text (a 22 px badge
     // around 6 px letters, a 52 px label): minimums restore it without ever cutting or wrapping text.
     // Only small boxes that do not fill their parent: a minimum on a large container would keep it
@@ -776,7 +802,9 @@ export function resolveHints(decls, present, tag, node = null) {
       else {
         // Text gets a pixel of slack: the same label can measure a fraction wider here than in the
         // original, and a width cut to the pixel would wrap it onto a second line.
-        const written = hint.text ? Math.ceil(hint.px) + 1 : round(hint.px);
+        // Plus whatever its own children were written wider by, when this is a row that can wrap: otherwise the
+        // slack granted to the children is spent out of the parent's and the last one drops to a second line.
+        const written = hint.text ? Math.ceil(hint.px) + 1 + Math.ceil(hint.childSlack ?? 0) : round(hint.px);
         decls[v].width = `${written}px`;
         // A definite width replaces whatever a minimum asked for in this view, so the slack is this one, not both.
         if (node) {

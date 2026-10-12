@@ -29,6 +29,12 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>
   .bar { display: flex; }
   .label { padding: 4px; background: #f0f0f0; }
   .grower { flex: 1 0 0; }
+  .outer { width: 800px; }
+  .col { display: flex; flex-direction: column; align-items: center; }
+  .middle { max-width: 600px; margin: 0 auto; background: #def; }
+  .pushed { position: relative; left: 100px; width: 600px; background: #fde; }
+  .wraprow { display: flex; flex-wrap: wrap; column-gap: 11px; justify-content: center; font: 15px/1.5 system-ui; }
+  .wraprow > span { white-space: nowrap; }
 </style></head><body>
   <div class="row"><div data-sas-id="1">one</div><div data-sas-id="2">two</div><div data-sas-id="3">three</div></div>
   <div class="fixed" data-sas-id="4">fixed</div>
@@ -36,6 +42,8 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>
   <div class="spun" data-sas-id="6">spun</div>
   <div class="holder"><div class="abs">abs</div></div>
   <div class="bar"><div class="label">label</div><div class="grower"></div></div>
+  <div class="outer"><div class="middle">centred</div><div class="pushed">pushed</div></div>
+  <div class="col"><div class="wraprow"><span>Overview</span><span>Capabilities</span><span>Resources</span><span>Quality and governance</span><span>Contact us</span></div></div>
 </body></html>`;
 
 let server;
@@ -55,8 +63,8 @@ after(async () => {
   await new Promise((r) => server.close(r));
 });
 
-const open = async () => {
-  const context = await browser.newContext({ viewport: { width: 1000, height: 800 }, deviceScaleFactor: 1 });
+const open = async (width = 1000) => {
+  const context = await browser.newContext({ viewport: { width, height: 800 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
   await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'load' });
   return { context, page };
@@ -191,16 +199,91 @@ test('the stylesheet carries the fraction, and the node records what it wrote an
     }
     // What generate saves beside the IR, and what the comparison reads back out of it.
     for (const [i, n] of nodes.entries()) n.sid = i + 1;
-    const saved = cpathsOf({ pages: [{ root: tree.root }] });
-    assert.equal(saved.version, 2);
+    const saved = cpathsOf({ pages: [{ info: { outPath: 'index.html' }, root: tree.root }] });
+    assert.equal(saved.version, 3);
     const lookups = boxLookups(saved);
-    assert.equal(lookups.graded, Object.keys(saved.sized).length);
+    const lookup = lookups.forPage('index.html');
+    const sizedSaved = saved.pages['index.html'].sized;
+    assert.equal(lookups.graded, Object.keys(sizedSaved).length);
     assert.ok(lookups.graded > 0, 'the grading reaches the comparison');
-    for (const [sid, views] of Object.entries(saved.sized)) {
+    for (const [sid, views] of Object.entries(sizedSaved)) {
       const [view, value] = Object.entries(views)[0];
-      assert.equal(lookups.sizedOf(sid, view), value);
+      assert.equal(lookup.sizedOf(sid, view), value);
     }
   } finally {
     await context.close();
+  }
+});
+
+test('a block centred in its parent is written as centred, whatever the capture says its margins were', async () => {
+  // Chrome resolves an `auto` margin to its used value only some of the time: on a real site 95 of 130 containers
+  // with the same class, the same markup and the same geometry reported `margin-left: 80px` and the other 35
+  // reported nothing, so the IR could not tell `margin: auto` from `margin: 0`. The 35 that lost it put the whole
+  // page content 80 px to the left of where the original paints it, on four pages of eleven.
+  const { context, page } = await open();
+  try {
+    const snapshot = await page.evaluate(snapshotPage, {});
+    const tree = buildPageTree({ desktop: snapshot.body });
+    const { rules } = buildStyles([tree], { assetFile: () => null });
+    const nodes = [];
+    const walk = (n) => {
+      if (!isElement(n)) return;
+      nodes.push(n);
+      n.children.forEach(walk);
+    };
+    walk(tree.root);
+    const ruleFor = (cls) => rules.find((r) => r.selector === `.${nodes.find((n) => n.attrs?.class === cls)?.class}`)?.parts?.base ?? {};
+
+    const centred = ruleFor('middle');
+    assert.equal(centred['margin-left'], 'auto', JSON.stringify(centred));
+    assert.equal(centred['margin-right'], 'auto');
+
+    // The box that only looks centred: a relative block pushed right by its own `left`. Its gaps are equal and its
+    // margins are zero, and it must keep the offset rather than become a centred box.
+    const pushed = ruleFor('pushed');
+    assert.notEqual(pushed['margin-left'], 'auto', JSON.stringify(pushed));
+    assert.equal(pushed.left, '100px');
+  } finally {
+    await context.close();
+  }
+});
+
+test('a row that may wrap is written wide enough for the widths its children are written at', async () => {
+  // Each text item is written a pixel wider than it measured so its own label cannot wrap (resolveHints). Nine of
+  // those pixels were spent out of the parent row's single pixel of slack, so the ninth link of a footer nav
+  // dropped to a second line: 53 px of extra page height - a 32 px row gap plus a 21 px line - on every page of
+  // the site at every width from 1024 up, and a page whose height is wrong can never be an exact match.
+  //
+  // Two views, as on the real site: the row is written a width because the narrow view needs one, and that width
+  // then has to hold the wide view too.
+  const wide = await open(900);
+  const narrow = await open(420);
+  try {
+    const tree = buildPageTree({
+      desktop: (await wide.page.evaluate(snapshotPage, {})).body,
+      mobile: (await narrow.page.evaluate(snapshotPage, {})).body,
+    });
+    const { rules } = buildStyles([tree], { assetFile: () => null });
+    const nodes = [];
+    const walk = (n) => { if (!isElement(n)) return; nodes.push(n); n.children.forEach(walk); };
+    walk(tree.root);
+    const base = (n) => rules.find((r) => r.selector === `.${n.class}`)?.parts?.base ?? {};
+    const row = nodes.find((n) => n.attrs?.class === 'wraprow');
+    assert.ok(row, 'the wrapping row was captured');
+    const rowWidth = parseFloat(base(row).width);
+    assert.ok(Number.isFinite(rowWidth), `the row has a written width, got ${JSON.stringify(base(row))}`);
+
+    const items = row.children.filter(isElement);
+    assert.ok(items.length >= 4, 'several items in the row');
+    const gap = parseFloat(base(row)['column-gap'] ?? '0') || 0;
+    const needed = items.reduce((n, it) => {
+      const w = parseFloat(base(it).width);
+      return n + (Number.isFinite(w) ? w : it.views.desktop.rect[2]);
+    }, 0) + gap * (items.length - 1);
+    assert.ok(rowWidth >= needed - 0.01,
+      `the row is ${rowWidth}px but its items are written at ${needed.toFixed(2)}px, so the last one wraps`);
+  } finally {
+    await wide.context.close();
+    await narrow.context.close();
   }
 });

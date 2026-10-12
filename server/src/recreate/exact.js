@@ -75,9 +75,7 @@ export async function exactStage(ctx, local = {}) {
     pages,
     scripts,
     overrides: paired?.pages ?? null,
-    cpathOf: paired?.lookups.cpathOf ?? null,
-    sizedOf: paired?.lookups.sizedOf ?? null,
-    slackOf: paired?.lookups.slackOf ?? null,
+    lookups: paired?.lookups ?? null,
     viewAt: paired ? (width) => viewForWidth(width, paired.views.length ? paired.views : undefined, paired.breakpoints) : null,
     noise: baseline.noiseFloor ?? {},
     // Parts of the page that are not the site and were left out on purpose (ir/exclude.js): not the copy's fault.

@@ -163,10 +163,15 @@ const countTemplates = (n) => (!n || 'text' in n ? 0 : (n.tpl ? 1 : 0) + (n.chil
  * text it happens to contain.
  */
 export function cpathsOf(site) {
-  const cpaths = {};
-  const sized = {};
-  const slack = {};
+  // Per page, because `sid` restarts at 1 in every page (ir/index.js numberNodes). One flat map across the site
+  // meant the last page written won every id, so on a real eleven-page site only the homepage - and the 404 page,
+  // which is a copy of it - paired boxes by identity at all: 575 of 576 there against 4 to 9 of 40 to 149
+  // everywhere else, with the rest left to the weaker guess-by-content path this map exists to replace.
+  const pages = {};
   for (const tree of site.pages) {
+    const cpaths = {};
+    const sized = {};
+    const slack = {};
     const walk = (n) => {
       if (!isElement(n)) return;
       if (n.sid != null) {
@@ -181,8 +186,9 @@ export function cpathsOf(site) {
       for (const c of n.children ?? []) walk(c);
     };
     walk(tree.root);
+    pages[tree.info.outPath] = { cpaths, sized, slack };
   }
-  return { version: 2, cpaths, sized, slack };
+  return { version: 3, pages };
 }
 
 // A page without a usable og:image (none, or the original's could not be downloaded: another host, an error page) shares
@@ -497,9 +503,7 @@ export async function generateStage(ctx) {
           ledger,
           baseCss: idsOut.files.get(CSS_FILE),
           workspace: ctx.dir,
-          cpathOf: lookups.cpathOf,
-          sizedOf: lookups.sizedOf,
-          slackOf: lookups.slackOf,
+          lookups,
           deadline: ctx.stepDeadline,
           progress: (f, message) => ctx.progress(0.78 + 0.1 * f, message),
         });

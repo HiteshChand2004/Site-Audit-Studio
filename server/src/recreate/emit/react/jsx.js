@@ -184,7 +184,12 @@ export function visibleChildren(kids, tag, keep = false) {
   // keep: the parent keeps its line breaks (white-space: pre*). The HTML emitter leaves such text alone
   // (html.js keepsBreaks), so dropping the whitespace-only children here would lose the blank lines the
   // HTML build keeps.
-  const blocky = !keep && !RAW_TEXT.has(tag) && kids.length > 0 && kids.every((c) => ('text' in c ? !c.text.trim() : c.b));
+  // "Between block children" is the rule, so there have to be block children: without that test the predicate is
+  // vacuously true for an element whose only child is a space, and every gap of a split-text animation - one
+  // element per word, one per gap - was emitted as `<span />`, running every word of the page into the next.
+  const blocky = !keep && !RAW_TEXT.has(tag)
+    && kids.some((c) => !('text' in c) && c.b)
+    && kids.every((c) => ('text' in c ? !c.text.trim() : c.b));
   if (blocky) return kids.filter((c) => !('text' in c));
   // Adjacent text nodes are one text node in HTML; as separate JSX lines they would be joined with a space.
   const merged = [];

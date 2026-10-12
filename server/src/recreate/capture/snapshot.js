@@ -247,18 +247,31 @@ export function snapshotPage(opts) {
 
     const children = [];
     const tagIndex = {};
+    // Whitespace that is all the element holds, kept aside until the walk ends: whether it is content or just the
+    // formatting of the source depends on what else turns up inside.
+    let loneWhitespace = null;
     const root = el.shadowRoot && el.shadowRoot.mode === 'open' ? el.shadowRoot : el;
     for (const child of root.childNodes) {
       if (child.nodeType === Node.TEXT_NODE) {
         const text = child.textContent;
         if (text && text.trim()) children.push({ text: text.length > maxTextLength ? text.slice(0, maxTextLength) : text });
         else if (text && children.length && !('text' in children[children.length - 1])) children.push({ text: ' ' });
+        else if (text && loneWhitespace === null) loneWhitespace = text;
       } else if (child.nodeType === Node.ELEMENT_NODE && !SKIP_TAGS.has(child.tagName) && child !== frame) {
         const t = child.tagName.toLowerCase();
         tagIndex[t] = (tagIndex[t] || 0) + 1;
         const sub = walk(child, values, `${path}>${t}:${tagIndex[t]}`);
         if (sub) children.push(sub);
       }
+    }
+    // An inline element whose whole content is a space IS a space. Sites that animate text split it into one
+    // element per word AND one per gap; dropping the gap ran every word of the page into the next - measured on a
+    // real site as each successive word displaced by a further 4 px (the width of the space it lost), 2,220 px by
+    // the end of the page, with every word itself exactly the right size. Inline-level only, so the formatting
+    // whitespace between block children is still dropped, and the text is kept as written rather than normalised,
+    // which also keeps it right under `white-space: pre`.
+    if (!children.length && loneWhitespace && /^inline/.test(cs.display)) {
+      children.push({ text: loneWhitespace.length > maxTextLength ? loneWhitespace.slice(0, maxTextLength) : loneWhitespace });
     }
     if (children.length) node.children = children;
     return node;

@@ -441,15 +441,25 @@ export function compareBoxes(original, copy, {
  * @param {object} saved
  */
 export function boxLookups(saved) {
-  const cpaths = saved?.cpaths ?? saved ?? {};
-  const sized = saved?.sized ?? {};
-  const slack = saved?.slack ?? {};
+  // Keyed by page, because `sid` restarts at 1 in every page. The older shapes - one flat map for the whole site,
+  // and before that a bare sid -> path object - are still read so an old workspace keeps whatever pairing it had.
+  const byPage = saved?.pages ?? null;
+  const flat = { cpaths: saved?.cpaths ?? (byPage ? {} : saved ?? {}), sized: saved?.sized ?? {}, slack: saved?.slack ?? {} };
+  const of = (outPath) => (byPage ? byPage[outPath] ?? { cpaths: {}, sized: {}, slack: {} } : flat);
+  const forPage = (outPath) => {
+    const p = of(outPath);
+    return {
+      cpathOf: (sid) => p.cpaths?.[sid] ?? null,
+      sizedOf: (sid, view) => p.sized?.[sid]?.[view] ?? null,
+      slackOf: (sid, view) => p.slack?.[sid]?.[view] ?? null,
+    };
+  };
+  const all = byPage ? Object.values(byPage) : [flat];
   return {
-    cpathOf: (sid) => cpaths[sid] ?? null,
-    sizedOf: (sid, view) => sized[sid]?.[view] ?? null,
-    slackOf: (sid, view) => slack[sid]?.[view] ?? null,
-    pairs: Object.keys(cpaths).length,
-    graded: Object.keys(sized).length,
+    forPage,
+    pages: byPage ? Object.keys(byPage).length : 0,
+    pairs: all.reduce((n, p) => n + Object.keys(p.cpaths ?? {}).length, 0),
+    graded: all.reduce((n, p) => n + Object.keys(p.sized ?? {}).length, 0),
   };
 }
 

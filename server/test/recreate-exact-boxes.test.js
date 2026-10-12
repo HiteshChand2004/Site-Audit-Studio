@@ -301,19 +301,36 @@ test('the pixel the copy asked for on purpose is expected, not counted as a defe
   assert.equal(wrongWay.hard, 1);
 });
 
-test('the lookups read what generate saved, and what older runs saved', () => {
-  const now = boxLookups({ version: 2, cpaths: { 3: 'body>p:1' }, sized: { 3: { mobile: 'wh' } }, slack: { 3: { mobile: { w: [-1, 0] } } } });
-  assert.equal(now.cpathOf(3), 'body>p:1');
-  assert.equal(now.sizedOf(3, 'mobile'), 'wh');
-  assert.equal(now.sizedOf(3, 'desktop'), null, 'per view: a width written for the phone says nothing about the desktop');
-  assert.deepEqual(now.slackOf(3, 'mobile'), { w: [-1, 0] });
+test('the lookups are per page, because every page numbers its elements from one', () => {
+  // One flat map for the whole site meant the last page written owned every id. On a real eleven-page run that
+  // left the homepage pairing 575 of 576 boxes by identity and the other ten pairing 4 to 9 of 40 to 149 - the
+  // rest fell back to guessing from the text a box contains, which is the thing identity exists to replace.
+  const saved = {
+    version: 3,
+    pages: {
+      'index.html': { cpaths: { 3: 'body>h1:1' }, sized: { 3: { mobile: 'wh' } }, slack: { 3: { mobile: { w: [-1, 0] } } } },
+      'about/index.html': { cpaths: { 3: 'body>main:1>p:2' }, sized: {}, slack: {} },
+    },
+  };
+  const now = boxLookups(saved);
+  assert.equal(now.pages, 2);
+  assert.equal(now.forPage('index.html').cpathOf(3), 'body>h1:1');
+  assert.equal(now.forPage('about/index.html').cpathOf(3), 'body>main:1>p:2', 'the same id, a different element');
+  assert.equal(now.forPage('index.html').sizedOf(3, 'mobile'), 'wh');
+  assert.equal(now.forPage('index.html').sizedOf(3, 'desktop'), null, 'per view: a width written for the phone says nothing about the desktop');
+  assert.deepEqual(now.forPage('index.html').slackOf(3, 'mobile'), { w: [-1, 0] });
   assert.equal(now.graded, 1);
+  // A page the map has nothing for pairs by content rather than borrowing another page's ids in silence.
+  assert.equal(now.forPage('contact.html').cpathOf(3), null);
 
-  // A workspace written before any of this still pairs boxes by path; it simply has nothing to grade them by.
+  // Older workspaces still load: one flat map for the site, and before that a bare sid -> path object.
+  const flat = boxLookups({ version: 2, cpaths: { 3: 'body>p:1' }, sized: { 3: { mobile: 'wh' } }, slack: {} });
+  assert.equal(flat.forPage('anything.html').cpathOf(3), 'body>p:1');
+  assert.equal(flat.forPage('anything.html').sizedOf(3, 'mobile'), 'wh');
   const old = boxLookups({ 3: 'body>p:1' });
-  assert.equal(old.cpathOf(3), 'body>p:1');
-  assert.equal(old.sizedOf(3, 'mobile'), null);
-  assert.equal(old.slackOf(3, 'mobile'), null);
+  assert.equal(old.forPage('anything.html').cpathOf(3), 'body>p:1');
+  assert.equal(old.forPage('anything.html').sizedOf(3, 'mobile'), null);
+  assert.equal(old.forPage('anything.html').slackOf(3, 'mobile'), null);
   assert.equal(old.graded, 0);
   assert.equal(old.pairs, 1);
 });
