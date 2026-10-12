@@ -302,7 +302,7 @@ export function makeExactRound({
           const view = viewForWidth(slot.width, views ?? tree.views ?? RECREATE_VIEWS, breakpoints);
           done += 1;
           progress?.((done - 1) / Math.max(1, total),
-            `${label ?? 'Measuring'}: ${slot.width}px (${done} of ${total}${elapsed(startedAt)})`);
+            label ? `${label}: ${slot.width}px (${done} of ${total}${elapsed(startedAt)})` : `${slot.width}px (${done} of ${total}${elapsed(startedAt)})`);
           // A slot that cannot be measured is counted and skipped, never guessed at: a round judged on half its
           // slots could accept a change that made the others worse. With nothing measured at all the round scores
           // zero, so the loop refuses it rather than treating silence as success.
