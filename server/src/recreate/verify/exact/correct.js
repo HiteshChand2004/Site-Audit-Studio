@@ -411,8 +411,14 @@ export async function correctExact({
     views: siteViews.length ? siteViews : null,
     breakpoints: ir?.breakpoints ?? null,
     // Per width, so a stage of eighteen renders says where it is instead of looking like a hang for minutes.
-    progress: (f, message) => progress(f, message),
+    // The page being corrected is held here rather than threaded through correctLayout, which has no idea it is
+    // one page of eleven: without it a width reads "1440px (3 of 18)" and says nothing about where that is.
+    progress: (f, message) => (at
+      ? progress(at.from + (f / Math.max(1, at.pages)), at.where + ': ' + message)
+      : progress(f, message)),
   });
+  // Which page the loop is on, for the per-width messages the round emits (set in the page loop below).
+  let at = null;
   const out = { pages: [], rounds: 0, applied: 0, reverted: 0, elements: 0, byCorrector: {}, stopped: null, scoreBefore: null, scoreAfter: null, margin: round1(marginForNoise(baseline.noiseFloor)) };
 
   // Worst page first, measured once with no override. This measures **every** slot of every page: it is the before
@@ -451,6 +457,7 @@ export async function correctExact({
     // A page already matching at every slot is left alone: a round on it can only risk what is right.
     const pageSlots = first.slots.filter((s) => s.page === slot.page);
     if (pageSlots.every((s) => s.pixel >= 100 - (GOOD_ENOUGH_PCT / PIXEL_FLOOR_PCT) * 100 && s.layout >= 100 && !s.heightOff)) continue;
+    at = { where: `${slot.page} (${i + 1} of ${order.length})`, from: i / order.length, pages: order.length };
     const where = `${slot.page} (${i + 1} of ${order.length})`;
     progress(i / order.length, `Correcting ${where} against the original`);
     const fixesBefore = snapshotFixes(treeOf.get(slot.page));

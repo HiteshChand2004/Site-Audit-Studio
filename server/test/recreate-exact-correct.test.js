@@ -171,6 +171,40 @@ test('the budget is three rounds, and the loop never measures one stylesheet twi
 
 
 
+test('a round says which width it is on, so a stage of eighteen renders is not silence', async () => {
+  // This is the defect that made a working run look hung: the loop reported once per page, a page took tens of
+  // minutes, and nothing in between said anything. A job that reports nothing cannot be told from a job that has
+  // stopped - and was not.
+  const widths = [1920, 1440, 768, 375];
+  const slots = widths.map((w) => ({ id: String(w), width: w, height: 800, dpr: 1, mobile: w < 768, hasTouch: w < 768 }));
+  const baseline = {
+    slots,
+    pages: [{ path: '/', slug: 'index', slots: slots.map((s) => ({ id: s.id, pageHeight: 1000, bands: [{ file: 'b.webp', top: 0, height: 800 }], boxes: { file: 'b.json.gz' } })) }],
+  };
+  const treeOf = new Map([['/', { info: { path: '/', slug: 'index', outPath: 'index.html' } }]]);
+  const said = [];
+  const round = makeExactRound({
+    renderer: { origin: 'http://127.0.0.1:0', server: { overrides: new Map() }, context: async () => { throw new Error('no browser in this test'); } },
+    baseline,
+    treeOf,
+    workspace: '/nowhere',
+    progress: (f, message) => said.push([f, message]),
+  });
+  await round({ site: { pages: [] }, ledger: createLedger(), css: 'body{}', round: 0, pages: ['/'], all: true });
+
+  assert.equal(said.length, widths.length, 'one message per width, not one per round');
+  // Each names the width and counts, so a person can see it moving and tell how far along it is.
+  assert.match(said[0][1], /1920px \(1 of 4/);
+  assert.match(said[3][1], /375px \(4 of 4/);
+  // And the fraction advances rather than sitting still.
+  assert.deepEqual(said.map(([f]) => f), [0, 0.25, 0.5, 0.75]);
+
+  // A caller that gives the round a label says what the stage is, not just the width.
+  said.length = 0;
+  await round({ site: { pages: [] }, ledger: createLedger(), css: 'body{}', round: 0, pages: ['/'], all: true, label: 'Measuring the copy against the original' });
+  assert.match(said[0][1], /^Measuring the copy against the original: 1920px/);
+});
+
 test('a round measures every width of the page, because a view is not one width', async () => {
   // Judging a round on one width per view was affordable and unsound. A corrector writes its value for every view
   // an element appears in, and the phone view alone governs nine of these eighteen widths - 320 to 767. On a real
