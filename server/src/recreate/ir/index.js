@@ -611,6 +611,11 @@ export function buildIR(site, { asIs = false } = {}) {
       for (const name of (decl?.['animation-name'] ?? '').split(/,\s*/)) if (name && name !== 'none') animationNames.add(name);
     }
   }
+  // Any other motion effect (an open panel, a state, a scrolled bar, a neighbour of a hover) may name a captured
+  // animation too, in `animation-name` or the `animation` shorthand: keep what it names rather than ship a dangling one.
+  const motionText = site.motion ? JSON.stringify(site.motion) : '';
+  const named = (name) => new RegExp(`(^|[^\\w-])${name.replace(/[^\w-]/g, '\\$&')}([^\\w-]|$)`).test(motionText);
+  const keepKeyframes = (name) => asIs || site.asIs || animationNames.has(name) || (motionText && named(name));
   const ir = {
     version: IR_VERSION,
     baseUrl: site.baseUrl,
@@ -620,7 +625,8 @@ export function buildIR(site, { asIs = false } = {}) {
     tokens: site.tokens,
     ...((asIs || site.asIs) && { asIs: true }),
     fontFaces: site.fontFaces.filter((f) => families.has(f.family.toLowerCase())),
-    keyframes: [...site.keyframes].filter(([name]) => animationNames.has(name)).map(([name, css]) => ({ name, css: mapUrls(css, (u) => site.assetResolve(u)) })),
+    // An as-is copy keeps every @keyframes the original declared: the site's script may start one by name at runtime.
+    keyframes: [...site.keyframes].filter(([name]) => keepKeyframes(name)).map(([name, css]) => ({ name, css: mapUrls(css, (u) => site.assetResolve(u)) })),
     boxSizingReset: styles.boxSizingReset,
     ...(site.motion && { motion: site.motion }),
     rules: styles.rules,
