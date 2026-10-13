@@ -19,6 +19,7 @@ body { margin: 0; font: 16px sans-serif }
 .half { height: 50vh; background: #eee }
 .faq { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .3s } .faq > div { overflow: hidden }
 .panel { height: 0; overflow: hidden }
+.stage { height: 700px; min-height: 100vh; display: flex; align-items: center; background: #222; color: #fff }
 .fixed-size { height: 300px; background: #ddd }
 .col { display: flex; flex-direction: column; width: 400px }
 .col .btn { width: fit-content; padding: 14px 26px; background: #111; color: #fff; border-radius: 999px }
@@ -32,6 +33,7 @@ body { margin: 0; font: 16px sans-serif }
 <div class="half" id="half"></div>
 <div id="q"><button type="button" aria-expanded="false">Question?</button><div class="faq" id="faq"><div><p>The answer.</p></div></div></div>
 <nav id="menu"><button type="button">Menu</button><div class="panel" id="panel"><a href="#a">One</a><a href="#b">Two</a></div></nav>
+<div class="stage" id="stage"><p>Short content</p></div>
 <div class="fixed-size" id="plain">Plain</div>
 </body></html>`;
 
@@ -125,6 +127,12 @@ test('a full-screen hero and what it holds keep following the screen', async () 
 
   assert.equal(style('half').height, '50dvh');
   assert.equal(style('plain').height ?? '300px', '300px', 'a fixed size stays px');
+});
+
+test('the window, but never less than its own height: height 700px + min-height 100vh keeps the px floor', async () => {
+  const { style } = await styledPage();
+  assert.equal(style('stage')['min-height'], 'max(700px, 100dvh)');
+  assert.equal(style('hero')['min-height'], '100dvh', 'a box held only by its content has no floor');
 });
 
 test('custom properties set on an element (a script measuring a word) reach its rule; inherited ones are not repeated', async () => {

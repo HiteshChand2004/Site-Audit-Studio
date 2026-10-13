@@ -140,3 +140,43 @@ test('an exclusion is taken out of the comparison by the text it painted', () =>
   assert.deepEqual([...texts], ['made in framer'], 'this page only, normalised the way the box index keys it');
   assert.equal(excludedFor([], '/').size, 0);
 });
+
+test("the builder's own frame and the control that opens it are tooling, not the site", () => {
+  // An editor bar: a frame from the platform's host stretched over the window (clipped until opened), and a small
+  // pinned button half-way down the edge - not in a corner - whose click changes that frame.
+  const frame = el('iframe', {
+    path: 'body>iframe:1',
+    style: { position: 'fixed', 'clip-path': 'circle(1px at 100% 100%)' },
+    rect: [0, 0, 1440, 900],
+    attrs: { src: 'https://framer.com/edit?siteId=abc' },
+  });
+  const bar = el('div', {
+    path: 'body>div:4',
+    style: { position: 'fixed' },
+    rect: [1400, 435, 30, 30],
+    children: [el('span', { path: 'body>div:4>span:1', text: 'Edit Content' }), el('button', { path: 'body>div:4>button:1' })],
+  });
+  const touches = new Map([['body>div:4>button:1', new Set(['body>iframe:1', 'body>div:4>span:1'])]]);
+  const found = findExcludable(tree([bar, frame]), { viewWidths: WIDTHS, touches });
+  assert.deepEqual(found.map((f) => f.reason).sort(), ['builder-control', 'builder-frame']);
+  assert.equal(found.find((f) => f.reason === 'builder-control').path, 'body>div:4');
+  assert.match(found.find((f) => f.reason === 'builder-frame').evidence, /framer\.com/);
+});
+
+test("a pinned control that does not touch the builder's frame stays, even when such a frame exists", () => {
+  const frame = el('iframe', { path: 'body>iframe:1', style: { position: 'fixed' }, rect: [0, 0, 1440, 900], attrs: { src: 'https://framer.com/edit' } });
+  const toTop = el('button', { path: 'body>button:1', style: { position: 'fixed' }, rect: [1380, 820, 40, 40], text: 'Top' });
+  const touches = new Map([['body>button:1', new Set(['body'])]]);
+  const found = findExcludable(tree([toTop, frame]), { viewWidths: WIDTHS, touches });
+  assert.deepEqual(found.map((f) => f.path), ['body>iframe:1']);
+});
+
+test('a frame in the page flow from a service the page shows is never tooling', () => {
+  const video = el('iframe', { path: 'body>iframe:1', rect: [0, 400, 800, 450], attrs: { src: 'https://www.youtube.com/embed/x' } });
+  assert.deepEqual(findExcludable(tree([video]), { viewWidths: WIDTHS }), []);
+});
+
+test('excluded text is matched with its white space folded, as the box index keys it', () => {
+  const keys = excludedFor([{ page: '/', text: 'Edit   Content' }], '/');
+  assert.ok(keys.has('edit content'));
+});

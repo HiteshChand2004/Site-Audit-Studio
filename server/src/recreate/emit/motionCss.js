@@ -1,5 +1,6 @@
-// The motion rules of the stylesheet (ir.motion, ir/motion.js): hover and focus states, scroll-reveal states and
-// animations, loops the page's own CSS did not carry. Elements are selected by their motion tokens
+// The motion rules of the stylesheet (ir.motion, ir/motion.js): hover and focus states, the transition an effect gets
+// when the original timed it with script, scroll-reveal states and animations, loops the page's own CSS did not
+// carry. Elements are selected by their motion tokens
 // (`data-motion="h1 rv r2"`), so no original class name is needed and equal effects share one rule.
 // Reveal rules apply only under `.js-motion` (set by js/motion.js) and not for visitors who prefer reduced motion:
 // without script the page is shown finished.
@@ -59,6 +60,18 @@ export function motionCss(m, opts) {
     for (const x of f.sibs ?? []) focus.push(block(sibSel(f.token, x, ':focus-visible'), D(x.decls)));
   }
   if (focus.some(Boolean)) out.push(`/* Keyboard focus */\n${focus.filter(Boolean).join('\n')}`);
+
+  // Effects the original ran with JavaScript (no state rule, no transition of its own: ir/motion.js synthTransition).
+  // The copy carries none of the original's script, so without this the end state above would be reached in one
+  // frame. The transition sits on the element at rest, so the effect eases out again as well, and it is written only
+  // where the original had no transition - nothing of the original is overruled.
+  const timed = [];
+  for (const e of [...m.hover, ...m.focus]) {
+    if (e.transition) timed.push(block(sel(e.token), `    transition: ${e.transition};`, '  '));
+    for (const k of e.kids ?? []) if (k.transition) timed.push(block(sel(k.token), `    transition: ${k.transition};`, '  '));
+    for (const x of e.sibs ?? []) if (x.transition) timed.push(block(sel(x.token), `    transition: ${x.transition};`, '  '));
+  }
+  if (timed.some(Boolean)) out.push(`/* The time an effect the original animated with script takes in the copy */\n@media (prefers-reduced-motion: no-preference) {\n${timed.filter(Boolean).join('\n')}\n}`);
 
   // Scroll states of bars: js/motion.js adds `is-scrolled` to the bar (`sN`) past its data-scroll-at.
   const scrolled = [];

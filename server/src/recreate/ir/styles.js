@@ -341,15 +341,20 @@ export function viewportStyle(style, node, v, chain) {
     }
   }
 
+  // "The window, but never less than N px" (capture/viewport.js floorOf): the floor read at a shorter window.
+  const floored = (value) => {
+    const floor = vp.floor != null ? round(size.h(vp.floor)) : null;
+    return value && floor > 0 ? `max(${floor}px, ${value})` : value;
+  };
   if (vp.mh) {
-    const value = followWindow(vp.mh[0], vp.mh[1], [h1, h2]);
+    const value = floored(followWindow(vp.mh[0], vp.mh[1], [h1, h2]));
     if (value) {
       style['min-height'] = value;
       // The px height the capture guessed for a box without in-flow content would cap it at the captured screen.
       if (px(style.height) != null) delete style.height;
     }
   } else if (heightChanged && !(abs && style.top && style.bottom && style.height == null)) {
-    const value = followWindow(size.h(vp.h[0]), size.h(vp.h[1]), [h1, h2]);
+    const value = floored(followWindow(size.h(vp.h[0]), size.h(vp.h[1]), [h1, h2]));
     if (value) {
       if (px(style.height) != null) style.height = value;
       if (px(style['min-height']) != null) style['min-height'] = value;

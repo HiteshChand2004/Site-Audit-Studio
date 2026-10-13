@@ -104,8 +104,33 @@ function placement(node, viewWidths) {
  *   dismissed: paths of controls whose click made something go away for good (capture/clicks.js)
  * @returns {{ path: string, reason: string, evidence: string, rect: number[]|null, text: string }[]}
  */
-export function findExcludable(tree, { dismissed = new Set(), viewWidths = { desktop: 1440 }, hosts = PLATFORM_CDN_HOSTS } = {}) {
+export function findExcludable(tree, { dismissed = new Set(), touches = new Map(), viewWidths = { desktop: 1440 }, hosts = PLATFORM_CDN_HOSTS } = {}) {
   const out = [];
+  // The builder's own tooling: a frame pinned to the window that loads from the platform's own host (an editor or
+  // preview bar the platform injects), whatever its size - it is often stretched over the window and clipped to
+  // nothing until opened. A page's own embeds come from the services they show, never from the builder's host.
+  const tools = new Set();
+  const findTools = (node) => {
+    if (!node?.tag) return;
+    if (node.tag === 'iframe' && node.attrs?.src && placement(node, viewWidths)) {
+      const host = platformCdnHost(node.attrs.src, hosts);
+      if (host) {
+        const path = node.cpath ?? node.path;
+        tools.add(String(path));
+        out.push({ path, reason: 'builder-frame', evidence: `a frame pinned to the window, loaded from ${host}`, rect: placement(node, viewWidths).rect, text: '' });
+      }
+    }
+    for (const child of node.children ?? []) findTools(child);
+  };
+  findTools(tree.root);
+  // A control whose click changed such a frame belongs to the same tooling (`touches`: trigger path → paths it changed).
+  const opensTool = (path) => {
+    for (const [trigger, changed] of touches) {
+      if (trigger !== path && !String(trigger).startsWith(`${path}>`)) continue;
+      if ([...changed].some((p) => [...tools].some((t) => p === t || String(p).startsWith(`${t}>`)))) return true;
+    }
+    return false;
+  };
   const walk = (node) => {
     if (!node?.tag) return;
     const place = placement(node, viewWidths);
@@ -115,7 +140,11 @@ export function findExcludable(tree, { dismissed = new Set(), viewWidths = { des
       const text = textOf(node).replace(/\s+/g, ' ').trim().slice(0, 60);
       const platformUrl = urls.map((u) => platformCdnHost(u, hosts)).find(Boolean);
 
-      if (place.small && place.corner && platformUrl) {
+      if (tools.has(String(node.cpath ?? node.path))) {
+        // already listed
+      } else if (place.small && tools.size && opensTool(String(node.cpath ?? node.path))) {
+        out.push({ path: node.cpath ?? node.path, reason: 'builder-control', evidence: 'pinned to the window, and its click changed the builder\'s own frame', rect: place.rect, text });
+      } else if (place.small && place.corner && platformUrl) {
         out.push({ path: node.cpath ?? node.path, reason: 'builder-badge', evidence: `pinned to a corner and points at ${platformUrl}`, rect: place.rect, text });
       } else if (place.spans && [...dismissed].some((p) => String(p).startsWith(String(node.cpath ?? node.path)))) {
         out.push({ path: node.cpath ?? node.path, reason: 'consent-banner', evidence: 'fixed across the window, and a control inside it made it go away for good', rect: place.rect, text });

@@ -46,3 +46,26 @@ test('script-driven hovers are found on every element of a long, smoothly scroll
   assert.equal(found.stats.candidates, N);
   assert.ok(hovered.length >= N - 1, `${hovered.length} of ${N} hovers found (${JSON.stringify(found.stats)})`);
 });
+
+// A hover rule whose selector holds an attribute selector: `~=` and a quoted space are not combinators. Read as one,
+// the element holding the state came out as `="card"]` and the rule was left to the slow mouse probe as "invalid".
+test('hover rules with attribute selectors are read from the stylesheet, not dropped as invalid', async () => {
+  const html = `<!doctype html><html><head><style>
+body { margin: 0; font: 16px sans-serif }
+[data-kind~="card"]:hover { background-color: rgb(1, 2, 3) }
+a[aria-label="Open menu"]:hover { color: rgb(4, 5, 6) }
+[data-state=open] > button:hover { color: rgb(7, 8, 9) }
+</style></head><body>
+<div data-kind="card big">Card</div><a href="#" aria-label="Open menu">Menu</a>
+<div data-state="open"><button type="button">Close</button></div>
+</body></html>`;
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.setContent(html);
+  const found = await captureInteractions(page, { budgetMs: 4000 });
+  await page.close();
+  const by = (tag) => found.hover.find((h) => h.tag === tag && h.source === 'css');
+  assert.equal(found.stats.fromRules.unsupportedBy.invalid, 0, JSON.stringify(found.stats.fromRules));
+  assert.deepEqual(by('div')?.changes?.['background-color']?.[1], 'rgb(1, 2, 3)');
+  assert.deepEqual(by('a')?.changes?.color?.[1], 'rgb(4, 5, 6)');
+  assert.deepEqual(by('button')?.changes?.color?.[1], 'rgb(7, 8, 9)');
+});

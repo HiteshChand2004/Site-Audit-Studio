@@ -288,7 +288,16 @@ export async function generateStage(ctx) {
       const found = motionByPath.get(t.info.path);
       // A control whose click did not restore the page changed something for good: that is what dismissing is.
       const dismissed = new Set((found?.clicks?.widgets ?? []).filter((w) => w.closes === false).map((w) => w.path));
-      const list = findExcludable(t, { dismissed, viewWidths: VIEW_WIDTHS });
+      // What each control's click changed, so a control that opens the builder's own frame can be told apart.
+      const touches = new Map();
+      for (const w of found?.clicks?.widgets ?? []) {
+        const trigger = w.trigger ?? w.path;
+        if (!trigger) continue;
+        const changed = touches.get(trigger) ?? new Set();
+        for (const kind of ['shown', 'hidden', 'added', 'attrs', 'moved']) for (const c of w.change?.[kind] ?? []) if (c?.path) changed.add(c.path);
+        touches.set(trigger, changed);
+      }
+      const list = findExcludable(t, { dismissed, touches, viewWidths: VIEW_WIDTHS });
       const removed = new Set(applyExcludes(t, list));
       for (const e of list) if (removed.has(e.path)) excluded.push({ page: t.info.path, ...e });
     }

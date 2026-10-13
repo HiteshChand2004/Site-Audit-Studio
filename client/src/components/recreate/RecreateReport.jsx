@@ -266,6 +266,8 @@ function Motion({ result }) {
   for (const s of m.loops?.skipped ?? []) notRebuilt[s.reason] = (notRebuilt[s.reason] ?? 0) + 1;
   const timed = m.reveal?.skipped?.timed ?? 0;
   const scripts = result.outputs?.html?.scripts;
+  // Effects the original ran with its own script: the copy rebuilds them in CSS and times them itself.
+  const scripted = (m.hover?.scripted ?? 0) + (m.focus?.scripted ?? 0);
   return (
     <section aria-label="Motion" className={styles.section}>
       <div className={styles.head}>
@@ -280,6 +282,7 @@ function Motion({ result }) {
       </ul>
       <p className={styles.note}>
         {scripts ? 'Scroll reveal needs one small generated script (js/motion.js); without script, or with reduced motion, the page shows finished. ' : ''}
+        {scripted > 0 && `${plural(scripted, 'effect')} the original played with its own code: rebuilt in plain CSS, over the time it was measured to take. `}
         {Object.keys(notRebuilt).length > 0 && `Not rebuilt: ${Object.entries(notRebuilt).map(([reason, n]) => `${plural(n, 'loop')} ${SKIP_REASON[reason] ?? reason}`).join(', ')}. `}
         {timed > 0 && `${plural(timed, 'timed effect')} (rotating headlines, timers) left as the page's own CSS. `}
       </p>

@@ -14,7 +14,10 @@
 // Without script nothing is hidden: the reveal rules only apply under `.js-motion`, which the script sets. CSS loops
 // the stylesheet already carries (animation-name in the element's captured style) are counted, not written twice.
 //
-// ir.motion = { version, hover: [{ token, decls, pseudo?, kids? }], focus: [...], reveal: [{ token, opacity?, translate?,
+// An effect the original drove with script (no state rule, no transition of its own) also carries the `transition`
+// the copy needs to arrive the same way, over the time the probe measured: synthTransition below.
+//
+// ir.motion = { version, hover: [{ token, decls, transition?, pseudo?, kids? }], focus: [...], reveal: [{ token, opacity?, translate?,
 //   scale?, rotate?, filter?, duration, easing }], delays: [ms], loops: [{ token, name, keyframes, timing }], script: boolean }
 import { readFile } from 'node:fs/promises';
 import { commonPath } from '../capture/clicks.js';
@@ -138,6 +141,51 @@ function changeDecls(changes, assetFile) {
     out[prop] = value;
   }
   return out;
+}
+
+// The properties a synthetic transition may animate: the ones a browser interpolates and a visitor reads as
+// movement. `display`, `visibility`, `background-image`, `cursor` and the like change in one step by nature and are
+// left to do so.
+const SYNTH_PROP = /^(transform|translate|scale|rotate|opacity|filter|backdrop-filter|clip-path|box-shadow|text-shadow|color|fill|stroke|letter-spacing|word-spacing|font-weight|outline-color|outline-offset|outline-width|row-gap|column-gap|gap|background-color|background-position|background-size|width|height|min-width|min-height|max-width|max-height|left|top|right|bottom|flex-basis|border-(top|right|bottom|left)-(color|width)|border-(top|bottom)-(left|right)-radius|text-decoration-(color|thickness)|text-underline-offset|margin-(top|right|bottom|left)|padding-(top|right|bottom|left))$/;
+// The copy's own timing for an effect the original ran with script. The measured time is used wherever there is one
+// (capture/interactions.js scriptedMs); these only bound it, so one slow read cannot give a page a sluggish hover.
+const SYNTH_MS = 250;
+const SYNTH_MIN_MS = 120;
+const SYNTH_MAX_MS = 700;
+// A change a visitor asks for arrives quickly and comes to rest softly; the same curve in both directions, so the
+// effect leaves the way it came.
+const SYNTH_EASING = 'ease-out';
+const DURATION_VALUE = /^-?[\d.]+m?s$/;
+const msList = (v) => String(v ?? '').split(',').map((s) => s.trim()).filter((s) => DURATION_VALUE.test(s))
+  .map((s) => (s.endsWith('ms') ? parseFloat(s) : parseFloat(s) * 1000));
+
+/** Does the element animate the change itself? Then its own `transition` is copied with its styles and kept. */
+function hasOwnTransition(tr) {
+  if (!tr || String(tr.property ?? 'none') === 'none') return false;
+  return msList(tr.duration).some((ms) => ms > 0);
+}
+
+/**
+ * The transition that lets a rebuilt hover / focus effect arrive the way the original's did when the original drove it
+ * with JavaScript. Such an element has no state rule and no transition of its own, so the copy - which carries no
+ * script of the original - would snap into the end state in a single frame. Written on the element at rest, so the
+ * effect eases out again as well.
+ * Only for an effect the probe timed (`scripted`, a measured duration > 0: an end state the page set in one step
+ * stays a step), only for an element with no transition of its own (so nothing the original wrote is overruled) and
+ * only for the properties a browser interpolates.
+ * @param {object} decls  the end values of this part of the effect
+ * @param {{ scripted?: boolean, scriptedMs?: number, transition?: object, transitionOut?: object }} [entry]
+ * @returns {string|null} the value of a `transition` declaration, or null when the original needs none
+ */
+export function synthTransition(decls, entry) {
+  if (!entry?.scripted) return null;
+  // The transition of the element at rest: what it had before the mouse arrived.
+  if (hasOwnTransition(entry.transitionOut ?? entry.transition)) return null;
+  const props = Object.keys(decls ?? {}).filter((p) => SYNTH_PROP.test(p));
+  if (!props.length) return null;
+  const measured = Number(entry.scriptedMs);
+  const ms = Math.min(SYNTH_MAX_MS, Math.max(SYNTH_MIN_MS, Math.round(Number.isFinite(measured) && measured > 0 ? measured : SYNTH_MS)));
+  return props.map((p) => `${p} ${ms}ms ${SYNTH_EASING}`).join(', ');
 }
 
 const isZero = (v) => /^0(\.0+)?(px)?$/.test(String(v ?? '').trim());
@@ -433,8 +481,10 @@ export function applyMotion(site, byPath) {
     pages: 0,
     scrolled: { bars: 0 },
     widgets: { elements: 0, effects: 0, skipped: { noState: 0, renderedOnOpen: 0, unmapped: 0, empty: 0, kinds: {} } },
-    hover: { elements: 0, effects: 0, fromRules: 0, spread: 0, sibs: 0, skipped: { script: 0, unmapped: 0, empty: 0, combinator: 0, kidNotDescendant: 0 } },
-    focus: { elements: 0, effects: 0, fromRules: 0, spread: 0, sibs: 0, skipped: { unmapped: 0, empty: 0, combinator: 0, kidNotDescendant: 0 } },
+    // `dynamic` / `scripted` / `synthesized`: elements the probe only reached by a script's fingerprint, effects the
+    // original timed with script, and the effects the copy therefore times itself (synthTransition).
+    hover: { elements: 0, effects: 0, fromRules: 0, spread: 0, sibs: 0, dynamic: 0, scripted: 0, synthesized: 0, skipped: { script: 0, unmapped: 0, empty: 0, combinator: 0, kidNotDescendant: 0 } },
+    focus: { elements: 0, effects: 0, fromRules: 0, spread: 0, sibs: 0, dynamic: 0, scripted: 0, synthesized: 0, skipped: { unmapped: 0, empty: 0, combinator: 0, kidNotDescendant: 0 } },
     reveal: { elements: 0, effects: 0, replay: 0, belowFold: 0, skipped: { timed: 0, unmapped: 0, flat: 0 } },
     loops: { carried: 0, rebuilt: 0, skipped: [] },
     // An exact copy probes the narrow views too: what each found, and which kinds were placed from it.
@@ -521,7 +571,7 @@ export function applyMotion(site, byPath) {
             else s.skipped.kidNotDescendant = (s.skipped.kidNotDescendant ?? 0) + 1;
             continue;
           }
-          kids.push({ node: kidNode, decls: d });
+          kids.push({ node: kidNode, decls: d, transition: synthTransition(d, { ...entry, transition: k.transition, transitionOut: null }) });
         }
         // Elements beside or around the hovered one (capture/interactions.js relatedOf): a card grid dimming its
         // other cards, a nav tinting the rest of the bar.
@@ -534,25 +584,29 @@ export function applyMotion(site, byPath) {
             s.skipped.combinator = (s.skipped.combinator ?? 0) + 1;
             continue;
           }
-          sibs.push({ node: sibNode, rel, decls: d });
+          sibs.push({ node: sibNode, rel, decls: d, transition: synthTransition(d, { ...entry, transition: sib.transition, transitionOut: null }) });
         }
         if (!Object.keys(decls).length && !Object.keys(pseudo).length && !kids.length && !sibs.length) {
           s.skipped.empty++;
           continue;
         }
-        const key = JSON.stringify([decls, pseudo, kids.map((k) => k.decls), sibs.map((x) => [x.rel, x.decls])]);
+        // The original drove this with script: the copy times the change itself, over the measured duration.
+        const transition = synthTransition(decls, entry);
+        const key = JSON.stringify([decls, pseudo, kids.map((k) => [k.decls, k.transition]), sibs.map((x) => [x.rel, x.decls, x.transition]), transition]);
         let effect = reg[kind].get(key);
         if (!effect) {
           const n = reg[kind].size + 1;
           effect = {
             token: `${prefix}${n}`,
             decls,
+            ...(transition && { transition }),
             ...(Object.keys(pseudo).length && { pseudo }),
-            kids: kids.map((k, i) => ({ token: `${prefix}${n}k${i + 1}`, decls: k.decls })),
-            ...(sibs.length && { sibs: sibs.map((x, i) => ({ token: `${prefix}${n}s${i + 1}`, rel: x.rel, decls: x.decls })) }),
+            kids: kids.map((k, i) => ({ token: `${prefix}${n}k${i + 1}`, decls: k.decls, ...(k.transition && { transition: k.transition }) })),
+            ...(sibs.length && { sibs: sibs.map((x, i) => ({ token: `${prefix}${n}s${i + 1}`, rel: x.rel, decls: x.decls, ...(x.transition && { transition: x.transition }) })) }),
           };
           reg[kind].set(key, effect);
           s.effects++;
+          if (transition || effect.kids.some((k) => k.transition) || (effect.sibs ?? []).some((x) => x.transition)) s.synthesized = (s.synthesized ?? 0) + 1;
         }
         tokenize(node, effect.token);
         kids.forEach((k, i) => tokenize(k.node, effect.kids[i].token));
@@ -560,6 +614,10 @@ export function applyMotion(site, byPath) {
         s.elements++;
         s.sibs = (s.sibs ?? 0) + sibs.length;
         if (entry.source === 'css') s.fromRules++;
+        // Evidence for the report: the effect the original ran with script, and the mark that made the probe look at
+        // an element no rule, cursor or transition described (capture/interactions.js dynamicSignature).
+        if (entry.scripted) s.scripted = (s.scripted ?? 0) + 1;
+        if (entry.dyn) s.dynamic = (s.dynamic ?? 0) + 1;
       }
     }
 

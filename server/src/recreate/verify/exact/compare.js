@@ -350,7 +350,7 @@ export function excludedFor(excluded, pagePath) {
   const texts = new Set();
   for (const e of excluded ?? []) {
     if (e.page && e.page !== pagePath) continue;
-    const key = String(e.text ?? '').replace(/s+/g, ' ').trim().toLowerCase();
+    const key = String(e.text ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
     if (key) texts.add(key.slice(0, 120));
   }
   return texts;

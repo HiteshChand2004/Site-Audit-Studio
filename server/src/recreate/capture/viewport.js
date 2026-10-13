@@ -4,8 +4,9 @@
 // reflows sideways); a box whose height or offset changed with it follows the window, and by how much says how
 // (ir/styles.js viewportStyle turns it into dvh / %). Nothing is identified by class name or framework.
 //
-// Output: `node.vp = { vh: [h1, h2], h: [a, b], top: [a, b], bottom: [a, b], mh: [a, b] }` on the snapshot nodes whose box
-// changed, written into capture/<slug>/<view>.json.
+// Output: `node.vp = { vh: [h1, h2], h: [a, b], top: [a, b], bottom: [a, b], mh: [a, b], floor? }` on the snapshot nodes
+// whose box changed, written into capture/<slug>/<view>.json. `floor` = the px height a box keeps at a shorter window
+// (read once more at SHORT_RATIO of the height), the "never less than" of `height: 800px; min-height: 100vh`.
 
 /** Page function: box, insets and min-height of every element, keyed by snapshot path (capture/snapshot.js). */
 export function readBoxes({ maxNodes }) {
@@ -36,6 +37,9 @@ export function readBoxes({ maxNodes }) {
   return out;
 }
 
+/** The shorter window the floor is read at, as a share of the captured one. */
+export const SHORT_RATIO = 0.55;
+
 const pxOf = (v) => (typeof v === 'string' && /px$/.test(v) ? parseFloat(v) : null);
 
 /**
@@ -65,6 +69,55 @@ export function compareBoxes(before, after, [h1, h2]) {
     });
   }
   return changed;
+}
+
+/**
+ * Page function: for the given paths, the box height at the current window and the height the box would have without
+ * any height or min-height of its own (its content, or what its flex / grid parent stretches it to). The inline style
+ * is put back at once, so the page is left as it was.
+ */
+export function readFloors({ paths }) {
+  const SKIP_TAGS = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
+  const wanted = new Set(paths);
+  const out = {};
+  const walk = (el, path) => {
+    if (wanted.has(path) && el instanceof HTMLElement) {
+      const cs = getComputedStyle(el);
+      const h = el.offsetHeight;
+      const saved = el.getAttribute('style');
+      el.style.setProperty('height', 'auto', 'important');
+      el.style.setProperty('min-height', '0px', 'important');
+      const free = el.offsetHeight;
+      if (saved == null) el.removeAttribute('style');
+      else el.setAttribute('style', saved);
+      out[path] = { h, free, mh: parseFloat(cs.minHeight) || 0 };
+    }
+    if (el.tagName === 'svg' || el.tagName === 'CANVAS') return;
+    const tagIndex = {};
+    const root = el.shadowRoot && el.shadowRoot.mode === 'open' ? el.shadowRoot : el;
+    for (const child of root.children) {
+      if (SKIP_TAGS.has(child.tagName)) continue;
+      const t = child.tagName.toLowerCase();
+      tagIndex[t] = (tagIndex[t] || 0) + 1;
+      walk(child, `${path}>${t}:${tagIndex[t]}`);
+    }
+  };
+  if (document.body) walk(document.body, 'body');
+  return out;
+}
+
+/**
+ * The px floor under a box that follows the window: `height: 800px; min-height: 100vh` is "the window, but never less
+ * than 800 px" - a taller window alone reads it as a plain 100vh. At a shorter window such a box stays taller than
+ * both its min-height and what its content / parent would give it; that extra height is a declared one, the floor.
+ * @returns {number|null}
+ */
+export function floorOf(read, vp, hs) {
+  if (!read) return null;
+  // Where the window alone would put it (the line through the two reads), so a plain 50vh is not a floor.
+  const k = (vp.h[1] - vp.h[0]) / (vp.vh[1] - vp.vh[0]);
+  const byWindow = vp.h[0] + k * (hs - vp.vh[0]);
+  return read.h > Math.max(read.free, read.mh, byWindow) + 1.5 ? read.h : null;
 }
 
 /** Writes the vp entries onto the snapshot tree (by path). Returns how many nodes got one. */
@@ -99,7 +152,20 @@ export async function probeViewportHeight(page, view, { maxNodes = 6000 } = {}) 
   try {
     await settle();
     const after = await page.evaluate(readBoxes, { maxNodes });
-    return { changed: compareBoxes(before, after, [h1, h2]), ms: Date.now() - started };
+    const changed = compareBoxes(before, after, [h1, h2]);
+    // A shorter window too, for the boxes that followed: what they keep there is a px floor (floorOf).
+    const followers = [...changed].filter(([, vp]) => vp.mh || Math.abs(vp.h[0] - vp.h[1]) > 1.5).map(([path]) => path);
+    if (followers.length) {
+      const hs = Math.max(200, Math.round(h1 * SHORT_RATIO));
+      await page.setViewportSize({ width: view.width, height: hs });
+      await settle();
+      const reads = await page.evaluate(readFloors, { paths: followers });
+      for (const path of followers) {
+        const floor = floorOf(reads[path], changed.get(path), hs);
+        if (floor != null) changed.get(path).floor = floor;
+      }
+    }
+    return { changed, ms: Date.now() - started };
   } finally {
     await page.setViewportSize({ width: view.width, height: h1 }).catch(() => {});
     await settle().catch(() => {});

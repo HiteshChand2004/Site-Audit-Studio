@@ -17,6 +17,17 @@ const MAX_PAGES = 6;
 // A little more than the capture of the original had (8 s): the probes go through the candidates in the same order, so the
 // recreate must get at least as far, or an element the original reached would look missing just because time ran out.
 const HOVER_BUDGET_MS = 10000;
+// ...and when the original's probe went further (an unlimited or exact capture probes every candidate), the copy gets the
+// time to probe as many: ~1.5 s per element (aim, a transition of up to 1 s, the read back), at most a minute a page.
+// A fixed 10 s probed 11 of 40 elements on the copy where the capture had probed all 40, and the row read as lost hovers.
+export const HOVER_MS_PER_PROBE = 1500;
+export const HOVER_BUDGET_MAX_MS = 60000;
+
+/** The hover budget the copy needs to get as far as the original's probe did. */
+export function hoverBudgetFor(oldMotion) {
+  const probed = oldMotion?.stats?.probed ?? 0;
+  return Math.max(HOVER_BUDGET_MS, Math.min(HOVER_BUDGET_MAX_MS, probed * HOVER_MS_PER_PROBE));
+}
 // The recreated site is served from loopback with nothing else to load: a quiet network shows within a second (was 3 s).
 const NETWORK_QUIET_MS = 1000;
 
@@ -34,7 +45,7 @@ export async function readOldMotion(recreateFolder, reportPages) {
 
 /**
  * Measures the recreated pages. Never throws for one page failing: that page is left out (and listed in `failed`).
- * @param {{ origin: string, pages: { slug: string, urlPath: string }[], deadline?: number, signal?: AbortSignal }} o
+ * @param {{ origin: string, pages: { slug: string, urlPath: string, hoverBudgetMs?: number }[], deadline?: number, signal?: AbortSignal }} o
  * @returns {Promise<{ pages: Map<string, object>, failed: { slug: string, error: string }[], skipped: string[] }>}
  */
 export async function measureNewMotion({ origin, pages, deadline = Infinity, signal }) {
@@ -56,8 +67,8 @@ export async function measureNewMotion({ origin, pages, deadline = Infinity, sig
         await page.waitForLoadState('networkidle', { timeout: NETWORK_QUIET_MS }).catch(() => {});
         const measured = await Promise.race([
           // No focus pass: the comparison (motionItems) reads reveals, loops and hover only; the hover probe keeps its time.
-          measureMotion(page, { budgetMs: HOVER_BUDGET_MS, focus: false }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), PAGE_BUDGET_MS)),
+          measureMotion(page, { budgetMs: p.hoverBudgetMs ?? HOVER_BUDGET_MS, focus: false }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), PAGE_BUDGET_MS + Math.max(0, (p.hoverBudgetMs ?? HOVER_BUDGET_MS) - HOVER_BUDGET_MS))),
         ]);
         result.pages.set(p.slug, measured);
       } catch (err) {

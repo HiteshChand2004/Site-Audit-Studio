@@ -3,7 +3,8 @@
 //   1. rules   - the :hover / :focus / :focus-visible / :focus-within / :active rules of every readable stylesheet,
 //                as authored (evidence; the class names do not survive into the recreate);
 //   2. hover   - for the interactive elements (links, buttons, fields, tabs, cursor: pointer, then plain transition
-//                hosts) the mouse moves onto the element and the computed styles of the element, its pseudo-elements
+//                hosts, then the elements a script animates: dynamicSignature() in install()) the mouse moves onto
+//                the element and the computed styles of the element, its pseudo-elements
 //                (::before / ::after) and its descendants (3 levels) are compared with their state just before the
 //                hover. This is the JavaScript-driven path too: whatever a script does on mouseenter shows in the
 //                computed styles, with or without a :hover rule;
@@ -32,6 +33,15 @@ const PSEUDO_EXTRA = ['width', 'height', 'left', 'right', 'top', 'bottom'];
 // Also compared when the stylesheets' state rules are applied (forceRuleStates), together with every property those rules
 // declare: an animation that starts on hover, a marquee that pauses, a gap that widens.
 const RULE_EXTRA = ['animation-name', 'animation-duration', 'animation-timing-function', 'animation-delay', 'animation-iteration-count', 'animation-direction', 'animation-fill-mode', 'animation-play-state', 'row-gap', 'column-gap'];
+// An effect a script drives has no transition to wait for, so how long it takes is measured instead of guessed: the
+// element is read every DYN_STEP_MS until it holds still, at most DYN_STEPS times. ir/motion.js turns the time it
+// took into the copy's own transition, so a rebuilt effect arrives over the same stretch instead of in one frame.
+const DYN_STEP_MS = 90;
+const DYN_STEPS = 6;
+// How many of the elements whose only sign of motion is a script's fingerprint are probed on one page (the rest are
+// counted): the real controls keep their share of the budget, and the mouse probe stays within its time.
+const DYNAMIC_SHARE = 0.25;
+const DYNAMIC_MIN = 4;
 
 /** Page function: the :hover / :focus / :active rules of the readable stylesheets. */
 function scanRules(opts) {
@@ -170,14 +180,36 @@ function forceRuleStates(opts) {
     const clone = `${part.slice(0, at)}[${ATTR[kind]}]${part.slice(at + len)}`;
     // The compound that holds the state: from the combinator before it to the one after it. Inside :has() it is the
     // contained element - the one the visitor's mouse is really on - and that is the element to force the state on.
+    // Combinators only count outside brackets and quotes: the `~` of `[data-x~="a"]` or the space in
+    // `[aria-label="Open menu"]` is part of an attribute selector, not a step to another element.
     const stop = /[\s>+~,)]/;
     let start = inHas >= 0 ? inHas : 0;
-    for (let i = at; i > start; i--) if (stop.test(part[i - 1])) { start = i; break; }
+    {
+      let depth = 0;
+      let q = null;
+      for (let i = start; i < at; i++) {
+        const c = part[i];
+        if (q) {
+          if (c === '\\') i++;
+          else if (c === q) q = null;
+        } else if (c === '"' || c === "'") q = c;
+        else if (c === '(' || c === '[') depth++;
+        else if ((c === ')' || c === ']') && depth > 0) depth--;
+        else if (depth === 0 && stop.test(c)) start = i + 1;
+      }
+    }
     let end = at + len;
     let depth = 0;
+    let q = null;
     for (; end < part.length; end++) {
       const c = part[end];
-      if (c === '(' || c === '[') depth++;
+      if (q) {
+        if (c === '\\') end++;
+        else if (c === q) q = null;
+        continue;
+      }
+      if (c === '"' || c === "'") q = c;
+      else if (c === '(' || c === '[') depth++;
       else if (c === ')' && depth === 0) break;
       else if (c === ')' || c === ']') depth--;
       else if (depth === 0 && stop.test(c)) break;
@@ -486,13 +518,17 @@ export async function cssStateEffects(page, { budgetMs = 1500 } = {}) {
 
 /**
  * Page function: picks the elements to probe and remembers them (window.__sasMotion). Links, buttons, fields and
- * roles come first, then cursor: pointer elements, then plain transition hosts; each group of equal elements is
- * probed `perSignature` times; the chosen ones are kept in document order. Elements whose effect the stylesheet
- * already gave (`skip`, paths) are not probed again.
- * @returns {{ candidates: object[], groups: object[], skipped: object, focusable: number }}
+ * roles come first, then cursor: pointer elements, then plain transition hosts, then the elements that carry nothing
+ * but a script's fingerprint (`dynamicSignature`: a will-change, a transform that does nothing, a motion property
+ * written inline, an attribute naming an animation). That last group is why this probe reaches a page whose motion
+ * lives entirely in JavaScript: such an element has no :hover rule, no pointer cursor and often no transition, so
+ * before it was never probed and its effect was lost together with the original's script.
+ * Each group of equal elements is probed `perSignature` times; the chosen ones are kept in document order. Elements
+ * whose effect the stylesheet already gave (`skip`, paths) are not probed again.
+ * @returns {{ candidates: object[], groups: object[], skipped: object, focusable: number, dynamic: number }}
  */
 function install(opts) {
-  const { limit, perSignature } = opts;
+  const { limit, perSignature, dynamicLimit = 0 } = opts;
   const skip = new Set(opts.skip || []);
   const SKIP_TAGS = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
   const INTERACTIVE = new Set(['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'SUMMARY', 'LABEL']);
@@ -528,9 +564,34 @@ function install(opts) {
     return [Math.round(r.left + scrollX), Math.round(r.top + scrollY), Math.round(r.width), Math.round(r.height)];
   };
 
+  // The marks a script leaves on an element it animates. None of them is something a stylesheet has a reason to
+  // write, and none names a framework, so the rule holds for any site:
+  //   will-change     the page promised the compositor an animatable property
+  //   inline-motion   a motion property stands in the style attribute - only a script puts it there
+  //   idle-transform  a transform that does nothing (matrix(1, 0, 0, 1, 0, 0)): what a finished tween leaves behind
+  //   attr:<name>     a data attribute naming an animation or a layout step (data-animate, data-slide-index, …)
+  // The name of the mark is reported as evidence only; what the copy rebuilds comes from the measured delta.
+  const WILL_CHANGE = /\b(transform|translate|scale|rotate|opacity|filter|backdrop-filter|clip-path)\b/;
+  const INLINE_MOTION = /(?:^|;)\s*(?:-webkit-)?(?:transform|translate|scale|rotate|opacity|filter|backdrop-filter|clip-path|will-change)\s*:/i;
+  const IDLE_TRANSFORM = /^matrix\(\s*1(?:\s*,\s*0){2}\s*,\s*1(?:\s*,\s*0){2}\s*\)$|^matrix3d\(\s*1(?:\s*,\s*0){4}\s*,\s*1(?:\s*,\s*0){4}\s*,\s*1(?:\s*,\s*0){4}\s*,\s*1\s*\)$/;
+  const MOTION_ATTR = /(?:^|[-_])(anim|animate|animation|motion|appear|reveal|parallax|inview|in-view|transition|slide|fade|carousel|index)(?:[-_]|$)/;
+  const dynamicSignature = (el, cs) => {
+    const wc = String(cs.willChange || '');
+    if (wc && wc !== 'auto' && WILL_CHANGE.test(wc)) return 'will-change';
+    const inline = el.getAttribute('style');
+    if (inline && INLINE_MOTION.test(`;${inline}`)) return 'inline-motion';
+    const tf = String(cs.transform || 'none').replace(/\s+/g, ' ').trim();
+    if (tf !== 'none' && IDLE_TRANSFORM.test(tf)) return 'idle-transform';
+    for (const a of el.attributes) {
+      const name = a.name.toLowerCase();
+      if (name.startsWith('data-') && MOTION_ATTR.test(name.slice(5))) return `attr:${name.slice(0, 40)}`;
+    }
+    return null;
+  };
+
   const found = [];
   const bySig = new Map();
-  const skipped = { limit: 0, duplicate: 0, hidden: 0 };
+  const skipped = { limit: 0, duplicate: 0, hidden: 0, dynamic: 0 };
   let focusable = 0;
   let seen = 0;
   const all = document.body ? document.body.querySelectorAll('*') : [];
@@ -557,6 +618,10 @@ function install(opts) {
     if (cs.cursor === 'pointer' && parentCursor !== 'pointer') reasons.push('pointer');
     const dur = parseFloat((cs.transitionDuration || '0s').split(',')[0]);
     if (dur > 0 && cs.transitionProperty !== 'none') reasons.push('transition');
+    // Last chance for an element the page animates with script alone: nothing above describes it, but a mark of a
+    // script that has already touched its transform or opacity does.
+    const dyn = reasons.length ? null : dynamicSignature(el, cs);
+    if (dyn) reasons.push('dynamic');
     if (!reasons.length) continue;
     const path = pathOf(el);
     if (!path || skip.has(path)) continue;
@@ -566,42 +631,57 @@ function install(opts) {
     group.count++;
     // All members, so an effect the probe finds on a few of them can be given to the rest (ir/motion.js).
     if (group.paths.length < 120) group.paths.push(path);
-    const priority = reasons.includes('focusable') || reasons.includes('interactive') || reasons.includes('role') ? 0 : reasons.includes('pointer') ? 1 : 2;
+    const priority = reasons.includes('focusable') || reasons.includes('interactive') || reasons.includes('role') ? 0
+      : reasons.includes('pointer') ? 1 : reasons.includes('transition') ? 2 : 3;
     found.push({
       order: found.length, priority, el, path, tag: el.tagName.toLowerCase(), sig, reasons, cursor: cs.cursor,
+      ...(dyn && { dyn }),
       text: (el.innerText || el.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ').slice(0, 60),
     });
   }
   const chosen = [];
   const chosenSet = new Set();
+  let dynamic = 0;
   for (const c of [...found].sort((a, b) => a.priority - b.priority || a.order - b.order)) {
     const group = bySig.get(c.sig);
     if (group.probed >= perSignature) {
       skipped.duplicate++;
       continue;
     }
-    // A plain transition host inside a chosen element (3 levels) is covered by that element's descendants.
-    if (c.priority === 2) {
+    // A plain transition host or a script-animated box inside a chosen element (3 levels) is covered by that
+    // element's descendants, which the probe reads anyway.
+    if (c.priority >= 2) {
       let up = c.el.parentElement;
       let covered = false;
       for (let i = 0; i < 3 && up && !covered; i++, up = up.parentElement) covered = chosenSet.has(up);
       if (covered) continue;
+    }
+    // The script-animated boxes come last and take a share of the page's budget, never all of it: a page that
+    // promises the compositor a hundred transforms must not push its real controls out of the probe.
+    if (c.priority === 3 && dynamic >= dynamicLimit) {
+      skipped.dynamic++;
+      continue;
     }
     if (chosen.length >= limit) {
       skipped.limit++;
       continue;
     }
     group.probed++;
+    if (c.priority === 3) dynamic++;
     chosen.push(c);
     chosenSet.add(c.el);
   }
   chosen.sort((a, b) => a.order - b.order); // document order: the page is scrolled down once, not up and down
   window.__sasMotion = { chosen: chosen.map((c) => c.el), index: new Map(chosen.map((c, i) => [c.el, i])), pathOf };
   return {
-    candidates: chosen.map((c, i) => ({ i, path: c.path, tag: c.tag, sig: c.sig, reasons: c.reasons, cursor: c.cursor, text: c.text, rect: docRect(c.el) })),
+    candidates: chosen.map((c, i) => ({
+      i, path: c.path, tag: c.tag, sig: c.sig, reasons: c.reasons, cursor: c.cursor, ...(c.dyn && { dyn: c.dyn }),
+      text: c.text, rect: docRect(c.el),
+    })),
     groups: [...bySig.values()].filter((g) => g.count > 1).sort((a, b) => b.count - a.count).slice(0, 40),
     skipped,
     focusable,
+    dynamic,
   };
 }
 
@@ -726,6 +806,9 @@ function transitionMs(state) {
   return longest;
 }
 
+/** Everything a read of one element holds, as one string: two equal keys mean the element is standing still. */
+const stateKey = (s) => JSON.stringify([s.values, s.pseudo, s.kids.map((k) => k.values), s.rect]);
+
 const changed = (a, b) => {
   const out = {};
   for (const k of Object.keys(b)) if (a[k] !== b[k]) out[k] = [a[k], b[k]];
@@ -834,10 +917,12 @@ export function keepReverting(rest, back, d) {
 /**
  * Probes a page (desktop view) for hover and focus effects. Hover may use up to 60 % of the budget, focus the rest.
  * @param {import('playwright').Page} page
- * @param {{ limit?: number, perSignature?: number, focusStops?: number, budgetMs?: number }} [o]
+ * @param {{ limit?: number, perSignature?: number, focusStops?: number, budgetMs?: number, dynamicLimit?: number }} [o]
+ *   `dynamicLimit`: how many elements whose only sign of motion is a script's fingerprint are probed (the rest are
+ *   counted in `stats.skipped.dynamic`); a quarter of the page's limit by default.
  * @returns {Promise<object>} the content of motion.json
  */
-export async function captureInteractions(page, { limit = 40, perSignature = 3, focusStops = 80, budgetMs = 10000, perCandidateMs = 900, maxHoverMs = Math.min(15000, budgetMs * 2), foreignCss = null } = {}) {
+export async function captureInteractions(page, { limit = 40, perSignature = 3, focusStops = 80, budgetMs = 10000, perCandidateMs = 900, maxHoverMs = Math.min(15000, budgetMs * 2), foreignCss = null, dynamicLimit = Math.max(DYNAMIC_MIN, Math.round(limit * DYNAMIC_SHARE)) } = {}) {
   const started = Date.now();
   // Set once the candidates are known: the mouse probe gets time per element to probe (within bounds), focus the rest.
   let hoverDeadline = started + budgetMs * 0.6;
@@ -851,14 +936,20 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
   } catch (err) {
     forced.stats.error = String(err?.message ?? err).split('\n')[0];
   }
-  const picked = await page.evaluate(install, { limit, perSignature, skip: forced.hover.map((h) => h.path) });
+  const picked = await page.evaluate(install, { limit, perSignature, dynamicLimit, skip: forced.hover.map((h) => h.path) });
   // A fixed share of the budget probed ~6 elements of 30 on a busy page: script-driven hovers further down were never
   // reached. The hover time follows the elements to probe (~0.9 s each: scroll, settle, hover, check it reverts).
   const hoverMs = Math.max(budgetMs * 0.6, Math.min(maxHoverMs, picked.candidates.length * perCandidateMs));
   hoverDeadline = started + hoverMs;
   deadline = hoverDeadline + budgetMs * 0.4;
   const args = (i) => ({ i, props: MOTION_PROPS, pseudoProps: PSEUDO_EXTRA });
-  const stats = { candidates: picked.candidates.length, focusable: picked.focusable, probed: 0, hovered: 0, focused: 0, noChange: 0, notReverted: 0, covered: 0, skipped: picked.skipped, timedOut: false };
+  const stats = {
+    candidates: picked.candidates.length, focusable: picked.focusable, probed: 0, hovered: 0, focused: 0, noChange: 0,
+    notReverted: 0, covered: 0, skipped: picked.skipped, timedOut: false,
+    // Elements taken in because a script animates them, and how many of them turned out to have an effect that a
+    // transition of their own does not carry - the ones the copy has to time itself.
+    dynamic: picked.dynamic ?? 0, dynamicFound: 0, scripted: 0, scriptedUnsettled: 0,
+  };
   const settle = (state) => Math.min(700, Math.max(80, (state ? transitionMs(state) : 200) + 60));
 
   const hover = [];
@@ -885,7 +976,7 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
       await page.waitForTimeout(150);
       const next = await page.evaluate(readState, args(c.i));
       if (!next) break;
-      const steady = JSON.stringify([next.values, next.pseudo, next.kids.map((k) => k.values), next.rect]) === JSON.stringify([before.values, before.pseudo, before.kids.map((k) => k.values), before.rect]);
+      const steady = stateKey(next) === stateKey(before);
       before = next;
       if (steady) break;
     }
@@ -900,11 +991,41 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
       }
       spot = again;
     }
+    // An element with no transition of its own that a script still animates: the time the effect takes is nowhere to
+    // be read, so it is measured. The element is read again every DYN_STEP_MS until two reads are the same, and that
+    // is how long the change took - the copy then eases into the same end state over the same stretch of time
+    // (ir/motion.js synthTransition) instead of jumping there in one frame.
+    const timed = transitionMs(before) === 0;
     await page.mouse.move(spot.x, spot.y);
+    // Read at once as well: an end state that is already there was set in one step, so there is no movement to
+    // copy and the copy must not invent one.
+    const first = timed ? await page.evaluate(readState, args(c.i)) : null;
     // The effect needs its transition to run (plus a frame); JavaScript-driven effects get the same time.
     await page.waitForTimeout(lastWait);
-    const after = await page.evaluate(readState, args(c.i));
+    let after = await page.evaluate(readState, args(c.i));
     if (!after) continue;
+    let scriptedMs = null;
+    let settled = true;
+    if (timed) {
+      let elapsed = lastWait;
+      let prev = after;
+      settled = false;
+      for (let step = 0; step < DYN_STEPS && Date.now() <= hoverDeadline; step++) {
+        await page.waitForTimeout(DYN_STEP_MS);
+        elapsed += DYN_STEP_MS;
+        const next = await page.evaluate(readState, args(c.i));
+        if (!next) break;
+        const steady = stateKey(next) === stateKey(prev);
+        prev = next;
+        if (steady) {
+          settled = true;
+          elapsed -= DYN_STEP_MS; // it was already there one read earlier
+          break;
+        }
+      }
+      after = prev;
+      scriptedMs = first && stateKey(first) === stateKey(after) ? 0 : Math.max(0, Math.round(elapsed));
+    }
     const d = diffStates(before, after);
     if (!d) {
       stats.noChange++;
@@ -913,7 +1034,9 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
     // Control: a hover effect goes away when the mouse leaves. A change that stays (or goes on) is an entrance animation,
     // a timer or a loop that happened to run while the mouse was there - not a hover effect.
     await page.mouse.move(-20, -20).catch(() => {});
-    await page.waitForTimeout(Math.min(600, settle(before) + 100));
+    // A script-driven effect is given the time it was measured to take to go back, so an effect still on its way out
+    // is not mistaken for one that never reverts.
+    await page.waitForTimeout(Math.min(1200, Math.max(settle(before) + 100, (scriptedMs ?? 0) + 150)));
     const back = await page.evaluate(readState, args(c.i));
     const kept = back ? keepReverting(before, back, d) : d;
     if (!kept) {
@@ -921,7 +1044,17 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
       continue;
     }
     stats.hovered++;
-    hover.push({ path: c.path, tag: c.tag, text: c.text, sig: c.sig, reasons: c.reasons, rect: c.rect, cursor: c.cursor, source: 'probe', ...kept });
+    // `scripted` says the page animated this itself: the effect carries no transition that the copy could keep, so
+    // the copy writes one of its own over the measured time.
+    const scripted = scriptedMs > 0 && Object.keys(kept.changes ?? {}).length > 0;
+    if (scripted) stats.scripted++;
+    if (scripted && !settled) stats.scriptedUnsettled++;
+    if (c.reasons?.includes('dynamic')) stats.dynamicFound++;
+    hover.push({
+      path: c.path, tag: c.tag, text: c.text, sig: c.sig, reasons: c.reasons, rect: c.rect, cursor: c.cursor,
+      ...(c.dyn && { dyn: c.dyn }), source: 'probe', ...kept,
+      ...(scripted && { scripted: true, scriptedMs, ...(settled ? {} : { scriptedUnsettled: true }) }),
+    });
   }
   await page.mouse.move(-20, -20).catch(() => {});
 
