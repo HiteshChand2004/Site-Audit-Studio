@@ -137,6 +137,7 @@ export function summarize(motion) {
     // outside the hovered element could be lost and the row would still read as passing.
     hover: {
       keys: hover.map(hoverKey),
+      entries: hover,
       props: new Map(hover.map((h) => [hoverKey(h), [
         ...Object.keys(h.changes ?? {}),
         ...(h.kids ?? []).flatMap((k) => Object.keys(k.changes ?? {}).map((p) => `kid:${p}`)),
@@ -148,6 +149,56 @@ export function summarize(motion) {
     // while its rebuilt CSS animation has one (and is named from its keyframes).
     loops: { keys: loops.map(loopFamily), count: loops.length },
   };
+}
+
+// Two computed values are the same end state when they are the same shape (functions, units, keywords) and every number in
+// them is within 1.5 (px, channel) or 2 % of the other: computed styles round, and sub-pixel layout differs a hair.
+const NUMBER = /-?\d*\.?\d+(?:e-?\d+)?/gi;
+const skeleton = (v) => String(v ?? '').replace(NUMBER, '#').replace(/\s+/g, ' ').trim();
+export function sameValue(a, b) {
+  if (a === b) return true;
+  if (skeleton(a) !== skeleton(b)) return false;
+  const x = String(a ?? '').match(NUMBER) ?? [];
+  const y = String(b ?? '').match(NUMBER) ?? [];
+  // 1.5 is a pixel or a colour channel; a small unitless number (opacity, a scale) is held to 0.02.
+  const tol = (v) => (Math.abs(v) <= 1.5 ? 0.02 : Math.max(1.5, Math.abs(v) * 0.02));
+  return x.length === y.length && x.every((v, i) => Math.abs(Number(v) - Number(y[i])) <= tol(Number(v)));
+}
+
+/** How long an effect takes, in ms: what was measured when a script ran it, else the longest transition it declares. */
+export function hoverDuration(h) {
+  if (h?.scriptedMs != null) return h.scriptedMs;
+  const parts = String(h?.transition?.duration ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  return Math.round(Math.max(0, ...parts.map((s) => (s.endsWith('ms') ? parseFloat(s) : parseFloat(s) * 1000) || 0)));
+}
+
+/**
+ * What is different between the original's hover and the copy's on one element: an end value of a property the original
+ * changed (on the element, its pseudo-elements and its children, by property), or the time it takes (beyond 60 ms or a
+ * quarter of the original's). A matching key with the same properties is not enough: the copy must end where the
+ * original ends, as fast.
+ * @returns {string[]}  readable differences (empty: the same)
+ */
+export function hoverDifferences(was, now) {
+  const out = [];
+  const compare = (label, a = {}, b = {}) => {
+    for (const [prop, [, end]] of Object.entries(a)) {
+      const got = b?.[prop]?.[1];
+      if (got === undefined) out.push(`${label}${prop} does not change`);
+      else if (!sameValue(end, got)) out.push(`${label}${prop} ends at ${String(got).slice(0, 60)} (original ${String(end).slice(0, 60)})`);
+    }
+  };
+  compare('', was.changes, now.changes);
+  for (const [which, c] of Object.entries(was.pseudo ?? {})) compare(`::${which} `, c, now.pseudo?.[which]);
+  const kidsNow = new Map((now.kids ?? []).map((k) => [Object.keys(k.changes ?? {}).sort().join(','), k]));
+  for (const k of was.kids ?? []) {
+    const twin = kidsNow.get(Object.keys(k.changes ?? {}).sort().join(','));
+    if (twin) compare('child ', k.changes, twin.changes);
+    else out.push(`a child's ${Object.keys(k.changes ?? {}).join(', ')} does not change`);
+  }
+  const [d0, d1] = [hoverDuration(was), hoverDuration(now)];
+  if (Math.abs(d0 - d1) > Math.max(60, d0 * 0.25)) out.push(`takes ${d1} ms (original ${d0} ms)`);
+  return out;
 }
 
 const tone = (ratio) => (ratio >= 0.9 ? 'pass' : ratio >= 0.5 ? 'open' : 'regressed');
@@ -168,7 +219,7 @@ export function motionItems(oldPages, newPages) {
   const both = [...oldPages.keys()].filter((slug) => newPages.has(slug));
   const o = { reveal: 0, replay: 0, hover: [], loops: [], durations: [], hoverProps: new Map() };
   const n = { reveal: 0, replay: 0, hover: [], loops: [], durations: [] };
-  const matchedHover = { count: 0, agree: 0 };
+  const matchedHover = { count: 0, agree: 0, same: 0, differences: [] };
   for (const slug of both) {
     const so = summarize(oldPages.get(slug));
     const sn = summarize(newPages.get(slug));
@@ -183,10 +234,20 @@ export function motionItems(oldPages, newPages) {
     // Matched hover elements whose changed properties agree (at least half of the original's).
     const pool = new Map();
     for (const k of sn.hover.keys) pool.set(k, (pool.get(k) ?? 0) + 1);
-    for (const k of so.hover.keys) {
+    // The copy's entries by key, in order, so each original hover is held against the copy's hover on the same element.
+    const entriesNow = new Map();
+    for (const h of sn.hover.entries) entriesNow.set(hoverKey(h), [...(entriesNow.get(hoverKey(h)) ?? []), h]);
+    for (const [i, k] of so.hover.keys.entries()) {
       if ((pool.get(k) ?? 0) <= 0) continue;
       pool.set(k, pool.get(k) - 1);
       matchedHover.count++;
+      const before = so.hover.entries[i];
+      const after = entriesNow.get(k)?.shift();
+      const diff = after ? hoverDifferences(before, after) : ['not measured'];
+      if (!diff.length) matchedHover.same++;
+      else if (matchedHover.differences.length < 12) {
+        matchedHover.differences.push({ page: slug, element: `${before.tag ?? ''} "${String(before.text ?? '').slice(0, 30)}"`, diff: diff.slice(0, 3) });
+      }
       const was = new Set(so.hover.props.get(k));
       const now = new Set(sn.hover.props.get(k));
       const same = [...was].filter((p) => now.has(p)).length;
@@ -196,7 +257,7 @@ export function motionItems(oldPages, newPages) {
     n.loops.push(...sn.loops.keys);
   }
   const items = [];
-  const summary = { pages: both.length, reveal: { before: o.reveal, after: n.reveal }, hover: { before: o.hover.length, after: n.hover.length }, loops: { before: o.loops.length, after: n.loops.length } };
+  const summary = { pages: both.length, reveal: { before: o.reveal, after: n.reveal }, hover: { before: o.hover.length, after: n.hover.length, matched: matchedHover.count, sameEnd: matchedHover.same }, loops: { before: o.loops.length, after: n.loops.length } };
 
   if (o.reveal) {
     const ratio = Math.min(1, n.reveal / o.reveal);
@@ -215,6 +276,17 @@ export function motionItems(oldPages, newPages) {
       { detail: `${plural(o.hover.length, 'element')} change on hover (colour, shadow, movement, …).`, count: o.hover.length },
       { detail: `${matched} of them react on the recreated site${matched ? ` (${matchedHover.agree} with the same changes)` : ''}.`, count: matched },
       ratio < 0.9 ? 'Hover effects driven by script (they add or remove elements) are not reproduced.' : null));
+  }
+  // Not only whether the copy reacts, but whether it ends where the original ends, as fast.
+  if (matchedHover.count) {
+    const ratio = matchedHover.same / matchedHover.count;
+    const shown = matchedHover.differences.slice(0, 3).map((d) => `${d.element}: ${d.diff[0]}`).join('; ');
+    items.push({
+      ...row('motion.hover-match', 'Hover end states and timing match', ratio,
+        { detail: `${plural(matchedHover.count, 'hover effect')} found on both sides.`, count: matchedHover.count },
+        { detail: `${matchedHover.same} of them end in the same values, at the same speed.${shown ? ` Differs: ${shown}.` : ''}`, count: matchedHover.same }),
+      differences: matchedHover.differences,
+    });
   }
   if (o.loops.length) {
     const matched = overlap(o.loops, n.loops);

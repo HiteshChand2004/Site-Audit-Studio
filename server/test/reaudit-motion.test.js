@@ -131,7 +131,7 @@ test('the recreated pages are measured like the original: same effects found wit
   assert.equal(a.loops.count, 1);
 
   const { items } = motionItems(original, recreated);
-  assert.deepEqual(items.map((i) => [i.key, i.preset]), [['motion.reveal', 'pass'], ['motion.hover', 'pass'], ['motion.loops', 'pass']]);
+  assert.deepEqual(items.map((i) => [i.key, i.preset]), [['motion.reveal', 'pass'], ['motion.hover', 'pass'], ['motion.hover-match', 'pass'], ['motion.loops', 'pass']]);
 });
 
 test('a recreate that lost its effects is reported as regressed', async () => {
@@ -189,4 +189,27 @@ test('the checklist carries the motion rows in their own category, and the total
   assert.equal(row.category, 'motion');
   assert.deepEqual(checklist.motion, { pages: 1, reveal: { before: 3, after: 3 }, failed: [], skipped: [] });
   assert.equal(compareAudits({ old: side, next: side, report: { pages: [], manual: [] }, newOrigin: 'http://127.0.0.1:1' }).motion, null);
+});
+
+test('hover end states and timing: same values within rounding, a different end or a slower effect is named', async () => {
+  const { sameValue, hoverDifferences, hoverDuration, motionItems } = await import('../src/reaudit/motion.js');
+  assert.ok(sameValue('rgb(10, 20, 30)', 'rgb(11, 20, 30)'));
+  assert.ok(sameValue('matrix(1, 0, 0, 1, 0, -8)', 'matrix(1, 0, 0, 1, 0, -8.4)'));
+  assert.ok(!sameValue('rgb(10, 20, 30)', 'rgb(40, 20, 30)'));
+  assert.ok(!sameValue('none', 'matrix(1, 0, 0, 1, 0, -8)'));
+  assert.equal(hoverDuration({ transition: { duration: '0.2s, 300ms' } }), 300);
+  assert.equal(hoverDuration({ scriptedMs: 450, transition: { duration: '0s' } }), 450);
+  const was = { changes: { color: ['rgb(0, 0, 0)', 'rgb(200, 0, 0)'], transform: ['none', 'matrix(1, 0, 0, 1, 0, -8)'] }, pseudo: { after: { width: ['0px', '40px'] } }, transition: { duration: '0.3s' } };
+  assert.deepEqual(hoverDifferences(was, { ...was }), []);
+  const diff = hoverDifferences(was, { changes: { color: ['rgb(0, 0, 0)', 'rgb(0, 0, 200)'] }, pseudo: { after: { width: ['0px', '40px'] } }, transition: { duration: '0s' } });
+  assert.deepEqual(diff, ['color ends at rgb(0, 0, 200) (original rgb(200, 0, 0))', 'transform does not change', 'takes 0 ms (original 300 ms)']);
+
+  const page = (hover) => new Map([['home', { hover }]]);
+  const a = { tag: 'a', text: 'Contact', ...was };
+  const b = { tag: 'button', text: 'Go', changes: { opacity: ['1', '0.8'] }, transition: { duration: '0.2s' } };
+  const { items, summary } = motionItems(page([a, b]), page([{ ...a }, { ...b, changes: { opacity: ['1', '0.5'] } }]));
+  const row = items.find((i) => i.key === 'motion.hover-match');
+  assert.equal(row.after.count, 1);
+  assert.match(row.after.detail, /1 of them end in the same values, at the same speed\. Differs: button "Go": opacity ends at 0\.5 \(original 0\.8\)/);
+  assert.deepEqual([summary.hover.matched, summary.hover.sameEnd], [2, 1]);
 });
