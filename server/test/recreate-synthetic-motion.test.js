@@ -74,7 +74,7 @@ test('a script-animated box with no interactive sign of any kind is probed, and 
   for (const [i, card] of cards.entries()) {
     assert.ok(card, `the ${['first', 'second', 'third'][i]} card was not probed (${JSON.stringify(found.stats)})`);
     assert.equal(card.dyn, 'will-change', 'the mark that made the probe look at it is reported');
-    assert.deepEqual(card.reasons, ['dynamic']);
+    assert.deepEqual(card.reasons, ['dynamic', 'item'], 'the mark of a script, and one of a row of blocks');
     assert.ok(card.changes.transform, `no transform delta measured: ${JSON.stringify(card.changes)}`);
     assert.equal(card.scripted, true, 'the page animated it itself, so the copy has to time it');
     assert.ok(card.scriptedMs >= 150 && card.scriptedMs <= 700, `measured ${card.scriptedMs} ms for a 300 ms animation`);
@@ -88,8 +88,12 @@ test('a script-animated box with no interactive sign of any kind is probed, and 
   assert.ok(step.changes.transform, 'its transform change was measured');
   assert.equal(step.scripted, undefined, 'nothing to time: it was already there at the first read');
 
-  // And an element with no mark at all is still none of the probe's business.
-  assert.equal(byText('Plain').length, 0, 'an unmarked box must not cost a probe');
+  // A box with no mark at all is found too when it is one of a row of blocks (capture/interactions.js `items`): its
+  // script-only hover used to be lost. An unmarked element that is not one of a row still costs no probe
+  // (recreate-hover-items.test.js).
+  const plain = byText('Plain')[0];
+  assert.ok(plain?.reasons.includes('item'), 'found as one of the row');
+  assert.deepEqual(plain.changes['background-color'], ['rgb(204, 204, 204)', 'rgb(200, 30, 30)']);
 });
 
 // A merged tree as ir/tree.js builds it (the shape recreate-motion-ir.test.js uses).

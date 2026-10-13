@@ -8,6 +8,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { launchBrowser } from '../audit/render.js';
 import { measureMotion } from '../recreate/capture/measure.js';
+import { DYN_STEP_MS, paintsNothing } from '../recreate/capture/interactions.js';
 import { isScrollReveal } from '../recreate/ir/motion.js';
 
 // A long page: settling (≤ 8 s), loops (a scroll window at a time, ≤ 12 × 2.5 s, + ≤ 9 s of slow movers), hover (≤ 15 s) and
@@ -185,7 +186,7 @@ export function hoverDifferences(was, now) {
     for (const [prop, [, end]] of Object.entries(a)) {
       const got = b?.[prop]?.[1];
       if (got === undefined) out.push(`${label}${prop} does not change`);
-      else if (!sameValue(end, got)) out.push(`${label}${prop} ends at ${String(got).slice(0, 60)} (original ${String(end).slice(0, 60)})`);
+      else if (!sameValue(end, got) && !(paintsNothing(prop, end) && paintsNothing(prop, got))) out.push(`${label}${prop} ends at ${String(got).slice(0, 60)} (original ${String(end).slice(0, 60)})`);
     }
   };
   compare('', was.changes, now.changes);
@@ -196,8 +197,22 @@ export function hoverDifferences(was, now) {
     if (twin) compare('child ', k.changes, twin.changes);
     else out.push(`a child's ${Object.keys(k.changes ?? {}).join(', ')} does not change`);
   }
+  // The other way round: the copy also changes a child, a neighbour or the parent the original leaves alone - hovering one
+  // card must not move another, nor the row around it.
+  const kidsWas = new Set((was.kids ?? []).map((k) => Object.keys(k.changes ?? {}).sort().join(',')));
+  for (const k of now.kids ?? []) {
+    const props = Object.keys(k.changes ?? {}).sort().join(',');
+    if (!kidsWas.has(props)) out.push(`also changes a child's ${props.replace(/,/g, ', ')} (the original does not)`);
+  }
+  const sibsWas = new Set((was.sibs ?? []).map((x) => `${x.rel}:${Object.keys(x.changes ?? {}).sort().join(',')}`));
+  for (const x of now.sibs ?? []) {
+    const props = Object.keys(x.changes ?? {}).sort().join(',');
+    if (!sibsWas.has(`${x.rel}:${props}`)) out.push(`also changes its ${x.rel === 'ancestor' ? 'parent' : `${x.rel === 'prev' ? 'previous' : 'next'} sibling`}'s ${props.replace(/,/g, ', ')} (the original does not)`);
+  }
   const [d0, d1] = [hoverDuration(was), hoverDuration(now)];
-  if (Math.abs(d0 - d1) > Math.max(60, d0 * 0.25)) out.push(`takes ${d1} ms (original ${d0} ms)`);
+  // A time measured on a script-driven effect is read every DYN_STEP_MS, so it is only that precise.
+  const step = was?.scriptedMs != null || now?.scriptedMs != null ? DYN_STEP_MS + 10 : 0;
+  if (Math.abs(d0 - d1) > Math.max(60, d0 * 0.25, step)) out.push(`takes ${d1} ms (original ${d0} ms)`);
   return out;
 }
 
