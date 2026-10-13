@@ -110,7 +110,7 @@ const maskAreas = (boxes) => boxes
  *   cpathOf?: Function, noise?: number }} o  baseline: the slot's entry from the capture's exact/index.json
  */
 export async function compareSlot({
-  renderer, slot, baseline, page, workspace, deadline = Infinity, cpathOf = null, noise = 0, excludedTexts = null,
+  renderer, slot, baseline, page, workspace, deadline = Infinity, cpathOf = null, noise = 0, excludedTexts = null, excludedPaths = null,
   sizedOf = null, slackOf = null, view = null,
 }) {
   const started = Date.now();
@@ -151,10 +151,13 @@ export async function compareSlot({
     if (baseline.boxes?.file) {
       const saved = JSON.parse(gunzipSync(await readFile(path.join(inDir, baseline.boxes.file))));
       theirs = saved.boxes;
-      if (excludedTexts?.size) {
+      if (excludedTexts?.size || excludedPaths?.length) {
+        // By what it painted, and - since boxes carry the capture's path - by being the excluded element or inside it:
+        // an icon or a frame paints no text to match on.
+        const under = (p) => Boolean(p) && (excludedPaths ?? []).some((x) => p === x || p.startsWith(`${x}>`));
         const keep = [];
         for (const b of theirs) {
-          if (b.key && excludedTexts.has(b.key)) {
+          if ((b.key && excludedTexts?.has(b.key)) || under(b.path)) {
             excludedBoxes++;
             exclude.push({ x: b.rect[0], y: b.rect[1], w: b.rect[2], h: b.rect[3], cause: 'excluded' });
           } else keep.push(b);
@@ -322,6 +325,7 @@ export async function compareExact({
           slots.push(await compareSlot({
             renderer, slot, baseline: slotBaseline, page, workspace, deadline, noise: noise[slot.id] ?? 0,
             excludedTexts: excludedFor(excluded, page.path),
+            excludedPaths: (excluded ?? []).filter((e) => !e.page || e.page === page.path).map((e) => e.path).filter(Boolean),
             cpathOf: per.cpathOf, sizedOf: per.sizedOf, slackOf: per.slackOf, view: viewAt?.(slot.width) ?? null,
           }));
         } catch (err) {

@@ -20,6 +20,7 @@ import { guardAttributes } from '../fixers/html.js';
 import { addRemoved, sanitizeSvg } from '../fixers/svg.js';
 import { noticeFiles } from './index.js';
 import { relFile } from './links.js';
+import { VIEW_WIDTHS } from '../views.js';
 
 // Never part of a page's markup in the copy: active content, what the head already writes, and the stylesheet owners
 // (their CSS is written separately, in the same order).
@@ -356,8 +357,18 @@ export function carryInto(body, carried) {
     if (!n || 'text' in n) return;
     const attrs = n.cpath && carried.get(n.cpath);
     if (attrs) {
-      for (const [k, v] of Object.entries(attrs)) {
-        n.attrs[k] = k === 'data-motion' && typeof n.attrs[k] === 'string' ? [...new Set(`${n.attrs[k]} ${v}`.split(/\s+/).filter(Boolean))].join(' ') : v;
+      const merge = (k, v, had) => (k === 'data-motion' && typeof had === 'string' ? [...new Set(`${had} ${v}`.split(/\s+/).filter(Boolean))].join(' ') : v);
+      if (n.t === 'svg' && typeof n.raw === 'string') {
+        // Inline SVG keeps its attributes in its own markup (emit/walk.js describeNode writes `raw` as it is).
+        for (const [k, v] of Object.entries(attrs)) {
+          const re = new RegExp(`^(<svg\\b[^>]*?)\\s${k}="([^"]*)"`);
+          const had = re.exec(n.raw)?.[2];
+          const value = String(merge(k, v, had)).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+          n.raw = had != null ? n.raw.replace(re, `$1 ${k}="${value}"`) : n.raw.replace(/^<svg\b/, `<svg ${k}="${value}"`);
+        }
+      } else {
+        n.attrs ??= {};
+        for (const [k, v] of Object.entries(attrs)) n.attrs[k] = merge(k, v, n.attrs[k]);
       }
       carried.delete(n.cpath);
       placed++;
@@ -366,6 +377,121 @@ export function carryInto(body, carried) {
   };
   walk(body);
   return { placed, lost: carried.size };
+}
+
+// A page whose script renders different markup at different widths (a phone version of a heading swapped in as the
+// window narrows) has one as-is document per view. Where they agree they are one tree; where they differ, every
+// version is kept in place and shown only in the width range of the views it came from (`data-sas-v`, hidden by a
+// generated rule elsewhere) - the same thing such a site's own server-rendered markup does before its script runs.
+const serial = (n) => JSON.stringify(n, (k, v) => (k === 'cpath' || k === 'sid' ? undefined : v));
+const kindOf = (n) => ('text' in n ? '#text' : n.t);
+const sameShallow = (a, b) => a.t === b.t && a.class === b.class && a.id === b.id && JSON.stringify(a.attrs ?? {}) === JSON.stringify(b.attrs ?? {});
+
+function markVariant(node, id) {
+  if (node.t === 'svg' && typeof node.raw === 'string') return { ...node, raw: node.raw.replace(/^<svg\b/, `<svg data-sas-v="${id}"`) };
+  return { ...node, attrs: { ...node.attrs, 'data-sas-v': id } };
+}
+
+/**
+ * Merges the same position of every view's tree. `entries` = [[view, node]], widest view first.
+ * @returns {object[]|null}  the nodes to put there, or null when a text differs (the parent then keeps versions)
+ */
+function mergeNodes(entries, mark) {
+  const groups = new Map();
+  for (const [view, node] of entries) {
+    const key = serial(node);
+    const g = groups.get(key) ?? { node, views: [] };
+    g.views.push(view);
+    groups.set(key, g);
+  }
+  if (groups.size === 1) return [entries[0][1]];
+  const nodes = entries.map(([, n]) => n);
+  if (nodes.some((n) => 'text' in n)) return null;
+  if (nodes.every((n) => n.t !== 'svg' && sameShallow(n, nodes[0]))) {
+    const kids = mergeChildren(entries.map(([v, n]) => [v, n.children ?? []]), mark);
+    if (kids) return [{ ...nodes[0], children: kids }];
+  }
+  return [...groups.values()].map((g) => markVariant(g.node, mark(g.views)));
+}
+
+function mergeChildren(lists, mark) {
+  const first = lists[0][1];
+  const aligned = lists.every(([, c]) => c.length === first.length && c.every((n, i) => kindOf(n) === kindOf(first[i])));
+  if (!aligned) return null;
+  const out = [];
+  for (let i = 0; i < first.length; i++) {
+    const merged = mergeNodes(lists.map(([v, c]) => [v, c[i]]), mark);
+    if (!merged) return null;
+    out.push(...merged);
+  }
+  return out;
+}
+
+/**
+ * One body from the bodies of every view (widest first). The <body> itself is never duplicated: when its children do not
+ * line up, each view's children are all kept, marked, and only the widest view's loose text stays.
+ * @returns {{ body: object, variants: Map<string, string[]> }}  variant id → the views it is shown at
+ */
+export function mergeViewBodies(bodies) {
+  const variants = new Map();
+  const byViews = new Map();
+  const mark = (views) => {
+    const key = views.join(',');
+    if (!byViews.has(key)) {
+      const id = `v${byViews.size + 1}`;
+      byViews.set(key, id);
+      variants.set(id, views);
+    }
+    return byViews.get(key);
+  };
+  if (bodies.length === 1) return { body: bodies[0][1], variants };
+  const [, first] = bodies[0];
+  const merged = mergeNodes(bodies, mark);
+  if (merged?.length === 1 && !merged[0].attrs?.['data-sas-v']) return { body: merged[0], variants };
+  // The body differs in itself or its children do not line up: keep the widest view's body, every view's children.
+  const kids = mergeChildren(bodies.map(([v, b]) => [v, b.children ?? []]), mark);
+  if (kids) return { body: { ...first, children: kids }, variants };
+  const groups = new Map();
+  for (const [view, b] of bodies) {
+    const key = JSON.stringify((b.children ?? []).map(serial));
+    const g = groups.get(key) ?? { children: b.children ?? [], views: [] };
+    g.views.push(view);
+    groups.set(key, g);
+  }
+  const children = [];
+  [...groups.values()].forEach((g, i) => {
+    const id = mark(g.views);
+    for (const c of g.children) {
+      if ('text' in c) {
+        if (i === 0) children.push(c);
+      } else children.push(markVariant(c, id));
+    }
+  });
+  return { body: { ...first, children }, variants };
+}
+
+/**
+ * The rule that shows each version only in the width range of its views. A view's range follows the breakpoints the
+ * copy already uses (ir.breakpoints: the site's own where it declared them): above the next narrower view's, up to its own.
+ */
+export function variantCss(variants, views, breakpoints = {}) {
+  if (!variants.size) return '';
+  const range = (view) => {
+    const i = views.indexOf(view);
+    const upper = i > 0 ? breakpoints[view] : null;
+    const lower = i < views.length - 1 ? breakpoints[views[i + 1]] : null;
+    const parts = [lower != null && `(width > ${lower}px)`, upper != null && `(width <= ${upper}px)`].filter(Boolean);
+    return parts.length ? parts.join(' and ') : null;
+  };
+  const rules = [];
+  for (const view of views) {
+    const hidden = [...variants].filter(([, at]) => !at.includes(view)).map(([id]) => `[data-sas-v="${id}"]`);
+    if (!hidden.length) continue;
+    const q = range(view);
+    const rule = `${hidden.join(', ')} { display: none !important; }`;
+    rules.push(q ? `@media ${q} {\n  ${rule}\n}` : rule);
+  }
+  return `/* Versions of the page the site renders at some widths only */\n${rules.join('\n')}`;
 }
 
 /** Reads one page's as-is capture: the desktop one (the others are kept for comparison). Null when there is none. */
@@ -383,7 +509,7 @@ export async function readAsis(dir, info, view = 'desktop') {
  */
 export async function applyAsIs(ir, { dir, site, excluded = [] }) {
   const sheets = new Map(); // hash → css text (with url("asset:…"))
-  const report = { pages: 0, rebuilt: [], sheets: 0, imports: 0, missingSheets: 0, cssUrls: 0, missingCssUrls: 0, elements: 0, dropped: 0, shadowRoots: 0, missing: { images: 0, media: 0, styleUrls: 0 }, links: { internal: 0, notice: 0, file: 0, external: 0, anchor: 0 }, safety: { handlers: 0, scriptUrls: 0, other: 0 }, excluded: 0, unpinned: 0, motion: { carried: 0, notCarried: { states: 0, hoverCards: 0, notices: 0, panels: 0, unmapped: 0 } } };
+  const report = { pages: 0, rebuilt: [], sheets: 0, imports: 0, missingSheets: 0, cssUrls: 0, missingCssUrls: 0, elements: 0, dropped: 0, shadowRoots: 0, missing: { images: 0, media: 0, styleUrls: 0 }, links: { internal: 0, notice: 0, file: 0, external: 0, anchor: 0 }, safety: { handlers: 0, scriptUrls: 0, other: 0 }, excluded: 0, unpinned: 0, variants: { pages: 0, versions: 0 }, motion: { carried: 0, notCarried: { states: 0, hoverCards: 0, notices: 0, panels: 0, unmapped: 0 } } };
   const infoByOut = new Map(site.pages.map((t) => [t.info.outPath, t.info]));
   for (const page of ir.pages) {
     const info = infoByOut.get(page.outPath);
@@ -393,8 +519,32 @@ export async function applyAsIs(ir, { dir, site, excluded = [] }) {
       continue;
     }
     const exclude = new Set(excluded.filter((e) => e.page === info.path).map((e) => e.path));
-    const { body, htmlClass, stats } = asisBody(asis, { pageUrl: info.url, assetResolve: site.assetResolve, resolveLink: site.resolveLink, exclude });
+    const { body: desktopBody, htmlClass, stats } = asisBody(asis, { pageUrl: info.url, assetResolve: site.assetResolve, resolveLink: site.resolveLink, exclude });
     const css = pageSheets(asis, site.assetResolve);
+    // The other views' documents, widest first: where the site's script rendered different markup there, it is kept.
+    const views = (page.views?.length ? [...page.views] : ['desktop']).sort((a, b) => (VIEW_WIDTHS[b] ?? 0) - (VIEW_WIDTHS[a] ?? 0));
+    const bodies = [['desktop', desktopBody]];
+    for (const view of views) {
+      if (view === 'desktop') continue;
+      const other = await readAsis(dir, info, view);
+      if (!other?.html) continue;
+      bodies.push([view, asisBody(other, { pageUrl: info.url, assetResolve: site.assetResolve, resolveLink: site.resolveLink, exclude }).body]);
+      // Sheets only that view had (a script that writes rules for the version it renders) come after the widest view's.
+      const known = new Set(css.sheets);
+      for (const text of pageSheets(other, site.assetResolve).sheets) {
+        if (!known.has(text)) {
+          css.sheets.push(text);
+          known.add(text);
+        }
+      }
+    }
+    const merged = mergeViewBodies(bodies);
+    const body = merged.body;
+    if (merged.variants.size) {
+      css.sheets.push(variantCss(merged.variants, bodies.map(([v]) => v), ir.breakpoints ?? {}));
+      report.variants.pages++;
+      report.variants.versions += merged.variants.size;
+    }
     const tree = site.pages.find((t) => t.info.outPath === page.outPath);
     const cpathOf = new Map();
     const index = (n) => {
@@ -408,8 +558,22 @@ export async function applyAsIs(ir, { dir, site, excluded = [] }) {
     report.motion.carried += placed;
     report.motion.notCarried.unmapped += lost;
     report.unpinned += stats.unpinned;
+    // Element ids for measuring (data-sas-id in a measurement build only), each with the capture path it stands for, so
+    // the exact comparison pairs a box of the copy with the very element of the original it is.
+    const cpaths = {};
+    let sid = 0;
+    const number = (n) => {
+      if (!n || 'text' in n) return;
+      n.sid = ++sid;
+      if (n.cpath) cpaths[n.sid] = n.cpath;
+      for (const c of n.children ?? []) number(c);
+    };
+    number(body);
+    (site.asisCpaths ??= {})[page.outPath] = cpaths;
     page.body = body;
     page.html = { ...page.html, class: htmlClass };
+    // The font preload a rebuilt page gets (fixers) names a file the site's own sheets may not ask for at all.
+    if (page.head) page.head = { ...page.head, preload: [] };
     page.asis = css.sheets.map((text) => {
       const hash = createHash('sha256').update(text).digest('hex').slice(0, 12);
       sheets.set(hash, text);

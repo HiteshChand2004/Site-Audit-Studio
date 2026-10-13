@@ -605,7 +605,12 @@ export async function generateStage(ctx) {
   // stack emitters read that file and none of them needs it - so the pairing the exact comparison runs on is saved
   // beside it. Without this the comparison after the build can only pair boxes by their text, which on a real page
   // paired 79 of 577 and reported the other 498 as missing and extra at once (`byPath: 0`).
-  if (asIs) await writeFile(path.join(ctx.dir, 'ir', 'cpaths.json'), JSON.stringify(cpathsOf(site)));
+  if (asIs) {
+    const saved = cpathsOf(site);
+    // A page kept as-is is the original's markup: its elements stand for capture paths of their own (ir/asis.js).
+    for (const [outPath, cpaths] of Object.entries(site.asisCpaths ?? {})) saved.pages[outPath] = { cpaths, sized: {}, slack: {} };
+    await writeFile(path.join(ctx.dir, 'ir', 'cpaths.json'), JSON.stringify(saved));
+  }
   const siteAssets = [...out.assets].filter((f) => known.has(f));
   ctx.generated = { site, ir, out, stats, siteDir, siteAssets, assetsDir };
 

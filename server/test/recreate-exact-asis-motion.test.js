@@ -49,6 +49,15 @@ test('motion attributes move to the element at the same path; extra elements are
   ] };
   assert.deepEqual(carryInto(asis, carried), { placed: 4, lost: 1 });
   assert.equal(asis.children[0].attrs['data-motion'], 'site-own h1 l2', 'merged, never replaced');
+
+  // An inline SVG keeps its attributes in its own markup: a loop token on it goes there.
+  const svg = { t: 'body', cpath: 'body', attrs: {}, children: [
+    { t: 'svg', cpath: 'body>svg:1', raw: '<svg viewBox="0 0 1 1"><path d="M0 0"/></svg>' },
+    { t: 'svg', cpath: 'body>svg:2', raw: '<svg data-motion="own" viewBox="0 0 1 1"></svg>' },
+  ] };
+  assert.deepEqual(carryInto(svg, new Map([['body>svg:1', { 'data-motion': 'l3' }], ['body>svg:2', { 'data-motion': 'l4' }]])), { placed: 2, lost: 0 });
+  assert.equal(svg.children[0].raw, '<svg data-motion="l3" viewBox="0 0 1 1"><path d="M0 0"/></svg>');
+  assert.equal(svg.children[1].raw, '<svg data-motion="own l4" viewBox="0 0 1 1"></svg>');
   assert.deepEqual(asis.children[2].attrs, { 'data-motion': 's1', 'data-scroll-at': '40' });
 });
 

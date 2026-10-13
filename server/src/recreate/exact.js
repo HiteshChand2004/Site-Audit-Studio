@@ -33,7 +33,9 @@ async function withIds(ctx) {
   ]);
   const lookups = boxLookups(saved);
   if (!ir?.pages?.length || !lookups.pairs) return null;
-  const out = emitSite(ir, { ids: true });
+  // As shipped: each page with its own stylesheet inline. The shared css/site.css is not what a visitor gets, and in an
+  // as-is copy it holds every page's own sheets one after another, so one page's rules land on another's elements.
+  const out = emitSite(ir, { ids: true, inlineCss: true });
   const pages = new Map();
   for (const p of ir.pages) {
     const html = out.files.get(p.outPath);
