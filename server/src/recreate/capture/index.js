@@ -21,6 +21,7 @@ import { FOREIGN_BUDGET_MS, foreignStyleText, harvestForeignStateRules } from '.
 import { shapeCounts } from './selectorShape.js';
 import { attachType, probeTypography } from './typography.js';
 import { attachProbe, probeViewportHeight } from './viewport.js';
+import { asisFile, captureAsIs, recordSheetBodies } from './asis.js';
 
 // Clicking through the states of tabs / carousels / filtered lists of one page (most pages have none: no time used). The
 // limit follows the work (capture/states.js, ~3 s per control) within these bounds.
@@ -125,6 +126,8 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
   });
   // Static files another view (or page) of this job already loaded come from the shared cache, not from the network again.
   await cache?.attach(context);
+  // An exact copy keeps the site's own stylesheets: their bodies as written, from the network (capture/asis.js).
+  const sheetRecorder = exact ? recordSheetBodies(context) : null;
   const resources = new Map();
   const failed = [];
   context.on('response', (res) => {
@@ -181,6 +184,17 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     // How many interactive things this view has at all, with nothing filtered out: the denominator the probes'
     // own counts are missing (capture/census.js).
     const census = await page.evaluate(censusInteractive, {}).catch(() => null);
+    // The page as-is (markup + the site's own stylesheets), read before any probe hovers, clicks or resizes it.
+    let asis = null;
+    if (sheetRecorder) {
+      try {
+        const read = await captureAsIs(page, sheetRecorder);
+        await writeFile(path.join(dir, asisFile(view.id)), JSON.stringify(read.data));
+        asis = { file: asisFile(view.id), ...read.summary };
+      } catch (err) {
+        asis = { error: firstLine(err) };
+      }
+    }
     lap('snapshot');
     // Continuous motion (4b.3) is read before the screenshots: a screenshot with animations disabled cancels the infinite ones.
     let loops = null;
@@ -358,6 +372,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       viewportProbe,
       typeProbe,
       scrollProbe,
+      ...(asis && { asis }),
       ...snapshot,
       resources: [...resources.values()],
       failedRequests: failed,
@@ -376,6 +391,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       scrollHeight: data.scrollHeight,
       timing,
       reveal,
+      ...(asis && { asis }),
       ...(motion && { motion }),
       resources: data.resources,
     };

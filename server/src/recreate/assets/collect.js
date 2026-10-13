@@ -188,6 +188,9 @@ export function collectAssets(captures, extra = {}) {
     }
   }
   for (const f of extra.fontFaces ?? []) faces.set(faceKey(f), f);
+  // Files an as-is copy points at (capture/asis.js): already absolute, already typed; fonts included whether or not the
+  // captured views drew with them, since the site's own sheets still name them.
+  for (const r of extra.urls ?? []) add(r.url, KINDS.includes(r.kind) ? r.kind : 'image', r.from ?? 'asis', r.slug ?? 'asis');
 
   // Only faces of families the pages rendered with. The browser loaded the files it needed; a face
   // it did not load (a unicode-range subset these pages never used) gets its best format as a fallback.

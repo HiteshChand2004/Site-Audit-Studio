@@ -15,6 +15,7 @@ import { fetchPage } from '../../audit/http.js';
 import { mapLimit } from '../../audit/util.js';
 import { platformCdnHost } from './cdn.js';
 import { assetKey, collectAssets } from './collect.js';
+import { asisFile } from '../capture/asis.js';
 import { parseStylesheet } from './css.js';
 import { downloadAsset, reasonDetail } from './download.js';
 import { causeText, recoverHit, RETRYABLE_ASSET_REASONS } from '../interrupts.js';
@@ -103,6 +104,20 @@ async function readCaptures(ctx) {
     }
   }
   return captures;
+}
+
+// What an as-is copy (exact mode, capture/asis.js) points at beyond what the snapshot saw: every srcset candidate, every
+// url() of the site's own sheets (a background only a media query shows, each font weight). Only its list of files.
+async function readAsisRefs(ctx) {
+  const out = [];
+  for (const page of ctx.pages ?? []) {
+    for (const view of Object.keys(page.views)) {
+      const file = path.join(ctx.dir, 'capture', page.slug, asisFile(view));
+      const data = await readFile(file, 'utf8').then(JSON.parse, () => null);
+      for (const r of data?.refs ?? []) out.push({ ...r, slug: page.slug });
+    }
+  }
+  return out;
 }
 
 // A stylesheet the job's browsers already loaded (the shared cache), in the shape fetchPage returns; null = download it.
@@ -325,7 +340,8 @@ export async function assetsStage(ctx, opts = {}) {
     deadline: ctx.stepDeadline,
     cache: ctx.netCache,
   });
-  const { assets, fontFaces, unusedFontFaces } = collectAssets(captures, { fontFaces: foreign.fontFaces });
+  const asisRefs = ctx.exact ? await readAsisRefs(ctx) : [];
+  const { assets, fontFaces, unusedFontFaces } = collectAssets(captures, { fontFaces: foreign.fontFaces, urls: asisRefs });
   captures.length = 0; // the capture trees are large; only the asset list is needed from here
 
   ctx.progress(0.1, `Downloading ${assets.length} assets`);
@@ -386,6 +402,7 @@ export async function assetsStage(ctx, opts = {}) {
 
   report.assets = {
     found: assets.length,
+    ...(asisRefs.length && { asisRefs: new Set(asisRefs.map((r) => assetKey(r.url))).size }),
     downloaded: result.files.length,
     duplicates: result.reused,
     fromCache: result.fromCache,
