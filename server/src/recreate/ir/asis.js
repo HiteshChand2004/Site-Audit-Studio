@@ -155,8 +155,11 @@ function localizeSvg(markup, pageUrl, assetResolve) {
   });
 }
 
+/** The pinned reveal properties of an inline style, without their !important. */
+export const unpin = (style) => String(style).replace(/(^|;)(\s*(?:opacity|transform|filter)\s*:[^;!]*?)\s*!\s*important\s*(?=;|$)/gi, '$1$2');
+
 const newStats = () => ({
-  elements: 0, dropped: 0, shadowRoots: 0, links: { internal: 0, notice: 0, file: 0, external: 0, anchor: 0 },
+  unpinned: 0, elements: 0, dropped: 0, shadowRoots: 0, links: { internal: 0, notice: 0, file: 0, external: 0, anchor: 0 },
   missing: { images: 0, media: 0, styleUrls: 0 }, safety: { handlers: 0, scriptUrls: 0, other: 0 }, svg: { cleaned: 0, removed: null },
   excluded: 0, notices: new Map(),
 });
@@ -191,6 +194,13 @@ export function asisBody(asis, { pageUrl, assetResolve, resolveLink, exclude = n
     const id = attrs.id;
     delete attrs.class;
     delete attrs.id;
+    // A revealed element the capture pinned (capture/reveal.js): still shown, but as an ordinary inline style, so a
+    // rebuilt scroll reveal can animate it (an animation cannot move an !important value).
+    if ('data-sas-pin' in attrs) {
+      delete attrs['data-sas-pin'];
+      if (typeof attrs.style === 'string') attrs.style = unpin(attrs.style);
+      stats.unpinned++;
+    }
     const hadHref = attrs.href != null;
     guardAttributes(attrs, stats.safety);
     // A link whose href was code (javascript:…) is still drawn as a link (:link styles, the hand cursor): it keeps a
@@ -308,6 +318,56 @@ export function asisBody(asis, { pageUrl, assetResolve, resolveLink, exclude = n
   return { body, htmlClass: $('html').attr('class') ?? null, stats };
 }
 
+// The motion the copy rebuilds (ir/motion.js) lives in attributes the stylesheet and js/motion.js select on: hover,
+// focus, reveal and loop tokens, open panels, a bar that changes once scrolled. These are carried to the same element of
+// the as-is markup, found by the capture's own path. What the copy rebuilds as extra elements - the other states of a
+// tab set or carousel, a card's hovered look, a message a click shows, a panel only drawn while open - is not part of
+// the original markup and is counted instead (`notCarried`).
+const CARRY = /^(data-motion|data-scroll-at|data-w-(one|dismiss|layer|x|stay))$/;
+const COPY_ATTRS = { 'data-w-hcopy': 'hoverCards', 'data-w-note-of': 'notices', 'data-w-panel-of': 'panels' };
+
+/** cpath → the motion attributes of the rebuilt element there, from one page of the rebuilt IR. */
+export function carriedAttrs(irBody, cpathOf, notCarried) {
+  const out = new Map();
+  const walk = (n) => {
+    if (!n || 'text' in n) return;
+    const attrs = n.attrs ?? {};
+    const copy = Object.keys(COPY_ATTRS).find((k) => k in attrs);
+    if (copy) {
+      notCarried[COPY_ATTRS[copy]]++;
+      return;
+    }
+    if (n.tpl || ('data-w-set' in attrs && 'hidden' in attrs)) return; // another state of a set: counted with its set
+    if ('data-w-set' in attrs) notCarried.states++;
+    const own = Object.entries(attrs).filter(([k]) => CARRY.test(k));
+    const cpath = n.sid != null ? cpathOf.get(n.sid) : null;
+    if (own.length && cpath) out.set(cpath, Object.fromEntries(own));
+    else if (own.length) notCarried.unmapped++;
+    for (const c of n.children ?? []) walk(c);
+  };
+  walk(irBody);
+  return out;
+}
+
+/** Puts carried attributes on the as-is nodes with the same path (motion tokens are merged, never replaced). */
+export function carryInto(body, carried) {
+  let placed = 0;
+  const walk = (n) => {
+    if (!n || 'text' in n) return;
+    const attrs = n.cpath && carried.get(n.cpath);
+    if (attrs) {
+      for (const [k, v] of Object.entries(attrs)) {
+        n.attrs[k] = k === 'data-motion' && typeof n.attrs[k] === 'string' ? [...new Set(`${n.attrs[k]} ${v}`.split(/\s+/).filter(Boolean))].join(' ') : v;
+      }
+      carried.delete(n.cpath);
+      placed++;
+    }
+    for (const c of n.children ?? []) walk(c);
+  };
+  walk(body);
+  return { placed, lost: carried.size };
+}
+
 /** Reads one page's as-is capture: the desktop one (the others are kept for comparison). Null when there is none. */
 export async function readAsis(dir, info, view = 'desktop') {
   return readFile(path.join(dir, 'capture', info.slug, asisFile(view)), 'utf8').then(JSON.parse, () => null);
@@ -323,7 +383,7 @@ export async function readAsis(dir, info, view = 'desktop') {
  */
 export async function applyAsIs(ir, { dir, site, excluded = [] }) {
   const sheets = new Map(); // hash → css text (with url("asset:…"))
-  const report = { pages: 0, rebuilt: [], sheets: 0, imports: 0, missingSheets: 0, cssUrls: 0, missingCssUrls: 0, elements: 0, dropped: 0, shadowRoots: 0, missing: { images: 0, media: 0, styleUrls: 0 }, links: { internal: 0, notice: 0, file: 0, external: 0, anchor: 0 }, safety: { handlers: 0, scriptUrls: 0, other: 0 }, excluded: 0 };
+  const report = { pages: 0, rebuilt: [], sheets: 0, imports: 0, missingSheets: 0, cssUrls: 0, missingCssUrls: 0, elements: 0, dropped: 0, shadowRoots: 0, missing: { images: 0, media: 0, styleUrls: 0 }, links: { internal: 0, notice: 0, file: 0, external: 0, anchor: 0 }, safety: { handlers: 0, scriptUrls: 0, other: 0 }, excluded: 0, unpinned: 0, motion: { carried: 0, notCarried: { states: 0, hoverCards: 0, notices: 0, panels: 0, unmapped: 0 } } };
   const infoByOut = new Map(site.pages.map((t) => [t.info.outPath, t.info]));
   for (const page of ir.pages) {
     const info = infoByOut.get(page.outPath);
@@ -335,6 +395,19 @@ export async function applyAsIs(ir, { dir, site, excluded = [] }) {
     const exclude = new Set(excluded.filter((e) => e.page === info.path).map((e) => e.path));
     const { body, htmlClass, stats } = asisBody(asis, { pageUrl: info.url, assetResolve: site.assetResolve, resolveLink: site.resolveLink, exclude });
     const css = pageSheets(asis, site.assetResolve);
+    const tree = site.pages.find((t) => t.info.outPath === page.outPath);
+    const cpathOf = new Map();
+    const index = (n) => {
+      if (!n || !n.children) return;
+      if (n.sid != null && (n.cpath || n.path)) cpathOf.set(n.sid, n.cpath ?? n.path);
+      n.children.forEach(index);
+    };
+    index(tree?.root);
+    const carried = carriedAttrs(page.body, cpathOf, report.motion.notCarried);
+    const { placed, lost } = carryInto(body, carried);
+    report.motion.carried += placed;
+    report.motion.notCarried.unmapped += lost;
+    report.unpinned += stats.unpinned;
     page.body = body;
     page.html = { ...page.html, class: htmlClass };
     page.asis = css.sheets.map((text) => {

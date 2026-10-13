@@ -65,7 +65,7 @@ const TOOL_UNSAFE = /^(revert|revert-layer)$/;
  * @param {object} decl  property → value
  * @param {object} o     { tokenOf: Map<hex, name>, from: the file the CSS is written to }
  */
-export function declarations(decl, { tokenOf, from, indent = '  ', usedVars = null }) {
+export function declarations(decl, { tokenOf, from, indent = '  ', usedVars = null, important = false }) {
   const lines = [];
   for (const [prop, raw] of Object.entries(compact(decl))) {
     if (usedVars && prop.startsWith('--') && !usedVars.has(prop)) continue;
@@ -75,7 +75,7 @@ export function declarations(decl, { tokenOf, from, indent = '  ', usedVars = nu
     }
     let value = tidyColors(String(raw)).replace(/url\("asset:([^"]+)"\)/g, (all, file) => `url("${relFile(from, `assets/${file}`)}")`);
     if (COLOR_PROPS.test(prop) && tokenOf.has(value)) value = `var(${tokenOf.get(value)})`;
-    lines.push(`${indent}${prop}: ${value};`);
+    lines.push(`${indent}${prop}: ${value}${important ? ' !important' : ''};`);
   }
   return lines.join('\n');
 }
@@ -299,7 +299,7 @@ export function emitCss(ir, { page = null, usedVars = usedCustomProps(ir) } = {}
   const from = page ? page.outPath : CSS_FILE;
   // A page kept as-is (exact mode, ir/asis.js) is styled by the site's own sheets alone, in their order, plus the
   // effects the copy rebuilds; the shared file adds them after whatever rebuilt pages need.
-  if (ir.asis && page?.asis) return [asisCss(ir, { page, from }), motionCss(ir.motion && pageMotion(ir.motion, page), { tokenOf: new Map(), from, usedVars })].filter(Boolean).join('\n');
+  if (ir.asis && page?.asis) return [asisCss(ir, { page, from }), motionCss(ir.motion && pageMotion(ir.motion, page), { tokenOf: new Map(), from, usedVars, important: true })].filter(Boolean).join('\n');
   const tokenOf = new Map(Object.entries(ir.tokens).map(([name, hex]) => [hex, name]));
   const opts = { tokenOf, from, usedVars };
   const classes = page && pageClasses(page);

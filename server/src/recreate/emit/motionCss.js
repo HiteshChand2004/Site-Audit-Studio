@@ -25,7 +25,9 @@ function revealFrom(r) {
 /** @param {object|undefined} m  ir.motion; @param {{ tokenOf: Map, from: string }} opts  as for declarations() */
 export function motionCss(m, opts) {
   if (!m) return '';
-  const D = (decl, indent) => declarations(decl, { ...opts, indent });
+  // `opts.important` (an as-is copy): the original's script left inline styles on its elements (`transform: none`),
+  // which a plain state rule cannot beat; never inside @keyframes, where !important makes a declaration invalid.
+  const D = (decl, indent, important = Boolean(opts.important)) => declarations(decl, { ...opts, indent, important });
   const out = [];
 
   /**
@@ -119,7 +121,7 @@ export function motionCss(m, opts) {
       rules.push(block(`.js-motion ${sel('rv')}${sel(r.token)}.is-in`, `    animation: m-${r.token} ${r.duration}ms ${r.easing} var(--md, 0ms) backwards;`, '  '));
       // An entrance of the first screen: played once as the page opens, no script needed.
       rules.push(block(`${sel('rl')}${sel(r.token)}`, `    animation: m-${r.token} ${r.duration}ms ${r.easing} var(--md, 0ms) backwards;`, '  '));
-      rules.push(`  @keyframes m-${r.token} {\n    from {\n${D(from, '      ')}\n    }\n  }`);
+      rules.push(`  @keyframes m-${r.token} {\n    from {\n${D(from, '      ', false)}\n    }\n  }`);
     }
     for (const ms of m.delays) rules.push(block(sel(`d${ms}`), `    --md: ${ms}ms;`, '  '));
     out.push(`/* Scroll reveal (js/motion.js adds .js-motion to <html> and .is-in to an element in view) */\n@media (prefers-reduced-motion: no-preference) {\n${rules.filter(Boolean).join('\n')}\n}`);

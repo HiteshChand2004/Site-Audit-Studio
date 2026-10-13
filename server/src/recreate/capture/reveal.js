@@ -242,6 +242,8 @@ export function installRevealTracker(opts) {
       el.style.setProperty('opacity', String(final.opacity), 'important');
       el.style.setProperty('transform', final.transform, 'important');
       el.style.setProperty('filter', final.filter, 'important');
+      // Marked, so an as-is copy can tell these from the site's own inline styles (ir/asis.js).
+      el.setAttribute('data-sas-pin', '');
       finish(el); // the change starts the site's own transition; jump to its end
     };
     pinned.forEach(pin);
