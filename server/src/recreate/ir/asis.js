@@ -171,7 +171,7 @@ const newStats = () => ({
  * @param {{ html: string, baseURI: string }} asis
  * @param {{ pageUrl: string, assetResolve: Function, resolveLink: Function, exclude?: Set<string> }} o
  */
-export function asisBody(asis, { pageUrl, assetResolve, resolveLink, exclude = new Set() }) {
+export function asisBody(asis, { pageUrl, assetResolve, resolveLink, exclude = new Set(), fragment = null }) {
   const $ = load(asis.html);
   const stats = newStats();
   const base = $('base[href]').attr('href') ? new URL($('base[href]').attr('href'), asis.baseURI).href : asis.baseURI;
@@ -312,8 +312,11 @@ export function asisBody(asis, { pageUrl, assetResolve, resolveLink, exclude = n
     }
     return out;
   };
+  // A part of the page (`fragment` = the path its root stands for): its markup is the first element of the body.
   const bodyEl = $('body')[0];
-  const body = bodyEl ? convert(bodyEl, 'body') : { t: 'body', attrs: {}, children: [] };
+  const fragmentEl = fragment && bodyEl ? (bodyEl.children ?? []).find((c) => c.type === 'tag' || c.type === 'script' || c.type === 'style') : null;
+  const body = fragment ? (fragmentEl ? convert(fragmentEl, fragment) : null)
+    : bodyEl ? convert(bodyEl, 'body') : { t: 'body', attrs: {}, children: [] };
   stats.svg.removed = svgRemoved;
   // The class list of <html>: sites style on it (a theme, a breakpoint flag).
   return { body, htmlClass: $('html').attr('class') ?? null, stats };
@@ -325,29 +328,175 @@ export function asisBody(asis, { pageUrl, assetResolve, resolveLink, exclude = n
 // tab set or carousel, a card's hovered look, a message a click shows, a panel only drawn while open - is not part of
 // the original markup and is counted instead (`notCarried`).
 const CARRY = /^(data-motion|data-scroll-at|data-w-(one|dismiss|layer|x|stay))$/;
+// Attributes that make an element switch to, or be, another state: carried only when what they point at was built.
+const STATE = /^data-w-(set|i|auto|go|hrest|hv|panel|note|panel-of|note-of|hcopy)$/;
 const COPY_ATTRS = { 'data-w-hcopy': 'hoverCards', 'data-w-note-of': 'notices', 'data-w-panel-of': 'panels' };
+const isStateCopy = (n) => Boolean(n.tpl) || ('data-w-set' in (n.attrs ?? {}) && 'hidden' in (n.attrs ?? {}));
+// What a part is decides first; a <template> (`tpl`) is only how a state or a hovered look waits to be shown.
+const copyKind = (n) => COPY_ATTRS[Object.keys(COPY_ATTRS).find((k) => k in (n.attrs ?? {}))] ?? (isStateCopy(n) ? 'states' : null);
 
-/** cpath → the motion attributes of the rebuilt element there, from one page of the rebuilt IR. */
-export function carriedAttrs(irBody, cpathOf, notCarried) {
+/** What a state attribute needs to exist in the copy: a set, a panel, a message, a hover card. */
+function needOf(k, v, cpath) {
+  const value = String(v ?? '');
+  if (k === 'data-w-go') return `set:${value.split(':')[0]}`;
+  if (k === 'data-w-panel') return `panel:${value}`;
+  if (k === 'data-w-note') return `note:${value.split(':')[0]}`;
+  if (k === 'data-w-hrest') return `card:${cpath}`;
+  if (k === 'data-w-hv') return `cell:${cpath}`;
+  return 'never';
+}
+
+/**
+ * cpath → the motion and state attributes of the rebuilt element there, from one page of the rebuilt IR. A state
+ * attribute is carried only when what it points at was built in the copy (`built`, from asisExtras): a tab that switched
+ * to a state the copy does not have would empty its panel.
+ */
+export function carriedAttrs(irBody, cpathOf, notCarried, built = new Set()) {
   const out = new Map();
   const walk = (n) => {
     if (!n || 'text' in n) return;
+    if (copyKind(n)) return; // built (or counted) by asisExtras
     const attrs = n.attrs ?? {};
-    const copy = Object.keys(COPY_ATTRS).find((k) => k in attrs);
-    if (copy) {
-      notCarried[COPY_ATTRS[copy]]++;
-      return;
-    }
-    if (n.tpl || ('data-w-set' in attrs && 'hidden' in attrs)) return; // another state of a set: counted with its set
-    if ('data-w-set' in attrs) notCarried.states++;
-    const own = Object.entries(attrs).filter(([k]) => CARRY.test(k));
     const cpath = n.sid != null ? cpathOf.get(n.sid) : null;
+    const setBuilt = built.has(`set:${attrs['data-w-set']}`);
+    const own = Object.entries(attrs).filter(([k, v]) => {
+      if (CARRY.test(k)) return true;
+      if (!STATE.test(k)) return false;
+      if (k === 'data-w-set' || k === 'data-w-i' || k === 'data-w-auto') return setBuilt;
+      return built.has(needOf(k, v, cpath));
+    });
+    if ('data-w-set' in attrs && !setBuilt) notCarried.states++;
     if (own.length && cpath) out.set(cpath, Object.fromEntries(own));
     else if (own.length) notCarried.unmapped++;
     for (const c of n.children ?? []) walk(c);
   };
   walk(irBody);
   return out;
+}
+
+/**
+ * The parts the copy adds as elements of their own - the other states of a tab set or carousel, a card's hovered look, a
+ * message a click shows, a panel drawn only while open - built from the original's own markup of that state
+ * (capture/snapshot.js `asisHtml`), placed where the rebuilt copy places them, with the same switching attributes.
+ * A part without that markup (a capture made before it was kept) is counted, and nothing that points at it is carried.
+ * @param {(x: object) => object|null} build  the as-is node of a rebuilt part (its `asisHtml` converted)
+ * @returns {{ placements: object[], built: Set<string> }}
+ */
+export function asisExtras(irBody, cpathOf, build, notCarried) {
+  const placements = [];
+  const sets = new Map(); // set id -> { total, ok }
+  const built = new Set();
+  // The rebuilt part's attributes on the built part, root and inside (by the path relative to the root).
+  const transfer = (x, node) => {
+    const base = x.sid != null ? cpathOf.get(x.sid) : null;
+    const rel = new Map();
+    const collect = (n, top) => {
+      if (!n || 'text' in n) return;
+      if (!top && copyKind(n)) return; // a part nested inside this one: not carried
+      const p = n.sid != null ? cpathOf.get(n.sid) : null;
+      const own = Object.entries(n.attrs ?? {}).filter(([k]) => CARRY.test(k) || STATE.test(k) || (top && k === 'hidden'));
+      const key = top ? '' : base && p?.startsWith(`${base}>`) ? p.slice(base.length) : null;
+      if (own.length && key != null) rel.set(key, Object.fromEntries(own));
+      for (const c of n.children ?? []) collect(c, false);
+    };
+    collect(x, true);
+    const rootPath = node.cpath;
+    const put = (n) => {
+      if (!n || 'text' in n) return;
+      const key = n.cpath === rootPath ? '' : n.cpath?.startsWith(`${rootPath}>`) ? n.cpath.slice(rootPath.length) : null;
+      const attrs = key != null ? rel.get(key) : null;
+      if (attrs) {
+        if (n.t === 'svg') carryInto({ t: 'x', children: [n] }, new Map([[n.cpath, attrs]]));
+        else n.attrs = { ...n.attrs, ...attrs };
+      }
+      for (const c of n.children ?? []) put(c);
+    };
+    put(node);
+    if (x.tpl) node.tpl = x.tpl;
+    return node;
+  };
+  const walk = (parent) => {
+    const kids = parent.children ?? [];
+    for (let i = 0; i < kids.length; i++) {
+      const x = kids[i];
+      if (!x || 'text' in x) continue;
+      const kind = copyKind(x);
+      if (!kind) {
+        walk(x);
+        continue;
+      }
+      const made = x.asisHtml ? build(x) : null;
+      const node = made && transfer(x, made);
+      if (kind === 'states') {
+        const id = x.attrs?.['data-w-set'] ?? x.tpl;
+        const s = sets.get(id) ?? { total: 0, ok: 0 };
+        s.total++;
+        let a = i - 1;
+        while (a >= 0 && (!kids[a] || 'text' in kids[a] || copyKind(kids[a]))) a--;
+        const anchor = a >= 0 && kids[a].sid != null ? cpathOf.get(kids[a].sid) : null;
+        if (node && anchor) {
+          s.ok++;
+          placements.push({ kind: 'after', anchor, node, set: id });
+        }
+        sets.set(id, s);
+      } else if (kind === 'hoverCards') {
+        const card = kids[i - 1];
+        const cardPath = card?.sid != null ? cpathOf.get(card.sid) : null;
+        const cellPath = parent.sid != null ? cpathOf.get(parent.sid) : null;
+        if (node && cardPath) {
+          // A card that is all its cell holds: the copy goes after it; else both go in a box that draws nothing.
+          placements.push(cellPath && parent.attrs?.['data-w-hv'] != null ? { kind: 'after', anchor: cardPath, node } : { kind: 'wrap', anchor: cardPath, node });
+          built.add(`card:${cardPath}`);
+          if (cellPath) built.add(`cell:${cellPath}`);
+        } else notCarried.hoverCards++;
+      } else if (node) {
+        placements.push({ kind: 'end', node });
+        if (kind === 'panels') built.add(`panel:${x.attrs['data-w-panel-of']}`);
+        else built.add(`note:${x.attrs['data-w-note-of']}`);
+      } else notCarried[kind]++;
+    }
+  };
+  walk(irBody);
+  for (const [id, s] of sets) {
+    if (s.ok === s.total) built.add(`set:${id}`);
+    else notCarried.states++;
+  }
+  // A set that is not complete is left out whole: its other states would never be shown.
+  return { placements: placements.filter((p) => !p.set || built.has(`set:${p.set}`)), built };
+}
+
+/** Puts the built parts into the as-is tree: after their anchor, around it (a hover box), or at the end of the body. */
+export function placeExtras(body, placements) {
+  const where = new Map();
+  const index = (n, parent) => {
+    if (!n || 'text' in n) return;
+    if (n.cpath && !where.has(n.cpath)) where.set(n.cpath, { n, parent });
+    for (const c of n.children ?? []) index(c, n);
+  };
+  index(body, null);
+  const after = new Map(); // anchor -> nodes placed after it, in order
+  let placed = 0;
+  for (const p of placements) {
+    if (p.kind === 'end') {
+      body.children.push(p.node);
+      placed++;
+      continue;
+    }
+    const at = where.get(p.anchor);
+    if (!at?.parent) continue;
+    const list = at.parent.children;
+    if (p.kind === 'wrap') {
+      list.splice(list.indexOf(at.n), 1, { t: 'div', attrs: { 'data-w-hv': '', style: 'display: contents' }, children: [at.n, p.node] });
+      placed++;
+      continue;
+    }
+    const chain = after.get(p.anchor) ?? [at.n];
+    list.splice(list.indexOf(chain[chain.length - 1]) + 1, 0, p.node);
+    chain.push(p.node);
+    after.set(p.anchor, chain);
+    placed++;
+  }
+  return placed;
 }
 
 /** Puts carried attributes on the as-is nodes with the same path (motion tokens are merged, never replaced). */
@@ -509,7 +658,7 @@ export async function readAsis(dir, info, view = 'desktop') {
  */
 export async function applyAsIs(ir, { dir, site, excluded = [] }) {
   const sheets = new Map(); // hash → css text (with url("asset:…"))
-  const report = { pages: 0, rebuilt: [], sheets: 0, imports: 0, missingSheets: 0, cssUrls: 0, missingCssUrls: 0, elements: 0, dropped: 0, shadowRoots: 0, missing: { images: 0, media: 0, styleUrls: 0 }, links: { internal: 0, notice: 0, file: 0, external: 0, anchor: 0 }, safety: { handlers: 0, scriptUrls: 0, other: 0 }, excluded: 0, unpinned: 0, variants: { pages: 0, versions: 0 }, motion: { carried: 0, notCarried: { states: 0, hoverCards: 0, notices: 0, panels: 0, unmapped: 0 } } };
+  const report = { pages: 0, rebuilt: [], sheets: 0, imports: 0, missingSheets: 0, cssUrls: 0, missingCssUrls: 0, elements: 0, dropped: 0, shadowRoots: 0, missing: { images: 0, media: 0, styleUrls: 0 }, links: { internal: 0, notice: 0, file: 0, external: 0, anchor: 0 }, safety: { handlers: 0, scriptUrls: 0, other: 0 }, excluded: 0, unpinned: 0, variants: { pages: 0, versions: 0 }, motion: { carried: 0, extras: 0, notCarried: { states: 0, hoverCards: 0, notices: 0, panels: 0, unmapped: 0 } } };
   const infoByOut = new Map(site.pages.map((t) => [t.info.outPath, t.info]));
   for (const page of ir.pages) {
     const info = infoByOut.get(page.outPath);
@@ -553,9 +702,13 @@ export async function applyAsIs(ir, { dir, site, excluded = [] }) {
       n.children.forEach(index);
     };
     index(tree?.root);
-    const carried = carriedAttrs(page.body, cpathOf, report.motion.notCarried);
+    // The parts the copy adds as elements of their own, from the original markup of that state.
+    const fragmentOf = (x) => asisBody({ html: x.asisHtml, baseURI: asis.baseURI }, { pageUrl: info.url, assetResolve: site.assetResolve, resolveLink: site.resolveLink, fragment: 'copy' }).body;
+    const extras = asisExtras(page.body, cpathOf, fragmentOf, report.motion.notCarried);
+    const carried = carriedAttrs(page.body, cpathOf, report.motion.notCarried, extras.built);
     const { placed, lost } = carryInto(body, carried);
     report.motion.carried += placed;
+    report.motion.extras += placeExtras(body, extras.placements);
     report.motion.notCarried.unmapped += lost;
     report.unpinned += stats.unpinned;
     // Element ids for measuring (data-sas-id in a measurement build only), each with the capture path it stands for, so

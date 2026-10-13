@@ -22,6 +22,7 @@
 // Page functions below are self-contained (Playwright sends only their source).
 import { samePage } from './clicks.js';
 import { snapshotPage } from './snapshot.js';
+import { inheritAsIs } from './asis.js';
 import { cssStateEffects } from './interactions.js';
 
 const NAV = /next|prev|previous|arrow|›|‹|→|←|»|«|^>$|^<$/i;
@@ -213,6 +214,7 @@ async function firstVisit(page, url, area) {
   if (!browser) return null;
   const userAgent = await page.evaluate(() => navigator.userAgent);
   const context = await browser.newContext({ viewport: page.viewportSize(), userAgent, ignoreHTTPSErrors: true, serviceWorkers: 'block' });
+  await inheritAsIs(page, context);
   try {
     await context.addInitScript(() => {
       const later = window.setTimeout;
@@ -292,6 +294,7 @@ async function watchAutoplay(page, url, area, states) {
   if (!browser) return null;
   const userAgent = await page.evaluate(() => navigator.userAgent);
   const context = await browser.newContext({ viewport: page.viewportSize(), userAgent, ignoreHTTPSErrors: true, serviceWorkers: 'block' });
+  await inheritAsIs(page, context);
   try {
     const fresh = await context.newPage();
     await fresh.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });

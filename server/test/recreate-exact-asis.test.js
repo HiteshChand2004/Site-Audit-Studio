@@ -130,3 +130,20 @@ test('the pieces on their own: srcset, url() in and out of @font-face, a <base>,
   assert.ok(assets.some((a) => a.url.endsWith('/img/small.png')));
   assert.ok(assets.some((a) => a.url.endsWith('/fonts/brand.woff') && a.kind === 'font'), 'every source of a face, not just the one this browser chose');
 });
+
+test('in an exact capture a snapshot of one part keeps its markup in that state; an ordinary capture does not', async () => {
+  const { snapshotPage } = await import('../src/recreate/capture/snapshot.js');
+  const { markAsIs } = await import('../src/recreate/capture/asis.js');
+  const read = async (exact) => {
+    const context = await browser.newContext({ viewport: { width: 800, height: 600 } });
+    if (exact) await markAsIs(context);
+    const page = await context.newPage();
+    await page.goto(`${ORIGIN}/`, { waitUntil: 'load' });
+    const res = await page.evaluate(snapshotPage, { rootPath: 'body>div:1' });
+    await context.close();
+    return res.body;
+  };
+  const exact = await read(true);
+  assert.match(exact.asisHtml, /^<div class="hero">Hero<\/div>$/);
+  assert.equal((await read(false)).asisHtml, undefined);
+});

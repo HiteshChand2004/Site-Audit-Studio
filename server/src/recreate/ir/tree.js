@@ -40,6 +40,9 @@ export function fromCapture(node, view) {
     children: (node.children ?? []).map((c) => fromCapture(c, view)),
   };
   for (const key of ['lazy', 'src', 'href', 'poster', 'natural', 'svg']) if (node[key] != null) m[key] = node[key];
+  // The original markup of a part snapshotted in another state (capture/snapshot.js, exact mode): an as-is copy builds the
+  // state from it (ir/asis.js).
+  if (node.asisHtml) m.asisHtml = node.asisHtml;
   // The desktop path of the snapshot (body>div:1>a:2): the motion capture (4b) names its elements by it.
   if (view === 'desktop' && node.path) m.cpath = node.path;
   // The phone snapshot path: controls only the phone layout has (a menu button) are named by it (mobile-clicks.json).

@@ -7,6 +7,7 @@
 // Output: `body.notices = [{ element, ms, items: [{ control, body }] }]` on the page snapshot (capture/<slug>/desktop.json);
 // `element` and `control` are snapshot paths, `body` the message as snapshotted (snapshot.js), `ms` how long it stays.
 import { snapshotPage } from './snapshot.js';
+import { inheritAsIs } from './asis.js';
 
 const MAX_CONTROLS = 30;
 
@@ -84,6 +85,7 @@ export async function captureNotices(page, clicks, body, { budgetMs = 30000, url
   if (!browser) return stats;
   userAgent ??= await page.evaluate(() => navigator.userAgent);
   const context = await browser.newContext({ viewport: viewport ?? page.viewportSize(), userAgent, ignoreHTTPSErrors: true, serviceWorkers: 'block' });
+  await inheritAsIs(page, context);
   const out = [];
   try {
     const fresh = await context.newPage();

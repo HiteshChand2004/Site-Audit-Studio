@@ -117,7 +117,7 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
     if (!skip.includes('motion')) {
       try {
         const folder = recreateDir(project.id, recreateId);
-        const oldMotion = await readOldMotion(folder, report.pages);
+        const oldMotion = await readOldMotion(folder, report.pages, report.exact?.excluded ?? []);
         const slugOf = new Map((report.pages ?? []).map((p) => [p.outPath, p.slug]));
         const targets = outputPageList.filter((p) => slugOf.has(p.outPath) && oldMotion.has(slugOf.get(p.outPath)))
           .map((p) => ({ slug: slugOf.get(p.outPath), urlPath: p.path.replace(/^\//, ''), hoverBudgetMs: hoverBudgetFor(oldMotion.get(slugOf.get(p.outPath))) }));

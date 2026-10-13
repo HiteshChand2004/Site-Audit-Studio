@@ -21,7 +21,7 @@ import { FOREIGN_BUDGET_MS, foreignStyleText, harvestForeignStateRules } from '.
 import { shapeCounts } from './selectorShape.js';
 import { attachType, probeTypography } from './typography.js';
 import { attachProbe, probeViewportHeight } from './viewport.js';
-import { asisFile, captureAsIs, recordSheetBodies } from './asis.js';
+import { asisFile, captureAsIs, markAsIs, recordSheetBodies } from './asis.js';
 
 // Clicking through the states of tabs / carousels / filtered lists of one page (most pages have none: no time used). The
 // limit follows the work (capture/states.js, ~3 s per control) within these bounds.
@@ -128,6 +128,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
   await cache?.attach(context);
   // An exact copy keeps the site's own stylesheets: their bodies as written, from the network (capture/asis.js).
   const sheetRecorder = exact ? recordSheetBodies(context) : null;
+  if (exact) await markAsIs(context);
   const resources = new Map();
   const failed = [];
   context.on('response', (res) => {

@@ -40,6 +40,16 @@ export function recordSheetBodies(context) {
   return { bodies, settled: () => Promise.all([...pending]).then(() => {}) };
 }
 
+/**
+ * Marks a page as captured for an as-is copy: snapshots of one part (the states of a carousel, a hovered card, a panel)
+ * then keep that part's markup too (snapshot.js `asisHtml`). A probe that opens a fresh context passes the mark on
+ * (`inheritAsIs`).
+ */
+export const markAsIs = (context) => context.addInitScript(() => { window.__sasAsIs = true; });
+export async function inheritAsIs(page, context) {
+  if (await page.evaluate(() => Boolean(window.__sasAsIs)).catch(() => false)) await markAsIs(context);
+}
+
 /** Page function: the rendered document and its stylesheets in cascade order (see the header). */
 export function readAsIs() {
   const sheets = [];

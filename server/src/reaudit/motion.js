@@ -32,12 +32,18 @@ export function hoverBudgetFor(oldMotion) {
 const NETWORK_QUIET_MS = 1000;
 
 /** The original's motion.json per page: Map<slug, object> (only pages that have one). */
-export async function readOldMotion(recreateFolder, reportPages) {
+export async function readOldMotion(recreateFolder, reportPages, excluded = []) {
   const out = new Map();
   for (const p of reportPages ?? []) {
     if (!p.slug) continue;
     try {
-      out.set(p.slug, JSON.parse(await readFile(path.join(recreateFolder, 'capture', p.slug, 'motion.json'), 'utf8')));
+      const motion = JSON.parse(await readFile(path.join(recreateFolder, 'capture', p.slug, 'motion.json'), 'utf8'));
+      // A part the copy left out on purpose (an exact copy's ir/exclude.js: the builder's own controls) is not a hover
+      // the copy lost.
+      const gone = excluded.filter((e) => !e.page || e.page === p.path).map((e) => e.path).filter(Boolean);
+      const kept = (h) => !gone.some((x) => h.path === x || String(h.path ?? '').startsWith(`${x}>`));
+      if (gone.length) for (const kind of ['hover', 'focus']) if (Array.isArray(motion[kind])) motion[kind] = motion[kind].filter(kept);
+      out.set(p.slug, motion);
     } catch { /* not captured for this page */ }
   }
   return out;

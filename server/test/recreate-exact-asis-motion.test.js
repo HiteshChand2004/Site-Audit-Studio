@@ -40,7 +40,7 @@ test('motion attributes move to the element at the same path; extra elements are
   const carried = carriedAttrs(rebuilt, cpathOf, notCarried);
   assert.deepEqual([...carried.keys()], ['body>a:1', 'body>div:1', 'body>div:1>button:1', 'body>header:1', 'body>span:9']);
   assert.deepEqual(carried.get('body>div:1'), { 'data-motion': 'w1', 'data-w-one': '' }, 'the set attribute itself is not carried');
-  assert.deepEqual(notCarried, { states: 1, hoverCards: 1, notices: 0, panels: 0, unmapped: 0 });
+  assert.deepEqual(notCarried, { states: 1, hoverCards: 0, notices: 0, panels: 0, unmapped: 0 }, 'a hover card is built or counted by asisExtras');
 
   const asis = { t: 'body', cpath: 'body', attrs: {}, children: [
     { t: 'a', cpath: 'body>a:1', attrs: { 'data-motion': 'site-own' }, children: [] },

@@ -314,6 +314,9 @@ export function snapshotPage(opts) {
       sub = walk(el, parentValues, opts.rootPath);
     }
     frame.remove();
+    // An exact capture (capture/asis.js) also keeps this part as the browser has it in this state: its markup, so an
+    // as-is copy can show the state with the site's own classes and stylesheets.
+    if (sub && el && window.__sasAsIs) sub.asisHtml = el.outerHTML;
     return { body: sub, cssUrls: [...cssUrls], nodeCount: count, truncated };
   }
   const body = document.body ? walk(document.body, rootValues, 'body') : null;

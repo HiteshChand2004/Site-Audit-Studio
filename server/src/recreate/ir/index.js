@@ -432,7 +432,7 @@ function pageBody(t, site, stats) {
     if (n.motionTokens?.length) attrs['data-motion'] = n.motionTokens.join(' ');
     // States of tabs / carousels / filtered lists (ir/states.js): which state an area is, which state a control shows.
     if (n.stateAttrs) Object.assign(attrs, n.stateAttrs);
-    const out = { t: n.tag, sid: n.sid, attrs, children: [] };
+    const out = { t: n.tag, sid: n.sid, attrs, children: [], ...(n.asisHtml && { asisHtml: n.asisHtml }) };
     // A state the page does not start in (another tab, slide or filter) is written inside a <template> (emitters): not part
     // of the page until the script shows it, so the page's element count stays the original's.
     if (n.stateAttrs?.['data-w-set'] && 'hidden' in n.stateAttrs) out.tpl = n.stateAttrs['data-w-set'];
