@@ -550,7 +550,7 @@ function pageBody(t, site, stats) {
 }
 
 /** The notice pages the links of the site need (ir/notice.js): static files, so every stack ships them. */
-function noticeFiles(site) {
+export function noticeFiles(site) {
   const lang = site.pages[0]?.head?.lang ?? null;
   return [...(site.resolveLink.notices ?? new Map())].map(([outPath, { url, reason }]) => ({
     path: outPath,

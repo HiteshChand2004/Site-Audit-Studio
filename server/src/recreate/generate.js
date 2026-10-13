@@ -33,6 +33,7 @@ import { boxLookups } from './verify/exact/boxes.js';
 import { CSS_FILE } from './emit/css.js';
 import { SWEEP_WIDTHS } from './capture/sweep.js';
 import { REFINE_PAGES, refineResponsive } from './verify/refine.js';
+import { applyAsIs } from './ir/asis.js';
 
 export const FIT_ROUNDS = 2;
 // The fit pass stops starting new rounds this long before the step's time limit.
@@ -346,6 +347,21 @@ export async function generateStage(ctx) {
     await addToManifest(assetsDir, images.files, known, ctx.assets);
     ({ ir, stats } = build());
   }
+  // Exact mode keeps the original's own markup and stylesheets where the capture kept them (ir/asis.js): the site's
+  // rules size every element at every width, so the layout passes below - which fit rebuilt px values to the captured
+  // widths - have nothing to do and are skipped.
+  let asis = null;
+  if (asIs) {
+    ctx.progress(0.18, 'Keeping the original markup and stylesheets');
+    asis = await applyAsIs(ir, { dir: ctx.dir, site, excluded });
+    if (asis.pages && asis.rebuilt.length) {
+      report.warnings.push(`${asis.rebuilt.length} ${asis.rebuilt.length === 1 ? 'page has' : 'pages have'} no as-is capture and ${asis.rebuilt.length === 1 ? 'was' : 'were'} rebuilt instead (capture the site again to keep their original CSS).`);
+    }
+    if (asis.missingCssUrls || asis.missing.images || asis.missing.media) {
+      report.warnings.push(`${asis.missingCssUrls + asis.missing.images + asis.missing.media} files the original's markup or stylesheets point at could not be downloaded; they are left out of the copy, never linked to the original.`);
+    }
+  }
+  const asisMode = Boolean(ir.asis);
   let out = emitSite(ir);
   await writeSite(siteDir, out, assetsDir, known);
 
@@ -364,7 +380,7 @@ export async function generateStage(ctx) {
   // 64-page rebuild it used the whole step and the correction loop was skipped before it measured anything.
   const refineTime = refineBudget(ctx.sweep?.widths ?? SWEEP_WIDTHS, { exact: asIs });
   const afterFit = correctOn() ? CORRECT_BUDGET + refineTime : 0;
-  for (let round = 0; round <= FIT_ROUNDS; round++) {
+  for (let round = 0; !asisMode && round <= FIT_ROUNDS; round++) {
     // Round 0 only measures, and the correction loop picks its pages from what it measures, so it always runs.
     if (Date.now() > ctx.stepDeadline - FIT_MARGIN - (round ? afterFit : 0)) {
       fit.stopped = 'time-limit';
@@ -422,7 +438,7 @@ export async function generateStage(ctx) {
   // from the per-element differences the ledger now holds, tries each candidate as an override of css/site.css
   // (no rebuild, nothing written), and keeps only what measured closer to the original on every page and view.
   let correct = null;
-  if (correctOn()) {
+  if (correctOn() && !asisMode) {
     const correctDeadline = Math.min(Date.now() + CORRECT_BUDGET, ctx.stepDeadline - FIT_MARGIN - refineTime);
     if (correctDeadline - Date.now() >= CORRECT_MIN) {
       ctx.progress(0.75, 'Correcting the layout against the original');
@@ -456,7 +472,7 @@ export async function generateStage(ctx) {
   // viewport rather than at the four captured views. It measures the build with data-sas-id, which is what lets a box
   // be matched by path - a production build has no ids, which is why the reporting pass after `build` cannot.
   let exactCorrect = null;
-  if (asIs && ctx.exactBaseline?.pages?.length) {
+  if (asIs && !asisMode && ctx.exactBaseline?.pages?.length) {
     // The loop is the longest part of an exact run, so a previous attempt that got through it and was interrupted
     // afterwards (a crash, a restart, the machine running out of memory) leaves its result in the checkpoint, and the
     // fixes are put back on the trees instead of being measured again - but only if every saved fix lands on the
@@ -548,11 +564,11 @@ export async function generateStage(ctx) {
   // The sweep may still be running next to this step (recreate/index.js): the check needs its first pages only, so it
   // waits for those (a bounded time) and works with the pages swept by then.
   let sweep = ctx.sweep;
-  if (sweep === undefined && ctx.sweepPending) {
+  if (!asisMode && sweep === undefined && ctx.sweepPending) {
     ctx.progress(0.9, 'Waiting for the screenshots of the original at more widths');
     sweep = await ctx.sweepPending(REFINE_PAGES, Math.max(0, Math.min(SWEEP_WAIT, ctx.stepDeadline - FIT_MARGIN - refineTime - Date.now())));
   }
-  if (sweep) {
+  if (sweep && !asisMode) {
     ctx.progress(0.9, 'Checking the layout between the captured widths');
     try {
       refined = await refineResponsive({
@@ -626,6 +642,7 @@ export async function generateStage(ctx) {
   }), { elements: 0, variantsMerged: 0, wrappersRemoved: 0, viewOnly: 0 });
   report.generate = {
     stack: 'html',
+    ...(asis && { asis }),
     pages: ir.pages.length,
     ...treeStats,
     classes: stats.classes,

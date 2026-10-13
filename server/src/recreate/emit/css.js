@@ -10,6 +10,7 @@ import { KNOWN_MEDIA_VIEWS as MEDIA_VIEWS } from '../views.js';
 import { RESET } from '../ir/styles.js';
 import { relFile } from '../ir/links.js';
 import { motionCss } from './motionCss.js';
+import { asisCss } from '../ir/asis.js';
 
 export const CSS_FILE = 'css/site.css';
 const CSS_WIDE = /^(inherit|initial|unset|revert|revert-layer)$/;
@@ -296,6 +297,9 @@ const selectorClass = (selector) => selector.match(/^\.(-?[_a-zA-Z][\w-]*)/)?.[1
  */
 export function emitCss(ir, { page = null, usedVars = usedCustomProps(ir) } = {}) {
   const from = page ? page.outPath : CSS_FILE;
+  // A page kept as-is (exact mode, ir/asis.js) is styled by the site's own sheets alone, in their order, plus the
+  // effects the copy rebuilds; the shared file adds them after whatever rebuilt pages need.
+  if (ir.asis && page?.asis) return [asisCss(ir, { page, from }), motionCss(ir.motion && pageMotion(ir.motion, page), { tokenOf: new Map(), from, usedVars })].filter(Boolean).join('\n');
   const tokenOf = new Map(Object.entries(ir.tokens).map(([name, hex]) => [hex, name]));
   const opts = { tokenOf, from, usedVars };
   const classes = page && pageClasses(page);
@@ -330,5 +334,6 @@ export function emitCss(ir, { page = null, usedVars = usedCustomProps(ir) } = {}
     const rules = byView[view];
     if (rules.length) sections.push(`@media (max-width: ${ir.breakpoints[view] ?? DEFAULT_BREAKPOINTS[view]}px) {\n${rules.join('\n')}\n}`);
   }
+  if (ir.asis && !page) sections.push(asisCss(ir, { from }));
   return `${sections.filter(Boolean).join('\n\n')}\n`;
 }

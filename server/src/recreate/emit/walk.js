@@ -37,6 +37,8 @@ export function refValue(value, refs) {
   if (value.page) return refs.pageHref(value.page) + (value.hash ?? '');
   if (value.file) return (refs.fileHref ?? rootFileHref)(value.file) + (value.hash ?? '');
   if (value.anchor) return value.anchor;
+  // A style attribute of an as-is page (ir/asis.js): its url("asset:…") point at the downloaded files.
+  if (value.css != null) return value.css.replace(/url\("asset:([^"]+)"\)/g, (all, file) => (refs.useAsset(file), `url("${refs.assetHref(file)}")`));
   if (value.live) return value.live;
   if (value.external) return value.external;
   return '';
