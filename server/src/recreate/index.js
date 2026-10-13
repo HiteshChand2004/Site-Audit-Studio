@@ -16,7 +16,7 @@ import { userPolicy, withNetPolicy } from '../security/netGuard.js';
 import { maxParallel, parallelism } from '../audit/resources.js';
 import { TimeoutError } from '../audit/util.js';
 import { createInterrupts, extendableTimeout } from './interrupts.js';
-import { analysisWarnings, baseUrlOf, isAllPages, latestAnalysis, pageLimitOf, SITE_PAGE_CAP } from './inputs.js';
+import { analysisWarnings, baseUrlOf, isAllPages, latestAnalysis, pageLimitOf, pageUrlOf, SITE_PAGE_CAP } from './inputs.js';
 import { RecreateError } from './errors.js';
 import { assetsStage } from './assets/index.js';
 import { buildStage } from './build/index.js';
@@ -186,8 +186,10 @@ async function recreate({
     baseUrl: baseUrlOf(project, analysis.audit),
     // An exact copy is of the whole site: every page the discovery finds, whatever the project's page setting says
     // (the setting still decides for an ordinary copy, and the safety cap still applies).
-    pageLimit: exact ? SITE_PAGE_CAP - 1 : pageLimitOf(project.recreate_pages),
-    allPages: exact || isAllPages(project.recreate_pages),
+    // One page only (projects.page_url) wins over both: that page and nothing else, in an exact copy too.
+    ...(pageUrlOf(project) && { singlePage: pageUrlOf(project) }),
+    pageLimit: pageUrlOf(project) ? 0 : exact ? SITE_PAGE_CAP - 1 : pageLimitOf(project.recreate_pages),
+    allPages: !pageUrlOf(project) && (exact || isAllPages(project.recreate_pages)),
     exact,
     unlimited,
     // Without an overall limit a page is given much longer before it counts as stalled (inspect.js: max of this and

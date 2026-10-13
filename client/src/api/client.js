@@ -143,6 +143,8 @@ export const api = {
   updateProject: (id, patch) => request(`/projects/${id}`, { method: 'PATCH', body: patch }),
   deleteProject: (id) => request(`/projects/${id}`, { method: 'DELETE' }),
   getAudit: (id) => request(`/projects/${id}/audit`),
+  // Every page of the site the app has seen (for the "One page" picker): { pages: [{ path, url }], pageUrl }.
+  getPages: (id) => request(`/projects/${id}/pages`),
   startAnalyze: (id, body = {}) => request(`/projects/${id}/analyze`, { method: 'POST', body }),
   getCurrentAnalysis: (id) => request(`/projects/${id}/analyze/current`),
   subscribeAnalysis: (id, analysisId, handlers) => subscribe(`/api/projects/${id}/analyze/${analysisId}/events`, handlers),

@@ -14,6 +14,7 @@ const REASONS = {
   stalled: 'The original page did not finish loading, twice, when the site was copied.',
   'time-limit': 'The original page was not copied in the time the copy had.',
   'beyond-limit': 'This page was not part of the pages chosen for the copy.',
+  'single-page': 'Only one page of this site was copied, and this is not that page.',
 };
 const FALLBACK = 'This page was not copied.';
 

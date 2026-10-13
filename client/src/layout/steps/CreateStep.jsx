@@ -14,6 +14,7 @@ import { api } from '../../api/client.js';
 import { outputsOf, outputState } from '../../stacks.js';
 import { isAnalysisActive, isJobActive, useProjects } from '../../store/useProjects.js';
 import styles from '../Panel.module.css';
+import { pathOf } from '../../components/project/PageScope.jsx';
 import ws from '../Workspace.module.css';
 
 const STALE_DAYS = 7;
@@ -108,7 +109,7 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
           </div>
           <div>
             <dt>Pages</dt>
-            <dd>{pagesText(project.recreate_pages)}</dd>
+            <dd>{project.page_url ? <>Only one page: <span className="mono">{pathOf(project.page_url)}</span></> : pagesText(project.recreate_pages)}</dd>
           </div>
           <div>
             <dt>Future address</dt>

@@ -13,6 +13,7 @@ import { api } from '../../api/client.js';
 import { outputsOf } from '../../stacks.js';
 import { isJobActive, useProjects } from '../../store/useProjects.js';
 import styles from '../Panel.module.css';
+import { pathOf } from '../../components/project/PageScope.jsx';
 import ws from '../Workspace.module.css';
 
 /** Step 4: what got better, what still needs work, and the download. */
@@ -88,6 +89,11 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
     <div className={ws.stepBody}>
       {reauditJob && reauditJob.status !== 'done' && <AnalyzeProgress analysis={reauditJob} kind="reaudit" onDismiss={() => dismissJob('reaudit', project.id)} />}
 
+      {result.singlePage && (
+        <p className={ws.hint}>
+          Results for one page only: <span className="mono">{result.singlePage.path ?? pathOf(result.singlePage.url)}</span> (checked and copied on its own; the rest of the website is not part of these results).
+        </p>
+      )}
       <Outcome result={result} comparison={comparison} />
 
       {!comparison && canCompare && (

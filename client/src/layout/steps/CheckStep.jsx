@@ -9,6 +9,7 @@ import SectionCard from '../../components/common/SectionCard.jsx';
 import { Alert } from '../../components/common/Surface.jsx';
 import AuditReport from '../../components/audit/AuditReport.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
+import PageScope, { pathOf } from '../../components/project/PageScope.jsx';
 import { isAnalysisActive, useProjects } from '../../store/useProjects.js';
 import { timeAgo } from '../../format.js';
 import styles from '../Panel.module.css';
@@ -120,7 +121,7 @@ export default function CheckStep({ project, audit, loading }) {
           <Globe size={14} aria-hidden="true" />
           <input className="mono" value={url} onChange={(e) => setUrl(e.target.value)} aria-label="Website address" disabled={running} />
         </label>
-        <label className={styles.pagesInput} title="How many pages the check reads (1–100)">
+        {!project.page_url && <label className={styles.pagesInput} title="How many pages the check reads (1–100)">
           <span>Pages to check</span>
           <input
             className="mono"
@@ -133,11 +134,13 @@ export default function CheckStep({ project, audit, loading }) {
             aria-label="How many pages the check reads"
             disabled={running}
           />
-        </label>
+        </label>}
         <Button type="submit" variant={audit?.isDummy ? 'primary' : 'secondary'} icon={running ? Spinner : Play} disabled={running}>
           {running ? 'Checking…' : audit?.isDummy ? 'Check now' : 'Check again'}
         </Button>
       </form>
+
+      <PageScope project={project} disabled={running} />
 
       {analysis && analysis.status !== 'done' && <AnalyzeProgress analysis={analysis} onDismiss={() => dismissAnalysis(project.id)} />}
 
@@ -152,12 +155,22 @@ export default function CheckStep({ project, audit, loading }) {
                   Example report — click “Check now” to check the real site.
                 </p>
               )}
-              {!audit.isDummy && (
+              {!audit.isDummy && audit.scope?.kind === 'page' && (
+                <p className={ws.hint}>
+                  Checked {timeAgo(audit.analyzedAt)} · one page only: <span className="mono">{pathOf(audit.scope.url)}</span> · speed measured on this page
+                </p>
+              )}
+              {!audit.isDummy && audit.scope?.kind !== 'page' && (
                 <p className={ws.hint}>
                   Checked {timeAgo(audit.analyzedAt)} · {audit.pagesCrawled} {audit.pagesCrawled === 1 ? 'page' : 'pages'} read
                   {audit.pageVariants > 0 && ` (+${audit.pageVariants} ${audit.pageVariants === 1 ? 'address' : 'addresses'} with “?…” counted as the same page)`}
                   {' '}· speed measured on the homepage
                 </p>
+              )}
+              {!audit.isDummy && (project.page_url ?? null) !== (audit.scope?.url ?? null) && (
+                <Alert tone="info" title={project.page_url ? `This report is not for ${pathOf(project.page_url)} yet` : 'This report is for one page only'}>
+                  {project.page_url ? 'Click “Check again” to check only the chosen page.' : 'Click “Check again” to check the whole website.'}
+                </Alert>
               )}
               {audit.errors?.length > 0 && (
                 <Alert tone="warn" title="Some checks did not finish, so the report is incomplete">

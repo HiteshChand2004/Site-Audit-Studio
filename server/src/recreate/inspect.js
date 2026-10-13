@@ -173,7 +173,7 @@ export async function inspectStage(ctx) {
   });
   const discover = () =>
     discoverPages({
-      url: ctx.audit.url ?? ctx.project.url,
+      url: ctx.singlePage ?? ctx.audit.url ?? ctx.project.url,
       limit: ctx.pageLimit,
       all: ctx.allPages,
       knownUrls,
@@ -185,7 +185,7 @@ export async function inspectStage(ctx) {
   // recreates that page, so the copy does not answer with a blank 200 where the original answers 404 with a page of
   // its own design.
   let notFound = null;
-  if (ctx.exact) {
+  if (ctx.exact && !ctx.singlePage) {
     notFound = await probeNotFound(ctx.audit.url ?? ctx.project.url, { signal: ctx.signal }).catch(() => null);
   }
 
@@ -219,6 +219,14 @@ export async function inspectStage(ctx) {
       notFound: true,
     });
   }
+  // One page only: that page, and it is the copy's start page (index.html), so the preview, the download, the re-audit
+  // and every stack open on it. Its links to the rest of the site lead to local notice pages, like any page not copied.
+  if (!resumed && ctx.singlePage) {
+    const [page] = discovery.pages;
+    discovery.beyondLimit = [...(discovery.beyondLimit ?? []), ...discovery.pages.slice(1).map((p) => ({ url: p.url, reason: 'single-page' }))];
+    discovery.pages = page ? [{ ...page, outPath: 'index.html', slug: 'index', source: 'single-page' }] : [];
+  }
+  if (ctx.singlePage) report.singlePage = { url: ctx.singlePage, path: discovery.pages[0] ? new URL(discovery.pages[0].url).pathname : null };
   if (!resumed) await ctx.checkpoint?.saveDiscovery(discovery);
 
   // The limits follow the work: every page beyond the base set extends this step, the job and the later steps (index.js).
