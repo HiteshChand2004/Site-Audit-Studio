@@ -406,8 +406,24 @@ export function regionDiff(closed, open) {
 
 /** Page function: brings candidate `i` into view and returns where to click it, or null when something covers it. */
 function aimClick(i) {
-  const el = window.__sasClick?.els[i];
-  if (!el || !el.isConnected) return null;
+  let el = window.__sasClick?.els[i];
+  if (!el) return null;
+  // A page that re-renders the area (a framework re-mounting it, a copy showing another copy of it) has hidden or replaced
+  // the control that was clicked: the second click goes to its drawn twin - the same tag and name - nearest to where it was.
+  const drawn = (x) => x.isConnected && x.getClientRects().length > 0 && x.getBoundingClientRect().width >= 2;
+  if (!drawn(el)) {
+    const name = (x) => (x.getAttribute('aria-label') || x.textContent || '').replace(/\s+/g, ' ').trim();
+    const key = name(el);
+    const was = el.getBoundingClientRect();
+    const twins = key ? [...document.getElementsByTagName(el.tagName)].filter((x) => x !== el && drawn(x) && name(x) === key) : [];
+    if (!twins.length) return null;
+    const dist = (x) => {
+      const r = x.getBoundingClientRect();
+      return Math.hypot(r.left - was.left, r.top - was.top);
+    };
+    el = twins.sort((a, b) => dist(a) - dist(b))[0];
+  }
+  window.__sasClick.aimed = el;
   const before = el.getBoundingClientRect();
   const scrolled = before.top < 0 || before.bottom > innerHeight;
   if (scrolled) el.scrollIntoView({ block: 'center', inline: 'nearest' });
@@ -417,6 +433,11 @@ function aimClick(i) {
   const y = Math.round(Math.min(innerHeight - 2, Math.max(1, r.top + r.height / 2)));
   const top = document.elementFromPoint(x, y);
   return { x, y, scrolled, reachable: !!top && (top === el || el.contains(top) || top.contains(el)) };
+}
+
+/** Page function: clicks the element aimClick last aimed at without the mouse. */
+function clickAimed() {
+  window.__sasClick?.aimed?.click();
 }
 
 /** Page function: clicks candidate `i` without the mouse (a fallback when something covers it). */
@@ -601,6 +622,7 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
   // A tab that writes its state into the address (?tab=join, #faq) without loading another page has not left the page.
   const left = () => !samePage(page.url(), startUrl);
   const picked = await page.evaluate(installClicks, { limit, perSignature, hint: HINT_SOURCE });
+  const probedNames = [];
   const stats = { candidates: picked.candidates.length, probed: 0, found: 0, noChange: 0, covered: 0, notRestored: 0, left: false, timedOut: false, skipped: picked.skipped, kinds: {} };
   const groupOf = new Map();
   for (const g of picked.groups) for (const p of g.paths) groupOf.set(p, g);
@@ -662,6 +684,7 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
       continue;
     }
     stats.probed++;
+    probedNames.push(c.text ?? '');
     try {
       await page.mouse.move(-20, -20).catch(() => {});
       // After scrolling the control into view, what reacts to the scroll (a header sliding away, reveals) settles first, and
@@ -749,7 +772,9 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
         const root = common || null;
         const only = root === 'body' ? [c.path, ...kind.targets] : null;
         const open = root ? await page.evaluate(readRegion, { rootPath: root, only }).catch(() => null) : null;
-        entry.closes = await restore(page, c, spot, read);
+        const how = await restore(page, c, spot, read, d);
+        entry.closes = how.closes;
+        if (how.own) entry.closesOwn = how.own;
         if (!entry.closes) stats.notRestored++;
         else if (open) {
           await page.waitForTimeout(200);
@@ -757,6 +782,11 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
           const parts = closed ? quietParts(regionDiff(closed, open), noise, root) : [];
           if (parts.length) entry.state = { root, parts, ...(Object.keys(open).length > Object.keys(closed).length && { added: true }) };
         }
+      } else if (kind.kind === 'tabs') {
+        // A tab clicked again normally stays; a set of states drawn as copies of an area (an exact copy's FAQ) reads as
+        // tabs, and closes what it opened on a second click. Only the fair reading is kept, so nothing is planned from it.
+        const how = await restore(page, c, spot, read, d);
+        if (how.own) entry.closesOwn = how.own;
       }
       widgets.push(entry);
       stats.found++;
@@ -809,32 +839,46 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
       /* the list is left as found */
     }
   }
-  return { version: 1, view: 'desktop', widgets, groups: picked.groups, noise, stats: { ...stats, noise: noise.length, ms: Date.now() - started } };
+  return { version: 1, view: 'desktop', widgets, groups: picked.groups, noise, probedNames, stats: { ...stats, noise: noise.length, ms: Date.now() - started } };
 }
 
-/** Closes what a click opened; returns how ('toggle' | 'escape' | 'outside') or null when it stays open. */
-async function restore(page, c, spot, read) {
-  const closed = async () => {
+/**
+ * Closes what a click opened, trying its own control again (on its drawn twin when the page replaced it, by script when
+ * something covers it), then Escape, then a click outside. Two readings, each the first way that worked:
+ * - `closes` - the page is back as it was. The capture plans with it (a FAQ that closes another answer when this one opens
+ *   is a set of states, not a plain panel), so it keeps its meaning.
+ * - `own` - something the click showed or added, still open right before, is gone again. What else changed meanwhile (an
+ *   element revealing itself, the other answer) neither proves nor prevents it, so the order the probe goes through the
+ *   controls cannot decide it. The re-audit compares this one on both sides.
+ * @returns {Promise<{ closes: string|null, own: string|null }>}
+ */
+async function restore(page, c, spot, read, opened = null) {
+  // Text a click rewrote (a tab replacing a panel's text in place) counts as opened too.
+  const shownIn = (d) => new Set([...(d?.shown ?? []), ...(d?.added ?? []), ...(d?.text ?? [])].map((x) => x.path));
+  const ownPaths = opened ? [...opened.shown, ...opened.added, ...(opened.text ?? [])].filter((x) => !x.inTrigger).map((x) => x.path) : [];
+  const openBefore = ownPaths.length ? shownIn(await read(c.i).catch(() => null)) : new Set();
+  const openNow = ownPaths.filter((p) => openBefore.has(p));
+  const out = { closes: null, own: null };
+  const check = async (how) => {
     await page.waitForTimeout(350);
     const d = await read(c.i);
-    return !visibleChange(d);
+    if (!out.own && (openNow.length ? openNow.some((p) => !shownIn(d).has(p)) : !visibleChange(d))) out.own = how;
+    if (!visibleChange(d)) out.closes = how;
+    return out.closes != null;
   };
   try {
-    if (spot.reachable) {
-      const again = await page.evaluate(aimClick, c.i);
-      if (again?.reachable) {
-        await page.mouse.click(again.x, again.y);
-        if (await closed()) return 'toggle';
-      }
-    }
+    const again = await page.evaluate(aimClick, c.i);
+    if (again?.reachable) await page.mouse.click(again.x, again.y);
+    else if (again) await page.evaluate(clickAimed);
+    if (again && await check('toggle')) return out;
     await page.keyboard.press('Escape');
-    if (await closed()) return 'escape';
+    if (await check('escape')) return out;
     await page.mouse.click(4, 4);
-    if (await closed()) return 'outside';
+    await check('outside');
   } catch {
     /* the next probe reads the page as it is */
   }
-  return null;
+  return out;
 }
 
 /** The parts of a change worth keeping in motion.json. */

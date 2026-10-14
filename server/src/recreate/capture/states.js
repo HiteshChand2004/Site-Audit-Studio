@@ -186,7 +186,29 @@ function commonPath(paths) {
 
 const related = (a, b) => a === b || a.startsWith(`${b}>`) || b.startsWith(`${a}>`);
 
-/** What a state looks like, for telling states apart: structure, visibility and text, not exact styles. */
+/**
+ * How far a box is slid (a carousel track whose slides all stay rendered: only its translation tells them apart), in steps
+ * of 8 px so sub-pixel jitter is no difference. '' when it is not slid.
+ */
+export function shiftOf(style) {
+  if (!style) return '';
+  let x = 0;
+  let y = 0;
+  const m = /^matrix(3d)?\(([^)]+)\)/.exec(style.transform ?? '');
+  if (m) {
+    const v = m[2].split(',').map(Number);
+    [x, y] = m[1] ? [v[12], v[13]] : [v[4], v[5]];
+  }
+  const t = /^(-?[\d.]+)px(?:\s+(-?[\d.]+)px)?/.exec(style.translate ?? '');
+  if (t) {
+    x += Number(t[1]);
+    y += Number(t[2] ?? 0);
+  }
+  const q = (v) => Math.round((v || 0) / 8);
+  return q(x) || q(y) ? ` @${q(x)},${q(y)}` : '';
+}
+
+/** What a state looks like, for telling states apart: structure, visibility, text and how far a track is slid, not exact styles. */
 export function stateSignature(node) {
   const parts = [];
   const walk = (n) => {
@@ -196,7 +218,7 @@ export function stateSignature(node) {
       return;
     }
     const hidden = n.hidden || n.style?.display === 'none' || n.style?.visibility === 'hidden' || n.style?.opacity === '0' || n.attrs?.['aria-hidden'] === 'true';
-    parts.push(`<${n.tag}${hidden ? ' h' : ''}>`);
+    parts.push(`<${n.tag}${hidden ? ' h' : ''}${shiftOf(n.style)}>`);
     if (!hidden) for (const c of n.children ?? []) walk(c);
     parts.push('>');
   };
@@ -362,6 +384,39 @@ export function closestByText(node, states) {
 }
 
 /**
+ * Equal controls in blocks of their own that each act inside their own block only - two FAQ lists side by side, each
+ * opening one answer at a time - are independent sets: one set over both would close the first list's answer when the
+ * second list is used, which the original never does. The blocks are the children of the controls' common ancestor that
+ * hold two controls or more; the evidence is every probed control's changes staying inside its own block (a tab row whose
+ * panel is elsewhere changes outside it, and stays one set). A block nobody probed repeats the probed one's structure, so
+ * its changes are the probed block's, moved over.
+ */
+export function splitIndependent(s) {
+  const area = commonPath(s.controls);
+  if (!area || !s.byTrigger?.size) return [s];
+  const blockOf = (p) => (p.startsWith(`${area}>`) ? `${area}>${p.slice(area.length + 1).split('>')[0]}` : null);
+  const blocks = new Map();
+  for (const c of s.controls) {
+    const b = blockOf(c);
+    if (!b) return [s];
+    blocks.set(b, [...(blocks.get(b) ?? []), c]);
+  }
+  if (blocks.size < 2 || [...blocks.values()].some((cs) => cs.length < 2)) return [s];
+  const own = new Map();
+  for (const [t, changed] of s.byTrigger) {
+    const b = blockOf(t);
+    if (!b || !blocks.has(b) || !changed.length || changed.some((p) => !p.startsWith(`${b}>`))) return [s];
+    own.set(b, [...(own.get(b) ?? []), ...changed]);
+  }
+  const [probed, sample] = own.entries().next().value;
+  return [...blocks].map(([b, controls]) => {
+    const changed = own.get(b) ?? sample.map((p) => b + p.slice(probed.length));
+    const triggers = new Set([...s.triggers].filter((t) => blockOf(t) === b));
+    return { ...s, controls, changed: new Set(changed), triggers, nav: s.nav.filter((p) => blockOf(p) === b), byTrigger: new Map([...s.byTrigger].filter(([t]) => blockOf(t) === b)) };
+  });
+}
+
+/**
  * The groups worth capturing: equal controls that switch content (tabs, dots, chips), with the next / previous controls
  * that act on the same content. Paths that change on their own (`noise`) are not evidence.
  */
@@ -369,7 +424,8 @@ export function planSets(widgets, noise = []) {
   const quiet = (p) => !noise.some((n) => p === n || p.startsWith(`${n}>`));
   // A fixed element a click shows is a notice (capture/notices.js), not switched content.
   // What a click showed, hid, added, or wrote new text into (a panel whose text a tab replaces in place).
-  const changedBy = (w) => [...(w.change?.shown ?? []), ...(w.change?.hidden ?? []), ...(w.change?.added ?? []), ...(w.change?.text ?? [])].filter((x) => !x.fixed).map((x) => x.path).filter(quiet);
+  // A carousel's controls often only slide the track (its slides all stay rendered): what they moved is switched content too.
+  const changedBy = (w) => [...(w.change?.shown ?? []), ...(w.change?.hidden ?? []), ...(w.change?.added ?? []), ...(w.change?.text ?? []), ...(w.kind === 'carousel' ? w.change?.moved ?? [] : [])].filter((x) => !x.fixed).map((x) => x.path).filter(quiet);
   // Panels the same click does not close again (tabs, category chips) switch content too.
   const switching = widgets.filter((w) => w.opensOn === 'click' && (w.kind === 'tabs' || w.kind === 'carousel' || (w.kind === 'disclosure' && !w.closes)));
   const sets = new Map();
@@ -388,9 +444,10 @@ export function planSets(widgets, noise = []) {
       continue;
     }
     const key = w.group?.sig ?? w.trigger;
-    const set = sets.get(key) ?? { controls: [...controls], changed: new Set(), nav: [], triggers: new Set() };
+    const set = sets.get(key) ?? { controls: [...controls], changed: new Set(), nav: [], triggers: new Set(), byTrigger: new Map() };
     changed.forEach((p) => set.changed.add(p));
     set.triggers.add(w.trigger);
+    set.byTrigger.set(w.trigger, changed);
     sets.set(key, set);
   }
   const parentOf = (p) => (p.includes('>') ? p.slice(0, p.lastIndexOf('>')) : null);
@@ -405,7 +462,7 @@ export function planSets(widgets, noise = []) {
     if (set) set.nav.push(n.path);
   }
   // Controls that are part of what another set switches (the cards a filter shows) are content, not a set of their own.
-  const all = [...sets.values()];
+  const all = [...sets.values()].flatMap(splitIndependent);
   const isContent = (s) => all.some((t) => t !== s && s.controls.some((c) => [...t.changed].some((p) => c === p || c.startsWith(`${p}>`))));
   const out = [];
   for (const s of all.filter((x) => !isContent(x))) {
@@ -597,11 +654,15 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
         const effects = plan.controls.length <= MAX_EFFECT_STATES ? await cssStateEffects(page, { budgetMs: 800 }) : null;
         variants.push({ index: j, body: state, ...(effects && { effects: effectsByPart(effects, plan.parts) }) });
       }
+      // A list of questions that starts with every answer closed matches no control: the start may be the set's "off"
+      // state, which only a second click on an open question reaches (checked below).
+      let startsOff = false;
       if (initial < 0) {
         // The page snapshot caught the area between two states: the copy starts at the state it showed just now.
         initial = sigs.indexOf(nowSig);
-        if (initial < 0) throw new Error('the first state matches no control');
-        startWith(variants[initial].body);
+        if (initial < 0 && !plan.nav.length) startsOff = true;
+        else if (initial < 0) throw new Error('the first state matches no control');
+        else startWith(variants[initial].body);
       }
       if (new Set(sigs).size < 2) throw new Error('the controls do not change the content');
       // Next / previous: from the first state, which state does one click lead to?
@@ -634,15 +695,20 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
           await settle();
           const again = await snap(plan);
           const sig = again && stateSignature(again);
-          if (sig && !sigs.includes(sig) && samePage(page.url(), startUrl)) {
+          if (sig && !sigs.includes(sig) && samePage(page.url(), startUrl) && (!startsOff || sig === initialSig || sig === nowSig)) {
             off = plan.controls.length;
             variants.push({ index: off, body: again });
+            // The page started there: the page snapshot already holds it, and the page is back where it started.
+            if (startsOff) initial = off;
           }
         }
       }
+      if (startsOff && initial !== off) throw new Error('the first state matches no control');
       // Back to how the page started.
-      await page.evaluate(clickPath, plan.controls[initial]).catch(() => {});
-      await settle();
+      if (!startsOff) {
+        await page.evaluate(clickPath, plan.controls[initial]).catch(() => {});
+        await settle();
+      }
       // A carousel (it has next / previous) may advance on a timer, so the page snapshot can have caught it later than a
       // visitor first sees it: the copy starts at the state a first-time visitor sees right after the page loads.
       const loaded = nav.length && plan.parts.length === 1 ? await firstVisit(page, startUrl, plan.area).catch(() => null) : null;

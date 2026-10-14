@@ -295,8 +295,11 @@ export function clickDifferences(was, now) {
     return [closesOnly ? 'clicking it does not close what it closes on the original' : 'does nothing in the copy'];
   }
   const out = [];
-  if (was.closes && was.closes !== now.closes) {
-    out.push(`${CLOSES[was.closes] ?? was.closes} does not close it again (it does on the original)`);
+  // What the click opened going away again (closesOwn, capture/clicks.js restore); a capture made before it was read has `closes` only.
+  const wasCloses = was.closesOwn ?? was.closes;
+  const nowCloses = now.closesOwn ?? now.closes;
+  if (wasCloses && wasCloses !== nowCloses) {
+    out.push(`${CLOSES[wasCloses] ?? wasCloses} does not close it again (it does on the original)`);
   }
   if (was.exclusive === true && now.exclusive === false) out.push('several items stay open (the original keeps one open at a time)');
   if (was.exclusive === false && now.exclusive === true) out.push('opening one closes the others (the original keeps them open)');
@@ -304,7 +307,10 @@ export function clickDifferences(was, now) {
 }
 
 /** Pairs every control of the original with the copy's control of the same name that behaves most alike. */
-export function compareClicks(oldWidgets = [], newWidgets = []) {
+export function compareClicks(oldWidgets = [], newWidgets = [], probedNames = null) {
+  // A control the copy's probe never reached (its time ran out, or it probed other equal controls instead) is not checked:
+  // that is no evidence the copy's control does nothing.
+  const reached = probedNames ? new Set(probedNames.map((t) => clickKey({ text: t }))) : null;
   const byKey = new Map();
   for (const w of newWidgets) byKey.set(clickKey(w), [...(byKey.get(clickKey(w)) ?? []), w]);
   const rows = [];
@@ -313,6 +319,10 @@ export function compareClicks(oldWidgets = [], newWidgets = []) {
     let pick = -1;
     for (let i = 0; i < twins.length; i++) if (pick < 0 || clickDifferences(was, twins[i]).length < clickDifferences(was, twins[pick]).length) pick = i;
     const now = pick >= 0 ? twins.splice(pick, 1)[0] : null;
+    if (!now && reached && !reached.has(clickKey(was))) {
+      rows.push({ was, now, diff: [], unchecked: true });
+      continue;
+    }
     rows.push({ was, now, diff: clickDifferences(was, now) });
   }
   return rows;
@@ -400,12 +410,16 @@ export function motionItems(oldPages, newPages) {
       ratio < 0.9 ? 'Hover effects driven by script (they add or remove elements) are not reproduced.' : null));
   }
   // Clicks: every control the original's click probe found is clicked on the copy the same way, and the two compared.
-  const clicks = { total: 0, same: 0, differences: [] };
+  const clicks = { total: 0, same: 0, differences: [], unchecked: 0 };
   for (const slug of both) {
     const was = oldPages.get(slug)?.clicks?.widgets ?? [];
     const now = newPages.get(slug)?.clicks?.widgets;
     if (!was.length || !now) continue; // not measured on the copy: no verdict either way
-    for (const r of compareClicks(was, now)) {
+    for (const r of compareClicks(was, now, newPages.get(slug)?.clicks?.probedNames ?? null)) {
+      if (r.unchecked) {
+        clicks.unchecked++;
+        continue;
+      }
       clicks.total++;
       if (!r.diff.length) clicks.same++;
       else if (clicks.differences.length < 12) clicks.differences.push({ page: slug, element: `${r.was.tag ?? ''} "${String(r.was.text ?? '').slice(0, 30)}"`, kind: r.was.kind, diff: r.diff });
@@ -417,7 +431,8 @@ export function motionItems(oldPages, newPages) {
     items.push({
       ...row('motion.clicks', 'Click interactions kept', ratio,
         { detail: `${plural(clicks.total, 'control')} open, switch or move something when clicked (menus, FAQ answers, tabs, dialogs, …).`, count: clicks.total },
-        { detail: `${clicks.same} of them do the same on the recreated site, and close again the same way.${shown ? ` Differs: ${shown}.` : ''}`, count: clicks.same }),
+        { detail: `${clicks.same} of them do the same on the recreated site, and close again the same way.${shown ? ` Differs: ${shown}.` : ''}`, count: clicks.same },
+        clicks.unchecked ? `${plural(clicks.unchecked, 'control')} not reached on the copy in the time given (not counted).` : null),
       differences: clicks.differences,
     });
   }

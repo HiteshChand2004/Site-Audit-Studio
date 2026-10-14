@@ -492,6 +492,16 @@ export function applyMotion(site, byPath) {
     // An exact copy probes the narrow views too: what each found, and which kinds were placed from it.
     byView: {},
   };
+  // Where each hover / focus token's effects came from: tokens only the site's own state rules gave (`source: 'css'`)
+  // are what the original stylesheet already does - an as-is copy, which keeps that stylesheet, leaves them off
+  // (ir/asis.js), so a value read wrong can never overrule the site's own rule.
+  const tokenSource = new Map();
+  const noteSource = (token, source) => {
+    const t = tokenSource.get(token) ?? { css: 0, other: 0 };
+    if (source === 'css') t.css++;
+    else t.other++;
+    tokenSource.set(token, t);
+  };
   const tokenize = (node, token) => {
     // The same element in the other states of a tab panel / carousel (ir/states.js) gets the same effect.
     for (const n of [node, ...(node.stateTwins ?? [])]) {
@@ -625,6 +635,7 @@ export function applyMotion(site, byPath) {
         tokenize(node, effect.token);
         kids.forEach((k, i) => tokenize(k.node, effect.kids[i].token));
         sibs.forEach((x, i) => tokenize(x.node, effect.sibs[i].token));
+        for (const t of [effect.token, ...effect.kids.map((k) => k.token), ...(effect.sibs ?? []).map((x) => x.token)]) noteSource(t, entry.source);
         s.elements++;
         s.sibs = (s.sibs ?? 0) + sibs.length;
         if (entry.source === 'css') s.fromRules++;
@@ -640,9 +651,16 @@ export function applyMotion(site, byPath) {
     // An element that loops (a ticker strip) only seemed to "reveal" because it moves by itself; its loop is rebuilt instead
     // (a reveal's animation on the same element would replace the loop's).
     const loopHosts = new Set((motion.loops?.loops ?? []).filter((l) => !l.pseudo && !l.timeline).map((l) => l.path));
+    // A part that changes by itself (capture/feeds.js): what fades in there is its update's own entrance, which the copy's
+    // feed replays; a reveal on top would replace that animation and hold the row until it is scrolled to.
+    const feedAreas = [...nodes].filter(([, n]) => n?.stateAttrs?.['data-w-feed'] != null).map(([p]) => p);
     for (const el of motion.reveal?.elements ?? []) {
       if (loopHosts.has(el.path)) {
         stats.reveal.skipped.loop = (stats.reveal.skipped.loop ?? 0) + 1;
+        continue;
+      }
+      if (feedAreas.some((p) => el.path === p || el.path.startsWith(`${p}>`))) {
+        stats.reveal.skipped.feed = (stats.reveal.skipped.feed ?? 0) + 1;
         continue;
       }
       // Timed ones in the first screen are the page's entrance (a hero fading in as the page opens, an effect a timer or
@@ -952,6 +970,8 @@ export function applyMotion(site, byPath) {
     panels,
     hoverCards,
     scrolled,
+    // Hover / focus tokens only the site's own state rules gave (see noteSource).
+    cssOnly: [...tokenSource].filter(([, t]) => t.css > 0 && t.other === 0).map(([token]) => token),
     // The generated script is needed for the reveal (IntersectionObserver), the click widgets, the switched states, the
     // scroll states, the panels a click opens (dialogs the page only renders when open) and the hover cards (their
     // hovered look waits in a <template> until first pointed at); hover, focus and loops are CSS.

@@ -69,3 +69,19 @@ a[aria-label="Open menu"]:hover { color: rgb(4, 5, 6) }
   assert.deepEqual(by('a')?.changes?.color?.[1], 'rgb(4, 5, 6)');
   assert.deepEqual(by('button')?.changes?.color?.[1], 'rgb(7, 8, 9)');
 });
+
+// A site's own `transition: … !important` with more specificity than a bare `*` kept running while a rule was forced, so
+// the probe read the value from the start of the change (flexibench: a button's "hover" colour was its rest colour).
+test('a forced hover rule is read at its end value even when the site keeps its transition with !important', async () => {
+  const html = `<!doctype html><html><head><style>
+body { margin: 0; font: 16px sans-serif }
+.cta.big { background-color: rgb(10, 10, 10); transition: background-color 0.8s ease !important }
+.cta.big:hover { background-color: rgb(26, 26, 255) }
+</style></head><body><a class="cta big" href="#">Schedule</a></body></html>`;
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.setContent(html);
+  const found = await captureInteractions(page, { budgetMs: 4000 });
+  await page.close();
+  const css = found.hover.find((h) => h.tag === 'a' && h.source === 'css');
+  assert.deepEqual(css?.changes?.['background-color'], ['rgb(10, 10, 10)', 'rgb(26, 26, 255)'], JSON.stringify(found.hover));
+});

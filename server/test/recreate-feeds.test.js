@@ -16,6 +16,7 @@ import { recreateDir } from '../src/recreate/workspace.js';
 import { servePreview } from '../src/recreate/preview.js';
 import { captureFeeds, measureFeeds, nodeAt, paceOf } from '../src/recreate/capture/feeds.js';
 import { snapshotPage } from '../src/recreate/capture/snapshot.js';
+import { MOTION_JS } from '../src/recreate/emit/motionScript.js';
 
 process.env.SAS_ALLOW_LOCALHOST = '1';
 const PORT = 4224;
@@ -112,6 +113,7 @@ test('the probe finds every part that changes by itself, with its pace, and reco
   assert.ok(feed, JSON.stringify(found));
   assert.ok(Math.abs(feed.ms - 600) <= 100, `feed pace ${feed.ms}`);
   assert.equal(feed.cycle, true, 'the feed comes back to its first state after six updates');
+  assert.equal(feed.replay, 'new', 'only the added row plays its entrance on the original');
   assert.ok(Math.abs(byPath['body>p:1>span:1']?.ms - 700) <= 100, `ticker ${JSON.stringify(byPath['body>p:1>span:1'])}`);
   assert.ok(Math.abs(byPath['body>ul:2']?.ms - 800) <= 100, `highlight ${JSON.stringify(byPath['body>ul:2'])}`);
   assert.ok(!Object.keys(byPath).some((p) => p.startsWith('body>p:2')), 'the count-up at load is not a timer');
@@ -254,4 +256,40 @@ test('an ordinary (rebuilt) copy keeps changing too, at the same pace, its new r
   } finally {
     await served.close?.();
   }
+});
+
+// A list the page re-renders whole on each update (a framework list keyed by position): every row plays its entrance again,
+// one after the other. The copy must replay the whole state too, not hold the rows it already showed still.
+test('a feed re-rendered whole replays every entrance in the original, and so in the copy', async () => {
+  const rows = (k) => [0, 1, 2, 3].map((j) => `<div class="r" style="animation-delay: ${j / 10}s">Row ${k + j}</div>`).join('');
+  const context = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const page = await context.newPage();
+  await page.setContent(`<!doctype html><html><head><style>
+.list { width: 300px; margin: 20px } .r { padding: 6px; animation: in 300ms both }
+@keyframes in { from { opacity: 0; transform: translateY(-8px) } }
+</style></head><body><div class="list">${rows(0)}</div><script>
+  var k = 0, list = document.querySelector('.list');
+  setInterval(function () { k++; list.innerHTML = [0, 1, 2, 3].map(function (j) { return '<div class="r" style="animation-delay: ' + j / 10 + 's">Row ' + (k + j) + '</div>'; }).join(''); }, 900);
+</script></body></html>`);
+  await page.waitForTimeout(500);
+  const snap = await page.evaluate(snapshotPage, {});
+  const found = await captureFeeds(page, snap.body, { budgetMs: 15000 });
+  await context.close();
+  const feed = found.areas.find((x) => x.path === 'body>div:1');
+  assert.equal(feed?.replay, 'all', JSON.stringify(found));
+  assert.equal(nodeAt(snap.body, 'body>div:1').states.replay, 'all');
+
+  // The copy's script on the same states: data-w-feed="all" plays the entrance of the rows the last state had too.
+  const copy = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const p = await copy.newPage();
+  const state = (i, hidden) => `<div class="list" data-w-set="s1" data-w-i="${i}"${i === 0 ? ' data-w-auto="400:1" data-w-feed="all"' : ''}${hidden ? ' hidden' : ''}>${rows(i)}</div>`;
+  await p.setContent(`<!doctype html><html><head><style>
+[data-w-set][hidden] { display: none !important } .list { width: 300px; margin: 20px } .r { padding: 6px; animation: in 300ms both }
+@keyframes in { from { opacity: 0; transform: translateY(-8px) } }
+</style></head><body>${state(0)}${state(1, true)}${state(2, true)}<script>${MOTION_JS}</script></body></html>`);
+  await p.waitForFunction(() => document.querySelector('[data-w-i="1"]') && !document.querySelector('[data-w-i="1"]').hidden, null, { timeout: 3000 });
+  const playing = await p.evaluate(() => [...document.querySelector('[data-w-i="1"]').children].map((r) => r.textContent + ':' + r.getAnimations().length));
+  await copy.close();
+  // "Row 1" .. "Row 3" were already shown by the first state: they come in again, as on the original.
+  assert.deepEqual(playing, ['Row 1:1', 'Row 2:1', 'Row 3:1', 'Row 4:1']);
 });

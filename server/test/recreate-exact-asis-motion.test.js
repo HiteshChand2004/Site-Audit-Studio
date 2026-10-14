@@ -6,7 +6,7 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { launchBrowser } from '../src/audit/render.js';
-import { asisBody, carriedAttrs, carryInto, unpin } from '../src/recreate/ir/asis.js';
+import { asisBody, carriedAttrs, carryInto, unpin, withoutOwnCss } from '../src/recreate/ir/asis.js';
 import { emitCss } from '../src/recreate/emit/css.js';
 import { emitPage } from '../src/recreate/emit/html.js';
 
@@ -105,4 +105,19 @@ test('a rebuilt hover beats the inline style the original\'s script left; keyfra
   await page.waitForTimeout(100);
   assert.equal(await read(), 'matrix(1, 0, 0, 1, 0, -8)');
   await context.close();
+});
+
+// A hover the site's own stylesheet does (`source: 'css'`) is left to that stylesheet in an as-is copy: our rule is a
+// reading of it, and a reading taken wrong would overrule the original with !important.
+test('tokens only the site\'s own hover rules gave are taken out of the carried attributes', () => {
+  const carried = new Map([
+    ['body>a:1', { 'data-motion': 'h1 rv' }],
+    ['body>a:2', { 'data-motion': 'h1' }],
+    ['body>a:3', { 'data-motion': 'h2', 'data-w-stay': '' }],
+  ]);
+  assert.equal(withoutOwnCss(carried, new Set(['h1'])), 2);
+  assert.deepEqual(carried.get('body>a:1'), { 'data-motion': 'rv' });
+  assert.equal(carried.has('body>a:2'), false);
+  assert.deepEqual(carried.get('body>a:3'), { 'data-motion': 'h2', 'data-w-stay': '' });
+  assert.equal(withoutOwnCss(carried, new Set()), 0);
 });

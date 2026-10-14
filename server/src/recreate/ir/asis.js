@@ -521,6 +521,24 @@ export function placeExtras(body, placements) {
   return placed;
 }
 
+/** Takes the given motion tokens out of carried attributes (an attribute left empty goes). @returns {number} tokens removed */
+export function withoutOwnCss(carried, tokens) {
+  if (!tokens.size) return 0;
+  let removed = 0;
+  for (const [path, attrs] of carried) {
+    if (typeof attrs['data-motion'] !== 'string') continue;
+    const kept = attrs['data-motion'].split(/\s+/).filter((t) => {
+      if (!t || !tokens.has(t)) return Boolean(t);
+      removed++;
+      return false;
+    });
+    if (kept.length) attrs['data-motion'] = kept.join(' ');
+    else delete attrs['data-motion'];
+    if (!Object.keys(attrs).length) carried.delete(path);
+  }
+  return removed;
+}
+
 /** Puts carried attributes on the as-is nodes with the same path (motion tokens are merged, never replaced). */
 export function carryInto(body, carried) {
   let placed = 0;
@@ -596,6 +614,48 @@ function mergeChildren(lists, mark) {
     out.push(...merged);
   }
   return out;
+}
+
+/** The capture paths of the parts the rebuilt tree switches by itself: a feed, a carousel on a timer. */
+export function selfChangingPaths(root) {
+  const out = [];
+  const walk = (n) => {
+    if (!n || !n.children) return;
+    const a = n.stateAttrs ?? {};
+    if ((a['data-w-feed'] != null || a['data-w-auto'] != null) && n.cpath) out.push(n.cpath);
+    n.children.forEach(walk);
+  };
+  walk(root);
+  return out;
+}
+
+/**
+ * A part that changes by itself differs between the views because each view was read at another moment, not because the
+ * site renders it differently by width: every narrower view takes the widest view's markup there (bodies widest first), so
+ * the merge keeps one version and the copy's states switch it, instead of versions shown by width.
+ * @returns {number} parts replaced
+ */
+export function settleSelfChanging(bodies, paths) {
+  if (!paths.length || bodies.length < 2) return 0;
+  const find = (n, p) => {
+    if (!n || !n.children) return null;
+    if (n.cpath === p) return n;
+    for (const c of n.children) if (c.cpath && (p === c.cpath || p.startsWith(`${c.cpath}>`))) return find(c, p);
+    return null;
+  };
+  let replaced = 0;
+  for (const p of paths) {
+    const wide = find(bodies[0][1], p);
+    if (!wide) continue;
+    for (const [, b] of bodies.slice(1)) {
+      const own = find(b, p);
+      if (!own || own === wide) continue;
+      for (const k of Object.keys(own)) delete own[k];
+      Object.assign(own, structuredClone(wide));
+      replaced++;
+    }
+  }
+  return replaced;
 }
 
 /**
@@ -682,6 +742,7 @@ export async function applyAsIs(ir, { dir, site, excluded = [] }) {
   const sheets = new Map(); // hash → css text (with url("asset:…"))
   const report = { pages: 0, rebuilt: [], sheets: 0, imports: 0, missingSheets: 0, cssUrls: 0, missingCssUrls: 0, elements: 0, dropped: 0, shadowRoots: 0, missing: { images: 0, media: 0, styleUrls: 0 }, links: { internal: 0, notice: 0, file: 0, external: 0, anchor: 0 }, safety: { handlers: 0, scriptUrls: 0, other: 0 }, excluded: 0, unpinned: 0, variants: { pages: 0, versions: 0 }, motion: { carried: 0, extras: 0, notCarried: { states: 0, hoverCards: 0, notices: 0, panels: 0, unmapped: 0 } } };
   const infoByOut = new Map(site.pages.map((t) => [t.info.outPath, t.info]));
+  const cssOnly = new Set(ir.motion?.cssOnly ?? []);
   for (const page of ir.pages) {
     const info = infoByOut.get(page.outPath);
     const asis = info && (await readAsis(dir, info));
@@ -709,6 +770,8 @@ export async function applyAsIs(ir, { dir, site, excluded = [] }) {
         }
       }
     }
+    const tree = site.pages.find((t) => t.info.outPath === page.outPath);
+    report.variants.settled = (report.variants.settled ?? 0) + settleSelfChanging(bodies, selfChangingPaths(tree?.root));
     const merged = mergeViewBodies(bodies);
     const body = merged.body;
     if (merged.variants.size) {
@@ -716,7 +779,6 @@ export async function applyAsIs(ir, { dir, site, excluded = [] }) {
       report.variants.pages++;
       report.variants.versions += merged.variants.size;
     }
-    const tree = site.pages.find((t) => t.info.outPath === page.outPath);
     const cpathOf = new Map();
     const index = (n) => {
       if (!n || !n.children) return;
@@ -728,6 +790,9 @@ export async function applyAsIs(ir, { dir, site, excluded = [] }) {
     const fragmentOf = (x) => asisBody({ html: x.asisHtml, baseURI: asis.baseURI }, { pageUrl: info.url, assetResolve: site.assetResolve, resolveLink: site.resolveLink, fragment: 'copy' }).body;
     const extras = asisExtras(page.body, cpathOf, fragmentOf, report.motion.notCarried);
     const carried = carriedAttrs(page.body, cpathOf, report.motion.notCarried, extras.built);
+    // The page keeps the site's own stylesheet: a hover / focus effect that only its rules gave is already there, and a
+    // copy of it (read from the rendered page, with !important) could only overrule the real one.
+    report.motion.ownCss = (report.motion.ownCss ?? 0) + withoutOwnCss(carried, cssOnly);
     const { placed, lost } = carryInto(body, carried);
     report.motion.carried += placed;
     report.motion.extras += placeExtras(body, extras.placements);

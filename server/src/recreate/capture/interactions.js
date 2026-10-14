@@ -356,7 +356,10 @@ function forceRuleStates(opts) {
     transitionOf.set(el, { property: cs.transitionProperty, duration: cs.transitionDuration, delay: cs.transitionDelay, timing: cs.transitionTimingFunction });
   }
   const noTransition = document.createElement('style');
-  noTransition.textContent = '*, *::before, *::after { transition: none !important; }';
+  // The ids no element has give the rule three ids' specificity, so a site's own `transition: … !important` (common in
+  // builder and utility CSS) cannot keep running and hand the probe a value from the middle of the change.
+  const strong = ':not(#__sas_a):not(#__sas_b):not(#__sas_c)';
+  noTransition.textContent = `*${strong}, *${strong}::before, *${strong}::after { transition: none !important; }`;
   (document.head || document.documentElement).appendChild(noTransition);
   const cloneList = { hover: parts.filter((p) => p.kind === 'hover').map((p) => p.clone), focus: parts.filter((p) => p.kind === 'focus').map((p) => p.clone) };
 

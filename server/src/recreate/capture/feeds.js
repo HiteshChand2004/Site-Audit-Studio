@@ -129,8 +129,9 @@ export async function watchMutations({ ms, moreMs, burstGap, skip = [] }) {
 /**
  * Page function: waits for the next update of the area at `path` and for it to settle (no further change for a moment,
  * its own entrance animations finished), then returns when that happened (on the page's own clock, so the times of
- * several calls compare) and the area's visible text.
- * @returns {Promise<{ t: number, text: string } | null>}  null when no update came in time
+ * several calls compare), the area's visible text, and whether elements it already showed (same tag and text) played an
+ * entrance too (`replayed`: a list re-rendered whole, each row coming in again) or only the new ones did.
+ * @returns {Promise<{ t: number, text: string, replayed: boolean } | null>}  null when no update came in time
  */
 export async function nextUpdate({ path, timeoutMs, quietMs, burstGap }) {
   let el = document.body;
@@ -149,6 +150,8 @@ export async function nextUpdate({ path, timeoutMs, quietMs, burstGap }) {
   }
   if (!el) return null;
   const area = el;
+  const keyOf = (x) => `${x.tagName}|${(x.textContent || '').replace(/\s+/g, ' ').trim()}`;
+  const before = new Set([...area.querySelectorAll('*')].map(keyOf));
   return new Promise((resolve) => {
     let last = null;
     let timer = null;
@@ -160,8 +163,9 @@ export async function nextUpdate({ path, timeoutMs, quietMs, burstGap }) {
         const t = a.effect?.getTiming?.();
         return t && Number.isFinite(t.iterations) && Number.isFinite(t.duration) && a.playState === 'running';
       }) : [];
+      const replayed = running.some((a) => a.effect?.target instanceof Element && before.has(keyOf(a.effect.target)));
       await Promise.race([Promise.all(running.map((a) => a.finished.catch(() => null))), new Promise((r) => setTimeout(r, 1500))]);
-      resolve({ t: Math.round(last), text: (area.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 4000) });
+      resolve({ t: Math.round(last), text: (area.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 4000), replayed });
     };
     const observer = new MutationObserver(() => {
       last ??= performance.now();
@@ -260,10 +264,12 @@ export async function captureFeeds(page, body, { budgetMs = 30000, skip = [] } =
     const times = [];
     let first = null;
     let cycle = false;
+    let replays = 0;
     for (let k = 1; k <= MAX_STATES && Date.now() + a.pace.ms * 3 < deadline; k++) {
       const update = await page.evaluate(nextUpdate, { path: a.path, timeoutMs: a.pace.ms * 3, quietMs: Math.min(400, a.pace.ms / 3), burstGap: BURST_GAP_MS }).catch(() => null);
       if (!update) break;
       times.push(update.t);
+      if (update.replayed) replays++;
       if (first == null) first = update.text;
       else if (update.text === first) {
         cycle = true;
@@ -289,10 +295,12 @@ export async function captureFeeds(page, body, { budgetMs = 30000, skip = [] } =
       nav: [],
       autoplay: { ms, step: 1 },
       feed: true,
+      // Most updates played the entrance of what was already there too: the copy replays the whole state (else only what is new).
+      ...(replays * 2 > times.length && { replay: 'all' }),
       cycle,
       variants,
     };
-    out.areas.push({ path: a.path, ms, states: variants.length + 1, cycle, kinds: a.kinds, updates: all.length });
+    out.areas.push({ path: a.path, ms, states: variants.length + 1, cycle, kinds: a.kinds, updates: all.length, replay: replays * 2 > times.length ? 'all' : 'new' });
     out.states += variants.length + 1;
   }
   out.ms = Date.now() - started;

@@ -129,7 +129,8 @@ export const MOTION_JS = `(function () {
           }
         }
         var next = (((current + step) % n) + n) % n;
-        if (el.hasAttribute('data-w-feed')) {
+        // A feed whose original re-renders it whole (data-w-feed="all", capture/feeds.js) replays every entrance, as shown.
+        if (el.hasAttribute('data-w-feed') && el.getAttribute('data-w-feed') !== 'all') {
           var targets = document.querySelectorAll('[data-w-set="' + id + '"][data-w-i="' + next + '"]');
           for (var t = 0; t < targets.length; t++) calm(before, targets[t]);
         }

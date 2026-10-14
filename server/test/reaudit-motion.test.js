@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { measureNewMotion, motionItems, summarize } from '../src/reaudit/motion.js';
+import { compareClicks, measureNewMotion, motionItems, summarize } from '../src/reaudit/motion.js';
 import { compareAudits } from '../src/reaudit/compare/index.js';
 import { measureMotion } from '../src/recreate/capture/measure.js';
 import { launchBrowser } from '../src/audit/render.js';
@@ -224,4 +224,23 @@ test('parts that change by themselves: each original one needs a copy one at abo
   assert.equal(row.preset, 'open');
   assert.match(row.after.detail, /every 620 ms \(original 600 ms\), 690 ms \(original 700 ms\)/);
   assert.equal(motionItems(new Map([['home', {}]]), new Map([['home', {}]])).items.find((i) => i.key === 'motion.feeds'), undefined, 'no row when the original has none');
+});
+
+// Clicks compared on what a visitor sees: a second click that closes what it opened (closesOwn) counts even when the page
+// is not exactly back where it started; a control the copy's probe never reached is "not checked", never "does nothing".
+test('click comparison: the fair close reading wins; unreached controls are not counted against the copy', () => {
+  const was = [
+    { text: 'Question 1?', tag: 'button', kind: 'disclosure', closes: null, closesOwn: 'toggle' },
+    { text: 'Go to slide 3', tag: 'button', kind: 'carousel' },
+    { text: 'Go to slide 4', tag: 'button', kind: 'carousel' },
+  ];
+  const now = [
+    { text: 'Question 1?', tag: 'button', kind: 'tabs', closesOwn: 'toggle' },
+    { text: 'Go to slide 3', tag: 'button', kind: 'tabs' },
+  ];
+  const rows = compareClicks(was, now, ['Question 1?', 'Go to slide 3']);
+  assert.deepEqual(rows.map((r) => [r.was.text, r.diff.length, Boolean(r.unchecked)]), [['Question 1?', 0, false], ['Go to slide 3', 0, false], ['Go to slide 4', 0, true]]);
+  // Reached and missing is still a real difference; an older capture without closesOwn falls back to closes.
+  assert.deepEqual(compareClicks(was.slice(2), [], ['Go to slide 4'])[0].diff, ['does nothing in the copy']);
+  assert.deepEqual(compareClicks([{ text: 'Menu', closes: 'escape' }], [{ text: 'Menu', closes: null }])[0].diff, ['Escape does not close it again (it does on the original)']);
 });
