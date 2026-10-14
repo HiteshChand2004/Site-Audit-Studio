@@ -35,7 +35,7 @@ export function applyTreeFixes(site, { audit, skipped = [], axe = null, extraBro
   for (const t of site.pages) if (t.wp) wordpress.push({ page: t.info.path, ...syncText(t, t.wp.item) });
 
   const pageTitles = new Map(site.pages.map((t) => [t.info.outPath, t.head?.title ?? '']));
-  const broken = brokenTargets(audit, skipped);
+  const broken = brokenTargets(audit, skipped, site.pages.map((t) => t.info.url));
   // Dead targets the copy found itself (links on pages the analysis did not read: deadLinks below).
   for (const [key, b] of extraBroken) if (!broken.has(key)) broken.set(key, b);
   const out = { wordpress, names: { fixed: [], open: [] }, alt: { fixed: [], decorative: [] }, headings: [], links: [], loading: { priority: [], lazy: 0, lazyFrames: 0, unfaded: 0 }, sprites: 0, layouts: 0, faded: [], contrast: { fixed: [], open: [] } };

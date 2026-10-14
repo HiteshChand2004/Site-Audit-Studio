@@ -116,7 +116,7 @@ export async function settle(page, view, cap, { observe = false } = {}) {
   return { ...stats, scrolled: max };
 }
 
-async function captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs = 0, clickBudgetMs = 0, cache = null, exact = false }) {
+async function captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs = 0, clickBudgetMs = 0, cache = null, exact = false, document = null }) {
   const context = await browser.newContext({
     viewport: { width: view.width, height: view.height },
     deviceScaleFactor: view.dpr,
@@ -128,6 +128,13 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
   });
   // Static files another view (or page) of this job already loaded come from the shared cache, not from the network again.
   await cache?.attach(context);
+  // A page rebuilt from evidence (inspect.js recoverPage): its own address answers with that document, everything it
+  // loads (stylesheets, fonts, pictures of the site) still comes from the site. Registered after the cache, so it wins.
+  if (document) {
+    await context.route((u) => u.href === pageInfo.url, (route) => (route.request().isNavigationRequest()
+      ? route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: document })
+      : route.continue()));
+  }
   // An exact copy keeps the site's own stylesheets: their bodies as written, from the network (capture/asis.js).
   const sheetRecorder = exact ? recordSheetBodies(context) : null;
   if (exact) await markAsIs(context);
@@ -425,10 +432,23 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       ...(asis && { asis }),
       ...(motion && { motion }),
       resources: data.resources,
+      // The page's data requests that got no usable answer (its API or backend was not there): the page is still captured
+      // as it rendered - with whatever empty or error state the site shows - and the report says its data was missing.
+      dataFailed: dataFailures(data.resources, failed),
     };
   } finally {
     await context.close().catch(() => {});
   }
+}
+
+/** Data requests (XHR / fetch) of a view that answered with an error or not at all: count and hosts. */
+export function dataFailures(resources = [], failed = []) {
+  const bad = [
+    ...resources.filter((r) => (r.type === 'xhr' || r.type === 'fetch') && r.status >= 400),
+    ...failed.filter((r) => r.type === 'xhr' || r.type === 'fetch'),
+  ];
+  const hosts = [...new Set(bad.map((r) => { try { return new URL(r.url).host; } catch { return ''; } }).filter(Boolean))];
+  return bad.length ? { count: bad.length, hosts: hosts.slice(0, 8), sample: bad.slice(0, 5).map((r) => ({ url: r.url.slice(0, 200), status: r.status ?? null, error: r.error ?? null })) } : null;
 }
 
 /**
@@ -450,7 +470,7 @@ export const motionFile = (viewId) => (viewId === 'desktop' ? 'motion.json' : `$
 // A view the site gave up on in time, rather than refusing: worth another try only when the run has no limit.
 const TIMED_OUT = /Timeout|timed out|ERR_TIMED_OUT|ERR_NETWORK_CHANGED|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED/i;
 
-export async function capturePage(browser, pageInfo, workspace, { timeout = 30000, motionBudgetMs = 0, clickBudgetMs = 0, cache = null, patient = false, exact = false } = {}) {
+export async function capturePage(browser, pageInfo, workspace, { timeout = 30000, motionBudgetMs = 0, clickBudgetMs = 0, cache = null, patient = false, exact = false, document = null } = {}) {
   const dir = captureDir(workspace, pageInfo.slug);
   await mkdir(dir, { recursive: true });
   // All views side by side when the machine has the memory for the loaded pages, fewer (never under two) when it is
@@ -459,7 +479,7 @@ export async function capturePage(browser, pageInfo, workspace, { timeout = 3000
   const wanted = viewsFor({ exact });
   const atOnce = parallelism({ max: wanted.length, min: 2 });
   const results = await mapLimit(wanted, atOnce, (view) =>
-    captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, clickBudgetMs, cache, exact }).then((value) => ({ status: 'fulfilled', value }), (reason) => ({ status: 'rejected', reason })));
+    captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, clickBudgetMs, cache, exact, document }).then((value) => ({ status: 'fulfilled', value }), (reason) => ({ status: 'rejected', reason })));
   const views = {};
   const errors = [];
   results.forEach((r, i) => {
@@ -482,7 +502,7 @@ export async function capturePage(browser, pageInfo, workspace, { timeout = 3000
       await new Promise((r) => setTimeout(r, RETRY_WAIT_MS * attempt));
       const view = VIEWS.find((v) => v.id === e.view);
       try {
-        views[e.view] = await captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, clickBudgetMs, cache, exact });
+        views[e.view] = await captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, clickBudgetMs, cache, exact, document });
         errors.splice(errors.indexOf(e), 1);
         retried++;
       } catch (err) {

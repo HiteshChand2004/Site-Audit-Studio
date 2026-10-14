@@ -315,7 +315,7 @@ export async function generateStage(ctx) {
     : null;
   // Outbound links of pages the analysis did not read: dead targets are unlinked like the ones the analysis found.
   ctx.progress(0.13, 'Checking the links of every page');
-  const extraBroken = await deadLinks(site, { known: brokenTargets(ctx.audit, ctx.discovery?.skipped), ms: Math.max(10000, Math.min(LINK_CHECK_BUDGET, ctx.stepDeadline - Date.now() - FIT_MARGIN * 4)) });
+  const extraBroken = await deadLinks(site, { known: brokenTargets(ctx.audit, ctx.discovery?.skipped, site.pages.map((t) => t.info.url)), ms: Math.max(10000, Math.min(LINK_CHECK_BUDGET, ctx.stepDeadline - Date.now() - FIT_MARGIN * 4)) });
   const treeFixes = applyTreeFixes(site, { audit: ctx.audit, skipped: ctx.discovery?.skipped, axe, extraBroken, asIs });
   // Layout parts other window sizes show (fixers/perf.js markLayouts) are parked by the generated script.
   if (treeFixes.layouts) {

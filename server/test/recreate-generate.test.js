@@ -405,7 +405,9 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.deepEqual(toOld, [], 'no link to the original site');
   const notice = await read('login.html');
   assert.match(notice, /<meta name="robots" content="noindex">/);
-  assert.match(notice, /needs a server \(sign-in, sign-up, cart, checkout or account\)/);
+  // A sign-in page is a page of the site now (never left out for needing a backend): here it is only beyond this run's
+  // page limit, so its notice says that.
+  assert.match(notice, /was not part of the pages chosen for the copy/);
   assert.match(notice, /<a href="\.\/">Back to the homepage<\/a>/);
   assert.doesNotMatch(notice, /<script/i);
   assert.match(home, /<link rel="canonical" href="http:\/\/localhost:4196\/">/);
@@ -464,7 +466,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.deepEqual(report.generate.liveLinks, [], 'no same-site link stays live');
   const notices = Object.fromEntries(report.generate.noticePages.map((l) => [new URL(l.url).pathname, l.reason]));
   assert.equal(notices['/team.html'], 'beyond-limit');
-  assert.equal(notices['/login.html'], 'backend');
+  assert.equal(notices['/login.html'], 'beyond-limit');
   assert.equal(notices['/brochure.pdf'], undefined, 'downloaded, not a notice page');
 
   // The builder-style page: one copy of the content, restyled per breakpoint.
@@ -583,7 +585,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   const fix = Object.fromEntries(report.fixes.map((f) => [f.id, f]));
   assert.match(work, /<span class="[\w-]+">Archive<\/span>/); // broken link unlinked: plain text, no <a> left without href
   assert.ok(!/<a(?![^>]*\shref=)[^>]*>Archive/.test(work));
-  assert.deepEqual(fix['broken-links'].items.map((i) => [i.page, new URL(i.url).pathname, i.status]), [['/work.html', '/old-work.html', 404]]);
+  assert.deepEqual(fix['broken-links'].items.map((i) => [i.page, new URL(i.url).pathname, i.status]), [['/', '/cart', 404], ['/work.html', '/old-work.html', 404]]); // /cart does not exist on the fixture: a broken link (it used to hide behind the "needs a backend" skip)
   assert.match(work, /<img[^>]* alt="Our studio in Lisbon"/);
   assert.match(work, /<a class="[\w-]+" aria-label="GitHub"(?: data-motion="[^"]*")? href="https:\/\/github\.com\/recreate-co">/);
   assert.match(work, /<button class="[\w-]+" type="button"><img[^>]* alt="Search"/);

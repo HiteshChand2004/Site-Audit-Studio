@@ -10,10 +10,16 @@ import { maxParallel, PAGE_MB, parallelism } from '../audit/resources.js';
 import { createSharedCache, sharedCacheEnabled } from '../audit/sharedCache.js';
 import { startEgressProxy } from '../security/egressProxy.js';
 import { capturePage } from './capture/index.js';
-import { discoverPages, probeNotFound, SKIP_LABELS } from './discover.js';
+import { discoverPages, NOT_FOUND_STATUS, probeNotFound, SKIP_LABELS } from './discover.js';
+import { evidenceFor, readHomepageShell, reasonText, recoveredDocument } from './recover.js';
+import { pageKey } from '../audit/util.js';
+import { USER_AGENT } from '../audit/http.js';
 import { RecreateError } from './errors.js';
 import { causeText, recoverFailure, recoverHit } from './interrupts.js';
 import { viewsFor } from './views.js';
+
+/** Fewer elements than this in an error answer = nothing of the page rendered (an empty gateway error, a bare status line). */
+export const EMPTY_PAGE_NODES = 8;
 
 // Captures stop starting new pages this long before the step's time limit.
 const INSPECT_MARGIN = 15000;
@@ -128,10 +134,24 @@ const once = (fn) => {
 
 // The pages the analysis this recreate comes from crawled (its crawl.json); none when it is gone or unreadable.
 async function analysisPages(ctx) {
+  ctx.analysisFacts = new Map();
   if (!ctx.analysis?.id || !ctx.project?.id) return [];
   try {
     const crawl = JSON.parse(await readFile(path.join(projectDir(ctx.project.id), 'audit', ctx.analysis.id, 'crawl.json'), 'utf8'));
-    return (crawl.pages ?? []).filter((p) => p.facts && p.status >= 200 && p.status < 300).map((p) => p.url);
+    // What the analysis read of each page: the evidence a page that cannot be rendered later is rebuilt from (recover.js).
+    for (const p of crawl.pages ?? []) {
+      if (!p.facts) continue;
+      for (const u of [p.url, p.requestedUrl].filter(Boolean)) {
+        try {
+          ctx.analysisFacts.set(pageKey(u), p.facts);
+        } catch {
+          // not an address
+        }
+      }
+    }
+    // Every page it reached is a candidate, also one whose server failed (401 / 403 / 5xx, no answer): an unavailable
+    // backend never takes a page out of the copy. Only an address that does not exist (404 / 410) is no page.
+    return (crawl.pages ?? []).filter((p) => p.facts || !NOT_FOUND_STATUS.has(p.status)).map((p) => p.url);
   } catch {
     return [];
   }
@@ -234,6 +254,8 @@ export async function inspectStage(ctx) {
 
   const captured = new Map(); // discovery index → page (kept in discovery order, the homepage first)
   const failedPages = [];
+  // Pages that could not be recreated even from evidence, with what was missing (report.notRecreated).
+  const notRecreated = [];
   const notCaptured = [];
   const stalled = []; // pages abandoned the first time: { i, info }
   const abandoned = []; // their captures, which end when the browser closes
@@ -295,6 +317,13 @@ export async function inspectStage(ctx) {
       if (!views.desktop) {
         if (i === 0) throw new RecreateError(`The homepage could not be captured: ${errors[0]?.message ?? 'unknown error'}`);
         failedPages.push({ url: info.url, source: info.source, reason: 'capture-failed' });
+        return;
+      }
+      // An error answer with next to nothing in it (an empty 502 from a gateway, a bare 500) is no evidence of the page:
+      // it is rebuilt from evidence instead (recover.js), not kept as a blank page. An error page with content of its own
+      // (a "please sign in" page, a designed 500 page) is what the site shows, and is kept as it rendered.
+      if (i > 0 && views.desktop.status >= 400 && (views.desktop.nodeCount ?? 0) < EMPTY_PAGE_NODES) {
+        failedPages.push({ url: info.url, source: info.source, reason: 'capture-failed', empty: views.desktop.status });
         return;
       }
       captured.set(i, { ...info, views });
@@ -422,6 +451,58 @@ export async function inspectStage(ctx) {
         keep(i, info, result);
       }
     }
+
+    // A page that could not be rendered at all is still a page of the site: rebuilt from the evidence there is - the
+    // site's own header and footer, what the analysis read of the page, a marked empty state where its content would be
+    // (recover.js) - and captured through the same pipeline. Only a page out of time is left to the next run.
+    const unrendered = failedPages.filter((p) => p.reason === 'capture-failed' || p.reason === 'stalled');
+    if (unrendered.length && !ctx.signal.aborted) {
+      browser ??= await launchBrowser({ proxy: proxy.url });
+      const home = discovery.pages[0];
+      const shell = await readHomepageShell(browser, home.url, { cache: ctx.netCache, userAgent: USER_AGENT })
+        .catch((err) => ({ error: String(err.message ?? err).split('\n')[0] }));
+      for (const [n, failed] of unrendered.entries()) {
+        if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
+        const i = discovery.pages.findIndex((p) => p.url === failed.url);
+        const info = discovery.pages[i];
+        if (!info) continue;
+        if (!shell?.html) {
+          notRecreated.push({ url: info.url, path: info.path, reason: failed.reason, missing: `the homepage's layout could not be read (${shell?.error ?? 'no layout'}), and nothing else of the page was available` });
+          continue;
+        }
+        // Within the step's own limit, like every capture: a page there is no time left for stays a time-limit page.
+        const left = pageLimit() - Date.now();
+        if (left < Math.max(10000, typicalPageMs())) {
+          failed.reason = 'time-limit';
+          notCaptured.push(info.path);
+          continue;
+        }
+        ctx.progress(0.97 + 0.03 * (n / unrendered.length), `Rebuilding ${info.path} from what is known about it`);
+        const evidence = evidenceFor(info, ctx.analysisFacts?.get(pageKey(info.url)) ?? null);
+        const why = reasonText({ reason: failed.reason, degraded: info.degraded });
+        const document = recoveredDocument(shell, evidence, why);
+        let timer;
+        // No limit (an exact or manual run) arms no timer: setTimeout clamps Infinity to 1 ms, which would fire at once.
+        const cap = Number.isFinite(left)
+          ? new Promise((resolve) => { timer = setTimeout(() => resolve({ views: {}, errors: [{ view: 'desktop', message: 'the rebuilt page did not finish within the time left' }] }), left); })
+          : new Promise(() => {});
+        const result = await Promise.race([
+          (ctx.capturePage ?? capturePage)(browser, info, ctx.dir, { cache: ctx.netCache, exact: Boolean(ctx.exact), document })
+            .catch((err) => ({ views: {}, errors: [{ view: 'desktop', message: String(err.message ?? err).split('\n')[0] }] })),
+          cap,
+        ]).finally(() => clearTimeout(timer));
+        if (!result.views?.desktop) {
+          notRecreated.push({ url: info.url, path: info.path, reason: failed.reason, missing: `even the page rebuilt from evidence could not be captured (${result.errors?.[0]?.message ?? 'unknown error'})` });
+          continue;
+        }
+        failedPages.splice(failedPages.indexOf(failed), 1);
+        keep(i, { ...info, recovered: { reason: failed.reason, why, evidence: [
+          ...(shell.header ? ["the site's header from its homepage"] : []),
+          ...(shell.footer ? ["the site's footer from its homepage"] : []),
+          ...evidence.sources,
+        ] } }, result);
+      }
+    }
     report.capture.captureMs = Date.now() - captureStarted;
   } finally {
     await closeBrowser();
@@ -452,6 +533,16 @@ export async function inspectStage(ctx) {
     motion: p.views.desktop?.motion ?? null,
     // How many interactive parts this page has, and how many the probes examined (capture/census.js).
     coverage: p.views.desktop?.coverage ?? null,
+    // The page's server or backend failed: 401 / 403 / 5xx or no answer while the pages were found.
+    ...(p.degraded && { degraded: p.degraded }),
+    // Its forms or content need a backend (login, account, cart …): the visible page is recreated, not what a server does.
+    ...(p.needsBackend && { needsBackend: true }),
+    // robots.txt asks crawlers not to read it; it is a page of the site all the same, so it is in the copy.
+    ...(p.robotsBlocked && { robotsBlocked: true }),
+    // It could not be rendered at all and was rebuilt from evidence (recover.js): why, and from what.
+    ...(p.recovered && { recovered: p.recovered }),
+    // Data requests that got no usable answer while it was captured: it shows the site's own empty or error state there.
+    ...(p.views.desktop?.dataFailed && { dataUnavailable: p.views.desktop.dataFailed }),
     ...(Object.values(p.views).some((v) => v?.coverage && v.view !== 'desktop') && {
       coverageByView: Object.fromEntries(Object.values(p.views)
         .filter((v) => v?.coverage && v.view !== 'desktop')
@@ -563,9 +654,25 @@ export async function inspectStage(ctx) {
     ...(notFound && { notFound }),
   };
   report.blockedHosts = proxy.blocked();
-  for (const s of discovery.skipped.filter((s) => s.reason === 'backend')) {
-    report.manual.push({ kind: 'page', title: `${new URL(s.url).pathname} was not recreated`, detail: SKIP_LABELS.backend, url: s.url });
+  // What a backend would do on a recreated page cannot be copied: said for each page that needs one, never faked.
+  for (const p of report.pages.filter((x) => x.needsBackend || x.dataUnavailable || x.recovered)) {
+    report.manual.push({
+      kind: 'page',
+      title: p.recovered ? `${p.path} was rebuilt from what is known about it` : `${p.path} was recreated without its backend`,
+      detail: p.recovered
+        ? `It could not be loaded (${p.recovered.why}). It keeps the site's frame and what the analysis read of it (${p.recovered.evidence.join(', ')}), with its content shown as not available.`
+        : p.dataUnavailable
+          ? `Its data did not load while it was copied (${p.dataUnavailable.count} request(s) to ${p.dataUnavailable.hosts.join(', ')} failed): it shows the empty or error state the site itself shows, and its forms do not send anything.`
+          : 'Its visible page is recreated; signing in, a cart, an account or anything else its server does needs a real backend, and its forms do not send anything.',
+      url: p.url,
+    });
   }
+  report.notRecreated = notRecreated;
+  if (notRecreated.length) {
+    report.warnings.push(`${notRecreated.length} page(s) could not be recreated even from evidence (${notRecreated.slice(0, 3).map((p) => p.path).join(', ')}${notRecreated.length > 3 ? ', …' : ''}): see "not recreated" in the report for what was missing.`);
+  }
+  const recoveredCount = report.pages.filter((p) => p.recovered).length;
+  if (recoveredCount) report.warnings.push(`${recoveredCount} page(s) could not be loaded and were rebuilt from what is known about them, with their content marked as not available.`);
 
   await writeFile(
     path.join(ctx.dir, 'capture', 'manifest.json'),

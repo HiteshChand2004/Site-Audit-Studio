@@ -1,8 +1,11 @@
 // Page discovery for Recreate: which pages of the site get rebuilt.
 // A fresh, SSRF-guarded mini crawl (robots.txt respected) collects candidates. The homepage always
 // comes first, then pages the homepage links to (in link order, so the main navigation wins), then
-// sitemap pages, then anything else the crawl found. Pages that need a backend (login, cart,
-// checkout, account), URLs with a query string and non-HTML files are skipped with a reason.
+// sitemap pages, then anything else the crawl found. URLs with a query string, non-HTML files and addresses that do not
+// exist (404 / 410) are skipped with a reason. An address robots.txt closes is still a page (captured by the browser, flagged).
+// A page is never left out because its backend is not there: a login, cart, account or dashboard page, a page the server
+// answers with 401 / 403 / 5xx, and one that fails at network level are all pages of the site. They are captured as the
+// browser renders them, and one that cannot be rendered at all is rebuilt from the evidence there is (inspect.js).
 // Eligible pages beyond the page limit are listed (their links get a local notice page). In "All pages" mode the crawl
 // reads the whole site (up to the safety cap) and follows links deeper.
 import { createHash } from 'node:crypto';
@@ -14,7 +17,8 @@ import { loadSitemaps } from '../audit/sitemap.js';
 import { pageKey, sameSite } from '../audit/util.js';
 import { RecreateError } from './errors.js';
 
-// Paths that only work with a real backend; they are reported under "Manual rebuild needed".
+// Paths whose content or forms need a real backend: recreated like any page (the visible UI), and reported under "Manual
+// rebuild needed" for what only a backend can do.
 const BACKEND_PATH =
   /(^|\/)(log-?in|sign-?in|sign-?up|register|logout|account|my-account|cart|basket|checkout|wp-admin|wp-login\.php|admin|dashboard)(\/|\.html?$|$)/i;
 const NON_PAGE = /\.(pdf|jpe?g|png|gif|webp|avif|svg|ico|mp4|webm|mov|mp3|wav|zip|rar|7z|gz|dmg|exe|docx?|xlsx?|pptx?|csv|json|xml|txt|css|js|woff2?|ttf)$/i;
@@ -68,13 +72,26 @@ export function skipReason(url, origin) {
   const u = new URL(url);
   if (!sameSite(url, origin)) return 'external';
   if (NON_PAGE.test(u.pathname)) return 'not-html';
-  if (BACKEND_PATH.test(u.pathname)) return 'backend';
   if (u.search) return 'query';
   return null;
 }
 
+/** Does the address look like a page whose content or forms need a backend (login, account, cart, admin …)? */
+export const needsBackend = (url) => {
+  try {
+    return BACKEND_PATH.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+};
+
+/** A status that means "no page here" (a broken link), as opposed to a page whose server or backend failed. */
+export const NOT_FOUND_STATUS = new Set([404, 410]);
+
 export const SKIP_LABELS = {
+  // Kept for reports written before backend pages were recreated.
   backend: 'Needs a backend (login, cart, checkout or account); rebuild it manually.',
+  'not-found': 'The address does not exist on the original (404 / 410): a broken link, not a page.',
   query: 'URL has a query string; treated as a variant of another page.',
   'not-html': 'Not an HTML page.',
   robots: 'Blocked by robots.txt.',
@@ -126,26 +143,43 @@ export function selectPages({ pages, homeUrl, sitemapUrls = [], knownUrls = [], 
     let reason = skipReason(c.url, origin);
     if (reason === 'external') continue;
     const page = byKey.get(c.key);
-    if (!reason && !robots.isAllowed(c.url)) reason = 'robots';
+    // robots.txt asks crawlers not to read it - often the very pages that need a backend (an admin, a cart, an account).
+    // It is still a page of the site the copy is made of: the crawl above did not fetch it, so the capture's browser
+    // opens it like any other page, and the report says robots.txt closes it.
+    if (!reason && !robots.isAllowed(c.url)) {
+      const target = page ?? { url: c.url, depth: null };
+      if (selected.some((s) => pageKey(s.page.url) === pageKey(target.url))) continue;
+      if (selected.length <= limit) selected.push({ page: target, source: c.source, robotsBlocked: true });
+      else beyondLimit.push({ url: target.url, source: c.source });
+      continue;
+    }
     if (!reason && !page) {
       // Known (sitemap or link) but not crawled within the crawl budget: still a real page.
       beyondLimit.push({ url: c.url, source: c.source });
       continue;
     }
-    // The crawler only extracts facts from 2xx HTML responses.
-    if (!reason && !page.facts) reason = page.error || page.status < 200 || page.status >= 300 ? 'error' : 'not-html';
+    // The crawler only extracts facts from 2xx HTML responses. Without them: a 2xx is a file, not a page; a 404 / 410 is
+    // a broken link; anything else - 401, 403, 5xx, a network failure - is a page whose server or backend failed, and it
+    // is still a page of the site: it is captured as the browser renders it (inspect.js rebuilds it from evidence when
+    // even that fails), flagged `degraded`.
+    let degraded = null;
+    if (!reason && !page.facts) {
+      if (NOT_FOUND_STATUS.has(page.status)) reason = 'not-found';
+      else if (!page.error && page.status >= 200 && page.status < 300) reason = 'not-html';
+      else degraded = { status: page.status ?? null, error: page.error ?? null };
+    }
     if (reason) {
       skipped.push({ url: c.url, source: c.source, reason, status: page?.status ?? null });
       continue;
     }
     // A redirect can land on a page that is already selected.
     if (selected.some((s) => pageKey(s.page.url) === pageKey(page.url))) continue;
-    if (selected.length <= limit) selected.push({ page, source: c.source });
+    if (selected.length <= limit) selected.push({ page, source: c.source, ...(degraded && { degraded }) });
     else beyondLimit.push({ url: page.url, source: c.source });
   }
 
   const usedOut = new Set();
-  const result = selected.map(({ page, source }) => {
+  const result = selected.map(({ page, source, degraded, robotsBlocked }) => {
     let outPath = outPathFor(new URL(page.url).pathname);
     // Two URLs can map to one file ("/About" and "/about"); keep the first, number the rest.
     for (let i = 2; usedOut.has(outPath); i++) outPath = outPath.replace(/(-\d+)?(\/index)?\.html$/, `-${i}$2.html`);
@@ -158,6 +192,9 @@ export function selectPages({ pages, homeUrl, sitemapUrls = [], knownUrls = [], 
       source,
       title: page.facts?.title ?? null,
       depth: page.depth,
+      ...(degraded && { degraded }),
+      ...(needsBackend(page.url) && { needsBackend: true }),
+      ...(robotsBlocked && { robotsBlocked: true }),
     };
   });
   return { pages: result, skipped, beyondLimit };

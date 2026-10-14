@@ -7,7 +7,7 @@ import path from 'node:path';
 import { db, projectDir } from '../src/db/index.js';
 import { capturePage } from '../src/recreate/capture/index.js';
 import { EXACT_PROBE_FACTOR, probeBudget } from '../src/recreate/inspect.js';
-import { discoverPages, outPathFor, selectPages, skipReason, slugFor } from '../src/recreate/discover.js';
+import { discoverPages, needsBackend, outPathFor, selectPages, skipReason, slugFor } from '../src/recreate/discover.js';
 import { runRecreate, STAGES } from '../src/recreate/index.js';
 import { recreateDir } from '../src/recreate/workspace.js';
 import { userPolicy, withNetPolicy } from '../src/security/netGuard.js';
@@ -51,10 +51,13 @@ test('output paths keep the original URLs', () => {
   assert.notEqual(long, slugFor('media/news/panscience-innovations-partners-with-bits-law-school-to-launch-palette-centre-2/index.html'));
 });
 
-test('backend pages, query URLs and files are not recreated', () => {
-  assert.equal(skipReason(`${origin}/login.html`, origin), 'backend');
-  assert.equal(skipReason(`${origin}/shop/cart/`, origin), 'backend');
-  assert.equal(skipReason(`${origin}/wp-admin/`, origin), 'backend');
+test('query URLs and files are not recreated; backend pages are, flagged as needing a backend', () => {
+  // A page that needs a backend is a page of the site: its visible UI is recreated (an unavailable backend never omits it).
+  for (const p of ['/login.html', '/shop/cart/', '/wp-admin/']) {
+    assert.equal(skipReason(`${origin}${p}`, origin), null, p);
+    assert.equal(needsBackend(`${origin}${p}`), true, p);
+  }
+  assert.equal(needsBackend(`${origin}/cartography`), false);
   assert.equal(skipReason(`${origin}/?ref=x`, origin), 'query');
   assert.equal(skipReason(`${origin}/a.pdf`, origin), 'not-html');
   assert.equal(skipReason('https://example.org/', origin), 'external');
@@ -78,7 +81,27 @@ test('selection: homepage links first, then sitemap, limit respected, duplicates
   });
   assert.deepEqual(result.pages.map((p) => [p.path, p.source]), [['/', 'home'], ['/b', 'home-link'], ['/a', 'home-link']]);
   assert.deepEqual(result.beyondLimit.map((p) => new URL(p.url).pathname), ['/c', '/d']);
-  assert.deepEqual(result.skipped.map((s) => [new URL(s.url).pathname, s.reason]), [['/gone', 'error']]);
+  assert.deepEqual(result.skipped.map((s) => [new URL(s.url).pathname, s.reason]), [['/gone', 'not-found']]);
+});
+
+test('selection: a page whose server or backend fails is still a page; only an address that does not exist is not', () => {
+  const page = (p, links = []) => ({ url: `${origin}${p}`, status: 200, depth: 1, facts: { title: p, links: links.map((l) => ({ href: `${origin}${l}`, internal: true })) } });
+  const pages = [
+    page('/', ['/dashboard', '/orders', '/down', '/gone', '/login']),
+    { url: `${origin}/dashboard`, status: 401, facts: null },
+    { url: `${origin}/orders`, status: 503, facts: null },
+    { url: `${origin}/down`, status: 0, error: 'refused', facts: null },
+    { url: `${origin}/gone`, status: 410, facts: null },
+    page('/login'),
+  ];
+  // /admin was never crawled (robots.txt closes it): it is a page all the same.
+  pages[0].facts.links.push({ href: `${origin}/admin`, internal: true });
+  const result = selectPages({ pages, homeUrl: `${origin}/`, robots: { isAllowed: (u) => !u.endsWith('/admin') }, limit: 300 });
+  assert.deepEqual(result.pages.map((p) => [p.path, p.degraded?.status ?? null, Boolean(p.needsBackend)]), [
+    ['/', null, false], ['/dashboard', 401, true], ['/orders', 503, false], ['/down', 0, false], ['/login', null, true], ['/admin', null, true],
+  ]);
+  assert.equal(result.pages.find((p) => p.path === '/admin').robotsBlocked, true);
+  assert.deepEqual(result.skipped.map((s) => [new URL(s.url).pathname, s.reason]), [['/gone', 'not-found']]);
 });
 
 test('selection: www. and bare host, http and https, trailing slash are one page (found on a site that links both forms)', () => {
@@ -104,14 +127,13 @@ test('discovery on the fixture: nav pages first, skips with reasons, the rest li
   assert.deepEqual(result.pages.map((p) => p.outPath), ['index.html', 'about.html', 'services/index.html', 'contact.html']);
   const skipped = Object.fromEntries(result.skipped.map((s) => [new URL(s.url).pathname + new URL(s.url).search, s.reason]));
   assert.deepEqual(skipped, {
-    '/login.html': 'backend',
-    '/cart': 'backend',
+    // /login.html is a page of the site (needing a backend does not omit it); /cart does not exist on the fixture.
+    '/cart': 'not-found',
     '/?ref=footer': 'query',
     '/brochure.pdf': 'not-html',
-    '/private/secret.html': 'robots',
-    '/old-work.html': 'error', // the broken link on /work.html (a 4a.5 fixer seed)
+    '/old-work.html': 'not-found', // the broken link on /work.html (a 4a.5 fixer seed)
   });
-  assert.deepEqual(result.beyondLimit.map((p) => new URL(p.url).pathname).sort(), ['/blog/first-post.html', '/blog/second-post.html', '/team.html', '/work.html']);
+  assert.deepEqual(result.beyondLimit.map((p) => new URL(p.url).pathname).sort(), ['/blog/first-post.html', '/blog/second-post.html', '/login.html', '/private/secret.html', '/team.html', '/work.html']); // /private/ is closed by robots.txt: still a page
   assert.equal(result.sitemap.status, 'found');
 });
 
@@ -187,7 +209,11 @@ test('the inspect step captures every selected page at desktop, laptop, tablet a
     ['/about.html', ['desktop', 'laptop', 'tablet', 'mobile']],
   ]);
   assert.deepEqual(report.errors, []);
-  assert.deepEqual(report.manual.map((m) => m.title), ['/login.html was not recreated', '/cart was not recreated']);
+  // No page is reported as left out for needing a backend any more: /login.html is a page (beyond this run's limit of one
+  // page here), /cart does not exist on the fixture (a broken link, not a page).
+  assert.deepEqual(report.manual.map((m) => m.title), []);
+  assert.ok(!report.discovery.skipped.some((s) => s.url.endsWith('/login.html')));
+  assert.deepEqual(report.notRecreated, []);
   assert.ok(report.discovery.linksToLive.some((l) => l.url === `${origin}/services/`));
 
   const dir = path.join(recreateDir(id, recreateId), 'capture');

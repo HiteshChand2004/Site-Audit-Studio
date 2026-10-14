@@ -36,13 +36,17 @@ const shown = (n, v) => {
 /**
  * The broken link targets from the analysis and from discovery: Map<urlKey, { url, status, source }>.
  * @param {object} audit      the analysis audit JSON (brokenLinks.broken)
- * @param {object[]} skipped  discovery skips (reason 'error' with an HTTP error or no response)
+ * @param {object[]} skipped  discovery skips ('not-found': a 404 / 410; 'error', in reports from before every failing page
+ *   was recreated: an HTTP error or no response)
+ * @param {string[]} [recreated]  addresses of the pages the copy has: a page whose server answered 500 or did not answer
+ *   when the analysis checked its links is still recreated, and a link to it must stay a link
  */
-export function brokenTargets(audit, skipped = []) {
+export function brokenTargets(audit, skipped = [], recreated = []) {
   const out = new Map();
-  for (const b of audit?.brokenLinks?.broken ?? []) if (b?.url) out.set(urlKey(b.url), { url: b.url, status: b.status, source: 'audit' });
+  const ours = new Set(recreated.map((u) => urlKey(u)));
+  for (const b of audit?.brokenLinks?.broken ?? []) if (b?.url && !ours.has(urlKey(b.url))) out.set(urlKey(b.url), { url: b.url, status: b.status, source: 'audit' });
   for (const s of skipped) {
-    if (s.reason === 'error' && (s.status == null || s.status === 0 || s.status >= 400) && !out.has(urlKey(s.url))) {
+    if ((s.reason === 'not-found' || s.reason === 'error') && (s.status == null || s.status === 0 || s.status >= 400) && !out.has(urlKey(s.url)) && !ours.has(urlKey(s.url))) {
       out.set(urlKey(s.url), { url: s.url, status: s.status || 'error', source: 'discovery' });
     }
   }
