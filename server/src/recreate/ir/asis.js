@@ -160,7 +160,7 @@ function localizeSvg(markup, pageUrl, assetResolve) {
 export const unpin = (style) => String(style).replace(/(^|;)(\s*(?:opacity|transform|filter)\s*:[^;!]*?)\s*!\s*important\s*(?=;|$)/gi, '$1$2');
 
 const newStats = () => ({
-  unpinned: 0, elements: 0, dropped: 0, shadowRoots: 0, links: { internal: 0, notice: 0, file: 0, external: 0, anchor: 0 },
+  unpinned: 0, scaffolding: 0, elements: 0, dropped: 0, shadowRoots: 0, links: { internal: 0, notice: 0, file: 0, external: 0, anchor: 0 },
   missing: { images: 0, media: 0, styleUrls: 0 }, safety: { handlers: 0, scriptUrls: 0, other: 0 }, svg: { cleaned: 0, removed: null },
   excluded: 0, notices: new Map(),
 });
@@ -187,6 +187,16 @@ export function asisBody(asis, { pageUrl, assetResolve, resolveLink, exclude = n
     }
     if (exclude.has(cpath)) {
       stats.excluded++;
+      return null;
+    }
+    // A script's scaffolding, caught by the capture while it stood in the page: an empty box with nothing but an inline
+    // style that makes it invisible and takes it out of the flow (a measuring probe of a scroll or layout library). It
+    // paints nothing, but where it stands it stretches the page - a strip of background below the footer - and the
+    // script that would have removed it is not copied.
+    const onlyStyle = Object.keys(el.attribs ?? {}).length === 1 && typeof el.attribs.style === 'string';
+    if (onlyStyle && !(el.children ?? []).some((c) => c.type !== 'text' || c.data.trim())
+      && /(^|;)\s*visibility\s*:\s*hidden/i.test(el.attribs.style) && /(^|;)\s*position\s*:\s*(absolute|fixed)/i.test(el.attribs.style)) {
+      stats.scaffolding++;
       return null;
     }
     stats.elements++;
@@ -329,7 +339,7 @@ export function asisBody(asis, { pageUrl, assetResolve, resolveLink, exclude = n
 // the original markup and is counted instead (`notCarried`).
 const CARRY = /^(data-motion|data-scroll-at|data-w-(one|dismiss|layer|x|stay))$/;
 // Attributes that make an element switch to, or be, another state: carried only when what they point at was built.
-const STATE = /^data-w-(set|i|auto|go|hrest|hv|panel|note|panel-of|note-of|hcopy)$/;
+const STATE = /^data-w-(set|i|auto|feed|off|go|hrest|hv|panel|note|panel-of|note-of|hcopy)$/;
 const COPY_ATTRS = { 'data-w-hcopy': 'hoverCards', 'data-w-note-of': 'notices', 'data-w-panel-of': 'panels' };
 const isStateCopy = (n) => Boolean(n.tpl) || ('data-w-set' in (n.attrs ?? {}) && 'hidden' in (n.attrs ?? {}));
 // What a part is decides first; a <template> (`tpl`) is only how a state or a hovered look waits to be shown.
@@ -362,7 +372,7 @@ export function carriedAttrs(irBody, cpathOf, notCarried, built = new Set()) {
     const own = Object.entries(attrs).filter(([k, v]) => {
       if (CARRY.test(k)) return true;
       if (!STATE.test(k)) return false;
-      if (k === 'data-w-set' || k === 'data-w-i' || k === 'data-w-auto') return setBuilt;
+      if (k === 'data-w-set' || k === 'data-w-i' || k === 'data-w-auto' || k === 'data-w-feed' || k === 'data-w-off') return setBuilt;
       return built.has(needOf(k, v, cpath));
     });
     if ('data-w-set' in attrs && !setBuilt) notCarried.states++;
@@ -711,6 +721,7 @@ export async function applyAsIs(ir, { dir, site, excluded = [] }) {
     report.motion.extras += placeExtras(body, extras.placements);
     report.motion.notCarried.unmapped += lost;
     report.unpinned += stats.unpinned;
+    report.scaffolding = (report.scaffolding ?? 0) + stats.scaffolding;
     // Element ids for measuring (data-sas-id in a measurement build only), each with the capture path it stands for, so
     // the exact comparison pairs a box of the copy with the very element of the original it is.
     const cpaths = {};

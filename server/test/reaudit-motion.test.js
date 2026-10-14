@@ -213,3 +213,15 @@ test('hover end states and timing: same values within rounding, a different end 
   assert.match(row.after.detail, /1 of them end in the same values, at the same speed\. Differs: button "Go": opacity ends at 0\.5 \(original 0\.8\)/);
   assert.deepEqual([summary.hover.matched, summary.hover.sameEnd], [2, 1]);
 });
+
+test('parts that change by themselves: each original one needs a copy one at about the same pace', async () => {
+  const { motionItems } = await import('../src/reaudit/motion.js');
+  const old = new Map([['home', { feeds: { areas: [{ path: 'body>ul:1', ms: 600 }, { path: 'body>p:1', ms: 700 }, { path: 'body>ul:2', ms: 3000 }] } }]]);
+  const now = new Map([['home', { feeds: [{ path: 'body>ul:1', ms: 620 }, { path: 'body>span:1', ms: 690 }, { path: 'body>ul:9', ms: 1200 }] }]]);
+  const row = motionItems(old, now).items.find((i) => i.key === 'motion.feeds');
+  assert.equal(row.before.count, 3);
+  assert.equal(row.after.count, 2, 'the 3 s one has no counterpart: 1.2 s is not its pace');
+  assert.equal(row.preset, 'open');
+  assert.match(row.after.detail, /every 620 ms \(original 600 ms\), 690 ms \(original 700 ms\)/);
+  assert.equal(motionItems(new Map([['home', {}]]), new Map([['home', {}]])).items.find((i) => i.key === 'motion.feeds'), undefined, 'no row when the original has none');
+});

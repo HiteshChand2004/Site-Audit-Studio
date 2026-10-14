@@ -4,6 +4,7 @@
 import { captureInteractions } from './interactions.js';
 import { settle } from './index.js';
 import { captureLoops } from './loops.js';
+import { measureFeeds } from './feeds.js';
 import { processReveal } from './reveal.js';
 
 /**
@@ -16,6 +17,8 @@ export async function measureMotion(page, { width = 1440, height = 900, budgetMs
   const { events } = await settle(page, { width, height }, cap, { observe: true });
   await page.waitForTimeout(300);
   const loops = await captureLoops(page);
+  // What changes by itself, and how often (capture/feeds.js), measured the way the capture measured the original.
+  const feeds = await measureFeeds(page).catch(() => []);
   const found = await captureInteractions(page, { budgetMs, ...(!focus && { focusStops: 0 }) });
-  return { reveal: processReveal(events ?? []), loops, hover: found.hover, focus: found.focus, stats: found.stats };
+  return { reveal: processReveal(events ?? []), loops, feeds, hover: found.hover, focus: found.focus, stats: found.stats };
 }

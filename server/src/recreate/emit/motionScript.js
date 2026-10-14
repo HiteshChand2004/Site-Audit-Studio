@@ -81,6 +81,31 @@ export const MOTION_JS = `(function () {
     for (var h = 0; h < states.length; h++) if (target.indexOf(states[h]) < 0) states[h].setAttribute('hidden', '');
     return states.length;
   };
+  // A part that changes by itself (data-w-feed: a feed adding rows, a ticker): a state shown again plays the entrance of
+  // every element in it, but the original only animated what its script had just added. So on each step, what the
+  // state shown before already had (the same tag and text) is held still, and only the new elements play their entrance.
+  var keyOf = function (el) {
+    return el.tagName + '|' + (el.textContent || '').split(/\\s+/).join(' ');
+  };
+  var calm = function (before, next) {
+    var seen = {};
+    var old = before ? before.querySelectorAll('*') : [];
+    for (var p = 0; p < old.length; p++) seen[keyOf(old[p])] = (seen[keyOf(old[p])] || 0) + 1;
+    var all = next.querySelectorAll('*');
+    for (var q = 0; q < all.length; q++) {
+      var el = all[q];
+      if (el.hasAttribute('data-w-calm')) {
+        el.style.animation = el.getAttribute('data-w-calm');
+        el.removeAttribute('data-w-calm');
+      }
+      var key = keyOf(el);
+      if (seen[key] > 0) {
+        seen[key]--;
+        el.setAttribute('data-w-calm', el.style.animation || '');
+        el.style.animation = 'none';
+      }
+    }
+  };
   // Carousels that move on by themselves (data-w-auto="ms:step"); a click restarts the wait.
   var autos = document.querySelectorAll('[data-w-auto]');
   for (var a = 0; a < autos.length; a++) {
@@ -96,8 +121,19 @@ export const MOTION_JS = `(function () {
         var states = document.querySelectorAll('[data-w-set="' + id + '"]');
         var n = states.length;
         var current = 0;
-        for (var i = 0; i < n; i++) if (!states[i].hasAttribute('hidden')) current = parseInt(states[i].getAttribute('data-w-i'), 10);
-        show(id, (((current + step) % n) + n) % n);
+        var before = null;
+        for (var i = 0; i < n; i++) {
+          if (!states[i].hasAttribute('hidden')) {
+            current = parseInt(states[i].getAttribute('data-w-i'), 10);
+            before = states[i];
+          }
+        }
+        var next = (((current + step) % n) + n) % n;
+        if (el.hasAttribute('data-w-feed')) {
+          var targets = document.querySelectorAll('[data-w-set="' + id + '"][data-w-i="' + next + '"]');
+          for (var t = 0; t < targets.length; t++) calm(before, targets[t]);
+        }
+        show(id, next);
       }, ms);
     })(autos[a]);
   }
@@ -225,6 +261,18 @@ export const MOTION_JS = `(function () {
       var to = (go.getAttribute('data-w-go') || '').split(':');
       keepHere(go, e);
       touched[to[0]] = Date.now();
+      // The control of the state on show, clicked again, leads to the set's "off" state where it has one (data-w-off: the
+      // original closed the open item of an accordion or a FAQ).
+      var owner = document.querySelector('[data-w-set="' + to[0] + '"][data-w-off]');
+      if (owner) {
+        var on = document.querySelectorAll('[data-w-set="' + to[0] + '"]');
+        for (var o = 0; o < on.length; o++) {
+          if (!on[o].hasAttribute('hidden') && rendered(on[o]) && on[o].getAttribute('data-w-i') === to[1]) {
+            to[1] = owner.getAttribute('data-w-off');
+            break;
+          }
+        }
+      }
       show(to[0], to[1]);
       return;
     }

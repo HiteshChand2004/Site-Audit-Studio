@@ -425,6 +425,15 @@ function pageBody(t, site, stats) {
       stats.safety.elements++;
       return null;
     }
+    // A script's scaffolding caught mid-use (ir/asis.js says the same for an as-is page): empty, nameless, invisible and
+    // out of the flow in every view. It paints nothing but stretches the page below the footer.
+    const views = Object.values(n.views ?? {}).filter(Boolean);
+    // (n.class is the name the copy gives it; the original's own attributes are what say it is nameless.)
+    if (!n.children.length && !Object.keys(n.attrs ?? {}).length && views.length
+      && views.every((v) => (v.hidden || v.style?.visibility === 'hidden') && /^(absolute|fixed)$/.test(v.style?.position ?? ''))) {
+      stats.scaffolding = (stats.scaffolding ?? 0) + 1;
+      return null;
+    }
     const attrs = {};
     for (const [k, v] of Object.entries(n.attrs)) if (!SKIP_ATTRS.has(k) && !k.startsWith('data-')) attrs[k] = v;
     guardAttributes(attrs, stats.safety.attrs);

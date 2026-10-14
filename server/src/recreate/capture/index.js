@@ -22,6 +22,7 @@ import { shapeCounts } from './selectorShape.js';
 import { attachType, probeTypography } from './typography.js';
 import { attachProbe, probeViewportHeight } from './viewport.js';
 import { asisFile, captureAsIs, markAsIs, recordSheetBodies } from './asis.js';
+import { captureFeeds } from './feeds.js';
 
 // Clicking through the states of tabs / carousels / filtered lists of one page (most pages have none: no time used). The
 // limit follows the work (capture/states.js, ~3 s per control) within these bounds.
@@ -207,6 +208,20 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
         loopsError = firstLine(err);
       }
     }
+    // Parts that change by themselves (a feed adding rows on a timer, a ticker, a highlight that moves on): recorded as
+    // states the copy cycles through (capture/feeds.js). Before the probes: a hover or a click must not count as the page
+    // changing on its own, and the clicks change the page.
+    let feeds = null;
+    if (observeReveal) {
+      try {
+        feeds = await captureFeeds(page, snapshot.body, { budgetMs: exact ? 40000 : 25000 });
+        snapshot.cssUrls = [...new Set([...(snapshot.cssUrls ?? []), ...feeds.cssUrls])];
+        delete feeds.cssUrls;
+      } catch (err) {
+        feeds = { error: firstLine(err) };
+      }
+      lap('feeds');
+    }
     lap('motion');
     const fold = await page.screenshot({ type: 'png', animations: 'disabled' });
     const fullHeight = Math.max(1, Math.min(snapshot.scrollHeight, MAX_HEIGHT));
@@ -335,6 +350,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       try {
         found.reveal = processReveal(revealEvents ?? []);
         if (loops) found.loops = loops;
+        if (feeds) found.feeds = feeds;
       } catch (err) {
         error ??= firstLine(err);
       }
@@ -352,6 +368,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
           unreadableSheets: snapshot.unreadableSheets?.length ?? 0,
           ...(foreign.stats && { foreign: foreign.stats }),
           ms: found.stats.ms, timedOut: found.stats.timedOut, reveal: found.reveal?.stats ?? null, loops: loops?.stats ?? null, clicks: found.clicks?.stats ?? null,
+          ...(feeds && { feeds: feeds.error ? { error: feeds.error } : { areas: feeds.areas.length, states: feeds.states, skipped: feeds.skipped.length, ms: feeds.ms } }),
           ...((error ?? loopsError ?? clicksError) && { error: error ?? loopsError ?? clicksError }),
         };
       } catch (err) {

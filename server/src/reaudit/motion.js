@@ -156,7 +156,57 @@ export function summarize(motion) {
 // them is within 1.5 (px, channel) or 2 % of the other: computed styles round, and sub-pixel layout differs a hair.
 const NUMBER = /-?\d*\.?\d+(?:e-?\d+)?/gi;
 const skeleton = (v) => String(v ?? '').replace(NUMBER, '#').replace(/\s+/g, ' ').trim();
+// The same colour written in another colour space (a browser keeps `oklab(…)` as the site wrote it; a stylesheet the copy
+// writes may carry it as `rgba(…)`): every colour is put as rgba(r, g, b, a) on the 0-255 scale before comparing.
+const clamp255 = (v) => Math.max(0, Math.min(255, Math.round(v)));
+const gamma = (c) => (c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055) * 255;
+const fromLinear = ([r, g, b], alpha) => `rgba(${clamp255(gamma(r))}, ${clamp255(gamma(g))}, ${clamp255(gamma(b))}, ${+alpha.toFixed(3)})`;
+function oklabToRgba(L, a, b, alpha) {
+  const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const s = (L - 0.0894841775 * a - 1.2914855480 * b) ** 3;
+  return fromLinear([4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s, -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s, -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s], alpha);
+}
+function labToRgba(L, a, b, alpha) {
+  // CIE Lab (D50) -> XYZ -> D65 (Bradford) -> linear sRGB.
+  const fy = (L + 16) / 116;
+  const fx = fy + a / 500;
+  const fz = fy - b / 200;
+  const f = (t) => (t ** 3 > 216 / 24389 ? t ** 3 : (116 * t - 16) / (24389 / 27));
+  const [X, Y, Z] = [f(fx) * 0.96422, (L > 8 ? fy ** 3 : L / (24389 / 27)), f(fz) * 0.82521];
+  const [x, y, z] = [0.9555766 * X - 0.0230393 * Y + 0.0631636 * Z, -0.0282895 * X + 1.0099416 * Y + 0.0210077 * Z, 0.0122982 * X - 0.0204830 * Y + 1.3299098 * Z];
+  return fromLinear([3.2404542 * x - 1.5371385 * y - 0.4985314 * z, -0.9692660 * x + 1.8760108 * y + 0.0415560 * z, 0.0556434 * x - 0.2040259 * y + 1.0572252 * z], alpha);
+}
+const num = (v, scale = 1) => (String(v).endsWith('%') ? (parseFloat(v) / 100) * scale : parseFloat(v));
+export function normalizeColors(value) {
+  return String(value ?? '')
+    .replace(/#([0-9a-f]{3,8})\b/gi, (all, h) => {
+      const x = h.length <= 4 ? [...h].map((c) => c + c).join('') : h;
+      if (x.length !== 6 && x.length !== 8) return all;
+      const n = (i) => parseInt(x.slice(i, i + 2), 16);
+      return `rgba(${n(0)}, ${n(2)}, ${n(4)}, ${x.length === 8 ? +(n(6) / 255).toFixed(3) : 1})`;
+    })
+    .replace(/(oklab|oklch|lab|lch)\(\s*([^)]*)\)/gi, (all, fn, body) => {
+      const [main, alphaPart] = body.split('/');
+      const [p, q, r] = main.trim().split(/\s+/);
+      const alpha = alphaPart ? num(alphaPart.trim(), 1) : 1;
+      const f = fn.toLowerCase();
+      if (f === 'oklab') return oklabToRgba(num(p, 1), num(q, 0.4), num(r, 0.4), alpha);
+      if (f === 'oklch') {
+        const h = (parseFloat(r) * Math.PI) / 180;
+        return oklabToRgba(num(p, 1), num(q, 0.4) * Math.cos(h), num(q, 0.4) * Math.sin(h), alpha);
+      }
+      if (f === 'lab') return labToRgba(num(p, 100), num(q, 125), num(r, 125), alpha);
+      const h = (parseFloat(r) * Math.PI) / 180;
+      return labToRgba(num(p, 100), num(q, 150) * Math.cos(h), num(q, 150) * Math.sin(h), alpha);
+    })
+    .replace(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)\s*(?:[,/]\s*([\d.]+%?))?\s*\)/gi, (all, r, g, b, a) => `rgba(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)}, ${a == null ? 1 : +num(a, 1).toFixed(3)})`);
+}
+
 export function sameValue(a, b) {
+  if (a === b) return true;
+  a = normalizeColors(a);
+  b = normalizeColors(b);
   if (a === b) return true;
   if (skeleton(a) !== skeleton(b)) return false;
   const x = String(a ?? '').match(NUMBER) ?? [];
@@ -257,7 +307,12 @@ export function motionItems(oldPages, newPages) {
       pool.set(k, pool.get(k) - 1);
       matchedHover.count++;
       const before = so.hover.entries[i];
-      const after = entriesNow.get(k)?.shift();
+      // Several elements with the same name ("Home" in the header and in the footer): the copy's one that matches best, not
+      // the next in order - the copy is probed in its own order.
+      const twins = entriesNow.get(k) ?? [];
+      let pick = 0;
+      for (let c = 1; c < twins.length; c++) if (hoverDifferences(before, twins[c]).length < hoverDifferences(before, twins[pick]).length) pick = c;
+      const after = twins.splice(pick, 1)[0];
       const diff = after ? hoverDifferences(before, after) : ['not measured'];
       if (!diff.length) matchedHover.same++;
       else if (matchedHover.differences.length < 12) {
@@ -291,6 +346,29 @@ export function motionItems(oldPages, newPages) {
       { detail: `${plural(o.hover.length, 'element')} change on hover (colour, shadow, movement, …).`, count: o.hover.length },
       { detail: `${matched} of them react on the recreated site${matched ? ` (${matchedHover.agree} with the same changes)` : ''}.`, count: matched },
       ratio < 0.9 ? 'Hover effects driven by script (they add or remove elements) are not reproduced.' : null));
+  }
+  // Parts that change by themselves (capture/feeds.js): each one the original had is paired with one of the copy that
+  // changes at about the same pace (within max(150 ms, 25 %)) - the copy must keep changing after it loaded, not only
+  // show the moment the capture caught.
+  const feeds = { before: 0, kept: 0, paces: [] };
+  for (const slug of both) {
+    const was = oldPages.get(slug)?.feeds?.areas ?? [];
+    const now = [...(newPages.get(slug)?.feeds ?? [])];
+    feeds.before += was.length;
+    for (const a of was) {
+      const i = now.findIndex((b) => Math.abs(b.ms - a.ms) <= Math.max(150, a.ms * 0.25));
+      if (i < 0) continue;
+      feeds.kept++;
+      feeds.paces.push(`${now[i].ms} ms (original ${a.ms} ms)`);
+      now.splice(i, 1);
+    }
+  }
+  if (feeds.before) {
+    const ratio = feeds.kept / feeds.before;
+    items.push(row('motion.feeds', 'Parts that change by themselves kept', ratio,
+      { detail: `${plural(feeds.before, 'part')} of the page change on their own (a feed, a ticker, a highlight that moves on).`, count: feeds.before },
+      { detail: `${feeds.kept} of them keep changing on the recreated site${feeds.paces.length ? `: every ${feeds.paces.slice(0, 3).join(', ')}` : ''}.`, count: feeds.kept },
+      'The copy replays the updates the capture saw, in order, and starts over after the last one: it is not live data.'));
   }
   // Not only whether the copy reacts, but whether it ends where the original ends, as fast.
   if (matchedHover.count) {

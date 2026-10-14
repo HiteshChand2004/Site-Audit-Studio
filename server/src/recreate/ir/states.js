@@ -267,6 +267,10 @@ export function expandStates(root) {
       mark(n, id, s.initial, s);
       // A carousel that moves on by itself (capture/states.js): js/motion.js advances it on the same interval.
       if (s.autoplay?.ms > 0) n.stateAttrs['data-w-auto'] = `${s.autoplay.ms}:${s.autoplay.step}`;
+      // A part that changes by itself (capture/feeds.js): on each step only what is new plays its entrance (js/motion.js).
+      if (s.feed) n.stateAttrs['data-w-feed'] = '';
+      // The state a click on the control of the state on show leads to (an accordion or a FAQ closing: capture/states.js).
+      if (s.off != null) n.stateAttrs['data-w-off'] = String(s.off);
       const own = relMap(n);
       // Sets inside this area (a "View more" toggle inside a filtered section): the same content in another state (same
       // tag and text) works the same, so it gets the same states; all of them are expanded below with the copies.

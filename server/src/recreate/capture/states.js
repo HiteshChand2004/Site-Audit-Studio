@@ -617,6 +617,28 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
         const offset = k < 0 ? 0 : ((k - initial + n + Math.floor(n / 2)) % n) - Math.floor(n / 2);
         if (offset) nav.push({ rel: p.slice(plan.area.length + 1), offset });
       }
+      // The control of the state on show, clicked once more: an accordion or a FAQ closes it (every item closed - a state no
+      // control leads to by itself), a tab set stays. When the area changes into something new, that is the set's "off"
+      // state, and in the copy a click on the control of the state on show goes there.
+      let off = null;
+      if (Date.now() < deadline) {
+        // Its state first, only when the area is not in it (next / previous may have moved it on; a click on the control of
+        // the state on show would already close it), then the same control again.
+        const last = plan.controls.length - 1;
+        if (stateSignature(await snap(plan)) !== sigs[last]) {
+          await page.evaluate(clickPath, plan.controls[last]).catch(() => false);
+          await settle();
+        }
+        if (stateSignature(await snap(plan)) === sigs[last] && await page.evaluate(clickPath, plan.controls[last])) {
+          await settle();
+          const again = await snap(plan);
+          const sig = again && stateSignature(again);
+          if (sig && !sigs.includes(sig) && samePage(page.url(), startUrl)) {
+            off = plan.controls.length;
+            variants.push({ index: off, body: again });
+          }
+        }
+      }
       // Back to how the page started.
       await page.evaluate(clickPath, plan.controls[initial]).catch(() => {});
       await settle();
@@ -648,6 +670,7 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
           controls: plan.controls.map(rel),
           nav: nav.map((n) => ({ ...n, rel: rel(`${plan.area}>${n.rel}`) })).filter((n) => n.rel != null),
           ...(autoplay && pi === 0 && { autoplay }),
+          ...(off != null && { off }),
           variants: variants.filter((v) => v.index !== initial).map((v) => ({ index: v.index, body: partsOf(v.body, plan)[pi], ...(v.effects?.[pi] && { effects: v.effects[pi] }) })),
         };
       });

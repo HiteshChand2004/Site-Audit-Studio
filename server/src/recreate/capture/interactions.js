@@ -1019,7 +1019,9 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
     // transition of their own does not carry - the ones the copy has to time itself.
     dynamic: picked.dynamic ?? 0, dynamicFound: 0, scripted: 0, scriptedUnsettled: 0,
   };
-  const settle = (state) => Math.min(700, Math.max(80, (state ? transitionMs(state) : 200) + 60));
+  // The element's own transition, read to its end: a site that gives everything 0.8 s was read mid-way at the old 0.7 s
+  // cap, so a hover's end value was a value on the way there (and the copy, timed differently, read another one).
+  const settle = (state) => Math.min(1500, Math.max(80, (state ? transitionMs(state) : 200) + 60));
 
   const hover = [];
   let lastWait = 200;
