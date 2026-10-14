@@ -337,9 +337,9 @@ export function asisBody(asis, { pageUrl, assetResolve, resolveLink, exclude = n
 // the as-is markup, found by the capture's own path. What the copy rebuilds as extra elements - the other states of a
 // tab set or carousel, a card's hovered look, a message a click shows, a panel only drawn while open - is not part of
 // the original markup and is counted instead (`notCarried`).
-const CARRY = /^(data-motion|data-scroll-at|data-w-(one|dismiss|layer|x|stay|follow))$/;
+const CARRY = /^(data-motion|data-scroll-at|data-w-(one|dismiss|layer|x|stay|follow|open))$/;
 // Attributes that make an element switch to, or be, another state: carried only when what they point at was built.
-const STATE = /^data-w-(set|i|auto|feed|off|go|hrest|hv|panel|note|panel-of|note-of|hcopy)$/;
+const STATE = /^data-w-(set|i|auto|feed|off|alone|go|hrest|hv|panel|note|panel-of|note-of|hcopy)$/;
 const COPY_ATTRS = { 'data-w-hcopy': 'hoverCards', 'data-w-note-of': 'notices', 'data-w-panel-of': 'panels' };
 const isStateCopy = (n) => Boolean(n.tpl) || ('data-w-set' in (n.attrs ?? {}) && 'hidden' in (n.attrs ?? {}));
 // What a part is decides first; a <template> (`tpl`) is only how a state or a hovered look waits to be shown.
@@ -379,7 +379,7 @@ export function carriedAttrs(irBody, cpathOf, notCarried, built = new Set()) {
     const own = Object.entries(attrs).filter(([k, v]) => {
       if (CARRY.test(k)) return true;
       if (!STATE.test(k)) return false;
-      if (k === 'data-w-set' || k === 'data-w-i' || k === 'data-w-auto' || k === 'data-w-feed' || k === 'data-w-off') return setBuilt;
+      if (k === 'data-w-set' || k === 'data-w-i' || k === 'data-w-auto' || k === 'data-w-feed' || k === 'data-w-off' || k === 'data-w-alone') return setBuilt;
       return built.has(needOf(k, v, cpath));
     });
     if ('data-w-set' in attrs && !setBuilt) notCarried.states++;

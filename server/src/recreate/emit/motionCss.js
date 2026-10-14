@@ -44,12 +44,21 @@ export function motionCss(m, opts) {
     return `${sel(sib.token)}:has(${host})`;
   };
 
+  /**
+   * A part inside the hovered element. Where hosts of one effect sit inside each other (ir/motion.js markNestedHosts:
+   * a menu item holding a submenu of items), a part belongs to the nearest host around it: one inside a host that
+   * does NOT hold the state is left alone, so hovering the outer item does not restyle the inner items' links.
+   */
+  const kidSel = (e, k, state) => (e.nested
+    ? `${sel(e.token)}${state} ${sel(k.token)}:not(${sel(e.token)}:not(${state}) ${sel(k.token)})`
+    : `${sel(e.token)}${state} ${sel(k.token)}`);
+
   // Hover, for pointer devices only (a touch screen would keep the state after a tap).
   const hover = [];
   for (const h of m.hover) {
     hover.push(block(`${sel(h.token)}:hover`, D(h.decls, '    '), '  '));
     for (const [which, decl] of Object.entries(h.pseudo ?? {})) hover.push(block(`${sel(h.token)}:hover::${which}`, D(decl, '    '), '  '));
-    for (const k of h.kids ?? []) hover.push(block(`${sel(h.token)}:hover ${sel(k.token)}`, D(k.decls, '    '), '  '));
+    for (const k of h.kids ?? []) hover.push(block(kidSel(h, k, ':hover'), D(k.decls, '    '), '  '));
     for (const x of h.sibs ?? []) hover.push(block(sibSel(h.token, x, ':hover'), D(x.decls, '    '), '  '));
   }
   if (hover.some(Boolean)) out.push(`/* Hover */\n@media (hover: hover) {\n${hover.filter(Boolean).join('\n')}\n}`);
@@ -58,7 +67,7 @@ export function motionCss(m, opts) {
   for (const f of m.focus) {
     focus.push(block(`${sel(f.token)}:focus-visible`, D(f.decls)));
     for (const [which, decl] of Object.entries(f.pseudo ?? {})) focus.push(block(`${sel(f.token)}:focus-visible::${which}`, D(decl)));
-    for (const k of f.kids ?? []) focus.push(block(`${sel(f.token)}:focus-visible ${sel(k.token)}`, D(k.decls)));
+    for (const k of f.kids ?? []) focus.push(block(kidSel(f, k, ':focus-visible'), D(k.decls)));
     for (const x of f.sibs ?? []) focus.push(block(sibSel(f.token, x, ':focus-visible'), D(x.decls)));
   }
   if (focus.some(Boolean)) out.push(`/* Keyboard focus */\n${focus.filter(Boolean).join('\n')}`);
@@ -108,6 +117,13 @@ export function motionCss(m, opts) {
       const targets = states.map((s) => (p.token === w.token ? `${sel(w.token)}${s}` : `${sel(w.token)}${s} ${sel(p.token)}`));
       list.push(block(targets.join(',\n'), D(p.decls)));
       for (const [which, decl] of Object.entries(p.pseudo ?? {})) list.push(block(targets.map((t) => `${t}::${which}`).join(',\n'), D(decl)));
+      // A panel the page showed open when it loaded (`data-w-open`): its look at rest is the open one, and once the visitor
+      // closes it js/motion.js marks it `is-shut`, which takes it to the closed values.
+      if (w.startsOpen && !w.on) {
+        const shut = p.token === w.token ? `${sel(w.token)}.is-shut` : `${sel(w.token)}.is-shut ${sel(p.token)}`;
+        if (p.shut) list.push(block(shut, D(p.shut)));
+        for (const [which, decl] of Object.entries(p.pseudoShut ?? {})) list.push(block(`${shut}::${which}`, D(decl)));
+      }
     }
   }
   if (widgets.some(Boolean)) out.push(`/* Open panels (js/motion.js adds .is-open to the area of a clicked control) */\n${widgets.filter(Boolean).join('\n')}`);
