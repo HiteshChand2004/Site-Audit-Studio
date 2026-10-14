@@ -234,18 +234,47 @@ export const MOTION_JS = `(function () {
   var layerOf = function (area) {
     return (area.querySelector && area.querySelector('[data-w-layer]')) || area;
   };
+  // A panel whose open state is in the stylesheet (an area marked wN) is open with \`is-open\`, or - one the page showed open
+  // when it loaded (data-w-open, the first answer of a FAQ) - until the visitor closes it (\`is-shut\`). setOpen keeps both
+  // marks and the control's aria-expanded in step, whichever way the panel is opened or closed.
+  var isOpen = function (area) {
+    return area.classList.contains('is-open') || (area.hasAttribute('data-w-open') && !area.classList.contains('is-shut'));
+  };
+  var setOpen = function (area, open, control) {
+    area.classList.toggle('is-open', open);
+    if (area.hasAttribute('data-w-open')) area.classList.toggle('is-shut', !open);
+    var c = control && control.hasAttribute('aria-expanded') ? control : area.querySelector('[data-motion~="wt"][aria-expanded]');
+    if (c) c.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+  var openAreas = function (root, selector) {
+    var all = root.querySelectorAll(selector);
+    var out = [];
+    for (var i = 0; i < all.length; i++) if (AREA.test(all[i].getAttribute('data-motion') || '') && isOpen(all[i])) out.push(all[i]);
+    return out;
+  };
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Escape' && e.key !== 'Esc') return;
     var open = openPanels();
     for (var i = 0; i < open.length; i++) if (dismisses(open[i], 'esc')) openPanel(open[i], false);
-    // A panel whose open state is in the stylesheet (is-open on its area): the same, by its area.
-    var areas = document.querySelectorAll('[data-w-dismiss].is-open');
-    for (var k = 0; k < areas.length; k++) {
-      if (!dismisses(areas[k], 'esc')) continue;
-      areas[k].classList.remove('is-open');
-      var c = areas[k].querySelector('[data-motion~="wt"][aria-expanded]');
-      if (c) c.setAttribute('aria-expanded', 'false');
-    }
+    // A panel whose open state is in the stylesheet: the same, by its area.
+    var areas = openAreas(document, '[data-w-dismiss]');
+    for (var k = 0; k < areas.length; k++) if (dismisses(areas[k], 'esc')) setOpen(areas[k], false);
+  });
+  // The keyboard: a control the copy switches that is not a native button (a focusable box with a button role, a link
+  // acting as a toggle) answers Enter and Space with the same click the mouse gives, as the original's script made it;
+  // a <button>, <summary> or form control already turns those keys into a click by itself.
+  var CONTROL = '[data-w-go], [data-motion~="wt"], [data-w-panel], [data-w-note], [data-w-x]';
+  document.addEventListener('keydown', function (e) {
+    if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
+    var key = e.key === 'Spacebar' ? ' ' : e.key;
+    if (key !== 'Enter' && key !== ' ') return;
+    var el = e.target;
+    if (!el || !el.matches || !el.matches(CONTROL) || el.isContentEditable) return;
+    var tag = el.tagName;
+    if (tag === 'BUTTON' || tag === 'SUMMARY' || tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    if (tag === 'A' && el.hasAttribute('href') && (key === 'Enter' || el.getAttribute('role') !== 'button')) return;
+    e.preventDefault();
+    el.click();
   });
   var noteTimer = null;
   document.addEventListener('click', function (e) {
@@ -259,11 +288,9 @@ export const MOTION_JS = `(function () {
         openPanel(inPanel, false);
         return;
       }
-      var inArea = x.closest('[data-w-dismiss].is-open');
-      if (inArea) {
-        inArea.classList.remove('is-open');
-        var ac = inArea.querySelector('[data-motion~="wt"][aria-expanded]');
-        if (ac) ac.setAttribute('aria-expanded', 'false');
+      var inArea = x.closest('[data-w-dismiss]');
+      if (inArea && isOpen(inArea)) {
+        setOpen(inArea, false);
         return;
       }
     }
@@ -283,12 +310,10 @@ export const MOTION_JS = `(function () {
       if (!dismisses(openNow[o], 'out') || (target && (openNow[o].contains(target) || target.closest('[data-w-panel="' + openNow[o].getAttribute('data-w-panel-of') + '"]')))) continue;
       openPanel(openNow[o], false);
     }
-    var openAreas = document.querySelectorAll('[data-w-dismiss].is-open');
-    for (var oa = 0; oa < openAreas.length; oa++) {
-      if (!dismisses(openAreas[oa], 'out') || (target && (layerOf(openAreas[oa]).contains(target) || target.closest('[data-motion~="wt"]')))) continue;
-      openAreas[oa].classList.remove('is-open');
-      var oc = openAreas[oa].querySelector('[data-motion~="wt"][aria-expanded]');
-      if (oc) oc.setAttribute('aria-expanded', 'false');
+    var outs = openAreas(document, '[data-w-dismiss]');
+    for (var oa = 0; oa < outs.length; oa++) {
+      if (!dismisses(outs[oa], 'out') || (target && (layerOf(outs[oa]).contains(target) || target.closest('[data-motion~="wt"]')))) continue;
+      setOpen(outs[oa], false);
     }
     // A short message (data-w-note="id:ms"): shown on click, hidden again after ms (0 = until the next one).
     var note = e.target && e.target.closest ? e.target.closest('[data-w-note]') : null;
@@ -327,6 +352,18 @@ export const MOTION_JS = `(function () {
         }
       }
       show(to[0], to[1]);
+      // A panel of a list that keeps one open at a time (data-w-alone="group:closed state"): opening it closes the others.
+      var me = document.querySelector('[data-w-set="' + to[0] + '"][data-w-alone]');
+      if (me) {
+        var mine = (me.getAttribute('data-w-alone') || '').split(':');
+        if (String(to[1]) !== mine[1]) {
+          var mates = document.querySelectorAll('[data-w-alone^="' + mine[0] + ':"]');
+          for (var g = 0; g < mates.length; g++) {
+            var sid = mates[g].getAttribute('data-w-set');
+            if (sid !== to[0]) show(sid, (mates[g].getAttribute('data-w-alone') || '').split(':')[1]);
+          }
+        }
+      }
       return;
     }
     var t = e.target && e.target.closest ? e.target.closest('[data-motion~="wt"]') : null;
@@ -335,18 +372,13 @@ export const MOTION_JS = `(function () {
     while (area && !(area.getAttribute && AREA.test(area.getAttribute('data-motion') || ''))) area = area.parentElement;
     if (!area) return;
     keepHere(t, e);
-    var open = area.classList.toggle('is-open');
-    if (t.hasAttribute('aria-expanded')) t.setAttribute('aria-expanded', open ? 'true' : 'false');
+    var open = !isOpen(area);
+    setOpen(area, open, t);
     // One panel at a time in a list marked data-w-one (an accordion): the others close.
     var list = open && area.closest ? area.closest('[data-w-one]') : null;
     if (list) {
-      var others = list.querySelectorAll('.is-open');
-      for (var k = 0; k < others.length; k++) {
-        if (others[k] === area || !AREA.test(others[k].getAttribute('data-motion') || '')) continue;
-        others[k].classList.remove('is-open');
-        var c = others[k].querySelector('[data-motion~="wt"][aria-expanded]');
-        if (c) c.setAttribute('aria-expanded', 'false');
-      }
+      var others = openAreas(list, '.is-open, [data-w-open]');
+      for (var k = 0; k < others.length; k++) if (others[k] !== area) setOpen(others[k], false);
     }
   });
 })();

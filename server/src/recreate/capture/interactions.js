@@ -45,6 +45,10 @@ const DYNAMIC_MIN = 4;
 // Repeated blocks (cards of a row, tiles of a grid): their share of the page's limit, never below ITEM_MIN.
 const ITEM_SHARE = 0.4;
 const ITEM_MIN = 6;
+// Elements a stylesheet rule already describes, hovered with the real mouse as well (a script may add to the rule's
+// effect or overrule it): their share of the page's limit, after every element nothing describes yet.
+const RULE_SHARE = 0.25;
+const RULE_MIN = 4;
 
 /** Page function: the :hover / :focus / :active rules of the readable stylesheets. */
 function scanRules(opts) {
@@ -534,7 +538,10 @@ export async function cssStateEffects(page, { budgetMs = 1500 } = {}) {
  * @returns {{ candidates: object[], groups: object[], skipped: object, focusable: number, dynamic: number }}
  */
 function install(opts) {
-  const { limit, perSignature, dynamicLimit = 0, itemLimit = 0 } = opts;
+  const { limit, perSignature, dynamicLimit = 0, itemLimit = 0, ruleLimit = 0 } = opts;
+  // Elements whose stylesheet hover the rule probe already read (forceRuleStates). They are still hovered with the
+  // mouse when there is room (`ruleLimit`): a page's script can add to a hover a rule describes, or overrule it (an inline
+  // background a script animates on mouseenter beats the rule's), and only the real mouse shows what the visitor gets.
   const skip = new Set(opts.skip || []);
   const SKIP_TAGS = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
   const INTERACTIVE = new Set(['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'SUMMARY', 'LABEL']);
@@ -597,7 +604,7 @@ function install(opts) {
 
   const found = [];
   const bySig = new Map();
-  const skipped = { limit: 0, duplicate: 0, hidden: 0, dynamic: 0, items: 0 };
+  const skipped = { limit: 0, duplicate: 0, hidden: 0, dynamic: 0, items: 0, rules: 0 };
   let focusable = 0;
   let seen = 0;
   const all = document.body ? document.body.querySelectorAll('*') : [];
@@ -659,17 +666,21 @@ function install(opts) {
     if (item) reasons.push('item');
     if (!reasons.length) continue;
     const path = pathOf(el);
-    if (!path || skip.has(path)) continue;
+    if (!path) continue;
+    const ruled = skip.has(path);
+    if (ruled) reasons.push('rules');
     const sig = sigOf(el);
     const group = bySig.get(sig) || { sig, count: 0, probed: 0, paths: [] };
     bySig.set(sig, group);
     group.count++;
     // All members, so an effect the probe finds on a few of them can be given to the rest (ir/motion.js).
     if (group.paths.length < 120) group.paths.push(path);
-    const priority = reasons.includes('focusable') || reasons.includes('interactive') || reasons.includes('role') ? 0
+    // An element a rule already describes comes after every element nothing describes yet, before the boxes a script
+    // only marked: the mouse adds to what is known there, it does not find it.
+    const priority = ruled ? 2.5 : reasons.includes('focusable') || reasons.includes('interactive') || reasons.includes('role') ? 0
       : reasons.includes('pointer') ? 1 : reasons.includes('transition') || item ? 2 : 3;
     found.push({
-      order: found.length, priority, el, path, tag: el.tagName.toLowerCase(), sig, reasons, cursor: cs.cursor,
+      order: found.length, priority, el, path, tag: el.tagName.toLowerCase(), sig, reasons, cursor: cs.cursor, ...(ruled && { ruled: true }),
       ...(dyn && { dyn }), ...(item && { item: true }),
       text: (el.innerText || el.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ').slice(0, 60),
     });
@@ -678,16 +689,23 @@ function install(opts) {
   const chosenSet = new Set();
   let dynamic = 0;
   let itemCount = 0;
+  let ruleCount = 0;
   for (const c of [...found].sort((a, b) => a.priority - b.priority || a.order - b.order)) {
     const group = bySig.get(c.sig);
     if (group.probed >= perSignature) {
       skipped.duplicate++;
       continue;
     }
+    // Elements a rule already describes take their own share, after everything else.
+    if (c.ruled && ruleCount >= ruleLimit) {
+      skipped.rules++;
+      continue;
+    }
     // A plain transition host or a script-animated box inside a chosen element (3 levels) is covered by that
     // element's descendants, which the probe reads anyway. A repeated block never is: the probe of its parent points at
-    // one spot, and a block's own hover happens only with the mouse on that block.
-    if (c.priority >= 2 && !c.item) {
+    // one spot, and a block's own hover happens only with the mouse on that block. Nor is an element a rule describes:
+    // its hover is its own, with the mouse on it.
+    if (c.priority >= 2 && !c.item && !c.ruled) {
       let up = c.el.parentElement;
       let covered = false;
       for (let i = 0; i < 3 && up && !covered; i++, up = up.parentElement) covered = chosenSet.has(up);
@@ -712,6 +730,7 @@ function install(opts) {
     group.probed++;
     if (c.priority === 3) dynamic++;
     if (bareItem) itemCount++;
+    if (c.ruled) ruleCount++;
     chosen.push(c);
     chosenSet.add(c.el);
   }
@@ -723,7 +742,7 @@ function install(opts) {
   };
   return {
     candidates: chosen.map((c, i) => ({
-      i, path: c.path, tag: c.tag, sig: c.sig, reasons: c.reasons, cursor: c.cursor, ...(c.dyn && { dyn: c.dyn }), ...(c.item && { item: true }),
+      i, path: c.path, tag: c.tag, sig: c.sig, reasons: c.reasons, cursor: c.cursor, ...(c.dyn && { dyn: c.dyn }), ...(c.item && { item: true }), ...(c.ruled && { ruled: true }),
       text: c.text, rect: docRect(c.el),
     })),
     groups: [...bySig.values()].filter((g) => g.count > 1).sort((a, b) => b.count - a.count).slice(0, 40),
@@ -820,7 +839,14 @@ function aim(i) {
   const under = [];
   const m = window.__sasMotion;
   for (let n = top; n && n !== el && el.contains(n); n = n.parentElement) if (m.items?.has(n)) under.push(m.pathOf(n));
-  return { x, y, reachable, scrolled: !onScreen, under };
+  // Every element between the one under the mouse and this one, deepest first: the real mouse hovers all of them, so a
+  // change inside one of them may be that element's own hover (a link in the middle of a header) - creditUnderPointer().
+  const chain = [];
+  for (let n = top; n && n !== el && el.contains(n); n = n.parentElement) {
+    const p = m.pathOf(n);
+    if (p) chain.push(p);
+  }
+  return { x, y, reachable, scrolled: !onScreen, under, chain };
 }
 
 /** Page function: the element with keyboard focus (as an index into the probed elements, -1 for another, null for none). */
@@ -987,6 +1013,95 @@ export function keepReverting(rest, back, d) {
 }
 
 /**
+ * The changes the mouse probe found inside an element that is a hover subject of its own and was under the mouse.
+ * Probing a container (a header with a transition of its own) puts the mouse on whatever sits at its centre - a nav
+ * link - and the real mouse hovers that link too. Its colour change was credited to the header as a descendant
+ * effect, so in the copy hovering ANY part of the header turned that one link orange: hovering one link changed
+ * another. A change at or inside an element of the pointer chain (aim() `chain`) that is a hover subject itself (a
+ * stylesheet host or a probed candidate) is that element's, unless the element was measured on its own and its own
+ * hover does not make that change (then the container really does it: `.card:hover a`). An element never measured on
+ * its own cannot say, and the change is dropped rather than spread over the container.
+ * @param {object[]} entries  the mouse probe's hover entries, each with the `chain` its aim reported
+ * @param {{ effectOf: Map<string, object>, measured: Set<string>, subjects: Set<string> }} known
+ *   effectOf: path -> that element's own hover entry; measured: paths whose own hover was read (by rule or by mouse);
+ *   subjects: paths that are hover subjects of their own (rule hosts, probe candidates)
+ * @returns {number} how many changes were handed back to the element under the mouse
+ */
+export function creditUnderPointer(entries, { effectOf, measured, subjects }) {
+  let handed = 0;
+  const ownEnd = (subject, kidPath, prop) => {
+    const own = effectOf.get(subject);
+    if (!own) return undefined;
+    if (kidPath === subject) return own.changes?.[prop]?.[1];
+    return own.kids?.find((k) => k.path === kidPath)?.changes?.[prop]?.[1];
+  };
+  for (const e of entries) {
+    if (!e.kids?.length || !e.chain?.length) continue;
+    const kids = [];
+    for (const k of e.kids) {
+      const kept = {};
+      for (const [prop, pair] of Object.entries(k.changes ?? {})) {
+        let theirs = false;
+        for (const x of e.chain) {
+          if (!(k.path === x || k.path.startsWith(`${x}>`)) || !subjects.has(x)) continue;
+          if (!measured.has(x) || ownEnd(x, k.path, prop) === pair?.[1]) {
+            theirs = true;
+            break;
+          }
+        }
+        if (theirs) handed++;
+        else kept[prop] = pair;
+      }
+      if (Object.keys(kept).length) kids.push({ ...k, changes: kept });
+    }
+    if (kids.length) e.kids = kids;
+    else delete e.kids;
+  }
+  return handed;
+}
+
+/**
+ * The real mouse's reading of an element a stylesheet rule already describes, folded into the rule's entry: what the
+ * rule probe read stays, and whatever the mouse saw end elsewhere (a script's inline background beating the rule's, a
+ * part the script adds) is added - the visitor's hover is what the mouse showed. Neighbours are left to the rule probe.
+ * @returns {string[]} the properties (own, `::before`/`::after`, descendants) the mouse added
+ */
+export function mergeMouseIntoRule(rule, mouse) {
+  const added = [];
+  // Only what the rule probe did not see changing is taken from the mouse: the rule probe reads the end value with every
+  // transition off, the mouse may have read a property on its way there (a delay the hovered state adds).
+  const fold = (into, from, label) => {
+    const out = { ...into };
+    for (const [prop, pair] of Object.entries(from ?? {})) {
+      if (prop in out) continue;
+      out[prop] = pair;
+      added.push(`${label}${prop}`);
+    }
+    return out;
+  };
+  rule.changes = fold(rule.changes ?? {}, mouse.changes, '');
+  for (const [which, c] of Object.entries(mouse.pseudo ?? {})) {
+    if (c.content?.[1] === 'none') continue; // a pseudo-element the mouse saw go away is the rule probe's to say
+    rule.pseudo = { ...rule.pseudo, [which]: fold(rule.pseudo?.[which] ?? {}, c, `::${which} `) };
+  }
+  for (const k of mouse.kids ?? []) {
+    const have = (rule.kids ?? []).find((x) => x.path === k.path);
+    if (have) have.changes = fold(have.changes, k.changes, `${k.path} `);
+    else {
+      const before = added.length;
+      const changes = fold({}, k.changes, `${k.path} `);
+      if (added.length > before) rule.kids = [...(rule.kids ?? []), { ...k, changes }];
+    }
+  }
+  if (added.length) {
+    rule.source = 'css+probe';
+    rule.mouseAdded = added.slice(0, 30);
+    if (mouse.scripted) Object.assign(rule, { scripted: true, scriptedMs: mouse.scriptedMs });
+  }
+  return added;
+}
+
+/**
  * Probes a page (desktop view) for hover and focus effects. Hover may use up to 60 % of the budget, focus the rest.
  * @param {import('playwright').Page} page
  * @param {{ limit?: number, perSignature?: number, focusStops?: number, budgetMs?: number, dynamicLimit?: number }} [o]
@@ -994,7 +1109,7 @@ export function keepReverting(rest, back, d) {
  *   counted in `stats.skipped.dynamic`); a quarter of the page's limit by default.
  * @returns {Promise<object>} the content of motion.json
  */
-export async function captureInteractions(page, { limit = 40, perSignature = 3, focusStops = 80, budgetMs = 10000, perCandidateMs = 900, maxHoverMs = Math.min(15000, budgetMs * 2), foreignCss = null, dynamicLimit = Math.max(DYNAMIC_MIN, Math.round(limit * DYNAMIC_SHARE)), itemLimit = Math.max(ITEM_MIN, Math.round(limit * ITEM_SHARE)) } = {}) {
+export async function captureInteractions(page, { limit = 40, perSignature = 3, focusStops = 80, budgetMs = 10000, perCandidateMs = 900, maxHoverMs = Math.min(15000, budgetMs * 2), foreignCss = null, dynamicLimit = Math.max(DYNAMIC_MIN, Math.round(limit * DYNAMIC_SHARE)), itemLimit = Math.max(ITEM_MIN, Math.round(limit * ITEM_SHARE)), ruleLimit = Math.max(RULE_MIN, Math.round(limit * RULE_SHARE)) } = {}) {
   const started = Date.now();
   // Set once the candidates are known: the mouse probe gets time per element to probe (within bounds), focus the rest.
   let hoverDeadline = started + budgetMs * 0.6;
@@ -1008,7 +1123,7 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
   } catch (err) {
     forced.stats.error = String(err?.message ?? err).split('\n')[0];
   }
-  const picked = await page.evaluate(install, { limit, perSignature, dynamicLimit, itemLimit, skip: forced.hover.map((h) => h.path) });
+  const picked = await page.evaluate(install, { limit, perSignature, dynamicLimit, itemLimit, ruleLimit, skip: forced.hover.map((h) => h.path) });
   // A fixed share of the budget probed ~6 elements of 30 on a busy page: script-driven hovers further down were never
   // reached. The hover time follows the elements to probe (~0.9 s each: scroll, settle, hover, check it reverts).
   const hoverMs = Math.max(budgetMs * 0.6, Math.min(maxHoverMs, picked.candidates.length * perCandidateMs));
@@ -1027,6 +1142,7 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
   const settle = (state) => Math.min(1500, Math.max(80, (state ? transitionMs(state) : 200) + 60));
 
   const hover = [];
+  const measuredPaths = new Set();
   let lastWait = 200;
   for (const c of picked.candidates) {
     if (Date.now() > hoverDeadline) {
@@ -1039,6 +1155,7 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
       continue;
     }
     stats.probed++;
+    measuredPaths.add(c.path);
     // The rest state is read here, with the mouse out of the page, after the scroll that brought the element
     // into view has had time to run its reveal effects: those are not hover effects.
     await page.mouse.move(-20, -20).catch(() => {});
@@ -1078,6 +1195,13 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
     await page.waitForTimeout(lastWait);
     let after = await page.evaluate(readState, args(c.i));
     if (!after) continue;
+    // The hovered state may run a longer transition than the one at rest (`transition-delay` only on :hover): the read
+    // is taken again once that one has ended too, so an end value is never a value on its way there.
+    const more = Math.min(1500, transitionMs(after) + 60) - lastWait;
+    if (!timed && more > 0) {
+      await page.waitForTimeout(more);
+      after = (await page.evaluate(readState, args(c.i))) ?? after;
+    }
     let scriptedMs = null;
     let settled = true;
     if (timed) {
@@ -1137,11 +1261,51 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
     if (c.reasons?.includes('dynamic')) stats.dynamicFound++;
     hover.push({
       path: c.path, tag: c.tag, text: c.text, sig: c.sig, reasons: c.reasons, rect: c.rect, cursor: c.cursor,
-      ...(c.dyn && { dyn: c.dyn }), source: 'probe', ...kept,
+      ...(c.dyn && { dyn: c.dyn }), source: 'probe', ...kept, chain: spot.chain ?? [],
       ...(scripted && { scripted: true, scriptedMs, ...(settled ? {} : { scriptedUnsettled: true }) }),
     });
   }
   await page.mouse.move(-20, -20).catch(() => {});
+
+  // What the mouse found inside an element under it that hovers by itself is that element's (creditUnderPointer), and
+  // the mouse's reading of an element a rule describes is folded into the rule's entry (mergeMouseIntoRule).
+  const effectOf = new Map();
+  for (const e of [...forced.hover, ...hover]) if (!effectOf.has(e.path)) effectOf.set(e.path, e);
+  stats.handedToHovered = creditUnderPointer(hover, {
+    effectOf,
+    measured: new Set([...forced.hover.map((h) => h.path), ...measuredPaths]),
+    subjects: new Set([...forced.hover.map((h) => h.path), ...picked.candidates.map((c) => c.path)]),
+  });
+  const ruleByPath = new Map(forced.hover.map((h) => [h.path, h]));
+  const mouseOnly = [];
+  const added = [];
+  for (const e of hover) {
+    delete e.chain;
+    const rule = ruleByPath.get(e.path);
+    if (!rule) {
+      // Everything it found belonged to the element under the mouse: nothing of its own is left.
+      if (!Object.keys(e.changes ?? {}).length && !e.pseudo && !e.kids?.length && !e.sibs?.length && !e.layout && !e.domDelta) stats.hovered--;
+      else mouseOnly.push(e);
+      continue;
+    }
+    const props = mergeMouseIntoRule(rule, e);
+    if (props.length) added.push({ from: e, rule });
+  }
+  // What the mouse added on a few members of a group of equal elements, the other members (whose rule entries the mouse
+  // did not reach) get as well, with the descendants found at the same place inside each.
+  const rulesProbed = new Set(hover.filter((e) => ruleByPath.has(e.path)).map((e) => e.path));
+  for (const { from, rule } of added) {
+    const g = (picked.groups ?? []).find((x) => x.sig === from.sig);
+    for (const p of g?.paths ?? []) {
+      const other = ruleByPath.get(p);
+      if (!other || rulesProbed.has(p) || other === rule) continue;
+      const kids = (from.kids ?? []).filter((k) => k.path.startsWith(`${from.path}>`)).map((k) => ({ ...k, path: p + k.path.slice(from.path.length) }));
+      mergeMouseIntoRule(other, { ...from, path: p, kids, pseudo: from.pseudo });
+      rulesProbed.add(p);
+    }
+  }
+  stats.rulesProbed = hover.length - mouseOnly.length;
+  stats.rulesExtended = added.length;
 
   // Focus: the Tab key from the start of the page. At each stop the focused state is compared with the same
   // element blurred (same scroll position, same reveal state); a stop is probed once per element.
@@ -1175,7 +1339,7 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
     view: 'desktop',
     capturedAt: new Date().toISOString(),
     props: MOTION_PROPS,
-    hover: [...forced.hover, ...hover],
+    hover: [...forced.hover, ...mouseOnly],
     focus: [...forced.focus, ...focus],
     groups: picked.groups,
     rules: scan.rules,

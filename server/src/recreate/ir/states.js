@@ -222,6 +222,7 @@ export function expandStates(root) {
   let states = 0;
   // Parts of one area (sibling sections switched by the same tabs, capture/states.js `group`) share one set.
   const groups = new Map();
+  const alone = new Map();
   const mark = (area, id, index, s) => {
     area.stateAttrs = { ...area.stateAttrs, 'data-w-set': id, 'data-w-i': String(index) };
     // A control that is a link to another page keeps its href but must not follow it: clicking it switched the state in
@@ -271,6 +272,12 @@ export function expandStates(root) {
       if (s.feed) n.stateAttrs['data-w-feed'] = s.replay === 'all' ? 'all' : '';
       // The state a click on the control of the state on show leads to (an accordion or a FAQ closing: capture/states.js).
       if (s.off != null) n.stateAttrs['data-w-off'] = String(s.off);
+      // One of a list of panels drawn only while open that keeps one open at a time (capture/states.js `one`): its group and
+      // its closed state, so js/motion.js closes the others of the group when this one opens.
+      if (s.one) {
+        if (!alone.has(s.one)) alone.set(s.one, `a${alone.size + 1}`);
+        n.stateAttrs['data-w-alone'] = `${alone.get(s.one)}:${s.shut ?? 0}`;
+      }
       const own = relMap(n);
       // Sets inside this area (a "View more" toggle inside a filtered section): the same content in another state (same
       // tag and text) works the same, so it gets the same states; all of them are expanded below with the copies.

@@ -417,6 +417,22 @@ export function splitIndependent(s) {
 }
 
 /**
+ * Probed controls that each sit in a block of their own at the same place (`list>div:2>h3:1>button:1`,
+ * `list>div:5>h3:1>button:1`): a test for "another control at that place in another block of the same list", or null
+ * when they are not like that (one row of tabs, a single control).
+ */
+export function samePlace(triggers) {
+  if (triggers.length < 2) return null;
+  const area = commonPath(triggers);
+  if (!area) return null;
+  const tail = (p) => (p.startsWith(`${area}>`) ? p.slice(area.length + 1).split('>').slice(1).join('>') : null);
+  const tails = new Set(triggers.map(tail));
+  const [only] = tails;
+  if (tails.size !== 1 || !only) return null;
+  return (c) => tail(c) === only;
+}
+
+/**
  * The groups worth capturing: equal controls that switch content (tabs, dots, chips), with the next / previous controls
  * that act on the same content. Paths that change on their own (`noise`) are not evidence.
  */
@@ -453,9 +469,14 @@ export function planSets(widgets, noise = []) {
   const parentOf = (p) => (p.includes('>') ? p.slice(0, p.lastIndexOf('>')) : null);
   // A control with the clicked ones' signature that lies inside what they switch (a button in a filtered section, on a
   // site without classes) belongs to that content, not to the row of controls: it would stretch the area over the page.
+  // Controls one to a block (the question of each FAQ item) are not a row, but they are at the same place in each block:
+  // a page that re-renders the whole list on a click "changes" every item, and the rule above kept only the questions
+  // the probe had clicked - the copy's other questions did nothing. A control at the clicked ones' place in its own
+  // block (same common area, same path inside the block) is one of them.
   for (const s of sets.values()) {
     const rows = new Set([...s.triggers].map(parentOf));
-    s.controls = s.controls.filter((c) => rows.has(parentOf(c)) || ![...s.changed].some((p) => c.startsWith(`${p}>`)));
+    const spot = samePlace([...s.triggers]);
+    s.controls = s.controls.filter((c) => rows.has(parentOf(c)) || (spot && spot(c)) || ![...s.changed].some((p) => c.startsWith(`${p}>`)));
   }
   for (const n of navs) {
     const set = [...sets.values()].find((s) => n.changed.some((p) => [...s.changed].some((q) => related(p, q))));
@@ -513,7 +534,24 @@ export function planSets(widgets, noise = []) {
     if (!added.length || out.some((o) => o.controls.includes(w.trigger))) continue;
     const area = commonPath([w.trigger, ...added]);
     if (!area || area === 'body' || out.some((o) => o.area === area)) continue;
-    out.push({ area, parts: [area], controls: [], nav: [], toggle: w.trigger, closes: w.closes, weigh: true });
+    // An accordion (the click probe saw opening one close the other, `exclusive`): the toggles of its list are one group,
+    // and the copy closes the others when one opens (ir/states.js `data-w-alone`).
+    const one = w.exclusive && w.group?.paths?.length > 1 ? commonPath(w.group.paths) : null;
+    out.push({ area, parts: [area], controls: [], nav: [], toggle: w.trigger, closes: w.closes, weigh: true, ...(one && { one }) });
+    // The probe clicks a few members of a group of equal controls (the questions of a FAQ whose script renders an answer
+    // only while it is open); the others work the same way in their own blocks, so each is planned too - left out, the
+    // copy's later questions did nothing. Only a member at the same place in its own block, and only where the block is
+    // the member's own (it holds no other member).
+    const depth = w.trigger.split('>').length - area.split('>').length;
+    const members = (w.group?.paths ?? []).filter((p) => p !== w.trigger);
+    const spot = samePlace([w.trigger, ...members]);
+    if (!spot || depth < 1) continue;
+    for (const p of members) {
+      if (!spot(p) || out.some((o) => o.toggle === p || o.controls.includes(p))) continue;
+      const own = p.split('>').slice(0, -depth).join('>');
+      if (!own || own === 'body' || out.some((o) => o.area === own) || members.some((m) => m !== p && m.startsWith(`${own}>`)) || w.trigger.startsWith(`${own}>`)) continue;
+      out.push({ area: own, parts: [own], controls: [], nav: [], toggle: p, closes: w.closes, weigh: true, ...(one && { one }) });
+    }
   }
   return out;
 }
@@ -624,7 +662,13 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
         await settle();
         if (stateSignature(await snap(plan)) !== initialSig) throw new Error('the panel did not close again');
         stats.openPanels++;
-        nodes[0].states = { initial: 0, count: 2, controls: [], nav: [{ rel: plan.toggle.slice(plan.area.length + 1), offset: 1 }], variants: [{ index: 1, body: open }] };
+        // Which of the two is the closed one (the panel drawn only while open: the state with less in it), for a list that
+        // keeps one open at a time.
+        const shut = countNodes(open) < countNodes(node) ? 1 : 0;
+        nodes[0].states = {
+          initial: 0, count: 2, controls: [], nav: [{ rel: plan.toggle.slice(plan.area.length + 1), offset: 1 }], variants: [{ index: 1, body: open }],
+          ...(plan.one && { one: plan.one, shut }),
+        };
         stats.sets++;
         stats.states += 2;
         continue;

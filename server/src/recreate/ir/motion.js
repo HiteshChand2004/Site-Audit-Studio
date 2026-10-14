@@ -213,6 +213,80 @@ export function openDecls(changes, assetFile) {
   return out;
 }
 
+/**
+ * The closed state of a panel as declarations, for a panel the page showed open when it loaded (its look at rest IS
+ * the open one, so the copy needs the closed values to close it): a size that collapses to zero is written as zero,
+ * collapsed grid rows as 0fr, any other changed property as its closed value. A size the panel only has because of its
+ * content (a px height) is left out, like openDecls does.
+ * @param {object} changes  { prop: [closed, open] }
+ */
+export function shutDecls(changes, assetFile) {
+  const out = {};
+  for (const [prop, [closed, open]] of Object.entries(changes ?? {})) {
+    if (closed == null || NO_VALUE.test(String(closed))) continue;
+    if (prop === 'height' || prop === 'max-height') {
+      if (isZero(closed)) out[prop] = '0px';
+      continue;
+    }
+    if (prop === 'grid-template-rows') {
+      const rows = String(closed).trim().split(/\s+/);
+      if (rows.length && rows.every(isZero)) out[prop] = rows.map(() => '0fr').join(' ');
+      continue;
+    }
+    Object.assign(out, changeDecls({ [prop]: [open, closed] }, assetFile));
+  }
+  return out;
+}
+
+const HIDING = (prop, value) => (prop === 'display' && value === 'none') || (prop === 'visibility' && value === 'hidden')
+  || ((prop === 'height' || prop === 'max-height') && isZero(value)) || (prop === 'opacity' && Number(value) === 0)
+  || (prop === 'grid-template-rows' && String(value ?? '').trim().split(/\s+/).every(isZero));
+
+/**
+ * Did the probed click CLOSE a panel that was open when the page loaded (the first question of a FAQ shown open)?
+ * The control's aria-expanded says so where it has one; else what the click did: it hid something and showed nothing,
+ * or the panel's own values went from shown to hidden.
+ */
+export function closedOnClick(w) {
+  const expanded = (s) => String(s ?? '').split('|')[0];
+  const own = (w.change?.attrs ?? []).find((a) => a.isTrigger);
+  if (own && expanded(own.from) === 'true' && expanded(own.to) === 'false') return true;
+  if (own && expanded(own.from) === 'false' && expanded(own.to) === 'true') return false;
+  const shown = w.change?.shown?.length ?? 0;
+  const hidden = w.change?.hidden?.length ?? 0;
+  if (hidden || shown) return hidden > 0 && shown === 0;
+  let hides = 0;
+  let shows = 0;
+  for (const p of w.state?.parts ?? []) {
+    for (const [prop, [from, to]] of Object.entries(p.changes ?? {})) {
+      if (HIDING(prop, to) && !HIDING(prop, from)) hides++;
+      if (HIDING(prop, from) && !HIDING(prop, to)) shows++;
+    }
+  }
+  return hides > shows;
+}
+
+/**
+ * Was this control's panel open when the page loaded? Its aria-expanded says so where it has one. Else the probed
+ * control itself is known (closedOnClick); another member of its group is judged by its panel: open when the part the
+ * click hides or shows (display, visibility, a collapsing size) is drawn in the desktop capture with a size.
+ */
+export function startsOpen(w, trigger, triggerNode, rootPath, nodes, effect, flip) {
+  const aria = triggerNode?.attrs?.['aria-expanded'];
+  if (aria === 'true') return true;
+  if (aria === 'false') return false;
+  if (trigger === w.trigger) return flip;
+  const panels = effect.parts.filter((p) => p.rel !== '' && p.shut && Object.entries(p.shut).some(([k, v]) => HIDING(k, v)));
+  if (!panels.length) return false;
+  return panels.every((p) => {
+    const v = nodes.get(`${rootPath}>${p.rel}`)?.views?.desktop;
+    return v && !v.hidden && (v.rect?.[3] ?? 0) >= 1 && v.style?.display !== 'none' && v.style?.visibility !== 'hidden';
+  });
+}
+
+/** { prop: [a, b] } -> { prop: [b, a] } */
+const swapped = (changes) => Object.fromEntries(Object.entries(changes ?? {}).map(([k, [a, b]]) => [k, [b, a]]));
+
 /** A reveal as a from-state: what the element starts at, relative to where it ends (its own styles). */
 export function revealSpec(el) {
   const from = el.from;
@@ -475,6 +549,31 @@ function sumByView(out, byView) {
   }
 }
 
+/**
+ * Effects whose host token sits on an element inside another element with the same token (a menu item holding a
+ * submenu of items: `li:hover > a`). Their descendant rule (`[hN]:hover [hNk1]`) would also reach the inner items' own
+ * parts whenever the outer item is hovered, so hovering one item restyled the links of the items inside it.
+ * Marked `nested`, the stylesheet keeps each part to the nearest host that holds it (emit/motionCss.js).
+ */
+export function markNestedHosts(site, effects) {
+  const withKids = new Map(effects.filter((e) => e.kids?.length).map((e) => [e.token, e]));
+  if (!withKids.size) return;
+  for (const tree of site.pages) {
+    const open = new Map();
+    const walk = (n) => {
+      if (!isElement(n)) return;
+      const mine = (n.motionTokens ?? []).filter((t) => withKids.has(t));
+      for (const t of mine) {
+        if (open.get(t)) withKids.get(t).nested = true;
+        open.set(t, (open.get(t) ?? 0) + 1);
+      }
+      n.children.forEach(walk);
+      for (const t of mine) open.set(t, open.get(t) - 1);
+    };
+    walk(tree.root);
+  }
+}
+
 export function applyMotion(site, byPath) {
   const reg = { hover: new Map(), focus: new Map(), reveal: new Map(), loops: [], delays: new Set(), widgets: new Map(), scrolled: new Map() };
   const stats = {
@@ -616,7 +715,12 @@ export function applyMotion(site, byPath) {
         }
         // The original drove this with script: the copy times the change itself, over the measured duration.
         const transition = synthTransition(decls, entry);
-        const key = JSON.stringify([decls, pseudo, kids.map((k) => [k.decls, k.transition]), sibs.map((x) => [x.rel, x.decls, x.transition]), transition]);
+        // An effect on an element BESIDE the hovered one is written with a sibling combinator, which reaches every element
+        // with the neighbour's token that follows (or precedes) ANY element with the host's token. Shared between equal
+        // hosts (`.card:hover + .card` gives every card one), hovering the first card restyled every card after it. Such
+        // an effect is therefore this element's own: its token pairs it with its own neighbours only.
+        const beside = sibs.some((x) => x.rel !== 'ancestor');
+        const key = JSON.stringify([decls, pseudo, kids.map((k) => [k.decls, k.transition]), sibs.map((x) => [x.rel, x.decls, x.transition]), transition, beside ? `${tree.info.path} ${entry.path}` : null]);
         let effect = reg[kind].get(key);
         if (!effect) {
           const n = reg[kind].size + 1;
@@ -868,14 +972,27 @@ export function applyMotion(site, byPath) {
         ws.skipped.renderedOnOpen++; // the page renders the panel only when open: nothing in the copy to show
         continue;
       }
+      // The probe's click closed a panel the page showed open (the first answer of a FAQ): its reading runs from open to
+      // closed, so it is turned round - read as it came, the copy's "open" state was the closed one, and the panel the
+      // page starts with could never close.
+      const flip = !onHover && closedOnClick(w);
       const parts = w.state.parts.map((p) => {
+        const changes = flip ? swapped(p.changes) : p.changes;
         const pseudo = {};
+        const pseudoShut = {};
         for (const which of ['before', 'after']) {
-          const d = p[which] ? openDecls(p[which], assetFile) : {};
+          const c = p[which] ? (flip ? swapped(p[which]) : p[which]) : null;
+          const d = c ? openDecls(c, assetFile) : {};
           if (Object.keys(d).length) pseudo[which] = d;
+          const s = c ? shutDecls(c, assetFile) : {};
+          if (Object.keys(s).length) pseudoShut[which] = s;
         }
-        return { rel: p.rel, decls: openDecls(p.changes, assetFile), ...(Object.keys(pseudo).length && { pseudo }) };
-      }).filter((p) => Object.keys(p.decls).length || p.pseudo);
+        const shut = shutDecls(changes, assetFile);
+        return {
+          rel: p.rel, decls: openDecls(changes, assetFile), ...(Object.keys(pseudo).length && { pseudo }),
+          ...(!onHover && Object.keys(shut).length && { shut }), ...(!onHover && Object.keys(pseudoShut).length && { pseudoShut }),
+        };
+      }).filter((p) => Object.keys(p.decls).length || p.pseudo || p.shut);
       if (!parts.length) {
         ws.skipped.empty++;
         continue;
@@ -910,6 +1027,13 @@ export function applyMotion(site, byPath) {
           continue;
         }
         tokenize(rootNode, effect.token);
+        // A panel the page showed open when it loaded (a FAQ's first answer): marked `data-w-open`, so the copy starts
+        // with it open too, and its closed state is written (`is-shut`, js/motion.js) instead of being taken as its look.
+        if (on === 'click' && startsOpen(w, trigger, triggerNode, rootPath, nodes, effect, flip)) {
+          for (const n of [rootNode, ...(rootNode.stateTwins ?? [])]) n.stateAttrs = { ...n.stateAttrs, 'data-w-open': '' };
+          effect.startsOpen = true;
+          ws.startOpen = (ws.startOpen ?? 0) + 1;
+        }
         // `wt` = a control js/motion.js toggles on click; `wh` = a control whose hover opens its area (CSS only).
         if (on === 'click') tokenize(triggerNode, 'wt');
         else if (on === 'hover-control') tokenize(triggerNode, 'wh');
@@ -949,6 +1073,7 @@ export function applyMotion(site, byPath) {
   }
 
   frozenEntrances(site, reg, stats);
+  markNestedHosts(site, [...reg.hover.values(), ...reg.focus.values()]);
 
   const hover = [...reg.hover.values()];
   const focus = [...reg.focus.values()];
