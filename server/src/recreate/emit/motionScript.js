@@ -137,6 +137,58 @@ export const MOTION_JS = `(function () {
       }, ms);
     })(autos[a]);
   }
+  // Elements that follow the pointer (data-w-follow="kx,ky,cx,cy,mx,my,tauMs,fixed,share", capture/pointer.js): a custom cursor,
+  // mouse parallax. Each is moved to where the original's script put it for the mouse position (its centre was at cx,cy
+  // with the mouse at mx,my, and moves k times the mouse's move), easing with the measured time constant. On its own
+  // translate property, so a transform of its own stays as it is. Nothing under reduced motion, nothing for touch.
+  var followers = document.querySelectorAll('[data-w-follow]');
+  var calmMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (followers.length && !calmMotion) {
+    var trail = [];
+    for (var f = 0; f < followers.length; f++) {
+      var v = followers[f].getAttribute('data-w-follow').split(',').map(Number);
+      trail.push({ el: followers[f], kx: v[0], ky: v[1], cx: v[2], cy: v[3], mx: v[4], my: v[5], tau: v[6], fixed: v[7] === 1, share: v[8] > 0 ? v[8] : 0, x: 0, y: 0, base: null });
+    }
+    var pointer = null;
+    var following = false;
+    var lastFrame = 0;
+    var follow = function (now) {
+      var dt = lastFrame ? now - lastFrame : 16;
+      lastFrame = now;
+      var moving = false;
+      for (var i = 0; i < trail.length; i++) {
+        var it = trail[i];
+        if (!it.base) {
+          var r = it.el.getBoundingClientRect();
+          it.base = { x: r.left + r.width / 2 + (it.fixed ? 0 : window.scrollX), y: r.top + r.height / 2 + (it.fixed ? 0 : window.scrollY) };
+        }
+        var tx = it.cx + it.kx * (pointer.x - it.mx) - it.base.x;
+        var ty = it.cy + it.ky * (pointer.y - it.my) - it.base.y;
+        // A share of the way per frame, as a follower's script usually moves it (it falls behind more when frames come
+        // slower, like the original's): the share a 60 Hz frame covers with the measured time constant.
+        var share = it.share > 0 ? it.share : it.tau > 0 ? 1 - Math.exp(-16.67 / it.tau) : 1;
+        it.x += (tx - it.x) * share;
+        it.y += (ty - it.y) * share;
+        if (Math.abs(tx - it.x) > 0.3 || Math.abs(ty - it.y) > 0.3) moving = true;
+        it.el.style.translate = it.x.toFixed(2) + 'px ' + it.y.toFixed(2) + 'px';
+      }
+      if (moving) {
+        window.requestAnimationFrame(follow);
+      } else {
+        following = false;
+        lastFrame = 0;
+      }
+    };
+    document.addEventListener('pointermove', function (e) {
+      if (e.pointerType === 'touch') return;
+      pointer = { x: e.clientX, y: e.clientY };
+      if (!following) {
+        following = true;
+        lastFrame = 0;
+        window.requestAnimationFrame(follow);
+      }
+    }, { passive: true });
+  }
   // A card's hovered look (data-w-hv box): put in place the first time the card is pointed at or focused; the stylesheet
   // then swaps the two on :hover / :focus-within.
   var hoverIn = function (e) {

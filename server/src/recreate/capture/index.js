@@ -23,6 +23,7 @@ import { attachType, probeTypography } from './typography.js';
 import { attachProbe, probeViewportHeight } from './viewport.js';
 import { asisFile, captureAsIs, markAsIs, recordSheetBodies } from './asis.js';
 import { captureFeeds } from './feeds.js';
+import { capturePointer } from './pointer.js';
 
 // Clicking through the states of tabs / carousels / filtered lists of one page (most pages have none: no time used). The
 // limit follows the work (capture/states.js, ~3 s per control) within these bounds.
@@ -222,6 +223,16 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       }
       lap('feeds');
     }
+    // What follows the mouse (a custom cursor, mouse parallax): the mouse is taken across the window (capture/pointer.js).
+    let pointer = null;
+    if (observeReveal) {
+      try {
+        pointer = await capturePointer(page);
+      } catch (err) {
+        pointer = { error: firstLine(err) };
+      }
+      lap('pointer');
+    }
     lap('motion');
     const fold = await page.screenshot({ type: 'png', animations: 'disabled' });
     const fullHeight = Math.max(1, Math.min(snapshot.scrollHeight, MAX_HEIGHT));
@@ -351,6 +362,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
         found.reveal = processReveal(revealEvents ?? []);
         if (loops) found.loops = loops;
         if (feeds) found.feeds = feeds;
+        if (pointer) found.pointer = pointer;
       } catch (err) {
         error ??= firstLine(err);
       }
@@ -368,6 +380,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
           unreadableSheets: snapshot.unreadableSheets?.length ?? 0,
           ...(foreign.stats && { foreign: foreign.stats }),
           ms: found.stats.ms, timedOut: found.stats.timedOut, reveal: found.reveal?.stats ?? null, loops: loops?.stats ?? null, clicks: found.clicks?.stats ?? null,
+          ...(pointer && { pointer: pointer.error ? { error: pointer.error } : { followers: pointer.followers.length, ms: pointer.ms } }),
           ...(feeds && { feeds: feeds.error ? { error: feeds.error } : { areas: feeds.areas.length, states: feeds.states, skipped: feeds.skipped.length, ms: feeds.ms } }),
           ...((error ?? loopsError ?? clicksError) && { error: error ?? loopsError ?? clicksError }),
         };

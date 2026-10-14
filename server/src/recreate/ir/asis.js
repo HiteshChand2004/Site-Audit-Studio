@@ -337,7 +337,7 @@ export function asisBody(asis, { pageUrl, assetResolve, resolveLink, exclude = n
 // the as-is markup, found by the capture's own path. What the copy rebuilds as extra elements - the other states of a
 // tab set or carousel, a card's hovered look, a message a click shows, a panel only drawn while open - is not part of
 // the original markup and is counted instead (`notCarried`).
-const CARRY = /^(data-motion|data-scroll-at|data-w-(one|dismiss|layer|x|stay))$/;
+const CARRY = /^(data-motion|data-scroll-at|data-w-(one|dismiss|layer|x|stay|follow))$/;
 // Attributes that make an element switch to, or be, another state: carried only when what they point at was built.
 const STATE = /^data-w-(set|i|auto|feed|off|go|hrest|hv|panel|note|panel-of|note-of|hcopy)$/;
 const COPY_ATTRS = { 'data-w-hcopy': 'hoverCards', 'data-w-note-of': 'notices', 'data-w-panel-of': 'panels' };

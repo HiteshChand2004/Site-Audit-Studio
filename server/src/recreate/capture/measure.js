@@ -6,6 +6,7 @@ import { captureInteractions } from './interactions.js';
 import { settle } from './index.js';
 import { captureLoops } from './loops.js';
 import { measureFeeds } from './feeds.js';
+import { capturePointer } from './pointer.js';
 import { processReveal } from './reveal.js';
 
 /**
@@ -21,7 +22,9 @@ export async function measureMotion(page, { width = 1440, height = 900, budgetMs
   const loops = await captureLoops(page);
   // What changes by itself, and how often (capture/feeds.js), measured the way the capture measured the original.
   const feeds = await measureFeeds(page).catch(() => []);
+  // What follows the mouse (capture/pointer.js), moved across the window the same way.
+  const pointer = await capturePointer(page).catch(() => null);
   const found = await captureInteractions(page, { budgetMs, ...(!focus && { focusStops: 0 }) });
   const clicks = clickBudgetMs > 0 ? await captureClicks(page, { budgetMs: clickBudgetMs, limit: 40 }).catch(() => null) : null;
-  return { reveal: processReveal(events ?? []), loops, feeds, hover: found.hover, focus: found.focus, stats: found.stats, ...(clicks && { clicks }) };
+  return { reveal: processReveal(events ?? []), loops, feeds, pointer, hover: found.hover, focus: found.focus, stats: found.stats, ...(clicks && { clicks }) };
 }

@@ -444,6 +444,33 @@ export function motionItems(oldPages, newPages) {
       { detail: `${feeds.kept} of them keep changing on the recreated site${feeds.paces.length ? `: every ${feeds.paces.slice(0, 3).join(', ')}` : ''}.`, count: feeds.kept },
       'The copy replays the updates the capture saw, in order, and starts over after the last one: it is not live data.'));
   }
+  // Elements that follow the mouse (capture/pointer.js): each original follower needs one in the copy with the same ratio to
+  // the mouse's moves (within max(0.05, 25 %)) and, where it eases, a time constant within max(60 ms, 40 %).
+  const followers = { before: 0, kept: 0, differences: [] };
+  for (const slug of both) {
+    const was = oldPages.get(slug)?.pointer?.followers ?? [];
+    const now = [...(newPages.get(slug)?.pointer?.followers ?? [])];
+    followers.before += was.length;
+    for (const f of was) {
+      const close = (a, b) => Math.abs(a - b) <= Math.max(0.05, Math.abs(a) * 0.25);
+      const i = now.findIndex((g) => close(f.kx, g.kx) && close(f.ky, g.ky));
+      if (i < 0) {
+        followers.differences.push({ page: slug, element: f.path, diff: [`does not follow the mouse in the copy (the original moves ${f.kx} × the mouse's move)`] });
+        continue;
+      }
+      const g = now.splice(i, 1)[0];
+      if (Math.abs(f.tauMs - g.tauMs) > Math.max(60, f.tauMs * 0.4)) followers.differences.push({ page: slug, element: f.path, diff: [`catches up in about ${g.tauMs} ms (original ${f.tauMs} ms)`] });
+      else followers.kept++;
+    }
+  }
+  if (followers.before) {
+    items.push({
+      ...row('motion.pointer', 'Effects that follow the mouse kept', followers.kept / followers.before,
+        { detail: `${plural(followers.before, 'element')} follow the mouse (a custom cursor, mouse parallax).`, count: followers.before },
+        { detail: `${followers.kept} of them follow it the same way on the recreated site.`, count: followers.kept }),
+      differences: followers.differences.slice(0, 12),
+    });
+  }
   // Not only whether the copy reacts, but whether it ends where the original ends, as fast.
   if (matchedHover.count) {
     const ratio = matchedHover.same / matchedHover.count;

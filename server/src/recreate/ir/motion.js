@@ -487,6 +487,8 @@ export function applyMotion(site, byPath) {
     focus: { elements: 0, effects: 0, fromRules: 0, spread: 0, sibs: 0, dynamic: 0, scripted: 0, synthesized: 0, skipped: { unmapped: 0, empty: 0, combinator: 0, kidNotDescendant: 0 } },
     reveal: { elements: 0, effects: 0, replay: 0, belowFold: 0, skipped: { timed: 0, unmapped: 0, flat: 0 } },
     loops: { carried: 0, rebuilt: 0, skipped: [] },
+    // Elements that follow the pointer (capture/pointer.js): js/motion.js moves them like the original's script did.
+    pointer: { followers: 0, unmapped: 0 },
     // An exact copy probes the narrow views too: what each found, and which kinds were placed from it.
     byView: {},
   };
@@ -539,6 +541,18 @@ export function applyMotion(site, byPath) {
       n.children.forEach(gather);
     };
     gather(tree.root);
+
+    // What follows the mouse: its ratio to the mouse's moves, where it was for one known mouse position, and how quickly it
+    // catches up - written on the element as data the generated script reads (data-w-follow).
+    for (const f of motion.pointer?.followers ?? []) {
+      const node = nodes.get(f.path);
+      if (!node) {
+        stats.pointer.unmapped++;
+        continue;
+      }
+      node.stateAttrs = { ...node.stateAttrs, 'data-w-follow': [f.kx, f.ky, f.ref.cx, f.ref.cy, f.ref.mx, f.ref.my, f.tauMs, f.fixed ? 1 : 0, f.share ?? ''].join(',') };
+      stats.pointer.followers++;
+    }
 
     // Hover and focus: one effect per distinct set of changed values.
     const pseudoDecls = (pseudo) => Object.fromEntries(Object.entries(pseudo ?? {}).map(([which, c]) => [which, changeDecls(c, assetFile)]).filter(([, d]) => Object.keys(d).length));
@@ -941,7 +955,7 @@ export function applyMotion(site, byPath) {
     // The generated script is needed for the reveal (IntersectionObserver), the click widgets, the switched states, the
     // scroll states, the panels a click opens (dialogs the page only renders when open) and the hover cards (their
     // hovered look waits in a <template> until first pointed at); hover, focus and loops are CSS.
-    script: reveal.length > 0 || widgets.some((w) => !w.on) || stateSets > 0 || scrolled.length > 0 || notices > 0 || panels > 0 || hoverCards > 0,
+    script: reveal.length > 0 || stats.pointer.followers > 0 || widgets.some((w) => !w.on) || stateSets > 0 || scrolled.length > 0 || notices > 0 || panels > 0 || hoverCards > 0,
   } : null;
   return { motion, stats };
 }
