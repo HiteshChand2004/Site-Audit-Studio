@@ -34,6 +34,7 @@ import { CSS_FILE } from './emit/css.js';
 import { SWEEP_WIDTHS } from './capture/sweep.js';
 import { REFINE_PAGES, refineResponsive } from './verify/refine.js';
 import { applyAsIs } from './ir/asis.js';
+import { assetKey } from './assets/collect.js';
 
 export const FIT_ROUNDS = 2;
 // The fit pass stops starting new rounds this long before the step's time limit.
@@ -219,6 +220,65 @@ async function addSocialImages(site, ctx, assetsDir) {
   return { files, pages: auto };
 }
 
+/**
+ * Canvases (a WebGL scene, a chart, a particle field): what they draw comes from a script the copy never carries, so they
+ * cannot be rebuilt. Each one is reported as unsupported, and instead of an empty box the copy shows the frame the capture
+ * saw (cut from the page's own full screenshot, behind the canvas as its background) - a still picture, said to be one.
+ * A copy kept as is (exact mode) has its canvases reported, without the frame: its markup is the original's.
+ * @returns {Promise<{ files: object[], canvases: object[] }>}
+ */
+async function addCanvasFrames(site, motionByPath, ctx, assetsDir) {
+  const files = [];
+  const canvases = [];
+  const map = ctx.assets?.map;
+  for (const t of site.pages) {
+    const found = motionByPath.get(t.info.path)?.loops?.canvas ?? [];
+    if (!found.length) continue;
+    const byPath = new Map();
+    const walk = (n) => {
+      if (!isElement(n)) return;
+      for (const p of [n.cpath, ...(n.cpathAlt ?? [])]) if (p && !byPath.has(p)) byPath.set(p, n);
+      n.children.forEach(walk);
+    };
+    walk(t.root);
+    const full = path.join(ctx.dir, 'capture', t.info.slug, 'desktop-full.webp');
+    for (const c of found) {
+      const entry = { page: t.info.path, path: c.path, context: c.context, animated: c.animated ?? null, cover: c.cover, stillFrame: false };
+      canvases.push(entry);
+      const node = byPath.get(c.path);
+      if (!node || node.tag !== 'canvas' || !map || site.asIs) continue;
+      try {
+        const meta = await sharp(full).metadata();
+        const [x, y, w, h] = c.rect;
+        const left = Math.max(0, x);
+        const top = Math.max(0, y);
+        const width = Math.min(w, meta.width - left);
+        const height = Math.min(h, meta.height - top);
+        if (width < 8 || height < 8) continue;
+        const body = await sharp(full).extract({ left, top, width, height }).webp({ quality: 85 }).toBuffer();
+        const sha256 = createHash('sha256').update(body).digest('hex');
+        const file = `images/canvas-${t.info.slug}-${sha256.slice(0, 10)}.webp`;
+        await mkdir(path.join(assetsDir, 'images'), { recursive: true });
+        await writeFile(path.join(assetsDir, file), body);
+        files.push({ file, kind: 'image', mime: 'image/webp', bytes: body.length, sha256, urls: [], generated: 'canvas-frame' });
+        // Through the asset map like any picture of the site, so the stylesheet points at the local file.
+        const url = `https://canvas-frame.invalid/${file}`;
+        map[assetKey(url)] = file;
+        for (const d of Object.values(node.views ?? {})) {
+          if (!d?.style || d.hidden) continue;
+          d.style['background-image'] = `url("${url}")`;
+          d.style['background-size'] = '100% 100%';
+          d.style['background-repeat'] = 'no-repeat';
+        }
+        entry.stillFrame = true;
+      } catch {
+        // no picture to cut it from: reported all the same
+      }
+    }
+  }
+  return { files, canvases };
+}
+
 // New files of the site's own (responsive images) join the downloaded ones: the build, the exports to other stacks and a
 // rebuild from the saved capture find them through assets/manifest.json.
 async function addToManifest(assetsDir, files, known, assets) {
@@ -324,6 +384,19 @@ export async function generateStage(ctx) {
   // After the fixers: headings are final (FAQ questions are read from them).
   const social = await addSocialImages(site, ctx, assetsDir);
   if (social.files.length) await addToManifest(assetsDir, social.files, known, ctx.assets);
+  // Canvases: reported as not reproducible, shown as the frame the capture saw (never an empty box passed off as copied).
+  const frames = await addCanvasFrames(site, motionByPath, ctx, assetsDir);
+  if (frames.files.length) await addToManifest(assetsDir, frames.files, known, ctx.assets);
+  if (frames.canvases.length) {
+    report.motion = { ...report.motion, unsupported: { ...report.motion?.unsupported, canvas: frames.canvases } };
+    const moving = frames.canvases.filter((c) => c.animated).length;
+    report.manual.push({
+      area: 'Animation',
+      title: `${frames.canvases.length} canvas drawing(s) cannot be rebuilt`,
+      detail: `What a canvas draws (a WebGL scene, a chart, particles) comes from the site's own script, which the copy does not carry.${moving ? ` ${moving} of them keep moving on the original;` : ''} the copy shows the frame the capture saw, as a still picture.`,
+      count: frames.canvases.length,
+    });
+  }
   const structured = addStructuredData(site);
   let irFixes;
   let imageVariants = new Map();

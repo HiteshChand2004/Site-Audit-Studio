@@ -159,7 +159,8 @@ export function motionCss(m, opts) {
         t.direction && t.direction !== 'normal' ? t.direction : null,
         t.fill && t.fill !== 'none' && t.fill !== 'auto' ? t.fill : null,
       ].filter(Boolean);
-      loops.push(block(sel(l.token), `  animation: ${parts.join(' ')};`));
+      // A loop of a ::before / ::after (a dot the page pulses with script) runs on that pseudo-element.
+      loops.push(block(`${sel(l.token)}${l.pseudo ?? ''}`, `  animation: ${parts.join(' ')};`));
     }
     out.push(`/* Loops the original page runs with script */\n@media (prefers-reduced-motion: no-preference) {\n${loops.join('\n').replace(/^/gm, '  ')}\n}`);
   }

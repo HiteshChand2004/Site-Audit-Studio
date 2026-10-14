@@ -130,9 +130,15 @@ export async function findScriptLoops(opts) {
     }
     return parts.length && parts[parts.length - 1] === 'body' ? parts.reverse().join('>') : null;
   };
+  // Everything a script moves or fades an element with: its transform and the individual transform properties, its
+  // opacity, and also its position (`left` / `top` of a positioned element: particles and floating shapes are often moved
+  // that way), its `filter` (a colour cycle), and an SVG shape's own position attributes (x / y / cx / cy).
   const read = (el) => {
     const cs = getComputedStyle(el);
-    return [cs.transform, cs.opacity, cs.rotate, cs.translate, cs.scale];
+    const at = (n) => el.getAttribute(n);
+    return [cs.transform, cs.opacity, cs.rotate, cs.translate, cs.scale,
+      cs.position !== 'static' ? cs.left : 'auto', cs.position !== 'static' ? cs.top : 'auto', cs.filter,
+      at('x') ?? at('cx') ?? '', at('y') ?? at('cy') ?? ''];
   };
   const els = [...(document.body ? document.body.querySelectorAll('*') : [])].filter((e) => !SKIP_TAGS.has(e.tagName.toUpperCase())).slice(0, 6000);
   const before = els.map(read);
@@ -148,7 +154,10 @@ export async function findScriptLoops(opts) {
     const r = el.getBoundingClientRect();
     return r.width >= minWidth && (!inView || (r.bottom > 0 && r.top < innerHeight));
   };
-  const loose = changed.filter((el) => !(el.getAnimations?.().length) && shownNow(el));
+  // An SVG element animated by its own SMIL child (<animate>, <animateTransform>, <animateMotion>, <set>) is explained
+  // too: the copy keeps that markup, so it keeps moving - a loop rebuilt on top would move it twice.
+  const smil = (el) => [...el.children].some((c) => /^(animate|animatetransform|animatemotion|set)$/i.test(c.tagName));
+  const loose = changed.filter((el) => !(el.getAnimations?.().length) && !smil(el) && shownNow(el));
   const area = (el) => {
     const r = el.getBoundingClientRect();
     return r.width * r.height;
@@ -215,9 +224,13 @@ export async function recordPaths({ paths, ms = 9000, every = 50 }) {
     }
     return el;
   };
+  // The same reading as findScriptLoops (keep the two in step).
   const read = (el) => {
     const cs = getComputedStyle(el);
-    return [cs.transform, cs.opacity, cs.rotate, cs.translate, cs.scale];
+    const at = (n) => el.getAttribute(n);
+    return [cs.transform, cs.opacity, cs.rotate, cs.translate, cs.scale,
+      cs.position !== 'static' ? cs.left : 'auto', cs.position !== 'static' ? cs.top : 'auto', cs.filter,
+      at('x') ?? at('cx') ?? '', at('y') ?? at('cy') ?? ''];
   };
   // The position along both axes and the opacity (×100, so a 0.01 step counts like a quarter pixel), enough to see a
   // turn (the full reading is kept for the analysis).
@@ -371,9 +384,15 @@ const parsePair = (v) => {
 function channels(series) {
   let prevRot = null;
   let offset = 0;
-  return series.map(([t, transform, opacity, rotate, translate, scale]) => {
+  return series.map(([t, transform, opacity, rotate, translate, scale, left, top, filter, svgX, svgY]) => {
     const d = decomposeTransform(transform) ?? { translate: [0, 0], scale: [1, 1], rotate: 0 };
     const tr = parsePair(translate);
+    // A position a script writes (`left` / `top`, an SVG shape's x / y) moves the element like a translate does: the
+    // constant part cancels out in every range, period and path read below.
+    const pos = (v) => (typeof v === 'string' && /^-?[\d.]+(px)?$/.test(v.trim()) ? Number.parseFloat(v) : 0);
+    tr[0] += pos(left) + pos(svgX);
+    tr[1] += pos(top) + pos(svgY);
+    const hue = /hue-rotate\(\s*(-?[\d.]+)deg/.exec(String(filter ?? ''));
     let rot = d.rotate + (rotate && rotate !== 'none' ? angle(rotate.split(/\s+/).pop()) : 0);
     // Unwrap +-180 jumps so a full turn per second reads as one steady slope.
     if (prevRot != null) {
@@ -384,7 +403,7 @@ function channels(series) {
     rot += offset;
     prevRot = rot;
     const sc = scale && scale !== 'none' ? num(String(scale).split(/\s+/)[0]) || 1 : 1;
-    return { t, x: d.translate[0] + tr[0], y: d.translate[1] + tr[1], rot, scale: d.scale[0] * sc, opacity: num(opacity) };
+    return { t, x: d.translate[0] + tr[0], y: d.translate[1] + tr[1], rot, scale: d.scale[0] * sc, opacity: num(opacity), hue: hue ? Number(hue[1]) : 0 };
   });
 }
 
@@ -392,6 +411,23 @@ const median = (xs) => {
   const s = [...xs].sort((a, b) => a - b);
   return s.length ? (s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2) : 0;
 };
+
+/** Points of a path per period: enough for a smooth loop, few enough for a small @keyframes block. */
+export const PATH_POINTS = 12;
+
+/**
+ * The x / y path over one period, at PATH_POINTS evenly spaced times, relative to the middle of the movement (so the copy
+ * moves around where the element stands). Null when the recording does not cover a whole period.
+ * @returns {[number, number][] | null}
+ */
+export function periodPath(ch, periodMs) {
+  if (!(periodMs > 0) || ch[ch.length - 1].t - ch[0].t < periodMs) return null;
+  const at = (t) => ch.reduce((best, c) => (Math.abs(c.t - t) < Math.abs(best.t - t) ? c : best), ch[0]);
+  const pts = Array.from({ length: PATH_POINTS }, (_, i) => at(ch[0].t + (periodMs * i) / PATH_POINTS));
+  const mid = (k) => (Math.max(...ch.map((c) => c[k])) + Math.min(...ch.map((c) => c[k]))) / 2;
+  const [mx, my] = [mid('x'), mid('y')];
+  return pts.map((c) => [round(c.x - mx, 1), round(c.y - my, 1)]);
+}
 
 /**
  * Names what a recorded series does: spin (deg/s), linear movement with wrap-around (px/s, period), oscillation
@@ -401,7 +437,7 @@ const median = (xs) => {
 export function analyzeSeries(series) {
   if (series.length < 8) return null;
   const ch = channels(series);
-  const defs = [['x', 'px', 3], ['y', 'px', 3], ['rot', 'deg', 5], ['scale', '', 0.03], ['opacity', '', 0.05]];
+  const defs = [['x', 'px', 3], ['y', 'px', 3], ['rot', 'deg', 5], ['scale', '', 0.03], ['opacity', '', 0.05], ['hue', 'deg', 5]];
   let best = null;
   for (const [key, unit, min] of defs) {
     const vs = ch.map((c) => c[key]);
@@ -442,7 +478,12 @@ export function analyzeSeries(series) {
   }
   if (turns.length >= 2) {
     const half = median(turns.slice(1).map((t, i) => t - turns[i]));
-    return { pattern: 'oscillate', channel: key, unit, range: round(range), amplitude: round(range / 2), periodMs: Math.round(half * 2), min: round(Math.min(...vs), 3), max: round(Math.max(...vs), 3) };
+    const periodMs = Math.round(half * 2);
+    // Moving on the other axis too (a particle circling, a shape drifting diagonally): one axis alone would rebuild a
+    // line where the original drew a loop, so the recorded path over one period goes with it.
+    const other = key === 'x' ? 'y' : key === 'y' ? 'x' : null;
+    const path = other && Math.max(...ch.map((c) => c[other])) - Math.min(...ch.map((c) => c[other])) >= 3 ? periodPath(ch, periodMs) : null;
+    return { pattern: 'oscillate', channel: key, unit, range: round(range), amplitude: round(range / 2), periodMs, min: round(Math.min(...vs), 3), max: round(Math.max(...vs), 3), ...(path && { path }) };
   }
   return { pattern: 'move', channel: key, unit, range: round(range) };
 }
@@ -479,6 +520,94 @@ export function processLoops({ scan, script }) {
   return { version: 1, loops, stats };
 }
 
+/** At most this many canvases of a page are looked at (each costs two element screenshots). */
+export const MAX_CANVASES = 8;
+
+/**
+ * Page function: the visible <canvas> elements (a WebGL scene, a chart, a particle field, a game). What they draw comes
+ * from a script, which the copy never carries, so they are recorded to be reported - never passed off as copied.
+ * `context` asks the canvas which kind it is ('2d' when a 2d context answers; an uninitialised canvas gets one, which
+ * draws nothing).
+ */
+export function listCanvases({ max = 8 } = {}) {
+  const SKIP = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
+  const pathOf = (el) => {
+    const parts = [];
+    for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+      if (n === document.body) {
+        parts.push('body');
+        break;
+      }
+      let index = 0;
+      for (const s of n.parentElement ? n.parentElement.children : []) {
+        if (SKIP.has(s.tagName)) continue;
+        if (s.tagName === n.tagName) index++;
+        if (s === n) break;
+      }
+      parts.push(`${n.tagName.toLowerCase()}:${index}`);
+    }
+    return parts.length && parts[parts.length - 1] === 'body' ? parts.reverse().join('>') : null;
+  };
+  const out = [];
+  document.querySelectorAll('canvas').forEach((c, index) => {
+    if (out.length >= max) return;
+    const r = c.getBoundingClientRect();
+    const cs = getComputedStyle(c);
+    if (r.width < 24 || r.height < 24 || cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) === 0) return;
+    let context = 'webgl';
+    try {
+      if (c.getContext('2d')) context = '2d';
+    } catch {
+      context = 'unknown';
+    }
+    out.push({
+      index, path: pathOf(c), context,
+      rect: [Math.round(r.left + scrollX), Math.round(r.top + scrollY), Math.round(r.width), Math.round(r.height)],
+      // How much of the window it covers: a page drawn mostly on canvas (a Flutter / game page) is a different case.
+      cover: Math.round(((Math.min(r.right, innerWidth) - Math.max(r.left, 0)) * (Math.min(r.bottom, innerHeight) - Math.max(r.top, 0)) * 100) / (innerWidth * innerHeight)) / 100,
+    });
+  });
+  return out;
+}
+
+/**
+ * The canvases of a page and whether each keeps drawing: two pictures of it 700 ms apart, compared pixel by pixel
+ * (downscaled; a channel moved by more than 24 = changed). Never throws: a canvas that cannot be photographed is listed
+ * without `animated`.
+ */
+export async function captureCanvases(page) {
+  const list = await page.evaluate(listCanvases, { max: MAX_CANVASES }).catch(() => []);
+  const sharp = list.length ? (await import('sharp')).default : null;
+  for (const c of list) {
+    try {
+      const el = page.locator('canvas').nth(c.index);
+      const shot = async () => sharp(await el.screenshot({ timeout: 5000, animations: 'allow' })).resize({ width: 160 }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+      const a = await shot();
+      await page.waitForTimeout(700);
+      const b = await shot();
+      let changed = 0;
+      const px = a.info.width * a.info.height;
+      if (a.info.width === b.info.width && a.info.height === b.info.height) {
+        for (let i = 0; i < px; i++) {
+          const o = i * a.info.channels;
+          for (let k = 0; k < a.info.channels; k++) {
+            if (Math.abs(a.data[o + k] - b.data[o + k]) > 24) {
+              changed++;
+              break;
+            }
+          }
+        }
+      }
+      c.animated = changed / px > 0.002;
+    } catch {
+      // left without `animated`: listed all the same
+    }
+    delete c.index;
+  }
+  await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
+  return list;
+}
+
 /**
  * Reads the continuous motion of a page (desktop view). Never throws for a page function failing: the part that failed is left out.
  * @param {import('playwright').Page} page
@@ -493,6 +622,13 @@ export async function captureLoops(page, { script = true, recordMs = 2200 } = {}
     // One way (drift), or one turn only (move): not enough of it was seen. A slow fade that only went one way (a card
     // "breathing" over several seconds: opacity 0.07 in 2 s) is watched longer too.
     if (a?.pattern === 'ramp' && a.channel === 'opacity' && a.range < SLOW_FADE) return true;
+    // Moving on both axes with a loop longer than the short recording (a particle circling slowly): watched longer, so a
+    // whole period - and so its path - is seen.
+    if (a?.pattern === 'oscillate' && (a.channel === 'x' || a.channel === 'y') && !a.path) {
+      const ch = c.series.map((s) => s[0]);
+      const span = ch.length ? ch[ch.length - 1] - ch[0] : 0;
+      if (a.periodMs > span) return true;
+    }
     return (a?.pattern === 'drift' || a?.pattern === 'move') && !a.wrap && (a.channel === 'x' || a.channel === 'y') && a.range < SLOW_MOVER_PX;
   }).slice(0, 12);
   if (slow.length) {
@@ -518,5 +654,14 @@ export async function captureLoops(page, { script = true, recordMs = 2200 } = {}
     }
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
   }
-  return processLoops({ scan, script: found ?? undefined });
+  // What canvases draw cannot be rebuilt without their script: recorded here so the copy reports them (and shows the
+  // frame the capture saw) instead of an empty box that passes for copied.
+  const canvas = await captureCanvases(page).catch(() => []);
+  const out = processLoops({ scan, script: found ?? undefined });
+  if (canvas.length) {
+    out.canvas = canvas;
+    out.stats.canvas = canvas.length;
+    out.stats.canvasAnimated = canvas.filter((c) => c.animated).length;
+  }
+  return out;
 }

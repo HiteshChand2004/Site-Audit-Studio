@@ -539,11 +539,42 @@ export function withoutOwnCss(carried, tokens) {
   return removed;
 }
 
+/**
+ * Sets attributes on the element `rest` points at inside an SVG's markup (motion tokens merged). Null when the path does
+ * not lead to an element.
+ */
+export function attrsInSvg(markup, rest, attrs) {
+  const $ = load(markup, { xml: { xmlMode: true } }, false);
+  let el = $.root().children().filter((i, x) => x.name?.toLowerCase() === 'svg').first();
+  for (const seg of rest) {
+    const [tag, n] = seg.split(':');
+    el = el.children().filter((i, x) => x.name?.toLowerCase() === tag).eq(Math.max(0, Number(n) - 1));
+    if (!el.length) return null;
+  }
+  for (const [k, v] of Object.entries(attrs)) {
+    const had = el.attr(k);
+    el.attr(k, k === 'data-motion' && had ? [...new Set(`${had} ${v}`.split(/\s+/).filter(Boolean))].join(' ') : v);
+  }
+  return $.xml();
+}
+
 /** Puts carried attributes on the as-is nodes with the same path (motion tokens are merged, never replaced). */
 export function carryInto(body, carried) {
   let placed = 0;
   const walk = (n) => {
     if (!n || 'text' in n) return;
+    // Attributes for an element inside this inline SVG (a loop on a shape the page moves): written into the SVG's own
+    // markup at the same place (tag:n = the n-th child with that tag, as the capture path counts it).
+    if (n.t === 'svg' && typeof n.raw === 'string' && n.cpath) {
+      for (const [key, inner] of [...carried]) {
+        if (!key.startsWith(`${n.cpath}>`)) continue;
+        const raw = attrsInSvg(n.raw, key.slice(n.cpath.length + 1).split('>'), inner);
+        if (!raw) continue;
+        n.raw = raw;
+        carried.delete(key);
+        placed++;
+      }
+    }
     const attrs = n.cpath && carried.get(n.cpath);
     if (attrs) {
       const merge = (k, v, had) => (k === 'data-motion' && typeof had === 'string' ? [...new Set(`${had} ${v}`.split(/\s+/).filter(Boolean))].join(' ') : v);
@@ -793,6 +824,11 @@ export async function applyAsIs(ir, { dir, site, excluded = [] }) {
     // The page keeps the site's own stylesheet: a hover / focus effect that only its rules gave is already there, and a
     // copy of it (read from the rendered page, with !important) could only overrule the real one.
     report.motion.ownCss = (report.motion.ownCss ?? 0) + withoutOwnCss(carried, cssOnly);
+    // Loop tokens the rebuilt copy put inside an inline SVG (ir/motion.js svgTokens): carried into the original SVG too.
+    for (const s of (ir.motion?.svgTokens ?? []).filter((x) => x.page === page.outPath)) {
+      const had = carried.get(s.path) ?? {};
+      carried.set(s.path, { ...had, 'data-motion': [had['data-motion'], s.token].filter(Boolean).join(' ') });
+    }
     const { placed, lost } = carryInto(body, carried);
     report.motion.carried += placed;
     report.motion.extras += placeExtras(body, extras.placements);

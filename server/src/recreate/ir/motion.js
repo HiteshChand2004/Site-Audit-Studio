@@ -429,6 +429,17 @@ export function irRepeat(node, channel, view = 'desktop') {
  */
 export function scriptLoop(loop, node) {
   const p = loop.params;
+  // Movement on both axes at once (a particle circling, a shape drifting diagonally): the recording's own path over one
+  // period, at a few points, relative to where it was captured - the trajectory, since no rule behind it can be read.
+  // First, so a two-axis movement is never rebuilt on one axis only by the rule below.
+  if (loop.pattern === 'oscillate' && Array.isArray(p.path) && p.path.length >= 4 && p.periodMs >= 200) {
+    const n = p.path.length;
+    return {
+      keyframes: p.path.map(([x, y], i) => ({ offset: Math.round((i / n) * 10000) / 100, props: { translate: `${r1(x)}px ${r1(y)}px` } }))
+        .concat([{ offset: 100, props: { translate: `${r1(p.path[0][0])}px ${r1(p.path[0][1])}px` } }]),
+      timing: { duration: Math.round(p.periodMs), delay: 0, iterations: 'infinite', direction: 'normal', fill: 'none', easing: 'linear' },
+    };
+  }
   if (loop.pattern === 'spin' && p.rate > 0.5) {
     const deg = p.direction === 'backward' ? -360 : 360;
     return { keyframes: [{ offset: 0, props: { rotate: '0deg' } }, { offset: 100, props: { rotate: `${deg}deg` } }], timing: { duration: Math.round((360 / p.rate) * 1000), delay: 0, iterations: 'infinite', direction: 'normal', fill: 'none', easing: 'linear' } };
@@ -437,6 +448,17 @@ export function scriptLoop(loop, node) {
     const a = r1(p.amplitude);
     const v = (n) => (p.channel === 'x' ? `${n}px 0` : `0 ${n}px`);
     return { keyframes: [{ offset: 0, props: { translate: v(-a) } }, { offset: 100, props: { translate: v(a) } }], timing: { duration: Math.round(p.periodMs / 2), delay: 0, iterations: 'infinite', direction: 'alternate', fill: 'none', easing: 'ease-in-out' } };
+  }
+  // A pulse (scale) or a rocking motion (rotation) back and forth, between the values the recording saw.
+  if (loop.pattern === 'oscillate' && (p.channel === 'scale' || p.channel === 'rot') && p.periodMs >= 200 && Number.isFinite(p.min) && Number.isFinite(p.max)) {
+    const v = (n) => (p.channel === 'scale' ? String(Math.round(n * 1000) / 1000) : `${r1(n)}deg`);
+    const prop = p.channel === 'scale' ? 'scale' : 'rotate';
+    return { keyframes: [{ offset: 0, props: { [prop]: v(p.min) } }, { offset: 100, props: { [prop]: v(p.max) } }], timing: { duration: Math.round(p.periodMs / 2), delay: 0, iterations: 'infinite', direction: 'alternate', fill: 'none', easing: 'ease-in-out' } };
+  }
+  // A colour cycle a script turns (hue-rotate going round): a full turn at the measured speed.
+  if ((loop.pattern === 'spin' || loop.pattern === 'ramp') && p.channel === 'hue' && p.rate > 1) {
+    const deg = p.direction === 'backward' ? -360 : 360;
+    return { keyframes: [{ offset: 0, props: { filter: 'hue-rotate(0deg)' } }, { offset: 100, props: { filter: `hue-rotate(${deg}deg)` } }], timing: { duration: Math.round((360 / p.rate) * 1000), delay: 0, iterations: 'infinite', direction: 'normal', fill: 'none', easing: 'linear' } };
   }
   // A slow fade in and out (a "breathing" card or glow) between the opacities the recording saw.
   if (loop.pattern === 'oscillate' && p.channel === 'opacity' && p.periodMs >= 400 && Number.isFinite(p.min) && Number.isFinite(p.max) && p.max - p.min >= 0.05) {
@@ -576,6 +598,8 @@ export function markNestedHosts(site, effects) {
 
 export function applyMotion(site, byPath) {
   const reg = { hover: new Map(), focus: new Map(), reveal: new Map(), loops: [], delays: new Set(), widgets: new Map(), scrolled: new Map() };
+  // Tokens placed on an element inside an inline SVG, by its capture path (ir/asis.js carries them into the original SVG).
+  const svgTokens = [];
   const stats = {
     pages: 0,
     scrolled: { bars: 0 },
@@ -820,7 +844,8 @@ export function applyMotion(site, byPath) {
       // A loop inside an inline SVG (dashes running along lines): the SVG is kept as markup, so the token goes on the
       // element inside it (the SVG sanitizer keeps data-* attributes) and the keyframes are rebuilt like any other loop.
       const inSvg = node ? null : svgTarget(loop.path, nodes);
-      if (inSvg && !loop.pseudo && !loop.timeline && loop.keyframes?.length >= 2) node = inSvg.svg;
+      // A script that moves a shape or a text inside the SVG (its attributes or its transform) is rebuilt the same way.
+      if (inSvg && !loop.pseudo && !loop.timeline && (loop.keyframes?.length >= 2 || loop.source === 'script')) node = inSvg.svg;
       if (!node) {
         stats.loops.skipped.push({ pattern: loop.pattern, reason: 'unmapped' });
         continue;
@@ -834,7 +859,9 @@ export function applyMotion(site, byPath) {
         stats.loops.carried++;
         continue;
       }
-      if (loop.pseudo) {
+      // A ::before / ::after loop the stylesheet does not carry (a Web Animation on the pseudo-element, or a sheet the page
+      // could not read): its keyframes were read, so it is rebuilt on that pseudo-element. Without keyframes it is skipped.
+      if (loop.pseudo && !(loop.keyframes?.length >= 2 && loop.source !== 'script')) {
         stats.loops.skipped.push({ pattern: loop.pattern, reason: 'pseudo-element' });
         continue;
       }
@@ -853,6 +880,7 @@ export function applyMotion(site, byPath) {
         built = {
           keyframes: loopKeyframes(loop.keyframes),
           timing: { duration: Math.round(t.duration / rate), delay: Math.round(t.delay / rate), iterations: t.iterations, direction: t.direction, fill: t.fill, easing: t.easing },
+          ...(loop.pseudo && { pseudo: loop.pseudo }),
         };
       }
       if (!built) {
@@ -874,6 +902,8 @@ export function applyMotion(site, byPath) {
           stats.loops.skipped.push({ pattern: loop.pattern, reason: 'unmapped' });
           continue;
         }
+        // An as-is page keeps the original SVG markup, not this rebuilt one: the token is carried there by this path.
+        svgTokens.push({ page: tree.info.outPath, path: loop.path, token: entry.token });
       } else tokenize(node, entry.token);
       stats.loops.rebuilt++;
     }
@@ -1097,6 +1127,8 @@ export function applyMotion(site, byPath) {
     scrolled,
     // Hover / focus tokens only the site's own state rules gave (see noteSource).
     cssOnly: [...tokenSource].filter(([, t]) => t.css > 0 && t.other === 0).map(([token]) => token),
+    // Loop tokens on elements inside inline SVGs, by capture path (for an as-is page's original SVG markup).
+    ...(svgTokens.length && { svgTokens }),
     // The generated script is needed for the reveal (IntersectionObserver), the click widgets, the switched states, the
     // scroll states, the panels a click opens (dialogs the page only renders when open) and the hover cards (their
     // hovered look waits in a <template> until first pointed at); hover, focus and loops are CSS.
