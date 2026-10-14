@@ -429,6 +429,17 @@ export function irRepeat(node, channel, view = 'desktop') {
  */
 export function scriptLoop(loop, node) {
   const p = loop.params;
+  // Movement on both axes at once (a particle circling, a shape drifting diagonally): the recording's own path over one
+  // period, at a few points, relative to where it was captured - the trajectory, since no rule behind it can be read.
+  // First, so a two-axis movement is never rebuilt on one axis only by the rule below.
+  if (loop.pattern === 'oscillate' && Array.isArray(p.path) && p.path.length >= 4 && p.periodMs >= 200) {
+    const n = p.path.length;
+    return {
+      keyframes: p.path.map(([x, y], i) => ({ offset: Math.round((i / n) * 10000) / 100, props: { translate: `${r1(x)}px ${r1(y)}px` } }))
+        .concat([{ offset: 100, props: { translate: `${r1(p.path[0][0])}px ${r1(p.path[0][1])}px` } }]),
+      timing: { duration: Math.round(p.periodMs), delay: 0, iterations: 'infinite', direction: 'normal', fill: 'none', easing: 'linear' },
+    };
+  }
   if (loop.pattern === 'spin' && p.rate > 0.5) {
     const deg = p.direction === 'backward' ? -360 : 360;
     return { keyframes: [{ offset: 0, props: { rotate: '0deg' } }, { offset: 100, props: { rotate: `${deg}deg` } }], timing: { duration: Math.round((360 / p.rate) * 1000), delay: 0, iterations: 'infinite', direction: 'normal', fill: 'none', easing: 'linear' } };
@@ -438,10 +449,38 @@ export function scriptLoop(loop, node) {
     const v = (n) => (p.channel === 'x' ? `${n}px 0` : `0 ${n}px`);
     return { keyframes: [{ offset: 0, props: { translate: v(-a) } }, { offset: 100, props: { translate: v(a) } }], timing: { duration: Math.round(p.periodMs / 2), delay: 0, iterations: 'infinite', direction: 'alternate', fill: 'none', easing: 'ease-in-out' } };
   }
+  // A pulse (scale) or a rocking motion (rotation) back and forth, between the values the recording saw.
+  if (loop.pattern === 'oscillate' && (p.channel === 'scale' || p.channel === 'rot') && p.periodMs >= 200 && Number.isFinite(p.min) && Number.isFinite(p.max)) {
+    const v = (n) => (p.channel === 'scale' ? String(Math.round(n * 1000) / 1000) : `${r1(n)}deg`);
+    const prop = p.channel === 'scale' ? 'scale' : 'rotate';
+    return { keyframes: [{ offset: 0, props: { [prop]: v(p.min) } }, { offset: 100, props: { [prop]: v(p.max) } }], timing: { duration: Math.round(p.periodMs / 2), delay: 0, iterations: 'infinite', direction: 'alternate', fill: 'none', easing: 'ease-in-out' } };
+  }
+  // A colour cycle a script turns (hue-rotate going round): a full turn at the measured speed.
+  if ((loop.pattern === 'spin' || loop.pattern === 'ramp') && p.channel === 'hue' && p.rate > 1) {
+    const deg = p.direction === 'backward' ? -360 : 360;
+    return { keyframes: [{ offset: 0, props: { filter: 'hue-rotate(0deg)' } }, { offset: 100, props: { filter: `hue-rotate(${deg}deg)` } }], timing: { duration: Math.round((360 / p.rate) * 1000), delay: 0, iterations: 'infinite', direction: 'normal', fill: 'none', easing: 'linear' } };
+  }
   // A slow fade in and out (a "breathing" card or glow) between the opacities the recording saw.
   if (loop.pattern === 'oscillate' && p.channel === 'opacity' && p.periodMs >= 400 && Number.isFinite(p.min) && Number.isFinite(p.max) && p.max - p.min >= 0.05) {
     const o = (n) => String(Math.round(Math.min(1, Math.max(0, n)) * 1000) / 1000);
     return { keyframes: [{ offset: 0, props: { opacity: o(p.min) } }, { offset: 100, props: { opacity: o(p.max) } }], timing: { duration: Math.round(p.periodMs / 2), delay: 0, iterations: 'infinite', direction: 'alternate', fill: 'none', easing: 'ease-in-out' } };
+  }
+  // Movement with no pattern the recording could name (it wanders, or its loop is longer than what was watched): the
+  // recorded trace itself, played forward and back so it never jumps. An approximation of the original's motion, marked
+  // as one (`approximate`), never a claim to have found its rule.
+  if (loop.pattern === 'move' && p.trace?.points?.length >= 4 && p.trace.channels?.length && p.trace.durationMs >= 400) {
+    const { points, channels, durationMs } = p.trace;
+    const props = ([, x, y, rot, scale, opacity]) => ({
+      ...((channels.includes('x') || channels.includes('y')) && { translate: `${r1(x)}px ${r1(y)}px` }),
+      ...(channels.includes('rot') && { rotate: `${r1(rot)}deg` }),
+      ...(channels.includes('scale') && { scale: String(scale) }),
+      ...(channels.includes('opacity') && { opacity: String(opacity) }),
+    });
+    return {
+      approximate: 'recorded-path',
+      keyframes: points.map((pt) => ({ offset: Math.round((pt[0] / durationMs) * 10000) / 100, props: props(pt) })),
+      timing: { duration: Math.round(durationMs), delay: 0, iterations: 'infinite', direction: 'alternate', fill: 'none', easing: 'linear' },
+    };
   }
   // A ticker moved by script: its items repeat, so it slides by one repeat at the same speed, then starts over (seamless).
   // What the recording measured comes first; without it the tree is asked how far one repeat of the strip is (irRepeat).
@@ -576,6 +615,8 @@ export function markNestedHosts(site, effects) {
 
 export function applyMotion(site, byPath) {
   const reg = { hover: new Map(), focus: new Map(), reveal: new Map(), loops: [], delays: new Set(), widgets: new Map(), scrolled: new Map() };
+  // Tokens placed on an element inside an inline SVG, by its capture path (ir/asis.js carries them into the original SVG).
+  const svgTokens = [];
   const stats = {
     pages: 0,
     scrolled: { bars: 0 },
@@ -820,7 +861,8 @@ export function applyMotion(site, byPath) {
       // A loop inside an inline SVG (dashes running along lines): the SVG is kept as markup, so the token goes on the
       // element inside it (the SVG sanitizer keeps data-* attributes) and the keyframes are rebuilt like any other loop.
       const inSvg = node ? null : svgTarget(loop.path, nodes);
-      if (inSvg && !loop.pseudo && !loop.timeline && loop.keyframes?.length >= 2) node = inSvg.svg;
+      // A script that moves a shape or a text inside the SVG (its attributes or its transform) is rebuilt the same way.
+      if (inSvg && !loop.pseudo && !loop.timeline && (loop.keyframes?.length >= 2 || loop.source === 'script')) node = inSvg.svg;
       if (!node) {
         stats.loops.skipped.push({ pattern: loop.pattern, reason: 'unmapped' });
         continue;
@@ -834,7 +876,9 @@ export function applyMotion(site, byPath) {
         stats.loops.carried++;
         continue;
       }
-      if (loop.pseudo) {
+      // A ::before / ::after loop the stylesheet does not carry (a Web Animation on the pseudo-element, or a sheet the page
+      // could not read): its keyframes were read, so it is rebuilt on that pseudo-element. Without keyframes it is skipped.
+      if (loop.pseudo && !(loop.keyframes?.length >= 2 && loop.source !== 'script')) {
         stats.loops.skipped.push({ pattern: loop.pattern, reason: 'pseudo-element' });
         continue;
       }
@@ -853,11 +897,18 @@ export function applyMotion(site, byPath) {
         built = {
           keyframes: loopKeyframes(loop.keyframes),
           timing: { duration: Math.round(t.duration / rate), delay: Math.round(t.delay / rate), iterations: t.iterations, direction: t.direction, fill: t.fill, easing: t.easing },
+          ...(loop.pseudo && { pseudo: loop.pseudo }),
         };
       }
       if (!built) {
         stats.loops.skipped.push({ pattern: loop.pattern, reason: loop.source === 'script' ? 'script-driven' : 'no-keyframes' });
         continue;
+      }
+      // Rebuilt from the recorded trace, not from a rule: counted apart, so the report can say which loops are approximate.
+      if (built.approximate) {
+        stats.loops.approximated = (stats.loops.approximated ?? 0) + 1;
+        const { approximate: _a, ...rest } = built;
+        built = rest;
       }
       if (built.keyframes.some((k) => Object.values(k.props).some((v) => /url\(/i.test(v)))) {
         stats.loops.skipped.push({ pattern: loop.pattern, reason: 'url-in-keyframes' });
@@ -874,8 +925,58 @@ export function applyMotion(site, byPath) {
           stats.loops.skipped.push({ pattern: loop.pattern, reason: 'unmapped' });
           continue;
         }
+        // An as-is page keeps the original SVG markup, not this rebuilt one: the token is carried there by this path.
+        svgTokens.push({ page: tree.info.outPath, path: loop.path, token: entry.token });
       } else tokenize(node, entry.token);
       stats.loops.rebuilt++;
+    }
+
+    // Effects tied to the scroll position (capture/scrolllinked.js): keyframes over the page's scroll range (0 = top,
+    // 1 = bottom), relative to the pose the element was captured in at the top; js/motion.js keeps `--sas-sp` on <html>
+    // at the page's scroll progress and the paused animation is scrubbed to it. Whatever drove it on the original (a CSS
+    // scroll timeline, ScrollTrigger scrub, useScroll), the copy has one mechanism, in every browser.
+    for (const e of motion.scrollLinked?.elements ?? []) {
+      const sl = (stats.scrollLinked ??= { rebuilt: 0, skipped: {} });
+      const skip = (why) => { sl.skipped[why] = (sl.skipped[why] ?? 0) + 1; };
+      const node = nodes.get(e.path);
+      if (!node) {
+        skip('unmapped');
+        continue;
+      }
+      // Kept by the original's own stylesheet in an as-is copy; a bar with scroll states has its own path (below).
+      if (e.declared && site.asIs) {
+        skip('carried');
+        continue;
+      }
+      if (node.views?.desktop?.scrolled) {
+        skip('scroll-state');
+        continue;
+      }
+      const base = e.samples[0];
+      const keyframes = e.samples.map((s) => ({
+        offset: Math.round(s.at * 10000) / 100,
+        props: {
+          ...((e.channels.includes('x') || e.channels.includes('y')) && { translate: `${r1(s.x - base.x)}px ${r1(s.y - base.y)}px` }),
+          ...(e.channels.includes('rot') && { rotate: `${r1(s.rot - base.rot)}deg` }),
+          ...(e.channels.includes('scale') && { scale: String(Math.round((s.scale / (base.scale || 1)) * 1000) / 1000) }),
+          ...(e.channels.includes('opacity') && Number.isFinite(s.opacity) && { opacity: String(s.opacity) }),
+          ...(e.channels.includes('filter') && s.filter && { filter: s.filter }),
+        },
+      })).filter((k, i, all) => i === 0 || k.offset > all[i - 1].offset);
+      if (keyframes.length < 2) {
+        skip('flat');
+        continue;
+      }
+      const built = { keyframes, timing: { duration: 1000, delay: 0, iterations: 1, direction: 'normal', fill: 'both', easing: 'linear' }, scrub: true };
+      const key = JSON.stringify(built);
+      let entry = reg.loops.find((l) => l.key === key);
+      if (!entry) {
+        entry = { key, token: `l${reg.loops.length + 1}`, name: `m-l${reg.loops.length + 1}`, ...built };
+        reg.loops.push(entry);
+      }
+      tokenize(node, entry.token);
+      node.stateAttrs = { ...node.stateAttrs, 'data-w-scrub': '' };
+      sl.rebuilt++;
     }
 
     // Scroll states of fixed / sticky bars (capture/scrollstate.js): past `at` the bar gets `is-scrolled` (js/motion.js) and the
@@ -1097,10 +1198,13 @@ export function applyMotion(site, byPath) {
     scrolled,
     // Hover / focus tokens only the site's own state rules gave (see noteSource).
     cssOnly: [...tokenSource].filter(([, t]) => t.css > 0 && t.other === 0).map(([token]) => token),
+    // Loop tokens on elements inside inline SVGs, by capture path (for an as-is page's original SVG markup).
+    ...(svgTokens.length && { svgTokens }),
     // The generated script is needed for the reveal (IntersectionObserver), the click widgets, the switched states, the
     // scroll states, the panels a click opens (dialogs the page only renders when open) and the hover cards (their
     // hovered look waits in a <template> until first pointed at); hover, focus and loops are CSS.
-    script: reveal.length > 0 || stats.pointer.followers > 0 || widgets.some((w) => !w.on) || stateSets > 0 || scrolled.length > 0 || notices > 0 || panels > 0 || hoverCards > 0,
+    // (Scroll-linked effects too: the script keeps the page's scroll progress, which they are scrubbed to.)
+    script: reveal.length > 0 || stats.pointer.followers > 0 || widgets.some((w) => !w.on) || stateSets > 0 || scrolled.length > 0 || notices > 0 || panels > 0 || hoverCards > 0 || loops.some((l) => l.scrub),
   } : null;
   return { motion, stats };
 }

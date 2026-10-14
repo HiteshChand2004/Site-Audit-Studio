@@ -159,9 +159,28 @@ export function motionCss(m, opts) {
         t.direction && t.direction !== 'normal' ? t.direction : null,
         t.fill && t.fill !== 'none' && t.fill !== 'auto' ? t.fill : null,
       ].filter(Boolean);
-      loops.push(block(sel(l.token), `  animation: ${parts.join(' ')};`));
+      if (l.scrub) {
+        // Tied to the scroll position: paused, and scrubbed to the page's scroll progress (js/motion.js keeps --sas-sp on
+        // <html> between 0 at the top and 1 at the bottom).
+        loops.push(block(sel(l.token), `  animation: ${l.name} ${t.duration}ms linear both paused;\n  animation-delay: calc(var(--sas-sp, 0) * -${t.duration}ms);`));
+        continue;
+      }
+      // A loop of a ::before / ::after (a dot the page pulses with script) runs on that pseudo-element.
+      loops.push(block(`${sel(l.token)}${l.pseudo ?? ''}`, `  animation: ${parts.join(' ')};`));
     }
     out.push(`/* Loops the original page runs with script */\n@media (prefers-reduced-motion: no-preference) {\n${loops.join('\n').replace(/^/gm, '  ')}\n}`);
+  }
+
+  // Canvases (generate.js addCanvasFrames): what their script drew cannot be rebuilt; they show the frame the capture saw,
+  // and - for a visitor who does not ask for less motion - the recording of what they drew, as a looping picture.
+  if (m.canvas?.length) {
+    const still = [];
+    const moving = [];
+    for (const c of m.canvas) {
+      if (c.still) still.push(block(sel(c.token), D({ 'background-image': `url("asset:${c.still}")`, 'background-size': '100% 100%', 'background-repeat': 'no-repeat' }, '  ')));
+      if (c.loop) moving.push(block(sel(c.token), D({ 'background-image': `url("asset:${c.loop}")` }, '    '), '  '));
+    }
+    out.push(`/* Canvas drawings the copy cannot run: the captured frame, and a recording of them (not interactive) */\n${still.filter(Boolean).join('\n')}${moving.length ? `\n@media (prefers-reduced-motion: no-preference) {\n${moving.filter(Boolean).join('\n')}\n}` : ''}`);
   }
   return out.join('\n\n');
 }

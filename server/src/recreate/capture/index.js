@@ -11,6 +11,7 @@ import { RECREATE_VIEWS as VIEWS, viewsFor } from '../views.js';
 import { captureClicks } from './clicks.js';
 import { captureInteractions } from './interactions.js';
 import { captureLoops } from './loops.js';
+import { captureScrollLinked } from './scrolllinked.js';
 import { installRevealTracker, processReveal } from './reveal.js';
 import { snapshotPage } from './snapshot.js';
 import { censusInteractive, coverageOf } from './census.js';
@@ -211,7 +212,16 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     let loopsError = null;
     if (observeReveal) {
       try {
-        loops = await captureLoops(page);
+        // A run with no time limit watches slow movers longer (20 s): a long loop shows its period instead of a guess.
+        loops = await captureLoops(page, exact ? { slowWatchMs: 20000 } : {});
+        // A canvas that keeps drawing was recorded as a loop: written beside the capture, never into motion.json.
+        for (const [i, c] of (loops.canvas ?? []).entries()) {
+          if (!c.loopWebp) continue;
+          const file = `${view.id}-canvas-${i + 1}.webp`;
+          await writeFile(path.join(dir, file), c.loopWebp);
+          c.loop = { ...c.loop, file };
+          delete c.loopWebp;
+        }
       } catch (err) {
         loopsError = firstLine(err);
       }
@@ -239,6 +249,17 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
         pointer = { error: firstLine(err) };
       }
       lap('pointer');
+    }
+    // Effects tied to the scroll position (parallax, scrubbed movement): the page scrolled down and up through the same
+    // positions, what is the same at the same place either way (capture/scrolllinked.js).
+    let scrollLinked = null;
+    if (observeReveal) {
+      try {
+        scrollLinked = await captureScrollLinked(page);
+      } catch (err) {
+        scrollLinked = { error: firstLine(err) };
+      }
+      lap('scroll-linked');
     }
     lap('motion');
     const fold = await page.screenshot({ type: 'png', animations: 'disabled' });
@@ -370,6 +391,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
         if (loops) found.loops = loops;
         if (feeds) found.feeds = feeds;
         if (pointer) found.pointer = pointer;
+        if (scrollLinked) found.scrollLinked = scrollLinked;
       } catch (err) {
         error ??= firstLine(err);
       }
