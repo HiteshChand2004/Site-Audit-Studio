@@ -368,7 +368,8 @@ export function closestByText(node, states) {
 export function planSets(widgets, noise = []) {
   const quiet = (p) => !noise.some((n) => p === n || p.startsWith(`${n}>`));
   // A fixed element a click shows is a notice (capture/notices.js), not switched content.
-  const changedBy = (w) => [...(w.change?.shown ?? []), ...(w.change?.hidden ?? []), ...(w.change?.added ?? [])].filter((x) => !x.fixed).map((x) => x.path).filter(quiet);
+  // What a click showed, hid, added, or wrote new text into (a panel whose text a tab replaces in place).
+  const changedBy = (w) => [...(w.change?.shown ?? []), ...(w.change?.hidden ?? []), ...(w.change?.added ?? []), ...(w.change?.text ?? [])].filter((x) => !x.fixed).map((x) => x.path).filter(quiet);
   // Panels the same click does not close again (tabs, category chips) switch content too.
   const switching = widgets.filter((w) => w.opensOn === 'click' && (w.kind === 'tabs' || w.kind === 'carousel' || (w.kind === 'disclosure' && !w.closes)));
   const sets = new Map();

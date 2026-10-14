@@ -236,7 +236,10 @@ function readClickState(opts) {
       const pinned = cs.position === 'fixed' || cs.position === 'sticky';
       const moved = !pinned && (tf !== 'none' || cs.translate !== 'none' || el.scrollLeft > 0) ? `${tf} ${cs.translate} ${el.scrollLeft}` : '';
       const v = visible(el);
-      map.set(el, { v, a: attrs, c: typeof el.className === 'string' ? el.className : '', m: moved, ...(keepPaths && v && { p: pathOf(el) }) });
+      // Its own text (not its children's): a tab that writes another text into the same panel changes nothing else.
+      let t = '';
+      for (const c of el.childNodes) if (c.nodeType === 3) t += c.data;
+      map.set(el, { v, a: attrs, c: typeof el.className === 'string' ? el.className : '', m: moved, t: t.replace(/s+/g, ' ').trim(), ...(keepPaths && v && { p: pathOf(el) }) });
     }
     return map;
   };
@@ -253,6 +256,7 @@ function readClickState(opts) {
   const moved = [];
   const added = [];
   const removed = [];
+  const texts = [];
   for (const [el, b] of before) {
     const a = after.get(el);
     if (!a) {
@@ -263,6 +267,7 @@ function readClickState(opts) {
     else if (b.v && !a.v) hidden.push(el);
     if (b.a !== a.a || b.c !== a.c) attrs.push({ el, from: b.a, to: a.a, classFrom: b.c, classTo: a.c });
     if (b.m !== a.m) moved.push({ el, from: b.m, to: a.m });
+    if (b.v && a.v && b.t !== a.t) texts.push(el);
   }
   for (const [el, a] of after) if (!before.has(el) && a.v) added.push(el);
   // Only the outermost changed elements: a panel, not every line inside it.
@@ -285,6 +290,7 @@ function readClickState(opts) {
     added: roots(added).slice(0, 6).map(describe),
     attrs: attrs.slice(0, 12).map((x) => ({ path: pathOf(x.el), from: x.from, to: x.to, classFrom: x.classFrom.slice(0, 120), classTo: x.classTo.slice(0, 120), isTrigger: x.el === trigger })),
     moved: moved.filter((x) => x.el.getBoundingClientRect().width >= 100).slice(0, 6).map((x) => ({ path: pathOf(x.el), from: x.from, to: x.to })),
+    text: roots(texts).filter((el) => !(trigger && trigger.contains(el))).slice(0, 8).map(describe),
     url: location.href,
     viewport: [innerWidth, innerHeight],
   };
@@ -478,7 +484,9 @@ export function controlsInPlace(list) {
     return parts.reverse().join('>');
   };
   const els = window.__sasClick?.els ?? [];
-  return list.every(({ i, path }) => els[i] && els[i].isConnected && pathOf(els[i]) === path);
+  // Still there, at the same place, and still drawn: a page that answers a click by showing another copy of the area and
+  // hiding the one clicked in (a set of states) leaves the old controls in the page, but no visitor can click them.
+  return list.every(({ i, path }) => els[i] && els[i].isConnected && pathOf(els[i]) === path && els[i].getClientRects().length > 0);
 }
 
 /** Page function: clears every pending timeout and interval of the page (timer ids are consecutive numbers). */
@@ -515,6 +523,7 @@ export function withoutNoise(d, noise) {
     added: d.added.filter((x) => quiet(x.path)),
     moved: d.moved.filter((x) => quiet(x.path)),
     attrs: d.attrs.filter((x) => quiet(x.path)),
+    text: (d.text ?? []).filter((x) => quiet(x.path)),
   };
 }
 
@@ -541,7 +550,7 @@ export function samePage(a, b) {
   }
 }
 
-const empty = (d) => !d || (!d.shown.length && !d.hidden.length && !d.added.length && !d.moved.length && !d.attrs.length);
+const empty = (d) => !d || (!d.shown.length && !d.hidden.length && !d.added.length && !d.moved.length && !d.attrs.length && !(d.text?.length));
 const visibleChange = (d) => d && (d.shown.length || d.hidden.length || d.added.length);
 const parentOf = (p) => (p ? p.slice(0, p.lastIndexOf('>')) : null);
 
@@ -571,6 +580,8 @@ export function classifyClick(d, { text = '', group = null, triggerPath = null }
     const outside = [...opened, ...closed];
     return { kind: 'disclosure', targets: outside.map((x) => x.path).slice(0, 6) };
   }
+  // Content written in place (a tab that replaces the text of one panel instead of showing another): a set of states.
+  if (d.text?.length) return { kind: group && group.count >= 2 ? 'tabs' : 'disclosure', targets: d.text.map((x) => x.path).slice(0, 6) };
   // Only attributes / classes changed (a toggle that changes its own look, a switch): recorded, nothing to rebuild yet.
   if (d.attrs.length) return { kind: 'state', targets: d.attrs.filter((a) => !a.isTrigger).map((a) => a.path).slice(0, 4), ...(triggerPath && { trigger: triggerPath }) };
   return null;
@@ -835,5 +846,6 @@ function compact(d) {
     added: d.added.map(slim),
     attrs: d.attrs.map(({ path, from, to, isTrigger }) => ({ path, from, to, ...(isTrigger && { isTrigger }) })),
     moved: d.moved,
+    ...(d.text?.length && { text: d.text.map(slim) }),
   };
 }

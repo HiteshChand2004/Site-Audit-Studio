@@ -29,6 +29,15 @@ export function hoverBudgetFor(oldMotion) {
   const probed = oldMotion?.stats?.probed ?? 0;
   return Math.max(HOVER_BUDGET_MS, Math.min(HOVER_BUDGET_MAX_MS, probed * HOVER_MS_PER_PROBE));
 }
+/**
+ * The click budget the copy needs to try every control the original's click probe tried (~1.5 s each: aim, click, settle,
+ * read, put back), 10 s to a minute a page; none when the original had no control to click.
+ */
+export const CLICK_MS_PER_PROBE = 1500;
+export function clickBudgetFor(oldMotion) {
+  const probed = oldMotion?.clicks?.stats?.probed ?? 0;
+  return probed ? Math.max(10000, Math.min(60000, probed * CLICK_MS_PER_PROBE)) : 0;
+}
 // The recreated site is served from loopback with nothing else to load: a quiet network shows within a second (was 3 s).
 const NETWORK_QUIET_MS = 1000;
 
@@ -44,6 +53,7 @@ export async function readOldMotion(recreateFolder, reportPages, excluded = []) 
       const gone = excluded.filter((e) => !e.page || e.page === p.path).map((e) => e.path).filter(Boolean);
       const kept = (h) => !gone.some((x) => h.path === x || String(h.path ?? '').startsWith(`${x}>`));
       if (gone.length) for (const kind of ['hover', 'focus']) if (Array.isArray(motion[kind])) motion[kind] = motion[kind].filter(kept);
+      if (gone.length && Array.isArray(motion.clicks?.widgets)) motion.clicks.widgets = motion.clicks.widgets.filter((w) => kept({ path: w.trigger }));
       out.set(p.slug, motion);
     } catch { /* not captured for this page */ }
   }
@@ -74,8 +84,8 @@ export async function measureNewMotion({ origin, pages, deadline = Infinity, sig
         await page.waitForLoadState('networkidle', { timeout: NETWORK_QUIET_MS }).catch(() => {});
         const measured = await Promise.race([
           // No focus pass: the comparison (motionItems) reads reveals, loops and hover only; the hover probe keeps its time.
-          measureMotion(page, { budgetMs: p.hoverBudgetMs ?? HOVER_BUDGET_MS, focus: false }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), PAGE_BUDGET_MS + Math.max(0, (p.hoverBudgetMs ?? HOVER_BUDGET_MS) - HOVER_BUDGET_MS))),
+          measureMotion(page, { budgetMs: p.hoverBudgetMs ?? HOVER_BUDGET_MS, focus: false, clickBudgetMs: p.clickBudgetMs ?? 0 }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), PAGE_BUDGET_MS + Math.max(0, (p.hoverBudgetMs ?? HOVER_BUDGET_MS) - HOVER_BUDGET_MS) + (p.clickBudgetMs ?? 0))),
         ]);
         result.pages.set(p.slug, measured);
       } catch (err) {
@@ -266,6 +276,48 @@ export function hoverDifferences(was, now) {
   return out;
 }
 
+// ---- clicks: what each control does (capture/clicks.js on both sides) ----------------------------------------------
+
+/** A control as a visitor names it: its visible text (or label), lower case, no white space. */
+export const clickKey = (w) => String(w?.text ?? '').toLowerCase().replace(/\s+/g, '').slice(0, 40) || `${w?.tag ?? ''}#unnamed`;
+const CLOSES = { toggle: 'a second click', escape: 'Escape', outside: 'a click outside' };
+
+/**
+ * What a control of the copy does differently from the same control of the original: it does nothing, it does not close
+ * again the way the original's did (a second click, Escape, a click outside), or it keeps several items open where the
+ * original kept one at a time (or the other way round).
+ * @returns {string[]}
+ */
+export function clickDifferences(was, now) {
+  if (!now) {
+    // On the original this click only took something away (the open answer of a FAQ closing): say that, not just "nothing".
+    const closesOnly = (was.change?.hidden?.length ?? 0) > 0 && !(was.change?.shown?.length || was.change?.added?.length);
+    return [closesOnly ? 'clicking it does not close what it closes on the original' : 'does nothing in the copy'];
+  }
+  const out = [];
+  if (was.closes && was.closes !== now.closes) {
+    out.push(`${CLOSES[was.closes] ?? was.closes} does not close it again (it does on the original)`);
+  }
+  if (was.exclusive === true && now.exclusive === false) out.push('several items stay open (the original keeps one open at a time)');
+  if (was.exclusive === false && now.exclusive === true) out.push('opening one closes the others (the original keeps them open)');
+  return out;
+}
+
+/** Pairs every control of the original with the copy's control of the same name that behaves most alike. */
+export function compareClicks(oldWidgets = [], newWidgets = []) {
+  const byKey = new Map();
+  for (const w of newWidgets) byKey.set(clickKey(w), [...(byKey.get(clickKey(w)) ?? []), w]);
+  const rows = [];
+  for (const was of oldWidgets) {
+    const twins = byKey.get(clickKey(was)) ?? [];
+    let pick = -1;
+    for (let i = 0; i < twins.length; i++) if (pick < 0 || clickDifferences(was, twins[i]).length < clickDifferences(was, twins[pick]).length) pick = i;
+    const now = pick >= 0 ? twins.splice(pick, 1)[0] : null;
+    rows.push({ was, now, diff: clickDifferences(was, now) });
+  }
+  return rows;
+}
+
 const tone = (ratio) => (ratio >= 0.9 ? 'pass' : ratio >= 0.5 ? 'open' : 'regressed');
 const row = (key, title, ratio, before, after, note) => ({
   key, category: 'motion', title, preset: tone(ratio),
@@ -346,6 +398,28 @@ export function motionItems(oldPages, newPages) {
       { detail: `${plural(o.hover.length, 'element')} change on hover (colour, shadow, movement, …).`, count: o.hover.length },
       { detail: `${matched} of them react on the recreated site${matched ? ` (${matchedHover.agree} with the same changes)` : ''}.`, count: matched },
       ratio < 0.9 ? 'Hover effects driven by script (they add or remove elements) are not reproduced.' : null));
+  }
+  // Clicks: every control the original's click probe found is clicked on the copy the same way, and the two compared.
+  const clicks = { total: 0, same: 0, differences: [] };
+  for (const slug of both) {
+    const was = oldPages.get(slug)?.clicks?.widgets ?? [];
+    const now = newPages.get(slug)?.clicks?.widgets;
+    if (!was.length || !now) continue; // not measured on the copy: no verdict either way
+    for (const r of compareClicks(was, now)) {
+      clicks.total++;
+      if (!r.diff.length) clicks.same++;
+      else if (clicks.differences.length < 12) clicks.differences.push({ page: slug, element: `${r.was.tag ?? ''} "${String(r.was.text ?? '').slice(0, 30)}"`, kind: r.was.kind, diff: r.diff });
+    }
+  }
+  if (clicks.total) {
+    const ratio = clicks.same / clicks.total;
+    const shown = clicks.differences.slice(0, 3).map((d) => `${d.element}: ${d.diff[0]}`).join('; ');
+    items.push({
+      ...row('motion.clicks', 'Click interactions kept', ratio,
+        { detail: `${plural(clicks.total, 'control')} open, switch or move something when clicked (menus, FAQ answers, tabs, dialogs, …).`, count: clicks.total },
+        { detail: `${clicks.same} of them do the same on the recreated site, and close again the same way.${shown ? ` Differs: ${shown}.` : ''}`, count: clicks.same }),
+      differences: clicks.differences,
+    });
   }
   // Parts that change by themselves (capture/feeds.js): each one the original had is paired with one of the copy that
   // changes at about the same pace (within max(150 ms, 25 %)) - the copy must keep changing after it loaded, not only

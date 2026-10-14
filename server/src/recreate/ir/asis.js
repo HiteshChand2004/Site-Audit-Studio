@@ -345,6 +345,13 @@ const isStateCopy = (n) => Boolean(n.tpl) || ('data-w-set' in (n.attrs ?? {}) &&
 // What a part is decides first; a <template> (`tpl`) is only how a state or a hovered look waits to be shown.
 const copyKind = (n) => COPY_ATTRS[Object.keys(COPY_ATTRS).find((k) => k in (n.attrs ?? {}))] ?? (isStateCopy(n) ? 'states' : null);
 
+/** The visible text of an IR node and everything in it, white space collapsed. */
+const deepText = (n) => {
+  if (!n) return '';
+  if ('text' in n) return n.text;
+  return (n.children ?? []).map(deepText).join(' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+};
+
 /** What a state attribute needs to exist in the copy: a set, a panel, a message, a hover card. */
 function needOf(k, v, cpath) {
   const value = String(v ?? '');
@@ -400,6 +407,10 @@ export function asisExtras(irBody, cpathOf, build, notCarried) {
   const transfer = (x, node) => {
     const base = x.sid != null ? cpathOf.get(x.sid) : null;
     const rel = new Map();
+    // An element of a state captured without paths of its own (a state with no hover effects of its own keeps none) is
+    // found by what it is instead: its tag and its text, in order - "What is it?" is that question's button in any state.
+    const looks = new Map();
+    const look = (n) => `${n.t}|${deepText(n)}`;
     const collect = (n, top) => {
       if (!n || 'text' in n) return;
       if (!top && copyKind(n)) return; // a part nested inside this one: not carried
@@ -407,6 +418,7 @@ export function asisExtras(irBody, cpathOf, build, notCarried) {
       const own = Object.entries(n.attrs ?? {}).filter(([k]) => CARRY.test(k) || STATE.test(k) || (top && k === 'hidden'));
       const key = top ? '' : base && p?.startsWith(`${base}>`) ? p.slice(base.length) : null;
       if (own.length && key != null) rel.set(key, Object.fromEntries(own));
+      else if (own.length && !top) looks.set(look(n), [...(looks.get(look(n)) ?? []), Object.fromEntries(own)]);
       for (const c of n.children ?? []) collect(c, false);
     };
     collect(x, true);
@@ -414,7 +426,7 @@ export function asisExtras(irBody, cpathOf, build, notCarried) {
     const put = (n) => {
       if (!n || 'text' in n) return;
       const key = n.cpath === rootPath ? '' : n.cpath?.startsWith(`${rootPath}>`) ? n.cpath.slice(rootPath.length) : null;
-      const attrs = key != null ? rel.get(key) : null;
+      const attrs = (key != null ? rel.get(key) : null) ?? (key !== '' ? looks.get(look(n))?.shift() : null);
       if (attrs) {
         if (n.t === 'svg') carryInto({ t: 'x', children: [n] }, new Map([[n.cpath, attrs]]));
         else n.attrs = { ...n.attrs, ...attrs };
