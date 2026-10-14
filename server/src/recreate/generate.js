@@ -34,7 +34,6 @@ import { CSS_FILE } from './emit/css.js';
 import { SWEEP_WIDTHS } from './capture/sweep.js';
 import { REFINE_PAGES, refineResponsive } from './verify/refine.js';
 import { applyAsIs } from './ir/asis.js';
-import { assetKey } from './assets/collect.js';
 
 export const FIT_ROUNDS = 2;
 // The fit pass stops starting new rounds this long before the step's time limit.
@@ -222,15 +221,25 @@ async function addSocialImages(site, ctx, assetsDir) {
 
 /**
  * Canvases (a WebGL scene, a chart, a particle field): what they draw comes from a script the copy never carries, so they
- * cannot be rebuilt. Each one is reported as unsupported, and instead of an empty box the copy shows the frame the capture
- * saw (cut from the page's own full screenshot, behind the canvas as its background) - a still picture, said to be one.
- * A copy kept as is (exact mode) has its canvases reported, without the frame: its markup is the original's.
+ * cannot be rebuilt. Each one is reported as unsupported, and instead of an empty box the copy shows what the capture saw:
+ * the frame (cut from the page's own full screenshot) and, for one that kept drawing, the recording of it as a looping
+ * picture (capture/loops.js recordCanvasLoop) - behind the canvas as its background, the loop only for a visitor who does
+ * not ask for less motion. A recording, not a reproduction: a canvas that reacts to the visitor does not react in the copy.
+ * Both are a motion token (`cN`), so an as-is (exact) page - which keeps the original markup - gets them too.
  * @returns {Promise<{ files: object[], canvases: object[] }>}
  */
 async function addCanvasFrames(site, motionByPath, ctx, assetsDir) {
   const files = [];
   const canvases = [];
-  const map = ctx.assets?.map;
+  const rules = [];
+  const keep = async (body, name, generated) => {
+    const sha256 = createHash('sha256').update(body).digest('hex');
+    const file = `images/${name}-${sha256.slice(0, 10)}.webp`;
+    await mkdir(path.join(assetsDir, 'images'), { recursive: true });
+    await writeFile(path.join(assetsDir, file), body);
+    files.push({ file, kind: 'image', mime: 'image/webp', bytes: body.length, sha256, urls: [], generated });
+    return file;
+  };
   for (const t of site.pages) {
     const found = motionByPath.get(t.info.path)?.loops?.canvas ?? [];
     if (!found.length) continue;
@@ -243,10 +252,11 @@ async function addCanvasFrames(site, motionByPath, ctx, assetsDir) {
     walk(t.root);
     const full = path.join(ctx.dir, 'capture', t.info.slug, 'desktop-full.webp');
     for (const c of found) {
-      const entry = { page: t.info.path, path: c.path, context: c.context, animated: c.animated ?? null, cover: c.cover, stillFrame: false };
+      const entry = { page: t.info.path, path: c.path, context: c.context, animated: c.animated ?? null, cover: c.cover, stillFrame: false, recordedLoop: false };
       canvases.push(entry);
       const node = byPath.get(c.path);
-      if (!node || node.tag !== 'canvas' || !map || site.asIs) continue;
+      if (!node || node.tag !== 'canvas') continue;
+      const rule = { token: `c${rules.length + 1}` };
       try {
         const meta = await sharp(full).metadata();
         const [x, y, w, h] = c.rect;
@@ -254,29 +264,28 @@ async function addCanvasFrames(site, motionByPath, ctx, assetsDir) {
         const top = Math.max(0, y);
         const width = Math.min(w, meta.width - left);
         const height = Math.min(h, meta.height - top);
-        if (width < 8 || height < 8) continue;
-        const body = await sharp(full).extract({ left, top, width, height }).webp({ quality: 85 }).toBuffer();
-        const sha256 = createHash('sha256').update(body).digest('hex');
-        const file = `images/canvas-${t.info.slug}-${sha256.slice(0, 10)}.webp`;
-        await mkdir(path.join(assetsDir, 'images'), { recursive: true });
-        await writeFile(path.join(assetsDir, file), body);
-        files.push({ file, kind: 'image', mime: 'image/webp', bytes: body.length, sha256, urls: [], generated: 'canvas-frame' });
-        // Through the asset map like any picture of the site, so the stylesheet points at the local file.
-        const url = `https://canvas-frame.invalid/${file}`;
-        map[assetKey(url)] = file;
-        for (const d of Object.values(node.views ?? {})) {
-          if (!d?.style || d.hidden) continue;
-          d.style['background-image'] = `url("${url}")`;
-          d.style['background-size'] = '100% 100%';
-          d.style['background-repeat'] = 'no-repeat';
+        if (width >= 8 && height >= 8) {
+          rule.still = await keep(await sharp(full).extract({ left, top, width, height }).webp({ quality: 85 }).toBuffer(), `canvas-${t.info.slug}`, 'canvas-frame');
+          entry.stillFrame = true;
         }
-        entry.stillFrame = true;
       } catch {
-        // no picture to cut it from: reported all the same
+        // no picture to cut it from
       }
+      if (c.loop?.file) {
+        try {
+          rule.loop = await keep(await readFile(path.join(ctx.dir, 'capture', t.info.slug, c.loop.file)), `canvas-loop-${t.info.slug}`, 'canvas-loop');
+          entry.recordedLoop = true;
+          entry.loop = { frames: c.loop.frames, delayMs: c.loop.delayMs, seamless: c.loop.seamless };
+        } catch {
+          // the recording was not kept: the still frame stands
+        }
+      }
+      if (!rule.still && !rule.loop) continue;
+      rules.push(rule);
+      node.motionTokens = [...new Set([...(node.motionTokens ?? []), rule.token])];
     }
   }
-  return { files, canvases };
+  return { files, canvases, rules };
 }
 
 // New files of the site's own (responsive images) join the downloaded ones: the build, the exports to other stacks and a
@@ -387,13 +396,17 @@ export async function generateStage(ctx) {
   // Canvases: reported as not reproducible, shown as the frame the capture saw (never an empty box passed off as copied).
   const frames = await addCanvasFrames(site, motionByPath, ctx, assetsDir);
   if (frames.files.length) await addToManifest(assetsDir, frames.files, known, ctx.assets);
+  if (frames.rules.length) {
+    site.motion = { version: MOTION_VERSION, hover: [], focus: [], reveal: [], delays: [], loops: [], widgets: [], states: 0, notices: 0, panels: 0, hoverCards: 0, scrolled: [], script: false, ...site.motion, canvas: frames.rules };
+  }
   if (frames.canvases.length) {
     report.motion = { ...report.motion, unsupported: { ...report.motion?.unsupported, canvas: frames.canvases } };
     const moving = frames.canvases.filter((c) => c.animated).length;
+    const looped = frames.canvases.filter((c) => c.recordedLoop).length;
     report.manual.push({
       area: 'Animation',
       title: `${frames.canvases.length} canvas drawing(s) cannot be rebuilt`,
-      detail: `What a canvas draws (a WebGL scene, a chart, particles) comes from the site's own script, which the copy does not carry.${moving ? ` ${moving} of them keep moving on the original;` : ''} the copy shows the frame the capture saw, as a still picture.`,
+      detail: `What a canvas draws (a WebGL scene, a chart, particles) comes from the site's own script, which the copy does not carry.${moving ? ` ${moving} of them keep moving on the original.` : ''} The copy shows the frame the capture saw${looped ? `, and ${looped} of them play a recording of what they drew as a looping picture (not interactive)` : ''}.`,
       count: frames.canvases.length,
     });
   }

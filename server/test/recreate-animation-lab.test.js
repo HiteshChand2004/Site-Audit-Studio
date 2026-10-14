@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { readFile, rm } from 'node:fs/promises';
+import sharp from 'sharp';
 import path from 'node:path';
 import { db, projectDir } from '../src/db/index.js';
 import { launchBrowser } from '../src/audit/render.js';
@@ -38,6 +39,8 @@ export const ITEMS = [
   { label: 'FEED', kind: 'timer (inserted elements)', expect: 'text' },
   { label: 'SMIL', kind: 'svg (SMIL animateTransform)', expect: 'moves' },
   { label: 'SVG ATTR', kind: 'svg (attribute set by script)', expect: 'moves' },
+  { label: 'WANDER', kind: 'script (no repeating pattern)', expect: 'moves' },
+  { label: 'SLOW LOOP', kind: 'script (a 14 s loop)', expect: 'moves' },
 ];
 
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -77,7 +80,11 @@ canvas { display: block; margin: 0 auto }
   <div class="cell"><svg width="300" height="130" viewBox="0 0 300 130"><g><animateTransform attributeName="transform" type="rotate" from="0 150 65" to="360 150 65" dur="3s" repeatCount="indefinite"/><rect x="110" y="45" width="80" height="40" fill="#7c3aed"/><text x="128" y="70" fill="#fff" font-size="12">SMIL</text></g></svg></div>
   <div class="cell"><svg width="300" height="130" viewBox="0 0 300 130"><text id="svgtext" x="40" y="70" font-size="14">SVG ATTR</text></svg></div>
   <div class="cell"><canvas id="cv" width="280" height="120"></canvas></div>
+  <div class="cell"><div class="box" id="wander">WANDER</div></div>
+  <div class="cell"><div class="box" id="slow">SLOW LOOP</div></div>
+  <div class="cell"><div class="box" id="par" style="background:#0e7490">PARALLAX</div></div>
 </div>
+<section style="height:1800px;background:linear-gradient(#fff,#e2e8f0)"><p style="padding:24px">More of the page, to scroll through.</p></section>
 <script>
 document.getElementById('slide').animate([{ transform: 'translateX(-60px)' }, { transform: 'translateX(60px)' }], { duration: 1200, iterations: Infinity, direction: 'alternate', easing: 'ease-in-out' });
 document.getElementById('wdot').animate([{ opacity: 1 }, { opacity: 0.1 }], { duration: 700, iterations: Infinity, direction: 'alternate', pseudoElement: '::after' });
@@ -98,6 +105,19 @@ var t0 = performance.now(), deg = 0, x = 0;
   cx.fillStyle = '#e2e8f0'; cx.fillRect(0, 0, 280, 120); cx.fillStyle = '#0ea5e9'; cx.fillRect(20 + 200 * (0.5 + 0.5 * Math.sin(t * 2)), 40, 40, 40);
   requestAnimationFrame(frame);
 })(t0);
+var wander = document.getElementById('wander'), slow = document.getElementById('slow'), par = document.getElementById('par');
+(function frame2(now) {
+  var t = (now - t0) / 1000;
+  // Two waves out of step (no common period within the watch): motion with no repeating pattern.
+  wander.style.transform = 'translate(' + (50 * Math.sin(t * 1.3) + 25 * Math.sin(t * 3.71 + 1)) + 'px, ' + (18 * Math.sin(t * 2.17)) + 'px)';
+  // One back-and-forth every 14 s: longer than a short recording.
+  slow.style.transform = 'translateX(' + (90 * Math.sin((t * 2 * Math.PI) / 14)) + 'px)';
+  requestAnimationFrame(frame2);
+})(t0);
+// Tied to the scroll position: a layer that slides as the page scrolls.
+var onScroll = function () { par.style.transform = 'translateY(' + Math.round(window.scrollY * 0.25) + 'px)'; };
+window.addEventListener('scroll', onScroll, { passive: true });
+onScroll();
 var n = 0; setInterval(function () { document.getElementById('count').textContent = String(++n); }, 500);
 var k = 3; setInterval(function () { var li = document.createElement('li'); li.textContent = 'FEED item ' + (++k); var f = document.getElementById('feed'); f.insertBefore(li, f.firstChild); if (f.children.length > 4) f.removeChild(f.lastElementChild); }, 700);
 </script></body></html>`;
@@ -229,8 +249,25 @@ for (const mode of ['normal', 'exact']) {
       await page.goto(url, { waitUntil: 'load' });
       await page.waitForTimeout(800);
       const traces = await page.evaluate(watchLabels, { labels });
+      // The canvas over time: does it keep changing (a recording of what it drew), or stand still?
+      const shot = async () => sharp(await page.locator('canvas').first().screenshot()).resize({ width: 96 }).removeAlpha().raw().toBuffer();
+      const c1 = await shot().catch(() => null);
+      await page.waitForTimeout(700);
+      const c2 = await shot().catch(() => null);
+      const canvasMoves = Boolean(c1 && c2 && c1.length === c2.length && c1.some((v, i) => Math.abs(v - c2[i]) > 24));
+      // The scroll-linked layer at three scroll positions, in page coordinates.
+      const parallax = [];
+      for (const share of [0, 0.5, 1]) {
+        await page.evaluate((s) => window.scrollTo(0, Math.round((document.documentElement.scrollHeight - innerHeight) * s)), share);
+        await page.waitForTimeout(350);
+        parallax.push(await page.evaluate(() => {
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          for (let n = walker.nextNode(); n; n = walker.nextNode()) if (n.textContent.includes('PARALLAX')) return Math.round(n.parentElement.getBoundingClientRect().top + scrollY);
+          return null;
+        }));
+      }
       await context.close();
-      return Object.fromEntries(Object.entries(traces).map(([k, v]) => [k, summarizeTrace(v)]));
+      return { traces: Object.fromEntries(Object.entries(traces).map(([k, v]) => [k, summarizeTrace(v)])), canvasMoves, parallax };
     };
     let original;
     let copy;
@@ -242,14 +279,23 @@ for (const mode of ['normal', 'exact']) {
     }
     const failures = [];
     for (const item of ITEMS) {
-      const o = original[item.label];
+      const o = original.traces[item.label];
       assert.ok(o.found && (o.moves || o.styleStates >= 3 || o.textStates >= 3 || o.opacityRange > 0.1), `the fixture's ${item.label} must animate on the original: ${JSON.stringify(o)}`);
-      const why = matches(item, o, copy[item.label]);
-      if (why) failures.push(`${item.label} (${item.kind}): ${why} — ${diagnose(item, motion, report)} | original ${JSON.stringify(o)} copy ${JSON.stringify(copy[item.label])}`);
+      const why = matches(item, o, copy.traces[item.label]);
+      if (why) failures.push(`${item.label} (${item.kind}): ${why} — ${diagnose(item, motion, report)} | original ${JSON.stringify(o)} copy ${JSON.stringify(copy.traces[item.label])}`);
     }
-    // The canvas cannot be rebuilt without its script: it must be reported, and shown as a still frame, not left blank.
+    // Scroll-linked: at the same scroll positions the layer is where the original's was (within 25 % of its travel).
+    const travel = Math.abs(original.parallax[2] - original.parallax[0]);
+    assert.ok(travel > 100, `the fixture's parallax layer must move with the scroll: ${JSON.stringify(original.parallax)}`);
+    const off = copy.parallax.map((p, i) => Math.abs((p ?? -9999) - original.parallax[i]));
+    if (off.some((d) => d > travel * 0.25)) {
+      failures.push(`PARALLAX (scroll-linked): copy ${JSON.stringify(copy.parallax)} vs original ${JSON.stringify(original.parallax)} — capture: ${JSON.stringify(motion.scrollLinked?.elements?.map((e) => e.path) ?? null)}; IR: ${JSON.stringify(report.generate?.motion?.scrollLinked ?? null)}`);
+    }
+    // The canvas cannot be rebuilt without its script: reported, and showing a recording of what it drew, not a still box.
     const canvas = report.motion?.unsupported?.canvas ?? [];
     if (!canvas.length || !canvas[0].animated) failures.push(`canvas: not reported as unsupported (${JSON.stringify(report.motion?.unsupported ?? null)})`);
+    else if (!canvas[0].recordedLoop) failures.push(`canvas: no recording of what it drew (${JSON.stringify(canvas[0])})`);
+    if (original.canvasMoves && !copy.canvasMoves) failures.push('canvas: stands still in the copy while the original keeps drawing');
     assert.deepEqual(failures, [], `\n${failures.join('\n')}`);
   });
 }

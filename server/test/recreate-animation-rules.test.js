@@ -76,3 +76,36 @@ test('a pseudo-element loop runs on that pseudo-element in the copy, inside redu
   assert.match(css, /\[data-motion~="l1"\]::after \{\s*animation: m-l1 700ms linear infinite alternate;/);
   assert.match(css, /prefers-reduced-motion: no-preference/);
 });
+
+test('motion with no pattern keeps its recorded trace, played forward and back (approximate)', async () => {
+  const { analyzeSeries: analyze, TRACE_POINTS } = await import('../src/recreate/capture/loops.js');
+  // Back a little, then away: it turns once, so no period can be read - the shape of a wander or of a slow loop seen in part.
+  const a = analyze(series(2200, (t) => ({ translate: `${40 * t * t - 30 * t}px 0px` })));
+  assert.equal(a.pattern, 'move');
+  assert.equal(a.trace.points.length, TRACE_POINTS);
+  const built = scriptLoop({ pattern: 'move', params: a });
+  assert.equal(built.approximate, 'recorded-path');
+  assert.equal(built.timing.direction, 'alternate', 'forward and back, so it never jumps');
+  assert.match(built.keyframes[0].props.translate, /^0px 0px$/);
+});
+
+test('scroll-linked samples: channels relative to the top, and a reading that is not reversible is no effect of the scroll', async () => {
+  const { analyzeScrollSamples, channelsOf } = await import('../src/recreate/capture/scrolllinked.js');
+  assert.deepEqual(channelsOf('matrix(1, 0, 0, 1, 0, 120)|0.5|none|none|none|none'), { x: 0, y: 120, rot: 0, scale: 1, opacity: 0.5, filter: null });
+  const reading = (y) => `matrix(1, 0, 0, 1, 0, ${y})|1|none|none|none|none`;
+  const out = analyzeScrollSamples({ max: 2000, ys: [0, 1000, 2000], elements: [{ path: 'body>div:1', tag: 'div', rect: [0, 0, 10, 10], values: [reading(0), reading(250), reading(500)] }] });
+  assert.deepEqual(out[0].channels, ['y']);
+  assert.deepEqual(out[0].samples.map((s) => [s.at, s.y]), [[0, 0], [0.5, 250], [1, 500]]);
+});
+
+test('a scroll-linked loop is paused and scrubbed by --sas-sp; a canvas shows its frame and plays its recording only with motion allowed', () => {
+  const css = motionCss({
+    hover: [], focus: [], reveal: [], delays: [], widgets: [],
+    loops: [{ token: 'l1', name: 'm-l1', scrub: true, keyframes: [{ offset: 0, props: { translate: '0px 0px' } }, { offset: 100, props: { translate: '0px 500px' } }], timing: { duration: 1000, delay: 0, iterations: 1, direction: 'normal', fill: 'both', easing: 'linear' } }],
+    canvas: [{ token: 'c1', still: 'images/canvas-index-aaaa.webp', loop: 'images/canvas-loop-index-bbbb.webp' }],
+  }, { from: 'index.html' });
+  assert.match(css, /\[data-motion~="l1"\] \{\s*animation: m-l1 1000ms linear both paused;\s*animation-delay: calc\(var\(--sas-sp, 0\) \* -1000ms\);/);
+  const [before, after] = css.split('prefers-reduced-motion: no-preference) {\n  [data-motion~="c1"]');
+  assert.match(before, /\[data-motion~="c1"\] \{[^}]*canvas-index-aaaa\.webp/, 'the frame, always');
+  assert.ok(after && /canvas-loop-index-bbbb\.webp/.test(after), 'the recording, only where motion is allowed');
+});

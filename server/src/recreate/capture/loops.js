@@ -412,6 +412,28 @@ const median = (xs) => {
   return s.length ? (s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2) : 0;
 };
 
+/** Points of a recorded trace: enough to follow it, few enough for a small @keyframes block. */
+export const TRACE_POINTS = 16;
+
+/**
+ * A recorded movement as TRACE_POINTS evenly spaced samples relative to where it started: time (ms from the start), x, y,
+ * rotation, scale, opacity - and which of them changed at all.
+ * @returns {{ durationMs: number, channels: string[], points: number[][] }}
+ */
+export function traceOf(ch) {
+  const t0 = ch[0].t;
+  const durationMs = Math.max(1, ch[ch.length - 1].t - t0);
+  const at = (t) => ch.reduce((best, c) => (Math.abs(c.t - t) < Math.abs(best.t - t) ? c : best), ch[0]);
+  const pts = Array.from({ length: TRACE_POINTS }, (_, i) => at(t0 + (durationMs * i) / (TRACE_POINTS - 1)));
+  const range = (k) => Math.max(...ch.map((c) => c[k])) - Math.min(...ch.map((c) => c[k]));
+  const channels = [['x', 2], ['y', 2], ['rot', 1], ['scale', 0.01], ['opacity', 0.02]].filter(([k, min]) => range(k) >= min).map(([k]) => k);
+  return {
+    durationMs: Math.round(durationMs),
+    channels,
+    points: pts.map((c) => [Math.round(c.t - t0), round(c.x - ch[0].x, 1), round(c.y - ch[0].y, 1), round(c.rot - ch[0].rot, 1), round(c.scale / (ch[0].scale || 1), 3), round(c.opacity, 3)]),
+  };
+}
+
 /** Points of a path per period: enough for a smooth loop, few enough for a small @keyframes block. */
 export const PATH_POINTS = 12;
 
@@ -485,7 +507,9 @@ export function analyzeSeries(series) {
     const path = other && Math.max(...ch.map((c) => c[other])) - Math.min(...ch.map((c) => c[other])) >= 3 ? periodPath(ch, periodMs) : null;
     return { pattern: 'oscillate', channel: key, unit, range: round(range), amplitude: round(range / 2), periodMs, min: round(Math.min(...vs), 3), max: round(Math.max(...vs), 3), ...(path && { path }) };
   }
-  return { pattern: 'move', channel: key, unit, range: round(range) };
+  // No pattern (it wanders, or its loop is longer than what was watched): the trace itself, a few points, is what the copy
+  // can play - back and forth, so it never jumps (ir/motion.js scriptLoop, reported as approximate).
+  return { pattern: 'move', channel: key, unit, range: round(range), ...(ch.length >= 8 && { trace: traceOf(ch) }) };
 }
 
 /**
@@ -570,6 +594,61 @@ export function listCanvases({ max = 8 } = {}) {
   return out;
 }
 
+/** A canvas that keeps drawing is recorded for at most this long, a frame about every CANVAS_FRAME_MS, this wide. */
+export const CANVAS_RECORD_MS = 4000;
+export const CANVAS_FRAME_MS = 120;
+export const CANVAS_LOOP_WIDTH = 480;
+const MAX_LOOPED_CANVASES = 3;
+
+/** Share of pixels that differ between two raw frames of the same size (a channel moved by more than 24). */
+function frameDiff(a, b) {
+  if (a.info.width !== b.info.width || a.info.height !== b.info.height) return 1;
+  const px = a.info.width * a.info.height;
+  let changed = 0;
+  for (let i = 0; i < px; i++) {
+    const o = i * a.info.channels;
+    for (let k = 0; k < a.info.channels; k++) {
+      if (Math.abs(a.data[o + k] - b.data[o + k]) > 24) {
+        changed++;
+        break;
+      }
+    }
+  }
+  return changed / px;
+}
+
+/**
+ * What a canvas draws over a few seconds, as a looping animated picture: frames of the element, the loop closed at the
+ * frame most like the first one when one is close enough (a scene that repeats loops seamlessly), else played forward and
+ * back (no jump at the seam). The canvas's own script is what drew it, and the copy has none: this is a recording of it,
+ * reported as such, never a reproduction - and a canvas that reacts to the visitor does not react in the copy.
+ * @returns {Promise<{ webp: Buffer, frames: number, delayMs: number, seamless: boolean } | null>}
+ */
+export async function recordCanvasLoop(locator, sharp, { ms = CANVAS_RECORD_MS, every = CANVAS_FRAME_MS, width = CANVAS_LOOP_WIDTH } = {}) {
+  const pngs = [];
+  const times = [];
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    const shot = await locator.screenshot({ timeout: 5000, animations: 'allow' });
+    pngs.push(await sharp(shot).resize({ width, withoutEnlargement: true }).png().toBuffer());
+    times.push(Date.now() - t0);
+    await new Promise((r) => setTimeout(r, every));
+  }
+  if (pngs.length < 6) return null;
+  const raws = await Promise.all(pngs.map((p) => sharp(p).resize({ width: 96 }).removeAlpha().raw().toBuffer({ resolveWithObject: true })));
+  // The loop's end: the frame most like the first, at least a third of the way in.
+  let best = { k: -1, diff: 1 };
+  for (let k = Math.max(4, Math.floor(raws.length / 3)); k < raws.length; k++) {
+    const d = frameDiff(raws[0], raws[k]);
+    if (d < best.diff) best = { k, diff: d };
+  }
+  const seamless = best.k > 0 && best.diff < 0.02;
+  const frames = seamless ? pngs.slice(0, best.k) : [...pngs, ...pngs.slice(1, -1).reverse()];
+  const delayMs = Math.max(40, Math.round(times[times.length - 1] / Math.max(1, times.length - 1)));
+  const webp = await sharp(frames, { join: { animated: true } }).webp({ quality: 70, delay: frames.map(() => delayMs), loop: 0 }).toBuffer();
+  return { webp, frames: frames.length, delayMs, seamless };
+}
+
 /**
  * The canvases of a page and whether each keeps drawing: two pictures of it 700 ms apart, compared pixel by pixel
  * (downscaled; a channel moved by more than 24 = changed). Never throws: a canvas that cannot be photographed is listed
@@ -599,6 +678,14 @@ export async function captureCanvases(page) {
         }
       }
       c.animated = changed / px > 0.002;
+      // One that keeps drawing is recorded as a loop (written beside the capture by capture/index.js).
+      if (c.animated && list.filter((x) => x.loopWebp).length < MAX_LOOPED_CANVASES) {
+        const loop = await recordCanvasLoop(el, sharp).catch(() => null);
+        if (loop) {
+          c.loopWebp = loop.webp;
+          c.loop = { frames: loop.frames, delayMs: loop.delayMs, seamless: loop.seamless, bytes: loop.webp.length };
+        }
+      }
     } catch {
       // left without `animated`: listed all the same
     }
@@ -612,7 +699,7 @@ export async function captureCanvases(page) {
  * Reads the continuous motion of a page (desktop view). Never throws for a page function failing: the part that failed is left out.
  * @param {import('playwright').Page} page
  */
-export async function captureLoops(page, { script = true, recordMs = 2200 } = {}) {
+export async function captureLoops(page, { script = true, recordMs = 2200, slowWatchMs = SLOW_WATCH_MS } = {}) {
   const scan = await page.evaluate(scanAnimations, {}).catch(() => ({ items: [], total: 0, definedKeyframes: [] }));
   const found = script ? await page.evaluate(findScriptLoops, { recordMs }).catch(() => null) : null;
   // A small, slow one-way move that never turned in the short recording is often a shape floating up and down over
@@ -629,10 +716,13 @@ export async function captureLoops(page, { script = true, recordMs = 2200 } = {}
       const span = ch.length ? ch[ch.length - 1] - ch[0] : 0;
       if (a.periodMs > span) return true;
     }
-    return (a?.pattern === 'drift' || a?.pattern === 'move') && !a.wrap && (a.channel === 'x' || a.channel === 'y') && a.range < SLOW_MOVER_PX;
+    // Movement with no pattern in the short recording (it turned once, or wanders): watched longer, so a slow loop shows
+    // its period - and what still has none is rebuilt from the longer trace (ir/motion.js, approximate).
+    if (a?.pattern === 'move') return true;
+    return a?.pattern === 'drift' && !a.wrap && (a.channel === 'x' || a.channel === 'y') && a.range < SLOW_MOVER_PX;
   }).slice(0, 12);
   if (slow.length) {
-    const longer = await page.evaluate(recordPaths, { paths: slow.map((c) => c.path), ms: SLOW_WATCH_MS }).catch(() => null);
+    const longer = await page.evaluate(recordPaths, { paths: slow.map((c) => c.path), ms: slowWatchMs, every: Math.max(50, Math.round(slowWatchMs / 200)) }).catch(() => null);
     slow.forEach((c, i) => {
       if (longer?.[i]?.length >= 8) c.series = longer[i];
     });

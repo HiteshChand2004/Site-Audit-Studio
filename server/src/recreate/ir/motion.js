@@ -465,6 +465,23 @@ export function scriptLoop(loop, node) {
     const o = (n) => String(Math.round(Math.min(1, Math.max(0, n)) * 1000) / 1000);
     return { keyframes: [{ offset: 0, props: { opacity: o(p.min) } }, { offset: 100, props: { opacity: o(p.max) } }], timing: { duration: Math.round(p.periodMs / 2), delay: 0, iterations: 'infinite', direction: 'alternate', fill: 'none', easing: 'ease-in-out' } };
   }
+  // Movement with no pattern the recording could name (it wanders, or its loop is longer than what was watched): the
+  // recorded trace itself, played forward and back so it never jumps. An approximation of the original's motion, marked
+  // as one (`approximate`), never a claim to have found its rule.
+  if (loop.pattern === 'move' && p.trace?.points?.length >= 4 && p.trace.channels?.length && p.trace.durationMs >= 400) {
+    const { points, channels, durationMs } = p.trace;
+    const props = ([, x, y, rot, scale, opacity]) => ({
+      ...((channels.includes('x') || channels.includes('y')) && { translate: `${r1(x)}px ${r1(y)}px` }),
+      ...(channels.includes('rot') && { rotate: `${r1(rot)}deg` }),
+      ...(channels.includes('scale') && { scale: String(scale) }),
+      ...(channels.includes('opacity') && { opacity: String(opacity) }),
+    });
+    return {
+      approximate: 'recorded-path',
+      keyframes: points.map((pt) => ({ offset: Math.round((pt[0] / durationMs) * 10000) / 100, props: props(pt) })),
+      timing: { duration: Math.round(durationMs), delay: 0, iterations: 'infinite', direction: 'alternate', fill: 'none', easing: 'linear' },
+    };
+  }
   // A ticker moved by script: its items repeat, so it slides by one repeat at the same speed, then starts over (seamless).
   // What the recording measured comes first; without it the tree is asked how far one repeat of the strip is (irRepeat).
   if (loop.pattern === 'drift' && (p.channel === 'x' || p.channel === 'y') && p.rate > 1) {
@@ -887,6 +904,12 @@ export function applyMotion(site, byPath) {
         stats.loops.skipped.push({ pattern: loop.pattern, reason: loop.source === 'script' ? 'script-driven' : 'no-keyframes' });
         continue;
       }
+      // Rebuilt from the recorded trace, not from a rule: counted apart, so the report can say which loops are approximate.
+      if (built.approximate) {
+        stats.loops.approximated = (stats.loops.approximated ?? 0) + 1;
+        const { approximate: _a, ...rest } = built;
+        built = rest;
+      }
       if (built.keyframes.some((k) => Object.values(k.props).some((v) => /url\(/i.test(v)))) {
         stats.loops.skipped.push({ pattern: loop.pattern, reason: 'url-in-keyframes' });
         continue;
@@ -906,6 +929,54 @@ export function applyMotion(site, byPath) {
         svgTokens.push({ page: tree.info.outPath, path: loop.path, token: entry.token });
       } else tokenize(node, entry.token);
       stats.loops.rebuilt++;
+    }
+
+    // Effects tied to the scroll position (capture/scrolllinked.js): keyframes over the page's scroll range (0 = top,
+    // 1 = bottom), relative to the pose the element was captured in at the top; js/motion.js keeps `--sas-sp` on <html>
+    // at the page's scroll progress and the paused animation is scrubbed to it. Whatever drove it on the original (a CSS
+    // scroll timeline, ScrollTrigger scrub, useScroll), the copy has one mechanism, in every browser.
+    for (const e of motion.scrollLinked?.elements ?? []) {
+      const sl = (stats.scrollLinked ??= { rebuilt: 0, skipped: {} });
+      const skip = (why) => { sl.skipped[why] = (sl.skipped[why] ?? 0) + 1; };
+      const node = nodes.get(e.path);
+      if (!node) {
+        skip('unmapped');
+        continue;
+      }
+      // Kept by the original's own stylesheet in an as-is copy; a bar with scroll states has its own path (below).
+      if (e.declared && site.asIs) {
+        skip('carried');
+        continue;
+      }
+      if (node.views?.desktop?.scrolled) {
+        skip('scroll-state');
+        continue;
+      }
+      const base = e.samples[0];
+      const keyframes = e.samples.map((s) => ({
+        offset: Math.round(s.at * 10000) / 100,
+        props: {
+          ...((e.channels.includes('x') || e.channels.includes('y')) && { translate: `${r1(s.x - base.x)}px ${r1(s.y - base.y)}px` }),
+          ...(e.channels.includes('rot') && { rotate: `${r1(s.rot - base.rot)}deg` }),
+          ...(e.channels.includes('scale') && { scale: String(Math.round((s.scale / (base.scale || 1)) * 1000) / 1000) }),
+          ...(e.channels.includes('opacity') && Number.isFinite(s.opacity) && { opacity: String(s.opacity) }),
+          ...(e.channels.includes('filter') && s.filter && { filter: s.filter }),
+        },
+      })).filter((k, i, all) => i === 0 || k.offset > all[i - 1].offset);
+      if (keyframes.length < 2) {
+        skip('flat');
+        continue;
+      }
+      const built = { keyframes, timing: { duration: 1000, delay: 0, iterations: 1, direction: 'normal', fill: 'both', easing: 'linear' }, scrub: true };
+      const key = JSON.stringify(built);
+      let entry = reg.loops.find((l) => l.key === key);
+      if (!entry) {
+        entry = { key, token: `l${reg.loops.length + 1}`, name: `m-l${reg.loops.length + 1}`, ...built };
+        reg.loops.push(entry);
+      }
+      tokenize(node, entry.token);
+      node.stateAttrs = { ...node.stateAttrs, 'data-w-scrub': '' };
+      sl.rebuilt++;
     }
 
     // Scroll states of fixed / sticky bars (capture/scrollstate.js): past `at` the bar gets `is-scrolled` (js/motion.js) and the
@@ -1132,7 +1203,8 @@ export function applyMotion(site, byPath) {
     // The generated script is needed for the reveal (IntersectionObserver), the click widgets, the switched states, the
     // scroll states, the panels a click opens (dialogs the page only renders when open) and the hover cards (their
     // hovered look waits in a <template> until first pointed at); hover, focus and loops are CSS.
-    script: reveal.length > 0 || stats.pointer.followers > 0 || widgets.some((w) => !w.on) || stateSets > 0 || scrolled.length > 0 || notices > 0 || panels > 0 || hoverCards > 0,
+    // (Scroll-linked effects too: the script keeps the page's scroll progress, which they are scrubbed to.)
+    script: reveal.length > 0 || stats.pointer.followers > 0 || widgets.some((w) => !w.on) || stateSets > 0 || scrolled.length > 0 || notices > 0 || panels > 0 || hoverCards > 0 || loops.some((l) => l.scrub),
   } : null;
   return { motion, stats };
 }

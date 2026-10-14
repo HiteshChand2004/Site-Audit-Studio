@@ -144,6 +144,25 @@ export const MOTION_JS = `(function () {
   // translate property, so a transform of its own stays as it is. Nothing under reduced motion, nothing for touch.
   var followers = document.querySelectorAll('[data-w-follow]');
   var calmMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // Effects tied to the scroll position (data-w-scrub, capture/scrolllinked.js): their paused animations are scrubbed to
+  // --sas-sp, the page's scroll progress (0 at the top, 1 at the bottom), kept here once per frame while scrolling.
+  if (document.querySelector('[data-w-scrub]') && !calmMotion) {
+    var spPending = false;
+    var spUpdate = function () {
+      spPending = false;
+      var room = document.documentElement.scrollHeight - window.innerHeight;
+      var p = room > 0 ? Math.min(1, Math.max(0, window.scrollY / room)) : 0;
+      document.documentElement.style.setProperty('--sas-sp', String(Math.round(p * 10000) / 10000));
+    };
+    var spQueue = function () {
+      if (spPending) return;
+      spPending = true;
+      requestAnimationFrame(spUpdate);
+    };
+    window.addEventListener('scroll', spQueue, { passive: true });
+    window.addEventListener('resize', spQueue);
+    spUpdate();
+  }
   if (followers.length && !calmMotion) {
     var trail = [];
     for (var f = 0; f < followers.length; f++) {
