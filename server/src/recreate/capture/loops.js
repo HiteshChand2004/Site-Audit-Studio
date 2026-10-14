@@ -483,7 +483,8 @@ export function analyzeSeries(series) {
       const w = wraps.length ? { distance: round(Math.abs(wraps.map((i) => diffs[i]).reduce((a, b) => a + b, 0) / wraps.length)) } : undefined;
       let periodMs;
       if (wraps.length >= 2) periodMs = Math.round((ch[wraps[wraps.length - 1] + 1].t - ch[wraps[0] + 1].t) / (wraps.length - 1));
-      return { pattern: 'drift', ...out, ...(w && { wrap: w }), ...(periodMs && { periodMs }) };
+      // Without a wrap the copy may find no period to slide by (ir/motion.js): the trace is kept as the fallback.
+      return { pattern: 'drift', ...out, ...(w && { wrap: w }), ...(periodMs && { periodMs }), ...(!w && ch.length >= 8 && { trace: traceOf(ch) }) };
     }
     return { pattern: 'ramp', ...out };
   }
@@ -719,7 +720,9 @@ export async function captureLoops(page, { script = true, recordMs = 2200, slowW
     // Movement with no pattern in the short recording (it turned once, or wanders): watched longer, so a slow loop shows
     // its period - and what still has none is rebuilt from the longer trace (ir/motion.js, approximate).
     if (a?.pattern === 'move') return true;
-    return a?.pattern === 'drift' && !a.wrap && (a.channel === 'x' || a.channel === 'y') && a.range < SLOW_MOVER_PX;
+    // One way with no wrap and no repeating items: a ticker would have shown one or the other, so it may be a slow loop
+    // caught on its way in one direction (whatever its size) - watched longer too.
+    return a?.pattern === 'drift' && !a.wrap && !c.repeat && (a.channel === 'x' || a.channel === 'y');
   }).slice(0, 12);
   if (slow.length) {
     const longer = await page.evaluate(recordPaths, { paths: slow.map((c) => c.path), ms: slowWatchMs, every: Math.max(50, Math.round(slowWatchMs / 200)) }).catch(() => null);

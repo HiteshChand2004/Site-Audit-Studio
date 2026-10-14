@@ -89,6 +89,17 @@ test('motion with no pattern keeps its recorded trace, played forward and back (
   assert.match(built.keyframes[0].props.translate, /^0px 0px$/);
 });
 
+test('a slow loop seen going one way only (a drift with no wrap and no repeat) keeps moving as its trace', () => {
+  const a = analyzeSeries(series(2200, (t) => ({ translate: `${25 * t}px 0px` })));
+  assert.equal(a.pattern, 'drift');
+  assert.ok(!a.wrap, 'no wrap was seen');
+  assert.ok(a.trace?.points?.length >= 4, 'the recording keeps its trace');
+  const built = scriptLoop({ pattern: 'drift', params: a });
+  assert.ok(built, 'rebuilt, not skipped as script-driven');
+  assert.equal(built.approximate, 'recorded-path');
+  assert.equal(built.timing.direction, 'alternate');
+});
+
 test('scroll-linked samples: channels relative to the top, and a reading that is not reversible is no effect of the scroll', async () => {
   const { analyzeScrollSamples, channelsOf } = await import('../src/recreate/capture/scrolllinked.js');
   assert.deepEqual(channelsOf('matrix(1, 0, 0, 1, 0, 120)|0.5|none|none|none|none'), { x: 0, y: 120, rot: 0, scale: 1, opacity: 0.5, filter: null });

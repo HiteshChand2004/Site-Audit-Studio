@@ -468,20 +468,7 @@ export function scriptLoop(loop, node) {
   // Movement with no pattern the recording could name (it wanders, or its loop is longer than what was watched): the
   // recorded trace itself, played forward and back so it never jumps. An approximation of the original's motion, marked
   // as one (`approximate`), never a claim to have found its rule.
-  if (loop.pattern === 'move' && p.trace?.points?.length >= 4 && p.trace.channels?.length && p.trace.durationMs >= 400) {
-    const { points, channels, durationMs } = p.trace;
-    const props = ([, x, y, rot, scale, opacity]) => ({
-      ...((channels.includes('x') || channels.includes('y')) && { translate: `${r1(x)}px ${r1(y)}px` }),
-      ...(channels.includes('rot') && { rotate: `${r1(rot)}deg` }),
-      ...(channels.includes('scale') && { scale: String(scale) }),
-      ...(channels.includes('opacity') && { opacity: String(opacity) }),
-    });
-    return {
-      approximate: 'recorded-path',
-      keyframes: points.map((pt) => ({ offset: Math.round((pt[0] / durationMs) * 10000) / 100, props: props(pt) })),
-      timing: { duration: Math.round(durationMs), delay: 0, iterations: 'infinite', direction: 'alternate', fill: 'none', easing: 'linear' },
-    };
-  }
+  if (loop.pattern === 'move') return traceLoop(p.trace);
   // A ticker moved by script: its items repeat, so it slides by one repeat at the same speed, then starts over (seamless).
   // What the recording measured comes first; without it the tree is asked how far one repeat of the strip is (irRepeat).
   if (loop.pattern === 'drift' && (p.channel === 'x' || p.channel === 'y') && p.rate > 1) {
@@ -497,8 +484,30 @@ export function scriptLoop(loop, node) {
         timing: { duration: Math.round((period / p.rate) * 1000), delay: 0, iterations: 'infinite', direction: 'normal', fill: 'none', easing: 'linear' },
       };
     }
+    // One way with no period anywhere (a slow loop caught going one way, even after the longer watch): its trace.
+    return traceLoop(p.trace);
   }
   return null;
+}
+
+/**
+ * A recorded trace (capture/loops.js traceOf) as a loop played forward and back, so it never jumps: the motion as it was
+ * seen, not a rule behind it - marked `approximate` (counted in the report). Null without a usable trace.
+ */
+function traceLoop(trace) {
+  if (!(trace?.points?.length >= 4 && trace.channels?.length && trace.durationMs >= 400)) return null;
+  const { points, channels, durationMs } = trace;
+  const props = ([, x, y, rot, scale, opacity]) => ({
+    ...((channels.includes('x') || channels.includes('y')) && { translate: `${r1(x)}px ${r1(y)}px` }),
+    ...(channels.includes('rot') && { rotate: `${r1(rot)}deg` }),
+    ...(channels.includes('scale') && { scale: String(scale) }),
+    ...(channels.includes('opacity') && { opacity: String(opacity) }),
+  });
+  return {
+    approximate: 'recorded-path',
+    keyframes: points.map((pt) => ({ offset: Math.round((pt[0] / durationMs) * 10000) / 100, props: props(pt) })),
+    timing: { duration: Math.round(durationMs), delay: 0, iterations: 'infinite', direction: 'alternate', fill: 'none', easing: 'linear' },
+  };
 }
 
 // The scale / move of a captured transform (a computed matrix, or a scale() / translate() a minifier wrote).
