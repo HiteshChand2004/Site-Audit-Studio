@@ -276,7 +276,6 @@ export function dropHiddenVariants(node, view) {
   return dropped;
 }
 
-const LANDMARKS = { navigation: 'nav', banner: 'header', contentinfo: 'footer', main: 'main', complementary: 'aside' };
 const sameRect = (a, b) => a && b && a.every((x, i) => Math.abs(x - b[i]) <= 1);
 const BLOCKISH = new Set(['block', 'flow-root', 'list-item']);
 
@@ -291,10 +290,9 @@ export function cleanTree(node, views = VIEW_IDS, parentDisplay = 'block') {
   for (let i = 0; i < node.children.length; i++) {
     const c = node.children[i];
     if (!isElement(c)) continue;
-    if (c.tag === 'div' && LANDMARKS[c.attrs.role]) {
-      c.tag = LANDMARKS[c.attrs.role];
-      delete c.attrs.role;
-    }
+    // The original's tag and role stay (CLONER_SPEC Phase 3: preserve semantics): a div with role="navigation" already
+    // is a navigation landmark, and a tag the site's own selectors name must not change under them. (Turning such
+    // landmarks into nav / header / … returns as a guarded optimisation, verified against the computed styles.)
     const inner = c.children.filter(isElement);
     const plain =
       (c.tag === 'div' || c.tag === 'span') &&

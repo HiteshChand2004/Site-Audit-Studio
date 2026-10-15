@@ -40,8 +40,8 @@ export function applyTreeFixes(site, { audit, skipped = [], axe = null, extraBro
   for (const [key, b] of extraBroken) if (!broken.has(key)) broken.set(key, b);
   const out = { wordpress, names: { fixed: [], open: [] }, alt: { fixed: [], decorative: [] }, headings: [], links: [], loading: { priority: [], lazy: 0, lazyFrames: 0, unfaded: 0 }, sprites: 0, layouts: 0, faded: [], contrast: { fixed: [], open: [] } };
   for (const t of site.pages) {
-    // As is: a dead link keeps its href (unlinking it changes the markup the original has).
-    if (!asIs) out.links.push(...fixBrokenLinks(t, broken, site.origin));
+    // A dead link keeps its tag and href in every copy (CLONER_SPEC decision 5); it is reported, never unlinked.
+    out.links.push(...fixBrokenLinks(t, broken, site.origin));
     const names = fixNames(t, { pageUrl: t.info.url, resolveLink: site.resolveLink, pageTitles, siteName: site.siteName.value });
     out.names.fixed.push(...names.fixed);
     out.names.open.push(...names.open);
@@ -93,8 +93,10 @@ export function fixReport(tree, irFixes) {
   const names = tree.names;
   const alt = tree.alt;
   if (tree.links.length) {
-    fixes.push(entry('broken-links', 'Broken links unlinked', tree.links, {
-      detail: 'Links whose target the audit found broken keep their text but no longer link. Restore them once the target exists.',
+    // Reported, not changed: every one of them stays open (the link is the original's; fix the target, not the copy).
+    fixes.push(entry('broken-links', 'Broken links kept and reported', [], {
+      open: tree.links,
+      detail: 'Links whose target the audit found broken are kept exactly as the original has them. Fix or remove the target, then check again.',
     }));
   }
   if (alt.fixed.length || alt.decorative.length) {

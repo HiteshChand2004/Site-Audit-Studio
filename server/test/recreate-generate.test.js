@@ -130,7 +130,9 @@ test('duplicate Desktop / Tablet / Phone copies merge into one element restyled 
   assert.deepEqual(['desktop', 'tablet', 'mobile'].map((v) => merged.views[v].hidden), [false, false, false]);
   assert.equal(stats.wrappersRemoved, 2);
   assert.equal(root.children[1].tag, 'p');
-  assert.equal(root.children[2].tag, 'footer');
+  // The original's tag and role stay (CLONER_SPEC Phase 3): a div with role="contentinfo" is not turned into <footer>.
+  assert.equal(root.children[2].tag, 'div');
+  assert.equal(root.children[2].attrs.role, 'contentinfo');
   assert.equal(deepText(root), 'Our services We design and build websites. Note Footer');
 });
 
@@ -582,9 +584,10 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
 
   // 4a.5 — fixers.
   const fix = Object.fromEntries(report.fixes.map((f) => [f.id, f]));
-  assert.match(work, /<span class="[\w-]+">Archive<\/span>/); // broken link unlinked: plain text, no <a> left without href
-  assert.ok(!/<a(?![^>]*\shref=)[^>]*>Archive/.test(work));
-  assert.deepEqual(fix['broken-links'].items.map((i) => [i.page, new URL(i.url).pathname, i.status]), [['/', '/cart', 404], ['/work.html', '/old-work.html', 404]]); // /cart does not exist on the fixture: a broken link (it used to hide behind the "needs a backend" skip)
+  // A broken link is kept as the original has it (CLONER_SPEC decision 5) and reported, never unlinked.
+  assert.match(work, /<a class="[\w-]+" href="old-work\.html">Archive<\/a>/);
+  assert.equal(fix['broken-links'].status, 'open');
+  assert.deepEqual(fix['broken-links'].openItems.map((i) => [i.page, new URL(i.url).pathname, i.status, i.kept]), [['/', '/cart', 404, true], ['/work.html', '/old-work.html', 404, true]]); // /cart does not exist on the fixture: a broken link (it used to hide behind the "needs a backend" skip)
   assert.match(work, /<img[^>]* alt="Our studio in Lisbon"/);
   assert.match(work, /<a class="[\w-]+" aria-label="GitHub"(?: data-motion="[^"]*")? href="https:\/\/github\.com\/recreate-co">/);
   assert.match(work, /<button class="[\w-]+" type="button"><img[^>]* alt="Search"/);

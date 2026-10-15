@@ -94,15 +94,10 @@ export async function deadLinks(site, { known = new Map(), ms = 60000, check = c
   return out;
 }
 
-// Attributes that only mean something on a link; an unlinked element keeps none of them.
-const LINK_ONLY_ATTRS = ['href', 'target', 'rel', 'hreflang', 'download', 'ping', 'referrerpolicy', 'type', 'aria-label'];
-
 /**
- * Unlinks links to broken targets: the element becomes a <span> with the same text, classes and id, and
- * loses every link-only attribute. An <a> left without href is flagged by crawlers ("not crawlable"),
- * and aria-label is not allowed on a plain span. The stylesheet reset already renders a link like its
- * parent text (color, decoration, cursor), so the span looks the same.
- * @returns {object[]} the unlinked links
+ * Finds the links whose target is broken, for the report. They are kept exactly as the original has them (tag, href,
+ * text): CLONER_SPEC decision 5. (Until 2026-10-15 they were unlinked into a <span>.)
+ * @returns {object[]} the broken links, `kept: true`
  */
 export function fixBrokenLinks(t, broken, origin) {
   const fixed = [];
@@ -119,11 +114,10 @@ export function fixBrokenLinks(t, broken, origin) {
     }
     const hit = broken.get(urlKey(abs.href));
     if (!hit) return;
-    delete n.href;
-    for (const attr of LINK_ONLY_ATTRS) delete n.attrs[attr];
-    n.tag = 'span';
+    // Kept as it is and reported (CLONER_SPEC decision 5): the link, its tag and its href are the original's; unlinking it
+    // changed the markup, the cursor and what a click does, and a target may come back. Never a new destination.
     const text = n.children.filter(isText).map((c) => c.text).join(' ').replace(/\s+/g, ' ').trim();
-    fixed.push({ page: t.info.path, url: hit.url, status: hit.status, internal: new URL(hit.url).host.replace(/^www\./, '') === new URL(origin).host.replace(/^www\./, ''), text });
+    fixed.push({ page: t.info.path, url: hit.url, status: hit.status, internal: new URL(hit.url).host.replace(/^www\./, '') === new URL(origin).host.replace(/^www\./, ''), text, kept: true });
   });
   return fixed;
 }
