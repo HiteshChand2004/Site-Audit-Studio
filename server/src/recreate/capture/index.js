@@ -24,6 +24,7 @@ import { shapeCounts } from './selectorShape.js';
 import { attachType, probeTypography } from './typography.js';
 import { attachProbe, probeViewportHeight } from './viewport.js';
 import { animLogFile, installAnimLog, markProbePhase, readAnimLog, summarizeAnimLog } from './animlog.js';
+import { captureAppearElements } from '../behavior/framer/capture.js';
 import { asisFile, captureAsIs, markAsIs } from './asis.js';
 import { captureFeeds } from './feeds.js';
 import { capturePointer } from './pointer.js';
@@ -209,6 +210,8 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     lap('idle');
 
     const snapshot = await page.evaluate(snapshotPage, { exact });
+    // Which captured elements Framer's appear settings name (behavior/framer): their ids by the snapshot's own paths.
+    const appearElements = view.id === 'desktop' ? await captureAppearElements(page, dir).catch(() => 0) : 0;
     // How many interactive things this view has at all, with nothing filtered out: the denominator the probes'
     // own counts are missing (capture/census.js).
     const census = await page.evaluate(censusInteractive, {}).catch(() => null);
@@ -477,6 +480,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       ...(asis && { asis }),
       ...(motion && { motion }),
       ...(animLog && { animLog: { file: animLogFile(view.id), ...animLog } }),
+      ...(appearElements && { appearElements }),
       resources: data.resources,
       // The page's data requests that got no usable answer (its API or backend was not there): the page is still captured
       // as it rendered - with whatever empty or error state the site shows - and the report says its data was missing.

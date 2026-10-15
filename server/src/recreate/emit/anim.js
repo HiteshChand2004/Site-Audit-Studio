@@ -23,10 +23,13 @@ export const ANIM_DIR = 'js/anim';
 export const VENDOR_FILES = {
   [`${VENDOR_DIR}/gsap.min.js`]: path.join(GSAP_DIST, 'gsap.min.js'),
   [`${VENDOR_DIR}/ScrollTrigger.min.js`]: path.join(GSAP_DIST, 'ScrollTrigger.min.js'),
+  // The motion package's browser build (window.Motion), for Framer appear entrances (behavior/framer/emit.js). The
+  // package exports only its module entries, so the build is found next to the CommonJS one.
+  [`${VENDOR_DIR}/motion.js`]: path.join(path.dirname(require.resolve('motion')), '..', 'motion.js'),
 };
 const sha256 = (text) => createHash('sha256').update(text).digest('hex');
 const cache = new Map();
-const vendorText = (rel) => {
+export const vendorText = (rel) => {
   if (!cache.has(rel)) cache.set(rel, readFileSync(VENDOR_FILES[rel], 'utf8'));
   return cache.get(rel);
 };

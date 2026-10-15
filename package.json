@@ -19,5 +19,10 @@
   },
   "devDependencies": {
     "concurrently": "^9.1.2"
+  },
+  "overrides": {
+    "framer-motion": "13.4.6",
+    "motion-dom": "13.4.5",
+    "motion-utils": "13.3.0"
   }
 }

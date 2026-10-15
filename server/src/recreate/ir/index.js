@@ -604,6 +604,8 @@ export function buildIR(site, { asIs = false } = {}) {
       body,
       content: t.wp?.content ?? null,
       ...(t.anim && { anim: t.anim }),
+      // Framer appear entrances (behavior/framer/plan.js), run with the motion package; app stacks read the same data.
+      ...(t.appear && { appear: t.appear }),
       stats: { links: s.links, liveLinks: [...s.liveLinks].map(([url, reason]) => ({ url, reason })), forms: s.forms, droppedImages: t.droppedImages.length },
     };
   });
