@@ -22,6 +22,7 @@ import { checkScript, scanProject, scanSite } from '../src/recreate/verify/safet
 import { recreateDir } from '../src/recreate/workspace.js';
 import recreateRouter from '../src/routes/recreate.js';
 import { toolchainDir, toolchainStatus } from '../src/toolchains/index.js';
+import { seedProject } from './helpers/projects.js';
 
 const exists = (p) => access(p).then(() => true, () => false);
 const temps = [];
@@ -345,7 +346,7 @@ test('real export: static export, moved URLs, equivalence through the moves, hyd
     const id = randomUUID();
     projectIds.push(id);
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://www.example.com/', 'nextjs', 1, ?, ?)`).run(id, now, now);
+    seedProject(db, { id, name: 'p', url: 'https://www.example.com/', stack: 'nextjs', authorized: 1 });
     const recreateId = randomUUID();
     const dir = recreateDir(id, recreateId);
     await writeTree(dir, { 'assets/images/a.png': TINY_PNG, 'assets/manifest.json': JSON.stringify({ files: [{ file: 'images/a.png' }] }), 'ir/site.json': JSON.stringify(ir) });

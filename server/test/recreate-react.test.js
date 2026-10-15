@@ -22,6 +22,7 @@ import { checkScript, scanProject, scanSite } from '../src/recreate/verify/safet
 import { recreateDir } from '../src/recreate/workspace.js';
 import recreateRouter from '../src/routes/recreate.js';
 import { toolchainStatus } from '../src/toolchains/index.js';
+import { seedProject } from './helpers/projects.js';
 
 const exists = (p) => access(p).then(() => true, () => false);
 const temps = [];
@@ -302,7 +303,7 @@ test('real export: build, verify, equivalence with the HTML build, hydration', {
     const id = randomUUID();
     projectIds.push(id);
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://www.example.com/', 'react-vite', 1, ?, ?)`).run(id, now, now);
+    seedProject(db, { id, name: 'p', url: 'https://www.example.com/', stack: 'react-vite', authorized: 1 });
     const recreateId = randomUUID();
     const dir = recreateDir(id, recreateId);
     const known = new Set(['images/a.png']);
@@ -389,7 +390,7 @@ test('an emitter mistake is caught: a DOM that differs from the HTML build fails
     const id = randomUUID();
     projectIds.push(id);
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://x.test/', 'react-vite', 1, ?, ?)`).run(id, now, now);
+    seedProject(db, { id, name: 'p', url: 'https://x.test/', stack: 'react-vite', authorized: 1 });
     const recreateId = randomUUID();
     const dir = recreateDir(id, recreateId);
     await writeTree(dir, { 'assets/manifest.json': JSON.stringify({ files: [] }), 'ir/site.json': JSON.stringify(ir) });

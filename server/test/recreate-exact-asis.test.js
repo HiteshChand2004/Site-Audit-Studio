@@ -6,7 +6,8 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { launchBrowser } from '../src/audit/render.js';
-import { asisRefs, captureAsIs, cssRefs, recordSheetBodies, srcsetUrls } from '../src/recreate/capture/asis.js';
+import { asisRefs, captureAsIs, cssRefs, srcsetUrls } from '../src/recreate/capture/asis.js';
+import { tapContext } from '../src/audit/sharedCache.js';
 import { collectAssets } from '../src/recreate/assets/collect.js';
 
 const PORT = 4215;
@@ -61,7 +62,7 @@ before(async () => {
   await new Promise((resolve) => { server.listen(PORT, '127.0.0.1', resolve); });
   browser = await launchBrowser();
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-  const recorder = recordSheetBodies(context);
+  const recorder = tapContext(context, { sheets: true });
   const page = await context.newPage();
   await page.goto(`${ORIGIN}/`, { waitUntil: 'load' });
   read = await captureAsIs(page, recorder);

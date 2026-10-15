@@ -9,7 +9,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { launchBrowser } from '../src/audit/render.js';
 import { assetKey } from '../src/recreate/assets/collect.js';
-import { captureAsIs, recordSheetBodies } from '../src/recreate/capture/asis.js';
+import { captureAsIs } from '../src/recreate/capture/asis.js';
+import { tapContext } from '../src/audit/sharedCache.js';
 import { asisBody, asisCss, localizeCss, pageSheets, srcsetEntries } from '../src/recreate/ir/asis.js';
 import { createAssetResolver, createLinkResolver } from '../src/recreate/ir/links.js';
 import { emitPage } from '../src/recreate/emit/html.js';
@@ -68,7 +69,7 @@ before(async () => {
   await new Promise((resolve) => { server.listen(PORT, '127.0.0.1', resolve); });
   browser = await launchBrowser();
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-  const recorder = recordSheetBodies(context);
+  const recorder = tapContext(context, { sheets: true });
   const page = await context.newPage();
   await page.goto(`${ORIGIN}/`, { waitUntil: 'load' });
   asis = (await captureAsIs(page, recorder)).data;

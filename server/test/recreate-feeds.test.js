@@ -17,6 +17,7 @@ import { servePreview } from '../src/recreate/preview.js';
 import { captureFeeds, measureFeeds, nodeAt, paceOf } from '../src/recreate/capture/feeds.js';
 import { snapshotPage } from '../src/recreate/capture/snapshot.js';
 import { MOTION_JS } from '../src/recreate/emit/motionScript.js';
+import { seedProject } from './helpers/projects.js';
 
 process.env.SAS_ALLOW_LOCALHOST = '1';
 const PORT = 4224;
@@ -127,10 +128,7 @@ test('the built copy keeps changing after it loaded, at the measured pace, and o
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at) VALUES (?, 'feeds', ?, 'html', 1, -1, ?, ?)`).run(id, `${origin}/`, now, now);
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), id, now, now, JSON.stringify({ url: `${origin}/`, analyzedAt: now }));
-  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+  const project = seedProject(db, { id, name: 'feeds', url: `${origin}/`, stack: 'html', authorized: 1, recreatePages: -1, analysis: true });
   const recreateId = randomUUID();
   const stub = async () => {};
   const report = await runRecreate({
@@ -206,10 +204,7 @@ test('an ordinary (rebuilt) copy keeps changing too, at the same pace, its new r
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at) VALUES (?, 'feeds-rebuilt', ?, 'html', 1, 0, ?, ?)`).run(id, `${origin}/`, now, now);
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), id, now, now, JSON.stringify({ url: `${origin}/`, analyzedAt: now }));
-  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+  const project = seedProject(db, { id, name: 'feeds-rebuilt', url: `${origin}/`, stack: 'html', authorized: 1, recreatePages: 0, analysis: true });
   const recreateId = randomUUID();
   const stub = async () => {};
   await runRecreate({

@@ -8,6 +8,7 @@ import express from 'express';
 import { db, projectDir } from '../src/db/index.js';
 import screensRouter from '../src/routes/screens.js';
 import { pruneScreenshots } from '../src/audit/retention.js';
+import { seedAnalysis, seedProject } from './helpers/projects.js';
 
 const projectId = randomUUID();
 const analyses = Array.from({ length: 5 }, () => randomUUID());
@@ -19,11 +20,9 @@ const screens = (id) => path.join(projectDir(projectId), 'audit', id, 'screens')
 
 before(async () => {
   const now = Date.now();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'test', 'https://example.com/', 'html', 1, ?, ?)`)
-    .run(projectId, new Date(now).toISOString(), new Date(now).toISOString());
-  const insert = db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at) VALUES (?, ?, ?, 100, ?)`);
-  analyses.forEach((id, i) => insert.run(id, projectId, 'done', new Date(now + i * 1000).toISOString()));
-  insert.run(failed, projectId, 'failed', new Date(now + 9000).toISOString());
+  seedProject(db, { id: projectId, name: 'test', url: 'https://example.com/', stack: 'html', authorized: 1 });
+  analyses.forEach((id, i) => seedAnalysis(db, projectId, null, { id, at: new Date(now + i * 1000).toISOString(), finished: false }));
+  seedAnalysis(db, projectId, null, { id: failed, status: 'failed', at: new Date(now + 9000).toISOString(), finished: false });
   for (const id of [...analyses, failed]) {
     await mkdir(screens(id), { recursive: true });
     await writeFile(path.join(screens(id), 'desktop-fold.webp'), 'RIFF....WEBP');

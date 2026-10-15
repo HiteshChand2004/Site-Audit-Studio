@@ -18,6 +18,7 @@ import { applyTreeFixes } from '../src/recreate/fixers/index.js';
 import { userPolicy, withNetPolicy } from '../src/security/netGuard.js';
 import projectsRouter from '../src/routes/projects.js';
 import recreateRouter from '../src/routes/recreate.js';
+import { seedProject } from './helpers/projects.js';
 
 process.env.SAS_ALLOW_LOCALHOST = '1';
 process.env.SAS_KEEP_AWAKE = '0';
@@ -31,12 +32,7 @@ function makeProject({ exactMode = 0 } = {}) {
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`
-    INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, exact_mode, created_at, updated_at)
-    VALUES (?, 'test', 'https://example.com/', 'html', 1, -1, ?, ?, ?)
-  `).run(id, exactMode, now, now);
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), id, now, now, JSON.stringify({ url: 'https://example.com/', analyzedAt: now }));
+  seedProject(db, { id, name: 'test', url: 'https://example.com/', stack: 'html', authorized: 1, recreatePages: -1, exactMode, analysis: true });
   return db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
 }
 

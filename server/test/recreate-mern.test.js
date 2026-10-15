@@ -21,6 +21,7 @@ import { planZip } from '../src/recreate/export/zip.js';
 import { recreateDir } from '../src/recreate/workspace.js';
 import recreateRouter from '../src/routes/recreate.js';
 import { toolchainDir, toolchainStatus } from '../src/toolchains/index.js';
+import { seedProject } from './helpers/projects.js';
 
 const TEMPLATE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'recreate', 'emit', 'mern', 'template', 'server');
 const exists = (p) => access(p).then(() => true, () => false);
@@ -215,7 +216,7 @@ test('real export: client verified against the HTML build, server tests run, for
     const id = randomUUID();
     projectIds.push(id);
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://www.example.com/', 'mern', 1, ?, ?)`).run(id, now, now);
+    seedProject(db, { id, name: 'p', url: 'https://www.example.com/', stack: 'mern', authorized: 1 });
     const recreateId = randomUUID();
     const dir = recreateDir(id, recreateId);
     await writeTree(dir, { 'assets/images/a.png': TINY_PNG, 'assets/manifest.json': JSON.stringify({ files: [{ file: 'images/a.png' }] }), 'ir/site.json': JSON.stringify(ir) });

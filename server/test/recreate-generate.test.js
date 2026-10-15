@@ -19,6 +19,7 @@ import { runRecreate } from '../src/recreate/index.js';
 import { startPreview, stopPreview } from '../src/recreate/preview.js';
 import { recreateDir } from '../src/recreate/workspace.js';
 import { startFixtureServer } from './serve-fixture.js';
+import { seedAnalysis, seedProject } from './helpers/projects.js';
 
 process.env.SAS_ALLOW_LOCALHOST = '1';
 
@@ -346,8 +347,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at) VALUES (?, 'fixture', ?, 'html', 1, 4, ?, ?)`)
-    .run(id, `${origin}/`, now, now);
+  seedProject(db, { id, name: 'fixture', url: `${origin}/`, stack: 'html', authorized: 1, recreatePages: 4 });
   // The analysis detected WordPress (the fixture serves a small /wp-json/wp/v2/) and one broken link.
   const audit = {
     url: `${origin}/`,
@@ -355,8 +355,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
     techStack: [{ id: 'wordpress', name: 'WordPress', confidence: 90 }],
     brokenLinks: { checked: 10, broken: [{ url: `${origin}/old-work.html`, status: 404, foundOn: '/work.html' }], unverified: [] },
   };
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), id, now, now, JSON.stringify(audit));
+  seedAnalysis(db, id, audit);
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
   const recreateId = randomUUID();
   const report = await runRecreate({ project, recreateId, progress: () => {} });

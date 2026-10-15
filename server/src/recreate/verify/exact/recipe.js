@@ -9,7 +9,7 @@
 // The steps are below one screen on purpose (the capture's own scroll-through uses 0.85 screens for the same reason):
 // every element passes through the view, so lazy images load and scroll reveals run. The page is re-measured at every
 // step because loading content makes it grow.
-import { scrollToY } from '../../capture/index.js';
+import { scrollThrough, scrollToY } from '../../capture/index.js';
 
 /** Bumped when the recipe changes: a baseline captured by an older recipe is not comparable and is re-captured. */
 export const RECIPE_VERSION = 1;
@@ -96,27 +96,20 @@ export async function settleExact(page, slot, { cap = Infinity, deadline = Infin
     ]), FONTS_WAIT_MS)
     .catch(() => false);
 
-  const heightOf = () => page.evaluate(() => document.documentElement.scrollHeight);
-  const firstHeight = await heightOf();
-  let y = 0;
-  for (let i = 0; i < MAX_STEPS; i++) {
-    const height = await heightOf();
-    const end = Math.max(0, Math.min(height, cap) - slot.height);
-    if (y >= end) {
-      note.reachedBottom = true;
-      break;
-    }
-    const next = await scrollToY(page, Math.min(y + SCROLL_STEP_PX, end));
-    if (next <= y) break; // the page does not scroll any further, whatever its height says
-    y = next;
-    note.steps++;
-    await page.waitForTimeout(SCROLL_PAUSE_MS);
-    if (Date.now() - started > MAX_SCROLL_MS || Date.now() > deadline) {
-      note.stoppedBy = Date.now() > deadline ? 'deadline' : 'scroll-limit';
-      break;
-    }
-  }
-  if (note.steps === MAX_STEPS) note.stoppedBy ??= 'step-limit';
+  const firstHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+  const pass = await scrollThrough(page, {
+    step: SCROLL_STEP_PX,
+    viewportHeight: slot.height,
+    cap,
+    maxSteps: MAX_STEPS,
+    // Measured from the start of the recipe (the load and font waits count), as before the loop was shared.
+    maxMs: MAX_SCROLL_MS - (Date.now() - started),
+    deadline,
+    onStep: () => page.waitForTimeout(SCROLL_PAUSE_MS),
+  });
+  note.steps = pass.steps;
+  note.reachedBottom = pass.reachedBottom;
+  note.stoppedBy = pass.stoppedBy;
 
   await scrollToY(page, 0);
   await page.waitForTimeout(TOP_WAIT_MS);

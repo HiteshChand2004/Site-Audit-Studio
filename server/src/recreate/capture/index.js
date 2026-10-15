@@ -5,6 +5,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { USER_AGENT } from '../../audit/http.js';
 import { parallelism } from '../../audit/resources.js';
+import { tapContext } from '../../audit/sharedCache.js';
 import { encode, MAX_HEIGHT, MOBILE_UA } from '../../audit/screenshots.js';
 import { mapLimit } from '../../audit/util.js';
 import { RECREATE_VIEWS as VIEWS, viewsFor } from '../views.js';
@@ -22,7 +23,7 @@ import { FOREIGN_BUDGET_MS, foreignStyleText, harvestForeignStateRules } from '.
 import { shapeCounts } from './selectorShape.js';
 import { attachType, probeTypography } from './typography.js';
 import { attachProbe, probeViewportHeight } from './viewport.js';
-import { asisFile, captureAsIs, markAsIs, recordSheetBodies } from './asis.js';
+import { asisFile, captureAsIs, markAsIs } from './asis.js';
 import { captureFeeds } from './feeds.js';
 import { capturePointer } from './pointer.js';
 
@@ -35,6 +36,8 @@ const STATES_BUDGET_MS ={ min: 30000, max: 100000, perControl: 4000 }; // 24 car
 export { VIEWS };
 const firstLine = (err) => String(err?.message ?? err).split('\n')[0].trim();
 export const captureDir = (workspace, slug) => path.join(workspace, 'capture', slug);
+/** The job's network record (audit/sharedCache.js createRecordStore). A dot name: no page slug can start with one. */
+export const networkDir = (workspace) => path.join(workspace, 'capture', '.network');
 // How long a page gets to fire its load event after the document arrived.
 const LOAD_WAIT = 20000;
 // How far down the page the scroll-through goes. The screenshot stops at MAX_HEIGHT (8000 px), but the scroll must
@@ -86,6 +89,43 @@ export async function scrollToY(page, target) {
 }
 
 /**
+ * The one scroll-through loop (the capture's `settle` and the exact recipe's `settleExact` both use it): real wheel
+ * steps of `step` px down to min(page height, `cap`) minus the window, until the page stops moving or a limit is hit.
+ * `onStep(n)` runs after each step (a dwell, a pause). Does not return to the top; the caller decides how.
+ * @param {import('playwright').Page} page
+ * @param {{ step: number, viewportHeight: number, cap?: number, maxSteps?: number, maxMs?: number, deadline?: number,
+ *   onStep?: (n: number) => Promise<void> }} o
+ * @returns {Promise<{ steps: number, maxY: number, reachedBottom: boolean, stoppedBy: string|null }>}
+ */
+export async function scrollThrough(page, { step, viewportHeight, cap = Infinity, maxSteps = 80, maxMs = Infinity, deadline = Infinity, onStep }) {
+  const started = Date.now();
+  let y = 0;
+  let maxY = 0;
+  let steps = 0;
+  let reachedBottom = false;
+  let stoppedBy = null;
+  for (let i = 0; i < maxSteps; i++) {
+    const height = await page.evaluate(() => document.documentElement.scrollHeight);
+    const end = Math.max(0, Math.min(height, cap) - viewportHeight);
+    if (y >= end) {
+      reachedBottom = true;
+      break;
+    }
+    const next = await scrollToY(page, Math.min(y + step, end));
+    if (next <= y) break; // the page does not scroll any further, whatever its height says
+    y = next;
+    maxY = Math.max(maxY, y);
+    await onStep?.(steps++);
+    if (Date.now() - started > maxMs || Date.now() > deadline) {
+      stoppedBy = Date.now() > deadline ? 'deadline' : 'scroll-limit';
+      break;
+    }
+  }
+  if (steps === maxSteps) stoppedBy ??= 'step-limit';
+  return { steps, maxY, reachedBottom, stoppedBy };
+}
+
+/**
  * Scrolls through the page in steps below one viewport (so every element passes through the view),
  * lets the reveal tracker record each step, then returns to the top and pins revealed content.
  * @returns {Promise<{ revealed: number, pinned: number, stacked: number, scrolled: number }>}
@@ -94,20 +134,12 @@ export async function settle(page, view, cap, { observe = false } = {}) {
   await page.evaluate(installRevealTracker, { observe });
   // Near the left edge: less likely over an element with its own scroll area (carousels, maps).
   await page.mouse.move(Math.min(20, view.width / 4), Math.round(view.height / 2)).catch(() => {});
-  const step = Math.max(400, Math.floor(view.height * 0.85));
-  let y = 0;
-  let max = 0;
-  let steps = 0;
-  for (let i = 0; i < 80; i++) {
-    const height = await page.evaluate(() => document.documentElement.scrollHeight);
-    const end = Math.max(0, Math.min(height, cap) - view.height);
-    if (y >= end) break;
-    const next = await scrollToY(page, Math.min(y + step, end));
-    if (next <= y) break; // the page does not scroll any further
-    y = next;
-    max = Math.max(max, y);
-    await page.evaluate((n) => window.__sasReveal.dwell(n), steps++);
-  }
+  const { maxY: max } = await scrollThrough(page, {
+    step: Math.max(400, Math.floor(view.height * 0.85)),
+    viewportHeight: view.height,
+    cap,
+    onStep: (n) => page.evaluate((i) => window.__sasReveal.dwell(i), n),
+  });
   // Back to the top (a large wheel step, else scrollTo), then pin what was revealed.
   if ((await scrollToY(page, 0)) > 1) {
     await page.evaluate(() => window.scrollTo(0, 0));
@@ -128,7 +160,8 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     serviceWorkers: 'block',
   });
   // Static files another view (or page) of this job already loaded come from the shared cache, not from the network again.
-  await cache?.attach(context);
+  // The job's one network recorder: this view's resources, failed requests and (exact) stylesheet texts come from its tap.
+  const tap = cache ? await cache.attach(context, { page: new URL(pageInfo.url).pathname, sheets: exact }) : tapContext(context, { sheets: exact });
   // A page rebuilt from evidence (inspect.js recoverPage): its own address answers with that document, everything it
   // loads (stylesheets, fonts, pictures of the site) still comes from the site. Registered after the cache, so it wins.
   if (document) {
@@ -136,28 +169,9 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       ? route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: document })
       : route.continue()));
   }
-  // An exact copy keeps the site's own stylesheets: their bodies as written, from the network (capture/asis.js).
-  const sheetRecorder = exact ? recordSheetBodies(context) : null;
+  // An exact copy keeps the site's own stylesheets: their bodies as written, from the network (the tap's `sheets`).
   if (exact) await markAsIs(context);
-  const resources = new Map();
-  const failed = [];
-  context.on('response', (res) => {
-    const url = res.url();
-    if (url.startsWith('data:') || url.startsWith('blob:')) return;
-    const req = res.request();
-    const headers = res.headers();
-    resources.set(url, {
-      url,
-      type: req.resourceType(),
-      status: res.status(),
-      mime: (headers['content-type'] || '').split(';')[0].trim() || null,
-      bytes: Number(headers['content-length']) || null,
-    });
-  });
-  context.on('requestfailed', (req) => {
-    const url = req.url();
-    if (!url.startsWith('data:')) failed.push({ url, type: req.resourceType(), error: req.failure()?.errorText ?? 'failed' });
-  });
+  const { resources, failed } = tap;
 
   // Where the time of this view goes (ms per phase), for the report: what is worth speeding up differs from site to site.
   const timing = {};
@@ -197,9 +211,9 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     const census = await page.evaluate(censusInteractive, {}).catch(() => null);
     // The page as-is (markup + the site's own stylesheets), read before any probe hovers, clicks or resizes it.
     let asis = null;
-    if (sheetRecorder) {
+    if (exact) {
       try {
-        const read = await captureAsIs(page, sheetRecorder);
+        const read = await captureAsIs(page, tap);
         await writeFile(path.join(dir, asisFile(view.id)), JSON.stringify(read.data));
         asis = { file: asisFile(view.id), ...read.summary };
       } catch (err) {

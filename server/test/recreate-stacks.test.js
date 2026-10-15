@@ -19,6 +19,7 @@ import recreateRouter from '../src/routes/recreate.js';
 import stacksRouter from '../src/routes/stacks.js';
 import { STACKS } from '../src/routes/projects.js';
 import { toolchainStatus } from '../src/toolchains/index.js';
+import { seedProject } from './helpers/projects.js';
 
 const exists = (p) => access(p).then(() => true, () => false);
 const temps = [];
@@ -226,7 +227,7 @@ test('export from the saved IR: emit, write, record the output; idempotent; fail
     const id = randomUUID();
     projectIds.push(id);
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://example.com/', 'html', 1, ?, ?)`).run(id, now, now);
+    seedProject(db, { id, name: 'p', url: 'https://example.com/', stack: 'html', authorized: 1 });
     const recreateId = randomUUID();
     const report = { recreateId, stack: 'html', outputs: { html: { status: 'ready', dir: 'dist' } }, pages: [{ outPath: 'index.html' }], safety: { safe: true } };
     db.prepare(`INSERT INTO recreates (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`).run(recreateId, id, now, now, JSON.stringify(report));
@@ -316,7 +317,7 @@ test('Recreate refuses a stack that is not ready, naming the ones that are', asy
     const id = randomUUID();
     projectIds.push(id);
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://example.com/', 'planned-y', 1, ?, ?)`).run(id, now, now);
+    seedProject(db, { id, name: 'p', url: 'https://example.com/', stack: 'planned-y', authorized: 1 });
     const res = await post(`${base}/projects/${id}/recreate`, {});
     assert.equal(res.status, 400);
     assert.match((await res.json()).error, /^Only Plain HTML \/ CSS \/ JS, React \+ Vite, Next\.js, MERN can be recreated for now/);

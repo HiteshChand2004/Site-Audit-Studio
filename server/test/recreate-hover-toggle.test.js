@@ -27,6 +27,7 @@ import { creditUnderPointer, mergeMouseIntoRule } from '../src/recreate/capture/
 import { planSets, samePlace } from '../src/recreate/capture/states.js';
 import { applyMotion, closedOnClick, shutDecls } from '../src/recreate/ir/motion.js';
 import { motionCss } from '../src/recreate/emit/motionCss.js';
+import { seedProject } from './helpers/projects.js';
 
 process.env.SAS_ALLOW_LOCALHOST = '1';
 const PORT = 4251;
@@ -372,9 +373,7 @@ async function build(exact) {
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at) VALUES (?, 'hover-toggle', ?, 'html', 1, -1, ?, ?)`).run(id, `${origin}/`, now, now);
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), id, now, now, JSON.stringify({ url: `${origin}/`, analyzedAt: now }));
+  seedProject(db, { id, name: 'hover-toggle', url: `${origin}/`, stack: 'html', authorized: 1, recreatePages: -1, analysis: true });
   const recreateId = randomUUID();
   const stub = async () => {};
   await runRecreate({

@@ -13,6 +13,7 @@ import { recreateDir } from '../src/recreate/workspace.js';
 import { userPolicy, withNetPolicy } from '../src/security/netGuard.js';
 import { pageKey } from '../src/audit/util.js';
 import { startFixtureServer } from './serve-fixture.js';
+import { seedProject } from './helpers/projects.js';
 
 // The fixture runs on localhost, which the SSRF guard blocks unless this dev flag is set.
 process.env.SAS_ALLOW_LOCALHOST = '1';
@@ -150,11 +151,7 @@ test('near its time limit the inspect step keeps the pages captured so far inste
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at) VALUES (?, 'fixture', ?, 'html', 1, 1, ?, ?)`)
-    .run(id, `${origin}/`, now, now);
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), id, now, now, JSON.stringify({ url: `${origin}/`, analyzedAt: now }));
-  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+  const project = seedProject(db, { id, name: 'fixture', url: `${origin}/`, stack: 'html', authorized: 1, recreatePages: 1, analysis: true });
   const stubs = Object.fromEntries(Object.keys(STAGES).map((key) => [key, async () => {}]));
   // The step has (almost) no time left: the homepage is still captured, the other page is not.
   const inspect = (ctx) => {
@@ -171,11 +168,7 @@ test('a page that stalls is abandoned before the step limit: the pages captured 
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at) VALUES (?, 'fixture', ?, 'html', 1, 1, ?, ?)`)
-    .run(id, `${origin}/`, now, now);
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), id, now, now, JSON.stringify({ url: `${origin}/`, analyzedAt: now }));
-  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+  const project = seedProject(db, { id, name: 'fixture', url: `${origin}/`, stack: 'html', authorized: 1, recreatePages: 1, analysis: true });
   const stubs = Object.fromEntries(Object.keys(STAGES).map((key) => [key, async () => {}]));
   // The second page never finishes. Without the page limit the step would run into its own limit and fail the whole job.
   const inspect = (ctx) => {
@@ -195,11 +188,7 @@ test('the inspect step captures every selected page at desktop, laptop, tablet a
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at) VALUES (?, 'fixture', ?, 'html', 1, 1, ?, ?)`)
-    .run(id, `${origin}/`, now, now);
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), id, now, now, JSON.stringify({ url: `${origin}/`, analyzedAt: now }));
-  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+  const project = seedProject(db, { id, name: 'fixture', url: `${origin}/`, stack: 'html', authorized: 1, recreatePages: 1, analysis: true });
   const recreateId = randomUUID();
   const stubs = Object.fromEntries(Object.keys(STAGES).map((key) => [key, async () => {}]));
 

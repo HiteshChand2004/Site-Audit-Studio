@@ -9,7 +9,7 @@ import { projectDir } from '../db/index.js';
 import { maxParallel, PAGE_MB, parallelism } from '../audit/resources.js';
 import { createSharedCache, sharedCacheEnabled } from '../audit/sharedCache.js';
 import { startEgressProxy } from '../security/egressProxy.js';
-import { capturePage } from './capture/index.js';
+import { capturePage, networkDir } from './capture/index.js';
 import { discoverPages, NOT_FOUND_STATUS, probeNotFound, SKIP_LABELS } from './discover.js';
 import { evidenceFor, readHomepageShell, reasonText, recoveredDocument } from './recover.js';
 import { pageKey } from '../audit/util.js';
@@ -175,8 +175,10 @@ export async function inspectStage(ctx) {
 
   // One cache of static files for every browser context of the job: the views of a page, the next pages, and the sweep
   // of the original at more widths (which runs after this step) load a stylesheet, script, image or font once.
-  if (sharedCacheEnabled() && !ctx.netCache) {
-    ctx.netCache = createSharedCache();
+  // It is also the job's one network recorder: every response of the original is kept in capture/.network/ (the
+  // mirror the verification compares against), whether or not files are shared between contexts (SAS_SHARED_CACHE).
+  if (!ctx.netCache) {
+    ctx.netCache = createSharedCache({ share: sharedCacheEnabled(), recordDir: networkDir(ctx.dir) });
     ctx.defer(() => ctx.netCache.close());
   }
 

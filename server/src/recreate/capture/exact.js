@@ -17,6 +17,7 @@ import path from 'node:path';
 import sharp from 'sharp';
 import { MAX_HEIGHT, MOBILE_UA } from '../../audit/screenshots.js';
 import { USER_AGENT } from '../../audit/http.js';
+import { tapContext } from '../../audit/sharedCache.js';
 import { collectExactBoxes } from '../verify/exact/boxes.js';
 import { fingerprintOf } from '../verify/exact/fingerprint.js';
 import { freezePage, freezeTimers } from '../verify/exact/freeze.js';
@@ -120,14 +121,12 @@ export async function visitSlot(browser, url, slot, dir, {
     serviceWorkers: 'block',
   });
   const consoleErrors = [];
-  const failed = [];
+  let tap = null;
   try {
     // Before any of the page's own script: no interval, no timer of a second or more (verify/exact/freeze.js).
     await context.addInitScript(freezeTimers);
-    await cache?.attach(context);
-    context.on('requestfailed', (req) => {
-      if (failed.length < MAX_CONSOLE) failed.push({ url: req.url().slice(0, 300), reason: req.failure()?.errorText ?? 'failed' });
-    });
+    // The job's one network recorder; failed requests are read from this context's tap.
+    tap = cache ? await cache.attach(context, { page: new URL(url).pathname }) : tapContext(context);
     const page = await context.newPage();
     // Console messages are not recorded anywhere else in the pipeline, and a copy that throws is a defect.
     page.on('console', (msg) => {
@@ -175,7 +174,7 @@ export async function visitSlot(browser, url, slot, dir, {
       recipe,
       frozen,
       ...(consoleErrors.length && { consoleErrors }),
-      ...(failed.length && { failed }),
+      ...(tap.failed.length && { failed: tap.failed.slice(0, MAX_CONSOLE).map((r) => ({ url: r.url.slice(0, 300), reason: r.error })) }),
       ...(print && { fingerprint: print }),
       bytes: bands.reduce((n, b) => n + b.bytes, 0),
       ms: Date.now() - started,

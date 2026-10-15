@@ -15,6 +15,7 @@ import { recreateDir } from '../src/recreate/workspace.js';
 import { servePreview } from '../src/recreate/preview.js';
 import { capturePointer, findFollowers } from '../src/recreate/capture/pointer.js';
 import { motionItems } from '../src/reaudit/motion.js';
+import { seedProject } from './helpers/projects.js';
 
 process.env.SAS_ALLOW_LOCALHOST = '1';
 const PORT = 4226;
@@ -96,9 +97,7 @@ test('the copy moves them the same way with no script of the original, and the r
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at) VALUES (?, 'pointer', ?, 'html', 1, 0, ?, ?)`).run(id, `${origin}/`, now, now);
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), id, now, now, JSON.stringify({ url: `${origin}/`, analyzedAt: now }));
+  seedProject(db, { id, name: 'pointer', url: `${origin}/`, stack: 'html', authorized: 1, recreatePages: 0, analysis: true });
   const recreateId = randomUUID();
   const stub = async () => {};
   await runRecreate({

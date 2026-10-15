@@ -20,6 +20,7 @@ import { db, projectDir } from '../src/db/index.js';
 import { runRecreate, STAGES } from '../src/recreate/index.js';
 import { recreateDir } from '../src/recreate/workspace.js';
 import { evidenceFor, nameFromPath, reasonText } from '../src/recreate/recover.js';
+import { seedAnalysis, seedProject } from './helpers/projects.js';
 
 process.env.SAS_ALLOW_LOCALHOST = '1';
 const PORT = 4243;
@@ -81,9 +82,8 @@ async function newProject() {
   projectIds.push(id);
   const now = new Date().toISOString();
   const analysisId = randomUUID();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at) VALUES (?, 'backend', ?, 'html', 1, -1, ?, ?)`).run(id, `${origin}/`, now, now);
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(analysisId, id, now, now, JSON.stringify({ url: `${origin}/`, analyzedAt: now, brokenLinks: { broken: [{ url: `${origin}/status`, status: 'refused' }, { url: `${origin}/missing`, status: 404 }] } }));
+  seedProject(db, { id, name: 'backend', url: `${origin}/`, stack: 'html', authorized: 1, recreatePages: -1 });
+  seedAnalysis(db, id, { url: `${origin}/`, analyzedAt: now, brokenLinks: { broken: [{ url: `${origin}/status`, status: 'refused' }, { url: `${origin}/missing`, status: 404 }] } }, { id: analysisId });
   const dir = path.join(projectDir(id), 'audit', analysisId);
   await mkdir(dir, { recursive: true });
   await writeFile(path.join(dir, 'crawl.json'), JSON.stringify({

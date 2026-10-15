@@ -10,6 +10,7 @@ import { db, projectDir } from '../src/db/index.js';
 import { logo, thumbnail } from '../src/report/collect.js';
 import { renderReportHtml } from '../src/report/render.js';
 import reportRouter from '../src/routes/report.js';
+import { seedAnalysis, seedProject } from './helpers/projects.js';
 
 let server;
 let base;
@@ -35,7 +36,7 @@ const now = () => new Date().toISOString();
 function makeProject(name = 'Acme', url = 'https://www.acme.test/') {
   const id = randomUUID();
   projectIds.push(id);
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, ?, ?, 'html', 1, ?, ?)`).run(id, name, url, now(), now());
+  seedProject(db, { id, name, url, stack: 'html', authorized: 1 });
   return id;
 }
 
@@ -84,8 +85,7 @@ const RECREATE = {
 };
 
 function addAnalysis(projectId, audit = AUDIT) {
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), projectId, now(), now(), JSON.stringify(audit));
+  seedAnalysis(db, projectId, audit, { at: now() });
 }
 function addRecreate(projectId, report = RECREATE) {
   const id = randomUUID();

@@ -13,6 +13,7 @@ import { overallPct, recreateBudgetMs, RecreateError, roomForSecondBrowser, runR
 import { analysisWarnings, parseRecreatePages, parseTargetDomain } from '../src/recreate/inputs.js';
 import { pruneRecreates, recreateDir, recreateRoot } from '../src/recreate/workspace.js';
 import recreateRouter from '../src/routes/recreate.js';
+import { seedAnalysis, seedProject } from './helpers/projects.js';
 
 const exists = (p) => access(p).then(() => true, () => false);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -22,12 +23,10 @@ function makeProject({ authorized = 1, stack = 'html', analyzedDaysAgo = 0, anal
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'test', 'https://example.com/', ?, ?, ?, ?)`)
-    .run(id, stack, authorized, now, now);
+  seedProject(db, { id, name: 'test', url: 'https://example.com/', stack, authorized });
   if (analysis) {
     const analyzedAt = new Date(Date.now() - analyzedDaysAgo * 86400000).toISOString();
-    db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-      .run(randomUUID(), id, analyzedAt, analyzedAt, JSON.stringify({ url: 'https://www.example.com/', analyzedAt }));
+    seedAnalysis(db, id, { url: 'https://www.example.com/', analyzedAt }, { at: analyzedAt });
   }
   return db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
 }

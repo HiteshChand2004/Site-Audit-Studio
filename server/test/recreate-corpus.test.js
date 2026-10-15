@@ -129,6 +129,11 @@ test('a pinned capture outlives the recreate it was pinned from, and a stale id 
 
     // Re-pinning with a stale id takes the newest finished recreate that can be replayed, skipping the broken one.
     assert.equal(pickSource(fixture, { dataDir, finished: ['broken', 'newer', 'older'] }), 'newer');
+    // A newer one-page run does not displace a whole-site capture.
+    const onePage = await make('one-page', '/c');
+    await writeFile(path.join(onePage, 'report.json'), JSON.stringify({ singlePage: { url: '/c' } }));
+    assert.equal(pickSource(fixture, { dataDir, finished: ['one-page', 'newer'] }), 'newer');
+    assert.equal(pickSource(fixture, { dataDir, finished: ['one-page'] }), 'one-page', 'but it is used when it is all there is');
     assert.equal(await pinFixture(fixture, { dataDir, finished: ['broken', 'newer'] }), 'newer');
     assert.equal(JSON.parse(await readFile(path.join(pinned, 'capture', 'manifest.json'), 'utf8')).pages[0].url, '/b');
     assert.ok(!existsSync(`${pinned}.tmp`), 'no staging folder is left behind');

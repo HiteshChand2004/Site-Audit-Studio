@@ -16,6 +16,7 @@ import { flagFidelity } from '../src/recreate/verify/fidelity.js';
 import { resolveRef, verifyFailure, verifySite } from '../src/recreate/verify/site.js';
 import { recreateDir } from '../src/recreate/workspace.js';
 import recreateRouter from '../src/routes/recreate.js';
+import { seedProject } from './helpers/projects.js';
 
 const exists = (p) => access(p).then(() => true, () => false);
 const temps = [];
@@ -272,7 +273,7 @@ test('preview routes start, report and stop the preview of the latest completed 
     const id = randomUUID();
     projectIds.push(id);
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://example.com/', 'html', 1, ?, ?)`).run(id, now, now);
+    seedProject(db, { id, name: 'p', url: 'https://example.com/', stack: 'html', authorized: 1 });
 
     assert.equal((await fetch(`${base}/${id}/preview`, { method: 'POST' })).status, 404); // nothing recreated yet
     const recreateId = randomUUID();
@@ -304,7 +305,7 @@ test('capture screenshots of a completed recreate are served per page, and nothi
     const makeProject = () => {
       const id = randomUUID();
       projectIds.push(id);
-      db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://example.com/', 'html', 1, ?, ?)`).run(id, now, now);
+      seedProject(db, { id, name: 'p', url: 'https://example.com/', stack: 'html', authorized: 1 });
       return id;
     };
     const id = makeProject();

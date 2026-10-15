@@ -16,7 +16,7 @@
 //   node scripts/corpus.mjs --pin      freeze each fixture's capture under <dataDir>/corpus/ (out of retention's reach)
 //   node scripts/corpus.mjs --only nyaayai[,botza]
 import { cp, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -95,7 +95,18 @@ const replayable = (dir) => existsSync(path.join(dir, 'capture', 'manifest.json'
 export function pickSource(fixture, { dataDir, finished = [] }) {
   const dirOf = (id) => path.join(dataDir, 'projects', fixture.projectId, 'recreate', id);
   if (fixture.recreateId && replayable(dirOf(fixture.recreateId))) return fixture.recreateId;
-  return finished.find((id) => replayable(dirOf(id))) ?? null;
+  const usable = finished.filter((id) => replayable(dirOf(id)));
+  // A whole-site capture before a one-page run: the corpus is about the site, and one page proves less.
+  return usable.find((id) => !onePage(dirOf(id))) ?? usable[0] ?? null;
+}
+
+/** Was the recreate in `dir` a one-page run (`report.singlePage`)? */
+function onePage(dir) {
+  try {
+    return Boolean(JSON.parse(readFileSync(path.join(dir, 'report.json'), 'utf8')).singlePage);
+  } catch {
+    return false;
+  }
 }
 
 /** Finished recreates of a project, newest first, read from the data folder's database (read-only). */

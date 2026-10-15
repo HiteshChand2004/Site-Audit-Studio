@@ -16,29 +16,13 @@
 //   css url()), so the assets step downloads them and the copy can point at local files.
 // Nothing here identifies a site, a framework or a class name.
 import { load } from 'cheerio';
+import { MAX_SHEET_BYTES } from '../../audit/sharedCache.js';
 import { linkedFileKind } from '../assets/collect.js';
 
 export const ASIS_VERSION = 1;
 /** One stylesheet body kept from the network: larger ones fall back to the browser's serialisation. */
-export const MAX_SHEET_BYTES = 8 * 1024 * 1024;
+export { MAX_SHEET_BYTES };
 export const asisFile = (viewId) => `${viewId}-asis.json`;
-
-/**
- * Keeps the text of every stylesheet response of a browser context (call before the page is opened).
- * @returns {{ bodies: Map<string, string>, settled: () => Promise<void> }}
- */
-export function recordSheetBodies(context) {
-  const bodies = new Map();
-  const pending = new Set();
-  context.on('response', (res) => {
-    if (res.request().resourceType() !== 'stylesheet' || res.status() >= 400) return;
-    const job = res.body().then((buf) => {
-      if (buf.length <= MAX_SHEET_BYTES) bodies.set(res.url(), buf.toString('utf8'));
-    }, () => {}).finally(() => pending.delete(job));
-    pending.add(job);
-  });
-  return { bodies, settled: () => Promise.all([...pending]).then(() => {}) };
-}
 
 /**
  * Marks a page as captured for an as-is copy: snapshots of one part (the states of a carousel, a hovered card, a panel)
@@ -259,18 +243,18 @@ export function asisRefs({ html, baseURI, sheets }) {
  * Reads the page as-is and writes capture/<slug>/<view>-asis.json. Run right after the snapshot, before any probe
  * hovers, clicks or resizes the page.
  * @param {import('playwright').Page} page
- * @param {{ bodies: Map<string,string>, settled: () => Promise<void> }} recorder  recordSheetBodies() of the context
+ * @param {{ sheets: Map<string,string>, settled: () => Promise<void> }} tap  the context's tap (audit/sharedCache.js tapContext / attach with sheets: true)
  * @returns {Promise<{ data: object, summary: object }>}
  */
-export async function captureAsIs(page, recorder) {
+export async function captureAsIs(page, tap) {
   const read = await page.evaluate(readAsIs);
-  await recorder.settled();
+  await tap.settled();
   const { html, removed } = documentHtml(read);
   let fromNetwork = 0;
   let missing = 0;
   for (const sheet of read.sheets) {
     if (!sheet.href || sheet.from === 'adopted') continue;
-    const raw = recorder.bodies.get(sheet.href);
+    const raw = tap.sheets.get(sheet.href);
     if (raw != null) {
       sheet.raw = raw;
       fromNetwork++;

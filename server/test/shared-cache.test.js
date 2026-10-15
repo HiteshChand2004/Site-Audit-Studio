@@ -3,7 +3,7 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { access, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { access, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { gzipSync } from 'node:zlib';
@@ -69,6 +69,7 @@ before(async () => {
     if (p === '/nostore.png') return send('image/png', png, { 'cache-control': 'no-store' });
     if (p === '/by-ua.png') return send('image/png', png, { vary: 'User-Agent' });
     if (p === '/api') return send('application/json', JSON.stringify({ n: count('/api') }));
+    if (p === '/nowhere.png') return void req.socket.destroy();
     res.writeHead(404, { 'content-type': 'text/plain' });
     res.end('not found');
   });
@@ -174,6 +175,72 @@ test('contexts of one job load a static file once; everything else still comes f
     await cache.close();
     await browser.close();
     await proxy.close();
+  }
+});
+
+test('the one network recorder: every response kept on disk once, redirects as hops, data and failures recorded, taps per context', async () => {
+  const proxy = await startEgressProxy(createNetPolicy({ internalPorts: [site.address().port] }));
+  const browser = await launchBrowser({ proxy: proxy.url });
+  const recordDir = await mkdtemp(path.join(os.tmpdir(), 'sas-record-'));
+  // Sharing off (SAS_SHARED_CACHE=0): every context loads everything itself, and the recording still happens.
+  const cache = createSharedCache({ recordDir, share: false });
+  try {
+    const visit = async (page) => {
+      const context = await browser.newContext({ serviceWorkers: 'block' });
+      const tap = await cache.attach(context, { page, sheets: true });
+      const p = await context.newPage();
+      await p.goto(`${origin}/`, { waitUntil: 'load' });
+      await p.waitForFunction(() => document.body.dataset.api);
+      await p.evaluate(() => fetch('/api', { method: 'POST', body: 'x' }).catch(() => null));
+      // A request that never gets an answer (the connection is cut): a failure, recorded with its reason.
+      await p.evaluate((u) => fetch(u).catch(() => null), `${origin}/nowhere.png`);
+      await tap.settled();
+      await context.close();
+      return tap;
+    };
+    const a = await visit('/');
+    await visit('/again');
+
+    // The tap of one context: its resources (with status and type), its failures, its stylesheet texts.
+    assert.equal(a.resources.get(`${origin}/style.css`)?.status, 200);
+    assert.equal(a.resources.get(`${origin}/gone.png`)?.status, 404);
+    // An address the policy blocks is answered by the egress proxy (403), so it is a resource with an error status.
+    assert.equal(a.resources.get(`${otherOrigin}/secret.png`)?.status, 403);
+    assert.ok(a.failed.some((f) => f.url.endsWith('/nowhere.png')), JSON.stringify(a.failed));
+    assert.equal(a.sheets.get(`${origin}/style.css`), '#t { color: rgb(1, 2, 3); }', 'the decoded text, not the gzip bytes');
+
+    const counts = await cache.saveRecord();
+    const index = JSON.parse(await readFile(path.join(recordDir, 'index.json'), 'utf8'));
+    const byPath = new Map(index.entries.map((e) => [new URL(e.url).pathname, e]));
+    for (const p of ['/', '/style.css', '/app.js', '/img.png', '/target.png', '/api']) assert.ok(byPath.get(p)?.sha, `${p} kept`);
+    assert.equal(byPath.get('/api').kind, 'data', 'fetch / XHR bodies are part of the record');
+    assert.equal(byPath.get('/moved.png').redirect, `${origin}/target.png`);
+    assert.deepEqual(byPath.get('/').pages.sort(), ['/', '/again'], 'the pages that loaded a file');
+    assert.equal(byPath.get('/api').variants, 1, 'a body that changes with every request is counted as a variant');
+    assert.ok(!byPath.has('/gone.png'), 'an error is not a file');
+    assert.ok(index.unreproducible.some((u) => u.method === 'POST' && u.url.endsWith('/api')), 'a write is not reproducible');
+    assert.ok(index.failed.some((f) => f.url.endsWith('/nowhere.png')));
+    // Content-addressed: the same body twice (img.png, target.png) is one file.
+    const files = await readdir(path.join(recordDir, 'files'));
+    assert.equal(files.length, new Set(index.entries.filter((e) => e.sha).map((e) => e.sha)).size);
+    assert.equal(byPath.get('/img.png').sha, byPath.get('/target.png').sha);
+    assert.equal(counts.entries, index.entries.length);
+
+    // Server-side steps read from it: a redirect is followed to the recorded file.
+    const kept = cache.lookup(`${origin}/moved.png`);
+    assert.equal((await readFile(kept.file)).length, png.length);
+    assert.equal(kept.headers['content-type'], 'image/png');
+
+    // A job continued in the same folder keeps what the record already holds.
+    await cache.close();
+    const again = createSharedCache({ recordDir, share: false });
+    assert.equal(again.record.size, index.entries.length);
+    await again.close();
+  } finally {
+    await cache.close();
+    await browser.close();
+    await proxy.close();
+    await rm(recordDir, { recursive: true, force: true });
   }
 });
 

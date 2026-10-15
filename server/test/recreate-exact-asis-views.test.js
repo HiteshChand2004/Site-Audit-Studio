@@ -5,7 +5,8 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { launchBrowser } from '../src/audit/render.js';
-import { captureAsIs, recordSheetBodies } from '../src/recreate/capture/asis.js';
+import { captureAsIs } from '../src/recreate/capture/asis.js';
+import { tapContext } from '../src/audit/sharedCache.js';
 import { asisBody, asisCss, mergeViewBodies, pageSheets, variantCss } from '../src/recreate/ir/asis.js';
 import { emitPage } from '../src/recreate/emit/html.js';
 
@@ -40,7 +41,7 @@ before(async () => {
   const reads = [];
   for (const [view, width] of [['desktop', 1280], ['mobile', 375]]) {
     const context = await browser.newContext({ viewport: { width, height: 700 } });
-    const recorder = recordSheetBodies(context);
+    const recorder = tapContext(context, { sheets: true });
     const page = await context.newPage();
     await page.goto(`${ORIGIN}/`, { waitUntil: 'load' });
     reads.push([view, (await captureAsIs(page, recorder)).data]);

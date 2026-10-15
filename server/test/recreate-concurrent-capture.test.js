@@ -15,6 +15,7 @@ import { runRecreate, STAGES } from '../src/recreate/index.js';
 import { CAPTURE_PAGES_MAX, capturePagesAtOnce, limiter, roomForAnotherPage } from '../src/recreate/inspect.js';
 import { userPolicy, withNetPolicy } from '../src/security/netGuard.js';
 import { startFixtureServer } from './serve-fixture.js';
+import { seedProject } from './helpers/projects.js';
 
 process.env.SAS_ALLOW_LOCALHOST = '1';
 // No shared static-file cache in this file (it is covered by shared-cache.test.js): every inspect step here would create and
@@ -41,9 +42,7 @@ function makeProject(recreatePages = 5) {
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at) VALUES (?, 'fixture', ?, 'html', 1, ?, ?, ?)`).run(id, `${origin}/`, recreatePages, now, now);
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), id, now, now, JSON.stringify({ url: `${origin}/`, analyzedAt: now }));
+  seedProject(db, { id, name: 'fixture', url: `${origin}/`, stack: 'html', authorized: 1, recreatePages, analysis: true });
   return db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
 }
 const stubs = Object.fromEntries(Object.keys(STAGES).map((key) => [key, async () => {}]));

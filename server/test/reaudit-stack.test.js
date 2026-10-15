@@ -15,6 +15,7 @@ import { outputPages, outputRoot, targetStack } from '../src/recreate/export/fro
 import { servePreview } from '../src/recreate/preview.js';
 import { recreateDir } from '../src/recreate/workspace.js';
 import { createNetPolicy } from '../src/security/netGuard.js';
+import { seedAnalysis, seedProject } from './helpers/projects.js';
 
 delete process.env.SAS_ALLOW_LOCALHOST;
 
@@ -139,7 +140,7 @@ function makeProject(stack) {
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://example.com/', ?, 1, ?, ?)`).run(id, stack, now, now);
+  seedProject(db, { id, name: 'p', url: 'https://example.com/', stack, authorized: 1 });
   return db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
 }
 
@@ -164,7 +165,7 @@ async function setup(stack, { nextReady = true } = {}) {
     originUrl = served.origin;
     const audit = await runAnalysis({ project, analysisId, url: `${served.origin}/`, maxPages: 5, skip: FAST_SKIP, netPolicy: createNetPolicy({ internalPorts: [served.port] }), progress: () => {} });
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`).run(analysisId, project.id, now, now, JSON.stringify(audit));
+    seedAnalysis(db, project.id, audit, { id: analysisId });
   } finally {
     await served.close();
   }
