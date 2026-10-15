@@ -8,7 +8,7 @@ import path from 'node:path';
 import { RecreateError } from './errors.js';
 
 /** Hard-links (or copies) every file of `from` into `to`. Returns the number of files. */
-async function linkTree(from, to) {
+export async function linkTree(from, to) {
   await mkdir(to, { recursive: true });
   let n = 0;
   for (const entry of await readdir(from, { withFileTypes: true })) {

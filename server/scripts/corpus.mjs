@@ -13,8 +13,9 @@
 //   node scripts/corpus.mjs            compare against the committed baselines (exit 1 if any score fell)
 //   node scripts/corpus.mjs --update   write the baselines from this run
 //   node scripts/corpus.mjs --list     show what the corpus holds, measuring nothing
+//   node scripts/corpus.mjs --pin      freeze each fixture's capture under <dataDir>/corpus/ (out of retention's reach)
 //   node scripts/corpus.mjs --only nyaayai[,botza]
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -75,6 +76,62 @@ export function formatRow(name, row) {
   return `  ${mark} ${name.padEnd(22)} ${String(before).padStart(6)} → ${String(now).padStart(6)}${delta}`;
 }
 
+/**
+ * Where a fixture's frozen capture lives: `<dataDir>/corpus/<name>/` (capture/, assets/, report.json, pin.json).
+ * Retention keeps only a project's latest two recreates, so a registry pointing into `projects/…/recreate/` went stale
+ * after two runs (twice). Retention never looks in `corpus/`, and the files are hard links, so pinning costs no disk.
+ */
+export function pinnedDir(dataDir, name) {
+  return path.join(dataDir, 'corpus', name);
+}
+
+/** Is there a replayable recreate (capture + asset manifests) in `dir`? */
+const replayable = (dir) => existsSync(path.join(dir, 'capture', 'manifest.json')) && existsSync(path.join(dir, 'assets', 'manifest.json'));
+
+/**
+ * The recreate a fixture is pinned from: the registered one while it is still on disk, else the project's newest
+ * finished recreate that can be replayed. `finished` = recreate ids newest first (from the database).
+ */
+export function pickSource(fixture, { dataDir, finished = [] }) {
+  const dirOf = (id) => path.join(dataDir, 'projects', fixture.projectId, 'recreate', id);
+  if (fixture.recreateId && replayable(dirOf(fixture.recreateId))) return fixture.recreateId;
+  return finished.find((id) => replayable(dirOf(id))) ?? null;
+}
+
+/** Finished recreates of a project, newest first, read from the data folder's database (read-only). */
+async function finishedRecreates(dataDir, projectId) {
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(path.join(dataDir, 'app.db'), { readOnly: true });
+  try {
+    return db.prepare("SELECT id FROM recreates WHERE project_id = ? AND status = 'done' ORDER BY started_at DESC").all(projectId).map((r) => r.id);
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Freezes a fixture's capture into `pinnedDir`: capture/ and assets/ hard-linked, report.json copied, pin.json written.
+ * Replaces an earlier pin of the same name. Returns the recreate id it was pinned from, or null when none can be replayed.
+ */
+export async function pinFixture(fixture, { dataDir, finished }) {
+  const { linkTree } = await import('../src/recreate/replay.js');
+  const list = finished ?? await finishedRecreates(dataDir, fixture.projectId);
+  const recreateId = pickSource(fixture, { dataDir, finished: list });
+  if (!recreateId) return null;
+  const from = path.join(dataDir, 'projects', fixture.projectId, 'recreate', recreateId);
+  const to = pinnedDir(dataDir, fixture.name);
+  const staging = `${to}.tmp`;
+  await rm(staging, { recursive: true, force: true });
+  await linkTree(path.join(from, 'capture'), path.join(staging, 'capture'));
+  await linkTree(path.join(from, 'assets'), path.join(staging, 'assets'));
+  if (existsSync(path.join(from, 'report.json'))) await cp(path.join(from, 'report.json'), path.join(staging, 'report.json'));
+  const pin = { name: fixture.name, projectId: fixture.projectId, recreateId, site: fixture.site ?? null, pinnedAt: new Date().toISOString() };
+  await writeFile(path.join(staging, 'pin.json'), `${JSON.stringify(pin, null, 1)}\n`);
+  await rm(to, { recursive: true, force: true });
+  await rename(staging, to);
+  return recreateId;
+}
+
 const readJson = async (file, fallback = null) => {
   try {
     return JSON.parse(await readFile(file, 'utf8'));
@@ -92,7 +149,10 @@ async function rebuild(fixture, { dataDir }) {
   try {
     // The copy: the project folder and the database, so pruning and every write land here and not in the original.
     await cp(path.join(dataDir, 'app.db'), path.join(work, 'app.db'));
-    await cp(path.join(dataDir, 'projects', fixture.projectId), path.join(work, 'projects', fixture.projectId), { recursive: true });
+    // The project's own recreates are left out: the rebuild reads the pinned capture, and they can be hundreds of MB.
+    const projectDir = path.join(dataDir, 'projects', fixture.projectId);
+    const recreates = path.join(projectDir, 'recreate');
+    await cp(projectDir, path.join(work, 'projects', fixture.projectId), { recursive: true, filter: (src) => !src.startsWith(recreates) });
     process.env.SAS_DATA_DIR = work;
     process.env.SAS_KEEP_AWAKE = '0';
     process.env.SAS_NETWORK_WATCH = '0';
@@ -100,18 +160,21 @@ async function rebuild(fixture, { dataDir }) {
     const { db } = await import('../src/db/index.js');
     const { runRecreate, STAGES } = await import('../src/recreate/index.js');
     const { replayStages } = await import('../src/recreate/replay.js');
-    const { recreateDir } = await import('../src/recreate/workspace.js');
     const { randomUUID } = await import('node:crypto');
 
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(fixture.projectId);
     if (!project) throw new Error('the project is not in the copied database');
-    const source = { recreateId: fixture.recreateId, createdAt: new Date().toISOString() };
+    const pinned = pinnedDir(dataDir, fixture.name);
+    const sourceDir = replayable(pinned) ? pinned : path.join(dataDir, 'projects', fixture.projectId, 'recreate', fixture.recreateId);
+    if (!replayable(sourceDir)) throw new Error(`no capture to rebuild from: run "node scripts/corpus.mjs --pin --only ${fixture.name}"`);
+    const pin = await readJson(path.join(pinned, 'pin.json'));
+    const source = { recreateId: pin?.recreateId ?? fixture.recreateId, createdAt: new Date().toISOString() };
     const recreateId = randomUUID();
     const report = await runRecreate({
       project,
       recreateId,
       progress: () => {},
-      stages: { ...STAGES, ...replayStages(recreateDir(project.id, fixture.recreateId), source) },
+      stages: { ...STAGES, ...replayStages(sourceDir, source) },
       // No limit: a rebuild of sixty pages must not be judged on how fast this machine was today.
       unlimited: true,
     });
@@ -142,9 +205,22 @@ async function main() {
   if (list) {
     console.log(`Corpus (${fixtures.length} of ${registry.fixtures.length} shown), read from ${dataDir}:`);
     for (const f of fixtures) {
-      const dir = path.join(dataDir, 'projects', f.projectId, 'recreate', f.recreateId);
-      console.log(`  ${f.name.padEnd(14)} ${existsSync(dir) ? 'capture present' : 'MISSING on disk'}  ${f.recreateId}`);
+      const pin = await readJson(path.join(pinnedDir(dataDir, f.name), 'pin.json'));
+      const state = replayable(pinnedDir(dataDir, f.name)) ? `pinned ${pin?.pinnedAt?.slice(0, 10) ?? ''}` : 'NOT PINNED (run --pin)';
+      console.log(`  ${f.name.padEnd(14)} ${state.padEnd(22)} ${pin?.recreateId ?? f.recreateId}`);
     }
+    return;
+  }
+
+  if (args.includes('--pin')) {
+    // Freezes each fixture's capture where retention cannot reach it, and records the recreate it came from.
+    for (const f of fixtures) {
+      const recreateId = await pinFixture(f, { dataDir });
+      console.log(`  ${f.name.padEnd(14)} ${recreateId ? `pinned from ${recreateId}` : 'NOTHING to pin: no finished recreate with a capture'}`);
+      if (recreateId) f.recreateId = recreateId;
+    }
+    await writeFile(REGISTRY, `${JSON.stringify(registry, null, 1)}\n`);
+    console.log(`\nRegistry updated. Run "node scripts/corpus.mjs --update${only ? ` --only ${only.join(',')}` : ''}" to re-baseline what was re-pinned.`);
     return;
   }
 

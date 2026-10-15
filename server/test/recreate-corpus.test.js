@@ -2,10 +2,11 @@
 // tested here is the part that decides pass or fail - a gate that cannot tell a drop from noise is worse than none.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { compareScores, formatRow, METRICS, REGISTRY, TOLERANCE } from '../scripts/corpus.mjs';
+import { compareScores, formatRow, METRICS, pickSource, pinFixture, pinnedDir, REGISTRY, TOLERANCE } from '../scripts/corpus.mjs';
 
 const scores = (o) => ({ fidelity: null, diff: null, responsive: null, pages: null, lowPages: null, ...o });
 
@@ -91,9 +92,49 @@ test('the five saved sites are registered, each with a capture to rebuild from',
     assert.match(f.recreateId, /^[0-9a-f-]{36}$/);
     // Skipped rather than failed when the machine has no such data: the corpus is this machine's, not the repo's.
     if (!existsSync(registry.dataDir)) continue;
-    const dir = path.join(registry.dataDir, 'projects', f.projectId, 'recreate', f.recreateId);
-    assert.ok(existsSync(path.join(dir, 'capture', 'manifest.json')), `${f.name} has a capture`);
-    assert.ok(existsSync(path.join(dir, 'assets', 'manifest.json')), `${f.name} has its assets`);
+    // The pinned copy, not the project's recreate folder: retention prunes those after two newer runs.
+    const dir = pinnedDir(registry.dataDir, f.name);
+    assert.ok(existsSync(path.join(dir, 'capture', 'manifest.json')), `${f.name} has a pinned capture (node scripts/corpus.mjs --pin)`);
+    assert.ok(existsSync(path.join(dir, 'assets', 'manifest.json')), `${f.name} has its pinned assets`);
+  }
+});
+
+test('a pinned capture outlives the recreate it was pinned from, and a stale id falls back to the newest finished one', async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), 'sas-corpus-pin-'));
+  try {
+    const projectId = '00000000-0000-4000-8000-000000000001';
+    const make = async (id, page) => {
+      const dir = path.join(dataDir, 'projects', projectId, 'recreate', id);
+      await mkdir(path.join(dir, 'capture', 'home'), { recursive: true });
+      await mkdir(path.join(dir, 'assets'), { recursive: true });
+      await writeFile(path.join(dir, 'capture', 'manifest.json'), JSON.stringify({ pages: [{ url: page }] }));
+      await writeFile(path.join(dir, 'capture', 'home', 'desktop.json'), '{}');
+      await writeFile(path.join(dir, 'assets', 'manifest.json'), '{}');
+      await writeFile(path.join(dir, 'report.json'), '{}');
+      return dir;
+    };
+    const older = await make('older', '/a');
+    await make('newer', '/b');
+    // An unfinished folder (no manifests) is never a source.
+    await mkdir(path.join(dataDir, 'projects', projectId, 'recreate', 'broken', 'capture'), { recursive: true });
+    const fixture = { name: 'site', projectId, recreateId: 'older' };
+
+    assert.equal(await pinFixture(fixture, { dataDir, finished: ['broken', 'newer', 'older'] }), 'older', 'the registered id wins while it exists');
+    // Retention removes the source; the pin keeps working.
+    await rm(older, { recursive: true, force: true });
+    const pinned = pinnedDir(dataDir, 'site');
+    assert.equal(JSON.parse(await readFile(path.join(pinned, 'capture', 'manifest.json'), 'utf8')).pages[0].url, '/a');
+    assert.ok(existsSync(path.join(pinned, 'capture', 'home', 'desktop.json')), 'nested capture files are pinned too');
+    assert.equal(JSON.parse(await readFile(path.join(pinned, 'pin.json'), 'utf8')).recreateId, 'older');
+
+    // Re-pinning with a stale id takes the newest finished recreate that can be replayed, skipping the broken one.
+    assert.equal(pickSource(fixture, { dataDir, finished: ['broken', 'newer', 'older'] }), 'newer');
+    assert.equal(await pinFixture(fixture, { dataDir, finished: ['broken', 'newer'] }), 'newer');
+    assert.equal(JSON.parse(await readFile(path.join(pinned, 'capture', 'manifest.json'), 'utf8')).pages[0].url, '/b');
+    assert.ok(!existsSync(`${pinned}.tmp`), 'no staging folder is left behind');
+    assert.equal(await pinFixture({ name: 'none', projectId, recreateId: 'gone' }, { dataDir, finished: ['broken'] }), null);
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
   }
 });
 

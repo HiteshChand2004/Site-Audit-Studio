@@ -5,7 +5,7 @@
   {
    "name": "nyaayai",
    "projectId": "1f98e132-7f60-45d7-8110-704d790a210c",
-   "recreateId": "2cd8b2ad-3fdc-40d7-8fbf-20ab3853a522",
+   "recreateId": "b9f1be6f-7b4b-41ca-a1aa-3302f2963a9d",
    "site": "www.nyaayai.com"
   },
   {
@@ -23,7 +23,7 @@
   {
    "name": "flexibench",
    "projectId": "caa38f97-330d-401e-bec9-059a9c3635b2",
-   "recreateId": "43d7caa4-a26c-4bc5-aed8-1e9b08708b52",
+   "recreateId": "93cc4df7-bf39-442d-bdcd-6510a2992ef0",
    "site": "www.flexibench.io",
    "note": "repointed 2026-10-12 (second time): retention keeps the latest two recreates per project, so a registered id goes stale after two runs. This one is the five-view exact run."
   },
