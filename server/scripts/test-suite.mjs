@@ -1,5 +1,5 @@
 // The test suites of the permanence rules (CLONER_SPEC "Regression suite", agreed with the user 2026-10-15):
-//   node scripts/test-suite.mjs precommit   fast unit tests + the fixtures in the plain-HTML stack (the git hook)
+//   node scripts/test-suite.mjs precommit   every source file parses + the unit tests, under two minutes (the git hook)
 //   node scripts/test-suite.mjs fixtures    every fixture in all four stacks (before a step's final commit)
 // A fixture that fails blocks the commit. Files run two at a time: the machine this was written on has little memory.
 import { spawn } from 'node:child_process';
@@ -24,7 +24,21 @@ if (!['precommit', 'fixtures'].includes(suite)) {
   console.error('Usage: node scripts/test-suite.mjs <precommit|fixtures>');
   process.exit(2);
 }
-const files = (suite === 'precommit' ? [...FAST, ...FIXTURES] : [...FIXTURES]).map((f) => `test/${f}.test.js`);
+// The hook stays under two minutes (user, 2026-10-15): every source file must parse, then the unit tests. The fixtures in
+// all four stacks run with `npm run test:fixtures` at the end of each step and before any merge.
+if (suite === 'precommit') {
+  const { readdir } = await import('node:fs/promises');
+  const { spawnSync } = await import('node:child_process');
+  const sources = (await readdir(path.join(SERVER, 'src'), { recursive: true }))
+    .filter((f) => /\.(m?js)$/.test(f)).map((f) => path.join('src', f));
+  const bad = sources.filter((f) => spawnSync(process.execPath, ['--check', f], { cwd: SERVER }).status !== 0);
+  if (bad.length) {
+    console.error(`Syntax errors in:\n  ${bad.join('\n  ')}`);
+    process.exit(1);
+  }
+  console.log(`${sources.length} source files parse.`);
+}
+const files = (suite === 'precommit' ? FAST : FIXTURES).map((f) => `test/${f}.test.js`);
 const env = {
   ...process.env,
   SAS_KEEP_AWAKE: '0',
