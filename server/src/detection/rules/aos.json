@@ -1,0 +1,15 @@
+{
+  "id": "aos",
+  "name": "AOS (Animate On Scroll)",
+  "kind": "library",
+  "category": "animation-library",
+  "notes": "AOS adds the aos-init / aos-animate classes and reads data-aos-offset / -duration / -easing (src/js/aos.js, helpers/prepare.js).",
+  "signals": [
+    { "type": "script", "pattern": "(^|/)aos(\\.min)?\\.js(\\?|$)|/aos@[\\d.]+", "weight": 0.6, "label": "AOS script" },
+    { "type": "scriptBody", "pattern": "[\"']aos-animate[\"']", "weight": 0.6, "label": "AOS animate class inside a script" },
+    { "type": "scriptBody", "pattern": "data-aos-(offset|easing|duration|anchor-placement)", "weight": 0.6, "label": "AOS options inside a script" },
+    { "type": "global", "name": "AOS", "weight": 0.6, "label": "window.AOS present" },
+    { "type": "dom", "selector": "[data-aos]", "weight": 0.4, "label": "data-aos elements" }
+  ],
+  "requires": []
+}

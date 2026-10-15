@@ -1,0 +1,14 @@
+{
+  "id": "locomotive",
+  "name": "Locomotive Scroll",
+  "kind": "library",
+  "category": "scroll-library",
+  "notes": "Locomotive Scroll v4 adds has-scroll-init / has-scroll-smooth to <html> (src/scripts/Core.js); pages mark the scroller with data-scroll-container.",
+  "signals": [
+    { "type": "script", "pattern": "locomotive-scroll", "weight": 0.7, "label": "Locomotive Scroll script" },
+    { "type": "scriptBody", "pattern": "has-scroll-smooth|has-scroll-init", "weight": 0.85, "label": "Locomotive Scroll inside a script" },
+    { "type": "global", "name": "LocomotiveScroll", "weight": 0.6, "label": "window.LocomotiveScroll present" },
+    { "type": "dom", "selector": "[data-scroll-container]", "weight": 0.5, "label": "data-scroll-container element" }
+  ],
+  "requires": []
+}

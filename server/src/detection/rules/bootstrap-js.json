@@ -1,0 +1,15 @@
+{
+  "id": "bootstrap-js",
+  "name": "Bootstrap JavaScript",
+  "kind": "library",
+  "category": "ui-library",
+  "notes": "Bootstrap 4/5 plugins keep their data under keys \"bs.modal\" / \"bs.collapse\" / \"bs.dropdown\" (js/src/*.js DATA_KEY) and ship a `Bootstrap vX.Y.Z (https://getbootstrap.com/)` banner. Bootstrap 4 needs jQuery.",
+  "signals": [
+    { "type": "script", "pattern": "bootstrap(\\.bundle)?(\\.min)?\\.js(\\?|$)", "weight": 0.6, "label": "Bootstrap script" },
+    { "type": "scriptBody", "pattern": "[\"']bs\\.(modal|collapse|dropdown|tooltip)[\"']", "weight": 0.8, "label": "Bootstrap plugins inside a script" },
+    { "type": "scriptBody", "pattern": "Bootstrap v(\\d+\\.\\d+\\.\\d+)", "version": 1, "weight": 0.5, "label": "Bootstrap banner" },
+    { "type": "global", "name": "bootstrap", "weight": 0.5, "label": "window.bootstrap present" },
+    { "type": "dom", "selector": "[data-bs-toggle]", "weight": 0.4, "label": "data-bs-toggle controls" }
+  ],
+  "requires": []
+}

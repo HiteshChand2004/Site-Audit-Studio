@@ -1,0 +1,11 @@
+{
+  "id": "angular-runtime",
+  "name": "Angular runtime",
+  "kind": "runtime",
+  "role": "framework",
+  "category": "framework-runtime",
+  "notes": "Angular's compiled components carry the ɵcmp / ɵfac definitions and the runtime writes ng-version on the root element (@angular/core).",
+  "signals": [
+    { "type": "scriptBody", "pattern": "ng-version|ɵcmp|ɵfac", "weight": 0.9, "label": "Angular runtime inside a script" }
+  ]
+}

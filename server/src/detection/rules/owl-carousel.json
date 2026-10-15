@@ -1,0 +1,13 @@
+{
+  "id": "owl-carousel",
+  "name": "Owl Carousel (jQuery plugin)",
+  "kind": "library",
+  "category": "ui-library",
+  "notes": "Owl Carousel 2 adds owl-loaded / owl-drag to the carousel and wraps slides in owl-stage (src/js/owl.carousel.js Owl.Defaults: loadedClass: 'owl-loaded').",
+  "signals": [
+    { "type": "script", "pattern": "owl\\.carousel(\\.min)?\\.js(\\?|$)", "weight": 0.6, "label": "Owl Carousel script" },
+    { "type": "scriptBody", "pattern": "loadedClass\\s*:\\s*[\"']owl-loaded[\"']", "weight": 0.85, "label": "Owl Carousel inside a script" },
+    { "type": "dom", "selector": ".owl-loaded", "weight": 0.5, "label": "initialised Owl carousel" }
+  ],
+  "requires": ["jquery"]
+}

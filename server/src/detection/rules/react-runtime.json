@@ -1,0 +1,14 @@
+{
+  "id": "react-runtime",
+  "name": "React runtime",
+  "kind": "runtime",
+  "role": "framework",
+  "category": "framework-runtime",
+  "notes": "react-dom looks for __REACT_DEVTOOLS_GLOBAL_HOOK__ and production builds throw \"Minified React error #…\"; react registers Symbol.for(\"react.element\") (React 19: \"react.transitional.element\"). Preact's devtools hook is __PREACT_DEVTOOLS__. A script holding React is an app bundle: never lifted, its own React tree would fight the copy's.",
+  "signals": [
+    { "type": "script", "pattern": "react(-dom)?(\\.production|\\.development)?(\\.min)?\\.js(\\?|$)|/react(-dom)?@[\\d.]+", "weight": 0.7, "label": "React script" },
+    { "type": "scriptBody", "pattern": "__REACT_DEVTOOLS_GLOBAL_HOOK__|Minified React error #", "weight": 0.9, "label": "React DOM inside a script" },
+    { "type": "scriptBody", "pattern": "[\"']react\\.(transitional\\.)?element[\"']", "weight": 0.8, "label": "React elements inside a script" },
+    { "type": "scriptBody", "pattern": "__PREACT_DEVTOOLS__", "weight": 0.8, "label": "Preact inside a script" }
+  ]
+}

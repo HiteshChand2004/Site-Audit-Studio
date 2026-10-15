@@ -1,0 +1,14 @@
+{
+  "id": "lenis",
+  "name": "Lenis",
+  "kind": "library",
+  "category": "scroll-library",
+  "notes": "Lenis sets window.lenisVersion and toggles the lenis-smooth / lenis-scrolling classes on <html> (packages/core/src/lenis.ts).",
+  "signals": [
+    { "type": "script", "pattern": "lenis(\\.min)?\\.m?js(\\?|$)|/lenis@[\\d.]+|@studio-freight/lenis", "weight": 0.6, "label": "Lenis script" },
+    { "type": "scriptBody", "pattern": "lenisVersion|[\"']lenis-smooth[\"']", "weight": 0.85, "label": "Lenis inside a script" },
+    { "type": "global", "name": "lenisVersion", "weight": 0.6, "label": "window.lenisVersion present" },
+    { "type": "dom", "selector": "html.lenis, html.lenis-smooth", "weight": 0.5, "label": "lenis class on <html>" }
+  ],
+  "requires": []
+}

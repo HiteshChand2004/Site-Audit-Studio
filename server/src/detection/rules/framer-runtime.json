@@ -1,0 +1,12 @@
+{
+  "id": "framer-runtime",
+  "name": "Framer runtime",
+  "kind": "runtime",
+  "role": "framework",
+  "category": "framework-runtime",
+  "notes": "A Framer site's modules are served from framerusercontent.com/sites/… or framer.com/m/…; the runtime hydrates elements marked data-framer-hydrate-v2 and imports packages through __framer_importFromPackage. Framer's events endpoint (events.framer.com) is a tracker, listed in manual-rules.json.",
+  "signals": [
+    { "type": "script", "pattern": "framerusercontent\\.com/sites/|framer\\.com/m/|framer\\.com/edit/", "weight": 0.9, "label": "Framer module" },
+    { "type": "scriptBody", "pattern": "__framer_importFromPackage|data-framer-hydrate-v2", "weight": 0.85, "label": "Framer runtime inside a script" }
+  ]
+}

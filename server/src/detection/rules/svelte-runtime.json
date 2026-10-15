@@ -1,0 +1,12 @@
+{
+  "id": "svelte-runtime",
+  "name": "Svelte / SvelteKit runtime",
+  "kind": "runtime",
+  "role": "framework",
+  "category": "framework-runtime",
+  "notes": "Svelte 4+ registers window.__svelte (its version set); SvelteKit's client keeps its state under __sveltekit_…; its chunks are served from /_app/immutable/.",
+  "signals": [
+    { "type": "script", "pattern": "/_app/immutable/", "weight": 0.8, "label": "SvelteKit chunk" },
+    { "type": "scriptBody", "pattern": "__sveltekit|__svelte\\b", "weight": 0.85, "label": "Svelte runtime inside a script" }
+  ]
+}
