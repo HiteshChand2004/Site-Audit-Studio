@@ -10,7 +10,9 @@
     "test": "node test/run-tests.js",
     "fixture-site": "node test/serve-fixture.js",
     "setup:toolchains": "node scripts/setup-toolchains.js",
-    "corpus": "node scripts/corpus.mjs"
+    "corpus": "node scripts/corpus.mjs",
+    "test:fixtures": "node scripts/test-suite.mjs fixtures",
+    "test:precommit": "node scripts/test-suite.mjs precommit"
   },
   "dependencies": {
     "@axe-core/playwright": "^4.13.0",

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Regression suite (CLONER_SPEC permanence rules): fast unit tests + the fixtures in the plain-HTML stack.
+# The full four-stack fixture suite is `npm run test:fixtures -w server`, before a step's final commit.
+cd "$(git rev-parse --show-toplevel)/server" || exit 1
+exec node scripts/test-suite.mjs precommit

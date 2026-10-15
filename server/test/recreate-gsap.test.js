@@ -228,6 +228,8 @@ async function serveStatic(root) {
 }
 
 test('React + Vite, Next.js and MERN: the same program runs from the gsap package in a layout effect, equivalent to the HTML build', async () => {
+  // The pre-commit run (scripts/test-suite.mjs precommit) checks the plain-HTML stack only; `npm run test:fixtures` builds these.
+  if (process.env.SAS_SKIP_APP_STACKS === '1') return;
   const { toolchainStatus } = await import('../src/toolchains/index.js');
   const ready = [];
   for (const [stack, toolchain] of [['react-vite', 'react-vite'], ['nextjs', 'next'], ['mern', 'mern']]) {

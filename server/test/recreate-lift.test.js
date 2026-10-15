@@ -147,6 +147,8 @@ async function serveStatic(root) {
 }
 
 test('React + Vite, Next.js and MERN: the lifted library is injected after mount, once, and drives the same markup', async () => {
+  // The pre-commit run (scripts/test-suite.mjs precommit) checks the plain-HTML stack only; `npm run test:fixtures` builds these.
+  if (process.env.SAS_SKIP_APP_STACKS === '1') return;
   const { toolchainStatus } = await import('../src/toolchains/index.js');
   const { buildStackOutput } = await import('../src/recreate/export/fromIr.js');
   const ready = [];
