@@ -53,6 +53,11 @@ function domSignature(map) {
       if (name === 'class') {
         value = pageClasses(value);
         if (!value) return null;
+      } else if (name === 'style') {
+        // The declarations the browser parsed, not the text: React writes `height:400px` for the original's
+        // `height: 400px` (an as-is page keeps inline styles as written), the same style.
+        value = [...node.style].map((p) => `${p}:${node.style.getPropertyValue(p)}${node.style.getPropertyPriority(p) ? '!important' : ''}`).sort().join(';');
+        if (!value) return null;
       } else if (name === 'srcset') value = value.split(',').map((c) => { const [u, ...d] = c.trim().split(/\s+/); return [resolve(u), ...d].join(' '); }).join(', ');
       else if (['href', 'xlink:href', 'src', 'poster', 'action', 'data'].includes(name)) value = resolve(value);
       return `${name}=${value}`;

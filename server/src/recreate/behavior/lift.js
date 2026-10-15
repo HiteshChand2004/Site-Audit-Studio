@@ -157,6 +157,54 @@ export async function planLift(ir, job) {
   return { files, report };
 }
 
+/**
+ * The app stacks' component for a page with lifted libraries (CLONER_SPEC Phase 3 React + Vite: "inject Tier 2 scripts in
+ * useEffect by appending <script> elements in order, awaiting each onload, then dispatching the synthetic events"): the
+ * files are served from public/js/lift/, run once per page load (a second mount - StrictMode, a re-render - finds them
+ * there), and `DOMContentLoaded` / `load` are dispatched once after the last one, because the libraries wait for them and
+ * the page has long passed both. Renders nothing.
+ * @param {{ client?: boolean }} [o]
+ */
+export function siteScriptsJsx({ client = false } = {}) {
+  return [
+    ...(client ? ["'use client';", ''] : []),
+    "// Generated: runs the original's own self-starting libraries on this page's markup, once, in their order.",
+    "import { useEffect } from 'react';",
+    '',
+    'function load(src) {',
+    '  const found = document.querySelector(`script[src="${src}"]`);',
+    "  if (found) return found.dataset.loaded === '1' ? Promise.resolve() : new Promise((resolve) => found.addEventListener('load', resolve, { once: true }));",
+    '  return new Promise((resolve, reject) => {',
+    "    const s = document.createElement('script');",
+    '    s.src = src;',
+    '    s.async = false;',
+    "    s.onload = () => { s.dataset.loaded = '1'; resolve(); };",
+    '    s.onerror = reject;',
+    '    document.head.appendChild(s);',
+    '  });',
+    '}',
+    '',
+    'export default function SiteScripts({ files }) {',
+    '  useEffect(() => {',
+    '    let cancelled = false;',
+    '    (async () => {',
+    '      for (const src of files) {',
+    '        if (cancelled) return;',
+    '        await load(src).catch(() => {});',
+    '      }',
+    '      if (cancelled || window.__sasLiftStarted) return;',
+    '      window.__sasLiftStarted = true;',
+    "      document.dispatchEvent(new Event('DOMContentLoaded', { bubbles: true }));",
+    "      window.dispatchEvent(new Event('load'));",
+    '    })();',
+    '    return () => { cancelled = true; };',
+    '  }, [files]);',
+    '  return null;',
+    '}',
+    '',
+  ].join('\n');
+}
+
 /** The page's lifted scripts, deferred, in order (before the copy's own script, which runs last). */
 export function liftTags(page, rel) {
   return (page.lift ?? []).map((f) => `  <script src="${rel(f)}" defer></script>`);

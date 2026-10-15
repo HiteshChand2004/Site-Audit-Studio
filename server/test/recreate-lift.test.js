@@ -127,6 +127,46 @@ test('exact copy: the self-starting library ships byte for byte and drives its m
   }
 });
 
+// A static server for a built app (no CSP: the behaviour is what is checked; the stack builds run their own safety scan).
+async function serveStatic(root) {
+  const s = http.createServer(async (req, res) => {
+    const p = decodeURIComponent(req.url.split('?')[0]);
+    for (const c of p.endsWith('/') ? [`${p}index.html`] : [p, `${p}/index.html`, `${p}.html`]) {
+      try {
+        const body = await readFile(path.join(root, c));
+        res.writeHead(200, { 'content-type': c.endsWith('.html') ? 'text/html; charset=utf-8' : c.endsWith('.js') ? 'text/javascript' : c.endsWith('.css') ? 'text/css' : 'application/octet-stream' });
+        return res.end(body);
+      } catch {
+        // next candidate
+      }
+    }
+    res.writeHead(404).end();
+  });
+  await new Promise((resolve) => s.listen(0, '127.0.0.1', resolve));
+  return { origin: `http://127.0.0.1:${s.address().port}`, close: () => new Promise((r) => s.close(r)) };
+}
+
+test('React + Vite, Next.js and MERN: the lifted library is injected after mount, once, and drives the same markup', async () => {
+  const { toolchainStatus } = await import('../src/toolchains/index.js');
+  const { buildStackOutput } = await import('../src/recreate/export/fromIr.js');
+  const ready = [];
+  for (const [stack, toolchain] of [['react-vite', 'react-vite'], ['nextjs', 'next'], ['mern', 'mern']]) {
+    if ((await toolchainStatus(toolchain)).installed) ready.push(stack);
+  }
+  if (!ready.length) return;
+  const { report, dir } = await recreate(true);
+  for (const stack of ready) {
+    const output = await buildStackOutput({ dir, stack, report });
+    assert.equal(output.status, 'ready', stack);
+    const served = await serveStatic(path.join(dir, 'stacks', stack, output.dist));
+    try {
+      assert.deepEqual(await toggles(`${served.origin}/`), [false, true, false], stack);
+    } finally {
+      await served.close();
+    }
+  }
+});
+
 test('the safety gate refuses a lifted file that is not the recorded library it is named after', async () => {
   const { scanSite } = await import('../src/recreate/verify/safety.js');
   const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');

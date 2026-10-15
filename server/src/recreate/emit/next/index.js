@@ -17,6 +17,7 @@ import { whiteSpaceByClass } from '../html.js';
 import { MOTION_FILE, MOTION_JS, MOTION_SRC } from '../motionScript.js';
 import { programJson, REPLAY_MODULE, siteAnimationsJsx } from '../anim.js';
 import { APPEAR_MODULE, siteAppearJsx } from '../../behavior/framer/emit.js';
+import { siteScriptsJsx } from '../../behavior/lift.js';
 import { findShared } from '../react/components.js';
 import { jsxAttr, jsxNode, propName, visibleChildren } from '../react/jsx.js';
 import { pageName } from '../react/index.js';
@@ -154,7 +155,9 @@ export function emitNext(ir) {
       imports.push("import SiteAppear from '@/components/SiteAppear.jsx';", `import appear from '@/anim/${names[i]}.appear.json';`);
       files.set(`anim/${names[i]}.appear.json`, `${JSON.stringify(page.appear)}\n`);
     }
-    const animEl = `${page.anim ? '\n      <SiteAnimations program={anim} />' : ''}${page.appear ? '\n      <SiteAppear program={appear} />' : ''}`;
+    if (page.lift?.length) imports.push("import SiteScripts from '@/components/SiteScripts.jsx';");
+    const liftEl = page.lift?.length ? `\n      <SiteScripts files={${JSON.stringify(page.lift.map((f) => `/${f}`))}} />` : '';
+    const animEl = `${page.anim ? '\n      <SiteAnimations program={anim} />' : ''}${page.appear ? '\n      <SiteAppear program={appear} />' : ''}${liftEl}`;
     files.set(`${dir}/page.jsx`, `${imports.join('\n')}${imports.length ? '\n\n' : ''}export default function ${names[i]}() {\n  return (\n    <>\n${content}${animEl}\n    </>\n  );\n}\n`);
   });
 
@@ -168,6 +171,10 @@ export function emitNext(ir) {
   if (replays) {
     files.set('anim/replay.js', REPLAY_MODULE);
     files.set('components/SiteAnimations.jsx', siteAnimationsJsx({ client: true, base: '@/anim' }));
+  }
+  if (ir.liftFiles && Object.keys(ir.liftFiles).length) {
+    for (const [file, text] of Object.entries(ir.liftFiles)) files.set(`public/${file}`, text);
+    files.set('components/SiteScripts.jsx', siteScriptsJsx({ client: true }));
   }
   const appears = ir.pages.some((p) => p.appear);
   if (appears) {

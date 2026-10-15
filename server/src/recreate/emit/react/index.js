@@ -10,6 +10,7 @@ import { headHtml, whiteSpaceByClass } from '../html.js';
 import { MOTION_FILE, MOTION_JS, MOTION_TAG } from '../motionScript.js';
 import { programJson, REPLAY_MODULE, siteAnimationsJsx } from '../anim.js';
 import { APPEAR_MODULE, siteAppearJsx } from '../../behavior/framer/emit.js';
+import { siteScriptsJsx } from '../../behavior/lift.js';
 import { headTags, safeJsonLd } from '../walk.js';
 import { pinnedOverrides, pinnedVersions } from '../../../toolchains/index.js';
 import { findShared, pascal } from './components.js';
@@ -91,7 +92,10 @@ export function emitReact(ir, opts = {}) {
       imports.push("import SiteAppear from '../SiteAppear.jsx';", `import appear from '../anim/${name}.appear.json';`);
       files.set(`src/anim/${name}.appear.json`, `${JSON.stringify(page.appear)}\n`);
     }
-    const animEl = `${page.anim ? '\n      <SiteAnimations program={anim} />' : ''}${page.appear ? '\n      <SiteAppear program={appear} />' : ''}`;
+    // The original's own self-starting libraries on this page (behavior/lift.js), served from public/js/lift/.
+    if (page.lift?.length) imports.push("import SiteScripts from '../SiteScripts.jsx';");
+    const liftEl = page.lift?.length ? `\n      <SiteScripts files={${JSON.stringify(page.lift.map((f) => `/${f}`))}} />` : '';
+    const animEl = `${page.anim ? '\n      <SiteAnimations program={anim} />' : ''}${page.appear ? '\n      <SiteAppear program={appear} />' : ''}${liftEl}`;
     files.set(fileOf(name, 'pages'), `${imports.join('\n')}${imports.length ? '\n\n' : ''}export default function ${name}() {\n  return (\n    <>\n${body}${animEl}\n    </>\n  );\n}\n`);
     meta.push({
       path: pagePath(page.outPath),
@@ -125,6 +129,10 @@ export function emitReact(ir, opts = {}) {
   if (ir.pages.some((p) => p.appear)) {
     files.set('src/anim/appear.js', APPEAR_MODULE);
     files.set('src/SiteAppear.jsx', siteAppearJsx());
+  }
+  if (ir.liftFiles && Object.keys(ir.liftFiles).length) {
+    for (const [file, text] of Object.entries(ir.liftFiles)) files.set(`public/${file}`, text);
+    files.set('src/SiteScripts.jsx', siteScriptsJsx());
   }
 
   return { files, assets, stats: { pages: ir.pages.length, components: components.length, sharedInstances: shared.size } };

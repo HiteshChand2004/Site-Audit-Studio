@@ -60,6 +60,8 @@ export const APP_PROFILES = {
     scriptAllowed: ({ src, type, text }) => !text.trim() && ((type === 'module' && VITE_BUNDLE.test(src ?? '')) || (!type && src === MOTION_ROOT)),
     jsAllow: [],
     contentChunk: () => false,
+    // The original's lifted libraries (public/js/lift/), injected after mount by SiteScripts: name + own hash, as in HTML.
+    lifted: liftedOk,
   },
   next: {
     bundleLink: NEXT_BUNDLE,
@@ -72,6 +74,7 @@ export const APP_PROFILES = {
     // pages use plain <a> links, so neither runs on navigation; both are the framework's, not the site's.
     jsAllow: ['fetch()', 'XMLHttpRequest'],
     contentChunk: (rel) => rel.startsWith('_next/static/chunks/app/'),
+    lifted: liftedOk,
   },
 };
 
