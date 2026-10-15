@@ -405,6 +405,27 @@ export function videoCandidates(motion) {
  * @param {string} dir  the page's capture folder
  * @param {{ motion: object, document?: string | null, watchMs?: number, fps?: number }} o
  */
+/**
+ * Pauses the page's clock a little ahead of its own time. The time is read from the page and the pause sent back, so on a
+ * busy machine the page may already be past the target ("Cannot fast-forward to the past"): it is read again with a
+ * wider margin. Nothing has been recorded yet at this point, so a retry changes nothing about the result.
+ * @param {import('playwright').Page} page
+ */
+export async function pauseClock(page, { margins = [50, 500, 2000] } = {}) {
+  let last;
+  for (const margin of margins) {
+    try {
+      const now = await page.evaluate(() => Date.now());
+      await page.clock.pauseAt(now + margin);
+      return margin;
+    } catch (err) {
+      last = err;
+      if (!/past/i.test(String(err?.message ?? err))) throw err;
+    }
+  }
+  throw last;
+}
+
 export async function recordVideoTier(browser, pageInfo, dir, { motion, document = null, watchMs = VIDEO_WATCH_MS, fps = VIDEO_FPS }) {
   const { layers, skipped } = videoCandidates(motion);
   if (!layers.length) return null;
@@ -452,8 +473,7 @@ export async function recordVideoTier(browser, pageInfo, dir, { motion, document
             continue;
           }
           await page.waitForTimeout(250);
-          const now = await page.evaluate(() => Date.now());
-          await page.clock.pauseAt(now + 50);
+          await pauseClock(page);
           const clip = { x: Math.max(0, prep.x), y: Math.max(0, prep.y), width: Math.min(prep.width, view.width - Math.max(0, prep.x)), height: Math.min(prep.height, view.height - Math.max(0, prep.y)) };
           let drift = 0;
           const shoot = async () => {
