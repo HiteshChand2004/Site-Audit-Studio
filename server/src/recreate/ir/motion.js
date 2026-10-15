@@ -444,6 +444,12 @@ export function scriptLoop(loop, node) {
     const deg = p.direction === 'backward' ? -360 : 360;
     return { keyframes: [{ offset: 0, props: { rotate: '0deg' } }, { offset: 100, props: { rotate: `${deg}deg` } }], timing: { duration: Math.round((360 / p.rate) * 1000), delay: 0, iterations: 'infinite', direction: 'normal', fill: 'none', easing: 'linear' } };
   }
+  // Both axes moved but no whole period was recorded (capture/loops.js keeps the trace then): the recorded movement,
+  // never one axis of it.
+  if (loop.pattern === 'oscillate' && !p.path && p.trace) {
+    const fromTrace = traceLoop(p.trace);
+    if (fromTrace) return fromTrace;
+  }
   if (loop.pattern === 'oscillate' && p.periodMs >= 200 && p.amplitude > 0 && (p.channel === 'x' || p.channel === 'y')) {
     const a = r1(p.amplitude);
     const v = (n) => (p.channel === 'x' ? `${n}px 0` : `0 ${n}px`);

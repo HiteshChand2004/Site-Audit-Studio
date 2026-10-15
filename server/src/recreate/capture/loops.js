@@ -523,8 +523,12 @@ export function analyzeSeries(series) {
     // Moving on the other axis too (a particle circling, a shape drifting diagonally): one axis alone would rebuild a
     // line where the original drew a loop, so the recorded path over one period goes with it.
     const other = key === 'x' ? 'y' : key === 'y' ? 'x' : null;
-    const path = other && Math.max(...ch.map((c) => c[other])) - Math.min(...ch.map((c) => c[other])) >= 3 ? periodPath(ch, periodMs) : null;
-    return { pattern: 'oscillate', channel: key, unit, range: round(range), amplitude: round(range / 2), periodMs, min: round(Math.min(...vs), 3), max: round(Math.max(...vs), 3), ...(path && { path }) };
+    const otherMoves = Boolean(other) && Math.max(...ch.map((c) => c[other])) - Math.min(...ch.map((c) => c[other])) >= 3;
+    const path = otherMoves ? periodPath(ch, periodMs) : null;
+    // Both axes move but the recording is shorter than a period (no path): its trace keeps both, so the copy never
+    // flattens a wandering movement to one axis (ir/motion.js scriptLoop plays the trace before the one-axis rule).
+    const trace = otherMoves && !path && ch.length >= 8 ? { trace: traceOf(ch) } : {};
+    return { pattern: 'oscillate', channel: key, unit, range: round(range), amplitude: round(range / 2), periodMs, min: round(Math.min(...vs), 3), max: round(Math.max(...vs), 3), ...(path && { path }), ...trace };
   }
   // No pattern (it wanders, or its loop is longer than what was watched): the trace itself, a few points, is what the copy
   // can play - back and forth, so it never jumps (ir/motion.js scriptLoop, reported as approximate).

@@ -107,6 +107,17 @@ test('a script motion named after an axis it barely moves on (its scale breathes
   assert.equal(scriptLoop({ pattern: 'drift', params: { channel: 'y', rate: 0, wrap: { distance: 28 } } }), null);
 });
 
+test('a two-axis movement recorded for less than one period is played as recorded, never flattened to one axis', () => {
+  // x swings with a 1.8 s period, y wanders slowly: 1.7 s recorded - two turns on x are seen, a whole period is not.
+  const a = analyzeSeries(series(1700, (t) => ({ translate: `${60 * Math.sin((2 * Math.PI * t) / 1.8)}px ${25 * t}px` })));
+  assert.equal(a.pattern, 'oscillate');
+  assert.equal(a.path, undefined, 'no whole period, no path');
+  assert.ok(a.trace?.points?.length >= 4, JSON.stringify(a));
+  const built = scriptLoop({ pattern: a.pattern, params: a });
+  assert.equal(built.approximate, 'recorded-path');
+  assert.ok(built.keyframes.some((k) => !/ 0px$/.test(k.props.translate)), 'the y movement is kept');
+});
+
 test('motion made of jumps (a counter rolling in steps) and a one-step change keep their trace and are rebuilt from it', () => {
   // Still most of the time, then a 20 px jump up every second, back down after three: median step 0, a "wrap" seen.
   const roller = analyzeSeries(series(4000, (t) => ({ translate: `0px ${-20 * (Math.floor(t) % 3)}px` })));
