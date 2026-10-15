@@ -38,6 +38,11 @@ const RULE_EXTRA = ['animation-name', 'animation-duration', 'animation-timing-fu
 // took into the copy's own transition, so a rebuilt effect arrives over the same stretch instead of in one frame.
 export const DYN_STEP_MS = 90;
 const DYN_STEPS = 6;
+/** How long a script may take to START reacting to the pointer before the element counts as not changing on hover. */
+export const START_WAIT_MS = 700;
+/** How long the way back may take before a change counts as not reverting (polled every REVERT_STEP_MS). */
+export const REVERT_WAIT_MS = 2000;
+const REVERT_STEP_MS = 120;
 // How many of the elements whose only sign of motion is a script's fingerprint are probed on one page (the rest are
 // counted): the real controls keep their share of the budget, and the mouse probe stays within its time.
 const DYNAMIC_SHARE = 0.25;
@@ -1206,6 +1211,21 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
     let settled = true;
     if (timed) {
       let elapsed = lastWait;
+      // Nothing yet: a script may react late (a busy main thread, a runtime that answers a while after the pointer
+      // arrived). Waited for, up to START_WAIT_MS, before calling it no change - a fixed wait read "no change" on a busy
+      // page and the hover was lost. The time counted is the change's own, from where it started.
+      if (stateKey(after) === stateKey(before)) {
+        for (let waited = 0; waited < START_WAIT_MS && Date.now() <= hoverDeadline; waited += DYN_STEP_MS) {
+          await page.waitForTimeout(DYN_STEP_MS);
+          const next = await page.evaluate(readState, args(c.i));
+          if (!next) break;
+          if (stateKey(next) !== stateKey(before)) {
+            after = next;
+            elapsed = DYN_STEP_MS;
+            break;
+          }
+        }
+      }
       let prev = after;
       settled = false;
       for (let step = 0; step < DYN_STEPS && Date.now() <= hoverDeadline; step++) {
@@ -1246,7 +1266,15 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
     // A script-driven effect is given the time it was measured to take to go back, so an effect still on its way out
     // is not mistaken for one that never reverts.
     await page.waitForTimeout(Math.min(1200, Math.max(settle(before) + 100, (scriptedMs ?? 0) + 150)));
-    const back = await page.evaluate(readState, args(c.i));
+    let back = await page.evaluate(readState, args(c.i));
+    // Not back yet: a way back slower than the way in (or a busy page) is waited for, up to REVERT_WAIT_MS, until the
+    // element is at rest again - a fixed wait threw away hovers that were still easing out.
+    for (let waited = 0; back && stateKey(back) !== stateKey(before) && waited < REVERT_WAIT_MS && Date.now() <= hoverDeadline; waited += REVERT_STEP_MS) {
+      await page.waitForTimeout(REVERT_STEP_MS);
+      const next = await page.evaluate(readState, args(c.i));
+      if (!next) break;
+      back = next;
+    }
     const kept = back ? keepReverting(before, back, d) : d;
     if (!kept) {
       stats.notReverted++;

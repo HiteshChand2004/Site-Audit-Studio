@@ -81,6 +81,13 @@ export function causeOf(entry) {
   // A part of a click widget (wN area, wNpK part, a state switch): open / closed is its own rules' business.
   if (attrs.some((a) => /^data-w-/.test(a)) || tokens.some((t) => /^w(\d+(p\d+)?|t|h)$/.test(t))) return { cause: 'panel closed in the copy', fix: false };
   if (entry.reason === 'offscreen') return { cause: 'placed off the page', fix: false };
+  // Moving by design: a rebuilt loop (lN: a ticker, a float), a scroll-scrubbed effect, an element a library's replay or a
+  // Framer appear entrance animates (data-sas-a), one that follows the pointer, a self-changing part, an autoplay. What
+  // it hides, it hides for a moment of its own movement (a ticker's logo slid off to the side); letting the property go
+  // with !important would stop the movement itself - a frozen ticker (found on a real Framer site). Reported, never forced.
+  const moving = tokens.some((t) => /^l\d+$/.test(t))
+    || attrs.some((a) => ['data-sas-a', 'data-w-scrub', 'data-w-follow', 'data-w-feed', 'data-w-auto', 'data-w-video'].includes(a));
+  if (moving) return { cause: 'moving by design (a loop, a replay or a scrubbed effect)', fix: false };
   const token = { opacity: 'opacity', visibility: 'visibility', transform: 'transform', size: by.prop, clipped: by.prop }[entry.reason];
   if (!token || !['opacity', 'visibility', 'transform', 'height', 'width'].includes(token)) return { cause: 'hidden', fix: false };
   if (tokens.includes('rv') && !by.isIn) return { cause: 'reveal never triggered', fix: true, strip: true, token };

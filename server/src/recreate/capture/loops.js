@@ -148,13 +148,14 @@ export async function findScriptLoops(opts) {
   };
   // Everything a script moves or fades an element with: its transform and the individual transform properties, its
   // opacity, and also its position (`left` / `top` of a positioned element: particles and floating shapes are often moved
-  // that way), its `filter` (a colour cycle), and an SVG shape's own position attributes (x / y / cx / cy).
+  // that way), its `filter` (a colour cycle), an SVG shape's own position attributes (x / y / cx / cy), and the dash offset
+  // of a stroke (a line drawn along an SVG path).
   const read = (el) => {
     const cs = getComputedStyle(el);
     const at = (n) => el.getAttribute(n);
     return [cs.transform, cs.opacity, cs.rotate, cs.translate, cs.scale,
       cs.position !== 'static' ? cs.left : 'auto', cs.position !== 'static' ? cs.top : 'auto', cs.filter,
-      at('x') ?? at('cx') ?? '', at('y') ?? at('cy') ?? ''];
+      at('x') ?? at('cx') ?? '', at('y') ?? at('cy') ?? '', cs.strokeDashoffset];
   };
   const els = [...(document.body ? document.body.querySelectorAll('*') : [])].filter((e) => !SKIP_TAGS.has(e.tagName.toUpperCase())).slice(0, 6000);
   const before = els.map(read);
@@ -173,7 +174,12 @@ export async function findScriptLoops(opts) {
   // An SVG element animated by its own SMIL child (<animate>, <animateTransform>, <animateMotion>, <set>) is explained
   // too: the copy keeps that markup, so it keeps moving - a loop rebuilt on top would move it twice.
   const smil = (el) => [...el.children].some((c) => /^(animate|animatetransform|animatemotion|set)$/i.test(c.tagName));
-  const loose = changed.filter((el) => !(el.getAnimations?.().length) && !smil(el) && shownNow(el));
+  // A one-shot Web Animation a script starts again at every step (a list stepping up one card at a time) explains
+  // nothing: the scan above keeps only repeating ones, so that motion is the script's and is recorded here. What the
+  // stylesheet runs (a CSS animation or transition) and a repeating Web Animation do explain the change.
+  const explains = (a) => (typeof CSSAnimation !== 'undefined' && a instanceof CSSAnimation) || (typeof CSSTransition !== 'undefined' && a instanceof CSSTransition)
+    || (a.effect?.getComputedTiming?.().iterations ?? 1) > 1;
+  const loose = changed.filter((el) => !(el.getAnimations?.() ?? []).some(explains) && !smil(el) && shownNow(el));
   const area = (el) => {
     const r = el.getBoundingClientRect();
     return r.width * r.height;
@@ -246,7 +252,7 @@ export async function recordPaths({ paths, ms = 9000, every = 50 }) {
     const at = (n) => el.getAttribute(n);
     return [cs.transform, cs.opacity, cs.rotate, cs.translate, cs.scale,
       cs.position !== 'static' ? cs.left : 'auto', cs.position !== 'static' ? cs.top : 'auto', cs.filter,
-      at('x') ?? at('cx') ?? '', at('y') ?? at('cy') ?? ''];
+      at('x') ?? at('cx') ?? '', at('y') ?? at('cy') ?? '', cs.strokeDashoffset];
   };
   // The position along both axes and the opacity (×100, so a 0.01 step counts like a quarter pixel), enough to see a
   // turn (the full reading is kept for the analysis).
@@ -396,11 +402,11 @@ const parsePair = (v) => {
   return [a[0] && a[0] !== 'none' ? num(a[0]) : 0, a[1] ? num(a[1]) : 0];
 };
 
-/** Per-sample channels of a recorded series: x / y (px), rotation (deg, unwrapped), scale, opacity. */
+/** Per-sample channels of a recorded series: x / y (px), rotation (deg, unwrapped), scale, opacity, hue, a stroke's dash offset. */
 function channels(series) {
   let prevRot = null;
   let offset = 0;
-  return series.map(([t, transform, opacity, rotate, translate, scale, left, top, filter, svgX, svgY]) => {
+  return series.map(([t, transform, opacity, rotate, translate, scale, left, top, filter, svgX, svgY, dash]) => {
     const d = decomposeTransform(transform) ?? { translate: [0, 0], scale: [1, 1], rotate: 0 };
     const tr = parsePair(translate);
     // A position a script writes (`left` / `top`, an SVG shape's x / y) moves the element like a translate does: the
@@ -419,7 +425,7 @@ function channels(series) {
     rot += offset;
     prevRot = rot;
     const sc = scale && scale !== 'none' ? num(String(scale).split(/\s+/)[0]) || 1 : 1;
-    return { t, x: d.translate[0] + tr[0], y: d.translate[1] + tr[1], rot, scale: d.scale[0] * sc, opacity: num(opacity), hue: hue ? Number(hue[1]) : 0 };
+    return { t, x: d.translate[0] + tr[0], y: d.translate[1] + tr[1], rot, scale: d.scale[0] * sc, opacity: num(opacity), hue: hue ? Number(hue[1]) : 0, dash: pos(dash) };
   });
 }
 
@@ -442,11 +448,12 @@ export function traceOf(ch) {
   const at = (t) => ch.reduce((best, c) => (Math.abs(c.t - t) < Math.abs(best.t - t) ? c : best), ch[0]);
   const pts = Array.from({ length: TRACE_POINTS }, (_, i) => at(t0 + (durationMs * i) / (TRACE_POINTS - 1)));
   const range = (k) => Math.max(...ch.map((c) => c[k])) - Math.min(...ch.map((c) => c[k]));
-  const channels = [['x', 2], ['y', 2], ['rot', 1], ['scale', 0.01], ['opacity', 0.02]].filter(([k, min]) => range(k) >= min).map(([k]) => k);
+  const channels = [['x', 2], ['y', 2], ['rot', 1], ['scale', 0.01], ['opacity', 0.02], ['dash', 2]].filter(([k, min]) => range(k) >= min).map(([k]) => k);
   return {
     durationMs: Math.round(durationMs),
     channels,
-    points: pts.map((c) => [Math.round(c.t - t0), round(c.x - ch[0].x, 1), round(c.y - ch[0].y, 1), round(c.rot - ch[0].rot, 1), round(c.scale / (ch[0].scale || 1), 3), round(c.opacity, 3)]),
+    // A stroke's dash offset is kept as it is (like the opacity): the line is drawn by its value, not by a change of it.
+    points: pts.map((c) => [Math.round(c.t - t0), round(c.x - ch[0].x, 1), round(c.y - ch[0].y, 1), round(c.rot - ch[0].rot, 1), round(c.scale / (ch[0].scale || 1), 3), round(c.opacity, 3), round(c.dash ?? 0, 1)]),
   };
 }
 
@@ -475,7 +482,7 @@ export function periodPath(ch, periodMs) {
 export function analyzeSeries(series) {
   if (series.length < 8) return null;
   const ch = channels(series);
-  const defs = [['x', 'px', 3], ['y', 'px', 3], ['rot', 'deg', 5], ['scale', '', 0.03], ['opacity', '', 0.05], ['hue', 'deg', 5]];
+  const defs = [['x', 'px', 3], ['y', 'px', 3], ['rot', 'deg', 5], ['scale', '', 0.03], ['opacity', '', 0.05], ['hue', 'deg', 5], ['dash', 'px', 3]];
   let best = null;
   for (const [key, unit, min] of defs) {
     const vs = ch.map((c) => c[key]);
@@ -528,8 +535,18 @@ export function analyzeSeries(series) {
     const path = otherMoves ? periodPath(ch, periodMs) : null;
     // Both axes move but the recording is shorter than a period (no path): its trace keeps both, so the copy never
     // flattens a wandering movement to one axis (ir/motion.js scriptLoop plays the trace before the one-axis rule).
-    const trace = otherMoves && !path && ch.length >= 8 ? { trace: traceOf(ch) } : {};
-    return { pattern: 'oscillate', channel: key, unit, range: round(range), amplitude: round(range / 2), periodMs, min: round(Math.min(...vs), 3), max: round(Math.max(...vs), 3), ...(path && { path }), ...trace };
+    // A dash offset going back and forth (a line drawn and undrawn) has no one-channel rule of its own: its trace is it.
+    // Changing in other ways at the same time (a card of a cycling stack moves AND scales AND fades): one channel would
+    // rebuild a bare slide. All of them go with it - over exactly one period when the recording holds one (a seamless
+    // loop), else as the trace played forward and back.
+    const RANGE_MIN = { x: 3, y: 3, rot: 5, scale: 0.03, opacity: 0.05, dash: 3 };
+    const alsoChanges = Object.keys(RANGE_MIN).some((k) => k !== key && k !== other && Math.max(...ch.map((c) => c[k] ?? 0)) - Math.min(...ch.map((c) => c[k] ?? 0)) >= RANGE_MIN[k]);
+    const oneCycle = alsoChanges && periodMs > 0 ? ch.filter((c) => c.t - ch[0].t <= periodMs) : null;
+    const periodic = oneCycle && ch[ch.length - 1].t - ch[0].t >= periodMs && oneCycle.length >= 8;
+    const trace = periodic
+      ? { trace: { ...traceOf(oneCycle), periodic: true } }
+      : ((otherMoves && !path) || key === 'dash' || alsoChanges) && ch.length >= 8 ? { trace: traceOf(ch) } : {};
+    return { pattern: 'oscillate', channel: key, unit, range: round(range), amplitude: round(range / 2), periodMs, min: round(Math.min(...vs), 3), max: round(Math.max(...vs), 3), ...(path && !alsoChanges && { path }), ...trace };
   }
   // No pattern (it wanders, or its loop is longer than what was watched): the trace itself, a few points, is what the copy
   // can play - back and forth, so it never jumps (ir/motion.js scriptLoop, reported as approximate).

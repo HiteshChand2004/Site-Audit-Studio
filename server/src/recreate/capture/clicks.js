@@ -117,6 +117,10 @@ function installClicks(opts) {
       else return [];
     }
     if (!r.length && cs.cursor === 'pointer' && tag !== 'INPUT' && tag !== 'SELECT' && tag !== 'TEXTAREA' && tag !== 'LABEL' && HINT.test(labelOf(el))) r.push('hint');
+    // A box the page made focusable and drew with a hand cursor is a control its script handles, whatever it says: a
+    // builder's FAQ question is a plain `div tabindex="0"` with neither a role nor a word that names it (found on a real
+    // Framer site, whose questions were never clicked).
+    if (!r.length && cs.cursor === 'pointer' && el.tabIndex >= 0 && el.hasAttribute('tabindex') && !/^(INPUT|SELECT|TEXTAREA|LABEL|A|BUTTON|IFRAME)$/.test(tag)) r.push('focusable');
     return r;
   };
 
@@ -151,17 +155,17 @@ function installClicks(opts) {
       skipped.duplicate++;
       continue;
     }
-    if (found.length >= limit) {
-      skipped.limit++;
-      continue;
-    }
     found.push({ el, sig, reasons });
   }
   // Controls that announce a toggle (aria-expanded, <summary>) first: they are quick and undo themselves, so a page whose
   // tabs or filters need reloads cannot use up the time before its accordion was probed.
-  // Top-bar links next: only hovered, so quick, and a menu bar is what every page shares.
-  const toggles = (f) => (f.reasons.includes('aria-expanded') || f.reasons.includes('summary') ? 0 : f.reasons.includes('nav-hover') ? 1 : 2);
-  found.sort((a, b) => toggles(a) - toggles(b));
+  // Top-bar links next: a menu bar is what every page shares. Other controls (buttons, roles, hint words) before links
+  // elsewhere. The limit is applied after this order, not in document order: a menu of twenty links at the top of the page
+  // used the whole limit, and a FAQ further down was never a candidate (found on a real Framer site).
+  const rank = (f) => (f.reasons.includes('aria-expanded') || f.reasons.includes('summary') ? 0
+    : f.reasons.includes('nav-hover') ? 2 : f.reasons.includes('link') ? 3 : 1);
+  found.sort((a, b) => rank(a) - rank(b));
+  if (found.length > limit) skipped.limit += found.splice(limit).length;
   window.__sasClick = { els: found.map((f) => f.el), base: null };
   return {
     candidates: found.map((f, i) => ({
@@ -651,12 +655,21 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
     await page.evaluate(stopTimers).catch(() => {});
     const again = await page.evaluate(installClicks, { limit, perSignature, hint: HINT_SOURCE });
     stats.reloads++;
-    return again.candidates.length === picked.candidates.length && again.candidates.every((x, k) => x.path === picked.candidates[k].path);
+    // The controls are found again by their path, not required to be the same list in the same order: a live page is
+    // rarely identical after a reload (a part that changes by itself, a re-rendered block), and asking for that ended the
+    // probe after the first link that navigated - the questions of a FAQ further down were never clicked (found on a real
+    // Framer site: 3 of 30 controls probed). A control no longer there is skipped and counted.
+    const now = new Map(again.candidates.map((x) => [x.path, x.i]));
+    if (!now.size) return false;
+    for (const x of picked.candidates) x.i = now.has(x.path) ? now.get(x.path) : -1;
+    for (const x of all) x.i = now.has(x.path) ? now.get(x.path) : -1;
+    return true;
   };
   const all = picked.candidates.map((x) => ({ i: x.i, path: x.path }));
-  const changed = async (from = 0) => !(await page.evaluate(controlsInPlace, all.slice(from)).catch(() => true));
+  const changed = async (from = 0) => !(await page.evaluate(controlsInPlace, all.slice(Math.max(0, from)).filter((x) => x.i >= 0)).catch(() => true));
 
   const widgets = [];
+  const wentAway = new Set();
   for (const c of picked.candidates) {
     if (Date.now() > deadline) {
       stats.timedOut = true;
@@ -666,11 +679,25 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
       stats.left = true;
       break;
     }
-    if (await changed(c.i)) {
+    if (c.i >= 0 && (await changed(all.findIndex((x) => x.path === c.path)))) {
       if (!(await reset().catch(() => false))) {
         stats.left = true;
         break;
       }
+    }
+    // Gone after a reload (the page drew it only once): skipped, the rest go on.
+    if (c.i < 0) {
+      stats.skipped.gone = (stats.skipped.gone ?? 0) + 1;
+      continue;
+    }
+    // A link equal to one that already left the page (the other items of the same menu) is a link as well: each would cost
+    // a reload and find nothing, so the time goes to the controls after them.
+    // Two links that left already: the page's router follows every link, so a plain link (nothing but its href says it is
+    // a control) is not clicked any more either.
+    const plainLink = c.reasons.every((x) => x === 'link' || x === 'nav-hover');
+    if (c.reasons.includes('link') && (wentAway.has(c.sig) || (plainLink && wentAway.size >= 2))) {
+      stats.skipped.navigates = (stats.skipped.navigates ?? 0) + 1;
+      continue;
     }
     let spot;
     try {
@@ -743,10 +770,10 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
       if (left()) {
         // A link that navigated in spite of the guard (its script went to the page itself) is a link, not a control: the
         // page is loaded again and the remaining controls are probed, instead of giving up on the page.
-        if (isLink) {
-          stats.navigated = (stats.navigated ?? 0) + 1;
-          if (await reset().catch(() => false)) continue;
-        }
+        // A button whose script went to another address is the same: the page it left is loaded again.
+        stats.navigated = (stats.navigated ?? 0) + 1;
+        if (isLink) wentAway.add(c.sig);
+        if (await reset().catch(() => false)) continue;
         stats.left = true;
         break;
       }
@@ -794,6 +821,8 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
     } catch {
       // A probe that throws (the element went away, the page navigated) is skipped; the next one decides.
       if (left()) {
+        stats.navigated = (stats.navigated ?? 0) + 1;
+        if (await reset().catch(() => false)) continue;
         stats.left = true;
         break;
       }

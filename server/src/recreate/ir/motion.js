@@ -505,16 +505,18 @@ export function scriptLoop(loop, node) {
 function traceLoop(trace) {
   if (!(trace?.points?.length >= 4 && trace.channels?.length && trace.durationMs >= 400)) return null;
   const { points, channels, durationMs } = trace;
-  const props = ([, x, y, rot, scale, opacity]) => ({
+  const props = ([, x, y, rot, scale, opacity, dash]) => ({
     ...((channels.includes('x') || channels.includes('y')) && { translate: `${r1(x)}px ${r1(y)}px` }),
     ...(channels.includes('rot') && { rotate: `${r1(rot)}deg` }),
     ...(channels.includes('scale') && { scale: String(scale) }),
     ...(channels.includes('opacity') && { opacity: String(opacity) }),
+    // A line drawn along an SVG path: its dash offset as the recording saw it (capture/loops.js `dash`).
+    ...(channels.includes('dash') && Number.isFinite(dash) && { 'stroke-dashoffset': `${r1(dash)}px` }),
   });
   return {
     approximate: 'recorded-path',
     keyframes: points.map((pt) => ({ offset: Math.round((pt[0] / durationMs) * 10000) / 100, props: props(pt) })),
-    timing: { duration: Math.round(durationMs), delay: 0, iterations: 'infinite', direction: 'alternate', fill: 'none', easing: 'linear' },
+    timing: { duration: Math.round(durationMs), delay: 0, iterations: 'infinite', direction: trace.periodic ? 'normal' : 'alternate', fill: 'none', easing: 'linear' },
   };
 }
 

@@ -24,10 +24,14 @@ export function errorCode(err) {
 // One connection pool per policy. The connector resolves and checks the host, then connects to
 // that exact address, so a second DNS answer (rebinding) can never be used.
 const agents = new WeakMap();
+export const MAX_HEADER_BYTES = 256 * 1024;
 function agentFor(policy) {
   if (!agents.has(policy)) {
     const connect = buildConnector({});
     const agent = new Agent({
+      // undici stops at 16 KB of headers by default; a page with hundreds of inline scripts sends a CSP with one hash
+      // each (a Next.js export: 364 hashes, ~20 KB) and was "unreachable". Browsers accept far more.
+      maxHeaderSize: MAX_HEADER_BYTES,
       connect(opts, callback) {
         const port = Number(opts.port) || (opts.protocol === 'https:' ? 443 : 80);
         resolveChecked(opts.hostname, port, policy).then(

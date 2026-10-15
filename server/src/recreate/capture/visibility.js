@@ -143,7 +143,7 @@ export function readVisibility({ max = 3000, record = false }) {
         by: {
           path: pathOf(by), sid: by.getAttribute('data-sas-id'), tag: by.tagName.toLowerCase(), prop: verdict.prop,
           motion: by.getAttribute('data-motion'), isIn: by.classList.contains('is-in'),
-          attrs: by.getAttributeNames().filter((n) => /^data-(w-|sas-v|framer-appear)/.test(n) || n === 'hidden'),
+          attrs: by.getAttributeNames().filter((n) => /^data-(w-|sas-v|sas-a|framer-appear)/.test(n) || n === 'hidden'),
         },
       }),
     });

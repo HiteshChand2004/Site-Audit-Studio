@@ -107,6 +107,21 @@ test('a script motion named after an axis it barely moves on (its scale breathes
   assert.equal(scriptLoop({ pattern: 'drift', params: { channel: 'y', rate: 0, wrap: { distance: 28 } } }), null);
 });
 
+test('a card of a cycling stack (moves, scales and fades together) keeps every channel, as one seamless period', () => {
+  // y swings ±80 px every 1.5 s while the card scales 0.5 → 1 and fades 0.4 → 1 with it; 3 s recorded (two periods).
+  const a = analyzeSeries(series(3000, (t) => {
+    const k = Math.sin((2 * Math.PI * t) / 1.5);
+    return { translate: `0px ${80 * k}px`, scale: String(0.75 + 0.25 * k), opacity: 0.7 + 0.3 * k };
+  }));
+  assert.equal(a.pattern, 'oscillate');
+  assert.equal(a.trace?.periodic, true, JSON.stringify(a));
+  const built = scriptLoop({ pattern: a.pattern, params: a });
+  assert.equal(built.timing.direction, 'normal', 'one period, played on: seamless');
+  assert.ok(Math.abs(built.timing.duration - 1500) <= 200, `duration ${built.timing.duration}`);
+  const props = Object.keys(built.keyframes[0].props).sort();
+  assert.deepEqual(props, ['opacity', 'scale', 'translate'], 'every channel goes with it');
+});
+
 test('a two-axis movement recorded for less than one period is played as recorded, never flattened to one axis', () => {
   // x swings with a 1.8 s period, y wanders slowly: 1.7 s recorded - two turns on x are seen, a whole period is not.
   const a = analyzeSeries(series(1700, (t) => ({ translate: `${60 * Math.sin((2 * Math.PI * t) / 1.8)}px ${25 * t}px` })));

@@ -11,12 +11,13 @@ const SERVER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 /** Unit tests with no browser pipeline run: seconds. */
 export const FAST = [
   'recreate-animation-rules', 'recreate-framer-appear', 'detect-libraries', 'behavior-scripts', 'detection', 'analyzers',
-  'recreate-fixers', 'reaudit-compare', 'recreate-corpus',
+  'recreate-fixers', 'reaudit-compare', 'recreate-corpus', 'http-headers',
 ];
 /** Fixtures: a page through the real pipeline, compared with the original in a browser (their app-stack parts build the
  * three app stacks with the real toolchains unless SAS_SKIP_APP_STACKS=1). */
 export const FIXTURES = [
   'recreate-animation-lab', 'recreate-gsap', 'recreate-framer-appear-e2e', 'recreate-lift', 'recreate-hittest', 'recreate-visibility', 'recreate-video-tier',
+  'recreate-framer-patterns', 'recreate-clicks', 'reaudit-clicks', 'recreate-hover-toggle',
 ];
 
 const suite = process.argv[2];

@@ -82,11 +82,11 @@ test('every metric comes from the report the pipeline already writes', () => {
   });
 });
 
-test('the five saved sites are registered, each with a capture to rebuild from', async () => {
+test('the eight saved sites are registered, each with a capture to rebuild from', async () => {
   const registry = JSON.parse(await readFile(REGISTRY, 'utf8'));
   assert.ok(registry.dataDir, 'the corpus knows where to read from');
   const names = registry.fixtures.map((f) => f.name).sort();
-  assert.deepEqual(names, ['botza', 'flexibench', 'nyaayai', 'panscience', 'parchaa']);
+  assert.deepEqual(names, ['botza', 'collateral', 'dreamhire', 'flexibench', 'incredible-dragon', 'nyaayai', 'panscience', 'parchaa']);
   for (const f of registry.fixtures) {
     assert.match(f.projectId, /^[0-9a-f-]{36}$/);
     assert.match(f.recreateId, /^[0-9a-f-]{36}$/);

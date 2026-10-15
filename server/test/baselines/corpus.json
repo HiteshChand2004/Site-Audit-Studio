@@ -32,6 +32,26 @@
    "projectId": "d5691f4f-8b64-4244-a561-d467db3fcb8c",
    "recreateId": "65503eed-898e-4290-b5e9-e0aa0beff930",
    "site": "www.parchaa.com"
+  },
+  {
+   "name": "collateral",
+   "projectId": "48ba9d10-eaa4-4c9b-9aac-dad6bf07ff68",
+   "recreateId": "3019a275-09f6-4732-8c90-eab9049638c5",
+   "site": "collateral.panscience.ai"
+  },
+  {
+   "name": "incredible-dragon",
+   "projectId": "8e134d55-4281-4218-a412-a6b24f8939af",
+   "recreateId": "b443e730-36ff-4cbc-826b-c8ba05ad5c7e",
+   "site": "incredible-dragon-471935.framer.app"
+  },
+  {
+   "name": "dreamhire",
+   "projectId": "2473f6be-ba75-466b-97c1-c3375229c7c0",
+   "recreateId": "c41cc1e0-cc3c-44e7-8c03-ea000ef59348",
+   "site": "dreamhire.in"
   }
- ]
+ ],
+ "previousRelease": "8380cf6",
+ "previousReleaseNote": "the last commit before CLONER_SPEC v2 Release 1 (animations), 2026-10-14"
 }
