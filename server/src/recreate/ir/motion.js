@@ -487,7 +487,9 @@ export function scriptLoop(loop, node) {
     // One way with no period anywhere (a slow loop caught going one way, even after the longer watch): its trace.
     return traceLoop(p.trace);
   }
-  return null;
+  // Anything a rule above could not rebuild - a "drift" that barely moves on its named axis while its scale breathes, a
+  // ramp, a spin too slow to time - keeps moving as recorded, whatever the speed or channel: never left standing still.
+  return traceLoop(p?.trace);
 }
 
 /**

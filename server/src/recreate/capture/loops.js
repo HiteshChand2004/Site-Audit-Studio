@@ -478,15 +478,18 @@ export function analyzeSeries(series) {
   if (dir !== 0 && same >= 0.85) {
     const rate = median(regular.map((r) => Math.abs(r.d) / (r.dt / 1000)));
     const out = { channel: key, unit, range: round(range), rate: round(rate, rate < 1 ? 4 : 2), direction: dir > 0 ? 'forward' : 'backward' };
-    if (key === 'rot') return { pattern: 'spin', ...out };
+    // The trace always goes with it: the copy's rules (a steady spin, a seamless ticker) come first, and when none fits -
+    // a movement made of jumps with a median step of 0 (a counter that rolls in steps), a one-step change, no period to
+    // slide by - the recorded motion is what it plays (ir/motion.js scriptLoop), rather than standing still.
+    const trace = ch.length >= 8 ? { trace: traceOf(ch) } : {};
+    if (key === 'rot') return { pattern: 'spin', ...out, ...trace };
     if (key === 'x' || key === 'y') {
       const w = wraps.length ? { distance: round(Math.abs(wraps.map((i) => diffs[i]).reduce((a, b) => a + b, 0) / wraps.length)) } : undefined;
       let periodMs;
       if (wraps.length >= 2) periodMs = Math.round((ch[wraps[wraps.length - 1] + 1].t - ch[wraps[0] + 1].t) / (wraps.length - 1));
-      // Without a wrap the copy may find no period to slide by (ir/motion.js): the trace is kept as the fallback.
-      return { pattern: 'drift', ...out, ...(w && { wrap: w }), ...(periodMs && { periodMs }), ...(!w && ch.length >= 8 && { trace: traceOf(ch) }) };
+      return { pattern: 'drift', ...out, ...(w && { wrap: w }), ...(periodMs && { periodMs }), ...trace };
     }
-    return { pattern: 'ramp', ...out };
+    return { pattern: 'ramp', ...out, ...trace };
   }
   // Oscillation: the direction of movement reverses at least twice.
   const smooth = diffs.map((d, i) => d + (diffs[i + 1] ?? 0)); // two frames, steadier than one

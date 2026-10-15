@@ -89,6 +89,35 @@ test('motion with no pattern keeps its recorded trace, played forward and back (
   assert.match(built.keyframes[0].props.translate, /^0px 0px$/);
 });
 
+test('a script motion named after an axis it barely moves on (its scale breathes) keeps moving as its trace, at any speed', () => {
+  // y creeps 0.3 px/s while the scale goes 1 → 1.06 → 1: the analysis may call it a slow drift, the copy must still move.
+  const a = analyzeSeries(series(4000, (t) => ({ translate: `0px ${0.3 * t}px`, scale: String(1 + 0.06 * Math.sin(t * Math.PI / 2)) })));
+  const built = scriptLoop({ pattern: a.pattern, params: a });
+  assert.ok(built, `${a.pattern} was left standing still`);
+  assert.ok(built.keyframes.some((k) => k.props.scale && k.props.scale !== '1'), JSON.stringify(built.keyframes.slice(0, 3)));
+  // The shape nyaayai's capture had: called a drift on y at 0-0.3 px/s, the motion in its trace (y + scale). Whatever the
+  // pattern is called, a slow one with a trace is rebuilt from it.
+  const trace = { channels: ['y', 'scale'], durationMs: 19925, points: Array.from({ length: 16 }, (_, i) => [i * 1328, 0, i * 0.4, 0, 1 + 0.04 * Math.sin(i), 1]) };
+  for (const pattern of ['drift', 'ramp', 'spin']) {
+    const r = scriptLoop({ pattern, params: { channel: 'y', rate: pattern === 'drift' ? 0.3 : 0, trace } });
+    assert.equal(r?.approximate, 'recorded-path', pattern);
+    assert.ok(r.keyframes.some((k) => k.props.scale !== '1'), pattern);
+  }
+  // And with nothing recorded there is still nothing to invent.
+  assert.equal(scriptLoop({ pattern: 'drift', params: { channel: 'y', rate: 0, wrap: { distance: 28 } } }), null);
+});
+
+test('motion made of jumps (a counter rolling in steps) and a one-step change keep their trace and are rebuilt from it', () => {
+  // Still most of the time, then a 20 px jump up every second, back down after three: median step 0, a "wrap" seen.
+  const roller = analyzeSeries(series(4000, (t) => ({ translate: `0px ${-20 * (Math.floor(t) % 3)}px` })));
+  assert.ok(roller?.trace?.points?.length >= 4, JSON.stringify(roller));
+  assert.ok(scriptLoop({ pattern: roller.pattern, params: roller }), `${roller.pattern} at ${roller.rate} px/s stood still`);
+  // An SVG part whose opacity steps from 0.2 to 1 and back now and then.
+  const stepper = analyzeSeries(series(4000, (t) => ({ opacity: Math.floor(t * 2) % 4 === 3 ? 0.2 : 1 })));
+  assert.ok(stepper?.trace, JSON.stringify(stepper));
+  assert.ok(scriptLoop({ pattern: stepper.pattern, params: stepper }), stepper.pattern);
+});
+
 test('a slow loop seen going one way only (a drift with no wrap and no repeat) keeps moving as its trace', () => {
   const a = analyzeSeries(series(2200, (t) => ({ translate: `${25 * t}px 0px` })));
   assert.equal(a.pattern, 'drift');
