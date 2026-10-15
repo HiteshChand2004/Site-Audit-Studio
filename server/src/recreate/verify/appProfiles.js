@@ -6,7 +6,17 @@
 //   jsAllow         script sinks the framework's runtime itself contains (see checkScript); everything else is banned
 //   contentChunk    chunk files that carry the site's own text (skipped by the sink scan: covered by the DOM equivalence)
 
+import { createHash } from 'node:crypto';
 import { vendorHashes } from '../emit/anim.js';
+import { LIFT_FILE, LIFTABLE_LIBS } from '../behavior/lift.js';
+
+const LIFT_SCRIPT = /^(\.\.\/)*js\/lift\/[a-z0-9-]+-[0-9a-f]{10}\.js$/;
+/** A lifted file: a known library's name and the start of its own sha256. Null = not a lifted file's path. */
+function liftedOk(rel, content) {
+  const m = LIFT_FILE.exec(rel);
+  if (!m) return null;
+  return LIFTABLE_LIBS.has(m[1]) && createHash('sha256').update(content).digest('hex').startsWith(m[2]);
+}
 
 const VITE_BUNDLE = /^\/_app\/[\w.-]+\.js$/;
 const NEXT_BUNDLE = /^\/_next\/static\/[\w./()%@~-]+\.js$/;
@@ -34,7 +44,10 @@ const MOTION_ROOT = '/js/motion.js';
 export const APP_PROFILES = {
   motion: {
     bundleLink: /$^/,
-    scriptAllowed: ({ src, type, text }) => !type && (MOTION_SCRIPT.test(src ?? '') || ANIM_SCRIPT.test(src ?? '')) && !text.trim(),
+    scriptAllowed: ({ src, type, text }) => !type && (MOTION_SCRIPT.test(src ?? '') || ANIM_SCRIPT.test(src ?? '') || LIFT_SCRIPT.test(src ?? '')) && !text.trim(),
+    // A lifted library of the original (behavior/lift.js): accepted only when its name is a known library and the first
+    // 10 hex of its own sha256 (checked by verify/safety.js), never scanned or edited.
+    lifted: liftedOk,
     jsAllow: [],
     contentChunk: () => false,
     // Only these files may be JavaScript at all: the generated script, the replayer and its data (sink-scanned), and the

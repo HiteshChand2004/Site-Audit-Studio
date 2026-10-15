@@ -5,10 +5,36 @@
   "category": "ui-library",
   "notes": "Alpine dispatches the \"alpine:init\" event and reports \"Alpine Expression Error\" (packages/alpinejs/src/utils/error.js); pages use x-data attributes.",
   "signals": [
-    { "type": "script", "pattern": "alpinejs|(^|/)alpine(\\.min)?\\.js(\\?|$)", "weight": 0.7, "label": "Alpine.js script" },
-    { "type": "scriptBody", "pattern": "Alpine Expression Error|[\"']alpine:init[\"']", "weight": 0.85, "label": "Alpine.js inside a script" },
-    { "type": "global", "name": "Alpine", "weight": 0.6, "label": "window.Alpine present" },
-    { "type": "dom", "selector": "[x-data]", "weight": 0.5, "label": "x-data elements" }
+    {
+      "type": "script",
+      "pattern": "alpinejs|(^|/)alpine(\\.min)?\\.js(\\?|$)",
+      "weight": 0.7,
+      "label": "Alpine.js script"
+    },
+    {
+      "type": "scriptBody",
+      "pattern": "Alpine Expression Error|[\"']alpine:init[\"']",
+      "weight": 0.85,
+      "label": "Alpine.js inside a script"
+    },
+    {
+      "type": "global",
+      "name": "Alpine",
+      "weight": 0.6,
+      "label": "window.Alpine present"
+    },
+    {
+      "type": "dom",
+      "selector": "[x-data]",
+      "weight": 0.5,
+      "label": "x-data elements"
+    }
   ],
-  "requires": []
+  "requires": [],
+  "selfInit": {
+    "attrs": [
+      "x-data"
+    ],
+    "note": "Alpine starts itself and binds every x-data element (alpinejs/src/index.js start())."
+  }
 }

@@ -126,6 +126,13 @@ export async function scanSite(dir, { app = false, contentChunk = () => false } 
       if (!same && issues.length < MAX_ISSUES) issues.push({ file: rel, type: 'script', detail: 'vendored library differs from the pinned package' });
       continue;
     }
+    if (kind === 'js' && profile?.lifted) {
+      const lifted = profile.lifted(rel, await readFile(file, 'utf8'));
+      if (lifted !== null) {
+        if (!lifted && issues.length < MAX_ISSUES) issues.push({ file: rel, type: 'script', detail: 'lifted script is not the recorded library it is named after' });
+        continue;
+      }
+    }
     const allowedFile = typeof profile?.onlyFile === 'function' ? profile.onlyFile(rel) : rel === profile?.onlyFile;
     if (kind === 'js' && profile?.onlyFile && !allowedFile) {
       if (issues.length < MAX_ISSUES) issues.push({ file: rel, type: 'script', detail: 'unexpected script file' });

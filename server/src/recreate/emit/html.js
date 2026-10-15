@@ -7,6 +7,7 @@ import { CSS_FILE, emitCss, usedCustomProps } from './css.js';
 import { MOTION_FILE, MOTION_JS } from './motionScript.js';
 import { animFiles, animTags, vendorText } from './anim.js';
 import { appearFiles, appearTags } from '../behavior/framer/emit.js';
+import { liftTags } from '../behavior/lift.js';
 import { describeNode, headTags, relativeRefs, safeJsonLd } from './walk.js';
 
 export { safeJsonLd };
@@ -113,6 +114,8 @@ export function emitPage(page, { ids = false, useAsset = () => true, motionScrip
     '<head>',
     headMarkup(page, ctx),
     ...(css ? [`  <style>\n${styleText(css)}</style>`] : []),
+    // The original's own self-starting libraries (behavior/lift.js), byte for byte, before the copy's script.
+    ...liftTags(page, (f) => relFile(page.outPath, f)),
     ...(motionScript ? [`  <script src="${relFile(page.outPath, MOTION_FILE)}" defer></script>`] : []),
     // The animation library's replay (emit/anim.js): the library, the page's program, the replayer - deferred, in order.
     ...animTags(page, (f) => relFile(page.outPath, f)),
@@ -148,6 +151,7 @@ export function emitSite(ir, { ids = false, inlineCss = false } = {}) {
   }
   if (motionScript) files.set(MOTION_FILE, MOTION_JS);
   for (const [file, text] of animFiles(ir)) files.set(file, text);
+  for (const [file, text] of Object.entries(ir.liftFiles ?? {})) files.set(file, text);
   for (const [file, text] of appearFiles(ir, vendorText)) files.set(file, text);
   const css = emitCss(ir, { usedVars });
   for (const m of css.matchAll(assetRef)) assets.add(m[1]);

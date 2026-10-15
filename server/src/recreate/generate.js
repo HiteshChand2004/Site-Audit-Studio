@@ -29,6 +29,7 @@ import { applyExcludes, findExcludable } from './ir/exclude.js';
 import { isElement } from './ir/tree.js';
 import { RECREATE_VIEWS, VIEW_WIDTHS } from './views.js';
 import { hitTestGuard, pointerMapFile } from './verify/hittest.js';
+import { classifyJobScripts, planLift } from './behavior/lift.js';
 import { launchBrowser } from '../audit/render.js';
 import { compareLayout, openRenderer, planFixes, renderPage, viewScore } from './verify/layout.js';
 import { createLedger } from './verify/ledger.js';
@@ -508,6 +509,21 @@ export async function generateStage(ctx) {
     }
     if (asis.missingCssUrls || asis.missing.images || asis.missing.media) {
       report.warnings.push(`${asis.missingCssUrls + asis.missing.images + asis.missing.media} files the original's markup or stylesheets point at could not be downloaded; they are left out of the copy, never linked to the original.`);
+    }
+  }
+  // Every script the original loaded, classified from the job's network record (behavior/lift.js): what it is, which
+  // are trackers left out, which framework bundles are never lifted. On pages that keep the original markup, the
+  // libraries that start by themselves from that markup ship byte for byte (the targeted lift, decision 1).
+  await ctx.netCache?.saveRecord?.().catch(() => null);
+  const scriptJob = await classifyJobScripts(ctx.dir).catch(() => null);
+  if (scriptJob) report.scripts = scriptJob.summary;
+  if (asIs && scriptJob) {
+    const lift = await planLift(ir, scriptJob);
+    report.scripts = { ...report.scripts, lift: lift.report };
+    if (lift.files.size) {
+      ir.liftFiles = Object.fromEntries(lift.files);
+      ir.motion = { version: MOTION_VERSION, hover: [], focus: [], reveal: [], delays: [], loops: [], widgets: [], states: 0, notices: 0, panels: 0, hoverCards: 0, scrolled: [], ...(ir.motion ?? {}), script: true };
+      report.warnings.push(`${lift.report.lifted.length} script librar${lift.report.lifted.length === 1 ? 'y' : 'ies'} of the original ${lift.report.lifted.length === 1 ? 'runs' : 'run'} in the copy as they were (${[...new Set(lift.report.lifted.map((l) => l.lib))].join(', ')}): they start themselves from the original markup.`);
     }
   }
   const asisMode = Boolean(ir.asis);

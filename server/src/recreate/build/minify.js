@@ -79,7 +79,7 @@ async function writeBuild({ files, assets, assetsDir, distDir }) {
     try {
       // A vendored library (emit/anim.js js/vendor/) ships exactly as its pinned package has it: already minified, and the
       // safety gate accepts it only byte for byte.
-      if (file.startsWith(`${VENDOR_DIR}/`)) out = content;
+      if (file.startsWith(`${VENDOR_DIR}/`) || file.startsWith('js/lift/')) out = content;
       else if (kind === 'css') out = await minifyCss(content);
       else if (kind === 'js') out = await minifyJs(content);
       else if (ext === '.html' && content.includes('<style>')) out = await minifyInlineStyles(content, sizes.css);
