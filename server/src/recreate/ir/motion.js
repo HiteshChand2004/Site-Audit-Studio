@@ -559,6 +559,17 @@ function frozenEntrances(site, reg, stats) {
     const poses = shown.map((d) => (Number(d.style?.opacity) < 0.05 && !/absolute|fixed/.test(d.style?.position ?? '') ? entrancePose(d.style?.transform) : null));
     // Frozen in at least one view (others may have been read after the entrance played, like a laptop view read later).
     const frozen = shown.filter((d, i) => moved(poses[i]) && inside(n, parent, views[i][0]));
+    // A Framer appear target (behavior/framer/plan.js): its entrance is the page's own settings, run by the copy's motion
+    // replay ('replay'), or there are none the copy could read ('fallback': shown still, as CLONER_SPEC 2A asks). Either
+    // way it ends shown: a first pose the capture caught it in is dropped, and no measured reveal is added on top.
+    if (n.appear && frozen.length) {
+      for (const d of frozen) {
+        const { opacity, transform, ...rest } = d.style;
+        d.style = rest;
+      }
+      stats.reveal.appearShown = (stats.reveal.appearShown ?? 0) + 1;
+      return;
+    }
     if (!owned && frozen.length && hasContent(n)) {
       const pose = poses.find(moved);
       for (const d of frozen) {

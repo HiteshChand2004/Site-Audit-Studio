@@ -24,9 +24,10 @@ function jsonArray(text) {
 // The plain-HTML build with scroll reveal (emit/motionScript.js): the one fixed script `js/motion.js`, loaded by <script src defer>
 // from each page (a relative path), and nothing else.
 const MOTION_SCRIPT = /^(\.\.\/)*js\/motion\.js$/;
-// The animation library's replay (emit/anim.js): the pinned library (accepted only byte for byte), the fixed replayer, data.
-const ANIM_SCRIPT = /^(\.\.\/)*js\/(vendor\/(gsap|ScrollTrigger)\.min\.js|anim-replay\.js|anim\/[\w.-]+\.js)$/;
-const ANIM_FILE = /^js\/(anim-replay\.js|anim\/[\w.-]+\.js)$/;
+// The animation library's replay (emit/anim.js) and Framer appear entrances (behavior/framer/emit.js): the pinned libraries
+// (accepted only byte for byte), the fixed replayers, their data.
+const ANIM_SCRIPT = /^(\.\.\/)*js\/(vendor\/((gsap|ScrollTrigger)\.min|motion)\.js|(anim|appear)-replay\.js|(anim|appear)\/[\w.-]+\.js)$/;
+const ANIM_FILE = /^js\/((anim|appear)-replay\.js|(anim|appear)\/[\w.-]+\.js)$/;
 // The app stacks (React + Vite, Next.js, MERN) serve the same file from the site root, and may carry it next to their bundles.
 const MOTION_ROOT = '/js/motion.js';
 

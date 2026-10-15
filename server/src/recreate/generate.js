@@ -21,6 +21,9 @@ import { fetchWordPress, isWordPress } from './fixers/wordpress.js';
 import { buildIR, prepareSite, readPageCaptures } from './ir/index.js';
 import { MOTION_VERSION, applyMotion, cpathIndex, readPageMotion } from './ir/motion.js';
 import { addStats, GSAP_VERSION, planReplay, readAnimLogFor, replayIds } from './behavior/gsap.js';
+import { parseAppearConfig } from './behavior/framer/appear.js';
+import { readAppearFor } from './behavior/framer/capture.js';
+import { addAppearStats, appearIds, MOTION_PACKAGE_VERSION, planAppear, readDocumentHtml, showAsIsAppear } from './behavior/framer/plan.js';
 import { addStructuredData } from './ir/structuredData.js';
 import { applyExcludes, findExcludable } from './ir/exclude.js';
 import { isElement } from './ir/tree.js';
@@ -364,9 +367,34 @@ export async function generateStage(ctx) {
     if (plan.program) t.anim = plan.program;
     if (plan.owned.size) replayOwned.set(t.info.path, plan.owned);
   }
+  // Framer appear entrances (behavior/framer): the settings the page's server-rendered HTML carries for each element marked
+  // data-framer-appear-id, run with the motion package. They win over the entrance the capture measured on that element.
+  const appearStats = {};
+  const appearConfigs = new Map();
+  const appearUnknown = [];
+  const fIds = appearIds();
+  for (const t of site.pages) {
+    const info = ctx.pages.find((p) => p.path === t.info.path);
+    const found = info ? await readAppearFor(ctx.dir, info) : null;
+    if (!found?.elements?.length) continue;
+    const html = await readDocumentHtml(ctx, info);
+    const config = html ? parseAppearConfig(html) : null;
+    if (config) appearConfigs.set(t.info.path, config);
+    for (const u of config?.unknown ?? []) if (appearUnknown.length < 10) appearUnknown.push({ page: t.info.path, ...u });
+    const measured = new Set((motionByPath.get(t.info.path)?.reveal?.elements ?? []).map((e) => e.path));
+    const plan = planAppear({ config, elements: found.elements, nodes: cpathIndex(t.root), ids: fIds, measured });
+    addAppearStats(appearStats, { pages: 1, withSettings: config?.found ? 1 : 0, noDocument: html ? 0 : 1, ...plan.stats });
+    if (plan.program) t.appear = plan.program;
+    if (plan.owned.size) replayOwned.set(t.info.path, new Set([...(replayOwned.get(t.info.path) ?? []), ...plan.owned]));
+  }
   const motion = applyMotion(site, motionByPath, { owned: replayOwned });
   site.motion = motion.motion;
   if (Object.keys(replayStats).length) motion.stats.replay = { lib: 'gsap', version: GSAP_VERSION, pages: site.pages.filter((t) => t.anim).length, ...replayStats };
+  if (appearStats.pages) {
+    motion.stats.appear = { lib: 'motion', version: MOTION_PACKAGE_VERSION, ...appearStats, shownStill: motion.stats.reveal?.appearShown ?? 0, ...(appearUnknown.length && { unknown: appearUnknown }) };
+    const still = (appearStats.missing ?? 0) + (appearStats.garbled ?? 0);
+    if (still) report.warnings.push(`${still} Framer appear ${still === 1 ? 'entrance has' : 'entrances have'} no settings the copy could read; ${still === 1 ? 'that element is' : 'those elements are'} shown without the entrance.`);
+  }
 
   // Parts of the page that are not the site: the builder's badge, a consent banner, a chat bubble (ir/exclude.js).
   // Only for an exact copy, only on evidence the capture measured, and every one of them reported - the copy must
@@ -424,6 +452,10 @@ export async function generateStage(ctx) {
   if (site.pages.some((t) => t.anim)) {
     site.motion = { version: MOTION_VERSION, hover: [], focus: [], reveal: [], delays: [], loops: [], widgets: [], states: 0, notices: 0, panels: 0, hoverCards: 0, scrolled: [], ...site.motion, script: true, anim: true };
   }
+  // Framer appear entrances (behavior/framer/emit.js) ship scripts the same way.
+  if (site.pages.some((t) => t.appear)) {
+    site.motion = { version: MOTION_VERSION, hover: [], focus: [], reveal: [], delays: [], loops: [], widgets: [], states: 0, notices: 0, panels: 0, hoverCards: 0, scrolled: [], ...site.motion, script: true, appear: true };
+  }
   if (frames.canvases.length) {
     report.motion = { ...report.motion, unsupported: { ...report.motion?.unsupported, canvas: frames.canvases } };
     const moving = frames.canvases.filter((c) => c.animated).length;
@@ -465,6 +497,12 @@ export async function generateStage(ctx) {
   if (asIs) {
     ctx.progress(0.18, 'Keeping the original markup and stylesheets');
     asis = await applyAsIs(ir, { dir: ctx.dir, site, excluded });
+    // The original's markup keeps each appear target's inline style as the capture read it: one still in its first pose
+    // (an entrance the page never played, or one without settings) is shown (behavior/framer/plan.js showAsIsAppear).
+    if (motion.stats.appear) {
+      const shown = showAsIsAppear(ir, appearConfigs, (p) => p.path);
+      motion.stats.appear.shownAsIs = shown.shown;
+    }
     if (asis.pages && asis.rebuilt.length) {
       report.warnings.push(`${asis.rebuilt.length} ${asis.rebuilt.length === 1 ? 'page has' : 'pages have'} no as-is capture and ${asis.rebuilt.length === 1 ? 'was' : 'were'} rebuilt instead (capture the site again to keep their original CSS).`);
     }
