@@ -1,0 +1,13 @@
+{
+  "id": "slick",
+  "name": "Slick carousel (jQuery plugin)",
+  "kind": "library",
+  "category": "ui-library",
+  "notes": "slick.js marks a ready carousel with the slick-initialized class and wraps its slides in slick-track (slick/slick.js).",
+  "signals": [
+    { "type": "script", "pattern": "slick(\\.min)?\\.js(\\?|$)|slick-carousel", "weight": 0.6, "label": "slick script" },
+    { "type": "scriptBody", "pattern": "slick-initialized", "weight": 0.85, "label": "slick inside a script" },
+    { "type": "dom", "selector": ".slick-initialized", "weight": 0.5, "label": "initialised slick carousel" }
+  ],
+  "requires": ["jquery"]
+}

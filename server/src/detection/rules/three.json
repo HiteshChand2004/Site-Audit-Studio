@@ -1,0 +1,14 @@
+{
+  "id": "three",
+  "name": "three.js (WebGL)",
+  "kind": "library",
+  "category": "webgl-library",
+  "notes": "three.js registers window.__THREE__ = REVISION (src/Three.js) and prefixes its renderer messages with \"THREE.WebGLRenderer:\".",
+  "signals": [
+    { "type": "script", "pattern": "(^|/)three(\\.module|\\.core)?(\\.min)?\\.m?js(\\?|$)|/three@[\\d.]+", "weight": 0.6, "label": "three.js script" },
+    { "type": "scriptBody", "pattern": "__THREE__", "weight": 0.85, "label": "three.js inside a script" },
+    { "type": "scriptBody", "pattern": "THREE\\.WebGLRenderer", "weight": 0.6, "label": "three.js renderer inside a script" },
+    { "type": "global", "name": "THREE", "weight": 0.6, "label": "window.THREE present" }
+  ],
+  "requires": []
+}

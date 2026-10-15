@@ -1,0 +1,12 @@
+{
+  "id": "vue-runtime",
+  "name": "Vue / Nuxt runtime",
+  "kind": "runtime",
+  "role": "framework",
+  "category": "framework-runtime",
+  "notes": "Vue 3 sets __VUE__ and app containers carry __vue_app__ (runtime-core devtools / apiCreateApp); Nuxt chunks are served from /_nuxt/ and read window.__NUXT__.",
+  "signals": [
+    { "type": "script", "pattern": "/_nuxt/|(^|/)vue(\\.runtime)?(\\.global|\\.esm-browser)?(\\.prod)?(\\.min)?\\.js(\\?|$)|/vue@[\\d.]+", "weight": 0.8, "label": "Vue / Nuxt script" },
+    { "type": "scriptBody", "pattern": "__VUE__|__vue_app__|__NUXT__", "weight": 0.9, "label": "Vue runtime inside a script" }
+  ]
+}

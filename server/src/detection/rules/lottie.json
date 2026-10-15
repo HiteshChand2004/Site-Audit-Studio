@@ -1,0 +1,17 @@
+{
+  "id": "lottie",
+  "name": "Lottie",
+  "kind": "library",
+  "category": "animation-library",
+  "notes": "lottie-web / bodymovin: searchAnimations() reads the data-animation-path / data-bm-renderer attributes (player/js/main.js). lottie-player and dotlottie-player register custom elements of those names; dotlottie-web loads dotlottie-player.wasm.",
+  "signals": [
+    { "type": "script", "pattern": "lottie(_[a-z]+)?(\\.min)?\\.m?js(\\?|$)|bodymovin(\\.min)?\\.js|lottie-player|dotlottie|lottie-web", "weight": 0.6, "label": "Lottie script" },
+    { "type": "scriptBody", "pattern": "data-bm-renderer|data-animation-path", "weight": 0.85, "label": "lottie-web inside a script" },
+    { "type": "scriptBody", "pattern": "customElements\\.define\\(\\s*[\"'](dot)?lottie-player[\"']", "weight": 0.85, "label": "lottie-player element defined by a script" },
+    { "type": "scriptBody", "pattern": "dotlottie-player\\.wasm|@lottiefiles/dotlottie-web", "weight": 0.7, "label": "dotLottie runtime inside a script" },
+    { "type": "global", "name": "lottie", "weight": 0.6, "label": "window.lottie present" },
+    { "type": "global", "name": "bodymovin", "weight": 0.6, "label": "window.bodymovin present" },
+    { "type": "dom", "selector": "lottie-player, dotlottie-player, dotlottie-wc", "weight": 0.5, "label": "Lottie player element" }
+  ],
+  "requires": []
+}

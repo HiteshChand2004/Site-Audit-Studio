@@ -1,0 +1,14 @@
+{
+  "id": "webflow-ix",
+  "name": "Webflow Interactions (webflow.js IX2)",
+  "kind": "library",
+  "category": "animation-library",
+  "notes": "webflow.js ships the IX2 engine as a Redux store whose action types are the strings IX2_RAW_DATA_IMPORTED / IX2_SESSION_STARTED …, and loads it with Webflow.require('ix2'). Newer sites split it into webflow.achunk.* / webflow.schunk.* files.",
+  "signals": [
+    { "type": "script", "pattern": "/js/webflow(\\.[0-9a-f]{6,})?\\.js(\\?|$)|webflow\\.[as]chunk\\.[0-9a-f]+\\.js", "weight": 0.6, "label": "webflow.js script" },
+    { "type": "scriptBody", "pattern": "IX2_RAW_DATA_IMPORTED|IX2_SESSION_STARTED", "weight": 0.9, "label": "Webflow IX2 engine inside a script" },
+    { "type": "scriptBody", "pattern": "Webflow\\.require\\(\\s*[\"']ix2[\"']\\)", "weight": 0.7, "label": "Webflow.require('ix2')" },
+    { "type": "dom", "selector": "[data-w-id]", "weight": 0.4, "label": "data-w-id elements" }
+  ],
+  "requires": []
+}

@@ -1,0 +1,12 @@
+{
+  "id": "next-runtime",
+  "name": "Next.js runtime",
+  "kind": "runtime",
+  "role": "framework",
+  "category": "framework-runtime",
+  "notes": "Every Next.js chunk is served from /_next/static/ and pushes itself onto self.webpackChunk_N_E (pages router) or reads self.__next_f / __NEXT_DATA__ (app / pages router).",
+  "signals": [
+    { "type": "script", "pattern": "/_next/static/", "weight": 0.9, "label": "Next.js chunk" },
+    { "type": "scriptBody", "pattern": "webpackChunk_N_E|__NEXT_DATA__|__next_f|__NEXT_P", "weight": 0.9, "label": "Next.js runtime inside a script" }
+  ]
+}

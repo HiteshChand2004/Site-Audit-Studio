@@ -1,0 +1,14 @@
+{
+  "id": "jquery",
+  "name": "jQuery",
+  "kind": "library",
+  "category": "ui-library",
+  "notes": "jQuery 3.x carries the strings \"jQuery.Deferred exception: \" (src/deferred/exceptionHook.js) and Sizzle's \"Syntax error, unrecognized expression: \", and a `/*! jQuery vX.Y.Z` banner.",
+  "signals": [
+    { "type": "script", "pattern": "jquery(-\\d[\\w.]*)?(\\.slim)?(\\.min)?\\.js(\\?|$)|/jquery@[\\d.]+|ajax/libs/jquery/", "weight": 0.6, "label": "jQuery script" },
+    { "type": "scriptBody", "pattern": "jQuery\\.Deferred exception|Syntax error, unrecognized expression", "weight": 0.85, "label": "jQuery inside a script" },
+    { "type": "scriptBody", "pattern": "jQuery v(\\d+\\.\\d+\\.\\d+)", "version": 1, "weight": 0.5, "label": "jQuery banner" },
+    { "type": "global", "name": "jQuery", "weight": 0.6, "label": "window.jQuery present" }
+  ],
+  "requires": []
+}

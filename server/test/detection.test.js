@@ -95,3 +95,14 @@ test('manual rebuild: login, external form, WebGL and chat widget are reported',
   assert.deepEqual(new Set(kinds), new Set(['integration', 'auth', 'form', 'webgl']));
   assert.match(manual.find((m) => m.kind === 'form').detail, /forms\.example\.org/);
 });
+
+test('manual rebuild: denylisted trackers share one analytics item; a host\'s own analytics adds none', async () => {
+  const render = {
+    html: CUSTOM,
+    requests: ['https://www.googletagmanager.com/gtag/js?id=G-1', 'https://static.hotjar.com/c/hotjar-1.js', 'https://events.framer.com/script'],
+    scripts: [], cookies: [], foundGlobals: [], forms: [],
+  };
+  const ctx = buildContext({ headers: {}, rawHtml: CUSTOM, render, origin: 'https://acme.test' });
+  const titles = (await detectManualRebuild(ctx, [], render)).map((m) => m.title);
+  assert.deepEqual(titles, ['Analytics and tag manager']);
+});

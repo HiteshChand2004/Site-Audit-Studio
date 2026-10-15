@@ -1,0 +1,14 @@
+{
+  "id": "gsap",
+  "name": "GSAP",
+  "kind": "library",
+  "category": "animation-library",
+  "notes": "Body markers from gsap/dist/gsap.js 3.x: the warning string \"GSAP target … not found\", the GreenSockGlobals hook and the `/*! GSAP x.y.z` banner. String literals and property names survive minification and bundling.",
+  "signals": [
+    { "type": "script", "pattern": "(^|/)gsap(\\.min)?\\.m?js(\\?|$)|/gsap@[\\d.]+|/gsap/[\\d.]+/", "weight": 0.6, "label": "gsap script" },
+    { "type": "scriptBody", "pattern": "GSAP target |GreenSockGlobals", "weight": 0.85, "label": "GSAP core inside a script" },
+    { "type": "scriptBody", "pattern": "\\*\\s*GSAP (\\d+\\.\\d+\\.\\d+)", "version": 1, "weight": 0.5, "label": "GSAP banner" },
+    { "type": "global", "name": "gsap", "weight": 0.7, "label": "window.gsap present" }
+  ],
+  "requires": []
+}

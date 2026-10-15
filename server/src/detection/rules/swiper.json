@@ -1,0 +1,15 @@
+{
+  "id": "swiper",
+  "name": "Swiper",
+  "kind": "library",
+  "category": "ui-library",
+  "notes": "Body markers from swiper's core defaults (src/core/defaults.mjs: wrapperClass: 'swiper-wrapper', slideClass: 'swiper-slide') and its `/** Swiper x.y.z` banner. A site's own `new Swiper('.x')` call does not carry the defaults object.",
+  "signals": [
+    { "type": "script", "pattern": "swiper(-bundle|-element(-bundle)?)?(\\.min)?\\.m?js(\\?|$)|/swiper@[\\d.]+", "weight": 0.6, "label": "Swiper script" },
+    { "type": "scriptBody", "pattern": "wrapperClass\\s*:\\s*[\"']swiper-wrapper[\"']", "weight": 0.85, "label": "Swiper core inside a script" },
+    { "type": "scriptBody", "pattern": "\\*\\s*Swiper (\\d+\\.\\d+\\.\\d+)", "version": 1, "weight": 0.5, "label": "Swiper banner" },
+    { "type": "global", "name": "Swiper", "weight": 0.6, "label": "window.Swiper present" },
+    { "type": "dom", "selector": ".swiper-initialized, .swiper-container-initialized", "weight": 0.5, "label": "initialised Swiper element" }
+  ],
+  "requires": []
+}

@@ -9,6 +9,13 @@ const GENERIC = JSON.parse(
   readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'manual-rules.json'), 'utf8'),
 );
 
+// manual-rules.json is also the script denylist (CLONER_SPEC decision 2): an entry with a `role` ('tracker' | 'auth' |
+// 'integration') names third-party scripts that are never lifted into a copy. Its `when` (the URL) and optional `signals`
+// (scriptBody markers) identify them. `report: false` = a denylisted script that is not worth a "Manual rebuild" item
+// (a host's own page-view analytics).
+export const MANUAL_RULES = GENERIC;
+export const SCRIPT_DENYLIST = GENERIC.filter((item) => item.role);
+
 const hostOf = (url) => {
   try {
     return new URL(url).hostname;
@@ -66,6 +73,7 @@ export async function detectManualRebuild(ctx, detections, render) {
     }
   }
   for (const item of GENERIC) {
+    if (item.report === false) continue;
     if (await matchSignal(item.when, ctx).catch(() => null)) add(item);
   }
   for (const item of builtIn(render, ctx.origin)) {

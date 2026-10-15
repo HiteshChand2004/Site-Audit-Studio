@@ -1,0 +1,11 @@
+{
+  "id": "bundler-runtime",
+  "name": "Code-split app bundle",
+  "kind": "runtime",
+  "role": "app",
+  "category": "app-bundle",
+  "notes": "A chunk of a code-split build loads its siblings through a runtime: webpack pushes onto self.webpackChunk<name>, Parcel defines parcelRequire, Turbopack registers with TURBOPACK. Such a chunk only works with the whole chunk graph, so it is never lifted alone (the libraries inside it are still reported).",
+  "signals": [
+    { "type": "scriptBody", "pattern": "webpackChunk|parcelRequire|TURBOPACK", "weight": 0.8, "label": "bundler chunk runtime inside a script" }
+  ]
+}
