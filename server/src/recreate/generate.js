@@ -21,6 +21,7 @@ import { fetchWordPress, isWordPress } from './fixers/wordpress.js';
 import { buildIR, prepareSite, readPageCaptures } from './ir/index.js';
 import { MOTION_VERSION, applyMotion, cpathIndex, readPageMotion } from './ir/motion.js';
 import { addStats, GSAP_VERSION, planReplay, readAnimLogFor, replayIds } from './behavior/gsap.js';
+import { applyEmbeds, planEmbeds } from './behavior/embeds.js';
 import { parseAppearConfig } from './behavior/framer/appear.js';
 import { readAppearFor } from './behavior/framer/capture.js';
 import { addAppearStats, appearIds, MOTION_PACKAGE_VERSION, planAppear, readDocumentHtml, showAsIsAppear } from './behavior/framer/plan.js';
@@ -472,6 +473,8 @@ export async function generateStage(ctx) {
       count: frames.canvases.length,
     });
   }
+  // Lottie embeds and the video tier (behavior/lottie.js, behavior/video.js): self-running layers the copy cannot run.
+  const embeds = await planEmbeds(site, motionByPath, { ctx, assetsDir, known, report, canvasRules: frames.rules, addToManifest });
   const structured = addStructuredData(site);
   let irFixes;
   let imageVariants = new Map();
@@ -479,6 +482,7 @@ export async function generateStage(ctx) {
     const built = buildIR(site, { asIs });
     irFixes = applyIrFixes(built.ir);
     applyImageVariants(built.ir, imageVariants);
+    applyEmbeds(built.ir, embeds);
     return built;
   };
 
@@ -502,6 +506,8 @@ export async function generateStage(ctx) {
   if (asIs) {
     ctx.progress(0.18, 'Keeping the original markup and stylesheets');
     asis = await applyAsIs(ir, { dir: ctx.dir, site, excluded });
+    // The original markup's layers that play a recording become their videos too (their `vN` token was carried).
+    applyEmbeds(ir, embeds);
     // The original's markup keeps each appear target's inline style as the capture read it: one still in its first pose
     // (an entrance the page never played, or one without settings) is shown (behavior/framer/plan.js showAsIsAppear).
     if (motion.stats.appear) {

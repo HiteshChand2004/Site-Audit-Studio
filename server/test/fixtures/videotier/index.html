@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video tier fixture</title>
+<meta name="description" content="A canvas particle background behind a heading and a button, a blob a script keeps reshaping, a Lottie badge and a scroll-driven strip.">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; color: #0f172a; background: #f8fafc; }
+  .hero { position: relative; height: 100vh; min-height: 560px; overflow: hidden; background: #0b1020; }
+  .hero canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .hero .copy { position: relative; z-index: 1; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; color: #fff; text-align: center; padding: 0 16px; }
+  .hero h1 { margin: 0; font-size: 56px; line-height: 1.1; }
+  .button { display: inline-block; padding: 14px 28px; border-radius: 999px; background: #f97316; color: #fff; text-decoration: none; font-weight: 600; }
+  .intro { max-width: 760px; margin: 0 auto; padding: 64px 16px 400px; line-height: 1.6; }
+  .blob-wrap { display: flex; justify-content: center; padding: 48px 16px; background: #eef2ff; }
+  .blob { width: 240px; height: 240px; background: radial-gradient(circle at 30% 30%, #a78bfa, #4f46e5); border-radius: 50%; }
+  .badge { display: flex; align-items: center; gap: 16px; justify-content: center; padding: 32px 16px; }
+  #lottie { width: 160px; height: 160px; }
+  .track { overflow: hidden; padding: 48px 0; background: #fff7ed; }
+  .scrub { width: 320px; height: 80px; border-radius: 12px; background: #ea580c; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+  .more { height: 1400px; padding: 32px 16px; background: linear-gradient(#f8fafc, #e2e8f0); }
+  @media (max-width: 767px) { .hero h1 { font-size: 34px; } .blob { width: 180px; height: 180px; } }
+</style>
+</head>
+<body>
+<section class="hero">
+  <canvas id="particles" aria-hidden="true"></canvas>
+  <div class="copy">
+    <h1>Particles behind real text</h1>
+    <a class="button" id="start" href="#more">Get started</a>
+  </div>
+</section>
+<section class="intro">
+  <p>This page holds every kind of motion the video tier must tell apart. The hero's particles are drawn on a canvas by a script that keeps running by itself, so the copy can only show a recording of them, behind the heading and the button, which stay real HTML.</p>
+  <p>The blob below is reshaped frame by frame by a script that rewrites its corner radii; no rule of CSS describes that, so it is recorded too. The badge is a Lottie animation, which the copy plays itself from its own JSON, and the orange strip moves with the scroll, which a recording could never follow.</p>
+</section>
+<section class="blob-wrap">
+  <div class="blob" id="blob"></div>
+</section>
+<section class="badge">
+  <div id="lottie"></div>
+  <p>Lottie badge</p>
+</section>
+<section class="track">
+  <div class="scrub" id="scrub">SCROLL STRIP</div>
+</section>
+<section class="more" id="more"><p>More of the page, to scroll through.</p></section>
+<script src="/vendor/lottie_light.min.js"></script>
+<script>
+  // Particles: positions follow the page clock, drawn every frame.
+  var canvas = document.getElementById('particles');
+  var g = canvas.getContext('2d');
+  var size = function () {
+    canvas.width = canvas.clientWidth;
+    canvas.height = canvas.clientHeight;
+  };
+  size();
+  window.addEventListener('resize', size);
+  var draw = function (now) {
+    var w = canvas.width;
+    var h = canvas.height;
+    g.fillStyle = '#0b1020';
+    g.fillRect(0, 0, w, h);
+    for (var i = 0; i < 48; i++) {
+      var speed = 0.03 + (i % 5) * 0.012;
+      var x = ((i * 137) % w + now * speed) % w;
+      var y = (i * 89) % h + Math.sin(now / 700 + i) * 24;
+      g.beginPath();
+      g.fillStyle = 'hsla(' + ((i * 23) % 360) + ', 80%, 65%, 0.9)';
+      g.arc(x, y, 3 + (i % 4), 0, Math.PI * 2);
+      g.fill();
+    }
+    requestAnimationFrame(draw);
+  };
+  requestAnimationFrame(draw);
+
+  // The blob: corner radii rewritten every frame, a 2.4 s loop.
+  var blob = document.getElementById('blob');
+  var morph = function (now) {
+    var t = (now % 2400) / 2400 * Math.PI * 2;
+    var r = function (k) { return Math.round(50 + 18 * Math.sin(t + k)); };
+    blob.style.borderRadius = r(0) + '% ' + (100 - r(1)) + '% ' + r(2) + '% ' + (100 - r(3)) + '% / ' + r(4) + '% ' + r(5) + '% ' + (100 - r(6)) + '% ' + (100 - r(7)) + '%';
+    requestAnimationFrame(morph);
+  };
+  requestAnimationFrame(morph);
+
+  // Tied to the scroll position: the strip slides as the page scrolls.
+  var scrub = document.getElementById('scrub');
+  var onScroll = function () { scrub.style.transform = 'translateX(' + Math.round(window.scrollY * 0.3) + 'px)'; };
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+
+  // The Lottie badge, loaded from its JSON.
+  window.lottie.loadAnimation({ container: document.getElementById('lottie'), renderer: 'svg', loop: true, autoplay: true, path: '/spin.json' });
+</script>
+</body>
+</html>

@@ -8,6 +8,7 @@ import { MOTION_FILE, MOTION_JS } from './motionScript.js';
 import { animFiles, animTags, vendorText } from './anim.js';
 import { appearFiles, appearTags } from '../behavior/framer/emit.js';
 import { liftTags } from '../behavior/lift.js';
+import { lottieFiles, lottieTags } from '../behavior/lottie.js';
 import { describeNode, headTags, relativeRefs, safeJsonLd } from './walk.js';
 
 export { safeJsonLd };
@@ -121,6 +122,8 @@ export function emitPage(page, { ids = false, useAsset = () => true, motionScrip
     ...animTags(page, (f) => relFile(page.outPath, f)),
     // Framer appear entrances (behavior/framer/emit.js): motion, the page's program, the replayer - deferred, in order.
     ...appearTags(page, (f) => relFile(page.outPath, f)),
+    // Lottie animations (behavior/lottie.js): lottie-web, the page's animations, the player - deferred, in order.
+    ...lottieTags(page, (f) => relFile(page.outPath, f)),
     '</head>',
     emitNode(page.body, ctx, 0, true),
     '</html>',
@@ -153,6 +156,7 @@ export function emitSite(ir, { ids = false, inlineCss = false } = {}) {
   for (const [file, text] of animFiles(ir)) files.set(file, text);
   for (const [file, text] of Object.entries(ir.liftFiles ?? {})) files.set(file, text);
   for (const [file, text] of appearFiles(ir, vendorText)) files.set(file, text);
+  for (const [file, text] of lottieFiles(ir, vendorText)) files.set(file, text);
   const css = emitCss(ir, { usedVars });
   for (const m of css.matchAll(assetRef)) assets.add(m[1]);
   files.set(CSS_FILE, css);

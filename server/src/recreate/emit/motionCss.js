@@ -6,6 +6,7 @@
 // without script the page is shown finished.
 import { declarations } from './css.js';
 import { visibilityCss } from './visibilityCss.js';
+import { videoCss } from '../behavior/video.js';
 
 const sel = (token) => `[data-motion~="${token}"]`;
 const block = (selector, body, indent = '') => (body ? `${indent}${selector} {\n${body}\n${indent}}` : '');
@@ -184,6 +185,8 @@ export function motionCss(m, opts) {
     out.push(`/* Canvas drawings the copy cannot run: the captured frame, and a recording of them (not interactive) */\n${still.filter(Boolean).join('\n')}${moving.length ? `\n@media (prefers-reduced-motion: no-preference) {\n${moving.filter(Boolean).join('\n')}\n}` : ''}`);
   }
   // Layers that covered a control in the copy but not in the original (verify/hittest.js): clicks go through them.
+  // The video tier (behavior/video.js): recordings standing in for self-running layers.
+  if (m.video?.length) out.push(videoCss(m.video, { asis: Boolean(opts.important), D }));
   if (m.pass) out.push('/* Layers a click passes through, as on the original (hit-test guard) */\n[data-sas-pass] { pointer-events: none !important; }');
   if (m.show) out.push(visibilityCss(m.show));
   return out.join('\n\n');

@@ -470,6 +470,32 @@ export const MOTION_JS = `(function () {
     } else if (++tries > 100) window.clearInterval(wait);
   }, 100);
 })();
+(function () {
+  // The video tier (video[data-w-video], behavior/video.js): recordings of layers the original's script kept moving. Their
+  // sources only match without prefers-reduced-motion (then the poster alone is shown and nothing is downloaded); here
+  // they play once near the window and pause when they leave it (preload="none": nothing is loaded before that).
+  var videos = document.querySelectorAll('video[data-w-video]');
+  if (!videos.length) return;
+  for (var i = 0; i < videos.length; i++) {
+    var v = videos[i];
+    v.muted = true;
+    var narrow = v.getAttribute('data-narrow');
+    var poster = v.getAttribute('data-poster-narrow');
+    if (narrow && poster && window.matchMedia && window.matchMedia(narrow).matches) v.setAttribute('poster', poster);
+  }
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  if (!('IntersectionObserver' in window)) return;
+  var seen = new IntersectionObserver(function (entries) {
+    for (var e = 0; e < entries.length; e++) {
+      var el = entries[e].target;
+      if (entries[e].isIntersecting) {
+        var p = el.play();
+        if (p && p.catch) p.catch(function () {});
+      } else el.pause();
+    }
+  }, { rootMargin: '200px 0px' });
+  for (var j = 0; j < videos.length; j++) seen.observe(videos[j]);
+})();
 `;
 
 /** Where the app stacks (React + Vite, Next.js, MERN) serve it from: the root of the site, like their assets. */

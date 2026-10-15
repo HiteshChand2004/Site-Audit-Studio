@@ -16,7 +16,7 @@ export const FAST = [
 /** Fixtures: a page through the real pipeline, compared with the original in a browser (their app-stack parts build the
  * three app stacks with the real toolchains unless SAS_SKIP_APP_STACKS=1). */
 export const FIXTURES = [
-  'recreate-animation-lab', 'recreate-gsap', 'recreate-framer-appear-e2e', 'recreate-lift', 'recreate-hittest',
+  'recreate-animation-lab', 'recreate-gsap', 'recreate-framer-appear-e2e', 'recreate-lift', 'recreate-hittest', 'recreate-visibility', 'recreate-video-tier',
 ];
 
 const suite = process.argv[2];

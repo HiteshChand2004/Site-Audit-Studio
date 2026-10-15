@@ -13,6 +13,7 @@
 //
 // Page functions are self-contained (Playwright sends only their source); the analysis below runs in Node.
 import { decomposeTransform } from './reveal.js';
+import { findLottie, findVideoLayers } from './videotier.js';
 
 /**
  * Page function: the repeating / scroll-linked animations of the document.
@@ -624,7 +625,7 @@ export const CANVAS_LOOP_WIDTH = 480;
 const MAX_LOOPED_CANVASES = 3;
 
 /** Share of pixels that differ between two raw frames of the same size (a channel moved by more than 24). */
-function frameDiff(a, b) {
+export function frameDiff(a, b) {
   if (a.info.width !== b.info.width || a.info.height !== b.info.height) return 1;
   const px = a.info.width * a.info.height;
   let changed = 0;
@@ -648,16 +649,34 @@ function frameDiff(a, b) {
  * @returns {Promise<{ webp: Buffer, frames: number, delayMs: number, seamless: boolean } | null>}
  */
 export async function recordCanvasLoop(locator, sharp, { ms = CANVAS_RECORD_MS, every = CANVAS_FRAME_MS, width = CANVAS_LOOP_WIDTH } = {}) {
+  const loop = await recordLoopFrames(locator, sharp, { ms, every, width });
+  if (!loop) return null;
+  const webp = await sharp(loop.frames, { join: { animated: true } }).webp({ quality: 70, delay: loop.frames.map(() => loop.delayMs), loop: 0 }).toBuffer();
+  return { webp, frames: loop.frames.length, delayMs: loop.delayMs, seamless: loop.seamless };
+}
+
+/**
+ * The frames of a recording, closed into a loop (the one recorder behind both the animated canvas picture above and the
+ * video tier, capture/videotier.js): a frame of `locator` every `every` ms for `ms`, then the loop closed at the frame
+ * most like the first one when one is close enough (seamless), else played forward and back (no jump at the seam).
+ * `advance(ms)`: a stepped clock (the video tier moves the page's own clock by exactly one frame between two shots, so
+ * the recording is deterministic and as smooth as asked whatever a screenshot costs); without it the page runs in real
+ * time and the recorder waits. `shoot`: how one frame is taken (default: the element's own picture).
+ * @returns {Promise<{ frames: Buffer[], delayMs: number, seamless: boolean, recorded: number, closeness: number } | null>}
+ */
+export async function recordLoopFrames(locator, sharp, { ms = CANVAS_RECORD_MS, every = CANVAS_FRAME_MS, width = CANVAS_LOOP_WIDTH, advance = null, shoot = null, minFrames = 6, seamlessDiff = 0.02 } = {}) {
   const pngs = [];
   const times = [];
   const t0 = Date.now();
-  while (Date.now() - t0 < ms) {
-    const shot = await locator.screenshot({ timeout: 5000, animations: 'allow' });
+  const take = shoot ?? (() => locator.screenshot({ timeout: 5000, animations: 'allow' }));
+  for (let i = 0; advance ? i * every < ms : Date.now() - t0 < ms; i++) {
+    const shot = await take();
     pngs.push(await sharp(shot).resize({ width, withoutEnlargement: true }).png().toBuffer());
-    times.push(Date.now() - t0);
-    await new Promise((r) => setTimeout(r, every));
+    times.push(advance ? i * every : Date.now() - t0);
+    if (advance) await advance(every);
+    else await new Promise((r) => setTimeout(r, every));
   }
-  if (pngs.length < 6) return null;
+  if (pngs.length < minFrames) return null;
   const raws = await Promise.all(pngs.map((p) => sharp(p).resize({ width: 96 }).removeAlpha().raw().toBuffer({ resolveWithObject: true })));
   // The loop's end: the frame most like the first, at least a third of the way in.
   let best = { k: -1, diff: 1 };
@@ -665,11 +684,10 @@ export async function recordCanvasLoop(locator, sharp, { ms = CANVAS_RECORD_MS, 
     const d = frameDiff(raws[0], raws[k]);
     if (d < best.diff) best = { k, diff: d };
   }
-  const seamless = best.k > 0 && best.diff < 0.02;
+  const seamless = best.k > 0 && best.diff < seamlessDiff;
   const frames = seamless ? pngs.slice(0, best.k) : [...pngs, ...pngs.slice(1, -1).reverse()];
-  const delayMs = Math.max(40, Math.round(times[times.length - 1] / Math.max(1, times.length - 1)));
-  const webp = await sharp(frames, { join: { animated: true } }).webp({ quality: 70, delay: frames.map(() => delayMs), loop: 0 }).toBuffer();
-  return { webp, frames: frames.length, delayMs, seamless };
+  const delayMs = advance ? every : Math.max(40, Math.round(times[times.length - 1] / Math.max(1, times.length - 1)));
+  return { frames, delayMs, seamless, recorded: pngs.length, closeness: Math.round((1 - best.diff) * 1000) / 1000 };
 }
 
 /**
@@ -778,5 +796,11 @@ export async function captureLoops(page, { script = true, recordMs = 2200, slowW
     out.stats.canvas = canvas.length;
     out.stats.canvasAnimated = canvas.filter((c) => c.animated).length;
   }
+  // The video tier's other candidates (capture/videotier.js): what a script keeps reshaping in a way the loops above
+  // cannot rebuild, and the page's Lottie animations.
+  const layers = await page.evaluate(findVideoLayers, {}).catch(() => null);
+  if (layers?.layers.length || layers?.skipped.length) out.videoLayers = layers;
+  const lottie = await page.evaluate(findLottie, {}).catch(() => null);
+  if (lottie?.animations.length || lottie?.players.length) out.lottie = lottie;
   return out;
 }

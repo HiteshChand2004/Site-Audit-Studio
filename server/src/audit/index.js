@@ -20,6 +20,7 @@ import { crawl } from './crawler.js';
 import { extractPage } from './extract.js';
 import { computeFrame } from './frame.js';
 import { fetchPage, isBotChallenge, isHtml } from './http.js';
+import { CANVAS_RENDERED_MESSAGE, classifySiteType } from '../detection/siteType.js';
 import { runLighthouse } from './lighthouse/run.js';
 import { checkLinks } from './linkChecker.js';
 import { launchBrowser, renderHome, renderHtml } from './render.js';
@@ -504,6 +505,9 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     renderedTextLength: render?.textLength ?? null,
   });
 
+  // A page drawn on a canvas (detection/siteType.js): reported with a clear warning, and Recreate stops on it.
+  const siteType = classifySiteType(render?.siteTypeEvidence);
+  if (siteType.type === 'canvas-rendered') errors.push({ step: 'site-type', message: `${CANVAS_RENDERED_MESSAGE} (${siteType.reason})` });
   const audit = assembleAudit({
     project,
     analysisId,
@@ -527,6 +531,7 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     pageVariants: pages.filter((p) => hasQuery(p.url)).length,
     blockedHosts: proxy.blocked(),
     errors,
+    siteType,
   });
   progress('report', 1);
   return audit;

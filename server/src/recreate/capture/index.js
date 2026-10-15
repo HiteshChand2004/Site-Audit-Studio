@@ -1,7 +1,7 @@
 // Captures one page at the recreate views (1440 / 1024 / 768 / 375, views.js): the rendered DOM with
 // computed styles (snapshot.js), the network resources it loaded, and fold + full-page screenshots.
 // Output per page: capture/<slug>/<view>.json and capture/<slug>/<view>-{fold,full}.webp.
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { USER_AGENT } from '../../audit/http.js';
 import { parallelism } from '../../audit/resources.js';
@@ -30,6 +30,8 @@ import { captureAppearElements } from '../behavior/framer/capture.js';
 import { asisFile, captureAsIs, markAsIs } from './asis.js';
 import { captureFeeds } from './feeds.js';
 import { capturePointer } from './pointer.js';
+import { recordVideoTier } from './videotier.js';
+import { classifySiteType, readSiteTypeEvidence } from '../../detection/siteType.js';
 
 // Clicking through the states of tabs / carousels / filtered lists of one page (most pages have none: no time used). The
 // limit follows the work (capture/states.js, ~3 s per control) within these bounds.
@@ -212,6 +214,8 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     lap('idle');
 
     const snapshot = await page.evaluate(snapshotPage, { exact });
+    // Whether the page is drawn on a canvas instead of in the DOM (detection/siteType.js): Recreate stops on it.
+    const siteType = view.id === 'desktop' ? classifySiteType(await page.evaluate(readSiteTypeEvidence).catch(() => null)) : null;
     // Which captured elements Framer's appear settings name (behavior/framer): their ids by the snapshot's own paths.
     const appearElements = view.id === 'desktop' ? await captureAppearElements(page, dir).catch(() => 0) : 0;
     // How many interactive things this view has at all, with nothing filtered out: the denominator the probes'
@@ -491,6 +495,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       ...(motion && { motion }),
       ...(animLog && { animLog: { file: animLogFile(view.id), ...animLog } }),
       ...(appearElements && { appearElements }),
+      ...(siteType?.evidence && { siteType }),
       resources: data.resources,
       // The page's data requests that got no usable answer (its API or backend was not there): the page is still captured
       // as it rendered - with whatever empty or error state the site shows - and the report says its data was missing.
@@ -570,5 +575,12 @@ export async function capturePage(browser, pageInfo, workspace, { timeout = 3000
       }
     }
   }
-  return { views, errors, ...(retried && { retried }) };
+  // The video tier (capture/videotier.js): the page's self-running layers, recorded at 1440 and the phone width in visits of
+  // their own (a stepped clock), only when the desktop view's motion probes found one. Never fails the page.
+  let video = null;
+  if (views.desktop?.motion && motionBudgetMs > 0 && views.desktop.siteType?.type !== 'canvas-rendered') {
+    const motion = await readFile(path.join(dir, motionFile('desktop')), 'utf8').then(JSON.parse, () => null);
+    video = await recordVideoTier(browser, pageInfo, dir, { motion, document }).catch((err) => ({ error: firstLine(err) }));
+  }
+  return { views, errors, ...(retried && { retried }), ...(video && { video }) };
 }

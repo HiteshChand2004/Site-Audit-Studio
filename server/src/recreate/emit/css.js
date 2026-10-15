@@ -286,6 +286,7 @@ export function pageMotion(motion, page) {
     reveal: (motion.reveal ?? []).filter(has),
     loops: (motion.loops ?? []).filter(has),
     canvas: (motion.canvas ?? []).filter(has),
+    video: (motion.video ?? []).filter(has),
     delays: (motion.delays ?? []).filter((ms) => tokens.has(`d${ms}`)),
   };
 }

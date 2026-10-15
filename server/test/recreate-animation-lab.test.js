@@ -248,7 +248,7 @@ for (const mode of ['normal', 'exact']) {
       await page.waitForTimeout(800);
       const traces = await page.evaluate(watchLabels, { labels });
       // The canvas over time: does it keep changing (a recording of what it drew), or stand still?
-      const shot = async () => sharp(await page.locator('canvas').first().screenshot()).resize({ width: 96 }).removeAlpha().raw().toBuffer();
+      const shot = async () => sharp(await page.locator('canvas, video[data-w-video]').first().screenshot()).resize({ width: 96 }).removeAlpha().raw().toBuffer();
       const c1 = await shot().catch(() => null);
       await page.waitForTimeout(700);
       const c2 = await shot().catch(() => null);
