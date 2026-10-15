@@ -182,5 +182,7 @@ export function motionCss(m, opts) {
     }
     out.push(`/* Canvas drawings the copy cannot run: the captured frame, and a recording of them (not interactive) */\n${still.filter(Boolean).join('\n')}${moving.length ? `\n@media (prefers-reduced-motion: no-preference) {\n${moving.filter(Boolean).join('\n')}\n}` : ''}`);
   }
+  // Layers that covered a control in the copy but not in the original (verify/hittest.js): clicks go through them.
+  if (m.pass) out.push('/* Layers a click passes through, as on the original (hit-test guard) */\n[data-sas-pass] { pointer-events: none !important; }');
   return out.join('\n\n');
 }

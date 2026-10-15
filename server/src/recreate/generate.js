@@ -24,7 +24,9 @@ import { addStats, GSAP_VERSION, planReplay, readAnimLogFor, replayIds } from '.
 import { addStructuredData } from './ir/structuredData.js';
 import { applyExcludes, findExcludable } from './ir/exclude.js';
 import { isElement } from './ir/tree.js';
-import { VIEW_WIDTHS } from './views.js';
+import { RECREATE_VIEWS, VIEW_WIDTHS } from './views.js';
+import { hitTestGuard, pointerMapFile } from './verify/hittest.js';
+import { launchBrowser } from '../audit/render.js';
 import { compareLayout, openRenderer, planFixes, renderPage, viewScore } from './verify/layout.js';
 import { createLedger } from './verify/ledger.js';
 import { CORRECT_BUDGET, CORRECT_MIN, correctLayout, correctReport } from './verify/correct.js';
@@ -39,6 +41,8 @@ import { applyAsIs } from './ir/asis.js';
 export const FIT_ROUNDS = 2;
 // The fit pass stops starting new rounds this long before the step's time limit.
 const FIT_MARGIN = 25000;
+// The hit-test guard (verify/hittest.js): two renders of every page at two views, twice when it fixed something.
+const HIT_TEST_BUDGET_MS = 180000;
 // Time for checking the outbound links of every page (fixers/perf.js deadLinks).
 const LINK_CHECK_BUDGET = 60000;
 // Time for making the responsive image files.
@@ -697,6 +701,34 @@ export async function generateStage(ctx) {
       ir.rules = refined.rules;
       out = emitSite(ir);
       await writeSite(siteDir, out, assetsDir, known);
+    }
+  }
+
+  // Hit-test guard (verify/hittest.js): every control must receive its click in the copy wherever it did in the original.
+  // A layer that takes the click in the copy and holds nothing clickable lets it through; the rest is reported.
+  const maps = new Map();
+  for (const info of ctx.pages) {
+    const byView = {};
+    for (const view of ['desktop', 'mobile']) {
+      const map = await readFile(path.join(ctx.dir, 'capture', info.slug, pointerMapFile(view)), 'utf8').then(JSON.parse, () => null);
+      if (map) byView[view] = map;
+    }
+    if (Object.keys(byView).length) maps.set(info.outPath, byView);
+  }
+  if (maps.size) {
+    ctx.progress(0.93, 'Checking every control can still be clicked');
+    const ids = cpathsOf(site);
+    for (const [outPath, cpaths] of Object.entries(site.asisCpaths ?? {})) ids.pages[outPath] = { cpaths };
+    try {
+      report.hitTest = await hitTestGuard({
+        ir, siteDir, maps, cpaths: ids.pages, launchBrowser,
+        views: RECREATE_VIEWS.filter((v) => v.id === 'desktop' || v.id === 'mobile'),
+        deadline: Math.min(ctx.stepDeadline ?? Infinity, Date.now() + HIT_TEST_BUDGET_MS) - FIT_MARGIN,
+      });
+      if (report.hitTest.fixed.length) report.warnings.push(`${report.hitTest.fixed.length} layer${report.hitTest.fixed.length === 1 ? '' : 's'} covering a control in the copy now let${report.hitTest.fixed.length === 1 ? 's' : ''} clicks through, as on the original.`);
+      if (report.hitTest.unresolved.length) report.warnings.push(`${report.hitTest.unresolved.length} control${report.hitTest.unresolved.length === 1 ? ' is' : 's are'} covered by another element in the copy and not in the original (see the hit-test check).`);
+    } catch (err) {
+      report.hitTest = { error: String(err?.message ?? err).split('\n')[0] };
     }
   }
 

@@ -23,6 +23,7 @@ import { FOREIGN_BUDGET_MS, foreignStyleText, harvestForeignStateRules } from '.
 import { shapeCounts } from './selectorShape.js';
 import { attachType, probeTypography } from './typography.js';
 import { attachProbe, probeViewportHeight } from './viewport.js';
+import { capturePointerMap, pointerMapFile } from '../verify/hittest.js';
 import { animLogFile, installAnimLog, markProbePhase, readAnimLog, summarizeAnimLog } from './animlog.js';
 import { asisFile, captureAsIs, markAsIs } from './asis.js';
 import { captureFeeds } from './feeds.js';
@@ -212,6 +213,9 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     // How many interactive things this view has at all, with nothing filtered out: the denominator the probes'
     // own counts are missing (capture/census.js).
     const census = await page.evaluate(censusInteractive, {}).catch(() => null);
+    // What a click at the centre of each control reaches, and its cursor (verify/hittest.js): what the copy is held to.
+    const pointerMap = await capturePointerMap(page).catch(() => null);
+    if (pointerMap?.length) await writeFile(path.join(dir, pointerMapFile(view.id)), JSON.stringify(pointerMap));
     // Load and scroll are over: library calls from here on come from the probes' hovers and clicks (not replayed on load).
     await page.evaluate(markProbePhase).catch(() => {});
     // The page as-is (markup + the site's own stylesheets), read before any probe hovers, clicks or resizes it.
