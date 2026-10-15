@@ -16,10 +16,13 @@ import { decomposeTransform } from './reveal.js';
 
 /**
  * Page function: the repeating / scroll-linked animations of the document.
- * @returns {{ items: object[], total: number, unreadableSheets: number, definedKeyframes: string[] }}
+ * `all` (capture/visibility.js animations.json, CLONER_SPEC Phase 1 item 7): every animation instead, CSS transitions and
+ * one-shots included, listed compactly (type, name, path, iterations, duration), plus the CSSOM's :hover / :focus rule
+ * counts. The default reading is unchanged.
+ * @returns {{ items: object[], total: number, unreadableSheets: number, definedKeyframes: string[], cssom?: { hover: number, focus: number } }}
  */
 export function scanAnimations(opts) {
-  const { max = 120 } = opts || {};
+  const { max = 120, all = false } = opts || {};
   const SKIP_TAGS = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
   const pathOf = (el) => {
     const parts = [];
@@ -40,10 +43,15 @@ export function scanAnimations(opts) {
   };
   // @keyframes the readable stylesheets define: a CSS animation of one of them is already carried by the page's CSS.
   const defined = new Set();
+  const cssom = { hover: 0, focus: 0 };
   const readRules = (list) => {
     for (const rule of list) {
       if (rule.type === CSSRule.KEYFRAMES_RULE) defined.add(rule.name);
       else if (rule.cssRules) readRules(rule.cssRules);
+      if (all && rule.selectorText) {
+        if (/:hover\b/.test(rule.selectorText)) cssom.hover++;
+        if (/:focus(-visible|-within)?\b/.test(rule.selectorText)) cssom.focus++;
+      }
     }
   };
   // A sheet the page may not read contributes no @keyframes name, so `inStylesheet` comes out false for an
@@ -63,7 +71,7 @@ export function scanAnimations(opts) {
   for (const a of document.getAnimations()) {
     const eff = a.effect;
     const type = a.constructor.name;
-    if (!eff || !eff.getKeyframes || type === 'CSSTransition') continue;
+    if (!eff || !eff.getKeyframes || (type === 'CSSTransition' && !all)) continue;
     let t;
     try {
       t = eff.getComputedTiming();
@@ -71,12 +79,19 @@ export function scanAnimations(opts) {
       continue;
     }
     const timeline = a.timeline && a.timeline !== document.timeline ? a.timeline.constructor.name : null;
-    if (!(t.iterations > 1) && !timeline) continue;
+    if (!(t.iterations > 1) && !timeline && !all) continue;
     total++;
     const target = eff.target;
     if (items.length >= max || !target) continue;
     const path = pathOf(target);
     if (!path) continue;
+    if (all) {
+      items.push({
+        type, name: a.animationName || a.transitionProperty || a.id || null, path, pseudo: eff.pseudoElement || null,
+        iterations: Number.isFinite(t.iterations) ? t.iterations : 'infinite', duration: Number(t.duration) || 0, playState: a.playState,
+      });
+      continue;
+    }
     const r = target.getBoundingClientRect();
     items.push({
       path, pseudo: eff.pseudoElement || null, tag: target.tagName.toLowerCase(),
@@ -101,7 +116,7 @@ export function scanAnimations(opts) {
       }),
     });
   }
-  return { items, total, unreadableSheets, definedKeyframes: [...defined].slice(0, 100) };
+  return { items, total, unreadableSheets, definedKeyframes: [...defined].slice(0, 100), ...(all && { cssom }) };
 }
 
 /**

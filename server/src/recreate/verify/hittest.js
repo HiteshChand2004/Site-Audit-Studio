@@ -11,8 +11,7 @@
 //     controls, is reported, never changed (making it click-through would break those);
 //   - a cursor that differs from the original's is reported (5b).
 // Elements the original also blocked are left as they are: that is how the site works.
-import { emitSite } from '../emit/html.js';
-import { startSiteServer } from './server.js';
+import { nodeBySid, openCopyRenderer, withMotion } from './copyRender.js';
 
 /** Elements a visitor can act on, as the capture and the copy both find them. */
 const INTERACTIVE = 'a[href], button, input:not([type=hidden]), select, textarea, summary, label[for], [role=button], [role=link], [role=tab], [role=menuitem], [role=checkbox], [role=switch], [role=option], [tabindex]:not([tabindex="-1"]), [onclick]';
@@ -110,17 +109,6 @@ export function compareHits(original, copy) {
   return { checked, blocked, cursors };
 }
 
-/** An IR node by its sid in one page body. */
-function nodeBySid(body, sid) {
-  let found = null;
-  const walk = (n) => {
-    if (found || !n || 'text' in n) return;
-    if (String(n.sid) === String(sid)) found = n;
-    else (n.children ?? []).forEach(walk);
-  };
-  walk(body);
-  return found;
-}
 const CLICKABLE_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea', 'summary', 'label']);
 const clickable = (n) => CLICKABLE_TAGS.has(n.t) || ['button', 'link', 'tab', 'menuitem', 'checkbox', 'switch', 'option'].includes(n.attrs?.role) || (n.attrs?.tabindex != null && n.attrs.tabindex !== '-1');
 /** Does the IR node hold anything a visitor can act on (itself or inside)? Raw markup (inline SVG) counts by its tags. */
@@ -136,44 +124,27 @@ function holdsControls(n) {
  * compares the click targets with the capture's, lets clicks through layers that hold nothing clickable, and checks again.
  * Changes the IR in place (`data-sas-pass` on the layer, `ir.motion.pass`).
  * @param {{ ir: any, siteDir: string, maps: Map<string, Record<string, object[]>>, cpaths: Record<string, { cpaths: Record<string, string> }>,
- *   views: { id: string, width: number, height: number, dpr: number, mobile: boolean }[], launchBrowser: () => Promise<any>, deadline?: number }} o
- *   maps: page outPath → view id → the capture's pointer map; cpaths: page outPath → sid → capture path (generate.js cpathsOf)
+ *   views: { id: string, width: number, height: number, dpr: number, mobile: boolean }[], launchBrowser: () => Promise<any>, deadline?: number,
+ *   renderer?: import('./copyRender.js').CopyRenderer }} o
+ *   maps: page outPath → view id → the capture's pointer map; cpaths: page outPath → sid → capture path (generate.js cpathsOf);
+ *   renderer: a renderer shared with the other guards of the run (verify/copyRender.js), else one of its own
  */
-export async function hitTestGuard({ ir, siteDir, maps, cpaths, views, launchBrowser, deadline = Infinity }) {
+export async function hitTestGuard({ ir, siteDir, maps, cpaths, views, launchBrowser, deadline = Infinity, renderer = undefined }) {
   const report = { pages: 0, checked: 0, blocked: 0, fixed: [], unresolved: [], cursors: [], afterFix: 0 };
   const pages = ir.pages.filter((p) => maps.get(p.outPath));
   if (!pages.length) return report;
-  const server = await startSiteServer(siteDir);
-  const browser = await launchBrowser();
-  const measure = async () => {
-    const built = emitSite(ir, { ids: true, inlineCss: true });
-    server.overrides.clear();
-    for (const [file, text] of built.files) server.overrides.set(file, text);
-    const results = [];
-    for (const page of pages) {
-      for (const view of views) {
-        if (Date.now() > deadline) return results;
-        const original = maps.get(page.outPath)?.[view.id];
-        if (!original?.length) continue;
-        const context = await browser.newContext({ viewport: { width: view.width, height: view.height }, deviceScaleFactor: view.dpr, isMobile: view.mobile, hasTouch: view.mobile, serviceWorkers: 'block' });
-        try {
-          await context.route('**/*', (route) => (route.request().url().startsWith(server.origin) ? route.continue() : route.abort()));
-          const tab = await context.newPage();
-          await tab.goto(`${server.origin}/${page.outPath}`, { waitUntil: 'load', timeout: 30000 });
-          await tab.waitForTimeout(800);
-          const sidPath = cpaths[page.outPath]?.cpaths ?? {};
-          const copy = (await tab.evaluate(readPointerMap, { max: MAX_HIT_ELEMENTS * 2, selector: INTERACTIVE }))
-            .map((c) => ({ ...c, cpath: c.sid ? sidPath[c.sid] ?? null : null, hitCpath: c.hitSid ? sidPath[c.hitSid] ?? null : null }));
-          results.push({ page, view: view.id, ...compareHits(original, copy) });
-        } catch (err) {
-          results.push({ page, view: view.id, error: String(err?.message ?? err).split('\n')[0] });
-        } finally {
-          await context.close().catch(() => {});
-        }
-      }
-    }
-    return results;
-  };
+  const own = renderer ? null : await openCopyRenderer({ siteDir, launchBrowser });
+  const render = /** @type {import('./copyRender.js').CopyRenderer} */ (renderer ?? own);
+  const measure = () => render.each({
+    ir, pages, views, deadline,
+    want: (page, view) => (maps.get(page.outPath)?.[view.id]?.length ? maps.get(page.outPath)[view.id] : null),
+    visit: async (tab, page, view, original) => {
+      const sidPath = cpaths[page.outPath]?.cpaths ?? {};
+      const copy = (await tab.evaluate(readPointerMap, { max: MAX_HIT_ELEMENTS * 2, selector: INTERACTIVE }))
+        .map((c) => ({ ...c, cpath: c.sid ? sidPath[c.sid] ?? null : null, hitCpath: c.hitSid ? sidPath[c.hitSid] ?? null : null }));
+      return compareHits(original, copy);
+    },
+  });
   try {
     const first = await measure();
     const passed = new Set();
@@ -200,14 +171,13 @@ export async function hitTestGuard({ ir, siteDir, maps, cpaths, views, launchBro
     }
     if (report.fixed.length) {
       // A copy with no motion at all has no ir.motion: the empty shape the emitters read, with the one rule.
-      ir.motion = { hover: [], focus: [], reveal: [], delays: [], loops: [], widgets: [], scrolled: [], states: 0, notices: 0, panels: 0, hoverCards: 0, script: false, ...(ir.motion ?? {}), pass: true };
+      withMotion(ir, { pass: true });
       // Checked again with the fix in: what is still blocked is reported as such.
       const again = await measure();
       report.afterFix = again.reduce((n, r) => n + (r.blocked?.length ?? 0), 0);
     }
   } finally {
-    await browser.close().catch(() => {});
-    await server.close().catch(() => {});
+    await own?.close();
   }
   return report;
 }

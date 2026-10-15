@@ -24,6 +24,7 @@ import { shapeCounts } from './selectorShape.js';
 import { attachType, probeTypography } from './typography.js';
 import { attachProbe, probeViewportHeight } from './viewport.js';
 import { capturePointerMap, pointerMapFile } from '../verify/hittest.js';
+import { ANIMATIONS_FILE, captureAnimations, captureVisibility, visibilityFile } from './visibility.js';
 import { animLogFile, installAnimLog, markProbePhase, readAnimLog, summarizeAnimLog } from './animlog.js';
 import { captureAppearElements } from '../behavior/framer/capture.js';
 import { asisFile, captureAsIs, markAsIs } from './asis.js';
@@ -216,6 +217,11 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     // How many interactive things this view has at all, with nothing filtered out: the denominator the probes'
     // own counts are missing (capture/census.js).
     const census = await page.evaluate(censusInteractive, {}).catch(() => null);
+    // What is visible in the settled page, and the running animations (capture/visibility.js): what the copy is held to.
+    const visibility = await captureVisibility(page).catch(() => null);
+    if (visibility?.length) await writeFile(path.join(dir, visibilityFile(view.id)), JSON.stringify(visibility));
+    const animations = view.id === 'desktop' ? await captureAnimations(page).catch(() => null) : null;
+    if (animations) await writeFile(path.join(dir, ANIMATIONS_FILE), JSON.stringify(animations));
     // What a click at the centre of each control reaches, and its cursor (verify/hittest.js): what the copy is held to.
     const pointerMap = await capturePointerMap(page).catch(() => null);
     if (pointerMap?.length) await writeFile(path.join(dir, pointerMapFile(view.id)), JSON.stringify(pointerMap));
