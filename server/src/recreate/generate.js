@@ -30,6 +30,9 @@ import { isElement } from './ir/tree.js';
 import { RECREATE_VIEWS, VIEW_WIDTHS } from './views.js';
 import { hitTestGuard, pointerMapFile } from './verify/hittest.js';
 import { classifyJobScripts, planLift } from './behavior/lift.js';
+import { visibilityGuard } from './verify/visibility.js';
+import { openCopyRenderer } from './verify/copyRender.js';
+import { ANIMATIONS_FILE, visibilityFile } from './capture/visibility.js';
 import { launchBrowser } from '../audit/render.js';
 import { compareLayout, openRenderer, planFixes, renderPage, viewScore } from './verify/layout.js';
 import { createLedger } from './verify/ledger.js';
@@ -47,6 +50,7 @@ export const FIT_ROUNDS = 2;
 const FIT_MARGIN = 25000;
 // The hit-test guard (verify/hittest.js): two renders of every page at two views, twice when it fixed something.
 const HIT_TEST_BUDGET_MS = 180000;
+const VISIBILITY_BUDGET_MS = 300000; // the visibility guard: two settled renders (scrolled through) per page and view
 // Time for checking the outbound links of every page (fixers/perf.js deadLinks).
 const LINK_CHECK_BUDGET = 60000;
 // Time for making the responsive image files.
@@ -760,23 +764,54 @@ export async function generateStage(ctx) {
 
   // Hit-test guard (verify/hittest.js): every control must receive its click in the copy wherever it did in the original.
   // A layer that takes the click in the copy and holds nothing clickable lets it through; the rest is reported.
+  // Visibility guard first (verify/visibility.js): what the original shows must not stay invisible in the copy; both
+  // guards share one renderer of the copy (verify/copyRender.js).
   const maps = new Map();
+  const shown = new Map();
+  const anims = new Map();
+  const readJson = (info, file) => readFile(path.join(ctx.dir, 'capture', info.slug, file), 'utf8').then(JSON.parse, () => null);
   for (const info of ctx.pages) {
     const byView = {};
+    const visByView = {};
     for (const view of ['desktop', 'mobile']) {
-      const map = await readFile(path.join(ctx.dir, 'capture', info.slug, pointerMapFile(view)), 'utf8').then(JSON.parse, () => null);
+      const map = await readJson(info, pointerMapFile(view));
       if (map) byView[view] = map;
+      const vis = await readJson(info, visibilityFile(view));
+      if (vis) visByView[view] = vis;
     }
     if (Object.keys(byView).length) maps.set(info.outPath, byView);
+    if (Object.keys(visByView).length) shown.set(info.outPath, visByView);
+    const anim = await readJson(info, ANIMATIONS_FILE);
+    if (anim) anims.set(info.outPath, anim);
   }
-  if (maps.size) {
+  const guardViews = RECREATE_VIEWS.filter((v) => v.id === 'desktop' || v.id === 'mobile');
+  const guardIds = cpathsOf(site);
+  for (const [outPath, cpaths] of Object.entries(site.asisCpaths ?? {})) guardIds.pages[outPath] = { cpaths };
+  const copyRenderer = maps.size || shown.size ? await openCopyRenderer({ siteDir, launchBrowser }).catch((err) => ({ error: err })) : null;
+  if (copyRenderer && 'error' in copyRenderer) report.visibility = { error: String(copyRenderer.error?.message ?? copyRenderer.error).split('\n')[0] };
+  const shared = copyRenderer && !('error' in copyRenderer) ? copyRenderer : null;
+  if (shared && shown.size) {
+    ctx.progress(0.92, 'Checking nothing visible stays hidden');
+    try {
+      const checked = await visibilityGuard({
+        ir, siteDir, records: shown, animations: anims, cpaths: guardIds.pages, views: guardViews, launchBrowser, renderer: shared,
+        deadline: Math.min(ctx.stepDeadline ?? Infinity, Date.now() + VISIBILITY_BUDGET_MS) - FIT_MARGIN,
+      });
+      report.visibility = checked.visibility;
+      report.animations = checked.animations;
+      const { fixed, unresolved } = report.visibility;
+      if (fixed.length) report.warnings.push(`${fixed.length} element${fixed.length === 1 ? '' : 's'} the original shows stayed invisible in the copy and ${fixed.length === 1 ? 'is' : 'are'} now shown without ${fixed.length === 1 ? 'its' : 'their'} entrance (visibility check).`);
+      if (unresolved.length) report.warnings.push(`${unresolved.length} element${unresolved.length === 1 ? '' : 's'} the original shows ${unresolved.length === 1 ? 'is' : 'are'} still invisible in the copy (see the visibility check).`);
+    } catch (err) {
+      report.visibility = { error: String(err?.message ?? err).split('\n')[0] };
+    }
+  }
+  if (maps.size && shared) {
     ctx.progress(0.93, 'Checking every control can still be clicked');
-    const ids = cpathsOf(site);
-    for (const [outPath, cpaths] of Object.entries(site.asisCpaths ?? {})) ids.pages[outPath] = { cpaths };
     try {
       report.hitTest = await hitTestGuard({
-        ir, siteDir, maps, cpaths: ids.pages, launchBrowser,
-        views: RECREATE_VIEWS.filter((v) => v.id === 'desktop' || v.id === 'mobile'),
+        ir, siteDir, maps, cpaths: guardIds.pages, launchBrowser, renderer: shared,
+        views: guardViews,
         deadline: Math.min(ctx.stepDeadline ?? Infinity, Date.now() + HIT_TEST_BUDGET_MS) - FIT_MARGIN,
       });
       if (report.hitTest.fixed.length) report.warnings.push(`${report.hitTest.fixed.length} layer${report.hitTest.fixed.length === 1 ? '' : 's'} covering a control in the copy now let${report.hitTest.fixed.length === 1 ? 's' : ''} clicks through, as on the original.`);
@@ -784,7 +819,8 @@ export async function generateStage(ctx) {
     } catch (err) {
       report.hitTest = { error: String(err?.message ?? err).split('\n')[0] };
     }
-  }
+  } else if (maps.size && report.visibility?.error && !shared) report.hitTest = { error: report.visibility.error };
+  await shared?.close();
 
   // The published pages carry their own CSS inline (no render-blocking request, no rules of other pages); the layout
   // passes above worked on the shared css/site.css, which stays in the site for reading and for the app stacks.

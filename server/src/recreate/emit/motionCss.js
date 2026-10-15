@@ -5,6 +5,7 @@
 // Reveal rules apply only under `.js-motion` (set by js/motion.js) and not for visitors who prefer reduced motion:
 // without script the page is shown finished.
 import { declarations } from './css.js';
+import { visibilityCss } from './visibilityCss.js';
 
 const sel = (token) => `[data-motion~="${token}"]`;
 const block = (selector, body, indent = '') => (body ? `${indent}${selector} {\n${body}\n${indent}}` : '');
@@ -184,5 +185,6 @@ export function motionCss(m, opts) {
   }
   // Layers that covered a control in the copy but not in the original (verify/hittest.js): clicks go through them.
   if (m.pass) out.push('/* Layers a click passes through, as on the original (hit-test guard) */\n[data-sas-pass] { pointer-events: none !important; }');
+  if (m.show) out.push(visibilityCss(m.show));
   return out.join('\n\n');
 }
