@@ -517,7 +517,7 @@ Already shared (good): `checkLinks` (Analyze + the copy's dead-link check), `isB
 | Contrast lightness-only | `recreate-fix-all` (contrast cases), `recreate-fixers` (`passingColor`) |
 | `noindex` + marker by default | `recreate-generate` (head); crawl files (`ir/crawlFiles.js` drops `noindex` pages from the sitemap and must ignore our own); `reaudit-compare` (SEO rows); exact pixel tests (`recreate-exact-asis-emit`, `-views`, `-compare`) unless the marker is masked |
 | BullMQ / worker split | `recreate-jobs`, jobs / SSE route tests, `recreate-resume` (checkpoint + auto-resume on restart) |
-| Mobile view 375 → 390 (approved) | tests asserting 375 in `recreate/views.js` users: `recreate-capture`, `recreate-responsive`, `recreate-exact-probes`, `recreate-widgets` (narrow click views), `single-page`; listed in that commit message |
+| Mobile view 375 → 390 (approved) | files that mention 375 (some only as an exact slot width, which stays): `recreate-dom-size`, `recreate-exact-asis-views`, `-exact-capture`, `-exact-compare`, `-exact-correct`, `-exact-slots`, `recreate-fixers`, `recreate-generate`, `recreate-refine`, `recreate-responsive`, `recreate-typography`, `recreate-widgets`; the ones that change are listed in that commit message |
 | In-flight merges | the hover + FAQ worktree edits `ir/motion.js`, `emit/motionScript.js`, `emit/motionCss.js`, `capture/states.js`, `capture/interactions.js`, `ir/states.js`, `ir/asis.js`; the animation work touches `ir/motion.js` and `capture/loops.js`, so the worktree must be merged **before** it starts |
 
 ### Revised steps (2026-10-14, superseded by the order below)
