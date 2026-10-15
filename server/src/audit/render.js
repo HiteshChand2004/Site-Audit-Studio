@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 import { AxeBuilder } from '@axe-core/playwright';
 import { USER_AGENT } from './http.js';
 import { withTimeout } from './util.js';
+import { readSiteTypeEvidence } from '../detection/siteType.js';
 
 const VIEWPORT = { width: 1440, height: 900 };
 const AXE_LIMIT_MS = 40000;
@@ -107,6 +108,8 @@ export async function renderHome(browser, url, { globals = [], cache = null, sca
       };
     }, globals);
 
+    // Whether the page is drawn on a canvas rather than in the DOM (detection/siteType.js).
+    const siteTypeEvidence = await page.evaluate(readSiteTypeEvidence).catch(() => null);
     const html = await page.content();
     const cookies = (await context.cookies()).map((c) => c.name);
 
@@ -138,6 +141,7 @@ export async function renderHome(browser, url, { globals = [], cache = null, sca
       requests,
       cookies,
       ...snapshot,
+      siteTypeEvidence,
       axe,
       axeError,
     };

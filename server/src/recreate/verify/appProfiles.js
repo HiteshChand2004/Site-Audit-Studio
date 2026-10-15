@@ -26,8 +26,9 @@ function jsonArray(text) {
 const MOTION_SCRIPT = /^(\.\.\/)*js\/motion\.js$/;
 // The animation library's replay (emit/anim.js) and Framer appear entrances (behavior/framer/emit.js): the pinned libraries
 // (accepted only byte for byte), the fixed replayers, their data.
-const ANIM_SCRIPT = /^(\.\.\/)*js\/(vendor\/((gsap|ScrollTrigger)\.min|motion)\.js|(anim|appear)-replay\.js|(anim|appear)\/[\w.-]+\.js)$/;
-const ANIM_FILE = /^js\/((anim|appear)-replay\.js|(anim|appear)\/[\w.-]+\.js)$/;
+// Lottie animations (behavior/lottie.js) the same way: the vendored lottie-web build, the fixed player, the page's data.
+const ANIM_SCRIPT = /^(\.\.\/)*js\/(vendor\/((gsap|ScrollTrigger|lottie_light)\.min|motion)\.js|((anim|appear)-replay|lottie-play)\.js|(anim|appear|lottie)\/[\w.-]+\.js)$/;
+const ANIM_FILE = /^js\/(((anim|appear)-replay|lottie-play)\.js|(anim|appear|lottie)\/[\w.-]+\.js)$/;
 // The app stacks (React + Vite, Next.js, MERN) serve the same file from the site root, and may carry it next to their bundles.
 const MOTION_ROOT = '/js/motion.js';
 

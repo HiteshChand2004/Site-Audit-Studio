@@ -18,6 +18,7 @@ import { TimeoutError } from '../audit/util.js';
 import { createInterrupts, extendableTimeout } from './interrupts.js';
 import { analysisWarnings, baseUrlOf, isAllPages, latestAnalysis, pageLimitOf, pageUrlOf, SITE_PAGE_CAP } from './inputs.js';
 import { RecreateError } from './errors.js';
+import { CANVAS_RENDERED_MESSAGE } from '../detection/siteType.js';
 import { assetsStage } from './assets/index.js';
 import { buildStage } from './build/index.js';
 import { generateStage } from './generate.js';
@@ -150,6 +151,10 @@ async function recreate({
 }) {
   const analysis = latestAnalysis(project.id);
   if (!analysis) throw new RecreateError('Run Analyze first: Recreate works from a completed analysis.');
+  // The analysis found the site drawn on a canvas (detection/siteType.js): nothing to copy, stopped before any work.
+  if (analysis.audit?.siteType?.type === 'canvas-rendered') {
+    throw Object.assign(new RecreateError(`${CANVAS_RENDERED_MESSAGE} (${analysis.audit.siteType.reason})`), { siteType: analysis.audit.siteType });
+  }
   // Stopped from the app. Thrown like any other failure, so the workspace and its checkpoint are kept the same way:
   // the app then offers to continue where it stopped.
   const stopError = () => Object.assign(new RecreateError('Stopped: the copy was stopped from the app.'), { stopped: true });

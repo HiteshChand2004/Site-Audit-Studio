@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { LOTTIE_VENDOR, lottieVendorPath } from '../behavior/lottie.js';
 
 const require = createRequire(import.meta.url);
 const GSAP_DIST = path.dirname(require.resolve('gsap/dist/gsap.min.js'));
@@ -26,6 +27,8 @@ export const VENDOR_FILES = {
   // The motion package's browser build (window.Motion), for Framer appear entrances (behavior/framer/emit.js). The
   // package exports only its module entries, so the build is found next to the CommonJS one.
   [`${VENDOR_DIR}/motion.js`]: path.join(path.dirname(require.resolve('motion')), '..', 'motion.js'),
+  // lottie-web's SVG build, for Lottie animations (behavior/lottie.js); listed only when the pinned package is installed.
+  ...(lottieVendorPath() && { [LOTTIE_VENDOR]: /** @type {string} */ (lottieVendorPath()) }),
 };
 const sha256 = (text) => createHash('sha256').update(text).digest('hex');
 const cache = new Map();

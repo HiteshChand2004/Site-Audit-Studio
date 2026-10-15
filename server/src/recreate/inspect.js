@@ -15,6 +15,7 @@ import { evidenceFor, readHomepageShell, reasonText, recoveredDocument } from '.
 import { pageKey } from '../audit/util.js';
 import { USER_AGENT } from '../audit/http.js';
 import { RecreateError } from './errors.js';
+import { CANVAS_RENDERED_MESSAGE } from '../detection/siteType.js';
 import { causeText, recoverFailure, recoverHit } from './interrupts.js';
 import { viewsFor } from './views.js';
 
@@ -320,6 +321,11 @@ export async function inspectStage(ctx) {
         if (i === 0) throw new RecreateError(`The homepage could not be captured: ${errors[0]?.message ?? 'unknown error'}`);
         failedPages.push({ url: info.url, source: info.source, reason: 'capture-failed' });
         return;
+      }
+      // A page drawn on a canvas has no structure to copy (detection/siteType.js): stopped with the reason, never a copy of
+      // an empty shell - like a bot-protection challenge.
+      if (i === 0 && views.desktop.siteType?.type === 'canvas-rendered') {
+        throw Object.assign(new RecreateError(`${CANVAS_RENDERED_MESSAGE} (${views.desktop.siteType.reason})`), { siteType: views.desktop.siteType });
       }
       // An error answer with next to nothing in it (an empty 502 from a gateway, a bare 500) is no evidence of the page:
       // it is rebuilt from evidence instead (recover.js), not kept as a blank page. An error page with content of its own
