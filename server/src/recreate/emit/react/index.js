@@ -8,6 +8,7 @@
 import { emitCss, CSS_FILE, minifyCssSync, usedCustomProps } from '../css.js';
 import { headHtml, whiteSpaceByClass } from '../html.js';
 import { MOTION_FILE, MOTION_JS, MOTION_TAG } from '../motionScript.js';
+import { programJson, REPLAY_MODULE, siteAnimationsJsx } from '../anim.js';
 import { headTags, safeJsonLd } from '../walk.js';
 import { pinnedOverrides, pinnedVersions } from '../../../toolchains/index.js';
 import { findShared, pascal } from './components.js';
@@ -79,7 +80,13 @@ export function emitReact(ir, opts = {}) {
     const used = new Set();
     const body = visibleChildren(page.body.children ?? [], 'body').map((c) => jsxNode(c, refs, 3, shared, used, { wsByClass })).join('\n');
     const imports = [...used].sort().map((n) => `import ${n} from '../components/${n}.jsx';`);
-    files.set(fileOf(name, 'pages'), `${imports.join('\n')}${imports.length ? '\n\n' : ''}export default function ${name}() {\n  return (\n    <>\n${body}\n    </>\n  );\n}\n`);
+    // The animation library's replay of this page (emit/anim.js): its program as data, run by SiteAnimations.
+    if (page.anim) {
+      imports.push("import SiteAnimations from '../SiteAnimations.jsx';", `import anim from '../anim/${name}.json';`);
+      files.set(`src/anim/${name}.json`, programJson(page));
+    }
+    const animEl = page.anim ? '\n      <SiteAnimations program={anim} />' : '';
+    files.set(fileOf(name, 'pages'), `${imports.join('\n')}${imports.length ? '\n\n' : ''}export default function ${name}() {\n  return (\n    <>\n${body}${animEl}\n    </>\n  );\n}\n`);
     meta.push({
       path: pagePath(page.outPath),
       outPath: page.outPath,
@@ -105,6 +112,10 @@ export function emitReact(ir, opts = {}) {
   files.set('src/page-meta.json', `${JSON.stringify(meta, null, 2)}\n`);
   for (const f of ir.files) files.set(`public/${f.path}`, f.content);
   if (motionScript) files.set(`public/${MOTION_FILE}`, MOTION_JS);
+  if (ir.pages.some((p) => p.anim)) {
+    files.set('src/anim/replay.js', REPLAY_MODULE);
+    files.set('src/SiteAnimations.jsx', siteAnimationsJsx());
+  }
 
   return { files, assets, stats: { pages: ir.pages.length, components: components.length, sharedInstances: shared.size } };
 }

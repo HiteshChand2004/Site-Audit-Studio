@@ -206,6 +206,71 @@ for (const mode of ['normal', 'exact']) {
   });
 }
 
+// A static server for a built app (no CSP: what is checked here is the behaviour; the stack builds run their own safety scan).
+async function serveStatic(root) {
+  const s = http.createServer(async (req, res) => {
+    const p = decodeURIComponent(req.url.split('?')[0]);
+    const candidates = p.endsWith('/') ? [`${p}index.html`] : [p, `${p}/index.html`, `${p}.html`];
+    for (const c of candidates) {
+      try {
+        const body = await readFile(path.join(root, c));
+        const type = c.endsWith('.html') ? 'text/html; charset=utf-8' : c.endsWith('.js') ? 'text/javascript' : c.endsWith('.css') ? 'text/css' : 'application/octet-stream';
+        res.writeHead(200, { 'content-type': type });
+        return res.end(body);
+      } catch {
+        // next candidate
+      }
+    }
+    res.writeHead(404).end();
+  });
+  await new Promise((resolve) => s.listen(0, '127.0.0.1', resolve));
+  return { origin: `http://127.0.0.1:${s.address().port}`, close: () => new Promise((r) => s.close(r)) };
+}
+
+test('React + Vite, Next.js and MERN: the same program runs from the gsap package in a layout effect, equivalent to the HTML build', async () => {
+  const { toolchainStatus } = await import('../src/toolchains/index.js');
+  const ready = [];
+  for (const [stack, toolchain] of [['react-vite', 'react-vite'], ['nextjs', 'next'], ['mern', 'mern']]) {
+    if ((await toolchainStatus(toolchain)).installed) ready.push(stack);
+  }
+  if (!ready.length) return; // no toolchain on this machine: the stack builds are covered where they are installed
+  process.env.SAS_ALLOW_LOCALHOST = '1';
+  const { db } = await import('../src/db/index.js');
+  const { runRecreate, STAGES } = await import('../src/recreate/index.js');
+  const { recreateDir } = await import('../src/recreate/workspace.js');
+  const { buildStackOutput } = await import('../src/recreate/export/fromIr.js');
+  const { seedProject, skipStages } = await import('./helpers/projects.js');
+  const { randomUUID } = await import('node:crypto');
+  const site = `http://localhost:${server.address().port}`;
+  const project = seedProject(db, { name: 'gsap-stacks', url: `${site}/`, recreatePages: -1, analysis: true });
+  const recreateId = randomUUID();
+  const report = await runRecreate({
+    project, recreateId, progress: () => {},
+    stages: { ...STAGES, ...skipStages('sweep', 'exactCapture', 'exact', 'responsive', 'stack') },
+  });
+  const dir = recreateDir(project.id, recreateId);
+  const original = await look(`${site}/gsap.html`);
+  for (const stack of ready) {
+    const output = await buildStackOutput({ dir, stack, report });
+    assert.equal(output.status, 'ready', stack);
+    // The replay component renders nothing: the DOM and pixels with JavaScript off are the HTML build's.
+    assert.ok(output.equivalence?.equivalent !== false, `${stack} ${JSON.stringify(output.equivalence?.summary ?? output.equivalence)}`);
+    const pkg = JSON.parse(await readFile(path.join(dir, 'stacks', stack, stack === 'mern' ? 'client' : '', 'package.json'), 'utf8'));
+    assert.equal(pkg.dependencies.gsap, '3.15.0', `${stack} depends on the pinned gsap`);
+    const served = await serveStatic(path.join(dir, 'stacks', stack, output.dist));
+    try {
+      const copy = await look(`${served.origin}/`);
+      assert.ok(copy.moving >= 1, `${stack}: nothing moves`);
+      assert.equal(copy.hero.opacity, 1, `${stack}: entrance`);
+      assert.deepEqual(copy.cards, [1, 1, 1], `${stack}: reveal`);
+      const moved = (s) => s[1] - s[0];
+      assert.ok(Math.abs(moved(copy.scrub) - moved(original.scrub)) <= 12, `${stack}: original ${original.scrub} copy ${copy.scrub}`);
+    } finally {
+      await served.close();
+    }
+  }
+});
+
 test('a page without an animation library leaves no log entries and costs nothing', async () => {
   const context = await browser.newContext();
   await context.addInitScript(installAnimLog);

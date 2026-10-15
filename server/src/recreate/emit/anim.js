@@ -34,13 +34,14 @@ const vendorText = (rel) => {
 export const vendorHashes = () => Object.fromEntries(Object.keys(VENDOR_FILES).map((rel) => [rel, sha256(vendorText(rel))]));
 export const animDataFile = (slug) => `${ANIM_DIR}/${slug}.js`;
 
-/** The fixed replayer (plain ES5-style JS, no sink: it only calls the library and querySelectorAll). */
-export const REPLAY_JS = `(function () {
-  var p = window.__sasAnim;
-  var g = window.gsap;
+/**
+ * The replay itself, one source for every stack: the plain-HTML replayer below wraps it, the app stacks import it as a
+ * module (src/anim/replay.js) and run it inside gsap.context(). Plain ES5-style JS with no sink: it only calls the library
+ * and querySelectorAll. `ST` is ScrollTrigger (or null).
+ */
+export const REPLAY_CORE = `function replayProgram(g, ST, p) {
   if (!p || !g || !p.calls) return;
-  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  if (p.scrollTrigger && window.ScrollTrigger) g.registerPlugin(window.ScrollTrigger);
+  if (p.scrollTrigger && ST) g.registerPlugin(ST);
   function els(ids) {
     var out = [];
     for (var i = 0; i < ids.length; i++) {
@@ -74,7 +75,7 @@ export const REPLAY_JS = `(function () {
   p.calls.forEach(function (c) {
     try {
       if (c.lib === 'ScrollTrigger') {
-        if (window.ScrollTrigger) window.ScrollTrigger.create(vars(c.vars));
+        if (ST) ST.create(vars(c.vars));
         return;
       }
       var host = c.timeline != null && tls[c.timeline] ? tls[c.timeline] : g;
@@ -94,8 +95,52 @@ export const REPLAY_JS = `(function () {
       // one call the library refuses must not stop the others
     }
   });
+}`;
+
+/** The plain-HTML replayer (js/anim-replay.js): the core, run once the deferred library and data are in, not under reduced motion. */
+export const REPLAY_JS = `(function () {
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  ${REPLAY_CORE.split('\n').join('\n  ')}
+  replayProgram(window.gsap, window.ScrollTrigger || null, window.__sasAnim);
 })();
 `;
+
+/** The same core as an ES module for the app stacks (src/anim/replay.js). */
+export const REPLAY_MODULE = `// Generated: replays the animation calls the original page made, with the real gsap package (see SiteAnimations.jsx).
+${REPLAY_CORE}
+
+export { replayProgram };
+`;
+
+/**
+ * The app stacks' component (React + Vite, MERN client, Next.js with `'use client'`): runs a page's program with the gsap
+ * package inside gsap.context() in a layout effect, and reverts it on unmount, so React StrictMode's double mount (and a
+ * client-side route change) never leaves two copies of a tween. Nothing under reduced motion; renders nothing.
+ * @param {{ client?: boolean, base?: string }} [o]  client: the Next.js directive; base: the import path of src/anim
+ */
+export function siteAnimationsJsx({ client = false, base = './anim' } = {}) {
+  return [
+    ...(client ? ["'use client';", ''] : []),
+    '// Generated: replays the animation calls the original page made, with the real gsap package.',
+    "import { useLayoutEffect } from 'react';",
+    "import { gsap } from 'gsap';",
+    "import { ScrollTrigger } from 'gsap/ScrollTrigger';",
+    `import { replayProgram } from '${base}/replay.js';`,
+    '',
+    'export default function SiteAnimations({ program }) {',
+    '  useLayoutEffect(() => {',
+    "    if (!program || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return undefined;",
+    '    const ctx = gsap.context(() => replayProgram(gsap, program.scrollTrigger ? ScrollTrigger : null, program));',
+    '    return () => ctx.revert();',
+    '  }, [program]);',
+    '  return null;',
+    '}',
+    '',
+  ].join('\n');
+}
+
+/** The program of a page as a module the page component imports (src/anim/<name>.json). */
+export const programJson = (page) => `${JSON.stringify(page.anim)}\n`;
 
 /**
  * Files of the plain-HTML copy for every page with a program: the library (only the parts used), the replayer, the data.

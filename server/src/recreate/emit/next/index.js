@@ -15,6 +15,7 @@
 import { emitCss, usedCustomProps } from '../css.js';
 import { whiteSpaceByClass } from '../html.js';
 import { MOTION_FILE, MOTION_JS, MOTION_SRC } from '../motionScript.js';
+import { programJson, REPLAY_MODULE, siteAnimationsJsx } from '../anim.js';
 import { findShared } from '../react/components.js';
 import { jsxAttr, jsxNode, propName, visibleChildren } from '../react/jsx.js';
 import { pageName } from '../react/index.js';
@@ -143,7 +144,13 @@ export function emitNext(ir) {
     // The page's own stylesheet (only its rules): Next writes it inline in the page's head (inlineCss), no blocking request.
     files.set(`${dir}/page.css`, rootUrls(emitCss(ir, { page, usedVars })));
     imports.unshift("import './page.css';");
-    files.set(`${dir}/page.jsx`, `${imports.join('\n')}${imports.length ? '\n\n' : ''}export default function ${names[i]}() {\n  return (\n    <>\n${content}\n    </>\n  );\n}\n`);
+    // The animation library's replay of this page (emit/anim.js): a client component, the program passed as data.
+    if (page.anim) {
+      imports.push("import SiteAnimations from '@/components/SiteAnimations.jsx';", `import anim from '@/anim/${names[i]}.json';`);
+      files.set(`anim/${names[i]}.json`, programJson(page));
+    }
+    const animEl = page.anim ? '\n      <SiteAnimations program={anim} />' : '';
+    files.set(`${dir}/page.jsx`, `${imports.join('\n')}${imports.length ? '\n\n' : ''}export default function ${names[i]}() {\n  return (\n    <>\n${content}${animEl}\n    </>\n  );\n}\n`);
   });
 
   const css = emitCss(ir, { usedVars });
@@ -152,6 +159,11 @@ export function emitNext(ir) {
 
   for (const f of ir.files) files.set(`public/${f.path}`, publicFile(f, urlMap));
   if (ir.motion?.script) files.set(`public/${MOTION_FILE}`, MOTION_JS);
+  const replays = ir.pages.some((p) => p.anim);
+  if (replays) {
+    files.set('anim/replay.js', REPLAY_MODULE);
+    files.set('components/SiteAnimations.jsx', siteAnimationsJsx({ client: true, base: '@/anim' }));
+  }
   if (plan.urlChanges.length) {
     files.set('public/_redirects', plan.urlChanges.map((c) => `${c.from} ${c.to} 301`).join('\n') + '\n');
     files.set('vercel.json', `${JSON.stringify({ trailingSlash: true, redirects: plan.urlChanges.map((c) => ({ source: c.from, destination: c.to, permanent: true })) }, null, 2)}\n`);
@@ -162,7 +174,7 @@ export function emitNext(ir) {
   files.set('package.json', `${JSON.stringify({
     name, private: true, version: '0.0.0',
     scripts: { dev: 'next dev', build: 'next build', serve: 'npx serve out' },
-    dependencies: { next: pinned.next, react: pinned.react, 'react-dom': pinned['react-dom'] },
+    dependencies: { next: pinned.next, react: pinned.react, 'react-dom': pinned['react-dom'], ...(replays && { gsap: pinned.gsap }) },
   }, null, 2)}\n`);
   files.set('next.config.mjs', lines(
     '// Static export: `npm run build` writes the whole site to out/, every page as <route>/index.html.',
