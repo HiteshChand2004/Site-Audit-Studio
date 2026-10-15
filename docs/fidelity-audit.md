@@ -256,40 +256,41 @@ concurrency 2). SQLite stays for project data unless you want Postgres.
 
 **Step 9 — Optional live smoke test** against 2–3 sites you list in a config file, off in CI.
 
-## 6. Decisions needed before Step 1
+## 6. Decisions (final, CLONER_SPEC v2)
 
-1. **Script lift (Tier 2) and embeds (Tier 3).** The spec wants original JS bundles copied and run after mount. This
-   project has a standing rule that the original's JavaScript is never copied, and you stopped Mirror mode (which did
-   exactly this) earlier today. Options: (a) allow Tier 2/3 as the spec says, running lifted scripts only in the sandbox /
-   capture browser and in the downloaded clone; (b) keep the rule — Tier 1 replay + measured reconstruction only, Lottie /
-   canvas reported and shown as a still frame; (c) allow Tier 3 embeds (Lottie JSON + its player, WebGL assets) but not
-   general bundle lifting.
-2. **Analytics / tracker denylist by name** (GA, GTM, Hotjar, …). The project's rule so far is "no brand or selector
-   lists"; earlier you chose third-party scripts by measured role. Keep the measured rule, use the spec's denylist, or both
-   (denylist first, measurement for the rest)?
-3. **Normal mode's semantic class renaming.** The spec keeps original class names and CSS in every stack and keeps the
-   fixers by guarding them (Phase 5). Proposal: the as-is path becomes the base of every copy, today's fixers are rewired
-   to work on it under `fixMode` (`fix-all` by default), and exact mode becomes `fixMode: fidelity`. The regenerated-CSS
-   path stays only as the fallback for a page whose original CSS cannot be read. Agree?
-4. **Footer marker + `noindex` by default.** The spec makes both default-on with one off switch. They change the copy's
-   pixels and its SEO rows, so the verifier would treat them as intentional changes. OK to make the switch a project
-   setting ("This is my own site") that also turns both off?
-5. **Broken links:** the spec says keep the link and report it; today the copy unlinks it (`<span>`). Follow the spec?
-6. **Baseline scope:** the spec's `baseline.json` / `issueAudit.json` per site — Analyze runs Lighthouse and axe on the
-   homepage only. Keep homepage-only (fast), or every recreated page (Lighthouse ~30–40 s per page per device)?
-7. **Folder layout and language.** The spec asks for `api/`, `worker/`, `capture/`, `optimize/`, … and TypeScript "unless
-   the repo uses plain JS consistently" — it does (no TypeScript anywhere). Proposal: stay JavaScript, keep
-   `server/src/recreate/…` and add `server/src/worker/`, `server/src/sandbox/`, `server/src/recreate/behavior/` and
-   `server/src/recreate/optimize/` rather than moving every module.
-8. **Phase 6 order.** It changes how the app runs (Redis + Docker required). Do it last as planned, or first?
-9. **Work already in flight** (started on your earlier requests today): (a) "every page recreated" — done, tests pass alone,
-   waiting for one rerun to commit; (b) the hover + FAQ fix running in a parallel worktree; (c) the animation fixes and the
-   Copy-step speed work. Proposal: commit (a), let (b) finish and merge, fold (c)'s animation part into Step 4 above, and do
-   the speed work after Step 8 (the worker split changes where time is spent).
+Final as written in the spec's "Decisions (final)" section, 2026-10-15:
+
+1. **Script lift = targeted.** Only scripts fingerprinted as animation / UI / interaction libraries (GSAP, ScrollTrigger, Swiper,
+   Lottie, webflow.js, Bootstrap JS, jQuery plugins, Alpine.js, …) and the site's own small interaction scripts when they are the
+   only source of a recorded interaction. Never app / framework bundles, trackers or auth scripts. Only the recorder is taken from
+   `mirror-mode-wip`, not mirror mode's output path.
+2. **Trackers:** the name denylist first (extending `detection/manual-rules.json`, no new list), then the measured-role rule for
+   anything not on it.
+3. **As-is is the base of every copy.** Exact mode becomes `fixMode: fidelity`. Normal mode (CSS regenerated from computed
+   styles) leaves the default path and stays behind a flag.
+4. **Footer marker + `noindex` on by default.** One "This is my own site" switch turns both off and allows islands. The marker
+   region is masked in pixel tests.
+5. **Broken links** keep their `href` and are reported; never unlinked.
+6. **Lighthouse** on the homepage by default, configurable to the top N pages. The cheap checks (axe, console errors, broken
+   assets, mobile overflow, every Phase 4 check) run on every page.
+7. **Language:** JavaScript, new folders added without restructuring existing ones, `// @ts-check` + JSDoc in new modules.
+8. **Phase 6 last.** Everything is built as a pure `runJob(config) → outputs` function with no Express dependency; Phase 6 must be
+   complete before the tool goes public.
+9. **In-flight work:** commit "every page recreated", merge the hover + FAQ fix, fold the animation work into the behaviour step,
+   speed work after Phase 6. **Done:** 2138098, 06e9afa, 505d72d, 8380cf6.
+
+Answers given with the v2 plan approval (2026-10-15):
+- Click behaviour in React / Next / MERN keeps the one shared `js/motion.js`, initialised from a client component's `useEffect`
+  with cleanup, re-binding after re-renders and client-side route changes (a Next route-change test is required).
+- The capture's mobile view moves from 375 to 390 px; tests asserting 375 are updated and listed in the commit message.
+- Toolchains are installed in the worktree. The pre-commit hook runs the fast unit tests + the HTML/CSS stack fixtures;
+  `npm run test:fixtures` runs the full 4-stack fixture suite and must pass before each step's final commit.
+- Live sites (corpus / smoke) only when the user starts the script.
+- **Video tier** added to the spec (Phase 2 item 9, fixture 11, report "clean vs approximated vs islands").
 
 ---
 
-## 7. Plan vs existing code
+## 7. Plan vs existing code (v1 tables 2026-10-14, v2 additions 2026-10-15)
 
 Checked against the code on 2026-10-14 (functions named as exported). **Status:** done / partial / missing. **Decision:**
 reuse (as is) / extend (add to the existing module) / new (nothing to build on) / replace (only where the existing code
@@ -420,6 +421,70 @@ cannot be extended; the reason is given). "In flight" = uncommitted work in this
 |---|---|---|---|---|
 | Live sites from a config file, off in CI | partial | `test/recreate-corpus.test.js` (registry of saved real-site captures; currently failing because a capture was pruned) | a config of live URLs + an opt-in flag | extend |
 
+### v2 additions (re-checked 2026-10-15 against the code at 8380cf6)
+
+Since the tables above were written: 2138098 (every page recreated), 06e9afa (hover + FAQ merge), 9403670 / 387aab5 / 505d72d
+(continuous animations, scroll-linked effects, canvas recordings), 8380cf6 (slow loop seen one way → trace). Rows above whose
+status changed: **Continuous loops → done** (`capture/loops.js`, `ir/motion.js scriptLoop / traceLoop`); **Scroll-linked → done**
+(`capture/scrolllinked.js captureScrollLinked`, scrub tokens, `--sas-sp` in `emit/motionScript.js`, CSS in all 4 stacks, no
+`useScroll` needed); **Canvas / WebGL / Lottie → partial** (`recordCanvasLoop` + `generate.js addCanvasFrames`: still frame + recorded
+loop, reported; the video tier below extends it); **Tier 2 → partial** (targeted per decision 1, recorder from the branch);
+**Webflow `webflow.js` → covered by the targeted lift**.
+
+#### One-mode design
+| Item | Status | Where it exists | Missing for v2 | Decision |
+|---|---|---|---|---|
+| Mirror capture, ONE recorder | partial | `audit/sharedCache.js createSharedCache` (job-temporary GET bodies); `capture/asis.js recordSheetBodies`; per-view `resources` + `dataFailures` (`capture/index.js`); `capture/exact.js visitSlot` (console + failed requests); branch `mirror-mode-wip` `capture/mirror.js createMirrorStore` (every GET body incl. XHR / fetch, content-addressed, redirects, unreproducible requests) | one persisted recorder for all four call sites; XHR / fetch bodies kept | extend `sharedCache` with the branch's recorder (recorder only, decision 1) |
+| Mirror served locally as the reference | partial | today: the saved exact baseline (`capture/exact.js`, offline); branch `mirror/paths.js planMirror`, `mirror/rewrite.js createRewriter`, `mirror/shim.js mirrorShim` | serve the recorded mirror on a loopback port for Phase 4, never as output | extend `verify/server.js` with the branch modules |
+| Section splitter | missing (pieces) | landmark choice in `recreate/recover.js`; repeated subtrees in `emit/react/components.js`; role mapping in `ir/tree.js`; bands in `verify/exact/compare.js` | `behavior/sections`: landmarks → top-level blocks → repeated patterns, a section id on IR nodes + capture paths | new, reusing those pieces |
+| Section-wise rebuild | done for markup / CSS (exact) | `ir/asis.js applyAsIs` + carried motion tokens | the section id on every node | extend |
+| Islands (per section, own-site only) | missing | branch `mirror/rewrite.js`, `mirror/shim.js`, `mirror/csp.js mirrorScriptHashes` (per page) | `behavior/islands`: a section's original markup + its minimal targeted-lift JS as an isolated component in 4 stacks; own-site off → "unresolved" | new, reusing the branch modules |
+| "This is my own site" switch | missing | `projects.exact_mode` pattern | `projects.own_site`: marker + `noindex` off, islands allowed | new (small) |
+| Report: clean vs approximated vs islands | missing | `report.json`, `RecreateReport.jsx`, `report/render.js` | per page %, a reason per island / video | new (small) |
+
+#### Phase 1 items 17–20
+| Item | Status | Where it exists | Missing for v2 | Decision |
+|---|---|---|---|---|
+| 17 click interactions → `interactionStates.json` | mostly done | `capture/clicks.js captureClicks` (aria-expanded / -controls / -haspopup, hint words, links as controls, `restore` / `closesOwn`), `capture/states.js` (tabs, carousels, FAQ, off state, `splitIndependent`, `planPanels`), `capture/notices.js`, hover panels (`interactions.js`), `capture/feeds.js`; narrow pass `NARROW_CLICK_VIEWS` (8 s; full probe per view in exact) | the file; **390 px** (mobile view is 375 → 390, approved); the full probe on the mobile view in every copy | extend |
+| 18 cursors + hit-testing → `pointerMap.json` | partial | computed `cursor` per element (`capture/snapshot.js`; an inline / JS-set cursor survives in the as-is markup); `elementFromPoint` in `clicks.js aimClick` / `interactions.js aim`, not saved; `capture/census.js` visits every interactive element | cursor + `elementFromPoint` at the centre, per interactive element, per view | extend `census.js` |
+| 19 content completeness → `contentInventory.json` | partial | lazy attrs (`snapshot.js LAZY_ATTR`), scroll-through, `verify/layout.js loadLazyImages`; every panel state (`states.js`, notices, panels); fetched content in the rendered DOM; XHR bodies not kept | resolve `data-src` / `data-srcset` / lazy backgrounds before the snapshot; XHR bodies via the one recorder; the inventory (text / images / links per page + section, hidden panels marked) | extend + new builder |
+| 20 bundle layout | partial | `capture/<slug>/…`, `capture/manifest.json` | an index of the v2 file names (no move) | extend |
+
+#### Phase 2 items 7–9
+| Item | Status | Where | Missing | Decision |
+|---|---|---|---|---|
+| 7 click behaviour | done (no-lift path) | `ir/states.js`, `ir/motion.js openDecls / shutDecls / startsOpen`, `js/motion.js isOpen / setOpen` (same script in 4 stacks) | use a lifted script when one was lifted; in React / Next / MERN init from a client component's `useEffect` with cleanup, re-bind on re-render + route change (+ Next route-change test) | reuse + extend (approved: one shared script) |
+| 8 islands | missing | see above | — | new |
+| 9 video tier | partial | `capture/loops.js recordCanvasLoop` (animated WebP, ~120 ms frames, 4 s, seamless or forward-back), `generate.js addCanvasFrames` (`cN` tokens, still frame + loop) | only self-running layers not driven by scroll / hover / click / mouse; deterministic recording (`canvas.captureStream` or a stepped clock); 1440 + 390; WebM + MP4 + poster; lazy; size budget; poster under reduced motion; non-canvas layers (Lottie, loops, intros) with text kept as HTML on top; chosen when islands are off or heavier; "approximated" | extend (no new recorder) |
+| Tier 2 targeted lift | partial (branch) | branch recorder / rewrite / shim / csp | script-body fingerprint signal in `detection/engine.js matchSignal` + rule files; lift only allowed libraries + the site's small interaction scripts; tracker denylist in `manual-rules.json` | extend |
+
+#### Phase 3 new rules
+| Item | Status | Where | Missing | Decision |
+|---|---|---|---|---|
+| Preserve semantics (tags, every href, type, role, tabindex) | done on the as-is path | `ir/asis.js asisBody`; default path changes them (`ir/tree.js` role → tag, `fixers/perf.js fixBrokenLinks` → `<span>`) | as-is default (decision 3), broken links kept (decision 5), a semantics check | extend |
+| Cursor reproduction | partial | as-is CSS + inline styles; computed `cursor` on the rebuilt path | compare with `pointerMap.json`, write a rule where it differs | new small fixer |
+| Hit-test guard | missing | — | `elementFromPoint` per interactive element vs `pointerMap.json`; the blocking layer gets `pointer-events: none` or a stacking fix, logged | new (`verify/hitTest.js` + fixer) |
+| Content rule | missing | painted-box comparison only | every inventory item present, shown / hidden like the original | new check |
+
+#### Phase 4 checks 5a–5e
+| Check | Status | Where | Missing | Decision |
+|---|---|---|---|---|
+| 5a content | partial | `verify/exact/compare.js compareSlot` (missing / extra painted boxes per slot) | against `contentInventory.json`, hidden panels included | extend |
+| 5b cursor | missing | — | computed cursor vs `pointerMap.json` | new (shares 5c's pass) |
+| 5c hit-test | missing | — | `elementFromPoint` vs `pointerMap.json` | new |
+| 5d click | partial | `reaudit/motion.js compareClicks` (1440, ≤ 6 pages, re-audit only) | 390, every page, against `interactionStates.json`, inside verification | extend |
+| 5e every page, both widths, per section, with cause | partial | exact compare on every page at ~20 slots | section attribution, a cause per failure, the hard-failure set | extend |
+
+#### Permanence rules and fixtures
+| Item | Status | Where | Missing | Decision |
+|---|---|---|---|---|
+| Regression suite on every commit | missing | `npm test -w server`; no hook | pre-commit hook (unit tests + HTML/CSS fixtures) + `npm run test:fixtures` (4 stacks) | new |
+| Real-site corpus script | partial | `scripts/corpus.mjs` (offline rebuild of saved captures vs baselines), `test/recreate-corpus.test.js` (failing: a capture was pruned) | a live-site config, clone all, summary (checks passed, % islands / approximated, Lighthouse delta), only when started by the user | extend; the failing test is fixed / re-baselined in step 0.5 |
+| F8 interactions | partial | `recreate-hover-toggle`, `reaudit-clicks`, `recreate-widgets`, `recreate-exact-probes`, `recreate-states-*` | one page with all eight, incl. a menu rendered only on click by a framework-style script; 4 stacks, both widths | extend |
+| F9 pointer + content | missing (pieces) | lazy attrs in fixtures, `recreate-backend-pages` | overlay blocking clicks, inline-JS cursor, lazy bg, hidden-panel content, fetch after scroll | new |
+| F10 island | missing | — | own-site on → island, off → unresolved | new |
+| F11 video tier | missing (pieces) | `recreate-animation-lab` canvas cell | canvas particles behind heading + button, a looping blob, a scroll-driven animation that must not use the tier | new |
+
 ### Duplicates to merge (instead of adding another version)
 1. **Three visual comparators:** `verify/visualDiff.js visualDiff` (SSIM, fidelity score), `verify/exact/pixels.js exactDiff`
    (pixelmatch's metric, which is the spec's), `verify/equivalence.js` (`visualSimilarity`, stack equivalence). Step 5
@@ -452,9 +517,10 @@ Already shared (good): `checkLinks` (Analyze + the copy's dead-link check), `isB
 | Contrast lightness-only | `recreate-fix-all` (contrast cases), `recreate-fixers` (`passingColor`) |
 | `noindex` + marker by default | `recreate-generate` (head); crawl files (`ir/crawlFiles.js` drops `noindex` pages from the sitemap and must ignore our own); `reaudit-compare` (SEO rows); exact pixel tests (`recreate-exact-asis-emit`, `-views`, `-compare`) unless the marker is masked |
 | BullMQ / worker split | `recreate-jobs`, jobs / SSE route tests, `recreate-resume` (checkpoint + auto-resume on restart) |
+| Mobile view 375 → 390 (approved) | tests asserting 375 in `recreate/views.js` users: `recreate-capture`, `recreate-responsive`, `recreate-exact-probes`, `recreate-widgets` (narrow click views), `single-page`; listed in that commit message |
 | In-flight merges | the hover + FAQ worktree edits `ir/motion.js`, `emit/motionScript.js`, `emit/motionCss.js`, `capture/states.js`, `capture/interactions.js`, `ir/states.js`, `ir/asis.js`; the animation work touches `ir/motion.js` and `capture/loops.js`, so the worktree must be merged **before** it starts |
 
-### Revised steps (what shrinks, what is left)
+### Revised steps (2026-10-14, superseded by the order below)
 | # | Step | Was | Now | Size |
 |---|---|---|---|---|
 | 0 | Land in-flight work | none | commit "every page recreated", merge hover + FAQ, full suite | S |
@@ -468,3 +534,21 @@ Already shared (good): `checkLinks` (Analyze + the copy's dead-link check), `isB
 | 7 | Safety guardrails | step | mostly done; left: the field-type form rule + a no-op handler | S |
 | 8 | Production architecture | step | SSRF done; left: a queue backend behind `JobManager`, the worker + Dockerfile + compose, the sandbox, S3, logs, docs | L (largest) |
 | 9 | Live smoke test | step | the corpus test exists; left: a config + an opt-in flag | S |
+
+### Implementation order (v2, approved 2026-10-15)
+| # | Step | What is left | Size |
+|---|---|---|---|
+| 0 | In-flight work | **done** (2138098, 06e9afa, 505d72d, 8380cf6) | — |
+| 0.5 | Green suite + merge duplicates | fix / re-baseline `recreate-corpus`; install the toolchains; one test helper; **one network recorder** (sharedCache + the branch's recorder, XHR bodies, persisted) used by the other three; one scroll recipe; `pathOf` via init script | M |
+| 1 | Fixtures 1–11 + runner | F1 / F3 / F4 / F7 / F8 extend existing pages; F2 / F5 / F6 / F9 / F10 / F11 new; runner = `runJob(config)` (decision 8) composing `runRecreate` + stack export + `compareExact` + motion / click rows; pre-commit hook + `npm run test:fixtures`; acceptance criteria as failing tests first | L |
+| 2 | Capture (Phase 1) | GSAP hooks, `dynamicClasses`, canvas-rendered site type, `ssr.html`, mobile 375 → 390 + full probe there, `interactionStates.json`, `pointerMap.json`, lazy resolution + `contentInventory.json`, issueAudit 390 checks, bundle index | M–L |
+| 3 | Style + Phase 3 rules as default | as-is default (normal behind a flag), hrefs kept, cursor fixer, hit-test guard, content rule; the test updates listed above | L |
+| 4 | Behaviour | GSAP replay; targeted lift + fingerprints + tracker denylist; `js/motion.js` init from `useEffect` + re-bind on route change; Framer appear-config parser into the reveal path; tap variants; Lottie / WebGL embed; section splitter + islands + own-site switch; **video tier** | L |
+| 5 | Verification + `fidelity-report.html` | mirror served as reference; 5a–5e on every page at 1440 + 390 per section with causes; visibility loop; CSSOM counts; tier retry; report with clean / approximated / islands | L |
+| 6 | Phase 5 guarded optimization | guarded pipeline, `fixMode`, `intentionalChanges.json`, lightness-only contrast, new fixers, safelist purge, deploy configs, `noindex` + marker | L |
+| 7 | Safety guardrails | form field-type rule + no-op handler | S |
+| 8 | Phase 6 production | queue behind `JobManager`, worker, Dockerfile, compose, sandbox, S3, logs, docs | L |
+| 9 | Live smoke + corpus | live-site config + opt-in flag on `scripts/corpus.mjs` | S–M |
+
+Each L step is split into sub-steps with a WIP commit each; the full 4-stack fixture suite (`npm run test:fixtures`) and the
+server suite pass before a step's final commit.
