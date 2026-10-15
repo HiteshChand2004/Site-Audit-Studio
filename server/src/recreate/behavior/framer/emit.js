@@ -16,12 +16,15 @@ export const APPEAR_REPLAY_FILE = 'js/appear-replay.js';
 export const APPEAR_DIR = 'js/appear';
 export const appearDataFile = (slug) => `${APPEAR_DIR}/${slug}.js`;
 
-/** The fixed replayer (plain ES5-style JS, no sink: it only calls motion and querySelectorAll). */
-export const APPEAR_REPLAY_JS = `(function () {
-  var p = window.__sasAppear;
-  var M = window.Motion;
-  if (!p || !M || !M.animate || !p.entries) return;
-  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+/**
+ * The replay itself, one source for every stack (like emit/anim.js REPLAY_CORE): `M` is motion's API ({ animate, inView }),
+ * `p` the page's program. Returns a function that stops what it started (the app stacks call it on unmount). Plain
+ * ES5-style JS, no sink: it only calls motion and querySelectorAll.
+ */
+export const APPEAR_CORE = `function replayAppear(M, p) {
+  var stops = [];
+  var stop = function () { stops.forEach(function (s) { try { s(); } catch (err) { /* already stopped */ } }); stops = []; };
+  if (!p || !M || !M.animate || !p.entries) return stop;
   var hash = null;
   (p.breakpoints || []).some(function (b) {
     if (b.media && window.matchMedia(b.media).matches) { hash = b.hash; return true; }
@@ -47,11 +50,17 @@ export const APPEAR_REPLAY_JS = `(function () {
       (function (el) {
         try {
           pose(el, s.keyframes, true);
+          stops.push(function () { pose(el, s.keyframes, false); });
           var run = function () {
-            try { M.animate(el, s.keyframes, s.options); } catch (err) { pose(el, s.keyframes, false); }
+            try {
+              var c = M.animate(el, s.keyframes, s.options);
+              if (c && c.stop) stops.push(function () { c.stop(); });
+            } catch (err) { pose(el, s.keyframes, false); }
           };
-          if (s.trigger === 'inView' && M.inView) M.inView(el, function () { run(); }, s.viewport || {});
-          else run();
+          if (s.trigger === 'inView' && M.inView) {
+            var off = M.inView(el, function () { run(); }, s.viewport || {});
+            if (typeof off === 'function') stops.push(off);
+          } else run();
         } catch (err) {
           // an entrance the library refuses leaves the element as the stylesheet draws it, never in its first pose
           pose(el, s.keyframes, false);
@@ -59,8 +68,47 @@ export const APPEAR_REPLAY_JS = `(function () {
       })(els[i]);
     }
   });
+  return stop;
+}`;
+
+/** The plain-HTML replayer (js/appear-replay.js): the core, run once motion and the data are in, not under reduced motion. */
+export const APPEAR_REPLAY_JS = `(function () {
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  ${APPEAR_CORE.split('\n').join('\n  ')}
+  replayAppear(window.Motion, window.__sasAppear);
 })();
 `;
+
+/** The same core as an ES module for the app stacks (src/anim/appear.js). */
+export const APPEAR_MODULE = `// Generated: plays the page's Framer appear entrances with the motion package (see SiteAppear.jsx).
+${APPEAR_CORE}
+
+export { replayAppear };
+`;
+
+/**
+ * The app stacks' component: runs a page's appear program with the motion package in a layout effect (before the first
+ * paint, so the first pose is set before anything is seen) and stops it on unmount. Nothing under reduced motion.
+ * @param {{ client?: boolean, base?: string }} [o]
+ */
+export function siteAppearJsx({ client = false, base = './anim' } = {}) {
+  return [
+    ...(client ? ["'use client';", ''] : []),
+    "// Generated: plays the original's Framer appear entrances with the motion package.",
+    "import { useLayoutEffect } from 'react';",
+    "import { animate, inView } from 'motion';",
+    `import { replayAppear } from '${base}/appear.js';`,
+    '',
+    'export default function SiteAppear({ program }) {',
+    '  useLayoutEffect(() => {',
+    "    if (!program || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return undefined;",
+    '    return replayAppear({ animate, inView }, program);',
+    '  }, [program]);',
+    '  return null;',
+    '}',
+    '',
+  ].join('\n');
+}
 
 /**
  * Files of the plain-HTML copy for every page with an appear program: motion's browser build, the replayer, the data.

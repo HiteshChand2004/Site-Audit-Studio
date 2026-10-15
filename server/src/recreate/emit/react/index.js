@@ -9,6 +9,7 @@ import { emitCss, CSS_FILE, minifyCssSync, usedCustomProps } from '../css.js';
 import { headHtml, whiteSpaceByClass } from '../html.js';
 import { MOTION_FILE, MOTION_JS, MOTION_TAG } from '../motionScript.js';
 import { programJson, REPLAY_MODULE, siteAnimationsJsx } from '../anim.js';
+import { APPEAR_MODULE, siteAppearJsx } from '../../behavior/framer/emit.js';
 import { headTags, safeJsonLd } from '../walk.js';
 import { pinnedOverrides, pinnedVersions } from '../../../toolchains/index.js';
 import { findShared, pascal } from './components.js';
@@ -85,7 +86,12 @@ export function emitReact(ir, opts = {}) {
       imports.push("import SiteAnimations from '../SiteAnimations.jsx';", `import anim from '../anim/${name}.json';`);
       files.set(`src/anim/${name}.json`, programJson(page));
     }
-    const animEl = page.anim ? '\n      <SiteAnimations program={anim} />' : '';
+    // Its Framer appear entrances (behavior/framer/emit.js), the same way.
+    if (page.appear) {
+      imports.push("import SiteAppear from '../SiteAppear.jsx';", `import appear from '../anim/${name}.appear.json';`);
+      files.set(`src/anim/${name}.appear.json`, `${JSON.stringify(page.appear)}\n`);
+    }
+    const animEl = `${page.anim ? '\n      <SiteAnimations program={anim} />' : ''}${page.appear ? '\n      <SiteAppear program={appear} />' : ''}`;
     files.set(fileOf(name, 'pages'), `${imports.join('\n')}${imports.length ? '\n\n' : ''}export default function ${name}() {\n  return (\n    <>\n${body}${animEl}\n    </>\n  );\n}\n`);
     meta.push({
       path: pagePath(page.outPath),
@@ -115,6 +121,10 @@ export function emitReact(ir, opts = {}) {
   if (ir.pages.some((p) => p.anim)) {
     files.set('src/anim/replay.js', REPLAY_MODULE);
     files.set('src/SiteAnimations.jsx', siteAnimationsJsx());
+  }
+  if (ir.pages.some((p) => p.appear)) {
+    files.set('src/anim/appear.js', APPEAR_MODULE);
+    files.set('src/SiteAppear.jsx', siteAppearJsx());
   }
 
   return { files, assets, stats: { pages: ir.pages.length, components: components.length, sharedInstances: shared.size } };

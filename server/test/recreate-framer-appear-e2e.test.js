@@ -175,3 +175,66 @@ for (const mode of ['normal', 'exact']) {
     }
   });
 }
+
+// A static server for a built app (no CSP: the behaviour is what is checked; the stack builds run their own safety scan).
+async function serveStatic(root) {
+  const s = http.createServer(async (req, res) => {
+    const p = decodeURIComponent(req.url.split('?')[0]);
+    for (const c of p.endsWith('/') ? [`${p}index.html`] : [p, `${p}/index.html`, `${p}.html`]) {
+      try {
+        const body = await readFile(path.join(root, c));
+        res.writeHead(200, { 'content-type': c.endsWith('.html') ? 'text/html; charset=utf-8' : c.endsWith('.js') ? 'text/javascript' : c.endsWith('.css') ? 'text/css' : 'application/octet-stream' });
+        return res.end(body);
+      } catch {
+        // next candidate
+      }
+    }
+    res.writeHead(404).end();
+  });
+  await new Promise((resolve) => s.listen(0, '127.0.0.1', resolve));
+  return { origin: `http://127.0.0.1:${s.address().port}`, close: () => new Promise((r) => s.close(r)) };
+}
+
+test('React + Vite, Next.js and MERN: the appear program runs from the motion package in a layout effect, equivalent to the HTML build', async () => {
+  const { toolchainStatus } = await import('../src/toolchains/index.js');
+  const ready = [];
+  for (const [stack, toolchain] of [['react-vite', 'react-vite'], ['nextjs', 'next'], ['mern', 'mern']]) {
+    if ((await toolchainStatus(toolchain)).installed) ready.push(stack);
+  }
+  if (!ready.length) return; // no toolchain on this machine
+  process.env.SAS_ALLOW_LOCALHOST = '1';
+  const { db } = await import('../src/db/index.js');
+  const { runRecreate, STAGES } = await import('../src/recreate/index.js');
+  const { recreateDir } = await import('../src/recreate/workspace.js');
+  const { buildStackOutput } = await import('../src/recreate/export/fromIr.js');
+  const { seedProject, skipStages } = await import('./helpers/projects.js');
+  const { randomUUID } = await import('node:crypto');
+  const site = `http://localhost:${server.address().port}`;
+  const project = seedProject(db, { name: 'framer-stacks', url: `${site}/`, recreatePages: -1, analysis: true });
+  const recreateId = randomUUID();
+  const report = await runRecreate({
+    project, recreateId, progress: () => {},
+    stages: { ...STAGES, ...skipStages('sweep', 'exactCapture', 'exact', 'responsive', 'stack') },
+  });
+  const dir = recreateDir(project.id, recreateId);
+  for (const stack of ready) {
+    const output = await buildStackOutput({ dir, stack, report });
+    assert.equal(output.status, 'ready', stack);
+    assert.ok(output.equivalence?.equivalent !== false, `${stack} ${JSON.stringify(output.equivalence?.summary ?? output.equivalence)}`);
+    const pkg = JSON.parse(await readFile(path.join(dir, 'stacks', stack, stack === 'mern' ? 'client' : '', 'package.json'), 'utf8'));
+    assert.equal(pkg.dependencies.motion, '13.4.6', `${stack} depends on the pinned motion`);
+    const served = await serveStatic(path.join(dir, 'stacks', stack, output.dist));
+    try {
+      const copy = await look(`${served.origin}/`);
+      for (const key of ['title', 'sub', 'badge']) {
+        const s = copy.series(key);
+        assert.equal(last(s).opacity, 1, `${stack}: ${key} ends shown`);
+        assert.ok(changed(s, 'transform') || changed(s, 'opacity'), `${stack}: ${key} plays its entrance`);
+      }
+      assert.ok(last(copy.cardSeries).opacity === 1, `${stack}: the in-view card ends shown`);
+      assert.deepEqual(copy.invisible, [], `${stack}: no text stays invisible`);
+    } finally {
+      await served.close();
+    }
+  }
+});

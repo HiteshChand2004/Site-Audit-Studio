@@ -29,7 +29,12 @@ export function scaffold({ ir, meta, pinned, overrides = {}, siteName }) {
       preview: 'vite preview',
     },
     // gsap only when a page replays the original's animation calls (emit/anim.js SiteAnimations).
-    dependencies: { react: pinned.react, 'react-dom': pinned['react-dom'], ...(ir.pages.some((p) => p.anim) && { gsap: pinned.gsap }) },
+    dependencies: {
+      react: pinned.react, 'react-dom': pinned['react-dom'],
+      ...(ir.pages.some((p) => p.anim) && { gsap: pinned.gsap }),
+      // motion only when a page plays Framer appear entrances (behavior/framer/emit.js SiteAppear).
+      ...(ir.pages.some((p) => p.appear) && { motion: pinned.motion }),
+    },
     devDependencies: { '@vitejs/plugin-react': pinned['@vitejs/plugin-react'], vite: pinned.vite },
     // The transitive versions the server built with (a newer Rollup made the build minutes long).
     ...(Object.keys(overrides).length && { overrides }),

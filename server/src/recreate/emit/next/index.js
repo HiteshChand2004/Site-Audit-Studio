@@ -16,11 +16,12 @@ import { emitCss, usedCustomProps } from '../css.js';
 import { whiteSpaceByClass } from '../html.js';
 import { MOTION_FILE, MOTION_JS, MOTION_SRC } from '../motionScript.js';
 import { programJson, REPLAY_MODULE, siteAnimationsJsx } from '../anim.js';
+import { APPEAR_MODULE, siteAppearJsx } from '../../behavior/framer/emit.js';
 import { findShared } from '../react/components.js';
 import { jsxAttr, jsxNode, propName, visibleChildren } from '../react/jsx.js';
 import { pageName } from '../react/index.js';
 import { headTags, safeJsonLd } from '../walk.js';
-import { pinnedVersions } from '../../../toolchains/index.js';
+import { pinnedOverrides, pinnedVersions } from '../../../toolchains/index.js';
 import { planRoutes, urlMapFor } from './routes.js';
 
 const TOOLCHAIN = 'next';
@@ -149,7 +150,11 @@ export function emitNext(ir) {
       imports.push("import SiteAnimations from '@/components/SiteAnimations.jsx';", `import anim from '@/anim/${names[i]}.json';`);
       files.set(`anim/${names[i]}.json`, programJson(page));
     }
-    const animEl = page.anim ? '\n      <SiteAnimations program={anim} />' : '';
+    if (page.appear) {
+      imports.push("import SiteAppear from '@/components/SiteAppear.jsx';", `import appear from '@/anim/${names[i]}.appear.json';`);
+      files.set(`anim/${names[i]}.appear.json`, `${JSON.stringify(page.appear)}\n`);
+    }
+    const animEl = `${page.anim ? '\n      <SiteAnimations program={anim} />' : ''}${page.appear ? '\n      <SiteAppear program={appear} />' : ''}`;
     files.set(`${dir}/page.jsx`, `${imports.join('\n')}${imports.length ? '\n\n' : ''}export default function ${names[i]}() {\n  return (\n    <>\n${content}${animEl}\n    </>\n  );\n}\n`);
   });
 
@@ -164,6 +169,11 @@ export function emitNext(ir) {
     files.set('anim/replay.js', REPLAY_MODULE);
     files.set('components/SiteAnimations.jsx', siteAnimationsJsx({ client: true, base: '@/anim' }));
   }
+  const appears = ir.pages.some((p) => p.appear);
+  if (appears) {
+    files.set('anim/appear.js', APPEAR_MODULE);
+    files.set('components/SiteAppear.jsx', siteAppearJsx({ client: true, base: '@/anim' }));
+  }
   if (plan.urlChanges.length) {
     files.set('public/_redirects', plan.urlChanges.map((c) => `${c.from} ${c.to} 301`).join('\n') + '\n');
     files.set('vercel.json', `${JSON.stringify({ trailingSlash: true, redirects: plan.urlChanges.map((c) => ({ source: c.from, destination: c.to, permanent: true })) }, null, 2)}\n`);
@@ -174,7 +184,9 @@ export function emitNext(ir) {
   files.set('package.json', `${JSON.stringify({
     name, private: true, version: '0.0.0',
     scripts: { dev: 'next dev', build: 'next build', serve: 'npx serve out' },
-    dependencies: { next: pinned.next, react: pinned.react, 'react-dom': pinned['react-dom'], ...(replays && { gsap: pinned.gsap }) },
+    dependencies: { next: pinned.next, react: pinned.react, 'react-dom': pinned['react-dom'], ...(replays && { gsap: pinned.gsap }), ...(appears && { motion: pinned.motion }) },
+    // The versions motion's own packages were verified with (newer ones were under two weeks old when pinned).
+    ...(appears && Object.keys(pinnedOverrides(TOOLCHAIN)).length && { overrides: pinnedOverrides(TOOLCHAIN) }),
   }, null, 2)}\n`);
   files.set('next.config.mjs', lines(
     '// Static export: `npm run build` writes the whole site to out/, every page as <route>/index.html.',
