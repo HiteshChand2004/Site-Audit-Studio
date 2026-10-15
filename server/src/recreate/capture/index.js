@@ -23,6 +23,7 @@ import { FOREIGN_BUDGET_MS, foreignStyleText, harvestForeignStateRules } from '.
 import { shapeCounts } from './selectorShape.js';
 import { attachType, probeTypography } from './typography.js';
 import { attachProbe, probeViewportHeight } from './viewport.js';
+import { animLogFile, installAnimLog, readAnimLog, summarizeAnimLog } from './animlog.js';
 import { asisFile, captureAsIs, markAsIs } from './asis.js';
 import { captureFeeds } from './feeds.js';
 import { capturePointer } from './pointer.js';
@@ -171,6 +172,8 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
   }
   // An exact copy keeps the site's own stylesheets: their bodies as written, from the network (the tap's `sheets`).
   if (exact) await markAsIs(context);
+  // What an animation library the page exposes is asked to do (Tier 1 replay, capture/animlog.js), from its first call.
+  await context.addInitScript(installAnimLog);
   const { resources, failed } = tap;
 
   // Where the time of this view goes (ms per phase), for the report: what is worth speeding up differs from site to site.
@@ -456,6 +459,10 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       },
     };
     await writeFile(path.join(dir, `${view.id}.json`), JSON.stringify(data));
+    // The animation log, read last so tweens started by the probes' hovers and clicks are in it too.
+    const animLogData = await page.evaluate(readAnimLog).catch(() => null);
+    const animLog = animLogData?.entries?.length ? summarizeAnimLog(animLogData) : null;
+    if (animLog) await writeFile(path.join(dir, animLogFile(view.id)), JSON.stringify(animLogData));
     return {
       file: `${view.id}.json`,
       status: data.status,
@@ -467,6 +474,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       reveal,
       ...(asis && { asis }),
       ...(motion && { motion }),
+      ...(animLog && { animLog: { file: animLogFile(view.id), ...animLog } }),
       resources: data.resources,
       // The page's data requests that got no usable answer (its API or backend was not there): the page is still captured
       // as it rendered - with whatever empty or error state the site shows - and the report says its data was missing.

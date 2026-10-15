@@ -20,6 +20,7 @@
     "cors": "^2.8.5",
     "esbuild": "^0.25.12",
     "express": "^5.1.0",
+    "gsap": "3.15.0",
     "html-validate": "^11.0.0",
     "lighthouse": "^12.8.2",
     "playwright": "^1.63.0",
