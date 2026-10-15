@@ -6,6 +6,8 @@
 //   jsAllow         script sinks the framework's runtime itself contains (see checkScript); everything else is banned
 //   contentChunk    chunk files that carry the site's own text (skipped by the sink scan: covered by the DOM equivalence)
 
+import { vendorHashes } from '../emit/anim.js';
+
 const VITE_BUNDLE = /^\/_app\/[\w.-]+\.js$/;
 const NEXT_BUNDLE = /^\/_next\/static\/[\w./()%@~-]+\.js$/;
 // (self.__next_f = self.__next_f || []).push([...])  /  self.__next_f.push([...])
@@ -22,17 +24,22 @@ function jsonArray(text) {
 // The plain-HTML build with scroll reveal (emit/motionScript.js): the one fixed script `js/motion.js`, loaded by <script src defer>
 // from each page (a relative path), and nothing else.
 const MOTION_SCRIPT = /^(\.\.\/)*js\/motion\.js$/;
+// The animation library's replay (emit/anim.js): the pinned library (accepted only byte for byte), the fixed replayer, data.
+const ANIM_SCRIPT = /^(\.\.\/)*js\/(vendor\/(gsap|ScrollTrigger)\.min\.js|anim-replay\.js|anim\/[\w.-]+\.js)$/;
+const ANIM_FILE = /^js\/(anim-replay\.js|anim\/[\w.-]+\.js)$/;
 // The app stacks (React + Vite, Next.js, MERN) serve the same file from the site root, and may carry it next to their bundles.
 const MOTION_ROOT = '/js/motion.js';
 
 export const APP_PROFILES = {
   motion: {
     bundleLink: /$^/,
-    scriptAllowed: ({ src, type, text }) => !type && MOTION_SCRIPT.test(src ?? '') && !text.trim(),
+    scriptAllowed: ({ src, type, text }) => !type && (MOTION_SCRIPT.test(src ?? '') || ANIM_SCRIPT.test(src ?? '')) && !text.trim(),
     jsAllow: [],
     contentChunk: () => false,
-    // Only this file may be JavaScript at all.
-    onlyFile: 'js/motion.js',
+    // Only these files may be JavaScript at all: the generated script, the replayer and its data (sink-scanned), and the
+    // vendored library (`vendor`: accepted only when it is exactly the pinned package's file, never scanned or edited).
+    onlyFile: (rel) => rel === 'js/motion.js' || ANIM_FILE.test(rel),
+    vendor: vendorHashes,
   },
   vite: {
     bundleLink: VITE_BUNDLE,

@@ -139,7 +139,14 @@ export function installAnimLog() {
     }
     // A call made from inside another recorded call is the library using its own API (a tween creating its
     // ScrollTrigger): kept for the record, never replayed on its own.
-    log.push({ ...entry, ...(state.depth > 1 && { nested: true }), t: Math.round(performance.now()), scrollY: Math.round(window.scrollY) });
+    log.push({ ...entry, ...(state.depth > 1 && { nested: true }), ...(state.phase && { phase: state.phase }), t: Math.round(performance.now()), scrollY: Math.round(window.scrollY) });
+  };
+  // A ScrollTrigger's element options given as selector strings (trigger: '.cards') are resolved here, while the page is
+  // live: the trigger is often a container, not the tweened element, and only this page can say which element it was.
+  const ELEMENT_KEYS = ['trigger', 'endTrigger', 'pin', 'scroller', 'pinnedContainer'];
+  const resolveTrigger = (raw, kept) => {
+    if (!raw || typeof raw !== 'object' || !kept || typeof kept !== 'object') return;
+    for (const k of ELEMENT_KEYS) if (typeof raw[k] === 'string') kept[k] = { targets: targetsOf(raw[k]), selector: raw[k].slice(0, 200) };
   };
   const record = (lib, method, args, extra) => {
     try {
@@ -147,9 +154,14 @@ export function installAnimLog() {
       const entry = { lib, method, ...extra };
       if (method === 'fromTo') Object.assign(entry, { targets: targetsOf(targets), fromVars: plain(a), vars: plain(b), position: plain(c) });
       else if (method === 'timeline') Object.assign(entry, { vars: plain(targets) });
-      else if (method === 'create') Object.assign(entry, { vars: plain(targets) });
+      else if (method === 'create') {
+        Object.assign(entry, { vars: plain(targets) });
+        resolveTrigger(targets, entry.vars);
+      }
       else if (method === 'add' || method === 'call' || method === 'addLabel') Object.assign(entry, { child: targets?.__sasTl ?? null, label: typeof targets === 'string' ? targets : null, position: plain(a) });
       else Object.assign(entry, { targets: targetsOf(targets), vars: plain(a), position: plain(b) });
+      const raw = method === 'fromTo' ? b : method === 'timeline' ? targets : a;
+      if (method !== 'create') resolveTrigger(raw?.scrollTrigger, entry.vars?.scrollTrigger);
       push(entry);
     } catch {
       state.dropped++;
@@ -256,6 +268,12 @@ export function installAnimLog() {
     state.seen[name] = true;
     for (const m of ['to', 'from', 'fromTo', 'set']) wrapMethod(t, m, (args) => (record('gsap', m, args, {}), {}));
   });
+}
+
+/** Page function: what is logged from now on was started by a probe (a hover, a click), not by loading or scrolling. */
+export function markProbePhase() {
+  const s = /** @type {any} */ (window).__sasAnimLog;
+  if (s) s.state.phase = 'probe';
 }
 
 /** Page function: the log so far. */

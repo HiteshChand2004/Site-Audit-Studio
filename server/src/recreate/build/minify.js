@@ -8,6 +8,7 @@ import { copyFile, link, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { transform } from 'esbuild';
 import { RecreateError } from '../errors.js';
+import { VENDOR_DIR } from '../emit/anim.js';
 
 /** Minified CSS. Modern syntax is kept as is (no lowering). */
 export async function minifyCss(css) {
@@ -76,7 +77,10 @@ async function writeBuild({ files, assets, assetsDir, distDir }) {
     let out = content;
     const kind = ext === '.css' ? 'css' : ext === '.js' || ext === '.mjs' ? 'js' : ext === '.json' || ext === '.webmanifest' ? 'json' : null;
     try {
-      if (kind === 'css') out = await minifyCss(content);
+      // A vendored library (emit/anim.js js/vendor/) ships exactly as its pinned package has it: already minified, and the
+      // safety gate accepts it only byte for byte.
+      if (file.startsWith(`${VENDOR_DIR}/`)) out = content;
+      else if (kind === 'css') out = await minifyCss(content);
       else if (kind === 'js') out = await minifyJs(content);
       else if (ext === '.html' && content.includes('<style>')) out = await minifyInlineStyles(content, sizes.css);
     } catch (err) {

@@ -19,7 +19,8 @@ import { applyIrFixes, applyTreeFixes, fixReport } from './fixers/index.js';
 import { brokenTargets, deadLinks } from './fixers/perf.js';
 import { fetchWordPress, isWordPress } from './fixers/wordpress.js';
 import { buildIR, prepareSite, readPageCaptures } from './ir/index.js';
-import { MOTION_VERSION, applyMotion, readPageMotion } from './ir/motion.js';
+import { MOTION_VERSION, applyMotion, cpathIndex, readPageMotion } from './ir/motion.js';
+import { addStats, GSAP_VERSION, planReplay, readAnimLogFor, replayIds } from './behavior/gsap.js';
 import { addStructuredData } from './ir/structuredData.js';
 import { applyExcludes, findExcludable } from './ir/exclude.js';
 import { isElement } from './ir/tree.js';
@@ -345,8 +346,23 @@ export async function generateStage(ctx) {
     const found = await readPageMotion(ctx.dir, info);
     if (found) motionByPath.set(info.path, found);
   }
-  const motion = applyMotion(site, motionByPath);
+  // Tier 1 replay (behavior/gsap.js): what the page asked its animation library to do, replayed with the same library on
+  // the same elements. Planned first, so the measured motion leaves the elements the library animates alone.
+  const replayOwned = new Map();
+  const replayStats = {};
+  const ids = replayIds();
+  for (const t of site.pages) {
+    const info = ctx.pages.find((p) => p.path === t.info.path);
+    const log = info ? await readAnimLogFor(ctx.dir, info) : null;
+    if (!log) continue;
+    const plan = planReplay(log, cpathIndex(t.root), ids);
+    addStats(replayStats, plan.stats);
+    if (plan.program) t.anim = plan.program;
+    if (plan.owned.size) replayOwned.set(t.info.path, plan.owned);
+  }
+  const motion = applyMotion(site, motionByPath, { owned: replayOwned });
   site.motion = motion.motion;
+  if (Object.keys(replayStats).length) motion.stats.replay = { lib: 'gsap', version: GSAP_VERSION, pages: site.pages.filter((t) => t.anim).length, ...replayStats };
 
   // Parts of the page that are not the site: the builder's badge, a consent banner, a chat bubble (ir/exclude.js).
   // Only for an exact copy, only on evidence the capture measured, and every one of them reported - the copy must
@@ -398,6 +414,11 @@ export async function generateStage(ctx) {
   if (frames.files.length) await addToManifest(assetsDir, frames.files, known, ctx.assets);
   if (frames.rules.length) {
     site.motion = { version: MOTION_VERSION, hover: [], focus: [], reveal: [], delays: [], loops: [], widgets: [], states: 0, notices: 0, panels: 0, hoverCards: 0, scrolled: [], script: false, ...site.motion, canvas: frames.rules };
+  }
+  // A page that replays its animation library (behavior/gsap.js) ships scripts: the same switch as the generated script,
+  // so the preview's script policy, the exact renderer and the safety profile follow.
+  if (site.pages.some((t) => t.anim)) {
+    site.motion = { version: MOTION_VERSION, hover: [], focus: [], reveal: [], delays: [], loops: [], widgets: [], states: 0, notices: 0, panels: 0, hoverCards: 0, scrolled: [], ...site.motion, script: true, anim: true };
   }
   if (frames.canvases.length) {
     report.motion = { ...report.motion, unsupported: { ...report.motion?.unsupported, canvas: frames.canvases } };

@@ -624,7 +624,24 @@ export function markNestedHosts(site, effects) {
   }
 }
 
-export function applyMotion(site, byPath) {
+/** Every element of a page tree by its capture path (`cpath`, and `cpathAlt` where a wrapper was removed). */
+export function cpathIndex(root) {
+  const nodes = new Map();
+  const walk = (n) => {
+    if (!isElement(n)) return;
+    if (n.cpath) nodes.set(n.cpath, n);
+    for (const alt of n.cpathAlt ?? []) if (!nodes.has(alt)) nodes.set(alt, n);
+    n.children.forEach(walk);
+  };
+  walk(root);
+  return nodes;
+}
+
+/**
+ * @param {{ owned?: Map<string, Set<string>> }} [o]  owned: page path → capture paths an animation library's replay
+ *   animates (behavior/gsap.js); their measured reveals, loops and scroll-linked effects are not rebuilt too.
+ */
+export function applyMotion(site, byPath, { owned = new Map() } = {}) {
   const reg = { hover: new Map(), focus: new Map(), reveal: new Map(), loops: [], delays: new Set(), widgets: new Map(), scrolled: new Map() };
   // Tokens placed on an element inside an inline SVG, by its capture path (ir/asis.js carries them into the original SVG).
   const svgTokens = [];
@@ -685,14 +702,7 @@ export function applyMotion(site, byPath) {
     if (!motion) continue;
     stats.pages++;
     sumByView(stats.byView, motion.byView);
-    const nodes = new Map();
-    const walk = (n) => {
-      if (!isElement(n)) return;
-      if (n.cpath) nodes.set(n.cpath, n);
-      for (const alt of n.cpathAlt ?? []) if (!nodes.has(alt)) nodes.set(alt, n);
-      n.children.forEach(walk);
-    };
-    walk(tree.root);
+    const nodes = cpathIndex(tree.root);
     const assetFile = (url) => site.assetResolve(url, tree.info.url);
     // Hover / focus effects of content only a tab / filter state shows (ir/states.js `stateEffects` on its copies).
     const extra = { hover: [], focus: [] };
@@ -810,7 +820,12 @@ export function applyMotion(site, byPath) {
     // A part that changes by itself (capture/feeds.js): what fades in there is its update's own entrance, which the copy's
     // feed replays; a reveal on top would replace that animation and hold the row until it is scrolled to.
     const feedAreas = [...nodes].filter(([, n]) => n?.stateAttrs?.['data-w-feed'] != null).map(([p]) => p);
+    const libraryOwned = owned.get(tree.info.path) ?? new Set();
     for (const el of motion.reveal?.elements ?? []) {
+      if (libraryOwned.has(el.path)) {
+        stats.reveal.skipped.library = (stats.reveal.skipped.library ?? 0) + 1;
+        continue;
+      }
       if (loopHosts.has(el.path)) {
         stats.reveal.skipped.loop = (stats.reveal.skipped.loop ?? 0) + 1;
         continue;
@@ -868,6 +883,10 @@ export function applyMotion(site, byPath) {
 
     // Loops: a CSS animation the element's captured style carries is already in the stylesheet; the others are rebuilt.
     for (const loop of motion.loops?.loops ?? []) {
+      if (libraryOwned.has(loop.path)) {
+        stats.loops.skipped.push({ pattern: loop.pattern, reason: 'library' });
+        continue;
+      }
       let node = nodes.get(loop.path);
       // A loop inside an inline SVG (dashes running along lines): the SVG is kept as markup, so the token goes on the
       // element inside it (the SVG sanitizer keeps data-* attributes) and the keyframes are rebuilt like any other loop.
@@ -949,6 +968,10 @@ export function applyMotion(site, byPath) {
     for (const e of motion.scrollLinked?.elements ?? []) {
       const sl = (stats.scrollLinked ??= { rebuilt: 0, skipped: {} });
       const skip = (why) => { sl.skipped[why] = (sl.skipped[why] ?? 0) + 1; };
+      if (libraryOwned.has(e.path)) {
+        skip('library');
+        continue;
+      }
       const node = nodes.get(e.path);
       if (!node) {
         skip('unmapped');

@@ -90,7 +90,10 @@ test('the hooks record every GSAP call with its targets as capture paths, its va
   // ScrollTrigger inside the vars: its trigger turned into a target, its options kept.
   const [panel] = of('to', '.panel');
   assert.equal(panel.vars.scrollTrigger.scrub, true);
-  assert.equal(panel.vars.scrollTrigger.trigger, '.panel');
+  assert.equal(panel.vars.scrollTrigger.trigger.selector, '.panel');
+  assert.equal(panel.vars.scrollTrigger.trigger.targets.list[0].path, 'body>div:3');
+  // A trigger that is a container, not the tweened element: resolved to that container while the page was live.
+  assert.equal(of('from', '.card')[0].vars.scrollTrigger.trigger.targets.list[0].sel, 'div.cards');
   const [cards] = of('from', '.card');
   assert.equal(cards.targets.count, 3, 'every target of a stagger');
   assert.equal(cards.vars.stagger, 0.15);
@@ -104,6 +107,104 @@ test('the hooks record every GSAP call with its targets as capture paths, its va
   assert.equal(summary.scrollTriggers, 2);
   assert.ok(summary.calls >= 8, JSON.stringify(summary.methods));
 });
+
+// What a visitor sees, by visible text (class names differ between a rebuilt copy and the original): where SCRUBBED sits
+// at two scroll positions, whether the texts are shown, and how many elements keep moving by themselves.
+async function look(url, { reducedMotion = 'no-preference' } = {}) {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, reducedMotion });
+  const page = await context.newPage();
+  try {
+    await page.goto(url, { waitUntil: 'load' });
+    await page.waitForTimeout(400);
+    const byText = (t) => page.evaluate((text) => {
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        if (n.textContent.trim() === text) {
+          const el = n.parentElement;
+          let o = 1;
+          for (let e = el; e; e = e.parentElement) o *= Number(getComputedStyle(e).opacity);
+          const r = el.getBoundingClientRect();
+          return { left: Math.round(r.left), top: Math.round(r.top + scrollY), opacity: Math.round(o * 100) / 100 };
+        }
+      }
+      return null;
+    }, t);
+    // Moving by itself: elements whose transform differs between two reads 500 ms apart (the spinner's yoyo).
+    const transforms = () => page.evaluate(() => [...document.body.querySelectorAll('div')].map((e) => getComputedStyle(e).transform));
+    const t1 = await transforms();
+    await page.waitForTimeout(500);
+    const t2 = await transforms();
+    const moving = t1.filter((t, i) => t !== t2[i]).length;
+    const hero = await byText('Moved by GSAP');
+    // The scrubbed panel: its offset follows the scroll position, the same on both sides.
+    const panelAt = async (y) => {
+      await page.evaluate((v) => window.scrollTo(0, v), y);
+      await page.waitForTimeout(500);
+      return (await byText('SCRUBBED'))?.left ?? null;
+    };
+    const scrub = [await panelAt(300), await panelAt(700)];
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await page.waitForTimeout(1500);
+    const cards = await Promise.all(['One', 'Two', 'Three'].map(byText));
+    return { moving, hero, scrub, cards: cards.map((c) => c?.opacity ?? null) };
+  } finally {
+    await context.close();
+  }
+}
+
+for (const mode of ['normal', 'exact']) {
+  test(`${mode} copy: GSAP calls are replayed with the real library on the same elements, safely, in step with the original`, async () => {
+    process.env.SAS_ALLOW_LOCALHOST = '1';
+    const { db } = await import('../src/db/index.js');
+    const { runRecreate, STAGES } = await import('../src/recreate/index.js');
+    const { recreateDir } = await import('../src/recreate/workspace.js');
+    const { servePreview } = await import('../src/recreate/preview.js');
+    const { seedProject, skipStages } = await import('./helpers/projects.js');
+    const { randomUUID } = await import('node:crypto');
+    const site = `http://localhost:${server.address().port}`;
+    const project = seedProject(db, { name: 'gsap', url: `${site}/`, recreatePages: -1, analysis: true });
+    const recreateId = randomUUID();
+    const report = await runRecreate({
+      project, recreateId, progress: () => {}, ...(mode === 'exact' && { exact: true }),
+      stages: { ...STAGES, ...skipStages('sweep', 'exactCapture', 'exact', 'responsive', 'stack') },
+    });
+    const dir = recreateDir(project.id, recreateId);
+    const replay = report.generate.motion.replay;
+    assert.ok(replay, JSON.stringify(Object.keys(report.generate.motion)));
+    // from, to (repeat), the timeline's two steps, the scrubbed move, the staggered reveal; the dots' function value is
+    // left out (their call has nothing else to animate) and the tweens' own ScrollTrigger.create calls are not doubled.
+    assert.ok(replay.replayed >= 6, JSON.stringify(replay));
+    assert.ok(replay.nested >= 2, JSON.stringify(replay));
+    assert.ok(replay.functionValues >= 1);
+    assert.equal(report.safety.safe, true, JSON.stringify(report.safety.issues));
+    const vendored = await readFile(path.join(dir, 'dist', 'js', 'vendor', 'gsap.min.js'), 'utf8');
+    assert.equal(vendored, await readFile(path.join(GSAP_DIST, 'gsap.min.js'), 'utf8'), 'the library ships byte for byte');
+    // The measured motion leaves the library's elements alone (two animations on one element replace each other).
+    const reveal = report.generate.motion.reveal?.skipped ?? {};
+    const loops = report.generate.motion.loops?.skipped ?? [];
+    assert.ok((reveal.library ?? 0) + loops.filter((l) => l.reason === 'library').length >= 1, JSON.stringify({ reveal, loops }));
+
+    const served = await servePreview(path.join(dir, 'dist'), { scripts: true });
+    try {
+      const original = await look(`${site}/gsap.html`);
+      const copy = await look(`${served.origin}/`);
+      assert.ok(original.moving >= 1 && copy.moving >= 1, `moving: original ${original.moving}, copy ${copy.moving}`);
+      assert.equal(copy.hero.opacity, 1, 'the entrance ended shown');
+      assert.deepEqual(copy.cards, [1, 1, 1], 'the scroll-triggered reveal ran');
+      // Scrubbed by the scroll: the panel moved between the two positions, by what the original moved (layout may differ by a few px).
+      assert.notEqual(copy.scrub[0], copy.scrub[1], `copy scrub ${copy.scrub}`);
+      const moved = (s) => s[1] - s[0];
+      assert.ok(Math.abs(moved(copy.scrub) - moved(original.scrub)) <= 12, `original ${original.scrub} copy ${copy.scrub}`);
+      // Reduced motion: nothing is replayed and the page is the finished one.
+      const calm = await look(`${served.origin}/`, { reducedMotion: 'reduce' });
+      assert.equal(calm.moving, 0);
+      assert.equal(calm.hero.opacity, 1);
+      assert.deepEqual(calm.cards, [1, 1, 1]);
+    } finally {
+      await served.close();
+    }
+  });
+}
 
 test('a page without an animation library leaves no log entries and costs nothing', async () => {
   const context = await browser.newContext();

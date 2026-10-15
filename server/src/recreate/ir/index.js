@@ -439,6 +439,8 @@ function pageBody(t, site, stats) {
     guardAttributes(attrs, stats.safety.attrs);
     // Motion tokens (ir/motion.js): the stylesheet's hover / reveal / loop rules select on them.
     if (n.motionTokens?.length) attrs['data-motion'] = n.motionTokens.join(' ');
+    // Targets of the animation library's replay (behavior/gsap.js): the program names elements by these ids.
+    if (n.animIds?.length) attrs['data-sas-a'] = n.animIds.join(' ');
     // States of tabs / carousels / filtered lists (ir/states.js): which state an area is, which state a control shows.
     if (n.stateAttrs) Object.assign(attrs, n.stateAttrs);
     const out = { t: n.tag, sid: n.sid, attrs, children: [], ...(n.asisHtml && { asisHtml: n.asisHtml }) };
@@ -601,6 +603,7 @@ export function buildIR(site, { asIs = false } = {}) {
       html: { class: t.htmlNode.class ?? null },
       body,
       content: t.wp?.content ?? null,
+      ...(t.anim && { anim: t.anim }),
       stats: { links: s.links, liveLinks: [...s.liveLinks].map(([url, reason]) => ({ url, reason })), forms: s.forms, droppedImages: t.droppedImages.length },
     };
   });

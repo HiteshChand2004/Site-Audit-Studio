@@ -5,6 +5,7 @@
 import { relFile } from '../ir/links.js';
 import { CSS_FILE, emitCss, usedCustomProps } from './css.js';
 import { MOTION_FILE, MOTION_JS } from './motionScript.js';
+import { animFiles, animTags } from './anim.js';
 import { describeNode, headTags, relativeRefs, safeJsonLd } from './walk.js';
 
 export { safeJsonLd };
@@ -112,6 +113,8 @@ export function emitPage(page, { ids = false, useAsset = () => true, motionScrip
     headMarkup(page, ctx),
     ...(css ? [`  <style>\n${styleText(css)}</style>`] : []),
     ...(motionScript ? [`  <script src="${relFile(page.outPath, MOTION_FILE)}" defer></script>`] : []),
+    // The animation library's replay (emit/anim.js): the library, the page's program, the replayer - deferred, in order.
+    ...animTags(page, (f) => relFile(page.outPath, f)),
     '</head>',
     emitNode(page.body, ctx, 0, true),
     '</html>',
@@ -141,6 +144,7 @@ export function emitSite(ir, { ids = false, inlineCss = false } = {}) {
     files.set(page.outPath, emitPage(page, { ids, useAsset, motionScript, wsByClass, css }));
   }
   if (motionScript) files.set(MOTION_FILE, MOTION_JS);
+  for (const [file, text] of animFiles(ir)) files.set(file, text);
   const css = emitCss(ir, { usedVars });
   for (const m of css.matchAll(assetRef)) assets.add(m[1]);
   files.set(CSS_FILE, css);
