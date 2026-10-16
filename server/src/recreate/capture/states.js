@@ -58,6 +58,77 @@ function effectsByPart(effects, parts) {
 const countNodes = (n) => (!n || 'text' in n ? 0 : 1 + (n.children ?? []).reduce((a, c) => a + countNodes(c), 0));
 
 /** Page function: clicks the element at a snapshot path (no mouse: the control may be covered or scrolled away). */
+/**
+ * Page function: scrolls the element a capture path names into the middle of the window and returns its centre, and
+ * whether a pointer there reaches it (nothing else drawn on top).
+ */
+function aimPath(p) {
+  const SKIP = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
+  let el = document.body;
+  for (const part of p.split('>').slice(1)) {
+    const [tag, n] = part.split(':');
+    let k = 0;
+    let next = null;
+    for (const c of el ? el.children : []) {
+      if (SKIP.has(c.tagName) || c.tagName.toLowerCase() !== tag) continue;
+      if (++k === Number(n)) {
+        next = c;
+        break;
+      }
+    }
+    el = next;
+    if (!el) return null;
+  }
+  el.scrollIntoView({ block: 'center', inline: 'center' });
+  const r = el.getBoundingClientRect();
+  if (r.width < 1 || r.height < 1) return { x: 0, y: 0, reachable: false };
+  const x = r.left + Math.min(r.width / 2, 40);
+  const y = r.top + r.height / 2;
+  const hit = document.elementFromPoint(x, y);
+  return { x, y, reachable: !!hit && (hit === el || el.contains(hit)) };
+}
+
+/**
+ * Clicks the element a capture path names the way a visitor does: with the mouse, so a framework that listens for the
+ * pointer going down and up (a tap handler) answers - a script's el.click() sends neither, and a builder's FAQ then
+ * "did not change the content" (found on a real Framer site, where the click probe's real clicks had opened every
+ * answer). The script click stays the fallback for an element nothing on screen reaches.
+ * @returns {Promise<boolean>} false when the path names no element
+ */
+async function realClick(page, p) {
+  let spot = await page.evaluate(aimPath, p).catch(() => null);
+  if (!spot) return false;
+  // A smooth-scrolling page is still moving after scrollIntoView: aim again once it settled.
+  await page.waitForTimeout(150);
+  spot = (await page.evaluate(aimPath, p).catch(() => null)) ?? spot;
+  if (spot.reachable) {
+    await page.mouse.click(spot.x, spot.y);
+    return true;
+  }
+  return page.evaluate(clickPath, p).catch(() => false);
+}
+
+/** Page function: whether a capture path names an element of the page now. */
+function pathExists(p) {
+  const SKIP = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
+  let el = document.body;
+  for (const part of p.split('>').slice(1)) {
+    const [tag, n] = part.split(':');
+    let k = 0;
+    let next = null;
+    for (const c of el ? el.children : []) {
+      if (SKIP.has(c.tagName) || c.tagName.toLowerCase() !== tag) continue;
+      if (++k === Number(n)) {
+        next = c;
+        break;
+      }
+    }
+    el = next;
+    if (!el) return false;
+  }
+  return !!el;
+}
+
 function clickPath(p) {
   const SKIP = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
   let el = document.body;
@@ -597,6 +668,24 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
   // Panels the body alone holds (a dialog, a drawer): captured at the end, but they decide whether there is work at all.
   const panelPlans = planPanels(clicks?.widgets ?? [], body);
   if (!plans.length && !panelPlans.length && !(clicks?.widgets ?? []).some((w) => w.opensOn === 'hover')) return { ...stats, ms: Date.now() - started };
+  // The controls are named by the paths of the page as the capture saw it: scrolled through, every part drawn. The click
+  // probe may have loaded the page again since, and a builder that draws a section only once it is scrolled into view
+  // then has one section less - every path below it points one section off, and each control reads as "gone" (found on
+  // a real Framer site: a FAQ's questions, every one skipped). So when a planned control does not resolve, the page is
+  // scrolled through once more, as the capture did, and back to the top.
+  const planned = plans.flatMap((p) => [p.toggle, ...(p.controls ?? [])]).filter(Boolean);
+  const unresolved = async () => {
+    for (const p of planned) if (!(await page.evaluate(pathExists, p).catch(() => false))) return true;
+    return false;
+  };
+  if (planned.length && (await unresolved())) {
+    const { scrollThrough, scrollToY } = await import('./index.js');
+    const vh = page.viewportSize()?.height ?? 900;
+    await scrollThrough(page, { step: Math.round(vh * 0.8), viewportHeight: vh, maxSteps: 120, maxMs: 30000, onStep: () => page.waitForTimeout(120) }).catch(() => {});
+    await scrollToY(page, 0).catch(() => {});
+    await page.waitForTimeout(600);
+    stats.redrawn = !(await unresolved());
+  }
   // The limit follows the work: a few seconds per control to click, scroll through and snapshot, within bounds.
   const b = typeof budgetMs === 'number' ? { min: budgetMs, max: budgetMs, perControl: 0 } : budgetMs;
   const controls = plans.reduce((n, p) => n + Math.max(p.controls.length, 2) + p.nav.length, 0);
@@ -625,7 +714,7 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
   const closePanel = (plan) => {
     if (plan.closes === 'escape') return page.keyboard.press('Escape').catch(() => {});
     if (plan.closes === 'outside') return page.mouse.click(2, 2).catch(() => {});
-    return page.evaluate(clickPath, plan.toggle); // a toggle: the same control again
+    return realClick(page, plan.toggle); // a toggle: the same control again
   };
 
   for (const plan of plans) {
@@ -654,7 +743,7 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
       if (plan.toggle) {
         if (2 * countNodes(node) > MAX_STATE_NODES) throw new Error('too large to copy per state');
         const initialSig = stateSignature(node);
-        if (!(await page.evaluate(clickPath, plan.toggle))) throw new Error('control gone');
+        if (!(await realClick(page, plan.toggle))) throw new Error('control gone');
         await settle();
         const open = await snap(plan);
         if (!open || stateSignature(open) === initialSig) throw new Error('the control does not change the content');
@@ -685,7 +774,7 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
       const sigs = [];
       for (let j = 0; j < plan.controls.length; j++) {
         if (Date.now() > deadline) throw Object.assign(new Error('time'), { time: true });
-        if (!(await page.evaluate(clickPath, plan.controls[j]))) throw new Error('control gone');
+        if (!(await realClick(page, plan.controls[j]))) throw new Error('control gone');
         await settle();
         if (!samePage(page.url(), startUrl)) throw new Error('the page navigated');
         const state = await snap(plan);
@@ -712,9 +801,9 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
       // Next / previous: from the first state, which state does one click lead to?
       const nav = [];
       for (const p of plan.nav) {
-        await page.evaluate(clickPath, plan.controls[initial]);
+        await realClick(page, plan.controls[initial]);
         await settle();
-        await page.evaluate(clickPath, p);
+        await realClick(page, p);
         await settle();
         const reached = await snap(plan);
         let k = sigs.indexOf(stateSignature(reached));
@@ -732,10 +821,10 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
         // the state on show would already close it), then the same control again.
         const last = plan.controls.length - 1;
         if (stateSignature(await snap(plan)) !== sigs[last]) {
-          await page.evaluate(clickPath, plan.controls[last]).catch(() => false);
+          await realClick(page, plan.controls[last]).catch(() => false);
           await settle();
         }
-        if (stateSignature(await snap(plan)) === sigs[last] && await page.evaluate(clickPath, plan.controls[last])) {
+        if (stateSignature(await snap(plan)) === sigs[last] && await realClick(page, plan.controls[last])) {
           await settle();
           const again = await snap(plan);
           const sig = again && stateSignature(again);
@@ -750,7 +839,7 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
       if (startsOff && initial !== off) throw new Error('the first state matches no control');
       // Back to how the page started.
       if (!startsOff) {
-        await page.evaluate(clickPath, plan.controls[initial]).catch(() => {});
+        await realClick(page, plan.controls[initial]).catch(() => {});
         await settle();
       }
       // A carousel (it has next / previous) may advance on a timer, so the page snapshot can have caught it later than a
@@ -863,7 +952,7 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
     }
     const closeIt = () => closePanel({ closes: plan.w.closes, toggle: plan.w.trigger }).catch(() => {});
     try {
-      if (!(await page.evaluate(clickPath, plan.w.trigger))) continue;
+      if (!(await realClick(page, plan.w.trigger))) continue;
       await page.waitForTimeout(SETTLE_MS + 250);
       if (!samePage(page.url(), startUrl)) {
         stats.panelsSkipped.push({ control: plan.w.trigger, reason: 'the page navigated' });
@@ -889,7 +978,7 @@ export async function captureStates(page, clicks, body, { budgetMs = { min: 3000
       // Which control inside it closes it (a × in a corner): clicked, and the panel must be gone afterwards.
       let closeRel = null;
       for (const cand of await page.evaluate(closeCandidates, plan.panel).catch(() => [])) {
-        if (!(await page.evaluate(clickPath, cand))) continue;
+        if (!(await realClick(page, cand))) continue;
         await page.waitForTimeout(SETTLE_MS);
         if (!(await page.evaluate(shownAt, plan.panel))) {
           closeRel = cand.slice(plan.panel.length + 1);

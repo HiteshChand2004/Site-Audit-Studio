@@ -135,6 +135,43 @@ const fades = (l) => (l.pattern === 'oscillate' && l.params?.channel === 'opacit
   || (l.pattern === 'other' && (l.params?.properties ?? []).length > 0 && l.params.properties.every((p) => p === 'opacity'));
 const loopFamily = (l) => (fades(l) ? 'fade' : PATTERN_FAMILY[l.pattern] ?? l.pattern);
 
+/**
+ * How many of the original's loops run on the copy, paired by the element that moves: the same capture path first (an
+ * exact copy keeps the original markup), then the same tag at about the same place and size, and only then by the kind of
+ * motion. Pairing by kind alone counted 2 of 16 on a copy that ran all 16: the original's script motion is recorded as a
+ * drift or a trace, the copy's rebuilt keyframes read back as another kind. The place allows for the motion itself (half
+ * the element's size, at least 60 px): a moving element is read at another moment on each side.
+ */
+export function matchLoops(original, copy) {
+  const center = (r) => [r[0] + r[2] / 2, r[1] + r[3] / 2];
+  const samePath = (x, y) => !!x.path && x.path === y.path;
+  const samePlace = (x, y) => {
+    if (!x.rect || !y.rect || x.tag !== y.tag) return false;
+    const [ax, ay] = center(x.rect);
+    const [bx, by] = center(y.rect);
+    const area = (r) => Math.max(1, r[2] * r[3]);
+    const ratio = area(y.rect) / area(x.rect);
+    return Math.hypot(ax - bx, ay - by) <= Math.max(60, 0.5 * Math.max(x.rect[2], x.rect[3])) && ratio > 0.5 && ratio < 2;
+  };
+  const sameKind = (x, y) => loopFamily(x) === loopFamily(y);
+  const free = new Set(copy.map((_, j) => j));
+  const done = new Set();
+  let matched = 0;
+  for (const same of [samePath, samePlace, sameKind]) {
+    original.forEach((x, i) => {
+      if (done.has(i)) return;
+      for (const j of free) {
+        if (!same(x, copy[j])) continue;
+        free.delete(j);
+        done.add(i);
+        matched++;
+        return;
+      }
+    });
+  }
+  return matched;
+}
+
 /** What the comparison counts on one side. */
 export function summarize(motion) {
   // The reveals the recreate rebuilds (ir/motion.js isScrollReveal), counted the same way on both sides.
@@ -158,7 +195,7 @@ export function summarize(motion) {
     },
     // By pattern family only: a loop the original drove with script has no duration (and is named from its recorded path),
     // while its rebuilt CSS animation has one (and is named from its keyframes).
-    loops: { keys: loops.map(loopFamily), count: loops.length },
+    loops: { keys: loops.map(loopFamily), count: loops.length, entries: loops },
   };
 }
 
@@ -346,6 +383,7 @@ export function motionItems(oldPages, newPages) {
   const both = [...oldPages.keys()].filter((slug) => newPages.has(slug));
   const o = { reveal: 0, replay: 0, hover: [], loops: [], durations: [], hoverProps: new Map() };
   const n = { reveal: 0, replay: 0, hover: [], loops: [], durations: [] };
+  let loopsMatched = 0;
   const matchedHover = { count: 0, agree: 0, same: 0, differences: [] };
   for (const slug of both) {
     const so = summarize(oldPages.get(slug));
@@ -386,6 +424,7 @@ export function motionItems(oldPages, newPages) {
       if (!was.size || same / was.size >= 0.5) matchedHover.agree++;
     }
     o.loops.push(...so.loops.keys);
+    loopsMatched += matchLoops(so.loops.entries, sn.loops.entries);
     n.loops.push(...sn.loops.keys);
   }
   const items = [];
@@ -498,7 +537,7 @@ export function motionItems(oldPages, newPages) {
     });
   }
   if (o.loops.length) {
-    const matched = overlap(o.loops, n.loops);
+    const matched = Math.min(loopsMatched, o.loops.length);
     const ratio = matched / o.loops.length;
     items.push(row('motion.loops', 'Looping animations kept', ratio,
       { detail: `${plural(o.loops.length, 'animation')} run continuously (spinners, tickers, pulses, …).`, count: o.loops.length },

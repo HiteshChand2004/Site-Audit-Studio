@@ -178,8 +178,13 @@
   // 5b. A FAQ whose whole item is the clickable box, and whose answer is drawn inside it only while open (a framework
   //     rendering it on demand), with a layout animation nudging the list as it grows - like a builder's FAQ component.
   var answers = { 'How do I get started?': 'Create an account and invite your first project.', 'Can my whole team use it?': 'Yes, every plan includes unlimited seats.', 'Where is my data kept?': 'In data centres inside the country, encrypted.' };
+  //     It answers a tap - the pointer going down and up on it - and no `click` event at all, as a builder's tap handler does.
   [].slice.call(document.querySelectorAll('.item')).forEach(function (item) {
-    item.addEventListener('click', function () {
+    var down = false;
+    item.addEventListener('pointerdown', function () { down = true; });
+    item.addEventListener('pointerup', function () {
+      if (!down) return;
+      down = false;
       var open = item.querySelector('.ans');
       if (open) open.remove();
       else {
@@ -235,6 +240,19 @@
   }
   renderSlot();
   addEventListener('resize', renderSlot);
+
+  // 10. A section the builder draws only once the page has been scrolled into it: added before the first FAQ the first
+  //     time the window passes it. A page loaded again and not scrolled lacks it, so every capture path below it is one
+  //     section off until someone scrolls.
+  var lazyAdded = false;
+  addEventListener('scroll', function () {
+    if (lazyAdded || scrollY < 400) return;
+    lazyAdded = true;
+    var s = document.createElement('section');
+    s.className = 'lazy-late';
+    s.innerHTML = '<h2>Seen on scroll</h2><p>This part is drawn once the page has been scrolled.</p>';
+    document.body.insertBefore(s, document.querySelector('.faq'));
+  }, { passive: true });
 
   // 6. Cards that cycle: the list steps up by one card every 1.2 s through a Web Animation, the card in front grows to full
   //    size and opacity while the others shrink - each card's scale and opacity set by script every frame.
