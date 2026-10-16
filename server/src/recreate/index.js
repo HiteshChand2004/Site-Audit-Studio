@@ -182,7 +182,7 @@ async function recreate({
     }
     await clearUnfinished(dir, saved);
   }
-  const checkpoint = openCheckpoint(dir, { recreateId, analysisId: analysis.id, saved, auto: Boolean(resumeFrom?.auto) });
+  const checkpoint = openCheckpoint(dir, { recreateId, analysisId: analysis.id, saved, auto: Boolean(resumeFrom?.auto), mode: { exact, unlimited } });
   const ctx = {
     project,
     recreateId,

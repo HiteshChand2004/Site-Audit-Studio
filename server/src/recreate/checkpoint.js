@@ -73,7 +73,7 @@ export function checkpointSummary(recreateId, data) {
  * @param {string} dir  the job's workspace
  * @param {{ recreateId: string, analysisId?: string, saved?: object|null, auto?: boolean }} o  saved: the checkpoint resumed from
  */
-export function openCheckpoint(dir, { recreateId, analysisId = null, saved = null, auto = false }) {
+export function openCheckpoint(dir, { recreateId, analysisId = null, saved = null, auto = false, mode = null }) {
   const now = new Date().toISOString();
   const data = saved
     ? {
@@ -91,6 +91,9 @@ export function openCheckpoint(dir, { recreateId, analysisId = null, saved = nul
   data.resumed ??= [];
   data.corrections ??= null;
   data.exactCompare ??= {};
+  // How the run was started (exact, no time limit): a resume that does not say otherwise continues the same way
+  // (recreate/jobs.js resumeMode) - an exact copy resumed after a server restart had quietly become an ordinary one.
+  if (mode) data.mode = mode;
   let chain = Promise.resolve();
   // Did this run add anything (a page, a sweep page, a step)? A job that stopped without progress is not resumed by itself.
   let progressed = false;

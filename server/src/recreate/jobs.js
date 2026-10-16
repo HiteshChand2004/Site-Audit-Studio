@@ -30,10 +30,12 @@ export const recreateJobs = new JobManager({
     // A resume (recreate/checkpoint.js) continues the stopped recreate payload.resumeFrom names from its kept workspace.
     // Exact mode: the project's setting, or this one run (POST …/recreate { exact: true }). It replicates the site as it
     // is and has no time limit; `noLimit` lifts the limit for an ordinary run.
-    const exact = payload?.exact ?? isExactMode(project);
+    // A resume continues the way the stopped run was started (its checkpoint's mode) unless this request says otherwise.
+    const resumed = payload?.resumeFrom ? await resumeMode(project.id, payload.resumeFrom.recreateId) : null;
+    const exact = payload?.exact ?? resumed?.exact ?? isExactMode(project);
     const report = await runRecreate({
       project, recreateId: job.id, progress, warnings: job.warnings, signal, exact,
-      ...(payload?.noLimit && { unlimited: true }),
+      ...((payload?.noLimit || (payload?.exact === undefined && resumed?.unlimited)) && { unlimited: true }),
       ...(stages && { stages }), ...(payload?.resumeFrom && { resumeFrom: payload.resumeFrom }),
     });
     // The preview is runtime state: its port is not part of the report. The app asks for it
@@ -65,6 +67,12 @@ const noteResumed = db.prepare('UPDATE recreates SET error = ? WHERE id = ?');
  * stopped while it ran; `time-limit`: its budget ran out after it made progress), at most MAX_AUTO_RESUMES times in a row.
  * @returns {Promise<object|null>} the new job
  */
+/** How the stopped recreate was started ({ exact, unlimited }, from its checkpoint), or null when it did not say. */
+export async function resumeMode(projectId, recreateId) {
+  const checkpoint = await readCheckpoint(tmpDir(projectId, recreateId)).catch(() => null);
+  return checkpoint?.mode ?? null;
+}
+
 export async function autoResume(project, recreateId, reason) {
   if (!project?.authorized) return null;
   const checkpoint = await readCheckpoint(tmpDir(project.id, recreateId));
