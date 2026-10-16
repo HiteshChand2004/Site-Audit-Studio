@@ -15,7 +15,7 @@ import { startEgressProxy } from '../src/security/egressProxy.js';
 import { createNetPolicy } from '../src/security/netGuard.js';
 
 const exists = (p) => access(p).then(() => true, () => false);
-const cacheFolders = async () => (await readdir(os.tmpdir())).filter((n) => n.startsWith('sas-cache-'));
+const cacheFolders = async () => (await readdir(process.env.SAS_TEMP_DIR || os.tmpdir())).filter((n) => n.startsWith('sas-cache-'));
 
 let site;
 let other;

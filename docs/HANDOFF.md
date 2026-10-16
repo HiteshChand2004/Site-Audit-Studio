@@ -128,6 +128,12 @@ nyaayai copy takes ~25–30 min (2.5 h when memory ran short). Start the API ser
 (`node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/index.js` in `server/`) — a minimized `npm run dev`
 window received Ctrl+C twice and stopped mid-run; a server whose parent console died could no longer launch Chromium.
 
+## Known test failures that are not regressions
+
+- `recreate-feeds.test.js` ("the built copy keeps changing after it loaded, at the measured pace, and only the new row plays its entrance") fails on `286b3aa` too, when run in the same group as the other browser-heavy files. It is a timing test over the measured pace of a page that changes by itself. Not fixed; pre-existing.
+- Browser-heavy files used to fail in the full suite when several ran at once (they pass alone and in small groups). `npm test -w server` now runs them one at a time (`SAS_TEST_BROWSER_CONCURRENCY`, default 1), and every other file in parallel. Expect the full run to take much longer than before.
+- `shared-cache.test.js` counted cache folders in the shared OS temp folder, so a folder from another test file running at the same time was taken for a leak. Each test file now has its own temp folder (`SAS_TEMP_DIR`, set by `test/setup-data-dir.js`).
+
 ## Rules (from the user)
 
 - **Generic only**: no site-specific code, no per-URL handling; platform knowledge only in `detection/rules/*.json`.
