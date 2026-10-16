@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, ArrowUpDown, ChevronLeft, ChevronRight, Columns2, Info, Monitor, RotateCw, Smartphone, Tablet } from 'lucide-react';
+import { AlertTriangle, ArrowUpDown, ChevronLeft, ChevronRight, Columns2, Info, Monitor, RotateCw, ShieldAlert, Smartphone, Tablet } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/Surface.jsx';
 import { Segmented } from '../../components/common/Tabs.jsx';
 import InfoTip from '../../components/common/InfoTip.jsx';
 import PreviewFrame, { VIEWPORTS } from '../../components/preview/PreviewFrame.jsx';
 import SitePreview, { FullPageFrame, liveAvailability, LiveFrame, ModeToggle } from '../../components/preview/SitePreview.jsx';
+import { defaultPreviewMode, unavailableNote } from '../../components/preview/framing.js';
 import { Pill } from '../../components/common/Score.jsx';
 import { matchRating, TERMS, VIEWPORT_NAMES } from '../../copy.js';
 import { pageOf, shownStack, outputsOf } from '../../stacks.js';
@@ -136,8 +137,10 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   const [mode, setMode] = useState('screenshot');
   const [copyMode, setCopyMode] = useState(COPY_MODE);
   useEffect(() => {
-    setMode(live.ok ? 'live' : 'screenshot');
+    setMode(defaultPreviewMode(live));
   }, [audit?.analysisId, originalUrl, live.ok]);
+  // Live not available (the site blocks framing, or this app's own address): say so, and what is shown instead.
+  const originalNote = realOriginal ? unavailableNote(live, hasScreens) : null;
   // Scrolling together works on the picture of the original (the app cannot scroll a live site of another origin).
   const modeBefore = useRef(null);
   useEffect(() => {
@@ -244,6 +247,7 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
             onViewportChange={setViewport}
             fit={Boolean(realOriginal)}
             viewportButtons={false}
+            overlay={originalNote && (<><ShieldAlert size={13} color="var(--warn)" aria-hidden="true" /><span>{originalNote}</span></>)}
             toolbar={realOriginal && <ModeToggle mode={mode} onChange={setMode} live={live} hasScreens={hasScreens} />}
           >
             {realOriginal && (
