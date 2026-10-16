@@ -28,6 +28,7 @@
     "lottie-web": "5.13.0",
     "motion": "13.4.6",
     "playwright": "^1.63.0",
+    "postcss": "8.5.28",
     "robots-parser": "^3.0.1",
     "sharp": "^0.34.5",
     "undici": "^7.30.0"
