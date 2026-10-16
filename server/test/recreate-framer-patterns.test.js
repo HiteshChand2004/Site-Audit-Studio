@@ -113,7 +113,27 @@ async function look(url) {
       await page.waitForTimeout(600);
       grown.push(await grownAnswers());
     }
-    return { rest, hovered, back, x1, x2, d1, d2, c1, c2, faq: [closed, opened, shut], inline, grown };
+    // The bare menu icon at the top: is the menu shown, after one click and after a second.
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.waitForTimeout(300);
+    const menuShown = () => page.evaluate(() => {
+      const p = [...document.querySelectorAll('p')].find((x) => x.textContent.trim() === 'Menu: Products');
+      return p ? (p.getBoundingClientRect().height > 0 ? 1 : 0) : -1;
+    });
+    const iconAt = () => page.evaluate(() => {
+      const el = [...document.querySelectorAll('div')].find((d) => !d.textContent.trim() && d.children.length === 3 && getComputedStyle(d).cursor === 'pointer'
+        && d.getBoundingClientRect().width > 0);
+      const r = el?.getBoundingClientRect();
+      return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null;
+    });
+    const menu = [await menuShown()];
+    for (let k = 0; k < 2; k++) {
+      const at = await iconAt();
+      if (at) await page.mouse.click(at.x, at.y);
+      await page.waitForTimeout(500);
+      menu.push(await menuShown());
+    }
+    return { rest, hovered, back, x1, x2, d1, d2, c1, c2, faq: [closed, opened, shut], inline, grown, menu };
   } finally {
     await page.close();
   }
@@ -136,7 +156,17 @@ async function phoneLook(url) {
     const a = await read();
     await page.waitForTimeout(500);
     const b = await read();
-    return [a, b];
+    // The button of the phone version of a slot rendered per width: its background at rest and hovered.
+    const btn = page.getByText('Get the app', { exact: true }).locator('visible=true').first();
+    await btn.scrollIntoViewIfNeeded();
+    const bg = () => btn.evaluate((el) => getComputedStyle(el).backgroundColor);
+    await page.mouse.move(2, 2);
+    await page.waitForTimeout(300);
+    const rest = await bg();
+    await btn.hover();
+    await page.waitForTimeout(700);
+    const hovered = await bg();
+    return [a, b, rest, hovered];
   } finally {
     await page.close();
   }
@@ -167,7 +197,13 @@ async function checkCopy(origin, original, motion, report, label) {
   // 8. At phone width, the part only the phone layout draws keeps moving (its spinner turns, its knob slides).
   const phone = await phoneLook(origin);
   assert.notEqual(phone[0], 'missing', `${label}: the phone-only part is in the copy`);
-  assert.notEqual(phone[0], phone[1], `${label} phone-only motion ${phone.join(' / ')}; skipped ${skipped}`);
+  assert.notEqual(phone[0], phone[1], `${label} phone-only motion ${phone.slice(0, 2).join(' / ')}; skipped ${skipped}`);
+  // 10. At phone width, the button of a slot rendered per width hovers like the original's. Exact-based copies only: an
+  // ordinary copy's hover probe has a time budget, and on this busy page it does not reach that button at all.
+  if (label !== 'normal') assert.equal(phone[3], original.phone[3], `${label} phone-version button hover: original ${original.phone[2]} -> ${original.phone[3]}, copy ${phone[2]} -> ${phone[3]}`);
+  // 9. A bare menu icon (a hand-cursor box, nothing else) opens and closes the menu.
+  const iconKinds = (motion.clicks?.widgets ?? []).filter((w) => !w.text).map((w) => `${w.kind}: ${w.trigger?.slice(-30)}`);
+  assert.deepEqual(copy.menu, original.menu, `${label} menu icon ${copy.menu}; captured ${JSON.stringify(iconKinds)}; skipped ${JSON.stringify(motion.clicks?.stats?.skipped)}`);
   assert.deepEqual(copy.grown, original.grown, `${label} growing FAQ ${copy.grown}; captured ${JSON.stringify(grownKinds)}`);
 }
 
@@ -183,8 +219,11 @@ async function originalOnce() {
   assert.ok(o.faq[1] > o.faq[0] && o.faq[2] === o.faq[0], `original FAQ ${o.faq}`);
   assert.deepEqual(o.inline, ['000', '100', '110', '010', '000'], 'original inline FAQ');
   assert.deepEqual(o.grown, ['00', '10', '11', '01', '00'], 'original growing FAQ');
+  assert.deepEqual(o.menu, [0, 1, 0], 'original menu icon');
   const p = await phoneLook(`${site}/`);
-  assert.notEqual(p[0], p[1], `original phone-only motion ${p.join(' / ')}`);
+  assert.notEqual(p[0], p[1], `original phone-only motion ${p.slice(0, 2).join(' / ')}`);
+  assert.notEqual(p[3], p[2], 'the original phone-version button changes on hover');
+  o.phone = p;
   return (originalLook = o);
 }
 

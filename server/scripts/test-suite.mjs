@@ -11,7 +11,7 @@ const SERVER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 /** Unit tests with no browser pipeline run: seconds. */
 export const FAST = [
   'recreate-animation-rules', 'recreate-framer-appear', 'detect-libraries', 'behavior-scripts', 'detection', 'analyzers',
-  'recreate-fixers', 'reaudit-compare', 'recreate-corpus', 'http-headers', 'recreate-video-clock',
+  'recreate-fixers', 'reaudit-compare', 'recreate-corpus', 'http-headers', 'recreate-video-clock', 'recreate-asis-versions',
 ];
 /** Fixtures: a page through the real pipeline, compared with the original in a browser (their app-stack parts build the
  * three app stacks with the real toolchains unless SAS_SKIP_APP_STACKS=1). */

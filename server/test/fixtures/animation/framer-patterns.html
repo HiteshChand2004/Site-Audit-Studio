@@ -15,11 +15,16 @@
   .track { display: flex; gap: 48px; width: max-content; }
   .logo { width: 140px; height: 48px; border-radius: 8px; background: #e5e7eb; display: grid; place-items: center; font-weight: 600; color: #374151; }
   .platform { padding: 40px; }
-  .platform svg { width: 640px; height: 220px; display: block; }
+  .platform svg { width: 640px; max-width: 100%; height: auto; display: block; }
   .card { fill: #f3f4f6; stroke: #d1d5db; }
   .line { fill: none; stroke: #c2410c; stroke-width: 3; }
   footer { height: 400px; }
-  .topnav { display: flex; gap: 20px; padding: 16px 40px; }
+  .bar { padding: 12px 40px; }
+  .fx-a7k2 { width: 28px; height: 22px; display: flex; flex-direction: column; justify-content: space-between; cursor: pointer; }
+  .fx-a7k2 span { display: block; height: 3px; background: #111827; border-radius: 2px; }
+  .fx-b9m1 { display: none; padding: 12px 0; }
+  .fx-b9m1.open { display: block; }
+  .topnav { flex-wrap: wrap; display: flex; gap: 20px; padding: 16px 40px; }
   .topnav a { color: #111827; text-decoration: none; }
   .faq { padding: 40px; max-width: 720px; }
   .q { padding: 14px 0; border-bottom: 1px solid #e5e7eb; cursor: pointer; }
@@ -45,6 +50,10 @@
 <nav class="topnav">
   <a href="/" class="nl">Home</a><a href="/about" class="nl">About</a><a href="/pricing" class="nl">Pricing</a><a href="/blog" class="nl">Blog</a><a href="/careers" class="nl">Careers</a><a href="/contact" class="nl">Contact</a>
 </nav>
+<div class="bar">
+  <div class="fx-a7k2"><span></span><span></span><span></span></div>
+  <div class="fx-b9m1"><p>Menu: Products</p><p>Menu: Company</p></div>
+</div>
 <section class="hero">
   <h1>Script-driven patterns</h1>
   <div class="cta" role="button" tabindex="0">Book a demo</div>
@@ -89,6 +98,7 @@
   <div class="grow" tabindex="0"><p>Is there a free plan?</p><div class="ans2"><div>A free plan covers one project forever.</div></div></div>
   <div class="grow" tabindex="0"><p>Can I cancel any time?</p><div class="ans2"><div>Cancel from the settings page, no questions.</div></div></div>
 </section>
+<section class="vslot"></section>
 <section class="phone-only">
   <h2>On your phone</h2>
   <div class="spinner">Syncing</div>
@@ -203,6 +213,28 @@
     requestAnimationFrame(phoneFrame);
   }
   requestAnimationFrame(phoneFrame);
+
+  // 8. A bare menu icon: a box with a hand cursor and nothing else (no text, role, tabindex or word naming it); the
+  //    framework's script opens and closes the menu on its click.
+  document.querySelector(".fx-a7k2").addEventListener('click', function () {
+    document.querySelector(".fx-b9m1").classList.toggle('open');
+  });
+
+  // 9. Markup rendered per width (a builder's separate phone layout): the same button inside another wrapper below
+  //    600 px, its hover drawn by script on whichever version is on screen.
+  var vslot = document.querySelector('.vslot');
+  function renderSlot() {
+    var phone = innerWidth < 600;
+    vslot.innerHTML = phone
+      ? '<div class="vp"><div class="vq"><button class="vb" type="button">Get the app</button></div></div>'
+      : '<div class="vw"><span class="vt">Download</span><button class="vb" type="button">Get the app</button></div>';
+    var b = vslot.querySelector('.vb');
+    b.style.backgroundColor = 'rgb(229, 231, 235)';
+    b.addEventListener('mouseenter', function () { b.style.backgroundColor = 'rgb(37, 99, 235)'; });
+    b.addEventListener('mouseleave', function () { b.style.backgroundColor = 'rgb(229, 231, 235)'; });
+  }
+  renderSlot();
+  addEventListener('resize', renderSlot);
 
   // 6. Cards that cycle: the list steps up by one card every 1.2 s through a Web Animation, the card in front grows to full
   //    size and opacity while the others shrink - each card's scale and opacity set by script every frame.

@@ -120,6 +120,62 @@ export async function readPageMotion(dir, page) {
 
 const r1 = (n) => Math.round(n * 10) / 10;
 
+const HOVER_TOKEN = /^[hf]\d+(?:[ks]\d+)?$/;
+const drawnIn = (node, view) => {
+  const d = node.views?.[view];
+  return !!d && !d.hidden && d.style?.display !== 'none' && (d.rect?.[2] ?? 0) * (d.rect?.[3] ?? 0) > 0;
+};
+
+/**
+ * Hover and focus are probed on the desktop layout. A site that renders other markup at narrower widths (its own phone
+ * version of a section) has the same button again as an element the desktop never draws, which got no effect - it reacted
+ * at 1440 px and stood still at 390 px. Each element drawn only in narrower views that is the same element (tag, class and
+ * text) as a desktop element with hover / focus tokens gets those tokens, its inner parts matched by position where the
+ * structure agrees. (ir/asis.js shareHoverAcrossVersions does the same for an exact copy's original markup.)
+ * @returns {number} elements that received tokens
+ */
+export function shareHoverWithNarrowTwins(root) {
+  const tokensOf = (n) => (n.motionTokens ?? []).filter((t) => HOVER_TOKEN.test(t));
+  const keyOf = (n) => `${n.tag}|${n.attrs?.class ?? ''}|${deepText(n).replace(/\s+/g, ' ').trim().slice(0, 80)}`;
+  const sources = new Map();
+  const narrow = [];
+  const walk = (n) => {
+    if (!isElement(n)) return;
+    if (drawnIn(n, 'desktop')) {
+      if (tokensOf(n).length && !sources.has(keyOf(n))) sources.set(keyOf(n), n);
+    } else if (Object.keys(n.views ?? {}).some((v) => v !== 'desktop' && drawnIn(n, v))) {
+      narrow.push(n);
+      return; // its subtree is visited from here
+    }
+    n.children.forEach(walk);
+  };
+  walk(root);
+  if (!sources.size) return 0;
+  let copied = 0;
+  const copy = (src, dst) => {
+    if (!isElement(src) || !isElement(dst) || src.tag !== dst.tag) return;
+    const toks = tokensOf(src);
+    if (toks.length && !tokensOf(dst).length) {
+      dst.motionTokens = [...(dst.motionTokens ?? []), ...toks];
+      copied++;
+    }
+    const a = src.children.filter(isElement);
+    const b = dst.children.filter(isElement);
+    if (a.length === b.length) a.forEach((c, i) => copy(c, b[i]));
+  };
+  const visit = (n) => {
+    if (!isElement(n)) return;
+    const src = sources.get(keyOf(n));
+    if (src && !tokensOf(n).length) {
+      copy(src, n);
+      return;
+    }
+    n.children.forEach(visit);
+  };
+  narrow.forEach(visit);
+  return copied;
+}
+
 /** A link that would leave the page (not `#`, `javascript:` or empty). */
 function realHref(node) {
   if (node?.tag !== 'a') return false;
@@ -833,6 +889,7 @@ export function applyMotion(site, byPath, { owned = new Map() } = {}) {
         if (entry.dyn) s.dynamic = (s.dynamic ?? 0) + 1;
       }
     }
+    stats.hover.narrowTwins = (stats.hover.narrowTwins ?? 0) + shareHoverWithNarrowTwins(tree.root);
 
     // Scroll reveal: those the scroll started, and timed ones below the first screen (isScrollReveal); timed ones in the
     // first screen (an entrance a timer or the first scroll started) are not scroll effects and are rebuilt as `rl`.
@@ -945,9 +1002,7 @@ export function applyMotion(site, byPath, { owned = new Map() } = {}) {
       if (loopView === 'mobile') {
         // Drawn on the desktop too, or already moving: the desktop's loop (or none, as on the original) stands. An
         // element only the phone layout draws may still be in the desktop's data, hidden or with no size.
-        const d = node.views?.desktop;
-        const drawnOnDesktop = !!d && !d.hidden && d.style?.display !== 'none' && (d.rect?.[2] ?? 0) * (d.rect?.[3] ?? 0) > 0;
-        if (drawnOnDesktop || (node.motionTokens ?? []).some((t) => /^l\d+$/.test(t))) continue;
+        if (drawnIn(node, 'desktop') || (node.motionTokens ?? []).some((t) => /^l\d+$/.test(t))) continue;
         stats.loops.phone = (stats.loops.phone ?? 0) + 1;
       }
       if (loop.timeline) {

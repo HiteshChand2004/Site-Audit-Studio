@@ -121,6 +121,11 @@ function installClicks(opts) {
     // builder's FAQ question is a plain `div tabindex="0"` with neither a role nor a word that names it (found on a real
     // Framer site, whose questions were never clicked).
     if (!r.length && cs.cursor === 'pointer' && el.tabIndex >= 0 && el.hasAttribute('tabindex') && !/^(INPUT|SELECT|TEXTAREA|LABEL|A|BUTTON|IFRAME)$/.test(tag)) r.push('focusable');
+    // Any other box drawn with a hand cursor where its parent has none (the outermost one: its children inherit the
+    // cursor) and that is no link or button: a framework's script handles its click - a menu icon, a dropdown trigger -
+    // with nothing in the markup saying so. Capped per page below, the top bar's first.
+    if (!r.length && cs.cursor === 'pointer' && !/^(INPUT|SELECT|TEXTAREA|LABEL|OPTION|IFRAME|IMG|svg|SVG|PATH)$/.test(tag) && !el.closest('a[href], button')
+      && el.parentElement && getComputedStyle(el.parentElement).cursor !== 'pointer') r.push('pointer');
     return r;
   };
 
@@ -165,6 +170,20 @@ function installClicks(opts) {
   const rank = (f) => (f.reasons.includes('aria-expanded') || f.reasons.includes('summary') ? 0
     : f.reasons.includes('nav-hover') ? 2 : f.reasons.includes('link') ? 3 : 1);
   found.sort((a, b) => rank(a) - rank(b));
+  // Boxes known only by their hand cursor: at most POINTER_MAX, the top bar's first (a menu icon), then the smallest (an
+  // icon rather than a whole card); the rest are counted.
+  const POINTER_MAX = 8;
+  const pointerOnly = found.filter((f) => f.reasons.length === 1 && f.reasons[0] === 'pointer');
+  if (pointerOnly.length > POINTER_MAX) {
+    const area = (f) => { const b = f.el.getBoundingClientRect(); return b.width * b.height; };
+    const keep = new Set(pointerOnly.sort((a, b) => (topBar(b.el) ? 1 : 0) - (topBar(a.el) ? 1 : 0) || area(a) - area(b)).slice(0, POINTER_MAX));
+    for (let k = found.length - 1; k >= 0; k--) {
+      if (pointerOnly.includes(found[k]) && !keep.has(found[k])) {
+        found.splice(k, 1);
+        skipped.pointer = (skipped.pointer ?? 0) + 1;
+      }
+    }
+  }
   if (found.length > limit) skipped.limit += found.splice(limit).length;
   window.__sasClick = { els: found.map((f) => f.el), base: null };
   return {

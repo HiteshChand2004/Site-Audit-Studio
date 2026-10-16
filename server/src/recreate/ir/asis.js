@@ -559,6 +559,67 @@ export function attrsInSvg(markup, rest, attrs) {
 }
 
 /** Puts carried attributes on the as-is nodes with the same path (motion tokens are merged, never replaced). */
+const HOVER_TOKEN = /^[hf]\d+(?:[ks]\d+)?$/;
+
+/**
+ * Hover and focus effects are probed on the desktop layout and carried to the element there. A site that renders other
+ * markup at other widths (ir/asis.js mergeViewBodies: versions marked data-sas-v) has the same button again in its
+ * tablet and phone versions, which got nothing - the button reacted at 1440 px and stood still at 390 px (found on a real
+ * Framer site). Each element of a narrower version that is the same element (tag, class and text) as one with hover /
+ * focus tokens in the desktop version gets those tokens, its inner parts matched by position where the structure agrees.
+ * @returns {number} elements that received tokens
+ */
+export function shareHoverAcrossVersions(body, variants) {
+  if (!variants?.size) return 0;
+  const isEl = (n) => n && !('text' in n);
+  const textOf = (n) => ('text' in n ? n.text : (n.children ?? []).map(textOf).join(' '));
+  const keyOf = (n) => `${n.t}|${n.attrs?.class ?? ''}|${textOf(n).replace(/\s+/g, ' ').trim().slice(0, 80)}`;
+  const tokensOf = (n) => String(n.attrs?.['data-motion'] ?? '').split(/\s+/).filter((t) => HOVER_TOKEN.test(t));
+  const wide = [];
+  const narrow = [];
+  const find = (n) => {
+    if (!isEl(n)) return;
+    const views = n.attrs?.['data-sas-v'] ? variants.get(n.attrs['data-sas-v']) : null;
+    if (views) {
+      (views.includes('desktop') ? wide : narrow).push(n);
+      return;
+    }
+    (n.children ?? []).forEach(find);
+  };
+  find(body);
+  const sources = new Map();
+  const collect = (n) => {
+    if (!isEl(n)) return;
+    if (tokensOf(n).length && !sources.has(keyOf(n))) sources.set(keyOf(n), n);
+    (n.children ?? []).forEach(collect);
+  };
+  wide.forEach(collect);
+  if (!sources.size) return 0;
+  let copied = 0;
+  const copy = (src, dst) => {
+    if (!isEl(src) || !isEl(dst) || src.t !== dst.t) return;
+    const toks = tokensOf(src);
+    if (toks.length && !tokensOf(dst).length) {
+      dst.attrs = { ...(dst.attrs ?? {}), 'data-motion': [dst.attrs?.['data-motion'], ...toks].filter(Boolean).join(' ') };
+      copied++;
+    }
+    const a = (src.children ?? []).filter(isEl);
+    const b = (dst.children ?? []).filter(isEl);
+    if (a.length === b.length) a.forEach((c, i) => copy(c, b[i]));
+  };
+  const visit = (n) => {
+    if (!isEl(n)) return;
+    const src = sources.get(keyOf(n));
+    if (src && !tokensOf(n).length) {
+      copy(src, n);
+      return;
+    }
+    (n.children ?? []).forEach(visit);
+  };
+  narrow.forEach(visit);
+  return copied;
+}
+
 export function carryInto(body, carried) {
   let placed = 0;
   const walk = (n) => {
@@ -855,6 +916,7 @@ export async function applyAsIs(ir, { dir, site, excluded = [] }) {
       const got = roots.length ? carryInto({ t: 'x', children: roots }, tokens) : { placed: 0 };
       report.motion.viewLoops = (report.motion.viewLoops ?? 0) + got.placed;
     }
+    report.motion.versionHovers = (report.motion.versionHovers ?? 0) + shareHoverAcrossVersions(body, merged.variants);
     report.motion.extras += placeExtras(body, extras.placements);
     report.motion.notCarried.unmapped += lost;
     report.unpinned += stats.unpinned;
