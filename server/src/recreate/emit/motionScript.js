@@ -87,6 +87,10 @@ export const MOTION_JS = `(function () {
   var keyOf = function (el) {
     return el.tagName + '|' + (el.textContent || '').split(/\\s+/).join(' ');
   };
+  var loops = function (el) {
+    if (/(^|\\s)l\\d+(\\s|$)/.test(el.getAttribute('data-motion') || '')) return true;
+    return /infinite/.test(getComputedStyle(el).animationIterationCount || '');
+  };
   var calm = function (before, next) {
     var seen = {};
     var old = before ? before.querySelectorAll('*') : [];
@@ -99,7 +103,9 @@ export const MOTION_JS = `(function () {
         el.removeAttribute('data-w-calm');
       }
       var key = keyOf(el);
-      if (seen[key] > 0) {
+      // Only an entrance is held still: a loop (a token lN, or any animation that repeats forever) runs on in every
+      // state, as it did on the original (found on a real site: the cards of an auto-switching section stood still).
+      if (seen[key] > 0 && !loops(el)) {
         seen[key]--;
         el.setAttribute('data-w-calm', el.style.animation || '');
         el.style.animation = 'none';

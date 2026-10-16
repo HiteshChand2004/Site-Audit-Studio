@@ -243,7 +243,7 @@ function readClickState(opts) {
       // Its own text (not its children's): a tab that writes another text into the same panel changes nothing else.
       let t = '';
       for (const c of el.childNodes) if (c.nodeType === 3) t += c.data;
-      map.set(el, { v, a: attrs, c: typeof el.className === 'string' ? el.className : '', m: moved, t: t.replace(/s+/g, ' ').trim(), ...(keepPaths && v && { p: pathOf(el) }) });
+      map.set(el, { v, a: attrs, c: typeof el.className === 'string' ? el.className : '', m: moved, t: t.replace(/\s+/g, ' ').trim(), ...(keepPaths && v && { p: pathOf(el) }) });
     }
     return map;
   };
@@ -284,17 +284,31 @@ function readClickState(opts) {
     return { rect: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)], fixed, position: cs.position };
   };
   const trigger = state.els[i];
-  const describe = (el) => ({ path: pathOf(el), tag: el.tagName.toLowerCase(), parent: el.parentElement ? pathOf(el.parentElement) : null, ...box(el), inTrigger: trigger ? trigger.contains(el) : false });
+  // Inside the clicked control is usually the control's own look (a chevron turning, an icon swapped) and is not what it
+  // opened. A part that was not visible before the click and is visible now (drawn by the click, or uncovered as its
+  // container grew) is a panel though, when it spans the control rather than sitting in it like a glyph: a FAQ whose
+  // whole item is the clickable box draws its answer inside that box (found on a real Framer site, where every answer
+  // was dropped as "the control's own change" and the question read as a carousel). Whether it has text does not matter.
+  const triggerWidth = trigger ? trigger.getBoundingClientRect().width : 0;
+  const panelInside = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.height >= 16 && (r.width >= 0.4 * triggerWidth || r.width >= 160);
+  };
+  const describe = (el, appeared = false) => {
+    const inside = trigger ? trigger.contains(el) : false;
+    const panel = appeared && inside && el !== trigger && panelInside(el);
+    return { path: pathOf(el), tag: el.tagName.toLowerCase(), parent: el.parentElement ? pathOf(el.parentElement) : null, ...box(el), inTrigger: inside && !panel, ...(panel && { panelInTrigger: true }) };
+  };
   // Removed from the page: only the outermost, named by the path they had.
   const gone = removed.filter((p) => !removed.some((q) => q !== p && p.startsWith(`${q}>`))).slice(0, 12)
     .map((p) => ({ path: p, tag: p.slice(p.lastIndexOf('>') + 1).split(':')[0], parent: p.slice(0, p.lastIndexOf('>')), rect: [0, 0, 0, 0], fixed: false, position: '', inTrigger: false, removed: true }));
   return {
-    shown: roots(shown).slice(0, 12).map(describe),
-    hidden: [...roots(hidden).slice(0, 12).map(describe), ...gone],
-    added: roots(added).slice(0, 6).map(describe),
+    shown: roots(shown).slice(0, 12).map((el) => describe(el, true)),
+    hidden: [...roots(hidden).slice(0, 12).map((el) => describe(el)), ...gone],
+    added: roots(added).slice(0, 6).map((el) => describe(el, true)),
     attrs: attrs.slice(0, 12).map((x) => ({ path: pathOf(x.el), from: x.from, to: x.to, classFrom: x.classFrom.slice(0, 120), classTo: x.classTo.slice(0, 120), isTrigger: x.el === trigger })),
     moved: moved.filter((x) => x.el.getBoundingClientRect().width >= 100).slice(0, 6).map((x) => ({ path: pathOf(x.el), from: x.from, to: x.to })),
-    text: roots(texts).filter((el) => !(trigger && trigger.contains(el))).slice(0, 8).map(describe),
+    text: roots(texts).filter((el) => !(trigger && trigger.contains(el))).slice(0, 8).map((el) => describe(el)),
     url: location.href,
     viewport: [innerWidth, innerHeight],
   };

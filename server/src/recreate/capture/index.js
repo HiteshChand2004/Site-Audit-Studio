@@ -246,7 +246,11 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     // Continuous motion (4b.3) is read before the screenshots: a screenshot with animations disabled cancels the infinite ones.
     let loops = null;
     let loopsError = null;
-    if (observeReveal) {
+    // The phone view records its continuous animations in every copy, not only in exact mode: a builder that renders a
+    // separate phone layout moves those elements, and the desktop recording never sees them (ir/motion.js places them
+    // by the phone view's paths). Only the loops - the other probes stay where they were.
+    const phoneLoops = !observeReveal && view.id === 'mobile' && motionBudgetMs > 0;
+    if (observeReveal || phoneLoops) {
       try {
         // A run with no time limit watches slow movers longer (20 s): a long loop shows its period instead of a guess.
         loops = await captureLoops(page, exact ? { slowWatchMs: 20000 } : {});
@@ -260,6 +264,9 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
         }
       } catch (err) {
         loopsError = firstLine(err);
+      }
+      if (phoneLoops && loops?.loops?.length) {
+        await writeFile(path.join(dir, motionFile(view.id)), JSON.stringify({ view: view.id, loops })).catch(() => {});
       }
     }
     // Parts that change by themselves (a feed adding rows on a timer, a ticker, a highlight that moves on): recorded as

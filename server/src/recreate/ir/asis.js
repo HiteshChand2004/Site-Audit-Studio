@@ -831,6 +831,30 @@ export async function applyAsIs(ir, { dir, site, excluded = [] }) {
     }
     const { placed, lost } = carryInto(body, carried);
     report.motion.carried += placed;
+    // Loops only a narrow view's layout has (ir/motion.js viewTokens): carried by that view's path into the versions the
+    // merge kept for that view (data-sas-v) - never into the desktop markup, where the same path names another element.
+    const byView = new Map();
+    for (const t of (ir.motion?.viewTokens ?? []).filter((x) => x.page === page.outPath)) {
+      const m = byView.get(t.view) ?? byView.set(t.view, new Map()).get(t.view);
+      const had = m.get(t.path) ?? {};
+      m.set(t.path, { ...had, 'data-motion': [had['data-motion'], t.token].filter(Boolean).join(' ') });
+    }
+    for (const [view, tokens] of byView) {
+      const roots = [];
+      const find = (n) => {
+        if (!n || 'text' in n) return;
+        const id = n.attrs?.['data-sas-v'];
+        const views = id ? merged.variants.get(id) : null;
+        if (views && views.includes(view) && !views.includes('desktop')) {
+          roots.push(n);
+          return;
+        }
+        for (const c of n.children ?? []) find(c);
+      };
+      find(body);
+      const got = roots.length ? carryInto({ t: 'x', children: roots }, tokens) : { placed: 0 };
+      report.motion.viewLoops = (report.motion.viewLoops ?? 0) + got.placed;
+    }
     report.motion.extras += placeExtras(body, extras.placements);
     report.motion.notCarried.unmapped += lost;
     report.unpinned += stats.unpinned;

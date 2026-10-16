@@ -89,7 +89,54 @@ async function look(url) {
     await q.click();
     await page.waitForTimeout(600);
     const shut = await answer();
-    return { rest, hovered, back, x1, x2, d1, d2, c1, c2, faq: [closed, opened, shut] };
+    // The FAQ whose answer is drawn inside the clicked item: which answers are shown after each step.
+    const shownAnswers = () => page.evaluate(() => ['Create an account', 'Yes, every plan', 'In data centres'].map((t) => {
+      const el = [...document.querySelectorAll('div')].find((d) => d.children.length === 0 && d.textContent.startsWith(t) && d.getBoundingClientRect().height > 0
+        && getComputedStyle(d).visibility !== 'hidden');
+      return el ? 1 : 0;
+    }).join(''));
+    const inline = [await shownAnswers()];
+    for (const q of ['How do I get started?', 'Can my whole team use it?', 'How do I get started?', 'Can my whole team use it?']) {
+      await page.getByText(q, { exact: true }).locator('visible=true').first().click();
+      await page.waitForTimeout(600);
+      inline.push(await shownAnswers());
+    }
+    // The FAQ whose answer already sits inside the item at height 0 and grows open.
+    const grownAnswers = () => page.evaluate(() => ['A free plan covers', 'Cancel from the settings'].map((t) => {
+      const el = [...document.querySelectorAll('div')].find((d) => d.children.length === 0 && d.textContent.startsWith(t) && getComputedStyle(d).visibility !== 'hidden'
+        && d.getBoundingClientRect().height > 0 && d.parentElement.getBoundingClientRect().height > 8);
+      return el ? 1 : 0;
+    }).join(''));
+    const grown = [await grownAnswers()];
+    for (const q of ['Is there a free plan?', 'Can I cancel any time?', 'Is there a free plan?', 'Can I cancel any time?']) {
+      await page.getByText(q, { exact: true }).locator('visible=true').first().click();
+      await page.waitForTimeout(600);
+      grown.push(await grownAnswers());
+    }
+    return { rest, hovered, back, x1, x2, d1, d2, c1, c2, faq: [closed, opened, shut], inline, grown };
+  } finally {
+    await page.close();
+  }
+}
+
+/** At phone width (390 px): the part only the phone layout draws - its spinner and knob, twice 500 ms apart. */
+async function phoneLook(url) {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  try {
+    await page.goto(url, { waitUntil: 'load' });
+    await page.waitForTimeout(1000);
+    await page.getByText('On your phone', { exact: true }).locator('visible=true').first().scrollIntoViewIfNeeded();
+    const read = () => page.evaluate(() => {
+      const spin = [...document.querySelectorAll('div')].find((d) => d.textContent.trim() === 'Syncing' && d.getBoundingClientRect().width > 0);
+      const box = (el) => (el ? el.getBoundingClientRect() : null);
+      const k = [...(spin?.parentElement?.querySelectorAll('div') ?? [])].filter((d) => !d.children.length && !d.textContent.trim()).map(box).find((r) => r && r.width > 0);
+      const s = box(spin);
+      return s ? `${Math.round(s.width)}x${Math.round(s.height)} knob ${k ? Math.round(k.left) : 'none'}` : 'missing';
+    });
+    const a = await read();
+    await page.waitForTimeout(500);
+    const b = await read();
+    return [a, b];
   } finally {
     await page.close();
   }
@@ -112,6 +159,16 @@ async function checkCopy(origin, original, motion, report, label) {
   // 5. FAQ behind a menu of links the router follows: probed, and it opens and closes in the copy like the original.
   const clicks = motion.clicks?.stats ?? {};
   assert.deepEqual(copy.faq, original.faq, `${label} FAQ ${copy.faq}; click probe ${JSON.stringify({ probed: clicks.probed, left: clicks.left, navigated: clicks.navigated, skipped: clicks.skipped })}`);
+  // 6. FAQ with the answer drawn inside the clicked item: opens, a second opens beside it, each closes again.
+  const kinds = (motion.clicks?.widgets ?? []).filter((w) => /get started|whole team|data kept/.test(w.text ?? '')).map((w) => `${w.text}: ${w.kind} closes=${w.closes}`);
+  assert.deepEqual(copy.inline, original.inline, `${label} inline FAQ ${copy.inline}; captured ${JSON.stringify(kinds)}`);
+  // 7. FAQ whose answer is inside the item at height 0 and grows open.
+  const grownKinds = (motion.clicks?.widgets ?? []).filter((w) => /free plan|cancel any/.test(w.text ?? '')).map((w) => `${w.text}: ${w.kind} closes=${w.closes}`);
+  // 8. At phone width, the part only the phone layout draws keeps moving (its spinner turns, its knob slides).
+  const phone = await phoneLook(origin);
+  assert.notEqual(phone[0], 'missing', `${label}: the phone-only part is in the copy`);
+  assert.notEqual(phone[0], phone[1], `${label} phone-only motion ${phone.join(' / ')}; skipped ${skipped}`);
+  assert.deepEqual(copy.grown, original.grown, `${label} growing FAQ ${copy.grown}; captured ${JSON.stringify(grownKinds)}`);
 }
 
 /** The original as a visitor sees it, checked once: every pattern really happens there. */
@@ -124,6 +181,10 @@ async function originalOnce() {
   assert.notEqual(o.d1, o.d2, `original lines ${o.d1} / ${o.d2}`);
   assert.notEqual(o.c1, o.c2, `original cards ${o.c1} / ${o.c2}`);
   assert.ok(o.faq[1] > o.faq[0] && o.faq[2] === o.faq[0], `original FAQ ${o.faq}`);
+  assert.deepEqual(o.inline, ['000', '100', '110', '010', '000'], 'original inline FAQ');
+  assert.deepEqual(o.grown, ['00', '10', '11', '01', '00'], 'original growing FAQ');
+  const p = await phoneLook(`${site}/`);
+  assert.notEqual(p[0], p[1], `original phone-only motion ${p.join(' / ')}`);
   return (originalLook = o);
 }
 

@@ -158,13 +158,20 @@ export async function findScriptLoops(opts) {
       at('x') ?? at('cx') ?? '', at('y') ?? at('cy') ?? '', cs.strokeDashoffset];
   };
   const els = [...(document.body ? document.body.querySelectorAll('*') : [])].filter((e) => !SKIP_TAGS.has(e.tagName.toUpperCase())).slice(0, 6000);
-  const before = els.map(read);
-  await sleep(probeMs);
-  const changed = [];
-  els.forEach((el, i) => {
-    const now = read(el);
-    if (now.some((v, k) => v !== before[i][k])) changed.push(el);
-  });
+  // Read three times: once after `probeMs`, once more a second later. Motion that steps and holds (a list moving up one
+  // card at a time, every 1.2 s, still for most of it) can sit entirely inside one short interval; whatever changed in
+  // either interval is a candidate.
+  let last = els.map(read);
+  const changedSet = new Set();
+  for (const wait of [probeMs, Math.max(probeMs, 1100)]) {
+    await sleep(wait);
+    els.forEach((el, i) => {
+      const now = read(el);
+      if (now.some((v, k) => v !== last[i][k])) changedSet.add(el);
+      last[i] = now;
+    });
+  }
+  const changed = els.filter((el) => changedSet.has(el));
   // Animations (including a transition that is still running) explain a change; so does nothing else.
   // Below the first screen (inView): only what the window shows now, and strips (minWidth), not a reveal finishing.
   const shownNow = (el) => {

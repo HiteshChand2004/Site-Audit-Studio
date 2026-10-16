@@ -90,6 +90,8 @@ export async function readPageMotion(dir, page) {
     }
     const key = view === 'mobile' ? 'clicksMobile' : view === 'tablet' ? 'clicksTablet' : null;
     if (key && !motion[key] && full.clicks) motion[key] = full.clicks;
+    // The phone layout's continuous animations: placed by the phone view's paths (see the loops in buildMotion).
+    if (view === 'mobile' && !motion.loopsMobile && full.loops?.loops?.length) motion.loopsMobile = full.loops;
     motion.byView = {
       ...motion.byView,
       [view]: {
@@ -103,8 +105,8 @@ export async function readPageMotion(dir, page) {
         // What this builder can place from a narrow view: its controls, by that view's own paths (ir/tree.js
         // mpath / tpath). Hover, focus, reveals and loops of a narrow view have no path map yet, so they are
         // counted here instead of being quietly dropped.
-        rebuilt: key ? ['clicks'] : [],
-        notRebuilt: ['hover', 'focus', 'states', 'notices', 'loops', 'reveal', ...(key ? [] : ['clicks'])]
+        rebuilt: [...(key ? ['clicks'] : []), ...(view === 'mobile' && (full.loops?.loops?.length ?? 0) > 0 ? ['loops'] : [])],
+        notRebuilt: ['hover', 'focus', 'states', 'notices', ...(view === 'mobile' ? [] : ['loops']), 'reveal', ...(key ? [] : ['clicks'])]
           .filter((k) => (k === 'clicks' ? (full.clicks?.stats?.found ?? 0) : (Array.isArray(full[k]) ? full[k].length : 0)) > 0
             || (k === 'states' && (full.states?.sets ?? 0) > 0)
             || (k === 'notices' && (full.notices?.notices ?? 0) > 0)
@@ -664,6 +666,7 @@ export function applyMotion(site, byPath, { owned = new Map() } = {}) {
   const reg = { hover: new Map(), focus: new Map(), reveal: new Map(), loops: [], delays: new Set(), widgets: new Map(), scrolled: new Map() };
   // Tokens placed on an element inside an inline SVG, by its capture path (ir/asis.js carries them into the original SVG).
   const svgTokens = [];
+  const viewTokens = [];
   const stats = {
     pages: 0,
     scrolled: { bars: 0 },
@@ -901,26 +904,58 @@ export function applyMotion(site, byPath, { owned = new Map() } = {}) {
     }
 
     // Loops: a CSS animation the element's captured style carries is already in the stylesheet; the others are rebuilt.
-    for (const loop of motion.loops?.loops ?? []) {
-      if (libraryOwned.has(loop.path)) {
+    // The desktop view's loops first, then the phone view's (mobile-motion.json), found by that view's own paths (mpath):
+    // a builder that renders a separate phone layout (its own copy of each section) moves those elements, which the
+    // desktop recording never saw. A phone loop is placed only on an element the desktop layout does not have, so a
+    // shared element keeps the desktop's loop and nothing starts moving at a width where the original stood still.
+    let phoneLoopNodes = null;
+    const loopSources = [
+      ...(motion.loops?.loops ?? []).map((loop) => [loop, 'desktop']),
+      ...(motion.loopsMobile?.loops ?? []).map((loop) => [loop, 'mobile']),
+    ];
+    for (const [loop, loopView] of loopSources) {
+      if (loopView === 'desktop' && libraryOwned.has(loop.path)) {
         stats.loops.skipped.push({ pattern: loop.pattern, reason: 'library' });
         continue;
       }
-      let node = nodes.get(loop.path);
+      let map = nodes;
+      if (loopView === 'mobile') {
+        if (!phoneLoopNodes) {
+          phoneLoopNodes = new Map();
+          const walkPhone = (n) => {
+            if (!isElement(n)) return;
+            if (n.mpath) phoneLoopNodes.set(n.mpath, n);
+            for (const a of n.mpathAlt ?? []) if (!phoneLoopNodes.has(a)) phoneLoopNodes.set(a, n);
+            n.children.forEach(walkPhone);
+          };
+          walkPhone(tree.root);
+        }
+        map = phoneLoopNodes;
+      }
+      let node = map.get(loop.path);
       // A loop inside an inline SVG (dashes running along lines): the SVG is kept as markup, so the token goes on the
       // element inside it (the SVG sanitizer keeps data-* attributes) and the keyframes are rebuilt like any other loop.
-      const inSvg = node ? null : svgTarget(loop.path, nodes);
+      const inSvg = node ? null : svgTarget(loop.path, map);
       // A script that moves a shape or a text inside the SVG (its attributes or its transform) is rebuilt the same way.
       if (inSvg && !loop.pseudo && !loop.timeline && (loop.keyframes?.length >= 2 || loop.source === 'script')) node = inSvg.svg;
       if (!node) {
-        stats.loops.skipped.push({ pattern: loop.pattern, reason: 'unmapped' });
+        if (loopView === 'desktop') stats.loops.skipped.push({ pattern: loop.pattern, reason: 'unmapped' });
         continue;
+      }
+      if (loopView === 'mobile') {
+        // Drawn on the desktop too, or already moving: the desktop's loop (or none, as on the original) stands. An
+        // element only the phone layout draws may still be in the desktop's data, hidden or with no size.
+        const d = node.views?.desktop;
+        const drawnOnDesktop = !!d && !d.hidden && d.style?.display !== 'none' && (d.rect?.[2] ?? 0) * (d.rect?.[3] ?? 0) > 0;
+        if (drawnOnDesktop || (node.motionTokens ?? []).some((t) => /^l\d+$/.test(t))) continue;
+        stats.loops.phone = (stats.loops.phone ?? 0) + 1;
       }
       if (loop.timeline) {
         stats.loops.skipped.push({ pattern: loop.pattern, reason: 'scroll-linked' });
         continue;
       }
-      const own = loop.pseudo ? node.views.desktop?.[loop.pseudo === '::before' ? 'before' : 'after']?.style : node.views.desktop?.style;
+      const ownView = node.views?.[loopView] ?? node.views?.desktop;
+      const own = loop.pseudo ? ownView?.[loop.pseudo === '::before' ? 'before' : 'after']?.style : ownView?.style;
       if (!inSvg && loop.source === 'css-animation' && loop.inStylesheet && loop.name && String(own?.['animation-name'] ?? '').split(/,\s*/).includes(loop.name)) {
         stats.loops.carried++;
         continue;
@@ -975,8 +1010,14 @@ export function applyMotion(site, byPath, { owned = new Map() } = {}) {
           continue;
         }
         // An as-is page keeps the original SVG markup, not this rebuilt one: the token is carried there by this path.
-        svgTokens.push({ page: tree.info.outPath, path: loop.path, token: entry.token });
-      } else tokenize(node, entry.token);
+        if (loopView === 'desktop') svgTokens.push({ page: tree.info.outPath, path: loop.path, token: entry.token });
+        else viewTokens.push({ page: tree.info.outPath, view: loopView, path: loop.path, token: entry.token });
+      } else {
+        tokenize(node, entry.token);
+        // An as-is page keeps the phone layout's own markup (ir/asis.js data-sas-v): the token is carried into it by the
+        // phone view's path, since that element has no desktop path to be found by.
+        if (loopView !== 'desktop') viewTokens.push({ page: tree.info.outPath, view: loopView, path: loop.path, token: entry.token });
+      }
       stats.loops.rebuilt++;
     }
 
@@ -1253,6 +1294,7 @@ export function applyMotion(site, byPath, { owned = new Map() } = {}) {
     cssOnly: [...tokenSource].filter(([, t]) => t.css > 0 && t.other === 0).map(([token]) => token),
     // Loop tokens on elements inside inline SVGs, by capture path (for an as-is page's original SVG markup).
     ...(svgTokens.length && { svgTokens }),
+    ...(viewTokens.length && { viewTokens }),
     // The generated script is needed for the reveal (IntersectionObserver), the click widgets, the switched states, the
     // scroll states, the panels a click opens (dialogs the page only renders when open) and the hover cards (their
     // hovered look waits in a <template> until first pointed at); hover, focus and loops are CSS.

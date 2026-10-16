@@ -25,6 +25,17 @@
   .q { padding: 14px 0; border-bottom: 1px solid #e5e7eb; cursor: pointer; }
   .q p { margin: 0; font-weight: 600; }
   .a { overflow: hidden; height: 0; }
+  .item { padding: 14px 0; border-bottom: 1px solid #e5e7eb; cursor: pointer; }
+  .item p { margin: 0; font-weight: 600; }
+  .item .ans { margin-top: 8px; color: #4b5563; }
+  .grow { padding: 14px 0; border-bottom: 1px solid #e5e7eb; cursor: pointer; }
+  .grow p { margin: 0; font-weight: 600; }
+  .grow .ans2 { height: 0; overflow: hidden; transition: height 0.25s ease; color: #4b5563; }
+  .phone-only { display: none; padding: 24px; }
+  @media (max-width: 767px) { .phone-only { display: block; } }
+  .spinner { width: 120px; height: 40px; display: grid; place-items: center; background: #fde68a; border-radius: 8px; }
+  .slider { margin-top: 16px; width: 280px; height: 12px; background: #e5e7eb; border-radius: 6px; }
+  .knob { width: 40px; height: 12px; background: #c2410c; border-radius: 6px; }
   .proof { padding: 40px; height: 360px; overflow: hidden; }
   .stack { list-style: none; margin: 0; padding: 0; }
   .stack li { height: 100px; margin-bottom: 16px; border-radius: 12px; background: #fff7ed; border: 1px solid #fed7aa; padding: 16px; box-sizing: border-box; }
@@ -66,6 +77,22 @@
   <div class="q" tabindex="0"><p>What is the product?</p></div><div class="a"><p>A platform for teams.</p></div>
   <div class="q" tabindex="0"><p>Who is it built for?</p></div><div class="a"><p>Firms of every size.</p></div>
   <div class="q" tabindex="0"><p>Is it safe to use?</p></div><div class="a"><p>Yes, it is audited.</p></div>
+</section>
+<section class="faq faq2">
+  <h2>More questions</h2>
+  <div class="item" tabindex="0"><p>How do I get started?</p></div>
+  <div class="item" tabindex="0"><p>Can my whole team use it?</p></div>
+  <div class="item" tabindex="0"><p>Where is my data kept?</p></div>
+</section>
+<section class="faq faq3">
+  <h2>Pricing questions</h2>
+  <div class="grow" tabindex="0"><p>Is there a free plan?</p><div class="ans2"><div>A free plan covers one project forever.</div></div></div>
+  <div class="grow" tabindex="0"><p>Can I cancel any time?</p><div class="ans2"><div>Cancel from the settings page, no questions.</div></div></div>
+</section>
+<section class="phone-only">
+  <h2>On your phone</h2>
+  <div class="spinner">Syncing</div>
+  <div class="slider"><div class="knob"></div></div>
 </section>
 <footer></footer>
 <script>
@@ -137,6 +164,45 @@
       a.style.height = open ? '0px' : a.scrollHeight + 'px';
     });
   });
+
+  // 5b. A FAQ whose whole item is the clickable box, and whose answer is drawn inside it only while open (a framework
+  //     rendering it on demand), with a layout animation nudging the list as it grows - like a builder's FAQ component.
+  var answers = { 'How do I get started?': 'Create an account and invite your first project.', 'Can my whole team use it?': 'Yes, every plan includes unlimited seats.', 'Where is my data kept?': 'In data centres inside the country, encrypted.' };
+  [].slice.call(document.querySelectorAll('.item')).forEach(function (item) {
+    item.addEventListener('click', function () {
+      var open = item.querySelector('.ans');
+      if (open) open.remove();
+      else {
+        var a = document.createElement('div');
+        a.className = 'ans';
+        a.textContent = answers[item.querySelector('p').textContent];
+        item.appendChild(a);
+      }
+      item.parentElement.animate([{ transform: 'scaleY(0.999)' }, { transform: 'none' }], { duration: 300 });
+    });
+  });
+
+  // 5c. The same kind of item, but its answer is already inside it at height 0 and the script opens it to its height.
+  [].slice.call(document.querySelectorAll('.grow')).forEach(function (item) {
+    var a = item.querySelector('.ans2');
+    item.addEventListener('click', function () {
+      var open = a.style.height && a.style.height !== '0px';
+      a.style.height = open ? '0px' : a.scrollHeight + 'px';
+    });
+  });
+
+  // 7. A part only the phone layout draws: a spinner turned and a knob slid by script, every frame (the desktop never
+  //    shows them, so a desktop-only recording never sees them move).
+  var spinner = document.querySelector('.spinner');
+  var knob = document.querySelector('.knob');
+  var p0 = performance.now();
+  function phoneFrame(now) {
+    var t = (now - p0) / 1000;
+    spinner.style.transform = 'rotate(' + ((t * 120) % 360).toFixed(1) + 'deg)';
+    knob.style.transform = 'translateX(' + (120 + 110 * Math.sin(t * 2.5)).toFixed(1) + 'px)';
+    requestAnimationFrame(phoneFrame);
+  }
+  requestAnimationFrame(phoneFrame);
 
   // 6. Cards that cycle: the list steps up by one card every 1.2 s through a Web Animation, the card in front grows to full
   //    size and opacity while the others shrink - each card's scale and opacity set by script every frame.

@@ -17,7 +17,7 @@ export const FAST = [
  * three app stacks with the real toolchains unless SAS_SKIP_APP_STACKS=1). */
 export const FIXTURES = [
   'recreate-animation-lab', 'recreate-gsap', 'recreate-framer-appear-e2e', 'recreate-lift', 'recreate-hittest', 'recreate-visibility', 'recreate-video-tier',
-  'recreate-framer-patterns', 'recreate-clicks', 'reaudit-clicks', 'recreate-hover-toggle',
+  'recreate-framer-patterns', 'recreate-clicks', 'reaudit-clicks', 'recreate-hover-toggle', 'recreate-motion-calm',
 ];
 
 const suite = process.argv[2];
