@@ -142,7 +142,7 @@ export function runRecreate({ netPolicy = userPolicy(), ...opts }) {
 }
 
 async function recreate({
-  project, recreateId, progress, warnings = [], stages = STAGES, exact = false, unlimited = exact, signal: stopSignal = null,
+  project, recreateId, progress, warnings = [], stages = STAGES, exact = false, preserve = false, unlimited = exact, signal: stopSignal = null,
   // No limit means no limit: the job, every step and the time given back after a sleep are unbounded. SAS_RECREATE_MINUTES
   // still wins when the user set it, so a run can always be bounded. What keeps a run from hanging is unchanged and
   // stronger instead: every single page load, asset and render keeps its own limit, and a page that stalls is abandoned.
@@ -196,6 +196,7 @@ async function recreate({
     pageLimit: pageUrlOf(project) ? 0 : exact ? SITE_PAGE_CAP - 1 : pageLimitOf(project.recreate_pages),
     allPages: !pageUrlOf(project) && (exact || isAllPages(project.recreate_pages)),
     exact,
+    preserve,
     unlimited,
     // Without an overall limit a page is given much longer before it counts as stalled (inspect.js: max of this and
     // three times the slowest page so far), but it is still abandoned and retried rather than waited on for ever.

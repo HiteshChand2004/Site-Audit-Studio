@@ -495,7 +495,7 @@ export async function inspectStage(ctx) {
           ? new Promise((resolve) => { timer = setTimeout(() => resolve({ views: {}, errors: [{ view: 'desktop', message: 'the rebuilt page did not finish within the time left' }] }), left); })
           : new Promise(() => {});
         const result = await Promise.race([
-          (ctx.capturePage ?? capturePage)(browser, info, ctx.dir, { cache: ctx.netCache, exact: Boolean(ctx.exact), document })
+          (ctx.capturePage ?? capturePage)(browser, info, ctx.dir, { cache: ctx.netCache, exact: Boolean(ctx.exact), document, preserve: Boolean(ctx.preserve) })
             .catch((err) => ({ views: {}, errors: [{ view: 'desktop', message: String(err.message ?? err).split('\n')[0] }] })),
           cap,
         ]).finally(() => clearTimeout(timer));

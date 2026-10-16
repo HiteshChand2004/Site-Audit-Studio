@@ -81,6 +81,8 @@ router.post('/:id/recreate', async (req, res) => {
   }
   // `noLimit`: an ordinary run that is allowed to take as long as its work needs.
   if (req.body?.noLimit) payload.noLimit = true;
+  // `preserve`: an authorised project whose original parts are kept as they are (CLONER_SPEC): also fetches every picture and video.
+  if (req.body?.preserve === true) payload.preserve = true;
 
   try {
     const job = recreateJobs.start(project, payload, { warnings: analysisWarnings(analysis) });

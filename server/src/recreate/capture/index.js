@@ -15,6 +15,7 @@ import { captureLoops } from './loops.js';
 import { captureScrollLinked } from './scrolllinked.js';
 import { installRevealTracker, processReveal } from './reveal.js';
 import { snapshotPage } from './snapshot.js';
+import { recordVariants } from './variants.js';
 import { censusInteractive, coverageOf } from './census.js';
 import { captureNotices } from './notices.js';
 import { captureStates } from './states.js';
@@ -155,7 +156,7 @@ export async function settle(page, view, cap, { observe = false } = {}) {
   return { ...stats, scrolled: max };
 }
 
-async function captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs = 0, clickBudgetMs = 0, cache = null, exact = false, document = null }) {
+async function captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs = 0, clickBudgetMs = 0, cache = null, exact = false, document = null, preserve = false }) {
   const context = await browser.newContext({
     viewport: { width: view.width, height: view.height },
     deviceScaleFactor: view.dpr,
@@ -463,8 +464,13 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
 
     lap('motion');
 
+    // Preserve-original projects only (CLONER_SPEC): every picture and video the page offers, fetched AFTER the probes so
+    // no timing above depends on it. Capped in time and count, and skipped quietly when that runs out (capture/variants.js).
+    let variants = null;
+    if (preserve && view.id === 'desktop') variants = await recordVariants(page).catch((err) => ({ error: firstLine(err) }));
     const data = {
       view: view.id,
+      ...(variants && { variants }),
       ...(census && { census, coverage: coverageOf(census, motion) }),
       viewport: { width: view.width, height: view.height, dpr: view.dpr, mobile: view.mobile },
       status: response?.status() ?? 0,
@@ -542,7 +548,7 @@ export const motionFile = (viewId) => (viewId === 'desktop' ? 'motion.json' : `$
 // A view the site gave up on in time, rather than refusing: worth another try only when the run has no limit.
 const TIMED_OUT = /Timeout|timed out|ERR_TIMED_OUT|ERR_NETWORK_CHANGED|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED/i;
 
-export async function capturePage(browser, pageInfo, workspace, { timeout = 30000, motionBudgetMs = 0, clickBudgetMs = 0, cache = null, patient = false, exact = false, document = null } = {}) {
+export async function capturePage(browser, pageInfo, workspace, { timeout = 30000, motionBudgetMs = 0, clickBudgetMs = 0, cache = null, patient = false, exact = false, document = null, preserve = false } = {}) {
   const dir = captureDir(workspace, pageInfo.slug);
   await mkdir(dir, { recursive: true });
   // All views side by side when the machine has the memory for the loaded pages, fewer (never under two) when it is
@@ -551,7 +557,7 @@ export async function capturePage(browser, pageInfo, workspace, { timeout = 3000
   const wanted = viewsFor({ exact });
   const atOnce = parallelism({ max: wanted.length, min: 2 });
   const results = await mapLimit(wanted, atOnce, (view) =>
-    captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, clickBudgetMs, cache, exact, document }).then((value) => ({ status: 'fulfilled', value }), (reason) => ({ status: 'rejected', reason })));
+    captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, clickBudgetMs, cache, exact, document, preserve }).then((value) => ({ status: 'fulfilled', value }), (reason) => ({ status: 'rejected', reason })));
   const views = {};
   const errors = [];
   results.forEach((r, i) => {
@@ -574,7 +580,7 @@ export async function capturePage(browser, pageInfo, workspace, { timeout = 3000
       await new Promise((r) => setTimeout(r, RETRY_WAIT_MS * attempt));
       const view = VIEWS.find((v) => v.id === e.view);
       try {
-        views[e.view] = await captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, clickBudgetMs, cache, exact, document });
+        views[e.view] = await captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, clickBudgetMs, cache, exact, document, preserve });
         errors.splice(errors.indexOf(e), 1);
         retried++;
       } catch (err) {

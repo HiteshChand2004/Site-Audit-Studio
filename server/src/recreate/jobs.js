@@ -34,7 +34,7 @@ export const recreateJobs = new JobManager({
     const resumed = payload?.resumeFrom ? await resumeMode(project.id, payload.resumeFrom.recreateId) : null;
     const exact = payload?.exact ?? resumed?.exact ?? isExactMode(project);
     const report = await runRecreate({
-      project, recreateId: job.id, progress, warnings: job.warnings, signal, exact,
+      project, recreateId: job.id, progress, warnings: job.warnings, signal, exact, preserve: payload?.preserve === true,
       ...((payload?.noLimit || (payload?.exact === undefined && resumed?.unlimited)) && { unlimited: true }),
       ...(stages && { stages }), ...(payload?.resumeFrom && { resumeFrom: payload.resumeFrom }),
     });
