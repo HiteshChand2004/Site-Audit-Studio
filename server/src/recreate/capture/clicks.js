@@ -870,7 +870,7 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
   stats.exclusive = 0;
   const lists = new Map();
   for (const w of widgets) {
-    if (w.kind !== 'disclosure' || w.opensOn !== 'click' || !w.state || w.closes !== 'toggle' || !w.group?.sig) continue;
+    if (w.kind !== 'disclosure' || w.opensOn !== 'click' || w.closes !== 'toggle' || !w.group?.sig) continue;
     if (!lists.has(w.group.sig)) lists.set(w.group.sig, []);
     lists.get(w.group.sig).push(w);
   }
@@ -901,7 +901,158 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
       /* the list is left as found */
     }
   }
+  // Lists the check above could not settle (no shared signature: each question in a block of its own; or answers drawn
+  // only while open): read by what each click shows, with real clicks.
+  if (!left()) await sequenceDrawnPanels(page, widgets, picked, stats);
   return { version: 1, view: 'desktop', widgets, groups: picked.groups, noise, probedNames, stats: { ...stats, noise: noise.length, ms: Date.now() - started } };
+}
+
+/** Page function: whether each capture path still names an element with the text it had ([path, text] pairs). */
+function textAtPaths(pairs) {
+  const SKIP = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
+  const norm = (t) => String(t ?? '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  return pairs.every(([p, text]) => {
+    let el = document.body;
+    for (const part of p.split('>').slice(1)) {
+      const [tag, n] = part.split(':');
+      let k = 0;
+      let next = null;
+      for (const c of el ? el.children : []) {
+        if (SKIP.has(c.tagName) || c.tagName.toLowerCase() !== tag) continue;
+        if (++k === Number(n)) {
+          next = c;
+          break;
+        }
+      }
+      el = next;
+      if (!el) return false;
+    }
+    return !text || norm(el.getAttribute('aria-label') || el.textContent).startsWith(norm(text).slice(0, 20));
+  });
+}
+
+/** Page function: whether any of these capture paths names an element drawn now. */
+function anyDrawn(paths) {
+  const SKIP = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
+  const resolve = (p) => {
+    let el = document.body;
+    for (const part of p.split('>').slice(1)) {
+      const [tag, n] = part.split(':');
+      let k = 0;
+      let next = null;
+      for (const c of el ? el.children : []) {
+        if (SKIP.has(c.tagName) || c.tagName.toLowerCase() !== tag) continue;
+        if (++k === Number(n)) {
+          next = c;
+          break;
+        }
+      }
+      el = next;
+      if (!el) return null;
+    }
+    return el;
+  };
+  return paths.some((p) => {
+    const el = resolve(p);
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    return r.width > 1 && r.height > 1 && cs.visibility !== 'hidden' && cs.display !== 'none' && Number(cs.opacity) > 0.05;
+  });
+}
+
+/**
+ * The group behaviour of a list of questions whose answers the page draws only while open (no `state` to read): the
+ * probe clicked each on its own, which cannot tell an accordion from independent toggles. Here, with real clicks (a
+ * builder's tap handler ignores a script's el.click()): open A, open B - is A still open? - then A again - does it close?
+ * Questions are one list when their controls sit at the same place of the page's structure (a FAQ's items each in their
+ * own block have different parents, so the probe's group signature does not join them). The answer is read as what A's
+ * own click showed or added, drawn again. Records `exclusive` (the copy then closes the others: ir/states.js data-w-alone)
+ * and `sequence` on every member.
+ */
+async function sequenceDrawnPanels(page, widgets, picked, stats) {
+  const template = (p) => p.replace(/:\d+/g, ':#');
+  const openedBy = (w) => [...(w.change?.shown ?? []), ...(w.change?.added ?? [])].filter((x) => !x.inTrigger && !x.removed).map((x) => x.path);
+  const lists = new Map();
+  for (const w of widgets) {
+    if (w.exclusive !== undefined || w.kind !== 'disclosure' || w.opensOn !== 'click' || (w.closesOwn ?? w.closes) !== 'toggle' || !openedBy(w).length) continue;
+    const key = template(w.trigger);
+    if (!lists.has(key)) lists.set(key, []);
+    lists.get(key).push(w);
+  }
+  // A list the probe reached only one member of (its time ended first): the next control at the same place stands in, its
+  // answer where the probed one's is, relative to its own control (the paths differ only in the indices of their blocks).
+  const mapped = (w, trigger) => openedBy(w).map((o) => {
+    const t = w.trigger.split('>');
+    const p = o.split('>');
+    let d = 0;
+    while (d < t.length && d < p.length && t[d] === p[d]) d++;
+    return [...trigger.split('>').slice(0, d), ...p.slice(d)].join('>');
+  });
+  for (const [key, list] of lists) {
+    if (list.length !== 1) continue;
+    const other = picked.candidates.find((x) => x.path !== list[0].trigger && template(x.path) === key && x.i >= 0);
+    if (other) list.push({ trigger: other.path, text: other.text, standIn: true, opened: mapped(list[0], other.path) });
+  }
+  const click = async (w) => {
+    const i = picked.candidates.find((x) => x.path === w.trigger)?.i;
+    if (i == null || i < 0) return false;
+    const spot = await page.evaluate(aimClick, i).catch(() => null);
+    if (!spot) return false;
+    if (spot.reachable) await page.mouse.click(spot.x, spot.y);
+    else await page.evaluate(clickIndex, i);
+    await page.waitForTimeout(700);
+    return true;
+  };
+  const isOpen = (w) => page.evaluate(anyDrawn, w.opened ?? openedBy(w)).catch(() => false);
+  stats.sequenced = 0;
+  // The probe may have loaded the page again, and a section the builder draws only once scrolled into view is then
+  // missing: every path below it is one section off. Scrolled through once, as the capture did, when a control of a list
+  // does not resolve (the states step does the same).
+  const listed = [...lists.values()].filter((l) => l.length > 1).flat();
+  const inPlace = () => page.evaluate(textAtPaths, listed.map((w) => [w.trigger, w.text ?? ''])).catch(() => false);
+  if (listed.length && !(await inPlace())) {
+    const { scrollThrough, scrollToY } = await import('./index.js');
+    const vh = page.viewportSize()?.height ?? 900;
+    await scrollThrough(page, { step: Math.round(vh * 0.8), viewportHeight: vh, maxSteps: 120, maxMs: 30000, onStep: () => page.waitForTimeout(120) }).catch(() => {});
+    await scrollToY(page, 0).catch(() => {});
+    await page.waitForTimeout(600);
+    // The controls' indices were taken on the page before: find them again by path.
+    const again = await page.evaluate(installClicks, { limit: 200, perSignature: 200, hint: HINT_SOURCE }).catch(() => null);
+    const now = new Map((again?.candidates ?? []).map((x) => [x.path, x.i]));
+    for (const x of picked.candidates) x.i = now.has(x.path) ? now.get(x.path) : -1;
+  }
+  for (const list of lists.values()) {
+    if (list.length < 2) continue;
+    const [a, b] = list;
+    try {
+      if ((await isOpen(a)) || (await isOpen(b))) continue; // start from both closed, or the reading means nothing
+      if (!(await click(a)) || !(await isOpen(a))) continue;
+      if (!(await click(b)) || !(await isOpen(b))) {
+        await click(a);
+        continue;
+      }
+      const aAfterB = await isOpen(a);
+      // Close what is open again, A first: its own second click is the other half of the sequence.
+      let aClosesAgain = null;
+      if (aAfterB) {
+        await click(a);
+        aClosesAgain = !(await isOpen(a));
+      }
+      await click(b);
+      const sequence = { aStaysOpen: aAfterB, ...(aClosesAgain != null && { aClosesAgain }) };
+      for (const w of list.filter((x) => !x.standIn)) {
+        w.exclusive = !aAfterB;
+        w.sequence = sequence;
+        // Every control at the same place of the structure, probed or not (the probe's time may have ended first).
+        w.listPaths = [...new Set([...list.map((x) => x.trigger), ...picked.candidates.map((x) => x.path).filter((p) => template(p) === template(w.trigger))])];
+      }
+      if (!aAfterB) stats.exclusive++;
+      stats.sequenced++;
+    } catch {
+      /* the list is left as found */
+    }
+  }
 }
 
 /**

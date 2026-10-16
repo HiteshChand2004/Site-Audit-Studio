@@ -56,8 +56,9 @@ export const EXACT_PROBE_FACTOR = 15;
  * @param {number} need  what this probe and the ones beside it cost together
  * @param {{ spare: number, measured: boolean, exact?: boolean }} o
  */
-export function probeBudget(full, min, need, { spare, measured, exact = false }) {
-  if (exact) return full * EXACT_PROBE_FACTOR;
+export function probeBudget(full, min, need, { spare, measured, exact = false, unlimited = false }) {
+  // An exact copy, or any run the user let take as long as its work needs: the probes get their full, longer budget.
+  if (exact || unlimited) return full * EXACT_PROBE_FACTOR;
   if (spare <= 0) return 0;
   // Before any page has been measured the time that is left says little about what a page costs: the full budget
   // only when it clearly fits, as it was. From the second page on the share follows the time to spare.
@@ -293,7 +294,7 @@ export async function inspectStage(ctx) {
       // The budgets follow the time to spare instead of switching off at a threshold: a page with less time still gets
       // a shorter hover and click probe. A full budget needs twice what it costs, as before; below the floor the probe
       // is not worth its page load and is skipped.
-      const share = (full, min, need) => probeBudget(full, min, need, { spare, measured: pageMs.length > 0, exact: ctx.exact });
+      const share = (full, min, need) => probeBudget(full, min, need, { spare, measured: pageMs.length > 0, exact: ctx.exact, unlimited: ctx.unlimited });
       const capture = (ctx.capturePage ?? capturePage)(browser, info, ctx.dir, {
         motionBudgetMs: share(MOTION_BUDGET, MOTION_BUDGET_MIN, MOTION_BUDGET),
         clickBudgetMs: share(CLICK_BUDGET, CLICK_BUDGET_MIN, MOTION_BUDGET + CLICK_BUDGET),

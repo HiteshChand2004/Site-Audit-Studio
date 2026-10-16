@@ -999,11 +999,16 @@ export function applyMotion(site, byPath, { owned = new Map() } = {}) {
         if (loopView === 'desktop') stats.loops.skipped.push({ pattern: loop.pattern, reason: 'unmapped' });
         continue;
       }
+      // A phone loop on an element the merged tree shares with the desktop (drawn there too, or already moving): that
+      // element keeps the desktop's loop (or none, as on the original). But an exact copy keeps the phone layout's own
+      // markup (ir/asis.js data-sas-v), whose element there moves only by this token: it is carried there by the phone's
+      // path (viewTokens), never written on the shared element. An element only the phone layout draws may still be in
+      // the desktop's data, hidden or with no size.
+      let phoneMarkupOnly = false;
       if (loopView === 'mobile') {
-        // Drawn on the desktop too, or already moving: the desktop's loop (or none, as on the original) stands. An
-        // element only the phone layout draws may still be in the desktop's data, hidden or with no size.
-        if (drawnIn(node, 'desktop') || (node.motionTokens ?? []).some((t) => /^l\d+$/.test(t))) continue;
-        stats.loops.phone = (stats.loops.phone ?? 0) + 1;
+        phoneMarkupOnly = drawnIn(node, 'desktop') || (node.motionTokens ?? []).some((t) => /^l\d+$/.test(t));
+        if (phoneMarkupOnly) stats.loops.phoneMarkup = (stats.loops.phoneMarkup ?? 0) + 1;
+        else stats.loops.phone = (stats.loops.phone ?? 0) + 1;
       }
       if (loop.timeline) {
         stats.loops.skipped.push({ pattern: loop.pattern, reason: 'scroll-linked' });
@@ -1058,6 +1063,10 @@ export function applyMotion(site, byPath, { owned = new Map() } = {}) {
       if (!entry) {
         entry = { key, token: `l${reg.loops.length + 1}`, name: `m-l${reg.loops.length + 1}`, ...built };
         reg.loops.push(entry);
+      }
+      if (phoneMarkupOnly) {
+        viewTokens.push({ page: tree.info.outPath, view: loopView, path: loop.path, token: entry.token });
+        continue;
       }
       if (inSvg) {
         if (!tokenizeInSvg(inSvg.svg, inSvg.rest, entry.token)) {

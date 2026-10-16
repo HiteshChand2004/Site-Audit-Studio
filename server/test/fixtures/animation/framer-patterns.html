@@ -30,12 +30,16 @@
   .q { padding: 14px 0; border-bottom: 1px solid #e5e7eb; cursor: pointer; }
   .q p { margin: 0; font-weight: 600; }
   .a { overflow: hidden; height: 0; }
-  .item { padding: 14px 0; border-bottom: 1px solid #e5e7eb; cursor: pointer; }
+  .item, .acc { padding: 14px 0; border-bottom: 1px solid #e5e7eb; cursor: pointer; }
+  .acc p { margin: 0; font-weight: 600; }
+  .acc .ans { margin-top: 8px; color: #4b5563; }
   .item p { margin: 0; font-weight: 600; }
   .item .ans { margin-top: 8px; color: #4b5563; }
   .grow { padding: 14px 0; border-bottom: 1px solid #e5e7eb; cursor: pointer; }
   .grow p { margin: 0; font-weight: 600; }
   .grow .ans2 { height: 0; overflow: hidden; transition: height 0.25s ease; color: #4b5563; }
+  .vtrack { margin-top: 12px; width: 240px; height: 10px; background: #e5e7eb; border-radius: 5px; }
+  .vbar { width: 36px; height: 10px; background: #2563eb; border-radius: 5px; }
   .phone-only { display: none; padding: 24px; }
   @media (max-width: 767px) { .phone-only { display: block; } }
   .spinner { width: 120px; height: 40px; display: grid; place-items: center; background: #fde68a; border-radius: 8px; }
@@ -92,6 +96,12 @@
   <div class="item" tabindex="0"><p>How do I get started?</p></div>
   <div class="item" tabindex="0"><p>Can my whole team use it?</p></div>
   <div class="item" tabindex="0"><p>Where is my data kept?</p></div>
+</section>
+<section class="faq faq4">
+  <h2>Billing questions</h2>
+  <div class="accw"><div class="acc" tabindex="0"><p>When am I charged?</p></div></div>
+  <div class="accw"><div class="acc" tabindex="0"><p>Can I get an invoice?</p></div></div>
+  <div class="accw"><div class="acc" tabindex="0"><p>Which cards work?</p></div></div>
 </section>
 <section class="faq faq3">
   <h2>Pricing questions</h2>
@@ -197,6 +207,27 @@
     });
   });
 
+  // 5d. The same kind of item, one answer at a time: opening one removes the others' answers (an accordion), each item in
+  //     a block of its own, tap handlers only.
+  var accAnswers = { 'When am I charged?': 'On the first day of each month, in advance.', 'Can I get an invoice?': 'Every payment sends one to the billing address.', 'Which cards work?': 'Visa, Mastercard and RuPay are all accepted.' };
+  var accItems = [].slice.call(document.querySelectorAll('.acc'));
+  accItems.forEach(function (item) {
+    var down = false;
+    item.addEventListener('pointerdown', function () { down = true; });
+    item.addEventListener('pointerup', function () {
+      if (!down) return;
+      down = false;
+      var open = item.querySelector('.ans');
+      accItems.forEach(function (other) { var a = other.querySelector('.ans'); if (a) a.remove(); });
+      if (!open) {
+        var a = document.createElement('div');
+        a.className = 'ans';
+        a.textContent = accAnswers[item.querySelector('p').textContent];
+        item.appendChild(a);
+      }
+    });
+  });
+
   // 5c. The same kind of item, but its answer is already inside it at height 0 and the script opens it to its height.
   [].slice.call(document.querySelectorAll('.grow')).forEach(function (item) {
     var a = item.querySelector('.ans2');
@@ -231,8 +262,8 @@
   function renderSlot() {
     var phone = innerWidth < 600;
     vslot.innerHTML = phone
-      ? '<div class="vp"><div class="vq"><button class="vb" type="button">Get the app</button></div></div>'
-      : '<div class="vw"><span class="vt">Download</span><button class="vb" type="button">Get the app</button></div>';
+      ? '<div class="vp"><div class="vq"><button class="vb" type="button">Get the app</button></div><div class="vtrack"><div class="vbar"></div></div></div>'
+      : '<div class="vw"><span class="vt">Download</span><button class="vb" type="button">Get the app</button><div class="vtrack"><div class="vbar"></div></div></div>';
     var b = vslot.querySelector('.vb');
     b.style.backgroundColor = 'rgb(229, 231, 235)';
     b.addEventListener('mouseenter', function () { b.style.backgroundColor = 'rgb(37, 99, 235)'; });
@@ -240,6 +271,14 @@
   }
   renderSlot();
   addEventListener('resize', renderSlot);
+  // A bar slid by script in whichever version of the slot is on screen (each width version has its own copy of it).
+  var v0 = performance.now();
+  function slotFrame(now) {
+    var bar = vslot.querySelector('.vbar');
+    if (bar) bar.style.transform = 'translateX(' + (100 + 90 * Math.sin((now - v0) / 400)).toFixed(1) + 'px)';
+    requestAnimationFrame(slotFrame);
+  }
+  requestAnimationFrame(slotFrame);
 
   // 10. A section the builder draws only once the page has been scrolled into it: added before the first FAQ the first
   //     time the window passes it. A page loaded again and not scrolled lacks it, so every capture path below it is one

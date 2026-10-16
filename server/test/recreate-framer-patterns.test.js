@@ -95,6 +95,18 @@ async function look(url) {
         && getComputedStyle(d).visibility !== 'hidden');
       return el ? 1 : 0;
     }).join(''));
+    // The one-at-a-time list (answers drawn inside the item, tap handlers): which answers are shown after each step.
+    const accShown = () => page.evaluate(() => ['On the first day', 'Every payment sends', 'Visa, Mastercard'].map((t) => {
+      const el = [...document.querySelectorAll('div')].find((d) => d.children.length === 0 && d.textContent.startsWith(t) && d.getBoundingClientRect().height > 0
+        && getComputedStyle(d).visibility !== 'hidden');
+      return el ? 1 : 0;
+    }).join(''));
+    const acc = [await accShown()];
+    for (const q of ['When am I charged?', 'Can I get an invoice?', 'Can I get an invoice?', 'Which cards work?']) {
+      await page.getByText(q, { exact: true }).locator('visible=true').first().click();
+      await page.waitForTimeout(600);
+      acc.push(await accShown());
+    }
     const inline = [await shownAnswers()];
     for (const q of ['How do I get started?', 'Can my whole team use it?', 'How do I get started?', 'Can my whole team use it?']) {
       await page.getByText(q, { exact: true }).locator('visible=true').first().click();
@@ -133,10 +145,27 @@ async function look(url) {
       await page.waitForTimeout(500);
       menu.push(await menuShown());
     }
-    return { rest, hovered, back, x1, x2, d1, d2, c1, c2, faq: [closed, opened, shut], inline, grown, menu };
+    const bar = await barMoves(page);
+    return { rest, hovered, back, x1, x2, d1, d2, c1, c2, faq: [closed, opened, shut], inline, grown, menu, bar, acc };
   } finally {
     await page.close();
   }
+}
+
+
+/** Where the slid bar of the slot rendered per width stands (the 36 x 10 box), twice 400 ms apart. */
+async function barMoves(page) {
+  const at = () => page.evaluate(() => {
+    const bar = [...document.querySelectorAll('div')].find((d) => {
+      const r = d.getBoundingClientRect();
+      return !d.children.length && !d.textContent.trim() && r.width > 30 && r.width < 42 && r.height > 7 && r.height < 13 && getComputedStyle(d).backgroundColor === 'rgb(37, 99, 235)';
+    });
+    return bar ? Math.round(bar.getBoundingClientRect().left) : null;
+  });
+  await page.getByText('Get the app', { exact: true }).locator('visible=true').first().scrollIntoViewIfNeeded();
+  const a = await at();
+  await page.waitForTimeout(400);
+  return [a, await at()];
 }
 
 /** At phone width (390 px): the part only the phone layout draws - its spinner and knob, twice 500 ms apart. */
@@ -166,7 +195,8 @@ async function phoneLook(url) {
     await btn.hover();
     await page.waitForTimeout(700);
     const hovered = await bg();
-    return [a, b, rest, hovered];
+    const bar = await barMoves(page);
+    return [a, b, rest, hovered, bar];
   } finally {
     await page.close();
   }
@@ -192,12 +222,18 @@ async function checkCopy(origin, original, motion, report, label) {
   // 6. FAQ with the answer drawn inside the clicked item: opens, a second opens beside it, each closes again.
   const kinds = (motion.clicks?.widgets ?? []).filter((w) => /get started|whole team|data kept/.test(w.text ?? '')).map((w) => `${w.text}: ${w.kind} closes=${w.closes}`);
   assert.deepEqual(copy.inline, original.inline, `${label} inline FAQ ${copy.inline}; captured ${JSON.stringify(kinds)}`);
+  // 6b. The one-at-a-time list: opening one closes the other, as on the original.
+  const accKinds = (motion.clicks?.widgets ?? []).filter((w) => /charged|invoice|cards work/.test(w.text ?? '')).map((w) => `${w.text}: ${w.kind} exclusive=${w.exclusive} closes=${w.closes} own=${w.closesOwn} opened=${[...(w.change?.shown ?? []), ...(w.change?.added ?? [])].filter((x) => !x.inTrigger).length} trig=${w.trigger.slice(-30)}`).concat([JSON.stringify({ sequenced: motion.clicks?.stats?.sequenced, left: motion.clicks?.stats?.left, timedOut: motion.clicks?.stats?.timedOut })]);
+  assert.deepEqual(copy.acc, original.acc, `${label} one-at-a-time FAQ ${copy.acc}; captured ${JSON.stringify(accKinds)}`);
   // 7. FAQ whose answer is inside the item at height 0 and grows open.
   const grownKinds = (motion.clicks?.widgets ?? []).filter((w) => /free plan|cancel any/.test(w.text ?? '')).map((w) => `${w.text}: ${w.kind} closes=${w.closes}`);
   // 8. At phone width, the part only the phone layout draws keeps moving (its spinner turns, its knob slides).
   const phone = await phoneLook(origin);
   assert.notEqual(phone[0], 'missing', `${label}: the phone-only part is in the copy`);
   assert.notEqual(phone[0], phone[1], `${label} phone-only motion ${phone.slice(0, 2).join(' / ')}; skipped ${skipped}`);
+  // 11. The bar of the slot rendered per width keeps moving in its desktop version (1280 px) and its phone version (390 px).
+  assert.ok(copy.bar[0] != null && copy.bar[0] !== copy.bar[1], `${label} desktop-version bar ${copy.bar}`);
+  assert.ok(phone[4][0] != null && phone[4][0] !== phone[4][1], `${label} phone-version bar ${phone[4]}`);
   // 10. At phone width, the button of a slot rendered per width hovers like the original's. Exact-based copies only: an
   // ordinary copy's hover probe has a time budget, and on this busy page it does not reach that button at all.
   if (label !== 'normal') assert.equal(phone[3], original.phone[3], `${label} phone-version button hover: original ${original.phone[2]} -> ${original.phone[3]}, copy ${phone[2]} -> ${phone[3]}`);
@@ -218,11 +254,13 @@ async function originalOnce() {
   assert.notEqual(o.c1, o.c2, `original cards ${o.c1} / ${o.c2}`);
   assert.ok(o.faq[1] > o.faq[0] && o.faq[2] === o.faq[0], `original FAQ ${o.faq}`);
   assert.deepEqual(o.inline, ['000', '100', '110', '010', '000'], 'original inline FAQ');
+  assert.deepEqual(o.acc, ['000', '100', '010', '000', '001'], 'original one-at-a-time FAQ');
   assert.deepEqual(o.grown, ['00', '10', '11', '01', '00'], 'original growing FAQ');
   assert.deepEqual(o.menu, [0, 1, 0], 'original menu icon');
   const p = await phoneLook(`${site}/`);
   assert.notEqual(p[0], p[1], `original phone-only motion ${p.slice(0, 2).join(' / ')}`);
   assert.notEqual(p[3], p[2], 'the original phone-version button changes on hover');
+  assert.ok(p[4][0] !== p[4][1] && o.bar[0] !== o.bar[1], `original bars ${o.bar} / ${p[4]}`);
   o.phone = p;
   return (originalLook = o);
 }
@@ -231,7 +269,9 @@ async function build(mode) {
   const project = seedProject(db, { name: 'patterns', url: `${site}/`, recreatePages: -1, analysis: true });
   const recreateId = randomUUID();
   const report = await runRecreate({
-    project, recreateId, progress: () => {}, ...(mode === 'exact' && { exact: true }),
+    // No time limit in either mode: this page holds many patterns at once, and an ordinary run's probe budgets (a known,
+    // separate limit) would decide which of them are reached rather than how each one is handled.
+    project, recreateId, progress: () => {}, unlimited: true, ...(mode === 'exact' && { exact: true }),
     stages: { ...STAGES, ...skipStages('sweep', 'exactCapture', 'exact', 'responsive', 'stack') },
   });
   const dir = recreateDir(project.id, recreateId);

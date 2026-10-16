@@ -607,19 +607,22 @@ export function planSets(widgets, noise = []) {
     if (!area || area === 'body' || out.some((o) => o.area === area)) continue;
     // An accordion (the click probe saw opening one close the other, `exclusive`): the toggles of its list are one group,
     // and the copy closes the others when one opens (ir/states.js `data-w-alone`).
-    const one = w.exclusive && w.group?.paths?.length > 1 ? commonPath(w.group.paths) : null;
+    // The list the sequence probe found (clicks.js sequenceDrawnPanels), else the probe's group of equal controls.
+    const listMembers = w.listPaths ?? w.group?.paths;
+    const one = w.exclusive && listMembers?.length > 1 ? commonPath(listMembers) : null;
     out.push({ area, parts: [area], controls: [], nav: [], toggle: w.trigger, closes: w.closes, weigh: true, ...(one && { one }) });
     // The probe clicks a few members of a group of equal controls (the questions of a FAQ whose script renders an answer
     // only while it is open); the others work the same way in their own blocks, so each is planned too - left out, the
     // copy's later questions did nothing. Only a member at the same place in its own block, and only where the block is
     // the member's own (it holds no other member).
     const depth = w.trigger.split('>').length - area.split('>').length;
-    const members = (w.group?.paths ?? []).filter((p) => p !== w.trigger);
+    const members = (w.listPaths ?? w.group?.paths ?? []).filter((p) => p !== w.trigger);
     const spot = samePlace([w.trigger, ...members]);
-    if (!spot || depth < 1) continue;
+    // depth 0: the area is the control itself (an answer drawn inside the clicked box), so each member is its own area.
+    if (!spot || depth < 0) continue;
     for (const p of members) {
       if (!spot(p) || out.some((o) => o.toggle === p || o.controls.includes(p))) continue;
-      const own = p.split('>').slice(0, -depth).join('>');
+      const own = depth === 0 ? p : p.split('>').slice(0, -depth).join('>');
       if (!own || own === 'body' || out.some((o) => o.area === own) || members.some((m) => m !== p && m.startsWith(`${own}>`)) || w.trigger.startsWith(`${own}>`)) continue;
       out.push({ area: own, parts: [own], controls: [], nav: [], toggle: p, closes: w.closes, weigh: true, ...(one && { one }) });
     }
