@@ -139,8 +139,6 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   useEffect(() => {
     setMode(defaultPreviewMode(live));
   }, [audit?.analysisId, originalUrl, live.ok]);
-  // Live not available (the site blocks framing, or this app's own address): say so, and what is shown instead.
-  const originalNote = realOriginal ? unavailableNote(live, hasScreens) : null;
   // Scrolling together works on the picture of the original (the app cannot scroll a live site of another origin).
   const modeBefore = useRef(null);
   useEffect(() => {
@@ -179,6 +177,8 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   const pageHeight = result?.fidelity?.pages?.find((p) => p.outPath === page)?.views?.[view]?.height?.generated ?? null;
   const fullPage = sync && ready && pageHeight > 0;
   const realOriginal = audit && !audit.isDummy;
+  // Live not available (the site blocks framing, or this app's own address): say so, and what is shown instead.
+  const originalNote = realOriginal ? unavailableNote(live, hasScreens) : null;
   const fidByPage = new Map((result.fidelity?.pages ?? []).map((p) => [p.outPath, p]));
   const pageIndex = Math.max(0, pages.indexOf(page));
   // The copy's own pictures (taken when its match was measured), per screen size.
