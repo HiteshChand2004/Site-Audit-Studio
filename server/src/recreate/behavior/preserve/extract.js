@@ -158,6 +158,18 @@ export function filterCss(parsed, $, rootEl) {
   const blocks = [];
   for (const { root } of parsed) blocks.push(...walk(root.nodes));
 
+  // Names an inline style="" attribute uses (on the subtree and its ancestors): an animation written only there has no
+  // rule in any sheet, so its @keyframes would be dropped otherwise (makememo.ai's gradient text runs this way).
+  const inlineStyles = [];
+  $(rootEl).find('[style]').addBack('[style]').each((_i, el) => inlineStyles.push(el.attribs.style));
+  for (let n = rootEl.parent; n && n.attribs; n = n.parent) if (n.attribs.style) inlineStyles.push(n.attribs.style);
+  for (const style of inlineStyles) {
+    for (const decl of String(style).split(';')) {
+      const colon = decl.indexOf(':');
+      if (colon < 0) continue;
+      addUses(decl.slice(0, colon).trim().toLowerCase(), decl.slice(colon + 1), used);
+    }
+  }
   const keptKeyframes = [...keyframes].filter(([name]) => used.names.has(name)).map(([, css]) => css);
   const keptFontFaces = [...fontFaces].filter(([family]) => used.families.has(family)).map(([, css]) => css);
   const css = [...keptFontFaces, ...keptKeyframes, ...blocks].join('\n');
@@ -171,15 +183,17 @@ export function filterCss(parsed, $, rootEl) {
 
 /** Animation names and font families a kept rule uses (declarations only). */
 function collectUses(/** @type {any} */ rule, /** @type {{names:Set<string>, families:Set<string>}} */ used) {
-  rule.walkDecls((/** @type {any} */ decl) => {
-    const prop = decl.prop.toLowerCase();
-    if (prop === 'animation' || prop === 'animation-name') {
-      for (const token of decl.value.split(/[\s,]+/)) if (token) used.names.add(token);
-    }
-    if (prop === 'font-family') {
-      for (const f of decl.value.split(',')) used.families.add(f.trim().replace(/^['"]|['"]$/g, ''));
-    }
-  });
+  rule.walkDecls((/** @type {any} */ decl) => addUses(decl.prop.toLowerCase(), decl.value, used));
+}
+
+/** Records what one declaration uses: animation names, or font families. */
+function addUses(/** @type {string} */ prop, /** @type {string} */ value, /** @type {{names:Set<string>, families:Set<string>}} */ used) {
+  if (prop === 'animation' || prop === 'animation-name') {
+    for (const token of value.split(/[\s,]+/)) if (token) used.names.add(token);
+  }
+  if (prop === 'font-family') {
+    for (const f of value.split(',')) used.families.add(f.trim().replace(/^['"]|['"]$/g, ''));
+  }
 }
 
 /** @param {any} rule */
@@ -223,15 +237,29 @@ export function recordByUrl(recordIndex) {
   return map;
 }
 
-/** Every URL a component's markup and CSS load (resources only: images, fonts, media, stylesheets, scripts). */
+/** The kind of a resource, from the tag that loads it or its file extension. */
+export function kindOf(url, tag = '') {
+  if (tag === 'video' || tag === 'audio') return 'media';
+  if (tag === 'link') return 'style';
+  if (/\.(woff2?|ttf|otf|eot)(\?|$)/i.test(url)) return 'font';
+  if (/\.(mp4|webm|mov|m4v|ogv|mp3|wav|ogg)(\?|$)/i.test(url)) return 'media';
+  return 'image';
+}
+
+/**
+ * Every URL a component's markup and CSS load (images, media, fonts, stylesheets). A srcset candidate is flagged: the
+ * browser may never have loaded it. Each URL carries its kind (kindOf).
+ * @returns {{ url: string, candidate: boolean, kind: string }[]}
+ */
 export function resourceUrls(markup$, rootEl, css, base) {
-  /** @type {Map<string, boolean>} url → true when it is only a srcset candidate (the browser may never have loaded it) */
+  /** @type {Map<string, { candidate: boolean, kind: string }>} */
   const urls = new Map();
-  const add = (/** @type {string} */ raw, candidate = false) => {
+  const add = (/** @type {string} */ raw, { candidate = false, tag = '' } = {}) => {
     if (!raw || /^(data|blob|javascript|#)/i.test(raw.trim())) return;
     try {
       const url = new URL(raw.trim(), base).href.split('#')[0];
-      urls.set(url, (urls.get(url) ?? true) && candidate);
+      const prev = urls.get(url);
+      urls.set(url, { candidate: (prev?.candidate ?? true) && candidate, kind: prev?.kind ?? kindOf(url, tag) });
     } catch {
       // Not a URL: nothing to load.
     }
@@ -239,13 +267,14 @@ export function resourceUrls(markup$, rootEl, css, base) {
   const $ = markup$;
   $(rootEl).find('img, source, video, audio, iframe, use, image, link[rel="stylesheet"], link[rel~="preload"]').addBack().each((_i, el) => {
     const node = $(el);
-    if (node.attr('src')) add(node.attr('src'));
-    if (node.attr('poster')) add(node.attr('poster'));
-    if (node.attr('href') && (el.name === 'use' || el.name === 'image' || el.name === 'link')) add(node.attr('href'));
-    for (const part of (node.attr('srcset') ?? '').split(',')) add(part.trim().split(/\s+/)[0], true);
+    const tag = el.name;
+    if (node.attr('src')) add(node.attr('src'), { tag });
+    if (node.attr('poster')) add(node.attr('poster'), { tag: 'img' });
+    if (node.attr('href') && (tag === 'use' || tag === 'image' || tag === 'link')) add(node.attr('href'), { tag });
+    for (const part of (node.attr('srcset') ?? '').split(',')) add(part.trim().split(/\s+/)[0], { candidate: true, tag });
   });
   for (const m of css.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g)) add(m[2]);
-  return [...urls].map(([url, candidate]) => ({ url, candidate }));
+  return [...urls].map(([url, v]) => ({ url, candidate: v.candidate, kind: v.kind }));
 }
 
 /**

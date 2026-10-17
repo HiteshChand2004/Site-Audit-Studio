@@ -146,15 +146,17 @@ export function driverOf(component, scripts) {
   if (!kinds.includes('script')) {
     return { available: 'css', runtime: null, note: 'CSS rules, keyframes and transitions the page declared: copied as they are' };
   }
-  const lift = scripts.filter((s) => s.status === 'lift-candidate' || s.status === 'measure');
-  if (lift.length) {
-    return { available: 'lift-candidate', runtime: null, note: `script-driven: ${lift.length} page script(s) may drive it (a library or the site's own); step (b) measures which` };
-  }
+  // A library the page loads is a candidate first; then the runtime that moves the part (never lifted); then the scripts
+  // whose role measurement must decide. The page's scripts are not tied to one component yet (step b measures that).
+  const libraries = scripts.filter((s) => s.status === 'lift-candidate');
+  if (libraries.length) return { available: 'lift-candidate', runtime: null, note: `a library the page loads may drive it (${libraries.map((s) => s.lib ?? 'library').join(', ')}); step (b) measures which` };
   const runtime = scripts.find((s) => s.status === 'not-lifted');
   if (runtime) {
     const name = /_next\//.test(runtime.url) ? 'Next.js' : /framer/i.test(runtime.url) ? 'Framer' : 'site framework';
     return { available: 'runtime', runtime: name, note: `driven by the ${name} runtime, which is never lifted: a lift of its chunk in isolation, or keep the rebuild` };
   }
+  const measured = scripts.filter((s) => s.status === 'measure');
+  if (measured.length) return { available: 'measure', runtime: null, note: `${measured.length} unknown script(s) the page loads: measurement decides what, if anything, drives it` };
   return { available: 'none', runtime: null, note: 'script-driven, but no script the copy could carry was found' };
 }
 

@@ -32,7 +32,7 @@ export function collectSignals(motion, extra = {}) {
   const out = [];
   const add = (/** @type {Signal} */ s) => s.path && out.push(s);
   for (const l of motion?.loops?.loops ?? []) {
-    add({ kind: 'loop', driver: l.source === 'script' ? 'script' : 'css', path: l.path, detail: `${l.source}/${l.pattern}` });
+    add({ kind: 'loop', driver: l.source === 'script' ? 'script' : 'css', path: l.path, detail: `${l.source}/${l.pattern}`, playState: l.timing?.playState ?? null });
   }
   for (const e of motion?.reveal?.elements ?? []) {
     const declared = e.timing?.source === 'transition' || e.timing?.source === 'animation';

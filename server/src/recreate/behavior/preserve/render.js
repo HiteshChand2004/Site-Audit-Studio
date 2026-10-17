@@ -127,7 +127,12 @@ export async function fileList(dir) {
 
 /** Whether a stored copy file refers to an absolute address (an http(s) URL): a copy must not. */
 export function absoluteRefs(text) {
-  return [...text.matchAll(/(?:src|href|srcset|poster)\s*=\s*["']\s*https?:\/\/[^"']+|url\(\s*["']?https?:\/\/[^)"']+/gi)].map((m) => m[0]);
+  return [...text.matchAll(/(?:src|srcset|poster)\s*=\s*["']\s*https?:\/\/[^"']+|url\(\s*["']?https?:\/\/[^)"']+/gi)].map((m) => m[0]);
+}
+
+/** Absolute links (<a href>) to other addresses: not requests, reported apart (the visitor may follow them). */
+export function absoluteLinks(text) {
+  return [...text.matchAll(/<a\b[^>]*\shref\s*=\s*["']\s*https?:\/\/[^"']+/gi)].map((m) => m[0].replace(/^.*href\s*=\s*["']\s*/i, ''));
 }
 
 /** Steps of a capture path below its root: `body>section:1>div:2` under `body>section:1` → [`div:2`]. */
@@ -178,7 +183,8 @@ export async function renderComponent({ browser, dir, component, manifest, basel
     await page.waitForTimeout(600);
 
     // Loops: how many CSS animations of this component are running (the capture recorded them as declared).
-    const expectedLoops = (manifest.signals ?? []).filter((s) => s.kind === 'loop' && s.driver === 'css').length;
+    // Only the loops that ran in the original: a loop the original left paused (waiting for a trigger) must stay paused.
+    const expectedLoops = (manifest.signals ?? []).filter((s) => s.kind === 'loop' && s.driver === 'css' && s.playState !== 'paused').length;
     const running = await page.evaluate(() => {
       const root = document.querySelector('[data-sas-root]');
       if (!root) return -1;
@@ -223,6 +229,7 @@ export async function renderComponent({ browser, dir, component, manifest, basel
     const reference = await referenceRect(baselineDir, width, component.rect).catch(() => null);
     let diffPct = null;
     let refPng = null;
+    await mkdir(outDir, { recursive: true });
     if (reference) {
       // Both to the copy's size (the rectangle is rounded to whole pixels).
       const ref = await sharp(reference.data, { raw: { width: reference.width, height: reference.height, channels: 3 } })
@@ -231,11 +238,10 @@ export async function renderComponent({ browser, dir, component, manifest, basel
       refPng = path.join(outDir, `${component.id}-original.png`);
       await sharp(ref, { raw: { width: copyRaw.info.width, height: copyRaw.info.height, channels: 3 } }).png().toFile(refPng);
     }
-    await mkdir(outDir, { recursive: true });
     const copyFile = path.join(outDir, `${component.id}-copy.png`);
     await writeFile(copyFile, shot);
 
-    const leakOfCopy = await leakScan(dir);
+    const { hits: leakOfCopy, links: externalLinks } = await leakScan(dir);
     return {
       id: component.id,
       root: component.root,
@@ -243,6 +249,7 @@ export async function renderComponent({ browser, dir, component, manifest, basel
       leaks: leaks.length,
       leakSamples: leaks.slice(0, 5),
       copyLinks: leakOfCopy,
+      externalLinks,
       pageErrors: errors.slice(0, 5),
       diffPct,
       referenceCovered: Boolean(reference),
@@ -264,16 +271,18 @@ export function normalize(value) {
   }).toLowerCase();
 }
 
-/** Absolute references left in the copy's own files (must be none). */
+/** Absolute references left in the copy's own files: resources it would request (the leaks), and links it would follow. */
 async function leakScan(dir) {
   const hits = [];
+  let links = 0;
   for (const file of await fileList(dir)) {
     if (!/\.(html|css)$/i.test(file)) continue;
     const text = await readFile(file, 'utf8');
     const found = absoluteRefs(text);
+    links += absoluteLinks(text).length;
     if (found.length) hits.push({ file: path.relative(dir, file), count: found.length, sample: found[0].slice(0, 120) });
   }
-  return hits;
+  return { hits, links };
 }
 
 /**
