@@ -4,7 +4,7 @@
 //   react-vite  public/ holds the copy; vite build copies it unchanged to dist/ (the entry is an empty file, never bundled)
 //   next        public/ holds the copy; next start serves it as static files, and the app router renders nothing
 //   mern        client/dist holds the copy; the Express server serves it (compression, types, headers) and keeps the form API
-import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,6 +41,17 @@ const HOST_SLUG = (pageUrl) => {
   } catch { /* keep the default */ }
   return host.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'site';
 };
+
+/** Every file under a folder, as paths relative to it ("static/app.js"). */
+async function listFilesUnder(dir, rel = '') {
+  const out = [];
+  for (const e of await readdir(path.join(dir, rel), { withFileTypes: true }).catch(() => [])) {
+    const r = rel ? `${rel}/${e.name}` : e.name;
+    if (e.isDirectory()) out.push(...(await listFilesUnder(dir, r)));
+    else out.push(r);
+  }
+  return out;
+}
 
 /** The lifted copy, copied with everything in it (its own files, sw.js, robots.txt). */
 async function copyLifted(copyDir, dest) {
@@ -162,12 +173,23 @@ export default defineConfig({
       dependencies: { next: v.dependencies.next, react: v.dependencies.react, 'react-dom': v.dependencies['react-dom'] },
       overrides: { 'framer-motion': '13.4.6', 'motion-dom': '13.4.5', 'motion-utils': '13.3.0' },
     }, null, 2)}\n`);
+    // Next.js refuses a public/_next folder (it is its own route). A Next.js site's own files live under _next: they are kept
+    // in public/next-assets, and the addresses /_next/… are rewritten to them, so the copy's own text is not changed.
+    const movesNext = await stat(path.join(copyDir, '_next')).then((s) => s.isDirectory(), () => false);
+    // Only the files the copy holds under _next are rewritten, one rule each: Next's own /_next files (its chunks, its error
+    // pages) stay Next's. A name the Next router would read as a pattern (brackets, stars) cannot be written as a rule.
+    const copiedNext = movesNext ? await listFilesUnder(path.join(copyDir, '_next')) : [];
+    const routable = copiedNext.filter((rel) => /^[A-Za-z0-9._\-/]+$/.test(rel));
+    const nextRewrites = [
+      { source: '/', destination: '/index.html' },
+      ...routable.map((rel) => ({ source: `/_next/${rel}`, destination: `/next-assets/${rel}` })),
+    ];
     await put('next.config.mjs', `// Static files first: next start serves public/ before any route, so the copy is never run through React.
 const nextConfig = {
   poweredByHeader: false,
   // The copy's home page is public/index.html: a rewrite answers the root address with it (static files are matched by their own path).
   async rewrites() {
-    return { beforeFiles: [{ source: '/', destination: '/index.html' }] };
+    return { beforeFiles: ${JSON.stringify(nextRewrites)} };
   },
   compress: true,
   async headers() {
@@ -186,6 +208,7 @@ export default nextConfig;
     await put('app/layout.jsx', `export default function RootLayout({ children }) {\n  return <html lang="en"><body>{children}</body></html>;\n}\n`);
     await put('app/not-found.jsx', `export default function NotFound() {\n  return <main><h1>Not found</h1><p><a href="/">Back to the home page</a></p></main>;\n}\n`);
     await copyLifted(copyDir, path.join(outDir, 'public'));
+    if (movesNext) await rename(path.join(outDir, 'public', '_next'), path.join(outDir, 'public', 'next-assets'));
     await put('README.md', readme({
       title: `${slug} — Next.js`, stack: `Next.js ${v.dependencies.next} (App Router; the copy is static files, not rendered by React)`, slug,
       install: '```sh\nnpm install\n```',
