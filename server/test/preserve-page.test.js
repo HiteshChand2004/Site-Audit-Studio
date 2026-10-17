@@ -181,3 +181,33 @@ test('inline styles: a font source in a <style> block and a url() in a style att
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('module scripts run in the copy: a .mjs runtime is served as JavaScript and executes', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sas-mjs-'));
+  try {
+    const net = path.join(root, '.network');
+    await mkdir(path.join(net, 'files'), { recursive: true });
+    const MOD = 'window.__moduleRan = true;';
+    const DOC = '<!doctype html><html><head></head><body><script type="module" src="https://site.test/_next/static/chunks/runtime.mjs"></script></body></html>';
+    for (const b of [DOC, MOD]) await writeFile(path.join(net, 'files', sha(b)), b);
+    await writeFile(path.join(net, 'index.json'), JSON.stringify({ version: 1, entries: [
+      { url: SITE, status: 200, kind: 'document', type: 'text/html', sha: sha(DOC) },
+      { url: 'https://site.test/_next/static/chunks/runtime.mjs', status: 200, kind: 'script', type: 'text/javascript', sha: sha(MOD) },
+    ] }));
+    const out = path.join(root, 'copy');
+    await liftPage({ captureRoot: root, pageUrl: SITE, outDir: out, fetch: false });
+    const server = await serveFolder(out);
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      await page.goto(`${server.url}index.html`, { waitUntil: 'load', timeout: 60000 });
+      await page.waitForTimeout(400);
+      assert.equal(await page.evaluate(() => window.__moduleRan === true), true, 'the module ran');
+    } finally {
+      await context.close();
+      await server.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
