@@ -72,6 +72,8 @@ export const STEPS = [
 // What each page beyond BASE_PAGES adds to the whole job, and to the time the capture keeps for the steps after it.
 /** The steps an "Original as-is" copy runs (the rest are finished at once): the capture and the as-is stage. */
 export const ASIS_STEP_KEYS = new Set(['inspect', 'generate']);
+/** The as-is stage's own limit (ms): lift, build, checks and Lighthouse of a two-page copy took about seven minutes in a run. */
+export const AS_IS_STAGE_MS = 40 * 60000;
 /** A repack (another stack from a lifted copy that is kept): only the as-is stage. */
 export const ASIS_REPACK_KEYS = new Set(['generate']);
 const JOB_PER_PAGE = STEPS.reduce((n, s) => n + (s.perPage ?? 0), 0);
@@ -192,7 +194,8 @@ async function recreate({
   }
   // The as-is copy's own stage replaces the copy's generate step; no other copy step runs (see the step loop below).
   if (asIs) stages = { ...stages, generate: asIsStage };
-  const checkpoint = openCheckpoint(dir, { recreateId, analysisId: analysis.id, saved, auto: Boolean(resumeFrom?.auto), mode: { exact, unlimited } });
+  // The checkpoint keeps the mode, the as-is copy's included: a resume continues the same kind of copy.
+  const checkpoint = openCheckpoint(dir, { recreateId, analysisId: analysis.id, saved, auto: Boolean(resumeFrom?.auto), mode: { exact, unlimited, ...(asIs && { asIs: { stack: asIs.stack, pages: asIs.pages } }) } });
   const ctx = {
     project,
     recreateId,
@@ -393,7 +396,9 @@ async function recreate({
     }
     // No overall limit means no step limit either: a step ends when its work is done. (A stalled page is still
     // abandoned, and every network and render operation keeps its own limit.)
-    const limit = unlimited ? Infinity : Math.min(def.max + ctx.pageScale * (def.perPage ?? 0), remaining);
+    // The as-is stage (lift, build, checks, Lighthouse) takes longer than a clean copy's generate step: its own limit.
+    const stepMax = asIs && def.key === 'generate' ? AS_IS_STAGE_MS : def.max;
+    const limit = unlimited ? Infinity : Math.min(stepMax + ctx.pageScale * (def.perPage ?? 0), remaining);
     // A stage may use the deadline to wind down on its own (skip remaining work) before the hard timeout. A background
     // stage gets its own deadline and progress as its second argument: the shared ones belong to the step in front.
     const local = { stepDeadline: Date.now() + limit, progress: (fraction, message) => progress(def.key, fraction, message) };

@@ -91,6 +91,8 @@ export async function asIsStage(ctx) {
       await mkdir(path.dirname(copyDir), { recursive: true });
       await cp(path.join(fromDir, ASIS_DIR, 'copy'), copyDir, { recursive: true });
     } else {
+      // The record is written when the job ends; the lift needs it now (every page's document), so it is saved here first.
+      await ctx.netCache?.record?.save?.().catch(() => {});
       ctx.progress(0.05, 'Excluding the parts that are not the site');
       excludedHosts = await excludedHostsOf(captureRoot, siteUrl);
       ctx.progress(0.1, 'Lifting the pages');

@@ -33,12 +33,15 @@ export const recreateJobs = new JobManager({
     // A resume continues the way the stopped run was started (its checkpoint's mode) unless this request says otherwise.
     const resumed = payload?.resumeFrom ? await resumeMode(project.id, payload.resumeFrom.recreateId) : null;
     const exact = payload?.exact ?? resumed?.exact ?? isExactMode(project);
+    // The as-is copy of this job: the request's, or the one its checkpoint kept when it is resumed.
+    const asIsMode = payload?.asIs ?? resumed?.asIs ?? null;
     const report = await runRecreate({
       project, recreateId: job.id, progress, warnings: job.warnings, signal, exact, preserve: payload?.preserve === true,
-      ...((payload?.noLimit || (payload?.exact === undefined && resumed?.unlimited)) && { unlimited: true }),
+      // An as-is copy has no overall time limit (its stage has its own, index.js AS_IS_STAGE_MS); a resume keeps it as-is.
+      ...((payload?.noLimit || (payload?.exact === undefined && resumed?.unlimited) || asIsMode) && { unlimited: true }),
       ...(stages && { stages }), ...(payload?.resumeFrom && { resumeFrom: payload.resumeFrom }),
       // A repack names the job whose lifted copy it reuses (its folder is read by the stage, behavior/preserve/stage.js).
-      ...(payload?.asIs && { asIs: payload.asIs.from ? { ...payload.asIs, fromDir: recreateDir(project.id, payload.asIs.from) } : payload.asIs }),
+      ...(asIsMode && { asIs: asIsMode.from ? { ...asIsMode, fromDir: recreateDir(project.id, asIsMode.from) } : asIsMode }),
     });
     // The preview is runtime state: its port is not part of the report. The app asks for it
     // (GET/POST /preview), which also starts it again after a server restart. The stack's own build when the job built it.
