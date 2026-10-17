@@ -533,9 +533,59 @@ function analytics(d, f, pageNo, total) {
   return `${head}<div class="body" id="numbers">${blocks.join('')}<p class="end">Every check, page and value is in the JSON download.</p></div>${footer(d, pageNo, total)}`;
 }
 
+/**
+ * The "Original as-is" page: the mode, what the checks found on each page, what was left out on purpose, what needs a person,
+ * the JavaScript the copy ships and Lighthouse before and after. It says plainly that this mode delivers the original's code.
+ */
+function asIsPage(d, f, pageNo, total) {
+  const a = d.recreate.asIs;
+  const stackName = { html: 'Plain HTML', 'react-vite': 'React + Vite', nextjs: 'Next.js', mern: 'MERN' }[a.stack] ?? a.stack;
+  const pages = a.checks?.pages ?? [];
+  const kb = (n) => `${Math.round((n ?? 0) / 1024).toLocaleString('en-US')} KB`;
+  const head = `<header class="minihead">${logoTile(f, d.project.name, 'logo sm')}<span>${esc(d.project.name || hostOf(d.project.url))}</span><em>Original as-is</em></header>`;
+  const mode = card('Mode used', 'Original as-is', `Packaged as ${stackName} · ${pages.length} page${pages.length === 1 ? '' : 's'}`,
+    `<p>This mode delivers the original's own code and animations, saved locally. The code is the original's, not new code in the chosen stack.</p>`
+    + `<p>Pages: ${pages.map((p) => `<span class="mono">${esc(p.path)}</span>`).join(', ') || '—'}</p>`);
+  const rows = pages.map((p) => {
+    const visual = Object.fromEntries((p.visual ?? []).map((v) => [v.width, v.diffPct]));
+    const off = p.offline?.external?.length ?? 0;
+    const err = p.offline?.errors?.length ?? 0;
+    return `<tr><td class="mono">${esc(p.path)}</td><td>${off ? `${off} off the copy` : 'none leave the copy'}</td>`
+      + `<td>${esc(visual[1440] ?? '—')}%</td><td>${esc(visual[390] ?? '—')}%</td>`
+      + `<td>${p.hovers ? `${p.hovers.copy.changed} of ${p.hovers.original.changed}` : '—'}</td>`
+      + `<td>${p.controls ? `${p.controls.copy.visible} of ${p.controls.original.visible} visible` : '—'}</td><td>${err}</td></tr>`;
+  }).join('');
+  const checks = card('Checks', 'What the copy was checked for', 'Cold first visit, visual difference against the original, hovers, controls and console errors.',
+    `<table class="asis"><thead><tr><th>Page</th><th>Cold first visit</th><th>Visual 1440</th><th>Visual 390</th><th>Hovers (copy / original)</th><th>Controls</th><th>Console errors</th></tr></thead><tbody>${rows}</tbody></table>`);
+  const excluded = a.excludedByRule ?? [];
+  const gaps = pages.flatMap((p) => (p.controls?.excludedByRule ?? []).map((c) => `${esc(c.label)} on ${esc(p.path)}`));
+  const left = card('Left out on purpose', 'Excluded by rule', 'Third-party parts that are not the site: trackers, chat widgets, the builder’s editor.',
+    excluded.length || gaps.length
+      ? `<ul>${excluded.length ? `<li>Scripts left out: ${esc(excluded.join(', '))}</li>` : ''}${gaps.map((g) => `<li>${g} (a fixed-position widget whose script is excluded)</li>`).join('')}</ul>`
+      : '<p>Nothing was left out.</p>');
+  const forms = a.needsAPerson?.length ? a.needsAPerson[0].count : 0;
+  const person = card('Needs a person', 'What needs connecting', 'Forms are drawn and checked as on the original; their data is never sent to the original site.',
+    forms
+      ? `<p>${forms} form${forms === 1 ? '' : 's'}: until a server is connected, submitting shows “This form is not connected yet, so nothing was sent.” Set <span class="mono">FORM_ENDPOINT</span> in <span class="mono">sas-forms.json</span> (see the README in the download). No rebuild is needed.</p>`
+      : '<p>No form needs a server.</p>');
+  const lh = a.lighthouse ?? {};
+  const after = lh.after ?? null;
+  const before = lh.before ?? null;
+  const speed = card('Speed and size', 'JavaScript and Lighthouse, desktop', 'The original’s score comes from the project’s Check; the copy’s from one run of this copy.',
+    `<p>JavaScript shipped: ${a.javascript ? `${a.javascript.files} file(s), ${kb(a.javascript.bytes)}, ${kb(a.javascript.gzipBytes)} compressed` : 'not measured'}.</p>`
+    + (after && !lh.error
+      ? `<table class="asis"><thead><tr><th></th><th>Performance</th><th>SEO</th><th>Accessibility</th><th>Best practices</th></tr></thead><tbody>`
+        + `<tr><td>Original</td>${before ? `<td>${esc(before.performance)}</td><td>${esc(before.seo)}</td><td>${esc(before.accessibility)}</td><td>${esc(before.bestPractices)}</td>` : '<td colspan="4">Not measured: run the Check on this site first.</td>'}</tr>`
+        + `<tr><td>Copy</td><td>${esc(after.performance)}</td><td>${esc(after.seo)}</td><td>${esc(after.accessibility)}</td><td>${esc(after.bestPractices)}</td></tr></tbody></table>`
+      : `<p>Lighthouse: ${lh.error ? `not measured (${esc(lh.error)})` : 'not measured'}.</p>`));
+  return `${head}<div class="body" id="as-is">${mode}${checks}${left}${person}${speed}</div>${footer(d, pageNo, total)}`;
+}
+
 // ---- Styles -----------------------------------------------------------------------------------------------------
 
 const CSS = `
+table.asis { width: 100%; border-collapse: collapse; font-size: 11px; }
+table.asis th, table.asis td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
 @page{size:A4;margin:0}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
@@ -663,9 +713,11 @@ h1,h2,h3,p{margin:0}
  */
 export function renderReportHtml(d) {
   const f = facts(d);
-  const total = f.a ? 2 : 1;
+  const asIs = Boolean(d.recreate?.asIs);
+  const total = (f.a ? 2 : 1) + (asIs ? 1 : 0);
   const pages = [cover(d, f, total)];
   if (f.a) pages.push(analytics(d, f, 2, total));
+  if (asIs) pages.push(asIsPage(d, f, total, total));
   const title = `${d.project.name || hostOf(d.project.url)} · Website report`;
   return `<!doctype html>
 <html lang="en">
