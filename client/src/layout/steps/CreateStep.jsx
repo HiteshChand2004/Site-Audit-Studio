@@ -5,7 +5,7 @@ import { Alert, Card } from '../../components/common/Surface.jsx';
 import SectionCard from '../../components/common/SectionCard.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import StackOutput from '../../components/recreate/StackOutput.jsx';
-import AsIsChoice from '../../components/recreate/AsIsChoice.jsx';
+import AsIsChoice, { ASIS_STACK_CHOICES } from '../../components/recreate/AsIsChoice.jsx';
 import { BrowserShot } from '../../components/site/Site.jsx';
 import { copyShot } from '../../siteData.js';
 import { RECREATE_STACKS, stackById } from '../../constants.js';
@@ -123,6 +123,21 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
             <dd className="mono">{project.target_domain || 'Same as the original'}</dd>
           </div>
         </dl>
+        {result?.asIs && !running && (
+          <div className={ws.actions}>
+            <span className={ws.hint}>Package the same lifted copy in another stack (nothing is captured or lifted again):</span>
+            {ASIS_STACK_CHOICES.filter((s) => s.id !== result.asIs.stack).map((s) => (
+              <Button
+                key={s.id}
+                icon={Sparkles}
+                disabled={Boolean(blocker)}
+                onClick={() => recreate(project.id, { mode: 'as-is', confirmed: true, stack: s.id, reuseAsIs: true })}
+              >
+                Package in {s.label}
+              </Button>
+            ))}
+          </div>
+        )}
         <AsIsChoice
           projectId={project.id}
           authorized={Boolean(project.authorized)}
