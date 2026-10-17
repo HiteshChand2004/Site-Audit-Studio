@@ -5,6 +5,7 @@ import { Alert, Card } from '../../components/common/Surface.jsx';
 import SectionCard from '../../components/common/SectionCard.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import StackOutput from '../../components/recreate/StackOutput.jsx';
+import AsIsChoice from '../../components/recreate/AsIsChoice.jsx';
 import { BrowserShot } from '../../components/site/Site.jsx';
 import { copyShot } from '../../siteData.js';
 import { RECREATE_STACKS, stackById } from '../../constants.js';
@@ -55,7 +56,13 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   // A copy that stopped before it finished, whose work the server kept: it can continue instead of starting over.
   const resumable = !running ? latest?.resumable ?? null : null;
   const resume = resumable ? resumeText(resumable) : null;
-  const blocker = blockerOf({ audit, project, analyzing: isAnalysisActive(analysis) });
+    // "Original as-is" (a choice of pages and a stack, and a confirmation); the clean rebuild keeps its own start, unchanged.
+  const [mode, setMode] = useState('clean');
+  const [asIsPages, setAsIsPages] = useState([]);
+  const [asIsStack, setAsIsStack] = useState(project.stack ?? 'html');
+  const [asIsConfirmed, setAsIsConfirmed] = useState(false);
+  const asIsBlocker = mode === 'as-is' && !asIsConfirmed ? 'Confirm that you may copy this site as it is.' : null;
+  const blocker = blockerOf({ audit, project, analyzing: isAnalysisActive(analysis) }) ?? asIsBlocker;
   const staleDays = audit && !audit.isDummy ? ageDays(audit.analyzedAt) : 0;
   const outputs = outputsOf(result);
   const stackState = outputState(result, project.stack);
@@ -116,6 +123,19 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
             <dd className="mono">{project.target_domain || 'Same as the original'}</dd>
           </div>
         </dl>
+        <AsIsChoice
+          projectId={project.id}
+          authorized={Boolean(project.authorized)}
+          stack={project.stack}
+          mode={mode}
+          onMode={setMode}
+          pages={asIsPages}
+          onPages={setAsIsPages}
+          asIsStack={asIsStack}
+          onAsIsStack={setAsIsStack}
+          confirmed={asIsConfirmed}
+          onConfirmed={setAsIsConfirmed}
+        />
         <div className={ws.actions}>
           <Button
             variant={resume ? 'secondary' : 'primary'}
@@ -123,13 +143,15 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
             icon={running ? (p) => <Loader2 {...p} className={styles.spin} /> : Sparkles}
             disabled={Boolean(blocker) || running}
             title={blocker ?? undefined}
-            onClick={() => recreate(project.id)}
+            onClick={() => (mode === 'as-is'
+              ? recreate(project.id, { mode: 'as-is', confirmed: true, stack: asIsStack, pages: asIsPages })
+              : recreate(project.id))}
           >
             {running
               ? 'Creating the copy…'
               : resume
                 ? 'Start over'
-                : project.exact_mode
+                : mode === 'as-is' ? 'Create the original copy' : project.exact_mode
                   ? (result ? 'Create the exact copy again' : 'Create the exact copy')
                   : (result ? 'Create the copy again' : 'Create the copy')}
           </Button>

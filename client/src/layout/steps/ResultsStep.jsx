@@ -6,6 +6,7 @@ import FixReport from '../../components/recreate/FixReport.jsx';
 import RecreateReport from '../../components/recreate/RecreateReport.jsx';
 import Outcome from '../../components/recreate/Outcome.jsx';
 import PageGallery from '../../components/recreate/PageGallery.jsx';
+import AsIsReport from '../../components/recreate/AsIsReport.jsx';
 import SectionCard from '../../components/common/SectionCard.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import { STACKS, stackById } from '../../constants.js';
@@ -88,6 +89,8 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
   return (
     <div className={ws.stepBody}>
       {reauditJob && reauditJob.status !== 'done' && <AnalyzeProgress analysis={reauditJob} kind="reaudit" onDismiss={() => dismissJob('reaudit', project.id)} />}
+
+      {result.asIs && <AsIsReport asIs={result.asIs} outputs={[result.asIs.stack]} />}
 
       {result.singlePage && (
         <p className={ws.hint}>
