@@ -76,6 +76,8 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   const files = [];
   const removed = [];
   const downloads = { tried: 0, ok: 0, failed: 0, failedUrls: [] };
+  /** @type {{ url: string, family: string, reason: string }[]} font sources the copy does not keep */
+  const dropped = [];
 
   /** Copies one recorded file to its path on the copy. */
   const fromRecord = async (abs, entry, kind) => {
@@ -204,9 +206,43 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
 
   async function rewriteCss(css, base) {
     let out = css;
-    for (const m of [...css.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g)]) {
+    // @font-face: a face keeps only the sources the record holds (loaded with 200). A source that is not recorded (it 404s
+    // or was never loaded) is dropped. A family with no recorded source at all gets its first downloadable candidate.
+    for (const block of [...out.matchAll(/@font-face\s*\{[^}]*\}/g)].map((m) => m[0])) {
+      const srcDecl = block.match(/src\s*:([^;]+);/);
+      if (!srcDecl) continue;
+      const family = (block.match(/font-family\s*:\s*([^;]+);/)?.[1] ?? '').trim().replace(/^['"]|['"]$/g, '');
+      const sources = [...srcDecl[1].matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)(\s*format\([^)]*\))?/g)];
+      const absOf = (raw) => new URL(raw.trim(), base).href.split('#')[0];
+      const kept = [];
+      for (const s of sources) {
+        const abs = absOf(s[2]);
+        const entry = byUrl.get(abs);
+        if (entry && !excluded.has(abs)) kept.push(`url("${await fromRecord(abs, entry, 'font')}")${s[3] ?? ''}`);
+        else dropped.push({ url: abs, family, reason: entry ? 'excluded' : 'not in the record' });
+      }
+      let newSrc = kept.length ? kept.join(', ') : null;
+      if (!newSrc && fetch) {
+        for (const s of sources) {
+          const abs = absOf(s[2]);
+          if (excluded.has(abs)) continue;
+          const local = await download(abs, 'media');
+          if (local) {
+            newSrc = `url("${local}")${s[3] ?? ''}`;
+            break;
+          }
+        }
+      }
+      if (!newSrc) {
+        blockers.push({ url: family, reason: 'no file of this font family could be had' });
+        continue;
+      }
+      out = out.split(srcDecl[0]).join(`src: ${newSrc};`);
+    }
+    // Other url() references (images, fonts outside @font-face): the same copies.
+    for (const m of [...out.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g)]) {
       // A fragment (an SVG reference such as url(#n) or its percent-encoded form) names something inside the document.
-      if (/^(data|blob|#)/i.test(m[2].trim()) || decodeURIComponent(m[2].trim()).startsWith('#')) continue;
+      if (/^(data|blob|#|\/)/i.test(m[2].trim()) || decodeURIComponent(m[2].trim()).startsWith('#')) continue;
       const abs = new URL(m[2].trim(), base).href.split('#')[0];
       if (excluded.has(abs)) continue;
       const entry = byUrl.get(abs);
@@ -226,5 +262,5 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   // The copy\'s entry point: the document itself (its inline scripts and data are unchanged).
   await writeFile(path.join(outDir, 'index.html'), $.html(), 'utf8');
   await rm(tmp, { recursive: true, force: true });
-  return { document: { url: doc.url, sha256: doc.sha }, files, removed, blockers, downloads };
+  return { document: { url: doc.url, sha256: doc.sha }, files, removed, blockers, downloads, dropped };
 }

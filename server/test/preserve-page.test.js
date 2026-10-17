@@ -4,7 +4,7 @@
 // the chunk runs, the page hydrates, the animation runs, the hover changes the colour, and nothing leaves the copy.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -117,6 +117,40 @@ test('the page lifted from the record runs offline: chunk, hydration, animation 
       await context.close();
       await server.close();
     }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('font sources: a face keeps only the files the record holds; a family with none recorded is downloaded; nothing stays on the original', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sas-fonts-'));
+  try {
+    const net = path.join(root, '.network');
+    await mkdir(path.join(net, 'files'), { recursive: true });
+    const CSS_FONTS = `@font-face { font-family: "Good"; src: url(https://site.test/fonts/good.woff2) format("woff2"), url(https://cdn.test/missing.woff) format("woff"); }
+@font-face { font-family: "Lost"; src: url(https://cdn.test/lost.woff2) format("woff2"); }`;
+    const FONT = 'WOFF2-GOOD';
+    const bodies = { doc: '<!doctype html><html><head><link rel="stylesheet" href="https://site.test/app.css"></head><body><p style="font-family: Good">Text</p></body></html>', css: CSS_FONTS, font: FONT };
+    for (const b of Object.values(bodies)) await writeFile(path.join(net, 'files', sha(b)), b);
+    await writeFile(path.join(net, 'index.json'), JSON.stringify({ version: 1, entries: [
+      { url: SITE, status: 200, kind: 'document', type: 'text/html', sha: sha(bodies.doc) },
+      { url: 'https://site.test/app.css', status: 200, kind: 'style', type: 'text/css', sha: sha(bodies.css) },
+      { url: 'https://site.test/fonts/good.woff2', status: 200, kind: 'font', type: 'font/woff2', sha: sha(bodies.font) },
+    ] }));
+    const out = path.join(root, 'copy');
+    const fetchImpl = async (url, { dir }) => {
+      if (!url.endsWith('lost.woff2')) return { ok: false, reason: 'http-404', finalUrl: url };
+      const tmp = path.join(dir, 'lost.tmp');
+      await writeFile(tmp, 'WOFF2-LOST');
+      return { ok: true, tmp, sha256: sha('WOFF2-LOST'), bytes: 10, mime: 'font/woff2', finalUrl: url, redirects: [] };
+    };
+    const lift = await liftPage({ captureRoot: root, pageUrl: SITE, outDir: out, fetchImpl });
+    const css = await readFile(path.join(out, 'app.css'), 'utf8');
+    assert.doesNotMatch(css, /cdn\.test|site\.test/, 'no address of the original is left in the stylesheet');
+    assert.match(css, /font-family: "Good"; src: url\("\/fonts\/good\.woff2"\) format\("woff2"\);/, 'the recorded source is kept, the unrecorded one is dropped');
+    assert.match(css, /font-family: "Lost"; src: url\("\/lost\.woff2"\) format\("woff2"\);/, 'a family with no recorded file gets its downloaded file');
+    assert.ok(lift.dropped.some((d) => d.url.endsWith('missing.woff') && d.family === 'Good'), 'the dropped source is reported');
+    assert.equal(lift.blockers.length, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
