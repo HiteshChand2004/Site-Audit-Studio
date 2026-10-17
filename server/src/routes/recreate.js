@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { Router } from 'express';
 import { db } from '../db/index.js';
@@ -15,7 +15,8 @@ import { getEmitter, isReadyStack, listStacks } from '../recreate/emit/index.js'
 import { exportStack, outputRoot, reportOutputs, targetStack } from '../recreate/export/fromIr.js';
 import { planZip, writeZip } from '../recreate/export/zip.js';
 import { RecreateError } from '../recreate/errors.js';
-import { ASIS_STACKS } from '../recreate/behavior/preserve/stage.js';
+import { ASIS_DIR, ASIS_PAGES_FILE, ASIS_STACKS } from '../recreate/behavior/preserve/stage.js';
+import { startAsIsPreview, stopAsIsPreview } from '../recreate/behavior/preserve/asisPreview.js';
 import { asIsPagesOf } from '../recreate/behavior/preserve/asis.js';
 
 const router = Router();
@@ -96,10 +97,20 @@ router.post('/:id/recreate', async (req, res) => {
     if (req.body.confirmed !== true) return res.status(400).json({ error: 'Confirm that you may copy this site as it is.' });
     const stack = req.body.stack ?? project.stack ?? 'html';
     if (!ASIS_STACKS.includes(stack)) return res.status(400).json({ error: `The as-is copy can be packaged as: ${ASIS_STACKS.join(', ')}.` });
-    const pages = asIsPagesOf(project, req.body.pages);
-    if (pages === null) return res.status(400).json({ error: 'The pages must be addresses of this site (the homepage first or among them), up to 40.' });
+    // `reuseAsIs`: another stack from the lifted copy of the latest as-is copy (no capture, no lift again).
+    let pages;
+    let from = null;
+    if (req.body.reuseAsIs === true) {
+      const source = latestReplayable.all(project.id).find((r) => r && existsSync(path.join(recreateDir(project.id, r.id), ASIS_PAGES_FILE)));
+      if (!source) return res.status(409).json({ error: 'There is no lifted copy to package: make an original as-is copy first.' });
+      from = source.id;
+      pages = JSON.parse(await readFile(path.join(recreateDir(project.id, source.id), ASIS_PAGES_FILE), 'utf8')).pages.map((p) => p.url);
+    } else {
+      pages = asIsPagesOf(project, req.body.pages);
+      if (pages === null) return res.status(400).json({ error: 'The pages must be addresses of this site (the homepage first or among them), up to 40.' });
+    }
     payload.preserve = true;
-    payload.asIs = { stack, pages };
+    payload.asIs = { stack, pages, ...(from && { from }) };
   }
 
   try {
@@ -328,6 +339,24 @@ router.post('/:id/recreate/:recreateId/export', async (req, res) => {
     if (err instanceof RecreateError) return res.status(err.status ?? 500).json({ error: err.message });
     throw err;
   }
+});
+
+// The preview of an "Original as-is" copy: served from its own address (behavior/preserve/asisPreview.js), never the app's origin.
+router.post('/:id/recreate/:recreateId/asis-preview', async (req, res) => {
+  const row = doneReport.get(req.params.recreateId, req.params.id);
+  const report = row?.result_json ? JSON.parse(row.result_json) : null;
+  if (!report?.asIs) return res.status(409).json({ error: 'This is not a finished original as-is copy.' });
+  try {
+    const url = await startAsIsPreview(req.params.id, req.params.recreateId, path.join(recreateDir(req.params.id, req.params.recreateId), ASIS_DIR, 'copy'));
+    res.json({ url });
+  } catch (err) {
+    res.status(500).json({ error: `The preview could not be started: ${err.message}` });
+  }
+});
+
+router.delete('/:id/recreate/:recreateId/asis-preview', async (req, res) => {
+  await stopAsIsPreview(req.params.id, req.params.recreateId);
+  res.status(204).end();
 });
 
 router.get('/:id/recreate/:recreateId/events', (req, res) => {

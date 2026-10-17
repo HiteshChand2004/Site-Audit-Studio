@@ -37,7 +37,8 @@ export const recreateJobs = new JobManager({
       project, recreateId: job.id, progress, warnings: job.warnings, signal, exact, preserve: payload?.preserve === true,
       ...((payload?.noLimit || (payload?.exact === undefined && resumed?.unlimited)) && { unlimited: true }),
       ...(stages && { stages }), ...(payload?.resumeFrom && { resumeFrom: payload.resumeFrom }),
-      ...(payload?.asIs && { asIs: payload.asIs }),
+      // A repack names the job whose lifted copy it reuses (its folder is read by the stage, behavior/preserve/stage.js).
+      ...(payload?.asIs && { asIs: payload.asIs.from ? { ...payload.asIs, fromDir: recreateDir(project.id, payload.asIs.from) } : payload.asIs }),
     });
     // The preview is runtime state: its port is not part of the report. The app asks for it
     // (GET/POST /preview), which also starts it again after a server restart. The stack's own build when the job built it.

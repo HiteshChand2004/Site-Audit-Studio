@@ -150,6 +150,8 @@ export const api = {
   subscribeAnalysis: (id, analysisId, handlers) => subscribe(`/api/projects/${id}/analyze/${analysisId}/events`, handlers),
   // { reuseCapture: true }: rebuild from the last capture (the site is not opened again).
   startRecreate: (id, options = null) => request(`/projects/${id}/recreate`, { method: 'POST', ...(options && { body: options }) }),
+  // The preview of an original as-is copy: its own address on this machine (never the app's origin).
+  startAsIsPreview: (id, recreateId) => request(`/projects/${id}/recreate/${recreateId}/asis-preview`, { method: 'POST' }),
   getCurrentRecreate: (id) => request(`/projects/${id}/recreate/current`),
   downloadUrl: (id, recreateId, stack) => `/api/projects/${id}/recreate/${recreateId}/download${stack ? `?stack=${encodeURIComponent(stack)}` : ''}`,
   // Builds another stack from the saved recreate (no new capture): resolves when it is ready, rejects with why it failed.

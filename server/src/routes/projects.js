@@ -9,6 +9,7 @@ import { precheckUrl } from '../security/netGuard.js';
 import { MAX_RECREATE_PAGES, parseExactMode, parsePageUrl, parseRecreatePages, parseTargetDomain } from '../recreate/inputs.js';
 import { sameSite } from '../audit/util.js';
 import { stopPreview } from '../recreate/preview.js';
+import { stopAsIsPreviewsOf } from '../recreate/behavior/preserve/asisPreview.js';
 import { stackIds } from '../recreate/emit/index.js';
 import { recreateSection } from '../reaudit/contract.js';
 
@@ -149,6 +150,7 @@ router.delete('/:id', async (req, res) => {
   const result = remove.run(req.params.id);
   if (result.changes === 0) return res.status(404).json({ error: 'Project not found.' });
   await stopPreview({ projectId: req.params.id });
+  await stopAsIsPreviewsOf(req.params.id);
   await rm(projectDir(req.params.id), { recursive: true, force: true }).catch(() => {});
   res.status(204).end();
 });

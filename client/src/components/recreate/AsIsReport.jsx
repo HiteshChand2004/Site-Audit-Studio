@@ -99,7 +99,9 @@ export default function AsIsReport({ asIs, outputs }) {
             <tr><th /><th>Performance</th><th>SEO</th><th>Accessibility</th><th>Best practices</th></tr>
           </thead>
           <tbody>
-            <tr><td>Original</td><td>{before?.performance ?? '—'}</td><td>—</td><td>—</td><td>—</td></tr>
+            {before
+              ? <tr><td>Original (from the Check)</td><td>{before.performance ?? '—'}</td><td>{before.seo ?? '—'}</td><td>{before.accessibility ?? '—'}</td><td>{before.bestPractices ?? '—'}</td></tr>
+              : <tr><td>Original</td><td colSpan={4}>Not measured: run the Check on this site to get the original's Lighthouse result.</td></tr>}
             <tr><td>Copy</td><td>{after.performance}</td><td>{after.seo}</td><td>{after.accessibility}</td><td>{after.bestPractices}</td></tr>
           </tbody>
         </table>

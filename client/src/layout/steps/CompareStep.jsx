@@ -5,6 +5,7 @@ import { EmptyState } from '../../components/common/Surface.jsx';
 import { Segmented } from '../../components/common/Tabs.jsx';
 import InfoTip from '../../components/common/InfoTip.jsx';
 import PreviewFrame, { VIEWPORTS } from '../../components/preview/PreviewFrame.jsx';
+import { api } from '../../api/client.js';
 import SitePreview, { FullPageFrame, liveAvailability, LiveFrame, ModeToggle } from '../../components/preview/SitePreview.jsx';
 import { defaultPreviewMode, unavailableNote } from '../../components/preview/framing.js';
 import { Pill } from '../../components/common/Score.jsx';
@@ -104,6 +105,15 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   const [sync, setSync] = useState(false);
   const [oldScroller, setOldScroller] = useState(null);
   const [newScroller, setNewScroller] = useState(null);
+  // An original as-is copy is shown from its own address (its preview server, behavior/preserve/asisPreview.js).
+  const asIsCopy = Boolean(result?.asIs);
+  const [asIsUrl, setAsIsUrl] = useState(null);
+  useEffect(() => {
+    if (!asIsCopy || !result?.recreateId) return undefined;
+    let alive = true;
+    api.startAsIsPreview(project.id, result.recreateId).then((r) => alive && setAsIsUrl(r.url)).catch(() => alive && setAsIsUrl(null));
+    return () => { alive = false; };
+  }, [asIsCopy, project.id, result?.recreateId]);
   useSyncScroll(oldScroller, newScroller, sync);
 
   const pages = result?.preview?.pages ?? result?.pages?.map((p) => p.outPath) ?? [];
@@ -117,7 +127,7 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   const shownOutput = outputsOf(result)[shown];
 
   // A preview of another build than the one shown (the stack was changed, or its build just finished): start the right one.
-  const previewStale = Boolean(result && preview?.url && preview.recreateId === result.recreateId && !preview.loading && (preview.stack ?? 'html') !== shown);
+  const previewStale = Boolean(result && !asIsCopy && preview?.url && preview.recreateId === result.recreateId && !preview.loading && (preview.stack ?? 'html') !== shown);
   useEffect(() => {
     if (previewStale) ensurePreview(project.id);
   }, [previewStale, project.id, ensurePreview]);
@@ -171,8 +181,11 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
     );
   }
 
-  const ready = Boolean(preview?.url && preview.recreateId === result.recreateId);
-  const src = ready ? `${preview.url}${pageUrl(pageOf(result, shown, page).file)}` : null;
+  const copyUrl = asIsCopy ? asIsUrl : preview?.url;
+  // An as-is copy is its own origin: scripts run there (its own code), and nothing of it reaches the app.
+  const frameSandbox = asIsCopy ? 'allow-same-origin allow-scripts' : sandboxFor(preview);
+  const ready = Boolean(asIsCopy ? asIsUrl : preview?.url && preview.recreateId === result.recreateId);
+  const src = ready ? `${copyUrl}${pageUrl(pageOf(result, shown, page).file)}` : null;
   const view = VIEWPORTS.find((v) => v.id === viewport)?.view;
   const pageHeight = result?.fidelity?.pages?.find((p) => p.outPath === page)?.views?.[view]?.height?.generated ?? null;
   const fullPage = sync && ready && pageHeight > 0;
@@ -278,12 +291,12 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
                 width={viewport}
                 height={pageHeight}
                 scrollRef={setNewScroller}
-                sandbox={sandboxFor(preview)}
+                sandbox={frameSandbox}
                 title="The new copy"
                 loadingText="Loading the copy…"
               />
             ) : ready ? (
-              <LiveFrame key={`${preview.recreateId}-${preview.startedAt}`} url={src} width={viewport} sandbox={sandboxFor(preview)} title="The new copy" loadingText="Loading the copy…" />
+              <LiveFrame key={`${preview.recreateId}-${preview.startedAt}`} url={src} width={viewport} sandbox={frameSandbox} title="The new copy" loadingText="Loading the copy…" />
             ) : preview?.error ? (
               <EmptyState icon={AlertTriangle} title="The preview could not start" action={<Button icon={RotateCw} onClick={() => ensurePreview(project.id)}>Try again</Button>}>
                 {preview.error}

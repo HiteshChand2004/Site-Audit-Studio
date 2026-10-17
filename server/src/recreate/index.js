@@ -72,6 +72,8 @@ export const STEPS = [
 // What each page beyond BASE_PAGES adds to the whole job, and to the time the capture keeps for the steps after it.
 /** The steps an "Original as-is" copy runs (the rest are finished at once): the capture and the as-is stage. */
 export const ASIS_STEP_KEYS = new Set(['inspect', 'generate']);
+/** A repack (another stack from a lifted copy that is kept): only the as-is stage. */
+export const ASIS_REPACK_KEYS = new Set(['generate']);
 const JOB_PER_PAGE = STEPS.reduce((n, s) => n + (s.perPage ?? 0), 0);
 const LATER_PER_PAGE = STEPS.filter((s) => !s.background && s.key !== 'inspect').reduce((n, s) => n + (s.perPage ?? 0), 0);
 export const PUBLIC_STEPS = STEPS.map(({ key, label }) => ({ key, label }));
@@ -410,7 +412,7 @@ async function recreate({
   try {
     for (const def of STEPS.filter((s) => !s.background)) {
       // An as-is copy runs its capture and its stage only; the other steps are finished at once, so the bar still ends at 100 %.
-      if (asIs && !ASIS_STEP_KEYS.has(def.key)) {
+      if (asIs && !(asIs.fromDir ? ASIS_REPACK_KEYS : ASIS_STEP_KEYS).has(def.key)) {
         progress(def.key, 1);
         continue;
       }
