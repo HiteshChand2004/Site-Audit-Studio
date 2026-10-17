@@ -75,7 +75,7 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   /** @type {{ url: string, local: string, kind: string, from: string, reason: string, sha256: string }[]} */
   const files = [];
   const removed = [];
-  const downloads = { tried: 0, ok: 0, failed: 0 };
+  const downloads = { tried: 0, ok: 0, failed: 0, failedUrls: [] };
 
   /** Copies one recorded file to its path on the copy. */
   const fromRecord = async (abs, entry, kind) => {
@@ -94,6 +94,7 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
     const res = await fetchImpl(abs, { dir: tmp, kind: DOWNLOAD_KIND[kind] ?? 'image', maxBytes: LIFT_MAX_BYTES, attempts: LIFT_ATTEMPTS });
     if (!res.ok) {
       downloads.failed++;
+      downloads.failedUrls.push({ url: abs, reason: res.reason });
       return null;
     }
     const local = localPathOf(abs);
@@ -160,6 +161,40 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
     }
   }
 
+  // Every file of the record the page can load is copied to its path, not only the ones the HTML names: a runtime imports
+  // its own modules by URL, from inside its JavaScript (Framer, Next.js chunks loaded later). Excluded scripts never are.
+  const COPIED_KINDS = new Set(['script', 'style', 'font', 'image', 'media']);
+  for (const entry of byUrl.values()) {
+    if (!COPIED_KINDS.has(entry.kind) || entry.status !== 200 || excluded.has(entry.url.split('#')[0])) continue;
+    const abs = entry.url.split('#')[0];
+    if (files.some((f) => f.url === abs)) continue;
+    const local = localPathOf(abs);
+    const target = path.join(outDir, local);
+    await mkdir(path.dirname(target), { recursive: true });
+    await copyFile(path.join(recordDir, 'files', entry.sha), target);
+    files.push({ url: abs, local, kind: entry.kind, sha256: entry.sha, from: abs, reason: 'a file of the record (the runtime may load it by address)' });
+  }
+  // Inside the copied scripts, every address of a file the copy holds is its local path (raw and JSON-escaped forms).
+  const localOf = new Map(files.map((f) => [f.url, f.local]));
+  for (const f of files.filter((x) => x.kind === 'script')) {
+    const target = path.join(outDir, f.local);
+    let text = await readFile(target, 'utf8').catch(() => null);
+    if (text === null) continue;
+    let changed = false;
+    for (const [abs, local] of localOf) {
+      if (!text.includes(abs)) continue;
+      text = text.split(abs).join(local);
+      changed = true;
+    }
+    for (const [abs, local] of localOf) {
+      const escaped = abs.replace(/\//g, '\/');
+      if (!text.includes(escaped)) continue;
+      text = text.split(escaped).join(local.replace(/\//g, '\/'));
+      changed = true;
+    }
+    if (changed) await writeFile(target, text, 'utf8');
+  }
+
   // Stylesheets: their url() references point at the same copies (the record, or a download).
   for (const f of files.filter((x) => x.kind === 'style')) {
     const target = path.join(outDir, f.local);
@@ -170,7 +205,8 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   async function rewriteCss(css, base) {
     let out = css;
     for (const m of [...css.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g)]) {
-      if (/^(data|blob|#)/i.test(m[2].trim())) continue;
+      // A fragment (an SVG reference such as url(#n) or its percent-encoded form) names something inside the document.
+      if (/^(data|blob|#)/i.test(m[2].trim()) || decodeURIComponent(m[2].trim()).startsWith('#')) continue;
       const abs = new URL(m[2].trim(), base).href.split('#')[0];
       if (excluded.has(abs)) continue;
       const entry = byUrl.get(abs);

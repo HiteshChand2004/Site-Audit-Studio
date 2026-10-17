@@ -12,7 +12,8 @@
     "setup:toolchains": "node scripts/setup-toolchains.js",
     "corpus": "node scripts/corpus.mjs",
     "test:fixtures": "node scripts/test-suite.mjs fixtures",
-    "test:precommit": "node scripts/test-suite.mjs precommit"
+    "test:precommit": "node scripts/test-suite.mjs precommit",
+    "preview:lift": "node scripts/preview-lift.mjs"
   },
   "dependencies": {
     "@axe-core/playwright": "^4.13.0",
