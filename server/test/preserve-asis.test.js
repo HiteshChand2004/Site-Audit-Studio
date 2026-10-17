@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { asIsPagesOf, localOfOutPath } from '../src/recreate/behavior/preserve/asis.js';
 import { pageKeyOf } from '../src/recreate/behavior/preserve/pageLift.js';
 import { readLifted } from '../src/recreate/behavior/preserve/stage.js';
+import { planZip } from '../src/recreate/export/zip.js';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -76,6 +77,31 @@ test('a lifted copy keeps its page set; an older copy (report only) gives the sa
     assert.deepEqual(old.excludedHosts, ['chat.test']);
 
     assert.equal(await readLifted(path.join(root, 'nothing')), null, 'no copy, no pages');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('the download of an as-is MERN copy keeps its client/dist (the copy itself); a clean build’s dist is still left out', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sas-zip-asis-'));
+  try {
+    const stacks = path.join(root, 'stacks', 'mern');
+    await mkdir(path.join(stacks, 'client', 'dist'), { recursive: true });
+    await mkdir(path.join(stacks, 'server'), { recursive: true });
+    await writeFile(path.join(stacks, 'client', 'dist', 'index.html'), '<!doctype html>', 'utf8');
+    await writeFile(path.join(stacks, 'server', 'index.js'), '// server', 'utf8');
+    await writeFile(path.join(stacks, 'README.md'), '# copy', 'utf8');
+    const asIsReport = { stack: 'mern', url: 'https://site.test/', outputs: { mern: { status: 'ready', dir: 'stacks/mern', mode: 'as-is' } }, pages: [] };
+    const plan = await planZip({ dir: root, report: asIsReport, stack: 'mern' });
+    const names = plan.entries.map((e) => e.name);
+    assert.ok(names.some((n) => n.endsWith('/client/dist/index.html')), 'the copy is in the download');
+    assert.ok(names.some((n) => n.endsWith('/README.md')));
+
+    await mkdir(path.join(stacks, 'client', 'dist', 'assets'), { recursive: true });
+    await writeFile(path.join(stacks, 'client', 'dist', 'assets', 'built.js'), 'x', 'utf8');
+    const cleanReport = { ...asIsReport, outputs: { mern: { status: 'ready', dir: 'stacks/mern' } } };
+    const clean = await planZip({ dir: root, report: cleanReport, stack: 'mern' });
+    assert.ok(!clean.entries.some((e) => e.name.includes('/client/dist/')), 'a built dist is not the copy: left out');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
