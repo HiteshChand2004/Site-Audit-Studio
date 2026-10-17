@@ -184,7 +184,7 @@ async function planProjectZip({ dir, report, stack }) {
   const output = reportOutputs(report)[stack];
   if (output?.status !== 'ready') throw refuse(400, `This recreate has no ${stack} output.`);
   const project = path.join(dir, output.dir);
-  const files = (await listFiles(project, { allowDot: ['.gitignore', '.env.example'] }).catch(() => [])).filter((f) => !skippedInProject(f.rel));
+  const files = (await listFiles(project, { allowDot: ['.gitignore', '.env.example', '.nojekyll'] }).catch(() => [])).filter((f) => !skippedInProject(f.rel));
   if (!files.length) throw refuse(404, `The ${stack} project of this recreate is gone. Run Recreate again.`);
   const root = zipBaseName(report, stack);
   const entries = [

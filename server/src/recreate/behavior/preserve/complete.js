@@ -193,6 +193,8 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
     if (downloaded === 0) break;
   }
   await writeFile(path.join(outDir, 'sw.js'), serviceWorkerSource(manifest, [...originHosts]), 'utf8');
+  // GitHub Pages (Jekyll) leaves out folders whose names start with "_" unless this empty file is there: a copy with a _next folder needs it.
+  await writeFile(path.join(outDir, '.nojekyll'), '', 'utf8');
   for (const entry of entries) await registerServiceWorker(outDir, entry);
   await rm(tmp, { recursive: true, force: true });
   return { passes: passesRun, manifest, log };

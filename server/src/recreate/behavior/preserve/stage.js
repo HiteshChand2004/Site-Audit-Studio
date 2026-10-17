@@ -118,6 +118,22 @@ export async function asIsStage(ctx) {
     await rm(outDir, { recursive: true, force: true });
     if (stack === 'html') {
       await cp(copyDir, outDir, { recursive: true });
+      await writeFile(path.join(outDir, 'README.md'), [
+        '# Plain HTML copy',
+        '',
+        'The copy is static files: upload this folder as it is to any static host (Netlify, Vercel, Cloudflare Pages, GitHub Pages, S3, nginx).',
+        'Every page and file is the copy\'s own; it loads nothing from the original site, and its service worker serves the files it has.',
+        '',
+        '## Hosting',
+        '',
+        'Hosting must serve HTTP/2 (or HTTP/3) and compressed text (gzip or brotli). Static hosts do both by default.',
+        '',
+        '## GitHub Pages',
+        '',
+        'The file `.nojekyll` (empty) is in this folder on purpose: without it GitHub Pages leaves out folders whose names start with `_`,',
+        'and this copy keeps the original\'s `_next` folder. Keep the file when you upload.',
+        '',
+      ].join('\n'), 'utf8');
     } else {
       await packLifted({ stack, copyDir, outDir, pageUrl: siteUrl });
       ctx.progress(0.45, 'Building the stack');
