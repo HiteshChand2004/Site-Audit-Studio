@@ -66,8 +66,10 @@ export async function registerServiceWorker(outDir) {
  */
 export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl = downloadAsset, passes = COMPLETE_PASSES, files = [] }) {
   const originHosts = new Set(hosts.map((h) => h.replace(/^www\./, '')));
+  // Every file the lift already copied is served by the worker too: its address maps to its local file, so a request for
+  // it (a chunk the page imports by address) is answered from the copy, never refused as "not in this copy".
   /** @type {Record<string, string>} */
-  const manifest = {};
+  const manifest = Object.fromEntries(files.map((f) => [f.url, f.local]));
   const log = [];
   const tmp = path.join(outDir, '.complete-tmp');
   await mkdir(tmp, { recursive: true });
