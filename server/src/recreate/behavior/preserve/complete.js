@@ -59,10 +59,17 @@ export async function registerServiceWorker(outDir) {
   }
 }
 
+/** The two sizes a copy is opened at: the lazy parts of each (mobile and desktop) load their own files. */
+export const COMPLETE_VIEWPORTS = [
+  { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 },
+  { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
+];
+
 /**
- * Opens the copy until a pass downloads nothing from the original hosts, then writes sw.js.
+ * Opens the copy until a pass downloads nothing from the original hosts, then writes sw.js. Each pass opens the copy at
+ * both sizes and scrolls the whole page, so the files only a mobile layout or a scroll asks for are downloaded too.
  * @param {{ browser: import('playwright').Browser, outDir: string, pageUrl: string, hosts: string[],
- *   fetchImpl?: typeof downloadAsset, passes?: number }} o
+ *   fetchImpl?: typeof downloadAsset, passes?: number, files?: { url: string, local: string }[] }} o
  */
 export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl = downloadAsset, passes = COMPLETE_PASSES, files = [] }) {
   const originHosts = new Set(hosts.map((h) => h.replace(/^www\./, '')));
@@ -77,45 +84,57 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
   for (let pass = 1; pass <= passes; pass++) {
     passesRun = pass;
     const server = await serveFolder(outDir);
-    const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
     let downloaded = 0;
     let blocked = 0;
+    const handle = async (route) => {
+      const url = route.request().url().split('#')[0];
+      if (url.startsWith(server.url)) return route.continue();
+      let host = '';
+      try {
+        host = new URL(url).hostname.replace(/^www\./, '');
+      } catch {
+        return route.abort();
+      }
+      if (!originHosts.has(host)) {
+        blocked++;
+        return route.abort();
+      }
+      // An original-host address: store it once at its path, then answer the page from the copy.
+      // The name the lift gave this address (its content type decides the extension); a new address gets its own name.
+      const local = files.find((f) => f.url === url)?.local ?? localPathOf(url);
+      const target = path.join(outDir, local);
+      if (!manifest[url]) {
+        const res = await fetchImpl(url, { dir: tmp, kind: 'image', maxBytes: 25 * 1024 * 1024, attempts: 3 });
+        if (!res.ok) {
+          log.push({ pass, url, result: res.reason });
+          return route.fulfill({ status: 404, body: '' });
+        }
+        await mkdir(path.dirname(target), { recursive: true });
+        await copyFile(res.tmp, target);
+        manifest[url] = local;
+        downloaded++;
+      }
+      return route.fulfill({ path: target });
+    };
     try {
-      await context.route('**/*', async (route) => {
-        const url = route.request().url().split('#')[0];
-        if (url.startsWith(server.url)) return route.continue();
-        let host = '';
+      for (const options of COMPLETE_VIEWPORTS) {
+        const context = await browser.newContext(options);
         try {
-          host = new URL(url).hostname.replace(/^www\./, '');
-        } catch {
-          return route.abort();
-        }
-        if (!originHosts.has(host)) {
-          blocked++;
-          return route.abort();
-        }
-        // An original-host address: store it once at its path, then answer the page from the copy.
-        // The name the lift gave this address (its content type decides the extension); a new address gets its own name.
-        const local = files.find((f) => f.url === url)?.local ?? localPathOf(url);
-        const target = path.join(outDir, local);
-        if (!manifest[url]) {
-          const res = await fetchImpl(url, { dir: tmp, kind: 'image', maxBytes: 25 * 1024 * 1024, attempts: 3 });
-          if (!res.ok) {
-            log.push({ pass, url, result: res.reason });
-            return route.fulfill({ status: 404, body: '' });
+          await context.route('**/*', handle);
+          const page = await context.newPage();
+          await page.goto(`${server.url}index.html`, { waitUntil: 'load', timeout: 90000 });
+          await page.waitForTimeout(1500);
+          // The whole page, scrolled the way a visitor does: the lazy parts load and request their files.
+          for (let y = 0; y < 14000; y += 400) {
+            await page.evaluate((yy) => window.scrollTo(0, yy), y);
+            await page.waitForTimeout(120);
           }
-          await mkdir(path.dirname(target), { recursive: true });
-          await copyFile(res.tmp, target);
-          manifest[url] = local;
-          downloaded++;
+          await page.waitForTimeout(1200);
+        } finally {
+          await context.close();
         }
-        return route.fulfill({ path: target });
-      });
-      const page = await context.newPage();
-      await page.goto(`${server.url}index.html`, { waitUntil: 'load', timeout: 90000 });
-      await page.waitForTimeout(2500);
+      }
     } finally {
-      await context.close();
       await server.close();
     }
     log.push({ pass, downloaded, blocked });

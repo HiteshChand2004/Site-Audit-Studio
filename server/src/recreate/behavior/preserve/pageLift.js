@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto';
 import { readRecordIndex, classifyScripts, recordBodyReader } from '../scripts.js';
 import { scriptCandidates } from './extract.js';
 import { RULES } from '../../../detection/engine.js';
+import { rewriteHosts } from './hostRewrite.js';
 import { downloadAsset } from '../../assets/download.js';
 
 /** Largest file the lift downloads at build time (bytes). */
@@ -134,6 +135,15 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   }
   for (const st of load(html)('style').toArray()) indexCss(load(html)(st).html() ?? '', pageUrl);
 
+  // Host names of the original (its site and every host the record holds, excluded scripts' hosts left out): inside the copy
+  // they are local paths (hostRewrite.js), so the copy never names the original, even before its service worker is active.
+  const originHosts = [...new Set([siteHost, ...(recordIndex.entries ?? []).filter((e) => !excluded.has(e.url)).map((e) => {
+    try {
+      return new URL(e.url).hostname.replace(/^www\./, '');
+    } catch {
+      return '';
+    }
+  })].filter(Boolean))];
   const $ = load(html);
   /** @type {{ url: string, reason: string }[]} */
   const blockers = [];
@@ -410,6 +420,25 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
     }
     if (changed) await writeFile(target, text, 'utf8');
   }
+  // The original's host names inside the copied scripts and stylesheets, and in the document's own <style> blocks, become
+  // local paths (hostRewrite.js): a runtime that builds an address from a host fragment asks the copy, not the original.
+  for (const f of files.filter((x) => x.kind === 'script' || x.kind === 'style')) {
+    const target = path.join(outDir, f.local);
+    const text = await readFile(target, 'utf8').catch(() => null);
+    if (text === null) continue;
+    const rewritten = rewriteHosts(text, originHosts);
+    if (rewritten.count) await writeFile(target, rewritten.text, 'utf8');
+  }
+  for (const st of $('style').toArray()) {
+    const css = $(st).html() ?? '';
+    const rewritten = rewriteHosts(css, originHosts);
+    if (rewritten.count) $(st).html(rewritten.text);
+  }
+  // A site's robots.txt is read by the page's tooling (Lighthouse\'s SEO checks): it is fetched once, when the copy lacks it.
+  if (fetch && !files.some((f) => f.local === '/robots.txt')) {
+    await download(new URL('/robots.txt', pageUrl).href, 'icon').catch(() => null);
+  }
+
   // Inline <style> blocks and style="" attributes: the same rules as a stylesheet file (font sources, url() references).
   for (const st of $('style').toArray()) {
     const css = $(st).html() ?? '';
