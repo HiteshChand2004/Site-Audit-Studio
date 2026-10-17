@@ -14,6 +14,7 @@ import { load } from 'cheerio';
 import { createHash } from 'node:crypto';
 import { readRecordIndex, classifyScripts, recordBodyReader } from '../scripts.js';
 import { scriptCandidates } from './extract.js';
+import { RULES } from '../../../detection/engine.js';
 import { downloadAsset } from '../../assets/download.js';
 
 /** Largest file the lift downloads at build time (bytes). */
@@ -84,9 +85,20 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   const html = await readFile(path.join(recordDir, 'files', doc.sha), 'utf8');
   const siteHost = new URL(pageUrl).hostname.replace(/^www\./, '');
   const tmp = path.join(outDir, '.lift-tmp');
+  await mkdir(outDir, { recursive: true });
 
   const classified = await classifyScripts(recordIndex, recordBodyReader(recordDir), { origin: pageUrl });
   const excluded = new Set(scriptCandidates(classified, siteHost).filter((s) => s.status === 'excluded').map((s) => s.url));
+  // A builder's editor (its own host, under /edit) is not part of the site: the original never ran it for a visitor.
+  const builderHosts = new Set(RULES.flatMap((r) => r.cleanup?.cdnHosts ?? []).map((h) => h.replace(/^www\./, '')));
+  for (const e of recordIndex.entries ?? []) {
+    try {
+      const u = new URL(e.url);
+      if (e.kind === 'script' && builderHosts.has(u.hostname.replace(/^www\./, '')) && /^\/edit(\/|$)/.test(u.pathname)) excluded.add(e.url);
+    } catch {
+      // Not a URL.
+    }
+  }
 
   // Which recorded font file a face of the same family, weight and style uses: the page's own @font-face rules (its sheets
   // and inline blocks) name the same font at the address the record holds, even when a face names another address.

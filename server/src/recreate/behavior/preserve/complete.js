@@ -53,7 +53,8 @@ export async function registerServiceWorker(outDir) {
   const file = path.join(outDir, 'index.html');
   const $ = load(await readFile(file, 'utf8'));
   if (!$('script').toArray().some((s) => ($(s).html() ?? '').includes("serviceWorker.register('/sw.js')"))) {
-    $('head').append(`<script>${SW_REGISTER}</script>`);
+    // At the end of the body: an inline script in the head would delay the stylesheets above it.
+    $('body').append(`<script>${SW_REGISTER}</script>`);
     await writeFile(file, $.html(), 'utf8');
   }
 }

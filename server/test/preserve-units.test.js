@@ -204,3 +204,26 @@ test('responsive variants are separate files, named by their content; a versione
   assert.match(localPathOf(`${base}?width=512`, 'image/webp'), /^\/images\/pic~[0-9a-f]{8}\.webp$/, 'the extension follows the content');
   assert.equal(typeExtOf('/m/feather-icons/menu.js@0.0.29'), '.js', 'a version suffix is not the extension');
 });
+
+test('a builder\'s editor script (its own host, under /edit) is not part of the copy', async () => {
+  const { liftPage } = await import('../src/recreate/behavior/preserve/pageLift.js');
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sas-editor-'));
+  try {
+    const net = path.join(root, '.network');
+    await mkdir(path.join(net, 'files'), { recursive: true });
+    const DOC = '<!doctype html><html><head></head><body><p>site text</p><script src="https://framer.com/edit/init.mjs"></script></body></html>';
+    const EDIT = 'window.__editor = true;';
+    for (const b of [DOC, EDIT]) await writeFile(path.join(net, 'files', sha(b)), b);
+    await writeFile(path.join(net, 'index.json'), JSON.stringify({ version: 1, entries: [
+      { url: SITE, status: 200, kind: 'document', type: 'text/html', sha: sha(DOC) },
+      { url: 'https://framer.com/edit/init.mjs', status: 200, kind: 'script', type: 'text/javascript', sha: sha(EDIT) },
+    ] }));
+    const out = path.join(root, 'copy');
+    const lift = await liftPage({ captureRoot: root, pageUrl: SITE, outDir: out, fetch: false });
+    assert.ok(lift.removed.some((r) => r.url.includes('/edit/init.mjs')), 'the editor script is removed');
+    const html = await readFile(path.join(out, 'index.html'), 'utf8');
+    assert.doesNotMatch(html, /edit\/init/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
