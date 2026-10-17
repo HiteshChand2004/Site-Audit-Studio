@@ -128,7 +128,8 @@ test('font sources: a face keeps only the files the record holds; a family with 
     const net = path.join(root, '.network');
     await mkdir(path.join(net, 'files'), { recursive: true });
     const CSS_FONTS = `@font-face { font-family: "Good"; src: url(https://site.test/fonts/good.woff2) format("woff2"), url(https://cdn.test/missing.woff) format("woff"); }
-@font-face { font-family: "Lost"; src: url(https://cdn.test/lost.woff2) format("woff2"); }`;
+@font-face { font-family: "Lost"; src: url(https://cdn.test/lost.woff2) format("woff2"); }
+@font-face { font-family: "Fallback"; src: local("Arial"), url(https://cdn.test/gone.woff) format("woff"); }`;
     const FONT = 'WOFF2-GOOD';
     const bodies = { doc: '<!doctype html><html><head><link rel="stylesheet" href="https://site.test/app.css"></head><body><p style="font-family: Good">Text</p></body></html>', css: CSS_FONTS, font: FONT };
     for (const b of Object.values(bodies)) await writeFile(path.join(net, 'files', sha(b)), b);
@@ -150,6 +151,7 @@ test('font sources: a face keeps only the files the record holds; a family with 
     assert.match(css, /font-family: "Good"; src: url\("\/fonts\/good\.woff2"\) format\("woff2"\);/, 'the recorded source is kept, the unrecorded one is dropped');
     assert.match(css, /font-family: "Lost"; src: url\("\/lost\.woff2"\) format\("woff2"\);/, 'a family with no recorded file gets its downloaded file');
     assert.ok(lift.dropped.some((d) => d.url.endsWith('missing.woff') && d.family === 'Good'), 'the dropped source is reported');
+    assert.match(css, /font-family: "Fallback"; src: local\("Arial"\);/, 'a system font (local()) stays as written');
     assert.equal(lift.blockers.length, 0);
   } finally {
     await rm(root, { recursive: true, force: true });

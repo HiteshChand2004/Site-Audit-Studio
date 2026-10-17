@@ -212,28 +212,39 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
       const srcDecl = block.match(/src\s*:([^;]+);/);
       if (!srcDecl) continue;
       const family = (block.match(/font-family\s*:\s*([^;]+);/)?.[1] ?? '').trim().replace(/^['"]|['"]$/g, '');
-      const sources = [...srcDecl[1].matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)(\s*format\([^)]*\))?/g)];
+      const sources = srcDecl[1].split(/,(?![^(]*\))/).map((e) => e.trim()).filter(Boolean);
       const absOf = (raw) => new URL(raw.trim(), base).href.split('#')[0];
       const kept = [];
-      for (const s of sources) {
-        const abs = absOf(s[2]);
+      const candidates = [];
+      for (const e of sources) {
+        // local() is a font on this machine, not a file the page loads: it stays as written.
+        if (/^local\(/i.test(e)) {
+          kept.push(e);
+          continue;
+        }
+        const m = e.match(/^url\(\s*(['"]?)([^'")]+)\1\s*\)(\s*format\([^)]*\))?/i);
+        if (!m) continue;
+        const fmt = m[3] ?? '';
+        candidates.push({ raw: m[2], fmt });
+        const abs = absOf(m[2]);
         const entry = byUrl.get(abs);
-        if (entry && !excluded.has(abs)) kept.push(`url("${await fromRecord(abs, entry, 'font')}")${s[3] ?? ''}`);
+        if (entry && !excluded.has(abs)) kept.push(`url("${await fromRecord(abs, entry, 'font')}")${fmt}`);
         else dropped.push({ url: abs, family, reason: entry ? 'excluded' : 'not in the record' });
       }
       let newSrc = kept.length ? kept.join(', ') : null;
+      const hasLocal = kept.some((k) => /^local\(/i.test(k));
       if (!newSrc && fetch) {
-        for (const s of sources) {
-          const abs = absOf(s[2]);
+        for (const c of candidates) {
+          const abs = absOf(c.raw);
           if (excluded.has(abs)) continue;
           const local = await download(abs, 'media');
           if (local) {
-            newSrc = `url("${local}")${s[3] ?? ''}`;
+            newSrc = `url("${local}")${c.fmt}`;
             break;
           }
         }
       }
-      if (!newSrc) {
+      if (!newSrc && !hasLocal) {
         blockers.push({ url: family, reason: 'no file of this font family could be had' });
         continue;
       }
