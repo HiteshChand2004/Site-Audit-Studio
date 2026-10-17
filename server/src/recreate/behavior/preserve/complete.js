@@ -63,7 +63,7 @@ export async function registerServiceWorker(outDir) {
  * @param {{ browser: import('playwright').Browser, outDir: string, pageUrl: string, hosts: string[],
  *   fetchImpl?: typeof downloadAsset, passes?: number }} o
  */
-export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl = downloadAsset, passes = COMPLETE_PASSES }) {
+export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl = downloadAsset, passes = COMPLETE_PASSES, files = [] }) {
   const originHosts = new Set(hosts.map((h) => h.replace(/^www\./, '')));
   /** @type {Record<string, string>} */
   const manifest = {};
@@ -92,7 +92,8 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
           return route.abort();
         }
         // An original-host address: store it once at its path, then answer the page from the copy.
-        const local = localPathOf(url);
+        // The name the lift gave this address (its content type decides the extension); a new address gets its own name.
+        const local = files.find((f) => f.url === url)?.local ?? localPathOf(url);
         const target = path.join(outDir, local);
         if (!manifest[url]) {
           const res = await fetchImpl(url, { dir: tmp, kind: 'image', maxBytes: 25 * 1024 * 1024, attempts: 3 });

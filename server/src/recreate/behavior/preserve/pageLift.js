@@ -27,11 +27,27 @@ export const JS_ASSET_LIMIT = 60;
 /** Attempts per download (the guarded download's own back-off applies between them). */
 export const LIFT_ATTEMPTS = 3;
 
-/** The local path (root-relative) of a URL, as the copy serves it. */
-export function localPathOf(url) {
+/** The extension a file of this content type is saved under (the content, not the address, decides it). */
+const EXT_OF_TYPE = { 'image/webp': '.webp', 'image/avif': '.avif', 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/svg+xml': '.svg' };
+
+/**
+ * The local path (root-relative) of a URL, as the copy serves it. Two addresses of one file that differ only in their query
+ * (a responsive variant) are two files: the query's hash is part of the name. The extension follows the content type when
+ * the record (or a download) knows it, so a WebP served from a .png address is named .webp.
+ */
+export function localPathOf(url, type = null) {
   const u = new URL(url);
-  const clean = decodeURIComponent(u.pathname);
-  return clean.endsWith('/') ? `${clean}index.html` : clean;
+  let clean = decodeURIComponent(u.pathname);
+  if (clean.endsWith('/')) clean += 'index.html';
+  if (u.search) {
+    const hash = createHash('sha256').update(u.search).digest('hex').slice(0, 8);
+    const dot = clean.lastIndexOf('.');
+    const slash = clean.lastIndexOf('/');
+    clean = dot > slash ? `${clean.slice(0, dot)}~${hash}${clean.slice(dot)}` : `${clean}~${hash}`;
+  }
+  const typed = EXT_OF_TYPE[String(type ?? '').split(';')[0].trim().toLowerCase()];
+  if (typed && /\.[a-z0-9]+$/i.test(clean) && /^image\//.test(String(type))) clean = clean.replace(/\.[a-z0-9]+$/i, typed);
+  return clean;
 }
 
 /** Whether a URL is on the page's own site (or a subdomain of it). */
@@ -120,7 +136,7 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
 
   /** Copies one recorded file to its path on the copy. */
   const fromRecord = async (abs, entry, kind) => {
-    const local = localPathOf(abs);
+    const local = localPathOf(abs, entry.type);
     const target = path.join(outDir, local);
     await mkdir(path.dirname(target), { recursive: true });
     await copyFile(path.join(recordDir, 'files', entry.sha), target);
@@ -138,7 +154,7 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
       downloads.failedUrls.push({ url: abs, reason: res.reason });
       return null;
     }
-    const local = localPathOf(abs);
+    const local = localPathOf(abs, res.mime);
     const target = path.join(outDir, local);
     await mkdir(path.dirname(target), { recursive: true });
     await copyFile(res.tmp, target);
@@ -209,7 +225,7 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
     if (!COPIED_KINDS.has(entry.kind) || entry.status !== 200 || excluded.has(entry.url.split('#')[0])) continue;
     const abs = entry.url.split('#')[0];
     if (files.some((f) => f.url === abs)) continue;
-    const local = localPathOf(abs);
+    const local = localPathOf(abs, entry.type);
     const target = path.join(outDir, local);
     await mkdir(path.dirname(target), { recursive: true });
     await copyFile(path.join(recordDir, 'files', entry.sha), target);
@@ -236,6 +252,15 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
     if (changed) await writeFile(target, text, 'utf8');
   }
 
+  // A web app manifest names icons the page never loads itself (the browser fetches them for the install prompt): every
+  // icon it names is a file the copy uses, so it is copied or downloaded like any other.
+  for (const f of files.filter((x) => x.kind === 'icon' && /\.webmanifest$|\.json$/i.test(x.local))) {
+    const manifest = JSON.parse(await readFile(path.join(outDir, f.local), 'utf8').catch(() => 'null') ?? 'null');
+    for (const icon of manifest?.icons ?? []) {
+      if (!icon?.src) continue;
+      await localize(icon.src, 'icon');
+    }
+  }
   // Stylesheets: their url() references point at the same copies (the record, or a download).
   for (const f of files.filter((x) => x.kind === 'style')) {
     const target = path.join(outDir, f.local);

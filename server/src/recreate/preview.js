@@ -16,7 +16,7 @@ import { gzipSync } from 'node:zlib';
 import { APP_ORIGIN } from '../audit/frame.js';
 import { RecreateError } from './errors.js';
 import { inlineScriptHashes } from './inlineScripts.js';
-import { TYPES } from './verify/server.js';
+import { TYPES, typeExtOf } from './verify/server.js';
 
 export const PREVIEW_PORTS = { first: 5100, last: 5199 };
 export const PREVIEW_HOST = '127.0.0.1';
@@ -104,7 +104,7 @@ function createPreviewServer(root, { port, frameAncestors = appOrigins(), connec
       const real = await realpath(file);
       if (!inside(realBase, real)) return send(404, 'Not found');
       const body = await readFile(real);
-      const ext = path.extname(real).toLowerCase();
+      const ext = typeExtOf(real);
       const sent = scripts === 'inline' && ext === '.html'
         ? previewHeaders(frameAncestors, { connectSelf, scripts, scriptHashes: inlineScriptHashes(body.toString('utf8')) })
         : headers;

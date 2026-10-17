@@ -5,6 +5,13 @@ import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+/**
+ * The extension that decides a file's content type: a version suffix (framer's modules are named menu.js@0.0.29) is not part of it.
+ */
+export function typeExtOf(file) {
+  return path.extname(String(file).replace(/@[\w.-]+$/, '')).toLowerCase();
+}
+
 export const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
   '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.gif': 'image/gif',
@@ -34,7 +41,7 @@ export async function startSiteServer(root) {
     let rel = pathname.replace(/^\/+/, '');
     if (!rel || rel.endsWith('/')) rel += 'index.html';
     const send = (body, file) => {
-      res.writeHead(200, { 'Content-Type': TYPES[path.extname(file).toLowerCase()] ?? 'application/octet-stream', 'Cache-Control': 'no-store' });
+      res.writeHead(200, { 'Content-Type': TYPES[typeExtOf(file)] ?? 'application/octet-stream', 'Cache-Control': 'no-store' });
       res.end(req.method === 'HEAD' ? undefined : body);
     };
     if (overrides.has(rel)) return send(overrides.get(rel), rel);

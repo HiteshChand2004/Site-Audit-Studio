@@ -192,3 +192,15 @@ test('resource kinds: an image, a video, a font and a stylesheet are each their 
   assert.equal(found['/f.woff2'], 'font');
   assert.equal(found['/s.css'], 'style');
 });
+
+test('responsive variants are separate files, named by their content; a versioned module is served as JavaScript', async () => {
+  const { localPathOf } = await import('../src/recreate/behavior/preserve/pageLift.js');
+  const { typeExtOf } = await import('../src/recreate/verify/server.js');
+  const base = 'https://site.test/images/pic.png';
+  const small = localPathOf(`${base}?scale-down-to=1024&width=6400`);
+  const big = localPathOf(`${base}?width=512`);
+  assert.notEqual(small, big, 'two variants of one file do not share a name');
+  assert.equal(localPathOf(base), '/images/pic.png', 'the bare address keeps its name');
+  assert.match(localPathOf(`${base}?width=512`, 'image/webp'), /^\/images\/pic~[0-9a-f]{8}\.webp$/, 'the extension follows the content');
+  assert.equal(typeExtOf('/m/feather-icons/menu.js@0.0.29'), '.js', 'a version suffix is not the extension');
+});
