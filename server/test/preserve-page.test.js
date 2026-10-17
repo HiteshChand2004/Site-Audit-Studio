@@ -263,3 +263,30 @@ test('assets a script names but the record lacks are downloaded at build time an
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('a font face whose file is not recorded uses the recorded file of the same family, weight and style', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sas-face-'));
+  try {
+    const net = path.join(root, '.network');
+    await mkdir(path.join(net, 'files'), { recursive: true });
+    const CSS_APP = '@font-face { font-family: "Sup"; font-weight: 400; font-style: normal; src: url(https://cdn.test/missing.woff2) format("woff2"); }';
+    const FONT = 'WOFF2-SUP';
+    const DOC = '<!doctype html><html><head><style>@font-face { font-family: "Sup"; font-weight: 400; font-style: normal; src: url(https://site.test/fonts/sup.woff2) format("woff2"); }</style>'
+      + '<link rel="stylesheet" href="https://site.test/app.css"></head><body><h1 style="font-family: Sup">Head</h1></body></html>';
+    for (const b of [DOC, CSS_APP, FONT]) await writeFile(path.join(net, 'files', sha(b)), b);
+    await writeFile(path.join(net, 'index.json'), JSON.stringify({ version: 1, entries: [
+      { url: SITE, status: 200, kind: 'document', type: 'text/html', sha: sha(DOC) },
+      { url: 'https://site.test/app.css', status: 200, kind: 'style', type: 'text/css', sha: sha(CSS_APP) },
+      { url: 'https://site.test/fonts/sup.woff2', status: 200, kind: 'font', type: 'font/woff2', sha: sha(FONT) },
+    ] }));
+    const out = path.join(root, 'copy');
+    const lift = await liftPage({ captureRoot: root, pageUrl: SITE, outDir: out, fetch: false });
+    const css = await readFile(path.join(out, 'app.css'), 'utf8');
+    assert.doesNotMatch(css, /cdn\.test/, 'the face names no address of the original');
+    assert.match(css, /src: url\("\/fonts\/sup\.woff2"\) format\("woff2"\)/, 'the face uses the recorded file of the same font');
+    assert.ok(lift.matchedBy.some((m) => m.family.toLowerCase() === 'sup'));
+    assert.equal(lift.blockers.length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

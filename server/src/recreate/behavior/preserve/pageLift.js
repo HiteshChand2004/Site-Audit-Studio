@@ -72,6 +72,40 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   const classified = await classifyScripts(recordIndex, recordBodyReader(recordDir), { origin: pageUrl });
   const excluded = new Set(scriptCandidates(classified, siteHost).filter((s) => s.status === 'excluded').map((s) => s.url));
 
+  // Which recorded font file a face of the same family, weight and style uses: the page's own @font-face rules (its sheets
+  // and inline blocks) name the same font at the address the record holds, even when a face names another address.
+  /** @type {Map<string, string[]>} family|weight|style → recorded font addresses */
+  const faceIndex = new Map();
+  const faceKey = (block) => {
+    const family = (block.match(/font-family\s*:\s*([^;]+);/)?.[1] ?? '').trim().replace(/^['"]|['"]$/g, '').toLowerCase();
+    const weight = (block.match(/font-weight\s*:\s*([^;]+);/)?.[1] ?? '400').trim().replace(/\s+/g, ' ');
+    const style = (block.match(/font-style\s*:\s*([^;]+);/)?.[1] ?? 'normal').trim();
+    return `${family}|${weight}|${style}`;
+  };
+  const indexCss = (text, base) => {
+    for (const block of [...String(text).matchAll(/@font-face\s*\{[^}]*\}/g)].map((m) => m[0])) {
+      const srcDecl = block.match(/src\s*:([^;]+);/);
+      if (!srcDecl) continue;
+      for (const m of srcDecl[1].matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g)) {
+        let abs;
+        try {
+          abs = new URL(m[2].trim(), base).href.split('#')[0];
+        } catch {
+          continue;
+        }
+        if (!byUrl.has(abs) || excluded.has(abs)) continue;
+        const key = faceKey(block);
+        faceIndex.set(key, [...(faceIndex.get(key) ?? []), abs]);
+      }
+    }
+  };
+  for (const e of recordIndex.entries ?? []) {
+    if (e.kind !== 'style' || !e.sha || e.redirect) continue;
+    const text = await readFile(path.join(recordDir, 'files', e.sha), 'utf8').catch(() => '');
+    indexCss(text, e.url);
+  }
+  for (const st of load(html)('style').toArray()) indexCss(load(html)(st).html() ?? '', pageUrl);
+
   const $ = load(html);
   /** @type {{ url: string, reason: string }[]} */
   const blockers = [];
@@ -81,6 +115,8 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   const downloads = { tried: 0, ok: 0, failed: 0, failedUrls: [] };
   /** @type {{ url: string, family: string, reason: string }[]} font sources the copy does not keep */
   const dropped = [];
+  /** @type {{ family: string, from: string }[]} faces given the recorded file of the same font */
+  const matchedBy = [];
 
   /** Copies one recorded file to its path on the copy. */
   const fromRecord = async (abs, entry, kind) => {
@@ -236,6 +272,18 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
       }
       let newSrc = kept.length ? kept.join(', ') : null;
       const hasLocal = kept.some((k) => /^local\(/i.test(k));
+      // The same font (family, weight, style) the page names at an address the record holds: that file is the face.
+      if (!newSrc) {
+        const FORMAT = { woff2: 'woff2', woff: 'woff', ttf: 'truetype', otf: 'opentype' };
+        for (const abs of faceIndex.get(faceKey(block)) ?? []) {
+          const entry = byUrl.get(abs);
+          if (!entry || excluded.has(abs)) continue;
+          const ext = (abs.split(/[?#]/)[0].match(/\.(woff2?|ttf|otf)$/i)?.[1] ?? '').toLowerCase();
+          newSrc = `url("${await fromRecord(abs, entry, 'font')}")${FORMAT[ext] ? ` format("${FORMAT[ext]}")` : ''}`;
+          matchedBy.push({ family, from: abs });
+          break;
+        }
+      }
       if (!newSrc && fetch) {
         for (const c of candidates) {
           const abs = absOf(c.raw);
@@ -338,5 +386,5 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   // The copy\'s entry point: the document itself (its inline scripts and data are unchanged).
   await writeFile(path.join(outDir, 'index.html'), $.html(), 'utf8');
   await rm(tmp, { recursive: true, force: true });
-  return { document: { url: doc.url, sha256: doc.sha }, files, removed, blockers, downloads, dropped };
+  return { document: { url: doc.url, sha256: doc.sha }, files, removed, blockers, downloads, dropped, matchedBy };
 }
