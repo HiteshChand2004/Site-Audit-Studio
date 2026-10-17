@@ -245,7 +245,9 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
         }
       }
       if (!newSrc && !hasLocal) {
-        blockers.push({ url: family, reason: 'no file of this font family could be had' });
+        // The family has no file the copy can use: its face is removed (reported), never left pointing at the original.
+        out = out.split(block).join('');
+        blockers.push({ url: family, reason: 'no file of this font family could be had: the face is removed' });
         continue;
       }
       out = out.split(srcDecl[0]).join(`src: ${newSrc};`);
@@ -268,6 +270,16 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
       out = out.split(m[0]).join(`url("${local}")`);
     }
     return out;
+  }
+
+  // Inline <style> blocks and style="" attributes: the same rules as a stylesheet file (font sources, url() references).
+  for (const st of $('style').toArray()) {
+    const css = $(st).html() ?? '';
+    if (/url\(|@font-face/.test(css)) $(st).html(await rewriteCss(css, pageUrl));
+  }
+  for (const el of $('[style]').toArray()) {
+    const style = $(el).attr('style') ?? '';
+    if (/url\(/.test(style)) $(el).attr('style', await rewriteCss(style, pageUrl));
   }
 
   // The copy\'s entry point: the document itself (its inline scripts and data are unchanged).

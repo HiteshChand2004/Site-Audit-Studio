@@ -157,3 +157,27 @@ test('font sources: a face keeps only the files the record holds; a family with 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('inline styles: a font source in a <style> block and a url() in a style attribute are judged the same way', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sas-inline-'));
+  try {
+    const net = path.join(root, '.network');
+    await mkdir(path.join(net, 'files'), { recursive: true });
+    const IMG = 'PNG-BG';
+    const DOC = `<!doctype html><html><head><style>@font-face { font-family: "Inl"; src: url(https://cdn.test/inl.woff2) format("woff2"); }</style></head>`
+      + `<body><p style="background-image: url(https://site.test/bg.png); font-family: Inl">Text</p></body></html>`;
+    for (const b of [DOC, IMG]) await writeFile(path.join(net, 'files', sha(b)), b);
+    await writeFile(path.join(net, 'index.json'), JSON.stringify({ version: 1, entries: [
+      { url: SITE, status: 200, kind: 'document', type: 'text/html', sha: sha(DOC) },
+      { url: 'https://site.test/bg.png', status: 200, kind: 'image', type: 'image/png', sha: sha(IMG) },
+    ] }));
+    const out = path.join(root, 'copy');
+    const lift = await liftPage({ captureRoot: root, pageUrl: SITE, outDir: out, fetch: false });
+    const html = await readFile(path.join(out, 'index.html'), 'utf8');
+    assert.doesNotMatch(html, /cdn\.test|site\.test/, 'no address of the original is left in the document');
+    assert.match(html, /background-image: url\((&quot;|")\/bg\.png(&quot;|")\)/, 'the recorded image in the style attribute is the local copy');
+    assert.ok(lift.dropped.some((d) => d.url.endsWith('inl.woff2')), 'the unrecorded font source in the style block is dropped');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
