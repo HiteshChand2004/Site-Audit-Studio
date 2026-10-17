@@ -21,6 +21,9 @@ export const LIFT_MAX_BYTES = 25 * 1024 * 1024;
 /** What the guarded download expects for each kind of file (assets/download.js). */
 const DOWNLOAD_KIND = { media: 'media', icon: 'icon', style: 'image', script: 'image' };
 
+/** Most assets a page's scripts may name that the record lacks (downloaded at build time). */
+export const JS_ASSET_LIMIT = 60;
+
 /** Attempts per download (the guarded download's own back-off applies between them). */
 export const LIFT_ATTEMPTS = 3;
 
@@ -272,6 +275,29 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
     return out;
   }
 
+  // Asset addresses written inside a copied script (an image or a font the runtime fetches, which the capture never loaded):
+  // each one the record lacks is downloaded at build time (at most JS_ASSET_LIMIT), and the script points at the copy.
+  const JS_ASSET = /https:\/\/[a-z0-9.-]+\/[^\s"'`<>()\\]+?\.(?:svg|png|jpe?g|webp|gif|avif|woff2?|ttf|otf|mp4|webm)(?=["'`\s)])/gi;
+  let jsDownloads = 0;
+  for (const f of files.filter((x) => x.kind === 'script')) {
+    const target = path.join(outDir, f.local);
+    let text = await readFile(target, 'utf8').catch(() => null);
+    if (text === null) continue;
+    const found = [...new Set(text.match(JS_ASSET) ?? [])];
+    let changed = false;
+    for (const raw of found) {
+      const abs = raw.split('#')[0];
+      if (excluded.has(abs) || files.some((x) => x.url === abs)) continue;
+      if (byUrl.has(abs)) continue;
+      if (!fetch || jsDownloads >= JS_ASSET_LIMIT) continue;
+      jsDownloads++;
+      const local = await download(abs, 'image');
+      if (!local) continue;
+      text = text.split(raw).join(local);
+      changed = true;
+    }
+    if (changed) await writeFile(target, text, 'utf8');
+  }
   // A runtime often builds an address from a directory and a file name (a base constant plus a name): the directories of
   // the recorded files, two or more levels deep, are rewritten too, so the copy\'s scripts never build an original address.
   const dirPrefixes = new Map();

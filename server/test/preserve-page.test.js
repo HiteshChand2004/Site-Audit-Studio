@@ -235,3 +235,31 @@ test('runtime addresses built from a directory: the base constant of a script is
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('assets a script names but the record lacks are downloaded at build time and the script points at the copy', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sas-jsasset-'));
+  try {
+    const net = path.join(root, '.network');
+    await mkdir(path.join(net, 'files'), { recursive: true });
+    const LIB = 'window.__pic = "https://site.test/assets/pic.svg";';
+    const DOC = '<!doctype html><html><head></head><body><script src="https://site.test/app.js"></script></body></html>';
+    for (const b of [DOC, LIB]) await writeFile(path.join(net, 'files', sha(b)), b);
+    await writeFile(path.join(net, 'index.json'), JSON.stringify({ version: 1, entries: [
+      { url: SITE, status: 200, kind: 'document', type: 'text/html', sha: sha(DOC) },
+      { url: 'https://site.test/app.js', status: 200, kind: 'script', type: 'text/javascript', sha: sha(LIB) },
+    ] }));
+    const fetchImpl = async (url, { dir }) => {
+      const tmp = path.join(dir, 'pic.tmp');
+      await writeFile(tmp, '<svg/>');
+      return { ok: true, tmp, sha256: sha('<svg/>'), bytes: 6, mime: 'image/svg+xml', finalUrl: url, redirects: [] };
+    };
+    const out = path.join(root, 'copy');
+    const lift = await liftPage({ captureRoot: root, pageUrl: SITE, outDir: out, fetchImpl });
+    const app = await readFile(path.join(out, 'app.js'), 'utf8');
+    assert.doesNotMatch(app, /site\.test/, 'the script names no address of the original');
+    assert.match(app, /window\.__pic = "\/assets\/pic\.svg"/, 'the script points at the downloaded copy');
+    assert.ok(lift.files.some((f) => f.local === '/assets/pic.svg' && /downloaded/.test(f.reason)));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
