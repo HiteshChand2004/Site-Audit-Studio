@@ -211,3 +211,27 @@ test('module scripts run in the copy: a .mjs runtime is served as JavaScript and
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('runtime addresses built from a directory: the base constant of a script is rewritten to the local directory', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sas-prefix-'));
+  try {
+    const net = path.join(root, '.network');
+    await mkdir(path.join(net, 'files'), { recursive: true });
+    const LIB = 'var base = `https://site.test/m/icons/`; var file = "Add.js"; window.__iconUrl = base + file;';
+    const ICON = 'export default 1;';
+    const DOC = '<!doctype html><html><head></head><body><script src="https://site.test/app.js"></script></body></html>';
+    for (const b of [DOC, LIB, ICON]) await writeFile(path.join(net, 'files', sha(b)), b);
+    await writeFile(path.join(net, 'index.json'), JSON.stringify({ version: 1, entries: [
+      { url: SITE, status: 200, kind: 'document', type: 'text/html', sha: sha(DOC) },
+      { url: 'https://site.test/app.js', status: 200, kind: 'script', type: 'text/javascript', sha: sha(LIB) },
+      { url: 'https://site.test/m/icons/Add.js', status: 200, kind: 'script', type: 'text/javascript', sha: sha(ICON) },
+    ] }));
+    const out = path.join(root, 'copy');
+    await liftPage({ captureRoot: root, pageUrl: SITE, outDir: out, fetch: false });
+    const app = await readFile(path.join(out, 'app.js'), 'utf8');
+    assert.doesNotMatch(app, /site\.test/, 'the script builds no address of the original');
+    assert.match(app, /base = `\/m\/icons\/`/, 'the base is the local directory');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

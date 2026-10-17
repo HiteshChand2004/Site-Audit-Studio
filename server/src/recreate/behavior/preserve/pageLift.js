@@ -272,6 +272,33 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
     return out;
   }
 
+  // A runtime often builds an address from a directory and a file name (a base constant plus a name): the directories of
+  // the recorded files, two or more levels deep, are rewritten too, so the copy\'s scripts never build an original address.
+  const dirPrefixes = new Map();
+  for (const f of files) {
+    const dir = f.url.slice(0, f.url.lastIndexOf('/') + 1);
+    let u;
+    try {
+      u = new URL(dir);
+    } catch {
+      continue;
+    }
+    if (u.pathname.split('/').filter(Boolean).length < 2) continue;
+    if (excluded.has(dir)) continue;
+    dirPrefixes.set(dir, decodeURIComponent(u.pathname));
+  }
+  for (const f of files.filter((x) => x.kind === 'script')) {
+    const target = path.join(outDir, f.local);
+    let text = await readFile(target, 'utf8').catch(() => null);
+    if (text === null) continue;
+    let changed = false;
+    for (const [dir, local] of [...dirPrefixes].sort((a, b) => b[0].length - a[0].length)) {
+      if (!text.includes(dir)) continue;
+      text = text.split(dir).join(local);
+      changed = true;
+    }
+    if (changed) await writeFile(target, text, 'utf8');
+  }
   // Inline <style> blocks and style="" attributes: the same rules as a stylesheet file (font sources, url() references).
   for (const st of $('style').toArray()) {
     const css = $(st).html() ?? '';
