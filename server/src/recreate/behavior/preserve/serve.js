@@ -17,7 +17,9 @@ const TYPES = {
   '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.wasm': 'application/wasm',
 };
 /** Files that are compressed on the way out (the rest is already compressed or binary). */
-const COMPRESSIBLE = /\.(html|css|m?js|json|svg|txt|xml|webmanifest)$/i;
+const COMPRESSIBLE = /^\.(html|css|m?js|json|svg|txt|xml|webmanifest)$/i;
+/** Whether a file is text that is compressed on the way out (decided by its type, see typeExtOf). */
+const compressible = (file) => COMPRESSIBLE.test(typeExtOf(file));
 
 /**
  * Starts the server.
@@ -40,21 +42,22 @@ export function serveCopy(dir) {
       let entry = cache.get(file);
       if (!entry) {
         const body = await readFile(file);
-        entry = COMPRESSIBLE.test(file.replace(/@[\w.-]+$/, ""))
+        entry = compressible(file)
           ? { body, br: brotliCompressSync(body, { params: { [constants.BROTLI_PARAM_QUALITY]: 5 } }), gz: gzipSync(body, { level: 6 }) }
           : { body, br: body, gz: body };
         cache.set(file, entry);
       }
       const headers = {
         'content-type': TYPES[ext] ?? 'application/octet-stream',
-        'cache-control': ext === '.html' ? 'no-cache' : 'public, max-age=31536000',
+        // Pages and the service worker revalidate (a worker must notice an update); everything else is cached a year.
+        'cache-control': ext === '.html' || /(^|\/)sw\.js$/.test(rel) ? 'no-cache' : 'public, max-age=31536000',
         'x-content-type-options': 'nosniff',
         vary: 'Accept-Encoding',
       };
       const accept = String(req.headers['accept-encoding'] ?? '');
-      if (COMPRESSIBLE.test(file.replace(/@[\w.-]+$/, "")) && /\bbr\b/.test(accept)) {
+      if (compressible(file) && /\bbr\b/.test(accept)) {
         res.writeHead(200, { ...headers, 'content-encoding': 'br' }).end(req.method === 'HEAD' ? undefined : entry.br);
-      } else if (COMPRESSIBLE.test(file.replace(/@[\w.-]+$/, "")) && /\bgzip\b/.test(accept)) {
+      } else if (compressible(file) && /\bgzip\b/.test(accept)) {
         res.writeHead(200, { ...headers, 'content-encoding': 'gzip' }).end(req.method === 'HEAD' ? undefined : entry.gz);
       } else {
         res.writeHead(200, headers).end(req.method === 'HEAD' ? undefined : entry.body);

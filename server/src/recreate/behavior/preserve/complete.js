@@ -7,7 +7,7 @@
 //      copy serves those addresses itself. An original-host address the manifest does not hold fails at once, quietly,
 //      without leaving the copy. The copy registers it with one small inline script.
 // Nothing is fetched except through the guarded download, and only for the page's own hosts (the record's hosts).
-import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { load } from 'cheerio';
 import { downloadAsset } from '../../assets/download.js';
@@ -16,6 +16,8 @@ import { localPathOf } from './pageLift.js';
 
 /** Most passes a copy is completed in. */
 export const COMPLETE_PASSES = 3;
+/** What a builder's editor address holds in a copy: an empty module (the editor itself is not copied). */
+export const EDITOR_STUB = 'export const createEditorBar = () => null;\n';
 /** The inline script that registers the service worker (the same for every copy). */
 export const SW_REGISTER = "if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js');}";
 
@@ -52,12 +54,47 @@ self.addEventListener('fetch', (event) => {
 export async function registerServiceWorker(outDir) {
   const file = path.join(outDir, 'index.html');
   const $ = load(await readFile(file, 'utf8'));
-  if (!$('script').toArray().some((s) => ($(s).html() ?? '').includes("serviceWorker.register('/sw.js')"))) {
-    // At the end of the body: an inline script in the head would delay the stylesheets above it.
-    $('body').append(`<script>${SW_REGISTER}</script>`);
+  const inline = $('script').toArray().map((s) => $(s).html() ?? '');
+  const shim = !inline.some((t) => t.includes('window.URL=S'));
+  const register = !inline.some((t) => t.includes("serviceWorker.register('/sw.js')"));
+  // The marker is unique to the guard: the site's own scripts add submit listeners too.
+  const guard = !inline.some((t) => t.includes('sasFormGuard'));
+  if (shim || register || guard) {
+    // At the end of the body: an inline script in the head would delay the stylesheets above it. The page's modules run
+    // after this, so the shim is in place before any of them builds an address, and the form guard before any form is used.
+    $('body').append(`${shim ? `<script>${URL_BASE_SHIM}</script>` : ''}${guard ? `<script>${FORM_GUARD}</script>` : ''}${register ? `<script>${SW_REGISTER}</script>` : ''}`);
     await writeFile(file, $.html(), 'utf8');
   }
+  // The form settings: read when a form is sent, so a server can be connected without rebuilding the copy.
+  const config = path.join(outDir, 'sas-forms.json');
+  if (!(await stat(config).then(() => true, () => false))) await writeFile(config, `${JSON.stringify(FORMS_CONFIG, null, 2)}\n`, 'utf8');
 }
+
+/** The copy's form settings: where a form's data is sent. Empty by default: nothing is sent anywhere until a server is set. */
+export const FORMS_CONFIG = { endpoint: '' };
+
+/**
+ * A form in the copy is never sent to the original's backend. The site's own script still validates the form and draws it
+ * the same way; its submit handler (which would post to the original) never runs, because this listener sits on the window
+ * in the capture phase. The data goes to the endpoint in sas-forms.json (FORM_ENDPOINT) when one is set; otherwise a short
+ * visible note says the form is not connected yet, and nothing is sent.
+ */
+export const FORM_GUARD = "(function(){window.sasFormGuard=true;var C=null;function cfg(){return C||(C=fetch('/sas-forms.json',{cache:'no-cache'}).then(function(r){return r.ok?r.json():{}}).catch(function(){return{}}))}"
+  + "function note(f,t){var n=f.querySelector('[data-sas-form-note]');if(!n){n=document.createElement('p');n.setAttribute('data-sas-form-note','');n.setAttribute('role','status');n.style.cssText='margin:8px 0 0;font:14px/1.4 system-ui,sans-serif;color:#7c2d12';f.appendChild(n)}n.textContent=t}"
+  + "window.addEventListener('submit',function(e){var f=e.target;if(!(f instanceof HTMLFormElement))return;e.preventDefault();e.stopImmediatePropagation();"
+  + "cfg().then(function(c){var end=typeof c.endpoint==='string'?c.endpoint.trim():'';if(!end){note(f,'This form is not connected yet, so nothing was sent.');return}"
+  + "note(f,'Sending…');return fetch(end,{method:'POST',body:new FormData(f)}).then(function(r){note(f,r.ok?'Thank you. Your message was sent.':'The form could not be sent.')},function(){note(f,'The form could not be sent.')})})},true)})();";
+
+/**
+ * The host rewrite turns an absolute address of a runtime (new URL('https://<host>/x') or new URL(path, 'https://<host>/m.js'))
+ * into a root-relative one, which `new URL` refuses ("Invalid base URL" / "Invalid URL"). This shim resolves a root-relative
+ * address, or a root-relative base, against the page's own address; every other address and base is left as it is.
+ * A no-op for any copy without such an address.
+ */
+export const URL_BASE_SHIM = "(function(){var U=URL;function R(s){return typeof s==='string'&&s.charAt(0)==='/'&&s.charAt(1)!=='/'}"
+  + "function B(b){return R(b)?new U(b,location.href).href:b}"
+  + "function S(u,b){if(b===undefined)return R(u)?new U(u,location.href):new U(u);return new U(u,B(b))}"
+  + "S.prototype=U.prototype;Object.setPrototypeOf(S,U);window.URL=S;})();";
 
 /** The two sizes a copy is opened at: the lazy parts of each (mobile and desktop) load their own files. */
 export const COMPLETE_VIEWPORTS = [
@@ -88,7 +125,19 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
     let blocked = 0;
     const handle = async (route) => {
       const url = route.request().url().split('#')[0];
-      if (url.startsWith(server.url)) return route.continue();
+      if (url.startsWith(server.url)) {
+        // A builder's editor module, imported by the page's own code at its address (/edit/…): the editor is not part of
+        // the copy, so the address gets an empty module (the import resolves to nothing the page uses, not a 404).
+        const p = new URL(url).pathname;
+        if (/^\/edit\/[\w./-]+\.m?js$/.test(p)) {
+          const target = path.join(outDir, p);
+          if (!(await stat(target).then(() => true, () => false))) {
+            await mkdir(path.dirname(target), { recursive: true });
+            await writeFile(target, EDITOR_STUB, 'utf8');
+          }
+        }
+        return route.continue();
+      }
       let host = '';
       try {
         host = new URL(url).hostname.replace(/^www\./, '');

@@ -9,7 +9,12 @@ import path from 'node:path';
  * The extension that decides a file's content type: a version suffix (framer's modules are named menu.js@0.0.29) is not part of it.
  */
 export function typeExtOf(file) {
-  return path.extname(String(file).replace(/@[\w.-]+$/, '')).toLowerCase();
+  // A name that already ends in a known extension is what it is (menu@0.0.29.js: the version sits before the extension,
+  // the way the lift names a versioned file); only a version written after the extension (menu.js@0.0.29) is stripped.
+  const name = String(file);
+  const ext = path.extname(name).toLowerCase();
+  if (Object.hasOwn(TYPES, ext)) return ext;
+  return path.extname(name.replace(/@[\w.-]+$/, '')).toLowerCase();
 }
 
 export const TYPES = {

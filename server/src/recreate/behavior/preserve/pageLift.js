@@ -8,7 +8,7 @@
 // at build time through the guarded download and stored at the same path. A file that could not be had is a blocker,
 // reported, and never silently pointed back at the original. Plain links (a feed in <link rel="alternate">) are left as
 // they are: nothing loads them.
-import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { load } from 'cheerio';
 import { createHash } from 'node:crypto';
@@ -49,7 +49,65 @@ export function localPathOf(url, type = null) {
   }
   const typed = EXT_OF_TYPE[String(type ?? '').split(';')[0].trim().toLowerCase()];
   if (typed && /\.[a-z0-9]+$/i.test(clean) && /^image\//.test(String(type))) clean = clean.replace(/\.[a-z0-9]+$/i, typed);
+  // A host decides a file's type from its extension (CDNs, static hosts, Vercel and Netlify alike). A name that does not end in
+  // a known one gets one: a version after the extension (menu.js@0.0.29) moves before it (menu@0.0.29.js); any other name takes
+  // the extension of its content type. The version stays in the name, so two versions are two files.
+  if (!KNOWN_EXT.test(clean)) {
+    const versioned = clean.match(/^(.*)\.([a-z0-9]+)@([\w.-]+)$/i);
+    if (versioned && KNOWN_EXT.test(`.${versioned[2]}`)) clean = `${versioned[1]}@${versioned[3]}.${versioned[2]}`;
+    else if (EXT_ANY_TYPE[String(type ?? '').split(';')[0].trim().toLowerCase()]) clean += EXT_ANY_TYPE[String(type).split(';')[0].trim().toLowerCase()];
+  }
   return clean;
+}
+
+/** Extensions a host serves with the right type. */
+const KNOWN_EXT = /\.(html?|m?js|css|json|svg|png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf|eot|mp4|webm|ogv|mp3|ogg|wav|m4a|wasm|txt|xml|webmanifest|map)$/i;
+/** A versioned name in a copy's text, as a runtime writes it after its parts: name.js@0.0.32 (the version then ends the name). */
+const VERSIONED_IN_TEXT = /\.(m?js|css|json)@(\d[\w.-]*)(?=[`"'\s),;?#]|$)/g;
+/** The extension a file of a content type gets when its address has none the host knows. */
+const EXT_ANY_TYPE = {
+  'text/javascript': '.js', 'application/javascript': '.js', 'text/css': '.css', 'application/json': '.json', 'text/plain': '.txt',
+  'font/woff2': '.woff2', 'font/woff': '.woff', 'font/ttf': '.ttf', 'font/otf': '.otf', 'video/mp4': '.mp4', 'video/webm': '.webm',
+  'audio/mpeg': '.mp3', 'application/wasm': '.wasm', 'image/svg+xml': '.svg', 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp',
+  'image/avif': '.avif', 'image/gif': '.gif', 'image/x-icon': '.ico', 'application/manifest+json': '.webmanifest',
+};
+
+/**
+ * A file the copy renamed (localPathOf): every reference to its old name in the copy's text (HTML, scripts, styles, the
+ * manifests) is rewritten to the new one. A reference is a whole path segment, so a word that merely contains the name is left
+ * alone. Returns how many references changed.
+ * @param {string} outDir
+ * @param {Map<string, string>} renames  old file name → new file name
+ */
+export async function renameReferences(outDir, renames) {
+  const names = [...renames.keys()].sort((a, b) => b.length - a.length);
+  const pattern = names.length
+    ? new RegExp(`(?<=[/"'\`(])(${names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?=[?#"'\`)\\s,;]|$)`, 'g')
+    : null;
+  let changed = 0;
+  const walk = async (dir) => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(file);
+      } else if (/\.(html?|m?js|css|json|svg|webmanifest|txt|xml)$/i.test(entry.name)) {
+        const text = await readFile(file, 'utf8');
+        const named = pattern ? text.replace(pattern, (m) => {
+          changed++;
+          return renames.get(m);
+        }) : text;
+        // A name a runtime builds from parts (`${base}${name}.js@0.0.32`) is not in the text whole: the same rule applies to it
+        // wherever the version follows the extension, so the address it builds is the one localPathOf gave the file.
+        const next = named.replace(VERSIONED_IN_TEXT, (m, ext, version) => {
+          changed++;
+          return `@${version}.${ext}`;
+        });
+        if (next !== text) await writeFile(file, next, 'utf8');
+      }
+    }
+  };
+  await walk(outDir);
+  return changed;
 }
 
 /** Whether a URL is on the page's own site (or a subdomain of it). */
@@ -243,8 +301,10 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   // Every file of the record the page can load is copied to its path, not only the ones the HTML names: a runtime imports
   // its own modules by URL, from inside its JavaScript (Framer, Next.js chunks loaded later). Excluded scripts never are.
   const COPIED_KINDS = new Set(['script', 'style', 'font', 'image', 'media']);
+  // A file the page fetched as data (an SVG read by script, not by an <img>) is still a file the runtime loads by address.
+  const isMediaType = (type) => /^(image|font|video|audio)\//.test(String(type ?? ''));
   for (const entry of byUrl.values()) {
-    if (!COPIED_KINDS.has(entry.kind) || entry.status !== 200 || excluded.has(entry.url.split('#')[0])) continue;
+    if (!(COPIED_KINDS.has(entry.kind) || (entry.kind === 'data' && isMediaType(entry.type))) || entry.status !== 200 || excluded.has(entry.url.split('#')[0])) continue;
     const abs = entry.url.split('#')[0];
     if (files.some((f) => f.url === abs)) continue;
     const local = localPathOf(abs, entry.type);
@@ -453,6 +513,17 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
 
   // The copy\'s entry point: the document itself (its inline scripts and data are unchanged).
   await writeFile(path.join(outDir, 'index.html'), $.html(), 'utf8');
+  // Files the copy renamed for the hosts (a version after the extension, a name with no known extension): every reference
+  // to the old name in the copy's text follows the new one, so nothing asks for a name that is no longer there.
+  const renames = new Map();
+  for (const f of files) {
+    if (!f.url) continue;
+    const oldName = decodeURIComponent(new URL(f.url).pathname.split('/').pop() ?? '');
+    const newName = path.basename(f.local);
+    if (oldName && oldName !== newName && !newName.includes('~') && !renames.has(oldName)) renames.set(oldName, newName);
+  }
+  downloads.renamed = await renameReferences(outDir, renames);
+  downloads.renamedFiles = renames.size;
   await rm(tmp, { recursive: true, force: true });
   return { document: { url: doc.url, sha256: doc.sha }, files, removed, blockers, downloads, dropped, matchedBy };
 }
