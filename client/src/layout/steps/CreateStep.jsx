@@ -6,6 +6,7 @@ import SectionCard from '../../components/common/SectionCard.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import StackOutput from '../../components/recreate/StackOutput.jsx';
 import AsIsChoice, { ASIS_STACK_CHOICES } from '../../components/recreate/AsIsChoice.jsx';
+import { failedAttempt } from '../../components/recreate/failedAttempt.js';
 import { BrowserShot } from '../../components/site/Site.jsx';
 import { copyShot } from '../../siteData.js';
 import { RECREATE_STACKS, stackById } from '../../constants.js';
@@ -53,6 +54,9 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   const reauditJob = useProjects((s) => s.reaudits[project.id]);
   const result = latest?.result;
   const running = isJobActive(job);
+  // A copy that failed: its reason, and the same request again (the settings it was started with).
+  const lastOptions = useProjects((s) => s.lastRecreateOptions?.[project.id]) ?? null;
+  const failure = failedAttempt(latest, running);
   // A copy that stopped before it finished, whose work the server kept: it can continue instead of starting over.
   const resumable = !running ? latest?.resumable ?? null : null;
   const resume = resumable ? resumeText(resumable) : null;
@@ -84,6 +88,18 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   return (
     <div className={ws.stepBody}>
       {job && job.status !== 'done' && <AnalyzeProgress analysis={job} kind="recreate" onDismiss={() => dismissJob('recreate', project.id)} />}
+
+      {failure && (
+        <Alert
+          tone="bad"
+          title="The copy could not be finished"
+          action={lastOptions
+            ? <Button variant="primary" icon={RefreshCw} onClick={() => recreate(project.id, lastOptions)}>Try again</Button>
+            : <Button variant="primary" icon={RefreshCw} onClick={() => recreate(project.id)}>Try again</Button>}
+        >
+          {failure.reason} “Try again” starts it again with the same settings.
+        </Alert>
+      )}
 
       {resume && (
         <Alert

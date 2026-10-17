@@ -202,6 +202,8 @@ export const useProjects = create((set, get) => ({
       failed: (data) => {
         streams.delete(`${kind}:${projectId}`);
         get().setJob(kind, projectId, { status: 'failed', error: data.error || failedMessage });
+        // The latest attempt (its reason) is loaded, so the Create step shows why it failed and offers a new try.
+        if (kind === 'recreate') get().reloadRecreate(projectId).catch(() => {});
         // A copy stopped by its time limit after getting further continues by itself (the server queues the next try):
         // follow it, so the progress goes on instead of showing the failure. Asked again shortly after: the server decides
         // that just after it reports the failure.
@@ -248,6 +250,8 @@ export const useProjects = create((set, get) => ({
    *   (GET …/recreate `resumable`); exact: this one copy is an exact one (the project's own setting decides otherwise)
    */
   async recreate(id, options = null) {
+    // The request is kept: a failed copy can be tried again with the same settings (the Create step's "Try again").
+    set({ lastRecreateOptions: { ...get().lastRecreateOptions, [id]: options } });
     get().setJob('recreate', id, { status: 'starting', pct: 0, step: null, error: null, message: 'Starting…' });
     try {
       const { job, steps } = await api.startRecreate(id, options);
