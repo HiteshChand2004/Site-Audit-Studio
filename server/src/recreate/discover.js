@@ -108,7 +108,7 @@ export const SKIP_LABELS = {
  * @param {{isAllowed:(url:string)=>boolean}} o.robots
  * @param {number} o.limit         pages besides the homepage
  */
-export function selectPages({ pages, homeUrl, sitemapUrls = [], knownUrls = [], robots, limit }) {
+export function selectPages({ pages, homeUrl, sitemapUrls = [], knownUrls = [], robots, limit, include = null }) {
   const origin = new URL(homeUrl).origin;
   const byKey = new Map();
   for (const p of pages) {
@@ -142,6 +142,8 @@ export function selectPages({ pages, homeUrl, sitemapUrls = [], knownUrls = [], 
   for (const c of order) {
     let reason = skipReason(c.url, origin);
     if (reason === 'external') continue;
+    // An as-is run copies only the pages the user chose (include: the page keys); the homepage is always one of them.
+    if (include && !include.has(c.key)) continue;
     const page = byKey.get(c.key);
     // robots.txt asks crawlers not to read it - often the very pages that need a backend (an admin, a cart, an account).
     // It is still a page of the site the copy is made of: the crawl above did not fetch it, so the capture's browser
@@ -239,7 +241,7 @@ export async function probeNotFound(origin, { signal } = {}) {
   };
 }
 
-export async function discoverPages({ url, limit, all = false, knownUrls = [], render, signal, onProgress, notFound = false }) {
+export async function discoverPages({ url, limit, all = false, knownUrls = [], render, signal, onProgress, notFound = false, include = null }) {
   const home = await fetchPage(url, { timeout: 20000, signal });
   if (home.error === 'blocked') throw new RecreateError(home.message);
   if (home.error || home.status >= 400) throw new RecreateError(`Could not load the homepage (${home.error || `HTTP ${home.status}`}).`);
@@ -267,7 +269,7 @@ export async function discoverPages({ url, limit, all = false, knownUrls = [], r
     signal,
     onProgress: (done, total) => onProgress?.(0.2 + 0.8 * (done / Math.max(total, 1)), `Found ${done} pages`),
   });
-  const selection = selectPages({ pages: result.pages, homeUrl: home.url, sitemapUrls: sitemap.urls, knownUrls, robots, limit });
+  const selection = selectPages({ pages: result.pages, homeUrl: home.url, sitemapUrls: sitemap.urls, knownUrls, robots, limit, include });
   return {
     homeUrl: home.url,
     origin,

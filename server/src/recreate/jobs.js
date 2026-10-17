@@ -37,6 +37,7 @@ export const recreateJobs = new JobManager({
       project, recreateId: job.id, progress, warnings: job.warnings, signal, exact, preserve: payload?.preserve === true,
       ...((payload?.noLimit || (payload?.exact === undefined && resumed?.unlimited)) && { unlimited: true }),
       ...(stages && { stages }), ...(payload?.resumeFrom && { resumeFrom: payload.resumeFrom }),
+      ...(payload?.asIs && { asIs: payload.asIs }),
     });
     // The preview is runtime state: its port is not part of the report. The app asks for it
     // (GET/POST /preview), which also starts it again after a server restart. The stack's own build when the job built it.
@@ -54,6 +55,8 @@ export const recreateJobs = new JobManager({
     await pruneRecreates(project.id);
     // Stopped by the time limit after making progress: it continues by itself with a fresh budget (a few times at most).
     if (!ok) await autoResume(project, job.id, 'time-limit');
+    // An as-is copy is its own output: the stack export and the re-audit (which measure a clean rebuild) do not apply to it.
+    if (reportOf(job.id)?.asIs) return;
     if (ok && !reportOf(job.id)?.outputs?.[project.stack]) queueStackExport(project, job.id);
     if (ok) queueReaudit(project.id, job.id);
   },

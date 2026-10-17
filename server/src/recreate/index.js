@@ -31,6 +31,8 @@ import { exactCaptureStage } from './exactCapture.js';
 import { exactStage } from './exact.js';
 import { CHECKPOINT_FILE, clearUnfinished, isReusable, openCheckpoint, readCheckpoint, reportMarks, restoreStep, resumeStep, REUSABLE_STEPS } from './checkpoint.js';
 import { adoptWorkspace, commitWorkspace, discardWorkspace, openWorkspace } from './workspace.js';
+import { asIsStage } from './behavior/preserve/stage.js';
+import { pageKey } from '../audit/util.js';
 
 export { RecreateError };
 
@@ -68,6 +70,8 @@ export const STEPS = [
   { key: 'stack', label: 'Building the chosen stack', weight: 6, max: 8 * 60000, optional: true, background: true, after: 'build', perPage: 20000 },
 ];
 // What each page beyond BASE_PAGES adds to the whole job, and to the time the capture keeps for the steps after it.
+/** The steps an "Original as-is" copy runs (the rest are finished at once): the capture and the as-is stage. */
+export const ASIS_STEP_KEYS = new Set(['inspect', 'generate']);
 const JOB_PER_PAGE = STEPS.reduce((n, s) => n + (s.perPage ?? 0), 0);
 const LATER_PER_PAGE = STEPS.filter((s) => !s.background && s.key !== 'inspect').reduce((n, s) => n + (s.perPage ?? 0), 0);
 export const PUBLIC_STEPS = STEPS.map(({ key, label }) => ({ key, label }));
@@ -143,6 +147,8 @@ export function runRecreate({ netPolicy = userPolicy(), ...opts }) {
 
 async function recreate({
   project, recreateId, progress, warnings = [], stages = STAGES, exact = false, preserve = false, unlimited = exact, signal: stopSignal = null,
+  // "Original as-is" (behavior/preserve): the chosen pages ({ stack, pages: [addresses] }); only the capture and the as-is stage run.
+  asIs = null,
   // No limit means no limit: the job, every step and the time given back after a sleep are unbounded. SAS_RECREATE_MINUTES
   // still wins when the user set it, so a run can always be bounded. What keeps a run from hanging is unchanged and
   // stronger instead: every single page load, asset and render keeps its own limit, and a page that stalls is abandoned.
@@ -182,6 +188,8 @@ async function recreate({
     }
     await clearUnfinished(dir, saved);
   }
+  // The as-is copy's own stage replaces the copy's generate step; no other copy step runs (see the step loop below).
+  if (asIs) stages = { ...stages, generate: asIsStage };
   const checkpoint = openCheckpoint(dir, { recreateId, analysisId: analysis.id, saved, auto: Boolean(resumeFrom?.auto), mode: { exact, unlimited } });
   const ctx = {
     project,
@@ -192,9 +200,12 @@ async function recreate({
     // An exact copy is of the whole site: every page the discovery finds, whatever the project's page setting says
     // (the setting still decides for an ordinary copy, and the safety cap still applies).
     // One page only (projects.page_url) wins over both: that page and nothing else, in an exact copy too.
-    ...(pageUrlOf(project) && { singlePage: pageUrlOf(project) }),
-    pageLimit: pageUrlOf(project) ? 0 : exact ? SITE_PAGE_CAP - 1 : pageLimitOf(project.recreate_pages),
-    allPages: !pageUrlOf(project) && (exact || isAllPages(project.recreate_pages)),
+    ...(!asIs && pageUrlOf(project) && { singlePage: pageUrlOf(project) }),
+    // An as-is copy takes exactly the pages the user chose (discover.js include): as many as there are.
+    pageLimit: asIs ? asIs.pages.length : pageUrlOf(project) ? 0 : exact ? SITE_PAGE_CAP - 1 : pageLimitOf(project.recreate_pages),
+    allPages: !asIs && !pageUrlOf(project) && (exact || isAllPages(project.recreate_pages)),
+    include: asIs ? new Set(asIs.pages.map((u) => pageKey(u))) : null,
+    asIs,
     exact,
     preserve,
     unlimited,
@@ -398,6 +409,11 @@ async function recreate({
 
   try {
     for (const def of STEPS.filter((s) => !s.background)) {
+      // An as-is copy runs its capture and its stage only; the other steps are finished at once, so the bar still ends at 100 %.
+      if (asIs && !ASIS_STEP_KEYS.has(def.key)) {
+        progress(def.key, 1);
+        continue;
+      }
       // Background steps this step needs in full are awaited first; all of them when it renders pages itself and the
       // machine has no memory to spare for two browsers.
       for (const [key, task] of [...background]) {
@@ -409,7 +425,7 @@ async function recreate({
         }
       }
       await start(def);
-      for (const next of STEPS.filter((s) => s.background && s.after === def.key)) await start(next);
+      if (!asIs) for (const next of STEPS.filter((s) => s.background && s.after === def.key)) await start(next);
     }
     for (const key of [...background.keys()]) await join(key);
     ctx.report.timings = { ...timings, total: Date.now() - startedAt };

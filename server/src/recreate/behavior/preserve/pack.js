@@ -13,7 +13,7 @@ const SERVER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..
 const MERN_TEMPLATE = path.join(SERVER, 'src/recreate/emit/mern/template/server');
 
 /** The stacks a lifted copy can be packaged into. */
-export const PACK_STACKS = ['react-vite', 'next', 'mern'];
+export const PACK_STACKS = ['react-vite', 'nextjs', 'mern'];
 
 /** The versions the server builds and checks with (toolchains/<id>/package.json): what the user installs is what was verified. */
 export function pinnedVersions(id) {
@@ -154,7 +154,7 @@ export default defineConfig({
     }));
   }
 
-  if (stack === 'next') {
+  if (stack === 'nextjs') {
     const v = pinnedVersions('next');
     await put('package.json', `${JSON.stringify({
       name: `${slug}-site`, private: true, version: '0.0.0',

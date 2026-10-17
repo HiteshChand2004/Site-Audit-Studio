@@ -133,7 +133,18 @@ function kindOfTag(tag, rel = '') {
  * Saves the page: document, its files and its scripts (trackers removed) into outDir, served from its root.
  * @param {{ captureRoot: string, pageUrl: string, outDir: string, fetch?: boolean, fetchImpl?: typeof downloadAsset }} o
  */
-export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fetchImpl = downloadAsset }) {
+/**
+ * The identity of a page for links between copies: host without www, path without its trailing slash or index.html, no
+ * query and no fragment. `https://www.site.test/about/?x=1#top` and `https://site.test/about` are the same page.
+ * @param {string} url
+ */
+export function pageKeyOf(url) {
+  const u = new URL(url);
+  const p = u.pathname.replace(/\/index\.html$/, '/').replace(/\/+$/, '');
+  return `${u.hostname.replace(/^www\./, '')}${p}`;
+}
+
+export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fetchImpl = downloadAsset, entry = 'index.html', pageLinks = new Map() }) {
   const recordDir = path.join(captureRoot, '.network');
   const recordIndex = (await readRecordIndex(recordDir)) ?? { entries: [] };
   /** @type {Map<string, any>} */
@@ -511,8 +522,25 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
     if (rewritten.count) $(st).html(rewritten.text);
   }
 
-  // The copy\'s entry point: the document itself (its inline scripts and data are unchanged).
-  await writeFile(path.join(outDir, 'index.html'), $.html(), 'utf8');
+  // Links to pages of this copy that were selected: the copy's own address for them (a page of a site is one copy of it).
+  // Every other link stays as the original wrote it: a page that was not selected is an ordinary link to the original.
+  // The keys of pageLinks are the pages' addresses without query or fragment (pageKeyOf in asis.js).
+  if (pageLinks.size) {
+    for (const a of $('a[href]').toArray()) {
+      const raw = String($(a).attr('href') ?? '').trim();
+      if (!raw || /^(mailto|tel|javascript|data|#)/i.test(raw)) continue;
+      let target;
+      try {
+        target = new URL(raw, pageUrl);
+      } catch {
+        continue;
+      }
+      const local = pageLinks.get(pageKeyOf(target.href));
+      if (local) $(a).attr('href', `${local}${target.hash}`);
+    }
+  }
+  // The copy's entry point: the document itself (its inline scripts and data are unchanged).
+  await writeFile(path.join(outDir, entry), $.html(), 'utf8');
   // Files the copy renamed for the hosts (a version after the extension, a name with no known extension): every reference
   // to the old name in the copy's text follows the new one, so nothing asks for a name that is no longer there.
   const renames = new Map();

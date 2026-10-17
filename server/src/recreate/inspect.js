@@ -202,6 +202,7 @@ export async function inspectStage(ctx) {
       knownUrls,
       render,
       signal: ctx.signal,
+      include: ctx.include ?? null,
       onProgress: (f, message) => ctx.progress(0.2 * f, message),
     });
   // What the site answers for an address that does not exist. Only an exact copy asks, and only an exact copy

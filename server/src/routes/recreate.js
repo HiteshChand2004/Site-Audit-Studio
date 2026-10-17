@@ -15,8 +15,11 @@ import { getEmitter, isReadyStack, listStacks } from '../recreate/emit/index.js'
 import { exportStack, outputRoot, reportOutputs, targetStack } from '../recreate/export/fromIr.js';
 import { planZip, writeZip } from '../recreate/export/zip.js';
 import { RecreateError } from '../recreate/errors.js';
+import { ASIS_STACKS } from '../recreate/behavior/preserve/stage.js';
+import { asIsPagesOf } from '../recreate/behavior/preserve/asis.js';
 
 const router = Router();
+
 
 const selectProject = db.prepare('SELECT * FROM projects WHERE id = ?');
 const selectRecreate = db.prepare('SELECT id, status, error FROM recreates WHERE id = ? AND project_id = ?');
@@ -83,6 +86,21 @@ router.post('/:id/recreate', async (req, res) => {
   if (req.body?.noLimit) payload.noLimit = true;
   // `preserve`: an authorised project whose original parts are kept as they are (CLONER_SPEC): also fetches every picture and video.
   if (req.body?.preserve === true) payload.preserve = true;
+  // `mode: 'as-is'`: the original's own code and animations, saved locally (behavior/preserve). Only for an authorised project,
+  // and only when the request confirms it; the pages are the chosen ones of this site (the homepage always among them).
+  if (req.body?.mode !== undefined && req.body.mode !== 'clean' && req.body.mode !== 'as-is') {
+    return res.status(400).json({ error: 'The mode must be "clean" or "as-is".' });
+  }
+  if (req.body?.mode === 'as-is') {
+    if (!project.authorized) return res.status(403).json({ error: 'The original as-is copy is only available for a project marked as authorised.' });
+    if (req.body.confirmed !== true) return res.status(400).json({ error: 'Confirm that you may copy this site as it is.' });
+    const stack = req.body.stack ?? project.stack ?? 'html';
+    if (!ASIS_STACKS.includes(stack)) return res.status(400).json({ error: `The as-is copy can be packaged as: ${ASIS_STACKS.join(', ')}.` });
+    const pages = asIsPagesOf(project, req.body.pages);
+    if (pages === null) return res.status(400).json({ error: 'The pages must be addresses of this site (the homepage first or among them), up to 40.' });
+    payload.preserve = true;
+    payload.asIs = { stack, pages };
+  }
 
   try {
     const job = recreateJobs.start(project, payload, { warnings: analysisWarnings(analysis) });

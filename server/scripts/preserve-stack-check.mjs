@@ -26,7 +26,7 @@ const [stack, copyDir, originalUrl, outDir, portArg] = process.argv.slice(2);
 const port = Number(portArg ?? 4300);
 const CAPTURE = path.resolve(process.env.CAPTURE_ROOT ?? '../data/preserve/work/nyaayai/capture');
 const SERVER = path.resolve('.');
-const toolchainOf = { 'react-vite': 'react-vite', next: 'next', mern: 'mern' };
+const toolchainOf = { 'react-vite': 'react-vite', nextjs: 'next', mern: 'mern' };
 // The stack's address; "html" checks the plain copy served as it is (serve.js), not a packed stack.
 let base = `http://127.0.0.1:${port}`;
 const isLocal = (url) => url.startsWith(base) || url.startsWith('data:') || url.startsWith('blob:');
@@ -42,7 +42,7 @@ async function start(dir) {
   await symlink(path.join(SERVER, 'toolchains', toolchainOf[stack], 'node_modules'), modules, 'junction');
   const args = {
     'react-vite': ['node_modules/vite/bin/vite.js', 'preview', '--port', String(port), '--strictPort', '--host', '127.0.0.1'],
-    next: ['node_modules/next/dist/bin/next', 'start', '-p', String(port), '-H', '127.0.0.1'],
+    nextjs: ['node_modules/next/dist/bin/next', 'start', '-p', String(port), '-H', '127.0.0.1'],
     mern: ['server/src/index.js'],
   }[stack];
   const child = spawn(process.execPath, args, {
@@ -75,7 +75,7 @@ async function build(dir) {
   if (stack === 'react-vite') {
     return runToolchain({ dir, toolchain: 'react-vite', timeoutMs: 6 * 60000, steps: [{ label: 'vite build', args: ['vite', 'build'] }] });
   }
-  if (stack === 'next') {
+  if (stack === 'nextjs') {
     return runToolchain({ dir, toolchain: 'next', timeoutMs: 8 * 60000, steps: [{ label: 'next build', args: ['node_modules/next/dist/bin/next', 'build'] }] });
   }
   return null; // MERN: nothing to build

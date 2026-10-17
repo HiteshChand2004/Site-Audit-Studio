@@ -51,8 +51,8 @@ self.addEventListener('fetch', (event) => {
  * Adds the service worker registration to the copy's document (once).
  * @param {string} outDir
  */
-export async function registerServiceWorker(outDir) {
-  const file = path.join(outDir, 'index.html');
+export async function registerServiceWorker(outDir, entry = 'index.html') {
+  const file = path.join(outDir, entry);
   const $ = load(await readFile(file, 'utf8'));
   const inline = $('script').toArray().map((s) => $(s).html() ?? '');
   const shim = !inline.some((t) => t.includes('window.URL=S'));
@@ -108,7 +108,7 @@ export const COMPLETE_VIEWPORTS = [
  * @param {{ browser: import('playwright').Browser, outDir: string, pageUrl: string, hosts: string[],
  *   fetchImpl?: typeof downloadAsset, passes?: number, files?: { url: string, local: string }[] }} o
  */
-export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl = downloadAsset, passes = COMPLETE_PASSES, files = [] }) {
+export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl = downloadAsset, passes = COMPLETE_PASSES, files = [], entries = ['index.html'] }) {
   const originHosts = new Set(hosts.map((h) => h.replace(/^www\./, '')));
   // Every file the lift already copied is served by the worker too: its address maps to its local file, so a request for
   // it (a chunk the page imports by address) is answered from the copy, never refused as "not in this copy".
@@ -166,21 +166,24 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
       return route.fulfill({ path: target });
     };
     try {
-      for (const options of COMPLETE_VIEWPORTS) {
-        const context = await browser.newContext(options);
-        try {
-          await context.route('**/*', handle);
-          const page = await context.newPage();
-          await page.goto(`${server.url}index.html`, { waitUntil: 'load', timeout: 90000 });
-          await page.waitForTimeout(1500);
-          // The whole page, scrolled the way a visitor does: the lazy parts load and request their files.
-          for (let y = 0; y < 14000; y += 400) {
-            await page.evaluate((yy) => window.scrollTo(0, yy), y);
-            await page.waitForTimeout(120);
+      // Every page of the copy, at both sizes: each one's lazy parts load the files only they ask for.
+      for (const entry of entries) {
+        for (const options of COMPLETE_VIEWPORTS) {
+          const context = await browser.newContext(options);
+          try {
+            await context.route('**/*', handle);
+            const page = await context.newPage();
+            await page.goto(`${server.url}${entry}`, { waitUntil: 'load', timeout: 90000 });
+            await page.waitForTimeout(1500);
+            // The whole page, scrolled the way a visitor does: the lazy parts load and request their files.
+            for (let y = 0; y < 14000; y += 400) {
+              await page.evaluate((yy) => window.scrollTo(0, yy), y);
+              await page.waitForTimeout(120);
+            }
+            await page.waitForTimeout(1200);
+          } finally {
+            await context.close();
           }
-          await page.waitForTimeout(1200);
-        } finally {
-          await context.close();
         }
       }
     } finally {
@@ -190,7 +193,7 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
     if (downloaded === 0) break;
   }
   await writeFile(path.join(outDir, 'sw.js'), serviceWorkerSource(manifest, [...originHosts]), 'utf8');
-  await registerServiceWorker(outDir);
+  for (const entry of entries) await registerServiceWorker(outDir, entry);
   await rm(tmp, { recursive: true, force: true });
   return { passes: passesRun, manifest, log };
 }

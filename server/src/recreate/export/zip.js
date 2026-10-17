@@ -129,7 +129,8 @@ There is no build step and no JavaScript. To check it locally:
  * @returns {Promise<{ entries: object[], bytes: number, name: string }>}
  */
 export async function planZip({ dir, report, stack = report.stack }) {
-  if (stack !== 'html') return planProjectZip({ dir, report, stack });
+  // An app stack, and an as-is copy (its folder is the whole copy, with its README): the project as it is.
+  if (stack !== 'html' || reportOutputs(report)[stack]?.mode === 'as-is') return planProjectZip({ dir, report, stack });
   const dist = await listFiles(path.join(dir, 'dist')).catch(() => []);
   if (!dist.length) throw refuse(404, 'The production build of this recreate is gone. Run Recreate again.');
   const distSizes = new Map(dist.map((f) => [f.rel, f.size]));
