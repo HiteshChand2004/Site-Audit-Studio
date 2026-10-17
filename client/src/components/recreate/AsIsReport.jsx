@@ -18,8 +18,8 @@ function PageRow({ page }) {
       <td>{offline.external?.length ? <span className={styles.bad}>{offline.external.length} off the copy</span> : <span className={styles.good}>none leave the copy</span>}</td>
       <td>{visual[1440] ?? '—'}%</td>
       <td>{visual[390] ?? '—'}%</td>
-      <td>{page.hovers ? `${page.hovers.copy.changed} of ${page.hovers.original.changed}` : '—'}</td>
-      <td>{page.controls ? `${page.controls.copy.visible} of ${page.controls.original.visible} visible` : '—'}</td>
+      <td>{page.hovers ? `${page.hovers.copy.changed} of ${page.hovers.original?.changed ?? '—'}` : '—'}</td>
+      <td>{page.controls ? `${page.controls.copy.visible} of ${page.controls.original?.visible ?? '—'} visible` : '—'}</td>
       <td>{errors ? <span className={styles.bad}>{errors}</span> : '0'}</td>
       <td>{page.forms?.count ?? 0}</td>
     </tr>
