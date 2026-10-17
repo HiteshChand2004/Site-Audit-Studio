@@ -7,7 +7,7 @@ import path from 'node:path';
 import { db, interruptedRecreates } from '../db/index.js';
 import { JobManager } from '../jobs/manager.js';
 import { startReaudit } from '../reaudit/jobs.js';
-import { overallPct, runRecreate, STAGES, STEPS } from './index.js';
+import { asIsBudgetMs, overallPct, runRecreate, STAGES, STEPS } from './index.js';
 import { replayStages } from './replay.js';
 import { getEmitter } from './emit/index.js';
 import { exportStack, outputRoot, targetStack } from './export/fromIr.js';
@@ -37,8 +37,10 @@ export const recreateJobs = new JobManager({
     const asIsMode = payload?.asIs ?? resumed?.asIs ?? null;
     const report = await runRecreate({
       project, recreateId: job.id, progress, warnings: job.warnings, signal, exact, preserve: payload?.preserve === true,
-      // An as-is copy has no overall time limit (its stage has its own, index.js AS_IS_STAGE_MS); a resume keeps it as-is.
-      ...((payload?.noLimit || (payload?.exact === undefined && resumed?.unlimited) || asIsMode) && { unlimited: true }),
+      ...((payload?.noLimit || (payload?.exact === undefined && resumed?.unlimited)) && { unlimited: true }),
+      // An as-is copy gets a budget that follows its size (20 minutes per page, 10 per stack; index.js asIsBudgetMs): a stuck
+      // copy ends with the time-limit error and frees the worker, never runs for ever. SAS_RECREATE_MINUTES still wins.
+      ...(asIsMode && { budgetMs: asIsBudgetMs(asIsMode.pages?.length ?? 1, 1) }),
       ...(stages && { stages }), ...(payload?.resumeFrom && { resumeFrom: payload.resumeFrom }),
       // A repack names the job whose lifted copy it reuses (its folder is read by the stage, behavior/preserve/stage.js).
       ...(asIsMode && { asIs: asIsMode.from ? { ...asIsMode, fromDir: recreateDir(project.id, asIsMode.from) } : asIsMode }),
