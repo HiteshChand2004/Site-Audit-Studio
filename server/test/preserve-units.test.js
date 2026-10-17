@@ -148,3 +148,47 @@ test('origin: a button a widget script injected is excluded, a site portal outsi
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('attribution: an icon-only button a widget inserted takes its wrapper with it; a site element that is missing is kept', async () => {
+  const { injectedParts } = await import('../src/recreate/behavior/preserve/attribution.js');
+  const WIDGET = 'https://chat.vendor.test/widget.js';
+  const SITE_SCRIPT = 'https://site.test/site.js';
+  // Normal loads: the widget's wrapper and its icon-only button, and a site note the site script inserted after the widget.
+  // Blocked load: none of the widget's parts, and the site note is missing too (its script waited for the widget).
+  const normal = {
+    elements: [
+      { key: 'svg|#1', path: 'body>div:3>button:1>svg:1', text: '', by: WIDGET },
+      { key: 'p|Site note#1', path: 'body>p:9', text: 'Site note', by: SITE_SCRIPT },
+    ],
+    paths: ['body', 'body>div:3', 'body>div:3>button:1', 'body>div:3>button:1>svg:1', 'body>p:9', 'body>div:1', 'body>div:1>p:1'],
+    inserted: [{ path: 'body>div:3', by: WIDGET }, { path: 'body>div:3>button:1', by: WIDGET }, { path: 'body>div:3>button:1>svg:1', by: WIDGET }, { path: 'body>p:9', by: SITE_SCRIPT }],
+  };
+  const again = { elements: normal.elements, paths: normal.paths };
+  const blocked = { elements: [], paths: ['body', 'body>div:1', 'body>div:1>p:1'] };
+  const out = injectedParts(normal, again, blocked, ['chat.vendor.test']);
+  assert.deepEqual(out.injected, ['body>div:3'], 'the widget\'s wrapper is the injected root');
+  assert.ok(!out.injected.some((p) => p.includes('p:9')), 'the site\'s own note is kept, though it is missing when the widget is blocked');
+});
+
+test('keyframes used only by an inline style="animation" are kept: the element animates in the copy', () => {
+  // The animation is written in the element\'s own style attribute, not in any stylesheet rule (the way a page\'s script
+  // or a builder writes it). Its @keyframes is in the sheet and must come with the component.
+  const $ = load('<html><body><div class="wrap"><span class="grad" style="background-size:200% 200%;animation:gradient-shift 4s ease infinite">Text</span></div></body></html>');
+  const sheets = parseSheets([{ readable: true, raw: '@keyframes gradient-shift{0%{background-position:0%}to{background-position:100%}} @keyframes unused{from{opacity:0}to{opacity:1}}' }]);
+  const el = resolvePath($, 'body>div:1');
+  const css = filterCss(sheets, $, el).css;
+  assert.match(css, /@keyframes gradient-shift/, 'the keyframes the inline animation names are kept');
+  assert.doesNotMatch(css, /@keyframes unused/, 'keyframes nothing names are not kept');
+});
+
+test('resource kinds: an image, a video, a font and a stylesheet are each their own kind (a video is never fetched as an image)', async () => {
+  const { resourceUrls } = await import('../src/recreate/behavior/preserve/extract.js');
+  const $ = load('<html><body><div class="x"><img src="/a.png"><video src="/v.mp4" poster="/p.webp"></video><link rel="stylesheet" href="/s.css"></div></body></html>');
+  const root = resolvePath($, 'body>div:1');
+  const found = Object.fromEntries(resourceUrls($, root, 'h1{font-family:X} @font-face{src:url(/f.woff2)}', SITE).map((r) => [r.url.replace(SITE, '/'), r.kind]));
+  assert.equal(found['/a.png'], 'image');
+  assert.equal(found['/v.mp4'], 'media', 'the video is media');
+  assert.equal(found['/p.webp'], 'image', 'the poster is an image');
+  assert.equal(found['/f.woff2'], 'font');
+  assert.equal(found['/s.css'], 'style');
+});

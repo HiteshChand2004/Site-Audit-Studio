@@ -170,3 +170,24 @@ test('capture: every picture variant and the video of a page are requested, not 
     await context.close();
   }
 });
+
+test('attribution: a site element that fails to render when the widget is blocked is kept; the widget\'s own button is excluded', async () => {
+  // The site\'s own script adds a note only once the widget has loaded. With the widget blocked the note does not render,
+  // but it was inserted by the site\'s script (same host), so it must not be excluded.
+  served.set('/site-page', `<!doctype html><html><head></head><body>
+    <section><p>content here</p></section>
+    <script src="/site.js"></script>
+    <script src="http://localhost:${port}/widget.js"></script></body></html>`);
+  served.set('/site.js', 'document.addEventListener("DOMContentLoaded", function () { if (window.WidgetReady) { var n = document.createElement("p"); n.className = "site-note"; n.textContent = "Site note from the site script"; document.body.appendChild(n); } });');
+  served.set('/widget.js', 'window.WidgetReady = true; var b = document.createElement("button"); b.textContent = "Ask the widget"; document.body.appendChild(b);');
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sas-attr2-'));
+  try {
+    const result = await measureAttribution({ browser, url: `http://127.0.0.1:${port}/site-page`, hosts: ['localhost'], outFile: path.join(root, 'attribution.json'), settleMs: 600 });
+    const texts = result.parts.map((p) => p.text);
+    assert.ok(texts.includes('Ask the widget'), 'the widget\'s button is excluded');
+    assert.ok(!texts.includes('Site note from the site script'), 'the site\'s note, missing when the widget is blocked, is kept');
+    assert.ok(result.parts.every((p) => p.by && p.by.includes('localhost')), 'every excluded part was inserted by the widget\'s host');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
