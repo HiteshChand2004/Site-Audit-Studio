@@ -5,7 +5,7 @@
 //   FORMS_DB           database name, default "site";  FORMS_COLLECTION  default "submissions"
 //   FORMS_STORE=memory keep submissions in memory instead (development; lost on restart)
 //   TRUST_PROXY        set to "true" (or a hop count) behind a reverse proxy, so the rate limit sees the real client address
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApp } from './app.js';
@@ -15,6 +15,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const forms = JSON.parse(readFileSync(path.join(here, '..', 'forms.json'), 'utf8'));
 const siteDir = path.resolve(process.env.SITE_DIR ?? path.join(here, '..', '..', 'client', 'dist'));
 const port = Number(process.env.PORT ?? 3000);
+// A lifted copy (server/site.json written by the packer) is served as it was copied: see app.js lifted.
+const lifted = existsSync(path.join(here, '..', 'site.json')) && JSON.parse(readFileSync(path.join(here, '..', 'site.json'), 'utf8')).lifted === true;
 
 async function openStore() {
   if (process.env.MONGODB_URI) {
@@ -37,7 +39,7 @@ async function openStore() {
 }
 
 const store = await openStore();
-const server = createApp({ store, forms, siteDir }).listen(port, () => console.log(`Serving ${siteDir} on http://localhost:${port}`));
+const server = createApp({ store, forms, siteDir, lifted }).listen(port, () => console.log(`Serving ${siteDir} on http://localhost:${port}`));
 
 const stop = () => {
   server.close(() => store.close().finally(() => process.exit(0)));
