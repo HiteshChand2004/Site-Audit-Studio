@@ -5,6 +5,7 @@ import { Alert } from '../common/Surface.jsx';
 import StepList from '../common/StepList.jsx';
 import { JOB_STEPS, stepTitle } from '../../copy.js';
 import styles from './AnalyzeProgress.module.css';
+import { stripAnsi } from '../../ansi.js';
 
 const LABELS = {
   analysis: { running: 'Checking the site', queued: 'Waiting to check the site', failed: 'The check did not finish' },
@@ -45,7 +46,7 @@ export default function AnalyzeProgress({ analysis, kind = 'analysis', onDismiss
           </Button>
         }
       >
-        {analysis.error}
+        {stripAnsi(analysis.error)}
         <p className={styles.after}>Nothing was lost: the last finished result is still there. You can simply start it again.</p>
       </Alert>
     );

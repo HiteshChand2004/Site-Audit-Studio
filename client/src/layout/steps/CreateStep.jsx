@@ -7,6 +7,7 @@ import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import StackOutput from '../../components/recreate/StackOutput.jsx';
 import AsIsChoice, { ASIS_STACK_CHOICES } from '../../components/recreate/AsIsChoice.jsx';
 import { failedAttempt } from '../../components/recreate/failedAttempt.js';
+import { stripAnsi } from '../../ansi.js';
 import { BrowserShot } from '../../components/site/Site.jsx';
 import { copyShot } from '../../siteData.js';
 import { RECREATE_STACKS, stackById } from '../../constants.js';
@@ -89,7 +90,8 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
     <div className={ws.stepBody}>
       {job && job.status !== 'done' && <AnalyzeProgress analysis={job} kind="recreate" onDismiss={() => dismissJob('recreate', project.id)} />}
 
-      {failure && (
+      {/* The progress box above already shows a failure that just happened: this alert is for one that was found afterwards. */}
+      {failure && !(job && job.status === 'failed') && (
         <Alert
           tone="bad"
           title="The copy could not be finished"
@@ -97,7 +99,7 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
             ? <Button variant="primary" icon={RefreshCw} onClick={() => recreate(project.id, lastOptions)}>Try again</Button>
             : <Button variant="primary" icon={RefreshCw} onClick={() => recreate(project.id)}>Try again</Button>}
         >
-          {failure.reason} “Try again” starts it again with the same settings.
+          {stripAnsi(failure.reason)} “Try again” starts it again with the same settings.
         </Alert>
       )}
 

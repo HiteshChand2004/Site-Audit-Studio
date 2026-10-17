@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { db } from '../db/index.js';
 import { holdAwake, releaseAwake } from './keepAwake.js';
+import { stripAnsi } from './ansi.js';
 
 const RETAIN_MS = 60000;
 const DB_WRITE_INTERVAL = 1000;
@@ -190,7 +191,7 @@ export class JobManager extends EventEmitter {
     } catch (err) {
       console.error(`[${this.#opts.table} ${job.id}]`, err);
       job.status = 'failed';
-      job.error = err.message || 'The job failed.';
+      job.error = stripAnsi(err.message) || 'The job failed.';
       this.#rows.finish.run('failed', job.pct, job.error, new Date().toISOString(), null, job.id);
       this.#emit(job, 'failed');
     }
