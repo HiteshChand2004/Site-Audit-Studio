@@ -4,6 +4,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { asIsPagesOf, localOfOutPath } from '../src/recreate/behavior/preserve/asis.js';
 import { pageKeyOf } from '../src/recreate/behavior/preserve/pageLift.js';
+import { readLifted } from '../src/recreate/behavior/preserve/stage.js';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { selectPages } from '../src/recreate/discover.js';
 import { pageKey } from '../src/audit/util.js';
 
@@ -51,4 +55,28 @@ test('discovery takes exactly the chosen pages when an include set is given; wit
 
   const all = selectPages({ pages, homeUrl: home, robots, limit: 5 });
   assert.deepEqual(all.pages.map((p) => p.url), [home, 'https://site.test/a', 'https://site.test/b']);
+});
+
+test('a lifted copy keeps its page set; an older copy (report only) gives the same pages', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sas-readlifted-'));
+  try {
+    const saved = path.join(root, 'saved');
+    await mkdir(saved, { recursive: true });
+    await mkdir(path.join(saved, 'as-is'), { recursive: true });
+    await writeFile(path.join(saved, 'as-is', 'pages.json'), JSON.stringify({ pages: [{ url: 'https://s.test/', outPath: 'index.html' }, { url: 'https://s.test/about/', outPath: 'about/index.html' }], excludedHosts: ['chat.test'], lift: { files: 3 } }), 'utf8');
+    const kept = await readLifted(saved);
+    assert.deepEqual(kept.pages.map((p) => p.outPath), ['index.html', 'about/index.html']);
+    assert.deepEqual(kept.excludedHosts, ['chat.test']);
+
+    const older = path.join(root, 'older');
+    await mkdir(older, { recursive: true });
+    await writeFile(path.join(older, 'report.json'), JSON.stringify({ asIs: { pages: [{ url: 'https://s.test/', path: '/' }, { url: 'https://s.test/about/', path: '/about/' }, { url: 'https://s.test/pricing.html', path: '/pricing.html' }], excludedByRule: ['chat.test'] } }), 'utf8');
+    const old = await readLifted(older);
+    assert.deepEqual(old.pages.map((p) => p.outPath), ['index.html', 'about/index.html', 'pricing.html']);
+    assert.deepEqual(old.excludedHosts, ['chat.test']);
+
+    assert.equal(await readLifted(path.join(root, 'nothing')), null, 'no copy, no pages');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

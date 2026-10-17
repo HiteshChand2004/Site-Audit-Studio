@@ -44,6 +44,25 @@ async function javascriptOf(dir) {
   return { files, bytes, gzipBytes };
 }
 
+/**
+ * The page set and lift of a finished as-is job's folder. A job that kept as-is/pages.json gives it; an older one (before the
+ * page set was kept) gives the pages its report recorded, with the same addresses (its own lift is still in as-is/copy).
+ * @returns {Promise<{ pages: { url: string, outPath: string }[], excludedHosts: string[], lift: object | null } | null>}
+ */
+export async function readLifted(dir) {
+  const saved = await readFile(path.join(dir, ASIS_PAGES_FILE), 'utf8').then(JSON.parse, () => null);
+  if (saved?.pages?.length) return { pages: saved.pages, excludedHosts: saved.excludedHosts ?? [], lift: saved.lift ?? null };
+  const report = await readFile(path.join(dir, 'report.json'), 'utf8').then(JSON.parse, () => null);
+  const pages = report?.asIs?.pages ?? [];
+  if (!pages.length) return null;
+  const outPathOf = (p) => (p === '/' ? 'index.html' : p.endsWith('/') ? `${p.slice(1)}index.html` : p.slice(1));
+  return {
+    pages: pages.map((p) => ({ url: p.url, outPath: outPathOf(p.path) })),
+    excludedHosts: report.asIs.excludedByRule ?? [],
+    lift: report.asIs.lift ?? null,
+  };
+}
+
 /** Lighthouse scores and the metrics the report shows, from one saved desktop report. */
 export function scoresOf(lhr) {
   const a = lhr.audits ?? {};
@@ -72,9 +91,10 @@ export async function asIsStage(ctx) {
   let excludedHosts;
   let lifted = null;
   if (fromDir) {
-    const saved = JSON.parse(await readFile(path.join(fromDir, ASIS_PAGES_FILE), 'utf8'));
+    const saved = await readLifted(fromDir);
+    if (!saved) throw new RecreateError('The lifted copy to package is gone: make the original as-is copy again.');
     pages = saved.pages;
-    excludedHosts = saved.excludedHosts ?? [];
+    excludedHosts = saved.excludedHosts;
     lifted = { ...saved.lift, reusedFrom: path.basename(fromDir) };
   } else {
     pages = ctx.discovery?.pages ?? [];
@@ -90,6 +110,12 @@ export async function asIsStage(ctx) {
       await rm(copyDir, { recursive: true, force: true });
       await mkdir(path.dirname(copyDir), { recursive: true });
       await cp(path.join(fromDir, ASIS_DIR, 'copy'), copyDir, { recursive: true });
+      // This job keeps the lifted copy and its page set too: a later repack takes them from here, and the retention that keeps
+      // the newest finished jobs never removes the only copy of the lift.
+      await mkdir(path.join(ctx.dir, ASIS_DIR), { recursive: true });
+      await writeFile(path.join(ctx.dir, ASIS_PAGES_FILE), `${JSON.stringify({
+        createdAt: new Date().toISOString(), pages, excludedHosts, lift: lifted, reusedFrom: path.basename(fromDir),
+      }, null, 1)}\n`, 'utf8');
     } else {
       // The record is written when the job ends; the lift needs it now (every page's document), so it is saved here first.
       await ctx.netCache?.record?.save?.().catch(() => {});

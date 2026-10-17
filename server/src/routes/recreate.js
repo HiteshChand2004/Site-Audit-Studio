@@ -15,7 +15,7 @@ import { getEmitter, isReadyStack, listStacks } from '../recreate/emit/index.js'
 import { exportStack, outputRoot, reportOutputs, targetStack } from '../recreate/export/fromIr.js';
 import { planZip, writeZip } from '../recreate/export/zip.js';
 import { RecreateError } from '../recreate/errors.js';
-import { ASIS_DIR, ASIS_PAGES_FILE, ASIS_STACKS } from '../recreate/behavior/preserve/stage.js';
+import { ASIS_DIR, ASIS_STACKS, readLifted } from '../recreate/behavior/preserve/stage.js';
 import { startAsIsPreview, stopAsIsPreview } from '../recreate/behavior/preserve/asisPreview.js';
 import { asIsPagesOf } from '../recreate/behavior/preserve/asis.js';
 
@@ -35,6 +35,13 @@ const latestDone = db.prepare(`
 `);
 
 // Finished recreates, newest first: the latest one whose capture is still on disk can be rebuilt from.
+/** The finished copies, newest first, that may hold a lifted copy to package (see the reuse of an as-is copy). */
+const latestAsIsSource = db.prepare(`
+  SELECT id, started_at FROM recreates
+  WHERE project_id = ? AND status = 'done'
+  ORDER BY started_at DESC LIMIT 20
+`);
+
 const latestReplayable = db.prepare(`
   SELECT id, started_at FROM recreates
   WHERE project_id = ? AND status = 'done'
@@ -101,10 +108,12 @@ router.post('/:id/recreate', async (req, res) => {
     let pages;
     let from = null;
     if (req.body.reuseAsIs === true) {
-      const source = latestReplayable.all(project.id).find((r) => r && existsSync(path.join(recreateDir(project.id, r.id), ASIS_PAGES_FILE)));
-      if (!source) return res.status(409).json({ error: 'There is no lifted copy to package: make an original as-is copy first.' });
+      // The newest finished copy that still has its lifted folder (older ones may have been removed by the retention rule).
+      const source = latestAsIsSource.all(project.id).find((r) => existsSync(path.join(recreateDir(project.id, r.id), ASIS_DIR, 'copy')));
+      const lifted = source ? await readLifted(recreateDir(project.id, source.id)) : null;
+      if (!source || !lifted) return res.status(409).json({ error: 'There is no lifted copy to package: make an original as-is copy first.' });
       from = source.id;
-      pages = JSON.parse(await readFile(path.join(recreateDir(project.id, source.id), ASIS_PAGES_FILE), 'utf8')).pages.map((p) => p.url);
+      pages = lifted.pages.map((p) => p.url);
     } else {
       pages = asIsPagesOf(project, req.body.pages);
       if (pages === null) return res.status(400).json({ error: 'The pages must be addresses of this site (the homepage first or among them), up to 40.' });
