@@ -10,7 +10,8 @@ import { chromium } from 'playwright';
 import { liftSite, localOfOutPath } from './asis.js';
 import { packLifted } from './pack.js';
 import { buildStack, startStack } from './serveStack.js';
-import { checkCopy, excludedHostsOf, formsInCopy } from './check.js';
+import { checkCopy, excludedHostsOf, formsInCopy, probeOriginal } from './check.js';
+import { slugFor } from '../../discover.js';
 import { serveCopy } from './serve.js';
 import { runLighthouse } from '../../../audit/lighthouse/run.js';
 import { RecreateError } from '../../errors.js';
@@ -110,6 +111,8 @@ export async function asIsStage(ctx) {
       await rm(copyDir, { recursive: true, force: true });
       await mkdir(path.dirname(copyDir), { recursive: true });
       await cp(path.join(fromDir, ASIS_DIR, 'copy'), copyDir, { recursive: true });
+      // The baseline pictures travel with the copy: a repack needs no capture and no live site.
+      await cp(path.join(fromDir, ASIS_DIR, 'baseline'), path.join(ctx.dir, ASIS_DIR, 'baseline'), { recursive: true }).catch(() => {});
       // This job keeps the lifted copy and its page set too: a later repack takes them from here, and the retention that keeps
       // the newest finished jobs never removes the only copy of the lift.
       await mkdir(path.join(ctx.dir, ASIS_DIR), { recursive: true });
@@ -131,6 +134,12 @@ export async function asIsStage(ctx) {
         hosts: lift.hosts.length,
       };
       if (lift.lifts.some((l) => l.blockers?.length)) lifted.blockers = lift.lifts.flatMap((l) => l.blockers.map((b) => ({ page: l.path, ...b })));
+      // The capture's own picture of each page is the baseline the checks use when the original does not answer: kept with the lift.
+      await mkdir(path.join(ctx.dir, ASIS_DIR, 'baseline'), { recursive: true });
+      for (const p of pages) {
+        const slug = slugFor(p.outPath);
+        await cp(path.join(captureRoot, slug, 'desktop-full.webp'), path.join(ctx.dir, ASIS_DIR, 'baseline', `${slug}.webp`)).catch(() => {});
+      }
       // The lifted copy and its page set stay with the job: another stack is packaged from them without lifting again.
       await mkdir(path.join(ctx.dir, ASIS_DIR), { recursive: true });
       await writeFile(path.join(ctx.dir, ASIS_PAGES_FILE), `${JSON.stringify({
@@ -181,12 +190,22 @@ export async function asIsStage(ctx) {
       servers.push(s);
       base = s.url;
     }
+    // The original is asked once: when it does not answer, the checks that need it say so and the copy is still finished.
+    // The baseline is the capture's own picture of each page (kept with the lift), so the visual check does not need the site.
+    const originalReachable = await probeOriginal(siteUrl);
+    const baselines = {};
+    for (const p of pages) {
+      const png = await readFile(path.join(ctx.dir, ASIS_DIR, 'baseline', `${slugFor(p.outPath)}.webp`)).catch(() => null);
+      if (png) baselines[localOfOutPath(p.outPath)] = png;
+    }
+    report.baseline = { pages: Object.keys(baselines).length, of: pages.length };
     const checks = await checkCopy({
-      browser, base, excludedHosts,
+      browser, base, excludedHosts, originalReachable, baselines,
       pages: pages.map((p) => ({ path: localOfOutPath(p.outPath), url: p.url })),
       log: (m) => ctx.progress(0.55, m),
     });
     report.checks = checks;
+    if (!originalReachable) ctx.report.warnings.push('The original did not answer: the checks that compare with it say so; the copy and its download are complete.');
     const external = checks.pages.reduce((n, p) => n + p.offline.external.length, 0);
     report.safety = { safe: external === 0, mode: 'as-is', note: 'The original\'s own code is kept as it is; the check is that nothing leaves the copy.' };
 

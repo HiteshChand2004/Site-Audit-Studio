@@ -220,17 +220,70 @@ export function controlGaps(copy, original, excludedHosts) {
  * @param {string[]} o.excludedHosts  third-party hosts the lift excluded by rule
  * @param {(msg: string) => void} [o.log]
  */
-export async function checkCopy({ browser, base, pages, excludedHosts = [], log = () => {} }) {
-  const report = { pages: [], forms: 0, needsAPerson: [] };
+/**
+ * Whether the original answers at all, asked once per job (the checks never ask it again, and nothing retries it: the site may
+ * rate-limit a burst of requests). A repack does not depend on this: without it the checks use the saved capture.
+ */
+export async function probeOriginal(url, { timeoutMs = 15000 } = {}) {
+  return fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) }).then(() => true, () => false);
+}
+
+/**
+ * The copy's screenshot at 1440 against the saved capture's full-page screenshot of the original (the baseline from the first
+ * capture). Used when the original is not reachable: the copy is then compared with what the original was when it was captured.
+ */
+export async function baselineVisual(browser, base, copyUrl, baselinePng) {
+  const outside = [];
+  const copy = await isolated(browser, { viewport: { width: 1440, height: 900 } }, base, outside);
+  try {
+    const cp = await copy.newPage();
+    await openAndScroll(cp, copyUrl);
+    const shot = await cp.screenshot({ fullPage: true, type: 'png' });
+    const a = await rgbOf(shot);
+    const img = sharp(baselinePng);
+    const meta = await img.metadata();
+    const b = { raw: await img.removeAlpha().raw().toBuffer(), width: meta.width, height: meta.height };
+    // The saved picture may be a different size: the copy is brought to its width before the pixels are compared.
+    const same = a.width === b.width ? a : await rgbOf(await sharp(shot).resize({ width: b.width }).png().toBuffer());
+    return { width: 1440, copyHeight: same.height, originalHeight: b.height, diffPct: pixelDiffPct(same.raw, b.raw), source: 'saved capture' };
+  } finally {
+    await copy.close();
+  }
+}
+
+export async function checkCopy({ browser, base, pages, excludedHosts = [], log = () => {}, originalReachable = true, baselines = {} }) {
+  const report = { pages: [], forms: 0, needsAPerson: [], originalReachable };
   for (const p of pages) {
     const copyUrl = `${base}${p.path}`;
     const one = { path: p.path, original: p.url };
     one.offline = await offlineCheck(browser, base, p.path).then((r) => ({ ...r, path: p.path }));
     log(`offline ${p.path} ${JSON.stringify(one.offline).slice(0, 200)}`);
     one.visual = [];
-    for (const width of [1440, 390]) {
-      one.visual.push(await visualCheck(browser, base, copyUrl, p.url, width));
-      log(`visual ${p.path} ${JSON.stringify(one.visual.at(-1))}`);
+    if (originalReachable) {
+      for (const width of [1440, 390]) {
+        one.visual.push(await visualCheck(browser, base, copyUrl, p.url, width));
+        log(`visual ${p.path} ${JSON.stringify(one.visual.at(-1))}`);
+      }
+    } else {
+      // The original does not answer: the copy's desktop picture is compared with the capture's; there is no phone baseline.
+      const png = baselines[p.path];
+      one.visual.push(png
+        ? await baselineVisual(browser, base, copyUrl, png)
+        : { width: 1440, diffPct: null, note: 'original not reachable and no saved capture' });
+      one.visual.push({ width: 390, diffPct: null, note: 'original not reachable' });
+      log(`visual ${p.path} ${JSON.stringify(one.visual[0])}`);
+    }
+    if (!originalReachable) {
+      // Only what the copy does on its own: the original cannot be clicked or hovered now.
+      const copyClicks = await clickProfile(browser, base, copyUrl, true);
+      one.controls = { copy: summarize(copyClicks), original: null, mismatch: [], note: 'original not reachable: not compared' };
+      const copyHover = await hoverProfile(browser, base, copyUrl, true);
+      one.hovers = { copy: summarize(copyHover), original: null, mismatch: [], note: 'original not reachable: not compared' };
+      one.forms = await formCheck(browser, base, copyUrl);
+      report.forms += one.forms.count;
+      report.pages.push(one);
+      log(`page ${p.path} done (copy only)`);
+      continue;
     }
     const copyClicks = await clickProfile(browser, base, copyUrl, true);
     const origClicks = await clickProfile(browser, base, p.url, false);
