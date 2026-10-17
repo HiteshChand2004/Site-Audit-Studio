@@ -27,6 +27,7 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
   const dismissJob = useProjects((s) => s.dismissJob);
   const reloadRecreate = useProjects((s) => s.reloadRecreate);
   const reloadAudit = useProjects((s) => s.reloadAudit);
+  const recreate = useProjects((s) => s.recreate);
   // One job at a time on the server: no new comparison while a copy or comparison of this project runs.
   const busy = isJobActive(job) || isJobActive(reauditJob);
   const outputs = outputsOf(result);
@@ -90,7 +91,15 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
     <div className={ws.stepBody}>
       {reauditJob && reauditJob.status !== 'done' && <AnalyzeProgress analysis={reauditJob} kind="reaudit" onDismiss={() => dismissJob('reaudit', project.id)} />}
 
-      {result.asIs && <AsIsReport asIs={result.asIs} outputs={[result.asIs.stack]} />}
+      {result.asIs && (
+        <AsIsReport
+          asIs={result.asIs}
+          outputs={[result.asIs.stack]}
+          projectId={project.id}
+          asIsOutputs={latest?.asIsOutputs ?? {}}
+          onPackage={(stack) => recreate(project.id, { mode: 'as-is', confirmed: true, stack, reuseAsIs: true })}
+        />
+      )}
 
       {result.singlePage && (
         <p className={ws.hint}>

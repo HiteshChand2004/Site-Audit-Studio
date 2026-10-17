@@ -35,6 +35,13 @@ const latestDone = db.prepare(`
 `);
 
 // Finished recreates, newest first: the latest one whose capture is still on disk can be rebuilt from.
+/** The finished copies with their reports, newest first (the output of each stack of an as-is copy). */
+const doneCopies = db.prepare(`
+  SELECT id, result_json FROM recreates
+  WHERE project_id = ? AND status = 'done'
+  ORDER BY started_at DESC LIMIT 20
+`);
+
 /** The finished copies, newest first, that may hold a lifted copy to package (see the reuse of an as-is copy). */
 const latestAsIsSource = db.prepare(`
   SELECT id, started_at FROM recreates
@@ -159,7 +166,18 @@ router.get('/:id/recreate', async (req, res) => {
   const done = latestDone.get(req.params.id);
   // A stopped recreate whose work was kept: the app offers to continue it (POST { resume: true }).
   const stopped = recreateJobs.active(req.params.id) ? null : await findResumable(req.params.id);
+  // The newest output of each stack of an as-is copy, with the copy that holds it (each stack has its own download).
+  const asIsOutputs = {};
+  for (const row of doneCopies.all(req.params.id)) {
+    const rep = row.result_json ? JSON.parse(row.result_json) : null;
+    for (const [stack, out] of Object.entries(rep?.outputs ?? {})) {
+      if (out?.mode !== 'as-is' || out.status !== 'ready' || asIsOutputs[stack]) continue;
+      if (!existsSync(path.join(recreateDir(req.params.id, row.id), out.dir ?? ''))) continue;
+      asIsOutputs[stack] = { recreateId: row.id };
+    }
+  }
   res.json({
+    asIsOutputs,
     resumable: stopped?.summary ?? null,
     last: last ? {
       id: last.id,

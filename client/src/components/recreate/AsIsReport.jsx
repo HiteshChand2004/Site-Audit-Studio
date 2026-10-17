@@ -1,4 +1,6 @@
 import { Alert, Card } from '../common/Surface.jsx';
+import Button from '../common/Button.jsx';
+import { api } from '../../api/client.js';
 import { AS_IS_EXPLANATION, ASIS_STACK_CHOICES } from './AsIsChoice.jsx';
 import styles from './AsIsReport.module.css';
 
@@ -28,7 +30,7 @@ function PageRow({ page }) {
  * The result of an "Original as-is" copy: the mode, the checks per page, what was excluded by rule, what needs a person, the
  * JavaScript the copy ships, and Lighthouse before and after (desktop).
  */
-export default function AsIsReport({ asIs, outputs }) {
+export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {}, onPackage }) {
   if (!asIs) return null;
   const checks = asIs.checks?.pages ?? [];
   const lh = asIs.lighthouse ?? {};
@@ -109,7 +111,24 @@ export default function AsIsReport({ asIs, outputs }) {
         <p className={styles.note}>{lh.error ? `Not measured: ${lh.error}` : 'Not measured.'}</p>
       )}
 
-      {outputs?.length > 0 && <p className={styles.note}>The download is the {stackName(asIs.stack)} project, with its README (install, run, deploy, FORM_ENDPOINT).</p>}
+      {/* One download per stack: each stack's own output stays until that stack is packed again. A missing output is never offered. */}
+      <h4 className={styles.h}>Downloads, one per stack</h4>
+      <ul className={styles.list}>
+        {ASIS_STACK_CHOICES.map((s) => {
+          const out = asIsOutputs[s.id];
+          return (
+            <li key={s.id}>
+              <span>{s.label}</span>{' '}
+              {out && projectId ? (
+                <a className="mono" href={api.downloadUrl(projectId, out.recreateId, s.id)}>Download .zip</a>
+              ) : (
+                <Button size="sm" onClick={() => onPackage?.(s.id)}>Package again</Button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      <p className={styles.note}>Each download is the stack’s project, with its README (install, run, deploy, FORM_ENDPOINT).</p>
     </Card>
   );
 }

@@ -3,6 +3,7 @@
 // failed or timed-out job never leaves a half-written site behind. A job that stopped with work worth keeping (its
 // checkpoint.json, recreate/checkpoint.js) keeps its "<recreateId>.tmp" until it is continued, a newer recreate succeeds,
 // a newer stopped job replaces it, or RESUMABLE_DAYS pass.
+import { existsSync } from 'node:fs';
 import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { db, projectDir } from '../db/index.js';
@@ -48,8 +49,9 @@ export async function discardWorkspace(projectId, recreateId) {
   await rm(tmpDir(projectId, recreateId), { recursive: true, force: true });
 }
 
-const doneRecreates = db.prepare(
-  `SELECT id FROM recreates WHERE project_id = ? AND status = 'done' ORDER BY started_at DESC LIMIT ?`,
+// The finished copies with their reports, newest first (the as-is retention reads what each stack's output is).
+const doneWithResults = db.prepare(
+  `SELECT id, result_json FROM recreates WHERE project_id = ? AND status = 'done' ORDER BY started_at DESC LIMIT 50`,
 );
 
 // Stopped jobs newer than the latest completed recreate, newest first: the first whose work is kept can be continued.
@@ -83,7 +85,25 @@ export async function findResumable(projectId, now = Date.now()) {
  * @returns {Promise<string[]>} removed folder names
  */
 export async function pruneRecreates(projectId, { keep = KEEP_RECREATES } = {}) {
-  const kept = new Set(doneRecreates.all(projectId, keep).map((r) => r.id));
+  const done = doneWithResults.all(projectId);
+  const parsed = done.map((r) => ({ id: r.id, report: r.result_json ? JSON.parse(r.result_json) : null }));
+  const asIsRows = parsed.filter((r) => r.report?.asIs);
+  // A clean copy keeps the two newest, as before. An "Original as-is" copy is kept per stack instead: the newest output of each
+  // stack (its zip stays downloadable until that stack is packed again) and the newest copy that still holds the lift.
+  const kept = new Set(parsed.filter((r) => !r.report?.asIs).slice(0, keep).map((r) => r.id));
+  if (asIsRows.length) {
+    const seen = new Set();
+    for (const r of asIsRows) {
+      for (const [stack, out] of Object.entries(r.report?.outputs ?? {})) {
+        if (out?.mode === 'as-is' && out.status === 'ready' && !seen.has(stack)) {
+          seen.add(stack);
+          kept.add(r.id);
+        }
+      }
+    }
+    const lift = asIsRows.find((r) => existsSync(path.join(recreateRoot(projectId), r.id, 'as-is', 'copy')));
+    if (lift) kept.add(lift.id);
+  }
   const resumable = await findResumable(projectId);
   if (resumable) kept.add(`${resumable.recreateId}.tmp`);
   const root = recreateRoot(projectId);
