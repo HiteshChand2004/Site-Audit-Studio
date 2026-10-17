@@ -429,11 +429,6 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
     const rewritten = rewriteHosts(text, originHosts);
     if (rewritten.count) await writeFile(target, rewritten.text, 'utf8');
   }
-  for (const st of $('style').toArray()) {
-    const css = $(st).html() ?? '';
-    const rewritten = rewriteHosts(css, originHosts);
-    if (rewritten.count) $(st).html(rewritten.text);
-  }
   // A site's robots.txt is read by the page's tooling (Lighthouse\'s SEO checks): it is fetched once, when the copy lacks it.
   if (fetch && !files.some((f) => f.local === '/robots.txt')) {
     await download(new URL('/robots.txt', pageUrl).href, 'icon').catch(() => null);
@@ -447,6 +442,13 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   for (const el of $('[style]').toArray()) {
     const style = $(el).attr('style') ?? '';
     if (/url\(/.test(style)) $(el).attr('style', await rewriteCss(style, pageUrl));
+  }
+  // The original's host names inside the document's <style> blocks, after their references were resolved above: a host name
+  // turned into a path first would be read as a path of the page's own host (the font download went to the wrong server).
+  for (const st of $('style').toArray()) {
+    const css = $(st).html() ?? '';
+    const rewritten = rewriteHosts(css, originHosts);
+    if (rewritten.count) $(st).html(rewritten.text);
   }
 
   // The copy\'s entry point: the document itself (its inline scripts and data are unchanged).

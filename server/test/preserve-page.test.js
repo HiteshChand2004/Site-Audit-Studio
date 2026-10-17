@@ -182,6 +182,35 @@ test('inline styles: a font source in a <style> block and a url() in a style att
   }
 });
 
+test('inline <style> font the record lacks is downloaded from its own host, never from the page host', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sas-inlhost-'));
+  try {
+    const net = path.join(root, '.network');
+    await mkdir(path.join(net, 'files'), { recursive: true });
+    const IMG = 'PNG-KNOWN';
+    const DOC = `<!doctype html><html><head><style>@font-face { font-family: "Far"; src: url(https://fonts.test/far/f.woff2) format("woff2"); }</style></head>`
+      + `<body><p style="font-family: Far">Text</p></body></html>`;
+    for (const b of [DOC, IMG]) await writeFile(path.join(net, 'files', sha(b)), b);
+    await writeFile(path.join(net, 'index.json'), JSON.stringify({ version: 1, entries: [
+      { url: SITE, status: 200, kind: 'document', type: 'text/html', sha: sha(DOC) },
+      { url: 'https://fonts.test/known.png', status: 200, kind: 'image', type: 'image/png', sha: sha(IMG) },
+    ] }));
+    /** @type {string[]} */
+    const asked = [];
+    const fetchImpl = async (url) => {
+      asked.push(url);
+      return { ok: false, reason: 'http-404' };
+    };
+    const out = path.join(root, 'copy');
+    await liftPage({ captureRoot: root, pageUrl: SITE, outDir: out, fetch: true, fetchImpl });
+    const fontAsks = asked.filter((u) => u.endsWith('/far/f.woff2'));
+    assert.ok(fontAsks.length > 0, 'the font is asked for');
+    assert.ok(fontAsks.every((u) => u.startsWith('https://fonts.test/')), `asked only at its own host, got ${fontAsks.join(', ')}`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('module scripts run in the copy: a .mjs runtime is served as JavaScript and executes', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sas-mjs-'));
   try {
