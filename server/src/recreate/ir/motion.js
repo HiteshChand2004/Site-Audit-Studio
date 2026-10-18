@@ -909,7 +909,9 @@ export function applyMotion(site, byPath, { owned = new Map() } = {}) {
         stats.reveal.skipped.loop = (stats.reveal.skipped.loop ?? 0) + 1;
         continue;
       }
-      if (feedAreas.some((p) => el.path === p || el.path.startsWith(`${p}>`))) {
+      // Only what the feed shows in turn (not in the page's tree) is left to the feed. What the page shows in its first state
+      // keeps its reveal, whatever area it is in: a whole carousel was losing every scroll reveal of its visible slide (nyaayai).
+      if (!nodes.has(el.path) && feedAreas.some((p) => el.path === p || el.path.startsWith(`${p}>`))) {
         stats.reveal.skipped.feed = (stats.reveal.skipped.feed ?? 0) + 1;
         continue;
       }
