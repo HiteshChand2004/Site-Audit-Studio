@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
+import { VIEW_WIDTHS } from '../views.js';
 
 const RASTER = /\.(jpe?g|png|webp|avif|tiff?)$/i;
 const MIN_BYTES = 12 * 1024; // smaller files gain little and cost a request each
@@ -109,21 +110,26 @@ export async function makeImageVariants({ ir, assetsDir, deadline = Infinity }) 
 
 const VIEW_ORDER = ['mobile', 'tablet', 'laptop', 'desktop'];
 
-/** The sizes attribute from the shown widths per view and the breakpoints: "(max-width: 767.98px) 343px, …, 600px". */
+/**
+ * The sizes attribute from the shown widths per view and the breakpoints: "(max-width: 767.98px) 343px, …, 600px".
+ * A width never exceeds the viewport of the view it describes: a box recorded wider than its view (caught mid-transform,
+ * or a box that overflows) must not make a phone download the file of a tablet (parchaa: 676 px for a 375 px view).
+ */
 export function sizesFor(rw, breakpoints) {
   const parts = [];
   let last = null;
-  const widest = rw.desktop ?? rw.laptop ?? rw.tablet ?? rw.mobile;
+  const widestId = rw.desktop !== undefined ? 'desktop' : rw.laptop !== undefined ? 'laptop' : rw.tablet !== undefined ? 'tablet' : 'mobile';
+  const capped = (view, w) => Math.min(Math.ceil(w), VIEW_WIDTHS[view] ?? Infinity);
   for (const v of VIEW_ORDER.slice(0, 3)) {
     const w = rw[v];
     const bp = breakpoints?.[v];
     if (!w || !bp) continue;
-    const px = `${Math.ceil(w)}px`;
+    const px = `${capped(v, w)}px`;
     if (px === last) continue;
     parts.push(`(max-width: ${bp}px) ${px}`);
     last = px;
   }
-  parts.push(`${Math.ceil(widest)}px`);
+  parts.push(`${capped(widestId, rw[widestId] ?? rw.mobile)}px`);
   return parts.join(', ');
 }
 
@@ -138,7 +144,8 @@ export function applyImageVariants(ir, variants) {
       const best = list.find((v) => v.w >= desktop) ?? list[list.length - 1];
       n.attrs.src = { asset: best.asset };
       n.attrs.srcset = list.map((v) => ({ asset: v.asset, d: `${v.w}w` }));
-      n.attrs.sizes = sizesFor(n.rw, ir.breakpoints);
+      // The site's own sizes (it knows its layout) are kept; ours are computed only where it gave none.
+      if (!n.attrs.sizes) n.attrs.sizes = sizesFor(n.rw, ir.breakpoints);
       changed++;
     }
     (n.children ?? []).forEach((c) => walk(c, n));
