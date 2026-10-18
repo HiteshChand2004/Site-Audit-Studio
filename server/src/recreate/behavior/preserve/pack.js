@@ -180,13 +180,18 @@ export default defineConfig({
     // pages) stay Next's. A name the Next router would read as a pattern (brackets, stars) cannot be written as a rule.
     const copiedNext = movesNext ? await listFilesUnder(path.join(copyDir, '_next')) : [];
     const routable = copiedNext.filter((rel) => /^[A-Za-z0-9._\-/]+$/.test(rel));
+    // Next.js serves public/ by file name only: a page folder (about/index.html) answers its address through a rule, as the home page does.
+    const pageFolders = (await listFilesUnder(copyDir)).filter((rel) => rel.endsWith('/index.html') && !rel.startsWith('_next/') && /^[A-Za-z0-9._\-/]+$/.test(rel));
     const nextRewrites = [
       { source: '/', destination: '/index.html' },
+      ...pageFolders.map((rel) => ({ source: `/${rel.slice(0, -'index.html'.length)}`, destination: `/${rel}` })),
       ...routable.map((rel) => ({ source: `/_next/${rel}`, destination: `/next-assets/${rel}` })),
     ];
     await put('next.config.mjs', `// Static files first: next start serves public/ before any route, so the copy is never run through React.
 const nextConfig = {
   poweredByHeader: false,
+  // The copy's pages are <route>/index.html: the router and the static files agree on the trailing slash (/about/ → about/index.html).
+  trailingSlash: true,
   // The copy's home page is public/index.html: a rewrite answers the root address with it (static files are matched by their own path).
   async rewrites() {
     return { beforeFiles: ${JSON.stringify(nextRewrites)} };
