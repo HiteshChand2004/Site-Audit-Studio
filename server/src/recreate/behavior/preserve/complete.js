@@ -131,8 +131,20 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
   const sameFile = {};
   /** @type {Map<string, string>} */
   const sameFailed = new Map();
-  const sameOrigin = { mapped: [], sameAsOriginal: [] };
-  const bareTaken = new Set();
+  const sameOrigin = { mapped: [], sameAsOriginal: [], ambiguous: [] };
+  // The bare file of a path (no query) belongs to one address of it. A static host answers the bare path for every query, so
+  // while a path has two addresses (two sizes of one image) there is no bare file at all: a cold visit then asks for each
+  // address and gets the 404 of a missing file, never the other size's bytes. The worker maps each address exactly.
+  /** @type {Map<string, string>} */
+  const bareOwner = new Map();
+  const ambiguous = new Set();
+  let bareChain = Promise.resolve();
+  // A request for a same-origin address the copy answers itself: a missing file, or a second address of a path whose bare file is another's.
+  const needsOwnAnswer = async (u) => {
+    if (await missingInCopy(u.pathname)) return true;
+    const owner = bareOwner.get(u.pathname);
+    return owner !== undefined && owner !== u.pathname + u.search;
+  };
   const root = path.resolve(outDir);
   const missingInCopy = async (pathname) => {
     let p;
@@ -157,18 +169,26 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
       return route.fulfill({ status: 404, body: '' });
     }
     const local = localPathOf(original, res.mime);
-    await mkdir(path.dirname(path.join(outDir, local)), { recursive: true });
-    await copyFile(res.tmp, path.join(outDir, local));
-    sameFile[rel] = local;
-    let bare = false;
-    const barePath = path.join(outDir, decodeURIComponent(u.pathname));
-    if (!bareTaken.has(u.pathname) && !(await stat(barePath).then(() => true, () => false))) {
-      await mkdir(path.dirname(barePath), { recursive: true });
-      await copyFile(res.tmp, barePath);
-      bareTaken.add(u.pathname);
-      bare = true;
-    }
-    sameOrigin.mapped.push({ path: rel, file: local, bare, pass });
+    // One step at a time: the bare file of a path is written or removed by one answer after another, never two at once.
+    await (bareChain = bareChain.then(async () => {
+      await mkdir(path.dirname(path.join(outDir, local)), { recursive: true });
+      await copyFile(res.tmp, path.join(outDir, local));
+      sameFile[rel] = local;
+      const barePath = path.join(outDir, decodeURIComponent(u.pathname));
+      const owner = bareOwner.get(u.pathname);
+      if (owner === undefined && !ambiguous.has(u.pathname)) {
+        bareOwner.set(u.pathname, rel);
+        await mkdir(path.dirname(barePath), { recursive: true });
+        await copyFile(res.tmp, barePath);
+      } else if (owner !== undefined && owner !== rel) {
+        // A second size of the path: the bare file would be the wrong size for one of them, so it goes for good.
+        bareOwner.delete(u.pathname);
+        ambiguous.add(u.pathname);
+        await rm(barePath, { force: true });
+        sameOrigin.ambiguous.push({ path: u.pathname, addresses: [owner, rel] });
+      }
+    }));
+    sameOrigin.mapped.push({ path: rel, file: local, pass });
     log.push({ pass, sameOrigin: rel, result: 'answered from the original' });
     return route.fulfill({ path: path.join(outDir, local) });
   };
@@ -192,7 +212,7 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
           }
         }
         // A file the copy does not hold, asked of the copy's own server: answered from the original (see answerSameOrigin).
-        if (route.request().resourceType() !== 'document' && (await missingInCopy(new URL(url).pathname))) {
+        if (route.request().resourceType() !== 'document' && (await needsOwnAnswer(new URL(url)))) {
           return answerSameOrigin(route, url, pass);
         }
         return route.continue();
@@ -251,6 +271,7 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
     log.push({ pass, downloaded, blocked });
     if (downloaded === 0) break;
   }
+  for (const m of sameOrigin.mapped) m.bare = bareOwner.get(m.path.split('?')[0]) === m.path;
   await writeFile(path.join(outDir, 'sw.js'), serviceWorkerSource(manifest, [...originHosts], sameFile), 'utf8');
   // GitHub Pages (Jekyll) leaves out folders whose names start with "_" unless this empty file is there: a copy with a _next folder needs it.
   await writeFile(path.join(outDir, '.nojekyll'), '', 'utf8');
