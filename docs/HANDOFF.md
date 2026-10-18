@@ -1,6 +1,6 @@
 # Handoff — preserve-original ("Original as-is"), 2026-10-18
 
-Where the `preserve-original` branch stands. It builds on `exact-mode` (`c1e1667`) and holds 49 commits. Everything here
+Where the `preserve-original` branch stands. It builds on `exact-mode` (`c1e1667`); its commits are `git log exact-mode..preserve-original`. Everything here
 was run on the fixture tests and on the real site makememo.ai. The full suite has **not** been run yet (see Next steps).
 
 ## What "Original as-is" does, end to end
