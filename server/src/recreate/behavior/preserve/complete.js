@@ -26,15 +26,22 @@ export const SW_REGISTER = "if('serviceWorker' in navigator){navigator.serviceWo
  * @param {Record<string, string>} manifest  absolute original address → root-relative local path
  * @param {string[]} hosts                   the original's hosts (site and CDNs)
  */
-export function serviceWorkerSource(manifest, hosts) {
+export function serviceWorkerSource(manifest, hosts, sameOrigin = {}) {
   return `// Serves the copy's own files for every address of the original, and nothing else (generated).
 const MAP = ${JSON.stringify(manifest)};
 const HOSTS = ${JSON.stringify(hosts)};
+// Addresses of the copy's own server (path + query) that the copy does not hold: the file the original answered with.
+const SAME = ${JSON.stringify(sameOrigin)};
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', (event) => {
   const url = event.request.url.split('#')[0];
   const bare = url.split('?')[0];
+  const here = new URL(url);
+  if (here.origin === self.location.origin && SAME[here.pathname + here.search]) {
+    event.respondWith(fetch(new URL(SAME[here.pathname + here.search], self.location.origin)));
+    return;
+  }
   const local = MAP[url] ?? MAP[bare];
   if (local) {
     event.respondWith(fetch(new URL(local, self.location.origin)));
@@ -117,6 +124,54 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
   const log = [];
   const tmp = path.join(outDir, '.complete-tmp');
   await mkdir(tmp, { recursive: true });
+  // Same-origin addresses the copy does not hold (its runtime asks its own server for a file: an image optimiser's output,
+  // built from an address of the original). Each is asked of the original once; the answer is kept as a file, the worker maps
+  // the address to it, and the bare path (no query: static hosts ignore the query) answers a first visit with no worker yet.
+  /** @type {Record<string, string>} */
+  const sameFile = {};
+  /** @type {Map<string, string>} */
+  const sameFailed = new Map();
+  const sameOrigin = { mapped: [], sameAsOriginal: [] };
+  const bareTaken = new Set();
+  const root = path.resolve(outDir);
+  const missingInCopy = async (pathname) => {
+    let p;
+    try { p = decodeURIComponent(pathname); } catch { return false; }
+    if (p === '/' || p.endsWith('/')) return false;
+    const target = path.resolve(root, `.${p}`);
+    if (!target.startsWith(root + path.sep)) return false;
+    return !(await stat(target).then(() => true, () => false));
+  };
+  const answerSameOrigin = async (route, url, pass) => {
+    const u = new URL(url);
+    const rel = u.pathname + u.search;
+    if (sameFile[rel]) return route.fulfill({ path: path.join(outDir, sameFile[rel]) });
+    if (sameFailed.has(rel)) return route.fulfill({ status: 404, body: '' });
+    const original = new URL(rel, pageUrl).href;
+    const res = await fetchImpl(original, { dir: tmp, kind: 'image', maxBytes: 25 * 1024 * 1024, attempts: 3 });
+    if (!res.ok || /text\/html/i.test(res.mime ?? '')) {
+      // The original answers the same error (or a page): the copy leaves the address as the original does, and says so.
+      const reason = res.ok ? 'the original answers with a page' : res.reason;
+      sameFailed.set(rel, reason);
+      sameOrigin.sameAsOriginal.push({ path: rel, reason, pass });
+      return route.fulfill({ status: 404, body: '' });
+    }
+    const local = localPathOf(original, res.mime);
+    await mkdir(path.dirname(path.join(outDir, local)), { recursive: true });
+    await copyFile(res.tmp, path.join(outDir, local));
+    sameFile[rel] = local;
+    let bare = false;
+    const barePath = path.join(outDir, decodeURIComponent(u.pathname));
+    if (!bareTaken.has(u.pathname) && !(await stat(barePath).then(() => true, () => false))) {
+      await mkdir(path.dirname(barePath), { recursive: true });
+      await copyFile(res.tmp, barePath);
+      bareTaken.add(u.pathname);
+      bare = true;
+    }
+    sameOrigin.mapped.push({ path: rel, file: local, bare, pass });
+    log.push({ pass, sameOrigin: rel, result: 'answered from the original' });
+    return route.fulfill({ path: path.join(outDir, local) });
+  };
   let passesRun = 0;
   for (let pass = 1; pass <= passes; pass++) {
     passesRun = pass;
@@ -135,6 +190,10 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
             await mkdir(path.dirname(target), { recursive: true });
             await writeFile(target, EDITOR_STUB, 'utf8');
           }
+        }
+        // A file the copy does not hold, asked of the copy's own server: answered from the original (see answerSameOrigin).
+        if (route.request().resourceType() !== 'document' && (await missingInCopy(new URL(url).pathname))) {
+          return answerSameOrigin(route, url, pass);
         }
         return route.continue();
       }
@@ -192,10 +251,10 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
     log.push({ pass, downloaded, blocked });
     if (downloaded === 0) break;
   }
-  await writeFile(path.join(outDir, 'sw.js'), serviceWorkerSource(manifest, [...originHosts]), 'utf8');
+  await writeFile(path.join(outDir, 'sw.js'), serviceWorkerSource(manifest, [...originHosts], sameFile), 'utf8');
   // GitHub Pages (Jekyll) leaves out folders whose names start with "_" unless this empty file is there: a copy with a _next folder needs it.
   await writeFile(path.join(outDir, '.nojekyll'), '', 'utf8');
   for (const entry of entries) await registerServiceWorker(outDir, entry);
   await rm(tmp, { recursive: true, force: true });
-  return { passes: passesRun, manifest, log };
+  return { passes: passesRun, manifest, log, sameOrigin };
 }
