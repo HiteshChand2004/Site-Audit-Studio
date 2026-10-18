@@ -1,6 +1,7 @@
 // Captures one page at the recreate views (1440 / 1024 / 768 / 375, views.js): the rendered DOM with
 // computed styles (snapshot.js), the network resources it loaded, and fold + full-page screenshots.
 // Output per page: capture/<slug>/<view>.json and capture/<slug>/<view>-{fold,full}.webp.
+import { frozenFullShot } from '../verify/shot.js';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { USER_AGENT } from '../../audit/http.js';
@@ -308,12 +309,12 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     lap('motion');
     const fold = await page.screenshot({ type: 'png', animations: 'disabled' });
     const fullHeight = Math.max(1, Math.min(snapshot.scrollHeight, MAX_HEIGHT));
-    const full = await page.screenshot({
-      type: 'png',
-      fullPage: true,
-      animations: 'disabled',
-      clip: { x: 0, y: 0, width: view.width, height: fullHeight },
-    });
+    // The visual check compares this picture with the copy, so it is taken in a frozen state: a fresh page whose own timers
+    // (rotators, carousels, tickers) are stopped, at the top (verify/shot.js). A page served from a document of ours (a recovery
+    // page) keeps the picture of this page, which a fresh page would not have.
+    const full = document
+      ? await page.screenshot({ type: 'png', fullPage: true, animations: 'disabled', clip: { x: 0, y: 0, width: view.width, height: fullHeight } })
+      : (await frozenFullShot(browser, pageInfo.url, view, { timeout, maxHeight: MAX_HEIGHT })).png;
     const [foldInfo, fullInfo] = await Promise.all([
       encode(fold, path.join(dir, `${view.id}-fold.webp`)),
       encode(full, path.join(dir, `${view.id}-full.webp`)),
