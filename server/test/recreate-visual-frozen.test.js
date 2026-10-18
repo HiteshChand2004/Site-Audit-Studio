@@ -6,7 +6,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
-import { frozenFullShot } from '../src/recreate/verify/shot.js';
+import { frozenFullShot, fullShotOf } from '../src/recreate/verify/shot.js';
 
 test('a page that rotates its words: a frozen picture is the same at any time, while the page itself keeps changing', { timeout: 180000 }, async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'sas-frozen-'));
@@ -35,6 +35,44 @@ test('a page that rotates its words: a frozen picture is the same at any time, w
     const b = await frozenFullShot(browser, url, view);
     assert.equal(Buffer.compare(a.png, b.png), 0, 'the frozen picture does not depend on when it was taken');
     assert.ok(a.frozen && a.frozen.intervals >= 1, 'the rotator\'s timer was frozen and counted');
+  } finally {
+    await browser.close();
+  }
+});
+
+test('a page whose load event never comes: the frozen picture still finishes inside its own limit', { timeout: 120000 }, async (t) => {
+  const { createServer } = await import('node:http');
+  // The image never answers, so the page's load event never fires; the page itself is ready at domcontentloaded.
+  const server = createServer((req, res) => {
+    if (req.url === '/hang.png') return; // never answered
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<!doctype html><html><head><meta charset="utf-8"><title>Hang</title></head><body style="margin:0;font:40px sans-serif"><h1>Ready</h1><img src="/hang.png" width="40" height="40" alt=""><p>Text below the heading.</p></body></html>');
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  const browser = await chromium.launch();
+  try {
+    const started = Date.now();
+    const shot = await frozenFullShot(browser, url, { width: 600, height: 500, dpr: 1, mobile: false }, { limitMs: 20000 });
+    assert.ok(shot.png.length > 1000, 'a picture was taken');
+    assert.ok(Date.now() - started < 30000, 'inside its own limit, not the load event\'s');
+  } finally {
+    await browser.close();
+  }
+});
+
+test('when the frozen picture cannot finish, the capture keeps the normal screenshot and says why', { timeout: 120000 }, async () => {
+  const browser = await chromium.launch();
+  try {
+    const context = await browser.newContext({ viewport: { width: 600, height: 500 } });
+    const page = await context.newPage();
+    await page.setContent('<!doctype html><html><body style="margin:0;font:40px sans-serif"><h1>Normal</h1></body></html>');
+    const shot = await fullShotOf(browser, page, 'http://127.0.0.1:1/', { width: 600, height: 500, dpr: 1, mobile: false }, { fallbackHeight: 500, limitMs: 5000 });
+    assert.equal(shot.frozen, false);
+    assert.ok(shot.reason && shot.reason.length > 0, 'the reason is kept');
+    assert.ok(shot.png.length > 1000, 'the normal screenshot is kept');
+    await context.close();
   } finally {
     await browser.close();
   }
