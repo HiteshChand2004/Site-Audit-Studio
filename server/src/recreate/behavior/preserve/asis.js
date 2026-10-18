@@ -84,7 +84,7 @@ export async function liftSite({ captureRoot, pages, siteUrl, outDir, browser, e
   const entries = pages.map((p) => p.outPath);
   const done = await completeCopy({ browser, outDir, pageUrl: siteUrl, hosts, files, entries });
   log(`completed ${entries.length} page(s) in ${done.passes} pass(es), manifest ${Object.keys(done.manifest).length}`);
-  return { files, entries, hosts, lifts, completion: { passes: done.passes, manifest: Object.keys(done.manifest).length, log: done.log } };
+  return { files, entries, hosts, lifts, completion: { passes: done.passes, manifest: Object.keys(done.manifest).length, log: done.log, sameOrigin: done.sameOrigin } };
 }
 
 /** The lifted document of a page (for the checks and for a reader of the report). */

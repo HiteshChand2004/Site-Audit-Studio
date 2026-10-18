@@ -265,3 +265,22 @@ test('PDF: a real PDF made by the server, no print dialog, two A4 pages', async 
   const pages = body.toString('latin1').match(/\/Type \/Page[^s]/g) ?? [];
   assert.equal(pages.length, 2, `${pages.length} pages: a checked and copied site fits on two A4 pages`);
 });
+
+test('as-is: the addresses the copy answers from the original, the same-as-original ones, and the two-size paths', () => {
+  const asIs = {
+    stack: 'html', mode: 'as-is', pages: [{ url: 'https://shop.test/', path: '/' }], checks: { pages: [] }, excludedByRule: [], needsAPerson: [],
+    sameOrigin: {
+      mapped: [{ path: '/_next/image?url=%2Flogo.png&w=96&q=75', file: '_next/image~a1b2c3d4.png', bare: false }],
+      sameAsOriginal: [{ path: '/gone.js', reason: 'HTTP 404' }],
+      ambiguous: [{ path: '/_next/image', addresses: ['/_next/image?url=%2Flogo.png&w=96&q=75', '/_next/image?url=%2Flogo.png&w=256&q=75'] }],
+    },
+  };
+  const html = renderReportHtml({ generatedAt: now(), project: { name: 'Shop', url: 'https://shop.test/' }, audit: { ...AUDIT, recreate: null }, analyzed: true, recreate: { asIs }, images: { old: {}, new: {} } });
+  assert.match(html, /Addresses from the original/);
+  assert.match(html, /1 kept from the original; 1 the original also lacks/);
+  assert.match(html, /_next\/image~a1b2c3d4\.png/);
+  assert.match(html, /\/gone\.js<\/span>: the same as the original \(HTTP 404\)/);
+  assert.match(html, /1 path with two sizes/);
+  const older = renderReportHtml({ generatedAt: now(), project: { name: 'Shop', url: 'https://shop.test/' }, audit: { ...AUDIT, recreate: null }, analyzed: true, recreate: { asIs: { ...asIs, sameOrigin: undefined } }, images: { old: {}, new: {} } });
+  assert.match(older, /Not recorded for this copy/);
+});

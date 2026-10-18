@@ -80,6 +80,22 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
         </ul>
       ) : <p className={styles.note}>Nothing was left out.</p>}
 
+      <h4 className={styles.h}>Addresses from the original</h4>
+      {asIs.sameOrigin ? (
+        <>
+          <p className={styles.note}>
+            The copy asks its own server for some files it did not hold. The original answered them, and the copy keeps those answers
+            ({asIs.sameOrigin.mapped.length} kept; {asIs.sameOrigin.sameAsOriginal.length} the original also lacks).
+            {asIs.sameOrigin.ambiguous.length > 0 && ` ${asIs.sameOrigin.ambiguous.length} path(s) have two sizes: each size is its own file.`}
+          </p>
+          {asIs.sameOrigin.sameAsOriginal.length > 0 && (
+            <ul className={styles.list}>
+              {asIs.sameOrigin.sameAsOriginal.map((x) => <li key={x.path}><code>{x.path}</code>: the same as the original ({x.reason}).</li>)}
+            </ul>
+          )}
+        </>
+      ) : <p className={styles.note}>Not recorded for this copy: make the copy again to see it.</p>}
+
       <h4 className={styles.h}>Needs a person</h4>
       {asIs.needsAPerson?.length ? (
         <Alert tone="warn" title={`${asIs.needsAPerson[0].count} form${asIs.needsAPerson[0].count === 1 ? '' : 's'} need a server`}>

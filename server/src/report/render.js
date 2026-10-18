@@ -578,7 +578,16 @@ function asIsPage(d, f, pageNo, total) {
         + `<tr><td>Original</td>${before ? `<td>${esc(before.performance)}</td><td>${esc(before.seo)}</td><td>${esc(before.accessibility)}</td><td>${esc(before.bestPractices)}</td>` : '<td colspan="4">Not measured: run the Check on this site first.</td>'}</tr>`
         + `<tr><td>Copy</td><td>${esc(after.performance)}</td><td>${esc(after.seo)}</td><td>${esc(after.accessibility)}</td><td>${esc(after.bestPractices)}</td></tr></tbody></table>`
       : `<p>Lighthouse: ${lh.error ? `not measured (${esc(lh.error)})` : 'not measured'}.</p>`));
-  return `${head}<div class="body" id="as-is">${mode}${checks}${left}${person}${speed}</div>${footer(d, pageNo, total)}`;
+  // The addresses the copy asks its own server for and answers from the original (complete.js): kept, the same as the original,
+  // and the paths that have two sizes (a first visit with no worker asks for each size, and gets the 404 of a missing file).
+  const addr = a.sameOrigin ?? null;
+  const addresses = card('Addresses from the original', 'Requests the copy answers itself', 'The copy asks its own server for some files it did not hold. The original answered them; the copy keeps those answers.',
+    addr === null
+      ? '<p>Not recorded for this copy (it was made before this was kept): make the copy again to see it.</p>'
+      : `<p>${addr.mapped.length} kept from the original; ${addr.sameAsOriginal.length} the original also lacks (the same as the original: still an error).${addr.ambiguous.length ? ` ${addr.ambiguous.length} path${addr.ambiguous.length === 1 ? '' : 's'} with two sizes: each size is its own file.` : ''}</p>`
+      + (addr.mapped.length ? `<table class="asis"><thead><tr><th>Address</th><th>Kept as</th><th>Bare path</th></tr></thead><tbody>${addr.mapped.map((m) => `<tr><td class="mono">${esc(m.path)}</td><td class="mono">${esc(m.file)}</td><td>${m.bare ? 'yes' : 'no'}</td></tr>`).join('')}</tbody></table>` : '')
+      + (addr.sameAsOriginal.length ? `<ul>${addr.sameAsOriginal.map((x) => `<li><span class="mono">${esc(x.path)}</span>: the same as the original (${esc(x.reason)})</li>`).join('')}</ul>` : ''));
+  return `${head}<div class="body" id="as-is">${mode}${checks}${left}${addresses}${person}${speed}</div>${footer(d, pageNo, total)}`;
 }
 
 // ---- Styles -----------------------------------------------------------------------------------------------------
