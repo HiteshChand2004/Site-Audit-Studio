@@ -9,6 +9,7 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import { liftSite, localOfOutPath } from './asis.js';
 import { packLifted } from './pack.js';
+import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
 import { checkCopy, excludedHostsOf, formsInCopy, probeOriginal } from './check.js';
 import { slugFor } from '../../discover.js';
@@ -149,6 +150,8 @@ export async function asIsStage(ctx) {
     report.excludedByRule = excludedHosts;
     report.lift = lifted;
 
+    // A preload of a file the copy does not hold is removed before packaging, so every stack inherits it (see preloads.js).
+    report.preloadsRemoved = await dropMissingPreloads(copyDir);
     ctx.progress(0.35, 'Packaging the copy');
     await rm(outDir, { recursive: true, force: true });
     if (stack === 'html') {
