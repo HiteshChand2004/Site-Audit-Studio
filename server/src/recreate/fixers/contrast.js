@@ -114,6 +114,7 @@ function sharedBackdrop(node, layers, bgNode, bgAncestors, v, fg) {
 }
 
 const px = (v) => parseFloat(String(v ?? '')) || 0;
+const FIELD_TAGS = new Set(['input', 'textarea', 'select']);
 const ownText = (n) => n.children.some((c) => isText(c) && c.text.trim());
 // What a value of this property is for this element in this view: its own, else the nearest ancestor's (inherited).
 const inherited = (n, ancestors, v, prop) => {
@@ -176,7 +177,8 @@ export function fixContrast(t, { axe = [] } = {}) {
   const pending = [...axe];
   const walk = (n, ancestors) => {
     if (!isElement(n)) return;
-    if (ownText(n)) {
+    // A form field shows its own text (what is typed, the placeholder) in its own colour, though it has no text children.
+    if (ownText(n) || FIELD_TAGS.has(n.tag)) {
       const text = textOf(n);
       const i = pending.findIndex((f) => f.tag === n.tag && f.text === text && f.classes === classesOf(n.attrs?.class));
       if (i >= 0) measured(n, ancestors, pending.splice(i, 1)[0], text);
