@@ -465,9 +465,7 @@ export function asisExtras(irBody, cpathOf, build, notCarried) {
         const card = kids[i - 1];
         const cardPath = card?.sid != null ? cpathOf.get(card.sid) : null;
         const cellPath = parent.sid != null ? cpathOf.get(parent.sid) : null;
-        // In a list (ul, ol, menu) with other items a box would be a div in the list (invalid): the card keeps its own look there.
-        const inList = ['ul', 'ol', 'menu'].includes(parent.tag) && kids.filter((k) => k && !('text' in k)).length > 1;
-        if (node && cardPath && !inList) {
+        if (node && cardPath) {
           // A card that is all its cell holds: the copy goes after it; else both go in a box that draws nothing.
           placements.push(cellPath && parent.attrs?.['data-w-hv'] != null ? { kind: 'after', anchor: cardPath, node } : { kind: 'wrap', anchor: cardPath, node });
           built.add(`card:${cardPath}`);

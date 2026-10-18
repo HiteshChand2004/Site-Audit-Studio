@@ -172,8 +172,6 @@ export function expandPanels(root) {
 // The views of the box that draws nothing around a hover card: present where the card is, display: contents.
 const hoverBoxViews = (card) => Object.fromEntries(Object.entries(card.views ?? {}).map(([v, d]) => [v, d && { rect: d.rect, hidden: !!d.hidden, style: { display: 'contents' } }]));
 
-const LIST_PARENTS = new Set(['ul', 'ol', 'menu']);
-
 export function expandHoverCards(root) {
   let k = 0;
   const walk = (parent) => {
@@ -195,12 +193,6 @@ export function expandHoverCards(root) {
       borrowViews(n, copy);
       n.stateAttrs = { ...n.stateAttrs, 'data-w-hrest': '' };
       copy.stateAttrs = { ...copy.stateAttrs, 'data-w-hcopy': '' };
-      // A list (ul, ol, menu) holds only list items: a box around a card would be a div in the list (invalid, and the list rule
-      // of the accessibility audit fails it). Several items there keep their own look; the copy is not added.
-      if (LIST_PARENTS.has(parent.tag) && parent.children.filter(isElement).length > 1) {
-        walk(n);
-        continue;
-      }
       if (parent !== root && parent.children.filter(isElement).length === 1) {
         // The card is all its cell holds: the cell is where the mouse is.
         parent.stateAttrs = { ...parent.stateAttrs, 'data-w-hv': '' };
