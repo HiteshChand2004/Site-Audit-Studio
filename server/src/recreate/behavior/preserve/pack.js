@@ -179,7 +179,8 @@ export default defineConfig({
     // Only the files the copy holds under _next are rewritten, one rule each: Next's own /_next files (its chunks, its error
     // pages) stay Next's. A name the Next router would read as a pattern (brackets, stars) cannot be written as a rule.
     const copiedNext = movesNext ? await listFilesUnder(path.join(copyDir, '_next')) : [];
-    const routable = copiedNext.filter((rel) => /^[A-Za-z0-9._\-/]+$/.test(rel));
+    // ~ is how the framework names its optimised images (image~<hash>.webp): a plain character in a rewrite, not a pattern.
+    const routable = copiedNext.filter((rel) => /^[A-Za-z0-9._~\-/]+$/.test(rel));
     // Next.js serves public/ by file name only: a page folder (about/index.html) answers its address through a rule, as the home page does.
     const pageFolders = (await listFilesUnder(copyDir)).filter((rel) => rel.endsWith('/index.html') && !rel.startsWith('_next/') && /^[A-Za-z0-9._\-/]+$/.test(rel));
     const nextRewrites = [
