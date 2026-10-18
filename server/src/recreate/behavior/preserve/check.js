@@ -240,7 +240,8 @@ export async function baselineVisual(browser, base, copyUrl, baselinePng) {
     await openAndScroll(cp, copyUrl);
     const shot = await cp.screenshot({ fullPage: true, type: 'png' });
     const a = await rgbOf(shot);
-    const img = sharp(baselinePng);
+    // Read into memory: sharp keeps a file open while it is given a path, which blocks the folder's removal on Windows.
+    const img = sharp(Buffer.isBuffer(baselinePng) ? baselinePng : await readFile(baselinePng));
     const meta = await img.metadata();
     const b = { raw: await img.removeAlpha().raw().toBuffer(), width: meta.width, height: meta.height };
     // The saved picture may be a different size: the copy is brought to its width before the pixels are compared.
@@ -258,55 +259,63 @@ export async function checkCopy({ browser, base, pages, excludedHosts = [], log 
     const one = { path: p.path, original: p.url };
     one.offline = await offlineCheck(browser, base, p.path).then((r) => ({ ...r, path: p.path }));
     log(`offline ${p.path} ${JSON.stringify(one.offline).slice(0, 200)}`);
-    one.visual = [];
-    if (originalReachable) {
-      for (const width of [1440, 390]) {
-        one.visual.push(await visualCheck(browser, base, copyUrl, p.url, width));
-        log(`visual ${p.path} ${JSON.stringify(one.visual.at(-1))}`);
+    // The original is asked only while it answers. A check of it that fails (the probe passed, the page then did not load) is
+    // recorded as "not compared" with its reason; the copy's own checks still run. A repack never fails on the original.
+    let reason = originalReachable ? null : 'the original did not answer';
+    const asOriginal = async (label, fn) => {
+      if (reason) return null;
+      try {
+        return await fn();
+      } catch (err) {
+        reason = `${label} did not load: ${String(err?.message ?? err).split('\n')[0].slice(0, 160)}`;
+        log(`original ${p.path}: ${reason}`);
+        return null;
       }
-    } else {
-      // The original does not answer: the copy's desktop picture is compared with the capture's; there is no phone baseline.
-      const png = baselines[p.path];
-      one.visual.push(png
-        ? await baselineVisual(browser, base, copyUrl, png)
-        : { width: 1440, diffPct: null, note: 'original not reachable and no saved capture' });
-      one.visual.push({ width: 390, diffPct: null, note: 'original not reachable' });
-      log(`visual ${p.path} ${JSON.stringify(one.visual[0])}`);
-    }
-    if (!originalReachable) {
-      // Only what the copy does on its own: the original cannot be clicked or hovered now.
-      const copyClicks = await clickProfile(browser, base, copyUrl, true);
-      one.controls = { copy: summarize(copyClicks), original: null, mismatch: [], note: 'original not reachable: not compared' };
-      const copyHover = await hoverProfile(browser, base, copyUrl, true);
-      one.hovers = { copy: summarize(copyHover), original: null, mismatch: [], note: 'original not reachable: not compared' };
-      one.forms = await formCheck(browser, base, copyUrl);
-      report.forms += one.forms.count;
-      report.pages.push(one);
-      log(`page ${p.path} done (copy only)`);
-      continue;
+    };
+    one.visual = [];
+    for (const width of [1440, 390]) {
+      const v = await asOriginal(`${p.url} at ${width}`, () => visualCheck(browser, base, copyUrl, p.url, width));
+      if (v) {
+        one.visual.push(v);
+        log(`visual ${p.path} ${JSON.stringify(v)}`);
+      } else if (width === 1440 && baselines[p.path]) {
+        // The original is not compared: the copy's desktop picture is compared with the capture's own picture of the page.
+        one.visual.push(await baselineVisual(browser, base, copyUrl, baselines[p.path]));
+        log(`visual ${p.path} ${JSON.stringify(one.visual.at(-1))}`);
+      } else {
+        one.visual.push({ width, diffPct: null, note: `original not reachable: ${reason}${width === 1440 ? ' and no saved capture' : ''}` });
+      }
     }
     const copyClicks = await clickProfile(browser, base, copyUrl, true);
-    const origClicks = await clickProfile(browser, base, p.url, false);
-    const mismatch = [];
-    for (let i = 0; i < Math.max(copyClicks.length, origClicks.length); i++) {
-      const a = copyClicks[i];
-      const b = origClicks[i];
-      if (a?.visible && b?.visible && Boolean(a.changed) !== Boolean(b.changed)) mismatch.push({ i, copy: a.changed, original: b.changed, label: b.label });
+    const origClicks = await asOriginal('controls', () => clickProfile(browser, base, p.url, false));
+    if (origClicks) {
+      const mismatch = [];
+      for (let i = 0; i < Math.max(copyClicks.length, origClicks.length); i++) {
+        const a = copyClicks[i];
+        const b = origClicks[i];
+        if (a?.visible && b?.visible && Boolean(a.changed) !== Boolean(b.changed)) mismatch.push({ i, copy: a.changed, original: b.changed, label: b.label });
+      }
+      one.controls = { copy: summarize(copyClicks), original: summarize(origClicks), mismatch, ...controlGaps(copyClicks, origClicks, excludedHosts) };
+    } else {
+      one.controls = { copy: summarize(copyClicks), original: null, mismatch: [], note: `original not reachable: ${reason}` };
     }
-    one.controls = { copy: summarize(copyClicks), original: summarize(origClicks), mismatch, ...controlGaps(copyClicks, origClicks, excludedHosts) };
     const copyHover = await hoverProfile(browser, base, copyUrl, true);
-    const origHover = await hoverProfile(browser, base, p.url, false);
-    const hm = [];
-    for (let i = 0; i < Math.max(copyHover.length, origHover.length); i++) {
-      const a = copyHover[i];
-      const b = origHover[i];
-      if (a?.visible && b?.visible && Boolean(a.changed) !== Boolean(b.changed)) hm.push({ i, copy: a.changed, original: b.changed });
+    const origHover = await asOriginal('hovers', () => hoverProfile(browser, base, p.url, false));
+    if (origHover) {
+      const hm = [];
+      for (let i = 0; i < Math.max(copyHover.length, origHover.length); i++) {
+        const a = copyHover[i];
+        const b = origHover[i];
+        if (a?.visible && b?.visible && Boolean(a.changed) !== Boolean(b.changed)) hm.push({ i, copy: a.changed, original: b.changed });
+      }
+      one.hovers = { copy: summarize(copyHover), original: summarize(origHover), mismatch: hm };
+    } else {
+      one.hovers = { copy: summarize(copyHover), original: null, mismatch: [], note: `original not reachable: ${reason}` };
     }
-    one.hovers = { copy: summarize(copyHover), original: summarize(origHover), mismatch: hm };
     one.forms = await formCheck(browser, base, copyUrl);
     report.forms += one.forms.count;
     report.pages.push(one);
-    log(`page ${p.path} done`);
+    log(`page ${p.path} done${reason ? ` (original: ${reason})` : ''}`);
   }
   return report;
 }
