@@ -13,6 +13,7 @@ import path from 'node:path';
 import { ZipArchive } from 'archiver';
 import { RecreateError } from '../errors.js';
 import { reportOutputs } from './fromIr.js';
+import { notesEntries } from './notes.js';
 
 const refuse = (status, message) => Object.assign(new RecreateError(message), { status });
 
@@ -141,6 +142,7 @@ export async function planZip({ dir, report, stack = report.stack }) {
   const entries = [
     { name: `${root}/README.md`, content: readmeMarkdown(report, stack) },
     { name: `${root}/RECREATE-REPORT.md`, content: reportMarkdown(report) },
+    ...notesEntries({ report, stack, root }),
     ...dist.map((f) => ({ name: `${root}/site/${f.rel}`, file: f.abs, size: f.size, store: STORED.test(f.rel) })),
     ...readable.map((f) => ({ name: `${root}/unminified/${f.rel}`, file: f.abs, size: f.size, store: false })),
   ];
@@ -192,6 +194,7 @@ async function planProjectZip({ dir, report, stack }) {
   const root = zipBaseName(report, stack);
   const entries = [
     { name: `${root}/RECREATE-REPORT.md`, content: reportMarkdown(report, stack) },
+    ...notesEntries({ report, stack, root }),
     ...files.map((f) => ({ name: `${root}/${f.rel}`, file: f.abs, size: f.size, store: STORED.test(f.rel) })),
   ];
   return finishPlan(entries, root);

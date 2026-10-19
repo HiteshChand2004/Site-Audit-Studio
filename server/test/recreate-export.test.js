@@ -58,6 +58,7 @@ const report = (extra = {}) => ({
 });
 
 const EXPECTED = [
+  'example.com-html/DEPLOY.md', // Copy my site: how to run and deploy (docs/COPY-MY-SITE.md §8)
   'example.com-html/README.md',
   'example.com-html/RECREATE-REPORT.md',
   'example.com-html/site/assets/images/a-1.webp',
