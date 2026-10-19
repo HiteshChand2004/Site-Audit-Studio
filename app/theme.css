@@ -1,0 +1,871 @@
+/* Remastly design system: the single source of tokens, base styles and UI primitives.
+   Light and warm: #FAFAF7 base, white cards, #111 ink, Remastly orange as an accent only. Depth comes from soft
+   layered shadows and gentle glows, never from dark surfaces. Layout and page styles live in site.css. */
+
+/* ---------- Tokens ---------- */
+:root {
+  /* Colour */
+  --bg: #fafaf7;
+  --bg-tint: #f3f2ed;
+  --surface: #ffffff;
+  --surface-2: #f6f5f1;
+  --border: #e8e6e0;
+  --border-strong: #d9d6ce;
+  --hairline: rgba(17, 17, 17, 0.07);
+  --text: #111111;
+  --text-2: #3d3c38;
+  --muted: #6b6a65;
+  --faint: #9a978f;
+
+  --accent: #c2410c;
+  --accent-strong: #9a3412;
+  --accent-rgb: 194, 65, 12;
+  --accent-tint: #fff4ec;
+
+  --ok: #15803d;
+  --ok-rgb: 22, 163, 74;
+  --ok-tint: #eef8f0;
+  --ok-border: #cbe8d3;
+  --warn: #b45309;
+  --warn-tint: #fff7e8;
+  --warn-border: #fadfa8;
+  --bad: #b42318;
+  --bad-tint: #fef3f2;
+  --bad-border: #fbd3cf;
+  --info: #1d4ed8;
+  --info-tint: #eff4ff;
+  --info-border: #cddafd;
+
+  /* Type */
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-serif: var(--font-display), 'Iowan Old Style', Georgia, serif;
+  --fs-xs: 12.5px;
+  --fs-sm: 14px;
+  --fs-base: 16px;
+  --fs-lead: clamp(1.0625rem, 1rem + 0.25vw, 1.1875rem);
+  --fs-h3: clamp(1.1875rem, 1.1rem + 0.3vw, 1.3125rem);
+  --fs-d3: clamp(1.875rem, 1.4rem + 1.6vw, 2.625rem);
+  --fs-d2: clamp(2.5rem, 1.6rem + 3.3vw, 4.375rem);
+  --fs-d1: clamp(2.75rem, 1.2rem + 5vw, 5.75rem);
+
+  /* Space */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+  --sp-8: 64px;
+  --sp-9: 96px;
+  --section-y: clamp(88px, 11vw, 160px);
+  --gutter: 20px;
+  --max: 1200px;
+
+  /* Radius */
+  --r-sm: 8px;
+  --r: 12px;
+  --r-lg: 18px;
+  --r-xl: 24px;
+  --r-pill: 999px;
+
+  /* Shadow */
+  --sh-1: 0 1px 2px rgba(17, 17, 17, 0.05);
+  --sh-2: 0 1px 2px rgba(17, 17, 17, 0.04), 0 12px 32px -16px rgba(17, 17, 17, 0.14);
+  --sh-3: 0 1px 2px rgba(17, 17, 17, 0.04), 0 8px 16px -6px rgba(17, 17, 17, 0.06), 0 30px 60px -20px rgba(17, 17, 17, 0.2);
+  --sh-glow: 0 0 0 1px rgba(var(--accent-rgb), 0.16), 0 24px 60px -24px rgba(var(--accent-rgb), 0.38);
+  --ring: 0 0 0 4px rgba(var(--accent-rgb), 0.16);
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --header-h: 64px;
+}
+
+@media (min-width: 720px) {
+  :root {
+    --gutter: 32px;
+  }
+}
+
+/* ---------- Base ---------- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scrollbar-gutter: stable;
+  scroll-behavior: smooth;
+  scroll-padding-top: calc(var(--header-h) + 16px);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  overflow-x: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+ul,
+ol,
+dl,
+dd,
+figure,
+blockquote {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding: 0;
+  list-style: none;
+}
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+a {
+  color: inherit;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+::selection {
+  background: rgba(var(--accent-rgb), 0.16);
+}
+
+.skip-link {
+  position: absolute;
+  left: 16px;
+  top: -60px;
+  z-index: 100;
+  padding: 10px 16px;
+  border-radius: var(--r-sm);
+  background: var(--text);
+  color: #fff;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.skip-link:focus {
+  top: 12px;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.container {
+  width: 100%;
+  max-width: calc(var(--max) + 2 * var(--gutter));
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+/* ---------- Type ---------- */
+.display {
+  font-family: var(--font-serif);
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  text-wrap: balance;
+}
+
+.display em {
+  padding-right: 0.04em;
+  color: var(--accent);
+  font-style: italic;
+  letter-spacing: -0.01em;
+}
+
+.d1 {
+  font-size: var(--fs-d1);
+  line-height: 0.98;
+}
+
+.d2 {
+  font-size: var(--fs-d2);
+  line-height: 1.02;
+}
+
+.d3 {
+  font-size: var(--fs-d3);
+  line-height: 1.08;
+}
+
+.h3 {
+  font-size: var(--fs-h3);
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
+}
+
+.lead {
+  color: var(--text-2);
+  font-size: var(--fs-lead);
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: var(--fs-sm);
+}
+
+.label {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.link {
+  color: var(--text);
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: rgba(17, 17, 17, 0.25);
+  transition: text-decoration-color 200ms var(--ease-out);
+}
+
+.link:hover {
+  text-decoration-color: var(--accent);
+}
+
+.link-arrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.link-arrow svg {
+  transition: transform 250ms var(--ease-out);
+}
+
+.link-arrow:hover svg {
+  transform: translateX(3px);
+}
+
+/* ---------- Button ----------
+   Effects are layers that only move or fade (transform/opacity): ::before is the hover shadow (primary) or the
+   drawn border (secondary/ghost); .btn__fx holds the sheen band (primary) and the soft fill (secondary/ghost).
+   The magnetic pull writes --mx/--my (components/ui/PointerEffects.tsx); hover sets --lift, press sets --press. */
+.btn {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 0 22px;
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  line-height: 1.2;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transform: translate3d(var(--mx, 0px), calc(var(--my, 0px) + var(--lift, 0px)), 0) scale(var(--press, 1));
+  transition: transform 250ms var(--ease-out);
+}
+
+.btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 250ms var(--ease-out);
+}
+
+.btn__fx {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.btn__fx::before,
+.btn__fx::after {
+  content: '';
+  position: absolute;
+}
+
+/* Sheen: a soft light band that sweeps across once per hover */
+.btn__fx::before {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 55%;
+  background: linear-gradient(105deg, transparent 15%, rgba(255, 255, 255, 0.26) 50%, transparent 85%);
+  transform: translateX(-130%);
+}
+
+/* Soft fill */
+.btn__fx::after {
+  inset: 0;
+  opacity: 0;
+  transition: opacity 200ms var(--ease-out);
+}
+
+.btn svg {
+  flex: none;
+  transition: transform 250ms var(--ease-out);
+}
+
+.btn:active {
+  --press: 0.97;
+  transition-duration: 120ms;
+}
+
+/* Primary */
+.btn--primary {
+  background: #111;
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 1px 2px rgba(17, 17, 17, 0.18), 0 10px 24px -10px rgba(17, 17, 17, 0.5);
+}
+
+.btn--primary::before {
+  box-shadow: 0 4px 8px -2px rgba(17, 17, 17, 0.18), 0 22px 40px -14px rgba(17, 17, 17, 0.6);
+}
+
+/* Secondary: the border draws in darker, a gentle fill comes up */
+.btn--secondary {
+  border-color: var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--sh-1);
+}
+
+.btn--secondary::before {
+  inset: -1px;
+  border: 1px solid rgba(17, 17, 17, 0.55);
+  transform: scale(0.985);
+  transition: opacity 250ms var(--ease-out), transform 250ms var(--ease-out);
+}
+
+.btn--secondary .btn__fx::after,
+.btn--ghost .btn__fx::after {
+  background: rgba(17, 17, 17, 0.045);
+}
+
+/* Ghost */
+.btn--ghost {
+  background: transparent;
+  color: var(--text);
+}
+
+.btn--ghost::before {
+  border: 1px solid rgba(17, 17, 17, 0.16);
+}
+
+/* Hover (mouse and trackpad only) and keyboard focus share one look */
+@media (hover: hover) and (pointer: fine) {
+  .btn--primary:hover {
+    --lift: -2px;
+  }
+  .btn--primary:hover::before,
+  .btn--secondary:hover::before,
+  .btn--ghost:hover::before,
+  .btn--secondary:hover .btn__fx::after,
+  .btn--ghost:hover .btn__fx::after {
+    opacity: 1;
+  }
+  .btn--secondary:hover::before {
+    transform: none;
+  }
+  .btn--primary:hover .btn__fx::before {
+    transform: translateX(260%);
+    transition: transform 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .btn:hover svg.nudge {
+    transform: translateX(3px);
+  }
+}
+
+.btn--primary:focus-visible {
+  --lift: -2px;
+}
+
+.btn--primary:focus-visible::before,
+.btn--secondary:focus-visible::before,
+.btn--ghost:focus-visible::before,
+.btn--secondary:focus-visible .btn__fx::after,
+.btn--ghost:focus-visible .btn__fx::after {
+  opacity: 1;
+}
+
+.btn--secondary:focus-visible::before {
+  transform: none;
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.btn:focus-visible svg.nudge {
+  transform: translateX(3px);
+}
+
+.btn--sm {
+  min-height: 38px;
+  padding: 0 16px;
+  font-size: 14px;
+}
+
+.btn--lg {
+  min-height: 52px;
+  padding: 0 26px;
+  font-size: 16px;
+}
+
+.btn--block {
+  width: 100%;
+}
+
+.btn:disabled,
+.btn[aria-disabled='true'] {
+  opacity: 0.55;
+  cursor: not-allowed;
+  --lift: 0px;
+  --press: 1;
+}
+
+/* ---------- Card ----------
+   Hover cards lift, a soft shadow layer (::before) fades in, and a radial glow (.card__glow i) follows the cursor
+   (--gx/--gy from PointerEffects). The glow sits under the content, above the card background. */
+.card {
+  position: relative;
+  isolation: isolate;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--surface);
+  box-shadow: var(--sh-2);
+}
+
+.card--pad {
+  padding: clamp(22px, 2.4vw, 32px);
+}
+
+.card--hover {
+  transition: transform 300ms var(--ease-out);
+}
+
+.card--hover::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border-radius: inherit;
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.18), 0 28px 60px -26px rgba(17, 17, 17, 0.28), 0 24px 70px -30px rgba(var(--accent-rgb), 0.4);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 300ms var(--ease-out);
+}
+
+.card__glow {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 300ms var(--ease-out);
+}
+
+.card__glow i {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 380px;
+  height: 380px;
+  margin: -190px 0 0 -190px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(var(--accent-rgb), 0.1), rgba(var(--accent-rgb), 0.04) 55%, transparent);
+  transform: translate3d(var(--gx, 0px), var(--gy, 0px), 0);
+  transition: transform 150ms linear;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .card--hover:hover {
+    transform: translateY(-4px);
+  }
+  .card--hover:hover::before,
+  .card--hover:hover .card__glow {
+    opacity: 1;
+  }
+}
+
+.card--hover:focus-within::before {
+  opacity: 1;
+}
+
+/* ---------- Badge ---------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.badge--accent {
+  border-color: rgba(var(--accent-rgb), 0.25);
+  background: var(--accent-tint);
+  color: var(--accent-strong);
+}
+
+.badge--ok {
+  border-color: var(--ok-border);
+  background: var(--ok-tint);
+  color: var(--ok);
+}
+
+.badge--warn {
+  border-color: var(--warn-border);
+  background: var(--warn-tint);
+  color: var(--warn);
+}
+
+.badge--bad {
+  border-color: var(--bad-border);
+  background: var(--bad-tint);
+  color: var(--bad);
+}
+
+.badge--info {
+  border-color: var(--info-border);
+  background: var(--info-tint);
+  color: var(--info);
+}
+
+.badge--ink {
+  border-color: #111;
+  background: #111;
+  color: #fff;
+}
+
+/* ---------- Form fields ---------- */
+.field {
+  display: grid;
+  gap: 7px;
+}
+
+.field__label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.field__label a {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.input {
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
+  background: var(--surface);
+  font-size: 15px;
+  transition: border-color 200ms var(--ease-out), box-shadow 200ms var(--ease-out);
+}
+
+.input::placeholder {
+  color: var(--faint);
+}
+
+.input:hover {
+  border-color: #c9c5bb;
+}
+
+.input:focus {
+  border-color: #111;
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+textarea.input {
+  min-height: 140px;
+  resize: vertical;
+}
+
+select.input {
+  appearance: none;
+  padding-right: 40px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%236b6a65' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' viewBox='0 0 24 24'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-position: right 14px center;
+  background-repeat: no-repeat;
+}
+
+.input[aria-invalid='true'] {
+  border-color: var(--bad);
+}
+
+.input[aria-invalid='true']:focus {
+  box-shadow: 0 0 0 4px rgba(180, 35, 24, 0.14);
+}
+
+.field__hint {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.field__error {
+  color: var(--bad);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.input-wrap {
+  position: relative;
+}
+
+.input-wrap .input {
+  padding-right: 52px;
+}
+
+.input-wrap__btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.input-wrap__btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* ---------- FAQ accordion ---------- */
+.faq {
+  border-top: 1px solid rgba(17, 17, 17, 0.05);
+}
+
+.faq details {
+  border-bottom: 1px solid rgba(17, 17, 17, 0.05);
+}
+
+.faq summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 22px 0;
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  list-style: none;
+  cursor: pointer;
+}
+
+.faq summary::-webkit-details-marker {
+  display: none;
+}
+
+.faq summary svg {
+  flex: none;
+  color: var(--muted);
+  transition: transform 300ms var(--ease-out), color 200ms var(--ease-out);
+}
+
+.faq summary:hover svg {
+  color: var(--text);
+}
+
+.faq details[open] summary svg {
+  transform: rotate(45deg);
+  color: var(--accent);
+}
+
+.faq__answer {
+  max-width: 62ch;
+  padding: 0 0 24px;
+  color: var(--text-2);
+}
+
+/* ---------- Browser frame (for mockups) ---------- */
+.frame {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(17, 17, 17, 0.08);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--sh-3);
+}
+
+.frame__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 12px;
+  border-bottom: 1px solid #f0eee8;
+  background: linear-gradient(#fdfdfb, #f8f7f3);
+}
+
+.frame__dots {
+  display: flex;
+  gap: 5px;
+}
+
+.frame__dots i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e2dfd7;
+}
+
+.frame__addr {
+  min-width: 140px;
+  margin: 0 auto;
+  padding: 2px 12px;
+  overflow: hidden;
+  border: 1px solid #eeece6;
+  border-radius: 7px;
+  background: #fff;
+  color: #8a877f;
+  font-size: 11px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.frame__tag {
+  padding: 3px 8px;
+  border-radius: var(--r-pill);
+  background: #f1f0eb;
+  color: #6b6a65;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.frame__tag--ink {
+  background: #111;
+  color: #fff;
+}
+
+/* ---------- Small looping visuals only run while on screen (InViewPlay sets data-play) ---------- */
+[data-loop]:not([data-play]),
+[data-loop]:not([data-play]) *,
+[data-loop]:not([data-play]) *::before,
+[data-loop]:not([data-play]) *::after {
+  animation-play-state: paused !important;
+}
+
+/* ---------- Scroll reveal (only when JavaScript runs) ---------- */
+.js [data-reveal] {
+  opacity: 0;
+  transform: translateY(22px);
+  transition:
+    opacity 900ms var(--ease-out) var(--d, 0ms),
+    transform 900ms var(--ease-out) var(--d, 0ms);
+}
+
+.js [data-reveal='scale'] {
+  transform: translateY(22px) scale(0.98);
+}
+
+.js [data-reveal].is-in {
+  opacity: 1;
+  transform: none;
+}
+
+/* ---------- Reduced motion: everything shown at once, nothing moves ---------- */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+  }
+  .js [data-reveal] {
+    opacity: 1;
+    transform: none;
+  }
+}
