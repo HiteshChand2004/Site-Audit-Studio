@@ -7,9 +7,13 @@
   color: var(--text);
   box-shadow: 0 0 0 1px var(--hairline-strong), var(--elev-3);
   overflow: hidden;
+  /* Never taller than the window (a margin top and bottom): the body scrolls, the footer stays in view. */
+  max-height: calc(100vh - 32px);
 }
 
 .dialog[open] {
+  display: flex;
+  flex-direction: column;
   animation: pop 320ms var(--ease);
 }
 
@@ -26,7 +30,15 @@
   }
 }
 
+.inner {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .header {
+  flex: none;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -64,9 +76,16 @@
 
 .body {
   padding: var(--sp-5);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .footer {
+  position: sticky;
+  bottom: 0;
+  flex: none;
   display: flex;
   justify-content: flex-end;
   gap: var(--sp-2);
