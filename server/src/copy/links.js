@@ -4,7 +4,8 @@
 /** Real checks per link (each from a real browser, with retries between them). */
 export const ATTEMPTS = 3;
 /** Answers that mean "could not check", never "broken". */
-const UNVERIFIED_STATUS = new Set([401, 403, 429]);
+// 999 is the bot-block answer of some sites (the analysis's own link checker treats it the same way).
+const UNVERIFIED_STATUS = new Set([401, 403, 429, 999]);
 
 /**
  * One check's outcome: 'ok' (the link works, maybe after a redirect), 'broken' (a page-level error or no page),

@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { GAP_MS, linkSummary, recheckAll, recheckLink } from '../src/copy/linkCheck.js';
-import { decideLink } from '../src/copy/links.js';
+import { decideLink, outcomeOf } from '../src/copy/links.js';
 
 /** A checker that answers the given list in order (the last answer repeats). */
 function answers(list) {
@@ -98,4 +98,8 @@ test('a redirect to a sign-in page on the same site is not followed either', () 
 test('a redirect within the same site is followed', () => {
   const d = decideLink({ kind: 'internal', href: 'https://site.test/old' }, 'ok', { redirectedTo: 'https://www.site.test/new/' });
   assert.equal(d.action, 'redirect-final');
+});
+
+test("a 999 answer (a site that blocks automated checks) is couldn't verify, never broken", () => {
+  assert.equal(outcomeOf({ status: 999 }), 'unverified');
 });
