@@ -251,7 +251,8 @@ export async function asIsStage(ctx) {
       check: pr.width ? `${pr.check} ${pr.width}px` : pr.check,
       values: `${typeof pr.value === 'number' ? Math.round(pr.value * 100) / 100 : pr.value} (min ${typeof pr.min === 'number' ? Math.round(pr.min * 100) / 100 : pr.min})`,
       tried: 'checked after the copy was made; no fallback rebuild in this run',
-      reason: 'unresolved',
+      // A request the copy makes to another site (the original's own third-party script) is third-party code (reason a).
+      reason: checks.pages.find((x) => x.path === p.path)?.offline?.external?.length ? 'third_party' : 'unresolved',
     })));
     const logOpen = issueLogger(DATA_DIR);
     for (const o of openItems) await logOpen({ site: new URL(siteUrl).hostname, stack, ...o });

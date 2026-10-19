@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { GAP_MS, linkSummary, recheckAll, recheckLink } from '../src/copy/linkCheck.js';
+import { decideLink } from '../src/copy/links.js';
 
 /** A checker that answers the given list in order (the last answer repeats). */
 function answers(list) {
@@ -81,4 +82,20 @@ test('a batch is checked link by link and summarised per action', async () => {
   assert.equal(results.length, 2);
   assert.equal(seen[0], 'https://ok.test/');
   assert.deepEqual(linkSummary(results), { ok: 1, 'flag-external': 1 });
+});
+
+test('a redirect to another site (a login wall) is not followed: the link is left as it is', () => {
+  const d = decideLink({ kind: 'external', href: 'https://www.linkedin.com/company/x/posts/' }, 'ok', { redirectedTo: 'https://www.linkedin.com/uas/login?session_redirect=x' });
+  assert.equal(d.action, 'ok');
+  assert.equal(d.url, undefined);
+});
+
+test('a redirect to a sign-in page on the same site is not followed either', () => {
+  const d = decideLink({ kind: 'external', href: 'https://www.linkedin.com/company/x/' }, 'ok', { redirectedTo: 'https://www.linkedin.com/checkpoint/challenge' });
+  assert.equal(d.action, 'ok');
+});
+
+test('a redirect within the same site is followed', () => {
+  const d = decideLink({ kind: 'internal', href: 'https://site.test/old' }, 'ok', { redirectedTo: 'https://www.site.test/new/' });
+  assert.equal(d.action, 'redirect-final');
 });

@@ -53,7 +53,7 @@ test('broken links: safe internal fixes, in order', () => {
 });
 
 test('broken links: a redirect is followed to its final address; a working link is left alone', () => {
-  assert.deepEqual(decideLink({ kind: 'internal', href: '/old' }, 'ok', { redirectedTo: '/new' }), { action: 'redirect-final', url: '/new' });
+  assert.deepEqual(decideLink({ kind: 'internal', href: 'https://s.test/old' }, 'ok', { redirectedTo: 'https://s.test/new' }), { action: 'redirect-final', url: 'https://s.test/new' });
   assert.equal(decideLink({ kind: 'external', href: 'https://x.test/' }, 'ok', {}).action, 'ok');
 });
 

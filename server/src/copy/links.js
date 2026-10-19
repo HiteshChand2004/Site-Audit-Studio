@@ -33,6 +33,11 @@ export function consensus(outcomes) {
   return 'unverified';
 }
 
+const bare = (u) => new URL(u).hostname.replace(/^www\./, '').toLowerCase();
+// A redirect to a sign-in or wall page is not the page the link means, even on the same site.
+const SIGN_IN = /\/(login|signin|sign-in|checkpoint|authwall|uas\/login)(\/|$|\?)/i;
+const sameSite = (a, b) => { try { return bare(a) === bare(b); } catch { return false; } };
+
 /**
  * The action for one link. Only the safe cases change the copy; the rest are reported.
  * @param {object} link
@@ -50,7 +55,12 @@ export function consensus(outcomes) {
 export function decideLink(link, verdict, facts = {}) {
   if (verdict === 'unverified') return { action: 'unverified', note: "couldn't verify" };
   if (verdict === 'ok') {
-    if (facts.redirectedTo && facts.redirectedTo !== link.href) return { action: 'redirect-final', url: facts.redirectedTo };
+    if (facts.redirectedTo && facts.redirectedTo !== link.href) {
+      // Followed only within the same site: a redirect to another site (a login wall, a share dialog) is not the page the link means.
+      const wall = SIGN_IN.test(new URL(facts.redirectedTo).pathname + new URL(facts.redirectedTo).search);
+      if (sameSite(link.href, facts.redirectedTo) && !wall) return { action: 'redirect-final', url: facts.redirectedTo };
+      return { action: 'ok', note: 'redirects to another site: left as it is' };
+    }
     return { action: 'ok' };
   }
   // broken
