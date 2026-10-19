@@ -220,8 +220,16 @@ export async function asIsStage(ctx) {
       if (png) baselines[localOfOutPath(p.outPath)] = png;
     }
     report.baseline = { pages: Object.keys(baselines).length, of: pages.length };
+    // The Plain HTML base: the same copy as plain files. It is the comparison when the original cannot be compared and no saved
+    // picture exists (docs/COPY-MY-SITE.md §4); the plain HTML stack needs none, it is the base.
+    let htmlBase = null;
+    if (stack !== 'html') {
+      const plain = await serveCopy(copyDir);
+      servers.push(plain);
+      htmlBase = plain.url.replace(/\/$/, '');
+    }
     const checks = await checkCopy({
-      browser, base, excludedHosts, originalReachable, baselines,
+      browser, base, excludedHosts, originalReachable, baselines, htmlBase,
       pages: pages.map((p) => ({ path: localOfOutPath(p.outPath), url: p.url })),
       log: (m) => ctx.progress(0.55, m),
     });

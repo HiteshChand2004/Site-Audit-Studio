@@ -15,6 +15,7 @@ import sharp from 'sharp';
 import { pixelDiffPct } from './render.js';
 import { scriptCandidates } from './extract.js';
 import { readRecordIndex, classifyScripts, recordBodyReader } from '../scripts.js';
+import { freezePage, freezeTimers } from '../../verify/exact/freeze.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -84,12 +85,23 @@ export async function visualCheck(browser, base, copyUrl, originalUrl, width) {
   const copy = await isolated(browser, opts, base, outside);
   const original = await browser.newContext(opts);
   try {
+    // Both sides are frozen the same way before either picture is taken: timers (carousels, tickers, rotators) stop on their
+    // first state and CSS animations are settled. Then both are shot at the same moment, so the difference is the page's.
+    await copy.addInitScript(freezeTimers);
+    await original.addInitScript(freezeTimers);
     const cp = await copy.newPage();
-    await openAndScroll(cp, copyUrl);
     const op = await original.newPage();
-    await openAndScroll(op, originalUrl);
-    const a = await rgbOf(await cp.screenshot({ fullPage: true, type: 'png' }));
-    const b = await rgbOf(await op.screenshot({ fullPage: true, type: 'png' }));
+    await Promise.all([openAndScroll(cp, copyUrl), openAndScroll(op, originalUrl)]);
+    // Warm-up: a cold first load still brings fonts and images in while the picture is taken (one run in five was 14 % off).
+    // Both pages are loaded once more, with the files now cached, and their fonts and images settled before the freeze.
+    await Promise.all([cp.reload({ waitUntil: 'load' }), op.reload({ waitUntil: 'load' })]);
+    await Promise.all([openAndScroll(cp, copyUrl), openAndScroll(op, originalUrl)]);
+    await Promise.all([cp.evaluate(() => document.fonts.ready.then(() => true)), op.evaluate(() => document.fonts.ready.then(() => true))]).catch(() => {});
+    await Promise.all([freezePage(cp), freezePage(op)]);
+    await Promise.all([cp.waitForTimeout(400), op.waitForTimeout(400)]);
+    const [shotA, shotB] = await Promise.all([cp.screenshot({ fullPage: true, type: 'png' }), op.screenshot({ fullPage: true, type: 'png' })]);
+    const a = await rgbOf(shotA);
+    const b = await rgbOf(shotB);
     return { width, copyHeight: a.height, originalHeight: b.height, diffPct: a.width === b.width ? pixelDiffPct(a.raw, b.raw) : null };
   } finally {
     await copy.close();
@@ -252,7 +264,7 @@ export async function baselineVisual(browser, base, copyUrl, baselinePng) {
   }
 }
 
-export async function checkCopy({ browser, base, pages, excludedHosts = [], log = () => {}, originalReachable = true, baselines = {} }) {
+export async function checkCopy({ browser, base, pages, excludedHosts = [], log = () => {}, originalReachable = true, baselines = {}, htmlBase = null }) {
   const report = { pages: [], forms: 0, needsAPerson: [], originalReachable };
   for (const p of pages) {
     const copyUrl = `${base}${p.path}`;
@@ -281,6 +293,12 @@ export async function checkCopy({ browser, base, pages, excludedHosts = [], log 
       } else if (width === 1440 && baselines[p.path]) {
         // The original is not compared: the copy's desktop picture is compared with the capture's own picture of the page.
         one.visual.push(await baselineVisual(browser, base, copyUrl, baselines[p.path]));
+        log(`visual ${p.path} ${JSON.stringify(one.visual.at(-1))}`);
+      } else if (htmlBase) {
+        // The original is not compared and there is no saved picture: the copy is compared with its own Plain HTML base
+        // (the same copy rendered as plain files), so the check does not skip the page.
+        const v2 = await visualCheck(browser, base, copyUrl, `${htmlBase}${p.path}`, width);
+        one.visual.push({ ...v2, source: 'plain-html base' });
         log(`visual ${p.path} ${JSON.stringify(one.visual.at(-1))}`);
       } else {
         one.visual.push({ width, diffPct: null, note: `original not reachable: ${reason}${width === 1440 ? ' and no saved capture' : ''}` });
