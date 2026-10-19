@@ -1,10 +1,12 @@
-import { Lock, Monitor } from 'lucide-react';
+import { Lock, Monitor, Smartphone, Tablet } from 'lucide-react';
 import { useState } from 'react';
 import styles from './PreviewFrame.module.css';
 
-// Desktop only for now (the server captures the computer view only; see server/src/recreate/views.js). The tablet
-// (768, Tablet icon) and phone (375, Smartphone icon) sizes are parked; with one size the frame shows no size buttons.
-export const VIEWPORTS = [{ id: 1440, view: 'desktop', icon: Monitor, label: 'Computer screen (1440 px wide)' }];
+export const VIEWPORTS = [
+  { id: 1440, view: 'desktop', icon: Monitor, label: 'Computer screen (1440 px wide)' },
+  { id: 768, view: 'tablet', icon: Tablet, label: 'Tablet screen (768 px wide)' },
+  { id: 375, view: 'mobile', icon: Smartphone, label: 'Phone screen (375 px wide)' },
+];
 
 /**
  * Browser-chrome frame. The viewport can be controlled (`viewport` + `onViewportChange`) or left
@@ -30,7 +32,7 @@ export default function PreviewFrame({ address, tone = 'old', overlay, toolbar, 
           <span>{address}</span>
         </span>
         {toolbar}
-        {viewportButtons && VIEWPORTS.length > 1 && (
+        {viewportButtons && (
           <span className={styles.viewports} role="group" aria-label="Screen size">
             {VIEWPORTS.map(({ id, icon: Icon, label }) => (
               <button key={id} type="button" aria-pressed={current === id} title={label} onClick={() => select(id)}>

@@ -1,16 +1,23 @@
 import { useState } from 'react';
-import { CheckCircle2, Loader2, Settings2, Sparkles } from 'lucide-react';
+import { CheckCircle2, Columns2, Loader2, Play, RefreshCw, Settings2, Sparkles, StopCircle, Target, Trophy } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import { Alert, Card } from '../../components/common/Surface.jsx';
+import SectionCard from '../../components/common/SectionCard.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import StackOutput from '../../components/recreate/StackOutput.jsx';
+import AsIsChoice, { ASIS_STACK_CHOICES } from '../../components/recreate/AsIsChoice.jsx';
+import { failedAttempt } from '../../components/recreate/failedAttempt.js';
+import { stripAnsi } from '../../ansi.js';
+import { BrowserShot } from '../../components/site/Site.jsx';
+import { copyShot } from '../../siteData.js';
 import { RECREATE_STACKS, stackById } from '../../constants.js';
-import { TERMS } from '../../copy.js';
-import { ageDays, plural } from '../../format.js';
+import { matchRating, resumeText, TERMS } from '../../copy.js';
+import { ageDays, plural, timeAgo } from '../../format.js';
 import { api } from '../../api/client.js';
 import { outputsOf, outputState } from '../../stacks.js';
 import { isAnalysisActive, isJobActive, useProjects } from '../../store/useProjects.js';
 import styles from '../Panel.module.css';
+import { pathOf } from '../../components/project/PageScope.jsx';
 import ws from '../Workspace.module.css';
 
 const STALE_DAYS = 7;
@@ -26,7 +33,7 @@ function blockerOf({ audit, project, analyzing }) {
 
 // The four stages of making a copy, in plain words (the live progress shows the detailed steps).
 const STAGES = [
-  ['Visit every page', 'Each page is opened like a visitor on a computer would see it; its layout, text, hover effects and animations are recorded.'],
+  ['Visit every page', 'Each page is opened at phone, tablet, laptop and computer size; its layout, text, hover effects and animations are recorded.'],
   ['Save images and files', 'Images, fonts, videos and documents are downloaded, so the copy never depends on the old site.'],
   ['Build the new pages', 'Clean pages are written and the problems the check found are fixed where that can be done automatically.'],
   ['Check the result', 'Safety, broken links and how closely every page matches the original; then a private preview opens.'],
@@ -35,11 +42,12 @@ const STAGES = [
 const pagesText = (n) => (n == null || n === ALL_PAGES ? 'Every page of the site' : n === 0 ? 'Only the homepage' : `The homepage + ${plural(n, 'page')}`);
 
 /** Step 2: make the copy (Recreate). */
-export default function CreateStep({ project, audit, onOpenSettings }) {
+export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   const stack = stackById(project.stack);
   const analysis = useProjects((s) => s.analyses[project.id]);
   const job = useProjects((s) => s.recreates[project.id]);
   const recreate = useProjects((s) => s.recreate);
+  const stopRecreate = useProjects((s) => s.stopRecreate);
   const dismissJob = useProjects((s) => s.dismissJob);
   const latest = useProjects((s) => s.recreateResults[project.id]);
   const reloadRecreate = useProjects((s) => s.reloadRecreate);
@@ -47,15 +55,69 @@ export default function CreateStep({ project, audit, onOpenSettings }) {
   const reauditJob = useProjects((s) => s.reaudits[project.id]);
   const result = latest?.result;
   const running = isJobActive(job);
-  const blocker = blockerOf({ audit, project, analyzing: isAnalysisActive(analysis) });
+  // A copy that failed: its reason, and the same request again (the settings it was started with).
+  const lastOptions = useProjects((s) => s.lastRecreateOptions?.[project.id]) ?? null;
+  const failure = failedAttempt(latest, running);
+  // A copy that stopped before it finished, whose work the server kept: it can continue instead of starting over.
+  const resumable = !running ? latest?.resumable ?? null : null;
+  const resume = resumable ? resumeText(resumable) : null;
+    // "Original as-is" (a choice of pages and a stack, and a confirmation); the clean rebuild keeps its own start, unchanged.
+  const [mode, setMode] = useState('clean');
+  const [asIsPages, setAsIsPages] = useState([]);
+  const [asIsStack, setAsIsStack] = useState(project.stack ?? 'html');
+  const [asIsConfirmed, setAsIsConfirmed] = useState(false);
+  const asIsBlocker = mode === 'as-is' && !asIsConfirmed ? 'Confirm that you may copy this site as it is.' : null;
+  const blocker = blockerOf({ audit, project, analyzing: isAnalysisActive(analysis) }) ?? asIsBlocker;
   const staleDays = audit && !audit.isDummy ? ageDays(audit.analyzedAt) : 0;
   const outputs = outputsOf(result);
   const stackState = outputState(result, project.stack);
   const [building, setBuilding] = useState(false);
   const [buildError, setBuildError] = useState(null);
 
+  const match = result?.fidelity?.score ?? null;
+  const stages = (
+    <ol className={ws.stages}>
+      {STAGES.map(([title, text], i) => (
+        <li key={title}>
+          <span className={ws.stageNum}>{i + 1}</span>
+          <strong>{title}</strong>
+          <span>{text}</span>
+        </li>
+      ))}
+    </ol>
+  );
   return (
     <div className={ws.stepBody}>
+      {job && job.status !== 'done' && <AnalyzeProgress analysis={job} kind="recreate" onDismiss={() => dismissJob('recreate', project.id)} />}
+
+      {/* The progress box above already shows a failure that just happened: this alert is for one that was found afterwards. */}
+      {failure && !(job && job.status === 'failed') && (
+        <Alert
+          tone="bad"
+          title="The copy could not be finished"
+          action={lastOptions
+            ? <Button variant="primary" icon={RefreshCw} onClick={() => recreate(project.id, lastOptions)}>Try again</Button>
+            : <Button variant="primary" icon={RefreshCw} onClick={() => recreate(project.id)}>Try again</Button>}
+        >
+          {stripAnsi(failure.reason)} “Try again” starts it again with the same settings.
+        </Alert>
+      )}
+
+      {resume && (
+        <Alert
+          tone="warn"
+          title={resume.title}
+          action={
+            <Button variant="primary" icon={Play} disabled={Boolean(blocker)} title={blocker ?? undefined} onClick={() => recreate(project.id, { resume: true })}>
+              {resume.button}
+            </Button>
+          }
+        >
+          {resume.text}
+        </Alert>
+      )}
+
+      <div className={result ? ws.twoCol : undefined}>
       <Card
         icon={Sparkles}
         title="Make a clean copy of this site"
@@ -67,27 +129,96 @@ export default function CreateStep({ project, audit, onOpenSettings }) {
             <dd>{stack.name}</dd>
           </div>
           <div>
+            <dt>How exact</dt>
+            <dd>{project.exact_mode ? 'Exact copy (as it is, no time limit)' : 'Normal copy'}</dd>
+          </div>
+          <div>
             <dt>Pages</dt>
-            <dd>{pagesText(project.recreate_pages)}</dd>
+            <dd>{project.page_url ? <>Only one page: <span className="mono">{pathOf(project.page_url)}</span></> : pagesText(project.recreate_pages)}</dd>
           </div>
           <div>
             <dt>Future address</dt>
             <dd className="mono">{project.target_domain || 'Not set yet (asked when you create the copy)'}</dd>
           </div>
         </dl>
+        {result?.asIs && !running && (
+          <div className={ws.actions}>
+            <span className={ws.hint}>Package the same lifted copy in another stack (nothing is captured or lifted again):</span>
+            {ASIS_STACK_CHOICES.filter((s) => s.id !== result.asIs.stack).map((s) => (
+              <Button
+                key={s.id}
+                icon={Sparkles}
+                disabled={Boolean(blocker)}
+                onClick={() => recreate(project.id, { mode: 'as-is', confirmed: true, stack: s.id, reuseAsIs: true })}
+              >
+                Package in {s.label}
+              </Button>
+            ))}
+          </div>
+        )}
+        <AsIsChoice
+          projectId={project.id}
+          authorized={Boolean(project.authorized)}
+          stack={project.stack}
+          mode={mode}
+          onMode={setMode}
+          pages={asIsPages}
+          onPages={setAsIsPages}
+          asIsStack={asIsStack}
+          onAsIsStack={setAsIsStack}
+          confirmed={asIsConfirmed}
+          onConfirmed={setAsIsConfirmed}
+        />
         <div className={ws.actions}>
           <Button
-            variant="primary"
+            variant={resume ? 'secondary' : 'primary'}
             size="lg"
             icon={running ? (p) => <Loader2 {...p} className={styles.spin} /> : Sparkles}
             disabled={Boolean(blocker) || running}
             title={blocker ?? undefined}
             // Every full address in the copy (canonical, sitemap, link previews, structured data) uses the new site's address,
             // never the original: it is asked once before the first copy.
-            onClick={() => (project.target_domain ? recreate(project.id) : onOpenSettings('before-create'))}
+            onClick={() => (project.target_domain
+              ? (mode === 'as-is' ? recreate(project.id, { mode: 'as-is', confirmed: true, stack: asIsStack, pages: asIsPages }) : recreate(project.id))
+              : onOpenSettings('before-create'))}
           >
-            {running ? 'Creating the copy…' : result ? 'Create the copy again' : 'Create the copy'}
+            {running
+              ? 'Creating the copy…'
+              : resume
+                ? 'Start over'
+                : mode === 'as-is' ? 'Create the original copy' : project.exact_mode
+                  ? (result ? 'Create the exact copy again' : 'Create the exact copy')
+                  : (result ? 'Create the copy again' : 'Create the copy')}
           </Button>
+          {running && (
+            <Button
+              icon={StopCircle}
+              title="Stops the copy. Everything it has finished is kept, so it can carry on where it stopped."
+              onClick={() => stopRecreate(project.id)}
+            >
+              Stop
+            </Button>
+          )}
+          {!project.exact_mode && !running && (
+            <Button
+              icon={Target}
+              disabled={Boolean(blocker)}
+              title="Measures every page against the original at every screen size until it matches, and copies the site as it is. It takes hours, and it does not change this project's settings."
+              onClick={() => recreate(project.id, { exact: true })}
+            >
+              Create an exact copy
+            </Button>
+          )}
+          {result && (
+            <Button
+              icon={RefreshCw}
+              disabled={Boolean(blocker) || running}
+              title="Builds the copy again from what the last visit recorded, without opening the site again: quick, for trying an improvement."
+              onClick={() => recreate(project.id, { reuseCapture: true })}
+            >
+              Rebuild from the last visit
+            </Button>
+          )}
           <Button icon={Settings2} onClick={() => onOpenSettings('settings')} disabled={running}>
             Change settings
           </Button>
@@ -97,23 +228,46 @@ export default function CreateStep({ project, audit, onOpenSettings }) {
           <p className={ws.hint}>
             This can take a while for a large site (several minutes per page on a slow computer). The computer is kept awake while it works; keep the
             laptop plugged in and its lid open.
+            {result && ' “Rebuild from the last visit” takes well under a minute: it reuses what was recorded and does not open the site again.'}
           </p>
         )}
       </Card>
 
-      {!running && (
-        <Card title="What happens when you click">
-          <ol className={ws.stages}>
-            {STAGES.map(([title, text], i) => (
-              <li key={title}>
-                <span className={ws.stageNum}>{i + 1}</span>
-                <strong>{title}</strong>
-                <span>{text}</span>
-              </li>
-            ))}
-          </ol>
+      {result && (
+        <Card icon={Trophy} title="Last copy" sub={`Made ${new Date(result.createdAt).toLocaleString()} (${timeAgo(result.createdAt)})`}>
+          <div className={ws.lastCopy}>
+            <BrowserShot src={copyShot(project.id, result)} address="the copy" alt="The copy's homepage" ratio={16 / 10} />
+            <dl className={ws.miniFacts}>
+              <div>
+                <dt>Pages</dt>
+                <dd className="tabular">{result.pages.length}</dd>
+              </div>
+              <div>
+                <dt>Match</dt>
+                <dd className="tabular">{match != null ? `${match}/100` : '–'}</dd>
+              </div>
+              <div>
+                <dt>Verdict</dt>
+                <dd>{matchRating(match).label}</dd>
+              </div>
+            </dl>
+            {onGo && (
+              <div className={ws.actions}>
+                <Button size="sm" icon={Columns2} onClick={() => onGo('compare')}>
+                  Compare
+                </Button>
+                <Button size="sm" variant="ghost" icon={Trophy} onClick={() => onGo('results')}>
+                  Results
+                </Button>
+              </div>
+            )}
+          </div>
         </Card>
       )}
+      </div>
+
+
+      {!running && !result && <Card title="What happens when you click">{stages}</Card>}
 
       {staleDays > STALE_DAYS && !running && (
         <Alert tone="warn" title={`The check is ${Math.floor(staleDays)} days old`}>
@@ -121,13 +275,6 @@ export default function CreateStep({ project, audit, onOpenSettings }) {
         </Alert>
       )}
 
-      {job && job.status !== 'done' && <AnalyzeProgress analysis={job} kind="recreate" onDismiss={() => dismissJob('recreate', project.id)} />}
-
-      {result && (
-        <Alert tone="ok" title="Last copy">
-          Made {new Date(result.createdAt).toLocaleString()} · {plural(result.pages.length, 'page')}. See it in step 3, the results in step 4.
-        </Alert>
-      )}
 
       {result && project.stack !== 'html' && (
         <>
@@ -151,6 +298,12 @@ export default function CreateStep({ project, audit, onOpenSettings }) {
           />
           {buildError && <Alert tone="bad" title="The build did not finish">{buildError}</Alert>}
         </>
+      )}
+
+      {!running && result && (
+        <SectionCard title="What happens when you click" meta="The four stages of a copy" defaultOpen={false}>
+          {stages}
+        </SectionCard>
       )}
 
       {!result && !running && !blocker && (

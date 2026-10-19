@@ -1,21 +1,26 @@
-import { stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { Router } from 'express';
 import { db } from '../db/index.js';
 import { ConflictError } from '../jobs/manager.js';
 import { streamJob } from '../jobs/sse.js';
 import { PUBLIC_STEPS } from '../recreate/index.js';
-import { analysisWarnings, latestAnalysis } from '../recreate/inputs.js';
+import { analysisWarnings, latestAnalysis, parseExactMode } from '../recreate/inputs.js';
 import { recreateJobs } from '../recreate/jobs.js';
 import { activePreview, PreviewError, startPreview, stopPreview } from '../recreate/preview.js';
-import { recreateDir } from '../recreate/workspace.js';
+import { findResumable, recreateDir } from '../recreate/workspace.js';
 import { slugFor } from '../recreate/discover.js';
 import { getEmitter, isReadyStack, listStacks } from '../recreate/emit/index.js';
 import { exportStack, outputRoot, reportOutputs, targetStack } from '../recreate/export/fromIr.js';
 import { planZip, writeZip } from '../recreate/export/zip.js';
 import { RecreateError } from '../recreate/errors.js';
+import { ASIS_DIR, ASIS_STACKS, readLifted } from '../recreate/behavior/preserve/stage.js';
+import { startAsIsPreview, stopAsIsPreview } from '../recreate/behavior/preserve/asisPreview.js';
+import { asIsPagesOf } from '../recreate/behavior/preserve/asis.js';
 
 const router = Router();
+
 
 const selectProject = db.prepare('SELECT * FROM projects WHERE id = ?');
 const selectRecreate = db.prepare('SELECT id, status, error FROM recreates WHERE id = ? AND project_id = ?');
@@ -29,7 +34,28 @@ const latestDone = db.prepare(`
   ORDER BY started_at DESC LIMIT 1
 `);
 
-router.post('/:id/recreate', (req, res) => {
+// Finished recreates, newest first: the latest one whose capture is still on disk can be rebuilt from.
+/** The finished copies with their reports, newest first (the output of each stack of an as-is copy). */
+const doneCopies = db.prepare(`
+  SELECT id, result_json FROM recreates
+  WHERE project_id = ? AND status = 'done'
+  ORDER BY started_at DESC LIMIT 20
+`);
+
+/** The finished copies, newest first, that may hold a lifted copy to package (see the reuse of an as-is copy). */
+const latestAsIsSource = db.prepare(`
+  SELECT id, started_at FROM recreates
+  WHERE project_id = ? AND status = 'done'
+  ORDER BY started_at DESC LIMIT 20
+`);
+
+const latestReplayable = db.prepare(`
+  SELECT id, started_at FROM recreates
+  WHERE project_id = ? AND status = 'done'
+  ORDER BY started_at DESC LIMIT 5
+`);
+
+router.post('/:id/recreate', async (req, res) => {
   const project = selectProject.get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found.' });
   if (!project.authorized) {
@@ -44,15 +70,85 @@ router.post('/:id/recreate', (req, res) => {
     return res.status(409).json({ error: 'Run Analyze first: Recreate works from a completed analysis.' });
   }
 
+  // `reuseCapture`: rebuild from the capture of the latest finished recreate (recreate/replay.js) instead of opening the
+  // site again: only generate → build → preview run, for trying a change to the generated site quickly.
+  if (req.body?.resume && req.body?.reuseCapture) {
+    return res.status(400).json({ error: 'Choose one: continue the stopped copy, or rebuild from the last visit.' });
+  }
+  let payload = {};
+  if (req.body?.reuseCapture) {
+    const source = latestReplayable.all(project.id).find((r) => r && existsSync(path.join(recreateDir(project.id, r.id), 'capture', 'manifest.json'))
+      && existsSync(path.join(recreateDir(project.id, r.id), 'assets', 'manifest.json')));
+    if (!source) return res.status(409).json({ error: 'There is no saved capture to rebuild from: run a full Recreate first.' });
+    payload = { reuseFrom: { recreateId: source.id, createdAt: source.started_at } };
+  }
+  // `resume`: continue the stopped recreate whose work was kept (recreate/checkpoint.js) instead of starting over.
+  if (req.body?.resume) {
+    if (recreateJobs.active(project.id)) {
+      return res.status(409).json({ error: 'A recreate is already running for this project.', recreateId: recreateJobs.active(project.id).id });
+    }
+    const stopped = await findResumable(project.id);
+    if (!stopped) return res.status(409).json({ error: 'There is no stopped recreate to continue: start a new one.' });
+    payload = { resumeFrom: { recreateId: stopped.recreateId } };
+  }
+  // `exact`: this one run is an exact copy (the project's own setting decides when this is not given).
+  if (req.body?.exact !== undefined) {
+    const parsed = parseExactMode(req.body.exact);
+    if (parsed === null) return res.status(400).json({ error: 'Exact mode must be true or false.' });
+    payload.exact = Boolean(parsed);
+  }
+  // `noLimit`: an ordinary run that is allowed to take as long as its work needs.
+  if (req.body?.noLimit) payload.noLimit = true;
+  // `preserve`: an authorised project whose original parts are kept as they are (CLONER_SPEC): also fetches every picture and video.
+  if (req.body?.preserve === true) payload.preserve = true;
+  // `mode: 'as-is'`: the original's own code and animations, saved locally (behavior/preserve). Only for an authorised project,
+  // and only when the request confirms it; the pages are the chosen ones of this site (the homepage always among them).
+  if (req.body?.mode !== undefined && req.body.mode !== 'clean' && req.body.mode !== 'as-is') {
+    return res.status(400).json({ error: 'The mode must be "clean" or "as-is".' });
+  }
+  if (req.body?.mode === 'as-is') {
+    if (!project.authorized) return res.status(403).json({ error: 'The original as-is copy is only available for a project marked as authorised.' });
+    if (req.body.confirmed !== true) return res.status(400).json({ error: 'Confirm that you may copy this site as it is.' });
+    const stack = req.body.stack ?? project.stack ?? 'html';
+    if (!ASIS_STACKS.includes(stack)) return res.status(400).json({ error: `The as-is copy can be packaged as: ${ASIS_STACKS.join(', ')}.` });
+    // `reuseAsIs`: another stack from the lifted copy of the latest as-is copy (no capture, no lift again).
+    let pages;
+    let from = null;
+    if (req.body.reuseAsIs === true) {
+      // The newest finished copy that still has its lifted folder (older ones may have been removed by the retention rule).
+      const source = latestAsIsSource.all(project.id).find((r) => existsSync(path.join(recreateDir(project.id, r.id), ASIS_DIR, 'copy')));
+      const lifted = source ? await readLifted(recreateDir(project.id, source.id)) : null;
+      if (!source || !lifted) return res.status(409).json({ error: 'There is no lifted copy to package: make an original as-is copy first.' });
+      from = source.id;
+      pages = lifted.pages.map((p) => p.url);
+    } else {
+      pages = asIsPagesOf(project, req.body.pages);
+      if (pages === null) return res.status(400).json({ error: 'The pages must be addresses of this site (the homepage first or among them), up to 40.' });
+    }
+    payload.preserve = true;
+    payload.asIs = { stack, pages, ...(from && { from }) };
+  }
+
   try {
-    const job = recreateJobs.start(project, {}, { warnings: analysisWarnings(analysis) });
-    res.status(202).json({ recreateId: job.id, job, steps: PUBLIC_STEPS });
+    const job = recreateJobs.start(project, payload, { warnings: analysisWarnings(analysis) });
+    res.status(202).json({
+      recreateId: job.id, job, steps: PUBLIC_STEPS,
+      ...(payload.reuseFrom && { reuseFrom: payload.reuseFrom }),
+      ...(payload.resumeFrom && { resumeFrom: payload.resumeFrom }),
+      ...(payload.exact !== undefined && { exact: payload.exact }),
+    });
   } catch (err) {
     if (err instanceof ConflictError) {
       return res.status(409).json({ error: err.message, recreateId: err.job.id });
     }
     throw err;
   }
+});
+
+router.post('/:id/recreate/stop', (req, res) => {
+  const job = recreateJobs.stop(req.params.id);
+  if (!job) return res.status(409).json({ error: 'No copy is running for this project.' });
+  res.json({ job, steps: PUBLIC_STEPS });
 });
 
 router.get('/:id/recreate/current', (req, res) => {
@@ -64,11 +160,25 @@ router.get('/:id/recreate/current', (req, res) => {
 const withSlugs = (report) => ({ ...report, pages: (report.pages ?? []).map((p) => ({ ...p, slug: p.slug ?? slugFor(p.outPath) })) });
 
 // Latest attempt (any status) plus the report of the latest successful recreate.
-router.get('/:id/recreate', (req, res) => {
+router.get('/:id/recreate', async (req, res) => {
   if (!selectProject.get(req.params.id)) return res.status(404).json({ error: 'Project not found.' });
   const last = latestRow.get(req.params.id);
   const done = latestDone.get(req.params.id);
+  // A stopped recreate whose work was kept: the app offers to continue it (POST { resume: true }).
+  const stopped = recreateJobs.active(req.params.id) ? null : await findResumable(req.params.id);
+  // The newest output of each stack of an as-is copy, with the copy that holds it (each stack has its own download).
+  const asIsOutputs = {};
+  for (const row of doneCopies.all(req.params.id)) {
+    const rep = row.result_json ? JSON.parse(row.result_json) : null;
+    for (const [stack, out] of Object.entries(rep?.outputs ?? {})) {
+      if (out?.mode !== 'as-is' || out.status !== 'ready' || asIsOutputs[stack]) continue;
+      if (!existsSync(path.join(recreateDir(req.params.id, row.id), out.dir ?? ''))) continue;
+      asIsOutputs[stack] = { recreateId: row.id };
+    }
+  }
   res.json({
+    asIsOutputs,
+    resumable: stopped?.summary ?? null,
     last: last ? {
       id: last.id,
       status: last.status,
@@ -102,10 +212,7 @@ async function latestBuild(project) {
   return { recreateId: row.id, root, scripts: getEmitter(stack)?.scripts || reportOutputs(report)[stack]?.scripts || false, stack };
 }
 
-const previewOf = (projectId) => {
-  const p = activePreview();
-  return p?.projectId === projectId ? p : null;
-};
+const previewOf = (projectId) => activePreview(projectId);
 
 router.get('/:id/preview', (req, res) => {
   if (!selectProject.get(req.params.id)) return res.status(404).json({ error: 'Project not found.' });
@@ -152,6 +259,31 @@ router.get('/:id/recreate/:recreateId/captures/:slug/:file', (req, res) => {
     (err) => {
       if (!err || res.headersSent) return;
       res.status(404).json({ error: 'Capture not found. Only the latest 2 recreates of a project keep their files.' });
+    },
+  );
+});
+
+// The exact comparison's pictures: the original as it was measured (capture/<slug>/exact/) and the copy beside it,
+// with the map of where they differ and the magnified crops (fidelity/<slug>/exact/). A slot id is a width, or a
+// width and a height, so the file names are bounded by that.
+const EXACT_FILE = /^(copy-)?d{3,4}(xd{3,4})?(-b[1-3]|-full|-map|-crop[1-3]).webp$/;
+
+router.get('/:id/recreate/:recreateId/exact/:slug/:file', (req, res) => {
+  const { id, recreateId, slug, file } = req.params;
+  if (!UUID.test(id) || !UUID.test(recreateId) || !CAPTURE_SLUG.test(slug) || !EXACT_FILE.test(file)) {
+    return res.status(404).json({ error: 'Image not found.' });
+  }
+  if (!doneRecreate.get(recreateId, id)) return res.status(404).json({ error: 'Recreate not found.' });
+  // The original's own shots live with the capture; everything the comparison made lives with the fidelity output.
+  const dir = file.startsWith('copy-') || /-(map|crop[1-3]).webp$/.test(file)
+    ? path.join(recreateDir(id, recreateId), 'fidelity', slug, 'exact')
+    : path.join(recreateDir(id, recreateId), 'capture', slug, 'exact');
+  res.sendFile(
+    path.join(dir, file),
+    { headers: { 'Content-Type': 'image/webp', 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' } },
+    (err) => {
+      if (!err || res.headersSent) return;
+      res.status(404).json({ error: 'Image not found. Only the latest 2 recreates of a project keep their files.' });
     },
   );
 });
@@ -234,6 +366,24 @@ router.post('/:id/recreate/:recreateId/export', async (req, res) => {
     if (err instanceof RecreateError) return res.status(err.status ?? 500).json({ error: err.message });
     throw err;
   }
+});
+
+// The preview of an "Original as-is" copy: served from its own address (behavior/preserve/asisPreview.js), never the app's origin.
+router.post('/:id/recreate/:recreateId/asis-preview', async (req, res) => {
+  const row = doneReport.get(req.params.recreateId, req.params.id);
+  const report = row?.result_json ? JSON.parse(row.result_json) : null;
+  if (!report?.asIs) return res.status(409).json({ error: 'This is not a finished original as-is copy.' });
+  try {
+    const url = await startAsIsPreview(req.params.id, req.params.recreateId, path.join(recreateDir(req.params.id, req.params.recreateId), ASIS_DIR, 'copy'));
+    res.json({ url });
+  } catch (err) {
+    res.status(500).json({ error: `The preview could not be started: ${err.message}` });
+  }
+});
+
+router.delete('/:id/recreate/:recreateId/asis-preview', async (req, res) => {
+  await stopAsIsPreview(req.params.id, req.params.recreateId);
+  res.status(204).end();
 });
 
 router.get('/:id/recreate/:recreateId/events', (req, res) => {

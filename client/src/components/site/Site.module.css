@@ -1,0 +1,205 @@
+/* Site icon */
+.icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 9px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong), var(--elev-1);
+  color: var(--text-2);
+  font-weight: 700;
+}
+
+.icon img {
+  width: 62%;
+  height: 62%;
+  object-fit: contain;
+}
+
+/* Picture in a browser frame */
+.shot {
+  position: relative;
+  margin: 0;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--hairline-strong), var(--elev-2);
+}
+
+.shot[data-size='sm'] {
+  border-radius: 9px;
+}
+
+.chrome {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 26px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface-2);
+}
+
+.shot[data-size='lg'] .chrome {
+  height: 32px;
+  padding: 0 12px;
+}
+
+.shot[data-size='sm'] .chrome {
+  height: 18px;
+  gap: 6px;
+  padding: 0 7px;
+}
+
+.dots {
+  display: flex;
+  gap: 4px;
+}
+
+.dots i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+
+.shot[data-size='sm'] .dots i {
+  width: 5px;
+  height: 5px;
+}
+
+.address {
+  display: flex;
+  flex: 0 1 60%;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  height: 17px;
+  margin: 0 auto;
+  padding: 0 10px;
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.shot[data-size='lg'] .address {
+  height: 21px;
+  font-size: 11.5px;
+}
+
+.address span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viewport {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.viewport img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transform: scale(1.015);
+  transition: opacity 500ms ease, transform 900ms var(--ease);
+}
+
+.viewport img[data-loaded] {
+  opacity: 1;
+  transform: none;
+}
+
+.placeholder {
+  position: absolute;
+  inset: 0;
+  border-radius: 0;
+}
+
+.empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 6px;
+  padding: 8%;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  background:
+    radial-gradient(circle at 1px 1px, var(--border) 1px, transparent 0) 0 0 / 14px 14px,
+    var(--surface-2);
+}
+
+.emptyArt {
+  width: min(180px, 70%);
+}
+
+/* Stage marks */
+.stages {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.stages[data-labels] {
+  gap: 12px;
+}
+
+.stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 550;
+}
+
+.stage i {
+  width: 14px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-3);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.stages[data-labels] .stage i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.stage[data-state='done'] i {
+  background: var(--ok);
+  box-shadow: none;
+}
+
+.stage[data-state='warn'] i {
+  background: var(--warn-strong);
+  box-shadow: none;
+}
+
+.stage[data-state='failed'] i {
+  background: var(--bad);
+  box-shadow: none;
+}
+
+.stage[data-state='running'] i {
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-border) 50%, var(--accent) 100%) 0 0 / 200% 100%;
+  box-shadow: none;
+  animation: var(--k-skeleton) 1.2s linear infinite;
+}
+
+.stage[data-state='done'],
+.stage[data-state='warn'] {
+  color: var(--text-2);
+}

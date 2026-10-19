@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, ArrowUpDown, ChevronLeft, ChevronRight, Columns2, Info, RotateCw } from 'lucide-react';
+import { AlertTriangle, ArrowUpDown, ChevronLeft, ChevronRight, Columns2, Info, Monitor, RotateCw, ShieldAlert, Smartphone, Tablet } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/Surface.jsx';
+import { Segmented } from '../../components/common/Tabs.jsx';
 import InfoTip from '../../components/common/InfoTip.jsx';
 import PreviewFrame, { VIEWPORTS } from '../../components/preview/PreviewFrame.jsx';
+import { api } from '../../api/client.js';
 import SitePreview, { FullPageFrame, liveAvailability, LiveFrame, ModeToggle } from '../../components/preview/SitePreview.jsx';
+import { defaultPreviewMode, unavailableNote } from '../../components/preview/framing.js';
 import { Pill } from '../../components/common/Score.jsx';
-import { matchRating, TERMS } from '../../copy.js';
+import { matchRating, TERMS, VIEWPORT_NAMES } from '../../copy.js';
 import { pageOf, shownStack, outputsOf } from '../../stacks.js';
 import { useProjects } from '../../store/useProjects.js';
 import { useSyncScroll } from '../useSyncScroll.js';
+import { captureShot } from '../../siteData.js';
 import styles from '../Panel.module.css';
 import ws from '../Workspace.module.css';
 
@@ -20,12 +24,54 @@ const pageUrl = (outPath) => outPath.replace(/(^|\/)index\.html$/, '$1');
 // may run its own bundles: the preview server sends script-src 'self' for it and says so (preview.scripts).
 const sandboxFor = (preview) => (preview?.scripts ? 'allow-same-origin allow-scripts' : 'allow-same-origin');
 
-/** How closely the selected page matches the original: one score and one plain verdict. */
-function PageMatch({ fid }) {
+// The copy's preview server lets only the app's own address frame it (frame-ancestors); opened from another address the
+// live frame stays blank, so the picture taken when the copy was measured is shown first.
+const COPY_MODE = typeof window !== 'undefined' && window.location.port === '5173' ? 'live' : 'screenshot';
+
+/** A strip of every copied page (a small picture of its first screen and its match), to jump between pages. */
+function PageStrip({ project, result, pages, page, onPick, fidByPage, label }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    ref.current?.querySelector('[aria-pressed="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [page]);
+  return (
+    <div className={ws.strip} ref={ref} role="group" aria-label="Pages of the copy">
+      {pages.map((p) => {
+        const info = result.pages?.find((x) => x.outPath === p);
+        const src = captureShot(project.id, result, info, 'desktop', 'fold');
+        const score = fidByPage.get(p)?.score;
+        const tone = matchRating(score).tone;
+        return (
+          <button key={p} type="button" aria-pressed={p === page} onClick={() => onPick(p)} title={label(p)}>
+            <span className={ws.stripShot}>{src ? <img src={src} alt="" loading="lazy" decoding="async" /> : null}</span>
+            <span className={ws.stripText}>
+              <span className="mono">{label(p)}</span>
+              {score != null && (
+                <span className={ws.stripScore} data-tone={tone}>
+                  {score}
+                </span>
+              )}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const SIZES = [
+  { value: 1440, label: 'Computer', icon: Monitor },
+  { value: 768, label: 'Tablet', icon: Tablet },
+  { value: 375, label: 'Phone', icon: Smartphone },
+];
+
+/** How closely the selected page matches the original: one score and one plain verdict, plus the screen size shown. */
+function PageMatch({ fid, view }) {
   if (!fid || fid.score == null) {
     return <p className={ws.hint}>How closely this page matches was not measured (the copy ran out of time before that check).</p>;
   }
   const r = matchRating(fid.score);
+  const here = fid.views?.[view]?.score;
   return (
     <div className={ws.match}>
       <span className={ws.matchLabel}>
@@ -39,32 +85,49 @@ function PageMatch({ fid }) {
         <small>/100</small>
       </span>
       <Pill tone={r.tone}>{r.label}</Pill>
+      {here != null && (
+        <span className={ws.hint}>
+          On this screen size ({VIEWPORT_NAMES[view] ?? view}): {here}/100
+        </span>
+      )}
     </div>
   );
 }
 
 /** Step 3: the original and the copy side by side, the same page and screen size on both. */
-export default function CompareStep({ project, audit, onGoCreate }) {
+export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   const latest = useProjects((s) => s.recreateResults[project.id]);
   const result = latest?.result;
   const preview = useProjects((s) => s.previews[project.id]);
   const ensurePreview = useProjects((s) => s.ensurePreview);
-  // Desktop only for now (the computer view is the only one captured).
-  const viewport = 1440;
+  const [viewport, setViewport] = useState(1440);
   const [page, setPage] = useState('index.html');
   const [sync, setSync] = useState(false);
   const [oldScroller, setOldScroller] = useState(null);
   const [newScroller, setNewScroller] = useState(null);
+  // An original as-is copy is shown from its own address (its preview server, behavior/preserve/asisPreview.js).
+  const asIsCopy = Boolean(result?.asIs);
+  const [asIsUrl, setAsIsUrl] = useState(null);
+  useEffect(() => {
+    if (!asIsCopy || !result?.recreateId) return undefined;
+    let alive = true;
+    api.startAsIsPreview(project.id, result.recreateId).then((r) => alive && setAsIsUrl(r.url)).catch(() => alive && setAsIsUrl(null));
+    return () => { alive = false; };
+  }, [asIsCopy, project.id, result?.recreateId]);
   useSyncScroll(oldScroller, newScroller, sync);
 
   const pages = result?.preview?.pages ?? result?.pages?.map((p) => p.outPath) ?? [];
   // A new copy opens on its homepage.
   useEffect(() => setPage(pages[0] ?? 'index.html'), [result?.recreateId]);
+  // …or on the page picked elsewhere (the page pictures in Results).
+  useEffect(() => {
+    if (focusPage && pages.includes(focusPage)) setPage(focusPage);
+  }, [focusPage, result?.recreateId]);
   const shown = shownStack(result, project.stack);
   const shownOutput = outputsOf(result)[shown];
 
   // A preview of another build than the one shown (the stack was changed, or its build just finished): start the right one.
-  const previewStale = Boolean(result && preview?.url && preview.recreateId === result.recreateId && !preview.loading && (preview.stack ?? 'html') !== shown);
+  const previewStale = Boolean(result && !asIsCopy && preview?.url && preview.recreateId === result.recreateId && !preview.loading && (preview.stack ?? 'html') !== shown);
   useEffect(() => {
     if (previewStale) ensurePreview(project.id);
   }, [previewStale, project.id, ensurePreview]);
@@ -82,8 +145,9 @@ export default function CompareStep({ project, audit, onGoCreate }) {
   const live = liveAvailability(audit, originalUrl);
   const hasScreens = otherPage ? (otherPage.views?.length ?? 0) > 0 : Boolean(audit?.screenshots);
   const [mode, setMode] = useState('screenshot');
+  const [copyMode, setCopyMode] = useState(COPY_MODE);
   useEffect(() => {
-    setMode(live.ok ? 'live' : 'screenshot');
+    setMode(defaultPreviewMode(live));
   }, [audit?.analysisId, originalUrl, live.ok]);
   // Scrolling together works on the picture of the original (the app cannot scroll a live site of another origin).
   const modeBefore = useRef(null);
@@ -117,14 +181,28 @@ export default function CompareStep({ project, audit, onGoCreate }) {
     );
   }
 
-  const ready = Boolean(preview?.url && preview.recreateId === result.recreateId);
-  const src = ready ? `${preview.url}${pageUrl(pageOf(result, shown, page).file)}` : null;
+  const copyUrl = asIsCopy ? asIsUrl : preview?.url;
+  // An as-is copy is its own origin: scripts run there (its own code), and nothing of it reaches the app.
+  const frameSandbox = asIsCopy ? 'allow-same-origin allow-scripts' : sandboxFor(preview);
+  const ready = Boolean(asIsCopy ? asIsUrl : preview?.url && preview.recreateId === result.recreateId);
+  const src = ready ? `${copyUrl}${pageUrl(pageOf(result, shown, page).file)}` : null;
   const view = VIEWPORTS.find((v) => v.id === viewport)?.view;
   const pageHeight = result?.fidelity?.pages?.find((p) => p.outPath === page)?.views?.[view]?.height?.generated ?? null;
   const fullPage = sync && ready && pageHeight > 0;
   const realOriginal = audit && !audit.isDummy;
+  // Live not available (the site blocks framing, or this app's own address): say so, and what is shown instead.
+  const originalNote = realOriginal ? unavailableNote(live, hasScreens) : null;
   const fidByPage = new Map((result.fidelity?.pages ?? []).map((p) => [p.outPath, p]));
   const pageIndex = Math.max(0, pages.indexOf(page));
+  // The copy's own pictures (taken when its match was measured), per screen size.
+  const copyInfo = result.pages?.find((p) => p.outPath === page) ?? null;
+  const copyPageShot = (vp) => {
+    const fv = fidByPage.get(page)?.views?.[vp.view];
+    if (!fv || !copyInfo?.slug) return null;
+    return { viewport: { width: vp.id }, full: { url: `/api/projects/${project.id}/recreate/${result.recreateId}/fidelity/${copyInfo.slug}/${vp.view}-full.webp` } };
+  };
+  const copyHasShots = Boolean(copyInfo?.slug && fidByPage.get(page)?.views);
+  const copyPicture = copyMode === 'screenshot' && copyHasShots;
 
   return (
     <div className={ws.stepBody}>
@@ -155,6 +233,7 @@ export default function CompareStep({ project, audit, onGoCreate }) {
             </Button>
           </div>
         )}
+        <Segmented options={SIZES} value={viewport} onChange={setViewport} label="Screen size" />
         <span className={ws.toolbarEnd}>
           <Button icon={ArrowUpDown} variant={sync ? 'primary' : 'secondary'} aria-pressed={sync} onClick={() => setSync((on) => !on)}>
             {sync ? 'Scrolling together' : TERMS.sync.title}
@@ -165,7 +244,9 @@ export default function CompareStep({ project, audit, onGoCreate }) {
         </span>
       </div>
 
-      <PageMatch fid={fidByPage.get(page)} />
+      {pages.length > 1 && <PageStrip project={project} result={result} pages={pages} page={page} onPick={setPage} fidByPage={fidByPage} label={(p) => pageOf(result, shown, p).path} />}
+
+      <PageMatch fid={fidByPage.get(page)} view={view} />
 
       <div className={ws.compare}>
         <section aria-label={TERMS.original}>
@@ -176,8 +257,10 @@ export default function CompareStep({ project, audit, onGoCreate }) {
             address={originalUrl}
             tone="old"
             viewport={viewport}
+            onViewportChange={setViewport}
             fit={Boolean(realOriginal)}
             viewportButtons={false}
+            overlay={originalNote && (<><ShieldAlert size={13} color="var(--warn)" aria-hidden="true" /><span>{originalNote}</span></>)}
             toolbar={realOriginal && <ModeToggle mode={mode} onChange={setMode} live={live} hasScreens={hasScreens} />}
           >
             {realOriginal && (
@@ -194,22 +277,26 @@ export default function CompareStep({ project, audit, onGoCreate }) {
             address={src ? src.replace(/^https?:\/\//, '') : 'starting the preview…'}
             tone="new"
             viewport={viewport}
-            fit={ready}
+            onViewportChange={setViewport}
+            fit={ready || copyPicture}
             viewportButtons={false}
+            toolbar={copyHasShots && <ModeToggle mode={copyMode} onChange={setCopyMode} live={{ ok: true }} hasScreens={copyHasShots} />}
           >
-            {fullPage ? (
+            {copyPicture ? (
+              <SitePreview url={src ?? 'the copy'} audit={audit} mode="screenshot" viewport={viewport} scrollRef={sync ? setNewScroller : undefined} pageShot={copyPageShot} />
+            ) : fullPage ? (
               <FullPageFrame
-                key={`${preview.recreateId}-${page}-${viewport}`}
+                key={`${preview.recreateId}-${preview.startedAt}-${page}-${viewport}`}
                 url={src}
                 width={viewport}
                 height={pageHeight}
                 scrollRef={setNewScroller}
-                sandbox={sandboxFor(preview)}
+                sandbox={frameSandbox}
                 title="The new copy"
                 loadingText="Loading the copy…"
               />
             ) : ready ? (
-              <LiveFrame key={preview.recreateId} url={src} width={viewport} sandbox={sandboxFor(preview)} title="The new copy" loadingText="Loading the copy…" />
+              <LiveFrame key={`${preview.recreateId}-${preview.startedAt}`} url={src} width={viewport} sandbox={frameSandbox} title="The new copy" loadingText="Loading the copy…" />
             ) : preview?.error ? (
               <EmptyState icon={AlertTriangle} title="The preview could not start" action={<Button icon={RotateCw} onClick={() => ensurePreview(project.id)}>Try again</Button>}>
                 {preview.error}

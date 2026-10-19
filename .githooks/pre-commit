@@ -1,0 +1,5 @@
+#!/bin/sh
+# Regression suite (CLONER_SPEC permanence rules): every source file parses + the unit tests (under two minutes).
+# The fixtures in all four stacks: `npm run test:fixtures -w server`, at the end of each step and before any merge.
+cd "$(git rev-parse --show-toplevel)/server" || exit 1
+exec node scripts/test-suite.mjs precommit

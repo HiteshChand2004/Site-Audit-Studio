@@ -10,15 +10,16 @@ import { declarations, emitCss, tidyColors } from '../src/recreate/emit/css.js';
 import { emitPage } from '../src/recreate/emit/html.js';
 import { MOTION_JS } from '../src/recreate/emit/motionScript.js';
 import { buildHead, clip, generatedFavicon } from '../src/recreate/ir/head.js';
-import { pickBreakpoints } from '../src/recreate/ir/index.js';
+import { noReflowViews, pickBreakpoints } from '../src/recreate/ir/index.js';
 import { createLinkResolver, relFile, relPage } from '../src/recreate/ir/links.js';
 import { ClassNamer, meaningful, originalName } from '../src/recreate/ir/names.js';
-import { cascade, resolveHints, wrapsText } from '../src/recreate/ir/styles.js';
-import { buildPageTree, deepText, isElement } from '../src/recreate/ir/tree.js';
+import { buildStyles, cascade, resolveHints, wrapsText } from '../src/recreate/ir/styles.js';
+import { buildPageTree, deepText, isElement, matchChildren } from '../src/recreate/ir/tree.js';
 import { runRecreate } from '../src/recreate/index.js';
 import { startPreview, stopPreview } from '../src/recreate/preview.js';
 import { recreateDir } from '../src/recreate/workspace.js';
 import { startFixtureServer } from './serve-fixture.js';
+import { seedAnalysis, seedProject } from './helpers/projects.js';
 
 process.env.SAS_ALLOW_LOCALHOST = '1';
 
@@ -58,6 +59,19 @@ const findAll = (node, test, out = []) => {
   node.children.forEach((c) => findAll(c, test, out));
   return out;
 };
+
+test('views are matched by content when a layout lists the same items in another order', () => {
+  const item = (text) => ({ tag: 'div', attrs: {}, views: {}, children: [{ tag: 'div', attrs: {}, views: {}, children: [] }, { tag: 'div', attrs: {}, views: {}, children: [{ text }] }] });
+  const desktop = [item('Clinical care'), item('Telemedicine'), item('OPD, IPD, emergency')];
+  const phone = [item('OPD, IPD, emergency'), item('Clinical care'), item('Telemedicine')];
+  const pairs = matchChildren(desktop, phone);
+  for (const [a, b] of pairs) assert.equal(deepText(a), deepText(b), 'each item pairs with the same item');
+  // An item moved to another place is kept once per layout (each shown only where it belongs), so every layout keeps its order.
+  assert.ok(pairs.length >= 2);
+  // Same tags but other content (text that differs between the views) still pairs by position.
+  const other = [item('A'), item('B'), item('C')];
+  assert.deepEqual(matchChildren(desktop, other).map(([a, b]) => [deepText(a), deepText(b)]), desktop.map((d, i) => [deepText(d), deepText(other[i])]));
+});
 
 test('original class names are hints only: builder, hashed and utility names are never reused', () => {
   for (const bad of ['framer-1x2y3z', 'framer-Xk2p9', 'w-dyn-list', 'wp-block-group', 'css-1a2b3c', 'sc-bdVaJa', 'jsx-1234', '_a1b2c',
@@ -116,7 +130,9 @@ test('duplicate Desktop / Tablet / Phone copies merge into one element restyled 
   assert.deepEqual(['desktop', 'tablet', 'mobile'].map((v) => merged.views[v].hidden), [false, false, false]);
   assert.equal(stats.wrappersRemoved, 2);
   assert.equal(root.children[1].tag, 'p');
-  assert.equal(root.children[2].tag, 'footer');
+  // The original's tag and role stay (CLONER_SPEC Phase 3): a div with role="contentinfo" is not turned into <footer>.
+  assert.equal(root.children[2].tag, 'div');
+  assert.equal(root.children[2].attrs.role, 'contentinfo');
   assert.equal(deepText(root), 'Our services We design and build websites. Note Footer');
 });
 
@@ -171,6 +187,51 @@ test('breakpoints come from the original media queries', () => {
   // Without a laptop capture the tablet boundary is the widest between 768 and 1440, as before.
   assert.deepEqual(pickBreakpoints(['(max-width: 1024px)', '(max-width: 600px)'], { laptop: false }), { tablet: 1024, mobile: 600, source: 'site' });
   assert.deepEqual(pickBreakpoints([], { laptop: false }), { tablet: 1023.98, mobile: 767.98, source: 'default' });
+});
+
+test('a view the original does not reflow in is recognised from the capture', () => {
+  // The root's captured width against the width of the screen it was captured at. A page that reflows is as wide as
+  // the screen; one that does not keeps its own layout and overflows sideways, which plenty of sites with no phone
+  // layout do. A few pixels over (a scrollbar, a rounding) is not an overflowing layout.
+  const tree = (widths) => ({
+    views: Object.keys(widths),
+    root: { tag: 'body', children: [], views: Object.fromEntries(Object.entries(widths).map(([v, w]) => [v, { style: {}, rect: [0, 0, w, 1000] }])) },
+  });
+  assert.deepEqual(noReflowViews(tree({ desktop: 1440, laptop: 1024, tablet: 768, mobile: 375 })), []);
+  assert.deepEqual(noReflowViews(tree({ desktop: 1440, tablet: 1200, mobile: 1200 })), ['tablet', 'mobile']);
+  assert.deepEqual(noReflowViews(tree({ desktop: 1440, mobile: 385 })), [], 'ten pixels over is a scrollbar, not a layout');
+  assert.deepEqual(noReflowViews(tree({ desktop: 1456 })), [], 'the desktop view is judged the same way as the rest');
+  assert.deepEqual(noReflowViews({ views: ['mobile'], root: { tag: 'body', children: [], views: {} } }), [], 'no capture, no claim');
+});
+
+test('in a view the original does not reflow in, the copy keeps the width instead of shrinking to the screen', () => {
+  // Without this the copy's root shrinks to the screen, every width below it is clamped to that, and the text wraps
+  // the page two or three times too tall - the biggest single difference measured on real narrow views.
+  const body = (widths) => ({
+    tag: 'body', attrs: {}, children: [],
+    views: Object.fromEntries(Object.entries(widths).map(([v, w]) => [v, { style: {}, rect: [0, 0, w, 1000] }])),
+  });
+  const run = (widths) => {
+    const root = body(widths);
+    const page = { root, views: Object.keys(widths), noReflow: noReflowViews({ views: Object.keys(widths), root }) };
+    const { rules } = buildStyles([page], { assetFile: () => null });
+    return rules.find((r) => r.selector === `.${root.class}`)?.parts ?? {};
+  };
+
+  const overflowing = run({ desktop: 1440, tablet: 1200, mobile: 1200 });
+  assert.equal(overflowing.base?.['min-width'], undefined, 'the desktop view fits its own screen');
+  assert.equal(overflowing.tablet?.['min-width'], '1200px');
+  // The phone keeps the same width, so the cascade carries it down rather than repeating it.
+  assert.equal(overflowing.mobile?.['min-width'], undefined);
+
+  // Where the two narrow views overflow by different amounts, each gets its own.
+  const uneven = run({ desktop: 1440, tablet: 1200, mobile: 900 });
+  assert.equal(uneven.tablet?.['min-width'], '1200px');
+  assert.equal(uneven.mobile?.['min-width'], '900px');
+
+  // A page that reflows is left exactly as it was: no declaration anywhere.
+  const reflowing = run({ desktop: 1440, tablet: 768, mobile: 375 });
+  for (const part of Object.values(reflowing)) assert.equal(part['min-width'], undefined, JSON.stringify(reflowing));
 });
 
 test('head: kept when present, filled from the page when missing, and marked auto-generated', () => {
@@ -288,8 +349,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at) VALUES (?, 'fixture', ?, 'html', 1, 4, ?, ?)`)
-    .run(id, `${origin}/`, now, now);
+  seedProject(db, { id, name: 'fixture', url: `${origin}/`, stack: 'html', authorized: 1, recreatePages: 4 });
   // The analysis detected WordPress (the fixture serves a small /wp-json/wp/v2/) and one broken link.
   const audit = {
     url: `${origin}/`,
@@ -297,8 +357,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
     techStack: [{ id: 'wordpress', name: 'WordPress', confidence: 90 }],
     brokenLinks: { checked: 10, broken: [{ url: `${origin}/old-work.html`, status: 404, foundOn: '/work.html' }], unverified: [] },
   };
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), id, now, now, JSON.stringify(audit));
+  seedAnalysis(db, id, audit);
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
   const recreateId = randomUUID();
   const report = await runRecreate({ project, recreateId, progress: () => {} });
@@ -311,17 +370,13 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.deepEqual(report.pages.map((p) => p.outPath), ['index.html', 'about.html', 'services/index.html', 'contact.html', 'work.html']);
   assert.deepEqual(report.errors, []);
   const files = (await readdir(site, { recursive: true })).map((f) => f.replaceAll('\\', '/')).filter((f) => /\.\w+$/.test(f)).sort();
-  for (const f of ['index.html', 'about.html', 'services/index.html', 'contact.html', 'work.html']) assert.ok(files.includes(f), f);
-  // D.6: no shared stylesheet; every page carries the rules it uses (this small site: all inline in the head).
-  assert.ok(!files.includes('css/site.css'));
-  const siteCss = emitCss(JSON.parse(await readFile(path.join(dir, 'ir', 'site.json'), 'utf8')));
-  const inlineCss = (html) => html.match(/<style>([\s\S]*?)<\/style>/)?.[1] ?? '';
+  for (const f of ['index.html', 'about.html', 'services/index.html', 'contact.html', 'work.html', 'css/site.css']) assert.ok(files.includes(f), f);
   // Crawl files (Phase 5): sitemap.xml and robots.txt generated, the original llms.txt copied as it is.
   for (const f of ['sitemap.xml', 'robots.txt', 'llms.txt']) assert.ok(files.includes(f), f);
-  // Copied with its page links moved onto the copy's own address (full-site E.1): nothing names the original site.
-  const llmsOriginal = await readFile(new URL('./fixtures/recreate-site/llms.txt', import.meta.url), 'utf8');
-  const llmsCopy = await read('llms.txt');
-  assert.equal(llmsCopy.replace(/http:\/\/localhost:\d+/g, 'ORIGIN'), llmsOriginal.replace(/http:\/\/localhost:\d+/g, 'ORIGIN'));
+  // Full addresses in the copied llms.txt name the copy (full-site E.1, from main): the fixture's original address is
+  // rebased onto the address the copy's sitemap uses. Everything else is copied as it is.
+  const copyOrigin = (await read('sitemap.xml')).match(/<loc>(https?:\/\/[^/]+)/)[1];
+  assert.equal(await read('llms.txt'), (await readFile(new URL('./fixtures/recreate-site/llms.txt', import.meta.url), 'utf8')).replaceAll('http://localhost:4100', copyOrigin));
   assert.match(await read('robots.txt'), /^Sitemap: https?:\/\/[^\s]+\/sitemap\.xml$/m);
   assert.equal((await read('sitemap.xml')).match(/<loc>/g).length, 5);
   const crawlFix = report.fixes.find((f) => f.id === 'crawl-files');
@@ -354,7 +409,9 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.deepEqual(toOld, [], 'no link to the original site');
   const notice = await read('login.html');
   assert.match(notice, /<meta name="robots" content="noindex">/);
-  assert.match(notice, /needs a server \(sign-in, sign-up, cart, checkout or account\)/);
+  // A sign-in page is a page of the site now (never left out for needing a backend): here it is only beyond this run's
+  // page limit, so its notice says that.
+  assert.match(notice, /was not part of the pages chosen for the copy/);
   assert.match(notice, /<a href="\.\/">Back to the homepage<\/a>/);
   assert.doesNotMatch(notice, /<script/i);
   assert.match(home, /<link rel="canonical" href="http:\/\/localhost:4196\/">/);
@@ -395,9 +452,9 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.match(rawServices, /<h2 class="[\w-]+" data-motion="rv r\d+( d\d+)? rp">Revealed on scroll<\/h2>/);
   assert.match(rawServices, /<script src="\.\.\/js\/motion\.js" defer><\/script>\s*<\/head>/);
   assert.equal(await readRaw('js/motion.js'), MOTION_JS);
-  const motionCssText = siteCss;
-  assert.match(motionCssText, /@media \(prefers-reduced-motion: no-preference\) \{[\s\S]*\.js-motion \[data-motion~="r1"\]:not\(\.is-in\) \{\n {4}opacity: 0;\n {4}translate: 0px 40px;/);
-  assert.match(motionCssText, /\.js-motion \[data-motion~="r1"\]\.is-in \{\n {4}animation: m-r1 400ms ease var\(--md, 0ms\) backwards;/);
+  const motionCssText = await readRaw('css/site.css');
+  assert.match(motionCssText, /@media \(prefers-reduced-motion: no-preference\) \{[\s\S]*\.js-motion \[data-motion~="rv"\]\[data-motion~="r1"\]:not\(\.is-in\) \{\n {4}opacity: 0;\n {4}translate: 0px 40px;/);
+  assert.match(motionCssText, /\.js-motion \[data-motion~="rv"\]\[data-motion~="r1"\]\.is-in \{\n {4}animation: m-r1 400ms ease var\(--md, 0ms\) backwards;/);
   assert.match(motionCssText, / {2}@keyframes m-r1 \{\n {4}from \{\n {6}opacity: 0;/);
   assert.match(motionCssText, /@media \(hover: hover\) \{[\s\S]*\[data-motion~="h1"\]:hover \{/);
   assert.match(await readRaw('index.html'), /<script src="js\/motion\.js" defer><\/script>/);
@@ -413,7 +470,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.deepEqual(report.generate.liveLinks, [], 'no same-site link stays live');
   const notices = Object.fromEntries(report.generate.noticePages.map((l) => [new URL(l.url).pathname, l.reason]));
   assert.equal(notices['/team.html'], 'beyond-limit');
-  assert.equal(notices['/login.html'], 'backend');
+  assert.equal(notices['/login.html'], 'beyond-limit');
   assert.equal(notices['/brochure.pdf'], undefined, 'downloaded, not a notice page');
 
   // The builder-style page: one copy of the content, restyled per breakpoint.
@@ -425,19 +482,15 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.match(work, /<input id="email"/);
   assert.match(work, /<title>Selected work \| Recreate Co<\/title>/);
   assert.match(work, /<meta name="description" content="We design and build fast marketing sites for small teams, from the first sketch to launch day\.">/);
-  const css = siteCss;
-  // The page's own copy of those rules: inline, compact, only what the page uses, no stylesheet request.
-  const workInline = inlineCss(await readRaw('work.html'));
-  assert.ok(workInline.length > 0 && workInline.length < css.length, `${workInline.length} vs ${css.length}`);
-  assert.doesNotMatch(workInline, /\n/);
-  assert.doesNotMatch(await readRaw('work.html'), /rel="stylesheet"/);
+  const css = await read('css/site.css');
   const gridClass = work.match(/<div class="([\w-]+)">\s*<div class="card">/)[1];
   const rules = (selector) => [...css.matchAll(new RegExp(`\\.${selector} \\{([^}]*)\\}`, 'g'))].map((m) => m[1]);
-  // Desktop only for now (views.js): one rule per class and no media queries.
-  const [base, ...others] = rules(gridClass);
+  const [base, tablet, mobile] = rules(gridClass);
   assert.match(base, /grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
-  assert.deepEqual(others, []);
-  assert.doesNotMatch(css, /@media \(max-width:/);
+  assert.match(tablet, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(mobile, /grid-template-columns: minmax\(0, 1fr\)/);
+  assert.match(css, /@media \(max-width: 1024\.98px\)/);
+  assert.match(css, /@media \(max-width: 600\.98px\)/);
   assert.match(css, /--brand: #0f766e;/);
   assert.match(css, /@font-face \{\n {2}font-family: "Brand Mono";\n {2}src: url\("\.\.\/assets\/fonts\/mono-[0-9a-f]{10}\.woff2"\) format\("woff2"\);/);
   assert.match(css, /@keyframes brand-fade/);
@@ -476,7 +529,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.doesNotMatch(badgeRule, /(^|\s)width: 0/);
   // A spinning element is captured with its layout size, not the bounding box of the frame it was
   // caught in, in every view; the generated rule keeps 40 px.
-  for (const view of ['desktop']) {
+  for (const view of ['desktop', 'tablet', 'mobile']) {
     const snap = JSON.parse(await readFile(path.join(dir, 'capture', 'services', `${view}.json`), 'utf8'));
     const findNode = (n) => (n.attrs?.class ?? '').split(' ').includes('spinner') ? n : (n.children ?? []).reduce((hit, c) => hit ?? (c.tag ? findNode(c) : null), null);
     assert.deepEqual(findNode(snap.body).rect.slice(2), [40, 40], view);
@@ -505,11 +558,13 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.equal(report.autoGenerated.some((a) => a.page === '/' && a.field === 'title'), false);
   assert.deepEqual(report.pages.find((p) => p.path === '/work.html').head.autoGenerated.slice(0, 2), ['title', 'description']);
   assert.ok(report.manual.some((m) => m.kind === 'form' && m.title === 'Form on /work.html needs a backend'));
-  // The builder page's hidden tablet / phone copies are dropped (one visible copy kept).
   assert.equal(report.generate.variantsMerged, 2);
   assert.ok(report.generate.wrappersRemoved >= 2);
-  // One captured view: no breakpoints.
-  assert.deepEqual(report.generate.breakpoints, { source: 'single-view' });
+  // The site's own queries (laptop 1024.98, mobile 600.98); the responsive sweep may move the tablet boundary.
+  const bp = report.generate.breakpoints;
+  assert.equal(bp.laptop, 1024.98);
+  assert.equal(bp.mobile, 600.98);
+  assert.ok(bp.tablet === 1023.98 ? bp.source === 'site' : bp.source === 'sweep', JSON.stringify(bp));
   const ir = JSON.parse(await readFile(path.join(dir, 'ir', 'site.json'), 'utf8'));
   assert.equal(ir.version, 1);
   assert.equal(ir.pages.length, 5);
@@ -532,9 +587,10 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
 
   // 4a.5 — fixers.
   const fix = Object.fromEntries(report.fixes.map((f) => [f.id, f]));
-  assert.match(work, /<span class="[\w-]+">Archive<\/span>/); // broken link unlinked: plain text, no <a> left without href
-  assert.ok(!/<a(?![^>]*\shref=)[^>]*>Archive/.test(work));
-  assert.deepEqual(fix['broken-links'].items.map((i) => [i.page, new URL(i.url).pathname, i.status]), [['/work.html', '/old-work.html', 404]]);
+  // A broken link is kept as the original has it (CLONER_SPEC decision 5) and reported, never unlinked.
+  assert.match(work, /<a class="[\w-]+" href="old-work\.html">Archive<\/a>/);
+  assert.equal(fix['broken-links'].status, 'open');
+  assert.deepEqual(fix['broken-links'].openItems.map((i) => [i.page, new URL(i.url).pathname, i.status, i.kept]), [['/', '/cart', 404, true], ['/work.html', '/old-work.html', 404, true]]); // /cart does not exist on the fixture: a broken link (it used to hide behind the "needs a backend" skip)
   assert.match(work, /<img[^>]* alt="Our studio in Lisbon"/);
   assert.match(work, /<a class="[\w-]+" aria-label="GitHub"(?: data-motion="[^"]*")? href="https:\/\/github\.com\/recreate-co">/);
   assert.match(work, /<button class="[\w-]+" type="button"><img[^>]* alt="Search"/);
@@ -563,10 +619,12 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.equal(ir.pages.find((p) => p.path === '/').content, null);
 
   // 4a.5 — production build: dist/ has the same pages and a minified stylesheet.
-  const distCss = inlineCss(await readFile(path.join(dir, 'dist', 'index.html'), 'utf8'));
-  assert.ok(distCss.length > 0 && distCss.length < css.length * 0.9, `${distCss.length} vs ${css.length}`);
+  const distCss = await readFile(path.join(dir, 'dist', 'css', 'site.css'), 'utf8');
+  assert.ok(distCss.length < css.length * 0.9, `${distCss.length} vs ${css.length}`);
   assert.doesNotMatch(distCss, /\n {2}/);
-  assert.doesNotMatch(distCss, /@media ?\(max-width/); // desktop only for now: no media queries
+  assert.match(distCss, /@media ?\(max-width: ?1024\.98px\)/);
+  assert.equal(report.minify.css.files, 1);
+  assert.ok(report.minify.css.minBytes < report.minify.css.bytes);
   for (const f of ['index.html', 'work.html', 'services/index.html']) assert.ok(await exists(path.join(dir, 'dist', f)), f);
   assert.ok(await exists(path.join(dir, 'dist', searchIcon)));
 
@@ -600,7 +658,7 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.equal((await verifySite(site)).ok, true);
 
   // 4a.6 — preview: the pipeline served every page and the stylesheet; the real preview serves dist/.
-  assert.equal(report.preview.checked, 6); // five pages and js/motion.js (D.6: the CSS is inside the pages)
+  assert.equal(report.preview.checked, 7); // five pages, the stylesheet and js/motion.js
   assert.deepEqual(report.preview.pages, ['index.html', 'about.html', 'services/index.html', 'contact.html', 'work.html']);
   const preview = await startPreview({ projectId: id, recreateId, root: path.join(dir, 'dist') });
   assert.ok(preview.port >= 5100 && preview.port <= 5199);
@@ -611,4 +669,60 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   assert.equal((await fetch(`${preview.url}ir/site.json`)).status, 404); // only dist/ is served
   assert.equal((await fetch(`${preview.url}../report.json`)).status, 404);
   await stopPreview();
+
+  // --- What the report has to carry, and in a shape report.json can hold -------------------------------------------
+  // The whole report is written with JSON.stringify, so a Set or a live node reference anywhere in it is a crash.
+  assert.doesNotThrow(() => JSON.stringify(report));
+  const saved = JSON.parse(await readFile(path.join(dir, 'report.json'), 'utf8'));
+
+  // Per-element differences, kept rather than thrown away after the counting (verify/ledger.js).
+  for (const ledger of [report.generate.fit.ledger, saved.generate.fit.ledger]) {
+    assert.ok(ledger, 'the fit pass records which elements are off, not only how many');
+    for (const key of ['elements', 'open', 'cleared', 'rounds']) assert.equal(typeof ledger[key], 'number', key);
+    assert.equal(typeof ledger.byKind, 'object');
+    assert.equal(typeof ledger.skipped.noKey, 'number');
+    assert.ok(Array.isArray(ledger.worst) && ledger.worst.length <= 10, 'bounded');
+  }
+
+  // The correction loop: either it ran and said what it did, or it says why it did not.
+  const correct = saved.generate.correct;
+  assert.ok(correct, 'report.generate.correct is always present when the loop is enabled');
+  assert.equal(typeof correct.stopped, 'string');
+  assert.equal(typeof correct.applied, 'number');
+  assert.equal(typeof correct.reverted, 'number');
+  if (correct.ledger) assert.ok(Array.isArray(correct.ledger.worst));
+  // Its report rows, when it had anything to do.
+  const layout = (saved.fixes ?? []).find((f) => f.id === 'layout-correct');
+  if (correct.rounds > 0 || correct.applied > 0) {
+    assert.ok(layout, `layout-correct missing; fixes: ${(saved.fixes ?? []).map((f) => f.id).join(', ')}`);
+    assert.ok(['fixed', 'partial', 'open'].includes(layout.status), layout.status);
+    assert.equal(typeof layout.count, 'number');
+    assert.ok(Array.isArray(layout.items));
+  }
+
+  // Views the original does not reflow in (ir/index.js noReflowViews). The fixture reflows, so the list is empty -
+  // which is the point: the field is always there, so "none" is a reported fact and not a missing number.
+  assert.ok(Array.isArray(saved.generate.noReflow));
+  for (const row of saved.generate.noReflow) {
+    assert.equal(typeof row.page, 'string');
+    assert.ok(row.width > row.viewport, 'only a layout wider than the screen is listed');
+  }
+
+  // The shapes of the original's own state rules, against what the copy rebuilt: the pair that makes a lost
+  // sibling or ancestor effect visible instead of silent (capture/selectorShape.js).
+  assert.equal(typeof saved.motion.shapes, 'object');
+  assert.ok(saved.motion.shapes.self >= 1, JSON.stringify(saved.motion.shapes));
+  assert.equal(typeof saved.motion.unreadableSheets, 'number');
+  const hover = saved.generate.motion.hover;
+  assert.equal(typeof hover.sibs, 'number');
+  assert.equal(typeof hover.skipped.combinator, 'number');
+  assert.equal(typeof hover.skipped.kidNotDescendant, 'number');
+  // Nothing outward-reaching may be dropped without being counted.
+  const outward = (saved.motion.shapes.sibling ?? 0) + (saved.motion.shapes.adjacent ?? 0) + (saved.motion.shapes.ancestorHas ?? 0);
+  assert.ok(hover.sibs + hover.skipped.combinator >= 0 && outward >= 0);
+
+  // Manual rows stay actionable: every one says what it is and what to do.
+  for (const row of saved.manual ?? []) {
+    assert.ok(row.kind && row.title, JSON.stringify(row));
+  }
 });

@@ -1,0 +1,121 @@
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: var(--sp-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.grid li {
+  min-width: 0;
+  animation: var(--k-rise) 420ms var(--ease) both;
+}
+
+.tile {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  text-align: left;
+  transition: background 180ms ease, box-shadow 180ms ease, transform 220ms var(--ease);
+}
+
+.tile:hover {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong), var(--elev-2);
+  transform: translateY(-2px);
+}
+
+.pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.shot {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  aspect-ratio: 16 / 11;
+  border-radius: 7px;
+  background: var(--surface-3);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.shot::after {
+  content: '';
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--old-rail);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9);
+}
+
+.shot[data-side='new']::after {
+  background: var(--accent);
+}
+
+.shot img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 2px;
+}
+
+.path {
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.score {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--surface-3);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.score[data-tone='ok'] {
+  background: var(--ok-tint);
+  color: var(--ok);
+}
+
+.score[data-tone='warn'] {
+  background: var(--warn-tint);
+  color: var(--warn);
+}
+
+.score[data-tone='bad'] {
+  background: var(--bad-tint);
+  color: var(--bad);
+}
+
+.more {
+  display: flex;
+  justify-content: center;
+  margin-top: var(--sp-4);
+}

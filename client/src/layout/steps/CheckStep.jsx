@@ -9,12 +9,17 @@ import SectionCard from '../../components/common/SectionCard.jsx';
 import { Alert } from '../../components/common/Surface.jsx';
 import AuditReport from '../../components/audit/AuditReport.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
+import PageScope, { pathOf } from '../../components/project/PageScope.jsx';
 import { isAnalysisActive, useProjects } from '../../store/useProjects.js';
 import { timeAgo } from '../../format.js';
 import styles from '../Panel.module.css';
 import ws from '../Workspace.module.css';
 
 const Spinner = (props) => <Loader2 {...props} className={styles.spin} />;
+
+// The preview viewport and the metrics device follow each other (tablet has no Lighthouse run).
+const DEVICE_OF = { 1440: 'desktop', 375: 'mobile' };
+const VIEWPORT_OF = { desktop: 1440, mobile: 375 };
 
 function previewOverlay({ audit, mode, slow }) {
   if (!audit) return null;
@@ -53,6 +58,13 @@ function previewOverlay({ audit, mode, slow }) {
   return null;
 }
 
+// Jump links of the report (the side column stays in view while the report scrolls).
+const TOC = [
+  ['check-glance', 'At a glance & speed'],
+  ['check-fix', 'What needs fixing'],
+  ['check-experts', 'Details for experts'],
+];
+
 /** Step 1: check the original site (Analyze) and read its report. */
 export default function CheckStep({ project, audit, loading }) {
   const [url, setUrl] = useState(project.url);
@@ -66,8 +78,8 @@ export default function CheckStep({ project, audit, loading }) {
   const dismissAnalysis = useProjects((s) => s.dismissAnalysis);
   const running = isAnalysisActive(analysis);
 
-  // Desktop only for now: the check measures and pictures the computer view.
-  const viewport = 1440;
+  const [viewport, setViewport] = useState(375);
+  const [device, setDevice] = useState('mobile');
   const [slow, setSlow] = useState(false);
   const siteUrl = audit?.url ?? project.url;
   const live = liveAvailability(audit, siteUrl);
@@ -78,6 +90,14 @@ export default function CheckStep({ project, audit, loading }) {
     setMode(live.ok ? 'live' : 'screenshot');
   }, [audit?.analysisId, audit?.isDummy, siteUrl, live.ok]);
 
+  const changeViewport = (v) => {
+    setViewport(v);
+    if (DEVICE_OF[v]) setDevice(DEVICE_OF[v]);
+  };
+  const changeDevice = (d) => {
+    setDevice(d);
+    setViewport(VIEWPORT_OF[d]);
+  };
   const realPreview = audit && !audit.isDummy;
 
   const saveMaxPages = () => {
@@ -101,7 +121,7 @@ export default function CheckStep({ project, audit, loading }) {
           <Globe size={14} aria-hidden="true" />
           <input className="mono" value={url} onChange={(e) => setUrl(e.target.value)} aria-label="Website address" disabled={running} />
         </label>
-        <label className={styles.pagesInput} title="How many pages the check reads (1–100)">
+        {!project.page_url && <label className={styles.pagesInput} title="How many pages the check reads (1–100)">
           <span>Pages to check</span>
           <input
             className="mono"
@@ -114,11 +134,13 @@ export default function CheckStep({ project, audit, loading }) {
             aria-label="How many pages the check reads"
             disabled={running}
           />
-        </label>
+        </label>}
         <Button type="submit" variant={audit?.isDummy ? 'primary' : 'secondary'} icon={running ? Spinner : Play} disabled={running}>
           {running ? 'Checking…' : audit?.isDummy ? 'Check now' : 'Check again'}
         </Button>
       </form>
+
+      <PageScope project={project} disabled={running} />
 
       {analysis && analysis.status !== 'done' && <AnalyzeProgress analysis={analysis} onDismiss={() => dismissAnalysis(project.id)} />}
 
@@ -133,10 +155,22 @@ export default function CheckStep({ project, audit, loading }) {
                   Example report — click “Check now” to check the real site.
                 </p>
               )}
-              {!audit.isDummy && (
+              {!audit.isDummy && audit.scope?.kind === 'page' && (
                 <p className={ws.hint}>
-                  Checked {timeAgo(audit.analyzedAt)} · {audit.pagesCrawled} {audit.pagesCrawled === 1 ? 'page' : 'pages'} read · speed measured on the homepage
+                  Checked {timeAgo(audit.analyzedAt)} · one page only: <span className="mono">{pathOf(audit.scope.url)}</span> · speed measured on this page
                 </p>
+              )}
+              {!audit.isDummy && audit.scope?.kind !== 'page' && (
+                <p className={ws.hint}>
+                  Checked {timeAgo(audit.analyzedAt)} · {audit.pagesCrawled} {audit.pagesCrawled === 1 ? 'page' : 'pages'} read
+                  {audit.pageVariants > 0 && ` (+${audit.pageVariants} ${audit.pageVariants === 1 ? 'address' : 'addresses'} with “?…” counted as the same page)`}
+                  {' '}· speed measured on the homepage
+                </p>
+              )}
+              {!audit.isDummy && (project.page_url ?? null) !== (audit.scope?.url ?? null) && (
+                <Alert tone="info" title={project.page_url ? `This report is not for ${pathOf(project.page_url)} yet` : 'This report is for one page only'}>
+                  {project.page_url ? 'Click “Check again” to check only the chosen page.' : 'Click “Check again” to check the whole website.'}
+                </Alert>
               )}
               {audit.errors?.length > 0 && (
                 <Alert tone="warn" title="Some checks did not finish, so the report is incomplete">
@@ -148,16 +182,32 @@ export default function CheckStep({ project, audit, loading }) {
                   Checking again usually completes them.
                 </Alert>
               )}
-              <HealthOverview audit={audit} />
-              <FixList audit={audit} />
-              <SectionCard icon={FileSearch} title="Details for experts" meta="Technology, every check, links, accessibility rules" defaultOpen={false}>
-                <AuditReport audit={audit} />
-              </SectionCard>
+              <div id="check-glance" className={ws.anchor}>
+                <HealthOverview audit={audit} device={device} onDeviceChange={changeDevice} />
+              </div>
+              <div id="check-fix" className={ws.anchor}>
+                <FixList audit={audit} />
+              </div>
+              <div id="check-experts" className={ws.anchor}>
+                <SectionCard icon={FileSearch} title="Details for experts" meta="Technology, every check, links, accessibility rules" defaultOpen={false}>
+                  <AuditReport audit={audit} />
+                </SectionCard>
+              </div>
             </>
           )}
         </div>
 
         <aside className={ws.splitSide} aria-label="The original site">
+          {audit && !loading && (
+            <nav className={ws.toc} aria-label="On this page">
+              <span className="eyebrow">On this page</span>
+              {TOC.map(([id, label]) => (
+                <button key={id} type="button" onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
+                  {label}
+                </button>
+              ))}
+            </nav>
+          )}
           <div className={styles.sectionTitle}>
             <span>The original site</span>
           </div>
@@ -165,6 +215,7 @@ export default function CheckStep({ project, audit, loading }) {
             address={siteUrl}
             tone="old"
             viewport={viewport}
+            onViewportChange={changeViewport}
             fit={Boolean(realPreview)}
             toolbar={realPreview && <ModeToggle mode={mode} onChange={setMode} live={live} hasScreens={hasScreens} />}
             overlay={previewOverlay({ audit, mode, slow })}

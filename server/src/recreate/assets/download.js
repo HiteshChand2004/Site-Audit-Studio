@@ -59,68 +59,155 @@ async function fromCache(url, { cache, dir, kind, maxBytes }) {
   }
 }
 
+// Reasons worth another try: the network or the server was momentarily unable, not the file being wrong. A 404, a file
+// that is too large and a web page in place of an asset are answers, not failures, and are never retried.
+const RETRY_REASONS = new Set(['timeout', 'dns', 'refused', 'error', 'http-408', 'http-425', 'http-429', 'http-500', 'http-502', 'http-503', 'http-504']);
+// Waiting between attempts: 1.5 s, then 3 s, then 6 s, so a server that is briefly overloaded is not hammered.
+const BACKOFF_MS = 1500;
+// Below this there is nothing worth asking the server to continue from.
+const MIN_RESUME_BYTES = 64 * 1024;
+
+const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms).unref(); });
+
 /**
+ * One attempt at one file.
  * @param {string} url
  * @param {object} o
  * @param {string} o.dir         folder for the temporary file
- * @param {string} o.kind        image | icon | font | media | stylesheet
+ * @param {string} o.kind        image | icon | font | media | stylesheet | document
  * @param {number} o.maxBytes
  * @param {number} o.timeout     ms for the whole transfer, redirects included
  * @param {AbortSignal} [o.signal]
  * @param {string} [o.referer]   the site's own origin; some CDNs refuse hotlinked requests without it
- * @param {object} [o.cache]     the job's shared cache: a file it holds is not downloaded again (`cached: true`)
- * @returns {Promise<{ ok: true, tmp: string, sha256: string, bytes: number, mime: string|null, head: Buffer, finalUrl: string, redirects: string[], cached?: boolean }
- *   | { ok: false, reason: string, detail?: string, finalUrl: string, bytes?: number }>}
+ * @param {number} [o.idleMs]    when set, a transfer is given up only after this long with no byte arriving, instead of
+ *   after a fixed time: a large file on a slow line finishes, while a connection that died is still dropped
+ * @param {{ tmp: string, bytes: number, head?: Buffer }} [o.resumeFrom]  continue a transfer that broke off (Range)
  */
-export async function downloadAsset(url, { dir, kind, maxBytes, timeout, signal, referer, cache = null }) {
-  const cached = await fromCache(url, { cache, dir, kind, maxBytes });
-  if (cached) return cached;
-  const timeoutSignal = AbortSignal.timeout(timeout);
-  const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+async function attemptDownload(url, { dir, kind, maxBytes, timeout, signal, referer, idleMs = 0, resumeFrom = null }) {
+  const resuming = Boolean(resumeFrom?.bytes);
+  // The watchdog: with idleMs every chunk (and the headers arriving) resets the clock, so what is given up on is a
+  // connection that stopped moving, not a slow one. Without it the whole transfer keeps its fixed limit, as before.
+  const controller = new AbortController();
+  let idle = null;
+  const tick = () => {
+    if (!idleMs) return;
+    clearTimeout(idle);
+    idle = setTimeout(() => controller.abort(new DOMException('idle', 'TimeoutError')), idleMs);
+  };
+  const parts = [controller.signal];
+  if (signal) parts.push(signal);
+  if (!idleMs && Number.isFinite(timeout)) parts.push(AbortSignal.timeout(timeout));
+  const combined = parts.length > 1 ? AbortSignal.any(parts) : parts[0];
+  tick();
   const hop = await guardedFetch(url, {
     signal: combined,
-    headers: { Accept: ACCEPT[kind] ?? '*/*', ...(referer && { Referer: referer }) },
+    headers: {
+      Accept: ACCEPT[kind] ?? '*/*',
+      ...(referer && { Referer: referer }),
+      ...(resuming && { Range: `bytes=${resumeFrom.bytes}-` }),
+    },
   });
-  if (hop.error) return { ok: false, reason: hop.error, ...(hop.message && { detail: hop.message }), finalUrl: hop.url };
+  if (hop.error) {
+    clearTimeout(idle);
+    return { ok: false, reason: hop.error, ...(hop.message && { detail: hop.message }), finalUrl: hop.url };
+  }
   const { res } = hop;
+  const acceptsRanges = /bytes/i.test(res.headers.get('accept-ranges') || '') || res.status === 206;
   const fail = async (reason, extra) => {
+    clearTimeout(idle);
     await res.body?.cancel().catch(() => {});
     return { ok: false, reason, finalUrl: hop.url, ...extra };
   };
 
-  if (res.status !== 200) return fail(`http-${res.status}`);
+  // 206 only when this attempt asked to continue; a server that ignores Range answers 200, and the file starts over.
+  if (res.status !== 200 && !(resuming && res.status === 206)) return fail(`http-${res.status}`);
+  const continued = resuming && res.status === 206;
   const mime = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase() || null;
   if (mime && NOT_AN_ASSET.test(mime) && kind !== 'stylesheet') return fail('not-an-asset');
   const declared = Number(res.headers.get('content-length'));
-  if (declared > maxBytes) return fail('too-large', { bytes: declared });
-  if (!res.body) return { ok: false, reason: 'empty', finalUrl: hop.url };
+  if (declared + (continued ? resumeFrom.bytes : 0) > maxBytes) return fail('too-large', { bytes: declared });
+  if (!res.body) {
+    clearTimeout(idle);
+    return { ok: false, reason: 'empty', finalUrl: hop.url };
+  }
 
-  const tmp = path.join(dir, `.part-${randomUUID()}`);
+  const tmp = continued ? resumeFrom.tmp : path.join(dir, `.part-${randomUUID()}`);
   const hash = createHash('sha256');
-  let bytes = 0;
-  let head = null;
+  let bytes = continued ? resumeFrom.bytes : 0;
+  let head = continued ? resumeFrom.head ?? null : null;
   let file;
   try {
-    file = await open(tmp, 'w');
+    file = await open(tmp, continued ? 'a' : 'w');
+    tick();
     for await (const chunk of res.body) {
+      tick();
       if (bytes === 0 && kind !== 'stylesheet' && HTML_START.test(Buffer.from(chunk.subarray(0, 64)).toString('latin1'))) {
         throw Object.assign(new Error('not an asset'), { reason: 'not-an-asset' });
       }
       head ??= Buffer.from(chunk.subarray(0, 16));
       bytes += chunk.byteLength;
       if (bytes > maxBytes) throw Object.assign(new Error('too large'), { reason: 'too-large' });
-      hash.update(chunk);
+      if (!continued) hash.update(chunk);
       await file.write(chunk);
     }
     await file.close();
     file = null;
+    clearTimeout(idle);
     if (!bytes) throw Object.assign(new Error('empty'), { reason: 'empty' });
-    return { ok: true, tmp, sha256: hash.digest('hex'), bytes, mime, head, finalUrl: hop.url, redirects: hop.redirects };
+    // A continued transfer cannot hash as it streams (its first part arrived in an earlier attempt), so the finished
+    // file is hashed once from disk.
+    const sha256 = continued ? createHash('sha256').update(await readFile(tmp)).digest('hex') : hash.digest('hex');
+    return { ok: true, tmp, sha256, bytes, mime, head, finalUrl: hop.url, redirects: hop.redirects };
   } catch (err) {
+    clearTimeout(idle);
     await res.body.cancel().catch(() => {});
     await file?.close().catch(() => {});
-    await rm(tmp, { force: true }).catch(() => {});
     const reason = err.reason ?? errorCode(err);
-    return { ok: false, reason, finalUrl: hop.url, ...(reason === 'too-large' && { bytes }) };
+    // What arrived stays on disk only when another attempt could continue it; anything else is removed at once.
+    const keep = RETRY_REASONS.has(reason) && acceptsRanges && bytes >= MIN_RESUME_BYTES && bytes < maxBytes;
+    if (!keep) await rm(tmp, { force: true }).catch(() => {});
+    return {
+      ok: false,
+      reason,
+      finalUrl: hop.url,
+      ...(reason === 'too-large' && { bytes }),
+      ...(keep && { partial: { tmp, bytes, head, acceptsRanges } }),
+    };
   }
+}
+
+/**
+ * Downloads one asset, with as many attempts as it is given. A transfer that broke off part way is continued where it
+ * stopped when the server allows it (Range), so a dropped connection does not start a 30 MB file again.
+ * @param {string} url
+ * @param {object} o  everything attemptDownload takes, plus:
+ * @param {object} [o.cache]     the job's shared cache: a file it holds is not downloaded again (`cached: true`)
+ * @param {number} [o.attempts]  1 = a single try, as before
+ * @param {(o:{ attempt:number, reason:string, waitMs:number, resuming:boolean })=>void} [o.onRetry]
+ * @returns {Promise<{ ok: true, tmp: string, sha256: string, bytes: number, mime: string|null, head: Buffer, finalUrl: string, redirects: string[], cached?: boolean, attempts?: number, resumed?: boolean }
+ *   | { ok: false, reason: string, detail?: string, finalUrl: string, bytes?: number, attempts?: number }>}
+ */
+export async function downloadAsset(url, { dir, kind, maxBytes, cache = null, attempts = 1, onRetry = null, ...opts }) {
+  const cached = await fromCache(url, { cache, dir, kind, maxBytes });
+  if (cached) return cached;
+  const tries = Math.max(1, attempts);
+  let partial = null;
+  let last = null;
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    if (attempt > 1) {
+      const waitMs = BACKOFF_MS * 2 ** (attempt - 2);
+      onRetry?.({ attempt, reason: last.reason, waitMs, resuming: Boolean(partial) });
+      await sleep(waitMs);
+      if (opts.signal?.aborted) break;
+    }
+    const r = await attemptDownload(url, { ...opts, dir, kind, maxBytes, resumeFrom: partial });
+    if (r.ok) return { ...r, ...(attempt > 1 && { attempts: attempt, resumed: Boolean(partial) }) };
+    last = r;
+    partial = r.partial ?? partial;
+    if (!RETRY_REASONS.has(r.reason) || opts.signal?.aborted) break;
+  }
+  if (partial) await rm(partial.tmp, { force: true }).catch(() => {});
+  const { partial: unusable, ...rest } = last;
+  void unusable;
+  return { ...rest, ...(tries > 1 && { attempts: tries }) };
 }

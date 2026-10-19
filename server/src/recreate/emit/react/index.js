@@ -5,16 +5,21 @@
 //
 // URLs are root-relative (/assets/…, /about/): the site is meant for a domain root, and a component
 // shared by pages at different depths renders the same markup on each of them.
-import { emitCss, CSS_FILE } from '../css.js';
-import { headHtml } from '../html.js';
+import { emitCss, CSS_FILE, minifyCssSync, usedCustomProps } from '../css.js';
+import { headHtml, whiteSpaceByClass } from '../html.js';
 import { MOTION_FILE, MOTION_JS, MOTION_TAG } from '../motionScript.js';
+import { programJson, REPLAY_MODULE, siteAnimationsJsx } from '../anim.js';
+import { APPEAR_MODULE, siteAppearJsx } from '../../behavior/framer/emit.js';
+import { siteScriptsJsx } from '../../behavior/lift.js';
 import { headTags, safeJsonLd } from '../walk.js';
-import { pinnedVersions } from '../../../toolchains/index.js';
+import { pinnedOverrides, pinnedVersions } from '../../../toolchains/index.js';
 import { findShared, pascal } from './components.js';
 import { jsxNode, visibleChildren } from './jsx.js';
 import { scaffold } from './scaffold.js';
 
 export { safeJsonLd, headTags };
+
+const ROOT_RULE = '\n/* The page markup lives in this wrapper; it must not become a box of its own. */\n#root {\n  display: contents;\n}\n';
 
 /** "/about/" for about/index.html, "/" for index.html, "/about.html" for about.html. */
 export function pagePath(outPath) {
@@ -59,20 +64,39 @@ export function emitReact(ir, opts = {}) {
   const names = pageNames(ir.pages);
   const { names: shared, components } = findShared(ir.pages, new Set(names));
 
+  // Classes whose rules keep line breaks (white-space: pre*), for the same reason the HTML emitter reads
+  // them: a pre-wrap block must keep its blank lines in the app stacks too.
+  const wsByClass = whiteSpaceByClass(ir.rules);
   const files = new Map();
   for (const c of components) {
     const own = new Map(shared);
     own.delete(c.node);
-    files.set(fileOf(c.name, 'components'), `export default function ${c.name}() {\n  return (\n${jsxNode(c.node, refs, 2, own)}\n  );\n}\n`);
+    files.set(fileOf(c.name, 'components'), `export default function ${c.name}() {\n  return (\n${jsxNode(c.node, refs, 2, own, null, { wsByClass })}\n  );\n}\n`);
   }
   const meta = [];
   const motionScript = Boolean(ir.motion?.script);
+  const usedVars = usedCustomProps(ir);
+  const rootUrls = (css) => css.replace(/url\("(?:\.\.\/)*assets\//g, 'url("/assets/');
   ir.pages.forEach((page, i) => {
     const name = names[i];
     const used = new Set();
-    const body = visibleChildren(page.body.children ?? [], 'body').map((c) => jsxNode(c, refs, 3, shared, used)).join('\n');
+    const body = visibleChildren(page.body.children ?? [], 'body').map((c) => jsxNode(c, refs, 3, shared, used, { wsByClass })).join('\n');
     const imports = [...used].sort().map((n) => `import ${n} from '../components/${n}.jsx';`);
-    files.set(fileOf(name, 'pages'), `${imports.join('\n')}${imports.length ? '\n\n' : ''}export default function ${name}() {\n  return (\n    <>\n${body}\n    </>\n  );\n}\n`);
+    // The animation library's replay of this page (emit/anim.js): its program as data, run by SiteAnimations.
+    if (page.anim) {
+      imports.push("import SiteAnimations from '../SiteAnimations.jsx';", `import anim from '../anim/${name}.json';`);
+      files.set(`src/anim/${name}.json`, programJson(page));
+    }
+    // Its Framer appear entrances (behavior/framer/emit.js), the same way.
+    if (page.appear) {
+      imports.push("import SiteAppear from '../SiteAppear.jsx';", `import appear from '../anim/${name}.appear.json';`);
+      files.set(`src/anim/${name}.appear.json`, `${JSON.stringify(page.appear)}\n`);
+    }
+    // The original's own self-starting libraries on this page (behavior/lift.js), served from public/js/lift/.
+    if (page.lift?.length) imports.push("import SiteScripts from '../SiteScripts.jsx';");
+    const liftEl = page.lift?.length ? `\n      <SiteScripts files={${JSON.stringify(page.lift.map((f) => `/${f}`))}} />` : '';
+    const animEl = `${page.anim ? '\n      <SiteAnimations program={anim} />' : ''}${page.appear ? '\n      <SiteAppear program={appear} />' : ''}${liftEl}`;
+    files.set(fileOf(name, 'pages'), `${imports.join('\n')}${imports.length ? '\n\n' : ''}export default function ${name}() {\n  return (\n    <>\n${body}${animEl}\n    </>\n  );\n}\n`);
     meta.push({
       path: pagePath(page.outPath),
       outPath: page.outPath,
@@ -82,20 +106,34 @@ export function emitReact(ir, opts = {}) {
       bodyClass: page.body.class ?? null,
       // The generated reveal script (emit/motionScript.js) when the site has scroll-reveal effects.
       head: motionScript ? [headHtml(page, refs), `  ${MOTION_TAG}`].join('\n') : headHtml(page, refs),
+      // The page's own stylesheet, inlined in its head by the prerender (like the HTML site): no render-blocking request.
+      css: minifyCssSync(`${rootUrls(emitCss(ir, { page, usedVars }))}${ROOT_RULE}`),
     });
   });
 
-  // The stylesheet: the same CSS as the HTML site, its asset URLs pointing at /assets.
-  const css = emitCss(ir);
+  // The whole stylesheet (the dev server and readers of the project): the same CSS as the HTML site, asset URLs at /assets.
+  const css = emitCss(ir, { usedVars });
   for (const m of css.matchAll(/url\("(?:\.\.\/)+assets\/([^"]+)"\)/g)) assets.add(m[1]);
-  const styles = `${css.replace(/url\("(?:\.\.\/)+assets\//g, 'url("/assets/')}\n/* The page markup lives in this wrapper; it must not become a box of its own. */\n#root {\n  display: contents;\n}\n`;
+  const styles = `${rootUrls(css)}${ROOT_RULE}`;
 
-  const project = scaffold({ ir, meta, names, pinned: pinnedVersions('react-vite'), siteName: opts.siteName ?? ir.siteName ?? null, stylesheet: CSS_FILE });
+  const project = scaffold({ ir, meta, names, pinned: pinnedVersions('react-vite'), overrides: pinnedOverrides('react-vite'), siteName: opts.siteName ?? ir.siteName ?? null, stylesheet: CSS_FILE });
   for (const [file, content] of project) files.set(file, content);
   files.set('src/styles/site.css', styles);
   files.set('src/page-meta.json', `${JSON.stringify(meta, null, 2)}\n`);
   for (const f of ir.files) files.set(`public/${f.path}`, f.content);
   if (motionScript) files.set(`public/${MOTION_FILE}`, MOTION_JS);
+  if (ir.pages.some((p) => p.anim)) {
+    files.set('src/anim/replay.js', REPLAY_MODULE);
+    files.set('src/SiteAnimations.jsx', siteAnimationsJsx());
+  }
+  if (ir.pages.some((p) => p.appear)) {
+    files.set('src/anim/appear.js', APPEAR_MODULE);
+    files.set('src/SiteAppear.jsx', siteAppearJsx());
+  }
+  if (ir.liftFiles && Object.keys(ir.liftFiles).length) {
+    for (const [file, text] of Object.entries(ir.liftFiles)) files.set(`public/${file}`, text);
+    files.set('src/SiteScripts.jsx', siteScriptsJsx());
+  }
 
   return { files, assets, stats: { pages: ir.pages.length, components: components.length, sharedInstances: shared.size } };
 }

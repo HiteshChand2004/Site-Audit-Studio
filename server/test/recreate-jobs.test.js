@@ -2,7 +2,8 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { access, mkdir, readdir, readFile } from 'node:fs/promises';
+import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { rm } from 'node:fs/promises';
 import express from 'express';
 import { db, projectDir } from '../src/db/index.js';
@@ -12,6 +13,7 @@ import { overallPct, recreateBudgetMs, RecreateError, roomForSecondBrowser, runR
 import { analysisWarnings, parseRecreatePages, parseTargetDomain } from '../src/recreate/inputs.js';
 import { pruneRecreates, recreateDir, recreateRoot } from '../src/recreate/workspace.js';
 import recreateRouter from '../src/routes/recreate.js';
+import { seedAnalysis, seedProject } from './helpers/projects.js';
 
 const exists = (p) => access(p).then(() => true, () => false);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -21,12 +23,10 @@ function makeProject({ authorized = 1, stack = 'html', analyzedDaysAgo = 0, anal
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'test', 'https://example.com/', ?, ?, ?, ?)`)
-    .run(id, stack, authorized, now, now);
+  seedProject(db, { id, name: 'test', url: 'https://example.com/', stack, authorized });
   if (analysis) {
     const analyzedAt = new Date(Date.now() - analyzedDaysAgo * 86400000).toISOString();
-    db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-      .run(randomUUID(), id, analyzedAt, analyzedAt, JSON.stringify({ url: 'https://www.example.com/', analyzedAt }));
+    seedAnalysis(db, id, { url: 'https://www.example.com/', analyzedAt }, { at: analyzedAt });
   }
   return db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
 }
@@ -87,7 +87,7 @@ test('settings parsers and the budget', () => {
   assert.equal(recreateBudgetMs({ SAS_RECREATE_MINUTES: '3' }), 180000);
   assert.equal(recreateBudgetMs({ SAS_RECREATE_MINUTES: '0' }), 720000);
   assert.equal(overallPct('inspect', 0), 0);
-  assert.equal(overallPct('preview', 1), 100);
+  assert.equal(overallPct('stack', 1), 100);
   // Running the sweep next to the steps that render pages: by free memory, or decided for the machine.
   assert.equal(roomForSecondBrowser({ SAS_RECREATE_OVERLAP: '1' }), true);
   assert.equal(roomForSecondBrowser({ SAS_RECREATE_OVERLAP: '0' }), false);
@@ -115,8 +115,7 @@ test('a successful run publishes the workspace with a report', async () => {
     progress: (step, f) => f === 0 && steps.at(-1) !== step && steps.push(step),
     stages: { ...stubStages, generate: async (ctx) => ctx.report.pages.push({ path: '/' }) },
   });
-  // Desktop only for now: the sweep and responsive steps are parked (recreate/index.js).
-  assert.deepEqual(steps, ['inspect', 'assets', 'generate', 'build', 'preview']);
+  assert.deepEqual(steps, ['inspect', 'sweep', 'exactCapture', 'assets', 'generate', 'build', 'stack', 'preview', 'exact', 'responsive']);
   assert.equal(report.baseUrl, 'https://www.example.com');
   assert.deepEqual(report.pages, [{ path: '/' }]);
   const saved = JSON.parse(await readFile(`${recreateDir(project.id, recreateId)}/report.json`, 'utf8'));
@@ -208,7 +207,7 @@ test('POST /recreate runs a job, streams events and exposes the result', async (
   const res = await fetch(`${base}/${project.id}/recreate`, { method: 'POST' });
   assert.equal(res.status, 202);
   const { recreateId, job, steps } = await res.json();
-  assert.equal(steps.length, 5);
+  assert.equal(steps.length, 10);
   assert.match(job.warnings[0], /8 days old/);
 
   const events = await (await fetch(`${base}/${project.id}/recreate/${recreateId}/events`)).text();
@@ -221,7 +220,7 @@ test('POST /recreate runs a job, streams events and exposes the result', async (
   Object.assign(STAGES, savedStages);
 });
 
-test('the sweep runs next to the steps after it and is awaited by the step that needs it', { skip: 'the width sweep is parked (desktop only for now, recreate/views.js)' }, async () => {
+test('the sweep runs next to the steps after it and is awaited by the step that needs it', async () => {
   const project = makeProject();
   const log = [];
   const stage = (name, ms, extra) => async (ctx, local) => {
@@ -259,13 +258,14 @@ test('the sweep runs next to the steps after it and is awaited by the step that 
     },
   });
   assert.deepEqual(log, ['start sweep', 'start assets', 'end assets', 'start generate', 'end generate', 'start build', 'end build', 'end sweep', 'start responsive', 'end responsive']);
+  // The two exact-mode steps ran and did nothing, which is what they do for an ordinary copy.
   // Every step is timed; the steps that overlapped add up to more than the job took.
-  assert.deepEqual(Object.keys(report.timings).sort(), ['assets', 'build', 'generate', 'inspect', 'preview', 'responsive', 'sweep', 'total']);
+  assert.deepEqual(Object.keys(report.timings).sort(), ['assets', 'build', 'exact', 'exactCapture', 'generate', 'inspect', 'preview', 'responsive', 'stack', 'sweep', 'total']);
   assert.ok(report.timings.sweep >= 110);
   assert.ok(report.timings.total < report.timings.sweep + report.timings.assets + report.timings.generate + report.timings.build);
 });
 
-test('short of memory, the sweep is finished before the next step that renders pages', { skip: 'the width sweep is parked (desktop only for now, recreate/views.js)' }, async () => {
+test('short of memory, the sweep is finished before the next step that renders pages', async () => {
   const project = makeProject();
   const log = [];
   // The sweep ends only after the asset step has ended (not by a timer: the order must not depend on the machine's speed).
@@ -298,7 +298,7 @@ test('short of memory, the sweep is finished before the next step that renders p
   assert.deepEqual(log, ['start sweep', 'start assets', 'end assets', 'end sweep', 'start generate', 'end generate']);
 });
 
-test('a failing sweep is a warning; a failing step ends a sweep that is still running before the workspace goes', { skip: 'the width sweep is parked (desktop only for now, recreate/views.js)' }, async () => {
+test('a failing sweep is a warning; a failing step ends a sweep that is still running before the workspace goes', async () => {
   const project = makeProject();
   const report = await runRecreate({
     project,
@@ -326,4 +326,105 @@ test('a failing sweep is a warning; a failing step ends a sweep that is still ru
   );
   assert.equal(sweepEnded, true);
   assert.equal(await exists(`${recreateDir(project.id, recreateId)}.tmp`), false);
+});
+
+// Stages that leave what a stack build needs in the workspace: ir/site.json, assets/manifest.json, a plain-HTML dist/.
+const stackInputs = {
+  generate: async (ctx) => {
+    await mkdir(path.join(ctx.dir, 'ir'), { recursive: true });
+    await mkdir(path.join(ctx.dir, 'assets'), { recursive: true });
+    await writeFile(path.join(ctx.dir, 'ir', 'site.json'), JSON.stringify({ pages: [{ outPath: 'index.html' }] }));
+    await writeFile(path.join(ctx.dir, 'assets', 'manifest.json'), JSON.stringify({ files: [] }));
+  },
+  build: async (ctx) => {
+    await mkdir(path.join(ctx.dir, 'dist'), { recursive: true });
+    ctx.report.outputs = { ...ctx.report.outputs, html: { status: 'ready', dir: 'dist' } };
+  },
+};
+
+test('the project stack is built inside the job, next to the steps after "build"; its output lands where an export puts it', async () => {
+  const log = [];
+  let responsiveStarted;
+  const responsiveStart = new Promise((resolve) => { responsiveStarted = resolve; });
+  registerEmitter({
+    id: 'job-stack', label: 'Job stack', status: 'ready', assetsTarget: 'public/assets',
+    emit: (ir) => ({ files: new Map([['package.json', `{"pages":${ir.pages.length}}`]]), assets: new Set() }),
+    build: async ({ dir, signal, progress, htmlDist }) => {
+      log.push('start stack');
+      assert.ok(signal instanceof AbortSignal);
+      assert.equal(typeof progress, 'function');
+      assert.ok(await exists(htmlDist), 'the HTML build it is checked against is there');
+      // Still running when the responsive step starts (not by a timer: the order must not depend on the machine's speed).
+      await responsiveStart;
+      await writeFile(path.join(dir, 'built.txt'), 'ok');
+      log.push('end stack');
+      return { built: true };
+    },
+  });
+  try {
+    const project = makeProject({ stack: 'job-stack' });
+    const recreateId = randomUUID();
+    const report = await runRecreate({
+      project,
+      recreateId,
+      progress: () => {},
+      canOverlap: () => true,
+      stages: {
+        ...stubStages,
+        ...stackInputs,
+        stack: STAGES.stack,
+        responsive: async () => {
+          log.push('start responsive');
+          responsiveStarted();
+          await sleep(20);
+          log.push('end responsive');
+        },
+      },
+    });
+    assert.ok(log.indexOf('start responsive') < log.indexOf('end stack'), log.join(', '));
+    assert.equal(report.outputs['job-stack'].status, 'ready');
+    assert.equal(report.outputs['job-stack'].dir, 'stacks/job-stack');
+    assert.equal(report.outputs['job-stack'].built, true);
+    assert.equal(report.stackBuild.inJob, true);
+    const final = recreateDir(project.id, recreateId);
+    assert.equal(await readFile(path.join(final, 'stacks', 'job-stack', 'built.txt'), 'utf8'), 'ok');
+    assert.equal(await exists(path.join(final, 'stacks', 'job-stack.tmp')), false);
+    assert.equal(JSON.parse(await readFile(path.join(final, 'report.json'), 'utf8')).outputs['job-stack'].status, 'ready');
+  } finally {
+    unregisterEmitter('job-stack');
+  }
+});
+
+test('the stack build is left to the export after the job without memory to spare; a failed build is recorded, the recreate kept', async () => {
+  let builds = 0;
+  registerEmitter({
+    id: 'job-stack-2', label: 'Job stack 2', status: 'ready',
+    emit: () => ({ files: new Map([['a.txt', 'a']]), assets: new Set() }),
+    build: async () => {
+      builds++;
+      throw new RecreateError('The build failed on a.txt.');
+    },
+  });
+  try {
+    const project = makeProject({ stack: 'job-stack-2' });
+    const stages = { ...stubStages, ...stackInputs, stack: STAGES.stack };
+    const later = await runRecreate({ project, recreateId: randomUUID(), progress: () => {}, canOverlap: () => false, stages });
+    assert.equal(builds, 0);
+    assert.equal(later.outputs['job-stack-2'], undefined);
+    assert.equal(later.stackBuild.inJob, false);
+
+    const failed = await runRecreate({ project, recreateId: randomUUID(), progress: () => {}, canOverlap: () => true, stages });
+    assert.equal(builds, 1);
+    assert.equal(failed.outputs['job-stack-2'].status, 'failed');
+    assert.match(failed.outputs['job-stack-2'].error, /failed on a\.txt/);
+    assert.equal(failed.outputs.html.status, 'ready');
+    assert.deepEqual(failed.warnings, []);
+
+    // Plain HTML: nothing to build.
+    const html = await runRecreate({ project: makeProject(), recreateId: randomUUID(), progress: () => {}, canOverlap: () => true, stages });
+    assert.deepEqual(Object.keys(html.outputs), ['html']);
+    assert.equal(html.stackBuild, undefined);
+  } finally {
+    unregisterEmitter('job-stack-2');
+  }
 });

@@ -1,16 +1,20 @@
 // Recreate jobs. They share the global one-job-at-a-time lock with Analyze and Re-audit (jobs/manager.js).
 // A successful job starts the preview of its production build (the one active preview) and queues a
 // re-audit of that build (Phase 5 fix checklist). When the project's stack is not plain HTML, the stack
-// output is built from the saved IR right after (queued behind this job, never discarding the recreate).
+// output is built inside the job when a second browser fits (recreate/stack.js), else from the saved IR right
+// after (queued behind this job, never discarding the recreate).
 import path from 'node:path';
-import { db } from '../db/index.js';
+import { db, interruptedRecreates } from '../db/index.js';
 import { JobManager } from '../jobs/manager.js';
 import { startReaudit } from '../reaudit/jobs.js';
-import { overallPct, runRecreate, STEPS } from './index.js';
+import { asIsBudgetMs, overallPct, runRecreate, STAGES, STEPS } from './index.js';
+import { replayStages } from './replay.js';
 import { getEmitter } from './emit/index.js';
-import { exportStack } from './export/fromIr.js';
+import { exportStack, outputRoot, targetStack } from './export/fromIr.js';
 import { activePreview, startPreview } from './preview.js';
-import { pruneRecreates, recreateDir } from './workspace.js';
+import { MAX_AUTO_RESUMES, readCheckpoint } from './checkpoint.js';
+import { analysisWarnings, isExactMode, latestAnalysis } from './inputs.js';
+import { pruneRecreates, recreateDir, tmpDir } from './workspace.js';
 
 export const recreateJobs = new JobManager({
   table: 'recreates',
@@ -18,23 +22,101 @@ export const recreateJobs = new JobManager({
   steps: STEPS,
   overallPct,
   doneMessage: 'Recreate complete',
-  run: async ({ job, project, progress }) => {
-    const report = await runRecreate({ project, recreateId: job.id, progress, warnings: job.warnings });
+  run: async ({ job, project, payload, progress, signal }) => {
+    // A rebuild from a saved capture (recreate/replay.js): the site is not opened again, only generate → build → preview run.
+    const stages = payload?.reuseFrom
+      ? { ...STAGES, ...replayStages(recreateDir(project.id, payload.reuseFrom.recreateId), payload.reuseFrom) }
+      : undefined;
+    // A resume (recreate/checkpoint.js) continues the stopped recreate payload.resumeFrom names from its kept workspace.
+    // Exact mode: the project's setting, or this one run (POST …/recreate { exact: true }). It replicates the site as it
+    // is and has no time limit; `noLimit` lifts the limit for an ordinary run.
+    // A resume continues the way the stopped run was started (its checkpoint's mode) unless this request says otherwise.
+    const resumed = payload?.resumeFrom ? await resumeMode(project.id, payload.resumeFrom.recreateId) : null;
+    const exact = payload?.exact ?? resumed?.exact ?? isExactMode(project);
+    // The as-is copy of this job: the request's, or the one its checkpoint kept when it is resumed.
+    const asIsMode = payload?.asIs ?? resumed?.asIs ?? null;
+    const report = await runRecreate({
+      project, recreateId: job.id, progress, warnings: job.warnings, signal, exact, preserve: payload?.preserve === true,
+      ...((payload?.noLimit || (payload?.exact === undefined && resumed?.unlimited)) && { unlimited: true }),
+      // An as-is copy gets a budget that follows its size (20 minutes per page, 10 per stack; index.js asIsBudgetMs): a stuck
+      // copy ends with the time-limit error and frees the worker, never runs for ever. SAS_RECREATE_MINUTES still wins.
+      ...(asIsMode && { budgetMs: asIsBudgetMs(asIsMode.pages?.length ?? 1, 1) }),
+      ...(stages && { stages }), ...(payload?.resumeFrom && { resumeFrom: payload.resumeFrom }),
+      // A repack names the job whose lifted copy it reuses (its folder is read by the stage, behavior/preserve/stage.js).
+      ...(asIsMode && { asIs: asIsMode.from ? { ...asIsMode, fromDir: recreateDir(project.id, asIsMode.from) } : asIsMode }),
+    });
     // The preview is runtime state: its port is not part of the report. The app asks for it
-    // (GET/POST /preview), which also starts it again after a server restart.
-    await startPreview({ projectId: project.id, recreateId: job.id, root: path.join(recreateDir(project.id, job.id), 'dist'), scripts: Boolean(report.outputs?.html?.scripts) }).catch(() => {});
+    // (GET/POST /preview), which also starts it again after a server restart. The stack's own build when the job built it.
+    const stack = targetStack(report, project.stack);
+    const dir = recreateDir(project.id, job.id);
+    await (stack === 'html'
+      ? startPreview({ projectId: project.id, recreateId: job.id, root: path.join(dir, 'dist'), scripts: Boolean(report.outputs?.html?.scripts) })
+      : startPreview({ projectId: project.id, recreateId: job.id, root: outputRoot(dir, report, stack), scripts: getEmitter(stack)?.scripts ?? false, stack })
+    ).catch(() => {});
     return report;
   },
   // Keep the latest completed recreates only; also removes any leftover temporary workspace.
-  // Then queue the re-audit (it runs after anything already waiting for the lock).
+  // Then queue the stack build the job left out (if any) and the re-audit (it runs after anything already waiting for the lock).
   after: async ({ job, project, ok }) => {
     await pruneRecreates(project.id);
-    if (ok) queueStackExport(project, job.id);
+    // Stopped by the time limit after making progress: it continues by itself with a fresh budget (a few times at most).
+    if (!ok) await autoResume(project, job.id, 'time-limit');
+    // An as-is copy is its own output: the stack export and the re-audit (which measure a clean rebuild) do not apply to it.
+    if (reportOf(job.id)?.asIs) return;
+    if (ok && !reportOf(job.id)?.outputs?.[project.stack]) queueStackExport(project, job.id);
     if (ok) queueReaudit(project.id, job.id);
   },
 });
 
 const selectProject = db.prepare('SELECT * FROM projects WHERE id = ?');
+const noteResumed = db.prepare('UPDATE recreates SET error = ? WHERE id = ?');
+
+/**
+ * Continues a stopped recreate by itself when it stopped for a reason a new try can get past (`restart`: the server
+ * stopped while it ran; `time-limit`: its budget ran out after it made progress), at most MAX_AUTO_RESUMES times in a row.
+ * @returns {Promise<object|null>} the new job
+ */
+/** How the stopped recreate was started ({ exact, unlimited }, from its checkpoint), or null when it did not say. */
+export async function resumeMode(projectId, recreateId) {
+  const checkpoint = await readCheckpoint(tmpDir(projectId, recreateId)).catch(() => null);
+  return checkpoint?.mode ?? null;
+}
+
+export async function autoResume(project, recreateId, reason) {
+  if (!project?.authorized) return null;
+  const checkpoint = await readCheckpoint(tmpDir(project.id, recreateId));
+  if (!checkpoint?.discovery?.pages?.length || (checkpoint.autoResumes ?? 0) >= MAX_AUTO_RESUMES) return null;
+  if (reason === 'time-limit' && !(checkpoint.stopped?.reason === 'time-limit' && checkpoint.stopped.progressed)) return null;
+  if (reason === 'restart' && checkpoint.stopped) return null; // it stopped on its own before the restart
+  try {
+    const analysis = latestAnalysis(project.id);
+    const job = recreateJobs.start(project, { resumeFrom: { recreateId, auto: true } }, { warnings: analysis ? analysisWarnings(analysis) : [] });
+    if (reason === 'restart') noteResumed.run('The server restarted while this job was running: it continues where it stopped.', recreateId);
+    console.log(`[recreates ${recreateId}] continues where it stopped (${reason}) as ${job.id}`);
+    return job;
+  } catch (err) {
+    console.warn(`[recreates ${recreateId}] not continued: ${err.message}`);
+    return null;
+  }
+}
+
+/** On server start: the recreates the restart interrupted continue where they stopped (queued under the global lock). */
+export async function resumeInterruptedRecreates(rows = interruptedRecreates) {
+  const jobs = [];
+  for (const row of rows) {
+    const job = await autoResume(selectProject.get(row.project_id), row.id, 'restart').catch(() => null);
+    if (job) jobs.push(job);
+  }
+  return jobs;
+}
+const selectResult = db.prepare('SELECT result_json FROM recreates WHERE id = ?');
+const reportOf = (recreateId) => {
+  try {
+    return JSON.parse(selectResult.get(recreateId)?.result_json ?? 'null');
+  } catch {
+    return null;
+  }
+};
 
 function queueReaudit(projectId, recreateId) {
   const project = selectProject.get(projectId); // may have been deleted while the job ran
@@ -57,7 +139,7 @@ function queueStackExport(project, recreateId) {
   exportStack({ projectId: project.id, recreateId, stack })
     .then(async ({ output }) => {
       // The app shows the stack's own build when it is ready: move this project's preview onto it.
-      if (activePreview()?.projectId !== project.id) return;
+      if (!activePreview(project.id)) return;
       const root = path.join(recreateDir(project.id, recreateId), output.dir, output.dist ?? '');
       await startPreview({ projectId: project.id, recreateId, root, scripts: getEmitter(stack)?.scripts ?? false, stack });
     })

@@ -200,7 +200,7 @@ test('headings: one h1, no skipped levels, siblings stay siblings, margins kept'
   assert.deepEqual(fixHeadings(page(noH1)).map((c) => [c.text, c.from, c.to]), [['Welcome', 'h2', 'h1'], ['More', 'h3', 'h2']]);
 });
 
-test('broken links become plain text (a span without link attributes); loading priorities follow the first screen', () => {
+test('broken links are found and kept exactly as the original has them; loading priorities follow the first screen', () => {
   const broken = brokenTargets(
     { brokenLinks: { broken: [{ url: 'https://s.test/old/', status: 404 }] } },
     [{ url: 'https://s.test/gone', reason: 'error', status: 410 }, { url: 'https://s.test/slow', reason: 'error', status: 200 }, { url: 'https://s.test/login', reason: 'backend' }],
@@ -211,10 +211,11 @@ test('broken links become plain text (a span without link attributes); loading p
     node('a', { href: '/fine' }, [text('Fine')], { href: 'https://s.test/fine' }),
   ]);
   const fixed = fixBrokenLinks(page(root), broken, 'https://s.test');
-  assert.deepEqual(fixed.map((f) => [f.text, f.status, f.internal]), [['Old page', 404, true]]);
-  assert.equal(root.children[0].tag, 'span');
-  assert.equal(root.children[0].href, undefined);
-  assert.deepEqual(root.children[0].attrs, { class: 'footer-link' });
+  assert.deepEqual(fixed.map((f) => [f.text, f.status, f.internal, f.kept]), [['Old page', 404, true, true]]);
+  // CLONER_SPEC decision 5: tag, href and every attribute stay; the link is reported, never unlinked.
+  assert.equal(root.children[0].tag, 'a');
+  assert.equal(root.children[0].href, 'https://s.test/old');
+  assert.deepEqual(root.children[0].attrs, { href: '/old', target: '_blank', rel: 'noopener noreferrer', class: 'footer-link', 'aria-label': 'Old page' });
   assert.equal(root.children[1].tag, 'a');
   assert.equal(root.children[1].attrs.href, '/fine');
 

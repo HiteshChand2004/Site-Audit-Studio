@@ -3,6 +3,7 @@ import { fetchPage, isHtml } from './http.js';
 import { pageKey, sameSite } from './util.js';
 
 const NON_PAGE = /\.(pdf|jpe?g|png|gif|webp|avif|svg|ico|mp4|webm|mov|mp3|wav|zip|rar|7z|gz|dmg|exe|docx?|xlsx?|pptx?|csv|json|xml|txt|css|js|woff2?|ttf)$/i;
+// Pages fetched at once unless the caller asks for another number (Analyze keeps 4; Recreate's discovery asks for more).
 const CONCURRENCY = 4;
 
 /**
@@ -15,10 +16,12 @@ const CONCURRENCY = 4;
  * @param {string[]} [o.sitemapUrls]
  * @param {string[]} [o.seedUrls]  pages crawled first, before the homepage's links (re-audit: the recreated pages)
  * @param {(url:string)=>Promise<{html:string}|null>} [o.render]  used for client-rendered pages
+ * @param {number} [o.concurrency]  pages fetched at once (default 4)
+ * @param {(facts:object, html:string)=>boolean} [o.needsRender]  which fetched pages get the browser render (default: a shell)
  * @param {(done:number,total:number,url:string)=>void} [o.onProgress]
  * @param {AbortSignal} [o.signal]  stops starting new pages; partial results are returned
  */
-export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls = [], seedUrls = [], render, onProgress, signal }) {
+export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls = [], seedUrls = [], render, onProgress, signal, concurrency = CONCURRENCY, needsRender = looksLikeShell }) {
   const pages = [];
   const seen = new Set();
   const queue = [];
@@ -49,7 +52,7 @@ export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls 
     if (res.status < 200 || res.status >= 300 || !isHtml(res) || !res.body) return page;
     let facts = extractPage(res.body, res.url);
     const rawTextLength = facts.textLength;
-    if (render && looksLikeShell(facts)) {
+    if (render && needsRender(facts, res.body)) {
       const rendered = await render(res.url).catch(() => null);
       if (rendered?.html) facts = { ...extractPage(rendered.html, res.url), rendered: true };
     }
@@ -70,7 +73,7 @@ export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls 
   const inflight = new Set();
   let started = 1;
   while (queue.length || inflight.size) {
-    while (queue.length && inflight.size < CONCURRENCY && started < maxPages && !signal?.aborted) {
+    while (queue.length && inflight.size < concurrency && started < maxPages && !signal?.aborted) {
       const { url, depth } = queue.shift();
       started++;
       const task = (async () => {

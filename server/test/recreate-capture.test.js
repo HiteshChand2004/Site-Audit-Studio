@@ -6,12 +6,14 @@ import { access, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { db, projectDir } from '../src/db/index.js';
 import { capturePage } from '../src/recreate/capture/index.js';
-import { discoverPages, outPathFor, selectPages, skipReason, slugFor } from '../src/recreate/discover.js';
+import { EXACT_PROBE_FACTOR, probeBudget } from '../src/recreate/inspect.js';
+import { discoverPages, needsBackend, outPathFor, selectPages, skipReason, slugFor } from '../src/recreate/discover.js';
 import { runRecreate, STAGES } from '../src/recreate/index.js';
 import { recreateDir } from '../src/recreate/workspace.js';
 import { userPolicy, withNetPolicy } from '../src/security/netGuard.js';
 import { pageKey } from '../src/audit/util.js';
 import { startFixtureServer } from './serve-fixture.js';
+import { seedProject } from './helpers/projects.js';
 
 // The fixture runs on localhost, which the SSRF guard blocks unless this dev flag is set.
 process.env.SAS_ALLOW_LOCALHOST = '1';
@@ -43,12 +45,20 @@ test('output paths keep the original URLs', () => {
   assert.equal(slugFor('index.html'), 'index');
   assert.equal(slugFor('services/index.html'), 'services');
   assert.equal(slugFor('blog/first-post.html'), 'blog__first-post');
+  // A long address is cut and keeps a hash (Windows: capture files under a long folder could not be written).
+  const long = slugFor('media/news/panscience-innovations-partners-with-bits-law-school-to-launch-palette-centre/index.html');
+  assert.ok(long.length <= 48, long);
+  assert.match(long, /^media__news__panscience-innovations-par.*-[0-9a-f]{8}$/);
+  assert.notEqual(long, slugFor('media/news/panscience-innovations-partners-with-bits-law-school-to-launch-palette-centre-2/index.html'));
 });
 
-test('backend pages, query URLs and files are not recreated', () => {
-  assert.equal(skipReason(`${origin}/login.html`, origin), 'backend');
-  assert.equal(skipReason(`${origin}/shop/cart/`, origin), 'backend');
-  assert.equal(skipReason(`${origin}/wp-admin/`, origin), 'backend');
+test('query URLs and files are not recreated; backend pages are, flagged as needing a backend', () => {
+  // A page that needs a backend is a page of the site: its visible UI is recreated (an unavailable backend never omits it).
+  for (const p of ['/login.html', '/shop/cart/', '/wp-admin/']) {
+    assert.equal(skipReason(`${origin}${p}`, origin), null, p);
+    assert.equal(needsBackend(`${origin}${p}`), true, p);
+  }
+  assert.equal(needsBackend(`${origin}/cartography`), false);
   assert.equal(skipReason(`${origin}/?ref=x`, origin), 'query');
   assert.equal(skipReason(`${origin}/a.pdf`, origin), 'not-html');
   assert.equal(skipReason('https://example.org/', origin), 'external');
@@ -72,7 +82,27 @@ test('selection: homepage links first, then sitemap, limit respected, duplicates
   });
   assert.deepEqual(result.pages.map((p) => [p.path, p.source]), [['/', 'home'], ['/b', 'home-link'], ['/a', 'home-link']]);
   assert.deepEqual(result.beyondLimit.map((p) => new URL(p.url).pathname), ['/c', '/d']);
-  assert.deepEqual(result.skipped.map((s) => [new URL(s.url).pathname, s.reason]), [['/gone', 'error']]);
+  assert.deepEqual(result.skipped.map((s) => [new URL(s.url).pathname, s.reason]), [['/gone', 'not-found']]);
+});
+
+test('selection: a page whose server or backend fails is still a page; only an address that does not exist is not', () => {
+  const page = (p, links = []) => ({ url: `${origin}${p}`, status: 200, depth: 1, facts: { title: p, links: links.map((l) => ({ href: `${origin}${l}`, internal: true })) } });
+  const pages = [
+    page('/', ['/dashboard', '/orders', '/down', '/gone', '/login']),
+    { url: `${origin}/dashboard`, status: 401, facts: null },
+    { url: `${origin}/orders`, status: 503, facts: null },
+    { url: `${origin}/down`, status: 0, error: 'refused', facts: null },
+    { url: `${origin}/gone`, status: 410, facts: null },
+    page('/login'),
+  ];
+  // /admin was never crawled (robots.txt closes it): it is a page all the same.
+  pages[0].facts.links.push({ href: `${origin}/admin`, internal: true });
+  const result = selectPages({ pages, homeUrl: `${origin}/`, robots: { isAllowed: (u) => !u.endsWith('/admin') }, limit: 300 });
+  assert.deepEqual(result.pages.map((p) => [p.path, p.degraded?.status ?? null, Boolean(p.needsBackend)]), [
+    ['/', null, false], ['/dashboard', 401, true], ['/orders', 503, false], ['/down', 0, false], ['/login', null, true], ['/admin', null, true],
+  ]);
+  assert.equal(result.pages.find((p) => p.path === '/admin').robotsBlocked, true);
+  assert.deepEqual(result.skipped.map((s) => [new URL(s.url).pathname, s.reason]), [['/gone', 'not-found']]);
 });
 
 test('selection: www. and bare host, http and https, trailing slash are one page (found on a site that links both forms)', () => {
@@ -98,14 +128,13 @@ test('discovery on the fixture: nav pages first, skips with reasons, the rest li
   assert.deepEqual(result.pages.map((p) => p.outPath), ['index.html', 'about.html', 'services/index.html', 'contact.html']);
   const skipped = Object.fromEntries(result.skipped.map((s) => [new URL(s.url).pathname + new URL(s.url).search, s.reason]));
   assert.deepEqual(skipped, {
-    '/login.html': 'backend',
-    '/cart': 'backend',
+    // /login.html is a page of the site (needing a backend does not omit it); /cart does not exist on the fixture.
+    '/cart': 'not-found',
     '/?ref=footer': 'query',
     '/brochure.pdf': 'not-html',
-    '/private/secret.html': 'robots',
-    '/old-work.html': 'error', // the broken link on /work.html (a 4a.5 fixer seed)
+    '/old-work.html': 'not-found', // the broken link on /work.html (a 4a.5 fixer seed)
   });
-  assert.deepEqual(result.beyondLimit.map((p) => new URL(p.url).pathname).sort(), ['/blog/first-post.html', '/blog/second-post.html', '/team.html', '/work.html']);
+  assert.deepEqual(result.beyondLimit.map((p) => new URL(p.url).pathname).sort(), ['/blog/first-post.html', '/blog/second-post.html', '/login.html', '/private/secret.html', '/team.html', '/work.html']); // /private/ is closed by robots.txt: still a page
   assert.equal(result.sitemap.status, 'found');
 });
 
@@ -122,11 +151,7 @@ test('near its time limit the inspect step keeps the pages captured so far inste
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at) VALUES (?, 'fixture', ?, 'html', 1, 1, ?, ?)`)
-    .run(id, `${origin}/`, now, now);
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), id, now, now, JSON.stringify({ url: `${origin}/`, analyzedAt: now }));
-  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+  const project = seedProject(db, { id, name: 'fixture', url: `${origin}/`, stack: 'html', authorized: 1, recreatePages: 1, analysis: true });
   const stubs = Object.fromEntries(Object.keys(STAGES).map((key) => [key, async () => {}]));
   // The step has (almost) no time left: the homepage is still captured, the other page is not.
   const inspect = (ctx) => {
@@ -143,11 +168,7 @@ test('a page that stalls is abandoned before the step limit: the pages captured 
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at) VALUES (?, 'fixture', ?, 'html', 1, 1, ?, ?)`)
-    .run(id, `${origin}/`, now, now);
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), id, now, now, JSON.stringify({ url: `${origin}/`, analyzedAt: now }));
-  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+  const project = seedProject(db, { id, name: 'fixture', url: `${origin}/`, stack: 'html', authorized: 1, recreatePages: 1, analysis: true });
   const stubs = Object.fromEntries(Object.keys(STAGES).map((key) => [key, async () => {}]));
   // The second page never finishes. Without the page limit the step would run into its own limit and fail the whole job.
   const inspect = (ctx) => {
@@ -163,36 +184,32 @@ test('a page that stalls is abandoned before the step limit: the pages captured 
   assert.match(report.warnings.join('\n'), /1 page was not captured within the time limit of the inspect step \(\/about\.html\)/);
 });
 
-test('the inspect step captures every selected page at desktop size only', async () => {
+test('the inspect step captures every selected page at desktop, laptop, tablet and mobile', async () => {
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at) VALUES (?, 'fixture', ?, 'html', 1, 1, ?, ?)`)
-    .run(id, `${origin}/`, now, now);
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), id, now, now, JSON.stringify({ url: `${origin}/`, analyzedAt: now }));
-  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+  const project = seedProject(db, { id, name: 'fixture', url: `${origin}/`, stack: 'html', authorized: 1, recreatePages: 1, analysis: true });
   const recreateId = randomUUID();
   const stubs = Object.fromEntries(Object.keys(STAGES).map((key) => [key, async () => {}]));
 
   const report = await runRecreate({ project, recreateId, progress: () => {}, stages: { ...stubs, inspect: STAGES.inspect } });
   assert.deepEqual(report.pages.map((p) => [p.path, p.views]), [
-    ['/', ['desktop']],
-    ['/about.html', ['desktop']],
+    ['/', ['desktop', 'laptop', 'tablet', 'mobile']],
+    ['/about.html', ['desktop', 'laptop', 'tablet', 'mobile']],
   ]);
   assert.deepEqual(report.errors, []);
-  assert.deepEqual(report.manual.map((m) => m.title), ['/login.html was not recreated', '/cart was not recreated']);
+  // No page is reported as left out for needing a backend any more: /login.html is a page (beyond this run's limit of one
+  // page here), /cart does not exist on the fixture (a broken link, not a page).
+  assert.deepEqual(report.manual.map((m) => m.title), []);
+  assert.ok(!report.discovery.skipped.some((s) => s.url.endsWith('/login.html')));
+  assert.deepEqual(report.notRecreated, []);
   assert.ok(report.discovery.linksToLive.some((l) => l.url === `${origin}/services/`));
 
   const dir = path.join(recreateDir(id, recreateId), 'capture');
   const manifest = JSON.parse(await readFile(path.join(dir, 'manifest.json'), 'utf8'));
   assert.equal(manifest.pages.length, 2);
-  for (const file of ['desktop.json', 'desktop-fold.webp', 'desktop-full.webp']) {
+  for (const file of ['desktop.json', 'laptop.json', 'tablet.json', 'mobile.json', 'desktop-fold.webp', 'mobile-full.webp']) {
     assert.ok(await exists(path.join(dir, 'index', file)), file);
-  }
-  // Desktop only for now (recreate/views.js): no laptop, tablet or phone capture.
-  for (const file of ['laptop.json', 'tablet.json', 'mobile.json', 'mobile-full.webp']) {
-    assert.ok(!(await exists(path.join(dir, 'index', file))), file);
   }
   assert.ok(await exists(path.join(dir, 'about', 'desktop.json')));
 
@@ -213,7 +230,7 @@ test('the inspect step captures every selected page at desktop size only', async
   assert.ok(!(await exists(path.join(dir, 'index', 'laptop-motion.json'))), 'only the desktop view is probed');
 
   const load = async (view) => JSON.parse(await readFile(path.join(dir, 'index', `${view}.json`), 'utf8'));
-  const desktop = await load('desktop');
+  const [desktop, mobile] = [await load('desktop'), await load('mobile')];
   const find = (node, fn) => {
     if (fn(node)) return node;
     for (const c of node.children ?? []) {
@@ -231,9 +248,12 @@ test('the inspect step captures every selected page at desktop size only', async
   assert.deepEqual(desktop.mediaQueries, ['(max-width: 1024px)', '(max-width: 600px)']);
   assert.equal(desktop.head.jsonLd.length, 1);
 
-  // Computed styles of the desktop layout.
+  // Computed styles differ per breakpoint; the mobile menu swap is visible.
   assert.equal(byClass(desktop, 'features').style['grid-template-columns'].split(' ').length, 3);
+  assert.equal(byClass(mobile, 'features').style['grid-template-columns'].split(' ').length, 1);
   assert.equal(find(desktop.body, (n) => n.tag === 'nav').hidden, undefined);
+  assert.equal(find(mobile.body, (n) => n.tag === 'nav').hidden, true);
+  assert.equal(byClass(mobile, 'menu-button').style.display, 'block');
   // Style diffs stay small: currentColor defaults are not repeated.
   assert.equal(byClass(desktop, 'site-header').style['border-top-color'], undefined);
   assert.equal(byClass(desktop, 'site-header').style['border-bottom-color'], 'rgb(226, 232, 240)');
@@ -249,4 +269,103 @@ test('the inspect step captures every selected page at desktop size only', async
   const resources = desktop.resources.map((r) => `${r.type} ${new URL(r.url).pathname}`).sort();
   assert.deepEqual(resources, ['document /', 'image /img/hero-bg.svg', 'image /img/photo.svg', 'script /hover.js', 'script /lazy.js', 'stylesheet /styles.css']);
   assert.deepEqual(desktop.screenshots.fold.width, 1440);
+  assert.deepEqual(mobile.screenshots.fold.width, 750); // DPR 2
+});
+
+// Step 1 of the capture-completeness work, on a server of its own (the static fixture cannot drop connections or
+// serve a 12 000 px page): a site that refuses a load, and a page taller than the screenshot limit.
+const STEP1_PORT = 4201;
+const TALL = `<!doctype html><html><head><title>Tall</title><style>
+body { margin: 0; font: 16px sans-serif }
+section { height: 2200px; padding: 40px }
+.late { opacity: 0; transition: opacity .2s linear }
+.late.seen { opacity: 1 }
+</style></head><body>
+<section><h1>Top</h1><p>The first screen of a page that is far taller than the screenshot limit.</p></section>
+<section><p>Filler two</p></section>
+<section><p>Filler three</p></section>
+<section><p>Filler four</p></section>
+<section id="deep"><h2 class="late">Deep heading</h2><p class="late">This sits past 8000 px.</p>
+<img class="late" id="deepimg" loading="lazy" width="120" height="60" alt="deep" src="/pixel.svg"></section>
+<script>
+var io = new IntersectionObserver(function (es) {
+  es.forEach(function (e) { if (e.isIntersecting) e.target.classList.add('seen'); });
+}, { threshold: 0.01 });
+document.querySelectorAll('.late').forEach(function (el) { io.observe(el); });
+</script>
+</body></html>`;
+
+test('a load the site refuses is tried again, and the scroll-through goes past the screenshot limit', async () => {
+  const { createServer } = await import('node:http');
+  const { launchBrowser } = await import('../src/audit/render.js');
+  let refusals = 0;
+  const srv = createServer((req, res) => {
+    // Every view's first load of /flaky is dropped without an answer (ERR_EMPTY_RESPONSE), then it works.
+    if (req.url === '/flaky' && refusals < 4) {
+      refusals++;
+      res.socket.destroy();
+      return;
+    }
+    if (req.url === '/pixel.svg') {
+      res.writeHead(200, { 'content-type': 'image/svg+xml' });
+      res.end('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"><rect width="120" height="60" fill="#444"/></svg>');
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(req.url === '/flaky' ? '<!doctype html><html><head><title>Flaky</title></head><body><h1>Flaky</h1><p>It answered this time.</p></body></html>' : TALL);
+  });
+  await new Promise((r) => srv.listen(STEP1_PORT, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${STEP1_PORT}`;
+  const dir = recreateDir(`step1-${randomUUID()}`, randomUUID());
+  const browser = await launchBrowser();
+  try {
+    // A site that drops the connection: every view failed and the page used to be lost.
+    const flaky = await capturePage(browser, { url: `${base}/flaky`, path: '/flaky', slug: 'flaky' }, dir, { timeout: 15000 });
+    assert.ok(refusals > 0, 'the server refused at least once');
+    assert.deepEqual(flaky.errors, [], JSON.stringify(flaky.errors));
+    assert.ok(flaky.views.desktop && flaky.retried > 0, `retried ${flaky.retried}`);
+
+    // A page taller than the screenshot limit: what sits past 8000 px is scrolled to, so its lazy image loads and
+    // its scroll-reveal fires instead of being captured at opacity 0.
+    const tall = await capturePage(browser, { url: `${base}/`, path: '/', slug: 'tall' }, dir, { timeout: 20000 });
+    assert.deepEqual(tall.errors, [], JSON.stringify(tall.errors));
+    const view = JSON.parse(await readFile(path.join(dir, 'capture', 'tall', tall.views.desktop.file), 'utf8'));
+    const find = (n, hit) => {
+      if (!n || typeof n !== 'object') return null;
+      if (hit(n)) return n;
+      for (const c of n.children ?? []) { const r = find(c, hit); if (r) return r; }
+      return null;
+    };
+    const deepText = find(view.body, (n) => (n.children ?? []).some((c) => c.text === 'This sits past 8000 px.'));
+    assert.ok(deepText, 'the section past 8000 px is in the snapshot');
+    assert.notEqual(deepText.style?.opacity, '0', 'it is not captured mid reveal');
+    const img = find(view.body, (n) => n.attrs?.id === 'deepimg');
+    assert.ok(img?.natural?.[0] > 0, `the lazy image past 8000 px loaded (${JSON.stringify(img?.natural)})`);
+  } finally {
+    await browser.close();
+    srv.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('an exact copy probes every control: the budget follows the work, not a flat twenty seconds', () => {
+  // "No limit" did not reach the probes. `full` was a ceiling whatever the mode, so on a real site the homepage's
+  // click probe stopped after 10 of its 23 controls with `timedOut: true` - and a control that was never clicked
+  // has no recorded open state, so thirteen menus and panels could not be rebuilt as working controls. Every one
+  // of them is a dynamic transition the copy simply does not have.
+  const CLICK = 20000;
+  const MIN = 6000;
+  const NEED = 28000;
+  const exact = probeBudget(CLICK, MIN, NEED, { spare: Infinity, measured: true, exact: true });
+  assert.equal(exact, CLICK * EXACT_PROBE_FACTOR);
+  assert.ok(exact >= 300000, `${exact}ms is enough for a page full of controls`);
+  // It is a ceiling, not a duration: a page with two controls still finishes in seconds, because the probe stops
+  // when it runs out of controls.
+
+  // An ordinary copy is unchanged in every case.
+  assert.equal(probeBudget(CLICK, MIN, NEED, { spare: 200000, measured: false }), CLICK, 'first page, room to spare');
+  assert.equal(probeBudget(CLICK, MIN, NEED, { spare: 1000, measured: false }), 0, 'first page, not enough room');
+  assert.equal(probeBudget(CLICK, MIN, NEED, { spare: -1, measured: true }), 0, 'no time left at all');
+  assert.equal(probeBudget(CLICK, MIN, NEED, { spare: 20000, measured: true }), 7143, 'a share of what is left');
+  assert.equal(probeBudget(CLICK, MIN, NEED, { spare: 8000, measured: true }), 0, 'below the floor it is skipped');
 });

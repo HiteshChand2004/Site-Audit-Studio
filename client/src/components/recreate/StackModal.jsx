@@ -19,6 +19,7 @@ export default function StackModal({ open, onClose, project, askAddress = false 
   const [all, setAll] = useState(isAll(project?.recreate_pages));
   const [pages, setPages] = useState(String(isAll(project?.recreate_pages) ? 5 : project.recreate_pages));
   const [domain, setDomain] = useState(project?.target_domain ?? '');
+  const [exact, setExact] = useState(Boolean(project?.exact_mode));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
@@ -28,9 +29,10 @@ export default function StackModal({ open, onClose, project, askAddress = false 
       setAll(isAll(project?.recreate_pages));
       setPages(String(isAll(project?.recreate_pages) ? 5 : project.recreate_pages));
       setDomain(project?.target_domain ?? '');
+      setExact(Boolean(project?.exact_mode));
       setError(null);
     }
-  }, [open, project?.stack, project?.recreate_pages, project?.target_domain]);
+  }, [open, project?.stack, project?.recreate_pages, project?.target_domain, project?.exact_mode]);
 
   const save = async () => {
     const n = all ? ALL_PAGES : Number(pages);
@@ -44,7 +46,12 @@ export default function StackModal({ open, onClose, project, askAddress = false 
     }
     setSaving(true);
     try {
-      await update(project.id, { stack: choice, recreate_pages: n, target_domain: domain.trim() || null });
+      await update(project.id, {
+        stack: choice,
+        recreate_pages: exact ? ALL_PAGES : n,
+        target_domain: domain.trim() || null,
+        exact_mode: exact,
+      });
       onClose();
       if (askAddress) recreate(project.id);
     } catch (err) {
@@ -100,15 +107,26 @@ export default function StackModal({ open, onClose, project, askAddress = false 
       </div>
       <div className={styles.settings}>
         <div className={form.field}>
-          <span className={form.label}>Pages</span>
+          <span className={form.label}>How exact</span>
           <label className={form.check}>
-            <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} />
+            <input type="checkbox" checked={exact} onChange={(e) => setExact(e.target.checked)} />
             <span>
-              Every page of the site. Every link in the new site then opens a page of the new site; the time limit grows with
-              the number of pages.
+              Exact copy. Every page is measured against the original at every screen size until it matches, so the copy
+              takes hours instead of minutes. The site is copied as it is: colours and pictures are left untouched, which
+              means the original’s own contrast and picture problems are kept rather than fixed.
             </span>
           </label>
-          {!all && (
+        </div>
+        <div className={form.field}>
+          <span className={form.label}>Pages</span>
+          <label className={form.check}>
+            <input type="checkbox" checked={all || exact} disabled={exact} onChange={(e) => setAll(e.target.checked)} />
+            <span>
+              Every page of the site. Every link in the new site then opens a page of the new site; the time limit grows with
+              the number of pages.{exact ? ' An exact copy always takes every page.' : ''}
+            </span>
+          </label>
+          {!all && !exact && (
             <>
               <input
                 className={`${form.input} mono`}

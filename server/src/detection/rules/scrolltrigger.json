@@ -1,0 +1,15 @@
+{
+  "id": "scrolltrigger",
+  "name": "GSAP ScrollTrigger",
+  "kind": "library",
+  "category": "scroll-library",
+  "notes": "Body markers from gsap/dist/ScrollTrigger.js 3.x: the plugin registers itself with core.globals(\"ScrollTrigger\", …), wraps pinned elements in \"pin-spacer\" and draws debug markers \"gsap-marker-…\"; plus its `/*! ScrollTrigger x.y.z` banner.",
+  "signals": [
+    { "type": "script", "pattern": "ScrollTrigger(\\.min)?\\.m?js(\\?|$)", "weight": 0.6, "label": "ScrollTrigger script" },
+    { "type": "scriptBody", "pattern": "globals\\(\\s*[\"']ScrollTrigger[\"']", "weight": 0.8, "label": "ScrollTrigger registers itself inside a script" },
+    { "type": "scriptBody", "pattern": "[\"']pin-spacer[\"']", "weight": 0.6, "label": "ScrollTrigger pin spacer inside a script" },
+    { "type": "scriptBody", "pattern": "\\*\\s*ScrollTrigger (\\d+\\.\\d+\\.\\d+)", "version": 1, "weight": 0.5, "label": "ScrollTrigger banner" },
+    { "type": "global", "name": "ScrollTrigger", "weight": 0.6, "label": "window.ScrollTrigger present" }
+  ],
+  "requires": ["gsap"]
+}

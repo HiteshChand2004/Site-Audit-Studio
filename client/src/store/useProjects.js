@@ -37,6 +37,18 @@ const KINDS = {
   reaudit: { stateKey: 'reaudits', subscribe: api.subscribeReaudit, current: api.getCurrentReaudit, failed: 'Re-audit failed.' },
 };
 
+// The screenshots of an analysis are served under the project that owns them now (an imported project keeps the URLs it was
+// saved with, which point at its old id).
+function normalizeAudit(id, audit) {
+  const views = audit?.screenshots?.views;
+  if (!views) return audit;
+  const fix = (shot) => (shot?.url ? { ...shot, url: shot.url.replace(/^\/api\/projects\/[^/]+\//, `/api/projects/${id}/`) } : shot);
+  const fixed = Object.fromEntries(Object.entries(views).map(([k, v]) => [k, v && { ...v, fold: fix(v.fold), full: fix(v.full) }]));
+  return { ...audit, screenshots: { ...audit.screenshots, views: fixed } };
+}
+
+export const HOME = 'home';
+
 export const isJobActive = (job) => Boolean(job) && ['starting', 'queued', 'running'].includes(job.status);
 export const isAnalysisActive = isJobActive;
 
@@ -56,6 +68,8 @@ export const useProjects = create((set, get) => ({
   // projectId → { url, port, recreateId, loading, error }: the preview of the latest recreate.
   // Only one preview runs at a time, so it follows the selected project.
   previews: {},
+  // projectId → { audit, recreate, loaded }: what the home gallery and the sidebar show for every website.
+  overviews: {},
 
   setJob(kind, projectId, patch) {
     const key = KINDS[kind].stateKey;
@@ -71,16 +85,36 @@ export const useProjects = create((set, get) => ({
     try {
       const projects = await api.listProjects();
       set({ projects, loading: false, error: null });
+      get().loadOverviews();
+      // The last website opened, or the home overview (also when nothing was opened yet).
       const last = recall();
-      const initial = projects.find((p) => p.id === last) ?? projects[0];
+      const initial = projects.find((p) => p.id === last);
       if (initial) get().select(initial.id);
     } catch (err) {
       set({ loading: false, error: err.message });
     }
   },
 
+  /** The home overview: no website selected. */
+  goHome() {
+    set({ selectedId: null, audit: null, auditLoading: false });
+    remember(HOME);
+    get().loadOverviews();
+  },
+
+  /** Check + copy of every website, for the home gallery and the sidebar (read only). */
+  async loadOverviews() {
+    await Promise.all(get().projects.map((p) => get().loadOverview(p.id)));
+  },
+
+  async loadOverview(id) {
+    const [audit, recreate] = await Promise.all([api.getAudit(id).catch(() => null), api.getRecreate(id).catch(() => null)]);
+    set({ overviews: { ...get().overviews, [id]: { audit: normalizeAudit(id, audit), recreate, loaded: true } } });
+  },
+
   async select(id) {
-    if (get().selectedId === id && get().audit) return;
+    // Picking the open website again looks for newer work (a copy made or imported elsewhere).
+    if (get().selectedId === id && get().audit) return get().refreshSelected();
     set({ selectedId: id, audit: null, auditLoading: true });
     remember(id);
     await Promise.all([get().reloadAudit(id), get().reloadRecreate(id)]);
@@ -92,9 +126,33 @@ export const useProjects = create((set, get) => ({
     }
   },
 
+  /**
+   * The open website's check and copy as the server has them now: a copy finished, imported or rebuilt
+   * while this tab stayed open replaces the one shown (called when the tab comes back into view).
+   */
+  async refreshSelected() {
+    const id = get().selectedId;
+    if (!id) return;
+    const [data, audit] = await Promise.all([api.getRecreate(id).catch(() => null), api.getAudit(id).catch(() => null)]);
+    if (get().selectedId !== id) return;
+    const known = get().recreateResults[id];
+    const changed = (a, b) => (a?.result?.recreateId ?? null) !== (b?.result?.recreateId ?? null) || (a?.last?.id ?? null) !== (b?.last?.id ?? null) || (a?.last?.status ?? null) !== (b?.last?.status ?? null);
+    if (data && changed(data, known)) {
+      set({ recreateResults: { ...get().recreateResults, [id]: data } });
+      if (data.result) await get().ensurePreview(id);
+    } else if (data?.result) {
+      // Only one preview runs at a time: another tab may have moved it to another website meanwhile.
+      await get().ensurePreview(id);
+    }
+    const shown = get().audit;
+    if (audit && (audit.analysisId !== shown?.analysisId || audit.recreate?.reauditId !== shown?.recreate?.reauditId || audit.recreate?.recreateId !== shown?.recreate?.recreateId)) {
+      set({ audit: normalizeAudit(id, audit) });
+    }
+  },
+
   async reloadRecreate(id) {
     const data = await api.getRecreate(id).catch(() => null);
-    if (data) set({ recreateResults: { ...get().recreateResults, [id]: data } });
+    if (data) set({ recreateResults: { ...get().recreateResults, [id]: data }, overviews: { ...get().overviews, [id]: { ...get().overviews[id], recreate: data } } });
     if (data?.result && get().selectedId === id) await get().ensurePreview(id);
   },
 
@@ -115,8 +173,9 @@ export const useProjects = create((set, get) => ({
 
   async reloadAudit(id) {
     try {
-      const audit = await api.getAudit(id);
+      const audit = normalizeAudit(id, await api.getAudit(id));
       if (get().selectedId === id) set({ audit, auditLoading: false });
+      set({ overviews: { ...get().overviews, [id]: { ...get().overviews[id], audit, loaded: true } } });
     } catch (err) {
       if (get().selectedId === id) set({ auditLoading: false, error: err.message });
     }
@@ -143,7 +202,15 @@ export const useProjects = create((set, get) => ({
       failed: (data) => {
         streams.delete(`${kind}:${projectId}`);
         get().setJob(kind, projectId, { status: 'failed', error: data.error || failedMessage });
-        if (kind === 'recreate') get().reloadRecreate(projectId);
+        // The latest attempt (its reason) is loaded, so the Create step shows why it failed and offers a new try.
+        if (kind === 'recreate') get().reloadRecreate(projectId).catch(() => {});
+        // A copy stopped by its time limit after getting further continues by itself (the server queues the next try):
+        // follow it, so the progress goes on instead of showing the failure. Asked again shortly after: the server decides
+        // that just after it reports the failure.
+        if (kind === 'recreate') {
+          get().reloadRecreate(projectId);
+          setTimeout(() => get().followRecreate(projectId).then(() => get().reloadRecreate(projectId)), 2000);
+        }
         if (kind === 'reaudit' && get().selectedId === projectId) get().reloadAudit(projectId);
       },
     });
@@ -171,10 +238,23 @@ export const useProjects = create((set, get) => ({
     }
   },
 
-  async recreate(id) {
+  /** Attaches to the project's queued or running recreate, if any (e.g. one that continues a stopped copy by itself). */
+  async followRecreate(id) {
+    const current = await api.getCurrentRecreate(id).catch(() => null);
+    if (current && !streams.has(`recreate:${id}`)) get().attachJob('recreate', id, current.job, current.steps);
+  },
+
+  /**
+   * @param {{ reuseCapture?: boolean, resume?: boolean, exact?: boolean }} [options]  reuseCapture: rebuild from the last
+   *   capture, without opening the site; resume: continue the copy that stopped, keeping what it had done
+   *   (GET …/recreate `resumable`); exact: this one copy is an exact one (the project's own setting decides otherwise)
+   */
+  async recreate(id, options = null) {
+    // The request is kept: a failed copy can be tried again with the same settings (the Create step's "Try again").
+    set({ lastRecreateOptions: { ...get().lastRecreateOptions, [id]: options } });
     get().setJob('recreate', id, { status: 'starting', pct: 0, step: null, error: null, message: 'Starting…' });
     try {
-      const { job, steps } = await api.startRecreate(id);
+      const { job, steps } = await api.startRecreate(id, options);
       get().attachJob('recreate', id, job, steps);
     } catch (err) {
       if (err.status === 409 && err.data?.recreateId) {
@@ -182,6 +262,19 @@ export const useProjects = create((set, get) => ({
         if (current) return get().attachJob('recreate', id, current.job, current.steps);
       }
       get().setJob('recreate', id, { status: 'failed', error: err.message });
+    }
+  },
+
+  /**
+   * Asks the copy that is running to stop. What it has done is kept, so the Copy step then offers to continue where it
+   * stopped. The job's own SSE stream reports the end, so nothing is set here beyond the "Stopping…" message.
+   */
+  async stopRecreate(id) {
+    try {
+      const { job } = await api.stopRecreate(id);
+      get().setJob('recreate', id, { status: job.status, message: job.message, pct: job.pct, step: job.step });
+    } catch {
+      // Already finished or stopped: its stream reports the real state.
     }
   },
 
@@ -219,6 +312,7 @@ export const useProjects = create((set, get) => ({
   async create(input) {
     const project = await api.createProject(input);
     set({ projects: [project, ...get().projects] });
+    get().loadOverview(project.id);
     await get().select(project.id);
     return project;
   },
@@ -239,8 +333,7 @@ export const useProjects = create((set, get) => ({
     set({ projects });
     if (get().selectedId === id) {
       set({ selectedId: null, audit: null });
-      remember(null);
-      if (projects[0]) get().select(projects[0].id);
+      remember(HOME);
     }
   },
 }));

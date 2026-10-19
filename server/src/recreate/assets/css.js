@@ -77,6 +77,74 @@ export function parseFontSrc(value, base) {
  * @returns {{ fontFaces: object[], keyframes: { name: string, css: string|null }[], imports: string[], urls: string[] }}
  *   `urls` are the other url() references (backgrounds and similar), resolved against `base`.
  */
+// The states a rule can describe, and the at-rules whose body holds ordinary rules.
+const STATE_SELECTOR = /:(hover|focus-visible|focus-within|focus|active)\b/;
+const GROUPING = new Set(['media', 'supports', 'layer', 'container', 'scope']);
+
+/**
+ * The hover / focus rules of a stylesheet's text, in the shape capture/interactions.js scanRules produces for the
+ * sheets the browser let it read. A cross-origin sheet without CORS is invisible to the page - `sheet.cssRules`
+ * throws - so every state rule in a CDN-hosted design system was lost, with no count of how many. Parsing the text
+ * server-side cannot affect the capture at all, unlike making the browser read the sheet: a CORS fetch that fails
+ * means the stylesheet does not apply, and nothing downstream would notice the site had lost its styling.
+ *
+ * Grouping at-rules are walked and an @media condition is carried down, as scanRules does. This is not a CSS
+ * parser: it finds rules, and anything it cannot read is counted in `unparsed` rather than guessed at.
+ * @param {string} text
+ * @param {{ max?: number, maxDecls?: number }} [opts]
+ * @returns {{ rules: object[], total: number, truncated: boolean, atRules: Record<string, number>, unparsed: number }}
+ */
+export function parseStateRules(text, { max = 600, maxDecls = 40 } = {}) {
+  const rules = [];
+  const atRules = {};
+  let total = 0;
+  let unparsed = 0;
+  let truncated = false;
+
+  const walk = (body, media, depth) => {
+    let i = 0;
+    while (i < body.length) {
+      const brace = body.indexOf('{', i);
+      if (brace < 0) break;
+      const semi = body.indexOf(';', i);
+      // A statement at-rule (@import, @charset, @layer a, b;) ends before any block of its own.
+      if (semi >= 0 && semi < brace) {
+        i = semi + 1;
+        continue;
+      }
+      const prelude = body.slice(i, brace).trim();
+      const end = blockEnd(body, brace);
+      const inner = body.slice(brace + 1, end);
+      if (prelude.startsWith('@')) {
+        const name = (/^@-?(?:\w+-)*?([\w-]+)/.exec(prelude)?.[1] ?? '').toLowerCase();
+        atRules[name] = (atRules[name] ?? 0) + 1;
+        if (GROUPING.has(name) && depth < 8) {
+          const condition = name === 'media' ? prelude.replace(/^@media\s*/i, '').trim() : null;
+          walk(inner, condition ? [media, condition].filter(Boolean).join(' and ') : media, depth + 1);
+        }
+      } else if (!prelude) unparsed++;
+      else if (STATE_SELECTOR.test(prelude)) {
+        total++;
+        if (rules.length >= max) truncated = true;
+        else {
+          const all = declarations(inner);
+          const decls = {};
+          for (const key of Object.keys(all).slice(0, maxDecls)) decls[key] = all[key];
+          rules.push({
+            selector: prelude.slice(0, 300),
+            state: STATE_SELECTOR.exec(prelude)[1],
+            ...(media && { media }),
+            decls,
+          });
+        }
+      }
+      i = end + 1;
+    }
+  };
+  walk(stripComments(String(text)), null, 0);
+  return { rules, total, truncated, atRules, unparsed };
+}
+
 export function parseStylesheet(text, base) {
   const css = stripComments(String(text));
   const fontFaces = [];

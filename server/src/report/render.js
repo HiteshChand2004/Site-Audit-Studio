@@ -1,488 +1,748 @@
-// The report as one self-contained HTML file: inline styles, inline images, no script and no external request, so
-// it can be saved, e-mailed, opened offline, printed and turned into a PDF (report/pdf.js). It is written for a
-// client: a summary first, then numbered sections, and only what a reader needs - the scores, what is wrong, what was
-// fixed and what still needs a person. Passing checks are counted, not listed. Every value from the audit or the
-// recreate goes through esc(): site names, titles and URLs come from the pages that were analysed.
+// The report as one self-contained HTML file: inline styles, inline images and inline SVG charts, no script and no
+// external request, so it can be saved, e-mailed, opened offline, printed and turned into a PDF (report/pdf.js).
+//
+// A visual, dashboard-style report for a business reader, laid out as A4 sheets:
+//   page 1  the website's logo and name, one verdict line, four score gauges (original vs copy), result tiles,
+//           the two homepages side by side and at most three next steps;
+//   page 2  the analytics: scores by device (grouped bars), the checklist outcome (donut), speed in everyday words
+//           (bars against Google's "good" mark), the match with the original per page, and short lists of what was
+//           fixed and what needs a person.
+// A project that was never checked gets one page. Text stays short: one caption per chart, lists of at most six
+// lines; every check, page and value is in the JSON download. Every value from the audit or the recreate goes
+// through esc(): site names, titles and URLs come from the pages that were analysed.
+import { AREAS, matchRating, plainName, rating } from './words.js';
+
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const num = (n) => (Number.isFinite(n) ? n.toLocaleString('en-US') : '—');
 const date = (iso) => {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('en-GB', { dateStyle: 'long', timeZone: 'UTC' });
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-GB', { dateStyle: 'long', timeZone: 'UTC' });
 };
-const ms = (v) => (v == null ? '—' : v >= 1000 ? `${(v / 1000).toFixed(1)} s` : `${Math.round(v)} ms`);
-const bytes = (v) => (v == null ? '—' : v >= 1048576 ? `${(v / 1048576).toFixed(1)} MB` : v >= 1024 ? `${Math.round(v / 1024)} KB` : `${v} B`);
-const scoreTone = (s) => (s == null ? 'none' : s >= 90 ? 'ok' : s >= 50 ? 'warn' : 'bad');
-const fidTone = (s, t = 80) => (s == null ? 'none' : s >= t ? 'ok' : s >= t - 15 ? 'warn' : 'bad');
-const STATUS_TONE = { pass: 'ok', ok: 'ok', fixed: 'ok', improved: 'ok', warn: 'warn', changed: 'info', recheck: 'warn', manual: 'warn', open: 'bad', fail: 'bad', regressed: 'bad', na: 'none' };
-const STATUS_LABEL = { pass: 'Pass', ok: 'OK', fixed: 'Fixed', improved: 'Improved', warn: 'Warning', fail: 'Fail', open: 'Still open', regressed: 'Regressed', changed: 'Changed', recheck: 'Recheck', manual: 'Manual', na: 'N/A' };
-// How many rows a list shows before it says "+N more" (the full data is in the JSON download).
-const MAX_ROWS = 12;
-
-/** A small coloured label (severity, score, count). */
-const pill = (text, tone = 'none') => `<span class="pill ${tone}">${esc(text)}</span>`;
-/** A status as a coloured dot and a word: quieter than a filled badge in a long table. */
-const status = (s) => `<span class="st ${STATUS_TONE[s] ?? 'none'}">${esc(STATUS_LABEL[s] ?? s)}</span>`;
-const more = (total, shown) => (total > shown ? `<p class="note">+ ${total - shown} more in the JSON download.</p>` : '');
-
-/** A score ring (static SVG). */
-function ring(value, label, tone = scoreTone(value)) {
-  const c = 2 * Math.PI * 15;
-  const dash = value == null ? 0 : (Math.max(0, Math.min(100, value)) / 100) * c;
-  return `<div class="ring ${tone}"><svg viewBox="0 0 36 36" width="54" height="54" aria-hidden="true"><circle cx="18" cy="18" r="15" class="track"/><circle cx="18" cy="18" r="15" class="arc" stroke-dasharray="${dash.toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 18 18)"/></svg><b>${value ?? '—'}</b><span>${esc(label)}</span></div>`;
-}
-
-const table = (head, rows) =>
-  rows.length
-    ? `<div class="tablewrap"><table><thead><tr>${head.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c ?? ''}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`
-    : '';
-const section = (id, title, body, sub = '') => `<section id="${id}" class="card"><h3>${esc(title)}${sub ? `<small>${esc(sub)}</small>` : ''}</h3>${body}</section>`;
-const kpi = (label, value, tone = 'none', sub = '') => `<div class="kpi ${tone}"><span>${esc(label)}</span><b>${value}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</div>`;
-
-// ---- Charts: inline SVG / CSS, no script -------------------------------------------------------------------------
-
-const TONE_COLOR = { ok: '#0a8f62', warn: '#f59e0b', bad: '#d81b4a', info: '#2557d6', none: '#c9cbe0' };
-
-/** A donut chart with the total in the middle and a legend. segments: [{ label, value, tone }] */
-function donut(segments, centerLabel) {
-  const list = segments.filter((s) => s.value > 0);
-  const total = list.reduce((n, s) => n + s.value, 0);
-  if (!total) return '<p class="note">No data.</p>';
-  let used = 0;
-  const arcs = list.map((s) => {
-    const pct = (s.value / total) * 100;
-    const arc = `<circle cx="18" cy="18" r="15.9155" fill="none" stroke="${TONE_COLOR[s.tone] ?? s.color ?? TONE_COLOR.none}" stroke-width="4.4" stroke-dasharray="${pct.toFixed(2)} ${(100 - pct).toFixed(2)}" stroke-dashoffset="${(25 - used).toFixed(2)}"/>`;
-    used += pct;
-    return arc;
-  }).join('');
-  return `<div class="donut"><svg viewBox="0 0 36 36" width="104" height="104" role="img" aria-label="${esc(centerLabel)}"><circle cx="18" cy="18" r="15.9155" fill="none" stroke="#eef0f8" stroke-width="4.4"/>${arcs}<text x="18" y="18.6" text-anchor="middle" class="dn">${total}</text><text x="18" y="23.4" text-anchor="middle" class="dl">${esc(centerLabel)}</text></svg>
-    <ul class="legend">${list.map((s) => `<li><i style="background:${TONE_COLOR[s.tone] ?? TONE_COLOR.none}"></i>${esc(s.label)}<b>${s.value}</b></li>`).join('')}</ul></div>`;
-}
-
-/** Horizontal bars 0-100 with an optional threshold mark. rows: [{ label, value, tone }] */
-function hbars(rows, { threshold } = {}) {
-  if (!rows.length) return '<p class="note">No data.</p>';
-  return `<div class="hbars">${rows.map((r) => `<div class="hb"><span class="hl" title="${esc(r.label)}">${esc(r.label)}</span><span class="ht"><i class="${r.tone}" style="width:${Math.max(0, Math.min(100, r.value ?? 0))}%"></i>${threshold != null ? `<u style="left:${threshold}%"></u>` : ''}</span><b>${r.value ?? '—'}</b></div>`).join('')}</div>`;
-}
-
-/** Vertical bars 0-100 (one per column) with an optional threshold line. rows: [{ label, value, tone }] */
-function vbars(rows, { threshold } = {}) {
-  if (!rows.length) return '<p class="note">No data.</p>';
-  return `<div class="vbars">${threshold != null ? `<u style="bottom:${(15 + 0.72 * threshold).toFixed(1)}px"></u>` : ''}${rows.map((r) => `<div class="vc"><b>${r.value ?? '—'}</b><span class="vt"><i class="${r.tone}" style="height:${Math.max(2, Math.min(100, r.value ?? 0))}%"></i></span><em>${esc(r.label)}</em></div>`).join('')}</div>`;
-}
-
-/** Two bars per row (before and after), both 0-100. rows: [{ label, before, after }] */
-function groupedBars(rows, names = ['Original', 'Recreated']) {
-  return `<div class="gbars">${rows.map((r) => `<div class="gb"><span class="hl">${esc(r.label)}</span><span class="gt">${[r.before, r.after].map((v, i) => (v == null ? '' : `<i class="g${i}" style="width:${Math.max(1, Math.min(100, v))}%"><b>${v}</b></i>`)).join('')}</span></div>`).join('')}<p class="key"><i class="g0"></i>${esc(names[0])}<i class="g1"></i>${esc(names[1])}</p></div>`;
-}
-
-const chartCard = (title, body, sub = '') => `<div class="chart"><h4>${esc(title)}${sub ? `<small>${esc(sub)}</small>` : ''}</h4>${body}</div>`;
-
-/** "At a glance": the main numbers as small charts. */
-function glance(d) {
-  const a = d.audit;
-  const r = d.recreate;
-  const c = a.recreate;
-  const charts = [];
-  const LABEL = { performance: 'Performance', seo: 'SEO', accessibility: 'Accessibility', bestPractices: 'Best practices' };
-  // Desktop only for now (recreate/views.js): the computer scores lead; an older check may only have phone scores.
-  const mobile = a.scores?.desktop ?? a.scores?.mobile;
-  const after = c && !c.isDummy ? c.scores?.after?.desktop ?? c.scores?.after?.mobile : null;
-  if (d.analyzed && mobile) {
-    charts.push(chartCard('Lighthouse scores', groupedBars(Object.keys(LABEL).map((k) => ({ label: LABEL[k], before: mobile[k], after: after?.[k] })), ['Original', 'Recreated']), after ? 'desktop, original vs recreated' : 'desktop'));
+const plural = (n, one, many = `${one}s`) => `${num(n)} ${n === 1 ? one : many}`;
+const clip = (s, max = 80) => {
+  const t = String(s ?? '').replace(/\s+/g, ' ').trim();
+  return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
+};
+/** "a, b and c". */
+const listWords = (items) => {
+  const list = items.filter(Boolean);
+  return list.length <= 1 ? list.join('') : `${list.slice(0, -1).join(', ')} and ${list.at(-1)}`;
+};
+const seconds = (v) => (v == null ? '—' : v === 0 ? '0 s' : `${(v / 1000).toFixed(v < 1000 ? 2 : 1)} s`);
+const bytes = (v) => (v == null ? '—' : v >= 1048576 ? `${(v / 1048576).toFixed(1)} MB` : `${num(Math.round(v / 1024))} KB`);
+const signed = (d) => (d > 0 ? `+${d}` : d < 0 ? `−${-d}` : '±0');
+const f1 = (v) => Number(v.toFixed(1));
+const hostOf = (url) => {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return String(url ?? '');
   }
-  if (d.analyzed) {
-    const crawl = a.crawl ?? {};
-    const checks = [...(a.seo ?? []), ...(a.aeo ?? []), ...[crawl.sitemap, crawl.robots, crawl.metaTags].filter((x) => x?.status)];
-    const count = (s) => checks.filter((x) => (s === 'pass' ? x.status === 'pass' : s === 'warn' ? x.status === 'warn' : !['pass', 'warn'].includes(x.status))).length;
-    charts.push(chartCard('Original: SEO, AEO and crawl checks', donut([{ label: 'Passing', value: count('pass'), tone: 'ok' }, { label: 'Warnings', value: count('warn'), tone: 'warn' }, { label: 'Failing', value: count('fail'), tone: 'bad' }], 'checks')));
-  }
-  if (c && !c.isDummy && c.summary) {
-    const s = c.summary;
-    charts.push(chartCard('Fix checklist', donut([
-      { label: 'Fixed / improved', value: (s.fixed ?? 0) + (s.improved ?? 0), tone: 'ok' },
-      { label: 'Passing on both', value: s.pass ?? 0, tone: 'info' },
-      { label: 'Needs a person', value: (s.manual ?? 0) + (s.recheck ?? 0) + (s.changed ?? 0), tone: 'warn' },
-      { label: 'Still open', value: (s.open ?? 0) + (s.regressed ?? 0), tone: 'bad' },
-    ], 'checks'), 'original vs recreated'));
-  }
-  if (r?.fidelity?.pages?.length) {
-    const t = r.fidelity.threshold ?? 80;
-    charts.push(chartCard('Fidelity by page', hbars(r.fidelity.pages.slice(0, 8).map((p) => ({ label: p.path, value: p.score, tone: fidTone(p.score, t) })), { threshold: t }), `line = ${t}`));
-  }
-  return charts.length ? `<section class="card"><h3>At a glance</h3><div class="charts">${charts.join('')}</div></section>` : '';
+};
+
+// Chart colours: the app's theme (orange accent for the copy, slate grey for the original) and status colours,
+// which always come with a word.
+const C = {
+  copy: '#c2410c',
+  orig: '#a3acbb',
+  track: '#eef1f5',
+  grid: '#e4e7ec',
+  ink: '#101828',
+  ink2: '#344054',
+  muted: '#667085',
+  ok: '#067647',
+  okSoft: '#5fb98c',
+  warn: '#d97706',
+  bad: '#b42318',
+  info: '#175cd3',
+  pass: '#c5ccd6',
+};
+
+// ---- What the report knows ----------------------------------------------------------------------------------------
+
+/** The parts of the data the report uses, and which state the project is in. */
+function facts(d) {
+  const a = d.analyzed ? d.audit : null;
+  const r = a ? d.recreate ?? null : null;
+  const cs = a ? a.recreate ?? null : null;
+  const c = cs && !cs.isDummy && Array.isArray(cs.items) ? cs : null;
+  const checks = a
+    ? [
+        ...(a.seo ?? []),
+        ...(a.aeo ?? []),
+        ...[['sitemap.xml', a.crawl?.sitemap], ['robots.txt', a.crawl?.robots], ['Meta tags', a.crawl?.metaTags]].filter(([, v]) => v?.status).map(([title, v]) => ({ title, status: v.status, detail: v.detail })),
+      ]
+    : [];
+  const before = c?.scores?.before ?? a?.scores ?? null;
+  const after = c?.scores?.after ?? null;
+  const mBefore = c?.metrics?.before ?? a?.metricsByDevice ?? null;
+  const mAfter = c?.metrics?.after ?? null;
+  const state = !a ? 'none' : c ? 'full' : r ? 'copied' : 'checked';
+  return { a, r, c, cs, checks, before, after, mBefore, mAfter, state, logo: d.images?.logo ?? null };
 }
 
-// Small pictures: the width a view is shown at (px); the picture itself has twice that for sharpness.
-const SHOT_WIDTH = { desktop: 220, tablet: 115, mobile: 70 };
-const shot = (src, label, view) => (src ? `<figure style="flex:0 0 ${SHOT_WIDTH[view]}px"><img src="${src}" alt="${esc(label)}"/></figure>` : '');
-const shotRow = (images, name) => `<div class="shots">${['desktop'].map((v) => shot(images[v], `${name} · ${v}`, v)).join('')}</div>`;
-const hasShots = (images) => Object.values(images ?? {}).some(Boolean);
-
-/** The first screen of the original and (when there is one) of the recreate, at three sizes, small. */
-function snapshot(d) {
-  if (!hasShots(d.images.old) && !hasShots(d.images.new)) return '';
-  const both = hasShots(d.images.new);
-  const body = `<div class="sets"><div><h4>Original</h4>${shotRow(d.images.old, 'Original')}</div>${both ? `<div><h4>Recreated</h4>${shotRow(d.images.new, 'Recreated')}</div>` : ''}</div>`;
-  return section('snapshot', both ? 'Original and recreated' : 'The original site', body, 'homepage, first screen · 1440 / 768 / 375 px');
+/** Better / Same / Worse for two scores: within 2 points counts as the same (scores vary a little run to run). */
+function change(b, a) {
+  if (b == null || a == null) return null;
+  const d = a - b;
+  if (d >= 3) return { label: 'Better', tone: 'ok', d };
+  if (d <= -3) return { label: 'Worse', tone: 'bad', d };
+  return { label: 'Same', tone: 'none', d };
 }
 
-// ---- Summary ------------------------------------------------------------------------------------------------------
+/** Manual items of the original and the copy, equal ones (same kind and reason) merged into one line. */
+function manualGroups(a, r) {
+  const groups = new Map();
+  for (const m of [...(a?.manualRebuild ?? []), ...(r?.manual ?? [])]) {
+    const key = `${m.kind}|${m.detail}`;
+    const g = groups.get(key) ?? { kind: m.kind, detail: m.detail, titles: [] };
+    if (!g.titles.includes(m.title)) g.titles.push(m.title);
+    groups.set(key, g);
+  }
+  return [...groups.values()].map((g) => ({
+    ...g,
+    title: g.titles.length > 1 ? (g.kind === 'form' ? `Forms on ${plural(g.titles.length, 'page')} need a backend` : `${g.titles[0]} (and ${g.titles.length - 1} similar)`) : g.titles[0],
+  }));
+}
 
-/** Four or five plain sentences: where the site stands, what the recreate achieved, what is left. */
-function highlights(d) {
-  const a = d.audit;
-  const r = d.recreate;
-  const c = a.recreate;
+/** Problems the check found on the original, worst first: { name, detail, tone }. */
+function originalIssues(f) {
+  const { a } = f;
   const out = [];
-  if (d.analyzed) {
-    const m = a.scores?.desktop ?? a.scores?.mobile;
-    const checks = [...(a.seo ?? []), ...(a.aeo ?? [])];
-    const issues = checks.filter((i) => i.status !== 'pass').length;
-    const names = (a.techStack ?? []).map((t) => t.name).slice(0, 3).join(', ');
-    out.push({ tone: scoreTone(m?.performance), text: `The original site${names ? ` (${names})` : ''} scores ${m?.performance ?? '—'} for performance, ${m?.seo ?? '—'} for SEO and ${m?.accessibility ?? '—'} for accessibility on desktop (Lighthouse).` });
-    out.push({ tone: issues || a.brokenLinks?.broken?.length ? 'warn' : 'ok', text: `${issues} SEO / AEO ${issues === 1 ? 'issue' : 'issues'}, ${a.brokenLinks?.broken?.length ?? 0} broken ${a.brokenLinks?.broken?.length === 1 ? 'link' : 'links'} and ${a.accessibility?.length ?? 0} accessibility ${a.accessibility?.length === 1 ? 'issue type' : 'issue types'} were found across ${num(a.pagesCrawled)} crawled pages.` });
+  for (const x of f.checks) if (x.status !== 'pass') out.push({ name: plainName(x).name, detail: x.detail, tone: x.status === 'fail' ? 'bad' : 'warn', rank: x.status === 'fail' ? 0 : 2 });
+  for (const x of a.accessibility ?? []) {
+    const serious = ['critical', 'serious'].includes(x.impact);
+    out.push({ name: plainName(x).name, detail: x.count ? `${plural(x.count, 'place')} on the homepage` : '', tone: serious ? 'bad' : 'warn', rank: serious ? 1 : 3 });
+  }
+  const broken = a.brokenLinks?.broken?.length ?? 0;
+  if (broken) out.push({ name: 'Dead links', detail: `${plural(broken, 'link')} lead nowhere`, tone: 'bad', rank: 0 });
+  for (const w of a.weaknesses ?? []) out.push({ name: plainName(w).name, detail: '', tone: w.severity === 'high' ? 'bad' : 'warn', rank: w.severity === 'high' ? 1 : 4 });
+  return out.sort((x, y) => x.rank - y.rank);
+}
+
+const CATEGORY_ORDER = ['accessibility', 'seo', 'aeo', 'links', 'crawl', 'performance', 'platform', 'motion', 'best-practices'];
+/** Fixed and improved checks of the comparison, the ones a visitor notices first. */
+function fixedItems(c) {
+  const rank = (i) => (CATEGORY_ORDER.indexOf(i.category) + 1 || 99) * 2 + (i.status === 'improved' ? 1 : 0);
+  return c.items.filter((i) => i.status === 'fixed' || i.status === 'improved').sort((x, y) => rank(x) - rank(y));
+}
+
+// ---- Words: the verdict and the next steps ------------------------------------------------------------------------
+
+const BETTER = { performance: 'faster', seo: 'easier to find on Google', accessibility: 'more accessible', bestPractices: 'more modern' };
+const WORSE = { performance: 'slower', seo: 'harder to find on Google', accessibility: 'less accessible', bestPractices: 'less up to date' };
+const STRONG = { performance: 'fast', seo: 'easy to find on Google', accessibility: 'easy for everyone to use', bestPractices: 'safe and modern' };
+const WEAK = { performance: 'speed', seo: 'Google visibility', accessibility: 'accessibility', bestPractices: 'modern standards' };
+
+/** One line, about twenty words: where the site stands, or what the copy achieved. */
+function verdict(f) {
+  const { a, r, c, before, after } = f;
+  if (!a) return 'This website has not been checked yet.';
+  if (c && after) {
+    const better = [];
+    const worse = [];
+    for (const area of AREAS) {
+      const p = change(before?.mobile?.[area.id], after?.mobile?.[area.id]);
+      const k = change(before?.desktop?.[area.id], after?.desktop?.[area.id]);
+      const tones = [p?.tone, k?.tone];
+      if (tones.includes('bad')) worse.push(WORSE[area.id] + (p?.tone === 'bad' && k?.tone !== 'bad' ? ' on phones' : k?.tone === 'bad' && p?.tone !== 'bad' ? ' on computers' : ''));
+      else if (tones.includes('ok')) better.push(BETTER[area.id]);
+    }
+    const s = c.summary ?? {};
+    const fixed = (s.fixed ?? 0) + (s.improved ?? 0);
+    const head = better.length ? `The copy is ${listWords(better)}` : 'The copy scores about the same as the original';
+    const fixes = fixed ? `${better.length > 1 ? ',' : ''} and fixes ${plural(fixed, 'problem')}` : '';
+    const buts = [worse.length && `is ${listWords(worse)}`, s.regressed && `${plural(s.regressed, 'check')} got worse`].filter(Boolean);
+    return `${head}${fixes}${buts.length ? `, but ${buts.join(' and ')}` : ''}.`;
+  }
+  if (r) {
+    const m = r.fidelity?.score;
+    return `A copy of ${plural(r.pages?.length ?? 0, 'page')} was made${m != null ? ` and matches the original ${m}%` : ''}; it has not been compared check by check yet.`;
+  }
+  const good = AREAS.filter((x) => rating(before?.mobile?.[x.id]).tone === 'ok').map((x) => STRONG[x.id]);
+  const work = AREAS.filter((x) => ['warn', 'bad'].includes(rating(before?.mobile?.[x.id]).tone)).map((x) => WEAK[x.id]);
+  const n = originalIssues(f).length;
+  const head = good.length ? `The site is ${listWords(good)}${work.length ? `, but needs work on ${listWords(work)}` : ''}` : `The site needs work on ${listWords(work) || 'every area'}`;
+  return `${head}; ${plural(n, 'thing')} to improve.`;
+}
+
+/** The small line under the verdict: what was measured. */
+function subline(f) {
+  const { a, r } = f;
+  if (!a) return '';
+  const parts = [`Checked on ${date(a.analyzedAt)} across ${plural(a.pagesCrawled ?? 0, 'page')}`];
+  if (r) parts.push(`copy of ${plural(r.pages?.length ?? 0, 'page')} made on ${date(r.createdAt)}`);
+  if (f.c?.reauditedAt) parts.push(`compared on ${date(f.c.reauditedAt)}`);
+  return `${parts.join(' · ')}.`;
+}
+
+/** At most three next steps, most important first. */
+function nextSteps(f) {
+  const { a, r, c, cs } = f;
+  if (!a) return ['Check the site (step 1 in the app): a few minutes, and it finds speed, Google and accessibility problems.', 'Create the copy (step 2): it fixes many of those problems by itself.', 'Compare the copy with the original (step 3) and download this report again.'];
+  const steps = [];
+  if (!r) steps.push('Create the copy (step 2 in the app): it fixes many of the problems found here by itself.');
+  else if (!c) steps.push(cs?.status === 'running' || cs?.status === 'queued' ? 'The comparison with the original is running; download the report again when it has finished.' : 'Compare the copy with the original (Re-audit in the app) to see what got better.');
+  else {
+    if (c.stale) steps.push('Compare again: the copy changed after this comparison was made.');
+    const worse = c.items.filter((i) => i.status === 'regressed');
+    if (worse.length) steps.push(`Look at the ${plural(worse.length, 'check')} that got worse: ${listWords(worse.slice(0, 3).map((i) => plainName(i).name.toLowerCase()))}.`);
+  }
+  const manual = manualGroups(a, r);
+  if (manual.length) steps.push(`Rebuild by hand what cannot be copied automatically (${plural(manual.length, 'item')}, listed on page 2).`);
+  const open = c?.summary?.open ?? 0;
+  if (open) steps.push(`Work through the ${plural(open, 'check')} that still ${open === 1 ? 'needs' : 'need'} work.`);
+  if (!steps.length) steps.push('Nothing urgent: put the copy online and check its speed again there.');
+  return steps.slice(0, 3);
+}
+
+// ---- Charts (inline SVG, no script) ---------------------------------------------------------------------------------
+
+const arcPoint = (cx, cy, r, deg) => [f1(cx + r * Math.cos((deg * Math.PI) / 180)), f1(cy + r * Math.sin((deg * Math.PI) / 180))];
+/** A 270° arc from the bottom left over the top to the bottom right, as a path whose length counts as 100. */
+const arc = (cx, cy, r) => {
+  const [x0, y0] = arcPoint(cx, cy, r, 135);
+  const [x1, y1] = arcPoint(cx, cy, r, 45);
+  return `M${x0} ${y0}A${r} ${r} 0 1 1 ${x1} ${y1}`;
+};
+const ringValue = (d, v, color, width) =>
+  v > 0 ? `<path d="${d}" pathLength="100" fill="none" stroke="${color}" stroke-width="${width}" stroke-linecap="round" stroke-dasharray="${f1(Math.min(100, v))} 200"/>` : '';
+
+/** A score gauge: the copy as the outer orange ring, the original as the inner grey ring (or one ring alone). */
+function gauge(area, f) {
+  const b = f.before?.mobile?.[area.id] ?? null;
+  const a = f.after?.mobile?.[area.id] ?? null;
+  const both = f.state === 'full';
+  const shown = both ? a : b;
+  const outer = arc(70, 68, 54);
+  const inner = arc(70, 68, 41);
+  const [tx0, ty0] = arcPoint(70, 68, 60, 135 + 2.7 * 90);
+  const [tx1, ty1] = arcPoint(70, 68, 68, 135 + 2.7 * 90);
+  const svg = `<svg class="gauge" viewBox="0 0 140 122" aria-hidden="true">
+<path d="${outer}" fill="none" stroke="${C.track}" stroke-width="11" stroke-linecap="round"/>
+${ringValue(outer, shown, C.copy, 11)}
+${both ? `<path d="${inner}" fill="none" stroke="${C.track}" stroke-width="6" stroke-linecap="round"/>${ringValue(inner, b, C.orig, 6)}` : ''}
+<line x1="${tx0}" y1="${ty0}" x2="${tx1}" y2="${ty1}" stroke="${C.ok}" stroke-width="2.2" stroke-linecap="round"/>
+<text x="70" y="76" text-anchor="middle" class="g-num">${shown == null ? '—' : shown}</text>
+<text x="70" y="94" text-anchor="middle" class="g-of">of 100</text>
+</svg>`;
+  const ch = both ? change(b, a) : null;
+  const rate = rating(shown);
+  const line = both
+    ? `<span class="chg ${ch?.tone ?? 'none'}">${ch ? `${signed(ch.d)} ${ch.label}` : 'Not measured'}</span><span class="was">Original ${b ?? '—'}</span>`
+    : `<span class="chg ${rate.tone}">${esc(rate.label)}</span>`;
+  const kb = f.before?.desktop?.[area.id];
+  const ka = f.after?.desktop?.[area.id];
+  const desk = both ? (kb != null || ka != null ? `Computer ${kb ?? '—'} → ${ka ?? '—'}` : '') : kb != null ? `Computer ${kb}` : '';
+  return `<div class="g-cell">${svg}<div class="g-title">${esc(area.title)}</div><div class="g-line">${line}</div>${desk ? `<div class="g-desk">${desk}</div>` : ''}</div>`;
+}
+
+/** Scores by device: grouped bars per area, original (grey) next to the copy (orange), values on the bars. */
+function scoresChart(f) {
+  const both = f.state === 'full';
+  const W = 660;
+  const L = 30;
+  const R = 652;
+  const T = 16;
+  const B = 172;
+  const y = (v) => f1(B - (Math.max(0, Math.min(100, v)) / 100) * (B - T));
+  const out = [];
+  for (const g of [0, 50, 90, 100]) {
+    out.push(`<line x1="${L}" x2="${R}" y1="${y(g)}" y2="${y(g)}" stroke="${g === 0 ? C.ink2 : C.grid}" stroke-width="${g === 0 ? 1 : 0.8}"${g === 90 ? ' stroke-dasharray="3 3"' : ''}/>`);
+    out.push(`<text x="${L - 6}" y="${y(g) + 3}" text-anchor="end" class="ax">${g}</text>`);
+  }
+  const gw = (R - L) / AREAS.length;
+  const bar = (x, w, v, color, label) => {
+    if (v == null) return `<text x="${f1(x + w / 2)}" y="${B - 4}" text-anchor="middle" class="ax">—</text>`;
+    const top = y(v);
+    const h = B - top;
+    const r = Math.min(3, h);
+    return `<path d="M${f1(x)} ${B}V${f1(top + r)}Q${f1(x)} ${top} ${f1(x + r)} ${top}H${f1(x + w - r)}Q${f1(x + w)} ${top} ${f1(x + w)} ${f1(top + r)}V${B}Z" fill="${color}"/><text x="${f1(x + w / 2)}" y="${f1(top - 4)}" text-anchor="middle" class="${label}">${v}</text>`;
+  };
+  AREAS.forEach((area, i) => {
+    const gx = L + i * gw;
+    if (i) out.push(`<line x1="${f1(gx)}" x2="${f1(gx)}" y1="${T}" y2="${B + 34}" stroke="${C.grid}" stroke-width="0.8"/>`);
+    ['mobile', 'desktop'].forEach((dev, j) => {
+      const cx = gx + gw * (j === 0 ? 0.3 : 0.7);
+      const b = f.before?.[dev]?.[area.id] ?? null;
+      if (both) {
+        out.push(bar(cx - 21, 20, b, C.orig, 'v-o'));
+        out.push(bar(cx + 1, 20, f.after?.[dev]?.[area.id] ?? null, C.copy, 'v-n'));
+      } else {
+        out.push(bar(cx - 13, 26, b, C.copy, 'v-n'));
+      }
+      out.push(`<text x="${f1(cx)}" y="${B + 13}" text-anchor="middle" class="ax">${dev === 'mobile' ? 'Phone' : 'Computer'}</text>`);
+    });
+    out.push(`<text x="${f1(gx + gw / 2)}" y="${B + 30}" text-anchor="middle" class="ax-h">${esc(area.title)}</text>`);
+  });
+  return `<svg class="chart" viewBox="0 0 ${W} 210" aria-hidden="true">${out.join('')}</svg>`;
+}
+
+/** A donut of counts with a legend: [{ label, value, color, keep? }]. */
+function donut(parts, centreLabel) {
+  const shown = parts.filter((p) => p.value > 0);
+  const total = shown.reduce((s, p) => s + p.value, 0);
+  const gap = shown.length > 1 ? 0.9 : 0;
+  let start = 0;
+  const segs = shown.map((p) => {
+    const len = (p.value / total) * 100;
+    const seg = `<circle cx="70" cy="70" r="54" fill="none" stroke="${p.color}" stroke-width="20" pathLength="100" stroke-dasharray="${f1(Math.max(0.1, len - gap))} ${f1(100 - len + gap)}" stroke-dashoffset="${f1(-start)}" transform="rotate(-90 70 70)"/>`;
+    start += len;
+    return seg;
+  });
+  const svg = `<svg class="donut" viewBox="0 0 140 140" aria-hidden="true"><circle cx="70" cy="70" r="54" fill="none" stroke="${C.track}" stroke-width="20"/>${segs.join('')}<text x="70" y="75" text-anchor="middle" class="d-num">${num(total)}</text><text x="70" y="91" text-anchor="middle" class="d-of">${esc(centreLabel)}</text></svg>`;
+  const legend = parts
+    .filter((p) => p.value > 0 || p.keep)
+    .map((p) => `<li><i style="background:${p.color}"></i><span>${esc(p.label)}</span><b>${num(p.value)}</b><em>${total ? Math.round((p.value / total) * 100) : 0}%</em></li>`)
+    .join('');
+  return `<div class="donut-wrap">${svg}<ul class="legend">${legend}</ul></div>`;
+}
+
+const SPEED = [
+  { key: 'lcp', title: 'Main content shows in', good: 2500, goodText: 'Good ≤ 2.5 s', fmt: seconds },
+  { key: 'loadTime', title: 'Ready to use in', good: 3800, goodText: 'Good ≤ 3.8 s', fmt: seconds },
+  { key: 'tbt', title: 'Page freezes for', good: 200, goodText: 'Good ≤ 0.2 s', fmt: seconds, onlyWhen: 50 },
+  { key: 'pageSize', title: 'Page weight', good: null, goodText: 'Lighter is better', fmt: bytes },
+];
+
+/** Speed in everyday words: each measurement on its own scale, bars against Google's "good" mark. */
+function speedChart(f) {
+  const dev = f.mBefore?.mobile ? 'mobile' : 'desktop';
+  const b = f.mBefore?.[dev] ?? {};
+  const a = f.state === 'full' ? f.mAfter?.[dev] ?? null : null;
+  const rows = SPEED.filter((m) => b[m.key] != null || a?.[m.key] != null).filter((m) => !m.onlyWhen || Math.max(b[m.key] ?? 0, a?.[m.key] ?? 0) >= m.onlyWhen);
+  const W = 250;
+  const body = rows.map((m) => {
+    const vals = [b[m.key], a?.[m.key]].filter((v) => v != null);
+    // The scale leaves room past Google's mark (and, for the original alone, 2 MB for weight), so one bar alone still says whether it is good.
+    const max = Math.max(...vals, (m.good ?? 0) * 1.6, !a && m.key === 'pageSize' ? 2097152 : 0) * 1.08 || 1;
+    const x = (v) => f1((v / max) * (W - 54));
+    const barRow = (v, yy, color, cls) => (v == null ? '' : `<rect x="0" y="${yy}" width="${Math.max(2, x(v))}" height="11" rx="2.5" fill="${color}"/><text x="${Math.max(2, x(v)) + 5}" y="${yy + 9}" class="${cls}">${esc(m.fmt(v))}</text>`);
+    const parts = a ? [barRow(b[m.key], 3, C.orig, 'v-o'), barRow(a[m.key], 17, C.copy, 'v-n')] : [barRow(b[m.key], 10, C.copy, 'v-n')];
+    const mark = m.good ? `<line x1="${x(m.good)}" x2="${x(m.good)}" y1="0" y2="31" stroke="${C.ok}" stroke-width="1.2" stroke-dasharray="2.5 2"/>` : '';
+    return `<div class="sp-row"><div class="sp-lab"><b>${esc(m.title)}</b><small>${esc(m.goodText)}</small></div><svg viewBox="0 0 ${W} 32" class="sp-svg" aria-hidden="true">${mark}${parts.join('')}</svg></div>`;
+  });
+  return { html: body.join(''), device: dev === 'mobile' ? 'a phone' : 'a computer' };
+}
+
+/** Match with the original per page (horizontal bars with the target mark), or a distribution for many pages. */
+function matchChart(r) {
+  const pages = (r.fidelity?.pages ?? []).filter((p) => Number.isFinite(p.score));
+  const threshold = r.fidelity?.threshold ?? 80;
+  if (!pages.length) return '';
+  const W = 380;
+  if (pages.length <= 11) {
+    const sorted = [...pages].sort((x, y) => y.score - x.score);
+    const L = 150;
+    const x = (v) => f1(L + (v / 100) * (W - L - 34));
+    const rowH = 19;
+    const H = sorted.length * rowH + 22;
+    const out = [];
+    sorted.forEach((p, i) => {
+      const yy = 6 + i * rowH;
+      const label = p.path === '/' ? 'Homepage' : clip(p.path, 26);
+      const low = p.score < threshold;
+      out.push(`<text x="${L - 8}" y="${yy + 10}" text-anchor="end" class="ax-p">${esc(label)}</text>`);
+      out.push(`<rect x="${L}" y="${yy + 1}" width="${f1(x(100) - L)}" height="12" rx="2.5" fill="${C.track}"/>`);
+      out.push(`<rect x="${L}" y="${yy + 1}" width="${f1(x(p.score) - L)}" height="12" rx="2.5" fill="${low ? C.warn : C.copy}"/>`);
+      out.push(`<text x="${x(100) + 5}" y="${yy + 10}" class="v-n">${p.score}${low ? ' low' : ''}</text>`);
+    });
+    out.push(`<line x1="${x(threshold)}" x2="${x(threshold)}" y1="4" y2="${H - 16}" stroke="${C.ok}" stroke-width="1.2" stroke-dasharray="2.5 2"/>`, `<text x="${x(threshold)}" y="${H - 4}" text-anchor="middle" class="ax good">Target ${threshold}</text>`);
+    return `<svg class="chart" viewBox="0 0 ${W} ${H}" aria-hidden="true">${out.join('')}</svg>`;
+  }
+  // Many pages: how many pages fall in each band of match.
+  const bands = [
+    { label: '95–100', min: 95, max: 101 },
+    { label: '90–94', min: 90, max: 95 },
+    { label: '85–89', min: 85, max: 90 },
+    { label: '80–84', min: 80, max: 85 },
+    { label: '65–79', min: 65, max: 80 },
+    { label: 'below 65', min: -1, max: 65 },
+  ].map((band) => ({ ...band, n: pages.filter((p) => p.score >= band.min && p.score < band.max).length }));
+  const max = Math.max(...bands.map((x) => x.n), 1);
+  const L = 70;
+  const rowH = 24;
+  const x = (n) => f1((n / max) * (W - L - 64));
+  const out = bands.map((band, i) => {
+    const yy = 4 + i * rowH;
+    const color = band.min >= threshold ? C.copy : C.warn;
+    const w = band.n ? Math.max(3, x(band.n)) : 0;
+    return `<text x="${L - 8}" y="${yy + 12}" text-anchor="end" class="ax-p">${band.label}</text><rect x="${L}" y="${yy + 2}" width="${f1(W - L - 64)}" height="14" rx="2.5" fill="${C.track}"/>${w ? `<rect x="${L}" y="${yy + 2}" width="${w}" height="14" rx="2.5" fill="${color}"/>` : ''}<text x="${f1(W - 58)}" y="${yy + 12}" class="v-n">${plural(band.n, 'page')}</text>`;
+  });
+  const worst = [...pages].sort((p, q) => p.score - q.score)[0];
+  return `<svg class="chart" viewBox="0 0 ${W} ${bands.length * rowH + 6}" aria-hidden="true">${out.join('')}</svg><p class="note">Lowest: ${esc(worst.path === '/' ? 'the homepage' : clip(worst.path, 40))} at ${worst.score}. Target ${threshold}.</p>`;
+}
+
+// ---- Building blocks --------------------------------------------------------------------------------------------
+
+const logoTile = (f, name, cls = 'logo') =>
+  typeof f.logo === 'string' && /^data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/.test(f.logo)
+    ? `<span class="${cls}"><img src="${esc(f.logo)}" alt=""></span>`
+    : `<span class="${cls} mono">${esc((String(name || '?').replace(/^www\./i, '').match(/[a-z0-9]/i)?.[0] ?? '?').toUpperCase())}</span>`;
+
+const card = (eyebrow, title, caption, body, cls = '') =>
+  `<section class="card ${cls}"><header><div><p class="eyebrow">${esc(eyebrow)}</p><h3>${esc(title)}</h3></div></header>${caption ? `<p class="cap">${caption}</p>` : ''}${body}</section>`;
+
+const legendKey = (f) =>
+  f.state === 'full'
+    ? `<div class="key"><span><i class="sw copy"></i>Copy</span><span><i class="sw orig"></i>Original</span></div>`
+    : `<div class="key"><span><i class="sw copy"></i>Original site</span></div>`;
+
+const tile = (value, label, tone, note = '') =>
+  `<div class="tile"><div class="t-val">${value}</div><div class="t-lab">${tone ? `<i class="dot ${tone}"></i>` : ''}${esc(label)}</div>${note ? `<div class="t-note">${note}</div>` : ''}</div>`;
+
+function tiles(f) {
+  const { a, r, c } = f;
+  const manual = manualGroups(a, r).length;
+  const match = r?.fidelity?.score;
+  const matchTile = r ? tile(match == null ? '—' : `${match}<small>%</small>`, 'Match with the original', '', esc(matchRating(match).label)) : '';
+  if (f.state === 'full') {
+    const s = c.summary ?? {};
+    return [
+      tile(num((s.fixed ?? 0) + (s.improved ?? 0)), 'Fixed or better', 'ok', s.improved ? `${num(s.improved)} of them improved` : 'problems of the original'),
+      tile(num(s.open ?? 0), 'Still needs work', 'warn', 'same as the original'),
+      tile(num(s.regressed ?? 0), 'Got worse', 'bad', s.regressed ? 'worth a look' : 'nothing got worse'),
+      tile(num(s.manual ?? manual), 'Needs a person', 'info', 'cannot be automated'),
+      matchTile,
+    ].join('');
+  }
+  if (f.state === 'copied') {
+    const fixes = (r.fixes ?? []).filter((x) => x.status !== 'open');
+    return [
+      tile(num(r.pages?.length ?? 0), 'Pages copied', '', `of ${plural(a.pagesCrawled ?? 0, 'page')} checked`),
+      tile(num(fixes.length), 'Kinds of fixes applied', 'ok', 'by the copy, automatically'),
+      tile(num(manual), 'Needs a person', 'info', 'cannot be automated'),
+      matchTile,
+    ].join('');
+  }
+  const issues = originalIssues(f);
+  const a11y = (a.accessibility ?? []).reduce((s, x) => s + (x.count ?? 1), 0);
+  const broken = a.brokenLinks?.broken?.length ?? 0;
+  return [
+    tile(num(a.pagesCrawled ?? 0), 'Pages checked', '', 'read by the check'),
+    tile(num(issues.length), 'Things to improve', 'warn', `${num(issues.filter((x) => x.tone === 'bad').length)} important`),
+    tile(num(a11y), 'Accessibility issues', a11y ? 'bad' : 'ok', 'on the homepage'),
+    tile(num(broken), 'Dead links', broken ? 'bad' : 'ok', `of ${num(a.brokenLinks?.checked ?? 0)} checked`),
+    tile(num(manual), 'Needs a person', 'info', 'cannot be automated'),
+  ].join('');
+}
+
+function shots(d, f) {
+  const frame = (img, phone, label, sub) => `<figure class="shot">
+<figcaption><b>${esc(label)}</b><span>${esc(sub)}</span></figcaption>
+<div class="stage"><div class="browser"><div class="bar"><i></i><i></i><i></i></div>${img ? `<img src="${esc(img)}" alt="">` : '<div class="noimg">No picture</div>'}</div>${phone ? `<div class="phone"><img src="${esc(phone)}" alt=""></div>` : ''}</div>
+</figure>`;
+  const old = d.images?.old ?? {};
+  const neu = d.images?.new ?? {};
+  if (!old.desktop && !neu.desktop) return '';
+  const items = [frame(old.desktop, old.mobile, 'Original', hostOf(d.project.url))];
+  if (f.r) items.push(frame(neu.desktop, neu.mobile, 'Copy', plural(f.r.pages?.length ?? 0, 'page') + ' rebuilt'));
+  return `<div class="shots ${items.length === 1 ? 'one' : ''}">${items.join('')}</div>`;
+}
+
+const listBlock = (items, empty = '') =>
+  items.length ? `<ul class="items">${items.join('')}</ul>` : empty ? `<p class="empty">${empty}</p>` : '';
+const itemLine = (mark, tone, name, detailText = '') =>
+  `<li><i class="mk ${tone}" aria-hidden="true">${mark}</i><span><b>${esc(name)}</b>${detailText ? `<small>${esc(detailText)}</small>` : ''}</span></li>`;
+
+// ---- Pages ------------------------------------------------------------------------------------------------------
+
+const footer = (d, n, total) => `<footer class="foot-line"><span>${esc(d.project.name || hostOf(d.project.url))} · Website report · ${esc(date(d.generatedAt))}</span><span>Page ${n} of ${total}</span></footer>`;
+
+function cover(d, f, total) {
+  const host = hostOf(d.project.url);
+  const band = `<header class="band">
+<div class="brand">${logoTile(f, d.project.name || host)}<div><h1>${esc(d.project.name || host)}</h1><p class="addr">${esc(d.project.url)}</p></div></div>
+<div class="meta"><p class="kicker">Website report</p><p>${esc(date(d.generatedAt))}</p></div>
+</header>`;
+  const next = `<section class="nextbox${f.a ? '' : ' flat'}"><p class="eyebrow">What to do next</p><ol class="next">${nextSteps(f).map((s) => `<li>${esc(s)}</li>`).join('')}</ol></section>`;
+  if (!f.a) {
+    const steps = [['Check the site', 'Speed, Google and accessibility scores'], ['Create the copy', 'A faster copy with many problems fixed'], ['Compare', 'What got better, check by check']];
+    return `${band}<div class="body" id="summary">
+<p class="verdict">${esc(verdict(f))}</p>
+<p class="sub">There is nothing to measure yet. Three steps in the app fill this report with scores, charts and results.</p>
+<ol class="track">${steps.map(([s, what], i) => `<li><span class="n">${i + 1}</span><b>${esc(s)}</b><small>${esc(what)}</small><em>Not yet</em></li>`).join('')}</ol>
+${next}
+</div>${footer(d, 1, total)}`;
+  }
+  return `${band}<div class="body" id="summary">
+<p class="verdict">${esc(verdict(f))}</p>
+<p class="sub">${esc(subline(f))}</p>
+<section class="card gauges" id="scores"><header><div><p class="eyebrow">Health scores on a phone</p><h3>${f.state === 'full' ? 'Original and copy, out of 100' : 'The original site, out of 100'}</h3></div>${legendKey(f)}</header>
+<div class="g-row">${AREAS.map((x) => gauge(x, f)).join('')}</div>
+<p class="cap foot">Google looks at phones first. The green tick on each dial marks “good” (90).${f.state === 'full' ? ' Outer ring: the copy; inner ring: the original.' : f.state === 'copied' ? ' The copy gets its own scores once it is compared (Re-audit).' : ''}</p></section>
+<div class="tiles">${tiles(f)}</div>
+${f.r ? `${shots(d, f)}${next}` : `<div class="duo">${shots(d, f)}${next}</div>`}
+</div>${footer(d, 1, total)}`;
+}
+
+function analytics(d, f, pageNo, total) {
+  const { a, r, c } = f;
+  const blocks = [];
+  blocks.push(card('Scores', f.state === 'full' ? 'Every score, original next to copy' : 'Every score of the original', 'Lighthouse scores on a phone and a computer, out of 100. The dashed line marks “good” (90).', `${legendKey(f)}${scoresChart(f)}`, 'wide'));
+
+  let donutCard;
+  if (c) {
+    const s = c.summary ?? {};
+    const parts = [
+      { label: 'Fixed', value: s.fixed ?? 0, color: C.ok, keep: true },
+      { label: 'Better', value: s.improved ?? 0, color: C.okSoft },
+      { label: 'Fine on both', value: s.pass ?? 0, color: C.pass },
+      { label: 'Still needs work', value: s.open ?? 0, color: C.warn, keep: true },
+      { label: 'Got worse', value: s.regressed ?? 0, color: C.bad, keep: true },
+      { label: 'Needs a person', value: s.manual ?? 0, color: C.info },
+    ];
+    donutCard = card('Checklist', 'How every check turned out', 'Each check of the original, run again on the copy.', donut(parts, 'checks'));
   } else {
-    out.push({ tone: 'none', text: 'The original site has not been analyzed yet.' });
+    const count = (st) => f.checks.filter((x) => x.status === st).length;
+    const parts = [
+      { label: 'Fine', value: count('pass'), color: C.ok, keep: true },
+      { label: 'Worth fixing', value: count('warn'), color: C.warn, keep: true },
+      { label: 'Problem', value: count('fail'), color: C.bad, keep: true },
+    ];
+    donutCard = card('Checks', 'Google, AI and site files', 'Titles, descriptions, headings, site map and AI readiness.', donut(parts, 'checks'));
   }
-  if (r?.fidelity) {
-    const resp = r.responsive?.status === 'done' ? r.responsive : null;
-    out.push({ tone: fidTone(r.fidelity.score, r.fidelity.threshold), text: `${r.pages?.length ?? 0} ${r.pages?.length === 1 ? 'page was' : 'pages were'} recreated (${r.stack ?? 'html'}): fidelity ${r.fidelity.score ?? '—'}/100, visual difference ${r.fidelity.diff?.score ?? '—'}/100${resp ? `, layout between screen widths ${resp.score}/100` : ''}.` });
-  } else if (d.analyzed) {
-    out.push({ tone: 'none', text: 'The site has not been recreated yet.' });
+  const sp = speedChart(f);
+  const speedCard = card('Speed', 'How fast the homepage loads', `Measured on ${sp.device}. Dashed green line: Google’s “good” mark.${f.state === 'full' ? ' Grey original, orange copy.' : ''}`, `<div class="speed">${sp.html || '<p class="empty">Speed was not measured.</p>'}</div>`);
+  blocks.push(`<div class="row two">${donutCard}${speedCard}</div>`);
+
+  const manual = manualGroups(a, r).slice(0, 4).map((m) => itemLine('→', 'info', clip(m.title, 70)));
+  const lists = [];
+  let left;
+  const match = r ? matchChart(r) : '';
+  if (match) {
+    const pagesN = r.fidelity?.pages?.length ?? 0;
+    left = card('Match', 'How close the copy looks', `${pagesN > 11 ? `${plural(pagesN, 'page')} grouped by how closely each matches the original` : 'Each copied page compared with the original'}, out of 100.`, match);
+  } else {
+    const top = originalIssues(f).slice(0, 6).map((x) => itemLine(x.tone === 'bad' ? '!' : '·', x.tone, clip(x.name, 60), clip(x.detail, 70)));
+    left = card('To improve', 'The most important problems', 'Found by the check; the copy fixes many of them by itself.', listBlock(top, 'No problems found.'));
   }
-  if (c && !c.isDummy && c.summary) {
-    out.push({ tone: c.summary.regressed ? 'bad' : c.summary.open ? 'warn' : 'ok', text: `After recreating: ${c.summary.fixed ?? 0} checks fixed, ${c.summary.open ?? 0} still open, ${c.summary.regressed ?? 0} regressed.` });
+  if (c) {
+    const all = fixedItems(c);
+    const shown = all.slice(0, 6).map((i) => itemLine('✓', 'ok', clip(plainName(i).name, 60), i.status === 'improved' ? 'better, not yet perfect' : ''));
+    if (shown.length) lists.push(card('What was fixed', `${plural(all.length, 'check')} fixed or better`, '', `${listBlock(shown)}${all.length > 6 ? `<p class="more">and ${num(all.length - 6)} more</p>` : ''}`));
+  } else if (r) {
+    const fixes = (r.fixes ?? []).filter((x) => x.status !== 'open');
+    const shown = fixes.slice(0, 6).map((x) => itemLine('✓', 'ok', clip(String(x.title ?? '').split(': ')[0], 60), x.count ? plural(x.count, 'place') : ''));
+    if (shown.length) lists.push(card('Fixed by the copy', 'Applied automatically', '', listBlock(shown)));
   }
-  const manual = (a.manualRebuild?.length ?? 0) + (r?.manual?.length ?? 0);
-  const auto = r?.autoGenerated?.length ?? 0;
-  if (manual || auto) out.push({ tone: 'warn', text: `${manual ? `${manual} ${manual === 1 ? 'item needs' : 'items need'} a manual rebuild` : ''}${manual && auto ? '; ' : ''}${auto ? `${auto} generated ${auto === 1 ? 'value needs' : 'values need'} a review` : ''}.` });
-  return out;
+  if (manual.length) lists.push(card('Needs a person', 'Rebuild by hand', '', listBlock(manual)));
+  blocks.push(lists.length ? `<div class="row split">${left}<div class="stack">${lists.join('')}</div></div>` : left);
+
+  const head = `<header class="minihead">${logoTile(f, d.project.name, 'logo sm')}<span>${esc(d.project.name || hostOf(d.project.url))}</span><em>The numbers</em></header>`;
+  return `${head}<div class="body" id="numbers">${blocks.join('')}<p class="end">Every check, page and value is in the JSON download.</p></div>${footer(d, pageNo, total)}`;
 }
-
-// ---- Part 1: the original site (the OLD panel) ------------------------------------------------------------
-
-function oldPart(d) {
-  const a = d.audit;
-  if (!d.analyzed) {
-    return `<h2 id="old"><span class="chip old">OLD</span>Original site</h2>${section('old-none', 'Not analyzed yet', '<p class="empty">Run Analyze for this project to include the audit of the original site.</p>')}`;
-  }
-  const parts = [`<h2 id="old"><span class="chip old">OLD</span>Original site<small>${esc(a.url)}</small></h2>`];
-
-  // Performance: the four Lighthouse scores per device and the numbers behind them.
-  const sc = a.scores ?? {};
-  const rings = (s) => (s ? [ring(s.performance, 'Performance'), ring(s.seo, 'SEO'), ring(s.accessibility, 'Accessibility'), ring(s.bestPractices, 'Best practices')].join('') : '<p class="note">Lighthouse did not finish.</p>');
-  const md = a.metricsByDevice ?? { mobile: a.metrics, desktop: null };
-  const metricRow = (m) => (m ? [ms(m.loadTime), ms(m.lcp), ms(m.tbt), m.cls ?? '—', bytes(m.pageSize)] : ['—', '—', '—', '—', '—']);
-  parts.push(section('old-perf', 'Performance', `
-    <div class="rings">${rings(sc.desktop)}</div>
-    ${table(['Device', 'Load time', 'LCP', 'TBT', 'CLS', 'Page size'], [['Desktop', ...metricRow(md.desktop)]])}`,
-  `Lighthouse, homepage · analyzed ${date(a.analyzedAt)} · ${num(a.pagesCrawled)} pages crawled`));
-
-  // Platform and weaknesses.
-  const stack = (a.techStack ?? []).map((t) => pill(`${t.name} · ${t.confidence ?? '—'}%`, 'info')).join(' ');
-  const weak = (a.weaknesses ?? []).slice(0, MAX_ROWS);
-  parts.push(section('old-stack', 'Platform and weaknesses', `${stack ? `<p>${stack}</p>` : '<p class="note">No platform recognised (Custom / Unknown).</p>'}${
-    weak.length ? table(['Severity', 'Weakness', 'Detail'], weak.map((w) => [pill(w.severity, w.severity === 'high' ? 'bad' : w.severity === 'medium' ? 'warn' : 'info'), `<b>${esc(w.title)}</b>`, esc(w.detail)])) : ''}`));
-
-  // SEO, AEO and crawl files in one list: only what is not passing.
-  const crawl = a.crawl ?? {};
-  const checks = [
-    ...(a.seo ?? []).map((i) => ({ group: 'SEO', ...i })),
-    ...(a.aeo ?? []).map((i) => ({ group: 'AEO', ...i })),
-    ...[['sitemap.xml', crawl.sitemap], ['robots.txt', crawl.robots], ['Meta tags', crawl.metaTags]].filter(([, v]) => v?.status).map(([title, v]) => ({ group: 'Crawl', title, status: v.status, detail: v.detail })),
-  ];
-  const passing = checks.filter((i) => i.status === 'pass').length;
-  const issues = checks.filter((i) => i.status !== 'pass');
-  parts.push(section('old-checks', 'SEO, AEO and crawl', `${issues.length
-    ? table(['Status', 'Area', 'Check', 'Result'], issues.slice(0, MAX_ROWS * 2).map((i) => [status(i.status), esc(i.group), `<b>${esc(i.title)}</b>`, esc(i.detail)]))
-    : '<p class="empty">Every check passes.</p>'}${more(issues.length, MAX_ROWS * 2)}`, `${issues.length} to look at · ${passing} passing`));
-
-  // Links and accessibility.
-  const bl = a.brokenLinks ?? {};
-  const broken = bl.broken ?? [];
-  const a11y = (a.accessibility ?? []).slice(0, 8);
-  parts.push(section('old-links', 'Broken links and accessibility', `
-    <p><b>${num(broken.length)}</b> of ${num(bl.checked)} links checked ${broken.length === 1 ? 'is' : 'are'} broken${bl.unverified?.length ? `; ${num(bl.unverified.length)} could not be verified` : ''}.</p>
-    ${table(['Link', 'Result', 'Found on'], broken.slice(0, 8).map((l) => [`<span class="mono">${esc(l.url)}</span>`, pill(l.status, 'bad'), `<span class="mono">${esc(l.foundOn)}</span>`]))}${more(broken.length, 8)}
-    ${a11y.length ? table(['Impact', 'Accessibility issue (axe)', 'Elements'], a11y.map((i) => [pill(i.impact, i.impact === 'critical' || i.impact === 'serious' ? 'bad' : 'warn'), `<b>${esc(i.title)}</b>`, num(i.count)])) : '<p class="note">No accessibility issues on the homepage.</p>'}`));
-
-  if (a.manualRebuild?.length) {
-    parts.push(section('old-manual', 'Manual rebuild needed', table(['Kind', 'What', 'Why'], a.manualRebuild.slice(0, MAX_ROWS).map((m) => [pill(m.kind, 'warn'), `<b>${esc(m.title)}</b>`, esc(m.detail)]))));
-  }
-  return parts.join('');
-}
-
-// ---- Part 2: the recreated site (the NEW panel) ---------------------------------------------------------------
-
-// The motion of the original that the recreate carries (hover, scroll reveal, loops); nothing to say when it had none.
-function motionRow(m) {
-  if (!m) return null;
-  const hover = m.hover?.elements ?? 0;
-  const reveal = m.reveal?.elements ?? 0;
-  const loops = (m.loops?.carried ?? 0) + (m.loops?.rebuilt ?? 0);
-  if (!hover && !reveal && !loops) return null;
-  const parts = [hover && `${num(hover)} hover effects`, reveal && `${num(reveal)} scroll reveals`, loops && `${num(loops)} looping animations`].filter(Boolean);
-  const notRebuilt = m.loops?.skipped?.length ?? 0;
-  return ['Motion', `${parts.join(', ')} recreated${m.script ? ' (scroll reveal uses one small generated script; without script the page shows finished)' : ''}${notRebuilt ? `; ${notRebuilt} loops could not be rebuilt` : ''}`];
-}
-
-function newPart(d) {
-  const r = d.recreate;
-  if (!r) {
-    return `<h2 id="new"><span class="chip new">NEW</span>Recreated site</h2>${section('new-none', 'Not recreated yet', '<p class="empty">Run Recreate for this project to include the recreated site in the report.</p>')}`;
-  }
-  const parts = [`<h2 id="new"><span class="chip new">NEW</span>Recreated site</h2>`];
-  const f = r.fidelity;
-  const resp = r.responsive?.status === 'done' ? r.responsive : null;
-  const t = f?.threshold ?? 80;
-  const dt = f?.diff?.threshold ?? 65;
-
-  // How close the recreate is: per page, with the weakest size, and the layout between the captured widths.
-  const weakest = (p) => {
-    const views = Object.entries(p.views ?? {}).filter(([, v]) => v.score != null).sort((x, y) => x[1].score - y[1].score);
-    return views.length ? `${views[0][0] === 'mobile' ? 'phone' : views[0][0]} ${views[0][1].score}` : '—';
-  };
-  parts.push(section('new-fidelity', 'How close is the recreate', `
-    <div class="kpis">
-      ${kpi('Fidelity', f?.score ?? '—', fidTone(f?.score, t), `threshold ${t}`)}
-      ${kpi('Visual difference', f?.diff?.score ?? '—', fidTone(f?.diff?.score, dt), `threshold ${dt}`)}
-      ${kpi('Between widths', resp?.score ?? '—', fidTone(resp?.score, dt), resp ? `${resp.driftCount} of ${resp.measured} drift` : 'not measured')}
-      ${kpi('Pages', r.pages?.length ?? 0, 'none', 'recreated')}
-    </div>
-    ${table(['Page', 'Fidelity', 'Visual diff', 'Weakest size'], (f?.pages ?? []).slice(0, MAX_ROWS).map((p) => [`<span class="mono">${esc(p.path)}</span>`, pill(p.score ?? '—', fidTone(p.score, t)), pill(p.diff?.score ?? '—', fidTone(p.diff?.score, dt)), esc(weakest(p))]))}${more(f?.pages?.length ?? 0, MAX_ROWS)}
-    ${resp ? chartCard('Layout between screen widths', vbars(resp.widths.map((w) => ({ label: `${w}`, value: resp.byWidth?.[w], tone: fidTone(resp.byWidth?.[w], dt) })), { threshold: dt }), `score per width in px · line = ${dt}`) : ''}
-    <p class="note">Fidelity: element sizes and positions plus a rough picture comparison (below ${t} is flagged). Visual difference: perceptual comparison of the screenshots (below ${dt} is flagged). Recreated ${esc(date(r.createdAt))} · output ${esc(r.stack ?? 'html')}.</p>`));
-
-  // What was built, fixed and left to a person.
-  const v = r.verify;
-  const rows = [
-    v && ['Links, assets, HTML', `${status(v.brokenLinks?.length || v.missingAssets?.length || v.html?.errors ? 'fail' : 'pass')} ${num(v.checked?.links)} links and ${num(v.checked?.assets)} assets resolve${v.html?.warnings ? `; ${v.html.warnings} HTML warnings carried over from the original` : ''}`],
-    r.safety && ['Safety', `${status(r.safety.safe ? 'pass' : 'fail')} ${r.safety.safe ? (r.outputs?.html?.scripts ? 'only the generated scroll-reveal script, no external reference' : 'no script and no external reference') : 'issues found'}`],
-    motionRow(r.generate?.motion),
-    r.fixes?.length && ['Fixes applied', esc(r.fixes.slice(0, 10).map((x) => `${x.title}${x.count ? ` (${x.count})` : ''}`).join(' · '))],
-    r.autoGenerated?.length && ['Auto-generated', `${num(r.autoGenerated.length)} values (descriptions, alt text, …) were written from the page content because the original had none. Please review them.`],
-  ].filter(Boolean);
-  const outs = Object.entries(r.outputs ?? {}).filter(([k, o]) => k !== 'html' && o.status === 'ready');
-  if (outs.length) rows.push(['Other stacks', esc(outs.map(([k, o]) => `${k}${o.build?.js?.gzipBytes ? ` (${bytes(o.build.js.gzipBytes)} JS)` : ''}`).join(' · '))]);
-  parts.push(section('new-build', 'Built, fixed and left to review', table(['', 'Result'], rows)));
-
-  if (r.manual?.length) {
-    parts.push(section('new-manual', 'Manual rebuild needed', table(['Kind', 'What', 'Why'], r.manual.slice(0, MAX_ROWS).map((m) => [pill(m.kind, 'warn'), `<b>${esc(m.title)}</b>`, esc(m.detail)])) + more(r.manual.length, MAX_ROWS)));
-  }
-  if (r.warnings?.length) parts.push(section('new-warn', 'Warnings', `<ul class="warns">${r.warnings.slice(0, 6).map((w) => `<li>${esc(w)}</li>`).join('')}</ul>${more(r.warnings.length, 6)}`));
-  return parts.join('');
-}
-
-// ---- Part 3: the fix checklist (the re-audit) ---------------------------------------------------------------------
-
-function checklistPart(d) {
-  const c = d.audit.recreate;
-  if (!c || c.isDummy || !c.items) {
-    return `<h2 id="fix"><span class="chip fix">FIX</span>Fix checklist</h2>${section('fix-none', 'Not available', `<p class="empty">${esc(d.recreate ? 'The recreated site has not been re-audited yet. Run Re-audit in the NEW panel.' : 'Recreate the site first; the fix checklist compares the original with the recreated site.')}</p>`)}`;
-  }
-  const s = c.summary ?? {};
-  const parts = [`<h2 id="fix"><span class="chip fix">FIX</span>Fix checklist<small>original vs recreated${c.stackLabel ? ` · ${esc(c.stackLabel)}` : ''}</small></h2>`];
-  const LABEL = { performance: 'Performance', seo: 'SEO', accessibility: 'Accessibility', bestPractices: 'Best practices' };
-  const cell = (side, k) => {
-    const b = c.scores?.before?.[side]?.[k];
-    const a = c.scores?.after?.[side]?.[k];
-    const delta = a != null && b != null ? ` <b class="${a - b >= 0 ? 'okt' : 'badt'}">${a - b >= 0 ? '+' : ''}${a - b}</b>` : '';
-    return `${pill(b ?? '—', scoreTone(b))} → ${pill(a ?? '—', scoreTone(a))}${delta}`;
-  };
-  parts.push(section('fix-scores', 'Lighthouse, before and after', `${table(['', 'Desktop'], Object.keys(LABEL).map((k) => [esc(LABEL[k]), cell('desktop', k)]))}
-    <div class="chips">${['fixed', 'improved', 'open', 'regressed', 'changed', 'recheck', 'manual', 'na'].filter((k) => s[k]).map((k) => pill(`${STATUS_LABEL[k]} · ${s[k]}`, STATUS_TONE[k])).join('')}${pill(`Passing on both sides · ${s.pass ?? 0}`, 'ok')}</div>
-    <p class="note">${c.scope?.pages?.length ? `${c.scope.pages.length} pages compared` : ''}${c.scope?.outOfScope?.length ? `, ${c.scope.outOfScope.length} original pages were not recreated` : ''}. The recreate is measured on a local preview with simulated throttling: confirm the performance after deploying.</p>`));
-
-  const label = Object.fromEntries((c.categories ?? []).map((x) => [x.id, x.label]));
-  const attention = (c.items ?? []).filter((i) => ['regressed', 'open', 'recheck', 'changed', 'manual'].includes(i.status));
-  if (attention.length) {
-    parts.push(section('fix-open', 'Needs attention', table(['Status', 'Check', 'Area', 'Before → now'], attention.slice(0, 20).map((i) => [
-      status(i.status), `<b>${esc(i.title)}</b>${i.review ? ' <small class="reviewtag">review</small>' : ''}`, esc(label[i.category] ?? i.category), esc(`${i.before?.detail ?? i.before?.status ?? '—'} → ${i.after?.detail ?? i.after?.status ?? '—'}`),
-    ])) + more(attention.length, 20)));
-  }
-  const fixed = (c.items ?? []).filter((i) => i.status === 'fixed' || i.status === 'improved');
-  if (fixed.length) {
-    parts.push(section('fix-done', 'Fixed', `<div class="chips">${fixed.slice(0, 30).map((i) => pill(i.title, 'ok')).join('')}</div>${more(fixed.length, 30)}`, `${fixed.length} checks`));
-  }
-  return parts.join('');
-}
-
-const CSS = `
-:root{--ink:#14142b;--ink2:#34365c;--muted:#6a6e94;--line:#e5e7f3;--soft:#f6f7fc;--brand:#5b3df5;--ok:#0a8f62;--okbg:#e8f8f1;--warn:#b8530b;--warnbg:#fff4e2;--bad:#d81b4a;--badbg:#fff0f3;--info:#2557d6;--infobg:#ecf2ff}
-*{box-sizing:border-box}
-body{margin:0;font:14px/1.55 'Inter','Segoe UI',system-ui,-apple-system,sans-serif;color:var(--ink);background:#eef0f8}
-.mono{font-family:'JetBrains Mono',ui-monospace,Consolas,monospace;font-size:.9em;word-break:break-all}
-main{max-width:980px;margin:0 auto;padding:28px 22px 56px;background:#fff;box-shadow:0 0 0 1px var(--line),0 24px 60px rgba(40,40,100,.08);counter-reset:part}
-header.cover{position:relative;overflow:hidden;margin:-28px -22px 0;padding:34px 40px 30px;color:#fff;background:linear-gradient(135deg,#14142b 0%,#2b2470 55%,#5b3df5 130%)}
-header.cover::before{content:'';position:absolute;left:0;top:0;bottom:0;width:6px;background:linear-gradient(180deg,#8b6cff,#ec4899)}
-header.cover small{opacity:.8;letter-spacing:.16em;text-transform:uppercase;font-weight:700;font-size:11px}
-header.cover h1{margin:8px 0 4px;font-size:32px;letter-spacing:-.025em;font-weight:750}
-header.cover p{margin:0;opacity:.85}
-header.cover .meta{margin-top:18px;display:flex;flex-wrap:wrap;gap:6px 22px;font-size:12px;opacity:.9}
-header.cover .meta b{opacity:.65;font-weight:600;margin-right:6px;text-transform:uppercase;letter-spacing:.08em;font-size:10.5px}
-.band{margin:0 -22px;padding:16px 40px;background:var(--soft);border-bottom:1px solid var(--line)}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
-.band .kpis{margin:0}
-.kpi{border-radius:10px;padding:9px 12px;background:#fff;border:1px solid var(--line);border-top:3px solid var(--line)}
-.kpi span{display:block;font-size:11px;color:var(--muted);font-weight:600}
-.kpi b{display:block;font-size:25px;line-height:1.2;letter-spacing:-.03em}
-.kpi small{color:var(--muted);font-size:11px}
-.kpi.ok{border-top-color:var(--ok)}.kpi.ok b{color:var(--ok)}
-.kpi.warn{border-top-color:#f59e0b}.kpi.warn b{color:var(--warn)}
-.kpi.bad{border-top-color:var(--bad)}.kpi.bad b{color:var(--bad)}
-nav.toc{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 0}
-nav.toc a{padding:3px 12px;border-radius:999px;border:1px solid var(--line);color:var(--ink2);text-decoration:none;font-weight:600;font-size:12px}
-h2{counter-increment:part;counter-reset:sec;display:flex;align-items:baseline;gap:10px;margin:30px 0 12px;padding-bottom:8px;border-bottom:2px solid var(--ink);font-size:20px;letter-spacing:-.02em}
-h2::before{content:counter(part) '.';color:var(--brand);font-weight:800}
-h2 small{margin-left:auto;font-size:11.5px;color:var(--muted);font-weight:500;word-break:break-all}
-h3{counter-increment:sec;display:flex;align-items:baseline;gap:10px;margin:0 0 10px;font-size:14.5px}
-h3::before{content:counter(part) '.' counter(sec);color:var(--brand);font-weight:700;font-size:12.5px}
-h3 small{margin-left:auto;color:var(--muted);font-weight:500;font-size:11.5px;text-align:right}
-h4{margin:0 0 6px;font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}
-.chip{display:inline-block;padding:1px 9px;border-radius:5px;font:700 11px/1.6 'JetBrains Mono',monospace;letter-spacing:.08em;color:#fff;align-self:center}
-.chip.old{background:#0b7bb5}.chip.new{background:var(--brand)}.chip.fix{background:var(--ok)}
-.card{margin:0 0 14px;padding:0 0 12px;border-bottom:1px solid var(--line)}
-.card:last-child{border-bottom:0}
-.sumlist{list-style:none;margin:0;padding:0}
-.sumlist li{position:relative;padding:5px 0 5px 20px}
-.sumlist li::before{content:'';position:absolute;left:2px;top:12px;width:8px;height:8px;border-radius:50%;background:var(--muted)}
-.sumlist li.ok::before{background:var(--ok)}.sumlist li.warn::before{background:#f59e0b}.sumlist li.bad::before{background:var(--bad)}
-.pill{display:inline-block;padding:0 8px;border-radius:5px;font-size:11px;font-weight:700;line-height:1.7;background:var(--soft);color:var(--ink2);border:1px solid var(--line)}
-.pill.ok{background:var(--okbg);color:var(--ok);border-color:#c4ebdb}
-.pill.warn{background:var(--warnbg);color:var(--warn);border-color:#fcdba5}
-.pill.bad{background:var(--badbg);color:var(--bad);border-color:#ffc7d3}
-.pill.info{background:var(--infobg);color:var(--info);border-color:#cbdcff}
-.st{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;white-space:nowrap}
-.st::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--muted)}
-.st.ok{color:var(--ok)}.st.ok::before{background:var(--ok)}
-.st.warn{color:var(--warn)}.st.warn::before{background:#f59e0b}
-.st.bad{color:var(--bad)}.st.bad::before{background:var(--bad)}
-.st.info{color:var(--info)}.st.info::before{background:var(--info)}
-.okt{color:var(--ok);font-weight:700}.badt{color:var(--bad);font-weight:700}
-.tablewrap{overflow-x:auto}
-table{width:100%;border-collapse:collapse;font-size:12.5px}
-th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);padding:6px 8px;background:var(--soft);border-bottom:1px solid var(--line)}
-td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top;word-break:break-word}
-tr:last-child td{border-bottom:0}
-.note{margin:8px 0 0;color:var(--muted);font-size:12px}
-.empty{margin:0;padding:9px 12px;border-radius:8px;background:var(--soft);color:var(--muted)}
-.rings{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px}
-.rings2{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
-.ring{position:relative;display:grid;justify-items:center;width:70px}
-.ring .track{fill:none;stroke:#e9e8fb;stroke-width:3.4}
-.ring .arc{fill:none;stroke-width:3.4;stroke-linecap:round}
-.ring.ok .arc{stroke:var(--ok)}.ring.warn .arc{stroke:#f59e0b}.ring.bad .arc{stroke:var(--bad)}
-.ring b{position:absolute;top:15px;font-size:15px}
-.ring span{font-size:10.5px;color:var(--muted);font-weight:600;text-align:center}
-.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:14px}
-.chart{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#fff}
-.chart h4{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin:0 0 8px}
-.chart h4 small{text-transform:none;letter-spacing:0;font-weight:500;color:var(--muted);font-size:10.5px}
-.donut{display:flex;align-items:center;gap:14px}
-.donut svg{flex:none}
-.dn{font:800 8px 'Inter',sans-serif;fill:var(--ink)}.dl{font:600 2.6px 'Inter',sans-serif;fill:var(--muted)}
-.legend{list-style:none;margin:0;padding:0;font-size:12px;flex:1}
-.legend li{display:flex;align-items:center;gap:7px;padding:2px 0}
-.legend li i{width:9px;height:9px;border-radius:3px;flex:none}
-.legend li b{margin-left:auto}
-.hbars{display:grid;gap:5px}
-.hb{display:grid;grid-template-columns:96px 1fr 26px;align-items:center;gap:8px;font-size:11.5px}
-.hl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink2)}
-.ht{position:relative;height:9px;border-radius:5px;background:#eef0f8}
-.ht i{display:block;height:100%;border-radius:5px;background:var(--muted)}
-.ht u{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--ink);opacity:.45}
-.hb b{text-align:right;font-size:11.5px}
-.i.ok,.ht i.ok,.vt i.ok{background:var(--ok)}.ht i.warn,.vt i.warn{background:#f59e0b}.ht i.bad,.vt i.bad{background:var(--bad)}.ht i.none,.vt i.none{background:#c9cbe0}
-.vbars{position:relative;display:flex;align-items:flex-end;gap:7px;height:118px;padding-top:4px}
-.vbars u{position:absolute;left:0;right:0;border-top:2px dashed rgba(20,20,43,.35);height:0}
-.vc{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;height:100%;justify-content:flex-end}
-.vc b{font-size:10.5px}
-.vt{display:flex;align-items:flex-end;width:100%;height:72px;border-radius:4px 4px 0 0;background:#f3f4fb}
-.vt i{display:block;width:100%;border-radius:4px 4px 0 0}
-.vc em{font-style:normal;font-size:10px;color:var(--muted)}
-.gbars{display:grid;gap:7px}
-.gb{display:grid;grid-template-columns:92px 1fr;align-items:center;gap:8px;font-size:11.5px}
-.gt{display:grid;gap:3px}
-.gt i{display:block;height:10px;border-radius:5px;position:relative;min-width:18px}
-.gt i b{position:absolute;right:5px;top:-1px;font-size:8.5px;line-height:10px;color:#fff}
-.g0{background:#a99bff}.g1{background:var(--brand)}
-.key{display:flex;align-items:center;gap:6px;margin:2px 0 0;color:var(--muted);font-size:10.5px}
-.key i{width:9px;height:9px;border-radius:3px;display:inline-block}
-.key i+*{margin-right:6px}
-.shots{display:flex;gap:10px;align-items:flex-end}
-.sets{display:flex;flex-wrap:wrap;gap:12px 30px}
-figure{margin:0;min-width:0}
-figure img{display:block;width:100%;border-radius:6px;border:1px solid var(--line);box-shadow:0 3px 10px rgba(40,40,100,.12)}
-.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0}
-.warns{margin:0;padding-left:18px;color:var(--warn);font-size:12.5px}
-.warns li{margin:2px 0}
-.reviewtag{background:var(--warnbg);color:var(--warn);border-radius:4px;padding:0 6px;font-weight:700}
-footer{margin-top:26px;padding-top:12px;border-top:1px solid var(--line);color:var(--muted);font-size:11.5px}
-@media print{
-*{-webkit-print-color-adjust:exact;print-color-adjust:exact}
-body{background:#fff;font-size:12px}
-main{max-width:none;padding:0;box-shadow:none}
-header.cover{margin:0;padding:24px 28px 22px}
-header.cover h1{font-size:27px}
-.band{margin:0;padding:12px 28px}
-nav.toc{display:none}
-h2{break-after:avoid;margin:20px 0 9px;font-size:18px}
-h3{break-after:avoid}
-.card{margin-bottom:9px;padding-bottom:9px}
-.tablewrap{overflow:visible}
-table{font-size:11px}
-tr,figure,.kpi,.ring,.pill,.shots,.sets,.empty,.sumlist li,.chart{break-inside:avoid}
-thead{display:table-header-group}
-td,th{padding:4px 7px}
-.kpis{break-inside:avoid}
-}
-@page{size:A4}
-`;
 
 /**
- * @param {Awaited<ReturnType<import('./collect.js').collectReport>>} d
- * @returns {string} the whole HTML document
+ * The "Original as-is" page: the mode, what the checks found on each page, what was left out on purpose, what needs a person,
+ * the JavaScript the copy ships and Lighthouse before and after. It says plainly that this mode delivers the original's code.
  */
-export function renderReportHtml(d) {
-  const a = d.audit;
-  const r = d.recreate;
-  const c = a.recreate;
-  const m = a.scores?.desktop ?? a.scores?.mobile;
-  const kpis = [
-    d.analyzed && kpi('Performance', `${m?.performance ?? '—'}`, scoreTone(m?.performance), 'Lighthouse, desktop'),
-    d.analyzed && kpi('SEO', `${m?.seo ?? '—'}`, scoreTone(m?.seo), 'Lighthouse, desktop'),
-    r?.fidelity && kpi('Fidelity', `${r.fidelity.score ?? '—'}`, fidTone(r.fidelity.score, r.fidelity.threshold), 'recreate vs original'),
-    r?.fidelity?.diff && kpi('Visual difference', `${r.fidelity.diff.score ?? '—'}`, fidTone(r.fidelity.diff.score, r.fidelity.diff.threshold ?? 65), 'recreate vs original'),
-    c?.summary && !c.isDummy && kpi('Fixed', `${c.summary.fixed ?? 0}`, 'ok', `${c.summary.open ?? 0} still open`),
-  ].filter(Boolean).join('');
-  const host = (() => {
-    try {
-      return new URL(d.project.url).host;
-    } catch {
-      return d.project.url;
-    }
-  })();
-  return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(d.project.name)} · audit and recreate report</title>
-<meta name="generator" content="Site Audit Studio"><style>${CSS}</style></head>
-<body><main>
-<header class="cover"><small>Website audit &amp; recreate report</small><h1>${esc(d.project.name)}</h1><p class="mono">${esc(d.project.url)}</p>
-<div class="meta"><span><b>Site</b>${esc(host)}</span><span><b>Date</b>${esc(date(d.generatedAt))}</span><span><b>Analysis</b>${d.analyzed ? esc(date(a.analyzedAt)) : 'not run'}</span><span><b>Recreate</b>${r ? esc(date(r.createdAt)) : 'not run'}</span></div></header>
-${kpis ? `<div class="band"><div class="kpis">${kpis}</div></div>` : ''}
-<nav class="toc"><a href="#summary">Summary</a><a href="#old">Original site</a><a href="#new">Recreated site</a><a href="#fix">Fix checklist</a></nav>
-<h2 id="summary">Summary</h2>
-<section class="card"><ul class="sumlist">${highlights(d).map((h) => `<li class="${h.tone}">${esc(h.text)}</li>`).join('')}</ul></section>
-${glance(d)}
-${snapshot(d)}
-${oldPart(d)}
-${newPart(d)}
-${checklistPart(d)}
-<footer>Prepared with Site Audit Studio for company-owned or authorized websites. Scores come from Lighthouse (simulated throttling), axe and the tool's own checks. The recreated site is measured on a local preview; confirm the performance after deploying. Generated text is marked and should be reviewed. The complete data is in the JSON download.</footer>
-</main></body></html>`;
+function asIsPage(d, f, pageNo, total) {
+  const a = d.recreate.asIs;
+  const stackName = { html: 'Plain HTML', 'react-vite': 'React + Vite', nextjs: 'Next.js', mern: 'MERN' }[a.stack] ?? a.stack;
+  const pages = a.checks?.pages ?? [];
+  const kb = (n) => `${Math.round((n ?? 0) / 1024).toLocaleString('en-US')} KB`;
+  const head = `<header class="minihead">${logoTile(f, d.project.name, 'logo sm')}<span>${esc(d.project.name || hostOf(d.project.url))}</span><em>Original as-is</em></header>`;
+  const mode = card('Mode used', 'Original as-is', `Packaged as ${stackName} · ${pages.length} page${pages.length === 1 ? '' : 's'}`,
+    `<p>This mode delivers the original's own code and animations, saved locally. The code is the original's, not new code in the chosen stack.</p>`
+    + `<p>Pages: ${pages.map((p) => `<span class="mono">${esc(p.path)}</span>`).join(', ') || '—'}</p>`);
+  const rows = pages.map((p) => {
+    const visual = Object.fromEntries((p.visual ?? []).map((v) => [v.width, v.diffPct]));
+    const off = p.offline?.external?.length ?? 0;
+    const err = p.offline?.errors?.length ?? 0;
+    return `<tr><td class="mono">${esc(p.path)}</td><td>${off ? `${off} off the copy` : 'none leave the copy'}</td>`
+      + `<td>${esc(visual[1440] ?? '—')}%</td><td>${esc(visual[390] ?? '—')}%</td>`
+      + `<td>${p.hovers ? `${p.hovers.copy.changed} of ${p.hovers.original.changed}` : '—'}</td>`
+      + `<td>${p.controls ? `${p.controls.copy.visible} of ${p.controls.original.visible} visible` : '—'}</td><td>${err}</td></tr>`;
+  }).join('');
+  const checks = card('Checks', 'What the copy was checked for', 'Cold first visit, visual difference against the original, hovers, controls and console errors.',
+    `<table class="asis"><thead><tr><th>Page</th><th>Cold first visit</th><th>Visual 1440</th><th>Visual 390</th><th>Hovers (copy / original)</th><th>Controls</th><th>Console errors</th></tr></thead><tbody>${rows}</tbody></table>`);
+  const excluded = a.excludedByRule ?? [];
+  const gaps = pages.flatMap((p) => (p.controls?.excludedByRule ?? []).map((c) => `${esc(c.label)} on ${esc(p.path)}`));
+  const left = card('Left out on purpose', 'Excluded by rule', 'Third-party parts that are not the site: trackers, chat widgets, the builder’s editor.',
+    excluded.length || gaps.length
+      ? `<ul>${excluded.length ? `<li>Scripts left out: ${esc(excluded.join(', '))}</li>` : ''}${gaps.map((g) => `<li>${g} (a fixed-position widget whose script is excluded)</li>`).join('')}</ul>`
+      : '<p>Nothing was left out.</p>');
+  const forms = a.needsAPerson?.length ? a.needsAPerson[0].count : 0;
+  const person = card('Needs a person', 'What needs connecting', 'Forms are drawn and checked as on the original; their data is never sent to the original site.',
+    forms
+      ? `<p>${forms} form${forms === 1 ? '' : 's'}: until a server is connected, submitting shows “This form is not connected yet, so nothing was sent.” Set <span class="mono">FORM_ENDPOINT</span> in <span class="mono">sas-forms.json</span> (see the README in the download). No rebuild is needed.</p>`
+      : '<p>No form needs a server.</p>');
+  const lh = a.lighthouse ?? {};
+  const after = lh.after ?? null;
+  const before = lh.before ?? null;
+  const speed = card('Speed and size', 'JavaScript and Lighthouse, desktop', 'The original’s score comes from the project’s Check; the copy’s from one run of this copy.',
+    `<p>JavaScript shipped: ${a.javascript ? `${a.javascript.files} file(s), ${kb(a.javascript.bytes)}, ${kb(a.javascript.gzipBytes)} compressed` : 'not measured'}.</p>`
+    + (after && !lh.error
+      ? `<table class="asis"><thead><tr><th></th><th>Performance</th><th>SEO</th><th>Accessibility</th><th>Best practices</th></tr></thead><tbody>`
+        + `<tr><td>Original</td>${before ? `<td>${esc(before.performance)}</td><td>${esc(before.seo)}</td><td>${esc(before.accessibility)}</td><td>${esc(before.bestPractices)}</td>` : '<td colspan="4">Not measured: run the Check on this site first.</td>'}</tr>`
+        + `<tr><td>Copy</td><td>${esc(after.performance)}</td><td>${esc(after.seo)}</td><td>${esc(after.accessibility)}</td><td>${esc(after.bestPractices)}</td></tr></tbody></table>`
+      : `<p>Lighthouse: ${lh.error ? `not measured (${esc(lh.error)})` : 'not measured'}.</p>`));
+  // The addresses the copy asks its own server for and answers from the original (complete.js): kept, the same as the original,
+  // and the paths that have two sizes (a first visit with no worker asks for each size, and gets the 404 of a missing file).
+  const addr = a.sameOrigin ?? null;
+  const addresses = card('Addresses from the original', 'Requests the copy answers itself', 'The copy asks its own server for some files it did not hold. The original answered them; the copy keeps those answers.',
+    addr === null
+      ? '<p>Not recorded for this copy (it was made before this was kept): make the copy again to see it.</p>'
+      : `<p>${addr.mapped.length} kept from the original; ${addr.sameAsOriginal.length} the original also lacks (the same as the original: still an error).${addr.ambiguous.length ? ` ${addr.ambiguous.length} path${addr.ambiguous.length === 1 ? '' : 's'} with two sizes: each size is its own file.` : ''}</p>`
+      + (addr.mapped.length ? `<table class="asis"><thead><tr><th>Address</th><th>Kept as</th><th>Bare path</th></tr></thead><tbody>${addr.mapped.map((m) => `<tr><td class="mono">${esc(m.path)}</td><td class="mono">${esc(m.file)}</td><td>${m.bare ? 'yes' : 'no'}</td></tr>`).join('')}</tbody></table>` : '')
+      + (addr.sameAsOriginal.length ? `<ul>${addr.sameAsOriginal.map((x) => `<li><span class="mono">${esc(x.path)}</span>: the same as the original (${esc(x.reason)})</li>`).join('')}</ul>` : ''));
+  return `${head}<div class="body" id="as-is">${mode}${checks}${left}${addresses}${person}${speed}</div>${footer(d, pageNo, total)}`;
 }
 
-/** A file name for the download: <host>-audit-report-<date>.<ext> */
+// ---- Styles -----------------------------------------------------------------------------------------------------
+
+const CSS = `
+table.asis { width: 100%; border-collapse: collapse; font-size: 11px; }
+table.asis th, table.asis td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+@page{size:A4;margin:0}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:#e9edf2;color:${C.ink};font:400 11px/1.45 'Segoe UI','Inter',system-ui,-apple-system,Arial,sans-serif;font-variant-numeric:tabular-nums;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.page{width:210mm;height:297mm;margin:24px auto;background:#fff;position:relative;overflow:hidden;box-shadow:0 2px 14px rgba(16,24,40,.12);display:flex;flex-direction:column}
+@media print{body{background:#fff}.page{margin:0;box-shadow:none;break-after:page}.page:last-child{break-after:auto}}
+@media screen and (max-width:820px){.page{width:auto;height:auto;margin:0 0 16px;overflow:visible}}
+h1,h2,h3,p{margin:0}
+.band{background:${C.ink};color:#fff;padding:30px 40px 28px;display:flex;justify-content:space-between;align-items:center;gap:24px;border-bottom:4px solid ${C.copy}}
+.brand{display:flex;align-items:center;gap:16px;min-width:0}
+.brand h1{font-size:24px;font-weight:700;letter-spacing:-.01em;line-height:1.15;overflow-wrap:anywhere}
+.addr{color:#c3cad5;font-size:11.5px;margin-top:3px;overflow-wrap:anywhere}
+.logo{flex:none;width:58px;height:58px;border-radius:14px;background:#fff;display:grid;place-items:center;overflow:hidden}
+.logo img{width:40px;height:40px;object-fit:contain}
+.logo.mono{background:${C.copy};color:#fff;font-size:28px;font-weight:700}
+.logo.sm{width:22px;height:22px;border-radius:6px;border:1px solid #e4e7ec}
+.logo.sm img{width:16px;height:16px}
+.logo.sm.mono{font-size:12px;border:0}
+.meta{text-align:right;flex:none;color:#c3cad5;font-size:11.5px}
+.kicker{color:#fff;font-size:10px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;margin-bottom:4px}
+.body{flex:1;padding:28px 40px 0;display:flex;flex-direction:column;gap:18px;min-height:0}
+.verdict{font-size:21px;line-height:1.3;font-weight:650;letter-spacing:-.01em;color:${C.ink};max-width:660px}
+.sub{color:${C.muted};font-size:11px;margin-top:-6px}
+.card{border:1px solid #e4e7ec;border-radius:12px;padding:14px 16px;background:#fff;break-inside:avoid}
+.card>header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:6px}
+.eyebrow{color:${C.copy};font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}
+.card h3{font-size:13.5px;font-weight:650;margin-top:2px;letter-spacing:-.005em}
+.cap{color:${C.muted};font-size:10px;margin:0 0 8px}
+.cap.foot{margin:6px 0 0;padding-top:8px;border-top:1px solid #eef1f5}
+.key{display:flex;gap:14px;color:${C.ink2};font-size:10px;align-items:center;white-space:nowrap}
+.card.wide .key{justify-content:flex-end;margin:-26px 0 4px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.sw.copy{background:${C.copy}}.sw.orig{background:${C.orig}}
+.g-row{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.g-cell{text-align:center}
+.gauge{width:150px;height:131px;display:block;margin:0 auto}
+.g-num{font-size:30px;font-weight:700;fill:${C.ink};letter-spacing:-.02em}
+.g-of{font-size:9px;fill:${C.muted}}
+.g-title{font-size:12px;font-weight:650;margin-top:-6px}
+.g-line{display:flex;justify-content:center;gap:8px;align-items:center;margin-top:4px;font-size:10px}
+.g-desk{color:${C.muted};font-size:9.5px;margin-top:2px}
+.was{color:${C.muted}}
+.chg{font-weight:650;padding:1px 7px;border-radius:999px;border:1px solid}
+.chg.ok{color:${C.ok};background:#ecfdf3;border-color:#abefc6}
+.chg.bad{color:${C.bad};background:#fef3f2;border-color:#fecdca}
+.chg.warn{color:#b54708;background:#fffaeb;border-color:#fedf89}
+.chg.none{color:${C.ink2};background:#f2f4f7;border-color:#e4e7ec}
+.tiles{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:10px}
+.tile{border:1px solid #e4e7ec;border-radius:12px;padding:14px 16px;background:#f8fafc}
+.t-val{font-size:28px;font-weight:700;letter-spacing:-.02em;line-height:1.05}
+.t-val small{font-size:15px;font-weight:650;margin-left:1px}
+.t-lab{font-size:10.5px;font-weight:600;color:${C.ink2};margin-top:4px;display:flex;align-items:center;gap:5px}
+.t-note{font-size:9.5px;color:${C.muted};margin-top:1px}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;flex:none}
+.dot.ok{background:${C.ok}}.dot.warn{background:${C.warn}}.dot.bad{background:${C.bad}}.dot.info{background:${C.info}}
+.shots{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.shots.one{grid-template-columns:1fr}
+.duo{display:grid;grid-template-columns:1.2fr 1fr;gap:28px;align-items:end}
+.duo .nextbox{margin-top:0;border-top:0;border-left:1px solid #e4e7ec;padding:0 0 10px 22px}
+.nextbox.flat{margin-top:4px}
+.shot{margin:0}
+.shot figcaption{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;font-size:10px;color:${C.muted};padding-right:46px}
+.shot figcaption b{color:${C.ink};font-size:11px}
+.stage{position:relative;padding-right:46px;padding-bottom:10px}
+.browser{border:1px solid #d0d5dd;border-radius:9px;overflow:hidden;background:#f2f4f7}
+.browser .bar{height:14px;display:flex;gap:4px;align-items:center;padding:0 7px;border-bottom:1px solid #e4e7ec}
+.browser .bar i{width:5px;height:5px;border-radius:50%;background:#d0d5dd}
+.browser img{display:block;width:100%;aspect-ratio:16/10;object-fit:cover;object-position:top}
+.noimg{aspect-ratio:16/10;display:grid;place-items:center;color:${C.muted}}
+.phone{position:absolute;right:0;bottom:0;width:70px;border:3px solid ${C.ink};border-radius:12px;overflow:hidden;background:${C.ink};box-shadow:0 4px 12px rgba(16,24,40,.18)}
+.phone img{display:block;width:100%;aspect-ratio:375/760;object-fit:cover;object-position:top;border-radius:8px}
+.nextbox{border-top:1px solid #e4e7ec;padding-top:14px;margin-top:auto}
+.next{margin:6px 0 0;padding:0;list-style:none;counter-reset:n;display:grid;gap:5px}
+.next li{counter-increment:n;display:flex;gap:9px;font-size:11px;color:${C.ink2}}
+.next li::before{content:counter(n);flex:none;width:17px;height:17px;border-radius:50%;background:#fff7ed;color:${C.copy};font-weight:700;font-size:9.5px;display:grid;place-items:center;border:1px solid #fdba74}
+.track{list-style:none;margin:8px 0;padding:0;display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.track li{border:1px dashed #d0d5dd;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:6px}
+.track .n{width:24px;height:24px;border-radius:50%;background:#f2f4f7;display:grid;place-items:center;font-weight:700;color:${C.ink2}}
+.track small{color:${C.muted};font-size:10.5px}.track b{font-size:13px}.track em{font-style:normal;color:${C.muted}}
+.minihead{display:flex;align-items:center;gap:8px;padding:18px 40px 12px;border-bottom:1px solid #e4e7ec;font-weight:650;font-size:11.5px}
+.minihead em{margin-left:auto;font-style:normal;color:${C.copy};font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}
+.chart{display:block;width:100%;height:auto}
+.ax{font-size:9px;fill:${C.muted}}
+.ax.good{fill:${C.ok};font-weight:600}
+.ax-h{font-size:10.5px;font-weight:650;fill:${C.ink}}
+.ax-p{font-size:9.5px;fill:${C.ink2}}
+.v-o{font-size:9px;fill:${C.muted};font-weight:600;paint-order:stroke;stroke:#fff;stroke-width:5px;stroke-linejoin:round}
+.v-n{font-size:9.5px;fill:${C.ink};font-weight:700;paint-order:stroke;stroke:#fff;stroke-width:5px;stroke-linejoin:round}
+.row{display:grid;gap:14px}
+.row.two{grid-template-columns:1fr 1.15fr}
+.row.split{grid-template-columns:1.15fr 1fr;align-items:start}
+.stack{display:flex;flex-direction:column;gap:14px}
+.donut-wrap{display:flex;align-items:center;gap:14px}
+.donut{width:128px;height:128px;flex:none}
+.d-num{font-size:24px;font-weight:700;fill:${C.ink}}
+.d-of{font-size:9px;fill:${C.muted}}
+.legend{list-style:none;margin:0;padding:0;flex:1;display:grid;gap:4px}
+.legend li{display:grid;grid-template-columns:10px 1fr auto 32px;gap:7px;align-items:center;font-size:10.5px;padding-bottom:3px;border-bottom:1px solid #f2f4f7}
+.legend i{width:10px;height:10px;border-radius:3px}
+.legend b{font-weight:700}
+.legend em{font-style:normal;color:${C.muted};text-align:right;font-size:9.5px}
+.speed{display:grid;gap:9px}
+.sp-row{display:grid;grid-template-columns:128px 1fr;gap:10px;align-items:center}
+.sp-lab b{display:block;font-size:10.5px;font-weight:600}
+.sp-lab small{font-size:9px;color:${C.muted}}
+.sp-svg{width:100%;height:auto;display:block}
+.items{list-style:none;margin:0;padding:0;display:grid;gap:5px}
+.items li{display:flex;gap:8px;align-items:flex-start;font-size:10.5px}
+.items b{font-weight:600}
+.items small{display:block;color:${C.muted};font-size:9.5px}
+.mk{flex:none;width:15px;height:15px;border-radius:50%;display:grid;place-items:center;font-style:normal;font-size:9px;font-weight:700;margin-top:1px}
+.mk.ok{background:#ecfdf3;color:${C.ok}}.mk.warn{background:#fffaeb;color:#b54708}.mk.bad{background:#fef3f2;color:${C.bad}}.mk.info{background:#eff8ff;color:${C.info}}
+.more{color:${C.muted};font-size:9.5px;margin:6px 0 0 23px}
+.note{color:${C.muted};font-size:9.5px;margin-top:6px}
+.empty{color:${C.muted}}
+.end{color:${C.muted};font-size:10px;text-align:center;margin-top:auto;padding-bottom:4px}
+.foot-line{display:flex;justify-content:space-between;padding:10px 0 16px;color:${C.muted};font-size:8.5px;border-top:1px solid #eef1f5;margin:12px 40px 0}
+`;
+
+// ---- The document -------------------------------------------------------------------------------------------------
+
+/**
+ * @param {{ generatedAt: string, project: object, audit: object, analyzed: boolean, recreate: object|null, images?: object }} d
+ * @returns {string}
+ */
+export function renderReportHtml(d) {
+  const f = facts(d);
+  const asIs = Boolean(d.recreate?.asIs);
+  const total = (f.a ? 2 : 1) + (asIs ? 1 : 0);
+  const pages = [cover(d, f, total)];
+  if (f.a) pages.push(analytics(d, f, 2, total));
+  if (asIs) pages.push(asIsPage(d, f, total, total));
+  const title = `${d.project.name || hostOf(d.project.url)} · Website report`;
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>${esc(title)}</title>
+<style>${CSS}</style>
+</head>
+<body>
+${pages.map((p, i) => `<div class="page" id="page-${i + 1}">${p}</div>`).join('\n')}
+</body>
+</html>`;
+}
+
 export function reportFileName(project, ext) {
   let host = 'site';
   try {

@@ -6,7 +6,8 @@ import { access, cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { captureSweep, SWEEP_WIDTHS, sweepView } from '../src/recreate/capture/sweep.js';
+import { captureSweep, SWEEP_WIDTHS, SWEEP_WIDTHS_MAX, sweepView, sweepWidths } from '../src/recreate/capture/sweep.js';
+import { specsFor } from '../src/recreate/verify/refine.js';
 import { applyFluidType, fluidValue } from '../src/recreate/ir/fluid.js';
 import { responsiveStage } from '../src/recreate/responsive.js';
 import { sweepStage } from '../src/recreate/sweep.js';
@@ -251,4 +252,94 @@ test('fluid type with the laptop view: all four captured values must be on the l
   const out = applyFluidType(rules, { laptop: true });
   assert.equal(out.changed, 1);
   assert.deepEqual(Object.keys(out.rules[0].parts), ['base'], 'every stepped override it replaces is gone');
+});
+
+test('several pages are checked side by side when the memory allows; the report keeps them in page order', async () => {
+  const dir = await tempDir();
+  const original = path.join(dir, 'original');
+  await mkdir(path.join(original, 'about'), { recursive: true });
+  await mkdir(path.join(original, 'team'), { recursive: true });
+  await writeFile(path.join(original, 's.css'), CSS('max-width:900px;margin:0 auto;padding:16px'));
+  for (const p of ['index.html', 'about/index.html', 'team/index.html']) await writeFile(path.join(original, p), PAGE);
+  await cp(original, path.join(dir, 'dist'), { recursive: true });
+  const live = await startSiteServer(original);
+  try {
+    const ctx = {
+      dir,
+      netPolicy: userPolicy(),
+      signal: new AbortController().signal,
+      stepDeadline: Date.now() + 180000,
+      progress: () => {},
+      pages: [
+        { url: `${live.origin}/`, path: '/', outPath: 'index.html', slug: 'home' },
+        { url: `${live.origin}/about/`, path: '/about/', outPath: 'about/index.html', slug: 'about' },
+        { url: `${live.origin}/team/`, path: '/team/', outPath: 'team/index.html', slug: 'team' },
+      ],
+      report: { outputs: { html: { status: 'ready', dir: 'dist' } }, warnings: [] },
+    };
+    await withNetPolicy(userPolicy(), () => sweepStage(ctx, { widths: [320, 900] }));
+    const started = Date.now();
+    await responsiveStage(ctx);
+    console.log(`# 3 pages × 2 widths checked in ${Date.now() - started} ms`);
+    const r = ctx.report.responsive;
+    assert.equal(r.status, 'done', JSON.stringify(r));
+    assert.deepEqual(r.pages.map((p) => p.path), ['/', '/about/', '/team/']);
+    for (const p of r.pages) assert.ok(p.score >= 95, `${p.path} ${p.score}`);
+    assert.deepEqual(ctx.report.warnings, []);
+  } finally {
+    await live.close();
+  }
+});
+
+test('the sweep adds the widths either side of a boundary the site declares itself', () => {
+  // Measured on flexibench: it changes layout at 640, which falls between the fixed widths 600 and 900, so no
+  // swept width could tell which band 640-767 belonged to. refine judges breakpoints on these widths, so a
+  // boundary it cannot see is one it cannot get right - 12% of the page height across that band.
+  const bounds = [
+    { value: 639.98, rules: 40 }, { value: 767.98, rules: 120 },
+    { value: 1023.98, rules: 90 }, { value: 1279.98, rules: 30 },
+  ];
+  assert.deepEqual(sweepWidths(bounds), [320, 480, 600, 639, 640, 767, 768, 900, 1024, 1280, 1920]);
+  // 1023.98 and 1279.98 add nothing: 1024 and 1280 are already there.
+  assert.deepEqual(sweepWidths([{ value: 1023.98, rules: 90 }]), SWEEP_WIDTHS);
+  // A site that declares nothing sweeps exactly what it always did.
+  assert.deepEqual(sweepWidths([]), SWEEP_WIDTHS);
+  // Nonsense is ignored rather than swept: outside the range, or not a number.
+  assert.deepEqual(sweepWidths([{ value: 40 }, { value: 4000 }, { value: NaN }, null]), SWEEP_WIDTHS);
+  // However many a site declares, the sweep stays affordable.
+  const many = Array.from({ length: 30 }, (_, i) => ({ value: 350 + i * 17, rules: i }));
+  assert.ok(sweepWidths(many).length <= SWEEP_WIDTHS_MAX, `${sweepWidths(many).length} widths`);
+  assert.ok(sweepWidths(many).every((w, i, a) => i === 0 || w > a[i - 1]), 'ascending and deduped');
+});
+
+test('refine offers the site\'s own boundaries and judges them where they differ', () => {
+  const swept = [320, 480, 600, 639, 640, 767, 768, 900, 1024, 1280, 1920];
+  const bounds = [{ value: 639.98, rules: 40 }, { value: 767.98, rules: 120 }, { value: 1023.98, rules: 90 }];
+  const got = Object.fromEntries(specsFor(true, bounds, swept).map(([k, w, alt]) => [k, { w, alt }]));
+
+  // The value the copy needed and could not try before.
+  assert.ok(got.mobile.alt.includes(639.98), JSON.stringify(got.mobile.alt));
+  // And the widths that tell 639.98 from 767.98 apart: ones inside the band in question.
+  assert.ok(got.mobile.w.includes(640) && got.mobile.w.includes(767), JSON.stringify(got.mobile.w));
+  assert.ok(got.mobile.w.includes(480) && got.mobile.w.includes(600), 'the widths it already judged on stay');
+
+  // A width the original was never captured at is never judged on, whatever the site declares.
+  const narrow = specsFor(true, bounds, [320, 480, 600, 900, 1024, 1280, 1920]);
+  const mobile = narrow.find(([k]) => k === 'mobile');
+  assert.deepEqual(mobile[1], [480, 600], 'nothing to judge 639.98 on, so nothing is claimed');
+  assert.ok(mobile[2].includes(639.98), 'but it is still offered: another page may have swept that width');
+
+  // A site that declares nothing behaves exactly as it did before this change.
+  assert.deepEqual(specsFor(true, [], SWEEP_WIDTHS), [
+    ['laptop', [1280], [1279.98, 1439.98]],
+    ['tablet', [900], [899.98, 1023.98]],
+    ['mobile', [480, 600], [479.98, 599.98, 767.98]],
+  ]);
+  assert.deepEqual(specsFor(false, [], SWEEP_WIDTHS), [
+    ['tablet', [900, 1024, 1280], [899.98, 1023.98, 1279.98, 1439.98]],
+    ['mobile', [480, 600], [479.98, 599.98, 767.98]],
+  ]);
+  // A boundary is only a candidate for the breakpoint whose range it falls in.
+  const laptopSpec = specsFor(true, bounds, swept).find(([k]) => k === 'laptop');
+  assert.deepEqual(laptopSpec[2], [1279.98, 1439.98], 'a 639.98 is no candidate for the laptop breakpoint');
 });

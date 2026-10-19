@@ -16,6 +16,8 @@
 // - containers taller than their content keep a min-height.
 import { BLOCK_TAGS, deepText, displayOf, isElement, isText, VIEW_IDS } from './tree.js';
 import { ClassNamer, nameHint } from './names.js';
+import { fluidType, fluidTypeAt } from './typography.js';
+import { VIEW_WIDTHS } from '../views.js';
 
 // Must match the inherited set of capture/snapshot.js.
 export const INHERITED = new Set([
@@ -59,6 +61,9 @@ const UA_MARGIN_X = { blockquote: [40, 40], figure: [40, 40], dd: [40, 0], body:
 const URL_PROPS = ['background-image', 'mask-image', '-webkit-mask-image', 'list-style-image', 'border-image-source'];
 // 'text-decoration' is a shorthand Chrome also lists; the captured longhands carry the same information.
 const DROP = new Set(['will-change', 'text-decoration']);
+// An exact copy keeps will-change: it decides whether an element gets its own compositing layer, and text in one is
+// rasterised differently. 'text-decoration' stays dropped either way - it is a shorthand whose longhands are kept.
+const DROP_EXACT = new Set(['text-decoration']);
 const FORM_CONTROL = new Set(['input', 'select', 'textarea']);
 // Tags whose browser default is border-box (so a missing box-sizing diff means border-box).
 const UA_BORDER_BOX = new Set(['button', 'select', 'meter', 'progress']);
@@ -66,6 +71,10 @@ const BORDER_BOX_INPUT = /^(button|submit|reset|image|checkbox|radio|color|file|
 
 export const px = (value) => (typeof value === 'string' && /^-?[\d.]+px$/.test(value) ? parseFloat(value) : null);
 const num = (value, dflt = 0) => px(value) ?? dflt;
+// Two decimals - the precision the capture keeps and the exact comparison grades at. These numbers go out as CSS,
+// so rounding them to whole pixels here was the last of three roundings between the browser and the stylesheet: one
+// of three columns in a 1000 px row measured 333.33, was stored as 333 and written back as 333px, and the copy was
+// told to be a third of a pixel narrower than the original it was copying.
 const round = (n) => Math.round(n * 100) / 100;
 export const pct = (ratio) => `${round(ratio * 100)}%`;
 
@@ -97,10 +106,12 @@ const uaBorderBox = (node) => UA_BORDER_BOX.has(node.tag) || (node.tag === 'inpu
  * element: the same with border-box, minus padding and border with content-box.
  */
 function sizer(node, s) {
-  if ((s['box-sizing'] ?? (uaBorderBox(node) ? 'border-box' : 'content-box')) === 'border-box') return { w: (w) => w, h: (h) => h };
+  // Two decimals on the way out: these numbers go straight into CSS, and subtracting fractional padding from a
+  // fractional width leaves float noise (333.33 - 16 is 317.32999999999998) that would be written as it stands.
+  if ((s['box-sizing'] ?? (uaBorderBox(node) ? 'border-box' : 'content-box')) === 'border-box') return { w: round, h: round };
   const dx = num(s['padding-left'], UA_PADDING_LEFT[node.tag] ?? 0) + num(s['padding-right']) + num(s['border-left-width']) + num(s['border-right-width']);
   const dy = num(s['padding-top']) + num(s['padding-bottom']) + num(s['border-top-width']) + num(s['border-bottom-width']);
-  return { w: (w) => Math.max(0, w - dx), h: (h) => Math.max(0, h - dy) };
+  return { w: (w) => round(Math.max(0, w - dx)), h: (h) => round(Math.max(0, h - dy)) };
 }
 
 const isTranslateOnly = (t) => !t || t === 'none' || /^matrix\(1, 0, 0, 1, [-\d.e]+, [-\d.e]+\)$/.test(t);
@@ -118,10 +129,40 @@ function gridTracks(value, contentW, gap) {
   return tracks.map((t) => `minmax(0, ${round(t / min)}fr)`).join(' ');
 }
 
+// The width of one column of a grid (its captured px tracks, or n equal tracks of repeat(n, …) / 1fr lists), or null when
+// the columns differ in width (the item's own column is then not known).
+function gridColumnWidth(pStyle, contentW) {
+  const value = String(pStyle['grid-template-columns'] ?? '').trim();
+  if (!value || value === 'none' || value.includes('[')) return null;
+  const gap = num(pStyle['column-gap']);
+  const rep = /^repeat\(\s*(\d+)\s*,\s*(minmax\(\s*0(px)?\s*,\s*1fr\s*\)|1fr)\s*\)$/.exec(value);
+  let tracks;
+  if (rep) tracks = Array(Number(rep[1])).fill(null);
+  else {
+    tracks = value.split(/\s+(?![^(]*\))/);
+    const pxs = tracks.map(px);
+    if (pxs.every((t) => t != null)) return pxs.every((t) => Math.abs(t - pxs[0]) <= 1) ? pxs[0] : null;
+    if (!tracks.every((t) => /^(1fr|minmax\(\s*0(px)?\s*,\s*1fr\s*\))$/.test(t))) return null;
+  }
+  const n = tracks.length;
+  return n > 0 && contentW > 0 ? (contentW - gap * (n - 1)) / n : null;
+}
+
 // Badges, chips, labels and icon buttons: small, and narrower than their parent.
 const isSmallBox = (w, h, ratio) => w <= 400 && h <= 200 && (ratio == null || ratio < 0.95);
 
 const lineHeightPx = (fontSize, lineHeight) => (!lineHeight || lineHeight === 'normal' ? fontSize * 1.2 : px(lineHeight) ?? parseFloat(lineHeight) * fontSize);
+
+// An inherited property of `node` in view `v`: its own captured value, else the nearest ancestor's (captured styles are
+// diffs against the parent for inherited properties).
+const inheritedValue = (node, chain, v, prop) => {
+  for (const n of [node, ...[...chain].reverse()]) {
+    const value = n.views?.[v]?.style?.[prop];
+    if (value != null) return value;
+  }
+  return null;
+};
+const inheritedPx = (node, chain, v, prop, dflt) => px(inheritedValue(node, chain, v, prop)) ?? dflt;
 
 // Height of the content box: padding and borders are not lines of text (a 40 px button with 14 px
 // text is one line).
@@ -156,6 +197,15 @@ export function wrapsText(node, v, chain = []) {
  * Width of the containing block of an absolutely positioned (or fixed) box in view `v`: the viewport for a fixed box
  * and when no ancestor is positioned, else the padding box of the nearest positioned ancestor.
  */
+/** Whether chain[pi] (the parent) is an item of a flex or grid container in view `v` (ancestors with display: contents skipped). */
+function isFlexOrGridItem(chain, pi, v) {
+  let gi = pi - 1;
+  while (gi > 0 && chain[gi].views[v] && displayOf(chain[gi], v) === 'contents') gi--;
+  const g = chain[gi];
+  if (!g?.views[v]) return false;
+  return /flex|grid/.test(g.views[v].style.display ?? displayOf(g, v));
+}
+
 function containingWidth(chain, v, position) {
   const viewport = chain[0]?.views[v]?.rect[2] ?? 0;
   if (position === 'fixed') return viewport;
@@ -170,10 +220,207 @@ function containingWidth(chain, v, position) {
 }
 
 /**
+ * Height of the containing block of an absolutely positioned (or fixed) box in view `v`, at the captured window height
+ * and at the taller one of the window-height probe (capture/viewport.js): [captured, probed]. The window itself when no
+ * ancestor is positioned (`windowHeights`, null when unknown).
+ */
+function containingHeights(chain, v, position, windowHeights) {
+  if (position !== 'fixed') {
+    for (let i = chain.length - 1; i > 0; i--) {
+      const d = chain[i].views[v];
+      if (!d || d.hidden) continue;
+      if (/^(relative|absolute|fixed|sticky)$/.test(d.style.position ?? '')) {
+        const borders = num(d.style['border-top-width']) + num(d.style['border-bottom-width']);
+        const [a, b] = d.vp?.h ?? [d.rect[3], d.rect[3]];
+        return [a - borders, b - borders];
+      }
+    }
+  }
+  return windowHeights;
+}
+
+/**
+ * A length that follows the window height: `a` at window height h1, `b` at h2 → `Ndvh` or `calc(Ndvh ± Cpx)`.
+ * Null when the change is not a steady share of the window (content that merely grew).
+ */
+export function followWindow(a, b, [h1, h2]) {
+  const k = (b - a) / (h2 - h1);
+  if (!(k >= 0.05 && k <= 2)) return null;
+  const share = Math.round(k * 1000) / 10;
+  const c = a - (share / 100) * h1;
+  if (Math.abs(b - ((share / 100) * h2 + c)) > 2) return null;
+  const unit = `${share}dvh`;
+  return Math.abs(c) <= 1.5 ? unit : `calc(${unit} ${c < 0 ? '-' : '+'} ${round(Math.abs(c))}px)`;
+}
+
+const TRANSLATE = /^matrix\(1, 0, 0, 1, ([-\d.e]+), ([-\d.e]+)\)$/;
+
+/**
+ * Screen-size-independent sizes and offsets (applied last, over the px values above). A capture reads everything in px
+ * at one window size, so a full-screen hero (min-height: 100vh) came out as 900 px and a box centred with
+ * `top: 50%; left: 50%; transform: translate(-50%, -50%)` as `top: 450px; left: 720px`, right on a 1440 × 900 screen
+ * only. Two kinds of evidence, both general:
+ *   - the centring idiom: an inset at half the containing block with a translate of minus half the own size;
+ *   - the window-height probe (`d.vp`): what changed when the window got taller - a min-height or height that is a
+ *     share of the window becomes dvh, an inset that is a share of its containing block becomes %, an inset that did
+ *     not move is the anchor, and a box held by two fixed insets gets no px height.
+ */
+export function viewportStyle(style, node, v, chain) {
+  const d = node.views[v];
+  const position = d.style.position ?? 'static';
+  const abs = position === 'absolute' || position === 'fixed';
+  const [, , w, h] = d.rect;
+  const size = sizer(node, d.style);
+  const vp = d.vp;
+
+  if (abs && !REPLACED.has(node.tag)) {
+    const m = TRANSLATE.exec(d.style.transform ?? '');
+    if (m) {
+      const [tx, ty] = [parseFloat(m[1]), parseFloat(m[2])];
+      const cbW = containingWidth(chain, v, position);
+      const cbH = containingHeights(chain, v, position, vp?.vh ?? null)?.[0] ?? 0;
+      const left = px(d.style.left);
+      const top = px(d.style.top);
+      const centreX = left != null && cbW > 0 && Math.abs(left - cbW / 2) <= 1 && w > 0 && Math.abs(tx + w / 2) <= 1;
+      const centreY = top != null && cbH > 0 && h > 0 && Math.abs(top - cbH / 2) <= 1 && Math.abs(ty + h / 2) <= 1;
+      if (centreX) {
+        style.left = '50%';
+        delete style.right;
+        // Without the right inset the box would shrink to its content in the room right of the middle: it keeps its
+        // width (100 % when it sits at its max-width, a capped full width; else the px, never wider than the room).
+        if (!style.width && w > 0) {
+          const maxW = px(style['max-width']);
+          if (maxW != null && Math.abs(maxW - size.w(w)) <= 1) style.width = '100%';
+          else {
+            // One line of text (a centred message, a badge): as wide as its text, never a px width a slightly wider
+            // rendering of the same text would wrap in.
+            const oneLine = deepText(node).trim() && !wrapsText(node, v, chain);
+            if (!oneLine) {
+              // Rounded up on purpose: a width cut to the pixel wraps a slightly wider rendering of the same text.
+              const written = Math.ceil(size.w(w));
+              style.width = `${written}px`;
+              askedFor(node, v, 'w', 0, written - size.w(w));
+            } else style.width = 'max-content';
+            style['max-width'] ??= '100%';
+          }
+        }
+      }
+      if (centreY) {
+        style.top = '50%';
+        delete style.bottom;
+      }
+      if (centreX || centreY) style.transform = `translate(${centreX ? '-50%' : `${round(tx)}px`}, ${centreY ? '-50%' : `${round(ty)}px`})`;
+    }
+  }
+
+  if (!vp) return style;
+  const [h1, h2] = vp.vh;
+  const heightChanged = Math.abs(vp.h[0] - vp.h[1]) > 1.5;
+
+  if (abs && vp.top && vp.bottom && style.top !== '50%') {
+    const cb = containingHeights(chain, v, position, vp.vh) ?? [0, 0];
+    const kind = ([a, b]) => {
+      if (a == null || b == null) return null;
+      if (Math.abs(a - b) <= 1) return { value: `${round(a)}px`, stable: true };
+      if (cb[0] > 0 && cb[1] > 0 && Math.abs(cb[0] - cb[1]) > 1.5 && Math.abs(a / cb[0] - b / cb[1]) <= 0.003) return { value: pct(a / cb[0]) };
+      return null;
+    };
+    const t = kind(vp.top);
+    const b = kind(vp.bottom);
+    if (t?.stable && b?.stable && heightChanged) {
+      // Held by both insets: the height comes from them, on every screen.
+      style.top = t.value;
+      style.bottom = b.value;
+      if (px(style.height) != null) delete style.height;
+    } else {
+      const anchor = t?.stable ? ['top', t] : b?.stable ? ['bottom', b] : t ? ['top', t] : b ? ['bottom', b] : null;
+      if (anchor) {
+        style[anchor[0]] = anchor[1].value;
+        delete style[anchor[0] === 'top' ? 'bottom' : 'top'];
+      }
+    }
+  }
+
+  // "The window, but never less than N px" (capture/viewport.js floorOf): the floor read at a shorter window.
+  const floored = (value) => {
+    const floor = vp.floor != null ? round(size.h(vp.floor)) : null;
+    return value && floor > 0 ? `max(${floor}px, ${value})` : value;
+  };
+  if (vp.mh) {
+    const value = floored(followWindow(vp.mh[0], vp.mh[1], [h1, h2]));
+    if (value) {
+      style['min-height'] = value;
+      // The px height the capture guessed for a box without in-flow content would cap it at the captured screen.
+      if (px(style.height) != null) delete style.height;
+    }
+  } else if (heightChanged && !(abs && style.top && style.bottom && style.height == null)) {
+    const value = floored(followWindow(size.h(vp.h[0]), size.h(vp.h[1]), [h1, h2]));
+    if (value) {
+      if (px(style.height) != null) style.height = value;
+      if (px(style['min-height']) != null) style['min-height'] = value;
+    }
+  }
+  return style;
+}
+
+// Properties that make the sizing hints (@w / @rw / @fw / @cw) pointless when a correction sets them directly.
+const SIZED = ['width', 'max-width', 'min-width', 'flex'];
+
+/**
+ * Fluid text declarations of a node in view `v` (capture/typography.js probes the desktop view only): the desktop's fluid
+ * values, and in a narrower view the ones that give that view's captured px at its width (ir/typography.js fluidTypeAt).
+ */
+function fluidDecls(node, v) {
+  const d = node.views[v];
+  if (v === 'desktop') return d?.ty ? fluidType(d.ty) : {};
+  const ty = node.views.desktop?.ty;
+  return ty && d ? fluidTypeAt(ty, VIEW_WIDTHS[v], d.style) : {};
+}
+
+/**
  * The declarations of one node in one view, with sizing hints (@w, @rw, @fw) that are resolved
  * across views afterwards.
  */
+/**
+ * Slack the copy asks for on purpose, recorded on the node so the exact comparison can expect it. A width cut to
+ * the pixel wraps the same label onto a second line, and a minimum set to the pixel lets two boxes sharing a line
+ * overflow it - so a text width is written a pixel wide and a minimum a pixel narrow, deliberately. Until this was
+ * recorded, every such box measured about a pixel from the original and was reported as a defect on every run, at
+ * every width, by construction.
+ * @param {object} node  @param {string} v  @param {'w'|'h'} axis  @param {number} lo  @param {number} hi
+ */
+function askedFor(node, v, axis, lo, hi) {
+  const view = ((node.slack ??= {})[v] ??= {});
+  const [l, h] = view[axis] ?? [0, 0];
+  view[axis] = [Math.min(l, lo), Math.max(h, hi)];
+}
+
+/** A length the copy decided, as opposed to one the content decides (`auto`, `fit-content`, `max-content`). */
+const definiteLength = (value) => value != null && /^(-?[0-9.]+(px|%|r?em|v[hwib]|ch|ex)$|calc[(]|clamp[(]|min[(]|max[(])/.test(String(value).trim());
+
+/**
+ * Which of a box's two sizes the copy wrote itself, per view: 'wh' both, 'w' or 'h' one, null neither. The exact
+ * comparison holds a box it wrote both of to a pixel, and puts the rest - boxes as big as the text inside them -
+ * under a reported budget, because no declaration the copy can write changes how a font shapes a string.
+ * `min-height` deliberately does not count: it governs only while the content is shorter, so the copy cannot be
+ * said to have decided the height.
+ */
+function sizedViews(decls, present) {
+  const out = {};
+  for (const v of present) {
+    const d = decls[v];
+    if (!d) continue;
+    const w = definiteLength(d.width);
+    const h = definiteLength(d.height);
+    if (w && h) out[v] = 'wh';
+    else if (w) out[v] = 'w';
+    else if (h) out[v] = 'h';
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 export function normalizeView(node, v, chain, opts) {
+  if (node.slack) delete node.slack[v]; // rebuilt from this view's declarations, never carried over a re-emit
   const d = node.views[v];
   const style = { ...d.style };
   const [x, , w, h] = d.rect;
@@ -187,7 +434,7 @@ export function normalizeView(node, v, chain, opts) {
   const position = style.position ?? 'static';
   const size = sizer(node, d.style);
 
-  for (const p of DROP) delete style[p];
+  for (const p of (opts.asIs ? DROP_EXACT : DROP)) delete style[p];
   if (style['view-transition-name'] === 'root') delete style['view-transition-name']; // the browser's value for <html>
   for (const p of URL_PROPS) if (style[p]) style[p] = mapUrls(style[p], opts.assetFile);
 
@@ -198,17 +445,34 @@ export function normalizeView(node, v, chain, opts) {
   if (position === 'relative' || position === 'static') {
     for (const side of ['top', 'right', 'bottom', 'left']) if (position === 'static' || style[side] === '0px') delete style[side];
   }
+  // A view the original does not reflow in: it stays wider than the screen and overflows sideways (ir/index.js
+  // noReflowViews). The copy's root keeps that width, so everything inside it is laid out against the same space
+  // the capture measured. Without it the root shrinks to the screen, every width below is clamped to that, and the
+  // text wraps the page two or three times too tall. `min-width`, not `width`: on a screen wider than the captured
+  // layout the root still fills it. Set before the return below, so it holds whether or not the page has an <html>
+  // node above the body.
+  if (node === opts.rootNode && opts.noReflow?.includes(v)) {
+    const rootWidth = d.rect?.[2];
+    if (rootWidth) style['min-width'] = `${round(rootWidth)}px`;
+  }
   if (display === 'none' || display === 'contents' || !pd) return style;
 
   const pBox = contentBox(parent, v);
   const pDisplay = pd.style.display ?? displayOf(parent, v);
   const ratioOf = (bw) => (pBox.w > 0 ? size.w(bw) / pBox.w : null);
+  // Text sized with the window (capture/typography.js): px minimums taken from its size at the captured width would keep
+  // the box at that size on other screens (a headline line 76 px tall where the text has shrunk to 68).
+  const fluidText = Boolean(fluidDecls(node, v)['font-size']);
 
   if (/grid/.test(display)) {
     const box = contentBox(node, v);
     const gap = num(style['column-gap']);
     if (style['grid-template-columns']) style['grid-template-columns'] = gridTracks(style['grid-template-columns'], box.w, gap);
-    delete style['grid-template-rows'];
+    // Computed rows are the heights of the content, so they are left to the content, except rows collapsed to nothing:
+    // that is a closed panel (an accordion answer at grid-template-rows: 0fr), and without it the panel shows open.
+    const rows = (style['grid-template-rows'] ?? '').trim().split(/\s+/).filter(Boolean);
+    if (rows.length && rows.every((r) => /^0(\.0+)?px$/.test(r)) && node.children.some(isElement)) style['grid-template-rows'] = rows.map(() => '0fr').join(' ');
+    else delete style['grid-template-rows'];
   }
 
   if (position === 'absolute' || position === 'fixed') {
@@ -217,17 +481,39 @@ export function normalizeView(node, v, chain, opts) {
     // floating tile shrinks to its content.
     const sized = true;
     const cbW = containingWidth(chain, v, position);
+    let fullWidth = false;
     for (const [a, b, prop, value] of [['left', 'right', 'width', size.w(w)], ['top', 'bottom', 'height', size.h(h)]]) {
       const va = px(style[a]);
       const vb = px(style[b]);
-      if (va != null && vb != null && Math.abs(va) <= 1 && Math.abs(vb) <= 1) continue; // stretched: inset 0
+      if (va != null && vb != null && Math.abs(va) <= 1 && Math.abs(vb) <= 1) {
+        // Stretched: inset 0. A size another view sets (a centred 410 px box on desktop) must not carry over through the
+        // cascade, else the fit pass pins this view at its captured px (a card's dark layer stopped short of the card).
+        const sizedElsewhere = Object.entries(node.views).some(([k, od]) => k !== v && od && (od.style.position ?? 'static') === position
+          && !(Math.abs(px(od.style[a]) ?? 99) <= 1 && Math.abs(px(od.style[b]) ?? 99) <= 1));
+        if (sizedElsewhere && !REPLACED.has(node.tag)) style[prop] = 'auto';
+        continue;
+      }
       // A box that fills the width between its two insets (a fixed header with a margin on each side) is stretched
-      // by them: with a px width it would overflow on every screen narrower than the captured one.
-      if (prop === 'width' && va != null && vb != null && cbW > 0 && !REPLACED.has(node.tag) && Math.abs(cbW - va - vb - w) <= 1.5) continue;
+      // by them: with a px width it would overflow on every screen narrower than the captured one. The browser reports
+      // both insets of every absolute box, so this alone says nothing: an inset that moves between the captured views
+      // (right 370 px at 1440, 566 at 1024 for a 340 px card) belongs to a box of its own width, which keeps it.
+      const insetsMove = Object.entries(node.views).some(([k, od]) => {
+        if (k === v || !od || (od.style.position ?? 'static') !== position) return false;
+        const oa = px(od.style[a]);
+        const ob = px(od.style[b]);
+        return oa != null && ob != null && (Math.abs(oa - va) > 2 || Math.abs(ob - vb) > 2);
+      });
+      if (prop === 'width' && va != null && vb != null && cbW > 0 && !REPLACED.has(node.tag) && Math.abs(cbW - va - vb - w) <= 1.5 && !insetsMove) continue;
       if (va != null && vb != null) delete style[Math.abs(va) <= Math.abs(vb) ? b : a];
       if (sized && value > 0 && !REPLACED.has(node.tag)) {
-        // A box as wide as its containing block stays that wide on other screens.
-        const full = prop === 'width' && cbW > 0 && value / cbW >= 0.995 && value / cbW <= 1.005 && (va == null || Math.abs(va) <= 1) && (vb == null || Math.abs(vb) <= 1);
+        // A box as wide as its containing block stays that wide on other screens: anchored at its left edge, or centred
+        // (left: 50% with a translate back by half its size - a hero picture as wide as the window).
+        const centred = va != null && cbW > 0 && Math.abs(va - cbW / 2) <= 1.5 && /translate|matrix/.test(style.transform ?? '');
+        const full = prop === 'width' && cbW > 0 && value / cbW >= 0.995 && value / cbW <= 1.005
+          && (centred || ((va == null || Math.abs(va) <= 1) && (vb == null || Math.abs(vb) <= 1)));
+        if (full) fullWidth = true;
+        // Its height then follows from its own aspect ratio (a px height would keep the captured window's size).
+        if (prop === 'height' && fullWidth && style['aspect-ratio'] && style['aspect-ratio'] !== 'auto') continue;
         style[prop] = full ? '100%' : `${value}px`;
       }
     }
@@ -241,6 +527,11 @@ export function normalizeView(node, v, chain, opts) {
       style['@rw'] = { px: size.w(w), ratio: ratioOf(w) };
       const [nw, nh] = node.natural ?? [];
       style.height = node.tag === 'img' && nw > 0 && nh > 0 && Math.abs(w / h - nw / nh) / (nw / nh) < 0.02 ? 'auto' : `${size.h(h)}px`;
+      // Filling a parent stretched over its own frame (absolute, top and bottom at 0): the picture takes that height, which
+      // follows the frame on every screen (a hero background 712 px tall in an 880 px frame at 1265).
+      const pAbs = /^(absolute|fixed)$/.test(pd.style.position ?? '');
+      const pStretchedY = pAbs && Math.abs(px(pd.style.top) ?? 99) <= 1 && Math.abs(px(pd.style.bottom) ?? 99) <= 1;
+      if (style.height !== 'auto' && pStretchedY && pBox.h > 0 && Math.abs(h - pBox.h) <= 1 && Math.abs(w - pBox.w) <= 1) style.height = '100%';
     }
   } else if (FORM_CONTROL.has(node.tag) && w > 0 && !/^(hidden|checkbox|radio)$/i.test(node.attrs.type ?? '')) {
     // Form fields keep their rendered width; their height comes from font and padding.
@@ -253,7 +544,20 @@ export function normalizeView(node, v, chain, opts) {
     const maxW = style['max-width'];
     const ratio = ratioOf(w);
     const limitedBy = (maxW && px(maxW) != null && Math.abs(px(maxW) - size.w(w)) <= 1) || (maxW?.endsWith('%') && ratio != null && Math.abs(parseFloat(maxW) / 100 - ratio) < 0.01);
-    if (ml > 0 && Math.abs(ml - mr) <= 1 && Math.abs(x - (pBox.x + ml)) <= 2) {
+    // Centring is read off the box, not off the margin. Chrome resolves an `auto` margin to its used value only
+    // some of the time: on one real site 95 of 130 containers with identical markup, identical geometry and the
+    // same class reported `margin-left: 80px` and the other 35 reported nothing at all. A capture therefore cannot
+    // tell `margin: auto` from `margin: 0`, and the 35 that lost it put their whole page content 80 px to the left.
+    // Equal space either side of a block in a block parent, with nothing else that could have put it there, is the
+    // declaration. The gate above already excludes floats, absolute boxes, flex and grid parents; the `ml - mr`
+    // test keeps an asymmetric declared margin out; and a relative box moved by its own `left`/`right` is not
+    // centred however even the gaps look.
+    // The free space either side, margin included: that is the quantity that is equal whether Chrome reported the
+    // used margin or reported nothing at all, which is the whole point of reading it off the box.
+    const leftGap = x - pBox.x;
+    const rightGap = (pBox.x + pBox.w) - (x + w);
+    const shifted = position === 'relative' && (px(style.left) || px(style.right));
+    if (Math.abs(ml - mr) <= 1 && !shifted && leftGap > 0.5 && Math.abs(leftGap - rightGap) <= 1) {
       style['margin-left'] = 'auto';
       style['margin-right'] = 'auto';
       if (!limitedBy) style['@w'] = { px: size.w(w), ratio };
@@ -291,30 +595,82 @@ export function normalizeView(node, v, chain, opts) {
     // would otherwise leave the percentages of its descendants nothing to resolve against.
     const ratio = ratioOf(w);
     const fills = ratio != null && ratio >= 0.995 && ratio <= 1.005;
+    // A grid item as wide as its column (a card at justify-self: start with width: 100% in the builder): it fills its cell
+    // at every width, not the captured px (product cards stayed 397 px in 528 px columns at 1265).
+    const gridCol = /grid/.test(pDisplay) ? gridColumnWidth(pd.style, pBox.w) : null;
+    const cell = gridCol != null && gridCol > 0 && Math.abs(size.w(w) - gridCol) <= 1.5 && !fills;
     // Without text (icon boxes, image frames) the content cannot size the item reliably: an SVG or
     // image at width: 100% inside it falls back to its default size (300 px for SVG). Keep the width.
     const text = deepText(node).trim();
-    if (contentSized) style['@cw'] = { px: size.w(w), ratio, text: !!text, wraps: !text || fills || zeroBasisRow || wrapsText(node, v, chain) };
+    // A row that is allowed to wrap must stay as wide as the widths its children are *written* at, not as wide as
+    // it measured. Each text child is written a pixel wider than it measured, on purpose, so the same label cannot
+    // wrap onto a second line (see resolveHints and askedFor) - and nine of those pixels pushed the ninth link of
+    // a footer nav onto a second line of its own. That cost 53 px of page height (a 32 px row gap plus a 21 px
+    // line) on every page of the site, at every width from 1024 up, and page height is a condition of a size
+    // being exact, so it failed 66 of 198 sizes by itself. Only a wrapping row: a row that cannot wrap cannot
+    // change its line count, and the width only ever grows, which `max-width: 100%` already bounds.
+    const wrapRow = /flex/.test(display) && /wrap/.test(style['flex-wrap'] ?? '');
+    const childSlack = !wrapRow ? 0 : node.children.filter(isElement).reduce((n, c) => {
+      const cd = c.views?.[v];
+      if (!cd || cd.hidden || /^(absolute|fixed)$/.test(cd.style.position ?? '') || !deepText(c).trim()) return n;
+      return n + Math.max(0, Math.ceil(cd.rect[2]) + 1 - cd.rect[2]);
+    }, 0);
+    if (contentSized) style['@cw'] = { px: size.w(w), ratio, cell, text: !!text, childSlack, wraps: !text || fills || cell || zeroBasisRow || wrapsText(node, v, chain) };
     // A content-sized item with text can still have a fixed size larger than its text (a 22 px badge
     // around 6 px letters, a 52 px label): minimums restore it without ever cutting or wrapping text.
     // Only small boxes that do not fill their parent: a minimum on a large container would keep it
     // from shrinking between the captured widths.
-    if (contentSized && text && h > 0 && isSmallBox(w, h, ratio)) {
+    if (contentSized && text && h > 0 && isSmallBox(w, h, ratio) && !fluidText) {
       const minW = Math.floor(size.w(w)) - 1;
-      const minH = Math.round(size.h(h));
-      if (minW > 0 && !style['min-width']) style['min-width'] = `${minW}px`;
+      const minH = round(size.h(h));
+      if (minW > 0 && !style['min-width']) {
+        style['min-width'] = `${minW}px`;
+        askedFor(node, v, 'w', minW - size.w(w), 0);
+      }
       if (minH > 0 && !style.height && !style['min-height']) style['min-height'] = `${minH}px`;
+    }
+    // A growing item of a flex row narrower than something inside it (a ticker strip wider than its card): the original
+    // kept it from growing to that content (a builder's width: 1px / min-width: 0, which the capture leaves out). Without
+    // it the item takes the content's width (a testimonials box 18 px wider and off centre).
+    if (/flex/.test(pDisplay) && !/column/.test(pd.style['flex-direction'] ?? '') && parseFloat(style['flex-grow'] ?? '0') > 0 && !style['min-width']) {
+      // Something below it wider than its own parent's content box: that width reaches the item's minimum.
+      const innerOf = (n) => {
+        const s = n.views[v].style;
+        return n.views[v].rect[2] - num(s['padding-left']) - num(s['padding-right']) - num(s['border-left-width']) - num(s['border-right-width']);
+      };
+      // A display: contents wrapper has no box: its children count as children of `box` (the nearest real box).
+      const wider = (n, depth, box = n) => depth > 0 && n.children.filter(isElement).some((c) => {
+        const cd = c.views?.[v];
+        if (!cd || cd.hidden || /^(absolute|fixed)$/.test(cd.style.position ?? '')) return false;
+        if (displayOf(c, v) === 'contents') return wider(c, depth, box);
+        return cd.rect[2] > innerOf(box) + 1 || wider(c, depth - 1);
+      });
+      if (w > 0 && wider(node, 4)) style['min-width'] = '0px';
+    }
+    // An item of a flex column that stretches its items, yet narrower than the column: it had a width of its own (a
+    // button at width: fit-content). Without it the copy stretched it across the column (a 140 px button became 319 px).
+    const column = /flex/.test(pDisplay) && /column/.test(pd.style['flex-direction'] ?? '');
+    if (column && !contentSized && !style.width && w > 0) {
+      const room = pBox.w - num(style['margin-left']) - num(style['margin-right']);
+      const maxW = px(style['max-width']);
+      const capped = maxW != null && Math.abs(maxW - size.w(w)) <= 1; // its own max-width already makes it narrower
+      if (room > 0 && w < room - 2 && !capped) {
+        style.width = text && !wrapsText(node, v, chain) ? 'fit-content' : `min(${round(size.w(w))}px, 100%)`;
+      }
     }
   }
 
   // Inline-level boxes (badges, chips, avatars, labels) often have a fixed size larger than their
   // text; without it they shrink to the text. Minimums restore it and can never cut or wrap content
   // (the width one pixel under the captured one, so boxes sharing a line never overflow it).
-  if (/^inline-(block|flex|grid)$/.test(display) && !REPLACED.has(node.tag) && !FORM_CONTROL.has(node.tag)
+  if (/^inline-(block|flex|grid)$/.test(display) && !REPLACED.has(node.tag) && !FORM_CONTROL.has(node.tag) && !fluidText
     && (position === 'static' || position === 'relative') && w > 0 && h > 0 && !fix?.w && isSmallBox(w, h, ratioOf(w))) {
     const minW = Math.floor(size.w(w)) - 1;
-    const minH = Math.round(size.h(h));
-    if (minW > 0 && !style.width && !style['min-width']) style['min-width'] = `${minW}px`;
+    const minH = round(size.h(h));
+    if (minW > 0 && !style.width && !style['min-width']) {
+      style['min-width'] = `${minW}px`;
+      askedFor(node, v, 'w', minW - size.w(w), 0);
+    }
     if (minH > 0 && !style.height && !style['min-height']) style['min-height'] = `${minH}px`;
   }
 
@@ -329,12 +685,47 @@ export function normalizeView(node, v, chain, opts) {
     return [c];
   });
   const inFlow = flowChildren(node);
+  // A closed panel (height: 0; overflow: hidden - an accordion answer, a collapsed menu): the capture leaves heights
+  // out, so without this the content shows open. A parent of no height holds the collapse itself (grid rows at 0fr).
+  if (h <= 1 && !REPLACED.has(node.tag) && display !== 'inline' && /^(hidden|clip)$/.test(style['overflow-y'] ?? '')
+    && (inFlow.length || hasText) && (pd.rect?.[3] ?? 0) > 1 && !style['max-height']) {
+    style.height = '0px';
+  }
+  // A small box holding one line of text but taller than that line (a numbered circle, a badge, a fixed-height chip): its
+  // height was set, and without it the box shrinks to the line (a 26 px circle became a 26 × 17 oval). A minimum, so text is
+  // never cut. One line: the text fits the content width at an average glyph width.
+  if (hasText && !fluidText && !inFlow.length && !REPLACED.has(node.tag) && !FORM_CONTROL.has(node.tag) && display !== 'inline' && h > 0 && w > 0
+    && isSmallBox(w, h, ratioOf(w)) && !style.height && !style['min-height']) {
+    const fontSize = inheritedPx(node, chain, v, 'font-size', 16);
+    const line = lineHeightPx(fontSize, inheritedValue(node, chain, v, 'line-height'));
+    const padY = num(style['padding-top']) + num(style['padding-bottom']) + num(style['border-top-width']) + num(style['border-bottom-width']);
+    const padX = num(style['padding-left']) + num(style['padding-right']) + num(style['border-left-width']) + num(style['border-right-width']);
+    const oneLine = deepText(node).trim().length * fontSize * 0.62 <= Math.max(0, w - padX);
+    if (oneLine && h - (line + padY) > 4) style['min-height'] = `${size.h(h)}px`;
+  }
   if (!REPLACED.has(node.tag) && !FORM_CONTROL.has(node.tag) && display !== 'inline' && h > 0) {
     if (!inFlow.length && !hasText) {
       // An empty box (divider, colour block, image holder) only has the size it was given. Builders
       // often place the image of a frame absolutely (inset 0) inside it: the frame is empty too.
-      if (!style.height) style.height = `${size.h(h)}px`;
-      if (!style.width && !style['@w'] && !BLOCK_PARENT.has(pDisplay) && w > 0) style['@rw'] = { px: size.w(w), ratio: ratioOf(w) };
+      // An absolute box held by both insets of an axis at 0 (a dark layer over a card) takes that size from its containing
+      // block: a px size would keep the captured card's size on other screens.
+      const absBox = position === 'absolute' || position === 'fixed';
+      const atZero = (k) => style[k] != null && Math.abs(px(style[k]) ?? 99) <= 1;
+      const stretchedX = absBox && atZero('left') && atZero('right');
+      const stretchedY = absBox && atZero('top') && atZero('bottom');
+      // A box as wide as its containing block with an aspect ratio of its own gets its height from that ratio.
+      const ratioSized = style.width === '100%' && style['aspect-ratio'] && style['aspect-ratio'] !== 'auto';
+      if (!style.height && !stretchedY && !ratioSized) style.height = `${size.h(h)}px`;
+      if (stretchedX) {
+        // nothing: the insets size it
+      } else if (!style.width && !style['@w'] && !BLOCK_PARENT.has(pDisplay) && w > 0) style['@rw'] = { px: size.w(w), ratio: ratioOf(w) };
+      // An empty box that is all its parent holds, where that parent is itself a flex / grid item (a logo frame in the list
+      // item of a ticker row): the parent's size comes from this box, so without its own px width both shrink to 0 as
+      // soon as the row is fuller than the screen (logos vanished).
+      else if (!style.width && !style['@w'] && w > 0 && BLOCK_PARENT.has(pDisplay) && Math.abs(w - pBox.w) <= 1 && isFlexOrGridItem(chain, pi, v)) {
+        style.width = `${size.w(w)}px`;
+        style['flex-shrink'] ??= '0';
+      }
     } else if (elements.length && !hasText && !style['min-height'] && !style.height) {
       let bottom = 0;
       for (const c of elements) {
@@ -361,7 +752,18 @@ export function normalizeView(node, v, chain, opts) {
 
   if (fix?.w) style['@fw'] = { ...fix.w, px: size.w(fix.w.px), ratio: fix.w.ratio == null ? null : fix.w.ratio * (size.w(fix.w.px) / fix.w.px) };
   if (fix?.mh && !(px(style['min-height']) >= size.h(fix.mh))) style['min-height'] = `${size.h(fix.mh)}px`;
-  return style;
+  // Text sized with the window (capture/typography.js): the fluid value instead of the px of the captured width.
+  Object.assign(style, fluidDecls(node, v));
+  const out = viewportStyle(style, node, v, chain);
+  // A correction the fidelity loop decided (verify/correct.js) has the last word. Everything above is inference from
+  // the capture; a correction was tried on a real render and kept only because the page measured closer to the
+  // original, so where the two disagree the measurement wins. The competing sizing hint is dropped as well, or
+  // resolveHints() would write the inferred width back over it.
+  if (fix?.decls) {
+    if (SIZED.some((p) => p in fix.decls)) for (const hint of ['@w', '@rw', '@fw', '@cw']) delete out[hint];
+    Object.assign(out, fix.decls);
+  }
+  return out;
 }
 
 /**
@@ -370,7 +772,7 @@ export function normalizeView(node, v, chain, opts) {
  * ratio to the parent is the same in every view, else a px value. @rw (images, SVG, fields) is
  * 100% when the element fills its parent, else px.
  */
-export function resolveHints(decls, present, tag) {
+export function resolveHints(decls, present, tag, node = null) {
   // @cw: a content-sized flex item with text. When its text wraps in any view it had a definite
   // width: `width` in every hinted view (a percentage when the ratio holds everywhere), never only
   // max-width, which cannot stop a flex container from shrinking to its min-content width.
@@ -380,24 +782,40 @@ export function resolveHints(decls, present, tag) {
     const ratios = cw.map((v) => decls[v]['@cw'].ratio);
     const pxs = cw.map((v) => decls[v]['@cw'].px);
     // The same px in every view is a fixed size (an icon box), not a share of the parent. With a single captured view
-    // (desktop only for now) nothing says the width is a share of the parent: the captured px is kept.
+    // (a capture made while only desktop was on) nothing says the width is a share of the parent: the captured px is kept.
     const single = present.length === 1;
     const fixed = single || (cw.length > 1 && Math.max(...pxs) - Math.min(...pxs) <= 1);
     const consistent = !fixed && cw.length === present.length && ratios.every((r) => r != null && Number.isFinite(r) && r > 0)
       && Math.max(...ratios) - Math.min(...ratios) <= 0.01;
     // An item wider than its parent on purpose (a marquee track, a scroller) must not be clamped.
     const overflows = ratios.some((r) => r != null && r > 1.01);
+    const allCells = cw.every((v) => decls[v]['@cw'].cell || (decls[v]['@cw'].ratio >= 0.995 && decls[v]['@cw'].ratio <= 1.005));
     for (const v of cw) {
       const hint = decls[v]['@cw'];
       delete decls[v]['@cw'];
       if (!apply || decls[v].width) continue;
       // One view: an item exactly as wide as its parent still fills it.
       if (single && hint.ratio >= 0.995 && hint.ratio <= 1.005) decls[v].width = '100%';
+      // As wide as its grid column in this view: it fills its cell (a percentage of a grid item is of its grid area).
+      // Only when it does so in every view and its width changes between them (a fixed-size logo tile that happens to be
+      // as wide as its fixed column keeps its px).
+      else if (hint.cell && hint.text && allCells && !single && !fixed) decls[v].width = '100%';
       else if (consistent) decls[v].width = hint.ratio >= 0.995 && hint.ratio <= 1.005 ? '100%' : pct(hint.ratio);
+      // Filling its parent in this view (a card in a one-column grid at laptop width) while the views differ otherwise:
+      // it keeps filling it between the captured widths instead of staying at the captured px (cards too narrow at 1200).
+      else if (!fixed && hint.ratio >= 0.995 && hint.ratio <= 1.005) decls[v].width = '100%';
       else {
         // Text gets a pixel of slack: the same label can measure a fraction wider here than in the
         // original, and a width cut to the pixel would wrap it onto a second line.
-        decls[v].width = `${hint.text ? Math.ceil(hint.px) + 1 : Math.round(hint.px)}px`;
+        // Plus whatever its own children were written wider by, when this is a row that can wrap: otherwise the
+        // slack granted to the children is spent out of the parent's and the last one drops to a second line.
+        const written = hint.text ? Math.ceil(hint.px) + 1 + Math.ceil(hint.childSlack ?? 0) : round(hint.px);
+        decls[v].width = `${written}px`;
+        // A definite width replaces whatever a minimum asked for in this view, so the slack is this one, not both.
+        if (node) {
+          if (node.slack?.[v]) delete node.slack[v].w;
+          if (written !== hint.px) askedFor(node, v, 'w', Math.min(0, written - hint.px), Math.max(0, written - hint.px));
+        }
         if (!overflows) decls[v]['max-width'] ??= '100%';
       }
     }
@@ -406,7 +824,7 @@ export function resolveHints(decls, present, tag) {
     const hinted = present.filter((v) => decls[v]?.[key]);
     if (!hinted.length) continue;
     const ratios = hinted.map((v) => decls[v][key].ratio);
-    // One captured view (desktop only for now): a single ratio is no evidence of a share of the parent, so the px is
+    // One captured view (a capture made while only desktop was on): a single ratio is no evidence of a share of the parent, so the px is
     // kept (a 40 px icon must not become 2.78 %); an element that fills its parent still gets 100 %.
     const single = present.length === 1;
     const consistentRatios = hinted.length === present.length && ratios.every((r) => r != null && Number.isFinite(r) && r > 0)
@@ -416,7 +834,7 @@ export function resolveHints(decls, present, tag) {
       delete decls[v][key];
       const full = hint.ratio != null && hint.ratio >= 0.995 && hint.ratio <= 1.005;
       const consistent = consistentRatios && (!single || full);
-      const pxValue = `${Math.round(hint.px)}px`;
+      const pxValue = `${round(hint.px)}px`;
       if (key === '@rw') {
         decls[v].width = full ? '100%' : pxValue;
         // Never wider than the parent: a px width taken from one captured view overflows on a narrower screen.
@@ -460,7 +878,34 @@ export function cascade(decls, pageViews, tag, hideProp = 'display') {
   return parts;
 }
 
-const pseudoDecl = (p, assetFile) => (p ? { content: mapUrls(p.content, assetFile), ...p.style } : null);
+// The capture keeps only values that differ from the default, and a border side of width 0 looks like the default. A side
+// with a border style but no width would then get the browser's "medium" (3 px): a builder's 1 px divider on one side of a
+// ::after drew a full box. Such sides are written as 0 px.
+export function fillBorderWidths(decl) {
+  if (!decl || decl.border != null || decl['border-width'] != null) return decl;
+  // border-style shorthand: 1 value = all sides, 2 = top/bottom + right/left, 3 = top + right/left + bottom, 4 = each.
+  const v = String(decl['border-style'] ?? '').split(/\s+/).filter(Boolean);
+  const short = v.length ? [v[0], v[1] ?? v[0], v[2] ?? v[0], v[3] ?? v[1] ?? v[0]] : [];
+  ['top', 'right', 'bottom', 'left'].forEach((side, i) => {
+    const style = decl[`border-${side}-style`] ?? short[i];
+    if (style && style !== 'none' && style !== 'hidden' && decl[`border-${side}-width`] == null) decl[`border-${side}-width`] = '0px';
+  });
+  return decl;
+}
+
+const pseudoDecl = (p, assetFile) => (p ? fillBorderWidths({ content: mapUrls(p.content, assetFile), ...p.style }) : null);
+
+// The pseudo-elements with no content of their own (capture/snapshot.js otherPseudos: ::marker, ::placeholder,
+// ::first-line, ::first-letter). CSS only lets a handful of properties through on these, so only those are written -
+// a browser would ignore the rest, and writing them would be noise in every stylesheet.
+const OTHER_PSEUDOS = ['marker', 'placeholder', 'first-line', 'first-letter'];
+const PSEUDO_PROPS = /^(color|opacity|background(-|$)|font(-|$)|line-height|letter-spacing|word-spacing|white-space|text-(transform|decoration|shadow|emphasis)|text-decoration-|vertical-align|content|-webkit-text-(fill|stroke)|animation(-|$)|transition(-|$)|margin(-|$)|padding(-|$)|border(-|$)|float)/;
+const otherPseudoDecl = (p) => {
+  if (!p?.style) return null;
+  const out = {};
+  for (const [prop, value] of Object.entries(p.style)) if (PSEUDO_PROPS.test(prop)) out[prop] = value;
+  return Object.keys(out).length ? out : null;
+};
 const isEmpty = (parts) => !parts || (!Object.keys(parts.base).length && !parts.laptop && !parts.tablet && !parts.mobile);
 
 /**
@@ -492,14 +937,21 @@ export function buildStyles(pages, opts) {
     delete node.class;
     const present = pageViews.filter((v) => node.views[v]);
     const decls = {};
-    for (const v of pageViews) decls[v] = node.views[v] ? normalizeView(node, v, chain, o) : null;
-    resolveHints(decls, present, node.tag);
+    for (const v of pageViews) decls[v] = node.views[v] ? fillBorderWidths(normalizeView(node, v, chain, o)) : null;
+    resolveHints(decls, present, node.tag, node);
+    node.sized = sizedViews(decls, present);
     const parts = cascade(decls, pageViews, node.tag);
     const pseudo = {};
     for (const which of ['before', 'after']) {
       const pd = {};
       for (const v of pageViews) pd[v] = pseudoDecl(node.views[v]?.[which], o.assetFile);
       if (Object.values(pd).some(Boolean)) pseudo[which] = cascade(pd, pageViews, 'span', 'content');
+    }
+    // Only an exact copy captures these, so for every other copy the loop finds nothing and costs nothing.
+    for (const which of OTHER_PSEUDOS) {
+      const pd = {};
+      for (const v of pageViews) pd[v] = otherPseudoDecl(node.views[v]?.pseudo?.[which]);
+      if (Object.values(pd).some(Boolean)) pseudo[which] = cascade(pd, pageViews, 'span');
     }
 
     const desktop = node.views.desktop ?? node.views[present[0]];
@@ -526,7 +978,13 @@ export function buildStyles(pages, opts) {
     };
     if (node.tag !== 'svg') for (const c of node.children) if (isElement(c)) walk(c, [...chain, node], pageViews, next);
   };
-  for (const page of pages) walk(page.htmlNode ?? page.root, [], page.views, { block: null, topLevel: true });
+  for (const page of pages) {
+    // Per page: the views the original does not reflow in, and the element that has to keep its width in them
+    // (ir/index.js noReflowViews).
+    o.noReflow = page.noReflow ?? [];
+    o.rootNode = page.root;
+    walk(page.htmlNode ?? page.root, [], page.views, { block: null, topLevel: true });
+  }
 
   return { rules: [...rules.values()], boxSizingReset, classCount: namer.used.size };
 }

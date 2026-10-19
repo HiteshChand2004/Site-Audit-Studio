@@ -88,8 +88,16 @@ addColumn('projects', 'max_pages', 'INTEGER NOT NULL DEFAULT 25');
 // Recreate: pages besides the homepage, and an optional origin for canonical/sitemap/OG URLs.
 addColumn('projects', 'recreate_pages', 'INTEGER NOT NULL DEFAULT 5');
 addColumn('projects', 'target_domain', 'TEXT');
+// Exact mode: an "as is" recreate, measured against the original at every viewport, with no time limit
+// (recreate/inputs.js isExactMode). Off by default, so every existing project behaves exactly as before.
+addColumn('projects', 'exact_mode', 'INTEGER NOT NULL DEFAULT 0');
+// One page only: the address of a page of the site that Analyze and Recreate work on instead of the whole site
+// (recreate/inputs.js parsePageUrl). Empty = the whole site, so every existing project behaves exactly as before.
+addColumn('projects', 'page_url', 'TEXT');
 
-// Jobs live in memory, so anything still "running" after a restart can never finish.
+// Jobs live in memory, so anything still "running" after a restart can never finish. A recreate that was running is
+// continued where it stopped once the server is up (recreate/jobs.js resumeInterruptedRecreates, recreate/checkpoint.js).
+export const interruptedRecreates = db.prepare(`SELECT id, project_id FROM recreates WHERE status = 'running'`).all();
 for (const table of ['analyses', 'recreates', 'reaudits']) {
   db.prepare(`
     UPDATE ${table} SET status = 'failed', error = 'The server restarted while this job was running. Run it again.', finished_at = ?

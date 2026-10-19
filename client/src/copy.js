@@ -70,18 +70,27 @@ export const JOB_STEPS = {
   render: { title: 'Loading the page like a visitor', explain: 'Opening the homepage in a real browser and checking accessibility.' },
   crawl: { title: 'Finding all pages', explain: 'Following links to discover the pages of the site.' },
   links: { title: 'Checking links', explain: 'Testing every link to find broken ones.' },
-  screenshots: { title: 'Taking a picture', explain: 'Taking a picture of the homepage as visitors see it on a computer.' },
+  screenshots: { title: 'Taking screenshots', explain: 'Capturing the site on desktop, tablet and phone screens.' },
   'lighthouse-mobile': { title: 'Measuring speed on a phone', explain: 'A standard speed test with a phone and a slower connection.' },
-  'lighthouse-desktop': { title: 'Measuring speed', explain: 'A standard speed test of the homepage on a computer.' },
+  'lighthouse-desktop': { title: 'Measuring speed on a computer', explain: 'The same speed test on a desktop screen.' },
   report: { title: 'Writing the report', explain: 'Putting the results together.' },
   // Create (Recreate)
-  inspect: { title: 'Visiting every page', explain: 'Opening each page and recording its layout, text, hover effects and animations.' },
+  inspect: { title: 'Visiting every page', explain: 'Opening each page at four screen sizes and recording its layout, text, hover effects and animations.' },
   assets: { title: 'Downloading images and files', explain: 'Saving images, fonts, videos and documents so the copy never depends on the old site.' },
   generate: { title: 'Building the new pages', explain: 'Writing clean pages and fixing the problems found in the check.' },
   build: { title: 'Checking the new site', explain: 'Safety check, broken links, valid code, and how closely each page matches the original.' },
   preview: { title: 'Opening the preview', explain: 'Starting a private preview of the new site.' },
   sweep: { title: 'Checking more screen sizes', explain: 'Capturing the original at extra screen widths to get the in-between sizes right.' },
   responsive: { title: 'Comparing all screen sizes', explain: 'Checking the copy at those extra widths against the original.' },
+  stack: { title: 'Building the chosen technology', explain: 'Turning the copy into the technology you picked (React, Next.js or MERN) and checking it matches the simple version.' },
+  exactCapture: {
+    title: 'Measuring the original',
+    explain: 'Opening the original at every screen size an exact copy is checked at, and recording how it looks and where everything sits. This is the slow part of an exact copy.',
+  },
+  exact: {
+    title: 'Comparing with the original',
+    explain: 'Opening the copy at those same sizes and comparing it with the original, pixel by pixel.',
+  },
   // Compare again (re-audit)
   serve: { title: 'Opening the new site', explain: 'Starting the new site privately so it can be checked.' },
   motion: { title: 'Checking animations', explain: 'Comparing hover effects and animations with the original.' },
@@ -110,6 +119,7 @@ export const TERMS = {
   copy: 'New copy',
   fidelity: { title: 'Match with the original', explain: 'How closely each page of the copy matches the original in sizes, positions and look (100 = identical). 80 or more is good.' },
   visual: { title: 'Looks the same', explain: 'How alike the two pages look to the eye, compared section by section (100 = identical).' },
+  widths: { title: 'Other screen sizes', explain: 'How well the copy follows the original at screen widths between phone, tablet, laptop and desktop.' },
   motion: { title: 'Hover effects & animations', explain: 'Effects when you point at buttons and links, and things that move or fade in while you scroll.' },
   stack: { title: 'Technology of the new site', explain: 'What the new site is built with. Plain HTML is the simplest; React, Next.js and MERN are for developer teams.' },
   pages: { title: 'Pages', explain: 'Which pages of the site are copied. "Every page" copies the whole site.' },
@@ -121,6 +131,7 @@ export const TERMS = {
 };
 
 /** Screen sizes. */
+export const VIEWPORT_NAMES = { desktop: 'Computer', laptop: 'Laptop', tablet: 'Tablet', mobile: 'Phone' };
 
 /**
  * Every check of the site in plain words: what it is called and why it matters. Keyed by the check's title as the
@@ -172,4 +183,27 @@ export function matchRating(score) {
   if (score >= 80) return { label: 'Very close', tone: 'ok' };
   if (score >= 65) return { label: 'Close, worth a look', tone: 'warn' };
   return { label: 'Clearly different, needs a look', tone: 'bad' };
+}
+
+/**
+ * A copy that stopped before it finished (the server kept its work: GET …/recreate `resumable`).
+ * @param {{ step: string, pagesDone: number, pagesTotal: number, reason: string, stoppedAt?: string }} r
+ */
+export function resumeText(r) {
+  const why = {
+    restart: 'the app was closed or restarted while it worked',
+    'time-limit': 'it ran out of time',
+    stopped: 'you stopped it',
+    error: 'something went wrong',
+  }[r.reason] ?? 'it was interrupted';
+  const pages = r.pagesTotal ? `${r.pagesDone} of ${r.pagesTotal} pages` : null;
+  const kept = r.step === 'inspect'
+    ? `${pages ?? 'The pages'} visited so far are kept; only the rest are visited.`
+    : `every page${r.pagesTotal ? ` (${r.pagesTotal})` : ''} was already visited, so it goes straight on to “${stepTitle(r.step)}”.`;
+  return {
+    title: 'The last copy stopped before it finished',
+    text: `It stopped because ${why}. Nothing was lost: ${kept}`,
+    button: pages && r.step === 'inspect' ? `Continue where it stopped (${pages})` : 'Continue where it stopped',
+    short: 'Continue the copy',
+  };
 }

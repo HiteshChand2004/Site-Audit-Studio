@@ -17,6 +17,7 @@ import { recreateDir } from '../src/recreate/workspace.js';
 import projectsRouter from '../src/routes/projects.js';
 import reauditRouter from '../src/routes/reaudit.js';
 import { createNetPolicy } from '../src/security/netGuard.js';
+import { seedAnalysis, seedProject } from './helpers/projects.js';
 
 // The re-audit must reach its own server without the dev flag; other loopback ports stay blocked.
 delete process.env.SAS_ALLOW_LOCALHOST;
@@ -72,8 +73,7 @@ function makeProject({ authorized = 1 } = {}) {
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'test', 'https://example.com/', 'html', ?, ?, ?)`)
-    .run(id, authorized, now, now);
+  seedProject(db, { id, name: 'test', url: 'https://example.com/', stack: 'html', authorized });
   return db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
 }
 
@@ -95,8 +95,7 @@ async function makeAnalysis(project) {
       progress: () => {},
     });
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-      .run(analysisId, project.id, now, now, JSON.stringify(audit));
+    seedAnalysis(db, project.id, audit, { id: analysisId });
     return { analysisId, origin: served.origin, audit };
   } finally {
     await served.close();
@@ -159,9 +158,7 @@ test('steps: serve first, no screenshots, compare last, progress reaches 100', (
   assert.equal(STEPS[0].key, 'serve');
   assert.equal(STEPS.at(-1).key, 'compare');
   assert.ok(!STEPS.some((s) => s.key === 'screenshots'));
-  // Desktop only for now: the phone Lighthouse run is parked.
-  assert.ok(STEPS.some((s) => s.key === 'lighthouse-desktop'));
-  assert.ok(!STEPS.some((s) => s.key === 'lighthouse-mobile'));
+  assert.ok(STEPS.some((s) => s.key === 'lighthouse-mobile'));
   assert.equal(overallPct('compare', 1), 100);
   assert.equal(overallPct('serve', 0), 0);
   assert.equal(pagePath('index.html'), '');
@@ -354,8 +351,7 @@ test('routes: validation, one job per project, result, stale flag, retention', {
 
   // So does a newer analysis: the audit shown is not the one the checklist compared against.
   const later = new Date(Date.now() + 1000).toISOString();
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), project.id, later, later, JSON.stringify({ ...analysis.audit, analysisId: 'newer' }));
+  seedAnalysis(db, project.id, { ...analysis.audit, analysisId: 'newer' }, { at: later });
   rec = (await auditOf()).recreate;
   assert.equal(rec.isDummy, false);
   assert.deepEqual(rec.staleReasons, ['recreate', 'analysis']);
@@ -372,8 +368,7 @@ test('routes: validation, one job per project, result, stale flag, retention', {
 test('audit.recreate: a failed re-audit without an earlier result keeps the sample and reports the error', { timeout: 60000 }, async () => {
   const project = makeProject();
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), project.id, now, now, JSON.stringify({ url: 'https://example.com/', analysisId: 'other', seo: [] }));
+  seedAnalysis(db, project.id, { url: 'https://example.com/', analysisId: 'other', seo: [] });
   // The recreate names an analysis that does not exist, so the job fails.
   await makeRecreate(project);
   assert.equal((await fetch(`${base}/${project.id}/reaudit`, { method: 'POST' })).status, 202);

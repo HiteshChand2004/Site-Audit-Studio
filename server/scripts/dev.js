@@ -80,14 +80,24 @@ async function changedFiles(files) {
   return changed;
 }
 
-/** True while the API reports a running or queued job; false when it does not answer. */
+/**
+ * True unless the API clearly says it is idle. A server too busy to answer in time (a heavy Recreate step) is busy: reading
+ * a slow answer as "idle" restarted the server in the middle of a job. A server that is gone (child exited) is not waited for.
+ */
 async function apiBusy() {
   try {
-    const res = await fetch(`http://127.0.0.1:${await apiPort()}/api/health`, { signal: AbortSignal.timeout(2000) });
-    return (await res.json()).busy === true;
+    const res = await fetch(`http://127.0.0.1:${await apiPort()}/api/health`, { signal: AbortSignal.timeout(5000) });
+    return (await res.json()).busy !== false;
   } catch {
-    return false;
+    return Boolean(child && child.exitCode == null);
   }
+}
+
+/** Idle only after two clear "not busy" answers in a row (a job may start between two steps). */
+async function apiIdle() {
+  if (await apiBusy()) return false;
+  await sleep(1000);
+  return !(await apiBusy());
 }
 
 let child = null;
@@ -107,9 +117,9 @@ async function restart(changed) {
   if (restarting) return;
   restarting = true;
   try {
-    if (child && (await apiBusy())) {
+    if (child && !(await apiIdle())) {
       log('A job is running: the restart waits until it has finished.');
-      while (child && (await apiBusy())) await sleep(BUSY_POLL_MS);
+      while (child && !(await apiIdle())) await sleep(BUSY_POLL_MS);
     }
     const files = [...pendingChanges].map((f) => path.relative(ROOT, f));
     pendingChanges = new Set();

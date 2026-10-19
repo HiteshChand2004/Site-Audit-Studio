@@ -3,7 +3,8 @@
 //   1. rules   - the :hover / :focus / :focus-visible / :focus-within / :active rules of every readable stylesheet,
 //                as authored (evidence; the class names do not survive into the recreate);
 //   2. hover   - for the interactive elements (links, buttons, fields, tabs, cursor: pointer, then plain transition
-//                hosts) the mouse moves onto the element and the computed styles of the element, its pseudo-elements
+//                hosts, then the elements a script animates: dynamicSignature() in install()) the mouse moves onto
+//                the element and the computed styles of the element, its pseudo-elements
 //                (::before / ::after) and its descendants (3 levels) are compared with their state just before the
 //                hover. This is the JavaScript-driven path too: whatever a script does on mouseenter shows in the
 //                computed styles, with or without a :hover rule;
@@ -29,6 +30,30 @@ export const MOTION_PROPS = [
 ];
 // Pseudo-elements also change their size and position (an underline that grows).
 const PSEUDO_EXTRA = ['width', 'height', 'left', 'right', 'top', 'bottom'];
+// Also compared when the stylesheets' state rules are applied (forceRuleStates), together with every property those rules
+// declare: an animation that starts on hover, a marquee that pauses, a gap that widens.
+const RULE_EXTRA = ['animation-name', 'animation-duration', 'animation-timing-function', 'animation-delay', 'animation-iteration-count', 'animation-direction', 'animation-fill-mode', 'animation-play-state', 'row-gap', 'column-gap'];
+// An effect a script drives has no transition to wait for, so how long it takes is measured instead of guessed: the
+// element is read every DYN_STEP_MS until it holds still, at most DYN_STEPS times. ir/motion.js turns the time it
+// took into the copy's own transition, so a rebuilt effect arrives over the same stretch instead of in one frame.
+export const DYN_STEP_MS = 90;
+const DYN_STEPS = 6;
+/** How long a script may take to START reacting to the pointer before the element counts as not changing on hover. */
+export const START_WAIT_MS = 700;
+/** How long the way back may take before a change counts as not reverting (polled every REVERT_STEP_MS). */
+export const REVERT_WAIT_MS = 2000;
+const REVERT_STEP_MS = 120;
+// How many of the elements whose only sign of motion is a script's fingerprint are probed on one page (the rest are
+// counted): the real controls keep their share of the budget, and the mouse probe stays within its time.
+const DYNAMIC_SHARE = 0.25;
+const DYNAMIC_MIN = 4;
+// Repeated blocks (cards of a row, tiles of a grid): their share of the page's limit, never below ITEM_MIN.
+const ITEM_SHARE = 0.4;
+const ITEM_MIN = 6;
+// Elements a stylesheet rule already describes, hovered with the real mouse as well (a script may add to the rule's
+// effect or overrule it): their share of the page's limit, after every element nothing describes yet.
+const RULE_SHARE = 0.25;
+const RULE_MIN = 4;
 
 /** Page function: the :hover / :focus / :active rules of the readable stylesheets. */
 function scanRules(opts) {
@@ -65,13 +90,464 @@ function scanRules(opts) {
 }
 
 /**
+ * Page function: the hover / focus effects the readable stylesheets declare, on every element they apply to (not only
+ * the few the mouse probe has time for). Each state rule is copied with its state pseudo-class replaced by an attribute
+ * (`.card:hover .title` → `.card[data-sas-hover] .title`) and inserted right after the original, so media, layer and
+ * order stay the same. Then, element by element, the attribute is set and the computed styles of the element, its
+ * ::before / ::after and the descendants a copied rule now matches are compared with the same element without it.
+ * Transitions are switched off and both reads happen in the same task, so neither a transition nor a running
+ * animation shows up as a difference, and nothing has to scroll or wait. Everything is removed again afterwards.
+ * A selector with the state inside :not() / :is() / :has(), or with two states, is left to the mouse probe.
+ */
+function forceRuleStates(opts) {
+  const { props, pseudoProps, maxHosts, maxKids, budgetMs, foreignCss } = opts;
+  const t0 = performance.now();
+  // Elements beside or around the hovered one that one rule may change, and how far up the tree "beside" reaches.
+  const MAX_SIBS = 12;
+  const SIB_UP = 3;
+  const SKIP_TAGS = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
+  const ATTR = { hover: 'data-sas-hover', focus: 'data-sas-focus' };
+  const STATE = /^:(hover|focus-visible|focus-within|focus)(?![\w-])/;
+  const PSEUDO_EL = /::?(before|after|first-line|first-letter|marker|placeholder|selection)\b|::[\w-]+(\([^)]*\))?/g;
+  const pathOf = (el) => {
+    const parts = [];
+    for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+      if (n === document.body) {
+        parts.push('body');
+        break;
+      }
+      const tag = n.tagName.toLowerCase();
+      let index = 0;
+      for (const s of n.parentElement ? n.parentElement.children : []) {
+        if (SKIP_TAGS.has(s.tagName)) continue;
+        if (s.tagName === n.tagName) index++;
+        if (s === n) break;
+      }
+      parts.push(`${tag}:${index}`);
+    }
+    return parts.length && parts[parts.length - 1] === 'body' ? parts.reverse().join('>') : null;
+  };
+  const inSvg = (el) => el.tagName.toLowerCase() !== 'svg' && !!el.closest('svg');
+
+  // The top-level parts of a selector list.
+  const splitList = (s) => {
+    const out = [];
+    let depth = 0;
+    let quote = null;
+    let start = 0;
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (quote) {
+        if (c === '\\') i++;
+        else if (c === quote) quote = null;
+      } else if (c === '"' || c === "'") quote = c;
+      else if (c === '(' || c === '[') depth++;
+      else if (c === ')' || c === ']') depth--;
+      else if (c === ',' && depth === 0) {
+        out.push(s.slice(start, i).trim());
+        start = i + 1;
+      }
+    }
+    out.push(s.slice(start).trim());
+    return out.filter(Boolean);
+  };
+  // One complex selector: its copy with the state as an attribute, and the selector of the element that holds the state.
+  // A state inside :has() is kept: the copy still matches the same element, because :has() describes what the element
+  // contains, so forcing the attribute on the contained element keeps the rule matching. A state inside :not() or
+  // :is() is left to the mouse probe - a forced attribute can never satisfy :not(:hover).
+  const convert = (part, reasons) => {
+    let quote = null;
+    const open = [];
+    const states = [];
+    for (let i = 0; i < part.length; i++) {
+      const c = part[i];
+      if (quote) {
+        if (c === '\\') i++;
+        else if (c === quote) quote = null;
+        continue;
+      }
+      if (c === '"' || c === "'") quote = c;
+      else if (c === '(') {
+        const fn = /:([\w-]+)$/.exec(part.slice(0, i));
+        open.push({ name: fn ? fn[1].toLowerCase() : '', arg: i + 1 });
+      } else if (c === '[') open.push({ name: '[', arg: i + 1 });
+      else if (c === ')' || c === ']') open.pop();
+      else if (c === ':' && part[i + 1] !== ':') {
+        const m = STATE.exec(part.slice(i));
+        if (m) {
+          if (open.length && !open.every((o) => o.name === 'has')) {
+            reasons.nesting++;
+            return null;
+          }
+          states.push({ at: i, len: m[0].length, kind: m[1] === 'hover' ? 'hover' : 'focus', inHas: open.length ? open[open.length - 1].arg : -1 });
+        }
+      }
+    }
+    if (states.length !== 1 || part.includes('&')) {
+      if (states.length > 1) reasons.twoStates++;
+      else reasons.invalid++;
+      return null;
+    }
+    const { at, len, kind, inHas } = states[0];
+    const clone = `${part.slice(0, at)}[${ATTR[kind]}]${part.slice(at + len)}`;
+    // The compound that holds the state: from the combinator before it to the one after it. Inside :has() it is the
+    // contained element - the one the visitor's mouse is really on - and that is the element to force the state on.
+    // Combinators only count outside brackets and quotes: the `~` of `[data-x~="a"]` or the space in
+    // `[aria-label="Open menu"]` is part of an attribute selector, not a step to another element.
+    const stop = /[\s>+~,)]/;
+    let start = inHas >= 0 ? inHas : 0;
+    {
+      let depth = 0;
+      let q = null;
+      for (let i = start; i < at; i++) {
+        const c = part[i];
+        if (q) {
+          if (c === '\\') i++;
+          else if (c === q) q = null;
+        } else if (c === '"' || c === "'") q = c;
+        else if (c === '(' || c === '[') depth++;
+        else if ((c === ')' || c === ']') && depth > 0) depth--;
+        else if (depth === 0 && stop.test(c)) start = i + 1;
+      }
+    }
+    let end = at + len;
+    let depth = 0;
+    let q = null;
+    for (; end < part.length; end++) {
+      const c = part[end];
+      if (q) {
+        if (c === '\\') end++;
+        else if (c === q) q = null;
+        continue;
+      }
+      if (c === '"' || c === "'") q = c;
+      else if (c === '(' || c === '[') depth++;
+      else if (c === ')' && depth === 0) break;
+      else if (c === ')' || c === ']') depth--;
+      else if (depth === 0 && stop.test(c)) break;
+    }
+    let host = `${part.slice(start, at)}${part.slice(at + len, end)}`.replace(PSEUDO_EL, '').trim();
+    if (!host || /[\s>+~]$/.test(host)) host = `${host} *`.trim();
+    return { clone, host, kind };
+  };
+
+  // The state rules of stylesheets the page may not read, harvested server-side (capture/foreignCss.js) and put
+  // into the page as an ordinary sheet of its own, so everything below treats them exactly like a readable one:
+  // converted, copied with the state as an attribute, and measured by comparing computed styles. Only state rules
+  // are injected, so the page's resting look cannot change - a `:hover` rule matches nothing until it is forced.
+  let foreignSheet = null;
+  if (foreignCss) {
+    try {
+      foreignSheet = document.createElement('style');
+      foreignSheet.setAttribute('data-sas-foreign', '');
+      foreignSheet.textContent = foreignCss;
+      (document.head || document.documentElement).appendChild(foreignSheet);
+    } catch {
+      foreignSheet = null;
+    }
+  }
+
+  // 1. The state rules of the readable sheets, copied right after themselves.
+  const tasks = [];
+  const declared = new Set();
+  // `unsupportedBy` says WHY a selector was left to the mouse probe. The single number it replaces is how a whole
+  // class of effects (anything with the state inside :has()) stayed invisible without anyone being able to see it.
+  const unsupportedBy = { nesting: 0, twoStates: 0, invalid: 0, insert: 0 };
+  const stats = {
+    rules: 0, parts: 0, unsupported: 0, unsupportedBy, hasRules: 0, hosts: 0, skippedHosts: 0, effects: 0,
+    sibs: 0, sibsUnrelated: 0, sibsCapped: 0, timedOut: false,
+  };
+  // Rules for the opposite state (`.card:not(:hover) .panel { opacity: 0 }`) keep matching while a state is forced by
+  // attribute (the mouse is not really there) and win over the forced rule: until the probe ends they follow the attribute.
+  const negated = [];
+  const NEGATED = /:not\(\s*:(hover|focus(?:-visible|-within)?)\s*\)/g;
+  const visit = (list, container) => {
+    for (let i = 0; i < list.length; i++) {
+      const rule = list[i];
+      if (rule.type === CSSRule.STYLE_RULE && NEGATED.test(rule.selectorText || '')) {
+        const before = rule.selectorText;
+        try {
+          rule.selectorText = before.replace(NEGATED, (all, s) => `:not([${s === 'hover' ? ATTR.hover : ATTR.focus}])`);
+          if (rule.selectorText !== before) negated.push({ rule, before });
+        } catch {
+          /* left as it is */
+        }
+      }
+      NEGATED.lastIndex = 0;
+      if (rule.type === CSSRule.STYLE_RULE) {
+        const text = rule.selectorText || '';
+        if (/:(hover|focus)/.test(text)) {
+          stats.rules++;
+          if (/:has\(/.test(text)) stats.hasRules++;
+          const parts = [];
+          for (const p of splitList(text)) {
+            const c = convert(p, unsupportedBy);
+            if (!c) {
+              stats.unsupported++;
+              continue;
+            }
+            try {
+              document.querySelector(c.host);
+              document.querySelector(c.clone);
+              parts.push(c);
+            } catch {
+              stats.unsupported++;
+              unsupportedBy.invalid++;
+            }
+          }
+          if (parts.length && container.insertRule) {
+            tasks.push({ container, index: i, parts, body: rule.style.cssText });
+            for (let d = 0; d < rule.style.length && declared.size < 120; d++) {
+              const name = rule.style[d];
+              if (!name.startsWith('--') && !name.startsWith('transition')) declared.add(name);
+            }
+          }
+        }
+      } else if (rule.type === CSSRule.IMPORT_RULE && rule.styleSheet) {
+        try {
+          visit(rule.styleSheet.cssRules, rule.styleSheet);
+        } catch {
+          /* unreadable */
+        }
+      } else if (rule.cssRules && rule.insertRule) {
+        visit(rule.cssRules, rule);
+      }
+    }
+  };
+  for (const sheet of document.styleSheets) {
+    try {
+      visit(sheet.cssRules, sheet);
+    } catch {
+      /* a cross-origin sheet cannot be read */
+    }
+  }
+  const inserted = [];
+  // Highest index first, so the positions of the ones still to insert do not move.
+  for (const t of [...tasks].sort((a, b) => b.index - a.index)) {
+    try {
+      t.container.insertRule(`${t.parts.map((p) => p.clone).join(', ')} { ${t.body} }`, t.index + 1);
+      inserted.push({ container: t.container, rule: t.container.cssRules[t.index + 1] });
+      stats.parts += t.parts.length;
+    } catch {
+      stats.unsupported += t.parts.length;
+      unsupportedBy.insert += t.parts.length;
+      t.parts = [];
+    }
+  }
+  const parts = tasks.flatMap((t) => t.parts);
+  const hosts = new Map();
+  for (const p of parts) {
+    let found = [];
+    try {
+      found = document.querySelectorAll(p.host);
+    } catch {
+      continue;
+    }
+    for (const el of found) {
+      if (SKIP_TAGS.has(el.tagName) || inSvg(el) || el === document.body || el === document.documentElement) continue;
+      let kinds = hosts.get(el);
+      if (!kinds) {
+        if (hosts.size >= maxHosts) {
+          stats.skippedHosts++;
+          continue;
+        }
+        kinds = new Set();
+        hosts.set(el, kinds);
+      }
+      kinds.add(p.kind);
+    }
+  }
+  stats.hosts = hosts.size;
+  // How each element animates into the state, read before transitions are switched off for the comparison.
+  const transitionOf = new Map();
+  for (const el of hosts.keys()) {
+    const cs = getComputedStyle(el);
+    transitionOf.set(el, { property: cs.transitionProperty, duration: cs.transitionDuration, delay: cs.transitionDelay, timing: cs.transitionTimingFunction });
+  }
+  const noTransition = document.createElement('style');
+  // The ids no element has give the rule three ids' specificity, so a site's own `transition: … !important` (common in
+  // builder and utility CSS) cannot keep running and hand the probe a value from the middle of the change.
+  const strong = ':not(#__sas_a):not(#__sas_b):not(#__sas_c)';
+  noTransition.textContent = `*${strong}, *${strong}::before, *${strong}::after { transition: none !important; }`;
+  (document.head || document.documentElement).appendChild(noTransition);
+  const cloneList = { hover: parts.filter((p) => p.kind === 'hover').map((p) => p.clone), focus: parts.filter((p) => p.kind === 'focus').map((p) => p.clone) };
+
+  const pick = (cs, list) => {
+    const o = {};
+    for (const p of list) o[p] = cs.getPropertyValue(p);
+    return o;
+  };
+  const list = [...new Set([...props, ...declared])];
+  const pseudoList = [...new Set([...list, ...pseudoProps])];
+  const read = (el, kids, sibs) => {
+    const pseudo = {};
+    for (const w of ['before', 'after']) {
+      const pcs = getComputedStyle(el, `::${w}`);
+      if (pcs.content && pcs.content !== 'none' && pcs.content !== 'normal') pseudo[w] = pick(pcs, pseudoList);
+    }
+    return {
+      values: pick(getComputedStyle(el), list),
+      pseudo,
+      kids: kids.map((k) => pick(getComputedStyle(k), list)),
+      sibs: sibs.map((s) => pick(getComputedStyle(s.el), list)),
+    };
+  };
+  const diff = (a, b) => {
+    const out = {};
+    for (const k of Object.keys(b)) if (a[k] !== b[k]) out[k] = [a[k], b[k]];
+    return out;
+  };
+  /**
+   * How an element the copied rule matches is related to the element holding the state: inside it, around it, or
+   * beside it. Only these three are rebuildable as CSS; anything further away is not worth a selector.
+   */
+  const relation = (host, m) => {
+    if (m === host) return null;
+    if (m.contains(host)) return 'ancestor';
+    if (host.contains(m)) return null;
+    let up = host;
+    for (let i = 0; i <= SIB_UP && up; i++, up = up.parentElement) {
+      if (up.contains(m)) return host.compareDocumentPosition(m) & Node.DOCUMENT_POSITION_FOLLOWING ? 'next' : 'prev';
+    }
+    return null;
+  };
+  /**
+   * Everything a copied rule matches while the element holds the state, split by where it is. The query runs on the
+   * document, not on the element: `.card:hover ~ .card` can never return a sibling from el.querySelectorAll, which
+   * is why every sibling and dimming effect on a navbar or a card grid used to be read as "nothing changed".
+   */
+  const relatedOf = (el, kind) => {
+    const kids = [];
+    const sibs = [];
+    for (const sel of cloneList[kind]) {
+      let found = [];
+      try {
+        found = document.querySelectorAll(sel);
+      } catch {
+        continue;
+      }
+      for (const m of found) {
+        if (inSvg(m) || m === document.documentElement) continue;
+        if (el.contains(m)) {
+          if (m === el || kids.includes(m)) continue;
+          if (kids.length >= maxKids) continue;
+          kids.push(m);
+          continue;
+        }
+        if (sibs.some((s) => s.el === m)) continue;
+        const rel = relation(el, m);
+        if (!rel) {
+          stats.sibsUnrelated++;
+          continue;
+        }
+        // A selector like `.card:hover ~ .card` matches every later card: without a cap one hovered card in a grid
+        // would read a hundred elements inside the page's whole budget.
+        if (sibs.length >= MAX_SIBS) {
+          stats.sibsCapped++;
+          continue;
+        }
+        sibs.push({ el: m, rel });
+      }
+    }
+    return { kids, sibs };
+  };
+
+  const out = { hover: [], focus: [] };
+  try {
+    for (const [el, kinds] of hosts) {
+      if (performance.now() - t0 > budgetMs) {
+        stats.timedOut = true;
+        break;
+      }
+      for (const kind of kinds) {
+        el.setAttribute(ATTR[kind], '');
+        const { kids, sibs } = relatedOf(el, kind);
+        const on = read(el, kids, sibs);
+        el.removeAttribute(ATTR[kind]);
+        const off = read(el, kids, sibs);
+        const changes = diff(off.values, on.values);
+        const pseudo = {};
+        for (const w of new Set([...Object.keys(off.pseudo), ...Object.keys(on.pseudo)])) {
+          if (!on.pseudo[w]) pseudo[w] = { content: ['present', 'none'] };
+          else {
+            const c = off.pseudo[w] ? diff(off.pseudo[w], on.pseudo[w]) : Object.fromEntries(Object.entries(on.pseudo[w]).map(([k, v]) => [k, [null, v]]));
+            if (Object.keys(c).length) pseudo[w] = c;
+          }
+        }
+        const kidChanges = [];
+        kids.forEach((k, i) => {
+          const c = diff(off.kids[i], on.kids[i]);
+          const p = Object.keys(c).length ? pathOf(k) : null;
+          if (p) kidChanges.push({ path: p, changes: c });
+        });
+        // The elements beside or around the hovered one: a card grid dimming its other cards, a nav tinting the rest.
+        const sibChanges = [];
+        sibs.forEach((s, i) => {
+          const c = diff(off.sibs[i], on.sibs[i]);
+          const p = Object.keys(c).length ? pathOf(s.el) : null;
+          if (p) sibChanges.push({ path: p, rel: s.rel, changes: c });
+        });
+        if (!Object.keys(changes).length && !Object.keys(pseudo).length && !kidChanges.length && !sibChanges.length) continue;
+        const path = pathOf(el);
+        if (!path) continue;
+        const r = el.getBoundingClientRect();
+        out[kind].push({
+          // Visible text first, like the mouse probe (an aria-label the copy adds to a control must not change its key).
+          path, tag: el.tagName.toLowerCase(), text: (el.textContent.trim() || el.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ').slice(0, 60),
+          rect: [Math.round(r.left + scrollX), Math.round(r.top + scrollY), Math.round(r.width), Math.round(r.height)],
+          source: 'css', changes, ...(Object.keys(pseudo).length && { pseudo }), ...(kidChanges.length && { kids: kidChanges }),
+          ...(sibChanges.length && { sibs: sibChanges }), transition: transitionOf.get(el), layout: false, domDelta: 0,
+        });
+        stats.effects++;
+        stats.sibs += sibChanges.length;
+      }
+    }
+  } finally {
+    noTransition.remove();
+    foreignSheet?.remove();
+    for (const { container, rule } of inserted) {
+      const i = Array.prototype.indexOf.call(container.cssRules, rule);
+      if (i >= 0) container.deleteRule(i);
+    }
+    for (const { rule, before } of negated) {
+      try {
+        rule.selectorText = before;
+      } catch {
+        /* the sheet is gone */
+      }
+    }
+  }
+  stats.ms = Math.round(performance.now() - t0);
+  return { ...out, stats };
+}
+
+/**
+ * The stylesheet's hover / focus effects of the elements the page shows right now (forceRuleStates), for content that
+ * only exists in another state of a tab or filter (capture/states.js reads them while that state is shown).
+ * @returns {Promise<{ hover: object[], focus: object[] }>}
+ */
+export async function cssStateEffects(page, { budgetMs = 1500 } = {}) {
+  return page.evaluate(forceRuleStates, { props: [...MOTION_PROPS, ...RULE_EXTRA], pseudoProps: PSEUDO_EXTRA, maxHosts: 300, maxKids: 40, budgetMs })
+    .catch(() => ({ hover: [], focus: [] }));
+}
+
+/**
  * Page function: picks the elements to probe and remembers them (window.__sasMotion). Links, buttons, fields and
- * roles come first, then cursor: pointer elements, then plain transition hosts; each group of equal elements is
- * probed `perSignature` times; the chosen ones are kept in document order.
- * @returns {{ candidates: object[], groups: object[], skipped: object, focusable: number }}
+ * roles come first, then cursor: pointer elements, then plain transition hosts, then the elements that carry nothing
+ * but a script's fingerprint (`dynamicSignature`: a will-change, a transform that does nothing, a motion property
+ * written inline, an attribute naming an animation). That last group is why this probe reaches a page whose motion
+ * lives entirely in JavaScript: such an element has no :hover rule, no pointer cursor and often no transition, so
+ * before it was never probed and its effect was lost together with the original's script.
+ * Each group of equal elements is probed `perSignature` times; the chosen ones are kept in document order. Elements
+ * whose effect the stylesheet already gave (`skip`, paths) are not probed again.
+ * @returns {{ candidates: object[], groups: object[], skipped: object, focusable: number, dynamic: number }}
  */
 function install(opts) {
-  const { limit, perSignature } = opts;
+  const { limit, perSignature, dynamicLimit = 0, itemLimit = 0, ruleLimit = 0 } = opts;
+  // Elements whose stylesheet hover the rule probe already read (forceRuleStates). They are still hovered with the
+  // mouse when there is room (`ruleLimit`): a page's script can add to a hover a rule describes, or overrule it (an inline
+  // background a script animates on mouseenter beats the rule's), and only the real mouse shows what the visitor gets.
+  const skip = new Set(opts.skip || []);
   const SKIP_TAGS = new Set(['SCRIPT', 'NOSCRIPT', 'STYLE', 'TEMPLATE', 'LINK', 'META', 'HEAD', 'TITLE', 'BASE']);
   const INTERACTIVE = new Set(['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'SUMMARY', 'LABEL']);
   const ROLES = /^(button|link|tab|menuitem|option|switch|checkbox|radio|combobox)$/;
@@ -106,12 +582,64 @@ function install(opts) {
     return [Math.round(r.left + scrollX), Math.round(r.top + scrollY), Math.round(r.width), Math.round(r.height)];
   };
 
+  // The marks a script leaves on an element it animates. None of them is something a stylesheet has a reason to
+  // write, and none names a framework, so the rule holds for any site:
+  //   will-change     the page promised the compositor an animatable property
+  //   inline-motion   a motion property stands in the style attribute - only a script puts it there
+  //   idle-transform  a transform that does nothing (matrix(1, 0, 0, 1, 0, 0)): what a finished tween leaves behind
+  //   attr:<name>     a data attribute naming an animation or a layout step (data-animate, data-slide-index, …)
+  // The name of the mark is reported as evidence only; what the copy rebuilds comes from the measured delta.
+  const WILL_CHANGE = /\b(transform|translate|scale|rotate|opacity|filter|backdrop-filter|clip-path)\b/;
+  const INLINE_MOTION = /(?:^|;)\s*(?:-webkit-)?(?:transform|translate|scale|rotate|opacity|filter|backdrop-filter|clip-path|will-change)\s*:/i;
+  const IDLE_TRANSFORM = /^matrix\(\s*1(?:\s*,\s*0){2}\s*,\s*1(?:\s*,\s*0){2}\s*\)$|^matrix3d\(\s*1(?:\s*,\s*0){4}\s*,\s*1(?:\s*,\s*0){4}\s*,\s*1(?:\s*,\s*0){4}\s*,\s*1\s*\)$/;
+  const MOTION_ATTR = /(?:^|[-_])(anim|animate|animation|motion|appear|reveal|parallax|inview|in-view|transition|slide|fade|carousel|index)(?:[-_]|$)/;
+  const dynamicSignature = (el, cs) => {
+    const wc = String(cs.willChange || '');
+    if (wc && wc !== 'auto' && WILL_CHANGE.test(wc)) return 'will-change';
+    const inline = el.getAttribute('style');
+    if (inline && INLINE_MOTION.test(`;${inline}`)) return 'inline-motion';
+    const tf = String(cs.transform || 'none').replace(/\s+/g, ' ').trim();
+    if (tf !== 'none' && IDLE_TRANSFORM.test(tf)) return 'idle-transform';
+    for (const a of el.attributes) {
+      const name = a.name.toLowerCase();
+      if (name.startsWith('data-') && MOTION_ATTR.test(name.slice(5))) return `attr:${name.slice(0, 40)}`;
+    }
+    return null;
+  };
+
   const found = [];
   const bySig = new Map();
-  const skipped = { limit: 0, duplicate: 0, hidden: 0 };
+  const skipped = { limit: 0, duplicate: 0, hidden: 0, dynamic: 0, items: 0, rules: 0 };
   let focusable = 0;
   let seen = 0;
   const all = document.body ? document.body.querySelectorAll('*') : [];
+
+  // Repeated blocks: two or more siblings of the same shape (tag and the tags of their first children) set side by side
+  // or in a grid - cards of a row, tiles, list items. Each can have a hover of its own that nothing on it announces (no
+  // link, no pointer cursor, no transition: a script adds the effect when the mouse arrives), and probing their parent
+  // puts the mouse on whichever one sits in its middle. So each block is a candidate of its own. A block as wide as its
+  // parent (a stacked section) is not one: a page's sections are not a row of cards.
+  const items = new Set();
+  const shapeOf = (e) => `${e.tagName}|${[...e.children].slice(0, 6).map((c) => c.tagName).join(',')}`;
+  let walked = 0;
+  for (const parent of all) {
+    if (++walked > MAX_NODES) break;
+    if (parent.children.length < 2 || SKIP_TAGS.has(parent.tagName) || parent.closest('svg')) continue;
+    const pr = parent.getBoundingClientRect();
+    const byShape = new Map();
+    for (const c of parent.children) {
+      if (SKIP_TAGS.has(c.tagName)) continue;
+      byShape.set(shapeOf(c), [...(byShape.get(shapeOf(c)) ?? []), c]);
+    }
+    for (const members of byShape.values()) {
+      if (members.length < 2 || members.length > 24) continue;
+      const boxes = members.map((m) => m.getBoundingClientRect());
+      const ok = boxes.every((b, i) => b.width >= 24 && b.height >= 24 && b.width < pr.width * 0.95
+        && getComputedStyle(members[i]).display !== 'inline'
+        && ((members[i].innerText || '').trim() || members[i].querySelector('img, svg, picture, video')));
+      if (ok) for (const m of members) items.add(m);
+    }
+  }
   for (const el of all) {
     if (++seen > MAX_NODES) break;
     if (SKIP_TAGS.has(el.tagName) || (el.closest('svg') && el.tagName.toLowerCase() !== 'svg')) continue;
@@ -135,49 +663,99 @@ function install(opts) {
     if (cs.cursor === 'pointer' && parentCursor !== 'pointer') reasons.push('pointer');
     const dur = parseFloat((cs.transitionDuration || '0s').split(',')[0]);
     if (dur > 0 && cs.transitionProperty !== 'none') reasons.push('transition');
+    // Last chance for an element the page animates with script alone: nothing above describes it, but a mark of a
+    // script that has already touched its transform or opacity does.
+    const dyn = reasons.length ? null : dynamicSignature(el, cs);
+    if (dyn) reasons.push('dynamic');
+    const item = items.has(el);
+    if (item) reasons.push('item');
     if (!reasons.length) continue;
     const path = pathOf(el);
     if (!path) continue;
+    const ruled = skip.has(path);
+    if (ruled) reasons.push('rules');
     const sig = sigOf(el);
-    const group = bySig.get(sig) || { sig, count: 0, probed: 0 };
+    const group = bySig.get(sig) || { sig, count: 0, probed: 0, paths: [] };
     bySig.set(sig, group);
     group.count++;
-    const priority = reasons.includes('focusable') || reasons.includes('interactive') || reasons.includes('role') ? 0 : reasons.includes('pointer') ? 1 : 2;
+    // All members, so an effect the probe finds on a few of them can be given to the rest (ir/motion.js).
+    if (group.paths.length < 120) group.paths.push(path);
+    // An element a rule already describes comes after every element nothing describes yet, before the boxes a script
+    // only marked: the mouse adds to what is known there, it does not find it.
+    const priority = ruled ? 2.5 : reasons.includes('focusable') || reasons.includes('interactive') || reasons.includes('role') ? 0
+      : reasons.includes('pointer') ? 1 : reasons.includes('transition') || item ? 2 : 3;
     found.push({
-      order: found.length, priority, el, path, tag: el.tagName.toLowerCase(), sig, reasons, cursor: cs.cursor,
+      order: found.length, priority, el, path, tag: el.tagName.toLowerCase(), sig, reasons, cursor: cs.cursor, ...(ruled && { ruled: true }),
+      ...(dyn && { dyn }), ...(item && { item: true }),
       text: (el.innerText || el.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ').slice(0, 60),
     });
   }
   const chosen = [];
   const chosenSet = new Set();
+  let dynamic = 0;
+  let itemCount = 0;
+  let ruleCount = 0;
   for (const c of [...found].sort((a, b) => a.priority - b.priority || a.order - b.order)) {
     const group = bySig.get(c.sig);
     if (group.probed >= perSignature) {
       skipped.duplicate++;
       continue;
     }
-    // A plain transition host inside a chosen element (3 levels) is covered by that element's descendants.
-    if (c.priority === 2) {
+    // Elements a rule already describes take their own share, after everything else.
+    if (c.ruled && ruleCount >= ruleLimit) {
+      skipped.rules++;
+      continue;
+    }
+    // A plain transition host or a script-animated box inside a chosen element (3 levels) is covered by that
+    // element's descendants, which the probe reads anyway. A repeated block never is: the probe of its parent points at
+    // one spot, and a block's own hover happens only with the mouse on that block. Nor is an element a rule describes:
+    // its hover is its own, with the mouse on it.
+    if (c.priority >= 2 && !c.item && !c.ruled) {
       let up = c.el.parentElement;
       let covered = false;
       for (let i = 0; i < 3 && up && !covered; i++, up = up.parentElement) covered = chosenSet.has(up);
       if (covered) continue;
+    }
+    // The script-animated boxes come last and take a share of the page's budget, never all of it: a page that
+    // promises the compositor a hundred transforms must not push its real controls out of the probe.
+    if (c.priority === 3 && dynamic >= dynamicLimit) {
+      skipped.dynamic++;
+      continue;
+    }
+    // Blocks with no other sign take their own share, so a page of a hundred cards cannot push its controls out.
+    const bareItem = c.item && c.priority === 2 && !c.reasons.includes('transition');
+    if (bareItem && itemCount >= itemLimit) {
+      skipped.items++;
+      continue;
     }
     if (chosen.length >= limit) {
       skipped.limit++;
       continue;
     }
     group.probed++;
+    if (c.priority === 3) dynamic++;
+    if (bareItem) itemCount++;
+    if (c.ruled) ruleCount++;
     chosen.push(c);
     chosenSet.add(c.el);
   }
   chosen.sort((a, b) => a.order - b.order); // document order: the page is scrolled down once, not up and down
-  window.__sasMotion = { chosen: chosen.map((c) => c.el), index: new Map(chosen.map((c, i) => [c.el, i])), pathOf };
+  window.__sasMotion = {
+    chosen: chosen.map((c) => c.el), index: new Map(chosen.map((c, i) => [c.el, i])), pathOf,
+    // The blocks probed on their own (aim() says which of them is under the mouse when their parent is probed).
+    items: new Set(chosen.filter((c) => c.item).map((c) => c.el)),
+  };
   return {
-    candidates: chosen.map((c, i) => ({ i, path: c.path, tag: c.tag, sig: c.sig, reasons: c.reasons, cursor: c.cursor, text: c.text, rect: docRect(c.el) })),
-    groups: [...bySig.values()].filter((g) => g.count > 1).sort((a, b) => b.count - a.count).slice(0, 20),
+    candidates: chosen.map((c, i) => ({
+      i, path: c.path, tag: c.tag, sig: c.sig, reasons: c.reasons, cursor: c.cursor, ...(c.dyn && { dyn: c.dyn }), ...(c.item && { item: true }), ...(c.ruled && { ruled: true }),
+      text: c.text, rect: docRect(c.el),
+    })),
+    groups: [...bySig.values()].filter((g) => g.count > 1).sort((a, b) => b.count - a.count).slice(0, 40),
     skipped,
     focusable,
+    // Every element taken in because a script animates it - also one probed as a repeated block.
+    dynamic: chosen.filter((c) => c.dyn).length,
+    items: chosen.filter((c) => c.item).length,
   };
 }
 
@@ -226,7 +804,22 @@ function readState(opts) {
       if (depth < 2 && c.tagName.toLowerCase() !== 'svg') queue.push([c, depth + 1]);
     }
   }
-  return { ...one(el, true), kids, domCount: document.getElementsByTagName('*').length };
+  // The elements beside and around it, for an effect the page's own script spreads outwards: hovering one card dims
+  // the others, hovering a nav item tints the bar. The rule-driven probe finds these from the selector; a scripted
+  // one has no selector to read, so the neighbours are sampled directly.
+  const sibs = [];
+  const near = [
+    [el.previousElementSibling, 'prev'],
+    [el.nextElementSibling, 'next'],
+    [el.parentElement, 'ancestor'],
+  ];
+  for (const [n, rel] of near) {
+    if (!n || n === document.body || n === document.documentElement) continue;
+    if (/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|LINK|META)$/.test(n.tagName)) continue;
+    const path = m.pathOf(n);
+    if (path) sibs.push({ path, rel, ...one(n, false) });
+  }
+  return { ...one(el, true), kids, sibs, domCount: document.getElementsByTagName('*').length };
 }
 
 /** Page function: moves the element to the middle of the screen and reports where to point the mouse. */
@@ -247,7 +840,18 @@ function aim(i) {
   const top = document.elementFromPoint(x, y);
   // Something else (a fixed bar, an overlay) is on top of the element at this point.
   const reachable = !!top && (el === top || el.contains(top) || top.contains(el));
-  return { x, y, reachable, scrolled: !onScreen };
+  // The blocks probed on their own that the mouse will be on: what they do is theirs, not this element's.
+  const under = [];
+  const m = window.__sasMotion;
+  for (let n = top; n && n !== el && el.contains(n); n = n.parentElement) if (m.items?.has(n)) under.push(m.pathOf(n));
+  // Every element between the one under the mouse and this one, deepest first: the real mouse hovers all of them, so a
+  // change inside one of them may be that element's own hover (a link in the middle of a header) - creditUnderPointer().
+  const chain = [];
+  for (let n = top; n && n !== el && el.contains(n); n = n.parentElement) {
+    const p = m.pathOf(n);
+    if (p) chain.push(p);
+  }
+  return { x, y, reachable, scrolled: !onScreen, under, chain };
 }
 
 /** Page function: the element with keyboard focus (as an index into the probed elements, -1 for another, null for none). */
@@ -287,9 +891,30 @@ function transitionMs(state) {
   return longest;
 }
 
+/** Everything a read of one element holds, as one string: two equal keys mean the element is standing still. */
+const stateKey = (s) => JSON.stringify([s.values, s.pseudo, s.kids.map((k) => k.values), s.rect]);
+
+// Values that paint nothing, written the way a script leaves them: a shadow that is fully transparent or has no size, a
+// filter of functions that change nothing, a transform that does nothing. To the eye each is `none`, and a page's
+// script often swaps one for the other the first time the mouse leaves - which made a real hover look as if it never
+// went back, so it was dropped.
+const SHADOW_PROPS = new Set(['box-shadow', 'text-shadow']);
+const IDENTITY_FILTER = /^(blur\(0(px)?\)|brightness\(1\)|contrast\(1\)|grayscale\(0\)|hue-rotate\(0(deg)?\)|invert\(0\)|opacity\(1\)|saturate\(1\)|sepia\(0\)|drop-shadow\([^)]*rgba\([^)]*,\s*0\)[^)]*\))$/;
+export function paintsNothing(prop, value) {
+  const v = String(value ?? '').trim();
+  if (!v || v === 'none') return true;
+  if (SHADOW_PROPS.has(prop)) {
+    return v.split(/,(?![^(]*\))/).every((s) => /rgba\([^)]*,\s*0\)|transparent/.test(s) || !/[1-9]/.test(s.replace(/rgba?\([^)]*\)/g, '')));
+  }
+  if (prop === 'filter' || prop === 'backdrop-filter') return v.split(/\s+(?![^(]*\))/).every((f) => IDENTITY_FILTER.test(f));
+  if (prop === 'transform') return /^matrix\(\s*1(?:\s*,\s*0){2}\s*,\s*1(?:\s*,\s*0){2}\s*\)$/.test(v);
+  return false;
+}
+const same = (prop, a, b) => a === b || (paintsNothing(prop, a) && paintsNothing(prop, b));
+
 const changed = (a, b) => {
   const out = {};
-  for (const k of Object.keys(b)) if (a[k] !== b[k]) out[k] = [a[k], b[k]];
+  for (const k of Object.keys(b)) if (!same(k, a[k], b[k])) out[k] = [a[k], b[k]];
   return out;
 };
 const MAX_CHANGES = 30;
@@ -322,13 +947,23 @@ export function diffStates(rest, after) {
     const c = before ? changed(before.values, k.values) : { display: ['none', k.values.display] };
     if (Object.keys(c).length) kids.push({ path: k.path, changes: limitChanges(c), transition: k.tr });
   }
+  // The same comparison for the elements beside and around it.
+  const restSibs = new Map((rest.sibs ?? []).map((s) => [s.path, s]));
+  const sibs = [];
+  for (const s of after.sibs ?? []) {
+    const before = restSibs.get(s.path);
+    if (!before) continue;
+    const c = changed(before.values, s.values);
+    if (Object.keys(c).length) sibs.push({ path: s.path, rel: s.rel, changes: limitChanges(c), transition: s.tr });
+  }
   const dRect = after.rect.map((v, i) => v - rest.rect[i]);
   const rectChanged = dRect.some((v) => Math.abs(v) > 1);
   const domDelta = after.domCount - rest.domCount;
-  if (!Object.keys(changes).length && !Object.keys(pseudo).length && !kids.length && !rectChanged && !domDelta) return null;
+  if (!Object.keys(changes).length && !Object.keys(pseudo).length && !kids.length && !sibs.length && !rectChanged && !domDelta) return null;
   const out = { changes: limitChanges(changes), transition: after.tr, layout: rectChanged, domDelta };
   if (Object.keys(pseudo).length) out.pseudo = pseudo;
   if (kids.length) out.kids = kids.slice(0, 24);
+  if (sibs.length) out.sibs = sibs;
   if (rectChanged) out.rect = dRect;
   if (uaRing) out.uaRing = true;
   if (JSON.stringify(rest.tr) !== JSON.stringify(after.tr)) out.transitionOut = rest.tr;
@@ -362,43 +997,170 @@ export function keepReverting(rest, back, d) {
   }
   if (kids.length) out.kids = kids;
   else delete out.kids;
+  // A neighbour that keeps changing with the mouse away (a ticker in the next card) was never this element's hover.
+  const sibs = [];
+  for (const sib of d.sibs ?? []) {
+    const left = gone.sibs?.find((x) => x.path === sib.path);
+    const kept = Object.fromEntries(Object.entries(sib.changes).filter(([k]) => !(k in (left?.changes ?? {}))));
+    if (Object.keys(kept).length) sibs.push({ ...sib, changes: kept });
+  }
+  if (sibs.length) out.sibs = sibs;
+  else delete out.sibs;
   if (d.layout && gone.layout) {
     out.layout = false;
     delete out.rect;
   }
-  const nothing = !Object.keys(out.changes).length && !out.pseudo && !out.kids && !out.layout && !out.domDelta;
+  // Elements added or removed that did not come back with the mouse out (a menu the previous probe opened closing, a
+  // timer re-rendering) were not this element's hover.
+  if (out.domDelta && gone.domDelta) out.domDelta = 0;
+  const nothing = !Object.keys(out.changes).length && !out.pseudo && !out.kids && !out.sibs && !out.layout && !out.domDelta;
   return nothing ? null : out;
+}
+
+/**
+ * The changes the mouse probe found inside an element that is a hover subject of its own and was under the mouse.
+ * Probing a container (a header with a transition of its own) puts the mouse on whatever sits at its centre - a nav
+ * link - and the real mouse hovers that link too. Its colour change was credited to the header as a descendant
+ * effect, so in the copy hovering ANY part of the header turned that one link orange: hovering one link changed
+ * another. A change at or inside an element of the pointer chain (aim() `chain`) that is a hover subject itself (a
+ * stylesheet host or a probed candidate) is that element's, unless the element was measured on its own and its own
+ * hover does not make that change (then the container really does it: `.card:hover a`). An element never measured on
+ * its own cannot say, and the change is dropped rather than spread over the container.
+ * @param {object[]} entries  the mouse probe's hover entries, each with the `chain` its aim reported
+ * @param {{ effectOf: Map<string, object>, measured: Set<string>, subjects: Set<string> }} known
+ *   effectOf: path -> that element's own hover entry; measured: paths whose own hover was read (by rule or by mouse);
+ *   subjects: paths that are hover subjects of their own (rule hosts, probe candidates)
+ * @returns {number} how many changes were handed back to the element under the mouse
+ */
+export function creditUnderPointer(entries, { effectOf, measured, subjects }) {
+  let handed = 0;
+  const ownEnd = (subject, kidPath, prop) => {
+    const own = effectOf.get(subject);
+    if (!own) return undefined;
+    if (kidPath === subject) return own.changes?.[prop]?.[1];
+    return own.kids?.find((k) => k.path === kidPath)?.changes?.[prop]?.[1];
+  };
+  for (const e of entries) {
+    if (!e.kids?.length || !e.chain?.length) continue;
+    const kids = [];
+    for (const k of e.kids) {
+      const kept = {};
+      for (const [prop, pair] of Object.entries(k.changes ?? {})) {
+        let theirs = false;
+        for (const x of e.chain) {
+          if (!(k.path === x || k.path.startsWith(`${x}>`)) || !subjects.has(x)) continue;
+          if (!measured.has(x) || ownEnd(x, k.path, prop) === pair?.[1]) {
+            theirs = true;
+            break;
+          }
+        }
+        if (theirs) handed++;
+        else kept[prop] = pair;
+      }
+      if (Object.keys(kept).length) kids.push({ ...k, changes: kept });
+    }
+    if (kids.length) e.kids = kids;
+    else delete e.kids;
+  }
+  return handed;
+}
+
+/**
+ * The real mouse's reading of an element a stylesheet rule already describes, folded into the rule's entry: what the
+ * rule probe read stays, and whatever the mouse saw end elsewhere (a script's inline background beating the rule's, a
+ * part the script adds) is added - the visitor's hover is what the mouse showed. Neighbours are left to the rule probe.
+ * @returns {string[]} the properties (own, `::before`/`::after`, descendants) the mouse added
+ */
+export function mergeMouseIntoRule(rule, mouse) {
+  const added = [];
+  // Only what the rule probe did not see changing is taken from the mouse: the rule probe reads the end value with every
+  // transition off, the mouse may have read a property on its way there (a delay the hovered state adds).
+  const fold = (into, from, label) => {
+    const out = { ...into };
+    for (const [prop, pair] of Object.entries(from ?? {})) {
+      if (prop in out) continue;
+      out[prop] = pair;
+      added.push(`${label}${prop}`);
+    }
+    return out;
+  };
+  rule.changes = fold(rule.changes ?? {}, mouse.changes, '');
+  for (const [which, c] of Object.entries(mouse.pseudo ?? {})) {
+    if (c.content?.[1] === 'none') continue; // a pseudo-element the mouse saw go away is the rule probe's to say
+    rule.pseudo = { ...rule.pseudo, [which]: fold(rule.pseudo?.[which] ?? {}, c, `::${which} `) };
+  }
+  for (const k of mouse.kids ?? []) {
+    const have = (rule.kids ?? []).find((x) => x.path === k.path);
+    if (have) have.changes = fold(have.changes, k.changes, `${k.path} `);
+    else {
+      const before = added.length;
+      const changes = fold({}, k.changes, `${k.path} `);
+      if (added.length > before) rule.kids = [...(rule.kids ?? []), { ...k, changes }];
+    }
+  }
+  if (added.length) {
+    rule.source = 'css+probe';
+    rule.mouseAdded = added.slice(0, 30);
+    if (mouse.scripted) Object.assign(rule, { scripted: true, scriptedMs: mouse.scriptedMs });
+  }
+  return added;
 }
 
 /**
  * Probes a page (desktop view) for hover and focus effects. Hover may use up to 60 % of the budget, focus the rest.
  * @param {import('playwright').Page} page
- * @param {{ limit?: number, perSignature?: number, focusStops?: number, budgetMs?: number }} [o]
+ * @param {{ limit?: number, perSignature?: number, focusStops?: number, budgetMs?: number, dynamicLimit?: number }} [o]
+ *   `dynamicLimit`: how many elements whose only sign of motion is a script's fingerprint are probed (the rest are
+ *   counted in `stats.skipped.dynamic`); a quarter of the page's limit by default.
  * @returns {Promise<object>} the content of motion.json
  */
-export async function captureInteractions(page, { limit = 40, perSignature = 3, focusStops = 80, budgetMs = 10000 } = {}) {
+export async function captureInteractions(page, { limit = 40, perSignature = 3, focusStops = 80, budgetMs = 10000, perCandidateMs = 900, maxHoverMs = Math.min(15000, budgetMs * 2), foreignCss = null, dynamicLimit = Math.max(DYNAMIC_MIN, Math.round(limit * DYNAMIC_SHARE)), itemLimit = Math.max(ITEM_MIN, Math.round(limit * ITEM_SHARE)), ruleLimit = Math.max(RULE_MIN, Math.round(limit * RULE_SHARE)) } = {}) {
   const started = Date.now();
-  const hoverDeadline = started + budgetMs * 0.6;
-  const deadline = started + budgetMs;
+  // Set once the candidates are known: the mouse probe gets time per element to probe (within bounds), focus the rest.
+  let hoverDeadline = started + budgetMs * 0.6;
+  let deadline = started + budgetMs;
   const scan = await page.evaluate(scanRules, {});
-  const picked = await page.evaluate(install, { limit, perSignature });
+  // What the stylesheets declare first (every element, no mouse, ~1 s); the mouse probe then looks for the rest
+  // (script-driven effects) on the elements the stylesheets do not cover.
+  let forced = { hover: [], focus: [], stats: { error: null } };
+  try {
+    forced = await page.evaluate(forceRuleStates, { props: [...MOTION_PROPS, ...RULE_EXTRA], pseudoProps: PSEUDO_EXTRA, maxHosts: 600, maxKids: 40, budgetMs: Math.max(500, Math.min(4000, budgetMs * 0.3)), foreignCss });
+  } catch (err) {
+    forced.stats.error = String(err?.message ?? err).split('\n')[0];
+  }
+  const picked = await page.evaluate(install, { limit, perSignature, dynamicLimit, itemLimit, ruleLimit, skip: forced.hover.map((h) => h.path) });
+  // A fixed share of the budget probed ~6 elements of 30 on a busy page: script-driven hovers further down were never
+  // reached. The hover time follows the elements to probe (~0.9 s each: scroll, settle, hover, check it reverts).
+  const hoverMs = Math.max(budgetMs * 0.6, Math.min(maxHoverMs, picked.candidates.length * perCandidateMs));
+  hoverDeadline = started + hoverMs;
+  deadline = hoverDeadline + budgetMs * 0.4;
   const args = (i) => ({ i, props: MOTION_PROPS, pseudoProps: PSEUDO_EXTRA });
-  const stats = { candidates: picked.candidates.length, focusable: picked.focusable, probed: 0, hovered: 0, focused: 0, noChange: 0, notReverted: 0, covered: 0, skipped: picked.skipped, timedOut: false };
-  const settle = (state) => Math.min(700, Math.max(80, (state ? transitionMs(state) : 200) + 60));
+  const stats = {
+    candidates: picked.candidates.length, focusable: picked.focusable, probed: 0, hovered: 0, focused: 0, noChange: 0,
+    notReverted: 0, covered: 0, skipped: picked.skipped, timedOut: false,
+    // Elements taken in because a script animates them, and how many of them turned out to have an effect that a
+    // transition of their own does not carry - the ones the copy has to time itself.
+    dynamic: picked.dynamic ?? 0, dynamicFound: 0, scripted: 0, scriptedUnsettled: 0,
+  };
+  // The element's own transition, read to its end: a site that gives everything 0.8 s was read mid-way at the old 0.7 s
+  // cap, so a hover's end value was a value on the way there (and the copy, timed differently, read another one).
+  const settle = (state) => Math.min(1500, Math.max(80, (state ? transitionMs(state) : 200) + 60));
 
   const hover = [];
+  const measuredPaths = new Set();
   let lastWait = 200;
   for (const c of picked.candidates) {
     if (Date.now() > hoverDeadline) {
       stats.timedOut = true;
       break;
     }
-    const spot = await page.evaluate(aim, c.i);
+    let spot = await page.evaluate(aim, c.i);
     if (!spot || !spot.reachable) {
       stats.covered++;
       continue;
     }
     stats.probed++;
+    measuredPaths.add(c.path);
     // The rest state is read here, with the mouse out of the page, after the scroll that brought the element
     // into view has had time to run its reveal effects: those are not hover effects.
     await page.mouse.move(-20, -20).catch(() => {});
@@ -410,41 +1172,174 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
       await page.waitForTimeout(150);
       const next = await page.evaluate(readState, args(c.i));
       if (!next) break;
-      const steady = JSON.stringify([next.values, next.pseudo, next.kids.map((k) => k.values), next.rect]) === JSON.stringify([before.values, before.pseudo, before.kids.map((k) => k.values), before.rect]);
+      const steady = stateKey(next) === stateKey(before);
       before = next;
       if (steady) break;
     }
     if (!before) continue;
     lastWait = settle(before);
+    // A smooth scroll (a script owning the scroll) moved the element after the first aim: aim again where it settled.
+    if (spot.scrolled) {
+      const again = await page.evaluate(aim, c.i);
+      if (!again?.reachable) {
+        stats.covered++;
+        continue;
+      }
+      spot = again;
+    }
+    // An element with no transition of its own that a script still animates: the time the effect takes is nowhere to
+    // be read, so it is measured. The element is read again every DYN_STEP_MS until two reads are the same, and that
+    // is how long the change took - the copy then eases into the same end state over the same stretch of time
+    // (ir/motion.js synthTransition) instead of jumping there in one frame.
+    const timed = transitionMs(before) === 0;
     await page.mouse.move(spot.x, spot.y);
+    // Read at once as well: an end state that is already there was set in one step, so there is no movement to
+    // copy and the copy must not invent one.
+    const first = timed ? await page.evaluate(readState, args(c.i)) : null;
     // The effect needs its transition to run (plus a frame); JavaScript-driven effects get the same time.
     await page.waitForTimeout(lastWait);
-    const after = await page.evaluate(readState, args(c.i));
+    let after = await page.evaluate(readState, args(c.i));
     if (!after) continue;
+    // The hovered state may run a longer transition than the one at rest (`transition-delay` only on :hover): the read
+    // is taken again once that one has ended too, so an end value is never a value on its way there.
+    const more = Math.min(1500, transitionMs(after) + 60) - lastWait;
+    if (!timed && more > 0) {
+      await page.waitForTimeout(more);
+      after = (await page.evaluate(readState, args(c.i))) ?? after;
+    }
+    let scriptedMs = null;
+    let settled = true;
+    if (timed) {
+      let elapsed = lastWait;
+      // Nothing yet: a script may react late (a busy main thread, a runtime that answers a while after the pointer
+      // arrived). Waited for, up to START_WAIT_MS, before calling it no change - a fixed wait read "no change" on a busy
+      // page and the hover was lost. The time counted is the change's own, from where it started.
+      if (stateKey(after) === stateKey(before)) {
+        for (let waited = 0; waited < START_WAIT_MS && Date.now() <= hoverDeadline; waited += DYN_STEP_MS) {
+          await page.waitForTimeout(DYN_STEP_MS);
+          const next = await page.evaluate(readState, args(c.i));
+          if (!next) break;
+          if (stateKey(next) !== stateKey(before)) {
+            after = next;
+            elapsed = DYN_STEP_MS;
+            break;
+          }
+        }
+      }
+      let prev = after;
+      settled = false;
+      for (let step = 0; step < DYN_STEPS && Date.now() <= hoverDeadline; step++) {
+        await page.waitForTimeout(DYN_STEP_MS);
+        elapsed += DYN_STEP_MS;
+        const next = await page.evaluate(readState, args(c.i));
+        if (!next) break;
+        const steady = stateKey(next) === stateKey(prev);
+        prev = next;
+        if (steady) {
+          settled = true;
+          elapsed -= DYN_STEP_MS; // it was already there one read earlier
+          break;
+        }
+      }
+      after = prev;
+      scriptedMs = first && stateKey(first) === stateKey(after) ? 0 : Math.max(0, Math.round(elapsed));
+    }
     const d = diffStates(before, after);
-    if (!d) {
+    // The mouse rests on one block inside this element (a card in the middle of a row): that block's change is the
+    // block's own hover, measured when the block itself is probed - credited to this element it would make the copy
+    // move that one block whatever part of the row is hovered.
+    if (d?.kids && spot.under?.length) {
+      const own = (p) => spot.under.some((u) => p === u || p.startsWith(`${u}>`));
+      const kept = d.kids.filter((k) => !own(k.path));
+      if (kept.length < d.kids.length) stats.handedToItems = (stats.handedToItems ?? 0) + d.kids.length - kept.length;
+      if (kept.length) d.kids = kept;
+      else delete d.kids;
+    }
+    const empty = d && !Object.keys(d.changes ?? {}).length && !d.pseudo && !d.kids?.length && !d.sibs?.length && !d.layout && !d.domDelta;
+    if (!d || empty) {
       stats.noChange++;
       continue;
     }
     // Control: a hover effect goes away when the mouse leaves. A change that stays (or goes on) is an entrance animation,
     // a timer or a loop that happened to run while the mouse was there - not a hover effect.
     await page.mouse.move(-20, -20).catch(() => {});
-    await page.waitForTimeout(Math.min(600, settle(before) + 100));
-    const back = await page.evaluate(readState, args(c.i));
+    // A script-driven effect is given the time it was measured to take to go back, so an effect still on its way out
+    // is not mistaken for one that never reverts.
+    await page.waitForTimeout(Math.min(1200, Math.max(settle(before) + 100, (scriptedMs ?? 0) + 150)));
+    let back = await page.evaluate(readState, args(c.i));
+    // Not back yet: a way back slower than the way in (or a busy page) is waited for, up to REVERT_WAIT_MS, until the
+    // element is at rest again - a fixed wait threw away hovers that were still easing out.
+    for (let waited = 0; back && stateKey(back) !== stateKey(before) && waited < REVERT_WAIT_MS && Date.now() <= hoverDeadline; waited += REVERT_STEP_MS) {
+      await page.waitForTimeout(REVERT_STEP_MS);
+      const next = await page.evaluate(readState, args(c.i));
+      if (!next) break;
+      back = next;
+    }
     const kept = back ? keepReverting(before, back, d) : d;
     if (!kept) {
       stats.notReverted++;
       continue;
     }
     stats.hovered++;
-    hover.push({ path: c.path, tag: c.tag, text: c.text, sig: c.sig, reasons: c.reasons, rect: c.rect, cursor: c.cursor, ...kept });
+    // `scripted` says the page animated this itself: the effect carries no transition that the copy could keep, so
+    // the copy writes one of its own over the measured time.
+    const scripted = scriptedMs > 0 && Object.keys(kept.changes ?? {}).length > 0;
+    if (scripted) stats.scripted++;
+    if (scripted && !settled) stats.scriptedUnsettled++;
+    if (c.reasons?.includes('dynamic')) stats.dynamicFound++;
+    hover.push({
+      path: c.path, tag: c.tag, text: c.text, sig: c.sig, reasons: c.reasons, rect: c.rect, cursor: c.cursor,
+      ...(c.dyn && { dyn: c.dyn }), source: 'probe', ...kept, chain: spot.chain ?? [],
+      ...(scripted && { scripted: true, scriptedMs, ...(settled ? {} : { scriptedUnsettled: true }) }),
+    });
   }
   await page.mouse.move(-20, -20).catch(() => {});
+
+  // What the mouse found inside an element under it that hovers by itself is that element's (creditUnderPointer), and
+  // the mouse's reading of an element a rule describes is folded into the rule's entry (mergeMouseIntoRule).
+  const effectOf = new Map();
+  for (const e of [...forced.hover, ...hover]) if (!effectOf.has(e.path)) effectOf.set(e.path, e);
+  stats.handedToHovered = creditUnderPointer(hover, {
+    effectOf,
+    measured: new Set([...forced.hover.map((h) => h.path), ...measuredPaths]),
+    subjects: new Set([...forced.hover.map((h) => h.path), ...picked.candidates.map((c) => c.path)]),
+  });
+  const ruleByPath = new Map(forced.hover.map((h) => [h.path, h]));
+  const mouseOnly = [];
+  const added = [];
+  for (const e of hover) {
+    delete e.chain;
+    const rule = ruleByPath.get(e.path);
+    if (!rule) {
+      // Everything it found belonged to the element under the mouse: nothing of its own is left.
+      if (!Object.keys(e.changes ?? {}).length && !e.pseudo && !e.kids?.length && !e.sibs?.length && !e.layout && !e.domDelta) stats.hovered--;
+      else mouseOnly.push(e);
+      continue;
+    }
+    const props = mergeMouseIntoRule(rule, e);
+    if (props.length) added.push({ from: e, rule });
+  }
+  // What the mouse added on a few members of a group of equal elements, the other members (whose rule entries the mouse
+  // did not reach) get as well, with the descendants found at the same place inside each.
+  const rulesProbed = new Set(hover.filter((e) => ruleByPath.has(e.path)).map((e) => e.path));
+  for (const { from, rule } of added) {
+    const g = (picked.groups ?? []).find((x) => x.sig === from.sig);
+    for (const p of g?.paths ?? []) {
+      const other = ruleByPath.get(p);
+      if (!other || rulesProbed.has(p) || other === rule) continue;
+      const kids = (from.kids ?? []).filter((k) => k.path.startsWith(`${from.path}>`)).map((k) => ({ ...k, path: p + k.path.slice(from.path.length) }));
+      mergeMouseIntoRule(other, { ...from, path: p, kids, pseudo: from.pseudo });
+      rulesProbed.add(p);
+    }
+  }
+  stats.rulesProbed = hover.length - mouseOnly.length;
+  stats.rulesExtended = added.length;
 
   // Focus: the Tab key from the start of the page. At each stop the focused state is compared with the same
   // element blurred (same scroll position, same reveal state); a stop is probed once per element.
   const focus = [];
   const seen = new Set();
+  const focusByRule = new Set(forced.focus.map((f) => f.path));
   await page.evaluate(resetFocus);
   for (let n = 0; n < focusStops && Date.now() <= deadline; n++) {
     await page.keyboard.press('Tab');
@@ -463,7 +1358,7 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
     const d = focusedState && blurred && diffStates(blurred, focusedState);
     const c = picked.candidates[i];
     stats.focused++;
-    if (d) focus.push({ path: c.path, tag: c.tag, text: c.text, sig: c.sig, rect: c.rect, ...d });
+    if (d && !focusByRule.has(c.path)) focus.push({ path: c.path, tag: c.tag, text: c.text, sig: c.sig, rect: c.rect, ...d });
   }
   if (Date.now() > deadline) stats.timedOut = true;
 
@@ -472,10 +1367,13 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
     view: 'desktop',
     capturedAt: new Date().toISOString(),
     props: MOTION_PROPS,
-    hover,
-    focus,
+    hover: [...forced.hover, ...mouseOnly],
+    focus: [...forced.focus, ...focus],
     groups: picked.groups,
     rules: scan.rules,
-    stats: { ...stats, rules: scan.rules.length, rulesTotal: scan.total, unreadableSheets: scan.unreadable.length, ms: Date.now() - started },
+    stats: {
+      ...stats, rules: scan.rules.length, rulesTotal: scan.total, unreadableSheets: scan.unreadable.length,
+      fromRules: { hover: forced.hover.length, focus: forced.focus.length, ...forced.stats }, ms: Date.now() - started,
+    },
   };
 }

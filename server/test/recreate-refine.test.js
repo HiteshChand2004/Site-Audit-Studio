@@ -8,6 +8,7 @@ import { launchBrowser } from '../src/audit/render.js';
 import { captureSweep, SWEEP_WIDTHS } from '../src/recreate/capture/sweep.js';
 import { applyPhoneShrink } from '../src/recreate/ir/fluid.js';
 import { refineResponsive } from '../src/recreate/verify/refine.js';
+import { refineBudget } from '../src/recreate/generate.js';
 import { startSiteServer } from '../src/recreate/verify/server.js';
 import { userPolicy, withNetPolicy } from '../src/security/netGuard.js';
 
@@ -86,6 +87,42 @@ test('the sweep moves the tablet breakpoint to where the original switches layou
     assert.equal(right.breakpoints.tablet, 1199.98);
     assert.equal(right.breakpoints.source, 'site');
     assert.equal(right.summary.breakpoints.tablet.changed, false);
+  } finally {
+    await live.close();
+  }
+});
+
+test('a breakpoint the sweep does not judge survives the sweep', async () => {
+  // The check rebuilt the breakpoints from its own three key names, so every view it does not judge was dropped.
+  // An exact run captures a view between the tablet and the phone; losing its breakpoint left that view with no
+  // media query at all, its styles never written, and the band it exists for falling to the next view up - the
+  // layout it was added precisely because it is not. Seen on a live run: the copy emitted 1279.98, 1023.98 and
+  // 639.98, and nothing for 767.98.
+  const body = '<div class="row"><div class="box">One</div><div class="box">Two</div><div class="box">Three</div></div>';
+  const { original, site } = await setup(
+    '*{box-sizing:border-box}body{margin:0;font:16px sans-serif}.row{display:flex}.box{flex:1 1 0%;background:#4F46E5;color:#fff;padding:90px 12px}@media (max-width:1200px){.row{flex-direction:column}}',
+    body,
+  );
+  const rules = [
+    { selector: '.row', parts: { base: { display: 'flex' }, tablet: { 'flex-direction': 'column' } } },
+    { selector: '.box', parts: { base: { flex: '1 1 0%', 'background-color': '#4f46e5', color: '#ffffff', 'padding-top': '90px', 'padding-bottom': '90px', 'padding-left': '12px', 'padding-right': '12px' } } },
+  ];
+  const live = await startSiteServer(original);
+  try {
+    const { dir, sweep } = await sweepOf(`${live.origin}/`);
+    // A view the check knows nothing about, with a breakpoint of its own.
+    const ir = irFor(rules, { tablet: 1023.98, 'large-phone': 767.98, mobile: 639.98, source: 'site' });
+    const refined = await refineResponsive({ ir, siteDir: site, workspace: dir, sweep });
+    assert.equal(refined.summary.status, 'done');
+    assert.equal(refined.breakpoints.source, 'sweep', 'it did change something');
+    assert.equal(refined.breakpoints.tablet, 1279.98, 'the key it judges moves');
+    assert.equal(refined.breakpoints['large-phone'], 767.98, 'and the key it does not judge is still there');
+    assert.equal(refined.breakpoints.mobile, 639.98);
+    // Nothing invented either: it returns the keys it was given, no more.
+    assert.deepEqual(
+      Object.keys(refined.breakpoints).filter((k) => k !== 'source').sort(),
+      ['large-phone', 'mobile', 'tablet'],
+    );
   } finally {
     await live.close();
   }
@@ -212,7 +249,10 @@ test('fields and buttons with a px width never grow past their parent', async ()
   for (const tag of ['button', 'input', 'select', 'textarea', 'img']) {
     const decls = { desktop: { '@rw': { px: 200, ratio: 0.5 } }, mobile: { '@rw': { px: 312.4, ratio: 0.9 } } };
     resolveHints(decls, ['desktop', 'mobile'], tag);
-    assert.equal(decls.mobile.width, '312px', tag);
+    // Two decimals, not a whole pixel: the captured box was 312.4 px wide and that is what the copy is asked for.
+    // Rounding it here was the last of three roundings between the browser and the stylesheet, and the exact
+    // comparison - which grades to a hundredth of a pixel - then charged the copy for the 0.4 px it had removed.
+    assert.equal(decls.mobile.width, '312.4px', tag);
     assert.equal(decls.mobile['max-width'], '100%', tag);
   }
   // One that fills its parent is 100% wide and needs no cap; other elements are not touched.
@@ -265,4 +305,19 @@ test('the stylesheet writes a media query per captured view, widest first', asyn
   assert.ok(!/1279\.98/.test(old));
   // Laptop rules without a laptop breakpoint fall back to the default.
   assert.ok(/max-width: 1279\.98px/.test(emitCss(irFor([{ selector: '.a', parts: { base: { color: '#000000' }, laptop: { color: '#111111' } } }], { tablet: 1023.98, mobile: 767.98 }))));
+});
+
+test('the breakpoint check gets time for the widths it has to judge', () => {
+  // A live exact run ended with `stopped: 'time-limit'`, 76 renders and no verdict at all: the check renders a page
+  // at each judged width for every candidate, and the widths a site's own boundaries add took it past the flat
+  // ninety seconds. An exact run has no overall limit, so this one follows the work.
+  const fixed = [320, 480, 600, 900, 1024, 1280, 1920];
+  const wider = [320, 480, 600, 639, 640, 767, 768, 900, 1024, 1280, 1920];
+  assert.equal(refineBudget(fixed, { exact: true }), refineBudget(fixed), 'the fixed widths earn the base time');
+  assert.ok(refineBudget(wider, { exact: true }) > refineBudget(fixed, { exact: true }), 'four more widths, more time');
+  // Normal mode is untouched: it has an overall limit to respect, and this time comes out of it.
+  assert.equal(refineBudget(wider), refineBudget(fixed));
+  // Nothing swept, nothing odd: the base time, never zero or NaN.
+  assert.equal(refineBudget([], { exact: true }), refineBudget(fixed));
+  assert.equal(refineBudget(undefined, { exact: true }), refineBudget(fixed));
 });

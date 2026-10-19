@@ -13,7 +13,7 @@ function slug(ir) {
 }
 
 /** @returns {Map<string, string>} */
-export function scaffold({ ir, meta, pinned, siteName }) {
+export function scaffold({ ir, meta, pinned, overrides = {}, siteName }) {
   const name = `${slug(ir)}-site`;
   const home = meta[0];
   const files = new Map();
@@ -28,8 +28,16 @@ export function scaffold({ ir, meta, pinned, siteName }) {
       build: 'vite build && vite build --ssr src/entry-server.jsx --outDir .ssr && node scripts/prerender.mjs',
       preview: 'vite preview',
     },
-    dependencies: { react: pinned.react, 'react-dom': pinned['react-dom'] },
+    // gsap only when a page replays the original's animation calls (emit/anim.js SiteAnimations).
+    dependencies: {
+      react: pinned.react, 'react-dom': pinned['react-dom'],
+      ...(ir.pages.some((p) => p.anim) && { gsap: pinned.gsap }),
+      // motion only when a page plays Framer appear entrances (behavior/framer/emit.js SiteAppear).
+      ...(ir.pages.some((p) => p.appear) && { motion: pinned.motion }),
+    },
     devDependencies: { '@vitejs/plugin-react': pinned['@vitejs/plugin-react'], vite: pinned.vite },
+    // The transitive versions the server built with (a newer Rollup made the build minutes long).
+    ...(Object.keys(overrides).length && { overrides }),
   }, null, 2)}\n`);
 
   files.set('vite.config.js', lines(
@@ -84,17 +92,33 @@ export function scaffold({ ir, meta, pinned, siteName }) {
     '}',
   ));
 
+  // The dev server's shell has no page head, so the generated behaviour script (menus, tabs, reveals, js/motion.js) is
+  // loaded once the page is drawn; a built page has it in its head already.
+  const motion = Boolean(ir.motion?.script);
   files.set('src/main.jsx', lines(
     "import { hydrateRoot, createRoot } from 'react-dom/client';",
-    "import './styles/site.css';",
+    "import { flushSync } from 'react-dom';",
     "import { pageForPath } from './pages.js';",
+    '',
+    '// A built page carries its own CSS inline in its head (scripts/prerender.mjs); the dev server loads the whole stylesheet.',
+    "if (import.meta.env.DEV) import('./styles/site.css');",
     '',
     "const container = document.getElementById('root');",
     '// A prerendered page (npm run build) is hydrated; the dev server renders into the empty shell.',
     '// No top-level await: a page chunk imports the shared chunk this module lives in, so waiting for it here would deadlock.',
     'pageForPath(window.location.pathname).load().then(({ default: Page }) => {',
     '  if (container.hasChildNodes()) hydrateRoot(container, <Page />);',
-    '  else createRoot(container).render(<Page />);',
+    '  else {',
+    '    const root = createRoot(container);',
+    '    flushSync(() => root.render(<Page />));',
+    ...(motion ? [
+      "    if (!document.querySelector('script[src=\"/js/motion.js\"]')) {",
+      "      const s = document.createElement('script');",
+      "      s.src = '/js/motion.js';",
+      '      document.head.appendChild(s);',
+      '    }',
+    ] : []),
+    '  }',
     '});',
   ));
 
@@ -113,7 +137,8 @@ export function scaffold({ ir, meta, pinned, siteName }) {
 
   files.set('scripts/prerender.mjs', lines(
     '// After `vite build` and the server build: writes every page as HTML at its original path (dist/about/index.html,',
-    '// dist/contact.html, …): the page head, the built stylesheet and scripts, and the rendered markup.',
+    '// dist/contact.html, …): the page head, its own stylesheet (inline: no render-blocking request), the built scripts',
+    '// and the rendered markup.',
     "import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';",
     "import path from 'node:path';",
     "import { pathToFileURL } from 'node:url';",
@@ -137,6 +162,7 @@ export function scaffold({ ir, meta, pinned, siteName }) {
     "    '<html' + attr('lang', page.lang) + attr('class', page.htmlClass) + '>',",
     "    '<head>',",
     '    page.head,',
+    "    '  <style>' + page.css + '</style>',",
     "    ...built.map((tag) => '  ' + tag),",
     "    '</head>',",
     "    '<body' + attr('class', page.bodyClass) + '>',",

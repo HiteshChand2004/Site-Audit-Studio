@@ -40,19 +40,32 @@ body { margin: 0; font: 16px sans-serif; }
 <div class="b" id="jsspin">script spin</div>
 <div style="width: 400px; overflow: hidden"><div class="b" id="jsmarquee" style="width: 100px">script marquee</div></div>
 <div class="b" id="jssine">script oscillate</div>
+<div class="b" id="jsfloat">slow float</div>
+<div style="height: 1600px"></div>
+<div style="width: 600px; overflow: hidden"><div id="ticker" style="display: flex; width: max-content"><div style="width: 400px">quote one quote two</div><div style="width: 400px">quote one quote two</div></div></div>
 <script>
 document.getElementById('waapi').animate([{ transform: 'translateY(0)' }, { transform: 'translateY(-12px)' }], { duration: 1200, iterations: Infinity, direction: 'alternate', easing: 'ease-in-out' });
 setTimeout(() => document.getElementById('tr').classList.add('go'), 50);
 const spin = document.getElementById('jsspin');
 const mq = document.getElementById('jsmarquee');
 const sine = document.getElementById('jssine');
+const float = document.getElementById('jsfloat');
 const tick = (now) => {
   spin.style.transform = 'rotate(' + ((now / 1000) * 180) + 'deg)';
   mq.style.transform = 'translateX(' + ((now / 1000) * 120 % 300) + 'px)';
   sine.style.transform = 'translateY(' + (20 * Math.sin((now / 1000) * Math.PI)) + 'px)';
+  // A shape floating 12 px up and down every 5 s: in a short recording it only goes one way.
+  float.style.transform = 'translateY(' + (12 * Math.sin((now / 1000) * (2 * Math.PI / 5))) + 'px)';
   requestAnimationFrame(tick);
 };
 requestAnimationFrame(tick);
+// A ticker further down that only moves while it is on screen (like a builder's ticker), its items repeated.
+const ticker = document.getElementById('ticker');
+let visible = false;
+let x = 0;
+new IntersectionObserver((es) => { visible = es[0].isIntersecting; }).observe(ticker);
+const move = () => { if (visible) { x = (x - 1) % 400; ticker.style.transform = 'translateX(' + x + 'px)'; } requestAnimationFrame(move); };
+requestAnimationFrame(move);
 </script></body></html>`;
 
 let dir;
@@ -167,7 +180,16 @@ test('declared and script-driven loops are found; one-shot animations and transi
   assert.equal(scriptSine.pattern, 'oscillate');
   assert.ok(Math.abs(scriptSine.params.periodMs - 2000) < 300, JSON.stringify(scriptSine.params));
 
-  assert.ok(stats.css >= 5 && stats.waapi === 1 && stats.script === 3 && stats.paused === 1, JSON.stringify(stats));
+  const slowFloat = at('slow float');
+  assert.equal(slowFloat.pattern, 'oscillate', `watched longer, a slow float turns: ${JSON.stringify(slowFloat.params)}`);
+  assert.ok(Math.abs(slowFloat.params.periodMs - 5000) < 800, JSON.stringify(slowFloat.params));
+
+  const tickerLoop = loops.find((l) => l.text?.startsWith('quote one'));
+  assert.ok(tickerLoop, 'a ticker that moves only on screen is found by scrolling');
+  assert.equal(tickerLoop.pattern, 'drift');
+  assert.equal(Math.round(tickerLoop.params.repeat.x), 400, 'its items repeat every 400 px');
+
+  assert.ok(stats.css >= 5 && stats.waapi === 1 && stats.script === 5 && stats.paused === 1, JSON.stringify(stats));
   assert.equal(byPath(/./).length, loops.length);
   await context.close();
 });

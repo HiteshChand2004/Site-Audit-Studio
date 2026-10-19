@@ -10,6 +10,7 @@ import { db, projectDir } from '../src/db/index.js';
 import { planZip, reportMarkdown, ZIP_MAX_BYTES, zipBaseName } from '../src/recreate/export/zip.js';
 import { recreateDir } from '../src/recreate/workspace.js';
 import recreateRouter from '../src/routes/recreate.js';
+import { seedProject } from './helpers/projects.js';
 
 const temps = [];
 const projectIds = [];
@@ -122,7 +123,7 @@ test('download route streams a valid zip, and refuses unsafe, unknown and wrong-
     const id = randomUUID();
     projectIds.push(id);
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://example.com/', 'html', 1, ?, ?)`).run(id, now, now);
+    seedProject(db, { id, name: 'p', url: 'https://example.com/', stack: 'html', authorized: 1 });
     const addRecreate = async (rep, status = 'done') => {
       const rid = randomUUID();
       db.prepare(`INSERT INTO recreates (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, ?, 100, ?, ?, ?)`).run(rid, id, status, now, now, JSON.stringify(rep));

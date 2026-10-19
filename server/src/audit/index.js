@@ -20,6 +20,7 @@ import { crawl } from './crawler.js';
 import { extractPage } from './extract.js';
 import { computeFrame } from './frame.js';
 import { fetchPage, isBotChallenge, isHtml } from './http.js';
+import { CANVAS_RENDERED_MESSAGE, classifySiteType } from '../detection/siteType.js';
 import { runLighthouse } from './lighthouse/run.js';
 import { checkLinks } from './linkChecker.js';
 import { launchBrowser, renderHome, renderHtml } from './render.js';
@@ -43,9 +44,9 @@ export const STEPS = [
   { key: 'render', label: 'Rendering + accessibility', weight: 14, max: 110000, expected: 15000 },
   { key: 'crawl', label: 'Crawling pages', weight: 18, max: 75000 },
   { key: 'links', label: 'Checking links', weight: 14, max: 50000 },
-  { key: 'screenshots', label: 'Screenshot (desktop)', weight: 8, max: 80000, expected: 15000 },
-  // Desktop only for now (recreate/views.js); the phone run ('lighthouse-mobile', 'mobile') is parked.
-  { key: 'lighthouse-desktop', label: 'Lighthouse · desktop', weight: 40, max: 120000, expected: 35000 },
+  { key: 'screenshots', label: 'Screenshots (desktop, tablet, mobile)', weight: 8, max: 80000, expected: 25000 },
+  { key: 'lighthouse-mobile', label: 'Lighthouse · mobile', weight: 20, max: 120000, expected: 40000 },
+  { key: 'lighthouse-desktop', label: 'Lighthouse · desktop', weight: 20, max: 120000, expected: 35000 },
   { key: 'report', label: 'Building report', weight: 8, max: 30000 },
 ];
 export const PUBLIC_STEPS = STEPS.map(({ key, label }) => ({ key, label }));
@@ -68,6 +69,11 @@ const HOME_NETWORK_WAIT_MS = 30 * 1000;
 const INTERRUPTION_EXTRA_MS = 5 * 60 * 1000;
 // A crashed Lighthouse run is tried once more only when at least this much time is left for it.
 const LIGHTHOUSE_RETRY_MIN_MS = 45 * 1000;
+// Calibration against an earlier measurement (o.lighthouseBaseline): repeated when this computer's benchmark index is below
+// this share of the earlier run's. The simulated slowdown never goes below the minimum.
+const CALIBRATE_BELOW = 0.75;
+const CALIBRATE_MIN_SLOWDOWN = 0.5;
+const DEFAULT_SLOWDOWN = { mobile: 4, desktop: 1 };
 
 /**
  * Time limits of one analysis, from the environment (server/.env). The defaults suit a normal machine; a slow or busy one
@@ -176,13 +182,18 @@ async function fetchHome(url, scale = 1) {
  * @param {string[]} [o.seedUrls]  pages the crawl must visit besides the ones it finds itself
  * @param {string} [o.deployOrigin]  the origin the analyzed site will be published at: sitemaps that
  *   robots.txt lists there are read from the analyzed site instead (a recreate names its future home)
+ * @param {boolean} [o.linksBesideLighthouse]  Lighthouse starts while the link check still runs (the link check is plain
+ *   HTTP to other hosts; a site served from loopback has nothing to share with it). Analyze waits for the links first.
+ * @param {Function} [o.lighthouseRun]  tests only: stands in for runLighthouse (url, formFactor, options)
+ * @param {{ mobile?: number, desktop?: number }} [o.lighthouseBaseline]  benchmark index of the runs this one is compared
+ *   with (re-audit only): a much slower computer now repeats the run with a scaled CPU slowdown
  * @returns {Promise<object>} the audit JSON
  */
 export function runAnalysis({ netPolicy = userPolicy(), ...opts }) {
   return withNetPolicy(netPolicy, () => analyze({ ...opts, netPolicy }));
 }
 
-async function analyze({ project, analysisId, maxPages, progress, netPolicy, url = project.url, outDir: dir, skip = [], seedUrls = [], deployOrigin = null }) {
+async function analyze({ project, analysisId, maxPages, progress, netPolicy, url = project.url, outDir: dir, skip = [], seedUrls = [], deployOrigin = null, linksBesideLighthouse = false, lighthouseRun = runLighthouse, lighthouseBaseline = null }) {
   const timing = analyzeTiming();
   const freeAtStart = freeMemoryMB();
   const baseDeadline = Date.now() + timing.budgetMs;
@@ -297,7 +308,7 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
 
   const proxy = await startEgressProxy(netPolicy);
   try {
-    const audit = await analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing });
+    const audit = await analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing, linksBesideLighthouse, lighthouseRun, lighthouseBaseline });
     noteLowMemory(audit.errors, freeAtStart);
     return audit;
   } finally {
@@ -327,7 +338,7 @@ export function noteLowMemory(errors, freeMB) {
   });
 }
 
-async function analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing }) {
+async function analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing, linksBesideLighthouse, lighthouseRun, lighthouseBaseline }) {
   // The time kept for Lighthouse: the steps before it (and the crawl / link check, which can return what they have) never use it up.
   const reserve = { reserve: timing.lighthouseReserveMs };
   const scale = timing.scale;
@@ -348,7 +359,7 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
   const renderSlot = limiter(parallelism({ max: 3 }));
   // Really short of memory (room for one page at a time): the screenshots wait for the homepage render instead of competing
   // with it. Side by side, both slowed each other down until neither finished in its time limit.
-  const oneAtATime = parallelism({ max: 3 }) === 1;
+  const oneAtATime = viewsAtOnce === 1;
 
   const robotsTask = step(
     'robots',
@@ -424,27 +435,53 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     await browser?.close().catch(() => {});
     await cache?.close();
   }
-  const links = await linksTask;
+  // The re-audit lets the link check finish beside Lighthouse (linksBesideLighthouse); it is awaited before the report.
+  let links = linksBesideLighthouse ? null : await linksTask;
   const allPages = crawlResult.pages;
   const pages = allPages.filter((p) => p.facts);
+  const hasQuery = (url) => {
+    try {
+      return new URL(url).search.length > 1;
+    } catch {
+      return false;
+    }
+  };
   const homePage = { ...pages[0], headers: home.headers };
 
-  // 6. Lighthouse (one at a time and nothing else running: parallel work would distort each other's performance numbers).
+  // 6. Lighthouse (one at a time and no other browser running: parallel work would distort each other's performance numbers;
+  // in the re-audit only the link check's plain HTTP requests may still be running).
   // A run that dies (not one that times out) usually died of memory pressure: it gets one more try when the time allows.
   const lighthouse = (key, formFactor, reserveMs = 0) =>
     step(key, async (_signal, budget) => {
       const started = Date.now();
-      const options = (timeout) => ({ timeout, outFile: path.join(outDir, `lighthouse-${formFactor}.json`), proxy: proxy.url });
+      const options = (timeout, extra) => ({ timeout, outFile: path.join(outDir, `lighthouse-${formFactor}.json`), proxy: proxy.url, ...extra });
+      let result;
       try {
-        return await runLighthouse(home.url, formFactor, options(budget));
+        result = await lighthouseRun(home.url, formFactor, options(budget));
       } catch (err) {
         const left = budget - (Date.now() - started) - 3000;
         if (/timed out/i.test(err.message) || left < LIGHTHOUSE_RETRY_MIN_MS) throw err;
-        return runLighthouse(home.url, formFactor, options(left));
+        result = await lighthouseRun(home.url, formFactor, options(left));
       }
+      return calibrate(result, formFactor, () => budget - (Date.now() - started) - 3000, (extra, left) => lighthouseRun(home.url, formFactor, options(left, extra)));
     }, null, { reserve: reserveMs });
-  // Desktop only for now (recreate/views.js): the phone run is parked, so the desktop run has the whole reserve.
+  // A measurement compared with an earlier one (the re-audit against the original's analysis): when this computer is much
+  // slower now than during the earlier run (Lighthouse's benchmark index, e.g. other jobs keep it busy), the simulated
+  // phone CPU is scaled down by the same ratio and the run repeated, so both sides are measured on an equal footing.
+  const calibrate = async (result, formFactor, timeLeft, rerun) => {
+    const base = lighthouseBaseline?.[formFactor];
+    const now = result?.benchmarkIndex;
+    if (!(base > 0) || !(now > 0) || now >= base * CALIBRATE_BELOW) return result;
+    const multiplier = Math.max(CALIBRATE_MIN_SLOWDOWN, Math.round((result.cpuSlowdown ?? DEFAULT_SLOWDOWN[formFactor]) * (now / base) * 100) / 100);
+    if (timeLeft() < LIGHTHOUSE_RETRY_MIN_MS) return { ...result, calibration: { benchmarkIndex: now, baseline: base, skipped: 'no time left' } };
+    const again = await rerun({ cpuSlowdown: multiplier }, timeLeft()).catch(() => null);
+    if (!again) return { ...result, calibration: { benchmarkIndex: now, baseline: base, failed: true } };
+    return { ...again, calibration: { benchmarkIndex: now, baseline: base, cpuSlowdown: multiplier, rerunBenchmarkIndex: again.benchmarkIndex ?? null } };
+  };
+  // The mobile run leaves half of the reserve to the desktop run, so a slow first run never costs the second one.
+  const mobile = await lighthouse('lighthouse-mobile', 'mobile', timing.lighthouseReserveMs / 2);
   const desktop = await lighthouse('lighthouse-desktop', 'desktop');
+  links ??= await linksTask;
 
   // 7. Detection, analyzers, report
   progress('report', 0, 'Detecting tech stack');
@@ -468,26 +505,33 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     renderedTextLength: render?.textLength ?? null,
   });
 
+  // A page drawn on a canvas (detection/siteType.js): reported with a clear warning, and Recreate stops on it.
+  const siteType = classifySiteType(render?.siteTypeEvidence);
+  if (siteType.type === 'canvas-rendered') errors.push({ step: 'site-type', message: `${CANVAS_RENDERED_MESSAGE} (${siteType.reason})` });
   const audit = assembleAudit({
     project,
     analysisId,
     url: home.url,
     frame: computeFrame(home.headers, { url: home.url, html: render?.html || home.body }),
     screenshots: publicScreenshots(project.id, analysisId, shots),
-    metrics: buildMetrics(desktop, 'desktop'),
-    metricsByDevice: { desktop: buildMetrics(desktop, 'desktop') },
-    scores: buildScores(null, desktop),
+    metrics: buildMetrics(mobile, 'mobile'),
+    metricsByDevice: { mobile: buildMetrics(mobile, 'mobile'), desktop: buildMetrics(desktop, 'desktop') },
+    scores: buildScores(mobile, desktop),
     techStack: toTechStack(detections),
-    weaknesses: buildWeaknesses(detections, desktop),
+    weaknesses: buildWeaknesses(detections, mobile),
     seo: [...analyzeSeo(pages, homePage), crawlErrorsItem(allPages)],
     aeo: analyzeAeo({ pages, home: homePage, robots, llms, renderedTextLength: render?.textLength ?? null }),
     crawl: analyzeCrawl({ robots, sitemap, homeFacts: homePage.facts }),
     links,
     accessibility: analyzeA11y(render?.axe),
     manualRebuild,
-    pagesCrawled: pages.length,
+    // Pages counted like Recreate counts them (recreate/discover.js): an address with a query string (/contact?tab=join)
+    // is a variant of a page, not a page of its own. The checks above still read every address.
+    pagesCrawled: pages.filter((p) => !hasQuery(p.url)).length || pages.length,
+    pageVariants: pages.filter((p) => hasQuery(p.url)).length,
     blockedHosts: proxy.blocked(),
     errors,
+    siteType,
   });
   progress('report', 1);
   return audit;

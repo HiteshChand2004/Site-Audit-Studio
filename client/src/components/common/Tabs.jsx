@@ -65,3 +65,51 @@ export function Segmented({ options, value, onChange, label, size = 'md' }) {
     </div>
   );
 }
+
+/**
+ * The dashboard's section tabs: a title with a small status under it and a coloured mark, underlined when selected.
+ * Arrow keys, Home and End move between tabs (the WAI-ARIA tabs pattern).
+ * tabs: [{ id, title, status?: string, tone?: 'done'|'running'|'warn'|'bad' }]
+ */
+export function SectionTabs({ tabs, value, onChange, label = 'Sections' }) {
+  const refs = useRef({});
+  const move = (e, i) => {
+    const keys = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1 };
+    if (!(e.key in keys)) return;
+    e.preventDefault();
+    const next = tabs[(keys[e.key] + tabs.length) % tabs.length];
+    onChange(next.id);
+    refs.current[next.id]?.focus();
+  };
+  return (
+    <div className={styles.sections} role="tablist" aria-label={label}>
+      {tabs.map((t, i) => {
+        const selected = t.id === value;
+        return (
+          <button
+            key={t.id}
+            ref={(el) => {
+              refs.current[t.id] = el;
+            }}
+            type="button"
+            role="tab"
+            id={`tab-${t.id}`}
+            aria-controls={`panel-${t.id}`}
+            aria-selected={selected}
+            tabIndex={selected ? 0 : -1}
+            className={styles.section}
+            data-tone={t.tone}
+            onClick={() => onChange(t.id)}
+            onKeyDown={(e) => move(e, i)}
+          >
+            <span className={styles.sectionTitle}>
+              {t.tone && <i className={styles.sectionMark} aria-hidden="true" />}
+              {t.title}
+            </span>
+            {t.status && <span className={styles.sectionStatus}>{t.status}</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}

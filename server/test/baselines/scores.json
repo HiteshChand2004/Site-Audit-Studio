@@ -1,0 +1,19 @@
+{
+ "updatedAt": "2026-10-15T06:17:55.881Z",
+ "fixtures": {
+  "nyaayai": {
+   "fidelity": 80,
+   "diff": 80,
+   "responsive": 76,
+   "pages": 1,
+   "lowPages": 0
+  },
+  "flexibench": {
+   "fidelity": 91,
+   "diff": 87,
+   "responsive": 88,
+   "pages": 11,
+   "lowPages": 0
+  }
+ }
+}

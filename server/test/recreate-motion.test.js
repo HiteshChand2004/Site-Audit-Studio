@@ -7,6 +7,8 @@ import path from 'node:path';
 import { launchBrowser } from '../src/audit/render.js';
 import { captureInteractions, diffStates, keepReverting } from '../src/recreate/capture/interactions.js';
 import { snapshotPage } from '../src/recreate/capture/snapshot.js';
+import { shapeCounts } from '../src/recreate/capture/selectorShape.js';
+import { isScrollReveal, spreadToGroups } from '../src/recreate/ir/motion.js';
 import { startSiteServer } from '../src/recreate/verify/server.js';
 
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Motion</title>
@@ -66,6 +68,37 @@ body { margin: 0; font: 16px sans-serif; }
 <a class="spinwrap" href="#s"><span class="spinner"></span> Spin card</a>
 </body></html>`;
 
+// Effects that reach outside the hovered element: the sibling combinator (a card grid dimming its other cards), the
+// adjacent one, and :has() (a bar tinting itself because something inside it is hovered). None of these could be
+// seen before: the probe read the hovered element's own subtree, where a sibling can never appear.
+const SIBLINGS = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Siblings</title>
+<style>
+body { margin: 0; font: 16px sans-serif; }
+.tiles { display: flex; gap: 8px; }
+.tile { width: 60px; height: 40px; background: #dddddd; opacity: 1; transition: opacity 0.2s; }
+.tile:hover ~ .tile { opacity: 0.4; }
+.pair span { display: inline-block; width: 60px; height: 24px; background: #ffffff; }
+.pairA:hover + .pairB { background: #fde68a; }
+.wrap { padding: 12px; background: #ffffff; transition: background-color 0.2s; }
+.wrap:has(.inner:hover) { background: #f1f5f9; }
+.inner { color: #111111; }
+</style></head><body>
+<div class="tiles"><div class="tile" id="t1">one</div><div class="tile" id="t2">two</div><div class="tile" id="t3">three</div></div>
+<p class="pair"><span class="pairA">Ay</span><span class="pairB">Bee</span></p>
+<div class="wrap"><a class="inner" href="#i">Inner link</a></div>
+</body></html>`;
+
+// A page whose own stylesheet has no state rule at all: the hover lives in a stylesheet the page may not read, as a
+// CDN-hosted design system without CORS does. Its rules are recovered server-side (capture/foreignCss.js) and put
+// back into the page for the probe.
+const FOREIGN = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Foreign</title>
+<style>
+body { margin: 0; font: 16px sans-serif; }
+.row a { display: inline-block; width: 120px; height: 30px; background: #ffffff; color: #111111; opacity: 1; }
+</style></head><body>
+<div class="row"><a class="ext" href="#x">Outside rule</a><a class="ext2" href="#y">Second one</a></div>
+</body></html>`;
+
 let dir;
 let site;
 let browser;
@@ -73,6 +106,8 @@ before(async () => {
   dir = await mkdtemp(path.join(os.tmpdir(), 'sas-motion-'));
   await writeFile(path.join(dir, 'index.html'), PAGE);
   await writeFile(path.join(dir, 'entrance.html'), ENTRANCE);
+  await writeFile(path.join(dir, 'siblings.html'), SIBLINGS);
+  await writeFile(path.join(dir, 'foreign.html'), FOREIGN);
   site = await startSiteServer(dir);
   browser = await launchBrowser();
 });
@@ -82,9 +117,9 @@ after(async () => {
   if (dir) await rm(dir, { recursive: true, force: true });
 });
 
-async function openPage() {
+async function openPage(file = '') {
   const page = await (await browser.newContext({ viewport: { width: 1000, height: 700 } })).newPage();
-  await page.goto(`${site.origin}/`, { waitUntil: 'load' });
+  await page.goto(`${site.origin}/${file}`, { waitUntil: 'load' });
   return page;
 }
 
@@ -108,11 +143,13 @@ test('hover effects are captured as style changes with their transition', async 
   assert.ok(under.pseudo.after.transform, JSON.stringify(under.pseudo));
   assert.notEqual(under.pseudo.after.transform[0], under.pseudo.after.transform[1]);
 
-  // Nothing changes on hover: not listed, but counted. An element under another one cannot be hovered.
+  // Nothing changes on hover: not listed, but counted. Effects the stylesheet declares are read from the rules on every
+  // element they apply to (no mouse), so they are found and the mouse probe does not try them again.
   assert.ok(found.hover.every((h) => !h.text.startsWith('pointer only')));
   assert.ok(found.stats.noChange >= 1);
-  assert.ok(found.stats.covered >= 1);
-  assert.ok(found.hover.every((h) => !h.text.startsWith('Covered link')));
+  assert.equal(link.source, 'css');
+  assert.equal(found.hover.find((h) => h.text.startsWith('Covered link'))?.source, 'css');
+  assert.ok(found.stats.fromRules.hover >= 4, JSON.stringify(found.stats.fromRules));
 
   // Layout does not move on these hovers (the transform of the card is not a layout change).
   assert.equal(link.layout, false);
@@ -167,14 +204,26 @@ test('keepReverting: what stays after the mouse left is dropped from the effect,
   assert.deepEqual(keepReverting(rest, state({ color: 'a', opacity: '0.4' }, [kid('none')]), d).changes, { color: ['a', 'b'] });
 });
 
-test('equal elements are probed a few times and counted as a group', async () => {
+test('a hover the stylesheet declares is found on every equal element, not only the few the mouse probes', async () => {
   const page = await openPage();
   const found = await captureInteractions(page, { budgetMs: 20000, perSignature: 3 });
   const dups = found.hover.filter((h) => h.text.startsWith('dup'));
-  assert.equal(dups.length, 3);
-  assert.ok(dups.every((d) => d.changes['background-color']));
+  assert.equal(dups.length, 8);
+  assert.ok(dups.every((d) => d.source === 'css' && d.changes['background-color'][1] === 'rgb(153, 153, 153)'));
+  // Its transition is the element's own, read before transitions were switched off for the comparison.
+  assert.match(dups[0].transition.duration, /0\.1s/);
+  await page.context().close();
+});
+
+test('equal elements with a script-driven hover are probed a few times; the group lists every member', async () => {
+  const page = await (await browser.newContext({ viewport: { width: 1000, height: 700 } })).newPage();
+  await page.setContent(`<!doctype html><body style="margin:0">${Array.from({ length: 8 }, (_, i) => `<a class="js" href="#j${i}" style="display:block;width:120px;height:30px">js ${i}</a>`).join('')}
+<script>document.querySelectorAll('.js').forEach((a) => { a.onmouseenter = () => { a.style.color = 'rgb(0, 128, 0)'; }; a.onmouseleave = () => { a.style.color = ''; }; });</script></body>`);
+  const found = await captureInteractions(page, { budgetMs: 20000, perSignature: 3 });
+  assert.equal(found.hover.filter((h) => h.text.startsWith('js')).length, 3);
   const group = found.groups.find((g) => g.count === 8);
   assert.equal(group.probed, 3);
+  assert.equal(group.paths.length, 8);
   assert.ok(found.stats.skipped.duplicate >= 5);
   await page.context().close();
 });
@@ -223,6 +272,28 @@ test('captured paths are the paths of the DOM snapshot', async () => {
   await page.context().close();
 });
 
+// A card whose panel shows on hover, hidden by a rule for the opposite state (`:not(:hover)`), as builders often write it.
+const NEGATED = `<!doctype html><html><head><style>
+body { margin: 0; font: 16px sans-serif } .card { display: block; width: 240px; height: 120px; position: relative; border: 1px solid #ccc }
+.panel { position: absolute; inset: 0; opacity: 0; background: #111; color: #fff; transition: opacity .3s }
+.card:hover .panel { opacity: 1; transition-delay: .2s }
+.card:not(:hover) .panel { opacity: 0; transition-delay: 0s }
+</style></head><body><div class="card" tabindex="0"><span>Label</span><div class="panel">Details shown on hover</div></div></body></html>`;
+
+test('a panel hidden by a :not(:hover) rule still counts as shown on hover', async () => {
+  await writeFile(path.join(dir, 'negated.html'), NEGATED);
+  const page = await (await browser.newContext({ viewport: { width: 1000, height: 700 } })).newPage();
+  await page.goto(`${site.origin}/negated.html`, { waitUntil: 'load' });
+  const found = await captureInteractions(page, { budgetMs: 20000 });
+  const card = found.hover.find((h) => h.text.startsWith('Label'));
+  assert.ok(card, JSON.stringify(found.hover.map((h) => h.text)));
+  const panel = (card.kids ?? []).find((k) => k.changes.opacity);
+  assert.deepEqual(panel?.changes.opacity, ['0', '1'], JSON.stringify(card));
+  // The page's own rules are back as they were.
+  assert.equal(await page.evaluate(() => [...document.styleSheets[0].cssRules].some((r) => r.selectorText === '.card:not(:hover) .panel')), true);
+  await page.context().close();
+});
+
 test('the time budget stops the probing and says so', async () => {
   const page = await openPage();
   const found = await captureInteractions(page, { budgetMs: 1 });
@@ -240,4 +311,125 @@ test('diffStates: no change is null, a UA focus ring is not a change, a shifted 
   assert.deepEqual(moved.changes, { color: ['red', 'blue'] });
   assert.equal(moved.layout, true);
   assert.deepEqual(moved.rect, [0, 6, 0, 0]);
+});
+
+test('spreadToGroups drops a neighbour effect instead of pointing it at the wrong element', () => {
+  // A descendant rebases onto the other member (its path is the host's plus a tail). A neighbour cannot: nothing in
+  // the path says which element sits beside THIS member, so carrying it over would aim the effect at the first
+  // member's neighbours. It is dropped and counted.
+  const { list, spread, droppedSibs } = spreadToGroups(
+    [{
+      path: 'body>div:1', sig: 'tile', source: 'probe', changes: { opacity: ['1', '0.8'] },
+      kids: [{ path: 'body>div:1>span:1', changes: { color: ['a', 'b'] } }],
+      sibs: [{ path: 'body>div:2', rel: 'next', changes: { opacity: ['1', '0.4'] } }],
+    }],
+    [{ sig: 'tile', paths: ['body>div:1', 'body>div:2', 'body>div:3'] }],
+  );
+  assert.equal(spread, 2);
+  assert.equal(droppedSibs, 2, 'one neighbour effect dropped per member it spread to');
+  const copy = list.find((e) => e.path === 'body>div:3');
+  assert.equal(copy.sibs, undefined);
+  assert.deepEqual(copy.kids, [{ path: 'body>div:3>span:1', changes: { color: ['a', 'b'] } }]);
+  // The element that was really probed keeps what was really measured on it.
+  assert.equal(list.find((e) => e.path === 'body>div:1').sibs.length, 1);
+});
+
+test('spreadToGroups: a probed effect reaches the other members of its group, with its descendants rebased', () => {
+  const groups = [{ sig: 'a|x', count: 3, paths: ['body>a:1', 'body>a:2', 'body>a:3'] }];
+  const probe = { path: 'body>a:1', sig: 'a|x', source: 'probe', changes: { color: ['a', 'b'] }, kids: [{ path: 'body>a:1>span:1', changes: { opacity: ['0', '1'] } }] };
+  const css = { path: 'body>div:1', sig: 'div|', source: 'css', changes: { color: ['a', 'b'] } };
+  const { list, spread } = spreadToGroups([probe, css], groups);
+  assert.equal(spread, 2);
+  assert.deepEqual(list.map((e) => e.path), ['body>a:1', 'body>div:1', 'body>a:2', 'body>a:3']);
+  assert.equal(list[3].kids[0].path, 'body>a:3>span:1');
+  // Old captures (groups without paths) are left as they are.
+  assert.equal(spreadToGroups([probe], [{ sig: 'a|x', count: 3 }]).spread, 0);
+});
+
+test('isScrollReveal: scroll triggers, and timed ones below the first screen; timed ones in the first screen are not', () => {
+  assert.equal(isScrollReveal({ trigger: { kind: 'scroll' }, rect: [0, 100, 10, 10] }), true);
+  assert.equal(isScrollReveal({ trigger: { kind: 'timed' }, rect: [0, 2400, 10, 10] }), true);
+  assert.equal(isScrollReveal({ trigger: { kind: 'timed' }, rect: [0, 400, 10, 10] }), false);
+});
+
+test('an effect on the elements beside the hovered one is captured, with which side it is on', async () => {
+  const page = await openPage('siblings.html');
+  const found = await captureInteractions(page, { budgetMs: 20000 });
+  await page.close();
+
+  // `.tile:hover ~ .tile` - hovering the first tile dims the ones after it. Before this step the probe asked the
+  // hovered element's own subtree, where a sibling can never be, so the whole effect read as "nothing changed".
+  const tile = found.hover.find((h) => h.text === 'one');
+  assert.ok(tile, `tiles not probed: ${found.hover.map((h) => h.text).join(' | ')}`);
+  assert.ok(tile.sibs?.length >= 2, JSON.stringify(tile.sibs));
+  for (const s of tile.sibs) {
+    assert.equal(s.rel, 'next', 'the dimmed tiles come after the hovered one');
+    assert.deepEqual(Object.keys(s.changes), ['opacity']);
+    assert.equal(s.changes.opacity[1], '0.4');
+    assert.ok(s.path, 'with the snapshot path, so the IR can find the element');
+  }
+  // The last tile has nothing after it, so it has no sibling effect of its own.
+  assert.equal(found.hover.find((h) => h.text === 'three')?.sibs, undefined);
+
+  // `.pairA:hover + .pairB` - only the one immediately after.
+  const pair = found.hover.find((h) => h.text === 'Ay');
+  assert.equal(pair.sibs.length, 1);
+  assert.equal(pair.sibs[0].rel, 'next');
+  assert.ok(pair.sibs[0].changes['background-color']);
+
+  // `.wrap:has(.inner:hover)` - the element around it. convert() used to refuse any state inside a bracket, so this
+  // never reached the probe at all; the state is forced on the inner element and the wrapper is read.
+  const inner = found.hover.find((h) => h.text === 'Inner link');
+  assert.ok(inner, 'the hovered element is the one inside the :has()');
+  const around = (inner.sibs ?? []).find((s) => s.rel === 'ancestor');
+  assert.ok(around, JSON.stringify(inner.sibs));
+  assert.ok(around.changes['background-color'], JSON.stringify(around.changes));
+
+  // Nothing was lost quietly: the counters say what was found and what was refused.
+  assert.ok(found.stats.fromRules.sibs >= 4, JSON.stringify(found.stats.fromRules));
+  assert.ok(found.stats.fromRules.hasRules >= 1);
+  assert.equal(found.stats.fromRules.unsupportedBy.nesting, 0, 'a state inside :has() is no longer refused');
+});
+
+test('a hover rule from a stylesheet the page may not read is probed like any other', async () => {
+  const foreignCss = '.ext:hover { color: rgb(1, 2, 3) }\n.ext:hover ~ .ext2 { opacity: 0.3 }';
+
+  // The control first: without the recovered sheet there is nothing to find, which is exactly what a site whose
+  // design system is served without CORS used to look like to the capture.
+  const bare = await openPage('foreign.html');
+  const nothing = await captureInteractions(bare, { budgetMs: 6000 });
+  await bare.close();
+  assert.equal(nothing.hover.find((h) => h.text === 'Outside rule'), undefined);
+  assert.equal(nothing.stats.rules, 0, 'the page itself declares no state rule');
+
+  const page = await openPage('foreign.html');
+  const found = await captureInteractions(page, { budgetMs: 8000, foreignCss });
+  const leftBehind = await page.evaluate(() => document.querySelectorAll('[data-sas-foreign]').length);
+  const restingColour = await page.evaluate(() => getComputedStyle(document.querySelector('.ext')).color);
+  await page.close();
+
+  const hover = found.hover.find((h) => h.text === 'Outside rule');
+  assert.ok(hover, `not found: ${found.hover.map((h) => h.text).join(' | ')}`);
+  assert.equal(hover.source, 'css');
+  assert.deepEqual(hover.changes.color, ['rgb(17, 17, 17)', 'rgb(1, 2, 3)']);
+  // The recovered sheet and the sibling rebuild compose: the rule reaches the element beside it.
+  assert.equal(hover.sibs.length, 1);
+  assert.equal(hover.sibs[0].rel, 'next');
+  assert.deepEqual(hover.sibs[0].changes.opacity, ['1', '0.3']);
+
+  // Nothing of the page is left changed: the injected sheet is removed, and because only state rules go in, the
+  // resting look was never touched while it was there.
+  assert.equal(leftBehind, 0);
+  assert.equal(restingColour, 'rgb(17, 17, 17)');
+});
+
+test('the shapes of the authored state rules are counted', async () => {
+  const page = await openPage('siblings.html');
+  const found = await captureInteractions(page, { budgetMs: 8000 });
+  await page.close();
+  const shapes = shapeCounts(found.rules);
+  // The three that reach outside the hovered element, which is what the counts exist to make visible.
+  assert.equal(shapes.sibling, 1, JSON.stringify(shapes));
+  assert.equal(shapes.adjacent, 1, JSON.stringify(shapes));
+  assert.equal(shapes.ancestorHas, 1, JSON.stringify(shapes));
 });

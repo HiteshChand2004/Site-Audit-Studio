@@ -11,6 +11,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { load } from 'cheerio';
+import { createHash } from 'node:crypto';
 import { appProfile } from './appProfiles.js';
 
 const SCRIPT_URL = /(java|vb|live)script:|^data:(text\/html|application\/(x?html|javascript)|text\/(x?javascript))/i;
@@ -118,7 +119,22 @@ export async function scanSite(dir, { app = false, contentChunk = () => false } 
     if (!kind) continue;
     checked[kind]++;
     const rel = path.relative(dir, file).replaceAll('\\', '/');
-    if (kind === 'js' && profile?.onlyFile && rel !== profile.onlyFile) {
+    const vendored = kind === 'js' ? profile?.vendor?.()[rel] : null;
+    if (vendored) {
+      // A vendored library: exactly the pinned package's file, or nothing.
+      const same = createHash('sha256').update(await readFile(file, 'utf8')).digest('hex') === vendored;
+      if (!same && issues.length < MAX_ISSUES) issues.push({ file: rel, type: 'script', detail: 'vendored library differs from the pinned package' });
+      continue;
+    }
+    if (kind === 'js' && profile?.lifted) {
+      const lifted = profile.lifted(rel, await readFile(file, 'utf8'));
+      if (lifted !== null) {
+        if (!lifted && issues.length < MAX_ISSUES) issues.push({ file: rel, type: 'script', detail: 'lifted script is not the recorded library it is named after' });
+        continue;
+      }
+    }
+    const allowedFile = typeof profile?.onlyFile === 'function' ? profile.onlyFile(rel) : rel === profile?.onlyFile;
+    if (kind === 'js' && profile?.onlyFile && !allowedFile) {
       if (issues.length < MAX_ISSUES) issues.push({ file: rel, type: 'script', detail: 'unexpected script file' });
       continue;
     }

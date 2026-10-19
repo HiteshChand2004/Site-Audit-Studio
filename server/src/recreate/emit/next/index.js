@@ -12,13 +12,17 @@
 //   for Netlify / Cloudflare Pages (_redirects) and Vercel (vercel.json); canonical, og:url and sitemap.xml
 //   already use the new URLs.
 // - Links are plain <a> elements (full page loads, no client router), root-relative: deploy at a domain root.
-import { emitCss } from '../css.js';
+import { emitCss, usedCustomProps } from '../css.js';
+import { whiteSpaceByClass } from '../html.js';
 import { MOTION_FILE, MOTION_JS, MOTION_SRC } from '../motionScript.js';
+import { programJson, REPLAY_MODULE, siteAnimationsJsx } from '../anim.js';
+import { APPEAR_MODULE, siteAppearJsx } from '../../behavior/framer/emit.js';
+import { siteScriptsJsx } from '../../behavior/lift.js';
 import { findShared } from '../react/components.js';
 import { jsxAttr, jsxNode, propName, visibleChildren } from '../react/jsx.js';
 import { pageName } from '../react/index.js';
 import { headTags, safeJsonLd } from '../walk.js';
-import { pinnedVersions } from '../../../toolchains/index.js';
+import { pinnedOverrides, pinnedVersions } from '../../../toolchains/index.js';
 import { planRoutes, urlMapFor } from './routes.js';
 
 const TOOLCHAIN = 'next';
@@ -81,7 +85,7 @@ export function emitNext(ir) {
     useAsset: (file) => (assets.add(file), true),
     assetHref: (file) => `/assets/${file}`,
     pageHref: (outPath) => plan.byOutPath.get(outPath)?.route ?? '/',
-    stylesheetHref: () => null, // imported by each root layout
+    stylesheetHref: () => null, // each page imports its own stylesheet (page.css), inlined by Next (inlineCss)
   };
   const names = [];
   const taken = new Set();
@@ -94,11 +98,13 @@ export function emitNext(ir) {
   }
   const { names: shared, components } = findShared(ir.pages, new Set(names));
 
+  // Classes whose rules keep line breaks (white-space: pre*): the JSX emitter needs them, as the HTML one does.
+  const wsByClass = whiteSpaceByClass(ir.rules);
   const files = new Map();
   for (const c of components) {
     const own = new Map(shared);
     own.delete(c.node);
-    files.set(`components/${c.name}.jsx`, `export default function ${c.name}() {\n  return (\n${jsxNode(c.node, refs, 2, own)}\n  );\n}\n`);
+    files.set(`components/${c.name}.jsx`, `export default function ${c.name}() {\n  return (\n${jsxNode(c.node, refs, 2, own, null, { wsByClass })}\n  );\n}\n`);
   }
 
   // Root layouts: one route group per distinct <html lang class> + <body class>.
@@ -111,8 +117,6 @@ export function emitNext(ir) {
       const html = [page.head.lang && jsxAttr('lang', page.head.lang), page.html?.class && jsxAttr('className', page.html.class)].filter(Boolean).join(' ');
       const body = page.body.class ? ` ${jsxAttr('className', page.body.class)}` : '';
       files.set(`app/${name}/layout.jsx`, lines(
-        "import '../site.css';",
-        '',
         'export default function RootLayout({ children }) {',
         '  return (',
         `    <html${html ? ` ${html}` : ''}>`,
@@ -125,6 +129,8 @@ export function emitNext(ir) {
     return groups.get(key);
   };
 
+  const usedVars = usedCustomProps(ir);
+  const rootUrls = (css) => css.replace(/url\("(?:\.\.\/)*assets\//g, 'url("/assets/');
   ir.pages.forEach((page, i) => {
     const route = plan.routes[i];
     const used = new Set();
@@ -133,21 +139,50 @@ export function emitNext(ir) {
       canonical: page.head.canonical ? followMoves(page.head.canonical, urlMap) : page.head.canonical,
       meta: page.head.meta.map((m) => (m.property === 'og:url' ? { ...m, content: followMoves(m.content, urlMap) } : m)),
     };
-    const body = visibleChildren(page.body.children ?? [], 'body').map((c) => jsxNode(c, refs, 3, shared, used)).join('\n');
+    const body = visibleChildren(page.body.children ?? [], 'body').map((c) => jsxNode(c, refs, 3, shared, used, { wsByClass })).join('\n');
     const imports = [...used].sort().map((n) => `import ${n} from '@/components/${n}.jsx';`);
     // The reveal script (emit/motionScript.js): a plain deferred script, in place (React only hoists async ones).
     const motion = ir.motion?.script ? [`      <script src="${MOTION_SRC}" defer />`] : [];
     const content = [...headJsx(headTags({ ...page, head }, refs), '      '), ...motion, ...(body ? [body] : [])].join('\n');
     const dir = route.segments.length ? `app/${groupOf(page)}/${route.segments.join('/')}` : `app/${groupOf(page)}`;
-    files.set(`${dir}/page.jsx`, `${imports.join('\n')}${imports.length ? '\n\n' : ''}export default function ${names[i]}() {\n  return (\n    <>\n${content}\n    </>\n  );\n}\n`);
+    // The page's own stylesheet (only its rules): Next writes it inline in the page's head (inlineCss), no blocking request.
+    files.set(`${dir}/page.css`, rootUrls(emitCss(ir, { page, usedVars })));
+    imports.unshift("import './page.css';");
+    // The animation library's replay of this page (emit/anim.js): a client component, the program passed as data.
+    if (page.anim) {
+      imports.push("import SiteAnimations from '@/components/SiteAnimations.jsx';", `import anim from '@/anim/${names[i]}.json';`);
+      files.set(`anim/${names[i]}.json`, programJson(page));
+    }
+    if (page.appear) {
+      imports.push("import SiteAppear from '@/components/SiteAppear.jsx';", `import appear from '@/anim/${names[i]}.appear.json';`);
+      files.set(`anim/${names[i]}.appear.json`, `${JSON.stringify(page.appear)}\n`);
+    }
+    if (page.lift?.length) imports.push("import SiteScripts from '@/components/SiteScripts.jsx';");
+    const liftEl = page.lift?.length ? `\n      <SiteScripts files={${JSON.stringify(page.lift.map((f) => `/${f}`))}} />` : '';
+    const animEl = `${page.anim ? '\n      <SiteAnimations program={anim} />' : ''}${page.appear ? '\n      <SiteAppear program={appear} />' : ''}${liftEl}`;
+    files.set(`${dir}/page.jsx`, `${imports.join('\n')}${imports.length ? '\n\n' : ''}export default function ${names[i]}() {\n  return (\n    <>\n${content}${animEl}\n    </>\n  );\n}\n`);
   });
 
-  const css = emitCss(ir);
+  const css = emitCss(ir, { usedVars });
   for (const m of css.matchAll(/url\("(?:\.\.\/)+assets\/([^"]+)"\)/g)) assets.add(m[1]);
-  files.set('app/site.css', css.replace(/url\("(?:\.\.\/)+assets\//g, 'url("/assets/'));
+  files.set('app/site.css', rootUrls(css));
 
   for (const f of ir.files) files.set(`public/${f.path}`, publicFile(f, urlMap));
   if (ir.motion?.script) files.set(`public/${MOTION_FILE}`, MOTION_JS);
+  const replays = ir.pages.some((p) => p.anim);
+  if (replays) {
+    files.set('anim/replay.js', REPLAY_MODULE);
+    files.set('components/SiteAnimations.jsx', siteAnimationsJsx({ client: true, base: '@/anim' }));
+  }
+  if (ir.liftFiles && Object.keys(ir.liftFiles).length) {
+    for (const [file, text] of Object.entries(ir.liftFiles)) files.set(`public/${file}`, text);
+    files.set('components/SiteScripts.jsx', siteScriptsJsx({ client: true }));
+  }
+  const appears = ir.pages.some((p) => p.appear);
+  if (appears) {
+    files.set('anim/appear.js', APPEAR_MODULE);
+    files.set('components/SiteAppear.jsx', siteAppearJsx({ client: true, base: '@/anim' }));
+  }
   if (plan.urlChanges.length) {
     files.set('public/_redirects', plan.urlChanges.map((c) => `${c.from} ${c.to} 301`).join('\n') + '\n');
     files.set('vercel.json', `${JSON.stringify({ trailingSlash: true, redirects: plan.urlChanges.map((c) => ({ source: c.from, destination: c.to, permanent: true })) }, null, 2)}\n`);
@@ -158,7 +193,9 @@ export function emitNext(ir) {
   files.set('package.json', `${JSON.stringify({
     name, private: true, version: '0.0.0',
     scripts: { dev: 'next dev', build: 'next build', serve: 'npx serve out' },
-    dependencies: { next: pinned.next, react: pinned.react, 'react-dom': pinned['react-dom'] },
+    dependencies: { next: pinned.next, react: pinned.react, 'react-dom': pinned['react-dom'], ...(replays && { gsap: pinned.gsap }), ...(appears && { motion: pinned.motion }) },
+    // The versions motion's own packages were verified with (newer ones were under two weeks old when pinned).
+    ...(appears && Object.keys(pinnedOverrides(TOOLCHAIN)).length && { overrides: pinnedOverrides(TOOLCHAIN) }),
   }, null, 2)}\n`);
   files.set('next.config.mjs', lines(
     '// Static export: `npm run build` writes the whole site to out/, every page as <route>/index.html.',
@@ -167,6 +204,8 @@ export function emitNext(ir) {
     "  output: 'export',",
     '  trailingSlash: true,',
     '  images: { unoptimized: true },',
+    "  // Each page's stylesheet is written inline in its head: no render-blocking request.",
+    '  experimental: { inlineCss: true },',
     '};',
   ));
   files.set('jsconfig.json', `${JSON.stringify({ compilerOptions: { paths: { '@/*': ['./*'] } } }, null, 2)}\n`);
@@ -186,7 +225,7 @@ export function emitNext(ir) {
     '',
     '## How it is built',
     '- `app/<group>/**/page.jsx` — one page per URL; `components/*.jsx` — blocks that repeat on several pages.',
-    '- `app/site.css` — the shared stylesheet. `public/assets/` — every image, font and media file, local.',
+    "- `app/**/page.css` — each page's own stylesheet (inlined in its head); `app/site.css` — the whole stylesheet, for reference. `public/assets/` — every image, font and media file, local.",
     '- Each page writes its own `<title>`, description, canonical, Open Graph and JSON-LD; React hoists them into `<head>`.',
     '- `public/sitemap.xml`, `robots.txt` (and `llms.txt` when the original had one) are copied to the site root.',
     '',

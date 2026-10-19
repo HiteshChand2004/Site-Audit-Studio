@@ -11,8 +11,11 @@ export const jobs = new JobManager({
   steps: STEPS,
   overallPct,
   doneMessage: 'Analysis complete',
-  run: ({ job, project, payload, progress }) =>
-    runAnalysis({ project, analysisId: job.id, maxPages: payload.maxPages, progress }),
+  run: async ({ job, project, payload, progress }) => {
+    const audit = await runAnalysis({ project, analysisId: job.id, maxPages: payload.maxPages, progress, ...(payload.url && { url: payload.url }) });
+    // Which part of the site this analysis is about, so its report and what is built from it say so.
+    return payload.url ? { ...audit, scope: { kind: 'page', url: payload.url } } : audit;
+  },
   // Keep screenshots of the latest analyses only (failed ones never count).
   after: ({ project }) => pruneScreenshots(project.id),
 });

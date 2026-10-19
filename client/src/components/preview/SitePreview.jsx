@@ -230,7 +230,7 @@ export default function SitePreview({ url, audit, mode, viewport, onSlow, scroll
   if (!audit?.screenshots) {
     return (
       <Empty icon={Camera} title="No screenshots yet">
-        This check has no picture of the site. Check the site again to take one.
+        This analysis has no screenshots. Run Analyze again to capture desktop, tablet and phone views.
       </Empty>
     );
   }

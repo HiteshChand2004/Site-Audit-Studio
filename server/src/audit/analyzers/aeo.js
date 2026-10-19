@@ -2,6 +2,8 @@ import { auditItem, examples, pathOf, plural } from '../util.js';
 
 const item = (...args) => auditItem('aeo', ...args);
 const CONCISE_WORDS = 60;
+// Detail of the structured-answers row when a site has no question headings at all (the checklist reads it).
+export const NO_QUESTIONS = 'No question-style headings; answer engines favour clear question → answer sections.';
 
 /**
  * Answer-engine optimisation checks: structured data, Q&A structure, llms.txt, AI crawler access,
@@ -68,7 +70,7 @@ export function analyzeAeo({ pages, home, robots, llms, renderedTextLength }) {
     const questions = pages.flatMap((p) => p.facts.questionHeadings);
     const concise = questions.filter((q) => q.answerWords > 0 && q.answerWords <= CONCISE_WORDS);
     if (!questions.length) {
-      out.push(item('warn', 'Structured answers', 'No question-style headings; answer engines favour clear question → answer sections.'));
+      out.push(item('warn', 'Structured answers', NO_QUESTIONS));
     } else if (concise.length / questions.length < 0.5) {
       out.push(item('warn', 'Structured answers', `Only ${concise.length} of ${plural(questions.length, 'question heading')} are followed by a direct answer of ${CONCISE_WORDS} words or fewer.`));
     } else {

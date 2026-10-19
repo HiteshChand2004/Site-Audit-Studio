@@ -34,6 +34,9 @@ before(async () => {
       return res.end(page('Slow third party', '<p>Hello</p><a href="/about.html">About</a><img src="/hang.png" alt="tracker" width="10" height="10"><iframe src="/hang-embed" title="embed" width="200" height="100"></iframe>'));
     }
     if (req.url === '/about.html') return res.end(page('About', '<p>About us</p><a href="/">Home</a>'));
+    // A page whose only link answers slowly (an outbound link of the re-audited site).
+    if (req.url === '/links/') return res.end(page('Links', '<p>Links</p><a href="/slow-link">Partner</a>'));
+    if (req.url === '/slow-link') return setTimeout(() => res.end('ok'), 2500);
     res.statusCode = 404;
     res.end('not found');
   });
@@ -178,8 +181,7 @@ test('an analysis is complete when third-party resources of the page never answe
   assert.ok(seconds < 75, `took ${seconds}s`);
   assert.ok(overlapped, 'render and screenshots run side by side');
   assert.equal(audit.pagesCrawled, 2);
-  // Desktop only for now (audit/screenshots.js VIEWS).
-  for (const view of ['desktop']) {
+  for (const view of ['desktop', 'tablet', 'mobile']) {
     assert.ok(audit.screenshots?.views?.[view], `${view} screenshot`);
     assert.ok(await exists(path.join(outDir, 'screens', `${view}-full.webp`)));
   }
@@ -190,16 +192,87 @@ test('an analysis is complete when third-party resources of the page never answe
 test('screenshots: the views taken in time are kept when the step runs out of it', async () => {
   const browser = await launchBrowser();
   try {
-    // A deadline that no view can meet (desktop only for now: one view).
+    // One view at a time and a deadline that only the first view can meet.
     const shots = await captureScreenshots(browser, `${origin}/about.html`, path.join(dir, 'late'), { parallel: 1, deadline: Date.now() + 100 });
     assert.equal(Object.keys(shots.views).length, 0);
-    assert.equal(shots.errors.length, 1);
+    assert.equal(shots.errors.length, 3);
     assert.match(shots.errors[0].message, /time limit/);
 
     const some = await captureScreenshots(browser, `${origin}/about.html`, path.join(dir, 'some'), { parallel: 1, deadline: Date.now() + 60000 });
-    assert.deepEqual(Object.keys(some.views), ['desktop']);
+    assert.deepEqual(Object.keys(some.views), ['desktop', 'tablet', 'mobile']);
     assert.deepEqual(some.errors, []);
   } finally {
     await browser.close();
   }
+});
+
+test('re-audit: Lighthouse starts while the link check still runs; Analyze waits for the links first', async () => {
+  const run = async (linksBesideLighthouse) => {
+    const running = new Set();
+    const lighthouseStarts = [];
+    const started = Date.now();
+    const audit = await runAnalysis({
+      project: { id: 'perf', url: `${origin}/links/`, name: 'perf' },
+      analysisId: `lh-${linksBesideLighthouse}`,
+      maxPages: 1,
+      outDir: path.join(dir, `links-${linksBesideLighthouse}`),
+      skip: ['screenshots'],
+      netPolicy: createNetPolicy({ internalPorts: [server.address().port] }),
+      linksBesideLighthouse,
+      // Stands in for Lighthouse: notes whether the link check was still running when it started.
+      lighthouseRun: async (url, formFactor) => {
+        lighthouseStarts.push({ formFactor, linksRunning: running.has('links') });
+        await new Promise((r) => setTimeout(r, 300));
+        return null;
+      },
+      progress: (step, fraction) => (fraction < 1 ? running.add(step) : running.delete(step)),
+    });
+    console.log(`# links beside Lighthouse: ${linksBesideLighthouse}, ${Date.now() - started} ms`);
+    return { audit, lighthouseStarts };
+  };
+  const beside = await run(true);
+  assert.deepEqual(beside.lighthouseStarts.map((s) => s.formFactor), ['mobile', 'desktop']);
+  assert.equal(beside.lighthouseStarts[0].linksRunning, true);
+  // The report still has the link check's full result.
+  assert.ok(beside.audit.brokenLinks.checked >= 1, JSON.stringify(beside.audit.brokenLinks));
+  assert.deepEqual(beside.audit.brokenLinks.broken, []);
+
+  const after = await run(false);
+  assert.equal(after.lighthouseStarts[0].linksRunning, false);
+  assert.deepEqual(after.audit.brokenLinks, beside.audit.brokenLinks);
+});
+
+test('re-audit: a computer much busier than during the original measurement repeats Lighthouse with a scaled CPU slowdown', async () => {
+  const calls = [];
+  // Stands in for Lighthouse: this computer runs at a third of the original's benchmark until the calibrated run.
+  const lighthouseRun = async (url, formFactor, options) => {
+    calls.push({ formFactor, cpuSlowdown: options.cpuSlowdown ?? null });
+    return { categories: { performance: 0.5 }, audits: {}, benchmarkIndex: 1000, cpuSlowdown: options.cpuSlowdown ?? (formFactor === 'mobile' ? 4 : 1) };
+  };
+  await runAnalysis({
+    project: { id: 'perf', url: `${origin}/links/`, name: 'perf' },
+    analysisId: 'lh-calibrate',
+    maxPages: 1,
+    outDir: path.join(dir, 'lh-calibrate'),
+    skip: ['screenshots'],
+    netPolicy: createNetPolicy({ internalPorts: [server.address().port] }),
+    lighthouseRun,
+    progress: () => {},
+    lighthouseBaseline: { mobile: 3000, desktop: 1100 },
+  });
+  // Mobile: 1000 / 3000 → slowdown 4 × 0.33 = 1.33, run again. Desktop: 1000 / 1100 is within the margin, one run.
+  assert.deepEqual(calls, [{ formFactor: 'mobile', cpuSlowdown: null }, { formFactor: 'mobile', cpuSlowdown: 1.33 }, { formFactor: 'desktop', cpuSlowdown: null }]);
+  // Without a baseline (a normal Analyze) nothing is repeated.
+  calls.length = 0;
+  await runAnalysis({
+    project: { id: 'perf', url: `${origin}/links/`, name: 'perf' },
+    analysisId: 'lh-plain',
+    maxPages: 1,
+    outDir: path.join(dir, 'lh-plain'),
+    skip: ['screenshots'],
+    netPolicy: createNetPolicy({ internalPorts: [server.address().port] }),
+    lighthouseRun,
+    progress: () => {},
+  });
+  assert.deepEqual(calls.map((c) => c.cpuSlowdown), [null, null]);
 });

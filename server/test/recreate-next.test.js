@@ -22,6 +22,7 @@ import { checkScript, scanProject, scanSite } from '../src/recreate/verify/safet
 import { recreateDir } from '../src/recreate/workspace.js';
 import recreateRouter from '../src/routes/recreate.js';
 import { toolchainDir, toolchainStatus } from '../src/toolchains/index.js';
+import { seedProject } from './helpers/projects.js';
 
 const exists = (p) => access(p).then(() => true, () => false);
 const temps = [];
@@ -101,13 +102,16 @@ test('emitNext writes the project: groups, pages with their head, components, re
   const sitemap = '<urlset><url><loc>https://www.example.com/about.html</loc></url><url><loc>https://www.example.com/</loc></url></urlset>';
   const out = emitNext(irOf(pages, [{ path: 'sitemap.xml', content: sitemap }, { path: 'robots.txt', content: 'User-agent: *' }]));
   assert.deepEqual([...out.files.keys()].filter((f) => /^(app|components)\//.test(f)).sort(), [
-    'app/(site)/about/page.jsx', 'app/(site)/layout.jsx', 'app/(site)/page.jsx', 'app/(site-2)/blog/first-post/page.jsx', 'app/(site-2)/layout.jsx', 'app/site.css', 'components/SiteHeader.jsx',
+    'app/(site)/about/page.css', 'app/(site)/about/page.jsx', 'app/(site)/layout.jsx', 'app/(site)/page.css', 'app/(site)/page.jsx', 'app/(site-2)/blog/first-post/page.css', 'app/(site-2)/blog/first-post/page.jsx', 'app/(site-2)/layout.jsx', 'app/site.css', 'components/SiteHeader.jsx',
   ]);
   for (const f of ['package.json', 'next.config.mjs', 'jsconfig.json', '.gitignore', 'README.md', 'public/robots.txt', 'public/sitemap.xml', 'public/_redirects', 'vercel.json']) assert.ok(out.files.has(f), f);
   // Root layouts: one per distinct <html lang> + <body class>.
   assert.match(out.files.get('app/(site)/layout.jsx'), /<html lang="en">\n\s+<body className="page">\{children\}<\/body>/);
   assert.match(out.files.get('app/(site-2)/layout.jsx'), /<html lang="fr">\n\s+<body className="post">/);
-  assert.match(out.files.get('app/(site)/layout.jsx'), /^import '\.\.\/site\.css';/);
+  // Each page imports only its own stylesheet (inlined by Next); the layout imports none.
+  assert.doesNotMatch(out.files.get('app/(site)/layout.jsx'), /import/);
+  assert.match(out.files.get('app/(site)/page.jsx'), /^import '\.\/page\.css';/);
+  assert.match(out.files.get('next.config.mjs'), /inlineCss: true/);
   // The head is written as elements; Next supplies charset and viewport; canonical and og:url follow the move.
   const about = out.files.get('app/(site)/about/page.jsx');
   assert.match(about, /import SiteHeader from '@\/components\/SiteHeader\.jsx';/);
@@ -278,6 +282,37 @@ test('a `revert` reset of the flex shorthand is written as longhands (Next.js po
   assert.equal(await run(css), css);
 });
 
+test('the selectors that carry an effect outside the hovered element survive the Next.js CSS pipeline', async (t) => {
+  // Same lesson as `flex: revert` above: a bundler's CSS plugins can rewrite valid CSS, and a rewritten selector
+  // would quietly drop a whole class of hover effects. These three shapes are what emit/motionCss.js writes for a
+  // sibling, an earlier sibling and an ancestor.
+  const { motionCss } = await import('../src/recreate/emit/motionCss.js');
+  const css = motionCss({
+    hover: [{
+      token: 'h1',
+      decls: { color: 'rgb(225, 29, 72)' },
+      kids: [],
+      sibs: [
+        { token: 'h1s1', rel: 'next', decls: { opacity: '0.4' } },
+        { token: 'h1s2', rel: 'prev', decls: { opacity: '0.5' } },
+        { token: 'h1s3', rel: 'ancestor', decls: { 'background-color': 'rgb(241, 245, 249)' } },
+      ],
+    }],
+    focus: [], reveal: [], delays: [], loops: [],
+  }, { tokenOf: new Map(), from: 'index.html', usedVars: new Set() });
+  assert.match(css, /:hover ~ \[data-motion~="h1s1"\]/);
+  assert.match(css, /\[data-motion~="h1s2"\]:has\(~ /);
+  assert.match(css, /\[data-motion~="h1s3"\]:has\(\[data-motion~="h1"\]:hover\)/);
+
+  if (!(await toolchainStatus('next')).installed) return t.diagnostic('next toolchain not installed: the postcss check was skipped');
+  const { createRequire } = await import('node:module');
+  const require = createRequire(path.join(toolchainDir('next'), 'node_modules', 'next', 'package.json'));
+  const postcss = require('postcss');
+  const flexbugs = require('next/dist/compiled/postcss-flexbugs-fixes');
+  const out = (await postcss([flexbugs()]).process(css, { from: undefined })).css;
+  assert.equal(out, css, 'nothing in the selectors is rewritten');
+});
+
 // ---- a real export (needs the next toolchain: npm run setup:toolchains -w server -- next) ----
 
 const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
@@ -298,7 +333,8 @@ test('real export: static export, moved URLs, equivalence through the moves, hyd
         el('p', {}, text('Fish & chips <b>not bold</b> {braces}')), el('img', { attrs: { src: { asset: 'images/a.png' }, alt: 'A' } }),
         el('a', { attrs: { href: { anchor: '#top' } } }, text('Top')), form)),
       page('about.html', { meta: [{ property: 'og:url', content: 'https://www.example.com/about.html' }] }, headerNode(), el('main', { b: 1 }, el('h1', {}, text('About')))),
-      page('services/index.html', { bodyClass: 'services', lang: 'fr' }, el('main', { b: 1 }, el('h1', {}, text('Services')), el('a', { attrs: { href: { page: 'about.html', hash: '#team' } } }, text('Team')))),
+      // The original was a client-rendered app: everything in its own <div id="root"> (the mount id is never written).
+      page('services/index.html', { bodyClass: 'services', lang: 'fr' }, el('div', { id: 'root', class: 'box', b: 1 }, el('main', { b: 1 }, el('h1', {}, text('Services')), el('a', { attrs: { href: { page: 'about.html', hash: '#team' } } }, text('Team'))))),
     ];
     const ir = irOf(pages, [
       { path: 'robots.txt', content: 'User-agent: *\n' },
@@ -310,7 +346,7 @@ test('real export: static export, moved URLs, equivalence through the moves, hyd
     const id = randomUUID();
     projectIds.push(id);
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://www.example.com/', 'nextjs', 1, ?, ?)`).run(id, now, now);
+    seedProject(db, { id, name: 'p', url: 'https://www.example.com/', stack: 'nextjs', authorized: 1 });
     const recreateId = randomUUID();
     const dir = recreateDir(id, recreateId);
     await writeTree(dir, { 'assets/images/a.png': TINY_PNG, 'assets/manifest.json': JSON.stringify({ files: [{ file: 'images/a.png' }] }), 'ir/site.json': JSON.stringify(ir) });
@@ -348,6 +384,7 @@ test('real export: static export, moved URLs, equivalence through the moves, hyd
     assert.match(await readFile(path.join(site, 'sitemap.xml'), 'utf8'), /<loc>https:\/\/www\.example\.com\/about\/<\/loc>/);
     assert.equal(await readFile(path.join(site, '_redirects'), 'utf8'), '/about.html /about/ 301\n');
     assert.match(await readFile(path.join(site, 'services', 'index.html'), 'utf8'), /<html lang="fr"><head>/);
+    assert.doesNotMatch(await readFile(path.join(site, 'services', 'index.html'), 'utf8'), /id="root"/, 'the original app\'s mount id is not written');
 
     // Preview: the stack's own output with its inline data scripts allowed by hash.
     const preview = await (await fetch(`${base}/${id}/preview`, { method: 'POST' })).json();

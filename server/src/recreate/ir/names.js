@@ -20,6 +20,10 @@ const UTILITY = /[:[\]/.!@%#]|^-|^(p|m|px|py|pt|pb|pl|pr|mx|my|mt|mb|ml|mr|w|h|m
 const VISIBILITY = /(^|-)(hidden|visible|show|hide|only|sr|screen-reader|visually)(-|$)|(-|^)(desktop|tablet|phone|mobile|lg|md|sm|xs|xl)$/i;
 const GENERIC = new Set(['container', 'wrapper', 'wrap', 'inner', 'outer', 'content', 'block', 'element', 'item', 'row', 'col', 'column', 'clearfix', 'group', 'active', 'current', 'selected', 'open', 'is-active', 'js', 'no-js']);
 
+// Ids front-end frameworks give the element they render into (React / Vite `root`, Vue `app`, Next.js `__next`, …):
+// the original's framework, not its content. The copy never writes them; an app stack adds its own (`#root`).
+export const MOUNT_IDS = new Set(['root', 'app', '__next', '__nuxt', '___gatsby', 'svelte', 'q-app', 'ember-application', '__layout']);
+
 /** True when an original class name or id is meaningful enough to reuse. */
 export function meaningful(token) {
   if (!token || token.length < 2 || token.length > 32) return false;

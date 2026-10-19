@@ -65,10 +65,11 @@ export function siteNameOf(head, root, url) {
  * @param {string} o.baseUrl    origin used for canonical and og:url (target domain or original origin)
  * @param {{ value: string, source: string }} o.siteName
  * @param {{ rel: string, asset: string }[]} o.siteIcons  icons of the homepage, used when a page has none
+ * @param {string|null} [o.themeColor]  brand colour for a missing theme-color
  * @param {{ title?: string, excerpt?: string }|null} [o.rest]  WordPress REST title/excerpt, preferred over page heuristics
  * @returns {{ head: object, auto: { field: string, value: string, source: string }[], missing: string[] }}
  */
-export function buildHead({ head, page, root, assetFile, baseUrl, siteName, siteIcons = [], rest = null }) {
+export function buildHead({ head, page, root, assetFile, baseUrl, siteName, siteIcons = [], rest = null, themeColor = null }) {
   const auto = [];
   const missing = [];
   const fill = (field, value, source) => {
@@ -154,6 +155,8 @@ export function buildHead({ head, page, root, assetFile, baseUrl, siteName, site
     const img = find(root, (n) => n.tag === 'img' && (n.natural?.[0] ?? 0) >= 200 && assetFile(n.src ?? n.attrs.src, page.url));
     if (img) add('property', 'og:image', absAsset(assetFile(img.src ?? img.attrs.src, page.url)), 'first large image');
   }
+  // Browsers colour their toolbar with it and the crawl check asks for it: the brand colour when the original has none.
+  add('name', 'theme-color', themeColor, 'brand colour (most used button / link colour)');
   add('name', 'twitter:card', seen.has('og:image') || seen.has('twitter:image') ? 'summary_large_image' : 'summary', 'default');
 
   let icons = [];

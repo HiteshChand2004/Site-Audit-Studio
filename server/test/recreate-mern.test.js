@@ -21,6 +21,7 @@ import { planZip } from '../src/recreate/export/zip.js';
 import { recreateDir } from '../src/recreate/workspace.js';
 import recreateRouter from '../src/routes/recreate.js';
 import { toolchainDir, toolchainStatus } from '../src/toolchains/index.js';
+import { seedProject } from './helpers/projects.js';
 
 const TEMPLATE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'recreate', 'emit', 'mern', 'template', 'server');
 const exists = (p) => access(p).then(() => true, () => false);
@@ -184,7 +185,8 @@ test('the generated server tests pass as shipped', { timeout: 120000 }, async (t
   // Not inside this test run's context: a nested `node --test` would report to it instead of printing.
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
-  const run = spawnSync(process.execPath, ['--test'], { cwd: path.join(dir, 'server'), encoding: 'utf8', env });
+  // TAP explicitly: since Node 23 the default reporter of a non-terminal run is "spec" (ℹ pass 14), not TAP.
+  const run = spawnSync(process.execPath, ['--test', '--test-reporter=tap'], { cwd: path.join(dir, 'server'), encoding: 'utf8', env });
   assert.equal(run.status, 0, run.stdout.slice(-1500));
   assert.match(run.stdout, /# fail 0/);
   assert.match(run.stdout, /# pass 1[4-9]|# pass [2-9]\d/);
@@ -214,7 +216,7 @@ test('real export: client verified against the HTML build, server tests run, for
     const id = randomUUID();
     projectIds.push(id);
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://www.example.com/', 'mern', 1, ?, ?)`).run(id, now, now);
+    seedProject(db, { id, name: 'p', url: 'https://www.example.com/', stack: 'mern', authorized: 1 });
     const recreateId = randomUUID();
     const dir = recreateDir(id, recreateId);
     await writeTree(dir, { 'assets/images/a.png': TINY_PNG, 'assets/manifest.json': JSON.stringify({ files: [{ file: 'images/a.png' }] }), 'ir/site.json': JSON.stringify(ir) });

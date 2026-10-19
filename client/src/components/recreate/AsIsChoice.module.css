@@ -1,0 +1,105 @@
+.choice {
+  display: grid;
+  gap: 14px;
+  margin-top: 6px;
+}
+
+.modes {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.modes legend {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.mode {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg, 12px);
+  cursor: pointer;
+}
+
+.mode.on {
+  border-color: var(--accent);
+  background: var(--accent-tint, transparent);
+}
+
+.mode.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.mode > span {
+  display: grid;
+  gap: 4px;
+}
+
+.note {
+  color: var(--text-muted);
+  font-size: 0.9em;
+}
+
+.asis {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  border: 1px dashed var(--hairline-strong, var(--hairline));
+  border-radius: var(--radius-lg, 12px);
+}
+
+.label {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.pages ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.pages label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.stacks {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+}
+
+.stackBtn {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md, 10px);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.stackBtn.on {
+  border-color: var(--accent);
+}
+
+.confirm {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}

@@ -181,7 +181,7 @@ test('sitemap.xml lists indexable pages at the site origin; robots.txt keeps the
   assert.ok(!/GPTBot/.test(closed.files[1].content));
   const none = crawlFiles({ pages, baseUrl: 'https://new.test', robots: { status: 'missing' }, llms: { found: true, text: null, tooLarge: true } });
   assert.ok(!none.files.some((f) => f.path === 'llms.txt'));
-  assert.deepEqual(none.llms, { copied: false, generated: false, bytes: 0, tooLarge: true });
+  assert.deepEqual(none.llms, { copied: false, generated: false, bytes: 0, tooLarge: true }); // too large to read: never replaced by a generated one
   assert.match(none.robots.source, /no robots\.txt/);
   assert.match(none.files[1].content, /Allow: \//);
 });

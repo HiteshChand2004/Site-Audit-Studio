@@ -12,6 +12,7 @@ import { progressTracker } from '../src/jobs/manager.js';
 import { runRecreate, STAGES, STEPS as RECREATE_STEPS } from '../src/recreate/index.js';
 import { createInterrupts, extendableTimeout, recoverFailure, recoverHit } from '../src/recreate/interrupts.js';
 import { startFixtureServer } from './serve-fixture.js';
+import { seedProject } from './helpers/projects.js';
 
 process.env.SAS_ALLOW_LOCALHOST = '1';
 
@@ -38,9 +39,7 @@ function makeProject(pages = 0) {
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at) VALUES (?, 'fixture', ?, 'html', 1, ?, ?, ?)`).run(id, `${origin}/`, pages, now, now);
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), id, now, now, JSON.stringify({ url: `${origin}/`, analyzedAt: now }));
+  seedProject(db, { id, name: 'fixture', url: `${origin}/`, stack: 'html', authorized: 1, recreatePages: pages, analysis: true });
   return db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
 }
 const stubs = Object.fromEntries(Object.keys(STAGES).map((key) => [key, async () => {}]));
@@ -174,7 +173,7 @@ test('time given back after an outage extends the job and the running step', asy
   assert.equal(report.interruptions.grantedMs, 1500);
 });
 
-test('a step that waits for the background sweep is shown as that step, so the steps between are never ticked early', { skip: 'the width sweep is parked (desktop only for now, recreate/views.js)' }, async () => {
+test('a step that waits for the background sweep is shown as that step, so the steps between are never ticked early', async () => {
   const project = makeProject();
   const tracker = progressTracker(RECREATE_STEPS);
   const shown = [];
@@ -205,6 +204,9 @@ test('inspect: a page captured while the network was down is captured once more;
     stages: {
       ...stubs,
       inspect: (ctx) => {
+        // One page at a time: the stand-in outage below hits whichever capture finishes first, which is the homepage only
+        // when pages run one after the other (pages side by side: the next test).
+        ctx.capturePages = 1;
         // The outage overlapped the homepage capture only (its first attempt).
         let homeHit = true;
         const real = ctx.interrupts;
@@ -220,4 +222,32 @@ test('inspect: a page captured while the network was down is captured once more;
   assert.deepEqual(calls, ['/', '/', '/about.html']);
   assert.deepEqual(report.pages.map((p) => p.path), ['/', '/about.html']);
   assert.ok(events.includes('Capturing / again (the network dropped)'), events.join('\n'));
+});
+
+test('inspect, pages side by side: every capture an outage overlapped is captured once more, each page kept once', async () => {
+  const project = makeProject(1);
+  const calls = [];
+  const report = await runRecreate({
+    project,
+    recreateId: randomUUID(),
+    progress: () => {},
+    stages: {
+      ...stubs,
+      inspect: (ctx) => {
+        ctx.capturePages = 2;
+        // The outage overlapped both first attempts (they ran at the same time); the second attempts were clean.
+        let hits = 2;
+        const real = ctx.interrupts;
+        ctx.interrupts = { ...real, hit: () => (hits > 0 ? ((hits -= 1), { cause: 'network', pausedMs: 0, downMs: 3000 }) : null), waitBack: async () => ({ back: true, waitedMs: 0 }) };
+        ctx.capturePage = (browser, info, ...rest) => {
+          calls.push(info.path);
+          return capturePage(browser, info, ...rest);
+        };
+        return STAGES.inspect(ctx);
+      },
+    },
+  });
+  assert.deepEqual([...calls].sort(), ['/', '/', '/about.html', '/about.html']);
+  assert.deepEqual(report.pages.map((p) => p.path), ['/', '/about.html']);
+  assert.equal(report.capture.peak, 2);
 });

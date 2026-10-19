@@ -10,12 +10,13 @@
 // Recreate step 5 ("Starting preview") serves the new build on a throwaway port and requests every
 // page and the stylesheet through the same handler; after the job the preview is started for real.
 import { createServer } from 'node:http';
-import { readdir, readFile, realpath, stat } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { APP_ORIGIN } from '../audit/frame.js';
 import { RecreateError } from './errors.js';
 import { inlineScriptHashes } from './inlineScripts.js';
-import { TYPES } from './verify/server.js';
+import { TYPES, typeExtOf } from './verify/server.js';
 
 export const PREVIEW_PORTS = { first: 5100, last: 5199 };
 export const PREVIEW_HOST = '127.0.0.1';
@@ -63,9 +64,10 @@ export function previewHeaders(frameAncestors = appOrigins(), { connectSelf = fa
 }
 
 const inside = (base, file) => file === base || file.startsWith(base + path.sep);
+const COMPRESSIBLE = /^\.(html?|css|m?js|json|svg|txt|xml|webmanifest)$/;
 
 /** A preview server for `root` (not listening yet). `port()` is read on each request. */
-function createPreviewServer(root, { port, frameAncestors = appOrigins(), connectSelf = false, scripts = false }) {
+function createPreviewServer(root, { port, frameAncestors = appOrigins(), connectSelf = false, scripts = false, compress = false }) {
   const base = path.resolve(root);
   const headers = previewHeaders(frameAncestors, { connectSelf, scripts });
   let realBase = null;
@@ -102,10 +104,16 @@ function createPreviewServer(root, { port, frameAncestors = appOrigins(), connec
       const real = await realpath(file);
       if (!inside(realBase, real)) return send(404, 'Not found');
       const body = await readFile(real);
-      const ext = path.extname(real).toLowerCase();
+      const ext = typeExtOf(real);
       const sent = scripts === 'inline' && ext === '.html'
         ? previewHeaders(frameAncestors, { connectSelf, scripts, scriptHashes: inlineScriptHashes(body.toString('utf8')) })
         : headers;
+      // Text gzipped like any web host does (the re-audit measures what a visitor would download, as on the original).
+      if (compress && COMPRESSIBLE.test(ext) && body.length > 1024 && /\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''))) {
+        const zipped = gzipSync(body);
+        res.writeHead(200, { ...sent, 'Content-Type': TYPES[ext] ?? 'application/octet-stream', 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' });
+        return res.end(req.method === 'HEAD' ? undefined : zipped);
+      }
       res.writeHead(200, { ...sent, 'Content-Type': TYPES[ext] ?? 'application/octet-stream' });
       res.end(req.method === 'HEAD' ? undefined : body);
     } catch {
@@ -132,9 +140,9 @@ const closeServer = (server) => new Promise((resolve) => {
  * Serves `root` on `port` (0 = any free port; a range = the first free port in it).
  * @returns {Promise<{ port: number, origin: string, close: () => Promise<void> }>}
  */
-export async function servePreview(root, { port = 0, range = null, frameAncestors, connectSelf = false, scripts = false } = {}) {
+export async function servePreview(root, { port = 0, range = null, frameAncestors, connectSelf = false, scripts = false, compress = false } = {}) {
   let bound = null;
-  const server = createPreviewServer(root, { port: () => bound, frameAncestors, connectSelf, scripts });
+  const server = createPreviewServer(root, { port: () => bound, frameAncestors, connectSelf, scripts, compress });
   if (range) {
     for (let p = range.first; p <= range.last && bound == null; p++) {
       try {
@@ -150,8 +158,9 @@ export async function servePreview(root, { port = 0, range = null, frameAncestor
   return { port: bound, origin: `http://${PREVIEW_HOST}:${bound}`, close: () => closeServer(server) };
 }
 
-// The active preview (one at a time). Starts and stops run one after another.
-let active = null;
+// One preview per project, each on its own port, so two websites open side by side (two tabs) never take
+// each other's preview. Starts and stops run one after another.
+const active = new Map();
 let chain = Promise.resolve();
 const serial = (fn) => {
   const run = chain.then(fn);
@@ -161,37 +170,47 @@ const serial = (fn) => {
 
 const info = (p) => ({ projectId: p.projectId, recreateId: p.recreateId, port: p.port, url: `${p.origin}/`, scripts: Boolean(p.scripts), stack: p.stack ?? 'html', startedAt: p.startedAt });
 
-/** The active preview, or null. */
-export const activePreview = () => (active ? info(active) : null);
+/** The preview of a project, or null. Without a project: the latest one started (or null). */
+export const activePreview = (projectId) => {
+  if (projectId) return active.has(projectId) ? info(active.get(projectId)) : null;
+  const all = [...active.values()];
+  return all.length ? info(all[all.length - 1]) : null;
+};
 
 /**
- * Starts (or keeps) the preview of one recreate's dist/ folder; any other preview is stopped first.
+ * Starts (or keeps) the preview of one recreate's dist/ folder; the project's previous preview (another recreate or
+ * build) is stopped first, other projects' previews keep running.
  * @param {{ projectId: string, recreateId: string, root: string, scripts?: boolean|'inline', stack?: string }} o  stack: which build the folder is (the app shows it)  one recreate can have several
  *   outputs (stacks): the preview is kept only while it serves the same folder with the same script policy
  */
 export function startPreview({ projectId, recreateId, root, scripts = false, stack = 'html' }) {
   return serial(async () => {
-    if (active?.projectId === projectId && active.recreateId === recreateId && active.root === root && active.scripts === scripts) return info(active);
+    const current = active.get(projectId);
+    if (current && current.recreateId === recreateId && current.root === root && current.scripts === scripts) return info(current);
     if (!(await stat(root).catch(() => null))?.isDirectory()) throw new PreviewError('This recreate has no production build to preview.');
-    if (active) {
-      await active.close();
-      active = null;
+    if (current) {
+      await current.close();
+      active.delete(projectId);
     }
     const served = await servePreview(root, { range: PREVIEW_PORTS, scripts });
-    active = { projectId, recreateId, root, scripts, stack, ...served, startedAt: new Date().toISOString() };
-    return info(active);
+    const entry = { projectId, recreateId, root, scripts, stack, ...served, startedAt: new Date().toISOString() };
+    active.set(projectId, entry);
+    return info(entry);
   });
 }
 
-/** Stops the active preview when it matches (no filter = any). Resolves to true when one was stopped. */
+/** Stops the previews that match (no filter = all). Resolves to true when one was stopped. */
 export function stopPreview({ projectId, recreateId } = {}) {
   return serial(async () => {
-    if (!active) return false;
-    if (projectId && active.projectId !== projectId) return false;
-    if (recreateId && active.recreateId !== recreateId) return false;
-    await active.close();
-    active = null;
-    return true;
+    let stopped = false;
+    for (const [id, p] of [...active]) {
+      if (projectId && id !== projectId) continue;
+      if (recreateId && p.recreateId !== recreateId) continue;
+      await p.close();
+      active.delete(id);
+      stopped = true;
+    }
+    return stopped;
   });
 }
 
@@ -205,11 +224,9 @@ export async function previewStage(ctx) {
   const motionScript = Boolean(ir.motion?.script);
   const served = await servePreview(path.join(ctx.dir, 'dist'), { scripts: motionScript });
   try {
-    // Pages carry their own CSS (D.6): inline, or a file under css/pages/ for a large page.
-    const pageSheets = await readdir(path.join(ctx.dir, 'dist', 'css', 'pages')).catch(() => []);
     const targets = [
       ...ir.pages.map((p) => ({ path: p.outPath.replace(/(^|\/)index\.html$/, '$1'), type: 'text/html' })),
-      ...pageSheets.filter((f) => f.endsWith('.css')).map((f) => ({ path: `css/pages/${f}`, type: 'text/css' })),
+      { path: 'css/site.css', type: 'text/css' },
       ...(motionScript ? [{ path: 'js/motion.js', type: 'text/javascript' }] : []),
     ];
     let bytes = 0;

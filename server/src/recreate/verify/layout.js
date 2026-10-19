@@ -112,18 +112,35 @@ export async function withBrowserRetry(renderer, fn) {
   }
 }
 
-// Runs in the page. Boxes are measured like the capture measures them (capture/snapshot.js rectOf):
+// Runs in the page. Boxes are measured exactly as the capture measures them (capture/snapshot.js rectOf):
 // rotated or scaled elements by their untransformed size, centred on their bounding box.
-function collectRects() {
+export function collectRects() {
+  // Two decimals, like the capture, and the same untransformed box: the two sides have to be measured by one
+  // definition or the difference between them is partly the measuring.
+  const dp2 = (n) => Math.round(n * 100) / 100;
+  const untransformed = (el, cs) => {
+    const n = (v) => {
+      const x = parseFloat(v);
+      return Number.isFinite(x) ? x : 0;
+    };
+    // The resolved width respects the element's own box-sizing: with border-box it already is the border box, with
+    // content-box the padding and border have to be added. Checked against ground truth (the same element measured
+    // with its transform taken off) on nine cases - fixed sizes, auto widths, flex thirds, an inline-block and an
+    // SVG: exact to a hundredth of a pixel, where offsetWidth is half a pixel out and is not even defined for the SVG.
+    const border = cs.boxSizing === 'border-box';
+    const w = n(cs.width) + (border ? 0 : n(cs.paddingLeft) + n(cs.paddingRight) + n(cs.borderLeftWidth) + n(cs.borderRightWidth));
+    const h = n(cs.height) + (border ? 0 : n(cs.paddingTop) + n(cs.paddingBottom) + n(cs.borderTopWidth) + n(cs.borderBottomWidth));
+    return [w > 0 ? w : el.offsetWidth ?? 0, h > 0 ? h : el.offsetHeight ?? 0];
+  };
   const rects = {};
   for (const el of document.querySelectorAll('[data-sas-id]')) {
     const r = el.getBoundingClientRect();
-    const t = el instanceof HTMLElement ? getComputedStyle(el).transform : 'none';
-    let box = [Math.round(r.left + scrollX), Math.round(r.top + scrollY), Math.round(r.width), Math.round(r.height)];
+    const cs = el instanceof HTMLElement ? getComputedStyle(el) : null;
+    const t = cs ? cs.transform : 'none';
+    let box = [dp2(r.left + scrollX), dp2(r.top + scrollY), dp2(r.width), dp2(r.height)];
     if (t && t !== 'none' && !/^matrix\(1, 0, 0, 1, [^,]+, [^)]+\)$/.test(t)) {
-      const w = el.offsetWidth;
-      const h = el.offsetHeight;
-      box = [Math.round(r.left + r.width / 2 + scrollX - w / 2), Math.round(r.top + r.height / 2 + scrollY - h / 2), w, h];
+      const [w, h] = untransformed(el, cs);
+      box = [dp2(r.left + r.width / 2 + scrollX - w / 2), dp2(r.top + r.height / 2 + scrollY - h / 2), dp2(w), dp2(h)];
     }
     rects[el.getAttribute('data-sas-id')] = box;
   }
@@ -184,34 +201,67 @@ function iou(a, b) {
   return inter / (a[2] * a[3] + b[2] * b[3] - inter);
 }
 
-const visibleIn = (n, v) => {
+// A state of a tab panel / carousel the page does not start in (ir/states.js): hidden until a visitor clicks, so neither
+// measured nor fixed (its boxes are those of its own state).
+export const stateCopy = (n) => !!n.stateAttrs && ('hidden' in n.stateAttrs || 'data-w-hcopy' in n.stateAttrs);
+export const visibleIn = (n, v) => {
   const d = n.views[v];
-  return !!d && !d.hidden && d.rect[2] > 0 && d.rect[3] > 0;
+  return !stateCopy(n) && !!d && !d.hidden && d.rect[2] > 0 && d.rect[3] > 0;
 };
 
-/** Layout comparison of one page in one view. */
-export function compareLayout(root, v, rects) {
+/**
+ * Layout comparison of one page in one view.
+ *
+ * With `pairs`, the expected-vs-actual box of every element that is NOT fine is handed back as well, in document
+ * order, instead of being thrown away after the counting. Only the elements that fail a check are listed: an element
+ * that is absent from `pairs` matched the capture within the tolerances, so its offset delta is ~0 by definition.
+ * The rows are keyed by `cpath` as well as `sid`, because `sid` is re-assigned whenever the IR is rebuilt.
+ * @param {{ pairs?: boolean }} [opts]
+ * @returns {{ elements: number, sizes: number, boxes: number, missing: number, pairs?: object[] }}
+ */
+export function compareLayout(root, v, rects, { pairs = false } = {}) {
   let total = 0;
   let sizes = 0;
   let boxes = 0;
   let missing = 0;
+  const rows = pairs ? [] : null;
   const walk = (n) => {
-    if (!isElement(n)) return;
+    if (!isElement(n) || stateCopy(n)) return;
     if (visibleIn(n, v)) {
       total++;
       const o = n.views[v].rect;
       const r = rects[n.sid];
-      if (!r || r[2] <= 0 || r[3] <= 0) missing++;
+      const gone = !r || r[2] <= 0 || r[3] <= 0;
+      let wOk = false;
+      let hOk = false;
+      let overlap = 0;
+      if (gone) missing++;
       else {
-        if (widthOk(r, o) && heightOk(r, o)) sizes++;
-        if (iou(r, o) >= 0.6) boxes++;
+        wOk = widthOk(r, o);
+        hOk = heightOk(r, o);
+        overlap = iou(r, o);
+        if (wOk && hOk) sizes++;
+        if (overlap >= 0.6) boxes++;
+      }
+      if (rows && (gone || !wOk || !hOk || overlap < 0.6)) {
+        rows.push({
+          sid: n.sid,
+          cpath: n.cpath ?? null,
+          tag: n.tag,
+          kind: gone ? 'missing' : !wOk || !hOk ? 'size' : 'offset',
+          expected: o,
+          actual: gone ? null : r,
+          widthOk: wOk,
+          heightOk: hOk,
+          iou: Math.round(overlap * 1000) / 1000,
+        });
       }
     }
     if (n.tag !== 'svg') n.children.forEach(walk);
   };
   walk(root);
   const share = (k) => (total ? Math.round((k / total) * 1000) / 1000 : 1);
-  return { elements: total, sizes: share(sizes), boxes: share(boxes), missing };
+  return { elements: total, sizes: share(sizes), boxes: share(boxes), missing, ...(rows && { pairs: rows }) };
 }
 
 const NO_WIDTH_FIX = /^(inline|inline-block|inline-flex|inline-grid|table|table-cell|table-row|contents|none)$/;

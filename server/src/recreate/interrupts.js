@@ -128,7 +128,9 @@ export function extendableTimeout(ms, onTimeout, beforeFire) {
   let done = false;
   const arm = () => {
     clearTimeout(timer);
-    if (!done) timer = setTimeout(fire, Math.max(0, end - Date.now()));
+    // No limit: nothing is armed, so nothing can fire. (setTimeout cannot hold Infinity: Node clamps it to 1 ms, which
+    // would make the step time out at once.)
+    if (!done && Number.isFinite(end)) timer = setTimeout(fire, Math.max(0, end - Date.now()));
   };
   const fire = () => {
     beforeFire?.();

@@ -5,7 +5,7 @@
 // (never the app's active preview, which moves when another project is selected). Only that port is
 // reachable on loopback: the SSRF policy of the run allows it as an internal port, and everything
 // else keeps the user policy (public addresses; loopback only with SAS_ALLOW_LOCALHOST).
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { makeOverallPct, runAnalysis, STEPS as AUDIT_STEPS } from '../audit/index.js';
 import { db, projectDir } from '../db/index.js';
@@ -15,7 +15,7 @@ import { servePreview } from '../recreate/preview.js';
 import { recreateDir } from '../recreate/workspace.js';
 import { createNetPolicy, userPolicy } from '../security/netGuard.js';
 import { compareAudits, loadSide } from './compare/index.js';
-import { measureNewMotion, motionItems, readOldMotion } from './motion.js';
+import { clickBudgetFor, hoverBudgetFor, measureNewMotion, motionItems, readOldMotion } from './motion.js';
 
 /** Thrown when a re-audit cannot run at all; the job is marked failed. */
 export class ReauditError extends Error {}
@@ -33,6 +33,17 @@ export const PUBLIC_STEPS = STEPS.map(({ key, label }) => ({ key, label }));
 export const overallPct = makeOverallPct(STEPS);
 
 /** Folder of one re-audit's raw results (crawl, axe, Lighthouse), inside its recreate. */
+/** How fast the computer was when the original's Lighthouse runs were made: { mobile, desktop } benchmark index. */
+export async function benchmarkOf(auditDir) {
+  const out = {};
+  for (const formFactor of ['mobile', 'desktop']) {
+    const lhr = await readFile(path.join(auditDir, `lighthouse-${formFactor}.json`), 'utf8').then(JSON.parse, () => null);
+    const index = lhr?.environment?.benchmarkIndex;
+    if (index > 0) out[formFactor] = index;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 export const reauditDir = (projectId, recreateId, reauditId) => path.join(recreateDir(projectId, recreateId), 'reaudit', reauditId);
 
 const selectRecreate = db.prepare(`SELECT result_json FROM recreates WHERE id = ? AND project_id = ? AND status = 'done'`);
@@ -69,7 +80,8 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
 
   // connect-src 'self': Lighthouse fetches robots.txt from inside the page (previewHeaders).
   // An app's own scripts run (Lighthouse measures what its visitors get); the CSP still allows only the build's own.
-  const served = await servePreview(root, { connectSelf: true, scripts: emitter?.scripts || reportOutputs(report)[stack]?.scripts || false });
+  // Text is gzipped like on any host, so sizes compare with the original's real transfer sizes.
+  const served = await servePreview(root, { connectSelf: true, compress: true, scripts: emitter?.scripts || reportOutputs(report)[stack]?.scripts || false });
   try {
     // Pages at the URL the output serves them (a stack may move some).
     const outputPageList = outputPages(report, stack);
@@ -91,6 +103,10 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
       skip,
       netPolicy,
       progress,
+      // The link check (mostly the original's outbound links) runs on while Lighthouse measures the loopback build.
+      linksBesideLighthouse: true,
+      // Measured like the original was: a computer much busier now than then repeats a run with a scaled CPU slowdown.
+      lighthouseBaseline: await benchmarkOf(path.join(projectDir(project.id), 'audit', report.analysisId)),
     });
     // The analysis contract carries a sample checklist for the OLD site; it means nothing here.
     delete audit.recreate;
@@ -101,12 +117,12 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
     if (!skip.includes('motion')) {
       try {
         const folder = recreateDir(project.id, recreateId);
-        const oldMotion = await readOldMotion(folder, report.pages);
+        const oldMotion = await readOldMotion(folder, report.pages, report.exact?.excluded ?? []);
         const slugOf = new Map((report.pages ?? []).map((p) => [p.outPath, p.slug]));
         const targets = outputPageList.filter((p) => slugOf.has(p.outPath) && oldMotion.has(slugOf.get(p.outPath)))
-          .map((p) => ({ slug: slugOf.get(p.outPath), urlPath: p.path.replace(/^\//, ''), clicks: (oldMotion.get(slugOf.get(p.outPath))?.clicks?.widgets?.length ?? 0) > 0 }));
-        // ≤ 6 pages: hover, loops and reveal (~25 s) plus the click probe on pages that have interactive parts (~17 s).
-        const measured = await measureNewMotion({ origin: served.origin, pages: targets, deadline: Date.now() + 240000 });
+          .map((p) => ({ slug: slugOf.get(p.outPath), urlPath: p.path.replace(/^\//, ''), hoverBudgetMs: hoverBudgetFor(oldMotion.get(slugOf.get(p.outPath))), clickBudgetMs: clickBudgetFor(oldMotion.get(slugOf.get(p.outPath))) }));
+        // The time follows the pages measured (≤ 6): long pages take 40–60 s each.
+        const measured = await measureNewMotion({ origin: served.origin, pages: targets, deadline: Date.now() + Math.max(150000, targets.slice(0, 6).reduce((ms, t) => ms + 75000 + t.hoverBudgetMs + t.clickBudgetMs, 0)) });
         motion = { ...motionItems(oldMotion, measured.pages), failed: measured.failed, skipped: measured.skipped };
       } catch (err) {
         motion = { items: [], summary: null, failed: [{ slug: '*', error: String(err?.message ?? err).split('\n')[0] }], skipped: [] };

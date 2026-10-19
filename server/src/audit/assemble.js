@@ -24,8 +24,10 @@ export function assembleAudit({
   accessibility,
   manualRebuild,
   pagesCrawled,
+  pageVariants = 0,
   blockedHosts = [],
   errors,
+  siteType = null,
 }) {
   return {
     isDummy: false,
@@ -33,6 +35,7 @@ export function assembleAudit({
     url,
     analyzedAt: new Date().toISOString(),
     pagesCrawled,
+    pageVariants,
     frame,
     screenshots,
     metrics,
@@ -53,6 +56,8 @@ export function assembleAudit({
     manualRebuild,
     blockedHosts,
     errors,
+    // standard | canvas-rendered (detection/siteType.js), with the reason and the evidence. Recreate stops on canvas-rendered.
+    ...(siteType && { siteType }),
     // The fix checklist is produced by re-auditing the recreated site (Phase 5). Until then it stays a sample.
     recreate: { ...buildDummyAudit(project).recreate, isDummy: true },
   };

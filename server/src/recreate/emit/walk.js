@@ -9,6 +9,7 @@
 //   refs.stylesheetHref()       URL of the shared stylesheet, or null when the stack imports it
 //   refs.useAsset(file)         called for every asset the page uses (the writer copies those)
 import { relFile, relPage } from '../ir/links.js';
+import { MOUNT_IDS } from '../ir/names.js';
 import { CSS_FILE } from './css.js';
 
 /** References of a plain relative-path site (the HTML emitter, and any emitter that writes files). */
@@ -36,6 +37,8 @@ export function refValue(value, refs) {
   if (value.page) return refs.pageHref(value.page) + (value.hash ?? '');
   if (value.file) return (refs.fileHref ?? rootFileHref)(value.file) + (value.hash ?? '');
   if (value.anchor) return value.anchor;
+  // A style attribute of an as-is page (ir/asis.js): its url("asset:…") point at the downloaded files.
+  if (value.css != null) return value.css.replace(/url\("asset:([^"]+)"\)/g, (all, file) => (refs.useAsset(file), `url("${refs.assetHref(file)}")`));
   if (value.live) return value.live;
   if (value.external) return value.external;
   return '';
@@ -63,7 +66,8 @@ export function describeNode(node, refs) {
     const value = refValue(v, refs);
     attrs.push({ name, value, bare: value === '' && !EMPTY_OK.has(name) });
   }
-  return { kind: 'element', tag: node.t, id: node.id, class: node.class, attrs, sid: node.sid, children: node.children ?? [], block: Boolean(node.b) };
+  // A framework's mount id saved in an older IR (ir/names.js MOUNT_IDS) is not written either.
+  return { kind: 'element', tag: node.t, id: MOUNT_IDS.has(node.id) ? undefined : node.id, class: node.class, attrs, sid: node.sid, children: node.children ?? [], block: Boolean(node.b) };
 }
 
 /**

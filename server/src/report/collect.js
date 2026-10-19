@@ -1,6 +1,7 @@
 // Everything the report needs, read from the database and the project folder: the project, the latest analysis
 // (the audit as the OLD panel shows it), the latest completed recreate (its report.json), the fix checklist of the
-// latest re-audit (audit.recreate) and small screenshots of the original and the recreated pages.
+// latest re-audit (audit.recreate), small screenshots of the original and the recreated pages, and the site's icon
+// as the report's logo.
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
@@ -19,9 +20,12 @@ const latestRecreate = db.prepare(`
 
 // Report thumbnails: small (the report shows them at half this width, so they stay sharp on high-density screens
 // without making the file or the page big): the width in px and the share of the width that makes the first screen.
-// Desktop only for now (recreate/views.js); tablet { width: 250, ratio: 1024 / 768 } and mobile { width: 152, ratio: 812 / 375 } are parked.
+// The report shows a computer and a phone view; the tablet size stays available to thumbnail().
+const SHOWN = ['desktop', 'mobile'];
 const THUMB = {
   desktop: { width: 480, ratio: 900 / 1440 },
+  tablet: { width: 250, ratio: 1024 / 768 },
+  mobile: { width: 152, ratio: 812 / 375 },
 };
 
 /** A WebP data URI of the top of a screenshot, or null when the file is missing. */
@@ -34,6 +38,24 @@ export async function thumbnail(file, view) {
     const height = Math.min(resized.info.height, Math.round(width * ratio));
     const out = await sharp(resized.data).extract({ left: 0, top: 0, width, height }).webp({ quality: 72 }).toBuffer();
     return `data:image/webp;base64,${out.toString('base64')}`;
+  } catch {
+    return null;
+  }
+}
+
+// The website's own icon (kept by routes/favicon.js as favicon.bin + favicon.json): the report's logo, inline.
+const LOGO_TYPES = /^image\/(png|x-icon|vnd\.microsoft\.icon|svg\+xml|jpeg|gif|webp|avif)$/;
+const LOGO_MAX = 512 * 1024;
+
+/** The site's icon as a data URI, or null (the report then shows its first letter). */
+export async function logo(projectId) {
+  try {
+    const dir = projectDir(projectId);
+    const meta = JSON.parse(await readFile(path.join(dir, 'favicon.json'), 'utf8'));
+    if (!LOGO_TYPES.test(meta?.type ?? '')) return null;
+    const body = await readFile(path.join(dir, 'favicon.bin'));
+    if (!body.length || body.length > LOGO_MAX) return null;
+    return `data:${meta.type};base64,${body.toString('base64')}`;
   } catch {
     return null;
   }
@@ -54,18 +76,18 @@ export async function collectReport(projectId) {
 
   const rec = latestRecreate.get(projectId);
   const recreate = rec ? { ...JSON.parse(rec.result_json), recreateId: rec.id } : null;
-  const images = { old: {}, new: {} };
+  const images = { old: {}, new: {}, logo: await logo(projectId) };
 
   // The original: the first-screen shots of the analysis (screens/<view>-fold.webp).
   if (analyzed && audit.screenshots?.analysisId) {
     const dir = path.join(projectDir(projectId), 'audit', audit.screenshots.analysisId, 'screens');
-    for (const view of Object.keys(THUMB)) images.old[view] = await thumbnail(path.join(dir, `${view}-fold.webp`), view);
+    for (const view of SHOWN) images.old[view] = await thumbnail(path.join(dir, `${view}-fold.webp`), view);
   }
   // The recreated homepage: its screenshots from the fidelity check.
   if (recreate?.pages?.length) {
     const home = recreate.pages[0];
     const dir = path.join(recreateDir(projectId, rec.id), 'fidelity', home.slug ?? '');
-    for (const view of Object.keys(THUMB)) images.new[view] = await thumbnail(path.join(dir, `${view}-full.webp`), view);
+    for (const view of SHOWN) images.new[view] = await thumbnail(path.join(dir, `${view}-full.webp`), view);
   }
 
   return {

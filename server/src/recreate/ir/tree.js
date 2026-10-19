@@ -12,6 +12,7 @@
 //    the matching HTML element.
 // Every known view: the trees follow the views the captures have (views.js).
 import { KNOWN_VIEW_IDS as VIEW_IDS } from '../views.js';
+import { expandHoverCards, expandNotices, expandPanels, expandStates } from './states.js';
 
 export { VIEW_IDS };
 
@@ -29,6 +30,9 @@ export function fromCapture(node, view) {
         style: node.style ?? {},
         rect: node.rect ?? [0, 0, 0, 0],
         hidden: !!node.hidden,
+        ...(node.vp && { vp: node.vp }),
+        ...(node.ty && { ty: node.ty }),
+        ...(node.scrolled && { scrolled: node.scrolled }),
         ...(node.before && { before: node.before }),
         ...(node.after && { after: node.after }),
       },
@@ -36,8 +40,22 @@ export function fromCapture(node, view) {
     children: (node.children ?? []).map((c) => fromCapture(c, view)),
   };
   for (const key of ['lazy', 'src', 'href', 'poster', 'natural', 'svg']) if (node[key] != null) m[key] = node[key];
+  // The original markup of a part snapshotted in another state (capture/snapshot.js, exact mode): an as-is copy builds the
+  // state from it (ir/asis.js).
+  if (node.asisHtml) m.asisHtml = node.asisHtml;
   // The desktop path of the snapshot (body>div:1>a:2): the motion capture (4b) names its elements by it.
   if (view === 'desktop' && node.path) m.cpath = node.path;
+  // The phone snapshot path: controls only the phone layout has (a menu button) are named by it (mobile-clicks.json).
+  if (view === 'mobile' && node.path) m.mpath = node.path;
+  // The tablet snapshot path: controls only the tablet layout has (its own menu button), tablet-clicks.json.
+  if (view === 'tablet' && node.path) m.tpath = node.path;
+  // The other states of a tab panel / carousel (capture/states.js); ir/states.js puts them into the tree.
+  if (node.states) m.states = { ...node.states, variants: node.states.variants.map((v) => ({ index: v.index, node: fromCapture(v.body, view), ...(v.effects && { effects: v.effects }) })) };
+  if (node.hoverState?.body) m.hoverState = { node: fromCapture(node.hoverState.body, view) };
+  // Panels a click opens away from their control (capture/states.js), on the body; expandPanels puts them into the tree.
+  if (node.panels) m.panels = node.panels.map(({ body, ...rest }) => ({ ...rest, node: fromCapture(body, view) }));
+  // Short messages a click shows (capture/notices.js), on the body; ir/states.js expandNotices puts them into the tree.
+  if (node.notices) m.notices = node.notices.map((n) => ({ ...n, items: n.items.map((it) => ({ control: it.control, node: fromCapture(it.body, view) })) }));
   return m;
 }
 
@@ -104,7 +122,14 @@ function lcs(a, b, key) {
 
 /** Pairs of matching element children, in order. Exported for tests. */
 export function matchChildren(a, b) {
-  if (a.length === b.length && a.every((x, i) => x.tag === b[i].tag)) return a.map((x, i) => [x, b[i]]);
+  if (a.length === b.length && a.every((x, i) => x.tag === b[i].tag)) {
+    // Same tags, same content, another order (a builder's phone variant puts a list item's text before its bullet):
+    // pairing by position would give the bullet the text's styles in that view; matched by content below instead.
+    const ka = a.map(matchKey);
+    const kb = b.map(matchKey);
+    const reordered = ka.some((k, i) => k !== kb[i]) && [...ka].sort().join('\n') === [...kb].sort().join('\n');
+    if (!reordered) return a.map((x, i) => [x, b[i]]);
+  }
   // Strong anchors first (tag + text), then the gaps between anchors by tag alone.
   const anchors = lcs(a, b, matchKey);
   const pairs = [];
@@ -132,7 +157,7 @@ function clearViews(node, views) {
  */
 export function alignInto(a, b, views) {
   for (const v of views) if (b.views[v]) a.views[v] = b.views[v];
-  for (const key of ['src', 'href', 'poster', 'natural', 'svg', 'lazy', 'cpath']) if (a[key] == null && b[key] != null) a[key] = b[key];
+  for (const key of ['src', 'href', 'poster', 'natural', 'svg', 'lazy', 'cpath', 'mpath', 'tpath']) if (a[key] == null && b[key] != null) a[key] = b[key];
   const ae = a.children.filter(isElement);
   const be = b.children.filter(isElement);
   const partner = new Map();
@@ -228,7 +253,7 @@ export function mergeVariants(node, views = VIEW_IDS) {
 }
 
 /**
- * One captured view only (desktop only for now, views.js): a site builder's copies of a section for other screen sizes
+ * One captured view only (a capture made while only desktop was on, views.js): a site builder's copies of a section for other screen sizes
  * (Framer / Webflow Desktop / Tablet / Phone variants) are in the page but hidden. Without the other views they can't be
  * merged, and kept they would put hidden duplicate content (three main headings) into the copy. A hidden element is
  * dropped only when a visible sibling has the same content (`sameContent`), so a menu or dialog that is merely hidden
@@ -251,7 +276,6 @@ export function dropHiddenVariants(node, view) {
   return dropped;
 }
 
-const LANDMARKS = { navigation: 'nav', banner: 'header', contentinfo: 'footer', main: 'main', complementary: 'aside' };
 const sameRect = (a, b) => a && b && a.every((x, i) => Math.abs(x - b[i]) <= 1);
 const BLOCKISH = new Set(['block', 'flow-root', 'list-item']);
 
@@ -266,10 +290,9 @@ export function cleanTree(node, views = VIEW_IDS, parentDisplay = 'block') {
   for (let i = 0; i < node.children.length; i++) {
     const c = node.children[i];
     if (!isElement(c)) continue;
-    if (c.tag === 'div' && LANDMARKS[c.attrs.role]) {
-      c.tag = LANDMARKS[c.attrs.role];
-      delete c.attrs.role;
-    }
+    // The original's tag and role stay (CLONER_SPEC Phase 3: preserve semantics): a div with role="navigation" already
+    // is a navigation landmark, and a tag the site's own selectors name must not change under them. (Turning such
+    // landmarks into nav / header / … returns as a guarded optimisation, verified against the computed styles.)
     const inner = c.children.filter(isElement);
     const plain =
       (c.tag === 'div' || c.tag === 'span') &&
@@ -277,6 +300,7 @@ export function cleanTree(node, views = VIEW_IDS, parentDisplay = 'block') {
       inner.length === 1 &&
       !c.children.some((t) => isText(t) && t.text.trim()) &&
       !Object.keys(c.attrs).some((k) => k !== 'class') &&
+      !c.stateAttrs && // an area or control of a tab panel / carousel (ir/states.js)
       views.every((v) => {
         const d = c.views[v];
         const cd = inner[0].views[v];
@@ -287,6 +311,8 @@ export function cleanTree(node, views = VIEW_IDS, parentDisplay = 'block') {
     if (plain) {
       // What the motion capture said about the wrapper now applies to the element that took its place.
       if (c.cpath) inner[0].cpathAlt = [...(inner[0].cpathAlt ?? []), c.cpath];
+      if (c.mpath) inner[0].mpathAlt = [...(inner[0].mpathAlt ?? []), c.mpath];
+      if (c.tpath) inner[0].tpathAlt = [...(inner[0].tpathAlt ?? []), c.tpath];
       node.children.splice(i, 1, inner[0]);
       removed++;
       i--;
@@ -326,6 +352,11 @@ export function buildPageTree(bodies) {
   if (!bodies.desktop) throw new Error('The desktop capture is required.');
   const root = fromCapture(bodies.desktop, 'desktop');
   for (const v of views.slice(1)) alignInto(root, fromCapture(bodies[v], v), [v]);
+  // Tab / carousel / filter states as hidden copies of their area, while the capture's relative paths still hold.
+  const states = expandStates(root);
+  const notices = expandNotices(root);
+  const panels = expandPanels(root);
+  const hoverCards = expandHoverCards(root);
   const variantsMerged = views.length > 1 ? mergeVariants(root, views) : dropHiddenVariants(root, views[0]);
   const wrappersRemoved = cleanTree(root, views);
   let viewOnly = 0;
@@ -335,5 +366,5 @@ export function buildPageTree(bodies) {
     n.children.forEach(count);
   };
   count(root);
-  return { root, views, stats: { variantsMerged, wrappersRemoved, viewOnly } };
+  return { root, views, stats: { variantsMerged, wrappersRemoved, viewOnly, stateSets: states.sets, states: states.states, notices, panels, hoverCards } };
 }

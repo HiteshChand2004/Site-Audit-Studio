@@ -15,8 +15,8 @@ import { gotoLocal } from './goto.js';
 
 export const VISUAL_MIN = 0.97;
 
-// Runs in the page. The markup lives in <div id="root"> in an app (display: contents) and directly in
-// <body> in the plain-HTML build: both give the same list.
+// Runs in the page. The markup lives in <div id="root"> in a React app (display: contents; `map.appWrapper`) and
+// directly in <body> in the plain-HTML build and Next.js: all give the same list.
 function domSignature(map) {
   const lines = [];
   // `map`: a stack that moves pages (Next.js: about.html -> /about/) tells where the reference's URLs go.
@@ -50,8 +50,15 @@ function domSignature(map) {
       // A stack that wires its forms to a backend (MERN) adds action/method; the form itself is the same.
       if (moved.ignoreFormActions && node.localName === 'form' && ['action', 'method', 'enctype'].includes(name)) return null;
       let value = a.value;
+      // A framework's mount id (ir/names.js MOUNT_IDS) is not page content: never a difference between two builds.
+      if (name === 'id' && ['root', 'app', '__next', '__nuxt', '___gatsby', 'svelte', 'q-app', 'ember-application', '__layout'].includes(value)) return null;
       if (name === 'class') {
         value = pageClasses(value);
+        if (!value) return null;
+      } else if (name === 'style') {
+        // The declarations the browser parsed, not the text: React writes `height:400px` for the original's
+        // `height: 400px` (an as-is page keeps inline styles as written), the same style.
+        value = [...node.style].map((p) => `${p}:${node.style.getPropertyValue(p)}${node.style.getPropertyPriority(p) ? '!important' : ''}`).sort().join(';');
         if (!value) return null;
       } else if (name === 'srcset') value = value.split(',').map((c) => { const [u, ...d] = c.trim().split(/\s+/); return [resolve(u), ...d].join(' '); }).join(', ');
       else if (['href', 'xlink:href', 'src', 'poster', 'action', 'data'].includes(name)) value = resolve(value);
@@ -93,7 +100,9 @@ function domSignature(map) {
   // JSON-LD may sit in <head> or, in a framework that renders it with the page, in <body>.
   for (const s of document.querySelectorAll('script[type="application/ld+json"]')) lines.push(`jsonld ${s.textContent}`);
   const body = document.body;
-  const root = body.children.length === 1 && body.children[0].id === 'root' ? body.children[0] : body;
+  // Only the wrapper the stack itself adds (a React app's <div id="root">) is not page content; the reference build and a
+  // stack that renders into the document never skip one (the original page may have had its own #root).
+  const root = moved.appWrapper && body.children.length === 1 && body.children[0].id === 'root' ? body.children[0] : body;
   children(root, 0);
   return lines;
 }
@@ -132,6 +141,8 @@ async function snapshotOnce(renderer, outPath, viewId, urlMap = null) {
 async function hydrationCheck(origin, outPath, browser, sigMap = null) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, javaScriptEnabled: true, serviceWorkers: 'block' });
   await context.route('**/*', (route) => (route.request().url().startsWith(`${origin}/`) ? route.continue() : route.abort('blockedbyclient')));
+  // Compared as rendered by the app: the generated script's layout parking (js/motion.js) is a later change of its own.
+  await context.addInitScript(() => { window.__sasKeepLayouts = true; });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e.message ?? e).slice(0, 300)));
@@ -155,12 +166,14 @@ async function hydrationCheck(origin, outPath, browser, sigMap = null) {
 /**
  * @param {{ referenceRoot: string, candidateRoot: string, pages: { path: string, outPath: string, candidateOutPath?: string }[],
  *   urlMap?: { paths: object, absolute: object }, sigOptions?: { ignoreFormActions?: boolean },
- *   hydrate?: boolean, progress?: (fraction: number, message?: string) => void }} o
+ *   appWrapper?: boolean, hydrate?: boolean, progress?: (fraction: number, message?: string) => void }} o
+ *   appWrapper: the candidate renders its page inside <body><div id="root"> (React / MERN prerender)
  */
-export async function compareBuilds({ referenceRoot, candidateRoot, pages, urlMap = null, sigOptions = null, hydrate = true, progress = () => {} }) {
-  // What the signature may normalise: moved URLs (reference side) and form wiring (both sides).
+export async function compareBuilds({ referenceRoot, candidateRoot, pages, urlMap = null, sigOptions = null, appWrapper = false, hydrate = true, progress = () => {} }) {
+  // What the signature may normalise: moved URLs (reference side), form wiring (both sides) and the wrapper element the
+  // candidate stack adds around the page (candidate side only).
   const refMap = urlMap || sigOptions ? { paths: {}, absolute: {}, ...urlMap, ...sigOptions } : null;
-  const candMap = sigOptions ? { paths: {}, absolute: {}, ...sigOptions } : null;
+  const candMap = sigOptions || appWrapper ? { paths: {}, absolute: {}, ...sigOptions, appWrapper } : null;
   const renderer = await openRenderer(referenceRoot);
   let browser;
   try {

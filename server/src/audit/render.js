@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 import { AxeBuilder } from '@axe-core/playwright';
 import { USER_AGENT } from './http.js';
 import { withTimeout } from './util.js';
+import { readSiteTypeEvidence } from '../detection/siteType.js';
 
 const VIEWPORT = { width: 1440, height: 900 };
 const AXE_LIMIT_MS = 40000;
@@ -107,8 +108,20 @@ export async function renderHome(browser, url, { globals = [], cache = null, sca
       };
     }, globals);
 
+    // Whether the page is drawn on a canvas rather than in the DOM (detection/siteType.js).
+    const siteTypeEvidence = await page.evaluate(readSiteTypeEvidence).catch(() => null);
     const html = await page.content();
     const cookies = (await context.cookies()).map((c) => c.name);
+
+    // Fade-ins started by the scroll above are still running for a moment: text caught half-faded reads as low contrast.
+    // The scan waits (bounded) for animations that end; endless ones (loops, spinners) are not waited for.
+    await page.evaluate(async () => {
+      const ending = document.getAnimations().filter((a) => {
+        const t = a.effect?.getComputedTiming?.();
+        return a.playState === 'running' && t && Number.isFinite(t.endTime) && t.endTime < 10000;
+      });
+      await Promise.race([Promise.all(ending.map((a) => a.finished.catch(() => {}))), new Promise((r) => setTimeout(r, 3000))]);
+    }).catch(() => {});
 
     let axe = null;
     let axeError = null;
@@ -128,6 +141,7 @@ export async function renderHome(browser, url, { globals = [], cache = null, sca
       requests,
       cookies,
       ...snapshot,
+      siteTypeEvidence,
       axe,
       axeError,
     };

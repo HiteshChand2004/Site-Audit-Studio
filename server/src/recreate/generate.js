@@ -5,28 +5,78 @@
 // site is written again. A round that lowers the layout score is undone. The production build, the
 // safety gate and the verification of dist/ follow in the build step (build/index.js).
 // Writes ir/site.json (the IR the other stack emitters will use) and sets ctx.generated.
-import { mkdir, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import sharp from 'sharp';
+import { parallelism } from '../audit/resources.js';
+import { projectDir } from '../db/index.js';
+import { mapLimit } from '../audit/util.js';
+import { applyImageVariants, makeImageVariants } from './assets/variants.js';
 import { emitSite } from './emit/html.js';
 import { writeProject } from './emit/write.js';
 import { applyIrFixes, applyTreeFixes, fixReport } from './fixers/index.js';
+import { brokenTargets, deadLinks } from './fixers/perf.js';
 import { fetchWordPress, isWordPress } from './fixers/wordpress.js';
-import { buildIR, numberNodes, prepareSite, readPageCaptures } from './ir/index.js';
-import { applyMotion, readPageMotion } from './ir/motion.js';
-import { applyWidgets, readPageClicks } from './ir/widgets.js';
+import { buildIR, prepareSite, readPageCaptures } from './ir/index.js';
+import { MOTION_VERSION, applyMotion, cpathIndex, readPageMotion } from './ir/motion.js';
+import { addStats, GSAP_VERSION, planReplay, readAnimLogFor, replayIds } from './behavior/gsap.js';
+import { applyEmbeds, planEmbeds } from './behavior/embeds.js';
+import { parseAppearConfig } from './behavior/framer/appear.js';
+import { readAppearFor } from './behavior/framer/capture.js';
+import { addAppearStats, appearIds, MOTION_PACKAGE_VERSION, planAppear, readDocumentHtml, showAsIsAppear } from './behavior/framer/plan.js';
+import { applyExcludes, findExcludable } from './ir/exclude.js';
 import { isElement } from './ir/tree.js';
+import { RECREATE_VIEWS, VIEW_WIDTHS } from './views.js';
+import { hitTestGuard, pointerMapFile } from './verify/hittest.js';
+import { classifyJobScripts, planLift } from './behavior/lift.js';
+import { visibilityGuard } from './verify/visibility.js';
+import { openCopyRenderer } from './verify/copyRender.js';
+import { ANIMATIONS_FILE, visibilityFile } from './capture/visibility.js';
+import { launchBrowser } from '../audit/render.js';
 import { compareLayout, openRenderer, planFixes, renderPage, viewScore } from './verify/layout.js';
+import { createLedger } from './verify/ledger.js';
+import { CORRECT_BUDGET, CORRECT_MIN, correctLayout, correctReport } from './verify/correct.js';
+import { applyFixesByPath, correctExact, fixesByPath } from './verify/exact/correct.js';
+import { openExactRenderer } from './verify/exact/compare.js';
+import { boxLookups } from './verify/exact/boxes.js';
+import { CSS_FILE } from './emit/css.js';
+import { SWEEP_WIDTHS } from './capture/sweep.js';
 import { REFINE_PAGES, refineResponsive } from './verify/refine.js';
+import { applyAsIs } from './ir/asis.js';
 
 export const FIT_ROUNDS = 2;
 // The fit pass stops starting new rounds this long before the step's time limit.
 const FIT_MARGIN = 25000;
+// The hit-test guard (verify/hittest.js): two renders of every page at two views, twice when it fixed something.
+const HIT_TEST_BUDGET_MS = 180000;
+const VISIBILITY_BUDGET_MS = 300000; // the visibility guard: two settled renders (scrolled through) per page and view
+// Time for checking the outbound links of every page (fixers/perf.js deadLinks).
+const LINK_CHECK_BUDGET = 60000;
+// Time for making the responsive image files.
+const IMAGES_BUDGET = 60000;
 // Time for the WordPress REST lookup.
 const WP_BUDGET = 30000;
-// Time for the breakpoint / fluid type check against the original's sweep.
-const REFINE_BUDGET = 90000;
+// Time for the breakpoint / fluid type check against the original's sweep. It renders a page at each judged width
+// for every candidate, so the work grows with the widths the sweep captured: a site that declares its own
+// boundaries is judged at more of them, and on flexibench that took the check past ninety seconds and it ended
+// with `stopped: 'time-limit'` and no verdict at all - the quiet failure this scaling exists to prevent. An exact
+// run has no overall limit (recreate/index.js), so this one follows the work instead of standing still.
+const REFINE_BASE = 90000;
+const REFINE_PER_WIDTH = 15000;
+export const refineBudget = (widths = [], { exact = false } = {}) => (exact
+  ? REFINE_BASE + REFINE_PER_WIDTH * Math.max(0, widths.length - SWEEP_WIDTHS.length)
+  : REFINE_BASE);
+// The self-correction loop's own time. It is taken from the step's limit before the refine check, never from it:
+// generate is local work (no network, no capture), so a longer generate never changes what was captured.
+// SAS_CORRECT=0 turns the loop off; everything else behaves exactly as it did before.
+const correctOn = () => process.env.SAS_CORRECT !== '0';
 // How long that check waits for the sweep's first pages when the sweep is still running.
 const SWEEP_WAIT = 75000;
+
+// Pages measured at once (each with all its views): two when the memory allows four more tabs each.
+export const PAGES_AT_ONCE = 2;
+const PAGE_RENDER_MB = 600;
 
 const writeSite = (siteDir, out, assetsDir, known) => writeProject(siteDir, out, { assetsDir, known });
 
@@ -45,32 +95,53 @@ export async function siteRenderer(ctx) {
  * (the browser crashed twice on it, or it never loaded) is listed in `failed` and the other pages go on: one page never
  * throws away the work of the whole job. Only when no page renders at all is the error raised (the build itself is broken).
  * @param {(page:object, view:string, result:object)=>Promise<void>|void} onView
+ * Pages are rendered two at a time when the memory allows (`pagesAtOnce`): each render has its own tab, the site is local
+ * and static (no script), so boxes and screenshots do not depend on how many render at once.
  * @param {number} [deadline]  no new page is started after this time (ms since epoch)
  * @returns {Promise<{ started: number, failed: { path: string, error: string }[] }>} pages started before the deadline, pages that failed
  */
-export async function measureSite(renderer, ir, site, { screenshot = false, onView, deadline = Infinity } = {}) {
+export async function measureSite(renderer, ir, site, {
+  screenshot = false, onView, deadline = Infinity, only = null, viewsOf = null, extraOverrides = null,
+  pagesAtOnce = parallelism({ perUnitMB: PAGE_RENDER_MB, max: PAGES_AT_ONCE }),
+} = {}) {
   const measured = emitSite(ir, { ids: true });
-  for (const page of ir.pages) renderer.server.overrides.set(page.outPath, measured.files.get(page.outPath));
-  const failed = [];
-  let firstError = null;
+  // `only` (a Set of outPaths) measures a few pages instead of the whole site, and `viewsOf` a few views of each:
+  // the correction loop re-renders its decision pages many times, and `started` / `failed` are then about that
+  // selection. Without them nothing changes for the other callers.
+  // Paired by index, never by object identity: two entries of ir.pages may be the same object.
+  const selected = ir.pages
+    .map((page, i) => ({ page, tree: site.pages[i] }))
+    .filter(({ page }) => !only || only.has(page.outPath));
+  for (const { page } of selected) renderer.server.overrides.set(page.outPath, measured.files.get(page.outPath));
+  // Files to serve beside the pages, re-installed on every call because the override map is cleared below. This is
+  // how a candidate stylesheet is tried without rebuilding the IR or writing anything to disk.
+  for (const [file, body] of Object.entries(extraOverrides ?? {})) renderer.server.overrides.set(file, body);
+  // Per page, in page order whatever order they finish in: undefined = not started (deadline), null = rendered, else its error.
+  const outcome = new Array(selected.length);
   try {
-    let started = ir.pages.length;
-    for (const [i, page] of ir.pages.entries()) {
-      if (Date.now() > deadline) {
-        started = i;
-        break;
-      }
-      const tree = site.pages[i];
+    await mapLimit(selected, pagesAtOnce, async ({ page, tree }, i) => {
+      // Pages start in order, so the ones left out by the deadline are the last ones.
+      if (Date.now() > deadline) return;
+      outcome[i] = null;
       try {
-        await Promise.all(tree.views.map(async (view) => {
+        const views = viewsOf ? tree.views.filter((v) => viewsOf(tree).includes(v)) : tree.views;
+        await Promise.all(views.map(async (view) => {
           const result = await renderPage(renderer, page.outPath, view, { screenshot });
           await onView(tree, view, result);
         }));
       } catch (err) {
-        firstError ??= err;
-        failed.push({ path: tree.info.path, error: String(err?.message ?? err).split('\n')[0].trim() });
+        outcome[i] = err;
       }
-    }
+    });
+    const notStarted = outcome.findIndex((o) => o === undefined);
+    const started = notStarted < 0 ? selected.length : notStarted;
+    const failed = [];
+    let firstError = null;
+    outcome.slice(0, started).forEach((err, i) => {
+      if (!err) return;
+      firstError ??= err;
+      failed.push({ path: selected[i].tree.info.path, error: String(err?.message ?? err).split('\n')[0].trim() });
+    });
     if (started && failed.length === started) throw firstError;
     return { started, failed };
   } finally {
@@ -98,9 +169,158 @@ const restoreFixes = (site, saved) => {
   site.pages.forEach((t) => walk(t.root));
 };
 
+const countTemplates = (n) => (!n || 'text' in n ? 0 : (n.tpl ? 1 : 0) + (n.children ?? []).reduce((s, c) => s + countTemplates(c), 0));
+
+/**
+ * `sid` -> the path the element had in the original's own snapshot, for every page. This is what lets the exact
+ * comparison pair a box of the copy with the box of the original it was built from, rather than guessing from the
+ * text it happens to contain.
+ */
+export function cpathsOf(site) {
+  // Per page, because `sid` restarts at 1 in every page (ir/index.js numberNodes). One flat map across the site
+  // meant the last page written won every id, so on a real eleven-page site only the homepage - and the 404 page,
+  // which is a copy of it - paired boxes by identity at all: 575 of 576 there against 4 to 9 of 40 to 149
+  // everywhere else, with the rest left to the weaker guess-by-content path this map exists to replace.
+  const pages = {};
+  for (const tree of site.pages) {
+    const cpaths = {};
+    const sized = {};
+    const slack = {};
+    const walk = (n) => {
+      if (!isElement(n)) return;
+      if (n.sid != null) {
+        if (n.cpath || n.path) cpaths[n.sid] = n.cpath ?? n.path;
+        // What the copy sized itself, and the pixel or two it asked for on purpose (ir/styles.js): the exact
+        // comparison holds a box the copy sized to a pixel, expects the slack it asked for, and puts the boxes
+        // that are as big as their text under a reported budget instead of calling each one a defect.
+        if (n.sized) sized[n.sid] = n.sized;
+        const asked = n.slack && Object.fromEntries(Object.entries(n.slack).filter(([, v]) => v && Object.keys(v).length));
+        if (asked && Object.keys(asked).length) slack[n.sid] = asked;
+      }
+      for (const c of n.children ?? []) walk(c);
+    };
+    walk(tree.root);
+    pages[tree.info.outPath] = { cpaths, sized, slack };
+  }
+  return { version: 3, pages };
+}
+
+// A page without a usable og:image (none, or the original's could not be downloaded: another host, an error page) shares
+// a real picture of itself: the top of its captured desktop screen, cut to the 1200 × 630 social-card size.
+async function addSocialImages(site, ctx, assetsDir) {
+  const files = [];
+  const auto = [];
+  for (const t of site.pages) {
+    if (t.head.meta.some((m) => m.property === 'og:image')) continue;
+    const shot = path.join(ctx.dir, 'capture', t.info.slug, 'desktop-fold.webp');
+    try {
+      const body = await sharp(await readFile(shot)).resize(1200, 630, { fit: 'cover', position: 'top' }).webp({ quality: 82 }).toBuffer();
+      const sha256 = createHash('sha256').update(body).digest('hex');
+      const file = `images/og-${t.info.slug}-${sha256.slice(0, 10)}.webp`;
+      await mkdir(path.join(assetsDir, 'images'), { recursive: true });
+      await writeFile(path.join(assetsDir, file), body);
+      files.push({ file, kind: 'image', mime: 'image/webp', bytes: body.length, sha256, urls: [], generated: 'og-image' });
+      const url = new URL(`assets/${file}`, `${site.baseUrl}/`).href;
+      t.head.meta.push({ property: 'og:image', content: url });
+      if (!t.head.meta.some((m) => m.name === 'twitter:image')) t.head.meta.push({ name: 'twitter:image', content: url });
+      t.headAuto.push({ field: 'og:image', value: url, source: 'the page\'s own first screen (captured)' });
+      auto.push(t.info.path);
+    } catch {
+      // no capture picture for this page: it stays without one
+    }
+  }
+  return { files, pages: auto };
+}
+
+/**
+ * Canvases (a WebGL scene, a chart, a particle field): what they draw comes from a script the copy never carries, so they
+ * cannot be rebuilt. Each one is reported as unsupported, and instead of an empty box the copy shows what the capture saw:
+ * the frame (cut from the page's own full screenshot) and, for one that kept drawing, the recording of it as a looping
+ * picture (capture/loops.js recordCanvasLoop) - behind the canvas as its background, the loop only for a visitor who does
+ * not ask for less motion. A recording, not a reproduction: a canvas that reacts to the visitor does not react in the copy.
+ * Both are a motion token (`cN`), so an as-is (exact) page - which keeps the original markup - gets them too.
+ * @returns {Promise<{ files: object[], canvases: object[] }>}
+ */
+async function addCanvasFrames(site, motionByPath, ctx, assetsDir) {
+  const files = [];
+  const canvases = [];
+  const rules = [];
+  const keep = async (body, name, generated) => {
+    const sha256 = createHash('sha256').update(body).digest('hex');
+    const file = `images/${name}-${sha256.slice(0, 10)}.webp`;
+    await mkdir(path.join(assetsDir, 'images'), { recursive: true });
+    await writeFile(path.join(assetsDir, file), body);
+    files.push({ file, kind: 'image', mime: 'image/webp', bytes: body.length, sha256, urls: [], generated });
+    return file;
+  };
+  for (const t of site.pages) {
+    const found = motionByPath.get(t.info.path)?.loops?.canvas ?? [];
+    if (!found.length) continue;
+    const byPath = new Map();
+    const walk = (n) => {
+      if (!isElement(n)) return;
+      for (const p of [n.cpath, ...(n.cpathAlt ?? [])]) if (p && !byPath.has(p)) byPath.set(p, n);
+      n.children.forEach(walk);
+    };
+    walk(t.root);
+    const full = path.join(ctx.dir, 'capture', t.info.slug, 'desktop-full.webp');
+    for (const c of found) {
+      const entry = { page: t.info.path, path: c.path, context: c.context, animated: c.animated ?? null, cover: c.cover, stillFrame: false, recordedLoop: false };
+      canvases.push(entry);
+      const node = byPath.get(c.path);
+      if (!node || node.tag !== 'canvas') continue;
+      const rule = { token: `c${rules.length + 1}` };
+      try {
+        const meta = await sharp(full).metadata();
+        const [x, y, w, h] = c.rect;
+        const left = Math.max(0, x);
+        const top = Math.max(0, y);
+        const width = Math.min(w, meta.width - left);
+        const height = Math.min(h, meta.height - top);
+        if (width >= 8 && height >= 8) {
+          rule.still = await keep(await sharp(full).extract({ left, top, width, height }).webp({ quality: 85 }).toBuffer(), `canvas-${t.info.slug}`, 'canvas-frame');
+          entry.stillFrame = true;
+        }
+      } catch {
+        // no picture to cut it from
+      }
+      if (c.loop?.file) {
+        try {
+          rule.loop = await keep(await readFile(path.join(ctx.dir, 'capture', t.info.slug, c.loop.file)), `canvas-loop-${t.info.slug}`, 'canvas-loop');
+          entry.recordedLoop = true;
+          entry.loop = { frames: c.loop.frames, delayMs: c.loop.delayMs, seamless: c.loop.seamless };
+        } catch {
+          // the recording was not kept: the still frame stands
+        }
+      }
+      if (!rule.still && !rule.loop) continue;
+      rules.push(rule);
+      node.motionTokens = [...new Set([...(node.motionTokens ?? []), rule.token])];
+    }
+  }
+  return { files, canvases, rules };
+}
+
+// New files of the site's own (responsive images) join the downloaded ones: the build, the exports to other stacks and a
+// rebuild from the saved capture find them through assets/manifest.json.
+async function addToManifest(assetsDir, files, known, assets) {
+  const file = path.join(assetsDir, 'manifest.json');
+  const manifest = JSON.parse(await readFile(file, 'utf8'));
+  const have = new Set(manifest.files.map((f) => f.file));
+  const added = files.filter((f) => !have.has(f.file));
+  manifest.files.push(...added);
+  await writeFile(file, JSON.stringify(manifest, null, 2));
+  for (const f of files) known.add(f.file);
+  if (assets?.files) assets.files.push(...added.filter((f) => !assets.files.some((x) => x.file === f.file)));
+}
+
 /** @param {object} ctx  pipeline context: needs ctx.pages (inspect) and ctx.assets (assets) */
 export async function generateStage(ctx) {
   const { report } = ctx;
+  // Exact mode replicates the site as it is: the fixes that change pixels on purpose are left out (recreate/inputs.js
+  // isExactMode). Everything that does not touch a pixel - alt text, accessible names, lang, canonical / OG copying,
+  // sitemap and robots - still runs.
+  const asIs = Boolean(ctx.exact);
   const siteDir = path.join(ctx.dir, 'site');
   const assetsDir = path.join(ctx.dir, 'assets');
   const known = new Set((ctx.assets?.files ?? []).map((f) => f.file));
@@ -127,6 +347,7 @@ export async function generateStage(ctx) {
     wp,
     robots: ctx.discovery?.robots ?? null,
     llms: ctx.discovery?.llms ?? null,
+    asIs,
   });
   pages.length = 0;
   for (const t of site.pages) delete t.captures; // large; everything needed is in the trees now
@@ -137,54 +358,220 @@ export async function generateStage(ctx) {
     const found = await readPageMotion(ctx.dir, info);
     if (found) motionByPath.set(info.path, found);
   }
-  const motion = applyMotion(site, motionByPath);
+  // Tier 1 replay (behavior/gsap.js): what the page asked its animation library to do, replayed with the same library on
+  // the same elements. Planned first, so the measured motion leaves the elements the library animates alone.
+  const replayOwned = new Map();
+  const replayStats = {};
+  const ids = replayIds();
+  for (const t of site.pages) {
+    const info = ctx.pages.find((p) => p.path === t.info.path);
+    const log = info ? await readAnimLogFor(ctx.dir, info) : null;
+    if (!log) continue;
+    const plan = planReplay(log, cpathIndex(t.root), ids);
+    addStats(replayStats, plan.stats);
+    if (plan.program) t.anim = plan.program;
+    if (plan.owned.size) replayOwned.set(t.info.path, plan.owned);
+  }
+  // Framer appear entrances (behavior/framer): the settings the page's server-rendered HTML carries for each element marked
+  // data-framer-appear-id, run with the motion package. They win over the entrance the capture measured on that element.
+  const appearStats = {};
+  const appearConfigs = new Map();
+  const appearUnknown = [];
+  const fIds = appearIds();
+  for (const t of site.pages) {
+    const info = ctx.pages.find((p) => p.path === t.info.path);
+    const found = info ? await readAppearFor(ctx.dir, info) : null;
+    if (!found?.elements?.length) continue;
+    const html = await readDocumentHtml(ctx, info);
+    const config = html ? parseAppearConfig(html) : null;
+    if (config) appearConfigs.set(t.info.path, config);
+    for (const u of config?.unknown ?? []) if (appearUnknown.length < 10) appearUnknown.push({ page: t.info.path, ...u });
+    const measured = new Set((motionByPath.get(t.info.path)?.reveal?.elements ?? []).map((e) => e.path));
+    const plan = planAppear({ config, elements: found.elements, nodes: cpathIndex(t.root), ids: fIds, measured });
+    addAppearStats(appearStats, { pages: 1, withSettings: config?.found ? 1 : 0, noDocument: html ? 0 : 1, ...plan.stats });
+    if (plan.program) t.appear = plan.program;
+    if (plan.owned.size) replayOwned.set(t.info.path, new Set([...(replayOwned.get(t.info.path) ?? []), ...plan.owned]));
+  }
+  const motion = applyMotion(site, motionByPath, { owned: replayOwned });
   site.motion = motion.motion;
-  // Interactive parts (full-site C.1): menus, dropdowns, accordions, tabs, sliders and dialogs the click capture found.
-  // They are driven by the same generated script as the scroll reveal, so a site with them carries js/motion.js.
-  const clicksByPath = new Map();
-  for (const info of ctx.pages) {
-    const found = await readPageClicks(ctx.dir, info);
-    if (found) clicksByPath.set(info.path, found);
+  if (Object.keys(replayStats).length) motion.stats.replay = { lib: 'gsap', version: GSAP_VERSION, pages: site.pages.filter((t) => t.anim).length, ...replayStats };
+  if (appearStats.pages) {
+    motion.stats.appear = { lib: 'motion', version: MOTION_PACKAGE_VERSION, ...appearStats, shownStill: motion.stats.reveal?.appearShown ?? 0, ...(appearUnknown.length && { unknown: appearUnknown }) };
+    const still = (appearStats.missing ?? 0) + (appearStats.garbled ?? 0);
+    if (still) report.warnings.push(`${still} Framer appear ${still === 1 ? 'entrance has' : 'entrances have'} no settings the copy could read; ${still === 1 ? 'that element is' : 'those elements are'} shown without the entrance.`);
   }
-  const widgets = applyWidgets(site, clicksByPath);
-  site.widgets = widgets.widgets;
-  // Content inserted for script-built panels (C.8) gets measurement ids like every other node.
-  for (const t of site.pages) if (t.renumber) {
-    t.nodes = numberNodes(t.root);
-    delete t.renumber;
+
+  // Parts of the page that are not the site: the builder's badge, a consent banner, a chat bubble (ir/exclude.js).
+  // Only for an exact copy, only on evidence the capture measured, and every one of them reported - the copy must
+  // not show someone else's branding, and a banner dismissed on one visit and not another is pixels that differ for
+  // no reason of ours.
+  const excluded = [];
+  if (asIs) {
+    for (const t of site.pages) {
+      const found = motionByPath.get(t.info.path);
+      // A control whose click did not restore the page changed something for good: that is what dismissing is.
+      const dismissed = new Set((found?.clicks?.widgets ?? []).filter((w) => w.closes === false).map((w) => w.path));
+      // What each control's click changed, so a control that opens the builder's own frame can be told apart.
+      const touches = new Map();
+      for (const w of found?.clicks?.widgets ?? []) {
+        const trigger = w.trigger ?? w.path;
+        if (!trigger) continue;
+        const changed = touches.get(trigger) ?? new Set();
+        for (const kind of ['shown', 'hidden', 'added', 'attrs', 'moved']) for (const c of w.change?.[kind] ?? []) if (c?.path) changed.add(c.path);
+        touches.set(trigger, changed);
+      }
+      const list = findExcludable(t, { dismissed, touches, viewWidths: VIEW_WIDTHS });
+      const removed = new Set(applyExcludes(t, list));
+      for (const e of list) if (removed.has(e.path)) excluded.push({ page: t.info.path, ...e });
+    }
+    if (excluded.length) {
+      report.exact = { ...report.exact, excluded };
+      const kinds = [...new Set(excluded.map((e) => e.reason))].join(', ');
+      report.warnings.push(`${excluded.length} ${excluded.length === 1 ? 'part' : 'parts'} of the page that are not the site were left out (${kinds}); each one is listed in the report with the evidence for it.`);
+    }
   }
-  if (site.widgets) site.motion = { version: 1, hover: [], focus: [], reveal: [], delays: [], loops: [], ...(site.motion ?? {}), script: true };
 
   ctx.progress(0.12, 'Fixing audit issues');
-  const treeFixes = applyTreeFixes(site, { audit: ctx.audit, skipped: ctx.discovery?.skipped });
+  const axe = ctx.analysis?.id && ctx.project?.id
+    ? await readFile(path.join(projectDir(ctx.project.id), 'audit', ctx.analysis.id, 'axe.json'), 'utf8').then(JSON.parse, () => null)
+    : null;
+  // Outbound links of pages the analysis did not read: dead targets are unlinked like the ones the analysis found.
+  ctx.progress(0.13, 'Checking the links of every page');
+  const extraBroken = await deadLinks(site, { known: brokenTargets(ctx.audit, ctx.discovery?.skipped, site.pages.map((t) => t.info.url)), ms: Math.max(10000, Math.min(LINK_CHECK_BUDGET, ctx.stepDeadline - Date.now() - FIT_MARGIN * 4)) });
+  const treeFixes = applyTreeFixes(site, { audit: ctx.audit, skipped: ctx.discovery?.skipped, axe, extraBroken, asIs });
+  // Layout parts other window sizes show (fixers/perf.js markLayouts) are parked by the generated script.
+  if (treeFixes.layouts) {
+    site.motion = { version: MOTION_VERSION, hover: [], focus: [], reveal: [], delays: [], loops: [], widgets: [], states: 0, notices: 0, panels: 0, hoverCards: 0, scrolled: [], ...site.motion, layouts: treeFixes.layouts, script: true };
+  }
+  // After the fixers: headings are final (FAQ questions are read from them).
+  const social = await addSocialImages(site, ctx, assetsDir);
+  if (social.files.length) await addToManifest(assetsDir, social.files, known, ctx.assets);
+  // Canvases: reported as not reproducible, shown as the frame the capture saw (never an empty box passed off as copied).
+  const frames = await addCanvasFrames(site, motionByPath, ctx, assetsDir);
+  if (frames.files.length) await addToManifest(assetsDir, frames.files, known, ctx.assets);
+  if (frames.rules.length) {
+    site.motion = { version: MOTION_VERSION, hover: [], focus: [], reveal: [], delays: [], loops: [], widgets: [], states: 0, notices: 0, panels: 0, hoverCards: 0, scrolled: [], script: false, ...site.motion, canvas: frames.rules };
+  }
+  // A page that replays its animation library (behavior/gsap.js) ships scripts: the same switch as the generated script,
+  // so the preview's script policy, the exact renderer and the safety profile follow.
+  if (site.pages.some((t) => t.anim)) {
+    site.motion = { version: MOTION_VERSION, hover: [], focus: [], reveal: [], delays: [], loops: [], widgets: [], states: 0, notices: 0, panels: 0, hoverCards: 0, scrolled: [], ...site.motion, script: true, anim: true };
+  }
+  // Framer appear entrances (behavior/framer/emit.js) ship scripts the same way.
+  if (site.pages.some((t) => t.appear)) {
+    site.motion = { version: MOTION_VERSION, hover: [], focus: [], reveal: [], delays: [], loops: [], widgets: [], states: 0, notices: 0, panels: 0, hoverCards: 0, scrolled: [], ...site.motion, script: true, appear: true };
+  }
+  if (frames.canvases.length) {
+    report.motion = { ...report.motion, unsupported: { ...report.motion?.unsupported, canvas: frames.canvases } };
+    const moving = frames.canvases.filter((c) => c.animated).length;
+    const looped = frames.canvases.filter((c) => c.recordedLoop).length;
+    report.manual.push({
+      area: 'Animation',
+      title: `${frames.canvases.length} canvas drawing(s) cannot be rebuilt`,
+      detail: `What a canvas draws (a WebGL scene, a chart, particles) comes from the site's own script, which the copy does not carry.${moving ? ` ${moving} of them keep moving on the original.` : ''} The copy shows the frame the capture saw${looped ? `, and ${looped} of them play a recording of what they drew as a looping picture (not interactive)` : ''}.`,
+      count: frames.canvases.length,
+    });
+  }
+  // Lottie embeds and the video tier (behavior/lottie.js, behavior/video.js): self-running layers the copy cannot run.
+  const embeds = await planEmbeds(site, motionByPath, { ctx, assetsDir, known, report, canvasRules: frames.rules, addToManifest });
   let irFixes;
+  let imageVariants = new Map();
   const build = () => {
-    const built = buildIR(site);
+    const built = buildIR(site, { asIs });
     irFixes = applyIrFixes(built.ir);
+    applyImageVariants(built.ir, imageVariants);
+    applyEmbeds(built.ir, embeds);
     return built;
   };
 
   ctx.progress(0.15, 'Writing pages');
   let { ir, stats } = build();
+  // Responsive image files (assets/variants.js), made once from the widths the first build shows each image at.
+  // As is: every picture is served as the original bytes, in the original format and size, so no pixel of it differs.
+  ctx.progress(0.17, asIs ? 'Keeping the original pictures' : 'Making responsive images');
+  const images = asIs
+    ? { variants: new Map(), files: [], stats: { images: 0, files: 0, originalBytes: 0, servedBytes: 0, skipped: 0, asIs: true } }
+    : await makeImageVariants({ ir, assetsDir, deadline: Math.min(Date.now() + IMAGES_BUDGET, ctx.stepDeadline - FIT_MARGIN * 3) });
+  if (images.variants.size) {
+    imageVariants = images.variants;
+    await addToManifest(assetsDir, images.files, known, ctx.assets);
+    ({ ir, stats } = build());
+  }
+  // Exact mode keeps the original's own markup and stylesheets where the capture kept them (ir/asis.js): the site's
+  // rules size every element at every width, so the layout passes below - which fit rebuilt px values to the captured
+  // widths - have nothing to do and are skipped.
+  let asis = null;
+  if (asIs) {
+    ctx.progress(0.18, 'Keeping the original markup and stylesheets');
+    asis = await applyAsIs(ir, { dir: ctx.dir, site, excluded });
+    // The original markup's layers that play a recording become their videos too (their `vN` token was carried).
+    applyEmbeds(ir, embeds);
+    // The original's markup keeps each appear target's inline style as the capture read it: one still in its first pose
+    // (an entrance the page never played, or one without settings) is shown (behavior/framer/plan.js showAsIsAppear).
+    if (motion.stats.appear) {
+      const shown = showAsIsAppear(ir, appearConfigs, (p) => p.path);
+      motion.stats.appear.shownAsIs = shown.shown;
+    }
+    if (asis.pages && asis.rebuilt.length) {
+      report.warnings.push(`${asis.rebuilt.length} ${asis.rebuilt.length === 1 ? 'page has' : 'pages have'} no as-is capture and ${asis.rebuilt.length === 1 ? 'was' : 'were'} rebuilt instead (capture the site again to keep their original CSS).`);
+    }
+    if (asis.missingCssUrls || asis.missing.images || asis.missing.media) {
+      report.warnings.push(`${asis.missingCssUrls + asis.missing.images + asis.missing.media} files the original's markup or stylesheets point at could not be downloaded; they are left out of the copy, never linked to the original.`);
+    }
+  }
+  // Every script the original loaded, classified from the job's network record (behavior/lift.js): what it is, which
+  // are trackers left out, which framework bundles are never lifted. On pages that keep the original markup, the
+  // libraries that start by themselves from that markup ship byte for byte (the targeted lift, decision 1).
+  await ctx.netCache?.saveRecord?.().catch(() => null);
+  const scriptJob = await classifyJobScripts(ctx.dir).catch(() => null);
+  if (scriptJob) report.scripts = scriptJob.summary;
+  if (asIs && scriptJob) {
+    const lift = await planLift(ir, scriptJob);
+    report.scripts = { ...report.scripts, lift: lift.report };
+    if (lift.files.size) {
+      ir.liftFiles = Object.fromEntries(lift.files);
+      ir.motion = { version: MOTION_VERSION, hover: [], focus: [], reveal: [], delays: [], loops: [], widgets: [], states: 0, notices: 0, panels: 0, hoverCards: 0, scrolled: [], ...(ir.motion ?? {}), script: true };
+      report.warnings.push(`${lift.report.lifted.length} script librar${lift.report.lifted.length === 1 ? 'y' : 'ies'} of the original ${lift.report.lifted.length === 1 ? 'runs' : 'run'} in the copy as they were (${[...new Set(lift.report.lifted.map((l) => l.lib))].join(', ')}): they start themselves from the original markup.`);
+    }
+  }
+  const asisMode = Boolean(ir.asis);
   let out = emitSite(ir);
   await writeSite(siteDir, out, assetsDir, known);
 
   // Fit pass.
   const fit = { rounds: 0, widthFixes: 0, heightFixes: 0, layoutBefore: null, layoutAfter: null, undone: false, stopped: null };
+  // What is still off, element by element. Lives on `site` so rebuilding the IR cannot lose it, and is filled from the
+  // measurements the fit pass already takes.
+  const ledger = (site.ledger ??= createLedger());
   const renderer = await siteRenderer(ctx);
   let saved = null;
-  for (let round = 0; round <= FIT_ROUNDS; round++) {
-    if (Date.now() > ctx.stepDeadline - FIT_MARGIN) {
+  // The last round's per-page/view measurements, so the correction loop can pick the worst pages without measuring
+  // the whole site again.
+  let lastViews = [];
+  // What this step still has to do after the fit pass: correct the layout against the original, then check the
+  // breakpoints. The fit pass used to run until FIT_MARGIN before the step's limit and leave them nothing - on a
+  // 64-page rebuild it used the whole step and the correction loop was skipped before it measured anything.
+  const refineTime = refineBudget(ctx.sweep?.widths ?? SWEEP_WIDTHS, { exact: asIs });
+  const afterFit = correctOn() ? CORRECT_BUDGET + refineTime : 0;
+  for (let round = 0; !asisMode && round <= FIT_ROUNDS; round++) {
+    // Round 0 only measures, and the correction loop picks its pages from what it measures, so it always runs.
+    if (Date.now() > ctx.stepDeadline - FIT_MARGIN - (round ? afterFit : 0)) {
       fit.stopped = 'time-limit';
       break;
     }
     ctx.progress(0.3 + 0.6 * (round / (FIT_ROUNDS + 1)), round ? `Fitting layout (round ${round} of ${FIT_ROUNDS})` : 'Checking layout');
     const views = [];
+    ledger.beginRound(round);
     const { failed } = await measureSite(renderer, ir, site, {
       onView: (tree, view, result) => {
-        views.push({ tree, view, rects: result.rects, score: viewScore(compareLayout(tree.root, view, result.rects), null) });
+        // The same comparison as before, with the per-element pairs kept instead of thrown away: the correction loop
+        // and the report both need to know WHICH elements are off, not only how many. No extra render.
+        const cmp = compareLayout(tree.root, view, result.rects, { pairs: true });
+        ledger.observe({ page: tree.info.path, view, rows: cmp.pairs });
+        views.push({ tree, view, rects: result.rects, scrollHeight: result.scrollHeight, score: viewScore(cmp, null) });
       },
     });
+    lastViews = views;
     // A page the browser could not render keeps the layout it has (no fixes planned for it this round).
     for (const f of failed) if (!fit.failed?.some((x) => x.path === f.path)) (fit.failed ??= []).push(f);
     const score = Math.round(views.reduce((n, x) => n + x.score, 0) / Math.max(1, views.length));
@@ -217,6 +604,132 @@ export async function generateStage(ctx) {
     out = emitSite(ir);
     await writeSite(siteDir, out, assetsDir, known);
   }
+  fit.ledger = ledger.summary();
+
+  // The self-correction loop (verify/correct.js). The fit pass can only add a width or a min-height, and on a real
+  // site it runs out of things it is allowed to do long before the copy matches: this decides what else to change
+  // from the per-element differences the ledger now holds, tries each candidate as an override of css/site.css
+  // (no rebuild, nothing written), and keeps only what measured closer to the original on every page and view.
+  let correct = null;
+  if (correctOn() && !asisMode) {
+    const correctDeadline = Math.min(Date.now() + CORRECT_BUDGET, ctx.stepDeadline - FIT_MARGIN - refineTime);
+    if (correctDeadline - Date.now() >= CORRECT_MIN) {
+      ctx.progress(0.75, 'Correcting the layout against the original');
+      try {
+        correct = await correctLayout({
+          measure: (opts) => measureSite(renderer, ir, site, opts),
+          ir,
+          site,
+          ledger,
+          baseCss: out.files.get(CSS_FILE),
+          candidates: lastViews.map((x) => ({ path: x.tree.info.path, outPath: x.tree.info.outPath, view: x.view, score: x.score, scrollHeight: x.scrollHeight })),
+          shotOf: (tree, view) => path.join(ctx.dir, 'capture', tree.info.slug, `${view}-full.webp`),
+          deadline: correctDeadline,
+          progress: (f, message) => ctx.progress(0.75 + 0.1 * f, message),
+        });
+      } catch (err) {
+        // A correction pass that fails leaves the copy exactly as the fit pass left it.
+        correct = { stopped: 'error', error: err.message.split('\n')[0], rounds: 0, applied: 0, reverted: 0 };
+        report.warnings.push(`The layout could not be corrected against the original: ${correct.error}`);
+      }
+      if (correct?.applied) {
+        ({ ir, stats } = build());
+        out = emitSite(ir);
+        await writeSite(siteDir, out, assetsDir, known);
+      }
+    } else correct = { stopped: 'time-limit', rounds: 0, applied: 0, reverted: 0 };
+  }
+
+  // The same loop again, this time steered by the exact comparison (verify/exact/correct.js): every page, one at a
+  // time, worst first, five rounds each, measured at every exact viewport against the baseline taken at that same
+  // viewport rather than at the four captured views. It measures the build with data-sas-id, which is what lets a box
+  // be matched by path - a production build has no ids, which is why the reporting pass after `build` cannot.
+  let exactCorrect = null;
+  if (asIs && !asisMode && ctx.exactBaseline?.pages?.length) {
+    // The loop is the longest part of an exact run, so a previous attempt that got through it and was interrupted
+    // afterwards (a crash, a restart, the machine running out of memory) leaves its result in the checkpoint, and the
+    // fixes are put back on the trees instead of being measured again - but only if every saved fix lands on the
+    // element it was measured on. One that does not means this is not the same tree, and then the trees go back
+    // exactly as they were and the loop runs: a page corrected in parts that were never measured together is worse
+    // than an uncorrected one.
+    const kept = ctx.checkpoint?.corrections?.() ?? null;
+    if (kept?.pages) {
+      const before = snapshotFixes(site);
+      const expected = Object.values(kept.pages).reduce((n, m) => n + Object.keys(m).length, 0);
+      let applied = 0;
+      let mismatched = 0;
+      for (const tree of site.pages) {
+        const saved = kept.pages[tree.info.path];
+        if (!saved) continue;
+        const r = applyFixesByPath(tree, saved);
+        applied += r.applied;
+        mismatched += r.mismatched.length;
+      }
+      if (mismatched || applied !== expected) {
+        restoreFixes(site, before);
+        report.warnings.push(`The corrections kept from the interrupted attempt did not fit this copy (${mismatched || expected - applied} of ${expected}), so they were measured again.`);
+      } else {
+        // Nothing to put back is a result too: the loop can run for half an hour and accept nothing, and reaching
+        // that answer cost the same half hour as reaching any other.
+        exactCorrect = { ...kept.report, restoredFrom: { at: kept.at, elements: applied, pages: Object.keys(kept.pages).length } };
+        ctx.progress(0.88, 'Keeping what was measured before the interruption');
+        report.warnings.push(applied
+          ? `Continued after an interruption: the ${applied} corrections measured for ${Object.keys(kept.pages).length} page(s) were kept instead of measured again.`
+          : 'Continued after an interruption: the correction loop had already run and accepted nothing, so it was not run again.');
+      }
+    }
+
+    if (!exactCorrect) {
+      ctx.progress(0.78, 'Correcting the copy against the original at every size');
+      const idsOut = emitSite(ir, { ids: true });
+      // Per sid: the original's own path, so a box pairs by path instead of by content; which of its two sizes the
+      // copy wrote itself; and the pixel or two it asked for on purpose. One definition, shared with the report
+      // pass - the loop has to judge by the same ruler the report does, or it chases a number nobody reads.
+      const lookups = boxLookups(cpathsOf(site));
+      const renderer = await openExactRenderer(siteDir, { scripts: Boolean(site.motion?.script) });
+      try {
+        // The pages with ids are served from memory; everything else (images, fonts, the stylesheet) comes off disk.
+        for (const p of ir.pages) {
+          const html = idsOut.files.get(p.outPath);
+          if (html) renderer.server.overrides.set(p.outPath, html);
+        }
+        exactCorrect = await correctExact({
+          renderer,
+          baseline: ctx.exactBaseline,
+          site,
+          ir,
+          ledger,
+          baseCss: idsOut.files.get(CSS_FILE),
+          workspace: ctx.dir,
+          lookups,
+          deadline: ctx.stepDeadline,
+          progress: (f, message) => ctx.progress(0.78 + 0.1 * f, message),
+        });
+      } catch (err) {
+        exactCorrect = { stopped: 'error', error: String(err.message ?? err).split('\n')[0], rounds: 0, applied: 0, reverted: 0, pages: [] };
+        report.warnings.push(`The copy could not be corrected against the original: ${exactCorrect.error}`);
+      } finally {
+        await renderer.close().catch(() => {});
+      }
+      // Written the moment the loop is done, before anything else can fail: half an hour of measuring was lost to an
+      // interruption a minute later, and the next run measured all of it again. Saved whenever the loop reached the
+      // end of its work, even having applied nothing, because that answer cost the same half hour as any other.
+      if (exactCorrect && !exactCorrect.error && (exactCorrect.stopped === 'done' || exactCorrect.applied)) {
+        await ctx.checkpoint?.saveCorrections?.({
+          at: new Date().toISOString(),
+          report: exactCorrect,
+          pages: Object.fromEntries(site.pages.map((tree) => [tree.info.path, fixesByPath(tree)])),
+        });
+      }
+    }
+
+    if (exactCorrect?.applied) {
+      ({ ir, stats } = build());
+      out = emitSite(ir);
+      await writeSite(siteDir, out, assetsDir, known);
+    }
+    report.exact = { ...report.exact, correct: exactCorrect };
+  }
 
   // Breakpoints and fluid type, checked against the original's sweep screenshots (verify/refine.js). Only
   // css/site.css changes, so the pages and the fit fixes above stay as they are.
@@ -224,11 +737,11 @@ export async function generateStage(ctx) {
   // The sweep may still be running next to this step (recreate/index.js): the check needs its first pages only, so it
   // waits for those (a bounded time) and works with the pages swept by then.
   let sweep = ctx.sweep;
-  if (sweep === undefined && ctx.sweepPending) {
+  if (!asisMode && sweep === undefined && ctx.sweepPending) {
     ctx.progress(0.9, 'Waiting for the screenshots of the original at more widths');
-    sweep = await ctx.sweepPending(REFINE_PAGES, Math.max(0, Math.min(SWEEP_WAIT, ctx.stepDeadline - FIT_MARGIN - REFINE_BUDGET - Date.now())));
+    sweep = await ctx.sweepPending(REFINE_PAGES, Math.max(0, Math.min(SWEEP_WAIT, ctx.stepDeadline - FIT_MARGIN - refineTime - Date.now())));
   }
-  if (sweep) {
+  if (sweep && !asisMode) {
     ctx.progress(0.9, 'Checking the layout between the captured widths');
     try {
       refined = await refineResponsive({
@@ -236,10 +749,14 @@ export async function generateStage(ctx) {
         siteDir,
         workspace: ctx.dir,
         sweep,
-        deadline: Math.min(Date.now() + REFINE_BUDGET, ctx.stepDeadline - FIT_MARGIN),
+        bounds: ir.mediaBounds ?? [],
+        deadline: Math.min(Date.now() + refineBudget(sweep?.widths ?? SWEEP_WIDTHS, { exact: asIs }), ctx.stepDeadline - FIT_MARGIN),
       });
     } catch (err) {
       report.warnings.push(`The breakpoints could not be checked against the original: ${err.message.split('\n')[0]}`);
+    }
+    if (refined?.summary?.stopped === 'time-limit' && !refined.summary.breakpoints) {
+      report.warnings.push(`The breakpoints were not checked against the original: the check ran out of time after ${refined.summary.renders} renders. The copy keeps the breakpoints it read from the site's own stylesheets.`);
     }
     if (refined && (refined.breakpoints !== ir.breakpoints || refined.fluid || refined.shrink)) {
       ir.breakpoints = refined.breakpoints;
@@ -249,25 +766,100 @@ export async function generateStage(ctx) {
     }
   }
 
+  // Hit-test guard (verify/hittest.js): every control must receive its click in the copy wherever it did in the original.
+  // A layer that takes the click in the copy and holds nothing clickable lets it through; the rest is reported.
+  // Visibility guard first (verify/visibility.js): what the original shows must not stay invisible in the copy; both
+  // guards share one renderer of the copy (verify/copyRender.js).
+  const maps = new Map();
+  const shown = new Map();
+  const anims = new Map();
+  const readJson = (info, file) => readFile(path.join(ctx.dir, 'capture', info.slug, file), 'utf8').then(JSON.parse, () => null);
+  for (const info of ctx.pages) {
+    const byView = {};
+    const visByView = {};
+    for (const view of ['desktop', 'mobile']) {
+      const map = await readJson(info, pointerMapFile(view));
+      if (map) byView[view] = map;
+      const vis = await readJson(info, visibilityFile(view));
+      if (vis) visByView[view] = vis;
+    }
+    if (Object.keys(byView).length) maps.set(info.outPath, byView);
+    if (Object.keys(visByView).length) shown.set(info.outPath, visByView);
+    const anim = await readJson(info, ANIMATIONS_FILE);
+    if (anim) anims.set(info.outPath, anim);
+  }
+  const guardViews = RECREATE_VIEWS.filter((v) => v.id === 'desktop' || v.id === 'mobile');
+  const guardIds = cpathsOf(site);
+  for (const [outPath, cpaths] of Object.entries(site.asisCpaths ?? {})) guardIds.pages[outPath] = { cpaths };
+  const copyRenderer = maps.size || shown.size ? await openCopyRenderer({ siteDir, launchBrowser }).catch((err) => ({ error: err })) : null;
+  if (copyRenderer && 'error' in copyRenderer) report.visibility = { error: String(copyRenderer.error?.message ?? copyRenderer.error).split('\n')[0] };
+  const shared = copyRenderer && !('error' in copyRenderer) ? copyRenderer : null;
+  if (shared && shown.size) {
+    ctx.progress(0.92, 'Checking nothing visible stays hidden');
+    try {
+      const checked = await visibilityGuard({
+        ir, siteDir, records: shown, animations: anims, cpaths: guardIds.pages, views: guardViews, launchBrowser, renderer: shared,
+        deadline: Math.min(ctx.stepDeadline ?? Infinity, Date.now() + VISIBILITY_BUDGET_MS) - FIT_MARGIN,
+      });
+      report.visibility = checked.visibility;
+      report.animations = checked.animations;
+      const { fixed, unresolved } = report.visibility;
+      if (fixed.length) report.warnings.push(`${fixed.length} element${fixed.length === 1 ? '' : 's'} the original shows stayed invisible in the copy and ${fixed.length === 1 ? 'is' : 'are'} now shown without ${fixed.length === 1 ? 'its' : 'their'} entrance (visibility check).`);
+      if (unresolved.length) report.warnings.push(`${unresolved.length} element${unresolved.length === 1 ? '' : 's'} the original shows ${unresolved.length === 1 ? 'is' : 'are'} still invisible in the copy (see the visibility check).`);
+    } catch (err) {
+      report.visibility = { error: String(err?.message ?? err).split('\n')[0] };
+    }
+  }
+  if (maps.size && shared) {
+    ctx.progress(0.93, 'Checking every control can still be clicked');
+    try {
+      report.hitTest = await hitTestGuard({
+        ir, siteDir, maps, cpaths: guardIds.pages, launchBrowser, renderer: shared,
+        views: guardViews,
+        deadline: Math.min(ctx.stepDeadline ?? Infinity, Date.now() + HIT_TEST_BUDGET_MS) - FIT_MARGIN,
+      });
+      if (report.hitTest.fixed.length) report.warnings.push(`${report.hitTest.fixed.length} layer${report.hitTest.fixed.length === 1 ? '' : 's'} covering a control in the copy now let${report.hitTest.fixed.length === 1 ? 's' : ''} clicks through, as on the original.`);
+      if (report.hitTest.unresolved.length) report.warnings.push(`${report.hitTest.unresolved.length} control${report.hitTest.unresolved.length === 1 ? ' is' : 's are'} covered by another element in the copy and not in the original (see the hit-test check).`);
+    } catch (err) {
+      report.hitTest = { error: String(err?.message ?? err).split('\n')[0] };
+    }
+  } else if (maps.size && report.visibility?.error && !shared) report.hitTest = { error: report.visibility.error };
+  await shared?.close();
+
+  // The published pages carry their own CSS inline (no render-blocking request, no rules of other pages); the layout
+  // passes above worked on the shared css/site.css, which stays in the site for reading and for the app stacks.
+  out = emitSite(ir, { inlineCss: true });
+  await writeSite(siteDir, out, assetsDir, known);
+
   ctx.progress(0.95, 'Saving the IR');
   await mkdir(path.join(ctx.dir, 'ir'), { recursive: true });
   await writeFile(path.join(ctx.dir, 'ir', 'site.json'), JSON.stringify(ir));
+  // Which element of the original each element of the copy came from. The IR keeps `sid` but not `cpath` - four
+  // stack emitters read that file and none of them needs it - so the pairing the exact comparison runs on is saved
+  // beside it. Without this the comparison after the build can only pair boxes by their text, which on a real page
+  // paired 79 of 577 and reported the other 498 as missing and extra at once (`byPath: 0`).
+  if (asIs) {
+    const saved = cpathsOf(site);
+    // A page kept as-is is the original's markup: its elements stand for capture paths of their own (ir/asis.js).
+    for (const [outPath, cpaths] of Object.entries(site.asisCpaths ?? {})) saved.pages[outPath] = { cpaths, sized: {}, slack: {} };
+    await writeFile(path.join(ctx.dir, 'ir', 'cpaths.json'), JSON.stringify(saved));
+  }
   const siteAssets = [...out.assets].filter((f) => known.has(f));
   ctx.generated = { site, ir, out, stats, siteDir, siteAssets, assetsDir };
 
   const fixed = fixReport(treeFixes, irFixes);
   report.fixes.push(...fixed.fixes);
   // Lighter images (D.5, assets/optimize.js): converted to WebP / shrunk to what the pages show.
-  const images = report.assets?.images;
-  if (images?.converted) {
+  const lighter = report.assets?.images;
+  if (lighter?.converted) {
     report.fixes.push({
       id: 'images',
       title: 'Images made lighter (WebP, sized to how the pages show them)',
       status: 'fixed',
-      count: images.converted,
+      count: lighter.converted,
       open: 0,
-      detail: `${images.converted} of ${images.files} PNG / JPEG images re-encoded as WebP (${images.resized} also shrunk to twice their shown width): ${Math.round(images.bytesBefore / 1024)} KB → ${Math.round(images.bytesAfter / 1024)} KB.`,
-      items: [{ converted: images.converted, resized: images.resized, bytesBefore: images.bytesBefore, bytesAfter: images.bytesAfter }],
+      detail: `${lighter.converted} of ${lighter.files} PNG / JPEG images re-encoded as WebP (${lighter.resized} also shrunk to twice their shown width): ${Math.round(lighter.bytesBefore / 1024)} KB → ${Math.round(lighter.bytesAfter / 1024)} KB.`,
+      items: [{ converted: lighter.converted, resized: lighter.resized, bytesBefore: lighter.bytesBefore, bytesAfter: lighter.bytesAfter }],
     });
   }
   if (wp) {
@@ -301,6 +893,7 @@ export async function generateStage(ctx) {
   }), { elements: 0, variantsMerged: 0, wrappersRemoved: 0, viewOnly: 0 });
   report.generate = {
     stack: 'html',
+    ...(asis && { asis }),
     pages: ir.pages.length,
     ...treeStats,
     classes: stats.classes,
@@ -317,10 +910,63 @@ export async function generateStage(ctx) {
     assetFiles: siteAssets.length,
     generatedFiles: ir.files.map((f) => f.path),
     fit,
+    correct,
+    // Pages and views where the original does not reflow - its layout stays wider than the screen and overflows
+    // sideways. The copy keeps those widths instead of shrinking to the screen (ir/index.js noReflowViews), which
+    // is the difference between a narrow page that matches and one two or three times too tall.
+    noReflow: site.pages.flatMap((t) => (t.noReflow ?? []).map((view) => ({
+      page: t.info.path, view, width: Math.round(t.root.views[view]?.rect?.[2] ?? 0), viewport: VIEW_WIDTHS[view] ?? null,
+    }))).slice(0, 100),
     responsive: refined?.summary ?? null,
     motion: { ...motion.stats, script: Boolean(ir.motion?.script) },
-    widgets: widgets.stats,
+    images: images.stats,
   };
+  if (asIs) {
+    report.exact = {
+      ...report.exact,
+      mode: 'exact',
+      asIs: {
+        on: true,
+        note: 'The copy replicates the site as it is. These fixes were left out on purpose, so the re-audit rows below are choices, not failures.',
+        disabled: [
+          { id: 'contrast', what: 'Text colours are copied, never corrected', cost: 'The contrast failures of the original stay' },
+          { id: 'responsive-images', what: 'Every picture is served as the original bytes, format and size', cost: 'Image size and format savings are not taken' },
+          { id: 'page-css', what: 'The stylesheet keeps every @font-face the original declares', cost: 'A larger stylesheet (unused CSS)' },
+          { id: 'dom-size', what: 'Unused sprites, and parts only another window size shows, are kept', cost: 'A larger page (DOM size)' },
+          { id: 'head-text', what: 'Titles and descriptions are copied as they are', cost: 'Head texts that are too short, too long or shared by several pages stay' },
+          { id: 'broken-links', what: 'A link whose target is dead keeps its href', cost: 'Dead links stay as the original has them' },
+          { id: 'image-loading', what: "The main image keeps the original's entrance animation", cost: 'The main image is painted a little later' },
+        ],
+      },
+    };
+  }
+  // What the correction loop changed, and what is still different with the cause for it. The causes a person has to
+  // act on (a missing file, an image's own pixels) become manual rows; the rest are counted, never dropped.
+  const corrected = correctReport(correct);
+  if (corrected.fix) report.fixes.push(corrected.fix);
+  report.manual.push(...corrected.manual);
+
+  const templates = ir.pages.reduce((n, p) => n + countTemplates(p.body), 0);
+  if (templates) {
+    report.fixes.push({
+      id: 'state-templates',
+      title: `${templates} hidden ${templates === 1 ? 'part' : 'parts'} (other tabs / slides / filters, hovered card looks) kept out of the page until shown`,
+      status: 'fixed',
+      count: templates,
+      open: 0,
+      items: [],
+    });
+  }
+  if (images.stats.images) {
+    report.fixes.push({
+      id: 'responsive-images',
+      title: `Responsive WebP images for ${images.stats.images} ${images.stats.images === 1 ? 'picture' : 'pictures'}`,
+      status: 'fixed',
+      count: images.stats.images,
+      open: 0,
+      items: [{ files: images.stats.files, originalBytes: images.stats.originalBytes, largestServedBytes: images.stats.servedBytes }],
+    });
+  }
   const byPath = new Map(site.pages.map((t) => [t.info.path, t]));
   report.pages = report.pages.map((p) => {
     const t = byPath.get(p.path);
@@ -402,6 +1048,21 @@ export async function generateStage(ctx) {
     });
   }
   if (site.truncated) report.warnings.push('A page has more elements than one capture keeps (6,000); only the first 6,000 were recreated.');
+  // An animation whose keyframes could not be carried over is a visible loss - the element still asks for the
+  // animation and nothing happens - so it is named here and goes to "needs a person" rather than disappearing.
+  if (site.keyframesClash?.length) {
+    const names = site.keyframesClash.map((k) => k.name).join(', ');
+    report.warnings.push(`${site.keyframesClash.length} animation name(s) mean different things on different pages (${names}); the copy has one stylesheet, so the first definition is used everywhere.`);
+  }
+  if (site.keyframesLost?.length) {
+    const names = site.keyframesLost.map((k) => k.name).join(', ');
+    report.warnings.push(`${site.keyframesLost.length} animation(s) could not be copied because their keyframes are longer than one capture keeps (${names}); the elements that use them will not move.`);
+    report.manual.push({
+      kind: 'motion',
+      title: `${site.keyframesLost.length} animation${site.keyframesLost.length === 1 ? '' : 's'} could not be copied`,
+      detail: `These @keyframes are longer than one capture keeps, so anything using them stays still: ${names}. Copy them from the original stylesheet by hand.`,
+    });
+  }
   if (fit.stopped) report.warnings.push('The layout fit pass stopped early because of the time limit.');
   if (fit.failed?.length) {
     const list = fit.failed.map((f) => f.path);

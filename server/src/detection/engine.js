@@ -20,10 +20,16 @@ export function loadRules(dir = RULES_DIR) {
     });
 }
 
-export const RULES = loadRules();
+// A rule file's `kind`: none = a platform (the audit's techStack), 'library' = a script library the copy may lift
+// (gsap, swiper …), 'runtime' = an app / framework runtime a script can be recognised as (never lifted). Libraries and
+// runtimes are kept out of RULES, so the techStack, the platform CDN hosts and the builder class patterns are unchanged.
+export const ALL_RULES = loadRules();
+export const RULES = ALL_RULES.filter((r) => !r.kind);
+export const LIBRARY_RULES = ALL_RULES.filter((r) => r.kind === 'library');
+export const RUNTIME_RULES = ALL_RULES.filter((r) => r.kind === 'runtime');
 
 // Window paths the renderer must test for, collected from every rule and manual detector.
-export const globalNames = (rules = RULES) => [
+export const globalNames = (rules = [...RULES, ...LIBRARY_RULES]) => [
   ...new Set(rules.flatMap((r) => [...r.signals, ...(r.manualRebuild ?? []).map((m) => m.when).filter(Boolean)])
     .filter((s) => s.type === 'global')
     .map((s) => s.name)),
@@ -39,25 +45,70 @@ const regex = (pattern) => new RegExp(pattern, 'i');
  * @param {object|null} o.render   result of renderHome(), or null when rendering failed
  * @param {string[]} [o.assets]    asset URLs from the raw HTML (fallback when there is no render)
  * @param {string} o.origin
+ * @param {{ entries: any[], readBody: (entry: any) => Promise<string|Buffer|null> }|null} [o.record]
+ *   the job's network record (audit/sharedCache.js createRecordStore: index.json `entries` + a body reader). Its script
+ *   URLs join `scripts` / `requests`, and its script bodies are what `scriptBody` signals are matched against.
  */
-export function buildContext({ headers = {}, rawHtml = '', render = null, assets = [], origin }) {
+export function buildContext({ headers = {}, rawHtml = '', render = null, assets = [], origin, record = null }) {
   const html = `${rawHtml}\n${render?.html ?? ''}`;
   const $ = cheerio.load(render?.html || rawHtml || '');
   const metas = $('meta')
     .map((_, el) => ({ name: ($(el).attr('name') || $(el).attr('property') || '').toLowerCase(), content: $(el).attr('content') || '' }))
     .get();
+  const recorded = recordedScripts(record);
+  const scripts = render?.scripts ?? assets.filter((a) => /\.m?js(\?|$)/i.test(a));
+  const requests = render?.requests ?? assets;
   return {
     headers,
     html,
     $,
     metas,
-    scripts: render?.scripts ?? assets.filter((a) => /\.m?js(\?|$)/i.test(a)),
-    requests: render?.requests ?? assets,
+    scripts: [...new Set([...scripts, ...recorded.map((e) => e.url)])],
+    requests: [...new Set([...requests, ...recorded.map((e) => e.url)])],
     cookies: render?.cookies ?? [],
     globals: new Set(render?.foundGlobals ?? []),
     origin,
     probes: new Map(),
+    scriptEntries: recorded,
+    readBody: record?.readBody ?? null,
+    bodies: new Map(),
   };
+}
+
+/** Script entries of a network record that have a body on disk. */
+export const recordedScripts = (record) => (record?.entries ?? []).filter((e) => e && e.kind === 'script' && e.url && e.sha);
+
+/** A script body larger than this is scanned by its head and tail only (a library is bundled whole, so its markers sit together). */
+export const MAX_SCRIPT_SCAN_BYTES = 6 * 1024 * 1024;
+const SCAN_TAIL_BYTES = 1024 * 1024;
+
+/**
+ * The text of a recorded script, read once per context and capped (MAX_SCRIPT_SCAN_BYTES), or '' when unreadable.
+ * @param {{ bodies: Map<string, Promise<string>>, readBody: ((entry: any) => Promise<string|Buffer|null>)|null }} ctx
+ * @param {{ url: string }} entry
+ */
+export function scriptText(ctx, entry) {
+  if (!ctx.bodies.has(entry.url)) {
+    const read = async () => {
+      if (!ctx.readBody) return '';
+      const body = await ctx.readBody(entry).catch(() => null);
+      if (body == null) return '';
+      const buf = Buffer.isBuffer(body) ? body : Buffer.from(String(body));
+      if (buf.length <= MAX_SCRIPT_SCAN_BYTES) return buf.toString('utf8');
+      return `${buf.subarray(0, MAX_SCRIPT_SCAN_BYTES - SCAN_TAIL_BYTES).toString('utf8')}\n${buf.subarray(buf.length - SCAN_TAIL_BYTES).toString('utf8')}`;
+    };
+    ctx.bodies.set(entry.url, read());
+  }
+  return ctx.bodies.get(entry.url);
+}
+
+async function matchScriptBody(signal, ctx) {
+  const re = regex(signal.pattern);
+  for (const entry of ctx.scriptEntries ?? []) {
+    const m = re.exec(await scriptText(ctx, entry));
+    if (m) return m;
+  }
+  return null;
 }
 
 function firstMatch(re, values) {
@@ -108,6 +159,10 @@ export async function matchSignal(signal, ctx) {
       return ctx.$(signal.selector).length ? [signal.selector] : null;
     case 'endpoint':
       return probeEndpoint(ctx, signal);
+    case 'scriptBody':
+      // The text of a script the page loaded (from the network record): finds a library bundled into a site chunk
+      // whatever the chunk's name, by markers minifiers keep (string literals, property names, `/*!` banners).
+      return matchScriptBody(signal, ctx);
     default:
       return null;
   }
@@ -124,7 +179,10 @@ const defaultLabel = (s) =>
     global: `window.${s.name} present`,
     dom: `${s.selector} element`,
     endpoint: `${s.path} responds`,
+    scriptBody: `script body matching ${s.pattern}`,
   })[s.type] ?? s.type;
+
+export const signalLabel = (s) => s.label ?? defaultLabel(s);
 
 /**
  * Scores every rule against the context. Confidence = 1 − Π(1 − weight) over matched signals.
@@ -191,3 +249,46 @@ export function toTechStack(detections) {
 
 // Detections trusted enough to drive limitations and manual-rebuild items.
 export const confident = (detections) => detections.filter((t) => t.confidence >= 50);
+
+/**
+ * The script libraries a site uses (rules with `kind: 'library'`), scored like platforms. With a network record in the
+ * context, a library bundled into a site chunk is found by its body markers.
+ * @returns {Promise<Array<{ id: string, name: string, category: string, confidence: number, version: string|null, evidence: string[], requires: string[] }>>}
+ */
+export async function detectLibraries(ctx, rules = LIBRARY_RULES) {
+  const found = await detectStack(ctx, rules);
+  return found.map((t) => ({
+    id: t.id,
+    name: t.name,
+    category: t.category,
+    confidence: t.confidence,
+    version: t.version,
+    evidence: t.evidence,
+    requires: t.rule.requires ?? [],
+  }));
+}
+
+/**
+ * A detection context holding ONE recorded script: its URL is the only script / request, its body the only one a
+ * `scriptBody` signal reads. Page-level signals (markup, meta, DOM, globals, cookies) find nothing in it.
+ * @param {{ url: string }} entry
+ * @param {((entry: any) => Promise<string|Buffer|null>)|null} readBody
+ * @param {Map<string, Promise<string>>} [bodies]  shared body cache, so a body is read once across contexts
+ */
+export function scriptContext(entry, readBody, bodies = new Map()) {
+  return {
+    headers: {},
+    html: '',
+    $: cheerio.load(''),
+    metas: [],
+    scripts: [entry.url],
+    requests: [entry.url],
+    cookies: [],
+    globals: new Set(),
+    origin: '',
+    probes: new Map(),
+    scriptEntries: [entry],
+    readBody,
+    bodies,
+  };
+}

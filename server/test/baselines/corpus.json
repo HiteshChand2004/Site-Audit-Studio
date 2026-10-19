@@ -1,0 +1,57 @@
+{
+ "note": "Saved captures rebuilt offline to prove nothing broke. Never proof that a fix is general: these are the sites the fixes were written against. dataDir is read-only; each fixture is copied before it is rebuilt.",
+ "dataDir": "C:/Users/urvas/Downloads/Site-Audit-Studio-main/data",
+ "fixtures": [
+  {
+   "name": "nyaayai",
+   "projectId": "1f98e132-7f60-45d7-8110-704d790a210c",
+   "recreateId": "b9f1be6f-7b4b-41ca-a1aa-3302f2963a9d",
+   "site": "www.nyaayai.com"
+  },
+  {
+   "name": "botza",
+   "projectId": "61401b96-a3fc-46a8-8c88-ad567a0298a4",
+   "recreateId": "4029dc72-1851-461b-8afb-59f5933f2261",
+   "site": "botza.panscience.ai"
+  },
+  {
+   "name": "panscience",
+   "projectId": "b210e06f-c1e7-4b78-9b83-512b93c60e36",
+   "recreateId": "9f2e79f3-c967-447c-8b2f-180c201a094c",
+   "site": "www.panscience.xyz"
+  },
+  {
+   "name": "flexibench",
+   "projectId": "caa38f97-330d-401e-bec9-059a9c3635b2",
+   "recreateId": "93cc4df7-bf39-442d-bdcd-6510a2992ef0",
+   "site": "www.flexibench.io",
+   "note": "repointed 2026-10-12 (second time): retention keeps the latest two recreates per project, so a registered id goes stale after two runs. This one is the five-view exact run."
+  },
+  {
+   "name": "parchaa",
+   "projectId": "d5691f4f-8b64-4244-a561-d467db3fcb8c",
+   "recreateId": "65503eed-898e-4290-b5e9-e0aa0beff930",
+   "site": "www.parchaa.com"
+  },
+  {
+   "name": "collateral",
+   "projectId": "48ba9d10-eaa4-4c9b-9aac-dad6bf07ff68",
+   "recreateId": "3019a275-09f6-4732-8c90-eab9049638c5",
+   "site": "collateral.panscience.ai"
+  },
+  {
+   "name": "incredible-dragon",
+   "projectId": "8e134d55-4281-4218-a412-a6b24f8939af",
+   "recreateId": "b443e730-36ff-4cbc-826b-c8ba05ad5c7e",
+   "site": "incredible-dragon-471935.framer.app"
+  },
+  {
+   "name": "dreamhire",
+   "projectId": "2473f6be-ba75-466b-97c1-c3375229c7c0",
+   "recreateId": "c41cc1e0-cc3c-44e7-8c03-ea000ef59348",
+   "site": "dreamhire.in"
+  }
+ ],
+ "previousRelease": "8380cf6",
+ "previousReleaseNote": "the last commit before CLONER_SPEC v2 Release 1 (animations), 2026-10-14"
+}

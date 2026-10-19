@@ -3,9 +3,12 @@
 // Resolving references and describing nodes/head tags is shared with every stack (walk.js); this file
 // only writes them as HTML text.
 import { relFile } from '../ir/links.js';
-import { CSS_FILE, emitCss } from './css.js';
+import { CSS_FILE, emitCss, usedCustomProps } from './css.js';
 import { MOTION_FILE, MOTION_JS } from './motionScript.js';
-import { INLINE_MAX, pageCss, usedBy } from './pageCss.js';
+import { animFiles, animTags, vendorText } from './anim.js';
+import { appearFiles, appearTags } from '../behavior/framer/emit.js';
+import { liftTags } from '../behavior/lift.js';
+import { lottieFiles, lottieTags } from '../behavior/lottie.js';
 import { describeNode, headTags, relativeRefs, safeJsonLd } from './walk.js';
 
 export { safeJsonLd };
@@ -30,22 +33,53 @@ function svgMarkup(d, ctx) {
   return extra ? d.markup.replace(/^<svg\b/, `<svg ${extra}`) : d.markup;
 }
 
-function emitNode(node, ctx, depth, pretty) {
+// White space a page keeps (pre, pre-wrap, pre-line, break-spaces): line breaks in the markup show as lines there.
+const KEEPS_BREAKS = /^(pre|pre-wrap|pre-line|break-spaces|preserve|preserve-breaks)$/;
+export function keepsBreaks(node, inherited, byClass) {
+  // The emitted page knows its classes; their rules (base = the widest view) say what white space they set.
+  for (const c of String(node.class ?? '').split(/\s+/)) if (c && byClass?.has(c)) return byClass.get(c);
+  return inherited;
+}
+
+/** class name → whether its rule keeps line breaks (only classes that set white space). */
+export function whiteSpaceByClass(rules = []) {
+  const out = new Map();
+  for (const r of rules) {
+    const m = /^\.([\w-]+)$/.exec(String(r.selector ?? '').trim());
+    const base = r.parts?.base ?? {};
+    const own = base['white-space-collapse'] ?? base['white-space'];
+    if (m && own) out.set(m[1], KEEPS_BREAKS.test(String(own).trim()));
+  }
+  return out;
+}
+
+/** One IR node as HTML (exported for the app stacks, which write a state template's content as HTML). */
+export function emitNode(node, ctx, depth, pretty, keep = false) {
+  // A state the page does not start in: inert inside a <template> until js/motion.js shows it (no script: the first state).
+  if (node.tpl && !ctx.inTemplate) {
+    return `<template data-w-tpl="${escAttr(node.tpl)}">${emitNode(node, { ...ctx, inTemplate: true }, depth, false, keep)}</template>`;
+  }
   const d = describeNode(node, ctx.refs);
   if (d.kind === 'text') return escText(d.text);
   if (d.kind === 'svg') return svgMarkup(d, ctx);
   const open = `<${d.tag}${attributes(d, ctx)}>`;
   if (VOID.has(d.tag)) return open;
   const kids = d.children;
-  // Indent only when every child is a block and there is no loose text, so no inline spacing changes.
-  const blocky = pretty && !RAW_TEXT.has(d.tag) && kids.length > 0
+  // A builder's text sets white-space: pre-wrap: the indentation added for readability would become blank lines
+  // (a 24 px list item 120 px tall), so inside such text nothing is added.
+  const keepHere = keepsBreaks(node, keep, ctx.wsByClass);
+  // Indent only when every child is a block and there is no loose text, so no inline spacing changes. There has to
+  // be a block child for that to mean anything: without the test the predicate is vacuously true for an element
+  // whose only child is a space, which is exactly what every gap of a split-text animation is.
+  const blocky = pretty && !keepHere && !RAW_TEXT.has(d.tag)
+    && kids.some((c) => !('text' in c) && c.b)
     && kids.every((c) => ('text' in c ? !c.text.trim() : c.b));
   if (blocky) {
     const pad = '  '.repeat(depth + 1);
-    const inner = kids.filter((c) => !('text' in c)).map((c) => pad + emitNode(c, ctx, depth + 1, true)).join('\n');
+    const inner = kids.filter((c) => !('text' in c)).map((c) => pad + emitNode(c, ctx, depth + 1, true, keepHere)).join('\n');
     return `${open}\n${inner}\n${'  '.repeat(depth)}</${d.tag}>`;
   }
-  return `${open}${kids.map((c) => emitNode(c, ctx, depth + 1, false)).join('')}</${d.tag}>`;
+  return `${open}${kids.map((c) => emitNode(c, ctx, depth + 1, false, keepHere)).join('')}</${d.tag}>`;
 }
 
 function headMarkup(page, ctx) {
@@ -64,27 +98,34 @@ function headMarkup(page, ctx) {
 /** The head tags of a page as HTML lines, with the references of the stack that calls it. */
 export const headHtml = (page, refs) => headMarkup(page, { refs });
 
-/** One page as an HTML document. */
-export function emitPage(page, { ids = false, useAsset = () => true, motionScript = false, css = null } = {}) {
+// Inside <style>: a "</style" in a value would end the element early (never written by the IR, guarded anyway).
+const styleText = (css) => css.replace(/<\/style/gi, '<\\/style');
+
+/**
+ * One page as an HTML document. `css`: the page's own stylesheet, written inline in its head in place of the
+ * link to the shared one (no render-blocking request, no rules of other pages).
+ */
+export function emitPage(page, { ids = false, useAsset = () => true, motionScript = false, wsByClass = null, css = null } = {}) {
   const refs = relativeRefs(page.outPath, useAsset);
-  // css: the page's own rules (emitSite, D.6) instead of the shared stylesheet: inline, plus a file linked at the end.
-  const ctx = { outPath: page.outPath, ids, refs: css ? { ...refs, stylesheetHref: () => null } : refs };
-  let body = emitNode(page.body, ctx, 0, true);
-  if (css?.file) {
-    const at = body.lastIndexOf('</body>');
-    const link = `<link rel="stylesheet" href="${relFile(page.outPath, css.file)}">`;
-    body = at >= 0 ? `${body.slice(0, at)}${link}\n${body.slice(at)}` : `${body}\n${link}`;
-  }
+  const ctx = { outPath: page.outPath, ids, refs: css ? { ...refs, stylesheetHref: () => null } : refs, wsByClass };
   const htmlAttrs = [page.head.lang && `lang="${escAttr(page.head.lang)}"`, page.html.class && `class="${page.html.class}"`].filter(Boolean).join(' ');
   return [
     '<!doctype html>',
     `<html${htmlAttrs ? ` ${htmlAttrs}` : ''}>`,
     '<head>',
     headMarkup(page, ctx),
-    ...(css?.inline ? [`  <style>${css.inline.replace(/<\/style/gi, '<\\/style')}</style>`] : []),
+    ...(css ? [`  <style>\n${styleText(css)}</style>`] : []),
+    // The original's own self-starting libraries (behavior/lift.js), byte for byte, before the copy's script.
+    ...liftTags(page, (f) => relFile(page.outPath, f)),
     ...(motionScript ? [`  <script src="${relFile(page.outPath, MOTION_FILE)}" defer></script>`] : []),
+    // The animation library's replay (emit/anim.js): the library, the page's program, the replayer - deferred, in order.
+    ...animTags(page, (f) => relFile(page.outPath, f)),
+    // Framer appear entrances (behavior/framer/emit.js): motion, the page's program, the replayer - deferred, in order.
+    ...appearTags(page, (f) => relFile(page.outPath, f)),
+    // Lottie animations (behavior/lottie.js): lottie-web, the page's animations, the player - deferred, in order.
+    ...lottieTags(page, (f) => relFile(page.outPath, f)),
     '</head>',
-    body,
+    emitNode(page.body, ctx, 0, true),
     '</html>',
     '',
   ].join('\n');
@@ -93,37 +134,32 @@ export function emitPage(page, { ids = false, useAsset = () => true, motionScrip
 /**
  * All text files of the site: { files: Map<path, string>, assets: Set<file under assets/> }.
  * @param {object} ir
- * @param {{ ids?: boolean }} [opts]  ids: add data-sas-id attributes (for layout measurement only)
+ * @param {{ ids?: boolean, inlineCss?: boolean }} [opts]  ids: add data-sas-id attributes (for layout measurement only);
+ *   inlineCss: each page carries its own stylesheet inline (the published site). The layout passes work on the shared
+ *   css/site.css (verify/refine.js overrides that one file), so it is always written too.
  */
-export function emitSite(ir, { ids = false } = {}) {
+export function emitSite(ir, { ids = false, inlineCss = false } = {}) {
   const assets = new Set();
   const useAsset = (file) => (assets.add(file), true);
   const files = new Map();
   // The reveal script (emit/motionScript.js) only when the IR has reveal effects; hover, focus and loops are CSS.
   const motionScript = Boolean(ir.motion?.script);
-  // Each page carries only the rules it uses (D.6): inline when small, else the first screen's rules inline and the rest
-  // in css/pages/<page>.css at the end of the body. The stylesheet is built once; its url()s point from css/ to assets/
-  // and are rewritten for where each piece of CSS lives.
-  const css = emitCss(ir);
-  const rebase = (text, to) => text.replace(/url\("\.\.\/assets\/([^"]+)"\)/g, (all, file) => `url("${relFile(to, `assets/${file}`)}")`);
-  const pageRoots = (page) => [page.html?.class, page.body?.class].filter(Boolean).join(' ');
+  const wsByClass = whiteSpaceByClass(ir.rules);
+  const usedVars = usedCustomProps(ir);
+  const assetRef = /url\("(?:\.\.\/)*assets\/([^"]+)"\)/g;
   for (const page of ir.pages) {
-    const used = usedBy(page.body);
-    for (const c of pageRoots(page).split(/\s+/)) if (c) used.classes.add(c);
-    const full = pageCss(css, used);
-    let own;
-    if (full.length <= INLINE_MAX) own = { inline: rebase(full, page.outPath) };
-    else {
-      const first = usedBy(page.body, (n) => n.f === 1);
-      for (const c of pageRoots(page).split(/\s+/)) if (c) first.classes.add(c);
-      const file = `css/pages/${page.outPath.replace(/\.html$/, '').replace(/\//g, '--')}.css`;
-      own = { inline: rebase(pageCss(css, first), page.outPath), file };
-      files.set(file, rebase(full, file));
-    }
-    for (const m of `${own.inline}${own.file ? files.get(own.file) : ''}`.matchAll(/url\("(?:\.\.\/)*assets\/([^"]+)"\)/g)) assets.add(m[1]);
-    files.set(page.outPath, emitPage(page, { ids, useAsset, motionScript, css: own }));
+    const css = inlineCss ? emitCss(ir, { page, usedVars }) : null;
+    if (css) for (const m of css.matchAll(assetRef)) assets.add(m[1]);
+    files.set(page.outPath, emitPage(page, { ids, useAsset, motionScript, wsByClass, css }));
   }
   if (motionScript) files.set(MOTION_FILE, MOTION_JS);
+  for (const [file, text] of animFiles(ir)) files.set(file, text);
+  for (const [file, text] of Object.entries(ir.liftFiles ?? {})) files.set(file, text);
+  for (const [file, text] of appearFiles(ir, vendorText)) files.set(file, text);
+  for (const [file, text] of lottieFiles(ir, vendorText)) files.set(file, text);
+  const css = emitCss(ir, { usedVars });
+  for (const m of css.matchAll(assetRef)) assets.add(m[1]);
+  files.set(CSS_FILE, css);
   for (const f of ir.files) files.set(f.path, f.content);
   return { files, assets };
 }

@@ -11,7 +11,11 @@ if (!root) {
   console.warn('SAS_TEST_ROOT is not set; run tests with "npm test -w server" so the temp data is deleted afterwards.');
 }
 process.env.SAS_DATA_DIR = mkdtempSync(path.join(root || os.tmpdir(), root ? 'file-' : 'sas-test-'));
+// Each test file has its own temp folder too (the shared cache makes its folders there): a folder another file is using is never counted.
+if (root) process.env.SAS_TEMP_DIR = mkdtempSync(path.join(root, 'tmp-'));
 // Jobs in tests never ask the machine to stay awake (keep-awake.test.js turns it on where it tests it).
 process.env.SAS_KEEP_AWAKE ??= '0';
 // Jobs in tests never poll DNS for outages (interruptions.test.js passes its own checks).
 process.env.SAS_NETWORK_WATCH ??= '0';
+// The copy's own check of its outbound links goes to other sites: never from tests.
+process.env.SAS_COPY_LINK_CHECK ??= '0';

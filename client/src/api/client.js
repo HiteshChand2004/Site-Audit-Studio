@@ -143,10 +143,15 @@ export const api = {
   updateProject: (id, patch) => request(`/projects/${id}`, { method: 'PATCH', body: patch }),
   deleteProject: (id) => request(`/projects/${id}`, { method: 'DELETE' }),
   getAudit: (id) => request(`/projects/${id}/audit`),
+  // Every page of the site the app has seen (for the "One page" picker): { pages: [{ path, url }], pageUrl }.
+  getPages: (id) => request(`/projects/${id}/pages`),
   startAnalyze: (id, body = {}) => request(`/projects/${id}/analyze`, { method: 'POST', body }),
   getCurrentAnalysis: (id) => request(`/projects/${id}/analyze/current`),
   subscribeAnalysis: (id, analysisId, handlers) => subscribe(`/api/projects/${id}/analyze/${analysisId}/events`, handlers),
-  startRecreate: (id) => request(`/projects/${id}/recreate`, { method: 'POST' }),
+  // { reuseCapture: true }: rebuild from the last capture (the site is not opened again).
+  startRecreate: (id, options = null) => request(`/projects/${id}/recreate`, { method: 'POST', ...(options && { body: options }) }),
+  // The preview of an original as-is copy: its own address on this machine (never the app's origin).
+  startAsIsPreview: (id, recreateId) => request(`/projects/${id}/recreate/${recreateId}/asis-preview`, { method: 'POST' }),
   getCurrentRecreate: (id) => request(`/projects/${id}/recreate/current`),
   downloadUrl: (id, recreateId, stack) => `/api/projects/${id}/recreate/${recreateId}/download${stack ? `?stack=${encodeURIComponent(stack)}` : ''}`,
   // Builds another stack from the saved recreate (no new capture): resolves when it is ready, rejects with why it failed.
@@ -157,6 +162,7 @@ export const api = {
     return res.ok ? null : res.headers.get('X-Download-Error') ?? `Download failed (${res.status}).`;
   },
   getRecreate: (id) => request(`/projects/${id}/recreate`),
+  stopRecreate: (id) => request(`/projects/${id}/recreate/stop`, { method: 'POST' }),
   subscribeRecreate: (id, recreateId, handlers) => subscribe(`/api/projects/${id}/recreate/${recreateId}/events`, handlers),
   startReaudit: (id) => request(`/projects/${id}/reaudit`, { method: 'POST' }),
   getCurrentReaudit: (id) => request(`/projects/${id}/reaudit/current`),

@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Script-driven patterns</title>
+<meta name="description" content="Three patterns a builder's runtime draws with script alone: a hover background, a logo ticker and lines drawn along SVG paths.">
+<style>
+  /* Written from scratch for the regression suite: no :hover rule anywhere, every effect below comes from the script. */
+  body { margin: 0; font-family: system-ui, sans-serif; color: #111827; }
+  .hero { padding: 64px 40px; }
+  .cta { display: inline-block; padding: 14px 24px; border-radius: 10px; background-color: rgb(17, 24, 39); color: #fff; cursor: pointer; }
+  .trusted { padding: 40px 0; overflow: hidden; }
+  .trusted h2 { padding: 0 40px; font-size: 20px; }
+  .track { display: flex; gap: 48px; width: max-content; }
+  .logo { width: 140px; height: 48px; border-radius: 8px; background: #e5e7eb; display: grid; place-items: center; font-weight: 600; color: #374151; }
+  .platform { padding: 40px; }
+  .platform svg { width: 640px; max-width: 100%; height: auto; display: block; }
+  .card { fill: #f3f4f6; stroke: #d1d5db; }
+  .line { fill: none; stroke: #c2410c; stroke-width: 3; }
+  footer { height: 400px; }
+  .bar { padding: 12px 40px; }
+  .fx-a7k2 { width: 28px; height: 22px; display: flex; flex-direction: column; justify-content: space-between; cursor: pointer; }
+  .fx-a7k2 span { display: block; height: 3px; background: #111827; border-radius: 2px; }
+  .fx-b9m1 { display: none; padding: 12px 0; }
+  .fx-b9m1.open { display: block; }
+  .topnav { flex-wrap: wrap; display: flex; gap: 20px; padding: 16px 40px; }
+  .topnav a { color: #111827; text-decoration: none; }
+  .faq { padding: 40px; max-width: 720px; }
+  .q { padding: 14px 0; border-bottom: 1px solid #e5e7eb; cursor: pointer; }
+  .q p { margin: 0; font-weight: 600; }
+  .a { overflow: hidden; height: 0; }
+  .item { padding: 14px 0; border-bottom: 1px solid #e5e7eb; cursor: pointer; }
+  .item p { margin: 0; font-weight: 600; }
+  .item .ans { margin-top: 8px; color: #4b5563; }
+  .grow { padding: 14px 0; border-bottom: 1px solid #e5e7eb; cursor: pointer; }
+  .grow p { margin: 0; font-weight: 600; }
+  .grow .ans2 { height: 0; overflow: hidden; transition: height 0.25s ease; color: #4b5563; }
+  .phone-only { display: none; padding: 24px; }
+  @media (max-width: 767px) { .phone-only { display: block; } }
+  .spinner { width: 120px; height: 40px; display: grid; place-items: center; background: #fde68a; border-radius: 8px; }
+  .slider { margin-top: 16px; width: 280px; height: 12px; background: #e5e7eb; border-radius: 6px; }
+  .knob { width: 40px; height: 12px; background: #c2410c; border-radius: 6px; }
+  .proof { padding: 40px; height: 360px; overflow: hidden; }
+  .stack { list-style: none; margin: 0; padding: 0; }
+  .stack li { height: 100px; margin-bottom: 16px; border-radius: 12px; background: #fff7ed; border: 1px solid #fed7aa; padding: 16px; box-sizing: border-box; }
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <a href="/" class="nl">Home</a><a href="/about" class="nl">About</a><a href="/pricing" class="nl">Pricing</a><a href="/blog" class="nl">Blog</a><a href="/careers" class="nl">Careers</a><a href="/contact" class="nl">Contact</a>
+</nav>
+<div class="bar">
+  <div class="fx-a7k2"><span></span><span></span><span></span></div>
+  <div class="fx-b9m1"><p>Menu: Products</p><p>Menu: Company</p></div>
+</div>
+<section class="hero">
+  <h1>Script-driven patterns</h1>
+  <div class="cta" role="button" tabindex="0">Book a demo</div>
+</section>
+<section class="trusted">
+  <h2>Trusted by teams</h2>
+  <div class="track">
+    <div class="logo">Alpha</div><div class="logo">Beta</div><div class="logo">Gamma</div><div class="logo">Delta</div><div class="logo">Epsilon</div><div class="logo">Zeta</div>
+    <div class="logo">Alpha</div><div class="logo">Beta</div><div class="logo">Gamma</div><div class="logo">Delta</div><div class="logo">Epsilon</div><div class="logo">Zeta</div>
+  </div>
+</section>
+<section class="platform">
+  <h2>One connected platform</h2>
+  <svg viewBox="0 0 640 220">
+    <rect class="card" x="10" y="80" width="120" height="60" rx="8"/>
+    <rect class="card" x="510" y="20" width="120" height="60" rx="8"/>
+    <rect class="card" x="510" y="140" width="120" height="60" rx="8"/>
+    <path class="line" d="M130 110 C 300 110 340 50 510 50"/>
+    <path class="line" d="M130 110 C 300 110 340 170 510 170"/>
+  </svg>
+</section>
+<section class="proof">
+  <h2>Built on proof</h2>
+  <ul class="stack">
+    <li class="pc">Case one</li><li class="pc">Case two</li><li class="pc">Case three</li><li class="pc">Case four</li><li class="pc">Case five</li>
+  </ul>
+</section>
+<section class="faq">
+  <h2>Questions</h2>
+  <div class="q" tabindex="0"><p>What is the product?</p></div><div class="a"><p>A platform for teams.</p></div>
+  <div class="q" tabindex="0"><p>Who is it built for?</p></div><div class="a"><p>Firms of every size.</p></div>
+  <div class="q" tabindex="0"><p>Is it safe to use?</p></div><div class="a"><p>Yes, it is audited.</p></div>
+</section>
+<section class="faq faq2">
+  <h2>More questions</h2>
+  <div class="item" tabindex="0"><p>How do I get started?</p></div>
+  <div class="item" tabindex="0"><p>Can my whole team use it?</p></div>
+  <div class="item" tabindex="0"><p>Where is my data kept?</p></div>
+</section>
+<section class="faq faq3">
+  <h2>Pricing questions</h2>
+  <div class="grow" tabindex="0"><p>Is there a free plan?</p><div class="ans2"><div>A free plan covers one project forever.</div></div></div>
+  <div class="grow" tabindex="0"><p>Can I cancel any time?</p><div class="ans2"><div>Cancel from the settings page, no questions.</div></div></div>
+</section>
+<section class="vslot"></section>
+<section class="phone-only">
+  <h2>On your phone</h2>
+  <div class="spinner">Syncing</div>
+  <div class="slider"><div class="knob"></div></div>
+</section>
+<footer></footer>
+<script>
+  // 1. Hover background set by script on pointer enter / leave, eased by the script itself (no :hover rule). It reacts
+  //    350 ms late and eases back over 700 ms - what a busy page's runtime does, and what a probe with fixed waits misses
+  //    (it read "no change" before the script started, or "never reverted" before it was back).
+  var cta = document.querySelector('.cta');
+  var target = [17, 24, 39], from = [17, 24, 39], start = 0, duration = 400, pending = null;
+  function ease() {
+    var t = Math.min(1, (performance.now() - start) / duration);
+    var c = from.map(function (v, i) { return Math.round(v + (target[i] - v) * t); });
+    cta.style.backgroundColor = 'rgb(' + c.join(', ') + ')';
+    if (t < 1) requestAnimationFrame(ease);
+  }
+  function go(rgb, ms) {
+    from = (getComputedStyle(cta).backgroundColor.match(/\d+/g) || [17, 24, 39]).slice(0, 3).map(Number);
+    target = rgb;
+    duration = ms;
+    start = performance.now();
+    requestAnimationFrame(ease);
+  }
+  cta.addEventListener('mouseenter', function () { clearTimeout(pending); pending = setTimeout(function () { go([194, 65, 12], 400); }, 350); });
+  cta.addEventListener('mouseleave', function () { clearTimeout(pending); go([17, 24, 39], 700); });
+
+  // 2. A logo ticker: the track moves left by script every frame and wraps after one set of logos.
+  var track = document.querySelector('.track');
+  var half = 0, x = 0, last = performance.now();
+  function tick(now) {
+    if (!half) half = track.scrollWidth / 2;
+    x -= (now - last) * 0.06;
+    last = now;
+    if (x <= -half) x += half;
+    track.style.transform = 'translateX(' + x.toFixed(2) + 'px)';
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  // 3. Lines drawn along SVG paths: the dash offset runs from the path's length to 0, then the line fades and starts over.
+  var lines = [].slice.call(document.querySelectorAll('.line'));
+  lines.forEach(function (p) {
+    var len = p.getTotalLength();
+    p.setAttribute('stroke-dasharray', len + ' ' + len);
+    p.dataset.len = len;
+  });
+  var t0 = performance.now();
+  function draw(now) {
+    var phase = ((now - t0) % 2400) / 2400;
+    lines.forEach(function (p, i) {
+      var len = Number(p.dataset.len), k = (phase + i * 0.15) % 1;
+      p.setAttribute('stroke-dashoffset', String(len * (1 - Math.min(1, k / 0.7))));
+      p.style.opacity = String(k < 0.8 ? 1 : 1 - (k - 0.8) / 0.2);
+    });
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+
+  // 4. A client-side router: every menu link goes to its address by script, whatever blocks the default action - like a
+  //    builder's runtime, which navigates on the click itself.
+  [].slice.call(document.querySelectorAll('.nl')).forEach(function (a) {
+    a.addEventListener('click', function (e) { e.preventDefault(); location.assign(a.getAttribute('href') + '?via=router'); });
+  });
+
+  // 5. A FAQ of plain focusable boxes (no role, no aria-expanded, no word naming it): the script opens a question's answer
+  //    to its height and closes it on the next click, several may be open.
+  [].slice.call(document.querySelectorAll('.q')).forEach(function (q) {
+    var a = q.nextElementSibling;
+    q.addEventListener('click', function () {
+      var open = a.style.height && a.style.height !== '0px';
+      a.style.height = open ? '0px' : a.scrollHeight + 'px';
+    });
+  });
+
+  // 5b. A FAQ whose whole item is the clickable box, and whose answer is drawn inside it only while open (a framework
+  //     rendering it on demand), with a layout animation nudging the list as it grows - like a builder's FAQ component.
+  var answers = { 'How do I get started?': 'Create an account and invite your first project.', 'Can my whole team use it?': 'Yes, every plan includes unlimited seats.', 'Where is my data kept?': 'In data centres inside the country, encrypted.' };
+  //     It answers a tap - the pointer going down and up on it - and no `click` event at all, as a builder's tap handler does.
+  [].slice.call(document.querySelectorAll('.item')).forEach(function (item) {
+    var down = false;
+    item.addEventListener('pointerdown', function () { down = true; });
+    item.addEventListener('pointerup', function () {
+      if (!down) return;
+      down = false;
+      var open = item.querySelector('.ans');
+      if (open) open.remove();
+      else {
+        var a = document.createElement('div');
+        a.className = 'ans';
+        a.textContent = answers[item.querySelector('p').textContent];
+        item.appendChild(a);
+      }
+      item.parentElement.animate([{ transform: 'scaleY(0.999)' }, { transform: 'none' }], { duration: 300 });
+    });
+  });
+
+  // 5c. The same kind of item, but its answer is already inside it at height 0 and the script opens it to its height.
+  [].slice.call(document.querySelectorAll('.grow')).forEach(function (item) {
+    var a = item.querySelector('.ans2');
+    item.addEventListener('click', function () {
+      var open = a.style.height && a.style.height !== '0px';
+      a.style.height = open ? '0px' : a.scrollHeight + 'px';
+    });
+  });
+
+  // 7. A part only the phone layout draws: a spinner turned and a knob slid by script, every frame (the desktop never
+  //    shows them, so a desktop-only recording never sees them move).
+  var spinner = document.querySelector('.spinner');
+  var knob = document.querySelector('.knob');
+  var p0 = performance.now();
+  function phoneFrame(now) {
+    var t = (now - p0) / 1000;
+    spinner.style.transform = 'rotate(' + ((t * 120) % 360).toFixed(1) + 'deg)';
+    knob.style.transform = 'translateX(' + (120 + 110 * Math.sin(t * 2.5)).toFixed(1) + 'px)';
+    requestAnimationFrame(phoneFrame);
+  }
+  requestAnimationFrame(phoneFrame);
+
+  // 8. A bare menu icon: a box with a hand cursor and nothing else (no text, role, tabindex or word naming it); the
+  //    framework's script opens and closes the menu on its click.
+  document.querySelector(".fx-a7k2").addEventListener('click', function () {
+    document.querySelector(".fx-b9m1").classList.toggle('open');
+  });
+
+  // 9. Markup rendered per width (a builder's separate phone layout): the same button inside another wrapper below
+  //    600 px, its hover drawn by script on whichever version is on screen.
+  var vslot = document.querySelector('.vslot');
+  function renderSlot() {
+    var phone = innerWidth < 600;
+    vslot.innerHTML = phone
+      ? '<div class="vp"><div class="vq"><button class="vb" type="button">Get the app</button></div></div>'
+      : '<div class="vw"><span class="vt">Download</span><button class="vb" type="button">Get the app</button></div>';
+    var b = vslot.querySelector('.vb');
+    b.style.backgroundColor = 'rgb(229, 231, 235)';
+    b.addEventListener('mouseenter', function () { b.style.backgroundColor = 'rgb(37, 99, 235)'; });
+    b.addEventListener('mouseleave', function () { b.style.backgroundColor = 'rgb(229, 231, 235)'; });
+  }
+  renderSlot();
+  addEventListener('resize', renderSlot);
+
+  // 10. A section the builder draws only once the page has been scrolled into it: added before the first FAQ the first
+  //     time the window passes it. A page loaded again and not scrolled lacks it, so every capture path below it is one
+  //     section off until someone scrolls.
+  var lazyAdded = false;
+  addEventListener('scroll', function () {
+    if (lazyAdded || scrollY < 400) return;
+    lazyAdded = true;
+    var s = document.createElement('section');
+    s.className = 'lazy-late';
+    s.innerHTML = '<h2>Seen on scroll</h2><p>This part is drawn once the page has been scrolled.</p>';
+    document.body.insertBefore(s, document.querySelector('.faq'));
+  }, { passive: true });
+
+  // 6. Cards that cycle: the list steps up by one card every 1.2 s through a Web Animation, the card in front grows to full
+  //    size and opacity while the others shrink - each card's scale and opacity set by script every frame.
+  var stack = document.querySelector('.stack');
+  var cards = [].slice.call(document.querySelectorAll('.pc'));
+  var step = 0;
+  setInterval(function () {
+    var y0 = -step * 116;
+    step = (step + 1) % 3;
+    stack.animate([{ transform: 'translateY(' + y0 + 'px)' }, { transform: 'translateY(' + (-step * 116) + 'px)' }], { duration: 500, fill: 'forwards', easing: 'ease-in-out' });
+  }, 1200);
+  function cardsFrame() {
+    var top = stack.parentElement.getBoundingClientRect().top + 60;
+    cards.forEach(function (c) {
+      var d = Math.min(1, Math.abs(c.getBoundingClientRect().top - top) / 240);
+      c.style.transform = 'scale(' + (1 - d * 0.5).toFixed(3) + ')';
+      c.style.opacity = (1 - d * 0.6).toFixed(3);
+    });
+    requestAnimationFrame(cardsFrame);
+  }
+  requestAnimationFrame(cardsFrame);
+</script>
+</body>
+</html>

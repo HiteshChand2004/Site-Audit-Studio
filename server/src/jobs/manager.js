@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { db } from '../db/index.js';
 import { holdAwake, releaseAwake } from './keepAwake.js';
+import { stripAnsi } from './ansi.js';
 
 const RETAIN_MS = 60000;
 const DB_WRITE_INTERVAL = 1000;
@@ -125,11 +126,30 @@ export class JobManager extends EventEmitter {
       error: null,
       warnings,
       startedAt: new Date().toISOString(),
+      // Asked to stop from the app (stop() below). A job that has not started yet sees it as soon as it does.
+      controller: new AbortController(),
     };
     this.#jobs.set(job.id, job);
     this.#rows.insert.run(job.id, project.id, job.startedAt);
     exclusive(() => this.#run(job, project, payload));
     return snapshot(job);
+  }
+
+  /**
+   * Asks the project's running or queued job to stop. The job's own run function ends it (and keeps what it can:
+   * a recreate saves its checkpoint, so the app can continue where it stopped).
+   * @returns {object|null} the job, or null when nothing is running for this project
+   */
+  stop(projectId) {
+    for (const job of this.#jobs.values()) {
+      if (job.projectId !== projectId || (job.status !== 'queued' && job.status !== 'running')) continue;
+      job.stopping = true;
+      job.message = 'Stopping…';
+      job.controller.abort();
+      this.#emit(job, 'progress');
+      return snapshot(job);
+    }
+    return null;
   }
 
   #emit(job, type) {
@@ -161,7 +181,7 @@ export class JobManager extends EventEmitter {
 
     let ok = false;
     try {
-      const result = await run({ job, project, payload, progress });
+      const result = await run({ job, project, payload, progress, signal: job.controller.signal });
       job.status = 'done';
       job.pct = 100;
       job.message = doneMessage;
@@ -171,7 +191,7 @@ export class JobManager extends EventEmitter {
     } catch (err) {
       console.error(`[${this.#opts.table} ${job.id}]`, err);
       job.status = 'failed';
-      job.error = err.message || 'The job failed.';
+      job.error = stripAnsi(err.message) || 'The job failed.';
       this.#rows.finish.run('failed', job.pct, job.error, new Date().toISOString(), null, job.id);
       this.#emit(job, 'failed');
     }

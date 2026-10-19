@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GSAP fixture</title>
+<meta name="description" content="A page whose motion is all GSAP and ScrollTrigger, for the replay test.">
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; color: #1f2937; }
+  header { padding: 80px 40px 40px; }
+  .hero-title { font-size: 48px; margin: 0; }
+  .row { display: flex; gap: 24px; padding: 40px; }
+  .box, .a, .b, .dot { width: 80px; height: 80px; background: #c2410c; border-radius: 8px; }
+  .b { background: #1d4ed8; }
+  .dot { width: 24px; height: 24px; border-radius: 50%; background: #16a34a; }
+  .spacer { height: 900px; }
+  .panel { width: 200px; height: 120px; background: #334155; margin: 40px; color: #fff; display: grid; place-items: center; }
+  .cards { display: flex; gap: 24px; padding: 40px; }
+  .card { width: 180px; height: 120px; background: #f1f5f9; border: 1px solid #cbd5e1; display: grid; place-items: center; }
+  footer { height: 600px; }
+</style>
+<script src="/vendor/gsap.min.js"></script>
+<script src="/vendor/ScrollTrigger.min.js"></script>
+</head>
+<body>
+<header><h1 class="hero-title">Moved by GSAP</h1></header>
+<div class="row">
+  <div class="box" id="spinner"></div>
+  <div class="a"></div>
+  <div class="b"></div>
+  <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+</div>
+<div class="spacer"></div>
+<div class="panel">SCRUBBED</div>
+<div class="cards"><div class="card">One</div><div class="card">Two</div><div class="card">Three</div></div>
+<footer></footer>
+<script>
+  gsap.registerPlugin(ScrollTrigger);
+  // An entrance (from), an endless back-and-forth (to with repeat), a timeline with a relative position,
+  // a scroll-scrubbed move, a staggered reveal triggered on scroll, and a function-based value (not replayable from data).
+  gsap.from('.hero-title', { y: 40, opacity: 0, duration: 0.8, ease: 'power2.out' });
+  gsap.to('#spinner', { x: 120, rotation: 90, duration: 1.2, repeat: -1, yoyo: true, ease: 'sine.inOut' });
+  const tl = gsap.timeline({ delay: 0.2 });
+  tl.to('.a', { x: 100, duration: 0.6 }).to('.b', { y: -50, duration: 0.6 }, '<');
+  gsap.to('.panel', { x: 300, ease: 'none', scrollTrigger: { trigger: '.panel', start: 'top 80%', end: 'bottom 20%', scrub: true } });
+  gsap.from('.card', { opacity: 0, y: 60, stagger: 0.15, duration: 0.6, scrollTrigger: { trigger: '.cards', start: 'top 85%' } });
+  gsap.to('.dot', { x: (i) => i * 20, duration: 0.5 });
+</script>
+</body>
+</html>

@@ -19,6 +19,7 @@ import recreateRouter from '../src/routes/recreate.js';
 import stacksRouter from '../src/routes/stacks.js';
 import { STACKS } from '../src/routes/projects.js';
 import { toolchainStatus } from '../src/toolchains/index.js';
+import { seedProject } from './helpers/projects.js';
 
 const exists = (p) => access(p).then(() => true, () => false);
 const temps = [];
@@ -129,10 +130,7 @@ test('headTags lists the head as data, in order; the stylesheet can be left to t
 test('the HTML emitter writes the described head and body (golden output)', () => {
   const ir = { pages: [IR_PAGE], files: [{ path: 'robots.txt', content: 'x' }], fontFaces: [], keyframes: [], tokens: {}, rules: [], breakpoints: { tablet: 1023.98, mobile: 767.98 } };
   const out = emitSite(ir);
-  const page = out.files.get('index.html');
-  // D.6: the page carries its own rules inline (here only the reset), no shared stylesheet link.
-  assert.match(page, /\n {2}<style>a\{color: inherit;[^<]*<\/style>\n/);
-  const html = page.replace(/\n {2}<style>[^<]*<\/style>/, '');
+  const html = out.files.get('index.html');
   assert.equal(html, [
     '<!doctype html>',
     '<html lang="en">',
@@ -147,6 +145,7 @@ test('the HTML emitter writes the described head and body (golden output)', () =
     '  <link rel="alternate" hreflang="fr" href="https://x.test/fr">',
     '  <link rel="icon" href="assets/icons/f.png" sizes="32x32" type="image/png">',
     '  <link rel="preload" href="assets/fonts/f.woff2" as="font" type="font/woff2" crossorigin>',
+    '  <link rel="stylesheet" href="css/site.css">',
     '  <script type="application/ld+json">{"@type":"Thing","name":"\\u003cb\\u003e"}</script>',
     '</head>',
     '<body>',
@@ -158,7 +157,7 @@ test('the HTML emitter writes the described head and body (golden output)', () =
   assert.ok(html.includes('<h1>Hi &amp; &lt;you&gt;</h1>'));
   assert.deepEqual([...out.assets].sort(), ['fonts/f.woff2', 'icons/f.png']);
   assert.equal(out.files.get('robots.txt'), 'x');
-  assert.ok(!out.files.has('css/site.css'));
+  assert.ok(out.files.has('css/site.css'));
 });
 
 test('writeProject writes files, links only the known assets, and honours the assets folder', async () => {
@@ -228,7 +227,7 @@ test('export from the saved IR: emit, write, record the output; idempotent; fail
     const id = randomUUID();
     projectIds.push(id);
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://example.com/', 'html', 1, ?, ?)`).run(id, now, now);
+    seedProject(db, { id, name: 'p', url: 'https://example.com/', stack: 'html', authorized: 1 });
     const recreateId = randomUUID();
     const report = { recreateId, stack: 'html', outputs: { html: { status: 'ready', dir: 'dist' } }, pages: [{ outPath: 'index.html' }], safety: { safe: true } };
     db.prepare(`INSERT INTO recreates (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`).run(recreateId, id, now, now, JSON.stringify(report));
@@ -318,7 +317,7 @@ test('Recreate refuses a stack that is not ready, naming the ones that are', asy
     const id = randomUUID();
     projectIds.push(id);
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://example.com/', 'planned-y', 1, ?, ?)`).run(id, now, now);
+    seedProject(db, { id, name: 'p', url: 'https://example.com/', stack: 'planned-y', authorized: 1 });
     const res = await post(`${base}/projects/${id}/recreate`, {});
     assert.equal(res.status, 400);
     assert.match((await res.json()).error, /^Only Plain HTML \/ CSS \/ JS, React \+ Vite, Next\.js, MERN can be recreated for now/);

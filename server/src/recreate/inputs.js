@@ -1,5 +1,6 @@
 // What a Recreate job starts from: the project's latest completed analysis and its settings.
 import { db } from '../db/index.js';
+import { sameSite } from '../audit/util.js';
 
 export const STALE_ANALYSIS_DAYS = 7;
 // projects.recreate_pages: pages besides the homepage, or ALL_PAGES (every page of the site, the default for new projects).
@@ -45,6 +46,44 @@ export function parseRecreatePages(value) {
 /** The discovery limit (pages besides the homepage) for a project setting; "All pages" = up to the safety cap. */
 export const pageLimitOf = (recreatePages) => (recreatePages == null || recreatePages === ALL_PAGES ? SITE_PAGE_CAP - 1 : recreatePages);
 export const isAllPages = (recreatePages) => recreatePages == null || recreatePages === ALL_PAGES;
+
+/**
+ * Exact mode: the copy is measured against the original at every viewport until it matches, the run has no time limit, and
+ * everything that would change pixels on purpose (contrast rewriting, image re-encoding) is switched off, so the copy is the
+ * site "as it is" rather than an improved version of it.
+ */
+export const isExactMode = (project) => Boolean(project?.exact_mode);
+
+/**
+ * One page of the site from a PATCH body: an http(s) address on the project's own site (a bare path counts from the
+ * site), without its #fragment. Empty / null = the whole site.
+ * @returns {{ ok: boolean, value: string|null }}
+ */
+export function parsePageUrl(value, projectUrl) {
+  if (value == null || (typeof value === 'string' && !value.trim())) return { ok: true, value: null };
+  if (typeof value !== 'string') return { ok: false, value: null };
+  let raw = value.trim();
+  if (raw.startsWith('/')) raw = new URL(raw, projectUrl).href;
+  else if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
+  try {
+    const u = new URL(raw);
+    if (!/^https?:$/.test(u.protocol) || !sameSite(u.href, projectUrl)) return { ok: false, value: null };
+    u.hash = '';
+    return { ok: true, value: u.href };
+  } catch {
+    return { ok: false, value: null };
+  }
+}
+
+/** The one page a project is limited to, or null for the whole site. */
+export const pageUrlOf = (project) => project?.page_url || null;
+
+/** Exact mode from a PATCH body: a boolean, or 0/1 from a form. @returns {0|1|null} null = not a usable value */
+export function parseExactMode(value) {
+  if (value === true || value === 1 || value === '1' || value === 'true') return 1;
+  if (value === false || value === 0 || value === '0' || value === 'false') return 0;
+  return null;
+}
 
 /**
  * Optional origin used for canonical, sitemap and Open Graph URLs. Empty clears it.

@@ -59,7 +59,7 @@ test('a page that cannot be rendered is listed and the other pages are still mea
   const seen = [];
   const result = await measureSite(renderer, IR, SITE, { onView: (tree) => seen.push(tree.info.path) });
   await renderer.contexts.desktop.unroute('**/b.html');
-  assert.deepEqual(seen, ['/a.html', '/c.html']);
+  assert.deepEqual(seen.sort(), ['/a.html', '/c.html']);
   assert.equal(result.started, 3);
   assert.deepEqual(result.failed.map((f) => f.path), ['/b.html']);
   assert.match(result.failed[0].error, /ERR_FAILED/);
@@ -74,7 +74,7 @@ test('a crash in the middle of the site costs nothing: the pages after it are re
       if (tree.info.path === '/a.html') await crashBrowser();
     },
   });
-  assert.deepEqual(seen, ['/a.html', '/b.html', '/c.html']);
+  assert.deepEqual(seen.sort(), ['/a.html', '/b.html', '/c.html']);
   assert.deepEqual(result.failed, []);
   assert.equal(renderer.recoveries, before + 1);
 });
@@ -83,4 +83,46 @@ test('when no page renders at all, the error is raised (the build itself is brok
   await renderer.contexts.desktop.route('**/*.html', (route) => route.abort('failed'));
   await assert.rejects(measureSite(renderer, IR, SITE, { onView: () => {} }), /ERR_FAILED/);
   await renderer.contexts.desktop.unroute('**/*.html');
+});
+
+test('pages are measured two at a time when the memory allows: same boxes, failures and deadline as one at a time', async () => {
+  const pages = ['a', 'b', 'c', 'd'];
+  const ir = { ...IR, pages: pages.map(page) };
+  const site = { pages: pages.map((name) => ({ views: ['desktop'], info: { path: `/${name}.html` } })) };
+  // Every page answers after 400 ms: how many are loading at once shows in the server's count.
+  let loading = 0;
+  let most = 0;
+  await renderer.contexts.desktop.route('**/*.html', async (route) => {
+    loading++;
+    most = Math.max(most, loading);
+    await new Promise((r) => setTimeout(r, 400));
+    loading--;
+    if (route.request().url().endsWith('/c.html')) return route.abort('failed');
+    return route.continue();
+  });
+  try {
+    const run = async (pagesAtOnce, deadline = Infinity) => {
+      most = 0;
+      const rects = {};
+      const started = Date.now();
+      const result = await measureSite(renderer, ir, site, { pagesAtOnce, deadline, onView: (tree, view, r) => { rects[tree.info.path] = Object.keys(r.rects).length; } });
+      return { ...result, rects, most, ms: Date.now() - started };
+    };
+    const one = await run(1);
+    const two = await run(2);
+    assert.equal(one.most, 1);
+    assert.equal(two.most, 2);
+    assert.deepEqual(two.rects, one.rects);
+    assert.deepEqual(two.failed.map((f) => f.path), ['/c.html']);
+    assert.deepEqual(two.failed, one.failed);
+    assert.equal(two.started, 4);
+    console.log(`# 4 pages: one at a time ${one.ms} ms, two at a time ${two.ms} ms`);
+    assert.ok(two.ms < one.ms, `${two.ms} ms vs ${one.ms} ms`);
+    // A deadline that has passed after the first pair: the pages after it are left out, in order.
+    const late = await run(2, Date.now() + 200);
+    assert.equal(late.started, 2);
+    assert.deepEqual(Object.keys(late.rects).sort(), ['/a.html', '/b.html']);
+  } finally {
+    await renderer.contexts.desktop.unroute('**/*.html');
+  }
 });

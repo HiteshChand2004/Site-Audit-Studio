@@ -5,13 +5,15 @@
 // and it uses the time that is left (the homepage first, then the other pages while they fit). The pipeline
 // runs it next to the steps after it (recreate/index.js): they do not wait for screenshots they do not need yet.
 // Result: ctx.sweep and capture/sweep.json.
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { launchBrowser } from '../audit/render.js';
 import { parallelism } from '../audit/resources.js';
 import { TimeoutError, withTimeout } from '../audit/util.js';
 import { startEgressProxy } from '../security/egressProxy.js';
-import { captureSweep, SWEEP_PARALLEL, SWEEP_WIDTHS } from './capture/sweep.js';
+import { captureDir } from './capture/index.js';
+import { captureSweep, SWEEP_PARALLEL, sweepWidths } from './capture/sweep.js';
+import { mediaBounds } from './ir/index.js';
 import { RecreateError } from './errors.js';
 import { causeText, recoverHit } from './interrupts.js';
 import { LATER_STEPS_RESERVE } from './inspect.js';
@@ -29,12 +31,35 @@ const skipped = (ctx, reason, warning) => {
 };
 
 /**
+ * The boundaries the site declares in its own stylesheets, from the capture inspect has just written. The homepage's
+ * desktop snapshot holds every media query the page could read; a sheet it could not read is already counted as a
+ * warning elsewhere, and this simply finds nothing for it.
+ * @returns {Promise<{ value: number, rules?: number }[]>}
+ */
+async function siteBounds(ctx) {
+  for (const page of (ctx.pages ?? []).slice(0, 2)) {
+    try {
+      const file = path.join(captureDir(ctx.dir, page.slug), 'desktop.json');
+      const capture = JSON.parse(await readFile(file, 'utf8'));
+      const bounds = mediaBounds(capture.mediaQueries);
+      if (bounds.length) return bounds;
+    } catch {
+      // No capture to read, or not readable: the fixed widths stand.
+    }
+  }
+  return [];
+}
+
+/**
  * @param {object} ctx  needs ctx.pages (inspect step)
  * @param {{ widths?: number[], stepDeadline?: number, progress?: Function }} [local]  the step's own time limit and progress
  *   (the pipeline runs this step next to the following ones, so the shared ctx.stepDeadline / ctx.progress are not its own)
  */
 export async function sweepStage(ctx, local = {}) {
-  const { widths = SWEEP_WIDTHS, progress = ctx.progress } = local;
+  const { progress = ctx.progress } = local;
+  // The fixed widths, plus the two that straddle each boundary the site declares itself: refine judges breakpoints
+  // on these, so a boundary no swept width can see is a boundary it cannot get right.
+  const widths = local.widths ?? sweepWidths(await siteBounds(ctx));
   // Read each time: the limits move later when time is given back after sleep or a network outage (recreate/interrupts.js).
   const stepDeadline = () => local.stepDeadline ?? ctx.stepDeadline ?? Infinity;
   const pages = ctx.pages ?? [];
@@ -85,6 +110,14 @@ export async function sweepStage(ctx, local = {}) {
     let slowest = 0;
     for (const [i, page] of pages.entries()) {
       if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
+      // Swept before the job was interrupted (recreate/checkpoint.js): reused as it is.
+      const done = ctx.checkpoint?.sweepPage(page.slug);
+      if (done) {
+        captured[page.slug] = done;
+        tried = i + 1;
+        wake();
+        continue;
+      }
       // The homepage is always tried; the others only while one more page (at the slowest pace) fits.
       if (i > 0 && Date.now() + slowest > deadline()) {
         notCaptured.push(...pages.slice(i).map((p) => p.path));
@@ -105,6 +138,8 @@ export async function sweepStage(ctx, local = {}) {
           result = await sweepOnce();
         }
         captured[page.slug] = result;
+        // Kept for a resume: a job that stops later does not sweep this page again.
+        ctx.checkpoint?.saveSweepPage(page.slug, result);
       } catch (err) {
         if (!(err instanceof TimeoutError)) throw err;
         notCaptured.push(page.path);

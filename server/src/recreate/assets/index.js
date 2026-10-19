@@ -16,6 +16,7 @@ import { fetchPage } from '../../audit/http.js';
 import { mapLimit } from '../../audit/util.js';
 import { platformCdnHost } from './cdn.js';
 import { assetKey, collectAssets } from './collect.js';
+import { asisFile } from '../capture/asis.js';
 import { parseStylesheet } from './css.js';
 import { downloadAsset, reasonDetail } from './download.js';
 import { causeText, recoverHit, RETRYABLE_ASSET_REASONS } from '../interrupts.js';
@@ -34,6 +35,11 @@ export const ASSET_LIMITS = {
 };
 // maxTotalBytes is checked before each download starts, so parallel downloads can pass it slightly.
 export const ASSET_BUDGET = { maxAssets: 800, maxTotalBytes: 300 * MB, concurrency: 6, maxSheets: 20 };
+// A run with no time limit keeps every picture as the original bytes, so there are more and larger files than a run that
+// re-encodes them. It also tries harder: four attempts with a growing wait, and a transfer is given up only after 20 s
+// with no byte arriving (assets/download.js), instead of after a fixed 20 s in total.
+export const PATIENT_BUDGET = { maxAssets: 3000, maxTotalBytes: 2000 * MB, concurrency: 4, maxSheets: 40 };
+export const PATIENT_DOWNLOAD = { attempts: 4, idleMs: 20000 };
 // Downloads stop starting this long before the step's own time limit, so the step ends cleanly.
 const DEADLINE_MARGIN = 10000;
 
@@ -101,6 +107,20 @@ async function readCaptures(ctx) {
   return captures;
 }
 
+// What an as-is copy (exact mode, capture/asis.js) points at beyond what the snapshot saw: every srcset candidate, every
+// url() of the site's own sheets (a background only a media query shows, each font weight). Only its list of files.
+async function readAsisRefs(ctx) {
+  const out = [];
+  for (const page of ctx.pages ?? []) {
+    for (const view of Object.keys(page.views)) {
+      const file = path.join(ctx.dir, 'capture', page.slug, asisFile(view));
+      const data = await readFile(file, 'utf8').then(JSON.parse, () => null);
+      for (const r of data?.refs ?? []) out.push({ ...r, slug: page.slug });
+    }
+  }
+  return out;
+}
+
 // A stylesheet the job's browsers already loaded (the shared cache), in the shape fetchPage returns; null = download it.
 async function cachedSheet(cache, url, maxBytes) {
   const entry = cache?.lookup(url);
@@ -148,7 +168,10 @@ async function readForeignSheets(urls, { signal, limits, maxSheets, deadline = I
  * Downloads a collected asset list into `root`. Exported for tests; assetsStage() is the pipeline entry.
  * @returns {Promise<{ files: object[], map: Record<string,string>, skipped: object[], reused: number, bytes: number, fromCache: number }>}
  */
-export async function downloadAssets(list, root, { signal, referer, deadline = Infinity, limits = ASSET_LIMITS, budget = ASSET_BUDGET, onProgress = () => {}, cache = null } = {}) {
+export async function downloadAssets(list, root, {
+  signal, referer, deadline = Infinity, limits = ASSET_LIMITS, budget = ASSET_BUDGET, onProgress = () => {}, cache = null,
+  attempts = 1, idleMs = 0,
+} = {}) {
   await Promise.all(Object.values(FOLDERS).map((f) => mkdir(path.join(root, f), { recursive: true })));
   const byHash = new Map();
   const files = [];
@@ -158,6 +181,9 @@ export async function downloadAssets(list, root, { signal, referer, deadline = I
   let started = 0;
   let done = 0;
   let reused = 0;
+  // Files that needed more than one attempt, and ones a server let us continue instead of starting again.
+  let retried = 0;
+  let resumed = 0;
   // Files taken from the job's shared cache (what the browsers loaded) instead of the network.
   let fromCache = 0;
 
@@ -182,8 +208,16 @@ export async function downloadAssets(list, root, { signal, referer, deadline = I
         signal,
         referer,
         cache,
+        attempts,
+        idleMs,
+        onRetry: ({ attempt, reason, waitMs }) => {
+          if (attempt === 2) retried++;
+          onProgress(done / Math.max(1, list.length));
+          console.log(`[recreate assets] ${asset.url}: ${reason}, trying again in ${Math.round(waitMs / 1000)}s (attempt ${attempt})`);
+        },
       });
       if (r.cached) fromCache++;
+      if (r.ok && r.resumed) resumed++;
       if (!r.ok) {
         started--;
         let reason = r.reason;
@@ -217,7 +251,7 @@ export async function downloadAssets(list, root, { signal, referer, deadline = I
       onProgress(++done / list.length);
     }
   });
-  return { files, map, skipped, reused, bytes, fromCache };
+  return { files, map, skipped, reused, bytes, fromCache, ...(retried && { retried }), ...(resumed && { resumed }) };
 }
 
 /**
@@ -290,8 +324,10 @@ export async function sanitizeSvgFiles(root, result) {
  * @param {{ limits?: object, budget?: object }} [opts]  overrides, for tests
  */
 export async function assetsStage(ctx, opts = {}) {
+  const patient = Boolean(ctx.unlimited);
   const limits = { ...ASSET_LIMITS, ...opts.limits };
-  const budget = { ...ASSET_BUDGET, ...opts.budget };
+  const budget = { ...ASSET_BUDGET, ...(patient && PATIENT_BUDGET), ...opts.budget };
+  const download = { ...(patient && PATIENT_DOWNLOAD), ...opts.download };
   const { report } = ctx;
   const root = path.join(ctx.dir, 'assets');
   await mkdir(root, { recursive: true });
@@ -305,7 +341,8 @@ export async function assetsStage(ctx, opts = {}) {
     deadline: ctx.stepDeadline,
     cache: ctx.netCache,
   });
-  const { assets, fontFaces, unusedFontFaces } = collectAssets(captures, { fontFaces: foreign.fontFaces });
+  const asisRefs = ctx.exact ? await readAsisRefs(ctx) : [];
+  const { assets, fontFaces, unusedFontFaces } = collectAssets(captures, { fontFaces: foreign.fontFaces, urls: asisRefs });
   captures.length = 0; // the capture trees are large; only the asset list is needed from here
 
   ctx.progress(0.1, `Downloading ${assets.length} assets`);
@@ -317,6 +354,7 @@ export async function assetsStage(ctx, opts = {}) {
     deadline: ctx.stepDeadline,
     limits,
     budget,
+    ...download,
     cache: ctx.netCache,
     onProgress: (f) => ctx.progress(0.1 + 0.88 * f, `Downloading assets (${Math.round(f * assets.length)} of ${assets.length})`),
   });
@@ -368,10 +406,15 @@ export async function assetsStage(ctx, opts = {}) {
 
   report.assets = {
     found: assets.length,
+    ...(asisRefs.length && { asisRefs: new Set(asisRefs.map((r) => assetKey(r.url))).size }),
     downloaded: result.files.length,
     images,
     duplicates: result.reused,
     fromCache: result.fromCache,
+    // Files a flaky network cost an extra attempt, and ones a server let us continue instead of starting over.
+    ...(result.retried && { retried: result.retried }),
+    ...(result.resumed && { resumed: result.resumed }),
+    ...(patient && { patient: true }),
     bytes: result.bytes,
     byKind,
     skipped: result.skipped.slice(0, 100),

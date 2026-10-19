@@ -22,6 +22,7 @@ import { checkScript, scanProject, scanSite } from '../src/recreate/verify/safet
 import { recreateDir } from '../src/recreate/workspace.js';
 import recreateRouter from '../src/routes/recreate.js';
 import { toolchainStatus } from '../src/toolchains/index.js';
+import { seedProject } from './helpers/projects.js';
 
 const exists = (p) => access(p).then(() => true, () => false);
 const temps = [];
@@ -302,7 +303,7 @@ test('real export: build, verify, equivalence with the HTML build, hydration', {
     const id = randomUUID();
     projectIds.push(id);
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://www.example.com/', 'react-vite', 1, ?, ?)`).run(id, now, now);
+    seedProject(db, { id, name: 'p', url: 'https://www.example.com/', stack: 'react-vite', authorized: 1 });
     const recreateId = randomUUID();
     const dir = recreateDir(id, recreateId);
     const known = new Set(['images/a.png']);
@@ -324,7 +325,8 @@ test('real export: build, verify, equivalence with the HTML build, hydration', {
     assert.deepEqual([out.hydration.checked, out.hydration.failed], [2, 0], JSON.stringify(out.hydration));
     assert.equal(out.safety.safe, true);
     assert.deepEqual(out.fidelity, { score: 90, basis: 'equivalent-to-html', threshold: 80 });
-    assert.ok(out.build.js.bytes > 0 && out.build.css.bytes > 0);
+    // No stylesheet bundle: each page carries its own CSS inline (prerender), like the HTML site.
+    assert.ok(out.build.js.bytes > 0 && !out.build.css.bytes);
     assert.deepEqual(out.warnings, []);
 
     // The build left only the project's own files (no node_modules link) and the toolchain is intact.
@@ -335,7 +337,8 @@ test('real export: build, verify, equivalence with the HTML build, hydration', {
     const home = await readFile(path.join(project, 'dist', 'index.html'), 'utf8');
     assert.match(home, /<div id="root">.*<h1 data-motion="rv r1">Home<\/h1>/s);
     assert.match(home, /<script type="module" crossorigin src="\/_app\/index-[\w-]+\.js"><\/script>/);
-    assert.match(home, /<link rel="stylesheet" crossorigin href="\/_app\/style-[\w-]+\.css">/);
+    assert.doesNotMatch(home, /rel="stylesheet"/);
+    assert.match(home, /<style>[^<]*#root\{display:contents\}[^<]*<\/style>/);
     // 4b.5: the reveal script is a plain file from the site root, loaded by every page; the safety rules let it through.
     assert.match(home, /<script src="\/js\/motion\.js" defer><\/script>/);
     assert.equal(await readFile(path.join(project, 'dist', 'js', 'motion.js'), 'utf8'), MOTION_JS);
@@ -387,7 +390,7 @@ test('an emitter mistake is caught: a DOM that differs from the HTML build fails
     const id = randomUUID();
     projectIds.push(id);
     const now = new Date().toISOString();
-    db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, created_at, updated_at) VALUES (?, 'p', 'https://x.test/', 'react-vite', 1, ?, ?)`).run(id, now, now);
+    seedProject(db, { id, name: 'p', url: 'https://x.test/', stack: 'react-vite', authorized: 1 });
     const recreateId = randomUUID();
     const dir = recreateDir(id, recreateId);
     await writeTree(dir, { 'assets/manifest.json': JSON.stringify({ files: [] }), 'ir/site.json': JSON.stringify(ir) });
@@ -406,3 +409,39 @@ test('an emitter mistake is caught: a DOM that differs from the HTML build fails
   }
 });
 
+
+test('the five emitter defects: data URIs, !important, pre-wrap text, state templates, a rootless SVG', () => {
+  // D1: a semicolon inside url(...) or a quoted value does not separate declarations. Splitting on it cut the
+  // declaration in half and dropped everything after it.
+  assert.deepEqual(styleObject('background-image: url(data:image/svg+xml;base64,AAA); color: red'),
+    { backgroundImage: 'url(data:image/svg+xml;base64,AAA)', color: 'red' });
+  assert.deepEqual(styleObject('font-family: "a;b"; color: blue'), { fontFamily: '"a;b"', color: 'blue' });
+
+  // D5: !important stays in the value, so React's server render writes the same style attribute as the HTML
+  // emitter. The browser drops the priority after hydration: a known limitation, not something to rewrite.
+  assert.deepEqual(styleObject('opacity: 1 !important; transform: none !important'),
+    { opacity: '1 !important', transform: 'none !important' });
+
+  // D2: where the text keeps its line breaks (white-space: pre*), the whitespace children stay, as html.js keeps them.
+  const block = (t) => el(t, { b: 1 });
+  const kids = () => [block('div'), text('\n  '), block('p')];
+  assert.equal(visibleChildren(kids(), 'section', true).length, 3);
+  assert.equal(visibleChildren(kids(), 'section', false).length, 2);
+  // Read from the node's own class through the page's rules, the same lookup the HTML emitter makes.
+  const ws = new Map([['keeps', true]]);
+  const pre = () => el('div', { class: 'keeps', b: 1 }, block('span'), text('\n  '), block('span'));
+  const kept = JSON.stringify(String.fromCharCode(10) + '  '); // the whitespace child as JSX writes it
+  assert.ok(jsxNode(pre(), refs, 0, null, null, { wsByClass: ws }).includes(kept));
+  assert.ok(!jsxNode(pre(), refs, 0, null, null, {}).includes(kept));
+
+  // D3: the same block as live markup and as a state template must never share one component (one would be
+  // written inside <template> and the other as live content).
+  const live = () => el('section', { class: 'cta', b: 1 }, ...['a', 'b', 'c', 'd', 'e'].map((k) => el('p', {}, text(k))));
+  const tpl = () => ({ ...live(), tpl: 's1' });
+  const pages = [page('index.html', live(), tpl()), page('about.html', live(), tpl())];
+  assert.equal(findShared(pages, new Set()).components.length, 2);
+
+  // D4: inline SVG the parser cannot root is named instead of being emitted as an empty <svg />.
+  assert.throws(() => jsxNode({ t: 'svg', sid: 1, class: 'i', attrs: {}, children: [], raw: '<span>not an svg</span>' }, refs, 0),
+    /without an <svg> root/);
+});

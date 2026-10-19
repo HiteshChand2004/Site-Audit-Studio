@@ -7,8 +7,11 @@ import recreateRouter from './routes/recreate.js';
 import reauditRouter from './routes/reaudit.js';
 import stacksRouter from './routes/stacks.js';
 import reportRouter from './routes/report.js';
+import faviconRouter from './routes/favicon.js';
 import { lockBusy } from './jobs/manager.js';
 import { awakeHeld } from './jobs/keepAwake.js';
+import { resumeInterruptedRecreates } from './recreate/jobs.js';
+import { stopAllAsIsPreviews } from './recreate/behavior/preserve/asisPreview.js';
 
 const PORT = Number(process.env.PORT) || 4000;
 const app = express();
@@ -28,6 +31,7 @@ app.use('/api/projects', screensRouter);
 app.use('/api/projects', recreateRouter);
 app.use('/api/projects', reauditRouter);
 app.use('/api/projects', reportRouter);
+app.use('/api/projects', faviconRouter);
 app.use('/api/stacks', stacksRouter);
 
 app.use('/api', (_req, res) => {
@@ -43,6 +47,14 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Server error.' });
 });
 
+// The app shuts down: its previews of as-is copies stop with it (behavior/preserve/asisPreview.js).
+const shutdown = () => {
+  stopAllAsIsPreviews().catch(() => {}).finally(() => process.exit(0));
+  setTimeout(() => process.exit(0), 3000).unref();
+};
+process.once('SIGINT', shutdown);
+process.once('SIGTERM', shutdown);
+
 // Express 5 passes listen errors (such as a port conflict) to this callback.
 app.listen(PORT, (err) => {
   if (err) {
@@ -50,4 +62,6 @@ app.listen(PORT, (err) => {
     process.exit(1);
   }
   console.log(`API ready on http://localhost:${PORT}`);
+  // A recreate the restart interrupted continues where it stopped (recreate/checkpoint.js).
+  resumeInterruptedRecreates().catch((e) => console.warn('Interrupted recreates not continued:', e.message));
 });

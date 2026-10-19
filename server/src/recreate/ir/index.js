@@ -16,17 +16,17 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { platformCdnHost } from '../assets/cdn.js';
 import { buildHead, fixHeadTexts, generatedFavicon, siteNameOf } from './head.js';
-import { createAssetResolver, createLinkResolver } from './links.js';
+import { detectLang } from './seoText.js';
 import { createRebaser } from './rebase.js';
 import { addHeadData } from './aeo.js';
-import { FOLD_PX } from '../emit/pageCss.js';
-import { meaningful, PLATFORM_CLASS_PATTERNS } from './names.js';
+import { createAssetResolver, createLinkResolver } from './links.js';
+import { meaningful, MOUNT_IDS, PLATFORM_CLASS_PATTERNS } from './names.js';
 import { buildStyles, mapUrls } from './styles.js';
 import { DROP_TAGS, guardAttributes } from '../fixers/html.js';
 import { contentRecord, headHints, itemFor } from '../fixers/wordpress.js';
 import { addRemoved, emptyRemoved, sanitizeSvg } from '../fixers/svg.js';
-import { VIEW_WIDTHS } from '../views.js';
-import { BLOCK_TAGS, buildPageTree, displayOf, isElement, isText, VIEW_IDS } from './tree.js';
+import { EXACT_ONLY_VIEWS, KNOWN_VIEW_IDS, VIEW_WIDTHS } from '../views.js';
+import { BLOCK_TAGS, buildPageTree, deepText, displayOf, isElement, isText, VIEW_IDS } from './tree.js';
 import { crawlFiles } from './crawlFiles.js';
 import { noticePage } from './notice.js';
 
@@ -45,31 +45,78 @@ export async function readPageCaptures(dir, page) {
   return out;
 }
 
+// Conditions that say nothing about how wide the window is: a width written inside one belongs to that condition,
+// not to a breakpoint of the layout.
+const NOT_A_WIDTH = /\b(print|resolution|prefers-|hover\s*:|orientation|device-|container|aspect-ratio)/i;
+
+/**
+ * Every width boundary the site's own media queries declare, as the width the layout changes *at*: a max-width is that
+ * value, a min-width a hair below it (the same decision written the other way round). Shared by pickBreakpoints and by
+ * the exact compare's slot list (verify/exact/slots.js), so one regex decides what counts as a breakpoint.
+ * @param {{ condition: string, rules?: number }[]|string[]} queries  the capture's `mediaRules` (with rule counts) or
+ *   its `mediaQueries` (plain strings, which is all a capture saved before exact mode has)
+ * @returns {{ value: number, condition: string, rules: number }[]}
+ */
+export function mediaBounds(queries) {
+  const out = [];
+  for (const q of queries ?? []) {
+    const condition = typeof q === 'string' ? q : q?.condition ?? '';
+    const rules = typeof q === 'string' ? 0 : Number(q?.rules) || 0;
+    if (!condition || NOT_A_WIDTH.test(condition)) continue;
+    for (const m of condition.matchAll(/\((max|min)-width:\s*([\d.]+)(px|em|rem)\)/g)) {
+      const px = parseFloat(m[2]) * (m[3] === 'px' ? 1 : 16);
+      out.push({ value: m[1] === 'max' ? px : px - 0.02, condition, rules });
+    }
+  }
+  return out;
+}
+
 /**
  * Media query boundaries for the laptop, tablet and mobile overrides, taken from the original site's own
  * breakpoints when it has them: for each view the widest boundary between its capture width and the next
  * wider capture (laptop 1024 → 1440, tablet 768 → 1024, mobile 375 → 768). Without a laptop capture the
  * tablet boundary is the widest one between 768 and 1440, as before 4b.6.3.
  */
-export function pickBreakpoints(queries, { laptop: hasLaptop = true } = {}) {
-  const bounds = [];
-  for (const q of queries) {
-    for (const m of String(q).matchAll(/\((max|min)-width:\s*([\d.]+)(px|em|rem)\)/g)) {
-      const value = parseFloat(m[2]) * (m[3] === 'px' ? 1 : 16);
-      bounds.push(m[1] === 'max' ? value : value - 0.02);
-    }
+/**
+ * One entry per distinct boundary, keeping the largest rule count seen for it. The same query is captured once per
+ * page and once per view, so the raw list says 639.98 eighty-eight times for a site that declares it once.
+ */
+export function distinctBounds(bounds) {
+  const by = new Map();
+  for (const b of bounds ?? []) {
+    if (!Number.isFinite(b?.value)) continue;
+    const at = by.get(b.value);
+    if (!at || (b.rules ?? 0) > (at.rules ?? 0)) by.set(b.value, { value: b.value, rules: b.rules ?? 0, condition: b.condition });
   }
-  const within = (lo, hi) => bounds.filter((b) => b >= lo && b < hi);
-  const widest = (lo, hi) => Math.max(...within(lo, hi), -1);
-  const laptop = hasLaptop ? widest(VIEW_WIDTHS.laptop, VIEW_WIDTHS.desktop) : -1;
-  const tablet = widest(VIEW_WIDTHS.tablet, hasLaptop ? VIEW_WIDTHS.laptop : VIEW_WIDTHS.desktop);
-  const mobile = widest(VIEW_WIDTHS.mobile, VIEW_WIDTHS.tablet);
-  return {
-    ...(hasLaptop && { laptop: laptop > 0 ? laptop : DEFAULT_BREAKPOINTS.laptop }),
-    tablet: tablet > 0 ? tablet : DEFAULT_BREAKPOINTS.tablet,
-    mobile: mobile > 0 ? mobile : DEFAULT_BREAKPOINTS.mobile,
-    source: laptop > 0 || tablet > 0 || mobile > 0 ? 'site' : 'default',
-  };
+  return [...by.values()].sort((x, y) => x.value - y.value);
+}
+
+const round2 = (n) => Math.round(n * 100) / 100;
+
+export function pickBreakpoints(queries, { laptop: hasLaptop = true, views = null } = {}) {
+  const bounds = mediaBounds(queries).map((b) => b.value);
+  // The views in play, widest first. A view's styles were measured at its own width and apply from there up to the
+  // next wider view, so its breakpoint is the widest boundary the site declares inside that gap. Taken from the
+  // view list rather than named one by one, because exact mode captures a view between the tablet and the phone
+  // and a breakpoint nobody computes for it would leave its media query at a default that no page was measured at.
+  const list = (views ?? KNOWN_VIEW_IDS.filter((id) => !EXACT_ONLY_VIEWS.includes(id) && (id !== 'laptop' || hasLaptop)))
+    .filter((id) => VIEW_WIDTHS[id] != null)
+    .sort((a, b) => VIEW_WIDTHS[b] - VIEW_WIDTHS[a]);
+  const out = {};
+  let found = false;
+  for (const [i, id] of list.entries()) {
+    if (i === 0) continue;                          // the widest view is the base, it has no media query
+    const lo = VIEW_WIDTHS[id];
+    const hi = VIEW_WIDTHS[list[i - 1]];
+    const widest = Math.max(...bounds.filter((b) => b >= lo && b < hi), -1);
+    if (widest > 0) found = true;
+    // No boundary declared in the gap: the narrower of what the default table says for this view and the next
+    // wider view's width less a hundredth. The table's own laptop value (1279.98) is deliberately below the
+    // desktop width, so it cannot simply be derived; and its mobile value assumes the tablet view comes next, so
+    // it cannot simply be trusted once a view sits between them. Taking the narrower is right in both cases.
+    out[id] = widest > 0 ? widest : Math.min(DEFAULT_BREAKPOINTS[id] ?? Infinity, round2(hi - 0.02));
+  }
+  return { ...out, source: found ? 'site' : 'default' };
 }
 
 // Colour normalisation shared with the emitter: rgb() → #rrggbb, #abc → #aabbcc.
@@ -169,13 +216,42 @@ export function numberNodes(root) {
  * @param {object|null} [o.robots]  the original robots.txt as discovery parsed it (for robots.txt)
  * @param {object|null} [o.llms]  the original /llms.txt as discovery read it (copied as it is)
  */
-export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], skipped = [], wp = null, robots = null, llms = null }) {
+// A page is a few pixels wider than the screen for all sorts of harmless reasons (a scrollbar, a rounding); this
+// much more means its layout simply does not fit, which is a different thing.
+const REFLOW_SLACK_PX = 16;
+
+/**
+ * The views in which the original does NOT reflow: its own layout stays wider than the screen, so the page
+ * overflows sideways instead of rearranging. Plenty of real sites have no phone layout at all and do exactly this.
+ *
+ * It matters because every width heuristic in the IR assumes the opposite. Left alone, the copy's root shrinks to
+ * the screen, every width inside it is clamped to that, the text wraps two or three times as often and the page
+ * comes out far too tall - which is the single biggest difference measured on real narrow views. The copy has to
+ * overflow where the original overflowed.
+ * @returns {string[]} view ids, in the page's own view order
+ */
+export function noReflowViews(tree) {
+  const out = [];
+  for (const view of tree.views ?? []) {
+    const width = tree.root?.views?.[view]?.rect?.[2];
+    const viewport = VIEW_WIDTHS[view];
+    if (width && viewport && width > viewport + REFLOW_SLACK_PX) out.push(view);
+  }
+  return out;
+}
+
+export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], skipped = [], wp = null, robots = null, llms = null, asIs = false }) {
   const assetResolve = createAssetResolver(assets.map ?? {});
   const resolveLink = createLinkResolver({ pages: pages.map((p) => p.info), livePages, skipped, origin, assetFile: (url) => assetResolve(url) });
 
   const home = pages[0];
   const queries = [];
   const keyframes = new Map();
+  // An animation whose keyframes could not be carried over: the element keeps its `animation: <name> …`, the rule
+  // it names never ships, and the animation does nothing at all. That used to happen without a word anywhere.
+  const keyframesLost = new Map();
+  // Same name, a different body on another page: one stylesheet cannot hold both.
+  const keyframesClash = new Map();
   const trees = [];
   let truncated = false;
   for (const { info, captures } of pages) {
@@ -183,14 +259,27 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
     const tree = buildPageTree(bodies);
     for (const c of Object.values(captures)) {
       queries.push(...(c.mediaQueries ?? []));
-      for (const k of c.keyframes ?? []) if (k.css && !keyframes.has(k.name)) keyframes.set(k.name, k.css);
+      for (const k of c.keyframes ?? []) {
+        if (k.css) {
+          if (!keyframes.has(k.name)) keyframes.set(k.name, k.css);
+          // One stylesheet for the whole site, so the first definition of a name wins. Where two pages define the
+          // same name differently, every page after the first gets the wrong motion - silently, until now.
+          else if (keyframes.get(k.name) !== k.css) keyframesClash.set(k.name, { name: k.name, page: info.path });
+        } else if (!keyframesLost.has(k.name)) keyframesLost.set(k.name, { name: k.name, bytes: k.bytes ?? null, page: info.path });
+      }
       truncated ||= !!c.truncated;
     }
     const droppedImages = dropMissingImages(tree.root, info.url, assetResolve);
     const nodes = numberNodes(tree.root);
-    trees.push({ info, captures, ...tree, nodes, droppedImages, htmlNode: htmlNode(captures, tree.views, tree.root) });
+    trees.push({ info, captures, ...tree, nodes, droppedImages, noReflow: noReflowViews(tree), htmlNode: htmlNode(captures, tree.views, tree.root) });
   }
-  for (const k of assets.keyframes ?? []) if (k.css && !keyframes.has(k.name)) keyframes.set(k.name, k.css);
+  for (const k of assets.keyframes ?? []) {
+    if (k.css) {
+      if (!keyframes.has(k.name)) keyframes.set(k.name, k.css);
+    } else if (!keyframesLost.has(k.name)) keyframesLost.set(k.name, { name: k.name, bytes: k.bytes ?? null, page: null });
+  }
+  // One that came through from somewhere else is not lost after all.
+  for (const name of keyframes.keys()) keyframesLost.delete(name);
 
   const homeHead = home.captures.desktop.head ?? {};
   const siteName = siteNameOf(homeHead, trees[0].root, home.info.url);
@@ -208,6 +297,7 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
     faviconGenerated = true;
   }
 
+  const themeColor = brandColor(trees[0].root);
   for (const t of trees) {
     const item = itemFor(wp, t.info.url);
     if (item) t.wp = { item, content: contentRecord(item) };
@@ -220,14 +310,24 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
       baseUrl,
       siteName,
       siteIcons,
+      themeColor,
     });
     t.head = built.head;
     t.headAuto = built.auto.map((a) => (a.field === 'icon' && faviconGenerated ? { ...a, source: 'generated from the site name and brand colour' } : a));
     t.headMissing = built.missing;
+    if (t.headMissing.includes('lang')) {
+      const lang = detectLang(deepText(t.root));
+      if (lang) {
+        t.head.lang = lang;
+        t.headMissing = t.headMissing.filter((f) => f !== 'lang');
+        t.headAuto.push({ field: 'lang', value: lang, source: 'language of the page text' });
+      }
+    }
   }
-
-  // Titles and descriptions that break the SEO checks (too long, too short, used twice) are fixed across the pages (D.1).
-  const headTexts = fixHeadTexts(trees, siteName);
+  // Titles / descriptions that are too short, too long or shared by several pages (needs every head).
+  // As is: a title or description of the original is never rewritten, however short, long or duplicated it is. The
+  // re-audit still measures them, so what they cost is reported rather than lost.
+  const headTexts = asIs ? { titles: 0, descriptions: 0, skipped: 'as-is' } : fixHeadTexts(trees, siteName);
 
   // Full addresses copied from the original (structured data, hreflang alternates, llms.txt) name the new site (full-site E.1).
   const rebase = createRebaser({ resolveLink, baseUrl });
@@ -239,7 +339,8 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
 
   // Structured data, FAQ schema and theme-color the original lacks (full-site D.3), on the new site's address.
   const logoIcon = siteIcons.find((i) => /apple-touch-icon/i.test(i.rel)) ?? siteIcons[0];
-  const headData = addHeadData(trees, {
+  // As is: the head is the original's, so nothing is added to it (the re-audit reports what it lacks).
+  const headData = asIs ? null : addHeadData(trees, {
     siteName,
     baseUrl,
     logo: logoIcon ? new URL(`assets/${logoIcon.asset}`, `${new URL(baseUrl).origin}/`).href : null,
@@ -267,18 +368,30 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
     baseUrl,
     origin,
     siteName,
-    // No breakpoints when the pages were captured in one view only (desktop only for now, views.js): no media queries.
-    breakpoints: pages.some(({ captures }) => Object.keys(captures).length > 1) ? pickBreakpoints(queries, { laptop: pages.some(({ captures }) => captures.laptop) }) : { source: 'single-view' },
+    // No breakpoints when the pages were captured in one view only (a capture made while only desktop was on, views.js): no media queries.
+    breakpoints: pages.some(({ captures }) => Object.keys(captures).length > 1) ? pickBreakpoints(queries, { views: [...new Set(pages.flatMap(({ captures }) => Object.keys(captures)))] }) : { source: 'single-view' },
+    // The boundaries the site declares itself: refine offers them as candidates and judges them on the widths
+    // either side (verify/refine.js specsFor), which is how a boundary between two swept widths is found at all.
+    // One entry per distinct boundary, carrying how many rules hang off it - the queries arrive once per page and
+    // view, so the raw list repeats the same value scores of times and would travel into the IR that way.
+    mediaBounds: distinctBounds(mediaBounds(queries)),
+    ...(asIs && { asIs: true }),
     tokens: colorTokens(home.captures.desktop.customProps),
     keyframes,
     fontFaces,
     files,
     crawlFiles: crawl,
+    headTexts,
     truncated,
+    keyframesLost: [...keyframesLost.values()],
+    keyframesClash: [...keyframesClash.values()],
     assetResolve,
     resolveLink,
   };
 }
+
+// The template id of a hover card's hovered look (emitters write <template data-w-tpl="hover">).
+export const HOVER_TEMPLATE = 'hover';
 
 const SKIP_ATTRS = new Set(['class', 'style', 'id', 'src', 'srcset', 'href', 'poster', 'action']);
 
@@ -335,25 +448,44 @@ function pageBody(t, site, stats) {
       stats.safety.elements++;
       return null;
     }
+    // A script's scaffolding caught mid-use (ir/asis.js says the same for an as-is page): empty, nameless, invisible and
+    // out of the flow in every view. It paints nothing but stretches the page below the footer.
+    const views = Object.values(n.views ?? {}).filter(Boolean);
+    // (n.class is the name the copy gives it; the original's own attributes are what say it is nameless.)
+    if (!n.children.length && !Object.keys(n.attrs ?? {}).length && views.length
+      && views.every((v) => (v.hidden || v.style?.visibility === 'hidden') && /^(absolute|fixed)$/.test(v.style?.position ?? ''))) {
+      stats.scaffolding = (stats.scaffolding ?? 0) + 1;
+      return null;
+    }
     const attrs = {};
     for (const [k, v] of Object.entries(n.attrs)) if (!SKIP_ATTRS.has(k) && !k.startsWith('data-')) attrs[k] = v;
     guardAttributes(attrs, stats.safety.attrs);
     // Motion tokens (ir/motion.js): the stylesheet's hover / reveal / loop rules select on them.
     if (n.motionTokens?.length) attrs['data-motion'] = n.motionTokens.join(' ');
-    // Interactive parts (ir/widgets.js): the generated script and the open / closed rules select on them.
-    if (n.widgetTokens?.length) attrs['data-w'] = n.widgetTokens.join(' ');
-    const out = { t: n.tag, sid: n.sid, attrs, children: [] };
-    // In the first screen (desktop): its rules are inlined first when a page's CSS is large (emit/pageCss.js, D.6).
-    const top = n.views.desktop?.rect?.[1];
-    if (top != null && top < FOLD_PX) out.f = 1;
+    // Targets of the animation library's replay (behavior/gsap.js): the program names elements by these ids.
+    if (n.animIds?.length) attrs['data-sas-a'] = n.animIds.join(' ');
+    // States of tabs / carousels / filtered lists (ir/states.js): which state an area is, which state a control shows.
+    if (n.stateAttrs) Object.assign(attrs, n.stateAttrs);
+    const out = { t: n.tag, sid: n.sid, attrs, children: [], ...(n.asisHtml && { asisHtml: n.asisHtml }) };
+    // A state the page does not start in (another tab, slide or filter) is written inside a <template> (emitters): not part
+    // of the page until the script shows it, so the page's element count stays the original's.
+    if (n.stateAttrs?.['data-w-set'] && 'hidden' in n.stateAttrs) out.tpl = n.stateAttrs['data-w-set'];
+    // A card's hovered look (ir/states.js expandHoverCards) waits the same way until the card is first pointed at.
+    else if (n.stateAttrs && 'data-w-hcopy' in n.stateAttrs) out.tpl = HOVER_TEMPLATE;
     if (n.class) out.class = n.class;
     const id = n.attrs.id;
-    if (id && (keepIds.has(id) || meaningful(id))) out.id = id;
+    if (id && !MOUNT_IDS.has(id) && (keepIds.has(id) || meaningful(id))) out.id = id;
     const display = n.views.desktop ? displayOf(n, 'desktop') : 'none';
     if (BLOCK_DISPLAY.test(display) || (display === 'none' && BLOCK_TAGS.has(n.tag))) out.b = 1;
 
     switch (n.tag) {
       case 'a': {
+        // A bare "#" is a control that stays on the page (a script handles the click), not a link to the page itself:
+        // resolved, it became "./" and the click reloaded the page.
+        if (/^\s*#?\s*$/.test(n.attrs.href ?? 'x')) {
+          attrs.href = '#';
+          break;
+        }
         const link = resolveLink(n.href ?? n.attrs.href, pageUrl);
         if (link) {
           attrs.href = link;
@@ -378,6 +510,21 @@ function pageBody(t, site, stats) {
         attrs.src = { asset: src };
         if (srcset.length) attrs.srcset = srcset;
         if (!n.attrs.src && lazySrc && !attrs.loading) attrs.loading = 'lazy';
+        // The width it is shown at in each view: the responsive image files are made for these (assets/variants.js).
+        // In a box with object-fit the picture is drawn at its own proportions: inside the box (contain: a tall logo
+        // in a wide box is drawn narrower) or over it (cover: wider than the box).
+        const rw = {};
+        const ratio = n.natural?.[0] > 0 && n.natural?.[1] > 0 ? n.natural[0] / n.natural[1] : null;
+        for (const [v, d] of Object.entries(n.views)) {
+          if (!d || d.hidden || !(d.rect?.[2] > 0)) continue;
+          const [w, h] = [d.rect[2], d.rect[3]];
+          const fit = d.style?.['object-fit'];
+          // cover: the file whose area equals the box's (speed tools judge an image by its pixels against the box's pixels;
+          // the full width of the cropped picture would be a file up to twice as large).
+          const drawn = ratio && h > 0 && (fit === 'contain' || fit === 'scale-down') ? Math.min(w, h * ratio) : ratio && h > 0 && fit === 'cover' ? Math.sqrt(w * h * ratio) : w;
+          rw[v] = Math.round(drawn);
+        }
+        if (Object.keys(rw).length) out.rw = rw;
         break;
       }
       case 'source': {
@@ -437,7 +584,7 @@ function pageBody(t, site, stats) {
 }
 
 /** The notice pages the links of the site need (ir/notice.js): static files, so every stack ships them. */
-function noticeFiles(site) {
+export function noticeFiles(site) {
   const lang = site.pages[0]?.head?.lang ?? null;
   return [...(site.resolveLink.notices ?? new Map())].map(([outPath, { url, reason }]) => ({
     path: outPath,
@@ -450,8 +597,13 @@ function noticeFiles(site) {
  * Builds the IR from a prepared site (after the latest fit pass).
  * @returns {{ ir: object, stats: object }}
  */
-export function buildIR(site) {
-  const styles = buildStyles(site.pages, { assetFile: (url) => site.assetResolve(url) });
+/**
+ * @param {object} site
+ * @param {{ asIs?: boolean }} [o]  asIs (exact mode): head texts are copied as they are and the stylesheet keeps every
+ *   @font-face the original declares. The flag is written onto the IR, so a stack built later from ir/site.json follows it.
+ */
+export function buildIR(site, { asIs = false } = {}) {
+  const styles = buildStyles(site.pages, { assetFile: (url) => site.assetResolve(url), asIs: asIs || Boolean(site.asIs) });
   const safety = newSafetyStats();
   const links = () => ({ internal: 0, file: 0, notice: 0, live: 0, external: 0 });
   const stats = { links: links(), liveLinks: new Map(), notices: new Map(), droppedImages: [], droppedMedia: [], forms: 0, safety };
@@ -474,6 +626,9 @@ export function buildIR(site) {
       html: { class: t.htmlNode.class ?? null },
       body,
       content: t.wp?.content ?? null,
+      ...(t.anim && { anim: t.anim }),
+      // Framer appear entrances (behavior/framer/plan.js), run with the motion package; app stacks read the same data.
+      ...(t.appear && { appear: t.appear }),
       stats: { links: s.links, liveLinks: [...s.liveLinks].map(([url, reason]) => ({ url, reason })), forms: s.forms, droppedImages: t.droppedImages.length },
     };
   });
@@ -487,14 +642,28 @@ export function buildIR(site) {
       for (const f of (decl['font-family'] ?? '').split(/,\s*/)) if (f) families.add(f.replace(/^["']|["']$/g, '').toLowerCase());
     }
   }
+  // An animation that starts on hover / focus (ir/motion.js) needs its keyframes too.
+  for (const effect of [...(site.motion?.hover ?? []), ...(site.motion?.focus ?? [])]) {
+    for (const decl of [effect.decls, ...Object.values(effect.pseudo ?? {}), ...(effect.kids ?? []).map((k) => k.decls)]) {
+      for (const name of (decl?.['animation-name'] ?? '').split(/,\s*/)) if (name && name !== 'none') animationNames.add(name);
+    }
+  }
+  // Any other motion effect (an open panel, a state, a scrolled bar, a neighbour of a hover) may name a captured
+  // animation too, in `animation-name` or the `animation` shorthand: keep what it names rather than ship a dangling one.
+  const motionText = site.motion ? JSON.stringify(site.motion) : '';
+  const named = (name) => new RegExp(`(^|[^\\w-])${name.replace(/[^\w-]/g, '\\$&')}([^\\w-]|$)`).test(motionText);
+  const keepKeyframes = (name) => asIs || site.asIs || animationNames.has(name) || (motionText && named(name));
   const ir = {
     version: IR_VERSION,
     baseUrl: site.baseUrl,
     siteName: site.siteName.value,
     breakpoints: site.breakpoints,
+    ...(site.mediaBounds?.length && { mediaBounds: site.mediaBounds }),
     tokens: site.tokens,
+    ...((asIs || site.asIs) && { asIs: true }),
     fontFaces: site.fontFaces.filter((f) => families.has(f.family.toLowerCase())),
-    keyframes: [...site.keyframes].filter(([name]) => animationNames.has(name)).map(([name, css]) => ({ name, css: mapUrls(css, (u) => site.assetResolve(u)) })),
+    // An as-is copy keeps every @keyframes the original declared: the site's script may start one by name at runtime.
+    keyframes: [...site.keyframes].filter(([name]) => keepKeyframes(name)).map(([name, css]) => ({ name, css: mapUrls(css, (u) => site.assetResolve(u)) })),
     boxSizingReset: styles.boxSizingReset,
     ...(site.motion && { motion: site.motion }),
     ...(site.widgets && { widgets: site.widgets }),

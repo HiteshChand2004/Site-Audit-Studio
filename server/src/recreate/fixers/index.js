@@ -12,7 +12,7 @@
 import { fixAlt, fixHeadings, fixNames } from './a11y.js';
 import { fixContrast } from './contrast.js';
 import { fixAria } from './aria.js';
-import { brokenTargets, fixBrokenLinks, fixFonts, fixLoading } from './perf.js';
+import { brokenTargets, fixBrokenLinks, fixFonts, fixLoading, markLayouts, pruneSprites, showFaded } from './perf.js';
 import { syncText } from './wordpress.js';
 
 const ITEMS = 50;
@@ -24,13 +24,15 @@ const ITEMS = 50;
  * @param {object[]} [o.skipped]  discovery skips
  * @returns {object} tree fix results, for fixReport()
  */
-export function applyTreeFixes(site, { audit, skipped = [] }) {
+export function applyTreeFixes(site, { audit, skipped = [], extraBroken = new Map(), asIs = false }) {
   const wordpress = [];
   for (const t of site.pages) if (t.wp) wordpress.push({ page: t.info.path, ...syncText(t, t.wp.item) });
 
   const pageTitles = new Map(site.pages.map((t) => [t.info.outPath, t.head?.title ?? '']));
-  const broken = brokenTargets(audit, skipped);
-  const out = { wordpress, names: { fixed: [], open: [] }, alt: { fixed: [], decorative: [] }, headings: [], links: [], loading: { priority: [], lazy: 0, lazyFrames: 0 }, contrast: { fixed: [], open: [] }, aria: [] };
+  const broken = brokenTargets(audit, skipped, site.pages.map((t) => t.info.url));
+  // Dead targets the copy found itself (links on pages the analysis did not read).
+  for (const [key, b] of extraBroken) if (!broken.has(key)) broken.set(key, b);
+  const out = { wordpress, names: { fixed: [], open: [] }, alt: { fixed: [], decorative: [] }, headings: [], links: [], loading: { priority: [], lazy: 0, lazyFrames: 0, unfaded: 0 }, sprites: 0, layouts: 0, faded: [], contrast: { fixed: [], open: [] }, aria: [] };
   for (const t of site.pages) {
     out.links.push(...fixBrokenLinks(t, broken, site.origin));
     const names = fixNames(t, { pageUrl: t.info.url, resolveLink: site.resolveLink, pageTitles, siteName: site.siteName.value });
@@ -40,14 +42,22 @@ export function applyTreeFixes(site, { audit, skipped = [] }) {
     out.alt.fixed.push(...alt.fixed);
     out.alt.decorative.push(...alt.decorative);
     out.headings.push(...fixHeadings(t));
-    const loading = fixLoading(t);
+    // As is: both of these drop markup the original has (unused sprites, parts another window size shows).
+    if (!asIs) {
+      out.sprites += pruneSprites(t);
+      out.layouts += markLayouts(t);
+    }
+    out.faded.push(...showFaded(t));
+    const loading = fixLoading(t, { asIs });
     out.loading.priority.push(...loading.priority);
     out.loading.lazy += loading.lazy;
     out.loading.lazyFrames += loading.lazyFrames;
+    out.loading.unfaded += loading.unfaded;
     // Text that does not stand out from its background (full-site D.2).
     // Mechanical accessibility rules (D.4): duplicate ids, frame titles, tabindex, ARIA values, aria-hidden focus.
     out.aria.push(...fixAria(t).fixed);
-    const contrast = fixContrast(t);
+    // As is: colours are copied, never corrected (that changes pixels on purpose).
+    const contrast = asIs ? { fixed: [], open: [] } : fixContrast(t);
     out.contrast.fixed.push(...contrast.fixed);
     out.contrast.open.push(...contrast.open);
   }
@@ -89,8 +99,10 @@ export function fixReport(tree, irFixes) {
     }));
   }
   if (tree.links.length) {
-    fixes.push(entry('broken-links', 'Broken links unlinked', tree.links, {
-      detail: 'Links whose target the audit found broken keep their text but no longer link. Restore them once the target exists.',
+    // Reported, not changed: every one of them stays open (the link is the original's; fix the target, not the copy).
+    fixes.push(entry('broken-links', 'Broken links kept and reported', [], {
+      open: tree.links,
+      detail: 'Links whose target the audit found broken are kept exactly as the original has them. Fix or remove the target, then check again.',
     }));
   }
   if (alt.fixed.length || alt.decorative.length) {
@@ -111,6 +123,24 @@ export function fixReport(tree, irFixes) {
       priority: tree.loading.priority,
       lazyImages: tree.loading.lazy,
       lazyFrames: tree.loading.lazyFrames,
+      ...(tree.loading.unfaded && { unfaded: tree.loading.unfaded }),
+    });
+  }
+  if (tree.faded.length) {
+    fixes.push(entry('faded-sections', 'Sections the original had not faded in yet made visible', tree.faded, {
+      detail: 'These boxes were captured at opacity 0 while the original was still fading them in, and nothing in the copy would have shown them.',
+    }));
+  }
+  if (tree.sprites || tree.layouts) {
+    fixes.push({
+      id: 'dom-size',
+      title: 'Smaller page: unused hidden icon sheets removed, layouts of other window sizes left out until needed',
+      status: 'fixed',
+      count: tree.sprites + tree.layouts,
+      open: 0,
+      sprites: tree.sprites,
+      layouts: tree.layouts,
+      items: [],
     });
   }
   const { display, preloads } = irFixes.fonts;

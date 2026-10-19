@@ -12,6 +12,8 @@
 import path from 'node:path';
 import { emitCss, CSS_FILE } from '../emit/css.js';
 import { applyFluidType, applyPhoneShrink } from '../ir/fluid.js';
+import { mediaBounds } from '../ir/index.js';
+import { VIEW_WIDTHS } from '../views.js';
 import { compareWidth, openSweepRenderer, renderSweepPage } from './responsive.js';
 import { visualDiff } from './visualDiff.js';
 
@@ -32,6 +34,43 @@ const SPECS = {
     ['mobile', [480, 600], [479.98, 599.98, 767.98]],
   ],
 };
+// Where each breakpoint may fall: the same ranges `ir/index.js pickBreakpoints` uses to read the site's own queries.
+const RANGE = {
+  laptop: [VIEW_WIDTHS.laptop, VIEW_WIDTHS.desktop],
+  tablet: [VIEW_WIDTHS.tablet, VIEW_WIDTHS.laptop],
+  mobile: [VIEW_WIDTHS.mobile, VIEW_WIDTHS.tablet],
+};
+
+/**
+ * The breakpoints to try, and the widths to judge them on, with the site's own boundaries added to both.
+ *
+ * The fixed values above are even round numbers; a site's are its own. flexibench changes layout at 640, and
+ * `pickBreakpoints` takes the **widest** declared boundary in a range, so it chose 767.98 and the phone styles
+ * captured at 375 covered 640-767 as well - 12% too short across that whole band, and refine could neither try
+ * 639.98 (not a candidate) nor notice (no judged width between 600 and 900). Both are fixed by asking the site:
+ * its boundaries become candidates, and the widths either side of them become widths to judge on. Nothing is
+ * decided here - `refineSite` still keeps a value only if it measurably beats the one in hand.
+ *
+ * @param {boolean} hasLaptop
+ * @param {{ value: number, rules?: number }[]} bounds  from `ir/index.js mediaBounds`
+ * @param {number[]} swept  the widths the original was actually captured at
+ */
+export function specsFor(hasLaptop, bounds = [], swept = []) {
+  const declared = (key) => {
+    const [lo, hi] = RANGE[key];
+    return [...new Set(bounds.filter((b) => b.value >= lo && b.value < hi).map((b) => b.value))];
+  };
+  return SPECS[hasLaptop ? 'laptop' : 'tablet'].map(([key, widths, alternatives]) => {
+    const extra = declared(key);
+    // A boundary is judged by the widths on either side of it: which band they fall in is the question.
+    const around = extra.flatMap((v) => [Math.floor(v), Math.ceil(v)]).filter((w) => swept.includes(w));
+    return [
+      key,
+      [...new Set([...widths, ...around])].sort((a, b) => a - b),
+      [...new Set([...alternatives, ...extra])].sort((a, b) => a - b),
+    ];
+  });
+}
 export const BREAKPOINT_MARGIN = 3;
 export const FLUID_MARGIN = 1;
 export const SHRINK_MARGIN = 1;
@@ -53,7 +92,7 @@ const round1 = (n) => (n == null ? null : Math.round(n * 10) / 10);
  * @param {number} [o.deadline]  no new render starts after this time (ms since epoch)
  * @returns {Promise<{ breakpoints: object, rules: object[], fluid: boolean, summary: object }>}
  */
-export async function refineResponsive({ ir, siteDir, workspace, sweep, deadline = Infinity }) {
+export async function refineResponsive({ ir, siteDir, workspace, sweep, bounds = null, deadline = Infinity }) {
   const pages = ir.pages.filter((p) => sweep.pages[p.slug]?.widths && Object.keys(sweep.pages[p.slug].widths).length).slice(0, REFINE_PAGES);
   const summary = { status: 'done', pages: pages.length, renders: 0, breakpoints: null, fluid: null, shrink: null, stopped: null };
   const keep = { breakpoints: ir.breakpoints, rules: ir.rules, fluid: false, shrink: false, summary };
@@ -101,7 +140,7 @@ export async function refineResponsive({ ir, siteDir, workspace, sweep, deadline
   try {
     const bp = {};
     // Each breakpoint is tried on its own widths, the others as they are.
-    for (const [key, widths, alternatives] of SPECS[hasLaptop ? 'laptop' : 'tablet']) {
+    for (const [key, widths, alternatives] of specsFor(hasLaptop, bounds ?? mediaBounds(ir.mediaQueries), sweep.widths)) {
       const usable = widths.filter((w) => sweep.widths.includes(w));
       if (!usable.length) continue;
       const own = outcome(usable, chosen[key]);
@@ -154,8 +193,15 @@ export async function refineResponsive({ ir, siteDir, workspace, sweep, deadline
   }
 
   const changed = chosen.laptop !== current.laptop || chosen.tablet !== current.tablet || chosen.mobile !== current.mobile;
+  // Built from the breakpoints that came in, not from this function's own three keys. Listing them lost every view
+  // it does not judge: an exact run captures one between the tablet and the phone, and rebuilding the object
+  // without it left that view with no media query at all - so its styles were never written and the band it was
+  // captured for fell to the next view up, which is the layout it was added because it is not.
+  const judged = Object.fromEntries(
+    Object.keys(current).filter((k) => k !== 'fluid' && k !== 'shrink').map((k) => [k, chosen[k]]),
+  );
   return {
-    breakpoints: changed ? { ...(hasLaptop && { laptop: chosen.laptop }), tablet: chosen.tablet, mobile: chosen.mobile, source: 'sweep' } : ir.breakpoints,
+    breakpoints: changed ? { ...ir.breakpoints, ...judged, source: 'sweep' } : ir.breakpoints,
     rules: rulesOf(chosen),
     fluid: chosen.fluid,
     shrink: chosen.shrink,

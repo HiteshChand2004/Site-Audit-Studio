@@ -11,7 +11,7 @@
 // General by design: nothing here knows a site or a platform.
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { analyzeAeo } from '../../audit/analyzers/aeo.js';
+import { analyzeAeo, NO_QUESTIONS } from '../../audit/analyzers/aeo.js';
 import { analyzeCrawl } from '../../audit/analyzers/crawlChecks.js';
 import { analyzeSeo, crawlErrorsItem } from '../../audit/analyzers/seo.js';
 import { examples, itemKey, pathOf, plural } from '../../audit/util.js';
@@ -82,6 +82,9 @@ function analyzerItems(oldRows, newRows) {
         const op = o.parts.find((x) => x.id === p.id);
         items.push({ key: `${key}.${p.id}`, category, title: `${title}: ${p.label}`, before: view(op), after: view(p) });
       }
+    } else if (key === 'aeo.structured-answers' && o?.detail === NO_QUESTIONS && n?.detail === NO_QUESTIONS) {
+      // Neither site has a question on its pages: there is nothing to answer, and content is never invented.
+      items.push({ key, category, title, before: view(o), after: view(n), preset: 'na', note: 'Neither site has question headings, so there is nothing to answer; content is never invented. Add an FAQ section to the site to use this.' });
     } else {
       items.push({ key, category, title, before: view(o), after: view(n) });
     }
@@ -162,10 +165,17 @@ function linkItems({ oldLinks, newLinks, oldScopeLinks, map }) {
 const LH_CATEGORIES = ['performance', 'best-practices'];
 const LH_MODES = new Set(['binary', 'numeric', 'metricSavings']);
 
-/** audit id → { score (worst of mobile/desktop), title, detail, category } for failing-capable audits. */
+// What an audit measured, lower = better: its value (elements, ms, bytes) or else the time it says could be saved.
+const measured = (a) => {
+  if (Number.isFinite(a.numericValue)) return { value: a.numericValue, unit: a.numericUnit ?? '' };
+  const saved = Object.values(a.metricSavings ?? {}).filter(Number.isFinite);
+  return saved.length ? { value: saved.reduce((x, y) => x + y, 0), unit: 'savings' } : null;
+};
+
+/** audit id → { score (worst of mobile/desktop), title, detail, category, values per device } for failing-capable audits. */
 function lighthouseAudits(lh) {
   const out = new Map();
-  for (const lhr of [lh.mobile, lh.desktop]) {
+  for (const [device, lhr] of [['mobile', lh.mobile], ['desktop', lh.desktop]]) {
     if (!lhr?.categories) continue;
     for (const category of LH_CATEGORIES) {
       for (const ref of lhr.categories[category]?.auditRefs ?? []) {
@@ -173,13 +183,32 @@ function lighthouseAudits(lh) {
         const a = lhr.audits?.[ref.id];
         if (!a || !LH_MODES.has(a.scoreDisplayMode) || typeof a.score !== 'number') continue;
         const prev = out.get(ref.id);
+        const values = { ...prev?.values, ...(measured(a) && { [device]: measured(a) }) };
         if (!prev || a.score < prev.score) {
-          out.set(ref.id, { score: a.score, title: a.title, detail: a.displayValue || null, category, cpuTiming: isCpuTiming(a) });
-        }
+          out.set(ref.id, { score: a.score, title: a.title, detail: a.displayValue || null, category, cpuTiming: isCpuTiming(a), values });
+        } else prev.values = values;
       }
     }
   }
   return out;
+}
+
+// A failing audit on both sides that still moved: lower on every device both measured by the margin or more = better,
+// higher on one by the margin = worse. Times and bytes vary from run to run (10 %); an element count does not (2 %).
+export function lighthouseTrend(before, after) {
+  const ratios = [];
+  let margin = 0.02;
+  for (const d of ['mobile', 'desktop']) {
+    const b = before?.values?.[d];
+    const a = after?.values?.[d];
+    if (!b || !a || b.unit !== a.unit || !(b.value > 0)) continue;
+    ratios.push(a.value / b.value);
+    if (b.unit !== 'element') margin = 0.1;
+  }
+  if (!ratios.length) return null;
+  if (ratios.some((r) => r >= 1 + margin)) return 'worse';
+  if (ratios.every((r) => r <= 1 - margin)) return 'better';
+  return null;
 }
 
 function lighthouseItems(oldLh, newLh) {
@@ -201,6 +230,7 @@ function lighthouseItems(oldLh, newLh) {
       before: o.size ? before ?? { status: 'pass', rank: 0 } : null,
       after: n.size ? after ?? { status: 'pass', rank: 0 } : null,
       ...((o.get(id)?.cpuTiming || n.get(id)?.cpuTiming) && { cpuTiming: true }),
+      ...(lighthouseTrend(o.get(id), n.get(id)) && { trend: lighthouseTrend(o.get(id), n.get(id)) }),
     });
   }
   return items;
@@ -234,7 +264,7 @@ function platformItems(oldStack = [], newStack = [], output = null) {
 
 // ---------- JavaScript shipped (the honest cost of a stack with a runtime) ----------
 
-/** Script transfer size of a Lighthouse run's homepage (resource-summary), desktop first (desktop only for now). */
+/** Script transfer size of a Lighthouse run's homepage (resource-summary), desktop first (the same on both sides when one of them was checked while only desktop was measured). */
 function scriptBytes(lh) {
   for (const lhr of [lh?.desktop, lh?.mobile]) {
     const item = lhr?.audits?.['resource-summary']?.details?.items?.find((i) => i.resourceType === 'script');
@@ -298,7 +328,15 @@ function finish(item, report) {
   if (item.status === 'manual') return item;
   if (item.status === 'recheck') return item;
   let status = DEPLOY_CHECKS.has(item.key) ? 'na' : classify(item.before, item.after);
-  const out = { ...item, status };
+  // Failing on both sides, but the measured value moved clearly (fewer elements, fewer KiB to save, …). A Lighthouse audit
+  // scored by its savings is 0 or 0.5 depending on whether its simulated metric gain is above zero, so its grade can flip
+  // between two runs: the measured value decides there, not the grade.
+  const failingBoth = item.before?.rank > 0 && item.after?.rank > 0;
+  if (item.trend && (status === 'open' || (failingBoth && (status === 'improved' || status === 'regressed')))) {
+    status = item.trend === 'better' ? 'improved' : 'regressed';
+  }
+  const { trend, ...kept } = item;
+  const out = { ...kept, status };
   if (DEPLOY_CHECKS.has(item.key)) out.note = DEPLOY_NOTE;
   else if (!item.after) out.note = 'Not measured on the recreated site.';
   else if (!item.before) out.note = 'Not measured on the original site.';
@@ -334,8 +372,8 @@ const categoryOrder = (c) => {
  * @returns {object} the checklist
  */
 export function compareAudits({ old, next, report, newOrigin, output = null, motion = null }) {
-  // Lighthouse audits are compared only on a device both sides were measured on (a check from before "desktop only" has
-  // a phone run, a new copy does not): otherwise "worst of phone / computer" on one side meets "computer" on the other.
+  // Lighthouse audits are compared only on a device both sides were measured on (a check made while only desktop was measured
+  // has no phone run): otherwise "worst of phone / computer" on one side meets "computer" on the other.
   const oldLh = { ...old.lighthouse };
   const newLh = { ...next.lighthouse };
   for (const device of ['mobile', 'desktop']) {

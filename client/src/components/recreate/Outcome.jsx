@@ -2,11 +2,12 @@ import { ArrowRight, Trophy } from 'lucide-react';
 import { Card } from '../common/Surface.jsx';
 import { Pill } from '../common/Score.jsx';
 import InfoTip from '../common/InfoTip.jsx';
+import CountUp from '../common/CountUp.jsx';
 import { CHECKS, HEALTH, matchRating, RESULT_STATUS, TERMS } from '../../copy.js';
 import { plural } from '../../format.js';
 import styles from './Outcome.module.css';
 
-// Before → after scores shown (computer measurements: desktop only for now).
+// Before → after scores shown (phone measurements: most visitors).
 const SCORES = [
   ['performance', 'performance'],
   ['seo', 'seo'],
@@ -25,8 +26,8 @@ export default function Outcome({ result, comparison }) {
   const s = comparison?.summary ?? null;
   const better = s ? (s.fixed ?? 0) + (s.improved ?? 0) : 0;
   const todo = (comparison?.items ?? []).filter((i) => i.status === 'regressed' || i.status === 'open').sort((a, b) => (a.status === 'regressed' ? 0 : 1) - (b.status === 'regressed' ? 0 : 1));
-  const before = comparison?.scores?.before?.desktop ?? comparison?.scores?.before?.mobile;
-  const after = comparison?.scores?.after?.desktop ?? comparison?.scores?.after?.mobile;
+  const before = comparison?.scores?.before?.mobile;
+  const after = comparison?.scores?.after?.mobile;
 
   const sentence = [
     `The copy has ${plural(result.pages.length, 'page')}`,
@@ -47,7 +48,9 @@ export default function Outcome({ result, comparison }) {
             ['manual', s.manual ?? 0, 'neutral', RESULT_STATUS.manual.label, RESULT_STATUS.manual.explain],
           ].map(([id, n, tone, label, tip]) => (
             <li key={id} data-tone={tone}>
-              <strong>{n}</strong>
+              <strong>
+                <CountUp value={n} />
+              </strong>
               <span>
                 {label}
                 <InfoTip label={label}>{tip}</InfoTip>
@@ -75,7 +78,7 @@ export default function Outcome({ result, comparison }) {
           SCORES.map(([key, h]) =>
             before[key] != null && after[key] != null ? (
               <div key={key} className={styles.fact}>
-                <span className={styles.factLabel}>{HEALTH[h].title}</span>
+                <span className={styles.factLabel}>{HEALTH[h].title} on phones</span>
                 <span className={styles.factValue}>
                   {before[key]} <ArrowRight size={14} aria-label="to" /> {after[key]}
                 </span>
@@ -93,7 +96,9 @@ export default function Outcome({ result, comparison }) {
           <ul>
             {todo.slice(0, 6).map((item) => (
               <li key={item.key}>
-                <Pill tone={RESULT_STATUS[item.status]?.tone ?? 'warn'}>{RESULT_STATUS[item.status]?.label ?? item.status}</Pill>
+                <span className={styles.tone} data-tone={RESULT_STATUS[item.status]?.tone ?? 'warn'}>
+                  {RESULT_STATUS[item.status]?.label ?? item.status}
+                </span>
                 <span className={styles.todoName}>{titleOf(item)}</span>
                 {item.after?.detail && (
                   <span className={`${styles.todoDetail} ${styles.oneLine}`} title={item.after.detail}>

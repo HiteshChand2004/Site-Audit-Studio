@@ -5,6 +5,8 @@ import { Alert, Card, EmptyState } from '../../components/common/Surface.jsx';
 import FixReport from '../../components/recreate/FixReport.jsx';
 import RecreateReport from '../../components/recreate/RecreateReport.jsx';
 import Outcome from '../../components/recreate/Outcome.jsx';
+import PageGallery from '../../components/recreate/PageGallery.jsx';
+import AsIsReport from '../../components/recreate/AsIsReport.jsx';
 import SectionCard from '../../components/common/SectionCard.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import { STACKS, stackById } from '../../constants.js';
@@ -12,10 +14,11 @@ import { api } from '../../api/client.js';
 import { outputsOf } from '../../stacks.js';
 import { isJobActive, useProjects } from '../../store/useProjects.js';
 import styles from '../Panel.module.css';
+import { pathOf } from '../../components/project/PageScope.jsx';
 import ws from '../Workspace.module.css';
 
 /** Step 4: what got better, what still needs work, and the download. */
-export default function ResultsStep({ project, audit, onGoCreate, onOpenReport }) {
+export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, onOpenPage }) {
   const job = useProjects((s) => s.recreates[project.id]);
   const latest = useProjects((s) => s.recreateResults[project.id]);
   const result = latest?.result;
@@ -24,6 +27,7 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport }
   const dismissJob = useProjects((s) => s.dismissJob);
   const reloadRecreate = useProjects((s) => s.reloadRecreate);
   const reloadAudit = useProjects((s) => s.reloadAudit);
+  const recreate = useProjects((s) => s.recreate);
   // One job at a time on the server: no new comparison while a copy or comparison of this project runs.
   const busy = isJobActive(job) || isJobActive(reauditJob);
   const outputs = outputsOf(result);
@@ -87,6 +91,21 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport }
     <div className={ws.stepBody}>
       {reauditJob && reauditJob.status !== 'done' && <AnalyzeProgress analysis={reauditJob} kind="reaudit" onDismiss={() => dismissJob('reaudit', project.id)} />}
 
+      {result.asIs && (
+        <AsIsReport
+          asIs={result.asIs}
+          outputs={[result.asIs.stack]}
+          projectId={project.id}
+          asIsOutputs={latest?.asIsOutputs ?? {}}
+          onPackage={(stack) => recreate(project.id, { mode: 'as-is', confirmed: true, stack, reuseAsIs: true })}
+        />
+      )}
+
+      {result.singlePage && (
+        <p className={ws.hint}>
+          Results for one page only: <span className="mono">{result.singlePage.path ?? pathOf(result.singlePage.url)}</span> (checked and copied on its own; the rest of the website is not part of these results).
+        </p>
+      )}
       <Outcome result={result} comparison={comparison} />
 
       {!comparison && canCompare && (
@@ -102,6 +121,8 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport }
           {audit.recreate.lastError ? `The last comparison failed: ${audit.recreate.lastError}` : 'Runs the same check on the copy and shows what got better. Takes a few minutes.'}
         </Alert>
       )}
+
+      <PageGallery projectId={project.id} result={result} onOpenPage={onOpenPage} />
 
       <Card
         icon={Download}

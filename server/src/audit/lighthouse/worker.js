@@ -26,13 +26,16 @@ function summarize(lhr) {
     finalUrl: lhr.finalDisplayedUrl,
     runtimeError: lhr.runtimeError?.message ?? null,
     runWarnings: lhr.runWarnings,
+    // How fast this computer was during the run (Lighthouse's own measure) and the CPU slowdown simulated.
+    benchmarkIndex: lhr.environment?.benchmarkIndex ?? null,
+    cpuSlowdown: lhr.configSettings?.throttling?.cpuSlowdownMultiplier ?? null,
     categories: Object.fromEntries(Object.entries(lhr.categories).map(([id, c]) => [id, c.score])),
     metrics: lhr.audits.metrics?.details?.items?.[0] ?? null,
     audits,
   };
 }
 
-process.once('message', async ({ url, formFactor, chromePath, outFile, proxy }) => {
+process.once('message', async ({ url, formFactor, chromePath, outFile, proxy, cpuSlowdown }) => {
   let chrome;
   try {
     chrome = await chromeLauncher.launch({
@@ -43,7 +46,9 @@ process.once('message', async ({ url, formFactor, chromePath, outFile, proxy }) 
     process.send({ type: 'chrome', pid: chrome.pid });
     // The full-page screenshot Lighthouse embeds in its report is not used (the analysis takes its own screenshots): leaving
     // it out saves a resize of the page to its full height and a large image, and changes no score.
-    const flags = { port: chrome.port, output: 'json', logLevel: 'error', onlyCategories: CATEGORIES, maxWaitForLoad: 45000, disableFullPageScreenshot: true };
+    const flags = { port: chrome.port, output: 'json', logLevel: 'error', onlyCategories: CATEGORIES, maxWaitForLoad: 45000, disableFullPageScreenshot: true,
+      // A calibrated run (audit/index.js): the simulated CPU slowdown scaled to how busy this computer is.
+      ...(cpuSlowdown > 0 && { throttling: { cpuSlowdownMultiplier: cpuSlowdown } }) };
     const result = await lighthouse(url, flags, formFactor === 'desktop' ? desktopConfig : undefined);
     if (!result?.lhr) throw new Error('Lighthouse returned no result');
     if (outFile) await writeFile(outFile, JSON.stringify(result.lhr));

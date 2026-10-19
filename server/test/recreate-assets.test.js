@@ -10,11 +10,13 @@ import { db, projectDir } from '../src/db/index.js';
 import { ASSET_BUDGET, ASSET_LIMITS, assetsStage, downloadAssets } from '../src/recreate/assets/index.js';
 import { findPlatformCdnRefs, PLATFORM_CDN_HOSTS, platformCdnHost } from '../src/recreate/assets/cdn.js';
 import { assetKey, collectAssets, pickCandidates } from '../src/recreate/assets/collect.js';
-import { parseSrcset, parseStylesheet } from '../src/recreate/assets/css.js';
+import { parseSrcset, parseStateRules, parseStylesheet } from '../src/recreate/assets/css.js';
+import { harvestForeignStateRules, foreignStyleText } from '../src/recreate/capture/foreignCss.js';
 import { runRecreate, STAGES } from '../src/recreate/index.js';
 import { recreateDir } from '../src/recreate/workspace.js';
 import { userPolicy, withNetPolicy } from '../src/security/netGuard.js';
 import { startFixtureServer } from './serve-fixture.js';
+import { seedProject } from './helpers/projects.js';
 
 process.env.SAS_ALLOW_LOCALHOST = '1';
 
@@ -311,11 +313,7 @@ test('the assets step localizes every asset of the captured pages', async () => 
   const id = randomUUID();
   projectIds.push(id);
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at) VALUES (?, 'fixture', ?, 'html', 1, 1, ?, ?)`)
-    .run(id, `${origin}/`, now, now);
-  db.prepare(`INSERT INTO analyses (id, project_id, status, progress, started_at, finished_at, result_json) VALUES (?, ?, 'done', 100, ?, ?, ?)`)
-    .run(randomUUID(), id, now, now, JSON.stringify({ url: `${origin}/`, analyzedAt: now }));
-  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+  const project = seedProject(db, { id, name: 'fixture', url: `${origin}/`, stack: 'html', authorized: 1, recreatePages: 1, analysis: true });
   const recreateId = randomUUID();
   const stubs = Object.fromEntries(Object.keys(STAGES).map((key) => [key, async () => {}]));
   const limits = { media: { maxBytes: 1024 * 1024, timeout: 10000 } };
@@ -369,4 +367,102 @@ test('the assets step localizes every asset of the captured pages', async () => 
     ['Video or audio file too large to bundle', `${cdn}/big.mp4`],
   ]);
   for (const file of new Set(Object.values(manifest.map))) assert.ok((await stat(path.join(dir, file))).size > 0, file);
+});
+
+// ---- the state rules of a stylesheet the page itself may not read ----
+
+test('parseStateRules finds the hover and focus rules, walking the at-rules that group them', () => {
+  const css = `
+/* a comment with { braces } and :hover in it */
+@charset "utf-8";
+@import url(other.css);
+.a:hover { color: red; background: url(x.png) }
+.plain { color: blue }
+@media (max-width: 600px) and (orientation: portrait) {
+  .b:focus-visible { outline: 2px solid blue }
+  @supports (display: grid) { .c:hover ~ .d { opacity: .4 } }
+}
+@layer base { .e:hover { color: green } }
+@container card (min-width: 200px) { .f:hover { color: teal } }
+@font-face { font-family: X; src: url(a.woff2) }
+@keyframes spin { to { transform: rotate(360deg) } }
+.g:active { transform: scale(.98) }
+.nav:has(a:hover) { background: #eeeeee }
+`;
+  const out = parseStateRules(css);
+  assert.equal(out.total, 7);
+  assert.equal(out.truncated, false);
+  const by = (sel) => out.rules.find((r) => r.selector === sel);
+  assert.deepEqual(by('.a:hover').decls, { color: 'red', background: 'url(x.png)' });
+  assert.equal(by('.a:hover').state, 'hover');
+  assert.equal(by('.plain'), undefined, 'a rule with no state is not a state rule');
+  // An @media condition is carried down, and through a nested grouping at-rule.
+  assert.equal(by('.b:focus-visible').media, '(max-width: 600px) and (orientation: portrait)');
+  assert.equal(by('.c:hover ~ .d').media, '(max-width: 600px) and (orientation: portrait)');
+  // Grouped by something other than media: the rule counts, with no media of its own.
+  assert.equal(by('.e:hover').media, undefined);
+  assert.equal(by('.f:hover').media, undefined);
+  assert.equal(by('.g:active').state, 'active');
+  assert.equal(by('.nav:has(a:hover)').state, 'hover', 'the shape is classified elsewhere; here it is just a state rule');
+  // @font-face and @keyframes are seen but never descended into for state rules.
+  assert.equal(out.atRules['font-face'], 1);
+  assert.equal(out.atRules.keyframes, 1);
+  assert.equal(out.rules.some((r) => /^(to|from|\d)/.test(r.selector)), false);
+});
+
+test('parseStateRules keeps to its caps and says when it had to stop', () => {
+  const many = Array.from({ length: 5 }, (_, i) => `.x${i}:hover{${Array.from({ length: 60 }, (_, j) => `p${j}:${j}`).join(';')}}`).join('\n');
+  const out = parseStateRules(many, { max: 3, maxDecls: 5 });
+  assert.equal(out.rules.length, 3);
+  assert.equal(out.total, 5, 'what was there is counted even past the cap');
+  assert.equal(out.truncated, true);
+  assert.equal(Object.keys(out.rules[0].decls).length, 5);
+  assert.deepEqual(parseStateRules('').rules, []);
+  assert.deepEqual(parseStateRules('.a { color: red }').rules, []);
+});
+
+test('a stylesheet the page could not read is recovered from the shared cache, at no network cost', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'sas-foreign-'));
+  try {
+    const file = path.join(dir, 'brand.css');
+    await writeFile(file, '.brand:hover { color: #b45309 }\n.brand:hover ~ .brand { opacity: .6 }\n');
+    const url = 'https://cdn.example.test/brand.css';
+    // The shape audit/sharedCache.js lookup() returns: the browser already loaded this file to render the page.
+    const cache = { lookup: (u) => (u === url ? { file, bytes: 80, status: 200, headers: {} } : null) };
+    let fetched = 0;
+    const out = await harvestForeignStateRules([url, 'https://cdn.example.test/missing.css'], {
+      cache,
+      fetchText: async () => { fetched++; return null; },
+    });
+    assert.equal(out.rules.length, 2);
+    assert.equal(out.stats.fromCache, 1);
+    assert.equal(out.stats.failed, 1, 'the one the cache does not hold is counted, not guessed at');
+    assert.equal(fetched, 1, 'only the sheet the cache was missing was asked for');
+    // Every rule says which sheet it came from, so the evidence is traceable.
+    for (const rule of out.rules) {
+      assert.equal(rule.href, url);
+      assert.equal(rule.source, 'downloaded');
+    }
+
+    // As a stylesheet to put back into the page: state rules only, so nothing of the resting look can change.
+    const text = foreignStyleText(out.rules);
+    assert.match(text, /\.brand:hover \{ color: #b45309 \}/);
+    assert.match(text, /\.brand:hover ~ \.brand \{ opacity: \.6 \}/);
+    // Every line is a state rule, so putting this sheet into the page cannot change its resting look.
+    for (const line of text.split('\n')) assert.match(line, /:(hover|focus|focus-visible|focus-within|active)\b/, line);
+
+    // A media condition survives the round trip.
+    await writeFile(file, '@media (max-width: 600px) { .m:hover { color: red } }');
+    const media = await harvestForeignStateRules([url], { cache });
+    assert.match(foreignStyleText(media.rules), /@media \(max-width: 600px\) \{ \.m:hover \{ color: red \} \}/);
+
+    // Nothing to do, and nothing attempted.
+    const none = await harvestForeignStateRules([], { cache });
+    assert.deepEqual(none.rules, []);
+    assert.equal(none.stats.sheets, 0);
+    // Only http(s) sheets are read: a blob or data URL is not a sheet to download.
+    assert.equal((await harvestForeignStateRules(['data:text/css,.a:hover{color:red}'], { cache })).stats.sheets, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

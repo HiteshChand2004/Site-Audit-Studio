@@ -4,25 +4,35 @@
 //
 // Each step is a stage function that reads and extends a shared context. A failing step fails
 // the job: later steps need its output. The whole job has one time budget
-// (SAS_RECREATE_MINUTES, default 12); the workspace is discarded when anything goes wrong.
+// (SAS_RECREATE_MINUTES, default 12). When anything goes wrong the workspace is discarded, unless the pages were found:
+// then it is kept with its checkpoint, and a resume continues where the job stopped (recreate/checkpoint.js).
 //
-// Steps run one after the other, except a `background` step (the sweep of the original at more widths): it only
-// collects screenshots, so it runs next to the steps after it instead of making them wait, and is awaited by the step
-// that needs its whole result (`join`). On a machine short of memory it is awaited before the next browser step.
-import { writeFile } from 'node:fs/promises';
+// Steps run one after the other, except a `background` step (the sweep of the original at more widths, the build of the
+// project's stack): it runs next to the steps after it instead of making them wait, and is awaited by the step that needs
+// its whole result (`join`), or at the end. On a machine short of memory it is awaited before the next browser step.
+import { rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { userPolicy, withNetPolicy } from '../security/netGuard.js';
 import { maxParallel, parallelism } from '../audit/resources.js';
 import { TimeoutError } from '../audit/util.js';
 import { createInterrupts, extendableTimeout } from './interrupts.js';
-import { analysisWarnings, baseUrlOf, isAllPages, latestAnalysis, pageLimitOf } from './inputs.js';
+import { analysisWarnings, baseUrlOf, isAllPages, latestAnalysis, pageLimitOf, pageUrlOf, SITE_PAGE_CAP } from './inputs.js';
 import { RecreateError } from './errors.js';
+import { CANVAS_RENDERED_MESSAGE } from '../detection/siteType.js';
 import { assetsStage } from './assets/index.js';
 import { buildStage } from './build/index.js';
 import { generateStage } from './generate.js';
 import { inspectStage, LATER_STEPS_RESERVE } from './inspect.js';
 import { previewStage } from './preview.js';
-import { commitWorkspace, discardWorkspace, openWorkspace } from './workspace.js';
+import { responsiveStage } from './responsive.js';
+import { stackStage } from './stack.js';
+import { sweepStage } from './sweep.js';
+import { exactCaptureStage } from './exactCapture.js';
+import { exactStage } from './exact.js';
+import { CHECKPOINT_FILE, clearUnfinished, isReusable, openCheckpoint, readCheckpoint, reportMarks, restoreStep, resumeStep, REUSABLE_STEPS } from './checkpoint.js';
+import { adoptWorkspace, commitWorkspace, discardWorkspace, openWorkspace } from './workspace.js';
+import { asIsStage } from './behavior/preserve/stage.js';
+import { pageKey } from '../audit/util.js';
 
 export { RecreateError };
 
@@ -37,15 +47,36 @@ export const STEPS = [
   { key: 'inspect', label: 'Inspecting pages', weight: 35, max: 7 * 60000, perPage: 150000 },
   { key: 'assets', label: 'Extracting assets', weight: 25, max: 4 * 60000, perPage: 15000 },
   // browser: the step renders pages itself, so it shares the machine with a background step only when memory allows.
-  { key: 'generate', label: 'Generating site', weight: 15, max: 4 * 60000, browser: true, perPage: 45000 },
+  // The self-correction loop lives in this step (verify/correct.js, its own 90 s), so the limit grew from 4 to 6
+  // minutes rather than taking the time from the fit pass or the breakpoint check. Generate is local work - no
+  // network, no capture - so a longer limit here never changes what was captured.
+  { key: 'generate', label: 'Generating site', weight: 15, max: 6 * 60000, browser: true, perPage: 60000 },
   { key: 'build', label: 'Building & verifying', weight: 20, max: 3 * 60000, browser: true, perPage: 45000 },
   { key: 'preview', label: 'Starting preview', weight: 5, max: 30000, perPage: 3000 },
-  // Desktop only for now (views.js): the width sweep and the responsive check are parked. To bring them back:
-  //   { key: 'sweep', label: 'Capturing more widths', weight: 8, max: 4 * 60000, optional: true, background: true, after: 'inspect', join: 'responsive', perPage: 120000 },
-  //   { key: 'responsive', label: 'Checking responsive layout', weight: 4, max: 90000, optional: true, perPage: 30000 },
-  // (and sweep: sweepStage, responsive: responsiveStage in STAGES). Without a sweep, generate skips the breakpoint refinement.
+  // Original screenshots at more widths (4b.6): collects only, never fails the job. A background step: it starts right
+  // after the capture (`after`) and runs next to the steps above; the last step needs all of it (`join`). It is listed
+  // here, where the job waits for it, so the step list of the app only ever moves forward.
+  { key: 'sweep', label: 'Capturing more widths', weight: 8, max: 4 * 60000, optional: true, background: true, after: 'inspect', join: 'responsive', perPage: 120000 },
+  // The original at every exact viewport (capture/exact.js), for an exact copy only: about twenty visits per page,
+  // so it is the slowest step there is and it has no limit in that mode. A background step that starts right after
+  // the capture, like the sweep, and is awaited by the comparison that needs it.
+  { key: 'exactCapture', label: 'Measuring the original', weight: 10, max: 10 * 60000, optional: true, background: true, after: 'inspect', join: 'generate', perPage: 600000 },
+  // The copy at those same viewports, against what the original did (recreate/exact.js): measures only.
+  { key: 'exact', label: 'Comparing with the original', weight: 6, max: 10 * 60000, optional: true, browser: true, perPage: 240000 },
+  // Measures the finished build against the sweep screenshots (4b.6): never fails the job.
+  { key: 'responsive', label: 'Checking responsive layout', weight: 4, max: 90000, optional: true, perPage: 30000 },
+  // The project's stack (React + Vite, Next.js, MERN) built from what the build step left (recreate/stack.js): a background
+  // step next to the ones above when a second browser fits, else left to the export after the job. Never fails the job.
+  { key: 'stack', label: 'Building the chosen stack', weight: 6, max: 8 * 60000, optional: true, background: true, after: 'build', perPage: 20000 },
 ];
 // What each page beyond BASE_PAGES adds to the whole job, and to the time the capture keeps for the steps after it.
+/** The steps an "Original as-is" copy runs (the rest are finished at once): the capture and the as-is stage. */
+export const ASIS_STEP_KEYS = new Set(['inspect', 'generate']);
+/** The as-is stage's own limit (ms): lift, build, checks and Lighthouse of a two-page copy took about seven minutes in a run. */
+export const asIsBudgetMs = (pages, stacks = 1, env = process.env) =>
+  (fixedBudget(env) ? recreateBudgetMs(env) : (pages * 20 + stacks * 10) * 60000);
+/** A repack (another stack from a lifted copy that is kept): only the as-is stage. */
+export const ASIS_REPACK_KEYS = new Set(['generate']);
 const JOB_PER_PAGE = STEPS.reduce((n, s) => n + (s.perPage ?? 0), 0);
 const LATER_PER_PAGE = STEPS.filter((s) => !s.background && s.key !== 'inspect').reduce((n, s) => n + (s.perPage ?? 0), 0);
 export const PUBLIC_STEPS = STEPS.map(({ key, label }) => ({ key, label }));
@@ -86,10 +117,15 @@ export function roomForSecondBrowser(env = process.env) {
 
 export const STAGES = {
   inspect: inspectStage,
+  sweep: sweepStage,
+  exactCapture: exactCaptureStage,
+  exact: exactStage,
   assets: assetsStage,
   generate: generateStage,
   build: buildStage,
   preview: previewStage,
+  responsive: responsiveStage,
+  stack: stackStage,
 };
 
 /**
@@ -102,15 +138,38 @@ export const STAGES = {
  * @param {number} [o.budgetMs]
  * @param {() => boolean} [o.canOverlap]  may a background step run next to a browser step (default: by free memory)
  * @param {object} [o.netPolicy]  user projects always get the default user policy
+ * @param {boolean} [o.exact]  exact mode: the site is replicated as it is and the run has no time limit (inputs.js isExactMode)
+ * @param {boolean} [o.unlimited]  no overall time limit (exact mode, or a manual run the user asked to run to the end)
+ * @param {AbortSignal} [o.signal]  the app asked the job to stop (jobs/manager.js stop): the step in front ends and the
+ *   work done so far is kept, so the user can continue where it stopped
+ * @param {{ recreateId: string, auto?: boolean }} [o.resumeFrom]  continue the stopped recreate whose workspace was kept
+ *   (recreate/checkpoint.js): its finished steps and captured pages are reused, the rest runs with a fresh time budget
  * @returns {Promise<object>} the recreate report
  */
 export function runRecreate({ netPolicy = userPolicy(), ...opts }) {
   return withNetPolicy(netPolicy, () => recreate({ ...opts, netPolicy }));
 }
 
-async function recreate({ project, recreateId, progress, warnings = [], stages = STAGES, budgetMs = recreateBudgetMs(), autoBudget = !fixedBudget(), canOverlap = () => roomForSecondBrowser(), netPolicy, interruptOptions = {} }) {
+async function recreate({
+  project, recreateId, progress, warnings = [], stages = STAGES, exact = false, preserve = false, unlimited = exact, signal: stopSignal = null,
+  // "Original as-is" (behavior/preserve): the chosen pages ({ stack, pages: [addresses] }); only the capture and the as-is stage run.
+  asIs = null,
+  // No limit means no limit: the job, every step and the time given back after a sleep are unbounded. SAS_RECREATE_MINUTES
+  // still wins when the user set it, so a run can always be bounded. What keeps a run from hanging is unchanged and
+  // stronger instead: every single page load, asset and render keeps its own limit, and a page that stalls is abandoned.
+  budgetMs = unlimited && !fixedBudget() ? Infinity : recreateBudgetMs(),
+  autoBudget = !fixedBudget(), canOverlap = () => roomForSecondBrowser(), netPolicy, interruptOptions = {}, resumeFrom = null,
+}) {
   const analysis = latestAnalysis(project.id);
   if (!analysis) throw new RecreateError('Run Analyze first: Recreate works from a completed analysis.');
+  // The analysis found the site drawn on a canvas (detection/siteType.js): nothing to copy, stopped before any work.
+  if (analysis.audit?.siteType?.type === 'canvas-rendered') {
+    throw Object.assign(new RecreateError(`${CANVAS_RENDERED_MESSAGE} (${analysis.audit.siteType.reason})`), { siteType: analysis.audit.siteType });
+  }
+  // Stopped from the app. Thrown like any other failure, so the workspace and its checkpoint are kept the same way:
+  // the app then offers to continue where it stopped.
+  const stopError = () => Object.assign(new RecreateError('Stopped: the copy was stopped from the app.'), { stopped: true });
+  if (stopSignal?.aborted) throw stopError();
 
   // Moves later when time is given back after sleep or a network outage (recreate/interrupts.js), within its allowance.
   let deadline = Date.now() + budgetMs;
@@ -123,21 +182,52 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
   const running = new Set();
   let front = null;
 
-  const dir = await openWorkspace(project.id, recreateId);
+  // A resume takes over the stopped job's workspace and its checkpoint; what the steps that run again would write is cleared.
+  const dir = resumeFrom ? await adoptWorkspace(project.id, resumeFrom.recreateId, recreateId) : await openWorkspace(project.id, recreateId);
+  let saved = null;
+  if (resumeFrom) {
+    saved = await readCheckpoint(dir);
+    if (!isReusable(saved)) {
+      await discardWorkspace(project.id, recreateId).catch(() => {});
+      throw new RecreateError('There is no saved work to continue from: start a new Recreate.');
+    }
+    await clearUnfinished(dir, saved);
+  }
+  // The as-is copy's own stage replaces the copy's generate step; no other copy step runs (see the step loop below).
+  if (asIs) stages = { ...stages, generate: stages.asIsStage ?? asIsStage };
+  // The checkpoint keeps the mode, the as-is copy's included: a resume continues the same kind of copy.
+  const checkpoint = openCheckpoint(dir, { recreateId, analysisId: analysis.id, saved, auto: Boolean(resumeFrom?.auto), mode: { exact, unlimited, ...(asIs && { asIs: { stack: asIs.stack, pages: asIs.pages } }) } });
   const ctx = {
     project,
     recreateId,
     analysis,
     audit: analysis.audit,
     baseUrl: baseUrlOf(project, analysis.audit),
-    pageLimit: pageLimitOf(project.recreate_pages),
-    allPages: isAllPages(project.recreate_pages),
+    // An exact copy is of the whole site: every page the discovery finds, whatever the project's page setting says
+    // (the setting still decides for an ordinary copy, and the safety cap still applies).
+    // One page only (projects.page_url) wins over both: that page and nothing else, in an exact copy too.
+    ...(!asIs && pageUrlOf(project) && { singlePage: pageUrlOf(project) }),
+    // An as-is copy takes exactly the pages the user chose (discover.js include): as many as there are.
+    pageLimit: asIs ? asIs.pages.length : pageUrlOf(project) ? 0 : exact ? SITE_PAGE_CAP - 1 : pageLimitOf(project.recreate_pages),
+    allPages: !asIs && !pageUrlOf(project) && (exact || isAllPages(project.recreate_pages)),
+    include: asIs ? new Set(asIs.pages.map((u) => pageKey(u))) : null,
+    asIs,
+    exact,
+    preserve,
+    unlimited,
+    // Without an overall limit a page is given much longer before it counts as stalled (inspect.js: max of this and
+    // three times the slowest page so far), but it is still abandoned and retried rather than waited on for ever.
+    ...(unlimited && { pageCapMin: 10 * 60000 }),
     netPolicy,
     dir,
     signal: controller.signal,
     jobDeadline: deadline,
     /** Registers cleanup (browsers, proxies) that runs when the job ends, in reverse order. */
     defer: (fn) => disposers.push(fn),
+    /** May a background step run a second browser next to the steps still to come (free memory)? */
+    canOverlap,
+    /** Pages, steps and sweep pages finished so far (recreate/checkpoint.js): a stopped job continues from them. */
+    checkpoint,
     progress: null,
     report: {
       recreateId,
@@ -151,6 +241,8 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
       autoGenerated: [],
       manual: [],
       fidelity: null,
+      // Exact mode: what the "as is" profile left out, and later (phase A) the slot-by-slot comparison with the original.
+      exact: exact ? { mode: 'exact', asIs: null } : null,
       preview: null,
       warnings: [...warnings],
       errors: [],
@@ -165,6 +257,7 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
   const interrupts = createInterrupts({
     url: ctx.audit.url ?? project.url,
     label: recreateId.slice(0, 8),
+    ...(unlimited && { allowanceMs: Infinity }),
     ...interruptOptions,
     onGrant: (ms) => {
       deadline += ms;
@@ -201,11 +294,42 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     if (front) ctx.stepDeadline = front.stepDeadline;
   };
 
-  const minutes = Math.round(budgetMs / 60000);
+  // Steps the stopped job finished are not run again: their results are put back (an inspect step or a sweep that stopped
+  // half-way continues from its saved pages instead, see inspect.js / sweep.js).
+  const restored = new Set();
+  if (saved) {
+    stages = { ...stages };
+    for (const key of REUSABLE_STEPS.filter((k) => saved.steps?.[k])) {
+      restored.add(key);
+      stages[key] = async (_ctx, local) => {
+        restoreStep(ctx, saved.steps[key]);
+        if (key === 'inspect') ctx.scaleToPages(saved.discovery.pages.length);
+        (local?.progress ?? ctx.progress)?.(1, 'Reused from before the interruption');
+      };
+    }
+    const pagesReused = Object.keys(saved.pages ?? {}).length;
+    const entry = {
+      at: new Date().toISOString(),
+      fromRecreateId: resumeFrom.recreateId,
+      fromStep: resumeStep(saved),
+      stoppedStep: saved.stopped?.step ?? null,
+      reason: saved.stopped?.reason ?? 'restart',
+      pagesReused,
+      stepsReused: [...restored],
+      auto: Boolean(resumeFrom.auto),
+    };
+    checkpoint.data.resumed = [...(saved.resumed ?? []), entry];
+    ctx.report.resumed = checkpoint.data.resumed;
+    ctx.report.warnings.push(`Continued after an interruption (${pagesReused} ${pagesReused === 1 ? 'page' : 'pages'} reused).`);
+    await checkpoint.save();
+  }
+
+  const minutes = Number.isFinite(budgetMs) ? Math.round(budgetMs / 60000) : null;
   const startedAt = Date.now();
   const timings = {};
   // Background steps still running: key → { def, done } (done resolves to the step's error, or null).
   const background = new Map();
+  let currentStep = null;
   const join = async (key) => {
     const task = background.get(key);
     if (!task) return;
@@ -219,17 +343,28 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
   // pause watcher look before it decides the time is up.
   const runStep = async (def, local, limit) => {
     const started = Date.now();
+    const marks = reportMarks(ctx.report);
     let entry = null;
     try {
       await new Promise((resolve, reject) => {
         const timer = extendableTimeout(limit, () => reject(new TimeoutError(def.label, limit)), interrupts.catchUp);
         entry = { timer, local, def };
         running.add(entry);
+        // A stop does not wait for the step to notice: the step ends here and the stages are closed down by the abort below.
+        // A signal that is already aborted never fires a listener, so a stop between two steps is checked for first.
+        const onStop = () => reject(stopError());
+        if (stopSignal?.aborted) return onStop();
+        stopSignal?.addEventListener('abort', onStop, { once: true });
         Promise.resolve()
           .then(() => stages[def.key](ctx, local))
           .then(resolve, reject)
-          .finally(() => timer.clear());
+          .finally(() => {
+            timer.clear();
+            stopSignal?.removeEventListener('abort', onStop);
+          });
       });
+      // A finished step the next attempt can reuse (the sweep only when it captured something).
+      if (!restored.has(def.key) && REUSABLE_STEPS.includes(def.key) && (def.key !== 'sweep' || ctx.sweep)) await checkpoint.saveStep(def.key, ctx, marks);
     } catch (err) {
       if (def.optional && !controller.signal.aborted) {
         const reason = err instanceof TimeoutError ? 'did not finish in time' : `failed (${String(err.message).split(/\r?\n/)[0]})`;
@@ -237,11 +372,11 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
         return;
       }
       if (!(err instanceof TimeoutError)) throw err;
-      throw new RecreateError(
+      throw Object.assign(new RecreateError(
         limit < def.max
           ? `Recreate stopped: the ${minutes}-minute time limit was reached during “${def.label}”.`
           : `“${def.label}” did not finish within its ${Math.round(def.max / 1000)}s limit.`,
-      );
+      ), { timeLimit: true });
     } finally {
       if (entry) {
         entry.timer.clear();
@@ -263,9 +398,14 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
         progress(def.key, 1);
         return;
       }
-      throw new RecreateError(`Recreate stopped: the ${minutes}-minute time limit was reached.`);
+      throw Object.assign(new RecreateError(`Recreate stopped: the ${minutes}-minute time limit was reached.`), { timeLimit: true });
     }
-    const limit = Math.min(def.max + ctx.pageScale * (def.perPage ?? 0), remaining);
+    // No overall limit means no step limit either: a step ends when its work is done. (A stalled page is still
+    // abandoned, and every network and render operation keeps its own limit.)
+    // The as-is stage (lift, build, checks, Lighthouse) may use what the job's budget has left (asIsBudgetMs): the step is
+    // bounded by the job's remaining time, so a stuck stage ends with the time-limit error like any other.
+    const stepMax = asIs && def.key === 'generate' ? Infinity : def.max;
+    const limit = unlimited ? Infinity : Math.min(stepMax + ctx.pageScale * (def.perPage ?? 0), remaining);
     // A stage may use the deadline to wind down on its own (skip remaining work) before the hard timeout. A background
     // stage gets its own deadline and progress as its second argument: the shared ones belong to the step in front.
     const local = { stepDeadline: Date.now() + limit, progress: (fraction, message) => progress(def.key, fraction, message) };
@@ -275,6 +415,7 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     }
     ctx.progress = local.progress;
     ctx.stepDeadline = local.stepDeadline;
+    currentStep = def.key;
     front = local;
     await runStep(def, local, limit);
     front = null;
@@ -282,6 +423,11 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
 
   try {
     for (const def of STEPS.filter((s) => !s.background)) {
+      // An as-is copy runs its capture and its stage only; the other steps are finished at once, so the bar still ends at 100 %.
+      if (asIs && !(asIs.fromDir ? ASIS_REPACK_KEYS : ASIS_STEP_KEYS).has(def.key)) {
+        progress(def.key, 1);
+        continue;
+      }
       // Background steps this step needs in full are awaited first; all of them when it renders pages itself and the
       // machine has no memory to spare for two browsers.
       for (const [key, task] of [...background]) {
@@ -293,7 +439,7 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
         }
       }
       await start(def);
-      for (const next of STEPS.filter((s) => s.background && s.after === def.key)) await start(next);
+      if (!asIs) for (const next of STEPS.filter((s) => s.background && s.after === def.key)) await start(next);
     }
     for (const key of [...background.keys()]) await join(key);
     ctx.report.timings = { ...timings, total: Date.now() - startedAt };
@@ -302,6 +448,9 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     // What the shared cache of static files saved the captures (audit/sharedCache.js).
     if (ctx.netCache) ctx.report.sharedCache = ctx.netCache.stats();
     await dispose();
+    // Finished: nothing to continue from any more.
+    await checkpoint.flush();
+    await rm(path.join(dir, CHECKPOINT_FILE), { force: true });
     await writeFile(path.join(dir, 'report.json'), JSON.stringify(ctx.report, null, 1));
     await commitWorkspace(project.id, recreateId);
     return ctx.report;
@@ -310,7 +459,15 @@ async function recreate({ project, recreateId, progress, warnings = [], stages =
     await dispose();
     // A background step may still be writing into the workspace: it ends on the abort (its browser was just closed).
     await Promise.all([...background.values()].map((task) => task.done));
-    await discardWorkspace(project.id, recreateId).catch(() => {});
+    await checkpoint.flush();
+    // The work done so far is kept when the pages were found: the job can continue where it stopped (recreate/checkpoint.js).
+    if (checkpoint.reusable()) {
+      const reason = err.stopped ? 'stopped' : err.timeLimit ? 'time-limit' : 'error';
+      await checkpoint.stop({ step: currentStep, reason, message: String(err.message ?? err).split('\n')[0].trim() });
+      err.resumable = true;
+    } else {
+      await discardWorkspace(project.id, recreateId).catch(() => {});
+    }
     throw err;
   }
 }
