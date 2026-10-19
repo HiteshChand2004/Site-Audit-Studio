@@ -5,6 +5,7 @@ import { Alert, Card, EmptyState } from '../../components/common/Surface.jsx';
 import FixReport from '../../components/recreate/FixReport.jsx';
 import RecreateReport from '../../components/recreate/RecreateReport.jsx';
 import Outcome from '../../components/recreate/Outcome.jsx';
+import CopyPages from '../../components/recreate/CopyPages.jsx';
 import PageGallery from '../../components/recreate/PageGallery.jsx';
 import AsIsReport from '../../components/recreate/AsIsReport.jsx';
 import SectionCard from '../../components/common/SectionCard.jsx';
@@ -107,6 +108,7 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
         </p>
       )}
       <Outcome result={result} comparison={comparison} />
+      {result.copy && <CopyPages copy={result.copy} />}
 
       {!comparison && canCompare && (
         <Alert

@@ -16,6 +16,11 @@ import { slugFor } from '../../discover.js';
 import { serveCopy } from './serve.js';
 import { runLighthouse } from '../../../audit/lighthouse/run.js';
 import { RecreateError } from '../../errors.js';
+import { openLinkChecker } from '../../../copy/linkBrowser.js';
+import { linkCounts, linkPass } from '../../../copy/linkPass.js';
+import { copyChecksOf } from '../../../copy/checks.js';
+import { issueLogger } from '../../../copy/serverLog.js';
+import { DATA_DIR } from '../../../db/index.js';
 
 /** The stacks an as-is copy can be packaged into (the plain copy and the three app stacks). */
 export const ASIS_STACKS = ['html', 'react-vite', 'nextjs', 'mern'];
@@ -154,6 +159,17 @@ export async function asIsStage(ctx) {
 
     // A preload of a file the copy does not hold is removed before packaging, so every stack inherits it (see preloads.js).
     report.preloadsRemoved = await dropMissingPreloads(copyDir);
+    // Copy my site: every link of the copy is re-checked in a real browser and the safe fixes are written into the copy
+    // before it is packaged (copy/linkPass.js). The copy is otherwise left exactly as it was lifted.
+    ctx.progress(0.3, 'Checking the links');
+    const linkChecker = await openLinkChecker().catch((err) => ({ error: String(err.message ?? err).slice(0, 200) }));
+    try {
+      report.links = linkChecker.check
+        ? await linkPass({ dir: copyDir, originalUrl: siteUrl, pages: pages.map((p) => ({ path: localOfOutPath(p.outPath) })), checker: linkChecker })
+        : { error: linkChecker.error, links: [], changed: 0, files: 0, skippedForTime: 0 };
+    } finally {
+      await linkChecker.close?.();
+    }
     ctx.progress(0.35, 'Packaging the copy');
     await rm(outDir, { recursive: true, force: true });
     if (stack === 'html') {
@@ -228,6 +244,26 @@ export async function asIsStage(ctx) {
     const checked = ctx.audit && !ctx.audit.isDummy ? ctx.audit.scores?.desktop ?? null : null;
     report.lighthouse = { ...report.lighthouse, before: checked };
 
+    // Copy my site: the per-page checks, the open items and the server log (docs/COPY-MY-SITE.md §1, §5, §1h).
+    const copyPages = copyChecksOf(checks.pages, { copy: report.lighthouse?.after ?? null, original: null });
+    const openItems = copyPages.flatMap((p) => p.problems.map((pr) => ({
+      page: p.path,
+      check: pr.width ? `${pr.check} ${pr.width}px` : pr.check,
+      values: `${typeof pr.value === 'number' ? Math.round(pr.value * 100) / 100 : pr.value} (min ${typeof pr.min === 'number' ? Math.round(pr.min * 100) / 100 : pr.min})`,
+      tried: 'checked after the copy was made; no fallback rebuild in this run',
+      reason: 'unresolved',
+    })));
+    const logOpen = issueLogger(DATA_DIR);
+    for (const o of openItems) await logOpen({ site: new URL(siteUrl).hostname, stack, ...o });
+    ctx.report.copy = {
+      stack,
+      pages: copyPages,
+      links: linkCounts(report.links?.links ?? []),
+      linkDecisions: report.links?.links ?? [],
+      linkError: report.links?.error ?? null,
+      openItems,
+      counts: { pages: copyPages.length, asIs: copyPages.length, rebuilt: 0 },
+    };
     ctx.report.asIs = report;
     ctx.report.outputs[stack] = { status: 'ready', dir: path.join('stacks', stack), mode: 'as-is', pages: pages.map((p) => ({ outPath: p.outPath, path: localOfOutPath(p.outPath) })) };
     ctx.report.safety = report.safety;

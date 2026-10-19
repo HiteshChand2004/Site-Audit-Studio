@@ -7,6 +7,9 @@ export const REASONS = {
   owner: { code: 'c', text: 'Needs your decision (a dead external link, a content or brand choice).' },
   look: { code: 'd', text: 'The fix would change the original’s look, animation or behaviour. What it would change is shown; apply it from the report if you want it.' },
   deploy: { code: 'e', text: 'Can only be checked on the real host. See DEPLOY.md.' },
+  // Not one of the five reasons of the spec: an honest marker for a page the run did not try to fix yet (the fallback and
+  // the zero-regressions loop are not live in every job). It is shown as such, never as a reason of the spec.
+  unresolved: { code: '·', text: 'Not fixed in this run yet: no automatic fix or fallback was applied to this page.' },
 };
 
 const BACKEND = /form|login|sign-?in|payment|checkout|cart|backend|api\b/i;
