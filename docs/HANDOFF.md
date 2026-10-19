@@ -91,3 +91,33 @@ the copy is therefore "not safe" by the existing outside-call check. That is rea
 
 After 1–2: re-run makememo MERN and nyaayai Next.js on scratch data (scratch API only; never port 4000/5173, never the
 real data folder). Update this file as you go.
+
+## Step 1 status — stable visual check (WIP, commit 63d7023)
+
+Done in `server/src/recreate/behavior/preserve/check.js` (and `stage.js`):
+- **Freeze + simultaneous screenshots:** both sides get `freezeTimers` before load and `freezePage` after load
+  (timers, carousels, rotators and CSS animations stop on the same state); the two screenshots are taken together.
+- **Warm-up:** both pages are reloaded once with files cached and fonts settled before the freeze
+  (a cold first load was 14 % off in one run).
+- **Plain HTML base fallback:** when the original is not compared and no saved picture exists, the copy is compared
+  with its own Plain HTML base (a second server on the lifted copy), instead of skipping. `stage.js` starts it for
+  non-HTML stacks and passes `htmlBase` to `checkCopy`.
+
+Stability results so far (nyaayai Next.js copy, live original, desktop 1440 and phone 390):
+- Round 1 before the warm-up: 1440 = **14.27 %** (cold load); rounds 2–3: **0.03 %**, **0.03 %**; 390 ≈ **0.02–0.08 %**.
+- Second run with the warm-up: round 1 1440 = 0.21 %, 390 = 0.70 %; round 2 1440 = 0.04 %; then **stopped unfinished**
+  (3 of 6 measurements). It was stopped on purpose; no other process was touched.
+- Status: **not yet proven** (the proof is two full runs with nearly the same score). The 14 % outlier before the
+  warm-up is gone in the runs after it; the sample is too small to call it stable.
+
+Next steps, in order (commit and push after each):
+1. Confirm stability: finish the repeated measurement (at least three full runs, same copy, same widths) and
+   show the spread. Then mark step 1 done.
+2. MERN copy is 3.6 % taller than the original (8289 vs 8000 px on makememo, desktop) and differs from the other
+   stacks; find the cause generically; compare with the Plain HTML base.
+3. Wire the safe fixers onto the as-is output (the list in `docs/COPY-MY-SITE.md` §2).
+4. Zero-regressions loop: the re-audit runs; every "got worse" item is measured and must be 0 or have a reason.
+5. Per-page fallback: clean rebuild of a failing page in the chosen stack, time-boxed correction, keep the better one.
+
+After steps 1–2: re-run makememo MERN and nyaayai Next.js on scratch data (scratch API only; never port 4000/5173,
+never the real data folder).
