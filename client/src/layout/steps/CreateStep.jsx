@@ -6,6 +6,7 @@ import SectionCard from '../../components/common/SectionCard.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import StackOutput from '../../components/recreate/StackOutput.jsx';
 import AsIsChoice, { ASIS_STACK_CHOICES } from '../../components/recreate/AsIsChoice.jsx';
+import CopyPanel from '../../components/recreate/CopyPanel.jsx';
 import { failedAttempt } from '../../components/recreate/failedAttempt.js';
 import { stripAnsi } from '../../ansi.js';
 import { BrowserShot } from '../../components/site/Site.jsx';
@@ -41,6 +42,11 @@ const STAGES = [
 
 const pagesText = (n) => (n == null || n === ALL_PAGES ? 'Every page of the site' : n === 0 ? 'Only the homepage' : `The homepage + ${plural(n, 'page')}`);
 
+// The stages of "Copy my site" (docs/COPY-MY-SITE.md §7) and the job steps they cover (server/src/copy/stages.js).
+const COPY_STAGE_NAMES = ['Capturing', 'Copying', 'Fixing', 'Packaging', 'Checking', 'Done'];
+const COPY_STAGE_OF_STEP = { inspect: 'Capturing', sweep: 'Capturing', assets: 'Copying', generate: 'Fixing', build: 'Packaging', preview: 'Packaging', responsive: 'Checking', reaudit: 'Checking' };
+const copyStageOf = (step) => COPY_STAGE_OF_STEP[step] ?? COPY_STAGE_NAMES[0];
+
 /** Step 2: make the copy (Recreate). */
 export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   const stack = stackById(project.stack);
@@ -71,6 +77,14 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   const staleDays = audit && !audit.isDummy ? ageDays(audit.analyzedAt) : 0;
   const outputs = outputsOf(result);
   const stackState = outputState(result, project.stack);
+  // "Copy my site": one panel (stack, address, authorisation), then the as-is copy of every page for that stack.
+  const [copyOpen, setCopyOpen] = useState(false);
+  const updateProject = useProjects((s) => s.update);
+  const startCopy = async ({ stack: chosen, address }) => {
+    await updateProject(project.id, { stack: chosen, target_domain: address, recreate_pages: ALL_PAGES });
+    const pages = await api.getPages(project.id).then((r) => (r.pages ?? []).map((p) => p.url)).catch(() => []);
+    await recreate(project.id, { mode: 'as-is', confirmed: true, stack: chosen, pages });
+  };
   const [building, setBuilding] = useState(false);
   const [buildError, setBuildError] = useState(null);
 
@@ -88,6 +102,23 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   );
   return (
     <div className={ws.stepBody}>
+      {running ? (
+        <ol className={ws.stages} aria-label="Copy progress">
+          {COPY_STAGE_NAMES.map((name) => (
+            <li key={name} aria-current={copyStageOf(job.step) === name ? 'step' : undefined}>
+              <strong>{name}</strong>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <div className={ws.actions}>
+          <Button variant="primary" size="lg" icon={Sparkles} disabled={Boolean(blocker)} title={blocker ?? undefined} onClick={() => setCopyOpen(true)}>
+            Copy my site
+          </Button>
+        </div>
+      )}
+      <CopyPanel open={copyOpen} onClose={() => setCopyOpen(false)} project={project} onStart={startCopy} />
+
       {job && job.status !== 'done' && <AnalyzeProgress analysis={job} kind="recreate" onDismiss={() => dismissJob('recreate', project.id)} />}
 
       {/* The progress box above already shows a failure that just happened: this alert is for one that was found afterwards. */}
@@ -118,6 +149,8 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
       )}
 
       <div className={result ? ws.twoCol : undefined}>
+      <details style={{ marginTop: 16 }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Advanced options</summary>
       <Card
         icon={Sparkles}
         title="Make a clean copy of this site"
@@ -232,6 +265,7 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
           </p>
         )}
       </Card>
+      </details>
 
       {result && (
         <Card icon={Trophy} title="Last copy" sub={`Made ${new Date(result.createdAt).toLocaleString()} (${timeAgo(result.createdAt)})`}>

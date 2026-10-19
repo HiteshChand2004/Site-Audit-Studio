@@ -1,8 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Check } from 'lucide-react';
 import Modal from '../common/Modal.jsx';
 import Button from '../common/Button.jsx';
-import { STACKS } from '../../constants.js';
 import { useProjects } from '../../store/useProjects.js';
 import styles from './StackModal.module.css';
 import form from '../common/Form.module.css';
@@ -15,7 +13,6 @@ const isAll = (v) => v == null || v === ALL_PAGES;
 export default function StackModal({ open, onClose, project, askAddress = false }) {
   const update = useProjects((s) => s.update);
   const recreate = useProjects((s) => s.recreate);
-  const [choice, setChoice] = useState(project?.stack ?? 'html');
   const [all, setAll] = useState(isAll(project?.recreate_pages));
   const [pages, setPages] = useState(String(isAll(project?.recreate_pages) ? 5 : project.recreate_pages));
   const [domain, setDomain] = useState(project?.target_domain ?? '');
@@ -25,7 +22,6 @@ export default function StackModal({ open, onClose, project, askAddress = false 
 
   useEffect(() => {
     if (open) {
-      setChoice(project?.stack ?? 'html');
       setAll(isAll(project?.recreate_pages));
       setPages(String(isAll(project?.recreate_pages) ? 5 : project.recreate_pages));
       setDomain(project?.target_domain ?? '');
@@ -47,7 +43,7 @@ export default function StackModal({ open, onClose, project, askAddress = false 
     setSaving(true);
     try {
       await update(project.id, {
-        stack: choice,
+        stack: project.stack,
         recreate_pages: exact ? ALL_PAGES : n,
         target_domain: domain.trim() || null,
         exact_mode: exact,
@@ -83,28 +79,7 @@ export default function StackModal({ open, onClose, project, askAddress = false 
         </>
       }
     >
-      <div className={styles.grid} role="radiogroup" aria-label="Technology of the new site">
-        {STACKS.map((stack) => {
-          const selected = choice === stack.id;
-          return (
-            <button
-              key={stack.id}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              className={styles.option}
-              data-selected={selected}
-              onClick={() => setChoice(stack.id)}
-            >
-              <span className={styles.radio} aria-hidden="true">
-                {selected && <Check size={11} strokeWidth={3} />}
-              </span>
-              <span className={styles.name}>{stack.name}</span>
-              <span className={styles.detail}>{stack.detail}</span>
-            </button>
-          );
-        })}
-      </div>
+      {/* The technology is chosen in the copy panel ("Copy my site"), not here. */}
       <div className={styles.settings}>
         <div className={form.field}>
           <span className={form.label}>How exact</span>

@@ -6,6 +6,7 @@ import CountUp from '../common/CountUp.jsx';
 import { CHECKS, HEALTH, matchRating, RESULT_STATUS, TERMS } from '../../copy.js';
 import { plural } from '../../format.js';
 import styles from './Outcome.module.css';
+import { stackById } from '../../constants.js';
 
 // Before → after scores shown (phone measurements: most visitors).
 const SCORES = [
@@ -29,6 +30,12 @@ export default function Outcome({ result, comparison }) {
   const before = comparison?.scores?.before?.mobile;
   const after = comparison?.scores?.after?.mobile;
 
+  // The one plain line of "Copy my site" (the same words as server/src/copy/regress.js summaryLine).
+  const stackName = stackById(result.stack)?.label ?? result.stack ?? '';
+  const pagesN = result.pages.length;
+  const fixedN = s ? (s.fixed ?? 0) + (s.improved ?? 0) : 0;
+  const summaryText = `${plural(pagesN, 'page')} copied${stackName ? ` in ${stackName}` : ''} · ${result.asIs ? pagesN : 0} as-is, ${result.asIs ? 0 : pagesN} rebuilt · Got worse: ${s?.regressed ?? 0} · Fixed: ${fixedN} · Still open: ${s?.open ?? 0}`;
+
   const sentence = [
     `The copy has ${plural(result.pages.length, 'page')}`,
     match != null ? `. How closely it matches the original: ${m.label.toLowerCase()} (${match}/100).` : '.',
@@ -37,6 +44,7 @@ export default function Outcome({ result, comparison }) {
 
   return (
     <Card icon={Trophy} title="How the copy turned out">
+      <p className={styles.sentence}><strong>{summaryText}</strong></p>
       <p className={styles.sentence}>{sentence}</p>
 
       {s && (
