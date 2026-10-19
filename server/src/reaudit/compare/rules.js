@@ -57,16 +57,31 @@ const ALT = { fixes: ['img-alt'], auto: ['alt'] };
 const NAMES = { fixes: ['accessible-names'], auto: ['aria-label'] };
 const HEADINGS = { fixes: ['headings'] };
 const LOADING = { fixes: ['image-loading'] };
+// Full-site D.5: WebP, sized images.
+const IMAGES = { fixes: ['images'] };
+// Full-site D.4: mechanical accessibility rules.
+const ARIA = { fixes: ['aria'] };
 export const EVIDENCE = {
+  'axe.duplicate-id': ARIA,
+  'axe.duplicate-id-aria': ARIA,
+  'axe.duplicate-id-active': ARIA,
+  'axe.frame-title': ARIA,
+  'axe.tabindex': ARIA,
+  'axe.aria-valid-attr-value': ARIA,
+  'axe.aria-hidden-focus': ARIA,
+  'lighthouse.uses-optimized-images': IMAGES,
+  'lighthouse.modern-image-formats': IMAGES,
+  'lighthouse.uses-responsive-images': IMAGES,
+  'lighthouse.total-byte-weight': IMAGES,
   'seo.title-tag': { auto: ['title'] },
   'seo.title-tag.missing': { auto: ['title'] },
   'seo.meta-description': { auto: ['description'] },
   'seo.meta-description.missing': { auto: ['description'] },
-  'seo.title-tag.duplicate': { auto: ['title'] },
-  'seo.title-tag.length': { auto: ['title'] },
-  'seo.meta-description.duplicate': { auto: ['description'] },
-  'seo.meta-description.length': { auto: ['description'] },
-  'seo.language': { auto: ['lang'] },
+  // Full-site D.1: too long / too short / duplicated titles and descriptions rewritten from the page (marked for review).
+  'seo.title-tag.length': { fixes: ['head-texts'], auto: ['title'] },
+  'seo.title-tag.duplicate': { fixes: ['head-texts'], auto: ['title'] },
+  'seo.meta-description.length': { fixes: ['head-texts'], auto: ['description'] },
+  'seo.meta-description.duplicate': { fixes: ['head-texts'], auto: ['description'] },
   'seo.canonical-url': { auto: ['canonical'] },
   'seo.open-graph-tags': { auto: ['og:title', 'og:description', 'og:image'] },
   'seo.image-alt-text': ALT,
@@ -79,12 +94,16 @@ export const EVIDENCE = {
   // The recreated robots.txt keeps the original's AI crawler blocks on purpose; its entry says so.
   'aeo.ai-crawler-access': { auto: ['robots.txt'] },
   // The meta-tag row checks viewport, charset, twitter:card, theme-color and favicon.
-  'crawl.meta-tags': { auto: ['twitter:card', 'theme-color', 'icon'] },
+  'crawl.meta-tags': { fixes: ['head-data'], auto: ['twitter:card', 'icon', 'theme-color'] },
+  // Full-site D.3: Organization / WebSite / FAQPage added from the site itself.
+  'aeo.json-ld-schema': { fixes: ['head-data'], auto: ['json-ld'] },
+  'aeo.faq-schema': { fixes: ['head-data'], auto: ['json-ld'] },
   'aeo.llms-txt': { fixes: ['crawl-files'], auto: ['llms.txt'] },
-  'aeo.json-ld-schema': { fixes: ['structured-data'], auto: ['json-ld'] },
-  'aeo.faq-schema': { fixes: ['structured-data'], auto: ['json-ld'] },
   'links.broken': { fixes: ['broken-links'] },
   'axe.image-alt': ALT,
+  // Full-site D.2: text colours adjusted to WCAG AA.
+  'axe.color-contrast': { fixes: ['contrast'] },
+  'lighthouse.color-contrast': { fixes: ['contrast'] },
   'axe.role-img-alt': ALT,
   'axe.input-image-alt': ALT,
   'axe.link-name': NAMES,

@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { access, readdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { db, projectDir } from '../src/db/index.js';
-import { declarations, tidyColors } from '../src/recreate/emit/css.js';
+import { declarations, emitCss, tidyColors } from '../src/recreate/emit/css.js';
 import { emitPage } from '../src/recreate/emit/html.js';
 import { MOTION_JS } from '../src/recreate/emit/motionScript.js';
 import { buildHead, clip, generatedFavicon } from '../src/recreate/ir/head.js';
@@ -373,7 +373,10 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   for (const f of ['index.html', 'about.html', 'services/index.html', 'contact.html', 'work.html', 'css/site.css']) assert.ok(files.includes(f), f);
   // Crawl files (Phase 5): sitemap.xml and robots.txt generated, the original llms.txt copied as it is.
   for (const f of ['sitemap.xml', 'robots.txt', 'llms.txt']) assert.ok(files.includes(f), f);
-  assert.equal(await read('llms.txt'), await readFile(new URL('./fixtures/recreate-site/llms.txt', import.meta.url), 'utf8'));
+  // Full addresses in the copied llms.txt name the copy (full-site E.1, from main): the fixture's original address is
+  // rebased onto the address the copy's sitemap uses. Everything else is copied as it is.
+  const copyOrigin = (await read('sitemap.xml')).match(/<loc>(https?:\/\/[^/]+)/)[1];
+  assert.equal(await read('llms.txt'), (await readFile(new URL('./fixtures/recreate-site/llms.txt', import.meta.url), 'utf8')).replaceAll('http://localhost:4100', copyOrigin));
   assert.match(await read('robots.txt'), /^Sitemap: https?:\/\/[^\s]+\/sitemap\.xml$/m);
   assert.equal((await read('sitemap.xml')).match(/<loc>/g).length, 5);
   const crawlFix = report.fixes.find((f) => f.id === 'crawl-files');

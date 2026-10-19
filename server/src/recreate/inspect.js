@@ -21,6 +21,7 @@ import { viewsFor } from './views.js';
 
 /** Fewer elements than this in an error answer = nothing of the page rendered (an empty gateway error, a bare status line). */
 export const EMPTY_PAGE_NODES = 8;
+import { networkFailure } from '../audit/interruptions.js';
 
 // Captures stop starting new pages this long before the step's time limit.
 const INSPECT_MARGIN = 15000;
@@ -351,13 +352,25 @@ export async function inspectStage(ctx) {
       let result = await captureOnce(info, i);
       // Captured (or failed) while the network was down or the computer slept: the page may be incomplete although no
       // error says so. Once more when the network is back. An abandoned capture is not repeated here (it may still be writing).
+      let again = false;
       if (result !== null) {
         const hit = await recoverHit(ctx, { step: 'inspect', what: `capture of ${info.path}`, startedAt: started, progress: (m) => ctx.progress(at, m) });
         if (hit) {
           ctx.progress(at, `Capturing ${info.path} again (${causeText(hit)})`);
           started = Date.now();
           result = await captureOnce(info, i);
+          again = true;
         }
+      }
+      // The page failed with a network-level error (a Wi-Fi switch, a reset connection) that was too short for the outage
+      // watcher to see: every page must be captured, so once more after the site answers again (found on panscience.xyz:
+      // ERR_NETWORK_CHANGED cost a page).
+      if (!again && result && !result.views.desktop && result.errors.some((e) => networkFailure(e.message))) {
+        ctx.interrupts?.log?.(`inspect: ${info.path} failed with a network error → captured once more`);
+        ctx.progress(at, `Capturing ${info.path} again (the connection dropped)`);
+        await ctx.interrupts?.waitBack?.({ maxMs: 30000 }).catch(() => {});
+        started = Date.now();
+        result = await captureOnce(info, i);
       }
       if (result === null) {
         stalled.push({ i, info });

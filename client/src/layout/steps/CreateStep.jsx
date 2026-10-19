@@ -138,7 +138,7 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
           </div>
           <div>
             <dt>Future address</dt>
-            <dd className="mono">{project.target_domain || 'Same as the original'}</dd>
+            <dd className="mono">{project.target_domain || 'Not set yet (asked when you create the copy)'}</dd>
           </div>
         </dl>
         {result?.asIs && !running && (
@@ -176,9 +176,11 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
             icon={running ? (p) => <Loader2 {...p} className={styles.spin} /> : Sparkles}
             disabled={Boolean(blocker) || running}
             title={blocker ?? undefined}
-            onClick={() => (mode === 'as-is'
-              ? recreate(project.id, { mode: 'as-is', confirmed: true, stack: asIsStack, pages: asIsPages })
-              : recreate(project.id))}
+            // Every full address in the copy (canonical, sitemap, link previews, structured data) uses the new site's address,
+            // never the original: it is asked once before the first copy.
+            onClick={() => (project.target_domain
+              ? (mode === 'as-is' ? recreate(project.id, { mode: 'as-is', confirmed: true, stack: asIsStack, pages: asIsPages }) : recreate(project.id))
+              : onOpenSettings('before-create'))}
           >
             {running
               ? 'Creating the copy…'
@@ -217,7 +219,7 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
               Rebuild from the last visit
             </Button>
           )}
-          <Button icon={Settings2} onClick={onOpenSettings} disabled={running}>
+          <Button icon={Settings2} onClick={() => onOpenSettings('settings')} disabled={running}>
             Change settings
           </Button>
         </div>

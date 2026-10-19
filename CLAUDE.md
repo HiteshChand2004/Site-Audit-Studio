@@ -435,6 +435,107 @@ Steps are long, so a step is never re-run whole. (1) **Sleep does not count**: e
 discovery's homepage fetch. Before a repeat it waits for the site (≤ 2 min, `NETWORK_WAIT_MS`). generate / build / preview / responsive are local: only (1). (3) **Capped** at 6 min per job (`ALLOWANCE_MS`). Log line `[recreate <id>] <step>: <what> — <cause> → <outcome>`; `report.interruptions` = { pauses, pausedMs, outages, grantedMs, allowanceMs, events[] }.
 inspect and sweep read their limits live. `SAS_NETWORK_WATCH=0` = DNS watcher off (test suite). Tests: `recreate-interrupts.test.js`. Not covered: cross-origin stylesheets in the asset step, the WordPress REST fetch.
 - First real run: an overloaded process froze 5–10 s at a time and was taken for sleep → sleep now counts from **30 s** (`PAUSE_MIN_MS`), an outage needs **2 failed DNS checks in a row**, and a check that ran far past its timeout counts as no answer either way.
+- **B.1 click capture (WIP)** (`capture/clicks.js captureClicks`, desktop view, after the hover probe, own budget `inspect.js CLICK_BUDGET` 15 s when the step has time to spare): candidates = buttons (a button without
+  `type` is a submit button only inside a form), `summary`, `role=button|tab|switch`, `aria-expanded|controls|haspopup`, `#` / `javascript:` / empty-href anchors, `cursor: pointer` elements with a menu / toggle / slide / close… hint;
+  equal ones probed 3× (`groups`). Each: mouse rests on it (a panel that opens then = `opensOn: 'hover'`), click, the page is compared before / after (visibility, `aria-*` / `open` / `hidden` / class, sideways transform / scroll;
+  identity matrix = no move) → `classifyClick`: **dialog** (fixed layer ≥ 50 % of the screen), **disclosure** (shown / hidden; also a control that hides the block it sits in), **tabs** (sibling panels swapped, trigger has equal siblings),
+  **carousel** (track moved, or a swap by a next / prev / dot control), `state` (only attributes changed). Disclosure / dialog are closed again (same click → Escape → click outside; `closes`). Each target's open-state style is kept
+  (display, visibility, opacity, transform, height, max-height, overflow… for C.1). While probing: page links and form submissions are blocked (capture-phase `preventDefault`), `window.open` / `history.pushState|replaceState` are no-ops,
+  a script navigation is answered with 204 (an aborted one shows Chrome's error page). Output `motion.json.clicks = { version, widgets[{ kind, targets, trigger, tag, text, reasons, opensOn, closes, group, change }], groups, stats }`,
+  `report.pages[].motion.clicks`, `report.motion.clicks` (found, kinds, notRestored, left). `snapshot.js KEEP_ATTR` also keeps `hidden`. Tests: `recreate-clicks.test.js`.
+- **B.2 measured** (worktree API on `C:\sasb`, port 4010, all pages, desktop only): **panscience.xyz** 60 of 63 crawled pages captured (1 skipped: `/contact?tab=join`, a query variant), 23 min (inspect 19); 9 parts (tabs 1, disclosure 7, carousel 1);
+  the probe left `/` and `/contact` through Next.js script navigation (fixed afterwards: History API no-ops + 204). **parchaa.com** 10 / 10 pages, 5 min; 18 parts (dialog 2, disclosure 7, carousel 1, "tabs" 8 = a "Collapse search bar" button
+  hiding its own bar: fixed to disclosure); homepage ran out of probe time at 8 (budget 10 → 15 s, shorter waits). **No `<a href>` or `src` points at the original** (notice pages 3 on panscience). Still on the original domain (no target address
+  set): canonical, og:url / og:image / twitter:image, sitemap.xml, robots.txt, llms.txt (copied), JSON-LD page URLs (copied). Decision (user): **ask the new site's address before Recreate**; every full URL then uses it (step E.1).
+
+- **E.1 nothing names the original site (WIP)**: user decision "ask before Recreate". Client: "Create the copy" without `target_domain` opens the settings dialog as **"Where will the new site live?"** (`StackModal askAddress`, address required,
+  "Save and create the copy" saves and starts the copy; `AppShell stackMode` null | 'settings' | 'before-create'). Server: `ir/rebase.js createRebaser({ resolveLink, baseUrl })` moves full addresses copied from the original onto the new site with the
+  page-link resolver (a copied page → baseUrl + `servedPath(outPath)`, a downloaded file → its local copy, any other page of the site → its notice page; other hosts unchanged): every string of the JSON-LD (`rebase.json`), hreflang
+  alternates, and the links in the copied `llms.txt` (`rebase.text`, sentence punctuation kept outside); `crawlFiles.rebased` = count. canonical / og:url / og:image / sitemap / robots already used `baseUrl`. Without an address
+  (API callers) the report warns that these name the original address. Tests: `recreate-rebase.test.js`; the pipeline test compares llms.txt with its links on the copy's origin.
+
+- **C.1–C.5 + C.7 interactive parts rebuilt (WIP)**: `ir/widgets.js applyWidgets(site, clicksByPath)` (in `generateStage` after `applyMotion`, `readPageClicks`) matches the click capture to the merged tree by snapshot path (`cpath` /
+  `cpathAlt`, like `ir/motion.js`) and writes tokens in one attribute `data-w` (`ir/index.js pageBody`): `dtN` / `dhN` disclosure trigger (click / hover) + `dpN` panel, `mtN` + `mpN` dialog (`role=dialog aria-modal`), `btN:i` tab
+  (`role=tab`, `aria-selected` written in the HTML: the tab whose click changed nothing was the chosen one) + `bpN:i` panel (`role=tabpanel`), `ckN` slider track + `cnN` / `cvN` next / previous. Triggers get `aria-expanded` / `aria-controls`
+  (ids generated when the panel has none), `role=button` + `tabindex=0` when not focusable. States: a panel's open look = the style read with it open (`stateDecls`: display, visibility, opacity, transform, translate, max-height, clip-path,
+  pointer-events; not its size) under `.w-open`, a tab panel's closed look under `.w-shut` (`emit/widgetCss.js`, in the stylesheet after the motion rules); slider tracks get a 0.4 s transform transition (no-preference only).
+  `ir.widgets = { version, items[{ id, kind, mode?, open?, shut? }] }`, `report.generate.widgets` = { pages, found, rebuilt, byKind, skipped: { unmapped, scriptBuilt, state, noPanel } }. Not rebuilt: panels the page's script creates (not in the
+  snapshot), sliders that swap slides instead of moving a track, `state`-only toggles, equal triggers beyond the 3 probed.
+- **The script** (deviation from the plan: no second file): the widget code is a second, independent part of the same fixed `js/motion.js` (`emit/motionScript.js`): disclosure (click, Enter / Space on non-buttons, hover mode with a 150 ms
+  leave delay, Escape closes the last opened and returns focus, a click outside closes menus), dialog (Escape, click on the backdrop or on a close / dismiss / cancel / × control), tabs (click, ArrowLeft / ArrowRight), slider (one slide =
+  distance between the first two children; scrolls when the track scrolls itself; wraps around). Nothing changes at load (hydration stays clean); without script the page looks as captured. A site with widgets gets `ir.motion.script = true`
+  (an empty motion record when it had none), so every stack, the safety profile and the preview pick the file up unchanged. `verify/equivalence.js` ignores the `w-open` / `w-shut` classes (inside the page function).
+- **C.8 panels the page's script builds on the click (WIP)** (found on parchaa.com / Framer: 10 of 18 parts had their content created only when clicked, so it was not in the snapshot): when a click adds elements, the probe snapshots them
+  in the page snapshot's own form (`snapshot.js snapshotPage({ root: <element>, path, maxNodes: 400 })`: inherited styles diffed against the parent it was added to) before closing them: `widgets[].built = [{ parent, index, node }]`
+  (`addedPlaces`: the parent's snapshot path and the position among the children that existed before). `ir/widgets.js` inserts it (`fromCapture`, its own paths dropped) under that parent at that position, `display: none` + hidden,
+  its open look = the captured open style (else `display: block`); the trees are renumbered (`numberNodes`, exported). Images inside that were never downloaded are left out like elsewhere. `report.generate.widgets.inserted`.
+  Test: the "Services" menu of `fixtures/widgets-page.js` (a list created by script on click) is hidden in the copy and opens / closes there.
+- **UI**: NEW report card section **Interactive parts** (`RecreateReport.jsx Interactive`: Menus and panels / Tabs / Sliders / Pop-up windows counts, what could not be rebuilt).
+- **C.6 re-audit row** `motion.widgets` "Menus, tabs, sliders and pop-ups work" (category motion, same thresholds as the other motion rows): `capture/measure.js measureMotion({ clickBudgetMs })` runs the click probe on the recreated page last,
+  only where the original page had parts (`reaudit/index.js` passes `clicks`); budget 17 s (the capture had 15 s), page budget 40 → 60 s, motion step 150 → 240 s. Paired by `kind|text` (`state` toggles left out).
+  `checklist.motion.widgets` = before / after counts. Test in `reaudit-motion.test.js`.
+- Tests: `recreate-widgets.test.js` (a real Recreate of `fixtures/widgets-page.js`: tokens, ARIA, CSS states, safety; in a browser the menu opens / Escape closes, accordion, tabs, slider moves, dialog, hover dropdown, no page errors; without
+  script panels closed and the first tab shown; React + Vite and Next.js exports equivalent, hydration clean, menu and tabs work). The page lives in `fixtures/widgets-page.js` (shared with `recreate-clicks.test.js`).
+
+- **D.1 titles and descriptions (WIP)** (`ir/head.js fixHeadTexts(trees, siteName)`, in `prepareSite` after the heads; user decision: rewrite, marked for review, no AI): title > 60 → `shortenTitle` (trailing ` | – — : ·` parts dropped first, then
+  cut at a word with …); < 10 → `<title> | <site name>`; description > 160 → `clip`; < 50 → the page's first paragraph (≥ 50); duplicates across pages (case-insensitive): the first page keeps its text, a duplicate title becomes
+  `<page h1> | <site name>` (or the humanized path), a duplicate description the page's own first paragraph (or `<h1>: …`). Each change: `report.autoGenerated` with `original` + `review: true`; `report.fixes` `head-texts`;
+  EVIDENCE for `seo.title-tag.length|duplicate`, `seo.meta-description.length|duplicate`. Text that is fine is never touched. Tests: `recreate-headtexts.test.js`.
+
+- **D.2 colour contrast (WIP)** (`fixers/contrast.js fixContrast(tree)`, a tree fixer before the styles; user decision: fix with the smallest change, listed for review): every visible element with its own text, per view, is judged
+  against the colour behind it = the nearest solid ancestor background (semi-transparent ones blended), starting from `<html>`'s colours (`tree.htmlNode`; a dark site often sets them there), else white. WCAG AA 4.5:1, large text
+  (≥ 24 px, or ≥ 18.66 px bold) 3:1. Failing text gets `fixColor`: the same hue and saturation, lightness moved away from the background by binary search to the target + 0.15 (darker on light backgrounds, lighter on dark ones),
+  written as hex on the node (inherited by its children). Never judged (listed as open): text whose ancestor has a background image / gradient, and text whose centre lies on a picture (img, picture, video, canvas, svg, iframe, or an
+  element with a background image) that is not inside it — a hero photo behind a heading. `report.fixes` `contrast` (items: page, tag, text, from, to, background, before / after ratio); EVIDENCE `axe.color-contrast`.
+  Tests: `recreate-contrast.test.js`.
+
+- **D.3 head data the original lacks (WIP)** (`ir/aeo.js addHeadData`, in `prepareSite` after the address rebase; everything from the site itself, listed as auto-generated with `review: true`): `Organization` (site name, the new
+  address, the site icon as logo — apple-touch-icon first) and `WebSite` JSON-LD on the homepage when no page has one (`LocalBusiness` / `Corporation` count as an organisation); `FAQPage` on a page that shows ≥ 2 question → answer pairs
+  (`faqPairs`: an h2–h6 ending in "?" followed by ≥ 20 characters of text before the next heading, or `<details><summary>…?</summary>answer</details>`; ≤ 20, answers ≤ 600 chars); `theme-color` = the site's most used strong colour
+  (`brandColor`) on every page without one. **llms.txt** (supersedes the Phase 5 "copied only, never generated" rule — user: every old problem solved): when the original has none, `crawlFiles` writes one from the pages
+  (`# <home title>`, `> <home description>`, `## Pages` with `- [title](url): description` for each indexable page, ≤ 200); an original that was too large to copy is still left to copy by hand. `report.fixes` `head-data`;
+  `crawl-files` says "llms.txt generated from the pages"; EVIDENCE `aeo.json-ld-schema`, `aeo.faq-schema`, `crawl.meta-tags` (theme-color), `aeo.llms-txt`. Tests: `recreate-headdata.test.js`.
+
+- **D.6 per-page CSS (WIP)** (the regression deferred since 5.5: one shared `css/site.css` = "Reduce unused CSS" + "render-blocking resources" on every site): the plain-HTML build no longer writes or links `css/site.css`. `emit/html.js emitSite`
+  builds the stylesheet once (`emitCss(ir)`, now `emitCss(ir, { from })`) and each page carries only the rules it uses (`emit/pageCss.js`: `usedBy(body)` = classes + `data-motion` / `data-w` tokens, plus the html / body classes; `pageCss`
+  keeps a rule when the page has every class and token its selector names — the script's `js-motion` / `is-in` / `w-open` / `w-shut` count as present —, element rules, `:root`, `@font-face`, at-rules that still hold rules, `@keyframes`
+  a kept rule names; compact, quoted text untouched). ≤ `INLINE_MAX` 40 000 characters → all inline in a `<style>` in the head (no CSS request); larger → the rules of the first screen inline (IR nodes with `f: 1`: desktop top
+  < `FOLD_PX` 1000) and the page's full rules in `css/pages/<outPath>.css` linked at the end of `<body>` (not render-blocking). url()s are rewritten for where each piece lives. `report.generate.cssBytes` sums both; the preview step
+  requests `css/pages/*.css` instead of `css/site.css`. The app stacks keep one stylesheet (their bundler links it; equivalence ignores stylesheets). **Note**: `verify/refine.js` (parked with the sweep) overrides `css/site.css`; it
+  must serve the pages' CSS instead when the sweep comes back. Tests: `recreate-pagecss.test.js`; the pipeline test builds the formatted stylesheet from the saved IR (`emitCss`) and checks the inline copy.
+- **Two capture fixes found by the all-pages panscience run (every page must be captured)**: (1) `audit/screenshots.js encode` and the visual-diff heatmap encode in memory and write with Node — sharp cannot open a path longer than
+  Windows' 260 characters, which a long page URL reaches inside the data folder ("unable to open for write" cost 2 pages); (2) `inspect.js`: a page whose capture failed with a network-level error (`networkFailure`, e.g.
+  `ERR_NETWORK_CHANGED`) that the outage watcher was too slow to see is captured once more after the site answers again (≤ 30 s wait).
+
+- **D.7 deploy headers (WIP)** (`ir/crawlFiles.js HEADERS_FILE` = `_headers`, in `ir.files` so every stack ships it at the site root; read by Netlify and Cloudflare Pages): HSTS (1 year, subdomains), nosniff, `Referrer-Policy:
+  strict-origin-when-cross-origin`, `X-Frame-Options: SAMEORIGIN`, a Permissions-Policy, a CSP (`default-src 'self'`, images / media from https, inline style allowed — each page carries its own CSS since D.6 —, `script-src 'self'`,
+  `frame-ancestors 'self'`, `upgrade-insecure-requests`) and `Cache-Control: immutable` for `/assets/*` (content-hashed names). The Next.js build drops the CSP line (its pages carry inline scripts; `emit/next publicFile`). The checklist
+  keeps the deploy rows N/A (a local preview cannot measure them); `report.fixes` `deploy-headers` says what was prepared. Test in `recreate-headdata.test.js`.
+
+- **D.5 lighter images (WIP)** (`assets/optimize.js optimizeImages`, at the end of the assets step after the SVG sanitizer): every downloaded PNG / JPEG is re-encoded as WebP (quality 82, alpha kept, EXIF rotation applied) and,
+  when every use of it on the pages has a known width (an `<img>`: `collect.js add(…, width)` keeps `maxWidth` / `unsized`; the page's loaded-resource list does not count), shrunk to twice the widest shown width (never enlarged); a CSS
+  background or meta image of unknown size keeps its pixels. The new file replaces the old only when it is ≤ 90 % of its size; it keeps the naming scheme (`<name>-<sha256:10>.webp`) and every URL that mapped to the old file maps to
+  the new one, so the IR and every stack need no change. GIF (may be animated), SVG, WebP, AVIF and icons are left alone. `report.assets.images` = { files, converted, resized, bytesBefore, bytesAfter }; `report.fixes` `images`;
+  EVIDENCE for Lighthouse `uses-optimized-images`, `modern-image-formats`, `uses-responsive-images`, `total-byte-weight`. Test: `recreate-images.test.js`.
+
+- **D.4 mechanical accessibility rules (WIP)** (`fixers/aria.js fixAria(tree)`, a tree fixer before the contrast one; nothing visible changes): `duplicate-id` (later uses become `<id>-2`, `-3`; references keep pointing at the first),
+  `frame-title` (an `<iframe>` without a title → "Embedded content from <host>"), `tabindex` (positive → 0), `aria-valid-attr-value` (a true / false / mixed ARIA attribute with another value is removed), `aria-hidden-focus`
+  (a focusable element inside `aria-hidden="true"` gets `tabindex="-1"`), and on a widget panel the script opens (`dp` / `mp` / `bp` tokens) a captured `aria-hidden` is removed (closed = `display: none`, hidden from
+  screen readers anyway; it would otherwise stay hidden once opened). `report.fixes` `aria`; EVIDENCE `axe.duplicate-id(-aria|-active)`, `axe.frame-title`, `axe.tabindex`, `axe.aria-valid-attr-value`, `axe.aria-hidden-focus`.
+  Left alone on purpose: rules that would change the layout or the content (list structure, landmarks, nested interactive controls). Test: `recreate-aria.test.js`.
+
+### Recreate: sleep and network outages (`recreate/interrupts.js`, branch `recreate-retry`, WIP, merged into `phase-4a`; builds on `audit/interruptions.js`)
+Steps are long, so a step is never re-run whole. (1) **Sleep does not count**: each pause the watcher finds is given back at once — job deadline, `ctx.jobDeadline`, every running step's limit and `stepDeadline` move later (`runStep` uses
+`extendableTimeout`; a firing step timer first lets the watcher look (`tick()`)). (2) **Only what was hit is repeated, once**: a page capture or a page's sweep widths overlapped by an outage/sleep, even without an error (`recoverHit`; an abandoned
+capture that may still write is never repeated); asset downloads that failed at network level (`RETRYABLE_ASSET_REASONS`: timeout, time-limit, dns, refused, error) during an outage, merged into the first round (`mergeDownloads`: same bytes = one file);
+discovery's homepage fetch (`recoverFailure`). Before a repeat it waits for the site (≤ 2 min, `NETWORK_WAIT_MS`) and gives back the hit piece's time. generate / build / preview / responsive are local: only (1). (3) **Capped** at 6 min per job
+(`ALLOWANCE_MS`). Log line `[recreate <id>] <step>: <what> — <cause> → <outcome>`; `report.interruptions` = { pauses, pausedMs, outages, grantedMs, allowanceMs, events[] }. inspect and sweep read their limits live. `SAS_NETWORK_WATCH=0` = DNS watcher off
+(test suite). Tests: `recreate-interrupts.test.js`. Not covered: cross-origin stylesheets in the asset step and the WordPress REST fetch.
+- **First real run** (panscience, 2-core laptop, `SAS_MAX_PARALLEL=1`, limit 20): the overloaded process froze 5–10 s at a time (16 "pauses", 142 s; network fine), taken for sleep at the 5 s threshold: homepage captured twice, 305 s given back
+  (15.8 min instead of 12). No corruption (second capture overwrote all files), no errors, fidelity 75. Fixed: sleep counts from **30 s** (`PAUSE_MIN_MS`), an outage needs **2 failed DNS checks in a row**, a check that ran far past its timeout
+  (process froze) counts as no answer either way. The long inspect came from the page limit (20 of 21 pages, 7-min limit, 3–7 captured) and one view at a time, not from retries.
+- **Step list no longer ticks then unticks** (all jobs): `progressTracker` now shows the **first unfinished step of the list**, started or not; a step waiting for the background sweep says "Waiting for “Capturing more widths” to finish".
+  Every listed step reports progress (the re-audit leaves `screenshots` out). Tests: `recreate-interrupts.test.js`, `perf.test.js`.
 
 ### Phase 4b — responsive fidelity + visual diff + motion (branch `phase-4b`) — merged
 Decisions: CSS-first motion + one small generated `motion.js` (IntersectionObserver, safety-gated); sweep widths 320/480/600/900/1024/1280/1920. All general.

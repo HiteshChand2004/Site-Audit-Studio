@@ -1,301 +1,178 @@
-// Text colour contrast (axe `color-contrast`, WCAG 2 AA): text whose colour is too close to its background gets the
-// smallest change that passes — its colour mixed toward black or white (whichever reaches the ratio), so the hue and the
-// look stay as close to the original as possible. Only text that fails is changed.
-//   1. The page the analysis scanned (the homepage): the elements its axe run found too faint, with the colours axe
-//      measured in a real browser. Decorative text (aria-hidden, or a faint watermark laid over the layout) is drawn by
-//      CSS (`::before { content }`) instead: it looks as designed and is no longer page text.
-//   2. Every other text, from the captured styles, per view: the background is the nearest one behind the text
-//      (semi-transparent ones blended, element opacity applied like a browser does). Text over a picture or a gradient,
-//      and text nearly the colour of what seems behind it (something the styles do not show is really behind it), is left.
-// Large text (24 px, or 18.66 px bold) needs 3:1, other text 4.5:1.
-import { load } from 'cheerio';
+// Colour contrast (full-site D.2; user decision: fix with the smallest change, listed for review). Text whose colour does
+// not stand out enough from the colour behind it (WCAG 2 AA: 4.5:1, or 3:1 for large text - 24 px, or 18.66 px bold) gets a
+// darker (on a light background) or lighter (on a dark one) shade of the same hue, only as far as needed. The colour behind
+// the text is the nearest solid background of its ancestors (semi-transparent ones blended); text over an image or a
+// gradient cannot be judged from the styles and is left alone (listed as open). Runs on the merged trees before the styles
+// are built, on every view the node has; captured styles are diffs (colour inherited from the parent unless set).
 import { isElement, isText } from '../ir/tree.js';
 
-const NORMAL = 4.5;
-const LARGE = 3;
-const MARGIN = 0.08; // a little above the line, so rounding in the browser never lands below it
+const AA = 4.5;
+const AA_LARGE = 3;
+const MARGIN = 0.15; // a little above the line: rounding in the browser must not drop it below
 
-const RGB = /^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/i;
-
+/** 'rgb(1, 2, 3)' / 'rgba(1, 2, 3, 0.5)' / '#abc' → [r, g, b, a] or null. */
 export function parseColor(value) {
-  const m = RGB.exec(String(value ?? '').trim());
+  if (!value) return null;
+  const v = String(value).trim().toLowerCase();
+  if (v === 'transparent') return [0, 0, 0, 0];
+  let m = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:[\s,/]+([\d.]+%?))?\s*\)$/.exec(v);
   if (m) {
-    const a = m[4] === undefined ? 1 : m[4].endsWith('%') ? parseFloat(m[4]) / 100 : parseFloat(m[4]);
-    return [+m[1], +m[2], +m[3], a];
+    const a = m[4] == null ? 1 : m[4].endsWith('%') ? Number(m[4].slice(0, -1)) / 100 : Number(m[4]);
+    return [Number(m[1]), Number(m[2]), Number(m[3]), a];
   }
-  const hex = /^#([0-9a-f]{6})$/i.exec(String(value ?? '').trim());
-  if (hex) return [0, 2, 4].map((i) => parseInt(hex[1].slice(i, i + 2), 16)).concat(1);
-  if (/^transparent$/i.test(String(value ?? '').trim())) return [0, 0, 0, 0];
+  m = /^#([0-9a-f]{3,8})$/.exec(v);
+  if (m) {
+    let h = m[1];
+    if (h.length <= 4) h = [...h].map((c) => c + c).join('');
+    const n = (i) => parseInt(h.slice(i, i + 2), 16);
+    return [n(0), n(2), n(4), h.length === 8 ? n(6) / 255 : 1];
+  }
   return null;
 }
 
+const blend = (fg, bg) => {
+  const a = fg[3] ?? 1;
+  return [0, 1, 2].map((i) => fg[i] * a + bg[i] * (1 - a)).concat(1);
+};
 const channel = (c) => {
   const s = c / 255;
   return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
 };
-const luminance = ([r, g, b]) => 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
-export const ratio = (a, b) => {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-  return (hi + 0.05) / (lo + 0.05);
-};
-const over = (top, bottom, alpha = top[3]) => [0, 1, 2].map((i) => top[i] * alpha + bottom[i] * (1 - alpha)).concat(1);
-const mix = (c, target, t) => [0, 1, 2].map((i) => Math.round(c[i] + (target[i] - c[i]) * t)).concat(1);
-const css = ([r, g, b]) => `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
+export const luminance = (rgb) => 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+export function contrast(a, b) {
+  const [l1, l2] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (l1 + 0.05) / (l2 + 0.05);
+}
+
+function toHsl([r, g, b]) {
+  const [R, G, B] = [r / 255, g / 255, b / 255];
+  const max = Math.max(R, G, B);
+  const min = Math.min(R, G, B);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, l];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  const h = max === R ? (G - B) / d + (G < B ? 6 : 0) : max === G ? (B - R) / d + 2 : (R - G) / d + 4;
+  return [h / 6, s, l];
+}
+function toRgb([h, s, l]) {
+  if (!s) return [l, l, l].map((x) => Math.round(x * 255));
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const f = (t) => {
+    let x = t;
+    if (x < 0) x += 1;
+    if (x > 1) x -= 1;
+    if (x < 1 / 6) return p + (q - p) * 6 * x;
+    if (x < 1 / 2) return q;
+    if (x < 2 / 3) return p + (q - p) * (2 / 3 - x) * 6;
+    return p;
+  };
+  return [f(h + 1 / 3), f(h), f(h - 1 / 3)].map((x) => Math.round(x * 255));
+}
+const hex = (rgb) => `#${rgb.slice(0, 3).map((c) => Math.round(c).toString(16).padStart(2, '0')).join('')}`;
 
 /**
- * The smallest mix of one side toward black or white that reaches `need`, with how far it had to move (`t`, 0–1).
- * `side` 'text' moves the text colour (drawn at `alpha`) over the fixed background `other`; 'background' moves the
- * background under the fixed text colour `other`.
+ * The closest colour of the same hue that reaches `target` against `bg`: lightness moved away from the background.
+ * @returns {number[]} rgb
  */
-function bestMix(from, other, need, alpha, side) {
-  const reached = (c) => (side === 'text' ? ratio(over(c, other, alpha), other) : ratio(over(other, c, alpha), c));
-  if (reached(from) >= need) return null;
-  let best = null;
-  for (const target of [[0, 0, 0], [255, 255, 255]]) {
-    if (reached(mix(from, target, 1)) < need) continue;
-    let lo = 0;
-    let hi = 1;
-    for (let i = 0; i < 18; i++) {
-      const mid = (lo + hi) / 2;
-      if (reached(mix(from, target, mid)) >= need) hi = mid;
-      else lo = mid;
-    }
-    if (!best || hi < best.t) best = { t: hi, color: mix(from, target, hi) };
+export function fixColor(fg, bg, target) {
+  const [h, s, l] = toHsl(fg);
+  const darker = luminance(bg) > 0.18;
+  let lo = darker ? 0 : l;
+  let hi = darker ? l : 1;
+  let best = toRgb([h, s, darker ? 0 : 1]);
+  for (let i = 0; i < 24; i++) {
+    const mid = (lo + hi) / 2;
+    const rgb = toRgb([h, s, mid]);
+    if (contrast(rgb, bg) >= target) {
+      best = rgb;
+      if (darker) lo = mid;
+      else hi = mid;
+    } else if (darker) hi = mid;
+    else lo = mid;
   }
   return best;
 }
 
-/** The smallest mix of `fg` toward black or white that reaches `need` against `bg` (fg drawn at `alpha`), or null. */
-export function passingColor(fg, bg, need, alpha = 1) {
-  return bestMix(fg, bg, need, alpha, 'text')?.color ?? null;
-}
-
-// Moving the text further than this turns the design upside down (white button text ends up almost black): then the
-// background is darkened instead, and where that is not safe the case is left for a person.
-const MAX_TEXT_SHIFT = 0.5;
-
-/**
- * The box whose own background colour the text is read on, when darkening (or lightening) that one box is safe: it is
- * the only layer behind the text, and every piece of text drawn on it has this same colour, so one change fixes them
- * all and spoils none. A box holding text of its own colours (a card with a heading in another colour) is not touched.
- * Subtrees with their own opaque background are left out: their text sits on that one, not on this box.
- */
-/**
- * For a finding the audit measured (which carries colours, not boxes): the nearest box at or above the text that paints
- * exactly the background axe measured, when darkening it is safe (sharedBackdrop). The desktop view decides.
- */
-function backdropOf(node, ancestors, bg, fg) {
-  const chain = [node, ...[...ancestors].reverse()];
-  for (let k = 0; k < chain.length; k++) {
-    const own = parseColor(chain[k].views?.desktop?.style?.['background-color']);
-    if (!own || own[3] === 0) continue;
-    if (own[3] < 1 || own.join() !== bg.join()) return null; // a stack of layers, or not the colour axe read
-    const above = k === 0 ? [...ancestors] : ancestors.slice(0, Math.max(0, ancestors.length - k));
-    return sharedBackdrop(node, [own], chain[k], above, 'desktop', fg);
-  }
-  return null;
-}
-
-function sharedBackdrop(node, layers, bgNode, bgAncestors, v, fg) {
-  if (layers.length !== 1 || !bgNode?.views?.[v]) return null;
-  const same = (c) => c && c[0] === fg[0] && c[1] === fg[1] && c[2] === fg[2] && c[3] === fg[3];
-  let ok = true;
-  const visit = (n, ancestors) => {
-    if (!ok || !isElement(n)) return;
-    if (n !== bgNode) {
-      const own = parseColor(n.views?.[v]?.style?.['background-color']);
-      if (own && own[3] >= 1) return; // its text is read on its own background
-    }
-    if (ownText(n) && !same(parseColor(inherited(n, ancestors, v, 'color') ?? 'rgb(0, 0, 0)'))) ok = false;
-    for (const c of n.children) visit(c, [...ancestors, n]);
-  };
-  visit(bgNode, bgAncestors);
-  return ok ? bgNode : null;
-}
-
-const px = (v) => parseFloat(String(v ?? '')) || 0;
-const FIELD_TAGS = new Set(['input', 'textarea', 'select']);
 const ownText = (n) => n.children.some((c) => isText(c) && c.text.trim());
-// What a value of this property is for this element in this view: its own, else the nearest ancestor's (inherited).
-const inherited = (n, ancestors, v, prop) => {
-  for (const x of [n, ...[...ancestors].reverse()]) {
-    const value = x.views?.[v]?.style?.[prop];
-    if (value !== undefined && value !== 'inherit') return value;
-  }
-  return undefined;
-};
-
-const textOf = (n) => n.children.filter(isText).map((c) => c.text).join(' ').replace(/\s+/g, ' ').trim();
-const classesOf = (cls) => String(cls ?? '').split(/\s+/).filter(Boolean).sort().join(' ');
-const hexToRgb = (hex) => parseColor(String(hex ?? '').trim().length === 4 ? `#${[...hex.slice(1)].map((c) => c + c).join('')}` : hex);
+const contains = (a, b) => isElement(a) && a.children.some((c) => c === b || contains(c, b));
 
 /**
- * The original's own accessibility scan (axe, a real browser) of the page: the text it found too faint, with the colours it
- * measured. { tag, text, classes, fg, bg, need, ratio, hidden } per element. Exported for tests.
+ * Fixes the text colours of one page tree. @returns {{ fixed: object[], open: object[] }}
+ * @param {{ root: object, info: { path: string } }} tree
  */
-export function axeContrastFindings(axe) {
-  const rule = (axe?.violations ?? []).find((r) => r.id === 'color-contrast');
-  const out = [];
-  for (const node of rule?.nodes ?? []) {
-    const data = node.any?.find((a) => a.id === 'color-contrast')?.data ?? node.any?.[0]?.data;
-    const $ = load(node.html ?? '', null, false);
-    const el = $.root().children().first();
-    const fg = hexToRgb(data?.fgColor);
-    const bg = hexToRgb(data?.bgColor);
-    if (!el.length || !fg || !bg) continue;
-    out.push({
-      tag: el[0].name?.toLowerCase(),
-      text: el.text().replace(/\s+/g, ' ').trim(),
-      classes: classesOf(el.attr('class')),
-      fg,
-      bg,
-      need: Number(data.expectedContrastRatio?.toString().replace(/:1$/, '')) || NORMAL,
-      ratio: Number(data.contrastRatio) || 0,
-      hidden: el.attr('aria-hidden') === 'true',
-    });
-  }
-  return out;
-}
-
-// Decorative text (hidden from assistive technology, or a faint watermark laid over the layout): drawn by CSS instead
-// (`::before { content }`), so it looks as designed and is no longer page text that has to be readable.
-function toPseudo(n, text) {
-  const content = `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-  for (const view of Object.values(n.views ?? {})) if (view) view.before = { content, style: { ...(view.before?.style ?? {}) } };
-  n.children = n.children.filter((c) => !isText(c));
-  n.attrs = { ...n.attrs, 'aria-hidden': 'true' };
-}
-
-/**
- * @param {{ root: object, htmlNode?: object, info: { path: string } }} t  a merged page tree (mutated)
- * @param {{ axe?: object[] }} [o]  axeContrastFindings() of this page's original, when the analysis scanned it
- * @returns {{ fixed: object[], open: object[] }}
- */
-export function fixContrast(t, { axe = [] } = {}) {
+export function fixContrast(tree) {
   const fixed = [];
   const open = [];
-  const pending = [...axe];
-  const walk = (n, ancestors) => {
-    if (!isElement(n)) return;
-    // A form field shows its own text (what is typed, the placeholder) in its own colour, though it has no text children.
-    if (ownText(n) || FIELD_TAGS.has(n.tag)) {
-      const text = textOf(n);
-      const i = pending.findIndex((f) => f.tag === n.tag && f.text === text && f.classes === classesOf(n.attrs?.class));
-      if (i >= 0) measured(n, ancestors, pending.splice(i, 1)[0], text);
-      else check(n, ancestors);
-    }
-    n.children.forEach((c) => walk(c, [...ancestors, n]));
-  };
-  // An element the original's scan measured: its real colours decide (no guessing what is behind it).
-  const measured = (n, ancestors, f, text) => {
-    const position = n.views?.desktop?.style?.position ?? '';
-    if (f.hidden || (f.ratio < 1.6 && /absolute|fixed/.test(position))) {
-      toPseudo(n, text);
-      fixed.push({ page: t.info.path, element: n.tag, field: 'decorative-text', value: text.slice(0, 60), source: `decorative text (contrast ${f.ratio}) drawn by CSS` });
-      return;
-    }
-    const want = f.need + MARGIN;
-    const textOpt = bestMix(f.fg, f.bg, want, 1, 'text');
-    // As in check(): rather than turning the text almost black, darken the one box it is read on when that is safe.
-    const box = backdropOf(n, ancestors, f.bg, f.fg);
-    const backdrop = box ? bestMix(f.bg, f.fg, want, 1, 'background') : null;
-    if (backdrop && (!textOpt || backdrop.t < textOpt.t)) {
-      for (const view of Object.values(box.views ?? {})) {
-        if (view && parseColor(view.style?.['background-color'])?.join() === f.bg.join()) view.style = { ...view.style, 'background-color': css(backdrop.color) };
-      }
-      fixed.push({ page: t.info.path, element: box.tag, field: 'background-color', from: css(f.bg), value: css(backdrop.color), source: `contrast ${f.ratio} → ${ratio(over(f.fg, backdrop.color, 1), backdrop.color).toFixed(2)} behind ${css(f.fg)} text (measured by the audit)` });
-      return;
-    }
-    if (!textOpt) return;
-    if (textOpt.t > MAX_TEXT_SHIFT) {
-      open.push({ page: t.info.path, element: n.tag, detail: `Light text on a background nearly as light (contrast ${f.ratio}, measured by the audit): only a new colour for one of them reads well, which is a design choice` });
-      return;
-    }
-    const better = textOpt.color;
-    for (const view of Object.values(n.views ?? {})) if (view) view.style = { ...view.style, color: css(better) };
-    fixed.push({ page: t.info.path, element: n.tag, field: 'color', from: css(f.fg), value: css(better), source: `contrast ${f.ratio} → ${ratio(better, f.bg).toFixed(2)} on ${css(f.bg)} (measured by the audit)` });
-  };
-  const check = (n, ancestors) => {
-    let changed = null;
-    for (const [v, view] of Object.entries(n.views ?? {})) {
-      if (!view || view.hidden || !(view.rect?.[2] > 0)) continue;
-      const fill = inherited(n, ancestors, v, '-webkit-text-fill-color');
-      if (fill && !/currentcolor/i.test(fill)) continue; // gradient or clipped text: drawn by its background
-      const fg = parseColor(inherited(n, ancestors, v, 'color') ?? 'rgb(0, 0, 0)');
-      if (!fg || fg[3] === 0) continue;
-      // Behind the text: own and ancestors' backgrounds, nearest first, until an opaque one.
-      let bg = null;
-      const layers = [];
-      let picture = false;
-      let opacity = 1;
-      let bgNode = null;
-      let bgAncestors = [];
-      const chain = [n, ...[...ancestors].reverse(), ...(t.htmlNode ? [t.htmlNode] : [])];
-      for (const x of chain) {
-        const s = x.views?.[v]?.style ?? {};
-        if (s.opacity !== undefined) opacity *= parseFloat(s.opacity);
-        if (s['background-image'] && s['background-image'] !== 'none') {
-          picture = true;
-          break;
-        }
-        if (x !== n && (x.tag === 'img' || x.tag === 'video' || x.tag === 'canvas' || x.tag === 'svg')) {
-          picture = true;
-          break;
-        }
-        const c = parseColor(s['background-color']);
-        if (c && c[3] > 0) {
-          layers.push(c);
-          if (c[3] >= 1) {
-            bgNode = x;
-            // The ancestors of the box that paints the background, so inherited colours inside it can be read.
-            // chain is [n, parent, grandparent, …], so the box at chain index k is ancestors[length − k].
-            const k = chain.indexOf(x);
-            bgAncestors = k === 0 ? [...ancestors] : ancestors.slice(0, Math.max(0, ancestors.length - k));
-            break;
+  const seen = new Set();
+  const views = Object.keys(tree.root.views ?? { desktop: 1 });
+  const MEDIA = new Set(['img', 'picture', 'video', 'canvas', 'svg', 'iframe']);
+  for (const view of views) {
+    // Pictures anywhere on the page: text whose centre lies on one (a hero photo behind a heading, positioned as a sibling)
+    // has that picture behind it, not the background colour of its ancestors.
+    const media = [];
+    const collect = (n) => {
+      if (!isElement(n)) return;
+      const v = n.views?.[view];
+      if (!v || v.hidden) return;
+      const bgImage = v.style?.['background-image'] && v.style['background-image'] !== 'none';
+      if ((MEDIA.has(n.tag) || bgImage) && v.rect?.[2] > 0 && v.rect?.[3] > 0) media.push({ node: n, rect: v.rect });
+      n.children.forEach(collect);
+    };
+    collect(tree.root);
+    const onPicture = (n, rect) => {
+      const cx = rect[0] + rect[2] / 2;
+      const cy = rect[1] + rect[3] / 2;
+      return media.some((m) => m.node !== n && !contains(n, m.node) && cx >= m.rect[0] && cx <= m.rect[0] + m.rect[2] && cy >= m.rect[1] && cy <= m.rect[1] + m.rect[3]);
+    };
+    const walk = (n, ctx) => {
+      if (!isElement(n)) return;
+      const v = n.views?.[view];
+      if (!v) return;
+      const style = v.style ?? {};
+      const color = parseColor(style.color) ?? ctx.color;
+      const size = parseFloat(style['font-size']) || ctx.size;
+      const weight = Number(style['font-weight']) || ctx.weight;
+      let bg = ctx.bg;
+      const own = parseColor(style['background-color']);
+      if (style['background-image'] && style['background-image'] !== 'none') bg = null; // an image or a gradient: unknown
+      else if (own && own[3] > 0 && bg) bg = blend(own, bg);
+      else if (own && own[3] >= 1) bg = own;
+      const next = { color, size, weight, bg };
+      const shown = !v.hidden && v.rect?.[2] > 0 && v.rect?.[3] > 0;
+      if (shown && ownText(n) && color) {
+        const large = size >= 24 || (size >= 18.66 && weight >= 700);
+        const target = large ? AA_LARGE : AA;
+        const sample = n.children.filter(isText).map((c) => c.text).join(' ').trim().slice(0, 60);
+        if (!bg || onPicture(n, v.rect)) {
+          if (!seen.has(n)) open.push({ page: tree.info.path, tag: n.tag, text: sample, reason: 'text over an image or gradient' });
+        } else {
+          const fg = blend(color, bg);
+          const ratio = contrast(fg, bg);
+          if (ratio < target) {
+            const better = fixColor(fg, bg, target + MARGIN);
+            const value = hex(better);
+            v.style = { ...style, color: value };
+            next.color = [...better, 1];
+            if (!seen.has(n)) fixed.push({ page: tree.info.path, tag: n.tag, text: sample, from: style.color ?? hex(fg), to: value, background: hex(bg), before: Math.round(ratio * 100) / 100, after: Math.round(contrast(better, bg) * 100) / 100 });
           }
         }
+        seen.add(n);
       }
-      if (picture) {
-        if (!open.some((o) => o.page === t.info.path)) open.push({ page: t.info.path, element: n.tag, detail: 'Text over a picture or gradient: its contrast was left for a person to check' });
-        continue;
-      }
-      bg = [255, 255, 255, 1];
-      for (const c of layers.reverse()) bg = over(c, bg);
-      const size = px(inherited(n, ancestors, v, 'font-size')) || 16;
-      const weight = parseInt(inherited(n, ancestors, v, 'font-weight') ?? '400', 10) || 400;
-      const large = size >= 24 || (size >= 18.66 && weight >= 700);
-      const need = large ? LARGE : NORMAL;
-      const alpha = fg[3] * (opacity > 0 ? opacity : 1);
-      const now = ratio(over(fg, bg, alpha), bg);
-      // Only text that fails; and text nearly the colour of what seems to be behind it is left alone: then what is really
-      // behind it is something the styles do not show (an overlay, a layer below), and a guess would spoil the design.
-      if (now >= need || now < 1.6) continue;
-      const want = need + MARGIN;
-      const text = bestMix(fg, bg, want, alpha, 'text');
-      // White text on a mid-tone brand colour (a button) only passes once it is almost black, which throws the design
-      // away. Darkening that one box instead is a far smaller change and keeps the text as designed, so whichever side
-      // moves less wins.
-      const box = sharedBackdrop(n, layers, bgNode, bgAncestors, v, fg);
-      const backdrop = box ? bestMix(bg, fg, want, alpha, 'background') : null;
-      const pick = backdrop && (!text || backdrop.t < text.t) ? 'background' : text ? 'text' : null;
-      if (!pick) continue;
-      if (pick === 'background') {
-        const bview = box.views[v];
-        bview.style = { ...bview.style, 'background-color': css(backdrop.color) };
-        changed ??= { page: t.info.path, element: box.tag, field: 'background-color', from: css(bg), value: css(backdrop.color), source: `contrast ${now.toFixed(2)} → ${ratio(over(fg, backdrop.color, alpha), backdrop.color).toFixed(2)} behind ${css(fg)} text` };
-        continue;
-      }
-      if (text.t > MAX_TEXT_SHIFT) {
-        open.push({ page: t.info.path, element: n.tag, detail: `Light text on a background nearly as light (contrast ${now.toFixed(2)}): only a new colour for one of them reads well, which is a design choice` });
-        continue;
-      }
-      // Written as the colour it is seen as (alpha folded into it).
-      const shown = over(text.color, bg, alpha);
-      view.style = { ...view.style, color: css(shown) };
-      changed ??= { page: t.info.path, element: n.tag, field: 'color', from: css(fg), value: css(shown), source: `contrast ${now.toFixed(2)} → ${ratio(shown, bg).toFixed(2)} on ${css(bg)}` };
-    }
-    if (changed) fixed.push(changed);
-  };
-  walk(t.root, []);
+      for (const c of n.children) walk(c, next);
+    };
+    // The page starts on the <html> element's colours (a dark site often sets them there, not on <body>), else the
+    // browser's: black text on white. A background image on <html> means the colour behind the text is unknown.
+    const html = tree.htmlNode?.views?.[view]?.style ?? {};
+    const htmlBg = parseColor(html['background-color']);
+    const start = {
+      color: parseColor(html.color) ?? [0, 0, 0, 1],
+      size: parseFloat(html['font-size']) || 16,
+      weight: Number(html['font-weight']) || 400,
+      bg: html['background-image'] && html['background-image'] !== 'none' ? null : htmlBg && htmlBg[3] > 0 ? blend(htmlBg, [255, 255, 255, 1]) : [255, 255, 255, 1],
+    };
+    walk(tree.root, start);
+  }
   return { fixed, open };
 }

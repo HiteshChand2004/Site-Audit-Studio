@@ -15,7 +15,7 @@
 // pages disagree on into boxes (fractions of the page, so they fit in report.json) and says whether each one is also
 // different at the layout scale; `blocks` gives the raw maps. That is what lets the correction loop ask "which
 // elements sit in this box" rather than only "this page scores 85".
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import sharp from 'sharp';
 
 // `blur` (sigma, px at that scale) takes the edge off thin structure first: text lines a few px apart in the two pages
@@ -246,7 +246,8 @@ async function writeHeatmap({ scores, cols, rows }, file, scale) {
   await sharp(rgba, { raw: { width: cols, height: rows, channels: 4 } })
     .resize({ width: cols * scale, height: rows * scale, kernel: 'nearest' })
     .webp({ quality: 70 })
-    .toFile(file);
+    .toBuffer()
+    .then((data) => writeFile(file, data)); // Node writes long Windows paths; sharp cannot (see audit/screenshots.js encode)
 }
 
 /**

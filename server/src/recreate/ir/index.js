@@ -15,8 +15,10 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { platformCdnHost } from '../assets/cdn.js';
-import { buildHead, generatedFavicon, siteNameOf } from './head.js';
-import { detectLang, refineHeadTexts } from './seoText.js';
+import { buildHead, fixHeadTexts, generatedFavicon, siteNameOf } from './head.js';
+import { detectLang } from './seoText.js';
+import { createRebaser } from './rebase.js';
+import { addHeadData } from './aeo.js';
 import { createAssetResolver, createLinkResolver } from './links.js';
 import { meaningful, MOUNT_IDS, PLATFORM_CLASS_PATTERNS } from './names.js';
 import { buildStyles, mapUrls } from './styles.js';
@@ -190,7 +192,7 @@ function dropMissingImages(root, pageUrl, assetResolve) {
   return dropped;
 }
 
-function numberNodes(root) {
+export function numberNodes(root) {
   let sid = 0;
   const walk = (n) => {
     if (!isElement(n)) return;
@@ -325,10 +327,31 @@ export function prepareSite({ pages, assets, baseUrl, origin, livePages = [], sk
   // Titles / descriptions that are too short, too long or shared by several pages (needs every head).
   // As is: a title or description of the original is never rewritten, however short, long or duplicated it is. The
   // re-audit still measures them, so what they cost is reported rather than lost.
-  const headTexts = asIs ? { titles: 0, descriptions: 0, skipped: 'as-is' } : refineHeadTexts(trees, siteName.value);
+  const headTexts = asIs ? { titles: 0, descriptions: 0, skipped: 'as-is' } : fixHeadTexts(trees, siteName);
+
+  // Full addresses copied from the original (structured data, hreflang alternates, llms.txt) name the new site (full-site E.1).
+  const rebase = createRebaser({ resolveLink, baseUrl });
+  for (const t of trees) {
+    t.head.jsonLd = (t.head.jsonLd ?? []).map((raw) => rebase.json(raw, t.info.url));
+    t.head.alternates = (t.head.alternates ?? []).map((a) => ({ ...a, href: rebase.url(a.href, t.info.url) }));
+  }
+  const llmsRebased = llms?.text ? { ...llms, text: rebase.text(llms.text, home.info.url) } : llms;
+
+  // Structured data, FAQ schema and theme-color the original lacks (full-site D.3), on the new site's address.
+  const logoIcon = siteIcons.find((i) => /apple-touch-icon/i.test(i.rel)) ?? siteIcons[0];
+  // As is: the head is the original's, so nothing is added to it (the re-audit reports what it lacks).
+  const headData = asIs ? null : addHeadData(trees, {
+    siteName,
+    baseUrl,
+    logo: logoIcon ? new URL(`assets/${logoIcon.asset}`, `${new URL(baseUrl).origin}/`).href : null,
+    themeColor: brandColor(trees[0].root),
+  });
 
   // sitemap.xml + robots.txt (after the heads: canonical and robots meta decide what is listed).
-  const { files: crawlFileList, ...crawl } = crawlFiles({ pages: trees, baseUrl, robots, llms, siteName: siteName.value });
+  const { files: crawlFileList, ...crawl } = crawlFiles({ pages: trees, baseUrl, robots, llms: llmsRebased });
+  crawl.rebased = rebase.count();
+  crawl.headTexts = headTexts;
+  crawl.headData = headData;
   files.push(...crawlFileList);
 
   const fontFaces = (assets.fontFaces ?? []).filter((f) => f.local).map((f) => ({
@@ -643,6 +666,7 @@ export function buildIR(site, { asIs = false } = {}) {
     keyframes: [...site.keyframes].filter(([name]) => keepKeyframes(name)).map(([name, css]) => ({ name, css: mapUrls(css, (u) => site.assetResolve(u)) })),
     boxSizingReset: styles.boxSizingReset,
     ...(site.motion && { motion: site.motion }),
+    ...(site.widgets && { widgets: site.widgets }),
     rules: styles.rules,
     files: [...site.files, ...noticeFiles(site)],
     pages,

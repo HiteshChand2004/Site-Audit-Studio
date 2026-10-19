@@ -80,13 +80,26 @@ export function crawlFiles({ pages, baseUrl, robots = null, llms = null, siteNam
   for (const ua of blockedAiCrawlers) lines.push(`User-agent: ${ua}`, 'Disallow: /', '');
   lines.push(`Sitemap: ${origin}/sitemap.xml`, '');
 
+  // llms.txt: the original's own file (its links moved onto the new site, ir/rebase.js); when it has none, one is written
+  // from the pages (full-site D.3: name, description, the indexable pages with their titles and descriptions).
   const copied = llms?.text?.trim() ? llms.text : null;
-  const generated = copied || llms?.tooLarge ? null : llmsTxt(pages, urls, siteName, origin);
+  const home = pages.find((t) => t.info.outPath === 'index.html') ?? pages[0];
+  const generated = !copied && !llms?.tooLarge && home ? [
+    `# ${home.head.title ?? new URL(baseUrl).hostname}`,
+    '',
+    ...(home.head.description ? [`> ${home.head.description}`, ''] : []),
+    '## Pages',
+    '',
+    ...pages.filter((t) => sitemapUrl(t.info, t.head, origin)).slice(0, 200)
+      .map((t) => `- [${(t.head.title ?? t.info.path).replace(/[[\]]/g, '')}](${sitemapUrl(t.info, t.head, origin)})${t.head.description ? `: ${t.head.description}` : ''}`),
+    '',
+  ].join('\n') : null;
   const llmsText = copied ?? generated;
   return {
     files: [
       { path: 'sitemap.xml', content: sitemap },
       { path: 'robots.txt', content: lines.join('\n') },
+      { path: HEADERS_FILE, content: DEPLOY_HEADERS },
       ...(llmsText ? [{ path: 'llms.txt', content: llmsText }] : []),
     ],
     sitemap: { urls, excluded },
@@ -94,3 +107,21 @@ export function crawlFiles({ pages, baseUrl, robots = null, llms = null, siteNam
     llms: { copied: Boolean(copied), generated: Boolean(generated), bytes: llmsText ? Buffer.byteLength(llmsText) : 0, tooLarge: Boolean(llms?.tooLarge) },
   };
 }
+
+// Security and caching headers for the host (full-site D.7). A local preview cannot measure HTTPS, HSTS, CSP or caching
+// (the checklist keeps those rows N/A), so the copy ships them ready for static hosts that read `_headers` (Netlify,
+// Cloudflare Pages). Inline <style> is allowed (each page carries its own CSS, D.6); scripts only from the site itself
+// (js/motion.js). The Next.js build drops the CSP line (its pages carry inline scripts; emit/next/index.js publicFile).
+export const HEADERS_FILE = '_headers';
+export const DEPLOY_HEADERS = [
+  '/*',
+  '  Strict-Transport-Security: max-age=31536000; includeSubDomains',
+  '  X-Content-Type-Options: nosniff',
+  '  Referrer-Policy: strict-origin-when-cross-origin',
+  '  X-Frame-Options: SAMEORIGIN',
+  '  Permissions-Policy: camera=(), microphone=(), geolocation=()',
+  "  Content-Security-Policy: default-src 'self'; img-src 'self' data: https:; media-src 'self' https:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'; upgrade-insecure-requests",
+  '/assets/*',
+  '  Cache-Control: public, max-age=31536000, immutable',
+  '',
+].join('\n');
