@@ -338,3 +338,53 @@ comparable after a new capture (or a re-score of the reference like the one abov
 4. Recorded, waiting for a decision: DEPLOY.md per (stack, mode) from the shipped package (see the bug above); security headers that
    take effect on Next.js / Vercel. (The capture's reference picture is fixed, see above.)
 Then: full runs of makememo MERN and nyaayai Next.js on scratch data (scratch API only; never port 4000/5173, never the real data folder).
+
+## PARKED (2026-10-21) — copy-my-site paused for the `accounts` work
+
+Everything below is committed and pushed on `copy-my-site` (the last commit is a WIP). Nothing is half-written in a working tree.
+The side worktree `../Website-Audit-copyfix` (branch `copy-my-site-checks`, same commits, already fast-forwarded into
+`copy-my-site`) can be removed; its `node_modules` and `server/toolchains/*/node_modules` are **junctions** into
+`Website-Audit-exact`: remove them with `rmdir` first, never with a recursive delete, or the real packages go with them.
+
+Working rules that still apply: scratch data only (`C:/Users/urvas/AppData/Local/Temp/sas-corpus/data`, a copy of the real
+projects made 2026-10-18 ~12:55 IST, since diverged); scratch ports only; never the real data folder (`server/.env`
+`SAS_DATA_DIR` → `Site-Audit-Studio-main\…`). **The user's dev server (4000) and client (5173) run from this worktree
+(`Website-Audit-exact`)**: an edit to `server/src` here restarts it once idle — do code work in a separate worktree.
+Run only the test files of what you touch; no full suite.
+
+Open, in the order to pick them up:
+
+1. **Revert-path tests (WIP, one failing).** `server/test/copy-fix-gate.test.js`: 3 of 4 pass — a fix the page's own CSS turns
+   into a layout change is undone (reason d); a change below the fold inside a section that only appears on scroll is undone
+   (a picture without the scroll sees no difference); a small visible fix on a page with measured random noise is kept. The 4th
+   ("the floor in both directions") fails: its 2 × 2 px dot gave `diffPct` 0 (the dot is not in the picture — check the
+   absolutely placed `<i>` on a `height:900px; overflow:hidden` body; give it `display:block` or put it in flow). The rule under
+   test: kept when diff ≤ max(`FIX_GATE_FLOOR_PCT` 0.01 %, 2 × noise), same height, no new console error; noise = the unfixed
+   page pictured twice at 1440 the same frozen, scrolled way (`check.js fixGate`).
+2. **Next.js security headers — fixed, verify in a real run.** Commit `bf01313`: one header list (`copy/securityHeaders.js`);
+   the Next.js package sends them from `next.config.mjs headers()` (proven: `copy-served.test.js` builds and starts a real
+   package, all five headers sent). `copy/served.js` measures what the packaged copy's own server sends after packaging; headers
+   count as applied only for stacks with their own server (Next.js, MERN); Plain HTML / React + Vite `_headers` is an open item
+   with reason e, never a fix. MERN sends no HSTS (open, reason e). Still to do: one real as-is run per stack to see the
+   measurement in a report; the CopyPages line was built but not looked at in the browser.
+3. **DEPLOY.md names scripts the as-is package does not have (recorded, not fixed).** Details and the correct generic fix are in
+   "Review before step 4 → Bug recorded, not fixed" above: write DEPLOY.md from the package that ships (scripts and folders
+   of the generated `package.json`), plus a test that every `npm run x` and folder it names exists. The as-is MERN package has no
+   `client/package.json` (`npm install` + `npm start` is right for it); do **not** add an `install:all` alias.
+4. **Step-1 proof re-check.** The step-1 numbers used the live original on both sides, never the capture picture, so the 19ddc59
+   bug did not touch them. Still unproven: other sites than nyaayai; the race at 390 (never observed there); and the check's
+   own scroll stops at 14 000 px (`check.js openAndScroll`), so on nyaayai at 390 (15 681 px) the last 1 681 px are never
+   scrolled into view on either side. Fix by scrolling to the page height with the capture's `scrollThrough`, then re-measure
+   nyaayai and makememo at 1440 and 390 in fresh processes (harness pattern: see "Step 1" above).
+5. **Step 4 — re-audit + zero-regressions loop (not started).** The as-is job must run the re-audit on the copy; every
+   "got worse" item is measured and must be 0 or carry one of the five reasons; the summary line's "Fixed" comes from it (today
+   it is still the clean pipeline's comparison). `copy/run.js zeroRegressions` holds the decision logic, tested with fakes only.
+   It depends on 1–2 (an honest "Fixed" count) and on the capture fix 10a665a (a reference picture that is not blank).
+6. **Step 5 — per-page fallback (not started).** A page below threshold: auto-repair known stack issues, else a clean rebuild of
+   that page in the chosen stack with a time-boxed exact correction, keep the better. `copy/run.js` has the decision logic with
+   fakes only.
+
+Also known: clean-rebuild captures taken between 19ddc59 (2026-10-18 08:58 UTC) and 10a665a have blank reference pictures; in the
+scratch corpus that is dreamhire d541c77b, parchaa 5543a393, flexibench dcecafc4 / fe1df206 (partly) and makememo 1fe625e9 (as-is
+fallback). The real database very likely has such runs too (the dev server ran this code in that window) — not checked: the
+real data folder was not read. `scratchpad/window.mjs` of the 2026-10-21 session lists them read-only, given a data folder.
