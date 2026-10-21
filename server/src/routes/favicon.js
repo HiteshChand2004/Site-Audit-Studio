@@ -9,7 +9,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { load } from 'cheerio';
 import sharp from 'sharp';
-import { db, projectDir } from '../db/index.js';
+import { db } from '../db/index.js';
+import { projectDir } from '../config/paths.js';
 import { fetchPage, guardedFetch } from '../audit/http.js';
 import { sanitizeSvg } from '../recreate/fixers/svg.js';
 

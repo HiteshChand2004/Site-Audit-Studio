@@ -6,14 +6,15 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { db, projectDir } from '../db/index.js';
+import { db } from '../db/index.js';
+import { recreateRoot as recreateRootOf } from '../config/paths.js';
 import { checkpointSummary, isReusable, readCheckpoint, RESUMABLE_DAYS } from './checkpoint.js';
 import { RecreateError } from './errors.js';
 import { stopPreview } from './preview.js';
 
 export const KEEP_RECREATES = 2;
 
-export const recreateRoot = (projectId) => path.join(projectDir(projectId), 'recreate');
+export const recreateRoot = recreateRootOf;
 export const recreateDir = (projectId, recreateId) => path.join(recreateRoot(projectId), recreateId);
 export const tmpDir = (projectId, recreateId) => `${recreateDir(projectId, recreateId)}.tmp`;
 

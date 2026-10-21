@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import path from 'node:path';
-import { db, projectDir } from '../db/index.js';
+import { db } from '../db/index.js';
+import { auditDir } from '../config/paths.js';
 import { SCREEN_FILE, screensDir } from '../audit/screenshots.js';
 import { KEEP_SCREENSHOTS } from '../audit/retention.js';
 
@@ -17,7 +18,7 @@ router.get('/:id/analyses/:analysisId/screens/:file', (req, res) => {
   }
   if (!selectAnalysis.get(analysisId, id)) return res.status(404).json({ error: 'Analysis not found.' });
 
-  const filePath = path.join(screensDir(path.join(projectDir(id), 'audit', analysisId)), file);
+  const filePath = path.join(screensDir(auditDir(id, analysisId)), file);
   res.sendFile(
     filePath,
     {

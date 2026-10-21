@@ -8,7 +8,8 @@
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { makeOverallPct, runAnalysis, STEPS as AUDIT_STEPS } from '../audit/index.js';
-import { db, projectDir } from '../db/index.js';
+import { db } from '../db/index.js';
+import { auditDir } from '../config/paths.js';
 import { getEmitter } from '../recreate/emit/index.js';
 import { outputPages, outputRoot, reportOutputs, targetStack } from '../recreate/export/fromIr.js';
 import { servePreview } from '../recreate/preview.js';
@@ -106,7 +107,7 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
       // The link check (mostly the original's outbound links) runs on while Lighthouse measures the loopback build.
       linksBesideLighthouse: true,
       // Measured like the original was: a computer much busier now than then repeats a run with a scaled CPU slowdown.
-      lighthouseBaseline: await benchmarkOf(path.join(projectDir(project.id), 'audit', report.analysisId)),
+      lighthouseBaseline: await benchmarkOf(auditDir(project.id, report.analysisId)),
     });
     // The analysis contract carries a sample checklist for the OLD site; it means nothing here.
     delete audit.recreate;
@@ -132,7 +133,7 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
 
     progress('compare', 0);
     const checklist = compareAudits({
-      old: await loadSide(path.join(projectDir(project.id), 'audit', report.analysisId), JSON.parse(analysis.result_json)),
+      old: await loadSide(auditDir(project.id, report.analysisId), JSON.parse(analysis.result_json)),
       next: await loadSide(reauditDir(project.id, recreateId, reauditId), audit),
       report,
       newOrigin: served.origin,

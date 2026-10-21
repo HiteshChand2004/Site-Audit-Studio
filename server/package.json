@@ -13,7 +13,9 @@
     "corpus": "node scripts/corpus.mjs",
     "test:fixtures": "node scripts/test-suite.mjs fixtures",
     "test:precommit": "node scripts/test-suite.mjs precommit",
-    "preview:lift": "node scripts/preview-lift.mjs"
+    "preview:lift": "node scripts/preview-lift.mjs",
+    "db:backup": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/db-backup.mjs",
+    "db:rehearse": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/db-rehearse.mjs"
   },
   "dependencies": {
     "@axe-core/playwright": "^4.13.0",

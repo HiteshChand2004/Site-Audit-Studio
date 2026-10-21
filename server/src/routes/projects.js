@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { db, projectDir } from '../db/index.js';
+import { db } from '../db/index.js';
+import { auditDir, projectDir } from '../config/paths.js';
 import { parseMaxPages } from './analyze.js';
 import { buildDummyAudit } from '../dummy/audit.js';
 import { precheckUrl } from '../security/netGuard.js';
@@ -184,7 +185,7 @@ router.get('/:id/pages', async (req, res) => {
   };
   add(project.url);
   for (const { id } of analysisIds.all(project.id)) {
-    const crawl = await readFile(path.join(projectDir(project.id), 'audit', id, 'crawl.json'), 'utf8').then(JSON.parse, () => null);
+    const crawl = await readFile(path.join(auditDir(project.id, id), 'crawl.json'), 'utf8').then(JSON.parse, () => null);
     for (const p of crawl?.pages ?? []) if (p.status >= 200 && p.status < 300) add(p.url);
   }
   for (const row of recreateRows.all(project.id)) {

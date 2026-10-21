@@ -5,7 +5,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { launchBrowser, renderHtml } from '../audit/render.js';
-import { projectDir } from '../db/index.js';
+import { auditDir } from '../config/paths.js';
 import { maxParallel, PAGE_MB, parallelism } from '../audit/resources.js';
 import { createSharedCache, sharedCacheEnabled } from '../audit/sharedCache.js';
 import { startEgressProxy } from '../security/egressProxy.js';
@@ -139,7 +139,7 @@ async function analysisPages(ctx) {
   ctx.analysisFacts = new Map();
   if (!ctx.analysis?.id || !ctx.project?.id) return [];
   try {
-    const crawl = JSON.parse(await readFile(path.join(projectDir(ctx.project.id), 'audit', ctx.analysis.id, 'crawl.json'), 'utf8'));
+    const crawl = JSON.parse(await readFile(path.join(auditDir(ctx.project.id, ctx.analysis.id), 'crawl.json'), 'utf8'));
     // What the analysis read of each page: the evidence a page that cannot be rendered later is rebuilt from (recover.js).
     for (const p of crawl.pages ?? []) {
       if (!p.facts) continue;

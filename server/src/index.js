@@ -1,3 +1,5 @@
+// First: settings the server must not start with stop it before any module opens the database (config/startup.js).
+import './config/startup.js';
 import express from 'express';
 import cors from 'cors';
 import projectsRouter from './routes/projects.js';
@@ -12,8 +14,11 @@ import { lockBusy } from './jobs/manager.js';
 import { awakeHeld } from './jobs/keepAwake.js';
 import { resumeInterruptedRecreates } from './recreate/jobs.js';
 import { stopAllAsIsPreviews } from './recreate/behavior/preserve/asisPreview.js';
+import { bindHost, isLoopbackHost } from './config/index.js';
 
 const PORT = Number(process.env.PORT) || 4000;
+// Who can reach the API: this computer only by default (SAS_BIND_HOST, config/index.js).
+const HOST = bindHost();
 const app = express();
 
 app.use(cors({ origin: ['http://localhost:5173', 'http://127.0.0.1:5173'] }));
@@ -56,12 +61,12 @@ process.once('SIGINT', shutdown);
 process.once('SIGTERM', shutdown);
 
 // Express 5 passes listen errors (such as a port conflict) to this callback.
-app.listen(PORT, (err) => {
+app.listen(PORT, HOST, (err) => {
   if (err) {
     console.error(err.code === 'EADDRINUSE' ? `Port ${PORT} is already in use. Stop the other server or set PORT.` : err);
     process.exit(1);
   }
-  console.log(`API ready on http://localhost:${PORT}`);
+  console.log(`API ready on http://${HOST.includes(':') ? `[${HOST}]` : HOST}:${PORT}${isLoopbackHost(HOST) ? ' (this computer only)' : ' (reachable from the network)'}`);
   // A recreate the restart interrupted continues where it stopped (recreate/checkpoint.js).
   resumeInterruptedRecreates().catch((e) => console.warn('Interrupted recreates not continued:', e.message));
 });

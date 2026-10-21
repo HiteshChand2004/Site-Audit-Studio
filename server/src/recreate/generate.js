@@ -10,7 +10,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
 import { parallelism } from '../audit/resources.js';
-import { projectDir } from '../db/index.js';
+import { auditDir } from '../config/paths.js';
 import { mapLimit } from '../audit/util.js';
 import { applyImageVariants, makeImageVariants } from './assets/variants.js';
 import { emitSite } from './emit/html.js';
@@ -433,7 +433,7 @@ export async function generateStage(ctx) {
 
   ctx.progress(0.12, 'Fixing audit issues');
   const axe = ctx.analysis?.id && ctx.project?.id
-    ? await readFile(path.join(projectDir(ctx.project.id), 'audit', ctx.analysis.id, 'axe.json'), 'utf8').then(JSON.parse, () => null)
+    ? await readFile(path.join(auditDir(ctx.project.id, ctx.analysis.id), 'axe.json'), 'utf8').then(JSON.parse, () => null)
     : null;
   // Outbound links of pages the analysis did not read: dead targets are unlinked like the ones the analysis found.
   ctx.progress(0.13, 'Checking the links of every page');

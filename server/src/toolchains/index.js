@@ -5,10 +5,10 @@
 import { readFileSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-export const TOOLCHAINS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'toolchains');
-export const toolchainDir = (id) => path.join(TOOLCHAINS_DIR, id);
+import { TOOLCHAINS_DIR, toolchainDir } from '../config/paths.js';
+
+export { TOOLCHAINS_DIR, toolchainDir };
 const ID = /^[a-z][a-z0-9-]*$/;
 
 const readJson = (file) => readFile(file, 'utf8').then(JSON.parse, () => null);

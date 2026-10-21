@@ -1,99 +1,20 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { DATA_DIR, DB_FILE, projectDir } from '../config/paths.js';
+import { applySchema } from './schema.js';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-// SAS_DATA_DIR moves the database and project files elsewhere (the test suite points it at an OS temp folder).
-// Under the node test runner it is required, so tests can never touch the real data/app.db.
+// SAS_DATA_DIR moves the database and project files elsewhere (the test suite points it at an OS temp folder); every path is in
+// config/paths.js. Under the node test runner it is required, so tests can never touch the real data/app.db.
 if (process.env.NODE_TEST_CONTEXT && !process.env.SAS_DATA_DIR) {
   throw new Error('Tests must run with SAS_DATA_DIR set (use "npm test -w server"); refusing to open data/app.db');
 }
-export const DATA_DIR = process.env.SAS_DATA_DIR
-  ? path.resolve(process.env.SAS_DATA_DIR)
-  : path.resolve(here, '../../../data');
 mkdirSync(DATA_DIR, { recursive: true });
 
-export const projectDir = (projectId) => path.join(DATA_DIR, 'projects', projectId);
+export { DATA_DIR, projectDir };
 
-export const db = new DatabaseSync(path.join(DATA_DIR, 'app.db'));
+export const db = new DatabaseSync(DB_FILE);
 
-db.exec(`
-  PRAGMA busy_timeout = 5000;
-  PRAGMA journal_mode = WAL;
-  PRAGMA foreign_keys = ON;
-
-  CREATE TABLE IF NOT EXISTS projects (
-    id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    url         TEXT NOT NULL,
-    stack       TEXT NOT NULL DEFAULT 'html',
-    authorized  INTEGER NOT NULL DEFAULT 0,
-    created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS analyses (
-    id           TEXT PRIMARY KEY,
-    project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    status       TEXT NOT NULL DEFAULT 'queued',
-    step         TEXT,
-    progress     INTEGER NOT NULL DEFAULT 0,
-    error        TEXT,
-    started_at   TEXT NOT NULL,
-    finished_at  TEXT,
-    result_json  TEXT
-  );
-  CREATE INDEX IF NOT EXISTS analyses_project ON analyses(project_id, started_at);
-
-  CREATE TABLE IF NOT EXISTS recreates (
-    id           TEXT PRIMARY KEY,
-    project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    status       TEXT NOT NULL DEFAULT 'queued',
-    step         TEXT,
-    progress     INTEGER NOT NULL DEFAULT 0,
-    error        TEXT,
-    started_at   TEXT NOT NULL,
-    finished_at  TEXT,
-    result_json  TEXT
-  );
-  CREATE INDEX IF NOT EXISTS recreates_project ON recreates(project_id, started_at);
-
-  -- Phase 5: the audit run again on a recreated site (its dist/ build). analysis_id is the analysis
-  -- the recreate was built from, which the fix checklist compares against.
-  CREATE TABLE IF NOT EXISTS reaudits (
-    id           TEXT PRIMARY KEY,
-    project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    recreate_id  TEXT,
-    analysis_id  TEXT,
-    status       TEXT NOT NULL DEFAULT 'queued',
-    step         TEXT,
-    progress     INTEGER NOT NULL DEFAULT 0,
-    error        TEXT,
-    started_at   TEXT NOT NULL,
-    finished_at  TEXT,
-    result_json  TEXT
-  );
-  CREATE INDEX IF NOT EXISTS reaudits_project ON reaudits(project_id, started_at);
-`);
-
-// Idempotent column migrations for databases created by earlier phases.
-function addColumn(table, column, definition) {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
-  if (!cols.some((c) => c.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-  }
-}
-addColumn('projects', 'max_pages', 'INTEGER NOT NULL DEFAULT 25');
-// Recreate: pages besides the homepage, and an optional origin for canonical/sitemap/OG URLs.
-addColumn('projects', 'recreate_pages', 'INTEGER NOT NULL DEFAULT 5');
-addColumn('projects', 'target_domain', 'TEXT');
-// Exact mode: an "as is" recreate, measured against the original at every viewport, with no time limit
-// (recreate/inputs.js isExactMode). Off by default, so every existing project behaves exactly as before.
-addColumn('projects', 'exact_mode', 'INTEGER NOT NULL DEFAULT 0');
-// One page only: the address of a page of the site that Analyze and Recreate work on instead of the whole site
-// (recreate/inputs.js parsePageUrl). Empty = the whole site, so every existing project behaves exactly as before.
-addColumn('projects', 'page_url', 'TEXT');
+applySchema(db);
 
 // Jobs live in memory, so anything still "running" after a restart can never finish. A recreate that was running is
 // continued where it stopped once the server is up (recreate/jobs.js resumeInterruptedRecreates, recreate/checkpoint.js).

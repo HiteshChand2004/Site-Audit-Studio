@@ -23,7 +23,7 @@ import { openLinkChecker } from '../../../copy/linkBrowser.js';
 import { linkCounts, linkPass } from '../../../copy/linkPass.js';
 import { copyChecksOf } from '../../../copy/checks.js';
 import { issueLogger } from '../../../copy/serverLog.js';
-import { DATA_DIR } from '../../../db/index.js';
+import { LOGS_DIR } from '../../../config/paths.js';
 
 /** The stacks an as-is copy can be packaged into (the plain copy and the three app stacks). */
 export const ASIS_STACKS = ['html', 'react-vite', 'nextjs', 'mern'];
@@ -377,7 +377,7 @@ export async function asIsStage(ctx) {
     // that are not served are open, never fixed.
     const served = report.fixes?.served && !report.fixes.served.error ? servedOutcome(report.fixes.served) : null;
     if (served) openItems.push(...served.open.map((o) => ({ page: o.page ?? '/', ...o })));
-    const logOpen = issueLogger(DATA_DIR);
+    const logOpen = issueLogger(LOGS_DIR);
     for (const o of openItems) await logOpen({ site: new URL(siteUrl).hostname, stack, ...o });
     ctx.report.copy = {
       stack,

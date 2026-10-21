@@ -3,10 +3,10 @@
 import { spawn } from 'node:child_process';
 import { symlink, rmdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { runToolchain } from '../../build/toolchain.js';
+import { toolchainDir } from '../../../config/paths.js';
 
-const SERVER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
+
 const TOOLCHAIN = { 'react-vite': 'react-vite', nextjs: 'next', mern: 'mern' };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -30,7 +30,7 @@ export async function buildStack(stack, dir, { timeoutMs } = {}) {
  */
 export async function startStack(stack, dir, port) {
   const modules = path.join(dir, 'node_modules');
-  await symlink(path.join(SERVER, 'toolchains', TOOLCHAIN[stack], 'node_modules'), modules, 'junction');
+  await symlink(path.join(toolchainDir(TOOLCHAIN[stack]), 'node_modules'), modules, 'junction');
   const args = {
     'react-vite': ['node_modules/vite/bin/vite.js', 'preview', '--port', String(port), '--strictPort', '--host', '127.0.0.1'],
     nextjs: ['node_modules/next/dist/bin/next', 'start', '-p', String(port), '-H', '127.0.0.1'],

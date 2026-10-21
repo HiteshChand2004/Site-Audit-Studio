@@ -7,10 +7,10 @@
 import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { SECURITY_HEADERS } from '../../../copy/securityHeaders.js';
+import { SERVER_DIR, toolchainDir } from '../../../config/paths.js';
 
-const SERVER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
+const SERVER = SERVER_DIR;
 const MERN_TEMPLATE = path.join(SERVER, 'src/recreate/emit/mern/template/server');
 
 /** The stacks a lifted copy can be packaged into. */
@@ -18,7 +18,7 @@ export const PACK_STACKS = ['react-vite', 'nextjs', 'mern'];
 
 /** The versions the server builds and checks with (toolchains/<id>/package.json): what the user installs is what was verified. */
 export function pinnedVersions(id) {
-  return JSON.parse(readFileSync(path.join(SERVER, 'toolchains', id, 'package.json'), 'utf8'));
+  return JSON.parse(readFileSync(path.join(toolchainDir(id), 'package.json'), 'utf8'));
 }
 
 /** Headers for hosts that read a `_headers` file (Netlify, Cloudflare Pages): pages revalidate, everything else is cached. */

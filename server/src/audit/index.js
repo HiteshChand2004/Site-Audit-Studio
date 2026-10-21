@@ -6,7 +6,7 @@
 // Chromium/Lighthouse go through a local egress proxy that checks it (security/).
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { projectDir } from '../db/index.js';
+import { auditDir } from '../config/paths.js';
 import { buildContext, detectStack, globalNames, toTechStack } from '../detection/engine.js';
 import { detectManualRebuild } from '../detection/manual.js';
 import { analyzeA11y } from './analyzers/a11y.js';
@@ -205,7 +205,7 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
   const outages = watchNetwork(new URL(url).hostname);
   const errors = [];
   const skipped = new Set(skip);
-  const outDir = dir ?? path.join(projectDir(project.id), 'audit', analysisId);
+  const outDir = dir ?? auditDir(project.id, analysisId);
   await mkdir(outDir, { recursive: true });
   const save = (name, data) => writeFile(path.join(outDir, name), JSON.stringify(data, null, 1)).catch(() => {});
 
