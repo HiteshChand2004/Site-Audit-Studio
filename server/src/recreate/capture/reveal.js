@@ -24,7 +24,10 @@
  */
 export function installRevealTracker(opts) {
   const { observe = false } = opts || {};
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // The page's own setTimeout, even on a page whose timers are frozen (verify/exact/freeze.js keeps it as __sasTimeout): the
+  // tracker's waits must end there too, or a bounded wait (3 s for an image that never loads) never does.
+  const timeout = window.__sasTimeout || window.setTimeout;
+  const sleep = (ms) => new Promise((r) => timeout(r, ms));
   const HIDDEN = 0.05;
   const MAX_TRACKED = 400;
   const MAX_SAMPLES = 90;
@@ -261,7 +264,7 @@ export function installRevealTracker(opts) {
     await Promise.all(pending.map((img) => new Promise((r) => {
       img.addEventListener('load', r, { once: true });
       img.addEventListener('error', r, { once: true });
-      setTimeout(r, 3000);
+      timeout(r, 3000);
     })));
     await document.fonts?.ready;
     const out = { revealed: revealed.size, pinned: pinned.length, stacked: stacked.size };

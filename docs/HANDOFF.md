@@ -228,8 +228,7 @@ Tests: `copy-address.test.js` (3, incl. the skip path: nothing in the copy names
 - The exact numbers quoted for this review (flexibench ~43, framer ~40, parchaa ~41–52, dreamhire ~57–58) are **not** in the
   scratch corpus (its runs score 85–92 overall, diff 70–85; framer 50 / 39). They may come from another store or another score;
   the mechanism applies to any score computed against `capture/<slug>/<view>-full.webp` taken after 19ddc59.
-- Not fixed here (the capture is shared with other work). The general fix: the capture's reference picture must show what a
-  visitor sees after scrolling (taken after a scroll-through, then frozen), the same on both sides of any score that uses it.
+- Fixed afterwards: see "Fixed before step 4" below.
 
 ### 3. Stability proof coverage — nyaayai, and partly makememo
 - The outlier and its cause were reproduced and fixed on **one site (nyaayai)**. "Before" in fresh processes was measured at
@@ -280,6 +279,56 @@ run commands derived from the generated `package.json` scripts and folders — p
 DEPLOY.md names exists in the package it ships with. Not an `install:all` alias: in a clean MERN layout it must install both
 packages, and an alias that succeeds while doing the wrong thing is worse than one that fails.
 
+## Fixed before step 4: the capture's reference picture had no scroll (regression from 19ddc59)
+
+**Why the scroll went away.** `19ddc59` (2026-10-18) moved the capture's full-page picture to a fresh page with frozen timers,
+on purpose: rotators, carousels and tickers changed between the original's picture and the copy's, so the score measured the
+moment (nyaayai, dreamhire, indikaai, parchaa scored low at phone widths). The old picture came from the capture's own page,
+which had been scrolled through; the fresh page never was, and nothing in that commit (or in `7f0a189`, which shortened its
+load wait for flexibench) scrolls it. The freeze was deliberate; losing the scroll was a side effect no test covered (the frozen
+test only looked at a rotator in the first screen).
+
+**Fix (general, `verify/shot.js frozenFullShot`):** the fresh frozen page is now scrolled through with the capture's own
+`settle` (real wheel steps, the reveal tracker, back to the top, revealed content pinned — also sections that hide again
+when they leave the view), what the scroll loaded gets a bounded wait (`MEDIA_WAIT_MS` 3 s, bounded in Node), and the page's
+reactions to the window's size are held while the picture is taken (`holdSizeReactions`, moved to `verify/exact/freeze.js`
+and shared with the as-is check). Its time limit grows by `SCROLL_LIMIT_MS` 60 s; if it still cannot finish, the existing
+fallback is the capture page's own screenshot, which is scrolled and pinned. The other side of the clean score (the copy,
+rendered with its scripts off by `verify/layout.js`) has nothing that waits for a scroll, so both sides now show every section.
+Found on the way, same cause class: the freeze suppresses the page's timers of ≥ 1 s, and our own page code used them — the
+reveal tracker's 3 s wait for an image that never loads never ended (88 s, then the outer limit). The freeze now keeps the
+original timer as `window.__sasTimeout` (not enumerable) and the tracker uses it; the page's own timers stay frozen.
+
+**Regression test** (`recreate-visual-frozen.test.js`, +1): a page whose four sections appear only on scroll (one of them hides
+again when it leaves the view) plus a rotator: the frozen picture has < 10 % background-only bands below the first screen,
+every section's colour is in it, and the rotator stayed frozen. On the code before the fix it fails with "below the first screen
+100 % of the picture is blank". The other three frozen-picture tests pass (the load-never-comes page finishes in ~10 s).
+Related tests: recreate-reveal, recreate-capture, recreate-exact-capture, -compare, -recipe, recreate-feed-reveals,
+preserve-baseline-capped, copy-fix-asis — 53 / 53 pass.
+
+**Size of the effect** — dreamhire `d541c77b` (captured after 19ddc59), re-scored with the same functions as `verify/fidelity.js`
+(`visualSimilarity`, `visualDiff`, `viewScore` with the run's own sizes / boxes); the copy's pictures are the saved ones (read-only
+scratch copies), only the original's picture was taken again with the fixed code from the live site. Control: the new reference
+against the capture of the same site from before 19ddc59 (`865b6bc2`): diff 94–99, so the site had not changed.
+
+| Page | View | blank (old → new ref) | visual | diff | score |
+|---|---|---|---|---|---|
+| / | phone | 54.7 → 0.5 % | 82 → 87 | 70 → 76 | 84 → 86 |
+| / | computer | 61.0 → 2.4 % | 78 → 91 | 67 → 77 | 79 → 84 |
+| /employers | phone | 56.3 → 0.5 % | 74 → 87 | 62 → 74 | 83 → 89 |
+| /employers | computer | 55.8 → 0 % | 77 → 99 | 67 → 97 | 83 → 92 |
+| /candidates | phone | 46.2 → 0 % | 78 → 98 | 67 → 94 | 91 → 99 |
+| /candidates | computer | 47.4 → 0 % | 87 → 99 | 77 → 98 | 95 → 100 |
+| /pricing | phone | 55.6 → 0 % | 81 → 99 | 72 → 96 | 92 → 99 |
+| /pricing | computer | 38.7 → 0 % | 91 → 100 | 82 → 96 | 76 → 79 |
+| /about | phone | 26.5 → 0 % | 79 → 99 | 69 → 98 | 91 → 100 |
+| /about | computer | 32.4 → 0 % | 82 → 100 | 74 → 99 | 93 → 100 |
+| **mean** | | | **80.7 → 95.8** | **70.7 → 90.5** | **86.7 → 92.8** |
+
+What remains low after the fix is real (homepage 86 / 84: its picture part is 87 / 91; /pricing computer 79: the layout part).
+Captures saved between 19ddc59 and this fix keep their blank pictures: a project's clean scores from that window are only
+comparable after a new capture (or a re-score of the reference like the one above).
+
 ## Next steps, in order (commit and push after each)
 
 1. Zero-regressions loop: the re-audit runs on the as-is copy; every "got worse" item is measured and must be 0 or have a reason
@@ -287,5 +336,5 @@ packages, and an alias that succeeds while doing the wrong thing is worse than o
 2. Per-page fallback: clean rebuild of a failing page in the chosen stack, time-boxed correction, keep the better one.
 3. Images on the as-is output (WebP / variants) only where the pixels stay the same, through the same gate.
 4. Recorded, waiting for a decision: DEPLOY.md per (stack, mode) from the shipped package (see the bug above); security headers that
-   take effect on Next.js / Vercel; the capture's reference picture after a scroll-through (shared with the clean rebuild's scores).
+   take effect on Next.js / Vercel. (The capture's reference picture is fixed, see above.)
 Then: full runs of makememo MERN and nyaayai Next.js on scratch data (scratch API only; never port 4000/5173, never the real data folder).

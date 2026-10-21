@@ -77,3 +77,65 @@ test('when the frozen picture cannot finish, the capture keeps the normal screen
     await browser.close();
   }
 });
+
+// The share of 40-px bands below the first screen that are empty: nothing drawn (luma spread < 4) and the page's own background
+// (the luma of the first screen's corner). A picture taken without the scroll-through had every section that appears on scroll
+// empty (dreamhire after 19ddc59: 38-63 % of the picture). A solid coloured section is flat too, but it is not the background.
+async function blankBelowFold(png, foldPx) {
+  const { default: sharp } = await import('sharp');
+  const { data, info } = await sharp(png).removeAlpha().greyscale().raw().toBuffer({ resolveWithObject: true });
+  const background = data[(foldPx - 1) * info.width + info.width - 1];
+  let blank = 0;
+  let bands = 0;
+  for (let y0 = foldPx; y0 + 40 <= info.height; y0 += 40) {
+    let s = 0;
+    let s2 = 0;
+    let n = 0;
+    for (let y = y0; y < y0 + 40; y++) for (let x = 0; x < info.width; x++) { const v = data[y * info.width + x]; s += v; s2 += v * v; n++; }
+    const m = s / n;
+    if (Math.sqrt(Math.max(0, s2 / n - m * m)) < 4 && Math.abs(m - background) < 6) blank++;
+    bands++;
+  }
+  return bands ? blank / bands : 0;
+}
+
+test('sections that appear on scroll are in the frozen picture, also one that hides again when it leaves the view', { timeout: 180000 }, async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'sas-frozen-reveal-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'reveal.html');
+  const colours = ['#c2410c', '#15803d', '#1d4ed8', '#7e22ce'];
+  // Each section is drawn (a coloured block with text) only once the page's script has seen it in view; the last one is hidden
+  // again when it leaves the view (an effect that replays). A rotator at the top keeps the timers busy.
+  await writeFile(file, `<!doctype html><html><head><meta charset="utf-8"><title>Reveal</title><style>
+    body{margin:0;font:28px sans-serif;background:#fff} .hero{height:500px} section{height:700px}
+    .r{opacity:0;transform:translateY(40px);transition:opacity .5s,transform .5s} .r.in{opacity:1;transform:none}
+    .block{height:700px} .block p{margin:0;padding:24px;color:#fff}
+  </style></head><body><div class="hero"><h1 id="h">alpha</h1></div>
+  ${colours.map((c, i) => `<section><div class="r block"${i === colours.length - 1 ? ' data-replay' : ''} style="background:${c}"><p>Section ${i + 1} with its own words</p></div></section>`).join('')}
+  <script>
+    var words=['alpha','bravo'],k=0;setInterval(function(){k=(k+1)%2;document.getElementById('h').textContent=words[k];},1200);
+    var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting)e.target.classList.add('in');else if(e.target.hasAttribute('data-replay'))e.target.classList.remove('in');});},{threshold:.2});
+    document.querySelectorAll('.r').forEach(function(el){io.observe(el);});
+  </script></body></html>`, 'utf8');
+  const url = `file://${file.split(path.sep).join('/')}`;
+  const view = { width: 600, height: 500, dpr: 1, mobile: false };
+  const browser = await chromium.launch();
+  try {
+    const shot = await frozenFullShot(browser, url, view);
+    const blank = await blankBelowFold(shot.png, view.height);
+    assert.ok(blank < 0.1, `below the first screen ${Math.round(blank * 100)} % of the picture is blank`);
+    // Every section's block is drawn in its own colour (sampled in its middle).
+    const { default: sharp } = await import('sharp');
+    const { data, info } = await sharp(shot.png).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    colours.forEach((hex, i) => {
+      const y = 500 + i * 700 + 350; // hero + earlier sections + the middle of this one
+      const p = (y * info.width + 300) * 3;
+      const [r, g, b] = [1, 3, 5].map((o) => parseInt(hex.slice(o, o + 2), 16));
+      const off = Math.max(Math.abs(data[p] - r), Math.abs(data[p + 1] - g), Math.abs(data[p + 2] - b));
+      assert.ok(off < 30, `section ${i + 1} is in the picture (pixel ${data[p]},${data[p + 1]},${data[p + 2]} vs ${hex})`);
+    });
+    assert.ok(shot.frozen && shot.frozen.intervals >= 1, 'the rotator stayed frozen');
+  } finally {
+    await browser.close();
+  }
+});

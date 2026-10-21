@@ -15,7 +15,7 @@ import sharp from 'sharp';
 import { pixelDiffPct } from './render.js';
 import { scriptCandidates } from './extract.js';
 import { readRecordIndex, classifyScripts, recordBodyReader } from '../scripts.js';
-import { freezePage, freezeTimers } from '../../verify/exact/freeze.js';
+import { freezePage, freezeTimers, holdSizeReactions } from '../../verify/exact/freeze.js';
 import { MAX_HEIGHT } from '../../../audit/screenshots.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -56,38 +56,7 @@ export async function settleFrozen(page, url) {
   await page.waitForTimeout(400);
 }
 
-/**
- * Init script: a page's own reactions to a change of the window's size can be held (`window.__sasHoldSize = true`). A full-page
- * screenshot grows the window to the page's height and back; a page whose script answers that (a resize listener, a
- * ResizeObserver, a media-query listener — the window is "portrait" while it is that tall) re-lays itself out in the middle of
- * the picture, and whether that lands in it is a race (nyaayai: 14.5 % one run in four, 0.3 % the others). Held, the picture
- * shows the page as it stood at the visitor's size; its CSS still lays out the same way on both sides.
- */
-export function holdSizeReactions() {
-  const held = () => window.__sasHoldSize === true;
-  addEventListener('resize', (e) => { if (held()) e.stopImmediatePropagation(); }, true);
-  if (window.visualViewport) visualViewport.addEventListener('resize', (e) => { if (held()) e.stopImmediatePropagation(); }, true);
-  const RO = window.ResizeObserver;
-  if (RO) {
-    window.ResizeObserver = class extends RO {
-      constructor(callback) { super((entries, observer) => { if (!held()) callback(entries, observer); }); }
-    };
-  }
-  const MQL = window.MediaQueryList?.prototype;
-  if (MQL) {
-    const gate = (fn) => (typeof fn === 'function' ? function gated(e) { if (!held()) return fn.call(this, e); } : fn);
-    const add = MQL.addEventListener;
-    const remove = MQL.removeEventListener;
-    const wrapped = new WeakMap();
-    const wrap = (fn) => { if (typeof fn !== 'function') return fn; if (!wrapped.has(fn)) wrapped.set(fn, gate(fn)); return wrapped.get(fn); };
-    MQL.addEventListener = function (type, fn, o) { return add.call(this, type, type === 'change' ? wrap(fn) : fn, o); };
-    MQL.removeEventListener = function (type, fn, o) { return remove.call(this, type, type === 'change' ? wrap(fn) : fn, o); };
-    MQL.addListener = function (fn) { return add.call(this, 'change', wrap(fn)); };
-    MQL.removeListener = function (fn) { return remove.call(this, 'change', wrap(fn)); };
-    const desc = Object.getOwnPropertyDescriptor(MQL, 'onchange');
-    if (desc?.set) Object.defineProperty(MQL, 'onchange', { ...desc, set(fn) { desc.set.call(this, gate(fn)); } });
-  }
-}
+export { holdSizeReactions };
 
 /** The full-page picture with the page's size reactions held (see holdSizeReactions; the context must have it). */
 async function fullShot(page) {
