@@ -196,7 +196,7 @@ async function recreate({
   // The as-is copy's own stage replaces the copy's generate step; no other copy step runs (see the step loop below).
   if (asIs) stages = { ...stages, generate: stages.asIsStage ?? asIsStage };
   // The checkpoint keeps the mode, the as-is copy's included: a resume continues the same kind of copy.
-  const checkpoint = openCheckpoint(dir, { recreateId, analysisId: analysis.id, saved, auto: Boolean(resumeFrom?.auto), mode: { exact, unlimited, ...(asIs && { asIs: { stack: asIs.stack, pages: asIs.pages } }) } });
+  const checkpoint = openCheckpoint(dir, { recreateId, analysisId: analysis.id, saved, auto: Boolean(resumeFrom?.auto), mode: { exact, unlimited, ...(asIs && { asIs: { stack: asIs.stack, pages: asIs.pages, ...(asIs.address && { address: asIs.address }) } }) } });
   const ctx = {
     project,
     recreateId,

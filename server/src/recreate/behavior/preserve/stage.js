@@ -13,6 +13,7 @@ import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
 import { checkCopy, excludedHostsOf, fixGate, formsInCopy, probeOriginal } from './check.js';
 import { fixAsIsCopy, revertPage } from '../../../copy/fixAsIs.js';
+import { addressForCopy } from '../../../copy/address.js';
 import { slugFor } from '../../discover.js';
 import { serveCopy } from './serve.js';
 import { runLighthouse } from '../../../audit/lighthouse/run.js';
@@ -99,7 +100,7 @@ export function newSiteOf(baseUrl, siteUrl) {
  * a page whose fixes are not invisible gets its lifted HTML back, and its fixes are listed as reverted (reason d).
  * A gate that cannot decide (an error) reverts too: a fix is kept only when it is shown to change nothing.
  */
-export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, log = () => {} }) {
+export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped = null, log = () => {} }) {
   await rm(gateDir, { recursive: true, force: true });
   await cp(copyDir, gateDir, { recursive: true });
   try {
@@ -135,7 +136,7 @@ export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, n
       total: Object.values(counts).reduce((s, n) => s + n, 0),
       pages: fixed.pages.map((p) => ({ path: p.path, fixes: p.fixes, ...(p.reverted && { reverted: p.reverted }) })),
       reverted: fixed.pages.filter((p) => p.reverted).length,
-      open: fixed.open,
+      open: [...(addressSkipped ? [{ kind: 'address', page: null, ...addressSkipped }] : []), ...fixed.open],
       files: fixed.files,
       gate,
     };
@@ -240,9 +241,12 @@ export async function asIsStage(ctx) {
     }
     // Copy my site §2: the fixes that change neither the look nor the behaviour, each page proven unchanged by them.
     ctx.progress(0.33, 'Fixing what can be fixed without changing the look');
+    // The new address is written only when usable and confirmed for this copy (copy/address.js); else none is, and that is open.
+    const address = addressForCopy({ saved: newSiteOf(ctx.baseUrl, siteUrl), confirmed: ctx.asIs?.address ?? null, siteUrl });
+    report.address = address.origin ? { used: address.origin } : { used: null, ...address.skipped };
     report.fixes = await fixAndProve({
       browser, copyDir, gateDir: path.join(ctx.dir, ASIS_DIR, 'unfixed'), pages, siteUrl,
-      newSiteUrl: newSiteOf(ctx.baseUrl, siteUrl), log: (m) => ctx.progress(0.34, m),
+      newSiteUrl: address.origin, addressSkipped: address.skipped, log: (m) => ctx.progress(0.34, m),
     });
     ctx.progress(0.35, 'Packaging the copy');
     await rm(outDir, { recursive: true, force: true });
@@ -357,6 +361,10 @@ export async function asIsStage(ctx) {
       // A request the copy makes to another site (the original's own third-party script) is third-party code (reason a).
       reason: checks.pages.find((x) => x.path === p.path)?.offline?.external?.length ? 'third_party' : 'unresolved',
     })));
+    // No usable, confirmed new address: nothing in the copy names one (copy/address.js); the owner decides (reason c).
+    if (report.address && !report.address.used) {
+      openItems.unshift({ page: '/', check: 'new-site address', values: report.address.detail, tried: 'canonical, link previews, robots.txt, sitemap.xml and structured data were left without an address', reason: 'owner' });
+    }
     const logOpen = issueLogger(DATA_DIR);
     for (const o of openItems) await logOpen({ site: new URL(siteUrl).hostname, stack, ...o });
     ctx.report.copy = {

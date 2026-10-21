@@ -11,7 +11,9 @@ import { REASONS } from '../../copy/openItems.js';
  * @returns {{ name: string, content: string }[]}
  */
 export function notesEntries({ report, stack, root }) {
-  const address = report.baseUrl ?? null;
+  // An as-is copy names the address its fixes actually used (copy/address.js: none unless usable and confirmed); report.baseUrl
+  // is the original's own origin when no address was set, which DEPLOY.md must never call the new site's.
+  const address = report.asIs ? (report.asIs.address?.used ?? null) : (report.baseUrl ?? null);
   const siteName = siteNameOf(report);
   const copy = report.copy ?? {};
   const entries = [{ name: `${root}/DEPLOY.md`, content: deployMd({ stack, siteName, address, formEndpoint: copy.formEndpoint ?? null, checks: copy.deployChecks ?? [] }) }];

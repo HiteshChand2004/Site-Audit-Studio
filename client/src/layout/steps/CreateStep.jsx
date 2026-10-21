@@ -83,7 +83,7 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   const startCopy = async ({ stack: chosen, address }) => {
     await updateProject(project.id, { stack: chosen, target_domain: address, recreate_pages: ALL_PAGES });
     const pages = await api.getPages(project.id).then((r) => (r.pages ?? []).map((p) => p.url)).catch(() => []);
-    await recreate(project.id, { mode: 'as-is', confirmed: true, stack: chosen, pages });
+    await recreate(project.id, { mode: 'as-is', confirmed: true, stack: chosen, pages, addressConfirmed: address });
   };
   const [building, setBuilding] = useState(false);
   const [buildError, setBuildError] = useState(null);

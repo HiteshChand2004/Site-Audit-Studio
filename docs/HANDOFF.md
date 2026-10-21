@@ -175,10 +175,117 @@ Proof on the lifted copies (scratch copies, new address `https://new-site.exampl
 Tests: `copy-fix-asis.test.js` (new, 3), `preserve-asis`, `preserve-asis-offline`, `recreate-asis-budget`, `recreate-aria` — all pass.
 Client: `npx vite build` passes.
 
+## Review before step 4 (2026-10-21)
+
+### 1. The new-site address — guarded
+Where it came from (before the guard): `project.target_domain` (saved by the panel, `client/src/layout/steps/CreateStep.jsx:84`;
+validated only as "a web address with a dot", `server/src/recreate/inputs.js:92`) → `baseUrlOf` (`inputs.js:108`: the saved
+address, **else the original's own origin**) → `ctx.baseUrl` (`recreate/index.js:205`) → `newSiteOf` (`preserve/stage.js`) →
+`fixAsIsCopy({ newSiteUrl })`. Findings: an empty address was skipped (no rewrite); **a placeholder was written everywhere**
+(the scratch corpus has `https://new.example.com` saved on nyaayai and makememo); a **repack reused the saved address without
+asking**; `DEPLOY.md` said "search tags, sitemap and links already use it" and, with no address, called the original's origin
+"the new site's address" (`export/notes.js` used `report.baseUrl`). So yes: a shipped copy could name a domain the user does not own.
+
+Guard (`server/src/copy/address.js`): an address is written only when **usable by rule** — http(s), a domain name (no IP, no
+single label), not reserved for tests or documentation (.test .example .invalid .localhost .local .internal, home.arpa,
+example.com / .net / .org: RFC 2606, 6761, 6762, 8375; whole labels only), not the original — **and confirmed for this run**:
+the panel now sends `addressConfirmed` (`CreateStep.jsx`), the route keeps it (`routes/recreate.js`, normalised by
+`parseTargetDomain`), the checkpoint keeps it for a resume (`recreate/index.js:199`), and it must equal the saved address.
+Otherwise **no** address rewrite at all (canonical, og:url, robots.txt, sitemap.xml, llms.txt, JSON-LD url / logo), one open
+item with reason c in `report.copy.openItems` (→ KNOWN-ISSUES.md and the server log) and in `report.asIs.address`, and DEPLOY.md
+says no address was set (`export/notes.js`: an as-is copy names only the address its fixes used).
+Limits, stated: `nyaayai.test.com` is a real third-party domain (test.com is registered), so no rule can call it a placeholder;
+it is stopped only by the confirmation (a saved value alone is never used). A confirmed, real but wrong address cannot be detected.
+Tests: `copy-address.test.js` (3, incl. the skip path: nothing in the copy names an address, the open item is there).
+
+### 2. The capture's full-page picture — a measurement artefact in the clean rebuild's scores
+- The **new per-width pictures** (step 2, `as-is/baseline/<slug>@<width>.png`) have **no 8000 px cap**: `visualCheck` keeps an
+  uncapped full-page PNG (nyaayai 11654 / 15681 px were stored whole). The cap is on the capture's picture (`capture/index.js:311`,
+  `verify/shot.js:51`) and on the clean fidelity render (`verify/layout.js:185`) — **both** sides there, so in the clean score the
+  cap leaves the bottom of tall pages unmeasured; it does not create a height difference.
+- **The artefact is the missing scroll.** Since commit `19ddc59` (2026-10-18 14:28 IST = 08:58 UTC) the capture keeps
+  `verify/shot.js frozenFullShot`: a fresh page, 800 ms settle, top of the page, **no scroll**. Sections that appear on scroll
+  stay invisible in it. The clean rebuild's fidelity uses that picture as the original (`verify/fidelity.js:105-111`: `visual` is
+  40 % of the score, and the whole `diff` score); its copy is rendered with JS off, so its sections are all there.
+- Measured on saved artefacts (read-only scratch copies of the corpus, nothing re-run): share of 40-px bands blank in the
+  original's picture but not in the copy's —
+
+  | Site, run (UTC) | vs 19ddc59 | blank in original only | visual (per view) | diff (per view) |
+  |---|---|---|---|---|
+  | dreamhire 865b6bc2 (10-18 08:05) | before | 0–2.4 % | 87–99 | 74–98 |
+  | dreamhire d541c77b (10-18 09:47) | after | **38–63 %** | 74–91 | 62–82 |
+  | parchaa f0ca3e94 (10-18 07:43) | before | 0–0.5 % | 91–100 | 78–97 |
+  | parchaa 5543a393 (10-18 09:09) | after | **23–77 %** (blog posts 0–19 %) | 80–100 | 59–98 |
+  | flexibench dcecafc4 / fe1df206 (10-18 12:10 / 14:13) | after | **0–44 %** (home 30 / 44 %) | 76–99 | 60–98 |
+  | framer 1837ff5b / b443e730 (10-13 / 10-14) | before | 17–24 % (one-screen page; hero not in yet at 800 ms) | 82–91 | 68–82 |
+
+  Same site, same day, same kind of copy: dreamhire's picture after the change is blank below the first screen (checked by eye on
+  the about page: the figures, "the principles", "a short history", the team, the closing banner are all missing), and its
+  scores fall by 10–20 points with nothing else changed.
+- **Conclusion: low visual / diff scores of clean rebuilds captured after 19ddc59 are, to a large part, measurement artefacts,
+  not fidelity problems.** Exception: framer's homepage score 40 / 36 — its picture part is 82–91; the low score is the box-layout
+  part (sizes, boxes), a real difference, not this artefact.
+- The exact numbers quoted for this review (flexibench ~43, framer ~40, parchaa ~41–52, dreamhire ~57–58) are **not** in the
+  scratch corpus (its runs score 85–92 overall, diff 70–85; framer 50 / 39). They may come from another store or another score;
+  the mechanism applies to any score computed against `capture/<slug>/<view>-full.webp` taken after 19ddc59.
+- Not fixed here (the capture is shared with other work). The general fix: the capture's reference picture must show what a
+  visitor sees after scrolling (taken after a scroll-through, then frozen), the same on both sides of any score that uses it.
+
+### 3. Stability proof coverage — nyaayai, and partly makememo
+- The outlier and its cause were reproduced and fixed on **one site (nyaayai)**. "Before" in fresh processes was measured at
+  **1440 only** (1.27, 14.53, 1.26, 0.34 %). At 390, "before" exists only from one process (0.17, 0.18, 0.17, 0.17 %; no outlier
+  seen; an earlier session saw 0.70 % once). After the fix, nyaayai in 6 fresh processes: 1440 0.27–0.31 %, 390 0.17–0.24 %.
+- makememo was measured **after** the fix only (live 1440 0.06–0.08 %, 390 0.03–0.10 %, 3 checks), never before it.
+- **Unproven**: that the fix removes outliers on other sites; that 390 had the same race (never observed there); phone layouts
+  that answer resizes differently; widths other than 1440 and 390.
+
+### 4. Fixer accept / revert (step-3 proof runs)
+
+| Copy | Attempted | Kept | Reverted | What was attempted |
+|---|---|---|---|---|
+| nyaayai | 49 | 49 | 0 | 33 unlabelled form fields (3 forms × 11: website, company, message, subject, …), 12 icon links (6 known services, 3 other hosts, 3 to the homepage), canonical + og:url moved, Organization + WebSite JSON-LD |
+| makememo | 3 | 3 | 0 | 1 email field named from its placeholder, canonical + og:url moved |
+
+Nothing was reverted (gate: nyaayai 0.01 % vs noise 0.01 %, makememo 0.06 % vs noise 0.07 %). makememo's 3 is **few applicable
+fixes**, not reverts: its 2 images have alt, its 24 links and 2 buttons have names, title, description and lang are set, it has 3
+JSON-LD blocks; only one form field had no label. nyaayai has three forms of unlabelled fields, icon-only social links and no JSON-LD.
+Both runs used `https://new-site.example` as a stand-in address, which the new guard refuses.
+
+### 5. Security headers on an as-is copy
+No `<meta http-equiv>` is written anywhere (`copy/fixAsIs.js`, `preserve/*`: none). The mechanism is a host file:
+`copy/fixAsIs.js:287` writes `_headers` (`AS_IS_HEADERS`, `fixAsIs.js:38`: HSTS, nosniff, Referrer-Policy, X-Frame-Options,
+Permissions-Policy, no CSP, then the cache rules) into the copy folder. Per stack:
+- **Plain HTML**: the folder is the site → `_headers` at its root; applied by Netlify and Cloudflare Pages, a plain ignored file elsewhere.
+- **React + Vite**: copy → `public/` (`pack.js:155`) → `dist/_headers` after `vite build`; applied on Netlify / Cloudflare Pages.
+  `pack.js:156` also writes a cache-only `_headers` at the project root, which is not deployed (pre-existing).
+- **Next.js**: copy → `public/` (`pack.js:216`); `next.config.mjs` `headers()` sets cache headers only. `public/_headers` is served
+  as a file and **not applied** by `next start` or Vercel: the security headers do not take effect for this stack.
+- **MERN**: copy → `client/dist/` (`pack.js:244`); the Express server sets its own headers (`emit/mern/template/server/src/app.js:95-104`:
+  CSP from `liftedCsp` = `script-src 'self'` plus hashes of the copy's inline scripts, nosniff, Referrer-Policy, XFO, COOP,
+  Permissions-Policy; this pre-dates step 3). `client/dist/_headers` is served as a file and ignored.
+- No `vercel.json` / `netlify.toml` is written for as-is copies. Gaps: no stack gets HSTS on Vercel; Next.js gets none of the security headers.
+
+### Bug recorded, not fixed: DEPLOY.md names scripts the as-is package does not have
+`DEPLOY.md` comes from `server/src/copy/deploy.js` `STACK_FACTS` (one text per stack, written for the **clean** emitters); the as-is
+`package.json` from `server/src/recreate/behavior/preserve/pack.js`. Confirmed:
+- React + Vite: DEPLOY.md says `npm run dev` (`deploy.js:12`); the as-is scripts are `build` and `preview` only.
+- Next.js: DEPLOY.md says `npm run dev` and "they are in out/" (`deploy.js:17-18`); the as-is scripts are `build` and `start`
+  (`pack.js:172`), there is no `output: 'export'`, so no `out/` is ever produced; "Netlify: publish folder out" is wrong too.
+- MERN: DEPLOY.md says `npm run install:all` (`deploy.js:22`); the as-is script is `start` only (`pack.js:233`). The as-is MERN
+  package has **no `client/package.json`**: `client/` holds only `dist/` (the lifted copy, served as files) and every dependency
+  (express, compression, mongodb) is in the root `package.json`. For the as-is MERN copy, `npm install` + `npm start` is the
+  complete and correct command; for the **clean** MERN copy `install:all` is right (client and server each have a package).
+Correct generic fix: DEPLOY.md is written from the package that actually ships — `STACK_FACTS` per (stack, mode), or better the
+run commands derived from the generated `package.json` scripts and folders — plus a test that every `npm run <x>` and every folder
+DEPLOY.md names exists in the package it ships with. Not an `install:all` alias: in a clean MERN layout it must install both
+packages, and an alias that succeeds while doing the wrong thing is worse than one that fails.
+
 ## Next steps, in order (commit and push after each)
 
 1. Zero-regressions loop: the re-audit runs on the as-is copy; every "got worse" item is measured and must be 0 or have a reason
    (§5); the summary line's "Fixed" comes from it.
 2. Per-page fallback: clean rebuild of a failing page in the chosen stack, time-boxed correction, keep the better one.
 3. Images on the as-is output (WebP / variants) only where the pixels stay the same, through the same gate.
+4. Recorded, waiting for a decision: DEPLOY.md per (stack, mode) from the shipped package (see the bug above); security headers that
+   take effect on Next.js / Vercel; the capture's reference picture after a scroll-through (shared with the clean rebuild's scores).
 Then: full runs of makememo MERN and nyaayai Next.js on scratch data (scratch API only; never port 4000/5173, never the real data folder).

@@ -6,7 +6,7 @@ import { db } from '../db/index.js';
 import { ConflictError } from '../jobs/manager.js';
 import { streamJob } from '../jobs/sse.js';
 import { PUBLIC_STEPS } from '../recreate/index.js';
-import { analysisWarnings, latestAnalysis, parseExactMode } from '../recreate/inputs.js';
+import { analysisWarnings, latestAnalysis, parseExactMode, parseTargetDomain } from '../recreate/inputs.js';
 import { recreateJobs } from '../recreate/jobs.js';
 import { activePreview, PreviewError, startPreview, stopPreview } from '../recreate/preview.js';
 import { findResumable, recreateDir } from '../recreate/workspace.js';
@@ -125,8 +125,16 @@ router.post('/:id/recreate', async (req, res) => {
       pages = asIsPagesOf(project, req.body.pages);
       if (pages === null) return res.status(400).json({ error: 'The pages must be addresses of this site (the homepage first or among them), up to 40.' });
     }
+    // `addressConfirmed`: the new site's address as the user entered it for this copy (the "Copy my site" panel). Only a confirmed
+    // address is written into the copy (copy/address.js); a repack or an older flow sends none, and the copy then names no address.
+    let address = null;
+    if (req.body.addressConfirmed != null) {
+      const parsed = parseTargetDomain(req.body.addressConfirmed);
+      if (!parsed.ok) return res.status(400).json({ error: 'The new site\'s address must be a web address, for example https://www.your-site.com.' });
+      address = parsed.value;
+    }
     payload.preserve = true;
-    payload.asIs = { stack, pages, ...(from && { from }) };
+    payload.asIs = { stack, pages, ...(from && { from }), ...(address && { address }) };
   }
 
   try {
