@@ -8,6 +8,7 @@ import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { SECURITY_HEADERS } from '../../../copy/securityHeaders.js';
 
 const SERVER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const MERN_TEMPLATE = path.join(SERVER, 'src/recreate/emit/mern/template/server');
@@ -200,6 +201,8 @@ const nextConfig = {
   compress: true,
   async headers() {
     return [
+      // Security headers (copy/securityHeaders.js): next start and Vercel apply these; a _headers file they would not read.
+      { source: '/:path*', headers: ${JSON.stringify(SECURITY_HEADERS.map(([key, value]) => ({ key, value })))} },
       { source: '/sw.js', headers: [{ key: 'Cache-Control', value: 'no-cache' }] },
       { source: '/:path*', headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000' }] },
       { source: '/:path*.html', headers: [{ key: 'Cache-Control', value: 'no-cache' }] },

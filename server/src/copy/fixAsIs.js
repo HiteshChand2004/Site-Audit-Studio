@@ -26,6 +26,7 @@ import { faqPairs } from '../recreate/ir/aeo.js';
 import { crawlFiles } from '../recreate/ir/crawlFiles.js';
 import { resetTextCache } from '../recreate/ir/tree.js';
 import { HEADERS_FILE as CACHE_HEADERS } from '../recreate/behavior/preserve/pack.js';
+import { SECURITY_HEADERS } from './securityHeaders.js';
 
 const clean = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 const SKIP = new Set(['script', 'style', 'noscript', 'template']);
@@ -37,11 +38,7 @@ const bareHost = (h) => String(h ?? '').toLowerCase().replace(/^www\./, '');
  */
 export const AS_IS_HEADERS = [
   '/*',
-  '  Strict-Transport-Security: max-age=31536000; includeSubDomains',
-  '  X-Content-Type-Options: nosniff',
-  '  Referrer-Policy: strict-origin-when-cross-origin',
-  '  X-Frame-Options: SAMEORIGIN',
-  '  Permissions-Policy: camera=(), microphone=(), geolocation=()',
+  ...SECURITY_HEADERS.map(([name, value]) => `  ${name}: ${value}`),
   '',
   CACHE_HEADERS,
 ].join('\n');
