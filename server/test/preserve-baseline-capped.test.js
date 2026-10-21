@@ -13,7 +13,7 @@ import { serveCopy } from '../src/recreate/behavior/preserve/serve.js';
 import { pageChecksOf } from '../src/copy/checks.js';
 import { MAX_HEIGHT } from '../src/audit/screenshots.js';
 
-const page = (height) => `<!doctype html><html><head><meta charset="utf-8"><title>Tall</title>`
+const page = (height) => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Tall</title>`
   + `<style>html,body{margin:0;background:rgb(40,90,160)}div{height:${height}px}</style></head><body><div></div></body></html>`;
 
 test('a copy taller than the capped capture picture is compared on the rows the picture has, height not judged', { timeout: 5 * 60000 }, async () => {
@@ -27,10 +27,14 @@ test('a copy taller than the capped capture picture is compared on the rows the 
   const served = await serveCopy(copyDir);
   const base = served.url.replace(/\/$/, '');
   const browser = await chromium.launch();
-  let tall, shorter;
+  const phone = await sharp({ create: { width: 390, height: 6000, channels: 3, background: { r: 40, g: 90, b: 160 } } }).png().toBuffer();
+  let tall, shorter, ownTall, ownPhone;
   try {
     tall = await baselineVisual(browser, base, `${base}/`, capped);
     shorter = await baselineVisual(browser, base, `${base}/short.html`, short);
+    // The original's own picture from an earlier check is the whole page whatever its height, at the width it was taken.
+    ownTall = await baselineVisual(browser, base, `${base}/`, capped, { kind: 'original' });
+    ownPhone = await baselineVisual(browser, base, `${base}/short.html`, phone, { width: 390, kind: 'original' });
   } finally {
     await browser.close();
     await (served.stop ? served.stop() : served.close());
@@ -50,4 +54,12 @@ test('a copy taller than the capped capture picture is compared on the rows the 
   assert.equal(shorter.capped, undefined);
   assert.equal(shorter.originalHeight, 5000);
   assert.ok(pageChecksOf({ path: '/', visual: [shorter] }).problems.some((p) => p.check === 'height'));
+
+  assert.equal(ownTall.capped, undefined, 'a saved original picture is never taken for a capped one');
+  assert.equal(ownTall.originalHeight, MAX_HEIGHT);
+  assert.equal(ownTall.source, 'saved original picture');
+  assert.equal(ownPhone.width, 390);
+  assert.equal(ownPhone.copyHeight, 6000);
+  assert.equal(ownPhone.originalHeight, 6000);
+  assert.ok(ownPhone.diffPct < 0.5, `the phone copy matches its saved picture (${ownPhone.diffPct} %)`);
 });

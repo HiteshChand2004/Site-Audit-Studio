@@ -214,12 +214,33 @@ export async function asIsStage(ctx) {
     // The original is asked once: when it does not answer, the checks that need it say so and the copy is still finished.
     // The baseline is the capture's own picture of each page (kept with the lift), so the visual check does not need the site.
     const originalReachable = await probeOriginal(siteUrl);
+    // Per page: the capture's picture (`<slug>.webp`) and the original's own pictures from an earlier check (`<slug>@<width>.png`,
+    // written below whenever the original is compared live), which the check prefers: the capture's picture is taken without
+    // the scroll-through, so a page whose sections appear on scroll has them blank in it (makememo: 4.7 % off an identical copy).
+    const baselineDir = path.join(ctx.dir, ASIS_DIR, 'baseline');
     const baselines = {};
+    const slugOfPath = {};
     for (const p of pages) {
-      const png = await readFile(path.join(ctx.dir, ASIS_DIR, 'baseline', `${slugFor(p.outPath)}.webp`)).catch(() => null);
-      if (png) baselines[localOfOutPath(p.outPath)] = png;
+      const slug = slugFor(p.outPath);
+      const one = {};
+      const capture = await readFile(path.join(baselineDir, `${slug}.webp`)).catch(() => null);
+      if (capture) one.capture = capture;
+      for (const width of [1440, 390]) {
+        const png = await readFile(path.join(baselineDir, `${slug}@${width}.png`)).catch(() => null);
+        if (png) one[width] = png;
+      }
+      slugOfPath[localOfOutPath(p.outPath)] = slug;
+      if (Object.keys(one).length) baselines[localOfOutPath(p.outPath)] = one;
     }
-    report.baseline = { pages: Object.keys(baselines).length, of: pages.length };
+    report.baseline = {
+      pages: Object.keys(baselines).length,
+      of: pages.length,
+      originalPictures: Object.values(baselines).filter((b) => b[1440] || b[390]).length,
+    };
+    const keepOriginalPicture = async (pagePath, width, png) => {
+      await mkdir(baselineDir, { recursive: true });
+      await writeFile(path.join(baselineDir, `${slugOfPath[pagePath]}@${width}.png`), png).catch(() => {});
+    };
     // The Plain HTML base: the same copy as plain files. It is the comparison when the original cannot be compared and no saved
     // picture exists (docs/COPY-MY-SITE.md §4); the plain HTML stack needs none, it is the base.
     let htmlBase = null;
@@ -229,7 +250,7 @@ export async function asIsStage(ctx) {
       htmlBase = plain.url.replace(/\/$/, '');
     }
     const checks = await checkCopy({
-      browser, base, excludedHosts, originalReachable, baselines, htmlBase,
+      browser, base, excludedHosts, originalReachable, baselines, htmlBase, onOriginalPicture: keepOriginalPicture,
       pages: pages.map((p) => ({ path: localOfOutPath(p.outPath), url: p.url })),
       log: (m) => ctx.progress(0.55, m),
     });

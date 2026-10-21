@@ -116,17 +116,36 @@ The 0.3 % left at 1440 is the original's third-party chatbot bar (botza widget, 
 every run. Score = 100 − 10 × diff: 96.9–97.3 at 1440, 97.6–98.3 at 390.
 Tests: `preserve-baseline-capped.test.js` (new), `preserve-original-midway.test.js` — both pass.
 
-## Step 2 — MERN "3.6 % taller": diagnosed
+## Step 2 — MERN "3.6 % taller": DONE
 
-Not a MERN defect. makememo's copy is 8289 px in **every** stack (html / react-vite / nextjs / mern), and the live original is
-8289 px. The MERN run was the only one where the original did not answer, so it was compared with the saved capture, whose
-full-page picture stops at 8000 px → "3.6 % taller". Fixed by the capped rule above. Its 5.38 % pixel difference was against an
-unfrozen, lossy (WebP q75) capture picture taken at another moment — to re-measure with the new fallback.
+Not a MERN defect. makememo's copy has the original's height in **every** stack (8289 px then, 8213 px on 2026-10-21, original
+the same). The MERN run was the only one where the original did not answer, so it fell back to the saved capture picture:
+1. that picture stops at `MAX_HEIGHT` (8000 px) → "3.6 % taller" (fixed in step 1: `capped`, height not judged);
+2. that picture is taken without the scroll-through (`verify/shot.js frozenFullShot` opens the page at the top), so sections that
+   appear on scroll are **blank** in it → 4.73 % off an identical copy, every time.
+
+Fix (general, `check.js` + `stage.js`): every live comparison keeps the original's own picture, per width
+(`visualCheck(…, { keepOriginal })` → `checkCopy({ onOriginalPicture })` → `as-is/baseline/<slug>@<width>.png`, which travels
+with the copy to a repack). When the original does not answer, the check uses, in order: the saved original picture at that
+width (`source: 'saved original picture'`, both widths) → the capture picture (desktop only, `'saved capture'`) → the Plain HTML
+base → "not compared". `report.baseline.originalPictures` counts pages that have them. The old bare-picture form of `baselines`
+still means the capture picture.
+
+Proof (makememo MERN as-is copy 1fe625e9, scratch port 4611):
+| Reference | 1440 | 390 |
+|---|---|---|
+| live original | 0.06–0.08 % | 0.03–0.10 % |
+| saved original picture (2 runs) | 0.03, 0.07 % | 0.03, 0.02 % |
+| capture picture (old fallback) | 4.73 % (capped, height not judged) | — |
+Tests: `preserve-baseline-capped` (+ saved original pictures, 390), `preserve-original-midway`, `preserve-asis`,
+`preserve-asis-offline`, `recreate-asis-budget` — all pass.
+
+**Open, outside this step**: the capture's own full-page picture (`verify/shot.js`) has scroll-revealed sections blank. It is
+also the clean pipeline's reference picture, so it may cost the clean rebuild's fidelity numbers; not changed here.
 
 ## Next steps, in order (commit and push after each)
 
-1. Step 2 proof: re-measure makememo MERN against the saved capture with the new fallback (and the live original when it answers).
-2. Wire the safe fixers onto the as-is output (the list in `docs/COPY-MY-SITE.md` §2).
-3. Zero-regressions loop: the re-audit runs; every "got worse" item is measured and must be 0 or have a reason.
-4. Per-page fallback: clean rebuild of a failing page in the chosen stack, time-boxed correction, keep the better one.
+1. Wire the safe fixers onto the as-is output (the list in `docs/COPY-MY-SITE.md` §2).
+2. Zero-regressions loop: the re-audit runs; every "got worse" item is measured and must be 0 or have a reason.
+3. Per-page fallback: clean rebuild of a failing page in the chosen stack, time-boxed correction, keep the better one.
 Then: full runs of makememo MERN and nyaayai Next.js on scratch data (scratch API only; never port 4000/5173, never the real data folder).

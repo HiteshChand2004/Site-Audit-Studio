@@ -132,9 +132,18 @@ export async function offlineCheck(browser, base, pagePath = '/') {
   }
 }
 
-export async function visualCheck(browser, base, copyUrl, originalUrl, width) {
+/** The window of the visual check at a width: a phone below 600 px. */
+const viewOf = (width) => {
   const mobile = width < 600;
-  const opts = { viewport: { width, height: mobile ? 844 : 900 }, deviceScaleFactor: 1, isMobile: mobile, hasTouch: mobile };
+  return { viewport: { width, height: mobile ? 844 : 900 }, deviceScaleFactor: 1, isMobile: mobile, hasTouch: mobile };
+};
+
+/**
+ * @param {{ keepOriginal?: boolean }} [o]  keepOriginal: the original's picture (PNG) is returned as `originalShot`, so it can be kept
+ *   as the page's baseline for a later check made when the original does not answer
+ */
+export async function visualCheck(browser, base, copyUrl, originalUrl, width, { keepOriginal = false } = {}) {
+  const opts = viewOf(width);
   const outside = [];
   const copy = await isolated(browser, opts, base, outside);
   const original = await browser.newContext(opts);
@@ -151,7 +160,10 @@ export async function visualCheck(browser, base, copyUrl, originalUrl, width) {
     const [shotA, shotB] = await Promise.all([fullShot(cp), fullShot(op)]);
     const a = await rgbOf(shotA);
     const b = await rgbOf(shotB);
-    return { width, copyHeight: a.height, originalHeight: b.height, diffPct: a.width === b.width ? pixelDiffPct(a.raw, b.raw) : null };
+    return {
+      width, copyHeight: a.height, originalHeight: b.height, diffPct: a.width === b.width ? pixelDiffPct(a.raw, b.raw) : null,
+      ...(keepOriginal && { originalShot: shotB }),
+    };
   } finally {
     await copy.close();
     await original.close();
@@ -293,9 +305,17 @@ export async function probeOriginal(url, { timeoutMs = 15000 } = {}) {
  * The copy's screenshot at 1440 against the saved capture's full-page screenshot of the original (the baseline from the first
  * capture). Used when the original is not reachable: the copy is then compared with what the original was when it was captured.
  */
-export async function baselineVisual(browser, base, copyUrl, baselinePng) {
+/**
+ * The copy against a saved picture of the original.
+ * @param {Buffer|string} baselinePng  the picture (bytes or a file)
+ * @param {{ width?: number, kind?: 'capture'|'original' }} [o]
+ *   kind 'original': the original's own picture from an earlier visual check (same window, frozen the same way: as good as the
+ *   live original at the time it was taken); 'capture': the capture's full-page picture (desktop only, up to MAX_HEIGHT, taken
+ *   without the scroll-through, so effects that wait for a scroll may be missing from it — the less reliable of the two)
+ */
+export async function baselineVisual(browser, base, copyUrl, baselinePng, { width = 1440, kind = 'capture' } = {}) {
   const outside = [];
-  const copy = await isolated(browser, { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 }, base, outside);
+  const copy = await isolated(browser, viewOf(width), base, outside);
   try {
     // The copy is pictured the way the live check pictures it (frozen, warmed up), so the two sources measure the same thing.
     await copy.addInitScript(freezeTimers);
@@ -313,21 +333,31 @@ export async function baselineVisual(browser, base, copyUrl, baselinePng) {
     // The capture's full-page picture stops at MAX_HEIGHT: a picture that tall is the top of a page that may be taller, so the
     // original's height is unknown and only the rows the picture has are compared (a copy 8289 px tall against an 8000 px
     // picture is not 3.6 % taller than its original).
-    const capped = b.height >= MAX_HEIGHT && same.height > b.height;
+    const capped = kind === 'capture' && b.height >= MAX_HEIGHT && same.height > b.height;
     return {
-      width: 1440,
+      width,
       copyHeight: same.height,
       originalHeight: capped ? null : b.height,
       ...(capped && { comparedHeight: b.height, capped: true }),
       diffPct: pixelDiffPct(same.raw, b.raw),
-      source: 'saved capture',
+      source: kind === 'original' ? 'saved original picture' : 'saved capture',
     };
   } finally {
     await copy.close();
   }
 }
 
-export async function checkCopy({ browser, base, pages, excludedHosts = [], log = () => {}, originalReachable = true, baselines = {}, htmlBase = null }) {
+/** A page's saved pictures: { capture?, 1440?, 390? }; a bare picture (bytes or a file) is the capture's, as before. */
+const savedPictures = (b) => (!b ? {} : Buffer.isBuffer(b) || typeof b === 'string' ? { capture: b } : b);
+
+/**
+ * @param {object} o
+ * @param {Record<string, Buffer|string|{ capture?: Buffer|string, 1440?: Buffer|string, 390?: Buffer|string }>} [o.baselines]
+ *   per page path: the capture's picture and / or the original's own pictures from an earlier check, per width
+ * @param {(pagePath: string, width: number, png: Buffer) => Promise<void>|void} [o.onOriginalPicture]  receives the original's
+ *   picture of every live comparison, to be kept as that page's baseline
+ */
+export async function checkCopy({ browser, base, pages, excludedHosts = [], log = () => {}, originalReachable = true, baselines = {}, htmlBase = null, onOriginalPicture = null }) {
   const report = { pages: [], forms: 0, needsAPerson: [], originalReachable };
   for (const p of pages) {
     const copyUrl = `${base}${p.path}`;
@@ -348,14 +378,21 @@ export async function checkCopy({ browser, base, pages, excludedHosts = [], log 
       }
     };
     one.visual = [];
+    const saved = savedPictures(baselines[p.path]);
     for (const width of [1440, 390]) {
-      const v = await asOriginal(`${p.url} at ${width}`, () => visualCheck(browser, base, copyUrl, p.url, width));
+      const v = await asOriginal(`${p.url} at ${width}`, () => visualCheck(browser, base, copyUrl, p.url, width, { keepOriginal: Boolean(onOriginalPicture) }));
       if (v) {
-        one.visual.push(v);
-        log(`visual ${p.path} ${JSON.stringify(v)}`);
-      } else if (width === 1440 && baselines[p.path]) {
-        // The original is not compared: the copy's desktop picture is compared with the capture's own picture of the page.
-        one.visual.push(await baselineVisual(browser, base, copyUrl, baselines[p.path]));
+        const { originalShot, ...measured } = v;
+        if (originalShot) await onOriginalPicture(p.path, width, originalShot);
+        one.visual.push(measured);
+        log(`visual ${p.path} ${JSON.stringify(measured)}`);
+      } else if (saved[width]) {
+        // The original is not compared: the copy is compared with the original's own picture from an earlier check at this width.
+        one.visual.push(await baselineVisual(browser, base, copyUrl, saved[width], { width, kind: 'original' }));
+        log(`visual ${p.path} ${JSON.stringify(one.visual.at(-1))}`);
+      } else if (width === 1440 && saved.capture) {
+        // Else, on the desktop, with the capture's own picture of the page (less reliable: see baselineVisual).
+        one.visual.push(await baselineVisual(browser, base, copyUrl, saved.capture, { width, kind: 'capture' }));
         log(`visual ${p.path} ${JSON.stringify(one.visual.at(-1))}`);
       } else if (htmlBase) {
         // The original is not compared and there is no saved picture: the copy is compared with its own Plain HTML base
