@@ -35,8 +35,7 @@ the Copy step has the stage list while a copy runs, and the old options sit unde
 
 ## What is NOT live (be exact)
 
-- **Visual check is noisy** (step 1 of the next work). nyaayai desktop 1440: 83.7 in one run, 0 in another
-  (pixel diff 1.6 % then 14.7 % on the same capture). An as-is copy should be identical to the original.
+- **Visual check**: stable since step 1 (see "Step 1" below); the earlier noise was the full-page screenshot resizing the window.
 - **Per-page fallback** (auto-repair, clean rebuild of the page, time-boxed correction) is **not** wired. The open
   items say "unresolved" (`reasonFor` marker `unresolved`, not one of the spec's five reasons). `copy/run.js` has the
   decision logic with fakes only (unit-tested).
@@ -92,32 +91,42 @@ the copy is therefore "not safe" by the existing outside-call check. That is rea
 After 1–2: re-run makememo MERN and nyaayai Next.js on scratch data (scratch API only; never port 4000/5173, never the
 real data folder). Update this file as you go.
 
-## Step 1 status — stable visual check (WIP, commit 63d7023)
+## Step 1 — stable visual check: DONE
 
-Done in `server/src/recreate/behavior/preserve/check.js` (and `stage.js`):
-- **Freeze + simultaneous screenshots:** both sides get `freezeTimers` before load and `freezePage` after load
-  (timers, carousels, rotators and CSS animations stop on the same state); the two screenshots are taken together.
-- **Warm-up:** both pages are reloaded once with files cached and fonts settled before the freeze
-  (a cold first load was 14 % off in one run).
-- **Plain HTML base fallback:** when the original is not compared and no saved picture exists, the copy is compared
-  with its own Plain HTML base (a second server on the lifted copy), instead of skipping. `stage.js` starts it for
-  non-HTML stacks and passes `htmlBase` to `checkCopy`.
+`server/src/recreate/behavior/preserve/check.js`:
+- **Freeze + warm-up** (63d7023, now `settleFrozen`): `freezeTimers` before load; open, scroll, reload with files cached, scroll,
+  fonts settled, `freezePage`; both sides the same way, both pictures taken together.
+- **Root cause of the outliers: the full-page screenshot itself.** Chromium grows the window to the page's height for the picture
+  and back; the page receives `resize` (measured on nyaayai), and a page whose script answers it (resize listener,
+  ResizeObserver, a media-query listener — the window is "portrait" while that tall) re-lays itself out mid-picture. A race:
+  nyaayai's original showed other card / logo / footer layouts in the 14.5 % run and part of them in two 1.3 % runs.
+  Fix: `holdSizeReactions` (init script, both sides) + `fullShot`: while the picture is taken those reactions are held.
+- **Saved-capture fallback** (`baselineVisual`): the copy is pictured the same frozen, warmed-up way; a saved picture at
+  `MAX_HEIGHT` (8000 px) is the top of a possibly taller page → `capped: true`, `originalHeight: null` (height not judged),
+  only the rows the picture has are compared.
+- Plain HTML base fallback (63d7023) unchanged.
 
-Stability results so far (nyaayai Next.js copy, live original, desktop 1440 and phone 390):
-- Round 1 before the warm-up: 1440 = **14.27 %** (cold load); rounds 2–3: **0.03 %**, **0.03 %**; 390 ≈ **0.02–0.08 %**.
-- Second run with the warm-up: round 1 1440 = 0.21 %, 390 = 0.70 %; round 2 1440 = 0.04 %; then **stopped unfinished**
-  (3 of 6 measurements). It was stopped on purpose; no other process was touched.
-- Status: **not yet proven** (the proof is two full runs with nearly the same score). The 14 % outlier before the
-  warm-up is gone in the runs after it; the sample is too small to call it stable.
+Proof (nyaayai Next.js as-is copy 78c73050, live original, scratch data, scratch port 4613; harness kept out of the repo):
+| | 1440 diff % | 390 diff % |
+|---|---|---|
+| Before the hold, 4 runs in one process | 14.53, 0.27, 0.29, 0.27 | 0.17, 0.18, 0.17, 0.17 |
+| Before the hold, 4 fresh processes (1440 only) | 1.27, **14.53**, 1.26, 0.34 | — |
+| **With the hold, 6 fresh processes** | **0.27–0.31** | **0.17–0.24** |
+The 0.3 % left at 1440 is the original's third-party chatbot bar (botza widget, excluded on purpose = reason a), at the same place
+every run. Score = 100 − 10 × diff: 96.9–97.3 at 1440, 97.6–98.3 at 390.
+Tests: `preserve-baseline-capped.test.js` (new), `preserve-original-midway.test.js` — both pass.
 
-Next steps, in order (commit and push after each):
-1. Confirm stability: finish the repeated measurement (at least three full runs, same copy, same widths) and
-   show the spread. Then mark step 1 done.
-2. MERN copy is 3.6 % taller than the original (8289 vs 8000 px on makememo, desktop) and differs from the other
-   stacks; find the cause generically; compare with the Plain HTML base.
-3. Wire the safe fixers onto the as-is output (the list in `docs/COPY-MY-SITE.md` §2).
-4. Zero-regressions loop: the re-audit runs; every "got worse" item is measured and must be 0 or have a reason.
-5. Per-page fallback: clean rebuild of a failing page in the chosen stack, time-boxed correction, keep the better one.
+## Step 2 — MERN "3.6 % taller": diagnosed
 
-After steps 1–2: re-run makememo MERN and nyaayai Next.js on scratch data (scratch API only; never port 4000/5173,
-never the real data folder).
+Not a MERN defect. makememo's copy is 8289 px in **every** stack (html / react-vite / nextjs / mern), and the live original is
+8289 px. The MERN run was the only one where the original did not answer, so it was compared with the saved capture, whose
+full-page picture stops at 8000 px → "3.6 % taller". Fixed by the capped rule above. Its 5.38 % pixel difference was against an
+unfrozen, lossy (WebP q75) capture picture taken at another moment — to re-measure with the new fallback.
+
+## Next steps, in order (commit and push after each)
+
+1. Step 2 proof: re-measure makememo MERN against the saved capture with the new fallback (and the live original when it answers).
+2. Wire the safe fixers onto the as-is output (the list in `docs/COPY-MY-SITE.md` §2).
+3. Zero-regressions loop: the re-audit runs; every "got worse" item is measured and must be 0 or have a reason.
+4. Per-page fallback: clean rebuild of a failing page in the chosen stack, time-boxed correction, keep the better one.
+Then: full runs of makememo MERN and nyaayai Next.js on scratch data (scratch API only; never port 4000/5173, never the real data folder).

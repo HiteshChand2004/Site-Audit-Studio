@@ -16,6 +16,7 @@ import { pixelDiffPct } from './render.js';
 import { scriptCandidates } from './extract.js';
 import { readRecordIndex, classifyScripts, recordBodyReader } from '../scripts.js';
 import { freezePage, freezeTimers } from '../../verify/exact/freeze.js';
+import { MAX_HEIGHT } from '../../../audit/screenshots.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -39,6 +40,59 @@ export async function openAndScroll(page, url) {
   }
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.waitForTimeout(1200);
+}
+
+/**
+ * Brings a page (its context already has `freezeTimers`) to the state the visual check pictures: opened and scrolled, then a
+ * warm-up — a cold first load still brings fonts and images in while the picture is taken (one run in five was 14 % off) —
+ * so it is loaded once more with its files cached, its fonts settled, and its animations frozen.
+ */
+export async function settleFrozen(page, url) {
+  await openAndScroll(page, url);
+  await page.reload({ waitUntil: 'load' });
+  await openAndScroll(page, url);
+  await page.evaluate(() => document.fonts.ready.then(() => true)).catch(() => {});
+  await freezePage(page);
+  await page.waitForTimeout(400);
+}
+
+/**
+ * Init script: a page's own reactions to a change of the window's size can be held (`window.__sasHoldSize = true`). A full-page
+ * screenshot grows the window to the page's height and back; a page whose script answers that (a resize listener, a
+ * ResizeObserver, a media-query listener — the window is "portrait" while it is that tall) re-lays itself out in the middle of
+ * the picture, and whether that lands in it is a race (nyaayai: 14.5 % one run in four, 0.3 % the others). Held, the picture
+ * shows the page as it stood at the visitor's size; its CSS still lays out the same way on both sides.
+ */
+export function holdSizeReactions() {
+  const held = () => window.__sasHoldSize === true;
+  addEventListener('resize', (e) => { if (held()) e.stopImmediatePropagation(); }, true);
+  if (window.visualViewport) visualViewport.addEventListener('resize', (e) => { if (held()) e.stopImmediatePropagation(); }, true);
+  const RO = window.ResizeObserver;
+  if (RO) {
+    window.ResizeObserver = class extends RO {
+      constructor(callback) { super((entries, observer) => { if (!held()) callback(entries, observer); }); }
+    };
+  }
+  const MQL = window.MediaQueryList?.prototype;
+  if (MQL) {
+    const gate = (fn) => (typeof fn === 'function' ? function gated(e) { if (!held()) return fn.call(this, e); } : fn);
+    const add = MQL.addEventListener;
+    const remove = MQL.removeEventListener;
+    const wrapped = new WeakMap();
+    const wrap = (fn) => { if (typeof fn !== 'function') return fn; if (!wrapped.has(fn)) wrapped.set(fn, gate(fn)); return wrapped.get(fn); };
+    MQL.addEventListener = function (type, fn, o) { return add.call(this, type, type === 'change' ? wrap(fn) : fn, o); };
+    MQL.removeEventListener = function (type, fn, o) { return remove.call(this, type, type === 'change' ? wrap(fn) : fn, o); };
+    MQL.addListener = function (fn) { return add.call(this, 'change', wrap(fn)); };
+    MQL.removeListener = function (fn) { return remove.call(this, 'change', wrap(fn)); };
+    const desc = Object.getOwnPropertyDescriptor(MQL, 'onchange');
+    if (desc?.set) Object.defineProperty(MQL, 'onchange', { ...desc, set(fn) { desc.set.call(this, gate(fn)); } });
+  }
+}
+
+/** The full-page picture with the page's size reactions held (see holdSizeReactions; the context must have it). */
+async function fullShot(page) {
+  await page.evaluate(() => { window.__sasHoldSize = true; });
+  return page.screenshot({ fullPage: true, type: 'png' });
 }
 
 async function rgbOf(buf) {
@@ -87,19 +141,14 @@ export async function visualCheck(browser, base, copyUrl, originalUrl, width) {
   try {
     // Both sides are frozen the same way before either picture is taken: timers (carousels, tickers, rotators) stop on their
     // first state and CSS animations are settled. Then both are shot at the same moment, so the difference is the page's.
-    await copy.addInitScript(freezeTimers);
-    await original.addInitScript(freezeTimers);
+    for (const c of [copy, original]) {
+      await c.addInitScript(freezeTimers);
+      await c.addInitScript(holdSizeReactions);
+    }
     const cp = await copy.newPage();
     const op = await original.newPage();
-    await Promise.all([openAndScroll(cp, copyUrl), openAndScroll(op, originalUrl)]);
-    // Warm-up: a cold first load still brings fonts and images in while the picture is taken (one run in five was 14 % off).
-    // Both pages are loaded once more, with the files now cached, and their fonts and images settled before the freeze.
-    await Promise.all([cp.reload({ waitUntil: 'load' }), op.reload({ waitUntil: 'load' })]);
-    await Promise.all([openAndScroll(cp, copyUrl), openAndScroll(op, originalUrl)]);
-    await Promise.all([cp.evaluate(() => document.fonts.ready.then(() => true)), op.evaluate(() => document.fonts.ready.then(() => true))]).catch(() => {});
-    await Promise.all([freezePage(cp), freezePage(op)]);
-    await Promise.all([cp.waitForTimeout(400), op.waitForTimeout(400)]);
-    const [shotA, shotB] = await Promise.all([cp.screenshot({ fullPage: true, type: 'png' }), op.screenshot({ fullPage: true, type: 'png' })]);
+    await Promise.all([settleFrozen(cp, copyUrl), settleFrozen(op, originalUrl)]);
+    const [shotA, shotB] = await Promise.all([fullShot(cp), fullShot(op)]);
     const a = await rgbOf(shotA);
     const b = await rgbOf(shotB);
     return { width, copyHeight: a.height, originalHeight: b.height, diffPct: a.width === b.width ? pixelDiffPct(a.raw, b.raw) : null };
@@ -246,11 +295,14 @@ export async function probeOriginal(url, { timeoutMs = 15000 } = {}) {
  */
 export async function baselineVisual(browser, base, copyUrl, baselinePng) {
   const outside = [];
-  const copy = await isolated(browser, { viewport: { width: 1440, height: 900 } }, base, outside);
+  const copy = await isolated(browser, { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 }, base, outside);
   try {
+    // The copy is pictured the way the live check pictures it (frozen, warmed up), so the two sources measure the same thing.
+    await copy.addInitScript(freezeTimers);
+    await copy.addInitScript(holdSizeReactions);
     const cp = await copy.newPage();
-    await openAndScroll(cp, copyUrl);
-    const shot = await cp.screenshot({ fullPage: true, type: 'png' });
+    await settleFrozen(cp, copyUrl);
+    const shot = await fullShot(cp);
     const a = await rgbOf(shot);
     // Read into memory: sharp keeps a file open while it is given a path, which blocks the folder's removal on Windows.
     const img = sharp(Buffer.isBuffer(baselinePng) ? baselinePng : await readFile(baselinePng));
@@ -258,7 +310,18 @@ export async function baselineVisual(browser, base, copyUrl, baselinePng) {
     const b = { raw: await img.removeAlpha().raw().toBuffer(), width: meta.width, height: meta.height };
     // The saved picture may be a different size: the copy is brought to its width before the pixels are compared.
     const same = a.width === b.width ? a : await rgbOf(await sharp(shot).resize({ width: b.width }).png().toBuffer());
-    return { width: 1440, copyHeight: same.height, originalHeight: b.height, diffPct: pixelDiffPct(same.raw, b.raw), source: 'saved capture' };
+    // The capture's full-page picture stops at MAX_HEIGHT: a picture that tall is the top of a page that may be taller, so the
+    // original's height is unknown and only the rows the picture has are compared (a copy 8289 px tall against an 8000 px
+    // picture is not 3.6 % taller than its original).
+    const capped = b.height >= MAX_HEIGHT && same.height > b.height;
+    return {
+      width: 1440,
+      copyHeight: same.height,
+      originalHeight: capped ? null : b.height,
+      ...(capped && { comparedHeight: b.height, capped: true }),
+      diffPct: pixelDiffPct(same.raw, b.raw),
+      source: 'saved capture',
+    };
   } finally {
     await copy.close();
   }
