@@ -11,7 +11,8 @@ import { liftSite, localOfOutPath } from './asis.js';
 import { packLifted } from './pack.js';
 import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
-import { checkCopy, excludedHostsOf, formsInCopy, probeOriginal } from './check.js';
+import { checkCopy, excludedHostsOf, fixGate, formsInCopy, probeOriginal } from './check.js';
+import { fixAsIsCopy, revertPage } from '../../../copy/fixAsIs.js';
 import { slugFor } from '../../discover.js';
 import { serveCopy } from './serve.js';
 import { runLighthouse } from '../../../audit/lighthouse/run.js';
@@ -83,6 +84,66 @@ export function scoresOf(lhr) {
   };
 }
 
+/** The new site's address, or null when none was set (the job's base address is then the original's own). */
+export function newSiteOf(baseUrl, siteUrl) {
+  try {
+    const host = (u) => new URL(u).hostname.toLowerCase().replace(/^www\./, '');
+    return baseUrl && host(baseUrl) !== host(siteUrl) ? new URL(baseUrl).origin : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The safe fixes (copy/fixAsIs.js), then the proof: every page they changed is compared with itself before them (fixGate);
+ * a page whose fixes are not invisible gets its lifted HTML back, and its fixes are listed as reverted (reason d).
+ * A gate that cannot decide (an error) reverts too: a fix is kept only when it is shown to change nothing.
+ */
+export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, log = () => {} }) {
+  await rm(gateDir, { recursive: true, force: true });
+  await cp(copyDir, gateDir, { recursive: true });
+  try {
+    const fixed = await fixAsIsCopy({
+      dir: copyDir, siteUrl, newSiteUrl,
+      pages: pages.map((p) => ({ path: localOfOutPath(p.outPath), outPath: p.outPath, url: p.url })),
+    });
+    const changed = fixed.pages.filter((p) => p.fixes.length);
+    const gate = [];
+    if (changed.length) {
+      const a = await serveCopy(copyDir);
+      const b = await serveCopy(gateDir);
+      try {
+        for (const p of changed) {
+          const g = await fixGate(browser, a.url.replace(/\/$/, ''), b.url.replace(/\/$/, ''), p.path)
+            .catch((err) => ({ path: p.path, invisible: false, error: String(err?.message ?? err).split('\n')[0].slice(0, 160) }));
+          gate.push(g);
+          log(`fixes ${p.path} ${JSON.stringify(g)}`);
+          if (!g.invisible) {
+            await revertPage(copyDir, p.outPath, fixed.originals.get(p.outPath));
+            p.reverted = { reason: 'd', why: g.error ? `the check could not prove them invisible: ${g.error}` : `they changed the page (${g.diffPct} % of pixels${g.newErrors?.length ? `, ${g.newErrors.length} new console error(s)` : ''})` };
+          }
+        }
+      } finally {
+        await a.close();
+        await b.close();
+      }
+    }
+    const counts = {};
+    for (const p of fixed.pages) if (!p.reverted) for (const f of p.fixes) counts[f.kind] = (counts[f.kind] ?? 0) + 1;
+    return {
+      counts,
+      total: Object.values(counts).reduce((s, n) => s + n, 0),
+      pages: fixed.pages.map((p) => ({ path: p.path, fixes: p.fixes, ...(p.reverted && { reverted: p.reverted }) })),
+      reverted: fixed.pages.filter((p) => p.reverted).length,
+      open: fixed.open,
+      files: fixed.files,
+      gate,
+    };
+  } finally {
+    await rm(gateDir, { recursive: true, force: true });
+  }
+}
+
 /**
  * The as-is stage. `ctx.asIs`: { stack, pages?, fromDir? } — `fromDir` is the folder of an earlier as-is job whose copy is
  * reused (a repack): its page set and lift are taken from there, and nothing is captured or lifted again.
@@ -116,7 +177,10 @@ export async function asIsStage(ctx) {
       ctx.progress(0.1, 'Reusing the lifted copy');
       await rm(copyDir, { recursive: true, force: true });
       await mkdir(path.dirname(copyDir), { recursive: true });
-      await cp(path.join(fromDir, ASIS_DIR, 'copy'), copyDir, { recursive: true });
+      // The copy as it was lifted, before the fixes of that job (an older job kept only its fixed copy: that one, then).
+      const lifted = path.join(fromDir, ASIS_DIR, 'lifted');
+      const from = (await readdir(lifted).then((l) => l.length > 0, () => false)) ? lifted : path.join(fromDir, ASIS_DIR, 'copy');
+      await cp(from, copyDir, { recursive: true });
       // The baseline pictures travel with the copy: a repack needs no capture and no live site.
       await cp(path.join(fromDir, ASIS_DIR, 'baseline'), path.join(ctx.dir, ASIS_DIR, 'baseline'), { recursive: true }).catch(() => {});
       // This job keeps the lifted copy and its page set too: a later repack takes them from here, and the retention that keeps
@@ -152,6 +216,10 @@ export async function asIsStage(ctx) {
         createdAt: new Date().toISOString(), pages: pages.map((p) => ({ url: p.url, outPath: p.outPath })), excludedHosts, lift: lifted,
       }, null, 1)}\n`, 'utf8');
     }
+    // The copy as lifted is kept apart: the fixes below change copyDir, and a later repack starts again from this one.
+    const liftedDir = path.join(ctx.dir, ASIS_DIR, 'lifted');
+    await rm(liftedDir, { recursive: true, force: true });
+    await cp(copyDir, liftedDir, { recursive: true });
     report.excludedByRule = excludedHosts;
     report.lift = lifted;
     // The addresses the copy answers from the original (mapped, the same as the original, two sizes of one path): see complete.js.
@@ -170,6 +238,12 @@ export async function asIsStage(ctx) {
     } finally {
       await linkChecker.close?.();
     }
+    // Copy my site §2: the fixes that change neither the look nor the behaviour, each page proven unchanged by them.
+    ctx.progress(0.33, 'Fixing what can be fixed without changing the look');
+    report.fixes = await fixAndProve({
+      browser, copyDir, gateDir: path.join(ctx.dir, ASIS_DIR, 'unfixed'), pages, siteUrl,
+      newSiteUrl: newSiteOf(ctx.baseUrl, siteUrl), log: (m) => ctx.progress(0.34, m),
+    });
     ctx.progress(0.35, 'Packaging the copy');
     await rm(outDir, { recursive: true, force: true });
     if (stack === 'html') {
@@ -293,6 +367,14 @@ export async function asIsStage(ctx) {
       linkError: report.links?.error ?? null,
       openItems,
       counts: { pages: copyPages.length, asIs: copyPages.length, rebuilt: 0 },
+      // The safe fixes kept (per kind), the pages whose fixes were reverted (reason d) and what was left for a person.
+      fixes: report.fixes ? {
+        counts: report.fixes.counts,
+        total: report.fixes.total,
+        reverted: report.fixes.pages.filter((p) => p.reverted).map((p) => ({ page: p.path, ...p.reverted })),
+        open: report.fixes.open,
+        files: report.fixes.files?.written ?? [],
+      } : null,
     };
     ctx.report.asIs = report;
     ctx.report.outputs[stack] = { status: 'ready', dir: path.join('stacks', stack), mode: 'as-is', pages: pages.map((p) => ({ outPath: p.outPath, path: localOfOutPath(p.outPath) })) };

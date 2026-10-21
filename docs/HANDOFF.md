@@ -41,8 +41,7 @@ the Copy step has the stage list while a copy runs, and the old options sit unde
   decision logic with fakes only (unit-tested).
 - **Zero-regressions loop** over the re-audit is **not** live: the as-is job does not run the re-audit, so
   "got worse" is never measured. `copy/run.js` `zeroRegressions` has the logic with fakes only.
-- **Fixers on the as-is output** are not wired: the as-is copy has none of the fix-all fixers applied
-  (alt text, names, head/SEO, contrast, etc.).
+- **Safe fixers on the as-is output**: wired since step 3 (see "Step 3" below); images (WebP / variants) are not done yet.
 - The **as-is job does not run `copy/run.js`** as an orchestrator; it runs the stage above. `copy/run.js` is
   the tested model of the full pipeline, not yet the live one.
 - **Browser runs of the new code**: link pass and checks ran only in the 5 runs below (scratch data, scratch API).
@@ -143,9 +142,43 @@ Tests: `preserve-baseline-capped` (+ saved original pictures, 390), `preserve-or
 **Open, outside this step**: the capture's own full-page picture (`verify/shot.js`) has scroll-revealed sections blank. It is
 also the clean pipeline's reference picture, so it may cost the clean rebuild's fidelity numbers; not changed here.
 
+## Step 3 — safe fixers on the as-is output: DONE
+
+`server/src/copy/fixAsIs.js` (new), run by `preserve/stage.js fixAndProve` after the link pass and before packaging (so every
+stack gets them). The rules are the clean rebuild's own (`fixAlt`, `fixNames`, `fixAria`, `fitTitle` / `fitDescription`,
+`detectLang`, `faqPairs`, `crawlFiles`), given the lifted HTML through a thin adapter whose nodes share the parsed element's
+attribute object, so a fixer's change is a change to the markup. Only what is missing, empty, duplicated or invalid is touched;
+a page that states everything correctly is left byte for byte.
+- alt, accessible names, ARIA (frame titles, positive tabindex, invalid values, focusable inside aria-hidden). `fixAria({ asIs })`:
+  a **duplicate id is reported (reason d), never renamed** — the original's own CSS / scripts may use it.
+- head: missing or duplicated title / description; missing canonical, og:title, og:description, og:url; a canonical / og:url
+  naming the original moves to the new site; missing `<html lang>` (from the text, else an open item).
+- JSON-LD: Organization + WebSite on the homepage when no page has them; FAQPage where the page shows ≥ 2 questions with answers.
+- files: `sitemap.xml`, `llms.txt` (when the copy has none), `robots.txt` **kept** but its `Host:` / `Sitemap:` name the new
+  site (the lifted one named the original), `_headers` = security headers **without CSP** (the original's inline scripts run)
+  + the copy's caching rules (`AS_IS_HEADERS`). Without the new address nothing names an address and these are left as lifted.
+- **Proof per page** (`check.js fixGate`): the fixed page and the same page unfixed (a copy of the folder, both local) are pictured
+  the same frozen way at 1440 with their console errors; the unfixed page twice, so its own noise is measured. Kept only when
+  difference ≤ max(0.01 %, 2 × noise), same height, no new console error; else the page's lifted HTML is put back and its
+  fixes listed as reverted (reason d). A gate error reverts too. (A fixed 0.5 % allowance let a title the page's own script
+  prints into the page through — 0.1 % of it; the test covers that case.)
+- `as-is/lifted/`: the copy as lifted, before link pass and fixes; a repack starts from it (an older job without it: its `copy/`).
+- Report: `report.asIs.fixes` (every fix, the gate per page), `report.copy.fixes` (counts per kind, reverted pages, open, files);
+  app: "Fixed in the copy" in `CopyPages.jsx`. The summary line's "Fixed" still comes from the re-audit (step 4).
+- Not done: images (WebP / responsive variants only when the pixels stay the same).
+
+Proof on the lifted copies (scratch copies, new address `https://new-site.example`):
+| Copy | Fixes kept | Reverted | Fixed vs unfixed | Page's own noise | New console errors |
+|---|---|---|---|---|---|
+| nyaayai (Next.js) | 49 (45 names, 2 addresses, 2 JSON-LD) | 0 | 0.01 % | 0.01 % | 0 |
+| makememo (Next.js) | 3 (1 name, 2 addresses) | 0 | 0.06 % | 0.07 % | 0 |
+Tests: `copy-fix-asis.test.js` (new, 3), `preserve-asis`, `preserve-asis-offline`, `recreate-asis-budget`, `recreate-aria` — all pass.
+Client: `npx vite build` passes.
+
 ## Next steps, in order (commit and push after each)
 
-1. Wire the safe fixers onto the as-is output (the list in `docs/COPY-MY-SITE.md` §2).
-2. Zero-regressions loop: the re-audit runs; every "got worse" item is measured and must be 0 or have a reason.
-3. Per-page fallback: clean rebuild of a failing page in the chosen stack, time-boxed correction, keep the better one.
+1. Zero-regressions loop: the re-audit runs on the as-is copy; every "got worse" item is measured and must be 0 or have a reason
+   (§5); the summary line's "Fixed" comes from it.
+2. Per-page fallback: clean rebuild of a failing page in the chosen stack, time-boxed correction, keep the better one.
+3. Images on the as-is output (WebP / variants) only where the pixels stay the same, through the same gate.
 Then: full runs of makememo MERN and nyaayai Next.js on scratch data (scratch API only; never port 4000/5173, never the real data folder).

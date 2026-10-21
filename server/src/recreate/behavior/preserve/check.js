@@ -170,6 +170,47 @@ export async function visualCheck(browser, base, copyUrl, originalUrl, width, { 
   }
 }
 
+/** The least difference (percent of pixels) a fixed page may show against its unfixed self: a changed word is more than this. */
+export const FIX_GATE_FLOOR_PCT = 0.01;
+
+/**
+ * Are a page's fixes invisible? The fixed copy and the same copy before its fixes, both local, are opened and pictured the same
+ * way (frozen, warmed up, size reactions held) at 1440, with the console errors of each; the unfixed page is pictured twice, so
+ * the page's own noise (a random particle, a clock) is measured rather than assumed. Fixes whose picture differs from the
+ * unfixed one by more than max(FIX_GATE_FLOOR_PCT, 2 × that noise), change the height, or bring a console error the unfixed
+ * page does not have are not invisible (docs/COPY-MY-SITE.md §5: reverted, reason d). A whole fixed share would let a new
+ * word through (one title written into a page is ~0.1 % of it).
+ */
+export async function fixGate(browser, fixedBase, unfixedBase, pagePath) {
+  const opts = viewOf(1440);
+  const sides = [];
+  try {
+    for (const base of [fixedBase, unfixedBase, unfixedBase]) {
+      const context = await isolated(browser, opts, base, []);
+      await context.addInitScript(freezeTimers);
+      await context.addInitScript(holdSizeReactions);
+      const page = await context.newPage();
+      const errors = [];
+      page.on('pageerror', (e) => errors.push(`pageerror: ${e.message.slice(0, 160)}`));
+      page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text().slice(0, 160)}`); });
+      sides.push({ context, page, errors, url: `${base}${pagePath}` });
+    }
+    await Promise.all(sides.map((s) => settleFrozen(s.page, s.url)));
+    const [a, b, c] = await Promise.all(sides.map(async (s) => rgbOf(await fullShot(s.page))));
+    const diffPct = a.width === b.width ? pixelDiffPct(a.raw, b.raw) : 100;
+    const noisePct = b.width === c.width && b.height === c.height ? pixelDiffPct(b.raw, c.raw) : 100;
+    const allowedPct = Math.max(FIX_GATE_FLOOR_PCT, 2 * noisePct);
+    const [fixed, unfixed, unfixedAgain] = sides.map((s) => s.errors);
+    const newErrors = fixed.filter((e) => !unfixed.includes(e) && !unfixedAgain.includes(e));
+    return {
+      path: pagePath, diffPct, noisePct, allowedPct, heights: [a.height, b.height], newErrors,
+      invisible: diffPct <= allowedPct && a.height === b.height && newErrors.length === 0,
+    };
+  } finally {
+    for (const s of sides) await s.context.close();
+  }
+}
+
 /** Clicks each control in turn on a fresh load; records whether the page's text changed and whether the control is fixed. */
 export async function clickProfile(browser, base, url, isCopy) {
   const outside = [];

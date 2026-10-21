@@ -1,4 +1,4 @@
-import { FileText, Link2 } from 'lucide-react';
+import { FileText, Link2, Wrench } from 'lucide-react';
 import { Card } from '../common/Surface.jsx';
 import { plural } from '../../format.js';
 
@@ -14,6 +14,17 @@ const LINK_ACTION = {
   unverified: 'Could not verify: left as it is',
 };
 
+// Plain words for the kinds of safe fixes made in the copy's own markup (server/src/copy/fixAsIs.js).
+const FIX_KIND = {
+  alt: 'image descriptions',
+  names: 'names for links, buttons and fields',
+  aria: 'accessibility attributes',
+  head: 'titles, descriptions and link previews',
+  address: 'addresses moved to the new site',
+  lang: 'page language',
+  data: 'structured data for search and AI answers',
+};
+
 // How one check reads in the table: a score (visual), a count (controls, hovers), or nothing measured.
 const cell = (v) => (v == null ? '–' : typeof v === 'number' ? String(Math.round(v)) : v);
 
@@ -25,6 +36,7 @@ export default function CopyPages({ copy }) {
   const pages = copy?.pages ?? [];
   const links = copy?.linkDecisions ?? [];
   const open = copy?.openItems ?? [];
+  const fixes = copy?.fixes ?? null;
   if (!pages.length) return null;
   const linkWork = links.filter((l) => l.action !== 'ok');
   return (
@@ -62,6 +74,24 @@ export default function CopyPages({ copy }) {
           </tbody>
         </table>
       </div>
+
+      {fixes && (fixes.total > 0 || fixes.reverted.length > 0) && (
+        <>
+          <h3 style={{ marginTop: 16, display: 'flex', gap: 6, alignItems: 'center' }}><Wrench size={16} aria-hidden /> Fixed in the copy</h3>
+          <p>Only fixes that change nothing a visitor sees were kept; each page was compared with itself before them.</p>
+          <ul>
+            {Object.entries(fixes.counts ?? {}).map(([kind, n]) => (
+              <li key={kind}>{n} × {FIX_KIND[kind] ?? kind}</li>
+            ))}
+            {fixes.files?.length > 0 && <li>Site files: <span className="mono">{fixes.files.join(', ')}</span></li>}
+            {fixes.reverted.map((r) => (
+              <li key={r.page}>
+                <span className="mono">{r.page}</span>: fixes undone, because {r.why}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
 
       {linkWork.length > 0 && (
         <>
