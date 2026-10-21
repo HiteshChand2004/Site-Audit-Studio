@@ -14,6 +14,7 @@ import { buildStack, startStack } from './serveStack.js';
 import { checkCopy, excludedHostsOf, fixGate, formsInCopy, probeOriginal } from './check.js';
 import { fixAsIsCopy, revertPage } from '../../../copy/fixAsIs.js';
 import { addressForCopy } from '../../../copy/address.js';
+import { measureServed, servedOutcome } from '../../../copy/served.js';
 import { slugFor } from '../../discover.js';
 import { serveCopy } from './serve.js';
 import { runLighthouse } from '../../../audit/lighthouse/run.js';
@@ -289,6 +290,13 @@ export async function asIsStage(ctx) {
       servers.push(s);
       base = s.url;
     }
+    // What the packaged copy really serves: a fix counts only where it takes effect (copy/served.js).
+    if (report.fixes) {
+      const fixedPages = report.fixes.pages.filter((p) => !p.reverted && p.fixes.length)
+        .map((p) => ({ path: p.path, outPath: pages.find((q) => localOfOutPath(q.outPath) === p.path)?.outPath ?? 'index.html' }));
+      report.fixes.served = await measureServed({ base, stack, copyDir, fixedPages, files: report.fixes.files?.written ?? [] })
+        .catch((err) => ({ error: String(err?.message ?? err).slice(0, 160) }));
+    }
     // The original is asked once: when it does not answer, the checks that need it say so and the copy is still finished.
     // The baseline is the capture's own picture of each page (kept with the lift), so the visual check does not need the site.
     const originalReachable = await probeOriginal(siteUrl);
@@ -365,6 +373,10 @@ export async function asIsStage(ctx) {
     if (report.address && !report.address.used) {
       openItems.unshift({ page: '/', check: 'new-site address', values: report.address.detail, tried: 'canonical, link previews, robots.txt, sitemap.xml and structured data were left without an address', reason: 'owner' });
     }
+    // What the packaged copy serves decides what counts: headers only where its own server sends them; files and fixed pages
+    // that are not served are open, never fixed.
+    const served = report.fixes?.served && !report.fixes.served.error ? servedOutcome(report.fixes.served) : null;
+    if (served) openItems.push(...served.open.map((o) => ({ page: o.page ?? '/', ...o })));
     const logOpen = issueLogger(DATA_DIR);
     for (const o of openItems) await logOpen({ site: new URL(siteUrl).hostname, stack, ...o });
     ctx.report.copy = {
@@ -381,7 +393,10 @@ export async function asIsStage(ctx) {
         total: report.fixes.total,
         reverted: report.fixes.pages.filter((p) => p.reverted).map((p) => ({ page: p.path, ...p.reverted })),
         open: report.fixes.open,
-        files: report.fixes.files?.written ?? [],
+        // Site files the packaged copy really serves (measured); `_headers` is never one of them: it is a host setting.
+        files: (report.fixes.files?.written ?? []).filter((f) => f !== '_headers' && (!served || report.fixes.served.files[f] === 200)),
+        // Security headers counted as applied: sent by the copy's own server (Next.js, MERN); none for a static stack.
+        headers: served ? { applied: served.applied, takeEffect: report.fixes.served.takeEffect } : null,
       } : null,
     };
     ctx.report.asIs = report;

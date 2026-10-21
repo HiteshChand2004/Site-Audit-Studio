@@ -83,7 +83,9 @@ export default function CopyPages({ copy }) {
             {Object.entries(fixes.counts ?? {}).map(([kind, n]) => (
               <li key={kind}>{n} × {FIX_KIND[kind] ?? kind}</li>
             ))}
-            {fixes.files?.length > 0 && <li>Site files: <span className="mono">{fixes.files.join(', ')}</span></li>}
+            {fixes.files?.length > 0 && <li>Site files served by the copy: <span className="mono">{fixes.files.join(', ')}</span></li>}
+            {fixes.headers?.applied?.length > 0 && <li>Security headers sent by the copy’s own server: {fixes.headers.applied.join(', ')}</li>}
+            {fixes.headers?.takeEffect === 'host' && <li>Security headers: prepared for hosts that read <span className="mono">_headers</span> (Netlify, Cloudflare Pages); not counted until the copy is hosted</li>}
             {fixes.reverted.map((r) => (
               <li key={r.page}>
                 <span className="mono">{r.page}</span>: fixes undone, because {r.why}
