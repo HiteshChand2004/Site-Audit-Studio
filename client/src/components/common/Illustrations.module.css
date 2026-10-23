@@ -158,24 +158,5 @@
 .logo {
   display: block;
   flex: none;
-}
-
-.logoBg {
-  fill: var(--ink);
-}
-
-.logoBack {
-  fill: none;
-  stroke: rgba(255, 255, 255, 0.55);
-  stroke-width: 1.6;
-}
-
-.logoFront {
-  fill: var(--on-accent);
-}
-
-.logoLines {
-  stroke: var(--accent);
-  stroke-width: 1.6;
-  stroke-linecap: round;
+  border-radius: 8px;
 }

@@ -117,14 +117,10 @@ export function EmptySiteArt(props) {
   );
 }
 
-/** The app's mark: an original page and its copy, overlapping. */
+/**
+ * The Remastly mark: the marketing site's own icon (remastly-website/app/icon.tsx, served at /icon on this origin), the same
+ * image as the tab icon, so the two can never disagree. Decorative: the name stands next to it.
+ */
 export function LogoMark({ size = 32 }) {
-  return (
-    <svg viewBox="0 0 32 32" width={size} height={size} className={s.logo} aria-hidden="true" focusable="false">
-      <rect width="32" height="32" rx="8" className={s.logoBg} />
-      <rect x="7" y="7" width="13" height="15" rx="2.5" className={s.logoBack} />
-      <rect x="12" y="11" width="13" height="15" rx="2.5" className={s.logoFront} />
-      <path d="M15 16h7M15 19.5h5" className={s.logoLines} />
-    </svg>
-  );
+  return <img src="/icon" width={size} height={size} alt="" className={s.logo} />;
 }

@@ -14,7 +14,7 @@ const TIMEOUT_MS = 20000;
 export async function openLinkChecker({ policy = userPolicy() } = {}) {
   const proxy = await startEgressProxy(policy);
   const browser = await launchBrowser({ proxy: proxy.url });
-  const context = await browser.newContext({ userAgent: 'Mozilla/5.0 (compatible; SiteAuditStudio-LinkCheck)' });
+  const context = await browser.newContext({ userAgent: 'Mozilla/5.0 (compatible; Remastly-LinkCheck)' });
   return {
     async check(url) {
       const page = await context.newPage();

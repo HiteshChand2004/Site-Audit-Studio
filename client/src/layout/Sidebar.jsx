@@ -142,7 +142,7 @@ export default function Sidebar({ onNewProject, collapsed = false, onToggle }) {
               <LogoMark size={30} />
               <span className={styles.brandText}>
                 <span className={styles.brandName}>Remastly</span>
-                <span className={styles.brandSub}>Check · copy · improve</span>
+                <span className={styles.brandSub}>Audit. Fix. Rebuild.</span>
               </span>
             </button>
             {onToggle && <ToggleButton collapsed={false} onToggle={onToggle} />}

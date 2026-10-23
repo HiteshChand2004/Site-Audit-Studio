@@ -6,7 +6,7 @@ import { Agent, buildConnector, fetch } from 'undici';
 import { currentPolicy, precheckUrl, resolveChecked } from '../security/netGuard.js';
 
 export const USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36 SiteAuditStudio/0.2';
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36 Remastly/0.2';
 
 const MAX_REDIRECTS = 5;
 const HTML_ACCEPT = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';

@@ -282,7 +282,7 @@ export default function Home({ onNewProject }) {
       </section>
 
       <footer className={styles.foot}>
-        <span>Remastly · internal tool</span>
+        <span>Remastly</span>
         <span>Speed, Google, accessibility and safety scores are measured with Google’s Lighthouse.</span>
       </footer>
     </div>

@@ -1,7 +1,7 @@
 import robotsParser from 'robots-parser';
 import { fetchPage } from './http.js';
 
-export const CRAWLER_UA = 'SiteAuditStudio';
+export const CRAWLER_UA = 'Remastly';
 export const AI_CRAWLERS = ['GPTBot', 'OAI-SearchBot', 'ClaudeBot', 'PerplexityBot', 'Google-Extended'];
 
 // A 200 response that is really an HTML page (a soft 404) does not count as a text file.
