@@ -61,8 +61,12 @@ export const recreateJobs = new JobManager({
     await pruneRecreates(project.id);
     // Stopped by the time limit after making progress: it continues by itself with a fresh budget (a few times at most).
     if (!ok) await autoResume(project, job.id, 'time-limit');
-    // An as-is copy is its own output: the stack export and the re-audit (which measure a clean rebuild) do not apply to it.
-    if (reportOf(job.id)?.asIs) return;
+    // An as-is copy is its own output: no stack export (that builds a clean rebuild). It is re-audited like any copy, so "got
+    // worse" is measured on every copied page, and each such row carries its reason or is marked unexplained (copy/gotWorse.js).
+    if (reportOf(job.id)?.asIs) {
+      if (ok) queueReaudit(project.id, job.id);
+      return;
+    }
     if (ok && !reportOf(job.id)?.outputs?.[project.stack]) queueStackExport(project, job.id);
     if (ok) queueReaudit(project.id, job.id);
   },

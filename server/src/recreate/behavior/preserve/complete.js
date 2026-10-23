@@ -13,6 +13,7 @@ import { load } from 'cheerio';
 import { downloadAsset } from '../../assets/download.js';
 import { serveFolder } from './render.js';
 import { localPathOf } from './pageLift.js';
+import { fetchReferenced } from './referenced.js';
 
 /** Most passes a copy is completed in. */
 export const COMPLETE_PASSES = 3;
@@ -272,10 +273,14 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
     if (downloaded === 0) break;
   }
   for (const m of sameOrigin.mapped) m.bare = bareOwner.get(m.path.split('?')[0]) === m.path;
+  // What no visit asked for but the copy's own text names (a video the headless browser cannot play, the icon the browser
+  // fetches outside the page, a module imported after a click): fetched from the original once (referenced.js).
+  const referenced = await fetchReferenced({ outDir, pageUrl, originHosts, manifest, fetchImpl });
+  if (referenced.fetched.length) log.push({ referenced: referenced.fetched.length, bytes: referenced.fetched.reduce((n, x) => n + x.bytes, 0) });
   await writeFile(path.join(outDir, 'sw.js'), serviceWorkerSource(manifest, [...originHosts], sameFile), 'utf8');
   // GitHub Pages (Jekyll) leaves out folders whose names start with "_" unless this empty file is there: a copy with a _next folder needs it.
   await writeFile(path.join(outDir, '.nojekyll'), '', 'utf8');
   for (const entry of entries) await registerServiceWorker(outDir, entry);
   await rm(tmp, { recursive: true, force: true });
-  return { passes: passesRun, manifest, log, sameOrigin };
+  return { passes: passesRun, manifest, log, sameOrigin, referenced };
 }

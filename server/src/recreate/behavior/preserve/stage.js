@@ -17,6 +17,7 @@ import { addressForCopy } from '../../../copy/address.js';
 import { measureServed, servedOutcome } from '../../../copy/served.js';
 import { slugFor } from '../../discover.js';
 import { serveCopy } from './serve.js';
+import { fetchLlmsTxt } from '../../../audit/robots.js';
 import { runLighthouse } from '../../../audit/lighthouse/run.js';
 import { RecreateError } from '../../errors.js';
 import { openLinkChecker } from '../../../copy/linkBrowser.js';
@@ -101,12 +102,12 @@ export function newSiteOf(baseUrl, siteUrl) {
  * a page whose fixes are not invisible gets its lifted HTML back, and its fixes are listed as reverted (reason d).
  * A gate that cannot decide (an error) reverts too: a fix is kept only when it is shown to change nothing.
  */
-export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped = null, log = () => {} }) {
+export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped = null, log = () => {}, fetchLlms = null }) {
   await rm(gateDir, { recursive: true, force: true });
   await cp(copyDir, gateDir, { recursive: true });
   try {
     const fixed = await fixAsIsCopy({
-      dir: copyDir, siteUrl, newSiteUrl,
+      dir: copyDir, siteUrl, newSiteUrl, fetchLlms,
       pages: pages.map((p) => ({ path: localOfOutPath(p.outPath), outPath: p.outPath, url: p.url })),
     });
     const changed = fixed.pages.filter((p) => p.fixes.length);
@@ -247,7 +248,7 @@ export async function asIsStage(ctx) {
     report.address = address.origin ? { used: address.origin } : { used: null, ...address.skipped };
     report.fixes = await fixAndProve({
       browser, copyDir, gateDir: path.join(ctx.dir, ASIS_DIR, 'unfixed'), pages, siteUrl,
-      newSiteUrl: address.origin, addressSkipped: address.skipped, log: (m) => ctx.progress(0.34, m),
+      newSiteUrl: address.origin, addressSkipped: address.skipped, log: (m) => ctx.progress(0.34, m), fetchLlms: fetchLlmsTxt,
     });
     ctx.progress(0.35, 'Packaging the copy');
     await rm(outDir, { recursive: true, force: true });

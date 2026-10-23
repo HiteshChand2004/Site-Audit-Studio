@@ -4,7 +4,7 @@
 export const REASONS = {
   third_party: { code: 'a', text: 'Comes from third-party code outside the copy (an embed or an external script).' },
   backend: { code: 'b', text: 'Needs a real backend or credentials you have to provide (forms, login, payments).' },
-  owner: { code: 'c', text: 'Needs your decision (a dead external link, a content or brand choice).' },
+  owner: { code: 'c', text: 'Needs your decision (pages you chose not to copy, a dead link to another site, a content or brand choice).' },
   look: { code: 'd', text: 'The fix would change the original’s look, animation or behaviour. What it would change is shown; apply it from the report if you want it.' },
   deploy: { code: 'e', text: 'Can only be checked on the real host. See DEPLOY.md.' },
   // Not one of the five reasons of the spec: an honest marker for a page the run did not try to fix yet (the fallback and

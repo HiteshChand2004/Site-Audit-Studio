@@ -13,9 +13,11 @@ import { auditDir } from '../config/paths.js';
 import { getEmitter } from '../recreate/emit/index.js';
 import { outputPages, outputRoot, reportOutputs, targetStack } from '../recreate/export/fromIr.js';
 import { servePreview } from '../recreate/preview.js';
+import { serveCopy } from '../recreate/behavior/preserve/serve.js';
 import { recreateDir } from '../recreate/workspace.js';
 import { createNetPolicy, userPolicy } from '../security/netGuard.js';
 import { compareAudits, loadSide } from './compare/index.js';
+import { explainWorse } from '../copy/gotWorse.js';
 import { clickBudgetFor, hoverBudgetFor, measureNewMotion, motionItems, readOldMotion } from './motion.js';
 
 /** Thrown when a re-audit cannot run at all; the job is marked failed. */
@@ -82,7 +84,12 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
   // connect-src 'self': Lighthouse fetches robots.txt from inside the page (previewHeaders).
   // An app's own scripts run (Lighthouse measures what its visitors get); the CSP still allows only the build's own.
   // Text is gzipped like on any host, so sizes compare with the original's real transfer sizes.
-  const served = await servePreview(root, { connectSelf: true, compress: true, scripts: emitter?.scripts || reportOutputs(report)[stack]?.scripts || false });
+  // An as-is copy runs the original's own scripts (inline ones too), so it is served the way its preview and its checks serve it
+  // (behavior/preserve/serve.js: no policy of ours, compressed like a host). Served with the preview's policy, every script of
+  // it was blocked and the re-audit measured a copy no visitor gets: no motion, and console errors that were our own.
+  const served = reportOutputs(report)[stack]?.mode === 'as-is'
+    ? await serveCopy(root).then((c) => ({ ...c, origin: new URL(c.url).origin, port: Number(new URL(c.url).port) }))
+    : await servePreview(root, { connectSelf: true, compress: true, scripts: emitter?.scripts || reportOutputs(report)[stack]?.scripts || false });
   try {
     // Pages at the URL the output serves them (a stack may move some).
     const outputPageList = outputPages(report, stack);
@@ -140,6 +147,28 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
       output,
       motion,
     });
+    // An as-is copy: every "got worse" row carries one of the five reasons on this run's evidence, or is marked unexplained
+    // (copy/gotWorse.js). The rows stay where they are; the reasons are added to them, never put in their place.
+    if (reportOutputs(report)[stack]?.mode === 'as-is') {
+      const lhrs = async (dir) => Object.fromEntries(await Promise.all(['mobile', 'desktop'].map(async (d) => [d, await readFile(path.join(dir, `lighthouse-${d}.json`), 'utf8').then(JSON.parse, () => null)])));
+      const worse = explainWorse({
+        items: checklist.items,
+        siteUrl: project.url,
+        copyOrigin: served.origin,
+        copyPages: outputPageList.map((p) => p.path),
+        chosenPages: (report.asIs?.pages ?? []).map((p) => p.path ?? '/'),
+        oldLhr: await lhrs(auditDir(project.id, report.analysisId)),
+        newLhr: await lhrs(reauditDir(project.id, recreateId, reauditId)),
+        oldAxe: await readFile(path.join(auditDir(project.id, report.analysisId), 'axe.json'), 'utf8').then(JSON.parse, () => null),
+        newAxe: await readFile(path.join(reauditDir(project.id, recreateId, reauditId), 'axe.json'), 'utf8').then(JSON.parse, () => null),
+      });
+      const byKey = new Map(worse.items.map((w) => [w.key, w]));
+      for (const item of checklist.items) {
+        const w = item.status === 'regressed' && byKey.get(item.key);
+        if (w) Object.assign(item, { reason: w.reason, reasonEvidence: w.evidence, ...(w.unexplained && { unexplained: true }), ...(w.parts && { reasonParts: w.parts }) });
+      }
+      checklist.gotWorse = worse.summary;
+    }
     progress('compare', 1);
     return {
       reauditId,

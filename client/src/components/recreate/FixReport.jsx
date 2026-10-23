@@ -3,6 +3,7 @@ import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, Check, ChevronRi
 import Badge from '../common/Badge.jsx';
 import Button from '../common/Button.jsx';
 import styles from './FixReport.module.css';
+import { WORSE_REASONS, WORSE_UNEXPLAINED } from '../../copy.js';
 
 // Every status the comparison can give a check, in the order rows are listed (server: reaudit/compare/rules.js).
 const STATUS = {
@@ -171,6 +172,17 @@ function Evidence({ evidence }) {
   );
 }
 
+/** Why a row of an as-is copy got worse: one of the five reasons with what the run measured, or "unexplained" said plainly. */
+function WorseReason({ item }) {
+  const reasons = item.reason ? item.reason.split('+').map((r) => WORSE_REASONS[r] ?? { code: r, text: r }) : [];
+  return (
+    <div className={styles.note} data-unexplained={item.reason ? undefined : 'true'}>
+      <strong>{item.reason ? `Why: ${reasons.map((r) => `${r.code} — ${r.text}`).join(' / ')}` : WORSE_UNEXPLAINED}</strong>
+      {item.reasonEvidence && <p>{item.reasonEvidence}</p>}
+    </div>
+  );
+}
+
 function Row({ item }) {
   const meta = STATUS[item.status] ?? STATUS.open;
   return (
@@ -197,6 +209,7 @@ function Row({ item }) {
           <LinkList title="New" links={item.links?.new} />
           <LinkList title="Could not be reached on this run" links={item.links?.recheck} />
           <Evidence evidence={item.evidence} />
+          {item.status === 'regressed' && 'reason' in item && <WorseReason item={item} />}
           {item.review && <p className={styles.review}>Text was generated from the page; check that it reads right.</p>}
           {item.note && <p className={styles.note}>{item.note}</p>}
           {item.helpUrl && (

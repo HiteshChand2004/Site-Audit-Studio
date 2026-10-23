@@ -329,6 +329,30 @@ What remains low after the fix is real (homepage 86 / 84: its picture part is 87
 Captures saved between 19ddc59 and this fix keep their blank pictures: a project's clean scores from that window are only
 comparable after a new capture (or a re-score of the reference like the one above).
 
+## Step 4 — "got worse" measured on the as-is copy: IN PROGRESS (2026-10-23, branch `copy-step4`)
+
+Done (committed; the full suite NOT run, by the user's rule — related files only):
+- **The re-audit measured an as-is copy with its scripts blocked.** It served the copy through `servePreview`, whose CSP blocks
+  every script; an as-is copy runs the original's own. Motion rows, console errors and script-drawn headings "got worse" for
+  that reason alone (28 rows on 4 homepage copies → 22 with the fix, no motion row left). Now `reaudit/index.js` serves an as-is
+  output with `serveCopy`, as its preview and checks do. Test `reaudit-asis.test.js` fails without it.
+- **Each regressed row of an as-is copy carries a reason or is marked unexplained** (`copy/gotWorse.js explainWorse`, five
+  reasons a–e; parts rule; Lighthouse rows "e" only when nothing grew and, for timings, the same LCP element and page not
+  heavier). `checklist.gotWorse` = { total, explained, unexplained, byReason }. App row "Why: …", KNOWN-ISSUES.md "## Got worse: …"
+  with a "What this means" line; pages left out (reason c) are named in plain words with the 404 and what to do.
+  `copy/run.js` no longer defaults an unexplained open item to "d" (now `unresolved`). The summary line says "not measured yet"
+  instead of 0 until the re-audit (now queued after every as-is copy) finishes.
+- **Files named only in code** (`preserve/referenced.js fetchReferenced`, after completion): sankalpam's 62 MB hero video via
+  `new URL(…, import.meta.url)`, banner PNGs, nyaayai's lazily loaded page modules, indikaai's bare `/favicon.ico`.
+- **The original's own llms.txt** is kept (`fixAsIs.js`, `fetchLlms` passed by the job only).
+- **`serveCopy` answers `/about`** (301 to `/about/`, query kept) and clean URLs (`/pricing` → `pricing.html`); before, 404.
+
+Not done: the live run (whole-site Analyze → as-is copy of every page → re-audit) on indikaai / makememo + fresh homepage copies
+of sankalpam / nyaayai — stopped once by low memory, waiting for the user. Every figure so far is from 1-page copies.
+Known gaps: the as-is visual check (copy vs original) still compares ONE picture pair, no noise map (only the fix gate has
+3-per-side noise); Step 1's stability figures (nyaayai 0.27–0.31 %) were measured with the old `pixelDiffPct` and not again;
+"still open" rows carry no reasons yet (spec §5 wants them too).
+
 ## Next steps, in order (commit and push after each)
 
 1. Zero-regressions loop: the re-audit runs on the as-is copy; every "got worse" item is measured and must be 0 or have a reason

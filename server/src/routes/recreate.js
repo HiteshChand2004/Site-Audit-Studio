@@ -318,6 +318,8 @@ router.get('/:id/recreate/:recreateId/fidelity/:slug/:file', (req, res) => {
 // Download zip of a completed recreate, streamed from its folder. The stack is the one the recreate
 // was built for; only a recreate that passed the safety gate is offered.
 const doneReport = db.prepare(`SELECT result_json FROM recreates WHERE id = ? AND project_id = ? AND status = 'done'`);
+// The latest finished re-audit of a recreate: an as-is copy's "got worse" rows, with their reasons, go into KNOWN-ISSUES.md.
+const latestReauditOf = db.prepare(`SELECT result_json FROM reaudits WHERE recreate_id = ? AND project_id = ? AND status = 'done' ORDER BY started_at DESC LIMIT 1`);
 
 router.get('/:id/recreate/:recreateId/download', async (req, res) => {
   const { id, recreateId } = req.params;
@@ -337,7 +339,9 @@ router.get('/:id/recreate/:recreateId/download', async (req, res) => {
   }
   let plan;
   try {
-    plan = await planZip({ dir: recreateDir(id, recreateId), report, stack });
+    const reaudit = report.asIs ? JSON.parse(latestReauditOf.get(recreateId, id)?.result_json ?? 'null') : null;
+    const worse = (reaudit?.checklist?.items ?? []).filter((i) => i.status === 'regressed');
+    plan = await planZip({ dir: recreateDir(id, recreateId), report: worse.length ? { ...report, copy: { ...report.copy, worse } } : report, stack });
   } catch (err) {
     if (err instanceof RecreateError) {
       // The app checks with HEAD first (a failed download would otherwise navigate to a JSON page).

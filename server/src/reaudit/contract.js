@@ -103,6 +103,8 @@ export function recreateSection(project, audit) {
     scope: c.scope ?? null,
     output: c.stack ?? null,
     notes: c.notes ?? [],
+    // An as-is copy: { total, explained, unexplained, byReason } of its "got worse" rows (copy/gotWorse.js), else null.
+    gotWorse: c.gotWorse ?? null,
     // Motion measured on both sides (4b.8): { pages, reveal, hover, loops, failed, skipped } or null.
     motion: c.motion ?? null,
   };

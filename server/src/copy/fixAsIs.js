@@ -81,10 +81,11 @@ const paragraphsOf = ($) => $('body p').toArray().map((p) => clean($(p).text()))
  * @param {string} o.siteUrl            the original's address
  * @param {string|null} [o.newSiteUrl]  the new site's address (canonical, sitemap, robots); without it nothing names an address
  * @param {string|null} [o.siteName]
+ * @param {(origin: string) => Promise<{ text: string|null }>} [o.fetchLlms]  the original's llms.txt (the job passes the guarded fetch; none = not asked)
  * @returns {Promise<{ pages: object[], files: object, counts: Record<string, number>, open: object[], originals: Map<string, string> }>}
  *   originals: outPath → the page's HTML before its fixes (for a revert)
  */
-export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, siteName = null }) {
+export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, siteName = null, fetchLlms = null }) {
   const siteHost = bareHost(new URL(siteUrl).hostname);
   const newOrigin = newSiteUrl ? new URL(newSiteUrl).origin : null;
   const docs = [];
@@ -256,7 +257,7 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     result.push({ path: d.path, outPath: d.outPath, fixes });
   }
 
-  const files = await siteFiles({ dir, docs, newOrigin, siteName: name });
+  const files = await siteFiles({ dir, docs, newOrigin, siteName: name, siteUrl, fetchLlms });
   return { pages: result, files, counts, open, originals };
 }
 
@@ -278,11 +279,24 @@ function movedToNewSite(value, siteHost, newOrigin, byPath) {
 const exists = (f) => stat(f).then(() => true, () => false);
 
 /** sitemap.xml, llms.txt, robots.txt and _headers of the copy. */
-async function siteFiles({ dir, docs, newOrigin, siteName }) {
+async function siteFiles({ dir, docs, newOrigin, siteName, siteUrl, fetchLlms }) {
   const out = { written: [], notes: [] };
   await mkdir(dir, { recursive: true });
   await writeFile(path.join(dir, '_headers'), AS_IS_HEADERS, 'utf8');
   out.written.push('_headers');
+  // The original's own llms.txt is part of the site: kept as the owner wrote it (no page asks for it, so the lift never had it).
+  // Its addresses of the original name the new site when there is one; without one they stay as written, like the lifted pages.
+  if (!(await exists(path.join(dir, 'llms.txt')))) {
+    const origin = new URL(siteUrl).origin;
+    const own = fetchLlms ? await fetchLlms(origin).catch(() => null) : null;
+    if (own?.text) {
+      const host = bareHost(new URL(siteUrl).hostname).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const text = newOrigin ? own.text.replace(new RegExp(`https?://(?:www\\.)?${host}(?=[/\\s)\\]>"']|$)`, 'gi'), newOrigin) : own.text;
+      await writeFile(path.join(dir, 'llms.txt'), text, 'utf8');
+      out.written.push('llms.txt');
+      out.llms = newOrigin ? "the original's, naming the new site" : "the original's, as written";
+    } else if (own?.tooLarge) out.notes.push("The original's llms.txt is too large to copy whole: copy it by hand.");
+  }
   if (!newOrigin) {
     out.notes.push('No new-site address: sitemap.xml, robots.txt and llms.txt name no address and were left as lifted.');
     return out;

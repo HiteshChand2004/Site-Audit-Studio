@@ -147,7 +147,8 @@ async function zeroRegressions({ deps, output, stack, now, started, log, budgetM
   }
   const open = [];
   for (const item of worse) {
-    const reason = reasonFor(item) ?? 'look';
+    // Never a reason by default: an item no rule explains is said to be unexplained (openItems.js 'unresolved').
+    const reason = reasonFor(item) ?? 'unresolved';
     const entry = { check: item.key, values: item.note ?? 'got worse', tried: `fix attempted, reverted (up to ${REGRESSION_ROUNDS} rounds)`, reason };
     await log({ site: deps.site, stack, page: item.page ?? '-', check: entry.check, values: entry.values, tried: entry.tried, reason });
     open.push(entry);

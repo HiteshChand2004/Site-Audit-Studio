@@ -181,7 +181,7 @@ export function knownIssuesMd({ siteName, stack, pages }) {
     '',
   ];
   for (const p of pages) {
-    lines.push(`## ${p.page}`, '', `- Check: ${p.check}`, `- Values: ${p.values}`, `- Tried: ${p.tried}`, `- Reason: ${p.reason}`, '');
+    lines.push(`## ${p.page}`, '', `- Check: ${p.check}`, `- Values: ${p.values}`, ...(p.meaning ? [`- What this means: ${p.meaning}`] : []), `- Tried: ${p.tried}`, `- Reason: ${p.reason}`, '');
   }
   return lines.join('\n');
 }
