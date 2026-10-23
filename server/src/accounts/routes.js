@@ -8,6 +8,7 @@
 //   GET  /me                            → 200 { user }   | 401
 //   POST /verify/send                   → 202 { sentTo, expiresAt }   a new code (no mail module yet: written to the server log)
 //   POST /verify   { code }             → 200 { user }   the account is verified
+//   POST /password { currentPassword, newPassword } → 200 { user }   every other session of the account ends
 // Every error is { error: <a sentence for the person>, field? } so the sign-in form can show it as it is.
 import { Router } from 'express';
 import { devNoVerify, isProduction } from '../config/index.js';
@@ -15,7 +16,7 @@ import { normalizeEmail } from '../db/migrations.js';
 import { hashPassword, passwordProblem, verifyPassword } from './passwords.js';
 import {
   checkCode, createCode, createSession, createUser, endSession, findUserByEmail, lastCodeAt, markVerified, publicUser,
-  reclaimUser, findUser,
+  reclaimUser, findUser, changePassword,
 } from './store.js';
 import { clearSessionCookie, limiter, readSessionCookie, setSessionCookie } from './http.js';
 import { currentSession } from './gate.js';
@@ -88,6 +89,25 @@ router.get('/me', (req, res) => {
   const s = currentSession(req);
   if (!s) return fail(res, 401, 'Not signed in.');
   res.json({ user: publicUser(s.user) });
+});
+
+// A new password for the signed-in account: the current one first. Every other session ends; this one stays.
+router.post('/password', async (req, res) => {
+  const s = currentSession(req);
+  if (!s) return fail(res, 401, 'Sign in first.');
+  const key = `password|${s.user.id}`;
+  const retry = signins.blocked(key);
+  if (retry) return wait(res, retry);
+  if (!(await verifyPassword(String(req.body?.currentPassword ?? ''), s.user.password_hash))) {
+    signins.hit(key);
+    return fail(res, 400, 'Your current password is not right.', { field: 'currentPassword' });
+  }
+  const problem = passwordProblem(req.body?.newPassword);
+  if (problem) return fail(res, 400, problem, { field: 'newPassword' });
+  if (req.body.newPassword === req.body.currentPassword) return fail(res, 400, 'Choose a password different from the current one.', { field: 'newPassword' });
+  signins.reset(key);
+  changePassword(s.user.id, await hashPassword(req.body.newPassword), s.session.id);
+  res.json({ user: publicUser(s.user), otherSessionsEnded: true });
 });
 
 router.post('/verify/send', (req, res) => {

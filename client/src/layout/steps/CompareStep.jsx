@@ -6,6 +6,7 @@ import { Segmented } from '../../components/common/Tabs.jsx';
 import InfoTip from '../../components/common/InfoTip.jsx';
 import PreviewFrame, { VIEWPORTS } from '../../components/preview/PreviewFrame.jsx';
 import { api } from '../../api/client.js';
+import { apiUrl } from '../../api/base.js';
 import SitePreview, { FullPageFrame, liveAvailability, LiveFrame, ModeToggle } from '../../components/preview/SitePreview.jsx';
 import { defaultPreviewMode, unavailableNote } from '../../components/preview/framing.js';
 import { Pill } from '../../components/common/Score.jsx';
@@ -26,7 +27,10 @@ const sandboxFor = (preview) => (preview?.scripts ? 'allow-same-origin allow-scr
 
 // The copy's preview server lets only the app's own address frame it (frame-ancestors); opened from another address the
 // live frame stays blank, so the picture taken when the copy was measured is shown first.
-const COPY_MODE = typeof window !== 'undefined' && window.location.port === '5173' ? 'live' : 'screenshot';
+// The app's addresses: the Vite dev server (5173, npm run dev) and the one local address of npm run local (8080, which
+// starts the API with APP_ORIGIN set to it).
+const LIVE_PORTS = new Set(['5173', '8080']);
+const COPY_MODE = typeof window !== 'undefined' && LIVE_PORTS.has(window.location.port) ? 'live' : 'screenshot';
 
 /** A strip of every copied page (a small picture of its first screen and its match), to jump between pages. */
 function PageStrip({ project, result, pages, page, onPick, fidByPage, label }) {
@@ -139,7 +143,7 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   const originalUrl = otherPage?.url ?? siteUrl;
   const pageShot = otherPage
     ? (vp) => (otherPage.views?.includes(vp.view) && otherPage.slug
-      ? { viewport: { width: vp.id }, full: { url: `/api/projects/${project.id}/recreate/${result.recreateId}/captures/${otherPage.slug}/${vp.view}-full.webp` } }
+      ? { viewport: { width: vp.id }, full: { url: apiUrl(`/projects/${project.id}/recreate/${result.recreateId}/captures/${otherPage.slug}/${vp.view}-full.webp`) } }
       : null)
     : undefined;
   const live = liveAvailability(audit, originalUrl);
@@ -199,7 +203,7 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   const copyPageShot = (vp) => {
     const fv = fidByPage.get(page)?.views?.[vp.view];
     if (!fv || !copyInfo?.slug) return null;
-    return { viewport: { width: vp.id }, full: { url: `/api/projects/${project.id}/recreate/${result.recreateId}/fidelity/${copyInfo.slug}/${vp.view}-full.webp` } };
+    return { viewport: { width: vp.id }, full: { url: apiUrl(`/projects/${project.id}/recreate/${result.recreateId}/fidelity/${copyInfo.slug}/${vp.view}-full.webp`) } };
   };
   const copyHasShots = Boolean(copyInfo?.slug && fidByPage.get(page)?.views);
   const copyPicture = copyMode === 'screenshot' && copyHasShots;

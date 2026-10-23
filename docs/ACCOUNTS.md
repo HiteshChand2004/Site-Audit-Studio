@@ -96,6 +96,54 @@ are allowed. The user's dev server (4000 / 5173) runs from `Website-Audit-exact`
 - Tests: `stage2.test.js` (9, real server processes over HTTP), `stage0` (8, updated: accounts on no longer refused; the refusal
   loop now covers SAS_DEV_NO_VERIFY with a network bind), `stage1` (5), `single-page` (5), `screens` (3).
 
+## Stage 3 — done (ownership, one local address, the marketing form, change password)
+
+- **Ownership** (`server/src/accounts/ownership.js projectGate`, mounted on `/api/projects/:id` after the gate): every route of a
+  project — itself, PATCH (name or url), DELETE, pages, audit, report (html / json / pdf), favicon, analyze + current + SSE,
+  screenshots, recreate (start / resume / stop / current / list), its SSE, captures, fidelity and exact images, download (GET and
+  HEAD), export, as-is preview, preview (GET / POST / DELETE), re-audit + current + SSE — needs the signed-in account to own it.
+  Someone else's project answers exactly like one that does not exist: **404 "Project not found."**, never 403. Sub-ids (analysis,
+  copy, re-audit) were already tied to the project in the path by every route, so owning the project is owning what is under it.
+  `GET /api/projects` lists the account's own projects; `POST` sets `owner_id` to it (in one transaction with the insert). A
+  project with no owner (made with accounts off, or by a script) is nobody's and is counted in a warning at start.
+  **Found and fixed on the way**: the SSE stream of a *live* job (`jobs/sse.js streamJob`) did not check the job's project, so any
+  project's path could follow another project's running job by its id (with accounts off too).
+- **Jobs and owners**: a job records `ownerId` from the project row (`jobs/manager.js`, `ownerOf(id)`), never from a session —
+  an auto-resume after a restart, a queued export or re-audit has no signed-in user. Not sent to the app.
+- **Change password**: `POST /api/auth/password { currentPassword, newPassword }` (current one required, 10 wrong tries / 15 min,
+  must differ), every other session of the account ends, this one stays. App: **account line at the foot of the sidebar**
+  (`client/src/components/account/AccountMenu.jsx`: email, Change password dialog, Sign out; a sign-out icon in the rail); hidden
+  when the API has no accounts (`/api/auth/me` 404).
+- **One local address** (`npm run local` → `scripts/local.mjs` + `scripts/local-proxy.mjs`), http://localhost:8080:
+  `/` → the marketing site's `next dev` (:3000, `../remastly-website`, `SAS_MARKETING_DIR`), `/app/` → the tool's Vite (:5173),
+  `/api/` → the API (:4000, started with `SAS_ACCOUNTS=1`, `SAS_PUBLIC_ORIGIN` = `APP_ORIGIN` = the proxy's address, and
+  `SAS_DEV_NO_VERIFY=1` — the API prints its warning line; `npm run local -- --verify` for the real behaviour). Host is passed
+  through, so the API's Origin check and the dev servers see one origin; WebSocket upgrades (hot reload) are proxied.
+  **The gate on /app/**: the proxy asks the API (`GET /api/auth/me` with the visitor's cookie; a verified answer is kept 3 s per
+  cookie): not signed in → a page request is redirected to `/auth?mode=signin&next=<path>` (`&verify=1` when unverified), any other
+  request (script, style, socket) → 401. Everything under `/api` — SSE, screenshots, captures, downloads, reports — is gated by the
+  API itself (cookie Path=/ reaches it). The launcher refuses to start when 4000 / 5173 / 3000 / 8080 are taken.
+- **Client**: `base: '/app/'` (Vite; `/` and `/app` redirect to `/app/` when Vite is opened directly). The API stays at `/api`
+  (not `/app/api`): the same path the marketing form posts to, so the Vite proxy key stays `/api`. Every API URL goes through
+  `client/src/api/base.js` (`API_BASE` = `VITE_API_BASE` or `/api`, `apiUrl`, `fromServerUrl` for the server-built screenshot
+  URLs `normalizeAudit` rewrites): `api/client.js` (fetch, SSE, downloadUrl, PDF), `siteData.js`, `Site.jsx`, `CompareStep.jsx`,
+  `RecreateReport.jsx`. A 401 / 403 carrying `auth` sends the visitor to the sign-in page and back (`goToSignIn`). Port 8080 counts
+  as the app's own address for live previews (`CompareStep` LIVE_PORTS, `SitePreview` APP_PORTS).
+- **Marketing site** (`remastly-website/components/auth/AuthForm.tsx`, the only file changed there; **not committed**: that repo
+  has other uncommitted work of the user's): `fetch` to `NEXT_PUBLIC_API_BASE` (default `/api`) `/auth/login` | `/auth/signup`
+  instead of a native POST; a server error goes under its field when it names one, else into the notice (`role=alert`); signed in →
+  `?next=` (only `/app…`) or `NEXT_PUBLIC_APP_URL`; an unverified account is told it waits for email confirmation (room for the code
+  step); "Forgot password?" says reset is not open (the old link pointed at a page that does not exist). The name and the optional
+  website field are not sent (the API has no place for them yet).
+- Tests: `stage3.test.js` (4: two accounts against 35 routes of each other's project incl. files / SSE / downloads / reports, mixed
+  ids, an unowned project, create sets the owner; change password; job owner from the row; SSE of another project's live job),
+  `stage3-proxy.test.js` (2: routing, the gate for pages / assets / sockets, sign-up through the proxy, sign-out closes /app/,
+  unverified → verify=1), and stage0–2, single-page, screens, recreate-jobs, report: 61 / 61. A scratch browser run (real API, real
+  Vite on 5174, the proxy, Chromium, a stand-in marketing page) passed all 12 checks. Client `npm run build` and the marketing site's
+  `tsc --noEmit` pass. Not run: `npm run local` with the real `next dev` (the user's own servers held 4000 / 5173 / 3000).
+- **Noticed, not changed**: `routes/recreate.js EXACT_FILE` has lost its backslashes (`d{3,4}` instead of `d{3,4}`), so the exact
+  comparison's pictures always 404 — the known regex trap, on the exact-mode branch's code.
+
 ## Findings recorded for later stages
 
 ### Schema drift across branches (item 6)

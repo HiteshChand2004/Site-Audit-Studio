@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { LayoutGrid, PanelLeftClose, PanelLeftOpen, Plus, Search, Trash2, X } from 'lucide-react';
 import ConfirmDialog from '../components/common/ConfirmDialog.jsx';
 import Disclaimer from '../components/common/Disclaimer.jsx';
+import AccountMenu from '../components/account/AccountMenu.jsx';
 import { LogoMark } from '../components/common/Illustrations.jsx';
 import { SiteIcon, StageDots } from '../components/site/Site.jsx';
 import { useSiteData } from '../siteData.js';
@@ -99,6 +100,7 @@ function Rail({ projects, selectedId, select, goHome, onNewProject, onToggle }) 
           );
         })}
       </nav>
+      <AccountMenu compact />
       <Disclaimer compact />
     </>
   );
@@ -202,6 +204,7 @@ export default function Sidebar({ onNewProject, collapsed = false, onToggle }) {
             <StageDots stages={{ check: 'done', copy: 'done', results: 'done' }} />
             <span>Checked · Copy made · Compared</span>
           </div>
+          <AccountMenu />
           <Disclaimer />
         </>
       )}

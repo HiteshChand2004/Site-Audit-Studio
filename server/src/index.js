@@ -37,10 +37,12 @@ if (accountsEnabled()) {
       + 'Run "npm run db:migrate -w server" first (it backs up and rehearses before it changes anything).');
     process.exit(1);
   }
-  const [{ default: authRouter }, { apiGate }, { originCheck }] = await Promise.all([
-    import('./accounts/routes.js'), import('./accounts/gate.js'), import('./accounts/http.js'),
+  const [{ default: authRouter }, { apiGate }, { originCheck }, { projectGate, unownedProjects }] = await Promise.all([
+    import('./accounts/routes.js'), import('./accounts/gate.js'), import('./accounts/http.js'), import('./accounts/ownership.js'),
   ]);
-  accounts = { authRouter, apiGate, originCheck };
+  accounts = { authRouter, apiGate, originCheck, projectGate };
+  const unowned = unownedProjects();
+  if (unowned) console.warn(`Accounts: ${unowned} project(s) have no owner and are shown to nobody (made with accounts off?).`);
   app.use('/api', originCheck);
 }
 
@@ -53,6 +55,8 @@ app.get('/api/health', (_req, res) => {
 if (accounts) {
   app.use('/api/auth', accounts.authRouter);
   app.use('/api', accounts.apiGate);
+  // Every route of one project, files and streams included: only its owner gets past (404 for anyone else).
+  app.use('/api/projects/:id', accounts.projectGate);
 }
 
 app.use('/api/projects', projectsRouter);

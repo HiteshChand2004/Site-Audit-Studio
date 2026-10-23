@@ -59,6 +59,21 @@ export function reclaimUser(userId, { passwordHash, verified }) {
 
 export const markVerified = (userId) => setVerified.run(iso(), iso(), userId);
 
+const deleteOtherSessions = db.prepare('DELETE FROM sessions WHERE user_id = ? AND id <> ?');
+
+/** A new password; every other session of the account ends (a password is changed because it may be known). */
+export function changePassword(userId, passwordHash, keepSessionId) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    setPassword.run(passwordHash, iso(), userId);
+    deleteOtherSessions.run(userId, keepSessionId);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
 // --- sessions -----------------------------------------------------------------------------------------------------------------
 const insertSession = db.prepare('INSERT INTO sessions (id, user_id, token_hash, created_at, expires_at, last_seen_at, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?)');
 const sessionByToken = db.prepare('SELECT * FROM sessions WHERE token_hash = ?');

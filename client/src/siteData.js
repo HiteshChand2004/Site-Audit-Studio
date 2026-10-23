@@ -1,6 +1,7 @@
 // What the dashboard shows about one website, derived from its check (audit), its latest copy (recreate result) and the
 // jobs running for it. Pure helpers: the screens decide how to draw it. Nothing here is specific to one website.
 import { isJobActive, useProjects } from './store/useProjects.js';
+import { apiUrl } from './api/base.js';
 
 export const isReal = (audit) => Boolean(audit && !audit.isDummy);
 
@@ -19,7 +20,7 @@ export function originalShot(projectId, audit, result, kind = 'fold') {
 /** The copy step's picture of one original page (`kind`: fold | full). */
 export function captureShot(projectId, result, page, view = 'desktop', kind = 'full') {
   if (!result?.recreateId || !page?.slug || !(page.views ?? []).includes(view)) return null;
-  return `/api/projects/${projectId}/recreate/${result.recreateId}/captures/${page.slug}/${view}-${kind}.webp`;
+  return apiUrl(`/projects/${projectId}/recreate/${result.recreateId}/captures/${page.slug}/${view}-${kind}.webp`);
 }
 
 /** The picture of one page of the copy (taken when its match was measured). */
@@ -27,7 +28,7 @@ export function copyShot(projectId, result, page = homePage(result), view = 'des
   if (!result?.recreateId || !page?.slug) return null;
   const fid = result.fidelity?.pages?.find((p) => p.outPath === page.outPath);
   if (!fid?.views?.[view]) return null;
-  return `/api/projects/${projectId}/recreate/${result.recreateId}/fidelity/${page.slug}/${view}-full.webp`;
+  return apiUrl(`/projects/${projectId}/recreate/${result.recreateId}/fidelity/${page.slug}/${view}-full.webp`);
 }
 
 /** Scores of the original and of the copy on one device ({ performance, seo, accessibility, bestPractices }). */

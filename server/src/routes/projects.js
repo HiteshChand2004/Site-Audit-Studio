@@ -51,8 +51,15 @@ const insert = db.prepare(`
 `);
 const remove = db.prepare('DELETE FROM projects WHERE id = ?');
 
-router.get('/', (_req, res) => {
-  res.json(selectAll.all().map(toProject));
+// With accounts on (src/index.js), req.user is the signed-in account: it sees its own projects only, and a project it creates
+// is its own. Off, there is no req.user and nothing changes. The statements naming owner_id are prepared only when needed: an
+// unmigrated database (accounts off) has no such column.
+let selectOwnedAll;
+let setOwner;
+router.get('/', (req, res) => {
+  const user = /** @type {any} */ (req).user;
+  const rows = user ? (selectOwnedAll ??= db.prepare('SELECT * FROM projects WHERE owner_id = ? ORDER BY updated_at DESC')).all(user.id) : selectAll.all();
+  res.json(rows.map(toProject));
 });
 
 router.post('/', (req, res) => {
@@ -67,7 +74,21 @@ router.post('/', (req, res) => {
   const displayName = (typeof name === 'string' && name.trim()) || new URL(normalized).hostname;
   const now = new Date().toISOString();
   const id = randomUUID();
-  insert.run(id, displayName.slice(0, 120), normalized, 'html', now, now);
+  const user = /** @type {any} */ (req).user;
+  if (user) {
+    setOwner ??= db.prepare('UPDATE projects SET owner_id = ? WHERE id = ?');
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      insert.run(id, displayName.slice(0, 120), normalized, 'html', now, now);
+      setOwner.run(user.id, id);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  } else {
+    insert.run(id, displayName.slice(0, 120), normalized, 'html', now, now);
+  }
   res.status(201).json(toProject(selectOne.get(id)));
 });
 

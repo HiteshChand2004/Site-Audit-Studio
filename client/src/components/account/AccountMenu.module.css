@@ -1,0 +1,59 @@
+.account {
+  display: grid;
+  gap: 6px;
+  padding: var(--sp-3) var(--sp-3) 0;
+  border-top: 1px solid var(--border);
+}
+
+.who {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  min-width: 0;
+}
+
+.email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.action,
+.icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.action:hover,
+.icon:hover {
+  color: var(--accent);
+}
+
+.action:focus-visible,
+.icon:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius);
+}
+
+.rail {
+  display: grid;
+  place-items: center;
+  padding: var(--sp-2) 0;
+}

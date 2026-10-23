@@ -1,6 +1,7 @@
 // Small pieces that show one website the same way everywhere: its icon, a picture of it in a browser frame, and where its
 // work stands (three marks: checked, copy made, compared).
 import { useEffect, useState } from 'react';
+import { apiUrl } from '../../api/base.js';
 import { Lock } from 'lucide-react';
 import { EmptySiteArt } from '../common/Illustrations.jsx';
 import { STAGE_NAMES, stagesLabel } from '../../siteData.js';
@@ -14,7 +15,7 @@ export function SiteIcon({ project, host, size = 32 }) {
       {failed ? (
         (host || project.name || '?').charAt(0).toUpperCase()
       ) : (
-        <img src={`/api/projects/${project.id}/favicon`} alt="" loading="lazy" onError={() => setFailed(true)} />
+        <img src={apiUrl(`/projects/${project.id}/favicon`)} alt="" loading="lazy" onError={() => setFailed(true)} />
       )}
     </span>
   );

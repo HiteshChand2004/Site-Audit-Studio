@@ -1,4 +1,5 @@
 import { AlertTriangle, Check, X } from 'lucide-react';
+import { apiUrl } from '../../api/base.js';
 import Badge from '../common/Badge.jsx';
 import CountUp from '../common/CountUp.jsx';
 import styles from './RecreateReport.module.css';
@@ -67,7 +68,7 @@ function VisualDiff({ result, projectId }) {
               <span className={`${styles.pageScore} mono`}>{p.diff.score}</span>
               <span className={styles.links}>
                 {slug && views.map((v) => (
-                  <a key={v} href={`/api/projects/${projectId}/recreate/${result.recreateId}/fidelity/${slug}/${v}-diff.webp`} target="_blank" rel="noopener noreferrer" title={`Heatmap of the ${VIEW_LABEL[v]} view (red = differs)`} data-low={p.views[v].diff.low}>
+                  <a key={v} href={apiUrl(`/projects/${projectId}/recreate/${result.recreateId}/fidelity/${slug}/${v}-diff.webp`)} target="_blank" rel="noopener noreferrer" title={`Heatmap of the ${VIEW_LABEL[v]} view (red = differs)`} data-low={p.views[v].diff.low}>
                     {VIEW_LABEL[v]} {p.views[v].diff.score}
                   </a>
                 ))}
@@ -102,7 +103,7 @@ function ExactComparison({ result, projectId }) {
   if (!exact?.summary) return null;
   const { summary, limit = 0.5, remaining = [], pages = [] } = exact;
   const check = exact.baseline?.check;
-  const url = (slug, file) => `/api/projects/${projectId}/recreate/${result.recreateId}/exact/${slug}/${file}`;
+  const url = (slug, file) => apiUrl(`/projects/${projectId}/recreate/${result.recreateId}/exact/${slug}/${file}`);
   const rows = pages.flatMap((p) => p.slots.filter((s) => !s.accepted).map((s) => ({ page: p.page, slug: p.slug, ...s })));
   const noise = Object.entries(exact.noiseFloor ?? {}).filter(([, v]) => v > 0);
 

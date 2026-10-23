@@ -106,6 +106,11 @@ export class JobManager extends EventEmitter {
     return job ? snapshot(job) : null;
   }
 
+  /** The account that owns the job's project when it started (null: accounts off, or a project with no owner). */
+  ownerOf(id) {
+    return this.#jobs.get(id)?.ownerId ?? null;
+  }
+
   active(projectId) {
     for (const job of this.#jobs.values()) {
       if (job.projectId === projectId && (job.status === 'queued' || job.status === 'running')) return snapshot(job);
@@ -119,6 +124,9 @@ export class JobManager extends EventEmitter {
     const job = {
       id: randomUUID(),
       projectId: project.id,
+      // Whose job it is comes from the project row, never from a session: a job the server starts by itself (an auto-resume
+      // after a restart, a queued export or re-audit) has no signed-in user. Not part of the snapshot the app is sent.
+      ownerId: project.owner_id ?? null,
       status: 'queued',
       step: null,
       pct: 0,

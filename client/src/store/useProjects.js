@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { api } from '../api/client.js';
+import { fromServerUrl } from '../api/base.js';
 
 const LAST_KEY = 'wa:lastProject';
 
@@ -42,7 +43,7 @@ const KINDS = {
 function normalizeAudit(id, audit) {
   const views = audit?.screenshots?.views;
   if (!views) return audit;
-  const fix = (shot) => (shot?.url ? { ...shot, url: shot.url.replace(/^\/api\/projects\/[^/]+\//, `/api/projects/${id}/`) } : shot);
+  const fix = (shot) => (shot?.url ? { ...shot, url: fromServerUrl(shot.url.replace(/^\/api\/projects\/[^/]+\//, `/api/projects/${id}/`)) } : shot);
   const fixed = Object.fromEntries(Object.entries(views).map(([k, v]) => [k, v && { ...v, fold: fix(v.fold), full: fix(v.full) }]));
   return { ...audit, screenshots: { ...audit.screenshots, views: fixed } };
 }
