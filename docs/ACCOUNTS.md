@@ -170,14 +170,23 @@ are allowed. The user's dev server (4000 / 5173) runs from `Website-Audit-exact`
 
 ## Stage 5 — done (email verification at sign-up: the code is emailed, sign-in needs it)
 
-- **Mail** (`server/src/mail.js`): the one way out is `sendMail({ to, subject, text })`; behind it nodemailer (7.0.13, the only new
+- **Mail** (`server/src/mail.js`): the one way out is `sendMail({ to, subject, text, html?, attachments? })`; behind it nodemailer (7.0.13, the only new
   dependency: SMTP, STARTTLS and AUTH are security-sensitive and a library that has seen every server quirk is the safer choice)
   over SMTP from `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM` (`config/index.js mailConfig`). Port 465 = TLS from
   the first byte; any other port = STARTTLS **required**; a loopback host (a local relay, the test server) = no TLS. Without
   `SMTP_HOST` a development server prints each mail to its log (`[mail] (not sent: no SMTP_HOST) to … — <subject>`); **production
   with accounts on and no SMTP refuses to start**, as does a half-set SMTP (user without password, no MAIL_FROM, a port that is not
   one). The start-up line names host, port, TLS mode, user and sender — never the password; a send failure is logged with
-  nodemailer's code and the server's reply, never the credentials. `npm run mail:test -w server -- <address>` sends one test mail.
+  nodemailer's code and the server's reply, never the credentials. `npm run mail:test -w server -- <address>` sends one test mail
+  (the real verification design with a sample code).
+- **The verification email** (`accounts/verificationMail.js`): subject "Your Remastly verification code"; a plain-text part and an
+  HTML alternative that say the same (multipart/alternative; a client with HTML off reads the text). The HTML is the marketing
+  site's light theme (#FAFAF7 base, white card, #111 ink, the orange as a top rule), the logo at the top, the code large in
+  monospace as one copyable run of digits, "This code expires in 10 minutes", the tries / no-resend line small, and "If you
+  didn't sign up for Remastly, you can ignore this email." The logo is `server/assets/mail/remastly-logo.png` (a 360 × 63 PNG made
+  from the marketing site's `public/logo.png`; Gmail draws no SVG), shipped as an **inline CID attachment** (multipart/related),
+  so the mail fetches nothing: no remote picture, no link, no tracking pixel. `accounts/policy.js` holds `CODE_MINUTES` /
+  `CODE_ATTEMPTS` without the database behind them (re-exported by `store.js`), so the template and `mail:test` can read them.
 - **Codes** (`accounts/store.js`): six digits from `crypto.randomInt`, only `sha256(<row id>:<code>)` stored, **10 minutes**,
   **5 tries** (the fifth wrong try retires the code, so the right code afterwards is refused too), hashes compared with
   `timingSafeEqual`; a used, expired or exhausted code is refused whatever is typed. **No resend** (`/verify/send` is gone: 404)

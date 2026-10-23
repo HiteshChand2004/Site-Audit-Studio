@@ -20,6 +20,7 @@ import { Router } from 'express';
 import { devNoVerify } from '../config/index.js';
 import { normalizeEmail } from '../db/migrations.js';
 import { sendMail } from '../mail.js';
+import { verificationMail } from './verificationMail.js';
 import { hashPassword, passwordProblem, verifyPassword } from './passwords.js';
 import {
   CODE_ATTEMPTS, CODE_MINUTES, checkCode, codeAllowance, createCode, createSession, createUser, discardCode, endSession,
@@ -34,7 +35,6 @@ const signins = limiter({ max: 10, windowMs: 15 * 60_000 }); // failed sign-ins 
 const signups = limiter({ max: 20, windowMs: 60 * 60_000 }); // sign-ups per IP
 const verifies = limiter({ max: 10, windowMs: 15 * 60_000 }); // code checks per session (each code also dies after CODE_ATTEMPTS)
 const NAME_MAX = 80;
-const PRODUCT = 'Remastly';
 
 /** How a dead code is replaced, in one sentence: the only way, since there is no resend. */
 export const SIGN_UP_AGAIN = 'To get a new code, create the account again with the same email address.';
@@ -55,24 +55,6 @@ const wait = (res, seconds, error = `Too many tries. Try again in ${minutes(seco
   res.set('Retry-After', String(seconds));
   return fail(res, 429, error, extra);
 };
-
-/** The verification email: plain text, the code, how long it lives, what to do if it was not asked for. */
-export function verificationMail(user, code) {
-  return {
-    to: user.email,
-    subject: `${code} is your ${PRODUCT} verification code`,
-    text: [
-      `Your ${PRODUCT} verification code is:`,
-      '',
-      `    ${code}`,
-      '',
-      `Enter it on the page where you created your account. It expires in ${CODE_MINUTES} minutes and can be tried ${CODE_ATTEMPTS} times.`,
-      'If it expires, create the account again with this same email address to get a new code; codes cannot be re-sent.',
-      '',
-      `If you did not create a ${PRODUCT} account, ignore this email: nothing happens without the code.`,
-    ].join('\n'),
-  };
-}
 
 /** The verification facts the sign-up form shows, so nobody waits for a resend that does not exist. */
 const verificationInfo = (user, expiresAt) => ({ sentTo: user.email, expiresAt, expiresInMinutes: CODE_MINUTES, attempts: CODE_ATTEMPTS, resend: false, next: 'signup' });

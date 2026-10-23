@@ -1,6 +1,8 @@
 // @ts-check
-// The one way the server sends an email: sendMail({ to, subject, text }). Plain text only; nothing else in the server knows how a
-// mail leaves (today nodemailer over SMTP, from config/index.js mailConfig), so the provider can be swapped by changing this file.
+// The one way the server sends an email: sendMail({ to, subject, text, html?, attachments? }). The text is always there (the part
+// every client reads); `html` adds a designed alternative, and `attachments` with a `cid` are pictures the HTML shows inline
+// (`<img src="cid:…">`), never fetched from anywhere. Nothing else in the server knows how a mail leaves (today nodemailer over
+// SMTP, from config/index.js mailConfig), so the provider can be swapped by changing this file.
 //
 // Without SMTP_HOST a development server prints each mail to its log instead ('log' transport) — a hosted server never does: in
 // production, accounts on and no SMTP refuses to start (config/index.js startupProblems). The SMTP password is read from config
@@ -8,7 +10,8 @@
 import nodemailer from 'nodemailer';
 import { isProduction, mailConfig } from './config/index.js';
 
-/** @typedef {{ to: string, subject: string, text: string }} Mail */
+/** @typedef {{ filename: string, content: Buffer, contentType: string, cid: string }} InlineAttachment */
+/** @typedef {{ to: string, subject: string, text: string, html?: string, attachments?: InlineAttachment[] }} Mail */
 /** @typedef {{ kind: 'smtp' | 'log', send: (mail: Mail) => Promise<{ id?: string }> }} Mailer */
 
 const CONNECT_MS = 10_000;
@@ -25,7 +28,8 @@ export function createMailer(m) {
       kind: 'log',
       async send(mail) {
         if (isProduction()) throw new Error('No mail server is set up (SMTP_HOST).');
-        console.log(`[mail] (not sent: no SMTP_HOST) to ${mail.to} — ${mail.subject}\n${mail.text.replace(/^/gm, '    ')}`);
+        const parts = [mail.html ? 'an HTML part' : '', mail.attachments?.length ? `${mail.attachments.length} inline file(s)` : ''].filter(Boolean);
+        console.log(`[mail] (not sent: no SMTP_HOST) to ${mail.to} — ${mail.subject}${parts.length ? ` (+ ${parts.join(', ')})` : ''}\n${mail.text.replace(/^/gm, '    ')}`);
         return {};
       },
     };
@@ -45,7 +49,17 @@ export function createMailer(m) {
   return {
     kind: 'smtp',
     async send(mail) {
-      const info = await transport.sendMail({ from: m.from, to: mail.to, subject: mail.subject, text: mail.text });
+      const info = await transport.sendMail({
+        from: m.from,
+        to: mail.to,
+        subject: mail.subject,
+        text: mail.text,
+        ...(mail.html ? { html: mail.html } : {}),
+        // Inline pictures: nodemailer sends multipart/alternative = the text, and multipart/related = the html with its pictures.
+        ...(mail.attachments?.length
+          ? { attachments: mail.attachments.map((a) => ({ filename: a.filename, content: a.content, contentType: a.contentType, cid: a.cid, contentDisposition: 'inline' })) }
+          : {}),
+      });
       return { id: info.messageId };
     },
   };
@@ -58,7 +72,7 @@ let current = null;
 export const mailer = () => (current ??= createMailer(mailConfig()));
 
 /**
- * Sends one plain-text email. Rejects with a sentence that names the stage that failed (connect, sign-in, the server's refusal)
+ * Sends one email: plain text, with an HTML alternative and inline pictures when given. Rejects with a sentence that names the stage that failed (connect, sign-in, the server's refusal)
  * and never a credential.
  * @param {Mail} mail
  */

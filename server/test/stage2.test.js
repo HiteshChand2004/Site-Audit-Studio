@@ -204,7 +204,8 @@ test('verification required (flag off): sign-up makes an unverified account the 
   // The code: without SMTP_HOST the mail goes to the server log (development only; otp.test.js covers the real sending).
   assert.match(s.output(), /Mail: no SMTP_HOST set/);
   assert.equal((await s.call('POST', '/api/auth/verify', { code: '000000' })).json.reason ?? 'wrong', 'wrong');
-  const code = s.output().match(/\[mail\] \(not sent: no SMTP_HOST\) to test@example\.com — (\d{6}) is your Remastly verification code/)?.[1];
+  // The log line names the recipient and the subject, then prints the text part indented; the code stands alone on a line of it.
+  const code = s.output().match(/\[mail\] \(not sent: no SMTP_HOST\) to test@example\.com — Your Remastly verification code \(\+ an HTML part, 1 inline file\(s\)\)\r?\n(?:.*\r?\n)*? {8}(\d{6})\r?\n/)?.[1];
   assert.ok(code, s.output());
   assert.equal((await s.call('POST', '/api/auth/verify/send')).status, 404, 'there is no resend');
   const ok = await s.call('POST', '/api/auth/verify', { code });

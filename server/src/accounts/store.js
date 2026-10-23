@@ -6,8 +6,8 @@ import { db } from '../db/index.js';
 
 export const SESSION_DAYS = 30;
 const TOUCH_EVERY_MS = 10 * 60 * 1000;
-export const CODE_MINUTES = 10;
-export const CODE_ATTEMPTS = 5;
+export { CODE_MINUTES, CODE_ATTEMPTS } from './policy.js'; // the numbers live without the database, so the mail template can read them
+import { CODE_MINUTES, CODE_ATTEMPTS } from './policy.js';
 // Codes emailed to one address (whoever asked): a cap per hour and per day, so a stranger typing someone's address into sign-up
 // again and again cannot flood that inbox, and the sending account is not reported for it. There is no resend route, so each
 // code is one sign-up.

@@ -1,11 +1,12 @@
 // Email verification at sign-up (docs/ACCOUNTS.md, Stage 5): the six-digit code is emailed through src/mail.js (nodemailer over
-// SMTP) and checked with a 10-minute life, 5 tries, constant-time comparison, no resend. Tested on real server processes over
+// SMTP: a plain-text part, an HTML part in the site's theme and the logo as an inline PNG — accounts/verificationMail.js) and
+// checked with a 10-minute life, 5 tries, constant-time comparison, no resend. Tested on real server processes over
 // HTTP, each with a database of its own, against a fake SMTP server in this process — no mail ever leaves this machine, and the
 // spawned servers never see the developer's server/.env (every SMTP_* value is set here).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import net, { createServer } from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
 import os from 'node:os';
@@ -97,7 +98,7 @@ async function fakeSmtp(t) {
   return { port, state };
 }
 
-/** Headers and the decoded text body of a raw message (nodemailer writes the text as 7bit or quoted-printable). */
+/** Headers and the decoded body of a raw message or MIME part (nodemailer writes text as 7bit or quoted-printable, files as base64). */
 function parseMail(raw) {
   const [head, ...rest] = raw.split('\r\n\r\n');
   const headers = {};
@@ -106,12 +107,34 @@ function parseMail(raw) {
     if (i > 0) headers[line.slice(0, i).toLowerCase()] = line.slice(i + 1).trim();
   }
   let body = rest.join('\r\n\r\n');
-  if (/quoted-printable/i.test(headers['content-transfer-encoding'] ?? '')) {
+  const encoding = headers['content-transfer-encoding'] ?? '';
+  /** @type {Buffer | null} */
+  let bytes = null;
+  if (/quoted-printable/i.test(encoding)) {
     body = body.replace(/=\r\n/g, '').replace(/=([0-9A-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+  } else if (/base64/i.test(encoding)) {
+    bytes = Buffer.from(body.replace(/\s+/g, ''), 'base64');
+    body = bytes.toString('utf8');
   }
-  return { headers, body };
+  return { headers, body, bytes };
 }
-const codeOf = (message) => parseMail(message.raw).headers.subject.match(/^(\d{6}) is your Remastly verification code$/)?.[1];
+
+/**
+ * Every leaf part of a message, outermost first: a single-part message is its own one leaf; a multipart one is split at its
+ * boundary and each piece parsed again (multipart/related holding multipart/alternative holding text + html, as nodemailer nests
+ * them). Each leaf = { headers, body, bytes, type } with `type` the bare media type.
+ */
+function partsOf(raw) {
+  const parsed = parseMail(raw);
+  const type = (parsed.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+  const boundary = parsed.headers['content-type']?.match(/boundary="?([^";]+)"?/i)?.[1];
+  if (!type.startsWith('multipart/') || !boundary) return [{ ...parsed, type }];
+  const pieces = parsed.body.split(`--${boundary}`).slice(1); // before the first boundary = preamble; after the last (`--`) = epilogue
+  return pieces.filter((p) => !p.startsWith('--')).flatMap((p) => partsOf(p.replace(/^\r\n/, '').replace(/\r\n$/, '')));
+}
+const partOf = (message, type) => partsOf(message.raw).find((p) => p.type === type);
+/** The code stands alone on its own line of the text part (the subject no longer carries it). */
+const codeOf = (message) => partOf(message, 'text/plain')?.body.match(/\r\n {4}(\d{6})\r\n/)?.[1];
 
 // --- settings -----------------------------------------------------------------------------------------------------------------
 test('mail settings: the transport, TLS by port and host, what is refused, and what production needs', () => withEnv({}, async () => {
@@ -151,12 +174,12 @@ test('mail settings: the transport, TLS by port and host, what is refused, and w
 }));
 
 // --- the mailer against the fake server -----------------------------------------------------------------------------------------
-test('sendMail: a plain-text mail reaches the SMTP server with the configured sign-in; a refused sign-in fails without leaking it', async (t) => {
+test('sendMail: a plain-text mail reaches the SMTP server with the configured sign-in; html + an inline picture become one multipart mail; a refused sign-in fails without leaking it', async (t) => {
   const smtp = await fakeSmtp(t);
   const config = { transport: 'smtp', host: '127.0.0.1', port: smtp.port, tls: 'none', user: SMTP_USER, pass: SMTP_PASS, from: MAIL_FROM };
   const mailer = createMailer(config);
   assert.equal(mailer.kind, 'smtp');
-  await mailer.send({ to: 'someone@example.com', subject: '123456 is your Remastly verification code', text: 'Your code is:\n\n    123456\n\nTen minutes.' });
+  await mailer.send({ to: 'someone@example.com', subject: 'Your Remastly verification code', text: 'Your code is:\n\n    123456\n\nTen minutes.' });
   assert.equal(smtp.state.messages.length, 1);
   assert.deepEqual(smtp.state.auths, [{ user: SMTP_USER, pass: SMTP_PASS }]);
   const { headers, body } = parseMail(smtp.state.messages[0].raw);
@@ -164,9 +187,29 @@ test('sendMail: a plain-text mail reaches the SMTP server with the configured si
   assert.deepEqual(smtp.state.messages[0].to, ['someone@example.com']);
   assert.equal(headers.from, MAIL_FROM);
   assert.equal(headers.to, 'someone@example.com');
-  assert.equal(headers.subject, '123456 is your Remastly verification code');
-  assert.match(headers['content-type'], /^text\/plain/);
+  assert.equal(headers.subject, 'Your Remastly verification code');
+  assert.match(headers['content-type'], /^text\/plain/, 'a text-only mail stays single-part');
   assert.match(body, /Your code is:\r\n\r\n {4}123456\r\n\r\nTen minutes\./);
+
+  // The same interface with an HTML alternative and an inline picture: multipart/alternative holding the text and, as the other
+  // alternative, multipart/related = the html with the picture it addresses by Content-ID; the bytes arrive unchanged.
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  await mailer.send({
+    to: 'someone@example.com', subject: 'Designed', text: 'Plain words.',
+    html: '<!doctype html><html><body><img src="cid:pic@test" alt=""><p>Rich words.</p></body></html>',
+    attachments: [{ filename: 'pic.png', content: png, contentType: 'image/png', cid: 'pic@test' }],
+  });
+  const rich = smtp.state.messages[1];
+  assert.match(parseMail(rich.raw).headers['content-type'], /^multipart\/alternative/);
+  assert.match(rich.raw, /Content-Type: multipart\/related/, 'the html and its picture travel together');
+  const parts = partsOf(rich.raw);
+  assert.deepEqual(parts.map((p) => p.type), ['text/plain', 'text/html', 'image/png'], 'text first, then html, then the picture');
+  assert.equal(parts[0].body.trim(), 'Plain words.');
+  assert.match(parts[1].body, /<img src="cid:pic@test" alt=""><p>Rich words\.<\/p>/);
+  assert.equal(parts[2].headers['content-id'], '<pic@test>');
+  assert.match(parts[2].headers['content-disposition'], /^inline/);
+  assert.match(parts[2].headers['content-transfer-encoding'], /base64/);
+  assert.ok(parts[2].bytes.equals(png), 'the picture arrives byte for byte');
 
   const wrong = createMailer({ ...config, pass: 'not-the-password' });
   const err = await wrong.send({ to: 'x@example.com', subject: 's', text: 't' }).then(() => null, (e) => e);
@@ -260,12 +303,26 @@ test('sign-up emails a code; wrong, exhausted, expired and used codes are refuse
   const mail1 = smtp.state.messages[0];
   assert.deepEqual(mail1.to, ['alice@example.com']);
   const code1 = codeOf(mail1);
-  assert.match(code1, /^\d{6}$/);
+  assert.match(code1 ?? '', /^\d{6}$/, 'the code stands alone on a line of the text part');
   codes.push(code1);
-  const body1 = parseMail(mail1.raw).body;
-  assert.match(body1, new RegExp(`\\s${code1}\\r\\n`), 'the code stands alone in the body');
-  assert.match(body1, /expires in 10 minutes and can be tried 5 times/);
-  assert.match(body1, /codes cannot be re-sent/);
+  // The designed mail: subject without the code; a plain-text part and an HTML part that say the same; the logo inline, nothing remote.
+  assert.equal(parseMail(mail1.raw).headers.subject, 'Your Remastly verification code');
+  const parts1 = partsOf(mail1.raw);
+  assert.deepEqual(parts1.map((p) => p.type), ['text/plain', 'text/html', 'image/png']);
+  const [text1, html1, logo1] = parts1;
+  assert.match(text1.body, /This code expires in 10 minutes\./);
+  assert.match(text1.body, /can be tried 5 times and cannot be re-sent/);
+  assert.match(text1.body, /If you didn't sign up for Remastly, you can ignore this email\./);
+  assert.match(html1.body, /^<!doctype html>/i);
+  assert.match(html1.body, new RegExp(`>${code1}<`), 'the code is one copyable run of digits in the HTML');
+  assert.match(html1.body, /This code expires in 10 minutes\./);
+  assert.match(html1.body, /If you didn(&#39;|')t sign up for Remastly, you can ignore this email\./);
+  assert.match(html1.body, /<img src="cid:remastly-logo@remastly" width="160" height="28" alt="Remastly"/, 'the logo comes from the inline part');
+  assert.doesNotMatch(html1.body, /https?:|<a\b|<script|src="(?!cid:)/i, 'no external link, picture, pixel or script');
+  assert.equal(logo1.headers['content-id'], '<remastly-logo@remastly>');
+  assert.match(logo1.headers['content-disposition'], /^inline/);
+  assert.ok(logo1.bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')), 'a PNG, which Gmail draws (SVG it would not)');
+  assert.ok(logo1.bytes.equals(await readFile(path.join(SERVER, 'assets', 'mail', 'remastly-logo.png'))), 'the server\'s own copy of the logo, byte for byte');
   assert.equal(up.text.includes(code1), false, 'the code is not in the response');
   assert.equal(s.output().includes(code1), false, 'the code is not in the server log');
   assert.equal(sql((db) => db.prepare('SELECT code_hash FROM email_codes').all().some((r) => r.code_hash.includes(code1))), false, 'stored hashed');
