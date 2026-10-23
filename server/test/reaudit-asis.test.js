@@ -81,6 +81,13 @@ test('an as-is copy is re-audited with its own scripts running, and each row tha
   assert.ok(result.checklist.gotWorse, 'an as-is copy gets the reasons summary');
   assert.equal(result.checklist.gotWorse.total, worse.length, 'every row that got worse is counted, none left out');
   for (const w of worse) assert.ok(w.reason || w.unexplained, `${w.key} has a reason or is marked unexplained`);
+  // The same for every row still open (failing on both sides): a reason on evidence, or UNEXPLAINED, and the counts.
+  const open = items.filter((i) => i.status === 'open');
+  assert.ok(result.checklist.stillOpen, 'an as-is copy gets the still-open summary');
+  assert.equal(result.checklist.stillOpen.total, open.length, 'every row still open is counted, none left out');
+  for (const o of open) assert.ok(o.reason || o.unexplained, `${o.key} (still open) has a reason or is marked unexplained`);
+  assert.equal(result.checklist.stillOpen.explained + result.checklist.stillOpen.unexplained, open.length);
+  assert.equal(result.checklist.lighthousePages, undefined, 'Lighthouse was skipped in this test, so no per-page comparison');
   const links = worse.find((i) => i.key === 'links.broken-new');
   assert.ok(links, 'the link to the page that was not copied is broken in the copy');
   assert.equal(links.reason, 'owner');

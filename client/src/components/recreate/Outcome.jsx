@@ -27,6 +27,8 @@ export default function Outcome({ result, comparison }) {
   const s = comparison?.summary ?? null;
   // An as-is copy: how many "got worse" rows carry one of the five reasons, and how many none fits (server copy/gotWorse.js).
   const worse = comparison?.gotWorse ?? null;
+  // And the same counts for its "still open" rows (failing on both sides).
+  const stillOpen = comparison?.stillOpen ?? null;
   const better = s ? (s.fixed ?? 0) + (s.improved ?? 0) : 0;
   const todo = (comparison?.items ?? []).filter((i) => i.status === 'regressed' || i.status === 'open').sort((a, b) => (a.status === 'regressed' ? 0 : 1) - (b.status === 'regressed' ? 0 : 1));
   const before = comparison?.scores?.before?.mobile;
@@ -36,7 +38,7 @@ export default function Outcome({ result, comparison }) {
   const stackName = stackById(result.stack)?.label ?? result.stack ?? '';
   const pagesN = result.pages.length;
   const fixedN = s ? (s.fixed ?? 0) + (s.improved ?? 0) : 0;
-  const summaryText = `${plural(pagesN, 'page')} copied${stackName ? ` in ${stackName}` : ''} · ${result.asIs ? pagesN : 0} as-is, ${result.asIs ? 0 : pagesN} rebuilt · ${s ? `Got worse: ${s.regressed ?? 0}${worse ? ` (${worse.explained} with a reason, ${worse.unexplained} unexplained)` : ''} · Fixed: ${fixedN} · Still open: ${s.open ?? 0}` : 'Got worse: not measured yet (the check after the copy has not finished)'}`;
+  const summaryText = `${plural(pagesN, 'page')} copied${stackName ? ` in ${stackName}` : ''} · ${result.asIs ? pagesN : 0} as-is, ${result.asIs ? 0 : pagesN} rebuilt · ${s ? `Got worse: ${s.regressed ?? 0}${worse ? ` (${worse.explained} with a reason, ${worse.unexplained} unexplained)` : ''} · Fixed: ${fixedN} · Still open: ${s.open ?? 0}${stillOpen ? ` (${stillOpen.explained} with a reason, ${stillOpen.unexplained} unexplained)` : ''}` : 'Got worse: not measured yet (the check after the copy has not finished)'}`;
 
   const sentence = [
     `The copy has ${plural(result.pages.length, 'page')}`,

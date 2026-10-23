@@ -27,16 +27,18 @@ export function notesEntries({ report, stack, root, shipped }) {
     tried: o.tried,
     reason: `${REASONS[o.reason]?.code ?? o.reason} — ${REASONS[o.reason]?.text ?? ''}`.trim(),
   }));
-  // "Got worse" rows of the re-audit (an as-is copy), each with its reason, or said to be unexplained: none is left out.
-  for (const w of copy.worse ?? []) {
-    pages.push({
-      page: `Got worse: ${w.title}`,
-      check: 'the copy against the original, every copied page (the check after the copy)',
-      values: `${w.before?.detail ?? w.before?.status ?? '-'} → ${w.after?.detail ?? w.after?.status ?? '-'}`,
-      meaning: w.reasonEvidence ?? null,
-      tried: w.reason ? 'nothing in the copy: this is left to you, for the reason below' : 'no automatic fix yet',
-      reason: reasonText(w.reason ?? null),
-    });
+  // "Got worse" and "still open" rows of the re-audit (an as-is copy), each with its reason, or said to be unexplained: none is left out.
+  for (const [label, rows] of [['Got worse', copy.worse ?? []], ['Still open', copy.stillOpen ?? []]]) {
+    for (const w of rows) {
+      pages.push({
+        page: `${label}: ${w.title}`,
+        check: label === 'Got worse' ? 'the copy against the original, every copied page (the check after the copy)' : 'failing on the original and still failing in the copy (the check after the copy)',
+        values: `${w.before?.detail ?? w.before?.status ?? '-'} → ${w.after?.detail ?? w.after?.status ?? '-'}`,
+        meaning: w.reasonEvidence ?? null,
+        tried: w.reason ? 'nothing in the copy: this is left to you, for the reason below' : 'no automatic fix yet',
+        reason: reasonText(w.reason ?? null),
+      });
+    }
   }
   const known = knownIssuesMd({ siteName, stack, pages });
   if (known) entries.push({ name: `${root}/KNOWN-ISSUES.md`, content: known });

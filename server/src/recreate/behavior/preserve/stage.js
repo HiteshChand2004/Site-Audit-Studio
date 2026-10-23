@@ -11,7 +11,7 @@ import { liftSite, localOfOutPath } from './asis.js';
 import { packLifted } from './pack.js';
 import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
-import { checkCopy, excludedHostsOf, fixGate, formsInCopy, probeOriginal } from './check.js';
+import { checkCopy, excludedHostsOf, fixGate, formsInCopy, NOISE_SHOTS, probeOriginal } from './check.js';
 import { fixAsIsCopy, revertPage } from '../../../copy/fixAsIs.js';
 import { addressForCopy } from '../../../copy/address.js';
 import { measureServed, servedOutcome } from '../../../copy/served.js';
@@ -313,8 +313,14 @@ export async function asIsStage(ctx) {
       const capture = await readFile(path.join(baselineDir, `${slug}.webp`)).catch(() => null);
       if (capture) one.capture = capture;
       for (const width of [1440, 390]) {
-        const png = await readFile(path.join(baselineDir, `${slug}@${width}.png`)).catch(() => null);
-        if (png) one[width] = png;
+        // The original's own pictures of an earlier live check: `<slug>@<width>.png`, then `-2`, `-3` (one per round, so the
+        // baseline check maps the original's noise too; an older job kept one).
+        const pngs = [];
+        for (let i = 1; i <= NOISE_SHOTS; i++) {
+          const png = await readFile(path.join(baselineDir, `${slug}@${width}${i > 1 ? `-${i}` : ''}.png`)).catch(() => null);
+          if (png) pngs.push(png);
+        }
+        if (pngs.length) one[width] = pngs;
       }
       slugOfPath[localOfOutPath(p.outPath)] = slug;
       if (Object.keys(one).length) baselines[localOfOutPath(p.outPath)] = one;
@@ -324,9 +330,11 @@ export async function asIsStage(ctx) {
       of: pages.length,
       originalPictures: Object.values(baselines).filter((b) => b[1440] || b[390]).length,
     };
-    const keepOriginalPicture = async (pagePath, width, png) => {
+    const keepOriginalPicture = async (pagePath, width, pngs) => {
       await mkdir(baselineDir, { recursive: true });
-      await writeFile(path.join(baselineDir, `${slugOfPath[pagePath]}@${width}.png`), png).catch(() => {});
+      for (const [i, png] of [pngs].flat().entries()) {
+        await writeFile(path.join(baselineDir, `${slugOfPath[pagePath]}@${width}${i ? `-${i + 1}` : ''}.png`), png).catch(() => {});
+      }
     };
     // The Plain HTML base: the same copy as plain files. It is the comparison when the original cannot be compared and no saved
     // picture exists (docs/COPY-MY-SITE.md §4); the plain HTML stack needs none, it is the base.

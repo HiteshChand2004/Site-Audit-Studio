@@ -347,11 +347,36 @@ Done (committed; the full suite NOT run, by the user's rule — related files on
 - **The original's own llms.txt** is kept (`fixAsIs.js`, `fetchLlms` passed by the job only).
 - **`serveCopy` answers `/about`** (301 to `/about/`, query kept) and clean URLs (`/pricing` → `pricing.html`); before, 404.
 
+Done on `step4-lighthouse` (worktree `../Website-Audit-step4b`, from 1006f54; full suite NOT run, related files one at a time):
+- **The as-is visual check uses the gate's arithmetic** (`preserve/check.js`): `pictureRounds` takes `NOISE_SHOTS` = 3 pictures
+  per side (one fresh context per side per round, frozen timers, sequential rounds for memory) and `gateVerdict` compares them —
+  blocks where the SAME side differs between its own pictures are the noise map; a block counts as a change only when it differs
+  in every copy-vs-original pairing outside the map. `visualCheck`, `baselineVisual` (the saved original pictures are now three
+  files `<slug>@<width>.png`, `-2`, `-3`) and `fixGate` all call it; no second implementation. `copy/checks.js` carries
+  `noise[width] = { raw, inNoise, share, shots }` per page. Proof `copy-visual-check.test.js` (10 000 px page): a 38 × 38 block
+  (1444 px, 0.01 %), a 120 × 120 block (14 062 px) and a 400 × 80 area 23 levels off white (32 000 px, 0.22 %) are all flagged;
+  the old gate read 0.01 % / 0.1 % / **0 %** and the one-pair check at 0.1 read 0.01 % / 0.098 % / **0 % (0 px)**; a random
+  canvas on both sides is noise (changedPx 0) with a 60 × 60 block beside it still seen.
+- **"Still open" rows carry a reason or UNEXPLAINED** like the "got worse" ones (`copy/gotWorse.js explainOpen`, tables by
+  evidence: a Lighthouse audit naming only third-party hosts → a; image / preload audits → UNEXPLAINED (a fix the copy may make
+  and still owes); the original's own code / markup / colours → d; words only the owner writes (alt, names, lang, title length)
+  → c; canonical / OG / sitemap / robots / llms without a new address → c; timings → e only when the copy did not grow). API
+  `checklist.stillOpen` = { total, explained, unexplained, byReason }; the app's "Why:" row and KNOWN-ISSUES.md "## Still open:"
+  rows; the summary line adds "(n with a reason, m unexplained)" after "Still open". Tests `copy-still-open.test.js` (6).
+- **Lighthouse on every page, both sides, both modes** (`reaudit/lighthousePages.js`, re-audit step `lighthouse-pages` before
+  `compare`, as-is copies only): each copied page and the same page of the original are run now, on this computer, with the same
+  settings (the copy through `serveCopy`, the original through the egress proxy; the analysis's calibrated homepage run is NOT
+  reused). One run per side decides when the copy leads by ≥ 5 in every category, else 2 more runs per side and the medians of 3
+  decide; a copy median lower in any category = row `lighthouse-score.<mode>.<category>.<path>` (status regressed, explained by
+  `scorePart`: performance → e when the page is not heavier and has the same LCP element; other categories by the checks failing
+  only in the copy). The original's runs are cached per project in `lighthouse-original/` and reused by later re-audits.
+  `checklist.lighthousePages` = { pages[] (scores per mode, runs, extra), worse[], extraRunPages[], skipped[], errors[], runs };
+  a note names the pages that needed extra runs. Never fails the re-audit. Tests `reaudit-lighthouse-pages.test.js` (4, stand-in
+  runner). Cost: pages × 2 modes × 2 sides × (1 or 3) runs of ~30–60 s each.
+
 Not done: the live run (whole-site Analyze → as-is copy of every page → re-audit) on indikaai / makememo + fresh homepage copies
-of sankalpam / nyaayai — stopped once by low memory, waiting for the user. Every figure so far is from 1-page copies.
-Known gaps: the as-is visual check (copy vs original) still compares ONE picture pair, no noise map (only the fix gate has
-3-per-side noise); Step 1's stability figures (nyaayai 0.27–0.31 %) were measured with the old `pixelDiffPct` and not again;
-"still open" rows carry no reasons yet (spec §5 wants them too).
+of sankalpam / nyaayai. Every figure so far is from 1-page copies. Known gaps: Step 1's stability figures (nyaayai 0.27–0.31 %)
+were measured with the old `pixelDiffPct` and not again; sankalpam's address is in no scratch DB or doc of this worktree.
 
 ## Next steps, in order (commit and push after each)
 

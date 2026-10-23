@@ -94,6 +94,7 @@ export const JOB_STEPS = {
   // Compare again (re-audit)
   serve: { title: 'Opening the new site', explain: 'Starting the new site privately so it can be checked.' },
   motion: { title: 'Checking animations', explain: 'Comparing hover effects and animations with the original.' },
+  'lighthouse-pages': { title: 'Measuring every page, original and copy', explain: 'The standard speed test on each copied page and on the same page of the original, phone and computer, on this computer with the same settings.' },
   compare: { title: 'Comparing with the original', explain: 'Putting the old and new results side by side.' },
 };
 

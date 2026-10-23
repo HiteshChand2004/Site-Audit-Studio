@@ -8,8 +8,11 @@
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { makeOverallPct, runAnalysis, STEPS as AUDIT_STEPS } from '../audit/index.js';
+import { runLighthouse } from '../audit/lighthouse/run.js';
 import { db } from '../db/index.js';
-import { auditDir } from '../config/paths.js';
+import { auditDir, projectDir } from '../config/paths.js';
+import { startEgressProxy } from '../security/egressProxy.js';
+import { compareLighthousePages, lighthousePageItems, lighthousePagesNote, RUN_TIMEOUT_MS } from './lighthousePages.js';
 import { getEmitter } from '../recreate/emit/index.js';
 import { outputPages, outputRoot, reportOutputs, targetStack } from '../recreate/export/fromIr.js';
 import { servePreview } from '../recreate/preview.js';
@@ -17,6 +20,7 @@ import { serveCopy } from '../recreate/behavior/preserve/serve.js';
 import { recreateDir } from '../recreate/workspace.js';
 import { createNetPolicy, userPolicy } from '../security/netGuard.js';
 import { compareAudits, loadSide } from './compare/index.js';
+import { CATEGORIES } from './compare/rules.js';
 import { explainWorse } from '../copy/gotWorse.js';
 import { clickBudgetFor, hoverBudgetFor, measureNewMotion, motionItems, readOldMotion } from './motion.js';
 
@@ -30,6 +34,9 @@ export const STEPS = [
   { key: 'serve', label: 'Serving the recreated site', weight: 2 },
   ...AUDIT_STEPS.filter((s) => !SKIPPED_STEPS.includes(s.key)),
   { key: 'motion', label: 'Checking the motion', weight: 5 },
+  // An as-is copy only: every page of the copy and of the original, phone and computer (lighthousePages.js). Left out, like the
+  // homepage runs, when a caller skips Lighthouse.
+  { key: 'lighthouse-pages', label: 'Lighthouse on every page, original and copy', weight: 20 },
   { key: 'compare', label: 'Comparing with the original', weight: 3 },
 ];
 export const PUBLIC_STEPS = STEPS.map(({ key, label }) => ({ key, label }));
@@ -138,6 +145,32 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
     }
     progress('motion', 1);
 
+    // Lighthouse on every page, both sides, both modes (an as-is copy; docs/COPY-MY-SITE.md §4). Original and copy are measured
+    // now, on this computer, with the same settings: the original's runs are kept per project and reused next time. Never fails
+    // a re-audit: what could not be measured is listed.
+    const isAsIs = reportOutputs(report)[stack]?.mode === 'as-is';
+    progress('lighthouse-pages', 0);
+    let lighthousePages = null;
+    if (isAsIs && !skip.some((s) => /^lighthouse/.test(s))) {
+      const proxy = await startEgressProxy(netPolicy);
+      try {
+        // The original's address of each copied page (report.asIs.pages, by output path), else the path on the site.
+        const asIsPages = new Map((report.asIs?.pages ?? []).map((p) => [p.outPath, p.url]));
+        lighthousePages = await compareLighthousePages({
+          pages: outputPageList.map((p) => ({ path: p.path, url: asIsPages.get(p.outPath) ?? new URL(p.path, project.url).href, copyUrl: `${served.origin}${p.path}` })),
+          cacheDir: path.join(projectDir(project.id), 'lighthouse-original'),
+          outDir: path.join(reauditDir(project.id, recreateId, reauditId), 'lighthouse-pages'),
+          run: (url, mode, outFile) => runLighthouse(url, mode, { timeout: RUN_TIMEOUT_MS, outFile, proxy: proxy.url }),
+          progress: (fraction, message) => progress('lighthouse-pages', fraction, message),
+        });
+      } catch (err) {
+        lighthousePages = { pages: [], worse: [], extraRunPages: [], skipped: [], runs: { original: 0, copy: 0, reusedOriginal: 0 }, errors: [{ path: '*', mode: '*', error: String(err?.message ?? err).split('\n')[0].slice(0, 200) }] };
+      } finally {
+        await proxy.close().catch(() => {});
+      }
+    }
+    progress('lighthouse-pages', 1);
+
     progress('compare', 0);
     const checklist = compareAudits({
       old: await loadSide(auditDir(project.id, report.analysisId), JSON.parse(analysis.result_json)),
@@ -147,9 +180,29 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
       output,
       motion,
     });
+    if (lighthousePages) {
+      // The per-page score rows join the checklist (a "got worse" row per page, mode and category where the copy's median is
+      // lower), the counts follow, and the notes say what was measured and which pages needed extra runs.
+      const rows = lighthousePageItems(lighthousePages);
+      checklist.items.push(...rows);
+      for (const r of rows) {
+        checklist.summary[r.status] = (checklist.summary[r.status] ?? 0) + 1;
+        checklist.summary.total++;
+      }
+      checklist.categories = CATEGORIES.filter((c) => checklist.items.some((it) => it.category === c.id));
+      checklist.notes.push(lighthousePagesNote(lighthousePages));
+      checklist.lighthousePages = {
+        pages: lighthousePages.pages.map((p) => ({ path: p.path, modes: Object.fromEntries(Object.entries(p.modes).map(([m, v]) => [m, v.error ? { error: v.error } : { original: v.original, copy: v.copy, worse: v.worse, runs: v.runs, accepted: v.accepted, extra: v.extra, runScores: v.runScores }])) })),
+        worse: lighthousePages.worse,
+        extraRunPages: lighthousePages.extraRunPages,
+        skipped: lighthousePages.skipped,
+        errors: lighthousePages.errors,
+        runs: lighthousePages.runs,
+      };
+    }
     // An as-is copy: every "got worse" row carries one of the five reasons on this run's evidence, or is marked unexplained
     // (copy/gotWorse.js). The rows stay where they are; the reasons are added to them, never put in their place.
-    if (reportOutputs(report)[stack]?.mode === 'as-is') {
+    if (isAsIs) {
       const lhrs = async (dir) => Object.fromEntries(await Promise.all(['mobile', 'desktop'].map(async (d) => [d, await readFile(path.join(dir, `lighthouse-${d}.json`), 'utf8').then(JSON.parse, () => null)])));
       const worse = explainWorse({
         items: checklist.items,
@@ -161,13 +214,19 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
         newLhr: await lhrs(reauditDir(project.id, recreateId, reauditId)),
         oldAxe: await readFile(path.join(auditDir(project.id, report.analysisId), 'axe.json'), 'utf8').then(JSON.parse, () => null),
         newAxe: await readFile(path.join(reauditDir(project.id, recreateId, reauditId), 'axe.json'), 'utf8').then(JSON.parse, () => null),
+        // For the "still open" rows: whether a new-site address was written, which pages' fixes were undone, the hosts excluded by rule.
+        address: report.asIs?.address ?? null,
+        revertedPages: (report.asIs?.fixes?.reverted ?? []).map((r) => r.page),
+        excludedHosts: report.asIs?.excludedByRule ?? [],
       });
-      const byKey = new Map(worse.items.map((w) => [w.key, w]));
+      const byKey = new Map([...worse.items.map((w) => ['regressed', w]), ...worse.open.map((w) => ['open', w])].map(([status, w]) => [`${status} ${w.key}`, w]));
       for (const item of checklist.items) {
-        const w = item.status === 'regressed' && byKey.get(item.key);
+        const w = byKey.get(`${item.status} ${item.key}`);
         if (w) Object.assign(item, { reason: w.reason, reasonEvidence: w.evidence, ...(w.unexplained && { unexplained: true }), ...(w.parts && { reasonParts: w.parts }) });
       }
       checklist.gotWorse = worse.summary;
+      // The same for every row still open (failing on both sides): a reason or UNEXPLAINED, and the counts.
+      checklist.stillOpen = worse.openSummary;
     }
     progress('compare', 1);
     return {

@@ -209,7 +209,7 @@ function Row({ item }) {
           <LinkList title="New" links={item.links?.new} />
           <LinkList title="Could not be reached on this run" links={item.links?.recheck} />
           <Evidence evidence={item.evidence} />
-          {item.status === 'regressed' && 'reason' in item && <WorseReason item={item} />}
+          {(item.status === 'regressed' || item.status === 'open') && 'reason' in item && <WorseReason item={item} />}
           {item.review && <p className={styles.review}>Text was generated from the page; check that it reads right.</p>}
           {item.note && <p className={styles.note}>{item.note}</p>}
           {item.helpUrl && (

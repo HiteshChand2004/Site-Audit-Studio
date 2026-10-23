@@ -101,37 +101,62 @@ const viewOf = (width) => {
 };
 
 /**
- * @param {{ keepOriginal?: boolean }} [o]  keepOriginal: the original's picture (PNG) is returned as `originalShot`, so it can be kept
- *   as the page's baseline for a later check made when the original does not answer
+ * The pictures of several sides, taken in rounds: in each round every side gets a fresh context (frozen the same way — timers,
+ * carousels and rotators stop on their first state, CSS animations are settled — warmed up, size reactions held) and all of
+ * them are shot at the same moment, so a difference between sides is the page's, not the clock's. Rounds run one after
+ * another, so at most one context per side is open at a time: a whole-site run on a small computer never opens six pages at
+ * once. A side with `base` is the copy (requests off it are refused); without one it is the original, asked as a visitor.
+ * @param {{ base?: string|null, url: string, errors?: string[] }[]} sides  `errors` collects that side's console errors
+ * @returns {Promise<Buffer[][]>}  shots[side][round], PNGs
  */
-export async function visualCheck(browser, base, copyUrl, originalUrl, width, { keepOriginal = false } = {}) {
-  const opts = viewOf(width);
-  const outside = [];
-  const copy = await isolated(browser, opts, base, outside);
-  const original = await browser.newContext(opts);
-  try {
-    // Both sides are frozen the same way before either picture is taken: timers (carousels, tickers, rotators) stop on their
-    // first state and CSS animations are settled. Then both are shot at the same moment, so the difference is the page's.
-    for (const c of [copy, original]) {
-      await c.addInitScript(freezeTimers);
-      await c.addInitScript(holdSizeReactions);
+export async function pictureRounds(browser, opts, sides, rounds = NOISE_SHOTS) {
+  const shots = sides.map(() => []);
+  for (let round = 0; round < rounds; round++) {
+    const open = [];
+    try {
+      for (const s of sides) {
+        const context = s.base ? await isolated(browser, opts, s.base, []) : await browser.newContext(opts);
+        await context.addInitScript(freezeTimers);
+        await context.addInitScript(holdSizeReactions);
+        const page = await context.newPage();
+        if (s.errors) {
+          page.on('pageerror', (e) => s.errors.push(`pageerror: ${e.message.slice(0, 160)}`));
+          page.on('console', (m) => { if (m.type() === 'error') s.errors.push(`console: ${m.text().slice(0, 160)}`); });
+        }
+        open.push({ context, page, url: s.url });
+      }
+      await Promise.all(open.map((o) => settleFrozen(o.page, o.url)));
+      const taken = await Promise.all(open.map((o) => fullShot(o.page)));
+      taken.forEach((png, i) => shots[i].push(png));
+    } finally {
+      for (const o of open) await o.context.close().catch(() => {});
     }
-    const cp = await copy.newPage();
-    const op = await original.newPage();
-    await Promise.all([settleFrozen(cp, copyUrl), settleFrozen(op, originalUrl)]);
-    const [shotA, shotB] = await Promise.all([fullShot(cp), fullShot(op)]);
-    const d = await exactDiff(shotB, shotA);
-    return {
-      width, copyHeight: d.heights[1], originalHeight: d.heights[0], diffPct: d.widthMismatch ? null : d.commonPct,
-      ...(keepOriginal && { originalShot: shotB }),
-    };
-  } finally {
-    await copy.close();
-    await original.close();
   }
+  return shots;
 }
 
-/** The least difference (percent of pixels) a fixed page may show against its unfixed self: a changed word is more than this. */
+/**
+ * The copy against the live original at one width, with the gate's own arithmetic (gateVerdict: one implementation for every
+ * "is this the same picture" question): the copy on one side, the original on the other, each pictured NOISE_SHOTS times in
+ * rounds. `diffPct` is the share of the compared pixels that differ in EVERY copy-vs-original pairing outside the places either
+ * page moves by itself (the thresholds score it: copy/checks.js); `rawDiffPct` is the plain difference of the first pair, what a
+ * one-picture check reports; `inNoisePct` what differed only sometimes or inside the noise map (reported, never judged).
+ * (Before 2026-10-23 this compared ONE pair with the scoring threshold 0.1: a change of 23 levels on grey read 0, and a page
+ * with a part that moves by itself gave another number on every run. Measured in copy-visual-check.test.js.)
+ * @param {{ keepOriginal?: boolean }} [o]  keepOriginal: the original's pictures (PNGs) are returned as `originalShots`, so they
+ *   can be kept as the page's baseline for a later check made when the original does not answer
+ */
+export async function visualCheck(browser, base, copyUrl, originalUrl, width, { keepOriginal = false } = {}) {
+  const [copyShots, originalShots] = await pictureRounds(browser, viewOf(width), [{ base, url: copyUrl }, { url: originalUrl }]);
+  const v = await gateVerdict(copyShots, originalShots);
+  return {
+    width, copyHeight: v.heights[1], originalHeight: v.heights[0], shots: NOISE_SHOTS,
+    diffPct: v.widthMismatch ? null : v.changedPct, rawDiffPct: v.widthMismatch ? null : v.diffPct,
+    inNoisePct: v.inNoisePct, noiseShare: v.noiseShare, changedPx: v.changedPx, inNoisePx: v.inNoisePx,
+    ...(keepOriginal && { originalShots }),
+  };
+}
+
 /** How many pictures the gate takes of each side (fixed, unfixed): every pair on one side shows where the page moves by itself. */
 export const NOISE_SHOTS = 3;
 /** The noise map is widened by this many blocks (8 px each) around every place the page moved by itself. */
@@ -160,45 +185,35 @@ export const GATE_THRESHOLD = 0.05;
  * rounded to 0.01 % — it could not see a 30 x 30 px change on a tall page, or any pale change at all.)
  */
 export async function fixGate(browser, fixedBase, unfixedBase, pagePath) {
-  const opts = viewOf(1440);
-  const sides = [];
-  try {
-    for (const base of [...Array.from({ length: NOISE_SHOTS }, () => fixedBase), ...Array.from({ length: NOISE_SHOTS }, () => unfixedBase)]) {
-      const context = await isolated(browser, opts, base, []);
-      await context.addInitScript(freezeTimers);
-      await context.addInitScript(holdSizeReactions);
-      const page = await context.newPage();
-      const errors = [];
-      page.on('pageerror', (e) => errors.push(`pageerror: ${e.message.slice(0, 160)}`));
-      page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text().slice(0, 160)}`); });
-      sides.push({ context, page, errors, url: `${base}${pagePath}` });
-    }
-    await Promise.all(sides.map((s) => settleFrozen(s.page, s.url)));
-    const shots = await Promise.all(sides.map((s) => fullShot(s.page)));
-    const verdict = await gateVerdict(shots.slice(0, NOISE_SHOTS), shots.slice(NOISE_SHOTS));
-    const errors = sides.map((s) => s.errors);
-    const fixed = [...new Set(errors.slice(0, NOISE_SHOTS).flat())];
-    const unfixed = errors.slice(NOISE_SHOTS);
-    const newErrors = fixed.filter((e) => !unfixed.some((u) => u.includes(e)));
-    return {
-      path: pagePath, ...verdict, newErrors,
-      invisible: verdict.changedPx === 0 && !verdict.sizeChanged && newErrors.length === 0,
-    };
-  } finally {
-    for (const s of sides) await s.context.close();
-  }
+  const fixedErrors = [];
+  const unfixedErrors = [];
+  const [fixedShots, unfixedShots] = await pictureRounds(browser, viewOf(1440), [
+    { base: fixedBase, url: `${fixedBase}${pagePath}`, errors: fixedErrors },
+    { base: unfixedBase, url: `${unfixedBase}${pagePath}`, errors: unfixedErrors },
+  ]);
+  const verdict = await gateVerdict(fixedShots, unfixedShots);
+  // A console error of the fixed page that no load of the unfixed page had.
+  const newErrors = [...new Set(fixedErrors)].filter((e) => !unfixedErrors.some((u) => u.includes(e)));
+  return {
+    path: pagePath, ...verdict, newErrors,
+    invisible: verdict.changedPx === 0 && !verdict.sizeChanged && newErrors.length === 0,
+  };
 }
 
 /**
- * The gate's picture arithmetic, apart from the browser (so it is testable on its own): the noise map from every pair of
- * pictures of the same side, then the blocks that differ in every fixed-vs-unfixed pairing outside that map.
- * @param {Buffer[]} fixedShots  PNGs (a single Buffer is taken as one picture)
- * @param {Buffer[]} unfixedShots  PNGs, at least 2
+ * The picture arithmetic of every "is this the same picture" question in the app (the fix gate, the as-is visual check, the
+ * baseline check), apart from the browser so it is testable on its own: the noise map from every pair of pictures of the SAME
+ * side (either side), then the blocks that differ in every side-A-vs-side-B pairing outside that map.
+ * @param {Buffer[]} fixedShots  side A (the fixed page, or the copy): PNGs (a single Buffer is taken as one picture)
+ * @param {Buffer[]} unfixedShots  side B (the unfixed page, or the original): PNGs; with one picture only, the noise map comes
+ *   from side A alone (a saved baseline has no second picture)
+ * @param {{ threshold?: number }} [o]  the ruler's colour threshold (GATE_THRESHOLD)
  */
-export async function gateVerdict(fixedShots, unfixedShots) {
+export async function gateVerdict(fixedShots, unfixedShots, { threshold = GATE_THRESHOLD } = {}) {
   const fixedList = Buffer.isBuffer(fixedShots) ? [fixedShots] : fixedShots;
+  if (Buffer.isBuffer(unfixedShots)) unfixedShots = [unfixedShots];
   const pairs = [];
-  const opts = { threshold: GATE_THRESHOLD };
+  const opts = { threshold };
   for (const side of [fixedList, unfixedShots]) {
     for (let i = 0; i < side.length; i++) for (let j = i + 1; j < side.length; j++) pairs.push(await exactDiff(side[i], side[j], opts));
   }
@@ -237,13 +252,17 @@ export async function gateVerdict(fixedShots, unfixedShots) {
     else inNoisePx += sometimes[i];
   }
   const noiseBlocks = noisy.reduce((n, v) => n + v, 0);
+  const pct = (px) => (change.compared ? Math.round((px / change.compared) * 1e6) / 1e4 : 0);
   return {
     changedPx, // pixels that differ where the page does not move by itself: > 0 means a visible change
     inNoisePx, // pixels that differ where it does: cannot be judged, reported
+    changedPct: pct(changedPx), // the same two as a share of the compared pixels, to 4 decimals of a percent
+    inNoisePct: pct(inNoisePx),
     noiseShare: Math.round((noiseBlocks / (cols * rows || 1)) * 1e4) / 1e2, // % of the page that moves by itself
     noisePct: Math.max(0, ...pairs.map((p) => p.commonPct)),
-    diffPct: change.commonPct, // the whole difference, for the report line
-    heights: change.heights,
+    diffPct: change.commonPct, // the whole difference of the first pairing, for the report line
+    heights: change.heights, // [side B, side A]
+    widthMismatch: crosses.some((c) => c.widthMismatch),
     sizeChanged: crosses.some((c) => c.widthMismatch || c.heights[0] !== c.heights[1]),
   };
 }
@@ -384,56 +403,57 @@ export async function probeOriginal(url, { timeoutMs = 15000 } = {}) {
  * capture). Used when the original is not reachable: the copy is then compared with what the original was when it was captured.
  */
 /**
- * The copy against a saved picture of the original.
- * @param {Buffer|string} baselinePng  the picture (bytes or a file)
+ * The copy against saved pictures of the original, with the same arithmetic as the live check (gateVerdict): the copy is
+ * pictured NOISE_SHOTS times, so its own noise is mapped; the saved side has as many pictures as were kept (the capture's one,
+ * or the original's own three from an earlier live check).
+ * @param {Buffer|string|(Buffer|string)[]} baselinePng  the picture(s) (bytes or files)
  * @param {{ width?: number, kind?: 'capture'|'original' }} [o]
- *   kind 'original': the original's own picture from an earlier visual check (same window, frozen the same way: as good as the
- *   live original at the time it was taken); 'capture': the capture's full-page picture (desktop only, up to MAX_HEIGHT, taken
+ *   kind 'original': the original's own pictures from an earlier visual check (same window, frozen the same way: as good as the
+ *   live original at the time they were taken); 'capture': the capture's full-page picture (desktop only, up to MAX_HEIGHT, taken
  *   without the scroll-through, so effects that wait for a scroll may be missing from it — the less reliable of the two)
  */
 export async function baselineVisual(browser, base, copyUrl, baselinePng, { width = 1440, kind = 'capture' } = {}) {
-  const outside = [];
-  const copy = await isolated(browser, viewOf(width), base, outside);
-  try {
-    // The copy is pictured the way the live check pictures it (frozen, warmed up), so the two sources measure the same thing.
-    await copy.addInitScript(freezeTimers);
-    await copy.addInitScript(holdSizeReactions);
-    const cp = await copy.newPage();
-    await settleFrozen(cp, copyUrl);
-    const shot = await fullShot(cp);
-    // Read into memory: sharp keeps a file open while it is given a path, which blocks the folder's removal on Windows.
-    const saved = Buffer.isBuffer(baselinePng) ? baselinePng : await readFile(baselinePng);
-    const b = await sharp(saved).metadata();
-    const own = await sharp(shot).metadata();
-    // The saved picture may be a different size: the copy is brought to its width before the pixels are compared.
-    const sameShot = own.width === b.width ? shot : await sharp(shot).resize({ width: b.width }).png().toBuffer();
-    const same = own.width === b.width ? own : await sharp(sameShot).metadata();
-    // The capture's full-page picture stops at MAX_HEIGHT: a picture that tall is the top of a page that may be taller, so the
-    // original's height is unknown and only the rows the picture has are compared (a copy 8289 px tall against an 8000 px
-    // picture is not 3.6 % taller than its original).
-    const capped = kind === 'capture' && b.height >= MAX_HEIGHT && same.height > b.height;
-    return {
-      width,
-      copyHeight: same.height,
-      originalHeight: capped ? null : b.height,
-      ...(capped && { comparedHeight: b.height, capped: true }),
-      diffPct: (await exactDiff(saved, sameShot)).commonPct,
-      source: kind === 'original' ? 'saved original picture' : 'saved capture',
-    };
-  } finally {
-    await copy.close();
-  }
+  // The copy is pictured the way the live check pictures it (frozen, warmed up, in rounds), so the two sources measure the same thing.
+  const [shots] = await pictureRounds(browser, viewOf(width), [{ base, url: copyUrl }]);
+  // Read into memory: sharp keeps a file open while it is given a path, which blocks the folder's removal on Windows.
+  const saved = [];
+  for (const b of [baselinePng].flat()) saved.push(Buffer.isBuffer(b) ? b : await readFile(b));
+  const b = await sharp(saved[0]).metadata();
+  const own = await sharp(shots[0]).metadata();
+  // The saved picture may be a different size: the copy is brought to its width before the pixels are compared.
+  const sameShots = own.width === b.width ? shots : await Promise.all(shots.map((s) => sharp(s).resize({ width: b.width }).png().toBuffer()));
+  const same = own.width === b.width ? own : await sharp(sameShots[0]).metadata();
+  // The capture's full-page picture stops at MAX_HEIGHT: a picture that tall is the top of a page that may be taller, so the
+  // original's height is unknown and only the rows the picture has are compared (a copy 8289 px tall against an 8000 px
+  // picture is not 3.6 % taller than its original).
+  const capped = kind === 'capture' && b.height >= MAX_HEIGHT && same.height > b.height;
+  const v = await gateVerdict(sameShots, saved);
+  return {
+    width,
+    copyHeight: same.height,
+    originalHeight: capped ? null : b.height,
+    ...(capped && { comparedHeight: b.height, capped: true }),
+    shots: NOISE_SHOTS,
+    savedShots: saved.length,
+    diffPct: v.changedPct,
+    rawDiffPct: v.diffPct,
+    inNoisePct: v.inNoisePct,
+    noiseShare: v.noiseShare,
+    changedPx: v.changedPx,
+    inNoisePx: v.inNoisePx,
+    source: kind === 'original' ? 'saved original picture' : 'saved capture',
+  };
 }
 
-/** A page's saved pictures: { capture?, 1440?, 390? }; a bare picture (bytes or a file) is the capture's, as before. */
+/** A page's saved pictures: { capture?, 1440?, 390? } (a width's entry may hold several); a bare picture (bytes or a file) is the capture's. */
 const savedPictures = (b) => (!b ? {} : Buffer.isBuffer(b) || typeof b === 'string' ? { capture: b } : b);
 
 /**
  * @param {object} o
- * @param {Record<string, Buffer|string|{ capture?: Buffer|string, 1440?: Buffer|string, 390?: Buffer|string }>} [o.baselines]
+ * @param {Record<string, Buffer|string|{ capture?: Buffer|string, 1440?: Buffer|string|(Buffer|string)[], 390?: Buffer|string|(Buffer|string)[] }>} [o.baselines]
  *   per page path: the capture's picture and / or the original's own pictures from an earlier check, per width
- * @param {(pagePath: string, width: number, png: Buffer) => Promise<void>|void} [o.onOriginalPicture]  receives the original's
- *   picture of every live comparison, to be kept as that page's baseline
+ * @param {(pagePath: string, width: number, pngs: Buffer[]) => Promise<void>|void} [o.onOriginalPicture]  receives the original's
+ *   pictures (NOISE_SHOTS of them) of every live comparison, to be kept as that page's baseline
  */
 export async function checkCopy({ browser, base, pages, excludedHosts = [], log = () => {}, originalReachable = true, baselines = {}, htmlBase = null, onOriginalPicture = null }) {
   const report = { pages: [], forms: 0, needsAPerson: [], originalReachable };
@@ -460,8 +480,8 @@ export async function checkCopy({ browser, base, pages, excludedHosts = [], log 
     for (const width of [1440, 390]) {
       const v = await asOriginal(`${p.url} at ${width}`, () => visualCheck(browser, base, copyUrl, p.url, width, { keepOriginal: Boolean(onOriginalPicture) }));
       if (v) {
-        const { originalShot, ...measured } = v;
-        if (originalShot) await onOriginalPicture(p.path, width, originalShot);
+        const { originalShots, ...measured } = v;
+        if (originalShots) await onOriginalPicture(p.path, width, originalShots);
         one.visual.push(measured);
         log(`visual ${p.path} ${JSON.stringify(measured)}`);
       } else if (saved[width]) {

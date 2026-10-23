@@ -341,7 +341,8 @@ router.get('/:id/recreate/:recreateId/download', async (req, res) => {
   try {
     const reaudit = report.asIs ? JSON.parse(latestReauditOf.get(recreateId, id)?.result_json ?? 'null') : null;
     const worse = (reaudit?.checklist?.items ?? []).filter((i) => i.status === 'regressed');
-    plan = await planZip({ dir: recreateDir(id, recreateId), report: worse.length ? { ...report, copy: { ...report.copy, worse } } : report, stack });
+    const stillOpen = (reaudit?.checklist?.items ?? []).filter((i) => i.status === 'open');
+    plan = await planZip({ dir: recreateDir(id, recreateId), report: worse.length || stillOpen.length ? { ...report, copy: { ...report.copy, worse, stillOpen } } : report, stack });
   } catch (err) {
     if (err instanceof RecreateError) {
       // The app checks with HEAD first (a failed download would otherwise navigate to a JSON page).
