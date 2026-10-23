@@ -1,6 +1,6 @@
 // DEPLOY.md and KNOWN-ISSUES.md inside a download ("Copy my site", docs/COPY-MY-SITE.md §8). The open items come from the
 // copy's report (report.copy.openItems, written by the copy pipeline).
-import { deployMd, knownIssuesMd } from '../../copy/deploy.js';
+import { deployMd, describePackage, knownIssuesMd } from '../../copy/deploy.js';
 import { REASONS } from '../../copy/openItems.js';
 
 /**
@@ -8,15 +8,17 @@ import { REASONS } from '../../copy/openItems.js';
  * @param {object} o.report
  * @param {string} o.stack
  * @param {string} o.root   the folder name inside the zip
+ * @param {{ files: string[], read: (rel: string) => string | null }} o.shipped  what the zip holds under root (its files, and
+ *   the text of one): DEPLOY.md is written from that package's own scripts and folders (copy/deploy.js describePackage)
  * @returns {{ name: string, content: string }[]}
  */
-export function notesEntries({ report, stack, root }) {
+export function notesEntries({ report, stack, root, shipped }) {
   // An as-is copy names the address its fixes actually used (copy/address.js: none unless usable and confirmed); report.baseUrl
   // is the original's own origin when no address was set, which DEPLOY.md must never call the new site's.
   const address = report.asIs ? (report.asIs.address?.used ?? null) : (report.baseUrl ?? null);
   const siteName = siteNameOf(report);
   const copy = report.copy ?? {};
-  const entries = [{ name: `${root}/DEPLOY.md`, content: deployMd({ stack, siteName, address, formEndpoint: copy.formEndpoint ?? null, checks: copy.deployChecks ?? [] }) }];
+  const entries = [{ name: `${root}/DEPLOY.md`, content: deployMd({ stack, shipped: describePackage(shipped), siteName, address, formEndpoint: copy.formEndpoint ?? null, checks: copy.deployChecks ?? [] }) }];
   const pages = (copy.openItems ?? []).map((o) => ({
     page: o.page ?? '-',
     check: o.check,

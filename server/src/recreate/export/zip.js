@@ -8,6 +8,7 @@
 //   site/                the production build (dist/): upload it as it is
 //   unminified/          readable copies of the minified CSS/JS (same paths as in site/)
 // Never included: capture/, fidelity/, ir/, report.json, dotfiles, links, anything outside dist/ and site/.
+import { readFileSync } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { ZipArchive } from 'archiver';
@@ -139,14 +140,13 @@ export async function planZip({ dir, report, stack = report.stack }) {
     .filter((f) => READABLE.test(f.rel) && distSizes.has(f.rel) && distSizes.get(f.rel) !== f.size);
 
   const root = zipBaseName(report, stack);
-  const entries = [
+  const files = [
     { name: `${root}/README.md`, content: readmeMarkdown(report, stack) },
     { name: `${root}/RECREATE-REPORT.md`, content: reportMarkdown(report) },
-    ...notesEntries({ report, stack, root }),
     ...dist.map((f) => ({ name: `${root}/site/${f.rel}`, file: f.abs, size: f.size, store: STORED.test(f.rel) })),
     ...readable.map((f) => ({ name: `${root}/unminified/${f.rel}`, file: f.abs, size: f.size, store: false })),
   ];
-  return finishPlan(entries, root);
+  return finishPlan([...files, ...notesEntries({ report, stack, root, shipped: shippedOf(files, root) })], root);
 }
 
 /** Streams the planned entries as a zip into `out` (a writable); resolves when finished. */
@@ -194,10 +194,30 @@ async function planProjectZip({ dir, report, stack }) {
   const root = zipBaseName(report, stack);
   const entries = [
     { name: `${root}/RECREATE-REPORT.md`, content: reportMarkdown(report, stack) },
-    ...notesEntries({ report, stack, root }),
     ...files.map((f) => ({ name: `${root}/${f.rel}`, file: f.abs, size: f.size, store: STORED.test(f.rel) })),
   ];
-  return finishPlan(entries, root);
+  return finishPlan([...entries, ...notesEntries({ report, stack, root, shipped: shippedOf(entries, root) })], root);
+}
+
+/**
+ * What the zip holds under its top folder, for DEPLOY.md (copy/deploy.js describePackage): the paths, and a reader for the few
+ * small files it looks at (package.json, the vite and next configs).
+ */
+export function shippedOf(entries, root) {
+  const byRel = new Map(entries.filter((e) => e.name.startsWith(`${root}/`)).map((e) => [e.name.slice(root.length + 1), e]));
+  return {
+    files: [...byRel.keys()],
+    read: (rel) => {
+      const e = byRel.get(rel);
+      if (!e) return null;
+      if (e.content != null) return String(e.content);
+      try {
+        return readFileSync(e.file, 'utf8');
+      } catch {
+        return null;
+      }
+    },
+  };
 }
 
 function finishPlan(entries, root) {

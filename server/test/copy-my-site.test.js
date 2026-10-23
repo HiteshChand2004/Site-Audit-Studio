@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { VISUAL_MIN, pageProblems } from '../src/copy/thresholds.js';
 import { ATTEMPTS, consensus, decideLink, outcomeOf } from '../src/copy/links.js';
 import { REASONS, reasonFor, unexplained } from '../src/copy/openItems.js';
-import { STACK_FACTS, deployMd, issueRecord, knownIssuesMd } from '../src/copy/deploy.js';
+import { STACK_FACTS, deployMd, describePackage, issueRecord, knownIssuesMd } from '../src/copy/deploy.js';
 import { keepChange, summaryLine, worseItems } from '../src/copy/regress.js';
 import { COPY_STAGES, stageIndex, stageOf } from '../src/copy/stages.js';
 
@@ -95,20 +95,24 @@ test('the results line reads as the spec example', () => {
   assert.match(summaryLine({ stackLabel: 'Plain HTML', pages: 1, asIs: 1, rebuilt: 0, gotWorse: 0, fixed: 0, stillOpen: 0 }), /^1 page copied/);
 });
 
-test('DEPLOY.md: each stack has its run steps, two hosts and the settings to set', () => {
-  for (const stack of Object.keys(STACK_FACTS)) {
-    const md = deployMd({ stack, siteName: 'Demo', address: 'https://new.test' });
+test('DEPLOY.md: run steps, two hosts and the settings to set, written from the package that ships (copy-deploy-commands.test.js holds every stack to its package)', () => {
+  const staticSite = describePackage({ files: ['index.html'], read: () => null });
+  const vitePkg = describePackage({ files: ['package.json', 'vite.config.js'], read: (f) => (f === 'package.json' ? JSON.stringify({ scripts: { build: 'vite build', preview: 'vite preview' }, devDependencies: { vite: '6' } }) : '') });
+  for (const [stack, shipped] of [['html', staticSite], ['react-vite', vitePkg]]) {
+    const md = deployMd({ stack, shipped, siteName: 'Demo', address: 'https://new.test' });
     assert.match(md, /^# Deploy Demo/);
     assert.match(md, /## Run it on your computer/);
     assert.match(md, /## Put it on the web/);
     assert.match(md, /https:\/\/new\.test/);
     assert.match(md, /HTTPS is needed/);
-    assert.equal(STACK_FACTS[stack].hosts.length, 2);
+    assert.equal(md.split('## Put it on the web')[1].split('##')[0].trim().split('\n').length, 2, 'two hosts');
   }
-  assert.match(deployMd({ stack: 'html', siteName: 'Demo' }), /npx serve/);
-  assert.match(deployMd({ stack: 'html', siteName: 'Demo' }), /Do not double-click index\.html/);
-  assert.match(deployMd({ stack: 'mern', siteName: 'Demo', formEndpoint: 'https://f.test' }), /FORM_ENDPOINT=https:\/\/f\.test/);
-  assert.throws(() => deployMd({ stack: 'nope', siteName: 'x' }));
+  assert.match(deployMd({ stack: 'html', shipped: staticSite, siteName: 'Demo' }), /npx serve/);
+  assert.match(deployMd({ stack: 'html', shipped: staticSite, siteName: 'Demo' }), /Do not double-click index\.html/);
+  assert.match(deployMd({ stack: 'react-vite', shipped: vitePkg, siteName: 'Demo', formEndpoint: 'https://f.test' }), /FORM_ENDPOINT=https:\/\/f\.test/);
+  assert.throws(() => deployMd({ stack: 'nope', shipped: staticSite, siteName: 'x' }));
+  assert.throws(() => deployMd({ stack: 'html', siteName: 'x' }), /package that ships/, 'never written without the package');
+  assert.ok(STACK_FACTS.mern.label);
 });
 
 test('KNOWN-ISSUES.md: only when something is open, and each item names what was tried and why', () => {

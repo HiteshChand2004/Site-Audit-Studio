@@ -375,10 +375,14 @@ Open, in the order to pick them up:
    count as applied only for stacks with their own server (Next.js, MERN); Plain HTML / React + Vite `_headers` is an open item
    with reason e, never a fix. MERN sends no HSTS (open, reason e). Still to do: one real as-is run per stack to see the
    measurement in a report; the CopyPages line was built but not looked at in the browser.
-3. **DEPLOY.md names scripts the as-is package does not have (recorded, not fixed).** Details and the correct generic fix are in
-   "Review before step 4 → Bug recorded, not fixed" above: write DEPLOY.md from the package that ships (scripts and folders
-   of the generated `package.json`), plus a test that every `npm run x` and folder it names exists. The as-is MERN package has no
-   `client/package.json` (`npm install` + `npm start` is right for it); do **not** add an `install:all` alias.
+3. **DEPLOY.md names scripts the as-is package does not have — FIXED 2026-10-23 (on `accounts`).** `copy/deploy.js` no longer
+   has a text per stack: `describePackage` reads the package the zip actually holds (its package.json scripts and dependencies,
+   its vite / next config, its folders) and `runAndHost` writes the commands from that; `export/zip.js` plans the files first and
+   writes DEPLOY.md from them (`shippedOf`). What is not shipped is said (`serve` comes through npx and needs the internet the
+   first time; MongoDB is not part of the copy; an as-is Next.js copy needs a Node host, no static folder). Also fixed on the way:
+   the clean HTML download is in `site/`, its DEPLOY.md said `npx serve .`. No `install:all` alias. Test
+   `copy-deploy-commands.test.js`: all 4 stacks × clean / as-is through the real zip plan, every script and folder named exists
+   (or is the declared output of the build it names). Run for real: 8 downloads unzipped in scratch, every command run — all start.
 4. **Step-1 proof re-check.** The step-1 numbers used the live original on both sides, never the capture picture, so the 19ddc59
    bug did not touch them. Still unproven: other sites than nyaayai; the race at 390 (never observed there); and the check's
    own scroll stops at 14 000 px (`check.js openAndScroll`), so on nyaayai at 390 (15 681 px) the last 1 681 px are never
