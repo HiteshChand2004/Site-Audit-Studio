@@ -21,13 +21,12 @@
 }
 
 .input {
-  height: 34px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
+  height: 42px;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: var(--shadow-sm);
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  transition: border-color 200ms var(--ease), box-shadow 200ms var(--ease);
 }
 
 .input::placeholder {
@@ -35,13 +34,17 @@
 }
 
 .input:hover {
-  border-color: var(--border-strong);
+  border-color: #c9c5bb;
 }
 
 .input:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--ink);
   box-shadow: var(--focus-ring);
+}
+
+.input[aria-invalid='true'] {
+  border-color: var(--bad);
 }
 
 .check {

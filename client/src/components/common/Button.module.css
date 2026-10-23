@@ -5,8 +5,9 @@
   justify-content: center;
   gap: 8px;
   border: 1px solid transparent;
-  border-radius: var(--radius);
+  border-radius: var(--radius-pill);
   font-weight: 600;
+  letter-spacing: -0.005em;
   white-space: nowrap;
   transition:
     background 150ms ease,
@@ -26,46 +27,45 @@
 }
 
 .md {
-  height: 38px;
-  padding: 0 16px;
+  height: 40px;
+  padding: 0 18px;
   font-size: var(--fs-base);
 }
 
 .sm {
-  height: 30px;
-  padding: 0 12px;
+  height: 32px;
+  padding: 0 14px;
   font-size: var(--fs-sm);
-  border-radius: var(--radius-sm);
 }
 
 /* The one main action of a screen. */
 .lg {
-  height: 46px;
-  padding: 0 22px;
+  height: 48px;
+  padding: 0 24px;
   font-size: var(--fs-md);
-  border-radius: var(--radius);
 }
 
 .iconOnly.md {
-  width: 38px;
+  width: 40px;
   padding: 0;
 }
 
 .iconOnly.sm {
-  width: 30px;
+  width: 32px;
   padding: 0;
 }
 
-/* Primary: solid blue. */
+/* Primary: the accent, with the marketing site's soft coloured shadow. */
 .primary {
   background: var(--accent);
   color: var(--on-accent);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-accent);
 }
 
 .primary:hover:not(:disabled) {
   background: var(--accent-hover);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-accent), 0 14px 28px -12px rgba(var(--accent-rgb), 0.5);
+  transform: translateY(-1px);
 }
 
 .primary:active:not(:disabled) {
@@ -75,13 +75,13 @@
 .secondary {
   background: var(--surface);
   border-color: var(--border-strong);
-  color: var(--text-2);
+  color: var(--text);
   box-shadow: var(--shadow-sm);
 }
 
 .secondary:hover:not(:disabled) {
   background: var(--surface-2);
-  border-color: var(--faint);
+  border-color: rgba(17, 17, 17, 0.55);
   color: var(--text);
 }
 

@@ -144,6 +144,23 @@ are allowed. The user's dev server (4000 / 5173) runs from `Website-Audit-exact`
 - **Noticed, not changed**: `routes/recreate.js EXACT_FILE` has lost its backslashes (`d{3,4}` instead of `d{3,4}`), so the exact
   comparison's pictures always 404 — the known regex trap, on the exact-mode branch's code.
 
+## Stage 4 — done (the app looks like the marketing site; the sign-up name and website are used)
+
+- **Name**: migration `2026-10-23-users-name` (nullable `users.name`), sign-up stores the form's "Your name" (trimmed, ≤ 80, no
+  control characters or angle brackets, else 400 `field: 'name'`), `publicUser.name`; the sidebar shows it (the email when an
+  account has none, the email on hover). **Website to rebuild**: the form sends the visitor to `/app/?site=<address>`, which opens
+  Add a website with the address filled in (the authorization box still to be ticked) and takes it out of the URL.
+- **Look** (client only, no layout change): `styles/tokens.css` takes the marketing site's values under the existing names —
+  warm neutrals (#FAFAF7 ground, #111 ink, #3d3c38 / #6b6a65 / #9a978f text, #e8e6e0 borders), `--ink` / `--band-dark` (#111) and
+  on-dark colours, accent tints derived from #C2410C, warm shadows, radii 8 / 12 / 18 / 24 + pill, focus ring 4 px; fonts
+  **Hanken Grotesk** (text, 15 px base) and **Newsreader** 500 (headlines: home title, section titles, the site's name, step
+  titles, dialog titles; `.display` utility) via `@fontsource-variable/*` (Inter dropped from the entry). Buttons are pills,
+  the primary with the accent's soft shadow; inputs 42 px, 12 px corners, ink border on focus; labels are the marketing site's
+  small caps, and a section's first line is `// Overview` (`.eyebrow.intro`). The home welcome band is a near-black band (white
+  serif headline, lining figures, the accent lightened for it); the logo mark sits on an ink tile.
+- Screenshots at 1440 next to the marketing site: scratchpad `compare/*.jpg` of the 2026-10-23 session (data: a read-only copy).
+- Tests: stage1, stage2 (+name), stage3: 18 / 18; client build passes; the marketing site's `tsc --noEmit` passes.
+
 ## Findings recorded for later stages
 
 ### Schema drift across branches (item 6)

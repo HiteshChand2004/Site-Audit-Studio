@@ -185,7 +185,7 @@ export default function Home({ onNewProject }) {
     <div className={`${styles.home} scroll`} data-shot-scroll>
       <section className={styles.hero}>
         <div className={styles.heroText}>
-          <span className="eyebrow">Overview</span>
+          <span className="eyebrow intro">Overview</span>
           <h1 className={styles.title}>
             Every company website,
             <br />

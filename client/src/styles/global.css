@@ -17,7 +17,6 @@ body {
   font-family: var(--font-sans);
   font-size: var(--fs-base);
   line-height: var(--lh);
-  font-feature-settings: 'cv11', 'ss01';
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -49,6 +48,13 @@ a {
 :focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+}
+
+/* Headlines in Newsreader, as on the marketing site (components opt in with this class or the same declarations). */
+.display {
+  font-family: var(--font-display);
+  font-weight: 500;
+  letter-spacing: -0.02em;
 }
 
 .mono {
@@ -216,10 +222,26 @@ a {
 /* Small capitals label above a value or a section. */
 .eyebrow {
   color: var(--muted);
-  font-size: 11.5px;
-  font-weight: 650;
-  letter-spacing: var(--ls-caps);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
+}
+
+/* The first line of a section, as the marketing site writes it: "// Overview" in sentence case, the slashes in the accent. */
+.intro.eyebrow,
+.intro .eyebrow {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.intro.eyebrow::before,
+.intro .eyebrow::before {
+  content: '// ';
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .tabular {

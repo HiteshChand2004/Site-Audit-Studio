@@ -20,7 +20,7 @@ function FirstSteps({ project, onGo }) {
   return (
     <div className={styles.first}>
       <div className={styles.firstHead}>
-        <span className="eyebrow">Start here</span>
+        <span className="eyebrow intro">Start here</span>
         <h2 className={styles.firstTitle}>Four steps to a better copy of {hostOf(project.url)}</h2>
         <p className={styles.muted}>Each step unlocks the next. The original website is only read, never changed.</p>
       </div>

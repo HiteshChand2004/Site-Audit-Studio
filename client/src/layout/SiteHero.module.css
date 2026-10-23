@@ -25,7 +25,7 @@
   inset: 0;
   z-index: -1;
   background: var(--grain);
-  opacity: 0.2;
+  opacity: 0.07;
   mix-blend-mode: multiply;
   pointer-events: none;
 }
@@ -66,9 +66,10 @@
 .name {
   overflow: hidden;
   color: var(--text);
-  font-size: var(--fs-3xl);
-  font-weight: 700;
-  letter-spacing: -0.035em;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 42px;
+  letter-spacing: -0.02em;
   line-height: 1.05;
   text-overflow: ellipsis;
   white-space: nowrap;

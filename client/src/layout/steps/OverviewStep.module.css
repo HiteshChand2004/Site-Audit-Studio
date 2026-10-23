@@ -366,11 +366,13 @@ li[data-state='none'] .tlTitle {
 }
 
 .firstHead :global(.eyebrow) {
-  color: var(--accent-text);
+  color: var(--muted);
 }
 
 .firstTitle {
-  font-size: var(--fs-xl);
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 28px;
   letter-spacing: -0.02em;
 }
 

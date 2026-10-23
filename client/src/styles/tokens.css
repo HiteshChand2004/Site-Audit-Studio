@@ -1,26 +1,35 @@
-/* Calm light theme: white and soft grey surfaces, one warm orange accent, and status colours only where something is good,
-   needs work or is a problem. No gradients or glow: hierarchy comes from spacing, type and borders.
-   Colours are used through these tokens only (the names are kept from the earlier theme, so every component follows). */
+/* The Remastly look, shared with the marketing site (remastly-website/app/theme.css): a warm #FAFAF7 ground, white cards, #111
+   ink, one orange accent (#C2410C) and near-black bands; Newsreader for headlines, Hanken Grotesk for everything else. Status
+   colours only where something is good, needs work or is a problem.
+   Colours are used through these tokens only (the names are kept from the earlier themes, so every component follows). */
 :root {
-  /* Neutrals (cool greys) */
-  --bg: #f5f7fa;
+  /* Neutrals (warm, the marketing site's) */
+  --bg: #fafaf7;
   --surface: #ffffff;
-  --surface-2: #f8fafc;
-  --surface-3: #eef2f6;
-  --border: #e4e7ec;
-  --border-strong: #d0d5dd;
-  --text: #101828;
-  --text-2: #344054;
-  --muted: #5d6879;
-  --faint: #98a2b3;
+  --surface-2: #f6f5f1;
+  --surface-3: #f0eee8;
+  --border: #e8e6e0;
+  --border-strong: #d9d6ce;
+  --text: #111111;
+  --text-2: #3d3c38;
+  --muted: #6b6a65;
+  --faint: #9a978f;
+
+  /* Ink and the dark bands (near-black, as on the marketing site) */
+  --ink: #111111;
+  --band-dark: #111111;
+  --on-dark: #ffffff;
+  --on-dark-2: rgba(255, 255, 255, 0.72);
+  --on-dark-line: rgba(255, 255, 255, 0.14);
 
   /* Accent: warm orange (deep enough that white text on it stays readable, 5.2:1), amber tints */
   --accent: #c2410c;
   --accent-hover: #9a3412;
   --accent-press: #7c2d12;
-  --accent-tint: #fff7ed;
-  --accent-tint-2: #ffedd5;
-  --accent-border: #fdba74;
+  --accent-tint: #fbf1ec;
+  --accent-tint-2: #f6e0d5;
+  --accent-border: #ebb59c;
+  --accent-on-dark: #e39c7d;
   --accent-text: #c2410c;
   --accent-rgb: 194, 65, 12;
   --on-accent: #ffffff;
@@ -47,10 +56,10 @@
   --info-tint: #eff8ff;
 
   /* Original site (neutral slate) vs the new copy (orange) */
-  --old-chip: #475467;
-  --old-chip-bg: #f2f4f7;
-  --old-chip-border: #e4e7ec;
-  --old-rail: #98a2b3;
+  --old-chip: #3d3c38;
+  --old-chip-bg: #f3f2ed;
+  --old-chip-border: #e8e6e0;
+  --old-rail: #9a978f;
 
   /* Former gradients, now flat: kept as names so older styles render calmly. */
   --grad-brand: linear-gradient(var(--accent), var(--accent));
@@ -60,12 +69,13 @@
   --grad-warn: linear-gradient(var(--warn-strong), var(--warn-strong));
   --grad-bad: linear-gradient(var(--bad), var(--bad));
 
-  /* Type: larger than before, easier to read */
-  --font-sans: 'Inter Variable', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  /* Type: Hanken Grotesk for text, Newsreader (500) for headlines, as on the marketing site */
+  --font-sans: 'Hanken Grotesk Variable', 'Hanken Grotesk', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Newsreader Variable', 'Newsreader', 'Iowan Old Style', Georgia, serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', Consolas, monospace;
   --fs-xs: 12px;
-  --fs-sm: 13px;
-  --fs-base: 14.5px;
+  --fs-sm: 13.5px;
+  --fs-base: 15px;
   --fs-md: 16px;
   --fs-lg: 18px;
   --fs-xl: 24px;
@@ -84,16 +94,18 @@
   --sp-10: 40px;
 
   --radius-sm: 8px;
-  --radius: 10px;
-  --radius-lg: 14px;
+  --radius: 12px;
+  --radius-lg: 18px;
+  --radius-pill: 999px;
 
-  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
-  --shadow: 0 1px 3px rgba(16, 24, 40, 0.08), 0 1px 2px rgba(16, 24, 40, 0.04);
-  --shadow-md: 0 6px 16px -4px rgba(16, 24, 40, 0.1), 0 2px 6px -2px rgba(16, 24, 40, 0.05);
-  --shadow-lg: 0 20px 40px -8px rgba(16, 24, 40, 0.18), 0 6px 12px -4px rgba(16, 24, 40, 0.06);
-  --shadow-glow: 0 1px 2px rgba(16, 24, 40, 0.08);
-  --focus-ring: 0 0 0 3px rgba(var(--accent-rgb), 0.3);
-  --overlay: rgba(16, 24, 40, 0.45);
+  --shadow-sm: 0 1px 2px rgba(17, 17, 17, 0.05);
+  --shadow: 0 1px 2px rgba(17, 17, 17, 0.04), 0 4px 12px -6px rgba(17, 17, 17, 0.1);
+  --shadow-md: 0 1px 2px rgba(17, 17, 17, 0.04), 0 12px 32px -16px rgba(17, 17, 17, 0.14);
+  --shadow-lg: 0 1px 2px rgba(17, 17, 17, 0.04), 0 8px 16px -6px rgba(17, 17, 17, 0.06), 0 30px 60px -20px rgba(17, 17, 17, 0.2);
+  --shadow-glow: 0 1px 2px rgba(17, 17, 17, 0.08);
+  --shadow-accent: 0 1px 2px rgba(17, 17, 17, 0.12), 0 10px 24px -10px rgba(var(--accent-rgb), 0.55);
+  --focus-ring: 0 0 0 4px rgba(var(--accent-rgb), 0.18);
+  --overlay: rgba(17, 17, 17, 0.45);
 
   /* Motion. The keyframes live in global.css; CSS modules cannot refer to them by name, so they are
      referenced through these variables: animation: var(--k-fade-up) 500ms ... Kept short and subtle. */
@@ -110,25 +122,24 @@
   --k-spin: sas-spin;
 
   /* Dashboard (UI revamp): elevation, warm surface tints, display type, the hero's mesh. All built from the tokens above. */
-  --canvas: #f6f7f9;
+  --canvas: #fafaf7;
   --amber-rgb: 245, 158, 11;
-  --surface-warm: #fffcf8;
-  --hairline: rgba(16, 24, 40, 0.07);
-  --hairline-strong: rgba(16, 24, 40, 0.12);
-  --elev-1: 0 1px 0 rgba(16, 24, 40, 0.03), 0 1px 2px rgba(16, 24, 40, 0.06);
-  --elev-2: 0 1px 2px rgba(16, 24, 40, 0.05), 0 8px 24px -12px rgba(16, 24, 40, 0.14);
-  --elev-3: 0 2px 4px rgba(16, 24, 40, 0.05), 0 24px 48px -16px rgba(16, 24, 40, 0.22);
+  --surface-warm: #fdfcf9;
+  --hairline: rgba(17, 17, 17, 0.07);
+  --hairline-strong: rgba(17, 17, 17, 0.12);
+  --elev-1: 0 1px 2px rgba(17, 17, 17, 0.05);
+  --elev-2: 0 1px 2px rgba(17, 17, 17, 0.04), 0 12px 32px -16px rgba(17, 17, 17, 0.14);
+  --elev-3: 0 1px 2px rgba(17, 17, 17, 0.04), 0 8px 16px -6px rgba(17, 17, 17, 0.06), 0 30px 60px -20px rgba(17, 17, 17, 0.2);
   --elev-accent: 0 10px 30px -12px rgba(var(--accent-rgb), 0.45);
+  /* The marketing hero's single soft glow, top right, on the warm ground */
   --mesh-hero:
-    radial-gradient(60% 90% at 100% 0%, rgba(var(--accent-rgb), 0.13), transparent 60%),
-    radial-gradient(50% 80% at 0% 100%, rgba(var(--amber-rgb), 0.12), transparent 60%),
-    radial-gradient(40% 60% at 60% 120%, rgba(var(--accent-rgb), 0.07), transparent 70%),
-    var(--surface-warm);
+    radial-gradient(55% 80% at 100% 0%, rgba(var(--accent-rgb), 0.09), transparent 62%),
+    var(--surface);
   --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .5 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   --fs-3xl: 38px;
   --fs-display: 52px;
   --ls-caps: 0.08em;
-  --radius-xl: 18px;
+  --radius-xl: 24px;
   --k-rise: sas-rise;
   --k-slide-in: sas-slide-in;
   --k-mesh: sas-mesh;
