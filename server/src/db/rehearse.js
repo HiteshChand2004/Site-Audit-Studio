@@ -2,9 +2,10 @@
 // The migration rehearsal: what this server would do to a database, done to a copy of it, with proof that nothing was lost.
 //   1. a consistent copy of the source (db/backup.js: read-only, VACUUM INTO) in a folder of its own — the source is never written;
 //   2. the copy described: every table, its columns, its row count and a hash of every row's id;
-//   3. the server's own startup schema (db/schema.js applySchema) and then every pending migration (db/migrations.js), each in a
-//      transaction, applied to the copy;
-//   4. described again and compared: no table, column, row or id may be lost or changed; integrity_check and foreign_key_check pass.
+//   3. the server's own startup schema (db/schema.js applySchema) and then every pending migration (db/migrations.js), all in ONE
+//      transaction exactly as db/migrate.js applies them (db/apply.js), applied to the copy;
+//   4. described again and compared: no table, column, row or id may be lost or changed; integrity_check and foreign_key_check pass;
+//      once the accounts tables exist, every project has an owner who exists (db/apply.js ownershipProblems).
 // Also reported: columns the source has that this code neither creates nor knows (another branch's migration).
 // Nothing here opens the configured database: db/index.js is never imported.
 import { DatabaseSync } from 'node:sqlite';
@@ -12,6 +13,7 @@ import { createHash } from 'node:crypto';
 import { backupDatabase } from './backup.js';
 import { applySchema } from './schema.js';
 import { MIGRATIONS } from './migrations.js';
+import { applyMigrations, hasTable, ownershipProblems } from './apply.js';
 
 /** @typedef {{ columns: string[], rows: number, ids: string }} TableInfo */
 
@@ -48,12 +50,10 @@ export function knownSchema(migrations = MIGRATIONS) {
   const mem = new DatabaseSync(':memory:');
   try {
     applySchema(mem);
-    for (const m of migrations) {
-      try {
-        m.up(mem);
-      } catch {
-        // see above
-      }
+    try {
+      applyMigrations(mem, { migrations, ownerEmail: 'owner@example.invalid' });
+    } catch {
+      // see above
     }
     return describe(mem);
   } finally {
@@ -62,9 +62,10 @@ export function knownSchema(migrations = MIGRATIONS) {
 }
 
 /**
- * @param {{ dbFile: string, workDir: string, migrations?: typeof MIGRATIONS }} o  workDir: a scratch folder for the copy
+ * @param {{ dbFile: string, workDir: string, migrations?: typeof MIGRATIONS, ownerEmail?: string }} o  workDir: a scratch folder for
+ *   the copy; ownerEmail: the account the owner migration creates (SAS_OWNER_EMAIL)
  */
-export async function rehearse({ dbFile, workDir, migrations = MIGRATIONS }) {
+export async function rehearse({ dbFile, workDir, migrations = MIGRATIONS, ownerEmail = process.env.SAS_OWNER_EMAIL }) {
   const copy = await backupDatabase({ dbFile, dir: workDir });
   const db = new DatabaseSync(copy.file);
   const steps = [];
@@ -79,20 +80,17 @@ export async function rehearse({ dbFile, workDir, migrations = MIGRATIONS }) {
     } catch (err) {
       steps.push({ id: 'startup schema', ok: false, error: String(/** @type {Error} */ (err).message ?? err) });
     }
-    for (const m of migrations) {
-      db.exec('BEGIN');
-      try {
-        m.up(db);
-        db.exec('COMMIT');
-        steps.push({ id: m.id, ok: true });
-      } catch (err) {
-        db.exec('ROLLBACK');
-        steps.push({ id: m.id, ok: false, error: String(/** @type {Error} */ (err).message ?? err) });
-      }
+    try {
+      for (const id of applyMigrations(db, { migrations, ownerEmail })) steps.push({ id, ok: true });
+    } catch (err) {
+      // One transaction: the failing migration is named, and every one of them was rolled back.
+      const e = /** @type {Error & { migration?: string }} */ (err);
+      steps.push({ id: e.migration || 'migrations', ok: false, error: String(e.cause?.message ?? e.message ?? e) });
     }
     after = describe(db);
     const integrity = /** @type {{ integrity_check: string }} */ (db.prepare('PRAGMA integrity_check').get()).integrity_check;
     const foreignKeys = db.prepare('PRAGMA foreign_key_check').all().length;
+    const ownership = hasTable(db, 'users') ? ownershipProblems(db) : [];
 
     const lostTables = Object.keys(before).filter((t) => !after[t]);
     const lostColumns = Object.keys(before).flatMap((t) => (after[t] ? before[t].columns.filter((c) => !after[t].columns.includes(c)).map((c) => `${t}.${c}`) : []));
@@ -104,9 +102,9 @@ export async function rehearse({ dbFile, workDir, migrations = MIGRATIONS }) {
     const unknownColumns = Object.keys(before).flatMap((t) => before[t].columns.filter((c) => !known[t]?.columns.includes(c)).map((c) => `${t}.${c}`));
     const unknownTables = Object.keys(before).filter((t) => !known[t]);
     const ok = steps.every((s) => s.ok) && !lostTables.length && !lostColumns.length && !rowChanges.length && !idChanges.length
-      && integrity === 'ok' && foreignKeys === 0;
+      && integrity === 'ok' && foreignKeys === 0 && !ownership.length;
     return {
-      ok, copy: copy.file, steps, integrity, foreignKeyProblems: foreignKeys,
+      ok, copy: copy.file, steps, integrity, foreignKeyProblems: foreignKeys, ownership,
       lostTables, lostColumns, rowChanges, idChanges, addedTables, addedColumns, unknownTables, unknownColumns,
       tables: Object.fromEntries(Object.entries(after).map(([t, i]) => [t, { rows: i.rows, rowsBefore: before[t]?.rows ?? null }])),
     };

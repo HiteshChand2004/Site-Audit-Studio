@@ -5,7 +5,7 @@
 //
 // Usage:
 //   npm run db:rehearse -w server                    the configured database (SAS_DATA_DIR)
-//   npm run db:rehearse -w server -- --db <file> [--keep] [--json]
+//   npm run db:rehearse -w server -- --db <file> [--owner you@example.com] [--keep] [--json]
 import { mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { rehearse } from '../src/db/rehearse.js';
@@ -20,7 +20,7 @@ const flag = (name) => process.argv.includes(`--${name}`);
 const dbFile = arg('db', DB_FILE);
 const workDir = await mkdtemp(path.join(tempDir(), 'sas-rehearse-'));
 try {
-  const r = await rehearse({ dbFile, workDir });
+  const r = await rehearse({ dbFile, workDir, ownerEmail: arg('owner', process.env.SAS_OWNER_EMAIL) });
   if (flag('json')) console.log(JSON.stringify(r, null, 1));
   else {
     console.log(`Rehearsal of ${dbFile} on a copy (${r.copy})`);
@@ -35,6 +35,7 @@ try {
     line('added columns', r.addedColumns);
     line('columns this code does not know (another branch?)', r.unknownColumns);
     line('tables this code does not know', r.unknownTables);
+    line('ownership problems', r.ownership);
     console.log(`  integrity: ${r.integrity}, foreign-key problems: ${r.foreignKeyProblems}`);
     console.log(r.ok ? 'Rehearsal passed: nothing would be lost.' : 'Rehearsal FAILED: see above. Nothing was changed in the source.');
   }

@@ -129,7 +129,7 @@ test('the rehearsal applies the server\'s schema to a copy and proves nothing wa
   const work = await mkdtemp(path.join(os.tmpdir(), 'sas-stage0-work-'));
   t.after(() => rm(work, { recursive: true, force: true }));
 
-  const r = await rehearse({ dbFile: file, workDir: work });
+  const r = await rehearse({ dbFile: file, workDir: work, ownerEmail: 'owner@example.com' });
   assert.equal(r.ok, true, JSON.stringify(r));
   assert.deepEqual(r.unknownColumns, ['projects.mirror_mode'], 'a column another branch added is named');
   assert.ok(r.addedTables.includes('analyses') && r.addedColumns.includes('projects.page_url'), 'the startup schema brought an older database up to date');

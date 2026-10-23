@@ -38,6 +38,30 @@ are allowed. The user's dev server (4000 / 5173) runs from `Website-Audit-exact`
   reaudit, recreate-export, recreate-jobs, report, screens, shared-cache, single-page). `netGuard.test.js`: its two known Windows
   failures (`*.localhost` DNS), nothing new.
 
+## Stage 1 — done (accounts data model, dormant; applied to the real database 2026-10-23)
+
+- **Migrations** (`server/src/db/migrations.js`), additive only, no assumption about existing columns, each safe to run twice:
+  `2026-10-23-accounts-tables` = `users` (id, email unique lower-cased, password_hash nullable, role `user` | `owner`,
+  email_verified_at, timestamps), `sessions` (id, user_id → users, **token_hash** unique — the token itself is never stored —,
+  created / expires / last_seen, user_agent), `email_codes` (id, user_id, email, purpose, code_hash, attempts, created / expires /
+  used), `projects.owner_id TEXT REFERENCES users(id)` nullable with **no ON DELETE action** (deleting a user who owns projects
+  fails; deleting a project works as before; a project created the old way still inserts with no owner) + index.
+  `2026-10-23-accounts-owner` = the owner account from `SAS_OWNER_EMAIL` (role `owner`, no password yet) and every project
+  with no owner given to it; without a valid address it fails.
+- **One transaction** (`db/apply.js applyMigrations`): every pending migration + its row in `schema_migrations` in one
+  `BEGIN IMMEDIATE`; a failure anywhere rolls all of it back (tested: the database's schema and counts identical afterwards).
+  The rehearsal (`db/rehearse.js`) now uses the same function on its copy and also checks ownership (`ownershipProblems`: no
+  unowned project, no dangling owner, an owner exists).
+- **`npm run db:migrate -w server [-- --owner <email>]`** (`db/migrate.js migrateDatabase`): refuses while something listens on
+  the API port; checked backup → rehearsal on a scratch copy (must pass) → apply in one transaction → row counts before / after,
+  integrity, foreign keys, ownership. The server never migrates by itself at startup: with `SAS_ACCOUNTS` off nothing reads the
+  new tables, and `toProject` leaves `owner_id` out of the API, so the app gets exactly what it got before.
+- **Real database** (`Site-Audit-Studio-maindataapp.db`): backup `dataackupsapp-2026-10-23T06-08-26.db` (17.5 MB), rehearsal
+  passed, then `db:migrate` (its own backup `app-2026-10-23T06-08-39.db`) applied both migrations. Counts before = after:
+  projects 10, analyses 53, recreates 79, reaudits 65; new: users 1 (owner chadinesh228@gmail.com), sessions 0, email_codes 0,
+  schema_migrations 2; 0 projects without owner; `mirror_mode` kept; integrity ok.
+- Tests: `stage1.test.js` (5), `stage0.test.js` (8, rehearsal now given an owner), `single-page.test.js` (5).
+
 ## Findings recorded for later stages
 
 ### Schema drift across branches (item 6)

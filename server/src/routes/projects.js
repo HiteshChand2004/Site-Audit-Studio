@@ -18,7 +18,12 @@ export const STACKS = stackIds();
 
 const router = Router();
 
-const toProject = (row) => row && { ...row, authorized: Boolean(row.authorized), exact_mode: Boolean(row.exact_mode) };
+// owner_id (accounts, stage 1) is the server's business, not part of the project the app is sent.
+const toProject = (row) => {
+  if (!row) return row;
+  const { owner_id: _owner, ...rest } = row;
+  return { ...rest, authorized: Boolean(row.authorized), exact_mode: Boolean(row.exact_mode) };
+};
 
 function normalizeUrl(input) {
   if (typeof input !== 'string' || !input.trim()) return null;
