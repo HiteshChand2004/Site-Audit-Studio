@@ -201,11 +201,12 @@ test('verification required (flag off): sign-up makes an unverified account the 
   const wal = await readFile(path.join(dataDir, 'app.db-wal')).then((b) => b.toString('latin1'), () => '');
   assert.equal((raw + wal).includes(token), false, 'the session token is not in the database');
 
-  // The code (no mail module yet: in the server log).
+  // The code: without SMTP_HOST the mail goes to the server log (development only; otp.test.js covers the real sending).
+  assert.match(s.output(), /Mail: no SMTP_HOST set/);
   assert.equal((await s.call('POST', '/api/auth/verify', { code: '000000' })).json.reason ?? 'wrong', 'wrong');
-  const code = s.output().match(/verification code for test@example\.com: (\d{6})/)?.[1];
+  const code = s.output().match(/\[mail\] \(not sent: no SMTP_HOST\) to test@example\.com — (\d{6}) is your Remastly verification code/)?.[1];
   assert.ok(code, s.output());
-  assert.equal((await s.call('POST', '/api/auth/verify/send')).status, 429, 'a new code at most once a minute');
+  assert.equal((await s.call('POST', '/api/auth/verify/send')).status, 404, 'there is no resend');
   const ok = await s.call('POST', '/api/auth/verify', { code });
   assert.equal(ok.status, 200, JSON.stringify(ok.json));
   assert.equal(ok.json.user.verified, true);
