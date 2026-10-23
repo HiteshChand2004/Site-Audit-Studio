@@ -29,6 +29,10 @@ const RULES = [
   { id: 'number', label: 'A number', test: (p: string) => /\d/.test(p) },
 ];
 
+/** What the API says about the code it emailed at sign-up (POST /auth/signup → verification). */
+type Verification = { sentTo: string; expiresAt?: string; expiresInMinutes?: number; attempts?: number };
+/** An API error: a sentence, the field it belongs to, and — for a code or a sign-in — what to do next. */
+type ApiError = { error?: string; field?: string; reason?: string; next?: 'signup'; triesLeft?: number; auth?: 'signin' | 'verify' };
 
 function check(mode: AuthMode, k: Key, v: Values): string {
   const val = v[k];
@@ -64,9 +68,13 @@ const at = (i: number) => ({ ['--i' as string]: i }) as CSSProperties;
  * - a valid submit shows a loading shimmer and sends the form with fetch to the tool's API (NEXT_PUBLIC_API_BASE, default /api, on
  *   this same origin: the session cookie it sets is the tool's session); when NEXT_PUBLIC_APP_URL is not set it says sign-in is
  *   not open and sends nothing; the name is stored with the account, the website to rebuild fills in the tool's first form;
- * - the server's own error is shown as it is: under its field when it names one (email, password), else as a notice;
+ * - the server's own error is shown as it is: under its field when it names one (email, password, code), else as a notice;
  * - signed in: the browser goes to the tool (?next= when the tool sent the visitor here, else NEXT_PUBLIC_APP_URL);
- * - an account that still has to confirm its email address is told so (the code step is not required yet; this is where it goes).
+ * - a new account must confirm its email: the API emails a six-digit code and the form turns into the code step (also when the
+ *   tool sends an unverified, signed-in visitor here with ?verify=1). The code lasts 10 minutes and allows 5 tries; there is no
+ *   resend and no password reset — when a code is dead the form says so and offers to start over, which is signing up again with
+ *   the same address (that is how a new code is sent). The API's sentences are shown as they are, nothing is promised that the
+ *   API does not do.
  * It never pretends anyone is signed in.
  */
 export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: { mode: AuthMode; site?: string; onSwitch: (m: AuthMode) => void; idPrefix?: string }) {
@@ -78,6 +86,13 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
   const [notice, setNotice] = useState('');
   const [noticeKind, setNoticeKind] = useState<'info' | 'error'>('info');
   const [serverErr, setServerErr] = useState<Partial<Record<Key, string>>>({});
+  // The code step: what was emailed, what is typed, the API's answer to it, and whether the code is dead (then: start over).
+  const [verification, setVerification] = useState<Verification | null>(null);
+  const [code, setCode] = useState('');
+  const [codeErr, setCodeErr] = useState('');
+  const [codeShake, setCodeShake] = useState(0);
+  const [codeDead, setCodeDead] = useState(false);
+  const [checking, setChecking] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
   const noticeRef = useRef<HTMLParagraphElement>(null);
   const live = Boolean(APP_URL);
@@ -87,6 +102,30 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
   useEffect(() => {
     if (notice) noticeRef.current?.focus({ preventScroll: true });
   }, [notice]);
+
+  // Sent here by the tool with ?verify=1: a signed-in account whose email is not confirmed yet. Ask the API who it is and open the
+  // code step for that address; anyone else (not signed in, or already verified) sees the ordinary form.
+  useEffect(() => {
+    if (!live || new URLSearchParams(window.location.search).get('verify') !== '1') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/auth/me`, { credentials: 'same-origin' });
+        const data = (await res.json().catch(() => null)) as { user?: { email?: string; verified?: boolean } } | null;
+        if (cancelled || !res.ok || !data?.user?.email || data.user.verified) return;
+        setValues((s) => ({ ...s, email: data.user!.email! }));
+        setVerification({ sentTo: data.user.email });
+        setPhase('verify');
+        showNotice(`${data.user.email} has not confirmed its email address yet. Enter the code from the email you were sent when the account was created. If that code has expired, start over below to get a new one.`, 'info');
+      } catch {
+        /* the ordinary form stays */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live]);
 
   const errorOf = (k: Key) => check(mode, k, values);
   const allValid = keys.every((k) => !errorOf(k));
@@ -120,6 +159,21 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
     setNotice(text);
   };
 
+  /** The API's error under its field (when it names one the form has), else as a notice. */
+  const showApiError = (data: ApiError | null, status: number) => {
+    const message = data?.error || `Something went wrong (${status}). Try again.`;
+    const field = data?.field as Key | undefined;
+    if (field && keys.includes(field)) {
+      setServerErr((s) => ({ ...s, [field]: message }));
+      setShown((s) => ({ ...s, [field]: true }));
+      setShake((s) => ({ ...s, [field]: (s[field] ?? 0) + 1 }));
+      formRef.current?.querySelector<HTMLElement>(`#${id(field)}`)?.focus();
+      setNotice('');
+    } else {
+      showNotice(message, 'error');
+    }
+  };
+
   /** Sign in or sign up through the tool's API. The server decides; its message is shown as it is. */
   const send = async () => {
     const started = Date.now();
@@ -136,31 +190,109 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
       showNotice('The app could not be reached. Check your connection and try again.', 'error');
       return;
     }
-    const data = (await res.json().catch(() => null)) as { error?: string; field?: string; user?: { verified?: boolean } } | null;
+    const data = (await res.json().catch(() => null)) as (ApiError & { user?: { email?: string; verified?: boolean }; verification?: Verification }) | null;
     // Keep the shimmer on for a moment, so a fast answer does not flash.
     await new Promise((r) => window.setTimeout(r, Math.max(0, LOADING_MS - (Date.now() - started))));
     if (!res.ok || !data?.user) {
       setPhase('idle');
-      const message = data?.error || `Something went wrong (${res.status}). Try again.`;
-      const field = data?.field as Key | undefined;
-      if (field && keys.includes(field)) {
-        setServerErr((s) => ({ ...s, [field]: message }));
-        setShown((s) => ({ ...s, [field]: true }));
-        setShake((s) => ({ ...s, [field]: (s[field] ?? 0) + 1 }));
-        formRef.current?.querySelector<HTMLElement>(`#${id(field)}`)?.focus();
-        setNotice('');
-      } else {
-        showNotice(message, 'error');
+      if (data?.auth === 'verify' && data.next === 'signup') {
+        // Signing in with an account that never confirmed its email: the API refuses, and the way back in is a new sign-up.
+        setCodeDead(true);
+        showNotice(data.error || 'This account has not confirmed its email address yet. Create the account again with the same email address to get a new code.', 'error');
+        return;
       }
+      showApiError(data, res.status);
       return;
     }
     if (!data.user.verified) {
-      // Room for the email code step: the account exists and is signed in, but the tool lets it in only once verified.
+      // The account exists and is signed in, but the tool lets it in only once the emailed code is entered.
+      setVerification(data.verification ?? { sentTo: values.email.trim() });
+      setCode('');
+      setCodeErr('');
+      setCodeDead(false);
       setPhase('verify');
-      showNotice(`Your account is created. Confirm ${values.email.trim()} to continue: email confirmation is not switched on yet, so this account waits until it is.`, 'info');
+      const v = data.verification;
+      showNotice(
+        `We emailed a six-digit code to ${v?.sentTo ?? values.email.trim()}. Enter it here to finish creating your account.` +
+          (v?.expiresInMinutes ? ` It expires in ${v.expiresInMinutes} minutes` : '') +
+          (v?.attempts ? ` and allows ${v.attempts} tries.` : v?.expiresInMinutes ? '.' : '') +
+          ' Codes cannot be re-sent: if it expires, start over to get a new one.',
+        'info',
+      );
       return;
     }
     window.location.assign(destination());
+  };
+
+  /** The code step: POST /auth/verify. Right → the tool. Wrong → under the field with the tries left. Dead → start over. */
+  const confirm = async () => {
+    const clean = code.replace(/\s+/g, '');
+    if (!/^\d{6}$/.test(clean)) {
+      setCodeErr('Enter the six-digit code from the email');
+      setCodeShake((n) => n + 1);
+      formRef.current?.querySelector<HTMLElement>(`#${id('code')}`)?.focus();
+      return;
+    }
+    setChecking(true);
+    setCodeErr('');
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE}/auth/verify`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: clean }),
+      });
+    } catch {
+      setChecking(false);
+      showNotice('The app could not be reached. Check your connection and try again.', 'error');
+      return;
+    }
+    const data = (await res.json().catch(() => null)) as (ApiError & { user?: { verified?: boolean } }) | null;
+    setChecking(false);
+    if (res.ok && data?.user?.verified) {
+      window.location.assign(destination());
+      return;
+    }
+    if (res.status === 401) {
+      // The session is gone (another sign-up with this address ended it, or it expired): only a new sign-up helps.
+      setCodeDead(true);
+      showNotice('You are no longer signed in, so this code cannot be checked. Start over to create the account again and get a new code.', 'error');
+      return;
+    }
+    if (data?.next === 'signup') {
+      // Expired, tried too often, already used, or never sent: the API says which, and that there is no resend.
+      setCodeDead(true);
+      setCode('');
+      showNotice(data.error || 'That code no longer works. To get a new code, create the account again with the same email address.', 'error');
+      return;
+    }
+    const message = data?.error || `Something went wrong (${res.status}). Try again.`;
+    setCodeErr(message);
+    setCodeShake((n) => n + 1);
+    setNotice('');
+    formRef.current?.querySelector<HTMLElement>(`#${id('code')}`)?.focus();
+  };
+
+  /**
+   * Start over = sign up again with the same address (the only way to a new code). In sign-up mode the email and name stay, the
+   * password is asked again; in sign-in mode the form switches to sign-up.
+   */
+  const startOver = () => {
+    if (mode !== 'signup') {
+      onSwitch('signup');
+      return;
+    }
+    setPhase('idle');
+    setVerification(null);
+    setCode('');
+    setCodeErr('');
+    setCodeDead(false);
+    setValues((s) => ({ ...s, password: '', confirm: '' }));
+    setShown((s) => ({ ...s, password: false, confirm: false }));
+    setServerErr({});
+    showNotice('Choose your password again and create the account: a new code will be emailed to you.', 'info');
+    window.setTimeout(() => formRef.current?.querySelector<HTMLElement>(`#${id('password')}`)?.focus(), 50);
   };
 
   const onBlur = (k: Key) => () => {
@@ -170,6 +302,10 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
 
   const onSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (phase === 'verify') {
+      if (!checking && !codeDead) void confirm();
+      return;
+    }
     if (phase === 'loading') return;
     const bad = reveal(keys);
     if (bad.length) {
@@ -183,11 +319,13 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
     }
     setNotice('');
     setServerErr({});
+    setCodeDead(false);
     setPhase('loading');
     void send();
   };
 
-  const forgot = () => showNotice('Password reset is not open yet.', 'info');
+  // There is no password reset (the user's decision): say so, rather than link to a page that does not exist.
+  const forgot = () => showNotice('Password reset is not available. If you cannot sign in, contact us.', 'info');
 
   /** Error to display: only once the field has been revealed (blur or submit); then it updates live. The server's comes after. */
   const err = (k: Key) => (shown[k] ? errorOf(k) || serverErr[k] || undefined : undefined);
@@ -195,6 +333,81 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
 
   const pw = values.password;
   let i = 0;
+
+  if (phase === 'verify') {
+    // The code step replaces the fields: one six-digit field, the facts, Confirm — and Start over once the code is dead.
+    return (
+      <form ref={formRef} className="auth-form" noValidate onSubmit={onSubmit}>
+        <div className="auth-grid">
+          <div className="auth-grid__full" style={at(i++)}>
+            <TextField
+              id={id('code')}
+              name="code"
+              type="text"
+              label={`Code from the email to ${verification?.sentTo ?? values.email.trim()}`}
+              required
+              autoComplete="one-time-code"
+              inputMode="numeric"
+              placeholder="6 digits"
+              maxLength={7}
+              value={code}
+              disabled={codeDead || checking}
+              onChange={(e) => {
+                setCode(e.currentTarget.value);
+                if (codeErr) setCodeErr('');
+              }}
+              error={codeErr || undefined}
+              shake={codeShake}
+            />
+          </div>
+        </div>
+
+        <div className="auth-foot" style={at(i++)}>
+          <div className="auth-foot__meta">
+            <p className="auth-req">
+              {codeDead
+                ? 'This code no longer works. Codes cannot be re-sent.'
+                : `The code expires ${verification?.expiresInMinutes ? `in ${verification.expiresInMinutes} minutes` : 'soon'}${verification?.attempts ? ` and allows ${verification.attempts} tries` : ''}. Codes cannot be re-sent.`}
+            </p>
+          </div>
+          {codeDead ? (
+            <Button type="button" arrow className="auth-submit" onClick={startOver}>
+              Start over
+            </Button>
+          ) : (
+            <Button type="submit" arrow={!checking} aria-disabled={checking ? true : undefined} aria-busy={checking || undefined} className="auth-submit" data-loading={checking || undefined}>
+              {checking ? (
+                <>
+                  <span className="btn-load" aria-hidden="true">
+                    <i />
+                  </span>
+                  <span className="visually-hidden">Checking…</span>
+                </>
+              ) : (
+                'Confirm'
+              )}
+            </Button>
+          )}
+        </div>
+
+        {notice && (
+          <p ref={noticeRef} tabIndex={-1} className="auth-notice" role={noticeKind === 'error' ? 'alert' : 'status'} data-kind={noticeKind}>
+            <Info size={16} aria-hidden="true" />
+            <span>{notice}</span>
+          </p>
+        )}
+
+        <p className="auth-switch" style={at(i++)}>
+          {codeDead ? 'Starting over creates the account again with the same email and sends a new code.' : 'Typed the wrong email?'}{' '}
+          {!codeDead && (
+            <button type="button" className="link-btn link-btn--strong" onClick={startOver}>
+              Start over
+            </button>
+          )}
+        </p>
+      </form>
+    );
+  }
 
   return (
     <form ref={formRef} className="auth-form" noValidate onSubmit={onSubmit}>
@@ -253,7 +466,6 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
             shake={shake.password}
             aside={
               mode === 'signin' ? (
-                // No reset in the tool yet (it needs email): say so rather than link to a page that does not exist.
                 <button type="button" className="link-btn tf__aside" onClick={forgot}>
                   Forgot password?
                 </button>
@@ -304,6 +516,7 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
           {mode === 'signup' && (
             <p className="auth-legal">
               By signing up you agree to our <Link href="/terms">Terms</Link> and <Link href="/privacy">Privacy policy</Link>.
+              {live && ' We will email you a six-digit code to confirm your address.'}
             </p>
           )}
         </div>
@@ -328,7 +541,15 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
           <Info size={16} aria-hidden="true" />
           <span>
             {notice}
-            {noticeKind === 'info' && phase !== 'verify' && (
+            {codeDead && mode === 'signin' && (
+              <>
+                {' '}
+                <button type="button" className="link-btn link-btn--strong" onClick={startOver}>
+                  Create the account again
+                </button>
+              </>
+            )}
+            {noticeKind === 'info' && !codeDead && (
               <>
                 {' '}
                 <Link href="/contact">Contact us</Link>
