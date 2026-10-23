@@ -3,7 +3,9 @@
 // HTML off shows) and a small HTML page in the marketing site's light theme (its colours and type from remastly-website:
 // #FAFAF7 base, white card, #111 ink, the orange only as an accent) with the Remastly logo at the top. The logo is the PNG in
 // server/assets/mail (Gmail does not draw SVG), embedded as an inline attachment the HTML addresses as cid:… — the mail fetches
-// nothing: no remote picture, no link, no tracking pixel.
+// nothing: no remote picture, no link, no tracking pixel. The PNG carries its own white card (padding, rounded corners), because a
+// client in dark mode (the Gmail app among them) paints the mail's background black and ignores much of its CSS: dark ink on a
+// transparent logo vanished there. The head also says the mail is light only, for the clients that listen.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { CODE_ATTEMPTS, CODE_MINUTES } from './policy.js';
@@ -13,10 +15,10 @@ export const SUBJECT = `Your ${PRODUCT} verification code`;
 export const LOGO_CID = 'remastly-logo@remastly';
 
 const LOGO_FILE = fileURLToPath(new URL('../../assets/mail/remastly-logo.png', import.meta.url));
-/** Read once; 360 × 63 px, drawn at half size so it stays sharp on dense screens. */
+/** Read once; 416 × 104 px (the 360 × 63 logo on its white card), drawn at half size so it stays sharp on dense screens. */
 const LOGO_PNG = readFileSync(LOGO_FILE);
-const LOGO_WIDTH = 160;
-const LOGO_HEIGHT = 28;
+const LOGO_WIDTH = 208;
+const LOGO_HEIGHT = 52;
 
 // The site's theme (app/theme.css + lib/accent.ts of remastly-website), as literal colours: email clients read no custom properties.
 const C = { bg: '#fafaf7', card: '#ffffff', line: '#e8e6e0', codeBg: '#f6f5f1', text: '#111111', text2: '#3d3c38', muted: '#6b6a65', accent: '#c2410c' };
@@ -60,9 +62,10 @@ function htmlOf(l) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light">
+<meta name="color-scheme" content="light only">
 <meta name="supported-color-schemes" content="light">
 <title>${escapeHtml(SUBJECT)}</title>
+<style>:root{color-scheme:light only;supported-color-schemes:light;}</style>
 </head>
 <body style="margin:0;padding:0;background:${C.bg};-webkit-text-size-adjust:100%;">
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:${C.bg};">

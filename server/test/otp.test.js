@@ -317,7 +317,9 @@ test('sign-up emails a code; wrong, exhausted, expired and used codes are refuse
   assert.match(html1.body, new RegExp(`>${code1}<`), 'the code is one copyable run of digits in the HTML');
   assert.match(html1.body, /This code expires in 10 minutes\./);
   assert.match(html1.body, /If you didn(&#39;|')t sign up for Remastly, you can ignore this email\./);
-  assert.match(html1.body, /<img src="cid:remastly-logo@remastly" width="160" height="28" alt="Remastly"/, 'the logo comes from the inline part');
+  assert.match(html1.body, /<img src="cid:remastly-logo@remastly" width="208" height="52" alt="Remastly"/, 'the logo comes from the inline part');
+  assert.match(html1.body, /<meta name="color-scheme" content="light only">\s*<meta name="supported-color-schemes" content="light">/, 'the mail says it is light only');
+  assert.match(html1.body, /<style>:root\{color-scheme:light only;supported-color-schemes:light;\}<\/style>/);
   assert.doesNotMatch(html1.body, /https?:|<a\b|<script|src="(?!cid:)/i, 'no external link, picture, pixel or script');
   assert.equal(logo1.headers['content-id'], '<remastly-logo@remastly>');
   assert.match(logo1.headers['content-disposition'], /^inline/);

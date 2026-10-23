@@ -183,8 +183,9 @@ are allowed. The user's dev server (4000 / 5173) runs from `Website-Audit-exact`
   HTML alternative that say the same (multipart/alternative; a client with HTML off reads the text). The HTML is the marketing
   site's light theme (#FAFAF7 base, white card, #111 ink, the orange as a top rule), the logo at the top, the code large in
   monospace as one copyable run of digits, "This code expires in 10 minutes", the tries / no-resend line small, and "If you
-  didn't sign up for Remastly, you can ignore this email." The logo is `server/assets/mail/remastly-logo.png` (a 360 × 63 PNG made
-  from the marketing site's `public/logo.png`; Gmail draws no SVG), shipped as an **inline CID attachment** (multipart/related),
+  didn't sign up for Remastly, you can ignore this email." The logo is `server/assets/mail/remastly-logo.png` (a 416 × 104 PNG: the marketing site's `public/logo.png`
+  on a white card with padding and rounded corners, so it stays readable when a dark-mode client paints the mail black; the head also
+  declares the mail light only; Gmail draws no SVG), shipped as an **inline CID attachment** (multipart/related),
   so the mail fetches nothing: no remote picture, no link, no tracking pixel. `accounts/policy.js` holds `CODE_MINUTES` /
   `CODE_ATTEMPTS` without the database behind them (re-exported by `store.js`), so the template and `mail:test` can read them.
 - **Codes** (`accounts/store.js`): six digits from `crypto.randomInt`, only `sha256(<row id>:<code>)` stored, **10 minutes**,
