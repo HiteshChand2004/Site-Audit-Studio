@@ -12,15 +12,16 @@ export const CODE_ATTEMPTS = 5;
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const iso = (ms = Date.now()) => new Date(ms).toISOString();
 
-/** @typedef {{ id: string, email: string, password_hash: string | null, role: string, email_verified_at: string | null, created_at: string, updated_at: string }} UserRow */
+/** @typedef {{ id: string, email: string, name: string | null, password_hash: string | null, role: string, email_verified_at: string | null, created_at: string, updated_at: string }} UserRow */
 
 /** What the app is told about an account: never the password hash. */
-export const publicUser = (/** @type {UserRow} */ u) => ({ id: u.id, email: u.email, role: u.role, verified: Boolean(u.email_verified_at), createdAt: u.created_at });
+export const publicUser = (/** @type {UserRow} */ u) => ({ id: u.id, email: u.email, name: u.name ?? null, role: u.role, verified: Boolean(u.email_verified_at), createdAt: u.created_at });
 
 // --- users ------------------------------------------------------------------------------------------------------------------
 const byEmail = db.prepare('SELECT * FROM users WHERE email = ?');
 const byId = db.prepare('SELECT * FROM users WHERE id = ?');
-const insertUser = db.prepare("INSERT INTO users (id, email, password_hash, role, email_verified_at, created_at, updated_at) VALUES (?, ?, ?, 'user', ?, ?, ?)");
+const insertUser = db.prepare("INSERT INTO users (id, email, name, password_hash, role, email_verified_at, created_at, updated_at) VALUES (?, ?, ?, ?, 'user', ?, ?, ?)");
+const setName = db.prepare('UPDATE users SET name = ?, updated_at = ? WHERE id = ?');
 const setPassword = db.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?');
 const setVerified = db.prepare('UPDATE users SET email_verified_at = ?, updated_at = ? WHERE id = ?');
 
@@ -30,10 +31,10 @@ export const findUserByEmail = (email) => /** @type {any} */ (byEmail.get(email)
 export const findUser = (id) => /** @type {any} */ (byId.get(id));
 
 /** @param {{ email: string, passwordHash: string, verified: boolean }} o @returns {UserRow} */
-export function createUser({ email, passwordHash, verified }) {
+export function createUser({ email, name = null, passwordHash, verified }) {
   const id = randomUUID();
   const now = iso();
-  insertUser.run(id, email, passwordHash, verified ? now : null, now, now);
+  insertUser.run(id, email, name, passwordHash, verified ? now : null, now, now);
   return /** @type {UserRow} */ (findUser(id));
 }
 
@@ -42,12 +43,13 @@ export function createUser({ email, passwordHash, verified }) {
  * sessions (whoever verifies the address keeps it). This is also how the owner account (made by db:migrate, no password) is taken.
  * @param {string} userId @param {{ passwordHash: string, verified: boolean }} o
  */
-export function reclaimUser(userId, { passwordHash, verified }) {
+export function reclaimUser(userId, { passwordHash, verified, name = null }) {
   const now = iso();
   db.exec('BEGIN IMMEDIATE');
   try {
     setPassword.run(passwordHash, now, userId);
     if (verified) setVerified.run(now, now, userId);
+    if (name) setName.run(name, now, userId);
     deleteUserSessions.run(userId);
     db.exec('COMMIT');
   } catch (err) {

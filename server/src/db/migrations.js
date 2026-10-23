@@ -85,4 +85,11 @@ export const MIGRATIONS = [
       db.prepare('UPDATE projects SET owner_id = ? WHERE owner_id IS NULL').run(owner.id);
     },
   },
+  {
+    // Stage 4: the name the sign-up form asks for is kept (it was asked for and dropped). Nullable: earlier accounts have none.
+    id: '2026-10-23-users-name',
+    up(db) {
+      if (!hasColumn(db, 'users', 'name')) db.exec('ALTER TABLE users ADD COLUMN name TEXT');
+    },
+  },
 ];

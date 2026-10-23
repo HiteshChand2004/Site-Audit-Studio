@@ -1,7 +1,7 @@
 // @ts-check
 // /api/auth — sign-up, sign-in, sign-out, who am I, and email verification. Mounted only while SAS_ACCOUNTS=1 (src/index.js).
 //
-//   POST /signup   { email, password }  → 201 { user }   + session cookie. Verified at once only under SAS_DEV_NO_VERIFY
+//   POST /signup   { email, password, name? } → 201 { user } + session cookie. Verified at once only under SAS_DEV_NO_VERIFY
 //                                                         (config/index.js devNoVerify); otherwise unverified, and a code is sent.
 //   POST /login    { email, password }  → 200 { user }   + a new session cookie;  401 for a wrong email or password (one message)
 //   POST /logout                        → 204            session removed, cookie cleared
@@ -26,6 +26,17 @@ const router = Router();
 const signins = limiter({ max: 10, windowMs: 15 * 60_000 }); // failed sign-ins per address + IP
 const signups = limiter({ max: 20, windowMs: 60 * 60_000 }); // sign-ups per IP
 const RESEND_MS = 60_000;
+const NAME_MAX = 80;
+
+/** The name as given (trimmed, inner spaces collapsed), null when none was given, or false when it cannot be one. */
+function cleanName(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') return false;
+  const name = value.normalize('NFC').replace(/\s+/g, ' ').trim();
+  if (!name) return null;
+  if (name.length > NAME_MAX || /[\u0000-\u001f\u007f<>]/.test(name)) return false;
+  return name;
+}
 
 const fail = (res, status, error, extra = {}) => res.status(status).json({ error, ...extra });
 const wait = (res, seconds) => { res.set('Retry-After', String(seconds)); return fail(res, 429, `Too many tries. Try again in ${Math.ceil(seconds / 60)} minute(s).`); };
@@ -45,6 +56,8 @@ router.post('/signup', async (req, res) => {
   if (!email) return fail(res, 400, 'Enter a valid email address.', { field: 'email' });
   const problem = passwordProblem(req.body?.password);
   if (problem) return fail(res, 400, problem, { field: 'password' });
+  const name = cleanName(req.body?.name);
+  if (name === false) return fail(res, 400, `Use up to ${NAME_MAX} letters and spaces for your name.`, { field: 'name' });
   signups.hit(ip);
 
   const verified = devNoVerify();
@@ -53,7 +66,7 @@ router.post('/signup', async (req, res) => {
   if (existing?.email_verified_at) {
     return fail(res, 409, 'An account with this email already exists. Sign in instead.', { field: 'email' });
   }
-  const user = existing ? reclaimUser(existing.id, { passwordHash, verified }) : createUser({ email, passwordHash, verified });
+  const user = existing ? reclaimUser(existing.id, { passwordHash, verified, name }) : createUser({ email, name, passwordHash, verified });
   const { token } = createSession(user.id, { userAgent: req.get('user-agent') });
   setSessionCookie(res, token);
   const out = { user: publicUser(user) };

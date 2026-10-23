@@ -45,6 +45,15 @@ function useSidebarCollapsed() {
   return [collapsed, setCollapsed];
 }
 
+/** ?site= in the address (the sign-up form's optional "Website to rebuild"), or ''. */
+function siteFromUrl() {
+  try {
+    return (new URLSearchParams(window.location.search).get('site') ?? '').trim().slice(0, 2000);
+  } catch {
+    return '';
+  }
+}
+
 export default function AppShell() {
   const load = useProjects((s) => s.load);
   const refreshSelected = useProjects((s) => s.refreshSelected);
@@ -66,7 +75,16 @@ export default function AppShell() {
   const auditLoading = useProjects((s) => s.auditLoading);
   const project = useSelectedProject();
 
-  const [newOpen, setNewOpen] = useState(false);
+  // "Website to rebuild" from the sign-up form arrives as /app/?site=<address>: the Add a website form opens with it filled
+  // in (still to be confirmed, authorization box included), and the address leaves the URL so a reload does not ask again.
+  const [newOpen, setNewOpen] = useState(() => Boolean(siteFromUrl()));
+  const [newUrl] = useState(siteFromUrl);
+  useEffect(() => {
+    if (!siteFromUrl()) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('site');
+    window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+  }, []);
   // The settings dialog: null = closed, 'settings' = Change settings, 'before-create' = the new site's address is asked before a copy is made.
   const [stackMode, setStackMode] = useState(null);
   const [reportOpen, setReportOpen] = useState(false);
@@ -129,7 +147,7 @@ export default function AppShell() {
         )}
       </div>
 
-      <NewProjectModal open={newOpen} onClose={() => setNewOpen(false)} />
+      <NewProjectModal open={newOpen} initialUrl={newUrl} onClose={() => setNewOpen(false)} />
       {project && (
         <StackModal open={Boolean(stackMode)} askAddress={stackMode === 'before-create'} onClose={() => setStackMode(null)} project={project} />
       )}

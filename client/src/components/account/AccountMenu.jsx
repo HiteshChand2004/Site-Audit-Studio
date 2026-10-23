@@ -89,7 +89,8 @@ function ChangePasswordModal({ open, onClose }) {
 }
 
 /**
- * The signed-in account at the foot of the sidebar: its address, Change password, Sign out. Shows nothing when the API runs
+ * The signed-in account at the foot of the sidebar: its name (the address when it has none; the address on hover), Change
+ * password, Sign out. Shows nothing when the API runs
  * without accounts (getMe → null), so the single-user tool looks as it always did.
  */
 export default function AccountMenu({ compact = false }) {
@@ -112,7 +113,7 @@ export default function AccountMenu({ compact = false }) {
   if (compact) {
     return (
       <div className={styles.rail}>
-        <button type="button" className={styles.icon} title={`Signed in as ${user.email} — sign out`} aria-label={`Sign out ${user.email}`} onClick={signOut}>
+        <button type="button" className={styles.icon} title={`Signed in as ${user.name || user.email} — sign out`} aria-label={`Sign out ${user.name || user.email}`} onClick={signOut}>
           <LogOut size={16} />
         </button>
       </div>
@@ -123,7 +124,7 @@ export default function AccountMenu({ compact = false }) {
     <div className={styles.account}>
       <p className={styles.who} title={user.email}>
         <UserRound size={14} aria-hidden="true" />
-        <span className={styles.email}>{user.email}</span>
+        <span className={styles.email}>{user.name || user.email}</span>
       </p>
       <div className={styles.actions}>
         <button type="button" className={styles.action} onClick={() => setChanging(true)}>

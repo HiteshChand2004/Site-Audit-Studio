@@ -242,9 +242,13 @@ test('SAS_DEV_NO_VERIFY on (local): a visible line at start, sign-up verified at
   assert.equal(s.ready, true, s.output());
   assert.match(s.output(), /!!! SAS_DEV_NO_VERIFY is ON: new accounts are marked verified on sign-up without any email/);
 
-  const up = await s.call('POST', '/api/auth/signup', { email: 'dev@example.com', password: 'longenough' });
+  const badName = await s.call('POST', '/api/auth/signup', { email: 'dev@example.com', password: 'longenough', name: '<script>' });
+  assert.deepEqual([badName.status, badName.json.field], [400, 'name']);
+  const up = await s.call('POST', '/api/auth/signup', { email: 'dev@example.com', password: 'longenough', name: '  Asha   Rao ' });
   assert.equal(up.status, 201);
   assert.equal(up.json.user.verified, true);
+  assert.equal(up.json.user.name, 'Asha Rao', 'the name the form asks for is kept (trimmed)');
+  assert.equal((await s.call('GET', '/api/auth/me')).json.user.name, 'Asha Rao');
   assert.equal('verification' in up.json, false);
   assert.equal((await s.call('GET', '/api/projects')).status, 200, 'straight in');
 

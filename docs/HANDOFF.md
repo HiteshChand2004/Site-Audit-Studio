@@ -391,6 +391,23 @@ Open, in the order to pick them up:
 6. **Step 5 — per-page fallback (not started).** A page below threshold: auto-repair known stack issues, else a clean rebuild of
    that page in the chosen stack with a time-boxed exact correction, keep the better. `copy/run.js` has the decision logic with
    fakes only.
+7. **BUG: the exact comparison's pictures always answer 404 (found 2026-10-23 during the accounts work, not fixed).**
+   `server/src/routes/recreate.js`, route `GET /api/projects/:id/recreate/:recreateId/exact/:slug/:file` (line ~277 on
+   `copy-my-site` and `accounts`, ~211 on `exact-mode`). Its file-name check lost every backslash when it was written
+   (commit b712d3d, 2026-10-10, "Exact mode A6" — the known regex trap of writing code through a shell heredoc):
+   `const EXACT_FILE = /^(copy-)?d{3,4}(xd{3,4})?(-b[1-3]|-full|-map|-crop[1-3]).webp$/;`
+   `d{3,4}` means the letter "d" three or four times, not digits, so a real name like `1440-full.webp` or `copy-1440x600-b1.webp`
+   never matches and the route returns 404 "Image not found." before it looks at the disk. The line under it that picks the
+   folder has the same loss: `/-(map|crop[1-3]).webp$/` (the dot matches any character; harmless there, but fix it too).
+   Intended: `/^(copy-)?\d{3,4}(x\d{3,4})?(-b[1-3]|-full|-map|-crop[1-3])\.webp$/` and `/-(map|crop[1-3])\.webp$/`.
+   Check the names against what the comparison writes: `server/src/recreate/verify/exact/compare.js` (`copyBand`, `mapFile`,
+   `cropFile`, `shootBands(…, \`copy-${slot.id}\`)`) and `capture/exact.js` (`bandFile`), e.g. `1440-b1.webp`, `1440x600-full.webp`,
+   `copy-1440-b2.webp`, `1440-map.webp`, `1440-crop3.webp`. Who sees it: the app's **Exact comparison** table
+   (`client/src/components/recreate/RecreateReport.jsx`, links "map" and the crops) — every link is a 404, so the pictures that
+   explain a failing slot have never been viewable. Fix generally, then add a route test that requests one file of each kind
+   from a fixture recreate folder (200, `image/webp`) and one bad name (404), so the regex can never silently match nothing
+   again. Also worth a sweep of server/src for other regex literals that lost their backslashes (a bare `d{`, `s+`, `w+` or
+   an unescaped `.webp` inside `/…/`).
 
 Also known: clean-rebuild captures taken between 19ddc59 (2026-10-18 08:58 UTC) and 10a665a have blank reference pictures; in the
 scratch corpus that is dreamhire d541c77b, parchaa 5543a393, flexibench dcecafc4 / fe1df206 (partly) and makememo 1fe625e9 (as-is
