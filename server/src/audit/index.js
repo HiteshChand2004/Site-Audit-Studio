@@ -159,7 +159,7 @@ async function fetchHome(url, scale = 1) {
   }
   if (isBotChallenge(home)) {
     throw new AnalysisError(
-      'The site answered with a bot-protection challenge (for example Cloudflare). Allowlist this server or pause the challenge for the audit; Site Audit Studio does not bypass bot protection.',
+      'The site answered with a bot-protection challenge (for example Cloudflare). Allowlist this server or pause the challenge for the audit; Remastly does not bypass bot protection.',
     );
   }
   if (home.status >= 400) throw new AnalysisError(`The homepage returned HTTP ${home.status}.`);

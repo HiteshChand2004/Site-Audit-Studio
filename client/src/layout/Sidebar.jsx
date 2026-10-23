@@ -141,7 +141,7 @@ export default function Sidebar({ onNewProject, collapsed = false, onToggle }) {
             <button type="button" className={styles.brand} onClick={goHome} title="All websites">
               <LogoMark size={30} />
               <span className={styles.brandText}>
-                <span className={styles.brandName}>Site Audit Studio</span>
+                <span className={styles.brandName}>Remastly</span>
                 <span className={styles.brandSub}>Check · copy · improve</span>
               </span>
             </button>

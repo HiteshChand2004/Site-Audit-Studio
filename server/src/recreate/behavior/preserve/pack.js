@@ -78,7 +78,7 @@ form data (multipart/form-data). No rebuild is needed: the setting is read when 
 function readme({ title, stack, slug, install, run, build, deploy, extra = [], forms = 0 }) {
   return `# ${title}
 
-A copy of ${slug.replace(/-/g, '.')} made with Site Audit Studio. Every page and file is the copy's own: it loads nothing from
+A copy of ${slug.replace(/-/g, '.')} made with Remastly. Every page and file is the copy's own: it loads nothing from
 the original site, and its service worker serves the files it has at the same addresses, so the copy also works offline.
 
 ## Install

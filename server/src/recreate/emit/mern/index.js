@@ -83,7 +83,7 @@ export function emitMern(ir, opts = {}) {
   files.set('README.md', lines(
     `# ${name}`,
     '',
-    'A MERN site recreated from the rendered output of the original website by Site Audit Studio: a React + Vite client',
+    'A MERN site recreated from the rendered output of the original website by Remastly: a React + Vite client',
     '(prerendered, then hydrated) and an Express server that serves it and stores form submissions in MongoDB.',
     '',
     '## Run',

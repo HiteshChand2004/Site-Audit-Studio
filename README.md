@@ -1,4 +1,4 @@
-# Site Audit Studio — Website Audit & Recreate Platform
+# Remastly — Website Audit & Recreate Platform
 
 Manage all company websites in one place: audit them (performance, SEO, AEO, accessibility, broken links, tech stack) and automatically recreate an improved version.
 

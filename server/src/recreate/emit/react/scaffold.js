@@ -184,7 +184,7 @@ export function scaffold({ ir, meta, pinned, overrides = {}, siteName }) {
   files.set('README.md', lines(
     `# ${name}`,
     '',
-    'A React + Vite site recreated from the rendered output of the original website by Site Audit Studio.',
+    'A React + Vite site recreated from the rendered output of the original website by Remastly.',
     '',
     '## Run',
     '',

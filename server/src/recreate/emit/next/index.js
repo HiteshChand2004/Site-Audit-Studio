@@ -214,7 +214,7 @@ export function emitNext(ir) {
   files.set('README.md', lines(
     `# ${name}`,
     '',
-    'A Next.js (App Router, static export) site recreated from the rendered output of the original website by Site Audit Studio.',
+    'A Next.js (App Router, static export) site recreated from the rendered output of the original website by Remastly.',
     '',
     '## Run',
     '',

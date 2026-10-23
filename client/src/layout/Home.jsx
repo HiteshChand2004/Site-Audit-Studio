@@ -282,7 +282,7 @@ export default function Home({ onNewProject }) {
       </section>
 
       <footer className={styles.foot}>
-        <span>Site Audit Studio · internal tool</span>
+        <span>Remastly · internal tool</span>
         <span>Speed, Google, accessibility and safety scores are measured with Google’s Lighthouse.</span>
       </footer>
     </div>

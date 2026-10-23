@@ -74,6 +74,10 @@ export default function AppShell() {
   const audit = useProjects((s) => s.audit);
   const auditLoading = useProjects((s) => s.auditLoading);
   const project = useSelectedProject();
+  // The tab title in the marketing site's form ("%s · Remastly"): the open website, else the list of them.
+  useEffect(() => {
+    document.title = project ? `${project.name} · Remastly` : 'Your websites · Remastly';
+  }, [project]);
 
   // "Website to rebuild" from the sign-up form arrives as /app/?site=<address>: the Add a website form opens with it filled
   // in (still to be confirmed, authorization box included), and the address leaves the URL so a reload does not ask again.

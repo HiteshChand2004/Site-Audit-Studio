@@ -246,7 +246,7 @@ export async function discoverPages({ url, limit, all = false, knownUrls = [], r
   if (home.error === 'blocked') throw new RecreateError(home.message);
   if (home.error || home.status >= 400) throw new RecreateError(`Could not load the homepage (${home.error || `HTTP ${home.status}`}).`);
   if (isBotChallenge(home)) {
-    throw new RecreateError('The site answered with a bot-protection challenge; Site Audit Studio does not bypass bot protection.');
+    throw new RecreateError('The site answered with a bot-protection challenge; Remastly does not bypass bot protection.');
   }
   if (!isHtml(home)) throw new RecreateError('The homepage is not an HTML page.');
 

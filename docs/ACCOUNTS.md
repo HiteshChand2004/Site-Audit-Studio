@@ -161,6 +161,13 @@ are allowed. The user's dev server (4000 / 5173) runs from `Website-Audit-exact`
 - Screenshots at 1440 next to the marketing site: scratchpad `compare/*.jpg` of the 2026-10-23 session (data: a read-only copy).
 - Tests: stage1, stage2 (+name), stage3: 18 / 18; client build passes; the marketing site's `tsc --noEmit` passes.
 
+- **Name and tab** (same step): the product reads "Remastly" wherever a user sees it (sidebar, home footer, README headline, the
+  bot-protection and canvas messages, the generated stylesheet header and the downloads' READMEs); SAS_* names, package / folder /
+  database / module names and the crawler user agents are unchanged. The tool's tab icon is the marketing site's own `/icon`
+  (`remastly-website/app/icon.tsx`) on the same origin — `vite-ignore` keeps Vite from moving it under `/app/` — so the two cannot
+  drift; theme colour #FAFAF7; tab title "<site> · Remastly" / "Your websites · Remastly". Checked in a headed Chromium: both tabs
+  load byte-identical icons.
+
 ## Findings recorded for later stages
 
 ### Schema drift across branches (item 6)
