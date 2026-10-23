@@ -122,3 +122,13 @@ test('KNOWN-ISSUES.md also lists every "still open" row with its reason or UNEXP
   assert.match(known.content, /## Still open: Title tag[\s\S]*What this means: The text is the owner's own[\s\S]*Reason: c — /);
   assert.match(known.content, /## Still open: Hover effects kept[\s\S]*Tried: no automatic fix yet[\s\S]*Reason: UNEXPLAINED/);
 });
+
+test('a sitemap, robots, llms.txt or canonical row that got worse with no new-site address: the owner decides (c); with an address it stays unexplained', () => {
+  const noAddress = { address: { used: null, detail: 'no address was given for the new site' } };
+  const r = worseOne({ key: 'crawl.sitemap', before: { detail: '/sitemap.xml · 64 URLs' }, after: { detail: '/sitemap.xml → 404' } }, noAddress);
+  assert.equal(r.reason, 'owner');
+  assert.match(r.evidence, /no address was given for the new site/);
+  assert.equal(worseOne({ key: 'aeo.llms-txt' }, noAddress).reason, 'owner');
+  assert.equal(worseOne({ key: 'crawl.sitemap', after: { detail: '/sitemap.xml → 404' } }, { address: { used: 'https://new.example.net' } }).unexplained, true);
+  assert.equal(worseOne({ key: 'crawl.sitemap', after: { detail: '/sitemap.xml → 404' } }).unexplained, true, 'without address information nothing is assumed');
+});

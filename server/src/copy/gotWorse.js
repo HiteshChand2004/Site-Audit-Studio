@@ -81,6 +81,12 @@ function explainOne(item, ctx) {
   if (key === 'links.broken-new') return plainNotCopied(byParts(item.links?.new ?? [], (l) => linkPart(l, ctx), 'link'), ctx, 'links');
   if (key === 'lighthouse.errors-in-console') return plainNotCopied(byParts(consoleErrors(ctx.newLhr), (e) => requestPart(e, ctx), 'console error'), ctx, 'prefetch');
   if (key.startsWith('lighthouse-score.')) return scorePart(item, ctx);
+  // The site files and links that name an address: the copy writes them for an address of its own, and without one leaves them
+  // out (the original's would list pages the copy does not hold). The same evidence as the "still open" rule, for a row that
+  // got worse (the original had the file, the copy has none).
+  if (/^(crawl\.(sitemap|robots)|aeo\.llms-txt|seo\.canonical-url)(\.|$)/.test(key) && ctx.address && !ctx.address.used) {
+    return { reason: 'owner', evidence: `${item.after?.detail ?? 'Missing in the copy.'} No new-site address was given for this copy (${ctx.address.detail ?? 'none set'}); the copy writes sitemap.xml, robots.txt, llms.txt and canonical links only for an address of its own, since the original's name the original site's pages. Give the address and create the copy again.` };
+  }
   if (key.startsWith('lighthouse.')) return lighthousePart(item, key.slice('lighthouse.'.length), ctx);
   if (key === 'axe.color-contrast') return contrastPart(ctx);
   return unexplained('No rule of the five reasons applies to this check on the evidence of this run.');

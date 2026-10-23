@@ -8,11 +8,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { compareLighthousePages, decide, lighthousePageItems, lighthousePagesNote, LEAD, medianScores, pageSlug, singleRunDecides, trimReport } from '../src/reaudit/lighthousePages.js';
 
-const report = (scores, { weight = 400000, lcp = 'img.hero', failing = {} } = {}) => ({
+const report = (scores, { weight = 400000, lcp = 'img.hero', failing = {}, dom = 900 } = {}) => ({
   fetchTime: '2026-10-23T10:00:00Z', requestedUrl: 'x', finalDisplayedUrl: 'x', environment: { benchmarkIndex: 1200 },
-  categories: Object.fromEntries(Object.entries(scores).map(([c, s]) => [c, { score: s == null ? null : s / 100 }])),
+  categories: Object.fromEntries(Object.entries(scores).map(([c, s]) => [c, { score: s == null ? null : s / 100, auditRefs: c === 'performance' ? [{ id: 'speed-index' }] : [] }])),
   audits: {
     'total-byte-weight': { score: 1, numericValue: weight },
+    'dom-size': { score: 1, numericValue: dom },
+    ...(scores.performance == null && { 'speed-index': { id: 'speed-index', scoreDisplayMode: 'error', errorMessage: 'Chrome did not collect any screenshots during the page load. (SPEEDINDEX_OF_ZERO)' } }),
     'largest-contentful-paint-element': { score: null, scoreDisplayMode: 'informative', details: { items: [{ items: [{ node: { selector: lcp, snippet: `<${lcp}>` } }] }] } },
     ...Object.fromEntries(Object.entries(failing).map(([id, urls]) => [id, { score: 0.3, title: id, details: { items: urls.map((url) => ({ url })) } }])),
   },
@@ -43,7 +45,7 @@ test('the rule: one run decides when the copy leads by 5 in every category; medi
   assert.ok(singleRunDecides({ scores: ALL(70, 90, 90, 90) }, { scores: ALL(75, 95, 95, 95) }));
   assert.ok(!singleRunDecides({ scores: ALL(70, 90, 90, 90) }, { scores: ALL(76, 94, 95, 95) }), 'one category only 4 ahead');
   assert.ok(!singleRunDecides({ scores: ALL(70) }, { scores: ALL(70) }));
-  assert.ok(singleRunDecides({ scores: { ...ALL(70, 90, 90, 90), seo: null } }, { scores: ALL(75, 95, 95, 95) }), 'a category one side lacks cannot block');
+  assert.ok(!singleRunDecides({ scores: { ...ALL(70, 90, 90, 90), seo: null } }, { scores: ALL(75, 95, 95, 95) }), 'a category a run could not score decides nothing: extra runs');
   assert.equal(LEAD, 5);
   assert.deepEqual(medianScores([{ scores: ALL(70) }, { scores: ALL(90) }, { scores: ALL(80) }]).performance, 80);
   assert.deepEqual(medianScores([{ scores: ALL(70) }, { scores: ALL(90) }]).performance, 80, 'an even count: the mean of the middle two');
@@ -137,4 +139,46 @@ test('a run that fails is listed for its page and mode, the rest is measured; pa
   const late = await compareLighthousePages({ pages: [{ path: '/', url: 'https://site.test/', copyUrl: 'http://127.0.0.1:5000/' }], cacheDir: `${cacheDir}-l`, outDir: `${outDir}-l`, run: good.run, deadline: Date.now() - 1 });
   assert.deepEqual(late.skipped, ['/ (mobile)', '/ (desktop)']);
   assert.deepEqual(late.pages[0].modes, {});
+});
+
+test('a run Lighthouse could not score, or in which the copy rendered a blank shell, is reported as "could not be scored" (recheck), never averaged into a median', { timeout: 30000 }, async (t) => {
+  // Phone: the copy's performance has no score in 2 of 3 runs (no screenshots during the load); the one scored run is 73 against
+  // the original's 80 — one number is not a median of three, so the row is a recheck, not "got worse".
+  const v = decide(
+    [{ scores: ALL(81, 90, 96, 85), domElements: 1054 }, { scores: ALL(80, 90, 96, 85), domElements: 1054 }, { scores: ALL(78, 90, 96, 85), domElements: 1054 }],
+    [{ scores: { ...ALL(null, 100, 96, 100) }, unscored: { performance: ['speed-index: no screenshots'] }, domElements: 1054 }, { scores: ALL(null, 100, 96, 100), unscored: { performance: ['speed-index: no screenshots'] }, domElements: 1054 }, { scores: ALL(73, 94, 96, 85), domElements: 1054 }],
+  );
+  assert.deepEqual(v.worse, [], 'performance is not compared, so it is not worse');
+  assert.deepEqual(v.unscored.performance, { copy: { runs: 2, of: 3, errors: ['speed-index: no screenshots'] } });
+  assert.equal(v.copy.performance, null);
+  assert.equal(v.copy.accessibility, 100, 'the categories every run scored are compared as before');
+
+  // A copy run that rendered 36 elements against the original's 1054 showed no page: a perfect accessibility score on it is about
+  // nothing, so that run is unscored in every category.
+  const b = decide([{ scores: ALL(80, 90, 96, 85), domElements: 1054 }], [{ scores: ALL(null, 100, 96, 100), unscored: { performance: ['speed-index: no screenshots'] }, domElements: 36 }]);
+  assert.deepEqual(Object.keys(b.unscored), ['performance', 'accessibility', 'best-practices', 'seo']);
+  assert.equal(b.blankRuns, 1);
+  assert.match(b.unscored.seo.copy.errors[0], /rendered 36 elements against the original's 1054/);
+  assert.deepEqual(b.worse, []);
+
+  // Through the comparison: recheck rows per unscored category, a pass row only for what was scored, the note says it.
+  const { cacheDir, outDir } = await dirs(t);
+  const { run } = fakeRunner({
+    original: { '/': { mobile: [report(ALL(81, 90, 96, 85)), report(ALL(80, 90, 96, 85)), report(ALL(78, 90, 96, 85))], desktop: [report(ALL(84, 90, 96, 85))] } },
+    copy: { '/': { mobile: [report(ALL(null, 100, 96, 100)), report(ALL(null, 100, 96, 100)), report(ALL(73, 94, 96, 85))], desktop: [report(ALL(null, 100, 96, 100), { dom: 36 })] } },
+  });
+  const r = await compareLighthousePages({ pages: [{ path: '/', url: 'https://site.test/', copyUrl: 'http://127.0.0.1:5000/' }], cacheDir, outDir, run });
+  assert.deepEqual(r.worse, []);
+  assert.equal(r.unscored.filter((u) => u.mode === 'mobile').length, 1);
+  assert.equal(r.unscored.filter((u) => u.mode === 'desktop').length, 4, 'a blank desktop run: every category');
+  const items = lighthousePageItems(r);
+  const recheck = items.filter((i) => i.status === 'recheck');
+  assert.equal(recheck.length, 5);
+  assert.match(recheck[0].title, /Performance score \(phone\) on \/: could not be scored/);
+  assert.match(recheck[0].after.detail, /the copy in 2 of 3 runs \(speed-index: Chrome did not collect any screenshots/);
+  const pass = items.filter((i) => i.status === 'pass');
+  assert.equal(pass.length, 1, 'phone: the three scored categories pass; desktop: nothing scored, no pass row');
+  assert.match(pass[0].title, /in the categories scored$/);
+  assert.match(pass[0].after.detail, /^Accessibility 100, Best practices 96, SEO 100/);
+  assert.match(lighthousePagesNote(r), /5 categories could not be scored and are not compared/);
 });

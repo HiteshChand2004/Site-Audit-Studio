@@ -22,6 +22,8 @@ export const MODES = ['mobile', 'desktop'];
 export const LEAD = 5;
 /** Runs added on each side when one run does not decide (medians of 1 + EXTRA_RUNS). */
 export const EXTRA_RUNS = 2;
+/** A copy run with fewer than this share of the original's DOM elements did not render the page. */
+export const BLANK_SHARE = 0.2;
 /** Time given to one Lighthouse run (the analysis gives 120 s; a page of the original is fetched over the network). */
 export const RUN_TIMEOUT_MS = 150000;
 
@@ -57,12 +59,25 @@ export function trimReport(lhr) {
       urls: [...new Set((a.details?.items ?? []).map((i) => i.url ?? i.source?.url ?? i.sourceLocation?.url ?? i.entity ?? null).filter((u) => typeof u === 'string'))].slice(0, 20) };
   }
   const lcp = lhr?.audits?.['largest-contentful-paint-element']?.details?.items?.[0]?.items?.[0]?.node;
+  // A category Lighthouse could not score (null): the audits of it that errored, with their message, so the comparison can say
+  // why instead of leaving the run out (a copy that paints nothing during the load gets no performance score at all).
+  const unscored = {};
+  for (const c of LH_SCORE_CATEGORIES) {
+    const cat = lhr?.categories?.[c];
+    if (!cat || typeof cat.score === 'number') continue;
+    unscored[c] = [...new Set((cat.auditRefs ?? []).map((r) => lhr.audits?.[r.id]).filter((a) => a?.scoreDisplayMode === 'error')
+      .map((a) => `${a.id}: ${String(a.errorMessage ?? '').replace(/\s+/g, ' ').slice(0, 160)}`))].slice(0, 3);
+  }
   return {
     fetchTime: lhr?.fetchTime ?? null,
     requestedUrl: lhr?.requestedUrl ?? null,
     finalUrl: lhr?.finalDisplayedUrl ?? lhr?.finalUrl ?? null,
     benchmarkIndex: lhr?.environment?.benchmarkIndex ?? null,
     scores: scoresOf(lhr),
+    unscored,
+    // How much of a page Lighthouse saw: a copy whose script failed renders a shell of a few elements, and every score of that
+    // run (a perfect accessibility score on an empty page) is about nothing.
+    domElements: lhr?.audits?.['dom-size']?.numericValue ?? null,
     weightBytes: lhr?.audits?.['total-byte-weight']?.numericValue ?? null,
     lcpElement: lcp ? { selector: lcp.selector ?? null, snippet: String(lcp.snippet ?? lcp.selector ?? '').slice(0, 100) } : null,
     audits,
@@ -87,7 +102,7 @@ export function singleRunDecides(original, copy) {
   return LH_SCORE_CATEGORIES.every((c) => {
     const o = original.scores?.[c];
     const k = copy.scores?.[c];
-    if (o == null || k == null) return true; // a category one side lacks cannot be compared, so it cannot block the decision
+    if (o == null || k == null) return false; // a category a run could not score decides nothing: the extra runs are taken
     return k - o >= LEAD;
   });
 }
@@ -97,10 +112,27 @@ export function singleRunDecides(original, copy) {
  * median is lower than the original's.
  */
 export function decide(originalRuns, copyRuns) {
-  const original = originalRuns.length === 1 ? originalRuns[0].scores : medianScores(originalRuns);
-  const copy = copyRuns.length === 1 ? copyRuns[0].scores : medianScores(copyRuns);
-  const worse = LH_SCORE_CATEGORIES.filter((c) => original[c] != null && copy[c] != null && copy[c] < original[c]);
-  return { original, copy, worse, runs: { original: originalRuns.length, copy: copyRuns.length }, accepted: originalRuns.length === 1 && copyRuns.length === 1 ? 'single run' : 'median of runs' };
+  const original = originalRuns.length === 1 ? { ...originalRuns[0].scores } : medianScores(originalRuns);
+  const copy = copyRuns.length === 1 ? { ...copyRuns[0].scores } : medianScores(copyRuns);
+  // A copy run that rendered a fraction of the original's elements did not show the page (its script failed, a blank shell
+  // was measured): none of its scores is about the page, so the run counts as unscored in every category.
+  const originalDom = median(originalRuns.map((r) => r.domElements));
+  const blank = (r) => originalDom != null && r.domElements != null && originalDom >= 50 && r.domElements < originalDom * BLANK_SHARE;
+  const blankRuns = copyRuns.filter(blank);
+  // A category one run could not score on a side is not compared: a median over the runs that happened to score would pass
+  // off one number as three. It is reported with the side, how many runs, and the reason.
+  const unscored = {};
+  for (const c of LH_SCORE_CATEGORIES) {
+    for (const [side, runs] of [['original', originalRuns], ['copy', copyRuns]]) {
+      const bad = runs.filter((r) => r.scores?.[c] == null || (side === 'copy' && blank(r)));
+      if (!bad.length) continue;
+      const errors = [...new Set(bad.flatMap((r) => [...(blank(r) ? [`the copy rendered ${Math.round(r.domElements)} elements against the original's ${Math.round(originalDom)}: the page did not show`] : []), ...(r.unscored?.[c] ?? [])]))].slice(0, 3);
+      unscored[c] = { ...(unscored[c] ?? {}), [side]: { runs: bad.length, of: runs.length, errors } };
+    }
+    if (unscored[c]) { original[c] = null; copy[c] = null; }
+  }
+  const worse = LH_SCORE_CATEGORIES.filter((c) => !unscored[c] && copy[c] < original[c]);
+  return { original, copy, worse, unscored, blankRuns: blankRuns.length, runs: { original: originalRuns.length, copy: copyRuns.length }, accepted: originalRuns.length === 1 && copyRuns.length === 1 ? 'single run' : 'median of runs' };
 }
 
 /** A run's file in the original's cache or the re-audit's folder. */
@@ -124,7 +156,7 @@ async function readJson(file) {
 export async function compareLighthousePages({ pages, cacheDir, outDir, run, progress = () => {}, deadline = Infinity }) {
   await mkdir(cacheDir, { recursive: true });
   await mkdir(outDir, { recursive: true });
-  const result = { pages: [], worse: [], extraRunPages: [], skipped: [], errors: [], runs: { original: 0, copy: 0, reusedOriginal: 0 } };
+  const result = { pages: [], worse: [], unscored: [], extraRunPages: [], skipped: [], errors: [], runs: { original: 0, copy: 0, reusedOriginal: 0 } };
   const total = pages.length * MODES.length;
   let done = 0;
   // One run of one side, as the trimmed report. The original's run n is taken from the cache when it is there.
@@ -181,6 +213,7 @@ export async function compareLighthousePages({ pages, cacheDir, outDir, run, pro
           },
         };
         for (const c of verdict.worse) result.worse.push({ path: p.path, mode, category: c, original: verdict.original[c], copy: verdict.copy[c], runs: verdict.runs });
+        for (const [c, sides] of Object.entries(verdict.unscored)) for (const [side, u] of Object.entries(sides)) result.unscored.push({ path: p.path, mode, category: c, side, ...u });
       } catch (err) {
         entry.modes[mode] = { error: String(err?.message ?? err).split('\n')[0].slice(0, 200) };
         result.errors.push({ path: p.path, mode, error: entry.modes[mode].error });
@@ -205,11 +238,25 @@ export function lighthousePageItems(comparison) {
     for (const [mode, m] of Object.entries(p.modes)) {
       if (m.error) continue;
       const basis = `${m.accepted}${m.runs.original > 1 || m.runs.copy > 1 ? ` (${m.runs.original} of the original, ${m.runs.copy} of the copy)` : ''}`;
-      const text = (scores) => LH_SCORE_CATEGORIES.map((c) => `${CATEGORY_LABEL[c]} ${scores[c] ?? '–'}`).join(', ');
+      const scored = LH_SCORE_CATEGORIES.filter((c) => !m.unscored?.[c]);
+      const text = (scores) => scored.map((c) => `${CATEGORY_LABEL[c]} ${scores[c] ?? '–'}`).join(', ');
+      // A category a run could not score is its own row, measured again rather than judged (status recheck).
+      for (const [c, sides] of Object.entries(m.unscored ?? {})) {
+        const why = Object.entries(sides).map(([side, u]) => `the ${side} in ${u.runs} of ${u.of} run${u.of === 1 ? '' : 's'}${u.errors.length ? ` (${u.errors.join('; ')})` : ''}`).join('; ');
+        items.push({
+          key: `lighthouse-score.${mode}.${c}.${p.path}`, category: c, page: p.path,
+          title: `Lighthouse ${CATEGORY_LABEL[c]} score (${MODE_LABEL[mode]}) on ${p.path}: could not be scored`,
+          status: 'recheck',
+          before: { status: 'pass', detail: sides.original ? 'not scored' : `${m.runScores.original.map((s) => s[c] ?? '–').join(' / ')} on the original` },
+          after: { status: 'fail', detail: `not comparable: Lighthouse gave no ${CATEGORY_LABEL[c]} score for ${why}` },
+          note: 'Measured again, not judged: a run that could not score the page says nothing about it, and the runs that did are too few for a median of three.',
+        });
+      }
       if (!m.worse.length) {
+        if (!scored.length) continue;
         items.push({
           key: `lighthouse-score.${mode}.all.${p.path}`, category: 'performance', page: p.path,
-          title: `Lighthouse scores (${MODE_LABEL[mode]}) on ${p.path}: copy not below the original`,
+          title: `Lighthouse scores (${MODE_LABEL[mode]}) on ${p.path}: copy not below the original${scored.length < LH_SCORE_CATEGORIES.length ? ' in the categories scored' : ''}`,
           status: 'pass', before: { status: 'pass', detail: text(m.original) }, after: { status: 'pass', detail: `${text(m.copy)} — ${basis}` },
         });
         continue;
@@ -238,6 +285,7 @@ export function lighthousePagesNote(comparison) {
     ? `${comparison.extraRunPages.length} page${comparison.extraRunPages.length === 1 ? '' : 's'} needed three runs per side (${comparison.extraRunPages.map((p) => `${p.path} on ${p.modes.map((m) => MODE_LABEL[m]).join(' and ')}`).join('; ')})`
     : 'one run per side decided every page');
   if (comparison.runs.reusedOriginal) parts.push(`${comparison.runs.reusedOriginal} run${comparison.runs.reusedOriginal === 1 ? '' : 's'} of the original reused from an earlier comparison`);
+  if (comparison.unscored?.length) parts.push(`${comparison.unscored.length} categor${comparison.unscored.length === 1 ? 'y' : 'ies'} could not be scored and ${comparison.unscored.length === 1 ? 'is' : 'are'} not compared (${[...new Set(comparison.unscored.map((u) => `${u.path} ${MODE_LABEL[u.mode]} ${CATEGORY_LABEL[u.category]}: the ${u.side} in ${u.runs} of ${u.of}`))].slice(0, 6).join('; ')})`);
   if (comparison.skipped.length) parts.push(`not measured for time: ${comparison.skipped.join(', ')}`);
   if (comparison.errors.length) parts.push(`${comparison.errors.length} run${comparison.errors.length === 1 ? '' : 's'} failed (${comparison.errors.slice(0, 3).map((e) => `${e.path} ${e.mode}: ${e.error}`).join('; ')})`);
   return `${parts.join('; ')}.`;

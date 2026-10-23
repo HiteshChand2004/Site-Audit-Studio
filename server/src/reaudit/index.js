@@ -164,7 +164,7 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
           progress: (fraction, message) => progress('lighthouse-pages', fraction, message),
         });
       } catch (err) {
-        lighthousePages = { pages: [], worse: [], extraRunPages: [], skipped: [], runs: { original: 0, copy: 0, reusedOriginal: 0 }, errors: [{ path: '*', mode: '*', error: String(err?.message ?? err).split('\n')[0].slice(0, 200) }] };
+        lighthousePages = { pages: [], worse: [], unscored: [], extraRunPages: [], skipped: [], runs: { original: 0, copy: 0, reusedOriginal: 0 }, errors: [{ path: '*', mode: '*', error: String(err?.message ?? err).split('\n')[0].slice(0, 200) }] };
       } finally {
         await proxy.close().catch(() => {});
       }
@@ -192,8 +192,9 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
       checklist.categories = CATEGORIES.filter((c) => checklist.items.some((it) => it.category === c.id));
       checklist.notes.push(lighthousePagesNote(lighthousePages));
       checklist.lighthousePages = {
-        pages: lighthousePages.pages.map((p) => ({ path: p.path, modes: Object.fromEntries(Object.entries(p.modes).map(([m, v]) => [m, v.error ? { error: v.error } : { original: v.original, copy: v.copy, worse: v.worse, runs: v.runs, accepted: v.accepted, extra: v.extra, runScores: v.runScores }])) })),
+        pages: lighthousePages.pages.map((p) => ({ path: p.path, modes: Object.fromEntries(Object.entries(p.modes).map(([m, v]) => [m, v.error ? { error: v.error } : { original: v.original, copy: v.copy, worse: v.worse, unscored: v.unscored, blankRuns: v.blankRuns, runs: v.runs, accepted: v.accepted, extra: v.extra, runScores: v.runScores }])) })),
         worse: lighthousePages.worse,
+        unscored: lighthousePages.unscored,
         extraRunPages: lighthousePages.extraRunPages,
         skipped: lighthousePages.skipped,
         errors: lighthousePages.errors,
@@ -216,8 +217,9 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
         newAxe: await readFile(path.join(reauditDir(project.id, recreateId, reauditId), 'axe.json'), 'utf8').then(JSON.parse, () => null),
         // For the "still open" rows: whether a new-site address was written, which pages' fixes were undone, the hosts excluded by rule.
         address: report.asIs?.address ?? null,
-        revertedPages: (report.asIs?.fixes?.reverted ?? []).map((r) => r.page),
-        excludedHosts: report.asIs?.excludedByRule ?? [],
+        // report.copy.fixes.reverted lists the pages (report.asIs.fixes.reverted is only their count).
+        revertedPages: (Array.isArray(report.copy?.fixes?.reverted) ? report.copy.fixes.reverted : []).map((r) => r.page),
+        excludedHosts: Array.isArray(report.asIs?.excludedByRule) ? report.asIs.excludedByRule : [],
       });
       const byKey = new Map([...worse.items.map((w) => ['regressed', w]), ...worse.open.map((w) => ['open', w])].map(([status, w]) => [`${status} ${w.key}`, w]));
       for (const item of checklist.items) {

@@ -374,9 +374,48 @@ Done on `step4-lighthouse` (worktree `../Website-Audit-step4b`, from 1006f54; fu
   a note names the pages that needed extra runs. Never fails the re-audit. Tests `reaudit-lighthouse-pages.test.js` (4, stand-in
   runner). Cost: pages × 2 modes × 2 sides × (1 or 3) runs of ~30–60 s each.
 
-Not done: the live run (whole-site Analyze → as-is copy of every page → re-audit) on indikaai / makememo + fresh homepage copies
-of sankalpam / nyaayai. Every figure so far is from 1-page copies. Known gaps: Step 1's stability figures (nyaayai 0.27–0.31 %)
-were measured with the old `pixelDiffPct` and not again; sankalpam's address is in no scratch DB or doc of this worktree.
+**Live run (2026-10-23, scratch API 4411, scratch data in the session's Temp scratchpad, plain-HTML as-is copies)**: only
+nyaayai's homepage was run end to end (figures below, results copied to `C:/Users/urvas/Downloads/remastly-live-results/nyaayai/`).
+indikaai (https://www.indikaai.com/) and makememo (https://makememo.ai/) **failed at Analyze within a minute**:
+`AnalysisError: Could not reach https://www.indikaai.com/. The site did not respond in time.` (the same for makememo); a plain
+request from this machine hung 21 s on both with no answer while sankalpam answered in 0.4 s — the sites, or the path to them,
+not the tool. The user then moved the big multi-site run to the end of the copy-my-site work, before the PR.
+
+**nyaayai homepage, the one site run end to end (project e97a1434 on the scratch data, copy 79cf5689, re-audit 71468133)**:
+- Copy: 1 page, as-is, 22 min (capture 4.5, lift + fixes + checks 17.6). Visual check with the noise map: 1440 px **0 changed px**
+  (4 481 px in the noise map, 35 % of the raw 0.005 %), 390 px **121 changed px** (0.002 %; raw 3.28 % was all noise: 200 730 px).
+  47 safe fixes kept (45 names, 2 data), 0 reverted. Open items: no new-site address (c), a console error from the chatbot
+  widget host (a), security headers (e).
+- Re-audit (first attempt crashed at the end on a bug of this branch — `report.asIs.fixes.reverted` is a count, the page list
+  is `report.copy.fixes.reverted` — fixed, run again): 51 rows: 11 fixed, 3 improved, 18 pass, 8 still open (all 8 with a
+  reason: 4 c, 4 d), 4 got worse (links to the 20 pages not copied → c; mobile performance 80 → 73 → e; unused CSS 0 → 12 KiB
+  and sitemap.xml → 404 **unexplained**; the sitemap now gets c by the address rule added after the run). Motion could not be
+  measured on the copy (timeout), so no motion rows.
+- **Lighthouse comparison — not comparable, and the reason is a real defect of the copy on this site**: in 5 of the copy's 6
+  per-page runs (and both of the re-audit's own homepage runs) Lighthouse's Chrome got a **blank shell: 36 DOM elements against
+  the original's 1 215 / 1 370**, console `Fatal error … TypeError: Invalid base URL at …/JQGUGunJL.Cj2najZC.mjs` (Framer's own
+  runtime), performance unscored (`SPEEDINDEX_OF_ZERO`, no screenshots during the load); the one run that rendered scored
+  performance 73 / accessibility 94 / best practices 96 / SEO 85 against the original's medians 80 / 90 / 96 / 85. The page
+  renders fine in the copy's own Playwright checks (0 px visual difference) — the failure is specific to the Lighthouse load (its
+  Chrome through the egress proxy; a race in Framer's base-URL resolution is the lead) and **is not understood yet**. Consequence:
+  the "fixed" rows from the copy's analysis (accessibility 100, SEO 100, dom-size, layout-shifts, legacy-javascript …) were
+  measured on that blank shell and are **not trustworthy** for this site. The first arithmetic averaged the nulls away (73 from
+  one run against a median of three; the desktop called "not lower" with no score at all): now a run with no score, or a copy
+  run under 20 % of the original's DOM elements (`BLANK_SHARE`), is **unscored** for every category — row
+  `lighthouse-score.<mode>.<category>.<path>` with status `recheck`, the reason in words, never a median; the pass row covers
+  only what was scored; the note counts them. Test `reaudit-lighthouse-pages` (5). Recomputed on the stored runs: phone
+  2 blank of 3, computer 3 of 3 → nothing comparable, 0 "got worse" from Lighthouse scores.
+- **Next on this**: find why the as-is copy renders blank under Lighthouse's Chrome on nyaayai (reproduce with
+  `runLighthouse` against `serveCopy` of the saved copy; compare `document.baseURI` / `<base>` / the lifted module that throws),
+  then run the comparison again — the original's six runs are cached and reused.
+
+**Sites still to run at the end (before the PR)**, one at a time on a scratch API, same rules (one Lighthouse run per side, three
+only when the copy is not 5 ahead in every category; visual gate; re-audit): parchaa homepage (https://www.parchaa.com/),
+panscience (https://panscience.xyz/, homepage + the top-navigation pages Ventures, Approach, Ecosystem, Initiatives — the as-is
+copy takes an explicit page list, ≤ 40), sankalpam homepage (http://sankalpam.ai/), indikaai and makememo whole-site (check they
+answer first). A driver that does Analyze → as-is copy → waits for the queued re-audit → one JSON per site lived in the session
+scratchpad (`live/run-sites.mjs`); it is 150 lines against the public API and quick to write again.
+Known gaps: Step 1's stability figures (nyaayai 0.27–0.31 %) were measured with the old `pixelDiffPct` and not again.
 
 ## Next steps, in order (commit and push after each)
 
