@@ -48,6 +48,29 @@ export function applyMigrations(db, { migrations = MIGRATIONS, ...ctx } = {}) {
   }
 }
 
+/** The table where applied migrations are recorded: it is supposed to grow by exactly the migrations applied. */
+export const MIGRATIONS_TABLE = 'schema_migrations';
+
+/** The ids recorded in schema_migrations (empty when the table does not exist yet). @param {DatabaseSync} db @returns {string[]} */
+export const recordedMigrations = (db) => (hasTable(db, MIGRATIONS_TABLE) ? db.prepare(`SELECT id FROM ${MIGRATIONS_TABLE} ORDER BY id`).all().map((r) => String(r.id)) : []);
+
+/**
+ * The only change schema_migrations may show: every id it had is still there, and exactly the migrations just applied were
+ * added. Anything else is a sentence saying what is wrong; null when it is exactly that.
+ * @param {string[]} before @param {string[]} after @param {string[]} applied
+ */
+export function bookkeepingProblem(before, after, applied) {
+  const lost = before.filter((id) => !after.includes(id));
+  const added = after.filter((id) => !before.includes(id));
+  const unexpected = added.filter((id) => !applied.includes(id));
+  const missing = applied.filter((id) => !added.includes(id));
+  const parts = [];
+  if (lost.length) parts.push(`records disappeared (${lost.join(', ')})`);
+  if (unexpected.length) parts.push(`records appeared that no migration applied (${unexpected.join(', ')})`);
+  if (missing.length) parts.push(`applied migrations were not recorded (${missing.join(', ')})`);
+  return parts.length ? `${MIGRATIONS_TABLE}: ${parts.join('; ')}` : null;
+}
+
 /**
  * Checks about the data, not the shape, once the accounts migrations ran: every project has an owner, that owner exists, and
  * there is an owner account.

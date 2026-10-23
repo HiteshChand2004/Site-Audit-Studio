@@ -45,7 +45,8 @@ if (r.rehearsal) {
   if (r.rehearsal.unknownColumns.length) console.log(`  columns this code does not know (kept as they are): ${r.rehearsal.unknownColumns.join(', ')}`);
 }
 if (r.stage === 'rehearsal') {
-  console.error('Rehearsal FAILED: the database was not changed.');
+  console.error('Rehearsal FAILED: the database was not changed. Why:');
+  for (const p of r.problems) console.error(`  - ${p}`);
   process.exit(1);
 }
 if (r.stage === 'apply') {
@@ -58,5 +59,6 @@ console.log(`Applied: ${r.applied.join(', ')}`);
 console.log(`  counts before: ${counts(r.before)}`);
 console.log(`  counts after:  ${counts(r.after)}`);
 console.log(`  integrity ${r.integrity}, foreign-key problems ${r.foreignKeyProblems}, row changes ${r.rowChanges.join('; ') || 'none'}, ownership ${r.ownership.join('; ') || 'ok'}`);
-console.log(r.ok ? `Migration done. Backup: ${r.backup.file}` : `Migration applied but a check FAILED. Restore from ${r.backup.file} if needed.`);
+if (!r.ok) for (const p of r.problems) console.error(`  - ${p}`);
+console.log(r.ok ? `Migration done. Backup: ${r.backup.file}` : `Migration applied but a check FAILED (see above). Restore from ${r.backup.file} if needed.`);
 process.exitCode = r.ok ? 0 : 1;

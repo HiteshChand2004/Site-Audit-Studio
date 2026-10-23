@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import { backupDatabase } from './backup.js';
 import { applySchema } from './schema.js';
 import { MIGRATIONS } from './migrations.js';
-import { applyMigrations, hasTable, ownershipProblems } from './apply.js';
+import { applyMigrations, bookkeepingProblem, hasTable, MIGRATIONS_TABLE, ownershipProblems, recordedMigrations } from './apply.js';
 
 /** @typedef {{ columns: string[], rows: number, ids: string }} TableInfo */
 
@@ -73,6 +73,7 @@ export async function rehearse({ dbFile, workDir, migrations = MIGRATIONS, owner
   let after;
   try {
     before = describe(db);
+    const recordedBefore = recordedMigrations(db);
     db.exec('PRAGMA foreign_keys = ON;');
     try {
       applySchema(db);
@@ -88,23 +89,38 @@ export async function rehearse({ dbFile, workDir, migrations = MIGRATIONS, owner
       steps.push({ id: e.migration || 'migrations', ok: false, error: String(e.cause?.message ?? e.message ?? e) });
     }
     after = describe(db);
+    const applied = steps.filter((s) => s.ok && s.id !== 'startup schema').map((s) => s.id);
+    const bookkeeping = bookkeepingProblem(recordedBefore, recordedMigrations(db), applied);
     const integrity = /** @type {{ integrity_check: string }} */ (db.prepare('PRAGMA integrity_check').get()).integrity_check;
     const foreignKeys = db.prepare('PRAGMA foreign_key_check').all().length;
     const ownership = hasTable(db, 'users') ? ownershipProblems(db) : [];
 
     const lostTables = Object.keys(before).filter((t) => !after[t]);
     const lostColumns = Object.keys(before).flatMap((t) => (after[t] ? before[t].columns.filter((c) => !after[t].columns.includes(c)).map((c) => `${t}.${c}`) : []));
-    const rowChanges = Object.keys(before).filter((t) => after[t] && after[t].rows !== before[t].rows).map((t) => `${t}: ${before[t].rows} → ${after[t].rows}`);
-    const idChanges = Object.keys(before).filter((t) => after[t] && after[t].rows === before[t].rows && after[t].ids !== before[t].ids);
+    // The bookkeeping table grows by the migrations applied (checked exactly by bookkeepingProblem); every other table must not
+    // change at all.
+    const data = Object.keys(before).filter((t) => t !== MIGRATIONS_TABLE);
+    const rowChanges = data.filter((t) => after[t] && after[t].rows !== before[t].rows).map((t) => `${t}: ${before[t].rows} → ${after[t].rows}`);
+    const idChanges = data.filter((t) => after[t] && after[t].rows === before[t].rows && after[t].ids !== before[t].ids);
     const addedTables = Object.keys(after).filter((t) => !before[t]);
     const addedColumns = Object.keys(after).flatMap((t) => (before[t] ? after[t].columns.filter((c) => !before[t].columns.includes(c)).map((c) => `${t}.${c}`) : []));
     const known = knownSchema(migrations);
     const unknownColumns = Object.keys(before).flatMap((t) => before[t].columns.filter((c) => !known[t]?.columns.includes(c)).map((c) => `${t}.${c}`));
     const unknownTables = Object.keys(before).filter((t) => !known[t]);
-    const ok = steps.every((s) => s.ok) && !lostTables.length && !lostColumns.length && !rowChanges.length && !idChanges.length
-      && integrity === 'ok' && foreignKeys === 0 && !ownership.length;
+    /** Every reason to refuse, as a sentence. ok is derived from this list and from nothing else. */
+    const problems = [
+      ...steps.filter((s) => !s.ok).map((s) => `${s.id} failed: ${s.error}`),
+      ...lostTables.map((t) => `table ${t} would be lost`),
+      ...lostColumns.map((c) => `column ${c} would be lost`),
+      ...rowChanges.map((c) => `row count changed: ${c}`),
+      ...idChanges.map((t) => `rows of ${t} were replaced (same count, different ids)`),
+      ...(bookkeeping ? [bookkeeping] : []),
+      ...(integrity === 'ok' ? [] : [`integrity_check: ${integrity}`]),
+      ...(foreignKeys ? [`${foreignKeys} foreign-key problem(s)`] : []),
+      ...ownership.map((p) => `ownership: ${p}`),
+    ];
     return {
-      ok, copy: copy.file, steps, integrity, foreignKeyProblems: foreignKeys, ownership,
+      ok: problems.length === 0, problems, copy: copy.file, steps, integrity, foreignKeyProblems: foreignKeys, ownership,
       lostTables, lostColumns, rowChanges, idChanges, addedTables, addedColumns, unknownTables, unknownColumns,
       tables: Object.fromEntries(Object.entries(after).map(([t, i]) => [t, { rows: i.rows, rowsBefore: before[t]?.rows ?? null }])),
     };

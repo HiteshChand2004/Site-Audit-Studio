@@ -37,7 +37,11 @@ try {
     line('tables this code does not know', r.unknownTables);
     line('ownership problems', r.ownership);
     console.log(`  integrity: ${r.integrity}, foreign-key problems: ${r.foreignKeyProblems}`);
-    console.log(r.ok ? 'Rehearsal passed: nothing would be lost.' : 'Rehearsal FAILED: see above. Nothing was changed in the source.');
+    if (r.ok) console.log('Rehearsal passed: nothing would be lost.');
+    else {
+      console.log('Rehearsal FAILED. Nothing was changed in the source. Why:');
+      for (const p of r.problems) console.log(`  - ${p}`);
+    }
   }
   process.exitCode = r.ok ? 0 : 1;
 } finally {

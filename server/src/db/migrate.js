@@ -10,7 +10,7 @@ import path from 'node:path';
 import { backupDatabase, rowCounts } from './backup.js';
 import { applySchema } from './schema.js';
 import { MIGRATIONS } from './migrations.js';
-import { applyMigrations, pendingMigrations, ownershipProblems } from './apply.js';
+import { applyMigrations, bookkeepingProblem, MIGRATIONS_TABLE, pendingMigrations, ownershipProblems, recordedMigrations } from './apply.js';
 import { rehearse } from './rehearse.js';
 import { BACKUPS_DIR, tempDir } from '../config/paths.js';
 
@@ -43,27 +43,36 @@ export async function migrateDatabase({ dbFile, ownerEmail, backupDir = BACKUPS_
   } finally {
     await rm(workDir, { recursive: true, force: true });
   }
-  if (!rehearsal.ok) return { ok: false, stage: 'rehearsal', backup, rehearsal, pending, applied: [] };
+  if (!rehearsal.ok) return { ok: false, stage: 'rehearsal', problems: rehearsal.problems, backup, rehearsal, pending, applied: [] };
 
   // 4. The real database, in one transaction, with its counts before and after.
   const db = new DatabaseSync(dbFile);
   try {
     db.exec('PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
     const before = rowCounts(db);
+    const recordedBefore = recordedMigrations(db);
     applySchema(db); // what the server does at every start anyway (idempotent): the migrations meet the schema they were rehearsed on
     let applied;
     try {
       applied = applyMigrations(db, { migrations, ownerEmail });
     } catch (err) {
-      return { ok: false, stage: 'apply', backup, rehearsal, pending, applied: [], error: String(/** @type {Error} */ (err).message), before, after: rowCounts(db) };
+      const error = String(/** @type {Error} */ (err).message);
+      return { ok: false, stage: 'apply', problems: [error], backup, rehearsal, pending, applied: [], error, before, after: rowCounts(db) };
     }
     const after = rowCounts(db);
     const integrity = db.prepare('PRAGMA integrity_check').get().integrity_check;
     const foreignKeys = db.prepare('PRAGMA foreign_key_check').all().length;
-    const rowChanges = Object.keys(before).filter((t) => after[t] !== before[t]).map((t) => `${t}: ${before[t]} → ${after[t]}`);
+    const rowChanges = Object.keys(before).filter((t) => t !== MIGRATIONS_TABLE && after[t] !== before[t]).map((t) => `${t}: ${before[t]} → ${after[t]}`);
+    const bookkeeping = bookkeepingProblem(recordedBefore, recordedMigrations(db), applied);
     const ownership = ownershipProblems(db);
-    const ok = integrity === 'ok' && foreignKeys === 0 && !rowChanges.length && !ownership.length;
-    return { ok, stage: 'applied', backup, rehearsal, pending, applied, before, after, integrity, foreignKeyProblems: foreignKeys, rowChanges, ownership };
+    const problems = [
+      ...rowChanges.map((c) => `row count changed: ${c}`),
+      ...(bookkeeping ? [bookkeeping] : []),
+      ...(integrity === 'ok' ? [] : [`integrity_check: ${integrity}`]),
+      ...(foreignKeys ? [`${foreignKeys} foreign-key problem(s)`] : []),
+      ...ownership.map((p) => `ownership: ${p}`),
+    ];
+    return { ok: problems.length === 0, problems, stage: 'applied', backup, rehearsal, pending, applied, before, after, integrity, foreignKeyProblems: foreignKeys, rowChanges, ownership };
   } finally {
     db.close();
   }
