@@ -62,6 +62,40 @@ are allowed. The user's dev server (4000 / 5173) runs from `Website-Audit-exact`
   schema_migrations 2; 0 projects without owner; `mirror_mode` kept; integrity ok.
 - Tests: `stage1.test.js` (5), `stage0.test.js` (8, rehearsal now given an owner), `single-page.test.js` (5).
 
+## Stage 2 — done (sign-up, sessions, the gate; email verification built, not required)
+
+- **`/api/auth`** (`server/src/accounts/routes.js`), mounted only while `SAS_ACCOUNTS=1`: `POST /signup`, `POST /login`, `POST /logout`,
+  `GET /me`, `POST /verify/send`, `POST /verify { code }`. Errors are `{ error: <sentence>, field? }` for the form.
+  - Passwords: Node's scrypt (`accounts/passwords.js`, N 2^15, r 8, p 1, 16-byte salt, parameters stored in the hash), 8–200 chars;
+    an unknown address does the same scrypt work and gets the same "Wrong email or password."
+  - Sessions (`accounts/store.js`): 32 random bytes (base64url) in the cookie, only its SHA-256 in `sessions`; 30 days; a sign-in
+    replaces the session it came with. Cookie `sas_session` (`__Host-sas_session` when Secure): HttpOnly, SameSite=Lax, Path=/,
+    Secure from `SAS_COOKIE_SECURE` (default on when `SAS_PUBLIC_ORIGIN` is https).
+  - Email codes: six digits (`randomInt`), only `sha256(id:code)` stored, 15 min, 5 tries, one new code per minute; sent on
+    sign-up when not verified. **No mail module yet: the code is written to the server log** (never in production, never in a
+    response).
+  - An **unverified** account is a claim, not an ownership: signing up again with its address sets a new password and ends its
+    sessions (whoever verifies the address keeps it). That is how the owner account from db:migrate (no password) is taken. A
+    verified address → 409 "…Sign in instead."
+  - Limits in memory: 10 failed sign-ins per address + IP per 15 min, 20 sign-ups per IP per hour (429 + Retry-After).
+- **The gate** (`accounts/gate.js apiGate`): every `/api` route but `/api/auth` and `/api/health` — SSE, screenshots, captures,
+  downloads, reports included — needs a session (401 `auth: 'signin'`) of a verified account (403 `auth: 'verify'`); `req.user`.
+  **Origin check** (`accounts/http.js originCheck`) on every state-changing `/api` request: Origin must be `SAS_PUBLIC_ORIGIN`, its
+  localhost / 127.0.0.1 twin, or the address the request was sent to (403 otherwise).
+- **`SAS_DEV_NO_VERIFY=1`**: a new account is verified on sign-up. Default off; in effect only with NODE_ENV ≠ production **and** a
+  loopback bind; set in any other situation the server **refuses to start** (`config/index.js startupProblems`, the
+  SAS_ALLOW_LOCALHOST pattern, before the database is opened); while on, `!!! SAS_DEV_NO_VERIFY is ON … !!!` at every start.
+- `SAS_ACCOUNTS=1` now starts — unless the database has pending migrations (refused, "run npm run db:migrate"). The accounts modules
+  are loaded only when on, so off is exactly the old server (no auth routes, no gate, no queries on the new tables).
+- **Test accounts** (`npm run accounts -w server [-- list | delete <email> … [--yes]]`, `scripts/accounts.mjs`): deletes named
+  accounts with their sessions and email codes only (codes reference the user, so they must go too); refuses the owner account, an
+  account that owns a project, and an unknown address — one refusal and nothing is deleted; without `--yes` it only shows; in one
+  transaction that also checks projects / analyses / recreates / reaudits did not change.
+- **Not done yet**: projects are not filtered by owner (a signed-in user sees every project) and a new project gets no owner_id;
+  the app (client) knows nothing of sign-in (with accounts on it gets 401s) — step 3.
+- Tests: `stage2.test.js` (9, real server processes over HTTP), `stage0` (8, updated: accounts on no longer refused; the refusal
+  loop now covers SAS_DEV_NO_VERIFY with a network bind), `stage1` (5), `single-page` (5), `screens` (3).
+
 ## Findings recorded for later stages
 
 ### Schema drift across branches (item 6)

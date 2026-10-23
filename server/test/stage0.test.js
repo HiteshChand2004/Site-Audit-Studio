@@ -59,7 +59,7 @@ test('SAS_ALLOW_LOCALHOST is off by default and never in effect unless the API i
   });
 }));
 
-test('SAS_ACCOUNTS is off by default; on, the server refuses to start (accounts are not built yet)', () => withEnv({ SAS_ACCOUNTS: undefined, SAS_ALLOW_LOCALHOST: undefined }, async () => {
+test('SAS_ACCOUNTS is off by default (stage 2: on is allowed; its database check is in stage2.test.js)', () => withEnv({ SAS_ACCOUNTS: undefined, SAS_ALLOW_LOCALHOST: undefined }, async () => {
   assert.equal(accountsEnabled(), false);
   assert.deepEqual(startupProblems(), []);
   for (const off of ['0', '', 'false']) {
@@ -67,7 +67,8 @@ test('SAS_ACCOUNTS is off by default; on, the server refuses to start (accounts 
     assert.equal(accountsEnabled(), false, `"${off}" is off`);
   }
   process.env.SAS_ACCOUNTS = '1';
-  assert.match(startupProblems()[0], /SAS_ACCOUNTS/);
+  assert.equal(accountsEnabled(), true);
+  assert.deepEqual(startupProblems(), []);
 }));
 
 test('every path comes from config/paths.js and resolves where it always did', () => {
@@ -166,7 +167,7 @@ async function startServer(t, env) {
   const port = await freePort();
   const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'src/index.js'], {
     cwd: SERVER,
-    env: { ...process.env, NODE_TEST_CONTEXT: '', SAS_DATA_DIR: dataDir, PORT: String(port), SAS_KEEP_AWAKE: '0', SAS_NETWORK_WATCH: '0', SAS_BIND_HOST: '', SAS_ALLOW_LOCALHOST: '', SAS_ACCOUNTS: '', ...env },
+    env: { ...process.env, NODE_TEST_CONTEXT: '', SAS_DATA_DIR: dataDir, PORT: String(port), SAS_KEEP_AWAKE: '0', SAS_NETWORK_WATCH: '0', SAS_BIND_HOST: '', SAS_ALLOW_LOCALHOST: '', SAS_ACCOUNTS: '', SAS_DEV_NO_VERIFY: '', NODE_ENV: '', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let out = '';
@@ -199,7 +200,7 @@ test('the server listens on 127.0.0.1 by default: this computer answers, the net
 });
 
 test('unsafe or unbuilt settings stop the server before it opens the database', { timeout: 120000 }, async (t) => {
-  for (const env of [{ SAS_BIND_HOST: '0.0.0.0', SAS_ALLOW_LOCALHOST: '1' }, { SAS_ACCOUNTS: '1' }]) {
+  for (const env of [{ SAS_BIND_HOST: '0.0.0.0', SAS_ALLOW_LOCALHOST: '1' }, { SAS_BIND_HOST: '0.0.0.0', SAS_DEV_NO_VERIFY: '1' }]) {
     const s = await startServer(t, env);
     assert.equal(s.ready, false);
     assert.equal(await s.exited, 1, s.output());

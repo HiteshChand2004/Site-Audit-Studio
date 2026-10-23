@@ -14,7 +14,9 @@ import { lockBusy } from './jobs/manager.js';
 import { awakeHeld } from './jobs/keepAwake.js';
 import { resumeInterruptedRecreates } from './recreate/jobs.js';
 import { stopAllAsIsPreviews } from './recreate/behavior/preserve/asisPreview.js';
-import { bindHost, isLoopbackHost } from './config/index.js';
+import { accountsEnabled, bindHost, isLoopbackHost } from './config/index.js';
+import { db } from './db/index.js';
+import { pendingMigrations } from './db/apply.js';
 
 const PORT = Number(process.env.PORT) || 4000;
 // Who can reach the API: this computer only by default (SAS_BIND_HOST, config/index.js).
@@ -24,11 +26,34 @@ const app = express();
 app.use(cors({ origin: ['http://localhost:5173', 'http://127.0.0.1:5173'] }));
 app.use(express.json({ limit: '1mb' }));
 
+// Accounts (SAS_ACCOUNTS=1): the database must have the accounts tables (npm run db:migrate), the auth routes are mounted, and
+// every other /api route but /api/health is behind a verified session (accounts/gate.js). Off: none of this exists, as before.
+// The modules are loaded only when on: they prepare statements on tables an unmigrated database does not have.
+let accounts = null;
+if (accountsEnabled()) {
+  const pending = pendingMigrations(db);
+  if (pending.length) {
+    console.error(`Not starting: SAS_ACCOUNTS=1 needs the accounts tables, and the database has migrations to apply (${pending.map((m) => m.id).join(', ')}). `
+      + 'Run "npm run db:migrate -w server" first (it backs up and rehearses before it changes anything).');
+    process.exit(1);
+  }
+  const [{ default: authRouter }, { apiGate }, { originCheck }] = await Promise.all([
+    import('./accounts/routes.js'), import('./accounts/gate.js'), import('./accounts/http.js'),
+  ]);
+  accounts = { authRouter, apiGate, originCheck };
+  app.use('/api', originCheck);
+}
+
 // busy: an Analyze, Recreate or Re-audit job is running or queued (the dev runner waits before restarting).
 // keepAwake: the computer is being kept awake for it (jobs/keepAwake.js).
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, phase: '5', time: new Date().toISOString(), busy: lockBusy(), keepAwake: awakeHeld() });
 });
+
+if (accounts) {
+  app.use('/api/auth', accounts.authRouter);
+  app.use('/api', accounts.apiGate);
+}
 
 app.use('/api/projects', projectsRouter);
 app.use('/api/projects', analyzeRouter);
