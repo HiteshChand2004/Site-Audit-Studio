@@ -375,6 +375,58 @@ export const AUTH_NOT_OPEN = {
   signin: 'Sign-in is not open yet, and nothing you entered was sent or saved. To get in touch:',
 };
 
+/** "in N minutes" from the minutes the API gave, else "soon". */
+const inMinutes = (minutes?: number) => (minutes ? `in ${minutes} minutes` : 'soon');
+
+/**
+ * What the connected sign-in and sign-up forms say: the API's own sentences are shown as they are, these cover the rest. The
+ * email-code step: a new account gets a six-digit code by email, which lasts the minutes and tries the API reports; there is no
+ * resend and no password reset, so a dead code means signing up again with the same address. The functions take what the API
+ * sent (the address the code went to, the minutes it lasts, the tries it allows).
+ */
+export const AUTH_VERIFY = {
+  /* The API could not be reached, or answered without a sentence of its own. */
+  unreachable: 'The app could not be reached. Check your connection and try again.',
+  failed: (status: number) => `Something went wrong (${status}). Try again.`,
+
+  /* Sign-up done: the code is on its way. */
+  sent: (email: string, expiresInMinutes?: number, attempts?: number) =>
+    `We emailed a six-digit code to ${email}. Enter it here to finish creating your account.` +
+    (expiresInMinutes ? ` It expires in ${expiresInMinutes} minutes` : '') +
+    (attempts ? ` and allows ${attempts} tries.` : expiresInMinutes ? '.' : '') +
+    ' Codes cannot be re-sent: if it expires, start over to get a new one.',
+  /* Sent here by the tool (?verify=1): signed in, but the address is not confirmed yet. */
+  unconfirmed: (email: string) =>
+    `${email} has not confirmed its email address yet. Enter the code from the email you were sent when the account was created. If that code has expired, start over below to get a new one.`,
+  /* Signing in with an account that never confirmed its email. */
+  signinUnconfirmed: 'This account has not confirmed its email address yet. Create the account again with the same email address to get a new code.',
+  createAgain: 'Create the account again',
+
+  /* The code field. */
+  codeLabel: (email: string) => `Code from the email to ${email}`,
+  codePlaceholder: '6 digits',
+  codeFormat: 'Enter the six-digit code from the email',
+  codeNote: (expiresInMinutes?: number) =>
+    'Didn’t get the email? Check your Spam or Promotions folder.' + (expiresInMinutes ? ` The code expires in ${expiresInMinutes} minutes.` : ''),
+  facts: (expiresInMinutes?: number, attempts?: number) =>
+    `The code expires ${inMinutes(expiresInMinutes)}${attempts ? ` and allows ${attempts} tries` : ''}. Codes cannot be re-sent.`,
+  factsDead: 'This code no longer works. Codes cannot be re-sent.',
+  confirm: 'Confirm',
+  checking: 'Checking…',
+
+  /* A dead code, and the way to a new one. */
+  sessionGone: 'You are no longer signed in, so this code cannot be checked. Start over to create the account again and get a new code.',
+  codeDead: 'That code no longer works. To get a new code, create the account again with the same email address.',
+  startOver: 'Start over',
+  wrongEmail: 'Typed the wrong email?',
+  startOverExplained: 'Starting over creates the account again with the same email and sends a new code.',
+  startedOver: 'Choose your password again and create the account: a new code will be emailed to you.',
+
+  /* Sign-up legal line and the sign-in "Forgot password?" answer. */
+  willEmail: 'We will email you a six-digit code to confirm your address.',
+  noReset: 'Password reset is not available.',
+};
+
 /* ---- Home page and positioning copy -------------------------------------------------------------------------------
  * Run figures come from data/example-runs.json and are shown exactly as stored. The tool has two ways of copying a
  * page ('as-is' and 'exact'); the mode of every run is kept below for correctness, but it is never shown to visitors:

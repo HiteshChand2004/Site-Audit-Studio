@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState, type ChangeEvent, type CSSProperties, type FormEvent } from 'react';
 import { Info } from 'lucide-react';
 import { Button, TextField } from '@/components/ui';
-import { AUTH_NOT_OPEN } from '@/lib/content';
+import { AUTH_NOT_OPEN, AUTH_VERIFY } from '@/lib/content';
 import { APP_URL } from '@/lib/site';
 
 export type AuthMode = 'signin' | 'signup';
@@ -94,6 +94,8 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
   const [codeDead, setCodeDead] = useState(false);
   const [checking, setChecking] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
+  // Whether the notice ends with a link to the contact page (only the "not open" notices ask for it).
+  const [contactLink, setContactLink] = useState(false);
   const noticeRef = useRef<HTMLParagraphElement>(null);
   const live = Boolean(APP_URL);
   const id = (k: string) => `${idPrefix}-${mode}-${k}`;
@@ -116,7 +118,7 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
         setValues((s) => ({ ...s, email: data.user!.email! }));
         setVerification({ sentTo: data.user.email });
         setPhase('verify');
-        showNotice(`${data.user.email} has not confirmed its email address yet. Enter the code from the email you were sent when the account was created. If that code has expired, start over below to get a new one.`, 'info');
+        showNotice(AUTH_VERIFY.unconfirmed(data.user.email), 'info');
       } catch {
         /* the ordinary form stays */
       }
@@ -154,14 +156,15 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
     return site ? `${APP_URL}/?site=${encodeURIComponent(site)}` : `${APP_URL}/`;
   };
 
-  const showNotice = (text: string, kind: 'info' | 'error') => {
+  const showNotice = (text: string, kind: 'info' | 'error', withContact = false) => {
     setNoticeKind(kind);
+    setContactLink(withContact);
     setNotice(text);
   };
 
   /** The API's error under its field (when it names one the form has), else as a notice. */
   const showApiError = (data: ApiError | null, status: number) => {
-    const message = data?.error || `Something went wrong (${status}). Try again.`;
+    const message = data?.error || AUTH_VERIFY.failed(status);
     const field = data?.field as Key | undefined;
     if (field && keys.includes(field)) {
       setServerErr((s) => ({ ...s, [field]: message }));
@@ -187,7 +190,7 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
       });
     } catch {
       setPhase('idle');
-      showNotice('The app could not be reached. Check your connection and try again.', 'error');
+      showNotice(AUTH_VERIFY.unreachable, 'error');
       return;
     }
     const data = (await res.json().catch(() => null)) as (ApiError & { user?: { email?: string; verified?: boolean }; verification?: Verification }) | null;
@@ -198,7 +201,7 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
       if (data?.auth === 'verify' && data.next === 'signup') {
         // Signing in with an account that never confirmed its email: the API refuses, and the way back in is a new sign-up.
         setCodeDead(true);
-        showNotice(data.error || 'This account has not confirmed its email address yet. Create the account again with the same email address to get a new code.', 'error');
+        showNotice(data.error || AUTH_VERIFY.signinUnconfirmed, 'error');
         return;
       }
       showApiError(data, res.status);
@@ -212,13 +215,7 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
       setCodeDead(false);
       setPhase('verify');
       const v = data.verification;
-      showNotice(
-        `We emailed a six-digit code to ${v?.sentTo ?? values.email.trim()}. Enter it here to finish creating your account.` +
-          (v?.expiresInMinutes ? ` It expires in ${v.expiresInMinutes} minutes` : '') +
-          (v?.attempts ? ` and allows ${v.attempts} tries.` : v?.expiresInMinutes ? '.' : '') +
-          ' Codes cannot be re-sent: if it expires, start over to get a new one.',
-        'info',
-      );
+      showNotice(AUTH_VERIFY.sent(v?.sentTo ?? values.email.trim(), v?.expiresInMinutes, v?.attempts), 'info');
       return;
     }
     window.location.assign(destination());
@@ -228,7 +225,7 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
   const confirm = async () => {
     const clean = code.replace(/\s+/g, '');
     if (!/^\d{6}$/.test(clean)) {
-      setCodeErr('Enter the six-digit code from the email');
+      setCodeErr(AUTH_VERIFY.codeFormat);
       setCodeShake((n) => n + 1);
       formRef.current?.querySelector<HTMLElement>(`#${id('code')}`)?.focus();
       return;
@@ -245,7 +242,7 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
       });
     } catch {
       setChecking(false);
-      showNotice('The app could not be reached. Check your connection and try again.', 'error');
+      showNotice(AUTH_VERIFY.unreachable, 'error');
       return;
     }
     const data = (await res.json().catch(() => null)) as (ApiError & { user?: { verified?: boolean } }) | null;
@@ -257,17 +254,17 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
     if (res.status === 401) {
       // The session is gone (another sign-up with this address ended it, or it expired): only a new sign-up helps.
       setCodeDead(true);
-      showNotice('You are no longer signed in, so this code cannot be checked. Start over to create the account again and get a new code.', 'error');
+      showNotice(AUTH_VERIFY.sessionGone, 'error');
       return;
     }
     if (data?.next === 'signup') {
       // Expired, tried too often, already used, or never sent: the API says which, and that there is no resend.
       setCodeDead(true);
       setCode('');
-      showNotice(data.error || 'That code no longer works. To get a new code, create the account again with the same email address.', 'error');
+      showNotice(data.error || AUTH_VERIFY.codeDead, 'error');
       return;
     }
-    const message = data?.error || `Something went wrong (${res.status}). Try again.`;
+    const message = data?.error || AUTH_VERIFY.failed(res.status);
     setCodeErr(message);
     setCodeShake((n) => n + 1);
     setNotice('');
@@ -291,7 +288,7 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
     setValues((s) => ({ ...s, password: '', confirm: '' }));
     setShown((s) => ({ ...s, password: false, confirm: false }));
     setServerErr({});
-    showNotice('Choose your password again and create the account: a new code will be emailed to you.', 'info');
+    showNotice(AUTH_VERIFY.startedOver, 'info');
     window.setTimeout(() => formRef.current?.querySelector<HTMLElement>(`#${id('password')}`)?.focus(), 50);
   };
 
@@ -314,7 +311,7 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
     }
     if (!live) {
       // Nothing is connected: say so at once, with no loading state that could look like progress.
-      showNotice(AUTH_NOT_OPEN[mode], 'info');
+      showNotice(AUTH_NOT_OPEN[mode], 'info', true);
       return;
     }
     setNotice('');
@@ -324,8 +321,8 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
     void send();
   };
 
-  // There is no password reset (the user's decision): say so, rather than link to a page that does not exist.
-  const forgot = () => showNotice('Password reset is not available. If you cannot sign in, contact us.', 'info');
+  // There is no password reset (the user's decision): say so, and promise nothing (the contact page is not connected yet either).
+  const forgot = () => showNotice(AUTH_VERIFY.noReset, 'info');
 
   /** Error to display: only once the field has been revealed (blur or submit); then it updates live. The server's comes after. */
   const err = (k: Key) => (shown[k] ? errorOf(k) || serverErr[k] || undefined : undefined);
@@ -344,11 +341,11 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
               id={id('code')}
               name="code"
               type="text"
-              label={`Code from the email to ${verification?.sentTo ?? values.email.trim()}`}
+              label={AUTH_VERIFY.codeLabel(verification?.sentTo ?? values.email.trim())}
               required
               autoComplete="one-time-code"
               inputMode="numeric"
-              placeholder="6 digits"
+              placeholder={AUTH_VERIFY.codePlaceholder}
               maxLength={7}
               value={code}
               disabled={codeDead || checking}
@@ -358,21 +355,23 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
               }}
               error={codeErr || undefined}
               shake={codeShake}
+              describedBy={id('code-note')}
             />
+            <p id={id('code-note')} className="auth-legal" style={{ marginTop: 6 }}>
+              {AUTH_VERIFY.codeNote(verification?.expiresInMinutes)}
+            </p>
           </div>
         </div>
 
         <div className="auth-foot" style={at(i++)}>
           <div className="auth-foot__meta">
             <p className="auth-req">
-              {codeDead
-                ? 'This code no longer works. Codes cannot be re-sent.'
-                : `The code expires ${verification?.expiresInMinutes ? `in ${verification.expiresInMinutes} minutes` : 'soon'}${verification?.attempts ? ` and allows ${verification.attempts} tries` : ''}. Codes cannot be re-sent.`}
+              {codeDead ? AUTH_VERIFY.factsDead : AUTH_VERIFY.facts(verification?.expiresInMinutes, verification?.attempts)}
             </p>
           </div>
           {codeDead ? (
             <Button type="button" arrow className="auth-submit" onClick={startOver}>
-              Start over
+              {AUTH_VERIFY.startOver}
             </Button>
           ) : (
             <Button type="submit" arrow={!checking} aria-disabled={checking ? true : undefined} aria-busy={checking || undefined} className="auth-submit" data-loading={checking || undefined}>
@@ -381,10 +380,10 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
                   <span className="btn-load" aria-hidden="true">
                     <i />
                   </span>
-                  <span className="visually-hidden">Checking…</span>
+                  <span className="visually-hidden">{AUTH_VERIFY.checking}</span>
                 </>
               ) : (
-                'Confirm'
+                AUTH_VERIFY.confirm
               )}
             </Button>
           )}
@@ -398,10 +397,10 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
         )}
 
         <p className="auth-switch" style={at(i++)}>
-          {codeDead ? 'Starting over creates the account again with the same email and sends a new code.' : 'Typed the wrong email?'}{' '}
+          {codeDead ? AUTH_VERIFY.startOverExplained : AUTH_VERIFY.wrongEmail}{' '}
           {!codeDead && (
             <button type="button" className="link-btn link-btn--strong" onClick={startOver}>
-              Start over
+              {AUTH_VERIFY.startOver}
             </button>
           )}
         </p>
@@ -516,7 +515,7 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
           {mode === 'signup' && (
             <p className="auth-legal">
               By signing up you agree to our <Link href="/terms">Terms</Link> and <Link href="/privacy">Privacy policy</Link>.
-              {live && ' We will email you a six-digit code to confirm your address.'}
+              {live && ` ${AUTH_VERIFY.willEmail}`}
             </p>
           )}
         </div>
@@ -545,11 +544,11 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
               <>
                 {' '}
                 <button type="button" className="link-btn link-btn--strong" onClick={startOver}>
-                  Create the account again
+                  {AUTH_VERIFY.createAgain}
                 </button>
               </>
             )}
-            {noticeKind === 'info' && !codeDead && (
+            {contactLink && !codeDead && (
               <>
                 {' '}
                 <Link href="/contact">Contact us</Link>
