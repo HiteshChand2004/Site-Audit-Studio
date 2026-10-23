@@ -1,3 +1,4 @@
+import { ACCENT } from '@/lib/accent';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ImageResponse } from 'next/og';
@@ -29,7 +30,7 @@ export default async function OpengraphImage() {
         <img src={src} width={364} height={64} alt="" />
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           <div style={{ fontSize: 84, fontFamily: 'serif', letterSpacing: -2, lineHeight: 1.02 }}>Your site, rebuilt</div>
-          <div style={{ fontSize: 84, fontFamily: 'serif', fontStyle: 'italic', letterSpacing: -2, lineHeight: 1.02, color: '#c2410c' }}>better.</div>
+          <div style={{ fontSize: 84, fontFamily: 'serif', fontStyle: 'italic', letterSpacing: -2, lineHeight: 1.02, color: ACCENT }}>better.</div>
         </div>
         <div style={{ display: 'flex', gap: 14 }}>
           {pills.map((p, i) => (

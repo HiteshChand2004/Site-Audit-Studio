@@ -17,10 +17,10 @@
   --muted: #6b6a65;
   --faint: #9a978f;
 
-  --accent: #c2410c;
-  --accent-strong: #9a3412;
-  --accent-rgb: 194, 65, 12;
-  --accent-tint: #fff4ec;
+  /* --accent is set from lib/accent.ts (on <html>); everything else here is derived from it */
+  --accent-strong: color-mix(in srgb, var(--accent) 78%, #000);
+  --accent-tint: color-mix(in srgb, var(--accent) 7%, #fff);
+  --accent-on-dark: color-mix(in srgb, var(--accent) 62%, #fff);
 
   --ok: #15803d;
   --ok-rgb: 22, 163, 74;
@@ -37,7 +37,7 @@
   --info-border: #cddafd;
 
   /* Type */
-  --font-sans: var(--font-geist), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-sans: var(--font-hanken), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-serif: var(--font-display), 'Iowan Old Style', Georgia, serif;
   --fs-xs: 12.5px;
   --fs-sm: 14px;
@@ -73,8 +73,8 @@
   --sh-1: 0 1px 2px rgba(17, 17, 17, 0.05);
   --sh-2: 0 1px 2px rgba(17, 17, 17, 0.04), 0 12px 32px -16px rgba(17, 17, 17, 0.14);
   --sh-3: 0 1px 2px rgba(17, 17, 17, 0.04), 0 8px 16px -6px rgba(17, 17, 17, 0.06), 0 30px 60px -20px rgba(17, 17, 17, 0.2);
-  --sh-glow: 0 0 0 1px rgba(var(--accent-rgb), 0.16), 0 24px 60px -24px rgba(var(--accent-rgb), 0.38);
-  --ring: 0 0 0 4px rgba(var(--accent-rgb), 0.16);
+  --sh-glow: 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent), 0 24px 60px -24px color-mix(in srgb, var(--accent) 38%, transparent);
+  --ring: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent);
 
   /* Motion */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -161,7 +161,7 @@ select {
 }
 
 ::selection {
-  background: rgba(var(--accent-rgb), 0.16);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .skip-link {
@@ -200,7 +200,7 @@ select {
 /* ---------- Type ---------- */
 .display {
   font-family: var(--font-serif);
-  font-weight: 400;
+  font-weight: 500;
   line-height: 1;
   letter-spacing: -0.02em;
   color: var(--text);
@@ -210,7 +210,7 @@ select {
 .display em {
   padding-right: 0.04em;
   color: var(--accent);
-  font-style: italic;
+  font-style: normal;
   letter-spacing: -0.01em;
 }
 
@@ -240,7 +240,7 @@ select {
   color: var(--text-2);
   font-size: var(--fs-lead);
   line-height: 1.6;
-  text-wrap: pretty;
+  text-wrap: wrap;
 }
 
 .muted {
@@ -511,7 +511,7 @@ select {
   inset: -1px;
   z-index: -1;
   border-radius: inherit;
-  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.18), 0 28px 60px -26px rgba(17, 17, 17, 0.28), 0 24px 70px -30px rgba(var(--accent-rgb), 0.4);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent), 0 28px 60px -26px rgba(17, 17, 17, 0.28), 0 24px 70px -30px color-mix(in srgb, var(--accent) 40%, transparent);
   opacity: 0;
   pointer-events: none;
   transition: opacity 300ms var(--ease-out);
@@ -536,7 +536,7 @@ select {
   height: 380px;
   margin: -190px 0 0 -190px;
   border-radius: 50%;
-  background: radial-gradient(closest-side, rgba(var(--accent-rgb), 0.1), rgba(var(--accent-rgb), 0.04) 55%, transparent);
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 10%, transparent), color-mix(in srgb, var(--accent) 4%, transparent) 55%, transparent);
   transform: translate3d(var(--gx, 0px), var(--gy, 0px), 0);
   transition: transform 150ms linear;
 }
@@ -572,7 +572,7 @@ select {
 }
 
 .badge--accent {
-  border-color: rgba(var(--accent-rgb), 0.25);
+  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
   background: var(--accent-tint);
   color: var(--accent-strong);
 }
@@ -833,22 +833,38 @@ select.input {
   animation-play-state: paused !important;
 }
 
-/* ---------- Scroll reveal (only when JavaScript runs) ---------- */
-.js [data-reveal] {
-  opacity: 0;
-  transform: translateY(22px);
+/* ---------- Scroll reveal ----------
+   RevealObserver arms (data-armed) only elements that start below the fold and shows each once, when it first scrolls
+   into view. Nothing is hidden before that script runs. [data-reveal] moves the element itself; [data-stagger] moves its
+   children one after another (--i is set per child). data-dir changes direction and distance. Transform and opacity only. */
+[data-reveal] {
   transition:
-    opacity 900ms var(--ease-out) var(--d, 0ms),
-    transform 900ms var(--ease-out) var(--d, 0ms);
+    opacity 800ms var(--ease-out) var(--d, 0ms),
+    transform 800ms var(--ease-out) var(--d, 0ms);
 }
-
-.js [data-reveal='scale'] {
-  transform: translateY(22px) scale(0.98);
+[data-reveal][data-armed]:not(.is-in) {
+  opacity: 0;
+  transform: translate3d(var(--rx, 0px), var(--ry, 22px), 0) scale(var(--rs, 1));
 }
-
-.js [data-reveal].is-in {
-  opacity: 1;
-  transform: none;
+[data-reveal='scale'] {
+  --rs: 0.97;
+}
+[data-dir='far'] {
+  --ry: 56px;
+}
+[data-dir='near'] {
+  --ry: 12px;
+}
+[data-stagger] > * {
+  transition:
+    opacity 700ms var(--ease-out) calc(var(--i, 0) * 95ms),
+    transform 700ms var(--ease-out) calc(var(--i, 0) * 95ms),
+    box-shadow 300ms var(--ease-out),
+    border-color 300ms;
+}
+[data-stagger][data-armed]:not(.is-in) > * {
+  opacity: 0;
+  transform: translate3d(var(--rx, 0px), var(--ry, 26px), 0) scale(var(--rs, 1));
 }
 
 /* ---------- Reduced motion: everything shown at once, nothing moves ---------- */

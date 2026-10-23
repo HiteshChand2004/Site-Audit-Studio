@@ -1,19 +1,21 @@
 import type { Metadata, Viewport } from 'next';
-import { Geist, Instrument_Serif } from 'next/font/google';
+import { Hanken_Grotesk, Newsreader } from 'next/font/google';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import RevealObserver from '@/components/RevealObserver';
-import AuthDialog from '@/components/auth/AuthDialog';
+import ScrollManager from '@/components/ScrollManager';
 import { InViewPlay, PointerEffects } from '@/components/ui';
+import { ACCENT } from '@/lib/accent';
 import { DESCRIPTION, SITE_NAME, SITE_URL } from '@/lib/site';
 import './theme.css';
 import './site.css';
 import './pages.css';
-import './visuals.css';
+import './home.css';
+import './system.css';
 
-// Two families only: a serif display face for headlines, a clean sans for everything else.
-const display = Instrument_Serif({ subsets: ['latin'], weight: '400', style: ['normal', 'italic'], variable: '--font-display', display: 'swap' });
-const sans = Geist({ subsets: ['latin'], variable: '--font-geist', display: 'swap' });
+// Two families only, the same as panscience.xyz: Newsreader (weight 500) for headlines, Hanken Grotesk for everything else.
+const display = Newsreader({ subsets: ['latin'], weight: '500', variable: '--font-display', display: 'swap' });
+const sans = Hanken_Grotesk({ subsets: ['latin'], variable: '--font-hanken', display: 'swap' });
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -29,7 +31,7 @@ export const viewport: Viewport = { themeColor: '#FAFAF7', width: 'device-width'
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${display.variable} ${sans.variable}`} suppressHydrationWarning>
+    <html lang="en" data-scroll-behavior="smooth" className={`${display.variable} ${sans.variable}`} style={{ ['--accent' as string]: ACCENT }} suppressHydrationWarning>
       <head>
         {/* Scroll reveals only hide content when JavaScript runs, so nothing stays invisible without it. */}
         <script dangerouslySetInnerHTML={{ __html: "document.documentElement.classList.add('js')" }} />
@@ -41,10 +43,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Header />
         <main id="main">{children}</main>
         <Footer />
+        <ScrollManager />
         <RevealObserver />
         <PointerEffects />
         <InViewPlay />
-        <AuthDialog />
       </body>
     </html>
   );

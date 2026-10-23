@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import AuthForm, { type AuthMode } from './AuthForm';
-import LogoMark from '@/components/LogoMark';
 
 const TABS: Array<{ mode: AuthMode; label: string }> = [
   { mode: 'signin', label: 'Sign in' },
@@ -16,7 +15,7 @@ const TITLES: Record<AuthMode, [string, string]> = {
 
 const LEADS: Record<AuthMode, string> = {
   signin: 'Sign in to audit, rebuild and compare.',
-  signup: 'Paste an address. Get a better site.',
+  signup: 'Check your site. Get a measured copy.',
 };
 
 /* One easing for the whole switch. */
@@ -44,6 +43,7 @@ export default function AuthCard({
   syncUrl = false,
   idPrefix = 'a',
   titleId,
+  plain = false,
   close,
 }: {
   initialMode?: AuthMode;
@@ -52,6 +52,8 @@ export default function AuthCard({
   syncUrl?: boolean;
   idPrefix?: string;
   titleId?: string;
+  /** Laid out on the page with no glass card around it (the /auth page). */
+  plain?: boolean;
   /** A close button (the dialog passes one). */
   close?: ReactNode;
 }) {
@@ -163,14 +165,15 @@ export default function AuthCard({
   };
 
   return (
-    <div ref={card} className="authcard aglass" data-mode={active}>
-      <span className="aglass__edge" aria-hidden="true">
-        <i />
-      </span>
+    <div ref={card} className={plain ? 'authcard authcard--plain' : 'authcard aglass'} data-mode={active}>
+      {!plain && (
+        <span className="aglass__edge" aria-hidden="true">
+          <i />
+        </span>
+      )}
       {close}
       <div className="authcard__head">
         <div className="authcard__brand">
-          <LogoMark size={36} className="authcard__mark" />
           <div className="authcard__titles">
             <h2 id={titleId} className="display authcard__title">
               {(['signin', 'signup'] as const).map((m) => (

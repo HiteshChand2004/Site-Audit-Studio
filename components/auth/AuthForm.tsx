@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState, type ChangeEvent, type CSSProperties, type FormEvent } from 'react';
 import { Info } from 'lucide-react';
 import { Button, TextField } from '@/components/ui';
+import { AUTH_NOT_OPEN } from '@/lib/content';
 import { APP_URL } from '@/lib/site';
 
 export type AuthMode = 'signin' | 'signup';
@@ -13,6 +14,8 @@ type Values = Record<Key | 'site', string>;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const NAME = /^[\p{L} ]+$/u;
 const LOADING_MS = 900;
+/** The tool's API on this same origin (the local proxy and a hosted deployment both serve it at /api). */
+const API_BASE = (process.env.NEXT_PUBLIC_API_BASE ?? '/api').replace(/\/$/, '');
 
 const FIELDS: Record<AuthMode, Key[]> = {
   signin: ['email', 'password'],
@@ -58,7 +61,12 @@ const at = (i: number) => ({ ['--i' as string]: i }) as CSSProperties;
  * - fields validate on blur and on submit; while typing only once a field has shown an error;
  * - errors show inline with a red border and one gentle shake; a green tick appears when a field becomes valid;
  * - submit looks disabled until the required fields are valid; clicking it then points to the first problem;
- * - a valid submit shows a loading shimmer, then posts to NEXT_PUBLIC_APP_URL, or says sign-in opens soon.
+ * - a valid submit shows a loading shimmer and sends the form with fetch to the tool's API (NEXT_PUBLIC_API_BASE, default /api, on
+ *   this same origin: the session cookie it sets is the tool's session); when NEXT_PUBLIC_APP_URL is not set it says sign-in is
+ *   not open and sends nothing; the name is stored with the account, the website to rebuild fills in the tool's first form;
+ * - the server's own error is shown as it is: under its field when it names one (email, password), else as a notice;
+ * - signed in: the browser goes to the tool (?next= when the tool sent the visitor here, else NEXT_PUBLIC_APP_URL);
+ * - an account that still has to confirm its email address is told so (the code step is not required yet; this is where it goes).
  * It never pretends anyone is signed in.
  */
 export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: { mode: AuthMode; site?: string; onSwitch: (m: AuthMode) => void; idPrefix?: string }) {
@@ -66,8 +74,10 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
   const [shown, setShown] = useState<Partial<Record<Key, boolean>>>({});
   const [blurred, setBlurred] = useState<Partial<Record<Key, boolean>>>({});
   const [shake, setShake] = useState<Partial<Record<Key, number>>>({});
-  const [phase, setPhase] = useState<'idle' | 'loading' | 'soon'>('idle');
+  const [phase, setPhase] = useState<'idle' | 'loading' | 'verify'>('idle');
   const [notice, setNotice] = useState('');
+  const [noticeKind, setNoticeKind] = useState<'info' | 'error'>('info');
+  const [serverErr, setServerErr] = useState<Partial<Record<Key, string>>>({});
   const formRef = useRef<HTMLFormElement>(null);
   const noticeRef = useRef<HTMLParagraphElement>(null);
   const live = Boolean(APP_URL);
@@ -91,6 +101,66 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
   const set = (k: Key | 'site') => (e: ChangeEvent<HTMLInputElement>) => {
     const v = e.currentTarget.value;
     setValues((s) => ({ ...s, [k]: v }));
+    if (k !== 'site') setServerErr((s) => (s[k] ? { ...s, [k]: undefined } : s));
+  };
+
+  /**
+   * Where to go once signed in: the tool page that sent the visitor here (?next=/app/…), else the tool's home — with the
+   * "Website to rebuild" of a sign-up as ?site=, which opens the tool's Add a website form filled in with it.
+   */
+  const destination = () => {
+    const next = new URLSearchParams(window.location.search).get('next');
+    if (next && /^\/app(\/|$|\?)/.test(next)) return next;
+    const site = mode === 'signup' ? values.site.trim() : '';
+    return site ? `${APP_URL}/?site=${encodeURIComponent(site)}` : `${APP_URL}/`;
+  };
+
+  const showNotice = (text: string, kind: 'info' | 'error') => {
+    setNoticeKind(kind);
+    setNotice(text);
+  };
+
+  /** Sign in or sign up through the tool's API. The server decides; its message is shown as it is. */
+  const send = async () => {
+    const started = Date.now();
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE}/auth/${mode === 'signin' ? 'login' : 'signup'}`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: values.email.trim(), password: values.password, ...(mode === 'signup' && { name: values.name.trim() }) }),
+      });
+    } catch {
+      setPhase('idle');
+      showNotice('The app could not be reached. Check your connection and try again.', 'error');
+      return;
+    }
+    const data = (await res.json().catch(() => null)) as { error?: string; field?: string; user?: { verified?: boolean } } | null;
+    // Keep the shimmer on for a moment, so a fast answer does not flash.
+    await new Promise((r) => window.setTimeout(r, Math.max(0, LOADING_MS - (Date.now() - started))));
+    if (!res.ok || !data?.user) {
+      setPhase('idle');
+      const message = data?.error || `Something went wrong (${res.status}). Try again.`;
+      const field = data?.field as Key | undefined;
+      if (field && keys.includes(field)) {
+        setServerErr((s) => ({ ...s, [field]: message }));
+        setShown((s) => ({ ...s, [field]: true }));
+        setShake((s) => ({ ...s, [field]: (s[field] ?? 0) + 1 }));
+        formRef.current?.querySelector<HTMLElement>(`#${id(field)}`)?.focus();
+        setNotice('');
+      } else {
+        showNotice(message, 'error');
+      }
+      return;
+    }
+    if (!data.user.verified) {
+      // Room for the email code step: the account exists and is signed in, but the tool lets it in only once verified.
+      setPhase('verify');
+      showNotice(`Your account is created. Confirm ${values.email.trim()} to continue: email confirmation is not switched on yet, so this account waits until it is.`, 'info');
+      return;
+    }
+    window.location.assign(destination());
   };
 
   const onBlur = (k: Key) => () => {
@@ -106,46 +176,28 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
       formRef.current?.querySelector<HTMLElement>(`#${id(bad[0])}`)?.focus();
       return;
     }
+    if (!live) {
+      // Nothing is connected: say so at once, with no loading state that could look like progress.
+      showNotice(AUTH_NOT_OPEN[mode], 'info');
+      return;
+    }
     setNotice('');
+    setServerErr({});
     setPhase('loading');
-    window.setTimeout(() => {
-      if (live) {
-        formRef.current?.submit(); // native POST to the app; the page navigates away
-        return;
-      }
-      setPhase('soon');
-      setNotice(`${mode === 'signin' ? 'Sign-in' : 'Sign-up'} opens soon. Leave your details and we’ll let you know.`);
-    }, LOADING_MS);
+    void send();
   };
 
-  const google = () => setNotice('Continue with Google is coming soon.');
-  const forgot = () => setNotice('Password reset opens together with sign-in. Need help now? Write to us.');
+  const forgot = () => showNotice('Password reset is not open yet.', 'info');
 
-  /** Error to display: only once the field has been revealed (blur or submit); then it updates live. */
-  const err = (k: Key) => (shown[k] ? errorOf(k) || undefined : undefined);
-  const ok = (k: Key) => Boolean(values[k]) && !errorOf(k) && Boolean(shown[k] || blurred[k]);
+  /** Error to display: only once the field has been revealed (blur or submit); then it updates live. The server's comes after. */
+  const err = (k: Key) => (shown[k] ? errorOf(k) || serverErr[k] || undefined : undefined);
+  const ok = (k: Key) => Boolean(values[k]) && !errorOf(k) && !serverErr[k] && Boolean(shown[k] || blurred[k]);
 
   const pw = values.password;
   let i = 0;
 
   return (
-    <form ref={formRef} className="auth-form" action={live ? `${APP_URL}/${mode}` : undefined} method="post" noValidate onSubmit={onSubmit}>
-      <div style={at(i++)}>
-        <Button variant="secondary" block className="auth-google" onClick={google}>
-          <svg width="17" height="17" viewBox="0 0 48 48" aria-hidden="true">
-            <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z" />
-            <path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z" />
-            <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z" />
-            <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z" />
-          </svg>
-          Continue with Google
-        </Button>
-      </div>
-
-      <p className="auth-or" style={at(i++)}>
-        <span>or with email</span>
-      </p>
-
+    <form ref={formRef} className="auth-form" noValidate onSubmit={onSubmit}>
       <div className="auth-grid">
         {mode === 'signup' && (
           <div style={at(i++)}>
@@ -201,15 +253,10 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
             shake={shake.password}
             aside={
               mode === 'signin' ? (
-                live ? (
-                  <a className="tf__aside" href={`${APP_URL}/forgot-password`}>
-                    Forgot password?
-                  </a>
-                ) : (
-                  <button type="button" className="link-btn tf__aside" onClick={forgot}>
-                    Forgot password?
-                  </button>
-                )
+                // No reset in the tool yet (it needs email): say so rather than link to a page that does not exist.
+                <button type="button" className="link-btn tf__aside" onClick={forgot}>
+                  Forgot password?
+                </button>
               ) : undefined
             }
           />
@@ -277,10 +324,16 @@ export default function AuthForm({ mode, site = '', onSwitch, idPrefix = 'a' }: 
       </div>
 
       {notice && (
-        <p ref={noticeRef} tabIndex={-1} className="auth-notice" role="status">
+        <p ref={noticeRef} tabIndex={-1} className="auth-notice" role={noticeKind === 'error' ? 'alert' : 'status'} data-kind={noticeKind}>
           <Info size={16} aria-hidden="true" />
           <span>
-            {notice} <Link href="/contact">Contact us</Link>
+            {notice}
+            {noticeKind === 'info' && phase !== 'verify' && (
+              <>
+                {' '}
+                <Link href="/contact">Contact us</Link>
+              </>
+            )}
           </span>
         </p>
       )}

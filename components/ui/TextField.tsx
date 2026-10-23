@@ -60,7 +60,6 @@ export function TextField({ id, label, required, aside, error, valid, shake = 0,
           aria-invalid={error ? true : undefined}
           aria-describedby={ids}
         />
-        <span className="tf__line" aria-hidden="true" />
         <span className="tf__ok" aria-hidden="true">
           <Check size={13} strokeWidth={3} />
         </span>

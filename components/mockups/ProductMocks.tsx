@@ -1,10 +1,11 @@
-import SiteMock from '@/components/home/SiteMock';
-import { EXAMPLE_RUN } from '@/lib/content';
+import Image from 'next/image';
+import { exampleRun, exampleScores } from '@/lib/content';
+import '@/app/visuals.css';
 
 /* The two A4 pages of the shareable report, built in HTML/CSS (used on /report only). */
 
-function Ring({ value, label, tone }: { value: string; label: string; tone: 'old' | 'new' }) {
-  const n = parseInt(value, 10);
+function Ring({ value, label, tone }: { value: number | null; label: string; tone: 'old' | 'new' }) {
+  const n = value ?? 0; // no verified example run: an empty ring and a dash
   const c = 2 * Math.PI * 42;
   return (
     <div className={`rp-ring rp-ring--${tone}`}>
@@ -12,13 +13,13 @@ function Ring({ value, label, tone }: { value: string; label: string; tone: 'old
         <circle cx="50" cy="50" r="42" className="rp-ring__track" />
         <circle cx="50" cy="50" r="42" className="rp-ring__arc" strokeDasharray={c} strokeDashoffset={c * (1 - n / 100)} />
       </svg>
-      <strong>{value}</strong>
+      <strong>{value ?? '–'}</strong>
       <span>{label}</span>
     </div>
   );
 }
 
-/** The two A4 pages of the Full report. Only the example run's numbers are shown; the rest is skeleton. */
+/** The two A4 pages of the Full report. Only the example run's numbers (exampleRun) are shown; the rest is skeleton. */
 export function ReportPagesMock() {
   return (
     <div className="viz rp" aria-hidden="true">
@@ -30,10 +31,10 @@ export function ReportPagesMock() {
         <span className="rp__line rp__line--lg" />
         <span className="rp__line" />
         <div className="rp__rings">
-          <Ring value={String(EXAMPLE_RUN.lighthouseOriginal)} label="Original" tone="old" />
-          <Ring value={EXAMPLE_RUN.lighthouseCopy} label="Copy" tone="new" />
+          <Ring value={exampleScores?.from ?? null} label="Original" tone="old" />
+          <Ring value={exampleScores?.to ?? null} label="Copy" tone="new" />
         </div>
-        <p className="rp__caption">Lighthouse · example run on {EXAMPLE_RUN.site}</p>
+        <p className="rp__caption">{exampleScores ? `Lighthouse performance, phone · example run on ${exampleRun.site}` : 'Lighthouse'}</p>
         <div className="rp__tiles">
           <i />
           <i />
@@ -41,8 +42,8 @@ export function ReportPagesMock() {
           <i />
         </div>
         <div className="rp__shots">
-          <SiteMock />
-          <SiteMock />
+          <Image src="/shots/collateral-original.webp" alt="" width={1000} height={625} sizes="160px" />
+          <Image src="/shots/collateral-copy.webp" alt="" width={1000} height={625} sizes="160px" />
         </div>
       </div>
       <div className="rp__page rp__page--2">

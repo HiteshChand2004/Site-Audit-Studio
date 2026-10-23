@@ -1,104 +1,105 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
-import { Layers, MousePointer2, Terminal } from 'lucide-react';
-import { Badge } from '@/components/ui';
-import { EXAMPLE_RUN } from '@/lib/content';
+import Image from 'next/image';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { FrameBar } from '@/components/ui';
+import { showRuns } from '@/lib/content';
+import LighthouseReport from './LighthouseReport';
 
 /*
- * The one example run whose numbers the site quotes, in an open layout: a large Lighthouse pair (original → copy)
- * with a thin bar between them, and three compact stats. Numbers count up once when it scrolls into view (the server
- * renders the final values; reduced motion keeps them). The site switcher (Phase 6) will plug in here.
+ * The example runs (lib/content.ts showRuns): one framed screenshot of the copy on the left, the Lighthouse report of that
+ * run on the right. Every few seconds the picture swipes left to the next site and the
+ * dials change to that site's run (the track holds a copy of the first slide at its end, so the
+ * swipe is always leftwards, then snaps back unseen). It keeps going by itself and stands still only while the visitor is
+ * pointing at a ring of the report (hover, touch or focus), or when the picture is off screen, the tab is hidden, or the
+ * visitor prefers reduced motion (then the dots move it by hand). Every number is exactly the stored one.
  */
 
-const FROM = EXAMPLE_RUN.lighthouseOriginal;
-const TO = 98;
-
-const STATS = [
-  { Icon: Layers, label: 'Visual difference', value: '<1%' },
-  { Icon: MousePointer2, label: 'Hovers kept', value: EXAMPLE_RUN.hovers },
-  { Icon: Terminal, label: 'Console errors', value: String(EXAMPLE_RUN.consoleErrors) },
-];
+const N = showRuns.length;
+const SLIDES = [...showRuns, showRuns[0]];
+const EVERY = 3800;
+const HOLD_AFTER_TOUCH = 15000;
 
 export default function ExampleRun() {
+  const [index, setIndex] = useState(0);
+  const [snap, setSnap] = useState(false); // no transition while the track jumps back from the copy of the first slide
+  const [near, setNear] = useState(false); // the section has been close to the screen: load the other pictures
   const root = useRef<HTMLDivElement>(null);
+  const hold = useRef({ hover: false, until: 0, visible: false, reduce: false });
+  const slide = index % N;
+  const run = showRuns[slide];
+
+  const hovering = useCallback((on: boolean) => {
+    hold.current.hover = on;
+    hold.current.until = Math.max(hold.current.until, Date.now() + (on ? HOLD_AFTER_TOUCH : 1200));
+  }, []);
 
   useEffect(() => {
     const el = root.current;
-    if (!el || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      el?.classList.add('is-counted');
-      return;
-    }
-    const nums = Array.from(el.querySelectorAll<HTMLElement>('[data-count]'));
-    const set = (n: HTMLElement, v: number) => {
-      const t = n.firstChild;
-      if (t) t.nodeValue = String(v);
-    };
-    nums.forEach((n) => set(n, 0));
-
-    let frame = 0;
-    const io = new IntersectionObserver(
-      ([e]) => {
-        if (!e.isIntersecting) return;
-        io.disconnect();
-        el.classList.add('is-counted');
-        const start = performance.now();
-        const dur = 1400;
-        const step = (now: number) => {
-          const t = Math.min(1, (now - start) / dur);
-          const eased = 1 - Math.pow(1 - t, 3);
-          nums.forEach((n) => set(n, Math.round(Number(n.dataset.count) * eased)));
-          if (t < 1) frame = requestAnimationFrame(step);
-        };
-        frame = requestAnimationFrame(step);
-      },
-      { threshold: 0.45 },
-    );
-    io.observe(el);
+    if (!el) return;
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
+    hold.current.reduce = reduce.matches;
+    const onReduce = () => (hold.current.reduce = reduce.matches);
+    reduce.addEventListener('change', onReduce);
+    const nearIo = new IntersectionObserver(([e]) => e.isIntersecting && setNear(true), { rootMargin: '400px 0px' });
+    nearIo.observe(el);
+    const visIo = new IntersectionObserver(([e]) => (hold.current.visible = e.isIntersecting));
+    visIo.observe(el.querySelector('.xr__img') ?? el);
+    const timer = window.setInterval(() => {
+      const h = hold.current;
+      if (h.reduce || h.hover || !h.visible || document.hidden || Date.now() < h.until) return;
+      setIndex((i) => (i >= N ? i : i + 1));
+    }, EVERY);
     return () => {
-      io.disconnect();
-      cancelAnimationFrame(frame);
+      reduce.removeEventListener('change', onReduce);
+      nearIo.disconnect();
+      visIo.disconnect();
+      window.clearInterval(timer);
     };
   }, []);
 
+  // after the swipe onto the copy of the first slide, jump back to the real first slide without a transition
+  const onEnd = (e: React.TransitionEvent) => {
+    if (e.target !== e.currentTarget || e.propertyName !== 'transform' || index < N) return;
+    setSnap(true);
+    setIndex(0);
+    requestAnimationFrame(() => requestAnimationFrame(() => setSnap(false)));
+  };
+
+  const go = (i: number) => {
+    hold.current.until = Date.now() + HOLD_AFTER_TOUCH;
+    setIndex(i);
+  };
+
   return (
-    <div ref={root} className="xrun" data-reveal>
-      <Badge tone="accent">Example run · {EXAMPLE_RUN.site}</Badge>
-      <div className="xrun__grid">
-        <div className="xrun__pair">
-          <p className="label">Lighthouse</p>
-          <div className="xrun__nums">
-            <span className="xrun__num">
-              <span className="display xrun__big xrun__big--old" data-count={FROM}>
-                {FROM}
-              </span>
-              <span className="xrun__cap">Original</span>
-            </span>
-            <span className="xrun__bar" aria-hidden="true">
-              <i />
-            </span>
-            <span className="xrun__num">
-              <span className="display xrun__big">
-                <span data-count={TO}>{TO}</span>
-                <small>–99</small>
-              </span>
-              <span className="xrun__cap">Copy</span>
-            </span>
+    <div className="xr" data-reveal ref={root}>
+      <p className="xr__tag">
+        <strong>{run.site}</strong> · {run.pages} {run.pages === 1 ? 'page' : 'pages'}
+      </p>
+
+      <div className="xr__cmp">
+        <figure className="xr__shot">
+          <div className="frame">
+            <FrameBar addr={run.site} />
+            <div className="xr__img">
+              <div className="xr__track" data-snap={snap || undefined} style={{ transform: `translateX(-${index * 100}%)` }} onTransitionEnd={onEnd}>
+                {SLIDES.map((s, i) => (
+                  <div key={`${s.site}-${i}`} className="xr__slide" aria-hidden={i % N !== slide || i >= N || undefined}>
+                    <Image src={s.image} alt={`${s.alt}, ${s.caption.toLowerCase()}`} fill sizes="(min-width: 1000px) 600px, 100vw" loading={i === 0 ? 'lazy' : near ? 'eager' : 'lazy'} />
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
-        </div>
-        <ul className="xrun__stats">
-          {STATS.map(({ Icon, label, value }) => (
-            <li key={label}>
-              <span className="xrun__ico" aria-hidden="true">
-                <Icon size={18} />
-              </span>
-              <strong className="display">{value}</strong>
-              <span>{label}</span>
-            </li>
-          ))}
-        </ul>
+          <figcaption>{run.caption}. The copy looks the same on purpose; what changed is underneath.</figcaption>
+          <div className="xr__dots" role="group" aria-label="Choose a site">
+            {showRuns.map((s, i) => (
+              <button key={s.site} type="button" className="xr__dot" aria-label={s.site} aria-current={i === slide || undefined} onClick={() => go(i)} />
+            ))}
+          </div>
+        </figure>
+        <LighthouseReport run={run} onHold={hovering} />
       </div>
-      <p className="xrun__foot">Results vary by site.</p>
     </div>
   );
 }

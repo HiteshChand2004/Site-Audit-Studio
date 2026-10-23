@@ -1,152 +1,97 @@
 import Link from 'next/link';
-import type { ComponentType, ReactNode } from 'react';
-import { ArrowRight, Check, Clock, Eye, Globe, Hand, Scale, ServerCog, ShieldAlert, Timer, UserCheck } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { ArrowRight, Eye, Globe, Hand, Scale, ServerCog, ShieldAlert, Timer, UserCheck } from 'lucide-react';
 import CtaBand from '@/components/CtaBand';
-import { AuditMini, CompareMini, FixedMini, KeptMini, ReportMini, StacksMini } from '@/components/features/FeatureVisuals';
-import { Badge, IconList, PageHero, Section, SectionHead } from '@/components/ui';
+import { AuditMock, CompareMock, FixMock, KeptMock, PreviewMock, ReportMock, StackMock, ZipMock } from '@/components/how/Mocks';
+import { ButtonLink, Eyebrow, IconList, Section, SectionHead, TwoTone } from '@/components/ui';
+import { ToolShot } from '@/components/ui/ToolShot';
 import { LIMITS } from '@/lib/content';
 import { pageMeta } from '@/lib/meta';
+import '@/app/tour.css';
 
 export const metadata = pageMeta(
   '/features',
   'Features',
-  'What you get with Remastly: an audit of performance, SEO, accessibility, best practices, broken links and console errors; animations, hovers and clicks kept; common problems fixed; four stacks; a side-by-side compare view; and a shareable report.',
+  'What you get with Remastly: an audit of performance, SEO, accessibility, best practices, broken links and console errors; common problems fixed; four stacks; a side-by-side compare view; a download; and a shareable report.',
 );
 
 const LIMIT_ICONS = [UserCheck, Hand, Eye, Scale, ShieldAlert, Timer, ServerCog, Globe];
 
-type Capability = { id: string; label: string; title: ReactNode; lead: string; points: string[]; Viz: ComponentType; extra?: ReactNode };
-
-/* What you get, by capability. The journey (in which order) lives on How it works. */
-const CAPABILITIES: Capability[] = [
-  {
-    id: 'audit',
-    label: 'Audit',
-    title: (
-      <>
-        An honest <em>audit</em>.
-      </>
-    ),
-    lead: 'Every issue found and ranked before anything is rebuilt.',
-    points: ['Performance, phone and computer', 'SEO and accessibility', 'Best practices and console errors', 'Broken links, AI answers, platform', 'Ranked: Important, Worth fixing, Minor', 'Plain words, with why it matters'],
-    Viz: AuditMini,
-  },
-  {
-    id: 'kept',
-    label: 'Kept as-is',
-    title: (
-      <>
-        Everything that moves, <em>kept</em>.
-      </>
-    ),
-    lead: 'Rebuilt as real behaviour, not a flat picture.',
-    points: ['Animations play as before', 'Hovers react the same', 'Menus and toggles respond', 'Images, fonts and videos saved with the copy'],
-    Viz: KeptMini,
-  },
-  {
-    id: 'fixed',
-    label: 'Fixed for you',
-    title: (
-      <>
-        Quietly <em>fixed</em>.
-      </>
-    ),
-    lead: 'Common problems solved in the copy, then checked again.',
-    points: ['Alt text and heading order', 'Titles, descriptions, link previews', 'Site map and robots.txt', 'Lighter pages, unused code removed', 'What it can’t fix: flagged for you'],
-    Viz: FixedMini,
-  },
-  {
-    id: 'stacks',
-    label: 'Four stacks',
-    title: (
-      <>
-        Your stack, your <em>call</em>.
-      </>
-    ),
-    lead: 'The same site, in the code your team uses.',
-    points: ['Plain HTML: simplest, fastest', 'React + Vite or Next.js', 'MERN: forms that store messages', 'Download as one .zip'],
-    Viz: StacksMini,
-  },
-  {
-    id: 'compare',
-    label: 'Compare view',
-    title: (
-      <>
-        Side by <em>side</em>.
-      </>
-    ),
-    lead: 'Original and copy, page by page, at every screen size.',
-    points: ['Computer, tablet and phone', 'Both scroll together', 'A match score for every page', 'Pages below 80 flagged first', 'Private preview: nothing is published'],
-    Viz: CompareMini,
-    extra: (
-      <p className="soon">
-        <Badge tone="accent">
-          <Clock size={13} aria-hidden="true" /> Coming soon
-        </Badge>
-        <span>
-          <strong>Exact copy</strong>: matched at every screen size.
-        </span>
-      </p>
-    ),
-  },
-  {
-    id: 'report',
-    label: 'Report',
-    title: (
-      <>
-        A report you can <em>share</em>.
-      </>
-    ),
-    lead: 'The audit and the before/after, in one file.',
-    points: ['PDF, HTML or JSON', 'Fixed and flagged, side by side', 'Speed against Google’s targets', 'Regenerate after any run'],
-    Viz: ReportMini,
-    extra: (
-      <p className="more">
-        <Link href="/report" className="link-arrow">
-          Inside the report <ArrowRight size={16} aria-hidden="true" />
-        </Link>
-      </p>
-    ),
-  },
+/* What you get, by capability, each with a small drawing of that part of the app. All cards are the same size; the ninth
+   cell is the call to action. The journey lives on How it works. */
+const CAPABILITIES: { id: string; title: string; text: string; visual: ReactNode }[] = [
+  { id: 'audit', title: 'Every issue found and ranked', text: 'Speed, SEO, accessibility, best practices, broken links and console errors, in plain words.', visual: <AuditMock rows={4} /> },
+  { id: 'fidelity', title: 'Kept as it is, then measured', text: 'The page is carried over, not re-drawn, then compared with the original.', visual: <KeptMock /> },
+  { id: 'fixed', title: 'Common problems fixed', text: 'Safe fixes are made on the way. Anything else stays on the list, with the reason.', visual: <FixMock /> },
+  { id: 'stacks', title: 'Four stacks to choose from', text: 'The same copy in Plain HTML, React + Vite, Next.js or MERN.', visual: <StackMock /> },
+  { id: 'compare', title: 'Original and copy, side by side', text: 'Every page on computer, tablet and phone, scrolling together.', visual: <CompareMock /> },
+  { id: 'report', title: 'A report you can share', text: 'What was fixed and what is still open, as PDF, HTML or JSON.', visual: <ReportMock /> },
+  { id: 'download', title: 'The whole project in one .zip', text: 'Every page and asset, plus DEPLOY.md with the steps to publish it.', visual: <ZipMock /> },
+  { id: 'preview', title: 'A private preview first', text: 'Look through the copy before you download it. Nothing is published.', visual: <PreviewMock /> },
 ];
 
 export default function Features() {
   return (
     <>
-      <PageHero
-        label="Features"
-        title={
-          <>
-            Everything you <em>get</em>.
-          </>
-        }
-        lead="Six capabilities, one tool. Audit a site, keep what works, fix what doesn’t, and take it home in your stack."
-      />
-
-      {CAPABILITIES.map(({ id, label, title, lead, points, Viz, extra }, i) => (
-        <Section key={id} id={id} labelledBy={`${id}-title`} tone={i % 2 ? 'tint' : 'plain'} className={i === 0 ? 'section--flush-top' : ''}>
-          <div className={`split split--viz${i % 2 ? ' split--flip' : ''}`}>
-            <div>
-              <SectionHead id={`${id}-title`} label={label} title={title} lead={lead} />
-              <ul className="ticks" data-reveal>
-                {points.map((p) => (
-                  <li key={p}>
-                    <Check size={16} strokeWidth={2.6} aria-hidden="true" />
-                    {p}
-                  </li>
-                ))}
-              </ul>
-              {extra}
-            </div>
-            <div data-reveal="scale">
-              <Viz />
+      <section className="fx-hero" aria-labelledby="fx-title">
+        <span className="ghost" aria-hidden="true">
+          Features
+        </span>
+        <div className="container fx-hero__grid">
+          <div className="fx-hero__text">
+            <Eyebrow>What you get</Eyebrow>
+            <TwoTone as="h1" id="fx-title" line1="Everything in" line2="one measured run." className="fx-hero__title" />
+            <p className="lead fx-hero__lead">Audit, fix, copy, compare and download. Everything Remastly does for a site you add happens in one run.</p>
+            <div className="fx-hero__ctas">
+              <ButtonLink href="/#check" arrow>
+                Check my site
+              </ButtonLink>
+              <ButtonLink href="/how-it-works" variant="secondary">
+                How it works
+              </ButtonLink>
             </div>
           </div>
-        </Section>
-      ))}
+          <div className="fx-hero__art">
+            <span className="fx-hero__glow" aria-hidden="true" />
+            <ToolShot src="/tool/f-glance.webp" w={1000} h={933} alt="The audit summary in the app: five round scores, speed 62, found on Google 100, easy for everyone 100, safe and modern 100, ready for AI answers 93." className="fx-hero__shot" maxWidth={440} priority />
+            <ToolShot src="/tool/f-speed.webp" w={1000} h={443} alt="Speed in everyday words in the app: main content shows in 3.2 seconds, ready to use in 4.2 seconds, page freezes for 1.2 seconds, page weight 673 KB." className="fx-hero__shot2" maxWidth={340} priority />
+          </div>
+        </div>
+      </section>
 
-      <Section id="limitations" labelledBy="limitations-title">
-        <SectionHead id="limitations-title" label="Honest limits" title={<>Good to know <em>first</em>.</>} center />
+      <Section labelledBy="caps-title" tone="soft" size="sm">
+        <SectionHead id="caps-title" label="Capabilities" line1="Eight things," line2="in every run." center />
+        <ul className="fx-bento">
+          {CAPABILITIES.map(({ id, title, text, visual }) => (
+            <li key={id} id={id} className="fx-card">
+              <div className="fx-card__vis" aria-hidden="true">
+                {visual}
+              </div>
+              <div className="fx-card__body">
+                <h3>{title}</h3>
+                <p>{text}</p>
+              </div>
+            </li>
+          ))}
+          <li className="fx-card fx-card--cta">
+            <div className="fx-card__body">
+              <h3>Try it on your own site</h3>
+              <p>Paste an address and see what Remastly finds, in about a minute.</p>
+              <ButtonLink href="/#check" arrow>
+                Check my site
+              </ButtonLink>
+            </div>
+          </li>
+        </ul>
+        <p className="fx-more">
+          <Link href="/report" className="link-arrow">
+            See what is inside the report <ArrowRight size={16} aria-hidden="true" />
+          </Link>
+        </p>
+      </Section>
+
+      <Section id="limitations" labelledBy="limitations-title" tone="dark" ghost="Limits" size="sm">
+        <SectionHead id="limitations-title" label="Honest limits" line1="Good to know" line2="before you start." center />
         <IconList items={LIMITS.map((l, i) => ({ Icon: LIMIT_ICONS[i], title: l.title, text: l.text }))} columns={2} />
         <p className="more center" data-reveal>
           <Link href="/how-it-works" className="link-arrow">

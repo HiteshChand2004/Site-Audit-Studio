@@ -1,0 +1,19 @@
+/* The /auth page: sign in / sign up as a simple page, just the form, centred, no card. */
+
+.authpage {
+  padding: clamp(40px, 6vw, 80px) 0 clamp(56px, 7vw, 96px);
+}
+.authpage__form {
+  display: grid;
+  justify-items: center;
+}
+
+.authcard--plain {
+  max-width: 640px;
+}
+.authcard--plain .authcard__title {
+  font-size: clamp(2rem, 1.5rem + 1.6vw, 2.8rem);
+}
+.authcard--plain .authcard__lead {
+  font-size: 15.5px;
+}

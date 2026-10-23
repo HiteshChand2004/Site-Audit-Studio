@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import Logo from './Logo';
+import { exampleScores } from '@/lib/content';
 import { FOOTER_NAV, TAGLINE } from '@/lib/site';
 
 export default function Footer() {
@@ -12,7 +13,6 @@ export default function Footer() {
               <Logo />
             </Link>
             <p className="display footer__tagline">{TAGLINE}</p>
-            <p className="footer__text">Audit. Fix. Rebuild in your stack. Your live site is never touched.</p>
           </div>
           {FOOTER_NAV.map((col) => (
             <nav key={col.title} aria-labelledby={`footer-${col.title}`}>
@@ -31,7 +31,7 @@ export default function Footer() {
         </div>
         <div className="footer__bottom">
           <span>© {new Date().getFullYear()} Remastly. For websites your company owns or may use.</span>
-          <span>Lighthouse is a tool by Google. Scores shown are from a labelled example run.</span>
+          <span>Lighthouse is a tool by Google.{exampleScores && ' Scores shown are from a labelled example run.'}</span>
         </div>
       </div>
     </footer>

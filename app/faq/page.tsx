@@ -1,6 +1,7 @@
-import Link from 'next/link';
 import CtaBand from '@/components/CtaBand';
-import { FaqList, JsonLd, PageHero, Section } from '@/components/ui';
+import { JsonLd, PageHero, Section } from '@/components/ui';
+import { FaqPanel } from '@/components/ui/FaqPanel';
+import { HeroArt, HeroShot } from '@/components/ui/HeroArt';
 import { FAQS } from '@/lib/content';
 import { pageMeta } from '@/lib/meta';
 
@@ -18,25 +19,19 @@ export default function Faq() {
       />
       <PageHero
         label="FAQ"
-        title={
-          <>
-            Questions, <em>answered</em>.
-          </>
+        line1="Questions,"
+        line2="answered."
+        ghost="FAQ"
+        art={
+          <HeroArt
+            main={<HeroShot src="/shots/botza-original.webp" w={900} h={563} bar="Original: botza.panscience.ai" />}
+            overlay={<HeroShot src="/shots/botza-copy.webp" w={900} h={563} bar="Copy" chip={<span className="hchip">Standard mode</span>} />}
+          />
         }
-        lead="Including the ones about what Remastly can’t do."
       />
 
-      <Section label="Frequently asked questions" className="section--flush-top">
-        <div className="narrow" data-reveal>
-          <FaqList items={FAQS} openFirst />
-          <p className="more center muted">
-            Didn’t find your answer?{' '}
-            <Link href="/contact" className="link">
-              Ask us directly
-            </Link>
-            .
-          </p>
-        </div>
+      <Section label="Frequently asked questions" size="sm">
+        <FaqPanel items={FAQS} name="faq-all" />
       </Section>
 
       <CtaBand />

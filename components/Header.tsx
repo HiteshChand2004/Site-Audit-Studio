@@ -63,7 +63,7 @@ export default function Header() {
     <header className="header" data-scrolled={scrolled || open}>
       <div className="container header__inner">
         <Link href="/" className="header__brand" aria-label="Remastly home">
-          <Logo priority />
+          <Logo />
         </Link>
 
         <nav

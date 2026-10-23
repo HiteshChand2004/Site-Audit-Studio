@@ -3,11 +3,11 @@ import { Info } from 'lucide-react';
 import { PageHero, Section } from '@/components/ui';
 
 /** Shared layout for the legal pages: a short hero, a draft notice and readable prose. */
-export default function LegalPage({ label, title, updated, children }: { label: string; title: ReactNode; updated: string; children: ReactNode }) {
+export default function LegalPage({ label, line1, line2, updated, children }: { label: string; line1: ReactNode; line2: ReactNode; updated: string; children: ReactNode }) {
   return (
     <>
-      <PageHero label={label} title={title} lead={`Last updated: ${updated}`} />
-      <Section label={label} className="section--flush-top">
+      <PageHero label={label} line1={line1} line2={line2} lead={`Last updated: ${updated}`} />
+      <Section label={label} size="sm">
         <div className="narrow">
           <p className="draft-note">
             <Info size={16} aria-hidden="true" />

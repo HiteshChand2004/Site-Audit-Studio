@@ -9,16 +9,13 @@ export default function Privacy() {
   return (
     <LegalPage
       label="Legal"
-      title={
-        <>
-          Privacy <em>policy</em>.
-        </>
-      }
+      line1="Privacy"
+      line2="policy."
       updated="[DATE]"
     >
       <h2>Who we are</h2>
       <p>
-        Remastly is provided by [COMPANY LEGAL NAME], [REGISTERED ADDRESS]. For anything about your data, write to <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
+        Remastly is provided by [COMPANY LEGAL NAME], [REGISTERED ADDRESS]. For anything about your data, {CONTACT_EMAIL ? <>write to <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a></> : <>use the <Link href="/contact">contact page</Link></>}.
       </p>
 
       <h2>This website</h2>
@@ -51,7 +48,7 @@ export default function Privacy() {
 
       <h2>Your rights</h2>
       <p>
-        You can ask to see, correct, export or delete your personal data, or object to how it is used, by writing to <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>. [SUPERVISORY
+        You can ask to see, correct, export or delete your personal data, or object to how it is used, by {CONTACT_EMAIL ? <>writing to <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a></> : <>using the <Link href="/contact">contact page</Link></>}. [SUPERVISORY
         AUTHORITY, IF APPLICABLE.]
       </p>
 

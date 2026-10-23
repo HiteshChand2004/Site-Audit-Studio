@@ -1,5 +1,6 @@
 import { Accessibility, Check, Flag, Gauge, Link2Off, Search, ShieldCheck, Terminal } from 'lucide-react';
 import { Badge, BrowserFrame, type Tone } from '@/components/ui';
+import '@/app/visuals.css';
 
 /*
  * The audit report, compact (about 480×320), built in HTML/CSS. Categories and issue types are real checks of the

@@ -9,11 +9,8 @@ export default function Terms() {
   return (
     <LegalPage
       label="Legal"
-      title={
-        <>
-          Terms of <em>use</em>.
-        </>
-      }
+      line1="Terms"
+      line2="of use."
       updated="[DATE]"
     >
       <h2>Agreement</h2>
@@ -52,7 +49,7 @@ export default function Terms() {
 
       <h2>Changes and contact</h2>
       <p>
-        When these terms change, we update the date at the top of this page. Questions: <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>. [GOVERNING LAW.]
+        When these terms change, we update the date at the top of this page. Questions: {CONTACT_EMAIL ? <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> : <Link href="/contact">contact page</Link>}. [GOVERNING LAW.]
       </p>
     </LegalPage>
   );

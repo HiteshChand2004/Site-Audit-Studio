@@ -1,8 +1,13 @@
-import Image from 'next/image';
-import logo from '@/public/logo.png';
-import logoDark from '@/public/logo-dark.png';
+import LogoMark from './LogoMark';
 
-/** The Remastly logo: black brand name on light backgrounds, off-white on dark ones. */
-export default function Logo({ dark = false, className, priority = false }: { dark?: boolean; className?: string; priority?: boolean }) {
-  return <Image src={dark ? logoDark : logo} alt="Remastly" className={className} priority={priority} sizes="180px" />;
+/** The Remastly logo: the mark (its tallest bar takes the accent colour) and the name. `dark` is for dark bands. */
+export default function Logo({ dark = false, className = '' }: { dark?: boolean; className?: string; priority?: boolean }) {
+  return (
+    <span className={`logo${dark ? ' logo--dark' : ''} ${className}`.trim()} aria-label="Remastly" role="img">
+      <LogoMark size={30} />
+      <span className="logo__name" aria-hidden="true">
+        Remastly
+      </span>
+    </span>
+  );
 }

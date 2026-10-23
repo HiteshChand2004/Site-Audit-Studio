@@ -1,0 +1,125 @@
+/* Contact page: the side column, the form laid out on the page (no card), and the small message note in the hero. */
+
+.ct {
+  display: grid;
+  gap: 48px;
+  align-items: start;
+}
+@media (min-width: 960px) {
+  .ct {
+    grid-template-columns: minmax(0, 340px) minmax(0, 1fr);
+    gap: 72px;
+  }
+}
+.ct__side {
+  display: grid;
+  gap: 32px;
+}
+.ct__block {
+  display: grid;
+  gap: 8px;
+}
+.ct__block h2,
+.ct__title {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 1.6rem;
+  font-weight: 500;
+}
+.ct__block p,
+.ct__faq {
+  margin: 0;
+  color: var(--text-2);
+}
+.ct__block .ticks {
+  margin-top: 6px;
+}
+.ct__ico {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 4px;
+  border-radius: 12px;
+  background: var(--accent);
+  color: #fff;
+}
+.ct__main {
+  display: grid;
+  gap: 24px;
+}
+.ct__title {
+  font-size: clamp(1.9rem, 1.5rem + 1.2vw, 2.5rem);
+}
+
+.ct-form {
+  display: grid;
+  gap: 20px;
+}
+.ct-form__row {
+  display: grid;
+  gap: 20px;
+}
+@media (min-width: 640px) {
+  .ct-form__row {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+.ct-form textarea {
+  min-height: 140px;
+  resize: vertical;
+}
+.ct-form__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+.ct-form__note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+.ct-form__notice {
+  display: flex;
+  gap: 10px;
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--warn-border);
+  border-radius: 12px;
+  background: var(--warn-tint);
+  color: var(--warn);
+  font-size: 14px;
+}
+.ct-form__notice svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.ct-note {
+  display: flex;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.ct-note > span:last-child {
+  display: grid;
+  gap: 2px;
+  font-size: 14px;
+}
+.ct-note small {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.ct-note__ico {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--accent-tint);
+  color: var(--accent);
+}

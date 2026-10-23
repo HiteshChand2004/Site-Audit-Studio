@@ -1,9 +1,12 @@
 import Link from 'next/link';
-import { Lightbulb } from 'lucide-react';
 import CtaBand from '@/components/CtaBand';
-import ClockJourney, { type ClockStep } from '@/components/journey/ClockJourney';
-import { IconList, JsonLd, PageHero, Section, SectionHead } from '@/components/ui';
+import Journey, { type JourneyStep } from '@/components/how/Journey';
+import { AddressMock, AuditMock, CompareMock, CopyMock, StackMock, ZipMock } from '@/components/how/Mocks';
+import { HeroArt, HeroShot } from '@/components/ui/HeroArt';
+import { JsonLd, PageHero, Section, SectionHead } from '@/components/ui';
+import { PIPELINE } from '@/lib/content';
 import { pageMeta } from '@/lib/meta';
+import '@/app/tour.css';
 
 export const metadata = pageMeta(
   '/how-it-works',
@@ -11,14 +14,14 @@ export const metadata = pageMeta(
   'The Remastly journey: paste the address, audit, choose a stack, rebuild, compare with the original, then download and deploy.',
 );
 
-/* The journey: in which order things happen. What you get from each part lives on Features. */
-const STEPS: ClockStep[] = [
-  { title: 'Paste URL', text: 'Any site your company owns or may use. Nothing runs until you start it.' },
-  { title: 'Audit', text: 'Every issue found and ranked, in a minute or two (up to six on slow sites).' },
-  { title: 'Choose stack', text: 'HTML, React + Vite, Next.js or MERN. Then pick every page, the homepage, or one page.' },
-  { title: 'Rebuild', text: 'Every page rebuilt, problems fixed on the way. Stop any time; it resumes where it stopped.' },
-  { title: 'Compare', text: 'Original and copy side by side, with a match score for every page, before anything goes live.' },
-  { title: 'Download / deploy', text: 'Take the .zip and the report, and publish the site on your own hosting.' },
+/* The journey: in which order things happen, each with a drawing of the app at that step. What you get lives on Features. */
+const STEPS: JourneyStep[] = [
+  { id: 'paste', title: 'Paste the address', text: 'Any site your company owns or may use. Nothing runs until you start it.', screen: 'Add a website', visual: <AddressMock /> },
+  { id: 'audit', title: 'Audit', text: 'Every issue found and ranked, in about a minute (up to five on slow sites).', screen: 'Check', visual: <AuditMock /> },
+  { id: 'stack', title: 'Choose the stack', text: 'HTML, React + Vite, Next.js or MERN. Then every page, the homepage, or one page.', screen: 'Copy', visual: <StackMock /> },
+  { id: 'copy', title: 'Copy and fix', text: 'Every page kept as it is, problems fixed on the way. Stop any time; it resumes where it stopped.', screen: 'Copy', visual: <CopyMock /> },
+  { id: 'measure', title: 'Measure', text: 'Original and copy compared on every page, and the audit run again on the copy.', screen: 'Compare', visual: <CompareMock /> },
+  { id: 'download', title: 'Download and deploy', text: 'Take the .zip and the report, and publish the site on your own hosting.', screen: 'Results and download', visual: <ZipMock /> },
 ];
 
 const TIPS = [
@@ -43,22 +46,40 @@ export default function HowItWorks() {
       />
       <PageHero
         label="How it works"
-        title={
-          <>
-            Six steps. <em>Zero</em> code.
-          </>
-        }
-        lead="From an address to a better site, in order. You paste and choose; Remastly does the rest."
+        line1="Six steps from"
+        line2="address to copy."
+        ghost="Steps"
+        lead="Paste an address at the start, download a .zip at the end. Pick a step below to see that part of the app."
+        art={<HeroArt main={<HeroShot src="/tool/h-add.webp" w={960} h={864} trim />} overlay={<ZipMock />} />}
       />
 
-      <Section label="The journey" className="section--flush-top">
-        <ClockJourney steps={STEPS} />
+      <Section label="The journey" tone="soft" size="sm">
+        <Journey steps={STEPS} />
       </Section>
 
-      <Section labelledBy="tips-title" tone="tint">
-        <SectionHead id="tips-title" label="Good to know" title={<>Tips for the <em>best</em> result.</>} center />
-        <IconList items={TIPS.map(([title, text]) => ({ Icon: Lightbulb, title, text }))} layout="cols" columns={3} />
-        <p className="more center muted" data-reveal>
+      <Section labelledBy="inside-title" tone="dark" ghost="Inside" size="sm">
+        <SectionHead id="inside-title" label="Inside a run" line1="What happens to" line2="each page." center />
+        <ol className="runline">
+          {PIPELINE.map((s) => (
+            <li key={s.key}>
+              <h3>{s.title}</h3>
+              <p>{s.text}</p>
+            </li>
+          ))}
+        </ol>
+      </Section>
+
+      <Section labelledBy="tips-title" size="sm">
+        <SectionHead id="tips-title" label="Good to know" line1="Small habits" line2="for better results." />
+        <dl className="tips">
+          {TIPS.map(([title, text]) => (
+            <div key={title}>
+              <dt>{title}</dt>
+              <dd>{text}</dd>
+            </div>
+          ))}
+        </dl>
+        <p className="tips__more muted">
           What you get at each step: <Link href="/features" className="link">Features</Link>.
         </p>
       </Section>

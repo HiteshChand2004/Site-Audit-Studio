@@ -20,8 +20,9 @@ Repo: https://github.com/HiteshChand2004/remastly-website (branch `main`).
   ports 4000/5173.
 - **`C:\Users\urvas\Downloads\Website-Audit-exact` is the tool itself and is READ-ONLY.** Only read its saved runs in
   `data/` (Phase 6). Never edit, create or delete anything there, never run its scripts or git.
-- **Numbers:** only real ones, labelled "Example run · makememo.ai": Lighthouse 98–99 vs 91 original, visual
-  difference under 1%, 15/15 hovers kept, 0 console errors (`lib/content.ts` → `EXAMPLE_RUN`). Never invent stats,
+- **Numbers:** none are shown right now. `lib/content.ts` → `exampleRun` has status 'pending' and every run figure null; each
+  component shows a dash or "Example run to come". Fill it only from ONE real, complete run (`data/example-runs.json`, never mix
+  runs), then set status 'ready'. The old "91 → 98–99" example was wrong (three runs mixed). Never invent stats,
   testimonials, logos or prices. Illustrations show status words, not scores.
 - **Audit labels:** broken links and console errors are always **"Flagged for you"**, never "Fixed" (the tool keeps
   broken links deliberately). Settled; don't ask again. Only items in `FIXABLE` may be shown as "Fixed in your copy".
@@ -52,11 +53,14 @@ Repo: https://github.com/HiteshChand2004/remastly-website (branch `main`).
 | Route | What's there |
 | --- | --- |
 | `/` | Hero ("Paste a link. Get a *better* site.") with the 3D GSAP stage: URL centred → glides up → audit → fix → rebuild copy; 4-step rail (Paste · Audit · Fix · Rebuild); speed `SPEED = 1.4` in `components/hero/timeline.ts`. Audit → Fix → Rebuild story (rail + one visual, sticky + scroll-scrubbed on desktop). Before/after wipe card. 4 stacks tabs with file trees and run commands (auto-cycle). Example run (open layout, count-up). Quick FAQ. "Paste your address" CTA form → `/auth`. |
-| `/features` | Six capabilities (Audit, Kept as-is, Fixed for you, Four stacks, Compare view, Report), each with its own compact CSS visual (`components/features/FeatureVisuals.tsx`), then honest limits. |
-| `/how-it-works` | Clock/dial journey (`components/journey/ClockJourney.tsx`): pinned on desktop, the hand follows the scroll, 6 steps light up, centre visual + side panel; compact sticky dial on phones; static list under reduced motion. Tips. |
+| `/features` | Split hero (headline + buttons; two real app screenshots layered, `f-glance` + `f-speed`), then a 3 × 3 grid of same-size cards: eight capabilities, each with a drawn app piece on top (`components/how/Mocks.tsx`: audit list, kept chips, fixes, stack picker with logos, compare with the real indikaai original/copy (exact copy mode, labelled), report, zip, private preview), and a dark "Check my site" card, then honest limits. Styles: `app/tour.css` (`fx-`, `mk-`). |
+| `/how-it-works` | Interactive stepper (`components/how/Journey.tsx`): six steps on the left, an app window on the right showing a drawing of that step; plays through on its own until clicked, stops under reduced motion. Then "Inside a run" (dark), tips. Styles: `app/tour.css` (`hw-`). |
 | `/report` | Compact audit report mockup, Found / Fixed / Flagged columns, two-page PDF mockup + formats. |
 | `/pricing` | 3 plans, all "Price coming soon" + "Contact us"; what's in every plan; plan FAQ. |
 | `/faq`, `/about` | FAQ accordion (`lib/content.ts` → `FAQS`); About: four promises + audiences. |
+| Inner page heroes | How it works, Pricing, FAQ, About and Audit report pass `art` to `PageHero` (split layout): `components/ui/HeroArt.tsx` (`HeroArt` = main + overlapping overlay + glow; `HeroShot` = framed real picture with optional window bar, zoom, trim), styles in `app/hero-art.css`. Pictures: h-add + zip (how), collateral features-page copy + stack picker (pricing), botza original/copy labelled standard mode (FAQ), botza/panscience/indikaai-mid fanned (about); contact uses panscience.xyz. Each hero shows a different site, f-needs + f-overview (report). Drawn overlays hide under 600px. |
+| Contact, Get started, About | Contact: hero art (botza copy + message note), side column + form laid out on the page (`app/contact.css`, `ct-`); the form opens mailto when `NEXT_PUBLIC_CONTACT_EMAIL` is set, otherwise says nothing was sent. Get started: `/auth` is a simple page, just the form centred, no card and no pictures (`AuthCard plain`, `app/authpage.css`); the desktop modal (`AuthDialog`) is no longer mounted in `app/layout.tsx`. About "How it behaves": collateral live site + copy (exact copy mode) replace the empty AI image slot. |
+| Scroll on navigation | `components/ScrollManager.tsx` (mounted in `app/layout.tsx`, plus `data-scroll-behavior="smooth"` on `<html>`): a link to another page opens it at the top; a link with `#section` (e.g. `/#check`) opens that section; Back/Forward keep the restored position. Needed because Next 16 keeps the scroll position when the new page is already in view. |
 | `/contact` | Page hero, email + "Helpful to include", form that opens the visitor's email app (no backend). |
 | `/auth` | Sign in / Sign up glass card on a light "aurora" stage: typographic "Sign in · Sign up" switch, labels above fields, example placeholders, validation, posts to `NEXT_PUBLIC_APP_URL` or shows "opens soon". `/signin` and `/signup` redirect here (307, `next.config.mjs`). On desktop every `/auth` link opens it as a full-screen modal (`components/auth/AuthDialog.tsx`). |
 | `/privacy`, `/terms` | Drafts with `[BRACKETED]` placeholders and a visible "draft for review" note. |

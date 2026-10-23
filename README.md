@@ -65,7 +65,6 @@ To change an image, replace the file in `public/images/` and keep its name, or p
 
 ## Hero story and motion
 
-- **Hero story** (`components/hero/CinematicHero.tsx`): one 8-second GSAP timeline. A URL bar types the address and presses Enter; an older site floats in with its issues and a speed gauge (the real original figure, 79 on phones); a scan beam sweeps down and the page splits into layers; the layers reassemble into the rebuilt window with the stack chips; the markers become "Fixed" ticks and the counter reaches 8 (the real count of better checks); finally the original and the copy sit side by side with the 98% visual match badge. It plays once and settles on the last frame, with a Replay button. It starts once the hero is visible and pauses when it scrolls away or the tab is hidden.
 - **3D** is CSS 3D transforms (perspective, preserve-3d), so text stays sharp. No WebGL.
 - **Phones** use the same story in a flatter 3D setting, with a shorter stage so the hero fits one screen (844 px high at 390 × 844).
 - **Reduced motion** shows the final frame, with no timeline.

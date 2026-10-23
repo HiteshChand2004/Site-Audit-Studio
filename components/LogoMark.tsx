@@ -6,7 +6,7 @@ export default function LogoMark({ size = 32, className = '' }: { size?: number;
       <rect x="7" y="16" width="3.2" height="9" rx="1.6" fill="#f3f0ea" />
       <rect x="12.2" y="11" width="3.2" height="14" rx="1.6" fill="#f3f0ea" />
       <rect x="17.4" y="14" width="3.2" height="11" rx="1.6" fill="#f3f0ea" />
-      <rect x="22.6" y="6" width="3.4" height="19" rx="1.7" fill="#f97316" />
+      <rect x="22.6" y="6" width="3.4" height="19" rx="1.7" fill="var(--accent)" />
     </svg>
   );
 }

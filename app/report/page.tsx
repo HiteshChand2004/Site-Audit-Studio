@@ -3,6 +3,7 @@ import CtaBand from '@/components/CtaBand';
 import AuditReport, { AUDIT_CHECKS } from '@/components/mockups/AuditReport';
 import { ReportPagesMock } from '@/components/mockups/ProductMocks';
 import { IconList, PageHero, Section, SectionHead } from '@/components/ui';
+import { HeroArt, HeroShot } from '@/components/ui/HeroArt';
 import { pageMeta } from '@/lib/meta';
 
 export const metadata = pageMeta(
@@ -41,18 +42,21 @@ export default function ReportPage() {
     <>
       <PageHero
         label="Audit report"
-        title={
-          <>
-            Your audit, in one <em>report</em>.
-          </>
+        line1="Your audit,"
+        line2="in one report."
+        ghost="Report"
+        art={
+          <HeroArt
+            main={<HeroShot src="/tool/f-needs.webp" w={1400} h={409} bar="Audit report" zoom={1.6} height={230} />}
+            overlay={<HeroShot src="/tool/f-overview.webp" w={1400} h={250} zoom={1.9} height={118} />}
+          />
         }
-        lead="What’s wrong, what we fixed, and what’s left for you. Ready to share with your team or a client."
       />
 
-      <Section labelledBy="audit-title" className="section--flush-top">
+      <Section labelledBy="audit-title" size="sm">
         <div className="split split--viz">
           <div>
-            <SectionHead id="audit-title" label="The audit" title={<>Ranked, then <em>resolved</em>.</>} lead="Six categories. Every issue marked fixed in your copy, or flagged for you." />
+            <SectionHead id="audit-title" label="The audit" line1="Ranked," line2="then resolved." />
             <div className="cat-strip" data-reveal>
               {AUDIT_CHECKS.map(({ Icon, name }) => (
                 <span key={name} className="kf__chip">
@@ -67,8 +71,8 @@ export default function ReportPage() {
         </div>
       </Section>
 
-      <Section labelledBy="inside-title" tone="tint">
-        <SectionHead id="inside-title" label="What’s inside" title={<>Found. Fixed. <em>Flagged</em>.</>} center />
+      <Section labelledBy="inside-title" tone="dark" ghost="Inside" size="sm">
+        <SectionHead id="inside-title" label="What’s inside" line1="Found. Fixed." line2="Flagged." center />
         <div className="ocols ocols--3" data-reveal>
           {INSIDE.map((b) => (
             <div key={b.title}>
@@ -87,10 +91,10 @@ export default function ReportPage() {
         </div>
       </Section>
 
-      <Section labelledBy="share-title">
+      <Section labelledBy="share-title" size="sm">
         <div className="split split--viz split--flip">
           <div>
-            <SectionHead id="share-title" label="Share it" title={<>Two pages. <em>Any</em> format.</>} lead="The answer first, then the numbers." />
+            <SectionHead id="share-title" label="Share it" line1="Two pages," line2="any format." />
             <IconList items={FORMATS} columns={2} className="formats" />
           </div>
           <div data-reveal="scale">
@@ -99,7 +103,7 @@ export default function ReportPage() {
         </div>
       </Section>
 
-      <CtaBand title={<>Audit <em>your</em> site.</>} lead="Paste an address to start." />
+      <CtaBand />
     </>
   );
 }
