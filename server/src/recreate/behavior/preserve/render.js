@@ -8,6 +8,7 @@ import { createServer } from 'node:http';
 import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
+import { exactDiff } from '../../verify/exact/pixels.js';
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.png': 'image/png',
   '.jpg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf',
@@ -16,7 +17,6 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=u
 /** Visual difference above this share of pixels fails a component (CLONER_SPEC: default threshold 3%). */
 export const DIFF_LIMIT_PCT = 3;
 /** Per-channel difference that counts a pixel as different. */
-const CHANNEL_DELTA = 24;
 
 /**
  * Writes render.html for a component: its shell, its markup in place of the marker, and a head that loads its own CSS.
@@ -66,20 +66,6 @@ export function serveFolder(dir) {
   });
 }
 
-/**
- * Pixel difference of two same-size RGB images (share of pixels with a channel off by more than CHANNEL_DELTA).
- * @param {Buffer} a  raw RGB
- * @param {Buffer} b  raw RGB, same length
- */
-export function pixelDiffPct(a, b) {
-  const pixels = Math.min(a.length, b.length) / 3;
-  if (!pixels) return 100;
-  let diff = 0;
-  for (let i = 0; i < pixels * 3; i += 3) {
-    if (Math.abs(a[i] - b[i]) > CHANNEL_DELTA || Math.abs(a[i + 1] - b[i + 1]) > CHANNEL_DELTA || Math.abs(a[i + 2] - b[i + 2]) > CHANNEL_DELTA) diff++;
-  }
-  return Math.round((diff / pixels) * 10000) / 100;
-}
 
 /**
  * The original's pixels for a rectangle, from the exact baseline bands at the given width (the bands stack top to bottom).
@@ -234,9 +220,11 @@ export async function renderComponent({ browser, dir, component, manifest, basel
       // Both to the copy's size (the rectangle is rounded to whole pixels).
       const ref = await sharp(reference.data, { raw: { width: reference.width, height: reference.height, channels: 3 } })
         .resize(copyRaw.info.width, copyRaw.info.height).raw().toBuffer();
-      diffPct = pixelDiffPct(copyRaw.data, ref);
+      const refPngBuf = await sharp(ref, { raw: { width: copyRaw.info.width, height: copyRaw.info.height, channels: 3 } }).png().toBuffer();
+      // The same ruler as every other picture comparison (verify/exact/pixels.js): perceptual colour distance, edges set aside.
+      diffPct = (await exactDiff(refPngBuf, shot)).commonPct;
       refPng = path.join(outDir, `${component.id}-original.png`);
-      await sharp(ref, { raw: { width: copyRaw.info.width, height: copyRaw.info.height, channels: 3 } }).png().toFile(refPng);
+      await writeFile(refPng, refPngBuf);
     }
     const copyFile = path.join(outDir, `${component.id}-copy.png`);
     await writeFile(copyFile, shot);

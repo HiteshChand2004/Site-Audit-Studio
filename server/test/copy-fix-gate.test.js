@@ -1,9 +1,10 @@
 // The gate of the as-is fixes (preserve/stage.js fixAndProve + check.js fixGate), in both directions. A page's fixes are kept only
-// when its picture (1440 px, frozen, scrolled, size reactions held) differs from the same page unfixed by no more than
-// max(FIX_GATE_FLOOR_PCT 0.01 %, 2 × the page's own noise), at the same height, with no new console error; the noise is the
-// unfixed page pictured twice. Here: a fix the page's own CSS turns into a layout change is undone (reason d); one below the first
-// screen inside a section that only appears on scroll is undone too (a picture without the scroll shows no difference at all);
-// on a page whose own noise is larger, a small visible fix is kept; and the floor itself, a change just under and well over it.
+// when its picture (1440 px, frozen, scrolled, size reactions held) has not one pixel different from the same page unfixed outside
+// the places the page moves by itself (the noise map: wherever any two of three unfixed pictures differ), at the same size, with no
+// new console error. One ruler: verify/exact/pixels.js exactDiff. Here: a fix the page's own CSS turns into a layout change is
+// undone (reason d); one below the first screen inside a section that only appears on scroll is undone too; on a page with a noisy
+// part, a visible fix elsewhere is undone and a fix that changes nothing is kept; and the smallest changes — 2 x 2 px, a pale
+// square, a change far down a tall page — are seen, while an unchanged page passes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -12,9 +13,9 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import sharp from 'sharp';
 import { fixAndProve } from '../src/recreate/behavior/preserve/stage.js';
-import { fixGate, FIX_GATE_FLOOR_PCT } from '../src/recreate/behavior/preserve/check.js';
+import { fixGate, gateVerdict } from '../src/recreate/behavior/preserve/check.js';
 import { serveCopy } from '../src/recreate/behavior/preserve/serve.js';
-import { pixelDiffPct } from '../src/recreate/behavior/preserve/render.js';
+import { exactDiff } from '../src/recreate/verify/exact/pixels.js';
 
 const SITE = 'https://www.example-original.dev/';
 const ENGLISH = 'This page is about the work we do for our customers and the people who use what we make every day. '
@@ -49,7 +50,7 @@ test('a fix the page\'s own CSS turns into a layout change is undone, reason d',
   const page = r.pages[0];
   assert.ok(page.fixes.some((f) => f.kind === 'alt'), 'the alt fix was attempted');
   assert.equal(page.reverted?.reason, 'd', JSON.stringify(r.gate));
-  assert.ok(r.gate[0].diffPct > r.gate[0].allowedPct, JSON.stringify(r.gate[0]));
+  assert.ok(r.gate[0].changedPx > 0 || r.gate[0].sizeChanged, JSON.stringify(r.gate[0]));
   assert.equal(await readFile(path.join(dir, 'index.html'), 'utf8'), html, 'the page is back as lifted');
   assert.equal(r.counts.alt, undefined, 'an undone fix is not counted');
 });
@@ -76,42 +77,57 @@ test('a change below the first screen, in a section that only appears on scroll,
     await p.waitForTimeout(500);
     const shot = await p.screenshot({ fullPage: true });
     await ctx.close();
-    const { data } = await sharp(shot).removeAlpha().raw().toBuffer({ resolveWithObject: true });
-    return data;
+    return shot;
   };
-  assert.equal(pixelDiffPct(await noScroll(fixedHtml), await noScroll(html)), 0, 'a picture without the scroll sees no difference');
+  assert.equal((await exactDiff(await noScroll(html), await noScroll(fixedHtml))).diff, 0, 'a picture without the scroll sees no difference');
 
   const r = await prove(browser, dir);
   assert.ok(r.pages[0].fixes.some((f) => f.kind === 'names' && f.value === 'Email'), JSON.stringify(r.pages[0].fixes));
   assert.equal(r.pages[0].reverted?.reason, 'd', JSON.stringify(r.gate));
   assert.equal(r.gate[0].heights[0], r.gate[0].heights[1], 'same height: caught by the pixels, not by the height rule');
+  assert.ok(r.gate[0].changedPx > 0, JSON.stringify(r.gate[0]));
   assert.equal(await readFile(path.join(dir, 'index.html'), 'utf8'), html);
 });
 
-test('on a page whose own noise is larger, a small visible fix is kept', { timeout: 5 * 60000 }, async (t) => {
-  // A 300 x 300 canvas of random pixels: every load differs (~7 % of a 1440 x 900 page). The fix sets <html lang> (detectLang),
-  // and the site colours a 20 x 20 mark when lang is set: a real but small change, well inside twice the noise.
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Gate test page title</title>
+// A page with a part that moves by itself: a 300 x 300 canvas of random pixels, different on every load.
+const noisyPage = (markCss) => `<!doctype html><html><head><meta charset="utf-8"><title>Gate test page title</title>
     <meta name="description" content="A page made to test which fixes are kept and which are undone, written for the gate test.">
-    <style>body{margin:0;font:18px sans-serif;background:#fff;height:900px;overflow:hidden}.mark{width:20px;height:20px;background:#ddd}html[lang] .mark{background:#c00}</style></head>
+    <style>body{margin:0;font:18px sans-serif;background:#fff;height:900px;overflow:hidden}.mark{width:20px;height:20px;background:#ddd}${markCss}</style></head>
     <body><p>${ENGLISH}</p><div class="mark"></div><canvas id="c" width="300" height="300"></canvas>
     <script>var c=document.getElementById('c').getContext('2d'),d=c.createImageData(300,300);
     for(var i=0;i<d.data.length;i+=4){d.data[i]=Math.random()*255;d.data[i+1]=Math.random()*255;d.data[i+2]=Math.random()*255;d.data[i+3]=255;}
     c.putImageData(d,0,0);</script></body></html>`;
-  const dir = await copyOf(t, html);
+
+test('on a page with a noisy part, a small visible fix elsewhere is undone (the noise no longer hides it)', { timeout: 5 * 60000 }, async (t) => {
+  // The fix sets <html lang> (detectLang); the site colours a 20 x 20 mark red when lang is set. Before 2026-10-23 this was KEPT:
+  // 400 px is a small share of the page next to the canvas's noise. It is a visible change, away from the part that moves.
+  const dir = await copyOf(t, noisyPage('html[lang] .mark{background:#c00}'));
   const r = await prove(browser, dir);
   const g = r.gate[0];
   assert.ok(r.pages[0].fixes.some((f) => f.kind === 'lang'), JSON.stringify(r.pages[0].fixes));
-  assert.ok(g.noisePct > 1, `the page's own noise was measured (${g.noisePct} %)`);
-  assert.ok(g.diffPct > g.noisePct * 0.5 && g.diffPct <= g.allowedPct, JSON.stringify(g));
+  assert.ok(g.noiseShare > 1, `the page's own noise was mapped (${JSON.stringify(g)})`);
+  // The mark sits right above the canvas: the part of it within the noise map's 8 px margin is counted as in the noise, the
+  // rest as a visible change. Either way the fix is undone.
+  assert.ok(g.changedPx > 0 && g.changedPx + g.inNoisePx >= 400, `the mark's change is seen (${JSON.stringify(g)})`);
+  assert.equal(r.pages[0].reverted?.reason, 'd', 'undone');
+  assert.match(r.pages[0].reverted.why, /px where the page does not move by itself/);
+});
+
+test('on the same noisy page, a fix that changes nothing visible is kept', { timeout: 5 * 60000 }, async (t) => {
+  const dir = await copyOf(t, noisyPage(''));
+  const r = await prove(browser, dir);
+  const g = r.gate[0];
+  assert.ok(r.pages[0].fixes.some((f) => f.kind === 'lang'), JSON.stringify(r.pages[0].fixes));
+  assert.ok(g.inNoisePx > 1000, `the canvas differs between loads, inside the noise map (${JSON.stringify(g)})`);
+  assert.equal(g.changedPx, 0, JSON.stringify(g));
   assert.equal(r.pages[0].reverted, undefined, 'kept');
   assert.match(await readFile(path.join(dir, 'index.html'), 'utf8'), /<html lang="en"/);
 });
 
-test('the floor in both directions: a change under 0.01 % is kept, one well over it is not', { timeout: 5 * 60000 }, async (t) => {
-  // No noise at all (a still page), so the floor decides. 2 x 2 px of 1440 x 900 = 0.0003 %; 60 x 60 px = 0.28 %.
-  const page = (dot) => `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;height:900px;overflow:hidden;background:#fff}
-    i{position:absolute;left:600px;top:400px;width:${dot}px;height:${dot}px;background:#c00}</style></head><body>${dot ? '<i></i>' : ''}</body></html>`;
+test('the smallest changes are seen and an unchanged page passes: 2 x 2 px, a pale square, a change far down a tall page', { timeout: 8 * 60000 }, async (t) => {
+  // No noise at all (a still page). Before 2026-10-23 all four changes below read 0 % and passed as invisible.
+  const page = (size, color, tall) => `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;height:${tall ? 10000 : 900}px;overflow:hidden;background:#fff}
+    i{position:absolute;left:600px;top:${tall ? 9000 : 400}px;width:${size}px;height:${size}px;background:${color}}</style></head><body>${size ? '<i></i>' : ''}</body></html>`;
   const serve = async (body) => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'sas-floor-'));
     t.after(() => rm(dir, { recursive: true, force: true }));
@@ -120,11 +136,31 @@ test('the floor in both directions: a change under 0.01 % is kept, one well over
     t.after(() => s.close());
     return s.url.replace(/\/$/, '');
   };
-  const unfixed = await serve(page(0));
-  const tiny = await fixGate(browser, await serve(page(2)), unfixed, '/');
-  const big = await fixGate(browser, await serve(page(60)), unfixed, '/');
-  assert.equal(tiny.noisePct, 0);
-  assert.equal(tiny.allowedPct, FIX_GATE_FLOOR_PCT);
-  assert.ok(tiny.diffPct > 0 && tiny.diffPct <= FIX_GATE_FLOOR_PCT && tiny.invisible, JSON.stringify(tiny));
-  assert.ok(big.diffPct > FIX_GATE_FLOOR_PCT && !big.invisible, JSON.stringify(big));
+  const blank = await serve(page(0));
+  const same = await fixGate(browser, blank, blank, '/');
+  assert.equal(same.changedPx, 0, `an unchanged page passes (${JSON.stringify(same)})`);
+  assert.ok(same.invisible);
+  // The ruler sets antialiased-looking edge pixels aside (pixelmatch's rule), so a tiny square counts fewer pixels than it has;
+  // what matters is that it is seen.
+  for (const [size, color, tall] of [[2, '#c00', false], [60, '#f0f0f0', false], [10, '#c00', true], [30, '#e8e8e8', true]]) {
+    // (#f5f5f5 on white, 10 levels, is below GATE_THRESHOLD: the stated limit, not tested as seen.)
+    const g = await fixGate(browser, await serve(page(size, color, tall)), await serve(page(0, '', tall)), '/');
+    assert.ok(g.changedPx > 0 && g.changedPx <= size * size, `${size} x ${size} ${color}${tall ? ' at 9000 px on a 10000 px page' : ''}: ${JSON.stringify(g)}`);
+    assert.equal(g.invisible, false);
+  }
+});
+
+test('gateVerdict: a page whose own height changes between loads is all noise, and nothing in it is called invisible by default', async () => {
+  const shot = (h, dot) => sharp({ create: { width: 100, height: h, channels: 3, background: '#fff' } })
+    .composite(dot ? [{ input: { create: { width: 4, height: 4, channels: 3, background: '#000' } }, left: 10, top: 10 }] : []).png().toBuffer();
+  const v = await gateVerdict([await shot(200, true)], [await shot(200), await shot(220), await shot(200)]);
+  assert.equal(v.noiseShare, 100);
+  assert.equal(v.changedPx, 0);
+  assert.equal(v.inNoisePx, 16, 'the change is counted where it cannot be judged, not dropped');
+  const still = await gateVerdict([await shot(200, true), await shot(200, true), await shot(200, true)], [await shot(200), await shot(200), await shot(200)]);
+  assert.equal(still.changedPx, 16);
+  // A difference that shows in only one pairing is noise the pictures happened to catch, not a change the fixes made.
+  const once = await gateVerdict([await shot(200, true), await shot(200), await shot(200)], [await shot(200), await shot(200), await shot(200)]);
+  assert.equal(once.changedPx, 0);
+  assert.ok(once.inNoisePx >= 16, 'but it is counted, not dropped');
 });

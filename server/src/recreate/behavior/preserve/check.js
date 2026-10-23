@@ -12,7 +12,7 @@
 import path from 'node:path';
 import { stat, readFile } from 'node:fs/promises';
 import sharp from 'sharp';
-import { pixelDiffPct } from './render.js';
+import { exactDiff } from '../../verify/exact/pixels.js';
 import { scriptCandidates } from './extract.js';
 import { readRecordIndex, classifyScripts, recordBodyReader } from '../scripts.js';
 import { freezePage, freezeTimers, holdSizeReactions } from '../../verify/exact/freeze.js';
@@ -62,13 +62,6 @@ export { holdSizeReactions };
 async function fullShot(page) {
   await page.evaluate(() => { window.__sasHoldSize = true; });
   return page.screenshot({ fullPage: true, type: 'png' });
-}
-
-async function rgbOf(buf) {
-  const img = sharp(buf);
-  const { width, height } = await img.metadata();
-  const raw = await img.removeAlpha().raw().toBuffer();
-  return { raw, width, height };
 }
 
 /** A context whose requests off the copy's own server are refused and recorded; the copy's own requests continue. */
@@ -127,10 +120,9 @@ export async function visualCheck(browser, base, copyUrl, originalUrl, width, { 
     const op = await original.newPage();
     await Promise.all([settleFrozen(cp, copyUrl), settleFrozen(op, originalUrl)]);
     const [shotA, shotB] = await Promise.all([fullShot(cp), fullShot(op)]);
-    const a = await rgbOf(shotA);
-    const b = await rgbOf(shotB);
+    const d = await exactDiff(shotB, shotA);
     return {
-      width, copyHeight: a.height, originalHeight: b.height, diffPct: a.width === b.width ? pixelDiffPct(a.raw, b.raw) : null,
+      width, copyHeight: d.heights[1], originalHeight: d.heights[0], diffPct: d.widthMismatch ? null : d.commonPct,
       ...(keepOriginal && { originalShot: shotB }),
     };
   } finally {
@@ -140,21 +132,38 @@ export async function visualCheck(browser, base, copyUrl, originalUrl, width, { 
 }
 
 /** The least difference (percent of pixels) a fixed page may show against its unfixed self: a changed word is more than this. */
-export const FIX_GATE_FLOOR_PCT = 0.01;
+/** How many pictures the gate takes of each side (fixed, unfixed): every pair on one side shows where the page moves by itself. */
+export const NOISE_SHOTS = 3;
+/** The noise map is widened by this many blocks (8 px each) around every place the page moved by itself. */
+export const NOISE_MARGIN_BLOCKS = 1;
+/**
+ * The ruler's colour threshold for the gate (exactDiff's `threshold`; its default 0.1 is pixelmatch's, used where a copy is
+ * scored against its original). Proving a page UNCHANGED needs a finer one: at 0.05 a brightness step of about 13 / 255 on grey
+ * counts (#f0f0f0 on white does; #f5f5f5 on white, 10 levels, does not — that is the limit).
+ */
+export const GATE_THRESHOLD = 0.05;
 
 /**
  * Are a page's fixes invisible? The fixed copy and the same copy before its fixes, both local, are opened and pictured the same
- * way (frozen, warmed up, size reactions held) at 1440, with the console errors of each; the unfixed page is pictured twice, so
- * the page's own noise (a random particle, a clock) is measured rather than assumed. Fixes whose picture differs from the
- * unfixed one by more than max(FIX_GATE_FLOOR_PCT, 2 × that noise), change the height, or bring a console error the unfixed
- * page does not have are not invisible (docs/COPY-MY-SITE.md §5: reverted, reason d). A whole fixed share would let a new
- * word through (one title written into a page is ~0.1 % of it).
+ * way (frozen, warmed up, size reactions held) at 1440, with the console errors of each. One ruler for every picture in the
+ * app (verify/exact/pixels.js exactDiff: perceptual colour distance, antialiased edges set aside, every pixel counted).
+ * Each side is pictured NOISE_SHOTS times. Wherever two pictures of the SAME side differ, the page moves by itself (a random
+ * particle, a clock, text typed by a script) — the noise map, in 8 px blocks, widened by NOISE_MARGIN_BLOCKS. A change the fixes
+ * cause is in the same place on every load; noise is not. So a block is a visible change only when it differs in EVERY
+ * fixed-vs-unfixed pairing (the i-th picture of each side) and lies outside the noise map. Fixes are invisible only with no such
+ * pixel, the same width and height, and no console error the unfixed page does not have; otherwise they are undone
+ * (docs/COPY-MY-SITE.md §5, reason d). What differs only sometimes, or inside the noise map, cannot be proven either way: it is
+ * counted (inNoisePx) and reported, never silently passed as "no change".
+ * (Measured on nyaayai: one load of its own unfixed page against another differed by 17 px outside a three-picture noise map, so
+ * a single fixed-vs-unfixed comparison read noise as a change; the every-pairing rule is what separates the two.)
+ * (Before 2026-10-23: a share of the whole page against max(0.01 %, 2 × noise), with a 24-level colour cut and the share
+ * rounded to 0.01 % — it could not see a 30 x 30 px change on a tall page, or any pale change at all.)
  */
 export async function fixGate(browser, fixedBase, unfixedBase, pagePath) {
   const opts = viewOf(1440);
   const sides = [];
   try {
-    for (const base of [fixedBase, unfixedBase, unfixedBase]) {
+    for (const base of [...Array.from({ length: NOISE_SHOTS }, () => fixedBase), ...Array.from({ length: NOISE_SHOTS }, () => unfixedBase)]) {
       const context = await isolated(browser, opts, base, []);
       await context.addInitScript(freezeTimers);
       await context.addInitScript(holdSizeReactions);
@@ -165,19 +174,78 @@ export async function fixGate(browser, fixedBase, unfixedBase, pagePath) {
       sides.push({ context, page, errors, url: `${base}${pagePath}` });
     }
     await Promise.all(sides.map((s) => settleFrozen(s.page, s.url)));
-    const [a, b, c] = await Promise.all(sides.map(async (s) => rgbOf(await fullShot(s.page))));
-    const diffPct = a.width === b.width ? pixelDiffPct(a.raw, b.raw) : 100;
-    const noisePct = b.width === c.width && b.height === c.height ? pixelDiffPct(b.raw, c.raw) : 100;
-    const allowedPct = Math.max(FIX_GATE_FLOOR_PCT, 2 * noisePct);
-    const [fixed, unfixed, unfixedAgain] = sides.map((s) => s.errors);
-    const newErrors = fixed.filter((e) => !unfixed.includes(e) && !unfixedAgain.includes(e));
+    const shots = await Promise.all(sides.map((s) => fullShot(s.page)));
+    const verdict = await gateVerdict(shots.slice(0, NOISE_SHOTS), shots.slice(NOISE_SHOTS));
+    const errors = sides.map((s) => s.errors);
+    const fixed = [...new Set(errors.slice(0, NOISE_SHOTS).flat())];
+    const unfixed = errors.slice(NOISE_SHOTS);
+    const newErrors = fixed.filter((e) => !unfixed.some((u) => u.includes(e)));
     return {
-      path: pagePath, diffPct, noisePct, allowedPct, heights: [a.height, b.height], newErrors,
-      invisible: diffPct <= allowedPct && a.height === b.height && newErrors.length === 0,
+      path: pagePath, ...verdict, newErrors,
+      invisible: verdict.changedPx === 0 && !verdict.sizeChanged && newErrors.length === 0,
     };
   } finally {
     for (const s of sides) await s.context.close();
   }
+}
+
+/**
+ * The gate's picture arithmetic, apart from the browser (so it is testable on its own): the noise map from every pair of
+ * pictures of the same side, then the blocks that differ in every fixed-vs-unfixed pairing outside that map.
+ * @param {Buffer[]} fixedShots  PNGs (a single Buffer is taken as one picture)
+ * @param {Buffer[]} unfixedShots  PNGs, at least 2
+ */
+export async function gateVerdict(fixedShots, unfixedShots) {
+  const fixedList = Buffer.isBuffer(fixedShots) ? [fixedShots] : fixedShots;
+  const pairs = [];
+  const opts = { threshold: GATE_THRESHOLD };
+  for (const side of [fixedList, unfixedShots]) {
+    for (let i = 0; i < side.length; i++) for (let j = i + 1; j < side.length; j++) pairs.push(await exactDiff(side[i], side[j], opts));
+  }
+  const crosses = [];
+  for (let i = 0; i < fixedList.length; i++) crosses.push(await exactDiff(unfixedShots[i % unfixedShots.length], fixedList[i], opts));
+  const change = crosses[0];
+  const { cols, rows } = change.blocks;
+  // A block counts as changed only when every pairing shows it (the smallest count of them, so a change is never over-stated).
+  const counts = new Uint32Array(cols * rows);
+  for (let i = 0; i < counts.length; i++) counts[i] = Math.min(...crosses.map((c) => (c.blocks.cols === cols ? c.blocks.counts[i] ?? 0 : 0)));
+  const sometimes = new Uint32Array(cols * rows); // what differed in at least one pairing: reported, never dropped
+  for (let i = 0; i < sometimes.length; i++) sometimes[i] = Math.max(...crosses.map((c) => (c.blocks.cols === cols ? c.blocks.counts[i] ?? 0 : 0)));
+  // Noise map: every block where any two unfixed pictures differ, widened by NOISE_MARGIN_BLOCKS. A page that changes height
+  // or width between its own loads cannot be compared block by block: all of it is noise then.
+  const unstable = pairs.some((p) => p.widthMismatch || p.heights[0] !== p.heights[1]);
+  const noisy = new Uint8Array(cols * rows);
+  if (unstable) noisy.fill(1);
+  else {
+    for (const p of pairs) {
+      const c = p.blocks.counts;
+      for (let i = 0; i < c.length && i < noisy.length; i++) {
+        if (!c[i]) continue;
+        const bx = i % p.blocks.cols;
+        const by = Math.floor(i / p.blocks.cols);
+        for (let y = by - NOISE_MARGIN_BLOCKS; y <= by + NOISE_MARGIN_BLOCKS; y++) {
+          for (let x = bx - NOISE_MARGIN_BLOCKS; x <= bx + NOISE_MARGIN_BLOCKS; x++) if (x >= 0 && y >= 0 && x < cols && y < rows) noisy[y * cols + x] = 1;
+        }
+      }
+    }
+  }
+  let changedPx = 0;
+  let inNoisePx = 0;
+  for (let i = 0; i < sometimes.length; i++) {
+    if (!sometimes[i]) continue;
+    if (!noisy[i] && counts[i]) changedPx += counts[i];
+    else inNoisePx += sometimes[i];
+  }
+  const noiseBlocks = noisy.reduce((n, v) => n + v, 0);
+  return {
+    changedPx, // pixels that differ where the page does not move by itself: > 0 means a visible change
+    inNoisePx, // pixels that differ where it does: cannot be judged, reported
+    noiseShare: Math.round((noiseBlocks / (cols * rows || 1)) * 1e4) / 1e2, // % of the page that moves by itself
+    noisePct: Math.max(0, ...pairs.map((p) => p.commonPct)),
+    diffPct: change.commonPct, // the whole difference, for the report line
+    heights: change.heights,
+    sizeChanged: crosses.some((c) => c.widthMismatch || c.heights[0] !== c.heights[1]),
+  };
 }
 
 /** Clicks each control in turn on a fresh load; records whether the page's text changed and whether the control is fixed. */
@@ -333,13 +401,13 @@ export async function baselineVisual(browser, base, copyUrl, baselinePng, { widt
     const cp = await copy.newPage();
     await settleFrozen(cp, copyUrl);
     const shot = await fullShot(cp);
-    const a = await rgbOf(shot);
     // Read into memory: sharp keeps a file open while it is given a path, which blocks the folder's removal on Windows.
-    const img = sharp(Buffer.isBuffer(baselinePng) ? baselinePng : await readFile(baselinePng));
-    const meta = await img.metadata();
-    const b = { raw: await img.removeAlpha().raw().toBuffer(), width: meta.width, height: meta.height };
+    const saved = Buffer.isBuffer(baselinePng) ? baselinePng : await readFile(baselinePng);
+    const b = await sharp(saved).metadata();
+    const own = await sharp(shot).metadata();
     // The saved picture may be a different size: the copy is brought to its width before the pixels are compared.
-    const same = a.width === b.width ? a : await rgbOf(await sharp(shot).resize({ width: b.width }).png().toBuffer());
+    const sameShot = own.width === b.width ? shot : await sharp(shot).resize({ width: b.width }).png().toBuffer();
+    const same = own.width === b.width ? own : await sharp(sameShot).metadata();
     // The capture's full-page picture stops at MAX_HEIGHT: a picture that tall is the top of a page that may be taller, so the
     // original's height is unknown and only the rows the picture has are compared (a copy 8289 px tall against an 8000 px
     // picture is not 3.6 % taller than its original).
@@ -349,7 +417,7 @@ export async function baselineVisual(browser, base, copyUrl, baselinePng, { widt
       copyHeight: same.height,
       originalHeight: capped ? null : b.height,
       ...(capped && { comparedHeight: b.height, capped: true }),
-      diffPct: pixelDiffPct(same.raw, b.raw),
+      diffPct: (await exactDiff(saved, sameShot)).commonPct,
       source: kind === 'original' ? 'saved original picture' : 'saved capture',
     };
   } finally {

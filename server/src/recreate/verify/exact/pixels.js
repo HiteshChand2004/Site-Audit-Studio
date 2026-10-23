@@ -135,7 +135,9 @@ function hasManySiblings(img, x, y, width, height) {
  * Read into memory with Node, never with sharp: sharp keeps a handle on a file it opened, and Windows then refuses to
  * rename or remove the workspace that holds it.
  */
-const open = async (input) => sharp(Buffer.isBuffer(input) ? input : await readFile(input), { limitInputPixels: false });
+// Always four channels: the loop reads RGBA, and a picture without an alpha channel (a PNG made from RGB, a JPEG) would
+// otherwise be read three bytes off per pixel — every count wrong.
+const open = async (input) => sharp(Buffer.isBuffer(input) ? input : await readFile(input), { limitInputPixels: false }).ensureAlpha();
 
 /**
  * Compares two full-page shots pixel for pixel.
@@ -145,7 +147,9 @@ const open = async (input) => sharp(Buffer.isBuffer(input) ? input : await readF
  *   exclude?: {x:number,y:number,w:number,h:number}[], offsetY?: number }} [o]  exclude: areas counted as masked
  *   instead of as differences (a third-party frame, a canvas, a video); offsetY: where this band sits in the page,
  *   so the areas can be given in page coordinates
- * @returns {Promise<{ pct: number, diff: number, antialiased: number, compared: number, total: number,
+ * commonPct: the share of the part both pictures have (rows only one of them has are left out); pct counts those rows as
+ * different. Both to 4 decimals of a percent: 4 pixels of a 1440 x 900 picture is 0.0003 %, never rounded away.
+ * @returns {Promise<{ pct: number, commonPct: number, diff: number, antialiased: number, compared: number, total: number,
  *   width: number, height: number, heights: [number, number], heightOnlyOne: number, widthMismatch: boolean,
  *   blocks: { cols: number, rows: number, px: number, counts: Uint32Array } }>}
  */
@@ -213,6 +217,7 @@ export async function exactDiff(original, generated, {
   const total = compared + heightOnlyOne;
   return {
     pct: total ? Math.round(((diff + heightOnlyOne) / total) * 1e6) / 1e4 : 0,
+    commonPct: compared ? Math.round((diff / compared) * 1e6) / 1e4 : 0,
     diff,
     antialiased: anti,
     masked,

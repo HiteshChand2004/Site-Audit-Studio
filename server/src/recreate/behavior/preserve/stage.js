@@ -122,7 +122,7 @@ export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, n
           log(`fixes ${p.path} ${JSON.stringify(g)}`);
           if (!g.invisible) {
             await revertPage(copyDir, p.outPath, fixed.originals.get(p.outPath));
-            p.reverted = { reason: 'd', why: g.error ? `the check could not prove them invisible: ${g.error}` : `they changed the page (${g.diffPct} % of pixels${g.newErrors?.length ? `, ${g.newErrors.length} new console error(s)` : ''})` };
+            p.reverted = { reason: 'd', why: g.error ? `the check could not prove them invisible: ${g.error}` : `they changed the page (${g.sizeChanged ? `its height ${g.heights?.[0]} → ${g.heights?.[1]} px` : `${g.changedPx} px where the page does not move by itself`}${g.newErrors?.length ? `, ${g.newErrors.length} new console error(s)` : ''})` };
           }
         }
       } finally {

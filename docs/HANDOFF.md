@@ -354,21 +354,25 @@ Run only the test files of what you touch; no full suite.
 
 Open, in the order to pick them up:
 
-1. **Revert-path tests (WIP, one failing).** `server/test/copy-fix-gate.test.js`: 3 of 4 pass — a fix the page's own CSS turns
-   into a layout change is undone (reason d); a change below the fold inside a section that only appears on scroll is undone
-   (a picture without the scroll sees no difference); a small visible fix on a page with measured random noise is kept. The 4th
-   ("the floor in both directions") fails: its 2 × 2 px dot gave `diffPct` 0. Two explanations, **not yet told apart —
-   investigate the pipeline before "fixing the test"**:
-   (a) a test-page problem: the dot never reaches the picture (an absolutely placed `<i>` on a `height:900px; overflow:hidden`
-       body). Check by saving the fixed side's picture and looking for the dot.
-   (b) a pipeline problem: the comparison swallows changes that small — anything that scales or down-samples the pictures,
-       lossy encoding on the way, `pixelDiffPct`'s per-channel tolerance (`CHANNEL_DELTA` 24 in `preserve/render.js`), or a
-       noise floor larger than the change. If so, small visible changes can never be detected, and the revert path would
-       silently KEEP fixes it should undo — a real defect, not a test bug. Check by measuring known small changes (2×2,
-       4×4, 10×10 px, at full and partial contrast) through `fixGate` and seeing which register.
-   Only once (b) is ruled out (or fixed) adjust the test page. The rule under
-   test: kept when diff ≤ max(`FIX_GATE_FLOOR_PCT` 0.01 %, 2 × noise), same height, no new console error; noise = the unfixed
-   page pictured twice at 1440 the same frozen, scrolled way (`check.js fixGate`).
+1. **Revert-path tests / the comparison — FIXED 2026-10-23 (branch `copy-step4`).** It was the pipeline, not the test page: the
+   2 × 2 dot was in the picture (4 pixels really differed), and `pixelDiffPct` reported 0 — it rounded to 0.01 % of the whole
+   page and ignored any change of ≤ 24 levels per channel. Measured: a solid 10 × 10 px change read 0 % on a 900 px page, a 30 × 30
+   px change "0.01 %" on a 10 000 px page (both passed as unchanged), and a 60 × 60 px #f0f0f0 square 0 % at any height. The old
+   noise came from ONE pair of pictures, so verdicts flipped: makememo's 3 fixes were kept on 10-21 and undone on 10-23 by the
+   same old gate on the same copy.
+   Now **one ruler**: `pixelDiffPct` is gone; the gate, the as-is visual check, the baseline check, the component check and
+   `scripts/preserve-stack-check.mjs` all use `verify/exact/pixels.js exactDiff` (pixelmatch's YIQ distance, antialiased edges
+   set aside, every pixel counted; it gained `commonPct`, the share of the part both pictures have, to 4 decimals, and now reads
+   pictures without an alpha channel correctly — before, an RGB PNG was read 3 bytes off per pixel). The gate
+   (`check.js fixGate` / `gateVerdict`) pictures each side 3 times (`NOISE_SHOTS`): wherever two pictures of the SAME side
+   differ is the noise map (8 px blocks, +1 block margin); a block is a visible change only when it differs in EVERY
+   fixed-vs-unfixed pairing and lies outside the map — one pixel is enough; threshold 0.05 (`GATE_THRESHOLD`, finer than the
+   default 0.1 used for scoring a copy). Limits, stated: a change fainter than ~13 / 255 on grey (#f5f5f5 on white) is not seen;
+   a change that lies inside the parts that move by themselves (0.3–1.1 % of nyaayai's page) cannot be proven either way and is
+   reported as `inNoisePx`, not passed silently. Cost: 6 full-page pictures per changed page instead of 3.
+   Step 3 re-validated with it (3 runs each): nyaayai 49 of 49 kept, makememo 3 of 3 kept, 0 px of consistent change every time
+   (the fixes are labels, JSON-LD and address tags, which draw nothing). Tests: `copy-fix-gate.test.js` (6; the old "a small
+   visible fix on a noisy page is kept" now expects it UNDONE, and a no-op fix on the same page kept).
 2. **Next.js security headers — fixed, verify in a real run.** Commit `bf01313`: one header list (`copy/securityHeaders.js`);
    the Next.js package sends them from `next.config.mjs headers()` (proven: `copy-served.test.js` builds and starts a real
    package, all five headers sent). `copy/served.js` measures what the packaged copy's own server sends after packaging; headers
