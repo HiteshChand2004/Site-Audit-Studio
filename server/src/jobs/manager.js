@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { db } from '../db/index.js';
 import { holdAwake, releaseAwake } from './keepAwake.js';
 import { stripAnsi } from './ansi.js';
+import { heartbeat, HEARTBEAT_MS, isoAt, ownJobs } from './liveness.js';
 
 const RETAIN_MS = 60000;
 const DB_WRITE_INTERVAL = 1000;
@@ -87,13 +88,16 @@ export class JobManager extends EventEmitter {
    * @param {(o:{job:object, project:object, payload:object, progress:Function})=>Promise<object>} o.run
    * @param {(o:{job:object, project:object, payload:object, ok:boolean})=>Promise<void>} [o.after]  cleanup after every job
    * @param {string} o.doneMessage
+   * @param {number} [o.heartbeatMs]  how often the row's heartbeat is written while the job is queued or running (tests shorten it)
    */
   constructor(opts) {
     super();
     this.setMaxListeners(0);
     this.#opts = opts;
     this.#rows = {
-      insert: db.prepare(`INSERT INTO ${opts.table} (id, project_id, status, progress, started_at) VALUES (?, ?, 'queued', 0, ?)`),
+      // The heartbeat starts with the row: a queued job is alive too (its process waits for the lock), and a row with no
+      // heartbeat at all is one an older server wrote (jobs/liveness.js treats it as stale).
+      insert: db.prepare(`INSERT INTO ${opts.table} (id, project_id, status, progress, started_at, heartbeat_at) VALUES (?, ?, 'queued', 0, ?, ?)`),
       progress: db.prepare(`UPDATE ${opts.table} SET status = ?, step = ?, progress = ? WHERE id = ?`),
       finish: db.prepare(
         `UPDATE ${opts.table} SET status = ?, progress = ?, error = ?, finished_at = ?, result_json = ? WHERE id = ?`,
@@ -138,7 +142,19 @@ export class JobManager extends EventEmitter {
       controller: new AbortController(),
     };
     this.#jobs.set(job.id, job);
-    this.#rows.insert.run(job.id, project.id, job.startedAt);
+    this.#rows.insert.run(job.id, project.id, job.startedAt, isoAt(Date.now()));
+    // Alive, as far as any other process can tell: the heartbeat runs from the moment the row exists until the job has ended,
+    // through the wait for the lock included (jobs/liveness.js).
+    ownJobs.add(job.id);
+    const table = this.#opts.table;
+    job.beat = setInterval(() => {
+      try {
+        heartbeat(table, job.id);
+      } catch (err) {
+        console.warn(`[${table} ${job.id}] heartbeat not written: ${err.message}`);
+      }
+    }, this.#opts.heartbeatMs ?? HEARTBEAT_MS);
+    job.beat.unref();
     exclusive(() => this.#run(job, project, payload));
     return snapshot(job);
   }
@@ -203,6 +219,9 @@ export class JobManager extends EventEmitter {
       this.#rows.finish.run('failed', job.pct, job.error, new Date().toISOString(), null, job.id);
       this.#emit(job, 'failed');
     }
+    // The row is final: no heartbeat is needed and no other process may ever judge it stale (it is not open any more).
+    clearInterval(job.beat);
+    ownJobs.delete(job.id);
     await after?.({ job, project, payload, ok }).catch((err) => console.error(`[${this.#opts.table} cleanup ${job.id}]`, err));
     setTimeout(() => this.#jobs.delete(job.id), RETAIN_MS).unref();
   }

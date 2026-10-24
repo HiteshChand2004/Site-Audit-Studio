@@ -487,9 +487,10 @@ above; visual gate; re-audit):
   a local proxy that stalls one host + Lighthouse), `nyaayai-fresh-copy.mjs` (one as-is copy + re-audit on a scratch data folder,
   summary and folders copied out) and the other scratch scripts of the step-4 sessions (never committed; they import from a
   worktree's `server/src`, so run them from a worktree's `server/` folder or fix the import paths).
-- **Gotcha**: importing `server/src/db/index.js` from a second process (any script opening the same scratch `app.db`) marks every
-  `running` recreate as failed with "The server restarted while this job was running" (`db/index.js:24`). The job itself goes on
-  and writes its row back; still, never open a running job's database from another process — read its log / summary.
+- **Gotcha, FIXED on `job-lock` (2026-10-24)**: importing `server/src/db/index.js` from a second process used to mark every
+  `running` recreate as failed ("The server restarted while this job was running", `db/index.js:24`). Now the module only opens
+  the database; the server marks a job failed only when its heartbeat has stopped (see "Branch `job-lock`" below). On branches
+  before it the old behaviour stands: never open a running job's database from another process there.
 - Scratch data of this morning's run: `C:/Users/urvas/Downloads/sas-work/data` (projects indikaai 9b829d40…, makememo 93e23afa…,
   sankalpam 06a12702…, nyaayai 603201ca…); logs `sas-work/live.log`, `sas-work/live-killed-run.log`. Driver: `remastly-live-results/scripts/scratch-live.mjs
   <projectId>:<whole|home> …` (calls the job managers directly, no server; it used to live untracked in `Website-Audit-copystep4/server/`).
@@ -644,3 +645,42 @@ Done in parallel with the step-4b session; nothing pushed; full suite not run (o
    `fidelity/index/exact` per `docs/redesign-notes.md`): exactDiff **0.0116 %** (59 pixels) on that first screen. With `visual`
    0.996 at 96 px the whole page could hide at most changes ≤ 32 levels per channel or thinner than ~4 CSS px at 375 wide; nothing
    can be said about them without the pictures. The 98 is neither confirmed nor refuted beyond its first screen.
+
+## Branch `job-lock` (same worktree, from `owner-options` cc1afba), 2026-10-24 — one server per data folder, jobs judged by heartbeat
+
+Why: jobs live in the memory of the process that runs them, and `db/index.js` used to mark every queued / running row failed
+**at import** — a second server, or any script importing the module, killed the bookkeeping of a live job and `autoResume` then
+adopted (renamed) its workspace. Two servers on one `app.db` would also prune each other's recreate folders. Both are closed, generically:
+- **Heartbeat** (`jobs/liveness.js`, column `heartbeat_at TEXT` on `analyses` / `recreates` / `reaudits`, idempotent `addColumn`):
+  `JobManager` writes it with the row and then every **`HEARTBEAT_MS` = 15 s** while the job is queued or running (through the wait
+  for the global lock), `clearInterval` once the row is final; `ownJobs` is the set of ids this process runs. A row is **stale**
+  after **`STALE_MS` = 120 s** without a beat, or with none at all (written by an older server). `adoptStaleJobs()` marks stale rows
+  failed with the old text ("The server restarted while this job was running. Run it again." — the app's `copy.js` knows that
+  case) with a conditional write (`COALESCE(heartbeat_at,'') = <the value read>`), so a beat between read and write keeps the
+  job; rows with a fresh heartbeat are counted (`alive`) and never touched, so their workspace is never adopted or renamed.
+  **Why 15 s / 120 s**: a beat is one tiny WAL write, so 15 s is free; 120 s = 8 missed beats, longer than any event-loop stall a
+  live process has shown here (5–10 s freezes on an overloaded laptop; the interrupts watcher counts sleep from 30 s), short
+  enough that a crashed server's job is picked up within ~2–4 min of the next start. Laptop sleep suspends every process on the
+  machine together, so it cannot make a live job look stale to a server started on wake (and the lock refuses one anyway).
+- **Who decides**: `src/index.js` only — `recoverStaleJobs()` (`recreate/jobs.js`: adopt + `resumeInterruptedRecreates(rows)` for
+  the recreates among them) once the server listens, then `watchStaleJobs()` every `STALE_MS`. `db/index.js` touches no job row;
+  `interruptedRecreates` is gone (`resumeInterruptedRecreates` now takes its rows). A script that imports the module to read a
+  database triggers nothing.
+- **Lock file** (`config/dataLock.js`, `<DATA_DIR>/server.lock` = `{ pid, host, startedAt, port }`): `holdDataLock()` in
+  `src/index.js` before the migrations check; created atomically (`wx`), touched every 15 s, removed on `process.exit` (the
+  SIGINT / SIGTERM shutdown goes through it) only while it still names our pid. A second server exits 1 with
+  "Not starting: Another server is already using the data folder <dir> (process <pid> on <host>, port <p>, started <t>). Stop it
+  first, or give this server its own folder with SAS_DATA_DIR. If no server is running there …, delete <file> and start again."
+  Recovery: same host → the lock is held while that pid is alive (`process.kill(pid, 0)`; a crash / kill -9 / TerminateProcess
+  leaves the file and the next start takes it over; a reused pid is the one blind spot, hence the message); another host (shared
+  disk) → held while the file was touched within `LOCK_STALE_MS` = 120 s. Unreadable file = nobody's. Only the server takes it:
+  scripts, `db:migrate` and tests never do (`scripts/dev.js` kills the old child and awaits its exit before starting the next, so
+  the dev loop sees a dead pid and takes over).
+- Tests: `test/job-lock.test.js` (7): a child process holds the lock → refused with pid and file named → killed like a crash →
+  taken over; a foreign-host lock fresh / stale / garbage, and release never removing another's; **two real `src/index.js`
+  servers on one scratch data folder** (B exits 1 naming A, A still answers, A killed → C starts and holds the lock); heartbeat
+  written while queued and running and stopping with the job, `isStale` rules, a live job never marked from "outside" and own
+  jobs never judged; startup recovery marking only the stale and heartbeat-less rows while a live running and a live queued row
+  and the live job's `.tmp` workspace stay untouched, then the same job continued once its heartbeat ages out; the read-after-beat
+  race; a second process importing `db/index.js` marking nothing and taking no lock. Also run: `recreate-jobs` 15, `recreate-resume`
+  7, `keep-awake` 2, `perf` 10, `stage0` 8, `stage2` 9, `stage3-signout` 2. Full suite not run.

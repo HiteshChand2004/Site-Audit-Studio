@@ -82,4 +82,8 @@ export function applySchema(db) {
   // One page only: the address of a page of the site that Analyze and Recreate work on instead of the whole site
   // (recreate/inputs.js parsePageUrl). Empty = the whole site, so every existing project behaves exactly as before.
   addColumn('projects', 'page_url', 'TEXT');
+  // Liveness of a job (jobs/liveness.js): the process that runs it writes the time every HEARTBEAT_MS while it is queued or
+  // running. At startup only a row whose heartbeat is older than STALE_MS (or NULL: written by an older server) is marked
+  // failed; a job alive in another process is left alone. NULL for every row written before this column existed.
+  for (const table of ['analyses', 'recreates', 'reaudits']) addColumn(table, 'heartbeat_at', 'TEXT');
 }

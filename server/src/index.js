@@ -12,7 +12,8 @@ import reportRouter from './routes/report.js';
 import faviconRouter from './routes/favicon.js';
 import { lockBusy } from './jobs/manager.js';
 import { awakeHeld } from './jobs/keepAwake.js';
-import { resumeInterruptedRecreates } from './recreate/jobs.js';
+import { recoverStaleJobs, watchStaleJobs } from './recreate/jobs.js';
+import { holdDataLock } from './config/dataLock.js';
 import { stopAllAsIsPreviews } from './recreate/behavior/preserve/asisPreview.js';
 import { accountsEnabled, bindHost, isLoopbackHost } from './config/index.js';
 import { db } from './db/index.js';
@@ -21,6 +22,9 @@ import { pendingMigrations } from './db/apply.js';
 const PORT = Number(process.env.PORT) || 4000;
 // Who can reach the API: this computer only by default (SAS_BIND_HOST, config/index.js).
 const HOST = bindHost();
+// One server per data folder (config/dataLock.js): a second one on the same app.db exits here with who holds it. Before any job
+// row is touched; the modules above only opened the database and applied its schema.
+holdDataLock({ port: PORT });
 const app = express();
 
 app.use(cors({ origin: ['http://localhost:5173', 'http://127.0.0.1:5173'] }));
@@ -96,6 +100,10 @@ app.listen(PORT, HOST, (err) => {
     process.exit(1);
   }
   console.log(`API ready on http://${HOST.includes(':') ? `[${HOST}]` : HOST}:${PORT}${isLoopbackHost(HOST) ? ' (this computer only)' : ' (reachable from the network)'}`);
-  // A recreate the restart interrupted continues where it stopped (recreate/checkpoint.js).
-  resumeInterruptedRecreates().catch((e) => console.warn('Interrupted recreates not continued:', e.message));
+  // Jobs a server that is gone left queued or running (their heartbeat stopped, jobs/liveness.js) are marked failed, and a
+  // recreate among them continues where it stopped (recreate/checkpoint.js); then the same check keeps running. A job alive in
+  // another process is never touched.
+  recoverStaleJobs()
+    .catch((e) => console.warn('Interrupted jobs not recovered:', e.message))
+    .finally(() => watchStaleJobs());
 });

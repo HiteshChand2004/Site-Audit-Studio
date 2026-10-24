@@ -4,8 +4,9 @@
 // output is built inside the job when a second browser fits (recreate/stack.js), else from the saved IR right
 // after (queued behind this job, never discarding the recreate).
 import path from 'node:path';
-import { db, interruptedRecreates } from '../db/index.js';
+import { db } from '../db/index.js';
 import { JobManager } from '../jobs/manager.js';
+import { adoptStaleJobs, STALE_MS } from '../jobs/liveness.js';
 import { startReaudit } from '../reaudit/jobs.js';
 import { asIsBudgetMs, overallPct, runRecreate, STAGES, STEPS } from './index.js';
 import { replayStages } from './replay.js';
@@ -104,14 +105,36 @@ export async function autoResume(project, recreateId, reason) {
   }
 }
 
-/** On server start: the recreates the restart interrupted continue where they stopped (queued under the global lock). */
-export async function resumeInterruptedRecreates(rows = interruptedRecreates) {
+/** The recreates a server that is gone left running continue where they stopped (queued under the global lock). */
+export async function resumeInterruptedRecreates(rows = []) {
   const jobs = [];
   for (const row of rows) {
     const job = await autoResume(selectProject.get(row.project_id), row.id, 'restart').catch(() => null);
     if (job) jobs.push(job);
   }
   return jobs;
+}
+
+/**
+ * What the server does once it holds the data folder, and again every STALE_MS (watchStaleJobs): the queued or running rows
+ * whose heartbeat stopped (jobs/liveness.js) are marked failed, and the recreates among them continue where they stopped.
+ * A row with a fresh heartbeat is another live process's job: left as it is, its workspace never adopted (that is what
+ * autoResume → adoptWorkspace would do), only counted here.
+ * @param {{ now?: number }} [o]
+ */
+export async function recoverStaleJobs({ now = Date.now() } = {}) {
+  const { marked, alive, recreates } = adoptStaleJobs({ now });
+  for (const job of marked) console.log(`[${job.table} ${job.id}] marked failed: its process stopped (last heartbeat ${job.heartbeatAt ?? 'none'})`);
+  if (alive.length) console.warn(`${alive.length} job(s) are alive in another process on this data folder and were left alone.`);
+  const resumed = await resumeInterruptedRecreates(recreates);
+  return { marked, alive, resumed };
+}
+
+/** Keeps looking for jobs whose process died after this server started (a lock bypassed, a crash just before our startup pass). */
+export function watchStaleJobs(intervalMs = STALE_MS) {
+  const timer = setInterval(() => recoverStaleJobs().catch((e) => console.warn('Stale jobs not recovered:', e.message)), intervalMs);
+  timer.unref();
+  return timer;
 }
 const selectResult = db.prepare('SELECT result_json FROM recreates WHERE id = ?');
 const reportOf = (recreateId) => {
