@@ -613,4 +613,34 @@ Done in parallel with the step-4b session; nothing pushed; full suite not run (o
    the payload for any caller — the route, `recreate/jobs.js autoResume`, and the per-page fallback, which will call them from
    `copy/run.js checkPage` (`deps.rebuildClean`, `deps.correct` → the clean pipeline and `verify/exact/correct.js`) in-process, never through
    the route. Tests: `owner-options.test.js` (6).
-4. **Task 4 (read-only re-score of the published visual 93 / 98)**: see the section that follows it, written at the end of the session.
+4. **Task 4 — read-only re-score of the published "visual match" 93 (collateral) and 98 (indikaai)**, 2026-10-24. What the two
+   numbers are (from `remastly-website/lib/content.ts`): collateral's 93 = the **homepage view score** of exact run 3019a275
+   (13 Oct; `fidelity.pages['/'].views.desktop.score` and `.mobile.score` = 93: 35 % sizes 0.97 + 25 % boxes 0.99 + 40 % `visual`
+   0.856; the site score is 96, the SSIM diff 93); indikaai's 98 = **`fidelity.score`** of exact run f6035800 (15 Oct; `visual`
+   0.996–0.998 per view, diff 98–99). Both rulers tolerate what the question names: `verify/layout.js visualSimilarity` shrinks both
+   pictures to 96 px wide and counts a pixel as the same when its largest channel difference is ≤ 32 levels (`COLOR_TOLERANCE`), to
+   3 decimals of the page; `verify/visualDiff.js` is SSIM on luma at 384 / 96 px with a colour factor free up to 12 levels.
+   **How**: a scratch copy of the real `app.db` (+ WAL) and of collateral's run folder (`capture/<slug>/<view>-full.webp`,
+   `fidelity/<slug>/<view>-full.webp`, `report.json`), re-scored with the pipeline's own functions plus `verify/exact/pixels.js
+   exactDiff` (YIQ distance, threshold 0.1, antialiased edges set aside, every pixel) on every page × view (12 pages × 5 views);
+   the phone pictures of the capture are DPR 2 and the fidelity render DPR 1, so the larger was scaled to the other's width first
+   (Lanczos; an approximation, so said). Script and full table kept in `C:/Users/urvas/Downloads/remastly-live-results/collateral-rescore-2026-10-24/`.
+   Scratch copies deleted afterwards; nothing written to the real data or the marketing site.
+   **Collateral, real figures** (stored → re-run → exact ruler): homepage desktop visual 0.856 → 0.862, exact **11.36 %** differing
+   pixels; mobile 0.857 → 0.862, exact 11.25 %; tablet 0.826, exact 15.5 %; laptop 0.879, exact 9.4 %; large-phone 0.907, exact 8.3 %.
+   With the exact ruler in the 40 % visual slot the homepage reads **94** on desktop and mobile (published 93): the 96-px ruler
+   counted slightly *more* difference (13.8 %) than the pixel-exact one (11.4 %), because a shifted block blurs across more
+   thumbnail pixels. Site-wide: stored 96 → 96.55 with the exact ruler; exact % per view: desktop 2.4, laptop 2.4, tablet 3.5,
+   large-phone 3.5, mobile 4.5 (mean 3.25 %); the SSIM diff 93 re-runs as 93.7. **So the 93 is not overstated by the rounding or
+   the 32-level tolerance** (the tolerance is the same size as the slack the exact ruler gives, and the layout half of the score
+   dominates). What *is* true: it is a layout-and-thumbnail composite, not a pixel figure; the same run's exact engine (one recipe
+   both sides, the copy's script on, 252 slots) measured **diffMean 5.3 %, worst 21.1 %, 0 of 252 slots accepted** (homepage 1440:
+   0.90 %, 375: 1.09 %, 1920: 5.9 %, 639: 16.0 %). A pixel claim for that copy is "≈ 1 % at 1440 and 375, up to 16–21 % at
+   in-between widths", not 93 of 100.
+   **Indikaai: not re-scorable.** The pictures of f6035800 exist in no store (the real data has only the 23 Oct as-is copy of a new
+   project id and a failed clean one; `sas-corpus` keeps indikaai runs 092a894e and 938bd167 only; `sas-work` the same as real) —
+   retention keeps two recreates per project. Only the marketing site's crops of its first screen survive
+   (`public/shots/indikaai-original.webp` / `-copy.webp`, 900 × 563, cut from that run's `capture/index/exact` and
+   `fidelity/index/exact` per `docs/redesign-notes.md`): exactDiff **0.0116 %** (59 pixels) on that first screen. With `visual`
+   0.996 at 96 px the whole page could hide at most changes ≤ 32 levels per channel or thinner than ~4 CSS px at 375 wide; nothing
+   can be said about them without the pictures. The 98 is neither confirmed nor refuted beyond its first screen.
