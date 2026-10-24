@@ -4,7 +4,10 @@
 > an address, a framework name (like Framer) or a specific page. A fix must work for any site that has the same problem. Real
 > sites only find problems and verify fixes; a site may be named in a comment or a test's story, never in a condition.
 
-Branch `copy-my-site` (from main 511f36a, PR #2 merged). Not merged. Last pushed commit: see `git log -1`.
+Branch `step4-lighthouse` (worktree `../Website-Audit-step4b`, from `accounts` c7fa9a4 <- `copy-my-site` <- main 511f36a, PR #2 merged).
+Not merged and **nothing pushed** (there is no `origin/step4-lighthouse`). `copy-step4` is superseded: its one commit past the common
+base, cfaab64, is babf36c here (same patch id), so merging only `step4-lighthouse` into `accounts` is a fast-forward of 7 commits and
+loses nothing except the untracked scratch scripts, which are kept at `C:/Users/urvas/Downloads/remastly-live-results/scripts/`.
 Read first: `docs/COPY-MY-SITE.md` (the plan and the rules). This file says what is actually built and what is not.
 
 ## What the button does today
@@ -43,12 +46,13 @@ the Copy step has the stage list while a copy runs, and the old options sit unde
 - **Per-page fallback** (auto-repair, clean rebuild of the page, time-boxed correction) is **not** wired. The open
   items say "unresolved" (`reasonFor` marker `unresolved`, not one of the spec's five reasons). `copy/run.js` has the
   decision logic with fakes only (unit-tested).
-- **Zero-regressions loop** over the re-audit is **not** live: the as-is job does not run the re-audit, so
-  "got worse" is never measured. `copy/run.js` `zeroRegressions` has the logic with fakes only.
+- **Zero-regressions loop**: since step 4 the re-audit is queued after every as-is copy, and every "got worse" / "still open" row
+  carries a reason or is marked UNEXPLAINED (see "Step 4"). Still **not** live: anything that *acts* on an unexplained row (a fix,
+  a retry, the per-page fallback). `copy/run.js` `zeroRegressions` has that decision logic with fakes only.
 - **Safe fixers on the as-is output**: wired since step 3 (see "Step 3" below); images (WebP / variants) are not done yet.
 - The **as-is job does not run `copy/run.js`** as an orchestrator; it runs the stage above. `copy/run.js` is
   the tested model of the full pipeline, not yet the live one.
-- **Browser runs of the new code**: link pass and checks ran only in the 5 runs below (scratch data, scratch API).
+- **Browser runs of the new code**: link pass and checks ran in the 5 runs below and in the step 1-4 proof runs (scratch data, scratch API).
 
 ## The 5 runs (scratch data `sas-corpus`, scratch API 4402, homepage only)
 
@@ -81,7 +85,7 @@ the copy is therefore "not safe" by the existing outside-call check. That is rea
   Not re-run after the redirect and 999 fixes (`652dd57`, `5624947`): preserve-* should be re-run.
 - Client: `npx vite build` passes. No client test suite exists.
 
-## Next steps, in order (commit and push after each)
+## The plan of 2026-10-20 (kept as written: steps 1-3 DONE, 4 IN PROGRESS, 5 not started; the live list is under "Next steps" below)
 
 1. **Stable visual check.** Freeze animations/timers/carousels on both the original (baseline) and the copy and capture
    at the same moment; when the original does not answer, compare against the saved capture (or the Plain HTML base)
@@ -333,9 +337,9 @@ What remains low after the fix is real (homepage 86 / 84: its picture part is 87
 Captures saved between 19ddc59 and this fix keep their blank pictures: a project's clean scores from that window are only
 comparable after a new capture (or a re-score of the reference like the one above).
 
-## Step 4 — "got worse" measured on the as-is copy: IN PROGRESS (2026-10-23, branch `copy-step4`)
+## Step 4 — "got worse" measured on the as-is copy: IN PROGRESS (2026-10-23/24, branch `step4-lighthouse`; `copy-step4` superseded)
 
-Done (committed; the full suite NOT run, by the user's rule — related files only):
+Done first on `copy-step4` (1006f54, the base of `step4-lighthouse`; the full suite NOT run, by the user's rule — related files only):
 - **The re-audit measured an as-is copy with its scripts blocked.** It served the copy through `servePreview`, whose CSP blocks
   every script; an as-is copy runs the original's own. Motion rows, console errors and script-drawn headings "got worse" for
   that reason alone (28 rows on 4 homepage copies → 22 with the fix, no motion row left). Now `reaudit/index.js` serves an as-is
@@ -375,7 +379,7 @@ Done on `step4-lighthouse` (worktree `../Website-Audit-step4b`, from 1006f54; fu
   `scorePart`: performance → e when the page is not heavier and has the same LCP element; other categories by the checks failing
   only in the copy). The original's runs are cached per project in `lighthouse-original/` and reused by later re-audits.
   `checklist.lighthousePages` = { pages[] (scores per mode, runs, extra), worse[], extraRunPages[], skipped[], errors[], runs };
-  a note names the pages that needed extra runs. Never fails the re-audit. Tests `reaudit-lighthouse-pages.test.js` (4, stand-in
+  a note names the pages that needed extra runs. Never fails the re-audit. Tests `reaudit-lighthouse-pages.test.js` (5, stand-in
   runner). Cost: pages × 2 modes × 2 sides × (1 or 3) runs of ~30–60 s each.
 
 **Live run (2026-10-23, scratch API 4411, scratch data in the session's Temp scratchpad, plain-HTML as-is copies)**: only
@@ -470,25 +474,49 @@ above; visual gate; re-audit):
 
 **Where things are kept**:
 - Live results kept for the user: `C:/Users/urvas/Downloads/remastly-live-results/` — `nyaayai/` (summary.json, recreate/,
-  reaudit/, lighthouse-original/, CORRECTED-VERDICT.txt, repro-blank.mjs) and `first-attempt-indikaai-makememo/`.
+  reaudit/, lighthouse-original/, CORRECTED-VERDICT.txt, repro-blank.mjs), `first-attempt-indikaai-makememo/` and **`scripts/`**:
+  the live-run driver `scratch-live.mjs` and the other scratch scripts of the step-4 sessions (never committed; they import from
+  a worktree's `server/src`, so run them from a worktree's `server/` folder or fix the import paths).
 - Scratch data of this morning's run: `C:/Users/urvas/Downloads/sas-work/data` (projects indikaai 9b829d40…, makememo 93e23afa…,
-  sankalpam 06a12702…, nyaayai 603201ca…); logs `sas-work/live.log`, `sas-work/live-killed-run.log`. Driver (uncommitted, scratch):
-  `Website-Audit-copystep4/server/scratch-live.mjs <projectId>:<whole|home> …` (calls the job managers directly, no server).
+  sankalpam 06a12702…, nyaayai 603201ca…); logs `sas-work/live.log`, `sas-work/live-killed-run.log`. Driver: `remastly-live-results/scripts/scratch-live.mjs
+  <projectId>:<whole|home> …` (calls the job managers directly, no server; it used to live untracked in `Website-Audit-copystep4/server/`).
 - Scratch data of the 2026-10-23 nyaayai run (scratch API port 4411; project e97a1434 = nyaayai): the earlier session's
   scratchpad, `C:/Users/urvas/AppData/Local/Temp/claude/C--Users-urvas-Downloads-Website-Audit-accounts/0e702d26-ff8c-47ed-bdbe-ab81ffd84eb6/scratchpad/live/`
   (`data/`, `run-sites.mjs`, `recopy.mjs`, `rerun-reaudit.mjs`). It is in Temp: copy it out before it is cleaned if it is needed.
 
 Known gaps: Step 1's stability figures (nyaayai 0.27–0.31 %) were measured with the old `pixelDiffPct` and not again.
 
-## Next steps, in order (commit and push after each)
+## Next steps, in order (commit after each with `--no-verify`, say the full suite was not run; nothing is pushed before the PR)
 
-1. Zero-regressions loop: the re-audit runs on the as-is copy; every "got worse" item is measured and must be 0 or have a reason
-   (§5); the summary line's "Fixed" comes from it.
-2. Per-page fallback: clean rebuild of a failing page in the chosen stack, time-boxed correction, keep the better one.
-3. Images on the as-is output (WebP / variants) only where the pixels stay the same, through the same gate.
-4. Recorded, waiting for a decision: DEPLOY.md per (stack, mode) from the shipped package (see the bug above); security headers that
-   take effect on Next.js / Vercel. (The capture's reference picture is fixed, see above.)
-Then: full runs of makememo MERN and nyaayai Next.js on scratch data (scratch API only; never port 4000/5173, never the real data folder).
+1. **Step 4, open — nyaayai's as-is copy renders blank under Lighthouse** ("State on 2026-10-24" above): check the two committed leads
+   with `remastly-live-results/nyaayai/repro-blank.mjs`; if still blank, the third lead; fix generically; then the Lighthouse comparison
+   again, copy side only (the original's runs are cached). After it, on the same copy: the UNEXPLAINED "unused CSS" row and the
+   motion step's timeout.
+2. **Step 4, rest**: whatever *acts* on an unexplained "got worse" / "still open" row (`copy/run.js zeroRegressions` is the tested
+   model, fakes only); the summary line's "Fixed" already comes from the re-audit.
+3. **Step 5 — per-page fallback**: clean rebuild of a failing page in the chosen stack, time-boxed correction, keep the better one.
+4. Images on the as-is output (WebP / variants) only where the pixels stay the same, through the same gate.
+5. **BUG, open: the exact comparison's pictures always answer 404** (found 2026-10-23 during the accounts work; still present
+   on `step4-lighthouse`, checked 2026-10-24).
+   `server/src/routes/recreate.js`, route `GET /api/projects/:id/recreate/:recreateId/exact/:slug/:file` (line ~277 on
+   `copy-my-site` and `accounts`, ~211 on `exact-mode`). Its file-name check lost every backslash when it was written
+   (commit b712d3d, 2026-10-10, "Exact mode A6" — the known regex trap of writing code through a shell heredoc):
+   `const EXACT_FILE = /^(copy-)?d{3,4}(xd{3,4})?(-b[1-3]|-full|-map|-crop[1-3]).webp$/;`
+   `d{3,4}` means the letter "d" three or four times, not digits, so a real name like `1440-full.webp` or `copy-1440x600-b1.webp`
+   never matches and the route returns 404 "Image not found." before it looks at the disk. The line under it that picks the
+   folder has the same loss: `/-(map|crop[1-3]).webp$/` (the dot matches any character; harmless there, but fix it too).
+   Intended: `/^(copy-)?\d{3,4}(x\d{3,4})?(-b[1-3]|-full|-map|-crop[1-3])\.webp$/` and `/-(map|crop[1-3])\.webp$/`.
+   Check the names against what the comparison writes: `server/src/recreate/verify/exact/compare.js` (`copyBand`, `mapFile`,
+   `cropFile`, `shootBands(…, \`copy-${slot.id}\`)`) and `capture/exact.js` (`bandFile`), e.g. `1440-b1.webp`, `1440x600-full.webp`,
+   `copy-1440-b2.webp`, `1440-map.webp`, `1440-crop3.webp`. Who sees it: the app's **Exact comparison** table
+   (`client/src/components/recreate/RecreateReport.jsx`, links "map" and the crops) — every link is a 404, so the pictures that
+   explain a failing slot have never been viewable. Fix generally, then add a route test that requests one file of each kind
+   from a fixture recreate folder (200, `image/webp`) and one bad name (404), so the regex can never silently match nothing
+   again. Also worth a sweep of server/src for other regex literals that lost their backslashes (a bare `d{`, `s+`, `w+` or
+   an unescaped `.webp` inside `/…/`).
+6. Recorded, waiting for a decision: security headers that take effect on Next.js / Vercel (DEPLOY.md is fixed, PARKED item 3).
+Then the big multi-site live run ("Sites still to run at the end" above), one site per run, `SAS_MAX_PARALLEL=1`, scratch data and
+ports only, before the PR.
 
 ## PARKED (2026-10-21) — copy-my-site paused for the `accounts` work
 
@@ -543,30 +571,12 @@ Open, in the order to pick them up:
    own scroll stops at 14 000 px (`check.js openAndScroll`), so on nyaayai at 390 (15 681 px) the last 1 681 px are never
    scrolled into view on either side. Fix by scrolling to the page height with the capture's `scrollThrough`, then re-measure
    nyaayai and makememo at 1440 and 390 in fresh processes (harness pattern: see "Step 1" above).
-5. **Step 4 — re-audit + zero-regressions loop (not started).** The as-is job must run the re-audit on the copy; every
-   "got worse" item is measured and must be 0 or carry one of the five reasons; the summary line's "Fixed" comes from it (today
-   it is still the clean pipeline's comparison). `copy/run.js zeroRegressions` holds the decision logic, tested with fakes only.
-   It depends on 1–2 (an honest "Fixed" count) and on the capture fix 10a665a (a reference picture that is not blank).
+5. **Step 4 — re-audit + zero-regressions loop: IN PROGRESS since 2026-10-23** (see "Step 4" and "Next steps" above): the re-audit
+   runs after every as-is copy, "got worse" and "still open" rows carry reasons, Lighthouse runs on every page of both sides; the
+   summary line's "Fixed" comes from the re-audit. Open: the blank render under Lighthouse, and what acts on an unexplained row.
 6. **Step 5 — per-page fallback (not started).** A page below threshold: auto-repair known stack issues, else a clean rebuild of
    that page in the chosen stack with a time-boxed exact correction, keep the better. `copy/run.js` has the decision logic with
    fakes only.
-7. **BUG: the exact comparison's pictures always answer 404 (found 2026-10-23 during the accounts work, not fixed).**
-   `server/src/routes/recreate.js`, route `GET /api/projects/:id/recreate/:recreateId/exact/:slug/:file` (line ~277 on
-   `copy-my-site` and `accounts`, ~211 on `exact-mode`). Its file-name check lost every backslash when it was written
-   (commit b712d3d, 2026-10-10, "Exact mode A6" — the known regex trap of writing code through a shell heredoc):
-   `const EXACT_FILE = /^(copy-)?d{3,4}(xd{3,4})?(-b[1-3]|-full|-map|-crop[1-3]).webp$/;`
-   `d{3,4}` means the letter "d" three or four times, not digits, so a real name like `1440-full.webp` or `copy-1440x600-b1.webp`
-   never matches and the route returns 404 "Image not found." before it looks at the disk. The line under it that picks the
-   folder has the same loss: `/-(map|crop[1-3]).webp$/` (the dot matches any character; harmless there, but fix it too).
-   Intended: `/^(copy-)?\d{3,4}(x\d{3,4})?(-b[1-3]|-full|-map|-crop[1-3])\.webp$/` and `/-(map|crop[1-3])\.webp$/`.
-   Check the names against what the comparison writes: `server/src/recreate/verify/exact/compare.js` (`copyBand`, `mapFile`,
-   `cropFile`, `shootBands(…, \`copy-${slot.id}\`)`) and `capture/exact.js` (`bandFile`), e.g. `1440-b1.webp`, `1440x600-full.webp`,
-   `copy-1440-b2.webp`, `1440-map.webp`, `1440-crop3.webp`. Who sees it: the app's **Exact comparison** table
-   (`client/src/components/recreate/RecreateReport.jsx`, links "map" and the crops) — every link is a 404, so the pictures that
-   explain a failing slot have never been viewable. Fix generally, then add a route test that requests one file of each kind
-   from a fixture recreate folder (200, `image/webp`) and one bad name (404), so the regex can never silently match nothing
-   again. Also worth a sweep of server/src for other regex literals that lost their backslashes (a bare `d{`, `s+`, `w+` or
-   an unescaped `.webp` inside `/…/`).
 
 Also known: clean-rebuild captures taken between 19ddc59 (2026-10-18 08:58 UTC) and 10a665a have blank reference pictures; in the
 scratch corpus that is dreamhire d541c77b, parchaa 5543a393, flexibench dcecafc4 / fe1df206 (partly) and makememo 1fe625e9 (as-is
