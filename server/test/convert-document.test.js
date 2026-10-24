@@ -32,7 +32,7 @@ test('what React cannot write exactly is a fallback, each with its reason', () =
   assert.deepEqual(planAttributes('div', { hidden: 'hidden' }), { props: ['hidden'] });
 });
 
-test('a page: head as JSX, sections as components, raw fallbacks recorded with where and why, no comment markers', () => {
+test('a page: head as JSX, sections as components, raw fallbacks recorded with where and why, comments kept', () => {
   const html = doc(
     '<!-- a comment -->\n<header class="site-header"><a href="/about.html?x=1#top">About</a><button onclick="m()">Menu</button></header>'
     + '<main><h1 style="color:red">Hi &amp; bye</h1><p>a &lt; b</p><svg viewBox="0 0 1 1"><circle r="1"/></svg>'
@@ -46,7 +46,8 @@ test('a page: head as JSX, sections as components, raw fallbacks recorded with w
   // The head: whitespace between elements left out (no two text nodes side by side), the script's text raw, the link a fallback.
   assert.equal(c.headJsx, `<meta charSet="utf-8" /><title>T</title><RawHtml b64="${b64('<link rel="stylesheet" href="/s.css" media="print" onload="this.media=\'all\'">')}" /><script dangerouslySetInnerHTML={{ __html: "if (1 < 2) a()" }} />`);
   assert.deepEqual(c.sections.map((s) => s.name), ['SiteHeader', 'MainContent', 'SiteFooter']);
-  assert.equal(c.pageJsx, `{"\\n"}<SiteHeader /><MainContent /><RawHtml b64="${b64('<script src="/app.js" async=""></script>')}" /><SiteFooter /><script dangerouslySetInnerHTML={{ __html: "b()" }} />`);
+  // The comment is kept (a React-rendered site reads its comments back as hydration markers), and is not a fallback.
+  assert.equal(c.pageJsx, `<RawHtml comment=" a comment " />{"\\n"}<SiteHeader /><MainContent /><RawHtml b64="${b64('<script src="/app.js" async=""></script>')}" /><SiteFooter /><script dangerouslySetInnerHTML={{ __html: "b()" }} />`);
   const header = c.sections[0].jsx;
   assert.match(header, /<a href="\/about\/\?x=1#top">About<\/a>/, 'a moved page is linked at its new address, query and fragment kept');
   assert.match(header, /<RawHtml b64="[A-Za-z0-9+/=]+" \/><\/header>$/, 'the button with its handler is kept as original HTML');

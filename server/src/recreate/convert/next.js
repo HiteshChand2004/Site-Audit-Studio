@@ -91,7 +91,8 @@ function dropNextHead(html) {
     .replace(/<meta name="viewport"[^>]*data-next-head=""[^>]*\\/>/g, '')
     .replace(/<noscript data-n-css=""><\\/noscript>/g, '');
 }
-const unwrapRaw = (html) => html.replace(/<template data-sas-raw="([A-Za-z0-9+/=]*)"><\\/template>/g, (all, b64) => Buffer.from(b64, 'base64').toString('utf8'));
+const unwrapRaw = (html) => html.replace(/<template data-sas-raw="([A-Za-z0-9+/=]*)"><\\/template>/g, (all, b64) => Buffer.from(b64, 'base64').toString('utf8'))
+  .replace(/<template data-sas-comment="([^"]*)"><\\/template>/g, (all, text) => '<!--' + decode(text) + '-->');
 // The route of an exported file: out/about/index.html -> /about/, out/index.html -> /, out/404.html -> /404.html.
 const routeOf = (file) => {
   const rel = path.relative(out, file).split(path.sep).join('/');

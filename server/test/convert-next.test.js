@@ -92,7 +92,7 @@ test('the conversion: components per section, shared header and footer, the fall
     const converted = await readFile(file, 'utf8');
     const scripts = (s) => (s.match(/<script\b/gi) ?? []).length;
     assert.equal(scripts(converted), scripts(original), `${p.outPath}: the same number of scripts, none of the stack's`);
-    assert.ok(!/__next|data-next-head|_next\/|data-n-css|data-sas-raw/.test(converted), `${p.outPath}: no artefact of the build left`);
+    assert.ok(!/__next|data-next-head|_next\/|data-n-css|data-sas-raw|data-sas-comment/.test(converted), `${p.outPath}: no artefact of the build left`);
     assert.match(converted, /<html lang="en"/, `${p.outPath}: the html attributes are the original's`);
   }
   // The project is real code: a page imports its components, and the shared header is one file.

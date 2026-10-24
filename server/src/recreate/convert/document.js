@@ -20,8 +20,10 @@ import { pascal } from '../emit/react/components.js';
 export const RAW_COMPONENT = 'RawHtml';
 export const RAW_COMPONENT_SOURCE = `// An element the conversion kept as the original HTML (see KNOWN-ISSUES.md / the report for the list and the reasons).
 // The markup travels base64-encoded in an inert <template>, which the after-build step unwraps (decoding it), so the
-// page's DOM is the original's and no escaping rule of React can change a byte of it.
-export default function ${RAW_COMPONENT}({ b64 }) {
+// page's DOM is the original's and no escaping rule of React can change a byte of it. A comment of the page travels the same
+// way (the comment prop): React cannot write one, and a site rendered with React reads its comments back as hydration markers.
+export default function ${RAW_COMPONENT}({ b64, comment }) {
+  if (comment !== undefined) return <template data-sas-comment={comment} />;
   return <template data-sas-raw={b64} />;
 }
 `;
@@ -147,6 +149,13 @@ class Conversion {
     this.usesRaw = false;
   }
 
+  /** A comment of the page, kept as it is (RawHtml writes it; the build step turns it back into the comment). Not a fallback. */
+  commentJsx(data) {
+    this.comments = (this.comments ?? 0) + 1;
+    this.usesRaw = true;
+    return `<${RAW_COMPONENT} comment=${JSON.stringify(data)} />`;
+  }
+
   /** The original HTML of an element, kept as it is (RawHtml). */
   rawOf(el, reason, attribute) {
     this.fallbacks.push({ page: this.page, where: whereOf(el), tag: el.name, ...(attribute && { attribute }), reason });
@@ -155,7 +164,11 @@ class Conversion {
     return `<${RAW_COMPONENT} b64=${JSON.stringify(Buffer.from(this.$.html(el), 'utf8').toString('base64'))} />`;
   }
 
-  /** The JSX of a list of nodes (adjacent texts merged, comments left out: they draw nothing and React cannot write them). */
+  /**
+   * The JSX of a list of nodes (adjacent texts merged). Comments are kept, byte for byte: they draw nothing, but a site rendered
+   * with React marks its server-rendered parts with them (<!--$-->, <!--/$-->), and its own script, finding them gone, gives up
+   * on the page it was sent and draws it again (found on a live site: the largest paint 7.9 s late on a phone, loops lost).
+   */
   childrenJsx(nodes, { inHead = false } = {}) {
     const out = [];
     let text = '';
@@ -165,7 +178,8 @@ class Conversion {
       // document's Head would separate them with comment markers).
       if (n.type === 'text') text += inHead && !n.data.trim() ? '' : n.data;
       else if (isElement(n)) { flush(); out.push(this.elementJsx(n, { inHead })); }
-      // comments, directives and cdata: nothing to draw
+      else if (n.type === 'comment') { flush(); out.push(this.commentJsx(n.data)); }
+      // directives and cdata: nothing to draw
     }
     flush();
     return out;
