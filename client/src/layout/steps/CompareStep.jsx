@@ -34,6 +34,23 @@ const sandboxFor = (preview) => (preview?.scripts ? 'allow-scripts' : '');
 const LIVE_PORTS = new Set(['5173', '8080']);
 const COPY_MODE = typeof window !== 'undefined' && LIVE_PORTS.has(window.location.port) ? 'live' : 'screenshot';
 
+const PREVIEW_TOKEN = /^\/preview\/([A-Za-z0-9_-]{24})\//;
+
+/**
+ * Plain words for what the copy's own script could not do inside the preview's sealed frame (reported by the shim the
+ * preview serves first, as counts); null when nothing is amiss. The downloaded copy is never affected: the frame is the limit.
+ */
+function previewLimitNote(r) {
+  if (!r || (!r.blank && !r.failed)) return null;
+  const files = r.failed ? `${r.failed} file${r.failed === 1 ? '' : 's'} its script asked for could not be loaded here` : null;
+  const errors = r.errors ? `its script stopped with ${r.errors === 1 ? 'an error' : `${r.errors} errors`}` : null;
+  const why = [files, errors].filter(Boolean).join(' and ');
+  const what = r.blank
+    ? `The copy did not draw this page inside the preview's sealed frame${why ? ` (${why})` : ''}.`
+    : `Some parts of this page may not run inside the preview's sealed frame: ${why}.`;
+  return `${what} The downloaded copy is not affected: on a host of its own it runs normally.`;
+}
+
 /** A strip of every copied page (a small picture of its first screen and its match), to jump between pages. */
 function PageStrip({ project, result, pages, page, onPick, fidByPage, label }) {
   const ref = useRef(null);
@@ -121,6 +138,22 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
     return () => { alive = false; };
   }, [asIsCopy, project.id, result?.recreateId]);
   useSyncScroll(oldScroller, newScroller, sync);
+  // What the copy's own script could not do inside the preview's sealed frame: the shim the preview serves first reports
+  // counts, with the preview's token, from the sandboxed (origin "null") frame; nothing else is accepted as a report.
+  const previewToken = (asIsCopy ? asIsUrl : preview?.url)?.match(PREVIEW_TOKEN)?.[1] ?? null;
+  const [frameReport, setFrameReport] = useState(null);
+  useEffect(() => {
+    setFrameReport(null);
+    if (!previewToken) return undefined;
+    const onMessage = (e) => {
+      const d = e.data;
+      if (e.origin !== 'null' || !d || d.sasPreview !== 1 || d.token !== previewToken) return;
+      const count = (v) => (Number.isFinite(v) && v > 0 ? Math.min(Math.round(v), 999) : 0);
+      setFrameReport({ failed: count(d.failed), errors: count(d.errors), blank: d.blank === true });
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [previewToken, page, viewport]);
 
   const pages = result?.preview?.pages ?? result?.pages?.map((p) => p.outPath) ?? [];
   // A new copy opens on its homepage.
@@ -209,6 +242,7 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   };
   const copyHasShots = Boolean(copyInfo?.slug && fidByPage.get(page)?.views);
   const copyPicture = copyMode === 'screenshot' && copyHasShots;
+  const frameNote = ready && !copyPicture ? previewLimitNote(frameReport) : null;
 
   return (
     <div className={ws.stepBody}>
@@ -315,6 +349,12 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
             <p className={styles.dummyNote} role="note">
               <Info size={13} aria-hidden="true" />
               <span>Forms need the server, which this preview does not run. In the downloaded project, run it as its README explains to try them.</span>
+            </p>
+          )}
+          {frameNote && (
+            <p className={styles.dummyNote} role="status">
+              <Info size={13} aria-hidden="true" />
+              <span>{frameNote}</span>
             </p>
           )}
         </section>

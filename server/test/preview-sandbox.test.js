@@ -4,9 +4,12 @@
 //    account and projects from the API with the user's cookie, and the app's storage.
 // 2. THE FIX: the same copy through recreate/previewRoute.js (every document sent with `Content-Security-Policy: sandbox
 //    allow-scripts`) in a frame with sandbox="allow-scripts": the script runs, the copy's own files load (stylesheet, script,
-//    data, from root-relative addresses moved under the preview), and nothing of the app is reachable — no cookie goes with
-//    its requests, the API refuses what still arrives (security/foreignOrigin.js), storage and cookies throw, there is no
-//    service worker. Opened in a tab of its own, the preview is sandboxed just the same (the header, not the frame, decides).
+//    data, from root-relative addresses moved under the preview — in the markup by the server, at run time by the shim of
+//    recreate/previewShim.js: fetch, XMLHttpRequest, new URL, a script or image the page adds, a module imported by address),
+//    the page sees its own address, and nothing of the app is reachable — no cookie goes with its requests, the API refuses
+//    what still arrives (security/foreignOrigin.js), the app's storage and cookies are not readable (private empty stand-ins
+//    answer, so the site's script does not stop), there is no service worker. What the script could not load is reported to
+//    the app as counts. Opened in a tab of its own, the preview is sandboxed just the same (the header, not the frame, decides).
 // One browser; run alone with SAS_TEST_BROWSER_CONCURRENCY=1.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -38,8 +41,27 @@ const PROBE = `(async () => {
   await attempt('own', 'data.json');
   try { r.cookie = document.cookie; } catch (e) { r.cookie = 'error:' + e.name; }
   try { r.storage = localStorage.getItem('app-secret'); } catch (e) { r.storage = 'error:' + e.name; }
+  // Addresses the site's own script builds at run time, as a real site's bundle does.
+  await attempt('rootFetch', '/data.json');
+  await attempt('originFetch', location.origin + '/data.json');
+  await attempt('relFetch', 'data.json');
+  try { r.urlCtor = new URL('/data.json', location.href).pathname; } catch (e) { r.urlCtor = 'error:' + e.name; }
+  r.xhr = await new Promise((res) => { try { const x = new XMLHttpRequest(); x.open('GET', '/data.json'); x.onloadend = () => res(x.status); x.send(); } catch (e) { res('error:' + e.name); } });
+  r.late = await new Promise((res) => { const s = document.createElement('script'); s.src = '/late.js'; s.onload = () => res(window.__late === true); s.onerror = () => res(false); document.head.appendChild(s); });
+  r.img = await new Promise((res) => { const d = document.createElement('div'); d.innerHTML = '<img src="/dot.png">'; document.body.appendChild(d); const i = d.firstChild; i.onload = () => res(i.naturalWidth); i.onerror = () => res('error'); if (i.complete && i.naturalWidth) res(i.naturalWidth); });
+  r.mod = await import('/mod.js').then((x) => x.ok, (e) => 'error:' + e.name);
+  r.dynImport = await import('/mo' + 'd.js').then((x) => x.ok, (e) => 'error:' + e.name);
+  try { const st = document.createElement('style'); document.head.appendChild(st); st.sheet.insertRule('body{cursor:url(/dot.png),auto}', 0); r.cssom = getComputedStyle(document.body).cursor; } catch (e) { r.cssom = 'error:' + e.name; }
+  try { r.swProp = typeof navigator.serviceWorker; } catch (e) { r.swProp = 'error:' + e.name; }
+  try { const d = document.createElement('div'); d.style.backgroundImage = 'url(/dot.png)'; r.styleProp = d.style.backgroundImage; } catch (e) { r.styleProp = 'error:' + e.name; }
+  r.pathname = location.pathname;
+  try { localStorage.setItem('k', 'v'); r.storeRound = localStorage.getItem('k'); } catch (e) { r.storeRound = 'error:' + e.name; }
+  try { document.cookie = 'a=1'; r.cookieRound = document.cookie; } catch (e) { r.cookieRound = 'error:' + e.name; }
+  await attempt('missing', '/missing.json');
   try { const reg = await navigator.serviceWorker.register('sw.js'); r.sw = 'registered:' + new URL(reg.scope).pathname; await reg.unregister(); }
   catch (e) { r.sw = 'error:' + e.name; }
+  history.pushState(null, '', '/about');
+  r.pushed = location.pathname;
   r.origin = self.origin; // the document's origin ("null" when opaque; location.origin is the address's)
   r.bg = getComputedStyle(document.body).backgroundColor;
   r.appjs = window.__appjs === true;
@@ -51,13 +73,20 @@ async function copyFolder() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sas-sandbox-copy-'));
   await mkdir(path.join(root, 'about'), { recursive: true });
   await writeFile(path.join(root, 'index.html'), `<!doctype html><html><head><meta charset="utf-8"><title>copied site</title>
-<link rel="stylesheet" href="/styles.css"><script src="/app.js"></script></head><body><h1>Copied</h1><a href="/about/">about</a>
+<link rel="stylesheet" href="/styles.css"><script src="/app.js"></script></head><body><h1>Copied</h1><p>A page of the copied site, with enough words on it to count as drawn.</p><a href="/about/">about</a>
 <script>${PROBE}</script></body></html>`, 'utf8');
   await writeFile(path.join(root, 'about', 'index.html'), '<!doctype html><title>about</title>', 'utf8');
   await writeFile(path.join(root, 'styles.css'), 'body{background:rgb(1, 2, 3)}', 'utf8');
   await writeFile(path.join(root, 'app.js'), 'window.__appjs = true;', 'utf8');
   await writeFile(path.join(root, 'data.json'), '{"own":true}', 'utf8');
   await writeFile(path.join(root, 'sw.js'), "self.addEventListener('install', () => self.skipWaiting());", 'utf8');
+  await writeFile(path.join(root, 'late.js'), 'window.__late = true;', 'utf8');
+  await writeFile(path.join(root, 'mod.js'), 'import "/dep.js"; export const ok = window.__dep === true;', 'utf8');
+  await writeFile(path.join(root, 'dep.js'), 'window.__dep = true;', 'utf8');
+  await writeFile(path.join(root, 'dot.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64'));
+  // A page whose script draws nothing and asks for a file the copy does not have.
+  await mkdir(path.join(root, 'blank'), { recursive: true });
+  await writeFile(path.join(root, 'blank', 'index.html'), '<!doctype html><html><head><meta charset="utf-8"></head><body><script>fetch("/missing.json").catch(() => {});</script></body></html>', 'utf8');
   return root;
 }
 
@@ -164,9 +193,11 @@ async function setup(t) {
   await mkdir(path.dirname(asIsDir), { recursive: true });
   await rm(asIsDir, { recursive: true, force: true });
   await mkdir(asIsDir, { recursive: true });
-  for (const f of ['index.html', 'styles.css', 'app.js', 'data.json', 'sw.js']) await writeFile(path.join(asIsDir, f), await readFile(path.join(copyRoot, f)));
-  await mkdir(path.join(asIsDir, 'about'), { recursive: true });
-  await writeFile(path.join(asIsDir, 'about', 'index.html'), await readFile(path.join(copyRoot, 'about', 'index.html')));
+  for (const f of ['index.html', 'styles.css', 'app.js', 'data.json', 'sw.js', 'late.js', 'mod.js', 'dep.js', 'dot.png']) await writeFile(path.join(asIsDir, f), await readFile(path.join(copyRoot, f)));
+  for (const d of ['about', 'blank']) {
+    await mkdir(path.join(asIsDir, d), { recursive: true });
+    await writeFile(path.join(asIsDir, d, 'index.html'), await readFile(path.join(copyRoot, d, 'index.html')));
+  }
 
   // A second project with a build of ours (a plain copy: no script; the strict policy on top of the sandbox).
   const plainId = randomUUID();
@@ -215,6 +246,10 @@ test('the risk, then the fix: a copied site\'s script cannot reach the app, its 
       await page.waitForFunction(() => window.__results.some((m) => m && m.probe), null, { timeout: 15000 });
       const result = await page.evaluate(() => window.__results.find((m) => m.probe).probe);
       result.responses = responses;
+      if (o.report) {
+        await page.waitForFunction(() => window.__results.some((m) => m && m.sasPreview === 1 && m.done), null, { timeout: 15000 });
+        result.report = await page.evaluate(() => window.__results.filter((m) => m && m.sasPreview === 1 && m.done).pop());
+      }
       return result;
     } finally {
       await ctx.close();
@@ -230,25 +265,69 @@ test('the risk, then the fix: a copied site\'s script cannot reach the app, its 
   assert.match(before.projects.text, /copied site/, 'and lists the user\'s projects');
   assert.equal(before.storage, '42', 'and the app\'s own storage is readable');
   assert.match(before.sw, /^registered:\/old\/c\//, `a service worker was registered on the app's origin: ${before.sw}`);
+  assert.equal(before.pathname, '/old/c/', 'and the site saw the folder it was put in, not its own address');
 
   // 2. The fix: the same copy through the preview route, framed without allow-same-origin.
   const started = await s.call('POST', `/api/projects/${s.projectId}/recreate/${s.recreateId}/asis-preview`, { cookie: s.cookie, body: {} });
   assert.equal(started.status, 200, started.text);
   const previewUrl = JSON.parse(started.text).url;
   assert.match(previewUrl, /^\/preview\/[A-Za-z0-9_-]{24}\/$/);
-  const after = await probeAs({ sandbox: 'allow-scripts', src: previewUrl });
+  const token = previewUrl.split('/')[2];
+  const after = await probeAs({ sandbox: 'allow-scripts', src: previewUrl, report: true });
   assert.equal(after.origin, 'null', `the copied site has no origin of its own: ${JSON.stringify(after)}`);
   assert.notEqual(after.me.status, 200, `the API does not answer as the user: ${JSON.stringify(after.me)}`);
   assert.doesNotMatch(JSON.stringify(after.me), /me@example\.com/);
   assert.notEqual(after.projects.status, 200, JSON.stringify(after.projects));
   assert.doesNotMatch(JSON.stringify(after.projects), /copied site/);
-  assert.equal(after.cookie, 'error:SecurityError', 'cookies throw');
-  assert.equal(after.storage, 'error:SecurityError', 'storage throws');
+  assert.equal(after.cookie, '', 'no cookie of the app is readable (a private empty jar answers, so the site\'s script does not stop)');
+  assert.equal(after.storage, null, 'the app\'s storage is not readable (a private empty stand-in answers)');
   assert.equal(after.sw, 'error:SecurityError', `no service worker: ${after.sw}`);
   // And the copy itself works: its stylesheet, script and data, from root-relative addresses moved under the preview.
   assert.equal(after.bg, 'rgb(1, 2, 3)', 'its stylesheet applied');
   assert.equal(after.appjs, true, 'its script ran');
   assert.deepEqual(after.own, { status: 200, text: '{"own":true}' }, 'its own data fetched');
+  // Addresses its script built at run time reach the copy's own files, whichever way they were built.
+  const own = { status: 200, text: '{"own":true}' };
+  assert.deepEqual(after.rootFetch, own, 'fetch("/x")');
+  assert.deepEqual(after.originFetch, own, 'fetch(location.origin + "/x")');
+  assert.deepEqual(after.relFetch, own, 'fetch("x")');
+  assert.match(after.urlCtor, /^\/preview\/[A-Za-z0-9_-]{24}\/data\.json$/, 'new URL("/x", location.href)');
+  assert.equal(after.xhr, 200, 'XMLHttpRequest');
+  assert.equal(after.late, true, 'a script element the page adds with src="/x"');
+  assert.equal(after.img, 1, 'an image written as markup with src="/x"');
+  assert.equal(after.mod, true, 'import("/mod.js") whose module imports "/dep.js" by address');
+  assert.equal(after.dynImport, true, 'import() of an address built at run time (the import map, no hook can reach it)');
+  assert.match(after.cssom, /url\("http:\/\/localhost:\d+\/preview\/[A-Za-z0-9_-]{24}\/dot\.png"\)/, 'a rule inserted through the CSSOM');
+  assert.equal(after.swProp, 'object', 'navigator.serviceWorker can be read (a stand-in that refuses to register)');
+  assert.match(after.styleProp, /^url\("http:\/\/localhost:\d+\/preview\/[A-Za-z0-9_-]{24}\/dot\.png"\)$/, 'a style property set one at a time (style.backgroundImage = "url(/x)")');
+  // The site sees the address it was written for, and can move within it.
+  assert.equal(after.pathname, '/', 'location.pathname is the page\'s own path');
+  assert.equal(after.pushed, '/about', 'history.pushState works as on its own host');
+  assert.equal(after.storeRound, 'v', 'its own storage writes and reads (in memory, private to the frame)');
+  assert.equal(after.cookieRound, 'a=1', 'its own cookie writes and reads (in memory, private to the frame)');
+  assert.equal(after.missing.status, 404, 'a file the copy does not have is a 404 of the preview, never of the app');
+  // What the app is told: counts only, with the preview's token, after the page has loaded.
+  assert.equal(after.report.token, token);
+  assert.equal(after.report.blank, false, 'the page drew');
+  assert.ok(after.report.failed >= 1, `the missing file counted: ${JSON.stringify(after.report)}`);
+  assert.ok(after.report.moved > 0, 'addresses were moved');
+  assert.deepEqual(Object.keys(after.report).sort(), ['blank', 'done', 'errors', 'failed', 'moved', 'sasPreview', 'token'], 'nothing else leaves the frame');
+  // A page whose script draws nothing: reported as blank, with what it could not load.
+  const blank = await probeBlank(`${previewUrl}blank/`);
+  assert.equal(blank.blank, true);
+  assert.equal(blank.failed, 1);
+
+  async function probeBlank(src) {
+    const ctx = await browser.newContext();
+    try {
+      const page = await ctx.newPage();
+      await page.goto(`${s.origin}/host?sandbox=allow-scripts&src=${encodeURIComponent(src)}`, { waitUntil: 'load' });
+      await page.waitForFunction(() => window.__results.some((m) => m && m.sasPreview === 1 && m.done), null, { timeout: 15000 });
+      return await page.evaluate(() => window.__results.filter((m) => m && m.sasPreview === 1 && m.done).pop());
+    } finally {
+      await ctx.close();
+    }
+  }
 
   // 3. The header decides, not the frame: the preview opened in a tab of its own is sandboxed too.
   const ctx = await browser.newContext();
@@ -283,6 +362,7 @@ test('the risk, then the fix: a copied site\'s script cannot reach the app, its 
   } finally {
     await ctx2.close();
   }
+  assert.doesNotMatch((await s.call('GET', plainUrl)).text, /<script/, 'a page that runs no script gets no shim either');
 
   // 5. The API's own half, without a browser: a request that says it is foreign is refused even with the real cookie.
   assert.equal((await s.call('GET', '/api/projects', { cookie: s.cookie })).status, 200, 'the app\'s own request');

@@ -8,7 +8,8 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
-import { previewRouter, rewriteCssUrls, rewriteHtmlUrls, previewFileHeaders, PREVIEW_PREFIX } from '../src/recreate/previewRoute.js';
+import { previewRouter, rewriteCssUrls, rewriteHtmlUrls, rewriteFile, previewFileHeaders, PREVIEW_PREFIX } from '../src/recreate/previewRoute.js';
+import { importMapHash, importMapTag, injectShim, PREVIEW_SHIM, PREVIEW_SHIM_HASH, rewriteImportMap, rewriteInlineScripts, rewriteJsSpecifiers } from '../src/recreate/previewShim.js';
 import { issuePreviewToken, previewPath, resolvePreviewToken, revokePreviewToken } from '../src/recreate/previewTokens.js';
 
 test('root-relative addresses in CSS move under the prefix; protocol-relative, absolute and relative ones do not', () => {
@@ -56,7 +57,7 @@ test('headers: every document is sandboxed; a build of ours keeps the strict pol
   const css = previewFileHeaders({ kind: 'copy', scripts: false, ext: '.css', origin: 'https://tool.example', frameAncestors: ['https://tool.example'] });
   assert.doesNotMatch(css['Content-Security-Policy'], /sandbox/, 'a stylesheet is no document');
   const app = previewFileHeaders({ kind: 'copy', scripts: 'inline', ext: '.html', origin: 'http://localhost:8080', scriptHashes: ["'sha256-abc'"], frameAncestors: ['http://localhost:8080'] });
-  assert.match(app['Content-Security-Policy'], /script-src http:\/\/localhost:8080 'sha256-abc'/);
+  assert.match(app['Content-Security-Policy'], /script-src http:\/\/localhost:8080 'sha256-[^']+' 'sha256-abc'/);
   const asIs = previewFileHeaders({ kind: 'as-is', scripts: true, ext: '.html', origin: 'http://localhost:8080', frameAncestors: ['http://localhost:8080'] });
   assert.equal(asIs['Content-Security-Policy'], 'sandbox allow-scripts; frame-ancestors http://localhost:8080');
   const svg = previewFileHeaders({ kind: 'as-is', scripts: true, ext: '.svg', origin: null, frameAncestors: ['http://localhost:8080'] });
@@ -126,4 +127,62 @@ test('the router: token in, folder out; no token or a wrong one is 404; the fold
 
   revokePreviewToken(token);
   assert.equal((await fetch(`${base}${p}`)).status, 404, 'a stopped preview is gone at once');
+});
+
+test('relative addresses in a page resolve against the page\'s folder (the shim changes the page\'s address); a stylesheet file keeps its own', () => {
+  const html = '<a href="about/">a</a><img src="../img/x.png" srcset="x-2.png 2x, /r.png 3x"><a href="#top">t</a><a href="mailto:x">m</a><a href="?q=1">q</a>'
+    + '<div style="background:url(bg.png)"></div><style>h1{background:url(h.png)}</style>';
+  const out = rewriteHtmlUrls(html, '/preview/t/', '/docs/');
+  assert.match(out, /href="\/preview\/t\/docs\/about\/"/);
+  assert.match(out, /src="\/preview\/t\/img\/x\.png" srcset="\/preview\/t\/docs\/x-2\.png 2x, \/preview\/t\/r\.png 3x"/);
+  assert.match(out, /href="#top"/, 'a fragment stays in the page');
+  assert.match(out, /href="mailto:x"/);
+  assert.match(out, /href="\/preview\/t\/docs\/\?q=1"/);
+  assert.match(out, /style="background:url\(\/preview\/t\/docs\/bg\.png\)"/);
+  assert.match(out, /<style>h1\{background:url\(\/preview\/t\/docs\/h\.png\)\}<\/style>/);
+  assert.equal(rewriteCssUrls('a{background:url(x.png)}', '/preview/t/'), 'a{background:url(x.png)}', 'a stylesheet file resolves its own relative addresses');
+  assert.equal(rewriteHtmlUrls('<a href="rel/z">z</a>', '/preview/t/'), '<a href="rel/z">z</a>', 'without a folder nothing relative is touched');
+});
+
+test('module specifiers: root-relative ones in any script, relative ones in inline modules; an import map\'s addresses; data blocks untouched', () => {
+  assert.equal(rewriteJsSpecifiers('import a from"/x.js";import("/c.js");import "./d.js";Array.from("/n");o.from("/n");export*from"/e.js";import("https://h/z")', '/preview/t/'),
+    'import a from"/preview/t/x.js";import("/preview/t/c.js");import "./d.js";Array.from("/n");o.from("/n");export*from"/preview/t/e.js";import("https://h/z")');
+  assert.equal(rewriteJsSpecifiers('import "./d.js";import(\'../u.js\');import "/r.js"', '/preview/t/', '/about/'), 'import "/preview/t/about/d.js";import(\'/preview/t/u.js\');import "/preview/t/r.js"');
+  assert.equal(rewriteImportMap('{"imports":{"a":"/a.js","b":"./b.js","c":"https://h/c.js"},"scopes":{"/s/":{"d":"/d.js"}}}', '/preview/t/', '/p/'),
+    '{"imports":{"a":"/preview/t/a.js","b":"/preview/t/p/b.js","c":"https://h/c.js","/":"/preview/t/","/preview/t/":"/preview/t/"},"scopes":{"/s/":{"d":"/preview/t/d.js"}}}',
+    'a page\'s own map gets the preview\'s entries: a page can carry one map');
+  assert.equal(rewriteImportMap('not json', '/preview/t/', '/'), 'not json');
+  const page = '<script type="importmap">{"imports":{"a":"/a.js"}}</script><script type="application/ld+json">{"from":"/x"}</script>'
+    + '<script>import("/m.js"); const s = "/api/x";</script><script type="module">import "./i.js"</script><script src="/s.js"></script><template><script>import("/t.js")</script></template>';
+  const out = rewriteInlineScripts(page, '/preview/t/', '/p/');
+  assert.match(out, /"imports":\{"a":"\/preview\/t\/a\.js","\/":"\/preview\/t\/","\/preview\/t\/":"\/preview\/t\/"\}/);
+  assert.match(out, /\{"from":"\/x"\}/, 'JSON-LD is data');
+  assert.match(out, /import\("\/preview\/t\/m\.js"\); const s = "\/api\/x";/, 'import() moved, a plain string left to the shim');
+  assert.match(out, /<script type="module">import "\/preview\/t\/p\/i\.js"<\/script>/);
+  assert.match(out, /<script src="\/s\.js"><\/script>/, 'an external script\'s tag is the attribute rewriter\'s');
+});
+
+test('the shim and the import map: first in a page that may run script, after the charset; their hashes in a build\'s policy; none for a page without script', () => {
+  assert.ok(PREVIEW_SHIM.length > 4000 && PREVIEW_SHIM_HASH.startsWith("'sha256-"));
+  const p = '/preview/t/';
+  const tag = `<script>${PREVIEW_SHIM}</script><script type="importmap">{"imports":{"/":"/preview/t/","/preview/t/":"/preview/t/"}}</script>`;
+  assert.equal(importMapTag(p), tag.slice(tag.indexOf('<script type="importmap">')));
+  assert.equal(injectShim('<!doctype html><html><head><meta charset="utf-8"><title>x</title></head></html>', p), `<!doctype html><html><head><meta charset="utf-8">${tag}<title>x</title></head></html>`);
+  assert.equal(injectShim('<html><head><title>x</title></head></html>', p), `<html><head>${tag}<title>x</title></head></html>`);
+  assert.equal(injectShim('<html lang="en"><body>x</body></html>', p), `<html lang="en">${tag}<body>x</body></html>`);
+  assert.equal(injectShim('x', p), `${tag}x`);
+  assert.equal(injectShim(injectShim('<head></head>', p), p), injectShim('<head></head>', p), 'once');
+  const own = '<head><script type="importmap">{"imports":{"a":"/a.js"}}</script></head>';
+  assert.equal((injectShim(own, p).match(/importmap/g) ?? []).length, 1, 'a page with a map of its own gets no second one');
+  assert.match(importMapHash(p), /^'sha256-[A-Za-z0-9+/=]+'$/);
+  const page = '<html><head><meta charset="utf-8"></head><body><script>import("/m.js")</script></body></html>';
+  assert.match(rewriteFile({ ext: '.html', text: page, prefix: '/preview/t/', dir: '/', scripts: true }), /<meta charset="utf-8"><script>\(function \(\) \{/);
+  assert.match(rewriteFile({ ext: '.html', text: page, prefix: '/preview/t/', dir: '/', scripts: true }), /import\("\/preview\/t\/m\.js"\)/);
+  assert.doesNotMatch(rewriteFile({ ext: '.html', text: page, prefix: '/preview/t/', dir: '/', scripts: false }), /function \(\) \{/, 'no shim where no script runs');
+  assert.doesNotMatch(rewriteFile({ ext: '.html', text: page, prefix: '/preview/t/', dir: '/', scripts: true, shim: false }), /function \(\) \{/, 'switched off for measurement');
+  assert.equal(rewriteFile({ ext: '.mjs', text: 'import "/c.mjs"; fetch("/d.json")', prefix: '/preview/t/', dir: '/', scripts: true }), 'import "/preview/t/c.mjs"; fetch("/d.json")');
+  const policy = previewFileHeaders({ kind: 'copy', scripts: true, ext: '.html', origin: 'http://h', scriptHashes: [importMapHash(p)] })['Content-Security-Policy'];
+  assert.match(policy, new RegExp(`script-src http://h ${PREVIEW_SHIM_HASH.replace(/[+/=']/g, (c) => `\\${c}`)} ${importMapHash(p).replace(/[+/=']/g, (c) => `\\${c}`)};`), 'a build with external scripts allows exactly the shim and the map inline');
+  assert.doesNotMatch(policy, /unsafe-inline'[^;]*;\s*img-src|script-src[^;]*unsafe-inline/);
+  assert.doesNotMatch(previewFileHeaders({ kind: 'as-is', scripts: true, ext: '.html', origin: 'http://h' })['Content-Security-Policy'], /script-src/, 'an as-is copy keeps the sandbox and the framing rule only');
 });

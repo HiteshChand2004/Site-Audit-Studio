@@ -198,9 +198,22 @@ are allowed. The user's dev server (4000 / 5173) runs from `Website-Audit-exact`
   no session: it is an opaque origin, so the browser sends it no cookie). Every HTML / SVG answer carries
   `Content-Security-Policy: sandbox allow-scripts; frame-ancestors <app>` (a build of ours also the strict policy, written with
   the visitor's origin instead of `'self'`), `Access-Control-Allow-Origin: *` (a sandboxed document fetches its own files
-  cross-origin), no-store, no-referrer. Root-relative addresses in pages and stylesheets are moved under the preview's path on
-  the way out; addresses a copy's own script builds at run time are not (they ask the app's root and get 404 — nothing of the
-  app). The app frames every copy with `sandbox="allow-scripts"` (plain copies `sandbox=""`), never `allow-same-origin`
+  cross-origin), no-store, no-referrer. The addresses written in pages, stylesheets, module specifiers and import maps are
+  moved under the preview's path on the way out (relative ones resolved against the page's folder); the addresses a copy's
+  own script builds at run time are moved by the shim every document that may run script gets first
+  (`recreate/previewShim.js`, hash-allowed in a build's policy): `fetch`, `XMLHttpRequest`, `URL`, `Request`, workers,
+  element `src` / `href` / `srcset` / `poster` / `action`, `setAttribute`, `innerHTML` and the like, `document.write`, the
+  CSSOM (`insertRule`, `setProperty`, `style.backgroundImage = …`), a MutationObserver as the safety net, and an import map
+  (`"/" → "/preview/<token>/"`) for `import()` of an address built at run time, which no hook can reach. The page sees the
+  address it was written for (`history.replaceState` to its inner path, so a router reads `/`); private in-memory stand-ins
+  answer for `localStorage` / `sessionStorage` / `document.cookie` / `navigator.serviceWorker` where the browser throws in a
+  sealed document (the app's own are never readable; registering a worker is refused). Nothing of the app is reachable:
+  a request for `/api/…` becomes a request under the preview, a 404 of the preview. The shim tells the app only counts
+  (`postMessage({ sasPreview: 1, token, moved, failed, errors, blank, done })` from origin `null`); the Compare step accepts a
+  report only with the shown preview's token and says in plain words when a page could not run fully and that the downloaded
+  copy is not affected. The downloaded copy is never changed: all of this happens on the way out. Not covered: a full
+  navigation the site's script makes to a root address (it leaves the preview), a worker's own requests (no shim inside it).
+  The app frames every copy with `sandbox="allow-scripts"` (plain copies `sandbox=""`), never `allow-same-origin`
   (`CompareStep.jsx`). `/api` refuses `Origin: null` and `Sec-Fetch-Site: cross-site` for every method
   (`security/foreignOrigin.js`). Vite (`/preview` proxied) and `scripts/local-proxy.mjs` route the prefix to the API.
   Proof: `test/preview-sandbox.test.js` (the risk shown first, then the fix, in a browser against the real API),
