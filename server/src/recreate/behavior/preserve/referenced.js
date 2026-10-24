@@ -8,7 +8,7 @@
 import { copyFile, mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { downloadAsset } from '../../assets/download.js';
-import { localPathOf } from './pageLift.js';
+import { localPathOf, storableAsIs } from './pageLift.js';
 
 /** The extensions of files a copy holds (pages, which have none, are never fetched this way). */
 const FILE_EXT = 'm?js|css|png|jpe?g|gif|webp|avif|svg|ico|mp4|webm|ogv|mov|mp3|ogg|wav|m4a|woff2?|ttf|otf|eot|wasm|json|webmanifest|pdf';
@@ -104,7 +104,7 @@ export async function fetchReferenced({ outDir, pageUrl, originHosts, manifest, 
   }
   for (const [p, local] of byPath) {
     const bare = path.resolve(root, `.${p}`);
-    if (!local || p === local || p.endsWith('/') || !bare.startsWith(root + path.sep) || (await exists(bare))) continue;
+    if (!local || p === local || p.endsWith('/') || !storableAsIs(p) || !bare.startsWith(root + path.sep) || (await exists(bare))) continue;
     const from = path.resolve(root, `.${local}`);
     if (!(await exists(from))) continue;
     await mkdir(path.dirname(bare), { recursive: true });
@@ -124,7 +124,9 @@ export async function fetchReferenced({ outDir, pageUrl, originHosts, manifest, 
           if (asked.has(url)) continue;
           const u = new URL(url);
           if (!originHosts.has(bareHost(u.hostname))) continue;
-          const sameSite = bareHost(u.hostname) === site;
+          // A path of the site that no file system can store under its own name is held like another host's file: under its safe
+          // name, found through the worker's map.
+          const sameSite = bareHost(u.hostname) === site && storableAsIs(decodeURIComponent(u.pathname));
           const local = sameSite ? decodeURIComponent(u.pathname) : localPathOf(url);
           const target = path.resolve(root, `.${local}`);
           if (!target.startsWith(root + path.sep)) continue;

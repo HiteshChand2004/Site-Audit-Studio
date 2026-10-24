@@ -57,8 +57,35 @@ export function localPathOf(url, type = null) {
     if (versioned && KNOWN_EXT.test(`.${versioned[2]}`)) clean = `${versioned[1]}@${versioned[3]}.${versioned[2]}`;
     else if (EXT_ANY_TYPE[String(type ?? '').split(';')[0].trim().toLowerCase()]) clean += EXT_ANY_TYPE[String(type).split(';')[0].trim().toLowerCase()];
   }
-  return clean;
+  return fileSafePath(clean);
 }
+
+/** Characters no file name may hold on some system (Windows forbids them all; a decoded %2F or %5C would be a folder). */
+const UNSAFE_IN_NAME = /[<>:"\\|?*\u0000-\u001f]/g;
+/** Names Windows keeps for devices, with or without an extension. */
+const RESERVED_NAME = /^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i;
+
+/**
+ * A root-relative path every file system can store, the same on every machine (a copy made on Linux and one made on Windows
+ * name their files alike): a character a name may not hold becomes ~ and its code (`Special:FilePath` → `Special~3aFilePath`),
+ * a dot segment, a trailing dot or space and a device name are spelled so they are plain names. A path that needs none of it
+ * is returned unchanged. The copy's references are rewritten to the result, so the address still finds the file.
+ * @param {string} p  decoded path, starting with /
+ */
+export function fileSafePath(p) {
+  const code = (c) => `~${c.charCodeAt(0).toString(16).padStart(2, '0')}`;
+  return p.split('/').map((seg, i) => {
+    if (i === 0 && seg === '') return seg;
+    let s = seg.replace(UNSAFE_IN_NAME, code);
+    if (s === '.' || s === '..') s = s.replace(/\./g, '~2e');
+    s = s.replace(/[. ]+$/, (tail) => [...tail].map(code).join(''));
+    if (RESERVED_NAME.test(s)) s = s.replace(/^([^.]+)/, '$1~');
+    return s;
+  }).join('/');
+}
+
+/** Whether a decoded path can be stored under its own name (fileSafePath leaves it as it is). */
+export const storableAsIs = (p) => fileSafePath(p) === p;
 
 /** Extensions a host serves with the right type. */
 const KNOWN_EXT = /\.(html?|m?js|css|json|svg|png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf|eot|mp4|webm|ogv|mp3|ogg|wav|m4a|wasm|txt|xml|webmanifest|map)$/i;

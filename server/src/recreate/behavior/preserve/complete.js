@@ -12,7 +12,7 @@ import path from 'node:path';
 import { load } from 'cheerio';
 import { downloadAsset } from '../../assets/download.js';
 import { serveFolder } from './render.js';
-import { localPathOf } from './pageLift.js';
+import { localPathOf, storableAsIs } from './pageLift.js';
 import { fetchReferenced } from './referenced.js';
 
 /** Most passes a copy is completed in. */
@@ -199,6 +199,8 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
       sameFile[rel] = local;
       const barePath = path.join(outDir, decodeURIComponent(u.pathname));
       const owner = bareOwner.get(u.pathname);
+      // A path no file system can store under its own name (a ":" in it) keeps only its safe name, which the copy's text points at.
+      if (!storableAsIs(decodeURIComponent(u.pathname))) return;
       if (owner === undefined && !ambiguous.has(u.pathname)) {
         bareOwner.set(u.pathname, rel);
         await mkdir(path.dirname(barePath), { recursive: true });
