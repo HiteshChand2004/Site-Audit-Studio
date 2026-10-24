@@ -68,9 +68,19 @@ export async function registerServiceWorker(outDir, entry = 'index.html') {
   // The marker is unique to the guard: the site's own scripts add submit listeners too.
   const guard = !inline.some((t) => t.includes('sasFormGuard'));
   if (shim || register || guard) {
-    // At the end of the body: an inline script in the head would delay the stylesheets above it. The page's modules run
-    // after this, so the shim is in place before any of them builds an address, and the form guard before any form is used.
-    $('body').append(`${shim ? `<script>${URL_BASE_SHIM}</script>` : ''}${guard ? `<script>${FORM_GUARD}</script>` : ''}${register ? `<script>${SW_REGISTER}</script>` : ''}`);
+    // The shim is the first script of the document: it must replace URL before any script of the page runs, and a module
+    // marked async runs as soon as it is fetched - on a fast host that is while the parser is still in the body, before an
+    // inline script at its end (nyaayai: a 630 KB page whose async main module threw "Invalid base URL" in 5 of 6 Lighthouse
+    // loads while a blocking third-party script held the parser). It goes after the charset declaration, which must stay
+    // within the first 1024 bytes. It is ~400 bytes and asks the network for nothing, so it delays no stylesheet.
+    if (shim) {
+      const charset = $('head > meta[charset]').first();
+      if (charset.length) charset.after(`<script>${URL_BASE_SHIM}</script>`);
+      else $('head').prepend(`<script>${URL_BASE_SHIM}</script>`);
+    }
+    // The form guard listens on the window in the capture phase, so it is first for a submit whenever it was added; the
+    // worker registration is for the next visit. Both at the end of the body, after the page's own content.
+    $('body').append(`${guard ? `<script>${FORM_GUARD}</script>` : ''}${register ? `<script>${SW_REGISTER}</script>` : ''}`);
     await writeFile(file, $.html(), 'utf8');
   }
   // The form settings: read when a form is sent, so a server can be connected without rebuilding the copy.
@@ -160,11 +170,23 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
     const rel = u.pathname + u.search;
     if (sameFile[rel]) return route.fulfill({ path: path.join(outDir, sameFile[rel]) });
     if (sameFailed.has(rel)) return route.fulfill({ status: 404, body: '' });
-    const original = new URL(rel, pageUrl).href;
-    const res = await fetchImpl(original, { dir: tmp, kind: 'image', maxBytes: 25 * 1024 * 1024, attempts: 3 });
-    if (!res.ok || /text\/html/i.test(res.mime ?? '')) {
-      // The original answers the same error (or a page): the copy leaves the address as the original does, and says so.
-      const reason = res.ok ? 'the original answers with a page' : res.reason;
+    // The host rewrite folded every original host (the site and its CDNs) into the copy's root, so an address the copy's
+    // runtime builds from a rewritten base may belong to any of them: the site's own host is asked first, then each other
+    // host (nyaayai: a Framer CMS chunk under /cms/ that the site answers with a 404 page and framerusercontent.com with the file).
+    const siteHost = new URL(pageUrl).hostname.replace(/^www\./, '');
+    const origins = [new URL(pageUrl).origin, ...hosts.filter((h) => h.replace(/^www\./, '') !== siteHost).map((h) => `https://${h}`)];
+    let original = null;
+    let res = null;
+    const refused = [];
+    for (const origin of origins) {
+      const candidate = new URL(rel, origin).href;
+      const r = await fetchImpl(candidate, { dir: tmp, kind: 'image', maxBytes: 25 * 1024 * 1024, attempts: 3 });
+      if (r.ok && !/text\/html/i.test(r.mime ?? '')) { original = candidate; res = r; break; }
+      refused.push({ host: new URL(origin).hostname, reason: r.ok ? 'the original answers with a page' : r.reason });
+    }
+    if (!original) {
+      // Every original host answers an error (or a page): the copy leaves the address as the original does, and says so.
+      const reason = refused.length === 1 ? refused[0].reason : refused.map((r) => `${r.host}: ${r.reason}`).join('; ');
       sameFailed.set(rel, reason);
       sameOrigin.sameAsOriginal.push({ path: rel, reason, pass });
       return route.fulfill({ status: 404, body: '' });
@@ -189,7 +211,8 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
         sameOrigin.ambiguous.push({ path: u.pathname, addresses: [owner, rel] });
       }
     }));
-    sameOrigin.mapped.push({ path: rel, file: local, pass });
+    const host = new URL(original).hostname;
+    sameOrigin.mapped.push({ path: rel, file: local, pass, ...(host !== new URL(pageUrl).hostname && { host }) });
     log.push({ pass, sameOrigin: rel, result: 'answered from the original' });
     return route.fulfill({ path: path.join(outDir, local) });
   };
