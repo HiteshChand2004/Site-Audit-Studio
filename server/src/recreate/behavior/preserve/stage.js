@@ -9,6 +9,7 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import { liftSite, localOfOutPath } from './asis.js';
 import { packLifted, servedDir } from './pack.js';
+import { buildConverted, convertToNext, EXPORT_DIR } from '../../convert/next.js';
 import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
 import { checkCopy, excludedHostsOf, fixGate, formsInCopy, NOISE_SHOTS, probeOriginal } from './check.js';
@@ -272,12 +273,34 @@ export async function asIsStage(ctx) {
         'and this copy keeps the original\'s `_next` folder. Keep the file when you upload.',
         '',
       ].join('\n'), 'utf8');
+    } else if (stack === 'nextjs') {
+      // The finished copy converted into real code of the stack (recreate/convert/): pages and components, prerendered and never
+      // hydrated, so no runtime is added to what the original loads. If the conversion or its build fails, the copy is packaged
+      // as static files inside a project of the stack instead (the earlier route), and the report says so: a download never fails.
+      ctx.progress(0.4, 'Converting the copy into Next.js pages and components');
+      try {
+        const converted = await convertToNext({ copyDir, outDir, pages, pageUrl: siteUrl });
+        ctx.progress(0.45, 'Building the Next.js project');
+        const built = await buildConverted(outDir);
+        report.build = built?.steps?.map((s) => ({ label: s.label, ms: s.ms })) ?? null;
+        report.convert = { mode: 'converted', ...converted };
+      } catch (err) {
+        const why = String(err?.message ?? err).slice(0, 400);
+        ctx.report.warnings.push(`The copy could not be converted into Next.js pages and components (${why.split('\n')[0]}); it is packaged as static files inside a Next.js project instead.`);
+        await rm(outDir, { recursive: true, force: true });
+        await packLifted({ stack, copyDir, outDir, pageUrl: siteUrl });
+        ctx.progress(0.45, 'Building the stack');
+        const built = await buildStack(stack, outDir);
+        report.build = built?.steps?.map((s) => ({ label: s.label, ms: s.ms })) ?? null;
+        report.convert = { mode: 'packed', failed: why };
+      }
     } else {
       await packLifted({ stack, copyDir, outDir, pageUrl: siteUrl });
       ctx.progress(0.45, 'Building the stack');
       const built = await buildStack(stack, outDir);
       report.build = built?.steps?.map((s) => ({ label: s.label, ms: s.ms })) ?? null;
     }
+    const converted = report.convert?.mode === 'converted';
     report.forms = await formsInCopy(copyDir, pages.map((p) => p.outPath));
     report.needsAPerson = report.forms ? [{ kind: 'form', count: report.forms, why: 'its data is never sent to the original site; connect FORM_ENDPOINT in sas-forms.json' }] : [];
     report.javascript = await javascriptOf(copyDir);
@@ -286,6 +309,11 @@ export async function asIsStage(ctx) {
     let base;
     if (stack === 'html') {
       const served = await serveCopy(copyDir);
+      servers.push(served);
+      base = served.url.replace(/\/$/, '');
+    } else if (converted) {
+      // A static export: served as the static files it is (what any static host does); there is no server of the stack to run.
+      const served = await serveCopy(path.join(outDir, EXPORT_DIR));
       servers.push(served);
       base = served.url.replace(/\/$/, '');
     } else {
@@ -297,7 +325,8 @@ export async function asIsStage(ctx) {
     if (report.fixes) {
       const fixedPages = report.fixes.pages.filter((p) => !p.reverted && p.fixes.length)
         .map((p) => ({ path: p.path, outPath: pages.find((q) => localOfOutPath(q.outPath) === p.path)?.outPath ?? 'index.html' }));
-      report.fixes.served = await measureServed({ base, stack, copyDir, fixedPages, files: report.fixes.files?.written ?? [] })
+      // A converted copy is static files: its security headers are the host's, as for plain HTML.
+      report.fixes.served = await measureServed({ base, stack, copyDir, fixedPages, files: report.fixes.files?.written ?? [], ...(converted && { takeEffect: 'host' }) })
         .catch((err) => ({ error: String(err?.message ?? err).slice(0, 160) }));
     }
     // The original is asked once: when it does not answer, the checks that need it say so and the copy is still finished.
@@ -390,6 +419,10 @@ export async function asIsStage(ctx) {
     if (served) openItems.push(...served.open.map((o) => ({ page: o.page ?? '/', ...o })));
     const logOpen = issueLogger(LOGS_DIR);
     for (const o of openItems) await logOpen({ site: new URL(siteUrl).hostname, stack, ...o });
+    // Every part the conversion kept as original HTML is recorded for the owner too (site, page, tag / attribute, reason).
+    for (const f of report.convert?.fallbacks ?? []) {
+      await logOpen({ site: new URL(siteUrl).hostname, stack, page: f.page, check: `kept as original HTML: <${f.tag}>${f.attribute ? ` ${f.attribute}` : ''} at ${f.where}`, values: f.reason, tried: 'kept as the original HTML inside its component; the page is unchanged', reason: 'converted' });
+    }
     ctx.report.copy = {
       stack,
       pages: copyPages,

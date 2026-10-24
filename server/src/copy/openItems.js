@@ -10,6 +10,9 @@ export const REASONS = {
   // Not one of the five reasons of the spec: an honest marker for a page the run did not try to fix yet (the fallback and
   // the zero-regressions loop are not live in every job). It is shown as such, never as a reason of the spec.
   unresolved: { code: '·', text: 'Not fixed in this run yet: no automatic fix or fallback was applied to this page.' },
+  // A copy converted into code of a stack: a part the conversion could not write as a component is kept as the original HTML
+  // inside its component. The page is unchanged; the part is just not JSX.
+  converted: { code: 'f', text: 'Kept as the original HTML inside its component (React cannot write it exactly). The page looks and works the same; only this part is not component code.' },
 };
 
 const BACKEND = /form|login|sign-?in|payment|checkout|cart|backend|api\b/i;

@@ -25,8 +25,8 @@ const squash = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
  * @param {{ path: string, outPath: string }[]} o.fixedPages   pages whose fixes were kept
  * @param {string[]} [o.files]   site files the fixes wrote
  */
-export async function measureServed({ base, stack, copyDir, fixedPages = [], files = [] }) {
-  const out = { stack, takeEffect: HEADERS_TAKE_EFFECT[stack] ?? 'host', headers: { sent: [], missing: [] }, files: {}, pages: [] };
+export async function measureServed({ base, stack, copyDir, fixedPages = [], files = [], takeEffect = null }) {
+  const out = { stack, takeEffect: takeEffect ?? HEADERS_TAKE_EFFECT[stack] ?? 'host', headers: { sent: [], missing: [] }, files: {}, pages: [] };
   try {
     const home = await get(`${base}/`);
     for (const [name] of SECURITY_HEADERS) (home.headers.get(name) ? out.headers.sent : out.headers.missing).push(name);

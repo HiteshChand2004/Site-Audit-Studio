@@ -40,6 +40,16 @@ export function notesEntries({ report, stack, root, shipped }) {
       });
     }
   }
+  // A copy converted into the stack's code: every part kept as the original HTML, in plain words, with where and why.
+  for (const f of report.asIs?.convert?.fallbacks ?? []) {
+    pages.push({
+      page: f.page,
+      check: `kept as the original HTML: <${f.tag}>${f.attribute ? ` (attribute ${f.attribute})` : ''} at ${f.where}`,
+      values: f.reason,
+      tried: 'converted into a component like the rest of the page; this element is kept inside it as the original HTML, so the page is unchanged',
+      reason: `${REASONS.converted.code} — ${REASONS.converted.text}`,
+    });
+  }
   const known = knownIssuesMd({ siteName, stack, pages });
   if (known) entries.push({ name: `${root}/KNOWN-ISSUES.md`, content: known });
   return entries;
