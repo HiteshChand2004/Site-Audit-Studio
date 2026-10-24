@@ -647,6 +647,29 @@ fallbacks already in the core); no live site yet (the user names one); the zip o
 built by `npm run build`, as DEPLOY.md says); a `<form>` keeps the original's `action` — the as-is form guard decides what happens on
 submit, the forms list says so per form; a copy made before this has no `convert` section (make the copy again).
 
+### Live test of the converted Next.js copy: nyaayai homepage (2026-10-25, stopped for a laptop shutdown, NOT finished)
+
+Scratch data `C:/Users/urvas/Downloads/sas-work/nyaayai-next-data` (copied from `sas-work/nyaayai-data`, migrated with
+`scripts/db-migrate.mjs --db ... --backup-dir ...`; the real data folder untouched). Results and logs:
+`C:/Users/urvas/Downloads/remastly-live-results/nyaayai/nextjs-convert/`. Drivers: `remastly-live-results/scripts/nextjs-convert.mjs`
+(env `REPACK_FROM` / `RESUME_FROM`) and `side-by-side.mjs` (pictures at 1440 / 390 + exactDiff map).
+- Found and fixed generally on the way (committed, related tests pass): an inline style on `<svg>` broke the Next.js build
+  (a742376); the preview / re-audit picked the project's saved stack instead of the stack the as-is copy was made in, so every
+  non-HTML as-is copy made from the app failed its re-audit (a742376); the conversion dropped HTML comments, which a React-rendered
+  site reads back as hydration markers: phone performance 80 -> 54, largest paint 7.9 s late, 3 loops lost (e515352).
+- Run 3 (before the comment fix, `run-3-comments-dropped/`): visual 0 % at 1440, 0.002 % at 390, equal heights; clicks and 9 / 9
+  hovers like the original; computer Lighthouse 84 -> 98, phone 80 -> 54; 18 components, 17 parts kept as HTML (16 `<link>` + 1
+  async script standing in the body); 3 forms, all guarded.
+- Run 4 (with the fix, "Package again" from db54dfd5) was stopped after the 1440 gate (0.0002 %, equal height). A package job keeps
+  no checkpoint and needs none: the source copy db54dfd5 is intact in the scratch data.
+- **Run next** (one browser, about 25 min), from `Website-Audit-accounts/server`:
+  `REPACK_FROM=db54dfd5-dca6-49ce-b82a-e1ad75692b6d SAS_MAX_PARALLEL=1 SAS_KEEP_COPIES_DAYS=30 SAS_KEEP_AWAKE=0 node --disable-warning=ExperimentalWarning C:/Users/urvas/Downloads/remastly-live-results/scripts/nextjs-convert.mjs C:/Users/urvas/Downloads/Website-Audit-accounts C:/Users/urvas/Downloads/sas-work/nyaayai-next-data C:/Users/urvas/Downloads/remastly-live-results/nyaayai/nextjs-convert nyaayai https://www.nyaayai.com/`
+  then `side-by-side.mjs <worktree> <new recreate>/stacks/nextjs/out <results>/pictures https://www.nyaayai.com/`, save an example
+  component, and report to the user (visual, Lighthouse phone + computer, motion rows, links / console / forms, fallbacks).
+- Open, not fixed: the "fixes served" open item is a false alarm for a converted copy (it compares bytes; the fixes ARE in the
+  export); on a builder page the whole page is one 410 KB component (`Main`) plus one tiny component per stray body `<link>` (the
+  section split looks only through single wrappers); the 2 comments before `<html>` (builder banner, publish date) are left out.
+
 ## Next steps, in order (commit after each with `--no-verify`, say the full suite was not run; nothing is pushed before the PR)
 
 1. **Step 4 — the blank render and the motion step's timeout: DONE 2026-10-24** (both fixed generally and verified live, see
