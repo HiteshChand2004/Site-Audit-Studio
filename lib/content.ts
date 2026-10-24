@@ -144,7 +144,7 @@ export const LIMITS = [
   { title: 'Rebuilt from what visitors see', text: 'Not from source code or the admin panel.' },
   { title: 'Measured, not promised', text: 'Every copy gets a match figure from the run; a match score below 80 is flagged.' },
   { title: 'Not every problem is solved', text: 'What stays or gets worse is listed openly.' },
-  { title: 'Big sites take time', text: 'Several minutes per page on a slow computer.' },
+  { title: 'Big sites take time', text: 'Several minutes per page.' },
   { title: 'Bot-protected sites stop', text: 'Remastly never tries to get around them.' },
   { title: 'Some checks depend on hosting', text: 'Such as HTTPS, marked on the private preview.' },
 ] as const;
@@ -172,6 +172,11 @@ export type LighthouseScores = { performance: number; accessibility: number; bes
  * used either: a visitor could read either one as "93 % identical".
  */
 export const MATCH_LABEL = 'Layout and thumbnail match';
+/**
+ * What a match score covers, always said next to it: the tool stores one score for the homepage and one across every page
+ * it scored, and the two differ (botza: homepage 88, all pages 96). A 1-page run has only its homepage.
+ */
+export const MATCH_SCOPE = { all: 'all pages', home: 'homepage' } as const;
 
 export type ExampleRun = {
   status: 'pending' | 'ready';
@@ -186,7 +191,7 @@ export type ExampleRun = {
   lighthouseDesktop: { original: number; copy: number } | null;
   /** All four Lighthouse categories, as stored by the audit: [device][original|copy]. */
   lighthouseAll?: Record<'mobile' | 'desktop', Record<'original' | 'copy', LighthouseScores>>;
-  /** The homepage's match score, worded with MATCH_LABEL (the tool's fidelity score, out of 100; never a pixel figure). */
+  /** The homepage's match score, worded with MATCH_LABEL and MATCH_SCOPE (the tool's fidelity score, out of 100; never a pixel figure). */
   layoutMatch: string | null;
   hovers: { kept: number; of: number } | null;
   consoleErrors: number | null;
@@ -220,7 +225,7 @@ export const exampleRun: ExampleRun = {
     mobile: { original: { performance: 62, accessibility: 100, bestPractices: 100, seo: 100 }, copy: { performance: 94, accessibility: 96, bestPractices: 96, seo: 100 } },
     desktop: { original: { performance: 88, accessibility: 96, bestPractices: 100, seo: 100 }, copy: { performance: 99, accessibility: 96, bestPractices: 96, seo: 100 } },
   },
-  layoutMatch: `${MATCH_LABEL} 93 of 100`,
+  layoutMatch: `${MATCH_LABEL} 93 of 100, ${MATCH_SCOPE.home}`,
   hovers: null,
   consoleErrors: null,
   wentDown: ['Best practices, phone and desktop: 100 → 96', 'Accessibility, phone: 100 → 96'],
@@ -253,7 +258,7 @@ export const FAQS: Faq[] = [
   { q: 'Does Remastly change my live website?', a: 'No. The original is only visited, never changed. The copy is a separate site you preview and download.' },
   { q: 'Which websites can I use it on?', a: 'Only sites your company owns, or that you have permission to rebuild. You confirm this for every website.' },
   { q: 'Which stacks can the new site be built in?', a: 'Plain HTML / CSS / JS, React + Vite, Next.js, or MERN (React plus a small server and database for contact forms).' },
-  { q: 'How long does it take?', a: 'An audit usually takes about a minute, and up to about five minutes on slow sites. A copy can take several minutes per page on a slow computer.' },
+  { q: 'How long does it take?', a: 'An audit usually takes about a minute. It stops after six minutes at most; any check it did not reach is listed as skipped. A copy can take several minutes per page.' },
   { q: 'Will the copy look exactly like the original?', a: 'As close as the page allows, and it tells you how close: the share of pixels that differ, or a layout-and-thumbnail match score out of 100 (below 80 is flagged).' },
   { q: 'Does it fix every problem?', a: 'No, and it says so. Every issue is marked fixed in your copy, still open, got worse, or needs a person.' },
   { q: 'What can’t Remastly rebuild?', a: 'Logins, shops and checkout, form backends (except MERN), CMS content, plugin behaviour and 3D scenes. These are flagged, never faked.' },
@@ -509,7 +514,7 @@ export const HOME_FAQ: Faq[] = [
   { q: 'Does the copy always score higher?', a: 'Not always, and we do not claim it. Each re-audit marks every check fixed, better, still open or got worse, and lists the open and worse ones.' },
   { q: 'Does it change my live site?', a: 'Never. You get a separate copy to preview and download.' },
   { q: 'Which sites can I use?', a: 'Sites your company owns, or may use. Pages drawn on a canvas, and bot-protected sites, cannot be copied.' },
-  { q: 'How long does it take?', a: 'An audit usually takes about a minute; a copy can take several minutes per page.' },
+  { q: 'How long does it take?', a: 'An audit usually takes about a minute, six at most; a copy can take several minutes per page.' },
   { q: 'Which stacks can the copy be built in?', a: 'Plain HTML, React + Vite, Next.js or MERN. You choose one for each copy.' },
   { q: 'What can it not rebuild?', a: 'Logins, shop checkouts, form backends and CMS content need a person. Remastly flags them and never fakes them.' },
 ];
@@ -554,10 +559,14 @@ export const heroMedia: HeroMedia = {
 
 /* ---- Own sites: result cards ---- Every site here is one of ours, never a customer. Nothing in this block is a quote: the cards are measured results. */
 /**
- * One result card per site, from that site's latest re-audit in data/example-runs.json (figures copied as stored, none
- * rounded). A card is a measured result, never a statement by anyone. Add a card by adding an entry; keep to one
+ * One result card per site, from one finished re-audit of that site in data/example-runs.json (figures copied as stored,
+ * none rounded). A card is a measured result, never a statement by anyone. Add a card by adding an entry; keep to one
  * re-audit per site, a run that finished before 18 Oct 2026 (or one verified for the blank-in-reference problem), and
- * only strong, complete figures. collateral.panscience.ai is not a card: it is the example run above the cards.
+ * only complete figures. The run is the site's latest re-audit for indikaai, botza and panscience; dreamhire's card uses an
+ * earlier 1-page run of 14 Oct 2026, not its latest (a 5-page run the same day: phone 76 → 95, homepage match 58, 2 of 42
+ * checks worse). Whenever a card does not use the latest run, its `run` line must say so and give the page count and date.
+ * Match scores on a card say what they cover (MATCH_SCOPE). collateral.panscience.ai is not a card: it is the example run
+ * above the cards.
  */
 export type ResultCard = {
   site: string;
@@ -571,9 +580,9 @@ export type ResultCard = {
   figures: string[];
   /** Scores that went down in this run, shown so a card never reads as all good news. null = none went down. */
   wentDown: string | null;
-  /** The name line: the site and what was done, in plain words. */
+  /** The name line, shown in the card's header: the site and what was done, in plain words. */
   name: string;
-  /** Which run it is. */
+  /** Which run it is, shown as the card's last line: the date, and the page count and "not the latest run" where that applies. */
   run: string;
   /** Internal only, never shown. */
   mode: 'exact' | 'standard' | 'as-is';
@@ -592,7 +601,7 @@ export const resultCards = {
       figures: ['Desktop performance 99 to 100', 'Checks that got worse: 0 of 42'],
       wentDown: null,
       name: 'indikaai.com, 1 page rebuilt',
-      run: 'Re-audit of 15 Oct 2026',
+      run: 'Latest re-audit of this site, 15 Oct 2026',
       mode: 'exact',
     },
     {
@@ -600,10 +609,10 @@ export const resultCards = {
       icon: 'botza',
       headline: 'Lighthouse 81 to 99',
       headlineLabel: 'Performance on a phone',
-      figures: ['Desktop performance 94 to 100', `${MATCH_LABEL} 96 of 100`, 'Checks that got worse: 0 of 39'],
+      figures: ['Desktop performance 94 to 100', `${MATCH_LABEL} 96 of 100, ${MATCH_SCOPE.all}`, 'Checks that got worse: 0 of 39'],
       wentDown: null,
       name: 'botza.panscience.ai, 22 pages rebuilt',
-      run: 'Re-audit of 8 Oct 2026',
+      run: 'Latest re-audit of this site, 8 Oct 2026',
       mode: 'standard',
     },
     {
@@ -611,10 +620,10 @@ export const resultCards = {
       icon: 'panscience',
       headline: 'Lighthouse 83 to 97',
       headlineLabel: 'Performance on a phone',
-      figures: ['Desktop performance 99 to 100', `${MATCH_LABEL} 94 of 100`, 'Checks that got worse: 0 of 39'],
+      figures: ['Desktop performance 99 to 100', `${MATCH_LABEL} 94 of 100, ${MATCH_SCOPE.all}`, 'Checks that got worse: 0 of 39'],
       wentDown: null,
       name: 'panscience.xyz, 38 pages rebuilt',
-      run: 'Re-audit of 8 Oct 2026',
+      run: 'Latest re-audit of this site, 8 Oct 2026',
       mode: 'standard',
     },
     {
@@ -622,10 +631,11 @@ export const resultCards = {
       icon: 'dreamhire',
       headline: 'Lighthouse 77 to 97',
       headlineLabel: 'Performance on a phone',
-      figures: ['Desktop performance 98 to 100', `${MATCH_LABEL} 99 of 100`, 'Checks that got worse: 0 of 40'],
+      figures: ['Desktop performance 98 to 100', `${MATCH_LABEL} 99 of 100, ${MATCH_SCOPE.home}`, 'Checks that got worse: 0 of 40'],
       wentDown: null,
       name: 'dreamhire.in, 1 page rebuilt',
-      run: 'Re-audit of 14 Oct 2026',
+      // run 028e1e9e, 14 Oct 2026 10:59. Not the latest: d00a35b3 (5 pages, 14 Oct 15:47) scored lower and had 2 checks worse.
+      run: 'Re-audit of 14 Oct 2026, on 1 page. Not this site’s latest run.',
       mode: 'exact',
     },
   ] satisfies ResultCard[],
@@ -768,8 +778,9 @@ export const WHY_VISUAL = {
 /**
  * The runs the Example run section cycles through: the latest re-audit of four of our own sites that have a picture we can
  * show (dreamhire.in has none: its saved pictures show faces). Every figure is copied as stored in data/example-runs.json,
- * none rounded; the run id and date are in the comment above each entry. "layoutMatch" is the homepage's layout-and-thumbnail
- * match (the tool's fidelity score, worded with MATCH_LABEL), or null when it can no longer be re-measured.
+ * none rounded; the run id and date are in the comment above each entry. "layoutMatchHomepage" is the homepage's
+ * layout-and-thumbnail match (the tool's fidelity score, worded with MATCH_LABEL and MATCH_SCOPE.home; the all-pages score
+ * is a different number and is not kept here), or null when it can no longer be re-measured.
  */
 export type ShowScores = { performance: number; accessibility: number; bestPractices: number; seo: number };
 export type ShowRun = {
@@ -779,7 +790,7 @@ export type ShowRun = {
   alt: string;
   caption: string;
   lighthouse: Record<'mobile' | 'desktop', Record<'original' | 'copy', ShowScores>>;
-  layoutMatch: number | null;
+  layoutMatchHomepage: number | null;
   checks: { total: number; fixed: number; improved: number; pass: number; open: number; manual: number; regressed: number; na: number };
 };
 export const showRuns: ShowRun[] = [
@@ -794,7 +805,7 @@ export const showRuns: ShowRun[] = [
       mobile: { original: { performance: 62, accessibility: 100, bestPractices: 100, seo: 100 }, copy: { performance: 94, accessibility: 96, bestPractices: 96, seo: 100 } },
       desktop: { original: { performance: 88, accessibility: 96, bestPractices: 100, seo: 100 }, copy: { performance: 99, accessibility: 96, bestPractices: 96, seo: 100 } },
     },
-    layoutMatch: 93,
+    layoutMatchHomepage: 93,
     checks: { total: 41, fixed: 5, improved: 2, pass: 23, open: 4, manual: 2, regressed: 2, na: 3 },
   },
   {
@@ -808,7 +819,7 @@ export const showRuns: ShowRun[] = [
       mobile: { original: { performance: 90, accessibility: 95, bestPractices: 100, seo: 100 }, copy: { performance: 100, accessibility: 95, bestPractices: 100, seo: 100 } },
       desktop: { original: { performance: 99, accessibility: 95, bestPractices: 100, seo: 100 }, copy: { performance: 100, accessibility: 91, bestPractices: 100, seo: 100 } },
     },
-    layoutMatch: null, // the run's pictures were deleted; its 98 cannot be re-measured
+    layoutMatchHomepage: null, // the run's pictures were deleted; its 98 cannot be re-measured
     checks: { total: 42, fixed: 9, improved: 4, pass: 22, open: 5, manual: 0, regressed: 0, na: 2 },
   },
   {
@@ -822,7 +833,7 @@ export const showRuns: ShowRun[] = [
       mobile: { original: { performance: 81, accessibility: 95, bestPractices: 100, seo: 92 }, copy: { performance: 99, accessibility: 100, bestPractices: 100, seo: 100 } },
       desktop: { original: { performance: 94, accessibility: 96, bestPractices: 100, seo: 92 }, copy: { performance: 100, accessibility: 100, bestPractices: 100, seo: 100 } },
     },
-    layoutMatch: 88,
+    layoutMatchHomepage: 88,
     checks: { total: 39, fixed: 15, improved: 2, pass: 17, open: 0, manual: 3, regressed: 0, na: 2 },
   },
   {
@@ -836,7 +847,7 @@ export const showRuns: ShowRun[] = [
       mobile: { original: { performance: 83, accessibility: 96, bestPractices: 100, seo: 100 }, copy: { performance: 97, accessibility: 100, bestPractices: 100, seo: 100 } },
       desktop: { original: { performance: 99, accessibility: 96, bestPractices: 100, seo: 100 }, copy: { performance: 100, accessibility: 100, bestPractices: 100, seo: 100 } },
     },
-    layoutMatch: 84,
+    layoutMatchHomepage: 84,
     checks: { total: 39, fixed: 12, improved: 2, pass: 22, open: 0, manual: 1, regressed: 0, na: 2 },
   },
 ];

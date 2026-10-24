@@ -1,5 +1,7 @@
 # Number audit
 
+> **Out of date (24 Oct 2026).** This audit is of the earlier makememo.ai-based site: `EXAMPLE_RUN`, the hero timeline, `AuditStory`, `CompareWipe` and the 91 / 98–99 figures no longer exist; the current figures and their sources are in `lib/content.ts` and the claims-fix commits.
+
 Every run-like number or fact on the site, checked against `data/example-runs.json`. Nothing was changed on any page.
 Searched `app/`, `components/`, `lib/`, `README.md`, `docs/` for 91, 98, 99, 15/15, 0.02, 0.64, 390, "under 1%", scores, counts and times.
 

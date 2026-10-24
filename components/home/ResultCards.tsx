@@ -3,8 +3,9 @@ import { TrendingDown } from 'lucide-react';
 import { RESULT_IMAGES, resultCards } from '@/lib/content';
 
 /*
- * Result cards, one per own site: favicon in the avatar slot, the measured result as the large line, more figures from
- * the same run, anything that went down, and a name line. The cards drift slowly sideways in a seamless loop (the list is
+ * Result cards, one per own site: favicon in the avatar slot, the name line (site and page count), the measured result as
+ * the large line, more figures from the same run, anything that went down, and which run it is (date; page count and
+ * "not the latest" where that applies). The cards drift slowly sideways in a seamless loop (the list is
  * shown six times and the track moves by exactly half its width, so it is wider than any screen), edge to edge with soft fades at both ends. It pauses on
  * hover or keyboard focus and while off screen (data-loop + InViewPlay); under reduced motion it is a plain row you scroll
  * by hand. The second copy is hidden from assistive technology. No quotes anywhere: these are figures. Server-rendered.
@@ -25,7 +26,7 @@ export default function ResultCards() {
                 <span className="rc__avatar">
                   <Image src={`/favicons/${c.icon}.webp`} alt="" width={32} height={32} unoptimized />
                 </span>
-                <span className="rc__name">{c.site}</span>
+                <span className="rc__name">{c.name}</span>
               </header>
               <p className="rc__headline display">{c.headline}</p>
               <ul className="rc__figs">
@@ -38,6 +39,7 @@ export default function ResultCards() {
                   <TrendingDown size={13} aria-hidden="true" /> <span>Went down: {c.wentDown}</span>
                 </p>
               )}
+              <p className="rc__run">{c.run}</p>
             </article>
           </li>
         ))}

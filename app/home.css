@@ -555,6 +555,12 @@
   flex: none;
   margin-top: 3px;
 }
+.rc__run {
+  margin-top: 8px;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
 /* ---------- Shot pair (inner pages), run steps ---------- */
 .shotpair {
   display: grid;

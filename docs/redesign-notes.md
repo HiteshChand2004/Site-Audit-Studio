@@ -1,5 +1,7 @@
 # Redesign notes (22 Oct 2026)
 
+> **Out of date (24 Oct 2026).** The example run is collateral.panscience.ai, not indikaai; `asIsRun` no longer holds pixel figures; indikaai's match score was removed; match scores are named "Layout and thumbnail match" with their scope; dreamhire.in is a card (its 1-page run of 14 Oct, labelled as not the latest).
+
 ## Pictures in `public/shots` (all WebP, 40–53 KB each)
 
 Source: `Site-Audit-Studio-main/data/projects` (read-only; a copy of `app.db` was opened from a scratch folder).
