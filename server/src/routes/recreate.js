@@ -273,8 +273,11 @@ router.get('/:id/recreate/:recreateId/captures/:slug/:file', (req, res) => {
 
 // The exact comparison's pictures: the original as it was measured (capture/<slug>/exact/) and the copy beside it,
 // with the map of where they differ and the magnified crops (fidelity/<slug>/exact/). A slot id is a width, or a
-// width and a height, so the file names are bounded by that.
-const EXACT_FILE = /^(copy-)?d{3,4}(xd{3,4})?(-b[1-3]|-full|-map|-crop[1-3]).webp$/;
+// width and a height, so the file names are bounded by that: the original's bands `<slot>-full.webp` / `<slot>-bN.webp`
+// (capture/exact.js bandFile), the copy's `copy-<slot>-…` (verify/exact/compare.js copyBand), the map `<slot>-map.webp` and
+// the crops `<slot>-cropN.webp`. Written with escaped digits and dot on purpose: the first version lost its backslashes and
+// matched no real name, so every picture answered 404 (test/recreate-exact-route.test.js holds it to the real names).
+const EXACT_FILE = /^(copy-)?\d{3,4}(x\d{3,4})?(-b[1-3]|-full|-map|-crop[1-3])\.webp$/;
 
 router.get('/:id/recreate/:recreateId/exact/:slug/:file', (req, res) => {
   const { id, recreateId, slug, file } = req.params;
@@ -283,7 +286,7 @@ router.get('/:id/recreate/:recreateId/exact/:slug/:file', (req, res) => {
   }
   if (!doneRecreate.get(recreateId, id)) return res.status(404).json({ error: 'Recreate not found.' });
   // The original's own shots live with the capture; everything the comparison made lives with the fidelity output.
-  const dir = file.startsWith('copy-') || /-(map|crop[1-3]).webp$/.test(file)
+  const dir = file.startsWith('copy-') || /-(map|crop[1-3])\.webp$/.test(file)
     ? path.join(recreateDir(id, recreateId), 'fidelity', slug, 'exact')
     : path.join(recreateDir(id, recreateId), 'capture', slug, 'exact');
   res.sendFile(
