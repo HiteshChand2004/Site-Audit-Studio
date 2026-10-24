@@ -21,6 +21,7 @@ import { previewHeaders } from '../src/recreate/preview.js';
 import { checkScript, scanProject, scanSite } from '../src/recreate/verify/safety.js';
 import { recreateDir } from '../src/recreate/workspace.js';
 import recreateRouter from '../src/routes/recreate.js';
+import { previewRouter, PREVIEW_PREFIX } from '../src/recreate/previewRoute.js';
 import { toolchainStatus } from '../src/toolchains/index.js';
 import { seedProject } from './helpers/projects.js';
 
@@ -250,6 +251,7 @@ test('the project zip holds the source and the report, never build output or dep
   assert.equal(plan.name, 'example.com-react-vite.zip');
   assert.deepEqual(plan.entries.map((e) => e.name).sort(), [
     'example.com-react-vite/.gitignore',
+    'example.com-react-vite/DEPLOY.md',
     'example.com-react-vite/RECREATE-REPORT.md',
     'example.com-react-vite/package.json',
     'example.com-react-vite/public/assets/images/a.png',
@@ -291,10 +293,13 @@ test('real export: build, verify, equivalence with the HTML build, hydration', {
   const app = express();
   app.use(express.json());
   app.use('/api/projects', recreateRouter);
+  // Previews are paths of the app's own address (recreate/previewRoute.js), so the app serves them here too.
+  app.use(PREVIEW_PREFIX, previewRouter());
   const server = await new Promise((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
-  const base = `http://127.0.0.1:${server.address().port}/api/projects`;
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const base = `${origin}/api/projects`;
   try {
     const pages = [
       page('index.html', headerNode(), el('main', { b: 1 }, el('h1', { attrs: { 'data-motion': 'rv r1' } }, text('Home')), ...tricky())),
@@ -357,14 +362,15 @@ test('real export: build, verify, equivalence with the HTML build, hydration', {
     // Preview: the project's stack output, with its scripts allowed; download: source without build output.
     const preview = await (await fetch(`${base}/${id}/preview`, { method: 'POST' })).json();
     assert.equal(preview.preview.scripts, true);
-    const served = await fetch(`${preview.preview.url}about.html`);
+    const served = await fetch(`${origin}${preview.preview.url}about.html`);
     assert.equal(served.status, 200);
-    assert.match(served.headers.get('content-security-policy'), /script-src 'self'/);
+    // A sandboxed document has no 'self': the policy names the visitor's origin instead (recreate/previewRoute.js).
+    assert.match(served.headers.get('content-security-policy'), /script-src http:\/\/127\.0\.0\.1:\d+ /);
     // The script runs under that policy: <html> gets js-motion and the heading in view is revealed.
     const browser = await launchBrowser();
     try {
       const motionPage = await (await browser.newContext({ viewport: { width: 1000, height: 700 } })).newPage();
-      await motionPage.goto(preview.preview.url, { waitUntil: 'load' });
+      await motionPage.goto(`${origin}${preview.preview.url}`, { waitUntil: 'load' });
       await motionPage.waitForFunction(() => document.querySelector('h1').classList.contains('is-in'), null, { timeout: 5000 });
       assert.equal(await motionPage.evaluate(() => document.documentElement.classList.contains('js-motion')), true);
     } finally {
