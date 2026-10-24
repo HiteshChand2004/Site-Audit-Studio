@@ -80,10 +80,11 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   // "Copy my site": one panel (stack, address, authorisation), then the as-is copy of every page for that stack.
   const [copyOpen, setCopyOpen] = useState(false);
   const updateProject = useProjects((s) => s.update);
+  // The address is optional: without one the server writes no address into the copy and lists it as an open item.
   const startCopy = async ({ stack: chosen, address }) => {
-    await updateProject(project.id, { stack: chosen, target_domain: address, recreate_pages: ALL_PAGES });
+    await updateProject(project.id, { stack: chosen, target_domain: address || null, recreate_pages: ALL_PAGES });
     const pages = await api.getPages(project.id).then((r) => (r.pages ?? []).map((p) => p.url)).catch(() => []);
-    await recreate(project.id, { mode: 'as-is', confirmed: true, stack: chosen, pages, addressConfirmed: address });
+    await recreate(project.id, { mode: 'as-is', confirmed: true, stack: chosen, pages, ...(address && { addressConfirmed: address }) });
   };
   const [building, setBuilding] = useState(false);
   const [buildError, setBuildError] = useState(null);
@@ -171,7 +172,11 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
           </div>
           <div>
             <dt>Future address</dt>
-            <dd className="mono">{project.target_domain || 'Not set yet (asked when you create the copy)'}</dd>
+            <dd>
+              {project.target_domain
+                ? <span className="mono">{project.target_domain}</span>
+                : 'Not set (optional). Without it the copy’s canonical links, sitemap, link previews and structured data name the original site’s address, and the report says so.'}
+            </dd>
           </div>
         </dl>
         {result?.asIs && !running && (
@@ -209,9 +214,9 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
             icon={running ? (p) => <Loader2 {...p} className={styles.spin} /> : Sparkles}
             disabled={Boolean(blocker) || running}
             title={blocker ?? undefined}
-            // Every full address in the copy (canonical, sitemap, link previews, structured data) uses the new site's address,
-            // never the original: it is asked once before the first copy.
-            onClick={() => (project.target_domain
+            // Every full address in the copy (canonical, sitemap, link previews, structured data) uses the new site's address
+            // when one is set. It is asked once, before the first copy, and is optional: a later copy starts at once either way.
+            onClick={() => (project.target_domain || result
               ? (mode === 'as-is' ? recreate(project.id, { mode: 'as-is', confirmed: true, stack: asIsStack, pages: asIsPages }) : recreate(project.id))
               : onOpenSettings('before-create'))}
           >

@@ -42,7 +42,8 @@ export default function CopyPanel({ open, onClose, project, pageCount, onStart }
   }, [open, project.target_domain]);
 
   const submit = async () => {
-    if (!validAddress(address)) return setError('Enter the address the new site will live at, for example https://new.example.com.');
+    // The address is optional: an empty one means the copy names no address of its own (see the note under the field).
+    if (address.trim() && !validAddress(address)) return setError('The address must be a web address, for example https://new.example.com — or leave it empty.');
     if (!allowed) return setError('Confirm that you may copy this site before it starts.');
     if (!project.authorized) return setError('This website is not marked as authorised. Only authorised websites can be copied.');
     setBusy(true);
@@ -83,13 +84,22 @@ export default function CopyPanel({ open, onClose, project, pageCount, onStart }
       </div>
 
       <label className={form.field} style={{ marginTop: 16 }}>
-        <span className={form.label}>Address of the new site</span>
+        <span className={form.label}>
+          Address of the new site <span className={form.optional}>optional</span>
+        </span>
         <input
           className={`${form.input} mono`}
           placeholder="https://new.example.com"
           value={address}
           onChange={(e) => setAddress(e.target.value)}
         />
+        {/* What the copy does with it is in copy/fixAsIs.js (address fixes) and copy/address.js; this says the same in plain words. */}
+        <span style={{ display: 'block', marginTop: 6, color: 'var(--muted)', fontSize: 13 }}>
+          Where the new site will live. With it, the copy’s canonical links, link previews (og:url), robots.txt, sitemap.xml and
+          structured data name the new site. Leave it empty and the copy keeps the original’s own canonical links and robots.txt
+          as they are (they still name the original site), writes no sitemap.xml, and lists “new-site address” as an open
+          item to settle before you publish. You can add it later and make the copy again.
+        </span>
       </label>
 
       <p style={{ marginTop: 12, color: 'var(--muted)' }}>
