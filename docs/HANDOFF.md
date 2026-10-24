@@ -83,6 +83,8 @@ the copy is therefore "not safe" by the existing outside-call check. That is rea
 - Copy unit tests: 50 pass (`copy-*.test.js`, copy-retention, copy-notes, copy-log, copy-run, copy-links, copy-link-pass, copy-checks, copy-my-site).
 - Related files (preserve-*, recreate-jobs, recreate-export, copy-*): 28 pass at commit `fc4b917`.
   Not re-run after the redirect and 999 fixes (`652dd57`, `5624947`): preserve-* should be re-run.
+- 2026-10-24 (0fa8fc0), one at a time with `SAS_TEST_BROWSER_CONCURRENCY=1`: `preserve-completion-late` (new, 2),
+  `preserve-completion-same-origin` (2), `preserve-url-base` (2) pass. The full suite was not run.
 - Client: `npx vite build` passes. No client test suite exists.
 
 ## The plan of 2026-10-20 (kept as written: steps 1-3 DONE, 4 IN PROGRESS, 5 not started; the live list is under "Next steps" below)
@@ -423,31 +425,36 @@ more runs per side and the medians of three decide. A run with no score, or a co
 is "could not be scored" (status `recheck`, reason in words), never part of a median. The original's runs are cached per
 project (`lighthouse-original/`) and reused by later re-audits.
 
-**TOP PRIORITY, OPEN: nyaayai's as-is copy renders blank under Lighthouse.** 5 of 6 per-page runs and both homepage runs got a
-36-element shell (the original: 1 215 / 1 370), console `Fatal error … TypeError: Invalid base URL at …/JQGUGunJL.Cj2najZC.mjs`
-(the site's own builder runtime building URLs from a base). In the copy's own Playwright checks the page renders (0 px visual
-difference), so it is specific to the Lighthouse load. Leads, in the order to check them:
-1. **Script order (fix committed, not yet verified live)**: the URL shim that resolves a relative base was appended at the END of
-   the body; the site's main module is `async` (runs the moment it is fetched) and a blocking third-party script that never answers
-   from this machine (a chatbot widget's host, ~21 s) held the parser, so the module ran before the shim. Now the shim is the
-   first script of the document, after `<meta charset>` (`complete.js registerServiceWorker`, test `preserve-url-base`, which
-   reproduces the race with an async module and a stalled script).
-2. **A chunk on another original host (fix committed, not yet verified live)**: a builder CMS chunk under `/cms/…` is answered by
-   the site with a 404 page and by its CDN host with the file; completion asked the site only. Now it asks the site, then every
-   other original host (`complete.js answerSameOrigin`, test `preserve-completion-same-origin`).
-3. If still blank: compare `document.baseURI` / `<base>` / `import.meta.url` of the module that throws between a Playwright load
-   and Lighthouse's Chrome (which goes through the egress proxy); check whether the service worker answers inside Lighthouse's
-   fresh profile (Lighthouse clears storage, so a first visit has no worker).
-   Repro: `node C:/Users/urvas/Downloads/remastly-live-results/nyaayai/repro-blank.mjs <copy dir> <out dir>` (serveCopy +
-   Playwright ×3 + one Lighthouse run). Then run the comparison again; the original's six runs are cached.
-Until this is verified, the "fixed" accessibility / SEO / dom-size rows of nyaayai's re-audit were measured on the blank shell and
-are not trustworthy (see `CORRECTED-VERDICT.txt`).
+**FIXED AND VERIFIED 2026-10-24: nyaayai's as-is copy rendered blank under Lighthouse** (was: 5 of 6 per-page runs and both
+homepage runs a 36-element shell, console `Fatal error … TypeError: Invalid base URL at …/JQGUGunJL.Cj2najZC.mjs`). Full write-up
+with the numbers: `remastly-live-results/nyaayai/BLANK-RENDER-2026-10-24.md`.
+- **Cause 1 (d01efca, confirmed)**: the URL shim stood last in the body; the site's main module is `async` and a blocking
+  third-party script (a chatbot widget's host) held the parser when it stalled, so the module ran before the shim and its
+  top-level `new URL(x, '/root-relative base')` threw. Reproduced deterministically with a local proxy that stalls that host
+  (`scripts/repro-stall.mjs`): saved copy → 36 elements, unscored; shim first → 1217 elements, performance 0.70. Even without a
+  stall the late shim lost 172 elements silently (URL replaced at 1144 ms, the module had run at 368 ms).
+- **Cause 2 (0fa8fc0, general)**: the site's runtime asks its CDN for a CMS index ~10.5 s after load (timer; original and copy
+  alike). The completion pass had no shim yet (the runtime failed and asked for nothing) and ended ~7 s after load, so the copy
+  shipped without the file (404 + console error on every visit; d01efca's "ask every original host" never ran for it). Now a
+  pass opens the copy with the shim as an init script, caps the page's timers at `FAST_TIMER_CAP_MS` (1 s) and ends on
+  `QUIET_MS` (2.5 s) of no requests with every answer given, at most `PASS_MAX_MS` (45 s) per page and size
+  (`complete.js`, test `preserve-completion-late`).
+- **Verified live** (fresh copy + re-audit, `run-2026-10-24/`): the index is asked of the site then the CDN and shipped; the
+  shim is at byte 483; **6 of 6 Lighthouse runs of the copy rendered (1216 elements)**; visual 0.26 % / 0.19 %, heights equal.
+  Scores (medians of 3): phone original 80 / 90 / 96 / 85 → copy **68** / 94 / 100 / 85; computer 84 / 90 / 96 / 85 → copy
+  **96** / 94 / 100 / 85. The phone performance gap is the simulated LCP alone (6157 vs 1692 ms; observed 220 vs 777 ms; every
+  other phone metric better on the copy): on the loopback host the modules arrive before the first paint is recorded, so Lantern
+  puts their 4×-slowed run time in front of LCP; with applied throttling the copy is ahead (0.77 vs 0.72). The re-audit files
+  the row as "deploy", explained; got-worse unexplained 0. Nothing changed in the copy for it.
+The 2026-10-23 "fixed" rows measured on the blank shell are superseded by this run.
 
-**Also open on nyaayai's copy (re-audit 71468133)**:
-- **Unused CSS 0 → 12 KiB, "got worse", UNEXPLAINED.** Not investigated. It may be the blank render (the stylesheets load, the
-  content that uses them does not), so check it again after the fix above before looking elsewhere.
-- **Motion could not be measured on the copy (the motion step timed out)**, so the re-audit has no motion rows for it. Not
-  investigated; also check again after the blank-render fix.
+**Still open on nyaayai's copy (re-audit 5bf00522, 2026-10-24)**:
+- The "unused CSS 0 → 12 KiB" row of 2026-10-23 is gone after the fix (it was the blank render); the got-worse rows left are
+  responsive images (deploy), 20 new broken links and sitemap.xml (a one-page copy with no new-site address: owner), phone
+  performance (deploy, above).
+- **Motion could not be measured on the copy (the motion step timed out)**, again (`motion: pages 0, failed: index/timeout`).
+  Not investigated.
+- `lighthouse.offscreen-images` still open and **UNEXPLAINED** (1 of 9 still-open rows; 425 KiB, the original 427).
 
 **This morning's run (2026-10-24, branch `copy-step4`, scratch data `C:/Users/urvas/Downloads/sas-work/data`, log
 `sas-work/live.log`, `SAS_MAX_PARALLEL=2`)**:
@@ -470,28 +477,32 @@ above; visual gate; re-audit):
 - sankalpam homepage — http://sankalpam.ai/
 - indikaai whole site — https://www.indikaai.com/ (check it answers first)
 - makememo whole site — https://makememo.ai/ (check it answers first)
-- nyaayai homepage again, once the blank-render fix is verified.
+- nyaayai homepage: DONE 2026-10-24 (`remastly-live-results/nyaayai/run-2026-10-24/`, scratch data `sas-work/nyaayai-data`).
 
 **Where things are kept**:
-- Live results kept for the user: `C:/Users/urvas/Downloads/remastly-live-results/` — `nyaayai/` (summary.json, recreate/,
-  reaudit/, lighthouse-original/, CORRECTED-VERDICT.txt, repro-blank.mjs), `first-attempt-indikaai-makememo/` and **`scripts/`**:
-  the live-run driver `scratch-live.mjs` and the other scratch scripts of the step-4 sessions (never committed; they import from
-  a worktree's `server/src`, so run them from a worktree's `server/` folder or fix the import paths).
+- Live results kept for the user: `C:/Users/urvas/Downloads/remastly-live-results/` — `nyaayai/` (2026-10-23: summary.json, recreate/,
+  reaudit/, lighthouse-original/, CORRECTED-VERDICT.txt, repro-blank.mjs; 2026-10-24: `BLANK-RENDER-2026-10-24.md`,
+  `repro-2026-10-24/`, `run-2026-10-24/` with the fresh copy, re-audit, applied-throttling Lighthouse runs and the LCP probe),
+  `first-attempt-indikaai-makememo/` and **`scripts/`**: the live-run driver `scratch-live.mjs`, `repro-stall.mjs` (serveCopy +
+  a local proxy that stalls one host + Lighthouse), `nyaayai-fresh-copy.mjs` (one as-is copy + re-audit on a scratch data folder,
+  summary and folders copied out) and the other scratch scripts of the step-4 sessions (never committed; they import from a
+  worktree's `server/src`, so run them from a worktree's `server/` folder or fix the import paths).
+- **Gotcha**: importing `server/src/db/index.js` from a second process (any script opening the same scratch `app.db`) marks every
+  `running` recreate as failed with "The server restarted while this job was running" (`db/index.js:24`). The job itself goes on
+  and writes its row back; still, never open a running job's database from another process — read its log / summary.
 - Scratch data of this morning's run: `C:/Users/urvas/Downloads/sas-work/data` (projects indikaai 9b829d40…, makememo 93e23afa…,
   sankalpam 06a12702…, nyaayai 603201ca…); logs `sas-work/live.log`, `sas-work/live-killed-run.log`. Driver: `remastly-live-results/scripts/scratch-live.mjs
   <projectId>:<whole|home> …` (calls the job managers directly, no server; it used to live untracked in `Website-Audit-copystep4/server/`).
-- Scratch data of the 2026-10-23 nyaayai run (scratch API port 4411; project e97a1434 = nyaayai): the earlier session's
-  scratchpad, `C:/Users/urvas/AppData/Local/Temp/claude/C--Users-urvas-Downloads-Website-Audit-accounts/0e702d26-ff8c-47ed-bdbe-ab81ffd84eb6/scratchpad/live/`
-  (`data/`, `run-sites.mjs`, `recopy.mjs`, `rerun-reaudit.mjs`). It is in Temp: copy it out before it is cleaned if it is needed.
+- Scratch data of the nyaayai runs (project e97a1434 = nyaayai, analysis 9e93d237, cached `lighthouse-original/`): copied out of
+  Temp to `C:/Users/urvas/Downloads/sas-work/nyaayai-data` (2026-10-24); the 2026-10-24 recreate is 4665093e, re-audit 5bf00522.
 
 Known gaps: Step 1's stability figures (nyaayai 0.27–0.31 %) were measured with the old `pixelDiffPct` and not again.
 
 ## Next steps, in order (commit after each with `--no-verify`, say the full suite was not run; nothing is pushed before the PR)
 
-1. **Step 4, open — nyaayai's as-is copy renders blank under Lighthouse** ("State on 2026-10-24" above): check the two committed leads
-   with `remastly-live-results/nyaayai/repro-blank.mjs`; if still blank, the third lead; fix generically; then the Lighthouse comparison
-   again, copy side only (the original's runs are cached). After it, on the same copy: the UNEXPLAINED "unused CSS" row and the
-   motion step's timeout.
+1. **Step 4 — the blank render: DONE 2026-10-24** (fixed, verified live, see "State on 2026-10-24"). Left from it, on the same copy
+   (`run-2026-10-24`): the re-audit's **motion step timeout** (no motion rows for the copy) and the **UNEXPLAINED
+   `lighthouse.offscreen-images`** still-open row.
 2. **Step 4, rest**: whatever *acts* on an unexplained "got worse" / "still open" row (`copy/run.js zeroRegressions` is the tested
    model, fakes only); the summary line's "Fixed" already comes from the re-audit.
 3. **Step 5 — per-page fallback**: clean rebuild of a failing page in the chosen stack, time-boxed correction, keep the better one.
@@ -573,7 +584,8 @@ Open, in the order to pick them up:
    nyaayai and makememo at 1440 and 390 in fresh processes (harness pattern: see "Step 1" above).
 5. **Step 4 — re-audit + zero-regressions loop: IN PROGRESS since 2026-10-23** (see "Step 4" and "Next steps" above): the re-audit
    runs after every as-is copy, "got worse" and "still open" rows carry reasons, Lighthouse runs on every page of both sides; the
-   summary line's "Fixed" comes from the re-audit. Open: the blank render under Lighthouse, and what acts on an unexplained row.
+   summary line's "Fixed" comes from the re-audit. The blank render under Lighthouse was fixed and verified 2026-10-24. Open: what
+   acts on an unexplained row.
 6. **Step 5 — per-page fallback (not started).** A page below threshold: auto-repair known stack issues, else a clean rebuild of
    that page in the chosen stack with a time-boxed exact correction, keep the better. `copy/run.js` has the decision logic with
    fakes only.
