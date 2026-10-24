@@ -11,7 +11,7 @@ import express from 'express';
 import { runAnalysis } from '../src/audit/index.js';
 import { DATA_DIR, db, projectDir } from '../src/db/index.js';
 import { overallPct, pagePath, runReaudit, STEPS } from '../src/reaudit/index.js';
-import { JOB_OPTIONS } from '../src/reaudit/jobs.js';
+import { JOB_OPTIONS, startReaudit } from '../src/reaudit/jobs.js';
 import { previewHeaders, servePreview } from '../src/recreate/preview.js';
 import { recreateDir } from '../src/recreate/workspace.js';
 import projectsRouter from '../src/routes/projects.js';
@@ -370,8 +370,16 @@ test('audit.recreate: a failed re-audit without an earlier result keeps the samp
   const now = new Date().toISOString();
   seedAnalysis(db, project.id, { url: 'https://example.com/', analysisId: 'other', seo: [] });
   // The recreate names an analysis that does not exist, so the job fails.
-  await makeRecreate(project);
-  assert.equal((await fetch(`${base}/${project.id}/reaudit`, { method: 'POST' })).status, 202);
+  const recreateId = await makeRecreate(project);
+  // Asked for by a person: refused with the reason, no job queued (a re-audit that cannot measure anything fails once).
+  const refused = await fetch(`${base}/${project.id}/reaudit`, { method: 'POST' });
+  assert.equal(refused.status, 409);
+  const why = await refused.json();
+  assert.equal(why.blocked, true);
+  assert.match(why.error, /analysis this recreate was built from/);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM reaudits WHERE project_id = ?').get(project.id).n, 0, 'nothing was queued');
+  // The one the copy queues by itself (the server's own path) runs, fails once, and Results says why.
+  startReaudit(db.prepare('SELECT * FROM projects WHERE id = ?').get(project.id), recreateId, { system: true });
   const body = await waitForDone(project.id);
   assert.equal(body.last.status, 'failed');
   const rec = (await (await fetch(`${base}/${project.id}/audit`)).json()).recreate;

@@ -14,6 +14,7 @@ import { writeProject } from '../emit/write.js';
 import { emitSite } from '../emit/html.js';
 import { buildDist } from '../build/minify.js';
 import { recreateDir } from '../workspace.js';
+import { servedDir } from '../behavior/preserve/pack.js';
 
 const refuse = (status, message) => Object.assign(new RecreateError(message), { status });
 
@@ -23,7 +24,10 @@ export const reportOutputs = (report) => report.outputs ?? { [report.stack ?? 'h
 /** The folder an output is served, previewed and audited from (the plain-HTML build is `dist`, an app's is e.g. `stacks/nextjs/out`). */
 export function outputRoot(dir, report, stack) {
   const out = reportOutputs(report)[stack];
-  return path.join(dir, out?.dir ?? 'dist', out?.dist ?? '');
+  const project = path.join(dir, out?.dir ?? 'dist');
+  // An as-is project recorded before `dist` was: the copy is where that stack serves it from, not at the project's root.
+  const dist = out?.dist ?? (out?.mode === 'as-is' ? servedDir(stack, project) : '');
+  return path.join(project, dist);
 }
 
 /** The output to preview and re-audit: `wanted` (the project's stack) when it is ready, the plain-HTML build otherwise. */

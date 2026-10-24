@@ -8,7 +8,7 @@ import { gzipSync } from 'node:zlib';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { liftSite, localOfOutPath } from './asis.js';
-import { packLifted } from './pack.js';
+import { packLifted, servedDir } from './pack.js';
 import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
 import { checkCopy, excludedHostsOf, fixGate, formsInCopy, NOISE_SHOTS, probeOriginal } from './check.js';
@@ -409,7 +409,9 @@ export async function asIsStage(ctx) {
       } : null,
     };
     ctx.report.asIs = report;
-    ctx.report.outputs[stack] = { status: 'ready', dir: path.join('stacks', stack), mode: 'as-is', pages: pages.map((p) => ({ outPath: p.outPath, path: localOfOutPath(p.outPath) })) };
+    // dist: the folder of the project that answers `/` (after the build above), so the preview and the re-audit serve the copy,
+    // not the project around it. The download still takes the whole project (`dir`).
+    ctx.report.outputs[stack] = { status: 'ready', dir: path.join('stacks', stack), dist: servedDir(stack, outDir), mode: 'as-is', pages: pages.map((p) => ({ outPath: p.outPath, path: localOfOutPath(p.outPath) })) };
     ctx.report.safety = report.safety;
     if (!report.safety.safe) ctx.report.warnings.push(`The as-is copy asked for ${external} address(es) off its own server; see the checks.`);
     ctx.progress(1, 'The as-is copy is ready');

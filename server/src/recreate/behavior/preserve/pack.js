@@ -5,7 +5,7 @@
 //   next        public/ holds the copy; next start serves it as static files, and the app router renders nothing
 //   mern        client/dist holds the copy; the Express server serves it (compression, types, headers) and keeps the form API
 import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { SECURITY_HEADERS } from '../../../copy/securityHeaders.js';
 import { SERVER_DIR, toolchainDir } from '../../../config/paths.js';
@@ -15,6 +15,24 @@ const MERN_TEMPLATE = path.join(SERVER, 'src/recreate/emit/mern/template/server'
 
 /** The stacks a lifted copy can be packaged into. */
 export const PACK_STACKS = ['react-vite', 'nextjs', 'mern'];
+/**
+ * Per stack: where the packer writes the copy inside the project (`copy`), and the folders the stack's own server answers `/`
+ * from, first choice first (`served`): what the preview and the re-audit must read. vite preview serves dist/ (vite build copies
+ * public/ there unchanged; public/ is the same files when the project was not built), next start serves public/ before any route,
+ * the MERN server serves client/dist. Plain HTML is not packed: the copy is the project's own folder.
+ */
+export const PACKED = {
+  'react-vite': { copy: 'public', served: ['dist', 'public'] },
+  nextjs: { copy: 'public', served: ['public'] },
+  mern: { copy: 'client/dist', served: ['client/dist'] },
+};
+
+/** The folder (relative to the packed project) that serves the copy: the first of the stack's `served` that exists; '' unpacked. */
+export function servedDir(stack, projectDir) {
+  const served = PACKED[stack]?.served;
+  if (!served) return '';
+  return served.find((d) => existsSync(path.join(projectDir, d))) ?? served[0];
+}
 
 /** The versions the server builds and checks with (toolchains/<id>/package.json): what the user installs is what was verified. */
 export function pinnedVersions(id) {
@@ -153,7 +171,7 @@ export default defineConfig({
 });
 `);
     await put('src/entry.js', '// Empty on purpose: the page is public/index.html, served unchanged. Nothing here is bundled.\n');
-    await copyLifted(copyDir, path.join(outDir, 'public'));
+    await copyLifted(copyDir, path.join(outDir, PACKED[stack].copy));
     await put('_headers', HEADERS_FILE);
     await put('README.md', readme({
       title: `${slug} — React + Vite`, stack: `React + Vite (vite ${pin.vite}, the version the server verified with)`, slug,
@@ -216,7 +234,7 @@ export default nextConfig;
     // The app router needs a root layout and a route; neither renders the copy (public/ answers its addresses first).
     await put('app/layout.jsx', `export default function RootLayout({ children }) {\n  return <html lang="en"><body>{children}</body></html>;\n}\n`);
     await put('app/not-found.jsx', `export default function NotFound() {\n  return <main><h1>Not found</h1><p><a href="/">Back to the home page</a></p></main>;\n}\n`);
-    await copyLifted(copyDir, path.join(outDir, 'public'));
+    await copyLifted(copyDir, path.join(outDir, PACKED[stack].copy));
     if (movesNext) await rename(path.join(outDir, 'public', '_next'), path.join(outDir, 'public', 'next-assets'));
     await put('README.md', readme({
       title: `${slug} — Next.js`, stack: `Next.js ${v.dependencies.next} (App Router; the copy is static files, not rendered by React)`, slug,
@@ -244,7 +262,7 @@ export default nextConfig;
     await put('server/forms.json', '[]\n');
     // The lifted copy has no forms of its own that the server knows: the form API stays empty (see the README).
     await put('server/site.json', `${JSON.stringify({ lifted: true }, null, 2)}\n`);
-    await copyLifted(copyDir, path.join(outDir, 'client/dist'));
+    await copyLifted(copyDir, path.join(outDir, PACKED[stack].copy));
     await put('README.md', readme({
       title: `${slug} — MERN (Express + MongoDB)`, stack: 'MERN: Express server serving the copy, MongoDB for form submissions', slug,
       install: '```sh\nnpm install\n```',

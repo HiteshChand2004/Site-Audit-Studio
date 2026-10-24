@@ -72,22 +72,48 @@ export const pagePath = (outPath) => outPath.replace(/(^|\/)index\.html$/, '$1')
  * @param {string[]} [o.skip]  Analyze steps to leave out (tests also leave out Lighthouse)
  * @returns {Promise<object>} { recreateId, analysisId, origin, pages, audit, checklist }
  */
+/** The file that answers a page's address in a static folder ("/" → index.html, "/about/" → about/index.html, "/about" → about.html). */
+async function pageFile(root, urlPath) {
+  const rel = String(urlPath || '/').replace(/^\/+/, '');
+  const candidates = rel === '' || rel.endsWith('/') ? [`${rel}index.html`] : [rel, `${rel}.html`, `${rel}/index.html`];
+  for (const c of candidates) if ((await stat(path.join(root, c)).catch(() => null))?.isFile()) return c;
+  return null;
+}
+
+/**
+ * Why a re-audit of this recreate cannot measure anything, as a sentence for the person; null when it can start. The same answer
+ * every time for the same recreate, so a failed re-audit fails once: the route refuses a new one with this reason instead of
+ * queuing a job that would fail the same way (reaudit/jobs.js, routes/reaudit.js).
+ * @param {{ id: string, stack?: string }} project @param {string} recreateId
+ */
+export async function reauditBlocker(project, recreateId) {
+  const row = selectRecreate.get(recreateId, project.id);
+  if (!row) return 'This recreate is no longer available. Run Recreate again.';
+  const report = JSON.parse(row.result_json);
+  const stack = targetStack(report, project.stack);
+  const dir = recreateDir(project.id, recreateId);
+  const root = outputRoot(dir, report, stack);
+  if (!(await stat(root).catch(() => null))?.isDirectory()) return 'The recreated site has no production build to audit. Run Recreate again.';
+  if (!(report.analysisId && selectAnalysis.get(report.analysisId, project.id))) {
+    return 'The analysis this recreate was built from is no longer available. Run Analyze and Recreate again.';
+  }
+  const home = outputPages(report, stack)[0]?.path ?? '/';
+  if (!(await pageFile(root, home))) {
+    return `The copy has no page at its home address (${home}) in ${path.relative(dir, root) || 'its folder'}, so there is nothing to compare. Make the copy again.`;
+  }
+  return null;
+}
+
 export async function runReaudit({ project, reauditId, recreateId, progress, skip = SKIPPED_STEPS, signal = null }) {
   progress('serve', 0);
-  const row = selectRecreate.get(recreateId, project.id);
-  if (!row) throw new ReauditError('This recreate is no longer available. Run Recreate again.');
-  const report = JSON.parse(row.result_json);
+  const blocked = await reauditBlocker(project, recreateId);
+  if (blocked) throw new ReauditError(blocked);
+  const report = JSON.parse(selectRecreate.get(recreateId, project.id).result_json);
+  const analysis = selectAnalysis.get(report.analysisId, project.id); // the OLD side of the comparison (checked above)
   // What the user sees and downloads: the project's stack when its output is ready, the plain-HTML build otherwise.
   const stack = targetStack(report, project.stack);
   const emitter = getEmitter(stack);
   const root = outputRoot(recreateDir(project.id, recreateId), report, stack);
-  if (!(await stat(root).catch(() => null))?.isDirectory()) {
-    throw new ReauditError('The recreated site has no production build to audit. Run Recreate again.');
-  }
-  const analysis = report.analysisId && selectAnalysis.get(report.analysisId, project.id);
-  if (!analysis) {
-    throw new ReauditError('The analysis this recreate was built from is no longer available. Run Analyze and Recreate again.');
-  }
 
   // connect-src 'self': Lighthouse fetches robots.txt from inside the page (previewHeaders).
   // An app's own scripts run (Lighthouse measures what its visitors get); the CSP still allows only the build's own.
