@@ -89,4 +89,7 @@ export function applySchema(db) {
   // What the job was started with ({ payload, warnings, system }, jobs/manager.js), so a queued job of a server that died can be
   // put back in line by the next server with the same row. NULL for rows written before this column existed.
   for (const table of ['analyses', 'recreates', 'reaudits']) addColumn(table, 'payload_json', 'TEXT');
+  // When the disk cleanup removed a finished copy's folder (jobs/cleanup.js: older than SAS_KEEP_COPIES_DAYS and not the project's
+  // newest). The row stays as the record of the job; its files are gone. NULL: the folder is where it was.
+  addColumn('recreates', 'removed_at', 'TEXT');
 }

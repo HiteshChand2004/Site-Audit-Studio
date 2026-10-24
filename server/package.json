@@ -17,7 +17,8 @@
     "db:backup": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/db-backup.mjs",
     "db:rehearse": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/db-rehearse.mjs",
     "db:migrate": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/db-migrate.mjs",
-    "accounts": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/accounts.mjs"
+    "accounts": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/accounts.mjs",
+    "cleanup": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/cleanup.mjs"
   },
   "dependencies": {
     "@axe-core/playwright": "^4.13.0",

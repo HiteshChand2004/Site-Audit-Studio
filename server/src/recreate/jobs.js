@@ -16,6 +16,7 @@ import { activePreview, startPreview } from './preview.js';
 import { MAX_AUTO_RESUMES, readCheckpoint } from './checkpoint.js';
 import { analysisWarnings, isExactMode, latestAnalysis } from './inputs.js';
 import { pruneRecreates, recreateDir, tmpDir } from './workspace.js';
+import { sweepJobScratch } from '../jobs/cleanup.js';
 
 export const recreateJobs = new JobManager({
   table: 'recreates',
@@ -59,6 +60,9 @@ export const recreateJobs = new JobManager({
   // Keep the latest completed recreates only; also removes any leftover temporary workspace.
   // Then queue the stack build the job left out (if any) and the re-audit (it runs after anything already waiting for the lock).
   after: async ({ job, project, ok }) => {
+    // Half-built pieces inside this copy's folder go first (a kept workspace keeps only what a resume reads), then the
+    // project's own retention (jobs/cleanup.js, recreate/workspace.js).
+    await sweepJobScratch(project.id, job.id).catch(() => {});
     await pruneRecreates(project.id);
     // Stopped by the time limit after making progress: it continues by itself with a fresh budget (a few times at most).
     if (!ok) await autoResume(project, job.id, 'time-limit');

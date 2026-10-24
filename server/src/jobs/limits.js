@@ -24,7 +24,7 @@
 import { freeMemoryMB } from '../audit/resources.js';
 
 /** @param {string | undefined} raw @param {{ min: number, max: number, def: number, integer?: boolean }} r */
-function setting(raw, { min, max, def, integer = true }) {
+export function setting(raw, { min, max, def, integer = true }) {
   if (raw === undefined || raw === '') return def;
   const n = Number(raw);
   if (!Number.isFinite(n) || (integer && !Number.isInteger(n)) || n < min || n > max) return def;

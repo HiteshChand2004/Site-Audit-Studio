@@ -737,3 +737,71 @@ Hosting is not decided, so every limit is an env setting read at call time (`ser
   period, the late end leaves the row alone), 0 = none; the restart requeue (order, same ids, claimed heartbeats, warnings kept, a
   second pass starts nothing twice, a row another server took is left). Also passing: job-lock 10, recreate-jobs 15, recreate-resume 7,
   keep-awake 2, perf 10, owner-options 6, stage0 8, reaudit-stack 6; `npx vite build`. Full suite not run; no browser test.
+
+## Launch readiness — disk cleanup (branch `job-lock`, Task B, 2026-10-24)
+
+**Measured** (read-only, on scratch copies of real data: the 18-project folder `C:\sasd2` and the live-run folder of 2026-10-23/24;
+each file counted once, hard links included):
+
+| What | Size | Where it goes |
+|---|---|---|
+| A finished clean copy (Oct 6–7 runs, 7–30 pages) | 16–235 MB | capture 5–152 MB (the biggest part), fidelity shots 2–41, assets + site + dist 6–35 (hard-linked, counted once), ir 1–3, re-audit raw 1–3; a built stack adds 23–72 MB |
+| An as-is copy of one page (nyaayai, 2026-10-23) | 132 MB | its lift `as-is/` 83 MB, capture 9, packed stack 36, re-audit 3 |
+| A workspace a crashed job left (`<id>.tmp`) | 10–118 MB | the live folder's: 118 MB, of which **36 MB scratch** (`.lift-tmp` etc.) nothing would have removed |
+| An analysis | 1–3 MB | screenshots 0.1–0.4 MB (already kept for the latest 3 only) |
+| `lighthouse-original` per website | 3.5 MB | the original's Lighthouse runs, reused by later re-audits |
+| Temp folder leftovers on this machine | 26 `sas-cache-*` folders, 15 MB | a job's shared static-file cache, left by every crashed or killed job since 2026-10-16 |
+
+**Policy** (`server/src/jobs/cleanup.js`, env in `server/.env.example`): `SAS_KEEP_COPIES_DAYS` (default **30**; 0 = never by age),
+`SAS_CLEANUP_HOURS` (default 6; 0 = start-up and after-job passes only), `SAS_CLEANUP_DRY_RUN=1` (the server's passes only log).
+A pass removes exactly four kinds of thing, each with its reason in the log line: (1) scratch inside a copy's folder (`dist.tmp`,
+`stacks/*.tmp`, `*.html-ref.tmp`, the as-is stage's `.lift-tmp` / `.fetch` / `.complete-tmp` / `.referenced-tmp` / `unfixed`; never
+`capture/.network`, which a rebuild from the capture lifts from again); (2) a `<id>.tmp` workspace whose job is over and cannot be
+continued (the one resumable stopped copy is kept for the existing 7 days; a queued or running job's folder is never touched,
+whichever process runs it, and a row still open without a heartbeat is left to the job recovery, which runs first); (3) a finished copy
+older than the setting that is **not its website's newest finished copy** — the newest is never removed by age, whatever its date
+(its row gets `removed_at`, new column, so the record of the job stays); a copy folder no row knows, once still for a day;
+(4) `sas-cache-*` / `sas-migrate-*` in the temp folder older than the hard job limit (a day when there is none). Previews of a folder
+about to go are stopped first. Analyses are not aged out (the re-audit's baseline; 1–3 MB each). Runs: at start-up after the job
+recovery, after every copy (`sweepJobScratch` for that copy, then the existing per-project retention `pruneRecreates`, which keeps the
+newest two clean copies / newest output per stack / the lift), and every `SAS_CLEANUP_HOURS`. By hand: `npm run cleanup -w server --
+--dry-run` prints the disk table (per website: analyses, copies with their scratch, workspaces; the temp folder) and every item it
+would remove or keep with the reason; without the flag it removes, and refuses while a server holds the data folder's lock (it cleans
+by itself). Why 30 days: longer than every window the app has (7 days to continue a stopped copy, 7 days before an analysis is called
+stale), one plan period, and bounded cost (one extra copy per website for a month: 100 websites × ~100–250 MB = 10–25 GB).
+- Tests: `test/cleanup.test.js` (8): settings; `folderSize` counts a hard link once; old copies go and the only / newest copy never does,
+  scratch inside a kept copy goes, `capture/.network` stays, rows record the removal, a second pass finds nothing, days = 0 removes
+  nothing by age; workspaces (running / own / open-row kept, resumable kept 7 days then removed, dead and unknown removed, a stray
+  folder after a day only); the temp folder (hard limit or a day); dry run lists and removes nothing, `SAS_CLEANUP_DRY_RUN` honoured;
+  the after-job sweep touches only that copy; `measureDisk`. Also passing after the hooks: recreate-jobs 15, job-lock 10, job-limits 6,
+  stage0 8, recreate-resume 7, perf 10. The script was dry-run on a scratch copy of the live data folder. Full suite not run.
+
+### For the hosting discussion — how long a job really takes (measured runs only)
+
+Sources: every finished job row of the two scratch folders above (2026-10-06/07: clean copies with the sweep; 2026-10-23/24: as-is
+copies) and the live-results summaries (`remastly-live-results/*/summary.json`). No multi-page as-is copy has been run yet; its
+per-page figure below is the pipeline's own budget (`asIsBudgetMs`: 20 min per page + 10 per stack), which the one-page runs match.
+
+| Job | Runs | Typical | Worst | Per page |
+|---|---|---|---|---|
+| Analyze (whole site, 1–25 pages) | 17 done | 25–160 s (most 21-page runs 25–66 s) | 305 s (parchaa, 10 pages) | ≈ fixed: Lighthouse on the homepage twice; the crawl adds ~5–10 s a page |
+| As-is copy (the product; 1 page each) | 3 done | 1023–1164 s (17–19 min) | 1329 s (22 min) | 17–22 min for the first page: discovery + capture 4.5–6 min, lift + completion + checks 11–18 min; **budget 20 min/page** |
+| Clean copy, older mode with sweep (10–30 pages) | 7 done | 1407–1802 s (23–30 min) | 8794 s (146 min: nyaayai 30 pages, network stalls in capture) | 73–141 s/page typical, 293 s/page worst |
+| Re-audit | 23 done | clean 145–239 s; as-is one page 292–298 s (3 Lighthouse runs × 2 devices × both sides) | 399 s | ≈ fixed; +2–3 s a page |
+
+**The hold-up problem.** With `SAS_MAX_JOBS=1` and the 480-minute backstop, one as-is copy of a 24-page site (480 ÷ 20) runs the full
+backstop and every other account waits 8 hours behind it; the pipeline's own budget ends it there, the limit never fires. Proposal
+(nothing changed yet):
+1. **Backstop 240 minutes.** It covers every run recorded (the longest, the 146-minute clean copy of 30 pages, with room), an as-is copy
+   of up to 11 pages at the budget rate (11 × 20 + 10 = 230 min), Analyze (6) and a re-audit (7) many times over. A larger site needs
+   the setting raised or a page cap, and the row says so. The worst wait for the next person halves, 480 → 240 min.
+2. **A per-plan page limit bounds the wait directly**, because the as-is budget is 20 min a page: 3 pages → a job of at most 70 min,
+   5 pages → 110 min, 10 pages → 210 min (the existing `recreate_pages` setting already caps pages; a plan would set it from the
+   account). With a 5-page plan and one slot, nobody waits longer than 110 min behind one job, and the typical as-is job stays well
+   under it (the measured one-page jobs: 17–22 min).
+3. **More slots.** The live log shows free memory falling from 5065 to 2845 MB during one as-is copy (≈ 2.2 GB per job, server peak RSS
+   702 MB, the rest Chromium); with `SAS_JOB_MIN_FREE_MB=2048` guarding each start, `SAS_MAX_JOBS=2` is safe on an 8 GB host by those
+   numbers and `3` on 16 GB. Two slots mean the second person never waits behind the first, and the third waits for the shorter of two
+   jobs; with k jobs of P pages queued behind one slot the last waits ≈ k × 20P min, with two slots about half.
+Not measured: an as-is copy of more than one page (the per-page cost after the first page should be lower, discovery and the stack
+pack are paid once), and memory with two jobs truly side by side.

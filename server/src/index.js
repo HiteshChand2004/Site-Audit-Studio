@@ -15,6 +15,7 @@ import { describeLimits } from './jobs/limits.js';
 import { awakeHeld } from './jobs/keepAwake.js';
 import { recoverStaleJobs, watchStaleJobs } from './recreate/jobs.js';
 import { holdDataLock } from './config/dataLock.js';
+import { runCleanup, watchCleanup } from './jobs/cleanup.js';
 import { stopAllAsIsPreviews } from './recreate/behavior/preserve/asisPreview.js';
 import { accountsEnabled, bindHost, isLoopbackHost } from './config/index.js';
 import { db } from './db/index.js';
@@ -108,5 +109,10 @@ app.listen(PORT, HOST, (err) => {
   // another process is never touched.
   recoverStaleJobs()
     .catch((e) => console.warn('Interrupted jobs not recovered:', e.message))
-    .finally(() => watchStaleJobs());
+    .finally(() => {
+      watchStaleJobs();
+      // Disk: what a crashed server left behind goes now (scratch, dead workspaces, temp folders), copies older than
+      // SAS_KEEP_COPIES_DAYS too; then every SAS_CLEANUP_HOURS (jobs/cleanup.js). SAS_CLEANUP_DRY_RUN=1 only lists.
+      runCleanup().catch((e) => console.warn('[cleanup] start-up pass failed:', e.message)).finally(() => watchCleanup());
+    });
 });
