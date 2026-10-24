@@ -86,6 +86,13 @@ test('jsxNode writes elements the way HTML reads them', () => {
   const out = j(select);
   assert.match(out, /<select defaultValue="b">/);
   assert.doesNotMatch(out, /selected/);
+  // A custom element keeps its HTML attribute names: React writes a custom element's props as the attributes they are
+  // named, so htmlFor / tabIndex / defaultChecked would reach the page as htmlfor / tabindex / defaultchecked.
+  assert.equal(
+    j(el('x-card', { attrs: { for: 'a', tabindex: '0', checked: '', srcset: 'p 1w', 'data-x': '1' }, class: 'c' })),
+    '<x-card className="c" for="a" tabindex="0" checked="" srcset="p 1w" data-x="1" />',
+  );
+  assert.equal(j(el('x-card', { attrs: { style: 'color: red' } })), '<x-card style={{"color":"red"}} />');
   // Inline SVG keeps its own element: attributes as props, the inner markup as HTML.
   const svg = j({ t: 'svg', sid: 1, class: 'logo', attrs: {}, children: [], raw: '<svg width="24" viewBox="0 0 24 24" stroke-width="2"><use href="asset:icons/a.svg#i"/></svg>' });
   assert.equal(svg, '<svg className="logo" width="24" viewBox="0 0 24 24" strokeWidth="2" dangerouslySetInnerHTML={{ __html: "<use href=\\"/assets/icons/a.svg#i\\"/>" }} />');
