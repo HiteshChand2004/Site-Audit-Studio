@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { launchBrowser } from '../src/audit/render.js';
-import { analyzeSeries, captureLoops, classifyKeyframes, keyframeValues } from '../src/recreate/capture/loops.js';
+import { analyzeSeries, captureLoops, classifyKeyframes, keyframeValues, movesSlowly } from '../src/recreate/capture/loops.js';
 import { startSiteServer } from '../src/recreate/verify/server.js';
 
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Loops</title>
@@ -41,6 +41,7 @@ body { margin: 0; font: 16px sans-serif; }
 <div style="width: 400px; overflow: hidden"><div class="b" id="jsmarquee" style="width: 100px">script marquee</div></div>
 <div class="b" id="jssine">script oscillate</div>
 <div class="b" id="jsfloat">slow float</div>
+<div class="b" id="jsrock">slow rock</div>
 <div style="height: 1600px"></div>
 <div style="width: 600px; overflow: hidden"><div id="ticker" style="display: flex; width: max-content"><div style="width: 400px">quote one quote two</div><div style="width: 400px">quote one quote two</div></div></div>
 <script>
@@ -50,12 +51,15 @@ const spin = document.getElementById('jsspin');
 const mq = document.getElementById('jsmarquee');
 const sine = document.getElementById('jssine');
 const float = document.getElementById('jsfloat');
+const rock = document.getElementById('jsrock');
 const tick = (now) => {
   spin.style.transform = 'rotate(' + ((now / 1000) * 180) + 'deg)';
   mq.style.transform = 'translateX(' + ((now / 1000) * 120 % 300) + 'px)';
   sine.style.transform = 'translateY(' + (20 * Math.sin((now / 1000) * Math.PI)) + 'px)';
   // A shape floating 12 px up and down every 5 s: in a short recording it only goes one way.
   float.style.transform = 'translateY(' + (12 * Math.sin((now / 1000) * (2 * Math.PI / 5))) + 'px)';
+  // A badge rocking 3 deg either way every 8 s: in 2.2 s it turns less than the 5 deg that name a rotation.
+  rock.style.transform = 'rotate(' + (3 * Math.sin((now / 1000) * (2 * Math.PI / 8))) + 'deg)';
   requestAnimationFrame(tick);
 };
 requestAnimationFrame(tick);
@@ -189,7 +193,29 @@ test('declared and script-driven loops are found; one-shot animations and transi
   assert.equal(tickerLoop.pattern, 'drift');
   assert.equal(Math.round(tickerLoop.params.repeat.x), 400, 'its items repeat every 400 px');
 
-  assert.ok(stats.css >= 5 && stats.waapi === 1 && stats.script === 5 && stats.paused === 1, JSON.stringify(stats));
+  assert.ok(stats.css >= 5 && stats.waapi === 1 && stats.script === 6 && stats.paused === 1, JSON.stringify(stats)); // 6 script loops: spin, marquee, sine, slow float, slow rock, ticker
   assert.equal(byPath(/./).length, loops.length);
   await context.close();
+});
+
+// Four badges of a page rock a few degrees over several seconds; two runs of the probe kept 4, 3 and 2 of them, because a
+// 2.2 s recording that starts near a turning point covers less than the 5 deg that name a rotation, and such a candidate
+// was dropped at once instead of being watched longer like the other slow movers.
+test('a slow rocking rotation under the short recording\'s minimum is watched longer and kept', async () => {
+  const context = await browser.newContext({ viewport: { width: 1000, height: 700 } });
+  const page = await context.newPage();
+  await page.goto(`${site.origin}/`, { waitUntil: 'load' });
+  await page.waitForTimeout(700);
+  const { loops } = await captureLoops(page);
+  await context.close();
+  const rock = loops.find((l) => l.text?.startsWith('slow rock'));
+  assert.ok(rock, `the rocking badge is a loop: ${JSON.stringify(loops.map((l) => [l.text, l.pattern]))}`);
+  assert.equal(rock.source, 'script');
+  assert.equal(rock.params.channel, 'rot');
+  assert.ok(rock.pattern === 'oscillate' || rock.pattern === 'spin', rock.pattern);
+  // The rule itself: a series that turned 4 deg is slow, one that moved under a pixel is noise.
+  const series = (deg) => Array.from({ length: 12 }, (_, i) => [i * 100, `matrix(${Math.cos((deg * i) / 11 * Math.PI / 180)}, ${Math.sin((deg * i) / 11 * Math.PI / 180)}, ${-Math.sin((deg * i) / 11 * Math.PI / 180)}, ${Math.cos((deg * i) / 11 * Math.PI / 180)}, 0, 0)`, '1', 'none', 'none', 'none', 'auto', 'auto', 'none', '', '', 'none']);
+  assert.equal(analyzeSeries(series(4)), null, 'under 5 deg the short recording names nothing');
+  assert.equal(movesSlowly(series(4)), true);
+  assert.equal(movesSlowly(series(0.5)), false);
 });
