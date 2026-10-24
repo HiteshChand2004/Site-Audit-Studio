@@ -3,6 +3,8 @@
 // builds from pieces of text at run time, which no rule can see. Two parts close that:
 //   a. completeCopy: the copy is opened in a headless browser; every request to an original host is downloaded once through
 //      the guarded fetch and stored at its path, and the copy is opened again, until a pass downloads nothing new (3 passes).
+//      A pass opens the copy as it ships (the URL shim in force first), runs the page's timers fast (FAST_TIMERS) so a file
+//      asked for seconds after load is asked for now, and ends when the page has gone quiet (QUIET_MS), not after a fixed wait.
 //   b. a service worker (sw.js, generated) maps every original-host address to the local file from a manifest, so the
 //      copy serves those addresses itself. An original-host address the manifest does not hold fails at once, quietly,
 //      without leaving the copy. The copy registers it with one small inline script.
@@ -17,6 +19,22 @@ import { fetchReferenced } from './referenced.js';
 
 /** Most passes a copy is completed in. */
 export const COMPLETE_PASSES = 3;
+/**
+ * While a copy is completed the page's clock runs faster: a timer longer than this fires after this long. A runtime that asks
+ * for a file some seconds after load (a search index ten seconds in, a chunk a delayed widget imports) asks for it within the
+ * pass, whatever its delay; a pass that waited a fixed few seconds never saw such a request, so the copy shipped without the file.
+ */
+export const FAST_TIMER_CAP_MS = 1000;
+/** A pass ends once the page has asked for nothing for this long after the scroll, and nothing is still being answered. */
+export const QUIET_MS = 2500;
+/** The most a pass watches one page at one size after it opened. */
+export const PASS_MAX_MS = 45000;
+/** Init script of a completion pass: timers above FAST_TIMER_CAP_MS fire at the cap (setTimeout, setInterval, requestIdleCallback). */
+export const FAST_TIMERS = `(function(){var C=${FAST_TIMER_CAP_MS};var T=window.setTimeout,I=window.setInterval,R=window.requestIdleCallback;`
+  + "function cap(a){if(typeof a[1]==='number'&&a[1]>C)a[1]=C;return a}"
+  + 'window.setTimeout=function(){return T.apply(window,cap([].slice.call(arguments)))};'
+  + 'window.setInterval=function(){return I.apply(window,cap([].slice.call(arguments)))};'
+  + 'if(R)window.requestIdleCallback=function(f,o){return R.call(window,f,{timeout:Math.min(C,(o&&o.timeout)||C)})};})();';
 /** What a builder's editor address holds in a copy: an empty module (the editor itself is not copied). */
 export const EDITOR_STUB = 'export const createEditorBar = () => null;\n';
 /** The inline script that registers the service worker (the same for every copy). */
@@ -224,7 +242,21 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
     const server = await serveFolder(outDir);
     let downloaded = 0;
     let blocked = 0;
+    // The page's activity: when it last asked for anything, and how many answers are still on their way (an answer from the
+    // original takes a network round trip). A pass ends on quiet, not on a fixed wait.
+    let lastRequestAt = Date.now();
+    let inFlight = 0;
     const handle = async (route) => {
+      lastRequestAt = Date.now();
+      inFlight++;
+      try {
+        return await answer(route);
+      } finally {
+        inFlight--;
+        lastRequestAt = Date.now();
+      }
+    };
+    const answer = async (route) => {
       const url = route.request().url().split('#')[0];
       if (url.startsWith(server.url)) {
         // A builder's editor module, imported by the page's own code at its address (/edit/…): the editor is not part of
@@ -276,8 +308,14 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
         for (const options of COMPLETE_VIEWPORTS) {
           const context = await browser.newContext(options);
           try {
+            // The copy is opened the way it ships: with the URL shim in force before any script of the page (the shipped page
+            // gets it as its first script, registerServiceWorker). Without it a runtime that builds addresses from a rewritten
+            // base fails here, asks for nothing, and the pass sees a page no visitor gets.
+            await context.addInitScript(URL_BASE_SHIM);
+            await context.addInitScript(FAST_TIMERS);
             await context.route('**/*', handle);
             const page = await context.newPage();
+            const opened = Date.now();
             await page.goto(`${server.url}${entry}`, { waitUntil: 'load', timeout: 90000 });
             await page.waitForTimeout(1500);
             // The whole page, scrolled the way a visitor does: the lazy parts load and request their files.
@@ -285,7 +323,10 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
               await page.evaluate((yy) => window.scrollTo(0, yy), y);
               await page.waitForTimeout(120);
             }
-            await page.waitForTimeout(1200);
+            // Then until the page is quiet: nothing asked for QUIET_MS and every answer given (bounded by PASS_MAX_MS).
+            while (Date.now() - opened < PASS_MAX_MS && (inFlight > 0 || Date.now() - lastRequestAt < QUIET_MS)) {
+              await page.waitForTimeout(250);
+            }
           } finally {
             await context.close();
           }
