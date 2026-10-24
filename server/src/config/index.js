@@ -9,7 +9,8 @@
 //                        own internals. Set together with a non-loopback bind, the server refuses to start.
 //   SAS_ACCOUNTS         1 = user accounts: sign-up, sessions, every /api route behind a verified session. Off by default; off is
 //                        today's single-user tool, unchanged (no auth routes, no gate). On, the server refuses to start while the
-//                        database still has migrations to apply (npm run db:migrate).
+//                        database still has migrations to apply (npm run db:migrate). Off, everyone is the owner (accounts/roles.js),
+//                        so with NODE_ENV=production the server refuses to start unless accounts are on.
 //   SAS_DEV_NO_VERIFY    1 = a new account is verified on sign-up, no email needed. Local development only: in effect only when
 //                        NODE_ENV is not production AND the API is bound to a loopback address; set in any other situation, the
 //                        server refuses to start. Logged at every start while it is on.
@@ -86,6 +87,12 @@ export function startupProblems() {
   if (allowLocalhostRequested() && !isLoopbackHost(bindHost())) {
     problems.push(`SAS_ALLOW_LOCALHOST=1 is only allowed when the API listens on this computer only (SAS_BIND_HOST is ${bindHost()}). `
       + 'Remove SAS_ALLOW_LOCALHOST, or bind to 127.0.0.1.');
+  }
+  // Deployed, the tool has users and an owner; with accounts off every visitor would be the owner and every option open
+  // (accounts/roles.js isOwner), so a production server must run with accounts.
+  if (isProduction() && !accountsEnabled()) {
+    problems.push('NODE_ENV=production needs SAS_ACCOUNTS=1: with accounts off there is no sign-in and every visitor counts as the owner. '
+      + 'Set SAS_ACCOUNTS=1 (and run "npm run db:migrate -w server" once), or unset NODE_ENV for local use.');
   }
   if (devNoVerifyRequested() && (isProduction() || !isLoopbackHost(bindHost()))) {
     problems.push(`SAS_DEV_NO_VERIFY=1 skips email verification and is only allowed for local development: NODE_ENV must not be `

@@ -18,8 +18,30 @@ import { RecreateError } from '../recreate/errors.js';
 import { ASIS_DIR, ASIS_STACKS, readLifted } from '../recreate/behavior/preserve/stage.js';
 import { startAsIsPreview, stopAsIsPreview } from '../recreate/behavior/preserve/asisPreview.js';
 import { asIsPagesOf } from '../recreate/behavior/preserve/asis.js';
+import { isOwner, refuseNonOwner } from '../accounts/roles.js';
 
 const router = Router();
+
+/**
+ * The owner-only options a POST …/recreate body asks for, in words (accounts/roles.js). Ordinary users have "Copy my site":
+ * `mode: 'as-is'` with its stack, pages, address and `reuseAsIs`, and `resume` (it continues what exists, starts nothing new).
+ * Everything else changes how a copy is made and is the owner's: a clean rebuild (no mode, or `mode: 'clean'`), `exact`,
+ * `noLimit`, `preserve` outside an as-is copy, and `reuseCapture` (the clean pipeline's replay). Pure, so a test can hold it.
+ * @param {any} body
+ * @returns {string[]}  empty = nothing owner-only was asked for
+ */
+export function ownerOnlyOptions(body) {
+  const b = body ?? {};
+  const out = [];
+  if (b.exact !== undefined) out.push('an exact copy');
+  if (b.noLimit) out.push('a run with no time limit');
+  if (b.reuseCapture) out.push('a rebuild from a saved capture');
+  if (b.preserve === true && b.mode !== 'as-is') out.push('the "preserve" option');
+  // A clean rebuild is what starts when nothing says as-is: not a resume (which continues whatever was stopped) and not an as-is
+  // copy. Named only when nothing above did (an exact copy or a replay is a clean rebuild too; one name is enough).
+  if (!out.length && b.mode !== 'as-is' && !b.resume) out.push('a clean rebuild');
+  return out;
+}
 
 
 const selectProject = db.prepare('SELECT * FROM projects WHERE id = ?');
@@ -58,6 +80,12 @@ const latestReplayable = db.prepare(`
 router.post('/:id/recreate', async (req, res) => {
   const project = selectProject.get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found.' });
+  // Owner-only options are refused on the request, before anything is looked at (accounts/roles.js); the engines below run
+  // whatever payload they are given, for the route, for autoResume and for the per-page fallback alike.
+  if (!isOwner(req)) {
+    const owned = ownerOnlyOptions(req.body);
+    if (owned.length) return refuseNonOwner(res, owned.join(', '));
+  }
   if (!project.authorized) {
     return res.status(403).json({ error: 'This project is not confirmed as authorized for recreating.' });
   }
@@ -374,6 +402,8 @@ router.post('/:id/recreate/:recreateId/export', async (req, res) => {
   const { id, recreateId } = req.params;
   const stack = req.body?.stack;
   if (!UUID.test(id) || !UUID.test(recreateId)) return res.status(404).json({ error: 'Recreate not found.' });
+  // A stack built from a clean copy's saved IR is the owner's; an ordinary user packages an as-is copy again (POST …/recreate reuseAsIs).
+  if (!isOwner(req)) return refuseNonOwner(res, 'building another technology from a saved clean copy');
   if (typeof stack !== 'string' || !getEmitter(stack)) return res.status(400).json({ error: 'Choose one of the listed stacks.' });
   try {
     const { output, created } = await exportStack({ projectId: id, recreateId, stack });

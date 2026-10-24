@@ -4,6 +4,7 @@ import Modal from '../common/Modal.jsx';
 import Button from '../common/Button.jsx';
 import { api } from '../../api/client.js';
 import { SIGN_IN_URL } from '../../api/base.js';
+import { useProjects } from '../../store/useProjects.js';
 import form from '../common/Form.module.css';
 import styles from './AccountMenu.module.css';
 
@@ -110,7 +111,8 @@ function Avatar({ user, size = 'md' }) {
  * the arrow keys like any menu. Shows nothing when the API has no accounts (getMe → null), so the single-user tool is unchanged.
  */
 export default function AccountMenu({ compact = false }) {
-  const [user, setUser] = useState(null);
+  // The signed-in account, asked once by the store at start (also what decides the owner-only options): null = accounts off.
+  const user = useProjects((s) => s.me) ?? null;
   const [open, setOpen] = useState(false);
   const [changing, setChanging] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -118,12 +120,6 @@ export default function AccountMenu({ compact = false }) {
   const trigger = useRef(null);
   const menu = useRef(null);
   const menuId = useId();
-
-  useEffect(() => {
-    let alive = true;
-    api.getMe().then((u) => alive && setUser(u)).catch(() => {});
-    return () => { alive = false; };
-  }, []);
 
   const close = useCallback((refocus = true) => {
     setOpen(false);

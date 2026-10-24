@@ -594,3 +594,23 @@ Also known: clean-rebuild captures taken between 19ddc59 (2026-10-18 08:58 UTC) 
 scratch corpus that is dreamhire d541c77b, parchaa 5543a393, flexibench dcecafc4 / fe1df206 (partly) and makememo 1fe625e9 (as-is
 fallback). The real database very likely has such runs too (the dev server ran this code in that window) — not checked: the
 real data folder was not read. `scratchpad/window.mjs` of the 2026-10-21 session lists them read-only, given a data folder.
+
+## Branch `owner-options` (worktree `../Website-Audit-owner`, from `step4-lighthouse` fc059a4), 2026-10-24
+
+Done in parallel with the step-4b session; nothing pushed; full suite not run (one test file at a time, `npx vite build`).
+1. **PARKED 7 fixed (4dbd6db)**: `routes/recreate.js EXACT_FILE` and the folder picker have their backslashes back; `recreate-exact-route.test.js`
+   requests one file of every kind the comparison writes (names from `bandFile` / `copyBand` / `mapFile` / `cropFile`) and bad names. Only an
+   exact-mode run shows that table, so ordinary copies never saw the 404s. A sweep (regex literals with a bare `d{`, `s+`, `w+`, an unescaped
+   `.ext$`) over `server/src`, `client/src`, `scripts` found nothing else.
+2. **New-site address optional (20bb9a0)**: the Copy panel and the settings dialog accept an empty address and say what the copy does without
+   one (as-is: canonical / robots.txt kept as lifted, no sitemap.xml, an open item "new-site address"; clean: the original's address written
+   and a report warning). The Create step asks once before the first copy, then starts at once. Server unchanged (already optional).
+3. **Owner-only options, enforced on the server** (see `docs/ACCOUNTS.md` "Owner-only options"): `accounts/roles.js isOwner / refuseNonOwner`;
+   `routes/recreate.js ownerOnlyOptions`, `routes/projects.js ownerOnlySettings`, POST …/export; **`NODE_ENV=production` refuses to start
+   with accounts off** (`config/index.js startupProblems`). App: `store.me` / `selectIsOwner`; the Create step's "Advanced options" and the
+   Results step's build-another-stack picker draw for the owner only; an ordinary user with an as-is copy gets "Rebuild from the last visit"
+   (`reuseAsIs`, text says it shows the site as it was then). The engines are untouched: `recreate/index.js` runs clean / exact / as-is from
+   the payload for any caller — the route, `recreate/jobs.js autoResume`, and the per-page fallback, which will call them from
+   `copy/run.js checkPage` (`deps.rebuildClean`, `deps.correct` → the clean pipeline and `verify/exact/correct.js`) in-process, never through
+   the route. Tests: `owner-options.test.js` (6).
+4. **Task 4 (read-only re-score of the published visual 93 / 98)**: see the section that follows it, written at the end of the session.

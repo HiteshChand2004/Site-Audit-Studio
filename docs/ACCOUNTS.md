@@ -87,6 +87,16 @@ are allowed. The user's dev server (4000 / 5173) runs from `Website-Audit-exact`
   SAS_ALLOW_LOCALHOST pattern, before the database is opened); while on, `!!! SAS_DEV_NO_VERIFY is ON … !!!` at every start.
 - `SAS_ACCOUNTS=1` now starts — unless the database has pending migrations (refused, "run npm run db:migrate"). The accounts modules
   are loaded only when on, so off is exactly the old server (no auth routes, no gate, no queries on the new tables).
+- **Owner-only options** (`accounts/roles.js`, 2026-10-24): the advanced copy options are the owner's (`users.role = 'owner'`, set only by
+  the SAS_OWNER_EMAIL migration) and refused on the request with 403 `{ error: 'Only the owner can use …. Use “Copy my site” instead.',
+  forbidden: 'owner' }` — a clean rebuild (POST …/recreate without `mode: 'as-is'`), `exact`, `noLimit`, `preserve` outside an as-is
+  copy, `reuseCapture`, POST …/export, and PATCH `exact_mode` or a page count (`routes/recreate.js ownerOnlyOptions`,
+  `routes/projects.js ownerOnlySettings`, both pure). Everyone keeps "Copy my site" (as-is, its stack, pages, optional address,
+  `reuseAsIs` = "Rebuild from the last visit") and `resume`. The check reads the request only: the engines (`recreate/index.js`) run
+  whatever payload their caller gives, for the route, autoResume and the per-page fallback to come. **Accounts off = everyone is the
+  owner**, so **`NODE_ENV=production` refuses to start without `SAS_ACCOUNTS=1`** (`config/index.js startupProblems`, like
+  SAS_DEV_NO_VERIFY). The app draws the advanced options only for the owner (`store selectIsOwner`, from `/auth/me`). Tests:
+  `owner-options.test.js` (6).
 - **Test accounts** (`npm run accounts -w server [-- list | delete <email> … [--yes]]`, `scripts/accounts.mjs`): deletes named
   accounts with their sessions and email codes only (codes reference the user, so they must go too); refuses the owner account, an
   account that owns a project, and an unknown address — one refusal and nothing is deleted; without `--yes` it only shows; in one
