@@ -18,6 +18,11 @@
 //                        http://127.0.0.1 has no TLS, and a browser drops a Secure cookie there).
 //   SAS_PUBLIC_ORIGIN    the address people open the app at (default http://localhost:5173); a state-changing request whose
 //                        Origin is neither it nor the address it was sent to is refused.
+//   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, MAIL_FROM
+//                        where verification emails go out (src/mail.js). Port 465 = TLS from the first byte, any other port =
+//                        STARTTLS required, except a host on this computer (a local relay, the test server) = no TLS. Without
+//                        SMTP_HOST a development server writes each mail to its log instead; production with accounts on
+//                        refuses to start, because sign-up would make accounts nobody can ever verify. SMTP_PASS is never logged.
 
 export const DEFAULT_BIND_HOST = '127.0.0.1';
 
@@ -65,6 +70,35 @@ export function cookieSecure() {
 }
 
 /**
+ * How verification emails leave this server, from SMTP_* and MAIL_FROM. `transport` is 'smtp' when SMTP_HOST is set, else 'log'
+ * (each mail printed to the server log; development only — production refuses to start, see startupProblems). `tls` follows the
+ * port and host: 465 = 'implicit', a loopback host = 'none', anything else = 'starttls' (required: a server that does not offer
+ * it is refused, so a password never crosses the network in the clear). The password is read here and nowhere else.
+ * @returns {{ transport: 'smtp' | 'log', host: string, port: number, tls: 'implicit' | 'starttls' | 'none', user: string, pass: string, from: string }}
+ */
+export function mailConfig() {
+  const env = (k) => (process.env[k] ?? '').trim();
+  const host = env('SMTP_HOST');
+  const port = Number(env('SMTP_PORT') || (host ? 587 : 0));
+  const tls = port === 465 ? 'implicit' : isLoopbackHost(host) ? 'none' : 'starttls';
+  return { transport: host ? 'smtp' : 'log', host, port, tls, user: env('SMTP_USER'), pass: env('SMTP_PASS'), from: env('MAIL_FROM') };
+}
+
+/** Sentences describing an unusable mail setting, empty when it can be used as it is. */
+export function mailProblems() {
+  const m = mailConfig();
+  const out = [];
+  if (m.transport === 'smtp') {
+    if (!Number.isInteger(m.port) || m.port < 1 || m.port > 65535) out.push(`SMTP_PORT must be a port number (it is "${process.env.SMTP_PORT ?? ''}").`);
+    if (Boolean(m.user) !== Boolean(m.pass)) out.push('SMTP_USER and SMTP_PASS go together: set both, or neither for a relay that needs no sign-in.');
+    if (!m.from || !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(m.from.replace(/^.*<([^>]+)>$/, '$1'))) {
+      out.push('MAIL_FROM must be the address the emails come from (an address, or "Name <address>").');
+    }
+  }
+  return out;
+}
+
+/**
  * Lines printed at every start while a development-only setting is on, so it is never forgotten.
  * @returns {string[]}
  */
@@ -74,6 +108,12 @@ export function startupNotices() {
     out.push('!!! SAS_DEV_NO_VERIFY is ON: new accounts are marked verified on sign-up without any email. Local development only. !!!');
   } else if (devNoVerify()) {
     out.push('SAS_DEV_NO_VERIFY is set but has no effect: SAS_ACCOUNTS is off.');
+  }
+  if (accountsEnabled()) {
+    const m = mailConfig();
+    out.push(m.transport === 'smtp'
+      ? `Mail: SMTP ${m.host}:${m.port} (${m.tls === 'implicit' ? 'TLS' : m.tls === 'starttls' ? 'STARTTLS' : 'no TLS, local relay'})${m.user ? ` as ${m.user}` : ''}, from ${m.from}.`
+      : 'Mail: no SMTP_HOST set, so verification emails are written to this log instead of being sent. Development only.');
   }
   return out;
 }
@@ -98,6 +138,13 @@ export function startupProblems() {
     problems.push(`SAS_DEV_NO_VERIFY=1 skips email verification and is only allowed for local development: NODE_ENV must not be `
       + `production (it is ${process.env.NODE_ENV || 'unset'}) and the API must listen on this computer only (SAS_BIND_HOST is ${bindHost()}). `
       + 'Remove SAS_DEV_NO_VERIFY.');
+  }
+  if (accountsEnabled()) {
+    if (isProduction() && mailConfig().transport !== 'smtp') {
+      problems.push('SAS_ACCOUNTS=1 in production needs a mail server (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, MAIL_FROM): without one, '
+        + 'sign-up would create accounts that can never receive their verification code.');
+    }
+    problems.push(...mailProblems());
   }
   return problems;
 }

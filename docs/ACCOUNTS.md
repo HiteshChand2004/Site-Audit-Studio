@@ -65,7 +65,7 @@ are allowed. The user's dev server (4000 / 5173) runs from `Website-Audit-exact`
 ## Stage 2 — done (sign-up, sessions, the gate; email verification built, not required)
 
 - **`/api/auth`** (`server/src/accounts/routes.js`), mounted only while `SAS_ACCOUNTS=1`: `POST /signup`, `POST /login`, `POST /logout`,
-  `GET /me`, `POST /verify/send`, `POST /verify { code }`. Errors are `{ error: <sentence>, field? }` for the form.
+  `GET /me`, `POST /verify/send` (removed in Stage 5), `POST /verify { code }`. Errors are `{ error: <sentence>, field? }` for the form.
   - Passwords: Node's scrypt (`accounts/passwords.js`, N 2^15, r 8, p 1, 16-byte salt, parameters stored in the hash), 8–200 chars;
     an unknown address does the same scrypt work and gets the same "Wrong email or password."
   - Sessions (`accounts/store.js`): 32 random bytes (base64url) in the cookie, only its SHA-256 in `sessions`; 30 days; a sign-in
@@ -178,6 +178,55 @@ are allowed. The user's dev server (4000 / 5173) runs from `Website-Audit-exact`
   drift; theme colour #FAFAF7; tab title "<site> · Remastly" / "Your websites · Remastly". Checked in a headed Chromium: both tabs
   load byte-identical icons.
 
+## Stage 5 — done (email verification at sign-up: the code is emailed, sign-in needs it)
+
+- **Mail** (`server/src/mail.js`): the one way out is `sendMail({ to, subject, text, html?, attachments? })`; behind it nodemailer (7.0.13, the only new
+  dependency: SMTP, STARTTLS and AUTH are security-sensitive and a library that has seen every server quirk is the safer choice)
+  over SMTP from `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM` (`config/index.js mailConfig`). Port 465 = TLS from
+  the first byte; any other port = STARTTLS **required**; a loopback host (a local relay, the test server) = no TLS. Without
+  `SMTP_HOST` a development server prints each mail to its log (`[mail] (not sent: no SMTP_HOST) to … — <subject>`); **production
+  with accounts on and no SMTP refuses to start**, as does a half-set SMTP (user without password, no MAIL_FROM, a port that is not
+  one). The start-up line names host, port, TLS mode, user and sender — never the password; a send failure is logged with
+  nodemailer's code and the server's reply, never the credentials. `npm run mail:test -w server -- <address>` sends one test mail
+  (the real verification design with a sample code).
+- **The verification email** (`accounts/verificationMail.js`): subject "Your Remastly verification code"; a plain-text part and an
+  HTML alternative that say the same (multipart/alternative; a client with HTML off reads the text). The HTML is the marketing
+  site's light theme (#FAFAF7 base, white card, #111 ink, the orange as a top rule), the logo at the top, the code large in
+  monospace as one copyable run of digits, "This code expires in 10 minutes", the tries / no-resend line small, and "If you
+  didn't sign up for Remastly, you can ignore this email." The logo is `server/assets/mail/remastly-logo.png` (a 416 × 104 PNG: the marketing site's `public/logo.png`
+  on a white card with padding and rounded corners, so it stays readable when a dark-mode client paints the mail black; the head also
+  declares the mail light only; Gmail draws no SVG), shipped as an **inline CID attachment** (multipart/related),
+  so the mail fetches nothing: no remote picture, no link, no tracking pixel. `accounts/policy.js` holds `CODE_MINUTES` /
+  `CODE_ATTEMPTS` without the database behind them (re-exported by `store.js`), so the template and `mail:test` can read them.
+- **Codes** (`accounts/store.js`): six digits from `crypto.randomInt`, only `sha256(<row id>:<code>)` stored, **10 minutes**,
+  **5 tries** (the fifth wrong try retires the code, so the right code afterwards is refused too), hashes compared with
+  `timingSafeEqual`; a used, expired or exhausted code is refused whatever is typed. **No resend** (`/verify/send` is gone: 404)
+  and no password reset — the user's decision. The only way to a new code is **signing up again with the same address**: an
+  unverified account is a claim, so that sets a new password, ends its sessions and emails a fresh code; the previous code is
+  retired. Every dead-code answer says so (`reason` = `expired` | `too-many` | `used` | `none`, `next: 'signup'`); a wrong
+  code says how many tries are left (`triesLeft`). The sign-up answer carries `verification` = { sentTo, expiresAt,
+  expiresInMinutes 10, attempts 5, resend false, next 'signup' }, so the form never promises a resend.
+- **Per-address cap** (`CODES_PER_HOUR` 3, `CODES_PER_DAY` 6, counted in `email_codes` by address, so a restart forgets nothing):
+  a stranger typing someone else's address into sign-up cannot flood that inbox or get the sending account reported. A capped
+  sign-up answers 429 + Retry-After (`field: 'email'`, `reason: 'code-limit'`, `retryAfterMinutes`) **before anything is
+  written** — the existing unverified account keeps its password. A code whose email could not be sent (503, `reason: 'mail'`,
+  no session) is deleted and does not count.
+- **Sign-in refuses an unverified account**: 403 `{ auth: 'verify', next: 'signup' }`, no session (a wrong password is still 401
+  with the one message). The gate's 403 for an unverified *session* (made by sign-up) is unchanged, so the app and the proxy still
+  send such a visitor to `/auth?verify=1`, where the code step belongs. Unknown routes under `/api/auth` answer 404.
+- `SAS_DEV_NO_VERIFY=1` unchanged: verified at sign-up, no mail; refused outside non-production + loopback. The real database
+  (2026-10-23) holds one account, the owner, verified (claimed under the flag) — nothing changes for it.
+- **The marketing form** (`remastly-website/components/auth/AuthForm.tsx`): not changed from this repo; the code step (six-digit
+  field after sign-up and on `?verify=1`, the server's sentences shown as they are, "Start over" = sign up again) is a patch the
+  user applies in that repo's own session.
+- Tests: `otp.test.js` (4: the settings and their refusals; the mailer against a fake SMTP server in-process — sign-in with the
+  configured credentials, a refused sign-in without the password in the error; a real server over HTTP: the code reaches the
+  fake server and nothing else, wrong × 5 → dead, right code dead too, sign-in refused, sign-up again → new code → verified →
+  sign-in; expired and used codes; 3 per hour and 6 per day with nothing written; a refusing mail server → 503 and no count; the
+  log holds no code and not the password; `SAS_DEV_NO_VERIFY` sends nothing; production without SMTP and every half-set SMTP
+  refuse to start before opening a database), `stage2.test.js` (9, the log transport path). No real mail was sent while building
+  this; the one approved test mail is the proof of the STARTTLS path, which the fake server (no TLS) cannot give.
+
 ## Findings recorded for later stages
 
 ### Schema drift across branches (item 6)
@@ -263,7 +312,7 @@ are allowed. The user's dev server (4000 / 5173) runs from `Website-Audit-exact`
 ## Next (one stage at a time, each tested on its own)
 1. Stage 1 — accounts data model, dormant: `users`, `sessions`, `email_codes`, nullable `projects.owner_id` (no cascade), an owner
    account from env with every existing project assigned to it in one transaction; rehearsed on a copy of the real DB first.
-2. Stage 2 — mail module (`nodemailer` SMTP from env + a log transport for development).
+2. Stage 2 — mail module (`nodemailer` SMTP from env + a log transport for development) — done in Stage 5.
 3. Stage 3 — sign-up, OTP, sessions, every route filtered by owner (switch on, scratch data, two accounts).
 4. Stage 4 — login screens in the client. 5. Plans and limits. 6. Upgrade / payments. 7. Hosting (Phase 6). 8. Remastly restyle.
 Decisions needed before Stage 3: passwordless OTP vs password + OTP verification; email provider; what counts as "one site";

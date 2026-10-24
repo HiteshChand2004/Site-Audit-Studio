@@ -5,7 +5,7 @@
 //   /api/    the API (port 4000) with accounts on (SAS_ACCOUNTS=1)
 // Email verification is stubbed: the API runs with SAS_DEV_NO_VERIFY=1, so a new account is verified on sign-up (the API prints
 // its warning line at start). `npm run local -- --verify` runs the real behaviour instead: a new account is unverified and the
-// gate keeps it out (the code is printed in the API's log; no mail module yet).
+// gate keeps it out; the code is emailed through the SMTP_* settings of server/.env, or written to the API's log when there are none.
 // Everything else comes from server/.env as usual (SAS_DATA_DIR, SAS_ALLOW_LOCALHOST…); the settings above win over it.
 //
 // Options: --verify   SAS_LOCAL_PORT (8080)   SAS_MARKETING_DIR (../remastly-website, next to this repo)
@@ -104,7 +104,7 @@ const proxy = createLocalProxy({
 proxy.listen(PORT, '127.0.0.1', () => {
   out('proxy', `Open ${PUBLIC}  —  marketing at /, the tool at /app/, the API at /api/ (all four start in a few seconds).`);
   out('proxy', VERIFY
-    ? 'Email verification is REQUIRED (--verify): a new account is kept out until verified; codes appear in the [api] log.'
+    ? 'Email verification is REQUIRED (--verify): a new account is kept out until verified; codes are emailed (SMTP_* in server/.env), or appear in the [api] log without SMTP.'
     : 'Email verification is STUBBED (SAS_DEV_NO_VERIFY=1): a new account is verified on sign-up. Use --verify for the real behaviour.');
 });
 // localhost may resolve to ::1 first: answer there too (this computer only).

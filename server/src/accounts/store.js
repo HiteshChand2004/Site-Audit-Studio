@@ -1,13 +1,18 @@
 // @ts-check
 // Every SQL statement about accounts, behind small functions (docs/ACCOUNTS.md: a later move to Postgres is this one module).
 // Tables from db/migrations.js: users, sessions, email_codes. Session tokens and email codes are never stored, only their hashes.
-import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { db } from '../db/index.js';
 
 export const SESSION_DAYS = 30;
 const TOUCH_EVERY_MS = 10 * 60 * 1000;
-export const CODE_MINUTES = 15;
-export const CODE_ATTEMPTS = 5;
+export { CODE_MINUTES, CODE_ATTEMPTS } from './policy.js'; // the numbers live without the database, so the mail template can read them
+import { CODE_MINUTES, CODE_ATTEMPTS } from './policy.js';
+// Codes emailed to one address (whoever asked): a cap per hour and per day, so a stranger typing someone's address into sign-up
+// again and again cannot flood that inbox, and the sending account is not reported for it. There is no resend route, so each
+// code is one sign-up.
+export const CODES_PER_HOUR = 3;
+export const CODES_PER_DAY = 6;
 
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const iso = (ms = Date.now()) => new Date(ms).toISOString();
@@ -120,17 +125,20 @@ export const endSession = (token) => { if (token) deleteSessionByToken.run(sha25
 
 // --- email codes ------------------------------------------------------------------------------------------------------------
 const insertCode = db.prepare('INSERT INTO email_codes (id, user_id, email, purpose, code_hash, attempts, created_at, expires_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)');
-const latestCode = db.prepare('SELECT * FROM email_codes WHERE user_id = ? AND purpose = ? AND used_at IS NULL ORDER BY created_at DESC LIMIT 1');
+const latestCode = db.prepare('SELECT * FROM email_codes WHERE user_id = ? AND purpose = ? ORDER BY created_at DESC LIMIT 1');
 const countAttempt = db.prepare('UPDATE email_codes SET attempts = attempts + 1 WHERE id = ?');
 const useCode = db.prepare('UPDATE email_codes SET used_at = ? WHERE id = ?');
 const retireCodes = db.prepare('UPDATE email_codes SET used_at = ? WHERE user_id = ? AND purpose = ? AND used_at IS NULL');
+const deleteCodeById = db.prepare('DELETE FROM email_codes WHERE id = ?');
+const codesSince = db.prepare('SELECT created_at FROM email_codes WHERE email = ? AND purpose = ? AND created_at > ? ORDER BY created_at ASC');
 
 const codeHash = (id, code) => sha256(`${id}:${code}`);
 
 /**
- * A new six-digit code for this purpose; earlier unused ones stop working.
+ * A new six-digit code for this purpose; earlier unused ones stop working. The code itself is returned once, to be emailed, and
+ * only its hash (salted with the row's own id) is stored.
  * @param {UserRow} user @param {string} purpose
- * @returns {{ code: string, expiresAt: string }}
+ * @returns {{ id: string, code: string, expiresAt: string }}
  */
 export function createCode(user, purpose) {
   const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
@@ -139,28 +147,48 @@ export function createCode(user, purpose) {
   const expiresAt = iso(now + CODE_MINUTES * 60_000);
   retireCodes.run(iso(now), user.id, purpose);
   insertCode.run(id, user.id, user.email, purpose, codeHash(id, code), iso(now), expiresAt);
-  return { code, expiresAt };
+  return { id, code, expiresAt };
 }
 
-/** When the latest unused code of this purpose was made, or null. */
-export function lastCodeAt(userId, purpose) {
-  const row = /** @type {any} */ (latestCode.get(userId, purpose));
-  return row ? Date.parse(row.created_at) : null;
+/** A code whose email could not be sent is removed: it counts for nothing (not for the per-address cap either). */
+export const discardCode = (id) => deleteCodeById.run(id);
+
+/**
+ * Whether one more code may be emailed to this address now, under CODES_PER_HOUR / CODES_PER_DAY (every code made for the
+ * address counts, used or not: what matters is what reached the inbox).
+ * @returns {{ ok: true } | { ok: false, retryAfterMs: number, window: 'hour' | 'day' }}
+ */
+export function codeAllowance(email, purpose, now = Date.now()) {
+  const day = /** @type {{ created_at: string }[]} */ (codesSince.all(email, purpose, iso(now - 86400_000))).map((r) => Date.parse(r.created_at));
+  if (day.length >= CODES_PER_DAY) return { ok: false, retryAfterMs: day[day.length - CODES_PER_DAY] + 86400_000 - now, window: 'day' };
+  const hour = day.filter((t) => t > now - 3600_000);
+  if (hour.length >= CODES_PER_HOUR) return { ok: false, retryAfterMs: hour[hour.length - CODES_PER_HOUR] + 3600_000 - now, window: 'hour' };
+  return { ok: true };
 }
 
 /**
- * Checks a code. 'ok' uses it up; every wrong try counts, and after CODE_ATTEMPTS the code is dead.
- * @returns {'ok' | 'wrong' | 'expired' | 'none' | 'too-many'}
+ * Checks a code against the latest one of this purpose. 'ok' uses it up. A used, expired or exhausted code is refused whatever is
+ * typed; a wrong try counts, and the try that reaches CODE_ATTEMPTS retires the code. The hashes are compared in constant time.
+ * @returns {{ status: 'ok' | 'wrong' | 'used' | 'expired' | 'none' | 'too-many', triesLeft: number }}
  */
 export function checkCode(userId, purpose, code) {
   const row = /** @type {any} */ (latestCode.get(userId, purpose));
-  if (!row) return 'none';
-  if (Date.parse(row.expires_at) <= Date.now()) return 'expired';
-  if (row.attempts >= CODE_ATTEMPTS) return 'too-many';
-  if (codeHash(row.id, String(code ?? '').trim()) !== row.code_hash) {
+  if (!row) return { status: 'none', triesLeft: 0 };
+  if (row.attempts >= CODE_ATTEMPTS) return { status: 'too-many', triesLeft: 0 };
+  if (row.used_at) return { status: 'used', triesLeft: 0 };
+  if (Date.parse(row.expires_at) <= Date.now()) return { status: 'expired', triesLeft: 0 };
+  const given = Buffer.from(codeHash(row.id, String(code ?? '').trim()), 'hex');
+  const stored = Buffer.from(String(row.code_hash), 'hex');
+  const same = given.length === stored.length && timingSafeEqual(given, stored);
+  if (!same) {
     countAttempt.run(row.id);
-    return row.attempts + 1 >= CODE_ATTEMPTS ? 'too-many' : 'wrong';
+    const left = CODE_ATTEMPTS - (row.attempts + 1);
+    if (left <= 0) {
+      useCode.run(iso(), row.id); // dead: a later correct guess is refused too
+      return { status: 'too-many', triesLeft: 0 };
+    }
+    return { status: 'wrong', triesLeft: left };
   }
   useCode.run(iso(), row.id);
-  return 'ok';
+  return { status: 'ok', triesLeft: 0 };
 }
