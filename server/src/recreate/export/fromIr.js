@@ -30,8 +30,18 @@ export function outputRoot(dir, report, stack) {
   return path.join(project, dist);
 }
 
-/** The output to preview and re-audit: `wanted` (the project's stack) when it is ready, the plain-HTML build otherwise. */
-export const targetStack = (report, wanted = report.stack) => (reportOutputs(report)[wanted]?.status === 'ready' ? wanted : 'html');
+/**
+ * The output to preview and re-audit: `wanted` (the project's stack) when it is ready; else the stack an as-is copy was made in
+ * (the app sends that stack with the request and does not save it on the project, so a copy made in Next.js on a project saved
+ * as plain HTML has no plain-HTML build at all); else the plain-HTML build.
+ */
+export const targetStack = (report, wanted = report.stack) => {
+  const outputs = reportOutputs(report);
+  if (outputs[wanted]?.status === 'ready') return wanted;
+  const made = report?.asIs?.stack;
+  if (made && outputs[made]?.status === 'ready') return made;
+  return 'html';
+};
 
 /**
  * The pages of an output: [{ outPath (in the original site), path (its URL path in this output, "/about/") }].

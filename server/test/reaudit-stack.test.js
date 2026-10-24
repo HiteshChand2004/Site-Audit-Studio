@@ -32,6 +32,11 @@ test('the audited output is the project stack when ready, else the plain-HTML bu
   assert.equal(targetStack(r, 'mern'), 'html'); // failed
   assert.equal(targetStack(r, 'react-vite'), 'html'); // never built
   assert.equal(targetStack(report(undefined), 'html'), 'html');
+  // An as-is copy made in another stack than the project's saved one (the app sends the stack with the request): that copy's
+  // output is the one to preview and re-audit, since it has no plain-HTML build (found on a live run: the re-audit failed).
+  const asIs = report({ nextjs: { status: 'ready', dir: 'stacks/nextjs', dist: 'out', mode: 'as-is' } }, { stack: 'html', asIs: { stack: 'nextjs' } });
+  assert.equal(targetStack(asIs, 'html'), 'nextjs');
+  assert.equal(outputRoot('/r', asIs, targetStack(asIs, 'html')), path.join('/r', 'stacks/nextjs', 'out'));
   assert.equal(outputRoot('/r', r, 'nextjs'), path.join('/r', 'stacks/nextjs', 'out'));
   assert.equal(outputRoot('/r', r, 'html'), path.join('/r', 'dist'));
   assert.deepEqual(outputPages(r, 'nextjs'), [{ outPath: 'index.html', path: '/' }, { outPath: 'about.html', path: '/about/' }]);

@@ -72,13 +72,8 @@ export function planAttributes(tag, attribs, { inHead = false } = {}) {
     if (/^on[a-z]/.test(lower)) return { fail: 'an inline event handler, which React cannot write as text', attribute: name };
     if (RESERVED.has(lower) && !custom) return { fail: 'an attribute name React reserves for itself', attribute: name };
     if (URL_ATTRS.has(lower) && /^\s*javascript:/i.test(value)) return { fail: 'a javascript: address, which React blocks', attribute: name };
-    if (svgLike) {
-      // An SVG attribute: React's camelCase name (viewBox stays; stroke-width → strokeWidth; xlink:href → xlinkHref).
-      if (!/^[A-Za-z_][A-Za-z0-9_.:-]*$/.test(name)) return { fail: 'an attribute name React cannot write', attribute: name };
-      props.push(jsxAttr(tag === 'svg' ? svgPropName(name) : name, value));
-      continue;
-    }
-    if (!VALID_NAME.test(name)) return { fail: 'an attribute name React cannot write', attribute: name };
+    // An inline style is an object on every element, <svg> and <math> included: React refuses a style written as text
+    // (the build stops), and a builder often styles its SVG wrappers inline.
     if (lower === 'style') {
       const decls = declarations(value).filter((d) => d.trim());
       const obj = styleObject(value);
@@ -88,6 +83,13 @@ export function planAttributes(tag, attribs, { inHead = false } = {}) {
       props.push(jsxAttr('style', obj));
       continue;
     }
+    if (svgLike) {
+      // An SVG attribute: React's camelCase name (viewBox stays; stroke-width → strokeWidth; xlink:href → xlinkHref).
+      if (!/^[A-Za-z_][A-Za-z0-9_.:-]*$/.test(name)) return { fail: 'an attribute name React cannot write', attribute: name };
+      props.push(jsxAttr(tag === 'svg' ? svgPropName(name) : name, value));
+      continue;
+    }
+    if (!VALID_NAME.test(name)) return { fail: 'an attribute name React cannot write', attribute: name };
     if (custom) {
       // React writes a custom element's props as the attributes they are named: the HTML names stay.
       props.push(jsxAttr(lower, value));

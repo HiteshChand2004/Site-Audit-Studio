@@ -16,6 +16,8 @@ test('attributes follow the React emitter rules: class, for, style objects, bool
   // A custom element keeps its HTML names: React writes its props as the attributes they are named.
   assert.deepEqual(planAttributes('x-card', { for: 'a', tabindex: '0', checked: '' }), { props: ['for="a"', 'tabindex="0"', 'checked=""'] });
   assert.deepEqual(planAttributes('svg', { viewBox: '0 0 8 8', 'stroke-width': '2', 'xlink:href': '#a' }), { props: ['viewBox="0 0 8 8"', 'strokeWidth="2"', 'xlinkHref="#a"'] });
+  // An inline style on an <svg> is an object too: React stops the build on a style written as text (found on a builder's site).
+  assert.deepEqual(planAttributes('svg', { style: 'width:100%;height:100%;overflow: visible;' }), { props: ['style={{"width":"100%","height":"100%","overflow":"visible"}}'] });
   assert.deepEqual(planAttributes('img', { srcset: 'a 1x', fetchpriority: 'high', crossorigin: '' }), { props: ['srcSet="a 1x"', 'fetchPriority="high"', 'crossOrigin=""'] });
 });
 
