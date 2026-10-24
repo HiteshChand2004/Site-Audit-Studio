@@ -72,7 +72,7 @@ export const pagePath = (outPath) => outPath.replace(/(^|\/)index\.html$/, '$1')
  * @param {string[]} [o.skip]  Analyze steps to leave out (tests also leave out Lighthouse)
  * @returns {Promise<object>} { recreateId, analysisId, origin, pages, audit, checklist }
  */
-export async function runReaudit({ project, reauditId, recreateId, progress, skip = SKIPPED_STEPS }) {
+export async function runReaudit({ project, reauditId, recreateId, progress, skip = SKIPPED_STEPS, signal = null }) {
   progress('serve', 0);
   const row = selectRecreate.get(recreateId, project.id);
   if (!row) throw new ReauditError('This recreate is no longer available. Run Recreate again.');
@@ -132,7 +132,10 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
       lighthouseOrigin: (device) => measured[device].origin,
       // Measured like the original was: a computer much busier now than then repeats a run with a scaled CPU slowdown.
       lighthouseBaseline: await benchmarkOf(auditDir(project.id, report.analysisId)),
+      // The job manager's stop (the app's Stop, the hard time limit): the analysis ends at its next step.
+      signal,
     });
+    if (signal?.aborted) throw Object.assign(new Error('Stopped before it finished.'), { stopped: true });
     // The analysis contract carries a sample checklist for the OLD site; it means nothing here.
     delete audit.recreate;
 

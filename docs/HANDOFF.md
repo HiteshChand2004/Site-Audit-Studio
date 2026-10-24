@@ -560,7 +560,11 @@ above; visual gate; re-audit):
   a local proxy that stalls one host + Lighthouse), `nyaayai-fresh-copy.mjs` (one as-is copy + re-audit on a scratch data folder,
   summary and folders copied out), `nyaayai-reaudit.mjs` (a re-audit alone of a finished recreate, same folder rule) and the other scratch scripts of the step-4 sessions (never committed; they import from a
   worktree's `server/src`, so run them from a worktree's `server/` folder or fix the import paths).
-- **Gotcha**: importing `server/src/db/index.js` from a second process (any script opening the same scratch `app.db`) marks every
+- **Gotcha, FIXED on `job-lock` (2026-10-24)**: importing `server/src/db/index.js` from a second process used to mark every
+  `running` recreate as failed ("The server restarted while this job was running", `db/index.js:24`). Now the module only opens
+  the database; the server marks a job failed only when its heartbeat has stopped (see "Branch `job-lock`" below). On branches
+  before it the old behaviour stands: never open a running job's database from another process there.
+- **Gotcha (as written before the `job-lock` merge; kept for the production assessment)**: importing `server/src/db/index.js` from a second process (any script opening the same scratch `app.db`) marks every
   `running` recreate as failed with "The server restarted while this job was running" (`db/index.js:24`). The job itself goes on
   and writes its row back; still, never open a running job's database from another process — read its log / summary.
   **In production** (assessed 2026-10-24, not fixed): it needs two processes on one data folder — a zero-downtime reload or a
@@ -693,3 +697,225 @@ Also known: clean-rebuild captures taken between 19ddc59 (2026-10-18 08:58 UTC) 
 scratch corpus that is dreamhire d541c77b, parchaa 5543a393, flexibench dcecafc4 / fe1df206 (partly) and makememo 1fe625e9 (as-is
 fallback). The real database very likely has such runs too (the dev server ran this code in that window) — not checked: the
 real data folder was not read. `scratchpad/window.mjs` of the 2026-10-21 session lists them read-only, given a data folder.
+
+## Branch `owner-options` (worktree `../Website-Audit-owner`, from `step4-lighthouse` fc059a4), 2026-10-24
+
+Done in parallel with the step-4b session; nothing pushed; full suite not run (one test file at a time, `npx vite build`).
+1. **PARKED 7 fixed (4dbd6db)**: `routes/recreate.js EXACT_FILE` and the folder picker have their backslashes back; `recreate-exact-route.test.js`
+   requests one file of every kind the comparison writes (names from `bandFile` / `copyBand` / `mapFile` / `cropFile`) and bad names. Only an
+   exact-mode run shows that table, so ordinary copies never saw the 404s. A sweep (regex literals with a bare `d{`, `s+`, `w+`, an unescaped
+   `.ext$`) over `server/src`, `client/src`, `scripts` found nothing else.
+2. **New-site address optional (20bb9a0)**: the Copy panel and the settings dialog accept an empty address and say what the copy does without
+   one (as-is: canonical / robots.txt kept as lifted, no sitemap.xml, an open item "new-site address"; clean: the original's address written
+   and a report warning). The Create step asks once before the first copy, then starts at once. Server unchanged (already optional).
+3. **Owner-only options, enforced on the server** (see `docs/ACCOUNTS.md` "Owner-only options"): `accounts/roles.js isOwner / refuseNonOwner`;
+   `routes/recreate.js ownerOnlyOptions`, `routes/projects.js ownerOnlySettings`, POST …/export; **`NODE_ENV=production` refuses to start
+   with accounts off** (`config/index.js startupProblems`). App: `store.me` / `selectIsOwner`; the Create step's "Advanced options" and the
+   Results step's build-another-stack picker draw for the owner only; an ordinary user with an as-is copy gets "Rebuild from the last visit"
+   (`reuseAsIs`, text says it shows the site as it was then). The engines are untouched: `recreate/index.js` runs clean / exact / as-is from
+   the payload for any caller — the route, `recreate/jobs.js autoResume`, and the per-page fallback, which will call them from
+   `copy/run.js checkPage` (`deps.rebuildClean`, `deps.correct` → the clean pipeline and `verify/exact/correct.js`) in-process, never through
+   the route. Tests: `owner-options.test.js` (6).
+4. **Task 4 — read-only re-score of the published "visual match" 93 (collateral) and 98 (indikaai)**, 2026-10-24. What the two
+   numbers are (from `remastly-website/lib/content.ts`): collateral's 93 = the **homepage view score** of exact run 3019a275
+   (13 Oct; `fidelity.pages['/'].views.desktop.score` and `.mobile.score` = 93: 35 % sizes 0.97 + 25 % boxes 0.99 + 40 % `visual`
+   0.856; the site score is 96, the SSIM diff 93); indikaai's 98 = **`fidelity.score`** of exact run f6035800 (15 Oct; `visual`
+   0.996–0.998 per view, diff 98–99). Both rulers tolerate what the question names: `verify/layout.js visualSimilarity` shrinks both
+   pictures to 96 px wide and counts a pixel as the same when its largest channel difference is ≤ 32 levels (`COLOR_TOLERANCE`), to
+   3 decimals of the page; `verify/visualDiff.js` is SSIM on luma at 384 / 96 px with a colour factor free up to 12 levels.
+   **How**: a scratch copy of the real `app.db` (+ WAL) and of collateral's run folder (`capture/<slug>/<view>-full.webp`,
+   `fidelity/<slug>/<view>-full.webp`, `report.json`), re-scored with the pipeline's own functions plus `verify/exact/pixels.js
+   exactDiff` (YIQ distance, threshold 0.1, antialiased edges set aside, every pixel) on every page × view (12 pages × 5 views);
+   the phone pictures of the capture are DPR 2 and the fidelity render DPR 1, so the larger was scaled to the other's width first
+   (Lanczos; an approximation, so said). Script and full table kept in `C:/Users/urvas/Downloads/remastly-live-results/collateral-rescore-2026-10-24/`.
+   Scratch copies deleted afterwards; nothing written to the real data or the marketing site.
+   **Collateral, real figures** (stored → re-run → exact ruler): homepage desktop visual 0.856 → 0.862, exact **11.36 %** differing
+   pixels; mobile 0.857 → 0.862, exact 11.25 %; tablet 0.826, exact 15.5 %; laptop 0.879, exact 9.4 %; large-phone 0.907, exact 8.3 %.
+   With the exact ruler in the 40 % visual slot the homepage reads **94** on desktop and mobile (published 93): the 96-px ruler
+   counted slightly *more* difference (13.8 %) than the pixel-exact one (11.4 %), because a shifted block blurs across more
+   thumbnail pixels. Site-wide: stored 96 → 96.55 with the exact ruler; exact % per view: desktop 2.4, laptop 2.4, tablet 3.5,
+   large-phone 3.5, mobile 4.5 (mean 3.25 %); the SSIM diff 93 re-runs as 93.7. **So the 93 is not overstated by the rounding or
+   the 32-level tolerance** (the tolerance is the same size as the slack the exact ruler gives, and the layout half of the score
+   dominates). What *is* true: it is a layout-and-thumbnail composite, not a pixel figure; the same run's exact engine (one recipe
+   both sides, the copy's script on, 252 slots) measured **diffMean 5.3 %, worst 21.1 %, 0 of 252 slots accepted** (homepage 1440:
+   0.90 %, 375: 1.09 %, 1920: 5.9 %, 639: 16.0 %). A pixel claim for that copy is "≈ 1 % at 1440 and 375, up to 16–21 % at
+   in-between widths", not 93 of 100.
+   **Indikaai: not re-scorable.** The pictures of f6035800 exist in no store (the real data has only the 23 Oct as-is copy of a new
+   project id and a failed clean one; `sas-corpus` keeps indikaai runs 092a894e and 938bd167 only; `sas-work` the same as real) —
+   retention keeps two recreates per project. Only the marketing site's crops of its first screen survive
+   (`public/shots/indikaai-original.webp` / `-copy.webp`, 900 × 563, cut from that run's `capture/index/exact` and
+   `fidelity/index/exact` per `docs/redesign-notes.md`): exactDiff **0.0116 %** (59 pixels) on that first screen. With `visual`
+   0.996 at 96 px the whole page could hide at most changes ≤ 32 levels per channel or thinner than ~4 CSS px at 375 wide; nothing
+   can be said about them without the pictures. The 98 is neither confirmed nor refuted beyond its first screen.
+
+## Branch `job-lock` (same worktree, from `owner-options` cc1afba), 2026-10-24 — one server per data folder, jobs judged by heartbeat
+
+Why: jobs live in the memory of the process that runs them, and `db/index.js` used to mark every queued / running row failed
+**at import** — a second server, or any script importing the module, killed the bookkeeping of a live job and `autoResume` then
+adopted (renamed) its workspace. Two servers on one `app.db` would also prune each other's recreate folders. Both are closed, generically:
+- **Heartbeat** (`jobs/liveness.js`, column `heartbeat_at TEXT` on `analyses` / `recreates` / `reaudits`, idempotent `addColumn`):
+  `JobManager` writes it with the row and then every **`HEARTBEAT_MS` = 15 s** while the job is queued or running (through the wait
+  for the global lock), `clearInterval` once the row is final; `ownJobs` is the set of ids this process runs. A row is **stale**
+  after **`STALE_MS` = 120 s** without a beat, or with none at all (written by an older server). `adoptStaleJobs()` marks stale rows
+  failed with the old text ("The server restarted while this job was running. Run it again." — the app's `copy.js` knows that
+  case) with a conditional write (`COALESCE(heartbeat_at,'') = <the value read>`), so a beat between read and write keeps the
+  job; rows with a fresh heartbeat are counted (`alive`) and never touched, so their workspace is never adopted or renamed.
+  **Why 15 s / 120 s**: a beat is one tiny WAL write, so 15 s is free; 120 s = 8 missed beats, longer than any event-loop stall a
+  live process has shown here (5–10 s freezes on an overloaded laptop; the interrupts watcher counts sleep from 30 s), short
+  enough that a crashed server's job is picked up within ~2–4 min of the next start. Laptop sleep suspends every process on the
+  machine together, so it cannot make a live job look stale to a server started on wake (and the lock refuses one anyway).
+- **Who decides**: `src/index.js` only — `recoverStaleJobs()` (`recreate/jobs.js`: adopt + `resumeInterruptedRecreates(rows)` for
+  the recreates among them) once the server listens, then `watchStaleJobs()` every `STALE_MS`. `db/index.js` touches no job row;
+  `interruptedRecreates` is gone (`resumeInterruptedRecreates` now takes its rows). A script that imports the module to read a
+  database triggers nothing.
+- **Lock file** (`config/dataLock.js`, `<DATA_DIR>/server.lock` = `{ pid, host, startedAt, port }`): `holdDataLock()` in
+  `src/index.js` before the migrations check; created atomically (`wx`), touched every 15 s, removed on `process.exit` (the
+  SIGINT / SIGTERM shutdown goes through it) only while it still names our pid. A second server exits 1 with
+  "Not starting: Another server is already using the data folder <dir> (process <pid> on <host>, port <p>, started <t>). Stop it
+  first, or give this server its own folder with SAS_DATA_DIR. If no server is running there …, delete <file> and start again."
+  Recovery: same host → the lock is held while that pid is alive (`process.kill(pid, 0)`; a crash / kill -9 / TerminateProcess
+  leaves the file and the next start takes it over; a reused pid is the one blind spot, hence the message); another host (shared
+  disk) → held while the file was touched within `LOCK_STALE_MS` = 120 s. Unreadable file = nobody's. Only the server takes it:
+  scripts, `db:migrate` and tests never do (`scripts/dev.js` kills the old child and awaits its exit before starting the next, so
+  the dev loop sees a dead pid and takes over).
+  **Containers (second commit)**: a restarted container often gets the same pid (1) and a new hostname, so (1) the lock carries a
+  random **`INSTANCE_ID`** made at start, and that id alone says whether the file is ours when it is touched (`refresh`, false and a
+  one-time warning when another instance holds it now) or released (`release`, never another's); (2) a lock **naming our own pid**
+  cannot be a live process (we have not written one yet) and is taken over at once, whatever host it names; (3) a lock from
+  **another host** (replaced container, shared disk) blocks at most `LOCK_STALE_MS` = 120 s after it was last touched, and the
+  refusal says that its server cannot be checked from here, when the lock expires ("expires N s from now"), and that deleting the
+  file starts now — so a restart policy that starts the container again gets through within two minutes. Stated trade-off of
+  (2): two live containers that are both pid 1 on one shared volume would take each other's lock over; that is the
+  misconfiguration the lock exists for, and the job heartbeat (`jobs/liveness.js`) still keeps either one's jobs from being
+  marked failed by the other.
+- Tests: `test/job-lock.test.js` (7): a child process holds the lock → refused with pid and file named → killed like a crash →
+  taken over; a foreign-host lock fresh / stale / garbage, and release never removing another's; **two real `src/index.js`
+  servers on one scratch data folder** (B exits 1 naming A, A still answers, A killed → C starts and holds the lock); heartbeat
+  written while queued and running and stopping with the job, `isStale` rules, a live job never marked from "outside" and own
+  jobs never judged; startup recovery marking only the stale and heartbeat-less rows while a live running and a live queued row
+  and the live job's `.tmp` workspace stay untouched, then the same job continued once its heartbeat ages out; the read-after-beat
+  race; a second process importing `db/index.js` marking nothing and taking no lock. Also run: `recreate-jobs` 15, `recreate-resume`
+  7, `keep-awake` 2, `perf` 10, `stage0` 8, `stage2` 9, `stage3-signout` 2. Full suite not run.
+
+## Launch readiness — job limits (branch `job-lock`, Task A, 2026-10-24)
+
+Hosting is not decided, so every limit is an env setting read at call time (`server/src/jobs/limits.js`, documented in
+`server/.env.example`); one job uses several GB and two at once took a 15 GB machine down, so the defaults are one at a time.
+- **`SAS_MAX_JOBS`** (1–8, default 1): jobs running at once on this server. `jobs/manager.js` replaced the strict serial chain by one
+  FIFO line with that many slots, for every kind (Analyze, Recreate, Re-audit and the stack exports that use `exclusive()` directly);
+  order is never changed. `lockBusy()` / keep-awake unchanged.
+- **`SAS_JOBS_PER_USER`** (1–20, default 1): running or waiting jobs one account may have, counted across kinds by the project's
+  `owner_id`; a second start is refused with `JobLimitError` → 409 `{ error, limit: 'user', busy: { kind, projectId, jobId } }` (no
+  `analysisId` / `recreateId` key, so the app shows the sentence instead of following a job). With accounts off everyone is the one
+  local user (owner null), so the cap is the whole queue's depth there — raise it to queue several sites. The server's own follow-up
+  jobs (`{ system: true }`: the resume after a restart, the re-audit after a copy) are not counted against the account; owner
+  accounts follow the same caps (nothing reads the role).
+- **Place in line**: a waiting job's `message` says "Next in line: starts when the job before it finishes." or "Waiting in line: N jobs
+  run or wait before this one.", pushed over the same SSE path on every change, and the snapshot carries `queue: { ahead, position,
+  memory? }` while queued. `AnalyzeProgress.jsx` shows the server's sentence when queued.
+- **`SAS_JOB_MAX_MINUTES`** (1–1440, default **240**, was 480 until the hold-up review below; 0 = none): the hard limit of one running
+  job, above every pipeline's own budget (Analyze 6 min × scale ≤ 30, Recreate 12 min / `SAS_RECREATE_MINUTES` ≤ 60 or per-page limits
+  for every page, an as-is copy 20 min per page + 10 per stack, exact mode none): 240 covers every fixed budget, every real run recorded
+  (longest 146 min) and an as-is copy of up to 11 pages at its budget rate; with one job at a time it is also the longest anyone waits
+  behind one job. A larger site needs it raised or 0, and the row's error names the setting. When it
+  hits, the job is asked to stop exactly like the app's Stop (`controller.abort()`: Recreate saves its checkpoint, `reason: 'stopped'`,
+  "Continue where it stopped" works; Analyze and Re-audit now take `signal` and end at their next step, their browser and proxy
+  closing on the way out), the row reads "Stopped after N minutes: the time limit for one job (SAS_JOB_MAX_MINUTES). What was
+  finished is kept.", and a run that has not ended `TIMING.hardStopGraceMs` = 60 s later loses its slot anyway (row closed, next job
+  starts, the late end logged, never written over the row).
+- **`SAS_JOB_MIN_FREE_MB`** (default 2048; 0 = no check): free memory the first job in line needs before it starts, looked at again
+  every 5 s (`TIMING.memoryPollMs`); meanwhile its message reads "Waiting for memory: X MB free, Y MB needed…". The line keeps its
+  order (a small job never jumps a large one). A job that waited for memory longer than the hard limit fails with the reason
+  instead of stalling the queue silently. 2 GB = the pipeline's own rules for one job (`audit/resources.js`: 150 MB × 4 contexts,
+  300 MB kept free, 900 MB before a second browser) plus Lighthouse's Chrome; macOS reports "unknown" and is never gated.
+- **With the heartbeat and the lock**: a queued job beats from the moment its row exists; the row keeps `payload_json`
+  (`{ payload, warnings, system }`, new column) so a queued job of a dead server is put **back in line in `started_at` order with
+  the same row** (`requeueJobs` → `manager.requeue`, the row claimed by a conditional heartbeat write, `liveness.js claimQueued`, so
+  two servers can never both take it); a queued row without a payload (older server) is failed like a running one. `GET /api/health`
+  reports `jobs: { running, waiting, max, freeMB?, limits }`, and the start-up log prints the four limits.
+- Tests: `test/job-limits.test.js` (6): settings and bounds; FIFO with 1 and 2 slots and the exact sentences and `queue` fields pushed
+  to a subscriber; the per-account cap (refusal names the blocking job, another account passes, system jobs not counted, accounts-off
+  = one local user, cap 2); the memory gate (held with the sentence, released when memory returns, failed with the reason after the
+  hard limit, off at 0); the hard limit on a run that honours the stop and on one that ignores it (slot moves on after the grace
+  period, the late end leaves the row alone), 0 = none; the restart requeue (order, same ids, claimed heartbeats, warnings kept, a
+  second pass starts nothing twice, a row another server took is left). Also passing: job-lock 10, recreate-jobs 15, recreate-resume 7,
+  keep-awake 2, perf 10, owner-options 6, stage0 8, reaudit-stack 6; `npx vite build`. Full suite not run; no browser test.
+
+## Launch readiness — disk cleanup (branch `job-lock`, Task B, 2026-10-24)
+
+**Measured** (read-only, on scratch copies of real data: the 18-project folder `C:\sasd2` and the live-run folder of 2026-10-23/24;
+each file counted once, hard links included):
+
+| What | Size | Where it goes |
+|---|---|---|
+| A finished clean copy (Oct 6–7 runs, 7–30 pages) | 16–235 MB | capture 5–152 MB (the biggest part), fidelity shots 2–41, assets + site + dist 6–35 (hard-linked, counted once), ir 1–3, re-audit raw 1–3; a built stack adds 23–72 MB |
+| An as-is copy of one page (nyaayai, 2026-10-23) | 132 MB | its lift `as-is/` 83 MB, capture 9, packed stack 36, re-audit 3 |
+| A workspace a crashed job left (`<id>.tmp`) | 10–118 MB | the live folder's: 118 MB, of which **36 MB scratch** (`.lift-tmp` etc.) nothing would have removed |
+| An analysis | 1–3 MB | screenshots 0.1–0.4 MB (already kept for the latest 3 only) |
+| `lighthouse-original` per website | 3.5 MB | the original's Lighthouse runs, reused by later re-audits |
+| Temp folder leftovers on this machine | 26 `sas-cache-*` folders, 15 MB | a job's shared static-file cache, left by every crashed or killed job since 2026-10-16 |
+
+**Policy** (`server/src/jobs/cleanup.js`, env in `server/.env.example`): `SAS_KEEP_COPIES_DAYS` (default **30**; 0 = never by age),
+`SAS_CLEANUP_HOURS` (default 6; 0 = start-up and after-job passes only), `SAS_CLEANUP_DRY_RUN=1` (the server's passes only log).
+A pass removes exactly four kinds of thing, each with its reason in the log line: (1) scratch inside a copy's folder (`dist.tmp`,
+`stacks/*.tmp`, `*.html-ref.tmp`, the as-is stage's `.lift-tmp` / `.fetch` / `.complete-tmp` / `.referenced-tmp` / `unfixed`; never
+`capture/.network`, which a rebuild from the capture lifts from again); (2) a `<id>.tmp` workspace whose job is over and cannot be
+continued (the one resumable stopped copy is kept for the existing 7 days; a queued or running job's folder is never touched,
+whichever process runs it, and a row still open without a heartbeat is left to the job recovery, which runs first); (3) a finished copy
+older than the setting that is **not its website's newest finished copy** — the newest is never removed by age, whatever its date
+(its row gets `removed_at`, new column, so the record of the job stays); a copy folder no row knows, once still for a day;
+(4) `sas-cache-*` / `sas-migrate-*` in the temp folder older than the hard job limit (a day when there is none). Previews of a folder
+about to go are stopped first. Analyses are not aged out (the re-audit's baseline; 1–3 MB each). Runs: at start-up after the job
+recovery, after every copy (`sweepJobScratch` for that copy, then the existing per-project retention `pruneRecreates`, which keeps the
+newest two clean copies / newest output per stack / the lift), and every `SAS_CLEANUP_HOURS`. By hand: `npm run cleanup -w server --
+--dry-run` prints the disk table (per website: analyses, copies with their scratch, workspaces; the temp folder) and every item it
+would remove or keep with the reason; without the flag it removes, and refuses while a server holds the data folder's lock (it cleans
+by itself). Why 30 days: longer than every window the app has (7 days to continue a stopped copy, 7 days before an analysis is called
+stale), one plan period, and bounded cost (one extra copy per website for a month: 100 websites × ~100–250 MB = 10–25 GB).
+- Tests: `test/cleanup.test.js` (8): settings; `folderSize` counts a hard link once; old copies go and the only / newest copy never does,
+  scratch inside a kept copy goes, `capture/.network` stays, rows record the removal, a second pass finds nothing, days = 0 removes
+  nothing by age; workspaces (running / own / open-row kept, resumable kept 7 days then removed, dead and unknown removed, a stray
+  folder after a day only); the temp folder (hard limit or a day); dry run lists and removes nothing, `SAS_CLEANUP_DRY_RUN` honoured;
+  the after-job sweep touches only that copy; `measureDisk`. Also passing after the hooks: recreate-jobs 15, job-lock 10, job-limits 6,
+  stage0 8, recreate-resume 7, perf 10. The script was dry-run on a scratch copy of the live data folder. Full suite not run.
+
+### For the hosting discussion — how long a job really takes (measured runs only)
+
+Sources: every finished job row of the two scratch folders above (2026-10-06/07: clean copies with the sweep; 2026-10-23/24: as-is
+copies) and the live-results summaries (`remastly-live-results/*/summary.json`). No multi-page as-is copy has been run yet; its
+per-page figure below is the pipeline's own budget (`asIsBudgetMs`: 20 min per page + 10 per stack), which the one-page runs match.
+
+| Job | Runs | Typical | Worst | Per page |
+|---|---|---|---|---|
+| Analyze (whole site, 1–25 pages) | 17 done | 25–160 s (most 21-page runs 25–66 s) | 305 s (parchaa, 10 pages) | ≈ fixed: Lighthouse on the homepage twice; the crawl adds ~5–10 s a page |
+| As-is copy (the product; 1 page each) | 3 done | 1023–1164 s (17–19 min) | 1329 s (22 min) | 17–22 min for the first page: discovery + capture 4.5–6 min, lift + completion + checks 11–18 min; **budget 20 min/page** |
+| Clean copy, older mode with sweep (10–30 pages) | 7 done | 1407–1802 s (23–30 min) | 8794 s (146 min: nyaayai 30 pages, network stalls in capture) | 73–141 s/page typical, 293 s/page worst |
+| Re-audit | 23 done | clean 145–239 s; as-is one page 292–298 s (3 Lighthouse runs × 2 devices × both sides) | 399 s | ≈ fixed; +2–3 s a page |
+
+**Memory per job** (the live log of the sankalpam run, 2026-10-24, free memory sampled every few seconds; the pipeline's own rules in
+`audit/resources.js`):
+
+| Measure | Value | Source |
+|---|---|---|
+| Free memory before / lowest during one as-is copy + re-audit | 5065 MB / 2845 MB → **≈ 2.2 GB used by one job** | `remastly-live-results/sankalpam/final-2026-10-24.log` |
+| Server process peak RSS during that run | 702 MB (the rest is Chromium and Lighthouse's Chrome) | same log |
+| What the pipeline reserves by its own rules | 150 MB × 4 contexts + 300 MB kept free + 900 MB before a second browser ≈ 1.8 GB | `audit/resources.js`, `recreate/index.js roomForSecondBrowser` |
+| Gate before a job starts | `SAS_JOB_MIN_FREE_MB` 2048 | `jobs/limits.js` |
+| Two jobs at once | a 15 GB machine crashed (reported by the user; the mode is not recorded) | not measured here |
+
+**The hold-up problem.** With `SAS_MAX_JOBS=1` and a 480-minute backstop, one as-is copy of a 24-page site (480 ÷ 20) would run the full
+backstop and every other account would wait 8 hours behind it; the pipeline's own budget ends it there, the limit never fires.
+1. **Backstop 240 minutes — applied (default changed 2026-10-24).** It covers every run recorded (the longest, the 146-minute clean copy
+   of 30 pages, with room), an as-is copy of up to 11 pages at the budget rate (11 × 20 + 10 = 230 min), Analyze (6) and a re-audit (7)
+   many times over. A larger site needs the setting raised or a page cap, and the row says so. The worst wait for the next person
+   halves, 480 → 240 min. Page limits and the slot count stay settings (`recreate_pages`, `SAS_MAX_JOBS`); the hosting decision sets them:
+2. **A per-plan page limit bounds the wait directly**, because the as-is budget is 20 min a page: 3 pages → a job of at most 70 min,
+   5 pages → 110 min, 10 pages → 210 min (the existing `recreate_pages` setting already caps pages; a plan would set it from the
+   account). With a 5-page plan and one slot, nobody waits longer than 110 min behind one job, and the typical as-is job stays well
+   under it (the measured one-page jobs: 17–22 min).
+3. **More slots.** The live log shows free memory falling from 5065 to 2845 MB during one as-is copy (≈ 2.2 GB per job, server peak RSS
+   702 MB, the rest Chromium); with `SAS_JOB_MIN_FREE_MB=2048` guarding each start, `SAS_MAX_JOBS=2` is safe on an 8 GB host by those
+   numbers and `3` on 16 GB. Two slots mean the second person never waits behind the first, and the third waits for the shorter of two
+   jobs; with k jobs of P pages queued behind one slot the last waits ≈ k × 20P min, with two slots about half.
+Not measured: an as-is copy of more than one page (the per-page cost after the first page should be lower, discovery and the stack
+pack are paid once), and memory with two jobs truly side by side.

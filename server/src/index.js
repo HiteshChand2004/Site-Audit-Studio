@@ -10,9 +10,12 @@ import reauditRouter from './routes/reaudit.js';
 import stacksRouter from './routes/stacks.js';
 import reportRouter from './routes/report.js';
 import faviconRouter from './routes/favicon.js';
-import { lockBusy } from './jobs/manager.js';
+import { lockBusy, queueState } from './jobs/manager.js';
+import { describeLimits } from './jobs/limits.js';
 import { awakeHeld } from './jobs/keepAwake.js';
-import { resumeInterruptedRecreates } from './recreate/jobs.js';
+import { recoverStaleJobs, watchStaleJobs } from './recreate/jobs.js';
+import { holdDataLock } from './config/dataLock.js';
+import { runCleanup, watchCleanup } from './jobs/cleanup.js';
 import { stopAllAsIsPreviews } from './recreate/behavior/preserve/asisPreview.js';
 import { previewRouter, PREVIEW_PREFIX } from './recreate/previewRoute.js';
 import { inlineScriptHashes } from './recreate/inlineScripts.js';
@@ -24,6 +27,9 @@ import { pendingMigrations } from './db/apply.js';
 const PORT = Number(process.env.PORT) || 4000;
 // Who can reach the API: this computer only by default (SAS_BIND_HOST, config/index.js).
 const HOST = bindHost();
+// One server per data folder (config/dataLock.js): a second one on the same app.db exits here with who holds it. Before any job
+// row is touched; the modules above only opened the database and applied its schema.
+holdDataLock({ port: PORT });
 const app = express();
 
 app.use(cors({ origin: ['http://localhost:5173', 'http://127.0.0.1:5173'] }));
@@ -56,7 +62,7 @@ if (accountsEnabled()) {
 // busy: an Analyze, Recreate or Re-audit job is running or queued (the dev runner waits before restarting).
 // keepAwake: the computer is being kept awake for it (jobs/keepAwake.js).
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, phase: '5', time: new Date().toISOString(), busy: lockBusy(), keepAwake: awakeHeld() });
+  res.json({ ok: true, phase: '5', time: new Date().toISOString(), busy: lockBusy(), keepAwake: awakeHeld(), jobs: { ...queueState(), limits: describeLimits() } });
 });
 
 if (accounts) {
@@ -102,7 +108,18 @@ app.listen(PORT, HOST, (err) => {
     console.error(err.code === 'EADDRINUSE' ? `Port ${PORT} is already in use. Stop the other server or set PORT.` : err);
     process.exit(1);
   }
+  const limits = describeLimits();
+  console.log(`Jobs: ${limits.maxJobs} at a time on this server, ${limits.jobsPerUser} per account, ${limits.jobMaxMinutes ? `${limits.jobMaxMinutes} min` : 'no'} hard limit, ${limits.minFreeMB ? `${limits.minFreeMB} MB` : 'no'} free memory needed to start (jobs/limits.js).`);
   console.log(`API ready on http://${HOST.includes(':') ? `[${HOST}]` : HOST}:${PORT}${isLoopbackHost(HOST) ? ' (this computer only)' : ' (reachable from the network)'}`);
-  // A recreate the restart interrupted continues where it stopped (recreate/checkpoint.js).
-  resumeInterruptedRecreates().catch((e) => console.warn('Interrupted recreates not continued:', e.message));
+  // Jobs a server that is gone left queued or running (their heartbeat stopped, jobs/liveness.js) are marked failed, and a
+  // recreate among them continues where it stopped (recreate/checkpoint.js); then the same check keeps running. A job alive in
+  // another process is never touched.
+  recoverStaleJobs()
+    .catch((e) => console.warn('Interrupted jobs not recovered:', e.message))
+    .finally(() => {
+      watchStaleJobs();
+      // Disk: what a crashed server left behind goes now (scratch, dead workspaces, temp folders), copies older than
+      // SAS_KEEP_COPIES_DAYS too; then every SAS_CLEANUP_HOURS (jobs/cleanup.js). SAS_CLEANUP_DRY_RUN=1 only lists.
+      runCleanup().catch((e) => console.warn('[cleanup] start-up pass failed:', e.message)).finally(() => watchCleanup());
+    });
 });

@@ -2,7 +2,7 @@
 // one again (after a failure, or when the recreate or its analysis changed).
 import { Router } from 'express';
 import { db } from '../db/index.js';
-import { ConflictError } from '../jobs/manager.js';
+import { ConflictError, JobLimitError } from '../jobs/manager.js';
 import { streamJob } from '../jobs/sse.js';
 import { PUBLIC_STEPS } from '../reaudit/index.js';
 import { reauditJobs, startReaudit } from '../reaudit/jobs.js';
@@ -40,6 +40,7 @@ router.post('/:id/reaudit', (req, res) => {
     res.status(202).json({ reauditId: job.id, ...withSteps(job) });
   } catch (err) {
     if (err instanceof ConflictError) return res.status(409).json({ error: err.message, reauditId: err.job.id });
+    if (err instanceof JobLimitError) return res.status(409).json({ error: err.message, limit: 'user', busy: { kind: err.job.kind, projectId: err.job.projectId, jobId: err.job.id } });
     throw err;
   }
 });

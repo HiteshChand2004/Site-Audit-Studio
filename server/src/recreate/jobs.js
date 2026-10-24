@@ -4,8 +4,9 @@
 // output is built inside the job when a second browser fits (recreate/stack.js), else from the saved IR right
 // after (queued behind this job, never discarding the recreate).
 import path from 'node:path';
-import { db, interruptedRecreates } from '../db/index.js';
-import { JobManager } from '../jobs/manager.js';
+import { db } from '../db/index.js';
+import { JobManager, requeueJobs } from '../jobs/manager.js';
+import { adoptStaleJobs, failUnclaimed, STALE_MS } from '../jobs/liveness.js';
 import { startReaudit } from '../reaudit/jobs.js';
 import { asIsBudgetMs, overallPct, runRecreate, STAGES, STEPS } from './index.js';
 import { replayStages } from './replay.js';
@@ -15,6 +16,7 @@ import { activePreview, startPreview } from './preview.js';
 import { MAX_AUTO_RESUMES, readCheckpoint } from './checkpoint.js';
 import { analysisWarnings, isExactMode, latestAnalysis } from './inputs.js';
 import { pruneRecreates, recreateDir, tmpDir } from './workspace.js';
+import { sweepJobScratch } from '../jobs/cleanup.js';
 
 export const recreateJobs = new JobManager({
   table: 'recreates',
@@ -58,6 +60,9 @@ export const recreateJobs = new JobManager({
   // Keep the latest completed recreates only; also removes any leftover temporary workspace.
   // Then queue the stack build the job left out (if any) and the re-audit (it runs after anything already waiting for the lock).
   after: async ({ job, project, ok }) => {
+    // Half-built pieces inside this copy's folder go first (a kept workspace keeps only what a resume reads), then the
+    // project's own retention (jobs/cleanup.js, recreate/workspace.js).
+    await sweepJobScratch(project.id, job.id).catch(() => {});
     await pruneRecreates(project.id);
     // Stopped by the time limit after making progress: it continues by itself with a fresh budget (a few times at most).
     if (!ok) await autoResume(project, job.id, 'time-limit');
@@ -94,7 +99,7 @@ export async function autoResume(project, recreateId, reason) {
   if (reason === 'restart' && checkpoint.stopped) return null; // it stopped on its own before the restart
   try {
     const analysis = latestAnalysis(project.id);
-    const job = recreateJobs.start(project, { resumeFrom: { recreateId, auto: true } }, { warnings: analysis ? analysisWarnings(analysis) : [] });
+    const job = recreateJobs.start(project, { resumeFrom: { recreateId, auto: true } }, { warnings: analysis ? analysisWarnings(analysis) : [], system: true });
     if (reason === 'restart') noteResumed.run('The server restarted while this job was running: it continues where it stopped.', recreateId);
     console.log(`[recreates ${recreateId}] continues where it stopped (${reason}) as ${job.id}`);
     return job;
@@ -104,14 +109,41 @@ export async function autoResume(project, recreateId, reason) {
   }
 }
 
-/** On server start: the recreates the restart interrupted continue where they stopped (queued under the global lock). */
-export async function resumeInterruptedRecreates(rows = interruptedRecreates) {
+/** The recreates a server that is gone left running continue where they stopped (queued under the global lock). */
+export async function resumeInterruptedRecreates(rows = []) {
   const jobs = [];
   for (const row of rows) {
     const job = await autoResume(selectProject.get(row.project_id), row.id, 'restart').catch(() => null);
     if (job) jobs.push(job);
   }
   return jobs;
+}
+
+/**
+ * What the server does once it holds the data folder, and again every STALE_MS (watchStaleJobs): the queued or running rows
+ * whose heartbeat stopped (jobs/liveness.js) are marked failed, and the recreates among them continue where they stopped.
+ * A row with a fresh heartbeat is another live process's job: left as it is, its workspace never adopted (that is what
+ * autoResume → adoptWorkspace would do), only counted here.
+ * @param {{ now?: number }} [o]
+ */
+export async function recoverStaleJobs({ now = Date.now() } = {}) {
+  const { marked, alive, recreates, requeue } = adoptStaleJobs({ now });
+  for (const job of marked) console.log(`[${job.table} ${job.id}] marked failed: its process stopped (last heartbeat ${job.heartbeatAt ?? 'none'})`);
+  if (alive.length) console.warn(`${alive.length} job(s) are alive in another process on this data folder and were left alone.`);
+  // Queued jobs of the dead server go back in line in the order they were started, same rows; one no manager here can take
+  // (none of its kind in this process) is marked like a running one.
+  const { requeued, left } = requeueJobs(requeue);
+  for (const job of requeued) console.log(`[${job.id}] back in line: it was waiting when its server stopped`);
+  for (const job of left) if (failUnclaimed(job, now)) marked.push(job);
+  const resumed = await resumeInterruptedRecreates(recreates);
+  return { marked, alive, resumed, requeued };
+}
+
+/** Keeps looking for jobs whose process died after this server started (a lock bypassed, a crash just before our startup pass). */
+export function watchStaleJobs(intervalMs = STALE_MS) {
+  const timer = setInterval(() => recoverStaleJobs().catch((e) => console.warn('Stale jobs not recovered:', e.message)), intervalMs);
+  timer.unref();
+  return timer;
 }
 const selectResult = db.prepare('SELECT result_json FROM recreates WHERE id = ?');
 const reportOf = (recreateId) => {
@@ -126,7 +158,7 @@ function queueReaudit(projectId, recreateId) {
   const project = selectProject.get(projectId); // may have been deleted while the job ran
   if (!project?.authorized) return;
   try {
-    startReaudit(project, recreateId);
+    startReaudit(project, recreateId, { system: true });
   } catch (err) {
     // One re-audit per project at a time: one already queued stays (the app offers a manual run).
     console.warn(`[recreates ${recreateId}] re-audit not queued: ${err.message}`);

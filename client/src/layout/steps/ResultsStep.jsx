@@ -13,7 +13,7 @@ import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import { STACKS, stackById } from '../../constants.js';
 import { api } from '../../api/client.js';
 import { outputsOf } from '../../stacks.js';
-import { isJobActive, useProjects } from '../../store/useProjects.js';
+import { isJobActive, selectIsOwner, useProjects } from '../../store/useProjects.js';
 import styles from '../Panel.module.css';
 import { pathOf } from '../../components/project/PageScope.jsx';
 import ws from '../Workspace.module.css';
@@ -32,6 +32,10 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
   // One job at a time on the server: no new comparison while a copy or comparison of this project runs.
   const busy = isJobActive(job) || isJobActive(reauditJob);
   const outputs = outputsOf(result);
+  // Building another technology from a saved clean copy (POST …/export) is the owner's (server rule, accounts/roles.js): an
+  // ordinary user downloads what is built, and packages an as-is copy again from the as-is report above.
+  const isOwner = useProjects(selectIsOwner);
+  const zipChoices = isOwner ? STACKS : STACKS.filter((x) => outputs[x.id]?.status === 'ready');
   const [zipStack, setZipStack] = useState(project.stack);
   const [building, setBuilding] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -40,6 +44,7 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
     setDownloadError(null);
     setZipStack(project.stack);
   }, [result?.recreateId, project.id, project.stack]);
+  const zipChoice = zipChoices.some((x) => x.id === zipStack) ? zipStack : zipChoices[0]?.id ?? project.stack;
 
   if (!result) {
     return (
@@ -59,7 +64,7 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
     );
   }
 
-  const zipReady = outputs[zipStack]?.status === 'ready';
+  const zipReady = outputs[zipChoice]?.status === 'ready';
   const canDownload = Boolean(result.recreateId && result.safety?.safe && !busy && !building);
   async function download() {
     setDownloading(true);
@@ -68,14 +73,14 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
       if (!zipReady) {
         // Built from the saved copy (the site is not visited again); it waits for any running job.
         setBuilding(true);
-        await api.exportStack(project.id, result.recreateId, zipStack);
+        await api.exportStack(project.id, result.recreateId, zipChoice);
         await reloadRecreate(project.id);
         await reloadAudit(project.id);
         setBuilding(false);
       }
-      const problem = await api.checkDownload(project.id, result.recreateId, zipStack);
+      const problem = await api.checkDownload(project.id, result.recreateId, zipChoice);
       if (problem) setDownloadError(problem);
-      else window.location.assign(api.downloadUrl(project.id, result.recreateId, zipStack));
+      else window.location.assign(api.downloadUrl(project.id, result.recreateId, zipChoice));
     } catch (err) {
       setBuilding(false);
       setDownloadError(err.message || 'Cannot reach the server.');
@@ -136,29 +141,33 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
           </Button>
         }
       >
-        <div className={ws.actions}>
-          <label className={ws.field}>
-            <span>Technology</span>
-            <select className="mono" value={zipStack} onChange={(e) => setZipStack(e.target.value)} disabled={building} aria-label="Technology of the download">
-              {STACKS.map((x) => (
-                <option key={x.id} value={x.id}>
-                  {x.name}
-                  {outputs[x.id]?.status === 'ready' ? '' : ' (built when you download)'}
-                </option>
-              ))}
-            </select>
-          </label>
-          <Button
-            variant="primary"
-            icon={building || downloading ? (p) => <Loader2 {...p} className={styles.spin} /> : Download}
-            disabled={!canDownload || downloading}
-            onClick={download}
-            title={canDownload ? undefined : 'Wait until the running job has finished'}
-          >
-            {building ? 'Building…' : zipReady ? 'Download .zip' : `Build ${stackById(zipStack).name} & download`}
-          </Button>
-        </div>
-        {building && <p className={ws.hint}>Building the {stackById(zipStack).name} version from the saved copy; this can take a couple of minutes.</p>}
+        {zipChoices.length ? (
+          <div className={ws.actions}>
+            <label className={ws.field}>
+              <span>Technology</span>
+              <select className="mono" value={zipChoice} onChange={(e) => setZipStack(e.target.value)} disabled={building} aria-label="Technology of the download">
+                {zipChoices.map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.name}
+                    {outputs[x.id]?.status === 'ready' ? '' : ' (built when you download)'}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Button
+              variant="primary"
+              icon={building || downloading ? (p) => <Loader2 {...p} className={styles.spin} /> : Download}
+              disabled={!canDownload || downloading}
+              onClick={download}
+              title={canDownload ? undefined : 'Wait until the running job has finished'}
+            >
+              {building ? 'Building…' : zipReady ? 'Download .zip' : `Build ${stackById(zipChoice).name} & download`}
+            </Button>
+          </div>
+        ) : (
+          <p className={ws.hint}>Nothing is built for download yet. Make the copy with “Copy my site” first.</p>
+        )}
+        {building && <p className={ws.hint}>Building the {stackById(zipChoice).name} version from the saved copy; this can take a couple of minutes.</p>}
         {downloadError && (
           <Alert tone="bad" title="The download did not work">
             {downloadError}

@@ -16,12 +16,7 @@ export const db = new DatabaseSync(DB_FILE);
 
 applySchema(db);
 
-// Jobs live in memory, so anything still "running" after a restart can never finish. A recreate that was running is
-// continued where it stopped once the server is up (recreate/jobs.js resumeInterruptedRecreates, recreate/checkpoint.js).
-export const interruptedRecreates = db.prepare(`SELECT id, project_id FROM recreates WHERE status = 'running'`).all();
-for (const table of ['analyses', 'recreates', 'reaudits']) {
-  db.prepare(`
-    UPDATE ${table} SET status = 'failed', error = 'The server restarted while this job was running. Run it again.', finished_at = ?
-    WHERE status IN ('queued', 'running')
-  `).run(new Date().toISOString());
-}
+// What happens to the jobs of a server that is gone is the SERVER's decision, not this module's: src/index.js calls
+// recreate/jobs.js recoverStaleJobs() once it holds the data folder (config/dataLock.js), and only a job whose heartbeat has
+// stopped is marked failed (jobs/liveness.js). Importing this module from a script (a read-only check of a scratch copy, the
+// corpus tools) opens the database and applies the schema, and touches no job row and no lock.

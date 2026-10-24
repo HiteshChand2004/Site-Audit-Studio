@@ -191,11 +191,16 @@ async function fetchHome(url, scale = 1) {
  *   with (re-audit only): a much slower computer now repeats the run with a scaled CPU slowdown
  * @returns {Promise<object>} the audit JSON
  */
+/** The error an analysis ends with when its job was asked to stop (`stopped`, like the recreate pipeline's). */
+const stopError = () => Object.assign(new Error('Stopped before it finished.'), { stopped: true });
+
 export function runAnalysis({ netPolicy = userPolicy(), ...opts }) {
   return withNetPolicy(netPolicy, () => analyze({ ...opts, netPolicy }));
 }
 
-async function analyze({ project, analysisId, maxPages, progress, netPolicy, url = project.url, outDir: dir, skip = [], seedUrls = [], deployOrigin = null, linksBesideLighthouse = false, lighthouseRun = runLighthouse, lighthouseBaseline = null, lighthouseOrigin = null }) {
+// `signal`: the job manager asks the analysis to stop (the app's Stop, or the hard time limit, jobs/manager.js): the running step
+// is cut short and the next one is not started; the browser and the proxy close on the way out like after any failure.
+async function analyze({ project, analysisId, maxPages, progress, netPolicy, url = project.url, outDir: dir, skip = [], seedUrls = [], deployOrigin = null, linksBesideLighthouse = false, lighthouseRun = runLighthouse, lighthouseBaseline = null, lighthouseOrigin = null, signal = null }) {
   const timing = analyzeTiming();
   const freeAtStart = freeMemoryMB();
   const baseDeadline = Date.now() + timing.budgetMs;
@@ -216,6 +221,7 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
   // `reserve`: time that must stay for the steps after this one (Lighthouse); this step gets what is left of its own limit.
   async function step(key, fn, fallback = null, { reserve = 0 } = {}) {
     if (skipped.has(key)) return fallback;
+    if (signal?.aborted) throw stopError();
     progress(key, 0);
     const result = await attempt(key, fn, fallback, reserve);
     progress(key, 1);
@@ -236,6 +242,9 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
     }
     const controller = new AbortController();
     const abortTimer = setTimeout(() => controller.abort(), budget);
+    // A stop asked for while this step runs ends the step now; the next `step()` then throws.
+    const onStop = () => controller.abort();
+    signal?.addEventListener('abort', onStop, { once: true });
     // Steps without their own progress get a time-based estimate so the bar keeps moving.
     const started = Date.now();
     const ticker = def.expected
@@ -248,8 +257,11 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
       failure = err;
     } finally {
       clearTimeout(abortTimer);
+      signal?.removeEventListener('abort', onStop);
       if (ticker) clearInterval(ticker);
     }
+    // Stopped from outside: not a failure to explain or to try again.
+    if (signal?.aborted) throw stopError();
     if (!retried) {
       const explained = await recover(key, failure.message, started, { remaining: deadline - started });
       if (explained?.retry) {

@@ -7,7 +7,8 @@ import { auditDir, projectDir } from '../config/paths.js';
 import { parseMaxPages } from './analyze.js';
 import { buildDummyAudit } from '../dummy/audit.js';
 import { precheckUrl } from '../security/netGuard.js';
-import { MAX_RECREATE_PAGES, parseExactMode, parsePageUrl, parseRecreatePages, parseTargetDomain } from '../recreate/inputs.js';
+import { ALL_PAGES, MAX_RECREATE_PAGES, parseExactMode, parsePageUrl, parseRecreatePages, parseTargetDomain } from '../recreate/inputs.js';
+import { isOwner, refuseNonOwner } from '../accounts/roles.js';
 import { sameSite } from '../audit/util.js';
 import { stopPreview } from '../recreate/preview.js';
 import { stopAsIsPreviewsOf } from '../recreate/behavior/preserve/asisPreview.js';
@@ -98,6 +99,21 @@ router.get('/:id', (req, res) => {
   res.json(toProject(project));
 });
 
+/**
+ * The owner-only settings a PATCH body asks for, in words (accounts/roles.js). Pure, so a test can hold it.
+ * @param {{ exactMode?: unknown, recreatePages?: unknown }} o
+ * @returns {string[]}
+ */
+export function ownerOnlySettings({ exactMode, recreatePages }) {
+  const out = [];
+  if (exactMode !== undefined) out.push('the exact-copy setting');
+  if (recreatePages !== undefined) {
+    const parsed = parseRecreatePages(recreatePages);
+    if (parsed !== null && parsed !== ALL_PAGES) out.push('a page count for the copy');
+  }
+  return out;
+}
+
 router.patch('/:id', (req, res) => {
   const project = selectOne.get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found.' });
@@ -106,6 +122,13 @@ router.patch('/:id', (req, res) => {
     name, stack, url, max_pages: maxPages, recreate_pages: recreatePages, target_domain: targetDomain, exact_mode: exactMode,
     page_url: pageUrl,
   } = req.body ?? {};
+  // Settings that change how a copy is made are the owner's (accounts/roles.js): exact mode, and a page count other than every
+  // page ("Copy my site" saves the stack, the address and "every page", which stay open to everyone). An invalid value is still
+  // the 400 below, for everyone.
+  if (!isOwner(req)) {
+    const owned = ownerOnlySettings({ exactMode, recreatePages });
+    if (owned.length) return refuseNonOwner(res, owned.join(', '));
+  }
   const next = {
     name: project.name,
     stack: project.stack,

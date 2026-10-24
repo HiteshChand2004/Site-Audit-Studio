@@ -53,6 +53,12 @@ export const HOME = 'home';
 export const isJobActive = (job) => Boolean(job) && ['starting', 'queued', 'running'].includes(job.status);
 export const isAnalysisActive = isJobActive;
 
+/**
+ * Whether the person may use the owner-only options (the server's rule, accounts/roles.js, which it enforces on every request):
+ * the owner role, or nobody signed in (accounts off: the single-user tool). Unknown until /auth/me answered → not yet.
+ */
+export const selectIsOwner = (s) => s.me === null || s.me?.role === 'owner';
+
 export const useProjects = create((set, get) => ({
   projects: [],
   loading: true,
@@ -71,6 +77,17 @@ export const useProjects = create((set, get) => ({
   previews: {},
   // projectId → { audit, recreate, loaded }: what the home gallery and the sidebar show for every website.
   overviews: {},
+  // The signed-in account: undefined until asked, null when the API has no accounts (then everyone is the owner), else { id, email, name, role, verified }.
+  me: undefined,
+
+  /** Who is signed in (accounts on), or null (accounts off). Asked once at start; the account menu and the owner-only options read it. */
+  async loadMe() {
+    try {
+      set({ me: await api.getMe() });
+    } catch {
+      // Not signed in or the API unreachable: the gate answers 401 and the app goes to the sign-in page; nothing to show here.
+    }
+  },
 
   setJob(kind, projectId, patch) {
     const key = KINDS[kind].stateKey;
@@ -83,6 +100,7 @@ export const useProjects = create((set, get) => ({
   },
 
   async load() {
+    get().loadMe();
     try {
       const projects = await api.listProjects();
       set({ projects, loading: false, error: null });
