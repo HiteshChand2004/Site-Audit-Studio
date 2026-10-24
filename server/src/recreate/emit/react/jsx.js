@@ -28,8 +28,8 @@ const PROP = {
   nomodule: 'noModule', novalidate: 'noValidate', playsinline: 'playsInline', readonly: 'readOnly', referrerpolicy: 'referrerPolicy',
   rowspan: 'rowSpan', spellcheck: 'spellCheck', srcdoc: 'srcDoc', srclang: 'srcLang', srcset: 'srcSet', tabindex: 'tabIndex', usemap: 'useMap',
 };
-// Attributes React renders from a boolean prop.
-const BOOLEAN = new Set([
+// Attributes React renders from a boolean prop (shared with convert/document.js, which converts rendered HTML).
+export const BOOLEAN = new Set([
   'allowfullscreen', 'async', 'autofocus', 'autoplay', 'checked', 'controls', 'default', 'defer', 'disabled', 'disablepictureinpicture',
   'disableremoteplayback', 'formnovalidate', 'hidden', 'inert', 'ismap', 'itemscope', 'loop', 'multiple', 'muted', 'nomodule', 'novalidate',
   'open', 'playsinline', 'readonly', 'required', 'reversed', 'selected',
