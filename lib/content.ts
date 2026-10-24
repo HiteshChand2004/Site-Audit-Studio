@@ -165,6 +165,14 @@ export const AUDIENCES = [
  */
 export type LighthouseScores = { performance: number; accessibility: number; bestPractices: number; seo: number };
 
+/**
+ * How a match score is named wherever one is shown. It is the tool's fidelity score, out of 100: how closely the layout
+ * and a small thumbnail of the copy line up with the original. It is not a share of identical pixels (collateral's copy
+ * scores 93 while about 5 % of its pixels differ), so the word "pixel" never sits next to it, and "visual match" is not
+ * used either: a visitor could read either one as "93 % identical".
+ */
+export const MATCH_LABEL = 'Layout and thumbnail match';
+
 export type ExampleRun = {
   status: 'pending' | 'ready';
   site: string | null;
@@ -178,8 +186,8 @@ export type ExampleRun = {
   lighthouseDesktop: { original: number; copy: number } | null;
   /** All four Lighthouse categories, as stored by the audit: [device][original|copy]. */
   lighthouseAll?: Record<'mobile' | 'desktop', Record<'original' | 'copy', LighthouseScores>>;
-  /** Visual match score of the homepage (0–100). */
-  visualMatch: string | null;
+  /** The homepage's match score, worded with MATCH_LABEL (the tool's fidelity score, out of 100; never a pixel figure). */
+  layoutMatch: string | null;
   hovers: { kept: number; of: number } | null;
   consoleErrors: number | null;
   /** Scores that went down in this run. */
@@ -194,8 +202,9 @@ export type ExampleRun = {
 
 /**
  * collateral.panscience.ai, 11 pages, run on 13 Oct 2026 (re-audit 3019a275…, exact mode). Source: data/example-runs.json,
- * every figure as stored: phone performance 62 → 94, desktop 88 → 99, visual match of the homepage 93 (desktop and phone;
- * the score across all 12 pages scored is 96), 41 checks. The pictures are the first screen of the same run, captured
+ * every figure as stored: phone performance 62 → 94, desktop 88 → 99, layout-and-thumbnail match of the homepage 93 (desktop
+ * and phone; the score across all 12 pages scored is 96; this is the tool's fidelity score, not a pixel match: about 5 % of
+ * this copy's pixels differ), 41 checks. The pictures are the first screen of the same run, captured
  * before the tool's 18 Oct screenshot change (blank share below the first screen: 0.0 % one-sided).
  * Not stored for this run: a count of console errors; hover matches (251 found in the original, 288 in the copy, not paired).
  */
@@ -211,7 +220,7 @@ export const exampleRun: ExampleRun = {
     mobile: { original: { performance: 62, accessibility: 100, bestPractices: 100, seo: 100 }, copy: { performance: 94, accessibility: 96, bestPractices: 96, seo: 100 } },
     desktop: { original: { performance: 88, accessibility: 96, bestPractices: 100, seo: 100 }, copy: { performance: 99, accessibility: 96, bestPractices: 96, seo: 100 } },
   },
-  visualMatch: '93 / 100',
+  layoutMatch: `${MATCH_LABEL} 93 of 100`,
   hovers: null,
   consoleErrors: null,
   wentDown: ['Best practices, phone and desktop: 100 → 96', 'Accessibility, phone: 100 → 96'],
@@ -245,7 +254,7 @@ export const FAQS: Faq[] = [
   { q: 'Which websites can I use it on?', a: 'Only sites your company owns, or that you have permission to rebuild. You confirm this for every website.' },
   { q: 'Which stacks can the new site be built in?', a: 'Plain HTML / CSS / JS, React + Vite, Next.js, or MERN (React plus a small server and database for contact forms).' },
   { q: 'How long does it take?', a: 'An audit usually takes about a minute, and up to about five minutes on slow sites. A copy can take several minutes per page on a slow computer.' },
-  { q: 'Will the copy look exactly like the original?', a: 'As close as the page allows, and it tells you how close: the share of pixels that differ, or a match score out of 100 (below 80 is flagged).' },
+  { q: 'Will the copy look exactly like the original?', a: 'As close as the page allows, and it tells you how close: the share of pixels that differ, or a layout-and-thumbnail match score out of 100 (below 80 is flagged).' },
   { q: 'Does it fix every problem?', a: 'No, and it says so. Every issue is marked fixed in your copy, still open, got worse, or needs a person.' },
   { q: 'What can’t Remastly rebuild?', a: 'Logins, shops and checkout, form backends (except MERN), CMS content, plugin behaviour and 3D scenes. These are flagged, never faked.' },
   { q: 'What is in the report?', a: 'The audit of the original, the same checks on the copy, what was fixed, what still needs work, and the match per page. As PDF, HTML or JSON.' },
@@ -382,16 +391,16 @@ export const AUTH_NOT_OPEN = {
  */
 
 /**
- * nyaayai.com, run on 19 Oct 2026 (copy d515f72e…, as-is mode, one page). Pixel difference = share of pixels that
- * differ at that width, lower is closer. Picture: the first screen only (1440 × 900); the full-page captures of the
- * 19–21 Oct runs have areas that are blank in the reference only, so nothing below the first screen is shown.
+ * nyaayai.com, run on 19 Oct 2026 (copy d515f72e…, as-is mode, one page). Picture: the first screen only (1440 × 900);
+ * the full-page captures of the 19–21 Oct runs have areas that are blank in the reference only, so nothing below the
+ * first screen is shown. Its pixel-difference figures were removed on 24 Oct 2026: they came from an old ruler and
+ * nothing can reproduce them.
  */
 export const asIsRun = {
   site: 'nyaayai.com',
   mode: 'as-is',
   pages: '1 page',
   date: '19 Oct 2026',
-  pixelDiff: { w1440: 1.63, w390: 1.88 },
   hovers: { visible: 20, changed: 9, mismatch: 0 },
   offlineErrors: 0,
   note: 'The only visible difference in the first screen is the text typed into the search box, which animates.',
@@ -579,7 +588,8 @@ export const resultCards = {
       icon: 'indikaai',
       headline: 'Lighthouse 90 to 100',
       headlineLabel: 'Performance on a phone',
-      figures: ['Desktop performance 99 to 100', 'Visual match 98 of 100', 'Checks that got worse: 0 of 42'],
+      // No match score: the pictures of this run were deleted, so its 98 cannot be re-measured.
+      figures: ['Desktop performance 99 to 100', 'Checks that got worse: 0 of 42'],
       wentDown: null,
       name: 'indikaai.com, 1 page rebuilt',
       run: 'Re-audit of 15 Oct 2026',
@@ -590,7 +600,7 @@ export const resultCards = {
       icon: 'botza',
       headline: 'Lighthouse 81 to 99',
       headlineLabel: 'Performance on a phone',
-      figures: ['Desktop performance 94 to 100', 'Visual match 96 of 100', 'Checks that got worse: 0 of 39'],
+      figures: ['Desktop performance 94 to 100', `${MATCH_LABEL} 96 of 100`, 'Checks that got worse: 0 of 39'],
       wentDown: null,
       name: 'botza.panscience.ai, 22 pages rebuilt',
       run: 'Re-audit of 8 Oct 2026',
@@ -601,7 +611,7 @@ export const resultCards = {
       icon: 'panscience',
       headline: 'Lighthouse 83 to 97',
       headlineLabel: 'Performance on a phone',
-      figures: ['Desktop performance 99 to 100', 'Visual match 94 of 100', 'Checks that got worse: 0 of 39'],
+      figures: ['Desktop performance 99 to 100', `${MATCH_LABEL} 94 of 100`, 'Checks that got worse: 0 of 39'],
       wentDown: null,
       name: 'panscience.xyz, 38 pages rebuilt',
       run: 'Re-audit of 8 Oct 2026',
@@ -612,7 +622,7 @@ export const resultCards = {
       icon: 'dreamhire',
       headline: 'Lighthouse 77 to 97',
       headlineLabel: 'Performance on a phone',
-      figures: ['Desktop performance 98 to 100', 'Visual match 99 of 100', 'Checks that got worse: 0 of 40'],
+      figures: ['Desktop performance 98 to 100', `${MATCH_LABEL} 99 of 100`, 'Checks that got worse: 0 of 40'],
       wentDown: null,
       name: 'dreamhire.in, 1 page rebuilt',
       run: 'Re-audit of 14 Oct 2026',
@@ -758,7 +768,8 @@ export const WHY_VISUAL = {
 /**
  * The runs the Example run section cycles through: the latest re-audit of four of our own sites that have a picture we can
  * show (dreamhire.in has none: its saved pictures show faces). Every figure is copied as stored in data/example-runs.json,
- * none rounded; the run id and date are in the comment above each entry. "visual" is the homepage visual-match score.
+ * none rounded; the run id and date are in the comment above each entry. "layoutMatch" is the homepage's layout-and-thumbnail
+ * match (the tool's fidelity score, worded with MATCH_LABEL), or null when it can no longer be re-measured.
  */
 export type ShowScores = { performance: number; accessibility: number; bestPractices: number; seo: number };
 export type ShowRun = {
@@ -768,7 +779,7 @@ export type ShowRun = {
   alt: string;
   caption: string;
   lighthouse: Record<'mobile' | 'desktop', Record<'original' | 'copy', ShowScores>>;
-  visual: number;
+  layoutMatch: number | null;
   checks: { total: number; fixed: number; improved: number; pass: number; open: number; manual: number; regressed: number; na: number };
 };
 export const showRuns: ShowRun[] = [
@@ -783,7 +794,7 @@ export const showRuns: ShowRun[] = [
       mobile: { original: { performance: 62, accessibility: 100, bestPractices: 100, seo: 100 }, copy: { performance: 94, accessibility: 96, bestPractices: 96, seo: 100 } },
       desktop: { original: { performance: 88, accessibility: 96, bestPractices: 100, seo: 100 }, copy: { performance: 99, accessibility: 96, bestPractices: 96, seo: 100 } },
     },
-    visual: 93,
+    layoutMatch: 93,
     checks: { total: 41, fixed: 5, improved: 2, pass: 23, open: 4, manual: 2, regressed: 2, na: 3 },
   },
   {
@@ -797,7 +808,7 @@ export const showRuns: ShowRun[] = [
       mobile: { original: { performance: 90, accessibility: 95, bestPractices: 100, seo: 100 }, copy: { performance: 100, accessibility: 95, bestPractices: 100, seo: 100 } },
       desktop: { original: { performance: 99, accessibility: 95, bestPractices: 100, seo: 100 }, copy: { performance: 100, accessibility: 91, bestPractices: 100, seo: 100 } },
     },
-    visual: 98,
+    layoutMatch: null, // the run's pictures were deleted; its 98 cannot be re-measured
     checks: { total: 42, fixed: 9, improved: 4, pass: 22, open: 5, manual: 0, regressed: 0, na: 2 },
   },
   {
@@ -811,7 +822,7 @@ export const showRuns: ShowRun[] = [
       mobile: { original: { performance: 81, accessibility: 95, bestPractices: 100, seo: 92 }, copy: { performance: 99, accessibility: 100, bestPractices: 100, seo: 100 } },
       desktop: { original: { performance: 94, accessibility: 96, bestPractices: 100, seo: 92 }, copy: { performance: 100, accessibility: 100, bestPractices: 100, seo: 100 } },
     },
-    visual: 88,
+    layoutMatch: 88,
     checks: { total: 39, fixed: 15, improved: 2, pass: 17, open: 0, manual: 3, regressed: 0, na: 2 },
   },
   {
@@ -825,7 +836,7 @@ export const showRuns: ShowRun[] = [
       mobile: { original: { performance: 83, accessibility: 96, bestPractices: 100, seo: 100 }, copy: { performance: 97, accessibility: 100, bestPractices: 100, seo: 100 } },
       desktop: { original: { performance: 99, accessibility: 96, bestPractices: 100, seo: 100 }, copy: { performance: 100, accessibility: 100, bestPractices: 100, seo: 100 } },
     },
-    visual: 84,
+    layoutMatch: 84,
     checks: { total: 39, fixed: 12, improved: 2, pass: 22, open: 0, manual: 1, regressed: 0, na: 2 },
   },
 ];
