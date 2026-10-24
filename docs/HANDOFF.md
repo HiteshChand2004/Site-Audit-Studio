@@ -584,12 +584,16 @@ Known gaps: Step 1's stability figures (nyaayai 0.27–0.31 %) were measured wit
    "State on 2026-10-24"). The two UNEXPLAINED image rows left on that copy go to item 4 by decision.
 2. **Step 4, rest**: whatever *acts* on an unexplained "got worse" / "still open" row (`copy/run.js zeroRegressions` is the tested
    model, fakes only); the summary line's "Fixed" already comes from the re-audit.
-3. **Step 5 — per-page fallback**: clean rebuild of a failing page in the chosen stack, time-boxed correction, keep the better one.
-4. **Images on the as-is output** (WebP / variants / deferred loading of what is below the first screen), only where the pixels
-   stay the same, through the same visual gate. Goal (user, 2026-10-24): the copy **beats the original** on
+3. **Step 5 — per-page fallback: AFTER LAUNCH (user, 2026-10-24).** The plan is written and stays as it is:
+   `docs/STEP5-FALLBACK-PLAN.md` (878122f; 3½–4 days). Two changes the user wants in it when it is built: (1) the **performance
+   trigger is "below the original's"**, not "below 50" (the plan's part 1 table and `copy/thresholds.js LIGHTHOUSE_PERF_MIN`);
+   (2) the **live proof must be on a page that actually fails**, not on a site where nothing triggers. Until then a failing page
+   stays "unresolved" with its reason in the report, which keeps the promise honest.
+4. **Images on the as-is output: AFTER LAUNCH (user, 2026-10-24)** (WebP / variants / deferred loading of what is below the first
+   screen), only where the pixels stay the same, through the same visual gate. Goal: the copy **beats the original** on
    `lighthouse.offscreen-images` and `lighthouse.uses-responsive-images` without changing the look — on nyaayai's copy both
    rows are still open and unexplained (425 vs 427 KiB; 577 vs 772 KiB on phone) because an as-is copy keeps the images as
-   written. Runs after Step 5.
+   written.
 5. **BUG, open: the exact comparison's pictures always answer 404** (found 2026-10-23 during the accounts work; still present
    on `step4-lighthouse`, checked 2026-10-24).
    `server/src/routes/recreate.js`, route `GET /api/projects/:id/recreate/:recreateId/exact/:slug/:file` (line ~277 on
