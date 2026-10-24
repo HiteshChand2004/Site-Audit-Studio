@@ -8,15 +8,17 @@
 //                         (jobs/manager.js). Parallel Lighthouse runs also distort each other's numbers.
 //   SAS_JOBS_PER_USER     jobs one account may have running or waiting at once (1–20, default 1). With accounts off there is one
 //                         local user, so this is the whole queue's depth there; raise it to queue work on several sites.
-//   SAS_JOB_MAX_MINUTES   the hard time limit of one job (1–1440, default 480; 0 = none). Every pipeline has its own budget first
+//   SAS_JOB_MAX_MINUTES   the hard time limit of one job (1–1440, default 240; 0 = none). Every pipeline has its own budget first
 //                         and ends itself: Analyze 6 min × SAS_TIMEOUT_SCALE (at most 30), Recreate 12 min (SAS_RECREATE_MINUTES
 //                         at most 60) or, for every page of a site, limits that grow with the page count (about 7 min per page
 //                         over all steps), an as-is copy 20 min per page + 10 per stack (recreate/index.js asIsBudgetMs), an
 //                         exact-mode run none. This is the backstop above them, for a job whose own budget did not end it (a
-//                         browser that hangs, a step that never returns, an exact run that was meant to take hours). 480 covers
-//                         every fixed budget, an as-is copy of 23 pages and every real run recorded so far (the longest, an
-//                         exact-mode copy of 12 pages, took hours, not days); a site larger than that needs the setting raised or
-//                         0, and the job's error says so.
+//                         browser that hangs, a step that never returns, an exact run that was meant to take hours). 240 covers
+//                         every fixed budget, every real run recorded (the longest a clean copy of 30 pages, 146 min; an as-is
+//                         copy of one page 17–22 min) and an as-is copy of up to 11 pages at its budget rate (11 × 20 + 10 = 230);
+//                         with one job at a time (SAS_MAX_JOBS) it is also the longest anyone waits behind one job, which is why
+//                         it is not higher (docs/HANDOFF.md, "Launch readiness"). A larger site needs the setting raised or 0,
+//                         and the job's error says so.
 //   SAS_JOB_MIN_FREE_MB   free memory a job needs before it starts (0 = no check, default 2048). Below it the job stays in line,
 //                         says why, and is looked at again every few seconds. 2 GB is what the pipeline's own rules add up to for
 //                         one job (audit/resources.js: 150 MB per browser context × 4, 300 MB kept free for the machine, and 900 MB
@@ -34,7 +36,7 @@ export function setting(raw, { min, max, def, integer = true }) {
 export const maxJobs = (env = process.env) => setting(env.SAS_MAX_JOBS, { min: 1, max: 8, def: 1 });
 export const jobsPerUser = (env = process.env) => setting(env.SAS_JOBS_PER_USER, { min: 1, max: 20, def: 1 });
 /** The hard limit in milliseconds, 0 = none. Minutes, fractions allowed (tests use seconds). */
-export const jobMaxMs = (env = process.env) => setting(env.SAS_JOB_MAX_MINUTES, { min: 0, max: 1440, def: 480, integer: false }) * 60000;
+export const jobMaxMs = (env = process.env) => setting(env.SAS_JOB_MAX_MINUTES, { min: 0, max: 1440, def: 240, integer: false }) * 60000;
 export const minFreeMB = (env = process.env) => setting(env.SAS_JOB_MIN_FREE_MB, { min: 0, max: 1048576, def: 2048 });
 
 /** The memory reader the gate uses (tests replace `free`). macOS reports "unknown" as Infinity: never gated there. */

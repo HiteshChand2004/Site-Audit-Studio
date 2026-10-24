@@ -711,10 +711,11 @@ Hosting is not decided, so every limit is an env setting read at call time (`ser
 - **Place in line**: a waiting job's `message` says "Next in line: starts when the job before it finishes." or "Waiting in line: N jobs
   run or wait before this one.", pushed over the same SSE path on every change, and the snapshot carries `queue: { ahead, position,
   memory? }` while queued. `AnalyzeProgress.jsx` shows the server's sentence when queued.
-- **`SAS_JOB_MAX_MINUTES`** (1–1440, default **480**; 0 = none): the hard limit of one running job, above every pipeline's own budget
-  (Analyze 6 min × scale ≤ 30, Recreate 12 min / `SAS_RECREATE_MINUTES` ≤ 60 or per-page limits for every page, an as-is copy 20 min
-  per page + 10 per stack, exact mode none): 480 covers every fixed budget, an as-is copy of 23 pages and every real run recorded
-  (the longest, an exact-mode copy, took hours); a larger site needs it raised or 0, and the row's error names the setting. When it
+- **`SAS_JOB_MAX_MINUTES`** (1–1440, default **240**, was 480 until the hold-up review below; 0 = none): the hard limit of one running
+  job, above every pipeline's own budget (Analyze 6 min × scale ≤ 30, Recreate 12 min / `SAS_RECREATE_MINUTES` ≤ 60 or per-page limits
+  for every page, an as-is copy 20 min per page + 10 per stack, exact mode none): 240 covers every fixed budget, every real run recorded
+  (longest 146 min) and an as-is copy of up to 11 pages at its budget rate; with one job at a time it is also the longest anyone waits
+  behind one job. A larger site needs it raised or 0, and the row's error names the setting. When it
   hits, the job is asked to stop exactly like the app's Stop (`controller.abort()`: Recreate saves its checkpoint, `reason: 'stopped'`,
   "Continue where it stopped" works; Analyze and Re-audit now take `signal` and end at their next step, their browser and proxy
   closing on the way out), the row reads "Stopped after N minutes: the time limit for one job (SAS_JOB_MAX_MINUTES). What was
@@ -789,12 +790,23 @@ per-page figure below is the pipeline's own budget (`asIsBudgetMs`: 20 min per p
 | Clean copy, older mode with sweep (10–30 pages) | 7 done | 1407–1802 s (23–30 min) | 8794 s (146 min: nyaayai 30 pages, network stalls in capture) | 73–141 s/page typical, 293 s/page worst |
 | Re-audit | 23 done | clean 145–239 s; as-is one page 292–298 s (3 Lighthouse runs × 2 devices × both sides) | 399 s | ≈ fixed; +2–3 s a page |
 
-**The hold-up problem.** With `SAS_MAX_JOBS=1` and the 480-minute backstop, one as-is copy of a 24-page site (480 ÷ 20) runs the full
-backstop and every other account waits 8 hours behind it; the pipeline's own budget ends it there, the limit never fires. Proposal
-(nothing changed yet):
-1. **Backstop 240 minutes.** It covers every run recorded (the longest, the 146-minute clean copy of 30 pages, with room), an as-is copy
-   of up to 11 pages at the budget rate (11 × 20 + 10 = 230 min), Analyze (6) and a re-audit (7) many times over. A larger site needs
-   the setting raised or a page cap, and the row says so. The worst wait for the next person halves, 480 → 240 min.
+**Memory per job** (the live log of the sankalpam run, 2026-10-24, free memory sampled every few seconds; the pipeline's own rules in
+`audit/resources.js`):
+
+| Measure | Value | Source |
+|---|---|---|
+| Free memory before / lowest during one as-is copy + re-audit | 5065 MB / 2845 MB → **≈ 2.2 GB used by one job** | `remastly-live-results/sankalpam/final-2026-10-24.log` |
+| Server process peak RSS during that run | 702 MB (the rest is Chromium and Lighthouse's Chrome) | same log |
+| What the pipeline reserves by its own rules | 150 MB × 4 contexts + 300 MB kept free + 900 MB before a second browser ≈ 1.8 GB | `audit/resources.js`, `recreate/index.js roomForSecondBrowser` |
+| Gate before a job starts | `SAS_JOB_MIN_FREE_MB` 2048 | `jobs/limits.js` |
+| Two jobs at once | a 15 GB machine crashed (reported by the user; the mode is not recorded) | not measured here |
+
+**The hold-up problem.** With `SAS_MAX_JOBS=1` and a 480-minute backstop, one as-is copy of a 24-page site (480 ÷ 20) would run the full
+backstop and every other account would wait 8 hours behind it; the pipeline's own budget ends it there, the limit never fires.
+1. **Backstop 240 minutes — applied (default changed 2026-10-24).** It covers every run recorded (the longest, the 146-minute clean copy
+   of 30 pages, with room), an as-is copy of up to 11 pages at the budget rate (11 × 20 + 10 = 230 min), Analyze (6) and a re-audit (7)
+   many times over. A larger site needs the setting raised or a page cap, and the row says so. The worst wait for the next person
+   halves, 480 → 240 min. Page limits and the slot count stay settings (`recreate_pages`, `SAS_MAX_JOBS`); the hosting decision sets them:
 2. **A per-plan page limit bounds the wait directly**, because the as-is budget is 20 min a page: 3 pages → a job of at most 70 min,
    5 pages → 110 min, 10 pages → 210 min (the existing `recreate_pages` setting already caps pages; a plan would set it from the
    account). With a 5-page plan and one slot, nobody waits longer than 110 min behind one job, and the typical as-is job stays well

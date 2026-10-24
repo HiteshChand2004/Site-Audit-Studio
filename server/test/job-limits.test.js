@@ -86,7 +86,7 @@ test('the settings: defaults, bounds, and what the health line reports', () => {
   setEnv({});
   assert.equal(maxJobs(), 1);
   assert.equal(jobsPerUser(), 1);
-  assert.equal(jobMaxMs(), 480 * 60000);
+  assert.equal(jobMaxMs(), 240 * 60000);
   assert.equal(minFreeMB(), 2048);
   assert.equal(maxJobs({ SAS_MAX_JOBS: '3' }), 3);
   assert.equal(maxJobs({ SAS_MAX_JOBS: '0' }), 1, 'out of range = default');
@@ -95,7 +95,7 @@ test('the settings: defaults, bounds, and what the health line reports', () => {
   assert.equal(jobsPerUser({ SAS_JOBS_PER_USER: '20' }), 20);
   assert.equal(jobMaxMs({ SAS_JOB_MAX_MINUTES: '0' }), 0, '0 = no hard limit');
   assert.equal(jobMaxMs({ SAS_JOB_MAX_MINUTES: '0.5' }), 30000, 'fractions of a minute are allowed');
-  assert.equal(jobMaxMs({ SAS_JOB_MAX_MINUTES: '2000' }), 480 * 60000);
+  assert.equal(jobMaxMs({ SAS_JOB_MAX_MINUTES: '2000' }), 240 * 60000);
   assert.equal(minFreeMB({ SAS_JOB_MIN_FREE_MB: '0' }), 0, '0 = no memory check');
   assert.equal(minFreeMB({ SAS_JOB_MIN_FREE_MB: 'lots' }), 2048);
   assert.deepEqual(describeLimits({ SAS_JOB_MAX_MINUTES: '0', SAS_JOB_MIN_FREE_MB: '0', SAS_MAX_JOBS: '2', SAS_JOBS_PER_USER: '3' }), { maxJobs: 2, jobsPerUser: 3, jobMaxMinutes: null, minFreeMB: null });
