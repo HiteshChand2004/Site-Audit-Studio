@@ -93,6 +93,12 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
               {asIs.sameOrigin.sameAsOriginal.map((x) => <li key={x.path}><code>{x.path}</code>: the same as the original ({x.reason}).</li>)}
             </ul>
           )}
+          {asIs.ranged && (asIs.ranged.files.length > 0 || asIs.ranged.skipped.length > 0) && (
+            <p className={styles.note}>
+              {asIs.ranged.files.length} file(s) the original serves in pieces are kept whole, and the copy cuts the pieces itself.
+              {asIs.ranged.skipped.length > 0 && ` ${asIs.ranged.skipped.length} could not be kept that way and stay as the original answers them.`}
+            </p>
+          )}
         </>
       ) : <p className={styles.note}>Not recorded for this copy: make the copy again to see it.</p>}
 

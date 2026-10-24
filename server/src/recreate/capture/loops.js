@@ -299,6 +299,18 @@ export async function recordPaths({ paths, ms = 9000, every = 50 }) {
 const SLOW_MOVER_PX = 60; // a one-way move smaller than this in the short recording may be a slow float
 const SLOW_FADE = 0.5; // a one-way opacity change smaller than this in the short recording may be a slow pulse
 const SLOW_WATCH_MS = 9000;
+// A change the short recording saw but too small for any channel's minimum (analyzeSeries: 3 px, 5 deg, …): a badge rocking
+// 4 deg in 2.2 s. Above this floor it is a slow mover and is watched longer; below it, noise (sub-pixel layout).
+const SLOW_FLOOR = { x: 1, y: 1, rot: 1.5, scale: 0.01, opacity: 0.02, hue: 2, dash: 1 };
+/** A recorded series that moved, but by less than what names a pattern: watched longer before it is given up. */
+export function movesSlowly(series) {
+  if (!Array.isArray(series) || series.length < 8) return false;
+  const ch = channels(series);
+  return Object.entries(SLOW_FLOOR).some(([k, floor]) => {
+    const vs = ch.map((c) => c[k] ?? 0);
+    return Math.max(...vs) - Math.min(...vs) >= floor;
+  });
+}
 /** findScriptLoops compares the page twice this far apart before it records the changers. */
 const COMPARE_GAP_MS = 450;
 /** One scroll window of the strip scan: settle, the compare gap, the short recording, the reads and analysis around them. */
@@ -806,6 +818,10 @@ export async function captureLoops(page, { script = true, recordMs = 2200, slowW
   // several seconds: watched again longer (only these), it shows its turns and becomes an oscillation.
   const slow = (found?.candidates ?? []).filter((c) => {
     const a = analyzeSeries(c.series);
+    // Changed, but by less than a channel's minimum in the short recording (a badge rocking a few degrees over several
+    // seconds): whether it reached the minimum depended on the phase it was caught in, and one run kept it while the
+    // next dropped it. Watched longer like the other slow movers; what still names no pattern is dropped as before.
+    if (!a) return movesSlowly(c.series);
     // One way (drift), or one turn only (move): not enough of it was seen. A slow fade that only went one way (a card
     // "breathing" over several seconds: opacity 0.07 in 2 s) is watched longer too.
     if (a?.pattern === 'ramp' && a.channel === 'opacity' && a.range < SLOW_FADE) return true;

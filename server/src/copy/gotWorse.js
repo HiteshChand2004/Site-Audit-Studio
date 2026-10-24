@@ -34,7 +34,10 @@ const hostOf = (url) => {
     return '';
   }
 };
-const hasFileExt = (p) => /\.[a-z0-9]{1,6}$/i.test(p);
+// A file: a name with an extension (up to 10 letters: a runtime's own formats are longer than the usual three or four).
+const hasFileExt = (p) => /\.[a-z0-9]{1,10}$/i.test(p);
+// An address asking for byte ranges of a file (?range=from-to[,from-to]): the original serves that file in pieces.
+const isRanged = (url) => /[?&]range=\d+-\d+(,\d+-\d+)*(&|$)/.test(String(url ?? ''));
 const kb = (bytes) => `${Math.round(bytes / 1024)} KB`;
 
 /**
@@ -369,6 +372,7 @@ function requestPart(e, ctx) {
   if (p && !hasFileExt(p) && !ctx.copied.has(p) && !ctx.chosen.has(p)) {
     return { what, reason: 'owner', notCopied: p, evidence: 'the page loading a page that was not copied, ahead of a click' };
   }
+  if (p && isRanged(e.url)) return { what, reason: null, evidence: `the copy does not hold the file ${p}, which the original serves in pieces (a ?range= query): the copy must hold the whole file and slice it itself` };
   return { what, reason: null, evidence: hasFileExt(p ?? '') ? `the copy does not hold the file ${p}` : `${e.text}` };
 }
 

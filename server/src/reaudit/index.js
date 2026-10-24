@@ -23,7 +23,7 @@ import { createNetPolicy, userPolicy } from '../security/netGuard.js';
 import { compareAudits, loadSide } from './compare/index.js';
 import { CATEGORIES } from './compare/rules.js';
 import { explainWorse } from '../copy/gotWorse.js';
-import { clickBudgetFor, hoverBudgetFor, measureNewMotion, motionItems, motionTimeFor, readOldMotion } from './motion.js';
+import { clickBudgetFor, hoverBudgetFor, hoverFirstFor, measureNewMotion, motionItems, motionTimeFor, readOldMotion } from './motion.js';
 
 /** Thrown when a re-audit cannot run at all; the job is marked failed. */
 export class ReauditError extends Error {}
@@ -174,7 +174,10 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
         const oldMotion = await readOldMotion(folder, report.pages, report.exact?.excluded ?? []);
         const slugOf = new Map((report.pages ?? []).map((p) => [p.outPath, p.slug]));
         const targets = outputPageList.filter((p) => slugOf.has(p.outPath) && oldMotion.has(slugOf.get(p.outPath)))
-          .map((p) => ({ slug: slugOf.get(p.outPath), urlPath: p.path.replace(/^\//, ''), hoverBudgetMs: hoverBudgetFor(oldMotion.get(slugOf.get(p.outPath))), clickBudgetMs: clickBudgetFor(oldMotion.get(slugOf.get(p.outPath))) }));
+          .map((p) => {
+            const old = oldMotion.get(slugOf.get(p.outPath));
+            return { slug: slugOf.get(p.outPath), urlPath: p.path.replace(/^\//, ''), hoverBudgetMs: hoverBudgetFor(old), hoverFirst: hoverFirstFor(old), clickBudgetMs: clickBudgetFor(old) };
+          });
         // The time follows the pages measured (≤ 6): long pages take 40–60 s each.
         const measured = await measureNewMotion({ origin: served.origin, pages: targets, deadline: Date.now() + Math.max(150000, targets.slice(0, 6).reduce((ms, t) => ms + motionTimeFor(t), 0)) });
         motion = { ...motionItems(oldMotion, measured.pages), failed: measured.failed, skipped: measured.skipped };
