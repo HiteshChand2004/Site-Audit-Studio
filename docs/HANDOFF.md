@@ -1,5 +1,9 @@
 # Handoff — copy-my-site
 
+> **Working rule (the user's): every fix must be generic.** No site-specific patches, and no code that checks for a site name,
+> an address, a framework name (like Framer) or a specific page. A fix must work for any site that has the same problem. Real
+> sites only find problems and verify fixes; a site may be named in a comment or a test's story, never in a condition.
+
 Branch `copy-my-site` (from main 511f36a, PR #2 merged). Not merged. Last pushed commit: see `git log -1`.
 Read first: `docs/COPY-MY-SITE.md` (the plan and the rules). This file says what is actually built and what is not.
 
@@ -405,16 +409,75 @@ not the tool. The user then moved the big multi-site run to the end of the copy-
   `lighthouse-score.<mode>.<category>.<path>` with status `recheck`, the reason in words, never a median; the pass row covers
   only what was scored; the note counts them. Test `reaudit-lighthouse-pages` (5). Recomputed on the stored runs: phone
   2 blank of 3, computer 3 of 3 → nothing comparable, 0 "got worse" from Lighthouse scores.
-- **Next on this**: find why the as-is copy renders blank under Lighthouse's Chrome on nyaayai (reproduce with
-  `runLighthouse` against `serveCopy` of the saved copy; compare `document.baseURI` / `<base>` / the lifted module that throws),
-  then run the comparison again — the original's six runs are cached and reused.
+### State on 2026-10-24 (end of session)
 
-**Sites still to run at the end (before the PR)**, one at a time on a scratch API, same rules (one Lighthouse run per side, three
-only when the copy is not 5 ahead in every category; visual gate; re-audit): parchaa homepage (https://www.parchaa.com/),
-panscience (https://panscience.xyz/, homepage + the top-navigation pages Ventures, Approach, Ecosystem, Initiatives — the as-is
-copy takes an explicit page list, ≤ 40), sankalpam homepage (http://sankalpam.ai/), indikaai and makememo whole-site (check they
-answer first). A driver that does Analyze → as-is copy → waits for the queued re-audit → one JSON per site lived in the session
-scratchpad (`live/run-sites.mjs`); it is 150 lines against the public API and quick to write again.
+**Decision: the big multi-site live run moves to the end, before the PR.** Until then, live runs only to check a fix.
+
+**The Lighthouse rule** (`reaudit/lighthousePages.js`): the copy's Lighthouse score is never lower than the original's, in any
+category, on phone and computer, on every copied page. One run per side; when the copy is not ≥ 5 ahead in every category, two
+more runs per side and the medians of three decide. A run with no score, or a copy run under 20 % of the original's DOM elements,
+is "could not be scored" (status `recheck`, reason in words), never part of a median. The original's runs are cached per
+project (`lighthouse-original/`) and reused by later re-audits.
+
+**TOP PRIORITY, OPEN: nyaayai's as-is copy renders blank under Lighthouse.** 5 of 6 per-page runs and both homepage runs got a
+36-element shell (the original: 1 215 / 1 370), console `Fatal error … TypeError: Invalid base URL at …/JQGUGunJL.Cj2najZC.mjs`
+(the site's own builder runtime building URLs from a base). In the copy's own Playwright checks the page renders (0 px visual
+difference), so it is specific to the Lighthouse load. Leads, in the order to check them:
+1. **Script order (fix committed, not yet verified live)**: the URL shim that resolves a relative base was appended at the END of
+   the body; the site's main module is `async` (runs the moment it is fetched) and a blocking third-party script that never answers
+   from this machine (a chatbot widget's host, ~21 s) held the parser, so the module ran before the shim. Now the shim is the
+   first script of the document, after `<meta charset>` (`complete.js registerServiceWorker`, test `preserve-url-base`, which
+   reproduces the race with an async module and a stalled script).
+2. **A chunk on another original host (fix committed, not yet verified live)**: a builder CMS chunk under `/cms/…` is answered by
+   the site with a 404 page and by its CDN host with the file; completion asked the site only. Now it asks the site, then every
+   other original host (`complete.js answerSameOrigin`, test `preserve-completion-same-origin`).
+3. If still blank: compare `document.baseURI` / `<base>` / `import.meta.url` of the module that throws between a Playwright load
+   and Lighthouse's Chrome (which goes through the egress proxy); check whether the service worker answers inside Lighthouse's
+   fresh profile (Lighthouse clears storage, so a first visit has no worker).
+   Repro: `node C:/Users/urvas/Downloads/remastly-live-results/nyaayai/repro-blank.mjs <copy dir> <out dir>` (serveCopy +
+   Playwright ×3 + one Lighthouse run). Then run the comparison again; the original's six runs are cached.
+Until this is verified, the "fixed" accessibility / SEO / dom-size rows of nyaayai's re-audit were measured on the blank shell and
+are not trustworthy (see `CORRECTED-VERDICT.txt`).
+
+**Also open on nyaayai's copy (re-audit 71468133)**:
+- **Unused CSS 0 → 12 KiB, "got worse", UNEXPLAINED.** Not investigated. It may be the blank render (the stylesheets load, the
+  content that uses them does not), so check it again after the fix above before looking elsewhere.
+- **Motion could not be measured on the copy (the motion step timed out)**, so the re-audit has no motion rows for it. Not
+  investigated; also check again after the blank-render fix.
+
+**This morning's run (2026-10-24, branch `copy-step4`, scratch data `C:/Users/urvas/Downloads/sas-work/data`, log
+`sas-work/live.log`, `SAS_MAX_PARALLEL=2`)**:
+- **indikaai answered from this machine this time** (it hung on 2026-10-23). Analyze found 12 pages (`/`, `/media`, `/solutions`,
+  `/about`, `/industries`, `/careers`, `/contact`, three reports, two blog pages). **The copy failed**: one image comes from a
+  `/wiki/Special:FilePath/…` address and the copy tried to create a folder with a `:` in its name, which Windows refuses (ENOENT).
+  **Fixed in cfaab64** (cherry-picked here): every file of a copy gets a name any file system can hold, the same on every machine
+  (`pageLift.js fileSafePath`: `Special:FilePath` → `Special~3aFilePath`; dot segments, a decoded backslash, a trailing dot or
+  space and device names like `con` neutralised too); the copy's references point at that name; test `preserve-safe-names`.
+  indikaai has not been run again with the fix.
+- **makememo**: Analyze found 9 pages (`/ /about /pricing /blog /privacy /careers /terms /contact /security`); the run was
+  **killed by the system for low memory** during the copy (37 min in), so no re-audit. sankalpam and nyaayai were not reached.
+
+**Sites still to run at the end (before the PR)**: **one site per run, with `SAS_MAX_PARALLEL=1`** (two at a time was still
+killed for memory on this 15 GB machine; free memory first), on a scratch API or scratch data only, same rules (Lighthouse rule
+above; visual gate; re-audit):
+- parchaa homepage — https://www.parchaa.com/
+- panscience — https://panscience.xyz/, the homepage + the top-navigation pages Ventures, Approach, Ecosystem, Initiatives (the
+  as-is copy takes an explicit page list, ≤ 40)
+- sankalpam homepage — http://sankalpam.ai/
+- indikaai whole site — https://www.indikaai.com/ (check it answers first)
+- makememo whole site — https://makememo.ai/ (check it answers first)
+- nyaayai homepage again, once the blank-render fix is verified.
+
+**Where things are kept**:
+- Live results kept for the user: `C:/Users/urvas/Downloads/remastly-live-results/` — `nyaayai/` (summary.json, recreate/,
+  reaudit/, lighthouse-original/, CORRECTED-VERDICT.txt, repro-blank.mjs) and `first-attempt-indikaai-makememo/`.
+- Scratch data of this morning's run: `C:/Users/urvas/Downloads/sas-work/data` (projects indikaai 9b829d40…, makememo 93e23afa…,
+  sankalpam 06a12702…, nyaayai 603201ca…); logs `sas-work/live.log`, `sas-work/live-killed-run.log`. Driver (uncommitted, scratch):
+  `Website-Audit-copystep4/server/scratch-live.mjs <projectId>:<whole|home> …` (calls the job managers directly, no server).
+- Scratch data of the 2026-10-23 nyaayai run (scratch API port 4411; project e97a1434 = nyaayai): the earlier session's
+  scratchpad, `C:/Users/urvas/AppData/Local/Temp/claude/C--Users-urvas-Downloads-Website-Audit-accounts/0e702d26-ff8c-47ed-bdbe-ab81ffd84eb6/scratchpad/live/`
+  (`data/`, `run-sites.mjs`, `recopy.mjs`, `rerun-reaudit.mjs`). It is in Temp: copy it out before it is cleaned if it is needed.
+
 Known gaps: Step 1's stability figures (nyaayai 0.27–0.31 %) were measured with the old `pixelDiffPct` and not again.
 
 ## Next steps, in order (commit and push after each)
