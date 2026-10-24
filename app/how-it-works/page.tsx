@@ -50,7 +50,7 @@ export default function HowItWorks() {
         line2="address to copy."
         ghost="Steps"
         lead="Paste an address at the start, download a .zip at the end. Pick a step below to see that part of the app."
-        art={<HeroArt main={<HeroShot src="/tool/h-add.webp" w={960} h={864} trim />} overlay={<ZipMock />} />}
+        art={<HeroArt main={<HeroShot src="/tool/h-add.webp" w={960} h={864} trim priority />} overlay={<ZipMock />} />}
       />
 
       <Section label="The journey" tone="soft" size="sm">

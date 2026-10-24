@@ -47,7 +47,7 @@ export default function ReportPage() {
         ghost="Report"
         art={
           <HeroArt
-            main={<HeroShot src="/tool/f-needs.webp" w={1400} h={409} bar="Audit report" zoom={1.6} height={230} />}
+            main={<HeroShot src="/tool/f-needs.webp" w={1400} h={409} bar="Audit report" zoom={1.6} height={230} priority />}
             overlay={<HeroShot src="/tool/f-overview.webp" w={1400} h={250} zoom={1.9} height={118} />}
           />
         }

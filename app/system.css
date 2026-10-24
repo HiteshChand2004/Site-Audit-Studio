@@ -1375,7 +1375,13 @@ a:has(> .logo),
   margin-right: clamp(28px, 3.4vw, 48px);
   transition: opacity 350ms var(--ease-out), transform 350ms var(--ease-out);
 }
-.pm .mark[data-dim] {
+/* The kinds row (PlatformsFilter) puts the chosen kind on .plat as data-kind; marks of every other kind recede. One line
+   per group in lib/content.ts PLATFORMS, slugged by lib/kind.ts kindSlug: keep them in step. */
+.plat[data-kind='site-builders'] .pm .mark:not([data-kind='site-builders']),
+.plat[data-kind='cms-and-shops'] .pm .mark:not([data-kind='cms-and-shops']),
+.plat[data-kind='frameworks'] .pm .mark:not([data-kind='frameworks']),
+.plat[data-kind='hosting'] .pm .mark:not([data-kind='hosting']),
+.plat[data-kind='motion-and-ui-libraries'] .pm .mark:not([data-kind='motion-and-ui-libraries']) {
   opacity: 0.16;
   transform: scale(0.88);
 }

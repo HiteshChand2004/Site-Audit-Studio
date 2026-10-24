@@ -16,8 +16,12 @@ export function HeroArt({ main, overlay, className = '' }: { main: ReactNode; ov
   );
 }
 
-/* A framed picture: an optional window bar with a label, then the image. `zoom` shows the left part of a wide screen larger. */
-export function HeroShot({ src, w, h, bar, chip, zoom, height, trim }: { src: string; w: number; h: number; bar?: string; chip?: ReactNode; zoom?: number; height?: number; trim?: boolean }) {
+/*
+ * A framed picture: an optional window bar with a label, then the image. `zoom` shows the left part of a wide screen larger.
+ * `priority` is for the main piece of a page hero: it is above the fold on every screen, so it is fetched at once and
+ * preloaded instead of lazy-loaded (next/image's default), which otherwise delays the largest paint on a phone.
+ */
+export function HeroShot({ src, w, h, bar, chip, zoom, height, trim, priority = false }: { src: string; w: number; h: number; bar?: string; chip?: ReactNode; zoom?: number; height?: number; trim?: boolean; priority?: boolean }) {
   return (
     <figure className={`hshot${trim ? ' hshot--trim' : ''}`}>
       {bar && (
@@ -32,7 +36,7 @@ export function HeroShot({ src, w, h, bar, chip, zoom, height, trim }: { src: st
         </figcaption>
       )}
       <div className="hshot__img" style={height ? { height } : undefined}>
-        <Image src={src} width={w} height={h} alt="" unoptimized style={zoom ? { width: `${zoom * 100}%`, maxWidth: 'none' } : undefined} />
+        <Image src={src} width={w} height={h} alt="" unoptimized priority={priority} style={zoom ? { width: `${zoom * 100}%`, maxWidth: 'none' } : undefined} />
       </div>
     </figure>
   );

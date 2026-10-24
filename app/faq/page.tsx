@@ -24,7 +24,7 @@ export default function Faq() {
         ghost="FAQ"
         art={
           <HeroArt
-            main={<HeroShot src="/shots/botza-original.webp" w={900} h={563} bar="Original: botza.panscience.ai" />}
+            main={<HeroShot src="/shots/botza-original.webp" w={900} h={563} bar="Original: botza.panscience.ai" priority />}
             overlay={<HeroShot src="/shots/botza-copy.webp" w={900} h={563} bar="Copy" chip={<span className="hchip">Standard mode</span>} />}
           />
         }

@@ -28,7 +28,7 @@ export default function About() {
           <HeroArt
             main={
               <div className="hfan">
-                <HeroShot src="/shots/botza-copy.webp" w={900} h={563} bar="botza.panscience.ai" />
+                <HeroShot src="/shots/botza-copy.webp" w={900} h={563} bar="botza.panscience.ai" priority />
                 <HeroShot src="/shots/panscience-copy.webp" w={900} h={563} bar="panscience.xyz" />
                 <HeroShot src="/shots/indikaai-mid.webp" w={900} h={563} bar="indikaai.com" />
               </div>

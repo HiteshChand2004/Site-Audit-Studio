@@ -23,7 +23,7 @@ export default function Contact() {
         lead="Questions about plans, a demo, or a website you want to rebuild? Send us a message."
         art={
           <HeroArt
-            main={<HeroShot src="/shots/panscience-copy.webp" w={900} h={563} bar="panscience.xyz" />}
+            main={<HeroShot src="/shots/panscience-copy.webp" w={900} h={563} bar="panscience.xyz" priority />}
             overlay={
               <div className="ct-note">
                 <span className="ct-note__ico" aria-hidden="true">

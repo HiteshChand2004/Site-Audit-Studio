@@ -8,8 +8,8 @@ import HeroVideo from './HeroVideo';
  * changes its size and nothing shifts. It supports the headline; it does not lead the page. heroMedia in
  * lib/content.ts picks the fill:
  *   'stage' : one screenshot, framed (the copy of a real site), with a one-line figure under it
- *   'video' : the poster frame, which is always rendered and is the LCP image (priority, sized to the slot), with
- *             HeroVideo laid over it on wide screens once the page has loaded
+ *   'video' : the poster frame, which is always rendered and is the LCP image (priority: preloaded from the <head> with
+ *             fetchpriority=high, sized to the slot), with HeroVideo laid over it on wide screens once the page has loaded
  */
 export default function HeroMedia() {
   const m = heroMedia;
@@ -22,7 +22,7 @@ export default function HeroMedia() {
       <div className="frame hmedia__frame">
         <FrameBar addr={m.stage.site} />
         <div className="hmedia__slot">
-          <Image src={image} alt={alt} fill fetchPriority="high" loading="eager" sizes="(min-width: 1000px) 540px, calc(100vw - 40px)" className="hmedia__fill" />
+          <Image src={image} alt={alt} fill priority sizes="(min-width: 1000px) 540px, calc(100vw - 40px)" className="hmedia__fill" />
           {isVideo && <HeroVideo />}
         </div>
       </div>

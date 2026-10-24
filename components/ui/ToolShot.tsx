@@ -11,7 +11,7 @@ export function ToolShot({ src, w, h, alt, caption, priority = false, className 
   return (
     <figure className={`tshot ${className}`.trim()} style={{ maxWidth }}>
       <div className="tshot__frame">
-        <Image src={src} width={w} height={h} alt={alt} unoptimized loading={priority ? 'eager' : 'lazy'} />
+        <Image src={src} width={w} height={h} alt={alt} unoptimized priority={priority} />
       </div>
       {caption && <figcaption>{caption}</figcaption>}
     </figure>

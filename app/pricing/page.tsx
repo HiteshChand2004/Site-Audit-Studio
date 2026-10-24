@@ -25,7 +25,7 @@ export default function Pricing() {
         lead="Every plan audits, fixes, rebuilds and reports. The plans differ only in how much you can run."
         art={
           <HeroArt
-            main={<HeroShot src="/shots/collateral-features.webp" w={900} h={563} bar="collateral.panscience.ai/features, the copy" chip={<span className="hchip">Exact copy mode</span>} />}
+            main={<HeroShot src="/shots/collateral-features.webp" w={900} h={563} bar="collateral.panscience.ai/features, the copy" chip={<span className="hchip">Exact copy mode</span>} priority />}
             overlay={
               <div className="hpanel">
                 <StackMock />
