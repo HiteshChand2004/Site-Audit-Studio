@@ -21,7 +21,7 @@ Read first: `docs/COPY-MY-SITE.md` (the plan and the rules). This file says what
 | L2 | Database: heartbeat per running job + lock file | OPEN (next steps item 7) | A second process on one data folder marks running jobs failed and adopts their workspaces. **Until done: deploy only with plain stop-then-start, never a zero-downtime reload** (PM2 reload, rolling update on a shared volume). Today the app is one `npm start` process, so nothing shipped reloads. |
 | L3 | Preview in a sandboxed iframe with no same-origin access | OPEN, unproven | The recreate preview runs on its own loopback port, framed with `sandbox` and a CSP; the as-is copy's preview runs the original's own scripts. In production previews move to a path or a subdomain (docs/ACCOUNTS.md): prove, with a test that tries to reach the app's origin, cookies and storage from inside the frame, that a copied site's script cannot — before building the production preview. |
 | L4 | Job queue + concurrency limits per server and per user | OPEN | Today: one global lock per process (one Analyze / Recreate / Re-audit at a time), no per-user limit, no queue across processes; `SAS_MAX_PARALLEL` caps browser contexts. Two jobs at once crashed a 15 GB machine. Size the limits from measured memory per job (peak RSS of server + browsers per job kind and page count), not from guesses. |
-| L5 | Upper time limit per job and per page | OPEN | The motion timer now grows with page length (`motionTimeFor`: at most ~4.6 min per page, 6 pages), the completion pass has `PASS_MAX_MS` 45 s per page and size, but an exact / manual run has **no job limit** (`Infinity` by design) and the capture of one very long page has none either. Needed: a hard ceiling per page and per job in production, with what was not measured reported, so one page cannot hold a server for hours. |
+| L5 | Upper time limit per job and per page | OPEN | The motion timer now grows with page length (`motionTimeFor`: at most ~4.6 min per page, 6 pages), the completion pass has `PASS_MAX_MS` 45 s per page and size, but an exact / manual run has **no job limit** (`Infinity` by design) and the capture of one very long page has none either; the as-is warm-up scroll is bounded (`preserve/scroll.js SCROLL_MAX_MS` 30 s, 54e6aaa). Needed: a hard ceiling per page and per job in production, with what was not measured reported, so one page cannot hold a server for hours. |
 | L6 | Outbound fetching from a datacenter IP | OPEN | Sites may block or stall it (bot protection, geo rules). Known from this machine: the chatbot host `botza.panscience.xyz` stalled ~21 s / `ERR_EMPTY_RESPONSE` on 2026-10-23 (the blank-render trigger); indikaai and makememo had to be "checked that they answer first" (2026-10-24 morning). Keep a list: site, host, what failed, why, date — from the live runs and from production logs. |
 | L7 | Disk: storage per copy + cleanup policy | OPEN | An as-is copy keeps every original file (nyaayai homepage 4.6 MB referenced; an exact copy was 83 MB of `dist/`); retention today: latest 2 recreates keep their IR, latest 3 analyses keep screens, `pruneRecreates`; scratch folders (`sas-work`, Temp scratchpads) grow without limit. Needed: a per-copy size figure in the report, a quota per user / per site, and a scheduled cleanup of old copies, re-audits and scratch. |
 | L8 | Production config: HTTPS, Secure cookies, secrets in server `.env` only, database backups | OPEN | HTTPS is the reverse proxy's; the session cookie must be `Secure` + `HttpOnly` + `SameSite` behind it; no secret in the client bundle or the repo; SQLite backups (a copy of `app.db` + `projects/` on a schedule, restore tested once). |
@@ -110,6 +110,8 @@ the copy is therefore "not safe" by the existing outside-call check. That is rea
   that cap is meant to). The full suite was not run.
 - 2026-10-24 (31c5cf6), the same way with `SAS_MAX_PARALLEL=1`: `reaudit-motion` 12 (+1 new), `recreate-loops` 3 pass. The full
   suite was not run.
+- 2026-10-24 (54e6aaa), the same way: `preserve-scroll` 4 (new), `copy-visual-check` 2, `preserve-complete` 1,
+  `preserve-completion-late` 2 pass. The full suite was not run.
 - Client: `npx vite build` passes. No client test suite exists.
 
 ## The plan of 2026-10-20 (kept as written: steps 1-3 DONE, 4 IN PROGRESS, 5 not started; the live list is under "Next steps" below)
@@ -149,6 +151,29 @@ Proof (nyaayai Next.js as-is copy 78c73050, live original, scratch data, scratch
 The 0.3 % left at 1440 is the original's third-party chatbot bar (botza widget, excluded on purpose = reason a), at the same place
 every run. Score = 100 − 10 × diff: 96.9–97.3 at 1440, 97.6–98.3 at 390.
 Tests: `preserve-baseline-capped.test.js` (new), `preserve-original-midway.test.js` — both pass.
+
+**Re-check with the new ruler (2026-10-24, 54e6aaa; `remastly-live-results/nyaayai/stability-2026-10-24/STABILITY-2026-10-24.md`)**
+— the figures above came from the old ruler; these are the real `visualCheck` (3 pictures a side, noise map, `exactDiff` at
+0.05), five fresh processes, `SAS_MAX_PARALLEL=1`, one browser at a time:
+| | 1440 diff % (raw) | 390 diff % (raw) |
+|---|---|---|
+| **5 fresh processes** | **0.2621–0.2771** (0.26–0.34) | **0.1909 in every run** (0.21–0.24) |
+No outlier in 10 runs; the same to the fourth decimal as the copy's own check that morning (0.2621 / 0.1909); the 0.26 % at
+1440 is still the excluded chat bar. Score 97.2–97.4 at 1440, 98.1 at 390.
+- **The 14 000 px scroll stop was a limit, fixed generally** (`preserve/scroll.js scrollThrough`): the warm-up before every picture
+  and the completion pass both scrolled to a fixed 14 000 px; at 390 this page is 15 681 px tall, so its last 1 681 px were never
+  scrolled to. Now it scrolls to the page's own bottom, follows a page that grows while scrolled, and stops at a **time cap**
+  (`SCROLL_MAX_MS` 30 s ≈ 100 000 px; `capped` → `visualCheck.scrollCapped` and the completion pass's log). On this page the stop
+  hid nothing (probe: 209 elements and 3 images below 14 000 px, all loaded and visible after the old scroll too — the numbers
+  above are unchanged by the fix); the fixture test shows the general case (a part revealed at 17 000 px, missed before).
+- **The 390 race, tried on purpose, did not reproduce** (12 attempts: 3 rounds × 2 sides × 2 widths, picture taken without the
+  hold, the page's listeners counted): the trigger is real at both widths — one unheld picture delivers 2–7 `resize` and 1–2
+  media-query `change` events to the page — but every handler ran with the window already restored (innerHeight 844 / 900), the
+  DOM shape did not change and the unheld picture differed from the held one by ≤ 0.073 % (inside the noise). When the handler runs
+  relative to the capture is the browser's timing (on 2026-10-23 at 1440 it was once mid-picture: 14.53 %). The deterministic proof
+  is `test/preserve-scroll.test.js`: a page whose resize / media-query / ResizeObserver handlers re-lay it out is re-laid out by
+  the picture without the hold; held, no handler runs, two pictures are identical and their top is the first screen — **at 390 and
+  at 1440**.
 
 ## Step 2 — MERN "3.6 % taller": DONE
 
@@ -270,8 +295,9 @@ Tests: `copy-address.test.js` (3, incl. the skip path: nothing in the copy names
   **1440 only** (1.27, 14.53, 1.26, 0.34 %). At 390, "before" exists only from one process (0.17, 0.18, 0.17, 0.17 %; no outlier
   seen; an earlier session saw 0.70 % once). After the fix, nyaayai in 6 fresh processes: 1440 0.27–0.31 %, 390 0.17–0.24 %.
 - makememo was measured **after** the fix only (live 1440 0.06–0.08 %, 390 0.03–0.10 %, 3 checks), never before it.
-- **Unproven**: that the fix removes outliers on other sites; that 390 had the same race (never observed there); phone layouts
-  that answer resizes differently; widths other than 1440 and 390.
+- **Unproven**: that the fix removes outliers on other sites; phone layouts that answer resizes differently; widths other than
+  1440 and 390. **Proven since (2026-10-24, 54e6aaa)**: the hold stops every size reaction at 390 as at 1440 (fixture, deterministic),
+  and nyaayai's live race at 390 does not reproduce on purpose (see the Step 1 re-check above).
 
 ### 4. Fixer accept / revert (step-3 proof runs)
 
@@ -527,7 +553,9 @@ above; visual gate; re-audit):
   reaudit/, lighthouse-original/, CORRECTED-VERDICT.txt, repro-blank.mjs; 2026-10-24: `BLANK-RENDER-2026-10-24.md`,
   `repro-2026-10-24/`, `run-2026-10-24/` with the fresh copy, re-audit, applied-throttling Lighthouse runs and the LCP probe;
   `MEASURED-HOST-2026-10-24.md` + `reaudit-measured-host-2026-10-24/` (+ `.log`): the re-audit through the measurement host;
-  `reaudit-motion-2026-10-24/` (+ `.log`): the re-audit after the motion timer fix, motion measured),
+  `reaudit-motion-2026-10-24/` (+ `.log`): the re-audit after the motion timer fix, motion measured;
+  `stability-2026-10-24/` (`STABILITY-2026-10-24.md`, `after-fix.jsonl`, `probe-old.jsonl`, `race.jsonl`, `runs.log`): the Step 1
+  re-check with the new ruler, the scroll-stop probe and the race attempt; harness `scripts/nyaayai-stability.mjs`),
   `first-attempt-indikaai-makememo/` and **`scripts/`**: the live-run driver `scratch-live.mjs`, `repro-stall.mjs` (serveCopy +
   a local proxy that stalls one host + Lighthouse), `nyaayai-fresh-copy.mjs` (one as-is copy + re-audit on a scratch data folder,
   summary and folders copied out), `nyaayai-reaudit.mjs` (a re-audit alone of a finished recreate, same folder rule) and the other scratch scripts of the step-4 sessions (never committed; they import from a
