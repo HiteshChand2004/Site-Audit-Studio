@@ -76,7 +76,7 @@ export default function AnalyzeProgress({ analysis, kind = 'analysis', onDismiss
       <div className={styles.bar} role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={labels.running}>
         <span style={{ width: `${pct}%` }} />
       </div>
-      {queued && <p className={styles.explain}>Another job is running first (only one runs at a time, to keep the measurements fair). This starts by itself.</p>}
+      {queued && <p className={styles.explain}>{analysis.message && analysis.message !== 'Starting…' ? analysis.message : 'Another job is running first (only one runs at a time, to keep the measurements fair).'} This starts by itself.</p>}
       {analysis.reconnecting && (
         <Alert tone="info" title="The connection to the app's server dropped for a moment">
           Reconnecting… The work goes on in the background.

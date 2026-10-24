@@ -10,7 +10,8 @@ import reauditRouter from './routes/reaudit.js';
 import stacksRouter from './routes/stacks.js';
 import reportRouter from './routes/report.js';
 import faviconRouter from './routes/favicon.js';
-import { lockBusy } from './jobs/manager.js';
+import { lockBusy, queueState } from './jobs/manager.js';
+import { describeLimits } from './jobs/limits.js';
 import { awakeHeld } from './jobs/keepAwake.js';
 import { recoverStaleJobs, watchStaleJobs } from './recreate/jobs.js';
 import { holdDataLock } from './config/dataLock.js';
@@ -53,7 +54,7 @@ if (accountsEnabled()) {
 // busy: an Analyze, Recreate or Re-audit job is running or queued (the dev runner waits before restarting).
 // keepAwake: the computer is being kept awake for it (jobs/keepAwake.js).
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, phase: '5', time: new Date().toISOString(), busy: lockBusy(), keepAwake: awakeHeld() });
+  res.json({ ok: true, phase: '5', time: new Date().toISOString(), busy: lockBusy(), keepAwake: awakeHeld(), jobs: { ...queueState(), limits: describeLimits() } });
 });
 
 if (accounts) {
@@ -99,6 +100,8 @@ app.listen(PORT, HOST, (err) => {
     console.error(err.code === 'EADDRINUSE' ? `Port ${PORT} is already in use. Stop the other server or set PORT.` : err);
     process.exit(1);
   }
+  const limits = describeLimits();
+  console.log(`Jobs: ${limits.maxJobs} at a time on this server, ${limits.jobsPerUser} per account, ${limits.jobMaxMinutes ? `${limits.jobMaxMinutes} min` : 'no'} hard limit, ${limits.minFreeMB ? `${limits.minFreeMB} MB` : 'no'} free memory needed to start (jobs/limits.js).`);
   console.log(`API ready on http://${HOST.includes(':') ? `[${HOST}]` : HOST}:${PORT}${isLoopbackHost(HOST) ? ' (this computer only)' : ' (reachable from the network)'}`);
   // Jobs a server that is gone left queued or running (their heartbeat stopped, jobs/liveness.js) are marked failed, and a
   // recreate among them continues where it stopped (recreate/checkpoint.js); then the same check keeps running. A job alive in

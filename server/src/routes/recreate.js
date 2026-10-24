@@ -3,7 +3,7 @@ import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { Router } from 'express';
 import { db } from '../db/index.js';
-import { ConflictError } from '../jobs/manager.js';
+import { ConflictError, JobLimitError } from '../jobs/manager.js';
 import { streamJob } from '../jobs/sse.js';
 import { PUBLIC_STEPS } from '../recreate/index.js';
 import { analysisWarnings, latestAnalysis, parseExactMode, parseTargetDomain } from '../recreate/inputs.js';
@@ -177,6 +177,7 @@ router.post('/:id/recreate', async (req, res) => {
     if (err instanceof ConflictError) {
       return res.status(409).json({ error: err.message, recreateId: err.job.id });
     }
+    if (err instanceof JobLimitError) return res.status(409).json({ error: err.message, limit: 'user', busy: { kind: err.job.kind, projectId: err.job.projectId, jobId: err.job.id } });
     throw err;
   }
 });

@@ -86,4 +86,7 @@ export function applySchema(db) {
   // running. At startup only a row whose heartbeat is older than STALE_MS (or NULL: written by an older server) is marked
   // failed; a job alive in another process is left alone. NULL for every row written before this column existed.
   for (const table of ['analyses', 'recreates', 'reaudits']) addColumn(table, 'heartbeat_at', 'TEXT');
+  // What the job was started with ({ payload, warnings, system }, jobs/manager.js), so a queued job of a server that died can be
+  // put back in line by the next server with the same row. NULL for rows written before this column existed.
+  for (const table of ['analyses', 'recreates', 'reaudits']) addColumn(table, 'payload_json', 'TEXT');
 }

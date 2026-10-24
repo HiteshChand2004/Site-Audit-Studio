@@ -5,8 +5,8 @@
 // after (queued behind this job, never discarding the recreate).
 import path from 'node:path';
 import { db } from '../db/index.js';
-import { JobManager } from '../jobs/manager.js';
-import { adoptStaleJobs, STALE_MS } from '../jobs/liveness.js';
+import { JobManager, requeueJobs } from '../jobs/manager.js';
+import { adoptStaleJobs, failUnclaimed, STALE_MS } from '../jobs/liveness.js';
 import { startReaudit } from '../reaudit/jobs.js';
 import { asIsBudgetMs, overallPct, runRecreate, STAGES, STEPS } from './index.js';
 import { replayStages } from './replay.js';
@@ -95,7 +95,7 @@ export async function autoResume(project, recreateId, reason) {
   if (reason === 'restart' && checkpoint.stopped) return null; // it stopped on its own before the restart
   try {
     const analysis = latestAnalysis(project.id);
-    const job = recreateJobs.start(project, { resumeFrom: { recreateId, auto: true } }, { warnings: analysis ? analysisWarnings(analysis) : [] });
+    const job = recreateJobs.start(project, { resumeFrom: { recreateId, auto: true } }, { warnings: analysis ? analysisWarnings(analysis) : [], system: true });
     if (reason === 'restart') noteResumed.run('The server restarted while this job was running: it continues where it stopped.', recreateId);
     console.log(`[recreates ${recreateId}] continues where it stopped (${reason}) as ${job.id}`);
     return job;
@@ -123,11 +123,16 @@ export async function resumeInterruptedRecreates(rows = []) {
  * @param {{ now?: number }} [o]
  */
 export async function recoverStaleJobs({ now = Date.now() } = {}) {
-  const { marked, alive, recreates } = adoptStaleJobs({ now });
+  const { marked, alive, recreates, requeue } = adoptStaleJobs({ now });
   for (const job of marked) console.log(`[${job.table} ${job.id}] marked failed: its process stopped (last heartbeat ${job.heartbeatAt ?? 'none'})`);
   if (alive.length) console.warn(`${alive.length} job(s) are alive in another process on this data folder and were left alone.`);
+  // Queued jobs of the dead server go back in line in the order they were started, same rows; one no manager here can take
+  // (none of its kind in this process) is marked like a running one.
+  const { requeued, left } = requeueJobs(requeue);
+  for (const job of requeued) console.log(`[${job.id}] back in line: it was waiting when its server stopped`);
+  for (const job of left) if (failUnclaimed(job, now)) marked.push(job);
   const resumed = await resumeInterruptedRecreates(recreates);
-  return { marked, alive, resumed };
+  return { marked, alive, resumed, requeued };
 }
 
 /** Keeps looking for jobs whose process died after this server started (a lock bypassed, a crash just before our startup pass). */
@@ -149,7 +154,7 @@ function queueReaudit(projectId, recreateId) {
   const project = selectProject.get(projectId); // may have been deleted while the job ran
   if (!project?.authorized) return;
   try {
-    startReaudit(project, recreateId);
+    startReaudit(project, recreateId, { system: true });
   } catch (err) {
     // One re-audit per project at a time: one already queued stays (the app offers a manual run).
     console.warn(`[recreates ${recreateId}] re-audit not queued: ${err.message}`);

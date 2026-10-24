@@ -694,3 +694,46 @@ adopted (renamed) its workspace. Two servers on one `app.db` would also prune ea
   and the live job's `.tmp` workspace stay untouched, then the same job continued once its heartbeat ages out; the read-after-beat
   race; a second process importing `db/index.js` marking nothing and taking no lock. Also run: `recreate-jobs` 15, `recreate-resume`
   7, `keep-awake` 2, `perf` 10, `stage0` 8, `stage2` 9, `stage3-signout` 2. Full suite not run.
+
+## Launch readiness — job limits (branch `job-lock`, Task A, 2026-10-24)
+
+Hosting is not decided, so every limit is an env setting read at call time (`server/src/jobs/limits.js`, documented in
+`server/.env.example`); one job uses several GB and two at once took a 15 GB machine down, so the defaults are one at a time.
+- **`SAS_MAX_JOBS`** (1–8, default 1): jobs running at once on this server. `jobs/manager.js` replaced the strict serial chain by one
+  FIFO line with that many slots, for every kind (Analyze, Recreate, Re-audit and the stack exports that use `exclusive()` directly);
+  order is never changed. `lockBusy()` / keep-awake unchanged.
+- **`SAS_JOBS_PER_USER`** (1–20, default 1): running or waiting jobs one account may have, counted across kinds by the project's
+  `owner_id`; a second start is refused with `JobLimitError` → 409 `{ error, limit: 'user', busy: { kind, projectId, jobId } }` (no
+  `analysisId` / `recreateId` key, so the app shows the sentence instead of following a job). With accounts off everyone is the one
+  local user (owner null), so the cap is the whole queue's depth there — raise it to queue several sites. The server's own follow-up
+  jobs (`{ system: true }`: the resume after a restart, the re-audit after a copy) are not counted against the account; owner
+  accounts follow the same caps (nothing reads the role).
+- **Place in line**: a waiting job's `message` says "Next in line: starts when the job before it finishes." or "Waiting in line: N jobs
+  run or wait before this one.", pushed over the same SSE path on every change, and the snapshot carries `queue: { ahead, position,
+  memory? }` while queued. `AnalyzeProgress.jsx` shows the server's sentence when queued.
+- **`SAS_JOB_MAX_MINUTES`** (1–1440, default **480**; 0 = none): the hard limit of one running job, above every pipeline's own budget
+  (Analyze 6 min × scale ≤ 30, Recreate 12 min / `SAS_RECREATE_MINUTES` ≤ 60 or per-page limits for every page, an as-is copy 20 min
+  per page + 10 per stack, exact mode none): 480 covers every fixed budget, an as-is copy of 23 pages and every real run recorded
+  (the longest, an exact-mode copy, took hours); a larger site needs it raised or 0, and the row's error names the setting. When it
+  hits, the job is asked to stop exactly like the app's Stop (`controller.abort()`: Recreate saves its checkpoint, `reason: 'stopped'`,
+  "Continue where it stopped" works; Analyze and Re-audit now take `signal` and end at their next step, their browser and proxy
+  closing on the way out), the row reads "Stopped after N minutes: the time limit for one job (SAS_JOB_MAX_MINUTES). What was
+  finished is kept.", and a run that has not ended `TIMING.hardStopGraceMs` = 60 s later loses its slot anyway (row closed, next job
+  starts, the late end logged, never written over the row).
+- **`SAS_JOB_MIN_FREE_MB`** (default 2048; 0 = no check): free memory the first job in line needs before it starts, looked at again
+  every 5 s (`TIMING.memoryPollMs`); meanwhile its message reads "Waiting for memory: X MB free, Y MB needed…". The line keeps its
+  order (a small job never jumps a large one). A job that waited for memory longer than the hard limit fails with the reason
+  instead of stalling the queue silently. 2 GB = the pipeline's own rules for one job (`audit/resources.js`: 150 MB × 4 contexts,
+  300 MB kept free, 900 MB before a second browser) plus Lighthouse's Chrome; macOS reports "unknown" and is never gated.
+- **With the heartbeat and the lock**: a queued job beats from the moment its row exists; the row keeps `payload_json`
+  (`{ payload, warnings, system }`, new column) so a queued job of a dead server is put **back in line in `started_at` order with
+  the same row** (`requeueJobs` → `manager.requeue`, the row claimed by a conditional heartbeat write, `liveness.js claimQueued`, so
+  two servers can never both take it); a queued row without a payload (older server) is failed like a running one. `GET /api/health`
+  reports `jobs: { running, waiting, max, freeMB?, limits }`, and the start-up log prints the four limits.
+- Tests: `test/job-limits.test.js` (6): settings and bounds; FIFO with 1 and 2 slots and the exact sentences and `queue` fields pushed
+  to a subscriber; the per-account cap (refusal names the blocking job, another account passes, system jobs not counted, accounts-off
+  = one local user, cap 2); the memory gate (held with the sentence, released when memory returns, failed with the reason after the
+  hard limit, off at 0); the hard limit on a run that honours the stop and on one that ignores it (slot moves on after the grace
+  period, the late end leaves the row alone), 0 = none; the restart requeue (order, same ids, claimed heartbeats, warnings kept, a
+  second pass starts nothing twice, a row another server took is left). Also passing: job-lock 10, recreate-jobs 15, recreate-resume 7,
+  keep-awake 2, perf 10, owner-options 6, stage0 8, reaudit-stack 6; `npx vite build`. Full suite not run; no browser test.

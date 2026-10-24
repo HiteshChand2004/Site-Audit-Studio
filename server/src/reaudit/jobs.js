@@ -24,8 +24,8 @@ export const reauditJobs = new JobManager({
   steps: STEPS,
   overallPct,
   doneMessage: 'Re-audit complete',
-  run: ({ job, project, payload, progress }) =>
-    runReaudit({ project, reauditId: job.id, recreateId: payload.recreateId, progress, skip: JOB_OPTIONS.skip }),
+  run: ({ job, project, payload, progress, signal }) =>
+    runReaudit({ project, reauditId: job.id, recreateId: payload.recreateId, progress, skip: JOB_OPTIONS.skip, signal }),
   after: ({ project, payload }) => pruneReaudits(project.id, payload.recreateId),
 });
 
@@ -34,11 +34,11 @@ export const reauditJobs = new JobManager({
  * @throws {import('../jobs/manager.js').ConflictError} when one is already queued or running for the project
  * @returns {object|null} the job snapshot, or null when the recreate is not a completed one
  */
-export function startReaudit(project, recreateId) {
+export function startReaudit(project, recreateId, { system = false } = {}) {
   const row = selectRecreate.get(recreateId, project.id);
   if (!row) return null;
   const analysisId = JSON.parse(row.result_json)?.analysisId ?? null;
-  const job = reauditJobs.start(project, { recreateId });
+  const job = reauditJobs.start(project, { recreateId }, { system });
   setInputs.run(recreateId, analysisId, job.id);
   return { ...job, recreateId, analysisId };
 }
