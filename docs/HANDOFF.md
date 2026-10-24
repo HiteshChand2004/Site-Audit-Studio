@@ -85,6 +85,9 @@ the copy is therefore "not safe" by the existing outside-call check. That is rea
   Not re-run after the redirect and 999 fixes (`652dd57`, `5624947`): preserve-* should be re-run.
 - 2026-10-24 (0fa8fc0), one at a time with `SAS_TEST_BROWSER_CONCURRENCY=1`: `preserve-completion-late` (new, 2),
   `preserve-completion-same-origin` (2), `preserve-url-base` (2) pass. The full suite was not run.
+- 2026-10-24 (ca2c630), the same way: `reaudit-measured-host` (new, 3), `reaudit-lighthouse-pages` 5, `reaudit-asis` 1,
+  `reaudit` 6, `perf` 10 pass (perf's "render and screenshots side by side" test fails under `SAS_MAX_PARALLEL=1` alone, as
+  that cap is meant to). The full suite was not run.
 - Client: `npx vite build` passes. No client test suite exists.
 
 ## The plan of 2026-10-20 (kept as written: steps 1-3 DONE, 4 IN PROGRESS, 5 not started; the live list is under "Next steps" below)
@@ -424,6 +427,14 @@ category, on phone and computer, on every copied page. One run per side; when th
 more runs per side and the medians of three decide. A run with no score, or a copy run under 20 % of the original's DOM elements,
 is "could not be scored" (status `recheck`, reason in words), never part of a median. The original's runs are cached per
 project (`lighthouse-original/`) and reused by later re-audits.
+**The copy is measured through a host like the one it will live on** (`reaudit/measuredHost.js`, ca2c630): 50 ms before each
+answer (a CDN edge answering a cached file) and the bytes at Lighthouse's own device throughput (1638.4 kbit/s phone, 10240
+kbit/s computer, `constants.js`) over one shared link, for the Lighthouse runs only (the per-page comparison and the headline
+runs, through the new `runAnalysis` option `lighthouseOrigin`); the crawl, axe, links, motion, the preview and the shipped copy
+keep the direct server. Why: Lighthouse models a page from the ORDER it recorded, and from a loopback server the site's scripts
+had run before the first paint, so the model put their run time in front of LCP (nyaayai phone 68: a 6.2 s modelled LCP against
+0.2 s recorded). The values are in the report (`lighthousePages.network`, the comparison note). The final proof is a real
+deployment compared with PageSpeed Insights (end-of-plan live run, below).
 
 **FIXED AND VERIFIED 2026-10-24: nyaayai's as-is copy rendered blank under Lighthouse** (was: 5 of 6 per-page runs and both
 homepage runs a 36-element shell, console `Fatal error … TypeError: Invalid base URL at …/JQGUGunJL.Cj2najZC.mjs`). Full write-up
@@ -446,15 +457,19 @@ with the numbers: `remastly-live-results/nyaayai/BLANK-RENDER-2026-10-24.md`.
   other phone metric better on the copy): on the loopback host the modules arrive before the first paint is recorded, so Lantern
   puts their 4×-slowed run time in front of LCP; with applied throttling the copy is ahead (0.77 vs 0.72). The re-audit files
   the row as "deploy", explained; got-worse unexplained 0. Nothing changed in the copy for it.
+- **Re-measured through the measurement host** (ca2c630, `reaudit-measured-host-2026-10-24/`, `MEASURED-HOST-2026-10-24.md`):
+  phone copy **90** / 94 / 100 / 85 against 80 / 90 / 96 / 85, computer **96** / 94 / 100 / 85 against 84 / 90 / 96 / 85 — no
+  Lighthouse row lower (modelled phone LCP 1436 ms against the original's 1692; recorded 1340 against 777; copy runs 91 / 90 / 90).
 The 2026-10-23 "fixed" rows measured on the blank shell are superseded by this run.
 
 **Still open on nyaayai's copy (re-audit 5bf00522, 2026-10-24)**:
-- The "unused CSS 0 → 12 KiB" row of 2026-10-23 is gone after the fix (it was the blank render); the got-worse rows left are
-  responsive images (deploy), 20 new broken links and sitemap.xml (a one-page copy with no new-site address: owner), phone
-  performance (deploy, above).
+- The "unused CSS 0 → 12 KiB" row of 2026-10-23 is gone after the fix (it was the blank render); after the measurement host the
+  got-worse rows left are 20 new broken links and sitemap.xml (a one-page copy with no new-site address: owner).
 - **Motion could not be measured on the copy (the motion step timed out)**, again (`motion: pages 0, failed: index/timeout`).
   Not investigated.
-- `lighthouse.offscreen-images` still open and **UNEXPLAINED** (1 of 9 still-open rows; 425 KiB, the original 427).
+- `lighthouse.offscreen-images` (425 vs 427 KiB) and `lighthouse.uses-responsive-images` (577 vs 772 KiB, phone) still open and
+  **UNEXPLAINED** (2 of 10 still-open rows): both fail on both sides and the copy sends no more; the as-is copy keeps the
+  original's images as written.
 
 **This morning's run (2026-10-24, branch `copy-step4`, scratch data `C:/Users/urvas/Downloads/sas-work/data`, log
 `sas-work/live.log`, `SAS_MAX_PARALLEL=2`)**:
@@ -482,14 +497,21 @@ above; visual gate; re-audit):
 **Where things are kept**:
 - Live results kept for the user: `C:/Users/urvas/Downloads/remastly-live-results/` — `nyaayai/` (2026-10-23: summary.json, recreate/,
   reaudit/, lighthouse-original/, CORRECTED-VERDICT.txt, repro-blank.mjs; 2026-10-24: `BLANK-RENDER-2026-10-24.md`,
-  `repro-2026-10-24/`, `run-2026-10-24/` with the fresh copy, re-audit, applied-throttling Lighthouse runs and the LCP probe),
+  `repro-2026-10-24/`, `run-2026-10-24/` with the fresh copy, re-audit, applied-throttling Lighthouse runs and the LCP probe;
+  `MEASURED-HOST-2026-10-24.md` + `reaudit-measured-host-2026-10-24/` (+ `.log`): the re-audit through the measurement host),
   `first-attempt-indikaai-makememo/` and **`scripts/`**: the live-run driver `scratch-live.mjs`, `repro-stall.mjs` (serveCopy +
   a local proxy that stalls one host + Lighthouse), `nyaayai-fresh-copy.mjs` (one as-is copy + re-audit on a scratch data folder,
-  summary and folders copied out) and the other scratch scripts of the step-4 sessions (never committed; they import from a
+  summary and folders copied out), `nyaayai-reaudit.mjs` (a re-audit alone of a finished recreate, same folder rule) and the other scratch scripts of the step-4 sessions (never committed; they import from a
   worktree's `server/src`, so run them from a worktree's `server/` folder or fix the import paths).
 - **Gotcha**: importing `server/src/db/index.js` from a second process (any script opening the same scratch `app.db`) marks every
   `running` recreate as failed with "The server restarted while this job was running" (`db/index.js:24`). The job itself goes on
   and writes its row back; still, never open a running job's database from another process — read its log / summary.
+  **In production** (assessed 2026-10-24, not fixed): it needs two processes on one data folder — a zero-downtime reload or a
+  rolling update on a shared volume (the new server starts while the old one still runs a job), or a maintenance script that
+  imports `db/index.js`. Then the new process marks the running job failed and `resumeInterruptedRecreates` adopts its workspace
+  (renames the `.tmp` folder under the running job), so the old job fails for real; with a plain restart-on-exit (systemd, PM2
+  without reload) it cannot happen. Fix when wanted: a heartbeat column per running job (only stale rows are marked failed and
+  resumed) and a lock file so a second server refuses the same data folder; about half a day with tests.
 - Scratch data of this morning's run: `C:/Users/urvas/Downloads/sas-work/data` (projects indikaai 9b829d40…, makememo 93e23afa…,
   sankalpam 06a12702…, nyaayai 603201ca…); logs `sas-work/live.log`, `sas-work/live-killed-run.log`. Driver: `remastly-live-results/scripts/scratch-live.mjs
   <projectId>:<whole|home> …` (calls the job managers directly, no server; it used to live untracked in `Website-Audit-copystep4/server/`).
@@ -501,8 +523,8 @@ Known gaps: Step 1's stability figures (nyaayai 0.27–0.31 %) were measured wit
 ## Next steps, in order (commit after each with `--no-verify`, say the full suite was not run; nothing is pushed before the PR)
 
 1. **Step 4 — the blank render: DONE 2026-10-24** (fixed, verified live, see "State on 2026-10-24"). Left from it, on the same copy
-   (`run-2026-10-24`): the re-audit's **motion step timeout** (no motion rows for the copy) and the **UNEXPLAINED
-   `lighthouse.offscreen-images`** still-open row.
+   (`run-2026-10-24`): the re-audit's **motion step timeout** (no motion rows for the copy) and the two **UNEXPLAINED**
+   still-open rows (`lighthouse.offscreen-images`, `lighthouse.uses-responsive-images`).
 2. **Step 4, rest**: whatever *acts* on an unexplained "got worse" / "still open" row (`copy/run.js zeroRegressions` is the tested
    model, fakes only); the summary line's "Fixed" already comes from the re-audit.
 3. **Step 5 — per-page fallback**: clean rebuild of a failing page in the chosen stack, time-boxed correction, keep the better one.
@@ -528,6 +550,9 @@ Known gaps: Step 1's stability figures (nyaayai 0.27–0.31 %) were measured wit
 6. Recorded, waiting for a decision: security headers that take effect on Next.js / Vercel (DEPLOY.md is fixed, PARKED item 3).
 Then the big multi-site live run ("Sites still to run at the end" above), one site per run, `SAS_MAX_PARALLEL=1`, scratch data and
 ports only, before the PR.
+**Final proof before launch (user, 2026-10-24)**: deploy one copy to a real static host (temporary, `noindex`, deleted
+afterwards) and compare PageSpeed Insights, original vs copy, phone and computer. The measurement host
+(`reaudit/measuredHost.js`) stands in for that host until then; this is the check that it stands in well.
 
 ## PARKED (2026-10-21) — copy-my-site paused for the `accounts` work
 
