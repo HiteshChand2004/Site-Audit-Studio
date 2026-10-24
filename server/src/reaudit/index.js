@@ -17,6 +17,7 @@ import { getEmitter } from '../recreate/emit/index.js';
 import { outputPages, outputRoot, reportOutputs, targetStack } from '../recreate/export/fromIr.js';
 import { servePreview } from '../recreate/preview.js';
 import { serveCopy } from '../recreate/behavior/preserve/serve.js';
+import { openMeasuredHost, measuredHostDescription } from './measuredHost.js';
 import { recreateDir } from '../recreate/workspace.js';
 import { createNetPolicy, userPolicy } from '../security/netGuard.js';
 import { compareAudits, loadSide } from './compare/index.js';
@@ -97,12 +98,20 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
   const served = reportOutputs(report)[stack]?.mode === 'as-is'
     ? await serveCopy(root).then((c) => ({ ...c, origin: new URL(c.url).origin, port: Number(new URL(c.url).port) }))
     : await servePreview(root, { connectSelf: true, compress: true, scripts: emitter?.scripts || reportOutputs(report)[stack]?.scripts || false });
+  // Lighthouse measures the copy through a host like the one it will live on (measuredHost.js: a static host's latency and
+  // the visitor's throughput per device), never from the instant loopback server; the crawl, axe, links and motion keep the
+  // direct server, and so do the preview and the shipped copy.
+  const measured = {
+    mobile: await openMeasuredHost(served.origin, 'mobile'),
+    desktop: await openMeasuredHost(served.origin, 'desktop'),
+  };
+  const measuredUrl = (url, device) => (url.startsWith(served.origin) ? measured[device].origin + url.slice(served.origin.length) : url);
   try {
     // Pages at the URL the output serves them (a stack may move some).
     const outputPageList = outputPages(report, stack);
     const pages = outputPageList.map((p) => p.path.replace(/^\//, ''));
     const output = { stack, label: emitter?.label ?? stack, runtimes: emitter?.runtimes ?? [], pages: outputPageList, build: reportOutputs(report)[stack]?.build };
-    const netPolicy = createNetPolicy({ allowLoopback: userPolicy().allowLoopback, internalPorts: [served.port] });
+    const netPolicy = createNetPolicy({ allowLoopback: userPolicy().allowLoopback, internalPorts: [served.port, measured.mobile.port, measured.desktop.port] });
     progress('serve', 1);
     const audit = await runAnalysis({
       project,
@@ -120,6 +129,7 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
       progress,
       // The link check (mostly the original's outbound links) runs on while Lighthouse measures the loopback build.
       linksBesideLighthouse: true,
+      lighthouseOrigin: (device) => measured[device].origin,
       // Measured like the original was: a computer much busier now than then repeats a run with a scaled CPU slowdown.
       lighthouseBaseline: await benchmarkOf(auditDir(project.id, report.analysisId)),
     });
@@ -160,9 +170,10 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
           pages: outputPageList.map((p) => ({ path: p.path, url: asIsPages.get(p.outPath) ?? new URL(p.path, project.url).href, copyUrl: `${served.origin}${p.path}` })),
           cacheDir: path.join(projectDir(project.id), 'lighthouse-original'),
           outDir: path.join(reauditDir(project.id, recreateId, reauditId), 'lighthouse-pages'),
-          run: (url, mode, outFile) => runLighthouse(url, mode, { timeout: RUN_TIMEOUT_MS, outFile, proxy: proxy.url }),
+          run: (url, mode, outFile) => runLighthouse(measuredUrl(url, mode), mode, { timeout: RUN_TIMEOUT_MS, outFile, proxy: proxy.url }),
           progress: (fraction, message) => progress('lighthouse-pages', fraction, message),
         });
+        lighthousePages.network = measuredHostDescription();
       } catch (err) {
         lighthousePages = { pages: [], worse: [], unscored: [], extraRunPages: [], skipped: [], runs: { original: 0, copy: 0, reusedOriginal: 0 }, errors: [{ path: '*', mode: '*', error: String(err?.message ?? err).split('\n')[0].slice(0, 200) }] };
       } finally {
@@ -199,6 +210,7 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
         skipped: lighthousePages.skipped,
         errors: lighthousePages.errors,
         runs: lighthousePages.runs,
+        network: lighthousePages.network ?? null,
       };
     }
     // An as-is copy: every "got worse" row carries one of the five reasons on this run's evidence, or is marked unexplained
@@ -246,6 +258,7 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
       checklist,
     };
   } finally {
+    await Promise.all(Object.values(measured).map((m) => m.close().catch(() => {})));
     await served.close();
   }
 }

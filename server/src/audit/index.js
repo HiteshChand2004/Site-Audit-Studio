@@ -185,6 +185,8 @@ async function fetchHome(url, scale = 1) {
  * @param {boolean} [o.linksBesideLighthouse]  Lighthouse starts while the link check still runs (the link check is plain
  *   HTTP to other hosts; a site served from loopback has nothing to share with it). Analyze waits for the links first.
  * @param {Function} [o.lighthouseRun]  tests only: stands in for runLighthouse (url, formFactor, options)
+ * @param {(device: 'mobile'|'desktop') => string} [o.lighthouseOrigin]  re-audit only: the measurement host's origin per device
+ *   (reaudit/measuredHost.js); Lighthouse opens the same page there
  * @param {{ mobile?: number, desktop?: number }} [o.lighthouseBaseline]  benchmark index of the runs this one is compared
  *   with (re-audit only): a much slower computer now repeats the run with a scaled CPU slowdown
  * @returns {Promise<object>} the audit JSON
@@ -193,7 +195,7 @@ export function runAnalysis({ netPolicy = userPolicy(), ...opts }) {
   return withNetPolicy(netPolicy, () => analyze({ ...opts, netPolicy }));
 }
 
-async function analyze({ project, analysisId, maxPages, progress, netPolicy, url = project.url, outDir: dir, skip = [], seedUrls = [], deployOrigin = null, linksBesideLighthouse = false, lighthouseRun = runLighthouse, lighthouseBaseline = null }) {
+async function analyze({ project, analysisId, maxPages, progress, netPolicy, url = project.url, outDir: dir, skip = [], seedUrls = [], deployOrigin = null, linksBesideLighthouse = false, lighthouseRun = runLighthouse, lighthouseBaseline = null, lighthouseOrigin = null }) {
   const timing = analyzeTiming();
   const freeAtStart = freeMemoryMB();
   const baseDeadline = Date.now() + timing.budgetMs;
@@ -308,7 +310,7 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
 
   const proxy = await startEgressProxy(netPolicy);
   try {
-    const audit = await analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing, linksBesideLighthouse, lighthouseRun, lighthouseBaseline });
+    const audit = await analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing, linksBesideLighthouse, lighthouseRun, lighthouseBaseline, lighthouseOrigin });
     noteLowMemory(audit.errors, freeAtStart);
     return audit;
   } finally {
@@ -338,7 +340,7 @@ export function noteLowMemory(errors, freeMB) {
   });
 }
 
-async function analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing, linksBesideLighthouse, lighthouseRun, lighthouseBaseline }) {
+async function analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing, linksBesideLighthouse, lighthouseRun, lighthouseBaseline, lighthouseOrigin }) {
   // The time kept for Lighthouse: the steps before it (and the crawl / link check, which can return what they have) never use it up.
   const reserve = { reserve: timing.lighthouseReserveMs };
   const scale = timing.scale;
@@ -451,19 +453,23 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
   // 6. Lighthouse (one at a time and no other browser running: parallel work would distort each other's performance numbers;
   // in the re-audit only the link check's plain HTTP requests may still be running).
   // A run that dies (not one that times out) usually died of memory pressure: it gets one more try when the time allows.
+  // The re-audit measures the copy through a host like the one it will live on (reaudit/measuredHost.js): the same page, at the
+  // measurement host's origin for that device. Analyze never sets it.
+  const lighthouseUrl = (formFactor) => (lighthouseOrigin ? new URL(new URL(home.url).pathname + new URL(home.url).search, lighthouseOrigin(formFactor)).href : home.url);
   const lighthouse = (key, formFactor, reserveMs = 0) =>
     step(key, async (_signal, budget) => {
       const started = Date.now();
+      const target = lighthouseUrl(formFactor);
       const options = (timeout, extra) => ({ timeout, outFile: path.join(outDir, `lighthouse-${formFactor}.json`), proxy: proxy.url, ...extra });
       let result;
       try {
-        result = await lighthouseRun(home.url, formFactor, options(budget));
+        result = await lighthouseRun(target, formFactor, options(budget));
       } catch (err) {
         const left = budget - (Date.now() - started) - 3000;
         if (/timed out/i.test(err.message) || left < LIGHTHOUSE_RETRY_MIN_MS) throw err;
-        result = await lighthouseRun(home.url, formFactor, options(left));
+        result = await lighthouseRun(target, formFactor, options(left));
       }
-      return calibrate(result, formFactor, () => budget - (Date.now() - started) - 3000, (extra, left) => lighthouseRun(home.url, formFactor, options(left, extra)));
+      return calibrate(result, formFactor, () => budget - (Date.now() - started) - 3000, (extra, left) => lighthouseRun(target, formFactor, options(left, extra)));
     }, null, { reserve: reserveMs });
   // A measurement compared with an earlier one (the re-audit against the original's analysis): when this computer is much
   // slower now than during the earlier run (Lighthouse's benchmark index, e.g. other jobs keep it busy), the simulated

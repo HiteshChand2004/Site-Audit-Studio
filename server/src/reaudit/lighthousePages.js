@@ -288,5 +288,6 @@ export function lighthousePagesNote(comparison) {
   if (comparison.unscored?.length) parts.push(`${comparison.unscored.length} categor${comparison.unscored.length === 1 ? 'y' : 'ies'} could not be scored and ${comparison.unscored.length === 1 ? 'is' : 'are'} not compared (${[...new Set(comparison.unscored.map((u) => `${u.path} ${MODE_LABEL[u.mode]} ${CATEGORY_LABEL[u.category]}: the ${u.side} in ${u.runs} of ${u.of}`))].slice(0, 6).join('; ')})`);
   if (comparison.skipped.length) parts.push(`not measured for time: ${comparison.skipped.join(', ')}`);
   if (comparison.errors.length) parts.push(`${comparison.errors.length} run${comparison.errors.length === 1 ? '' : 's'} failed (${comparison.errors.slice(0, 3).map((e) => `${e.path} ${e.mode}: ${e.error}`).join('; ')})`);
-  return `${parts.join('; ')}.`;
+  const sentence = `${parts.join('; ')}.`;
+  return comparison.network?.note ? `${sentence} ${comparison.network.note}` : sentence;
 }

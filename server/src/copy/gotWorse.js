@@ -411,7 +411,7 @@ function lighthousePart(item, id, ctx) {
   if (grew) return unexplained(`What the check measures grew in the copy (${rows.join('; ')}).`);
   return {
     reason: 'deploy',
-    evidence: `What the check measures did not grow in the copy (${rows.join('; ')}); only its score moved, with the simulated load time of a local preview (HTTP/1.1 on this computer) where the original was measured on its own host. Measure it again after deploying.`,
+    evidence: `What the check measures did not grow in the copy (${rows.join('; ')}); only its score moved, with the simulated load time of the measurement host (this computer, served with a static host's network conditions, HTTP/1.1, no CDN) where the original was measured on its own host. Measure it again after deploying.`,
   };
 }
 
@@ -456,7 +456,7 @@ function scorePart(item, ctx) {
     if (wa > wb * (1 + GROWTH.other)) return unexplained(`${drop}: the copy's page weighs ${kb(wa)} against the original's ${kb(wb)}; it sends more, which no host explains.`);
     return {
       reason: 'deploy',
-      evidence: `${drop}: the same page (${kb(wb)} → ${kb(wa)}, the same largest element) scored lower from a local preview (HTTP/1.1 on this computer, no CDN) than the original from its host; both sides were measured now with the same settings, so the gap is the host's. Measure it again after deploying.`,
+      evidence: `${drop}: the same page (${kb(wb)} → ${kb(wa)}, the same largest element) scored lower from the measurement host (this computer, served with a static host's network conditions, HTTP/1.1, no CDN) than the original from its host; both sides were measured now with the same settings, so the gap is the host's. Measure it again after deploying.`,
     };
   }
   const onlyCopy = (lp.failing?.copy ?? []).filter((id) => !(lp.failing?.original ?? []).includes(id));
