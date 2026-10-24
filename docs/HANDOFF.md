@@ -10,6 +10,26 @@ base, cfaab64, is babf36c here (same patch id), so merging only `step4-lighthous
 loses nothing except the untracked scratch scripts, which are kept at `C:/Users/urvas/Downloads/remastly-live-results/scripts/`.
 Read first: `docs/COPY-MY-SITE.md` (the plan and the rules). This file says what is actually built and what is not.
 
+## Launch readiness (added 2026-10-24)
+
+> **Rule (the user's): all work is done with deployment of the whole website + tool in mind.** Every item below is open until
+> it says DONE; each names where it stands today.
+
+| # | Item | Status | Note |
+|---|---|---|---|
+| L1 | Production refuses to start with accounts off | IN PROGRESS (branch `owner-options`) | Being added there; nothing on this branch. Until merged, a production start with accounts off serves every site to everyone. |
+| L2 | Database: heartbeat per running job + lock file | OPEN (next steps item 7) | A second process on one data folder marks running jobs failed and adopts their workspaces. **Until done: deploy only with plain stop-then-start, never a zero-downtime reload** (PM2 reload, rolling update on a shared volume). Today the app is one `npm start` process, so nothing shipped reloads. |
+| L3 | Preview in a sandboxed iframe with no same-origin access | OPEN, unproven | The recreate preview runs on its own loopback port, framed with `sandbox` and a CSP; the as-is copy's preview runs the original's own scripts. In production previews move to a path or a subdomain (docs/ACCOUNTS.md): prove, with a test that tries to reach the app's origin, cookies and storage from inside the frame, that a copied site's script cannot — before building the production preview. |
+| L4 | Job queue + concurrency limits per server and per user | OPEN | Today: one global lock per process (one Analyze / Recreate / Re-audit at a time), no per-user limit, no queue across processes; `SAS_MAX_PARALLEL` caps browser contexts. Two jobs at once crashed a 15 GB machine. Size the limits from measured memory per job (peak RSS of server + browsers per job kind and page count), not from guesses. |
+| L5 | Upper time limit per job and per page | OPEN | The motion timer now grows with page length (`motionTimeFor`: at most ~4.6 min per page, 6 pages), the completion pass has `PASS_MAX_MS` 45 s per page and size, but an exact / manual run has **no job limit** (`Infinity` by design) and the capture of one very long page has none either. Needed: a hard ceiling per page and per job in production, with what was not measured reported, so one page cannot hold a server for hours. |
+| L6 | Outbound fetching from a datacenter IP | OPEN | Sites may block or stall it (bot protection, geo rules). Known from this machine: the chatbot host `botza.panscience.xyz` stalled ~21 s / `ERR_EMPTY_RESPONSE` on 2026-10-23 (the blank-render trigger); indikaai and makememo had to be "checked that they answer first" (2026-10-24 morning). Keep a list: site, host, what failed, why, date — from the live runs and from production logs. |
+| L7 | Disk: storage per copy + cleanup policy | OPEN | An as-is copy keeps every original file (nyaayai homepage 4.6 MB referenced; an exact copy was 83 MB of `dist/`); retention today: latest 2 recreates keep their IR, latest 3 analyses keep screens, `pruneRecreates`; scratch folders (`sas-work`, Temp scratchpads) grow without limit. Needed: a per-copy size figure in the report, a quota per user / per site, and a scheduled cleanup of old copies, re-audits and scratch. |
+| L8 | Production config: HTTPS, Secure cookies, secrets in server `.env` only, database backups | OPEN | HTTPS is the reverse proxy's; the session cookie must be `Secure` + `HttpOnly` + `SameSite` behind it; no secret in the client bundle or the repo; SQLite backups (a copy of `app.db` + `projects/` on a schedule, restore tested once). |
+| L9 | Email: Gmail SMTP daily limit | OPEN | OTP mail goes through Gmail SMTP (OTP stage 5). Gmail caps sending (about 500 a day on a free account, 2 000 on Workspace) and throttles bursts; move to a provider (transactional mail API) before the first marketing push or when daily sign-ups approach a tenth of the cap. |
+| L10 | A deploy guide for the tool itself | OPEN | DEPLOY.md today covers only the downloaded copies (`src/copy/deploy.js`). Needed for the tool: process manager (stop-then-start, see L2), env vars (`SAS_*`, `PORT`, `APP_ORIGIN`, accounts + mail settings), the data folder and its disk, ports (API, previews 5100–5199 or the production preview path), the reverse proxy (HTTPS, WebSocket / SSE pass-through, body limits), Playwright's browser install, keep-awake / sleep settings. |
+| L11 | Final proof: one copy on a real static host, PageSpeed original vs copy | OPEN (recorded under "Next steps") | Temporary, `noindex`, deleted afterwards; phone and computer; the measurement host (`reaudit/measuredHost.js`) stands in for it until then. |
+| L12 | Full test suite once before the PR | OPEN | Run once, when nothing else runs on the machine (the suite's browser tests fail under load), after the last code change and before the PR. Every step until then runs related files only, one at a time. |
+
 ## What the button does today
 
 "Copy my site" (Copy step) opens one panel: stack (Plain HTML default), new-site address, authorisation.
