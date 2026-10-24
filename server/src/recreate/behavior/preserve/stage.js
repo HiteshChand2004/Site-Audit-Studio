@@ -227,6 +227,8 @@ export async function asIsStage(ctx) {
     report.lift = lifted;
     // The addresses the copy answers from the original (mapped, the same as the original, two sizes of one path): see complete.js.
     report.sameOrigin = lifted?.completion?.sameOrigin ?? null;
+    // Files the original serves in pieces (?range=): held whole and sliced by the copy (ranged.js).
+    report.ranged = lifted?.completion?.ranged ?? null;
 
     // A preload of a file the copy does not hold is removed before packaging, so every stack inherits it (see preloads.js).
     report.preloadsRemoved = await dropMissingPreloads(copyDir);

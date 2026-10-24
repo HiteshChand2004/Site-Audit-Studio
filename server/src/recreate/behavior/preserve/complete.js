@@ -13,6 +13,7 @@ import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises
 import path from 'node:path';
 import { load } from 'cheerio';
 import { downloadAsset } from '../../assets/download.js';
+import { rangesOf, sliceOf, barePathOf, rangeShim, SW_RANGED_SOURCE, RANGED_MAX_BYTES } from './ranged.js';
 import { serveFolder } from './render.js';
 import { localPathOf, storableAsIs } from './pageLift.js';
 import { fetchReferenced } from './referenced.js';
@@ -46,18 +47,29 @@ export const SW_REGISTER = "if('serviceWorker' in navigator){navigator.serviceWo
  * @param {Record<string, string>} manifest  absolute original address → root-relative local path
  * @param {string[]} hosts                   the original's hosts (site and CDNs)
  */
-export function serviceWorkerSource(manifest, hosts, sameOrigin = {}) {
+export function serviceWorkerSource(manifest, hosts, sameOrigin = {}, ranged = {}) {
   return `// Serves the copy's own files for every address of the original, and nothing else (generated).
 const MAP = ${JSON.stringify(manifest)};
 const HOSTS = ${JSON.stringify(hosts)};
 // Addresses of the copy's own server (path + query) that the copy does not hold: the file the original answered with.
 const SAME = ${JSON.stringify(sameOrigin)};
+// Files the original serves in pieces (?range=from-to): the copy holds each whole and slices it here (ranged.js).
+const RANGED = ${JSON.stringify(ranged)};
+${SW_RANGED_SOURCE}
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', (event) => {
   const url = event.request.url.split('#')[0];
   const bare = url.split('?')[0];
   const here = new URL(url);
+  if (here.origin === self.location.origin) {
+    const key = rangedKey(here.pathname);
+    const ranges = key && rangesOf(here.searchParams.get('range') ?? '');
+    if (ranges) {
+      event.respondWith(rangedAnswer(key, ranges).catch(() => fetch(event.request)));
+      return;
+    }
+  }
   if (here.origin === self.location.origin && SAME[here.pathname + here.search]) {
     event.respondWith(fetch(new URL(SAME[here.pathname + here.search], self.location.origin)));
     return;
@@ -78,15 +90,17 @@ self.addEventListener('fetch', (event) => {
  * Adds the service worker registration to the copy's document (once).
  * @param {string} outDir
  */
-export async function registerServiceWorker(outDir, entry = 'index.html') {
+export async function registerServiceWorker(outDir, entry = 'index.html', { ranged = {} } = {}) {
   const file = path.join(outDir, entry);
   const $ = load(await readFile(file, 'utf8'));
   const inline = $('script').toArray().map((s) => $(s).html() ?? '');
   const shim = !inline.some((t) => t.includes('window.URL=S'));
+  // The slicing of files the original serves in pieces, for a first visit (ranged.js); after the URL shim, before any script of the page.
+  const slicing = Object.keys(ranged).length > 0 && !inline.some((t) => t.includes('sasRanged'));
   const register = !inline.some((t) => t.includes("serviceWorker.register('/sw.js')"));
   // The marker is unique to the guard: the site's own scripts add submit listeners too.
   const guard = !inline.some((t) => t.includes('sasFormGuard'));
-  if (shim || register || guard) {
+  if (shim || register || guard || slicing) {
     // The shim is the first script of the document: it must replace URL before any script of the page runs, and a module
     // marked async runs as soon as it is fetched - on a fast host that is while the parser is still in the body, before an
     // inline script at its end (nyaayai: a 630 KB page whose async main module threw "Invalid base URL" in 5 of 6 Lighthouse
@@ -96,6 +110,11 @@ export async function registerServiceWorker(outDir, entry = 'index.html') {
       const charset = $('head > meta[charset]').first();
       if (charset.length) charset.after(`<script>${URL_BASE_SHIM}</script>`);
       else $('head').prepend(`<script>${URL_BASE_SHIM}</script>`);
+    }
+    if (slicing) {
+      const after = $('script').filter((_, s) => ($(s).html() ?? '').includes('window.URL=S')).first();
+      if (after.length) after.after(`<script>${rangeShim(ranged)}</script>`);
+      else $('head').prepend(`<script>${rangeShim(ranged)}</script>`);
     }
     // The form guard listens on the window in the capture phase, so it is first for a submit whenever it was added; the
     // worker registration is for the next visit. Both at the end of the body, after the page's own content.
@@ -133,6 +152,14 @@ export const URL_BASE_SHIM = "(function(){var U=URL;function R(s){return typeof 
   + "function S(u,b){if(b===undefined)return R(u)?new U(u,location.href):new U(u);return new U(u,B(b))}"
   + "S.prototype=U.prototype;Object.setPrototypeOf(S,U);window.URL=S;})();";
 
+/**
+ * The pass opens the copy as a visitor's browser does: a page can tell an automated browser apart (`navigator.webdriver`)
+ * and leave part of its work undone there - a runtime that read its data index only for a visitor asked for nothing in
+ * three passes, and every first visit then got a 404 the passes never saw. The capture itself runs automated, so this pass
+ * is the one place that sees those requests. Nothing else about the browser is changed.
+ */
+export const VISITOR_SHIM = "Object.defineProperty(Navigator.prototype,'webdriver',{get:function(){return false},configurable:true});";
+
 /** The two sizes a copy is opened at: the lazy parts of each (mobile and desktop) load their own files. */
 export const COMPLETE_VIEWPORTS = [
   { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 },
@@ -162,6 +189,14 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
   /** @type {Map<string, string>} */
   const sameFailed = new Map();
   const sameOrigin = { mapped: [], sameAsOriginal: [], ambiguous: [] };
+  // Files the original serves in pieces (?range=): original pathname → the whole file the copy holds (ranged.js). The lift
+  // found some in the record; a pass finds the rest when the page asks for a slice: the original's answer to that slice is
+  // checked against the whole file at those offsets, and only a file that holds it is kept whole and sliced by the copy.
+  /** @type {Record<string, { file: string, type?: string|null }>} */
+  const rangedFiles = {};
+  for (const f of files) if (f.ranged) rangedFiles[barePathOf(f.url) ?? ''] = { file: f.local, type: f.type ?? null };
+  const ranged = { files: files.filter((f) => f.ranged).map((f) => ({ path: barePathOf(f.url), file: f.local, bytes: f.bytes ?? null, from: 'record' })), skipped: [] };
+  const rangedTried = new Set();
   // The bare file of a path (no query) belongs to one address of it. A static host answers the bare path for every query, so
   // while a path has two addresses (two sizes of one image) there is no bare file at all: a cold visit then asks for each
   // address and gets the 404 of a missing file, never the other size's bytes. The worker maps each address exactly.
@@ -184,25 +219,75 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
     if (!target.startsWith(root + path.sep)) return false;
     return !(await stat(target).then(() => true, () => false));
   };
+  // The host rewrite folded every original host (the site and its CDNs) into the copy's root, so an address the copy's
+  // runtime builds from a rewritten base may belong to any of them: the site's own host is asked first, then each other
+  // host (a CMS chunk the site answers with a 404 page and its CDN with the file). A page is no answer.
+  // Each address is asked of the original once in a completion, whoever asks (a slice, then the same address as any other).
+  /** @type {Map<string, Promise<{ original: string|null, res: any, refused: { host: string, reason: string }[] }>>} */
+  const askedOriginal = new Map();
+  const askOriginal = (rel, maxBytes = 25 * 1024 * 1024) => {
+    if (!askedOriginal.has(rel)) askedOriginal.set(rel, askOriginalOnce(rel, maxBytes));
+    return askedOriginal.get(rel);
+  };
+  const askOriginalOnce = async (rel, maxBytes) => {
+    const siteHost = new URL(pageUrl).hostname.replace(/^www\./, '');
+    const origins = [new URL(pageUrl).origin, ...hosts.filter((h) => h.replace(/^www\./, '') !== siteHost).map((h) => `https://${h}`)];
+    const refused = [];
+    for (const origin of origins) {
+      const candidate = new URL(rel, origin).href;
+      const r = await fetchImpl(candidate, { dir: tmp, kind: 'image', maxBytes, attempts: 3 });
+      if (r.ok && !/text\/html/i.test(r.mime ?? '')) return { original: candidate, res: r, refused };
+      refused.push({ host: new URL(origin).hostname, reason: r.ok ? 'the original answers with a page' : r.reason });
+    }
+    return { original: null, res: null, refused };
+  };
+  // A slice of a file the original serves in pieces, asked of the copy's own server: answered from the whole file once the
+  // copy holds it. The first such request of a path fetches the slice AND the whole file from the original, checks that the
+  // whole file holds the slice at those offsets (so the host really slices by this query), keeps the whole file, and from
+  // then on the copy slices. A file that does not hold its slice is left to answerSameOrigin, as any other address.
+  const answerRanged = async (route, u, pass) => {
+    const ranges = rangesOf(u.href);
+    if (!ranges) return false;
+    const key = decodeURIComponent(u.pathname);
+    const rel = u.pathname + u.search;
+    if (!rangedFiles[key]) {
+      if (rangedTried.has(key)) return false;
+      rangedTried.add(key);
+      const slice = await askOriginal(rel);
+      if (!slice.original) return false;
+      const bareUrl = slice.original.split('?')[0];
+      const whole = await askOriginal(u.pathname, RANGED_MAX_BYTES);
+      if (!whole.original || whole.original !== bareUrl) {
+        ranged.skipped.push({ path: key, reason: whole.original ? 'the whole file comes from another host than its slices' : `the whole file could not be fetched: ${whole.refused.map((r) => `${r.host}: ${r.reason}`).join('; ')}`, pass });
+        return false;
+      }
+      const wholeBytes = await readFile(whole.res.tmp);
+      const expected = sliceOf(wholeBytes, ranges);
+      if (!expected || !expected.equals(await readFile(slice.res.tmp))) {
+        ranged.skipped.push({ path: key, reason: 'the whole file does not hold the recorded slice at those offsets, so the host does not slice it by this query', pass });
+        return false;
+      }
+      const local = localPathOf(bareUrl, whole.res.mime);
+      await mkdir(path.dirname(path.join(outDir, local)), { recursive: true });
+      await copyFile(whole.res.tmp, path.join(outDir, local));
+      manifest[bareUrl] = local;
+      rangedFiles[key] = { file: local, type: whole.res.mime ?? null };
+      const host = new URL(bareUrl).hostname;
+      ranged.files.push({ path: key, file: local, bytes: wholeBytes.length, from: 'pass', pass, first: u.searchParams.get('range'), ...(host !== new URL(pageUrl).hostname && { host }) });
+      log.push({ pass, ranged: key, result: 'kept whole, sliced by the copy' });
+    }
+    const whole = await readFile(path.join(outDir, rangedFiles[key].file));
+    const body = sliceOf(whole, ranges);
+    if (!body) return false;
+    await route.fulfill({ status: 200, body, contentType: rangedFiles[key].type ?? 'application/octet-stream' });
+    return true;
+  };
   const answerSameOrigin = async (route, url, pass) => {
     const u = new URL(url);
     const rel = u.pathname + u.search;
     if (sameFile[rel]) return route.fulfill({ path: path.join(outDir, sameFile[rel]) });
     if (sameFailed.has(rel)) return route.fulfill({ status: 404, body: '' });
-    // The host rewrite folded every original host (the site and its CDNs) into the copy's root, so an address the copy's
-    // runtime builds from a rewritten base may belong to any of them: the site's own host is asked first, then each other
-    // host (nyaayai: a Framer CMS chunk under /cms/ that the site answers with a 404 page and framerusercontent.com with the file).
-    const siteHost = new URL(pageUrl).hostname.replace(/^www\./, '');
-    const origins = [new URL(pageUrl).origin, ...hosts.filter((h) => h.replace(/^www\./, '') !== siteHost).map((h) => `https://${h}`)];
-    let original = null;
-    let res = null;
-    const refused = [];
-    for (const origin of origins) {
-      const candidate = new URL(rel, origin).href;
-      const r = await fetchImpl(candidate, { dir: tmp, kind: 'image', maxBytes: 25 * 1024 * 1024, attempts: 3 });
-      if (r.ok && !/text\/html/i.test(r.mime ?? '')) { original = candidate; res = r; break; }
-      refused.push({ host: new URL(origin).hostname, reason: r.ok ? 'the original answers with a page' : r.reason });
-    }
+    const { original, res, refused } = await askOriginal(rel);
     if (!original) {
       // Every original host answers an error (or a page): the copy leaves the address as the original does, and says so.
       const reason = refused.length === 1 ? refused[0].reason : refused.map((r) => `${r.host}: ${r.reason}`).join('; ');
@@ -271,9 +356,12 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
             await writeFile(target, EDITOR_STUB, 'utf8');
           }
         }
-        // A file the copy does not hold, asked of the copy's own server: answered from the original (see answerSameOrigin).
-        if (route.request().resourceType() !== 'document' && (await needsOwnAnswer(new URL(url)))) {
-          return answerSameOrigin(route, url, pass);
+        if (route.request().resourceType() !== 'document') {
+          // A slice of a file the original serves in pieces: from the whole file the copy holds (see answerRanged); the
+          // static server would answer the bare path with the whole file, which is the wrong length.
+          if (/[?&]range=/.test(url) && (await answerRanged(route, new URL(url), pass))) return undefined;
+          // A file the copy does not hold, asked of the copy's own server: answered from the original (see answerSameOrigin).
+          if (await needsOwnAnswer(new URL(url))) return answerSameOrigin(route, url, pass);
         }
         return route.continue();
       }
@@ -314,6 +402,7 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
             // gets it as its first script, registerServiceWorker). Without it a runtime that builds addresses from a rewritten
             // base fails here, asks for nothing, and the pass sees a page no visitor gets.
             await context.addInitScript(URL_BASE_SHIM);
+            await context.addInitScript(VISITOR_SHIM);
             await context.addInitScript(FAST_TIMERS);
             await context.route('**/*', handle);
             const page = await context.newPage();
@@ -344,10 +433,10 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
   // fetches outside the page, a module imported after a click): fetched from the original once (referenced.js).
   const referenced = await fetchReferenced({ outDir, pageUrl, originHosts, manifest, fetchImpl });
   if (referenced.fetched.length) log.push({ referenced: referenced.fetched.length, bytes: referenced.fetched.reduce((n, x) => n + x.bytes, 0) });
-  await writeFile(path.join(outDir, 'sw.js'), serviceWorkerSource(manifest, [...originHosts], sameFile), 'utf8');
+  await writeFile(path.join(outDir, 'sw.js'), serviceWorkerSource(manifest, [...originHosts], sameFile, rangedFiles), 'utf8');
   // GitHub Pages (Jekyll) leaves out folders whose names start with "_" unless this empty file is there: a copy with a _next folder needs it.
   await writeFile(path.join(outDir, '.nojekyll'), '', 'utf8');
-  for (const entry of entries) await registerServiceWorker(outDir, entry);
+  for (const entry of entries) await registerServiceWorker(outDir, entry, { ranged: rangedFiles });
   await rm(tmp, { recursive: true, force: true });
-  return { passes: passesRun, manifest, log, sameOrigin, referenced };
+  return { passes: passesRun, manifest, log, sameOrigin, referenced, ranged };
 }

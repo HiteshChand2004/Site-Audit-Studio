@@ -17,6 +17,7 @@ import { scriptCandidates } from './extract.js';
 import { RULES } from '../../../detection/engine.js';
 import { rewriteHosts } from './hostRewrite.js';
 import { downloadAsset } from '../../assets/download.js';
+import { rangesOf, sliceOf, RANGED_MAX_BYTES } from './ranged.js';
 
 /** Largest file the lift downloads at build time (bytes). */
 export const LIFT_MAX_BYTES = 25 * 1024 * 1024;
@@ -351,6 +352,48 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
     await copyFile(path.join(recordDir, 'files', entry.sha), target);
     files.push({ url: abs, local, kind: entry.kind, sha256: entry.sha, from: abs, reason: 'a file of the record (the runtime may load it by address)' });
   }
+  // A file the original serves in pieces: the record holds the answer to one `?range=a-b` (a runtime reading a binary index
+  // in slices; the host answers 200 with exactly those bytes and the runtime checks the length). The slice alone is no use -
+  // the next visit asks for another - so the whole file is downloaded once at its bare address and kept when it holds the
+  // recorded slice at those offsets (on another site `?range=` may mean anything); the copy then slices it itself
+  // (ranged.js: an inline script on a first visit, the service worker later). Its record entry is `data`, which the loop
+  // above leaves out on purpose. Skipped ones are reported, never guessed at.
+  /** @type {{ files: { url: string, local: string, bytes: number, first: string }[], skipped: { url: string, reason: string }[] }} */
+  const ranged = { files: [], skipped: [] };
+  for (const entry of byUrl.values()) {
+    if (entry.status !== 200 || !entry.sha || excluded.has(entry.url.split('#')[0])) continue;
+    const abs = entry.url.split('#')[0];
+    const ranges = rangesOf(abs);
+    if (!ranges) continue;
+    const bare = abs.split('?')[0];
+    if (files.some((f) => f.url === bare)) continue;
+    if (!fetch) {
+      ranged.skipped.push({ url: bare, reason: 'the record holds one slice of it, and downloads are off' });
+      continue;
+    }
+    downloads.tried++;
+    await mkdir(tmp, { recursive: true });
+    const res = await fetchImpl(bare, { dir: tmp, kind: 'image', maxBytes: RANGED_MAX_BYTES, attempts: LIFT_ATTEMPTS });
+    if (!res.ok) {
+      downloads.failed++;
+      downloads.failedUrls.push({ url: bare, reason: res.reason });
+      ranged.skipped.push({ url: bare, reason: `the whole file could not be downloaded: ${res.reason}` });
+      continue;
+    }
+    const whole = await readFile(res.tmp);
+    const expected = sliceOf(whole, ranges);
+    if (!expected || !expected.equals(await readFile(path.join(recordDir, 'files', entry.sha)))) {
+      downloads.failed++;
+      ranged.skipped.push({ url: bare, reason: 'the whole file does not hold the recorded slice at those offsets, so the host does not slice it by this query' });
+      continue;
+    }
+    downloads.ok++;
+    const local = localPathOf(bare, res.mime ?? entry.type);
+    await mkdir(path.dirname(path.join(outDir, local)), { recursive: true });
+    await copyFile(res.tmp, path.join(outDir, local));
+    files.push({ url: bare, local, kind: 'data', sha256: res.sha256, bytes: whole.length, type: res.mime ?? entry.type ?? null, from: abs, ranged: true, reason: 'a file the original serves in pieces (?range=): kept whole, sliced by the copy' });
+    ranged.files.push({ url: bare, local, bytes: whole.length, first: new URL(abs).searchParams.get('range') ?? '' });
+  }
   // Inside the copied scripts, every address of a file the copy holds is its local path (raw and JSON-escaped forms).
   const localOf = new Map(files.map((f) => [f.url, f.local]));
   for (const f of files.filter((x) => x.kind === 'script')) {
@@ -580,5 +623,5 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   downloads.renamed = await renameReferences(outDir, renames);
   downloads.renamedFiles = renames.size;
   await rm(tmp, { recursive: true, force: true });
-  return { document: { url: doc.url, sha256: doc.sha }, files, removed, blockers, downloads, dropped, matchedBy };
+  return { document: { url: doc.url, sha256: doc.sha }, files, removed, blockers, downloads, dropped, matchedBy, ranged };
 }

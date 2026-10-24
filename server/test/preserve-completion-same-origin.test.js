@@ -62,7 +62,14 @@ test('completion: a same-origin file the copy lacks is answered from the origina
     assert.equal(optimised.host, undefined, 'answered by the site itself');
     const chunk = result.sameOrigin.mapped.find((m) => m.path === CDN_CHUNK);
     assert.equal(chunk?.host, 'cdn.test', 'the chunk came from the CDN host after the site answered with a page');
-    assert.deepEqual(asked.filter((u) => u.includes('/cms/')).map((u) => new URL(u).hostname), ['site.test', 'cdn.test'], 'the site first, then the CDN, each once');
+    // The chunk's address is a ?range= slice, so the whole file is asked for too (ranged.js); this original has none, so the
+    // slice is kept as any other address. Each address: the site first, then the CDN, each once.
+    const cms = asked.filter((u) => u.includes('/cms/'));
+    assert.deepEqual(cms.filter((u) => u.includes('?range=')).map((u) => new URL(u).hostname), ['site.test', 'cdn.test'], 'the slice: the site first, then the CDN, each once');
+    assert.deepEqual(cms.filter((u) => !u.includes('?range=')).map((u) => new URL(u).hostname), ['site.test', 'cdn.test'], 'the whole file: the site first, then the CDN, each once');
+    assert.equal(result.ranged.files.length, 0, 'nothing is kept whole');
+    assert.equal(result.ranged.skipped.length, 1, 'and the slice that could not be is reported');
+    assert.match(result.ranged.skipped[0].reason, /whole file could not be fetched/);
     assert.equal(result.sameOrigin.sameAsOriginal.length, 1, 'the file every original host lacks is reported as the same as the original');
     assert.equal(result.sameOrigin.sameAsOriginal[0].path, MISSING);
     assert.match(result.sameOrigin.sameAsOriginal[0].reason, /site.test: HTTP 404; cdn.test: HTTP 404/, 'the reason names every host asked');

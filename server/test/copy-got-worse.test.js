@@ -51,6 +51,12 @@ test('console errors: third-party hosts (a), prefetches of pages not copied (c),
   assert.match(mixed.evidence, /1 of 2 console errors have no reason: .*hero\.mp4/);
   assert.equal(mixed.parts.length, 2, 'every part is kept with its own verdict');
 
+  // A slice of a file the original serves in pieces (a runtime's binary index): a file, not a page, whatever its extension's length.
+  const ranged = one({ key: 'lighthouse.errors-in-console' }, { newLhr: errors([`${COPY}/cms/a1b2/index-default-0.sitecms?range=0-120`]) });
+  assert.equal(ranged.reason, null, 'a missing file is unexplained');
+  assert.match(ranged.evidence, /serves in pieces/, 'and the evidence says what the copy must do');
+  assert.doesNotMatch(ranged.evidence, /page that was not copied/, 'never taken for a page the owner left out');
+
   const both = one({ key: 'lighthouse.errors-in-console' }, { newLhr: errors([`${COPY}/contact?_rsc=abc`, 'https://widgets.other.example/w.js']) });
   assert.equal(both.reason, 'owner+third_party', 'parts with different reasons name each one');
   assert.match(reasonText(both.reason), /^c — .* \/ a — /);
