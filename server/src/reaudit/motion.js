@@ -8,12 +8,21 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { launchBrowser } from '../audit/render.js';
 import { measureMotion } from '../recreate/capture/measure.js';
+import { loopsTimeOf, LOOPS_MAX_MS } from '../recreate/capture/loops.js';
 import { DYN_STEP_MS, paintsNothing } from '../recreate/capture/interactions.js';
 import { isScrollReveal } from '../recreate/ir/motion.js';
 
 // A long page: settling (≤ 8 s), loops (a scroll window at a time, ≤ 12 × 2.5 s, + ≤ 9 s of slow movers), hover (≤ 15 s) and
 // focus. 40 s was set before the loop probe scrolled the page; a 6600 px page took 46 s and was reported as failed.
+// A page's time = this base (load, the reveal tracker, the self-changing and pointer probes, and the margin the probes take
+// beyond their budgets under load) + what the loop capture needs on THIS page (capture/loops.js loopsTimeFor: a long page is
+// scrolled a window at a time, every canvas recorded) + the hover and click budgets. A fixed 90 s cut a one-page copy off
+// whose loop capture alone took 48 s (12 scroll windows + 9 s of slow movers), and the re-audit had no motion rows for it.
 export const PAGE_BUDGET_MS = 90000;
+/** The time one page is given: the base, the loop capture's own estimate (the most it can take when unknown), hover, clicks. */
+export function motionTimeFor({ hoverBudgetMs = HOVER_BUDGET_MS, clickBudgetMs = 0, loopsMs = LOOPS_MAX_MS } = {}) {
+  return PAGE_BUDGET_MS + loopsMs + hoverBudgetMs + clickBudgetMs;
+}
 const MAX_PAGES = 6;
 // A little more than the capture of the original had (8 s): the probes go through the candidates in the same order, so the
 // recreate must get at least as far, or an element the original reached would look missing just because time ran out.
@@ -82,12 +91,20 @@ export async function measureNewMotion({ origin, pages, deadline = Infinity, sig
         const page = await context.newPage();
         await page.goto(`${origin}/${p.urlPath}`, { waitUntil: 'load', timeout: 20000 });
         await page.waitForLoadState('networkidle', { timeout: NETWORK_QUIET_MS }).catch(() => {});
-        const measured = await Promise.race([
-          // No focus pass: the comparison (motionItems) reads reveals, loops and hover only; the hover probe keeps its time.
-          measureMotion(page, { budgetMs: p.hoverBudgetMs ?? HOVER_BUDGET_MS, focus: false, clickBudgetMs: p.clickBudgetMs ?? 0 }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), PAGE_BUDGET_MS + Math.max(0, (p.hoverBudgetMs ?? HOVER_BUDGET_MS) - HOVER_BUDGET_MS) + (p.clickBudgetMs ?? 0))),
-        ]);
-        result.pages.set(p.slug, measured);
+        const loopsMs = await loopsTimeOf(page).catch(() => LOOPS_MAX_MS);
+        const allowedMs = motionTimeFor({ hoverBudgetMs: p.hoverBudgetMs ?? HOVER_BUDGET_MS, clickBudgetMs: p.clickBudgetMs ?? 0, loopsMs });
+        const started = Date.now();
+        let timer;
+        try {
+          const measured = await Promise.race([
+            // No focus pass: the comparison (motionItems) reads reveals, loops and hover only; the hover probe keeps its time.
+            measureMotion(page, { budgetMs: p.hoverBudgetMs ?? HOVER_BUDGET_MS, focus: false, clickBudgetMs: p.clickBudgetMs ?? 0 }),
+            new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`timeout after ${Math.round(allowedMs / 1000)} s`)), allowedMs); }),
+          ]);
+          result.pages.set(p.slug, { ...measured, timing: { ms: Date.now() - started, allowedMs, loopsMs } });
+        } finally {
+          clearTimeout(timer);
+        }
       } catch (err) {
         result.failed.push({ slug: p.slug, error: String(err?.message ?? err).split('\n')[0] });
       } finally {
