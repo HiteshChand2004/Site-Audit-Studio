@@ -676,6 +676,16 @@ adopted (renamed) its workspace. Two servers on one `app.db` would also prune ea
   disk) → held while the file was touched within `LOCK_STALE_MS` = 120 s. Unreadable file = nobody's. Only the server takes it:
   scripts, `db:migrate` and tests never do (`scripts/dev.js` kills the old child and awaits its exit before starting the next, so
   the dev loop sees a dead pid and takes over).
+  **Containers (second commit)**: a restarted container often gets the same pid (1) and a new hostname, so (1) the lock carries a
+  random **`INSTANCE_ID`** made at start, and that id alone says whether the file is ours when it is touched (`refresh`, false and a
+  one-time warning when another instance holds it now) or released (`release`, never another's); (2) a lock **naming our own pid**
+  cannot be a live process (we have not written one yet) and is taken over at once, whatever host it names; (3) a lock from
+  **another host** (replaced container, shared disk) blocks at most `LOCK_STALE_MS` = 120 s after it was last touched, and the
+  refusal says that its server cannot be checked from here, when the lock expires ("expires N s from now"), and that deleting the
+  file starts now — so a restart policy that starts the container again gets through within two minutes. Stated trade-off of
+  (2): two live containers that are both pid 1 on one shared volume would take each other's lock over; that is the
+  misconfiguration the lock exists for, and the job heartbeat (`jobs/liveness.js`) still keeps either one's jobs from being
+  marked failed by the other.
 - Tests: `test/job-lock.test.js` (7): a child process holds the lock → refused with pid and file named → killed like a crash →
   taken over; a foreign-host lock fresh / stale / garbage, and release never removing another's; **two real `src/index.js`
   servers on one scratch data folder** (B exits 1 naming A, A still answers, A killed → C starts and holds the lock); heartbeat

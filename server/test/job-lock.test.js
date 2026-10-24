@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { db } from '../src/db/index.js';
-import { acquireDataLock, lockFile, lockHeld, LOCK_STALE_MS, readLock } from '../src/config/dataLock.js';
+import { acquireDataLock, INSTANCE_ID, lockAge, lockFile, lockHeld, LOCK_STALE_MS, readLock } from '../src/config/dataLock.js';
 import { adoptStaleJobs, heartbeat, HEARTBEAT_MS, isStale, openJobs, ownJobs, STALE_MS, STOPPED_MESSAGE } from '../src/jobs/liveness.js';
 import { JobManager } from '../src/jobs/manager.js';
 import * as recreateModule from '../src/recreate/jobs.js';
@@ -158,6 +158,81 @@ test('a lock from another host is held while fresh and taken over once stale; ga
   again.release();
   assert.equal(readLock(file).pid, 4242, 'release never removes another process\'s lock');
   await rm(file, { force: true });
+});
+
+test('a lock naming our own pid cannot be ours and is taken over at once (a restarted container gets its pid again)', () => {
+  const dir = scratch('own-pid');
+  mkdirSync(dir, { recursive: true });
+  const file = lockFile(dir);
+  const now = Date.now();
+  // Same host, our pid, touched a moment ago: the pid-alive test would say "held" (we are alive), the rule says it is not ours.
+  writeFileSync(file, JSON.stringify({ instance: 'gone-' + randomUUID(), pid: process.pid, host: os.hostname(), startedAt: new Date(now - 5000).toISOString() }));
+  assert.equal(lockHeld(readLock(file), file, { now }), false);
+  const taken = acquireDataLock({ dir, now });
+  assert.equal(taken.ok, true, 'taken over without waiting');
+  assert.equal(readLock(file).instance, INSTANCE_ID, 'the new lock carries this process\'s instance id');
+  assert.equal(readLock(file).pid, process.pid);
+  taken.release();
+
+  // Another hostname (a replaced container), our pid, fresh: still ours by pid, so not a live process; taken over at once too.
+  writeFileSync(file, JSON.stringify({ instance: 'gone-' + randomUUID(), pid: process.pid, host: 'container-old', startedAt: new Date(now - 5000).toISOString() }));
+  assert.equal(lockHeld(readLock(file), file, { now }), false);
+  const again = acquireDataLock({ dir, now });
+  assert.equal(again.ok, true);
+  again.release();
+  assert.ok(!existsSync(file));
+});
+
+test('the instance id, not the pid, says whether the lock is ours when it is touched or released', async () => {
+  const dir = scratch('instance');
+  const file = lockFile(dir);
+  const held = acquireDataLock({ dir });
+  assert.equal(held.ok, true);
+  assert.equal(readLock(file).instance, INSTANCE_ID);
+  assert.equal(held.refresh(), true, 'our own lock is touched');
+
+  // Someone deleted our lock and another server took the folder: same pid and host are possible (a container's pid 1), only
+  // the instance id tells them apart.
+  const other = { instance: 'other-' + randomUUID(), pid: process.pid, host: os.hostname(), startedAt: new Date().toISOString() };
+  writeFileSync(file, JSON.stringify(other));
+  const before = new Date(Date.now() - 600000);
+  utimesSync(file, before, before);
+  assert.equal(held.refresh(), false, 'a lock another instance holds is not touched');
+  assert.equal(Math.round(lockAge(file, Date.now()) / 1000), 600, 'its time stamp is untouched');
+  assert.equal(held.release(), false, 'and not removed');
+  assert.equal(readLock(file).instance, other.instance);
+
+  // Our lock gone with nothing in its place: refresh writes it again.
+  await rm(file, { force: true });
+  assert.equal(held.refresh(), true);
+  assert.equal(readLock(file).instance, INSTANCE_ID);
+  assert.equal(held.release(), true);
+  assert.ok(!existsSync(file));
+});
+
+test('a replaced container: the old host\'s fresh lock blocks at most LOCK_STALE_MS, and the message says so', () => {
+  const dir = scratch('container');
+  mkdirSync(dir, { recursive: true });
+  const file = lockFile(dir);
+  const now = Date.now();
+  // The predecessor had another hostname and another pid (so neither rule above applies) and touched its lock 100 s ago.
+  const old = { instance: 'old-' + randomUUID(), pid: process.pid + 1, host: 'container-old', startedAt: new Date(now - 3600000).toISOString(), port: 4000 };
+  writeFileSync(file, JSON.stringify(old));
+  const touched = new Date(now - 100000);
+  utimesSync(file, touched, touched);
+  const refused = acquireDataLock({ dir, now, hostname: 'container-new' });
+  assert.equal(refused.ok, false, 'fresh: it may still run on the other host');
+  assert.match(refused.message, /cannot be checked here/);
+  assert.match(refused.message, /a container that was replaced/);
+  assert.match(refused.message, /expires 20 s from now \(120 s after it was last touched\)/);
+  assert.ok(refused.message.includes(file), 'and names the file to delete to start now');
+
+  // 20 s later the lock has gone untouched for LOCK_STALE_MS: the restarted container gets through.
+  const taken = acquireDataLock({ dir, now: now + 20000, hostname: 'container-new' });
+  assert.equal(taken.ok, true);
+  assert.equal(readLock(file).host, 'container-new');
+  taken.release();
+  assert.ok(LOCK_STALE_MS <= 120000, 'the wait a restart policy has to cover');
 });
 
 test('two servers on one data folder: the second refuses to start, a crashed first is recovered from', { timeout: 180000 }, async () => {
