@@ -159,7 +159,9 @@ test('mail settings: the transport, TLS by port and host, what is refused, and w
     assert.deepEqual(startupProblems(), []);
     assert.match(startupNotices().join('\n'), /Mail: no SMTP_HOST set/);
   });
-  await withEnv({ NODE_ENV: 'production' }, () => assert.deepEqual(startupProblems(), [], 'accounts off: nothing to refuse'));
+  // Accounts off asks nothing of the mail settings. (Production with accounts off is refused for a reason of its own since
+  // owner-options: every visitor would be the owner; test/owner-options.test.js.)
+  await withEnv({ NODE_ENV: 'production' }, () => assert.deepEqual(startupProblems().filter((p) => /mail|SMTP/i.test(p)), [], 'accounts off: nothing about mail to refuse'));
   await withEnv({ SAS_ACCOUNTS: '1', NODE_ENV: 'production', SMTP_HOST: 'smtp.example.com', SMTP_USER: 'u', SMTP_PASS: 'p', MAIL_FROM: 'a@b.co' }, () => {
     assert.deepEqual(startupProblems(), []);
     const notice = startupNotices().join('\n');

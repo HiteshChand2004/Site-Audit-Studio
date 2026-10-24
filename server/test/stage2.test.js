@@ -150,7 +150,8 @@ test('SAS_ACCOUNTS=1 refuses to start on a database that still has migrations to
   const s = await startServer(t, { SAS_ACCOUNTS: '1' }, dataDir);
   assert.equal(s.ready, false);
   assert.equal(await s.exited, 1);
-  assert.match(s.output(), /Not starting: SAS_ACCOUNTS=1 needs the accounts tables.*db:migrate/s);
+  // Refused by db/index.js already (the job columns are pending too), naming every pending migration, the accounts ones included.
+  assert.match(s.output(), /Not starting: the database .* needs migrating \(pending: 2026-10-23-accounts-tables, .*\)\. Nothing was changed\. Run "npm run db:migrate -w server"/s);
 });
 
 test('accounts off: no auth routes, no gate, the API as before (also on a migrated database)', { timeout: 60000 }, async (t) => {

@@ -80,7 +80,10 @@ test('production refuses to start with accounts off, the way SAS_DEV_NO_VERIFY i
     assert.match(problems[0], /every visitor counts as the owner/);
   });
   await withEnv({ NODE_ENV: 'production', SAS_ACCOUNTS: '0' }, () => assert.match(startupProblems()[0], /SAS_ACCOUNTS=1/));
-  await withEnv({ NODE_ENV: 'production', SAS_ACCOUNTS: '1' }, () => assert.deepEqual(startupProblems(), [], 'production with accounts: starts'));
+  // With accounts on, production also needs a mail server since otp (test/otp.test.js); with one, it starts.
+  const SMTP = { SMTP_HOST: 'smtp.example.com', SMTP_USER: 'u', SMTP_PASS: 'p', MAIL_FROM: 'a@b.co' };
+  await withEnv({ NODE_ENV: 'production', SAS_ACCOUNTS: '1', ...SMTP }, () => assert.deepEqual(startupProblems(), [], 'production with accounts: starts'));
+  await withEnv({ NODE_ENV: 'production', SAS_ACCOUNTS: '1' }, () => assert.doesNotMatch(startupProblems().join(' '), /NODE_ENV=production needs SAS_ACCOUNTS=1/, 'accounts on: not refused for accounts'));
   await withEnv({ NODE_ENV: 'development' }, () => assert.deepEqual(startupProblems(), []));
   await withEnv({ NODE_ENV: 'production', SAS_DEV_NO_VERIFY: '1' }, () => {
     const joined = startupProblems().join(' ');

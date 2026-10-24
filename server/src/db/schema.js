@@ -82,14 +82,7 @@ export function applySchema(db) {
   // One page only: the address of a page of the site that Analyze and Recreate work on instead of the whole site
   // (recreate/inputs.js parsePageUrl). Empty = the whole site, so every existing project behaves exactly as before.
   addColumn('projects', 'page_url', 'TEXT');
-  // Liveness of a job (jobs/liveness.js): the process that runs it writes the time every HEARTBEAT_MS while it is queued or
-  // running. At startup only a row whose heartbeat is older than STALE_MS (or NULL: written by an older server) is marked
-  // failed; a job alive in another process is left alone. NULL for every row written before this column existed.
-  for (const table of ['analyses', 'recreates', 'reaudits']) addColumn(table, 'heartbeat_at', 'TEXT');
-  // What the job was started with ({ payload, warnings, system }, jobs/manager.js), so a queued job of a server that died can be
-  // put back in line by the next server with the same row. NULL for rows written before this column existed.
-  for (const table of ['analyses', 'recreates', 'reaudits']) addColumn(table, 'payload_json', 'TEXT');
-  // When the disk cleanup removed a finished copy's folder (jobs/cleanup.js: older than SAS_KEEP_COPIES_DAYS and not the project's
-  // newest). The row stays as the record of the job; its files are gone. NULL: the folder is where it was.
-  addColumn('recreates', 'removed_at', 'TEXT');
+  // Nothing more is added here: a column a later version needs is a migration (db/migrations.js), applied to a real database only
+  // by "npm run db:migrate -w server". Columns the server needs at load are `required` migrations, and db/index.js refuses a
+  // database that lacks them instead of adding them silently.
 }

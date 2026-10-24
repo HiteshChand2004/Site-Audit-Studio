@@ -3,10 +3,12 @@
 // about which columns a table already has (another branch may have added some: projects.mirror_mode), and is safe to run twice.
 // They are applied by db/migrate.js, all pending ones in ONE transaction, only after db/rehearse.js has proven them on a copy.
 //
-// A migration: { id: 'yyyy-mm-dd-name', up(db, ctx) }; ctx.ownerEmail is the operator's account (SAS_OWNER_EMAIL).
+// A migration: { id: 'yyyy-mm-dd-name', required?, up(db, ctx) }; ctx.ownerEmail is the operator's account (SAS_OWNER_EMAIL).
+// required: the server's code reads what it adds whatever the settings (statements prepared when a module loads), so db/index.js
+// refuses an existing database where it is pending, and applies it by itself only to a database it has just created (no data).
 
 /** @typedef {{ ownerEmail?: string, now?: string }} MigrationContext */
-/** @typedef {{ id: string, up: (db: import('node:sqlite').DatabaseSync, ctx: MigrationContext) => void }} Migration */
+/** @typedef {{ id: string, required?: boolean, up: (db: import('node:sqlite').DatabaseSync, ctx: MigrationContext) => void }} Migration */
 
 import { randomUUID } from 'node:crypto';
 
@@ -90,6 +92,24 @@ export const MIGRATIONS = [
     id: '2026-10-23-users-name',
     up(db) {
       if (!hasColumn(db, 'users', 'name')) db.exec('ALTER TABLE users ADD COLUMN name TEXT');
+    },
+  },
+  {
+    // job-lock: the columns of job liveness, the queue that survives a restart and the disk cleanup. Nullable, no default: every
+    // row written before reads as "no heartbeat, no saved payload, folder where it was".
+    id: '2026-10-24-job-columns',
+    required: true,
+    up(db) {
+      for (const table of ['analyses', 'recreates', 'reaudits']) {
+        // Liveness (jobs/liveness.js): the process that runs a job writes the time every HEARTBEAT_MS while it is queued or
+        // running; at startup only a row whose heartbeat is older than STALE_MS (or NULL: an older server) is marked failed.
+        if (!hasColumn(db, table, 'heartbeat_at')) db.exec(`ALTER TABLE ${table} ADD COLUMN heartbeat_at TEXT`);
+        // What the job was started with ({ payload, warnings, system }, jobs/manager.js), so a queued job of a server that died
+        // can be put back in line by the next server with the same row.
+        if (!hasColumn(db, table, 'payload_json')) db.exec(`ALTER TABLE ${table} ADD COLUMN payload_json TEXT`);
+      }
+      // When the disk cleanup removed a finished copy's folder (jobs/cleanup.js); the row stays as the record of the job.
+      if (!hasColumn(db, 'recreates', 'removed_at')) db.exec('ALTER TABLE recreates ADD COLUMN removed_at TEXT');
     },
   },
 ];

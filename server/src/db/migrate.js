@@ -2,8 +2,8 @@
 // Migrating a real database: a checked backup first, then the rehearsal on a scratch copy of it (db/rehearse.js), and only when
 // that passed, the same migrations applied to the database itself in one transaction (db/apply.js), with row counts, integrity,
 // foreign keys and ownership checked before and after.
-// The server never runs this by itself at startup (db/index.js applies only the startup schema): migrating is an explicit
-// `npm run db:migrate -w server`.
+// The server never runs this by itself at startup: db/index.js refuses a database with a required migration pending (and gives
+// those only to a database it has just created, with no data in it); migrating is an explicit `npm run db:migrate -w server`.
 import { DatabaseSync } from 'node:sqlite';
 import { mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
