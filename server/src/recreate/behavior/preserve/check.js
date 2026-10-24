@@ -17,6 +17,7 @@ import { scriptCandidates } from './extract.js';
 import { readRecordIndex, classifyScripts, recordBodyReader } from '../scripts.js';
 import { freezePage, freezeTimers, holdSizeReactions } from '../../verify/exact/freeze.js';
 import { MAX_HEIGHT } from '../../../audit/screenshots.js';
+import { scrollThrough } from './scroll.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -30,16 +31,18 @@ export async function excludedHostsOf(captureRoot, originalUrl) {
   return [...new Set(scriptCandidates(classes, siteHost).filter((s) => s.status === 'excluded').map((s) => new URL(s.url).hostname))];
 }
 
-/** Opens the page and scrolls it the way a visitor does (the lazy parts load). */
+/**
+ * Opens the page and scrolls it to its bottom the way a visitor does (the lazy parts load), then back to the top. Bounded by
+ * time, not height (scroll.js): a phone layout is often taller than the 14 000 px this stopped at before 2026-10-24.
+ * @returns {Promise<{ height: number, steps: number, ms: number, capped: boolean }>}  capped: the page kept growing past the cap
+ */
 export async function openAndScroll(page, url) {
   await page.goto(url, { waitUntil: 'load', timeout: 120000 });
   await page.waitForTimeout(1500);
-  for (let y = 0; y < 14000; y += 400) {
-    await page.evaluate((yy) => window.scrollTo(0, yy), y);
-    await page.waitForTimeout(120);
-  }
+  const scrolled = await scrollThrough(page);
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.waitForTimeout(1200);
+  return scrolled;
 }
 
 /**
@@ -50,10 +53,11 @@ export async function openAndScroll(page, url) {
 export async function settleFrozen(page, url) {
   await openAndScroll(page, url);
   await page.reload({ waitUntil: 'load' });
-  await openAndScroll(page, url);
+  const scrolled = await openAndScroll(page, url);
   await page.evaluate(() => document.fonts.ready.then(() => true)).catch(() => {});
   await freezePage(page);
   await page.waitForTimeout(400);
+  return scrolled;
 }
 
 export { holdSizeReactions };
@@ -106,7 +110,9 @@ const viewOf = (width) => {
  * them are shot at the same moment, so a difference between sides is the page's, not the clock's. Rounds run one after
  * another, so at most one context per side is open at a time: a whole-site run on a small computer never opens six pages at
  * once. A side with `base` is the copy (requests off it are refused); without one it is the original, asked as a visitor.
- * @param {{ base?: string|null, url: string, errors?: string[] }[]} sides  `errors` collects that side's console errors
+ * @param {{ base?: string|null, url: string, errors?: string[] }[]} sides  `errors` collects that side's console errors;
+ *   `scrollCapped` is set on a side whose page kept growing past the warm-up scroll's time cap in any round (reported, so a
+ *   picture of a page that was never fully scrolled is not passed off as one of the whole page)
  * @returns {Promise<Buffer[][]>}  shots[side][round], PNGs
  */
 export async function pictureRounds(browser, opts, sides, rounds = NOISE_SHOTS) {
@@ -125,7 +131,8 @@ export async function pictureRounds(browser, opts, sides, rounds = NOISE_SHOTS) 
         }
         open.push({ context, page, url: s.url });
       }
-      await Promise.all(open.map((o) => settleFrozen(o.page, o.url)));
+      const settled = await Promise.all(open.map((o) => settleFrozen(o.page, o.url)));
+      settled.forEach((r, i) => { if (r?.capped) sides[i].scrollCapped = true; });
       const taken = await Promise.all(open.map((o) => fullShot(o.page)));
       taken.forEach((png, i) => shots[i].push(png));
     } finally {
@@ -147,10 +154,12 @@ export async function pictureRounds(browser, opts, sides, rounds = NOISE_SHOTS) 
  *   can be kept as the page's baseline for a later check made when the original does not answer
  */
 export async function visualCheck(browser, base, copyUrl, originalUrl, width, { keepOriginal = false } = {}) {
-  const [copyShots, originalShots] = await pictureRounds(browser, viewOf(width), [{ base, url: copyUrl }, { url: originalUrl }]);
+  const sides = [{ base, url: copyUrl }, { url: originalUrl }];
+  const [copyShots, originalShots] = await pictureRounds(browser, viewOf(width), sides);
   const v = await gateVerdict(copyShots, originalShots);
   return {
     width, copyHeight: v.heights[1], originalHeight: v.heights[0], shots: NOISE_SHOTS,
+    ...(sides.some((s) => s.scrollCapped) && { scrollCapped: true }),
     diffPct: v.widthMismatch ? null : v.changedPct, rawDiffPct: v.widthMismatch ? null : v.diffPct,
     inNoisePct: v.inNoisePct, noiseShare: v.noiseShare, changedPx: v.changedPx, inNoisePx: v.inNoisePx,
     ...(keepOriginal && { originalShots }),

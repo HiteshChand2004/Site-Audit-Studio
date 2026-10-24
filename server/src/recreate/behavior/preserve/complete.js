@@ -16,6 +16,7 @@ import { downloadAsset } from '../../assets/download.js';
 import { serveFolder } from './render.js';
 import { localPathOf, storableAsIs } from './pageLift.js';
 import { fetchReferenced } from './referenced.js';
+import { scrollThrough } from './scroll.js';
 
 /** Most passes a copy is completed in. */
 export const COMPLETE_PASSES = 3;
@@ -242,6 +243,7 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
     const server = await serveFolder(outDir);
     let downloaded = 0;
     let blocked = 0;
+    let scrollCapped = 0; // pages that kept growing past the scroll-through's time cap (their lowest parts were not asked)
     // The page's activity: when it last asked for anything, and how many answers are still on their way (an answer from the
     // original takes a network round trip). A pass ends on quiet, not on a fixed wait.
     let lastRequestAt = Date.now();
@@ -318,11 +320,10 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
             const opened = Date.now();
             await page.goto(`${server.url}${entry}`, { waitUntil: 'load', timeout: 90000 });
             await page.waitForTimeout(1500);
-            // The whole page, scrolled the way a visitor does: the lazy parts load and request their files.
-            for (let y = 0; y < 14000; y += 400) {
-              await page.evaluate((yy) => window.scrollTo(0, yy), y);
-              await page.waitForTimeout(120);
-            }
+            // The whole page, scrolled the way a visitor does, to its bottom whatever its height (scroll.js; before 2026-10-24
+            // a fixed 14 000 px, under many a phone layout): the lazy parts load and request their files. Within the pass's time.
+            const scrolled = await scrollThrough(page, { maxMs: Math.max(1000, PASS_MAX_MS - (Date.now() - opened) - QUIET_MS) });
+            if (scrolled.capped) scrollCapped++;
             // Then until the page is quiet: nothing asked for QUIET_MS and every answer given (bounded by PASS_MAX_MS).
             while (Date.now() - opened < PASS_MAX_MS && (inFlight > 0 || Date.now() - lastRequestAt < QUIET_MS)) {
               await page.waitForTimeout(250);
@@ -335,7 +336,7 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
     } finally {
       await server.close();
     }
-    log.push({ pass, downloaded, blocked });
+    log.push({ pass, downloaded, blocked, ...(scrollCapped && { scrollCapped }) });
     if (downloaded === 0) break;
   }
   for (const m of sameOrigin.mapped) m.bare = bareOwner.get(m.path.split('?')[0]) === m.path;
