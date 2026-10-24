@@ -9,6 +9,7 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import { liftSite, localOfOutPath } from './asis.js';
 import { packLifted, servedDir } from './pack.js';
+import { buildConvertedReact, convertToReact, verifyConverted } from '../../convert/react.js';
 import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
 import { checkCopy, excludedHostsOf, fixGate, formsInCopy, NOISE_SHOTS, probeOriginal } from './check.js';
@@ -272,6 +273,29 @@ export async function asIsStage(ctx) {
         'and this copy keeps the original\'s `_next` folder. Keep the file when you upload.',
         '',
       ].join('\n'), 'utf8');
+    } else if (stack === 'react-vite') {
+      // The finished copy converted into real code of the stack (recreate/convert/): pages and components, prerendered and never
+      // hydrated, so not one byte of React is added to what the original loads; the built pages are then held against the as-is
+      // pages (same DOM, no file added). If the conversion, its build or that check fails, the copy is packaged as static files
+      // inside a project of the stack instead (the earlier route), and the report says so: a download never fails.
+      ctx.progress(0.4, 'Converting the copy into React pages and components');
+      try {
+        const converted = await convertToReact({ copyDir, outDir, pages, pageUrl: siteUrl });
+        ctx.progress(0.45, 'Building the React + Vite project');
+        const built = await buildConvertedReact(outDir);
+        const verified = await verifyConverted({ copyDir, outDir, pages });
+        report.build = built?.steps?.map((s) => ({ label: s.label, ms: s.ms })) ?? null;
+        report.convert = { mode: 'converted', ...converted, verified };
+      } catch (err) {
+        const why = String(err?.message ?? err).slice(0, 400);
+        ctx.report.warnings.push(`The copy could not be converted into React pages and components (${why.split('\n')[0]}); it is packaged as static files inside a React + Vite project instead.`);
+        await rm(outDir, { recursive: true, force: true });
+        await packLifted({ stack, copyDir, outDir, pageUrl: siteUrl });
+        ctx.progress(0.45, 'Building the stack');
+        const built = await buildStack(stack, outDir);
+        report.build = built?.steps?.map((s) => ({ label: s.label, ms: s.ms })) ?? null;
+        report.convert = { mode: 'packed', failed: why };
+      }
     } else {
       await packLifted({ stack, copyDir, outDir, pageUrl: siteUrl });
       ctx.progress(0.45, 'Building the stack');
@@ -390,6 +414,10 @@ export async function asIsStage(ctx) {
     if (served) openItems.push(...served.open.map((o) => ({ page: o.page ?? '/', ...o })));
     const logOpen = issueLogger(LOGS_DIR);
     for (const o of openItems) await logOpen({ site: new URL(siteUrl).hostname, stack, ...o });
+    // Every part the conversion kept as original HTML is recorded for the owner too (site, page, tag / attribute, reason).
+    for (const f of report.convert?.fallbacks ?? []) {
+      await logOpen({ site: new URL(siteUrl).hostname, stack, page: f.page, check: `kept as original HTML: <${f.tag}>${f.attribute ? ` ${f.attribute}` : ''} at ${f.where}`, values: f.reason, tried: 'kept as the original HTML inside its component; the page is unchanged', reason: 'converted' });
+    }
     ctx.report.copy = {
       stack,
       pages: copyPages,

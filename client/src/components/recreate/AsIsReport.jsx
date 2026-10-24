@@ -30,6 +30,52 @@ function PageRow({ page }) {
  * The result of an "Original as-is" copy: the mode, the checks per page, what was excluded by rule, what needs a person, the
  * JavaScript the copy ships, and Lighthouse before and after (desktop).
  */
+/** A copy converted into the stack's code: what became components, what was kept as original HTML, and each form in plain words. */
+function Converted({ convert }) {
+  if (convert.mode !== 'converted') {
+    return (
+      <>
+        <h4 className={styles.h}>Converted into code</h4>
+        <Alert tone="warn" title="Packaged as static files instead">
+          The copy could not be converted into pages and components{convert.failed ? `: ${convert.failed.split('\n')[0]}` : ''}. It is packaged as static files inside a project of the stack, so the download still works.
+        </Alert>
+      </>
+    );
+  }
+  const s = convert.stats ?? {};
+  const fallbacks = convert.fallbacks ?? [];
+  const forms = convert.forms ?? [];
+  return (
+    <>
+      <h4 className={styles.h}>Converted into code</h4>
+      <p className={styles.note}>
+        {s.pages} page(s) became {s.components} component(s){s.shared ? ` (${s.shared} shared between pages)` : ''}, {s.elements} element(s) written as components.
+        The pages are prerendered and not hydrated, so no runtime of the stack is sent to visitors.
+        {convert.urlChanges?.length ? ` ${convert.urlChanges.length} page address(es) changed to folder form (redirects are in the download).` : ''}
+      </p>
+      {fallbacks.length ? (
+        <>
+          <p className={styles.note}>{fallbacks.length} part(s) kept as the original HTML inside their component (the page is unchanged; only these parts are not component code):</p>
+          <ul className={styles.list}>
+            {fallbacks.slice(0, 20).map((f, i) => (
+              <li key={i}><span className="mono">{f.page}</span> · <span className="mono">&lt;{f.tag}&gt;{f.attribute ? ` ${f.attribute}` : ''}</span> at <span className="mono">{f.where}</span>: {f.reason}</li>
+            ))}
+            {fallbacks.length > 20 && <li>… and {fallbacks.length - 20} more (all listed in KNOWN-ISSUES.md in the download).</li>}
+          </ul>
+        </>
+      ) : <p className={styles.note}>Every element of every page is component code.</p>}
+      <h4 className={styles.h}>Forms, in plain words</h4>
+      {forms.length ? (
+        <ul className={styles.list}>
+          {forms.map((f, i) => (
+            <li key={i}><span className="mono">{f.page}</span> · “{f.label}” ({f.method}, {f.fields.length} field(s){f.password ? ', a password' : ''}{f.file ? ', a file upload' : ''}): on the original it sent its data to {f.target}. {f.note}</li>
+          ))}
+        </ul>
+      ) : <p className={styles.note}>No form on the copied pages.</p>}
+    </>
+  );
+}
+
 export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {}, onPackage }) {
   if (!asIs) return null;
   const checks = asIs.checks?.pages ?? [];
@@ -101,6 +147,8 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
           )}
         </>
       ) : <p className={styles.note}>Not recorded for this copy: make the copy again to see it.</p>}
+
+      {asIs.convert && <Converted convert={asIs.convert} />}
 
       <h4 className={styles.h}>Needs a person</h4>
       {asIs.needsAPerson?.length ? (
