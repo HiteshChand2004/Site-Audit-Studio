@@ -88,6 +88,8 @@ the copy is therefore "not safe" by the existing outside-call check. That is rea
 - 2026-10-24 (ca2c630), the same way: `reaudit-measured-host` (new, 3), `reaudit-lighthouse-pages` 5, `reaudit-asis` 1,
   `reaudit` 6, `perf` 10 pass (perf's "render and screenshots side by side" test fails under `SAS_MAX_PARALLEL=1` alone, as
   that cap is meant to). The full suite was not run.
+- 2026-10-24 (31c5cf6), the same way with `SAS_MAX_PARALLEL=1`: `reaudit-motion` 12 (+1 new), `recreate-loops` 3 pass. The full
+  suite was not run.
 - Client: `npx vite build` passes. No client test suite exists.
 
 ## The plan of 2026-10-20 (kept as written: steps 1-3 DONE, 4 IN PROGRESS, 5 not started; the live list is under "Next steps" below)
@@ -465,11 +467,17 @@ The 2026-10-23 "fixed" rows measured on the blank shell are superseded by this r
 **Still open on nyaayai's copy (re-audit 5bf00522, 2026-10-24)**:
 - The "unused CSS 0 → 12 KiB" row of 2026-10-23 is gone after the fix (it was the blank render); after the measurement host the
   got-worse rows left are 20 new broken links and sitemap.xml (a one-page copy with no new-site address: owner).
-- **Motion could not be measured on the copy (the motion step timed out)**, again (`motion: pages 0, failed: index/timeout`).
-  Not investigated.
+- **The motion step's timeout: FIXED 2026-10-24 (31c5cf6)**, general. Measured stage by stage on this copy: loop capture 48 s
+  (12 scroll windows of the strip scan on an 11 654 px page + 9 s of slow movers), self-changing parts 9 s, pointer 3 s, hover
+  15.5 s, clicks 12.8 s = 90 s against a fixed timer of 104 s that dated from before the strip scan and the canvas recording
+  existed. Now `capture/loops.js loopsTimeFor` says what the loop capture needs on a page from its own constants (47.4 s here)
+  and `reaudit/motion.js motionTimeFor` = base 90 s + that + hover + clicks is the page's timer and the step's deadline.
+  Re-audit after it (`reaudit-motion-2026-10-24/`): motion measured on the page — reveals 85 / 85, hover 14 / 14 with the same
+  end states, loops 8 → 16, no motion row open or worse; the Lighthouse table holds (phone 89, computer 96).
 - `lighthouse.offscreen-images` (425 vs 427 KiB) and `lighthouse.uses-responsive-images` (577 vs 772 KiB, phone) still open and
   **UNEXPLAINED** (2 of 10 still-open rows): both fail on both sides and the copy sends no more; the as-is copy keeps the
-  original's images as written.
+  original's images as written. **Not fixed now by decision (user, 2026-10-24)**: they belong to the images step (next steps
+  item 4, after Step 5), whose goal is that the copy BEATS the original on these two rows without changing the look.
 
 **This morning's run (2026-10-24, branch `copy-step4`, scratch data `C:/Users/urvas/Downloads/sas-work/data`, log
 `sas-work/live.log`, `SAS_MAX_PARALLEL=2`)**:
@@ -498,7 +506,8 @@ above; visual gate; re-audit):
 - Live results kept for the user: `C:/Users/urvas/Downloads/remastly-live-results/` — `nyaayai/` (2026-10-23: summary.json, recreate/,
   reaudit/, lighthouse-original/, CORRECTED-VERDICT.txt, repro-blank.mjs; 2026-10-24: `BLANK-RENDER-2026-10-24.md`,
   `repro-2026-10-24/`, `run-2026-10-24/` with the fresh copy, re-audit, applied-throttling Lighthouse runs and the LCP probe;
-  `MEASURED-HOST-2026-10-24.md` + `reaudit-measured-host-2026-10-24/` (+ `.log`): the re-audit through the measurement host),
+  `MEASURED-HOST-2026-10-24.md` + `reaudit-measured-host-2026-10-24/` (+ `.log`): the re-audit through the measurement host;
+  `reaudit-motion-2026-10-24/` (+ `.log`): the re-audit after the motion timer fix, motion measured),
   `first-attempt-indikaai-makememo/` and **`scripts/`**: the live-run driver `scratch-live.mjs`, `repro-stall.mjs` (serveCopy +
   a local proxy that stalls one host + Lighthouse), `nyaayai-fresh-copy.mjs` (one as-is copy + re-audit on a scratch data folder,
   summary and folders copied out), `nyaayai-reaudit.mjs` (a re-audit alone of a finished recreate, same folder rule) and the other scratch scripts of the step-4 sessions (never committed; they import from a
@@ -511,7 +520,8 @@ above; visual gate; re-audit):
   imports `db/index.js`. Then the new process marks the running job failed and `resumeInterruptedRecreates` adopts its workspace
   (renames the `.tmp` folder under the running job), so the old job fails for real; with a plain restart-on-exit (systemd, PM2
   without reload) it cannot happen. Fix when wanted: a heartbeat column per running job (only stale rows are marked failed and
-  resumed) and a lock file so a second server refuses the same data folder; about half a day with tests.
+  resumed) and a lock file so a second server refuses the same data folder; about half a day with tests. **Must be done before
+  launch** (user, 2026-10-24): next steps item 7.
 - Scratch data of this morning's run: `C:/Users/urvas/Downloads/sas-work/data` (projects indikaai 9b829d40…, makememo 93e23afa…,
   sankalpam 06a12702…, nyaayai 603201ca…); logs `sas-work/live.log`, `sas-work/live-killed-run.log`. Driver: `remastly-live-results/scripts/scratch-live.mjs
   <projectId>:<whole|home> …` (calls the job managers directly, no server; it used to live untracked in `Website-Audit-copystep4/server/`).
@@ -522,13 +532,16 @@ Known gaps: Step 1's stability figures (nyaayai 0.27–0.31 %) were measured wit
 
 ## Next steps, in order (commit after each with `--no-verify`, say the full suite was not run; nothing is pushed before the PR)
 
-1. **Step 4 — the blank render: DONE 2026-10-24** (fixed, verified live, see "State on 2026-10-24"). Left from it, on the same copy
-   (`run-2026-10-24`): the re-audit's **motion step timeout** (no motion rows for the copy) and the two **UNEXPLAINED**
-   still-open rows (`lighthouse.offscreen-images`, `lighthouse.uses-responsive-images`).
+1. **Step 4 — the blank render and the motion step's timeout: DONE 2026-10-24** (both fixed generally and verified live, see
+   "State on 2026-10-24"). The two UNEXPLAINED image rows left on that copy go to item 4 by decision.
 2. **Step 4, rest**: whatever *acts* on an unexplained "got worse" / "still open" row (`copy/run.js zeroRegressions` is the tested
    model, fakes only); the summary line's "Fixed" already comes from the re-audit.
 3. **Step 5 — per-page fallback**: clean rebuild of a failing page in the chosen stack, time-boxed correction, keep the better one.
-4. Images on the as-is output (WebP / variants) only where the pixels stay the same, through the same gate.
+4. **Images on the as-is output** (WebP / variants / deferred loading of what is below the first screen), only where the pixels
+   stay the same, through the same visual gate. Goal (user, 2026-10-24): the copy **beats the original** on
+   `lighthouse.offscreen-images` and `lighthouse.uses-responsive-images` without changing the look — on nyaayai's copy both
+   rows are still open and unexplained (425 vs 427 KiB; 577 vs 772 KiB on phone) because an as-is copy keeps the images as
+   written. Runs after Step 5.
 5. **BUG, open: the exact comparison's pictures always answer 404** (found 2026-10-23 during the accounts work; still present
    on `step4-lighthouse`, checked 2026-10-24).
    `server/src/routes/recreate.js`, route `GET /api/projects/:id/recreate/:recreateId/exact/:slug/:file` (line ~277 on
@@ -548,6 +561,15 @@ Known gaps: Step 1's stability figures (nyaayai 0.27–0.31 %) were measured wit
    again. Also worth a sweep of server/src for other regex literals that lost their backslashes (a bare `d{`, `s+`, `w+` or
    an unescaped `.webp` inside `/…/`).
 6. Recorded, waiting for a decision: security headers that take effect on Next.js / Vercel (DEPLOY.md is fixed, PARKED item 3).
+7. **MUST BE DONE BEFORE LAUNCH — the database and a second process** (user, 2026-10-24; the gotcha under "Where things are
+   kept"): (a) a **heartbeat per running job** (a `seen_at` column written with every progress update) so a starting server marks
+   failed only the rows whose heartbeat is stale, and `resumeInterruptedRecreates` adopts only those; (b) a **lock file** in the
+   data folder (pid, checked alive) so a second server refuses the same data folder instead of opening its database. About half
+   a day with tests. Checked 2026-10-24: **no shipped way of running the app reloads without downtime today** — the app itself
+   is one `npm start` process (`server/package.json`; no Dockerfile, PM2 or systemd unit in the repo), and the DEPLOY.md shipped
+   with a copy (`src/copy/deploy.js`) says only where the COPY can be hosted (Netlify, Vercel, Cloudflare Pages / GitHub Pages /
+   S3 / nginx, Render for MERN), never how this server runs. The planned API + worker + Docker architecture (docs/ACCOUNTS.md,
+   docs/fidelity-audit.md step 8) is exactly the two-process case, so this comes before it.
 Then the big multi-site live run ("Sites still to run at the end" above), one site per run, `SAS_MAX_PARALLEL=1`, scratch data and
 ports only, before the PR.
 **Final proof before launch (user, 2026-10-24)**: deploy one copy to a real static host (temporary, `noindex`, deleted
