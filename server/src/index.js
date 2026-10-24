@@ -14,6 +14,9 @@ import { lockBusy } from './jobs/manager.js';
 import { awakeHeld } from './jobs/keepAwake.js';
 import { resumeInterruptedRecreates } from './recreate/jobs.js';
 import { stopAllAsIsPreviews } from './recreate/behavior/preserve/asisPreview.js';
+import { previewRouter, PREVIEW_PREFIX } from './recreate/previewRoute.js';
+import { inlineScriptHashes } from './recreate/inlineScripts.js';
+import { foreignOriginCheck } from './security/foreignOrigin.js';
 import { accountsEnabled, bindHost, isLoopbackHost } from './config/index.js';
 import { db } from './db/index.js';
 import { pendingMigrations } from './db/apply.js';
@@ -25,6 +28,10 @@ const app = express();
 
 app.use(cors({ origin: ['http://localhost:5173', 'http://127.0.0.1:5173'] }));
 app.use(express.json({ limit: '1mb' }));
+// Nothing that merely shares the app's address is the app: a sandboxed preview or another site (security/foreignOrigin.js).
+app.use('/api', foreignOriginCheck);
+// The previews of copies, under the app's own address; every document sandboxed by header (recreate/previewRoute.js).
+app.use(PREVIEW_PREFIX, previewRouter({ inlineScriptHashes }));
 
 // Accounts (SAS_ACCOUNTS=1): the database must have the accounts tables (npm run db:migrate), the auth routes are mounted, and
 // every other /api route but /api/health is behind a verified session (accounts/gate.js). Off: none of this exists, as before.

@@ -381,7 +381,8 @@ router.post('/:id/recreate/:recreateId/export', async (req, res) => {
   }
 });
 
-// The preview of an "Original as-is" copy: served from its own address (behavior/preserve/asisPreview.js), never the app's origin.
+// The preview of an "Original as-is" copy: served by the app under /preview/<token>/ (behavior/preserve/asisPreview.js,
+// recreate/previewRoute.js), every document sandboxed by header, so the copy's own script never has the app's origin.
 router.post('/:id/recreate/:recreateId/asis-preview', async (req, res) => {
   const row = doneReport.get(req.params.recreateId, req.params.id);
   const report = row?.result_json ? JSON.parse(row.result_json) : null;

@@ -21,11 +21,13 @@ import ws from '../Workspace.module.css';
 // "services/index.html" → "services/": the URL the preview server answers for a page file.
 const pageUrl = (outPath) => outPath.replace(/(^|\/)index\.html$/, '$1');
 
-// A plain-HTML site is framed without scripts, forms, popups or top navigation. A stack with JavaScript (React)
-// may run its own bundles: the preview server sends script-src 'self' for it and says so (preview.scripts).
-const sandboxFor = (preview) => (preview?.scripts ? 'allow-same-origin allow-scripts' : 'allow-same-origin');
+// Every copy is framed WITHOUT allow-same-origin: the preview is served under the app's own address (/preview/<token>/,
+// server/src/recreate/previewRoute.js), so a copy's script must never get the app's origin — not its cookies, storage or
+// API. The server sandboxes each document by header as well; this attribute is the frame's own half of the same rule.
+// A plain-HTML site runs no script at all; a stack with JavaScript (React, an as-is copy) runs its own bundles only.
+const sandboxFor = (preview) => (preview?.scripts ? 'allow-scripts' : '');
 
-// The copy's preview server lets only the app's own address frame it (frame-ancestors); opened from another address the
+// The preview lets only the app's own address frame it (frame-ancestors); opened from another address the
 // live frame stays blank, so the picture taken when the copy was measured is shown first.
 // The app's addresses: the Vite dev server (5173, npm run dev) and the one local address of npm run local (8080, which
 // starts the API with APP_ORIGIN set to it).
@@ -186,8 +188,8 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   }
 
   const copyUrl = asIsCopy ? asIsUrl : preview?.url;
-  // An as-is copy is its own origin: scripts run there (its own code), and nothing of it reaches the app.
-  const frameSandbox = asIsCopy ? 'allow-same-origin allow-scripts' : sandboxFor(preview);
+  // An as-is copy runs its own code, sandboxed: nothing of it reaches the app (see sandboxFor).
+  const frameSandbox = asIsCopy ? 'allow-scripts' : sandboxFor(preview);
   const ready = Boolean(asIsCopy ? asIsUrl : preview?.url && preview.recreateId === result.recreateId);
   const src = ready ? `${copyUrl}${pageUrl(pageOf(result, shown, page).file)}` : null;
   const view = VIEWPORTS.find((v) => v.id === viewport)?.view;

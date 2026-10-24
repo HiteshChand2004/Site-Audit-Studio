@@ -28,6 +28,8 @@ export default defineConfig({
     proxy: {
       // The API keeps its /api prefix (not /app/api): the same path the marketing site's sign-in form posts to.
       '/api': 'http://127.0.0.1:4000',
+      // The previews of copies: served by the API under the app's own address (server/src/recreate/previewRoute.js).
+      '/preview': 'http://127.0.0.1:4000',
     },
   },
 });

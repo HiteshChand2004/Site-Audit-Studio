@@ -11,7 +11,8 @@ import express from 'express';
 import { db, projectDir } from '../src/db/index.js';
 import { buildDist } from '../src/recreate/build/minify.js';
 import { RecreateError } from '../src/recreate/errors.js';
-import { activePreview, appOrigins, PREVIEW_PORTS, servePreview, startPreview, stopPreview } from '../src/recreate/preview.js';
+import { activePreview, appOrigins, servePreview, startPreview, stopPreview } from '../src/recreate/preview.js';
+import { previewRouter, PREVIEW_PREFIX } from '../src/recreate/previewRoute.js';
 import { flagFidelity } from '../src/recreate/verify/fidelity.js';
 import { resolveRef, verifyFailure, verifySite } from '../src/recreate/verify/site.js';
 import { recreateDir } from '../src/recreate/workspace.js';
@@ -221,42 +222,44 @@ test('preview server: serves only its own folder, with strict headers', async ()
   assert.deepEqual(appOrigins('http://127.0.0.1:5173'), ['http://127.0.0.1:5173', 'http://localhost:5173']);
 });
 
-test('one preview per project, each on its own port in 5100–5199', async () => {
+test('one preview per project, each under the app\'s own address with a token of its own', async (t) => {
   const root = await tempDir();
   await writeTree(root, { 'a/index.html': 'site A', 'b/index.html': 'site B' });
-  const a = await startPreview({ projectId: 'pa', recreateId: 'ra', root: path.join(root, 'a') });
-  assert.ok(a.port >= PREVIEW_PORTS.first && a.port <= PREVIEW_PORTS.last);
-  assert.equal(a.url, `http://127.0.0.1:${a.port}/`);
-  assert.equal((await get(a.port, '/')).body, 'site A');
-  // Same recreate again: the same preview.
-  assert.equal((await startPreview({ projectId: 'pa', recreateId: 'ra', root: path.join(root, 'a') })).port, a.port);
+  // The app's address with the preview route mounted, as src/index.js mounts it.
+  const app = express();
+  app.use(PREVIEW_PREFIX, previewRouter());
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((r) => server.once('listening', r));
+  t.after(() => new Promise((r) => server.close(r)));
+  const read = async (url) => { const res = await fetch(`http://127.0.0.1:${server.address().port}${url}`); return { status: res.status, body: await res.text() }; };
 
-  // Another project gets its own port; the first one keeps answering (two tabs side by side).
+  const a = await startPreview({ projectId: 'pa', recreateId: 'ra', root: path.join(root, 'a') });
+  assert.match(a.url, /^\/preview\/[A-Za-z0-9_-]{24}\/$/, 'a path under the app, with an unguessable token');
+  assert.equal(a.port, undefined, 'no port of its own any more');
+  assert.equal((await read(a.url)).body, 'site A');
+  // Same recreate again: the same preview.
+  assert.equal((await startPreview({ projectId: 'pa', recreateId: 'ra', root: path.join(root, 'a') })).url, a.url);
+
+  // Another project gets its own token; the first one keeps answering (two tabs side by side).
   const b = await startPreview({ projectId: 'pb', recreateId: 'rb', root: path.join(root, 'b') });
   assert.equal(activePreview().projectId, 'pb');
-  assert.equal(activePreview('pa').port, a.port);
-  assert.notEqual(b.port, a.port);
-  assert.equal((await get(b.port, '/')).body, 'site B');
-  assert.equal((await get(a.port, '/')).body, 'site A');
-  // A newer recreate of the same project replaces that project's preview only.
+  assert.equal(activePreview('pa').url, a.url);
+  assert.notEqual(b.url, a.url);
+  assert.equal((await read(b.url)).body, 'site B');
+  assert.equal((await read(a.url)).body, 'site A');
+  // A newer recreate of the same project replaces that project's preview only, and the old address is gone at once.
   const a2 = await startPreview({ projectId: 'pa', recreateId: 'ra2', root: path.join(root, 'b') });
   assert.equal(activePreview('pa').recreateId, 'ra2');
-  assert.equal((await get(a2.port, '/')).body, 'site B');
-  assert.equal(activePreview('pb').port, b.port);
-
-  // A port that is taken is skipped.
-  const blocker = await servePreview(path.join(root, 'a'), { port: b.port + 1 <= PREVIEW_PORTS.last ? b.port + 1 : PREVIEW_PORTS.first });
-  try {
-    await stopPreview();
-    const c = await startPreview({ projectId: 'pc', recreateId: 'rc', root: path.join(root, 'b') });
-    assert.notEqual(c.port, blocker.port);
-  } finally {
-    await blocker.close();
-  }
+  assert.equal((await read(a2.url)).body, 'site B');
+  assert.equal((await read(a.url)).status, 404, 'the replaced preview answers nothing');
+  assert.equal(activePreview('pb').url, b.url);
 
   // Stop filters by project / recreate; a missing build is refused.
+  await stopPreview();
+  const c = await startPreview({ projectId: 'pc', recreateId: 'rc', root: path.join(root, 'b') });
   assert.equal(await stopPreview({ projectId: 'other' }), false);
   assert.equal(await stopPreview({ projectId: 'pc', recreateId: 'rc' }), true);
+  assert.equal((await read(c.url)).status, 404, 'stopped: nothing answers');
   assert.equal(activePreview(), null);
   await assert.rejects(startPreview({ projectId: 'pd', recreateId: 'rd', root: path.join(root, 'none') }), /no production build/);
   assert.equal(activePreview(), null);
@@ -265,6 +268,7 @@ test('one preview per project, each on its own port in 5100–5199', async () =>
 test('preview routes start, report and stop the preview of the latest completed recreate', async () => {
   const app = express();
   app.use('/api/projects', recreateRouter);
+  app.use(PREVIEW_PREFIX, previewRouter());
   const server = await new Promise((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
@@ -282,7 +286,8 @@ test('preview routes start, report and stop the preview of the latest completed 
 
     const started = await (await fetch(`${base}/${id}/preview`, { method: 'POST' })).json();
     assert.equal(started.preview.recreateId, recreateId);
-    assert.equal(await (await fetch(started.preview.url)).text(), 'the build');
+    assert.match(started.preview.url, /^\/preview\/[A-Za-z0-9_-]{24}\/$/, 'under the app\'s own address');
+    assert.equal(await (await fetch(`http://127.0.0.1:${server.address().port}${started.preview.url}`)).text(), 'the build');
     assert.deepEqual(await (await fetch(`${base}/${id}/preview`)).json(), started);
     assert.deepEqual(await (await fetch(`${base}/${randomUUID()}/preview`)).json().catch(() => null), { error: 'Project not found.' });
 

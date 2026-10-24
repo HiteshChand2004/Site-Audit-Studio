@@ -1,6 +1,7 @@
-// Minimal static preview of a recreated site (Phase 4a; Phase 5 replaces it with the full
-// PreviewManager). One preview is active at a time. It serves exactly one recreate's dist/ folder on
-// its own port in 5100–5199, never the app origin, on 127.0.0.1 only:
+// The preview of a recreated site. The app shows it from its own address, /preview/<token>/… (recreate/previewRoute.js:
+// every document sandboxed by header, the token the only permission; startPreview below issues it). The loopback server in
+// this file (servePreview) remains for the measurements: the preview step and the re-audit serve a build on a throwaway
+// port of 127.0.0.1 through it. That server:
 //   - GET/HEAD only; the Host header must be this port on 127.0.0.1 or localhost (DNS rebinding);
 //   - paths stay inside the root (also after resolving links); dotfiles and folders without
 //     index.html are not served; a folder without a trailing slash redirects to it, so relative
@@ -17,6 +18,7 @@ import { APP_ORIGIN } from '../audit/frame.js';
 import { RecreateError } from './errors.js';
 import { inlineScriptHashes } from './inlineScripts.js';
 import { TYPES, typeExtOf } from './verify/server.js';
+import { issuePreviewToken, previewPath, revokePreviewToken } from './previewTokens.js';
 
 export const PREVIEW_PORTS = { first: 5100, last: 5199 };
 export const PREVIEW_HOST = '127.0.0.1';
@@ -168,7 +170,8 @@ const serial = (fn) => {
   return run;
 };
 
-const info = (p) => ({ projectId: p.projectId, recreateId: p.recreateId, port: p.port, url: `${p.origin}/`, scripts: Boolean(p.scripts), stack: p.stack ?? 'html', startedAt: p.startedAt });
+// url: the preview's root under the app's own address (a path, framed by the app; recreate/previewRoute.js).
+const info = (p) => ({ projectId: p.projectId, recreateId: p.recreateId, url: previewPath(p.token), scripts: Boolean(p.scripts), stack: p.stack ?? 'html', startedAt: p.startedAt });
 
 /** The preview of a project, or null. Without a project: the latest one started (or null). */
 export const activePreview = (projectId) => {
@@ -192,8 +195,9 @@ export function startPreview({ projectId, recreateId, root, scripts = false, sta
       await current.close();
       active.delete(projectId);
     }
-    const served = await servePreview(root, { range: PREVIEW_PORTS, scripts });
-    const entry = { projectId, recreateId, root, scripts, stack, ...served, startedAt: new Date().toISOString() };
+    // No server of its own: the app serves the folder under /preview/<token>/ while the token is valid.
+    const token = issuePreviewToken({ root, kind: 'copy', scripts });
+    const entry = { projectId, recreateId, root, scripts, stack, token, close: async () => { revokePreviewToken(token); }, startedAt: new Date().toISOString() };
     active.set(projectId, entry);
     return info(entry);
   });

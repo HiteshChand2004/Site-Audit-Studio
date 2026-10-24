@@ -192,13 +192,26 @@ are allowed. The user's dev server (4000 / 5173) runs from `Website-Audit-exact`
   text, and put new statements behind small functions so a later driver swap is one module. Decide before Stage 7.
 
 ### Previews when hosted
-- Today: an HTML copy is served by `recreate/preview.js` on `127.0.0.1`, a port of its own in **5100–5199**
+- **Done (2026-10-24): previews are paths of the app's own address, every document sandboxed by header.** The API serves
+  `/preview/<token>/…` (`recreate/previewRoute.js`; `recreate/previewTokens.js` issues a 24-character token when a preview
+  starts — `startPreview`, `startAsIsPreview` — and drops it when it stops). The token is the only permission (the frame has
+  no session: it is an opaque origin, so the browser sends it no cookie). Every HTML / SVG answer carries
+  `Content-Security-Policy: sandbox allow-scripts; frame-ancestors <app>` (a build of ours also the strict policy, written with
+  the visitor's origin instead of `'self'`), `Access-Control-Allow-Origin: *` (a sandboxed document fetches its own files
+  cross-origin), no-store, no-referrer. Root-relative addresses in pages and stylesheets are moved under the preview's path on
+  the way out; addresses a copy's own script builds at run time are not (they ask the app's root and get 404 — nothing of the
+  app). The app frames every copy with `sandbox="allow-scripts"` (plain copies `sandbox=""`), never `allow-same-origin`
+  (`CompareStep.jsx`). `/api` refuses `Origin: null` and `Sec-Fetch-Site: cross-site` for every method
+  (`security/foreignOrigin.js`). Vite (`/preview` proxied) and `scripts/local-proxy.mjs` route the prefix to the API.
+  Proof: `test/preview-sandbox.test.js` (the risk shown first, then the fix, in a browser against the real API),
+  `test/preview-route.test.js`. The loopback servers remain for measurement only (the preview step, the re-audit).
+- Before (kept for the record): an HTML copy was served by `recreate/preview.js` on `127.0.0.1`, a port of its own in **5100–5199**
   (`PREVIEW_PORTS`, host check `127.0.0.1:<port>` / `localhost:<port>`, `frame-ancestors` = `APP_ORIGIN` from `audit/frame.js`,
   default `http://localhost:5173`); an as-is copy by `behavior/preserve/asisPreview.js` (own port via `serve.js`); an app stack by
   `serveStack.js startStack` on **fixed** ports 4501 / 4502 / 4503 (`preserve/stage.js PORT`); throwaway servers on random ports
   (`verify/server.js`, `preserve/serve.js`, `render.js`, the re-audit, `security/egressProxy.js`). The client frames `preview.url`
   as given (`CompareStep.jsx`, `SitePreview.jsx`) and picks live vs picture by `window.location.port === '5173'`.
-- Hosted: a user's browser cannot reach `127.0.0.1:<port>` on the server. Previews become **subdomains**
+- The alternative not taken: **subdomains**
   (`<recreateId>.preview.<domain>`, recommended: each copy gets its own origin, so a copy's own scripts can never touch the app's
   cookies) served by one preview service that maps host → copy folder, or **paths** (`/preview/<recreateId>/…`, simpler, but every
   copy shares one origin and needs a `<base>` / link rewriting, which an as-is copy's own scripts break). Either way:

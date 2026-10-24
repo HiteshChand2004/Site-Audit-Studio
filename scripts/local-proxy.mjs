@@ -3,6 +3,7 @@
 // /api — the same origin, so the session cookie (Path=/) set by sign-up on the marketing page is the tool's session too.
 //
 //   /api, /api/…   → the API (it has its own gate: accounts/gate.js, accounts/ownership.js)
+//   /preview/…     → the API too: the previews of copies, each document sandboxed by header (recreate/previewRoute.js)
 //   /app           → 302 /app/
 //   /app/…         → the tool's dev server, ONLY for a signed-in, verified visitor. Anyone else asking for a page is sent to the
 //                    marketing site's /auth (with ?next= to come back); a script, style or socket request gets 401. The verdict
@@ -47,6 +48,7 @@ export function createLocalProxy({ api, app, site, cacheMs = 3000, log = () => {
   const route = (/** @type {string} */ url) => {
     const pathname = url.split('?')[0];
     if (pathname === '/api' || pathname.startsWith('/api/')) return 'api';
+    if (pathname === '/preview' || pathname.startsWith('/preview/')) return 'api';
     if (pathname === '/app') return 'app-root';
     if (pathname.startsWith('/app/')) return 'app';
     return 'site';
