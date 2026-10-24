@@ -56,7 +56,8 @@ export function trimReport(lhr) {
     if (typeof a?.score !== 'number' || a.score >= 0.9 || a.scoreDisplayMode === 'informative' || a.scoreDisplayMode === 'manual') continue;
     audits[id] = { score: a.score, title: a.title, displayValue: a.displayValue ?? null, numericValue: a.numericValue ?? null, numericUnit: a.numericUnit ?? null,
       ...(Number.isFinite(a.details?.overallSavingsBytes) && { savingsBytes: a.details.overallSavingsBytes }),
-      urls: [...new Set((a.details?.items ?? []).map((i) => i.url ?? i.source?.url ?? i.sourceLocation?.url ?? i.entity ?? null).filter((u) => typeof u === 'string'))].slice(0, 20) };
+      // details.items is a list for most audits; an insight with a checklist (document-latency-insight) keeps an object there.
+      urls: [...new Set((Array.isArray(a.details?.items) ? a.details.items : []).map((i) => i.url ?? i.source?.url ?? i.sourceLocation?.url ?? i.entity ?? null).filter((u) => typeof u === 'string'))].slice(0, 20) };
   }
   const lcp = lhr?.audits?.['largest-contentful-paint-element']?.details?.items?.[0]?.items?.[0]?.node;
   // A category Lighthouse could not score (null): the audits of it that errored, with their message, so the comparison can say
