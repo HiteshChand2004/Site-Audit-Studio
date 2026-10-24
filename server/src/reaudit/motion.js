@@ -9,7 +9,7 @@ import path from 'node:path';
 import { launchBrowser } from '../audit/render.js';
 import { measureMotion } from '../recreate/capture/measure.js';
 import { loopsTimeOf, LOOPS_MAX_MS } from '../recreate/capture/loops.js';
-import { DYN_STEP_MS, paintsNothing } from '../recreate/capture/interactions.js';
+import { DYN_STEP_MS, FIRST_MS, paintsNothing } from '../recreate/capture/interactions.js';
 import { isScrollReveal } from '../recreate/ir/motion.js';
 
 // A long page: settling (≤ 8 s), loops (a scroll window at a time, ≤ 12 × 2.5 s, + ≤ 9 s of slow movers), hover (≤ 15 s) and
@@ -33,10 +33,20 @@ const HOVER_BUDGET_MS = 10000;
 export const HOVER_MS_PER_PROBE = 1500;
 export const HOVER_BUDGET_MAX_MS = 60000;
 
-/** The hover budget the copy needs to get as far as the original's probe did. */
+/**
+ * The hover budget the copy needs to get as far as the original's probe did - and, whatever else it reaches, to measure every
+ * element the original saw hovering (hoverFirstFor), which the copy's probe takes first: a script-driven hover is read step by
+ * step and its revert waited for, ~FIRST_MS each. A page whose five hovers sat after five links that do nothing (each costing
+ * the probe its revert wait) was measured as "0 of 5" with time to spare for none of them.
+ */
 export function hoverBudgetFor(oldMotion) {
   const probed = oldMotion?.stats?.probed ?? 0;
-  return Math.max(HOVER_BUDGET_MS, Math.min(HOVER_BUDGET_MAX_MS, probed * HOVER_MS_PER_PROBE));
+  const first = hoverFirstFor(oldMotion).length;
+  return Math.max(HOVER_BUDGET_MS, Math.min(HOVER_BUDGET_MAX_MS, Math.max(probed * HOVER_MS_PER_PROBE, first * FIRST_MS)));
+}
+/** The tag|text keys (hoverKey) of the mouse-probed hovers of the original: what the copy's probe must reach. */
+export function hoverFirstFor(oldMotion) {
+  return [...new Set((oldMotion?.hover ?? []).filter((h) => h?.source !== 'css' && h?.tag).map(hoverKey))];
 }
 /**
  * The click budget the copy needs to try every control the original's click probe tried (~1.5 s each: aim, click, settle,
@@ -71,7 +81,7 @@ export async function readOldMotion(recreateFolder, reportPages, excluded = []) 
 
 /**
  * Measures the recreated pages. Never throws for one page failing: that page is left out (and listed in `failed`).
- * @param {{ origin: string, pages: { slug: string, urlPath: string, hoverBudgetMs?: number }[], deadline?: number, signal?: AbortSignal }} o
+ * @param {{ origin: string, pages: { slug: string, urlPath: string, hoverBudgetMs?: number, hoverFirst?: string[] }[], deadline?: number, signal?: AbortSignal }} o
  * @returns {Promise<{ pages: Map<string, object>, failed: { slug: string, error: string }[], skipped: string[] }>}
  */
 export async function measureNewMotion({ origin, pages, deadline = Infinity, signal }) {
@@ -98,7 +108,7 @@ export async function measureNewMotion({ origin, pages, deadline = Infinity, sig
         try {
           const measured = await Promise.race([
             // No focus pass: the comparison (motionItems) reads reveals, loops and hover only; the hover probe keeps its time.
-            measureMotion(page, { budgetMs: p.hoverBudgetMs ?? HOVER_BUDGET_MS, focus: false, clickBudgetMs: p.clickBudgetMs ?? 0 }),
+            measureMotion(page, { budgetMs: p.hoverBudgetMs ?? HOVER_BUDGET_MS, focus: false, clickBudgetMs: p.clickBudgetMs ?? 0, hoverFirst: p.hoverFirst ?? [] }),
             new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`timeout after ${Math.round(allowedMs / 1000)} s`)), allowedMs); }),
           ]);
           result.pages.set(p.slug, { ...measured, timing: { ms: Date.now() - started, allowedMs, loopsMs } });

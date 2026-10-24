@@ -38,6 +38,8 @@ const RULE_EXTRA = ['animation-name', 'animation-duration', 'animation-timing-fu
 // took into the copy's own transition, so a rebuilt effect arrives over the same stretch instead of in one frame.
 export const DYN_STEP_MS = 90;
 const DYN_STEPS = 6;
+// What one element asked for first may cost: aim and settle, a script-driven change read step by step, the revert wait.
+export const FIRST_MS = 2500;
 /** How long a script may take to START reacting to the pointer before the element counts as not changing on hover. */
 export const START_WAIT_MS = 700;
 /** How long the way back may take before a change counts as not reverting (polled every REVERT_STEP_MS). */
@@ -544,6 +546,10 @@ export async function cssStateEffects(page, { budgetMs = 1500 } = {}) {
  */
 function install(opts) {
   const { limit, perSignature, dynamicLimit = 0, itemLimit = 0, ruleLimit = 0 } = opts;
+  // Elements to probe before every other, as tag|text keys (reaudit/motion.js hoverKey): the ones that hovered on the
+  // original, when a copy is measured. A budget spent on the page's first links in document order never reached them.
+  const first = new Set(opts.first || []);
+  const keyOf = (tag, text) => `${tag}|${String(text || '').toLowerCase().replace(/\s+/g, '').slice(0, 40)}`;
   // Elements whose stylesheet hover the rule probe already read (forceRuleStates). They are still hovered with the
   // mouse when there is room (`ruleLimit`): a page's script can add to a hover a rule describes, or overrule it (an inline
   // background a script animates on mouseenter beats the rule's), and only the real mouse shows what the visitor gets.
@@ -682,12 +688,14 @@ function install(opts) {
     if (group.paths.length < 120) group.paths.push(path);
     // An element a rule already describes comes after every element nothing describes yet, before the boxes a script
     // only marked: the mouse adds to what is known there, it does not find it.
-    const priority = ruled ? 2.5 : reasons.includes('focusable') || reasons.includes('interactive') || reasons.includes('role') ? 0
+    const text = (el.innerText || el.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+    const wanted = first.size > 0 && first.has(keyOf(el.tagName.toLowerCase(), text));
+    const priority = wanted ? -1 : ruled ? 2.5 : reasons.includes('focusable') || reasons.includes('interactive') || reasons.includes('role') ? 0
       : reasons.includes('pointer') ? 1 : reasons.includes('transition') || item ? 2 : 3;
     found.push({
       order: found.length, priority, el, path, tag: el.tagName.toLowerCase(), sig, reasons, cursor: cs.cursor, ...(ruled && { ruled: true }),
-      ...(dyn && { dyn }), ...(item && { item: true }),
-      text: (el.innerText || el.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ').slice(0, 60),
+      ...(dyn && { dyn }), ...(item && { item: true }), ...(wanted && { first: true }),
+      text,
     });
   }
   const chosen = [];
@@ -697,7 +705,8 @@ function install(opts) {
   let ruleCount = 0;
   for (const c of [...found].sort((a, b) => a.priority - b.priority || a.order - b.order)) {
     const group = bySig.get(c.sig);
-    if (group.probed >= perSignature) {
+    // An element the original showed hovering is measured on its own, however many equal ones were probed already.
+    if (group.probed >= perSignature && !c.first) {
       skipped.duplicate++;
       continue;
     }
@@ -739,7 +748,9 @@ function install(opts) {
     chosen.push(c);
     chosenSet.add(c.el);
   }
-  chosen.sort((a, b) => a.order - b.order); // document order: the page is scrolled down once, not up and down
+  // Document order: the page is scrolled down once, not up and down - except the elements asked for first, which come
+  // before everything else (in document order among themselves) so a short budget still reaches them.
+  chosen.sort((a, b) => (b.first ? 1 : 0) - (a.first ? 1 : 0) || a.order - b.order);
   window.__sasMotion = {
     chosen: chosen.map((c) => c.el), index: new Map(chosen.map((c, i) => [c.el, i])), pathOf,
     // The blocks probed on their own (aim() says which of them is under the mouse when their parent is probed).
@@ -747,7 +758,7 @@ function install(opts) {
   };
   return {
     candidates: chosen.map((c, i) => ({
-      i, path: c.path, tag: c.tag, sig: c.sig, reasons: c.reasons, cursor: c.cursor, ...(c.dyn && { dyn: c.dyn }), ...(c.item && { item: true }), ...(c.ruled && { ruled: true }),
+      i, path: c.path, tag: c.tag, sig: c.sig, reasons: c.reasons, cursor: c.cursor, ...(c.dyn && { dyn: c.dyn }), ...(c.item && { item: true }), ...(c.ruled && { ruled: true }), ...(c.first && { first: true }),
       text: c.text, rect: docRect(c.el),
     })),
     groups: [...bySig.values()].filter((g) => g.count > 1).sort((a, b) => b.count - a.count).slice(0, 40),
@@ -756,6 +767,7 @@ function install(opts) {
     // Every element taken in because a script animates it - also one probed as a repeated block.
     dynamic: chosen.filter((c) => c.dyn).length,
     items: chosen.filter((c) => c.item).length,
+    first: chosen.filter((c) => c.first).length,
   };
 }
 
@@ -1114,7 +1126,7 @@ export function mergeMouseIntoRule(rule, mouse) {
  *   counted in `stats.skipped.dynamic`); a quarter of the page's limit by default.
  * @returns {Promise<object>} the content of motion.json
  */
-export async function captureInteractions(page, { limit = 40, perSignature = 3, focusStops = 80, budgetMs = 10000, perCandidateMs = 900, maxHoverMs = Math.min(15000, budgetMs * 2), foreignCss = null, dynamicLimit = Math.max(DYNAMIC_MIN, Math.round(limit * DYNAMIC_SHARE)), itemLimit = Math.max(ITEM_MIN, Math.round(limit * ITEM_SHARE)), ruleLimit = Math.max(RULE_MIN, Math.round(limit * RULE_SHARE)) } = {}) {
+export async function captureInteractions(page, { limit = 40, perSignature = 3, focusStops = 80, budgetMs = 10000, perCandidateMs = 900, maxHoverMs = Math.min(15000, budgetMs * 2), foreignCss = null, first = [], dynamicLimit = Math.max(DYNAMIC_MIN, Math.round(limit * DYNAMIC_SHARE)), itemLimit = Math.max(ITEM_MIN, Math.round(limit * ITEM_SHARE)), ruleLimit = Math.max(RULE_MIN, Math.round(limit * RULE_SHARE)) } = {}) {
   const started = Date.now();
   // Set once the candidates are known: the mouse probe gets time per element to probe (within bounds), focus the rest.
   let hoverDeadline = started + budgetMs * 0.6;
@@ -1128,10 +1140,12 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
   } catch (err) {
     forced.stats.error = String(err?.message ?? err).split('\n')[0];
   }
-  const picked = await page.evaluate(install, { limit, perSignature, dynamicLimit, itemLimit, ruleLimit, skip: forced.hover.map((h) => h.path) });
+  const picked = await page.evaluate(install, { limit, perSignature, dynamicLimit, itemLimit, ruleLimit, skip: forced.hover.map((h) => h.path), first });
   // A fixed share of the budget probed ~6 elements of 30 on a busy page: script-driven hovers further down were never
-  // reached. The hover time follows the elements to probe (~0.9 s each: scroll, settle, hover, check it reverts).
-  const hoverMs = Math.max(budgetMs * 0.6, Math.min(maxHoverMs, picked.candidates.length * perCandidateMs));
+  // reached. The hover time follows the elements to probe (~0.9 s each: scroll, settle, hover, check it reverts). The
+  // elements asked for first get FIRST_MS each within the budget: a script-driven one is read step by step and its
+  // revert is waited for, which is two to three times a plain probe.
+  const hoverMs = Math.max(budgetMs * 0.6, Math.min(maxHoverMs, picked.candidates.length * perCandidateMs), Math.min(budgetMs, (picked.first ?? 0) * FIRST_MS));
   hoverDeadline = started + hoverMs;
   deadline = hoverDeadline + budgetMs * 0.4;
   const args = (i) => ({ i, props: MOTION_PROPS, pseudoProps: PSEUDO_EXTRA });
@@ -1141,6 +1155,8 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
     // Elements taken in because a script animates them, and how many of them turned out to have an effect that a
     // transition of their own does not carry - the ones the copy has to time itself.
     dynamic: picked.dynamic ?? 0, dynamicFound: 0, scripted: 0, scriptedUnsettled: 0,
+    // Elements asked for first (the original's hovers, when a copy is measured) and how many of them were reached.
+    first: picked.first ?? 0, firstProbed: 0,
   };
   // The element's own transition, read to its end: a site that gives everything 0.8 s was read mid-way at the old 0.7 s
   // cap, so a hover's end value was a value on the way there (and the copy, timed differently, read another one).
@@ -1160,6 +1176,7 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
       continue;
     }
     stats.probed++;
+    if (c.first) stats.firstProbed++;
     measuredPaths.add(c.path);
     // The rest state is read here, with the mouse out of the page, after the scroll that brought the element
     // into view has had time to run its reveal effects: those are not hover effects.

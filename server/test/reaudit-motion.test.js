@@ -5,7 +5,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { compareClicks, measureNewMotion, motionItems, motionTimeFor, PAGE_BUDGET_MS, summarize } from '../src/reaudit/motion.js';
+import { compareClicks, hoverBudgetFor, hoverFirstFor, measureNewMotion, motionItems, motionTimeFor, PAGE_BUDGET_MS, summarize } from '../src/reaudit/motion.js';
+import { FIRST_MS } from '../src/recreate/capture/interactions.js';
 import { loopsTimeFor, LOOPS_MAX_MS, scrollStepsFor } from '../src/recreate/capture/loops.js';
 import { compareAudits } from '../src/reaudit/compare/index.js';
 import { measureMotion } from '../src/recreate/capture/measure.js';
@@ -274,4 +275,16 @@ test("a page's motion time follows the work: the loop capture's own estimate for
   assert.equal(motionTimeFor({ hoverBudgetMs: 13500, clickBudgetMs: 10500, loopsMs: long }), PAGE_BUDGET_MS + long + 13500 + 10500);
   assert.equal(motionTimeFor({}), PAGE_BUDGET_MS + LOOPS_MAX_MS + 10000, "unknown page: the most the loop capture takes, the base hover budget, no clicks");
   assert.ok(motionTimeFor({ hoverBudgetMs: 13500, clickBudgetMs: 10500, loopsMs: long }) > 104000, "the fixed timer that cut the page off (90 s + 3.5 + 10.5) is exceeded");
+});
+
+// The copy's hover budget covers the elements the original saw hovering (probed first on the copy, ~2.5 s each when a script
+// drives them), not only "as many probes as the original made": five hovers after five dead links took 12.5 s, not 10.5.
+test("the copy's hover budget and the elements it probes first follow the original's mouse-probed hovers", () => {
+  const card = (n) => ({ tag: 'a', text: `Card ${n} A longer description that goes past forty characters`, source: 'probe', scriptedMs: 620, changes: { color: ['rgb(0, 0, 0)', 'rgb(0, 0, 238)'] } });
+  const old = { stats: { probed: 7, candidates: 40 }, hover: [card(1), card(2), card(3), card(4), card(5), { tag: 'button', text: 'Menu', source: 'css', changes: { color: ['a', 'b'] } }, card(1)] };
+  assert.deepEqual(hoverFirstFor(old), [1, 2, 3, 4, 5].map((n) => `a|card${n}alongerdescriptionthatgoespastforty`), 'tag|text keys of the probed hovers, once each, no stylesheet hovers (those need no mouse)');
+  assert.equal(hoverBudgetFor(old), 5 * FIRST_MS, 'five first elements at FIRST_MS beat seven probes at 1.5 s');
+  assert.equal(hoverBudgetFor({ stats: { probed: 7 }, hover: [] }), Math.max(10000, 7 * 1500), 'no probed hovers: the old rule');
+  assert.equal(hoverBudgetFor({ stats: { probed: 100 }, hover: Array.from({ length: 40 }, (_, i) => card(i)) }), 60000, 'never more than a minute');
+  assert.deepEqual(hoverFirstFor(null), []);
 });
