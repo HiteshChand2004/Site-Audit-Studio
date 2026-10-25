@@ -54,7 +54,8 @@ export const AFTER_BUILD_SOURCE = `// Runs after \`next build\` (output: 'export
 //     have their own, so the wrapper is unwrapped and those tags removed (the page's DOM is then the original's). Next's
 //     charset meta stays only on a page that has none of its own.
 //  2. An element the conversion kept as original HTML (RawHtml: an inert <template data-sas-raw>) is unwrapped.
-//  3. Attributes of <html> / <body> React could not write (data-sas-raw-attrs) are written.
+//  3. Attributes of <html> / <body> React could not write (data-sas-raw-attrs) are written, and the comments the original has
+//     between its doctype and <html> (data-sas-prolog) are put back there.
 //  3b. React 19 adds <link rel="preload" as="image"> hints of its own for some images; the page's head already says what it
 //     preloads, so every image preload the original page does not have (scripts/own-preloads.json, per route) is removed.
 //  4. Next's own _next folder (build manifests no page references, since no page carries the runtime) is removed when nothing
@@ -106,6 +107,7 @@ const dropAddedPreloads = (html, route) => {
     return own.has(decode(href)) ? tag : '';
   });
 };
+const prolog = (html) => html.replace(/<html([^>]*?) data-sas-prolog="([^"]*)"/, (all, rest, text) => decode(text) + '<html' + rest);
 const rawAttrs = (html) => html.replace(/<(html|body)([^>]*) data-sas-raw-attrs="([^"]*)"/g, (all, tag, rest, json) => {
   const attrs = JSON.parse(decode(json));
   return '<' + tag + rest + Object.entries(attrs).map(([k, v]) => ' ' + k + '="' + attrValue(v) + '"').join('');
@@ -114,7 +116,7 @@ const rawAttrs = (html) => html.replace(/<(html|body)([^>]*) data-sas-raw-attrs=
 let referencesNext = false;
 for await (const file of htmlFiles(out)) {
   const html = await readFile(file, 'utf8');
-  const fixed = dropAddedPreloads(rawAttrs(unwrapRaw(dropNextHead(unwrapNext(html)))), routeOf(file));
+  const fixed = dropAddedPreloads(prolog(rawAttrs(unwrapRaw(dropNextHead(unwrapNext(html))))), routeOf(file));
   if (fixed !== html) await writeFile(file, fixed, 'utf8');
   if (fixed.includes('/_next/')) referencesNext = true;
 }
@@ -216,6 +218,7 @@ export async function convertToNext({ copyDir, outDir, pages, pageUrl }) {
       'export default {',
       `  html: ${JSON.stringify(c.html.props)},`,
       `  htmlRaw: ${JSON.stringify(c.html.raw)},`,
+      `  prolog: ${JSON.stringify(c.prolog)},`,
       `  body: ${JSON.stringify(c.body.props)},`,
       `  bodyRaw: ${JSON.stringify(c.body.raw)},`,
       '  head: () => (',
@@ -245,14 +248,15 @@ export async function convertToNext({ copyDir, outDir, pages, pageUrl }) {
 import { documents } from '../src/documents.js';
 
 // The <html>, <head> and <body> of each page are the original's (src/documents/*). React cannot write a few attributes
-// (an inline onload on <body>, for one): they travel in data-sas-raw-attrs and the after-build step writes them.
+// (an inline onload on <body>, for one): they travel in data-sas-raw-attrs and the after-build step writes them. The comments
+// before <html> travel in data-sas-prolog and are written back in front of it.
 const rawAttrs = (o) => (Object.keys(o).length ? JSON.stringify(o) : undefined);
 
 export default function Document(props) {
   const page = props.__NEXT_DATA__.page;
-  const d = documents[page] ?? documents['/'] ?? { html: {}, htmlRaw: {}, body: {}, bodyRaw: {}, head: () => null };
+  const d = documents[page] ?? documents['/'] ?? { html: {}, htmlRaw: {}, prolog: null, body: {}, bodyRaw: {}, head: () => null };
   return (
-    <Html {...d.html} data-sas-raw-attrs={rawAttrs(d.htmlRaw)}>
+    <Html {...d.html} data-sas-raw-attrs={rawAttrs(d.htmlRaw)} data-sas-prolog={d.prolog ?? undefined}>
       <Head>{d.head()}</Head>
       <body {...d.body} data-sas-raw-attrs={rawAttrs(d.bodyRaw)}>
         <Main />

@@ -423,7 +423,7 @@ export function formsOf($, { page, pageUrl }) {
  * @param {string} [o.pageUrl]       the original's address of the page (forms)
  * @param {Record<string, string>} [o.linkMap]  same-site paths that move ("/about.html" → "/about/"): links are rewritten first
  * @param {(el: object, outer: string) => string | null} [o.sharedName]  a name for a section that is shared with other pages
- * @returns {{ page: string, lang: string|null, html: { props: string[], raw: object }, body: { props: string[], raw: object },
+ * @returns {{ page: string, lang: string|null, html: { props: string[], raw: object }, prolog: string|null, body: { props: string[], raw: object },
  *   headJsx: string, headUsesRaw: boolean, sections: { name: string, jsx: string, outer: string, hash: string, shared: boolean }[],
  *   pageJsx: string, pageUsesRaw: boolean, fallbacks: Fallback[], forms: object[], stats: { elements: number, raw: number } }}
  */
@@ -473,6 +473,7 @@ export function convertDocument(html, { page, pageUrl = null, linkMap = null, sh
     page,
     lang: htmlEl?.attribs?.lang ?? null,
     html: rootAttributes(htmlEl?.attribs),
+    prolog: prologOf(html),
     body: rootAttributes(bodyEl?.attribs),
     headJsx,
     headUsesRaw: head.usesRaw,
@@ -483,6 +484,16 @@ export function convertDocument(html, { page, pageUrl = null, linkMap = null, sh
     forms,
     stats: { elements, raw: fallbacks.length },
   };
+}
+
+/**
+ * The comments between the doctype and <html> (a builder's banner, a publish date), exactly as written with the white space
+ * around them, or null when there are none. No parser keeps them (they belong to no element), and React renders from <html> down,
+ * so the stack writes them back in front of <html> after its build.
+ */
+export function prologOf(html) {
+  const m = /^﻿?\s*(?:<!doctype[^>]*>)?((?:\s|<!--[\s\S]*?-->)*)<html[\s>]/i.exec(String(html ?? ''));
+  return m && m[1].includes('<!--') ? m[1] : null;
 }
 
 /** Rewrites same-site links whose page moved ("/about.html" → "/about/"), the query and the fragment kept. */

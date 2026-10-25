@@ -674,7 +674,10 @@ Scratch data `C:/Users/urvas/Downloads/sas-work/nyaayai-next-data` (copied from 
   SolutionsAcrossThe, UnifyingFragmentedLegal, BuiltOnProof, OurCertifications, SuccessStories ×3, SeeHowNyaay, WeAnsweredAll,
   SiteFooter ×3, SvgTemplates; the ×3 are Framer's per-width versions); "fixes served" compared by meaning; a comment with a
   quote broke the Next.js build (convert-next failed on 6cc8ee8).
-- Open: the 2 comments before `<html>` are left out; BuiltOnProof is still 127 KB (one titled section holding a long list).
+- Comments before `<html>` kept (`prologOf` → `data-sas-prolog` on `<Html>` → the after-build step puts them back in front of
+  `<html>`). Run 7 (from run 6's copy c7c5df3b): the export starts exactly like the original (both Framer comments); Lighthouse
+  phone 80 -> 87, computer 84 -> 95, accessibility 90 -> 94.
+- Open: BuiltOnProof is still 127 KB (one titled section holding a long list).
 ## Next steps, in order (commit after each with `--no-verify`, say the full suite was not run; nothing is pushed before the PR)
 
 1. **Step 4 — the blank render and the motion step's timeout: DONE 2026-10-24** (both fixed generally and verified live, see

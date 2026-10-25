@@ -22,6 +22,8 @@ import { toolchainStatus } from '../src/toolchains/index.js';
 const PORT = 4252;
 const FIXTURE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'recreate-site');
 const ORIGIN = `http://127.0.0.1:${PORT}`;
+// A builder's banner before <html> (Framer writes two): no element holds them, so they travel beside the page and are put back.
+const PROLOG = '<!-- Made in "Builder" · example.com ✨ -->\n<!-- Published Oct 1, 2026 -->\n';
 
 let fixture;
 let browser;
@@ -58,7 +60,11 @@ before(async () => {
   for (const f of files) {
     if (f.startsWith('private/') || LIFT_ONLY.has(f)) continue;
     await mkdir(path.dirname(path.join(copyDir, f)), { recursive: true });
-    if (f.endsWith('.html')) await writeFile(path.join(copyDir, f), await (await fetch(`${ORIGIN}/${f}`)).text(), 'utf8');
+    if (f.endsWith('.html')) {
+      let text = await (await fetch(`${ORIGIN}/${f}`)).text();
+      if (f === 'index.html') text = text.replace(/^(<!doctype html>)\s*/i, `$1${PROLOG}`);
+      await writeFile(path.join(copyDir, f), text, 'utf8');
+    }
     else await cp(path.join(FIXTURE, f), path.join(copyDir, f));
   }
   const outDir = path.join(root, 'nextjs');
@@ -94,6 +100,9 @@ test('the conversion: components per section, shared header and footer, the fall
     assert.equal(scripts(converted), scripts(original), `${p.outPath}: the same number of scripts, none of the stack's`);
     assert.ok(!/__next|data-next-head|_next\/|data-n-css|data-sas-raw|data-sas-comment/.test(converted), `${p.outPath}: no artefact of the build left`);
     assert.match(converted, /<html lang="en"/, `${p.outPath}: the html attributes are the original's`);
+    assert.ok(!converted.includes('data-sas-prolog'), `${p.outPath}: no artefact of the build left`);
+    if (p.outPath === 'index.html') assert.ok(converted.startsWith(`<!DOCTYPE html>${PROLOG}<html `), converted.slice(0, 160));
+    else assert.match(converted, /^<!DOCTYPE html><html /, `${p.outPath}: nothing before <html> where the original has nothing`);
   }
   // The project is real code: a page imports its components, and the shared header is one file.
   // (The home page's header differs from the others' - its own component; a blog post uses the shared one.)

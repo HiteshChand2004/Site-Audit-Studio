@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as cheerio from 'cheerio';
-import { convertDocument, convertSite, formsOf, planAttributes, planSections, rootAttributes, sectionHost, sectionName, whereOf } from '../src/recreate/convert/document.js';
+import { convertDocument, convertSite, formsOf, planAttributes, planSections, prologOf, rootAttributes, sectionHost, sectionName, whereOf } from '../src/recreate/convert/document.js';
 
 const doc = (body, { head = '<meta charset="utf-8"><title>T</title>', html = ' lang="en"', bodyAttrs = '' } = {}) => `<!doctype html><html${html}><head>${head}</head><body${bodyAttrs}>${body}</body></html>`;
 const b64 = (s) => Buffer.from(s, 'utf8').toString('base64');
@@ -114,6 +114,14 @@ test('a builder page nested in wrappers is split into its real sections; lists, 
 test('a comment with quotes and line breaks is written as a JS string, which JSX reads back exactly', () => {
   const c = convertDocument(doc('<!-- the "appear" effect:\n - one\n - two --><main><h1>Hi</h1></main>'), { page: '/' });
   assert.ok(c.pageJsx.startsWith('<RawHtml comment={" the \\"appear\\" effect:\\n - one\\n - two "} />'), c.pageJsx.slice(0, 120));
+});
+
+test('the comments between the doctype and <html> are kept exactly, with their white space; none = null', () => {
+  const prolog = '<!-- Made in Framer · framer.com ✨ -->\n<!-- Published "Oct 1" -->\n';
+  assert.equal(prologOf(`<!DOCTYPE html>${prolog}<html lang="en"><head></head><body></body></html>`), prolog);
+  assert.equal(convertDocument(`<!doctype html>${prolog}<html><head><title>T</title></head><body><p>x</p></body></html>`, { page: '/' }).prolog, prolog);
+  assert.equal(prologOf('<!doctype html>\n<html><body></body></html>'), null);
+  assert.equal(prologOf('<!doctype html><html><body><!-- inside --></body></html>'), null, 'a comment inside the page is the page\'s');
 });
 
 test('a section identical on several pages is one shared component; a page keeps its own name space', () => {
