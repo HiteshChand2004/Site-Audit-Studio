@@ -695,6 +695,28 @@ Scratch data `C:/Users/urvas/Downloads/sas-work/nyaayai-next-data` (copied from 
   `/@react-refresh`, `/node_modules/*` and serves the project's own files at their paths (`/src/*`, `/index.html`, config files); its
   build writes `/_app/` here (`assetsDir`), so an original's `/_app/` collides. MERN adds the Express routes `/api/health`,
   `/api/forms/:id` and `/thanks`.
+
+### React + Vite writer (branch `convert-react`, 3b2b340 + the merge of `accounts` c8d265d, 2026-10-25) — code done, browser tests NOT run
+
+- `server/src/recreate/convert/react.js` on the shared core: every page `src/pages/<Page>.jsx` (body of section components +
+  `document` = doctype, prolog, html / body props + raw attributes, head), `src/components/*.jsx` (shared ones once),
+  `src/routes.js`, `src/entry-server.jsx` (renders a page: body after a marker so React 19's image preload hints fall away, head
+  one element at a time so React keeps its order), `src/finish-page.js` (puts back RawHtml parts, the page's comments
+  (`data-sas-comment`) and the prolog before `<html>`), `scripts/prerender.mjs` (`dist/` = `public/` + the pages), `scripts/dev.mjs`.
+  Pages keep their addresses (no `urlChanges`). Prerendered, never hydrated: `dist/` holds no React code. `verifyConverted`
+  (no browser) holds every built page against its as-is page — elements, attributes, text, the comments of head and body, the
+  prolog — and refuses any added script / stylesheet; a failure packages the copy as before (`report.convert.mode 'packed'`).
+- `npm run dev` = Vite used **only** to load the components (`ssrLoadModule`, no client, `hmr` / `ws` off, no dependency scan,
+  every module invalidated per page request): `public/` is served first at every address — `/@vite/`, `/@fs/`, `/@id/`,
+  `/@react-refresh`, `/node_modules/`, `/src/`, `/vite.config.js`, `/package.json`, `/_app/` included — then the pages at their
+  address and their file (`/` and `/index.html`), a folder page without its slash → 301, the copy's 404 page, GET / HEAD only.
+  The page is rendered by the same `render` + `finish-page.js` as the build: dev = build byte for byte.
+- Wired: `behavior/preserve/stage.js CONVERTERS` (React + Vite and Next.js share one branch; the export folder `dist/` / `out/`
+  is served as static files with host headers).
+- Tests: `convert-react-build.test.js` 6/6 (no browser, real toolchain: the build, the check, comments + prolog, dev byte for byte
+  at every page address, the reserved addresses, an edit shown on reload), `convert-document` 10, `copy-served` 4, `copy-notes` 3,
+  `copy-deploy-commands` 9 pass. **Not run (need the browser):** `convert-react.test.js`, `full-flow.test.js` for React + Vite
+  (`SAS_FLOW_STACKS=react-vite`), `convert-next*.test.js`, `reaudit-stack`; full suite not run.
 ## Next steps, in order (commit after each with `--no-verify`, say the full suite was not run; nothing is pushed before the PR)
 
 1. **Step 4 — the blank render and the motion step's timeout: DONE 2026-10-24** (both fixed generally and verified live, see

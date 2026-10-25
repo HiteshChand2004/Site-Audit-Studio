@@ -9,7 +9,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { cp, mkdtemp, readdir, readFile, rm, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,9 +20,11 @@ const FIXTURE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'fixt
 const ORIGIN = 'https://www.example-original.dev';
 
 const EDGE = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<!-- Published by a builder: "banner" & date -->
 <html lang="en" class="no-js" data-theme="dark">
 <head>
   <meta charset="utf-8">
+  <!-- head comment -->
   <title>Edge &amp; cases</title>
   <link rel="stylesheet" href="styles.css">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -30,7 +32,8 @@ const EDGE = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "ht
   <noscript><style>.reveal { opacity: 1 }</style></noscript>
 </head>
 <body class="edge" onload="window.loaded = 1">
-  <!-- a comment the copy keeps nowhere -->
+  <!-- a comment with "quotes", 'single' & <angle> -->
+  <!--$--><p class="marker">server-rendered</p><!--/$-->
   <header class="site-header"><a href="/">Home</a> <a href="about.html#team">About</a></header>
   <main id="content">
     <h1 style="color: rgb(10, 20, 30); --gap: 4px; -webkit-text-stroke: 0">Fish &amp; chips &lt;3 "quoted" 'single'</h1>
@@ -59,6 +62,19 @@ line 2</textarea>
 </html>
 `;
 
+// The original's own files at addresses Vite's development server answers for itself: npm run dev must serve these.
+const RESERVED = {
+  '@vite/client': 'window.originalViteClient = 1;',
+  '@react-refresh': 'window.originalRefresh = 1;',
+  '@fs/assets/a.css': '.fs { color: red }',
+  '@id/x.js': 'window.originalId = 1;',
+  'node_modules/lib/index.js': 'window.originalLib = 1;',
+  'src/app.js': 'window.originalSrc = 1;',
+  'vite.config.js': 'window.originalConfig = 1;',
+  'package.json': '{"name":"the-original"}',
+  '_app/chunk.js': 'window.originalApp = 1;',
+};
+
 let root;
 let copyDir;
 let outDir;
@@ -84,6 +100,10 @@ before(async () => {
   await cp(FIXTURE, copyDir, { recursive: true });
   await rm(path.join(copyDir, 'private'), { recursive: true, force: true });
   await writeFile(path.join(copyDir, 'edge.html'), EDGE, 'utf8');
+  for (const [rel, body] of Object.entries(RESERVED)) {
+    await mkdir(path.dirname(path.join(copyDir, rel)), { recursive: true });
+    await writeFile(path.join(copyDir, rel), body, 'utf8');
+  }
   const files = await listFiles(copyDir);
   pages = files.filter((f) => f.endsWith('.html')).map((outPath) => ({ outPath, url: `${ORIGIN}/${outPath.replace(/(^|\/)index\.html$/, '$1')}` }));
   outDir = path.join(root, 'react-vite');
@@ -118,14 +138,18 @@ test('every built page holds the DOM of its as-is page; nothing but the pages is
   assert.deepEqual(distFiles.filter((f) => /\.m?js$/.test(f)).sort(), copyJs);
   for (const p of pages) {
     const html = await readFile(path.join(dist, p.outPath), 'utf8');
-    assert.doesNotMatch(html, /data-sas-raw|sas-render-start|rel="preload" as="image"/, `${p.outPath}: no conversion marker or React preload hint left`);
+    assert.doesNotMatch(html, /data-sas-raw|data-sas-comment|sas-render-start|rel="preload" as="image"/, `${p.outPath}: no conversion marker or React preload hint left`);
     assert.doesNotMatch(html, /type="module"|modulepreload/, `${p.outPath}: no module script`);
   }
   const edge = await readFile(path.join(dist, 'edge.html'), 'utf8');
-  assert.ok(edge.startsWith('<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"'), 'the page\'s own doctype');
+  assert.ok(edge.startsWith('<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">\n<!-- Published by a builder: "banner" & date -->\n<html'),
+    'the page\'s own doctype, then the comment before <html> exactly as written');
+  assert.match(edge, /<!-- head comment -->/, 'a comment of the head is kept');
+  assert.ok(edge.includes(`<!-- a comment with "quotes", 'single' & <angle> -->`), 'a comment with quotes and markup characters is kept byte for byte');
+  assert.ok(edge.includes('<!--$--><p class="marker">server-rendered</p><!--/$-->'), 'the hydration markers of a React-rendered original stay in place');
   assert.match(edge, /<body class="edge" onload="window.loaded = 1">/, 'a <body> attribute React cannot write is written as it was');
   assert.match(edge, /<button type="button" onclick="window.clicked = \(window.clicked \|\| 0\) \+ 1">Click<\/button>/, 'the inline handler is the original HTML');
-  assert.match(edge, /<head><meta charSet="utf-8"\/><title>/, 'the head keeps the original order');
+  assert.match(edge, /<head><meta charSet="utf-8"\/><!-- head comment --><title>/, 'the head keeps the original order, its comment included');
   assert.match(edge, /<\/main>\s*<script src="hover.js" async=""><\/script>\s*<footer/, 'the async script stands where the original has it');
 });
 
@@ -134,6 +158,8 @@ test('a difference in the built DOM is caught, named, and fails the check', asyn
   assert.equal(domDifference('<p style="color: red;  --x: 1">x</p>', '<p style="color:red;--x:1">x</p>'), null, 'a style is compared by its declarations');
   assert.equal(domDifference('<input checked="checked">', '<input checked="">'), null, 'a boolean attribute by its presence');
   assert.equal(domDifference('<head>\n <title>a</title>\n</head><body><p>x</p></body>', '<head><title>a</title></head><body><p>x</p></body>'), null, 'whitespace in the head draws nothing');
+  assert.match(domDifference('<body><!--$--><p>x</p></body>', '<body><p>x</p></body>'), /#comment/, 'a comment of the body counts: a React-rendered original reads it back');
+  assert.match(domDifference('<!DOCTYPE html>\n<!-- banner -->\n<html><body></body></html>', '<!DOCTYPE html><html><body></body></html>'), /prolog/, 'so do the comments before <html>');
   assert.match(domDifference('<p>a</p>', '<p>b</p>'), /"a"/);
   assert.match(domDifference('<p>a</p>', '<p>a</p><p>b</p>'), /nothing more/);
   assert.notEqual(domDifference('<body><p> a</p></body>', '<body><p>a</p></body>'), null, 'whitespace in the body is text');
@@ -173,28 +199,63 @@ test('the project: components per section, shared ones once, the fallbacks named
   assert.match(readme, /3 element\(s\) could not be written exactly as JSX|element\(s\) could not be written exactly as JSX/);
 });
 
-test('npm run dev renders the pages from the components and serves public/', { timeout: 3 * 60000 }, async () => {
+test('npm run dev shows every page exactly as the build ships it and serves the original\'s files first, even where Vite answers', { timeout: 3 * 60000 }, async () => {
   const modules = path.join(outDir, 'node_modules');
   await symlink(path.join(toolchainDir('react-vite'), 'node_modules'), modules, 'junction');
   const port = 4291;
-  const child = spawn(process.execPath, ['scripts/dev.mjs'], { cwd: outDir, env: { ...process.env, PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  const dev = `http://127.0.0.1:${port}`;
+  const child = spawn(process.execPath, ['scripts/dev.mjs'], { cwd: outDir, env: { ...process.env, PORT: String(port), HOST: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   let out = '';
   child.stdout.on('data', (d) => { out += d; });
   child.stderr.on('data', (d) => { out += d; });
   try {
     let res;
     for (let i = 0; i < 60 && !res; i++) {
-      res = await fetch(`http://127.0.0.1:${port}/about.html`).catch(() => null);
+      res = await fetch(`${dev}/about.html`).catch(() => null);
       if (!res) await new Promise((r) => setTimeout(r, 500));
     }
     assert.ok(res, `the dev server answered: ${out.slice(-500)}`);
     assert.equal(res.status, 200);
-    const html = await res.text();
-    assert.equal(domDifference(await readFile(path.join(copyDir, 'about.html'), 'utf8'), html), null, 'the dev page is the built page');
-    const css = await fetch(`http://127.0.0.1:${port}/styles.css`);
-    assert.equal(css.status, 200);
-    assert.equal(await css.text(), await readFile(path.join(copyDir, 'styles.css'), 'utf8'));
-    assert.equal((await fetch(`http://127.0.0.1:${port}/no-such-page.html`)).status, 404);
+    // Every page, at its address and at its file: byte for byte what the build wrote (the same rendering and finishing code,
+    // no Vite client, no React code, the prolog and the comments put back).
+    const dist = path.join(outDir, REACT_EXPORT_DIR);
+    for (const p of pages) {
+      const builtPage = await readFile(path.join(dist, p.outPath), 'utf8');
+      for (const address of new Set([new URL(p.url).pathname, `/${p.outPath}`])) {
+        const page = await fetch(`${dev}${address}`);
+        assert.equal(page.status, 200, `${address}: ${out.slice(-800)}`);
+        assert.match(page.headers.get('content-type'), /text\/html/);
+        assert.equal(await page.text(), builtPage, `${address} in development is the built ${p.outPath}`);
+      }
+    }
+    // The original's own files, including the ones at addresses Vite's development server keeps for itself.
+    for (const rel of ['styles.css', ...Object.keys(RESERVED)]) {
+      const file = await fetch(`${dev}/${rel}`);
+      assert.equal(file.status, 200, `/${rel}`);
+      assert.deepEqual(Buffer.from(await file.arrayBuffer()), await readFile(path.join(copyDir, rel)), `/${rel} is the original's file`);
+    }
+    // A folder page without its slash goes to it, as on a static host; an unknown address is a 404; nothing but reading.
+    const folder = await fetch(`${dev}/services`, { redirect: 'manual' });
+    assert.equal(folder.status, 301);
+    assert.equal(folder.headers.get('location'), '/services/');
+    assert.equal((await fetch(`${dev}/no-such-page.html`)).status, 404);
+    assert.equal((await fetch(`${dev}/@vite/env`)).status, 404, 'no Vite address the original does not have is answered');
+    assert.equal((await fetch(`${dev}/about.html`, { method: 'POST', body: 'x' })).status, 405);
+    // An edit to a component shows when the page is loaded again.
+    const components = path.join(outDir, 'src', 'components');
+    let edited = null;
+    for (const name of await readdir(components)) {
+      const text = await readFile(path.join(components, name), 'utf8');
+      if (text.includes('server-rendered')) { edited = { file: path.join(components, name), text }; break; }
+    }
+    assert.ok(edited, 'a component holds the marker paragraph');
+    await writeFile(edited.file, edited.text.replace('server-rendered', 'edited in development'), 'utf8');
+    try {
+      const again = await (await fetch(`${dev}/edge.html`)).text();
+      assert.ok(again.includes('<p class="marker">edited in development</p>'), 'the edit is shown on the next load');
+    } finally {
+      await writeFile(edited.file, edited.text, 'utf8');
+    }
   } finally {
     child.kill();
     await new Promise((r) => setTimeout(r, 500));
