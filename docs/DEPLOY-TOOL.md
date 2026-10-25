@@ -760,8 +760,9 @@ provider is probably blocking outbound 587 (see the top of this guide).
   each run now gets a free port of its own, so `SAS_MAX_JOBS` ≥ 2 no longer collides on them.
 - **Toolchain installs locked (fixed after this guide was written).** Each toolchain has a committed `package-lock.json`,
   installed with `npm ci`, and the status line holds `node_modules` against it. Still run the checks in step 4 after
-  installing a release. A copy's own downloaded project (its `package.json`) pins only the direct versions and the
-  `overrides`, not a lockfile: whoever builds the download gets the newest packages underneath that fit.
+  installing a release. Every downloaded project (React + Vite, Next.js, MERN client and server; converted, packed or clean)
+  ships a `package-lock.json` per package, cut from the toolchain's lockfile (`toolchains/lockfile.js`), and its README and
+  DEPLOY.md say `npm ci`: the owner installs exactly the packages the copy was built and checked with.
 - **Next.js copies' `.next/` build folder (fixed after this guide was written).** It was kept with every Next.js copy (71 MB
   on a one-page copy) until retention removed the copy; the copy step now removes it once the copy is built and checked
   (`behavior/preserve/stage.js`, `convert/next.js dropBuildFolder`). The source and `out/` stay; `npm run dev` and

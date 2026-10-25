@@ -14,6 +14,7 @@ import { buildConverted, convertToNext, dropBuildFolder, EXPORT_DIR } from '../.
 import { buildConvertedMern, convertToMern, MERN_EXPORT_DIR, verifyConvertedMern } from '../../convert/mern.js';
 import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
+import { writeLockfiles } from '../../../toolchains/lockfile.js';
 import { checkCopy, excludedHostsOf, fixGate, formsInCopy, NOISE_SHOTS, probeOriginal } from './check.js';
 import { formRoutesOfCopy, formsReadmeSection } from '../../../copy/formRoutes.js';
 import { fixAsIsCopy, revertPage } from '../../../copy/fixAsIs.js';
@@ -332,6 +333,9 @@ export async function asIsStage(ctx) {
       const built = await buildStack(stack, outDir);
       report.build = built?.steps?.map((s) => ({ label: s.label, ms: s.ms })) ?? null;
     }
+    // The lockfile of every package of the project (the top, client/, server/), cut from the toolchain it was just built with:
+    // `npm ci` in the download installs exactly the packages this copy was built and checked with.
+    if (stack !== 'html') report.lockfiles = await writeLockfiles(outDir, { stack });
     const converted = report.convert?.mode === 'converted';
     // A converted copy run by its own server (MERN) is served by that server; a static export is static files.
     const ownServer = converted && CONVERTERS[stack].runs === 'server';

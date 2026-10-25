@@ -218,7 +218,7 @@ export function emitNext(ir) {
     '',
     '## Run',
     '',
-    '    npm install',
+    '    npm ci             # installs exactly package-lock.json: the packages this site was built and checked with',
     '    npm run dev        # development server',
     '    npm run build      # static site in out/ (every page as <route>/index.html)',
     '    npm run serve      # serve out/ locally',

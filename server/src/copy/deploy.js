@@ -72,7 +72,9 @@ export function describePackage({ files, read }) {
   if (tool === 'node' && scripts.build && subPackages.includes('client')) outputs.push('client/dist');
   // A package-less copy: the folder that holds the site's index.html.
   const staticDir = tool === 'static' ? (has.has('index.html') ? '.' : [...folders].sort((a, b) => a.length - b.length).find((d) => has.has(`${d}/index.html`)) ?? '.') : null;
-  return { tool, scripts, subPackages, outputs, staticDir, folders: [...folders].sort(), hasPackage: Boolean(pkg) };
+  // The packages that ship their lockfile (toolchains/lockfile.js): `npm ci` installs exactly what was built and checked.
+  const locked = ['', ...subPackages].filter((d) => has.has(d ? `${d}/package-lock.json` : 'package-lock.json'));
+  return { tool, scripts, subPackages, outputs, staticDir, locked, folders: [...folders].sort(), hasPackage: Boolean(pkg) };
 }
 
 /** `npm run x`, or `npm start` / `npm test` for the scripts npm runs by those names. */
@@ -98,11 +100,16 @@ export function runAndHost(d) {
     return { run, hosts };
   }
 
-  // Install: one command when the package says how; else npm install here and in each folder with its own package.json.
-  if (s['install:all']) run.push(`Run ${npm('install:all')}: it installs ${d.subPackages.length ? d.subPackages.map((p) => `\`${p}/\``).join(' and ') : 'every part'}.`);
-  else {
-    run.push('Run `npm install`.');
-    for (const sub of d.subPackages) run.push(`Then run \`npm install\` in \`${sub}/\` too: it has its own package.json.`);
+  // Install: one command when the package says how; else `npm ci` (with a lockfile) or `npm install` here and in each folder
+  // with its own package.json.
+  const locked = new Set(d.locked ?? []);
+  const exactly = 'it installs exactly the packages in package-lock.json, the versions this copy was built and checked with';
+  const install = (dir) => (locked.has(dir) ? 'npm ci' : 'npm install');
+  if (s['install:all']) {
+    run.push(`Run ${npm('install:all')}: it installs ${d.subPackages.length ? d.subPackages.map((p) => `\`${p}/\``).join(' and ') : 'every part'}${locked.size ? ` with \`npm ci\`: ${exactly.replace(/^it installs /, '')}` : ''}.`);
+  } else {
+    if (d.hasPackage) run.push(locked.has('') ? `Run \`npm ci\`: ${exactly}.` : 'Run `npm install`.');
+    for (const sub of d.subPackages) run.push(`Then run \`${install(sub)}\` in \`${sub}/\` too: it has its own package.json${locked.has(sub) ? ' and package-lock.json' : ''}.`);
   }
   const out = d.outputs[0] ?? null;
   const later = [];

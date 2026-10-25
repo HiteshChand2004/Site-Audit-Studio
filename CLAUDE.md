@@ -18,7 +18,8 @@ Sidebar (mark, "All websites" home, "Add a website", search, each site's favicon
 - Recreate: esbuild (minifies CSS/JS of `dist/`), html-validate (standard + document presets, offline), archiver (zip streamed on demand).
 - Build toolchains are NOT server dependencies: `server/toolchains/<id>/` (own `package.json` + committed `package-lock.json`; `node_modules` gitignored), installed on demand (`npm ci` of the lockfile) with
   `npm run setup:toolchains -w server -- <react-vite|next|mern>`: `react-vite` (vite 6.3.5, plugin-react 4.5.0, react 19.1.0), `next` (next 15.5.27, react 19.1.9), `mern` (react-vite's + express 5.2.1, compression 1.8.2, mongodb 7.7.0).
-  Generated projects pin the same versions, plus `overrides: { rollup: 4.40.2 }` (Rollup 4.64's tree-shaking took 3–5 min on a React bundle).
+  Generated projects pin the same versions, plus `overrides: { rollup: 4.40.2 }` (Rollup 4.64's tree-shaking took 3–5 min on a React bundle), and ship a
+  `package-lock.json` per package cut from the toolchain's lockfile (`toolchains/lockfile.js writeLockfiles`; installed with `npm ci`).
 - Planned: get-port, execa.
 
 ## Phases

@@ -140,7 +140,7 @@ test('emitMern: a React client under client/, the fixed server, forms.json and t
   assert.deepEqual(Object.keys(pkg.dependencies).sort(), ['compression', 'express', 'mongodb']);
   assert.ok(Object.values(pkg.dependencies).every((v) => /^\d+\.\d+\.\d+$/.test(v))); // pinned
   assert.equal(pkg.scripts.test, 'node --test');
-  assert.equal(JSON.parse(out.files.get('package.json')).scripts['install:all'], 'npm install --prefix client && npm install --prefix server');
+  assert.equal(JSON.parse(out.files.get('package.json')).scripts['install:all'], 'npm ci --prefix client && npm ci --prefix server');
   assert.match(out.files.get('README.md'), /`contact-1` on `\/contact\.html` — name, email, message/);
   assert.match(out.files.get('README.md'), /`\/contact\.html` — a login form/);
   assert.match(out.files.get('README.md'), /Without `MONGODB_URI`/);

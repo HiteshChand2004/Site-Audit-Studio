@@ -68,7 +68,7 @@ export function emitMern(ir, opts = {}) {
     private: true,
     version: '0.0.0',
     scripts: {
-      'install:all': 'npm install --prefix client && npm install --prefix server',
+      'install:all': 'npm ci --prefix client && npm ci --prefix server',
       build: 'npm run build --prefix client',
       start: 'npm start --prefix server',
       'dev:client': 'npm run dev --prefix client',

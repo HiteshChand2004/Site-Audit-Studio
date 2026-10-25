@@ -166,7 +166,7 @@ export default defineConfig({
     await put('_headers', HEADERS_FILE);
     await put('README.md', readme({
       title: `${slug} — React + Vite`, stack: `React + Vite (vite ${pin.vite}, the version the server verified with)`, slug,
-      install: '```sh\nnpm install\n```',
+      install: '```sh\nnpm ci\n```\n\n`npm ci` installs exactly `package-lock.json`: the packages this copy was built and checked with.',
       run: '```sh\nnpm run preview\n```\n\nThen open http://localhost:4173 (`npm run dev` serves the same folder for editing).',
       build: '```sh\nnpm run build\n```\n\nThe built site is `dist/`. Its files are the copy\'s files, byte for byte.',
       deploy: 'Deploy `dist/` as a static site (any host that serves it as is; `_headers` applies where it is read).',
@@ -229,7 +229,7 @@ export default nextConfig;
     if (movesNext) await rename(path.join(outDir, 'public', '_next'), path.join(outDir, 'public', 'next-assets'));
     await put('README.md', readme({
       title: `${slug} — Next.js`, stack: `Next.js ${v.dependencies.next} (App Router; the copy is static files, not rendered by React)`, slug,
-      install: '```sh\nnpm install\n```',
+      install: '```sh\nnpm ci\n```\n\n`npm ci` installs exactly `package-lock.json`: the packages this copy was built and checked with.',
       run: '```sh\nnpm run build\nnpm run start\n```\n\nThen open http://localhost:3000.',
       build: '```sh\nnpm run build\n```\n\nThe copy is in `public/`; `next build` does not change those files.',
       deploy: 'Deploy with `next start` on a Node host, or to Vercel (which serves HTTP/2 and compression by default).',
@@ -256,7 +256,7 @@ export default nextConfig;
     await copyLifted(copyDir, path.join(outDir, PACKED[stack].copy));
     await put('README.md', readme({
       title: `${slug} — MERN (Express + MongoDB)`, stack: 'MERN: Express server serving the copy, MongoDB for form submissions', slug,
-      install: '```sh\nnpm install\n```',
+      install: '```sh\nnpm ci\n```\n\n`npm ci` installs exactly `package-lock.json`: the packages this copy was built and checked with.',
       run: '```sh\nnpm start\n```\n\nThen open http://localhost:3000. Form submissions need MongoDB: set `MONGODB_URI`; without it the site is served and the\nform endpoint answers 503.',
       build: 'Nothing to build: the copy is served as it is (`client/dist/`).',
       deploy: 'Deploy the Node server (`npm start`) to any host that runs Node and serves HTTP/2 through its proxy, with `MONGODB_URI` set\nfor forms. `TRUST_PROXY=true` behind a proxy so the rate limit sees the real address.',

@@ -838,6 +838,16 @@ Checked against the conversions (2026-10-25, after `convert-react` was merged; D
   This worktree (`accounts`) now has real installs, not links to `Website-Audit-exact` (whose shared installs were
   1–4 packages newer than the lock: caniuse-lite, electron-to-chromium, postcss, qs). The other worktrees still link there,
   so their status now reads "not installed as locked" until they run the setup.
+- **Downloads ship the lockfile too (2026-10-25)**: `toolchains/lockfile.js` cuts a `package-lock.json` for every package of a
+  downloaded project (top, `client/`, `server/`) from the toolchain's lockfile: the project's direct packages and all they pull
+  in, at the toolchain's place, version and integrity, with npm's dev / optional / devOptional / peer flags recomputed for
+  the project and npm's own key order. No npm, no network. Written in `behavior/preserve/stage.js` (as-is: converted or
+  packed, `report.asIs.lockfiles`) and `export/fromIr.js` (clean stacks, `outputs[stack].lockfiles`); a package the toolchains
+  do not hold at its pinned version fails the job rather than ship an unlocked download. READMEs, `install:all` and DEPLOY.md
+  (`deploy.js describePackage().locked`) say `npm ci`. Checked on all 11 packages the writers produce (3 converted incl. the
+  MERN client, 3 packed, 3 clean incl. MERN client + server): `npm ci --offline` installs each, `npm install --package-lock-only`
+  rewrites each lockfile byte for byte the same, and the 3 converted projects build with `npm run build` from that install.
+  Tests: `download-lockfiles.test.js` (8), `copy-deploy-commands.test.js` (lockfile ships, no `npm install`), no browser.
 - **Disk**: a converted copy adds the as-is copy again in the stack project (React + Vite +75 MB, MERN +75 MB, Next.js +75 MB
   on nyaayai's 85 MB copy). Next.js's `.next/` (71 MB) used to stay in the copy's folder until retention; it is now removed
   once the copy is built and checked (`stage.js` finally, after the servers stop: `next start` of a packed copy reads it),

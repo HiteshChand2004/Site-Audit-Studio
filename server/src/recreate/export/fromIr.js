@@ -11,6 +11,7 @@ import { toolchainStatus } from '../../toolchains/index.js';
 import { RecreateError } from '../errors.js';
 import { getEmitter } from '../emit/index.js';
 import { writeProject } from '../emit/write.js';
+import { writeLockfiles } from '../../toolchains/lockfile.js';
 import { emitSite } from '../emit/html.js';
 import { buildDist } from '../build/minify.js';
 import { recreateDir } from '../workspace.js';
@@ -97,6 +98,8 @@ export async function buildStackOutput({ dir, stack, report, signal, progress })
   try {
     const out = emitter.emit(ir, {});
     await writeProject(tmp, out, { assetsDir: path.join(dir, 'assets'), known, assetsTarget: emitter.assetsTarget });
+    // The lockfile of every package of the project, cut from the toolchain it is built with (`npm ci` in the download).
+    const lockfiles = await writeLockfiles(tmp, { stack });
     const assets = [...out.assets].filter((f) => known.has(f));
     // The stack is checked against the plain-HTML build of the same IR written by this same code: the dist/ of the
     // recreate may come from an older version of the emitter (a copy made yesterday), and any change in how a page is
@@ -114,7 +117,7 @@ export async function buildStackOutput({ dir, stack, report, signal, progress })
     const built = (await emitter.build?.({ dir: tmp, ir, out, assets, report, htmlDist, ...(signal && { signal }), ...(progress && { progress }) })) ?? {};
     await rm(target, { recursive: true, force: true });
     await rename(tmp, target);
-    return { status: 'ready', dir: `stacks/${stack}`, from: 'ir', exportedAt: new Date().toISOString(), files: out.files.size, ...built };
+    return { status: 'ready', dir: `stacks/${stack}`, from: 'ir', exportedAt: new Date().toISOString(), files: out.files.size, lockfiles, ...built };
   } catch (err) {
     await rm(tmp, { recursive: true, force: true }).catch(() => {});
     throw err;

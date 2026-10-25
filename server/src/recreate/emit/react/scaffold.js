@@ -188,7 +188,7 @@ export function scaffold({ ir, meta, pinned, overrides = {}, siteName }) {
     '',
     '## Run',
     '',
-    '    npm install',
+    '    npm ci             # installs exactly package-lock.json: the packages this site was built and checked with',
     '    npm run dev        # development server',
     '    npm run build      # production build in dist/ (every page prerendered to HTML, then hydrated)',
     '    npm run preview    # serve dist/ locally',

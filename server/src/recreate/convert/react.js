@@ -431,7 +431,7 @@ React code is sent to the visitor, so nothing is added to what the original load
 ## Install, run, build
 
 \`\`\`sh
-npm install
+npm ci             # installs exactly package-lock.json: the packages this copy was built and checked with
 npm run dev        # http://localhost:5173: the pages as the build ships them, rendered from the components on each request
 npm run build      # the finished site is dist/
 npm run preview    # serves dist/ on http://localhost:4173

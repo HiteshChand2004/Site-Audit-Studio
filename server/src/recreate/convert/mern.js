@@ -223,7 +223,7 @@ export async function convertToMern({ copyDir, outDir, pages, pageUrl }) {
   await put('package.json', `${JSON.stringify({
     name: `${slug}-site`, private: true, version: '0.0.0', type: 'module',
     scripts: {
-      'install:all': `npm install && npm install --prefix ${MERN_CLIENT_DIR}`,
+      'install:all': `npm ci && npm ci --prefix ${MERN_CLIENT_DIR}`,
       dev: 'node server/src/dev.js',
       build: `npm run build --prefix ${MERN_CLIENT_DIR}`,
       start: 'node server/src/index.js',

@@ -13,6 +13,7 @@ import { getEmitter } from '../src/recreate/emit/index.js';
 import { packLifted } from '../src/recreate/behavior/preserve/pack.js';
 import { planZip } from '../src/recreate/export/zip.js';
 import { describePackage, mentionsOf } from '../src/copy/deploy.js';
+import { PACKAGE_ROOTS, writeLockfiles } from '../src/toolchains/lockfile.js';
 
 const PAGE = {
   outPath: 'index.html',
@@ -40,6 +41,8 @@ async function packageOf(work, stack, mode) {
       report.outputs = { html: { status: 'ready', dir: 'dist' } };
     } else {
       await writeAll(path.join(dir, 'stacks', stack), getEmitter(stack).emit(IR, {}).files);
+      // As the export does (export/fromIr.js): the lockfiles of the project's packages.
+      await writeLockfiles(path.join(dir, 'stacks', stack), { stack });
       report.outputs = { [stack]: { status: 'ready', dir: `stacks/${stack}` } };
     }
   } else {
@@ -48,6 +51,8 @@ async function packageOf(work, stack, mode) {
     if (stack === 'html') report.outputs = { html: { status: 'ready', dir: 'asis/copy', mode: 'as-is' } };
     else {
       await packLifted({ stack, copyDir, outDir: path.join(dir, 'asis', stack), pageUrl: 'https://new.test/' });
+      // As the as-is stage does (behavior/preserve/stage.js): the lockfiles of the project's packages.
+      await writeLockfiles(path.join(dir, 'asis', stack), { stack });
       report.outputs = { [stack]: { status: 'ready', dir: `asis/${stack}`, mode: 'as-is' } };
     }
     report.asIs = { address: { used: 'https://new.test' } };
@@ -87,6 +92,21 @@ for (const stack of ['html', 'react-vite', 'nextjs', 'mern']) {
       // What it needs and does not ship is said plainly.
       if (/npx serve/.test(deploy.content)) assert.match(deploy.content, /not part of this copy|downloads `serve`/);
       if (desc.tool === 'node') assert.match(deploy.content, /MongoDB is not part of this copy/);
+      // Every package of the download ships its lockfile, and DEPLOY.md installs with npm ci, never npm install.
+      for (const sub of PACKAGE_ROOTS) {
+        const at = (rel) => (sub ? `${sub}/${rel}` : rel);
+        if (!shipped.includes(at('package.json'))) continue;
+        const e = plan.entries.find((x) => x.name === `${root}/${at('package.json')}`);
+        const own = JSON.parse(e.content ?? readFileSync(e.file, 'utf8'));
+        if (!Object.keys({ ...own.dependencies, ...own.devDependencies }).length) continue;
+        assert.ok(shipped.includes(at('package-lock.json')), `${stack} ${mode}: ${at('package-lock.json')} ships`);
+      }
+      if (pkg) {
+        assert.doesNotMatch(deploy.content, /npm install/, `${stack} ${mode}: no npm install where a lockfile ships
+${deploy.content}`);
+        assert.match(deploy.content, /npm ci|install:all/, `${stack} ${mode}: installs with npm ci
+${deploy.content}`);
+      }
     });
   }
 }
@@ -108,10 +128,10 @@ test('the old mismatches: as-is React has no dev, as-is Next.js builds no out/, 
   assert.match(nextAsIs, /a static host cannot run it/);
   const mernAsIs = await text('mern', 'as-is');
   assert.doesNotMatch(mernAsIs, /install:all/);
-  assert.match(mernAsIs, /Run `npm install`\./);
+  assert.match(mernAsIs, /Run `npm ci`: it installs exactly the packages in package-lock\.json/);
   assert.match(mernAsIs, /`npm start`/);
   const mernClean = await text('mern', 'clean');
-  assert.match(mernClean, /`npm run install:all`: it installs `client\/` and `server\/`/);
+  assert.match(mernClean, /`npm run install:all`: it installs `client\/` and `server\/` with `npm ci`/);
   const htmlClean = await text('html', 'clean');
   assert.match(htmlClean, /`npx serve site`/);
   const htmlAsIs = await text('html', 'as-is');

@@ -459,7 +459,7 @@ hydrated: no Next.js runtime is sent to the visitor, so nothing is added to what
 ## Install, run, build
 
 \`\`\`sh
-npm install
+npm ci             # installs exactly package-lock.json: the packages this copy was built and checked with
 npm run dev        # http://localhost:3000: the pages as the build ships them, compiled again on each request
 npm run build      # next build, then scripts/after-build.mjs: the finished site is out/
 npm run serve      # serves out/ on a local address (npx downloads \`serve\` the first time)
