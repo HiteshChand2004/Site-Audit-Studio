@@ -9,7 +9,8 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import { liftSite, localOfOutPath } from './asis.js';
 import { packLifted, servedDir } from './pack.js';
-import { buildConvertedReact, convertToReact, verifyConverted } from '../../convert/react.js';
+import { buildConvertedReact, convertToReact, REACT_EXPORT_DIR, verifyConverted } from '../../convert/react.js';
+import { buildConverted, convertToNext, EXPORT_DIR } from '../../convert/next.js';
 import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
 import { checkCopy, excludedHostsOf, fixGate, formsInCopy, NOISE_SHOTS, probeOriginal } from './check.js';
@@ -29,6 +30,14 @@ import { LOGS_DIR } from '../../../config/paths.js';
 
 /** The stacks an as-is copy can be packaged into (the plain copy and the three app stacks). */
 export const ASIS_STACKS = ['html', 'react-vite', 'nextjs', 'mern'];
+/**
+ * The stacks whose copy is converted into real code (recreate/convert/): the words the progress and the report use, the writer,
+ * its build, the check of the built pages against the as-is pages (where the stack has one) and the folder the build writes.
+ */
+const CONVERTERS = {
+  'react-vite': { code: 'React', project: 'React + Vite', convert: convertToReact, build: buildConvertedReact, verify: verifyConverted, exportDir: REACT_EXPORT_DIR },
+  nextjs: { code: 'Next.js', project: 'Next.js', convert: convertToNext, build: buildConverted, verify: null, exportDir: EXPORT_DIR },
+};
 const PORT = { 'react-vite': 4502, nextjs: 4503, mern: 4501 };
 /** The lifted copy and its page set, kept in the job's folder: a repack for another stack starts from them. */
 export const ASIS_DIR = 'as-is';
@@ -273,22 +282,23 @@ export async function asIsStage(ctx) {
         'and this copy keeps the original\'s `_next` folder. Keep the file when you upload.',
         '',
       ].join('\n'), 'utf8');
-    } else if (stack === 'react-vite') {
+    } else if (CONVERTERS[stack]) {
       // The finished copy converted into real code of the stack (recreate/convert/): pages and components, prerendered and never
-      // hydrated, so not one byte of React is added to what the original loads; the built pages are then held against the as-is
-      // pages (same DOM, no file added). If the conversion, its build or that check fails, the copy is packaged as static files
+      // hydrated, so no runtime is added to what the original loads (React + Vite also holds every built page against its as-is
+      // page: same DOM, no file added). If the conversion, its build or that check fails, the copy is packaged as static files
       // inside a project of the stack instead (the earlier route), and the report says so: a download never fails.
-      ctx.progress(0.4, 'Converting the copy into React pages and components');
+      const conv = CONVERTERS[stack];
+      ctx.progress(0.4, `Converting the copy into ${conv.code} pages and components`);
       try {
-        const converted = await convertToReact({ copyDir, outDir, pages, pageUrl: siteUrl });
-        ctx.progress(0.45, 'Building the React + Vite project');
-        const built = await buildConvertedReact(outDir);
-        const verified = await verifyConverted({ copyDir, outDir, pages });
+        const converted = await conv.convert({ copyDir, outDir, pages, pageUrl: siteUrl });
+        ctx.progress(0.45, `Building the ${conv.project} project`);
+        const built = await conv.build(outDir);
+        const verified = conv.verify ? await conv.verify({ copyDir, outDir, pages }) : null;
         report.build = built?.steps?.map((s) => ({ label: s.label, ms: s.ms })) ?? null;
-        report.convert = { mode: 'converted', ...converted, verified };
+        report.convert = { mode: 'converted', ...converted, ...(verified && { verified }) };
       } catch (err) {
         const why = String(err?.message ?? err).slice(0, 400);
-        ctx.report.warnings.push(`The copy could not be converted into React pages and components (${why.split('\n')[0]}); it is packaged as static files inside a React + Vite project instead.`);
+        ctx.report.warnings.push(`The copy could not be converted into ${conv.code} pages and components (${why.split('\n')[0]}); it is packaged as static files inside a ${conv.project} project instead.`);
         await rm(outDir, { recursive: true, force: true });
         await packLifted({ stack, copyDir, outDir, pageUrl: siteUrl });
         ctx.progress(0.45, 'Building the stack');
@@ -302,6 +312,7 @@ export async function asIsStage(ctx) {
       const built = await buildStack(stack, outDir);
       report.build = built?.steps?.map((s) => ({ label: s.label, ms: s.ms })) ?? null;
     }
+    const converted = report.convert?.mode === 'converted';
     report.forms = await formsInCopy(copyDir, pages.map((p) => p.outPath));
     report.needsAPerson = report.forms ? [{ kind: 'form', count: report.forms, why: 'its data is never sent to the original site; connect FORM_ENDPOINT in sas-forms.json' }] : [];
     report.javascript = await javascriptOf(copyDir);
@@ -312,6 +323,11 @@ export async function asIsStage(ctx) {
       const served = await serveCopy(copyDir);
       servers.push(served);
       base = served.url.replace(/\/$/, '');
+    } else if (converted) {
+      // A static export: served as the static files it is (what any static host does); there is no server of the stack to run.
+      const served = await serveCopy(path.join(outDir, CONVERTERS[stack].exportDir));
+      servers.push(served);
+      base = served.url.replace(/\/$/, '');
     } else {
       const s = await startStack(stack, outDir, PORT[stack]);
       servers.push(s);
@@ -320,8 +336,9 @@ export async function asIsStage(ctx) {
     // What the packaged copy really serves: a fix counts only where it takes effect (copy/served.js).
     if (report.fixes) {
       const fixedPages = report.fixes.pages.filter((p) => !p.reverted && p.fixes.length)
-        .map((p) => ({ path: p.path, outPath: pages.find((q) => localOfOutPath(q.outPath) === p.path)?.outPath ?? 'index.html' }));
-      report.fixes.served = await measureServed({ base, stack, copyDir, fixedPages, files: report.fixes.files?.written ?? [] })
+        .map((p) => ({ path: p.path, outPath: pages.find((q) => localOfOutPath(q.outPath) === p.path)?.outPath ?? 'index.html', kinds: [...new Set(p.fixes.map((f) => f.kind))] }));
+      // A converted copy is static files: its security headers are the host's, as for plain HTML.
+      report.fixes.served = await measureServed({ base, stack, copyDir, fixedPages, files: report.fixes.files?.written ?? [], ...(converted && { takeEffect: 'host' }) })
         .catch((err) => ({ error: String(err?.message ?? err).slice(0, 160) }));
     }
     // The original is asked once: when it does not answer, the checks that need it say so and the copy is still finished.

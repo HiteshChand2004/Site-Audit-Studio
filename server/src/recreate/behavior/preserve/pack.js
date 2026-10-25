@@ -23,7 +23,8 @@ export const PACK_STACKS = ['react-vite', 'nextjs', 'mern'];
  */
 export const PACKED = {
   'react-vite': { copy: 'public', served: ['dist', 'public'] },
-  nextjs: { copy: 'public', served: ['public'] },
+  // out/: the static export of a converted copy (recreate/convert/next.js); public/: the earlier packaging, served by next start.
+  nextjs: { copy: 'public', served: ['out', 'public'] },
   mern: { copy: 'client/dist', served: ['client/dist'] },
 };
 

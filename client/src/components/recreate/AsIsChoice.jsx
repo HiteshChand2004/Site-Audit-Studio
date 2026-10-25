@@ -8,11 +8,11 @@ import styles from './AsIsChoice.module.css';
 export const ASIS_STACK_CHOICES = [
   { id: 'html', label: 'Plain HTML', note: 'Static files; runs on any host.' },
   { id: 'react-vite', label: 'React + Vite', note: 'Real React code: the copy converted into pages and components, prerendered to HTML. Not one byte of React is added to what the original loads.' },
-  { id: 'nextjs', label: 'Next.js', note: 'The copy as static files in a Next.js project.' },
+  { id: 'nextjs', label: 'Next.js', note: 'Real Next.js code: the copy converted into pages and components (static export). Nothing is added to what the original loads.' },
   { id: 'mern', label: 'MERN', note: 'Served by an Express server; form submissions can be stored in MongoDB.' },
 ];
 
-export const AS_IS_EXPLANATION = "Keeps the original site's own code and animations, saved locally. With React + Vite the pages are converted into components of that stack; the other stacks package the original's code as it is.";
+export const AS_IS_EXPLANATION = "Keeps the original site's own code and animations, saved locally. With React + Vite or Next.js the pages are converted into components of that stack; the other stacks package the original's code as it is.";
 
 /**
  * The mode of a copy: "Clean rebuild" (the default) or "Original as-is". The as-is option is only offered for an authorised

@@ -582,6 +582,119 @@ above; visual gate; re-audit):
 
 Known gaps: Step 1's stability figures (nyaayai 0.27–0.31 %) were measured with the old `pixelDiffPct` and not again.
 
+## The as-is copy converted into stack code (branch `accounts`, 2026-10-24) — Next.js DONE on the fixture, React + Vite and MERN next
+
+**Decision (the user):** "Copy my site" gives both — the identical look of the as-is copy AND real code in the chosen stack. The clean
+rebuild stays owner-only as it is. Order (changed mid-way by the user): **Next.js first**, then React + Vite, then MERN; no live site
+until the user names one.
+
+**Shared core — `server/src/recreate/convert/document.js` (commit a9dba0c).** Input: a finished as-is page (final HTML + CSS, already
+identical to the original, fixes applied). Output per page: `html` / `body` props + the attributes React cannot write (`raw`), `headJsx`,
+`sections[] { name, jsx, hash, shared }` (one component per child of the body, or of the one wrapper that holds the page — `sectionHost`
+looks through up to 3 single-child wrappers; names from landmarks → id → first class → tag), `pageJsx` (the page around them),
+`fallbacks[] { page, where, tag, attribute?, reason }`, `forms[]` (label, method, where the original sent it in plain words, fields,
+password / file, `worksWithoutOriginal`, a note), `stats`. `convertSite(pages)` makes a section identical on ≥ 2 pages one shared
+component. Rules reuse `emit/react/jsx.js` (`propName`, `svgPropName`, `styleObject`, `jsxText`, `jsxAttr`, `BOOLEAN` now exported):
+class → className, for → htmlFor, style → object, boolean attrs → props, `checked` → `defaultChecked`, `value` → `defaultValue`
+(textarea from its text, select from its selected option), custom elements keep HTML names, SVG attrs camelCased with the inner markup
+raw, `script` / `style` / `noscript` / `template` / `iframe` inner text raw. Whitespace-only text in the head is left out (adjacent text
+nodes would get React's `<!-- -->` markers); comments are dropped (React cannot write them; they draw nothing).
+**Fallback = exactness first:** an inline `on*` handler, an attribute name JSX cannot carry (`@click`, `[x]`), a reserved React name
+(`key`, `ref`, …), a `javascript:` address, a boolean with a foreign value (`hidden="until-found"`), a repeated / malformed inline style,
+a `<meta>` / `<title>` / `<link>` / `<base>` standing in the body and an `async` script in the body (React 19 moves those to the head)
+→ the element is kept as the original HTML: `<RawHtml b64="…" />` renders an inert `<template data-sas-raw="<base64>">` that the build
+step unwraps, so the DOM is the original's byte for byte and no React escaping rule can touch it. Every fallback is recorded.
+Tests: `test/convert-document.test.js` (7).
+
+**Next.js writer — `server/src/recreate/convert/next.js`.** Pages Router + `output: 'export'` + `trailingSlash: true`, every page
+`export const config = { unstable_runtimeJS: false, unstable_JsPreload: false }` → **the exported pages carry no Next.js script at all**
+(no `__NEXT_DATA__`, no `_next/` tag): prerendered, never hydrated, the original's own scripts run as on any HTML page. That is the
+generic answer to "the runtime must not lower Lighthouse": nothing is added to what the original loads. Layout: `pages/<route>/index.jsx`
+(from `emit/next/routes.js planRoutes`: `about.html` → `/about/`, `urlChanges` → `public/_redirects` + `vercel.json`, links rewritten
+in the pages), `pages/_document.jsx` picks the page's own `<html>` / `<head>` / `<body>` from `src/documents/<Page>.jsx` by
+`__NEXT_DATA__.page`, `src/components/*.jsx` (shared ones once; a page's own ones prefixed with the page name when a name is taken),
+`src/components/RawHtml.jsx` only when needed, `public/` = the copy's other files unchanged, `site-files/` = what Next refuses in
+`public/` (the copy's own `_next` folder, its `404.html`), `scripts/after-build.mjs` (shipped, run by `npm run build`): unwraps Next's
+`<div id="__next">`, removes Next's own charset / viewport metas and `<noscript data-n-css>`, unwraps the raw templates, writes the
+`data-sas-raw-attrs` of `<html>` / `<body>`, **removes the `<link rel="preload" as="image">` hints React 19 adds of its own** (only the
+page's own image preloads, `scripts/own-preloads.json` per route, stay — found on the fixture: React preloaded `/img/team.png` in the head
+AND at the top of the body on a page whose original had no preload), deletes `out/_next` when no page references it (505 KB of
+manifests), copies `site-files/` into `out/`. `pages/404.jsx` (no runtime either) only when the copy has no `404.html`. README lists the
+pages, the parts kept as HTML, the forms. `buildConverted(dir)` = `next build` + the after-build step through `build/toolchain.js`
+(toolchain `next`, pinned versions from `toolchains/next/package.json`). Fixture: 10 pages → 16 components (header + footer shared),
+2 fallbacks (the two inline handlers on /work), build ≈ 13 s.
+
+**Wired into "Copy my site"** (`behavior/preserve/stage.js`, `stack === 'nextjs'`): convert → build → `report.asIs.convert =
+{ mode: 'converted', routes, urlChanges, stats, fallbacks, forms, shared }`; the export `out/` is served by `serveCopy` (static files,
+headers measured as `takeEffect: 'host'` like plain HTML — `measureServed({ takeEffect })`); `PACKED.nextjs.served = ['out', 'public']`
+so preview / re-audit read `out/`. **A download never fails:** if conversion or build throws, the earlier route runs (`packLifted` +
+`next build` + `next start`), `report.asIs.convert = { mode: 'packed', failed }` and a warning says so. Every fallback goes to the owner
+log (`copy/serverLog.js issueLogger`, reason `converted`, new code `f` in `copy/openItems.js REASONS`) and to KNOWN-ISSUES.md in the
+download (`export/notes.js`, one section per part: page, tag / attribute, where, reason). Client: `AsIsChoice.jsx` wording for the
+Next.js choice, `AsIsReport.jsx` "Converted into code" (counts, the fallbacks in plain words, each form: where the original sent it and
+whether it keeps working if the original or its platform is shut down).
+
+**Proof on the fixture — `test/convert-next.test.js`** (one browser; the fixture site as served stands in for a finished as-is copy):
+the conversion facts; the same DOM as the original on every page (`verify/equivalence.js domSignature`, scripts off, moved pages
+mapped, the two origins read as one) and every same-site link answered; the as-is rulers against the ORIGINAL (`check.js checkCopy`:
+visual gate with the noise map at 1440 and 390 — diff ≤ 0.05 % outside noise and the same height —, clicks, hovers); Lighthouse through
+`reaudit/measuredHost.js` on both sides, **three runs a side, alternated, judged on the medians, no tolerance** (the user's rule, the same as the React + Vite branch): the converted median is never below the original's in any category.
+Result (2026-10-24, 9 pages, the lift-only stress page about.html left to the lift): **4 / 4 pass** — 16 components (header + footer shared), 2 fallbacks (the two inline handlers on /work), DOM identical on every page, every visual gate 0 % outside the noise map at both widths with equal heights, no click / hover mismatch, Lighthouse medians never below the original's; ~13 min, most of it the visual rounds. test/full-flow.test.js now expects the converted project for Next.js (served folder `out`, `pages/index.jsx`, `pages/_document.jsx`, `scripts/after-build.mjs`, `asIs.convert.mode === 'converted'`, no runtime in the preview page): **pass, 19.5 min** (2026-10-24, every stack, ordinary user and owner, through the real API).
+
+**Not done / limits:** React + Vite and MERN writers (the core is shared: a writer needs its own project layout, a prerender of the
+components with the same `RawHtml` unwrapping — the after-build pattern in `next.js AFTER_BUILD_SOURCE` —, and the same hoisting
+fallbacks already in the core); no live site yet (the user names one); the zip of an as-is Next.js project ships the source (`out/` is
+built by `npm run build`, as DEPLOY.md says); a `<form>` keeps the original's `action` — the as-is form guard decides what happens on
+submit, the forms list says so per form; a copy made before this has no `convert` section (make the copy again).
+
+### Live test of the converted Next.js copy: nyaayai homepage (2026-10-25, stopped for a laptop shutdown, NOT finished)
+
+Scratch data `C:/Users/urvas/Downloads/sas-work/nyaayai-next-data` (copied from `sas-work/nyaayai-data`, migrated with
+`scripts/db-migrate.mjs --db ... --backup-dir ...`; the real data folder untouched). Results and logs:
+`C:/Users/urvas/Downloads/remastly-live-results/nyaayai/nextjs-convert/`. Drivers: `remastly-live-results/scripts/nextjs-convert.mjs`
+(env `REPACK_FROM` / `RESUME_FROM`) and `side-by-side.mjs` (pictures at 1440 / 390 + exactDiff map).
+- Found and fixed generally on the way (committed, related tests pass): an inline style on `<svg>` broke the Next.js build
+  (a742376); the preview / re-audit picked the project's saved stack instead of the stack the as-is copy was made in, so every
+  non-HTML as-is copy made from the app failed its re-audit (a742376); the conversion dropped HTML comments, which a React-rendered
+  site reads back as hydration markers: phone performance 80 -> 54, largest paint 7.9 s late, 3 loops lost (e515352).
+- Run 3 (before the comment fix, `run-3-comments-dropped/`): visual 0 % at 1440, 0.002 % at 390, equal heights; clicks and 9 / 9
+  hovers like the original; computer Lighthouse 84 -> 98, phone 80 -> 54; 18 components, 17 parts kept as HTML (16 `<link>` + 1
+  async script standing in the body); 3 forms, all guarded.
+- Run 4 (with the fix, "Package again" from db54dfd5) was stopped after the 1440 gate (0.0002 %, equal height). A package job keeps
+  no checkpoint and needs none: the source copy db54dfd5 is intact in the scratch data.
+- Run 5 (2026-10-25, "Package again" from db54dfd5, comments kept; original not reachable, so compared with the saved picture):
+  visual 0.0005 % / 0.002 %; Lighthouse medians of three, phone 80 -> 92, computer 84 -> 96. The phone drop of run 3 was the
+  dropped comments (React-rendered markup read without its hydration markers).
+- Run 6 (2026-10-25, b6441de, "Package again" from run 5's copy 1c41a1fd — db54dfd5 was removed by retention): 47 fixes kept
+  (45 names, 2 structured data), fix gate 0 px; Lighthouse phone 80 -> 86, computer 84 -> 96, accessibility 90 -> 94; "fixes
+  served" = served (compared by meaning). Live original vs copy: equal heights, 0.26 % at 1440 / 0.13 % at 390, all of it the
+  third-party chat search bar (botza.panscience.xyz widget, not downloadable, 3 console errors), not the conversion. Pictures
+  in `remastly-live-results/nyaayai/nextjs-convert/pictures/`.
+- Fixed in b6441de: sections found inside builder wrappers (`planSections`: nyaayai = SiteNav, Hero, Section3, NyaayAIReflects,
+  SolutionsAcrossThe, UnifyingFragmentedLegal, BuiltOnProof, OurCertifications, SuccessStories ×3, SeeHowNyaay, WeAnsweredAll,
+  SiteFooter ×3, SvgTemplates; the ×3 are Framer's per-width versions); "fixes served" compared by meaning; a comment with a
+  quote broke the Next.js build (convert-next failed on 6cc8ee8).
+- Comments before `<html>` kept (`prologOf` → `data-sas-prolog` on `<Html>` → the after-build step puts them back in front of
+  `<html>`). Run 7 (from run 6's copy c7c5df3b): the export starts exactly like the original (both Framer comments); Lighthouse
+  phone 80 -> 87, computer 84 -> 95, accessibility 90 -> 94.
+- Open: BuiltOnProof is still 127 KB (one titled section holding a long list).
+
+### `npm run dev` of a converted Next.js copy showed an original built with Next.js unstyled (gardner.panscience.ai, 2026-10-25)
+
+- Cause: the original's own files under `/_next/` (gardner, App Router: `/_next/static/chunks/*.css` / `*.js`) go to
+  `site-files/`, which only the after-build step copies into `out/`; `next dev` answers every `/_next/` address itself, so they
+  were 404s. Dev also ignores `unstable_runtimeJS: false` (adds its runtime + `body{display:none}` until it runs) and skipped every
+  after-build fix (RawHtml, prolog, raw attributes).
+- Fix (generic): the project ships `scripts/finish-page.mjs` (the page finishing, shared), `scripts/after-build.mjs` (applies it to
+  `out/`) and `scripts/dev.mjs` (`npm run dev`): Next's dev handler on an internal loopback port, `site-files/` served first, every
+  HTML answer finished like the build with Next's dev runtime removed, the copy's own `404.html` for a missing page. Next's own head
+  tags are now removed by position (first charset / viewport metas, last `<noscript data-n-css>`), so a Pages Router original's
+  identical-looking tags stay. Test: `convert-next-dev.test.js` (App Router home + Pages Router `/about/`; dev = build byte for byte,
+  same DOM / styles / script / pixels as the original).
+- Reserved by the other stacks' dev servers (for the React + Vite / MERN conversion): Vite answers `/@vite/*`, `/@fs/*`, `/@id/*`,
+  `/@react-refresh`, `/node_modules/*` and serves the project's own files at their paths (`/src/*`, `/index.html`, config files); its
+  build writes `/_app/` here (`assetsDir`), so an original's `/_app/` collides. MERN adds the Express routes `/api/health`,
+  `/api/forms/:id` and `/thanks`.
 ## Next steps, in order (commit after each with `--no-verify`, say the full suite was not run; nothing is pushed before the PR)
 
 1. **Step 4 — the blank render and the motion step's timeout: DONE 2026-10-24** (both fixed generally and verified live, see

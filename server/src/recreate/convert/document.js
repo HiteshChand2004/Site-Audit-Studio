@@ -1,6 +1,6 @@
 // The as-is copy's finished pages (HTML the original's own stylesheets and scripts draw, identical to the original) converted
-// into components, mechanically. One component per section of a page (the children of the body, or of the one wrapper the
-// body holds), class → className, inline styles → style objects, inline SVG kept as its own element, the original's
+// into components, mechanically. One component per section of a page (header, hero, each content part, footer — found inside
+// the wrappers a builder or an app nests the page in: planSections), class → className, inline styles → style objects, inline SVG kept as its own element, the original's
 // stylesheets and scripts kept as they are (a script tag is written with its text; the page is prerendered and never
 // hydrated, so the original's scripts run as in any HTML page). The rules an attribute follows are emit/react/jsx.js's.
 //
@@ -20,8 +20,10 @@ import { pascal } from '../emit/react/components.js';
 export const RAW_COMPONENT = 'RawHtml';
 export const RAW_COMPONENT_SOURCE = `// An element the conversion kept as the original HTML (see KNOWN-ISSUES.md / the report for the list and the reasons).
 // The markup travels base64-encoded in an inert <template>, which the after-build step unwraps (decoding it), so the
-// page's DOM is the original's and no escaping rule of React can change a byte of it.
-export default function ${RAW_COMPONENT}({ b64 }) {
+// page's DOM is the original's and no escaping rule of React can change a byte of it. A comment of the page travels the same
+// way (the comment prop): React cannot write one, and a site rendered with React reads its comments back as hydration markers.
+export default function ${RAW_COMPONENT}({ b64, comment }) {
+  if (comment !== undefined) return <template data-sas-comment={comment} />;
   return <template data-sas-raw={b64} />;
 }
 `;
@@ -40,6 +42,7 @@ const URL_ATTRS = new Set(['href', 'src', 'action', 'formaction', 'xlink:href', 
 /** Wrappers the section split looks through: the body holding one of these holds the page inside it. */
 const MAX_WRAPPER_DEPTH = 3;
 const LANDMARK_NAMES = { header: 'SiteHeader', nav: 'SiteNav', main: 'MainContent', footer: 'SiteFooter', aside: 'Sidebar', form: 'Form' };
+const ROLE_NAMES = { banner: 'SiteHeader', navigation: 'SiteNav', contentinfo: 'SiteFooter', complementary: 'Sidebar', main: 'MainContent' };
 
 const isElement = (n) => n.type === 'tag' || n.type === 'script' || n.type === 'style';
 const isCustomElement = (tag) => tag.includes('-');
@@ -72,13 +75,8 @@ export function planAttributes(tag, attribs, { inHead = false } = {}) {
     if (/^on[a-z]/.test(lower)) return { fail: 'an inline event handler, which React cannot write as text', attribute: name };
     if (RESERVED.has(lower) && !custom) return { fail: 'an attribute name React reserves for itself', attribute: name };
     if (URL_ATTRS.has(lower) && /^\s*javascript:/i.test(value)) return { fail: 'a javascript: address, which React blocks', attribute: name };
-    if (svgLike) {
-      // An SVG attribute: React's camelCase name (viewBox stays; stroke-width → strokeWidth; xlink:href → xlinkHref).
-      if (!/^[A-Za-z_][A-Za-z0-9_.:-]*$/.test(name)) return { fail: 'an attribute name React cannot write', attribute: name };
-      props.push(jsxAttr(tag === 'svg' ? svgPropName(name) : name, value));
-      continue;
-    }
-    if (!VALID_NAME.test(name)) return { fail: 'an attribute name React cannot write', attribute: name };
+    // An inline style is an object on every element, <svg> and <math> included: React refuses a style written as text
+    // (the build stops), and a builder often styles its SVG wrappers inline.
     if (lower === 'style') {
       const decls = declarations(value).filter((d) => d.trim());
       const obj = styleObject(value);
@@ -88,6 +86,13 @@ export function planAttributes(tag, attribs, { inHead = false } = {}) {
       props.push(jsxAttr('style', obj));
       continue;
     }
+    if (svgLike) {
+      // An SVG attribute: React's camelCase name (viewBox stays; stroke-width → strokeWidth; xlink:href → xlinkHref).
+      if (!/^[A-Za-z_][A-Za-z0-9_.:-]*$/.test(name)) return { fail: 'an attribute name React cannot write', attribute: name };
+      props.push(jsxAttr(tag === 'svg' ? svgPropName(name) : name, value));
+      continue;
+    }
+    if (!VALID_NAME.test(name)) return { fail: 'an attribute name React cannot write', attribute: name };
     if (custom) {
       // React writes a custom element's props as the attributes they are named: the HTML names stay.
       props.push(jsxAttr(lower, value));
@@ -145,6 +150,14 @@ class Conversion {
     this.usesRaw = false;
   }
 
+  /** A comment of the page, kept as it is (RawHtml writes it; the build step turns it back into the comment). Not a fallback. */
+  commentJsx(data) {
+    this.comments = (this.comments ?? 0) + 1;
+    this.usesRaw = true;
+    // A JS string in braces: a JSX attribute string has no escapes, so a quote or a line break in the comment would end it.
+    return `<${RAW_COMPONENT} comment={${JSON.stringify(data)}} />`;
+  }
+
   /** The original HTML of an element, kept as it is (RawHtml). */
   rawOf(el, reason, attribute) {
     this.fallbacks.push({ page: this.page, where: whereOf(el), tag: el.name, ...(attribute && { attribute }), reason });
@@ -153,7 +166,11 @@ class Conversion {
     return `<${RAW_COMPONENT} b64=${JSON.stringify(Buffer.from(this.$.html(el), 'utf8').toString('base64'))} />`;
   }
 
-  /** The JSX of a list of nodes (adjacent texts merged, comments left out: they draw nothing and React cannot write them). */
+  /**
+   * The JSX of a list of nodes (adjacent texts merged). Comments are kept, byte for byte: they draw nothing, but a site rendered
+   * with React marks its server-rendered parts with them (<!--$-->, <!--/$-->), and its own script, finding them gone, gives up
+   * on the page it was sent and draws it again (found on a live site: the largest paint 7.9 s late on a phone, loops lost).
+   */
   childrenJsx(nodes, { inHead = false } = {}) {
     const out = [];
     let text = '';
@@ -163,7 +180,8 @@ class Conversion {
       // document's Head would separate them with comment markers).
       if (n.type === 'text') text += inHead && !n.data.trim() ? '' : n.data;
       else if (isElement(n)) { flush(); out.push(this.elementJsx(n, { inHead })); }
-      // comments, directives and cdata: nothing to draw
+      else if (n.type === 'comment') { flush(); out.push(this.commentJsx(n.data)); }
+      // directives and cdata: nothing to draw
     }
     flush();
     return out;
@@ -232,15 +250,124 @@ export function sectionHost(body) {
   return host;
 }
 
-/** A component name for a section: its landmark, else its id, else its first class, else its tag; PascalCase. */
-export function sectionName(el, index) {
+/** A name a person wrote, not one a builder or a CSS-in-JS tool generated (framer-1x2y3z, css-9f8e7d, a long hex run). */
+const readable = (name) => /[a-z]{3}/i.test(name) && !/^(framer|css|sc|jsx|svelte|astro|tw|chakra|mui|emotion)-|[0-9a-f]{6,}|\d{3,}|[a-z]\d[a-z]\d/i.test(name);
+
+/** The visible text of an element (scripts and styles left out), white space folded; joined as written, since a builder that sets
+ * each word or letter in a span of its own keeps the spaces in the text. */
+const rawText = (el) => (el.children ?? []).map((k) => (k.type === 'text' ? k.data : isElement(k) && !RAW_INNER.has(k.name) ? rawText(k) : '')).join('');
+const plainText = (el) => rawText(el).replace(/\s+/g, ' ').trim();
+
+/**
+ * A component name for a section, PascalCase: its landmark (tag or role), else "Hero" for the part holding the page's main heading
+ * (`hero`, given by planSections), else its id, else its first heading's words, else its first class, else its tag and place.
+ * Generated ids and classes (builder hashes) are passed over, so a builder page is named from what it says.
+ */
+export function sectionName(el, index, { hero = false } = {}) {
   const tag = el.name;
   if (LANDMARK_NAMES[tag]) return LANDMARK_NAMES[tag];
+  const role = ROLE_NAMES[el.attribs?.role?.trim()];
+  if (role) return role;
+  if (hero) return 'Hero';
   const id = el.attribs?.id?.trim();
-  if (id && /[a-z]/i.test(id)) return pascal(id);
-  const cls = (el.attribs?.class ?? '').trim().split(/\s+/).find((c) => /^[a-z][a-z0-9_-]{2,}$/i.test(c) && !/^(w-|is-|has-|js-|u-|col|row|grid|flex|container|wrapper|section)$/i.test(c));
+  if (id && readable(id)) return pascal(id);
+  const heading = firstHeading(el);
+  const words = heading ? plainText(heading).replace(/[^A-Za-z0-9 ]+/g, ' ').trim().split(/\s+/).filter((w) => /[A-Za-z]/.test(w)).slice(0, 3) : [];
+  if (words.length) return pascal(words.join(' '));
+  // No heading: a part that holds the site's navigation, header or footer is named after it (a builder wraps them in boxes).
+  const inner = firstLandmark(el);
+  if (inner) return inner;
+  const cls = (el.attribs?.class ?? '').trim().split(/\s+/).find((c) => /^[a-z][a-z0-9_-]{2,}$/i.test(c) && readable(c) && !/^(w-|is-|has-|js-|u-|col|row|grid|flex|container|wrapper|section)$/i.test(c));
   if (cls) return pascal(cls);
-  return `${pascal(tag)}${index + 1}`;
+  return `${tag === 'div' ? 'Section' : pascal(tag)}${index + 1}`;
+}
+
+/** The name of the first navigation, header, footer or sidebar inside an element (tag or role), or null. */
+function firstLandmark(el) {
+  for (const k of el.children ?? []) {
+    if (!isElement(k) || RAW_INNER.has(k.name) || k.name === 'svg') continue;
+    const name = LANDMARK_NAMES[k.name] ?? ROLE_NAMES[k.attribs?.role?.trim()];
+    if (name && name !== 'MainContent' && name !== 'Form') return name;
+    const found = firstLandmark(k);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Parts that are one section by what they are: never split further. */
+const WHOLE_SECTION = new Set(['header', 'footer', 'nav', 'aside', 'section', 'article', 'form', 'ul', 'ol', 'dl', 'table', 'figure', 'details', 'dialog']);
+const HEADING = /^h[1-6]$/;
+/** What draws something a person sees, beside text. */
+const DRAWN = new Set(['img', 'picture', 'video', 'canvas', 'svg', 'iframe', 'input', 'button', 'select', 'textarea', 'object', 'embed']);
+/** A wrapper holding at least this share of the page's elements is worth looking inside. */
+export const SPLIT_SHARE = 0.3;
+/** How deep the split looks through wrappers (a builder nests a page in a handful, an app in a few more). */
+const MAX_SPLIT_DEPTH = 12;
+
+function firstHeading(el) {
+  for (const k of el.children ?? []) {
+    if (!isElement(k) || RAW_INNER.has(k.name) || k.name === 'svg') continue;
+    if (HEADING.test(k.name)) return k;
+    const h = firstHeading(k);
+    if (h) return h;
+  }
+  return null;
+}
+
+/**
+ * The page's sections — header, hero, each content part, footer — found inside the wrappers a builder (Framer, Webflow, Wix…) or an
+ * app nests the page in, from what the page is, never from a builder's names:
+ *   - a landmark (header, footer, nav, aside, section, article, a list, a form, the role of one) is one section, never split;
+ *   - a wrapper holding one visible part is looked through;
+ *   - a large wrapper (≥ SPLIT_SHARE of the page's elements) whose parts carry their own headings, or are large themselves, is split
+ *     into them — unless it is one section with a title of its own (a heading before its parts) or a list (parts of one shape);
+ *   - what draws nothing (a stray <link>, a script, an empty box) is never a section: it stays in the page around them.
+ * Only which elements become components is decided here: every element, its order and every wrapper stay as they are.
+ * @returns {{ el: object, hero: boolean }[]}
+ */
+export function planSections(body) {
+  if (!body) return [];
+  const sizes = new Map();
+  const size = (el) => {
+    if (!sizes.has(el)) sizes.set(el, 1 + elementChildren(el).reduce((t, k) => t + size(k), 0));
+    return sizes.get(el);
+  };
+  const total = size(body);
+  const draws = (el) => DRAWN.has(el.name)
+    || (!RAW_INNER.has(el.name) && (el.children ?? []).some((k) => (k.type === 'text' && k.data.trim()) || (isElement(k) && draws(k))));
+  const candidate = (el) => !RAW_INNER.has(el.name) && !VOID.has(el.name) && !HOISTED_IN_BODY.has(el.name) && el.name !== 'svg' && draws(el);
+  const role = (el) => el.attribs?.role?.trim();
+  const landmark = (el) => WHOLE_SECTION.has(el.name) || (Boolean(ROLE_NAMES[role(el)]) && role(el) !== 'main');
+  const shape = (el) => `${el.name}|${(el.attribs?.class ?? '').trim().split(/\s+/).sort().join('.')}|${elementChildren(el).length}`;
+  const substantial = (el) => size(el) >= Math.max(5, total * 0.05);
+  // A list: three or more parts, most of one shape, not each a real share of the page (sections may share one class too).
+  const isList = (kids) => {
+    if (kids.length < 3 || kids.every(substantial)) return false;
+    const counts = new Map();
+    for (const k of kids) counts.set(shape(k), (counts.get(shape(k)) ?? 0) + 1);
+    return Math.max(...counts.values()) >= Math.ceil(kids.length * 0.6);
+  };
+  // A section with a title of its own: its first part is a heading, or a small box holding only a heading (and a line under it).
+  const titled = (kids) => HEADING.test(kids[0].name) || (size(kids[0]) <= 4 && Boolean(firstHeading(kids[0])));
+  const split = (el, depth, top) => {
+    const kids = elementChildren(el).filter(candidate);
+    if (!kids.length) return top ? [] : [el];
+    if (!top && (landmark(el) || depth >= MAX_SPLIT_DEPTH)) return [el];
+    // A wrapper around one box that holds parts of its own: look through it (never down to a lone heading or line).
+    if (kids.length === 1) return elementChildren(kids[0]).some(candidate) ? split(kids[0], depth + 1, false) : top ? kids : [el];
+    if (!top) {
+      const headed = kids.filter((k) => firstHeading(k) || landmark(k)).length;
+      const large = kids.filter(substantial).length;
+      if (size(el) < total * SPLIT_SHARE || isList(kids) || titled(kids) || (headed < 2 && large < 2)) return [el];
+    }
+    return kids.flatMap((k) => split(k, depth + 1, false));
+  };
+  const parts = split(body, 0, true);
+  // The hero: the part that holds the page's main heading, when it is not a landmark of its own.
+  const findH1 = (n) => { for (const k of elementChildren(n)) { if (k.name === 'h1') return k; const f = findH1(k); if (f) return f; } return null; };
+  const h1 = findH1(body);
+  const holds = (el) => { for (let n = h1; n; n = n.parent) if (n === el) return true; return false; };
+  return parts.map((el) => ({ el, hero: Boolean(h1) && holds(el) && !landmark(el) && !LANDMARK_NAMES[el.name] }));
 }
 
 /**
@@ -296,7 +423,7 @@ export function formsOf($, { page, pageUrl }) {
  * @param {string} [o.pageUrl]       the original's address of the page (forms)
  * @param {Record<string, string>} [o.linkMap]  same-site paths that move ("/about.html" → "/about/"): links are rewritten first
  * @param {(el: object, outer: string) => string | null} [o.sharedName]  a name for a section that is shared with other pages
- * @returns {{ page: string, lang: string|null, html: { props: string[], raw: object }, body: { props: string[], raw: object },
+ * @returns {{ page: string, lang: string|null, html: { props: string[], raw: object }, prolog: string|null, body: { props: string[], raw: object },
  *   headJsx: string, headUsesRaw: boolean, sections: { name: string, jsx: string, outer: string, hash: string, shared: boolean }[],
  *   pageJsx: string, pageUsesRaw: boolean, fallbacks: Fallback[], forms: object[], stats: { elements: number, raw: number } }}
  */
@@ -313,19 +440,18 @@ export function convertDocument(html, { page, pageUrl = null, linkMap = null, sh
   const headJsx = head.childrenJsx(headEl?.children ?? [], { inHead: true }).join('');
 
   // The sections: the children of the host, each its own component; the page component holds what is around them.
-  const host = sectionHost(bodyEl);
   const componentOf = new Map();
   const taken = new Set([RAW_COMPONENT]);
   const sections = [];
-  elementChildren(host).forEach((el, i) => {
-    if (RAW_INNER.has(el.name) || el.name === 'svg') return; // a script or a style between sections stays in the page
+  planSections(bodyEl).forEach(({ el, hero }, i) => {
     const outer = $.html(el);
     const hash = sha(outer);
     let name = sharedName?.(el, outer, hash) ?? null;
     const shared = Boolean(name);
     if (!name) {
-      name = sectionName(el, i);
-      for (let n = 2; taken.has(name); n++) name = `${sectionName(el, i)}${n}`;
+      const base = sectionName(el, i, { hero });
+      name = base;
+      for (let n = 2; taken.has(name); n++) name = `${base}${n}`;
     }
     taken.add(name);
     componentOf.set(el, name);
@@ -347,6 +473,7 @@ export function convertDocument(html, { page, pageUrl = null, linkMap = null, sh
     page,
     lang: htmlEl?.attribs?.lang ?? null,
     html: rootAttributes(htmlEl?.attribs),
+    prolog: prologOf(html),
     body: rootAttributes(bodyEl?.attribs),
     headJsx,
     headUsesRaw: head.usesRaw,
@@ -357,6 +484,16 @@ export function convertDocument(html, { page, pageUrl = null, linkMap = null, sh
     forms,
     stats: { elements, raw: fallbacks.length },
   };
+}
+
+/**
+ * The comments between the doctype and <html> (a builder's banner, a publish date), exactly as written with the white space
+ * around them, or null when there are none. No parser keeps them (they belong to no element), and React renders from <html> down,
+ * so the stack writes them back in front of <html> after its build.
+ */
+export function prologOf(html) {
+  const m = /^﻿?\s*(?:<!doctype[^>]*>)?((?:\s|<!--[\s\S]*?-->)*)<html[\s>]/i.exec(String(html ?? ''));
+  return m && m[1].includes('<!--') ? m[1] : null;
 }
 
 /** Rewrites same-site links whose page moved ("/about.html" → "/about/"), the query and the fragment kept. */
@@ -386,11 +523,9 @@ export function convertSite(pages, { linkMap = null } = {}) {
   for (const p of pages) {
     const $ = cheerio.load(p.html);
     if (linkMap && Object.keys(linkMap).length) rewriteLinks($, linkMap);
-    const host = sectionHost($('body').get(0));
-    elementChildren(host).forEach((el, i) => {
-      if (RAW_INNER.has(el.name) || el.name === 'svg') return;
+    planSections($('body').get(0)).forEach(({ el, hero }, i) => {
       const hash = sha($.html(el));
-      const entry = seen.get(hash) ?? { count: 0, name: sectionName(el, i) };
+      const entry = seen.get(hash) ?? { count: 0, name: sectionName(el, i, { hero }) };
       entry.count += 1;
       seen.set(hash, entry);
     });

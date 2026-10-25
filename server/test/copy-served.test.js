@@ -70,6 +70,29 @@ test('a site file the copy does not serve, and a page served differently from th
   assert.ok(o.open.some((x) => x.check === 'fixes served' && x.page === '/'));
 });
 
+test('a page rendered differently but stating the same fixes is served as fixed; one that lost a fix names what it lost', async (t) => {
+  const fixed = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Fixed page</title><meta name="description" content="A page about things.">'
+    + '<link rel="canonical" href="https://www.acme-new.dev/"><script type="application/ld+json">{"@type":"Organization","name":"Acme"}</script></head>'
+    + '<body><!-- note --><div class="a  b" id="x"><img src="/a.png" alt="A cat"><button aria-label="Open menu" class="m">≡</button></div></body></html>';
+  // The same page as React writes it: attributes in another order and quoting, white space and comments gone, `<img />`.
+  const rendered = '<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/><title>Fixed page</title><meta content="A page about things." name="description"/>'
+    + '<link href="https://www.acme-new.dev/" rel="canonical"/><script type="application/ld+json">{"name":"Acme","@type":"Organization"}</script></head>'
+    + '<body><div id="x" class="a  b"><img alt="A cat" src="/a.png"/><button class="m" aria-label="Open menu">≡</button></div><script src="/x.js"></script></body></html>';
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'sas-served-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(path.join(dir, 'index.html'), fixed);
+  const page = [{ path: '/', outPath: 'index.html', kinds: ['alt', 'names', 'head', 'data'] }];
+  const same = await measureServed({ base: await site(t, { page: rendered }), stack: 'nextjs', copyDir: dir, fixedPages: page });
+  assert.deepEqual(same.pages, [{ path: '/', status: 200, servedAsFixed: true, compared: 'meaning' }]);
+
+  const lost = await measureServed({ base: await site(t, { page: rendered.replace(' aria-label="Open menu"', '') }), stack: 'nextjs', copyDir: dir, fixedPages: page });
+  assert.deepEqual(lost.pages[0].differs, ['a11y']);
+  assert.match(servedOutcome(lost).open.find((o) => o.check === 'fixes served').values, /without these fixes: a11y/);
+  // A difference no recorded fix wrote (the head, when the page's only fix was an alt text) is not the fixes' concern.
+  const other = await measureServed({ base: await site(t, { page: rendered.replace('<title>Fixed page', '<title>Other') }), stack: 'nextjs', copyDir: dir, fixedPages: [{ ...page[0], kinds: ['alt'] }] });
+  assert.equal(other.pages[0].servedAsFixed, true);
+});
+
 test('the Next.js as-is package sends the security headers (next start applies next.config.mjs)', { timeout: 10 * 60000 }, async (t) => {
   if (!(await toolchainStatus('next')).installed) return t.skip('the next toolchain is not installed');
   const root = await mkdtemp(path.join(os.tmpdir(), 'sas-served-next-'));
