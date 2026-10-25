@@ -1251,6 +1251,22 @@
   transition: opacity 400ms var(--ease-out);
   transition-delay: calc(500ms + var(--i, 0) * 95ms + var(--j, 0) * 90ms);
 }
+.stk__limits {
+  display: grid;
+  gap: 6px 28px;
+  max-width: 56rem;
+  margin: 32px auto 0;
+  padding: 18px 0 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 13px;
+  list-style: none;
+}
+@media (min-width: 900px) {
+  .stk__limits {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
 
 /* ---------- A single framed screenshot on inner pages ---------- */
 .cshot {

@@ -79,7 +79,7 @@ export const STACKS = [
     name: 'Plain HTML / CSS / JS',
     short: 'HTML',
     mark: 'HTML',
-    detail: 'The simplest choice: plain web pages that load fastest and can be put on any web host. Best for most sites.',
+    detail: 'The exact copy: the original’s own pages and files, which load fastest and can be put on any web host. Best for most sites.',
     tag: 'Best for most sites',
   },
   {
@@ -87,7 +87,7 @@ export const STACKS = [
     name: 'React + Vite',
     short: 'React',
     mark: 'React',
-    detail: 'For developer teams who work with React. Pages are ready for Google; visitors download a little app code.',
+    detail: 'Real React components, built with Vite, for developer teams who work with React. Pages are prerendered, so they are ready for Google.',
     tag: 'For React teams',
   },
   {
@@ -95,7 +95,7 @@ export const STACKS = [
     name: 'Next.js',
     short: 'Next.js',
     mark: 'Next',
-    detail: 'For developer teams who work with Next.js (React). Pages are ready for Google; visitors download more app code.',
+    detail: 'Real Next.js pages and components, for developer teams who work with Next.js. Pages are prerendered, so they are ready for Google.',
     tag: 'For Next.js teams',
   },
   {
@@ -103,7 +103,7 @@ export const STACKS = [
     name: 'MERN',
     short: 'MERN',
     mark: 'MERN',
-    detail: 'React pages plus a small server and database that store what visitors send through contact forms.',
+    detail: 'The same React client plus an Express + MongoDB server that saves what visitors send through the site’s own forms, so the forms work without the original.',
     tag: 'Forms that work',
   },
 ] as const;
@@ -249,16 +249,20 @@ export const exampleScores =
 
 export type Faq = { q: string; a: string };
 
+/** How long an audit (the tool's Analyze step) usually takes: measured 25–160 s on typical runs. */
+const AUDIT_TIME = 'one to three minutes';
+
 export const FAQS: Faq[] = [
-  { q: 'How is this different from tools that turn a URL into code?', a: 'Remastly does not generate a new approximation of your page. It keeps the page’s own markup, styles and animations, measures the copy against the original, and publishes the measurements.' },
+  { q: 'How is this different from tools that turn a URL into code?', a: 'Remastly does not guess at your page. The Plain HTML copy keeps the page’s own markup, styles and animations; React, Next.js and MERN are code generated from that copy. Either way the copy is measured against the original, and the measurements are published.' },
   { q: 'Does the copy always score higher than the original?', a: 'Not always, and we do not claim it. After the fixes the audit is run again, and every check is marked fixed, better, still open or got worse. Open and worse items are listed with the reason.' },
   { q: 'Which platforms can it copy?', a: 'Any site a real browser can draw. Pages drawn on a canvas, such as Flutter Web, and bot-protected sites cannot be copied.' },
   { q: 'What does Remastly do?', a: 'It audits a website, builds a clean copy that fixes what it found, lets you compare the two, and gives you the new site and a report.' },
   { q: 'What does the audit check?', a: 'Performance, SEO, accessibility, best practices (including errors in the browser console), broken links, readiness for AI answers, and the platform the site is built on.' },
   { q: 'Does Remastly change my live website?', a: 'No. The original is only visited, never changed. The copy is a separate site you preview and download.' },
   { q: 'Which websites can I use it on?', a: 'Only sites your company owns, or that you have permission to rebuild. You confirm this for every website.' },
-  { q: 'Which stacks can the new site be built in?', a: 'Plain HTML / CSS / JS, React + Vite, Next.js, or MERN (React plus a small server and database for contact forms).' },
-  { q: 'How long does it take?', a: 'An audit usually takes about a minute. It stops after six minutes at most; any check it did not reach is listed as skipped. A copy can take several minutes per page.' },
+  { q: 'Which stacks can the new site be built in?', a: 'Plain HTML / CSS / JS is the exact copy. Next.js (pages and components), React + Vite (components) and MERN (the same React client plus an Express + MongoDB server that saves the site’s own forms) are real code that looks the same as the original. That code is generated from the site, so class names come from the original, some small parts stay as the original’s HTML, pages are prerendered and the original’s own scripts run the animations.' },
+  { q: 'Will chat or booking widgets work on the copy?', a: 'Widgets that only allow the original’s domain, such as chat or booking, work once the new domain is allowed in that service’s settings.' },
+  { q: 'How long does it take?', a: `An audit usually takes ${AUDIT_TIME}. It stops after six minutes at most; any check it did not reach is listed as skipped. A copy can take several minutes per page.` },
   { q: 'Will the copy look exactly like the original?', a: 'As close as the page allows, and it tells you how close: the share of pixels that differ, or a layout-and-thumbnail match score out of 100 (below 80 is flagged).' },
   { q: 'Does it fix every problem?', a: 'No, and it says so. Every issue is marked fixed in your copy, still open, got worse, or needs a person.' },
   { q: 'What can’t Remastly rebuild?', a: 'Logins, shops and checkout, form backends (except MERN), CMS content, plugin behaviour and 3D scenes. These are flagged, never faked.' },
@@ -506,12 +510,19 @@ export const PLATFORMS = {
 /** The four output stacks. Trees and commands are those of the tool's real download (docs/stack-trees-check.md). */
 export const STACK_CARDS = {
   title: 'Four stacks. One run.',
-  lead: 'Pick a stack, preview the copy, then download the whole project as one .zip: every file, plus the deploy steps and the report.',
+  lead: 'Pick a stack, preview the copy, then download the whole project as one .zip: every file, plus the deploy steps and the report. Every stack looks the same as the original.',
+  /** Shown under the four columns: what generated code means, said plainly. */
+  limits: [
+    'React, Next.js and MERN are code generated from your site, so class names come from the original.',
+    'Some small parts stay as the original’s HTML.',
+    'Pages are prerendered, and the original’s own scripts run the animations.',
+    'Widgets that only allow the original’s domain, such as chat or booking, need the new domain allowed in that service.',
+  ],
   items: [
     {
       id: 'html',
       name: 'Plain HTML',
-      tag: 'Loads fastest, runs on any web host.',
+      tag: 'The exact copy. Loads fastest, runs on any web host.',
       logos: [{ name: 'HTML5', logo: 'html5' }, { name: 'CSS', logo: 'css3' }, { name: 'JavaScript', logo: 'javascript' }],
       tree: ['index.html', 'other pages, at their paths', 'the page’s own folders', 'DEPLOY.md'],
       run: 'npx serve .',
@@ -519,7 +530,7 @@ export const STACK_CARDS = {
     {
       id: 'react-vite',
       name: 'React + Vite',
-      tag: 'For teams that work in React.',
+      tag: 'React components, for teams that work in React.',
       logos: [{ name: 'React', logo: 'react' }, { name: 'Vite', logo: 'vite' }],
       tree: ['package.json', 'vite.config.js', 'src/entry.js', 'public/  (the copy)'],
       run: 'npm install · npm run preview',
@@ -527,7 +538,7 @@ export const STACK_CARDS = {
     {
       id: 'nextjs',
       name: 'Next.js',
-      tag: 'For teams that work in Next.js.',
+      tag: 'Next.js pages and components, for teams that work in Next.js.',
       logos: [{ name: 'Next.js', logo: 'nextdotjs' }],
       tree: ['package.json', 'next.config.mjs', 'app/layout.jsx', 'public/  (the copy)'],
       run: 'npm install · npm run build · npm run start',
@@ -535,7 +546,7 @@ export const STACK_CARDS = {
     {
       id: 'mern',
       name: 'MERN',
-      tag: 'A small server that also stores form messages.',
+      tag: 'The same React client plus an Express + MongoDB server that saves the site’s own forms.',
       logos: [{ name: 'MongoDB', logo: 'mongodb' }, { name: 'Express', logo: 'express' }, { name: 'React', logo: 'react' }, { name: 'Node.js', logo: 'nodedotjs' }],
       tree: ['package.json', 'server/src/', 'server/forms.json', 'client/dist/  (the copy)'],
       run: 'npm install · npm start',
@@ -566,8 +577,8 @@ export const HOME_FAQ: Faq[] = [
   { q: 'Does the copy always score higher?', a: 'Not always, and we do not claim it. Each re-audit marks every check fixed, better, still open or got worse, and lists the open and worse ones.' },
   { q: 'Does it change my live site?', a: 'Never. You get a separate copy to preview and download.' },
   { q: 'Which sites can I use?', a: 'Sites your company owns, or may use. Pages drawn on a canvas, and bot-protected sites, cannot be copied.' },
-  { q: 'How long does it take?', a: 'An audit usually takes about a minute, six at most; a copy can take several minutes per page.' },
-  { q: 'Which stacks can the copy be built in?', a: 'Plain HTML, React + Vite, Next.js or MERN. You choose one for each copy.' },
+  { q: 'How long does it take?', a: `An audit usually takes ${AUDIT_TIME}, six at most; a copy can take several minutes per page.` },
+  { q: 'Which stacks can the copy be built in?', a: 'Plain HTML is the exact copy. Next.js, React + Vite and MERN are real code generated from the site that looks the same as the original; MERN adds a server that saves the site’s own forms. You choose one for each copy.' },
   { q: 'What can it not rebuild?', a: 'Logins, shop checkouts, form backends and CMS content need a person. Remastly flags them and never fakes them.' },
 ];
 
@@ -740,6 +751,13 @@ export const HEADS = {
   stacks: { eyebrow: 'Output stacks', l1: 'Four stacks,', l2: 'one run.' },
   faq: { eyebrow: 'Questions', l1: 'Short answers', l2: 'to the usual questions.' },
   cta: { eyebrow: 'Ready when you are', l1: 'Check your site', l2: 'and see the numbers.' },
+} as const;
+
+/** Lines on /features and /how-it-works that state the audit time or describe the stacks. */
+export const TOUR = {
+  auditStep: `Every issue found and ranked, usually in ${AUDIT_TIME} (six at most).`,
+  stacksCard: 'The exact copy in Plain HTML, or real code in Next.js, React + Vite or MERN that looks the same.',
+  tryIt: `Paste an address and see what Remastly finds, usually in ${AUDIT_TIME}.`,
 } as const;
 
 /** Three cards: what the product does. */
