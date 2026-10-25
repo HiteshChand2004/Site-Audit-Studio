@@ -277,16 +277,17 @@ test('stopping before the job starts: nothing is opened', async () => {
 });
 
 test('as is: the fixes that change pixels on purpose are left out, the ones that do not still run', () => {
-  const view = (style) => ({ rect: [0, 0, 400, 60], style });
-  const el = (tag, children = [], { style = {}, attrs = {} } = {}) => ({ tag, attrs, views: { desktop: view(style) }, children });
+  const view = (style, rect) => ({ rect, style });
+  const el = (tag, children = [], { style = {}, attrs = {}, rect = [0, 0, 400, 60] } = {}) => ({ tag, attrs, views: { desktop: view(style, rect) }, children });
   const txt = (text) => ({ text });
-  // Grey on white: a real contrast failure. Plus an image with no alt text, which is not a pixel.
+  // Grey on white: a real contrast failure. Plus an image with no alt text, which is not a pixel. The image sits below
+  // the text: text over a picture is left for a person to judge (fixers/contrast.js), so it must not lie under the text.
   const page = () => ({
     info: { path: '/', outPath: 'index.html', url: 'https://example.com/' },
     root: el('body', [
       el('p', [txt('Hard to read on white')], { style: { color: 'rgb(190, 190, 190)', 'background-color': 'rgb(255, 255, 255)' } }),
-      el('img', [], { attrs: { src: 'assets/images/team-photo.png' } }),
-    ], { style: { 'background-color': 'rgb(255, 255, 255)' } }),
+      el('img', [], { attrs: { src: 'assets/images/team-photo.png' }, rect: [0, 80, 400, 300] }),
+    ], { style: { 'background-color': 'rgb(255, 255, 255)' }, rect: [0, 0, 400, 400] }),
     head: { title: 'Home', description: 'A page of the test site that is long enough to pass as a description.', meta: [] },
     headAuto: [],
   });
