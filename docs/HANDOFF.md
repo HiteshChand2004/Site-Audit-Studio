@@ -678,6 +678,23 @@ Scratch data `C:/Users/urvas/Downloads/sas-work/nyaayai-next-data` (copied from 
   `<html>`). Run 7 (from run 6's copy c7c5df3b): the export starts exactly like the original (both Framer comments); Lighthouse
   phone 80 -> 87, computer 84 -> 95, accessibility 90 -> 94.
 - Open: BuiltOnProof is still 127 KB (one titled section holding a long list).
+
+### `npm run dev` of a converted Next.js copy showed an original built with Next.js unstyled (gardner.panscience.ai, 2026-10-25)
+
+- Cause: the original's own files under `/_next/` (gardner, App Router: `/_next/static/chunks/*.css` / `*.js`) go to
+  `site-files/`, which only the after-build step copies into `out/`; `next dev` answers every `/_next/` address itself, so they
+  were 404s. Dev also ignores `unstable_runtimeJS: false` (adds its runtime + `body{display:none}` until it runs) and skipped every
+  after-build fix (RawHtml, prolog, raw attributes).
+- Fix (generic): the project ships `scripts/finish-page.mjs` (the page finishing, shared), `scripts/after-build.mjs` (applies it to
+  `out/`) and `scripts/dev.mjs` (`npm run dev`): Next's dev handler on an internal loopback port, `site-files/` served first, every
+  HTML answer finished like the build with Next's dev runtime removed, the copy's own `404.html` for a missing page. Next's own head
+  tags are now removed by position (first charset / viewport metas, last `<noscript data-n-css>`), so a Pages Router original's
+  identical-looking tags stay. Test: `convert-next-dev.test.js` (App Router home + Pages Router `/about/`; dev = build byte for byte,
+  same DOM / styles / script / pixels as the original).
+- Reserved by the other stacks' dev servers (for the React + Vite / MERN conversion): Vite answers `/@vite/*`, `/@fs/*`, `/@id/*`,
+  `/@react-refresh`, `/node_modules/*` and serves the project's own files at their paths (`/src/*`, `/index.html`, config files); its
+  build writes `/_app/` here (`assetsDir`), so an original's `/_app/` collides. MERN adds the Express routes `/api/health`,
+  `/api/forms/:id` and `/thanks`.
 ## Next steps, in order (commit after each with `--no-verify`, say the full suite was not run; nothing is pushed before the PR)
 
 1. **Step 4 — the blank render and the motion step's timeout: DONE 2026-10-24** (both fixed generally and verified live, see

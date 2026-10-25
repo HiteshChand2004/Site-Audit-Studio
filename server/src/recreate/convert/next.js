@@ -5,6 +5,8 @@
 // Lighthouse point). A short after-build step (scripts/after-build.mjs, shipped and run by `npm run build`) then makes the
 // export the copy's own pages: Next's <div id="__next"> wrapper, its own charset / viewport metas and its <noscript> go,
 // raw fallbacks are unwrapped, and the files Next reserves in public/ (the copy's own _next folder) are put into out/.
+// `npm run dev` (scripts/dev.mjs) serves those reserved files too and finishes each page the same way (scripts/finish-page.mjs),
+// so the development server shows what the build ships.
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { convertSite, RAW_COMPONENT, RAW_COMPONENT_SOURCE } from './document.js';
@@ -48,34 +50,21 @@ function componentFile(name, jsx, { usesRaw }) {
   return `${usesRaw ? `import ${RAW_COMPONENT} from './${RAW_COMPONENT}.jsx';\n\n` : ''}export default function ${name}() {\n  return (\n${indent(jsx, 4)}\n  );\n}\n`;
 }
 
-/** The after-build step, shipped with the project (see the head of this file). */
-export const AFTER_BUILD_SOURCE = `// Runs after \`next build\` (output: 'export'): makes out/ the copy's own pages.
+/** How a page Next rendered becomes the copy's own page, shared by the after-build step and the development server. */
+export const FINISH_PAGE_SOURCE = `// How a page Next rendered becomes the copy's own page. scripts/after-build.mjs applies it to every page of out/ and
+// scripts/dev.mjs to every page the development server renders, so \`npm run dev\` shows what \`npm run build\` ships.
 //  1. Next wraps a page's markup in <div id="__next"> and adds its own charset and viewport metas and a <noscript>; the pages
 //     have their own, so the wrapper is unwrapped and those tags removed (the page's DOM is then the original's). Next's
 //     charset meta stays only on a page that has none of its own.
 //  2. An element the conversion kept as original HTML (RawHtml: an inert <template data-sas-raw>) is unwrapped.
 //  3. Attributes of <html> / <body> React could not write (data-sas-raw-attrs) are written, and the comments the original has
 //     between its doctype and <html> (data-sas-prolog) are put back there.
-//  3b. React 19 adds <link rel="preload" as="image"> hints of its own for some images; the page's head already says what it
+//  4. React 19 adds <link rel="preload" as="image"> hints of its own for some images; the page's head already says what it
 //     preloads, so every image preload the original page does not have (scripts/own-preloads.json, per route) is removed.
-//  4. Next's own _next folder (build manifests no page references, since no page carries the runtime) is removed when nothing
-//     references it, then site-files/ (what Next reserves in public/, such as the copy's own _next folder, and its own 404
-//     page) is copied into out/.
-import { cp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import path from 'node:path';
-
-const out = path.resolve('out');
-const siteFiles = path.resolve('site-files');
-const ownPreloads = JSON.parse(await readFile(path.resolve('scripts/own-preloads.json'), 'utf8').catch(() => '{}'));
-
-async function* htmlFiles(dir) {
-  for (const e of await readdir(dir, { withFileTypes: true })) {
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) yield* htmlFiles(p);
-    else if (e.name.endsWith('.html')) yield p;
-  }
-}
-const decode = (s) => s.replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+// The development server ignores \`unstable_runtimeJS: false\` and adds its runtime: dropDevRuntime removes it first (the
+// scripts it writes after the page's head, the style hiding the body until they run, its data and refresh scripts after the
+// page), so a page in development is never hydrated either.
+export const decode = (s) => s.replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 const attrValue = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 
 function unwrapNext(html) {
@@ -85,22 +74,30 @@ function unwrapNext(html) {
   if (i < 0 || end < i) return html;
   return html.slice(0, i) + html.slice(i + open.length, end) + html.slice(end + '</div>'.length);
 }
+// Next's own tags stand at known places: its charset and viewport metas come first in the head (before the page's own of the
+// same kind), its <noscript data-n-css> after the page's own head. A page of an original built with Next.js has tags that look
+// the same (data-next-head, data-n-css), so only Next's places are touched and the original's tags stay.
+const NEXT_CHARSET = '<meta charSet="utf-8" data-next-head=""/>';
+const NEXT_VIEWPORT = '<meta name="viewport" content="width=device-width" data-next-head=""/>';
+const N_CSS = '<noscript data-n-css=""></noscript>';
+const headEnd = (html) => { const i = html.indexOf('</head>'); return i < 0 ? html.length : i; };
+const dropFirst = (html, tag) => {
+  const i = html.indexOf(tag);
+  return i < 0 || i > headEnd(html) ? html : html.slice(0, i) + html.slice(i + tag.length);
+};
 function dropNextHead(html) {
-  const ownCharset = /<meta[^>]*\\bcharset=(?![^>]*data-next-head)[^>]*>/i.test(html.replace(/<meta[^>]*data-next-head=""[^>]*>/g, ''));
-  return html
-    .replace(/<meta charSet="utf-8" data-next-head=""\\/>/g, ownCharset ? '' : '<meta charset="utf-8"/>')
-    .replace(/<meta name="viewport"[^>]*data-next-head=""[^>]*\\/>/g, '')
-    .replace(/<noscript data-n-css=""><\\/noscript>/g, '');
+  const nextCharset = html.slice(0, headEnd(html)).includes(NEXT_CHARSET);
+  html = dropFirst(dropFirst(html, NEXT_CHARSET), NEXT_VIEWPORT);
+  const at = html.lastIndexOf(N_CSS, headEnd(html));
+  if (at >= 0) html = html.slice(0, at) + html.slice(at + N_CSS.length);
+  // Next's charset meta stays only on a page that has none of its own.
+  if (nextCharset && !/<meta[^>]*\\bcharset=/i.test(html.slice(0, headEnd(html)))) html = html.replace(/<head([^>]*)>/, '<head$1><meta charset="utf-8"/>');
+  return html;
 }
 const unwrapRaw = (html) => html.replace(/<template data-sas-raw="([A-Za-z0-9+/=]*)"><\\/template>/g, (all, b64) => Buffer.from(b64, 'base64').toString('utf8'))
   .replace(/<template data-sas-comment="([^"]*)"><\\/template>/g, (all, text) => '<!--' + decode(text) + '-->');
-// The route of an exported file: out/about/index.html -> /about/, out/index.html -> /, out/404.html -> /404.html.
-const routeOf = (file) => {
-  const rel = path.relative(out, file).split(path.sep).join('/');
-  return rel === 'index.html' ? '/' : rel.endsWith('/index.html') ? '/' + rel.slice(0, -'index.html'.length) : '/' + rel;
-};
-const dropAddedPreloads = (html, route) => {
-  const own = new Set(ownPreloads[route] ?? []);
+const dropAddedPreloads = (html, ownPreloads) => {
+  const own = new Set(ownPreloads ?? []);
   return html.replace(/<link[^>]*>/g, (tag) => {
     if (!/ rel="preload"/.test(tag) || !/ as="image"/.test(tag)) return tag;
     const href = / href="([^"]*)"/.exec(tag)?.[1] ?? '';
@@ -113,16 +110,140 @@ const rawAttrs = (html) => html.replace(/<(html|body)([^>]*) data-sas-raw-attrs=
   return '<' + tag + rest + Object.entries(attrs).map(([k, v]) => ' ' + k + '="' + attrValue(v) + '"').join('');
 });
 
+/** A page as Next rendered it (out/) -> the copy's page; ownPreloads: the image preloads the original page has. */
+export const finishPage = (html, ownPreloads) => dropAddedPreloads(prolog(rawAttrs(unwrapRaw(dropNextHead(unwrapNext(html))))), ownPreloads);
+
+/** What the development server adds to a page and the build does not: its runtime (Next writes it after the page's own head and body). */
+export function dropDevRuntime(html) {
+  // In the head: what follows Next's <noscript data-n-css> (its scripts), and the style hiding the body until they run.
+  const at = html.lastIndexOf(N_CSS, headEnd(html));
+  if (at >= 0) html = html.slice(0, at + N_CSS.length) + html.slice(headEnd(html));
+  html = html.replace(/<style data-next-hide-fouc="true">[\\s\\S]*?<\\/style>/, '').replace(/<noscript data-next-hide-fouc="true">[\\s\\S]*?<\\/noscript>/, '');
+  // After the body's wrapper: its data and refresh scripts (the page's own scripts are all inside the wrapper).
+  return html.replace(/<\\/div>(?:<script\\b[^>]*>(?:(?!<\\/script>)[\\s\\S])*<\\/script>)+(<\\/body>\\s*<\\/html>\\s*)$/, '</div>$1');
+}
+`;
+
+/** The after-build step, shipped with the project (see the head of this file). */
+export const AFTER_BUILD_SOURCE = `// Runs after \`next build\` (output: 'export'): makes out/ the copy's own pages.
+//  1. Every page is finished by scripts/finish-page.mjs (Next's wrapper, metas and <noscript> out, the parts kept as original
+//     HTML unwrapped, the <html> / <body> attributes and the comments before <html> written, React's own image preloads out).
+//  2. Next's own _next folder (build manifests no page references, since no page carries the runtime) is removed when nothing
+//     references it, then site-files/ (what Next reserves in public/, such as the copy's own _next folder, and its own 404
+//     page) is copied into out/.
+import { cp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { finishPage } from './finish-page.mjs';
+
+const out = path.resolve('out');
+const siteFiles = path.resolve('site-files');
+const ownPreloads = JSON.parse(await readFile(path.resolve('scripts/own-preloads.json'), 'utf8').catch(() => '{}'));
+
+async function* htmlFiles(dir) {
+  for (const e of await readdir(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) yield* htmlFiles(p);
+    else if (e.name.endsWith('.html')) yield p;
+  }
+}
+// The route of an exported file: out/about/index.html -> /about/, out/index.html -> /, out/404.html -> /404.html.
+const routeOf = (file) => {
+  const rel = path.relative(out, file).split(path.sep).join('/');
+  return rel === 'index.html' ? '/' : rel.endsWith('/index.html') ? '/' + rel.slice(0, -'index.html'.length) : '/' + rel;
+};
+
 let referencesNext = false;
 for await (const file of htmlFiles(out)) {
   const html = await readFile(file, 'utf8');
-  const fixed = dropAddedPreloads(prolog(rawAttrs(unwrapRaw(dropNextHead(unwrapNext(html))))), routeOf(file));
+  const fixed = finishPage(html, ownPreloads[routeOf(file)]);
   if (fixed !== html) await writeFile(file, fixed, 'utf8');
   if (fixed.includes('/_next/')) referencesNext = true;
 }
 if (!referencesNext) await rm(path.join(out, '_next'), { recursive: true, force: true });
 if (await stat(siteFiles).then((s) => s.isDirectory(), () => false)) await cp(siteFiles, out, { recursive: true, force: true });
 console.log('after-build: pages unwrapped, site files in place');
+`;
+
+/** `npm run dev`, shipped with the project: Next's development server showing what the build ships. */
+export const DEV_SERVER_SOURCE = `// \`npm run dev\`: Next's development server, showing the pages as \`npm run build\` ships them.
+//  - site-files/ (what Next reserves in public/, such as the original's own /_next/ folder when the original was itself built
+//    with Next.js) is served first: \`next dev\` answers every /_next/ address itself, so the original's stylesheets, scripts
+//    and fonts there would not be found and the page would show unstyled.
+//  - Every page is finished as the build finishes it (scripts/finish-page.mjs) and Next's development runtime is left out, so
+//    a page is never hydrated, as in out/. Pages are compiled on request: an edit shows when the page is loaded again.
+// PORT (default 3000) and HOST (default localhost) choose the address.
+import http from 'node:http';
+import { createReadStream } from 'node:fs';
+import { readFile, stat } from 'node:fs/promises';
+import path from 'node:path';
+import { Readable } from 'node:stream';
+import next from 'next';
+import { dropDevRuntime, finishPage } from './finish-page.mjs';
+
+const port = Number(process.env.PORT) || 3000;
+const hostname = process.env.HOST || 'localhost';
+const siteFiles = path.resolve('site-files');
+const ownPreloads = JSON.parse(await readFile(path.resolve('scripts/own-preloads.json'), 'utf8').catch(() => '{}'));
+const TYPES = {
+  '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8', '.json': 'application/json', '.map': 'application/json', '.txt': 'text/plain; charset=utf-8',
+  '.xml': 'application/xml', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.webp': 'image/webp', '.avif': 'image/avif', '.ico': 'image/x-icon', '.woff': 'font/woff',
+  '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.otf': 'font/otf', '.mp4': 'video/mp4', '.webm': 'video/webm', '.pdf': 'application/pdf',
+};
+
+const app = next({ dev: true, dir: process.cwd() });
+await app.prepare();
+const handle = app.getRequestHandler();
+// Next answers on an address of its own on this machine; the server below asks it and finishes what it sends.
+const inner = http.createServer((req, res) => handle(req, res));
+await new Promise((resolve) => inner.listen(0, '127.0.0.1', resolve));
+const nextOrigin = 'http://127.0.0.1:' + inner.address().port;
+const HOP = new Set(['host', 'connection', 'keep-alive', 'transfer-encoding', 'content-length', 'content-encoding', 'accept-encoding', 'upgrade']);
+const pass = (entries) => Object.fromEntries([...entries].filter(([k]) => !HOP.has(k.toLowerCase())));
+
+/** The file of site-files/ at an address, or null. */
+async function siteFile(pathname) {
+  const file = path.join(siteFiles, pathname);
+  if (!file.startsWith(siteFiles + path.sep)) return null;
+  return (await stat(file).catch(() => null))?.isFile() ? file : null;
+}
+function sendFile(req, res, file, status = 200) {
+  res.writeHead(status, { 'content-type': TYPES[path.extname(file).toLowerCase()] ?? 'application/octet-stream', 'cache-control': 'no-store' });
+  if (req.method === 'HEAD') return res.end();
+  createReadStream(file).pipe(res);
+}
+
+http.createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    let pathname = url.pathname;
+    try { pathname = decodeURIComponent(pathname); } catch { /* keep it as sent */ }
+    const read = req.method === 'GET' || req.method === 'HEAD';
+    const file = read ? await siteFile(pathname) : null;
+    if (file) return sendFile(req, res, file);
+    const answer = await fetch(nextOrigin + (req.url ?? '/'), {
+      method: req.method, headers: pass(Object.entries(req.headers)), redirect: 'manual',
+      ...(!read && { body: req, duplex: 'half' }),
+    });
+    const html = /text\\/html/.test(answer.headers.get('content-type') ?? '');
+    // A page the project does not have: the copy's own 404 page when it has one, as out/ serves it.
+    const notFound = answer.status === 404 && html && read ? await siteFile('/404.html') : null;
+    if (notFound) return sendFile(req, res, notFound, 404);
+    if (html) {
+      const page = finishPage(dropDevRuntime(await answer.text()), ownPreloads[pathname]);
+      res.writeHead(answer.status, { ...pass(answer.headers), 'cache-control': 'no-store' });
+      return res.end(req.method === 'HEAD' ? undefined : page);
+    }
+    res.writeHead(answer.status, pass(answer.headers));
+    if (!answer.body || req.method === 'HEAD') return res.end();
+    Readable.fromWeb(answer.body).pipe(res);
+  } catch (err) {
+    console.error(err);
+    if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('Internal error: see the terminal.');
+  }
+}).listen(port, hostname, () => console.log(\`> Ready on http://\${hostname}:\${port} (the pages as the build ships them)\`));
 `;
 
 /** The import lines of a component list, relative to the file's folder. */
@@ -304,7 +425,7 @@ export default function NotFound() {
   const slug = hostSlug(pageUrl);
   await put('package.json', `${JSON.stringify({
     name: `${slug}-site`, private: true, version: '0.0.0', type: 'module',
-    scripts: { dev: 'next dev', build: 'next build && node scripts/after-build.mjs', serve: 'npx serve out' },
+    scripts: { dev: 'node scripts/dev.mjs', build: 'next build && node scripts/after-build.mjs', serve: 'npx serve out' },
     dependencies: { next: v.next, react: v.react, 'react-dom': v['react-dom'] },
     ...(Object.keys(overrides ?? {}).length && { overrides }),
   }, null, 2)}\n`);
@@ -322,7 +443,9 @@ const nextConfig = {
 export default nextConfig;
 `);
   await put('jsconfig.json', `${JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['./src/*'] } } }, null, 2)}\n`);
+  await put('scripts/finish-page.mjs', FINISH_PAGE_SOURCE);
   await put('scripts/after-build.mjs', AFTER_BUILD_SOURCE);
+  await put('scripts/dev.mjs', DEV_SERVER_SOURCE);
   await put('scripts/own-preloads.json', `${JSON.stringify(ownPreloads, null, 2)}\n`);
   await put('.gitignore', 'node_modules\n.next\nout\n');
   const fallbackCount = site.fallbacks.length;
@@ -337,12 +460,15 @@ hydrated: no Next.js runtime is sent to the visitor, so nothing is added to what
 
 \`\`\`sh
 npm install
+npm run dev        # http://localhost:3000: the pages as the build ships them, compiled again on each request
 npm run build      # next build, then scripts/after-build.mjs: the finished site is out/
 npm run serve      # serves out/ on a local address (npx downloads \`serve\` the first time)
 \`\`\`
 
-\`npm run dev\` runs the pages in Next's development server, with its own wrapper and development scripts; what visitors get
-is \`out/\`.
+\`npm run dev\` (\`scripts/dev.mjs\`) runs Next's development server behind a small server that serves \`site-files/\` first
+(Next answers every \`/_next/\` address itself, so an original built with Next.js would otherwise lose its own stylesheets and
+scripts there) and finishes each page as the build does (\`scripts/finish-page.mjs\`), without Next's development scripts:
+an edit shows when the page is loaded again. \`PORT\` and \`HOST\` choose the address.
 
 ## What the build step does
 
@@ -368,7 +494,8 @@ ${site.forms.length ? site.forms.map((f) => `- "${f.label}" on ${f.page} (${f.me
 - \`pages/\`: one file per page (\`pages/about/index.jsx\` → \`/about/\`), each importing its components; \`pages/_document.jsx\` renders each page's own \`<html>\`, \`<head>\` and \`<body>\` (\`src/documents/\`).
 - \`src/components/\`: the sections (header, main parts, footer), one per file; \`RawHtml.jsx\` carries the parts kept as original HTML.
 - \`public/\`: the copy's files as the original served them (stylesheets, scripts, images, fonts, sw.js, robots.txt, sas-forms.json). Nothing is renamed or bundled.
-- \`site-files/\`: files Next does not allow in \`public/\`, copied into \`out/\` by the build step.
+- \`site-files/\`: files Next does not allow in \`public/\`, copied into \`out/\` by the build step and served first by \`npm run dev\`.
+- \`scripts/\`: \`finish-page.mjs\` (how a rendered page becomes the copy's page), \`after-build.mjs\` (applies it to \`out/\`), \`dev.mjs\` (the development server).
 `);
 
   return {
