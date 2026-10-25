@@ -17,8 +17,8 @@ Read first: `docs/COPY-MY-SITE.md` (the plan and the rules). This file says what
 
 | # | Item | Status | Note |
 |---|---|---|---|
-| L1 | Production refuses to start with accounts off | IN PROGRESS (branch `owner-options`) | Being added there; nothing on this branch. Until merged, a production start with accounts off serves every site to everyone. |
-| L2 | Database: heartbeat per running job + lock file | OPEN (next steps item 7) | A second process on one data folder marks running jobs failed and adopts their workspaces. **Until done: deploy only with plain stop-then-start, never a zero-downtime reload** (PM2 reload, rolling update on a shared volume). Today the app is one `npm start` process, so nothing shipped reloads. |
+| L1 | Production refuses to start with accounts off | **DONE** (774fd5d, on `accounts`) | `config/index.js startupProblems`: `NODE_ENV=production` without `SAS_ACCOUNTS=1` stops the server with a "Not starting:" line before it serves anything. |
+| L2 | Database: heartbeat per running job + lock file | **DONE** (1b7e222, c61e005, on `accounts`) | One server per data folder (`config/dataLock.js`: a second one exits naming who holds it; a lock naming a dead or our own pid is stale; a replaced container waits at most 120 s), and a job is failed only when its heartbeat stopped (`jobs/liveness.js`), so a starting server never takes over a live job. Still deploy with stop-then-start (DEPLOY-TOOL.md). |
 | L3 | Preview in a sandboxed iframe with no same-origin access | **DONE, proven (2026-10-24)** | Previews are paths of the app's own address, `/preview/<token>/…` (`recreate/previewRoute.js`, `previewTokens.js`), every document sent with `Content-Security-Policy: sandbox allow-scripts` and framed with `sandbox="allow-scripts"` (plain copies `""`), never `allow-same-origin`; `/api` refuses `Origin: null` / `Sec-Fetch-Site: cross-site` (`security/foreignOrigin.js`). `test/preview-sandbox.test.js` shows the risk first (a copy on a path of the app's address framed as before read the signed-in user's account and projects from the API and the app's storage) and then that the same copy through the preview cannot (origin `null`, no cookie sent, API 403 / unreadable, cookies and storage throw, no service worker), while its own stylesheet, script and data still load. Since the same day the preview also runs the copy's script fully: addresses written in pages, stylesheets and module specifiers are moved under `/preview/<token>/` on the way out, and the addresses the script builds at run time by a shim served first in every document that may run script (`recreate/previewShim.js`: fetch, XHR, URL, element attributes, markup strings, the CSSOM, an import map for `import()`; the page sees its own address through `history.replaceState`; private in-memory stand-ins answer for storage and cookies, which the browser otherwise throws on). The shim reports counts (moved / failed / errors / blank) to the app with the token, and the Compare step says in plain words when a page could not run fully and that the downloaded copy is not affected. Proven on two as-is copies of client-rendered sites (one a bundler build, one a builder export): blank / half-drawn without the shim, complete with it. Remaining limit: a full navigation the script makes itself to a root address leaves the preview; a worker gets no shim. The downloaded copy is never touched (the rewriting happens on the way out). See docs/ACCOUNTS.md "Previews when hosted". |
 | L4 | Job queue + concurrency limits per server and per user | OPEN | Today: one global lock per process (one Analyze / Recreate / Re-audit at a time), no per-user limit, no queue across processes; `SAS_MAX_PARALLEL` caps browser contexts. Two jobs at once crashed a 15 GB machine. Size the limits from measured memory per job (peak RSS of server + browsers per job kind and page count), not from guesses. |
 | L5 | Upper time limit per job and per page | OPEN | The motion timer now grows with page length (`motionTimeFor`: at most ~4.6 min per page, 6 pages), the completion pass has `PASS_MAX_MS` 45 s per page and size, but an exact / manual run has **no job limit** (`Infinity` by design) and the capture of one very long page has none either; the as-is warm-up scroll is bounded (`preserve/scroll.js SCROLL_MAX_MS` 30 s, 54e6aaa). Needed: a hard ceiling per page and per job in production, with what was not measured reported, so one page cannot hold a server for hours. |
@@ -26,7 +26,7 @@ Read first: `docs/COPY-MY-SITE.md` (the plan and the rules). This file says what
 | L7 | Disk: storage per copy + cleanup policy | OPEN | An as-is copy keeps every original file (nyaayai homepage 4.6 MB referenced; an exact copy was 83 MB of `dist/`); retention today: latest 2 recreates keep their IR, latest 3 analyses keep screens, `pruneRecreates`; scratch folders (`sas-work`, Temp scratchpads) grow without limit. Needed: a per-copy size figure in the report, a quota per user / per site, and a scheduled cleanup of old copies, re-audits and scratch. |
 | L8 | Production config: HTTPS, Secure cookies, secrets in server `.env` only, database backups | OPEN | HTTPS is the reverse proxy's; the session cookie must be `Secure` + `HttpOnly` + `SameSite` behind it; no secret in the client bundle or the repo; SQLite backups (a copy of `app.db` + `projects/` on a schedule, restore tested once). |
 | L9 | Email: Gmail SMTP daily limit | OPEN | OTP mail goes through Gmail SMTP (OTP stage 5). Gmail caps sending (about 500 a day on a free account, 2 000 on Workspace) and throttles bursts; move to a provider (transactional mail API) before the first marketing push or when daily sign-ups approach a tenth of the cap. |
-| L10 | A deploy guide for the tool itself | OPEN | DEPLOY.md today covers only the downloaded copies (`src/copy/deploy.js`). Needed for the tool: process manager (stop-then-start, see L2), env vars (`SAS_*`, `PORT`, `APP_ORIGIN`, accounts + mail settings), the data folder and its disk, ports (API, previews 5100–5199 or the production preview path), the reverse proxy (HTTPS, WebSocket / SSE pass-through, body limits), Playwright's browser install, keep-awake / sleep settings. |
+| L10 | A deploy guide for the tool itself | **WRITTEN** (`docs/DEPLOY-TOOL.md`, 980a727, merged into `accounts`) | One Ubuntu VPS: Caddy, systemd, the data folder, backups, cleanup, the first-day checklist. Its open points are listed under "Deploy guide: open points" below. |
 | L11 | Final proof: one copy on a real static host, PageSpeed original vs copy | OPEN (recorded under "Next steps") | Temporary, `noindex`, deleted afterwards; phone and computer; the measurement host (`reaudit/measuredHost.js`) stands in for it until then. |
 | L12 | Full test suite once before the PR | OPEN | Run once, when nothing else runs on the machine (the suite's browser tests fail under load), after the last code change and before the PR. Every step until then runs related files only, one at a time. |
 
@@ -706,6 +706,31 @@ Scratch data `C:/Users/urvas/Downloads/sas-work/nyaayai-next-data` (copied from 
   www. twin) and as another domain; allowed for the first and refused for the second = an open item (reason a) "This part (<host>)
   only loads on the original's domain. It will appear once your new domain is allowed in that service's settings." Test:
   `copy-domain-lock.test.js`.
+## Deploy guide: open points (2026-10-25)
+
+Fixed on `accounts` after the guide was merged (both were "Known risks" in it, now updated there):
+- **Per-address limits behind Caddy.** Express now believes `X-Forwarded-For` only from the proxies `SAS_TRUST_PROXY` names,
+  default `loopback` (Caddy on the same machine); nobody else can choose their address, and a value that would let them
+  (`true`, a hop count, a typo) stops the server at start (`config/index.js trustProxySetting`). Sign-ups and failed sign-ins
+  are counted per real visitor again; OTP checks are counted per session, as before. Test `trust-proxy.test.js`.
+- **Fixed stack-preview ports 4501–4503.** Each run of an as-is stack server gets a free port picked for it
+  (`preserve/serveStack.js startStack`); a port another server holds is never taken for the copy (it is detected and another
+  port is tried, at most 3). Two jobs side by side (`SAS_MAX_JOBS` ≥ 2) no longer meet. Test `stack-ports.test.js`.
+
+Still open, decided when the server is set up:
+1. **Lighthouse's Chromium sandbox on Ubuntu 24.04** (DEPLOY-TOOL.md step 4). Playwright starts its browsers with
+   `--no-sandbox`, but Lighthouse's Chrome is started by `chrome-launcher` without it (`audit/lighthouse/worker.js`), and 24.04
+   restricts the user namespaces Chromium's sandbox needs (AppArmor). Untested on a real 24.04 server: run the one-line check in
+   the guide as the `sas` user; if it fails, add the AppArmor profile the guide gives. Never fix it by turning the sandbox off.
+2. **First-start order.** The guide's order matters and has not been rehearsed end to end on a fresh server: install, set the
+   `.env`, `npm run db:migrate -w server` (creates the owner from `SAS_OWNER_EMAIL`; with accounts on the server refuses to
+   start before it), `npm run mail:test`, then start the API, then Caddy (DNS must point at the server first, for the
+   certificate). Do it once on the real server following the guide line by line, and fix the guide where it differs.
+3. **Which branch, and which git remote.** The guide uses `<tool-repo-url>` / `<site-repo-url>` / `<tag>` placeholders. The
+   launch work (accounts, data lock, job limits, cleanup, production refusal, the two fixes above) is on `accounts`; nothing has
+   been pushed. Decide the launch branch (merge `accounts` into `main`, or deploy a tag of `accounts`), the remote it is pushed
+   to and who can read it, and the marketing site's repository, then fill the placeholders.
+
 ## Next steps, in order (commit after each with `--no-verify`, say the full suite was not run; nothing is pushed before the PR)
 
 1. **Step 4 — the blank render and the motion step's timeout: DONE 2026-10-24** (both fixed generally and verified live, see
@@ -741,7 +766,7 @@ Scratch data `C:/Users/urvas/Downloads/sas-work/nyaayai-next-data` (copied from 
    again. Also worth a sweep of server/src for other regex literals that lost their backslashes (a bare `d{`, `s+`, `w+` or
    an unescaped `.webp` inside `/…/`).
 6. Recorded, waiting for a decision: security headers that take effect on Next.js / Vercel (DEPLOY.md is fixed, PARKED item 3).
-7. **MUST BE DONE BEFORE LAUNCH — the database and a second process** (user, 2026-10-24; the gotcha under "Where things are
+7. **DONE (L2: 1b7e222, c61e005) — the database and a second process** (user, 2026-10-24; the gotcha under "Where things are
    kept"): (a) a **heartbeat per running job** (a `seen_at` column written with every progress update) so a starting server marks
    failed only the rows whose heartbeat is stale, and `resumeInterruptedRecreates` adopts only those; (b) a **lock file** in the
    data folder (pid, checked alive) so a second server refuses the same data folder instead of opening its database. About half

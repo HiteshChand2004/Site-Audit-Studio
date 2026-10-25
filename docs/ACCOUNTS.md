@@ -293,8 +293,8 @@ are allowed. The user's dev server (4000 / 5173) runs from `Website-Audit-exact`
 ### The global job lock, and a per-user queue
 - Today `jobs/manager.js exclusive()` runs **one job at a time across every kind and every project**, FIFO, and holds the
   keep-awake while anything waits; `lockBusy()` feeds `/api/health busy` (the dev runner waits on it). Each manager also allows one
-  job per project. Also assuming one job at a time: the fixed stack ports 4501–4503 (two as-is copies of the same stack at once would
-  collide); `audit/resources.js parallelism()` sizes browser contexts from the whole machine's free memory as if the job owned it;
+  job per project. (The fixed stack ports 4501–4503 that assumed one job at a time are gone: each run picks a free port,
+  2026-10-25.) Also assuming one job at a time: `audit/resources.js parallelism()` sizes browser contexts from the whole machine's free memory as if the job owned it;
   `SAS_MAX_PARALLEL` is global; the keep-awake (a desktop concern, off when hosted).
 - A per-user queue needs: a job record with `owner_id` (and plan), a real queue (Phase 6: BullMQ + Redis, or a DB-backed queue)
   with N worker slots instead of one lock; a fairness rule (round-robin per user, per-plan concurrency, e.g. Free 1, paid 2); per-job

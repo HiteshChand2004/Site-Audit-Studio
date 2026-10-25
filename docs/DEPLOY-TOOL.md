@@ -104,8 +104,8 @@ sudo timedatectl set-timezone UTC
 sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
 echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
-# Firewall: SSH and the web only. Every app port (3000, 4000, the measurement servers 5100-5199 and 4501-4503,
-# random throwaway ports) stays on 127.0.0.1 and must not be opened.
+# Firewall: SSH and the web only. Every app port (3000, 4000, the measurement servers 5100-5199,
+# the stack previews and the other throwaway servers on random ports) stays on 127.0.0.1 and must not be opened.
 sudo ufw allow OpenSSH && sudo ufw allow 80/tcp && sudo ufw allow 443/tcp && sudo ufw --force enable
 ```
 
@@ -269,6 +269,8 @@ Notes on these values:
 - `APP_ORIGIN`: the previews' `frame-ancestors`. A wrong value means the tool cannot frame previews.
 - `SAS_OWNER_EMAIL`: read by `db:migrate`, which creates the owner account from it.
 - `SAS_BIND_HOST`: Caddy runs on the same machine, so the API stays on loopback.
+- `SAS_TRUST_PROXY`: leave it unset. The default, `loopback`, believes the visitor address Caddy passes on (it runs on this
+  machine) and nobody else's. Set it only when the proxy runs elsewhere (its address or subnet, e.g. `10.0.0.5`).
 - `SAS_KEEP_AWAKE`: keeping the machine awake is a laptop concern. On a server, `systemd-inhibit` is pointless.
 - `SAS_MAX_JOBS`: start at 1, see section 1.
 - `SAS_CLEANUP_DRY_RUN`: 1 for the first days, so cleanup only logs what it would remove. Then set it to 0.
@@ -687,15 +689,11 @@ provider is probably blocking outbound 587 (see the top of this guide).
   widget exactly, and the report names it as an open item: "only loads on the original's domain … will appear once your new
   domain is allowed in that service's settings" (`preserve/domainLock.js`). It is not fixable on our side. The same applies to
   the preview, which runs on `example.com`.
-- **Sign-up rate limits see one address for everybody (found while writing this guide; not fixed).** `accounts/routes.js`
-  limits sign-ups to 20 an hour per `req.ip`, and failed sign-ins per address + IP. Express does not trust proxy headers unless
-  told to, and `src/index.js` never sets `trust proxy`. So behind Caddy, every visitor's `req.ip` is 127.0.0.1 and the sign-up
-  limit becomes **20 sign-ups an hour for the whole site**. This needs a one-line code change before launch
-  (`app.set('trust proxy', 'loopback')` in `src/index.js`, safe because the API binds to loopback). This branch is docs only,
-  so it is recorded here, not made.
-- **Two jobs at once collide on fixed ports.** As-is stack previews use fixed ports 4501 (MERN), 4502 (React + Vite) and 4503
-  (Next.js) (`preserve/stage.js PORT`). `docs/ACCOUNTS.md` notes that two as-is copies of the same stack at once would collide.
-  This matters only with `SAS_MAX_JOBS` ≥ 2. **Unsure** how it fails. Watch for it before raising the setting.
+- **Sign-up limits behind Caddy (fixed after this guide was written).** Behind a proxy every visitor reaches the API from
+  127.0.0.1. The API now believes `X-Forwarded-For` only from the proxies `SAS_TRUST_PROXY` names (default `loopback`), so the
+  sign-up and failed sign-in limits count each real visitor, and nobody can choose their own address.
+- **Stack previews of two jobs at once (fixed after this guide was written).** As-is stack previews used fixed ports 4501–4503;
+  each run now gets a free port of its own, so `SAS_MAX_JOBS` ≥ 2 no longer collides on them.
 - **Two jobs side by side were never measured for memory.** The 2.2 GB per job is one run, and the memory gate is per start, not
   per running job. Raise `SAS_MAX_JOBS` only after watching.
 - **Waiting in line.** With one slot, the next person waits for the whole job in front: an as-is copy is about 20 minutes a page,
@@ -711,6 +709,6 @@ provider is probably blocking outbound 587 (see the top of this guide).
 - **Previews.** A full navigation that a copy's own script makes to a root address leaves the preview, and a worker gets no shim
   (ACCOUNTS.md "Previews when hosted"). A MERN copy's preview is the client only: forms need the downloaded project's own server.
 - **Launch items still open in HANDOFF**: L4 (per-plan concurrency), L5 (a hard per-page ceiling), L6, L7 (per-user disk quota),
-  L9, L11, L12 (full test suite once before the PR). Some rows of that table are older than the code: L1 (production refuses
-  accounts off) and L2 (heartbeat + data lock) are in the code on this branch (`config/index.js startupProblems`,
+  L9, L11, L12 (full test suite once before the PR). L1 (production refuses accounts off) and L2 (heartbeat + data lock) are
+  done (`config/index.js startupProblems`,
   `config/dataLock.js`, `jobs/liveness.js`).

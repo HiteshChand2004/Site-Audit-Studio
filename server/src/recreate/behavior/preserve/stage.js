@@ -30,7 +30,6 @@ import { LOGS_DIR } from '../../../config/paths.js';
 
 /** The stacks an as-is copy can be packaged into (the plain copy and the three app stacks). */
 export const ASIS_STACKS = ['html', 'react-vite', 'nextjs', 'mern'];
-const PORT = { 'react-vite': 4502, nextjs: 4503, mern: 4501 };
 /** The lifted copy and its page set, kept in the job's folder: a repack for another stack starts from them. */
 export const ASIS_DIR = 'as-is';
 export const ASIS_PAGES_FILE = path.join(ASIS_DIR, 'pages.json');
@@ -331,7 +330,7 @@ export async function asIsStage(ctx) {
       servers.push(served);
       base = served.url.replace(/\/$/, '');
     } else {
-      const s = await startStack(stack, outDir, PORT[stack]);
+      const s = await startStack(stack, outDir);
       servers.push(s);
       base = s.url;
     }

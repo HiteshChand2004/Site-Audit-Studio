@@ -104,7 +104,7 @@ test('the Next.js as-is package sends the security headers (next start applies n
   const outDir = path.join(root, 'next');
   await packLifted({ stack: 'nextjs', copyDir, outDir, pageUrl: 'https://www.example-original.dev/' });
   await buildStack('nextjs', outDir);
-  const server = await startStack('nextjs', outDir, 4621);
+  const server = await startStack('nextjs', outDir);
   try {
     const m = await measureServed({ base: server.url, stack: 'nextjs', copyDir, fixedPages: [{ path: '/', outPath: 'index.html' }], files: ['robots.txt'] });
     const o = servedOutcome(m);

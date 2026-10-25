@@ -24,7 +24,48 @@
 //                        SMTP_HOST a development server writes each mail to its log instead; production with accounts on
 //                        refuses to start, because sign-up would make accounts nobody can ever verify. SMTP_PASS is never logged.
 
+//   SAS_TRUST_PROXY      which proxies in front of the API are believed when they say who the visitor is (X-Forwarded-For,
+//                        X-Forwarded-Proto): the per-address limits (sign-up, sign-in) and req.protocol come from it. Default
+//                        "loopback": a proxy on this computer (Caddy, nginx) is believed, nobody else, so a visitor who sends
+//                        X-Forwarded-For directly is ignored and one behind the proxy cannot put a made-up address in front of
+//                        theirs. Otherwise a comma list of addresses, subnets (10.0.0.0/8) or the names loopback, linklocal,
+//                        uniquelocal; "off" believes nobody. "true" or a hop count would let any visitor choose their own
+//                        address: the server refuses to start with one.
+
+import { isIP } from 'node:net';
+
 export const DEFAULT_BIND_HOST = '127.0.0.1';
+export const DEFAULT_TRUST_PROXY = 'loopback';
+const PROXY_NAMES = new Set(['loopback', 'linklocal', 'uniquelocal']);
+
+/** One entry of SAS_TRUST_PROXY: a name Express knows, or an address with an optional prefix length. */
+function proxyEntryOk(entry) {
+  if (PROXY_NAMES.has(entry)) return true;
+  const [addr, bits, extra] = entry.split('/');
+  const kind = isIP(addr);
+  if (!kind || extra !== undefined) return false;
+  if (bits === undefined) return true;
+  const n = Number(bits);
+  return /^\d+$/.test(bits) && n >= 0 && n <= (kind === 4 ? 32 : 128);
+}
+
+/**
+ * Express's "trust proxy" value from SAS_TRUST_PROXY: false (believe nobody) or the list of trusted proxies. Never true or a
+ * number. An unusable value gives `problem` (startupProblems refuses to start) and believes nobody meanwhile.
+ * @returns {{ value: false | string, problem: string | null }}
+ */
+export function trustProxySetting() {
+  const raw = (process.env.SAS_TRUST_PROXY ?? '').trim().toLowerCase();
+  const v = raw || DEFAULT_TRUST_PROXY;
+  if (['off', '0', 'false', 'none'].includes(v)) return { value: false, problem: null };
+  const entries = v.split(',').map((s) => s.trim()).filter(Boolean);
+  const bad = entries.filter((e) => !proxyEntryOk(e));
+  if (!entries.length || bad.length) {
+    return { value: false, problem: `SAS_TRUST_PROXY must list the proxies in front of the API (addresses, subnets, or loopback / linklocal / uniquelocal) or be "off"; `
+      + `"${process.env.SAS_TRUST_PROXY}" ${/^(true|yes|\d+)$/.test(v) ? 'would believe any visitor about their own address' : `has entries that are none of these: ${bad.join(', ')}`}.` };
+  }
+  return { value: entries.join(', '), problem: null };
+}
 
 /** The address the API listens on. */
 export function bindHost() {
@@ -124,6 +165,8 @@ export function startupNotices() {
  */
 export function startupProblems() {
   const problems = [];
+  const trust = trustProxySetting().problem;
+  if (trust) problems.push(trust);
   if (allowLocalhostRequested() && !isLoopbackHost(bindHost())) {
     problems.push(`SAS_ALLOW_LOCALHOST=1 is only allowed when the API listens on this computer only (SAS_BIND_HOST is ${bindHost()}). `
       + 'Remove SAS_ALLOW_LOCALHOST, or bind to 127.0.0.1.');

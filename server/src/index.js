@@ -20,7 +20,7 @@ import { stopAllAsIsPreviews } from './recreate/behavior/preserve/asisPreview.js
 import { previewRouter, PREVIEW_PREFIX } from './recreate/previewRoute.js';
 import { inlineScriptHashes } from './recreate/inlineScripts.js';
 import { foreignOriginCheck } from './security/foreignOrigin.js';
-import { accountsEnabled, bindHost, isLoopbackHost } from './config/index.js';
+import { accountsEnabled, bindHost, isLoopbackHost, trustProxySetting } from './config/index.js';
 import { db } from './db/index.js';
 import { pendingMigrations } from './db/apply.js';
 
@@ -31,6 +31,9 @@ const HOST = bindHost();
 // row is touched; the modules above only opened the database and applied its schema.
 holdDataLock({ port: PORT });
 const app = express();
+// Who the visitor is behind a reverse proxy: only the proxies SAS_TRUST_PROXY names are believed (default: one on this computer),
+// so req.ip is the real visitor for the per-address limits and nobody can choose it with X-Forwarded-For (config/index.js).
+app.set('trust proxy', trustProxySetting().value);
 
 app.use(cors({ origin: ['http://localhost:5173', 'http://127.0.0.1:5173'] }));
 app.use(express.json({ limit: '1mb' }));
