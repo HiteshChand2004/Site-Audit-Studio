@@ -52,6 +52,12 @@ to 2845 MB. The server process peaked at 702 MB RSS; the rest was Chromium and L
 up to about 1.8 GB (`audit/resources.js`). A job does not start until `SAS_JOB_MIN_FREE_MB` (default 2048) is free. Two jobs at
 once once crashed a 15 GB laptop, in a mode that was not recorded.
 
+**A conversion build** (React + Vite or Next.js copy) is one extra Node process (`build/toolchain.js runToolchain`: `vite build`
++ prerender, or `next build` + an after-build step), with a 6-minute (Vite) / 8-minute (Next.js) limit. On the one-page nyaayai
+runs it took under half a minute and free memory dipped by **about 0.3–0.4 GB** while it ran (sampled once every few seconds, so
+the real peak may be higher). The job's lowest point stayed in its browser checks, so the 2.2 GB above still holds. **Unsure**:
+not measured on a site with many pages; `next build` starts several workers on a machine with more CPUs.
+
 **How long a job runs** (measured):
 
 | Job | Typical | Worst |
@@ -67,12 +73,16 @@ once once crashed a 15 GB laptop, in a mode that was not recorded.
 |---|---|
 | Clean copy | 16–235 MB |
 | As-is copy of one page | ~130 MB |
+| + converted to React + Vite (kept with the copy) | + ~75 MB (the copy twice: `public/` and the built `dist/`) |
+| + converted to Next.js (kept with the copy) | + ~145 MB (`public/`, the built `out/`, and Next's `.next/` build folder, 71 MB, which stays) |
 | Analysis | 1–3 MB |
 | Dead workspace | 10–118 MB, removed by the cleanup |
 
 With the default 30-day retention, 100 websites hold about 10–25 GB of older copies plus every site's newest copy (never removed
-by age). On top of that come the installs: each release's `node_modules`, the three toolchains and Playwright's Chromium. That is
-**probably 2–4 GB per release**. **Unsure**: I have not measured it on Linux, and the guide keeps 3 releases. Exact mode
+by age). The conversion figures are the nyaayai homepage runs of 2026-10-25 (one page, an 85 MB as-is copy): each stack copies the
+whole as-is copy into its project, so they grow with the copy. On top of that come the installs: each release's `node_modules`,
+the three toolchains (measured on the development machine: next 321 MB, mern 61 MB, react-vite 53 MB, so **~0.45 GB**) and
+Playwright's Chromium. That is **probably 2–4 GB per release**. **Unsure**: I have not measured it on Linux, and the guide keeps 3 releases. Exact mode
 (owner-only) refuses to start with less than 10 GB free.
 
 **Recommendation:**
@@ -152,7 +162,8 @@ prebuilt Linux binaries.
 
 Replace `<tool-repo-url>` / `<site-repo-url>` with your Git remotes and `<tag>` with the commit or tag you deploy.
 **Unsure: which branch is the launch branch has not been decided.** The launch-readiness work (data lock, job limits, cleanup,
-production refusal) lives on `job-lock` / `owner-options`, and this branch, `deploy-guide`, has it.
+production refusal), the two fixes after this guide and the React + Vite / Next.js conversions are on `accounts` (MERN
+conversion is on `convert-mern`, not merged yet).
 
 ```bash
 sudo -iu sas
@@ -169,20 +180,54 @@ exit
 sudo /srv/sas/releases/<tag>/node_modules/.bin/playwright install-deps chromium
 ```
 
-**The build toolchains** for converting copies to Next.js / React + Vite / MERN. These are not server dependencies: each one is
-`server/toolchains/<id>/` with pinned versions, installed with `--ignore-scripts` (`server/scripts/setup-toolchains.js`):
+**The build toolchains** for the React + Vite, Next.js and MERN copies. These are not server dependencies: each one is the
+folder `server/toolchains/<id>/` of the release, with its own `package.json` (in git) and its own `node_modules` (not in git).
+The code finds a toolchain only there (`config/paths.js toolchainDir` = `<release>/server/toolchains/<id>`), and a build links
+the copy's project to that `node_modules` for the time of the build, then removes the link. Nothing else is needed: no global
+install, no environment setting. (In the development worktrees these `node_modules` folders are links to another checkout,
+`Website-Audit-exact`; that is a development shortcut only. On the server, install them for real in every release.)
+
+Install all three, as the `sas` user, on the server itself (never copy `node_modules` from another machine: Next.js ships
+a native compiler per platform). This needs the npm registry once; `--ignore-scripts` means no package runs code at install:
 
 ```bash
 sudo -iu sas
 cd /srv/sas/releases/<tag>
 npm run setup:toolchains -w server -- react-vite next mern
-npm run setup:toolchains -w server       # no argument = status; all three should say "installed"
+npm run setup:toolchains -w server       # no argument = status; all three must say "installed (…versions…)"
 exit
 ```
 
-The pinned versions are: react-vite = vite 6.3.5 + plugin-react 4.5.0 + react 19.1.0; next = next 15.5.27 + react 19.1.9;
-mern = react-vite's + express 5.2.1, compression 1.8.2, mongodb 7.7.0. Without a toolchain, the stack build in the app says what
-command to run (`GET /api/stacks` → `setup`).
+The pinned versions (`server/toolchains/<id>/package.json`):
+
+| Toolchain | Used for | Pinned packages | Pinned underneath (`overrides`) |
+|---|---|---|---|
+| `react-vite` | React + Vite copies (conversion, and the packed fallback) | vite 6.3.5, @vitejs/plugin-react 4.5.0, react + react-dom 19.1.0, gsap 3.15.0, motion 13.4.6 | rollup 4.40.2, framer-motion 13.4.6, motion-dom 13.4.5, motion-utils 13.3.0 |
+| `next` | Next.js copies (`next build`, and `next start` for a packed copy's check) | next 15.5.27, react + react-dom 19.1.9, gsap 3.15.0, motion 13.4.6 | framer-motion 13.4.6, motion-dom 13.4.5, motion-utils 13.3.0 |
+| `mern` | MERN copies (runs the copy's Express server during the checks; builds the client of a clean MERN stack) | the react-vite list + express 5.2.1, compression 1.8.2, mongodb 7.7.0 | as react-vite |
+
+**Check they work** (as `sas`, in the release folder):
+
+```bash
+npm run setup:toolchains -w server                                              # all three "installed"
+node server/toolchains/react-vite/node_modules/vite/bin/vite.js --version       # vite/6.3.5 linux-x64 …
+node server/toolchains/next/node_modules/next/dist/bin/next --version            # Next.js v15.5.27
+node server/toolchains/mern/node_modules/vite/bin/vite.js --version             # vite/6.3.5 linux-x64 …
+node -e "console.log(require('./server/toolchains/mern/node_modules/express/package.json').version)"   # 5.2.1
+# A real build with no browser (temporary data folder, never /srv/sas/data; one at a time):
+npm test -w server -- test/convert-react-build.test.js     # React + Vite: builds a converted copy, compares every page
+npm test -w server -- test/copy-served.test.js             # Next.js: next build + next start of a packaged copy
+npm test -w server -- test/stack-ports.test.js             # MERN: the toolchain is installed and stack servers get free ports
+```
+
+If a toolchain is missing, a copy for that stack fails with "The <id> toolchain is not installed. Run: npm run setup:toolchains
+-w server -- <id>" (`GET /api/stacks` also shows `toolchainInstalled` and the command). The conversions need no system package
+beyond Node and no new setting in `api.env`: the build runs with a fixed, minimal environment (`build/toolchain.js`: telemetry
+off, `CI=1`, `NODE_ENV=production`).
+
+**Unsure / to know**: the setup installs with `--no-package-lock`, so only the packages in the table are pinned; the packages
+*they* pull in are the newest that fit on the day of the install. Two releases installed a week apart can build with different
+sub-packages. The status line checks only the table. See "Known risks".
 
 **Lighthouse** needs nothing beyond that Chromium. **Unsure (the one install step most likely to bite): Chromium's sandbox on
 Ubuntu 24.04.** Playwright launches its own browsers with `--no-sandbox`, but Lighthouse's Chrome is started by
@@ -694,6 +739,12 @@ provider is probably blocking outbound 587 (see the top of this guide).
   sign-up and failed sign-in limits count each real visitor, and nobody can choose their own address.
 - **Stack previews of two jobs at once (fixed after this guide was written).** As-is stack previews used fixed ports 4501–4503;
   each run now gets a free port of its own, so `SAS_MAX_JOBS` ≥ 2 no longer collides on them.
+- **Toolchain installs are not locked.** `setup:toolchains` runs `npm install --no-package-lock` (`scripts/setup-toolchains.js`),
+  so a new release's toolchains can get newer sub-packages than the last one had (only the direct packages and the
+  `overrides` are pinned; Rollup is pinned because a newer one took minutes per build). After installing a release, run the
+  checks in step 4 before switching to it. Fixing this means committing a lockfile per toolchain (a code change, not done).
+- **Next.js copies keep their `.next/` build folder** (71 MB on a one-page copy) inside the copy's folder until the copy itself
+  is removed by retention; the cleanup does not remove it (`jobs/cleanup.js` removes only crash leftovers). Counted in step 1.
 - **Two jobs side by side were never measured for memory.** The 2.2 GB per job is one run, and the memory gate is per start, not
   per running job. Raise `SAS_MAX_JOBS` only after watching.
 - **Waiting in line.** With one slot, the next person waits for the whole job in front: an as-is copy is about 20 minutes a page,

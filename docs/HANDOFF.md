@@ -761,6 +761,20 @@ Still open, decided when the server is set up:
    been pushed. Decide the launch branch (merge `accounts` into `main`, or deploy a tag of `accounts`), the remote it is pushed
    to and who can read it, and the marketing site's repository, then fill the placeholders.
 
+Checked against the conversions (2026-10-25, after `convert-react` was merged; DEPLOY-TOOL.md steps 1, 4 and 14 updated):
+- **Toolchains are found only at `<release>/server/toolchains/<id>/node_modules`** (`config/paths.js toolchainDir`). That is
+  a plain folder; the links to `Website-Audit-exact` in the worktrees are a development shortcut, so a server just runs
+  `npm run setup:toolchains -w server -- react-vite next mern` in each release. No code change needed for that.
+- **Not locked**: the setup installs with `--no-package-lock`, so sub-packages float between installs; only the direct
+  packages and `overrides` are pinned (and only those are checked by the status line). Open, code change not made:
+  commit a lockfile per toolchain and install with `npm ci`.
+- **Disk**: a converted copy adds the as-is copy again in the stack project (React + Vite +75 MB, Next.js +145 MB on nyaayai's
+  85 MB copy); Next.js leaves `.next/` (71 MB) in the copy's folder, never cleaned before retention removes the copy.
+  Toolchains ~0.45 GB per release (next 321 MB). Memory: a build is ~0.3–0.4 GB extra for under half a minute on one page
+  (coarse samples); not measured on many pages.
+- No new setting or system package: builds run with a fixed minimal environment (`build/toolchain.js`).
+- MERN conversion (`convert-mern`) does not change the toolchains; re-check this list when it is merged.
+
 ## Next steps, in order (commit after each with `--no-verify`, say the full suite was not run; nothing is pushed before the PR)
 
 1. **Step 4 — the blank render and the motion step's timeout: DONE 2026-10-24** (both fixed generally and verified live, see
