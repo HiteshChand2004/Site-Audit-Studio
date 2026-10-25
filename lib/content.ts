@@ -507,7 +507,11 @@ export const PLATFORMS = {
   ],
 };
 
-/** The four output stacks. Trees and commands are those of the tool's real download (docs/stack-trees-check.md). */
+/**
+ * The four output stacks. Trees and commands are those of the tool's real download: Plain HTML from docs/stack-trees-check.md;
+ * React + Vite, Next.js and MERN from the converter (server/src/recreate/convert/{react,next,mern}.js) and its nyaayai outputs.
+ * Commands are the package's own scripts.
+ */
 export const STACK_CARDS = {
   title: 'Four stacks. One run.',
   lead: 'Pick a stack, preview the copy, then download the whole project as one .zip: every file, plus the deploy steps and the report. Every stack looks the same as the original.',
@@ -532,24 +536,24 @@ export const STACK_CARDS = {
       name: 'React + Vite',
       tag: 'React components, for teams that work in React.',
       logos: [{ name: 'React', logo: 'react' }, { name: 'Vite', logo: 'vite' }],
-      tree: ['package.json', 'vite.config.js', 'src/entry.js', 'public/  (the copy)'],
-      run: 'npm install · npm run preview',
+      tree: ['package.json', 'src/pages/', 'src/components/', 'scripts/ · public/'],
+      run: 'npm install · npm run dev · npm run build',
     },
     {
       id: 'nextjs',
       name: 'Next.js',
       tag: 'Next.js pages and components, for teams that work in Next.js.',
       logos: [{ name: 'Next.js', logo: 'nextdotjs' }],
-      tree: ['package.json', 'next.config.mjs', 'app/layout.jsx', 'public/  (the copy)'],
-      run: 'npm install · npm run build · npm run start',
+      tree: ['package.json', 'pages/', 'src/components/', 'scripts/ · public/'],
+      run: 'npm install · npm run dev · npm run build',
     },
     {
       id: 'mern',
       name: 'MERN',
       tag: 'The same React client plus an Express + MongoDB server that saves the site’s own forms.',
       logos: [{ name: 'MongoDB', logo: 'mongodb' }, { name: 'Express', logo: 'express' }, { name: 'React', logo: 'react' }, { name: 'Node.js', logo: 'nodedotjs' }],
-      tree: ['package.json', 'server/src/', 'server/forms.json', 'client/dist/  (the copy)'],
-      run: 'npm install · npm start',
+      tree: ['package.json', 'client/  (the React + Vite project)', 'server/src/', 'server/forms.json'],
+      run: 'npm run install:all · npm run build · npm start',
     },
   ],
 } as const;
