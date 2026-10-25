@@ -867,6 +867,13 @@ Checked against the conversions (2026-10-25, after `convert-react` was merged; D
     colour thresholds, 3-vs-capture, a width mismatch, masked areas): every result deep-equal to the old code, six runs.
     The 15 gate verdicts, median of 3: 78.2 s → 24.4 s; per copied page (visual 1440 + 390 + fix gate) nyaayai −15 s,
     sankalpam −10 s, parchaa −6 s.
+  - *Lift and referenced files downloaded 6 at once* (`preserve/prefetch.js`, `AT_ONCE` 6): `pageLift.js` lists, before each
+    loop, the files the loop will download (the same filters as `localize`) and starts them ahead; the loop still takes
+    each result in its own order, so names, hashes and the manifest are decided exactly as before. `referenced.js` does the
+    same per round, within its file budget. Proof: the kept captures of parchaa, nyaayai and sankalpam lifted with the old
+    and the new code, back to back: every file's sha256 (216 / 475 / 95 files), the lift result, the manifest and the
+    referenced result deep-equal. Times: parchaa lift 28.1 → 18.4 s, referenced 10.9 → 3.6 s; sankalpam lift 12.8 → 2.8 s;
+    nyaayai referenced ~14 → ~4 s, its lift unchanged (~90 s: one 6400 px PNG, bandwidth-bound either way).
 
 ## Next steps, in order (commit after each with `--no-verify`, say the full suite was not run; nothing is pushed before the PR)
 

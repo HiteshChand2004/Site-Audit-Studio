@@ -9,6 +9,7 @@ import { copyFile, mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { downloadAsset } from '../../assets/download.js';
 import { localPathOf, storableAsIs } from './pageLift.js';
+import { createPrefetch } from './prefetch.js';
 
 /** The extensions of files a copy holds (pages, which have none, are never fetched this way). */
 const FILE_EXT = 'm?js|css|png|jpe?g|gif|webp|avif|svg|ico|mp4|webm|ogv|mov|mp3|ogg|wav|m4a|woff2?|ttf|otf|eot|wasm|json|webmanifest|pdf';
@@ -141,18 +142,25 @@ export async function fetchReferenced({ outDir, pageUrl, originHosts, manifest, 
       }
       result.named += wanted.size;
       if (!wanted.size) break;
+      const optsOf = (url) => {
+        const media = MEDIA_EXT.test(new URL(url).pathname);
+        return {
+          dir: tmp, kind: media ? 'media' : 'image', attempts: 3, idleMs: 20000,
+          maxBytes: media ? REFERENCED_MAX_BYTES.media : REFERENCED_MAX_BYTES.other,
+          referer: new URL(pageUrl).origin,
+        };
+      };
+      // The round's files are started several at once, within the file budget (prefetch.js); the loop below takes each
+      // answer in its own order, so what is kept, where, and when the budget stops it are as when they came one by one.
+      const prefetch = createPrefetch(fetchImpl);
+      for (const url of [...wanted.keys()].slice(0, Math.max(0, REFERENCED_BUDGET.files - result.fetched.length))) prefetch.ahead(url, url, optsOf(url));
       for (const [url, w] of wanted) {
         asked.add(url);
         if (result.fetched.length >= REFERENCED_BUDGET.files || bytes >= REFERENCED_BUDGET.bytes) {
           result.leftOver++;
           continue;
         }
-        const media = MEDIA_EXT.test(new URL(url).pathname);
-        const res = await fetchImpl(url, {
-          dir: tmp, kind: media ? 'media' : 'image', attempts: 3, idleMs: 20000,
-          maxBytes: media ? REFERENCED_MAX_BYTES.media : REFERENCED_MAX_BYTES.other,
-          referer: new URL(pageUrl).origin,
-        });
+        const res = await prefetch.take(url, url, optsOf(url));
         if (!res.ok) {
           // A name in a bundle that the original does not serve either is not a file of the site: counted, not listed.
           // A single-page app answers every path with its page: that is not a file either.
@@ -168,6 +176,8 @@ export async function fetchReferenced({ outDir, pageUrl, originHosts, manifest, 
         bytes += res.bytes ?? 0;
         result.fetched.push({ url, path: w.local, bytes: res.bytes ?? 0 });
       }
+      // Files started ahead that the budget then left out finish before the next round (and before the folder goes).
+      await prefetch.settle();
     }
   } finally {
     await rm(tmp, { recursive: true, force: true });

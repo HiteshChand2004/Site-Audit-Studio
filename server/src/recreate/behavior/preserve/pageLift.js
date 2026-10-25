@@ -18,6 +18,7 @@ import { RULES } from '../../../detection/engine.js';
 import { rewriteHosts } from './hostRewrite.js';
 import { downloadAsset } from '../../assets/download.js';
 import { rangesOf, sliceOf, RANGED_MAX_BYTES } from './ranged.js';
+import { createPrefetch } from './prefetch.js';
 
 /** Largest file the lift downloads at build time (bytes). */
 export const LIFT_MAX_BYTES = 25 * 1024 * 1024;
@@ -263,11 +264,47 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
     return local;
   };
 
+  // The downloads each walk below will certainly make are started ahead of it, several at once (prefetch.js); the walk takes
+  // each answer where it asks for it, so names, the file list and its order are those of a walk that fetched one by one.
+  const prefetch = createPrefetch(fetchImpl);
+  const liftOpts = (kind) => ({ dir: tmp, kind: DOWNLOAD_KIND[kind] ?? 'image', maxBytes: LIFT_MAX_BYTES, attempts: LIFT_ATTEMPTS });
+  const startAhead = async (list) => {
+    if (!fetch || !list.length) return;
+    await mkdir(tmp, { recursive: true });
+    for (const [abs, kind] of list) prefetch.ahead(`${kind}|${abs}`, abs, liftOpts(kind));
+  };
+  /** A URL a walk would download (not excluded, not in the record), as localize resolves it; null when it would not. */
+  const wouldDownload = (raw, base = pageUrl) => {
+    if (!raw || /^(data|blob|javascript|#|mailto|tel)/i.test(raw.trim())) return null;
+    let abs;
+    try {
+      abs = new URL(raw.trim(), base).href.split('#')[0];
+    } catch {
+      return null;
+    }
+    return excluded.has(abs) || byUrl.has(abs) ? null : abs;
+  };
+  /** The url() references rewriteCss downloads (outside @font-face, whose sources are decided by the record first). */
+  const cssDownloads = (css, base) => {
+    const list = [];
+    for (const m of String(css).replace(/@font-face\s*\{[^}]*\}/g, '').matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g)) {
+      if (/^(data|blob|#|\/)/i.test(m[2].trim())) continue;
+      try {
+        if (decodeURIComponent(m[2].trim()).startsWith('#')) continue;
+      } catch {
+        continue;
+      }
+      const abs = wouldDownload(m[2], base);
+      if (abs) list.push([abs, 'media']);
+    }
+    return list;
+  };
+
   /** Downloads a file the record lacks, once, at build time, to its path on the copy. */
   const download = async (abs, kind) => {
     downloads.tried++;
     await mkdir(tmp, { recursive: true });
-    const res = await fetchImpl(abs, { dir: tmp, kind: DOWNLOAD_KIND[kind] ?? 'image', maxBytes: LIFT_MAX_BYTES, attempts: LIFT_ATTEMPTS });
+    const res = await prefetch.take(`${kind}|${abs}`, abs, liftOpts(kind));
     if (!res.ok) {
       downloads.failed++;
       downloads.failedUrls.push({ url: abs, reason: res.reason });
@@ -305,7 +342,40 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
     return raw;
   };
 
-  for (const el of $('script[src], link[href], img[src], source[src], source[srcset], video[src], video[poster], iframe[src], img[srcset]').toArray()) {
+  const LOADED = 'script[src], link[href], img[src], source[src], source[srcset], video[src], video[poster], iframe[src], img[srcset]';
+  // What the walk below downloads, in its order: an element's own address, then its srcset, then a poster (an excluded
+  // address removes the element, so the rest of it is never asked for).
+  const htmlAhead = [];
+  for (const el of $(LOADED).toArray()) {
+    const node = $(el);
+    const tag = el.name;
+    const attr = tag === 'link' ? 'href' : 'src';
+    const rel = node.attr('rel') ?? '';
+    if (tag === 'link' && !/stylesheet|icon|manifest|preload|modulepreload/.test(rel)) continue;
+    if (node.attr(attr)) {
+      const raw = node.attr(attr);
+      let abs = null;
+      try {
+        abs = raw && !/^(data|blob|javascript|#|mailto|tel)/i.test(raw.trim()) ? new URL(raw.trim(), pageUrl).href.split('#')[0] : null;
+      } catch {
+        abs = null;
+      }
+      if (abs && excluded.has(abs)) continue;
+      const own = wouldDownload(raw);
+      if (own) htmlAhead.push([own, kindOfTag(tag, rel)]);
+    }
+    for (const part of (node.attr('srcset') ?? '').split(',')) {
+      const own = node.attr('srcset') ? wouldDownload(part.trim().split(/\s+/)[0]) : null;
+      if (own) htmlAhead.push([own, 'media']);
+    }
+    if (tag === 'video' && node.attr('poster')) {
+      const own = wouldDownload(node.attr('poster'));
+      if (own) htmlAhead.push([own, 'media']);
+    }
+  }
+  await startAhead(htmlAhead);
+
+  for (const el of $(LOADED).toArray()) {
     const node = $(el);
     const tag = el.name;
     const attr = tag === 'link' ? 'href' : 'src';
@@ -425,6 +495,18 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
     }
   }
   // Stylesheets: their url() references point at the same copies (the record, or a download).
+  // What they and the document's own style blocks download is started first (the walks below take the answers in order).
+  const cssAhead = [];
+  for (const f of files.filter((x) => x.kind === 'style')) cssAhead.push(...cssDownloads(await readFile(path.join(outDir, f.local), 'utf8').catch(() => ''), f.url));
+  for (const st of $('style').toArray()) {
+    const css = $(st).html() ?? '';
+    if (/url\(|@font-face/.test(css)) cssAhead.push(...cssDownloads(css, pageUrl));
+  }
+  for (const el of $('[style]').toArray()) {
+    const style = $(el).attr('style') ?? '';
+    if (/url\(/.test(style)) cssAhead.push(...cssDownloads(style, pageUrl));
+  }
+  await startAhead(cssAhead);
   for (const f of files.filter((x) => x.kind === 'style')) {
     const target = path.join(outDir, f.local);
     const css = await readFile(target, 'utf8');
@@ -515,6 +597,22 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   // each one the record lacks is downloaded at build time (at most JS_ASSET_LIMIT), and the script points at the copy.
   const JS_ASSET = /https:\/\/[a-z0-9.-]+\/[^\s"'`<>()\\]+?\.(?:svg|png|jpe?g|webp|gif|avif|woff2?|ttf|otf|mp4|webm)(?=["'`\s)])/gi;
   let jsDownloads = 0;
+  {
+    // Started ahead: the same addresses in the same order, up to the same limit.
+    const seen = new Set(files.map((x) => x.url));
+    const jsAhead = [];
+    for (const f of files.filter((x) => x.kind === 'script')) {
+      const text = await readFile(path.join(outDir, f.local), 'utf8').catch(() => null);
+      if (text === null) continue;
+      for (const raw of new Set(text.match(JS_ASSET) ?? [])) {
+        const abs = raw.split('#')[0];
+        if (excluded.has(abs) || seen.has(abs) || byUrl.has(abs) || jsAhead.length >= JS_ASSET_LIMIT) continue;
+        seen.add(abs);
+        jsAhead.push([abs, 'image']);
+      }
+    }
+    await startAhead(jsAhead);
+  }
   for (const f of files.filter((x) => x.kind === 'script')) {
     const target = path.join(outDir, f.local);
     let text = await readFile(target, 'utf8').catch(() => null);
@@ -622,6 +720,8 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   }
   downloads.renamed = await renameReferences(outDir, renames);
   downloads.renamedFiles = renames.size;
+  // Downloads started ahead and never asked for finish before their folder goes.
+  await prefetch.settle();
   await rm(tmp, { recursive: true, force: true });
   return { document: { url: doc.url, sha256: doc.sha }, files, removed, blockers, downloads, dropped, matchedBy, ranged };
 }
