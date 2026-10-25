@@ -1,5 +1,5 @@
 // The fixture site converted into a React + Vite project (recreate/convert/react.js), built, served by its own server (vite
-// preview, as "Copy my site" runs it) and held against the ORIGINAL with the as-is copy's own rulers (behavior/preserve/check.js
+// the static files of dist/, as "Copy my site" serves it) and held against the ORIGINAL with the as-is copy's own rulers (behavior/preserve/check.js
 // checkCopy: the visual gate with its noise map at 1440 and 390, clicks, hovers, console errors, forms), plus: the same DOM as the
 // original (equivalence.js domSignature, scripts off), not one script added (the pages are prerendered and never hydrated), every
 // link answered, the original's scripts still running (hovers, animations, clicks), and Lighthouse through the measurement host
@@ -7,14 +7,14 @@
 // convert-react-build.test.js.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { startFixtureServer } from './serve-fixture.js';
 import { buildConvertedReact, convertToReact, REACT_EXPORT_DIR, routeOf, verifyConverted } from '../src/recreate/convert/react.js';
-import { startStack } from '../src/recreate/behavior/preserve/serveStack.js';
+import { serveCopy } from '../src/recreate/behavior/preserve/serve.js';
 import { checkCopy } from '../src/recreate/behavior/preserve/check.js';
 import { domSignature, firstDifference } from '../src/recreate/verify/equivalence.js';
 import { openMeasuredHost } from '../src/reaudit/measuredHost.js';
@@ -22,9 +22,10 @@ import { runLighthouse } from '../src/audit/lighthouse/run.js';
 import { toolchainStatus } from '../src/toolchains/index.js';
 
 const PORT = 4253;
-const PREVIEW_PORT = 4254;
 const FIXTURE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'recreate-site');
 const ORIGIN = `http://127.0.0.1:${PORT}`;
+// Comments before <html>, as a builder writes them: the converted page must start with them too.
+const PROLOG = '<!-- Made in "Builder" · example.com ✨ -->\n<!-- Published Oct 1, 2026 -->\n';
 
 let fixture;
 let browser;
@@ -32,6 +33,7 @@ let root;
 let served;
 let result;
 let pages;
+let copyDir;
 
 async function listFiles(dir, rel = '') {
   const out = [];
@@ -43,28 +45,58 @@ async function listFiles(dir, rel = '') {
   return out;
 }
 
+/** The console errors the ORIGINAL page shows as it loads (as checkCopy records them, not cut, the address as {origin}). */
+async function consoleErrorsOf(url) {
+  const context = await browser.newContext();
+  const errors = [];
+  try {
+    const page = await context.newPage();
+    page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+    page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
+    await page.goto(url, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(1500);
+  } finally {
+    await context.close();
+  }
+  return errors.map((e) => e.split(ORIGIN).join('{origin}'));
+}
+
 const outDir = () => path.join(root, 'react-vite');
 const base = () => served.url.replace(/\/$/, '');
 
 before(async () => {
   const tc = await toolchainStatus('react-vite');
   if (!tc.installed) throw new Error('the react-vite toolchain is not installed: npm run setup:toolchains -w server -- react-vite');
-  fixture = startFixtureServer(PORT, { site: 'recreate' });
+  fixture = await startFixtureServer(PORT, { site: 'recreate' });
   browser = await chromium.launch();
   root = await mkdtemp(path.join(os.tmpdir(), 'sas-convert-react-'));
-  // The fixture's own pages stand in for a finished as-is copy (its pages, stylesheets and scripts are already local files).
+  // The fixture site as served stands in for a finished as-is copy: its pages as the server sends them (the second origin
+  // written in), its stylesheets, scripts and images as local files. about.html is the lift's stress page (a second origin, a
+  // missing image, a video served in pieces): a finished copy has those localised by the lift, not by the conversion.
   const files = await listFiles(FIXTURE);
-  pages = files.filter((f) => f.endsWith('.html') && !f.startsWith('private/')).map((outPath) => ({ outPath, url: `${ORIGIN}/${outPath.replace(/(^|\/)index\.html$/, '$1')}` }));
-  result = await convertToReact({ copyDir: FIXTURE, outDir: outDir(), pages, pageUrl: `${ORIGIN}/` });
+  const LIFT_ONLY = new Set(['about.html']);
+  pages = files.filter((f) => f.endsWith('.html') && !f.startsWith('private/') && !LIFT_ONLY.has(f)).map((outPath) => ({ outPath, url: `${ORIGIN}/${outPath.replace(/(^|\/)index\.html$/, '$1')}` }));
+  copyDir = path.join(root, 'copy');
+  for (const f of files) {
+    if (f.startsWith('private/') || LIFT_ONLY.has(f)) continue;
+    await mkdir(path.dirname(path.join(copyDir, f)), { recursive: true });
+    if (f.endsWith('.html')) {
+      let text = await (await fetch(`${ORIGIN}/${f}`)).text();
+      if (f === 'index.html') text = text.replace(/^(<!doctype html>)\s*/i, `$1${PROLOG}`);
+      await writeFile(path.join(copyDir, f), text, 'utf8');
+    } else await cp(path.join(FIXTURE, f), path.join(copyDir, f));
+  }
+  result = await convertToReact({ copyDir, outDir: outDir(), pages, pageUrl: `${ORIGIN}/` });
   await buildConvertedReact(outDir());
-  await verifyConverted({ copyDir: FIXTURE, outDir: outDir(), pages });
-  served = await startStack('react-vite', outDir(), PREVIEW_PORT);
+  await verifyConverted({ copyDir, outDir: outDir(), pages });
+  // Served as "Copy my site" serves a converted copy: the static files of dist/ (behavior/preserve/stage.js).
+  served = await serveCopy(path.join(outDir(), REACT_EXPORT_DIR));
 });
 
 after(async () => {
-  await served?.stop?.();
+  await (served?.close ?? served?.stop)?.call(served);
   await browser?.close();
-  fixture?.close?.();
+  await new Promise((r) => { fixture?.closeAllConnections?.(); fixture ? fixture.close(() => r()) : r(); });
   if (root) await rm(root, { recursive: true, force: true }).catch(() => {});
 });
 
@@ -75,9 +107,11 @@ test('the conversion: components per section, the fallbacks named, the same scri
   assert.deepEqual(result.fallbacks.map((f) => [f.page, f.tag, f.attribute]), [['/work.html', 'svg', 'onload'], ['/work.html', 'button', 'onclick']]);
   assert.ok(result.fallbacks.every((f) => /inline event handler/.test(f.reason) && f.where.startsWith('body')));
   for (const p of pages) {
-    const original = await readFile(path.join(FIXTURE, p.outPath), 'utf8');
+    const original = await readFile(path.join(copyDir, p.outPath), 'utf8');
     const converted = await readFile(path.join(outDir(), REACT_EXPORT_DIR, p.outPath), 'utf8');
     const scripts = (s) => (s.match(/<script\b/gi) ?? []).length;
+    // The page's own doctype as written, then the comments before <html> exactly as the original has them.
+    if (p.outPath === 'index.html') assert.ok(converted.startsWith(`<!doctype html>${PROLOG}<html `), converted.slice(0, 160));
     assert.equal(scripts(converted), scripts(original), `${p.outPath}: the same number of scripts, none of React's`);
   }
   const work = result.forms.find((f) => f.page === '/work.html');
@@ -153,8 +187,16 @@ test('held against the original with the as-is rulers: visual gate at 1440 and 3
     assert.deepEqual(p.controls.mismatch, [], `${p.path}: every control behaves like the original's`);
     assert.deepEqual(p.controls.missing, [], `${p.path}: no control missing`);
     assert.deepEqual(p.hovers.mismatch, [], `${p.path}: every hover like the original's`);
-    assert.deepEqual(p.offline.external ?? [], [], `${p.path}: nothing asked off the copy`);
-    assert.deepEqual(p.offline.errors ?? [], [], `${p.path}: no console error`);
+    // Nothing asked off the copy that the as-is page does not name itself (work.html carries the fixture's unsafe-SVG seed,
+    // example.org addresses the lift's sanitizer removes from a real copy): the conversion adds no outside request.
+    const asIs = await readFile(path.join(copyDir, pages.find((q) => routeOf(q.outPath) === p.path).outPath), 'utf8');
+    assert.deepEqual((p.offline.external ?? []).filter((u) => !asIs.includes(u)), [], `${p.path}: nothing asked off the copy that the page does not name`);
+    // No console error the original does not show on the same page (work.html's seed fails the same way on both sides).
+    // checkCopy cuts a message at 160 characters, address included, so the two sides are compared by prefix with the address
+    // written as {origin}.
+    const originalErrors = await consoleErrorsOf(pages.find((q) => routeOf(q.outPath) === p.path).url);
+    const own = (e) => originalErrors.some((o) => o.startsWith(e.slice(0, Math.max(20, e.length - 12))));
+    assert.deepEqual((p.offline.errors ?? []).map((e) => e.split(base()).join('{origin}')).filter((e) => !own(e)), [], `${p.path}: no console error the original does not have (${JSON.stringify(originalErrors)})`);
   }
 });
 
@@ -191,15 +233,12 @@ test('Lighthouse through the measurement host, phone and computer: the converted
     try {
       const run = (origin, name) => runLighthouse(`${origin}/`, device, { timeout: 240000, outFile: path.join(root, `lh-${device}-${name}.json`) });
       const scores = { original: [], converted: [] };
-      // The same DOM and the same files on both sides: a difference is the run's noise. Measured in pairs (original, then copy) until
-      // the medians agree, at most three pairs; the verdict is on the medians.
+      // Three runs a side, alternated (original, then copy), judged on the medians with no tolerance.
       for (let i = 0; i < 3; i++) {
         for (const [side, origin] of [['original', originalHost.origin], ['converted', copyHost.origin]]) {
           const lhr = await run(origin, `${side}-${i}`);
           scores[side].push(Object.fromEntries(['performance', 'seo', 'accessibility', 'best-practices'].map((c) => [c, Math.round((lhr.categories?.[c] ?? 0) * 100)])));
         }
-        const lower = ['performance', 'seo', 'accessibility', 'best-practices'].filter((c) => median(scores.converted.map((s) => s[c])) < median(scores.original.map((s) => s[c])));
-        if (!lower.length) break;
       }
       for (const cat of ['performance', 'seo', 'accessibility', 'best-practices']) {
         const a = median(scores.original.map((s) => s[cat]));
