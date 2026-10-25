@@ -509,6 +509,17 @@ ${site.forms.length ? site.forms.map((f) => `- "${f.label}" on ${f.page} (${f.me
   };
 }
 
+/**
+ * Next's build folder: `next build` writes it, `next start` reads it, and nothing else needs it once the build is checked.
+ * The copy keeps the source and out/; `npm run dev` and `npm run build` write their own.
+ */
+export const BUILD_DIR = '.next';
+
+/** Removes the build folder of a Next.js project (a converted or a packed copy). */
+export async function dropBuildFolder(dir) {
+  await rm(path.join(dir, BUILD_DIR), { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+}
+
 /** Builds the converted project: `next build`, then the after-build step; out/ is the result. */
 export async function buildConverted(dir, { timeoutMs = 8 * 60000, signal } = {}) {
   return runToolchain({

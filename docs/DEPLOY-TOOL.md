@@ -74,7 +74,8 @@ not measured on a site with many pages; `next build` starts several workers on a
 | Clean copy | 16–235 MB |
 | As-is copy of one page | ~130 MB |
 | + converted to React + Vite (kept with the copy) | + ~75 MB (the copy twice: `public/` and the built `dist/`) |
-| + converted to Next.js (kept with the copy) | + ~145 MB (`public/`, the built `out/`, and Next's `.next/` build folder, 71 MB, which stays) |
+| + converted to Next.js (kept with the copy) | + ~75 MB (`public/` and the built `out/`; Next's `.next/` build folder, ~71 MB, is removed once the copy is checked) |
+| + converted to MERN (kept with the copy) | + ~75 MB (the copy twice: `client/public/` and the built `client/dist/`) |
 | Analysis | 1–3 MB |
 | Dead workspace | 10–118 MB, removed by the cleanup |
 
@@ -761,8 +762,10 @@ provider is probably blocking outbound 587 (see the top of this guide).
   installed with `npm ci`, and the status line holds `node_modules` against it. Still run the checks in step 4 after
   installing a release. A copy's own downloaded project (its `package.json`) pins only the direct versions and the
   `overrides`, not a lockfile: whoever builds the download gets the newest packages underneath that fit.
-- **Next.js copies keep their `.next/` build folder** (71 MB on a one-page copy) inside the copy's folder until the copy itself
-  is removed by retention; the cleanup does not remove it (`jobs/cleanup.js` removes only crash leftovers). Counted in step 1.
+- **Next.js copies' `.next/` build folder (fixed after this guide was written).** It was kept with every Next.js copy (71 MB
+  on a one-page copy) until retention removed the copy; the copy step now removes it once the copy is built and checked
+  (`behavior/preserve/stage.js`, `convert/next.js dropBuildFolder`). The source and `out/` stay; `npm run dev` and
+  `npm run build` of the download write their own.
 - **Two jobs side by side were never measured for memory.** The 2.2 GB per job is one run, and the memory gate is per start, not
   per running job. Raise `SAS_MAX_JOBS` only after watching.
 - **Waiting in line.** With one slot, the next person waits for the whole job in front: an as-is copy is about 20 minutes a page,

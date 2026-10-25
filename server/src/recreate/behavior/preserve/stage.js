@@ -10,7 +10,7 @@ import { chromium } from 'playwright';
 import { liftSite, localOfOutPath } from './asis.js';
 import { packLifted, servedDir } from './pack.js';
 import { buildConvertedReact, convertToReact, REACT_EXPORT_DIR, verifyConverted } from '../../convert/react.js';
-import { buildConverted, convertToNext, EXPORT_DIR } from '../../convert/next.js';
+import { buildConverted, convertToNext, dropBuildFolder, EXPORT_DIR } from '../../convert/next.js';
 import { buildConvertedMern, convertToMern, MERN_EXPORT_DIR, verifyConvertedMern } from '../../convert/mern.js';
 import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
@@ -511,5 +511,9 @@ export async function asIsStage(ctx) {
   } finally {
     for (const s of servers) await (s.stop ? s.stop() : s.close?.()).catch(() => {});
     await browser.close().catch(() => {});
+    // Next's build folder is only needed while the copy is built and checked (next start of a packed copy reads it): once the
+    // servers are stopped it goes. What is kept, previewed and zipped is the source and out/ (public/ for a packed copy);
+    // `npm run dev` and `npm run build` write their own .next, and "Package again" converts and builds from the kept as-is copy.
+    if (stack === 'nextjs') await dropBuildFolder(outDir).catch(() => {});
   }
 }

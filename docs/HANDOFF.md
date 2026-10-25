@@ -838,8 +838,13 @@ Checked against the conversions (2026-10-25, after `convert-react` was merged; D
   This worktree (`accounts`) now has real installs, not links to `Website-Audit-exact` (whose shared installs were
   1–4 packages newer than the lock: caniuse-lite, electron-to-chromium, postcss, qs). The other worktrees still link there,
   so their status now reads "not installed as locked" until they run the setup.
-- **Disk**: a converted copy adds the as-is copy again in the stack project (React + Vite +75 MB, Next.js +145 MB on nyaayai's
-  85 MB copy); Next.js leaves `.next/` (71 MB) in the copy's folder, never cleaned before retention removes the copy.
+- **Disk**: a converted copy adds the as-is copy again in the stack project (React + Vite +75 MB, MERN +75 MB, Next.js +75 MB
+  on nyaayai's 85 MB copy). Next.js's `.next/` (71 MB) used to stay in the copy's folder until retention; it is now removed
+  once the copy is built and checked (`stage.js` finally, after the servers stop: `next start` of a packed copy reads it),
+  `convert/next.js dropBuildFolder`. Nothing later needs it: the preview and re-audit serve `out/` (`public/` packed), the
+  zip already left it out, "Package again" converts and builds again from the kept as-is copy. Test
+  `convert-next-no-build-folder.test.js` (3, no browser): after removing it, `npm run dev` serves both pages byte for byte as
+  `out/`, and `npm run build` writes the same `out/` again.
   Toolchains ~0.45 GB per release (next 321 MB). Memory: a build is ~0.3–0.4 GB extra for under half a minute on one page
   (coarse samples); not measured on many pages.
 - No new setting or system package: builds run with a fixed minimal environment (`build/toolchain.js`).
