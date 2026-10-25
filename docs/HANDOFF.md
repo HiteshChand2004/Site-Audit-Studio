@@ -718,6 +718,32 @@ Scratch data `C:/Users/urvas/Downloads/sas-work/nyaayai-next-data` (copied from 
   `copy-deploy-commands` 9 pass. **Not run (need the browser):** `convert-react.test.js`, `full-flow.test.js` for React + Vite
   (`SAS_FLOW_STACKS=react-vite`), `convert-next*.test.js`, `reaudit-stack`; full suite not run.
 
+### MERN writer (branch `convert-mern`, from `convert-react` 8b3ad1a, 2026-10-25) — code done, browser tests NOT run
+
+- `server/src/recreate/convert/mern.js`: `client/` = the React + Vite conversion, `convertToReact` called as it is (no change to
+  the React writer or the shared core); `server/` = an Express server (`convert/mern/server/`: `app.js`, `site.js`, `match.js`,
+  `index.js`, `dev.js`, `open-store.js`, plus `forms.js` / `store.js` / `limiter.js` of the MERN template; `headers.js` written from
+  `copy/securityHeaders.js`). Root `package.json`: `install:all`, `dev`, `build` (= the client's build), `start`; deps express +
+  mongodb only. Built with the `mern` toolchain (`buildConvertedMern`, steps read from the client's own build script).
+- Serving (`site.js`): the rules of the static server the React build is measured on (`serveCopy`): folder → 301, clean URLs,
+  pages / sw.js `no-cache`, the rest a year, brotli / gzip from a cache; the copy's files answer first at every address
+  (`/api/health`, `/api/forms/…`, `/thanks` and Vite's included; a POST still reaches the API); the copy's 404 page; the security
+  headers, no CSP (the original's scripts run). `npm run dev` = the same app with `client/public` + pages rendered by the client's
+  `entry-server.jsx` (Vite only loads components): byte for byte the build.
+- Forms (`planForms`): own server (no action, relative, the original's host) → wired; another service, mailto, script, and own
+  forms `describeForm` refuses (GET / search, password, file) → not stored, said why. The pages stay identical: `client/public/
+  sas-forms.json` gets `endpoint: /api/forms`, so the copy's form guard sends the fields there; the server finds the form by
+  Referer page + field names (`match.js`); without script a relative action posts to this server too (303 → /thanks). Report:
+  `asIs.convert.forms[]` with `wired`, `goesTo`, `note` (plain words), `wiredForms`; `needsAPerson` counts only the unwired;
+  DEPLOY.md says "N forms are saved in MongoDB" (`deployMd formsSaved`); the zip ships the source, not `client/dist`.
+- Wired: `stage.js CONVERTERS.mern` (`runs: 'server'`): checked on its own server (`startStack(..., { env: { FORMS_STORE: 'memory' } })`),
+  headers counted as the server's. A failure packages as before (`packLifted`).
+- **Limit (needs a decision)**: a form of another service is not sent to it in the MERN copy (as in every as-is copy, the form
+  guard holds every form); with the endpoint set, the visitor now sees "The form could not be sent." (server 409) instead of "not
+  connected yet". Letting such a form go to its own action needs a change in the shared form guard (`complete.js FORM_GUARD`).
+- Tests: `convert-mern-build.test.js` 8/8 (no browser). Written, not run: `convert-mern.test.js`, `full-flow.test.js` (MERN now
+  converted, an order form on the test page, its submission stored), `SAS_FLOW_STACKS=mern`.
+
 ### nyaayai's "What is Nyaay AI?" chat bar missing in the copy (botza.panscience.xyz, 2026-10-25): the service's domain allow-list
 
 - The copy keeps the widget's script exactly (`<script src="https://botza.panscience.xyz/widget/chatbot-widget.js">`, answered

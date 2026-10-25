@@ -116,9 +116,10 @@ export function runAndHost(d) {
  * @param {string} o.siteName
  * @param {string} [o.address]         the new site's address
  * @param {string} [o.formEndpoint]    where form submissions go (html / react-vite / nextjs), if any
+ * @param {number} [o.formsSaved]      forms the copy's own server stores in MongoDB (a converted MERN copy), if any
  * @param {{ text: string }[]} [o.checks] reason-e items: what to check after deploying
  */
-export function deployMd({ stack, shipped, siteName, address = null, formEndpoint = null, checks = [] }) {
+export function deployMd({ stack, shipped, siteName, address = null, formEndpoint = null, formsSaved = 0, checks = [] }) {
   const facts = STACK_FACTS[stack];
   if (!facts) throw new Error(`no deploy notes for the ${stack} stack`);
   if (!shipped) throw new Error('DEPLOY.md is written from the package that ships: describePackage() it first');
@@ -139,7 +140,8 @@ export function deployMd({ stack, shipped, siteName, address = null, formEndpoin
     '## Settings to set',
     '',
     ...(address ? [`- The new site's address: \`${address}\` (search tags, sitemap and links already use it).`] : ['- The new site\'s address was not set; the search tags still name the original. Set it and copy again.']),
-    ...(formEndpoint ? [`- Form submissions: \`FORM_ENDPOINT=${formEndpoint}\`.`] : ['- Forms: none of the copy\'s forms send anything yet. Connect a form service and set FORM_ENDPOINT to its address.']),
+    ...(formsSaved ? [`- Forms: ${formsSaved} form${formsSaved === 1 ? ' is' : 's are'} saved in MongoDB by the copy's own server: set MONGODB_URI (see \`.env.example\`). README.md says where every form's data goes.`]
+      : formEndpoint ? [`- Form submissions: \`FORM_ENDPOINT=${formEndpoint}\`.`] : ['- Forms: none of the copy\'s forms send anything yet. Connect a form service and set FORM_ENDPOINT to its address.']),
     '- HTTPS is needed for the service worker and for forms to work. Every host above provides it.',
     '',
     '## After you deploy',

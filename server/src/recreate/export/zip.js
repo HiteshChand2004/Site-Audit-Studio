@@ -187,7 +187,8 @@ async function planProjectZip({ dir, report, stack }) {
   if (output?.status !== 'ready') throw refuse(400, `This recreate has no ${stack} output.`);
   const project = path.join(dir, output.dir);
   // An as-is copy is not built: for MERN its files are client/dist (the copy itself), so only a clean build's dist is skipped.
-  const asIs = output.mode === 'as-is';
+  // A copy converted into code (its client is built by `npm run build`) ships the source like a clean build does.
+  const asIs = output.mode === 'as-is' && report.asIs?.convert?.mode !== 'converted';
   const keep = (rel) => (asIs && rel.startsWith('client/dist/')) || !skippedInProject(rel);
   const files = (await listFiles(project, { allowDot: ['.gitignore', '.env.example', '.nojekyll'] }).catch(() => [])).filter((f) => keep(f.rel));
   if (!files.length) throw refuse(404, `The ${stack} project of this recreate is gone. Run Recreate again.`);

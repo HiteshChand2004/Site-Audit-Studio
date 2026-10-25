@@ -27,8 +27,9 @@ export async function buildStack(stack, dir, { timeoutMs } = {}) {
  * @param {string} stack
  * @param {string} dir  the packed project
  * @param {number} port
+ * @param {{ env?: Record<string, string> }} [o]  settings for the server's environment (the MERN server's form store)
  */
-export async function startStack(stack, dir, port) {
+export async function startStack(stack, dir, port, { env = {} } = {}) {
   const modules = path.join(dir, 'node_modules');
   await symlink(path.join(toolchainDir(TOOLCHAIN[stack]), 'node_modules'), modules, 'junction');
   const args = {
@@ -39,7 +40,7 @@ export async function startStack(stack, dir, port) {
   if (!args) throw new Error(`no server for the ${stack} stack`);
   const child = spawn(process.execPath, args, {
     cwd: dir,
-    env: { ...process.env, PORT: String(port), NEXT_TELEMETRY_DISABLED: '1', NODE_ENV: 'production' },
+    env: { ...process.env, ...env, PORT: String(port), NEXT_TELEMETRY_DISABLED: '1', NODE_ENV: 'production' },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });

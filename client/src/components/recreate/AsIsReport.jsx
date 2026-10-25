@@ -151,7 +151,12 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
       {asIs.convert && <Converted convert={asIs.convert} />}
 
       <h4 className={styles.h}>Needs a person</h4>
-      {asIs.needsAPerson?.length ? (
+      {asIs.needsAPerson?.length && asIs.convert?.wiredForms != null ? (
+        <Alert tone="warn" title={`${asIs.needsAPerson[0].count} form${asIs.needsAPerson[0].count === 1 ? '' : 's'} not stored by the copy's server`}>
+          {asIs.convert.wiredForms ? `${asIs.convert.wiredForms} form${asIs.convert.wiredForms === 1 ? ' is' : 's are'} saved in MongoDB by the copy's own server. ` : ''}
+          The others sent their data to another service, or are forms the copy's server does not store (a sign-in, an upload, a search): “Forms, in plain words” above says which and why.
+        </Alert>
+      ) : asIs.needsAPerson?.length ? (
         <Alert tone="warn" title={`${asIs.needsAPerson[0].count} form${asIs.needsAPerson[0].count === 1 ? '' : 's'} need a server`}>
           The form is drawn and checked as on the original, but its data is never sent to the original site. Until a server is connected,
           submitting a form shows “This form is not connected yet, so nothing was sent.” To receive submissions, set <span className="mono">FORM_ENDPOINT</span> in
