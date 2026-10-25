@@ -830,15 +830,20 @@ Checked against the conversions (2026-10-25, after `convert-react` was merged; D
 - **Toolchains are found only at `<release>/server/toolchains/<id>/node_modules`** (`config/paths.js toolchainDir`). That is
   a plain folder; the links to `Website-Audit-exact` in the worktrees are a development shortcut, so a server just runs
   `npm run setup:toolchains -w server -- react-vite next mern` in each release. No code change needed for that.
-- **Not locked**: the setup installs with `--no-package-lock`, so sub-packages float between installs; only the direct
-  packages and `overrides` are pinned (and only those are checked by the status line). Open, code change not made:
-  commit a lockfile per toolchain and install with `npm ci`.
+- **Locked (done after this check)**: `server/toolchains/<id>/package-lock.json` committed for next, react-vite and mern,
+  written with `npm install --package-lock-only --ignore-scripts --before=2026-10-11` (releases at least two weeks old);
+  `setup:toolchains` runs `npm ci --ignore-scripts` (a `node_modules` link is removed as a link first, never emptied);
+  `toolchainStatus` = `lockedInstall`: every locked package at its place and version, lockfile in step with package.json and
+  its `overrides`, optional native builds for other systems may be absent. Test `toolchain-lock.test.js` (4, no browser).
+  This worktree (`accounts`) now has real installs, not links to `Website-Audit-exact` (whose shared installs were
+  1–4 packages newer than the lock: caniuse-lite, electron-to-chromium, postcss, qs). The other worktrees still link there,
+  so their status now reads "not installed as locked" until they run the setup.
 - **Disk**: a converted copy adds the as-is copy again in the stack project (React + Vite +75 MB, Next.js +145 MB on nyaayai's
   85 MB copy); Next.js leaves `.next/` (71 MB) in the copy's folder, never cleaned before retention removes the copy.
   Toolchains ~0.45 GB per release (next 321 MB). Memory: a build is ~0.3–0.4 GB extra for under half a minute on one page
   (coarse samples); not measured on many pages.
 - No new setting or system package: builds run with a fixed minimal environment (`build/toolchain.js`).
-- MERN conversion (`convert-mern`) does not change the toolchains; re-check this list when it is merged.
+- MERN conversion (`convert-mern`, merged into `accounts` in eabadb9) does not change the toolchains.
 
 ## Next steps, in order (commit after each with `--no-verify`, say the full suite was not run; nothing is pushed before the PR)
 

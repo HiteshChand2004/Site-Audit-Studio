@@ -162,8 +162,7 @@ prebuilt Linux binaries.
 
 Replace `<tool-repo-url>` / `<site-repo-url>` with your Git remotes and `<tag>` with the commit or tag you deploy.
 **Unsure: which branch is the launch branch has not been decided.** The launch-readiness work (data lock, job limits, cleanup,
-production refusal), the two fixes after this guide and the React + Vite / Next.js conversions are on `accounts` (MERN
-conversion is on `convert-mern`, not merged yet).
+production refusal), the two fixes after this guide and the React + Vite / Next.js / MERN conversions are on `accounts`.
 
 ```bash
 sudo -iu sas
@@ -181,14 +180,18 @@ sudo /srv/sas/releases/<tag>/node_modules/.bin/playwright install-deps chromium
 ```
 
 **The build toolchains** for the React + Vite, Next.js and MERN copies. These are not server dependencies: each one is the
-folder `server/toolchains/<id>/` of the release, with its own `package.json` (in git) and its own `node_modules` (not in git).
+folder `server/toolchains/<id>/` of the release, with its own `package.json` and `package-lock.json` (both in git) and its own
+`node_modules` (not in git).
 The code finds a toolchain only there (`config/paths.js toolchainDir` = `<release>/server/toolchains/<id>`), and a build links
 the copy's project to that `node_modules` for the time of the build, then removes the link. Nothing else is needed: no global
 install, no environment setting. (In the development worktrees these `node_modules` folders are links to another checkout,
-`Website-Audit-exact`; that is a development shortcut only. On the server, install them for real in every release.)
+`Website-Audit-exact`; that is a development shortcut only. On the server, install them for real in every release. The setup
+removes such a link, never what it points to, before it installs.)
 
 Install all three, as the `sas` user, on the server itself (never copy `node_modules` from another machine: Next.js ships
-a native compiler per platform). This needs the npm registry once; `--ignore-scripts` means no package runs code at install:
+a native compiler per platform). The setup runs `npm ci --ignore-scripts` in each folder: it installs exactly the committed
+lockfile (every package, the ones underneath included, at a fixed version with its integrity hash) and refuses a lockfile that
+does not match `package.json`; no package runs code at install. This needs the npm registry once:
 
 ```bash
 sudo -iu sas
@@ -198,7 +201,7 @@ npm run setup:toolchains -w server       # no argument = status; all three must 
 exit
 ```
 
-The pinned versions (`server/toolchains/<id>/package.json`):
+The direct versions (`server/toolchains/<id>/package.json`; the lockfile next to it pins everything they pull in):
 
 | Toolchain | Used for | Pinned packages | Pinned underneath (`overrides`) |
 |---|---|---|---|
@@ -209,7 +212,7 @@ The pinned versions (`server/toolchains/<id>/package.json`):
 **Check they work** (as `sas`, in the release folder):
 
 ```bash
-npm run setup:toolchains -w server                                              # all three "installed"
+npm run setup:toolchains -w server                                              # all three "installed": every package as locked
 node server/toolchains/react-vite/node_modules/vite/bin/vite.js --version       # vite/6.3.5 linux-x64 …
 node server/toolchains/next/node_modules/next/dist/bin/next --version            # Next.js v15.5.27
 node server/toolchains/mern/node_modules/vite/bin/vite.js --version             # vite/6.3.5 linux-x64 …
@@ -217,7 +220,8 @@ node -e "console.log(require('./server/toolchains/mern/node_modules/express/pack
 # A real build with no browser (temporary data folder, never /srv/sas/data; one at a time):
 npm test -w server -- test/convert-react-build.test.js     # React + Vite: builds a converted copy, compares every page
 npm test -w server -- test/copy-served.test.js             # Next.js: next build + next start of a packaged copy
-npm test -w server -- test/stack-ports.test.js             # MERN: the toolchain is installed and stack servers get free ports
+npm test -w server -- test/convert-mern-build.test.js     # MERN: builds a converted copy, runs its Express server
+npm test -w server -- test/toolchain-lock.test.js          # the lockfiles match package.json; the "installed" rule
 ```
 
 If a toolchain is missing, a copy for that stack fails with "The <id> toolchain is not installed. Run: npm run setup:toolchains
@@ -225,9 +229,22 @@ If a toolchain is missing, a copy for that stack fails with "The <id> toolchain 
 beyond Node and no new setting in `api.env`: the build runs with a fixed, minimal environment (`build/toolchain.js`: telemetry
 off, `CI=1`, `NODE_ENV=production`).
 
-**Unsure / to know**: the setup installs with `--no-package-lock`, so only the packages in the table are pinned; the packages
-*they* pull in are the newest that fit on the day of the install. Two releases installed a week apart can build with different
-sub-packages. The status line checks only the table. See "Known risks".
+**"Installed" means installed as locked** (`toolchains/index.js lockedInstall`): every package of the lockfile is in
+`node_modules` at its place with the locked version, and the lockfile still matches `package.json` and its `overrides`.
+An optional package may be absent only when it is a native build for another system (or has no system at all, such as a wasm
+fallback); this system's native build must be there. A different version anywhere = "not installed as locked", and the
+status line names the package; run the setup again.
+
+**Updating a toolchain** (a developer task, not a server one): change `package.json`, then write the lockfile again with
+releases at least two weeks old, and commit both:
+
+```bash
+cd server/toolchains/<id>
+npm install --package-lock-only --ignore-scripts --before=<date two weeks ago, e.g. 2026-10-11>
+```
+
+The lockfiles of 2026-10-25 were written with `--before=2026-10-11`: every package in them was published on or before that
+day (for example the newer qs 6.16.1 of 2026-10-14 and caniuse-lite of 2026-10-13 were left out).
 
 **Lighthouse** needs nothing beyond that Chromium. **Unsure (the one install step most likely to bite): Chromium's sandbox on
 Ubuntu 24.04.** Playwright launches its own browsers with `--no-sandbox`, but Lighthouse's Chrome is started by
@@ -596,7 +613,8 @@ sudo systemctl start sas-api
 journalctl -u sas-api -n 30 --no-pager
 ```
 
-Toolchain installs (`npm install` in each `server/toolchains/<id>`) are per release, and a cloned release starts without them.
+Toolchain installs (`npm ci` in each `server/toolchains/<id>`, from its committed lockfile) are per release, and a cloned
+release starts without them. Two releases with the same lockfiles get the same packages.
 Keep the last 3 releases and delete older folders by hand.
 
 The marketing site uses the same pattern: clone and build in `site-releases/<new>`, then
@@ -739,10 +757,10 @@ provider is probably blocking outbound 587 (see the top of this guide).
   sign-up and failed sign-in limits count each real visitor, and nobody can choose their own address.
 - **Stack previews of two jobs at once (fixed after this guide was written).** As-is stack previews used fixed ports 4501–4503;
   each run now gets a free port of its own, so `SAS_MAX_JOBS` ≥ 2 no longer collides on them.
-- **Toolchain installs are not locked.** `setup:toolchains` runs `npm install --no-package-lock` (`scripts/setup-toolchains.js`),
-  so a new release's toolchains can get newer sub-packages than the last one had (only the direct packages and the
-  `overrides` are pinned; Rollup is pinned because a newer one took minutes per build). After installing a release, run the
-  checks in step 4 before switching to it. Fixing this means committing a lockfile per toolchain (a code change, not done).
+- **Toolchain installs locked (fixed after this guide was written).** Each toolchain has a committed `package-lock.json`,
+  installed with `npm ci`, and the status line holds `node_modules` against it. Still run the checks in step 4 after
+  installing a release. A copy's own downloaded project (its `package.json`) pins only the direct versions and the
+  `overrides`, not a lockfile: whoever builds the download gets the newest packages underneath that fit.
 - **Next.js copies keep their `.next/` build folder** (71 MB on a one-page copy) inside the copy's folder until the copy itself
   is removed by retention; the cleanup does not remove it (`jobs/cleanup.js` removes only crash leftovers). Counted in step 1.
 - **Two jobs side by side were never measured for memory.** The 2.2 GB per job is one run, and the memory gate is per start, not
