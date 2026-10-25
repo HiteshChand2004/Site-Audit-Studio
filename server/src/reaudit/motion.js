@@ -11,6 +11,7 @@ import { measureMotion } from '../recreate/capture/measure.js';
 import { loopsTimeOf, LOOPS_MAX_MS } from '../recreate/capture/loops.js';
 import { DYN_STEP_MS, FIRST_MS, paintsNothing } from '../recreate/capture/interactions.js';
 import { isScrollReveal } from '../recreate/ir/motion.js';
+import { HOLD_FORMS } from '../recreate/behavior/preserve/complete.js';
 
 // A long page: settling (≤ 8 s), loops (a scroll window at a time, ≤ 12 × 2.5 s, + ≤ 9 s of slow movers), hover (≤ 15 s) and
 // focus. 40 s was set before the loop probe scrolled the page; a 6600 px page took 46 s and was reported as failed.
@@ -95,7 +96,9 @@ export async function measureNewMotion({ origin, pages, deadline = Infinity, sig
         continue;
       }
       const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, javaScriptEnabled: true, serviceWorkers: 'block' });
-      // Only the throwaway server is reachable: the recreated site makes no other request.
+      // Only the throwaway server is reachable: the recreated site makes no other request, and an as-is copy's form guard
+      // holds every form (the click probe may press a submit button).
+      await context.addInitScript(HOLD_FORMS);
       await context.route('**/*', (route) => (route.request().url().startsWith(`${origin}/`) ? route.continue() : route.abort('blockedbyclient')));
       try {
         const page = await context.newPage();

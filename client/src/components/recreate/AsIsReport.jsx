@@ -149,16 +149,24 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
       ) : <p className={styles.note}>Not recorded for this copy: make the copy again to see it.</p>}
 
       {asIs.convert && <Converted convert={asIs.convert} />}
+      {asIs.convert?.mode !== 'converted' && asIs.formRoutes?.length > 0 && (
+        <>
+          <h4 className={styles.h}>Forms, in plain words</h4>
+          <ul className={styles.list}>
+            {asIs.formRoutes.map((f, i) => <li key={i}><span className="mono">{f.page}</span> · “{f.label}” ({f.method}): {f.note}</li>)}
+          </ul>
+        </>
+      )}
 
       <h4 className={styles.h}>Needs a person</h4>
       {asIs.needsAPerson?.length && asIs.convert?.wiredForms != null ? (
         <Alert tone="warn" title={`${asIs.needsAPerson[0].count} form${asIs.needsAPerson[0].count === 1 ? '' : 's'} not stored by the copy's server`}>
           {asIs.convert.wiredForms ? `${asIs.convert.wiredForms} form${asIs.convert.wiredForms === 1 ? ' is' : 's are'} saved in MongoDB by the copy's own server. ` : ''}
-          The others sent their data to another service, or are forms the copy's server does not store (a sign-in, an upload, a search): “Forms, in plain words” above says which and why.
+          These went to the original's own server and are forms the copy's server does not store (a sign-in, an upload, a search): “Forms, in plain words” above says which and why. A form of another service sends its data to it, as on the original.
         </Alert>
       ) : asIs.needsAPerson?.length ? (
         <Alert tone="warn" title={`${asIs.needsAPerson[0].count} form${asIs.needsAPerson[0].count === 1 ? '' : 's'} need a server`}>
-          The form is drawn and checked as on the original, but its data is never sent to the original site. Until a server is connected,
+          The form went to the original's own server: it is drawn and checked as on the original, but its data is never sent there. A form of another service is not counted here: it sends its data to that service, as on the original. Until a server is connected,
           submitting a form shows “This form is not connected yet, so nothing was sent.” To receive submissions, set <span className="mono">FORM_ENDPOINT</span> in
           <span className="mono"> sas-forms.json</span> (see the README in the download); no rebuild is needed.
         </Alert>

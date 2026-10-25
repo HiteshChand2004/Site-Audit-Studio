@@ -5,6 +5,28 @@
 // output: 'export'). A clean copy and an as-is copy of the same stack ship different packages (an as-is React package has no dev
 // script; an as-is Next.js package builds no out/; an as-is MERN package has no client/package.json), so one text per stack
 // told people to run commands that do not exist. What the package does not ship (the `serve` program, MongoDB) is said plainly.
+import { formCounts } from './formRoutes.js';
+
+/**
+ * The Forms lines of "Settings to set": what the owner must connect, and the forms that need nothing (another service's go
+ * to it as on the original). Without the list of forms (an older report) the earlier lines.
+ */
+function formLines({ forms, formsSaved, formEndpoint }) {
+  const out = [];
+  if (formsSaved) out.push(`- Forms: ${formsSaved} form${formsSaved === 1 ? ' is' : 's are'} saved in MongoDB by the copy's own server: set MONGODB_URI (see \`.env.example\`). README.md says where every form's data goes.`);
+  if (!forms) {
+    if (!formsSaved) out.push(formEndpoint ? `- Form submissions: \`FORM_ENDPOINT=${formEndpoint}\`.` : '- Forms: none of the copy\'s forms send anything yet. Connect a form service and set FORM_ENDPOINT to its address.');
+    return out;
+  }
+  const c = formCounts(forms);
+  if (c.waiting) {
+    out.push(formEndpoint ? `- Form submissions: \`FORM_ENDPOINT=${formEndpoint}\`.`
+      : `- Forms: ${c.waiting === 1 ? 'one form went to the original\'s own server and sends' : `${c.waiting} forms went to the original's own server and send`} nothing yet: connect a form service and set FORM_ENDPOINT to its address.`);
+  }
+  if (c.services) out.push(`- Forms of another service${c.hosts.length ? ` (${c.hosts.join(', ')})` : ''} send their data where the original did: nothing to set.`);
+  if (!c.total) out.push('- Forms: the copy has none.');
+  return out;
+}
 
 /** The stacks' names, for the headings. */
 export const STACK_FACTS = {
@@ -117,9 +139,10 @@ export function runAndHost(d) {
  * @param {string} [o.address]         the new site's address
  * @param {string} [o.formEndpoint]    where form submissions go (html / react-vite / nextjs), if any
  * @param {number} [o.formsSaved]      forms the copy's own server stores in MongoDB (a converted MERN copy), if any
+ * @param {object[]} [o.forms]         where each form's data goes in the download (copy/formRoutes.js), when known
  * @param {{ text: string }[]} [o.checks] reason-e items: what to check after deploying
  */
-export function deployMd({ stack, shipped, siteName, address = null, formEndpoint = null, formsSaved = 0, checks = [] }) {
+export function deployMd({ stack, shipped, siteName, address = null, formEndpoint = null, formsSaved = 0, forms = null, checks = [] }) {
   const facts = STACK_FACTS[stack];
   if (!facts) throw new Error(`no deploy notes for the ${stack} stack`);
   if (!shipped) throw new Error('DEPLOY.md is written from the package that ships: describePackage() it first');
@@ -140,8 +163,7 @@ export function deployMd({ stack, shipped, siteName, address = null, formEndpoin
     '## Settings to set',
     '',
     ...(address ? [`- The new site's address: \`${address}\` (search tags, sitemap and links already use it).`] : ['- The new site\'s address was not set; the search tags still name the original. Set it and copy again.']),
-    ...(formsSaved ? [`- Forms: ${formsSaved} form${formsSaved === 1 ? ' is' : 's are'} saved in MongoDB by the copy's own server: set MONGODB_URI (see \`.env.example\`). README.md says where every form's data goes.`]
-      : formEndpoint ? [`- Form submissions: \`FORM_ENDPOINT=${formEndpoint}\`.`] : ['- Forms: none of the copy\'s forms send anything yet. Connect a form service and set FORM_ENDPOINT to its address.']),
+    ...formLines({ forms, formsSaved, formEndpoint }),
     '- HTTPS is needed for the service worker and for forms to work. Every host above provides it.',
     '',
     '## After you deploy',

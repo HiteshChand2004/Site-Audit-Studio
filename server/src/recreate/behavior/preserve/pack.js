@@ -8,6 +8,7 @@ import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { SECURITY_HEADERS } from '../../../copy/securityHeaders.js';
+import { formCounts, formRoutesOfCopy, formsReadmeSection } from '../../../copy/formRoutes.js';
 import { SERVER_DIR, toolchainDir } from '../../../config/paths.js';
 
 const SERVER = SERVER_DIR;
@@ -79,22 +80,10 @@ async function copyLifted(copyDir, dest) {
   await cp(copyDir, dest, { recursive: true, filter: (src) => !src.endsWith('.complete-tmp') });
 }
 
-/** The Forms section of a README: what a form does in the copy, and how to connect one. */
-function formsSection(count) {
-  if (!count) return '';
-  const noun = count === 1 ? 'form' : 'forms';
-  return `## Forms (needs a person)
+/** The Forms section of a README: where each form's data goes in this download, and how to connect the ones that wait. */
+const formsSection = (routes) => formsReadmeSection(routes ?? []);
 
-This copy has ${count} ${noun}. Each one is drawn and checked as on the original, but its data is never sent to the original
-site. Until a server is connected, submitting a form shows "This form is not connected yet, so nothing was sent."
-
-To receive submissions, set \`FORM_ENDPOINT\` in \`sas-forms.json\` (the \`endpoint\` key) to a URL that accepts a POST of the
-form data (multipart/form-data). No rebuild is needed: the setting is read when a form is sent. Empty means nothing is sent.
-
-`;
-}
-
-function readme({ title, stack, slug, install, run, build, deploy, extra = [], forms = 0 }) {
+function readme({ title, stack, slug, install, run, build, deploy, extra = [], forms = [] }) {
   return `# ${title}
 
 A copy of ${slug.replace(/-/g, '.')} made with Remastly. Every page and file is the copy's own: it loads nothing from
@@ -141,8 +130,9 @@ const commonExtra = [
 export async function packLifted({ stack, copyDir, outDir, pageUrl }) {
   if (!PACK_STACKS.includes(stack)) throw new Error(`no lifted packaging for the ${stack} stack`);
   const slug = HOST_SLUG(pageUrl);
-  // The copy's forms: each is drawn as on the original, but its data is never sent to the original (see FORM_GUARD).
-  const formCount = ((await readFile(path.join(copyDir, 'index.html'), 'utf8').catch(() => '')).match(/<form[\s>]/gi) ?? []).length;
+  // The copy's forms: never sent to the original's own server; another service's go to it as on the original (see FORM_GUARD).
+  const formRoutes = await formRoutesOfCopy(copyDir, [{ outPath: 'index.html', url: pageUrl }]);
+  const formCount = formRoutes.length;
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
   const written = [];
@@ -180,7 +170,7 @@ export default defineConfig({
       run: '```sh\nnpm run preview\n```\n\nThen open http://localhost:4173 (`npm run dev` serves the same folder for editing).',
       build: '```sh\nnpm run build\n```\n\nThe built site is `dist/`. Its files are the copy\'s files, byte for byte.',
       deploy: 'Deploy `dist/` as a static site (any host that serves it as is; `_headers` applies where it is read).',
-      forms: formCount,
+      forms: formRoutes,
       extra: commonExtra,
     }));
   }
@@ -243,7 +233,7 @@ export default nextConfig;
       run: '```sh\nnpm run build\nnpm run start\n```\n\nThen open http://localhost:3000.',
       build: '```sh\nnpm run build\n```\n\nThe copy is in `public/`; `next build` does not change those files.',
       deploy: 'Deploy with `next start` on a Node host, or to Vercel (which serves HTTP/2 and compression by default).',
-      forms: formCount,
+      forms: formRoutes,
       extra: [...commonExtra, '`app/`: a root layout and a not-found page (never shown for the copy\'s own addresses).', '`next.config.mjs`: cache headers and compression.'],
     }));
   }
@@ -270,12 +260,13 @@ export default nextConfig;
       run: '```sh\nnpm start\n```\n\nThen open http://localhost:3000. Form submissions need MongoDB: set `MONGODB_URI`; without it the site is served and the\nform endpoint answers 503.',
       build: 'Nothing to build: the copy is served as it is (`client/dist/`).',
       deploy: 'Deploy the Node server (`npm start`) to any host that runs Node and serves HTTP/2 through its proxy, with `MONGODB_URI` set\nfor forms. `TRUST_PROXY=true` behind a proxy so the rate limit sees the real address.',
-      forms: formCount,
+      forms: formRoutes,
       extra: [...commonExtra, '`server/`: Express — compression, content types, cache headers, a content security policy that allows the copy\'s inline scripts by hash, and the form endpoint.', '`server/forms.json`: no forms (the copy has none the server can store; see the README note).'],
     }));
   }
 
-  // The report's manual item: a form is drawn and checked, but nothing is sent until a server is connected.
-  const needsAPerson = formCount ? [{ kind: 'form', count: formCount, why: 'its data is never sent to the original site; connect FORM_ENDPOINT in sas-forms.json' }] : [];
+  // The report's manual item: a form that went to the original's own server sends nothing until a server is connected.
+  const { waiting } = formCounts(formRoutes);
+  const needsAPerson = waiting ? [{ kind: 'form', count: waiting, why: 'it went to the original\'s own server and is never sent there from the copy; connect FORM_ENDPOINT in sas-forms.json' }] : [];
   return { dir: outDir, files: written.sort(), forms: formCount, needsAPerson };
 }

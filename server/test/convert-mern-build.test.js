@@ -180,7 +180,11 @@ test('the forms: own-server ones wired to the copy\'s server, the others left as
   assert.equal(signupWords.target, 'the original site (example-original.dev/subscribe)');
   assert.equal(signupWords.goesTo, 'copy-server');
   assert.match(signupWords.note, /copy's own server \(POST \/api\/forms\) and is saved in MongoDB/);
-  assert.match(report.find((f) => f.id === service.id).note, /left as it is: the copy does not send it to forms\.example-service\.io and does not store it/);
+  // Another service's form goes to it in the download, as on the original (the form guard leaves it to the browser).
+  const serviceWords = report.find((f) => f.id === service.id);
+  assert.equal(serviceWords.goesTo, 'service');
+  assert.match(serviceWords.note, /In the downloaded copy it sends its data to forms\.example-service\.io, exactly as the original does\..*The copy's server does not store it\./);
+  assert.equal(report.find((f) => f.id === mail.id).goesTo, 'mail-app');
   assert.match(report.find((f) => f.id === login.id).note, /not stored: it is a login form/);
   assert.equal(result.wiredForms, 3);
   // Pure: a copy whose forms are already sent somewhere is left to that.

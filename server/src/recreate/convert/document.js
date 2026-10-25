@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto';
 import * as cheerio from 'cheerio';
 import { BOOLEAN, declarations, jsxAttr, jsxText, propName, styleObject, svgPropName } from '../emit/react/jsx.js';
 import { pascal } from '../emit/react/components.js';
+import { formDestination, formRoute } from '../../copy/formRoutes.js';
 
 /** The component that carries an element React cannot write exactly (the build unwraps the template). */
 export const RAW_COMPONENT = 'RawHtml';
@@ -404,12 +405,14 @@ export function formsOf($, { page, pageUrl }) {
       if (name && !fields.includes(name)) fields.push(name);
     });
     const label = el.attribs.id || el.attribs.name || el.attribs['aria-label'] || `form ${i + 1}`;
+    // Where it goes in the downloaded copy (copy/formRoutes.js, the form guard's rules): never to the original's own server;
+    // to another service or the visitor's mail app as on the original.
+    const route = formRoute(formDestination(action, pageUrl), { guarded, target });
     forms.push({
       page, label, method: (el.attribs.method || 'get').toUpperCase(), action, target, fields, password, file, guarded,
       worksWithoutOriginal: guarded,
-      note: guarded
-        ? 'In the copy nothing is sent to the original: the copy\'s form guard answers every submit. Until FORM_ENDPOINT is set in sas-forms.json, a visitor sees "This form is not connected yet". Once connected, it does not depend on the original site or its platform, so it keeps working if they are shut down.'
-        : `The copy sends this form where the original did (${target}). If the original site or its platform is shut down, the form stops working until it is connected elsewhere.`,
+      goesTo: route.goesTo,
+      note: route.note,
     });
   });
   return forms;

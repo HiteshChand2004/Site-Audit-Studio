@@ -7,9 +7,10 @@
 // host) is wired to the copy's own server: in the browser the copy's form guard already sends a form's fields to the endpoint
 // of sas-forms.json, so that endpoint becomes /api/forms, and the server tells the forms apart by the page they come from and
 // their fields (server/match.js); without script the form posts to its own action, which this server answers too. The pages
-// stay byte for byte the as-is pages. A form that sends its data to another service, opens the visitor's mail app, or is one
-// the server must not store (a sign-in, an upload, a search: emit/mern/forms.js describeForm) is not wired; the report says
-// in plain words where each form's data goes now.
+// stay byte for byte the as-is pages. A form that sends its data to another service, or opens the visitor's mail app, is not
+// wired: the form guard leaves it to the browser, so it goes where the original sent it (held only in the app's preview and the
+// checks). One the server must not store (a sign-in, an upload, a search: emit/mern/forms.js describeForm) is not wired
+// either. The report says in plain words where each form's data goes in the download.
 //
 // Exactness is checked as for React + Vite: verifyConverted holds every built page of client/dist against its as-is page and
 // every other file against the copy's (with the one file the wiring changes, sas-forms.json, as wired).
@@ -24,6 +25,7 @@ import { describeForm } from '../emit/mern/forms.js';
 import { pinnedVersions } from '../../toolchains/index.js';
 import { runToolchain } from '../build/toolchain.js';
 import { SECURITY_HEADERS } from '../../copy/securityHeaders.js';
+import { formDestination, formRoute } from '../../copy/formRoutes.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 /** The server the project ships (this folder's mern/server) and the form validation, store and limiter of the MERN template. */
@@ -44,7 +46,6 @@ const hostSlug = (pageUrl) => {
   try { host = new URL(pageUrl).hostname.replace(/^www\./, ''); } catch { /* keep the default */ }
   return host.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'site';
 };
-const bareHost = (h) => String(h ?? '').toLowerCase().replace(/^www\./, '');
 const kebab = (outPath) => outPath.replace(/(^|\/)index\.html$/, '').replace(/\.html?$/i, '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'home';
 const FIELD_TAGS = new Set(['input', 'select', 'textarea']);
 const NOT_SENT = new Set(['submit', 'button', 'reset', 'image']);
@@ -55,24 +56,7 @@ function irOf(el) {
   return { t: el.name, attrs: { ...el.attribs }, children: (el.children ?? []).filter((c) => c.type === 'tag' || c.type === 'text').map(irOf) };
 }
 
-/**
- * Where a form sent its data on the original: `own` (the original's own server: no action, a relative one, or one on its host),
- * `app` (mailto: / tel:), `service` (another host), `script` (an address the browser does not post to, javascript: or unreadable).
- */
-export function formDestination(action, pageUrl) {
-  const a = String(action ?? '').trim();
-  if (!a) return { kind: 'own', relative: true };
-  if (/^(mailto|tel):/i.test(a)) return { kind: 'app' };
-  if (/^javascript:/i.test(a)) return { kind: 'script' };
-  let u;
-  try { u = new URL(a, pageUrl || 'http://copy.invalid/'); } catch { return { kind: 'script' }; }
-  if (!/^https?:$/.test(u.protocol)) return { kind: 'script' };
-  const relative = !/^[a-z][a-z0-9+.-]*:|^\/\//i.test(a);
-  let pageHost = null;
-  try { pageHost = new URL(pageUrl).hostname; } catch { /* none */ }
-  if (relative || (pageHost && bareHost(u.hostname) === bareHost(pageHost))) return { kind: 'own', relative, host: u.hostname };
-  return { kind: 'service', host: u.hostname };
-}
+export { formDestination };
 
 /**
  * The forms of the copy's pages, planned: which are wired to the copy's own server (and the definition it validates against),
@@ -116,7 +100,11 @@ export function planForms(docs, { guardEndpoint }) {
       let wired = false;
       let refused;
       let now;
-      if (connected) {
+      if (dest.kind === 'service' || dest.kind === 'app') {
+        // The form guard leaves it to the browser and the page's script (copy/formRoutes.js): it goes where the original sent it.
+        refused = dest.kind === 'service' ? `This form sends its data to ${dest.host}, not to this site: this server does not store it.` : 'This form opens the visitor\'s own mail or phone app: this server does not store it.';
+        now = `${formRoute(dest, { guarded: true }).note} The copy's server does not store it.`;
+      } else if (connected) {
         refused = 'This form is sent where the copy\'s settings say (sas-forms.json); this server does not store it.';
         now = `In the copy it goes where sas-forms.json says (${guardEndpoint.trim()}), as before; this server does not store it.`;
       } else if (dest.kind === 'own' && !definition.skip) {
@@ -125,12 +113,6 @@ export function planForms(docs, { guardEndpoint }) {
       } else if (dest.kind === 'own') {
         refused = `This form is ${definition.skip}: this server does not store it.`;
         now = `In the copy it is not stored: it is ${definition.skip}, which needs the original's own service. The copy's server answers that it does not store this form, and nothing of it is kept.`;
-      } else if (dest.kind === 'service') {
-        refused = `This form sends its data to ${dest.host}, not to this site: this server does not store it.`;
-        now = `It is left as it is: the copy does not send it to ${dest.host} and does not store it (the copy's server answers that this form is not its own, and nothing of it is kept). Sending it to ${dest.host} again needs a person.`;
-      } else if (dest.kind === 'app') {
-        refused = 'This form opens the visitor\'s own mail or phone app: this server does not store it.';
-        now = 'It is left as it is: nothing of it is stored by the copy\'s server.';
       } else {
         refused = 'This form is sent by the page\'s own script: this server does not store it.';
         now = 'It is left as it is: the page\'s own script decided where it went on the original, and the copy\'s server does not store it.';
@@ -148,7 +130,9 @@ export function planForms(docs, { guardEndpoint }) {
         ...(wired ? { fields: definition.fields } : { refused }),
       };
       forms.push(entry);
-      report.push({ ...(words ?? {}), id, wired, goesTo: wired ? 'copy-server' : 'not-stored', note: now });
+      // Where its data goes in the downloaded copy: the copy's server, its own service (or mail app) as on the original, or nowhere.
+      const goesTo = wired ? 'copy-server' : dest.kind === 'service' ? 'service' : dest.kind === 'app' ? 'mail-app' : connected ? 'endpoint' : !guarded ? 'as-original' : 'not-stored';
+      report.push({ ...(words ?? {}), id, wired, goesTo, note: now });
     });
   }
   return { forms, report };

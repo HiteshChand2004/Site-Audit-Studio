@@ -90,7 +90,7 @@ self.addEventListener('fetch', (event) => {
  * Adds the service worker registration to the copy's document (once).
  * @param {string} outDir
  */
-export async function registerServiceWorker(outDir, entry = 'index.html', { ranged = {} } = {}) {
+export async function registerServiceWorker(outDir, entry = 'index.html', { ranged = {}, siteUrl = null } = {}) {
   const file = path.join(outDir, entry);
   const $ = load(await readFile(file, 'utf8'));
   const inline = $('script').toArray().map((s) => $(s).html() ?? '');
@@ -121,25 +121,103 @@ export async function registerServiceWorker(outDir, entry = 'index.html', { rang
     $('body').append(`${guard ? `<script>${FORM_GUARD}</script>` : ''}${register ? `<script>${SW_REGISTER}</script>` : ''}`);
     await writeFile(file, $.html(), 'utf8');
   }
-  // The form settings: read when a form is sent, so a server can be connected without rebuilding the copy.
+  // The form settings: read when a form is sent, so a server can be connected without rebuilding the copy. The original's
+  // own host is added to settings that lack it (an endpoint already set is never changed): with it the guard tells the
+  // forms that went to the original's server from those of another service.
   const config = path.join(outDir, 'sas-forms.json');
-  if (!(await stat(config).then(() => true, () => false))) await writeFile(config, `${JSON.stringify(FORMS_CONFIG, null, 2)}\n`, 'utf8');
+  const current = await readFile(config, 'utf8').then(JSON.parse, () => null);
+  const hosts = originalHostsOf(siteUrl);
+  if (!current) await writeFile(config, `${JSON.stringify({ ...FORMS_CONFIG, originalHosts: hosts }, null, 2)}\n`, 'utf8');
+  else if (hosts.length && !Array.isArray(current.originalHosts)) await writeFile(config, `${JSON.stringify({ ...current, originalHosts: hosts }, null, 2)}\n`, 'utf8');
 }
 
 /** The copy's form settings: where a form's data is sent. Empty by default: nothing is sent anywhere until a server is set. */
 export const FORMS_CONFIG = { endpoint: '' };
 
+/** The host names of the original site (with and without www.), as sas-forms.json lists them for the form guard. */
+export function originalHostsOf(siteUrl) {
+  try {
+    const host = new URL(siteUrl).hostname.toLowerCase().replace(/^www\./, '');
+    return host ? [host] : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Set by the app's preview and by every check of a copy (an init script): the guard then holds every form, see FORM_GUARD. */
+export const HOLD_FORMS = 'window.__sasHoldForms=true;';
+
+const formGuard = function () {
+  window.sasFormGuard = true;
+  var C = null;
+  var S = null;
+  function cfg() {
+    return C || (C = fetch('/sas-forms.json', { cache: 'no-cache' })
+      .then(function (r) { return r.ok ? r.json() : {}; })
+      .catch(function () { return {}; })
+      .then(function (c) { S = c || {}; return S; }));
+  }
+  function note(f, t) {
+    var n = f.querySelector('[data-sas-form-note]');
+    if (!n) {
+      n = document.createElement('p');
+      n.setAttribute('data-sas-form-note', '');
+      n.setAttribute('role', 'status');
+      n.style.cssText = 'margin:8px 0 0;font:14px/1.4 system-ui,sans-serif;color:#7c2d12';
+      f.appendChild(n);
+    }
+    n.textContent = t;
+  }
+  function held() { return window.__sasHoldForms === true; }
+  // Where the browser sends the form (the button's formaction first): another service or the visitor's mail app gives a
+  // name for it; the original's own server, this site and an address no browser posts to give null.
+  function away(f, b, c) {
+    var a = (b && b.getAttribute && b.getAttribute('formaction')) || f.getAttribute('action') || '';
+    var u;
+    try { u = new URL(a, location.href); } catch (x) { return null; }
+    if (u.protocol === 'mailto:' || u.protocol === 'tel:') return 'the visitor\'s mail or phone app';
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    var bare = function (h) { return String(h).toLowerCase().replace(/^www\./, ''); };
+    var own = (c && c.originalHosts) || [];
+    var h = bare(u.hostname);
+    if (u.host === location.host || h === bare(location.hostname) || own.indexOf(h) >= 0) return null;
+    return u.hostname;
+  }
+  cfg();
+  window.addEventListener('submit', function (e) {
+    var f = e.target;
+    if (!(f instanceof HTMLFormElement)) return;
+    var b = e.submitter || null;
+    // A form of another service goes to it as on the original: the browser and the page's own script send it.
+    if (!held() && S && away(f, b, S)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    cfg().then(function (c) {
+      var to = away(f, b, c);
+      if (to && held()) { note(f, 'Held in this preview: the downloaded copy sends this form to ' + to + ', as the original does.'); return; }
+      // The settings came after the click: the form is sent again, now passing the guard.
+      if (to) { try { f.requestSubmit(b && b.form === f ? b : undefined); } catch (x) { HTMLFormElement.prototype.submit.call(f); } return; }
+      var end = typeof c.endpoint === 'string' ? c.endpoint.trim() : '';
+      if (!end) { note(f, 'This form is not connected yet, so nothing was sent.'); return; }
+      note(f, 'Sending…');
+      return fetch(end, { method: 'POST', body: new FormData(f) }).then(function (r) {
+        note(f, r.ok ? 'Thank you. Your message was sent.' : 'The form could not be sent.');
+      }, function () { note(f, 'The form could not be sent.'); });
+    });
+  }, true);
+};
+
 /**
- * A form in the copy is never sent to the original's backend. The site's own script still validates the form and draws it
- * the same way; its submit handler (which would post to the original) never runs, because this listener sits on the window
- * in the capture phase. The data goes to the endpoint in sas-forms.json (FORM_ENDPOINT) when one is set; otherwise a short
- * visible note says the form is not connected yet, and nothing is sent.
+ * The copy's form guard, on every page of an as-is copy (a capture-phase submit listener on the window). Where each form goes:
+ *  - one that went to the original's own server (no action, a relative one, one on the original's host: sas-forms.json
+ *    `originalHosts`) is never sent to the original. The site's own submit handler (which would post there) never runs; the
+ *    data goes to the endpoint in sas-forms.json (FORM_ENDPOINT) when one is set, else a short note says it is not connected.
+ *  - one of another service (its action on another host: a form service, a newsletter, a CRM) or a mailto: form is left to the
+ *    browser and the page's own script, so the downloaded copy sends it exactly where the original did.
+ *  - while held (HOLD_FORMS: the app's preview and every check of a copy) no form is sent anywhere: one of another service
+ *    shows a note naming where the downloaded copy sends it.
  */
-export const FORM_GUARD = "(function(){window.sasFormGuard=true;var C=null;function cfg(){return C||(C=fetch('/sas-forms.json',{cache:'no-cache'}).then(function(r){return r.ok?r.json():{}}).catch(function(){return{}}))}"
-  + "function note(f,t){var n=f.querySelector('[data-sas-form-note]');if(!n){n=document.createElement('p');n.setAttribute('data-sas-form-note','');n.setAttribute('role','status');n.style.cssText='margin:8px 0 0;font:14px/1.4 system-ui,sans-serif;color:#7c2d12';f.appendChild(n)}n.textContent=t}"
-  + "window.addEventListener('submit',function(e){var f=e.target;if(!(f instanceof HTMLFormElement))return;e.preventDefault();e.stopImmediatePropagation();"
-  + "cfg().then(function(c){var end=typeof c.endpoint==='string'?c.endpoint.trim():'';if(!end){note(f,'This form is not connected yet, so nothing was sent.');return}"
-  + "note(f,'Sending…');return fetch(end,{method:'POST',body:new FormData(f)}).then(function(r){note(f,r.ok?'Thank you. Your message was sent.':'The form could not be sent.')},function(){note(f,'The form could not be sent.')})})},true)})();";
+export const FORM_GUARD = `(${formGuard.toString()})();`;
 
 /**
  * The host rewrite turns an absolute address of a runtime (new URL('https://<host>/x') or new URL(path, 'https://<host>/m.js'))
@@ -398,6 +476,7 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
         for (const options of COMPLETE_VIEWPORTS) {
           const context = await browser.newContext(options);
           try {
+            await context.addInitScript(HOLD_FORMS);
             // The copy is opened the way it ships: with the URL shim in force before any script of the page (the shipped page
             // gets it as its first script, registerServiceWorker). Without it a runtime that builds addresses from a rewritten
             // base fails here, asks for nothing, and the pass sees a page no visitor gets.
@@ -436,7 +515,7 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
   await writeFile(path.join(outDir, 'sw.js'), serviceWorkerSource(manifest, [...originHosts], sameFile, rangedFiles), 'utf8');
   // GitHub Pages (Jekyll) leaves out folders whose names start with "_" unless this empty file is there: a copy with a _next folder needs it.
   await writeFile(path.join(outDir, '.nojekyll'), '', 'utf8');
-  for (const entry of entries) await registerServiceWorker(outDir, entry, { ranged: rangedFiles });
+  for (const entry of entries) await registerServiceWorker(outDir, entry, { ranged: rangedFiles, siteUrl: pageUrl });
   await rm(tmp, { recursive: true, force: true });
   return { passes: passesRun, manifest, log, sameOrigin, referenced, ranged };
 }

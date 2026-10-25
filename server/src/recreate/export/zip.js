@@ -172,14 +172,29 @@ export function writeZip(plan, out) {
   });
 }
 
-// Build output and dependencies are never part of the zip: node_modules, .ssr and .next anywhere; dist and out at the top
-// of the project or of its client/ and server/ folders (MERN).
-const SKIP_ANYWHERE = new Set(['node_modules', '.ssr', '.next']);
-const SKIP_TOP = new Set(['dist', 'out']);
-const skippedInProject = (rel) => {
+// The project's own installed packages and build output are never part of the zip: node_modules, .ssr, .next, dist and out
+// directly inside one of the project's own packages (the project, its client/ or its server/, each with its package.json).
+// Nowhere else: a copy keeps the original's files at the paths the original served them, and an original may serve
+// /node_modules/… or /dist/… (inside public/, site-files/, or the folder of a plain HTML copy, which has no package.json).
+const PROJECT_OWN = new Set(['node_modules', '.ssr', '.next', 'dist', 'out']);
+const PACKAGE_ROOTS = ['', 'client', 'server'];
+
+/**
+ * Whether a file of a project is its own installed packages or build output.
+ * @param {string} rel  the file's path inside the project
+ * @param {Set<string>} packages  the project's own package folders ('' = the project) that hold a package.json
+ */
+export function projectOwnFile(rel, packages) {
   const seg = rel.split('/');
-  return seg.some((s) => SKIP_ANYWHERE.has(s)) || SKIP_TOP.has(seg[0]) || (['client', 'server'].includes(seg[0]) && SKIP_TOP.has(seg[1]));
-};
+  return PACKAGE_ROOTS.some((root) => {
+    if (!packages.has(root)) return false;
+    const inner = root ? (seg[0] === root ? seg.slice(1) : null) : seg;
+    return Boolean(inner && inner.length > 1 && PROJECT_OWN.has(inner[0]));
+  });
+}
+
+/** The project's own package folders, from its files. */
+export const packagesOf = (rels) => new Set(PACKAGE_ROOTS.filter((root) => rels.includes(root ? `${root}/package.json` : 'package.json')));
 
 /** A stack project: its source as it is (the user installs and builds it), plus the report. */
 async function planProjectZip({ dir, report, stack }) {
@@ -189,8 +204,10 @@ async function planProjectZip({ dir, report, stack }) {
   // An as-is copy is not built: for MERN its files are client/dist (the copy itself), so only a clean build's dist is skipped.
   // A copy converted into code (its client is built by `npm run build`) ships the source like a clean build does.
   const asIs = output.mode === 'as-is' && report.asIs?.convert?.mode !== 'converted';
-  const keep = (rel) => (asIs && rel.startsWith('client/dist/')) || !skippedInProject(rel);
-  const files = (await listFiles(project, { allowDot: ['.gitignore', '.env.example', '.nojekyll'] }).catch(() => [])).filter((f) => keep(f.rel));
+  const all = await listFiles(project, { allowDot: ['.gitignore', '.env.example', '.nojekyll'] }).catch(() => []);
+  const packages = packagesOf(all.map((f) => f.rel));
+  const keep = (rel) => (asIs && rel.startsWith('client/dist/')) || !projectOwnFile(rel, packages);
+  const files = all.filter((f) => keep(f.rel));
   if (!files.length) throw refuse(404, `The ${stack} project of this recreate is gone. Run Recreate again.`);
   const root = zipBaseName(report, stack);
   const entries = [

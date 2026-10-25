@@ -6,8 +6,9 @@
 //   POST /api/forms/:id           the same for one form named by its id
 //   POST <a form's own action>    a form sent without script, to the address it posts to on the original: the same, then 303 → /thanks
 //   GET  /thanks                  the page a browser lands on after a form sent without script
-// A form that sends its data to another service, or one this server does not store (a sign-in, an upload), is refused with
-// what it is in plain words: nothing of it is kept.
+// A form of another service does not come here (the copy's form guard leaves it to the browser, which sends it to that
+// service). One posted here anyway, and one this server does not store (a sign-in, an upload), is refused with what it is in
+// plain words: nothing of it is kept.
 import express from 'express';
 import { validateSubmission } from './forms.js';
 import { SECURITY_HEADERS } from './headers.js';

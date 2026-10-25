@@ -16,7 +16,7 @@ import { chromium } from 'playwright';
 import { startFixtureServer } from './serve-fixture.js';
 import { buildConvertedMern, convertToMern, MERN_EXPORT_DIR, verifyConvertedMern } from '../src/recreate/convert/mern.js';
 import { routeOf } from '../src/recreate/convert/react.js';
-import { FORM_GUARD } from '../src/recreate/behavior/preserve/complete.js';
+import { FORM_GUARD, HOLD_FORMS } from '../src/recreate/behavior/preserve/complete.js';
 import { startStack } from '../src/recreate/behavior/preserve/serveStack.js';
 import { checkCopy } from '../src/recreate/behavior/preserve/check.js';
 import { domSignature, firstDifference } from '../src/recreate/verify/equivalence.js';
@@ -82,9 +82,10 @@ test('the conversion: components per section, the fallbacks named, the same scri
     const scripts = (s) => (s.match(/<script\b/gi) ?? []).length;
     assert.equal(scripts(converted), scripts(original), `${p.outPath}: the same number of scripts, none of React's`);
   }
-  // The fixture's forms: a builder's form service (another service) and a sign-in: neither is stored, each said in words.
+  // The fixture's forms: a builder's form service (another service: it goes there, as on the original) and a sign-in (not
+  // stored): neither is stored by the copy's server, each said in words.
   assert.equal(result.wiredForms, 0);
-  assert.ok(result.forms.every((f) => f.note && f.goesTo === 'not-stored'), JSON.stringify(result.forms));
+  assert.ok(result.forms.every((f) => f.note && ['service', 'not-stored'].includes(f.goesTo)), JSON.stringify(result.forms));
 });
 
 test('in a browser: the same DOM as the original on every page (scripts off), no React in the page, every link answered', { timeout: 10 * 60000 }, async () => {
@@ -193,12 +194,12 @@ const FORMS_PAGE = `<!DOCTYPE html>
 </main><script>${FORM_GUARD}</script></body></html>
 `;
 
-test('the forms in a browser: sent by the copy\'s form guard to the copy\'s server and saved; another service\'s is not; without script to /thanks', { timeout: 10 * 60000 }, async () => {
+test('the forms in a browser: the copy\'s own saved by its server, another service\'s posted to it as on the original (held in the preview), without script to /thanks', { timeout: 10 * 60000 }, async () => {
   const formsRoot = path.join(root, 'forms');
   const copy = path.join(formsRoot, 'copy');
   await cp(path.join(FIXTURE, 'styles.css'), path.join(copy, 'styles.css'));
   await writeFile(path.join(copy, 'index.html'), FORMS_PAGE, 'utf8');
-  await writeFile(path.join(copy, 'sas-forms.json'), '{\n  "endpoint": ""\n}\n', 'utf8');
+  await writeFile(path.join(copy, 'sas-forms.json'), '{\n  "endpoint": "",\n  "originalHosts": ["example-original.dev"]\n}\n', 'utf8');
   const project = path.join(formsRoot, 'mern');
   const formPages = [{ outPath: 'index.html', url: 'https://www.example-original.dev/' }];
   await convertToMern({ copyDir: copy, outDir: project, pages: formPages, pageUrl: 'https://www.example-original.dev/' });
@@ -215,7 +216,18 @@ test('the forms in a browser: sent by the copy\'s form guard to the copy\'s serv
   const site = `http://127.0.0.1:${server.address().port}`;
   const context = await browser.newContext();
   const outside = [];
-  await context.route('**/*', (route) => (route.request().url().startsWith(site) ? route.continue() : (outside.push(route.request().url()), route.abort())));
+  const toService = [];
+  await context.route('**/*', (route) => {
+    const req = route.request();
+    if (req.url().startsWith(site)) return route.continue();
+    // The form service of the page: answered by a stand-in, so the test sees the post without sending it anywhere.
+    if (req.url().startsWith('https://forms.example-service.io/')) {
+      toService.push({ method: req.method(), url: req.url() });
+      return route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>Received</title><h1>Received</h1>' });
+    }
+    outside.push(req.url());
+    return route.abort();
+  });
   try {
     const page = await context.newPage();
     const errors = [];
@@ -232,13 +244,30 @@ test('the forms in a browser: sent by the copy\'s form guard to the copy\'s serv
     await page.click('.contact button');
     await page.locator('.contact [data-sas-form-note]').filter({ hasText: 'Thank you' }).waitFor({ timeout: 10000 });
     assert.equal(store.docs[1].formId, 'home-2');
-    // Another service's form: not stored, the visitor is told, nothing leaves the copy.
-    await page.fill('.service input[name=email]', 'ada@example.test');
-    await page.click('.service button');
-    await page.locator('.service [data-sas-form-note]').filter({ hasText: 'could not be sent' }).waitFor({ timeout: 10000 });
-    assert.equal(store.docs.length, 2);
-    assert.deepEqual(outside, [], 'nothing asked off the copy');
+    assert.deepEqual(outside, [], 'the copy\'s own forms ask nothing off the copy');
     assert.deepEqual(errors, []);
+    // Another service's form, in the download: the browser posts it to that service, as on the original (the request is
+    // answered here by a stand-in, never sent); the copy's server stores nothing of it.
+    await page.fill('.service input[name=email]', 'ada@example.test');
+    await Promise.all([page.waitForURL(/forms\.example-service\.io/, { timeout: 10000 }).catch(() => {}), page.click('.service button')]);
+    assert.deepEqual(toService, [{ method: 'POST', url: 'https://forms.example-service.io/f/abc' }]);
+    assert.equal(store.docs.length, 2);
+    // Held (the app's preview, every check): nothing is sent, and the form says where the download sends it.
+    const heldContext = await browser.newContext();
+    try {
+      await heldContext.addInitScript(HOLD_FORMS);
+      const sentHeld = [];
+      await heldContext.route('**/*', (route) => (route.request().url().startsWith(site) ? route.continue() : (sentHeld.push(route.request().url()), route.abort())));
+      const p = await heldContext.newPage();
+      await p.goto(`${site}/`, { waitUntil: 'networkidle' });
+      await p.fill('.service input[name=email]', 'ada@example.test');
+      await p.click('.service button');
+      await p.locator('.service [data-sas-form-note]').filter({ hasText: 'Held in this preview: the downloaded copy sends this form to forms.example-service.io' }).waitFor({ timeout: 10000 });
+      assert.deepEqual(sentHeld, []);
+      assert.equal(store.docs.length, 2);
+    } finally {
+      await heldContext.close();
+    }
     // Without script the form posts to its own address, as on the original, and the visitor lands on /thanks.
     const noJs = await browser.newContext({ javaScriptEnabled: false });
     try {

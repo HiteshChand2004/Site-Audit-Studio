@@ -15,6 +15,7 @@ import { buildConvertedMern, convertToMern, MERN_EXPORT_DIR, verifyConvertedMern
 import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
 import { checkCopy, excludedHostsOf, fixGate, formsInCopy, NOISE_SHOTS, probeOriginal } from './check.js';
+import { formRoutesOfCopy, formsReadmeSection } from '../../../copy/formRoutes.js';
 import { fixAsIsCopy, revertPage } from '../../../copy/fixAsIs.js';
 import { addressForCopy } from '../../../copy/address.js';
 import { measureServed, servedOutcome } from '../../../copy/served.js';
@@ -299,6 +300,8 @@ export async function asIsStage(ctx) {
         'The file `.nojekyll` (empty) is in this folder on purpose: without it GitHub Pages leaves out folders whose names start with `_`,',
         'and this copy keeps the original\'s `_next` folder. Keep the file when you upload.',
         '',
+        // Where each form's data goes in this download (copy/formRoutes.js).
+        formsReadmeSection(await formRoutesOfCopy(copyDir, pages)),
       ].join('\n'), 'utf8');
     } else if (CONVERTERS[stack]) {
       // The finished copy converted into real code of the stack (recreate/convert/): pages and components, prerendered and never
@@ -334,11 +337,15 @@ export async function asIsStage(ctx) {
     // A converted copy run by its own server (MERN) is served by that server; a static export is static files.
     const ownServer = converted && CONVERTERS[stack].runs === 'server';
     report.forms = await formsInCopy(copyDir, pages.map((p) => p.outPath));
-    // A converted MERN copy stores its own-server forms itself: only the others need a person.
-    const notStored = ownServer ? (report.convert.forms ?? []).filter((f) => !f.wired).length : report.forms;
-    report.needsAPerson = notStored ? [{
-      kind: 'form', count: notStored,
-      why: ownServer ? 'it sent its data to another service, or is one the copy\'s server does not store (a sign-in, an upload, a search); the forms list says which' : 'its data is never sent to the original site; connect FORM_ENDPOINT in sas-forms.json',
+    // Where each form's data goes in the downloaded copy (copy/formRoutes.js, the form guard's rules); a converted copy's own
+    // list (MERN: the forms its server stores) says it for that stack.
+    report.formRoutes = converted && report.convert.forms ? report.convert.forms : await formRoutesOfCopy(copyDir, pages);
+    // A form of another service, or a mail form, goes where the original sent it; one that went to the original's own server
+    // needs a person (FORM_ENDPOINT), except in a converted MERN copy, whose server stores it unless it is one it must not.
+    const waiting = report.formRoutes.filter((f) => f.goesTo === 'not-connected' || f.goesTo === 'not-stored').length;
+    report.needsAPerson = waiting ? [{
+      kind: 'form', count: waiting,
+      why: ownServer ? 'it went to the original\'s own server and is one the copy\'s server does not store (a sign-in, an upload, a search, a script\'s own address); the forms list says which' : 'it went to the original\'s own server and is never sent there from the copy; connect FORM_ENDPOINT in sas-forms.json',
     }] : [];
     report.javascript = await javascriptOf(copyDir);
 

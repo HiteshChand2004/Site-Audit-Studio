@@ -738,11 +738,37 @@ Scratch data `C:/Users/urvas/Downloads/sas-work/nyaayai-next-data` (copied from 
   DEPLOY.md says "N forms are saved in MongoDB" (`deployMd formsSaved`); the zip ships the source, not `client/dist`.
 - Wired: `stage.js CONVERTERS.mern` (`runs: 'server'`): checked on its own server (`startStack(..., { env: { FORMS_STORE: 'memory' } })`),
   headers counted as the server's. A failure packages as before (`packLifted`).
-- **Limit (needs a decision)**: a form of another service is not sent to it in the MERN copy (as in every as-is copy, the form
-  guard holds every form); with the endpoint set, the visitor now sees "The form could not be sent." (server 409) instead of "not
-  connected yet". Letting such a form go to its own action needs a change in the shared form guard (`complete.js FORM_GUARD`).
 - Tests: `convert-mern-build.test.js` 8/8 (no browser). Written, not run: `convert-mern.test.js`, `full-flow.test.js` (MERN now
   converted, an order form on the test page, its submission stored), `SAS_FLOW_STACKS=mern`.
+
+### Forms of another service go to it in the download; the zip keeps the original's node_modules paths (2026-10-25, `convert-mern`)
+
+User decision: a form that posts to another service (a form service, a newsletter, a CRM) must post there in the downloaded copy,
+exactly as on the original, in every stack; the guard holds forms only in the app's preview and in our checks.
+- **Guard** (`complete.js FORM_GUARD`, now readable source): it decides synchronously from the form's action (the submit
+  button's `formaction` first). Another host, or `mailto:` / `tel:` → not intercepted, so the browser and the page's own script send it.
+  No action, a relative one, this site, or the original's host (`sas-forms.json originalHosts`, written by `registerServiceWorker({
+  siteUrl })` without touching an endpoint the owner set), or `javascript:` → held as before (FORM_ENDPOINT, or "not connected
+  yet"). If the form is submitted before the settings have loaded, it is held and then sent again with `requestSubmit`. While
+  `window.__sasHoldForms` is set (`HOLD_FORMS`) a service form is held and says "Held in this preview: the downloaded copy sends
+  this form to <host>".
+- **Held in**: the preview shim (`previewShim.js`), every copy-side check context (`check.js isolated`), the completion passes
+  (`complete.js`), and the re-audit's motion / click probe (`reaudit/motion.js`).
+- **Report per form** (`copy/formRoutes.js`: `formDestination` moved here from `convert/mern.js`, which re-exports it, plus
+  `formRoute`, `formRoutesOfCopy`, `formCounts`, `formsReadmeSection`): `report.asIs.formRoutes[]` gives `goesTo` = service | mail-app |
+  endpoint | not-connected | as-original (MERN adds copy-server / not-stored) and a plain-words `note`, for every stack.
+  `needsAPerson` counts only not-connected / not-stored forms. It is shown in the HTML README, the packaged-stack READMEs
+  (`pack.js`), DEPLOY.md (`deploy.js formLines`), the report (`render.js`) and the app (`AsIsReport.jsx`).
+  `convert/document.js formsOf` (shared core) uses `formRoute` for its note and gains `goesTo`; `worksWithoutOriginal`
+  keeps its meaning. A page without the guard keeps the old as-original wording.
+- **Zip** (`export/zip.js projectOwnFile` / `packagesOf`): node_modules / .ssr / .next / dist / out are left out only directly
+  inside one of the project's own packages (the project, `client/` or `server/` with a package.json). An original's
+  `/node_modules/…` or `/dist/…` file is kept (in public/, site-files/, client/public/, or a plain HTML copy's folder). Before
+  this, a plain HTML as-is copy also lost the original's /dist/ and /out/ files.
+- **Limit**: a form with no service action whose own script posts to a service (by fetch from a submit handler) is held as
+  the original's own server's form.
+- Tests (no browser): `form-guard.test.js` 7/7 (the guard's own source in a stand-in page), `zip-project-files.test.js` 2/2
+  (every stack). Written, not run: `preserve-forms.test.js` (+1), `convert-mern.test.js` forms test.
 
 ### nyaayai's "What is Nyaay AI?" chat bar missing in the copy (botza.panscience.xyz, 2026-10-25): the service's domain allow-list
 
