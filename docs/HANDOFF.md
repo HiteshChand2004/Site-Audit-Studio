@@ -883,6 +883,21 @@ Checked against the conversions (2026-10-25, after `convert-react` was merged; D
     deep-equal (pages with url / outPath / slug / source / depth / flags, skipped, beyondLimit, sitemap, robots, llms).
     nyaayai 14–20 → 1–3 pages fetched (~2 s → ~0.8 s), parchaa 10 → 1–3; "every page" fell back on both. A few seconds per
     copy on these sites; more on a client-rendered site, whose crawl renders its pages in the browser.
+- **Full suite before the merge to main (2026-10-25, not finished)** — logs and lists in
+  `C:\Users\urvas\Downloads\remastly-live-results\suite\`. First run: 70 of 192 files done, 1 failure, a stale test
+  (`recreate-exact`: its fixture put the image under the faint text; fixed in ebb4fa2, 14/14). The other 122 files in
+  batches of 15: batches 1–4 (60 files) and 7 (15) passed, 0 failures; 5 tests skipped on purpose (the axe-based
+  contrast fixer set aside by the PR #1 merge 283b108, "follow-up: compare with main-before-merge").
+  Batch 5 failed 35 tests only because the cleanup closed its browsers while it ran (Claude Code's memory guard had killed
+  the driver, not the node runner, which went on): all "browser has been closed", not real. Batch 6: 3 real failures,
+  most likely stale tests, not fixed yet: `recreate-mern` / `recreate-next` "real export" fetch the preview's path
+  `/preview/<token>/…` as a full address (previews moved under the app's address on 2026-10-24), and the Next zip test
+  does not expect `DEPLOY.md`. Batch 8 was cut off.
+  **Tomorrow**: run the 34 files of `suite\remaining.txt` (batch 5, `recreate-mern`, `recreate-next`, batches 8–9):
+  the 22 of `remaining-browser.txt` alone, 5 at a time, then the 12 of `remaining-no-browser.txt`, 5 at a time:
+  `SAS_TEST_BROWSER_CONCURRENCY=1 node test/run-tests.js <5 files>` from `server/`. Before closing leftovers between
+  batches, make sure no runner is still going (a stopped background shell can leave `node test/run-tests.js` alive);
+  `suite\cleanup-tests.ps1` closes only Playwright's Chromium and node processes of this worktree's tests.
 
 ## Next steps, in order (commit after each with `--no-verify`, say the full suite was not run; nothing is pushed before the PR)
 
