@@ -662,14 +662,19 @@ Scratch data `C:/Users/urvas/Downloads/sas-work/nyaayai-next-data` (copied from 
   async script standing in the body); 3 forms, all guarded.
 - Run 4 (with the fix, "Package again" from db54dfd5) was stopped after the 1440 gate (0.0002 %, equal height). A package job keeps
   no checkpoint and needs none: the source copy db54dfd5 is intact in the scratch data.
-- **Run next** (one browser, about 25 min), from `Website-Audit-accounts/server`:
-  `REPACK_FROM=db54dfd5-dca6-49ce-b82a-e1ad75692b6d SAS_MAX_PARALLEL=1 SAS_KEEP_COPIES_DAYS=30 SAS_KEEP_AWAKE=0 node --disable-warning=ExperimentalWarning C:/Users/urvas/Downloads/remastly-live-results/scripts/nextjs-convert.mjs C:/Users/urvas/Downloads/Website-Audit-accounts C:/Users/urvas/Downloads/sas-work/nyaayai-next-data C:/Users/urvas/Downloads/remastly-live-results/nyaayai/nextjs-convert nyaayai https://www.nyaayai.com/`
-  then `side-by-side.mjs <worktree> <new recreate>/stacks/nextjs/out <results>/pictures https://www.nyaayai.com/`, save an example
-  component, and report to the user (visual, Lighthouse phone + computer, motion rows, links / console / forms, fallbacks).
-- Open, not fixed: the "fixes served" open item is a false alarm for a converted copy (it compares bytes; the fixes ARE in the
-  export); on a builder page the whole page is one 410 KB component (`Main`) plus one tiny component per stray body `<link>` (the
-  section split looks only through single wrappers); the 2 comments before `<html>` (builder banner, publish date) are left out.
-
+- Run 5 (2026-10-25, "Package again" from db54dfd5, comments kept; original not reachable, so compared with the saved picture):
+  visual 0.0005 % / 0.002 %; Lighthouse medians of three, phone 80 -> 92, computer 84 -> 96. The phone drop of run 3 was the
+  dropped comments (React-rendered markup read without its hydration markers).
+- Run 6 (2026-10-25, b6441de, "Package again" from run 5's copy 1c41a1fd — db54dfd5 was removed by retention): 47 fixes kept
+  (45 names, 2 structured data), fix gate 0 px; Lighthouse phone 80 -> 86, computer 84 -> 96, accessibility 90 -> 94; "fixes
+  served" = served (compared by meaning). Live original vs copy: equal heights, 0.26 % at 1440 / 0.13 % at 390, all of it the
+  third-party chat search bar (botza.panscience.xyz widget, not downloadable, 3 console errors), not the conversion. Pictures
+  in `remastly-live-results/nyaayai/nextjs-convert/pictures/`.
+- Fixed in b6441de: sections found inside builder wrappers (`planSections`: nyaayai = SiteNav, Hero, Section3, NyaayAIReflects,
+  SolutionsAcrossThe, UnifyingFragmentedLegal, BuiltOnProof, OurCertifications, SuccessStories ×3, SeeHowNyaay, WeAnsweredAll,
+  SiteFooter ×3, SvgTemplates; the ×3 are Framer's per-width versions); "fixes served" compared by meaning; a comment with a
+  quote broke the Next.js build (convert-next failed on 6cc8ee8).
+- Open: the 2 comments before `<html>` are left out; BuiltOnProof is still 127 KB (one titled section holding a long list).
 ## Next steps, in order (commit after each with `--no-verify`, say the full suite was not run; nothing is pushed before the PR)
 
 1. **Step 4 — the blank render and the motion step's timeout: DONE 2026-10-24** (both fixed generally and verified live, see
