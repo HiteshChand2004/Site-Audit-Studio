@@ -695,6 +695,17 @@ Scratch data `C:/Users/urvas/Downloads/sas-work/nyaayai-next-data` (copied from 
   `/@react-refresh`, `/node_modules/*` and serves the project's own files at their paths (`/src/*`, `/index.html`, config files); its
   build writes `/_app/` here (`assetsDir`), so an original's `/_app/` collides. MERN adds the Express routes `/api/health`,
   `/api/forms/:id` and `/thanks`.
+### nyaayai's "What is Nyaay AI?" chat bar missing in the copy (botza.panscience.xyz, 2026-10-25): the service's domain allow-list
+
+- The copy keeps the widget's script exactly (`<script src="https://botza.panscience.xyz/widget/chatbot-widget.js">`, answered
+  200). The widget then asks `GET /api/chatbot/w/cfg/<id>` with `Content-Type: application/json`, so the browser sends a
+  preflight first. botza answers `Origin: https://www.nyaayai.com` with 204 + `Access-Control-Allow-Origin: https://www.nyaayai.com`;
+  any other origin (the copy's, or a plain new domain) gets **500 `{"message":"Not allowed by CORS"}`**. Not a copy fault.
+- Reported generically (`recreate/behavior/preserve/domainLock.js`, run by `stage.js` after the checks): the copy's page is
+  opened with the network on, every failing request to another site is asked again server-side as the original's domain (and its
+  www. twin) and as another domain; allowed for the first and refused for the second = an open item (reason a) "This part (<host>)
+  only loads on the original's domain. It will appear once your new domain is allowed in that service's settings." Test:
+  `copy-domain-lock.test.js`.
 ## Next steps, in order (commit after each with `--no-verify`, say the full suite was not run; nothing is pushed before the PR)
 
 1. **Step 4 — the blank render and the motion step's timeout: DONE 2026-10-24** (both fixed generally and verified live, see

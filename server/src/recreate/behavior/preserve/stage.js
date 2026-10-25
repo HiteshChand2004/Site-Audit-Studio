@@ -18,6 +18,7 @@ import { addressForCopy } from '../../../copy/address.js';
 import { measureServed, servedOutcome } from '../../../copy/served.js';
 import { slugFor } from '../../discover.js';
 import { serveCopy } from './serve.js';
+import { domainLockedParts, lockedItems } from './domainLock.js';
 import { fetchLlmsTxt } from '../../../audit/robots.js';
 import { runLighthouse } from '../../../audit/lighthouse/run.js';
 import { RecreateError } from '../../errors.js';
@@ -381,6 +382,13 @@ export async function asIsStage(ctx) {
       log: (m) => ctx.progress(0.55, m),
     });
     report.checks = checks;
+    // Outside services that serve their part only to the original's domain (domainLock.js): kept in the copy, refused there.
+    for (const p of checks.pages) {
+      p.domainLocked = await domainLockedParts(browser, base, p.path, p.original).catch((err) => {
+        ctx.progress(0.56, `outside services ${p.path}: ${String(err?.message ?? err).slice(0, 160)}`);
+        return [];
+      });
+    }
     if (!originalReachable) ctx.report.warnings.push('The original did not answer: the checks that compare with it say so; the copy and its download are complete.');
     const external = checks.pages.reduce((n, p) => n + p.offline.external.length, 0);
     report.safety = { safe: external === 0, mode: 'as-is', note: 'The original\'s own code is kept as it is; the check is that nothing leaves the copy.' };
@@ -417,6 +425,7 @@ export async function asIsStage(ctx) {
     // that are not served are open, never fixed.
     const served = report.fixes?.served && !report.fixes.served.error ? servedOutcome(report.fixes.served) : null;
     if (served) openItems.push(...served.open.map((o) => ({ page: o.page ?? '/', ...o })));
+    openItems.push(...lockedItems(checks.pages));
     const logOpen = issueLogger(LOGS_DIR);
     for (const o of openItems) await logOpen({ site: new URL(siteUrl).hostname, stack, ...o });
     // Every part the conversion kept as original HTML is recorded for the owner too (site, page, tag / attribute, reason).
