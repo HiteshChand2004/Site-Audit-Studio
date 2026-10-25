@@ -125,7 +125,8 @@ function zipNames(buf) {
 // files the download must hold — the whole project, as before the fix (the fix changed only which folder is read).
 const STACKS = {
   html: { served: '', project: ['README.md', 'index.html'] },
-  'react-vite': { served: 'dist', project: ['package.json', 'vite.config.js', 'src/entry.js', 'public/index.html', 'README.md', '_headers'] },
+  // Converted into React pages and components (recreate/convert/react.js): the page is src/pages/Home.jsx, not a file of public/.
+  'react-vite': { served: 'dist', project: ['package.json', 'vite.config.js', 'src/entry-server.jsx', 'src/routes.js', 'src/pages/Home.jsx', 'scripts/prerender.mjs', 'scripts/dev.mjs', 'public/_headers', 'README.md'], absent: ['public/index.html', 'dist/index.html'], converted: true },
   // Next.js: the copy converted into pages and components (recreate/convert/next.js), a static export served from out/; the
   // project ships the source (out/ is written by its own build, as DEPLOY.md says).
   nextjs: { served: 'out', project: ['package.json', 'next.config.mjs', 'pages/index.jsx', 'pages/_document.jsx', 'src/documents.js', 'scripts/after-build.mjs', 'README.md'], converted: true },
@@ -163,6 +164,11 @@ ${api.output().slice(-3000)}`);
     const convert = recreate.result?.asIs?.convert;
     assert.equal(convert?.mode, 'converted', `the ${stack} copy is converted into code: ${JSON.stringify(convert ?? null).slice(0, 300)}`);
     assert.ok(convert.stats.components >= 1 && Array.isArray(convert.fallbacks) && Array.isArray(convert.forms), 'components, fallbacks and forms are reported');
+    // React + Vite holds every built page against its as-is page (recreate/convert/react.js verifyConverted).
+    if (stack === 'react-vite') {
+      assert.equal(convert.verified?.pages, convert.stats.pages, 'every built page was held against its as-is page');
+      assert.deepEqual(convert.verified?.added, [], 'the build added no file');
+    }
   }
 
   // 3. The re-audit the copy queued by itself: it runs once and succeeds.
@@ -206,6 +212,7 @@ ${api.output().slice(-3000)}`);
   assert.equal(zip.status, 200, zip.text.slice(0, 300));
   const names = zipNames(zip.bytes).map((n) => n.split('/').slice(1).join('/')).filter(Boolean);
   for (const f of STACKS[stack].project) assert.ok(names.includes(f), `the ${stack} download holds ${f} (it has: ${names.slice(0, 30).join(', ')})`);
+  for (const f of STACKS[stack].absent ?? []) assert.ok(!names.includes(f), `the ${stack} download does not hold ${f}`);
   assert.ok(!names.some((n) => n.split('/').includes('node_modules')), 'no node_modules');
   return id;
 }
@@ -223,7 +230,9 @@ test('Analyze → Copy my site → re-audit → Results → Compare → report �
   const failures = [];
   const made = {};
   // Every stack the tool offers; the ordinary user and the owner share them out (the user's MERN copy is the reported case).
-  for (const [who, as, stack] of [['ordinary user', user, 'mern'], ['owner', owner, 'react-vite'], ['ordinary user', user, 'html'], ['owner', owner, 'nextjs']]) {
+  // SAS_FLOW_STACKS (comma-separated) runs only those stacks, e.g. while one stack is being worked on.
+  const only = process.env.SAS_FLOW_STACKS?.split(',').map((s) => s.trim()).filter(Boolean);
+  for (const [who, as, stack] of [['ordinary user', user, 'mern'], ['ordinary user', user, 'react-vite'], ['owner', owner, 'html'], ['owner', owner, 'nextjs']].filter(([, , s]) => !only?.length || only.includes(s))) {
     made[`${who} ${stack}`] = {};
     try {
       await wholeFlow({ api, as, siteUrl: site.url, stack, name: `Bakery (${who}, ${stack})`, made: made[`${who} ${stack}`] });
@@ -235,7 +244,11 @@ test('Analyze → Copy my site → re-audit → Results → Compare → report �
   }
 
   // A copy that cannot be compared fails once, with the reason: a click on "Compare now" is refused, no job is queued.
-  // (A newer finished copy whose folder lost its home page.)
+  // (A newer finished copy whose folder lost its home page.) It needs the MERN copy: not run when SAS_FLOW_STACKS leaves it out.
+  if (!made['ordinary user mern']?.id) {
+    assert.deepEqual(failures, [], failures.join('\n'));
+    return;
+  }
   const userProject = made['ordinary user mern'].id;
   const d = new DatabaseSync(path.join(dataDir, 'app.db'));
   try {

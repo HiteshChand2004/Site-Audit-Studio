@@ -9,6 +9,7 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import { liftSite, localOfOutPath } from './asis.js';
 import { packLifted, servedDir } from './pack.js';
+import { buildConvertedReact, convertToReact, REACT_EXPORT_DIR, verifyConverted } from '../../convert/react.js';
 import { buildConverted, convertToNext, EXPORT_DIR } from '../../convert/next.js';
 import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
@@ -30,6 +31,14 @@ import { LOGS_DIR } from '../../../config/paths.js';
 
 /** The stacks an as-is copy can be packaged into (the plain copy and the three app stacks). */
 export const ASIS_STACKS = ['html', 'react-vite', 'nextjs', 'mern'];
+/**
+ * The stacks whose copy is converted into real code (recreate/convert/): the words the progress and the report use, the writer,
+ * its build, the check of the built pages against the as-is pages (where the stack has one) and the folder the build writes.
+ */
+const CONVERTERS = {
+  'react-vite': { code: 'React', project: 'React + Vite', convert: convertToReact, build: buildConvertedReact, verify: verifyConverted, exportDir: REACT_EXPORT_DIR },
+  nextjs: { code: 'Next.js', project: 'Next.js', convert: convertToNext, build: buildConverted, verify: null, exportDir: EXPORT_DIR },
+};
 /** The lifted copy and its page set, kept in the job's folder: a repack for another stack starts from them. */
 export const ASIS_DIR = 'as-is';
 export const ASIS_PAGES_FILE = path.join(ASIS_DIR, 'pages.json');
@@ -286,20 +295,23 @@ export async function asIsStage(ctx) {
         'and this copy keeps the original\'s `_next` folder. Keep the file when you upload.',
         '',
       ].join('\n'), 'utf8');
-    } else if (stack === 'nextjs') {
+    } else if (CONVERTERS[stack]) {
       // The finished copy converted into real code of the stack (recreate/convert/): pages and components, prerendered and never
-      // hydrated, so no runtime is added to what the original loads. If the conversion or its build fails, the copy is packaged
-      // as static files inside a project of the stack instead (the earlier route), and the report says so: a download never fails.
-      ctx.progress(0.4, 'Converting the copy into Next.js pages and components');
+      // hydrated, so no runtime is added to what the original loads (React + Vite also holds every built page against its as-is
+      // page: same DOM, no file added). If the conversion, its build or that check fails, the copy is packaged as static files
+      // inside a project of the stack instead (the earlier route), and the report says so: a download never fails.
+      const conv = CONVERTERS[stack];
+      ctx.progress(0.4, `Converting the copy into ${conv.code} pages and components`);
       try {
-        const converted = await convertToNext({ copyDir, outDir, pages, pageUrl: siteUrl });
-        ctx.progress(0.45, 'Building the Next.js project');
-        const built = await buildConverted(outDir);
+        const converted = await conv.convert({ copyDir, outDir, pages, pageUrl: siteUrl });
+        ctx.progress(0.45, `Building the ${conv.project} project`);
+        const built = await conv.build(outDir);
+        const verified = conv.verify ? await conv.verify({ copyDir, outDir, pages }) : null;
         report.build = built?.steps?.map((s) => ({ label: s.label, ms: s.ms })) ?? null;
-        report.convert = { mode: 'converted', ...converted };
+        report.convert = { mode: 'converted', ...converted, ...(verified && { verified }) };
       } catch (err) {
         const why = String(err?.message ?? err).slice(0, 400);
-        ctx.report.warnings.push(`The copy could not be converted into Next.js pages and components (${why.split('\n')[0]}); it is packaged as static files inside a Next.js project instead.`);
+        ctx.report.warnings.push(`The copy could not be converted into ${conv.code} pages and components (${why.split('\n')[0]}); it is packaged as static files inside a ${conv.project} project instead.`);
         await rm(outDir, { recursive: true, force: true });
         await packLifted({ stack, copyDir, outDir, pageUrl: siteUrl });
         ctx.progress(0.45, 'Building the stack');
@@ -326,7 +338,7 @@ export async function asIsStage(ctx) {
       base = served.url.replace(/\/$/, '');
     } else if (converted) {
       // A static export: served as the static files it is (what any static host does); there is no server of the stack to run.
-      const served = await serveCopy(path.join(outDir, EXPORT_DIR));
+      const served = await serveCopy(path.join(outDir, CONVERTERS[stack].exportDir));
       servers.push(served);
       base = served.url.replace(/\/$/, '');
     } else {
