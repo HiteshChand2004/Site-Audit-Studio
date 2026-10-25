@@ -859,6 +859,14 @@ Checked against the conversions (2026-10-25, after `convert-react` was merged; D
   (coarse samples); not measured on many pages.
 - No new setting or system package: builds run with a fixed minimal environment (`build/toolchain.js`).
 - MERN conversion (`convert-mern`, merged into `accounts` in eabadb9) does not change the toolchains.
+- **Copy my site, faster with the same result (2026-10-25)** — only changes that cannot alter what is copied or measured:
+  - *Pictures decoded once per comparison*: `check.js gateVerdict` compares each picture three times, and `exactDiff` read it
+    band by band through a fresh sharp pipeline every time. Each picture is now decoded once (`pixels.js decodePicture`,
+    within `DECODED_BUDGET_BYTES` 512 MB; past it, the band path as before). Proof: the saved original pictures of nyaayai,
+    parchaa and sankalpam (`remastly-live-results/*/recreate/as-is/baseline`), 21 verdicts (3×3 gates at 1440 and 390, both
+    colour thresholds, 3-vs-capture, a width mismatch, masked areas): every result deep-equal to the old code, six runs.
+    The 15 gate verdicts, median of 3: 78.2 s → 24.4 s; per copied page (visual 1440 + 390 + fix gate) nyaayai −15 s,
+    sankalpam −10 s, parchaa −6 s.
 
 ## Next steps, in order (commit after each with `--no-verify`, say the full suite was not run; nothing is pushed before the PR)
 

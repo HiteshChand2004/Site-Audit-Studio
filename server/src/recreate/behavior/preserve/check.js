@@ -12,7 +12,7 @@
 import path from 'node:path';
 import { stat, readFile } from 'node:fs/promises';
 import sharp from 'sharp';
-import { exactDiff } from '../../verify/exact/pixels.js';
+import { decodePicture, exactDiff } from '../../verify/exact/pixels.js';
 import { scriptCandidates } from './extract.js';
 import { readRecordIndex, classifyScripts, recordBodyReader } from '../scripts.js';
 import { freezePage, freezeTimers, holdSizeReactions } from '../../verify/exact/freeze.js';
@@ -181,6 +181,12 @@ export const NOISE_MARGIN_BLOCKS = 1;
  * counts (#f0f0f0 on white does; #f5f5f5 on white, 10 levels, does not — that is the limit).
  */
 export const GATE_THRESHOLD = 0.05;
+/**
+ * How much decoded picture (RGBA bytes) one verdict may hold. Each picture takes part in three comparisons, so it is decoded
+ * once and kept for them; a picture past this budget is read band by band in every comparison, as exactDiff does on its own.
+ * Same pixels either way: only the time changes (three 1440 x 11 654 pictures a side are about 400 MB).
+ */
+export const DECODED_BUDGET_BYTES = 512 * 1024 * 1024;
 
 /**
  * Are a page's fixes invisible? The fixed copy and the same copy before its fixes, both local, are opened and pictured the same
@@ -228,11 +234,27 @@ export async function gateVerdict(fixedShots, unfixedShots, { threshold = GATE_T
   if (Buffer.isBuffer(unfixedShots)) unfixedShots = [unfixedShots];
   const pairs = [];
   const opts = { threshold };
+  // Each picture decoded once for all the comparisons it is in (within DECODED_BUDGET_BYTES), not once per band of each.
+  const decoded = new Map();
+  let held = 0;
+  const once = async (png) => {
+    if (!Buffer.isBuffer(png)) return png;
+    if (!decoded.has(png)) {
+      const { width = 0, height = 0 } = await sharp(png, { limitInputPixels: false }).metadata();
+      let picture = png;
+      if (held + width * height * 4 <= DECODED_BUDGET_BYTES) {
+        picture = await decodePicture(png);
+        held += picture.raw.length;
+      }
+      decoded.set(png, picture);
+    }
+    return decoded.get(png);
+  };
   for (const side of [fixedList, unfixedShots]) {
-    for (let i = 0; i < side.length; i++) for (let j = i + 1; j < side.length; j++) pairs.push(await exactDiff(side[i], side[j], opts));
+    for (let i = 0; i < side.length; i++) for (let j = i + 1; j < side.length; j++) pairs.push(await exactDiff(await once(side[i]), await once(side[j]), opts));
   }
   const crosses = [];
-  for (let i = 0; i < fixedList.length; i++) crosses.push(await exactDiff(unfixedShots[i % unfixedShots.length], fixedList[i], opts));
+  for (let i = 0; i < fixedList.length; i++) crosses.push(await exactDiff(await once(unfixedShots[i % unfixedShots.length]), await once(fixedList[i]), opts));
   const change = crosses[0];
   const { cols, rows } = change.blocks;
   // A block counts as changed only when every pairing shows it (the smallest count of them, so a change is never over-stated).

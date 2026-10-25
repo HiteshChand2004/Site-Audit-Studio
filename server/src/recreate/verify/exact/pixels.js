@@ -140,6 +140,37 @@ function hasManySiblings(img, x, y, width, height) {
 const open = async (input) => sharp(Buffer.isBuffer(input) ? input : await readFile(input), { limitInputPixels: false }).ensureAlpha();
 
 /**
+ * A picture decoded once into RGBA, for a caller that compares the same picture several times (the gate's every-pairing rule
+ * compares each picture three times): exactDiff then reads its bands from memory instead of decoding the file again for every
+ * band of every comparison. The pixels are the ones exactDiff reads itself (the same decoder, the same alpha channel added).
+ * @returns {Promise<{ decoded: true, raw: Buffer, width: number, height: number }>}
+ */
+export async function decodePicture(input) {
+  const { data, info } = await (await open(input)).raw().toBuffer({ resolveWithObject: true });
+  return { decoded: true, raw: data, width: info.width, height: info.height };
+}
+
+/** One side of a comparison: its size, and the rows of a region as RGBA `width` pixels wide (decoded once, or per band). */
+async function sideOf(input) {
+  if (input?.decoded) {
+    return {
+      width: input.width,
+      height: input.height,
+      band: async ({ top, width, height }) => {
+        // Rows of the region, the narrower picture's width of each (the same crop sharp's extract makes).
+        if (width === input.width) return input.raw.subarray(top * width * 4, (top + height) * width * 4);
+        const out = Buffer.allocUnsafe(width * height * 4);
+        for (let y = 0; y < height; y++) input.raw.copy(out, y * width * 4, ((top + y) * input.width) * 4, ((top + y) * input.width + width) * 4);
+        return out;
+      },
+    };
+  }
+  const img = await open(input);
+  const m = await img.metadata();
+  return { width: m.width, height: m.height, band: (region) => img.clone().extract(region).raw().toBuffer() };
+}
+
+/**
  * Compares two full-page shots pixel for pixel.
  * @param {string|Buffer} original
  * @param {string|Buffer} generated
@@ -157,10 +188,9 @@ export async function exactDiff(original, generated, {
   threshold = DEFAULT_THRESHOLD, includeAntialiased = false, bandRows = BAND_ROWS, block = BLOCK_PX,
   exclude = [], offsetY = 0,
 } = {}) {
-  const a = await open(original);
-  const b = await open(generated);
-  const ma = await a.metadata();
-  const mb = await b.metadata();
+  // Either side may be a picture decoded once by the caller (decodePicture).
+  const ma = await sideOf(original);
+  const mb = await sideOf(generated);
   const width = Math.min(ma.width, mb.width);
   const height = Math.min(ma.height, mb.height);
   // Rows only one of the two has: counted as different in full, the same convention the SSIM diff uses, because a
@@ -187,8 +217,8 @@ export async function exactDiff(original, generated, {
     const haloRows = Math.min(height - haloTop, rowsHere + (top - haloTop) + 1);
     const region = { left: 0, top: haloTop, width, height: haloRows };
     const [bufA, bufB] = await Promise.all([
-      a.clone().extract(region).raw().toBuffer(),
-      b.clone().extract(region).raw().toBuffer(),
+      ma.band(region),
+      mb.band(region),
     ]);
     const offset = top - haloTop; // the first row of this band inside the halo
     for (let y = offset; y < offset + rowsHere; y++) {
