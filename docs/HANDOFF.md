@@ -715,8 +715,14 @@ Scratch data `C:/Users/urvas/Downloads/sas-work/nyaayai-next-data` (copied from 
   is served as static files with host headers).
 - Tests: `convert-react-build.test.js` 6/6 (no browser, real toolchain: the build, the check, comments + prolog, dev byte for byte
   at every page address, the reserved addresses, an edit shown on reload), `convert-document` 10, `copy-served` 4, `copy-notes` 3,
-  `copy-deploy-commands` 9 pass. **Not run (need the browser):** `convert-react.test.js`, `full-flow.test.js` for React + Vite
-  (`SAS_FLOW_STACKS=react-vite`), `convert-next*.test.js`, `reaudit-stack`; full suite not run.
+  `copy-deploy-commands` 9 pass. **Browser tests (2026-10-25, one at a time):** `convert-react` 6/6, `full-flow` (React + Vite) pass,
+  `convert-next` 4/4, `convert-next-dev` 3/3, `reaudit-stack` 6/6, `copy-page-counts` 3/3; full suite not run.
+- **Live proof, nyaayai homepage** (`remastly-live-results/nyaayai/react-convert/RESULTS.md`): visual 0.26 % at 1440 / 0.19 % at
+  390, same heights; Lighthouse medians phone 75/84/100/85 → 88/94/100/85, computer 81/84/100/85 → 96/94/100/85; hovers 14/14,
+  clicks 1/1, reveals 84/85, loops 18/18, feed 3030 vs 3040 ms; no console error, nothing leaves the copy; 17 components,
+  17 raw fallbacks (body `<link>`s + an async script); `npm run dev` = build byte for byte (488 files + the page).
+- **Open, not decided**: a fresh lift leaves nyaayai's botza chat script out (chat-widget rule, `extract.js scriptCandidates`),
+  while the earlier Next.js copy kept it and botza refused it (domain lock). Same pixels; which one is wanted is the user's call.
 
 ### nyaayai's "What is Nyaay AI?" chat bar missing in the copy (botza.panscience.xyz, 2026-10-25): the service's domain allow-list
 
