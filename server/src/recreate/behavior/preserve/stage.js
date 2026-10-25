@@ -58,6 +58,18 @@ async function javascriptOf(dir) {
 }
 
 /**
+ * The report's page list of a repack (another stack from a kept copy). Such a job runs no capture, which is what fills
+ * `report.pages` in a copy made from the site, so it would say "0 pages copied": the earlier job's list is taken (without its
+ * capture folder, which stays in that job), else one entry per page of the saved page set.
+ * @returns {Promise<{ url: string, path: string, outPath: string }[]>}
+ */
+export async function repackPages(fromDir, pages) {
+  const earlier = await readFile(path.join(fromDir, 'report.json'), 'utf8').then(JSON.parse, () => null);
+  const byOutPath = new Map((earlier?.pages ?? []).map(({ slug, ...p }) => [p.outPath, p]));
+  return pages.map((p) => byOutPath.get(p.outPath) ?? { url: p.url, path: new URL(p.url).pathname, outPath: p.outPath, source: 'reused' });
+}
+
+/**
  * The page set and lift of a finished as-is job's folder. A job that kept as-is/pages.json gives it; an older one (before the
  * page set was kept) gives the pages its report recorded, with the same addresses (its own lift is still in as-is/copy).
  * @returns {Promise<{ pages: { url: string, outPath: string }[], excludedHosts: string[], lift: object | null } | null>}
@@ -169,6 +181,7 @@ export async function asIsStage(ctx) {
     pages = saved.pages;
     excludedHosts = saved.excludedHosts;
     lifted = { ...saved.lift, reusedFrom: path.basename(fromDir) };
+    ctx.report.pages = await repackPages(fromDir, pages);
   } else {
     pages = ctx.discovery?.pages ?? [];
     if (!pages.length) throw new RecreateError('No page was captured for the as-is copy.');
