@@ -1175,6 +1175,17 @@
   flex-direction: column;
   gap: 6px;
 }
+/* Four across: the columns share rows, so every file list and command starts on the same line. */
+@supports (grid-template-rows: subgrid) {
+  @media (min-width: 1000px) {
+    .stk__col {
+      display: grid;
+      grid-row: span 6;
+      grid-template-rows: subgrid;
+      align-content: start;
+    }
+  }
+}
 .marks--stack {
   justify-content: flex-start;
   align-items: flex-end;
@@ -1224,6 +1235,7 @@
   align-items: center;
   gap: 8px;
   align-self: flex-start;
+  justify-self: start;
   margin-top: auto;
   padding: 7px 12px;
   border: 1px dashed var(--border-strong);
@@ -1242,6 +1254,9 @@
 .stk__run code {
   color: var(--text);
   font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+.stk__run code span {
+  white-space: nowrap;
 }
 [data-armed] .stk__tree li {
   opacity: 0;
