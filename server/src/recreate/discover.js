@@ -254,9 +254,10 @@ export async function discoverPages({ url, limit, all = false, knownUrls = [], r
   const [robots, llms] = await Promise.all([loadRobots(origin), fetchLlmsTxt(origin)]);
   const sitemap = await loadSitemaps(origin, robots.sitemaps);
   onProgress?.(0.2, 'Finding pages');
-  const result = await crawl({
+  const budget = all ? limit + 1 + ALL_PAGES_EXTRA : crawlBudget(limit);
+  const crawlSite = (only = null) => crawl({
     home,
-    maxPages: all ? limit + 1 + ALL_PAGES_EXTRA : crawlBudget(limit),
+    maxPages: budget,
     maxDepth: all ? ALL_PAGES_DEPTH : 2,
     robots,
     sitemapUrls: sitemap.urls.filter((u) => sameSite(u, origin)),
@@ -267,8 +268,28 @@ export async function discoverPages({ url, limit, all = false, knownUrls = [], r
     needsRender: looksClientRendered,
     concurrency: crawlConcurrency(),
     signal,
+    only,
     onProgress: (done, total) => onProgress?.(0.2 + 0.8 * (done / Math.max(total, 1)), `Found ${done} pages`),
   });
+  // An as-is run that names its pages needs only those: selectPages drops every other page before it looks at it. They are
+  // fetched alone (same crawl, same budget and depth, the rest of the site never asked for). That gives the same pages only
+  // when the whole crawl's answer is fixed in advance: every chosen page queued before the first fetch (homepage link, seed
+  // or sitemap: depth 1, started in queue order) at a place the budget reaches, and fetched without a redirect. Anything
+  // else (a page linked only from deeper pages, past the budget, a redirect, a robots.txt block) runs the whole crawl as
+  // before, so the selection is the same.
+  let result = null;
+  if (include?.size) {
+    const chosen = await crawlSite(include);
+    const homeKeys = new Set([home.url, home.requestedUrl].filter(Boolean).map((u) => pageKey(u)));
+    const fetched = new Map(chosen.pages.slice(1).map((p) => [pageKey(p.requestedUrl || p.url), p]));
+    const settled = [...include].every((k) => {
+      if (homeKeys.has(k)) return true;
+      const page = fetched.get(k);
+      return chosen.firstQueue.get(k) < budget - 1 && page && pageKey(page.url) === k;
+    });
+    if (settled && !chosen.aborted) result = chosen;
+  }
+  result ??= await crawlSite();
   const selection = selectPages({ pages: result.pages, homeUrl: home.url, sitemapUrls: sitemap.urls, knownUrls, robots, limit, include });
   return {
     homeUrl: home.url,

@@ -874,6 +874,15 @@ Checked against the conversions (2026-10-25, after `convert-react` was merged; D
     and the new code, back to back: every file's sha256 (216 / 475 / 95 files), the lift result, the manifest and the
     referenced result deep-equal. Times: parchaa lift 28.1 → 18.4 s, referenced 10.9 → 3.6 s; sankalpam lift 12.8 → 2.8 s;
     nyaayai referenced ~14 → ~4 s, its lift unchanged (~90 s: one 6400 px PNG, bandwidth-bound either way).
+  - *No whole crawl when the as-is pages are chosen* (`discover.js`, `crawl({ only })`): only the chosen pages are fetched,
+    and that result is used only when the whole crawl's answer is fixed in advance: every chosen page in the crawl's first
+    queue (homepage link, analysis page or sitemap, all queued before the first fetch and started in order) at a place the
+    budget reaches (`firstQueue`), fetched without a redirect. Otherwise (deeper page, past the budget, redirect, robots
+    block, stopped) the whole crawl runs as before. Proof: `discoverPages` old vs new on nyaayai, parchaa, sankalpam and
+    gardener with four page sets each (homepage; + 2 linked pages; + the deepest page; + every page found): all 16 results
+    deep-equal (pages with url / outPath / slug / source / depth / flags, skipped, beyondLimit, sitemap, robots, llms).
+    nyaayai 14–20 → 1–3 pages fetched (~2 s → ~0.8 s), parchaa 10 → 1–3; "every page" fell back on both. A few seconds per
+    copy on these sites; more on a client-rendered site, whose crawl renders its pages in the browser.
 
 ## Next steps, in order (commit after each with `--no-verify`, say the full suite was not run; nothing is pushed before the PR)
 

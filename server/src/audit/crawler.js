@@ -20,17 +20,30 @@ const CONCURRENCY = 4;
  * @param {(facts:object, html:string)=>boolean} [o.needsRender]  which fetched pages get the browser render (default: a shell)
  * @param {(done:number,total:number,url:string)=>void} [o.onProgress]
  * @param {AbortSignal} [o.signal]  stops starting new pages; partial results are returned
+ * @param {Set<string>|null} [o.only]  page keys (pageKey): only these pages are fetched; links are still followed from them.
+ *   The result then has `firstQueue`: key -> place in the first queue of the same crawl without `only`
  */
-export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls = [], seedUrls = [], render, onProgress, signal, concurrency = CONCURRENCY, needsRender = looksLikeShell }) {
+export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls = [], seedUrls = [], render, onProgress, signal, concurrency = CONCURRENCY, needsRender = looksLikeShell, only = null }) {
   const pages = [];
   const seen = new Set();
   const queue = [];
   let skippedByRobots = 0;
 
+  // With `only`: each page's place in the first queue as a crawl without `only` would build it (homepage links, seeds and
+  // sitemap are all queued before the first fetch, and pages start in queue order), so the caller can tell which of the
+  // chosen pages that crawl would have fetched within maxPages.
+  const firstQueue = only ? new Map() : null;
+  const firstSeen = new Set();
+  let queueing = Boolean(only);
   const enqueue = (url, depth) => {
     const key = pageKey(url);
     if (seen.has(key) || depth > maxDepth) return;
     if (!sameSite(url, home.url) || NON_PAGE.test(new URL(url).pathname)) return;
+    if (queueing && !firstSeen.has(key)) {
+      firstSeen.add(key);
+      if (robots.isAllowed(url)) firstQueue.set(key, firstQueue.size);
+    }
+    if (only && !only.has(key)) return;
     seen.add(key);
     if (!robots.isAllowed(url)) {
       skippedByRobots++;
@@ -62,11 +75,13 @@ export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls 
 
   seen.add(pageKey(home.url));
   seen.add(pageKey(home.requestedUrl || home.url));
+  for (const k of seen) firstSeen.add(k);
   const homePage = await toPage(home, 0);
   pages.push(homePage);
   for (const u of seedUrls) enqueue(u, 1);
   homePage.facts?.links.forEach((l) => enqueue(l.href, 1));
   for (const u of sitemapUrls.slice(0, maxPages * 3)) enqueue(u, 1);
+  queueing = false;
   onProgress?.(1, Math.min(maxPages, 1 + queue.length), home.url);
 
   const crawledKeys = new Set([pageKey(home.url)]);
@@ -99,5 +114,6 @@ export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls 
     skippedByRobots,
     truncated: queue.length > 0,
     aborted: Boolean(signal?.aborted),
+    ...(firstQueue && { firstQueue }),
   };
 }
