@@ -5,7 +5,7 @@ import CtaBand from '@/components/CtaBand';
 import { AuditMock, CompareMock, FixMock, KeptMock, PreviewMock, ReportMock, StackMock, ZipMock } from '@/components/how/Mocks';
 import { ButtonLink, Eyebrow, IconList, Section, SectionHead, TwoTone } from '@/components/ui';
 import { ToolShot } from '@/components/ui/ToolShot';
-import { LIMITS } from '@/lib/content';
+import { LIMITS, TOUR } from '@/lib/content';
 import { pageMeta } from '@/lib/meta';
 import '@/app/tour.css';
 
@@ -23,7 +23,7 @@ const CAPABILITIES: { id: string; title: string; text: string; visual: ReactNode
   { id: 'audit', title: 'Every issue found and ranked', text: 'Speed, SEO, accessibility, best practices, broken links and console errors, in plain words.', visual: <AuditMock rows={4} /> },
   { id: 'fidelity', title: 'Kept as it is, then measured', text: 'The page is carried over, not re-drawn, then compared with the original.', visual: <KeptMock /> },
   { id: 'fixed', title: 'Common problems fixed', text: 'Safe fixes are made on the way. Anything else stays on the list, with the reason.', visual: <FixMock /> },
-  { id: 'stacks', title: 'Four stacks to choose from', text: 'The same copy in Plain HTML, React + Vite, Next.js or MERN.', visual: <StackMock /> },
+  { id: 'stacks', title: 'Four stacks to choose from', text: TOUR.stacksCard, visual: <StackMock /> },
   { id: 'compare', title: 'Original and copy, side by side', text: 'Every page on computer, tablet and phone, scrolling together.', visual: <CompareMock /> },
   { id: 'report', title: 'A report you can share', text: 'What was fixed and what is still open, as PDF, HTML or JSON.', visual: <ReportMock /> },
   { id: 'download', title: 'The whole project in one .zip', text: 'Every page and asset, plus DEPLOY.md with the steps to publish it.', visual: <ZipMock /> },
@@ -76,7 +76,7 @@ export default function Features() {
           <li className="fx-card fx-card--cta">
             <div className="fx-card__body">
               <h3>Try it on your own site</h3>
-              <p>Paste an address and see what Remastly finds, in about a minute.</p>
+              <p>{TOUR.tryIt}</p>
               <ButtonLink href="/#check" arrow>
                 Check my site
               </ButtonLink>

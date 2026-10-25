@@ -4,7 +4,7 @@ import Journey, { type JourneyStep } from '@/components/how/Journey';
 import { AddressMock, AuditMock, CompareMock, CopyMock, StackMock, ZipMock } from '@/components/how/Mocks';
 import { HeroArt, HeroShot } from '@/components/ui/HeroArt';
 import { JsonLd, PageHero, Section, SectionHead } from '@/components/ui';
-import { PIPELINE } from '@/lib/content';
+import { PIPELINE, TOUR } from '@/lib/content';
 import { pageMeta } from '@/lib/meta';
 import '@/app/tour.css';
 
@@ -17,7 +17,7 @@ export const metadata = pageMeta(
 /* The journey: in which order things happen, each with a drawing of the app at that step. What you get lives on Features. */
 const STEPS: JourneyStep[] = [
   { id: 'paste', title: 'Paste the address', text: 'Any site your company owns or may use. Nothing runs until you start it.', screen: 'Add a website', visual: <AddressMock /> },
-  { id: 'audit', title: 'Audit', text: 'Every issue found and ranked, in about a minute (six at most).', screen: 'Check', visual: <AuditMock /> },
+  { id: 'audit', title: 'Audit', text: TOUR.auditStep, screen: 'Check', visual: <AuditMock /> },
   { id: 'stack', title: 'Choose the stack', text: 'HTML, React + Vite, Next.js or MERN. Then every page, the homepage, or one page.', screen: 'Copy', visual: <StackMock /> },
   { id: 'copy', title: 'Copy and fix', text: 'Every page kept as it is, problems fixed on the way. Stop any time; it resumes where it stopped.', screen: 'Copy', visual: <CopyMock /> },
   { id: 'measure', title: 'Measure', text: 'Original and copy compared on every page, and the audit run again on the copy.', screen: 'Compare', visual: <CompareMock /> },
