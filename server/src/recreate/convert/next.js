@@ -181,7 +181,8 @@ export async function convertToNext({ copyDir, outDir, pages, pageUrl }) {
     for (const s of c.sections) {
       if (s.shared) { used.push(s.name); continue; }
       let name = s.name;
-      for (let n = 2; taken.has(name); n++) name = `${pageName}${s.name}${n > 2 ? n : ''}`;
+      // A section named from its heading may share a page's name ("Services"): the page file would then declare it twice.
+      for (let n = 2; taken.has(name) || pageNames.has(name); n++) name = `${pageName}${s.name}${n > 2 ? n : ''}`;
       taken.add(name);
       if (name !== s.name) pageJsx = pageJsx.split(`<${s.name} />`).join(`<${name} />`);
       used.push(name);

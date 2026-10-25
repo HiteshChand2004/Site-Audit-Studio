@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as cheerio from 'cheerio';
-import { convertDocument, convertSite, formsOf, planAttributes, rootAttributes, sectionHost, sectionName, whereOf } from '../src/recreate/convert/document.js';
+import { convertDocument, convertSite, formsOf, planAttributes, planSections, rootAttributes, sectionHost, sectionName, whereOf } from '../src/recreate/convert/document.js';
 
 const doc = (body, { head = '<meta charset="utf-8"><title>T</title>', html = ' lang="en"', bodyAttrs = '' } = {}) => `<!doctype html><html${html}><head>${head}</head><body${bodyAttrs}>${body}</body></html>`;
 const b64 = (s) => Buffer.from(s, 'utf8').toString('base64');
@@ -47,7 +47,7 @@ test('a page: head as JSX, sections as components, raw fallbacks recorded with w
   assert.equal(c.headJsx, `<meta charSet="utf-8" /><title>T</title><RawHtml b64="${b64('<link rel="stylesheet" href="/s.css" media="print" onload="this.media=\'all\'">')}" /><script dangerouslySetInnerHTML={{ __html: "if (1 < 2) a()" }} />`);
   assert.deepEqual(c.sections.map((s) => s.name), ['SiteHeader', 'MainContent', 'SiteFooter']);
   // The comment is kept (a React-rendered site reads its comments back as hydration markers), and is not a fallback.
-  assert.equal(c.pageJsx, `<RawHtml comment=" a comment " />{"\\n"}<SiteHeader /><MainContent /><RawHtml b64="${b64('<script src="/app.js" async=""></script>')}" /><SiteFooter /><script dangerouslySetInnerHTML={{ __html: "b()" }} />`);
+  assert.equal(c.pageJsx, `<RawHtml comment={" a comment "} />{"\\n"}<SiteHeader /><MainContent /><RawHtml b64="${b64('<script src="/app.js" async=""></script>')}" /><SiteFooter /><script dangerouslySetInnerHTML={{ __html: "b()" }} />`);
   const header = c.sections[0].jsx;
   assert.match(header, /<a href="\/about\/\?x=1#top">About<\/a>/, 'a moved page is linked at its new address, query and fragment kept');
   assert.match(header, /<RawHtml b64="[A-Za-z0-9+/=]+" \/><\/header>$/, 'the button with its handler is kept as original HTML');
@@ -71,8 +71,49 @@ test('the sections are the children of the body, or of the one wrapper that hold
   const host = sectionHost($('body').get(0));
   assert.equal(host.attribs.class, 'page', 'two wrappers deep: the host is the element with several children');
   const names = host.children.filter((n) => n.type === 'tag').map((el, i) => sectionName(el, i));
-  assert.deepEqual(names, ['SiteHeader', 'HeroArea', 'Cards', 'Div4']);
+  assert.deepEqual(names, ['SiteHeader', 'HeroArea', 'Cards', 'Section4']);
   assert.equal(whereOf(host.children.find((n) => n.name === 'section')), 'body > div#app > div.page > section#hero-area');
+});
+
+test('a builder page nested in wrappers is split into its real sections; lists, titled sections and stray tags stay whole', () => {
+  // Framer-like: the page sits three boxes deep with generated class names; a <link> and a script stand among the sections.
+  const card = (t) => `<div class="framer-card1x"><h3>${t}</h3><p>About ${t}, in a few words.</p></div>`;
+  const body = '<div id="main"><div class="framer-QQPsi"><div class="framer-a1b2c3">'
+    + '<link rel="stylesheet" href="/late.css">'
+    + '<div class="framer-1mrr0jq-container"><nav class="framer-Nv1x"><a href="/">Home</a><a href="/about/">About</a></nav></div>'
+    + '<div class="framer-38voy7"><h1>Law, made simple</h1><p>One line under the heading.</p><a href="/start/">Start</a></div>'
+    + `<div class="framer-1pgy074"><h2>Our services</h2><div class="framer-grid9z">${card('Search')}${card('Draft')}${card('Review')}</div></div>`
+    + '<div class="framer-19ddfgb"><h2><span>U</span><span>nifying </span><span>legal </span><span>work</span></h2><p>Text.</p><img src="/a.png" alt=""></div>'
+    + `<div class="framer-cards44">${card('One')}${card('Two')}${card('Three')}</div>`
+    + '<div class="framer-empty1"></div><script>window.x = 1</script>'
+    + '<div class="framer-1df3djo-container"><footer class="framer-Tx7yw"><p>© Nyaay</p></footer></div>'
+    + '</div></div></div>';
+  const html = doc(body);
+  const $ = cheerio.load(html);
+  const parts = planSections($('body').get(0));
+  assert.deepEqual(parts.map((p) => p.el.attribs.class), ['framer-Nv1x', 'framer-38voy7', 'framer-1pgy074', 'framer-19ddfgb', 'framer-cards44', 'framer-Tx7yw'],
+    'the nav and the footer are found inside their containers; a titled section and a list of cards are not cut up; the link, the script and the empty box are no section');
+  const c = convertDocument(html, { page: '/' });
+  assert.deepEqual(c.sections.map((s) => s.name), ['SiteNav', 'Hero', 'OurServices', 'UnifyingLegalWork', 'One', 'SiteFooter'],
+    'names from landmarks, the main heading, the heading words (a word split into spans read as one), never from generated classes');
+  // Only which elements become components changed: every section once, in order, inside the original wrappers.
+  assert.match(c.pageJsx, /^<div id="main"><div className="framer-QQPsi"><div className="framer-a1b2c3"><RawHtml b64="[^"]+" \/><div className="framer-1mrr0jq-container"><SiteNav \/><\/div><Hero \/><OurServices \/><UnifyingLegalWork \/><One \/><div className="framer-empty1" \/><script dangerouslySetInnerHTML=\{\{ __html: "window.x = 1" \}\} \/><div className="framer-1df3djo-container"><SiteFooter \/><\/div><\/div><\/div><\/div>$/);
+  assert.match(c.sections[2].jsx, /^<div className="framer-1pgy074"><h2>Our services<\/h2><div className="framer-grid9z">(<div className="framer-card1x">.*?<\/div>){3}<\/div><\/div>$/);
+
+  // A plain page keeps its landmarks as the sections, and a small main is not cut into its paragraphs.
+  const plain = convertDocument(doc('<header><a href="/">Home</a></header><main><h1>Hi</h1><p>One</p><p>Two</p></main><footer>f</footer>'), { page: '/' });
+  assert.deepEqual(plain.sections.map((s) => s.name), ['SiteHeader', 'MainContent', 'SiteFooter']);
+
+  // A large main holding several sections with their own headings is split into them.
+  const sec = (h, n) => `<div class="part"><h2>${h}</h2>${'<p>text</p>'.repeat(n)}</div>`;
+  const big = convertDocument(doc(`<header><a href="/">Home</a></header><main>${sec('Why us', 6)}${sec('Pricing plans', 6)}${sec('Contact', 6)}</main><footer>f</footer>`), { page: '/' });
+  assert.deepEqual(big.sections.map((s) => s.name), ['SiteHeader', 'WhyUs', 'PricingPlans', 'Contact', 'SiteFooter']);
+  assert.match(big.pageJsx, /<main><WhyUs \/><PricingPlans \/><Contact \/><\/main>/, 'the main element itself stays where it was');
+});
+
+test('a comment with quotes and line breaks is written as a JS string, which JSX reads back exactly', () => {
+  const c = convertDocument(doc('<!-- the "appear" effect:\n - one\n - two --><main><h1>Hi</h1></main>'), { page: '/' });
+  assert.ok(c.pageJsx.startsWith('<RawHtml comment={" the \\"appear\\" effect:\\n - one\\n - two "} />'), c.pageJsx.slice(0, 120));
 });
 
 test('a section identical on several pages is one shared component; a page keeps its own name space', () => {

@@ -324,7 +324,7 @@ export async function asIsStage(ctx) {
     // What the packaged copy really serves: a fix counts only where it takes effect (copy/served.js).
     if (report.fixes) {
       const fixedPages = report.fixes.pages.filter((p) => !p.reverted && p.fixes.length)
-        .map((p) => ({ path: p.path, outPath: pages.find((q) => localOfOutPath(q.outPath) === p.path)?.outPath ?? 'index.html' }));
+        .map((p) => ({ path: p.path, outPath: pages.find((q) => localOfOutPath(q.outPath) === p.path)?.outPath ?? 'index.html', kinds: [...new Set(p.fixes.map((f) => f.kind))] }));
       // A converted copy is static files: its security headers are the host's, as for plain HTML.
       report.fixes.served = await measureServed({ base, stack, copyDir, fixedPages, files: report.fixes.files?.written ?? [], ...(converted && { takeEffect: 'host' }) })
         .catch((err) => ({ error: String(err?.message ?? err).slice(0, 160) }));
