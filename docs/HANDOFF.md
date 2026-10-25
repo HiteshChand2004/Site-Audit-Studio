@@ -724,7 +724,7 @@ Scratch data `C:/Users/urvas/Downloads/sas-work/nyaayai-next-data` (copied from 
 - **Open, not decided**: a fresh lift leaves nyaayai's botza chat script out (chat-widget rule, `extract.js scriptCandidates`),
   while the earlier Next.js copy kept it and botza refused it (domain lock). Same pixels; which one is wanted is the user's call.
 
-### MERN writer (branch `convert-mern`, from `convert-react` 8b3ad1a, 2026-10-25) — code done, browser tests NOT run
+### MERN writer (branch `convert-mern`, from `convert-react` 8b3ad1a, 2026-10-25) — done, browser tests and live proof passed
 
 - `server/src/recreate/convert/mern.js`: `client/` = the React + Vite conversion, `convertToReact` called as it is (no change to
   the React writer or the shared core); `server/` = an Express server (`convert/mern/server/`: `app.js`, `site.js`, `match.js`,
@@ -744,8 +744,21 @@ Scratch data `C:/Users/urvas/Downloads/sas-work/nyaayai-next-data` (copied from 
   DEPLOY.md says "N forms are saved in MongoDB" (`deployMd formsSaved`); the zip ships the source, not `client/dist`.
 - Wired: `stage.js CONVERTERS.mern` (`runs: 'server'`): checked on its own server (`startStack(..., { env: { FORMS_STORE: 'memory' } })`),
   headers counted as the server's. A failure packages as before (`packLifted`).
-- Tests: `convert-mern-build.test.js` 8/8 (no browser). Written, not run: `convert-mern.test.js`, `full-flow.test.js` (MERN now
-  converted, an order form on the test page, its submission stored), `SAS_FLOW_STACKS=mern`.
+- Tests: `convert-mern-build.test.js` 8/8 (no browser). **Browser tests (2026-10-25, one at a time, after merging convert-react
+  2dcf29f):** `convert-mern` 6/6, `full-flow` (`SAS_FLOW_STACKS=mern`) pass, `preserve-forms` 3/3, `convert-react` 5/5,
+  `convert-next` 4/4, `preserve-completion-same-origin` / `preserve-complete` / `preserve-ranged` pass; full suite not run.
+  `convert-mern.test.js` now builds its copy like `convert-react.test.js` (the fixture as served, about.html left to the lift).
+  `full-flow`: a failed flow is reported before the extra "Compare now" check; `SAS_FLOW_KEEP=1` keeps the data folder.
+- **Found by full-flow and fixed (shared core, `behavior/preserve/complete.js serviceWorkerSource`)**: the copy's service worker
+  answered "404 not in this copy" for every address of the original's host that is not one of the copy's files, also on the copy's
+  own address. A copy deployed at the original's domain (or on the same host name, as in tests) therefore had its own form endpoint
+  (MERN `/api/forms`, or a FORM_ENDPOINT on the same site) refused. The copy's own origin is now left to the copy's own server;
+  the original's other addresses are still refused. Test `preserve-sw-own-origin.test.js` (no browser).
+- **Live proof, nyaayai homepage** (`remastly-live-results/nyaayai/mern-convert/RESULTS.md`, run on its own Express server):
+  visual 0.26 % / 0.19 %, same heights; Lighthouse medians of 3 against the live original phone 61/84/100/85 → 90/94/100/85,
+  computer 84/84/100/85 → 96/94/100/85; hovers 14/14, clicks 2/2, reveals 85/85, loops 19/19, feed 3030 vs 3050 ms; no console
+  error, nothing leaves the copy; the 3 newsletter forms wired to `/api/forms` and one stored by the check; `npm run dev` = build
+  byte for byte (486 files + the page). Re-audit rows the same as the React run.
 
 ### Forms of another service go to it in the download; the zip keeps the original's node_modules paths (2026-10-25, `convert-mern`)
 
@@ -774,7 +787,7 @@ exactly as on the original, in every stack; the guard holds forms only in the ap
 - **Limit**: a form with no service action whose own script posts to a service (by fetch from a submit handler) is held as
   the original's own server's form.
 - Tests (no browser): `form-guard.test.js` 7/7 (the guard's own source in a stand-in page), `zip-project-files.test.js` 2/2
-  (every stack). Written, not run: `preserve-forms.test.js` (+1), `convert-mern.test.js` forms test.
+  (every stack). Browser: `preserve-forms.test.js` 3/3, `convert-mern.test.js` forms test pass (2026-10-25).
 
 ### nyaayai's "What is Nyaay AI?" chat bar missing in the copy (botza.panscience.xyz, 2026-10-25): the service's domain allow-list
 

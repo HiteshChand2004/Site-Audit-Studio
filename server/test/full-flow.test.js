@@ -179,7 +179,7 @@ ${api.output().slice(-3000)}`);
       assert.equal(convert.forms[0].goesTo, 'copy-server');
       assert.match(convert.forms[0].note, /saved in MongoDB/);
       const sent = recreate.result.asIs.checks.pages.flatMap((p) => p.forms?.forms ?? []);
-      assert.deepEqual(sent.map((f) => f.note), ['Thank you. Your message was sent.'], 'the copy\'s server stored the submission');
+      assert.deepEqual(sent.map((f) => f.note), ['Thank you. Your message was sent.'], `the copy's server stored the submission: ${JSON.stringify(recreate.result.asIs.checks.pages.map((p) => [p.path, p.forms ?? null]))}`);
       assert.equal(recreate.result.asIs.needsAPerson.length, 0, 'no form needs a person');
     }
   }
@@ -235,7 +235,9 @@ test('Analyze → Copy my site → re-audit → Results → Compare → report �
   t.after(() => site.close());
   const dataDir = await dataFolder();
   const api = await startApi(t, dataDir);
-  t.after(() => rm(dataDir, { recursive: true, force: true, maxRetries: 5 }));
+  // SAS_FLOW_KEEP=1 keeps the data folder (its path is printed) to look into a failure.
+  if (process.env.SAS_FLOW_KEEP === '1') console.log(`kept data folder: ${dataDir}`);
+  else t.after(() => rm(dataDir, { recursive: true, force: true, maxRetries: 5 }));
 
   const user = await api.signIn('user@example.com');
   const owner = await api.signIn('owner@example.com');
@@ -258,7 +260,8 @@ test('Analyze → Copy my site → re-audit → Results → Compare → report �
 
   // A copy that cannot be compared fails once, with the reason: a click on "Compare now" is refused, no job is queued.
   // (A newer finished copy whose folder lost its home page.) It needs the MERN copy: not run when SAS_FLOW_STACKS leaves it out.
-  if (!made['ordinary user mern']?.id) {
+  // After a failed flow (a job it left may still run) this check would only time out: the flow's own failure is said first.
+  if (!made['ordinary user mern']?.id || failures.length) {
     assert.deepEqual(failures, [], failures.join('\n'));
     return;
   }

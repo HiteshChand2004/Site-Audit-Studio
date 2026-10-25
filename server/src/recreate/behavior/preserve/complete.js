@@ -79,6 +79,9 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(fetch(new URL(local, self.location.origin)));
     return;
   }
+  // The copy's own address is answered by the copy's own server (its files, its 404, a form endpoint it runs), never by the
+  // original, also where the copy is deployed at the original's domain: only the original's other addresses are refused here.
+  if (here.origin === self.location.origin) return;
   let host = '';
   try { host = new URL(url).hostname.replace(/^www\\./, ''); } catch { return; }
   if (HOSTS.includes(host)) event.respondWith(new Response('', { status: 404, statusText: 'not in this copy' }));

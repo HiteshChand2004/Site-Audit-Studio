@@ -8,7 +8,7 @@
 // its own address and lands on /thanks. One browser, one page at a time. The no-browser half is convert-mern-build.test.js.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { cp, mkdtemp, readdir, readFile, rm, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -29,6 +29,8 @@ const STACK_PORT = 4262;
 const FIXTURE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'recreate-site');
 const ORIGIN = `http://127.0.0.1:${PORT}`;
 const CATEGORIES = ['performance', 'seo', 'accessibility', 'best-practices'];
+// Comments before <html>, as a builder writes them: the converted page must start with them too.
+const PROLOG = '<!-- Made in "Builder" · example.com ✨ -->\n<!-- Published Oct 1, 2026 -->\n';
 
 let fixture;
 let browser;
@@ -36,6 +38,7 @@ let root;
 let served;
 let result;
 let pages;
+let copyDir;
 
 async function listFiles(dir, rel = '') {
   const out = [];
@@ -47,28 +50,56 @@ async function listFiles(dir, rel = '') {
   return out;
 }
 
+/** The console errors the ORIGINAL page shows as it loads (as checkCopy records them, not cut, the address as {origin}). */
+async function consoleErrorsOf(url) {
+  const context = await browser.newContext();
+  const errors = [];
+  try {
+    const page = await context.newPage();
+    page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+    page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
+    await page.goto(url, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(1500);
+  } finally {
+    await context.close();
+  }
+  return errors.map((e) => e.split(ORIGIN).join('{origin}'));
+}
+
 const outDir = () => path.join(root, 'mern');
 const base = () => served.url.replace(/\/$/, '');
 
 before(async () => {
   const tc = await toolchainStatus('mern');
   if (!tc.installed) throw new Error('the mern toolchain is not installed: npm run setup:toolchains -w server -- mern');
-  fixture = startFixtureServer(PORT, { site: 'recreate' });
+  fixture = await startFixtureServer(PORT, { site: 'recreate' });
   browser = await chromium.launch();
   root = await mkdtemp(path.join(os.tmpdir(), 'sas-convert-mern-'));
-  // The fixture's own pages stand in for a finished as-is copy (its pages, stylesheets and scripts are already local files).
+  // The fixture site as served stands in for a finished as-is copy (built as convert-react.test.js builds it): its pages as the
+  // server sends them, its stylesheets, scripts and images as local files; about.html is the lift's stress page, left to the lift.
   const files = await listFiles(FIXTURE);
-  pages = files.filter((f) => f.endsWith('.html') && !f.startsWith('private/')).map((outPath) => ({ outPath, url: `${ORIGIN}/${outPath.replace(/(^|\/)index\.html$/, '$1')}` }));
-  result = await convertToMern({ copyDir: FIXTURE, outDir: outDir(), pages, pageUrl: `${ORIGIN}/` });
+  const LIFT_ONLY = new Set(['about.html']);
+  pages = files.filter((f) => f.endsWith('.html') && !f.startsWith('private/') && !LIFT_ONLY.has(f)).map((outPath) => ({ outPath, url: `${ORIGIN}/${outPath.replace(/(^|\/)index\.html$/, '$1')}` }));
+  copyDir = path.join(root, 'copy');
+  for (const f of files) {
+    if (f.startsWith('private/') || LIFT_ONLY.has(f)) continue;
+    await mkdir(path.dirname(path.join(copyDir, f)), { recursive: true });
+    if (f.endsWith('.html')) {
+      let text = await (await fetch(`${ORIGIN}/${f}`)).text();
+      if (f === 'index.html') text = text.replace(/^(<!doctype html>)\s*/i, `$1${PROLOG}`);
+      await writeFile(path.join(copyDir, f), text, 'utf8');
+    } else await cp(path.join(FIXTURE, f), path.join(copyDir, f));
+  }
+  result = await convertToMern({ copyDir, outDir: outDir(), pages, pageUrl: `${ORIGIN}/` });
   await buildConvertedMern(outDir());
-  await verifyConvertedMern({ copyDir: FIXTURE, outDir: outDir(), pages });
+  await verifyConvertedMern({ copyDir, outDir: outDir(), pages });
   served = await startStack('mern', outDir(), STACK_PORT, { env: { FORMS_STORE: 'memory', MONGODB_URI: '' } });
 });
 
 after(async () => {
   await served?.stop?.();
   await browser?.close();
-  fixture?.close?.();
+  await new Promise((r) => { fixture?.closeAllConnections?.(); fixture ? fixture.close(() => r()) : r(); });
   if (root) await rm(root, { recursive: true, force: true }).catch(() => {});
 });
 
@@ -77,15 +108,19 @@ test('the conversion: components per section, the fallbacks named, the same scri
   assert.ok(result.stats.components > pages.length, 'the pages are split into sections');
   assert.deepEqual(result.fallbacks.map((f) => [f.page, f.tag, f.attribute]), [['/work.html', 'svg', 'onload'], ['/work.html', 'button', 'onclick']]);
   for (const p of pages) {
-    const original = await readFile(path.join(FIXTURE, p.outPath), 'utf8');
+    const original = await readFile(path.join(copyDir, p.outPath), 'utf8');
     const converted = await readFile(path.join(outDir(), MERN_EXPORT_DIR, p.outPath), 'utf8');
     const scripts = (s) => (s.match(/<script\b/gi) ?? []).length;
+    // The page's own doctype as written, then the comments before <html> exactly as the original has them.
+    if (p.outPath === 'index.html') assert.ok(converted.startsWith(`<!doctype html>${PROLOG}<html `), converted.slice(0, 160));
     assert.equal(scripts(converted), scripts(original), `${p.outPath}: the same number of scripts, none of React's`);
   }
-  // The fixture's forms: a builder's form service (another service: it goes there, as on the original) and a sign-in (not
-  // stored): neither is stored by the copy's server, each said in words.
+  // The fixture's forms: /work's builder form service (another service: it goes there, as on the original) and /login's
+  // sign-in, on a page without the copy's form guard (the pages as served, not lifted): it goes where the original sent it.
+  // Neither is stored by the copy's server, each said in words.
   assert.equal(result.wiredForms, 0);
-  assert.ok(result.forms.every((f) => f.note && ['service', 'not-stored'].includes(f.goesTo)), JSON.stringify(result.forms));
+  assert.deepEqual(result.forms.map((f) => [f.page, f.goesTo]).sort(), [['/login.html', 'as-original'], ['/work.html', 'service']]);
+  assert.ok(result.forms.every((f) => f.note), JSON.stringify(result.forms));
 });
 
 test('in a browser: the same DOM as the original on every page (scripts off), no React in the page, every link answered', { timeout: 10 * 60000 }, async () => {
@@ -155,8 +190,15 @@ test('held against the original with the as-is rulers: visual gate at 1440 and 3
     assert.deepEqual(p.controls.mismatch, [], `${p.path}: every control behaves like the original's`);
     assert.deepEqual(p.controls.missing, [], `${p.path}: no control missing`);
     assert.deepEqual(p.hovers.mismatch, [], `${p.path}: every hover like the original's`);
-    assert.deepEqual(p.offline.external ?? [], [], `${p.path}: nothing asked off the copy`);
-    assert.deepEqual(p.offline.errors ?? [], [], `${p.path}: no console error`);
+    // Nothing asked off the copy that the as-is page does not name itself, and no console error the original does not show on
+    // the same page (as convert-react.test.js: work.html carries the fixture's unsafe-SVG seed; checkCopy cuts a message at 160
+    // characters, so the two sides are compared by prefix with the address written as {origin}).
+    const asIsPage = pages.find((q) => routeOf(q.outPath) === p.path);
+    const asIs = await readFile(path.join(copyDir, asIsPage.outPath), 'utf8');
+    assert.deepEqual((p.offline.external ?? []).filter((u) => !asIs.includes(u)), [], `${p.path}: nothing asked off the copy that the page does not name`);
+    const originalErrors = await consoleErrorsOf(asIsPage.url);
+    const own = (e) => originalErrors.some((o) => o.startsWith(e.slice(0, Math.max(20, e.length - 12))));
+    assert.deepEqual((p.offline.errors ?? []).map((e) => e.split(base()).join('{origin}')).filter((e) => !own(e)), [], `${p.path}: no console error the original does not have (${JSON.stringify(originalErrors)})`);
   }
 });
 
