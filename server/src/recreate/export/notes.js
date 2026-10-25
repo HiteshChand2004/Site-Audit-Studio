@@ -19,7 +19,7 @@ export function notesEntries({ report, stack, root, shipped }) {
   const address = report.asIs ? (report.asIs.address?.used ?? null) : (report.baseUrl ?? null);
   const siteName = siteNameOf(report);
   const copy = report.copy ?? {};
-  const entries = [{ name: `${root}/DEPLOY.md`, content: deployMd({ stack, shipped: describePackage(shipped), siteName, address, formEndpoint: copy.formEndpoint ?? null, checks: copy.deployChecks ?? [] }) }];
+  const entries = [{ name: `${root}/DEPLOY.md`, content: deployMd({ stack, shipped: describePackage(shipped), siteName, address, formEndpoint: copy.formEndpoint ?? null, formsSaved: report.asIs?.convert?.wiredForms ?? 0, forms: report.asIs?.formRoutes ?? null, checks: copy.deployChecks ?? [] }) }];
   const pages = (copy.openItems ?? []).map((o) => ({
     page: o.page ?? '-',
     check: o.check,

@@ -724,6 +724,71 @@ Scratch data `C:/Users/urvas/Downloads/sas-work/nyaayai-next-data` (copied from 
 - **Open, not decided**: a fresh lift leaves nyaayai's botza chat script out (chat-widget rule, `extract.js scriptCandidates`),
   while the earlier Next.js copy kept it and botza refused it (domain lock). Same pixels; which one is wanted is the user's call.
 
+### MERN writer (branch `convert-mern`, from `convert-react` 8b3ad1a, 2026-10-25) — done, browser tests and live proof passed
+
+- `server/src/recreate/convert/mern.js`: `client/` = the React + Vite conversion, `convertToReact` called as it is (no change to
+  the React writer or the shared core); `server/` = an Express server (`convert/mern/server/`: `app.js`, `site.js`, `match.js`,
+  `index.js`, `dev.js`, `open-store.js`, plus `forms.js` / `store.js` / `limiter.js` of the MERN template; `headers.js` written from
+  `copy/securityHeaders.js`). Root `package.json`: `install:all`, `dev`, `build` (= the client's build), `start`; deps express +
+  mongodb only. Built with the `mern` toolchain (`buildConvertedMern`, steps read from the client's own build script).
+- Serving (`site.js`): the rules of the static server the React build is measured on (`serveCopy`): folder → 301, clean URLs,
+  pages / sw.js `no-cache`, the rest a year, brotli / gzip from a cache; the copy's files answer first at every address
+  (`/api/health`, `/api/forms/…`, `/thanks` and Vite's included; a POST still reaches the API); the copy's 404 page; the security
+  headers, no CSP (the original's scripts run). `npm run dev` = the same app with `client/public` + pages rendered by the client's
+  `entry-server.jsx` (Vite only loads components): byte for byte the build.
+- Forms (`planForms`): own server (no action, relative, the original's host) → wired; another service, mailto, script, and own
+  forms `describeForm` refuses (GET / search, password, file) → not stored, said why. The pages stay identical: `client/public/
+  sas-forms.json` gets `endpoint: /api/forms`, so the copy's form guard sends the fields there; the server finds the form by
+  Referer page + field names (`match.js`); without script a relative action posts to this server too (303 → /thanks). Report:
+  `asIs.convert.forms[]` with `wired`, `goesTo`, `note` (plain words), `wiredForms`; `needsAPerson` counts only the unwired;
+  DEPLOY.md says "N forms are saved in MongoDB" (`deployMd formsSaved`); the zip ships the source, not `client/dist`.
+- Wired: `stage.js CONVERTERS.mern` (`runs: 'server'`): checked on its own server (`startStack(..., { env: { FORMS_STORE: 'memory' } })`),
+  headers counted as the server's. A failure packages as before (`packLifted`).
+- Tests: `convert-mern-build.test.js` 8/8 (no browser). **Browser tests (2026-10-25, one at a time, after merging convert-react
+  2dcf29f):** `convert-mern` 6/6, `full-flow` (`SAS_FLOW_STACKS=mern`) pass, `preserve-forms` 3/3, `convert-react` 5/5,
+  `convert-next` 4/4, `preserve-completion-same-origin` / `preserve-complete` / `preserve-ranged` pass; full suite not run.
+  `convert-mern.test.js` now builds its copy like `convert-react.test.js` (the fixture as served, about.html left to the lift).
+  `full-flow`: a failed flow is reported before the extra "Compare now" check; `SAS_FLOW_KEEP=1` keeps the data folder.
+- **Found by full-flow and fixed (shared core, `behavior/preserve/complete.js serviceWorkerSource`)**: the copy's service worker
+  answered "404 not in this copy" for every address of the original's host that is not one of the copy's files, also on the copy's
+  own address. A copy deployed at the original's domain (or on the same host name, as in tests) therefore had its own form endpoint
+  (MERN `/api/forms`, or a FORM_ENDPOINT on the same site) refused. The copy's own origin is now left to the copy's own server;
+  the original's other addresses are still refused. Test `preserve-sw-own-origin.test.js` (no browser).
+- **Live proof, nyaayai homepage** (`remastly-live-results/nyaayai/mern-convert/RESULTS.md`, run on its own Express server):
+  visual 0.26 % / 0.19 %, same heights; Lighthouse medians of 3 against the live original phone 61/84/100/85 → 90/94/100/85,
+  computer 84/84/100/85 → 96/94/100/85; hovers 14/14, clicks 2/2, reveals 85/85, loops 19/19, feed 3030 vs 3050 ms; no console
+  error, nothing leaves the copy; the 3 newsletter forms wired to `/api/forms` and one stored by the check; `npm run dev` = build
+  byte for byte (486 files + the page). Re-audit rows the same as the React run.
+
+### Forms of another service go to it in the download; the zip keeps the original's node_modules paths (2026-10-25, `convert-mern`)
+
+User decision: a form that posts to another service (a form service, a newsletter, a CRM) must post there in the downloaded copy,
+exactly as on the original, in every stack; the guard holds forms only in the app's preview and in our checks.
+- **Guard** (`complete.js FORM_GUARD`, now readable source): it decides synchronously from the form's action (the submit
+  button's `formaction` first). Another host, or `mailto:` / `tel:` → not intercepted, so the browser and the page's own script send it.
+  No action, a relative one, this site, or the original's host (`sas-forms.json originalHosts`, written by `registerServiceWorker({
+  siteUrl })` without touching an endpoint the owner set), or `javascript:` → held as before (FORM_ENDPOINT, or "not connected
+  yet"). If the form is submitted before the settings have loaded, it is held and then sent again with `requestSubmit`. While
+  `window.__sasHoldForms` is set (`HOLD_FORMS`) a service form is held and says "Held in this preview: the downloaded copy sends
+  this form to <host>".
+- **Held in**: the preview shim (`previewShim.js`), every copy-side check context (`check.js isolated`), the completion passes
+  (`complete.js`), and the re-audit's motion / click probe (`reaudit/motion.js`).
+- **Report per form** (`copy/formRoutes.js`: `formDestination` moved here from `convert/mern.js`, which re-exports it, plus
+  `formRoute`, `formRoutesOfCopy`, `formCounts`, `formsReadmeSection`): `report.asIs.formRoutes[]` gives `goesTo` = service | mail-app |
+  endpoint | not-connected | as-original (MERN adds copy-server / not-stored) and a plain-words `note`, for every stack.
+  `needsAPerson` counts only not-connected / not-stored forms. It is shown in the HTML README, the packaged-stack READMEs
+  (`pack.js`), DEPLOY.md (`deploy.js formLines`), the report (`render.js`) and the app (`AsIsReport.jsx`).
+  `convert/document.js formsOf` (shared core) uses `formRoute` for its note and gains `goesTo`; `worksWithoutOriginal`
+  keeps its meaning. A page without the guard keeps the old as-original wording.
+- **Zip** (`export/zip.js projectOwnFile` / `packagesOf`): node_modules / .ssr / .next / dist / out are left out only directly
+  inside one of the project's own packages (the project, `client/` or `server/` with a package.json). An original's
+  `/node_modules/…` or `/dist/…` file is kept (in public/, site-files/, client/public/, or a plain HTML copy's folder). Before
+  this, a plain HTML as-is copy also lost the original's /dist/ and /out/ files.
+- **Limit**: a form with no service action whose own script posts to a service (by fetch from a submit handler) is held as
+  the original's own server's form.
+- Tests (no browser): `form-guard.test.js` 7/7 (the guard's own source in a stand-in page), `zip-project-files.test.js` 2/2
+  (every stack). Browser: `preserve-forms.test.js` 3/3, `convert-mern.test.js` forms test pass (2026-10-25).
+
 ### nyaayai's "What is Nyaay AI?" chat bar missing in the copy (botza.panscience.xyz, 2026-10-25): the service's domain allow-list
 
 - The copy keeps the widget's script exactly (`<script src="https://botza.panscience.xyz/widget/chatbot-widget.js">`, answered

@@ -19,6 +19,8 @@ const shim = function () {
   var m = location.pathname.match(/^\/preview\/([A-Za-z0-9_-]{24})(?=\/)/);
   if (!m) return;
   var PREFIX = m[0];
+  // An as-is copy's form guard holds every form in the preview: nothing is sent anywhere from here (complete.js FORM_GUARD).
+  window.__sasHoldForms = true;
   var TOKEN = m[1];
   var ORIGIN = location.origin;
   var U = URL;

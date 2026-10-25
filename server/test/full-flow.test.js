@@ -29,6 +29,7 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta n
 <body><header><strong>Tiny Bakery</strong></header><main><h1>Fresh bread every morning</h1>
 <p>${'We bake everything by hand, with flour from the mill down the road. '.repeat(6)}</p>
 <div class="card"><h2>Sourdough</h2><p>Baked at six, gone by noon.</p></div><div class="card"><h2>Cinnamon buns</h2><p>Saturdays only.</p></div>
+<form class="order" action="/order" method="post"><label>Name <input name="name" required></label><label>Email <input name="email" type="email" required></label><button>Order a cake</button></form>
 </main><footer><p>Open every day from 7 to 15.</p></footer></body></html>`;
 
 /** The original: one page and a robots.txt, on a loopback port. */
@@ -130,7 +131,9 @@ const STACKS = {
   // Next.js: the copy converted into pages and components (recreate/convert/next.js), a static export served from out/; the
   // project ships the source (out/ is written by its own build, as DEPLOY.md says).
   nextjs: { served: 'out', project: ['package.json', 'next.config.mjs', 'pages/index.jsx', 'pages/_document.jsx', 'src/documents.js', 'scripts/after-build.mjs', 'README.md'], converted: true },
-  mern: { served: 'client/dist', project: ['package.json', 'server/src/index.js', 'server/src/app.js', 'server/forms.json', 'client/dist/index.html', 'README.md'] },
+  // MERN: the React + Vite conversion as client/ (built by the project's own `npm run build`) and the Express server, which
+  // serves client/dist and stores the forms that went to the original's own server (recreate/convert/mern.js).
+  mern: { served: 'client/dist', project: ['package.json', 'server/src/index.js', 'server/src/app.js', 'server/src/dev.js', 'server/forms.json', 'client/package.json', 'client/src/routes.js', 'client/src/pages/Home.jsx', 'client/scripts/prerender.mjs', 'README.md'], absent: ['client/dist/index.html', 'client/public/index.html'], converted: true },
 };
 
 /** One person's whole path; returns the project id. */
@@ -164,10 +167,20 @@ ${api.output().slice(-3000)}`);
     const convert = recreate.result?.asIs?.convert;
     assert.equal(convert?.mode, 'converted', `the ${stack} copy is converted into code: ${JSON.stringify(convert ?? null).slice(0, 300)}`);
     assert.ok(convert.stats.components >= 1 && Array.isArray(convert.fallbacks) && Array.isArray(convert.forms), 'components, fallbacks and forms are reported');
-    // React + Vite holds every built page against its as-is page (recreate/convert/react.js verifyConverted).
-    if (stack === 'react-vite') {
+    // React + Vite (and the MERN client, the same conversion) holds every built page against its as-is page (verifyConverted).
+    if (stack === 'react-vite' || stack === 'mern') {
       assert.equal(convert.verified?.pages, convert.stats.pages, 'every built page was held against its as-is page');
       assert.deepEqual(convert.verified?.added, [], 'the build added no file');
+    }
+    // MERN: the order form went to the original's own server, so it is wired to the copy's and saved; the form check, run on
+    // the copy's own server, sees it accepted.
+    if (stack === 'mern') {
+      assert.equal(convert.wiredForms, 1, JSON.stringify(convert.forms).slice(0, 400));
+      assert.equal(convert.forms[0].goesTo, 'copy-server');
+      assert.match(convert.forms[0].note, /saved in MongoDB/);
+      const sent = recreate.result.asIs.checks.pages.flatMap((p) => p.forms?.forms ?? []);
+      assert.deepEqual(sent.map((f) => f.note), ['Thank you. Your message was sent.'], `the copy's server stored the submission: ${JSON.stringify(recreate.result.asIs.checks.pages.map((p) => [p.path, p.forms ?? null]))}`);
+      assert.equal(recreate.result.asIs.needsAPerson.length, 0, 'no form needs a person');
     }
   }
 
@@ -222,7 +235,9 @@ test('Analyze → Copy my site → re-audit → Results → Compare → report �
   t.after(() => site.close());
   const dataDir = await dataFolder();
   const api = await startApi(t, dataDir);
-  t.after(() => rm(dataDir, { recursive: true, force: true, maxRetries: 5 }));
+  // SAS_FLOW_KEEP=1 keeps the data folder (its path is printed) to look into a failure.
+  if (process.env.SAS_FLOW_KEEP === '1') console.log(`kept data folder: ${dataDir}`);
+  else t.after(() => rm(dataDir, { recursive: true, force: true, maxRetries: 5 }));
 
   const user = await api.signIn('user@example.com');
   const owner = await api.signIn('owner@example.com');
@@ -245,7 +260,8 @@ test('Analyze → Copy my site → re-audit → Results → Compare → report �
 
   // A copy that cannot be compared fails once, with the reason: a click on "Compare now" is refused, no job is queued.
   // (A newer finished copy whose folder lost its home page.) It needs the MERN copy: not run when SAS_FLOW_STACKS leaves it out.
-  if (!made['ordinary user mern']?.id) {
+  // After a failed flow (a job it left may still run) this check would only time out: the flow's own failure is said first.
+  if (!made['ordinary user mern']?.id || failures.length) {
     assert.deepEqual(failures, [], failures.join('\n'));
     return;
   }

@@ -99,6 +99,8 @@ test('the download of an as-is MERN copy keeps its client/dist (the copy itself)
 
     await mkdir(path.join(stacks, 'client', 'dist', 'assets'), { recursive: true });
     await writeFile(path.join(stacks, 'client', 'dist', 'assets', 'built.js'), 'x', 'utf8');
+    // A clean build's client is a package of its own (emit/mern): its dist is what its build writes.
+    await writeFile(path.join(stacks, 'client', 'package.json'), '{ "scripts": { "build": "vite build" } }', 'utf8');
     const cleanReport = { ...asIsReport, outputs: { mern: { status: 'ready', dir: 'stacks/mern' } } };
     const clean = await planZip({ dir: root, report: cleanReport, stack: 'mern' });
     assert.ok(!clean.entries.some((e) => e.name.includes('/client/dist/')), 'a built dist is not the copy: left out');

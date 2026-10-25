@@ -41,14 +41,15 @@ export const freePort = () => new Promise((resolve, reject) => {
  * is never taken for the copy; a fresh port is tried instead. The link to the toolchain is removed when it stops.
  * @param {string} stack
  * @param {string} dir  the packed project
- * @param {{ port?: number }} [o]  a fixed port (tests); default: a free one
+ * @param {{ port?: number, env?: Record<string, string> }} [o]  a fixed port (tests; default: a free one), and settings for the
+ *   server's environment (the MERN server's form store)
  * @returns {Promise<{ url: string, port: number, stop: () => Promise<void> }>}
  */
-export async function startStack(stack, dir, { port } = {}) {
+export async function startStack(stack, dir, { port, env = {} } = {}) {
   let last = null;
   for (let attempt = 0; attempt < (port ? 1 : PORT_ATTEMPTS); attempt++) {
     try {
-      return await startOnPort(stack, dir, port ?? await freePort());
+      return await startOnPort(stack, dir, port ?? await freePort(), env);
     } catch (err) {
       last = err;
       if (!err.portLost) throw err;
@@ -69,7 +70,7 @@ const portAnswers = (port) => new Promise((resolve) => {
 const SETTLE_MS = 750;
 
 /** One try of startStack on one port. An error with `portLost`: the server could not keep the port; another one may work. */
-async function startOnPort(stack, dir, port) {
+async function startOnPort(stack, dir, port, env) {
   // A server that is not ours would answer the readiness check below before ours has even started.
   if (await portAnswers(port)) {
     const err = new Error(`port ${port} is already in use: the ${stack} server was not started there`);
@@ -89,7 +90,7 @@ async function startOnPort(stack, dir, port) {
   }
   const child = spawn(process.execPath, args, {
     cwd: dir,
-    env: { ...process.env, PORT: String(port), NEXT_TELEMETRY_DISABLED: '1', NODE_ENV: 'production' },
+    env: { ...process.env, ...env, PORT: String(port), NEXT_TELEMETRY_DISABLED: '1', NODE_ENV: 'production' },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });

@@ -11,9 +11,11 @@ import { liftSite, localOfOutPath } from './asis.js';
 import { packLifted, servedDir } from './pack.js';
 import { buildConvertedReact, convertToReact, REACT_EXPORT_DIR, verifyConverted } from '../../convert/react.js';
 import { buildConverted, convertToNext, EXPORT_DIR } from '../../convert/next.js';
+import { buildConvertedMern, convertToMern, MERN_EXPORT_DIR, verifyConvertedMern } from '../../convert/mern.js';
 import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
 import { checkCopy, excludedHostsOf, fixGate, formsInCopy, NOISE_SHOTS, probeOriginal } from './check.js';
+import { formRoutesOfCopy, formsReadmeSection } from '../../../copy/formRoutes.js';
 import { fixAsIsCopy, revertPage } from '../../../copy/fixAsIs.js';
 import { addressForCopy } from '../../../copy/address.js';
 import { measureServed, servedOutcome } from '../../../copy/served.js';
@@ -33,11 +35,14 @@ import { LOGS_DIR } from '../../../config/paths.js';
 export const ASIS_STACKS = ['html', 'react-vite', 'nextjs', 'mern'];
 /**
  * The stacks whose copy is converted into real code (recreate/convert/): the words the progress and the report use, the writer,
- * its build, the check of the built pages against the as-is pages (where the stack has one) and the folder the build writes.
+ * its build, the check of the built pages against the as-is pages (where the stack has one), the folder the build writes, and
+ * what runs it: `static` (the export is static files, served as a static host serves them) or `server` (the project's own
+ * server: MERN, whose Express server serves the built client and stores the forms).
  */
 const CONVERTERS = {
-  'react-vite': { code: 'React', project: 'React + Vite', convert: convertToReact, build: buildConvertedReact, verify: verifyConverted, exportDir: REACT_EXPORT_DIR },
-  nextjs: { code: 'Next.js', project: 'Next.js', convert: convertToNext, build: buildConverted, verify: null, exportDir: EXPORT_DIR },
+  'react-vite': { code: 'React', project: 'React + Vite', convert: convertToReact, build: buildConvertedReact, verify: verifyConverted, exportDir: REACT_EXPORT_DIR, runs: 'static' },
+  nextjs: { code: 'Next.js', project: 'Next.js', convert: convertToNext, build: buildConverted, verify: null, exportDir: EXPORT_DIR, runs: 'static' },
+  mern: { code: 'React', project: 'MERN', convert: convertToMern, build: buildConvertedMern, verify: verifyConvertedMern, exportDir: MERN_EXPORT_DIR, runs: 'server' },
 };
 /** The lifted copy and its page set, kept in the job's folder: a repack for another stack starts from them. */
 export const ASIS_DIR = 'as-is';
@@ -294,6 +299,8 @@ export async function asIsStage(ctx) {
         'The file `.nojekyll` (empty) is in this folder on purpose: without it GitHub Pages leaves out folders whose names start with `_`,',
         'and this copy keeps the original\'s `_next` folder. Keep the file when you upload.',
         '',
+        // Where each form's data goes in this download (copy/formRoutes.js).
+        formsReadmeSection(await formRoutesOfCopy(copyDir, pages)),
       ].join('\n'), 'utf8');
     } else if (CONVERTERS[stack]) {
       // The finished copy converted into real code of the stack (recreate/convert/): pages and components, prerendered and never
@@ -326,8 +333,19 @@ export async function asIsStage(ctx) {
       report.build = built?.steps?.map((s) => ({ label: s.label, ms: s.ms })) ?? null;
     }
     const converted = report.convert?.mode === 'converted';
+    // A converted copy run by its own server (MERN) is served by that server; a static export is static files.
+    const ownServer = converted && CONVERTERS[stack].runs === 'server';
     report.forms = await formsInCopy(copyDir, pages.map((p) => p.outPath));
-    report.needsAPerson = report.forms ? [{ kind: 'form', count: report.forms, why: 'its data is never sent to the original site; connect FORM_ENDPOINT in sas-forms.json' }] : [];
+    // Where each form's data goes in the downloaded copy (copy/formRoutes.js, the form guard's rules); a converted copy's own
+    // list (MERN: the forms its server stores) says it for that stack.
+    report.formRoutes = converted && report.convert.forms ? report.convert.forms : await formRoutesOfCopy(copyDir, pages);
+    // A form of another service, or a mail form, goes where the original sent it; one that went to the original's own server
+    // needs a person (FORM_ENDPOINT), except in a converted MERN copy, whose server stores it unless it is one it must not.
+    const waiting = report.formRoutes.filter((f) => f.goesTo === 'not-connected' || f.goesTo === 'not-stored').length;
+    report.needsAPerson = waiting ? [{
+      kind: 'form', count: waiting,
+      why: ownServer ? 'it went to the original\'s own server and is one the copy\'s server does not store (a sign-in, an upload, a search, a script\'s own address); the forms list says which' : 'it went to the original\'s own server and is never sent there from the copy; connect FORM_ENDPOINT in sas-forms.json',
+    }] : [];
     report.javascript = await javascriptOf(copyDir);
 
     ctx.progress(0.55, 'Running the copy and checking it');
@@ -336,6 +354,12 @@ export async function asIsStage(ctx) {
       const served = await serveCopy(copyDir);
       servers.push(served);
       base = served.url.replace(/\/$/, '');
+    } else if (ownServer) {
+      // The project's own server (MERN: Express serving client/dist and the forms). Submissions are kept in memory while it is
+      // checked, so the form check sees what a visitor sees once MongoDB is set.
+      const s = await startStack(stack, outDir, { env: { FORMS_STORE: 'memory', MONGODB_URI: '' } });
+      servers.push(s);
+      base = s.url;
     } else if (converted) {
       // A static export: served as the static files it is (what any static host does); there is no server of the stack to run.
       const served = await serveCopy(path.join(outDir, CONVERTERS[stack].exportDir));
@@ -350,8 +374,8 @@ export async function asIsStage(ctx) {
     if (report.fixes) {
       const fixedPages = report.fixes.pages.filter((p) => !p.reverted && p.fixes.length)
         .map((p) => ({ path: p.path, outPath: pages.find((q) => localOfOutPath(q.outPath) === p.path)?.outPath ?? 'index.html', kinds: [...new Set(p.fixes.map((f) => f.kind))] }));
-      // A converted copy is static files: its security headers are the host's, as for plain HTML.
-      report.fixes.served = await measureServed({ base, stack, copyDir, fixedPages, files: report.fixes.files?.written ?? [], ...(converted && { takeEffect: 'host' }) })
+      // A converted static export: its security headers are the host's, as for plain HTML; a converted MERN copy's server sends them.
+      report.fixes.served = await measureServed({ base, stack, copyDir, fixedPages, files: report.fixes.files?.written ?? [], ...(converted && !ownServer && { takeEffect: 'host' }) })
         .catch((err) => ({ error: String(err?.message ?? err).slice(0, 160) }));
     }
     // The original is asked once: when it does not answer, the checks that need it say so and the copy is still finished.
