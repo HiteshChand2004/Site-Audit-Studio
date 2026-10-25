@@ -11,6 +11,7 @@ import { comparisonOf, copyShot, isReal, originalShot, platformOf, useSiteData }
 import { useProjects } from '../../store/useProjects.js';
 import { HOW } from '../Home.jsx';
 import styles from './OverviewStep.module.css';
+import { copiedPages } from '../../copiedPages.js';
 
 const titleOf = (item) => CHECKS[item.title]?.title ?? CHECKS[item.title?.split(' · ')[0]]?.title ?? item.title;
 
@@ -66,7 +67,7 @@ function Progress({ audit, result, stages, onGo }) {
       id: 'create',
       title: 'Make the copy',
       state: stages.copy,
-      text: result ? `${timeAgo(result.createdAt)} · ${plural(result.pages.length, 'page')} in ${stackById(result.stack).short}` : 'Not made yet',
+      text: result ? `${timeAgo(result.createdAt)} · ${plural(copiedPages(result).length, 'page')} in ${stackById(result.stack).short}` : 'Not made yet',
     },
     {
       id: 'compare',

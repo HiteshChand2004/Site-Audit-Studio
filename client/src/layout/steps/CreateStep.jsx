@@ -20,6 +20,7 @@ import { isAnalysisActive, isJobActive, selectIsOwner, useProjects } from '../..
 import styles from '../Panel.module.css';
 import { pathOf } from '../../components/project/PageScope.jsx';
 import ws from '../Workspace.module.css';
+import { copiedPages } from '../../copiedPages.js';
 
 const STALE_DAYS = 7;
 const ALL_PAGES = -1;
@@ -300,7 +301,7 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
             <dl className={ws.miniFacts}>
               <div>
                 <dt>Pages</dt>
-                <dd className="tabular">{result.pages.length}</dd>
+                <dd className="tabular">{copiedPages(result).length}</dd>
               </div>
               <div>
                 <dt>Match</dt>

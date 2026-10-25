@@ -4,6 +4,7 @@ import { STEPS } from '../copy.js';
 import { plural, timeAgo } from '../format.js';
 import { api } from '../api/client.js';
 import { outputsOf, outputState } from '../stacks.js';
+import { copiedPages } from '../copiedPages.js';
 import { isJobActive, useProjects } from '../store/useProjects.js';
 import SiteHero from './SiteHero.jsx';
 import OverviewStep from './steps/OverviewStep.jsx';
@@ -34,9 +35,9 @@ function stepStates({ audit, analysis, job, result, reauditJob }) {
       : job?.status === 'failed'
         ? { tone: 'bad', status: 'Did not finish' }
         : result
-          ? { tone: 'done', status: `${plural(result.pages.length, 'page')} copied` }
+          ? { tone: 'done', status: `${plural(copiedPages(result).length, 'page')} copied` }
           : { status: checked ? 'Ready to start' : 'Check the site first' },
-    compare: result ? { status: `${plural(result.pages.length, 'page')} side by side` } : { status: 'After the copy' },
+    compare: result ? { status: `${plural(copiedPages(result).length, 'page')} side by side` } : { status: 'After the copy' },
     results: isJobActive(reauditJob)
       ? { tone: 'running', status: `Comparing${pct(reauditJob)}` }
       : summary
