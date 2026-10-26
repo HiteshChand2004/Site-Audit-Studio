@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import Logo from './Logo';
+import { exampleScores } from '@/lib/content';
 import { FOOTER_NAV, TAGLINE } from '@/lib/site';
 
 export default function Footer() {
@@ -30,6 +31,7 @@ export default function Footer() {
         </div>
         <div className="footer__bottom">
           <span>© {new Date().getFullYear()} Remastly. For websites your company owns or may use.</span>
+          <span>Lighthouse is a tool by Google.{exampleScores && ' Scores shown are from a labelled example run.'}</span>
         </div>
       </div>
     </footer>
