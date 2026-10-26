@@ -25,6 +25,7 @@ export function assembleAudit({
   manualRebuild,
   pagesCrawled,
   pageVariants = 0,
+  crawlStop = null,
   blockedHosts = [],
   errors,
   siteType = null,
@@ -36,6 +37,9 @@ export function assembleAudit({
     analyzedAt: new Date().toISOString(),
     pagesCrawled,
     pageVariants,
+    // { reason: 'time-limit' | 'page-limit' | 'all-found', read, maxPages, timeLimitSeconds? } (crawler.js crawlStopOf);
+    // absent on older analyses and when the crawl did not run.
+    ...(crawlStop && { crawlStop }),
     frame,
     screenshots,
     metrics,
