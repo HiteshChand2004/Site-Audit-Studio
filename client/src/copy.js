@@ -218,19 +218,3 @@ export function resumeText(r) {
     short: 'Continue the copy',
   };
 }
-
-/**
- * Why the check read fewer pages than it could, in one sentence, or null when there is nothing to say: it read everything it
- * found, or the analysis is older than this record (audit.crawlStop, server audit/crawler.js crawlStopOf).
- * @param {{ crawlStop?: { reason: string, read: number, maxPages: number, timeLimitSeconds?: number } } | null | undefined} audit
- */
-export function crawlStopText(audit) {
-  const s = audit?.crawlStop;
-  if (!s || !Number.isFinite(s.read) || !Number.isFinite(s.maxPages)) return null;
-  const read = `${s.read} of up to ${s.maxPages} ${s.maxPages === 1 ? 'page' : 'pages'} read`;
-  if (s.reason === 'time-limit') {
-    return `${read}: the crawl stopped at its ${s.timeLimitSeconds != null ? `${s.timeLimitSeconds}-second ` : ''}time limit.`;
-  }
-  if (s.reason === 'page-limit') return `${read}: the page limit was reached.`;
-  return null;
-}

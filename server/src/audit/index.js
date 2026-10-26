@@ -16,7 +16,7 @@ import { buildMetrics, buildScores } from './analyzers/metrics.js';
 import { analyzeSeo, crawlErrorsItem } from './analyzers/seo.js';
 import { buildWeaknesses } from './analyzers/weaknesses.js';
 import { assembleAudit } from './assemble.js';
-import { crawl, crawlStopOf } from './crawler.js';
+import { crawl } from './crawler.js';
 import { extractPage } from './extract.js';
 import { computeFrame } from './frame.js';
 import { fetchPage, isBotChallenge, isHtml } from './http.js';
@@ -399,7 +399,6 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
   const shotsTask = oneAtATime ? renderTask.then(shots$, shots$) : shots$();
 
   let crawlResult;
-  let crawlLimitMs = null; // the crawl step's own time limit as it was given (reported when the crawl stopped at it)
   let shots = null;
   let linksTask = null;
   let robots;
@@ -417,9 +416,8 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
       : undefined;
     crawlResult = await step(
       'crawl',
-      (signal, limitMs) => {
-        crawlLimitMs = limitMs;
-        return crawl({
+      (signal) =>
+        crawl({
           home,
           maxPages,
           robots,
@@ -428,8 +426,7 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
           render: renderForCrawl,
           signal,
           onProgress: (done, total) => progress('crawl', done / Math.max(total, 1), `Crawled ${done} of ${total} pages`),
-        });
-      },
+        }),
       null,
       reserve,
     );
@@ -550,8 +547,6 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     // is a variant of a page, not a page of its own. The checks above still read every address.
     pagesCrawled: pages.filter((p) => !hasQuery(p.url)).length || pages.length,
     pageVariants: pages.filter((p) => hasQuery(p.url)).length,
-    // Why the crawl read that many addresses (time limit, page limit, or nothing more to follow), with the limits it had.
-    crawlStop: crawlStopOf(crawlResult, { maxPages, timeLimitMs: crawlLimitMs }),
     blockedHosts: proxy.blocked(),
     errors,
     siteType,

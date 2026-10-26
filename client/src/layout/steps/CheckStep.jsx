@@ -12,7 +12,6 @@ import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import PageScope, { pathOf } from '../../components/project/PageScope.jsx';
 import { isAnalysisActive, useProjects } from '../../store/useProjects.js';
 import { timeAgo } from '../../format.js';
-import { crawlStopText } from '../../copy.js';
 import styles from '../Panel.module.css';
 import ws from '../Workspace.module.css';
 
@@ -169,9 +168,6 @@ export default function CheckStep({ project, audit, loading }) {
                   {audit.pageVariants > 0 && ` (+${audit.pageVariants} ${audit.pageVariants === 1 ? 'address' : 'addresses'} with “?…” counted as the same page)`}
                   {' '}· speed measured on the homepage
                 </p>
-              )}
-              {!audit.isDummy && audit.scope?.kind !== 'page' && crawlStopText(audit) && (
-                <p className={ws.hint}>{crawlStopText(audit)}</p>
               )}
               {!audit.isDummy && (project.page_url ?? null) !== (audit.scope?.url ?? null) && (
                 <Alert tone="info" title={project.page_url ? `This report is not for ${pathOf(project.page_url)} yet` : 'This report is for one page only'}>

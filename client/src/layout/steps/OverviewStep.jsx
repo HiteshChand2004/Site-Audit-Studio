@@ -5,7 +5,7 @@ import { problemsOf } from '../../components/audit/FixList.jsx';
 import { summarize } from '../../components/audit/HealthOverview.jsx';
 import { BrowserShot } from '../../components/site/Site.jsx';
 import { hostOf, stackById } from '../../constants.js';
-import { CHECKS, crawlStopText, matchRating, RESULT_STATUS, SEVERITY, TERMS } from '../../copy.js';
+import { CHECKS, matchRating, RESULT_STATUS, SEVERITY, TERMS } from '../../copy.js';
 import { plural, timeAgo } from '../../format.js';
 import { comparisonOf, copyShot, isReal, originalShot, platformOf, useSiteData } from '../../siteData.js';
 import { useProjects } from '../../store/useProjects.js';
@@ -109,7 +109,7 @@ function Facts({ audit, result, project }) {
   const a11y = (audit.accessibility ?? []).reduce((n, a) => n + (a.count ?? 1), 0);
   const rows = [
     ['Built with', platform?.name ?? 'Not recognised'],
-    ['Pages found', crawlStopText(audit) ? `${audit.pagesCrawled ?? '–'} · ${crawlStopText(audit)}` : audit.pagesCrawled ?? '–'],
+    ['Pages found', audit.pagesCrawled ?? '–'],
     ['Links that lead nowhere', broken],
     ['Accessibility problems', `${a11y} on the homepage`],
     ['Needs a person', audit.manualRebuild?.length ? plural(audit.manualRebuild.length, 'part') : 'Nothing'],

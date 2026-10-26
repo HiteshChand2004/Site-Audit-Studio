@@ -117,21 +117,3 @@ export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls 
     ...(firstQueue && { firstQueue }),
   };
 }
-
-/**
- * Why a crawl read the pages it read, for the person reading the report: 'time-limit' (its step's time ran out and it stopped
- * starting pages), 'page-limit' (maxPages started with addresses still waiting) or 'all-found' (nothing left to follow).
- * Pure, from the crawl's own result; null when there is no crawl result (the step failed or was skipped: audit.errors says so).
- * @param {{ pages: object[], truncated?: boolean, aborted?: boolean } | null | undefined} result
- * @param {{ maxPages: number, timeLimitMs?: number | null }} o
- */
-export function crawlStopOf(result, { maxPages, timeLimitMs = null }) {
-  if (!result || !Array.isArray(result.pages) || result.aborted === undefined) return null;
-  const reason = result.aborted ? 'time-limit' : result.truncated ? 'page-limit' : 'all-found';
-  return {
-    reason,
-    read: result.pages.length,
-    maxPages,
-    ...(reason === 'time-limit' && timeLimitMs != null && { timeLimitSeconds: Math.round(timeLimitMs / 1000) }),
-  };
-}
