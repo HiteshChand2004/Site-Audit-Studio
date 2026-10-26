@@ -20,8 +20,6 @@ const Spinner = (props) => <Loader2 {...props} className={styles.spin} />;
 // The preview viewport and the metrics device follow each other (tablet has no Lighthouse run).
 const DEVICE_OF = { 1440: 'desktop', 375: 'mobile' };
 const VIEWPORT_OF = { desktop: 1440, mobile: 375 };
-// Pages a check reads when the project has no number of its own: the most the server allows (server routes/analyze.js).
-const DEFAULT_MAX_PAGES = 100;
 
 function previewOverlay({ audit, mode, slow }) {
   if (!audit) return null;
@@ -70,9 +68,9 @@ const TOC = [
 /** Step 1: check the original site (Analyze) and read its report. */
 export default function CheckStep({ project, audit, loading }) {
   const [url, setUrl] = useState(project.url);
-  const [maxPages, setMaxPages] = useState(String(project.max_pages ?? DEFAULT_MAX_PAGES));
+  const [maxPages, setMaxPages] = useState(String(project.max_pages ?? 25));
   useEffect(() => setUrl(project.url), [project.url]);
-  useEffect(() => setMaxPages(String(project.max_pages ?? DEFAULT_MAX_PAGES)), [project.max_pages]);
+  useEffect(() => setMaxPages(String(project.max_pages ?? 25)), [project.max_pages]);
 
   const analysis = useProjects((s) => s.analyses[project.id]);
   const analyze = useProjects((s) => s.analyze);
@@ -107,7 +105,7 @@ export default function CheckStep({ project, audit, loading }) {
     if (Number.isInteger(n) && n >= 1 && n <= 100) {
       if (n !== project.max_pages) update(project.id, { max_pages: n }).catch(() => {});
     } else {
-      setMaxPages(String(project.max_pages ?? DEFAULT_MAX_PAGES));
+      setMaxPages(String(project.max_pages ?? 25));
     }
   };
 

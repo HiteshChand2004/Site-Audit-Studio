@@ -10,13 +10,9 @@ const router = Router();
 const selectProject = db.prepare('SELECT * FROM projects WHERE id = ?');
 const selectAnalysis = db.prepare('SELECT id, status, error FROM analyses WHERE id = ? AND project_id = ?');
 
-// Pages one analysis crawls: 1–MAX_PAGES, and a new project starts at the most (routes/projects.js).
-export const MAX_PAGES = 100;
-export const DEFAULT_MAX_PAGES = MAX_PAGES;
-
 export function parseMaxPages(value) {
   const n = Number(value);
-  return Number.isInteger(n) && n >= 1 && n <= MAX_PAGES ? n : null;
+  return Number.isInteger(n) && n >= 1 && n <= 100 ? n : null;
 }
 
 router.post('/:id/analyze', (req, res) => {
@@ -27,7 +23,7 @@ router.post('/:id/analyze', (req, res) => {
   }
   const requested = req.body?.maxPages;
   const maxPages = requested === undefined ? project.max_pages : parseMaxPages(requested);
-  if (!maxPages) return res.status(400).json({ error: `maxPages must be a whole number from 1 to ${MAX_PAGES}.` });
+  if (!maxPages) return res.status(400).json({ error: 'maxPages must be a whole number from 1 to 100.' });
 
   try {
     // One page only (projects.page_url): that page is the one fetched, rendered, measured and checked, and nothing else.
