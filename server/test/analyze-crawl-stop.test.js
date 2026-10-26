@@ -47,7 +47,7 @@ test('page limit: max pages reached with addresses still waiting', async () => {
   const result = await crawl({ home, maxPages: 3, robots });
   const stop = crawlStopOf(result, { maxPages: 3, timeLimitMs: 75000 });
   assert.deepEqual(stop, { reason: 'page-limit', read: 3, maxPages: 3 });
-  assert.equal(crawlStopText({ crawlStop: stop }), 'The crawl stopped at the 3-page limit. The site may have more pages.');
+  assert.equal(crawlStopText({ crawlStop: stop }), '3 of up to 3 pages read: the page limit was reached.');
 });
 
 test('time limit: the step stopped the crawl, which keeps what it read, and the real limit is named', async () => {
@@ -60,11 +60,11 @@ test('time limit: the step stopped the crawl, which keeps what it read, and the 
   assert.ok(result.pages.length < PAGES, 'stopped before every page was read');
   const stop = crawlStopOf(result, { maxPages: 100, timeLimitMs: 75000 });
   assert.deepEqual(stop, { reason: 'time-limit', read: result.pages.length, maxPages: 100, timeLimitSeconds: 75 });
-  assert.equal(crawlStopText({ crawlStop: stop }), 'The crawl stopped at its 75-second time limit, before the 100-page limit.');
+  assert.equal(crawlStopText({ crawlStop: stop }), `${result.pages.length} of up to 100 pages read: the crawl stopped at its 75-second time limit.`);
   // The real numbers, never fixed ones: a scaled step limit and another page limit.
   assert.equal(
     crawlStopText({ crawlStop: crawlStopOf({ pages: new Array(42), aborted: true, truncated: true }, { maxPages: 60, timeLimitMs: 150000 }) }),
-    'The crawl stopped at its 150-second time limit, before the 60-page limit.',
+    '42 of up to 60 pages read: the crawl stopped at its 150-second time limit.',
   );
 });
 
