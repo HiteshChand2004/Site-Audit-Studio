@@ -9,6 +9,7 @@
 //  - Platform code (Phase 5 preview servers) can build a policy with `internalPorts`: loopback
 //    ports it started itself. That list is never derived from user input.
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { allowLocalhost } from '../config/index.js';
 import { lookup } from 'node:dns/promises';
 import { BlockList, isIP } from 'node:net';
 
@@ -129,9 +130,12 @@ export function createNetPolicy({ allowLoopback = false, internalPorts = [] } = 
 let cachedUserPolicy = null;
 let cachedFlag = null;
 
-/** The policy for user-supplied URLs. Reads SAS_ALLOW_LOCALHOST each time so tests can set it. */
+/**
+ * The policy for user-supplied URLs. Loopback is allowed only with SAS_ALLOW_LOCALHOST=1 while the API listens on this computer
+ * alone (config/index.js allowLocalhost): bound to a reachable address (hosted), it is never allowed. Read each time: tests set it.
+ */
 export function userPolicy() {
-  const flag = process.env.SAS_ALLOW_LOCALHOST === '1';
+  const flag = allowLocalhost();
   if (!cachedUserPolicy || cachedFlag !== flag) {
     cachedUserPolicy = createNetPolicy({ allowLoopback: flag });
     cachedFlag = flag;

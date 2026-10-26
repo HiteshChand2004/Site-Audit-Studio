@@ -16,7 +16,7 @@ import { chromium } from 'playwright';
 import sharp from 'sharp';
 import { packLifted } from '../src/recreate/behavior/preserve/pack.js';
 import { serveCopy } from '../src/recreate/behavior/preserve/serve.js';
-import { pixelDiffPct } from '../src/recreate/behavior/preserve/render.js';
+import { exactDiff } from '../src/recreate/verify/exact/pixels.js';
 import { scriptCandidates } from '../src/recreate/behavior/preserve/extract.js';
 import { readRecordIndex, classifyScripts, recordBodyReader } from '../src/recreate/behavior/scripts.js';
 import { runToolchain } from '../src/recreate/build/toolchain.js';
@@ -141,9 +141,9 @@ async function visualCheck(browser, width) {
     await openAndScroll(cp, `${base}/`);
     const op = await original.newPage();
     await openAndScroll(op, originalUrl);
-    const a = await rgbOf(await cp.screenshot({ fullPage: true, type: 'png' }));
-    const b = await rgbOf(await op.screenshot({ fullPage: true, type: 'png' }));
-    return { width, copyHeight: a.height, originalHeight: b.height, diffPct: a.width === b.width ? pixelDiffPct(a.raw, b.raw) : null };
+    // The app's one picture ruler (verify/exact/pixels.js), as the as-is check uses it.
+    const d = await exactDiff(await op.screenshot({ fullPage: true, type: 'png' }), await cp.screenshot({ fullPage: true, type: 'png' }));
+    return { width, copyHeight: d.heights[1], originalHeight: d.heights[0], diffPct: d.widthMismatch ? null : d.commonPct };
   } finally {
     await copy.close();
     await original.close();

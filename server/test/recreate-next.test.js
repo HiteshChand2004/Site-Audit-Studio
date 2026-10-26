@@ -8,6 +8,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promise
 import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
+import { previewRouter, PREVIEW_PREFIX } from '../src/recreate/previewRoute.js';
 import { db, projectDir } from '../src/db/index.js';
 import { launchBrowser } from '../src/audit/render.js';
 import { emitSite } from '../src/recreate/emit/html.js';
@@ -253,8 +254,9 @@ test('the Next project zip leaves out build output and dependencies', async () =
   });
   const report = { stack: 'nextjs', baseUrl: 'https://example.com', pages: [], warnings: [], outputs: { html: { status: 'ready', dir: 'dist' }, nextjs: { status: 'ready', dir: 'stacks/nextjs', dist: 'out' } } };
   const plan = await planZip({ dir, report, stack: 'nextjs' });
+  // DEPLOY.md is written into every download from the package that ships (copy/deploy.js).
   assert.deepEqual(plan.entries.map((e) => e.name).sort(), [
-    'example.com-nextjs/RECREATE-REPORT.md', 'example.com-nextjs/app/(site)/page.jsx', 'example.com-nextjs/package.json', 'example.com-nextjs/public/_redirects',
+    'example.com-nextjs/DEPLOY.md', 'example.com-nextjs/RECREATE-REPORT.md', 'example.com-nextjs/app/(site)/page.jsx', 'example.com-nextjs/package.json', 'example.com-nextjs/public/_redirects',
   ]);
 });
 
@@ -322,10 +324,13 @@ test('real export: static export, moved URLs, equivalence through the moves, hyd
   const app = express();
   app.use(express.json());
   app.use('/api/projects', recreateRouter);
+  // The preview is served under the app's own address, as src/index.js mounts it.
+  app.use(PREVIEW_PREFIX, previewRouter({ inlineScriptHashes }));
   const server = await new Promise((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
-  const base = `http://127.0.0.1:${server.address().port}/api/projects`;
+  const appOrigin = `http://127.0.0.1:${server.address().port}`;
+  const base = `${appOrigin}/api/projects`;
   try {
     const form = el('form', { b: 1 }, el('label', { attrs: { for: 'n' } }, text('Name')), el('input', { attrs: { id: 'n', type: 'text', value: 'Ada' } }), el('button', { attrs: { type: 'submit' } }, text('Send')));
     const pages = [
@@ -389,10 +394,11 @@ test('real export: static export, moved URLs, equivalence through the moves, hyd
     // Preview: the stack's own output with its inline data scripts allowed by hash.
     const preview = await (await fetch(`${base}/${id}/preview`, { method: 'POST' })).json();
     assert.equal(preview.preview.scripts, true);
-    const served = await fetch(`${preview.preview.url}about/`);
+    const served = await fetch(`${appOrigin}${preview.preview.url}about/`);
     assert.equal(served.status, 200);
     const csp = served.headers.get('content-security-policy');
-    assert.match(csp, /script-src 'self' 'sha256-/);
+    // A sandboxed document has no origin of its own, so the policy names the app's address instead of 'self'.
+    assert.ok(csp.includes(`script-src ${appOrigin} 'sha256-`), csp);
     assert.doesNotMatch(csp, /unsafe-inline.*script-src|script-src[^;]*unsafe-inline/);
     // 4b.5: the reveal script is a file in public/, loaded by the page, and runs under that policy.
     assert.equal(await readFile(path.join(site, 'js', 'motion.js'), 'utf8'), MOTION_JS);
@@ -400,7 +406,7 @@ test('real export: static export, moved URLs, equivalence through the moves, hyd
     const browser = await launchBrowser();
     try {
       const motionPage = await (await browser.newContext({ viewport: { width: 1000, height: 700 } })).newPage();
-      await motionPage.goto(preview.preview.url, { waitUntil: 'load' });
+      await motionPage.goto(`${appOrigin}${preview.preview.url}`, { waitUntil: 'load' });
       await motionPage.waitForFunction(() => document.querySelector('h1').classList.contains('is-in'), null, { timeout: 5000 });
       assert.equal(await motionPage.evaluate(() => document.documentElement.classList.contains('js-motion')), true);
     } finally {

@@ -6,6 +6,7 @@ import SectionCard from '../../components/common/SectionCard.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import StackOutput from '../../components/recreate/StackOutput.jsx';
 import AsIsChoice, { ASIS_STACK_CHOICES } from '../../components/recreate/AsIsChoice.jsx';
+import CopyPanel from '../../components/recreate/CopyPanel.jsx';
 import { failedAttempt } from '../../components/recreate/failedAttempt.js';
 import { stripAnsi } from '../../ansi.js';
 import { BrowserShot } from '../../components/site/Site.jsx';
@@ -15,10 +16,11 @@ import { matchRating, resumeText, TERMS } from '../../copy.js';
 import { ageDays, plural, timeAgo } from '../../format.js';
 import { api } from '../../api/client.js';
 import { outputsOf, outputState } from '../../stacks.js';
-import { isAnalysisActive, isJobActive, useProjects } from '../../store/useProjects.js';
+import { isAnalysisActive, isJobActive, selectIsOwner, useProjects } from '../../store/useProjects.js';
 import styles from '../Panel.module.css';
 import { pathOf } from '../../components/project/PageScope.jsx';
 import ws from '../Workspace.module.css';
+import { copiedPages } from '../../copiedPages.js';
 
 const STALE_DAYS = 7;
 const ALL_PAGES = -1;
@@ -41,6 +43,11 @@ const STAGES = [
 
 const pagesText = (n) => (n == null || n === ALL_PAGES ? 'Every page of the site' : n === 0 ? 'Only the homepage' : `The homepage + ${plural(n, 'page')}`);
 
+// The stages of "Copy my site" (docs/COPY-MY-SITE.md §7) and the job steps they cover (server/src/copy/stages.js).
+const COPY_STAGE_NAMES = ['Capturing', 'Copying', 'Fixing', 'Packaging', 'Checking', 'Done'];
+const COPY_STAGE_OF_STEP = { inspect: 'Capturing', sweep: 'Capturing', assets: 'Copying', generate: 'Fixing', build: 'Packaging', preview: 'Packaging', responsive: 'Checking', reaudit: 'Checking' };
+const copyStageOf = (step) => COPY_STAGE_OF_STEP[step] ?? COPY_STAGE_NAMES[0];
+
 /** Step 2: make the copy (Recreate). */
 export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   const stack = stackById(project.stack);
@@ -53,6 +60,9 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   const reloadRecreate = useProjects((s) => s.reloadRecreate);
   const reloadAudit = useProjects((s) => s.reloadAudit);
   const reauditJob = useProjects((s) => s.reaudits[project.id]);
+  // The owner-only options (clean rebuild, exact copy, settings, other stacks) are the server's rule, enforced on every request
+  // (accounts/roles.js); this only decides what is drawn.
+  const isOwner = useProjects(selectIsOwner);
   const result = latest?.result;
   const running = isJobActive(job);
   // A copy that failed: its reason, and the same request again (the settings it was started with).
@@ -71,6 +81,15 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   const staleDays = audit && !audit.isDummy ? ageDays(audit.analyzedAt) : 0;
   const outputs = outputsOf(result);
   const stackState = outputState(result, project.stack);
+  // "Copy my site": one panel (stack, address, authorisation), then the as-is copy of every page for that stack.
+  const [copyOpen, setCopyOpen] = useState(false);
+  const updateProject = useProjects((s) => s.update);
+  // The address is optional: without one the server writes no address into the copy and lists it as an open item.
+  const startCopy = async ({ stack: chosen, address }) => {
+    await updateProject(project.id, { stack: chosen, target_domain: address || null, recreate_pages: ALL_PAGES });
+    const pages = await api.getPages(project.id).then((r) => (r.pages ?? []).map((p) => p.url)).catch(() => []);
+    await recreate(project.id, { mode: 'as-is', confirmed: true, stack: chosen, pages, ...(address && { addressConfirmed: address }) });
+  };
   const [building, setBuilding] = useState(false);
   const [buildError, setBuildError] = useState(null);
 
@@ -88,6 +107,23 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   );
   return (
     <div className={ws.stepBody}>
+      {running ? (
+        <ol className={ws.stages} aria-label="Copy progress">
+          {COPY_STAGE_NAMES.map((name) => (
+            <li key={name} aria-current={copyStageOf(job.step) === name ? 'step' : undefined}>
+              <strong>{name}</strong>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <div className={ws.actions}>
+          <Button variant="primary" size="lg" icon={Sparkles} disabled={Boolean(blocker)} title={blocker ?? undefined} onClick={() => setCopyOpen(true)}>
+            Copy my site
+          </Button>
+        </div>
+      )}
+      <CopyPanel open={copyOpen} onClose={() => setCopyOpen(false)} project={project} onStart={startCopy} />
+
       {job && job.status !== 'done' && <AnalyzeProgress analysis={job} kind="recreate" onDismiss={() => dismissJob('recreate', project.id)} />}
 
       {/* The progress box above already shows a failure that just happened: this alert is for one that was found afterwards. */}
@@ -118,6 +154,25 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
       )}
 
       <div className={result ? ws.twoCol : undefined}>
+      {/* An ordinary user's one way to copy again without opening the site: the same lifted copy, packaged again (the server
+          allows `reuseAsIs` to everyone; the clean pipeline's replay and everything under "Advanced options" are the owner's). */}
+      {!isOwner && result?.asIs && !running && (
+        <Card icon={RefreshCw} title="Rebuild from the last visit" sub={`Rebuilds the copy from what was saved on ${new Date(result.createdAt).toLocaleDateString()}, without opening the site again. It shows the site as it was then; for today's site, use “Copy my site”.`}>
+          <div className={ws.actions}>
+            <Button
+              icon={RefreshCw}
+              disabled={Boolean(blocker)}
+              title={blocker ?? 'Reuses the saved copy of the site, so it reflects the site as it was then.'}
+              onClick={() => recreate(project.id, { mode: 'as-is', confirmed: true, stack: result.asIs.stack, reuseAsIs: true })}
+            >
+              Rebuild from the last visit
+            </Button>
+          </div>
+        </Card>
+      )}
+      {isOwner && (
+      <details style={{ marginTop: 16 }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Advanced options</summary>
       <Card
         icon={Sparkles}
         title="Make a clean copy of this site"
@@ -138,7 +193,11 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
           </div>
           <div>
             <dt>Future address</dt>
-            <dd className="mono">{project.target_domain || 'Not set yet (asked when you create the copy)'}</dd>
+            <dd>
+              {project.target_domain
+                ? <span className="mono">{project.target_domain}</span>
+                : 'Not set (optional). Without it the copy’s canonical links, sitemap, link previews and structured data name the original site’s address, and the report says so.'}
+            </dd>
           </div>
         </dl>
         {result?.asIs && !running && (
@@ -176,9 +235,9 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
             icon={running ? (p) => <Loader2 {...p} className={styles.spin} /> : Sparkles}
             disabled={Boolean(blocker) || running}
             title={blocker ?? undefined}
-            // Every full address in the copy (canonical, sitemap, link previews, structured data) uses the new site's address,
-            // never the original: it is asked once before the first copy.
-            onClick={() => (project.target_domain
+            // Every full address in the copy (canonical, sitemap, link previews, structured data) uses the new site's address
+            // when one is set. It is asked once, before the first copy, and is optional: a later copy starts at once either way.
+            onClick={() => (project.target_domain || result
               ? (mode === 'as-is' ? recreate(project.id, { mode: 'as-is', confirmed: true, stack: asIsStack, pages: asIsPages }) : recreate(project.id))
               : onOpenSettings('before-create'))}
           >
@@ -232,6 +291,8 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
           </p>
         )}
       </Card>
+      </details>
+      )}
 
       {result && (
         <Card icon={Trophy} title="Last copy" sub={`Made ${new Date(result.createdAt).toLocaleString()} (${timeAgo(result.createdAt)})`}>
@@ -240,7 +301,7 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
             <dl className={ws.miniFacts}>
               <div>
                 <dt>Pages</dt>
-                <dd className="tabular">{result.pages.length}</dd>
+                <dd className="tabular">{copiedPages(result).length}</dd>
               </div>
               <div>
                 <dt>Match</dt>

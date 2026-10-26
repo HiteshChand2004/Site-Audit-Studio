@@ -6,7 +6,7 @@
 // Chromium/Lighthouse go through a local egress proxy that checks it (security/).
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { projectDir } from '../db/index.js';
+import { auditDir } from '../config/paths.js';
 import { buildContext, detectStack, globalNames, toTechStack } from '../detection/engine.js';
 import { detectManualRebuild } from '../detection/manual.js';
 import { analyzeA11y } from './analyzers/a11y.js';
@@ -159,7 +159,7 @@ async function fetchHome(url, scale = 1) {
   }
   if (isBotChallenge(home)) {
     throw new AnalysisError(
-      'The site answered with a bot-protection challenge (for example Cloudflare). Allowlist this server or pause the challenge for the audit; Site Audit Studio does not bypass bot protection.',
+      'The site answered with a bot-protection challenge (for example Cloudflare). Allowlist this server or pause the challenge for the audit; Remastly does not bypass bot protection.',
     );
   }
   if (home.status >= 400) throw new AnalysisError(`The homepage returned HTTP ${home.status}.`);
@@ -185,15 +185,22 @@ async function fetchHome(url, scale = 1) {
  * @param {boolean} [o.linksBesideLighthouse]  Lighthouse starts while the link check still runs (the link check is plain
  *   HTTP to other hosts; a site served from loopback has nothing to share with it). Analyze waits for the links first.
  * @param {Function} [o.lighthouseRun]  tests only: stands in for runLighthouse (url, formFactor, options)
+ * @param {(device: 'mobile'|'desktop') => string} [o.lighthouseOrigin]  re-audit only: the measurement host's origin per device
+ *   (reaudit/measuredHost.js); Lighthouse opens the same page there
  * @param {{ mobile?: number, desktop?: number }} [o.lighthouseBaseline]  benchmark index of the runs this one is compared
  *   with (re-audit only): a much slower computer now repeats the run with a scaled CPU slowdown
  * @returns {Promise<object>} the audit JSON
  */
+/** The error an analysis ends with when its job was asked to stop (`stopped`, like the recreate pipeline's). */
+const stopError = () => Object.assign(new Error('Stopped before it finished.'), { stopped: true });
+
 export function runAnalysis({ netPolicy = userPolicy(), ...opts }) {
   return withNetPolicy(netPolicy, () => analyze({ ...opts, netPolicy }));
 }
 
-async function analyze({ project, analysisId, maxPages, progress, netPolicy, url = project.url, outDir: dir, skip = [], seedUrls = [], deployOrigin = null, linksBesideLighthouse = false, lighthouseRun = runLighthouse, lighthouseBaseline = null }) {
+// `signal`: the job manager asks the analysis to stop (the app's Stop, or the hard time limit, jobs/manager.js): the running step
+// is cut short and the next one is not started; the browser and the proxy close on the way out like after any failure.
+async function analyze({ project, analysisId, maxPages, progress, netPolicy, url = project.url, outDir: dir, skip = [], seedUrls = [], deployOrigin = null, linksBesideLighthouse = false, lighthouseRun = runLighthouse, lighthouseBaseline = null, lighthouseOrigin = null, signal = null }) {
   const timing = analyzeTiming();
   const freeAtStart = freeMemoryMB();
   const baseDeadline = Date.now() + timing.budgetMs;
@@ -205,7 +212,7 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
   const outages = watchNetwork(new URL(url).hostname);
   const errors = [];
   const skipped = new Set(skip);
-  const outDir = dir ?? path.join(projectDir(project.id), 'audit', analysisId);
+  const outDir = dir ?? auditDir(project.id, analysisId);
   await mkdir(outDir, { recursive: true });
   const save = (name, data) => writeFile(path.join(outDir, name), JSON.stringify(data, null, 1)).catch(() => {});
 
@@ -214,6 +221,7 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
   // `reserve`: time that must stay for the steps after this one (Lighthouse); this step gets what is left of its own limit.
   async function step(key, fn, fallback = null, { reserve = 0 } = {}) {
     if (skipped.has(key)) return fallback;
+    if (signal?.aborted) throw stopError();
     progress(key, 0);
     const result = await attempt(key, fn, fallback, reserve);
     progress(key, 1);
@@ -234,6 +242,9 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
     }
     const controller = new AbortController();
     const abortTimer = setTimeout(() => controller.abort(), budget);
+    // A stop asked for while this step runs ends the step now; the next `step()` then throws.
+    const onStop = () => controller.abort();
+    signal?.addEventListener('abort', onStop, { once: true });
     // Steps without their own progress get a time-based estimate so the bar keeps moving.
     const started = Date.now();
     const ticker = def.expected
@@ -246,8 +257,11 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
       failure = err;
     } finally {
       clearTimeout(abortTimer);
+      signal?.removeEventListener('abort', onStop);
       if (ticker) clearInterval(ticker);
     }
+    // Stopped from outside: not a failure to explain or to try again.
+    if (signal?.aborted) throw stopError();
     if (!retried) {
       const explained = await recover(key, failure.message, started, { remaining: deadline - started });
       if (explained?.retry) {
@@ -308,7 +322,7 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
 
   const proxy = await startEgressProxy(netPolicy);
   try {
-    const audit = await analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing, linksBesideLighthouse, lighthouseRun, lighthouseBaseline });
+    const audit = await analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing, linksBesideLighthouse, lighthouseRun, lighthouseBaseline, lighthouseOrigin });
     noteLowMemory(audit.errors, freeAtStart);
     return audit;
   } finally {
@@ -338,7 +352,7 @@ export function noteLowMemory(errors, freeMB) {
   });
 }
 
-async function analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing, linksBesideLighthouse, lighthouseRun, lighthouseBaseline }) {
+async function analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing, linksBesideLighthouse, lighthouseRun, lighthouseBaseline, lighthouseOrigin }) {
   // The time kept for Lighthouse: the steps before it (and the crawl / link check, which can return what they have) never use it up.
   const reserve = { reserve: timing.lighthouseReserveMs };
   const scale = timing.scale;
@@ -451,19 +465,23 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
   // 6. Lighthouse (one at a time and no other browser running: parallel work would distort each other's performance numbers;
   // in the re-audit only the link check's plain HTTP requests may still be running).
   // A run that dies (not one that times out) usually died of memory pressure: it gets one more try when the time allows.
+  // The re-audit measures the copy through a host like the one it will live on (reaudit/measuredHost.js): the same page, at the
+  // measurement host's origin for that device. Analyze never sets it.
+  const lighthouseUrl = (formFactor) => (lighthouseOrigin ? new URL(new URL(home.url).pathname + new URL(home.url).search, lighthouseOrigin(formFactor)).href : home.url);
   const lighthouse = (key, formFactor, reserveMs = 0) =>
     step(key, async (_signal, budget) => {
       const started = Date.now();
+      const target = lighthouseUrl(formFactor);
       const options = (timeout, extra) => ({ timeout, outFile: path.join(outDir, `lighthouse-${formFactor}.json`), proxy: proxy.url, ...extra });
       let result;
       try {
-        result = await lighthouseRun(home.url, formFactor, options(budget));
+        result = await lighthouseRun(target, formFactor, options(budget));
       } catch (err) {
         const left = budget - (Date.now() - started) - 3000;
         if (/timed out/i.test(err.message) || left < LIGHTHOUSE_RETRY_MIN_MS) throw err;
-        result = await lighthouseRun(home.url, formFactor, options(left));
+        result = await lighthouseRun(target, formFactor, options(left));
       }
-      return calibrate(result, formFactor, () => budget - (Date.now() - started) - 3000, (extra, left) => lighthouseRun(home.url, formFactor, options(left, extra)));
+      return calibrate(result, formFactor, () => budget - (Date.now() - started) - 3000, (extra, left) => lighthouseRun(target, formFactor, options(left, extra)));
     }, null, { reserve: reserveMs });
   // A measurement compared with an earlier one (the re-audit against the original's analysis): when this computer is much
   // slower now than during the earlier run (Lighthouse's benchmark index, e.g. other jobs keep it busy), the simulated

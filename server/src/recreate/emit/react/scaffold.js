@@ -184,11 +184,11 @@ export function scaffold({ ir, meta, pinned, overrides = {}, siteName }) {
   files.set('README.md', lines(
     `# ${name}`,
     '',
-    'A React + Vite site recreated from the rendered output of the original website by Site Audit Studio.',
+    'A React + Vite site recreated from the rendered output of the original website by Remastly.',
     '',
     '## Run',
     '',
-    '    npm install',
+    '    npm ci             # installs exactly package-lock.json: the packages this site was built and checked with',
     '    npm run dev        # development server',
     '    npm run build      # production build in dist/ (every page prerendered to HTML, then hydrated)',
     '    npm run preview    # serve dist/ locally',

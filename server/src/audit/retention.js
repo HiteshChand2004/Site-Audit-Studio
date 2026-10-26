@@ -2,7 +2,8 @@
 // analyses; older and failed analyses lose their screens/ folder (the small JSON files stay).
 import { readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { db, projectDir } from '../db/index.js';
+import { db } from '../db/index.js';
+import { auditDir as auditDirOf } from '../config/paths.js';
 import { screensDir } from './screenshots.js';
 
 export const KEEP_SCREENSHOTS = 3;
@@ -18,7 +19,7 @@ const doneAnalyses = db.prepare(
  */
 export async function pruneScreenshots(projectId, { keep = KEEP_SCREENSHOTS, skip = [] } = {}) {
   const kept = new Set([...doneAnalyses.all(projectId, keep).map((r) => r.id), ...skip]);
-  const auditDir = path.join(projectDir(projectId), 'audit');
+  const auditDir = auditDirOf(projectId);
   const entries = await readdir(auditDir, { withFileTypes: true }).catch(() => []);
   const removed = [];
   for (const entry of entries) {

@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
 import Modal from '../common/Modal.jsx';
 import Button from '../common/Button.jsx';
-import { STACKS } from '../../constants.js';
 import { useProjects } from '../../store/useProjects.js';
+import { STACKS } from '../../constants.js';
 import styles from './StackModal.module.css';
 import form from '../common/Form.module.css';
 
@@ -15,6 +15,8 @@ const isAll = (v) => v == null || v === ALL_PAGES;
 export default function StackModal({ open, onClose, project, askAddress = false }) {
   const update = useProjects((s) => s.update);
   const recreate = useProjects((s) => s.recreate);
+  // The technology of a clean copy. Saved on the project, so the build, the preview, the comparison and the download all
+  // follow it. (The as-is copy has its own choice in the "Copy my site" panel, which saves the same field.)
   const [choice, setChoice] = useState(project?.stack ?? 'html');
   const [all, setAll] = useState(isAll(project?.recreate_pages));
   const [pages, setPages] = useState(String(isAll(project?.recreate_pages) ? 5 : project.recreate_pages));
@@ -40,10 +42,7 @@ export default function StackModal({ open, onClose, project, askAddress = false 
       setError(`Pages must be a whole number from 0 to ${MAX_PAGES}.`);
       return;
     }
-    if (askAddress && !domain.trim()) {
-      setError('Enter the address the new site will live at, for example https://new.example.com.');
-      return;
-    }
+    // The address is optional (what an empty one means is said under the field); a value given must be a web address.
     setSaving(true);
     try {
       await update(project.id, {
@@ -69,7 +68,7 @@ export default function StackModal({ open, onClose, project, askAddress = false 
       title={askAddress ? 'Where will the new site live?' : 'Settings for the copy'}
       description={
         askAddress
-          ? 'The copy names its own address in search-engine tags, the sitemap, link previews and structured data, so nothing points back to the original site. Enter it once; it is saved for this website.'
+          ? 'With its own address, the copy names it in search-engine tags, the sitemap, link previews and structured data, so nothing points back to the original site. It is optional and saved for this website; you can add it later and make the copy again.'
           : 'Which technology the new site is built with, which pages are copied, and its future address. Saved for this website.'
       }
       footer={
@@ -78,7 +77,7 @@ export default function StackModal({ open, onClose, project, askAddress = false 
             Cancel
           </Button>
           <Button variant="primary" onClick={save} disabled={saving}>
-            {saving ? 'Saving…' : askAddress ? 'Save and create the copy' : 'Save'}
+            {saving ? 'Saving…' : askAddress ? (domain.trim() ? 'Save and create the copy' : 'Create the copy without an address') : 'Save'}
           </Button>
         </>
       }
@@ -143,7 +142,7 @@ export default function StackModal({ open, onClose, project, askAddress = false 
         </div>
         <label className={form.field}>
           <span className={form.label}>
-            Address of the new site{!askAddress && <span className={form.optional}>asked before the first copy</span>}
+            Address of the new site <span className={form.optional}>optional</span>
           </span>
           <input
             className={`${form.input} mono`}
@@ -151,7 +150,13 @@ export default function StackModal({ open, onClose, project, askAddress = false 
             value={domain}
             onChange={(e) => setDomain(e.target.value)}
           />
-          <span className={styles.hint}>Where the new site will live. Search engines, link previews, the sitemap and structured data use this address; without it they would name the original site.</span>
+          {/* The clean copy's rule is recreate/index.js (baseUrl = this address, else the original's); the as-is copy's is copy/fixAsIs.js. */}
+          <span className={styles.hint}>
+            Where the new site will live. With it, the copy’s canonical links, sitemap.xml, robots.txt, link previews and structured data
+            name the new site. Left empty, a clean copy writes those with the original site’s address and the report says so; an
+            original as-is copy keeps the original’s own canonical links and robots.txt, writes no sitemap.xml, and lists the
+            address as an open item to settle before publishing.
+          </span>
         </label>
       </div>
       {error && <p className={styles.error}>{error}</p>}

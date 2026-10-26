@@ -1,0 +1,79 @@
+// @ts-check
+// Migrating a real database: a checked backup first, then the rehearsal on a scratch copy of it (db/rehearse.js), and only when
+// that passed, the same migrations applied to the database itself in one transaction (db/apply.js), with row counts, integrity,
+// foreign keys and ownership checked before and after.
+// The server never runs this by itself at startup: db/index.js refuses a database with a required migration pending (and gives
+// those only to a database it has just created, with no data in it); migrating is an explicit `npm run db:migrate -w server`.
+import { DatabaseSync } from 'node:sqlite';
+import { mkdtemp, rm } from 'node:fs/promises';
+import path from 'node:path';
+import { backupDatabase, rowCounts } from './backup.js';
+import { applySchema } from './schema.js';
+import { MIGRATIONS } from './migrations.js';
+import { applyMigrations, bookkeepingProblem, MIGRATIONS_TABLE, pendingMigrations, ownershipProblems, recordedMigrations } from './apply.js';
+import { rehearse } from './rehearse.js';
+import { BACKUPS_DIR, tempDir } from '../config/paths.js';
+
+/** @typedef {import('./migrations.js').Migration} Migration */
+
+/**
+ * Backup → rehearsal on a copy → apply → re-check. Nothing is written to dbFile unless the backup and the rehearsal succeeded.
+ * @param {{ dbFile: string, ownerEmail?: string, backupDir?: string, migrations?: Migration[], log?: (line: string) => void }} o
+ */
+export async function migrateDatabase({ dbFile, ownerEmail, backupDir = BACKUPS_DIR, migrations = MIGRATIONS, log = () => {} }) {
+  // 1. Is there anything to do? (a read-only look)
+  const peek = new DatabaseSync(dbFile, { readOnly: true });
+  let pending;
+  try {
+    pending = pendingMigrations(peek, migrations).map((m) => m.id);
+  } finally {
+    peek.close();
+  }
+  if (!pending.length) return { ok: true, stage: 'nothing', applied: [], pending };
+
+  // 2. A checked backup of the real database.
+  const backup = await backupDatabase({ dbFile, dir: backupDir });
+  log(`Backup written: ${backup.file}`);
+
+  // 3. The rehearsal on a scratch copy; it must pass, ownership checks included.
+  const workDir = await mkdtemp(path.join(tempDir(), 'sas-migrate-'));
+  let rehearsal;
+  try {
+    rehearsal = await rehearse({ dbFile, workDir, migrations, ownerEmail });
+  } finally {
+    await rm(workDir, { recursive: true, force: true });
+  }
+  if (!rehearsal.ok) return { ok: false, stage: 'rehearsal', problems: rehearsal.problems, backup, rehearsal, pending, applied: [] };
+
+  // 4. The real database, in one transaction, with its counts before and after.
+  const db = new DatabaseSync(dbFile);
+  try {
+    db.exec('PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
+    const before = rowCounts(db);
+    const recordedBefore = recordedMigrations(db);
+    applySchema(db); // what the server does at every start anyway (idempotent): the migrations meet the schema they were rehearsed on
+    let applied;
+    try {
+      applied = applyMigrations(db, { migrations, ownerEmail });
+    } catch (err) {
+      const error = String(/** @type {Error} */ (err).message);
+      return { ok: false, stage: 'apply', problems: [error], backup, rehearsal, pending, applied: [], error, before, after: rowCounts(db) };
+    }
+    const after = rowCounts(db);
+    const integrity = db.prepare('PRAGMA integrity_check').get().integrity_check;
+    const foreignKeys = db.prepare('PRAGMA foreign_key_check').all().length;
+    const rowChanges = Object.keys(before).filter((t) => t !== MIGRATIONS_TABLE && after[t] !== before[t]).map((t) => `${t}: ${before[t]} → ${after[t]}`);
+    const bookkeeping = bookkeepingProblem(recordedBefore, recordedMigrations(db), applied);
+    const ownership = ownershipProblems(db);
+    const problems = [
+      ...rowChanges.map((c) => `row count changed: ${c}`),
+      ...(bookkeeping ? [bookkeeping] : []),
+      ...(integrity === 'ok' ? [] : [`integrity_check: ${integrity}`]),
+      ...(foreignKeys ? [`${foreignKeys} foreign-key problem(s)`] : []),
+      ...ownership.map((p) => `ownership: ${p}`),
+    ];
+    return { ok: problems.length === 0, problems, stage: 'applied', backup, rehearsal, pending, applied, before, after, integrity, foreignKeyProblems: foreignKeys, rowChanges, ownership };
+  } finally {
+    db.close();
+  }
+}

@@ -13,13 +13,17 @@ import { serveCopy } from '../src/recreate/behavior/preserve/serve.js';
 
 const OPTIMISED = '/_next/image?url=%2Flogo.png&w=96&q=75';
 const MISSING = '/gone/missing.js';
+// A chunk a runtime builds from a rewritten CDN base (framer: /modules/… → /cms/…): the site's host answers it with a 404
+// page, the CDN host with the file. Every original host is folded into the copy's root, so completion asks each of them.
+const CDN_CHUNK = '/cms/wcnK/JQGUGunJL-chunk-default-0.framercms?range=0-168';
 
-test('completion: a same-origin file the copy lacks is answered from the original; the first visit has no console error', { timeout: 10 * 60000 }, async (t) => {
+test('completion: a same-origin file the copy lacks is answered from the original (the site, else one of its CDN hosts); the first visit has no console error', { timeout: 10 * 60000 }, async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sas-same-origin-'));
   const outDir = path.join(root, 'copy');
   await mkdir(outDir, { recursive: true });
   await writeFile(path.join(outDir, 'index.html'), '<!doctype html><html><head><meta charset="utf-8"><title>Home</title></head>'
     + `<body><h1>Copy</h1><script>var i=new Image();i.src='${OPTIMISED}';document.body.append(i);</script>`
+    + `<script>fetch('${CDN_CHUNK}').then((r) => r.ok ? r.text() : 'HTTP ' + r.status).then((t) => { window.__chunk = t; });</script>`
     + `<script src="${MISSING}"></script></body></html>`, 'utf8');
   const logo = path.join(root, 'logo-source.png');
   await sharp({ create: { width: 96, height: 32, channels: 3, background: { r: 30, g: 90, b: 200 } } }).png().toFile(logo);
@@ -29,6 +33,13 @@ test('completion: a same-origin file the copy lacks is answered from the origina
   const fetchImpl = async (url, { dir }) => {
     asked.push(url);
     const u = new URL(url);
+    if (u.hostname === 'cdn.test' && u.pathname + u.search === CDN_CHUNK) {
+      const tmp = path.join(dir, 'chunk.js');
+      await mkdir(dir, { recursive: true });
+      await writeFile(tmp, 'chunk-bytes', 'utf8');
+      return { ok: true, tmp, mime: 'application/javascript', sha256: 'c', bytes: 1, head: Buffer.alloc(0), finalUrl: url, redirects: [] };
+    }
+    if (u.hostname === 'site.test' && u.pathname.startsWith('/cms/')) return { ok: true, tmp: logo, mime: 'text/html; charset=utf-8', sha256: 'p', bytes: 1, head: Buffer.alloc(0), finalUrl: url, redirects: [] };
     if (u.pathname === '/_next/image' && u.searchParams.get('url') === '/logo.png') {
       const tmp = path.join(dir, 'optimised.png');
       await mkdir(dir, { recursive: true });
@@ -42,13 +53,26 @@ test('completion: a same-origin file the copy lacks is answered from the origina
   let served = null;
   try {
     const result = await completeCopy({
-      browser, outDir, pageUrl: 'https://site.test/', hosts: ['site.test'], fetchImpl, passes: 2, files: [], entries: ['index.html'],
+      browser, outDir, pageUrl: 'https://site.test/', hosts: ['site.test', 'cdn.test'], fetchImpl, passes: 2, files: [], entries: ['index.html'],
     });
     assert.ok(asked.some((u) => u.includes('/_next/image')), 'the original was asked for the optimised logo, once');
-    assert.equal(result.sameOrigin.mapped.length, 1, 'the optimised address is mapped');
-    assert.equal(result.sameOrigin.mapped[0].bare, true, 'its bare path answers a first visit too');
-    assert.equal(result.sameOrigin.sameAsOriginal.length, 1, 'the file the original lacks is reported as the same as the original');
+    assert.equal(result.sameOrigin.mapped.length, 2, 'the optimised address and the CDN chunk are mapped');
+    const optimised = result.sameOrigin.mapped.find((m) => m.path === OPTIMISED);
+    assert.equal(optimised.bare, true, 'its bare path answers a first visit too');
+    assert.equal(optimised.host, undefined, 'answered by the site itself');
+    const chunk = result.sameOrigin.mapped.find((m) => m.path === CDN_CHUNK);
+    assert.equal(chunk?.host, 'cdn.test', 'the chunk came from the CDN host after the site answered with a page');
+    // The chunk's address is a ?range= slice, so the whole file is asked for too (ranged.js); this original has none, so the
+    // slice is kept as any other address. Each address: the site first, then the CDN, each once.
+    const cms = asked.filter((u) => u.includes('/cms/'));
+    assert.deepEqual(cms.filter((u) => u.includes('?range=')).map((u) => new URL(u).hostname), ['site.test', 'cdn.test'], 'the slice: the site first, then the CDN, each once');
+    assert.deepEqual(cms.filter((u) => !u.includes('?range=')).map((u) => new URL(u).hostname), ['site.test', 'cdn.test'], 'the whole file: the site first, then the CDN, each once');
+    assert.equal(result.ranged.files.length, 0, 'nothing is kept whole');
+    assert.equal(result.ranged.skipped.length, 1, 'and the slice that could not be is reported');
+    assert.match(result.ranged.skipped[0].reason, /whole file could not be fetched/);
+    assert.equal(result.sameOrigin.sameAsOriginal.length, 1, 'the file every original host lacks is reported as the same as the original');
     assert.equal(result.sameOrigin.sameAsOriginal[0].path, MISSING);
+    assert.match(result.sameOrigin.sameAsOriginal[0].reason, /site.test: HTTP 404; cdn.test: HTTP 404/, 'the reason names every host asked');
     const sw = await readFile(path.join(outDir, 'sw.js'), 'utf8');
     assert.match(sw, /_next\/image\?url=%2Flogo\.png&w=96&q=75/, 'the worker maps the address');
 
@@ -62,8 +86,10 @@ test('completion: a same-origin file the copy lacks is answered from the origina
     page.on('response', (r) => { if (r.status() >= 400) failed.push(new URL(r.url()).pathname + new URL(r.url()).search); });
     await page.goto(`${served.url.replace(/\/$/, '')}/`, { waitUntil: 'load', timeout: 60000 });
     await page.waitForTimeout(1000);
+    const chunkRan = await page.evaluate(() => window.__chunk);
     await context.close();
-    assert.deepEqual(failed.filter((p) => p.startsWith('/_next/image')), [], 'the optimised address answers on a first visit');
+    assert.deepEqual(failed.filter((p) => p.startsWith('/_next/image') || p.startsWith('/cms/')), [], 'the optimised address and the CDN chunk answer on a first visit');
+    assert.equal(chunkRan, 'chunk-bytes', 'the chunk fetched from the copy is the file of the CDN host');
     assert.deepEqual(failed, [MISSING], 'only the file the original also lacks is still an error, and it is the same as the original');
     assert.equal(consoleErrors.length, 1, 'one console error: the one the original shows too');
   } finally {

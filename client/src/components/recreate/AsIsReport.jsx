@@ -30,6 +30,52 @@ function PageRow({ page }) {
  * The result of an "Original as-is" copy: the mode, the checks per page, what was excluded by rule, what needs a person, the
  * JavaScript the copy ships, and Lighthouse before and after (desktop).
  */
+/** A copy converted into the stack's code: what became components, what was kept as original HTML, and each form in plain words. */
+function Converted({ convert }) {
+  if (convert.mode !== 'converted') {
+    return (
+      <>
+        <h4 className={styles.h}>Converted into code</h4>
+        <Alert tone="warn" title="Packaged as static files instead">
+          The copy could not be converted into pages and components{convert.failed ? `: ${convert.failed.split('\n')[0]}` : ''}. It is packaged as static files inside a project of the stack, so the download still works.
+        </Alert>
+      </>
+    );
+  }
+  const s = convert.stats ?? {};
+  const fallbacks = convert.fallbacks ?? [];
+  const forms = convert.forms ?? [];
+  return (
+    <>
+      <h4 className={styles.h}>Converted into code</h4>
+      <p className={styles.note}>
+        {s.pages} page(s) became {s.components} component(s){s.shared ? ` (${s.shared} shared between pages)` : ''}, {s.elements} element(s) written as components.
+        The pages are prerendered and not hydrated, so no runtime of the stack is sent to visitors.
+        {convert.urlChanges?.length ? ` ${convert.urlChanges.length} page address(es) changed to folder form (redirects are in the download).` : ''}
+      </p>
+      {fallbacks.length ? (
+        <>
+          <p className={styles.note}>{fallbacks.length} part(s) kept as the original HTML inside their component (the page is unchanged; only these parts are not component code):</p>
+          <ul className={styles.list}>
+            {fallbacks.slice(0, 20).map((f, i) => (
+              <li key={i}><span className="mono">{f.page}</span> · <span className="mono">&lt;{f.tag}&gt;{f.attribute ? ` ${f.attribute}` : ''}</span> at <span className="mono">{f.where}</span>: {f.reason}</li>
+            ))}
+            {fallbacks.length > 20 && <li>… and {fallbacks.length - 20} more (all listed in KNOWN-ISSUES.md in the download).</li>}
+          </ul>
+        </>
+      ) : <p className={styles.note}>Every element of every page is component code.</p>}
+      <h4 className={styles.h}>Forms, in plain words</h4>
+      {forms.length ? (
+        <ul className={styles.list}>
+          {forms.map((f, i) => (
+            <li key={i}><span className="mono">{f.page}</span> · “{f.label}” ({f.method}, {f.fields.length} field(s){f.password ? ', a password' : ''}{f.file ? ', a file upload' : ''}): on the original it sent its data to {f.target}. {f.note}</li>
+          ))}
+        </ul>
+      ) : <p className={styles.note}>No form on the copied pages.</p>}
+    </>
+  );
+}
+
 export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {}, onPackage }) {
   if (!asIs) return null;
   const checks = asIs.checks?.pages ?? [];
@@ -93,13 +139,34 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
               {asIs.sameOrigin.sameAsOriginal.map((x) => <li key={x.path}><code>{x.path}</code>: the same as the original ({x.reason}).</li>)}
             </ul>
           )}
+          {asIs.ranged && (asIs.ranged.files.length > 0 || asIs.ranged.skipped.length > 0) && (
+            <p className={styles.note}>
+              {asIs.ranged.files.length} file(s) the original serves in pieces are kept whole, and the copy cuts the pieces itself.
+              {asIs.ranged.skipped.length > 0 && ` ${asIs.ranged.skipped.length} could not be kept that way and stay as the original answers them.`}
+            </p>
+          )}
         </>
       ) : <p className={styles.note}>Not recorded for this copy: make the copy again to see it.</p>}
 
+      {asIs.convert && <Converted convert={asIs.convert} />}
+      {asIs.convert?.mode !== 'converted' && asIs.formRoutes?.length > 0 && (
+        <>
+          <h4 className={styles.h}>Forms, in plain words</h4>
+          <ul className={styles.list}>
+            {asIs.formRoutes.map((f, i) => <li key={i}><span className="mono">{f.page}</span> · “{f.label}” ({f.method}): {f.note}</li>)}
+          </ul>
+        </>
+      )}
+
       <h4 className={styles.h}>Needs a person</h4>
-      {asIs.needsAPerson?.length ? (
+      {asIs.needsAPerson?.length && asIs.convert?.wiredForms != null ? (
+        <Alert tone="warn" title={`${asIs.needsAPerson[0].count} form${asIs.needsAPerson[0].count === 1 ? '' : 's'} not stored by the copy's server`}>
+          {asIs.convert.wiredForms ? `${asIs.convert.wiredForms} form${asIs.convert.wiredForms === 1 ? ' is' : 's are'} saved in MongoDB by the copy's own server. ` : ''}
+          These went to the original's own server and are forms the copy's server does not store (a sign-in, an upload, a search): “Forms, in plain words” above says which and why. A form of another service sends its data to it, as on the original.
+        </Alert>
+      ) : asIs.needsAPerson?.length ? (
         <Alert tone="warn" title={`${asIs.needsAPerson[0].count} form${asIs.needsAPerson[0].count === 1 ? '' : 's'} need a server`}>
-          The form is drawn and checked as on the original, but its data is never sent to the original site. Until a server is connected,
+          The form went to the original's own server: it is drawn and checked as on the original, but its data is never sent there. A form of another service is not counted here: it sends its data to that service, as on the original. Until a server is connected,
           submitting a form shows “This form is not connected yet, so nothing was sent.” To receive submissions, set <span className="mono">FORM_ENDPOINT</span> in
           <span className="mono"> sas-forms.json</span> (see the README in the download); no rebuild is needed.
         </Alert>

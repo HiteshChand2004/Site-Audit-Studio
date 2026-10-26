@@ -564,10 +564,13 @@ function asIsPage(d, f, pageNo, total) {
       ? `<ul>${excluded.length ? `<li>Scripts left out: ${esc(excluded.join(', '))}</li>` : ''}${gaps.map((g) => `<li>${g} (a fixed-position widget whose script is excluded)</li>`).join('')}</ul>`
       : '<p>Nothing was left out.</p>');
   const forms = a.needsAPerson?.length ? a.needsAPerson[0].count : 0;
-  const person = card('Needs a person', 'What needs connecting', 'Forms are drawn and checked as on the original; their data is never sent to the original site.',
-    forms
-      ? `<p>${forms} form${forms === 1 ? '' : 's'}: until a server is connected, submitting shows “This form is not connected yet, so nothing was sent.” Set <span class="mono">FORM_ENDPOINT</span> in <span class="mono">sas-forms.json</span> (see the README in the download). No rebuild is needed.</p>`
-      : '<p>No form needs a server.</p>');
+  // Where each form's data goes in the download (copy/formRoutes.js): another service's as on the original.
+  const routes = a.formRoutes ?? [];
+  const routeList = routes.length ? `<ul>${routes.slice(0, 12).map((r) => `<li><span class="mono">${esc(r.page)}</span> · ${esc(r.label)}: ${esc(r.note)}</li>`).join('')}${routes.length > 12 ? `<li>… and ${routes.length - 12} more (in the JSON download).</li>` : ''}</ul>` : '';
+  const person = card('Needs a person', 'What needs connecting', 'Forms are drawn and checked as on the original; a form that went to the original’s own server is never sent there, one of another service goes to it as before.',
+    `${forms
+      ? `<p>${forms} form${forms === 1 ? '' : 's'} sent to the original’s own server: until a server is connected, submitting shows “This form is not connected yet, so nothing was sent.” Set <span class="mono">FORM_ENDPOINT</span> in <span class="mono">sas-forms.json</span> (see the README in the download). No rebuild is needed.</p>`
+      : '<p>No form needs a server.</p>'}${routeList}`);
   const lh = a.lighthouse ?? {};
   const after = lh.after ?? null;
   const before = lh.before ?? null;

@@ -78,9 +78,10 @@
 
 .introTitle {
   color: var(--text);
-  font-size: var(--fs-xl);
-  font-weight: 700;
-  letter-spacing: -0.025em;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 28px;
+  letter-spacing: -0.02em;
 }
 
 .introText {

@@ -9,7 +9,7 @@ const noop = () => {};
 const LIVE_SANDBOX = 'allow-scripts allow-same-origin';
 
 // Framing our own app would let the page script this UI (allow-scripts + allow-same-origin).
-const APP_PORTS = new Set(['5173', '4000']);
+const APP_PORTS = new Set(['5173', '4000', '8080']); // 8080: npm run local (scripts/local.mjs)
 export function isAppOrigin(url) {
   try {
     const u = new URL(url);

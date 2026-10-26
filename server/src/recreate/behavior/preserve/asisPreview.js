@@ -1,9 +1,9 @@
-// The preview of an "Original as-is" copy: each one is served from its own address (a port of its own, on 127.0.0.1), with the
-// same headers as the plain copy (serve.js). It is on its own origin, not the app's: the copy's root paths work as they do on a
-// real host, its service worker can never take over the app's requests, and the app's content security policy stays as it is.
+// The preview of an "Original as-is" copy: the app serves the lifted folder itself under /preview/<token>/… (one address;
+// recreate/previewRoute.js). The copy's own scripts run there, inside a document the browser sandboxes by header into an
+// opaque origin: nothing of the app (its cookies, storage, API) is reachable from it, and it can register no service worker.
 // Previews stop when their project is deleted, when the app shuts down, and after IDLE_MS without use.
 import { stat } from 'node:fs/promises';
-import { serveCopy } from './serve.js';
+import { issuePreviewToken, previewPath, revokePreviewToken } from '../../previewTokens.js';
 
 export const IDLE_MS = 30 * 60 * 1000;
 /** key → { url, close, used, projectId } */
@@ -24,9 +24,10 @@ export async function startAsIsPreview(projectId, recreateId, copyDir) {
     return have.url;
   }
   if (!(await stat(copyDir).then((s) => s.isDirectory(), () => false))) throw new Error('The lifted copy of this copy is gone.');
-  const served = await serveCopy(copyDir);
-  previews.set(key, { url: served.url, close: served.close, used: Date.now(), projectId });
-  return served.url;
+  const token = issuePreviewToken({ root: copyDir, kind: 'as-is', scripts: true });
+  const url = previewPath(token);
+  previews.set(key, { url, close: async () => { revokePreviewToken(token); }, used: Date.now(), projectId });
+  return url;
 }
 
 /** The address of a running preview, or null. */

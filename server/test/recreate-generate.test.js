@@ -17,6 +17,8 @@ import { buildStyles, cascade, resolveHints, wrapsText } from '../src/recreate/i
 import { buildPageTree, deepText, isElement, matchChildren } from '../src/recreate/ir/tree.js';
 import { runRecreate } from '../src/recreate/index.js';
 import { startPreview, stopPreview } from '../src/recreate/preview.js';
+import express from 'express';
+import { previewRouter, PREVIEW_PREFIX, rewriteFile } from '../src/recreate/previewRoute.js';
 import { recreateDir } from '../src/recreate/workspace.js';
 import { startFixtureServer } from './serve-fixture.js';
 import { seedAnalysis, seedProject } from './helpers/projects.js';
@@ -660,15 +662,28 @@ test('the full pipeline generates a clean, linked, responsive site from the fixt
   // 4a.6 — preview: the pipeline served every page and the stylesheet; the real preview serves dist/.
   assert.equal(report.preview.checked, 7); // five pages, the stylesheet and js/motion.js
   assert.deepEqual(report.preview.pages, ['index.html', 'about.html', 'services/index.html', 'contact.html', 'work.html']);
-  const preview = await startPreview({ projectId: id, recreateId, root: path.join(dir, 'dist') });
-  assert.ok(preview.port >= 5100 && preview.port <= 5199);
-  const res = await fetch(`${preview.url}services/`);
-  assert.equal(res.status, 200);
-  assert.match(res.headers.get('content-security-policy'), /frame-ancestors/);
-  assert.equal(await res.text(), await readFile(path.join(dir, 'dist', 'services', 'index.html'), 'utf8'));
-  assert.equal((await fetch(`${preview.url}ir/site.json`)).status, 404); // only dist/ is served
-  assert.equal((await fetch(`${preview.url}../report.json`)).status, 404);
-  await stopPreview();
+  // It is served under the app's own address (/preview/<token>/), as src/index.js mounts the route.
+  const app = express();
+  app.use(PREVIEW_PREFIX, previewRouter());
+  const appServer = app.listen(0, '127.0.0.1');
+  await new Promise((r) => appServer.once('listening', r));
+  const appOrigin = `http://127.0.0.1:${appServer.address().port}`;
+  try {
+    const preview = await startPreview({ projectId: id, recreateId, root: path.join(dir, 'dist') });
+    assert.match(preview.url, /^\/preview\/[A-Za-z0-9_-]{24}\/$/);
+    const res = await fetch(`${appOrigin}${preview.url}services/`);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-security-policy'), /frame-ancestors/);
+    assert.match(res.headers.get('content-security-policy'), /sandbox/);
+    // dist/'s page, with its addresses moved under the preview's path on the way out (the download is never changed).
+    const built = await readFile(path.join(dir, 'dist', 'services', 'index.html'), 'utf8');
+    assert.equal(await res.text(), rewriteFile({ ext: '.html', text: built, prefix: preview.url, dir: '/services/', scripts: false }));
+    assert.equal((await fetch(`${appOrigin}${preview.url}ir/site.json`)).status, 404); // only dist/ is served
+    assert.equal((await fetch(`${appOrigin}${preview.url}../report.json`)).status, 404);
+    await stopPreview();
+  } finally {
+    await new Promise((r) => appServer.close(r));
+  }
 
   // --- What the report has to carry, and in a shape report.json can hold -------------------------------------------
   // The whole report is written with JSON.stringify, so a Set or a live node reference anywhere in it is a crash.

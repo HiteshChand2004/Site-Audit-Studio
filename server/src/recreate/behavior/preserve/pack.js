@@ -5,19 +5,40 @@
 //   next        public/ holds the copy; next start serves it as static files, and the app router renders nothing
 //   mern        client/dist holds the copy; the Express server serves it (compression, types, headers) and keeps the form API
 import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { SECURITY_HEADERS } from '../../../copy/securityHeaders.js';
+import { formCounts, formRoutesOfCopy, formsReadmeSection } from '../../../copy/formRoutes.js';
+import { SERVER_DIR, toolchainDir } from '../../../config/paths.js';
 
-const SERVER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
+const SERVER = SERVER_DIR;
 const MERN_TEMPLATE = path.join(SERVER, 'src/recreate/emit/mern/template/server');
 
 /** The stacks a lifted copy can be packaged into. */
 export const PACK_STACKS = ['react-vite', 'nextjs', 'mern'];
+/**
+ * Per stack: where the packer writes the copy inside the project (`copy`), and the folders the stack's own server answers `/`
+ * from, first choice first (`served`): what the preview and the re-audit must read. vite preview serves dist/ (vite build copies
+ * public/ there unchanged; public/ is the same files when the project was not built), next start serves public/ before any route,
+ * the MERN server serves client/dist. Plain HTML is not packed: the copy is the project's own folder.
+ */
+export const PACKED = {
+  'react-vite': { copy: 'public', served: ['dist', 'public'] },
+  // out/: the static export of a converted copy (recreate/convert/next.js); public/: the earlier packaging, served by next start.
+  nextjs: { copy: 'public', served: ['out', 'public'] },
+  mern: { copy: 'client/dist', served: ['client/dist'] },
+};
+
+/** The folder (relative to the packed project) that serves the copy: the first of the stack's `served` that exists; '' unpacked. */
+export function servedDir(stack, projectDir) {
+  const served = PACKED[stack]?.served;
+  if (!served) return '';
+  return served.find((d) => existsSync(path.join(projectDir, d))) ?? served[0];
+}
 
 /** The versions the server builds and checks with (toolchains/<id>/package.json): what the user installs is what was verified. */
 export function pinnedVersions(id) {
-  return JSON.parse(readFileSync(path.join(SERVER, 'toolchains', id, 'package.json'), 'utf8'));
+  return JSON.parse(readFileSync(path.join(toolchainDir(id), 'package.json'), 'utf8'));
 }
 
 /** Headers for hosts that read a `_headers` file (Netlify, Cloudflare Pages): pages revalidate, everything else is cached. */
@@ -59,25 +80,13 @@ async function copyLifted(copyDir, dest) {
   await cp(copyDir, dest, { recursive: true, filter: (src) => !src.endsWith('.complete-tmp') });
 }
 
-/** The Forms section of a README: what a form does in the copy, and how to connect one. */
-function formsSection(count) {
-  if (!count) return '';
-  const noun = count === 1 ? 'form' : 'forms';
-  return `## Forms (needs a person)
+/** The Forms section of a README: where each form's data goes in this download, and how to connect the ones that wait. */
+const formsSection = (routes) => formsReadmeSection(routes ?? []);
 
-This copy has ${count} ${noun}. Each one is drawn and checked as on the original, but its data is never sent to the original
-site. Until a server is connected, submitting a form shows "This form is not connected yet, so nothing was sent."
-
-To receive submissions, set \`FORM_ENDPOINT\` in \`sas-forms.json\` (the \`endpoint\` key) to a URL that accepts a POST of the
-form data (multipart/form-data). No rebuild is needed: the setting is read when a form is sent. Empty means nothing is sent.
-
-`;
-}
-
-function readme({ title, stack, slug, install, run, build, deploy, extra = [], forms = 0 }) {
+function readme({ title, stack, slug, install, run, build, deploy, extra = [], forms = [] }) {
   return `# ${title}
 
-A copy of ${slug.replace(/-/g, '.')} made with Site Audit Studio. Every page and file is the copy's own: it loads nothing from
+A copy of ${slug.replace(/-/g, '.')} made with Remastly. Every page and file is the copy's own: it loads nothing from
 the original site, and its service worker serves the files it has at the same addresses, so the copy also works offline.
 
 ## Install
@@ -121,8 +130,9 @@ const commonExtra = [
 export async function packLifted({ stack, copyDir, outDir, pageUrl }) {
   if (!PACK_STACKS.includes(stack)) throw new Error(`no lifted packaging for the ${stack} stack`);
   const slug = HOST_SLUG(pageUrl);
-  // The copy's forms: each is drawn as on the original, but its data is never sent to the original (see FORM_GUARD).
-  const formCount = ((await readFile(path.join(copyDir, 'index.html'), 'utf8').catch(() => '')).match(/<form[\s>]/gi) ?? []).length;
+  // The copy's forms: never sent to the original's own server; another service's go to it as on the original (see FORM_GUARD).
+  const formRoutes = await formRoutesOfCopy(copyDir, [{ outPath: 'index.html', url: pageUrl }]);
+  const formCount = formRoutes.length;
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
   const written = [];
@@ -152,15 +162,15 @@ export default defineConfig({
 });
 `);
     await put('src/entry.js', '// Empty on purpose: the page is public/index.html, served unchanged. Nothing here is bundled.\n');
-    await copyLifted(copyDir, path.join(outDir, 'public'));
+    await copyLifted(copyDir, path.join(outDir, PACKED[stack].copy));
     await put('_headers', HEADERS_FILE);
     await put('README.md', readme({
       title: `${slug} — React + Vite`, stack: `React + Vite (vite ${pin.vite}, the version the server verified with)`, slug,
-      install: '```sh\nnpm install\n```',
+      install: '```sh\nnpm ci\n```\n\n`npm ci` installs exactly `package-lock.json`: the packages this copy was built and checked with.',
       run: '```sh\nnpm run preview\n```\n\nThen open http://localhost:4173 (`npm run dev` serves the same folder for editing).',
       build: '```sh\nnpm run build\n```\n\nThe built site is `dist/`. Its files are the copy\'s files, byte for byte.',
       deploy: 'Deploy `dist/` as a static site (any host that serves it as is; `_headers` applies where it is read).',
-      forms: formCount,
+      forms: formRoutes,
       extra: commonExtra,
     }));
   }
@@ -200,6 +210,8 @@ const nextConfig = {
   compress: true,
   async headers() {
     return [
+      // Security headers (copy/securityHeaders.js): next start and Vercel apply these; a _headers file they would not read.
+      { source: '/:path*', headers: ${JSON.stringify(SECURITY_HEADERS.map(([key, value]) => ({ key, value })))} },
       { source: '/sw.js', headers: [{ key: 'Cache-Control', value: 'no-cache' }] },
       { source: '/:path*', headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000' }] },
       { source: '/:path*.html', headers: [{ key: 'Cache-Control', value: 'no-cache' }] },
@@ -213,15 +225,15 @@ export default nextConfig;
     // The app router needs a root layout and a route; neither renders the copy (public/ answers its addresses first).
     await put('app/layout.jsx', `export default function RootLayout({ children }) {\n  return <html lang="en"><body>{children}</body></html>;\n}\n`);
     await put('app/not-found.jsx', `export default function NotFound() {\n  return <main><h1>Not found</h1><p><a href="/">Back to the home page</a></p></main>;\n}\n`);
-    await copyLifted(copyDir, path.join(outDir, 'public'));
+    await copyLifted(copyDir, path.join(outDir, PACKED[stack].copy));
     if (movesNext) await rename(path.join(outDir, 'public', '_next'), path.join(outDir, 'public', 'next-assets'));
     await put('README.md', readme({
       title: `${slug} — Next.js`, stack: `Next.js ${v.dependencies.next} (App Router; the copy is static files, not rendered by React)`, slug,
-      install: '```sh\nnpm install\n```',
+      install: '```sh\nnpm ci\n```\n\n`npm ci` installs exactly `package-lock.json`: the packages this copy was built and checked with.',
       run: '```sh\nnpm run build\nnpm run start\n```\n\nThen open http://localhost:3000.',
       build: '```sh\nnpm run build\n```\n\nThe copy is in `public/`; `next build` does not change those files.',
       deploy: 'Deploy with `next start` on a Node host, or to Vercel (which serves HTTP/2 and compression by default).',
-      forms: formCount,
+      forms: formRoutes,
       extra: [...commonExtra, '`app/`: a root layout and a not-found page (never shown for the copy\'s own addresses).', '`next.config.mjs`: cache headers and compression.'],
     }));
   }
@@ -241,19 +253,20 @@ export default nextConfig;
     await put('server/forms.json', '[]\n');
     // The lifted copy has no forms of its own that the server knows: the form API stays empty (see the README).
     await put('server/site.json', `${JSON.stringify({ lifted: true }, null, 2)}\n`);
-    await copyLifted(copyDir, path.join(outDir, 'client/dist'));
+    await copyLifted(copyDir, path.join(outDir, PACKED[stack].copy));
     await put('README.md', readme({
       title: `${slug} — MERN (Express + MongoDB)`, stack: 'MERN: Express server serving the copy, MongoDB for form submissions', slug,
-      install: '```sh\nnpm install\n```',
+      install: '```sh\nnpm ci\n```\n\n`npm ci` installs exactly `package-lock.json`: the packages this copy was built and checked with.',
       run: '```sh\nnpm start\n```\n\nThen open http://localhost:3000. Form submissions need MongoDB: set `MONGODB_URI`; without it the site is served and the\nform endpoint answers 503.',
       build: 'Nothing to build: the copy is served as it is (`client/dist/`).',
       deploy: 'Deploy the Node server (`npm start`) to any host that runs Node and serves HTTP/2 through its proxy, with `MONGODB_URI` set\nfor forms. `TRUST_PROXY=true` behind a proxy so the rate limit sees the real address.',
-      forms: formCount,
+      forms: formRoutes,
       extra: [...commonExtra, '`server/`: Express — compression, content types, cache headers, a content security policy that allows the copy\'s inline scripts by hash, and the form endpoint.', '`server/forms.json`: no forms (the copy has none the server can store; see the README note).'],
     }));
   }
 
-  // The report's manual item: a form is drawn and checked, but nothing is sent until a server is connected.
-  const needsAPerson = formCount ? [{ kind: 'form', count: formCount, why: 'its data is never sent to the original site; connect FORM_ENDPOINT in sas-forms.json' }] : [];
+  // The report's manual item: a form that went to the original's own server sends nothing until a server is connected.
+  const { waiting } = formCounts(formRoutes);
+  const needsAPerson = waiting ? [{ kind: 'form', count: waiting, why: 'it went to the original\'s own server and is never sent there from the copy; connect FORM_ENDPOINT in sas-forms.json' }] : [];
   return { dir: outDir, files: written.sort(), forms: formCount, needsAPerson };
 }

@@ -135,7 +135,40 @@ function hasManySiblings(img, x, y, width, height) {
  * Read into memory with Node, never with sharp: sharp keeps a handle on a file it opened, and Windows then refuses to
  * rename or remove the workspace that holds it.
  */
-const open = async (input) => sharp(Buffer.isBuffer(input) ? input : await readFile(input), { limitInputPixels: false });
+// Always four channels: the loop reads RGBA, and a picture without an alpha channel (a PNG made from RGB, a JPEG) would
+// otherwise be read three bytes off per pixel — every count wrong.
+const open = async (input) => sharp(Buffer.isBuffer(input) ? input : await readFile(input), { limitInputPixels: false }).ensureAlpha();
+
+/**
+ * A picture decoded once into RGBA, for a caller that compares the same picture several times (the gate's every-pairing rule
+ * compares each picture three times): exactDiff then reads its bands from memory instead of decoding the file again for every
+ * band of every comparison. The pixels are the ones exactDiff reads itself (the same decoder, the same alpha channel added).
+ * @returns {Promise<{ decoded: true, raw: Buffer, width: number, height: number }>}
+ */
+export async function decodePicture(input) {
+  const { data, info } = await (await open(input)).raw().toBuffer({ resolveWithObject: true });
+  return { decoded: true, raw: data, width: info.width, height: info.height };
+}
+
+/** One side of a comparison: its size, and the rows of a region as RGBA `width` pixels wide (decoded once, or per band). */
+async function sideOf(input) {
+  if (input?.decoded) {
+    return {
+      width: input.width,
+      height: input.height,
+      band: async ({ top, width, height }) => {
+        // Rows of the region, the narrower picture's width of each (the same crop sharp's extract makes).
+        if (width === input.width) return input.raw.subarray(top * width * 4, (top + height) * width * 4);
+        const out = Buffer.allocUnsafe(width * height * 4);
+        for (let y = 0; y < height; y++) input.raw.copy(out, y * width * 4, ((top + y) * input.width) * 4, ((top + y) * input.width + width) * 4);
+        return out;
+      },
+    };
+  }
+  const img = await open(input);
+  const m = await img.metadata();
+  return { width: m.width, height: m.height, band: (region) => img.clone().extract(region).raw().toBuffer() };
+}
 
 /**
  * Compares two full-page shots pixel for pixel.
@@ -145,7 +178,9 @@ const open = async (input) => sharp(Buffer.isBuffer(input) ? input : await readF
  *   exclude?: {x:number,y:number,w:number,h:number}[], offsetY?: number }} [o]  exclude: areas counted as masked
  *   instead of as differences (a third-party frame, a canvas, a video); offsetY: where this band sits in the page,
  *   so the areas can be given in page coordinates
- * @returns {Promise<{ pct: number, diff: number, antialiased: number, compared: number, total: number,
+ * commonPct: the share of the part both pictures have (rows only one of them has are left out); pct counts those rows as
+ * different. Both to 4 decimals of a percent: 4 pixels of a 1440 x 900 picture is 0.0003 %, never rounded away.
+ * @returns {Promise<{ pct: number, commonPct: number, diff: number, antialiased: number, compared: number, total: number,
  *   width: number, height: number, heights: [number, number], heightOnlyOne: number, widthMismatch: boolean,
  *   blocks: { cols: number, rows: number, px: number, counts: Uint32Array } }>}
  */
@@ -153,10 +188,9 @@ export async function exactDiff(original, generated, {
   threshold = DEFAULT_THRESHOLD, includeAntialiased = false, bandRows = BAND_ROWS, block = BLOCK_PX,
   exclude = [], offsetY = 0,
 } = {}) {
-  const a = await open(original);
-  const b = await open(generated);
-  const ma = await a.metadata();
-  const mb = await b.metadata();
+  // Either side may be a picture decoded once by the caller (decodePicture).
+  const ma = await sideOf(original);
+  const mb = await sideOf(generated);
   const width = Math.min(ma.width, mb.width);
   const height = Math.min(ma.height, mb.height);
   // Rows only one of the two has: counted as different in full, the same convention the SSIM diff uses, because a
@@ -183,8 +217,8 @@ export async function exactDiff(original, generated, {
     const haloRows = Math.min(height - haloTop, rowsHere + (top - haloTop) + 1);
     const region = { left: 0, top: haloTop, width, height: haloRows };
     const [bufA, bufB] = await Promise.all([
-      a.clone().extract(region).raw().toBuffer(),
-      b.clone().extract(region).raw().toBuffer(),
+      ma.band(region),
+      mb.band(region),
     ]);
     const offset = top - haloTop; // the first row of this band inside the halo
     for (let y = offset; y < offset + rowsHere; y++) {
@@ -213,6 +247,7 @@ export async function exactDiff(original, generated, {
   const total = compared + heightOnlyOne;
   return {
     pct: total ? Math.round(((diff + heightOnlyOne) / total) * 1e6) / 1e4 : 0,
+    commonPct: compared ? Math.round((diff / compared) * 1e6) / 1e4 : 0,
     diff,
     antialiased: anti,
     masked,

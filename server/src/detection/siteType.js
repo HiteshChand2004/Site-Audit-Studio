@@ -11,7 +11,7 @@ export const CANVAS_TEXT_MAX = 200;
 /** flt-* elements that mark a Flutter Web page on their own. */
 export const FLUTTER_ELEMENTS_MIN = 3;
 
-export const CANVAS_RENDERED_MESSAGE = 'This page is drawn on a canvas (canvas-rendered, for example Flutter Web): it has no HTML structure to copy, only pixels. Site Audit Studio cannot clone it; the analysis screenshots are the only preview of it.';
+export const CANVAS_RENDERED_MESSAGE = 'This page is drawn on a canvas (canvas-rendered, for example Flutter Web): it has no HTML structure to copy, only pixels. Remastly cannot clone it; the analysis screenshots are the only preview of it.';
 
 /**
  * Page function: what decides the site type, read from the rendered page. Canvases' coverage is the share of the window

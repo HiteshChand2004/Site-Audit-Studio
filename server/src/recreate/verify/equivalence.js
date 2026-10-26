@@ -17,8 +17,14 @@ export const VISUAL_MIN = 0.97;
 
 // Runs in the page. The markup lives in <div id="root"> in a React app (display: contents; `map.appWrapper`) and
 // directly in <body> in the plain-HTML build and Next.js: all give the same list.
-function domSignature(map) {
+export function domSignature(map) {
   const lines = [];
+  // HTML's boolean attributes: present means true, whatever the value. The plain-HTML build keeps the original's spelling
+  // (`hidden="hidden"`), React renders a boolean prop as `hidden=""`, a hand-written page writes `hidden`: one attribute,
+  // compared by presence. `hidden="until-found"` is a different state (the element is searchable) and keeps its value.
+  const BOOLEAN = new Set(['allowfullscreen', 'async', 'autofocus', 'autoplay', 'checked', 'controls', 'default', 'defer', 'disabled',
+    'disablepictureinpicture', 'disableremoteplayback', 'formnovalidate', 'hidden', 'inert', 'ismap', 'itemscope', 'loop', 'multiple',
+    'muted', 'nomodule', 'novalidate', 'open', 'playsinline', 'readonly', 'required', 'reversed', 'selected']);
   // `map`: a stack that moves pages (Next.js: about.html -> /about/) tells where the reference's URLs go.
   const moved = map ?? { paths: {}, absolute: {} };
   const resolve = (v) => {
@@ -50,6 +56,7 @@ function domSignature(map) {
       // A stack that wires its forms to a backend (MERN) adds action/method; the form itself is the same.
       if (moved.ignoreFormActions && node.localName === 'form' && ['action', 'method', 'enctype'].includes(name)) return null;
       let value = a.value;
+      if (BOOLEAN.has(name) && !(name === 'hidden' && value.trim().toLowerCase() === 'until-found')) return name;
       // A framework's mount id (ir/names.js MOUNT_IDS) is not page content: never a difference between two builds.
       if (name === 'id' && ['root', 'app', '__next', '__nuxt', '___gatsby', 'svelte', 'q-app', 'ember-application', '__layout'].includes(value)) return null;
       if (name === 'class') {

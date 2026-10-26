@@ -10,6 +10,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import express from 'express';
+import { previewRouter, PREVIEW_PREFIX } from '../src/recreate/previewRoute.js';
+import { inlineScriptHashes } from '../src/recreate/inlineScripts.js';
 import { db, projectDir } from '../src/db/index.js';
 import { launchBrowser } from '../src/audit/render.js';
 import { emitSite } from '../src/recreate/emit/html.js';
@@ -140,7 +142,7 @@ test('emitMern: a React client under client/, the fixed server, forms.json and t
   assert.deepEqual(Object.keys(pkg.dependencies).sort(), ['compression', 'express', 'mongodb']);
   assert.ok(Object.values(pkg.dependencies).every((v) => /^\d+\.\d+\.\d+$/.test(v))); // pinned
   assert.equal(pkg.scripts.test, 'node --test');
-  assert.equal(JSON.parse(out.files.get('package.json')).scripts['install:all'], 'npm install --prefix client && npm install --prefix server');
+  assert.equal(JSON.parse(out.files.get('package.json')).scripts['install:all'], 'npm ci --prefix client && npm ci --prefix server');
   assert.match(out.files.get('README.md'), /`contact-1` on `\/contact\.html` — name, email, message/);
   assert.match(out.files.get('README.md'), /`\/contact\.html` — a login form/);
   assert.match(out.files.get('README.md'), /Without `MONGODB_URI`/);
@@ -201,10 +203,13 @@ test('real export: client verified against the HTML build, server tests run, for
   const app = express();
   app.use(express.json());
   app.use('/api/projects', recreateRouter);
+  // The preview is served under the app's own address, as src/index.js mounts it.
+  app.use(PREVIEW_PREFIX, previewRouter({ inlineScriptHashes }));
   const server = await new Promise((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
-  const base = `http://127.0.0.1:${server.address().port}/api/projects`;
+  const appOrigin = `http://127.0.0.1:${server.address().port}`;
+  const base = `${appOrigin}/api/projects`;
   try {
     const pages = [
       page('index.html', el('main', { b: 1 }, el('h1', { attrs: { 'data-motion': 'rv r1' } }, text('Home')), el('img', { attrs: { src: { asset: 'images/a.png' }, alt: 'A' } }), searchForm())),
@@ -258,14 +263,14 @@ test('real export: client verified against the HTML build, server tests run, for
     // Preview: the client build with its scripts allowed.
     const preview = await (await fetch(`${base}/${id}/preview`, { method: 'POST' })).json();
     assert.equal(preview.preview.scripts, true);
-    assert.equal((await fetch(`${preview.preview.url}contact.html`)).status, 200);
+    assert.equal((await fetch(`${appOrigin}${preview.preview.url}contact.html`)).status, 200);
     // 4b.5: the reveal script is part of the client build and runs under the preview's script policy.
     assert.equal(await readFile(path.join(project, 'client', 'dist', 'js', 'motion.js'), 'utf8'), MOTION_JS);
     assert.match(await readFile(path.join(project, 'client', 'dist', 'index.html'), 'utf8'), /<script src="\/js\/motion\.js" defer><\/script>/);
     const browser = await launchBrowser();
     try {
       const motionPage = await (await browser.newContext({ viewport: { width: 1000, height: 700 } })).newPage();
-      await motionPage.goto(preview.preview.url, { waitUntil: 'load' });
+      await motionPage.goto(`${appOrigin}${preview.preview.url}`, { waitUntil: 'load' });
       await motionPage.waitForFunction(() => document.querySelector('h1').classList.contains('is-in'), null, { timeout: 5000 });
     } finally {
       await browser.close();

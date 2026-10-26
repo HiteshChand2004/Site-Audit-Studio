@@ -104,3 +104,58 @@ test('with an endpoint set: the data goes there, and not to the original', async
     await rm(root, { recursive: true, force: true });
   }
 });
+
+// A form of another service (its action on another host): in the downloaded copy the browser sends it there, exactly as on the
+// original; in the app's preview and every check (HOLD_FORMS) it is held and says where the download sends it.
+const SERVICE_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Form</title></head><body>
+<form id="news" action="https://forms.service.test/f/abc" method="post"><input type="email" name="email" required><button type="submit">Join</button></form>
+<form id="own" action="/subscribe" method="post"><input type="email" name="email" required><button type="submit">Send</button></form>
+</body></html>`;
+
+test('another service\'s form goes to it as on the original; the original\'s own never; held in the preview and the checks', async () => {
+  const { HOLD_FORMS } = await import('../src/recreate/behavior/preserve/complete.js');
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sas-forms-svc-'));
+  const dir = path.join(root, 'copy');
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, 'index.html'), SERVICE_PAGE, 'utf8');
+  await registerServiceWorker(dir, 'index.html', { siteUrl: `https://${ORIGIN_HOST}/` });
+  const server = await serveFolder(dir);
+  const browser = await chromium.launch();
+  const run = async (held, id) => {
+    const context = await browser.newContext();
+    const posted = [];
+    try {
+      if (held) await context.addInitScript(HOLD_FORMS);
+      await context.route('**/*', (route) => {
+        const url = route.request().url();
+        if (url.startsWith(server.url)) return route.continue();
+        posted.push(`${route.request().method()} ${url}`);
+        return route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>ok</title>' });
+      });
+      const page = await context.newPage();
+      await page.goto(`${server.url}index.html`, { waitUntil: 'load' });
+      await page.waitForTimeout(300);
+      await page.fill(`#${id} input[name=email]`, 'check@example.test');
+      await page.click(`#${id} button`);
+      await page.waitForTimeout(800);
+      const note = await page.locator(`#${id} [data-sas-form-note]`).textContent().catch(() => null);
+      return { posted, note: note?.trim() ?? null };
+    } finally {
+      await context.close();
+    }
+  };
+  try {
+    const download = await run(false, 'news');
+    assert.deepEqual(download.posted, ['POST https://forms.service.test/f/abc'], 'sent to its service');
+    const own = await run(false, 'own');
+    assert.deepEqual(own.posted, [], 'the original\'s own server is never asked');
+    assert.match(own.note ?? '', /not connected yet/);
+    const held = await run(true, 'news');
+    assert.deepEqual(held.posted, [], 'held: nothing sent anywhere');
+    assert.match(held.note ?? '', /Held in this preview: the downloaded copy sends this form to forms\.service\.test/);
+  } finally {
+    await browser.close();
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

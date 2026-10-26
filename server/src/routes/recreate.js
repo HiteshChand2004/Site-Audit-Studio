@@ -3,10 +3,10 @@ import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { Router } from 'express';
 import { db } from '../db/index.js';
-import { ConflictError } from '../jobs/manager.js';
+import { ConflictError, JobLimitError } from '../jobs/manager.js';
 import { streamJob } from '../jobs/sse.js';
 import { PUBLIC_STEPS } from '../recreate/index.js';
-import { analysisWarnings, latestAnalysis, parseExactMode } from '../recreate/inputs.js';
+import { analysisWarnings, latestAnalysis, parseExactMode, parseTargetDomain } from '../recreate/inputs.js';
 import { recreateJobs } from '../recreate/jobs.js';
 import { activePreview, PreviewError, startPreview, stopPreview } from '../recreate/preview.js';
 import { findResumable, recreateDir } from '../recreate/workspace.js';
@@ -18,8 +18,30 @@ import { RecreateError } from '../recreate/errors.js';
 import { ASIS_DIR, ASIS_STACKS, readLifted } from '../recreate/behavior/preserve/stage.js';
 import { startAsIsPreview, stopAsIsPreview } from '../recreate/behavior/preserve/asisPreview.js';
 import { asIsPagesOf } from '../recreate/behavior/preserve/asis.js';
+import { isOwner, refuseNonOwner } from '../accounts/roles.js';
 
 const router = Router();
+
+/**
+ * The owner-only options a POST …/recreate body asks for, in words (accounts/roles.js). Ordinary users have "Copy my site":
+ * `mode: 'as-is'` with its stack, pages, address and `reuseAsIs`, and `resume` (it continues what exists, starts nothing new).
+ * Everything else changes how a copy is made and is the owner's: a clean rebuild (no mode, or `mode: 'clean'`), `exact`,
+ * `noLimit`, `preserve` outside an as-is copy, and `reuseCapture` (the clean pipeline's replay). Pure, so a test can hold it.
+ * @param {any} body
+ * @returns {string[]}  empty = nothing owner-only was asked for
+ */
+export function ownerOnlyOptions(body) {
+  const b = body ?? {};
+  const out = [];
+  if (b.exact !== undefined) out.push('an exact copy');
+  if (b.noLimit) out.push('a run with no time limit');
+  if (b.reuseCapture) out.push('a rebuild from a saved capture');
+  if (b.preserve === true && b.mode !== 'as-is') out.push('the "preserve" option');
+  // A clean rebuild is what starts when nothing says as-is: not a resume (which continues whatever was stopped) and not an as-is
+  // copy. Named only when nothing above did (an exact copy or a replay is a clean rebuild too; one name is enough).
+  if (!out.length && b.mode !== 'as-is' && !b.resume) out.push('a clean rebuild');
+  return out;
+}
 
 
 const selectProject = db.prepare('SELECT * FROM projects WHERE id = ?');
@@ -58,6 +80,12 @@ const latestReplayable = db.prepare(`
 router.post('/:id/recreate', async (req, res) => {
   const project = selectProject.get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found.' });
+  // Owner-only options are refused on the request, before anything is looked at (accounts/roles.js); the engines below run
+  // whatever payload they are given, for the route, for autoResume and for the per-page fallback alike.
+  if (!isOwner(req)) {
+    const owned = ownerOnlyOptions(req.body);
+    if (owned.length) return refuseNonOwner(res, owned.join(', '));
+  }
   if (!project.authorized) {
     return res.status(403).json({ error: 'This project is not confirmed as authorized for recreating.' });
   }
@@ -125,8 +153,16 @@ router.post('/:id/recreate', async (req, res) => {
       pages = asIsPagesOf(project, req.body.pages);
       if (pages === null) return res.status(400).json({ error: 'The pages must be addresses of this site (the homepage first or among them), up to 40.' });
     }
+    // `addressConfirmed`: the new site's address as the user entered it for this copy (the "Copy my site" panel). Only a confirmed
+    // address is written into the copy (copy/address.js); a repack or an older flow sends none, and the copy then names no address.
+    let address = null;
+    if (req.body.addressConfirmed != null) {
+      const parsed = parseTargetDomain(req.body.addressConfirmed);
+      if (!parsed.ok) return res.status(400).json({ error: 'The new site\'s address must be a web address, for example https://www.your-site.com.' });
+      address = parsed.value;
+    }
     payload.preserve = true;
-    payload.asIs = { stack, pages, ...(from && { from }) };
+    payload.asIs = { stack, pages, ...(from && { from }), ...(address && { address }) };
   }
 
   try {
@@ -141,6 +177,7 @@ router.post('/:id/recreate', async (req, res) => {
     if (err instanceof ConflictError) {
       return res.status(409).json({ error: err.message, recreateId: err.job.id });
     }
+    if (err instanceof JobLimitError) return res.status(409).json({ error: err.message, limit: 'user', busy: { kind: err.job.kind, projectId: err.job.projectId, jobId: err.job.id } });
     throw err;
   }
 });
@@ -265,8 +302,11 @@ router.get('/:id/recreate/:recreateId/captures/:slug/:file', (req, res) => {
 
 // The exact comparison's pictures: the original as it was measured (capture/<slug>/exact/) and the copy beside it,
 // with the map of where they differ and the magnified crops (fidelity/<slug>/exact/). A slot id is a width, or a
-// width and a height, so the file names are bounded by that.
-const EXACT_FILE = /^(copy-)?d{3,4}(xd{3,4})?(-b[1-3]|-full|-map|-crop[1-3]).webp$/;
+// width and a height, so the file names are bounded by that: the original's bands `<slot>-full.webp` / `<slot>-bN.webp`
+// (capture/exact.js bandFile), the copy's `copy-<slot>-…` (verify/exact/compare.js copyBand), the map `<slot>-map.webp` and
+// the crops `<slot>-cropN.webp`. Written with escaped digits and dot on purpose: the first version lost its backslashes and
+// matched no real name, so every picture answered 404 (test/recreate-exact-route.test.js holds it to the real names).
+const EXACT_FILE = /^(copy-)?\d{3,4}(x\d{3,4})?(-b[1-3]|-full|-map|-crop[1-3])\.webp$/;
 
 router.get('/:id/recreate/:recreateId/exact/:slug/:file', (req, res) => {
   const { id, recreateId, slug, file } = req.params;
@@ -275,7 +315,7 @@ router.get('/:id/recreate/:recreateId/exact/:slug/:file', (req, res) => {
   }
   if (!doneRecreate.get(recreateId, id)) return res.status(404).json({ error: 'Recreate not found.' });
   // The original's own shots live with the capture; everything the comparison made lives with the fidelity output.
-  const dir = file.startsWith('copy-') || /-(map|crop[1-3]).webp$/.test(file)
+  const dir = file.startsWith('copy-') || /-(map|crop[1-3])\.webp$/.test(file)
     ? path.join(recreateDir(id, recreateId), 'fidelity', slug, 'exact')
     : path.join(recreateDir(id, recreateId), 'capture', slug, 'exact');
   res.sendFile(
@@ -310,6 +350,8 @@ router.get('/:id/recreate/:recreateId/fidelity/:slug/:file', (req, res) => {
 // Download zip of a completed recreate, streamed from its folder. The stack is the one the recreate
 // was built for; only a recreate that passed the safety gate is offered.
 const doneReport = db.prepare(`SELECT result_json FROM recreates WHERE id = ? AND project_id = ? AND status = 'done'`);
+// The latest finished re-audit of a recreate: an as-is copy's "got worse" rows, with their reasons, go into KNOWN-ISSUES.md.
+const latestReauditOf = db.prepare(`SELECT result_json FROM reaudits WHERE recreate_id = ? AND project_id = ? AND status = 'done' ORDER BY started_at DESC LIMIT 1`);
 
 router.get('/:id/recreate/:recreateId/download', async (req, res) => {
   const { id, recreateId } = req.params;
@@ -329,7 +371,10 @@ router.get('/:id/recreate/:recreateId/download', async (req, res) => {
   }
   let plan;
   try {
-    plan = await planZip({ dir: recreateDir(id, recreateId), report, stack });
+    const reaudit = report.asIs ? JSON.parse(latestReauditOf.get(recreateId, id)?.result_json ?? 'null') : null;
+    const worse = (reaudit?.checklist?.items ?? []).filter((i) => i.status === 'regressed');
+    const stillOpen = (reaudit?.checklist?.items ?? []).filter((i) => i.status === 'open');
+    plan = await planZip({ dir: recreateDir(id, recreateId), report: worse.length || stillOpen.length ? { ...report, copy: { ...report.copy, worse, stillOpen } } : report, stack });
   } catch (err) {
     if (err instanceof RecreateError) {
       // The app checks with HEAD first (a failed download would otherwise navigate to a JSON page).
@@ -358,6 +403,8 @@ router.post('/:id/recreate/:recreateId/export', async (req, res) => {
   const { id, recreateId } = req.params;
   const stack = req.body?.stack;
   if (!UUID.test(id) || !UUID.test(recreateId)) return res.status(404).json({ error: 'Recreate not found.' });
+  // A stack built from a clean copy's saved IR is the owner's; an ordinary user packages an as-is copy again (POST …/recreate reuseAsIs).
+  if (!isOwner(req)) return refuseNonOwner(res, 'building another technology from a saved clean copy');
   if (typeof stack !== 'string' || !getEmitter(stack)) return res.status(400).json({ error: 'Choose one of the listed stacks.' });
   try {
     const { output, created } = await exportStack({ projectId: id, recreateId, stack });
@@ -368,7 +415,8 @@ router.post('/:id/recreate/:recreateId/export', async (req, res) => {
   }
 });
 
-// The preview of an "Original as-is" copy: served from its own address (behavior/preserve/asisPreview.js), never the app's origin.
+// The preview of an "Original as-is" copy: served by the app under /preview/<token>/ (behavior/preserve/asisPreview.js,
+// recreate/previewRoute.js), every document sandboxed by header, so the copy's own script never has the app's origin.
 router.post('/:id/recreate/:recreateId/asis-preview', async (req, res) => {
   const row = doneReport.get(req.params.recreateId, req.params.id);
   const report = row?.result_json ? JSON.parse(row.result_json) : null;

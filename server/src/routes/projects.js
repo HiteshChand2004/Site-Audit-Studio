@@ -2,11 +2,13 @@ import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { db, projectDir } from '../db/index.js';
+import { db } from '../db/index.js';
+import { auditDir, projectDir } from '../config/paths.js';
 import { parseMaxPages } from './analyze.js';
 import { buildDummyAudit } from '../dummy/audit.js';
 import { precheckUrl } from '../security/netGuard.js';
-import { MAX_RECREATE_PAGES, parseExactMode, parsePageUrl, parseRecreatePages, parseTargetDomain } from '../recreate/inputs.js';
+import { ALL_PAGES, MAX_RECREATE_PAGES, parseExactMode, parsePageUrl, parseRecreatePages, parseTargetDomain } from '../recreate/inputs.js';
+import { isOwner, refuseNonOwner } from '../accounts/roles.js';
 import { sameSite } from '../audit/util.js';
 import { stopPreview } from '../recreate/preview.js';
 import { stopAsIsPreviewsOf } from '../recreate/behavior/preserve/asisPreview.js';
@@ -17,7 +19,12 @@ export const STACKS = stackIds();
 
 const router = Router();
 
-const toProject = (row) => row && { ...row, authorized: Boolean(row.authorized), exact_mode: Boolean(row.exact_mode) };
+// owner_id (accounts, stage 1) is the server's business, not part of the project the app is sent.
+const toProject = (row) => {
+  if (!row) return row;
+  const { owner_id: _owner, ...rest } = row;
+  return { ...rest, authorized: Boolean(row.authorized), exact_mode: Boolean(row.exact_mode) };
+};
 
 function normalizeUrl(input) {
   if (typeof input !== 'string' || !input.trim()) return null;
@@ -45,8 +52,15 @@ const insert = db.prepare(`
 `);
 const remove = db.prepare('DELETE FROM projects WHERE id = ?');
 
-router.get('/', (_req, res) => {
-  res.json(selectAll.all().map(toProject));
+// With accounts on (src/index.js), req.user is the signed-in account: it sees its own projects only, and a project it creates
+// is its own. Off, there is no req.user and nothing changes. The statements naming owner_id are prepared only when needed: an
+// unmigrated database (accounts off) has no such column.
+let selectOwnedAll;
+let setOwner;
+router.get('/', (req, res) => {
+  const user = /** @type {any} */ (req).user;
+  const rows = user ? (selectOwnedAll ??= db.prepare('SELECT * FROM projects WHERE owner_id = ? ORDER BY updated_at DESC')).all(user.id) : selectAll.all();
+  res.json(rows.map(toProject));
 });
 
 router.post('/', (req, res) => {
@@ -61,7 +75,21 @@ router.post('/', (req, res) => {
   const displayName = (typeof name === 'string' && name.trim()) || new URL(normalized).hostname;
   const now = new Date().toISOString();
   const id = randomUUID();
-  insert.run(id, displayName.slice(0, 120), normalized, 'html', now, now);
+  const user = /** @type {any} */ (req).user;
+  if (user) {
+    setOwner ??= db.prepare('UPDATE projects SET owner_id = ? WHERE id = ?');
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      insert.run(id, displayName.slice(0, 120), normalized, 'html', now, now);
+      setOwner.run(user.id, id);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  } else {
+    insert.run(id, displayName.slice(0, 120), normalized, 'html', now, now);
+  }
   res.status(201).json(toProject(selectOne.get(id)));
 });
 
@@ -71,6 +99,21 @@ router.get('/:id', (req, res) => {
   res.json(toProject(project));
 });
 
+/**
+ * The owner-only settings a PATCH body asks for, in words (accounts/roles.js). Pure, so a test can hold it.
+ * @param {{ exactMode?: unknown, recreatePages?: unknown }} o
+ * @returns {string[]}
+ */
+export function ownerOnlySettings({ exactMode, recreatePages }) {
+  const out = [];
+  if (exactMode !== undefined) out.push('the exact-copy setting');
+  if (recreatePages !== undefined) {
+    const parsed = parseRecreatePages(recreatePages);
+    if (parsed !== null && parsed !== ALL_PAGES) out.push('a page count for the copy');
+  }
+  return out;
+}
+
 router.patch('/:id', (req, res) => {
   const project = selectOne.get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found.' });
@@ -79,6 +122,13 @@ router.patch('/:id', (req, res) => {
     name, stack, url, max_pages: maxPages, recreate_pages: recreatePages, target_domain: targetDomain, exact_mode: exactMode,
     page_url: pageUrl,
   } = req.body ?? {};
+  // Settings that change how a copy is made are the owner's (accounts/roles.js): exact mode, and a page count other than every
+  // page ("Copy my site" saves the stack, the address and "every page", which stay open to everyone). An invalid value is still
+  // the 400 below, for everyone.
+  if (!isOwner(req)) {
+    const owned = ownerOnlySettings({ exactMode, recreatePages });
+    if (owned.length) return refuseNonOwner(res, owned.join(', '));
+  }
   const next = {
     name: project.name,
     stack: project.stack,
@@ -184,7 +234,7 @@ router.get('/:id/pages', async (req, res) => {
   };
   add(project.url);
   for (const { id } of analysisIds.all(project.id)) {
-    const crawl = await readFile(path.join(projectDir(project.id), 'audit', id, 'crawl.json'), 'utf8').then(JSON.parse, () => null);
+    const crawl = await readFile(path.join(auditDir(project.id, id), 'crawl.json'), 'utf8').then(JSON.parse, () => null);
     for (const p of crawl?.pages ?? []) if (p.status >= 200 && p.status < 300) add(p.url);
   }
   for (const row of recreateRows.all(project.id)) {

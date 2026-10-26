@@ -9,6 +9,7 @@ import { plural, timeAgo } from '../format.js';
 import { copyShot, isReal, originalShot, outcomeCounts, platformOf, scoresOf, useSiteData } from '../siteData.js';
 import { useProjects } from '../store/useProjects.js';
 import styles from './Home.module.css';
+import { copiedPages } from '../copiedPages.js';
 
 /** The four stages of the app, drawn. */
 export const HOW = [
@@ -52,7 +53,7 @@ function statusLine({ audit, result, stages }) {
   if (stages.results === 'running') return 'Comparing the copy…';
   if (!isReal(audit)) return 'Not checked yet';
   if (!result) return `Checked ${timeAgo(audit.analyzedAt)}`;
-  return `${plural(result.pages.length, 'page')} copied · ${timeAgo(result.createdAt)}`;
+  return `${plural(copiedPages(result).length, 'page')} copied · ${timeAgo(result.createdAt)}`;
 }
 
 /** A website in the gallery: a picture of it, where its work stands and its scores. */
@@ -185,7 +186,7 @@ export default function Home({ onNewProject }) {
     <div className={`${styles.home} scroll`} data-shot-scroll>
       <section className={styles.hero}>
         <div className={styles.heroText}>
-          <span className="eyebrow">Overview</span>
+          <span className="eyebrow intro">Overview</span>
           <h1 className={styles.title}>
             Every company website,
             <br />
@@ -282,7 +283,7 @@ export default function Home({ onNewProject }) {
       </section>
 
       <footer className={styles.foot}>
-        <span>Site Audit Studio · internal tool</span>
+        <span>Remastly</span>
         <span>Speed, Google, accessibility and safety scores are measured with Google’s Lighthouse.</span>
       </footer>
     </div>

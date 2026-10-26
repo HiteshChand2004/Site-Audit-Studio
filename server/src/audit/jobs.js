@@ -3,7 +3,7 @@ import { JobManager } from '../jobs/manager.js';
 import { overallPct, runAnalysis, STEPS } from './index.js';
 import { pruneScreenshots } from './retention.js';
 
-export { ConflictError } from '../jobs/manager.js';
+export { ConflictError, JobLimitError } from '../jobs/manager.js';
 
 export const jobs = new JobManager({
   table: 'analyses',
@@ -11,8 +11,8 @@ export const jobs = new JobManager({
   steps: STEPS,
   overallPct,
   doneMessage: 'Analysis complete',
-  run: async ({ job, project, payload, progress }) => {
-    const audit = await runAnalysis({ project, analysisId: job.id, maxPages: payload.maxPages, progress, ...(payload.url && { url: payload.url }) });
+  run: async ({ job, project, payload, progress, signal }) => {
+    const audit = await runAnalysis({ project, analysisId: job.id, maxPages: payload.maxPages, progress, signal, ...(payload.url && { url: payload.url }) });
     // Which part of the site this analysis is about, so its report and what is built from it say so.
     return payload.url ? { ...audit, scope: { kind: 'page', url: payload.url } } : audit;
   },

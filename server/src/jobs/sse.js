@@ -10,7 +10,10 @@ const HEARTBEAT_MS = 15000;
  * @param {() => ({id:string,status:string,error:string|null}|undefined)} loadRow
  */
 export function streamJob(req, res, manager, jobId, loadRow) {
-  const job = manager.get(jobId);
+  // A live job of another project is not this project's job: a job's stream is only reachable under its own project (with
+  // accounts on, the project in the path is one the visitor owns: accounts/ownership.js).
+  const live = manager.get(jobId);
+  const job = live && (!req.params?.id || live.projectId === req.params.id) ? live : null;
   const row = job ? null : loadRow();
   if (!job && !row) return res.status(404).json({ error: 'Job not found.' });
 

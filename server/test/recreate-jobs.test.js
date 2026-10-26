@@ -406,7 +406,9 @@ test('the stack build is left to the export after the job without memory to spar
     },
   });
   try {
-    const project = makeProject({ stack: 'job-stack-2' });
+    // The new site's address is set (E.1): without it the job warns that the copy names the original address, which is
+    // a different check (recreate-rebase.test.js). This test is about the stack build.
+    const project = { ...makeProject({ stack: 'job-stack-2' }), target_domain: 'https://new.example.com' };
     const stages = { ...stubStages, ...stackInputs, stack: STAGES.stack };
     const later = await runRecreate({ project, recreateId: randomUUID(), progress: () => {}, canOverlap: () => false, stages });
     assert.equal(builds, 0);

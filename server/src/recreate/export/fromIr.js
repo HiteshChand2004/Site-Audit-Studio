@@ -11,9 +11,11 @@ import { toolchainStatus } from '../../toolchains/index.js';
 import { RecreateError } from '../errors.js';
 import { getEmitter } from '../emit/index.js';
 import { writeProject } from '../emit/write.js';
+import { writeLockfiles } from '../../toolchains/lockfile.js';
 import { emitSite } from '../emit/html.js';
 import { buildDist } from '../build/minify.js';
 import { recreateDir } from '../workspace.js';
+import { servedDir } from '../behavior/preserve/pack.js';
 
 const refuse = (status, message) => Object.assign(new RecreateError(message), { status });
 
@@ -23,11 +25,24 @@ export const reportOutputs = (report) => report.outputs ?? { [report.stack ?? 'h
 /** The folder an output is served, previewed and audited from (the plain-HTML build is `dist`, an app's is e.g. `stacks/nextjs/out`). */
 export function outputRoot(dir, report, stack) {
   const out = reportOutputs(report)[stack];
-  return path.join(dir, out?.dir ?? 'dist', out?.dist ?? '');
+  const project = path.join(dir, out?.dir ?? 'dist');
+  // An as-is project recorded before `dist` was: the copy is where that stack serves it from, not at the project's root.
+  const dist = out?.dist ?? (out?.mode === 'as-is' ? servedDir(stack, project) : '');
+  return path.join(project, dist);
 }
 
-/** The output to preview and re-audit: `wanted` (the project's stack) when it is ready, the plain-HTML build otherwise. */
-export const targetStack = (report, wanted = report.stack) => (reportOutputs(report)[wanted]?.status === 'ready' ? wanted : 'html');
+/**
+ * The output to preview and re-audit: `wanted` (the project's stack) when it is ready; else the stack an as-is copy was made in
+ * (the app sends that stack with the request and does not save it on the project, so a copy made in Next.js on a project saved
+ * as plain HTML has no plain-HTML build at all); else the plain-HTML build.
+ */
+export const targetStack = (report, wanted = report.stack) => {
+  const outputs = reportOutputs(report);
+  if (outputs[wanted]?.status === 'ready') return wanted;
+  const made = report?.asIs?.stack;
+  if (made && outputs[made]?.status === 'ready') return made;
+  return 'html';
+};
 
 /**
  * The pages of an output: [{ outPath (in the original site), path (its URL path in this output, "/about/") }].
@@ -83,6 +98,8 @@ export async function buildStackOutput({ dir, stack, report, signal, progress })
   try {
     const out = emitter.emit(ir, {});
     await writeProject(tmp, out, { assetsDir: path.join(dir, 'assets'), known, assetsTarget: emitter.assetsTarget });
+    // The lockfile of every package of the project, cut from the toolchain it is built with (`npm ci` in the download).
+    const lockfiles = await writeLockfiles(tmp, { stack });
     const assets = [...out.assets].filter((f) => known.has(f));
     // The stack is checked against the plain-HTML build of the same IR written by this same code: the dist/ of the
     // recreate may come from an older version of the emitter (a copy made yesterday), and any change in how a page is
@@ -100,7 +117,7 @@ export async function buildStackOutput({ dir, stack, report, signal, progress })
     const built = (await emitter.build?.({ dir: tmp, ir, out, assets, report, htmlDist, ...(signal && { signal }), ...(progress && { progress }) })) ?? {};
     await rm(target, { recursive: true, force: true });
     await rename(tmp, target);
-    return { status: 'ready', dir: `stacks/${stack}`, from: 'ir', exportedAt: new Date().toISOString(), files: out.files.size, ...built };
+    return { status: 'ready', dir: `stacks/${stack}`, from: 'ir', exportedAt: new Date().toISOString(), files: out.files.size, lockfiles, ...built };
   } catch (err) {
     await rm(tmp, { recursive: true, force: true }).catch(() => {});
     throw err;

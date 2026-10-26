@@ -5,7 +5,8 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
-import { db, projectDir } from '../db/index.js';
+import { db } from '../db/index.js';
+import { auditDir, projectDir } from '../config/paths.js';
 import { recreateSection } from '../reaudit/contract.js';
 import { recreateDir } from '../recreate/workspace.js';
 import { buildDummyAudit } from '../dummy/audit.js';
@@ -80,7 +81,7 @@ export async function collectReport(projectId) {
 
   // The original: the first-screen shots of the analysis (screens/<view>-fold.webp).
   if (analyzed && audit.screenshots?.analysisId) {
-    const dir = path.join(projectDir(projectId), 'audit', audit.screenshots.analysisId, 'screens');
+    const dir = path.join(auditDir(projectId, audit.screenshots.analysisId), 'screens');
     for (const view of SHOWN) images.old[view] = await thumbnail(path.join(dir, `${view}-fold.webp`), view);
   }
   // The recreated homepage: its screenshots from the fidelity check.

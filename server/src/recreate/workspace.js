@@ -6,14 +6,15 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { db, projectDir } from '../db/index.js';
+import { db } from '../db/index.js';
+import { recreateRoot as recreateRootOf } from '../config/paths.js';
 import { checkpointSummary, isReusable, readCheckpoint, RESUMABLE_DAYS } from './checkpoint.js';
 import { RecreateError } from './errors.js';
 import { stopPreview } from './preview.js';
 
 export const KEEP_RECREATES = 2;
 
-export const recreateRoot = (projectId) => path.join(projectDir(projectId), 'recreate');
+export const recreateRoot = recreateRootOf;
 export const recreateDir = (projectId, recreateId) => path.join(recreateRoot(projectId), recreateId);
 export const tmpDir = (projectId, recreateId) => `${recreateDir(projectId, recreateId)}.tmp`;
 
@@ -84,6 +85,24 @@ export async function findResumable(projectId, now = Date.now()) {
  * workspace is in use here.
  * @returns {Promise<string[]>} removed folder names
  */
+/**
+ * The newest finished copy of each stack (rows newest first): a copy is never removed while no newer one exists for its
+ * stack (docs/COPY-MY-SITE.md §9). A copy with no stack recorded counts as the plain HTML stack.
+ * @param {{ id: string, report: object | null }[]} rows
+ * @returns {Set<string>}
+ */
+export function newestPerStack(rows) {
+  const seen = new Set();
+  const kept = new Set();
+  for (const r of rows) {
+    const stack = r.report?.stack ?? 'html';
+    if (seen.has(stack)) continue;
+    seen.add(stack);
+    kept.add(r.id);
+  }
+  return kept;
+}
+
 export async function pruneRecreates(projectId, { keep = KEEP_RECREATES } = {}) {
   const done = doneWithResults.all(projectId);
   const parsed = done.map((r) => ({ id: r.id, report: r.result_json ? JSON.parse(r.result_json) : null }));
@@ -104,6 +123,7 @@ export async function pruneRecreates(projectId, { keep = KEEP_RECREATES } = {}) 
     const lift = asIsRows.find((r) => existsSync(path.join(recreateRoot(projectId), r.id, 'as-is', 'copy')));
     if (lift) kept.add(lift.id);
   }
+  for (const id of newestPerStack(parsed)) kept.add(id);
   const resumable = await findResumable(projectId);
   if (resumable) kept.add(`${resumable.recreateId}.tmp`);
   const root = recreateRoot(projectId);

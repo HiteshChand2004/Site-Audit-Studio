@@ -6,6 +6,7 @@ import { Segmented } from '../../components/common/Tabs.jsx';
 import InfoTip from '../../components/common/InfoTip.jsx';
 import PreviewFrame, { VIEWPORTS } from '../../components/preview/PreviewFrame.jsx';
 import { api } from '../../api/client.js';
+import { apiUrl } from '../../api/base.js';
 import SitePreview, { FullPageFrame, liveAvailability, LiveFrame, ModeToggle } from '../../components/preview/SitePreview.jsx';
 import { defaultPreviewMode, unavailableNote } from '../../components/preview/framing.js';
 import { Pill } from '../../components/common/Score.jsx';
@@ -20,13 +21,35 @@ import ws from '../Workspace.module.css';
 // "services/index.html" → "services/": the URL the preview server answers for a page file.
 const pageUrl = (outPath) => outPath.replace(/(^|\/)index\.html$/, '$1');
 
-// A plain-HTML site is framed without scripts, forms, popups or top navigation. A stack with JavaScript (React)
-// may run its own bundles: the preview server sends script-src 'self' for it and says so (preview.scripts).
-const sandboxFor = (preview) => (preview?.scripts ? 'allow-same-origin allow-scripts' : 'allow-same-origin');
+// Every copy is framed WITHOUT allow-same-origin: the preview is served under the app's own address (/preview/<token>/,
+// server/src/recreate/previewRoute.js), so a copy's script must never get the app's origin — not its cookies, storage or
+// API. The server sandboxes each document by header as well; this attribute is the frame's own half of the same rule.
+// A plain-HTML site runs no script at all; a stack with JavaScript (React, an as-is copy) runs its own bundles only.
+const sandboxFor = (preview) => (preview?.scripts ? 'allow-scripts' : '');
 
-// The copy's preview server lets only the app's own address frame it (frame-ancestors); opened from another address the
+// The preview lets only the app's own address frame it (frame-ancestors); opened from another address the
 // live frame stays blank, so the picture taken when the copy was measured is shown first.
-const COPY_MODE = typeof window !== 'undefined' && window.location.port === '5173' ? 'live' : 'screenshot';
+// The app's addresses: the Vite dev server (5173, npm run dev) and the one local address of npm run local (8080, which
+// starts the API with APP_ORIGIN set to it).
+const LIVE_PORTS = new Set(['5173', '8080']);
+const COPY_MODE = typeof window !== 'undefined' && LIVE_PORTS.has(window.location.port) ? 'live' : 'screenshot';
+
+const PREVIEW_TOKEN = /^\/preview\/([A-Za-z0-9_-]{24})\//;
+
+/**
+ * Plain words for what the copy's own script could not do inside the preview's sealed frame (reported by the shim the
+ * preview serves first, as counts); null when nothing is amiss. The downloaded copy is never affected: the frame is the limit.
+ */
+function previewLimitNote(r) {
+  if (!r || (!r.blank && !r.failed)) return null;
+  const files = r.failed ? `${r.failed} file${r.failed === 1 ? '' : 's'} its script asked for could not be loaded here` : null;
+  const errors = r.errors ? `its script stopped with ${r.errors === 1 ? 'an error' : `${r.errors} errors`}` : null;
+  const why = [files, errors].filter(Boolean).join(' and ');
+  const what = r.blank
+    ? `The copy did not draw this page inside the preview's sealed frame${why ? ` (${why})` : ''}.`
+    : `Some parts of this page may not run inside the preview's sealed frame: ${why}.`;
+  return `${what} The downloaded copy is not affected: on a host of its own it runs normally.`;
+}
 
 /** A strip of every copied page (a small picture of its first screen and its match), to jump between pages. */
 function PageStrip({ project, result, pages, page, onPick, fidByPage, label }) {
@@ -115,6 +138,22 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
     return () => { alive = false; };
   }, [asIsCopy, project.id, result?.recreateId]);
   useSyncScroll(oldScroller, newScroller, sync);
+  // What the copy's own script could not do inside the preview's sealed frame: the shim the preview serves first reports
+  // counts, with the preview's token, from the sandboxed (origin "null") frame; nothing else is accepted as a report.
+  const previewToken = (asIsCopy ? asIsUrl : preview?.url)?.match(PREVIEW_TOKEN)?.[1] ?? null;
+  const [frameReport, setFrameReport] = useState(null);
+  useEffect(() => {
+    setFrameReport(null);
+    if (!previewToken) return undefined;
+    const onMessage = (e) => {
+      const d = e.data;
+      if (e.origin !== 'null' || !d || d.sasPreview !== 1 || d.token !== previewToken) return;
+      const count = (v) => (Number.isFinite(v) && v > 0 ? Math.min(Math.round(v), 999) : 0);
+      setFrameReport({ failed: count(d.failed), errors: count(d.errors), blank: d.blank === true });
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [previewToken, page, viewport]);
 
   const pages = result?.preview?.pages ?? result?.pages?.map((p) => p.outPath) ?? [];
   // A new copy opens on its homepage.
@@ -139,7 +178,7 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   const originalUrl = otherPage?.url ?? siteUrl;
   const pageShot = otherPage
     ? (vp) => (otherPage.views?.includes(vp.view) && otherPage.slug
-      ? { viewport: { width: vp.id }, full: { url: `/api/projects/${project.id}/recreate/${result.recreateId}/captures/${otherPage.slug}/${vp.view}-full.webp` } }
+      ? { viewport: { width: vp.id }, full: { url: apiUrl(`/projects/${project.id}/recreate/${result.recreateId}/captures/${otherPage.slug}/${vp.view}-full.webp`) } }
       : null)
     : undefined;
   const live = liveAvailability(audit, originalUrl);
@@ -182,8 +221,8 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   }
 
   const copyUrl = asIsCopy ? asIsUrl : preview?.url;
-  // An as-is copy is its own origin: scripts run there (its own code), and nothing of it reaches the app.
-  const frameSandbox = asIsCopy ? 'allow-same-origin allow-scripts' : sandboxFor(preview);
+  // An as-is copy runs its own code, sandboxed: nothing of it reaches the app (see sandboxFor).
+  const frameSandbox = asIsCopy ? 'allow-scripts' : sandboxFor(preview);
   const ready = Boolean(asIsCopy ? asIsUrl : preview?.url && preview.recreateId === result.recreateId);
   const src = ready ? `${copyUrl}${pageUrl(pageOf(result, shown, page).file)}` : null;
   const view = VIEWPORTS.find((v) => v.id === viewport)?.view;
@@ -199,10 +238,11 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   const copyPageShot = (vp) => {
     const fv = fidByPage.get(page)?.views?.[vp.view];
     if (!fv || !copyInfo?.slug) return null;
-    return { viewport: { width: vp.id }, full: { url: `/api/projects/${project.id}/recreate/${result.recreateId}/fidelity/${copyInfo.slug}/${vp.view}-full.webp` } };
+    return { viewport: { width: vp.id }, full: { url: apiUrl(`/projects/${project.id}/recreate/${result.recreateId}/fidelity/${copyInfo.slug}/${vp.view}-full.webp`) } };
   };
   const copyHasShots = Boolean(copyInfo?.slug && fidByPage.get(page)?.views);
   const copyPicture = copyMode === 'screenshot' && copyHasShots;
+  const frameNote = ready && !copyPicture ? previewLimitNote(frameReport) : null;
 
   return (
     <div className={ws.stepBody}>
@@ -309,6 +349,12 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
             <p className={styles.dummyNote} role="note">
               <Info size={13} aria-hidden="true" />
               <span>Forms need the server, which this preview does not run. In the downloaded project, run it as its README explains to try them.</span>
+            </p>
+          )}
+          {frameNote && (
+            <p className={styles.dummyNote} role="status">
+              <Info size={13} aria-hidden="true" />
+              <span>{frameNote}</span>
             </p>
           )}
         </section>

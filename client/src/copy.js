@@ -94,6 +94,7 @@ export const JOB_STEPS = {
   // Compare again (re-audit)
   serve: { title: 'Opening the new site', explain: 'Starting the new site privately so it can be checked.' },
   motion: { title: 'Checking animations', explain: 'Comparing hover effects and animations with the original.' },
+  'lighthouse-pages': { title: 'Measuring every page, original and copy', explain: 'The standard speed test on each copied page and on the same page of the original, phone and computer, on this computer with the same settings.' },
   compare: { title: 'Comparing with the original', explain: 'Putting the old and new results side by side.' },
 };
 
@@ -101,6 +102,16 @@ export const JOB_STEPS = {
 export const stepTitle = (key, fallback) => JOB_STEPS[key]?.title ?? fallback ?? key;
 
 /** Results of a check, before → after (fix checklist statuses). */
+// Why a row of an as-is copy got worse (server/src/copy/openItems.js REASONS, the five reasons of "Copy my site").
+export const WORSE_REASONS = {
+  third_party: { code: 'a', text: 'Comes from third-party code outside the copy (an embed or an external script).' },
+  backend: { code: 'b', text: 'Needs a real backend or credentials you have to provide (forms, login, payments).' },
+  owner: { code: 'c', text: 'Needs your decision (pages you chose not to copy, a dead link to another site, a content or brand choice).' },
+  look: { code: 'd', text: 'The fix would change the original’s look, animation or behaviour.' },
+  deploy: { code: 'e', text: 'Can only be checked on the real host. See DEPLOY.md.' },
+};
+export const WORSE_UNEXPLAINED = 'Unexplained: none of the five reasons fits what this run measured. This still needs a fix.';
+
 export const RESULT_STATUS = {
   fixed: { label: 'Fixed', explain: 'This was a problem on the original site and is solved in the copy.', tone: 'ok' },
   improved: { label: 'Better', explain: 'Still not perfect, but better than on the original.', tone: 'ok' },

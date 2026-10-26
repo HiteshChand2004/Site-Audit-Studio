@@ -13,7 +13,13 @@
     "corpus": "node scripts/corpus.mjs",
     "test:fixtures": "node scripts/test-suite.mjs fixtures",
     "test:precommit": "node scripts/test-suite.mjs precommit",
-    "preview:lift": "node scripts/preview-lift.mjs"
+    "preview:lift": "node scripts/preview-lift.mjs",
+    "db:backup": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/db-backup.mjs",
+    "db:rehearse": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/db-rehearse.mjs",
+    "db:migrate": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/db-migrate.mjs",
+    "accounts": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/accounts.mjs",
+    "cleanup": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/cleanup.mjs",
+    "mail:test": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/mail-test.mjs"
   },
   "dependencies": {
     "@axe-core/playwright": "^4.13.0",
@@ -28,6 +34,7 @@
     "lighthouse": "^12.8.2",
     "lottie-web": "5.13.0",
     "motion": "13.4.6",
+    "nodemailer": "^7.0.13",
     "playwright": "^1.63.0",
     "postcss": "8.5.28",
     "robots-parser": "^3.0.1",

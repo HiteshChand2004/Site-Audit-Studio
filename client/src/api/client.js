@@ -1,9 +1,23 @@
+import { apiUrl, goToSignIn } from './base.js';
+
 const API_DOWN = 'Cannot reach the API server (port 4000). Start it with npm run dev.';
+
+/**
+ * With accounts on, a request the API refuses for want of a (verified) session carries `auth: 'signin' | 'verify'`: the
+ * visitor is sent to the sign-in page, coming back here after. True when that happened.
+ */
+function signInIfAsked(res, data) {
+  if ((res.status === 401 || res.status === 403) && (data?.auth === 'signin' || data?.auth === 'verify')) {
+    goToSignIn(data.auth);
+    return true;
+  }
+  return false;
+}
 
 async function request(path, { method = 'GET', body } = {}) {
   let res;
   try {
-    res = await fetch(`/api${path}`, {
+    res = await fetch(apiUrl(path), {
       method,
       headers: body ? { 'Content-Type': 'application/json' } : undefined,
       body: body ? JSON.stringify(body) : undefined,
@@ -14,6 +28,7 @@ async function request(path, { method = 'GET', body } = {}) {
   if (res.status === 204) return null;
   const data = await res.json().catch(() => null);
   if (!res.ok) {
+    signInIfAsked(res, data);
     // The Vite dev proxy answers 5xx without a JSON body when the API server is not running.
     const message = data?.error || (res.status >= 500 && !data ? API_DOWN : `Request failed (${res.status})`);
     const err = new Error(message);
@@ -109,12 +124,13 @@ function subscribe(url, { progress, done, failed, reconnecting }) {
 async function requestText(path) {
   let res;
   try {
-    res = await fetch(`/api${path}`);
+    res = await fetch(apiUrl(path));
   } catch {
     throw Object.assign(new Error(API_DOWN), { status: 0 });
   }
   if (!res.ok) {
     const data = await res.json().catch(() => null);
+    signInIfAsked(res, data);
     throw new Error(data?.error || (res.status >= 500 ? API_DOWN : `Request failed (${res.status})`));
   }
   return res.text();
@@ -128,12 +144,13 @@ export const api = {
   async getReportPdf(id) {
     let res;
     try {
-      res = await fetch(`/api/projects/${id}/report?format=pdf`);
+      res = await fetch(apiUrl(`/projects/${id}/report?format=pdf`));
     } catch {
       throw Object.assign(new Error(API_DOWN), { status: 0 });
     }
     if (!res.ok) {
       const data = await res.json().catch(() => null);
+      signInIfAsked(res, data);
       throw new Error(data?.error || (res.status >= 500 ? 'The PDF could not be built.' : `Request failed (${res.status})`));
     }
     return res.blob();
@@ -147,13 +164,13 @@ export const api = {
   getPages: (id) => request(`/projects/${id}/pages`),
   startAnalyze: (id, body = {}) => request(`/projects/${id}/analyze`, { method: 'POST', body }),
   getCurrentAnalysis: (id) => request(`/projects/${id}/analyze/current`),
-  subscribeAnalysis: (id, analysisId, handlers) => subscribe(`/api/projects/${id}/analyze/${analysisId}/events`, handlers),
+  subscribeAnalysis: (id, analysisId, handlers) => subscribe(apiUrl(`/projects/${id}/analyze/${analysisId}/events`), handlers),
   // { reuseCapture: true }: rebuild from the last capture (the site is not opened again).
   startRecreate: (id, options = null) => request(`/projects/${id}/recreate`, { method: 'POST', ...(options && { body: options }) }),
   // The preview of an original as-is copy: its own address on this machine (never the app's origin).
   startAsIsPreview: (id, recreateId) => request(`/projects/${id}/recreate/${recreateId}/asis-preview`, { method: 'POST' }),
   getCurrentRecreate: (id) => request(`/projects/${id}/recreate/current`),
-  downloadUrl: (id, recreateId, stack) => `/api/projects/${id}/recreate/${recreateId}/download${stack ? `?stack=${encodeURIComponent(stack)}` : ''}`,
+  downloadUrl: (id, recreateId, stack) => apiUrl(`/projects/${id}/recreate/${recreateId}/download${stack ? `?stack=${encodeURIComponent(stack)}` : ''}`),
   // Builds another stack from the saved recreate (no new capture): resolves when it is ready, rejects with why it failed.
   exportStack: (id, recreateId, stack) => request(`/projects/${id}/recreate/${recreateId}/export`, { method: 'POST', body: { stack } }),
   // HEAD first: it plans the zip without streaming it, so a refusal comes back as a message.
@@ -163,10 +180,22 @@ export const api = {
   },
   getRecreate: (id) => request(`/projects/${id}/recreate`),
   stopRecreate: (id) => request(`/projects/${id}/recreate/stop`, { method: 'POST' }),
-  subscribeRecreate: (id, recreateId, handlers) => subscribe(`/api/projects/${id}/recreate/${recreateId}/events`, handlers),
+  subscribeRecreate: (id, recreateId, handlers) => subscribe(apiUrl(`/projects/${id}/recreate/${recreateId}/events`), handlers),
   startReaudit: (id) => request(`/projects/${id}/reaudit`, { method: 'POST' }),
   getCurrentReaudit: (id) => request(`/projects/${id}/reaudit/current`),
-  subscribeReaudit: (id, reauditId, handlers) => subscribe(`/api/projects/${id}/reaudit/${reauditId}/events`, handlers),
+  subscribeReaudit: (id, reauditId, handlers) => subscribe(apiUrl(`/projects/${id}/reaudit/${reauditId}/events`), handlers),
   getPreview: (id) => request(`/projects/${id}/preview`),
   startPreview: (id) => request(`/projects/${id}/preview`, { method: 'POST' }),
+
+  // The signed-in account (accounts on). Resolves to null when the API runs without accounts (no /auth routes: 404).
+  async getMe() {
+    try {
+      return (await request('/auth/me')).user;
+    } catch (err) {
+      if (err.status === 404) return null;
+      throw err;
+    }
+  },
+  signOut: () => request('/auth/logout', { method: 'POST' }),
+  changePassword: (currentPassword, newPassword) => request('/auth/password', { method: 'POST', body: { currentPassword, newPassword } }),
 };

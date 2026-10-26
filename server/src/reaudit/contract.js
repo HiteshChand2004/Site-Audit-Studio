@@ -103,6 +103,12 @@ export function recreateSection(project, audit) {
     scope: c.scope ?? null,
     output: c.stack ?? null,
     notes: c.notes ?? [],
+    // An as-is copy: { total, explained, unexplained, byReason } of its "got worse" rows (copy/gotWorse.js), else null.
+    gotWorse: c.gotWorse ?? null,
+    // The same counts for its "still open" rows (failing on both sides, not fixed by the copy), else null.
+    stillOpen: c.stillOpen ?? null,
+    // An as-is copy: Lighthouse on every page, both sides, both modes (reaudit/lighthousePages.js), else null.
+    lighthousePages: c.lighthousePages ?? null,
     // Motion measured on both sides (4b.8): { pages, reveal, hover, loops, failed, skipped } or null.
     motion: c.motion ?? null,
   };

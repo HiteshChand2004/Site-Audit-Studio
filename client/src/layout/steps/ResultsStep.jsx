@@ -5,13 +5,14 @@ import { Alert, Card, EmptyState } from '../../components/common/Surface.jsx';
 import FixReport from '../../components/recreate/FixReport.jsx';
 import RecreateReport from '../../components/recreate/RecreateReport.jsx';
 import Outcome from '../../components/recreate/Outcome.jsx';
+import CopyPages from '../../components/recreate/CopyPages.jsx';
 import PageGallery from '../../components/recreate/PageGallery.jsx';
 import AsIsReport from '../../components/recreate/AsIsReport.jsx';
 import SectionCard from '../../components/common/SectionCard.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
-import { STACKS, stackById } from '../../constants.js';
+import { stackById } from '../../constants.js';
 import { api } from '../../api/client.js';
-import { outputsOf } from '../../stacks.js';
+import { outputsOf, outputState } from '../../stacks.js';
 import { isJobActive, useProjects } from '../../store/useProjects.js';
 import styles from '../Panel.module.css';
 import { pathOf } from '../../components/project/PageScope.jsx';
@@ -31,14 +32,15 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
   // One job at a time on the server: no new comparison while a copy or comparison of this project runs.
   const busy = isJobActive(job) || isJobActive(reauditJob);
   const outputs = outputsOf(result);
-  const [zipStack, setZipStack] = useState(project.stack);
-  const [building, setBuilding] = useState(false);
+  // The download is the copy's own technology: the one chosen before it was made (the clean copy's settings, or the
+  // "Copy my site" panel). Another technology means another copy, made with that choice; nothing is built from here.
+  const copyStack = result?.asIs?.stack ?? result?.stack ?? project.stack ?? 'html';
+  const copyState = outputState(result, copyStack);
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState(null);
   useEffect(() => {
     setDownloadError(null);
-    setZipStack(project.stack);
-  }, [result?.recreateId, project.id, project.stack]);
+  }, [result?.recreateId, project.id]);
 
   if (!result) {
     return (
@@ -58,31 +60,28 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
     );
   }
 
-  const zipReady = outputs[zipStack]?.status === 'ready';
-  const canDownload = Boolean(result.recreateId && result.safety?.safe && !busy && !building);
+  const zipReady = copyState === 'ready' && (copyStack === 'html' || outputs[copyStack]?.status === 'ready');
+  const canDownload = Boolean(result.recreateId && result.safety?.safe && !busy && zipReady);
   async function download() {
     setDownloading(true);
     setDownloadError(null);
     try {
-      if (!zipReady) {
-        // Built from the saved copy (the site is not visited again); it waits for any running job.
-        setBuilding(true);
-        await api.exportStack(project.id, result.recreateId, zipStack);
-        await reloadRecreate(project.id);
-        await reloadAudit(project.id);
-        setBuilding(false);
-      }
-      const problem = await api.checkDownload(project.id, result.recreateId, zipStack);
+      const problem = await api.checkDownload(project.id, result.recreateId, copyStack);
       if (problem) setDownloadError(problem);
-      else window.location.assign(api.downloadUrl(project.id, result.recreateId, zipStack));
+      else window.location.assign(api.downloadUrl(project.id, result.recreateId, copyStack));
     } catch (err) {
-      setBuilding(false);
       setDownloadError(err.message || 'Cannot reach the server.');
       await reloadRecreate(project.id).catch(() => {});
     } finally {
       setDownloading(false);
     }
   }
+  const copyName = stackById(copyStack).name;
+  const notReadyText = copyState === 'building'
+    ? `The ${copyName} version is still being built from the saved copy; it will be ready for download in a few minutes.`
+    : copyState === 'failed'
+      ? `The ${copyName} build of this copy did not finish. The reason is in “Create the copy”; make the copy again to get a download.`
+      : `This copy has no ${copyName} build to download. Make the copy again.`;
 
   const comparison = audit && !audit.isDummy && audit.recreate && !audit.recreate.isDummy ? audit.recreate : null;
   const canCompare = audit?.recreate?.recreateId && !isJobActive(reauditJob);
@@ -107,6 +106,7 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
         </p>
       )}
       <Outcome result={result} comparison={comparison} />
+      {result.copy && <CopyPages copy={result.copy} />}
 
       {!comparison && canCompare && (
         <Alert
@@ -135,28 +135,20 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
         }
       >
         <div className={ws.actions}>
-          <label className={ws.field}>
-            <span>Technology</span>
-            <select className="mono" value={zipStack} onChange={(e) => setZipStack(e.target.value)} disabled={building} aria-label="Technology of the download">
-              {STACKS.map((x) => (
-                <option key={x.id} value={x.id}>
-                  {x.name}
-                  {outputs[x.id]?.status === 'ready' ? '' : ' (built when you download)'}
-                </option>
-              ))}
-            </select>
-          </label>
+          <p className={ws.hint} style={{ margin: 0 }}>
+            Your copy: <strong>{copyName}</strong>. To get it in another technology, make a new copy with that choice.
+          </p>
           <Button
             variant="primary"
-            icon={building || downloading ? (p) => <Loader2 {...p} className={styles.spin} /> : Download}
+            icon={downloading ? (p) => <Loader2 {...p} className={styles.spin} /> : Download}
             disabled={!canDownload || downloading}
             onClick={download}
-            title={canDownload ? undefined : 'Wait until the running job has finished'}
+            title={canDownload ? undefined : zipReady ? 'Wait until the running job has finished' : notReadyText}
           >
-            {building ? 'Building…' : zipReady ? 'Download .zip' : `Build ${stackById(zipStack).name} & download`}
+            Download .zip
           </Button>
         </div>
-        {building && <p className={ws.hint}>Building the {stackById(zipStack).name} version from the saved copy; this can take a couple of minutes.</p>}
+        {!zipReady && <p className={ws.hint}>{notReadyText}</p>}
         {downloadError && (
           <Alert tone="bad" title="The download did not work">
             {downloadError}

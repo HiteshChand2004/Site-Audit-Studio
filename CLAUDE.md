@@ -16,9 +16,10 @@ Sidebar (mark, "All websites" home, "Add a website", search, each site's favicon
 - Analyze: playwright (Chromium), lighthouse + chrome-launcher (forked worker), @axe-core/playwright, cheerio, robots-parser.
 - Preview/security: sharp (WebP screenshots), undici (fetch with connect-time SSRF check).
 - Recreate: esbuild (minifies CSS/JS of `dist/`), html-validate (standard + document presets, offline), archiver (zip streamed on demand).
-- Build toolchains are NOT server dependencies: `server/toolchains/<id>/` (own `package.json` + `node_modules`, gitignored), installed on demand with
+- Build toolchains are NOT server dependencies: `server/toolchains/<id>/` (own `package.json` + committed `package-lock.json`; `node_modules` gitignored), installed on demand (`npm ci` of the lockfile) with
   `npm run setup:toolchains -w server -- <react-vite|next|mern>`: `react-vite` (vite 6.3.5, plugin-react 4.5.0, react 19.1.0), `next` (next 15.5.27, react 19.1.9), `mern` (react-vite's + express 5.2.1, compression 1.8.2, mongodb 7.7.0).
-  Generated projects pin the same versions, plus `overrides: { rollup: 4.40.2 }` (Rollup 4.64's tree-shaking took 3–5 min on a React bundle).
+  Generated projects pin the same versions, plus `overrides: { rollup: 4.40.2 }` (Rollup 4.64's tree-shaking took 3–5 min on a React bundle), and ship a
+  `package-lock.json` per package cut from the toolchain's lockfile (`toolchains/lockfile.js writeLockfiles`; installed with `npm ci`).
 - Planned: get-port, execa.
 
 ## Phases
@@ -669,7 +670,7 @@ From a completed Analyze, Recreate produces a clean static HTML/CSS copy. Real s
 - **Build step** (`build/index.js`, "Building & verifying"): atomic `dist/` (`dist.tmp` → `dist`; esbuild CSS/JS minify, no bundling/lowering, JSON compacted, HTML as emitted, assets hard-linked, `report.minify`) → safety gate → verification → fidelity. Any failure discards the workspace.
   Verification (`verify/site.js`, `report.verify`): every emitted page/stylesheet/asset in `dist/`; internal `<a>`/`<area>` resolve (file or folder + `index.html`); every local ref (src, srcset, poster, icon/preload/stylesheet, SVG href, CSS `url()`, `<style>`, `style=""`, inside SVG) exists; other-origin assets = errors (iframes may stay external). html-validate `standard` + `document` (`require-sri` off): emitter-only rules
   (`parser-error`, `no-dup-attr`, `void-content`, `missing-doctype`, `doctype-html`, `element-name`, `no-raw-characters`, `unrecognized-char-ref`, `attr-delimiter`) = errors; others (carried over from the original) = warnings. Missing/broken/remote/error fails the job naming the first case; HTML warnings and missing `#anchor` links → `report.warnings`.
-- **Preview** (`recreate/preview.js`): one at a time, one recreate's build on 127.0.0.1, first free port 5100–5199. GET/HEAD only; Host must be this port on 127.0.0.1/localhost; paths realpath-contained, no dotfiles, folder → slash redirect. Headers: CSP `default-src 'none'` (img/media/font/style self, inline style, https frames, `form-action 'none'`, `base-uri 'none'`, `frame-ancestors` = `APP_ORIGIN` + localhost/127.0.0.1 twin),
+- **Preview** (2026-10-24: the app serves previews itself at `/preview/<token>/…`, `recreate/previewRoute.js` + `previewTokens.js`; every document `Content-Security-Policy: sandbox allow-scripts`, the app frames copies with `sandbox="allow-scripts"` / `""`, never `allow-same-origin`; `/api` refuses `Origin: null` / cross-site, `security/foreignOrigin.js`; addresses in pages / CSS / module specifiers / import maps moved under the path on the way out, and the ones a copy's script builds at run time by the shim served first in every scripted document (`recreate/previewShim.js`: fetch / XHR / URL / attributes / markup / CSSOM / an import map for `import()`; `history.replaceState` so the page sees its own path; private in-memory stand-ins for storage, cookies and `navigator.serviceWorker`; counts reported to the app by `postMessage` with the token, shown by the Compare step as a plain-words note); the downloaded copy is never changed; the loopback server below remains for the preview step and the re-audit) (`recreate/preview.js servePreview`): one recreate's build on 127.0.0.1, a throwaway port. GET/HEAD only; Host must be this port on 127.0.0.1/localhost; paths realpath-contained, no dotfiles, folder → slash redirect. Headers: CSP `default-src 'none'` (img/media/font/style self, inline style, https frames, `form-action 'none'`, `base-uri 'none'`, `frame-ancestors` = `APP_ORIGIN` + localhost/127.0.0.1 twin),
   nosniff, no-referrer, CORP same-origin, no-store; `script-src 'self'` only when the output ships our motion script. Step "Starting preview" serves the new build on a throwaway port and requests every page + the stylesheet (`report.preview`). Started after a successful job and by `POST /preview`; retention / project delete stop it. Port never stored.
 - **UI + dev**: collapsible sidebar; SSE `ping` every 15 s, client reconnects a dropped/silent (40 s) stream with backoff up to 2 min; a job lost to a restart says "Run it again". **Sync scroll**: pill on the divider; on = both sites scroll by the same share of their height (OLD shows its screenshot since a cross-origin frame can't be scrolled; NEW draws the page at full height in an app-owned scroll box); off by default.
   **Matching page**: OLD follows the NEW page picker — Live frames that page's original URL, Shot shows the capture (`GET …/recreate/:recreateId/captures/:slug/:file`); homepage keeps Analyze shots. Dev runner `server/scripts/dev.js` (see Known issues).
@@ -705,7 +706,7 @@ Decisions: Live view (CDP screencast) deferred to 3b; a header-stripping reverse
 - **SSRF guard** (`server/src/security/`): user URLs reach **public** addresses only; loopback, private (RFC 1918, CGNAT, ULA), link-local (cloud metadata) and reserved ranges blocked, incl. IPv4 in IPv6. Checked on the **resolved IP at connect time** (anti DNS rebinding) and **every redirect hop**. Node: undici Agent whose connector resolves, checks and pins the IP. Playwright + Lighthouse Chrome: a per-analysis local egress proxy (`egressProxy.js`) doing the same.
 - Dev flag `SAS_ALLOW_LOCALHOST=1` (e.g. `server/.env`, gitignored): loopback only, never port 4000. No allowlist for private ranges. Internal allowlist: `createNetPolicy({ internalPorts })` for the platform's own loopback ports, via `runAnalysis({ netPolicy })`, never from user input; the analyze route always uses the default policy.
 - **Frame check** (`audit/frame.js`): CSP `frame-ancestors` (all policies must allow `APP_ORIGIN`, default `http://localhost:5173`) overrides X-Frame-Options; Report-Only and `<meta>` ignored; ALLOW-FROM / frame-busting scripts only set `confidence: 'uncertain'`.
-- **Iframe**: `sandbox="allow-scripts allow-same-origin"` (no top navigation, forms, popups), `allow=""`, no referrer; the app never frames its own origin.
+- **Iframe** (the live ORIGINAL site): `sandbox="allow-scripts allow-same-origin"` (no top navigation, forms, popups), `allow=""`, no referrer; the app never frames its own origin. **Copies** (served under the app's own address) are framed with `sandbox="allow-scripts"` or `""` — never `allow-same-origin` — and sandboxed by header besides.
 - **Screenshots**: 1440×900 (DPR 1), 768×1024 (DPR 1), 375×812 (DPR 2, mobile UA); fold + full each, full ≤ 8,000 CSS px, WebP q75, in `data/projects/<id>/audit/<analysisId>/screens/`, served by a whitelisted route with immutable caching; the latest **3** completed analyses keep `screens/`.
 
 ## Conventions
@@ -750,7 +751,7 @@ data/        app.db + projects/<id>/audit/<analysisId>/{crawl,axe,lighthouse-*}.
 ```
 
 ## Run
-Ports: client **5173**, API **4000**, fixture **4100**, previews **5100–5199**. For local testing put `SAS_ALLOW_LOCALHOST=1` in `server/.env`. "Cannot reach the API server" = nothing (or something else) on 4000.
+Ports: client **5173**, API **4000**, fixture **4100** (previews are paths of the app's address, `/preview/<token>/`; the old 5100–5199 range is used by measurement servers only). For local testing put `SAS_ALLOW_LOCALHOST=1` in `server/.env`. "Cannot reach the API server" = nothing (or something else) on 4000.
 ```bash
 npm install
 npm run dev          # client :5173 + server :4000
@@ -771,7 +772,7 @@ API: `GET/POST /api/projects`, `GET/PATCH/DELETE /api/projects/:id` (PATCH: `max
 
 ## Currently dummy / known issues
 - Never-analyzed projects get the **dummy** audit (`isDummy: true`, "Dummy data" badge) and a wireframe OLD preview. The fix checklist is the sample until a re-audit finishes.
-- One preview per project (own port in 5100–5199): a newer recreate / stack build replaces only that project's preview. A link to a non-recreated page opens the local notice page (`full-site` A.2).
+- One preview per project (its own token under `/preview/`): a newer recreate / stack build replaces only that project's preview, and the old address answers 404 at once. A link to a non-recreated page opens the local notice page (`full-site` A.2).
 - Recreate CSS: font sizes / line heights are px per breakpoint unless fluid type was adopted; between captured widths layout relies on %/max-width/fr heuristics.
 - A Lighthouse run takes ~20–40 s per device; a healthy site's analysis is a little over a minute; slow sites/machines up to the 6-min limit.
 - Pre-Phase-3 audits have no screenshots / desktop metrics (UI asks to re-run Analyze).

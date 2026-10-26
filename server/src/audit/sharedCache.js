@@ -27,7 +27,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import os from 'node:os';
+import { tempDir } from '../config/paths.js';
 import path from 'node:path';
 
 const SHARED_TYPES = new Set(['stylesheet', 'script', 'image', 'font']);
@@ -266,7 +266,7 @@ export function createSharedCache({ maxEntryBytes = MAX_ENTRY_BYTES, maxTotalByt
   let dir = null;
   let files = 0;
   let closed = false;
-  const folder = () => (dir ??= mkdtemp(path.join(process.env.SAS_TEMP_DIR || os.tmpdir(), 'sas-cache-')));
+  const folder = () => (dir ??= mkdtemp(path.join(tempDir(), 'sas-cache-')));
 
   // Keeps the response of the request that loaded a file first. Returns the entry for the other contexts, or null.
   async function keep(request) {

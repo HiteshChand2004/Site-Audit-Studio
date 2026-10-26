@@ -6,9 +6,9 @@ import styles from '../common/Form.module.css';
 
 const EMPTY = { name: '', url: '', authorized: false };
 
-export default function NewProjectModal({ open, onClose }) {
+export default function NewProjectModal({ open, onClose, initialUrl = '' }) {
   const create = useProjects((s) => s.create);
-  const [form, setForm] = useState(EMPTY);
+  const [form, setForm] = useState(() => ({ ...EMPTY, url: initialUrl }));
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
 

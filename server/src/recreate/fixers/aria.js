@@ -20,9 +20,15 @@ const hostOf = (src) => {
   }
 };
 
-/** @param {{ root: object, info: { path: string } }} tree @returns {{ fixed: object[] }} */
-export function fixAria(tree) {
+/**
+ * @param {{ root: object, info: { path: string } }} tree
+ * @param {{ asIs?: boolean }} [o]  asIs: the original's own markup, styles and scripts are kept, and they may find an element by
+ *   its id (#id rules, getElementById): a duplicate id is listed in `open`, never renamed
+ * @returns {{ fixed: object[], open: object[] }}
+ */
+export function fixAria(tree, { asIs = false } = {}) {
   const fixed = [];
+  const open = [];
   const page = tree.info.path;
   const ids = new Map();
   const walk = (n, hidden) => {
@@ -32,7 +38,8 @@ export function fixAria(tree) {
     if (a.id) {
       const seen = ids.get(a.id) ?? 0;
       ids.set(a.id, seen + 1);
-      if (seen) {
+      if (seen && asIs) open.push({ page, rule: 'duplicate-id', tag: n.tag, id: a.id, reason: 'd', why: "the original's own styles and scripts may use this id" });
+      else if (seen) {
         let next = `${a.id}-${seen + 1}`;
         while (ids.has(next)) next = `${next}-2`;
         ids.set(next, 1);
@@ -78,5 +85,5 @@ export function fixAria(tree) {
     n.children.forEach((c) => walk(c, inHidden));
   };
   walk(tree.root, false);
-  return { fixed };
+  return { fixed, open };
 }

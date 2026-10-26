@@ -6,6 +6,8 @@ import CountUp from '../common/CountUp.jsx';
 import { CHECKS, HEALTH, matchRating, RESULT_STATUS, TERMS } from '../../copy.js';
 import { plural } from '../../format.js';
 import styles from './Outcome.module.css';
+import { stackById } from '../../constants.js';
+import { copiedPages } from '../../copiedPages.js';
 
 // Before → after scores shown (phone measurements: most visitors).
 const SCORES = [
@@ -24,19 +26,30 @@ export default function Outcome({ result, comparison }) {
   const match = result.fidelity?.score ?? null;
   const m = matchRating(match);
   const s = comparison?.summary ?? null;
+  // An as-is copy: how many "got worse" rows carry one of the five reasons, and how many none fits (server copy/gotWorse.js).
+  const worse = comparison?.gotWorse ?? null;
+  // And the same counts for its "still open" rows (failing on both sides).
+  const stillOpen = comparison?.stillOpen ?? null;
   const better = s ? (s.fixed ?? 0) + (s.improved ?? 0) : 0;
   const todo = (comparison?.items ?? []).filter((i) => i.status === 'regressed' || i.status === 'open').sort((a, b) => (a.status === 'regressed' ? 0 : 1) - (b.status === 'regressed' ? 0 : 1));
   const before = comparison?.scores?.before?.mobile;
   const after = comparison?.scores?.after?.mobile;
 
+  // The one plain line of "Copy my site" (the same words as server/src/copy/regress.js summaryLine).
+  const stackName = stackById(result.stack)?.label ?? result.stack ?? '';
+  const pagesN = copiedPages(result).length;
+  const fixedN = s ? (s.fixed ?? 0) + (s.improved ?? 0) : 0;
+  const summaryText = `${plural(pagesN, 'page')} copied${stackName ? ` in ${stackName}` : ''} · ${result.asIs ? pagesN : 0} as-is, ${result.asIs ? 0 : pagesN} rebuilt · ${s ? `Got worse: ${s.regressed ?? 0}${worse ? ` (${worse.explained} with a reason, ${worse.unexplained} unexplained)` : ''} · Fixed: ${fixedN} · Still open: ${s.open ?? 0}${stillOpen ? ` (${stillOpen.explained} with a reason, ${stillOpen.unexplained} unexplained)` : ''}` : 'Got worse: not measured yet (the check after the copy has not finished)'}`;
+
   const sentence = [
-    `The copy has ${plural(result.pages.length, 'page')}`,
+    `The copy has ${plural(copiedPages(result).length, 'page')}`,
     match != null ? `. How closely it matches the original: ${m.label.toLowerCase()} (${match}/100).` : '.',
     s ? ` Compared with the original, ${plural(better, 'thing')} got better${s.regressed ? `, ${s.regressed} got worse` : ''} and ${s.open ?? 0} still need${(s.open ?? 0) === 1 ? 's' : ''} work.` : '',
   ].join('');
 
   return (
     <Card icon={Trophy} title="How the copy turned out">
+      <p className={styles.sentence}><strong>{summaryText}</strong></p>
       <p className={styles.sentence}>{sentence}</p>
 
       {s && (

@@ -1,0 +1,257 @@
+/* The account at the foot of the sidebar: a profile button and the menu it opens (AccountMenu.jsx). */
+.account {
+  padding: var(--sp-2) var(--sp-3) var(--sp-1);
+  border-top: 1px solid var(--hairline);
+}
+
+.account[data-compact] {
+  display: grid;
+  place-items: center;
+  padding: var(--sp-2) 0;
+}
+
+/* Profile button: initials, name and address, and a chevron that says it opens something. */
+.trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px 8px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  transition: background 160ms var(--ease), border-color 160ms var(--ease), box-shadow 160ms var(--ease);
+}
+
+.account[data-compact] .trigger {
+  width: auto;
+  padding: 4px;
+  border-radius: var(--radius-pill);
+}
+
+.trigger:hover,
+.trigger[data-open] {
+  border-color: var(--border);
+  background: var(--surface-2);
+}
+
+.trigger[data-open] {
+  box-shadow: var(--shadow-sm);
+}
+
+.trigger:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-pill);
+  background: var(--ink);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.08), 0 0 0 2px var(--surface), 0 0 0 3px rgba(var(--accent-rgb), 0.35);
+  color: var(--on-dark);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: box-shadow 200ms var(--ease);
+}
+
+.trigger:hover .avatar,
+.trigger[data-open] .avatar {
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.08), 0 0 0 2px var(--surface-2), 0 0 0 3px var(--accent);
+}
+
+.avatar[data-size='lg'] {
+  width: 44px;
+  height: 44px;
+  box-shadow: none;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.who {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.name,
+.email,
+.headEmail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.name {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.email {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.chevron {
+  flex: none;
+  color: var(--faint);
+  transition: color 160ms var(--ease);
+}
+
+.trigger:hover .chevron,
+.trigger[data-open] .chevron {
+  color: var(--text);
+}
+
+/* The menu floats above the page (position fixed: the sidebar clips what overflows it). */
+.menu {
+  position: fixed;
+  z-index: 50;
+  width: 260px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  transform-origin: bottom left;
+  animation: var(--k-fade-up) 180ms var(--ease) both;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 16px 14px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface-warm);
+}
+
+.headText {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.headName {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.headEmail {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0 0;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 8px;
+  border: 1px solid rgba(var(--accent-rgb), 0.25);
+  border-radius: var(--radius-pill);
+  background: var(--accent-tint);
+  color: var(--accent-hover);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.tag[data-kind='ok'] {
+  border-color: var(--ok-border);
+  background: var(--ok-tint);
+  color: var(--ok);
+}
+
+.items {
+  display: grid;
+  padding: 6px;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-align: left;
+  transition: background 140ms var(--ease), color 140ms var(--ease);
+}
+
+.item svg {
+  flex: none;
+  color: var(--muted);
+  transition: color 140ms var(--ease), transform 200ms var(--ease);
+}
+
+.item:hover,
+.item:focus-visible {
+  outline: none;
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.item:hover svg,
+.item:focus-visible svg {
+  color: var(--text);
+  transform: translateX(1px);
+}
+
+.item[data-kind='out']:hover,
+.item[data-kind='out']:focus-visible {
+  background: var(--bad-tint);
+  color: var(--bad);
+}
+
+.item[data-kind='out']:hover svg,
+.item[data-kind='out']:focus-visible svg {
+  color: var(--bad);
+}
+
+.item:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menu {
+    animation: none;
+  }
+  .trigger,
+  .avatar,
+  .item,
+  .item svg {
+    transition: none;
+  }
+}

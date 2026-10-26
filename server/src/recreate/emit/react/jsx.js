@@ -2,6 +2,9 @@
 // file only knows how React spells things:
 //   - attribute names (class → className, for → htmlFor, srcset → srcSet, …), boolean attributes,
 //     `style` strings → objects, value/checked/selected → their default* props (no controlled inputs);
+//     on a custom element (a name with a hyphen) React writes every prop as the attribute it is named, so
+//     there the attributes keep their HTML names (`for`, `tabindex`, `checked=""`): only class → className
+//     (which React maps back to class) and the style object are React's;
 //   - text is written as a JS string whenever JSX would change it (JSX trims lines and decodes `&amp;`),
 //     and every attribute value that is not plainly safe is written as an expression, so the markup
 //     React renders is the markup the HTML emitter writes;
@@ -25,8 +28,8 @@ const PROP = {
   nomodule: 'noModule', novalidate: 'noValidate', playsinline: 'playsInline', readonly: 'readOnly', referrerpolicy: 'referrerPolicy',
   rowspan: 'rowSpan', spellcheck: 'spellCheck', srcdoc: 'srcDoc', srclang: 'srcLang', srcset: 'srcSet', tabindex: 'tabIndex', usemap: 'useMap',
 };
-// Attributes React renders from a boolean prop.
-const BOOLEAN = new Set([
+// Attributes React renders from a boolean prop (shared with convert/document.js, which converts rendered HTML).
+export const BOOLEAN = new Set([
   'allowfullscreen', 'async', 'autofocus', 'autoplay', 'checked', 'controls', 'default', 'defer', 'disabled', 'disablepictureinpicture',
   'disableremoteplayback', 'formnovalidate', 'hidden', 'inert', 'ismap', 'itemscope', 'loop', 'multiple', 'muted', 'nomodule', 'novalidate',
   'open', 'playsinline', 'readonly', 'required', 'reversed', 'selected',
@@ -152,14 +155,20 @@ function selectedValue(node) {
   return found;
 }
 
+/** A custom element: React sets its props as attributes under the names given (htmlFor would become htmlfor). */
+const isCustomElement = (tag) => String(tag).includes('-');
+
 function elementProps(d, node) {
   const props = [];
   if (d.id) props.push(attr('id', d.id));
   if (d.class) props.push(attr('className', d.class));
+  const custom = isCustomElement(d.tag);
   for (const a of d.attrs) {
     const lower = a.name.toLowerCase();
     if (lower === 'style') {
       props.push(attr('style', styleObject(a.value)));
+    } else if (custom) {
+      props.push(attr(lower, a.bare ? '' : a.value));
     } else if (a.bare) {
       if (!BOOLEAN.has(lower)) props.push(attr(propName(lower), ''));
       else if (lower === 'checked') props.push('defaultChecked');

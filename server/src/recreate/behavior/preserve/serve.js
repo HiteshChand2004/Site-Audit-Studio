@@ -4,7 +4,7 @@
 // the content types are right, pages are revalidated, and the site's other files may be cached for an hour. Images, fonts
 // and video, already compressed, are sent as they are. Serves one folder on 127.0.0.1 and nothing outside it.
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { brotliCompressSync, gzipSync, constants } from 'node:zlib';
 import path from 'node:path';
 import { typeExtOf } from '../../verify/server.js';
@@ -36,6 +36,17 @@ export function serveCopy(dir) {
     if (!file.startsWith(root)) {
       res.writeHead(403).end();
       return;
+    }
+    // A page's address in the forms a static host answers: a folder without its slash is sent to the folder (GitHub Pages,
+    // nginx, Netlify), and an address with no extension is answered from its .html file when there is no folder ("clean URLs").
+    if (!rel.endsWith('/') && !path.extname(rel)) {
+      const isDir = await stat(file).then((s) => s.isDirectory(), () => false);
+      if (isDir && (await stat(path.join(file, 'index.html')).then((s) => s.isFile(), () => false))) {
+        const query = (req.url ?? '').includes('?') ? (req.url ?? '').slice((req.url ?? '').indexOf('?')) : '';
+        res.writeHead(301, { location: `${encodeURI(rel)}/${query}` }).end();
+        return;
+      }
+      if (!isDir && (await stat(`${file}.html`).then((s) => s.isFile(), () => false))) file = `${file}.html`;
     }
     try {
       const ext = typeExtOf(file);

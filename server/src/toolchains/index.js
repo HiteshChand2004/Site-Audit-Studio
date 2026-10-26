@@ -1,56 +1,86 @@
 // Build toolchains of the non-HTML stacks. They live in server/toolchains/<id>/ (own package.json, own
-// node_modules) and are installed on demand (`npm run setup:toolchains -w server -- react-vite`), so the
-// main install stays light. Recreate builds a stack's project with the toolchain it pins; the zip's own
-// package.json pins the same versions.
+// package-lock.json, own node_modules) and are installed on demand (`npm run setup:toolchains -w server -- react-vite`),
+// so the main install stays light. The lockfile pins every package, the ones underneath included, and the setup installs
+// exactly it (`npm ci`). Recreate builds a stack's project with the toolchain it pins; the zip's own package.json pins the
+// same direct versions.
 import { readFileSync } from 'node:fs';
-import { readdir, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-export const TOOLCHAINS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'toolchains');
-export const toolchainDir = (id) => path.join(TOOLCHAINS_DIR, id);
+import { TOOLCHAINS_DIR, toolchainDir } from '../config/paths.js';
+
+export { TOOLCHAINS_DIR, toolchainDir };
 const ID = /^[a-z][a-z0-9-]*$/;
+export const LOCKFILE = 'package-lock.json';
 
 const readJson = (file) => readFile(file, 'utf8').then(JSON.parse, () => null);
 
-/** Versions of every installed copy of `name`: at the top of node_modules and one level down (inside another package). */
-async function overrideCopies(dir, name) {
-  const root = path.join(dir, 'node_modules');
-  const found = [];
-  const top = await readJson(path.join(root, ...name.split('/'), 'package.json'));
-  if (top?.version) found.push(top.version);
-  const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
-  for (const e of entries) {
-    if (!e.isDirectory() || e.name.startsWith('.')) continue;
-    const owners = e.name.startsWith('@') ? (await readdir(path.join(root, e.name)).catch(() => [])).map((n) => path.join(e.name, n)) : [e.name];
-    for (const owner of owners) {
-      const nested = await readJson(path.join(root, owner, 'node_modules', ...name.split('/'), 'package.json'));
-      if (nested?.version) found.push(nested.version);
-    }
+/** This machine's C library on Linux ('glibc' | 'musl'), which decides which native build of a package npm installs. */
+function libc() {
+  if (process.platform !== 'linux') return null;
+  try {
+    return process.report.getReport().header.glibcVersionRuntime ? 'glibc' : 'musl';
+  } catch {
+    return 'glibc';
   }
-  return found;
 }
+
+/** An `os` / `cpu` / `libc` list of the lockfile ("linux", "!win32") allows this value. */
+const allows = (list, value) => !list?.length || (list.some((x) => !x.startsWith('!'))
+  ? list.includes(value) : !list.includes(`!${value}`));
+
+/**
+ * An optional package that must be there: a native build for this system (`os` / `cpu` / `libc` naming it). One for another
+ * system is skipped by design, and npm may leave out any other optional package (one that does not fit, a wasm fallback).
+ */
+const meantForHere = (entry) => Boolean(entry.os || entry.cpu || entry.libc)
+  && allows(entry.os, process.platform) && allows(entry.cpu, process.arch) && (!entry.libc || allows(entry.libc, libc()));
 
 /**
  * @returns {Promise<{ id: string, dir: string, defined: boolean, installed: boolean, missing: string[], versions: Record<string,string>, setup: string }>}
- *   installed = every dependency in its package.json has an installed copy.
+ *   installed = every package of the lockfile is installed at its place with the lockfile's version (an optional package
+ *   meant for another system may be absent), and the lockfile still matches package.json.
  */
 export async function toolchainStatus(id) {
   const dir = ID.test(id) ? toolchainDir(id) : null;
   const pkg = dir && (await readJson(path.join(dir, 'package.json')));
   const base = { id, dir, defined: Boolean(pkg), installed: false, missing: [], versions: {}, setup: `npm run setup:toolchains -w server -- ${id}` };
   if (!pkg) return base;
-  for (const name of Object.keys({ ...pkg.dependencies, ...pkg.devDependencies })) {
-    const installed = await readJson(path.join(dir, 'node_modules', ...name.split('/'), 'package.json'));
-    if (installed?.version) base.versions[name] = installed.version;
-    else base.missing.push(name);
+  return { ...base, ...(await lockedInstall(dir, pkg)) };
+}
+
+/**
+ * The folder's node_modules held against its lockfile (the rule of toolchainStatus, for any folder).
+ * @param {string} dir
+ * @param {object} pkg  its package.json
+ * @returns {Promise<{ installed: boolean, missing: string[], versions: Record<string,string> }>}  versions: the direct packages
+ */
+export async function lockedInstall(dir, pkg) {
+  const base = { installed: false, missing: [], versions: {} };
+  const lock = await readJson(path.join(dir, LOCKFILE));
+  const wanted = { ...pkg.dependencies, ...pkg.devDependencies };
+  if (!lock?.packages) {
+    base.missing.push(LOCKFILE);
+    return base;
   }
-  // Pinned transitive packages (`overrides`): an install made before a pin, with another version, needs the setup again.
-  // npm may place the pinned copy at the top or inside the package that needs it (node_modules/vite/node_modules/rollup).
-  for (const [name, want] of Object.entries(pkg.overrides ?? {})) {
-    const copies = await overrideCopies(dir, name);
-    if (copies.length && copies.every((v) => v === want)) base.versions[name] = want;
-    else base.missing.push(`${name}@${want}`);
+  // A package.json changed without its lockfile: npm ci refuses it, and so does this check.
+  const root = lock.packages[''] ?? {};
+  const locked = { ...root.dependencies, ...root.devDependencies };
+  for (const [name, spec] of Object.entries(wanted)) {
+    if (locked[name] !== spec) base.missing.push(`${LOCKFILE} out of date for ${name}@${spec}`);
+  }
+  for (const [where, entry] of Object.entries(lock.packages)) {
+    if (!where || entry.link) continue;
+    const name = where.slice(where.lastIndexOf('node_modules/') + 'node_modules/'.length);
+    // A pinned package underneath (`overrides`) must be locked at its pin wherever it sits.
+    const pin = pkg.overrides?.[name];
+    if (typeof pin === 'string' && entry.version !== pin) base.missing.push(`${LOCKFILE} out of date for ${name}@${pin}`);
+    const installed = await readJson(path.join(dir, ...where.split('/'), 'package.json'));
+    if (installed?.version === entry.version) {
+      if (where === `node_modules/${name}` && name in wanted) base.versions[name] = installed.version;
+    } else if (installed || !entry.optional || meantForHere(entry)) {
+      base.missing.push(`${name}@${entry.version}${installed ? ` (installed ${installed.version})` : ''}`);
+    }
   }
   base.installed = base.missing.length === 0;
   return base;

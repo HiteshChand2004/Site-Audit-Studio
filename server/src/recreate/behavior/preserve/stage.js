@@ -8,18 +8,43 @@ import { gzipSync } from 'node:zlib';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { liftSite, localOfOutPath } from './asis.js';
-import { packLifted } from './pack.js';
+import { packLifted, servedDir } from './pack.js';
+import { buildConvertedReact, convertToReact, REACT_EXPORT_DIR, verifyConverted } from '../../convert/react.js';
+import { buildConverted, convertToNext, dropBuildFolder, EXPORT_DIR } from '../../convert/next.js';
+import { buildConvertedMern, convertToMern, MERN_EXPORT_DIR, verifyConvertedMern } from '../../convert/mern.js';
 import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
-import { checkCopy, excludedHostsOf, formsInCopy, probeOriginal } from './check.js';
+import { writeLockfiles } from '../../../toolchains/lockfile.js';
+import { checkCopy, excludedHostsOf, fixGate, formsInCopy, NOISE_SHOTS, probeOriginal } from './check.js';
+import { formRoutesOfCopy, formsReadmeSection } from '../../../copy/formRoutes.js';
+import { fixAsIsCopy, revertPage } from '../../../copy/fixAsIs.js';
+import { addressForCopy } from '../../../copy/address.js';
+import { measureServed, servedOutcome } from '../../../copy/served.js';
 import { slugFor } from '../../discover.js';
 import { serveCopy } from './serve.js';
+import { domainLockedParts, lockedItems } from './domainLock.js';
+import { fetchLlmsTxt } from '../../../audit/robots.js';
 import { runLighthouse } from '../../../audit/lighthouse/run.js';
 import { RecreateError } from '../../errors.js';
+import { openLinkChecker } from '../../../copy/linkBrowser.js';
+import { linkCounts, linkPass } from '../../../copy/linkPass.js';
+import { copyChecksOf } from '../../../copy/checks.js';
+import { issueLogger } from '../../../copy/serverLog.js';
+import { LOGS_DIR } from '../../../config/paths.js';
 
 /** The stacks an as-is copy can be packaged into (the plain copy and the three app stacks). */
 export const ASIS_STACKS = ['html', 'react-vite', 'nextjs', 'mern'];
-const PORT = { 'react-vite': 4502, nextjs: 4503, mern: 4501 };
+/**
+ * The stacks whose copy is converted into real code (recreate/convert/): the words the progress and the report use, the writer,
+ * its build, the check of the built pages against the as-is pages (where the stack has one), the folder the build writes, and
+ * what runs it: `static` (the export is static files, served as a static host serves them) or `server` (the project's own
+ * server: MERN, whose Express server serves the built client and stores the forms).
+ */
+const CONVERTERS = {
+  'react-vite': { code: 'React', project: 'React + Vite', convert: convertToReact, build: buildConvertedReact, verify: verifyConverted, exportDir: REACT_EXPORT_DIR, runs: 'static' },
+  nextjs: { code: 'Next.js', project: 'Next.js', convert: convertToNext, build: buildConverted, verify: null, exportDir: EXPORT_DIR, runs: 'static' },
+  mern: { code: 'React', project: 'MERN', convert: convertToMern, build: buildConvertedMern, verify: verifyConvertedMern, exportDir: MERN_EXPORT_DIR, runs: 'server' },
+};
 /** The lifted copy and its page set, kept in the job's folder: a repack for another stack starts from them. */
 export const ASIS_DIR = 'as-is';
 export const ASIS_PAGES_FILE = path.join(ASIS_DIR, 'pages.json');
@@ -44,6 +69,18 @@ async function javascriptOf(dir) {
   };
   await walk(dir);
   return { files, bytes, gzipBytes };
+}
+
+/**
+ * The report's page list of a repack (another stack from a kept copy). Such a job runs no capture, which is what fills
+ * `report.pages` in a copy made from the site, so it would say "0 pages copied": the earlier job's list is taken (without its
+ * capture folder, which stays in that job), else one entry per page of the saved page set.
+ * @returns {Promise<{ url: string, path: string, outPath: string }[]>}
+ */
+export async function repackPages(fromDir, pages) {
+  const earlier = await readFile(path.join(fromDir, 'report.json'), 'utf8').then(JSON.parse, () => null);
+  const byOutPath = new Map((earlier?.pages ?? []).map(({ slug, ...p }) => [p.outPath, p]));
+  return pages.map((p) => byOutPath.get(p.outPath) ?? { url: p.url, path: new URL(p.url).pathname, outPath: p.outPath, source: 'reused' });
 }
 
 /**
@@ -78,6 +115,66 @@ export function scoresOf(lhr) {
   };
 }
 
+/** The new site's address, or null when none was set (the job's base address is then the original's own). */
+export function newSiteOf(baseUrl, siteUrl) {
+  try {
+    const host = (u) => new URL(u).hostname.toLowerCase().replace(/^www\./, '');
+    return baseUrl && host(baseUrl) !== host(siteUrl) ? new URL(baseUrl).origin : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The safe fixes (copy/fixAsIs.js), then the proof: every page they changed is compared with itself before them (fixGate);
+ * a page whose fixes are not invisible gets its lifted HTML back, and its fixes are listed as reverted (reason d).
+ * A gate that cannot decide (an error) reverts too: a fix is kept only when it is shown to change nothing.
+ */
+export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped = null, log = () => {}, fetchLlms = null }) {
+  await rm(gateDir, { recursive: true, force: true });
+  await cp(copyDir, gateDir, { recursive: true });
+  try {
+    const fixed = await fixAsIsCopy({
+      dir: copyDir, siteUrl, newSiteUrl, fetchLlms,
+      pages: pages.map((p) => ({ path: localOfOutPath(p.outPath), outPath: p.outPath, url: p.url })),
+    });
+    const changed = fixed.pages.filter((p) => p.fixes.length);
+    const gate = [];
+    if (changed.length) {
+      const a = await serveCopy(copyDir);
+      const b = await serveCopy(gateDir);
+      try {
+        for (const p of changed) {
+          const g = await fixGate(browser, a.url.replace(/\/$/, ''), b.url.replace(/\/$/, ''), p.path)
+            .catch((err) => ({ path: p.path, invisible: false, error: String(err?.message ?? err).split('\n')[0].slice(0, 160) }));
+          gate.push(g);
+          log(`fixes ${p.path} ${JSON.stringify(g)}`);
+          if (!g.invisible) {
+            await revertPage(copyDir, p.outPath, fixed.originals.get(p.outPath));
+            p.reverted = { reason: 'd', why: g.error ? `the check could not prove them invisible: ${g.error}` : `they changed the page (${g.sizeChanged ? `its height ${g.heights?.[0]} → ${g.heights?.[1]} px` : `${g.changedPx} px where the page does not move by itself`}${g.newErrors?.length ? `, ${g.newErrors.length} new console error(s)` : ''})` };
+          }
+        }
+      } finally {
+        await a.close();
+        await b.close();
+      }
+    }
+    const counts = {};
+    for (const p of fixed.pages) if (!p.reverted) for (const f of p.fixes) counts[f.kind] = (counts[f.kind] ?? 0) + 1;
+    return {
+      counts,
+      total: Object.values(counts).reduce((s, n) => s + n, 0),
+      pages: fixed.pages.map((p) => ({ path: p.path, fixes: p.fixes, ...(p.reverted && { reverted: p.reverted }) })),
+      reverted: fixed.pages.filter((p) => p.reverted).length,
+      open: [...(addressSkipped ? [{ kind: 'address', page: null, ...addressSkipped }] : []), ...fixed.open],
+      files: fixed.files,
+      gate,
+    };
+  } finally {
+    await rm(gateDir, { recursive: true, force: true });
+  }
+}
+
 /**
  * The as-is stage. `ctx.asIs`: { stack, pages?, fromDir? } — `fromDir` is the folder of an earlier as-is job whose copy is
  * reused (a repack): its page set and lift are taken from there, and nothing is captured or lifted again.
@@ -98,6 +195,7 @@ export async function asIsStage(ctx) {
     pages = saved.pages;
     excludedHosts = saved.excludedHosts;
     lifted = { ...saved.lift, reusedFrom: path.basename(fromDir) };
+    ctx.report.pages = await repackPages(fromDir, pages);
   } else {
     pages = ctx.discovery?.pages ?? [];
     if (!pages.length) throw new RecreateError('No page was captured for the as-is copy.');
@@ -111,7 +209,10 @@ export async function asIsStage(ctx) {
       ctx.progress(0.1, 'Reusing the lifted copy');
       await rm(copyDir, { recursive: true, force: true });
       await mkdir(path.dirname(copyDir), { recursive: true });
-      await cp(path.join(fromDir, ASIS_DIR, 'copy'), copyDir, { recursive: true });
+      // The copy as it was lifted, before the fixes of that job (an older job kept only its fixed copy: that one, then).
+      const lifted = path.join(fromDir, ASIS_DIR, 'lifted');
+      const from = (await readdir(lifted).then((l) => l.length > 0, () => false)) ? lifted : path.join(fromDir, ASIS_DIR, 'copy');
+      await cp(from, copyDir, { recursive: true });
       // The baseline pictures travel with the copy: a repack needs no capture and no live site.
       await cp(path.join(fromDir, ASIS_DIR, 'baseline'), path.join(ctx.dir, ASIS_DIR, 'baseline'), { recursive: true }).catch(() => {});
       // This job keeps the lifted copy and its page set too: a later repack takes them from here, and the retention that keeps
@@ -147,13 +248,39 @@ export async function asIsStage(ctx) {
         createdAt: new Date().toISOString(), pages: pages.map((p) => ({ url: p.url, outPath: p.outPath })), excludedHosts, lift: lifted,
       }, null, 1)}\n`, 'utf8');
     }
+    // The copy as lifted is kept apart: the fixes below change copyDir, and a later repack starts again from this one.
+    const liftedDir = path.join(ctx.dir, ASIS_DIR, 'lifted');
+    await rm(liftedDir, { recursive: true, force: true });
+    await cp(copyDir, liftedDir, { recursive: true });
     report.excludedByRule = excludedHosts;
     report.lift = lifted;
     // The addresses the copy answers from the original (mapped, the same as the original, two sizes of one path): see complete.js.
     report.sameOrigin = lifted?.completion?.sameOrigin ?? null;
+    // Files the original serves in pieces (?range=): held whole and sliced by the copy (ranged.js).
+    report.ranged = lifted?.completion?.ranged ?? null;
 
     // A preload of a file the copy does not hold is removed before packaging, so every stack inherits it (see preloads.js).
     report.preloadsRemoved = await dropMissingPreloads(copyDir);
+    // Copy my site: every link of the copy is re-checked in a real browser and the safe fixes are written into the copy
+    // before it is packaged (copy/linkPass.js). The copy is otherwise left exactly as it was lifted.
+    ctx.progress(0.3, 'Checking the links');
+    const linkChecker = await openLinkChecker().catch((err) => ({ error: String(err.message ?? err).slice(0, 200) }));
+    try {
+      report.links = linkChecker.check
+        ? await linkPass({ dir: copyDir, originalUrl: siteUrl, pages: pages.map((p) => ({ path: localOfOutPath(p.outPath) })), checker: linkChecker })
+        : { error: linkChecker.error, links: [], changed: 0, files: 0, skippedForTime: 0 };
+    } finally {
+      await linkChecker.close?.();
+    }
+    // Copy my site §2: the fixes that change neither the look nor the behaviour, each page proven unchanged by them.
+    ctx.progress(0.33, 'Fixing what can be fixed without changing the look');
+    // The new address is written only when usable and confirmed for this copy (copy/address.js); else none is, and that is open.
+    const address = addressForCopy({ saved: newSiteOf(ctx.baseUrl, siteUrl), confirmed: ctx.asIs?.address ?? null, siteUrl });
+    report.address = address.origin ? { used: address.origin } : { used: null, ...address.skipped };
+    report.fixes = await fixAndProve({
+      browser, copyDir, gateDir: path.join(ctx.dir, ASIS_DIR, 'unfixed'), pages, siteUrl,
+      newSiteUrl: address.origin, addressSkipped: address.skipped, log: (m) => ctx.progress(0.34, m), fetchLlms: fetchLlmsTxt,
+    });
     ctx.progress(0.35, 'Packaging the copy');
     await rm(outDir, { recursive: true, force: true });
     if (stack === 'html') {
@@ -173,15 +300,56 @@ export async function asIsStage(ctx) {
         'The file `.nojekyll` (empty) is in this folder on purpose: without it GitHub Pages leaves out folders whose names start with `_`,',
         'and this copy keeps the original\'s `_next` folder. Keep the file when you upload.',
         '',
+        // Where each form's data goes in this download (copy/formRoutes.js).
+        formsReadmeSection(await formRoutesOfCopy(copyDir, pages)),
       ].join('\n'), 'utf8');
+    } else if (CONVERTERS[stack]) {
+      // The finished copy converted into real code of the stack (recreate/convert/): pages and components, prerendered and never
+      // hydrated, so no runtime is added to what the original loads (React + Vite also holds every built page against its as-is
+      // page: same DOM, no file added). If the conversion, its build or that check fails, the copy is packaged as static files
+      // inside a project of the stack instead (the earlier route), and the report says so: a download never fails.
+      const conv = CONVERTERS[stack];
+      ctx.progress(0.4, `Converting the copy into ${conv.code} pages and components`);
+      try {
+        const converted = await conv.convert({ copyDir, outDir, pages, pageUrl: siteUrl });
+        ctx.progress(0.45, `Building the ${conv.project} project`);
+        const built = await conv.build(outDir);
+        const verified = conv.verify ? await conv.verify({ copyDir, outDir, pages }) : null;
+        report.build = built?.steps?.map((s) => ({ label: s.label, ms: s.ms })) ?? null;
+        report.convert = { mode: 'converted', ...converted, ...(verified && { verified }) };
+      } catch (err) {
+        const why = String(err?.message ?? err).slice(0, 400);
+        ctx.report.warnings.push(`The copy could not be converted into ${conv.code} pages and components (${why.split('\n')[0]}); it is packaged as static files inside a ${conv.project} project instead.`);
+        await rm(outDir, { recursive: true, force: true });
+        await packLifted({ stack, copyDir, outDir, pageUrl: siteUrl });
+        ctx.progress(0.45, 'Building the stack');
+        const built = await buildStack(stack, outDir);
+        report.build = built?.steps?.map((s) => ({ label: s.label, ms: s.ms })) ?? null;
+        report.convert = { mode: 'packed', failed: why };
+      }
     } else {
       await packLifted({ stack, copyDir, outDir, pageUrl: siteUrl });
       ctx.progress(0.45, 'Building the stack');
       const built = await buildStack(stack, outDir);
       report.build = built?.steps?.map((s) => ({ label: s.label, ms: s.ms })) ?? null;
     }
+    // The lockfile of every package of the project (the top, client/, server/), cut from the toolchain it was just built with:
+    // `npm ci` in the download installs exactly the packages this copy was built and checked with.
+    if (stack !== 'html') report.lockfiles = await writeLockfiles(outDir, { stack });
+    const converted = report.convert?.mode === 'converted';
+    // A converted copy run by its own server (MERN) is served by that server; a static export is static files.
+    const ownServer = converted && CONVERTERS[stack].runs === 'server';
     report.forms = await formsInCopy(copyDir, pages.map((p) => p.outPath));
-    report.needsAPerson = report.forms ? [{ kind: 'form', count: report.forms, why: 'its data is never sent to the original site; connect FORM_ENDPOINT in sas-forms.json' }] : [];
+    // Where each form's data goes in the downloaded copy (copy/formRoutes.js, the form guard's rules); a converted copy's own
+    // list (MERN: the forms its server stores) says it for that stack.
+    report.formRoutes = converted && report.convert.forms ? report.convert.forms : await formRoutesOfCopy(copyDir, pages);
+    // A form of another service, or a mail form, goes where the original sent it; one that went to the original's own server
+    // needs a person (FORM_ENDPOINT), except in a converted MERN copy, whose server stores it unless it is one it must not.
+    const waiting = report.formRoutes.filter((f) => f.goesTo === 'not-connected' || f.goesTo === 'not-stored').length;
+    report.needsAPerson = waiting ? [{
+      kind: 'form', count: waiting,
+      why: ownServer ? 'it went to the original\'s own server and is one the copy\'s server does not store (a sign-in, an upload, a search, a script\'s own address); the forms list says which' : 'it went to the original\'s own server and is never sent there from the copy; connect FORM_ENDPOINT in sas-forms.json',
+    }] : [];
     report.javascript = await javascriptOf(copyDir);
 
     ctx.progress(0.55, 'Running the copy and checking it');
@@ -190,26 +358,89 @@ export async function asIsStage(ctx) {
       const served = await serveCopy(copyDir);
       servers.push(served);
       base = served.url.replace(/\/$/, '');
-    } else {
-      const s = await startStack(stack, outDir, PORT[stack]);
+    } else if (ownServer) {
+      // The project's own server (MERN: Express serving client/dist and the forms). Submissions are kept in memory while it is
+      // checked, so the form check sees what a visitor sees once MongoDB is set.
+      const s = await startStack(stack, outDir, { env: { FORMS_STORE: 'memory', MONGODB_URI: '' } });
       servers.push(s);
       base = s.url;
+    } else if (converted) {
+      // A static export: served as the static files it is (what any static host does); there is no server of the stack to run.
+      const served = await serveCopy(path.join(outDir, CONVERTERS[stack].exportDir));
+      servers.push(served);
+      base = served.url.replace(/\/$/, '');
+    } else {
+      const s = await startStack(stack, outDir);
+      servers.push(s);
+      base = s.url;
+    }
+    // What the packaged copy really serves: a fix counts only where it takes effect (copy/served.js).
+    if (report.fixes) {
+      const fixedPages = report.fixes.pages.filter((p) => !p.reverted && p.fixes.length)
+        .map((p) => ({ path: p.path, outPath: pages.find((q) => localOfOutPath(q.outPath) === p.path)?.outPath ?? 'index.html', kinds: [...new Set(p.fixes.map((f) => f.kind))] }));
+      // A converted static export: its security headers are the host's, as for plain HTML; a converted MERN copy's server sends them.
+      report.fixes.served = await measureServed({ base, stack, copyDir, fixedPages, files: report.fixes.files?.written ?? [], ...(converted && !ownServer && { takeEffect: 'host' }) })
+        .catch((err) => ({ error: String(err?.message ?? err).slice(0, 160) }));
     }
     // The original is asked once: when it does not answer, the checks that need it say so and the copy is still finished.
     // The baseline is the capture's own picture of each page (kept with the lift), so the visual check does not need the site.
     const originalReachable = await probeOriginal(siteUrl);
+    // Per page: the capture's picture (`<slug>.webp`) and the original's own pictures from an earlier check (`<slug>@<width>.png`,
+    // written below whenever the original is compared live), which the check prefers: the capture's picture is taken without
+    // the scroll-through, so a page whose sections appear on scroll has them blank in it (makememo: 4.7 % off an identical copy).
+    const baselineDir = path.join(ctx.dir, ASIS_DIR, 'baseline');
     const baselines = {};
+    const slugOfPath = {};
     for (const p of pages) {
-      const png = await readFile(path.join(ctx.dir, ASIS_DIR, 'baseline', `${slugFor(p.outPath)}.webp`)).catch(() => null);
-      if (png) baselines[localOfOutPath(p.outPath)] = png;
+      const slug = slugFor(p.outPath);
+      const one = {};
+      const capture = await readFile(path.join(baselineDir, `${slug}.webp`)).catch(() => null);
+      if (capture) one.capture = capture;
+      for (const width of [1440, 390]) {
+        // The original's own pictures of an earlier live check: `<slug>@<width>.png`, then `-2`, `-3` (one per round, so the
+        // baseline check maps the original's noise too; an older job kept one).
+        const pngs = [];
+        for (let i = 1; i <= NOISE_SHOTS; i++) {
+          const png = await readFile(path.join(baselineDir, `${slug}@${width}${i > 1 ? `-${i}` : ''}.png`)).catch(() => null);
+          if (png) pngs.push(png);
+        }
+        if (pngs.length) one[width] = pngs;
+      }
+      slugOfPath[localOfOutPath(p.outPath)] = slug;
+      if (Object.keys(one).length) baselines[localOfOutPath(p.outPath)] = one;
     }
-    report.baseline = { pages: Object.keys(baselines).length, of: pages.length };
+    report.baseline = {
+      pages: Object.keys(baselines).length,
+      of: pages.length,
+      originalPictures: Object.values(baselines).filter((b) => b[1440] || b[390]).length,
+    };
+    const keepOriginalPicture = async (pagePath, width, pngs) => {
+      await mkdir(baselineDir, { recursive: true });
+      for (const [i, png] of [pngs].flat().entries()) {
+        await writeFile(path.join(baselineDir, `${slugOfPath[pagePath]}@${width}${i ? `-${i + 1}` : ''}.png`), png).catch(() => {});
+      }
+    };
+    // The Plain HTML base: the same copy as plain files. It is the comparison when the original cannot be compared and no saved
+    // picture exists (docs/COPY-MY-SITE.md §4); the plain HTML stack needs none, it is the base.
+    let htmlBase = null;
+    if (stack !== 'html') {
+      const plain = await serveCopy(copyDir);
+      servers.push(plain);
+      htmlBase = plain.url.replace(/\/$/, '');
+    }
     const checks = await checkCopy({
-      browser, base, excludedHosts, originalReachable, baselines,
+      browser, base, excludedHosts, originalReachable, baselines, htmlBase, onOriginalPicture: keepOriginalPicture,
       pages: pages.map((p) => ({ path: localOfOutPath(p.outPath), url: p.url })),
       log: (m) => ctx.progress(0.55, m),
     });
     report.checks = checks;
+    // Outside services that serve their part only to the original's domain (domainLock.js): kept in the copy, refused there.
+    for (const p of checks.pages) {
+      p.domainLocked = await domainLockedParts(browser, base, p.path, p.original).catch((err) => {
+        ctx.progress(0.56, `outside services ${p.path}: ${String(err?.message ?? err).slice(0, 160)}`);
+        return [];
+      });
+    }
     if (!originalReachable) ctx.report.warnings.push('The original did not answer: the checks that compare with it say so; the copy and its download are complete.');
     const external = checks.pages.reduce((n, p) => n + p.offline.external.length, 0);
     report.safety = { safe: external === 0, mode: 'as-is', note: 'The original\'s own code is kept as it is; the check is that nothing leaves the copy.' };
@@ -228,8 +459,55 @@ export async function asIsStage(ctx) {
     const checked = ctx.audit && !ctx.audit.isDummy ? ctx.audit.scores?.desktop ?? null : null;
     report.lighthouse = { ...report.lighthouse, before: checked };
 
+    // Copy my site: the per-page checks, the open items and the server log (docs/COPY-MY-SITE.md §1, §5, §1h).
+    const copyPages = copyChecksOf(checks.pages, { copy: report.lighthouse?.after ?? null, original: null });
+    const openItems = copyPages.flatMap((p) => p.problems.map((pr) => ({
+      page: p.path,
+      check: pr.width ? `${pr.check} ${pr.width}px` : pr.check,
+      values: `${typeof pr.value === 'number' ? Math.round(pr.value * 100) / 100 : pr.value} (min ${typeof pr.min === 'number' ? Math.round(pr.min * 100) / 100 : pr.min})`,
+      tried: 'checked after the copy was made; no fallback rebuild in this run',
+      // A request the copy makes to another site (the original's own third-party script) is third-party code (reason a).
+      reason: checks.pages.find((x) => x.path === p.path)?.offline?.external?.length ? 'third_party' : 'unresolved',
+    })));
+    // No usable, confirmed new address: nothing in the copy names one (copy/address.js); the owner decides (reason c).
+    if (report.address && !report.address.used) {
+      openItems.unshift({ page: '/', check: 'new-site address', values: report.address.detail, tried: 'canonical, link previews, robots.txt, sitemap.xml and structured data were left without an address', reason: 'owner' });
+    }
+    // What the packaged copy serves decides what counts: headers only where its own server sends them; files and fixed pages
+    // that are not served are open, never fixed.
+    const served = report.fixes?.served && !report.fixes.served.error ? servedOutcome(report.fixes.served) : null;
+    if (served) openItems.push(...served.open.map((o) => ({ page: o.page ?? '/', ...o })));
+    openItems.push(...lockedItems(checks.pages));
+    const logOpen = issueLogger(LOGS_DIR);
+    for (const o of openItems) await logOpen({ site: new URL(siteUrl).hostname, stack, ...o });
+    // Every part the conversion kept as original HTML is recorded for the owner too (site, page, tag / attribute, reason).
+    for (const f of report.convert?.fallbacks ?? []) {
+      await logOpen({ site: new URL(siteUrl).hostname, stack, page: f.page, check: `kept as original HTML: <${f.tag}>${f.attribute ? ` ${f.attribute}` : ''} at ${f.where}`, values: f.reason, tried: 'kept as the original HTML inside its component; the page is unchanged', reason: 'converted' });
+    }
+    ctx.report.copy = {
+      stack,
+      pages: copyPages,
+      links: linkCounts(report.links?.links ?? []),
+      linkDecisions: report.links?.links ?? [],
+      linkError: report.links?.error ?? null,
+      openItems,
+      counts: { pages: copyPages.length, asIs: copyPages.length, rebuilt: 0 },
+      // The safe fixes kept (per kind), the pages whose fixes were reverted (reason d) and what was left for a person.
+      fixes: report.fixes ? {
+        counts: report.fixes.counts,
+        total: report.fixes.total,
+        reverted: report.fixes.pages.filter((p) => p.reverted).map((p) => ({ page: p.path, ...p.reverted })),
+        open: report.fixes.open,
+        // Site files the packaged copy really serves (measured); `_headers` is never one of them: it is a host setting.
+        files: (report.fixes.files?.written ?? []).filter((f) => f !== '_headers' && (!served || report.fixes.served.files[f] === 200)),
+        // Security headers counted as applied: sent by the copy's own server (Next.js, MERN); none for a static stack.
+        headers: served ? { applied: served.applied, takeEffect: report.fixes.served.takeEffect } : null,
+      } : null,
+    };
     ctx.report.asIs = report;
-    ctx.report.outputs[stack] = { status: 'ready', dir: path.join('stacks', stack), mode: 'as-is', pages: pages.map((p) => ({ outPath: p.outPath, path: localOfOutPath(p.outPath) })) };
+    // dist: the folder of the project that answers `/` (after the build above), so the preview and the re-audit serve the copy,
+    // not the project around it. The download still takes the whole project (`dir`).
+    ctx.report.outputs[stack] = { status: 'ready', dir: path.join('stacks', stack), dist: servedDir(stack, outDir), mode: 'as-is', pages: pages.map((p) => ({ outPath: p.outPath, path: localOfOutPath(p.outPath) })) };
     ctx.report.safety = report.safety;
     if (!report.safety.safe) ctx.report.warnings.push(`The as-is copy asked for ${external} address(es) off its own server; see the checks.`);
     ctx.progress(1, 'The as-is copy is ready');
@@ -237,5 +515,9 @@ export async function asIsStage(ctx) {
   } finally {
     for (const s of servers) await (s.stop ? s.stop() : s.close?.()).catch(() => {});
     await browser.close().catch(() => {});
+    // Next's build folder is only needed while the copy is built and checked (next start of a packed copy reads it): once the
+    // servers are stopped it goes. What is kept, previewed and zipped is the source and out/ (public/ for a packed copy);
+    // `npm run dev` and `npm run build` write their own .next, and "Package again" converts and builds from the kept as-is copy.
+    if (stack === 'nextjs') await dropBuildFolder(outDir).catch(() => {});
   }
 }

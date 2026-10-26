@@ -214,11 +214,11 @@ export function emitNext(ir) {
   files.set('README.md', lines(
     `# ${name}`,
     '',
-    'A Next.js (App Router, static export) site recreated from the rendered output of the original website by Site Audit Studio.',
+    'A Next.js (App Router, static export) site recreated from the rendered output of the original website by Remastly.',
     '',
     '## Run',
     '',
-    '    npm install',
+    '    npm ci             # installs exactly package-lock.json: the packages this site was built and checked with',
     '    npm run dev        # development server',
     '    npm run build      # static site in out/ (every page as <route>/index.html)',
     '    npm run serve      # serve out/ locally',

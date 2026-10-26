@@ -19,7 +19,7 @@ test('the packed Next.js copy serves its own /_next file, Next\'s own chunk, and
   const out = path.join(root, 'project');
   await packLifted({ stack: 'nextjs', copyDir: copy, outDir: out, pageUrl: 'https://site.test/' });
   await buildStack('nextjs', out, { timeoutMs: 8 * 60000 });
-  const server = await startStack('nextjs', out, 4540);
+  const server = await startStack('nextjs', out);
   // The server stops before its folder is removed (Windows keeps a running server's files locked).
   t.after(async () => { await server.stop(); await rm(root, { recursive: true, force: true }).catch(() => {}); });
 

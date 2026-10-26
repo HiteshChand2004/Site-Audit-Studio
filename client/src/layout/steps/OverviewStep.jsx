@@ -11,6 +11,7 @@ import { comparisonOf, copyShot, isReal, originalShot, platformOf, useSiteData }
 import { useProjects } from '../../store/useProjects.js';
 import { HOW } from '../Home.jsx';
 import styles from './OverviewStep.module.css';
+import { copiedPages } from '../../copiedPages.js';
 
 const titleOf = (item) => CHECKS[item.title]?.title ?? CHECKS[item.title?.split(' · ')[0]]?.title ?? item.title;
 
@@ -20,7 +21,7 @@ function FirstSteps({ project, onGo }) {
   return (
     <div className={styles.first}>
       <div className={styles.firstHead}>
-        <span className="eyebrow">Start here</span>
+        <span className="eyebrow intro">Start here</span>
         <h2 className={styles.firstTitle}>Four steps to a better copy of {hostOf(project.url)}</h2>
         <p className={styles.muted}>Each step unlocks the next. The original website is only read, never changed.</p>
       </div>
@@ -66,7 +67,7 @@ function Progress({ audit, result, stages, onGo }) {
       id: 'create',
       title: 'Make the copy',
       state: stages.copy,
-      text: result ? `${timeAgo(result.createdAt)} · ${plural(result.pages.length, 'page')} in ${stackById(result.stack).short}` : 'Not made yet',
+      text: result ? `${timeAgo(result.createdAt)} · ${plural(copiedPages(result).length, 'page')} in ${stackById(result.stack).short}` : 'Not made yet',
     },
     {
       id: 'compare',

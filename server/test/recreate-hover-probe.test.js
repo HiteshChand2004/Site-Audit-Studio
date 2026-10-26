@@ -85,3 +85,18 @@ body { margin: 0; font: 16px sans-serif }
   const css = found.hover.find((h) => h.tag === 'a' && h.source === 'css');
   assert.deepEqual(css?.changes?.['background-color'], ['rgb(10, 10, 10)', 'rgb(26, 26, 255)'], JSON.stringify(found.hover));
 });
+
+// The re-audit measures a copy with the original's hovers known: those elements are probed first, so a budget that runs out on
+// the page's first links (which do nothing on either side) still reaches what is compared. A copy of five working script
+// hovers read as "0 of 5" because the probe spent its time on five earlier links.
+test('elements asked for first are probed before the rest, in a budget that would not reach them in document order', async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(url);
+  const found = await captureInteractions(page, { budgetMs: 2500, maxHoverMs: 3000, first: ['a|itemnumber17', 'a|itemnumber18'] });
+  await page.close();
+  const probed = found.hover.filter((h) => h.source === 'probe' && h.changes?.['background-color']).map((h) => h.text);
+  assert.equal(found.stats.first, 2, JSON.stringify(found.stats));
+  assert.equal(found.stats.firstProbed, 2, JSON.stringify(found.stats));
+  assert.deepEqual(probed.slice(0, 2), ['Item number 17', 'Item number 18'], `probed in this order: ${probed.join(', ')}`);
+  assert.ok(probed.length < N - 1, `the short budget did not reach every element (${probed.length} of ${N}), so the order is what reached these two`);
+});

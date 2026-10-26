@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { db } from '../db/index.js';
-import { ConflictError, jobs } from '../audit/jobs.js';
+import { ConflictError, JobLimitError, jobs } from '../audit/jobs.js';
 import { PUBLIC_STEPS } from '../audit/index.js';
 import { streamJob } from '../jobs/sse.js';
 import { pageUrlOf } from '../recreate/inputs.js';
@@ -34,6 +34,8 @@ router.post('/:id/analyze', (req, res) => {
     if (err instanceof ConflictError) {
       return res.status(409).json({ error: err.message, analysisId: err.job.id });
     }
+    // The account's own limit (SAS_JOBS_PER_USER): no job id of this kind, so the app shows the sentence instead of following a job.
+    if (err instanceof JobLimitError) return res.status(409).json({ error: err.message, limit: 'user', busy: { kind: err.job.kind, projectId: err.job.projectId, jobId: err.job.id } });
     throw err;
   }
 });

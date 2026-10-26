@@ -270,7 +270,7 @@ Final as written in the spec's "Decisions (final)" section, 2026-10-15:
    styles) leaves the default path and stays behind a flag.
 4. **Footer marker + `noindex` on by default.** One "This is my own site" switch turns both off and allows islands. The marker
    region is masked in pixel tests.
-5. **Broken links** keep their `href` and are reported; never unlinked.
+5. **Broken links** ("Copy my site", docs/COPY-MY-SITE.md §3): a link is called broken only after repeated real-browser checks (401 / 403 / 429 / timeouts are "couldn't verify"). Safe internal links are fixed (wrong path or trailing slash → the copy's page; redirect → final address; http that works on https → https; confirmed 404 on the original → the copy's 404 page). Dead external links are never changed: they are flagged with a suggestion for the owner. Everything else is left unchanged and reported. The earlier rule ("never unlinked", links kept as they are) applies only to the clean rebuild path and is superseded for "Copy my site".
 6. **Lighthouse** on the homepage by default, configurable to the top N pages. The cheap checks (axe, console errors, broken
    assets, mobile overflow, every Phase 4 check) run on every page.
 7. **Language:** JavaScript, new folders added without restructuring existing ones, `// @ts-check` + JSDoc in new modules.

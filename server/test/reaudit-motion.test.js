@@ -5,7 +5,9 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { compareClicks, measureNewMotion, motionItems, summarize } from '../src/reaudit/motion.js';
+import { compareClicks, hoverBudgetFor, hoverFirstFor, measureNewMotion, motionItems, motionTimeFor, PAGE_BUDGET_MS, summarize } from '../src/reaudit/motion.js';
+import { FIRST_MS } from '../src/recreate/capture/interactions.js';
+import { loopsTimeFor, LOOPS_MAX_MS, scrollStepsFor } from '../src/recreate/capture/loops.js';
 import { compareAudits } from '../src/reaudit/compare/index.js';
 import { measureMotion } from '../src/recreate/capture/measure.js';
 import { launchBrowser } from '../src/audit/render.js';
@@ -256,4 +258,33 @@ test('click comparison: the fair close reading wins; unreached controls are not 
   // Reached and missing is still a real difference; an older capture without closesOwn falls back to closes.
   assert.deepEqual(compareClicks(was.slice(2), [], ['Go to slide 4'])[0].diff, ['does nothing in the copy']);
   assert.deepEqual(compareClicks([{ text: 'Menu', closes: 'escape' }], [{ text: 'Menu', closes: null }])[0].diff, ['Escape does not close it again (it does on the original)']);
+});
+
+test("a page's motion time follows the work: the loop capture's own estimate for that page, the hover and the click budgets", () => {
+  // The strip scan scrolls a window (80 % of the view) at a time while there is page below: none on one screen, 12 at most.
+  assert.equal(scrollStepsFor(900, 900), 0);
+  assert.equal(scrollStepsFor(2000, 900), 2);
+  assert.equal(scrollStepsFor(11654, 900), 12, "a 11 654 px page is scanned in 12 windows");
+  assert.equal(scrollStepsFor(100000, 900), 12, "never more than the cap");
+  const short = loopsTimeFor({ height: 900, view: 900 });
+  const long = loopsTimeFor({ height: 11654, view: 900 });
+  assert.ok(long > short + 12 * 2000, "a long page gets the time of its 12 windows");
+  assert.ok(long >= 40000 && long <= 55000, "about what the loop capture measured on such a page (48 s): " + long);
+  assert.ok(loopsTimeFor({ height: 900, view: 900, canvases: 2 }) > short + 2 * 4000, "every animated canvas may be recorded");
+  assert.equal(loopsTimeFor({ height: Infinity, view: 900, canvases: 99 }), LOOPS_MAX_MS, "the most is the longest scan with every canvas");
+  assert.equal(motionTimeFor({ hoverBudgetMs: 13500, clickBudgetMs: 10500, loopsMs: long }), PAGE_BUDGET_MS + long + 13500 + 10500);
+  assert.equal(motionTimeFor({}), PAGE_BUDGET_MS + LOOPS_MAX_MS + 10000, "unknown page: the most the loop capture takes, the base hover budget, no clicks");
+  assert.ok(motionTimeFor({ hoverBudgetMs: 13500, clickBudgetMs: 10500, loopsMs: long }) > 104000, "the fixed timer that cut the page off (90 s + 3.5 + 10.5) is exceeded");
+});
+
+// The copy's hover budget covers the elements the original saw hovering (probed first on the copy, ~2.5 s each when a script
+// drives them), not only "as many probes as the original made": five hovers after five dead links took 12.5 s, not 10.5.
+test("the copy's hover budget and the elements it probes first follow the original's mouse-probed hovers", () => {
+  const card = (n) => ({ tag: 'a', text: `Card ${n} A longer description that goes past forty characters`, source: 'probe', scriptedMs: 620, changes: { color: ['rgb(0, 0, 0)', 'rgb(0, 0, 238)'] } });
+  const old = { stats: { probed: 7, candidates: 40 }, hover: [card(1), card(2), card(3), card(4), card(5), { tag: 'button', text: 'Menu', source: 'css', changes: { color: ['a', 'b'] } }, card(1)] };
+  assert.deepEqual(hoverFirstFor(old), [1, 2, 3, 4, 5].map((n) => `a|card${n}alongerdescriptionthatgoespastforty`), 'tag|text keys of the probed hovers, once each, no stylesheet hovers (those need no mouse)');
+  assert.equal(hoverBudgetFor(old), 5 * FIRST_MS, 'five first elements at FIRST_MS beat seven probes at 1.5 s');
+  assert.equal(hoverBudgetFor({ stats: { probed: 7 }, hover: [] }), Math.max(10000, 7 * 1500), 'no probed hovers: the old rule');
+  assert.equal(hoverBudgetFor({ stats: { probed: 100 }, hover: Array.from({ length: 40 }, (_, i) => card(i)) }), 60000, 'never more than a minute');
+  assert.deepEqual(hoverFirstFor(null), []);
 });
