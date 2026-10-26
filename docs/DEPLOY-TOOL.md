@@ -384,6 +384,26 @@ the verified date and the name).
 
 `db:migrate` refuses while anything listens on 127.0.0.1:`PORT`. Always stop the API first (step 10 does).
 
+**Hand over the owner.** `SAS_OWNER_EMAIL` is read only by that first migration; changing it later changes nothing. To make
+another account the owner, that person **signs up and verifies the address first**, then:
+
+```bash
+sudo systemctl stop sas-api
+sudo -iu sas
+cd /srv/sas/app
+npm run accounts -w server -- transfer-owner new@example.com --move-projects         # shows what would change
+npm run accounts -w server -- transfer-owner new@example.com --move-projects --yes   # backup, then the change
+npm run accounts -w server                                                           # new@ owner, the old owner user
+exit
+sudo systemctl start sas-api
+```
+
+It writes a checked backup to `<data>/backups/` first, then in one transaction makes the new account the owner and the old owner
+an ordinary user. With `--move-projects` every project of the old owner moves to the new one; without it the old owner keeps
+them and the new owner does not see them. It refuses (and changes nothing) when the account is missing or unverified, the
+backup fails, or the API is still running. **To undo**, stop the API and restore the backup it printed ("Backup written: …") as
+in step 11, "Restoring"; anything created after it is lost.
+
 ## 7. The marketing site
 
 `NEXT_PUBLIC_*` values are baked in at **build** time. `SITE_URL` is read when the pages are built, and also at runtime to be

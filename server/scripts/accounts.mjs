@@ -7,15 +7,27 @@
 //   npm run accounts -w server                                  list every account
 //   npm run accounts -w server -- delete a@x.com b@y.com        show what would go
 //   npm run accounts -w server -- delete a@x.com b@y.com --yes  delete them
-//   (--db <file> for another database than SAS_DATA_DIR's)
+//   npm run accounts -w server -- transfer-owner new@x.com [--move-projects]        show what would change
+//   npm run accounts -w server -- transfer-owner new@x.com [--move-projects] --yes  back up, then hand the owner role over
+//   (--db <file> for another database than SAS_DATA_DIR's; --backup-dir <folder> for transfer-owner's backup)
+//
+// transfer-owner (src/accounts/transfer.js): the target must have an account with a verified email. A checked backup is written
+// first (db/backup.js, as db:migrate does; default <data>/backups, or a backups folder next to --db); then, in one transaction,
+// the target becomes the owner and the old owner an ordinary user, and with --move-projects every project of the old owner
+// moves to the target. Row counts and owners are checked before COMMIT; any problem rolls it all back. Refused while a server
+// answers on the API port when the database is the configured one (the same check as db:migrate).
+import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { DB_FILE } from '../src/config/paths.js';
+import { BACKUPS_DIR, DB_FILE } from '../src/config/paths.js';
 import { normalizeEmail } from '../src/db/migrations.js';
+import { backupDatabase } from '../src/db/backup.js';
+import { applyTransfer, planTransfer, serverListening } from '../src/accounts/transfer.js';
 
 const argv = process.argv.slice(2);
 const dbIndex = argv.indexOf('--db');
 const dbFile = dbIndex >= 0 ? argv[dbIndex + 1] : DB_FILE;
-const words = argv.filter((a, i) => !a.startsWith('--') && !(dbIndex >= 0 && i === dbIndex + 1));
+const backupIndex = argv.indexOf('--backup-dir');
+const words = argv.filter((a, i) => !a.startsWith('--') && !(dbIndex >= 0 && i === dbIndex + 1) && !(backupIndex >= 0 && i === backupIndex + 1));
 const command = words[0] ?? 'list';
 const yes = argv.includes('--yes');
 
@@ -41,8 +53,63 @@ if (command === 'list') {
   process.exit(0);
 }
 
+if (command === 'transfer-owner') {
+  const email = words[1];
+  if (!email || words.length > 2) {
+    console.error('Name exactly one account: transfer-owner <email> [--move-projects] [--yes].');
+    process.exit(1);
+  }
+  const moveProjects = argv.includes('--move-projects');
+  const plan = planTransfer(db, email, { moveProjects });
+  if (!plan.ok) {
+    for (const p of plan.problems) console.error(`  refused: ${p}`);
+    console.error('Nothing was changed.');
+    process.exit(1);
+  }
+  const { target, owner } = plan;
+  console.log(`${yes ? 'Changing' : 'Would change'} (${dbFile}):`);
+  console.log(`  ${target.email}: role user → owner`);
+  console.log(`  ${owner.email}: role owner → user`);
+  if (moveProjects) console.log(`  projects: ${owner.projects} move from ${owner.email} to ${target.email} (${owner.email} ${owner.projects} → 0, ${target.email} ${target.projects} → ${target.projects + owner.projects})`);
+  else console.log(`  projects: none move (${owner.email} keeps ${owner.projects}, ${target.email} keeps ${target.projects}); add --move-projects to move them`);
+  if (!yes) {
+    console.log('Nothing changed. Add --yes to make the change (a backup is written first).');
+    process.exit(0);
+  }
+  const configured = (f) => (process.platform === 'win32' ? path.resolve(f).toLowerCase() : path.resolve(f));
+  const port = Number(process.env.PORT || 4000);
+  if (configured(dbFile) === configured(DB_FILE) && await serverListening(port)) {
+    console.error(`  refused: something is listening on 127.0.0.1:${port} (a server with this database open?). Stop it first.`);
+    console.error('Nothing was changed.');
+    process.exit(1);
+  }
+  const backupDir = backupIndex >= 0 ? argv[backupIndex + 1] : dbIndex >= 0 ? path.join(path.dirname(path.resolve(dbFile)), 'backups') : BACKUPS_DIR;
+  let backup;
+  try {
+    backup = await backupDatabase({ dbFile, dir: backupDir });
+  } catch (err) {
+    console.error(`  refused: the backup failed: ${/** @type {Error} */ (err).message}`);
+    console.error('Nothing was changed.');
+    process.exit(1);
+  }
+  console.log(`Backup written: ${backup.file}`);
+  let r;
+  try {
+    r = applyTransfer(db, plan);
+  } catch (err) {
+    console.error(`Nothing was changed (rolled back): ${/** @type {Error} */ (err).message}`);
+    process.exit(1);
+  }
+  console.log('Changed:');
+  console.log(`  ${r.target.email}: owner, ${r.target.projects} project(s)`);
+  console.log(`  ${r.owner.email}: user, ${r.owner.projects} project(s)`);
+  console.log(`  projects moved: ${r.moved}`);
+  console.log(`Unchanged row counts: ${Object.entries(r.after).map(([t, n]) => `${t} ${n}`).join(', ')}.`);
+  process.exit(0);
+}
+
 if (command !== 'delete') {
-  console.error(`Unknown command "${command}". Use "list" or "delete <email> [...] [--yes]".`);
+  console.error(`Unknown command "${command}". Use "list", "delete <email> [...] [--yes]" or "transfer-owner <email> [--move-projects] [--yes]".`);
   process.exit(1);
 }
 const emails = words.slice(1);
