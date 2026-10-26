@@ -129,7 +129,7 @@ function SiteCard({ project, featured = false, index }) {
         {featured && (platform || result) && (
           <p className={styles.featuredNote}>
             {platform && <>Built with {platform.name}. </>}
-            {result && <>Copy in {stackById(result.stack ?? project.stack).name}{result.fidelity?.score != null && `, ${result.fidelity.score}/100 match with the original`}.</>}
+            {result && <>Copy in {stackById(result.stack ?? project.stack).name}.</>}
           </p>
         )}
       </div>

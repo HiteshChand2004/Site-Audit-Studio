@@ -9,15 +9,12 @@ const stackName = (id) => ASIS_STACK_CHOICES.find((s) => s.id === id)?.label ?? 
 
 /** One page's checks as a row of short facts. */
 function PageRow({ page }) {
-  const visual = Object.fromEntries((page.visual ?? []).map((v) => [v.width, v.diffPct]));
   const offline = page.offline ?? {};
   const errors = (offline.errors ?? []).length;
   return (
     <tr>
       <td className="mono">{page.path}</td>
       <td>{offline.external?.length ? <span className={styles.bad}>{offline.external.length} off the copy</span> : <span className={styles.good}>none leave the copy</span>}</td>
-      <td>{visual[1440] ?? '—'}%</td>
-      <td>{visual[390] ?? '—'}%</td>
       <td>{page.hovers ? `${page.hovers.copy.changed} of ${page.hovers.original?.changed ?? '—'}` : '—'}</td>
       <td>{page.controls ? `${page.controls.copy.visible} of ${page.controls.original?.visible ?? '—'} visible` : '—'}</td>
       <td>{errors ? <span className={styles.bad}>{errors}</span> : '0'}</td>
@@ -103,8 +100,6 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
             <tr>
               <th>Page</th>
               <th>Cold first visit</th>
-              <th>Visual 1440</th>
-              <th>Visual 390</th>
               <th>Hovers (copy / original)</th>
               <th>Controls</th>
               <th>Console errors</th>

@@ -18,15 +18,6 @@ export function rating(score) {
   return { label: 'Poor', tone: 'bad' };
 }
 
-/** How close the copy is to the original (fidelity / visual difference), in words. */
-export function matchRating(score) {
-  if (score == null) return { label: 'Not measured', tone: 'none' };
-  if (score >= 90) return { label: 'Almost identical', tone: 'ok' };
-  if (score >= 80) return { label: 'Very close', tone: 'ok' };
-  if (score >= 65) return { label: 'Close, worth a look', tone: 'warn' };
-  return { label: 'Clearly different', tone: 'bad' };
-}
-
 /** Result of a check, original vs copy (the re-audit statuses), and of a check on the original alone. */
 export const RESULT = {
   regressed: { label: 'Got worse', mark: '↓', tone: 'bad' },
@@ -201,3 +192,108 @@ export const GENERATED_FIELDS = {
   'robots.txt': 'search engine instructions',
   'decorative-text': 'decorative texts hidden from screen readers',
 };
+
+// ---- How the copy looks ------------------------------------------------------------------------------------------
+// The same warning as the app's (client/src/copy.js lookWarning, kept word for word: test/client-copy-words.test.js compares
+// the two on every case), so the report and the app say the same thing; a match score is never printed.
+// What looks different, in plain words: the tool's own causes (exact comparison, verify/exact/compare.js summarise) and
+// the other visual checks.
+const LOOK_CAUSES = {
+  layout: 'parts have a different size or sit in a different place',
+  look: 'it does not look the same',
+  'page-height': 'the page is a different height',
+  'missing-element': 'something is missing',
+  'extra-element': 'something was added',
+  'box-out-of-place': 'something sits in the wrong place',
+  'font-metric': 'text is a different size',
+  pixels: 'colours or pictures differ',
+  'console-error': 'the copy shows an error',
+  'failed-request': 'something did not load',
+  'loop-missing': 'an animation does not repeat',
+  converted: 'the converted version is built differently',
+};
+
+const SIZE_ORDER = ['computer', 'laptop', 'tablet', 'phone'];
+const VIEWPORT_NAMES = { desktop: 'Computer', laptop: 'Laptop', tablet: 'Tablet', mobile: 'Phone' };
+const sizeOfView = (view) => VIEWPORT_NAMES[view]?.toLowerCase() ?? view;
+// The same split as the exact comparison's slots (phone < 768, tablet < 1024), with the laptop view below 1440.
+const sizeOfWidth = (w) => (w < 768 ? 'phone' : w < 1024 ? 'tablet' : w < 1440 ? 'laptop' : 'computer');
+const failing = (status) => status === 'low' || status === 'mixed';
+
+/** The causes of one exact-comparison slot that was not accepted, counted by the same rules as the server's summary. */
+function slotCauses(s) {
+  const causes = [];
+  if (!s.heightOk) causes.push('page-height');
+  if (s.boxes?.missing) causes.push('missing-element');
+  if (s.boxes?.extra) causes.push('extra-element');
+  if (s.boxes?.hard) causes.push('box-out-of-place');
+  if (s.boxes?.textBeyond) causes.push('font-metric');
+  if (!s.pixelsOk && s.heightOk) causes.push('pixels');
+  if (s.consoleErrors?.length) causes.push('console-error');
+  if (s.failedRequests?.length) causes.push('failed-request');
+  if (s.frozen?.loopsOnlyOriginal) causes.push('loop-missing');
+  return causes.length ? causes : ['look'];
+}
+
+/**
+ * One plain warning when the copy's own visual checks say part of it looks different, naming the page, the screen size and
+ * what differs; null when every check passed (nothing is said then, not even "looks the same"). A check fails when:
+ * the match score is low on some or all pages (`fidelity.status` low / mixed, its `lowPages` / `lowViews`); the visual
+ * difference is low (`fidelity.diff` the same way); an exact-comparison slot was not accepted; a converted version is not
+ * identical to the plain one (`equivalence.dom.equal < total`); an as-is page failed its visual check (`copy.pages[].problems`).
+ * @param {object} result  the copy's report (report.json)
+ * @param {{ page?: string }} [o]  page: only this page (its path), plus what was found for every page; for the Compare step,
+ *   so the sentence does not send the reader to Compare
+ * @returns {string|null}
+ */
+export function lookWarning(result, { page: only } = {}) {
+  if (!result) return null;
+  const found = [];
+  const add = (page, sizes, cause) => {
+    if (only == null || page == null || page === only) found.push({ page: page ?? null, sizes: sizes.filter(Boolean), cause });
+  };
+
+  const fidelity = result.fidelity;
+  if (fidelity && failing(fidelity.status)) {
+    const low = fidelity.lowPages ?? [];
+    for (const path of low) add(path, (fidelity.pages?.find((p) => p.path === path)?.lowViews ?? []).map(sizeOfView), 'layout');
+    if (!low.length) add(null, [], 'layout');
+  }
+  const diff = fidelity?.diff;
+  if (diff && failing(diff.status)) {
+    const low = diff.lowPages ?? [];
+    for (const path of low) add(path, (fidelity.pages?.find((p) => p.path === path)?.diff?.lowViews ?? []).map(sizeOfView), 'look');
+    if (!low.length) add(null, [], 'look');
+  }
+  for (const page of result.exact?.pages ?? []) {
+    for (const slot of page.slots ?? []) {
+      if (slot.accepted !== false) continue;
+      for (const cause of slotCauses(slot)) add(page.page, [sizeOfWidth(slot.width)], cause);
+    }
+  }
+  for (const output of Object.values(result.outputs ?? {})) {
+    const eq = output && typeof output === 'object' ? output.equivalence : null;
+    if (!eq?.dom || eq.dom.equal >= eq.dom.total) continue;
+    const different = (eq.pages ?? []).filter((p) => p.dom === 'different');
+    for (const p of different) add(p.path, p.difference?.view ? [sizeOfView(p.difference.view)] : [], 'converted');
+    if (!different.length) add(null, [], 'converted');
+  }
+  for (const page of result.copy?.pages ?? []) {
+    for (const problem of page.problems ?? []) if (problem.check === 'visual') add(page.path, [sizeOfWidth(problem.width)], 'look');
+  }
+  if (!found.length) return null;
+
+  // One part per page and cause, with every screen size it was seen at.
+  const groups = [];
+  for (const f of found) {
+    const g = groups.find((x) => x.page === f.page && x.cause === f.cause);
+    if (g) f.sizes.forEach((s) => g.sizes.add(s));
+    else groups.push({ page: f.page, cause: f.cause, sizes: new Set(f.sizes) });
+  }
+  const parts = groups.slice(0, 4).map((g) => {
+    const sizes = [...g.sizes].sort((a, b) => SIZE_ORDER.indexOf(a) - SIZE_ORDER.indexOf(b));
+    return `on ${g.page ?? 'every page'}${sizes.length ? ` (${sizes.join(', ')})` : ''} ${LOOK_CAUSES[g.cause]}`;
+  });
+  const more = groups.length > 4 ? `; and in ${groups.length - 4} more ${groups.length - 4 === 1 ? 'place' : 'places'}` : '';
+  return `Part of the copy looks different from the original: ${parts.join('; ')}${more}.${only == null ? ' Open Compare to look.' : ''}`;
+}

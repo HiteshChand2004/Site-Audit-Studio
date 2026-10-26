@@ -1,6 +1,6 @@
 // Plain-language wording for everything the app shows. Every screen takes its labels and "what does this mean"
 // explanations from here, so a person without a technical background reads the same simple words everywhere, and an
-// expert term (LCP, SEO, fidelity, …) always comes with an explanation. Nothing here is specific to one website.
+// expert term (LCP, SEO, …) always comes with an explanation. Nothing here is specific to one website.
 
 /** A 0–100 score as a rating people understand. */
 export function rating(score) {
@@ -78,18 +78,18 @@ export const JOB_STEPS = {
   inspect: { title: 'Visiting every page', explain: 'Opening each page at four screen sizes and recording its layout, text, hover effects and animations.' },
   assets: { title: 'Downloading images and files', explain: 'Saving images, fonts, videos and documents so the copy never depends on the old site.' },
   generate: { title: 'Building the new pages', explain: 'Writing clean pages and fixing the problems found in the check.' },
-  build: { title: 'Checking the new site', explain: 'Safety check, broken links, valid code, and how closely each page matches the original.' },
+  build: { title: 'Checking the new site', explain: 'Safety check, broken links and valid code, then a check that nothing looks different from the original.' },
   preview: { title: 'Opening the preview', explain: 'Starting a private preview of the new site.' },
   sweep: { title: 'Checking more screen sizes', explain: 'Capturing the original at extra screen widths to get the in-between sizes right.' },
   responsive: { title: 'Comparing all screen sizes', explain: 'Checking the copy at those extra widths against the original.' },
-  stack: { title: 'Building the chosen technology', explain: 'Turning the copy into the technology you picked (React, Next.js or MERN) and checking it matches the simple version.' },
+  stack: { title: 'Building the chosen technology', explain: 'Turning the copy into the technology you picked (React, Next.js or MERN) and checking it works like the simple version.' },
   exactCapture: {
     title: 'Measuring the original',
-    explain: 'Opening the original at every screen size an exact copy is checked at, and recording how it looks and where everything sits. This is the slow part of an exact copy.',
+    explain: 'Opening the original at every screen size an exact copy is checked at, and recording how it looks. This is the slow part of an exact copy.',
   },
   exact: {
-    title: 'Comparing with the original',
-    explain: 'Opening the copy at those same sizes and comparing it with the original, pixel by pixel.',
+    title: 'Checking the look',
+    explain: 'Opening the copy at those same sizes to check that nothing looks different from the original.',
   },
   // Compare again (re-audit)
   serve: { title: 'Opening the new site', explain: 'Starting the new site privately so it can be checked.' },
@@ -128,9 +128,6 @@ export const RESULT_STATUS = {
 export const TERMS = {
   original: 'Original site',
   copy: 'New copy',
-  fidelity: { title: 'Match with the original', explain: 'How closely each page of the copy matches the original in sizes, positions and look (100 = identical). 80 or more is good.' },
-  visual: { title: 'Looks the same', explain: 'How alike the two pages look to the eye, compared section by section (100 = identical).' },
-  widths: { title: 'Other screen sizes', explain: 'How well the copy follows the original at screen widths between phone, tablet, laptop and desktop.' },
   motion: { title: 'Hover effects & animations', explain: 'Effects when you point at buttons and links, and things that move or fade in while you scroll.' },
   stack: { title: 'Technology of the new site', explain: 'What the new site is built with. Plain HTML is the simplest; React, Next.js and MERN are for developer teams.' },
   pages: { title: 'Pages', explain: 'Which pages of the site are copied. "Every page" copies the whole site.' },
@@ -186,15 +183,6 @@ export const SEVERITY = {
   medium: { label: 'Worth fixing', tone: 'warn' },
   low: { label: 'Minor', tone: 'neutral' },
 };
-
-/** How closely a page of the copy matches the original (fidelity 0–100; 80 is the bar the app uses). */
-export function matchRating(score) {
-  if (score == null) return { label: 'Not measured', tone: 'neutral' };
-  if (score >= 90) return { label: 'Almost identical', tone: 'ok' };
-  if (score >= 80) return { label: 'Very close', tone: 'ok' };
-  if (score >= 65) return { label: 'Close, worth a look', tone: 'warn' };
-  return { label: 'Clearly different, needs a look', tone: 'bad' };
-}
 
 /**
  * A copy that stopped before it finished (the server kept its work: GET …/recreate `resumable`).
@@ -298,6 +286,17 @@ function slotCauses(s) {
   return causes.length ? causes : ['look'];
 }
 
+// The copy's own warnings that print a look score: the match and visual-difference ones say what lookWarning says (and are
+// left out), the one about the widths between the captured sizes keeps its words without the scores in brackets.
+const LOOK_SCORE_WARNING = /^(Overall fidelity is|Fidelity is below|The visual difference score)/;
+const DRIFT_WARNING = /^The layout drifts from the original/;
+
+/** A warning of the copy (report.warnings) as it is shown, or null when it is a look score lookWarning already covers. */
+export function plainWarning(w) {
+  if (typeof w !== 'string' || LOOK_SCORE_WARNING.test(w)) return null;
+  return DRIFT_WARNING.test(w) ? w.replace(/ \(\d+\)/g, '') : w;
+}
+
 /**
  * One plain warning when the copy's own visual checks say part of it looks different, naming the page, the screen size and
  * what differs; null when every check passed (nothing is said then, not even "looks the same"). A check fails when:
@@ -305,12 +304,16 @@ function slotCauses(s) {
  * difference is low (`fidelity.diff` the same way); an exact-comparison slot was not accepted; a converted version is not
  * identical to the plain one (`equivalence.dom.equal < total`); an as-is page failed its visual check (`copy.pages[].problems`).
  * @param {object} result  the copy's report (GET …/recreate `result`)
+ * @param {{ page?: string }} [o]  page: only this page (its path), plus what was found for every page; for the Compare step,
+ *   so the sentence does not send the reader to Compare
  * @returns {string|null}
  */
-export function lookWarning(result) {
+export function lookWarning(result, { page: only } = {}) {
   if (!result) return null;
   const found = [];
-  const add = (page, sizes, cause) => found.push({ page: page ?? null, sizes: sizes.filter(Boolean), cause });
+  const add = (page, sizes, cause) => {
+    if (only == null || page == null || page === only) found.push({ page: page ?? null, sizes: sizes.filter(Boolean), cause });
+  };
 
   const fidelity = result.fidelity;
   if (fidelity && failing(fidelity.status)) {
@@ -354,5 +357,5 @@ export function lookWarning(result) {
     return `on ${g.page ?? 'every page'}${sizes.length ? ` (${sizes.join(', ')})` : ''} ${LOOK_CAUSES[g.cause]}`;
   });
   const more = groups.length > 4 ? `; and in ${groups.length - 4} more ${groups.length - 4 === 1 ? 'place' : 'places'}` : '';
-  return `Part of the copy looks different from the original: ${parts.join('; ')}${more}. Open Compare to look.`;
+  return `Part of the copy looks different from the original: ${parts.join('; ')}${more}.${only == null ? ' Open Compare to look.' : ''}`;
 }

@@ -5,7 +5,7 @@ import { problemsOf } from '../../components/audit/FixList.jsx';
 import { summarize } from '../../components/audit/HealthOverview.jsx';
 import { BrowserShot } from '../../components/site/Site.jsx';
 import { hostOf, stackById } from '../../constants.js';
-import { CHECKS, matchRating, RESULT_STATUS, SEVERITY, TERMS } from '../../copy.js';
+import { CHECKS, RESULT_STATUS, SEVERITY, TERMS } from '../../copy.js';
 import { plural, timeAgo } from '../../format.js';
 import { comparisonOf, copyShot, isReal, originalShot, platformOf, useSiteData } from '../../siteData.js';
 import { useProjects } from '../../store/useProjects.js';
@@ -73,7 +73,7 @@ function Progress({ audit, result, stages, onGo }) {
       id: 'compare',
       title: 'Compare page by page',
       state: result ? 'done' : 'none',
-      text: result?.fidelity?.score != null ? `${result.fidelity.score}/100 match · ${matchRating(result.fidelity.score).label.toLowerCase()}` : result ? 'Ready to look at' : 'After the copy',
+      text: result ? 'Ready to look at' : 'After the copy',
     },
     {
       id: 'results',
@@ -114,7 +114,6 @@ function Facts({ audit, result, project }) {
     ['Accessibility problems', `${a11y} on the homepage`],
     ['Needs a person', audit.manualRebuild?.length ? plural(audit.manualRebuild.length, 'part') : 'Nothing'],
     result && ['Copy technology', stackById(result.stack ?? project.stack).name],
-    result?.fidelity?.score != null && [TERMS.fidelity.title, `${result.fidelity.score}/100`],
   ].filter(Boolean);
   return (
     <section className={styles.card} aria-labelledby="ov-facts">
@@ -150,8 +149,6 @@ export default function OverviewStep({ project, audit, loading, onGo }) {
   const cmp = comparisonOf(audit);
   const shot = originalShot(project.id, audit, result, 'fold');
   const copy = copyShot(project.id, result);
-  const match = result?.fidelity?.score ?? null;
-  const m = matchRating(match);
 
   // What needs a look: the comparison's open / worse items, else the original's problems.
   const todo = cmp
@@ -171,11 +168,6 @@ export default function OverviewStep({ project, audit, loading, onGo }) {
             <h3 id="ov-ba" className={styles.cardTitle}>
               {result ? 'Original and copy' : 'The original'}
             </h3>
-            {match != null && (
-              <span className={styles.match} data-tone={m.tone}>
-                <strong className="tabular">{match}</strong>/100 · {m.label}
-              </span>
-            )}
           </div>
           {result ? (
             <>

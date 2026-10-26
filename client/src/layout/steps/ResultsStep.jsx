@@ -11,6 +11,7 @@ import AsIsReport from '../../components/recreate/AsIsReport.jsx';
 import SectionCard from '../../components/common/SectionCard.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import { stackById } from '../../constants.js';
+import { lookWarning } from '../../copy.js';
 import { api } from '../../api/client.js';
 import { outputsOf, outputState } from '../../stacks.js';
 import { isJobActive, useProjects } from '../../store/useProjects.js';
@@ -97,6 +98,8 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
   // progress box already shows a failure that just happened.
   const compareError = audit && !audit.isDummy ? audit.recreate?.lastError ?? null : null;
   const showCompareError = Boolean(compareError) && reauditJob?.status !== 'failed';
+  // How the copy looks is said only when its own visual checks found a difference; nothing otherwise.
+  const look = lookWarning(result);
 
   return (
     <div className={ws.stepBody}>
@@ -116,6 +119,8 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
           {compareError} {comparison ? 'The results below are from the previous comparison.' : 'The copy has not been compared with the original yet.'}
         </Alert>
       )}
+
+      {look && <Alert tone="bad">{look}</Alert>}
 
       {result.asIs && (
         <AsIsReport
@@ -193,9 +198,9 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
           <FixReport data={comparison} busy={busy} onReaudit={() => startReaudit(project.id)} />
         </SectionCard>
       )}
-      {(result.fidelity || result.verify) && (
-        <SectionCard icon={Ruler} title="Match per page and other measurements" meta="For a closer look" defaultOpen={false}>
-          <RecreateReport result={result} projectId={project.id} />
+      {(result.verify || result.generate || result.warnings?.length > 0) && (
+        <SectionCard icon={Ruler} title="Other measurements" meta="For a closer look" defaultOpen={false}>
+          <RecreateReport result={result} />
         </SectionCard>
       )}
     </div>

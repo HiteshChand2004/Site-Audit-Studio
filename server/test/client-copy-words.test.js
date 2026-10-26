@@ -1,9 +1,18 @@
 // The plain words of the app (client/src/copy.js): the four result words and the statuses they stand for, the four score
-// names, the reason words, and the one warning shown when the copy's own visual checks say part of it looks different.
+// names, the reason words, the one warning shown when the copy's own visual checks say part of it looks different (in the
+// app and in the report), and the copy's own warnings without look scores.
 // Pure functions and constants, no browser.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { lookWarning, REASON_WORDS, RESULT_WORD_FOR, RESULT_WORDS, SCORE_NAMES } from '../../client/src/copy.js';
+import { lookWarning, plainWarning, REASON_WORDS, RESULT_WORD_FOR, RESULT_WORDS, SCORE_NAMES } from '../../client/src/copy.js';
+import { lookWarning as reportLookWarning } from '../src/report/words.js';
+
+// Every case below is checked on both the app's warning and the report's (report/words.js), which must say the same.
+const look = (r, o) => {
+  const app = lookWarning(r, o);
+  if (!o) assert.equal(reportLookWarning(r), app, 'the report says the same as the app');
+  return app;
+};
 
 test('the four result words exist and are the words for these statuses', () => {
   assert.deepEqual(Object.values(RESULT_WORDS), ['Better', 'Still needs work', 'Got worse', 'Needs a person']);
@@ -39,9 +48,9 @@ const passing = () => ({
 });
 
 test('nothing is said when every visual check passed, or when there is no result', () => {
-  assert.equal(lookWarning(passing()), null);
-  assert.equal(lookWarning({}), null);
-  assert.equal(lookWarning(null), null);
+  assert.equal(look(passing()), null);
+  assert.equal(look({}), null);
+  assert.equal(look(null), null);
 });
 
 test('a low match score names the page, the screen size and what differs', () => {
@@ -49,18 +58,18 @@ test('a low match score names the page, the screen size and what differs', () =>
   r.fidelity.status = 'mixed';
   r.fidelity.lowPages = ['/about'];
   r.fidelity.pages.push({ path: '/about', low: true, lowViews: ['mobile', 'desktop'] });
-  assert.equal(lookWarning(r), 'Part of the copy looks different from the original: on /about (computer, phone) parts have a different size or sit in a different place. Open Compare to look.');
+  assert.equal(look(r), 'Part of the copy looks different from the original: on /about (computer, phone) parts have a different size or sit in a different place. Open Compare to look.');
   // Low over the whole site with no single page below the bar: every page.
   const all = passing();
   all.fidelity.status = 'low';
-  assert.match(lookWarning(all), /on every page parts have a different size/);
+  assert.match(look(all), /on every page parts have a different size/);
 });
 
 test('a low visual difference names the page, the screen size and what differs', () => {
   const r = passing();
   r.fidelity.diff = { status: 'mixed', lowPages: ['/pricing'] };
   r.fidelity.pages.push({ path: '/pricing', low: false, lowViews: [], diff: { low: true, lowViews: ['tablet'] } });
-  assert.equal(lookWarning(r), 'Part of the copy looks different from the original: on /pricing (tablet) it does not look the same. Open Compare to look.');
+  assert.equal(look(r), 'Part of the copy looks different from the original: on /pricing (tablet) it does not look the same. Open Compare to look.');
 });
 
 test('an exact-comparison slot that was not accepted names each of its causes', () => {
@@ -73,7 +82,7 @@ test('an exact-comparison slot that was not accepted names each of its causes', 
       { width: 1025, accepted: true, heightOk: true, pixelsOk: true },
     ],
   });
-  const text = lookWarning(r);
+  const text = look(r);
   assert.match(text, /on \/team \(phone\) something is missing/);
   assert.match(text, /on \/team \(computer\) the page is a different height/);
   assert.match(text, /on \/team \(computer\) something sits in the wrong place/);
@@ -86,13 +95,13 @@ test('a converted version that is not identical names the page and the screen si
     ok: false, dom: { equal: 1, total: 2 },
     pages: [{ path: '/', dom: 'equal' }, { path: '/blog', dom: 'different', difference: { view: 'mobile' } }],
   };
-  assert.equal(lookWarning(r), 'Part of the copy looks different from the original: on /blog (phone) the converted version is built differently. Open Compare to look.');
+  assert.equal(look(r), 'Part of the copy looks different from the original: on /blog (phone) the converted version is built differently. Open Compare to look.');
 });
 
 test('an as-is page that failed its visual check names the page and the screen size', () => {
   const r = passing();
   r.copy.pages.push({ path: '/contact', problems: [{ check: 'visual', width: 390, value: 50, min: 65 }, { check: 'hover', value: 0.5, min: 0.9 }] });
-  assert.equal(lookWarning(r), 'Part of the copy looks different from the original: on /contact (phone) it does not look the same. Open Compare to look.');
+  assert.equal(look(r), 'Part of the copy looks different from the original: on /contact (phone) it does not look the same. Open Compare to look.');
 });
 
 test('the same page and cause at several sizes is one part; more than four parts are counted', () => {
@@ -101,7 +110,25 @@ test('the same page and cause at several sizes is one part; more than four parts
     page: '/a',
     slots: [390, 768, 1440].map((width) => ({ width, accepted: false, heightOk: true, pixelsOk: true, boxes: { extra: 1 } })),
   });
-  assert.match(lookWarning(r), /on \/a \(computer, tablet, phone\) something was added/);
+  assert.match(look(r), /on \/a \(computer, tablet, phone\) something was added/);
   for (const page of ['/b', '/c', '/d', '/e', '/f']) r.copy.pages.push({ path: page, problems: [{ check: 'visual', width: 1440 }] });
-  assert.match(lookWarning(r), /; and in 2 more places\. Open Compare to look\.$/);
+  assert.match(look(r), /; and in 2 more places\. Open Compare to look\.$/);
+});
+
+test('on Compare the warning is for the page shown, plus what was found for every page, and does not send the reader to Compare', () => {
+  const r = passing();
+  r.copy.pages.push({ path: '/contact', problems: [{ check: 'visual', width: 390 }] }, { path: '/team', problems: [{ check: 'visual', width: 1440 }] });
+  assert.equal(look(r, { page: '/contact' }), 'Part of the copy looks different from the original: on /contact (phone) it does not look the same.');
+  assert.equal(look(r, { page: '/' }), null, 'nothing found on this page');
+  r.fidelity.status = 'low';
+  assert.equal(look(r, { page: '/' }), 'Part of the copy looks different from the original: on every page parts have a different size or sit in a different place.');
+});
+
+test('the copy’s own warnings: a look score covered by the warning is left out, a drift keeps its words without scores', () => {
+  assert.equal(plainWarning('Overall fidelity is 72/100, below the 80 threshold. Compare the preview with the original before using the site.'), null);
+  assert.equal(plainWarning('Fidelity is below 80/100 on 1 page: / (72).'), null);
+  assert.equal(plainWarning('The visual difference score is 60/100, below 65: the recreated pages look clearly different from the originals. See the heatmaps in the report.'), null);
+  assert.equal(plainWarning('The layout drifts from the original at 2 of 9 measured page widths between the captured sizes: / at 320px (61), /a at 480px (58).'),
+    'The layout drifts from the original at 2 of 9 measured page widths between the captured sizes: / at 320px, /a at 480px.');
+  assert.equal(plainWarning('Fidelity was not measured for 1 page (time limit of the build step): /x.'), 'Fidelity was not measured for 1 page (time limit of the build step): /x.');
 });

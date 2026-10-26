@@ -3,7 +3,7 @@ import { Card } from '../common/Surface.jsx';
 import { Pill } from '../common/Score.jsx';
 import InfoTip from '../common/InfoTip.jsx';
 import CountUp from '../common/CountUp.jsx';
-import { CHECKS, HEALTH, matchRating, RESULT_STATUS, TERMS } from '../../copy.js';
+import { CHECKS, HEALTH, RESULT_STATUS } from '../../copy.js';
 import { plural } from '../../format.js';
 import styles from './Outcome.module.css';
 import { STACKS } from '../../constants.js';
@@ -19,12 +19,10 @@ const SCORES = [
 const titleOf = (item) => CHECKS[item.title]?.title ?? CHECKS[item.title?.split(' · ')[0]]?.title ?? item.title;
 
 /**
- * The result in one card: a plain summary, four counts, the main scores before → after, the overall match, and the few
+ * The result in one card: a plain summary, four counts, the main scores before → after, and the few
  * things that still need work. `comparison` is the real before / after comparison (null until it exists).
  */
 export default function Outcome({ result, comparison }) {
-  const match = result.fidelity?.score ?? null;
-  const m = matchRating(match);
   const s = comparison?.summary ?? null;
   // An as-is copy: how many "got worse" rows carry one of the five reasons, and how many none fits (server copy/gotWorse.js).
   const worse = comparison?.gotWorse ?? null;
@@ -45,8 +43,7 @@ export default function Outcome({ result, comparison }) {
   const summaryText = `${plural(pagesN, 'page')} copied${stackName ? ` in ${stackName}` : ''} · ${result.asIs ? pagesN : 0} as-is, ${result.asIs ? 0 : pagesN} rebuilt · ${s ? `Got worse: ${s.regressed ?? 0}${worse ? ` (${worse.explained} with a reason, ${worse.unexplained} unexplained)` : ''} · Fixed: ${fixedN} · Still open: ${s.open ?? 0}${stillOpen ? ` (${stillOpen.explained} with a reason, ${stillOpen.unexplained} unexplained)` : ''}` : 'Got worse: not measured yet (the check after the copy has not finished)'}`;
 
   const sentence = [
-    `The copy has ${plural(copiedPages(result).length, 'page')}`,
-    match != null ? `. How closely it matches the original: ${m.label.toLowerCase()} (${match}/100).` : '.',
+    `The copy has ${plural(copiedPages(result).length, 'page')}.`,
     s ? ` Compared with the original, ${plural(better, 'thing')} got better${s.regressed ? `, ${s.regressed} got worse` : ''} and ${s.open ?? 0} still need${(s.open ?? 0) === 1 ? 's' : ''} work.` : '',
   ].join('');
 
@@ -77,18 +74,6 @@ export default function Outcome({ result, comparison }) {
       )}
 
       <div className={styles.facts}>
-        {match != null && (
-          <div className={styles.fact}>
-            <span className={styles.factLabel}>
-              {TERMS.fidelity.title}
-              <InfoTip label={TERMS.fidelity.title} align="start">
-                {TERMS.fidelity.explain}
-              </InfoTip>
-            </span>
-            <span className={styles.factValue}>{match}/100</span>
-            <Pill tone={m.tone}>{m.label}</Pill>
-          </div>
-        )}
         {before &&
           after &&
           SCORES.map(([key, h]) =>

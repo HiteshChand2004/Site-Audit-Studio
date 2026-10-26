@@ -12,7 +12,7 @@ import { stripAnsi } from '../../ansi.js';
 import { BrowserShot } from '../../components/site/Site.jsx';
 import { copyShot } from '../../siteData.js';
 import { RECREATE_STACKS, stackById } from '../../constants.js';
-import { matchRating, resumeText, TERMS } from '../../copy.js';
+import { resumeText, TERMS } from '../../copy.js';
 import { ageDays, plural, timeAgo } from '../../format.js';
 import { api } from '../../api/client.js';
 import { outputsOf, outputState } from '../../stacks.js';
@@ -38,7 +38,7 @@ const STAGES = [
   ['Visit every page', 'Each page is opened at phone, tablet, laptop and computer size; its layout, text, hover effects and animations are recorded.'],
   ['Save images and files', 'Images, fonts, videos and documents are downloaded, so the copy never depends on the old site.'],
   ['Build the new pages', 'Clean pages are written and the problems the check found are fixed where that can be done automatically.'],
-  ['Check the result', 'Safety, broken links and how closely every page matches the original; then a private preview opens.'],
+  ['Check the result', 'Safety, broken links, and a check that no page looks different from the original; then a private preview opens.'],
 ];
 
 const pagesText = (n) => (n == null || n === ALL_PAGES ? 'Every page of the site' : n === 0 ? 'Only the homepage' : `The homepage + ${plural(n, 'page')}`);
@@ -103,7 +103,6 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   const [building, setBuilding] = useState(false);
   const [buildError, setBuildError] = useState(null);
 
-  const match = result?.fidelity?.score ?? null;
   const stages = (
     <ol className={ws.stages}>
       {STAGES.map(([title, text], i) => (
@@ -272,7 +271,7 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
             <Button
               icon={Target}
               disabled={Boolean(blocker)}
-              title="Measures every page against the original at every screen size until it matches, and copies the site as it is. It takes hours, and it does not change this project's settings."
+              title="Checks every page against the original at every screen size and corrects what looks different, and copies the site as it is. It takes hours, and it does not change this project's settings."
               onClick={() => recreate(project.id, { exact: true })}
             >
               Create an exact copy
@@ -312,14 +311,6 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
               <div>
                 <dt>Pages</dt>
                 <dd className="tabular">{copiedPages(result).length}</dd>
-              </div>
-              <div>
-                <dt>Match</dt>
-                <dd className="tabular">{match != null ? `${match}/100` : '–'}</dd>
-              </div>
-              <div>
-                <dt>Verdict</dt>
-                <dd>{matchRating(match).label}</dd>
               </div>
             </dl>
             {onGo && (

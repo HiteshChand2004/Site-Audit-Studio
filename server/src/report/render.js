@@ -5,12 +5,13 @@
 //   page 1  the website's logo and name, one verdict line, four score gauges (original vs copy), result tiles,
 //           the two homepages side by side and at most three next steps;
 //   page 2  the analytics: scores by device (grouped bars), the checklist outcome (donut), speed in everyday words
-//           (bars against Google's "good" mark), the match with the original per page, and short lists of what was
-//           fixed and what needs a person.
+//           (bars against Google's "good" mark), and short lists of what was fixed and what needs a person.
+// How the copy looks is never a score: when its own visual checks found a difference, one red warning says where (the
+// app's lookWarning, words.js); when they did not, nothing is said about the look.
 // A project that was never checked gets one page. Text stays short: one caption per chart, lists of at most six
 // lines; every check, page and value is in the JSON download. Every value from the audit or the recreate goes
 // through esc(): site names, titles and URLs come from the pages that were analysed.
-import { AREAS, matchRating, plainName, rating } from './words.js';
+import { AREAS, lookWarning, plainName, rating } from './words.js';
 
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const num = (n) => (Number.isFinite(n) ? n.toLocaleString('en-US') : '—');
@@ -156,8 +157,7 @@ function verdict(f) {
     return `${head}${fixes}${buts.length ? `, but ${buts.join(' and ')}` : ''}.`;
   }
   if (r) {
-    const m = r.fidelity?.score;
-    return `A copy of ${plural(r.pages?.length ?? 0, 'page')} was made${m != null ? ` and matches the original ${m}%` : ''}; it has not been compared check by check yet.`;
+    return `A copy of ${plural(r.pages?.length ?? 0, 'page')} was made; it has not been compared check by check yet.`;
   }
   const good = AREAS.filter((x) => rating(before?.mobile?.[x.id]).tone === 'ok').map((x) => STRONG[x.id]);
   const work = AREAS.filter((x) => ['warn', 'bad'].includes(rating(before?.mobile?.[x.id]).tone)).map((x) => WEAK[x.id]);
@@ -325,54 +325,6 @@ function speedChart(f) {
   return { html: body.join(''), device: dev === 'mobile' ? 'a phone' : 'a computer' };
 }
 
-/** Match with the original per page (horizontal bars with the target mark), or a distribution for many pages. */
-function matchChart(r) {
-  const pages = (r.fidelity?.pages ?? []).filter((p) => Number.isFinite(p.score));
-  const threshold = r.fidelity?.threshold ?? 80;
-  if (!pages.length) return '';
-  const W = 380;
-  if (pages.length <= 11) {
-    const sorted = [...pages].sort((x, y) => y.score - x.score);
-    const L = 150;
-    const x = (v) => f1(L + (v / 100) * (W - L - 34));
-    const rowH = 19;
-    const H = sorted.length * rowH + 22;
-    const out = [];
-    sorted.forEach((p, i) => {
-      const yy = 6 + i * rowH;
-      const label = p.path === '/' ? 'Homepage' : clip(p.path, 26);
-      const low = p.score < threshold;
-      out.push(`<text x="${L - 8}" y="${yy + 10}" text-anchor="end" class="ax-p">${esc(label)}</text>`);
-      out.push(`<rect x="${L}" y="${yy + 1}" width="${f1(x(100) - L)}" height="12" rx="2.5" fill="${C.track}"/>`);
-      out.push(`<rect x="${L}" y="${yy + 1}" width="${f1(x(p.score) - L)}" height="12" rx="2.5" fill="${low ? C.warn : C.copy}"/>`);
-      out.push(`<text x="${x(100) + 5}" y="${yy + 10}" class="v-n">${p.score}${low ? ' low' : ''}</text>`);
-    });
-    out.push(`<line x1="${x(threshold)}" x2="${x(threshold)}" y1="4" y2="${H - 16}" stroke="${C.ok}" stroke-width="1.2" stroke-dasharray="2.5 2"/>`, `<text x="${x(threshold)}" y="${H - 4}" text-anchor="middle" class="ax good">Target ${threshold}</text>`);
-    return `<svg class="chart" viewBox="0 0 ${W} ${H}" aria-hidden="true">${out.join('')}</svg>`;
-  }
-  // Many pages: how many pages fall in each band of match.
-  const bands = [
-    { label: '95–100', min: 95, max: 101 },
-    { label: '90–94', min: 90, max: 95 },
-    { label: '85–89', min: 85, max: 90 },
-    { label: '80–84', min: 80, max: 85 },
-    { label: '65–79', min: 65, max: 80 },
-    { label: 'below 65', min: -1, max: 65 },
-  ].map((band) => ({ ...band, n: pages.filter((p) => p.score >= band.min && p.score < band.max).length }));
-  const max = Math.max(...bands.map((x) => x.n), 1);
-  const L = 70;
-  const rowH = 24;
-  const x = (n) => f1((n / max) * (W - L - 64));
-  const out = bands.map((band, i) => {
-    const yy = 4 + i * rowH;
-    const color = band.min >= threshold ? C.copy : C.warn;
-    const w = band.n ? Math.max(3, x(band.n)) : 0;
-    return `<text x="${L - 8}" y="${yy + 12}" text-anchor="end" class="ax-p">${band.label}</text><rect x="${L}" y="${yy + 2}" width="${f1(W - L - 64)}" height="14" rx="2.5" fill="${C.track}"/>${w ? `<rect x="${L}" y="${yy + 2}" width="${w}" height="14" rx="2.5" fill="${color}"/>` : ''}<text x="${f1(W - 58)}" y="${yy + 12}" class="v-n">${plural(band.n, 'page')}</text>`;
-  });
-  const worst = [...pages].sort((p, q) => p.score - q.score)[0];
-  return `<svg class="chart" viewBox="0 0 ${W} ${bands.length * rowH + 6}" aria-hidden="true">${out.join('')}</svg><p class="note">Lowest: ${esc(worst.path === '/' ? 'the homepage' : clip(worst.path, 40))} at ${worst.score}. Target ${threshold}.</p>`;
-}
-
 // ---- Building blocks --------------------------------------------------------------------------------------------
 
 const logoTile = (f, name, cls = 'logo') =>
@@ -394,8 +346,6 @@ const tile = (value, label, tone, note = '') =>
 function tiles(f) {
   const { a, r, c } = f;
   const manual = manualGroups(a, r).length;
-  const match = r?.fidelity?.score;
-  const matchTile = r ? tile(match == null ? '—' : `${match}<small>%</small>`, 'Match with the original', '', esc(matchRating(match).label)) : '';
   if (f.state === 'full') {
     const s = c.summary ?? {};
     return [
@@ -403,7 +353,6 @@ function tiles(f) {
       tile(num(s.open ?? 0), 'Still needs work', 'warn', 'same as the original'),
       tile(num(s.regressed ?? 0), 'Got worse', 'bad', s.regressed ? 'worth a look' : 'nothing got worse'),
       tile(num(s.manual ?? manual), 'Needs a person', 'info', 'cannot be automated'),
-      matchTile,
     ].join('');
   }
   if (f.state === 'copied') {
@@ -412,7 +361,6 @@ function tiles(f) {
       tile(num(r.pages?.length ?? 0), 'Pages copied', '', `of ${plural(a.pagesCrawled ?? 0, 'page')} checked`),
       tile(num(fixes.length), 'Kinds of fixes applied', 'ok', 'by the copy, automatically'),
       tile(num(manual), 'Needs a person', 'info', 'cannot be automated'),
-      matchTile,
     ].join('');
   }
   const issues = originalIssues(f);
@@ -455,6 +403,8 @@ function cover(d, f, total) {
 <div class="brand">${logoTile(f, d.project.name || host)}<div><h1>${esc(d.project.name || host)}</h1><p class="addr">${esc(d.project.url)}</p></div></div>
 <div class="meta"><p class="kicker">Website report</p><p>${esc(date(d.generatedAt))}</p></div>
 </header>`;
+  // The look of the copy, said only when its own visual checks found a difference (the same sentence as the app's).
+  const look = f.r ? lookWarning(f.r) : null;
   const next = `<section class="nextbox${f.a ? '' : ' flat'}"><p class="eyebrow">What to do next</p><ol class="next">${nextSteps(f).map((s) => `<li>${esc(s)}</li>`).join('')}</ol></section>`;
   if (!f.a) {
     const steps = [['Check the site', 'Speed, Google and accessibility scores'], ['Create the copy', 'A faster copy with many problems fixed'], ['Compare', 'What got better, check by check']];
@@ -468,6 +418,7 @@ ${next}
   return `${band}<div class="body" id="summary">
 <p class="verdict">${esc(verdict(f))}</p>
 <p class="sub">${esc(subline(f))}</p>
+${look ? `<p class="look" role="alert">${esc(look)}</p>` : ''}
 <section class="card gauges" id="scores"><header><div><p class="eyebrow">Health scores on a phone</p><h3>${f.state === 'full' ? 'Original and copy, out of 100' : 'The original site, out of 100'}</h3></div>${legendKey(f)}</header>
 <div class="g-row">${AREAS.map((x) => gauge(x, f)).join('')}</div>
 <p class="cap foot">Google looks at phones first. The green tick on each dial marks “good” (90).${f.state === 'full' ? ' Outer ring: the copy; inner ring: the original.' : f.state === 'copied' ? ' The copy gets its own scores once it is compared (Re-audit).' : ''}</p></section>
@@ -508,15 +459,8 @@ function analytics(d, f, pageNo, total) {
 
   const manual = manualGroups(a, r).slice(0, 4).map((m) => itemLine('→', 'info', clip(m.title, 70)));
   const lists = [];
-  let left;
-  const match = r ? matchChart(r) : '';
-  if (match) {
-    const pagesN = r.fidelity?.pages?.length ?? 0;
-    left = card('Match', 'How close the copy looks', `${pagesN > 11 ? `${plural(pagesN, 'page')} grouped by how closely each matches the original` : 'Each copied page compared with the original'}, out of 100.`, match);
-  } else {
-    const top = originalIssues(f).slice(0, 6).map((x) => itemLine(x.tone === 'bad' ? '!' : '·', x.tone, clip(x.name, 60), clip(x.detail, 70)));
-    left = card('To improve', 'The most important problems', 'Found by the check; the copy fixes many of them by itself.', listBlock(top, 'No problems found.'));
-  }
+  const top = originalIssues(f).slice(0, 6).map((x) => itemLine(x.tone === 'bad' ? '!' : '·', x.tone, clip(x.name, 60), clip(x.detail, 70)));
+  const left = card('To improve', 'The most important problems', 'Found by the check; the copy fixes many of them by itself.', listBlock(top, 'No problems found.'));
   if (c) {
     const all = fixedItems(c);
     const shown = all.slice(0, 6).map((i) => itemLine('✓', 'ok', clip(plainName(i).name, 60), i.status === 'improved' ? 'better, not yet perfect' : ''));
@@ -547,16 +491,14 @@ function asIsPage(d, f, pageNo, total) {
     `<p>This mode delivers the original's own code and animations, saved locally. The code is the original's, not new code in the chosen stack.</p>`
     + `<p>Pages: ${pages.map((p) => `<span class="mono">${esc(p.path)}</span>`).join(', ') || '—'}</p>`);
   const rows = pages.map((p) => {
-    const visual = Object.fromEntries((p.visual ?? []).map((v) => [v.width, v.diffPct]));
     const off = p.offline?.external?.length ?? 0;
     const err = p.offline?.errors?.length ?? 0;
     return `<tr><td class="mono">${esc(p.path)}</td><td>${off ? `${off} off the copy` : 'none leave the copy'}</td>`
-      + `<td>${esc(visual[1440] ?? '—')}%</td><td>${esc(visual[390] ?? '—')}%</td>`
       + `<td>${p.hovers ? `${p.hovers.copy.changed} of ${p.hovers.original.changed}` : '—'}</td>`
       + `<td>${p.controls ? `${p.controls.copy.visible} of ${p.controls.original.visible} visible` : '—'}</td><td>${err}</td></tr>`;
   }).join('');
-  const checks = card('Checks', 'What the copy was checked for', 'Cold first visit, visual difference against the original, hovers, controls and console errors.',
-    `<table class="asis"><thead><tr><th>Page</th><th>Cold first visit</th><th>Visual 1440</th><th>Visual 390</th><th>Hovers (copy / original)</th><th>Controls</th><th>Console errors</th></tr></thead><tbody>${rows}</tbody></table>`);
+  const checks = card('Checks', 'What the copy was checked for', 'Cold first visit, hovers, controls and console errors.',
+    `<table class="asis"><thead><tr><th>Page</th><th>Cold first visit</th><th>Hovers (copy / original)</th><th>Controls</th><th>Console errors</th></tr></thead><tbody>${rows}</tbody></table>`);
   const excluded = a.excludedByRule ?? [];
   const gaps = pages.flatMap((p) => (p.controls?.excludedByRule ?? []).map((c) => `${esc(c.label)} on ${esc(p.path)}`));
   const left = card('Left out on purpose', 'Excluded by rule', 'Third-party parts that are not the site: trackers, chat widgets, the builder’s editor.',
@@ -621,6 +563,7 @@ h1,h2,h3,p{margin:0}
 .body{flex:1;padding:28px 40px 0;display:flex;flex-direction:column;gap:18px;min-height:0}
 .verdict{font-size:21px;line-height:1.3;font-weight:650;letter-spacing:-.01em;color:${C.ink};max-width:660px}
 .sub{color:${C.muted};font-size:11px;margin-top:-6px}
+.look{border:1px solid #fecdca;background:#fef3f2;color:${C.bad};border-radius:10px;padding:9px 12px;font-size:11px;font-weight:600}
 .card{border:1px solid #e4e7ec;border-radius:12px;padding:14px 16px;background:#fff;break-inside:avoid}
 .card>header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:6px}
 .eyebrow{color:${C.copy};font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}

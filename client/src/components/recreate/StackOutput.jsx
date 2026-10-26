@@ -65,11 +65,12 @@ export default function StackOutput({ stack, state, output, busy, onBuild }) {
       sub={`${plural(output.pages?.length ?? 0, 'page')}${build?.ms != null ? ` · built in ${Math.round(build.ms / 1000)} s` : ''}. Checked against the simple version page by page.`}
     >
       <ul className={styles.rows}>
+        {/* Pass or fail only, no page count: a page that differs is named by the look warning (copy.js lookWarning). */}
         {equivalence && (
           <Row
             ok={equivalence.ok ?? equivalence.dom.equal === equivalence.dom.total}
             label="Looks and works like the simple version"
-            detail={`${equivalence.dom.equal} of ${equivalence.dom.total} pages identical`}
+            detail={(equivalence.ok ?? equivalence.dom.equal === equivalence.dom.total) ? 'Checked page by page' : 'Some pages differ: see Results'}
           />
         )}
         {hydration && <Row ok={!hydration.failed} label="Starts without errors in the browser" detail={`${hydrated} of ${hydration.checked} pages`} />}
@@ -77,7 +78,6 @@ export default function StackOutput({ stack, state, output, busy, onBuild }) {
         {build?.js && (
           <Row ok label="Extra download for visitors" detail={`${kb(build.js.gzipBytes)} of app code (the simple version needs none)`} />
         )}
-        {output.fidelity?.score != null && <Row ok label="Match with the original" detail={`${output.fidelity.score} out of 100, the same as the simple version`} />}
         {urlChanges?.length > 0 && (
           <Row
             ok

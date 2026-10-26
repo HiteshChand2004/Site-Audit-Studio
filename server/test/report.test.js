@@ -127,15 +127,16 @@ test('checked and copied: page 1 is the dashboard, page 2 the charts; everything
   for (const anchor of ['id="page-1"', 'id="page-2"', 'id="summary"', 'id="scores"', 'id="numbers"']) assert.ok(html.includes(anchor), anchor);
   assert.equal(html.match(/class="page"/g)?.length, 2);
   assert.match(html, /Page 2 of 2/);
-  // No comparison yet: the original's scores, the match and the next step that asks for the comparison.
-  assert.match(html, /A copy of 1 page was made and matches the original 91%/);
+  // No comparison yet: the original's scores and the next step that asks for the comparison. No look score is printed, and
+  // the copy's visual checks passed, so nothing is said about the look.
+  assert.match(html, /A copy of 1 page was made; it has not been compared check by check yet./);
   assert.equal(html.match(/class="gauge"/g)?.length, 4, 'four score gauges');
-  assert.match(html, /Match with the original/);
-  assert.match(html, /Almost identical/, 'fidelity 91 in words');
+  assert.doesNotMatch(html, /Match with the original|Almost identical|matches the original|How close the copy looks|91%/);
+  assert.doesNotMatch(html, /class="look"/);
   assert.match(html, /Compare the copy with the original/);
   assert.match(html, /Every check, page and value is in the JSON download/);
   // Charts are inline SVG.
-  assert.ok((html.match(/<svg/g) ?? []).length >= 8, 'gauges, bar chart, donut, speed bars, match chart');
+  assert.ok((html.match(/<svg/g) ?? []).length >= 7, 'gauges, bar chart, donut, speed bars');
   assert.match(html, /Main content shows in/);
   assert.match(html, /Good ≤ 2\.5 s/);
   assert.match(html, /Form on \/ needs a backend/);

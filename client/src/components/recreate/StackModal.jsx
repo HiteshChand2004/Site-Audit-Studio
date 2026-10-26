@@ -110,8 +110,8 @@ export default function StackModal({ open, onClose, project, askAddress = false 
           <label className={form.check}>
             <input type="checkbox" checked={exact} onChange={(e) => setExact(e.target.checked)} />
             <span>
-              Exact copy. Every page is measured against the original at every screen size until it matches, so the copy
-              takes hours instead of minutes. The site is copied as it is: colours and pictures are left untouched, which
+              Exact copy. Every page is checked against the original at every screen size and what looks different is
+              corrected, so the copy takes hours instead of minutes. The site is copied as it is: colours and pictures are left untouched, which
               means the original’s own contrast and picture problems are kept rather than fixed.
             </span>
           </label>

@@ -25,9 +25,6 @@ const FIX_KIND = {
   data: 'structured data for search and AI answers',
 };
 
-// How one check reads in the table: a score (visual), a count (controls, hovers), or nothing measured.
-const cell = (v) => (v == null ? '–' : typeof v === 'number' ? String(Math.round(v)) : v);
-
 /**
  * The per-page results of "Copy my site": how each page was made, its checks, the open items, and what the link pass did.
  * @param {{ copy: object }} props  the copy's part of the recreate report (report.copy)
@@ -40,15 +37,13 @@ export default function CopyPages({ copy }) {
   if (!pages.length) return null;
   const linkWork = links.filter((l) => l.action !== 'ok');
   return (
-    <Card icon={FileText} title="Every page" sub={`${plural(pages.length, 'page')} in ${copy.stack}. Scores: 100 is the same as the original.`}>
+    <Card icon={FileText} title="Every page" sub={`${plural(pages.length, 'page')} in ${copy.stack}.`}>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
           <thead>
             <tr>
               <th scope="col" style={{ textAlign: 'left' }}>Page</th>
               <th scope="col" style={{ textAlign: 'left' }}>How it was made</th>
-              <th scope="col">Look, computer</th>
-              <th scope="col">Look, phone</th>
               <th scope="col">Controls</th>
               <th scope="col">Hovers</th>
               <th scope="col">Console errors</th>
@@ -62,8 +57,6 @@ export default function CopyPages({ copy }) {
                 <tr key={p.path}>
                   <td className="mono">{p.path}</td>
                   <td>As it is</td>
-                  <td style={{ textAlign: 'center' }}>{cell(p.visual?.[1440])}</td>
-                  <td style={{ textAlign: 'center' }}>{cell(p.visual?.[390])}</td>
                   <td style={{ textAlign: 'center' }}>{p.controls ? `${p.controls.same} of ${p.controls.total}` : '–'}</td>
                   <td style={{ textAlign: 'center' }}>{p.hovers ? `${p.hovers.matched} of ${p.hovers.total}` : '–'}</td>
                   <td style={{ textAlign: 'center' }}>{p.console}</td>
