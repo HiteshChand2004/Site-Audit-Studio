@@ -4,7 +4,7 @@ import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { db } from '../db/index.js';
 import { auditDir, projectDir } from '../config/paths.js';
-import { parseMaxPages } from './analyze.js';
+import { DEFAULT_MAX_PAGES, parseMaxPages } from './analyze.js';
 import { buildDummyAudit } from '../dummy/audit.js';
 import { precheckUrl } from '../security/netGuard.js';
 import { ALL_PAGES, MAX_RECREATE_PAGES, parseExactMode, parsePageUrl, parseRecreatePages, parseTargetDomain } from '../recreate/inputs.js';
@@ -47,8 +47,8 @@ function badRequest(res, message) {
 const selectAll = db.prepare('SELECT * FROM projects ORDER BY updated_at DESC');
 const selectOne = db.prepare('SELECT * FROM projects WHERE id = ?');
 const insert = db.prepare(`
-  INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at)
-  VALUES (?, ?, ?, ?, 1, -1, ?, ?)
+  INSERT INTO projects (id, name, url, stack, authorized, max_pages, recreate_pages, created_at, updated_at)
+  VALUES (?, ?, ?, ?, 1, ${DEFAULT_MAX_PAGES}, -1, ?, ?)
 `);
 const remove = db.prepare('DELETE FROM projects WHERE id = ?');
 
