@@ -386,6 +386,136 @@ export const CONTACT_PENDING = {
   form: 'The contact form is not connected yet, so this message was not sent and nothing you typed was saved. Please try again later.',
 };
 
+/**
+ * The Privacy and Terms pages. Each section's body is read in order: a string is a paragraph, a list of strings is a bullet
+ * list, { head, rows } is a small table. Only facts about the tool and this site go here: no retention period, promise or
+ * legal detail that has not been given to us. There is no contact email yet, and the pages say so instead of using a placeholder.
+ */
+export type LegalTable = { head: [string, string]; rows: [string, string][] };
+export type LegalSection = { heading: string; body: (string | string[] | LegalTable)[] };
+export type LegalDoc = { intro: string; updated: string; sections: LegalSection[] };
+
+const NO_CONTACT_YET = 'A contact email will be added here soon.';
+const WHO_WE_ARE: LegalSection = {
+  heading: 'Who we are',
+  body: ['Remastly is made by PanScience Innovations LLP, Wing 1, Third Floor, JP House, JP House Road, Shahpur Jat, Siri Fort, New Delhi – 110049, India.', NO_CONTACT_YET],
+};
+
+export const LEGAL: Record<'privacy' | 'terms', LegalDoc> = {
+  privacy: {
+    intro: 'What Remastly keeps about you, why, and for how long.',
+    updated: '26 October 2026',
+    sections: [
+      {
+        heading: 'What we keep',
+        body: [
+          {
+            head: ['Detail', 'Why'],
+            rows: [
+              ['Your email address', 'To create your account, sign you in and send your sign-up code'],
+              ['Your password', 'To sign you in'],
+              ['The websites you add', 'To open them, measure them and build the copy'],
+              ['Your projects, copies and reports', 'So you can see and download them'],
+              ['One session cookie', 'To keep you signed in'],
+            ],
+          },
+          'The sign-up form also sends the name you type in it.',
+        ],
+      },
+      {
+        heading: 'Who reads it and why',
+        body: [
+          [
+            'Each project and copy belongs to the account that made it. Other accounts cannot see it.',
+            'Your 6-digit sign-up code is emailed through Gmail SMTP, so that email passes through Google.',
+            'The websites you add are opened by a browser on our server and measured with Lighthouse.',
+          ],
+        ],
+      },
+      {
+        heading: 'How long it is kept',
+        body: [['Copies are kept for 30 days. The newest copy of each project is always kept.', 'No period has been published here yet for your account, projects or reports.']],
+      },
+      {
+        heading: 'Deleting it',
+        body: ['Copies older than 30 days are removed, except the newest copy of each project. To have your account or anything else deleted, write to us.', NO_CONTACT_YET],
+      },
+      {
+        heading: 'Everything else',
+        body: [
+          [
+            'Cookies: one session cookie keeps you signed in. Nothing else on this site sets cookies.',
+            'Analytics: this site has no analytics, advertising or tracking scripts.',
+            'Other websites: fonts, images and video are served from this site. Nothing is loaded from other websites.',
+            'Forms: the contact form never sends anything from this site itself. The address check on the home page is not connected yet and sends nothing.',
+            'Rate limits: sign-up and sign-in are limited per network address, so the server looks at the address your request comes from.',
+            'Server logs: what our servers log is not described on this page yet.',
+          ],
+        ],
+      },
+      WHO_WE_ARE,
+    ],
+  },
+  terms: {
+    intro: 'The rules for using Remastly, in plain words.',
+    updated: '26 October 2026',
+    sections: [
+      {
+        heading: 'What Remastly does',
+        body: [
+          [
+            'You add a website. A browser on our server opens it and measures it with Lighthouse.',
+            'Remastly builds a separate copy that you preview and download, with a report. The original site is only visited, never changed.',
+            'Some parts cannot be rebuilt automatically, such as logins, shops and form backends. These are listed as “Needs a person”.',
+          ],
+        ],
+      },
+      {
+        heading: 'Your permission to copy a site',
+        body: [
+          [
+            'Only add websites your company owns, or that you have permission to copy.',
+            'When you add a website, you tick a box promising this.',
+            'We do not check that promise. You are the one making it.',
+          ],
+        ],
+      },
+      {
+        heading: 'Acceptable use',
+        body: [
+          [
+            'Do not add a website you have no permission to copy.',
+            'Do not use Remastly to get around bot protection or into areas you are not allowed to access.',
+            'Do not use Remastly to break the law.',
+            'Sign-up and sign-in are limited per network address.',
+          ],
+        ],
+      },
+      {
+        heading: 'Copies and reports are provided as they are',
+        body: [
+          [
+            'Copies and reports are made automatically, and results vary by site.',
+            'Each report lists what got better, what still needs work and what got worse.',
+            'Check a copy before you publish it anywhere.',
+          ],
+        ],
+      },
+      {
+        heading: 'The service is new and may change',
+        body: [
+          [
+            'Remastly is new. What it does, its plans and these terms may change.',
+            'Copies are kept for 30 days, apart from the newest copy of each project. Download what you want to keep.',
+            'When these terms change, the date below changes too.',
+          ],
+        ],
+      },
+      WHO_WE_ARE,
+    ],
+  },
+};
+
 /** What the sign-in and sign-up forms say while the app is not connected. They send and save nothing, and say so. */
 export const AUTH_NOT_OPEN = {
   signup: 'Sign-up is not open yet, and nothing you entered was sent or saved. To get in touch:',
