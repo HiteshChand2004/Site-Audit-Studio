@@ -389,16 +389,15 @@ export const CONTACT_PENDING = {
 /**
  * The Privacy and Terms pages. Each section's body is read in order: a string is a paragraph, a list of strings is a bullet
  * list, { head, rows } is a small table. Only facts about the tool and this site go here: no retention period, promise or
- * legal detail that has not been given to us. There is no contact email yet, and the pages say so instead of using a placeholder.
+ * legal detail that has not been given to us.
  */
 export type LegalTable = { head: [string, string]; rows: [string, string][] };
 export type LegalSection = { heading: string; body: (string | string[] | LegalTable)[] };
 export type LegalDoc = { intro: string; updated: string; sections: LegalSection[] };
 
-const NO_CONTACT_YET = 'A contact email will be added here soon.';
 const WHO_WE_ARE: LegalSection = {
   heading: 'Who we are',
-  body: ['Remastly is made by PanScience Innovations LLP, Wing 1, Third Floor, JP House, JP House Road, Shahpur Jat, Siri Fort, New Delhi – 110049, India.', NO_CONTACT_YET],
+  body: ['Remastly is made by PanScience Innovations LLP, Wing 1, Third Floor, JP House, JP House Road, Shahpur Jat, Siri Fort, New Delhi – 110049, India.'],
 };
 
 export const LEGAL: Record<'privacy' | 'terms', LegalDoc> = {
@@ -417,9 +416,9 @@ export const LEGAL: Record<'privacy' | 'terms', LegalDoc> = {
               ['The websites you add', 'To open them, measure them and build the copy'],
               ['Your projects, copies and reports', 'So you can see and download them'],
               ['One session cookie', 'To keep you signed in'],
+              ['Your name, if you enter it at sign-up', 'To set up your account'],
             ],
           },
-          'The sign-up form also sends the name you type in it.',
         ],
       },
       {
@@ -434,11 +433,11 @@ export const LEGAL: Record<'privacy' | 'terms', LegalDoc> = {
       },
       {
         heading: 'How long it is kept',
-        body: [['Copies are kept for 30 days. The newest copy of each project is always kept.', 'No period has been published here yet for your account, projects or reports.']],
+        body: [['Copies are kept for 30 days. The newest copy of each project is always kept.', 'Your account, projects and reports are kept until you ask us to delete them.']],
       },
       {
         heading: 'Deleting it',
-        body: ['Copies older than 30 days are removed, except the newest copy of each project. To have your account or anything else deleted, write to us.', NO_CONTACT_YET],
+        body: ['Copies older than 30 days are removed automatically, except the newest copy of each project. To have your account or anything else deleted, write to us at the address below.'],
       },
       {
         heading: 'Everything else',
@@ -447,9 +446,9 @@ export const LEGAL: Record<'privacy' | 'terms', LegalDoc> = {
             'Cookies: one session cookie keeps you signed in. Nothing else on this site sets cookies.',
             'Analytics: this site has no analytics, advertising or tracking scripts.',
             'Other websites: fonts, images and video are served from this site. Nothing is loaded from other websites.',
-            'Forms: the contact form never sends anything from this site itself. The address check on the home page is not connected yet and sends nothing.',
+            'Previews: when you preview a copy, it may load fonts or widgets from the same services the original site uses.',
             'Rate limits: sign-up and sign-in are limited per network address, so the server looks at the address your request comes from.',
-            'Server logs: what our servers log is not described on this page yet.',
+            'Server logs: like any web server, ours may keep ordinary request logs, such as the address a request came from and when.',
           ],
         ],
       },

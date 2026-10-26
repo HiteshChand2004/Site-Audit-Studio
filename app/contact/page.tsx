@@ -42,17 +42,17 @@ export default function Contact() {
       <Section label="Contact form" size="sm">
         <div className="ct">
           <aside className="ct__side">
-            <div className="ct__block">
-              <span className="ct__ico" aria-hidden="true">
-                <Mail size={20} />
-              </span>
-              <h2>Email</h2>
-              {CONTACT_EMAIL && (
+            {CONTACT_EMAIL && (
+              <div className="ct__block">
+                <span className="ct__ico" aria-hidden="true">
+                  <Mail size={20} />
+                </span>
+                <h2>Email</h2>
                 <a href={`mailto:${CONTACT_EMAIL}`} className="link">
                   {CONTACT_EMAIL}
                 </a>
-              )}
-            </div>
+              </div>
+            )}
             <div className="ct__block">
               <h2>Helpful to include</h2>
               <ul className="ticks">
