@@ -11,6 +11,10 @@ export const COPY_STACKS = [
   { id: 'mern', name: 'MERN', line: 'React pages plus a small Express server that can store contact-form submissions in MongoDB.' },
 ];
 
+// The most pages one as-is copy takes: the server keeps the first this many of the list it is sent (AS_IS_MAX_PAGES in
+// server/src/recreate/behavior/preserve/asis.js; AsIsChoice lists the same number).
+const AS_IS_MAX_PAGES = 40;
+
 /** The address must be a web address with a host (https is asked for; http is accepted and upgraded when it works). */
 export function validAddress(value) {
   try {
@@ -103,7 +107,11 @@ export default function CopyPanel({ open, onClose, project, pageCount, onStart }
       </label>
 
       <p style={{ marginTop: 12, color: 'var(--muted)' }}>
-        Pages: {pageCount ? `every page of the site (${pageCount} found so far)` : 'every page of the site'}.
+        Pages: {!pageCount
+          ? 'every page of the site'
+          : pageCount > AS_IS_MAX_PAGES
+            ? `the first ${AS_IS_MAX_PAGES} of the ${pageCount} pages found so far`
+            : `every page of the site (${pageCount} found so far)`}.
       </p>
 
       <label className={form.check} style={{ marginTop: 12 }}>

@@ -66,7 +66,11 @@ export default function StackOutput({ stack, state, output, busy, onBuild }) {
     >
       <ul className={styles.rows}>
         {equivalence && (
-          <Row ok label="Looks and works like the simple version" detail={`${equivalence.dom.equal} of ${equivalence.dom.total} pages identical`} />
+          <Row
+            ok={equivalence.ok ?? equivalence.dom.equal === equivalence.dom.total}
+            label="Looks and works like the simple version"
+            detail={`${equivalence.dom.equal} of ${equivalence.dom.total} pages identical`}
+          />
         )}
         {hydration && <Row ok={!hydration.failed} label="Starts without errors in the browser" detail={`${hydrated} of ${hydration.checked} pages`} />}
         {safety && <Row ok={safety.safe} label="Safe" detail="Only its own scripts; nothing is loaded from other sites" />}

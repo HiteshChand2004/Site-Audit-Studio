@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CheckCircle2, Columns2, Loader2, Play, RefreshCw, Settings2, Sparkles, StopCircle, Target, Trophy } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import { Alert, Card } from '../../components/common/Surface.jsx';
@@ -90,6 +90,16 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
     const pages = await api.getPages(project.id).then((r) => (r.pages ?? []).map((p) => p.url)).catch(() => []);
     await recreate(project.id, { mode: 'as-is', confirmed: true, stack: chosen, pages, ...(address && { addressConfirmed: address }) });
   };
+  // What the panel says it will copy: the same list startCopy sends (every page the app has seen), read when it opens.
+  const [copyPageCount, setCopyPageCount] = useState(null);
+  useEffect(() => {
+    if (!copyOpen) return undefined;
+    let live = true;
+    api.getPages(project.id).then((r) => live && setCopyPageCount((r.pages ?? []).length), () => live && setCopyPageCount(null));
+    return () => {
+      live = false;
+    };
+  }, [copyOpen, project.id]);
   const [building, setBuilding] = useState(false);
   const [buildError, setBuildError] = useState(null);
 
@@ -122,7 +132,7 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
           </Button>
         </div>
       )}
-      <CopyPanel open={copyOpen} onClose={() => setCopyOpen(false)} project={project} onStart={startCopy} />
+      <CopyPanel open={copyOpen} onClose={() => setCopyOpen(false)} project={project} pageCount={copyPageCount} onStart={startCopy} />
 
       {job && job.status !== 'done' && <AnalyzeProgress analysis={job} kind="recreate" onDismiss={() => dismissJob('recreate', project.id)} />}
 

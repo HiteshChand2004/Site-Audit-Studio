@@ -6,7 +6,7 @@ import CountUp from '../common/CountUp.jsx';
 import { CHECKS, HEALTH, matchRating, RESULT_STATUS, TERMS } from '../../copy.js';
 import { plural } from '../../format.js';
 import styles from './Outcome.module.css';
-import { stackById } from '../../constants.js';
+import { STACKS } from '../../constants.js';
 import { copiedPages } from '../../copiedPages.js';
 
 // Before → after scores shown (phone measurements: most visitors).
@@ -36,7 +36,10 @@ export default function Outcome({ result, comparison }) {
   const after = comparison?.scores?.after?.mobile;
 
   // The one plain line of "Copy my site" (the same words as server/src/copy/regress.js summaryLine).
-  const stackName = stackById(result.stack)?.label ?? result.stack ?? '';
+  // The copy's own technology, as Results' download card reads it (an as-is copy is packaged in result.asIs.stack), by its
+  // readable name; an id the app does not know is shown as it is rather than as another technology.
+  const stackId = result.asIs?.stack ?? result.stack;
+  const stackName = (stackId && STACKS.find((x) => x.id === stackId)?.name) ?? stackId ?? '';
   const pagesN = copiedPages(result).length;
   const fixedN = s ? (s.fixed ?? 0) + (s.improved ?? 0) : 0;
   const summaryText = `${plural(pagesN, 'page')} copied${stackName ? ` in ${stackName}` : ''} · ${result.asIs ? pagesN : 0} as-is, ${result.asIs ? 0 : pagesN} rebuilt · ${s ? `Got worse: ${s.regressed ?? 0}${worse ? ` (${worse.explained} with a reason, ${worse.unexplained} unexplained)` : ''} · Fixed: ${fixedN} · Still open: ${s.open ?? 0}${stillOpen ? ` (${stillOpen.explained} with a reason, ${stillOpen.unexplained} unexplained)` : ''}` : 'Got worse: not measured yet (the check after the copy has not finished)'}`;

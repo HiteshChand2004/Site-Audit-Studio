@@ -82,13 +82,40 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
     : copyState === 'failed'
       ? `The ${copyName} build of this copy did not finish. The reason is in “Create the copy”; make the copy again to get a download.`
       : `This copy has no ${copyName} build to download. Make the copy again.`;
+  // Why a finished copy cannot be downloaded although it is built: its safety result (the server refuses the zip too).
+  const unsafeText = result.safety?.safe
+    ? null
+    : !result.safety
+      ? 'This copy has no safety check result, so it cannot be downloaded. Make the copy again.'
+      : result.safety.mode === 'as-is'
+        ? 'The copy loads something from another website, so it cannot be downloaded until that is fixed. “Checks, per page” above shows which page.'
+        : 'The copy did not pass its safety check, so it cannot be downloaded.';
 
   const comparison = audit && !audit.isDummy && audit.recreate && !audit.recreate.isDummy ? audit.recreate : null;
   const canCompare = audit?.recreate?.recreateId && !isJobActive(reauditJob);
+  // The latest comparison of this copy failed (with or without an earlier one to show): said once, at the top, in red. The
+  // progress box already shows a failure that just happened.
+  const compareError = audit && !audit.isDummy ? audit.recreate?.lastError ?? null : null;
+  const showCompareError = Boolean(compareError) && reauditJob?.status !== 'failed';
 
   return (
     <div className={ws.stepBody}>
       {reauditJob && reauditJob.status !== 'done' && <AnalyzeProgress analysis={reauditJob} kind="reaudit" onDismiss={() => dismissJob('reaudit', project.id)} />}
+
+      {/* Not only inside the closed "Every check, before and after", or below the results. */}
+      {showCompareError && (
+        <Alert
+          tone="bad"
+          title="The latest comparison failed"
+          action={
+            <Button size="sm" icon={RotateCw} disabled={!canCompare || busy} onClick={() => startReaudit(project.id)}>
+              Compare again
+            </Button>
+          }
+        >
+          {compareError} {comparison ? 'The results below are from the previous comparison.' : 'The copy has not been compared with the original yet.'}
+        </Alert>
+      )}
 
       {result.asIs && (
         <AsIsReport
@@ -108,9 +135,9 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
       <Outcome result={result} comparison={comparison} />
       {result.copy && <CopyPages copy={result.copy} />}
 
-      {!comparison && canCompare && (
+      {!comparison && canCompare && !showCompareError && (
         <Alert
-          tone="info"
+          tone={audit.recreate.lastError ? 'bad' : 'info'}
           title="The copy has not been compared with the original yet"
           action={
             <Button variant="primary" size="sm" icon={RotateCw} disabled={busy} onClick={() => startReaudit(project.id)}>
@@ -143,12 +170,17 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
             icon={downloading ? (p) => <Loader2 {...p} className={styles.spin} /> : Download}
             disabled={!canDownload || downloading}
             onClick={download}
-            title={canDownload ? undefined : zipReady ? 'Wait until the running job has finished' : notReadyText}
+            title={canDownload ? undefined : !zipReady ? notReadyText : unsafeText ?? 'Wait until the running job has finished'}
           >
             Download .zip
           </Button>
         </div>
         {!zipReady && <p className={ws.hint}>{notReadyText}</p>}
+        {zipReady && unsafeText && (
+          <Alert tone="bad" title="The download is held back">
+            {unsafeText}
+          </Alert>
+        )}
         {downloadError && (
           <Alert tone="bad" title="The download did not work">
             {downloadError}

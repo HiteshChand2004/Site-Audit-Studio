@@ -21,7 +21,7 @@ export function isAppOrigin(url) {
 
 /** Whether the live iframe may be used for this audit, and why not. */
 export function liveAvailability(audit, url) {
-  if (!audit || audit.isDummy) return { ok: false, why: 'Run Analyze to load the real site.' };
+  if (!audit || audit.isDummy) return { ok: false, why: 'Check the site to load the real site.' };
   if (isAppOrigin(url)) return { ok: false, why: 'This app cannot frame itself.' };
   if (!audit.frame?.frameable) return { ok: false, why: `The site blocks framing (${audit.frame?.reason}).` };
   return { ok: true, why: null };
@@ -121,14 +121,14 @@ function Screenshot({ shot, viewport, url, scrollRef }) {
   if (!shot) {
     return (
       <Empty icon={ImageOff} title="No screenshot for this width">
-        The {viewport.label.toLowerCase()} capture failed during Analyze. See the report errors.
+        The {viewport.label.toLowerCase()} capture failed during the check. See the report errors.
       </Empty>
     );
   }
   if (failed) {
     return (
       <Empty icon={ImageOff} title="Screenshot not available">
-        Only the latest 3 analyses keep their screenshots. Run Analyze again to capture new ones.
+        Only the latest 3 checks keep their screenshots. Check the site again to capture new ones.
       </Empty>
     );
   }
@@ -230,7 +230,7 @@ export default function SitePreview({ url, audit, mode, viewport, onSlow, scroll
   if (!audit?.screenshots) {
     return (
       <Empty icon={Camera} title="No screenshots yet">
-        This analysis has no screenshots. Run Analyze again to capture desktop, tablet and phone views.
+        This check has no screenshots. Check the site again to capture desktop, tablet and phone views.
       </Empty>
     );
   }
