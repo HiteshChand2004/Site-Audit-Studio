@@ -445,7 +445,7 @@ export const LEGAL: Record<'privacy' | 'terms', LegalDoc> = {
           [
             'Cookies: one session cookie keeps you signed in. Nothing else on this site sets cookies.',
             'Analytics: this site has no analytics, advertising or tracking scripts.',
-            'Other websites: fonts, images and video are served from this site. Nothing is loaded from other websites.',
+            'This website: its fonts, images and video are served from this site, and it loads nothing from other websites.',
             'Previews: when you preview a copy, it may load fonts or widgets from the same services the original site uses.',
             'Rate limits: sign-up and sign-in are limited per network address, so the server looks at the address your request comes from.',
             'Server logs: like any web server, ours may keep ordinary request logs, such as the address a request came from and when.',
