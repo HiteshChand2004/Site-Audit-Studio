@@ -3,7 +3,6 @@ import { Check, Mail, MessageSquare } from 'lucide-react';
 import ContactForm from '@/components/ContactForm';
 import { PageHero, Section } from '@/components/ui';
 import { HeroArt, HeroShot } from '@/components/ui/HeroArt';
-import { CONTACT_PENDING } from '@/lib/content';
 import { CONTACT_EMAIL } from '@/lib/site';
 import { pageMeta } from '@/lib/meta';
 import '@/app/contact.css';
@@ -48,12 +47,10 @@ export default function Contact() {
                 <Mail size={20} />
               </span>
               <h2>Email</h2>
-              {CONTACT_EMAIL ? (
+              {CONTACT_EMAIL && (
                 <a href={`mailto:${CONTACT_EMAIL}`} className="link">
                   {CONTACT_EMAIL}
                 </a>
-              ) : (
-                <p>{CONTACT_PENDING.email}</p>
               )}
             </div>
             <div className="ct__block">

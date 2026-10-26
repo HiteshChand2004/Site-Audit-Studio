@@ -383,7 +383,6 @@ export const pricing = {
 /** Shown instead of contact details until a real address is set in lib/site.ts (CONTACT_EMAIL). */
 export const CONTACT_PENDING = {
   lead: 'Questions about plans, a demo, or a website you want to rebuild? Our contact details are not published yet.',
-  email: 'Our email address is not published yet.',
   form: 'The contact form is not connected yet, so this message was not sent and nothing you typed was saved. Please try again later.',
 };
 
