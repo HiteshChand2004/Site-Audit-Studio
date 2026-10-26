@@ -893,11 +893,16 @@ Checked against the conversions (2026-10-25, after `convert-react` was merged; D
   most likely stale tests, not fixed yet: `recreate-mern` / `recreate-next` "real export" fetch the preview's path
   `/preview/<token>/…` as a full address (previews moved under the app's address on 2026-10-24), and the Next zip test
   does not expect `DEPLOY.md`. Batch 8 was cut off.
-  **Tomorrow**: run the 34 files of `suite\remaining.txt` (batch 5, `recreate-mern`, `recreate-next`, batches 8–9):
-  the 22 of `remaining-browser.txt` alone, 5 at a time, then the 12 of `remaining-no-browser.txt`, 5 at a time:
-  `SAS_TEST_BROWSER_CONCURRENCY=1 node test/run-tests.js <5 files>` from `server/`. Before closing leftovers between
-  batches, make sure no runner is still going (a stopped background shell can leave `node test/run-tests.js` alive);
-  `suite\cleanup-tests.ps1` closes only Playwright's Chromium and node processes of this worktree's tests.
+  **Completed 2026-10-26** (`suite\day2\`): the last 34 files (`suite\remaining.txt`), the 22 browser files alone 5 at a
+  time, then the 12 others: 270 passed, 4 failed, all stale tests, none a bug, updated in 848db63 (no code changed):
+  `recreate-generate`, `recreate-mern`, `recreate-next` still treated a preview as a server of its own (a port, an
+  absolute URL); since 6b2cdbf it is a path under the app's address, its pages served with their addresses moved under
+  `/preview/<token>/`, and `script-src` names the app's address (a sandboxed page has no 'self'). The Next zip test did
+  not expect `DEPLOY.md`, in every download since c7fa9a4. After the updates: 13/13, 6/6, 12/12. **All 192 files have now
+  run; no failure is left.** Still open: the 5 skipped contrast-fixer tests above (before or after the merge to main).
+  How to run batches: `SAS_TEST_BROWSER_CONCURRENCY=1 node test/run-tests.js <files>` from `server/`, browser files alone;
+  `suite\batches.sh` waits until no runner is left before `suite\cleanup-tests.ps1` closes leftovers (only Playwright's
+  Chromium and this worktree's test node processes).
 
 ## Next steps, in order (commit after each with `--no-verify`, say the full suite was not run; nothing is pushed before the PR)
 
