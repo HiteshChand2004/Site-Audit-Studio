@@ -1,0 +1,43 @@
+import type { Metadata, Viewport } from 'next';
+import { Inter, JetBrains_Mono } from 'next/font/google';
+import Header from '@/components/Header';
+import Footer from '@/components/Footer';
+import RevealObserver from '@/components/RevealObserver';
+import { DESCRIPTION, SITE_NAME, SITE_URL } from '@/lib/site';
+import './globals.css';
+import './visual.css';
+
+const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
+const mono = JetBrains_Mono({ subsets: ['latin'], weight: ['400', '500'], variable: '--font-jetbrains', display: 'swap' });
+
+export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
+  title: { default: 'Remastly: check, rebuild and compare your website', template: '%s · Remastly' },
+  description: DESCRIPTION,
+  applicationName: SITE_NAME,
+  alternates: { canonical: '/' },
+  openGraph: { type: 'website', siteName: SITE_NAME, locale: 'en', url: '/', title: 'Remastly: check, rebuild and compare your website', description: DESCRIPTION },
+  twitter: { card: 'summary_large_image' },
+};
+
+export const viewport: Viewport = { themeColor: '#c2410c', width: 'device-width', initialScale: 1 };
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en" className={`${inter.variable} ${mono.variable}`} suppressHydrationWarning>
+      <head>
+        {/* Scroll reveals only hide content when JavaScript runs, so nothing stays invisible without it. */}
+        <script dangerouslySetInnerHTML={{ __html: "document.documentElement.classList.add('js')" }} />
+      </head>
+      <body>
+        <a href="#main" className="skip-link">
+          Skip to content
+        </a>
+        <Header />
+        <main id="main">{children}</main>
+        <Footer />
+        <RevealObserver />
+      </body>
+    </html>
+  );
+}

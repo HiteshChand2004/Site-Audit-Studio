@@ -125,7 +125,7 @@ are allowed. The user's dev server (4000 / 5173) runs from `Website-Audit-exact`
   (`client/src/components/account/AccountMenu.jsx`: email, Change password dialog, Sign out; a sign-out icon in the rail); hidden
   when the API has no accounts (`/api/auth/me` 404).
 - **One local address** (`npm run local` → `scripts/local.mjs` + `scripts/local-proxy.mjs`), http://localhost:8080:
-  `/` → the marketing site's `next dev` (:3000, `../remastly-website`, `SAS_MARKETING_DIR`), `/app/` → the tool's Vite (:5173),
+  `/` → the marketing site's `next dev` (:3000, `./website` — `../remastly-website` before the `monorepo` branch —, `SAS_MARKETING_DIR`), `/app/` → the tool's Vite (:5173),
   `/api/` → the API (:4000, started with `SAS_ACCOUNTS=1`, `SAS_PUBLIC_ORIGIN` = `APP_ORIGIN` = the proxy's address, and
   `SAS_DEV_NO_VERIFY=1` — the API prints its warning line; `npm run local -- --verify` for the real behaviour). Host is passed
   through, so the API's Origin check and the dev servers see one origin; WebSocket upgrades (hot reload) are proxied.
