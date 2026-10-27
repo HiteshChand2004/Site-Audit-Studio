@@ -6,7 +6,7 @@ import InfoTip from '../components/common/InfoTip.jsx';
 import { Segmented } from '../components/common/Tabs.jsx';
 import { BrowserShot, SiteIcon } from '../components/site/Site.jsx';
 import { RECREATE_STACKS, hostOf, stackById } from '../constants.js';
-import { HEALTH, RESULT_STATUS, rating, resumeText } from '../copy.js';
+import { COPY_KIND, copyStackOf, HEALTH, RESULT_EXPLAIN, rating, resumeText } from '../copy.js';
 import { plural, timeAgo } from '../format.js';
 import { api } from '../api/client.js';
 import { outputsOf } from '../stacks.js';
@@ -34,7 +34,7 @@ function Score({ health, before, after, index }) {
       <span className={styles.scoreLabel}>
         {h.title}
         <InfoTip label={h.title}>
-          {h.explain} <em>({h.expert})</em>
+          {h.explain}
         </InfoTip>
       </span>
       <span className={styles.scoreRow}>
@@ -101,8 +101,8 @@ export default function SiteHero({ project, audit, onGo, compact = false }) {
   const facts = [
     checked && `Checked ${timeAgo(audit.analyzedAt)}`,
     checked && plural(audit.pagesCrawled ?? 0, 'page') + ' read',
-    platform && `Built with ${platform.name}`,
-    result && `Copy in ${stackById(result.stack ?? project.stack).short}`,
+    platform && `Made with ${platform.name}`,
+    result && `Your copy: ${COPY_KIND[copyStackOf(result, project.stack)] ?? stackById(copyStackOf(result, project.stack)).name}`,
   ].filter(Boolean);
 
   const ready = result && outputsOf(result)[project.stack]?.status === 'ready' && result.safety?.safe;
@@ -179,7 +179,7 @@ export default function SiteHero({ project, audit, onGo, compact = false }) {
           onGo('create');
         }}
       >
-        Create the copy
+        Make the copy
       </Button>
     );
   } else {
@@ -226,10 +226,10 @@ export default function SiteHero({ project, audit, onGo, compact = false }) {
           {counts && (
             <ul className={styles.counts} aria-label="Compared with the original">
               {[
-                ['better', counts.better, 'ok', 'better', `${RESULT_STATUS.fixed.explain} Or: ${RESULT_STATUS.improved.explain.toLowerCase()}`],
-                ['open', counts.open, counts.open ? 'warn' : 'neutral', 'still open', RESULT_STATUS.open.explain],
-                ['regressed', counts.regressed, counts.regressed ? 'bad' : 'neutral', 'got worse', RESULT_STATUS.regressed.explain],
-                ['manual', counts.manual, 'neutral', 'for a person', RESULT_STATUS.manual.explain],
+                ['better', counts.better, 'ok', 'better', RESULT_EXPLAIN.better],
+                ['open', counts.open, counts.open ? 'warn' : 'neutral', counts.open === 1 ? 'still needs work' : 'still need work', RESULT_EXPLAIN.open],
+                ['regressed', counts.regressed, counts.regressed ? 'bad' : 'neutral', 'got worse', RESULT_EXPLAIN.regressed],
+                ['manual', counts.manual, 'neutral', counts.manual === 1 ? 'needs a person' : 'need a person', RESULT_EXPLAIN.manual],
               ].map(([id, n, tone, label, tip]) => (
                 <li key={id} data-tone={tone}>
                   <button type="button" onClick={() => onGo('results')} title={tip}>
@@ -277,7 +277,7 @@ export default function SiteHero({ project, audit, onGo, compact = false }) {
       {checked && !compact && (
         <div className={styles.scores}>
           <div className={styles.scoresHead}>
-            <span className="eyebrow">{after ? 'Copy vs original' : 'Health of the original'}</span>
+            <span className="eyebrow">{after ? 'Before → after' : 'Health of the original'}</span>
             <Segmented
               size="sm"
               label="Measured on"

@@ -2,13 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Check, FileDown, FileJson, FileText, Loader2, RefreshCw, Sparkles } from 'lucide-react';
 import Modal from '../common/Modal.jsx';
 import Button from '../common/Button.jsx';
+import Details from '../common/Details.jsx';
 import { api } from '../../api/client.js';
 import styles from './ReportModal.module.css';
 
 const STEPS = [
-  'Collecting the audit of the original site',
-  'Reading the recreated site and its screenshots',
-  'Comparing the original with the recreate',
+  'Collecting the check of the original site',
+  'Reading the copy and its pictures',
+  'Comparing the original with the copy',
   'Writing the report',
 ];
 const STEP_MS = 650;
@@ -96,8 +97,8 @@ export default function ReportModal({ open, onClose, project }) {
       open={open}
       onClose={onClose}
       width={1040}
-      title="Complete report"
-      description={`${project.name} · original site, recreated site and fix checklist in one file.`}
+      title="Report"
+      description={`${project.name} · the original site, your copy and what got better, in one file.`}
     >
       <div className={styles.wrap}>
         {phase === 'working' && (
@@ -140,20 +141,24 @@ export default function ReportModal({ open, onClose, project }) {
                 <Button variant="primary" icon={busy === 'pdf' ? Loader2 : FileDown} onClick={() => download('pdf')} disabled={busy !== null}>
                   {busy === 'pdf' ? 'Building PDF…' : 'Download PDF'}
                 </Button>
-                <Button icon={FileText} onClick={() => save(html, 'text/html', `${base}.html`)}>
-                  HTML
-                </Button>
-                <Button icon={FileJson} onClick={() => download('json')} disabled={busy !== null}>
-                  {busy === 'json' ? 'Preparing…' : 'JSON'}
-                </Button>
                 <Button variant="ghost" icon={RefreshCw} onClick={generate}>
-                  Regenerate
+                  Make it again
                 </Button>
               </div>
             </div>
             {error && <p className={styles.inlineError}>{error}</p>}
+            <Details label="other formats">
+              <div className={styles.buttons}>
+                <Button icon={FileText} onClick={() => save(html, 'text/html', `${base}.html`)}>
+                  Web page (HTML)
+                </Button>
+                <Button icon={FileJson} onClick={() => download('json')} disabled={busy !== null}>
+                  {busy === 'json' ? 'Preparing…' : 'All the data (JSON)'}
+                </Button>
+              </div>
+              <p className={styles.hint}>The web page opens in any browser, even offline. The data file holds every check and value, for developers.</p>
+            </Details>
             <iframe className={styles.preview} title="Report preview" srcDoc={html} sandbox="allow-same-origin" />
-            <p className={styles.hint}>The PDF is built on the server and downloads directly. The HTML file is self-contained (it opens offline); the JSON holds the complete data.</p>
           </>
         )}
       </div>

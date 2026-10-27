@@ -475,3 +475,22 @@ li[data-state='none'] .tlTitle {
     text-align: left;
   }
 }
+
+/* The one-line answer and the key points under it. */
+.answer {
+  margin: 0;
+  max-width: 72ch;
+  color: var(--text);
+  font-size: var(--fs-lg);
+  line-height: 1.5;
+}
+
+.points {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 1.2em;
+  max-width: 72ch;
+  color: var(--text-2);
+  line-height: 1.6;
+}

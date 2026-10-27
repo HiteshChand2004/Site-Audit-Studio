@@ -326,6 +326,17 @@ export function fixedLine(copy) {
   return parts.length ? `Fixed in the copy: ${parts.join(', ')}.` : null;
 }
 
+// What the copy is, in plain words, by its technology (the stack id the copy was packaged in).
+export const COPY_KIND = {
+  html: 'plain website files',
+  'react-vite': 'a React project',
+  nextjs: 'a Next.js project',
+  mern: 'a React project with a small server',
+};
+
+/** The technology a finished copy was packaged in: an as-is copy keeps it in result.asIs.stack. */
+export const copyStackOf = (result, fallback = 'html') => result?.asIs?.stack ?? result?.stack ?? fallback;
+
 // The checks whose file or link names an address: an "owner" reason there means the new site's address was not given
 // (server/src/copy/gotWorse.js, the same keys).
 const ADDRESS_CHECK = /^(crawl\.(sitemap|robots)|aeo\.llms-txt|seo\.canonical-url)(\.|$)/;

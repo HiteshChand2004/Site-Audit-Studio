@@ -124,8 +124,8 @@ export default function AppShell() {
           </nav>
           <div className={styles.topActions}>
             {project && (
-              <Button size="sm" icon={FileText} onClick={() => setReportOpen(true)} title="One report of the check, the copy and what got better (PDF, HTML or data)">
-                Full report
+              <Button size="sm" icon={FileText} onClick={() => setReportOpen(true)} title="One report of the check, the copy and what got better">
+                Download a report (PDF)
               </Button>
             )}
           </div>

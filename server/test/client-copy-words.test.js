@@ -4,7 +4,7 @@
 // Pure functions and constants, no browser.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fixedLine, lookWarning, plainWarning, reasonWord, REASON_WORDS, RESULT_EXPLAIN, RESULT_WORD_FOR, RESULT_WORDS, resultTitle, SCORE_NAMES } from '../../client/src/copy.js';
+import { COPY_KIND, copyStackOf, fixedLine, lookWarning, plainWarning, reasonWord, REASON_WORDS, RESULT_EXPLAIN, RESULT_WORD_FOR, RESULT_WORDS, resultTitle, SCORE_NAMES } from '../../client/src/copy.js';
 import { lookWarning as reportLookWarning } from '../src/report/words.js';
 
 // Every case below is checked on both the app's warning and the report's (report/words.js), which must say the same.
@@ -148,4 +148,12 @@ test('Results: each row in plain words with its reason word; the four explanatio
   assert.equal(fixedLine({ fixes: { counts: { alt: 12, names: 3, lang: 0 } } }), 'Fixed in the copy: 12 image descriptions, 3 names for links, buttons and fields.');
   assert.equal(fixedLine({ fixes: { counts: {} } }), null);
   assert.equal(fixedLine(null), null);
+});
+
+test('what the copy is, in plain words, from the technology it was packaged in', () => {
+  assert.deepEqual(Object.keys(COPY_KIND), ['html', 'react-vite', 'nextjs', 'mern']);
+  assert.equal(copyStackOf({ stack: 'html', asIs: { stack: 'react-vite' } }), 'react-vite', 'an as-is copy is packaged in asIs.stack');
+  assert.equal(copyStackOf({ stack: 'nextjs' }), 'nextjs');
+  assert.equal(copyStackOf(null, 'mern'), 'mern');
+  for (const words of Object.values(COPY_KIND)) assert.doesNotMatch(words, /vite|express|mongo/i);
 });
