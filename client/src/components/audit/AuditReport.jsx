@@ -19,6 +19,9 @@ const STATUS_ICON = { pass: Check, warn: Minus, fail: X };
 const STATUS_TONE = { pass: 'ok', warn: 'warn', fail: 'bad' };
 const SEVERITY_TONE = { high: 'bad', medium: 'warn', low: 'info' };
 const IMPACT_TONE = { critical: 'bad', serious: 'bad', moderate: 'warn', minor: 'info' };
+// The words the rest of the app uses for how much a problem matters (the tool's own word in brackets).
+const SEVERITY_WORD = { high: 'Important', medium: 'Worth fixing', low: 'Minor' };
+const IMPACT_WORD = { critical: 'Important (critical)', serious: 'Important (serious)', moderate: 'Worth fixing (moderate)', minor: 'Minor' };
 
 function countBy(items, key) {
   return items.reduce((acc, it) => ({ ...acc, [it[key]]: (acc[it[key]] || 0) + 1 }), {});
@@ -127,7 +130,7 @@ export default function AuditReport({ audit }) {
           {audit.weaknesses.map((w) => (
             <li key={w.title} className={styles.row}>
               <Badge tone={SEVERITY_TONE[w.severity]} className={styles.sev}>
-                {w.severity}
+                {SEVERITY_WORD[w.severity] ?? w.severity}
               </Badge>
               <span className={styles.rowTitle}>{w.title}</span>
               <span className={styles.rowDetail}>{w.detail}</span>
@@ -225,7 +228,7 @@ export default function AuditReport({ audit }) {
           {audit.accessibility.map((a) => (
             <li key={a.id ?? a.title} className={styles.row}>
               <Badge tone={IMPACT_TONE[a.impact]} className={styles.sev}>
-                {a.impact}
+                {IMPACT_WORD[a.impact] ?? a.impact}
               </Badge>
               <span className={styles.rowTitle}>
                 {a.helpUrl ? (

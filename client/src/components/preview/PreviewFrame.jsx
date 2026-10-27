@@ -3,9 +3,9 @@ import { useState } from 'react';
 import styles from './PreviewFrame.module.css';
 
 export const VIEWPORTS = [
-  { id: 1440, view: 'desktop', icon: Monitor, label: 'Computer screen (1440 px wide)' },
-  { id: 768, view: 'tablet', icon: Tablet, label: 'Tablet screen (768 px wide)' },
-  { id: 375, view: 'mobile', icon: Smartphone, label: 'Phone screen (375 px wide)' },
+  { id: 1440, view: 'desktop', icon: Monitor, label: 'Computer' },
+  { id: 768, view: 'tablet', icon: Tablet, label: 'Tablet' },
+  { id: 375, view: 'mobile', icon: Smartphone, label: 'Phone' },
 ];
 
 /**

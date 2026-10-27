@@ -91,7 +91,7 @@ export default function PageScope({ project, disabled = false }) {
             list={listId}
             value={value}
             onChange={(e) => setValue(e.target.value)}
-            placeholder="/pricing — pick a page or type its address"
+            placeholder="Pick a page from the list, or type its address"
             aria-label="The page to check and copy"
             disabled={disabled || saving}
           />

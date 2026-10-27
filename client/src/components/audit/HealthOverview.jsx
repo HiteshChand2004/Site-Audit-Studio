@@ -3,6 +3,7 @@ import { Card } from '../common/Surface.jsx';
 import { ScoreRing, Pill } from '../common/Score.jsx';
 import { Segmented } from '../common/Tabs.jsx';
 import InfoTip from '../common/InfoTip.jsx';
+import Details from '../common/Details.jsx';
 import { AEO, HEALTH, METRICS, rating } from '../../copy.js';
 import { plural } from '../../format.js';
 import styles from './HealthOverview.module.css';
@@ -48,7 +49,7 @@ export function summarize(audit, device) {
   const seo = audit.scores?.[device]?.seo;
   if (seo != null) out.push(seo >= 90 ? 'Google can read it well.' : 'Some basics that help Google list it are missing.');
   const a11y = (audit.accessibility ?? []).reduce((n, a) => n + (a.count ?? 1), 0);
-  out.push(a11y ? `${plural(a11y, 'thing')} on the homepage make${a11y === 1 ? 's' : ''} it harder for people with disabilities to use.` : 'No accessibility problems were found on the homepage.');
+  out.push(a11y ? `${plural(a11y, 'thing')} on the homepage make${a11y === 1 ? 's' : ''} it harder to use for people who use a screen reader or a keyboard.` : 'No accessibility problems were found on the homepage.');
   const broken = audit.brokenLinks?.broken?.length ?? 0;
   if (broken) out.push(`${plural(broken, 'link')} lead${broken === 1 ? 's' : ''} nowhere.`);
   return out;
@@ -66,7 +67,7 @@ export default function HealthOverview({ audit, device, onDeviceChange }) {
       <Card
         icon={Sparkles}
         title="At a glance"
-        sub={primary ? `Built with ${primary.name}.` : undefined}
+        sub={primary ? `Made with ${primary.name}.` : undefined}
         actions={
           <Segmented
             label="Measured on"
@@ -93,7 +94,7 @@ export default function HealthOverview({ audit, device, onDeviceChange }) {
                     <Icon size={15} aria-hidden="true" />
                     <span className={styles.cardTitle}>{h.title}</span>
                     <InfoTip label={h.title}>
-                      {h.explain} <em>({h.expert})</em>
+                      {h.explain}
                     </InfoTip>
                   </div>
                   <p className={styles.question}>{h.question}</p>
@@ -101,20 +102,24 @@ export default function HealthOverview({ audit, device, onDeviceChange }) {
               </div>
             );
           })}
-          <div className={styles.card}>
-            <ScoreRing score={aeo} label={AEO.title} />
-            <div className={styles.cardText}>
-              <div className={styles.cardHead}>
-                <Bot size={15} aria-hidden="true" />
-                <span className={styles.cardTitle}>{AEO.title}</span>
-                <InfoTip label={AEO.title} align="end">
-                  {AEO.explain} <em>({AEO.expert}; share of its checks that pass)</em>
-                </InfoTip>
-              </div>
-              <p className={styles.question}>Can AI assistants quote it correctly?</p>
-            </div>
-          </div>
         </div>
+        <Details label="one more score">
+          <div className={styles.cards}>
+              <div className={styles.card}>
+                <ScoreRing score={aeo} label={AEO.title} />
+                <div className={styles.cardText}>
+                  <div className={styles.cardHead}>
+                    <Bot size={15} aria-hidden="true" />
+                    <span className={styles.cardTitle}>{AEO.title}</span>
+                    <InfoTip label={AEO.title} align="end">
+                      {AEO.explain} <em>({AEO.expert}; share of its checks that pass)</em>
+                    </InfoTip>
+                  </div>
+                  <p className={styles.question}>Can AI assistants quote it correctly?</p>
+                </div>
+              </div>
+          </div>
+        </Details>
         {!scores && <p className={styles.note}>The speed test did not finish for {device === 'mobile' ? 'phones' : 'computers'}; check the site again to measure it.</p>}
       </Card>
 
@@ -129,7 +134,7 @@ export default function HealthOverview({ audit, device, onDeviceChange }) {
                 <span className={styles.speedTitle}>
                   {text.title}
                   <InfoTip label={text.title}>
-                    {text.explain} <em>({text.expert})</em>
+                    {text.explain}
                   </InfoTip>
                 </span>
                 <span className={styles.speedValue}>{value == null ? '–' : m.fmt(value)}</span>

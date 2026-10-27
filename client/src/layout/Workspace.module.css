@@ -583,3 +583,12 @@
 .match .hint {
   margin: 0 0 0 auto;
 }
+
+/* A screen's one-line answer, above its key points. */
+.answer {
+  margin: 0;
+  max-width: 72ch;
+  color: var(--text);
+  font-size: var(--fs-lg);
+  line-height: 1.5;
+}

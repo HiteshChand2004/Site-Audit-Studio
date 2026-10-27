@@ -23,7 +23,7 @@ export function isAppOrigin(url) {
 export function liveAvailability(audit, url) {
   if (!audit || audit.isDummy) return { ok: false, why: 'Check the site to load the real site.' };
   if (isAppOrigin(url)) return { ok: false, why: 'This app cannot frame itself.' };
-  if (!audit.frame?.frameable) return { ok: false, why: `The site blocks framing (${audit.frame?.reason}).` };
+  if (!audit.frame?.frameable) return { ok: false, why: `This site doesn’t allow being shown inside another app (${audit.frame?.reason}).` };
   return { ok: true, why: null };
 }
 
@@ -156,7 +156,7 @@ function Screenshot({ shot, viewport, url, scrollRef }) {
       )}
       {shot.truncated && width > 0 && (
         <p className={styles.truncated} style={{ width }}>
-          Page continues — capture is capped at 8,000px of {shot.pageHeight.toLocaleString()}px.
+          Only the top of the page was captured; the page continues below.
         </p>
       )}
     </div>

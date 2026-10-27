@@ -4,8 +4,9 @@
 // Pure functions and constants, no browser.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { COPY_KIND, copyStackOf, fixedLine, lookWarning, plainWarning, reasonWord, REASON_WORDS, RESULT_EXPLAIN, RESULT_WORD_FOR, RESULT_WORDS, resultTitle, SCORE_NAMES } from '../../client/src/copy.js';
+import { CHECKS, COPY_KIND, copyStackOf, fixedLine, lookWarning, plainWarning, reasonWord, REASON_WORDS, RESULT_EXPLAIN, RESULT_WORD_FOR, RESULT_WORDS, resultTitle, SCORE_NAMES } from '../../client/src/copy.js';
 import { lookWarning as reportLookWarning } from '../src/report/words.js';
+import { readdirSync, readFileSync } from 'node:fs';
 
 // Every case below is checked on both the app's warning and the report's (report/words.js), which must say the same.
 const look = (r, o) => {
@@ -156,4 +157,15 @@ test('what the copy is, in plain words, from the technology it was packaged in',
   assert.equal(copyStackOf({ stack: 'nextjs' }), 'nextjs');
   assert.equal(copyStackOf(null, 'mern'), 'mern');
   for (const words of Object.values(COPY_KIND)) assert.doesNotMatch(words, /vite|express|mongo/i);
+});
+
+test('every limit a site builder rule names has a plain name on the Check screen', () => {
+  const dir = new URL('../src/detection/rules/', import.meta.url);
+  for (const file of readdirSync(dir).filter((n) => n.endsWith('.json'))) {
+    for (const limit of JSON.parse(readFileSync(new URL(file, dir), 'utf8')).limitations ?? []) {
+      const plain = CHECKS[limit.title];
+      assert.ok(plain?.title && plain.why, `${file}: "${limit.title}" has a plain name and a reason`);
+      assert.doesNotMatch(plain.title + plain.why, /(JS|runtime|hydrat|markup|TTFB|LCP|TBT|CSS)/i, limit.title);
+    }
+  }
 });

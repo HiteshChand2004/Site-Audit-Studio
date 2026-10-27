@@ -1,17 +1,17 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, Clock, FileSearch, Globe, Info, Loader2, Play, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, Clock, Globe, Info, Loader2, Play, ShieldAlert } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import PreviewFrame, { Wireframe } from '../../components/preview/PreviewFrame.jsx';
 import SitePreview, { liveAvailability, ModeToggle } from '../../components/preview/SitePreview.jsx';
-import HealthOverview from '../../components/audit/HealthOverview.jsx';
-import FixList from '../../components/audit/FixList.jsx';
-import SectionCard from '../../components/common/SectionCard.jsx';
+import HealthOverview, { summarize } from '../../components/audit/HealthOverview.jsx';
+import FixList, { problemsOf } from '../../components/audit/FixList.jsx';
+import Details from '../../components/common/Details.jsx';
 import { Alert } from '../../components/common/Surface.jsx';
 import AuditReport from '../../components/audit/AuditReport.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import PageScope, { pathOf } from '../../components/project/PageScope.jsx';
 import { isAnalysisActive, useProjects } from '../../store/useProjects.js';
-import { timeAgo } from '../../format.js';
+import { plural, timeAgo } from '../../format.js';
 import styles from '../Panel.module.css';
 import ws from '../Workspace.module.css';
 
@@ -62,7 +62,7 @@ function previewOverlay({ audit, mode, slow }) {
 const TOC = [
   ['check-glance', 'At a glance & speed'],
   ['check-fix', 'What needs fixing'],
-  ['check-experts', 'Details for experts'],
+  ['check-experts', 'Details'],
 ];
 
 /** Step 1: check the original site (Analyze) and read its report. */
@@ -99,6 +99,12 @@ export default function CheckStep({ project, audit, loading }) {
     setViewport(VIEWPORT_OF[d]);
   };
   const realPreview = audit && !audit.isDummy;
+  // The one-line answer: how fast it is on phones, and how many things to fix (how many of them important).
+  const problems = realPreview ? problemsOf(audit).rows : [];
+  const important = problems.filter((r) => r.severity === 'high').length;
+  const answer = realPreview
+    ? [summarize(audit, 'mobile')[0], problems.length ? `${plural(problems.length, 'thing')} to fix${important ? `, ${important} of them important` : ''}.` : 'Nothing important to fix.'].filter(Boolean).join(' ')
+    : null;
 
   const saveMaxPages = () => {
     const n = Number(maxPages);
@@ -121,26 +127,31 @@ export default function CheckStep({ project, audit, loading }) {
           <Globe size={14} aria-hidden="true" />
           <input className="mono" value={url} onChange={(e) => setUrl(e.target.value)} aria-label="Website address" disabled={running} />
         </label>
-        {!project.page_url && <label className={styles.pagesInput} title="How many pages the check reads (1–100)">
-          <span>Pages to check</span>
-          <input
-            className="mono"
-            type="number"
-            min={1}
-            max={100}
-            value={maxPages}
-            onChange={(e) => setMaxPages(e.target.value)}
-            onBlur={saveMaxPages}
-            aria-label="How many pages the check reads"
-            disabled={running}
-          />
-        </label>}
         <Button type="submit" variant={audit?.isDummy ? 'primary' : 'secondary'} icon={running ? Spinner : Play} disabled={running}>
           {running ? 'Checking…' : audit?.isDummy ? 'Check now' : 'Check again'}
         </Button>
       </form>
 
       <PageScope project={project} disabled={running} />
+
+      {!project.page_url && (
+        <Details label="settings">
+          <label className={styles.pagesInput} title="How many pages the check reads (1–100)">
+            <span>Pages to check</span>
+            <input
+              className="mono"
+              type="number"
+              min={1}
+              max={100}
+              value={maxPages}
+              onChange={(e) => setMaxPages(e.target.value)}
+              onBlur={saveMaxPages}
+              aria-label="How many pages the check reads"
+              disabled={running}
+            />
+          </label>
+        </Details>
+      )}
 
       {analysis && analysis.status !== 'done' && <AnalyzeProgress analysis={analysis} onDismiss={() => dismissAnalysis(project.id)} />}
 
@@ -163,7 +174,6 @@ export default function CheckStep({ project, audit, loading }) {
               {!audit.isDummy && audit.scope?.kind !== 'page' && (
                 <p className={ws.hint}>
                   Checked {timeAgo(audit.analyzedAt)} · {audit.pagesCrawled} {audit.pagesCrawled === 1 ? 'page' : 'pages'} read
-                  {audit.pageVariants > 0 && ` (+${audit.pageVariants} ${audit.pageVariants === 1 ? 'address' : 'addresses'} with “?…” counted as the same page)`}
                   {' '}· speed measured on the homepage
                 </p>
               )}
@@ -173,14 +183,21 @@ export default function CheckStep({ project, audit, loading }) {
                 </Alert>
               )}
               {audit.errors?.length > 0 && (
-                <Alert tone="warn" title="Some checks did not finish, so the report is incomplete">
-                  <ul className={ws.plainList}>
-                    {audit.errors.map((e, i) => (
-                      <li key={i}>{e.message}</li>
-                    ))}
-                  </ul>
-                  Checking again usually completes them.
+                <Alert tone="warn" title="Some checks did not finish, so this report is incomplete">
+                  Check again: it usually completes them.
+                  <Details label="what stopped">
+                    <ul className={ws.plainList}>
+                      {audit.errors.map((e, i) => (
+                        <li key={i}>{e.message}</li>
+                      ))}
+                    </ul>
+                  </Details>
                 </Alert>
+              )}
+              {answer && (
+                <p className={ws.answer}>
+                  <strong>{answer}</strong>
+                </p>
               )}
               <div id="check-glance" className={ws.anchor}>
                 <HealthOverview audit={audit} device={device} onDeviceChange={changeDevice} />
@@ -189,9 +206,17 @@ export default function CheckStep({ project, audit, loading }) {
                 <FixList audit={audit} />
               </div>
               <div id="check-experts" className={ws.anchor}>
-                <SectionCard icon={FileSearch} title="Details for experts" meta="Technology, every check, links, accessibility rules" defaultOpen={false}>
+                <Details label="details for experts (technology, every check, links, accessibility rules)">
+                  {audit.pageVariants > 0 && (
+                    <p className={ws.hint}>
+                      {plural(audit.pageVariants, 'more address', 'more addresses')} with “?…” at the end counted as the same page.
+                    </p>
+                  )}
+                  {realPreview && audit.blockedHosts?.length > 0 && (
+                    <p className={ws.hint}>Some requests to private network addresses were blocked for safety: {audit.blockedHosts.join(', ')}</p>
+                  )}
                   <AuditReport audit={audit} />
-                </SectionCard>
+                </Details>
               </div>
             </>
           )}
@@ -222,12 +247,6 @@ export default function CheckStep({ project, audit, loading }) {
           >
             {realPreview ? <SitePreview url={siteUrl} audit={audit} mode={mode} viewport={viewport} onSlow={setSlow} /> : <Wireframe />}
           </PreviewFrame>
-          {realPreview && audit.blockedHosts?.length > 0 && (
-            <p className={styles.dummyNote}>
-              <ShieldAlert size={13} aria-hidden="true" />
-              Some requests to private network addresses were blocked for safety: {audit.blockedHosts.join(', ')}
-            </p>
-          )}
         </aside>
       </div>
     </div>

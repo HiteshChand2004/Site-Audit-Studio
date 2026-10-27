@@ -1,7 +1,7 @@
 import { CheckCircle2, ChevronRight, ListTodo, Wrench } from 'lucide-react';
 import { Card } from '../common/Surface.jsx';
 import { Pill } from '../common/Score.jsx';
-import { CHECKS, SEVERITY } from '../../copy.js';
+import { CHECKS, resultTitle, SEVERITY } from '../../copy.js';
 import { plural } from '../../format.js';
 import styles from './FixList.module.css';
 
@@ -32,7 +32,9 @@ export function problemsOf(audit) {
     rows.push({
       id: `a11y-${a.id ?? a.title}`,
       severity: IMPACT[a.impact] ?? 'medium',
-      title: a.title,
+      // The plain name of the rule; the check's own name goes inside the row.
+      title: resultTitle({ key: `axe.${a.id}`, title: a.title }),
+      rule: a.title,
       why: 'Makes the page harder to use for people who rely on a screen reader, a keyboard or good contrast.',
       area: 'Easy for everyone',
       detail: `${plural(a.count ?? 1, 'place')} on the homepage.`,
@@ -57,6 +59,14 @@ export function problemsOf(audit) {
   return { rows, passed };
 }
 
+// What a dead link answered, in plain words (the status code in brackets).
+function linkProblem(status) {
+  if (!status) return 'no answer';
+  if (status === 404 || status === 410) return `page not found (${status})`;
+  if (status >= 500) return `the server failed (${status})`;
+  return `error (${status})`;
+}
+
 function Row({ row }) {
   const sev = SEVERITY[row.severity] ?? SEVERITY.medium;
   return (
@@ -76,13 +86,14 @@ function Row({ row }) {
             </p>
           )}
           {row.detail && <p className={styles.detail}>What the check found: {row.detail}</p>}
+          {row.rule && row.rule !== row.title && <p className={styles.detail}>The check’s own name: {row.rule}</p>}
           {row.links && (
             <ul className={styles.links}>
               {row.links.slice(0, 20).map((l) => (
                 <li key={l.url}>
                   <span className="mono">{l.url.replace(/^https?:\/\//, '')}</span>
                   <span className={styles.detail}>
-                    {l.status ? `error ${l.status}` : 'no answer'}
+                    {linkProblem(l.status)}
                     {l.foundOn ? ` · on ${l.foundOn}` : ''}
                   </span>
                 </li>
