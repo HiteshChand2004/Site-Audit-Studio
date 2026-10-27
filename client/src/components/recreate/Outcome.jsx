@@ -3,70 +3,65 @@ import { Card } from '../common/Surface.jsx';
 import { Pill } from '../common/Score.jsx';
 import InfoTip from '../common/InfoTip.jsx';
 import CountUp from '../common/CountUp.jsx';
-import { CHECKS, HEALTH, RESULT_STATUS } from '../../copy.js';
+import { HEALTH, reasonWord, RESULT_EXPLAIN, RESULT_WORDS, resultTitle } from '../../copy.js';
 import { plural } from '../../format.js';
 import styles from './Outcome.module.css';
 import { STACKS } from '../../constants.js';
 import { copiedPages } from '../../copiedPages.js';
 
 // Before → after scores shown (phone measurements: most visitors).
-const SCORES = [
-  ['performance', 'performance'],
-  ['seo', 'seo'],
-  ['accessibility', 'accessibility'],
-];
+const SCORES = ['performance', 'seo', 'accessibility'];
 
-const titleOf = (item) => CHECKS[item.title]?.title ?? CHECKS[item.title?.split(' · ')[0]]?.title ?? item.title;
+const places = (n) => `${n} ${n === 1 ? 'place' : 'places'}`;
 
 /**
- * The result in one card: a plain summary, four counts, the main scores before → after, and the few
- * things that still need work. `comparison` is the real before / after comparison (null until it exists).
+ * The result in one card: the one-line answer, the four counts, the main scores before → after, and every row that got
+ * worse or still needs work (got worse first), each with its reason in plain words. Nothing bad is left out or folded away.
+ * `comparison` is the real before / after comparison (null until it exists).
  */
 export default function Outcome({ result, comparison }) {
   const s = comparison?.summary ?? null;
-  // An as-is copy: how many "got worse" rows carry one of the five reasons, and how many none fits (server copy/gotWorse.js).
-  const worse = comparison?.gotWorse ?? null;
-  // And the same counts for its "still open" rows (failing on both sides).
-  const stillOpen = comparison?.stillOpen ?? null;
   const better = s ? (s.fixed ?? 0) + (s.improved ?? 0) : 0;
-  const todo = (comparison?.items ?? []).filter((i) => i.status === 'regressed' || i.status === 'open').sort((a, b) => (a.status === 'regressed' ? 0 : 1) - (b.status === 'regressed' ? 0 : 1));
+  const todo = (comparison?.items ?? [])
+    .filter((i) => i.status === 'regressed' || i.status === 'open')
+    .sort((a, b) => (a.status === 'regressed' ? 0 : 1) - (b.status === 'regressed' ? 0 : 1));
   const before = comparison?.scores?.before?.mobile;
   const after = comparison?.scores?.after?.mobile;
 
-  // The one plain line of "Copy my site" (the same words as server/src/copy/regress.js summaryLine).
   // The copy's own technology, as Results' download card reads it (an as-is copy is packaged in result.asIs.stack), by its
   // readable name; an id the app does not know is shown as it is rather than as another technology.
   const stackId = result.asIs?.stack ?? result.stack;
   const stackName = (stackId && STACKS.find((x) => x.id === stackId)?.name) ?? stackId ?? '';
   const pagesN = copiedPages(result).length;
-  const fixedN = s ? (s.fixed ?? 0) + (s.improved ?? 0) : 0;
-  const summaryText = `${plural(pagesN, 'page')} copied${stackName ? ` in ${stackName}` : ''} · ${result.asIs ? pagesN : 0} as-is, ${result.asIs ? 0 : pagesN} rebuilt · ${s ? `Got worse: ${s.regressed ?? 0}${worse ? ` (${worse.explained} with a reason, ${worse.unexplained} unexplained)` : ''} · Fixed: ${fixedN} · Still open: ${s.open ?? 0}${stillOpen ? ` (${stillOpen.explained} with a reason, ${stillOpen.unexplained} unexplained)` : ''}` : 'Got worse: not measured yet (the check after the copy has not finished)'}`;
 
-  const sentence = [
-    `The copy has ${plural(copiedPages(result).length, 'page')}.`,
-    s ? ` Compared with the original, ${plural(better, 'thing')} got better${s.regressed ? `, ${s.regressed} got worse` : ''} and ${s.open ?? 0} still need${(s.open ?? 0) === 1 ? 's' : ''} work.` : '',
-  ].join('');
+  const answer = s
+    ? `Your copy is better than the original in ${places(better)}, still needs work in ${s.open ?? 0}, and ${s.regressed ?? 0} got worse.`
+    : 'Your copy is ready. It has not been compared with the original yet, so what got better or worse is not known.';
 
   return (
     <Card icon={Trophy} title="How the copy turned out">
-      <p className={styles.sentence}><strong>{summaryText}</strong></p>
-      <p className={styles.sentence}>{sentence}</p>
+      <p className={styles.sentence}>
+        <strong>{answer}</strong>
+      </p>
+      <p className={styles.sentence}>
+        {plural(pagesN, 'page')} copied{stackName ? ` in ${stackName}` : ''}.
+      </p>
 
       {s && (
         <ul className={styles.counts}>
           {[
-            ['better', better, RESULT_STATUS.fixed.tone, 'Better than the original', `${RESULT_STATUS.fixed.explain} Or: ${RESULT_STATUS.improved.explain.toLowerCase()}`],
-            ['open', s.open ?? 0, (s.open ?? 0) ? 'warn' : 'neutral', RESULT_STATUS.open.label, RESULT_STATUS.open.explain],
-            ['regressed', s.regressed ?? 0, (s.regressed ?? 0) ? 'bad' : 'neutral', RESULT_STATUS.regressed.label, RESULT_STATUS.regressed.explain],
-            ['manual', s.manual ?? 0, 'neutral', RESULT_STATUS.manual.label, RESULT_STATUS.manual.explain],
-          ].map(([id, n, tone, label, tip]) => (
+            ['better', better, 'ok'],
+            ['open', s.open ?? 0, (s.open ?? 0) ? 'warn' : 'neutral'],
+            ['regressed', s.regressed ?? 0, (s.regressed ?? 0) ? 'bad' : 'neutral'],
+            ['manual', s.manual ?? 0, 'neutral'],
+          ].map(([id, n, tone]) => (
             <li key={id} data-tone={tone}>
               <strong>
                 <CountUp value={n} />
               </strong>
               <span>
-                {label}
-                <InfoTip label={label}>{tip}</InfoTip>
+                {RESULT_WORDS[id]}
+                <InfoTip label={RESULT_WORDS[id]}>{RESULT_EXPLAIN[id]}</InfoTip>
               </span>
             </li>
           ))}
@@ -76,15 +71,15 @@ export default function Outcome({ result, comparison }) {
       <div className={styles.facts}>
         {before &&
           after &&
-          SCORES.map(([key, h]) =>
+          SCORES.map((key) =>
             before[key] != null && after[key] != null ? (
               <div key={key} className={styles.fact}>
-                <span className={styles.factLabel}>{HEALTH[h].title} on phones</span>
+                <span className={styles.factLabel}>{HEALTH[key].title} on phones</span>
                 <span className={styles.factValue}>
                   {before[key]} <ArrowRight size={14} aria-label="to" /> {after[key]}
                 </span>
                 <Pill tone={after[key] > before[key] ? 'ok' : after[key] < before[key] ? 'bad' : 'neutral'}>
-                  {after[key] > before[key] ? 'Better' : after[key] < before[key] ? 'Worse' : 'Same'}
+                  {after[key] > before[key] ? RESULT_WORDS.better : after[key] < before[key] ? RESULT_WORDS.regressed : 'Same'}
                 </Pill>
               </div>
             ) : null,
@@ -93,23 +88,25 @@ export default function Outcome({ result, comparison }) {
 
       {todo.length > 0 && (
         <div className={styles.todo}>
-          <p className={styles.todoTitle}>Still needs work</p>
+          <p className={styles.todoTitle}>
+            {RESULT_WORDS.regressed} and {RESULT_WORDS.open.toLowerCase()}
+          </p>
           <ul>
-            {todo.slice(0, 6).map((item) => (
-              <li key={item.key}>
-                <span className={styles.tone} data-tone={RESULT_STATUS[item.status]?.tone ?? 'warn'}>
-                  {RESULT_STATUS[item.status]?.label ?? item.status}
-                </span>
-                <span className={styles.todoName}>{titleOf(item)}</span>
-                {item.after?.detail && (
-                  <span className={`${styles.todoDetail} ${styles.oneLine}`} title={item.after.detail}>
-                    {item.after.detail}
+            {todo.map((item) => {
+              const why = reasonWord(item);
+              return (
+                <li key={item.key}>
+                  <span className={styles.tone} data-tone={item.status === 'regressed' ? 'bad' : 'warn'}>
+                    {RESULT_WORDS[item.status]}
                   </span>
-                )}
-              </li>
-            ))}
+                  <span className={styles.todoName} title={item.after?.detail ?? undefined}>
+                    {resultTitle(item)}
+                  </span>
+                  {why && <span className={styles.todoDetail}>{why}</span>}
+                </li>
+              );
+            })}
           </ul>
-          {todo.length > 6 && <p className={styles.todoDetail}>and {todo.length - 6} more in “Every check, before and after” below.</p>}
         </div>
       )}
     </Card>

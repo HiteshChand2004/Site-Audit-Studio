@@ -3,18 +3,18 @@ import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, Check, ChevronRi
 import Badge from '../common/Badge.jsx';
 import Button from '../common/Button.jsx';
 import styles from './FixReport.module.css';
-import { WORSE_REASONS, WORSE_UNEXPLAINED } from '../../copy.js';
+import { RESULT_WORD_FOR, resultTitle, SCORE_NAMES, WORSE_REASONS, WORSE_UNEXPLAINED } from '../../copy.js';
 
 // Every status the comparison can give a check, in the order rows are listed (server: reaudit/compare/rules.js).
 const STATUS = {
-  regressed: { icon: ArrowDownRight, label: 'Regressed', chip: 'Regressed' },
-  open: { icon: X, label: 'Still open', chip: 'Still open' },
-  changed: { icon: Activity, label: 'Changed (noisy locally)', chip: 'Changed' },
-  recheck: { icon: RefreshCw, label: 'Recheck (network error)', chip: 'Recheck' },
-  improved: { icon: ArrowUpRight, label: 'Improved', chip: 'Improved' },
-  fixed: { icon: Check, label: 'Fixed', chip: 'Fixed' },
-  manual: { icon: Hand, label: 'Manual rebuild', chip: 'Manual' },
-  na: { icon: Minus, label: 'N/A · deploy check', chip: 'N/A' },
+  regressed: { icon: ArrowDownRight, label: RESULT_WORD_FOR.regressed, chip: RESULT_WORD_FOR.regressed },
+  open: { icon: X, label: RESULT_WORD_FOR.open, chip: RESULT_WORD_FOR.open },
+  changed: { icon: Activity, label: 'Changed (timing varies on this computer)', chip: 'Changed' },
+  recheck: { icon: RefreshCw, label: 'Check again (could not be reached)', chip: 'Check again' },
+  improved: { icon: ArrowUpRight, label: `${RESULT_WORD_FOR.improved} (improved)`, chip: `${RESULT_WORD_FOR.improved} (improved)` },
+  fixed: { icon: Check, label: `${RESULT_WORD_FOR.fixed} (fixed)`, chip: `${RESULT_WORD_FOR.fixed} (fixed)` },
+  manual: { icon: Hand, label: RESULT_WORD_FOR.manual, chip: RESULT_WORD_FOR.manual },
+  na: { icon: Minus, label: 'Measured once it’s online (deploy check)', chip: 'Once online' },
   pass: { icon: Check, label: 'Passing', chip: 'Passing' },
 };
 const CHIPS = ['fixed', 'improved', 'open', 'regressed', 'changed', 'recheck', 'manual', 'na'];
@@ -22,24 +22,24 @@ const CHIPS = ['fixed', 'improved', 'open', 'regressed', 'changed', 'recheck', '
 const NEEDS_ACTION = new Set(['regressed', 'open']);
 
 const SCORES = [
-  ['performance', 'Performance'],
-  ['seo', 'SEO'],
-  ['accessibility', 'Accessibility'],
-  ['bestPractices', 'Best practices'],
+  ['performance', `${SCORE_NAMES.performance} (Performance)`],
+  ['seo', `${SCORE_NAMES.seo} (SEO)`],
+  ['accessibility', `${SCORE_NAMES.accessibility} (Accessibility)`],
+  ['bestPractices', `${SCORE_NAMES['best-practices']} (Best practices)`],
 ];
 
 const STALE = {
-  recreate: 'A newer recreate exists; this checklist is about the previous one. Re-audit to check the latest site.',
-  analysis: 'The original site was analyzed again after this recreate; the checklist compares against the earlier analysis. Recreate to compare with the new analysis.',
-  stack: 'This checklist audited a different build of the site than the one the project uses now (its stack changed, or its build finished since). Re-audit to check the current one.',
+  recreate: 'A newer copy exists; this checklist is about the previous one. Compare again to check the latest copy.',
+  analysis: 'The original site was checked again after this copy was made; the checklist compares against the earlier check. Make the copy again to compare with the new check.',
+  stack: 'This checklist audited a different build of the site than the one the project uses now (its stack changed, or its build finished since). Compare again to check the current one.',
 };
 
 const seconds = (ms) => (ms == null ? '—' : `${(ms / 1000).toFixed(1)} s`);
 const size = (bytes) => (bytes == null ? '—' : bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`);
 const METRICS = [
-  ['lcp', 'LCP', seconds],
-  ['tbt', 'TBT', (ms) => (ms == null ? '—' : `${ms} ms`)],
-  ['cls', 'CLS', (v) => (v == null ? '—' : String(v))],
+  ['lcp', 'Main content shows in (LCP)', seconds],
+  ['tbt', 'Page freezes for (TBT)', (ms) => (ms == null ? '—' : `${ms} ms`)],
+  ['cls', 'Layout jumps (CLS)', (v) => (v == null ? '—' : String(v))],
   ['pageSize', 'Page size', size],
 ];
 
@@ -58,11 +58,11 @@ function ScoreStrip({ scores, metrics, stackLabel = null }) {
   return (
     <section className={styles.strip} aria-label="Lighthouse scores before and after">
       <div className={styles.stripHead}>
-        <span className={styles.stripTitle}>Lighthouse · homepage</span>
+        <span className={styles.stripTitle}>Scores · homepage (Lighthouse)</span>
         <div className={styles.toggle} role="group" aria-label="Device">
           {['mobile', 'desktop'].map((d) => (
             <button key={d} type="button" aria-pressed={device === d} onClick={() => setDevice(d)}>
-              {d === 'mobile' ? 'Mobile' : 'Desktop'}
+              {d === 'mobile' ? 'Phone' : 'Computer'}
             </button>
           ))}
         </div>
@@ -102,11 +102,17 @@ function ScoreStrip({ scores, metrics, stackLabel = null }) {
         </p>
       )}
       <p className={styles.footnote}>
-        * The recreated site is measured on a local preview; confirm performance after deploying.
-        {stackLabel && ` Audited build: ${stackLabel}. Its JavaScript runtime is part of these numbers; the “JavaScript shipped” row shows the cost.`}
+        * The copy is measured on this computer, not online yet; check its speed again once it’s online.
+        {stackLabel && ` Checked version: ${stackLabel}. Its own code (JavaScript runtime) is part of these numbers; the “Script visitors download” row shows the cost.`}
       </p>
     </section>
   );
+}
+
+// The plain name first, the check's own (technical) name after it in brackets when it differs.
+function rowTitle(item) {
+  const plain = resultTitle(item);
+  return plain && plain !== item.title ? `${plain} (${item.title})` : item.title;
 }
 
 function StatusMark({ status }) {
@@ -190,7 +196,7 @@ function Row({ item }) {
       <details>
         <summary>
           <StatusMark status={item.status} />
-          <span className={styles.rowTitle}>{item.title}</span>
+          <span className={styles.rowTitle}>{rowTitle(item)}</span>
           {item.review && <Badge tone="warn">Review</Badge>}
           <span className={styles.rowTag}>{item.statusLabel ?? meta.label}</span>
           <ChevronRight size={14} className={styles.chevron} aria-hidden="true" />
@@ -277,16 +283,16 @@ export default function FixReport({ data, busy, onReaudit }) {
       <div className={styles.head}>
         <div className={styles.headText}>
           <span className={styles.title}>
-            Original vs recreated{data.stackLabel && <Badge tone={data.stack === 'html' ? 'neutral' : 'accent'}>{data.stackLabel}</Badge>}
+            Original and copy{data.stackLabel && <Badge tone={data.stack === 'html' ? 'neutral' : 'accent'}>{data.stackLabel}</Badge>}
           </span>
           <span className={styles.meta}>
-            Re-audited {data.reauditedAt ? new Date(data.reauditedAt).toLocaleString() : '—'}
+            Compared {data.reauditedAt ? new Date(data.reauditedAt).toLocaleString() : '—'}
             {compared > 0 && ` · ${compared} ${compared === 1 ? 'page' : 'pages'} compared`}
-            {outOfScope > 0 && ` · ${outOfScope} not recreated`}
+            {outOfScope > 0 && ` · ${outOfScope} not copied`}
           </span>
         </div>
-        <Button size="sm" icon={RotateCw} onClick={onReaudit} disabled={busy} title={busy ? 'A job is running' : 'Audit the recreated site again'}>
-          Re-audit
+        <Button size="sm" icon={RotateCw} onClick={onReaudit} disabled={busy} title={busy ? 'A job is running' : 'Check the copy again and compare it with the original'}>
+          Compare again
         </Button>
       </div>
 
@@ -303,7 +309,7 @@ export default function FixReport({ data, busy, onReaudit }) {
       {data.lastError && (
         <div className={styles.banner} data-tone="bad" role="status">
           <AlertTriangle size={13} aria-hidden="true" />
-          <p>The latest re-audit failed: {data.lastError} The checklist below is from the previous run.</p>
+          <p>The latest comparison failed: {data.lastError} The checklist below is from the previous run.</p>
         </div>
       )}
 

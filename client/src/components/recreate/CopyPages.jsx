@@ -1,5 +1,6 @@
 import { FileText, Link2, Wrench } from 'lucide-react';
 import { Card } from '../common/Surface.jsx';
+import { FIX_KIND } from '../../copy.js';
 import { plural } from '../../format.js';
 
 // Plain words for the link decisions of the link pass (server/src/copy/linkPass.js).
@@ -12,17 +13,6 @@ const LINK_ACTION = {
   'flag-external': 'Dead external link: left as it is, suggested fix shown',
   'flag-internal': 'Could not confirm it is missing: left as it is',
   unverified: 'Could not verify: left as it is',
-};
-
-// Plain words for the kinds of safe fixes made in the copy's own markup (server/src/copy/fixAsIs.js).
-const FIX_KIND = {
-  alt: 'image descriptions',
-  names: 'names for links, buttons and fields',
-  aria: 'accessibility attributes',
-  head: 'titles, descriptions and link previews',
-  address: 'addresses moved to the new site',
-  lang: 'page language',
-  data: 'structured data for search and AI answers',
 };
 
 /**

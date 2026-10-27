@@ -7,11 +7,12 @@ import RecreateReport from '../../components/recreate/RecreateReport.jsx';
 import Outcome from '../../components/recreate/Outcome.jsx';
 import CopyPages from '../../components/recreate/CopyPages.jsx';
 import PageGallery from '../../components/recreate/PageGallery.jsx';
-import AsIsReport from '../../components/recreate/AsIsReport.jsx';
+import AsIsReport, { AsIsUnsafe } from '../../components/recreate/AsIsReport.jsx';
+import Details from '../../components/common/Details.jsx';
 import SectionCard from '../../components/common/SectionCard.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import { stackById } from '../../constants.js';
-import { lookWarning } from '../../copy.js';
+import { fixedLine, lookWarning } from '../../copy.js';
 import { api } from '../../api/client.js';
 import { outputsOf, outputState } from '../../stacks.js';
 import { isJobActive, useProjects } from '../../store/useProjects.js';
@@ -89,7 +90,7 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
     : !result.safety
       ? 'This copy has no safety check result, so it cannot be downloaded. Make the copy again.'
       : result.safety.mode === 'as-is'
-        ? 'The copy loads something from another website, so it cannot be downloaded until that is fixed. “Checks, per page” above shows which page.'
+        ? 'The copy loads something from another website, so it cannot be downloaded until that is fixed. “Checks, per page” under “Show details” shows which page.'
         : 'The copy did not pass its safety check, so it cannot be downloaded.';
 
   const comparison = audit && !audit.isDummy && audit.recreate && !audit.recreate.isDummy ? audit.recreate : null;
@@ -100,6 +101,8 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
   const showCompareError = Boolean(compareError) && reauditJob?.status !== 'failed';
   // How the copy looks is said only when its own visual checks found a difference; nothing otherwise.
   const look = lookWarning(result);
+  // What the copy fixed in its own markup, as one key point above the fold.
+  const fixed = fixedLine(result.copy);
 
   return (
     <div className={ws.stepBody}>
@@ -122,15 +125,7 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
 
       {look && <Alert tone="bad">{look}</Alert>}
 
-      {result.asIs && (
-        <AsIsReport
-          asIs={result.asIs}
-          outputs={[result.asIs.stack]}
-          projectId={project.id}
-          asIsOutputs={latest?.asIsOutputs ?? {}}
-          onPackage={(stack) => recreate(project.id, { mode: 'as-is', confirmed: true, stack, reuseAsIs: true })}
-        />
-      )}
+      {result.asIs && <AsIsUnsafe asIs={result.asIs} />}
 
       {result.singlePage && (
         <p className={ws.hint}>
@@ -138,7 +133,6 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
         </p>
       )}
       <Outcome result={result} comparison={comparison} />
-      {result.copy && <CopyPages copy={result.copy} />}
 
       {!comparison && canCompare && !showCompareError && (
         <Alert
@@ -154,12 +148,10 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
         </Alert>
       )}
 
-      <PageGallery projectId={project.id} result={result} onOpenPage={onOpenPage} />
-
       <Card
         icon={Download}
         title="Download the new site"
-        sub="A .zip with the complete site, ready to put on any web host, plus a short report."
+        sub="Everything needed to put the site online, in one file."
         actions={
           <Button icon={FileText} onClick={onOpenReport}>
             Full report (PDF)
@@ -193,16 +185,30 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
         )}
       </Card>
 
-      {comparison && (
-        <SectionCard icon={ListChecks} title="Every check, before and after" meta="For a closer look" defaultOpen={false}>
-          <FixReport data={comparison} busy={busy} onReaudit={() => startReaudit(project.id)} />
-        </SectionCard>
-      )}
-      {(result.verify || result.generate || result.warnings?.length > 0) && (
-        <SectionCard icon={Ruler} title="Other measurements" meta="For a closer look" defaultOpen={false}>
-          <RecreateReport result={result} />
-        </SectionCard>
-      )}
+      {fixed && <p className={ws.hint}>{fixed}</p>}
+      <Details>
+        <PageGallery projectId={project.id} result={result} onOpenPage={onOpenPage} />
+        {result.asIs && (
+          <AsIsReport
+            asIs={result.asIs}
+            outputs={[result.asIs.stack]}
+            projectId={project.id}
+            asIsOutputs={latest?.asIsOutputs ?? {}}
+            onPackage={(stack) => recreate(project.id, { mode: 'as-is', confirmed: true, stack, reuseAsIs: true })}
+          />
+        )}
+        {result.copy && <CopyPages copy={result.copy} />}
+        {comparison && (
+          <SectionCard icon={ListChecks} title="Every check, before and after" meta="For a closer look" defaultOpen={false}>
+            <FixReport data={comparison} busy={busy} onReaudit={() => startReaudit(project.id)} />
+          </SectionCard>
+        )}
+        {(result.verify || result.generate || result.warnings?.length > 0) && (
+          <SectionCard icon={Ruler} title="Other measurements" meta="For a closer look" defaultOpen={false}>
+            <RecreateReport result={result} />
+          </SectionCard>
+        )}
+      </Details>
     </div>
   );
 }

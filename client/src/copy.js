@@ -105,7 +105,7 @@ export const stepTitle = (key, fallback) => JOB_STEPS[key]?.title ?? fallback ??
 // Why a row of an as-is copy got worse (server/src/copy/openItems.js REASONS, the five reasons of "Copy my site").
 export const WORSE_REASONS = {
   third_party: { code: 'a', text: 'Comes from third-party code outside the copy (an embed or an external script).' },
-  backend: { code: 'b', text: 'Needs a real backend or credentials you have to provide (forms, login, payments).' },
+  backend: { code: 'b', text: 'Needs a server, a login or details you have to provide (forms, sign-in, payments).' },
   owner: { code: 'c', text: 'Needs your decision (pages you chose not to copy, a dead link to another site, a content or brand choice).' },
   look: { code: 'd', text: 'The fix would change the original’s look, animation or behaviour.' },
   deploy: { code: 'e', text: 'Can only be checked on the real host. See DEPLOY.md.' },
@@ -247,6 +247,99 @@ export const REASON_WORDS = {
   unresolved: 'Not fixed in this copy yet',
   unexplained: 'No reason found: still needs a fix',
 };
+
+/** What each of the four result words means, for the Results screen (no expert term in them). */
+export const RESULT_EXPLAIN = {
+  better: 'A problem of the original that is solved in the copy, or smaller in it.',
+  open: 'A problem of the original that is still there in the copy.',
+  regressed: 'Fine on the original but worse in the copy. Worth a look.',
+  manual: 'Parts that need a person, like a login, a shop or a contact form that sends mail.',
+};
+
+// The checks of a comparison by plain name (the check's key); the check's own title stays in the details.
+const RESULT_TITLES = {
+  'lighthouse.dom-size': 'Pages are built from very many parts',
+  'lighthouse.offscreen-images': 'Pictures below the screen load too early',
+  'lighthouse.uses-responsive-images': 'Pictures are larger than they are shown',
+  'lighthouse.uses-optimized-images': 'Pictures could be lighter',
+  'lighthouse.modern-image-formats': 'Pictures could use a lighter format',
+  'lighthouse.efficient-animated-content': 'Animated pictures could be lighter',
+  'lighthouse.render-blocking-resources': 'Files that delay the first view',
+  'lighthouse.unused-css-rules': 'Unused styling code',
+  'lighthouse.unused-javascript': 'Unused script code',
+  'lighthouse.legacy-javascript': 'Old-style scripts for old browsers',
+  'lighthouse.duplicated-javascript': 'The same script code loaded twice',
+  'lighthouse.total-byte-weight': 'Pages are heavy to download',
+  'lighthouse.mainthread-work-breakdown': 'The browser has a lot of work to show the page',
+  'lighthouse.bootup-time': 'Scripts take long to start',
+  'lighthouse.third-party-summary': 'Outside scripts slow the page',
+  'lighthouse.errors-in-console': 'Errors in the browser',
+  'lighthouse.lcp-lazy-loaded': 'The main picture loads late',
+  'lighthouse.largest-contentful-paint-element': 'The main content shows late',
+  'lighthouse.layout-shifts': 'Parts jump while the page loads',
+  'lighthouse.layout-shift-elements': 'Parts jump while the page loads',
+  'lighthouse.font-display': 'Text is invisible while fonts load',
+  'lighthouse.uses-long-cache-ttl': 'Files are not kept by the browser for long',
+  'lighthouse.server-response-time': 'The server answers slowly',
+  'lighthouse.uses-text-compression': 'Files are sent uncompressed',
+  'lighthouse.redirects': 'Extra redirects before the page',
+  'lighthouse.image-aspect-ratio': 'Pictures shown stretched',
+  'lighthouse.image-size-responsive': 'Pictures look blurry',
+  'axe.color-contrast': 'Text with too little contrast',
+  'axe.image-alt': 'Pictures without a description',
+  'axe.link-name': 'Links without a name for screen readers',
+  'axe.button-name': 'Buttons without a name for screen readers',
+  'axe.label': 'Form fields without a label',
+  'links.broken': 'Broken links',
+  'links.broken-new': 'New broken links',
+  'links.broken-recheck': 'Links that could not be reached',
+  'stack.javascript': 'Script visitors download',
+};
+
+/** A check of the comparison by its plain name: its own entry, the Check step's plain words for its title, else its title. */
+export function resultTitle(item) {
+  const key = item?.key ?? '';
+  if (RESULT_TITLES[key]) return RESULT_TITLES[key];
+  if (key.startsWith('platform.')) return 'The site builder’s code is still in the copy';
+  const title = String(item?.title ?? '');
+  const [base, part] = title.split(/ · |: /);
+  const plain = CHECKS[title]?.title ?? CHECKS[base]?.title;
+  return plain ? `${plain}${part && !CHECKS[title] ? `: ${part}` : ''}` : title;
+}
+
+// Plain words for the kinds of safe fixes made in the copy's own markup (server/src/copy/fixAsIs.js).
+export const FIX_KIND = {
+  alt: 'image descriptions',
+  names: 'names for links, buttons and fields',
+  aria: 'accessibility attributes',
+  head: 'titles, descriptions and link previews',
+  address: 'addresses moved to the new site',
+  lang: 'page language',
+  data: 'structured data for search and AI answers',
+};
+
+/** One line of what the copy fixed in its own markup ("Fixed in the copy: 12 image descriptions, 3 …"), or null. */
+export function fixedLine(copy) {
+  const parts = Object.entries(copy?.fixes?.counts ?? {})
+    .filter(([, n]) => n > 0)
+    .map(([kind, n]) => `${n} ${FIX_KIND[kind] ?? kind}`);
+  return parts.length ? `Fixed in the copy: ${parts.join(', ')}.` : null;
+}
+
+// The checks whose file or link names an address: an "owner" reason there means the new site's address was not given
+// (server/src/copy/gotWorse.js, the same keys).
+const ADDRESS_CHECK = /^(crawl\.(sitemap|robots)|aeo\.llms-txt|seo\.canonical-url)(\.|$)/;
+
+/**
+ * The plain reason word of a "Got worse" / "Still needs work" row of an as-is copy (its `reason`, one of server
+ * copy/openItems.js REASONS, or several joined by "+"); null when the comparison gives no reason (a copy of another mode).
+ */
+export function reasonWord(item) {
+  if (!item || item.reason === undefined) return null;
+  if (!item.reason) return REASON_WORDS.unexplained;
+  const words = String(item.reason).split('+').map((r) => (r === 'owner' && ADDRESS_CHECK.test(item.key ?? '') ? REASON_WORDS.address : REASON_WORDS[r] ?? r));
+  return [...new Set(words)].join(' · ');
+}
 
 // What looks different, in plain words: the tool's own causes (exact comparison, verify/exact/compare.js summarise) and
 // the other visual checks.

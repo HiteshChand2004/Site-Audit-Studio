@@ -4,7 +4,7 @@
 // Pure functions and constants, no browser.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { lookWarning, plainWarning, REASON_WORDS, RESULT_WORD_FOR, RESULT_WORDS, SCORE_NAMES } from '../../client/src/copy.js';
+import { fixedLine, lookWarning, plainWarning, reasonWord, REASON_WORDS, RESULT_EXPLAIN, RESULT_WORD_FOR, RESULT_WORDS, resultTitle, SCORE_NAMES } from '../../client/src/copy.js';
 import { lookWarning as reportLookWarning } from '../src/report/words.js';
 
 // Every case below is checked on both the app's warning and the report's (report/words.js), which must say the same.
@@ -131,4 +131,21 @@ test('the copy’s own warnings: a look score covered by the warning is left out
   assert.equal(plainWarning('The layout drifts from the original at 2 of 9 measured page widths between the captured sizes: / at 320px (61), /a at 480px (58).'),
     'The layout drifts from the original at 2 of 9 measured page widths between the captured sizes: / at 320px, /a at 480px.');
   assert.equal(plainWarning('Fidelity was not measured for 1 page (time limit of the build step): /x.'), 'Fidelity was not measured for 1 page (time limit of the build step): /x.');
+});
+
+test('Results: each row in plain words with its reason word; the four explanations; the one fixed line', () => {
+  assert.equal(resultTitle({ key: 'aeo.llms-txt', title: 'llms.txt' }), 'Guide for AI tools');
+  assert.equal(resultTitle({ key: 'platform.framer', title: 'Framer runtime' }), 'The site builder’s code is still in the copy');
+  assert.equal(resultTitle({ key: 'x.unknown', title: 'Something new' }), 'Something new', 'an unknown check keeps its own title');
+  assert.equal(reasonWord({ key: 'crawl.sitemap', reason: 'owner' }), REASON_WORDS.address);
+  assert.equal(reasonWord({ key: 'seo.title-tag', reason: 'owner' }), REASON_WORDS.owner);
+  assert.equal(reasonWord({ key: 'crawl.sitemapx', reason: 'owner' }), REASON_WORDS.owner, 'only the address checks themselves');
+  assert.equal(reasonWord({ key: 'a', reason: null }), REASON_WORDS.unexplained);
+  assert.equal(reasonWord({ key: 'a', reason: 'look+deploy' }), `${REASON_WORDS.look} · ${REASON_WORDS.deploy}`);
+  assert.equal(reasonWord({ key: 'a' }), null, 'no reason given = no word');
+  assert.deepEqual(Object.keys(RESULT_EXPLAIN), ['better', 'open', 'regressed', 'manual']);
+  assert.doesNotMatch(RESULT_EXPLAIN.manual, /backend/i);
+  assert.equal(fixedLine({ fixes: { counts: { alt: 12, names: 3, lang: 0 } } }), 'Fixed in the copy: 12 image descriptions, 3 names for links, buttons and fields.');
+  assert.equal(fixedLine({ fixes: { counts: {} } }), null);
+  assert.equal(fixedLine(null), null);
 });

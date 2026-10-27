@@ -73,6 +73,16 @@ function Converted({ convert }) {
   );
 }
 
+/** Shown above everything on Results (never inside "Show details"): the download is held back until this is checked. */
+export function AsIsUnsafe({ asIs }) {
+  if (!asIs?.safety || asIs.safety.safe) return null;
+  return (
+    <Alert tone="warn" title="The copy asks for something off its own server">
+      Some request leaves the copy. The download is kept off until this is checked: “Checks, per page” under “Show details” shows which page.
+    </Alert>
+  );
+}
+
 export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {}, onPackage }) {
   if (!asIs) return null;
   const checks = asIs.checks?.pages ?? [];
@@ -86,12 +96,6 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
       <p className={styles.mode}>
         <strong>Mode used:</strong> Original as-is. {AS_IS_EXPLANATION}
       </p>
-
-      {asIs.safety && !asIs.safety.safe && (
-        <Alert tone="warn" title="The copy asks for something off its own server">
-          Some request leaves the copy. The download is kept off until this is checked: see the checks below.
-        </Alert>
-      )}
 
       <h4 className={styles.h}>Checks, per page</h4>
       <div className={styles.tableWrap}>
