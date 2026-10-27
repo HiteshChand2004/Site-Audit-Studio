@@ -1,6 +1,10 @@
 .report {
   display: grid;
   gap: var(--sp-2);
+  min-width: 0;
+  /* A long address with no spaces (a login link, a file path) breaks inside the column instead of
+     stretching it under the preview beside the report. */
+  overflow-wrap: anywhere;
 }
 
 .rows {
@@ -12,7 +16,7 @@
 
 .row {
   display: grid;
-  grid-template-columns: 56px minmax(120px, 0.8fr) 1.6fr;
+  grid-template-columns: 56px minmax(0, 0.8fr) minmax(0, 1.6fr);
   align-items: baseline;
   gap: var(--sp-3);
   padding: 7px 0;
@@ -52,7 +56,7 @@
 
 @media (max-width: 1400px) {
   .row {
-    grid-template-columns: 56px 1fr;
+    grid-template-columns: 56px minmax(0, 1fr);
   }
   .rowDetail {
     grid-column: 2;

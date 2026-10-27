@@ -162,6 +162,12 @@
   min-width: 0;
 }
 
+/* A grid item may not grow past its column, so wide content never slides under the preview beside it. */
+.splitMain > *,
+.anchor > * {
+  min-width: 0;
+}
+
 /* "On this page": jump links above the preview in the side column. */
 .toc {
   display: flex;
