@@ -1,0 +1,451 @@
+import Image from 'next/image';
+import Link from 'next/link';
+import {
+  Accessibility,
+  ArrowRight,
+  Bot,
+  Briefcase,
+  Building2,
+  Check,
+  Code2,
+  FileDown,
+  FileJson,
+  FileText,
+  Gauge as GaugeIcon,
+  Hand,
+  Link2,
+  Megaphone,
+  Search,
+  ShieldCheck,
+  Timer,
+  UserCheck,
+  Eye,
+} from 'lucide-react';
+import ReportMock from '@/components/ReportMock';
+import CountUp from '@/components/CountUp';
+import BeforeAfter from '@/components/BeforeAfter';
+import Logo from '@/components/Logo';
+import Plans from '@/components/Plans';
+import SiteMarquee from '@/components/SiteMarquee';
+import HowSteps from '@/components/HowSteps';
+import CinematicHero from '@/components/hero/CinematicHero';
+import { Cta, JsonLd, SectionHead } from '@/components/Blocks';
+import { AREAS, AUDIENCES, LIMITS, STACKS, STEPS, SHOTS } from '@/lib/content';
+import { DESCRIPTION, SITE_NAME, SITE_URL } from '@/lib/site';
+
+const AREA_ICONS = [GaugeIcon, Search, Accessibility, ShieldCheck, Bot, Link2];
+const AUDIENCE_ICONS = [Megaphone, Building2, Briefcase, Code2];
+const LIMIT_ICONS = [UserCheck, Hand, Eye, Timer];
+
+/** Real results from the Remastly tool (read from the saved check and results of each site). */
+const RESULTS = [
+  { site: 'nyaayai.com', pages: '1 page', better: 8, open: 4, worse: 6, match: '98%', matchLabel: 'visual match on a computer screen', note: 'As-is copy' },
+  { site: 'panscience.xyz', pages: '38 pages', better: 14, open: 0, worse: 0, match: '94/100', matchLabel: 'match with the original', note: null },
+  { site: 'collateral.panscience.ai', pages: '12 pages', better: 7, open: 4, worse: 2, match: '93/100', matchLabel: 'match on the home page', note: null },
+];
+
+export default function Home() {
+  return (
+    <>
+      <JsonLd
+        data={{
+          '@context': 'https://schema.org',
+          '@type': 'SoftwareApplication',
+          name: SITE_NAME,
+          url: SITE_URL,
+          applicationCategory: 'BusinessApplication',
+          description: DESCRIPTION,
+        }}
+      />
+
+      {/* 1. Hero: the story in one viewport */}
+      <section className="hero" aria-labelledby="hero-title">
+        <span className="blob blob--a" aria-hidden="true" />
+        <div className="container hero__grid">
+          <div className="hero__copy">
+            <p className="hero__badge">
+              <strong>4 steps</strong> Check · Create · Compare · Results
+            </p>
+            <h1 id="hero-title" className="h1">
+              Every company website, <span className="grad-text">checked and rebuilt better.</span>
+            </h1>
+            <p className="lead">
+              Remastly checks how healthy a site is, builds a clean copy that fixes what can be fixed, and lets you compare the two before you download it.
+            </p>
+            <div className="btn-row">
+              <Link href="/pricing" className="btn btn--primary">
+                Get started <ArrowRight size={18} className="nudge" aria-hidden="true" />
+              </Link>
+              <Link href="/how-it-works" className="btn btn--secondary">
+                See how it works
+              </Link>
+            </div>
+            <ul className="hero__trust">
+              <li>
+                <Check size={16} strokeWidth={3} aria-hidden="true" /> Your live site is never changed
+              </li>
+              <li>
+                <Check size={16} strokeWidth={3} aria-hidden="true" /> HTML, React, Next.js or MERN
+              </li>
+              <li>
+                <Check size={16} strokeWidth={3} aria-hidden="true" /> Before/after report as PDF
+              </li>
+            </ul>
+          </div>
+          <CinematicHero />
+        </div>
+        <p className="visually-hidden">
+          Paste a website. Remastly captures it, shows its issues and speed, rebuilds it in your chosen stack, fixes what it can and shows the copy next to the original.
+        </p>
+      </section>
+
+      {/* 2. Rebuilt-sites strip */}
+      <section className="section section--tight" aria-labelledby="sites-title">
+        <div className="container sites-head">
+          <SectionHead
+            id="sites-title"
+            eyebrow="Real rebuilds"
+            title="Websites Remastly has rebuilt"
+            lead="Each one is a copy of a live site, rebuilt in clean code. Hover or focus the row to pause it."
+          />
+        </div>
+        <SiteMarquee />
+      </section>
+
+      {/* 3. Problem and solution */}
+      <section className="section" aria-labelledby="problem-title">
+        <div className="container problem">
+          <h2 id="problem-title" className="problem__line" data-reveal>
+            Company websites slip: slow on phones, hard to find on Google, hard for some people to use.
+          </h2>
+          <p className="lead" data-reveal style={{ ['--d' as string]: '120ms' }}>
+            Remastly checks the site, builds a clean copy that fixes what can be fixed, and lets you compare the two before you download anything. The original is never changed.
+          </p>
+        </div>
+      </section>
+
+      {/* 4. How it works (steps highlight as you scroll) */}
+      <section className="section section--white" aria-labelledby="how-title">
+        <div className="container how">
+          <div className="how__sticky" data-reveal>
+            <SectionHead id="how-title" eyebrow="How it works" title="Four steps for every website" lead="Add the address of a site your company owns. Remastly does the rest, and the original is never changed." />
+            <p style={{ marginTop: 28 }}>
+              <Link href="/how-it-works" className="link-arrow">
+                The step-by-step guide <ArrowRight size={16} aria-hidden="true" />
+              </Link>
+            </p>
+          </div>
+          <HowSteps />
+        </div>
+      </section>
+
+      {/* 5. Bento: the features with the real screens */}
+      <section className="section" aria-labelledby="bento-title">
+        <div className="container">
+          <SectionHead id="bento-title" eyebrow="What you get" title="Every step, with the real screens" lead="Each part of Remastly, shown on a real site it was used on." />
+          <div className="bento" style={{ marginTop: 48 }}>
+            <article className="bento__tile bento__tile--wide" data-reveal>
+              <span className="bento__kicker">{STEPS[0].n} · {STEPS[0].short}</span>
+              <h3 className="h3">{STEPS[0].title}</h3>
+              <p>{STEPS[0].text}</p>
+              <div className="bento__media">
+                <Image src={`/${SHOTS.check.file}`} alt={SHOTS.check.alt} fill sizes="(min-width: 1100px) 760px, (min-width: 720px) 640px, 100vw" style={{ objectFit: 'cover', objectPosition: 'top' }} />
+              </div>
+            </article>
+            <article className="bento__tile" data-reveal style={{ ['--d' as string]: '90ms' }}>
+              <span className="bento__kicker">{STEPS[1].n} · {STEPS[1].short}</span>
+              <h3 className="h3">{STEPS[1].title}</h3>
+              <p>{STEPS[1].text}</p>
+              <div className="bento__media">
+                <Image src={`/${SHOTS.create.file}`} alt={SHOTS.create.alt} fill sizes="(min-width: 1100px) 380px, (min-width: 720px) 320px, 100vw" style={{ objectFit: 'cover', objectPosition: 'top' }} />
+              </div>
+            </article>
+            <article className="bento__tile" data-reveal style={{ ['--d' as string]: '60ms' }}>
+              <span className="bento__kicker">{STEPS[2].n} · {STEPS[2].short}</span>
+              <h3 className="h3">{STEPS[2].title}</h3>
+              <p>{STEPS[2].text}</p>
+              <div className="bento__media">
+                <Image src={`/${SHOTS.compare.file}`} alt={SHOTS.compare.alt} fill sizes="(min-width: 1100px) 380px, (min-width: 720px) 320px, 100vw" style={{ objectFit: 'cover', objectPosition: 'top' }} />
+              </div>
+            </article>
+            <article className="bento__tile bento__tile--wide" data-reveal style={{ ['--d' as string]: '120ms' }}>
+              <span className="bento__kicker">{STEPS[3].n} · {STEPS[3].short}</span>
+              <h3 className="h3">{STEPS[3].title}</h3>
+              <p>{STEPS[3].text}</p>
+              <div className="bento__media">
+                <Image src={`/${SHOTS.results.file}`} alt={SHOTS.results.alt} fill sizes="(min-width: 1100px) 760px, (min-width: 720px) 640px, 100vw" style={{ objectFit: 'cover', objectPosition: 'top' }} />
+              </div>
+            </article>
+            <article className="bento__tile bento__tile--wide" data-reveal>
+              <span className="bento__kicker">Your site</span>
+              <h3 className="h3">The original is never changed</h3>
+              <p>Remastly only reads the live site. The copy is a separate site you download, and you decide what goes live.</p>
+            </article>
+            <article className="bento__tile" data-reveal style={{ ['--d' as string]: '90ms' }}>
+              <span className="bento__kicker">Honest limits</span>
+              <h3 className="h3">Parts that can’t be rebuilt are listed</h3>
+              <p>Logins, shops and anything that needs a person are named in the report, never faked.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      {/* 6. Before and after (a different site from the hero and the strip's first tile) */}
+      <section className="section section--white" aria-labelledby="compare-title">
+        <div className="container split">
+          <div data-reveal>
+            <span className="eyebrow">Steps 2 & 3 · Create and compare</span>
+            <h2 id="compare-title" className="h2">
+              A clean copy, side by side with the original
+            </h2>
+            <p className="lead">
+              Remastly visits every page, saves its images and files, and builds a new site that fixes the problems the check found. Then you compare the two, page by page, at
+              phone, tablet, laptop and computer size.
+            </p>
+            <ul className="checks" style={{ marginTop: 24 }}>
+              <li>
+                <Check size={18} strokeWidth={2.5} aria-hidden="true" />
+                <span>
+                  A <strong>match score</strong> out of 100 for every page; 80 or more is good
+                </span>
+              </li>
+              <li>
+                <Check size={18} strokeWidth={2.5} aria-hidden="true" />
+                <span>Builder clutter removed, every image and font saved with the copy</span>
+              </li>
+              <li>
+                <Check size={18} strokeWidth={2.5} aria-hidden="true" />
+                <span>Parts that can’t be rebuilt honestly are listed, never faked</span>
+              </li>
+            </ul>
+          </div>
+          <div data-reveal="scale">
+            <BeforeAfter
+              before={
+                <div className="shot-fill">
+                  <Image src="/images/sites/collateral-original-home.webp" alt="Homepage of collateral.panscience.ai before Remastly" fill sizes="(min-width: 1020px) 560px, 100vw" style={{ objectFit: 'cover', objectPosition: 'top' }} />
+                </div>
+              }
+              after={
+                <div className="shot-fill">
+                  <Image src="/images/sites/collateral-copy-home.webp" alt="Homepage of the clean copy of collateral.panscience.ai built by Remastly" fill sizes="(min-width: 1020px) 560px, 100vw" style={{ objectFit: 'cover', objectPosition: 'top' }} />
+                </div>
+              }
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* 7. Full report (dark band) */}
+      <section className="section dark" aria-labelledby="report-title">
+        <div className="container split">
+          <div data-reveal>
+            <Logo dark className="dark__logo" />
+            <span className="eyebrow">The Full report</span>
+            <h2 id="report-title" className="h2">
+              Before and after, in one report you can share
+            </h2>
+            <p className="lead">
+              Lighthouse scores of the original and the copy, what was fixed, what still needs work, what got worse, speed against Google’s targets and the match per page. On
+              two A4 pages.
+            </p>
+            <ul className="format-list" style={{ marginTop: 28 }}>
+              <li>
+                <span className="icon-chip" aria-hidden="true">
+                  <FileDown size={20} />
+                </span>
+                <p>
+                  <strong style={{ color: 'var(--ink-text)' }}>PDF</strong> ready to send or print
+                </p>
+              </li>
+              <li>
+                <span className="icon-chip" aria-hidden="true">
+                  <FileText size={20} />
+                </span>
+                <p>
+                  <strong style={{ color: 'var(--ink-text)' }}>HTML</strong> that opens anywhere, even offline
+                </p>
+              </li>
+              <li>
+                <span className="icon-chip" aria-hidden="true">
+                  <FileJson size={20} />
+                </span>
+                <p>
+                  <strong style={{ color: 'var(--ink-text)' }}>JSON</strong> with every check, page and value
+                </p>
+              </li>
+            </ul>
+            <div className="btn-row">
+              <Link href="/report" className="btn btn--primary">
+                Inside the Full report <ArrowRight size={18} className="nudge" aria-hidden="true" />
+              </Link>
+            </div>
+          </div>
+          <div data-reveal>
+            <ReportMock id="home-report" />
+          </div>
+        </div>
+      </section>
+
+      {/* 8. The four stacks */}
+      <section className="section" aria-labelledby="stacks-title">
+        <div className="container">
+          <SectionHead
+            id="stacks-title"
+            eyebrow="Your choice of technology"
+            title="Get the new site in the technology your team uses"
+            lead="Plain HTML is the simplest and loads fastest. React, Next.js and MERN are there for developer teams."
+          />
+          <div className="grid-4">
+            {STACKS.map((s, i) => (
+              <article key={s.id} className="card card--hover stack-card" data-reveal style={{ ['--d' as string]: `${i * 90}ms` }}>
+                <span className="stack-mark" aria-hidden="true">
+                  {s.mark}
+                </span>
+                <h3 className="h3">{s.name}</h3>
+                <p>{s.detail}</p>
+                <span className="pill" data-tone="accent">
+                  {s.tag}
+                </span>
+              </article>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* 9. Real results (verified figures only) */}
+      <section className="section section--white" aria-labelledby="results-title">
+        <div className="container">
+          <SectionHead
+            id="results-title"
+            eyebrow="Real results"
+            title="What Remastly changed on real sites"
+            lead="From the Remastly tool, for three sites it rebuilt. Each number is counted from the saved check and results of that site."
+          />
+          <div className="results" style={{ marginTop: 48 }}>
+            {RESULTS.map((r, i) => (
+              <article key={r.site} className="result" data-reveal style={{ ['--d' as string]: `${i * 90}ms` }}>
+                <p className="result__site">
+                  {r.site} · {r.pages}
+                  {r.note ? ` · ${r.note}` : ''}
+                </p>
+                <div className="result__row">
+                  <div className="result__fig result__fig--ok">
+                    <strong>
+                      <CountUp value={r.better} />
+                    </strong>
+                    <span>better than the original</span>
+                  </div>
+                  <div className="result__fig result__fig--warn">
+                    <strong>
+                      <CountUp value={r.open} />
+                    </strong>
+                    <span>still need work</span>
+                  </div>
+                  <div className="result__fig result__fig--bad">
+                    <strong>
+                      <CountUp value={r.worse} />
+                    </strong>
+                    <span>got worse</span>
+                  </div>
+                </div>
+                <p className="muted" style={{ marginTop: 18, fontSize: 14 }}>
+                  {r.match} {r.matchLabel}
+                </p>
+              </article>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* 10. Who it's for */}
+      <section className="section" aria-labelledby="who-title">
+        <div className="container">
+          <SectionHead id="who-title" eyebrow="Who it’s for" title="For the people responsible for company websites" />
+          <div className="grid-4">
+            {AUDIENCES.map((a, i) => {
+              const Icon = AUDIENCE_ICONS[i];
+              return (
+                <article key={a.title} className="card card--hover" data-reveal style={{ ['--d' as string]: `${i * 90}ms` }}>
+                  <span className="icon-chip" aria-hidden="true">
+                    <Icon size={22} />
+                  </span>
+                  <h3 className="h3">{a.title}</h3>
+                  <p>{a.text}</p>
+                </article>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      {/* 11. Honest limits */}
+      <section className="section section--white" aria-labelledby="limits-title">
+        <div className="container">
+          <SectionHead
+            id="limits-title"
+            eyebrow="Honest limits"
+            title="What Remastly does not do"
+            lead={
+              <>
+                It doesn’t fix everything, and it tells you so. In the nyaayai.com example, <strong>4 checks still needed work</strong> and <strong>6 got worse</strong>; both are
+                in the report.
+              </>
+            }
+          />
+          <div className="grid-2">
+            {LIMITS.slice(0, 4).map((l, i) => {
+              const Icon = LIMIT_ICONS[i];
+              return (
+                <div key={l.title} className="limit" data-reveal style={{ ['--d' as string]: `${(i % 2) * 90}ms` }}>
+                  <span className="limit__icon" aria-hidden="true">
+                    <Icon size={20} />
+                  </span>
+                  <div>
+                    <h3 className="h3">{l.title}</h3>
+                    <p className="muted" style={{ marginTop: 6 }}>
+                      {l.text}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <p data-reveal style={{ marginTop: 32 }}>
+            <Link href="/features#limitations" className="link-arrow">
+              All limitations <ArrowRight size={16} aria-hidden="true" />
+            </Link>
+          </p>
+        </div>
+      </section>
+
+      {/* 12. Pricing */}
+      <section className="section" aria-labelledby="pricing-title">
+        <div className="container">
+          <SectionHead id="pricing-title" eyebrow="Pricing" title="A plan for one site, a team or an agency" center />
+          <Plans />
+        </div>
+      </section>
+
+      {/* 13. FAQ teaser */}
+      <section className="section section--tight" aria-labelledby="faq-title">
+        <div className="container">
+          <div className="faq-teaser" data-reveal>
+            <div>
+              <h2 id="faq-title" className="h3">
+                Questions about the copy, the data and the price?
+              </h2>
+              <p>The FAQ covers what happens to the original site, what the copy includes and how the checks work.</p>
+            </div>
+            <Link href="/faq" className="btn btn--secondary">
+              Read the FAQ <ArrowRight size={18} className="nudge" aria-hidden="true" />
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* 14. Final call to action */}
+      <Cta />
+    </>
+  );
+}
