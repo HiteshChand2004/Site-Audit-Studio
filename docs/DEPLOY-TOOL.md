@@ -7,7 +7,7 @@ What runs, all on one machine, behind one domain (`example.com` below; use your 
 
 | Address | What answers | Process |
 |---|---|---|
-| `https://example.com/` (everything not listed below) | the marketing site (Next.js 16, `../remastly-website`) | `sas-site.service` on 127.0.0.1:3000 |
+| `https://example.com/` (everything not listed below) | the marketing site (Next.js 16, `website/` in this repo) | `sas-site.service` on 127.0.0.1:3000 |
 | `https://example.com/app/` | the tool's web app (React + Vite, built to static files in `client/dist`) | Caddy serves the files |
 | `https://example.com/api/` | the API (Express 5, Node, SQLite) | `sas-api.service` on 127.0.0.1:4000 |
 | `https://example.com/preview/<token>/` | previews of copies, sandboxed by header (`recreate/previewRoute.js`) | the same API process |
@@ -129,16 +129,15 @@ core fonts (`ttf-mscorefonts-installer`, which has its own licence prompt) are o
 
 ```bash
 sudo adduser --system --group --home /srv/sas --shell /bin/bash sas
-sudo -u sas mkdir -p /srv/sas/{releases,site-releases,shared,data,tmp,backups-offsite}
+sudo -u sas mkdir -p /srv/sas/{releases,shared,data,tmp,backups-offsite}
 ```
 
 Layout used below:
 
 ```
-/srv/sas/releases/<tag>/    one checkout of the tool per release
+/srv/sas/releases/<tag>/    one checkout of this repo per release (the tool, and the marketing site in website/)
 /srv/sas/app -> releases/<tag>    the running release (symlink)
-/srv/sas/site-releases/<tag>/    one checkout of the marketing site per release
-/srv/sas/site -> site-releases/<tag>
+/srv/sas/site -> releases/<tag>/website    the running marketing site (symlink)
 /srv/sas/shared/api.env    the API's settings (linked into each release as server/.env)
 /srv/sas/shared/site.env    the marketing site's settings
 /srv/sas/data/    SAS_DATA_DIR: app.db, projects/, backups/, server.lock, copy-issues.log
@@ -161,7 +160,8 @@ prebuilt Linux binaries.
 
 ## 4. Get the code and install it (first release)
 
-Replace `<tool-repo-url>` / `<site-repo-url>` with your Git remotes and `<tag>` with the commit or tag you deploy.
+Replace `<tool-repo-url>` with the Git remote of this repo and `<tag>` with the commit or tag you deploy. One clone holds both
+the tool and the marketing site (`website/`, with its own `package.json` and lockfile, outside the npm workspaces).
 **Unsure: which branch is the launch branch has not been decided.** The launch-readiness work (data lock, job limits, cleanup,
 production refusal), the two fixes after this guide and the React + Vite / Next.js / MERN conversions are on `accounts`.
 
@@ -400,11 +400,10 @@ NEXT_TELEMETRY_DISABLED=1
 EOF
 
 sudo -iu sas
-cd /srv/sas/site-releases
-git clone <site-repo-url> <tag> && cd <tag> && git checkout <tag>
-npm ci
+cd /srv/sas/releases/<tag>/website       # the same clone as step 4; no second repository
+npm ci                                   # its own lockfile; the root npm ci does not install it
 set -a && . /srv/sas/shared/site.env && set +a && npm run build
-ln -sfn /srv/sas/site-releases/<tag> /srv/sas/site
+ln -sfn /srv/sas/releases/<tag>/website /srv/sas/site
 exit
 ```
 
@@ -618,8 +617,15 @@ Toolchain installs (`npm ci` in each `server/toolchains/<id>`, from its committe
 release starts without them. Two releases with the same lockfiles get the same packages.
 Keep the last 3 releases and delete older folders by hand.
 
-The marketing site uses the same pattern: clone and build in `site-releases/<new>`, then
-`ln -sfn …/site-releases/<new> /srv/sas/site && sudo systemctl restart sas-site`.
+The marketing site is in the same release: build it there while the old one keeps running, then switch its symlink:
+
+```bash
+sudo -iu sas bash -lc "cd /srv/sas/releases/$NEW/website && npm ci && set -a && . /srv/sas/shared/site.env && set +a && npm run build"
+sudo -u sas ln -sfn /srv/sas/releases/$NEW/website /srv/sas/site && sudo systemctl restart sas-site
+```
+
+Keeping the last 3 releases keeps the last 3 builds of the site too. Rolling the site back is the same symlink pointing at
+`releases/<previous-tag>/website`.
 
 **Rolling back**:
 
