@@ -26,7 +26,10 @@ Read first: `docs/COPY-MY-SITE.md` (the plan and the rules). This file says what
   words; 6 / 6b the Check screen finished, choosing one page is the owner's only, enforced on the server). **Stages 7–8 left.**
   It has main merged in up to the monorepo merge; main has 2 commits it does not have yet (PR #6).
 - `analyze-100`: a new project reads 100 pages instead of 25, and Analyze says why the crawl read fewer pages than its limit.
-  Its three commits (83bac37, 38f77b3, 589bdff) are **already on main**; the branch holds nothing main lacks and can be deleted.
+  Its three commits (83bac37, 38f77b3, 589bdff) are in main's history but were **reverted on purpose before the deploy** by
+  04e08ef, 304c1cd and b439bbf, so main still has the 25-page default and no crawl-stop sentence: **the work is not live**.
+  Merging `analyze-100` does nothing (git sees its commits as already merged). To bring it back later, revert those three
+  revert commits on a new branch from main.
 - `owner-transfer` (428392a): `npm run accounts -w server -- transfer-owner <email> [--move-projects] [--yes]` hands the owner
   role to another verified account (dry run without `--yes`; with it a checked backup first, then one transaction). Not merged.
 
@@ -39,7 +42,7 @@ Read first: `docs/COPY-MY-SITE.md` (the plan and the rules). This file says what
   process as in `docs/DEPLOY-TOOL.md`.
 - Pending: the Search-Ready brief, to be added as `docs/SEARCH-READY.md` (not in the repo yet).
 
-## One repository: the marketing site is in `website/` (branch `monorepo`, 2026-10-27, not merged)
+## One repository: the marketing site is in `website/` (branch `monorepo`, 2026-10-27, merged by PR #4)
 
 **Layout.** `website/` is the marketing site (Next.js), brought in from `HiteshChand2004/remastly-website` main 549f866 with
 its full history (`git subtree add`, no squash: its 20 commits are in `git log 4eb890d^2`). It keeps its own `package.json`
