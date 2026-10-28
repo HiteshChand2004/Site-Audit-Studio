@@ -1,6 +1,7 @@
 import { CheckCircle2, ChevronRight, ListTodo, Wrench } from 'lucide-react';
 import { Card } from '../common/Surface.jsx';
 import { Pill } from '../common/Score.jsx';
+import Details from '../common/Details.jsx';
 import { CHECKS, resultTitle, SEVERITY } from '../../copy.js';
 import { plural } from '../../format.js';
 import styles from './FixList.module.css';
@@ -163,10 +164,22 @@ export default function FixList({ audit }) {
             {manual.map((m) => (
               <li key={m.title}>
                 <span className={styles.title}>{m.title}</span>
-                {m.detail && <span className={styles.detail}>{m.detail}</span>}
               </li>
             ))}
           </ul>
+          {/* What a developer would do about each one is written for developers: it waits behind the fold. */}
+          {manual.some((m) => m.detail) && (
+            <Details label="what a developer would do">
+              <ul className={styles.manual}>
+                {manual.filter((m) => m.detail).map((m) => (
+                  <li key={m.title}>
+                    <span className={styles.title}>{m.title}</span>
+                    <span className={styles.detail}>{m.detail}</span>
+                  </li>
+                ))}
+              </ul>
+            </Details>
+          )}
         </Card>
       )}
     </>

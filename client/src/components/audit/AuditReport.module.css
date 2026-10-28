@@ -45,6 +45,16 @@
   text-transform: capitalize;
 }
 
+/* The plain severity words ("Worth fixing", "Important (serious)") are written as they read. */
+.word {
+  text-transform: none;
+}
+
+/* Rows that start with a word badge: a column wide enough for the longest word, so it never runs into the title. */
+.row.badged {
+  grid-template-columns: 9.5rem minmax(0, 0.8fr) minmax(0, 1.6fr);
+}
+
 .rowTitle {
   font-weight: 500;
 }
@@ -57,6 +67,9 @@
 @media (max-width: 1400px) {
   .row {
     grid-template-columns: 56px minmax(0, 1fr);
+  }
+  .row.badged {
+    grid-template-columns: 9.5rem minmax(0, 1fr);
   }
   .rowDetail {
     grid-column: 2;

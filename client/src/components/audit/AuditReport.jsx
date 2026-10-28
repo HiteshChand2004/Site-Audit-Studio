@@ -128,8 +128,8 @@ export default function AuditReport({ audit }) {
         {audit.weaknesses.length === 0 && <Empty>No platform limits or measured performance problems found.</Empty>}
         <ul className={styles.rows}>
           {audit.weaknesses.map((w) => (
-            <li key={w.title} className={styles.row}>
-              <Badge tone={SEVERITY_TONE[w.severity]} className={styles.sev}>
+            <li key={w.title} className={`${styles.row} ${styles.badged}`}>
+              <Badge tone={SEVERITY_TONE[w.severity]} className={`${styles.sev} ${styles.word}`}>
                 {SEVERITY_WORD[w.severity] ?? w.severity}
               </Badge>
               <span className={styles.rowTitle}>{w.title}</span>
@@ -226,8 +226,8 @@ export default function AuditReport({ audit }) {
         )}
         <ul className={styles.rows}>
           {audit.accessibility.map((a) => (
-            <li key={a.id ?? a.title} className={styles.row}>
-              <Badge tone={IMPACT_TONE[a.impact]} className={styles.sev}>
+            <li key={a.id ?? a.title} className={`${styles.row} ${styles.badged}`}>
+              <Badge tone={IMPACT_TONE[a.impact]} className={`${styles.sev} ${styles.word}`}>
                 {IMPACT_WORD[a.impact] ?? a.impact}
               </Badge>
               <span className={styles.rowTitle}>
@@ -255,7 +255,7 @@ export default function AuditReport({ audit }) {
         )}
         <ul className={styles.rows}>
           {audit.manualRebuild.map((m) => (
-            <li key={m.title} className={styles.row}>
+            <li key={m.title} className={`${styles.row} ${styles.badged}`}>
               <Badge className={styles.sev}>{m.kind}</Badge>
               <span className={styles.rowTitle}>{m.title}</span>
               <span className={styles.rowDetail}>{m.detail}</span>

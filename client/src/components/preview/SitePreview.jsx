@@ -120,15 +120,15 @@ function Screenshot({ shot, viewport, url, scrollRef }) {
 
   if (!shot) {
     return (
-      <Empty icon={ImageOff} title="No screenshot for this width">
-        The {viewport.label.toLowerCase()} capture failed during the check. See the report errors.
+      <Empty icon={ImageOff} title="No picture for this screen size">
+        The {viewport.label.toLowerCase()} picture could not be taken during the check. Check the site again to try once more.
       </Empty>
     );
   }
   if (failed) {
     return (
-      <Empty icon={ImageOff} title="Screenshot not available">
-        Only the latest 3 checks keep their screenshots. Check the site again to capture new ones.
+      <Empty icon={ImageOff} title="Picture no longer kept">
+        Only the latest 3 checks keep their pictures. Check the site again to take new ones.
       </Empty>
     );
   }
@@ -229,8 +229,8 @@ export default function SitePreview({ url, audit, mode, viewport, onSlow, scroll
   if (pageShot) return <Screenshot shot={pageShot(vp)} viewport={vp} url={url} scrollRef={scrollRef} />;
   if (!audit?.screenshots) {
     return (
-      <Empty icon={Camera} title="No screenshots yet">
-        This check has no screenshots. Check the site again to capture desktop, tablet and phone views.
+      <Empty icon={Camera} title="No pictures yet">
+        This check has no pictures. Check the site again to take them on a computer, tablet and phone screen.
       </Empty>
     );
   }

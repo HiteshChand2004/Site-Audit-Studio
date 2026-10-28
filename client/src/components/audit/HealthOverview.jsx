@@ -61,6 +61,22 @@ export default function HealthOverview({ audit, device, onDeviceChange }) {
   const metrics = audit.metricsByDevice?.[device] ?? (device === 'mobile' ? audit.metrics : null);
   const primary = audit.techStack?.find((t) => t.id !== 'custom' && t.confidence != null);
   const aeo = aeoScore(audit.aeo);
+  const aeoPoor = aeo != null && rating(aeo).tone === 'bad';
+  const aeoCard = (
+    <div className={styles.card}>
+      <ScoreRing score={aeo} label={AEO.title} />
+      <div className={styles.cardText}>
+        <div className={styles.cardHead}>
+          <Bot size={15} aria-hidden="true" />
+          <span className={styles.cardTitle}>{AEO.title}</span>
+          <InfoTip label={AEO.title} align="end">
+            {AEO.explain} <em>({AEO.expert}; share of its checks that pass)</em>
+          </InfoTip>
+        </div>
+        <p className={styles.question}>Can AI assistants quote it correctly?</p>
+      </div>
+    </div>
+  );
 
   return (
     <div className={styles.wrap}>
@@ -103,23 +119,15 @@ export default function HealthOverview({ audit, device, onDeviceChange }) {
             );
           })}
         </div>
-        <Details label="one more score">
-          <div className={styles.cards}>
-              <div className={styles.card}>
-                <ScoreRing score={aeo} label={AEO.title} />
-                <div className={styles.cardText}>
-                  <div className={styles.cardHead}>
-                    <Bot size={15} aria-hidden="true" />
-                    <span className={styles.cardTitle}>{AEO.title}</span>
-                    <InfoTip label={AEO.title} align="end">
-                      {AEO.explain} <em>({AEO.expert}; share of its checks that pass)</em>
-                    </InfoTip>
-                  </div>
-                  <p className={styles.question}>Can AI assistants quote it correctly?</p>
-                </div>
-              </div>
-          </div>
-        </Details>
+        {/* "Ready for AI answers" is the score people understand least, so it waits behind a fold, unless it is poor: a bad
+            result is never hidden. */}
+        {aeoPoor ? (
+          <div className={styles.cards}>{aeoCard}</div>
+        ) : (
+          <Details label="one more score">
+            <div className={styles.cards}>{aeoCard}</div>
+          </Details>
+        )}
         {!scores && <p className={styles.note}>The speed test did not finish for {device === 'mobile' ? 'phones' : 'computers'}; check the site again to measure it.</p>}
       </Card>
 

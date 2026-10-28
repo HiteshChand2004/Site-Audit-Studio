@@ -10,7 +10,7 @@ import { Alert } from '../../components/common/Surface.jsx';
 import AuditReport from '../../components/audit/AuditReport.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import PageScope, { pathOf } from '../../components/project/PageScope.jsx';
-import { isAnalysisActive, useProjects } from '../../store/useProjects.js';
+import { isAnalysisActive, selectIsOwner, useProjects } from '../../store/useProjects.js';
 import { plural, timeAgo } from '../../format.js';
 import styles from '../Panel.module.css';
 import ws from '../Workspace.module.css';
@@ -51,7 +51,7 @@ function previewOverlay({ audit, mode, slow }) {
     return (
       <>
         <ShieldAlert size={13} color="var(--warn)" aria-hidden="true" />
-        <span title={audit.frame.reason}>This site does not allow being shown inside another app · showing a picture</span>
+        <span title={audit.frame.reason}>This site doesn’t allow being shown here, so you see a picture taken during the check</span>
       </>
     );
   }
@@ -76,6 +76,9 @@ export default function CheckStep({ project, audit, loading }) {
   const analyze = useProjects((s) => s.analyze);
   const update = useProjects((s) => s.update);
   const dismissAnalysis = useProjects((s) => s.dismissAnalysis);
+  // Checking one page instead of the whole website is an owner's option (under "Advanced options"); this only decides what
+  // is drawn, the server's rules are unchanged.
+  const isOwner = useProjects(selectIsOwner);
   const running = isAnalysisActive(analysis);
 
   const [viewport, setViewport] = useState(375);
@@ -132,7 +135,15 @@ export default function CheckStep({ project, audit, loading }) {
         </Button>
       </form>
 
-      <PageScope project={project} disabled={running} />
+      {/* A website already set to one page (saved before, or through the API) is said so to everyone, with the way back to the
+          whole website, so a normal user is never left checking one page without knowing it. */}
+      {!isOwner && project.page_url && (
+        <Alert tone="info" title={`This website is set to check one page only: ${pathOf(project.page_url)}`}>
+          <Button size="sm" variant="secondary" disabled={running} onClick={() => update(project.id, { page_url: null }).catch(() => {})}>
+            Check the whole website instead
+          </Button>
+        </Alert>
+      )}
 
       {!project.page_url && (
         <Details label="settings">
@@ -151,6 +162,13 @@ export default function CheckStep({ project, audit, loading }) {
             />
           </label>
         </Details>
+      )}
+
+      {isOwner && (
+        <details style={{ marginTop: 4 }}>
+          <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Advanced options</summary>
+          <PageScope project={project} disabled={running} />
+        </details>
       )}
 
       {analysis && analysis.status !== 'done' && <AnalyzeProgress analysis={analysis} onDismiss={() => dismissAnalysis(project.id)} />}
@@ -179,7 +197,7 @@ export default function CheckStep({ project, audit, loading }) {
               )}
               {!audit.isDummy && (project.page_url ?? null) !== (audit.scope?.url ?? null) && (
                 <Alert tone="info" title={project.page_url ? `This report is not for ${pathOf(project.page_url)} yet` : 'This report is for one page only'}>
-                  {project.page_url ? 'Click “Check again” to check only the chosen page.' : 'Click “Check again” to check the whole website.'}
+                  {project.page_url ? 'Click “Check again” to check only that page.' : 'Click “Check again” to check the whole website.'}
                 </Alert>
               )}
               {audit.errors?.length > 0 && (
