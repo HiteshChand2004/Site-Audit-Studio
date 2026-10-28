@@ -255,11 +255,18 @@
   cursor: pointer;
 }
 
+/* Hangs below the header and fills the rest of the screen. Not `position: fixed`: the header's backdrop-filter makes it the
+   containing block of fixed children, which squeezed the panel into the header's own 64px. */
 .mobile-nav {
-  position: fixed;
-  inset: var(--header-h) 0 0 0;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
   z-index: 49;
+  height: calc(100vh - var(--header-h));
+  height: calc(100dvh - var(--header-h));
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 8px var(--gutter) 32px;
   background: var(--bg);
   animation: drop 260ms var(--ease-out);
