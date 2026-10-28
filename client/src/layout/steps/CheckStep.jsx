@@ -76,9 +76,10 @@ export default function CheckStep({ project, audit, loading }) {
   const analyze = useProjects((s) => s.analyze);
   const update = useProjects((s) => s.update);
   const dismissAnalysis = useProjects((s) => s.dismissAnalysis);
-  // Checking one page instead of the whole website is an owner's option (under "Advanced options"); this only decides what
-  // is drawn, the server's rules are unchanged.
+  // Checking one page instead of the whole website is the owner's option (under "Advanced options"); the server refuses it to
+  // anyone else and checks the whole website for them, whatever page an older setting saved.
   const isOwner = useProjects(selectIsOwner);
+  const pageUrl = isOwner ? project.page_url ?? null : null;
   const running = isAnalysisActive(analysis);
 
   const [viewport, setViewport] = useState(375);
@@ -135,17 +136,7 @@ export default function CheckStep({ project, audit, loading }) {
         </Button>
       </form>
 
-      {/* A website already set to one page (saved before, or through the API) is said so to everyone, with the way back to the
-          whole website, so a normal user is never left checking one page without knowing it. */}
-      {!isOwner && project.page_url && (
-        <Alert tone="info" title={`This website is set to check one page only: ${pathOf(project.page_url)}`}>
-          <Button size="sm" variant="secondary" disabled={running} onClick={() => update(project.id, { page_url: null }).catch(() => {})}>
-            Check the whole website instead
-          </Button>
-        </Alert>
-      )}
-
-      {!project.page_url && (
+      {!pageUrl && (
         <Details label="settings">
           <label className={styles.pagesInput} title="How many pages the check reads (1–100)">
             <span>Pages to check</span>
@@ -195,9 +186,9 @@ export default function CheckStep({ project, audit, loading }) {
                   {' '}· speed measured on the homepage
                 </p>
               )}
-              {!audit.isDummy && (project.page_url ?? null) !== (audit.scope?.url ?? null) && (
-                <Alert tone="info" title={project.page_url ? `This report is not for ${pathOf(project.page_url)} yet` : 'This report is for one page only'}>
-                  {project.page_url ? 'Click “Check again” to check only that page.' : 'Click “Check again” to check the whole website.'}
+              {!audit.isDummy && pageUrl !== (audit.scope?.url ?? null) && (
+                <Alert tone="info" title={pageUrl ? `This report is not for ${pathOf(pageUrl)} yet` : 'This report is for one page only'}>
+                  {pageUrl ? 'Click “Check again” to check only that page.' : 'Click “Check again” to check the whole website.'}
                 </Alert>
               )}
               {audit.errors?.length > 0 && (

@@ -4,6 +4,7 @@ import { ConflictError, JobLimitError, jobs } from '../audit/jobs.js';
 import { PUBLIC_STEPS } from '../audit/index.js';
 import { streamJob } from '../jobs/sse.js';
 import { pageUrlOf } from '../recreate/inputs.js';
+import { isOwner } from '../accounts/roles.js';
 
 const router = Router();
 
@@ -26,8 +27,9 @@ router.post('/:id/analyze', (req, res) => {
   if (!maxPages) return res.status(400).json({ error: 'maxPages must be a whole number from 1 to 100.' });
 
   try {
-    // One page only (projects.page_url): that page is the one fetched, rendered, measured and checked, and nothing else.
-    const page = pageUrlOf(project);
+    // One page only (projects.page_url): that page is the one fetched, rendered, measured and checked, and nothing else. It is
+    // the owner's option (accounts/roles.js): anyone else always checks the whole website, whatever page an older setting saved.
+    const page = isOwner(req) ? pageUrlOf(project) : null;
     const job = jobs.start(project, page ? { maxPages: 1, url: page } : { maxPages });
     res.status(202).json({ analysisId: job.id, job, steps: PUBLIC_STEPS });
   } catch (err) {

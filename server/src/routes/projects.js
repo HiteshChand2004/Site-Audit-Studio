@@ -126,6 +126,11 @@ router.patch('/:id', (req, res) => {
   // page ("Copy my site" saves the stack, the address and "every page", which stay open to everyone). An invalid value is still
   // the 400 below, for everyone.
   if (!isOwner(req)) {
+    // Checking one page instead of the whole website is the owner's too: anyone else always checks the whole website (an old
+    // saved page stays stored and is ignored for them, routes/analyze.js).
+    if (pageUrl !== undefined) {
+      return res.status(403).json({ error: 'Only the owner can choose to check one page. Everyone else checks the whole website.', forbidden: 'owner' });
+    }
     const owned = ownerOnlySettings({ exactMode, recreatePages });
     if (owned.length) return refuseNonOwner(res, owned.join(', '));
   }
