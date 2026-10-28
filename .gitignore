@@ -14,3 +14,13 @@ data/
 coverage/
 .vite/
 toolchains/*/node_modules/
+
+# The marketing site (website/): its build output and settings (its own .gitignore says the same; .env.example is kept)
+website/.next/
+website/out/
+website/next-env.d.ts
+website/*.tsbuildinfo
+website/.env*
+!website/.env.example
+# data/ above means the tool's data folder; the website keeps content in website/data/
+!website/data/

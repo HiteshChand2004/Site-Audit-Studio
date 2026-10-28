@@ -10,6 +10,26 @@ base, cfaab64, is babf36c here (same patch id), so merging only `step4-lighthous
 loses nothing except the untracked scratch scripts, which are kept at `C:/Users/urvas/Downloads/remastly-live-results/scripts/`.
 Read first: `docs/COPY-MY-SITE.md` (the plan and the rules). This file says what is actually built and what is not.
 
+## One repository: the marketing site is in `website/` (branch `monorepo`, 2026-10-27, not merged)
+
+**Layout.** `website/` is the marketing site (Next.js), brought in from `HiteshChand2004/remastly-website` main 549f866 with
+its full history (`git subtree add`, no squash: its 20 commits are in `git log -- website`). It keeps its own `package.json`
+and `package-lock.json` and is **not** one of the root npm workspaces: it pins its own Next / React versions, and keeping it
+out leaves the root lockfile and the root `npm ci` exactly as they were.
+
+- `npm run local` (scripts/local.mjs) finds the site in `./website`; `SAS_MARKETING_DIR` still points it at another copy.
+- Deploy (docs/DEPLOY-TOOL.md): one clone per release; the site is built in `releases/<tag>/website` and `/srv/sas/site`
+  links there. There is no `<site-repo-url>` any more.
+- `.gitignore`: the site's build folders and `website/.env*` (`.env.example` kept). The root rule `data/` (the tool's data
+  folder) would also hide new files in `website/data/`, so that folder is excluded from it.
+
+**What a collaborator does after the merge.**
+1. `git pull`, then once: `cd website && npm ci` (the root `npm ci` does not install the site).
+2. `npm run local` as before. The separate `../remastly-website` folder is no longer used; at the time of the move it was
+   clean and at 549f866, so nothing in it is lost. Delete it or keep it, but make new site changes in `website/` here.
+3. Site changes are ordinary commits in this repo. Until the old repository is retired (not decided; not part of this step),
+   `git subtree pull --prefix=website <its url> main` (no `--squash`) brings in anything still committed there.
+
 ## Launch readiness (added 2026-10-24)
 
 > **Rule (the user's): all work is done with deployment of the whole website + tool in mind.** Every item below is open until
@@ -821,10 +841,11 @@ Still open, decided when the server is set up:
    `.env`, `npm run db:migrate -w server` (creates the owner from `SAS_OWNER_EMAIL`; with accounts on the server refuses to
    start before it), `npm run mail:test`, then start the API, then Caddy (DNS must point at the server first, for the
    certificate). Do it once on the real server following the guide line by line, and fix the guide where it differs.
-3. **Which branch, and which git remote.** The guide uses `<tool-repo-url>` / `<site-repo-url>` / `<tag>` placeholders. The
+3. **Which branch, and which git remote.** The guide uses `<tool-repo-url>` / `<tag>` placeholders (the site is in `website/`
+   since the `monorepo` branch, so there is no site repository to name). The
    launch work (accounts, data lock, job limits, cleanup, production refusal, the two fixes above) is on `accounts`; nothing has
    been pushed. Decide the launch branch (merge `accounts` into `main`, or deploy a tag of `accounts`), the remote it is pushed
-   to and who can read it, and the marketing site's repository, then fill the placeholders.
+   to and who can read it, then fill the placeholders.
 
 Checked against the conversions (2026-10-25, after `convert-react` was merged; DEPLOY-TOOL.md steps 1, 4 and 14 updated):
 - **Toolchains are found only at `<release>/server/toolchains/<id>/node_modules`** (`config/paths.js toolchainDir`). That is

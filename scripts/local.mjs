@@ -1,6 +1,6 @@
 // @ts-check
 // `npm run local`: the whole product on this computer, at one address — http://localhost:8080
-//   /        the marketing site (Next.js dev server, ../remastly-website, port 3000)
+//   /        the marketing site (Next.js dev server, ./website, port 3000)
 //   /app/    the tool (Vite dev server, port 5173), only for a signed-in, verified account (scripts/local-proxy.mjs)
 //   /api/    the API (port 4000) with accounts on (SAS_ACCOUNTS=1)
 // Email verification is stubbed: the API runs with SAS_DEV_NO_VERIFY=1, so a new account is verified on sign-up (the API prints
@@ -8,7 +8,7 @@
 // gate keeps it out; the code is emailed through the SMTP_* settings of server/.env, or written to the API's log when there are none.
 // Everything else comes from server/.env as usual (SAS_DATA_DIR, SAS_ALLOW_LOCALHOST…); the settings above win over it.
 //
-// Options: --verify   SAS_LOCAL_PORT (8080)   SAS_MARKETING_DIR (../remastly-website, next to this repo)
+// Options: --verify   SAS_LOCAL_PORT (8080)   SAS_MARKETING_DIR (another copy of the marketing site; default ./website)
 // Ctrl+C stops all four.
 import { spawn, execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -19,7 +19,7 @@ import { createLocalProxy } from './local-proxy.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.SAS_LOCAL_PORT) || 8080;
-const MARKETING = path.resolve(process.env.SAS_MARKETING_DIR || path.join(ROOT, '..', 'remastly-website'));
+const MARKETING = path.resolve(process.env.SAS_MARKETING_DIR || path.join(ROOT, 'website'));
 const VERIFY = process.argv.includes('--verify');
 const PUBLIC = `http://localhost:${PORT}`;
 const PORTS = { api: 4000, app: 5173, site: 3000 };

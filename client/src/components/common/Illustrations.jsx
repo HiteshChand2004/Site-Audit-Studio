@@ -118,7 +118,7 @@ export function EmptySiteArt(props) {
 }
 
 /**
- * The Remastly mark: the marketing site's own icon (remastly-website/app/icon.tsx, served at /icon on this origin), the same
+ * The Remastly mark: the marketing site's own icon (website/app/icon.tsx, served at /icon on this origin), the same
  * image as the tab icon, so the two can never disagree. Decorative: the name stands next to it.
  */
 export function LogoMark({ size = 32 }) {

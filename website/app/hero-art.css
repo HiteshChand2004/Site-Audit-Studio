@@ -1,0 +1,150 @@
+/* The picture beside an inner page's heading (components/ui/HeroArt.tsx) and the split layout PageHero uses with it. */
+
+.phero-split {
+  display: grid;
+  gap: 48px;
+  align-items: center;
+}
+@media (min-width: 960px) {
+  .phero-split {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 520px);
+    gap: 56px;
+  }
+}
+
+.hart {
+  position: relative;
+  display: grid;
+  justify-items: end;
+  padding-bottom: 36px;
+}
+.hart__glow {
+  position: absolute;
+  inset: 8% -4% 0 8%;
+  z-index: -1;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 22%, transparent), transparent);
+  filter: blur(20px);
+}
+.hart__main {
+  width: min(100%, 460px);
+}
+.hart__over {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: min(72%, 340px);
+}
+.hart__main > *,
+.hart__over > * {
+  box-shadow: var(--sh-3);
+}
+@media (max-width: 959px) {
+  .hart {
+    justify-items: center;
+  }
+  .hart__over {
+    left: 4%;
+  }
+}
+
+/* A framed picture, with an optional window bar */
+.hshot {
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.hshot__bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.hshot__bar > span:nth-child(2) {
+  flex: 1;
+}
+.hshot__dots {
+  display: flex;
+  gap: 5px;
+}
+.hshot__dots i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+.hshot__img {
+  overflow: hidden;
+}
+.hshot__img img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.hchip {
+  padding: 2px 9px;
+  border: 1px solid var(--ok-border);
+  border-radius: var(--r-pill);
+  background: var(--ok-tint);
+  color: var(--ok);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* About: three of our own sites, fanned */
+.hfan {
+  position: relative;
+  width: min(100%, 480px);
+  height: 380px;
+}
+.hfan > * {
+  position: absolute;
+  width: 78%;
+  box-shadow: var(--sh-3);
+}
+.hfan > :nth-child(1) {
+  top: 0;
+  right: 0;
+  transform: rotate(4deg);
+}
+.hfan > :nth-child(2) {
+  top: 70px;
+  left: 0;
+  transform: rotate(-4deg);
+}
+.hfan > :nth-child(3) {
+  bottom: 0;
+  right: 8%;
+}
+
+/* A white panel for a drawn app piece used as the overlay */
+.hpanel {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.hart__main > .hfan {
+  box-shadow: none;
+}
+/* Some captures carry a sliver of the window behind them at the edges; cut it off. */
+.hshot--trim .hshot__img img {
+  width: calc(100% + 8px);
+  max-width: none;
+  margin: -4px;
+}
+/* On a phone the drawn overlays (zip, stack picker) get too cramped beside the main picture, so only the picture shows. */
+@media (max-width: 599px) {
+  .hart__over:has(.mk-zip, .hpanel) {
+    display: none;
+  }
+  .hart:has(.hart__over .mk-zip, .hart__over .hpanel) {
+    padding-bottom: 0;
+  }
+}
