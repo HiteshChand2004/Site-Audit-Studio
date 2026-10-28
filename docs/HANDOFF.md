@@ -10,10 +10,39 @@ base, cfaab64, is babf36c here (same patch id), so merging only `step4-lighthous
 loses nothing except the untracked scratch scripts, which are kept at `C:/Users/urvas/Downloads/remastly-live-results/scripts/`.
 Read first: `docs/COPY-MY-SITE.md` (the plan and the rules). This file says what is actually built and what is not.
 
+## State on 28 Oct 2026
+
+**main** (`origin/main` d435fe2):
+- **One repository**: the marketing site is in `website/` (PR #4, branch `monorepo`, merged as 5fdd245). Details in the next
+  section.
+- **Check-step CSS fix** (PR #5, branch `fix-details-overflow`, ae25731, merged as d29c3ff): the expert report stays inside its
+  column on the Check step.
+- **Mobile menu fix** (PR #6, branch `fix-mobile-menu`, d9c94c5, **merged** as d435fe2): the website's mobile header menu shows
+  every option.
+
+**Open branches** (pushed, not merged):
+- `ui-simplify`: UI simplify **stages 1–6b done** (1 display bugs; 2 shared words + look warning + "Show details" fold; 3 no look
+  scores on screen, one red look warning; 4 Results in plain words; 5 site header, top bar, report dialog and Overview in plain
+  words; 6 / 6b the Check screen finished, choosing one page is the owner's only, enforced on the server). **Stages 7–8 left.**
+  It has main merged in up to the monorepo merge; main has 2 commits it does not have yet (PR #6).
+- `analyze-100`: a new project reads 100 pages instead of 25, and Analyze says why the crawl read fewer pages than its limit.
+  Its three commits (83bac37, 38f77b3, 589bdff) are **already on main**; the branch holds nothing main lacks and can be deleted.
+- `owner-transfer` (428392a): `npm run accounts -w server -- transfer-owner <email> [--move-projects] [--yes]` hands the owner
+  role to another verified account (dry run without `--yes`; with it a checked backup first, then one transaction). Not merged.
+
+**Owner and deployment:**
+- The owner account is **remastly.panscience@gmail.com**. `SAS_OWNER_EMAIL` is read only by the first `npm run db:migrate -w
+  server`, which creates the owner; changing it later changes nothing. Moving the role to another account is `transfer-owner`,
+  which exists only on the `owner-transfer` branch until it is merged.
+- The site is deployed at **https://remastly.panscience.ai**. Its API answered **502** on the last check; that is being fixed.
+- Caddy's `forward_auth` is **not** used. **No Docker** for launch: one `npm start`
+  process as in `docs/DEPLOY-TOOL.md`.
+- Pending: the Search-Ready brief, to be added as `docs/SEARCH-READY.md` (not in the repo yet).
+
 ## One repository: the marketing site is in `website/` (branch `monorepo`, 2026-10-27, not merged)
 
 **Layout.** `website/` is the marketing site (Next.js), brought in from `HiteshChand2004/remastly-website` main 549f866 with
-its full history (`git subtree add`, no squash: its 20 commits are in `git log -- website`). It keeps its own `package.json`
+its full history (`git subtree add`, no squash: its 20 commits are in `git log 4eb890d^2`). It keeps its own `package.json`
 and `package-lock.json` and is **not** one of the root npm workspaces: it pins its own Next / React versions, and keeping it
 out leaves the root lockfile and the root `npm ci` exactly as they were.
 
