@@ -12,8 +12,14 @@
 //   data         JSON-LD Organization + WebSite on the homepage when no page has them; FAQPage where the page shows questions
 //                with their answers and has none
 //   files        sitemap.xml, llms.txt (when the copy has none), robots.txt kept but pointing at the new site, _headers
+//   anchors, linktext, headings, and an invalid <html lang>: copy/seoA11yAsIs.js (role="button" on javascript:void(0) links,
+//                visually hidden text in vague links, aria-level on skipped headings)
+//   lcp, lazy, webp  copy/perfAsIs.js, from what the browser measured (`perf`): fetchpriority on the largest image, loading="lazy"
+//                below the first screen at every width, a lossless WebP for a local PNG with the very same pixels
+// A description is also taken from the page's own og:description / twitter:description when its paragraphs give none. A missing
+// or zoom-blocking <meta name="viewport"> is reported, never changed: adding or loosening one changes how phones lay out the page.
 // Not here (they change pixels or behaviour, reason d): contrast, font subsets, sprite / layout parking, longer-or-shorter-only
-// title rewrites, dead-link unlinking, LCP entrance removal; images (only when the pixels stay the same: not yet).
+// title rewrites, dead-link unlinking, LCP entrance removal; lossy or resized images, font-display, the original's scripts.
 // Every page's fixes are listed; the stage then proves them invisible (preserve/check.js fixGate) and reverts a page's fixes
 // when they are not.
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
@@ -26,6 +32,8 @@ import { faqPairs } from '../recreate/ir/aeo.js';
 import { crawlFiles } from '../recreate/ir/crawlFiles.js';
 import { resetTextCache } from '../recreate/ir/tree.js';
 import { HEADERS_FILE as CACHE_HEADERS } from '../recreate/behavior/preserve/pack.js';
+import { blocksZoom, fixCrawlableAnchors, fixHeadingLevels, fixInvalidLang, fixLinkText, isValidLang } from './seoA11yAsIs.js';
+import { fixImageLoading, fixPngImages } from './perfAsIs.js';
 import { SECURITY_HEADERS } from './securityHeaders.js';
 
 const clean = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -82,16 +90,23 @@ const paragraphsOf = ($) => $('body p').toArray().map((p) => clean($(p).text()))
  * @param {string|null} [o.newSiteUrl]  the new site's address (canonical, sitemap, robots); without it nothing names an address
  * @param {string|null} [o.siteName]
  * @param {(origin: string) => Promise<{ text: string|null }>} [o.fetchLlms]  the original's llms.txt (the job passes the guarded fetch; none = not asked)
+ * @param {string|null} [o.readDir]     where the pages are read from (default `dir`): the lifted copy, for a retry that must start
+ *   from the same pages the first pass started from
+ * @param {Map<string, Set<string>>|null} [o.only]  a retry of some fixes (preserve/stage.js fixAndProve): outPath → the groups
+ *   (fixGroup) allowed on that page. Every page is still read, so a duplicate title or description is judged as in the first
+ *   pass, but only the pages named here are written, with only those groups, and the site files are not written again.
+ * @param {Map<string, object>|null} [o.perf]  outPath → its plan (copy/perfAsIs.js planPerf, from preserve/check.js perfProbe);
+ *   a page without one gets no lcp / lazy fix. The same plan is passed to a retry, so it makes the same fixes.
  * @returns {Promise<{ pages: object[], files: object, counts: Record<string, number>, open: object[], originals: Map<string, string> }>}
  *   originals: outPath → the page's HTML before its fixes (for a revert)
  */
-export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, siteName = null, fetchLlms = null }) {
+export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, siteName = null, fetchLlms = null, readDir = null, only = null, perf = null }) {
   const siteHost = bareHost(new URL(siteUrl).hostname);
   const newOrigin = newSiteUrl ? new URL(newSiteUrl).origin : null;
   const docs = [];
   for (const p of pages) {
     const file = path.join(dir, p.outPath);
-    const html = await readFile(file, 'utf8').catch(() => null);
+    const html = await readFile(path.join(readDir ?? dir, p.outPath), 'utf8').catch(() => null);
     if (html == null) continue;
     docs.push({ ...p, file, html, $: cheerio.load(html) });
   }
@@ -128,25 +143,66 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
   const allTypes = new Set(docs.flatMap((d) => jsonLdTypes(d.$)));
   const result = [];
   const open = [];
-  const counts = { alt: 0, names: 0, aria: 0, head: 0, data: 0, address: 0, lang: 0 };
+  const counts = { alt: 0, names: 0, aria: 0, head: 0, data: 0, address: 0, lang: 0, anchors: 0, linktext: 0, headings: 0, lcp: 0, lazy: 0, webp: 0 };
   const originals = new Map();
+  // One WebP per PNG for the whole run, however many pages show it.
+  const webpMade = new Map();
 
   for (const d of docs) {
     const { $ } = d;
     const fixes = [];
     const body = $('body').get(0);
     const root = body ? adapt($, body) : null;
+    // The page's text before any fix adds to it (a link's hidden text), so the language read from it is the same in a retry.
+    const bodyText = $('body').text();
     resetTextCache();
+    // A retry (`only`) makes only the groups it names on its page; every other page, and a first pass, makes them all.
+    const allow = (group) => !only?.has(d.outPath) || only.get(d.outPath).has(group);
     if (root) {
       const tree = { root, info: { path: d.path, url: d.url, outPath: d.outPath } };
-      const alt = fixAlt(tree);
-      for (const f of [...alt.fixed, ...alt.decorative]) fixes.push({ kind: 'alt', ...f });
-      const names = fixNames(tree, { pageUrl: d.url, resolveLink, pageTitles, siteName: name });
-      for (const f of names.fixed) fixes.push({ kind: 'names', ...f });
-      open.push(...names.open.map((o) => ({ kind: 'names', reason: 'c', ...o })));
-      const aria = fixAria(tree, { asIs: true });
-      for (const f of aria.fixed) fixes.push({ kind: 'aria', ...f });
-      open.push(...aria.open.map((o) => ({ kind: 'aria', ...o })));
+      if (allow('alt')) {
+        const alt = fixAlt(tree);
+        for (const f of [...alt.fixed, ...alt.decorative]) fixes.push({ kind: 'alt', ...f });
+      }
+      if (allow('names')) {
+        const names = fixNames(tree, { pageUrl: d.url, resolveLink, pageTitles, siteName: name });
+        for (const f of names.fixed) fixes.push({ kind: 'names', ...f });
+        open.push(...names.open.map((o) => ({ kind: 'names', reason: 'c', ...o })));
+      }
+      if (allow('aria')) {
+        const aria = fixAria(tree, { asIs: true });
+        for (const f of aria.fixed) fixes.push({ kind: 'aria', ...f });
+        open.push(...aria.open.map((o) => ({ kind: 'aria', ...o })));
+      }
+    }
+    if (body) {
+      // The page's language for link-text: the declared one when it is a language code, else what its text shows.
+      const declared = clean($('html').attr('lang'));
+      const pageLang = declared && isValidLang(declared) ? declared : detectLang(bodyText);
+      const more = [
+        ['anchors', () => fixCrawlableAnchors($, d)],
+        ['linktext', () => fixLinkText($, d, { resolveLink, pageTitles, siteName: name, lang: pageLang })],
+        ['headings', () => fixHeadingLevels($, d)],
+      ];
+      for (const [kind, run] of more) {
+        if (!allow(kind)) continue;
+        const r = run();
+        for (const f of r.fixed) fixes.push({ kind, ...f });
+        open.push(...r.open.map((o) => ({ kind, ...o })));
+      }
+      const loading = fixImageLoading($, d, perf?.get(d.outPath) ?? null, { lcp: allow('lcp'), lazy: allow('lazy') });
+      for (const kind of ['lcp', 'lazy']) {
+        if (!allow(kind)) continue;
+        for (const f of loading[kind].fixed) fixes.push({ kind, ...f });
+        open.push(...loading[kind].open.map((o) => ({ kind, ...o })));
+      }
+      // Only on a page the probe measured (its plan): a caller that proves the markup fixes alone, or a page that could not be
+      // measured, gets no image rewritten either.
+      if (perf?.has(d.outPath) && allow('webp')) {
+        const webp = await fixPngImages($, d, dir, webpMade);
+        for (const f of webp.fixed) fixes.push({ kind: 'webp', ...f });
+        open.push(...webp.open.map((o) => ({ kind: 'webp', ...o })));
+      }
     }
 
     // Head: only what is missing or duplicated.
@@ -156,7 +212,7 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     const title = clean(titleEl.text());
     const titleKey = title.toLowerCase();
     let finalTitle = title;
-    if (!title || seenTitle.has(titleKey)) {
+    if (allow('head:title') && (!title || seenTitle.has(titleKey))) {
       const fresh = fitTitle(h1 && h1.toLowerCase() !== titleKey ? h1 : pathLabel(d.path) || h1, name);
       if (fresh && !seenTitle.has(fresh.toLowerCase())) {
         if (!titleEl.length) head.prepend('<title></title>');
@@ -169,13 +225,22 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     const descEl = $('meta[name="description"]').first();
     const description = clean(descEl.attr('content'));
     let finalDescription = description;
-    if (!description || seenDescription.has(description.toLowerCase())) {
+    if (allow('head:description') && (!description || seenDescription.has(description.toLowerCase()))) {
       const own = paragraphsOf($).filter((t) => !seenDescription.has(t.toLowerCase()));
-      const fresh = fitDescription(own);
+      let fresh = fitDescription(own);
+      let from = 'the page\'s own paragraphs';
+      if (!fresh || fresh.length < 50) {
+        // The owner's own summary of the page, when its paragraphs are too short to make one.
+        const summary = clean($('meta[property="og:description"]').attr('content') || $('meta[name="twitter:description"]').attr('content'));
+        if (summary.length >= 50) {
+          fresh = fitDescription([summary]);
+          from = 'the page\'s own og:description';
+        }
+      }
       if (fresh && fresh.length >= 50 && !seenDescription.has(fresh.toLowerCase())) {
         if (!descEl.length) head.append('<meta name="description" content="">');
         head.find('meta[name="description"]').first().attr('content', fresh);
-        fixes.push({ kind: 'head', field: 'description', from: description || null, value: fresh, source: description ? 'duplicate of another page' : 'the page\'s own paragraphs' });
+        fixes.push({ kind: 'head', field: 'description', from: description || null, value: fresh, source: description ? 'duplicate of another page' : from });
         finalDescription = fresh;
       }
     }
@@ -186,11 +251,11 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     const canonical = $('link[rel="canonical"]').first();
     if (canonical.length) {
       const moved = movedToNewSite(canonical.attr('href'), siteHost, newOrigin, byPath);
-      if (moved) {
+      if (moved && allow('head:meta')) {
         fixes.push({ kind: 'address', field: 'canonical', from: canonical.attr('href'), value: moved });
         canonical.attr('href', moved);
       }
-    } else if (own) {
+    } else if (own && allow('head:meta')) {
       head.append('<link rel="canonical" href="">');
       head.find('link[rel="canonical"]').last().attr('href', own);
       fixes.push({ kind: 'head', field: 'canonical', value: own, source: 'the new address' });
@@ -198,13 +263,13 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     const ogUrl = $('meta[property="og:url"]').first();
     if (ogUrl.length) {
       const moved = movedToNewSite(ogUrl.attr('content'), siteHost, newOrigin, byPath);
-      if (moved) {
+      if (moved && allow('head:meta')) {
         fixes.push({ kind: 'address', field: 'og:url', from: ogUrl.attr('content'), value: moved });
         ogUrl.attr('content', moved);
       }
     }
     const og = (prop, value, source) => {
-      if (!value || $(`meta[property="${prop}"]`).length) return;
+      if (!allow('head:meta') || !value || $(`meta[property="${prop}"]`).length) return;
       head.append(`<meta property="${prop}" content="">`);
       head.find(`meta[property="${prop}"]`).last().attr('content', value);
       fixes.push({ kind: 'head', field: prop, value, source });
@@ -214,17 +279,26 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     og('og:url', own, 'the new address');
 
     const html = $('html');
-    if (!clean(html.attr('lang'))) {
-      const lang = detectLang($('body').text());
+    if (allow('lang') && !clean(html.attr('lang'))) {
+      const lang = detectLang(bodyText);
       if (lang) {
         html.attr('lang', lang);
         fixes.push({ kind: 'lang', field: 'lang', value: lang, source: 'the page text' });
       } else open.push({ kind: 'lang', page: d.path, reason: 'c', detail: 'The page declares no language and its text does not say clearly' });
+    } else if (allow('lang')) {
+      const invalid = fixInvalidLang($, detectLang(bodyText));
+      if (invalid?.value) {
+        html.attr('lang', invalid.value);
+        fixes.push({ kind: 'lang', field: 'lang', from: invalid.from, value: invalid.value, source: 'the page text (the declared one is not a language code)' });
+      } else if (invalid) open.push({ kind: 'lang', page: d.path, reason: 'c', detail: `<html lang="${invalid.from}"> is not a language code and the page text does not say clearly which one it is` });
     }
+    const viewport = $('meta[name="viewport"]').attr('content');
+    if (viewport == null) open.push({ kind: 'viewport', page: d.path, reason: 'd', detail: 'The page has no <meta name="viewport">: adding one changes how every phone lays it out, so it is not added' });
+    else if (blocksZoom(viewport)) open.push({ kind: 'viewport', page: d.path, reason: 'd', detail: `<meta name="viewport" content="${clean(viewport)}"> stops zooming: loosening it changes how the page behaves on a phone, so it is not changed` });
 
     // Structured data.
     const types = jsonLdTypes($);
-    if (d === docs[0]) {
+    if (d === docs[0] && allow('data')) {
       const url = newOrigin ? `${newOrigin}/` : undefined;
       const icon = $('link[rel="apple-touch-icon"]').attr('href') ?? $('link[rel~="icon"]').attr('href');
       const logo = icon && newOrigin ? new URL(icon, `${newOrigin}${d.path}`).href : undefined;
@@ -237,7 +311,7 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
         fixes.push({ kind: 'data', field: 'json-ld', value: 'WebSite', source: 'site name and the new address' });
       }
     }
-    if (root && !types.includes('FAQPage')) {
+    if (allow('data') && root && !types.includes('FAQPage')) {
       const pairs = faqPairs(root);
       if (pairs.length >= 2) {
         head.append(ldScript({
@@ -248,7 +322,7 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
       }
     }
 
-    if (fixes.length) {
+    if (fixes.length && (!only || only.has(d.outPath))) {
       originals.set(d.outPath, d.html);
       await writeFile(d.file, $.html(), 'utf8');
     }
@@ -257,7 +331,7 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     result.push({ path: d.path, outPath: d.outPath, fixes });
   }
 
-  const files = await siteFiles({ dir, docs, newOrigin, siteName: name, siteUrl, fetchLlms });
+  const files = only ? null : await siteFiles({ dir, docs, newOrigin, siteName: name, siteUrl, fetchLlms });
   return { pages: result, files, counts, open, originals };
 }
 
@@ -334,6 +408,22 @@ async function siteFiles({ dir, docs, newOrigin, siteName, siteUrl, fetchLlms })
 }
 
 const noindexMeta = ($) => $('meta[name]').toArray().map((m) => ({ name: $(m).attr('name'), content: $(m).attr('content') }));
+
+/** The head tags that never show on the page: the canonical and og:url (added, or moved to the new site) and the og tags. */
+const HEAD_META_FIELDS = new Set(['canonical', 'og:url', 'og:title', 'og:description']);
+
+/**
+ * The group a fix is retried in when its page's fixes are not invisible together (preserve/stage.js fixAndProve): its kind, but
+ * the head is split three ways, because a title can show (a script that prints it) where the description and the meta tags never
+ * do. A canonical or og:url moved to the new site is a head:meta fix too; it is still counted and reported as `address`. Any
+ * other address rewrite keeps the group `address`.
+ */
+export function fixGroup(fix) {
+  if (fix.kind === 'head' && fix.field === 'title') return 'head:title';
+  if (fix.kind === 'head' && fix.field === 'description') return 'head:description';
+  if ((fix.kind === 'head' || fix.kind === 'address') && HEAD_META_FIELDS.has(fix.field)) return 'head:meta';
+  return fix.kind;
+}
 
 /** Puts a page's HTML back as it was lifted (its fixes were not invisible). */
 export async function revertPage(dir, outPath, html) {

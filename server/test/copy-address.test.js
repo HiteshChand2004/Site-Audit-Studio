@@ -58,7 +58,7 @@ test('when the address is skipped, nothing in the copy names one, and the copy l
     const r = await fixAndProve({
       browser: null, copyDir: dir, gateDir: `${dir}-unfixed`, siteUrl: SITE,
       pages: [{ outPath: 'index.html', url: SITE }],
-      newSiteUrl: address.origin, addressSkipped: address.skipped,
+      newSiteUrl: address.origin, addressSkipped: address.skipped, speed: false,
     });
     assert.equal(r.open[0].kind, 'address');
     assert.equal(r.open[0].reason, 'c');

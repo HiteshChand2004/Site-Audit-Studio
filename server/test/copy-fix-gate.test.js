@@ -1,10 +1,11 @@
 // The gate of the as-is fixes (preserve/stage.js fixAndProve + check.js fixGate), in both directions. A page's fixes are kept only
-// when its picture (1440 px, frozen, scrolled, size reactions held) has not one pixel different from the same page unfixed outside
+// when its picture (375 and 1440 px, frozen, scrolled, size reactions held) has not one pixel different from the same page unfixed outside
 // the places the page moves by itself (the noise map: wherever any two of three unfixed pictures differ), at the same size, with no
 // new console error. One ruler: verify/exact/pixels.js exactDiff. Here: a fix the page's own CSS turns into a layout change is
 // undone (reason d); one below the first screen inside a section that only appears on scroll is undone too; on a page with a noisy
 // part, a visible fix elsewhere is undone and a fix that changes nothing is kept; and the smallest changes — 2 x 2 px, a pale
-// square, a change far down a tall page — are seen, while an unchanged page passes.
+// square, a change far down a tall page — are seen, while an unchanged page passes. Both widths (375, 1440) are checked, and a
+// page's fixes are dropped by group, not all at once.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -32,13 +33,25 @@ async function copyOf(t, html, extra = async () => {}) {
   return dir;
 }
 const png = (w, h, rgb) => sharp({ create: { width: w, height: h, channels: 3, background: rgb } }).png().toBuffer();
-const prove = (browser, dir) => fixAndProve({ browser, copyDir: dir, gateDir: `${dir}-unfixed`, pages: [{ outPath: 'index.html', url: SITE }], siteUrl: SITE, newSiteUrl: null });
+const prove = (browser, dir) => fixAndProve({ browser, copyDir: dir, gateDir: `${dir}-unfixed`, pages: [{ outPath: 'index.html', url: SITE }], siteUrl: SITE, newSiteUrl: null, speed: false });
+// A page that already states what the head fixes would add (og tags, and the Organization / WebSite data a homepage gets), so
+// a test decides which groups of fixes it has: the image's alt, and the language only when `lang` is left out.
+const stated = (css, { lang = true } = {}) => head(css)
+  .replace('<html>', lang ? '<html lang="en">' : '<html>')
+  .replace('</head>', '<meta property="og:title" content="Gate test page title">'
+    + '<meta property="og:description" content="A page made to test which fixes are kept and which are undone, written for the gate test.">'
+    + '<script type="application/ld+json">{"@context":"https://schema.org","@type":["Organization","WebSite"],"name":"Gate"}</script></head>');
+const IMG = '<img src="/images/team-photo-ab12cd34ef.png">';
+const withImage = async (d) => {
+  await mkdir(path.join(d, 'images'), { recursive: true });
+  await writeFile(path.join(d, 'images', 'team-photo-ab12cd34ef.png'), await png(40, 40, { r: 200, g: 120, b: 40 }));
+};
 
 let browser;
 test.before(async () => { browser = await chromium.launch(); });
 test.after(async () => { await browser.close(); });
 
-test('a fix the page\'s own CSS turns into a layout change is undone, reason d', { timeout: 5 * 60000 }, async (t) => {
+test('a fix the page\'s own CSS turns into a layout change is caught; only that group of fixes is dropped, reason d', { timeout: 5 * 60000 }, async (t) => {
   // img[alt] is styled bigger by the site: giving the image an alt (fixAlt) resizes it and pushes the text below it.
   const html = `${head('img{display:block;width:40px;height:40px}img[alt]{width:320px;height:160px}')}<body lang="en">
     <h1>Gallery</h1><p>${ENGLISH}</p><img src="/images/team-photo-ab12cd34ef.png"><p>Text under the picture.</p></body></html>`;
@@ -48,11 +61,14 @@ test('a fix the page\'s own CSS turns into a layout change is undone, reason d',
   });
   const r = await prove(browser, dir);
   const page = r.pages[0];
-  assert.ok(page.fixes.some((f) => f.kind === 'alt'), 'the alt fix was attempted');
-  assert.equal(page.reverted?.reason, 'd', JSON.stringify(r.gate));
+  assert.equal(page.reverted, undefined, 'the page keeps its other fixes');
+  assert.deepEqual(page.dropped.map((d) => d.group), ['alt'], JSON.stringify(r.gate));
   assert.ok(r.gate[0].changedPx > 0 || r.gate[0].sizeChanged, JSON.stringify(r.gate[0]));
-  assert.equal(await readFile(path.join(dir, 'index.html'), 'utf8'), html, 'the page is back as lifted');
-  assert.equal(r.counts.alt, undefined, 'an undone fix is not counted');
+  const now = await readFile(path.join(dir, 'index.html'), 'utf8');
+  assert.doesNotMatch(now, /<img[^>]*\balt=/, 'the image is as lifted');
+  assert.match(now, /<html lang="en"/, 'the language, which changes nothing, is kept');
+  assert.equal(r.counts.alt, undefined, 'a dropped fix is not counted');
+  assert.equal(r.counts.lang, 1);
 });
 
 test('a change below the first screen, in a section that only appears on scroll, is caught and undone', { timeout: 5 * 60000 }, async (t) => {
@@ -82,11 +98,13 @@ test('a change below the first screen, in a section that only appears on scroll,
   assert.equal((await exactDiff(await noScroll(html), await noScroll(fixedHtml))).diff, 0, 'a picture without the scroll sees no difference');
 
   const r = await prove(browser, dir);
-  assert.ok(r.pages[0].fixes.some((f) => f.kind === 'names' && f.value === 'Email'), JSON.stringify(r.pages[0].fixes));
-  assert.equal(r.pages[0].reverted?.reason, 'd', JSON.stringify(r.gate));
+  assert.equal(r.pages[0].reverted, undefined, JSON.stringify(r.gate));
+  assert.deepEqual(r.pages[0].dropped.map((d) => d.group), ['names'], JSON.stringify(r.gate));
   assert.equal(r.gate[0].heights[0], r.gate[0].heights[1], 'same height: caught by the pixels, not by the height rule');
   assert.ok(r.gate[0].changedPx > 0, JSON.stringify(r.gate[0]));
-  assert.equal(await readFile(path.join(dir, 'index.html'), 'utf8'), html);
+  const now = await readFile(path.join(dir, 'index.html'), 'utf8');
+  assert.doesNotMatch(now, /aria-label="Email"/, 'the field is as lifted');
+  assert.match(now, /<html lang="en"/);
 });
 
 // A page with a part that moves by itself: a 300 x 300 canvas of random pixels, different on every load.
@@ -104,13 +122,15 @@ test('on a page with a noisy part, a small visible fix elsewhere is undone (the 
   const dir = await copyOf(t, noisyPage('html[lang] .mark{background:#c00}'));
   const r = await prove(browser, dir);
   const g = r.gate[0];
-  assert.ok(r.pages[0].fixes.some((f) => f.kind === 'lang'), JSON.stringify(r.pages[0].fixes));
   assert.ok(g.noiseShare > 1, `the page's own noise was mapped (${JSON.stringify(g)})`);
   // The mark sits right above the canvas: the part of it within the noise map's 8 px margin is counted as in the noise, the
   // rest as a visible change. Either way the fix is undone.
   assert.ok(g.changedPx > 0 && g.changedPx + g.inNoisePx >= 400, `the mark's change is seen (${JSON.stringify(g)})`);
-  assert.equal(r.pages[0].reverted?.reason, 'd', 'undone');
-  assert.match(r.pages[0].reverted.why, /px where the page does not move by itself/);
+  assert.equal(r.pages[0].reverted, undefined, 'the fixes that change nothing are kept');
+  const lang = r.pages[0].dropped?.find((d) => d.group === 'lang');
+  assert.ok(lang, JSON.stringify(r.pages[0]));
+  assert.match(lang.why, /px where the page does not move by itself/);
+  assert.doesNotMatch(await readFile(path.join(dir, 'index.html'), 'utf8'), /<html lang=/);
 });
 
 test('on the same noisy page, a fix that changes nothing visible is kept', { timeout: 5 * 60000 }, async (t) => {
@@ -122,6 +142,67 @@ test('on the same noisy page, a fix that changes nothing visible is kept', { tim
   assert.equal(g.changedPx, 0, JSON.stringify(g));
   assert.equal(r.pages[0].reverted, undefined, 'kept');
   assert.match(await readFile(path.join(dir, 'index.html'), 'utf8'), /<html lang="en"/);
+  assert.deepEqual(g.views.map((v) => v.width), [375, 1440], 'proved at both widths');
+  assert.equal(g.width, null, 'no width failed');
+});
+
+test('a fix that shows only on a phone is caught at 375 px and undone; the computer width is not rendered', { timeout: 5 * 60000 }, async (t) => {
+  const html = `${stated('img{display:block;width:40px;height:40px}@media (max-width:600px){img[alt]{width:320px;height:160px}}')}<body>
+    <h1>Gallery</h1><p>${ENGLISH}</p>${IMG}<p>Text under the picture.</p></body></html>`;
+  const dir = await copyOf(t, html, withImage);
+  const r = await prove(browser, dir);
+  const page = r.pages[0];
+  assert.deepEqual([...new Set(page.fixes.map((f) => f.kind))], ['alt'], 'the image is the only thing to fix');
+  assert.equal(r.gate.length, 1, 'one group: no retry');
+  assert.equal(r.gate[0].width, 375, JSON.stringify(r.gate[0]));
+  assert.deepEqual(r.gate[0].views.map((v) => v.width), [375], 'a change at 375 px decides');
+  assert.equal(page.reverted?.reason, 'd');
+  assert.match(page.reverted.why, /at 375 px/);
+  assert.deepEqual(page.dropped.map((d) => d.group), ['alt']);
+  assert.equal(await readFile(path.join(dir, 'index.html'), 'utf8'), html, 'the page is back as lifted');
+});
+
+test('a fix that shows only on a computer passes at 375 px and is caught at 1440 px', { timeout: 5 * 60000 }, async (t) => {
+  const html = `${stated('img{display:block;width:40px;height:40px}@media (min-width:1000px){img[alt]{width:320px;height:160px}}')}<body>
+    <h1>Gallery</h1><p>${ENGLISH}</p>${IMG}<p>Text under the picture.</p></body></html>`;
+  const dir = await copyOf(t, html, withImage);
+  const r = await prove(browser, dir);
+  const g = r.gate[0];
+  assert.deepEqual(g.views.map((v) => [v.width, v.invisible]), [[375, true], [1440, false]], JSON.stringify(g.views));
+  assert.equal(g.width, 1440);
+  assert.match(r.pages[0].reverted.why, /at 1440 px/);
+  assert.equal(await readFile(path.join(dir, 'index.html'), 'utf8'), html);
+});
+
+test('two groups invisible alone but visible together are both dropped; each retry is served afresh', { timeout: 8 * 60000 }, async (t) => {
+  // The site enlarges an image with an alt only when the page has a language: alt alone and lang alone change nothing.
+  // A server that kept the first pass's page would have shown alt AND lang in the "alt alone" look, and dropped alt there
+  // ("they changed the page"), never reaching the look at both together: the "not together" reason proves each look was fresh.
+  const html = `${stated('img{display:block;width:40px;height:40px}html[lang] img[alt]{width:320px;height:160px}', { lang: false })}<body>
+    <h1>Gallery</h1><p>${ENGLISH}</p>${IMG}<p>Text under the picture.</p></body></html>`;
+  const dir = await copyOf(t, html, withImage);
+  const r = await prove(browser, dir);
+  assert.deepEqual(r.gate.map((g) => [g.groups ?? null, g.invisible]), [[null, false], [['alt'], true], [['lang'], true], [['alt', 'lang'], false]], JSON.stringify(r.gate));
+  const page = r.pages[0];
+  assert.deepEqual(page.dropped.map((d) => d.group), ['alt', 'lang']);
+  for (const d of page.dropped) assert.match(d.why, /not together with the other kept fixes/);
+  assert.equal(page.reverted?.reason, 'd');
+  assert.equal(await readFile(path.join(dir, 'index.html'), 'utf8'), html, 'the page is back as lifted');
+  assert.equal(r.total, 0);
+});
+
+test('a look that cannot decide drops what it covers: with no working browser nothing is kept and the page is as lifted', { timeout: 60000 }, async (t) => {
+  const html = `${stated('img{display:block;width:40px;height:40px}', { lang: false })}<body><h1>Gallery</h1><p>${ENGLISH}</p>${IMG}</body></html>`;
+  const dir = await copyOf(t, html, withImage);
+  const broken = { newContext: async () => { throw new Error('the browser is gone'); } };
+  const r = await prove(broken, dir);
+  assert.equal(r.gate.length, 3, 'the first look, then each group alone; nothing passed, so no look at them together');
+  for (const g of r.gate) assert.equal(g.invisible, false);
+  const page = r.pages[0];
+  assert.deepEqual(page.dropped.map((d) => d.group), ['alt', 'lang']);
+  for (const d of page.dropped) assert.match(d.why, /could not prove them invisible: the browser is gone/);
+  assert.equal(page.reverted?.reason, 'd');
+  assert.equal(await readFile(path.join(dir, 'index.html'), 'utf8'), html);
 });
 
 test('the smallest changes are seen and an unchanged page passes: 2 x 2 px, a pale square, a change far down a tall page', { timeout: 8 * 60000 }, async (t) => {

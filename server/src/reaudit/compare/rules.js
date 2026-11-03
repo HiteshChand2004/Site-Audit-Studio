@@ -69,10 +69,12 @@ export const EVIDENCE = {
   'axe.tabindex': ARIA,
   'axe.aria-valid-attr-value': ARIA,
   'axe.aria-hidden-focus': ARIA,
-  'lighthouse.uses-optimized-images': IMAGES,
-  'lighthouse.modern-image-formats': IMAGES,
-  'lighthouse.uses-responsive-images': IMAGES,
-  'lighthouse.total-byte-weight': IMAGES,
+  // Image rows: D.5 (WebP, sized images: `images`) and the fix-all variants (`responsive-images`) both stand behind them. Each
+  // key is written once (a later duplicate silently replaced the earlier entry, so `images` was never shown).
+  'lighthouse.uses-optimized-images': { fixes: ['images', 'responsive-images'] },
+  'lighthouse.modern-image-formats': { fixes: ['images', 'responsive-images'] },
+  'lighthouse.uses-responsive-images': { fixes: ['images', 'responsive-images'] },
+  'lighthouse.total-byte-weight': { fixes: ['images', 'responsive-images', 'page-css'] },
   'seo.title-tag': { auto: ['title'] },
   'seo.title-tag.missing': { auto: ['title'] },
   'seo.meta-description': { auto: ['description'] },
@@ -101,8 +103,9 @@ export const EVIDENCE = {
   'aeo.llms-txt': { fixes: ['crawl-files'], auto: ['llms.txt'] },
   'links.broken': { fixes: ['broken-links'] },
   'axe.image-alt': ALT,
-  // Full-site D.2: text colours adjusted to WCAG AA.
-  'axe.color-contrast': { fixes: ['contrast'] },
+  // Full-site D.2: text colours adjusted to WCAG AA (the entry that was in effect: a second 'axe.color-contrast' key below
+  // replaced this one, so the two are written once here).
+  'axe.color-contrast': { fixes: ['contrast'], auto: ['color'] },
   'lighthouse.color-contrast': { fixes: ['contrast'] },
   'axe.role-img-alt': ALT,
   'axe.input-image-alt': ALT,
@@ -118,15 +121,107 @@ export const EVIDENCE = {
   'lighthouse.lcp-lazy-loaded': LOADING,
   'lighthouse.prioritize-lcp-image': LOADING,
   'lighthouse.font-display': { fixes: ['font-display'] },
-  'axe.color-contrast': { fixes: ['contrast'], auto: ['color'] },
   'lighthouse.render-blocking-resources': { fixes: ['page-css'] },
   'lighthouse.unused-css-rules': { fixes: ['page-css'] },
-  'lighthouse.uses-responsive-images': { fixes: ['responsive-images'] },
-  'lighthouse.modern-image-formats': { fixes: ['responsive-images'] },
-  'lighthouse.uses-optimized-images': { fixes: ['responsive-images'] },
-  'lighthouse.total-byte-weight': { fixes: ['responsive-images', 'page-css'] },
   'lighthouse.dom-size': { fixes: ['state-templates'] },
 };
+
+// What an as-is copy did about a check: the kinds of fix its stage kept, dropped or left open (report.asIs.fixes, written by
+// recreate/behavior/preserve/stage.js fixAndProve; copy/fixAsIs.js and copy/perfAsIs.js make them). `css` is the stylesheets
+// minified (report.asIs.fixes.css).
+const AS_IS = {
+  alt: ['seo.image-alt-text', 'axe.image-alt', 'axe.role-img-alt', 'axe.input-image-alt'],
+  names: ['axe.link-name', 'axe.button-name', 'axe.label', 'axe.select-name', 'axe.input-button-name', 'axe.aria-command-name'],
+  aria: ['axe.duplicate-id', 'axe.duplicate-id-aria', 'axe.duplicate-id-active', 'axe.frame-title', 'axe.tabindex', 'axe.aria-valid-attr-value', 'axe.aria-hidden-focus'],
+  // The head's checks are counted by the field written (AS_IS_FIELDS below), not by the `head` kind: one kind writes several fields.
+  data: ['aeo.json-ld-schema', 'aeo.faq-schema'],
+  lang: ['axe.html-has-lang', 'axe.html-lang-valid'],
+  viewport: ['lighthouse.viewport', 'axe.meta-viewport', 'crawl.meta-tags'],
+  // crawlable-anchors and link-text are SEO audits, and Lighthouse rows are made for performance and best practices only
+  // (compare/index.js LH_CATEGORIES): the anchors fix has no row to attach to; link text answers axe's link-name.
+  linktext: ['axe.link-name'],
+  // aria-level on a heading that skips a level: it changes no tag and adds no h1, so only axe's heading order can see it.
+  headings: ['axe.heading-order'],
+  lcp: ['lighthouse.prioritize-lcp-image', 'lighthouse.lcp-lazy-loaded'],
+  lazy: ['lighthouse.offscreen-images'],
+  webp: ['lighthouse.modern-image-formats', 'lighthouse.uses-optimized-images', 'lighthouse.total-byte-weight'],
+  css: ['lighthouse.unminified-css', 'lighthouse.total-byte-weight'],
+};
+const AS_IS_TITLE = {
+  alt: 'Image descriptions', names: 'Names of links, buttons and fields', aria: 'ARIA attributes',
+  data: 'Structured data', lang: 'Page language', viewport: 'Viewport tag', linktext: 'Descriptive link text',
+  headings: 'Heading levels', lcp: 'Largest image loads first', lazy: 'Images below the first screen load later',
+  webp: 'Lossless WebP for PNG images', css: 'Stylesheets without whitespace',
+};
+// The head's checks, each counted by the field written whatever kind wrote it (copy/fixAsIs.js: the `head` kind writes the title,
+// the description, a missing canonical and og:*; the `address` kind moves an existing canonical or og:url to the new site), so a row
+// never shows another field's fixes. `group` is the gate's group for that field (fixAsIs.js allow(...)), `open` the kind of open
+// item that leaves it unwritten (no address for the new site: no canonical can be written), `review` text taken from the page.
+const AS_IS_FIELDS = {
+  title: { keys: ['seo.title-tag', 'seo.title-tag.missing', 'seo.title-tag.length', 'seo.title-tag.duplicate'], title: 'Page title',
+    match: (field) => field === 'title', group: 'head:title', review: true },
+  description: { keys: ['seo.meta-description', 'seo.meta-description.missing', 'seo.meta-description.length', 'seo.meta-description.duplicate'],
+    title: 'Page description', match: (field) => field === 'description', group: 'head:description', review: true },
+  canonical: { keys: ['seo.canonical-url'], title: 'Canonical address', match: (field) => field === 'canonical', group: 'head:meta', open: 'address' },
+  og: { keys: ['seo.open-graph-tags'], title: 'Open Graph tags', match: (field) => String(field ?? '').startsWith('og:'), group: 'head:meta', review: true },
+};
+/** The kinds of as-is fix behind a check (AS_IS and AS_IS_FIELDS, inverted). */
+const AS_IS_BY_KEY = new Map();
+for (const [kind, keys] of Object.entries(AS_IS)) for (const k of keys) AS_IS_BY_KEY.set(k, [...(AS_IS_BY_KEY.get(k) ?? []), kind]);
+for (const [name, f] of Object.entries(AS_IS_FIELDS)) for (const k of f.keys) AS_IS_BY_KEY.set(k, [...(AS_IS_BY_KEY.get(k) ?? []), `field:${name}`]);
+
+/**
+ * An as-is copy's evidence for a check: per kind of fix, how many it kept, on how many pages the gate dropped it (it changed what
+ * a visitor sees, or could not be proven not to), and how many were left open with a reason. Nothing when the report is not an
+ * as-is copy's, or the kind did nothing at all. A title, description or og:* fix writes text taken from the page: it asks for a
+ * review. The head's checks are counted per field (AS_IS_FIELDS): kept on the pages that were not reverted, dropped where the gate
+ * dropped that field's group or reverted a page that had one.
+ * Each entry has the shape of a clean copy's fixer entry ({ fix, title, status, count, open }: what the app's Results page reads),
+ * with `asIs` (the kind) and `droppedOnPages` added: status `fixed` = kept and nothing dropped or open, `partial` = some kept,
+ * `open` = none kept.
+ */
+export function asIsEvidence(key, report) {
+  const fixes = report?.asIs?.fixes;
+  const kinds = AS_IS_BY_KEY.get(key);
+  if (!fixes || !kinds) return [];
+  const out = [];
+  const openOf = (kind) => (fixes.open ?? []).filter((o) => o.kind === kind).length;
+  const statusOf = (count, notKept) => (count && !notKept ? 'fixed' : count ? 'partial' : 'open');
+  for (const kind of kinds) {
+    if (kind.startsWith('field:')) {
+      const name = kind.slice(6);
+      const f = AS_IS_FIELDS[name];
+      const pages = fixes.pages ?? [];
+      const kept = pages.filter((p) => !p.reverted).flatMap((p) => (p.fixes ?? []).filter((x) => f.match(x.field)));
+      const count = kept.length;
+      const droppedOnPages = pages.filter((p) => (p.dropped ?? []).some((d) => d.group === f.group)
+        || (p.reverted && (p.fixes ?? []).some((x) => f.match(x.field)))).length;
+      const open = f.open ? openOf(f.open) : 0;
+      if (!count && !droppedOnPages && !open) continue;
+      // A review only for text taken from the page (a head fix); an address moved to the new site (og:url) is not.
+      const review = f.review && kept.some((x) => x.kind === 'head');
+      out.push({ fix: `as-is:${name}`, asIs: name, title: f.title, status: statusOf(count, droppedOnPages + open), count, open, droppedOnPages, ...(review && { review: true }) });
+      continue;
+    }
+    if (kind === 'css') {
+      const files = fixes.css?.files ?? [];
+      const open = openOf('css');
+      if (!files.length && !open) continue;
+      // The files themselves, not a byte total: the stage records the original's length in characters and the result's in bytes.
+      out.push({ fix: 'as-is:css', asIs: 'css', title: AS_IS_TITLE.css, status: statusOf(files.length, open), count: files.length, open, droppedOnPages: 0, files: files.slice(0, 10).map((f) => f.file) });
+      continue;
+    }
+    const count = fixes.counts?.[kind] ?? 0;
+    // A page's dropped groups name the kind (the head is split into head:<part>); a reverted page lost all its fixes.
+    const isKind = (group) => group === kind || String(group).startsWith(`${kind}:`);
+    const droppedOnPages = (fixes.pages ?? []).filter((p) => (p.dropped ?? []).some((d) => isKind(d.group))
+      || (p.reverted && (p.fixes ?? []).some((f) => f.kind === kind))).length;
+    const open = openOf(kind);
+    if (!count && !droppedOnPages && !open) continue;
+    out.push({ fix: `as-is:${kind}`, asIs: kind, title: AS_IS_TITLE[kind], status: statusOf(count, droppedOnPages + open), count, open, droppedOnPages });
+  }
+  return out;
+}
 
 /**
  * The recreate's evidence for a check: the fixer entries and auto-generated values behind it.
@@ -134,13 +229,14 @@ export const EVIDENCE = {
  */
 export function evidenceFor(key, report) {
   const rule = EVIDENCE[key];
-  if (!rule) return null;
+  const asIs = asIsEvidence(key, report);
+  if (!rule && !asIs.length) return null;
   const evidence = [];
-  for (const id of rule.fixes ?? []) {
+  for (const id of rule?.fixes ?? []) {
     const fix = (report.fixes ?? []).find((f) => f.id === id);
     if (fix) evidence.push({ fix: fix.id, title: fix.title, status: fix.status, count: fix.count ?? null, open: fix.open ?? 0 });
   }
-  const auto = (report.autoGenerated ?? []).filter((a) => rule.auto?.includes(a.field));
+  const auto = rule ? (report.autoGenerated ?? []).filter((a) => rule.auto?.includes(a.field)) : [];
   if (auto.length) {
     evidence.push({
       autoGenerated: auto.length,
@@ -148,7 +244,9 @@ export function evidenceFor(key, report) {
       examples: auto.slice(0, 3).map((a) => ({ page: a.page ?? null, field: a.field, value: a.value, source: a.source })),
     });
   }
-  return evidence.length ? { evidence, review: auto.length > 0 } : null;
+  // An as-is copy's own fixes come after the clean copy's (a report has one or the other; the order of the old rows is kept).
+  evidence.push(...asIs);
+  return evidence.length ? { evidence, review: auto.length > 0 || asIs.some((e) => e.review) } : null;
 }
 
 /**

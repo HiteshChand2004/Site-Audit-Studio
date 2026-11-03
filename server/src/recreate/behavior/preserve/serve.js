@@ -24,9 +24,11 @@ const compressible = (file) => COMPRESSIBLE.test(typeExtOf(file));
 /**
  * Starts the server.
  * @param {string} dir
+ * @param {{ overrides?: Map<string, Buffer> }} [o]  overrides: absolute file path → the bytes sent for it instead of the file's
+ *   (preserve/stage.js minifyAndProve proves a minified stylesheet without writing it); every other file is read from disk
  * @returns {Promise<{ url: string, close: () => Promise<void> }>}
  */
-export function serveCopy(dir) {
+export function serveCopy(dir, { overrides = null } = {}) {
   const root = path.resolve(dir);
   /** @type {Map<string, { body: Buffer, br: Buffer, gz: Buffer }>} */
   const cache = new Map();
@@ -52,7 +54,7 @@ export function serveCopy(dir) {
       const ext = typeExtOf(file);
       let entry = cache.get(file);
       if (!entry) {
-        const body = await readFile(file);
+        const body = overrides?.get(path.resolve(file)) ?? await readFile(file);
         entry = compressible(file)
           ? { body, br: brotliCompressSync(body, { params: { [constants.BROTLI_PARAM_QUALITY]: 5 } }), gz: gzipSync(body, { level: 6 }) }
           : { body, br: body, gz: body };

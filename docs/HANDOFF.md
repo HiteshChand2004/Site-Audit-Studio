@@ -1146,7 +1146,8 @@ Hosting is not decided, so every limit is an env setting read at call time (`ser
 `server/.env.example`); one job uses several GB and two at once took a 15 GB machine down, so the defaults are one at a time.
 - **`SAS_MAX_JOBS`** (1–8, default 1): jobs running at once on this server. `jobs/manager.js` replaced the strict serial chain by one
   FIFO line with that many slots, for every kind (Analyze, Recreate, Re-audit and the stack exports that use `exclusive()` directly);
-  order is never changed. `lockBusy()` / keep-awake unchanged.
+  order is never changed. `lockBusy()` / keep-awake unchanged. *Superseded by the resource-aware admission of 2026-10-30 (branch
+  `concurrency-lighthouse`, section below): 1–64 or `auto`, reservations, owner-fair order.*
 - **`SAS_JOBS_PER_USER`** (1–20, default 1): running or waiting jobs one account may have, counted across kinds by the project's
   `owner_id`; a second start is refused with `JobLimitError` → 409 `{ error, limit: 'user', busy: { kind, projectId, jobId } }` (no
   `analysisId` / `recreateId` key, so the app shows the sentence instead of following a job). With accounts off everyone is the one
@@ -1262,6 +1263,59 @@ backstop and every other account would wait 8 hours behind it; the pipeline's ow
    jobs; with k jobs of P pages queued behind one slot the last waits ≈ k × 20P min, with two slots about half.
 Not measured: an as-is copy of more than one page (the per-page cost after the first page should be lower, discovery and the stack
 pack are paid once), and memory with two jobs truly side by side.
+
+## Resource-aware concurrency + Lighthouse lane + as-is fixes (branch `concurrency-lighthouse`, 2026-10-30 → 11-02)
+
+Plan: `C:\Users\urvas\.claude\plans\pasted-content-id-eff6-i-need-polished-breeze.md`. Production stays at `SAS_MAX_JOBS=1`, so it
+behaves as before until an admin raises it.
+- **Admission** (`jobs/capacity.js`, `jobs/context.js`, `jobs/manager.js`, `jobs/limits.js`): `SAS_MAX_JOBS` is 1–64 or `auto`
+  (at most 16; unset = 1, not `auto` as the plan first said). The machine is read at call time: CPUs and memory from the cgroup
+  (v2, else v1) when one limits them, else the host; budget = total − `SAS_RESERVED_MB` (1024). Each running job holds a
+  reservation by kind (`SAS_JOB_MB_ANALYZE` 1500 / `_RECREATE` 2500 / `_REAUDIT` 2000 / `_EXPORT` 800, `SAS_JOB_CPUS` 2), taken
+  synchronously at admission and released when the run ends (or when the hard limit gives its slot away after the 60 s grace).
+  A job starts when the reservations fit the budget and the CPUs, and the free-memory reading minus the reservations of jobs
+  started < 90 s ago (`TIMING.rampMs`) covers `SAS_JOB_MIN_FREE_MB` alone, or its own reservation + `SAS_JOB_MIN_FREE_MB` next to
+  running jobs. Next job: the account with the fewest running jobs, then the oldest; a job that does not fit holds the line (no
+  backfill); a job of a website that already has one running is skipped while it waits ("Waiting for the other job on this
+  website to finish."). Stack exports go through the same admission. Inside a job, `audit/resources.js` and
+  `recreate/inspect.js` size browser work from the job's own reservation. `GET /api/health` →
+  `jobs.capacity { cpus, budgetMB, availableMB, reservedMB, reservedCpus, source }`.
+- **Lighthouse lane** (`audit/lighthouse/run.js`): one run at a time in the whole process, not a setting (two at once took phone
+  Performance 88 → 78, `remastly-live-results/parallel-test/report.md`). The worker's timeout starts when the turn comes; the wait
+  is given back to the step and job deadlines (`audit/util.js` holdable timers, `recreate/interrupts.js`; at most the job's own
+  limit in all, so no job is held past twice its limit); a stop while waiting leaves the line. Each summary keeps `contention`
+  (other jobs at the start). The re-audit reuses a kept run of the original only when it is < 7 days old and the benchmark index
+  is within 25 % (`reaudit/lighthousePages.js`), else measures it again.
+- **As-is fixes** (`copy/fixAsIs.js`, new `copy/seoA11yAsIs.js`, `copy/perfAsIs.js`; gate in `preserve/{check,stage}.js`): the
+  gate compares at 375 and 1440 px and drops only the fix group that changed pixels (retries bounded); head fixes are three
+  groups (`head:title`, `head:description`, `head:meta`). Added (`seoA11yAsIs.js`): `role="button"` on a named
+  `javascript:void(0)` link (href, click and tab order unchanged), a visually hidden " about <page title>" in an English
+  "Read more" / "Click here" link to a page of the copy, `aria-level` on a heading that skips a level, a valid `<html lang>` in
+  place of an invalid one. Added (`perfAsIs.js`, measured in the browser at 375 and 1440 px): `fetchpriority="high"` on the LCP
+  image, `loading="lazy"` on images below the first screen at both widths, lossless WebP for a local PNG with identical pixels,
+  local stylesheets stripped of whitespace and comments only when the browser builds the same rules. Never done (they change
+  pixels or behaviour): font-display, width / height attributes, preconnects, lossy or resized images, any change to the
+  original's scripts, contrast (reported with a passing colour), a missing or zoom-blocking viewport (reported). Evidence per
+  field (`reaudit/compare/rules.js AS_IS_FIELDS`: title, description, canonical, og). Not built: C4 (fix → re-audit loop), by
+  decision.
+- **Measured**: concurrency on the development laptop only (scratch server, fixture sites, `SAS_MAX_JOBS=auto`, Windows, 12 threads,
+  3.9–4.5 GB free at the start): three Analyze jobs asked for at once all finished; at most 2 ran side by side before the memory rule
+  was tightened (lowest free 3234 MB), 1 at a time after it. Fixture copy, 3 pages: 12 fixes kept, 0 dropped, 0 % pixel difference,
+  every Lighthouse category ≥ 90, 51 Lighthouse runs with 0 overlaps. parchaa.com (scratch server): phone Performance 46 → 66,
+  Accessibility 89 → 100, Best practices 100, SEO 92; computer 64 → 86, 85 → 96, 100, 92; pixel difference 0.2 % (1440) /
+  0.4 % (390); 64 fixes kept; 2 re-audit rows read "got worse" wrongly (hover pairing in `reaudit/motion.js`; the contrast scan
+  during script fades, `audit/render.js`), diffs proposed, not applied. Performance under 90 is the original's own JavaScript,
+  left unchanged on purpose.
+- **Tests**: new `job-capacity`, `job-concurrency`, `lighthouse-lane`, `holdable-timer`, `recreate-lane-wait`,
+  `reaudit-lighthouse-load`, `reaudit-lighthouse-stop`, `reaudit-evidence`, `copy-fix-perf`, `copy-fix-seo-a11y`; extended
+  `job-limits`, `perf`, `copy-fix-asis`, `copy-fix-gate`, `copy-address`. Full suite (2026-11-01/02, in pieces after two memory
+  kills): all 202 files pass on the final code, 8 skipped on purpose (the PR #1 skips below). Batch runs must keep the test root
+  short: a root inside a long folder pushed stack build folders past Windows' 260 characters and every build failed with
+  `spawn … ENOTCONN`.
+- **Still open**: the 8 skips from 283b108 ("follow-up: compare with main-before-merge", tag `main-before-merge` = 72a9a71):
+  5 contrast tests (`recreate-contrast-fields` 2, `recreate-fix-all` 3; `fixers/contrast.js` is the same on both sides), 2 click
+  tests (`recreate-clicks`; `capture/clicks.js` changed a lot since), 1 pairing test (`reaudit-motion`). Several jobs at once were
+  never measured on a server.
 
 ## Parchaa re-audit rows (2026-10-24, all three done: hovers, loops, best practices)
 - **Hovers 0 of 5 → FIXED** (commit after 116da51): cause as below; fix = the re-audit tells the copy's probe which elements hovered on the original (`hoverFirstFor`: tag|text keys, `captureInteractions({ first })` probes them before everything else, `stats.first/firstProbed`) and `hoverBudgetFor` covers them at `FIRST_MS` 2.5 s each (parchaa 10.5 → 12.5 s). Re-measured on the saved copy: **5 of 5** (`remastly-live-results/parchaa/motion-2026-10-24/first/copy-motion.json`). Tests: `recreate-hover-probe` 4/4, `reaudit-motion` 13/13 (+1 pre-existing skip). Full suite not run.

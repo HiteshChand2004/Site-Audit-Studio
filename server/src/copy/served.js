@@ -23,7 +23,10 @@ const get = async (url) => {
 const squash = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 
 /** Which facts each kind of fix (copy/fixAsIs.js) writes. */
-const FACTS_OF_KIND = { alt: ['a11y'], names: ['a11y'], aria: ['a11y'], head: ['head'], address: ['head'], lang: ['lang'], data: ['data'] };
+const FACTS_OF_KIND = {
+  alt: ['a11y'], names: ['a11y'], aria: ['a11y'], head: ['head'], address: ['head'], lang: ['lang'], data: ['data'],
+  anchors: ['a11y'], headings: ['a11y'], linktext: ['links'], lcp: ['images'], lazy: ['images'], webp: ['images'],
+};
 const ALL_FACTS = ['lang', 'head', 'data', 'a11y'];
 const A11Y_ATTR = /^(alt|role|tabindex|title|aria-[a-z]+)$/;
 
@@ -49,7 +52,11 @@ export function fixFacts(html) {
   const a11y = $('body *').toArray()
     .flatMap((el) => Object.entries(el.attribs ?? {}).filter(([k]) => A11Y_ATTR.test(k.toLowerCase())).map(([k, v]) => `${el.name}[${k.toLowerCase()}=${squash(v)}]`))
     .join('\n');
-  return { lang: squash($('html').attr('lang')), head, data, a11y };
+  // Each link's text, hidden text included: what the linktext fix adds, so a stack that drops it is caught.
+  const links = $('body a').toArray().map((el) => squash($(el).text())).join('\n');
+  // Each image's address and how it loads: what the lcp, lazy and webp fixes change, so a stack that drops one is caught.
+  const images = $('body img').toArray().map((el) => `${el.attribs.src ?? ''}|${el.attribs.loading ?? ''}|${el.attribs.fetchpriority ?? ''}`).join('\n');
+  return { lang: squash($('html').attr('lang')), head, data, a11y, links, images };
 }
 
 /** The facts the given kinds of fix wrote that the served page does not state as the fixed file does ([] = the fixes are served). */

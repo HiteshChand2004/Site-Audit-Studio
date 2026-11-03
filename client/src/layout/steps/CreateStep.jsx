@@ -18,12 +18,13 @@ import { api } from '../../api/client.js';
 import { outputsOf, outputState } from '../../stacks.js';
 import { isAnalysisActive, isJobActive, selectIsOwner, useProjects } from '../../store/useProjects.js';
 import styles from '../Panel.module.css';
-import { pathOf } from '../../components/project/PageScope.jsx';
 import ws from '../Workspace.module.css';
 import { copiedPages } from '../../copiedPages.js';
 
 const STALE_DAYS = 7;
 const ALL_PAGES = -1;
+// What a failure box says next when the stopped copy can continue (the resume offer below it).
+const RESUME_HINT = 'Nothing was lost: use “Continue where it stopped” below to carry on.';
 
 // Why the copy can't be made right now, or null when it can.
 function blockerOf({ audit, project, analyzing }) {
@@ -122,20 +123,35 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
           </Button>
         </div>
       )}
+      {/* A regular user's Stop, while their copy runs (the owner's own Stop stays in "Advanced options"). The server allows a stop
+          to everyone (routes/recreate.js), keeps what was finished, and the "Continue where it stopped" alert below offers to resume. */}
+      {running && !isOwner && (
+        <div className={ws.actions}>
+          <Button
+            icon={StopCircle}
+            title="Stops the copy. Everything it has finished is kept, so it can carry on where it stopped."
+            onClick={() => stopRecreate(project.id)}
+          >
+            Stop
+          </Button>
+        </div>
+      )}
       <CopyPanel open={copyOpen} onClose={() => setCopyOpen(false)} project={project} onStart={startCopy} />
 
-      {job && job.status !== 'done' && <AnalyzeProgress analysis={job} kind="recreate" onDismiss={() => dismissJob('recreate', project.id)} />}
+      {/* A stopped copy whose work was kept: both failure boxes point at "Continue where it stopped" below instead of starting
+          over (the reason stays; "Try again" would start a new copy). */}
+      {job && job.status !== 'done' && <AnalyzeProgress analysis={job} kind="recreate" onDismiss={() => dismissJob('recreate', project.id)} after={resume ? RESUME_HINT : null} />}
 
       {/* The progress box above already shows a failure that just happened: this alert is for one that was found afterwards. */}
       {failure && !(job && job.status === 'failed') && (
         <Alert
           tone="bad"
           title="The copy could not be finished"
-          action={lastOptions
+          action={resume ? undefined : lastOptions
             ? <Button variant="primary" icon={RefreshCw} onClick={() => recreate(project.id, lastOptions)}>Try again</Button>
             : <Button variant="primary" icon={RefreshCw} onClick={() => recreate(project.id)}>Try again</Button>}
         >
-          {stripAnsi(failure.reason)} “Try again” starts it again with the same settings.
+          {stripAnsi(failure.reason)} {resume ? RESUME_HINT : '“Try again” starts it again with the same settings.'}
         </Alert>
       )}
 
@@ -189,7 +205,7 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
           </div>
           <div>
             <dt>Pages</dt>
-            <dd>{project.page_url ? <>Only one page: <span className="mono">{pathOf(project.page_url)}</span></> : pagesText(project.recreate_pages)}</dd>
+            <dd>{pagesText(project.recreate_pages)}</dd>
           </div>
           <div>
             <dt>Future address</dt>

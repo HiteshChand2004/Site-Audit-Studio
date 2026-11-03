@@ -12,7 +12,7 @@ import { runLighthouse } from '../audit/lighthouse/run.js';
 import { db } from '../db/index.js';
 import { auditDir, projectDir } from '../config/paths.js';
 import { startEgressProxy } from '../security/egressProxy.js';
-import { compareLighthousePages, lighthousePageItems, lighthousePagesNote, RUN_TIMEOUT_MS } from './lighthousePages.js';
+import { compareLighthousePages, lighthousePageItems, lighthousePagesNote, lighthouseTargets, RUN_TIMEOUT_MS } from './lighthousePages.js';
 import { getEmitter } from '../recreate/emit/index.js';
 import { outputPages, outputRoot, reportOutputs, targetStack } from '../recreate/export/fromIr.js';
 import { servePreview } from '../recreate/preview.js';
@@ -202,11 +202,13 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
           pages: outputPageList.map((p) => ({ path: p.path, url: asIsPages.get(p.outPath) ?? new URL(p.path, project.url).href, copyUrl: `${served.origin}${p.path}` })),
           cacheDir: path.join(projectDir(project.id), 'lighthouse-original'),
           outDir: path.join(reauditDir(project.id, recreateId, reauditId), 'lighthouse-pages'),
-          run: (url, mode, outFile) => runLighthouse(measuredUrl(url, mode), mode, { timeout: RUN_TIMEOUT_MS, outFile, proxy: proxy.url }),
+          run: (url, mode, outFile) => runLighthouse(measuredUrl(url, mode), mode, { timeout: RUN_TIMEOUT_MS, outFile, proxy: proxy.url, signal }),
           progress: (fraction, message) => progress('lighthouse-pages', fraction, message),
+          signal,
         });
         lighthousePages.network = measuredHostDescription();
       } catch (err) {
+        if (err?.stopped) throw err;
         lighthousePages = { pages: [], worse: [], unscored: [], extraRunPages: [], skipped: [], runs: { original: 0, copy: 0, reusedOriginal: 0 }, errors: [{ path: '*', mode: '*', error: String(err?.message ?? err).split('\n')[0].slice(0, 200) }] };
       } finally {
         await proxy.close().catch(() => {});
@@ -243,6 +245,10 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
         errors: lighthousePages.errors,
         runs: lighthousePages.runs,
         network: lighthousePages.network ?? null,
+        // Kept runs of the original that were measured again, and why (too old, a computer of another speed).
+        refreshedOriginal: lighthousePages.refreshedOriginal ?? [],
+        // Per page, mode and category: original, copy, 90 reached or not, and what fails under 90 with the reason.
+        targets: lighthouseTargets(lighthousePages),
       };
     }
     // An as-is copy: every "got worse" row carries one of the five reasons on this run's evidence, or is marked unexplained
