@@ -42,7 +42,18 @@ const ANIM_FILE = /^js\/(((anim|appear)-replay|lottie-play)\.js|(anim|appear|lot
 // The app stacks (React + Vite, Next.js, MERN) serve the same file from the site root, and may carry it next to their bundles.
 const MOTION_ROOT = '/js/motion.js';
 
+// A site written by build mode's agent (buildmode/agent.js): its own scripts, as local files under js/ loaded by <script src>
+// (deferred or as modules), never inline, never from another origin; every one sink-scanned like the stacks' bundles.
+const BUILT_SCRIPT = /^(\/|(\.\.\/)*)js\/[\w-]+(\/[\w-]+)*\.m?js$/;
+
 export const APP_PROFILES = {
+  built: {
+    bundleLink: BUILT_SCRIPT,
+    scriptAllowed: ({ src, type, text }) => !text.trim() && (!type || type === 'module' || type === 'text/javascript') && BUILT_SCRIPT.test(src ?? ''),
+    jsAllow: [],
+    contentChunk: () => false,
+    onlyFile: (rel) => /^js\/[\w-]+(\/[\w-]+)*\.m?js$/.test(rel),
+  },
   motion: {
     bundleLink: /$^/,
     scriptAllowed: ({ src, type, text }) => !type && (MOTION_SCRIPT.test(src ?? '') || ANIM_SCRIPT.test(src ?? '') || LIFT_SCRIPT.test(src ?? '')) && !text.trim(),

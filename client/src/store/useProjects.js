@@ -79,6 +79,8 @@ export const useProjects = create((set, get) => ({
   overviews: {},
   // The signed-in account: undefined until asked, null when the API has no accounts (then everyone is the owner), else { id, email, name, role, verified }.
   me: undefined,
+  // Build mode is open (a new site from a description): the main area shows it instead of home or a website.
+  building: false,
 
   /** Who is signed in (accounts on), or null (accounts off). Asked once at start; the account menu and the owner-only options read it. */
   async loadMe() {
@@ -116,9 +118,14 @@ export const useProjects = create((set, get) => ({
 
   /** The home overview: no website selected. */
   goHome() {
-    set({ selectedId: null, audit: null, auditLoading: false });
+    set({ selectedId: null, audit: null, auditLoading: false, building: false });
     remember(HOME);
     get().loadOverviews();
+  },
+
+  /** Opens build mode: plan a new site, or changes to one, from a description. */
+  openBuild() {
+    set({ selectedId: null, audit: null, auditLoading: false, building: true });
   },
 
   /** Check + copy of every website, for the home gallery and the sidebar (read only). */
@@ -134,7 +141,7 @@ export const useProjects = create((set, get) => ({
   async select(id) {
     // Picking the open website again looks for newer work (a copy made or imported elsewhere).
     if (get().selectedId === id && get().audit) return get().refreshSelected();
-    set({ selectedId: id, audit: null, auditLoading: true });
+    set({ selectedId: id, audit: null, auditLoading: true, building: false });
     remember(id);
     await Promise.all([get().reloadAudit(id), get().reloadRecreate(id)]);
     // Reattach to jobs that are still running (after a reload or a project switch).

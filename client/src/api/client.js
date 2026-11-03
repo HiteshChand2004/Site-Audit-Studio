@@ -187,6 +187,16 @@ export const api = {
   getPreview: (id) => request(`/projects/${id}/preview`),
   startPreview: (id) => request(`/projects/${id}/preview`, { method: 'POST' }),
 
+  // Build mode (server/src/buildmode): the playbook library, a plan (two model calls), and the prompt again from an edited brief.
+  getBuildModules: () => request('/build/modules'),
+  planBuild: (body) => request('/build/plan', { method: 'POST', body }),
+  composeBuild: (body) => request('/build/compose', { method: 'POST', body }),
+  // Building the site from a confirmed plan (server/src/buildmode/builds.js): start, follow, stop, download.
+  startBuild: (body) => request('/build/runs', { method: 'POST', body }),
+  getBuild: (id) => request(`/build/runs/${id}`),
+  stopBuild: (id) => request(`/build/runs/${id}/stop`, { method: 'POST' }),
+  buildDownloadUrl: (id) => apiUrl(`/build/runs/${id}/download`),
+
   // The signed-in account (accounts on). Resolves to null when the API runs without accounts (no /auth routes: 404).
   async getMe() {
     try {

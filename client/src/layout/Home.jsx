@@ -1,4 +1,4 @@
-import { ArrowRight, ArrowUpRight, Plus } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, Plus, Wand2 } from 'lucide-react';
 import Button from '../components/common/Button.jsx';
 import CountUp from '../components/common/CountUp.jsx';
 import { CheckArt, CompareArt, CopyArt, EmptySiteArt, ResultsArt } from '../components/common/Illustrations.jsx';
@@ -168,7 +168,7 @@ function byActivity(projects, overviews) {
 }
 
 /** Home: every website at a glance, and how the app works. */
-export default function Home({ onNewProject }) {
+export default function Home({ onNewProject, onBuild }) {
   const projects = useProjects((s) => s.projects);
   const loading = useProjects((s) => s.loading);
   const overviews = useProjects((s) => s.overviews);
@@ -199,6 +199,11 @@ export default function Home({ onNewProject }) {
             <Button variant="primary" size="lg" icon={Plus} onClick={onNewProject}>
               Add a website
             </Button>
+            {onBuild && (
+              <Button size="lg" icon={Wand2} onClick={onBuild}>
+                Build a new site
+              </Button>
+            )}
           </div>
         </div>
         <dl className={styles.kpis}>

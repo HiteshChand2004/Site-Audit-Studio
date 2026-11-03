@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { LayoutGrid, PanelLeftClose, PanelLeftOpen, Plus, Search, Trash2, X } from 'lucide-react';
+import { LayoutGrid, PanelLeftClose, PanelLeftOpen, Plus, Search, Trash2, Wand2, X } from 'lucide-react';
 import ConfirmDialog from '../components/common/ConfirmDialog.jsx';
 import Disclaimer from '../components/common/Disclaimer.jsx';
 import AccountMenu from '../components/account/AccountMenu.jsx';
@@ -67,17 +67,20 @@ function SiteItem({ project, active, onSelect, onRemove }) {
 }
 
 /** Collapsed sidebar content: a thin rail with the logo, toggle, home, Add and one icon per website. */
-function Rail({ projects, selectedId, select, goHome, onNewProject, onToggle }) {
+function Rail({ projects, selectedId, select, goHome, onNewProject, onToggle, building, openBuild }) {
   return (
     <>
       <div className={styles.railTop}>
         <LogoMark size={30} />
         <ToggleButton collapsed onToggle={onToggle} />
-        <button type="button" className={styles.iconBtn} data-active={!selectedId || undefined} onClick={goHome} aria-label="All websites" title="All websites">
+        <button type="button" className={styles.iconBtn} data-active={(!selectedId && !building) || undefined} onClick={goHome} aria-label="All websites" title="All websites">
           <LayoutGrid size={16} aria-hidden="true" />
         </button>
         <button type="button" className={`${styles.iconBtn} ${styles.railNew}`} onClick={onNewProject} aria-label="Add a website" title="Add a website">
           <Plus size={16} aria-hidden="true" />
+        </button>
+        <button type="button" className={styles.iconBtn} data-active={building || undefined} onClick={openBuild} aria-label="Build a site" title="Build a site">
+          <Wand2 size={16} aria-hidden="true" />
         </button>
       </div>
       <nav className={`${styles.railList} scroll`} aria-label="Websites">
@@ -107,7 +110,7 @@ function Rail({ projects, selectedId, select, goHome, onNewProject, onToggle }) 
 }
 
 export default function Sidebar({ onNewProject, collapsed = false, onToggle }) {
-  const { projects, loading, selectedId, select, remove, goHome } = useProjects();
+  const { projects, loading, selectedId, select, remove, goHome, building, openBuild } = useProjects();
   const [query, setQuery] = useState('');
   const [toDelete, setToDelete] = useState(null);
 
@@ -134,7 +137,7 @@ export default function Sidebar({ onNewProject, collapsed = false, onToggle }) {
         </p>
       </ConfirmDialog>
       {collapsed ? (
-        <Rail projects={projects} selectedId={selectedId} select={select} goHome={goHome} onNewProject={onNewProject} onToggle={onToggle} />
+        <Rail projects={projects} selectedId={selectedId} select={select} goHome={goHome} onNewProject={onNewProject} onToggle={onToggle} building={building} openBuild={openBuild} />
       ) : (
         <>
           <div className={styles.brandRow}>
@@ -149,7 +152,7 @@ export default function Sidebar({ onNewProject, collapsed = false, onToggle }) {
           </div>
 
           <div className={styles.top}>
-            <button type="button" className={styles.navItem} data-active={!selectedId || undefined} aria-current={!selectedId ? 'page' : undefined} onClick={goHome}>
+            <button type="button" className={styles.navItem} data-active={(!selectedId && !building) || undefined} aria-current={!selectedId && !building ? 'page' : undefined} onClick={goHome}>
               <LayoutGrid size={16} aria-hidden="true" />
               <span>All websites</span>
               <span className={`${styles.count} tabular`}>{projects.length}</span>
@@ -157,6 +160,10 @@ export default function Sidebar({ onNewProject, collapsed = false, onToggle }) {
             <button type="button" className={styles.addBtn} onClick={onNewProject}>
               <Plus size={16} aria-hidden="true" />
               <span>Add a website</span>
+            </button>
+            <button type="button" className={styles.navItem} data-active={building || undefined} aria-current={building ? 'page' : undefined} onClick={openBuild}>
+              <Wand2 size={16} aria-hidden="true" />
+              <span>Build a site</span>
             </button>
           </div>
 

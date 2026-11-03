@@ -10,6 +10,7 @@ import reauditRouter from './routes/reaudit.js';
 import stacksRouter from './routes/stacks.js';
 import reportRouter from './routes/report.js';
 import faviconRouter from './routes/favicon.js';
+import buildRouter from './routes/build.js';
 import { lockBusy, queueState } from './jobs/manager.js';
 import { describeLimits } from './jobs/limits.js';
 import { awakeHeld } from './jobs/keepAwake.js';
@@ -83,6 +84,7 @@ app.use('/api/projects', reauditRouter);
 app.use('/api/projects', reportRouter);
 app.use('/api/projects', faviconRouter);
 app.use('/api/stacks', stacksRouter);
+app.use('/api/build', buildRouter);
 
 app.use('/api', (_req, res) => {
   res.status(404).json({ error: 'Route not found.' });

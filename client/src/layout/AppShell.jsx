@@ -3,6 +3,7 @@ import { ChevronRight, FileText, Globe } from 'lucide-react';
 import Sidebar from './Sidebar.jsx';
 import Workspace from './Workspace.jsx';
 import Home from './Home.jsx';
+import BuildMode from './BuildMode.jsx';
 import Button from '../components/common/Button.jsx';
 import { EmptyState } from '../components/common/Surface.jsx';
 import { SiteIcon } from '../components/site/Site.jsx';
@@ -74,10 +75,12 @@ export default function AppShell() {
   const audit = useProjects((s) => s.audit);
   const auditLoading = useProjects((s) => s.auditLoading);
   const project = useSelectedProject();
+  const building = useProjects((s) => s.building);
+  const openBuild = useProjects((s) => s.openBuild);
   // The tab title in the marketing site's form ("%s · Remastly"): the open website, else the list of them.
   useEffect(() => {
-    document.title = project ? `${project.name} · Remastly` : 'Your websites · Remastly';
-  }, [project]);
+    document.title = project ? `${project.name} · Remastly` : building ? 'Build a site · Remastly' : 'Your websites · Remastly';
+  }, [project, building]);
 
   // "Website to rebuild" from the sign-up form arrives as /app/?site=<address>: the Add a website form opens with it filled
   // in (still to be confirmed, authorization box included), and the address leaves the URL so a reload does not ask again.
@@ -116,6 +119,16 @@ export default function AppShell() {
                   {hostOf(project.url)}
                 </span>
               </>
+            ) : building ? (
+              <>
+                <button type="button" className={styles.crumbLink} onClick={goHome}>
+                  All websites
+                </button>
+                <ChevronRight size={14} aria-hidden="true" className={styles.crumbSep} />
+                <span className={styles.crumbHere} aria-current="page">
+                  Build a site
+                </span>
+              </>
             ) : (
               <span className={styles.crumbHere} aria-current="page">
                 All websites
@@ -146,8 +159,10 @@ export default function AppShell() {
             onOpenSettings={(mode = 'settings') => setStackMode(mode)}
             onOpenReport={() => setReportOpen(true)}
           />
+        ) : building ? (
+          <BuildMode />
         ) : (
-          <Home onNewProject={() => setNewOpen(true)} />
+          <Home onNewProject={() => setNewOpen(true)} onBuild={openBuild} />
         )}
       </div>
 
