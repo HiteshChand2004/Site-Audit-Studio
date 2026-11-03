@@ -204,20 +204,190 @@ export const DECODED_BUDGET_BYTES = 512 * 1024 * 1024;
  * (Before 2026-10-23: a share of the whole page against max(0.01 %, 2 × noise), with a 24-level colour cut and the share
  * rounded to 0.01 % — it could not see a 30 x 30 px change on a tall page, or any pale change at all.)
  */
-export async function fixGate(browser, fixedBase, unfixedBase, pagePath) {
-  const fixedErrors = [];
-  const unfixedErrors = [];
-  const [fixedShots, unfixedShots] = await pictureRounds(browser, viewOf(1440), [
-    { base: fixedBase, url: `${fixedBase}${pagePath}`, errors: fixedErrors },
-    { base: unfixedBase, url: `${unfixedBase}${pagePath}`, errors: unfixedErrors },
-  ]);
-  const verdict = await gateVerdict(fixedShots, unfixedShots);
-  // A console error of the fixed page that no load of the unfixed page had.
-  const newErrors = [...new Set(fixedErrors)].filter((e) => !unfixedErrors.some((u) => u.includes(e)));
-  return {
-    path: pagePath, ...verdict, newErrors,
-    invisible: verdict.changedPx === 0 && !verdict.sizeChanged && newErrors.length === 0,
-  };
+/** The widths every as-is fix is proved invisible at: a phone first (touch, mobile mode), then a computer. */
+export const GATE_WIDTHS = [375, 1440];
+
+/**
+ * The proof at every width of GATE_WIDTHS, each with the same rounds and console-error check: invisible only when every width
+ * is. A change at one width decides (the next is not rendered); the top-level fields are the failing width's, else the last
+ * one's, as callers have always read them; `views` holds each width's verdict.
+ */
+export async function fixGate(browser, fixedBase, unfixedBase, pagePath, { widths = GATE_WIDTHS } = {}) {
+  const views = [];
+  for (const width of widths) {
+    const fixedErrors = [];
+    const unfixedErrors = [];
+    const sides = [
+      { base: fixedBase, url: `${fixedBase}${pagePath}`, errors: fixedErrors },
+      { base: unfixedBase, url: `${unfixedBase}${pagePath}`, errors: unfixedErrors },
+    ];
+    const [fixedShots, unfixedShots] = await pictureRounds(browser, viewOf(width), sides);
+    const verdict = await gateVerdict(fixedShots, unfixedShots);
+    // A console error of the fixed page that no load of the unfixed page had.
+    const newErrors = [...new Set(fixedErrors)].filter((e) => !unfixedErrors.some((u) => u.includes(e)));
+    const invisible = verdict.changedPx === 0 && !verdict.sizeChanged && newErrors.length === 0;
+    // scrollCapped: a side was never scrolled to its end (reported; the speed fixes count such a look as not conclusive).
+    views.push({ width, ...verdict, newErrors, invisible, ...(sides.some((s) => s.scrollCapped) && { scrollCapped: true }) });
+    if (!invisible) break;
+  }
+  const failed = views.find((v) => !v.invisible);
+  return { path: pagePath, ...(failed ?? views.at(-1)), width: failed?.width ?? null, views, invisible: views.length > 0 && !failed };
+}
+
+/**
+ * Where a page's images are and which element is its Largest Contentful Paint, measured on the copy BEFORE its fixes at every
+ * width of GATE_WIDTHS, the way the gate opens it (same window, phone mode below 600 px, nothing off the copy's own server).
+ * Read once the page has loaded and rested, scrolled to the top: what a visitor sees first. An image is named as the markup
+ * names it (its src attribute as written, and its occurrence among images with that src), so copy/perfAsIs.js can find it in
+ * the HTML; `total` is how many images with that src the page holds as its scripts built it. `styles` are the stylesheets of the
+ * copy the page loaded, however (a link, an @import, a script), as paths on the copy's server; `integrity` the ones a <link>
+ * loads with an integrity hash; `scrolled` whether the page was scrolled to its end.
+ * @returns {Promise<{ path: string, widths: { width: number, viewportH: number, lcp: object|null, images: object[], styles: string[], integrity: string[], scrolled: boolean }[] }>}
+ */
+export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS } = {}) {
+  const out = [];
+  for (const width of widths) {
+    const opts = viewOf(width);
+    const context = await isolated(browser, opts, base, []);
+    try {
+      await context.addInitScript(() => {
+        window.__sasLcp = null;
+        try {
+          new PerformanceObserver((list) => { const e = list.getEntries().at(-1); if (e) window.__sasLcp = e; })
+            .observe({ type: 'largest-contentful-paint', buffered: true });
+        } catch { /* no LCP in this browser: none is named */ }
+      });
+      const page = await context.newPage();
+      const styles = new Set();
+      page.on('response', (r) => { if (r.request().resourceType() === 'stylesheet' && r.url().startsWith(base)) styles.add(new URL(r.url()).pathname); });
+      await page.goto(`${base}${pagePath}`, { waitUntil: 'load', timeout: 120000 });
+      await page.waitForTimeout(1500);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      const read = await page.evaluate(() => {
+        const nameOf = (img) => {
+          const src = img.getAttribute('src');
+          if (src == null) return { src: null, k: 0, total: 0 };
+          const same = [...document.images].filter((i) => i.getAttribute('src') === src);
+          return { src, k: same.indexOf(img), total: same.length };
+        };
+        const scroller = (el) => {
+          for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
+            const s = getComputedStyle(p);
+            if ((/(auto|scroll|hidden)/.test(s.overflowX) && p.scrollWidth > p.clientWidth + 1)
+              || (/(auto|scroll|hidden)/.test(s.overflowY) && p.scrollHeight > p.clientHeight + 1)) return true;
+          }
+          return false;
+        };
+        const images = [...document.images].filter((img) => img.getAttribute('src') != null).map((img) => {
+          const r = img.getBoundingClientRect();
+          const s = getComputedStyle(img);
+          return {
+            ...nameOf(img),
+            top: r.top + window.scrollY, bottom: r.bottom + window.scrollY, left: r.left, right: r.right,
+            visible: r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && img.checkVisibility?.({ opacityProperty: false }) !== false,
+            inScroller: scroller(img),
+            lazyLib: img.getAttributeNames().some((n) => /^(data-src|data-srcset|data-lazy|data-lazy-src|data-original|data-bg)$/.test(n)),
+            loading: img.getAttribute('loading'), fetchpriority: img.getAttribute('fetchpriority'),
+          };
+        });
+        const e = window.__sasLcp;
+        const el = e?.element ?? null;
+        const lcp = el ? (el.tagName === 'IMG'
+          ? { tag: 'img', ...nameOf(el) }
+          : { tag: el.tagName.toLowerCase(), background: Boolean(e.url) }) : null;
+        const integrity = [...document.querySelectorAll('link[rel~="stylesheet"][integrity]')].map((l) => { try { return new URL(l.href).pathname; } catch { return null; } }).filter(Boolean);
+        return { viewportH: window.innerHeight, lcp, images, integrity };
+      });
+      // Then down the page as a visitor scrolls (scroll.js), so a stylesheet a script loads on the way is known too. `scrolled`
+      // is false when that failed or stopped at its time cap: the list of stylesheets may then be short.
+      const scroll = await scrollThrough(page).catch(() => null);
+      out.push({ width, ...read, styles: [...styles], scrolled: Boolean(scroll && !scroll.capped) });
+    } finally {
+      await context.close();
+    }
+  }
+  return { path: pagePath, widths: out };
+}
+
+/** The lines a click added to a page's text and the lines it removed (each line counted as often as it appears). */
+export function textDelta(before, after) {
+  const left = String(before ?? '').split('\n');
+  const added = String(after ?? '').split('\n').filter((line) => {
+    const i = left.indexOf(line);
+    if (i < 0) return true;
+    left.splice(i, 1);
+    return false;
+  });
+  return { added, removed: left };
+}
+
+/**
+ * Do the links the anchors fix gave a role (copy/seoA11yAsIs.js: role="button" on the fixed side, not on the unfixed one) still
+ * do what they did? A role is ARIA only, but the page's own script or CSS may select on it: this is the proof that it does not.
+ * At every width each such link is clicked on both sides, each on a freshly loaded page: the same when the click adds and
+ * removes the same lines of the page's text on both (textDelta: what each side already showed cancels out, so the fixed side's
+ * own hidden link text does not count), leaves both at the same address, and brings no console error the unfixed side's click
+ * did not. Whether the text changed is not enough: a script that reacts to the role by doing something more changes it too.
+ * A link drawn on neither side at a width cannot be clicked there (counted in notShown). Not frozen, on purpose: a click that
+ * opens something after a timer must be seen; a page whose text moves by itself can therefore read as different, which drops
+ * the fix (never keeps one wrongly).
+ * @returns {Promise<{ same: boolean, clicked: number, notShown: number, differs: object[] }>}
+ */
+export async function anchorClicks(browser, fixedBase, unfixedBase, pagePath, { widths = GATE_WIDTHS } = {}) {
+  const differs = [];
+  let clicked = 0;
+  let notShown = 0;
+  for (const width of widths) {
+    const sides = [fixedBase, unfixedBase].map((base) => ({ base, url: `${base}${pagePath}`, errors: [] }));
+    const contexts = [];
+    try {
+      const pages = [];
+      for (const s of sides) {
+        const context = await isolated(browser, viewOf(width), s.base, []);
+        contexts.push(context);
+        const page = await context.newPage();
+        page.on('pageerror', (e) => s.errors.push(`pageerror: ${e.message.slice(0, 160)}`));
+        page.on('console', (m) => { if (m.type() === 'error') s.errors.push(`console: ${m.text().slice(0, 160)}`); });
+        pages.push(page);
+      }
+      const withRole = (page) => page.evaluate(() => [...document.querySelectorAll('a')].flatMap((a, i) => (a.getAttribute('role') === 'button' ? [i] : [])));
+      await Promise.all(pages.map((page, k) => page.goto(sides[k].url, { waitUntil: 'load', timeout: 120000 })));
+      const [fixedRoles, unfixedRoles] = await Promise.all(pages.map(withRole));
+      for (const i of fixedRoles.filter((i) => !unfixedRoles.includes(i))) {
+        const outcome = [];
+        for (const [k, page] of pages.entries()) {
+          await page.goto(sides[k].url, { waitUntil: 'load', timeout: 120000 });
+          await page.waitForTimeout(800);
+          const link = page.locator('a').nth(i);
+          if (!(await link.isVisible().catch(() => false))) {
+            outcome.push({ shown: false });
+            continue;
+          }
+          const errorsBefore = sides[k].errors.length;
+          const before = await page.evaluate(() => document.body.innerText);
+          await link.click({ timeout: 4000 }).catch(() => {});
+          await page.waitForTimeout(700);
+          const after = await page.evaluate(() => document.body?.innerText ?? '').catch(() => '');
+          outcome.push({ shown: true, changed: before !== after, delta: textDelta(before, after), at: page.url().replace(sides[k].base, ''), errors: sides[k].errors.slice(errorsBefore) });
+        }
+        const [f, u] = outcome;
+        if (!f.shown && !u.shown) {
+          notShown++;
+          continue;
+        }
+        clicked++;
+        const newErrors = f.shown ? f.errors.filter((e) => !(u.errors ?? []).some((x) => x.includes(e))) : [];
+        const sameChange = f.shown && u.shown ? JSON.stringify(f.delta) === JSON.stringify(u.delta) : true;
+        if (f.shown !== u.shown || !sameChange || f.at !== u.at || newErrors.length) {
+          const brief = (o) => ({ shown: o.shown, changed: o.changed, at: o.at, ...(o.delta && { added: o.delta.added.slice(0, 3), removed: o.delta.removed.slice(0, 3) }) });
+          differs.push({ width, index: i, fixed: brief(f), unfixed: brief(u), newErrors });
+        }
+      }
+    } finally {
+      for (const c of contexts) await c.close().catch(() => {});
+    }
+  }
+  return { same: differs.length === 0, clicked, notShown, differs };
 }
 
 /**

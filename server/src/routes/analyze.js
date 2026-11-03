@@ -3,7 +3,6 @@ import { db } from '../db/index.js';
 import { ConflictError, JobLimitError, jobs } from '../audit/jobs.js';
 import { PUBLIC_STEPS } from '../audit/index.js';
 import { streamJob } from '../jobs/sse.js';
-import { pageUrlOf } from '../recreate/inputs.js';
 
 const router = Router();
 
@@ -26,9 +25,8 @@ router.post('/:id/analyze', (req, res) => {
   if (!maxPages) return res.status(400).json({ error: 'maxPages must be a whole number from 1 to 100.' });
 
   try {
-    // One page only (projects.page_url): that page is the one fetched, rendered, measured and checked, and nothing else.
-    const page = pageUrlOf(project);
-    const job = jobs.start(project, page ? { maxPages: 1, url: page } : { maxPages });
+    // Always the whole website: the "One page" option was removed, so an old projects.page_url value is ignored here.
+    const job = jobs.start(project, { maxPages });
     res.status(202).json({ analysisId: job.id, job, steps: PUBLIC_STEPS });
   } catch (err) {
     if (err instanceof ConflictError) {

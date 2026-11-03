@@ -5,7 +5,7 @@ import { after, afterEach, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { db } from '../src/db/index.js';
-import { describeLimits, jobMaxMs, jobsPerUser, maxJobs, memory, minFreeMB } from '../src/jobs/limits.js';
+import { AUTO_MAX_JOBS, describeLimits, jobMaxMs, jobsPerUser, maxJobs, memory, minFreeMB } from '../src/jobs/limits.js';
 import { activeJobsOfUser, JobLimitError, JobManager, lockBusy, queueState, requeueJobs, TIMING } from '../src/jobs/manager.js';
 import { adoptStaleJobs, ownJobs, STALE_MS } from '../src/jobs/liveness.js';
 import { recoverStaleJobs } from '../src/recreate/jobs.js';
@@ -90,8 +90,14 @@ test('the settings: defaults, bounds, and what the health line reports', () => {
   assert.equal(minFreeMB(), 2048);
   assert.equal(maxJobs({ SAS_MAX_JOBS: '3' }), 3);
   assert.equal(maxJobs({ SAS_MAX_JOBS: '0' }), 1, 'out of range = default');
-  assert.equal(maxJobs({ SAS_MAX_JOBS: '9' }), 1);
+  assert.equal(maxJobs({ SAS_MAX_JOBS: '9' }), 9, 'no ceiling of 8 any more: the machine is the limit (jobs/capacity.js)');
+  assert.equal(maxJobs({ SAS_MAX_JOBS: '65' }), 1, 'beyond 64 = default');
   assert.equal(maxJobs({ SAS_MAX_JOBS: '2.5' }), 1, 'a whole number');
+  // `auto`: no fixed number, the machine decides; the ceiling only guards against a misread machine. Unset stays 1.
+  assert.equal(maxJobs({ SAS_MAX_JOBS: 'auto' }), AUTO_MAX_JOBS);
+  assert.equal(maxJobs({ SAS_MAX_JOBS: ' Auto ' }), AUTO_MAX_JOBS);
+  assert.equal(maxJobs({}), 1, 'unset = one at a time, exactly as before');
+  assert.deepEqual(describeLimits({ SAS_MAX_JOBS: 'auto' }).auto, true);
   assert.equal(jobsPerUser({ SAS_JOBS_PER_USER: '20' }), 20);
   assert.equal(jobMaxMs({ SAS_JOB_MAX_MINUTES: '0' }), 0, '0 = no hard limit');
   assert.equal(jobMaxMs({ SAS_JOB_MAX_MINUTES: '0.5' }), 30000, 'fractions of a minute are allowed');

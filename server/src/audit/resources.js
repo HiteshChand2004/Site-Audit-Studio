@@ -8,6 +8,7 @@
 // views at a time instead of four made the capture of six pages take 212 s instead of about 120 s, with no gain). Work is only
 // cut back when memory is really exhausted (a few hundred MB), the state in which loads start to time out.
 import os from 'node:os';
+import { jobShare } from '../jobs/context.js';
 
 const MB = 1024 * 1024;
 // Memory left alone for the rest of the machine.
@@ -21,6 +22,19 @@ export const PAGE_MB = 150;
  * "unknown" (Infinity), so nothing is cut back.
  */
 export const freeMemoryMB = () => (process.platform === 'darwin' ? Infinity : os.freemem() / MB);
+
+/**
+ * The memory the running code may plan with: inside a job, that job's share (what is really available minus what jobs that just
+ * started will still take, never more than the job is counted with: jobs/manager.js), so jobs side by side never each size
+ * themselves from the same free memory; outside a job, the machine's free memory as before.
+ */
+export const workMemoryMB = () => {
+  const share = jobShare();
+  return share ? Math.min(freeMemoryMB(), share.freeMB) : freeMemoryMB();
+};
+
+/** CPU threads the running code may plan with: inside a job, its share of the machine; outside, every thread. */
+export const workCpus = () => jobShare()?.cpus ?? (typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length || 1);
 
 /**
  * A hard cap on the browser contexts any step runs at once, from SAS_MAX_PARALLEL (server/.env, a whole number 1–8). For a machine
@@ -38,7 +52,7 @@ export function maxParallel(env = process.env) {
  *   perUnitMB: memory one unit needs; keepFreeMB: memory that must stay free for the rest of the machine; free, cap: overrides (tests)
  * @returns {number} between `min` and `max`, and never above SAS_MAX_PARALLEL (which may go below `min`, but not below 1 unless `min` is 0)
  */
-export function parallelism({ perUnitMB = PAGE_MB, max = 4, min = 1, keepFreeMB = KEEP_FREE_MB, free = freeMemoryMB(), cap = maxParallel() } = {}) {
+export function parallelism({ perUnitMB = PAGE_MB, max = 4, min = 1, keepFreeMB = KEEP_FREE_MB, free = workMemoryMB(), cap = maxParallel() } = {}) {
   const fit = free === Infinity ? max : Math.floor((free - keepFreeMB) / perUnitMB);
   const n = Math.max(min, Math.min(max, Number.isFinite(fit) ? fit : min));
   return Math.min(n, Math.max(cap, Math.min(min, 1)));

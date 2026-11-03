@@ -26,6 +26,12 @@ export const EXTRA_RUNS = 2;
 export const BLANK_SHARE = 0.2;
 /** Time given to one Lighthouse run (the analysis gives 120 s; a page of the original is fetched over the network). */
 export const RUN_TIMEOUT_MS = 150000;
+/** A kept run of the original older than this is measured again (the site may have changed). */
+export const ORIGINAL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+/** A kept run of the original is reused only when this computer's speed (benchmarkIndex) then and now differs by at most this share. */
+export const BENCHMARK_TOLERANCE = 0.25;
+/** The score a category is meant to reach (a goal, reported as reached or not; never a reason to change a score). */
+export const TARGET_SCORE = 90;
 
 const CATEGORY_LABEL = { performance: 'Performance', accessibility: 'Accessibility', 'best-practices': 'Best practices', seo: 'SEO' };
 const MODE_LABEL = { mobile: 'phone', desktop: 'computer' };
@@ -69,6 +75,16 @@ export function trimReport(lhr) {
     unscored[c] = [...new Set((cat.auditRefs ?? []).map((r) => lhr.audits?.[r.id]).filter((a) => a?.scoreDisplayMode === 'error')
       .map((a) => `${a.id}: ${String(a.errorMessage ?? '').replace(/\s+/g, ' ').slice(0, 160)}`))].slice(0, 3);
   }
+  // Per category, the audits of it that fail (score < 0.9, not informative / manual), with their weight in the category: what a
+  // category under TARGET_SCORE is made of.
+  const failingByCategory = {};
+  for (const c of LH_SCORE_CATEGORIES) {
+    const refs = lhr?.categories?.[c]?.auditRefs ?? [];
+    failingByCategory[c] = refs.filter((r) => {
+      const a = lhr.audits?.[r.id];
+      return typeof a?.score === 'number' && a.score < 0.9 && a.scoreDisplayMode !== 'informative' && a.scoreDisplayMode !== 'manual';
+    }).map((r) => ({ id: r.id, weight: r.weight ?? 0 }));
+  }
   return {
     fetchTime: lhr?.fetchTime ?? null,
     requestedUrl: lhr?.requestedUrl ?? null,
@@ -82,7 +98,25 @@ export function trimReport(lhr) {
     weightBytes: lhr?.audits?.['total-byte-weight']?.numericValue ?? null,
     lcpElement: lcp ? { selector: lcp.selector ?? null, snippet: String(lcp.snippet ?? lcp.selector ?? '').slice(0, 100) } : null,
     audits,
+    failingByCategory,
   };
+}
+
+/**
+ * Why a kept run of the original may not stand in for one measured now, against the copy's run it is compared with; null when it
+ * may. Its age comes from when it was saved here (`measuredAt`), else Lighthouse's own `fetchTime`; an unknown age or an unknown
+ * computer speed on either side is a reason too (nothing is assumed).
+ */
+export function staleOriginal(kept, copyRun, now = Date.now()) {
+  const at = Number.isFinite(kept?.measuredAt) ? kept.measuredAt : Date.parse(kept?.fetchTime ?? '');
+  if (!Number.isFinite(at)) return 'its age is not known';
+  if (now - at > ORIGINAL_MAX_AGE_MS) return `it is ${Math.floor((now - at) / 86400000)} days old (more than ${ORIGINAL_MAX_AGE_MS / 86400000})`;
+  const a = kept?.benchmarkIndex;
+  const b = copyRun?.benchmarkIndex;
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0) return 'the computer speed of one of the runs is not known';
+  const off = Math.abs(a - b) / Math.max(a, b);
+  if (off > BENCHMARK_TOLERANCE) return `this computer measured ${Math.round(off * 100)} % ${b < a ? 'slower' : 'faster'} than when it was kept (benchmark ${Math.round(a)} then, ${Math.round(b)} now)`;
+  return null;
 }
 
 export const median = (xs) => {
@@ -136,6 +170,20 @@ export function decide(originalRuns, copyRuns) {
   return { original, copy, worse, unscored, blankRuns: blankRuns.length, runs: { original: originalRuns.length, copy: copyRuns.length }, accepted: originalRuns.length === 1 && copyRuns.length === 1 ? 'single run' : 'median of runs' };
 }
 
+/**
+ * Two runs measured under different load: other jobs ran during one and not the same number during the other. Unknown on
+ * either side (a run of the original cached before this was recorded) decides nothing.
+ */
+export function unevenLoad(a, b) {
+  return a?.contention != null && b?.contention != null && a.contention.otherJobs !== b.contention.otherJobs;
+}
+
+/** The most other jobs any of these runs was measured beside; null when none of them recorded it. */
+const mostOthers = (runs) => {
+  const known = runs.map((r) => r.contention?.otherJobs).filter((n) => typeof n === 'number');
+  return known.length ? Math.max(...known) : null;
+};
+
 /** A run's file in the original's cache or the re-audit's folder. */
 const runFile = (dir, slug, mode, n) => path.join(dir, `${slug}-${mode}-${n}.json`);
 
@@ -154,28 +202,37 @@ async function readJson(file) {
  * @param {number} [o.deadline]  ms since epoch; pages not started by then are listed as skipped (what was measured is kept)
  * @returns {Promise<{ pages: object[], worse: object[], extraRunPages: object[], skipped: string[], errors: object[], runs: { original: number, copy: number, reusedOriginal: number } }>}
  */
-export async function compareLighthousePages({ pages, cacheDir, outDir, run, progress = () => {}, deadline = Infinity }) {
+export async function compareLighthousePages({ pages, cacheDir, outDir, run, progress = () => {}, deadline = Infinity, signal = null }) {
   await mkdir(cacheDir, { recursive: true });
   await mkdir(outDir, { recursive: true });
-  const result = { pages: [], worse: [], unscored: [], extraRunPages: [], skipped: [], errors: [], runs: { original: 0, copy: 0, reusedOriginal: 0 } };
+  const result = { pages: [], worse: [], unscored: [], extraRunPages: [], skipped: [], errors: [], refreshedOriginal: [], runs: { original: 0, copy: 0, reusedOriginal: 0 } };
   const total = pages.length * MODES.length;
   let done = 0;
-  // One run of one side, as the trimmed report. The original's run n is taken from the cache when it is there.
-  const measure = async (side, p, slug, mode, n) => {
+  // One run of one side, as the trimmed report. The original's run n is taken from the cache only when it may stand in for a run
+  // made now (staleOriginal, against `copyRun`: the copy's run it is compared with, measured just before); else it is measured
+  // again and the kept file replaced, and the reason is listed.
+  const measure = async (side, p, slug, mode, n, copyRun = null) => {
     const dir = side === 'original' ? cacheDir : outDir;
     const file = runFile(dir, slug, mode, n);
     if (side === 'original') {
       const cached = await readJson(file);
       if (cached?.scores) {
-        result.runs.reusedOriginal++;
-        return cached;
+        const why = staleOriginal(cached, copyRun);
+        if (!why) {
+          result.runs.reusedOriginal++;
+          return cached;
+        }
+        result.refreshedOriginal.push({ path: p.path, mode, run: n, reason: why });
       }
     }
     const raw = `${file}.full.json`;
-    await run(side === 'original' ? p.url : p.copyUrl, mode, raw);
+    const summary = await run(side === 'original' ? p.url : p.copyUrl, mode, raw);
     const lhr = await readJson(raw);
     if (!lhr?.categories) throw new Error(`Lighthouse wrote no report for ${side} ${p.path} (${mode})`);
     const trimmed = trimReport(lhr);
+    // Kept with the run (also in the original's cache): what else ran on this server when it was measured, and when.
+    trimmed.contention = summary?.contention ?? null;
+    trimmed.measuredAt = Date.now();
     await writeFile(file, JSON.stringify(trimmed), 'utf8');
     result.runs[side]++;
     return trimmed;
@@ -184,26 +241,33 @@ export async function compareLighthousePages({ pages, cacheDir, outDir, run, pro
     const slug = pageSlug(p.path, p.url);
     const entry = { path: p.path, url: p.url, slug, modes: {} };
     for (const mode of MODES) {
+      // Stopped from the app: no further runs (each would take the Lighthouse lane from another job).
+      if (signal?.aborted) throw Object.assign(new Error('Stopped before it finished.'), { stopped: true });
       if (Date.now() > deadline) {
         result.skipped.push(`${p.path} (${mode})`);
         continue;
       }
       progress(done / total, `Lighthouse (${MODE_LABEL[mode]}) on ${p.path}: original and copy`);
       try {
-        const originalRuns = [await measure('original', p, slug, mode, 1)];
+        // The copy first: its run tells whether a kept run of the original was made on a computer as fast as now.
         const copyRuns = [await measure('copy', p, slug, mode, 1)];
+        const originalRuns = [await measure('original', p, slug, mode, 1, copyRuns[0])];
         let extra = false;
-        if (!singleRunDecides(originalRuns[0], copyRuns[0])) {
+        // A single pair decides only when both sides were measured under the same load; else the medians of three do.
+        const uneven = unevenLoad(originalRuns[0], copyRuns[0]);
+        if (uneven || !singleRunDecides(originalRuns[0], copyRuns[0])) {
           extra = true;
           for (let n = 2; n <= 1 + EXTRA_RUNS; n++) {
             progress(done / total, `Lighthouse (${MODE_LABEL[mode]}) on ${p.path}: run ${n} of ${1 + EXTRA_RUNS} on both sides (one run did not decide)`);
-            originalRuns.push(await measure('original', p, slug, mode, n));
             copyRuns.push(await measure('copy', p, slug, mode, n));
+            originalRuns.push(await measure('original', p, slug, mode, n, copyRuns[copyRuns.length - 1]));
           }
         }
         const verdict = decide(originalRuns, copyRuns);
         entry.modes[mode] = {
-          ...verdict, extra,
+          ...verdict, extra, uneven,
+          // The most other jobs any run of each side was measured beside (null: not recorded).
+          contention: { original: mostOthers(originalRuns), copy: mostOthers(copyRuns) },
           runScores: { original: originalRuns.map((r) => r.scores), copy: copyRuns.map((r) => r.scores) },
           // For the reasons of a row that got worse: the page's weight, its largest element and what fails on each side (the medians' runs: the first).
           detail: {
@@ -211,11 +275,14 @@ export async function compareLighthousePages({ pages, cacheDir, outDir, run, pro
             lcp: { original: originalRuns[0].lcpElement, copy: copyRuns[0].lcpElement },
             failing: { original: Object.keys(originalRuns[0].audits), copy: Object.keys(copyRuns[0].audits) },
             copyAudits: copyRuns[0].audits,
+            // Per category, what fails on the copy (its first run; null for a run kept before this was recorded).
+            copyFailingByCategory: copyRuns[0].failingByCategory ?? null,
           },
         };
         for (const c of verdict.worse) result.worse.push({ path: p.path, mode, category: c, original: verdict.original[c], copy: verdict.copy[c], runs: verdict.runs });
         for (const [c, sides] of Object.entries(verdict.unscored)) for (const [side, u] of Object.entries(sides)) result.unscored.push({ path: p.path, mode, category: c, side, ...u });
       } catch (err) {
+        if (err?.stopped) throw err;
         entry.modes[mode] = { error: String(err?.message ?? err).split('\n')[0].slice(0, 200) };
         result.errors.push({ path: p.path, mode, error: entry.modes[mode].error });
       }
@@ -239,6 +306,8 @@ export function lighthousePageItems(comparison) {
     for (const [mode, m] of Object.entries(p.modes)) {
       if (m.error) continue;
       const basis = `${m.accepted}${m.runs.original > 1 || m.runs.copy > 1 ? ` (${m.runs.original} of the original, ${m.runs.copy} of the copy)` : ''}`;
+      const others = Math.max(m.contention?.original ?? 0, m.contention?.copy ?? 0);
+      const load = others ? `; measured while up to ${others} other job${others === 1 ? '' : 's'} ran on this server` : '';
       const scored = LH_SCORE_CATEGORIES.filter((c) => !m.unscored?.[c]);
       const text = (scores) => scored.map((c) => `${CATEGORY_LABEL[c]} ${scores[c] ?? '–'}`).join(', ');
       // A category a run could not score is its own row, measured again rather than judged (status recheck).
@@ -258,7 +327,7 @@ export function lighthousePageItems(comparison) {
         items.push({
           key: `lighthouse-score.${mode}.all.${p.path}`, category: 'performance', page: p.path,
           title: `Lighthouse scores (${MODE_LABEL[mode]}) on ${p.path}: copy not below the original${scored.length < LH_SCORE_CATEGORIES.length ? ' in the categories scored' : ''}`,
-          status: 'pass', before: { status: 'pass', detail: text(m.original) }, after: { status: 'pass', detail: `${text(m.copy)} — ${basis}` },
+          status: 'pass', before: { status: 'pass', detail: text(m.original) }, after: { status: 'pass', detail: `${text(m.copy)} — ${basis}${load}` },
         });
         continue;
       }
@@ -268,7 +337,7 @@ export function lighthousePageItems(comparison) {
           title: `Lighthouse ${CATEGORY_LABEL[c]} score (${MODE_LABEL[mode]}) on ${p.path}`,
           status: 'regressed',
           before: { status: 'pass', detail: `${m.original[c]} on the original`, score: m.original[c] },
-          after: { status: 'fail', detail: `${m.copy[c]} on the copy — ${basis}`, score: m.copy[c] },
+          after: { status: 'fail', detail: `${m.copy[c]} on the copy — ${basis}${load}`, score: m.copy[c] },
           lighthousePage: { mode, category: c, ...m.detail, runScores: m.runScores },
           note: 'Both sides measured on this computer with the same settings; a single run is accepted only when the copy is 5 or more points ahead in every category, else the medians of three runs per side decide.',
         });
@@ -276,6 +345,51 @@ export function lighthousePageItems(comparison) {
     }
   }
   return items;
+}
+
+// Why an audit still fails on an as-is copy. A reason that says the copy kept something of the original's is given only when the
+// original's own run fails the same audit; one that fails on the copy alone is said to be so, with no reason claimed (the rows
+// that got worse explain it, from the files they name). A load timing is described, not explained.
+const SCRIPT_AUDITS = new Set(['unused-javascript', 'unminified-javascript', 'legacy-javascript', 'duplicated-javascript', 'bootup-time',
+  'mainthread-work-breakdown', 'third-party-facades', 'third-party-summary', 'total-blocking-time', 'long-tasks', 'bf-cache', 'max-potential-fid']);
+const TIMING_AUDITS = new Set(['first-contentful-paint', 'largest-contentful-paint', 'speed-index', 'interactive', 'cumulative-layout-shift']);
+export const COPY_ONLY = 'fails on the copy only: not explained here (see the rows that got worse)';
+export function whyStillFailing(id, originalFails) {
+  if (TIMING_AUDITS.has(id)) return "a load timing: follows the page's own files and scripts";
+  if (!originalFails) return COPY_ONLY;
+  if (SCRIPT_AUDITS.has(id)) return "the original's own JavaScript: kept as it is, by choice";
+  if (id === 'color-contrast') return "the original's colours: kept, by choice";
+  if (id === 'render-blocking-resources') return "the original's scripts and stylesheets load where the original loads them: kept, by choice";
+  return 'fails on the original too: not changed by the copy';
+}
+
+/**
+ * Per page, mode and category: the original's and the copy's score (as the comparison decided them), whether the copy reached
+ * TARGET_SCORE, and for a category under it the audits that fail on the copy with their weight and why. Scores are reported as
+ * measured; a category that could not be scored says so.
+ */
+export function lighthouseTargets(comparison) {
+  const rows = [];
+  for (const p of comparison.pages) {
+    for (const [mode, m] of Object.entries(p.modes)) {
+      if (m.error) continue;
+      for (const c of LH_SCORE_CATEGORIES) {
+        const copy = m.copy?.[c] ?? null;
+        const row = { path: p.path, mode, category: c, original: m.original?.[c] ?? null, copy, reached: copy == null ? null : copy >= TARGET_SCORE };
+        if (copy == null) row.note = 'not scored';
+        else if (copy < TARGET_SCORE) {
+          const failing = m.detail?.copyFailingByCategory?.[c];
+          // What fails on the original's run the comparison used first (trimReport keeps every audit under 0.9).
+          const onOriginal = new Set(m.detail?.failing?.original ?? []);
+          row.failing = failing == null ? null : failing.slice().sort((a, b) => b.weight - a.weight).slice(0, 12)
+            .map((f) => ({ id: f.id, title: m.detail.copyAudits?.[f.id]?.title ?? f.id, weight: f.weight, why: whyStillFailing(f.id, onOriginal.has(f.id)) }));
+          if (failing == null) row.note = 'the failing audits of this run were not recorded';
+        }
+        rows.push(row);
+      }
+    }
+  }
+  return rows;
 }
 
 /** The one line the notes carry. */
@@ -286,7 +400,13 @@ export function lighthousePagesNote(comparison) {
     ? `${comparison.extraRunPages.length} page${comparison.extraRunPages.length === 1 ? '' : 's'} needed three runs per side (${comparison.extraRunPages.map((p) => `${p.path} on ${p.modes.map((m) => MODE_LABEL[m]).join(' and ')}`).join('; ')})`
     : 'one run per side decided every page');
   if (comparison.runs.reusedOriginal) parts.push(`${comparison.runs.reusedOriginal} run${comparison.runs.reusedOriginal === 1 ? '' : 's'} of the original reused from an earlier comparison`);
+  const refreshed = comparison.refreshedOriginal ?? [];
+  if (refreshed.length) parts.push(`${refreshed.length} kept run${refreshed.length === 1 ? '' : 's'} of the original measured again (${refreshed.slice(0, 3).map((r) => `${r.path} on ${MODE_LABEL[r.mode]}: ${r.reason}`).join('; ')})`);
   if (comparison.unscored?.length) parts.push(`${comparison.unscored.length} categor${comparison.unscored.length === 1 ? 'y' : 'ies'} could not be scored and ${comparison.unscored.length === 1 ? 'is' : 'are'} not compared (${[...new Set(comparison.unscored.map((u) => `${u.path} ${MODE_LABEL[u.mode]} ${CATEGORY_LABEL[u.category]}: the ${u.side} in ${u.runs} of ${u.of}`))].slice(0, 6).join('; ')})`);
+  const busy = comparison.pages.flatMap((p) => Object.entries(p.modes).filter(([, m]) => (m.contention?.original ?? 0) || (m.contention?.copy ?? 0)).map(([mode]) => `${p.path} on ${MODE_LABEL[mode]}`));
+  if (busy.length) parts.push(`measured while other jobs ran on this server: ${busy.slice(0, 6).join('; ')}`);
+  const uneven = comparison.pages.flatMap((p) => Object.entries(p.modes).filter(([, m]) => m.uneven).map(([mode]) => `${p.path} on ${MODE_LABEL[mode]}`));
+  if (uneven.length) parts.push(`${uneven.length} comparison${uneven.length === 1 ? ' was' : 's were'} measured under different load on the two sides, so three runs per side decided ${uneven.length === 1 ? 'it' : 'them'} (${uneven.slice(0, 6).join('; ')})`);
   if (comparison.skipped.length) parts.push(`not measured for time: ${comparison.skipped.join(', ')}`);
   if (comparison.errors.length) parts.push(`${comparison.errors.length} run${comparison.errors.length === 1 ? '' : 's'} failed (${comparison.errors.slice(0, 3).map((e) => `${e.path} ${e.mode}: ${e.error}`).join('; ')})`);
   const sentence = `${parts.join('; ')}.`;

@@ -16,7 +16,8 @@ import { userPolicy, withNetPolicy } from '../security/netGuard.js';
 import { maxParallel, parallelism } from '../audit/resources.js';
 import { TimeoutError } from '../audit/util.js';
 import { createInterrupts, extendableTimeout } from './interrupts.js';
-import { analysisWarnings, baseUrlOf, isAllPages, latestAnalysis, pageLimitOf, pageUrlOf, SITE_PAGE_CAP } from './inputs.js';
+import { onWaiting } from '../jobs/context.js';
+import { analysisWarnings, baseUrlOf, isAllPages, latestAnalysis, pageLimitOf, SITE_PAGE_CAP } from './inputs.js';
 import { RecreateError } from './errors.js';
 import { CANVAS_RENDERED_MESSAGE } from '../detection/siteType.js';
 import { assetsStage } from './assets/index.js';
@@ -205,11 +206,10 @@ async function recreate({
     baseUrl: baseUrlOf(project, analysis.audit),
     // An exact copy is of the whole site: every page the discovery finds, whatever the project's page setting says
     // (the setting still decides for an ordinary copy, and the safety cap still applies).
-    // One page only (projects.page_url) wins over both: that page and nothing else, in an exact copy too.
-    ...(!asIs && pageUrlOf(project) && { singlePage: pageUrlOf(project) }),
+    // The "One page" option was removed: an old projects.page_url value no longer limits a copy to one page.
     // An as-is copy takes exactly the pages the user chose (discover.js include): as many as there are.
-    pageLimit: asIs ? asIs.pages.length : pageUrlOf(project) ? 0 : exact ? SITE_PAGE_CAP - 1 : pageLimitOf(project.recreate_pages),
-    allPages: !asIs && !pageUrlOf(project) && (exact || isAllPages(project.recreate_pages)),
+    pageLimit: asIs ? asIs.pages.length : exact ? SITE_PAGE_CAP - 1 : pageLimitOf(project.recreate_pages),
+    allPages: !asIs && (exact || isAllPages(project.recreate_pages)),
     include: asIs ? new Set(asIs.pages.map((u) => pageKey(u))) : null,
     asIs,
     exact,
@@ -421,6 +421,32 @@ async function recreate({
     front = null;
   };
 
+  // Waiting behind another job's Lighthouse run is not this copy's time (jobs/context.js startWaiting). Only the as-is stage,
+  // the step in front, runs Lighthouse: while the job waits, that step's timer is held; when the wait ends, its limit, its
+  // stepDeadline and the job's deadline move later by the time waited. Not counted against the interruption allowance
+  // (this is neither sleep nor an outage). Background steps keep working meanwhile, so their limits do not move.
+  // Registered right before the try below; dispose() unregisters it on every way out of it.
+  let laneWaitStart = 0;
+  let laneHeld = null;
+  const stopLaneListening = onWaiting({
+    start(at) {
+      laneWaitStart = at;
+      laneHeld = [...running].find((r) => r.local === front) ?? null;
+      laneHeld?.timer.hold();
+    },
+    end() {
+      const waited = Date.now() - laneWaitStart;
+      deadline += waited;
+      ctx.jobDeadline = deadline;
+      if (laneHeld) {
+        laneHeld.timer.release(waited);
+        laneHeld.local.stepDeadline += waited;
+        if (front === laneHeld.local) ctx.stepDeadline = front.stepDeadline;
+        laneHeld = null;
+      }
+    },
+  });
+  disposers.push(async () => stopLaneListening());
   try {
     for (const def of STEPS.filter((s) => !s.background)) {
       // An as-is copy runs its capture and its stage only; the other steps are finished at once, so the bar still ends at 100 %.

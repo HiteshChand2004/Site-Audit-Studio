@@ -3,7 +3,7 @@
 // as-is/, packages the chosen stack, builds and runs it, checks it (check.js) and measures it once with Lighthouse on desktop.
 // The result is recorded in the job's report with `mode: 'as-is'`, so the download, the report and the app's stacks read it
 // the same way as a clean copy.
-import { cp, mkdir, rm, readFile, writeFile, readdir } from 'node:fs/promises';
+import { cp, mkdir, rm, readFile, writeFile, readdir, rename } from 'node:fs/promises';
 import { gzipSync } from 'node:zlib';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -15,9 +15,10 @@ import { buildConvertedMern, convertToMern, MERN_EXPORT_DIR, verifyConvertedMern
 import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
 import { writeLockfiles } from '../../../toolchains/lockfile.js';
-import { checkCopy, excludedHostsOf, fixGate, formsInCopy, NOISE_SHOTS, probeOriginal } from './check.js';
+import { anchorClicks, checkCopy, excludedHostsOf, fixGate, formsInCopy, NOISE_SHOTS, perfProbe, probeOriginal } from './check.js';
+import { localFileOf, namesStillUsed, PERF_KINDS, planPerf, stylesheetCandidates } from '../../../copy/perfAsIs.js';
 import { formRoutesOfCopy, formsReadmeSection } from '../../../copy/formRoutes.js';
-import { fixAsIsCopy, revertPage } from '../../../copy/fixAsIs.js';
+import { fixAsIsCopy, fixGroup, revertPage } from '../../../copy/fixAsIs.js';
 import { addressForCopy } from '../../../copy/address.js';
 import { measureServed, servedOutcome } from '../../../copy/served.js';
 import { slugFor } from '../../discover.js';
@@ -102,6 +103,98 @@ export async function readLifted(dir) {
   };
 }
 
+/**
+ * The local stylesheets without their whitespace (copy/perfAsIs.js stylesheetCandidates: the browser reads the same rules from
+ * both), proved on EVERY page that loaded the file in the probe, against the copy before any fix (fixGate, 375 and 1440 px,
+ * nothing else changed yet), each look conclusive (proven). First all candidates together; when one page is not proven, every
+ * file is put back and each file is tried alone on its own pages; when more than one file passed alone, they are looked at
+ * together once more. A file that is not proven keeps its original bytes. Cost: one look per page using a candidate, then (only
+ * on a failure) one per page per file, and one more round together.
+ * Nothing on disk changes while the files are being proved: the minified text is served in place of the file (serveCopy
+ * `overrides`), so a run stopped at any moment of the proof leaves every stylesheet with its original bytes. Only the files
+ * proven are written, at the very end, each one whole (written beside the gate folder, outside the copy, then renamed over it).
+ */
+async function minifyAndProve({ browser, copyDir, gateDir, uses, integrity, complete, measuredPages, log }) {
+  let found;
+  try {
+    found = await stylesheetCandidates({ dir: copyDir, uses, integrity, complete, measured: measuredPages, browser });
+  } catch (err) {
+    return { open: [{ kind: 'css', page: null, reason: 'd', detail: `The stylesheets could not be checked (${String(err?.message ?? err).slice(0, 120)}): left as they are` }], report: { files: [], looks: [] } };
+  }
+  const open = found.open.map((o) => ({ kind: 'css', ...o }));
+  const looks = [];
+  if (!found.candidates.length) return { open, report: { files: [], looks } };
+  const unfixed = await serveCopy(gateDir);
+  const base = unfixed.url.replace(/\/$/, '');
+  // Serves these candidates minified (every other file as it is on disk), then looks at every page that uses one of them.
+  const tryFiles = async (set, label) => {
+    const overrides = new Map(set.map((c) => [path.resolve(c.file), Buffer.from(c.min, 'utf8')]));
+    const pagesToLook = [...new Set(set.flatMap((c) => c.pages))];
+    for (const pagePath of pagesToLook) {
+      let side = null;
+      let g;
+      try {
+        side = await serveCopy(copyDir, { overrides });
+        g = await fixGate(browser, side.url.replace(/\/$/, ''), base, pagePath);
+      } catch (err) {
+        g = { path: pagePath, invisible: false, error: String(err?.message ?? err).split('\n')[0].slice(0, 160) };
+      } finally {
+        await side?.close();
+      }
+      const ok = proven(g);
+      looks.push({ files: set.map((c) => c.rel), path: pagePath, ok, width: g.width ?? null, ...(g.error && { error: g.error }) });
+      log(`stylesheets (${label}) on ${pagePath}: ${ok ? 'the same' : 'not proven the same'}`);
+      if (!ok) return { ok: false, why: g.invisible ? whyNotProven(g) : whyNotKept(g), page: pagePath };
+    }
+    return { ok: true };
+  };
+  let kept = [];
+  try {
+    const all = await tryFiles(found.candidates, 'all');
+    if (all.ok) kept = found.candidates;
+    else {
+      for (const c of found.candidates) {
+        const one = await tryFiles([c], c.rel);
+        if (one.ok) kept.push(c);
+        else open.push({ kind: 'css', page: one.page, reason: 'd', detail: `${c.rel} is not minified: ${one.why}` });
+      }
+      if (kept.length > 1 && !(await tryFiles(kept, 'together')).ok) {
+        open.push({ kind: 'css', page: null, reason: 'd', detail: `${kept.map((c) => c.rel).join(', ')} are not minified: each was the same alone, not together` });
+        kept = [];
+      }
+    }
+  } catch (err) {
+    kept = [];
+    open.push({ kind: 'css', page: null, reason: 'd', detail: `No stylesheet is minified: the check stopped (${String(err?.message ?? err).slice(0, 120)})` });
+  } finally {
+    await unfixed.close();
+  }
+  // Only now is anything written: each proven file whole, through a temporary file outside the copy and a rename. A file that
+  // cannot be replaced keeps its original bytes: a rename that fails leaves the old file as it was, so nothing is written back
+  // (a plain write of the original would itself not be atomic).
+  const swap = `${gateDir}-css`;
+  const written = [];
+  if (kept.length) {
+    await rm(swap, { recursive: true, force: true });
+    await mkdir(swap, { recursive: true });
+    for (const [i, c] of kept.entries()) {
+      const tmp = path.join(swap, `${i}.css`);
+      try {
+        await writeFile(tmp, c.min, 'utf8');
+        await rename(tmp, c.file);
+        written.push(c);
+      } catch (err) {
+        open.push({ kind: 'css', page: null, reason: 'd', detail: `${c.rel} is not minified: it could not be replaced (${String(err?.message ?? err).slice(0, 120)})` });
+      }
+    }
+    await rm(swap, { recursive: true, force: true });
+  }
+  return {
+    open,
+    report: { files: written.map((c) => ({ file: c.rel, from: c.original.length, to: Buffer.byteLength(c.min), pages: c.pages })), looks },
+  };
+}
+
 /** Lighthouse scores and the metrics the report shows, from one saved desktop report. */
 export function scoresOf(lhr) {
   const a = lhr.audits ?? {};
@@ -126,48 +219,210 @@ export function newSiteOf(baseUrl, siteUrl) {
 }
 
 /**
- * The safe fixes (copy/fixAsIs.js), then the proof: every page they changed is compared with itself before them (fixGate);
- * a page whose fixes are not invisible gets its lifted HTML back, and its fixes are listed as reverted (reason d).
- * A gate that cannot decide (an error) reverts too: a fix is kept only when it is shown to change nothing.
+ * A speed fix (lcp, lazy, webp, css) is kept only on a look that is conclusive, not merely one that found no change: no error,
+ * at every width the same picture size, no side left unscrolled (a lazy image further down was never pictured), and nothing
+ * that differed only sometimes or where the page moves by itself (inNoisePx: such pixels cannot be judged either way).
  */
-export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped = null, log = () => {}, fetchLlms = null }) {
+export function proven(g) {
+  return Boolean(g?.invisible) && !g.error && !(g.views ?? []).some((v) => v.widthMismatch || v.scrollCapped || v.inNoisePx > 0);
+}
+
+/** Why a look that found no change still does not prove a speed fix (see proven). */
+const whyNotProven = (g) => {
+  const v = (g.views ?? []).find((x) => x.widthMismatch || x.scrollCapped || x.inNoisePx > 0);
+  if (!v) return 'the check could not prove it unchanged';
+  return `the check could not prove it unchanged at ${v.width} px (${v.scrollCapped ? 'the page was not scrolled to its end' : v.widthMismatch ? 'the pictures were not the same width' : `${v.inNoisePx} px differed where the page moves by itself`})`;
+};
+
+/** Why a look at a page's fixes failed, in the report's words: what changed, and at which width. */
+const whyNotKept = (g) => (g.error
+  ? `the check could not prove them invisible: ${g.error}`
+  : g.clicks?.differs?.length
+    ? `a link given role="button" does not do the same when clicked at ${g.clicks.differs[0].width} px (link ${g.clicks.differs[0].index + 1} of the page)`
+    : `they changed the page${g.width ? ` at ${g.width} px` : ''} (${g.sizeChanged ? `its height ${g.heights?.[0]} → ${g.heights?.[1]} px` : `${g.changedPx} px where the page does not move by itself`}${g.newErrors?.length ? `, ${g.newErrors.length} new console error(s)` : ''})`);
+
+/**
+ * The safe fixes (copy/fixAsIs.js), then the proof: every page they changed is compared with itself before them (fixGate, at
+ * 375 and 1440 px). A page whose fixes are not invisible gets its lifted HTML back; then each group of its fixes (fixAsIs.js
+ * fixGroup) is made alone from the lifted pages and looked at, and the groups invisible alone are made together and looked at
+ * once more. What passes that is kept; every other group is listed as dropped (reason d, with the width and what changed), and a
+ * page that keeps nothing is listed as reverted, as before. A look that cannot decide (an error), or a group that cannot be made
+ * again on its own, drops what it covers: a fix is kept only when it is shown to change nothing. The fixed side is served by a
+ * fresh server for every look, because a server keeps each file it has sent and a retry rewrites the page.
+ */
+export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped = null, log = () => {}, fetchLlms = null, speed = true }) {
   await rm(gateDir, { recursive: true, force: true });
   await cp(copyDir, gateDir, { recursive: true });
+  const list = pages.map((p) => ({ path: localOfOutPath(p.outPath), outPath: p.outPath, url: p.url }));
   try {
-    const fixed = await fixAsIsCopy({
-      dir: copyDir, siteUrl, newSiteUrl, fetchLlms,
-      pages: pages.map((p) => ({ path: localOfOutPath(p.outPath), outPath: p.outPath, url: p.url })),
-    });
-    const changed = fixed.pages.filter((p) => p.fixes.length);
-    const gate = [];
-    if (changed.length) {
-      const a = await serveCopy(copyDir);
-      const b = await serveCopy(gateDir);
+    // Speed fixes (copy/perfAsIs.js), planned from the copy before any fix, measured at both gate widths. speed: false = none of
+    // them, exactly as before C3 (a caller that proves only the markup fixes).
+    const perf = new Map();
+    const perfOpen = [];
+    const uses = new Map();
+    const integrity = new Set();
+    let measured = true;
+    if (speed) {
+      const before = await serveCopy(gateDir);
       try {
-        for (const p of changed) {
-          const g = await fixGate(browser, a.url.replace(/\/$/, ''), b.url.replace(/\/$/, ''), p.path)
-            .catch((err) => ({ path: p.path, invisible: false, error: String(err?.message ?? err).split('\n')[0].slice(0, 160) }));
-          gate.push(g);
-          log(`fixes ${p.path} ${JSON.stringify(g)}`);
-          if (!g.invisible) {
-            await revertPage(copyDir, p.outPath, fixed.originals.get(p.outPath));
-            p.reverted = { reason: 'd', why: g.error ? `the check could not prove them invisible: ${g.error}` : `they changed the page (${g.sizeChanged ? `its height ${g.heights?.[0]} → ${g.heights?.[1]} px` : `${g.changedPx} px where the page does not move by itself`}${g.newErrors?.length ? `, ${g.newErrors.length} new console error(s)` : ''})` };
+        for (const p of list) {
+          try {
+            const probe = await perfProbe(browser, before.url.replace(/\/$/, ''), p.path);
+            const plan = planPerf(probe, p.path);
+            perf.set(p.outPath, plan);
+            perfOpen.push(...plan.open.map((o) => ({ kind: 'lcp', ...o })));
+            for (const w of probe.widths) {
+              if (!w.scrolled) {
+                measured = false;
+                perfOpen.push({ kind: 'css', page: p.path, reason: 'd', detail: `The page could not be scrolled to its end at ${w.width} px, so the stylesheets it loads on the way are not known: no stylesheet is minified` });
+              }
+              for (const s of w.styles ?? []) {
+                const file = localFileOf(copyDir, 'index.html', s);
+                if (file) uses.set(file, new Set([...(uses.get(file) ?? []), p.path]));
+              }
+              for (const s of w.integrity ?? []) {
+                const file = localFileOf(copyDir, 'index.html', s);
+                if (file) integrity.add(file);
+              }
+            }
+            log(`speed plan ${p.path}: ${plan.lcp.size} largest image(s), ${plan.lazy.size} below the first screen`);
+          } catch (err) {
+            measured = false;
+            perfOpen.push({ kind: 'lcp', page: p.path, reason: 'd', detail: `The page could not be measured (${String(err?.message ?? err).split('\n')[0].slice(0, 120)}): its images are left as they are` });
           }
         }
       } finally {
-        await a.close();
+        await before.close();
+      }
+    }
+    const css = speed
+      ? await minifyAndProve({ browser, copyDir, gateDir, uses, integrity, complete: measured, measuredPages: new Set(list.map((p) => p.outPath)), log })
+      : { open: [], report: null };
+    const fixed = await fixAsIsCopy({ dir: copyDir, siteUrl, newSiteUrl, fetchLlms, pages: list, ...(speed && { perf }) });
+    fixed.open.push(...perfOpen, ...css.open);
+    // Every WebP the first pass wrote: the ones no kept fix points at are removed at the end (never a file of the original).
+    const webpWritten = new Set(fixed.pages.flatMap((p) => p.fixes.filter((f) => f.kind === 'webp').map((f) => f.file)));
+    const changed = fixed.pages.filter((p) => p.fixes.length);
+    const gate = [];
+    if (changed.length) {
+      // The unfixed side never changes: one server for all of it.
+      const b = await serveCopy(gateDir);
+      const unfixed = b.url.replace(/\/$/, '');
+      const look = async (p, groups = null) => {
+        let a = null;
+        let g;
+        try {
+          a = await serveCopy(copyDir);
+          const fixedBase = a.url.replace(/\/$/, '');
+          g = await fixGate(browser, fixedBase, unfixed, p.path);
+          // A link given a role is also clicked on both sides: invisible is not enough for something a visitor uses.
+          if (g.invisible && (groups ? groups.includes('anchors') : p.fixes.some((f) => f.kind === 'anchors'))) {
+            const clicks = await anchorClicks(browser, fixedBase, unfixed, p.path);
+            g.clicks = { clicked: clicks.clicked, notShown: clicks.notShown, differs: clicks.differs.slice(0, 3) };
+            if (!clicks.same) g.invisible = false;
+          }
+        } catch (err) {
+          // A fixed side that cannot be served, or a look that cannot decide: not proven, so what it covers is dropped.
+          g = { path: p.path, invisible: false, error: String(err?.message ?? err).split('\n')[0].slice(0, 160) };
+        } finally {
+          await a?.close();
+        }
+        if (groups) g.groups = groups;
+        gate.push(g);
+        log(`fixes ${p.path}${groups ? ` [${groups.join(', ')}]` : ''} ${JSON.stringify(g)}`);
+        return g;
+      };
+      // Only these groups on this page, made again from the lifted pages; the fixes made, or null when that failed.
+      const makeOnly = (p, groups) => fixAsIsCopy({ dir: copyDir, readDir: gateDir, siteUrl, newSiteUrl, pages: list, ...(speed && { perf }), only: new Map([[p.outPath, new Set(groups)]]) })
+        .then((again) => again.pages.find((q) => q.outPath === p.outPath)?.fixes ?? [], () => null);
+      const notMade = (made) => ({ invisible: false, error: made ? 'the fix is not made on its own' : 'the fix could not be made again' });
+      try {
+        for (const p of changed) {
+          const groups = [...new Set(p.fixes.map(fixGroup))];
+          // Speed fixes are always proved on their own, strictly (proven), even when the page passed with everything.
+          const speedGroups = groups.filter((x) => PERF_KINDS.includes(x));
+          const isSpeed = (x) => speedGroups.includes(x);
+          const g = await look(p);
+          if (g.invisible && !speedGroups.length) continue;
+          const original = fixed.originals.get(p.outPath);
+          await revertPage(copyDir, p.outPath, original);
+          const dropped = [];
+          // A first look that passed keeps its verdict for the markup groups (C1 + C2, unchanged); every group is tried alone
+          // only when it failed. A page with one group was already looked at alone: that look is reused.
+          let kept = g.invisible ? groups.filter((x) => !isSpeed(x)) : [];
+          const alone = g.invisible ? speedGroups : groups;
+          if (groups.length > 1 || g.invisible) {
+            for (const group of alone) {
+              const made = groups.length === 1 ? p.fixes : await makeOnly(p, [group]);
+              const k = groups.length === 1 ? g : made?.length ? await look(p, [group]) : notMade(made);
+              await revertPage(copyDir, p.outPath, original);
+              const ok = isSpeed(group) ? proven(k) : k.invisible;
+              if (ok) kept.push(group);
+              else dropped.push({ group, reason: 'd', why: k.invisible ? whyNotProven(k) : whyNotKept(k) });
+            }
+            if (kept.length) {
+              // Fixes invisible alone can still show together (a rule that needs both): one more look at them all, unless they
+              // are exactly what the first look already passed.
+              const made = await makeOnly(p, kept);
+              const same = g.invisible && kept.length === groups.length;
+              const t = !made?.length ? notMade(made) : same ? g : await look(p, kept);
+              const ok = t.invisible && (!kept.some(isSpeed) || proven(t));
+              if (ok) p.fixes = made;
+              else if (t.invisible && kept.some(isSpeed) && kept.some((x) => !isSpeed(x))) {
+                // No change, but not proven strictly with the speed fixes in: those go, and the markup fixes are judged on their
+                // own by the rule they always had (C1 + C2 unchanged).
+                const markup = kept.filter((x) => !isSpeed(x));
+                dropped.push(...kept.filter(isSpeed).map((group) => ({ group, reason: 'd', why: `not proven together with the other fixes: ${whyNotProven(t)}` })));
+                await revertPage(copyDir, p.outPath, original);
+                const m = await makeOnly(p, markup);
+                const u = m?.length ? await look(p, markup) : notMade(m);
+                if (u.invisible) {
+                  p.fixes = m;
+                  kept = markup;
+                } else {
+                  await revertPage(copyDir, p.outPath, original);
+                  dropped.push(...markup.map((group) => ({ group, reason: 'd', why: `invisible alone, not together with the other kept fixes: ${whyNotKept(u)}` })));
+                  kept = [];
+                }
+              } else {
+                await revertPage(copyDir, p.outPath, original);
+                dropped.push(...kept.map((group) => ({ group, reason: 'd', why: `invisible alone, not together with the other kept fixes: ${t.invisible ? whyNotProven(t) : whyNotKept(t)}` })));
+                kept = [];
+              }
+            }
+          } else dropped.push({ group: groups[0], reason: 'd', why: whyNotKept(g) });
+          p.dropped = dropped;
+          if (!kept.length) p.reverted = { reason: 'd', why: g.invisible ? dropped[0]?.why ?? 'not proven' : whyNotKept(g) };
+        }
+      } finally {
         await b.close();
       }
+    }
+    // A WebP no kept fix uses is removed, but only one the fixes wrote (".sas-" in its name, not in the copy before the fixes)
+    // and only when no file of the copy still names it.
+    const webpKept = new Set(fixed.pages.filter((p) => !p.reverted).flatMap((p) => p.fixes.filter((f) => f.kind === 'webp').map((f) => f.file)));
+    const unused = [];
+    for (const f of webpWritten) {
+      if (webpKept.has(f) || !path.basename(f).includes('.sas-')) continue;
+      if (await readFile(path.join(gateDir, f)).then(() => true, () => false)) continue;
+      unused.push(f);
+    }
+    if (unused.length) {
+      const named = await namesStillUsed(copyDir, unused.map((f) => path.basename(f)), unused);
+      for (const f of unused) if (!named.has(path.basename(f))) await rm(path.join(copyDir, f), { force: true });
     }
     const counts = {};
     for (const p of fixed.pages) if (!p.reverted) for (const f of p.fixes) counts[f.kind] = (counts[f.kind] ?? 0) + 1;
     return {
       counts,
       total: Object.values(counts).reduce((s, n) => s + n, 0),
-      pages: fixed.pages.map((p) => ({ path: p.path, fixes: p.fixes, ...(p.reverted && { reverted: p.reverted }) })),
+      pages: fixed.pages.map((p) => ({ path: p.path, fixes: p.fixes, ...(p.reverted && { reverted: p.reverted }), ...(p.dropped?.length && { dropped: p.dropped }) })),
       reverted: fixed.pages.filter((p) => p.reverted).length,
+      // Pages that kept some of their fixes and dropped others.
+      dropped: fixed.pages.filter((p) => !p.reverted && p.dropped?.length).length,
       open: [...(addressSkipped ? [{ kind: 'address', page: null, ...addressSkipped }] : []), ...fixed.open],
       files: fixed.files,
+      ...(speed && { css: css.report }),
       gate,
     };
   } finally {
@@ -449,9 +704,9 @@ export async function asIsStage(ctx) {
     const lhFile = path.join(ctx.dir, ASIS_DIR, 'lighthouse-desktop.json');
     await mkdir(path.dirname(lhFile), { recursive: true });
     try {
-      await runLighthouse(`${base}/`, 'desktop', { timeout: 240000, outFile: lhFile });
+      const summary = await runLighthouse(`${base}/`, 'desktop', { timeout: 240000, outFile: lhFile, signal: ctx.signal });
       const j = JSON.parse(await readFile(lhFile, 'utf8'));
-      report.lighthouse = { after: scoresOf(j) };
+      report.lighthouse = { after: scoresOf(j), ...(summary?.contention && { contention: summary.contention }) };
     } catch (err) {
       report.lighthouse = { error: String(err.message ?? err).slice(0, 200) };
     }
@@ -497,6 +752,8 @@ export async function asIsStage(ctx) {
         counts: report.fixes.counts,
         total: report.fixes.total,
         reverted: report.fixes.pages.filter((p) => p.reverted).map((p) => ({ page: p.path, ...p.reverted })),
+        // The groups of fixes dropped on pages that kept their other fixes (each with the width and what it changed).
+        dropped: report.fixes.pages.filter((p) => !p.reverted && p.dropped?.length).flatMap((p) => p.dropped.map((d) => ({ page: p.path, ...d }))),
         open: report.fixes.open,
         // Site files the packaged copy really serves (measured); `_headers` is never one of them: it is a host setting.
         files: (report.fixes.files?.written ?? []).filter((f) => f !== '_headers' && (!served || report.fixes.served.files[f] === 200)),

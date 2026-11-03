@@ -1,14 +1,15 @@
 // The safe fixes of an as-is copy (copy/fixAsIs.js) and their proof (preserve/stage.js fixAndProve): only what is missing, empty,
 // duplicated or invalid is changed; a page that states everything correctly is left byte for byte; the site files name the new
-// site; and a page whose fixes change what it shows (its own script reads the title) gets its lifted HTML back, reason d.
+// site; and a page whose fixes change what it shows (its own script reads the title) gets the fix its own script shows (the
+// title) dropped and keeps the rest, reason d.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import sharp from 'sharp';
-import { fixAsIsCopy, AS_IS_HEADERS } from '../src/copy/fixAsIs.js';
+import { fixAsIsCopy, fixGroup, AS_IS_HEADERS } from '../src/copy/fixAsIs.js';
 import { fixAndProve } from '../src/recreate/behavior/preserve/stage.js';
 
 const SITE = 'https://www.example-original.test/';
@@ -124,18 +125,63 @@ test('fixes are kept only where they change nothing a visitor sees; the others a
   const dir = await siteDir();
   const browser = await chromium.launch();
   try {
-    const r = await fixAndProve({ browser, copyDir: dir, gateDir: `${dir}-unfixed`, pages: PAGES, siteUrl: SITE, newSiteUrl: NEW });
+    const r = await fixAndProve({ browser, copyDir: dir, gateDir: `${dir}-unfixed`, pages: PAGES, siteUrl: SITE, newSiteUrl: NEW, speed: false });
     const byPath = Object.fromEntries(r.pages.map((p) => [p.path, p]));
     assert.equal(byPath['/'].reverted, undefined, JSON.stringify(r.gate));
     assert.match(await readFile(path.join(dir, 'index.html'), 'utf8'), /alt="Team photo"/, 'the homepage keeps its fixes');
-    assert.equal(byPath['/about/'].reverted?.reason, 'd', JSON.stringify(r.gate));
-    assert.equal(await readFile(path.join(dir, 'about', 'index.html'), 'utf8'), about, 'the about page is back as lifted');
-    assert.equal(r.reverted, 1);
+    const about2 = byPath['/about/'];
+    assert.equal(about2.reverted, undefined, JSON.stringify(r.gate));
+    assert.deepEqual(about2.dropped.map((d) => d.group), ['head:title'], JSON.stringify(r.gate));
+    const aboutNow = await readFile(path.join(dir, 'about', 'index.html'), 'utf8');
+    assert.match(aboutNow, /<title>Acme<\/title>/, 'the title its script prints is the lifted one');
+    assert.ok(aboutNow.includes(`${NEW}/about/`), 'the canonical and og tags, which never show, are kept');
+    assert.equal(r.reverted, 0);
+    assert.equal(r.dropped, 1);
     assert.ok(r.counts.alt >= 1);
     assert.ok(r.gate.find((g) => g.path === '/').diffPct <= 0.5);
   } finally {
     await browser.close();
     await rm(dir, { recursive: true, force: true });
     await rm(`${dir}-unfixed`, { recursive: true, force: true });
+  }
+});
+
+test('fixGroup: each fix\'s retry group; the head is split three ways and a moved canonical / og:url is head:meta', () => {
+  const g = (kind, field) => fixGroup({ kind, field });
+  assert.equal(g('alt'), 'alt');
+  assert.equal(g('head', 'title'), 'head:title');
+  assert.equal(g('head', 'description'), 'head:description');
+  for (const f of ['canonical', 'og:title', 'og:description', 'og:url']) assert.equal(g('head', f), 'head:meta', f);
+  assert.equal(g('address', 'canonical'), 'head:meta');
+  assert.equal(g('address', 'og:url'), 'head:meta');
+  assert.equal(g('address', 'something-else'), 'address');
+  assert.equal(g('lang', 'lang'), 'lang');
+  assert.equal(g('data', 'json-ld'), 'data');
+});
+
+test('a retry (only + readDir): only the named page is written, with only its groups, built from the lifted pages; no site file again', async () => {
+  const lifted = await siteDir();
+  const dir = await siteDir();
+  try {
+    // The page in `dir` is not the lifted one: the retry must build from `readDir`, not from what is there now.
+    await writeFile(path.join(dir, 'about', 'index.html'), about.replace('We are a small team.', 'NOT THE LIFTED PAGE'));
+    const untouched = ['index.html', 'contact.html', 'robots.txt'];
+    const before = await Promise.all(untouched.map((f) => readFile(path.join(dir, f), 'utf8')));
+    const r = await fixAsIsCopy({ dir, readDir: lifted, pages: PAGES, siteUrl: SITE, newSiteUrl: NEW, only: new Map([['about/index.html', new Set(['head:meta'])]]) });
+    const page = r.pages.find((p) => p.outPath === 'about/index.html');
+    assert.ok(page.fixes.length > 0);
+    for (const f of page.fixes) assert.equal(fixGroup(f), 'head:meta', JSON.stringify(f));
+    const now = await readFile(path.join(dir, 'about', 'index.html'), 'utf8');
+    assert.doesNotMatch(now, /NOT THE LIFTED PAGE/);
+    assert.match(now, /We are a small team\./);
+    assert.match(now, /<title>Acme<\/title>/, 'the duplicate title is left: not this retry\'s group');
+    assert.ok(now.includes(`${NEW}/about/`));
+    assert.deepEqual(await Promise.all(untouched.map((f) => readFile(path.join(dir, f), 'utf8'))), before, 'no other page and no site file written');
+    const files = await readdir(dir);
+    assert.ok(!files.includes('sitemap.xml') && !files.includes('llms.txt'), files.join(', '));
+    assert.equal(r.files, null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+    await rm(lifted, { recursive: true, force: true });
   }
 });
