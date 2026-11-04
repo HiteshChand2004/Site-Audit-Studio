@@ -14,7 +14,7 @@ import { auditDir } from '../config/paths.js';
 import { mapLimit } from '../audit/util.js';
 import { applyImageVariants, makeImageVariants } from './assets/variants.js';
 import { emitSite } from './emit/html.js';
-import { filesOnDisk, writeProject } from './emit/write.js';
+import { writeProject } from './emit/write.js';
 import { applyIrFixes, applyTreeFixes, fixReport } from './fixers/index.js';
 import { brokenTargets, deadLinks } from './fixers/perf.js';
 import { fetchWordPress, isWordPress } from './fixers/wordpress.js';
@@ -80,27 +80,14 @@ const PAGE_RENDER_MB = 600;
 
 const writeSite = (siteDir, out, assetsDir, known) => writeProject(siteDir, out, { assetsDir, known });
 
-/**
- * Opens the shared renderer for the generated site on demand (the fit pass and the fidelity measurement). Released by
- * releaseSiteRenderer once its last user is done, so its browser is not held through the steps after build; closed when the
- * job ends in any case.
- */
+/** Opens the shared renderer for the generated site once per job (closed when the job ends). */
 export async function siteRenderer(ctx) {
   if (!ctx.renderer) {
     ctx.renderer = await openRenderer(path.join(ctx.dir, 'site'));
-    if (!ctx.rendererDeferred) {
-      ctx.rendererDeferred = true;
-      ctx.defer(() => releaseSiteRenderer(ctx));
-    }
+    const renderer = ctx.renderer;
+    ctx.defer(() => renderer.close());
   }
   return ctx.renderer;
-}
-
-/** Closes the shared renderer now (a later siteRenderer opens a new one). */
-export async function releaseSiteRenderer(ctx) {
-  const renderer = ctx.renderer;
-  ctx.renderer = null;
-  await renderer?.close().catch(() => {});
 }
 
 /**
@@ -843,8 +830,6 @@ export async function generateStage(ctx) {
   // passes above worked on the shared css/site.css, which stays in the site for reading and for the app stacks.
   out = emitSite(ir, { inlineCss: true });
   await writeSite(siteDir, out, assetsDir, known);
-  // Written: build, the exact comparison and the counts below read the files back from site/ instead of holding them.
-  out = { ...out, files: filesOnDisk(siteDir, out.files) };
 
   ctx.progress(0.95, 'Saving the IR');
   await mkdir(path.join(ctx.dir, 'ir'), { recursive: true });

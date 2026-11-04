@@ -52,16 +52,13 @@ export function serveCopy(dir, { overrides = null } = {}) {
     }
     try {
       const ext = typeExtOf(file);
-      // Text is compressed once and kept (compressing is the cost). Pictures, video and fonts are read from disk on each request
-      // and not kept: an as-is copy ships the original's own files, tens of MB, and holding every one served for the life of
-      // the server cost that much memory for nothing (the OS file cache already keeps them warm).
       let entry = cache.get(file);
       if (!entry) {
         const body = overrides?.get(path.resolve(file)) ?? await readFile(file);
-        if (compressible(file)) {
-          entry = { body, br: brotliCompressSync(body, { params: { [constants.BROTLI_PARAM_QUALITY]: 5 } }), gz: gzipSync(body, { level: 6 }) };
-          cache.set(file, entry);
-        } else entry = { body, br: body, gz: body };
+        entry = compressible(file)
+          ? { body, br: brotliCompressSync(body, { params: { [constants.BROTLI_PARAM_QUALITY]: 5 } }), gz: gzipSync(body, { level: 6 }) }
+          : { body, br: body, gz: body };
+        cache.set(file, entry);
       }
       const headers = {
         'content-type': TYPES[ext] ?? 'application/octet-stream',
