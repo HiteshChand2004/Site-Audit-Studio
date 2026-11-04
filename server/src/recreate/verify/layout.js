@@ -307,7 +307,12 @@ export function planFixes(root, v, rects) {
   return { widths, heights };
 }
 
-async function thumb(input) {
+/**
+ * The small picture visualSimilarity compares (VISUAL_WIDTH pixels wide, raw RGB): a caller that keeps a shot only to compare
+ * it later keeps this (a few KB) instead of the full-page PNG (MBs). Passed back in, it is used as is.
+ */
+export async function thumb(input) {
+  if (input && !Buffer.isBuffer(input) && typeof input === 'object' && input.data) return input;
   // Read files into memory first: sharp keeps a cached handle on files it opens by path, and Windows
   // cannot rename the workspace folder while a handle is open.
   const buffer = typeof input === 'string' ? await readFile(input) : input;

@@ -11,6 +11,7 @@
 import path from 'node:path';
 import { RecreateError } from '../errors.js';
 import { measureFidelity } from '../verify/fidelity.js';
+import { releaseSiteRenderer } from '../generate.js';
 import { scanSite } from '../verify/safety.js';
 import { verifyFailure, verifySite } from '../verify/site.js';
 import { buildDist } from './minify.js';
@@ -64,4 +65,6 @@ export async function buildStage(ctx) {
 
   // Fidelity of the production build.
   await measureFidelity(ctx, { root: distDir, progress: (f, message) => ctx.progress(0.15 + 0.85 * f, message) });
+  // The last use of the shared renderer: its browser is not held through preview, the exact comparison and the stack build.
+  await releaseSiteRenderer(ctx);
 }
