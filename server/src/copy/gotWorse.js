@@ -100,7 +100,6 @@ function groupOf(ex) {
  * By check key only, the same for every site.
  */
 const PLANNED = [
-  { test: (k) => /^(axe|lighthouse)\.(aria-prohibited-attr|scrollable-region-focusable)$/.test(k), what: 'An attribute-only accessibility fix, checked by the look gate.' },
   { test: (k) => /^lighthouse\.(modern-image-formats|uses-optimized-images|uses-responsive-images|offscreen-images|efficient-animated-content|total-byte-weight|unsized-images|image-size-responsive)$/.test(k), what: 'The original\'s own smaller image files, and smaller variants proved by the look gate.' },
   { test: (k) => k.startsWith('motion.'), what: 'Motion is a separate track: the effect is still owed.' },
 ];
@@ -165,7 +164,7 @@ const CONTENT_WORDS = new Set(['image-alt', 'role-img-alt', 'input-image-alt', '
 // contrast, duplicate ids the site's own scripts may use, widgets' ARIA, tap targets, font sizes, zoom (d).
 const LOOK_RULES = new Set(['color-contrast', 'heading-order', 'page-has-heading-one', 'empty-heading', 'region', 'landmark-one-main', 'landmark-banner-is-top-level',
   'landmark-contentinfo-is-top-level', 'landmark-main-is-top-level', 'landmark-no-duplicate-banner', 'landmark-no-duplicate-contentinfo', 'landmark-no-duplicate-main',
-  'landmark-unique', 'landmark-complementary-is-top-level', 'bypass', 'list', 'listitem', 'definition-list', 'dlitem', 'nested-interactive', 'scrollable-region-focusable',
+  'landmark-unique', 'landmark-complementary-is-top-level', 'bypass', 'list', 'listitem', 'definition-list', 'dlitem', 'nested-interactive',
   'empty-table-header', 'th-has-data-cells', 'td-headers-attr', 'table-duplicate-name', 'duplicate-id', 'duplicate-id-aria', 'duplicate-id-active',
   'meta-viewport', 'meta-viewport-large', 'target-size', 'tap-targets', 'font-size', 'aria-allowed-attr', 'aria-allowed-role', 'aria-required-attr', 'aria-required-children',
   'aria-required-parent', 'aria-roles', 'aria-valid-attr', 'aria-valid-attr-value', 'aria-hidden-focus', 'aria-hidden-body', 'aria-input-field-name', 'aria-toggle-field-name',
@@ -271,9 +270,33 @@ function openRule(item, id, ctx) {
     if (r.reason) return r;
     return lookRule(item, id);
   }
+  if (ATTR_FIXES[id]) return attrFixRule(item, id, ctx);
   if (CONTENT_WORDS.has(id)) return contentWords(item, id);
   if (LOOK_RULES.has(id)) return lookRule(item, id);
   return unexplained(`${item.after?.detail ?? 'Still failing in the copy.'} No rule of the five reasons covers this accessibility check.`);
+}
+
+// axe rules an as-is copy fixes with one attribute (copy/seoA11yAsIs.js), by the kind of fix that writes it.
+const ATTR_FIXES = {
+  'aria-prohibited-attr': { kind: 'prohibited', what: 'role="img" on a named element with no text' },
+  'scrollable-region-focusable': { kind: 'scrollable', what: 'tabindex="0" on a box that scrolls' },
+};
+
+/**
+ * One of those rules still failing: what the fix left open says why (an element it could not change without changing the
+ * page, reason d; a page cap, c), a fix the look gate undid is a change of the look, and anything else is a fix that did not
+ * happen (a bug).
+ */
+function attrFixRule(item, id, ctx) {
+  const { kind, what } = ATTR_FIXES[id];
+  const detail = item.after?.detail ?? 'Still failing in the copy.';
+  const left = ctx.fixOpen.filter((o) => o.kind === kind);
+  if (left.length) {
+    const says = left.slice(0, 2).map((o) => o.detail).join(' ');
+    return left.some((o) => o.reason === 'd') ? { reason: 'look', evidence: `${detail} ${says}` } : { reason: 'owner', evidence: `${detail} ${says}` };
+  }
+  if (ctx.revertedPages.length) return { reason: 'look', evidence: `${detail} The copy's fixes on ${ctx.revertedPages.slice(0, 3).join(', ')} were undone because they changed the page.` };
+  return unexplained(`${detail} The copy writes ${what} and this one still fails: a bug to report.`);
 }
 
 /** A motion row below 90 % on both sides: the copy still owes the effect, unless the parts missing belong to excluded third-party code. */

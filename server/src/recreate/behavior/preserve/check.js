@@ -241,8 +241,9 @@ export async function fixGate(browser, fixedBase, unfixedBase, pagePath, { width
  * names it (its src attribute as written, and its occurrence among images with that src), so copy/perfAsIs.js can find it in
  * the HTML; `total` is how many images with that src the page holds as its scripts built it. `styles` are the stylesheets of the
  * copy the page loaded, however (a link, an @import, a script), as paths on the copy's server; `integrity` the ones a <link>
- * loads with an integrity hash; `scrolled` whether the page was scrolled to its end.
- * @returns {Promise<{ path: string, widths: { width: number, viewportH: number, lcp: object|null, images: object[], styles: string[], integrity: string[], scrolled: boolean }[] }>}
+ * loads with an integrity hash; `scrolled` whether the page was scrolled to its end; `scrollers` the boxes that scroll and the
+ * keyboard cannot reach (axe scrollable-region-focusable), read in the same visit (no extra page load).
+ * @returns {Promise<{ path: string, widths: { width: number, viewportH: number, lcp: object|null, images: object[], styles: string[], integrity: string[], scrollers: object[], scrolled: boolean }[] }>}
  */
 export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS } = {}) {
   const out = [];
@@ -296,7 +297,28 @@ export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS 
           ? { tag: 'img', ...nameOf(el) }
           : { tag: el.tagName.toLowerCase(), background: Boolean(e.url) }) : null;
         const integrity = [...document.querySelectorAll('link[rel~="stylesheet"][integrity]')].map((l) => { try { return new URL(l.href).pathname; } catch { return null; } }).filter(Boolean);
-        return { viewportH: window.innerHeight, lcp, images, integrity };
+        // axe scrollable-region-focusable's test (axe-core 4.13 getScroll(el, 13)): a box whose content is more than 13 px larger
+        // than it on an axis whose overflow is auto or scroll, that the keyboard cannot reach (it and everything in it out of the
+        // tab order). Named by its place under <body> (tag and index among the element children at each level) with its id and
+        // class, so copy/seoA11yAsIs.js finds the same element in the HTML or leaves it.
+        const tabbable = (e) => e.tabIndex >= 0 && !e.disabled;
+        const scrollers = [];
+        for (const el of document.querySelectorAll('body *')) {
+          if (scrollers.length >= 24) break;
+          if (/^(select|textarea)$/i.test(el.tagName)) continue;
+          const overX = el.scrollWidth > el.clientWidth + 13;
+          const overY = el.scrollHeight > el.clientHeight + 13;
+          if (!overX && !overY) continue;
+          const s = getComputedStyle(el);
+          if (!((overX && /^(auto|scroll)$/.test(s.overflowX)) || (overY && /^(auto|scroll)$/.test(s.overflowY)))) continue;
+          if (tabbable(el) || el.isContentEditable || [...el.querySelectorAll('*')].some(tabbable)) continue;
+          const r = el.getBoundingClientRect();
+          if (!(r.width > 0 && r.height > 0) || s.visibility === 'hidden') continue;
+          const path = [];
+          for (let e = el; e && e !== document.body; e = e.parentElement) path.unshift([e.tagName.toLowerCase(), [...e.parentElement.children].indexOf(e)]);
+          scrollers.push({ path, id: el.getAttribute('id'), cls: el.getAttribute('class'), text: (el.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 60) });
+        }
+        return { viewportH: window.innerHeight, lcp, images, integrity, scrollers };
       });
       // Then down the page as a visitor scrolls (scroll.js), so a stylesheet a script loads on the way is known too. `scrolled`
       // is false when that failed or stopped at its time cap: the list of stylesheets may then be short.

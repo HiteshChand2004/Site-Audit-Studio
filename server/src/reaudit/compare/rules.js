@@ -142,6 +142,10 @@ const AS_IS = {
   linktext: ['axe.link-name'],
   // aria-level on a heading that skips a level: it changes no tag and adds no h1, so only axe's heading order can see it.
   headings: ['axe.heading-order'],
+  // role="img" on a named element with no text that may not carry a name; tabindex="0" on a box that scrolls out of the
+  // keyboard's reach (copy/seoA11yAsIs.js). Both ask for a review (their fixes carry `review`).
+  prohibited: ['axe.aria-prohibited-attr'],
+  scrollable: ['axe.scrollable-region-focusable'],
   lcp: ['lighthouse.prioritize-lcp-image', 'lighthouse.lcp-lazy-loaded'],
   lazy: ['lighthouse.offscreen-images'],
   webp: ['lighthouse.modern-image-formats', 'lighthouse.uses-optimized-images', 'lighthouse.total-byte-weight'],
@@ -150,7 +154,7 @@ const AS_IS = {
 const AS_IS_TITLE = {
   alt: 'Image descriptions', names: 'Names of links, buttons and fields', aria: 'ARIA attributes',
   data: 'Structured data', lang: 'Page language', viewport: 'Viewport tag', linktext: 'Descriptive link text',
-  headings: 'Heading levels', lcp: 'Largest image loads first', lazy: 'Images below the first screen load later',
+  headings: 'Heading levels', prohibited: 'Names on elements that may not carry one', scrollable: 'Scroll areas the keyboard can reach', lcp: 'Largest image loads first', lazy: 'Images below the first screen load later',
   webp: 'Lossless WebP for PNG images', css: 'Stylesheets without whitespace',
 };
 // The head's checks, each counted by the field written whatever kind wrote it (copy/fixAsIs.js: the `head` kind writes the title,
@@ -222,7 +226,9 @@ export function asIsEvidence(key, report) {
       || (p.reverted && (p.fixes ?? []).some((f) => f.kind === kind))).length;
     const open = openOf(kind);
     if (!count && !droppedOnPages && !open) continue;
-    out.push({ fix: `as-is:${kind}`, asIs: kind, title: AS_IS_TITLE[kind], status: statusOf(count, droppedOnPages + open), count, open, droppedOnPages });
+    // A kept fix that changes what a screen reader says asks for a review (it carries `review`).
+    const review = (fixes.pages ?? []).some((p) => !p.reverted && (p.fixes ?? []).some((f) => f.kind === kind && f.review === true));
+    out.push({ fix: `as-is:${kind}`, asIs: kind, title: AS_IS_TITLE[kind], status: statusOf(count, droppedOnPages + open), count, open, droppedOnPages, ...(review && { review: true }) });
   }
   return out;
 }

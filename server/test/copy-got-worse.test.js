@@ -134,7 +134,8 @@ test('every row gets one of the seven groups; only what nothing explains and no 
     'seo.title-tag.length': 'bug',
     // Step 3 built the theme colour / icon fix: still missing with no reason recorded (no fixOpen) is a bug.
     'crawl.meta-tags': 'bug',
-    'axe.aria-prohibited-attr': 'missing-fixer',
+    // Step 4 built the role="img" fix: still failing with no reason recorded (no fixOpen) is a bug.
+    'axe.aria-prohibited-attr': 'bug',
     'lighthouse.modern-image-formats': 'missing-fixer',
     'lighthouse.prioritize-lcp-image': 'bug',
     'lighthouse.unused-javascript': 'own-code',
@@ -145,7 +146,7 @@ test('every row gets one of the seven groups; only what nothing explains and no 
     'something.unknown': 'bug',
   });
   assert.match(r.open[0].evidence, /still outside the range: a bug to report/, 'the fix exists now (Step 3)');
-  assert.equal(r.openSummary.byGroup.bug, 4, 'title length + meta tags (fixes built in Step 3, no reason recorded), LCP priority, unknown');
+  assert.equal(r.openSummary.byGroup.bug, 5, 'title length + meta tags (Step 3), prohibited names (Step 4): fixes built, no reason recorded; LCP priority; unknown');
   assert.match(reasonText(null, 'missing-fixer'), /^Fix not built yet — /);
   assert.match(reasonText('owner', 'needs-info'), /^Needs information from you — .*\(c\)$/);
 });

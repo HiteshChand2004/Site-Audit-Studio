@@ -62,7 +62,18 @@ export function planPerf(probe, pagePath) {
   });
   // Below the first screen at EVERY width, and never the largest element at any.
   const lazy = new Set([...lazyAt[0] ?? []].filter((key) => lazyAt.every((s) => s.has(key)) && !lcp.has(key)));
-  return { lcp, lazy, totals, open, widths: probe.widths.map((w) => w.width) };
+  // Boxes that scroll at ANY width and the keyboard cannot reach (copy/seoA11yAsIs.js fixScrollableRegions): one entry per
+  // element, with the widths it scrolls at.
+  const scrollers = new Map();
+  for (const w of probe.widths) {
+    for (const s of w.scrollers ?? []) {
+      const key = s.path.map(([tag, i]) => `${tag}:${i}`).join('>');
+      const seen = scrollers.get(key) ?? { ...s, widths: [] };
+      seen.widths.push(w.width);
+      scrollers.set(key, seen);
+    }
+  }
+  return { lcp, lazy, totals, open, widths: probe.widths.map((w) => w.width), scrollers: [...scrollers.values()] };
 }
 
 /**

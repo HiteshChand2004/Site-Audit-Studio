@@ -15,8 +15,9 @@
 //   data         JSON-LD Organization + WebSite on the homepage when no page has them; FAQPage where the page shows questions
 //                with their answers and has none
 //   files        sitemap.xml, llms.txt (when the copy has none), robots.txt kept but pointing at the new site, _headers
-//   anchors, linktext, headings, and an invalid <html lang>: copy/seoA11yAsIs.js (role="button" on javascript:void(0) links,
-//                visually hidden text in vague links, aria-level on skipped headings)
+//   anchors, linktext, headings, prohibited, scrollable, and an invalid <html lang>: copy/seoA11yAsIs.js (role="button" on
+//                javascript:void(0) links, visually hidden text in vague links, aria-level on skipped headings, role="img" on a
+//                named element with no text that may not carry a name, tabindex="0" on a box that scrolls out of the keyboard's reach)
 //   lcp, lazy, webp  copy/perfAsIs.js, from what the browser measured (`perf`): fetchpriority on the largest image, loading="lazy"
 //                below the first screen at every width, a lossless WebP for a local PNG with the very same pixels
 // A description is also taken from the page's own og:description / twitter:description when its paragraphs give none. A missing
@@ -37,7 +38,7 @@ import { hexColor } from '../recreate/ir/index.js';
 import { crawlFiles } from '../recreate/ir/crawlFiles.js';
 import { resetTextCache } from '../recreate/ir/tree.js';
 import { HEADERS_FILE as CACHE_HEADERS } from '../recreate/behavior/preserve/pack.js';
-import { blocksZoom, fixCrawlableAnchors, fixHeadingLevels, fixInvalidLang, fixLinkText, isValidLang } from './seoA11yAsIs.js';
+import { blocksZoom, fixCrawlableAnchors, fixHeadingLevels, fixInvalidLang, fixLinkText, fixProhibitedNames, fixScrollableRegions, isValidLang } from './seoA11yAsIs.js';
 import { fixImageLoading, fixPngImages } from './perfAsIs.js';
 import { SECURITY_HEADERS } from './securityHeaders.js';
 
@@ -148,7 +149,7 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
   const allTypes = new Set(docs.flatMap((d) => jsonLdTypes(d.$)));
   const result = [];
   const open = [];
-  const counts = { alt: 0, names: 0, aria: 0, head: 0, data: 0, address: 0, lang: 0, anchors: 0, linktext: 0, headings: 0, lcp: 0, lazy: 0, webp: 0 };
+  const counts = { alt: 0, names: 0, aria: 0, head: 0, data: 0, address: 0, lang: 0, anchors: 0, linktext: 0, headings: 0, prohibited: 0, scrollable: 0, lcp: 0, lazy: 0, webp: 0 };
   const originals = new Map();
   // The site's theme colour and icon, decided once (undefined = not looked for yet; null = none).
   let theme;
@@ -191,6 +192,9 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
         ['anchors', () => fixCrawlableAnchors($, d)],
         ['linktext', () => fixLinkText($, d, { resolveLink, pageTitles, siteName: name, lang: pageLang })],
         ['headings', () => fixHeadingLevels($, d)],
+        ['prohibited', () => fixProhibitedNames($, d)],
+        // Only where the probe measured the page (its plan): which boxes scroll is the browser's to say.
+        ...(perf?.has(d.outPath) ? [['scrollable', () => fixScrollableRegions($, d, perf.get(d.outPath))]] : []),
       ];
       for (const [kind, run] of more) {
         if (!allow(kind)) continue;
