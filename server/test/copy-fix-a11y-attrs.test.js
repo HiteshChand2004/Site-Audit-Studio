@@ -43,6 +43,29 @@ test('prohibited names: only a named element with no text whose tag may not carr
   assert.equal($('[aria-label="Own role"]').attr('role'), 'paragraph', 'the author\'s role is never replaced');
 });
 
+test('prohibited names (4b): plain visible text, a named or role-bearing part inside, and missing labelledby ids are never made an image', () => {
+  const $ = cheerio.load(`<body>
+    <div aria-label="Plain text div">Some visible words</div>
+    <span aria-label="Holds a named svg"><svg role="img" aria-label="x" width="10" height="10"></svg></span>
+    <span aria-label="Holds a role button"><div role="button"></div></span>
+    <span aria-labelledby="no-such-id"></span>
+    <span aria-labelledby="missing-a missing-b"></span>
+    <span aria-labelledby="missing-a here"></span><b id="here">Name</b>
+  </body>`);
+  const r = fixProhibitedNames($, PAGE);
+  assert.equal($('[aria-label="Plain text div"]').attr('role'), undefined, 'a div with visible text is left');
+  assert.equal($('[aria-label="Holds a named svg"]').attr('role'), undefined);
+  assert.equal($('svg').attr('role'), 'img', 'the inner image keeps its own role');
+  assert.equal($('[aria-label="Holds a role button"]').attr('role'), undefined);
+  assert.equal($('[aria-labelledby="no-such-id"]').attr('role'), undefined);
+  assert.equal($('[aria-labelledby="missing-a missing-b"]').attr('role'), undefined);
+  assert.equal($('[aria-labelledby="missing-a here"]').attr('role'), 'img', 'one id that exists is enough for a name');
+  assert.deepEqual(r.fixed.map((f) => [f.tag, f.value, f.review]), [['span', 'img', true]]);
+  const why = r.open.map((o) => [o.reason, /own role or name/.test(o.detail) ? 'named-inside' : /no element on the page has that id/.test(o.detail) ? 'missing-id' : 'other']);
+  assert.deepEqual(why, [['d', 'named-inside'], ['d', 'named-inside'], ['d', 'missing-id'], ['d', 'missing-id']], JSON.stringify(r.open));
+  assert.ok(!r.open.some((o) => /Plain text div/.test(o.detail)), 'text is not a failure for axe: nothing reported for it');
+});
+
 test('scrollable regions: the probe\'s boxes are found at the same place and get tabindex="0" (review); others are reported', () => {
   const html = `<body><main><div class="list" id="l1">a</div><div class="other">b</div><div class="own" tabindex="-1">c</div></main></body>`;
   const plan = planPerf({ widths: [

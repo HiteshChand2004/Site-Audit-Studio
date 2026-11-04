@@ -197,11 +197,14 @@ export const MAX_SCROLLERS = 8;
  * aria-prohibited-attr. axe fails a name (aria-label / aria-labelledby) on an element whose tag or role forbids one only when the
  * element has no text (with text it asks for a review, not a failure). Such an element with no role of its own and nothing a
  * visitor can use inside gets role="img", which takes a name: the name it already carries stays and becomes valid. Its own role
- * (the author's choice) and an element with a link, button or field inside are reported, not changed.
+ * (the author's choice), an element with a link, button or field inside, one holding an element with a role or name of its own,
+ * and one named only by aria-labelledby ids the page does not have are reported, not changed.
  */
 export function fixProhibitedNames($, page) {
   const fixed = [];
   const open = [];
+  // Every id on the page, as written (an id may hold characters a selector would need escaped).
+  const pageIds = new Set($('[id]').toArray().map((e) => e.attribs.id));
   for (const el of $('body').find('[aria-label], [aria-labelledby]').toArray()) {
     const a = el.attribs;
     const label = clean(a['aria-label']) || clean(a['aria-labelledby']);
@@ -214,6 +217,19 @@ export function fixProhibitedNames($, page) {
     if (role) {
       open.push({ page: page.path, reason: 'd', detail: `A ${el.name} with role="${role}" carries the name "${short(label)}", which that role does not allow: the role is the author's choice, left as it is` });
       continue;
+    }
+    // An image's content is hidden from screen readers: a part inside with a role or a name of its own would be lost.
+    if ($(el).find('[role], [aria-label], [aria-labelledby]').length) {
+      open.push({ page: page.path, reason: 'd', detail: `A ${el.name} named "${short(label)}" holds an element with its own role or name: making it an image would hide that from screen readers, so it is left as it is` });
+      continue;
+    }
+    // A name given only by aria-labelledby whose ids are all missing: role="img" would give an image with no name.
+    if (!clean(a['aria-label'])) {
+      const ids = clean(a['aria-labelledby']).split(' ').filter(Boolean);
+      if (!ids.some((id) => pageIds.has(id))) {
+        open.push({ page: page.path, reason: 'd', detail: `A ${el.name} is named by aria-labelledby="${short(a['aria-labelledby'])}", and no element on the page has that id: left as it is` });
+        continue;
+      }
     }
     if ($(el).find(INTERACTIVE_INSIDE).length) {
       open.push({ page: page.path, reason: 'd', detail: `A ${el.name} named "${short(label)}" holds a link, button or field: making it an image would hide them from screen readers, so it is left as it is` });
