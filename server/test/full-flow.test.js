@@ -192,6 +192,11 @@ ${api.output().slice(-3000)}`);
   }, { timeoutMs: 20 * 60_000, output: api.output });
   assert.equal(reaudit.last.status, 'done', `the re-audit succeeded: ${reaudit.last.error ?? ''}\n${api.output().slice(-3000)}`);
   assert.ok(reaudit.result?.checklist?.items?.length, 'the comparison has rows');
+  // Every row left (not a plain pass / fix) sits in one of the seven groups, and none is "our bug": on the fixture, a row nothing
+  // explains and no planned fix covers fails here (copy/gotWorse.js GROUPS).
+  const left = reaudit.result.checklist.items.filter((i) => ['regressed', 'open', 'changed', 'recheck', 'manual'].includes(i.status));
+  for (const i of left) assert.ok(i.group, `${stack}: ${i.key} (${i.status}) has a group`);
+  assert.deepEqual(left.filter((i) => i.group === 'bug').map((i) => `${i.key}: ${i.reasonEvidence}`), [], `${stack}: no row of the copy is unexplained`);
   assert.equal(path.normalize(outputs[stack].dist), path.normalize(STACKS[stack].served), `the ${stack} output names the folder its server serves`);
 
   // 4. Results: the audit carries the comparison of the copy.

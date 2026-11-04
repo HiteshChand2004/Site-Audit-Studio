@@ -3,7 +3,7 @@ import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, Check, ChevronRi
 import Badge from '../common/Badge.jsx';
 import Button from '../common/Button.jsx';
 import styles from './FixReport.module.css';
-import { WORSE_REASONS, WORSE_UNEXPLAINED } from '../../copy.js';
+import { ROW_GROUPS, WORSE_REASONS, WORSE_UNEXPLAINED } from '../../copy.js';
 
 // Every status the comparison can give a check, in the order rows are listed (server: reaudit/compare/rules.js).
 const STATUS = {
@@ -175,9 +175,13 @@ function Evidence({ evidence }) {
 /** Why a row of an as-is copy got worse: one of the five reasons with what the run measured, or "unexplained" said plainly. */
 function WorseReason({ item }) {
   const reasons = item.reason ? item.reason.split('+').map((r) => WORSE_REASONS[r] ?? { code: r, text: r }) : [];
+  const group = ROW_GROUPS[item.group];
+  const head = group
+    ? `Why: ${group.label}. ${group.text}`
+    : item.reason ? `Why: ${reasons.map((r) => `${r.code} — ${r.text}`).join(' / ')}` : WORSE_UNEXPLAINED;
   return (
-    <div className={styles.note} data-unexplained={item.reason ? undefined : 'true'}>
-      <strong>{item.reason ? `Why: ${reasons.map((r) => `${r.code} — ${r.text}`).join(' / ')}` : WORSE_UNEXPLAINED}</strong>
+    <div className={styles.note} data-unexplained={(group ? item.group === 'bug' : !item.reason) ? 'true' : undefined}>
+      <strong>{head}</strong>
       {item.reasonEvidence && <p>{item.reasonEvidence}</p>}
     </div>
   );

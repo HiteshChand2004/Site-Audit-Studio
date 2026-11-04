@@ -110,7 +110,17 @@ export const WORSE_REASONS = {
   look: { code: 'd', text: 'The fix would change the original’s look, animation or behaviour.' },
   deploy: { code: 'e', text: 'Can only be checked on the real host. See DEPLOY.md.' },
 };
-export const WORSE_UNEXPLAINED = 'Unexplained: none of the five reasons fits what this run measured. This still needs a fix.';
+// Why a row stays, in seven groups (mirrors server/src/copy/gotWorse.js GROUPS).
+export const ROW_GROUPS = {
+  bug: { label: 'Our bug', text: 'Nothing explains this and no fix is planned for it: it should not happen. Please report it.' },
+  'missing-fixer': { label: 'Fix not built yet', text: 'This can be fixed without changing the look; the tool does not do it yet.' },
+  'needs-info': { label: 'Needs information from you', text: 'Needs something only you know: the new site’s address, a backend, which pages to copy, or your own words.' },
+  look: { label: 'Would change the look', text: 'Fixing it would change how the original looks or is built.' },
+  'own-code': { label: 'The original’s own code', text: 'Comes from the original’s own code, scripts or embeds, which the copy keeps as they are so the site works the same.' },
+  measurement: { label: 'Measurement', text: 'Measured on this computer’s preview; only the real host can confirm it.' },
+  impossible: { label: 'Not possible', text: 'No copy can do this.' },
+};
+export const WORSE_UNEXPLAINED ='Unexplained: none of the five reasons fits what this run measured. This still needs a fix.';
 
 export const RESULT_STATUS = {
   fixed: { label: 'Fixed', explain: 'This was a problem on the original site and is solved in the copy.', tone: 'ok' },

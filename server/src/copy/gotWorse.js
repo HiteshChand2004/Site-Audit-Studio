@@ -34,8 +34,10 @@ const hostOf = (url) => {
     return '';
   }
 };
-// A file: a name with an extension (up to 10 letters: a runtime's own formats are longer than the usual three or four).
-const hasFileExt = (p) => /\.[a-z0-9]{1,10}$/i.test(p);
+// A file: a name with an extension (up to 10 letters: a runtime's own formats are longer than the usual three or four). A page's
+// own extension (about.html, contact.php) names a page, not a file.
+const PAGE_EXT = /\.(html?|xhtml|shtml|php\d?|aspx?|jsp|cfm)$/i;
+const hasFileExt = (p) => /\.[a-z0-9]{1,10}$/i.test(p) && !PAGE_EXT.test(p);
 // An address asking for byte ranges of a file (?range=from-to[,from-to]): the original serves that file in pieces.
 const isRanged = (url) => /[?&]range=\d+-\d+(,\d+-\d+)*(&|$)/.test(String(url ?? ''));
 const kb = (bytes) => `${Math.round(bytes / 1024)} KB`;
@@ -59,7 +61,10 @@ export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPage
   const copied = new Set(copyPages.map(normPath));
   const chosen = new Set(chosenPages.map(normPath));
   const ctx = { site, copyHost, copied, chosen, oldLhr, newLhr, oldAxe, newAxe, address, revertedPages, excludedHosts };
-  const pick = (item, explain) => ({ key: item.key, title: item.title, before: item.before, after: item.after, ...explain(item, ctx) });
+  const pick = (item, explain) => {
+    const ex = explain(item, ctx);
+    return { key: item.key, title: item.title, before: item.before, after: item.after, ...ex, group: groupOf(ex) };
+  };
   const out = items.filter((i) => i.status === 'regressed').map((item) => pick(item, explainOne));
   // "Still open" rows (failing on both sides, not fixed by the copy) are owed the same honesty (spec §5): one of the five
   // reasons on this run's evidence, or UNEXPLAINED — a fix the copy still owes.
@@ -67,9 +72,46 @@ export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPage
   return { items: out, summary: summaryOf(out), open, openSummary: summaryOf(open) };
 }
 
+/**
+ * Why a row stays, in the plan's seven groups (one per row, always): what the copy's tool could do about it. A row none of the
+ * rules explains and that no planned fix covers is "bug": it should not happen, and a test fails on it.
+ */
+export const GROUPS = {
+  bug: { code: 'a', label: 'Our bug', text: 'Nothing explains this and no fix is planned for it: it should not happen. Please report it.' },
+  'missing-fixer': { code: 'b', label: 'Fix not built yet', text: 'This can be fixed without changing the look; the tool does not do it yet.' },
+  'needs-info': { code: 'c', label: 'Needs information from you', text: 'Needs something only you know: the new site’s address, a backend, which pages to copy, or your own words.' },
+  look: { code: 'd', label: 'Would change the look', text: 'Fixing it would change how the original looks or is built.' },
+  'own-code': { code: 'e', label: 'The original’s own code', text: 'Comes from the original’s own code, scripts or embeds, which the copy keeps as they are so the site works the same.' },
+  measurement: { code: 'f', label: 'Measurement', text: 'Measured on this computer’s preview; only the real host can confirm it.' },
+  impossible: { code: 'g', label: 'Not possible', text: 'No copy can do this.' },
+};
+const REASON_GROUP = { owner: 'needs-info', backend: 'needs-info', third_party: 'own-code', deploy: 'measurement', look: 'look' };
+
+function groupOf(ex) {
+  if (ex.group) return ex.group;
+  if (!ex.reason) return 'bug';
+  const groups = [...new Set(ex.reason.split('+').map((r) => REASON_GROUP[r] ?? 'bug'))];
+  return groups.length === 1 ? groups[0] : groups.includes('bug') ? 'bug' : groups[0];
+}
+
+/**
+ * Checks a fix is planned for but not built yet (docs: PLAN-fix-pipeline): the row stays a fix still owed, with what is to come.
+ * By check key only, the same for every site.
+ */
+const PLANNED = [
+  { test: (k) => /^seo\.(title-tag|meta-description)\.length$/.test(k), what: 'Shortening or completing the text from the page\'s own words (marked for review).' },
+  { test: (k, i) => k === 'crawl.meta-tags' && /theme-color ✗|favicon ✗/.test(i.after?.detail ?? ''), what: 'A theme colour from the site\'s own brand colour and the site\'s own icon.' },
+  { test: (k) => /^(axe|lighthouse)\.(aria-prohibited-attr|scrollable-region-focusable)$/.test(k), what: 'An attribute-only accessibility fix, checked by the look gate.' },
+  { test: (k) => /^lighthouse\.(modern-image-formats|uses-optimized-images|uses-responsive-images|offscreen-images|efficient-animated-content|total-byte-weight|unsized-images|image-size-responsive)$/.test(k), what: 'The original\'s own smaller image files, and smaller variants proved by the look gate.' },
+  { test: (k) => k.startsWith('motion.'), what: 'Motion is a separate track: the effect is still owed.' },
+];
+const planned = (item) => PLANNED.find((p) => p.test(item.key ?? '', item));
+const owed = (item, p) => ({ reason: null, unexplained: true, group: 'missing-fixer', evidence: `${item.after?.detail ?? 'Still failing in the copy.'} Fix not built yet: ${p.what}` });
+
 function summaryOf(rows) {
-  const summary = { total: rows.length, explained: 0, unexplained: 0, byReason: {} };
+  const summary = { total: rows.length, explained: 0, unexplained: 0, byReason: {}, byGroup: {} };
   for (const i of rows) {
+    summary.byGroup[i.group] = (summary.byGroup[i.group] ?? 0) + 1;
     if (i.reason) {
       summary.explained++;
       summary.byReason[i.reason] = (summary.byReason[i.reason] ?? 0) + 1;
@@ -90,19 +132,21 @@ function explainOne(item, ctx) {
   if (/^(crawl\.(sitemap|robots)|aeo\.llms-txt|seo\.canonical-url)(\.|$)/.test(key) && ctx.address && !ctx.address.used) {
     return { reason: 'owner', evidence: `${item.after?.detail ?? 'Missing in the copy.'} No new-site address was given for this copy (${ctx.address.detail ?? 'none set'}); the copy writes sitemap.xml, robots.txt, llms.txt and canonical links only for an address of its own, since the original's name the original site's pages. Give the address and create the copy again.` };
   }
-  if (key.startsWith('lighthouse.')) return lighthousePart(item, key.slice('lighthouse.'.length), ctx);
+  if (key.startsWith('lighthouse.')) return orPlanned(lighthousePart(item, key.slice('lighthouse.'.length), ctx), item);
   if (key === 'axe.color-contrast') return contrastPart(ctx);
-  return unexplained('No rule of the five reasons applies to this check on the evidence of this run.');
+  return orPlanned(unexplained('No rule of the five reasons applies to this check on the evidence of this run.'), item);
 }
+
+/** An unexplained row a planned fix will close: said to be owed, with what is to come. */
+const orPlanned = (r, item) => (r.unexplained && planned(item) ? owed(item, planned(item)) : r);
 
 const unexplained = (evidence) => ({ reason: null, unexplained: true, evidence });
 
 // ---------- "still open" rows ----------
 
-// Lighthouse audits the user's rules say an as-is copy may fix without changing the look (image formats and sizes, preloading
-// the largest element, deferring what is not critical): an open one is a fix still owed, never a reason.
-const LH_FIXABLE = new Set(['modern-image-formats', 'uses-optimized-images', 'uses-responsive-images', 'offscreen-images',
-  'efficient-animated-content', 'prioritize-lcp-image', 'lcp-lazy-loaded', 'uses-rel-preload', 'total-byte-weight', 'unsized-images']);
+// Lighthouse audits the copy's own fixers already handle (copy/perfAsIs.js: the largest element's priority, lazy loading): one
+// still open is a fixer that did not reach the copy (our bug). The audits a fix is planned for are in PLANNED above.
+const LH_FIXED_BY_COPY = new Set(['prioritize-lcp-image', 'lcp-lazy-loaded']);
 // Lighthouse audits that name the original's own code or markup: an as-is copy keeps it as written (docs/COPY-MY-SITE.md §2),
 // so what they ask for — rewriting, splitting or removing the site's own files and elements — is a change of its behaviour (d).
 const LH_OWN_CODE = new Set(['unused-css-rules', 'unused-javascript', 'render-blocking-resources', 'unminified-css', 'unminified-javascript',
@@ -135,10 +179,11 @@ function explainOpen(item, ctx) {
   const [section, id, part] = key.split('.');
   if (key === 'links.broken') return plainNotCopied(byParts(item.links?.open ?? [], (l) => openLinkPart(l, ctx), 'link'), ctx, 'links');
   if (section === 'lighthouse') return openLighthouse(item, id, ctx);
-  if (section === 'axe') return openRule(item, id, ctx);
   if (section === 'motion') return openMotion(item, ctx);
+  if (planned(item)) return owed(item, planned(item));
+  if (section === 'axe') return openRule(item, id, ctx);
   if (section === 'platform') {
-    return { reason: 'look', evidence: `${item.after?.detail ?? 'The platform is still detected.'} An as-is copy keeps the original's own code, this platform's included; removing it would rebuild the site, which changes how it looks and behaves.` };
+    return { reason: 'look', group: 'own-code', evidence: `${item.after?.detail ?? 'The platform is still detected.'} An as-is copy keeps the original's own code, this platform's included; removing it would rebuild the site, which changes how it looks and behaves.` };
   }
   if (section === 'seo' || section === 'aeo' || section === 'crawl') return openAnalyzer(item, id, part, ctx);
   return unexplained('No rule of the five reasons applies to this check on the evidence of this run.');
@@ -181,13 +226,15 @@ function openLighthouse(item, id, ctx) {
   if (hosts.length && foreign.length === hosts.length) {
     return { reason: 'third_party', evidence: `Everything this check names comes from ${foreign.join(', ')}: third-party code the original loads (${fewUrls(urls)}), neither the copy's nor the original's own files.` };
   }
-  if (LH_FIXABLE.has(id)) {
-    return unexplained(`${item.after?.detail ?? 'Still failing in the copy.'} This can be fixed in the copy without changing its look (image formats and sizes, preloading the largest element) through the visual gate; it was not done in this run: a fix still owed.`);
+  if (planned(item)) return owed(item, planned(item));
+  if (LH_FIXED_BY_COPY.has(id)) {
+    return unexplained(`${item.after?.detail ?? 'Still failing in the copy.'} The copy's own fixer for the largest element should have handled this and did not: a bug to report.`);
   }
   if (LH_OWN_CODE.has(id)) {
     const own = urls.filter((u) => !/^https?:/.test(u) || hostOf(u) === ctx.copyHost || hostOf(u) === ctx.site);
     return {
       reason: 'look',
+      group: 'own-code',
       evidence: `${item.after?.detail ?? 'Still failing in the copy.'} What it names is the original's own code${own.length ? ` (${fewUrls(own)}${own.length > 3 ? ` and ${own.length - 3} more` : ''})` : ''}, kept as written in an as-is copy; rewriting, splitting or removing it changes how the page behaves.`,
     };
   }
@@ -235,7 +282,7 @@ function openMotion(item, ctx) {
   if (ctx.excludedHosts.length && /excluded|third-party/i.test(item.after?.detail ?? '')) {
     return { reason: 'third_party', evidence: `${item.after?.detail} The parts missing are drawn by ${ctx.excludedHosts.join(', ')}, third-party code excluded from the copy by rule.` };
   }
-  return unexplained(`${item.after?.detail ?? 'The copy keeps fewer of these effects than the original.'} A fix still owed.`);
+  return owed(item, planned(item));
 }
 
 /** SEO, AEO and site-file checks failing on both sides. */
@@ -278,7 +325,7 @@ function openAnalyzer(item, id, part, ctx) {
     case 'content-without-javascript':
       return id === 'structured-answers'
         ? owner('Whether a question on the page gets a short direct answer is the owner\'s content.')
-        : look('The original draws its text with its own script; an as-is copy keeps that script, and writing the text into the HTML as well would change how the page loads.');
+        : { ...look('The original draws its text with its own script; an as-is copy keeps that script, and writing the text into the HTML as well would change how the page loads.'), group: 'own-code' };
     case 'llms-txt':
       if (noAddress) return owner(`No new-site address was given for this copy (${ctx.address?.detail ?? 'none set'}), so no llms.txt naming its pages was written.`);
       return unexplained(`${detail} The copy writes llms.txt from its pages when an address is set: a fix still owed.`);
@@ -475,11 +522,13 @@ function scorePart(item, ctx) {
     if (CONTENT_WORDS.has(id)) return { what, reason: 'owner', evidence: `"${what}": the page gives no words to fill it from; the owner writes them` };
     if (LOOK_RULES.has(id)) return { what, reason: 'look', evidence: `"${what}": the fix changes the original's own markup, colours or widgets` };
     if (LH_OWN_CODE.has(id)) return { what, reason: 'look', evidence: `"${what}": the original's own code, kept as written` };
-    if (LH_FIXABLE.has(id)) return { what, reason: null, evidence: `"${what}" can be fixed in the copy through the visual gate; not done in this run` };
+    if (planned({ key: `lighthouse.${id}` })) return { what, reason: null, planned: true, evidence: `"${what}": fix not built yet (${planned({ key: `lighthouse.${id}` }).what})` };
     return { what, reason: null, evidence: `"${what}" fails only in the copy and no rule covers it` };
   };
   const r = byParts(onlyCopy, explain, 'check');
-  return { ...r, evidence: `${drop}: ${r.evidence}` };
+  // Every check without a reason is one a fix is planned for: the row is owed, not a bug.
+  const owedOnly = r.unexplained && (r.parts ?? []).filter((p) => !p.reason).every((p) => p.planned);
+  return { ...r, ...(owedOnly && { group: 'missing-fixer' }), evidence: `${drop}: ${r.evidence}` };
 }
 
 /** The page's largest element in one Lighthouse report: { selector, path, snippet }, or null when it named none. */
@@ -505,7 +554,9 @@ function amountOf(a) {
 const fmt = (m) => (!m ? 'none' : m.unit === 'byte' ? kb(m.value) : m.unit === 'ms' ? `${Math.round(m.value)} ms` : `${Math.round(m.value)} ${m.unit}${m.value === 1 ? '' : 's'}`);
 
 /** The reason's code and words for a report line ("c — Needs your decision …"); a joined reason lists each. */
-export function reasonText(reason) {
+export function reasonText(reason, group = null) {
+  const g = GROUPS[group];
+  if (g) return `${g.label} — ${g.text}${reason ? ` (${reason.split('+').map((r) => REASONS[r]?.code ?? r).join(' / ')})` : ''}`;
   if (!reason) return 'UNEXPLAINED — none of the five reasons fits on the evidence; this is a fix still owed.';
   return reason.split('+').map((r) => `${REASONS[r]?.code ?? r} — ${REASONS[r]?.text ?? ''}`.trim()).join(' / ');
 }

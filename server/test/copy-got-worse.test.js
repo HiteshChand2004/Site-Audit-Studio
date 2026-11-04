@@ -104,9 +104,49 @@ test('a check no rule covers is unexplained, and the summary counts every row', 
     ],
   });
   assert.equal(r.items.length, 2, 'only the rows that got worse, all of them');
-  assert.deepEqual(r.summary, { total: 2, explained: 1, unexplained: 1, byReason: { owner: 1 } });
+  assert.deepEqual(r.summary, { total: 2, explained: 1, unexplained: 1, byReason: { owner: 1 }, byGroup: { 'missing-fixer': 1, 'needs-info': 1 } });
   assert.equal(r.items[0].unexplained, true);
+  assert.equal(r.items[0].group, 'missing-fixer', 'motion is its own track: owed, not a bug');
   assert.match(reasonText(null), /^UNEXPLAINED/);
+});
+
+test('every row gets one of the seven groups; only what nothing explains and no planned fix covers is "our bug"', () => {
+  const r = explainWorse({
+    ...base,
+    oldLhr: { mobile: lhr({ 'unused-javascript': { score: 0, details: { overallSavingsBytes: 50000, items: [{ url: 'https://www.example-original.test/app.js' }] } } }) },
+    newLhr: { mobile: lhr({ 'unused-javascript': { score: 0, details: { overallSavingsBytes: 48000, items: [{ url: `${COPY}/app.js` }] } } }) },
+    items: [
+      { status: 'open', key: 'seo.title-tag.length', title: 'Title length', after: { detail: '/: 74 characters' } },
+      { status: 'open', key: 'crawl.meta-tags', title: 'Meta tags', after: { detail: 'theme-color ✗' } },
+      { status: 'open', key: 'axe.aria-prohibited-attr', title: 'ARIA' },
+      { status: 'open', key: 'lighthouse.modern-image-formats', title: 'Images' },
+      { status: 'open', key: 'lighthouse.prioritize-lcp-image', title: 'LCP priority' },
+      { status: 'open', key: 'lighthouse.unused-javascript', title: 'Unused JS' },
+      { status: 'open', key: 'platform.nextjs', title: 'Next.js' },
+      { status: 'open', key: 'axe.heading-order', title: 'Headings' },
+      { status: 'open', key: 'seo.canonical-url', title: 'Canonical' },
+      { status: 'open', key: 'crawl.https', title: 'HTTPS' },
+      { status: 'open', key: 'something.unknown', title: 'Unknown' },
+    ],
+  });
+  const g = Object.fromEntries(r.open.map((i) => [i.key, i.group]));
+  assert.deepEqual(g, {
+    'seo.title-tag.length': 'missing-fixer',
+    'crawl.meta-tags': 'missing-fixer',
+    'axe.aria-prohibited-attr': 'missing-fixer',
+    'lighthouse.modern-image-formats': 'missing-fixer',
+    'lighthouse.prioritize-lcp-image': 'bug',
+    'lighthouse.unused-javascript': 'own-code',
+    'platform.nextjs': 'own-code',
+    'axe.heading-order': 'look',
+    'seo.canonical-url': 'needs-info',
+    'crawl.https': 'measurement',
+    'something.unknown': 'bug',
+  });
+  assert.match(r.open[0].evidence, /Fix not built yet: Shortening or completing/);
+  assert.equal(r.openSummary.byGroup.bug, 2);
+  assert.match(reasonText(null, 'missing-fixer'), /^Fix not built yet — /);
+  assert.match(reasonText('owner', 'needs-info'), /^Needs information from you — .*\(c\)$/);
 });
 
 test('KNOWN-ISSUES.md lists every row that got worse, the unexplained ones as such', () => {

@@ -302,11 +302,18 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
     const byKey = new Map([...worse.items.map((w) => ['regressed', w]), ...worse.open.map((w) => ['open', w])].map(([status, w]) => [`${status} ${w.key}`, w]));
     for (const item of checklist.items) {
       const w = byKey.get(`${item.status} ${item.key}`);
-      if (w) Object.assign(item, { reason: w.reason, reasonEvidence: w.evidence, ...(w.unexplained && { unexplained: true }), ...(w.parts && { reasonParts: w.parts }) });
+      if (w) Object.assign(item, { reason: w.reason, reasonEvidence: w.evidence, group: w.group, ...(w.unexplained && { unexplained: true }), ...(w.parts && { reasonParts: w.parts }) });
     }
     checklist.gotWorse = worse.summary;
     // The same for every row still open (failing on both sides): a reason or UNEXPLAINED, and the counts.
     checklist.stillOpen = worse.openSummary;
+  }
+  // The other rows that are not a plain pass / fix get their group too: a figure that varies or a link to check again is a
+  // matter of measurement; what needs a person needs information only the owner has.
+  for (const item of checklist.items) {
+    if (item.group) continue;
+    if (item.status === 'changed' || item.status === 'recheck') item.group = 'measurement';
+    else if (item.status === 'manual') item.group = 'needs-info';
   }
   return checklist;
 }
