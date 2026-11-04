@@ -81,7 +81,8 @@ test('only what is missing, duplicated or invalid is fixed; the site files name 
     assert.match(out, /<html lang="en"/);
     assert.ok(has('data', 'json-ld', 'Organization') && has('data', 'json-ld', 'WebSite') && has('data', 'json-ld', 'FAQPage (2'));
     assert.ok(has('head', 'description'), 'a missing description from the page\'s own paragraphs');
-    assert.match(out, /<title>Acme \| [^<]+<\/title>/, 'a title under 10 characters gets the site name');
+    assert.match(out, /<title>Acme \| example-original\.test<\/title>/, 'a title under 10 characters gets the site name (the host without www.: no og:site_name)');
+    assert.ok(fixes.some((f) => f.field === 'title' && f.value === 'Acme | example-original.test'), 'the fix records that exact title');
     assert.ok(fixes.some((f) => f.field === 'title' && f.from === 'Acme' && /too short/.test(f.source)));
 
     const aboutFixes = r.pages[1].fixes;
