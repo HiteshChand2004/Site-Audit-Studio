@@ -132,6 +132,12 @@ export function medianScores(runs) {
   return out;
 }
 
+/** How far one side's runs spread in a category (max − min of the runs that scored it). */
+export function spreadOf(runs, c) {
+  const v = runs.map((r) => r.scores?.[c]).filter((x) => typeof x === 'number');
+  return v.length ? Math.max(...v) - Math.min(...v) : 0;
+}
+
 /** One run per side decides when the copy is ahead by LEAD or more in every category both sides measured. */
 export function singleRunDecides(original, copy) {
   return LH_SCORE_CATEGORIES.every((c) => {
@@ -166,8 +172,13 @@ export function decide(originalRuns, copyRuns) {
     }
     if (unscored[c]) { original[c] = null; copy[c] = null; }
   }
-  const worse = LH_SCORE_CATEGORIES.filter((c) => !unscored[c] && copy[c] < original[c]);
-  return { original, copy, worse, unscored, blankRuns: blankRuns.length, runs: { original: originalRuns.length, copy: copyRuns.length }, accepted: originalRuns.length === 1 && copyRuns.length === 1 ? 'single run' : 'median of runs' };
+  // Lower on the copy by no more than the runs themselves spread (the medians of three on each side, the gap within the larger
+  // of the two sides' max − min): within run noise, said so, not "got worse". One run per side has no spread, so it never is.
+  const lower = LH_SCORE_CATEGORIES.filter((c) => !unscored[c] && copy[c] < original[c]);
+  const enough = originalRuns.length >= 1 + EXTRA_RUNS && copyRuns.length >= 1 + EXTRA_RUNS;
+  const noise = enough ? lower.filter((c) => original[c] - copy[c] <= Math.max(spreadOf(originalRuns, c), spreadOf(copyRuns, c))) : [];
+  const worse = lower.filter((c) => !noise.includes(c));
+  return { original, copy, worse, noise, unscored, blankRuns: blankRuns.length, runs: { original: originalRuns.length, copy: copyRuns.length }, accepted: originalRuns.length === 1 && copyRuns.length === 1 ? 'single run' : 'median of runs' };
 }
 
 /**
@@ -322,8 +333,20 @@ export function lighthousePageItems(comparison) {
           note: 'Measured again, not judged: a run that could not score the page says nothing about it, and the runs that did are too few for a median of three.',
         });
       }
+      // Lower on the copy, but by less than the runs of one side differ among themselves: shown with every run, not counted as worse.
+      for (const c of m.noise ?? []) {
+        const runs = (side) => m.runScores[side].map((s) => s[c] ?? '–').join(' / ');
+        items.push({
+          key: `lighthouse-score.${mode}.${c}.${p.path}`, category: c, page: p.path,
+          title: `Lighthouse ${CATEGORY_LABEL[c]} score (${MODE_LABEL[mode]}) on ${p.path}`,
+          status: 'changed', statusLabel: 'Within run noise',
+          before: { status: 'pass', detail: `${m.original[c]} on the original (runs ${runs('original')})`, score: m.original[c] },
+          after: { status: 'warn', detail: `${m.copy[c]} on the copy (runs ${runs('copy')}) — ${basis}${load}`, score: m.copy[c] },
+          note: 'The copy\'s median is lower, but by no more than the runs of one side differ among themselves (the larger of the two sides\' highest − lowest run): within the noise of measuring on this computer, so not counted as worse. Confirm after deploying.',
+        });
+      }
       if (!m.worse.length) {
-        if (!scored.length) continue;
+        if (!scored.length || m.noise?.length) continue;
         items.push({
           key: `lighthouse-score.${mode}.all.${p.path}`, category: 'performance', page: p.path,
           title: `Lighthouse scores (${MODE_LABEL[mode]}) on ${p.path}: copy not below the original${scored.length < LH_SCORE_CATEGORIES.length ? ' in the categories scored' : ''}`,

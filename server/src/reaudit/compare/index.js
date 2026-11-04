@@ -162,35 +162,74 @@ function linkItems({ oldLinks, newLinks, oldScopeLinks, map }) {
 
 // ---------- Lighthouse (performance, best practices) ----------
 
+export const UNGRADED_NOTE = 'The original\'s run listed this audit without a grade, so the copy cannot have got worse than it; it fails on the copy and is counted as still open.';
+export const ZERO_NOTE = 'Lighthouse lists this audit, but its run of the copy measures nothing to save on any device (0). Not counted as worse or as still open.';
+export const SMALLER_NOTE = 'The measured value is smaller on the copy than on the original on every device both were measured on; only Lighthouse\'s grade went down (it grades by simulated savings, which can flip between runs). Not counted as worse.';
+
 const LH_CATEGORIES = ['performance', 'best-practices'];
 const LH_MODES = new Set(['binary', 'numeric', 'metricSavings']);
 
-// What an audit measured, lower = better: its value (elements, ms, bytes) or else the time it says could be saved.
+// What an audit measured, lower = better: the bytes it says could be saved when it names them (unused, unminified or legacy
+// code, images: what the copy itself ships; the time Lighthouse puts on them depends on the host it measured through), else its
+// value (elements, ms, bytes), else the time it says could be saved.
 const measured = (a) => {
+  if (Number.isFinite(a.details?.overallSavingsBytes)) return { value: a.details.overallSavingsBytes, unit: 'byte' };
   if (Number.isFinite(a.numericValue)) return { value: a.numericValue, unit: a.numericUnit ?? '' };
   const saved = Object.values(a.metricSavings ?? {}).filter(Number.isFinite);
   return saved.length ? { value: saved.reduce((x, y) => x + y, 0), unit: 'savings' } : null;
 };
 
-/** audit id → { score (worst of mobile/desktop), title, detail, category, values per device } for failing-capable audits. */
+/**
+ * audit id → { score (worst of mobile/desktop), title, detail, category, values and text per device } for failing-capable audits.
+ * `out.unscored` holds the audits a run lists without a score of its own (informative there, or an error): nothing to compare.
+ */
 function lighthouseAudits(lh) {
   const out = new Map();
+  out.unscored = new Set();
   for (const [device, lhr] of [['mobile', lh.mobile], ['desktop', lh.desktop]]) {
     if (!lhr?.categories) continue;
     for (const category of LH_CATEGORIES) {
       for (const ref of lhr.categories[category]?.auditRefs ?? []) {
         if (ref.group === 'metrics' || ref.group === 'hidden') continue;
         const a = lhr.audits?.[ref.id];
-        if (!a || !LH_MODES.has(a.scoreDisplayMode) || typeof a.score !== 'number') continue;
+        if (!a) continue;
+        if (!LH_MODES.has(a.scoreDisplayMode) || typeof a.score !== 'number') {
+          // Not applicable = nothing of the kind on the page (a pass); manual = never scored by Lighthouse; anything else had no grade.
+          if (!['notApplicable', 'manual'].includes(a.scoreDisplayMode)) out.unscored.add(ref.id);
+          continue;
+        }
         const prev = out.get(ref.id);
         const values = { ...prev?.values, ...(measured(a) && { [device]: measured(a) }) };
+        const devices = { ...prev?.devices, [device]: a.displayValue || null };
         if (!prev || a.score < prev.score) {
-          out.set(ref.id, { score: a.score, title: a.title, detail: a.displayValue || null, category, cpuTiming: isCpuTiming(a), values });
-        } else prev.values = values;
+          out.set(ref.id, { score: a.score, title: a.title, detail: a.displayValue || null, category, cpuTiming: isCpuTiming(a), values, devices });
+        } else Object.assign(prev, { values, devices });
       }
     }
   }
+  for (const id of out.keys()) out.unscored.delete(id);
   return out;
+}
+
+const DEVICE_LABEL = { mobile: 'Phone', desktop: 'Computer' };
+
+/** The row's text with both devices' figures when they differ ("Phone: 50 KiB · Computer: 31 KiB"), else the one figure. */
+export function bothDevices(a) {
+  const shown = Object.entries(a?.devices ?? {}).filter(([, v]) => v);
+  if (shown.length < 2 || new Set(shown.map(([, v]) => v)).size === 1) return a?.detail ?? null;
+  return shown.map(([d, v]) => `${DEVICE_LABEL[d]}: ${v}`).join(' · ');
+}
+
+/**
+ * What the measured values say beside the grade, for a row whose grade went down: `smaller` = not higher on any device both sides
+ * measured (and lower on one), `zero` = the copy's run measures nothing to save on every device (0 ms, 0 KiB). Null otherwise.
+ */
+export function measuredBeside(before, after) {
+  const pairs = ['mobile', 'desktop'].map((d) => [before?.values?.[d], after?.values?.[d]]).filter(([b, a]) => b && a && b.unit === a.unit);
+  const own = Object.values(after?.values ?? {});
+  if (own.length && own.every((v) => v.value === 0 && v.unit !== 'element')) return 'zero';
+  if (pairs.length && pairs.every(([b, a]) => a.value <= b.value) && pairs.some(([b, a]) => a.value < b.value)) return 'smaller';
+  return null;
 }
 
 // A failing audit on both sides that still moved: lower on every device both measured by the margin or more = better,
@@ -216,13 +255,16 @@ function lighthouseItems(oldLh, newLh) {
   const n = lighthouseAudits(newLh);
   if (!o.size && !n.size) return [];
   // Compared by score only: the number of rows in a Lighthouse table is not a count of problems.
-  const side = (a) => a && { status: a.score >= 0.9 ? 'pass' : a.score >= 0.5 ? 'warn' : 'fail', detail: a.detail, score: a.score, rank: rankOfScore(a.score) };
+  const side = (a) => a && { status: a.score >= 0.9 ? 'pass' : a.score >= 0.5 ? 'warn' : 'fail', detail: bothDevices(a), score: a.score, rank: rankOfScore(a.score) };
+  // A side whose run listed the audit without grading it: no grade to compare with.
+  const ungraded = (map, id) => map.unscored.has(id) && { status: 'pass', rank: 0, unscored: true, detail: 'Not graded on this run' };
   const items = [];
   for (const id of new Set([...o.keys(), ...n.keys()])) {
-    const before = side(o.get(id));
-    const after = side(n.get(id));
+    const before = side(o.get(id)) || ungraded(o, id);
+    const after = side(n.get(id)) || ungraded(n, id);
     if (!before?.rank && !after?.rank) continue; // passing on both sides: not worth a row
     const a = n.get(id) ?? o.get(id);
+    const beside = measuredBeside(o.get(id), n.get(id));
     items.push({
       key: `lighthouse.${id}`,
       category: a.category,
@@ -231,6 +273,7 @@ function lighthouseItems(oldLh, newLh) {
       after: n.size ? after ?? { status: 'pass', rank: 0 } : null,
       ...((o.get(id)?.cpuTiming || n.get(id)?.cpuTiming) && { cpuTiming: true }),
       ...(lighthouseTrend(o.get(id), n.get(id)) && { trend: lighthouseTrend(o.get(id), n.get(id)) }),
+      ...(beside && { beside }),
     });
   }
   return items;
@@ -335,12 +378,27 @@ function finish(item, report) {
   if (item.trend && (status === 'open' || (failingBoth && (status === 'improved' || status === 'regressed')))) {
     status = item.trend === 'better' ? 'improved' : 'regressed';
   }
-  const { trend, ...kept } = item;
+  const { trend, beside, ...kept } = item;
   const out = { ...kept, status };
   if (DEPLOY_CHECKS.has(item.key)) out.note = DEPLOY_NOTE;
   else if (!item.after) out.note = 'Not measured on the recreated site.';
   else if (!item.before) out.note = 'Not measured on the original site.';
   if (item.category === 'performance' && status !== 'na') out.note = LOCAL_PERF_NOTE;
+  // A lower grade the measurement does not back (reaudit/compare: the figures of both devices stay in the row):
+  if (status === 'regressed' && item.before?.unscored) {
+    // the original's run listed the audit without a grade, so there is nothing it got worse than;
+    status = 'open';
+    out.status = status;
+    out.note = UNGRADED_NOTE;
+  } else if ((status === 'regressed' || status === 'open') && beside === 'zero') {
+    // the copy's run measures nothing to save (0 ms, 0 KiB): Lighthouse still lists it, it costs nothing;
+    status = 'changed';
+    Object.assign(out, { status, statusLabel: 'Nothing measured to save', note: ZERO_NOTE });
+  } else if (status === 'regressed' && beside === 'smaller') {
+    // or the measured value is smaller than the original's on every device, and only the grade went down.
+    status = 'changed';
+    Object.assign(out, { status, statusLabel: 'Smaller, graded lower', note: SMALLER_NOTE });
+  }
   if (item.cpuTiming && status === 'regressed') {
     status = 'changed';
     out.status = status;

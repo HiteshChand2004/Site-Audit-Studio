@@ -50,7 +50,12 @@ test('the rule: one run decides when the copy leads by 5 in every category; medi
   assert.deepEqual(medianScores([{ scores: ALL(70) }, { scores: ALL(90) }, { scores: ALL(80) }]).performance, 80);
   assert.deepEqual(medianScores([{ scores: ALL(70) }, { scores: ALL(90) }]).performance, 80, 'an even count: the mean of the middle two');
   const v = decide([{ scores: ALL(70) }, { scores: ALL(72) }, { scores: ALL(71) }], [{ scores: ALL(69) }, { scores: ALL(80) }, { scores: ALL(70) }]);
-  assert.deepEqual(v.worse, ['performance'], 'copy median 70 < original median 71');
+  assert.deepEqual(v.worse, [], 'copy median 70 < original median 71, but the copy\'s runs spread 69-80: within run noise');
+  assert.deepEqual(v.noise, ['performance']);
+  const real = decide([{ scores: ALL(80) }, { scores: ALL(81) }, { scores: ALL(82) }], [{ scores: ALL(72) }, { scores: ALL(70) }, { scores: ALL(75) }]);
+  assert.deepEqual(real.worse, ['performance'], 'a gap of 9, beyond either side\'s spread (2 and 5), is worse');
+  assert.deepEqual(real.noise, []);
+  assert.deepEqual(decide([{ scores: ALL(71) }], [{ scores: ALL(70) }]).noise, [], 'one run per side has no spread: never noise');
   assert.equal(v.accepted, 'median of runs');
   assert.deepEqual(decide([{ scores: ALL(70) }], [{ scores: ALL(70) }]).worse, [], 'equal is not lower');
 });
@@ -92,9 +97,10 @@ test('compareLighthousePages: one run per side when the copy leads, three when i
   assert.deepEqual(r.pages[0].modes.desktop.worse, []);
   assert.deepEqual(r.pages[1].modes.mobile.original, ALL(71, 90, 90, 90));
   assert.deepEqual(r.pages[1].modes.mobile.copy, ALL(70, 95, 95, 85));
-  assert.deepEqual(r.pages[1].modes.mobile.worse, ['performance', 'seo']);
+  assert.deepEqual(r.pages[1].modes.mobile.worse, ['seo'], 'SEO 85 vs 90, no spread on either side');
+  assert.deepEqual(r.pages[1].modes.mobile.noise, ['performance'], 'performance 70 vs 71, the copy\'s runs 69-80');
   assert.deepEqual(r.pages[1].modes.desktop.worse, []);
-  assert.deepEqual(r.worse.map((w) => `${w.path} ${w.mode} ${w.category} ${w.original}>${w.copy}`), ['/about/ mobile performance 71>70', '/about/ mobile seo 90>85']);
+  assert.deepEqual(r.worse.map((w) => `${w.path} ${w.mode} ${w.category} ${w.original}>${w.copy}`), ['/about/ mobile seo 90>85']);
   assert.deepEqual(r.extraRunPages, [{ path: '/', modes: ['desktop'] }, { path: '/about/', modes: ['mobile'] }]);
   // Runs: / mobile 1+1, / desktop 3+3, /about mobile 3+3, /about desktop 1+1 = 8 per side.
   assert.deepEqual(r.runs, { original: 8, copy: 8, reusedOriginal: 0 });
@@ -103,10 +109,12 @@ test('compareLighthousePages: one run per side when the copy leads, three when i
 
   const items = lighthousePageItems(r);
   const worse = items.filter((i) => i.status === 'regressed');
-  assert.deepEqual(worse.map((i) => i.key), ['lighthouse-score.mobile.performance./about/', 'lighthouse-score.mobile.seo./about/']);
-  assert.equal(worse[0].category, 'performance');
-  assert.equal(worse[1].category, 'seo');
-  assert.match(worse[0].after.detail, /70 on the copy — median of runs \(3 of the original, 3 of the copy\)/);
+  assert.deepEqual(worse.map((i) => i.key), ['lighthouse-score.mobile.seo./about/']);
+  assert.equal(worse[0].category, 'seo');
+  assert.match(worse[0].after.detail, /85 on the copy — median of runs \(3 of the original, 3 of the copy\)/);
+  const noisy = items.filter((i) => i.status === 'changed');
+  assert.deepEqual(noisy.map((i) => [i.key, i.statusLabel]), [['lighthouse-score.mobile.performance./about/', 'Within run noise']]);
+  assert.match(noisy[0].after.detail, /70 on the copy \(runs 69 \/ 80 \/ 70\)/);
   assert.equal(worse[0].lighthousePage.weight.original, 400000);
   assert.deepEqual(items.filter((i) => i.status === 'pass').map((i) => i.key), ['lighthouse-score.mobile.all./', 'lighthouse-score.desktop.all./', 'lighthouse-score.desktop.all./about/']);
   const note = lighthousePagesNote(r);
