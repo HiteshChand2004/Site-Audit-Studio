@@ -91,7 +91,7 @@ test('an as-is copy is re-audited with its own scripts running, and each row tha
   // fixers ran on it), so rows its fixers would close are "our bug" here; full-flow.test.js holds a real copy to "no bug".
   const rowsLeft = result.checklist.items.filter((i) => ['regressed', 'open', 'changed', 'recheck', 'manual'].includes(i.status));
   for (const i of rowsLeft) assert.ok(i.group, `${i.key} (${i.status}) has a group`);
-  assert.deepEqual(rowsLeft.filter((i) => i.group === 'bug').map((i) => i.key).sort(), ['aeo.json-ld-schema', 'seo.open-graph-tags'], 'only what the fixers (not run here) would have written');
+  assert.deepEqual(rowsLeft.filter((i) => i.group === 'bug').map((i) => i.key).sort(), ['aeo.json-ld-schema', 'crawl.meta-tags', 'seo.open-graph-tags'], 'only what the fixers (not run here) would have written');
   assert.equal(result.checklist.lighthousePages, undefined, 'Lighthouse was skipped in this test, so no per-page comparison');
   const links = worse.find((i) => i.key === 'links.broken-new');
   assert.ok(links, 'the link to the page that was not copied is broken in the copy');

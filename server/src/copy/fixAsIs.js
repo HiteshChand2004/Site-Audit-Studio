@@ -7,8 +7,11 @@
 //   names        links, buttons and fields without an accessible name (fixNames)
 //   aria         frame titles, positive tabindex, invalid ARIA values, focusable inside aria-hidden (fixAria, asIs: duplicate
 //                ids are reported, never renamed — the original's styles and scripts may use them)
-//   head         a missing or duplicated title or description; a missing canonical / og:title / og:description / og:url; a
-//                canonical or og:url naming the original moved to the new site; a missing <html lang>
+//   head         a missing or duplicated title or description; a title outside 10–60 characters or a description outside
+//                50–160 (shortened at a word, or completed from the page's own words; marked for review); a missing canonical /
+//                og:title / og:description / og:url; a canonical or og:url naming the original moved to the new site; a missing
+//                <html lang>; a missing theme-color (the site's manifest, its TileColor, else its links' and buttons' colour from
+//                its own stylesheets: review) and a missing icon (the site's own /favicon.ico, else a letter icon: review)
 //   data         JSON-LD Organization + WebSite on the homepage when no page has them; FAQPage where the page shows questions
 //                with their answers and has none
 //   files        sitemap.xml, llms.txt (when the copy has none), robots.txt kept but pointing at the new site, _headers
@@ -18,8 +21,8 @@
 //                below the first screen at every width, a lossless WebP for a local PNG with the very same pixels
 // A description is also taken from the page's own og:description / twitter:description when its paragraphs give none. A missing
 // or zoom-blocking <meta name="viewport"> is reported, never changed: adding or loosening one changes how phones lay out the page.
-// Not here (they change pixels or behaviour, reason d): contrast, font subsets, sprite / layout parking, longer-or-shorter-only
-// title rewrites, dead-link unlinking, LCP entrance removal; lossy or resized images, font-display, the original's scripts.
+// Not here (they change pixels or behaviour, reason d): contrast, font subsets, sprite / layout parking, dead-link unlinking,
+// LCP entrance removal; lossy or resized images, font-display, the original's scripts.
 // Every page's fixes are listed; the stage then proves them invisible (preserve/check.js fixGate) and reverts a page's fixes
 // when they are not.
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
@@ -29,6 +32,8 @@ import { fixAlt, fixNames } from '../recreate/fixers/a11y.js';
 import { fixAria } from '../recreate/fixers/aria.js';
 import { fitTitle, fitDescription, pathLabel, detectLang } from '../recreate/ir/seoText.js';
 import { faqPairs } from '../recreate/ir/aeo.js';
+import { generatedFavicon } from '../recreate/ir/head.js';
+import { hexColor } from '../recreate/ir/index.js';
 import { crawlFiles } from '../recreate/ir/crawlFiles.js';
 import { resetTextCache } from '../recreate/ir/tree.js';
 import { HEADERS_FILE as CACHE_HEADERS } from '../recreate/behavior/preserve/pack.js';
@@ -145,6 +150,9 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
   const open = [];
   const counts = { alt: 0, names: 0, aria: 0, head: 0, data: 0, address: 0, lang: 0, anchors: 0, linktext: 0, headings: 0, lcp: 0, lazy: 0, webp: 0 };
   const originals = new Map();
+  // The site's theme colour and icon, decided once (undefined = not looked for yet; null = none).
+  let theme;
+  let icon;
   // One WebP per PNG for the whole run, however many pages show it.
   const webpMade = new Map();
 
@@ -221,7 +229,19 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
         finalTitle = fresh;
       }
     }
+    // Length (10–60 characters, the Analyze check): a long title loses its trailing parts (" | tagline") first, then is cut at a
+    // word; a short one gets the site name. Only the page's own words and the site name; marked for review in the report.
+    if (allow('head:title') && finalTitle && finalTitle === title && outside(finalTitle, TITLE_LIMITS)) {
+      const fitted = fitTitle(finalTitle, name);
+      if (fitted !== finalTitle && !outside(fitted, TITLE_LIMITS) && !seenTitle.has(fitted.toLowerCase())) {
+        head.find('title').first().text(fitted);
+        fixes.push({ kind: 'head', field: 'title', from: finalTitle, value: fitted, source: finalTitle.length > TITLE_LIMITS[1] ? 'too long: shortened' : 'too short: the site name added' });
+        finalTitle = fitted;
+      } else open.push({ kind: 'head', field: 'title', page: d.path, reason: 'c', detail: `The title is ${finalTitle.length} characters (10–60 wanted) and the page gives nothing to ${finalTitle.length > TITLE_LIMITS[1] ? 'shorten it to' : 'complete it with'}: the owner writes it` });
+    }
+    // The page's own title counts as taken too: a later page with the same text is still a duplicate after this one's was fitted.
     seenTitle.add(finalTitle.toLowerCase());
+    if (title) seenTitle.add(titleKey);
     const descEl = $('meta[name="description"]').first();
     const description = clean(descEl.attr('content'));
     let finalDescription = description;
@@ -244,7 +264,19 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
         finalDescription = fresh;
       }
     }
+    // Length (50–160 characters): a long description is cut at a word; a short one is completed with the page's own paragraphs
+    // (those no other page uses). Marked for review.
+    if (allow('head:description') && finalDescription && finalDescription === description && outside(finalDescription, DESCRIPTION_LIMITS)) {
+      const long = finalDescription.length > DESCRIPTION_LIMITS[1];
+      const fitted = fitDescription(long ? [finalDescription] : [finalDescription, ...paragraphsOf($).filter((t) => !seenDescription.has(t.toLowerCase()))]);
+      if (fitted !== finalDescription && !outside(fitted, DESCRIPTION_LIMITS) && !seenDescription.has(fitted.toLowerCase())) {
+        head.find('meta[name="description"]').first().attr('content', fitted);
+        fixes.push({ kind: 'head', field: 'description', from: finalDescription, value: fitted, source: long ? 'too long: cut at a word' : 'too short: completed with the page\'s own paragraphs' });
+        finalDescription = fitted;
+      } else open.push({ kind: 'head', field: 'description', page: d.path, reason: 'c', detail: `The description is ${finalDescription.length} characters (50–160 wanted) and the page gives no words of its own to complete it: the owner writes it` });
+    }
     if (finalDescription) seenDescription.add(finalDescription.toLowerCase());
+    if (description) seenDescription.add(description.toLowerCase());
 
     // Addresses: a canonical / og:url naming the original moves to the new site; a missing one is added (only with an address).
     const own = newOrigin ? new URL(d.path, newOrigin).href : null;
@@ -277,6 +309,25 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     og('og:title', finalTitle, 'the page title');
     og('og:description', finalDescription, 'the page description');
     og('og:url', own, 'the new address');
+
+    // theme-color and an icon, when the page has none: neither ever shows on the page. The colour and the icon are decided once
+    // for the site (the homepage's evidence); a value taken from the stylesheets, and a letter icon, are marked for review.
+    if (allow('head:meta') && !clean($('meta[name="theme-color"]').attr('content'))) {
+      if (theme === undefined) theme = await siteThemeColor(docs[0], dir);
+      if (theme) {
+        head.append('<meta name="theme-color" content="">');
+        head.find('meta[name="theme-color"]').last().attr('content', theme.value);
+        fixes.push({ kind: 'head', field: 'theme-color', value: theme.value, source: theme.source, ...(theme.review && { review: true }) });
+      } else open.push({ kind: 'head', field: 'theme-color', page: d.path, reason: 'c', detail: 'The site states no brand colour (no manifest theme_color, no TileColor, no strong colour on its links or buttons): the owner chooses it' });
+    }
+    if (allow('head:meta') && !$('link[rel~="icon" i], link[rel="apple-touch-icon" i]').length) {
+      if (icon === undefined) icon = await siteIcon(dir, name, theme?.value ?? null);
+      const up = '../'.repeat(d.outPath.split('/').length - 1);
+      head.append('<link rel="icon" href="">');
+      head.find('link[rel="icon"]').last().attr('href', `${up}${icon.file}`);
+      if (icon.type) head.find('link[rel="icon"]').last().attr('type', icon.type);
+      fixes.push({ kind: 'head', field: 'icon', value: icon.file, source: icon.source, ...(icon.review && { review: true }) });
+    }
 
     const html = $('html');
     if (allow('lang') && !clean(html.attr('lang'))) {
@@ -409,8 +460,68 @@ async function siteFiles({ dir, docs, newOrigin, siteName, siteUrl, fetchLlms })
 
 const noindexMeta = ($) => $('meta[name]').toArray().map((m) => ({ name: $(m).attr('name'), content: $(m).attr('content') }));
 
-/** The head tags that never show on the page: the canonical and og:url (added, or moved to the new site) and the og tags. */
-const HEAD_META_FIELDS = new Set(['canonical', 'og:url', 'og:title', 'og:description']);
+/** The head tags that never show on the page: the canonical and og:url (added, or moved to the new site), the og tags, the theme colour and the icon. */
+const HEAD_META_FIELDS = new Set(['canonical', 'og:url', 'og:title', 'og:description', 'theme-color', 'icon']);
+
+const TITLE_LIMITS = [10, 60];
+const DESCRIPTION_LIMITS = [50, 160];
+const outside = (text, [min, max]) => text.length < min || text.length > max;
+const strong = (hex) => {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  return Math.max(r, g, b) - Math.min(r, g, b) > 60;
+};
+// A selector naming a link or a button (a, button, .btn…, [role=button]).
+const CONTROL_SELECTOR = /(^|[\s,>+~(])a(?=$|[\s,:.[#>+~)])|button|\bbtn\b|role=["']?button/i;
+
+/**
+ * The site's own colour for theme-color, from evidence only: its web manifest's theme_color, else its msapplication-TileColor,
+ * else the strong (saturated) background colour its own stylesheets give its links and buttons most (a choice the tool made from
+ * the site's colours: review). Null when there is none.
+ */
+async function siteThemeColor(home, dir) {
+  if (!home) return null;
+  const { $ } = home;
+  const fileOf = (href) => {
+    if (!clean(href)) return null;
+    try {
+      const u = new URL(href, `http://copy.local/${home.outPath}`);
+      return u.origin === 'http://copy.local' ? path.join(dir, decodeURIComponent(u.pathname)) : null;
+    } catch {
+      return null;
+    }
+  };
+  const manifest = fileOf($('link[rel="manifest"]').attr('href') ?? '');
+  // An unreadable or invalid manifest is no evidence.
+  const manifestJson = manifest ? await readFile(manifest, 'utf8').then((s) => JSON.parse(s)).catch(() => null) : null;
+  const fromManifest = hexColor(String(manifestJson?.theme_color ?? ''));
+  if (fromManifest) return { value: fromManifest, source: 'the site\'s web manifest (theme_color)' };
+  const tile = hexColor($('meta[name="msapplication-TileColor" i]').attr('content') ?? '');
+  if (tile) return { value: tile, source: 'the site\'s msapplication-TileColor' };
+  let css = $('style').text();
+  for (const el of $('link[rel~="stylesheet" i]').toArray()) {
+    const f = fileOf($(el).attr('href') ?? '');
+    if (f) css += `\n${await readFile(f, 'utf8').catch(() => '')}`;
+  }
+  const counts = new Map();
+  for (const rule of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!CONTROL_SELECTOR.test(rule[1])) continue;
+    for (const v of rule[2].matchAll(/background(?:-color)?\s*:\s*(#[0-9a-f]{3,6}\b|rgba?\([^)]*\))/gi)) {
+      const hex = hexColor(v[1].replace(/\s+/g, ' '));
+      if (hex && strong(hex)) counts.set(hex, (counts.get(hex) ?? 0) + 1);
+    }
+  }
+  const best = [...counts].sort((a, b) => b[1] - a[1])[0]?.[0];
+  return best ? { value: best, source: 'the colour the site\'s own stylesheets give its links and buttons most', review: true } : null;
+}
+
+/** The site's icon: its own /favicon.ico when the copy holds it, else a letter icon in its colour (review), written once. */
+async function siteIcon(dir, name, colour) {
+  if (await stat(path.join(dir, 'favicon.ico')).then((s) => s.isFile(), () => false)) return { file: 'favicon.ico', source: 'the site\'s own /favicon.ico' };
+  const file = 'icons/favicon-generated.svg';
+  await mkdir(path.join(dir, 'icons'), { recursive: true });
+  await writeFile(path.join(dir, file), generatedFavicon(name, colour ?? '#334155'), 'utf8');
+  return { file, type: 'image/svg+xml', source: `a letter icon (the first letter of ${name}${colour ? ' in the site\'s colour' : ''})`, review: true };
+}
 
 /**
  * The group a fix is retried in when its page's fixes are not invisible together (preserve/stage.js fixAndProve): its kind, but

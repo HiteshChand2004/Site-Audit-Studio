@@ -131,8 +131,9 @@ test('every row gets one of the seven groups; only what nothing explains and no 
   });
   const g = Object.fromEntries(r.open.map((i) => [i.key, i.group]));
   assert.deepEqual(g, {
-    'seo.title-tag.length': 'missing-fixer',
-    'crawl.meta-tags': 'missing-fixer',
+    'seo.title-tag.length': 'bug',
+    // Step 3 built the theme colour / icon fix: still missing with no reason recorded (no fixOpen) is a bug.
+    'crawl.meta-tags': 'bug',
     'axe.aria-prohibited-attr': 'missing-fixer',
     'lighthouse.modern-image-formats': 'missing-fixer',
     'lighthouse.prioritize-lcp-image': 'bug',
@@ -143,8 +144,8 @@ test('every row gets one of the seven groups; only what nothing explains and no 
     'crawl.https': 'measurement',
     'something.unknown': 'bug',
   });
-  assert.match(r.open[0].evidence, /Fix not built yet: Shortening or completing/);
-  assert.equal(r.openSummary.byGroup.bug, 2);
+  assert.match(r.open[0].evidence, /still outside the range: a bug to report/, 'the fix exists now (Step 3)');
+  assert.equal(r.openSummary.byGroup.bug, 4, 'title length + meta tags (fixes built in Step 3, no reason recorded), LCP priority, unknown');
   assert.match(reasonText(null, 'missing-fixer'), /^Fix not built yet — /);
   assert.match(reasonText('owner', 'needs-info'), /^Needs information from you — .*\(c\)$/);
 });

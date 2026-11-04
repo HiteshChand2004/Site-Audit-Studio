@@ -164,6 +164,10 @@ const AS_IS_FIELDS = {
     title: 'Page description', match: (field) => field === 'description', group: 'head:description', review: true },
   canonical: { keys: ['seo.canonical-url'], title: 'Canonical address', match: (field) => field === 'canonical', group: 'head:meta', open: 'address' },
   og: { keys: ['seo.open-graph-tags'], title: 'Open Graph tags', match: (field) => String(field ?? '').startsWith('og:'), group: 'head:meta', review: true },
+  // A theme colour from the manifest / TileColor is the site's own value; one taken from the stylesheets, and a letter icon, carry
+  // their own `review` (copy/fixAsIs.js).
+  themeColor: { keys: ['crawl.meta-tags'], title: 'Theme colour', match: (field) => field === 'theme-color', group: 'head:meta' },
+  icon: { keys: ['crawl.meta-tags'], title: 'Site icon', match: (field) => field === 'icon', group: 'head:meta' },
 };
 /** The kinds of as-is fix behind a check (AS_IS and AS_IS_FIELDS, inverted). */
 const AS_IS_BY_KEY = new Map();
@@ -199,7 +203,7 @@ export function asIsEvidence(key, report) {
       const open = f.open ? openOf(f.open) : 0;
       if (!count && !droppedOnPages && !open) continue;
       // A review only for text taken from the page (a head fix); an address moved to the new site (og:url) is not.
-      const review = f.review && kept.some((x) => x.kind === 'head');
+      const review = (f.review && kept.some((x) => x.kind === 'head')) || kept.some((x) => x.review === true);
       out.push({ fix: `as-is:${name}`, asIs: name, title: f.title, status: statusOf(count, droppedOnPages + open), count, open, droppedOnPages, ...(review && { review: true }) });
       continue;
     }

@@ -298,6 +298,8 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
       // report.copy.fixes.reverted lists the pages (report.asIs.fixes.reverted is only their count).
       revertedPages: (Array.isArray(report.copy?.fixes?.reverted) ? report.copy.fixes.reverted : []).map((r) => r.page),
       excludedHosts: Array.isArray(report.asIs?.excludedByRule) ? report.asIs.excludedByRule : [],
+      // What the copy's own fixes left open and why (the page gave no words, the site states no colour).
+      fixOpen: Array.isArray(report.asIs?.fixes?.open) ? report.asIs.fixes.open : [],
     });
     const byKey = new Map([...worse.items.map((w) => ['regressed', w]), ...worse.open.map((w) => ['open', w])].map(([status, w]) => [`${status} ${w.key}`, w]));
     for (const item of checklist.items) {

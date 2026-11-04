@@ -55,12 +55,13 @@ const kb = (bytes) => `${Math.round(bytes / 1024)} KB`;
  * @param {object} [o.newAxe]           the copy's
  * @returns {{ items: object[], summary: { total: number, explained: number, unexplained: number, byReason: Record<string, number> } }}
  */
-export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPages = copyPages, oldLhr = {}, newLhr = {}, oldAxe = null, newAxe = null, address = null, revertedPages = [], excludedHosts = [] }) {
+export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPages = copyPages, oldLhr = {}, newLhr = {}, oldAxe = null, newAxe = null, address = null, revertedPages = [], excludedHosts = [], fixOpen = [] }) {
   const site = bareHost(new URL(siteUrl).hostname);
   const copyHost = hostOf(copyOrigin);
   const copied = new Set(copyPages.map(normPath));
   const chosen = new Set(chosenPages.map(normPath));
-  const ctx = { site, copyHost, copied, chosen, oldLhr, newLhr, oldAxe, newAxe, address, revertedPages, excludedHosts };
+  // fixOpen: what the copy's own fixes left open, with why (report.asIs.fixes.open): a row they explain is not a bug.
+  const ctx = { site, copyHost, copied, chosen, oldLhr, newLhr, oldAxe, newAxe, address, revertedPages, excludedHosts, fixOpen };
   const pick = (item, explain) => {
     const ex = explain(item, ctx);
     return { key: item.key, title: item.title, before: item.before, after: item.after, ...ex, group: groupOf(ex) };
@@ -99,8 +100,6 @@ function groupOf(ex) {
  * By check key only, the same for every site.
  */
 const PLANNED = [
-  { test: (k) => /^seo\.(title-tag|meta-description)\.length$/.test(k), what: 'Shortening or completing the text from the page\'s own words (marked for review).' },
-  { test: (k, i) => k === 'crawl.meta-tags' && /theme-color ✗|favicon ✗/.test(i.after?.detail ?? ''), what: 'A theme colour from the site\'s own brand colour and the site\'s own icon.' },
   { test: (k) => /^(axe|lighthouse)\.(aria-prohibited-attr|scrollable-region-focusable)$/.test(k), what: 'An attribute-only accessibility fix, checked by the look gate.' },
   { test: (k) => /^lighthouse\.(modern-image-formats|uses-optimized-images|uses-responsive-images|offscreen-images|efficient-animated-content|total-byte-weight|unsized-images|image-size-responsive)$/.test(k), what: 'The original\'s own smaller image files, and smaller variants proved by the look gate.' },
   { test: (k) => k.startsWith('motion.'), what: 'Motion is a separate track: the effect is still owed.' },
@@ -295,7 +294,15 @@ function openAnalyzer(item, id, part, ctx) {
   switch (id) {
     case 'title-tag':
     case 'meta-description':
-      if (part === 'length') return owner('The text is the owner\'s own; making it longer or shorter is a content choice, so an as-is copy leaves it as written.');
+      if (part === 'length') {
+        // The copy shortens a long text at a word and completes a short one from the page's own words (copy/fixAsIs.js); it says
+        // so when the page gave it nothing to use. Anything else still outside the range is a fix that did not happen.
+        const field = id === 'title-tag' ? 'title' : 'description';
+        const left = ctx.fixOpen.filter((o) => o.kind === 'head' && o.field === field);
+        if (left.length) return owner(`The page gives no words of its own to fix it from (${left.slice(0, 3).map((o) => o.page).join(', ')}): the owner writes it.`);
+        if (ctx.revertedPages.length) return look(reverted.trim());
+        return unexplained(`${detail} The copy shortens or completes the ${field} from the page's own words, and this one is still outside the range: a bug to report.`);
+      }
       if (ctx.revertedPages.length) return look(`The copy writes a missing or duplicated ${id === 'title-tag' ? 'title' : 'description'} from the page itself.${reverted}`);
       return unexplained(`${detail} The copy writes a missing or duplicated ${id === 'title-tag' ? 'title' : 'description'} from the page itself, and this one is still open: a fix still owed.`);
     case 'canonical-url':
@@ -335,8 +342,15 @@ function openAnalyzer(item, id, part, ctx) {
     case 'robots':
       if (noAddress) return owner(`No new-site address was given for this copy (${ctx.address?.detail ?? 'none set'}), so sitemap.xml and robots.txt were left as lifted.`);
       return unexplained(`${detail} The copy writes these files when an address is set: a fix still owed.`);
-    case 'meta-tags':
-      return owner('The tags this check wants (a Twitter card, a theme colour, an icon) are brand choices; the copy adds none of its own.');
+    case 'meta-tags': {
+      // The copy adds a missing icon always and a missing theme colour whenever the site states one (copy/fixAsIs.js); a Twitter
+      // card is the owner's choice of preview.
+      const themeLeft = ctx.fixOpen.some((o) => o.kind === 'head' && o.field === 'theme-color');
+      const notDone = [/favicon ✗/.test(detail) && 'the icon', /theme-color ✗/.test(detail) && !themeLeft && 'the theme colour'].filter(Boolean);
+      if (notDone.length && !ctx.revertedPages.length) return unexplained(`${detail} The copy adds ${notDone.join(' and ')} when the page has none, and it is still missing: a bug to report.`);
+      if (notDone.length) return look(reverted.trim());
+      return owner(`${themeLeft ? 'The site states no brand colour for a theme colour; ' : ''}a Twitter card and its kind of preview are the owner's choice; the copy adds none of its own.`);
+    }
     case 'https':
       return { reason: 'deploy', evidence: 'HTTPS is the host\'s; see DEPLOY.md.' };
     default:

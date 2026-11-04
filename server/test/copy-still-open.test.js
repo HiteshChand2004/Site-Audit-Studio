@@ -33,9 +33,9 @@ test('"still open" rows get one of the five reasons on evidence, or UNEXPLAINED;
   assert.equal(r.items.length, 1, 'the rows that got worse are as before');
   assert.equal(r.open.length, 3, 'every open row, none fixed or passing');
   assert.deepEqual(r.open.map((o) => o.reason), [null, 'look', null]);
-  assert.deepEqual(r.open.map((o) => o.group), ['missing-fixer', 'look', 'missing-fixer'], 'title length: a fix is planned (Step 3); motion: its own track');
+  assert.deepEqual(r.open.map((o) => o.group), ['bug', 'look', 'missing-fixer'], 'title length: the fix exists (Step 3) and recorded no reason, so a bug; motion: its own track');
   assert.equal(r.open[2].unexplained, true, 'a motion effect the copy lost is a fix still owed, not a reason');
-  assert.deepEqual(r.openSummary, { total: 3, explained: 1, unexplained: 2, byReason: { look: 1 }, byGroup: { 'missing-fixer': 2, look: 1 } });
+  assert.deepEqual(r.openSummary, { total: 3, explained: 1, unexplained: 2, byReason: { look: 1 }, byGroup: { bug: 1, look: 1, 'missing-fixer': 1 } });
 });
 
 test('still open: Lighthouse audits are split by what they name: third-party code (a), fixable without a visible change (UNEXPLAINED), the original\'s own code (d), the host (e) only when the copy did not grow', () => {
