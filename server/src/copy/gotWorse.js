@@ -14,6 +14,7 @@
 //                    are the original's, and changing them is a change of its look (§2: contrast is never rewritten as-is);
 //   b                not decided here: a backend item or a reverted fix carries its reason from the copy run (openItems.js).
 import { REASONS } from './openItems.js';
+import { FIXES, fixOf } from './fixRegistry.js';
 
 /** How much a measured amount may move before it counts as grown: bytes and times vary run to run, element counts do not. */
 const GROWTH = { element: 0.02, other: 0.1 };
@@ -144,7 +145,7 @@ const unexplained = (evidence) => ({ reason: null, unexplained: true, evidence }
 
 // Lighthouse audits the copy's own fixers already handle (copy/perfAsIs.js: the largest element's priority, lazy loading): one
 // still open is a fixer that did not reach the copy (our bug). The audits a fix is planned for are in PLANNED above.
-const LH_FIXED_BY_COPY = new Set(['prioritize-lcp-image', 'lcp-lazy-loaded']);
+const LH_FIXED_BY_COPY = new Set(fixOf('lcp').targets.map((k) => k.slice('lighthouse.'.length)));
 // Lighthouse audits that name the original's own code or markup: an as-is copy keeps it as written (docs/COPY-MY-SITE.md §2),
 // so what they ask for — rewriting, splitting or removing the site's own files and elements — is a change of its behaviour (d).
 const LH_OWN_CODE = new Set(['unused-css-rules', 'unused-javascript', 'render-blocking-resources', 'unminified-css', 'unminified-javascript',
@@ -276,11 +277,10 @@ function openRule(item, id, ctx) {
   return unexplained(`${item.after?.detail ?? 'Still failing in the copy.'} No rule of the five reasons covers this accessibility check.`);
 }
 
-// axe rules an as-is copy fixes with one attribute (copy/seoA11yAsIs.js), by the kind of fix that writes it.
-const ATTR_FIXES = {
-  'aria-prohibited-attr': { kind: 'prohibited', what: 'role="img" on a named element with no text' },
-  'scrollable-region-focusable': { kind: 'scrollable', what: 'tabindex="0" on a box that scrolls' },
-};
+// axe rules an as-is copy fixes with one attribute (copy/seoA11yAsIs.js), by the kind of fix that writes it: the registry's
+// entries that say what they write (copy/fixRegistry.js).
+const ATTR_FIXES = Object.fromEntries(FIXES.filter((f) => f.what).flatMap((f) => f.targets.filter((k) => k.startsWith('axe.'))
+  .map((k) => [k.slice('axe.'.length), { kind: f.kind, what: f.what }])));
 
 /**
  * One of those rules still failing: what the fix left open says why (an element it could not change without changing the

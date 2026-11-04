@@ -1,5 +1,6 @@
 // Classification rules of the fix checklist. They only know our own check keys, our own fixer ids
 // and generic Lighthouse / axe audit ids — never a site or a platform.
+import { FIELDS, FIXES, KINDS_BY_KEY } from '../../copy/fixRegistry.js';
 
 // changed: a CPU-timing measurement moved the wrong way; local timings vary with machine load, so it is
 // not counted as a regression (isCpuTiming).
@@ -127,56 +128,13 @@ export const EVIDENCE = {
 };
 
 // What an as-is copy did about a check: the kinds of fix its stage kept, dropped or left open (report.asIs.fixes, written by
-// recreate/behavior/preserve/stage.js fixAndProve; copy/fixAsIs.js and copy/perfAsIs.js make them). `css` is the stylesheets
-// minified (report.asIs.fixes.css).
-const AS_IS = {
-  alt: ['seo.image-alt-text', 'axe.image-alt', 'axe.role-img-alt', 'axe.input-image-alt'],
-  names: ['axe.link-name', 'axe.button-name', 'axe.label', 'axe.select-name', 'axe.input-button-name', 'axe.aria-command-name'],
-  aria: ['axe.duplicate-id', 'axe.duplicate-id-aria', 'axe.duplicate-id-active', 'axe.frame-title', 'axe.tabindex', 'axe.aria-valid-attr-value', 'axe.aria-hidden-focus'],
-  // The head's checks are counted by the field written (AS_IS_FIELDS below), not by the `head` kind: one kind writes several fields.
-  data: ['aeo.json-ld-schema', 'aeo.faq-schema'],
-  lang: ['axe.html-has-lang', 'axe.html-lang-valid'],
-  viewport: ['lighthouse.viewport', 'axe.meta-viewport', 'crawl.meta-tags'],
-  // crawlable-anchors and link-text are SEO audits, and Lighthouse rows are made for performance and best practices only
-  // (compare/index.js LH_CATEGORIES): the anchors fix has no row to attach to; link text answers axe's link-name.
-  linktext: ['axe.link-name'],
-  // aria-level on a heading that skips a level: it changes no tag and adds no h1, so only axe's heading order can see it.
-  headings: ['axe.heading-order'],
-  // role="img" on a named element with no text that may not carry a name; tabindex="0" on a box that scrolls out of the
-  // keyboard's reach (copy/seoA11yAsIs.js). Both ask for a review (their fixes carry `review`).
-  prohibited: ['axe.aria-prohibited-attr'],
-  scrollable: ['axe.scrollable-region-focusable'],
-  lcp: ['lighthouse.prioritize-lcp-image', 'lighthouse.lcp-lazy-loaded'],
-  lazy: ['lighthouse.offscreen-images'],
-  webp: ['lighthouse.modern-image-formats', 'lighthouse.uses-optimized-images', 'lighthouse.total-byte-weight'],
-  css: ['lighthouse.unminified-css', 'lighthouse.total-byte-weight'],
-};
-const AS_IS_TITLE = {
-  alt: 'Image descriptions', names: 'Names of links, buttons and fields', aria: 'ARIA attributes',
-  data: 'Structured data', lang: 'Page language', viewport: 'Viewport tag', linktext: 'Descriptive link text',
-  headings: 'Heading levels', prohibited: 'Names on elements that may not carry one', scrollable: 'Scroll areas the keyboard can reach', lcp: 'Largest image loads first', lazy: 'Images below the first screen load later',
-  webp: 'Lossless WebP for PNG images', css: 'Stylesheets without whitespace',
-};
-// The head's checks, each counted by the field written whatever kind wrote it (copy/fixAsIs.js: the `head` kind writes the title,
-// the description, a missing canonical and og:*; the `address` kind moves an existing canonical or og:url to the new site), so a row
-// never shows another field's fixes. `group` is the gate's group for that field (fixAsIs.js allow(...)), `open` the kind of open
-// item that leaves it unwritten (no address for the new site: no canonical can be written), `review` text taken from the page.
-const AS_IS_FIELDS = {
-  title: { keys: ['seo.title-tag', 'seo.title-tag.missing', 'seo.title-tag.length', 'seo.title-tag.duplicate'], title: 'Page title',
-    match: (field) => field === 'title', group: 'head:title', review: true },
-  description: { keys: ['seo.meta-description', 'seo.meta-description.missing', 'seo.meta-description.length', 'seo.meta-description.duplicate'],
-    title: 'Page description', match: (field) => field === 'description', group: 'head:description', review: true },
-  canonical: { keys: ['seo.canonical-url'], title: 'Canonical address', match: (field) => field === 'canonical', group: 'head:meta', open: 'address' },
-  og: { keys: ['seo.open-graph-tags'], title: 'Open Graph tags', match: (field) => String(field ?? '').startsWith('og:'), group: 'head:meta', review: true },
-  // A theme colour from the manifest / TileColor is the site's own value; one taken from the stylesheets, and a letter icon, carry
-  // their own `review` (copy/fixAsIs.js).
-  themeColor: { keys: ['crawl.meta-tags'], title: 'Theme colour', match: (field) => field === 'theme-color', group: 'head:meta' },
-  icon: { keys: ['crawl.meta-tags'], title: 'Site icon', match: (field) => field === 'icon', group: 'head:meta' },
-};
-/** The kinds of as-is fix behind a check (AS_IS and AS_IS_FIELDS, inverted). */
-const AS_IS_BY_KEY = new Map();
-for (const [kind, keys] of Object.entries(AS_IS)) for (const k of keys) AS_IS_BY_KEY.set(k, [...(AS_IS_BY_KEY.get(k) ?? []), kind]);
-for (const [name, f] of Object.entries(AS_IS_FIELDS)) for (const k of f.keys) AS_IS_BY_KEY.set(k, [...(AS_IS_BY_KEY.get(k) ?? []), `field:${name}`]);
+// recreate/behavior/preserve/stage.js fixAndProve; copy/fixAsIs.js and copy/perfAsIs.js make them). Which kind answers which
+// check, its title and the head's fields are the fix registry's (copy/fixRegistry.js). `css` is the stylesheets minified
+// (report.asIs.fixes.css).
+const AS_IS_FIELDS = FIELDS;
+const AS_IS_TITLE = Object.fromEntries(FIXES.map((f) => [f.kind, f.title]));
+/** The kinds of as-is fix behind a check. */
+const AS_IS_BY_KEY = KINDS_BY_KEY;
 
 /**
  * An as-is copy's evidence for a check: per kind of fix, how many it kept, on how many pages the gate dropped it (it changed what

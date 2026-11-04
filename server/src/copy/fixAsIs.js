@@ -38,7 +38,8 @@ import { hexColor } from '../recreate/ir/index.js';
 import { crawlFiles } from '../recreate/ir/crawlFiles.js';
 import { resetTextCache } from '../recreate/ir/tree.js';
 import { HEADERS_FILE as CACHE_HEADERS } from '../recreate/behavior/preserve/pack.js';
-import { blocksZoom, fixCrawlableAnchors, fixHeadingLevels, fixInvalidLang, fixLinkText, fixProhibitedNames, fixScrollableRegions, isValidLang } from './seoA11yAsIs.js';
+import { blocksZoom, fixInvalidLang, isValidLang } from './seoA11yAsIs.js';
+import { MARKUP_PASS, emptyCounts, fixGroup } from './fixRegistry.js';
 import { fixImageLoading, fixPngImages } from './perfAsIs.js';
 import { SECURITY_HEADERS } from './securityHeaders.js';
 
@@ -149,7 +150,7 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
   const allTypes = new Set(docs.flatMap((d) => jsonLdTypes(d.$)));
   const result = [];
   const open = [];
-  const counts = { alt: 0, names: 0, aria: 0, head: 0, data: 0, address: 0, lang: 0, anchors: 0, linktext: 0, headings: 0, prohibited: 0, scrollable: 0, lcp: 0, lazy: 0, webp: 0 };
+  const counts = emptyCounts();
   const originals = new Map();
   // The site's theme colour and icon, decided once (undefined = not looked for yet; null = none).
   let theme;
@@ -188,17 +189,13 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
       // The page's language for link-text: the declared one when it is a language code, else what its text shows.
       const declared = clean($('html').attr('lang'));
       const pageLang = declared && isValidLang(declared) ? declared : detectLang(bodyText);
-      const more = [
-        ['anchors', () => fixCrawlableAnchors($, d)],
-        ['linktext', () => fixLinkText($, d, { resolveLink, pageTitles, siteName: name, lang: pageLang })],
-        ['headings', () => fixHeadingLevels($, d)],
-        ['prohibited', () => fixProhibitedNames($, d)],
-        // Only where the probe measured the page (its plan): which boxes scroll is the browser's to say.
-        ...(perf?.has(d.outPath) ? [['scrollable', () => fixScrollableRegions($, d, perf.get(d.outPath))]] : []),
-      ];
-      for (const [kind, run] of more) {
+      // The registry's markup pass (copy/fixRegistry.js MARKUP_PASS), in its order. A fix that needs the probe's plan runs only
+      // where the probe measured the page: which boxes scroll is the browser's to say.
+      const ctx = { resolveLink, pageTitles, siteName: name, lang: pageLang, plan: perf?.get(d.outPath) ?? null };
+      for (const { kind, apply, needs } of MARKUP_PASS) {
+        if (needs === 'perf' && !perf?.has(d.outPath)) continue;
         if (!allow(kind)) continue;
-        const r = run();
+        const r = apply($, d, ctx);
         for (const f of r.fixed) fixes.push({ kind, ...f });
         open.push(...r.open.map((o) => ({ kind, ...o })));
       }
@@ -464,9 +461,6 @@ async function siteFiles({ dir, docs, newOrigin, siteName, siteUrl, fetchLlms })
 
 const noindexMeta = ($) => $('meta[name]').toArray().map((m) => ({ name: $(m).attr('name'), content: $(m).attr('content') }));
 
-/** The head tags that never show on the page: the canonical and og:url (added, or moved to the new site), the og tags, the theme colour and the icon. */
-const HEAD_META_FIELDS = new Set(['canonical', 'og:url', 'og:title', 'og:description', 'theme-color', 'icon']);
-
 const TITLE_LIMITS = [10, 60];
 const DESCRIPTION_LIMITS = [50, 160];
 const outside = (text, [min, max]) => text.length < min || text.length > max;
@@ -527,18 +521,8 @@ async function siteIcon(dir, name, colour) {
   return { file, type: 'image/svg+xml', source: `a letter icon (the first letter of ${name}${colour ? ' in the site\'s colour' : ''})`, review: true };
 }
 
-/**
- * The group a fix is retried in when its page's fixes are not invisible together (preserve/stage.js fixAndProve): its kind, but
- * the head is split three ways, because a title can show (a script that prints it) where the description and the meta tags never
- * do. A canonical or og:url moved to the new site is a head:meta fix too; it is still counted and reported as `address`. Any
- * other address rewrite keeps the group `address`.
- */
-export function fixGroup(fix) {
-  if (fix.kind === 'head' && fix.field === 'title') return 'head:title';
-  if (fix.kind === 'head' && fix.field === 'description') return 'head:description';
-  if ((fix.kind === 'head' || fix.kind === 'address') && HEAD_META_FIELDS.has(fix.field)) return 'head:meta';
-  return fix.kind;
-}
+/** The group a fix is retried in (copy/fixRegistry.js fixGroup), exported here as before. */
+export { fixGroup };
 
 /** Puts a page's HTML back as it was lifted (its fixes were not invisible). */
 export async function revertPage(dir, outPath, html) {
