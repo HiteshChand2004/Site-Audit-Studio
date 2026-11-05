@@ -13,7 +13,7 @@ import path from 'node:path';
 import { stat, readFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import { AxeBuilder } from '@axe-core/playwright';
-import { decodePicture, exactDiff } from '../../verify/exact/pixels.js';
+import { exactDiffMany } from '../../verify/exact/pixels.js';
 import { scriptCandidates } from './extract.js';
 import { readRecordIndex, classifyScripts, recordBodyReader } from '../scripts.js';
 import { freezePage, freezeTimers, holdSizeReactions } from '../../verify/exact/freeze.js';
@@ -194,6 +194,8 @@ export const GATE_THRESHOLD = 0.05;
  * once and kept for them; a picture past this budget is read band by band in every comparison, as exactDiff does on its own.
  * Same pixels either way: only the time changes (three 1440 x 11 654 pictures a side are about 400 MB).
  */
+// (Light 3: gateVerdict no longer holds decoded pictures; it reads every picture once, band by band, with exactDiffMany. Kept
+// exported for callers that still decode a picture whole with decodePicture.)
 export const DECODED_BUDGET_BYTES = 512 * 1024 * 1024;
 
 /**
@@ -458,29 +460,22 @@ export async function anchorClicks(browser, fixedBase, unfixedBase, pagePath, { 
 export async function gateVerdict(fixedShots, unfixedShots, { threshold = GATE_THRESHOLD } = {}) {
   const fixedList = Buffer.isBuffer(fixedShots) ? [fixedShots] : fixedShots;
   if (Buffer.isBuffer(unfixedShots)) unfixedShots = [unfixedShots];
-  const pairs = [];
-  const opts = { threshold };
-  // Each picture decoded once for all the comparisons it is in (within DECODED_BUDGET_BYTES), not once per band of each.
-  const decoded = new Map();
-  let held = 0;
-  const once = async (png) => {
-    if (!Buffer.isBuffer(png)) return png;
-    if (!decoded.has(png)) {
-      const { width = 0, height = 0 } = await sharp(png, { limitInputPixels: false }).metadata();
-      let picture = png;
-      if (held + width * height * 4 <= DECODED_BUDGET_BYTES) {
-        picture = await decodePicture(png);
-        held += picture.raw.length;
-      }
-      decoded.set(png, picture);
-    }
-    return decoded.get(png);
+  // Every comparison of the verdict at once, each picture decoded once and read band by band (Light 3: exactDiffMany holds only
+  // the band in hand of each picture, where the whole decoded pictures were held before). Same pairs, same order, same results.
+  const pictures = [];
+  const indexOf = (png) => {
+    let i = pictures.indexOf(png);
+    if (i < 0) i = pictures.push(png) - 1;
+    return i;
   };
+  const same = [];
   for (const side of [fixedList, unfixedShots]) {
-    for (let i = 0; i < side.length; i++) for (let j = i + 1; j < side.length; j++) pairs.push(await exactDiff(await once(side[i]), await once(side[j]), opts));
+    for (let i = 0; i < side.length; i++) for (let j = i + 1; j < side.length; j++) same.push([indexOf(side[i]), indexOf(side[j])]);
   }
-  const crosses = [];
-  for (let i = 0; i < fixedList.length; i++) crosses.push(await exactDiff(await once(unfixedShots[i % unfixedShots.length]), await once(fixedList[i]), opts));
+  const cross = fixedList.map((png, i) => [indexOf(unfixedShots[i % unfixedShots.length]), indexOf(png)]);
+  const results = await exactDiffMany(pictures, [...same, ...cross], { threshold });
+  const pairs = results.slice(0, same.length);
+  const crosses = results.slice(same.length);
   const change = crosses[0];
   const { cols, rows } = change.blocks;
   // A block counts as changed only when every pairing shows it (the smallest count of them, so a change is never over-stated).
