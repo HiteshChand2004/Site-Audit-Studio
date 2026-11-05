@@ -63,9 +63,14 @@ export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPage
   const chosen = new Set(chosenPages.map(normPath));
   // fixOpen: what the copy's own fixes left open, with why (report.asIs.fixes.open): a row they explain is not a bug.
   const ctx = { site, copyHost, copied, chosen, oldLhr, newLhr, oldAxe, newAxe, address, revertedPages, excludedHosts, fixOpen };
+  // With a new-site address, structured data the original wrote with its own address is kept as written (copy/fixAsIs.js
+  // applyAddress): a structured-data row says so in plain words, whatever else explains it.
+  const ldNote = fixOpen.some((o) => o.kind === 'address' && o.field === 'json-ld')
+    ? ' Its structured data (JSON-LD) still names the original site\'s address: it is kept as the original wrote it.' : '';
   const pick = (item, explain) => {
     const ex = explain(item, ctx);
-    return { key: item.key, title: item.title, before: item.before, after: item.after, ...ex, group: groupOf(ex) };
+    const note = ldNote && /^aeo\.(json-ld-schema|faq-schema)(\.|$)/.test(item.key ?? '') ? ldNote : '';
+    return { key: item.key, title: item.title, before: item.before, after: item.after, ...ex, ...(note && { evidence: `${ex.evidence ?? ''}${note}`.trim() }), group: groupOf(ex) };
   };
   const out = items.filter((i) => i.status === 'regressed').map((item) => pick(item, explainOne));
   // "Still open" rows (failing on both sides, not fixed by the copy) are owed the same honesty (spec §5): one of the five
@@ -145,7 +150,7 @@ function explainOne(item, ctx) {
   // out (the original's would list pages the copy does not hold). The same evidence as the "still open" rule, for a row that
   // got worse (the original had the file, the copy has none).
   if (/^(crawl\.(sitemap|robots)|aeo\.llms-txt|seo\.canonical-url)(\.|$)/.test(key) && ctx.address && !ctx.address.used) {
-    return { reason: 'owner', evidence: `${item.after?.detail ?? 'Missing in the copy.'} No new-site address was given for this copy (${ctx.address.detail ?? 'none set'}); the copy writes sitemap.xml, robots.txt, llms.txt and canonical links only for an address of its own, since the original's name the original site's pages. Give the address and create the copy again.` };
+    return { reason: 'owner', evidence: `${item.after?.detail ?? 'Missing in the copy.'} No new-site address was given for this copy (${ctx.address.detail ?? 'none set'}); the copy writes sitemap.xml, robots.txt, llms.txt and canonical links only for an address of its own, since the original's name the original site's pages. Give the address when you download the copy.` };
   }
   if (key.startsWith('lighthouse.')) return orPlanned(lighthousePart(item, key.slice('lighthouse.'.length), ctx), item);
   if (key === 'axe.color-contrast') return contrastPart(ctx);
