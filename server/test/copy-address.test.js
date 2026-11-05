@@ -66,7 +66,9 @@ test('when the address is skipped, nothing in the copy names one, and the copy l
     assert.equal(await readFile(path.join(dir, 'robots.txt'), 'utf8'), robots, 'robots.txt left as lifted');
     const files = await readdir(dir);
     assert.ok(!files.includes('sitemap.xml') && !files.includes('llms.txt'), files.join(', '));
-    for (const f of files) assert.doesNotMatch(await readFile(path.join(dir, f), 'utf8'), /test\.com/, f);
+    // Every file of the copy, inside folders too (a fix may write one, e.g. icons/ for a letter icon).
+    const all = (await readdir(dir, { recursive: true, withFileTypes: true })).filter((e) => e.isFile()).map((e) => path.join(e.parentPath ?? e.path, e.name));
+    for (const f of all) assert.doesNotMatch(await readFile(f, 'utf8'), /test\.com/, path.relative(dir, f));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
