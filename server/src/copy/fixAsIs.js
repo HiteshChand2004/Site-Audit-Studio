@@ -27,6 +27,7 @@
 // Every page's fixes are listed; the stage then proves them invisible (preserve/check.js fixGate) and reverts a page's fixes
 // when they are not.
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
+import { statSync } from 'node:fs';
 import path from 'node:path';
 import * as cheerio from 'cheerio';
 import { fixAlt, fixNames } from '../recreate/fixers/a11y.js';
@@ -284,37 +285,22 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     if (finalDescription) seenDescription.add(finalDescription.toLowerCase());
     if (description) seenDescription.add(description.toLowerCase());
 
-    // Addresses: a canonical / og:url naming the original moves to the new site; a missing one is added (only with an address).
-    const own = newOrigin ? new URL(d.path, newOrigin).href : null;
-    const canonical = $('link[rel="canonical"]').first();
-    if (canonical.length) {
-      const moved = movedToNewSite(canonical.attr('href'), siteHost, newOrigin, byPath);
-      if (moved && allow('head:meta')) {
-        fixes.push({ kind: 'address', field: 'canonical', from: canonical.attr('href'), value: moved });
-        canonical.attr('href', moved);
-      }
-    } else if (own && allow('head:meta')) {
-      head.append('<link rel="canonical" href="">');
-      head.find('link[rel="canonical"]').last().attr('href', own);
-      fixes.push({ kind: 'head', field: 'canonical', value: own, source: 'the new address' });
-    }
-    const ogUrl = $('meta[property="og:url"]').first();
-    if (ogUrl.length) {
-      const moved = movedToNewSite(ogUrl.attr('content'), siteHost, newOrigin, byPath);
-      if (moved && allow('head:meta')) {
-        fixes.push({ kind: 'address', field: 'og:url', from: ogUrl.attr('content'), value: moved });
-        ogUrl.attr('content', moved);
-      }
-    }
+    // Addresses (applyAddress, shared with the address pass at download, copy/addressPass.js): a canonical / og:url / og:image
+    // naming the original moves to the new site, a missing canonical / og:url is added (only with an address).
     const og = (prop, value, source) => {
       if (!allow('head:meta') || !value || $(`meta[property="${prop}"]`).length) return;
       head.append(`<meta property="${prop}" content="">`);
       head.find(`meta[property="${prop}"]`).last().attr('content', value);
       fixes.push({ kind: 'head', field: prop, value, source });
     };
-    og('og:title', finalTitle, 'the page title');
-    og('og:description', finalDescription, 'the page description');
-    og('og:url', own, 'the new address');
+    // (Its fixes go into this page's list in the order they are made, the og:title / og:description between them as before.)
+    const { own } = applyAddress($, d, {
+      dir, siteHost, newOrigin, byPath, allow: allow('head:meta'), fixes, open,
+      between: () => {
+        og('og:title', finalTitle, 'the page title');
+        og('og:description', finalDescription, 'the page description');
+      },
+    });
 
     // theme-color and an icon, when the page has none: neither ever shows on the page. The colour and the icon are decided once
     // for the site (the homepage's evidence); a value taken from the stylesheets, and a letter icon, are marked for review.
@@ -394,6 +380,123 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
   return { pages: result, files, counts, open, originals, ...(!write && { html: htmlOut }) };
 }
 
+/** The tags that name a page's own address or picture: the only head tags an address writes or moves (copy/addressPass.js). */
+export const ADDRESS_TAGS = [
+  { field: 'canonical', selector: 'link[rel="canonical"]', attr: 'href' },
+  { field: 'og:url', selector: 'meta[property="og:url"]', attr: 'content' },
+  { field: 'og:image', selector: 'meta[property="og:image"]', attr: 'content' },
+  { field: 'twitter:image', selector: 'meta[name="twitter:image"], meta[property="twitter:image"]', attr: 'content' },
+];
+
+/**
+ * The new site's address written into one page's head (the full fix stage and the address pass at download use this same code):
+ *   - a canonical / og:url naming one of the copy's pages on the original's host moves to that page on the new site;
+ *   - an og:image / twitter:image naming the original's host moves to the new site when the copy holds that very file (a picture
+ *     the copy does not hold, or one given without a full address, is left as it is and listed);
+ *   - a missing canonical and og:url are added (the page on the new site); a missing og:image is listed, never made up;
+ *   - structured data (JSON-LD) that names the original's address is kept as the original wrote it, and listed.
+ * Nothing else is touched. Without an address (`newOrigin` null) nothing is written or listed.
+ * @param {import('cheerio').CheerioAPI} $  the page
+ * @param {{ path: string, outPath: string }} page
+ * @param {{ dir: string, siteHost: string, newOrigin: string|null, byPath: Map<string, string>, allow?: boolean, fixes?: object[],
+ *   open?: object[], between?: () => void }} o  `between` runs after the moves and before og:url is added (the full stage puts
+ *   og:title / og:description there, as it always has); `fixes` / `open` are the page's lists, appended to in order
+ * @returns {{ own: string|null, fixes: object[], open: object[] }}  own: the page's address on the new site
+ */
+export function applyAddress($, page, { dir, siteHost, newOrigin, byPath, allow = true, fixes = [], open = [], between = null }) {
+  const head = $('head');
+  const own = newOrigin ? new URL(page.path, newOrigin).href : null;
+  const canonical = $('link[rel="canonical"]').first();
+  if (canonical.length) {
+    const moved = movedToNewSite(canonical.attr('href'), siteHost, newOrigin, byPath);
+    if (moved && allow) {
+      fixes.push({ kind: 'address', field: 'canonical', from: canonical.attr('href'), value: moved });
+      canonical.attr('href', moved);
+    }
+  } else if (own && allow) {
+    head.append('<link rel="canonical" href="">');
+    head.find('link[rel="canonical"]').last().attr('href', own);
+    fixes.push({ kind: 'head', field: 'canonical', value: own, source: 'the new address' });
+  }
+  const ogUrl = $('meta[property="og:url"]').first();
+  if (ogUrl.length) {
+    const moved = movedToNewSite(ogUrl.attr('content'), siteHost, newOrigin, byPath);
+    if (moved && allow) {
+      fixes.push({ kind: 'address', field: 'og:url', from: ogUrl.attr('content'), value: moved });
+      ogUrl.attr('content', moved);
+    }
+  }
+  if (newOrigin && allow) {
+    for (const { field, selector, attr } of ADDRESS_TAGS.filter((t) => t.field.endsWith(':image'))) {
+      const el = $(selector).first();
+      const value = clean(el.attr(attr));
+      if (!el.length || !value) continue;
+      const moved = movedFileToNewSite(value, siteHost, newOrigin, dir);
+      if (moved) {
+        fixes.push({ kind: 'address', field, from: value, value: moved });
+        el.attr(attr, moved);
+      } else if (namesOriginal(value, siteHost)) {
+        open.push({ kind: 'address', field, page: page.path, reason: 'c', detail: `The ${field} picture (${value.slice(0, 160)}) is on the original site and the copy does not hold that file, so it still names the original's address: give the page a picture of the new site` });
+      } else if (!/^https?:\/\//i.test(value)) {
+        open.push({ kind: 'address', field, page: page.path, reason: 'c', detail: `The ${field} picture (${value.slice(0, 160)}) is not a full address, which link previews need; it is left as the original wrote it` });
+      }
+    }
+  }
+  between?.();
+  if (allow && own && !$('meta[property="og:url"]').length) {
+    head.append('<meta property="og:url" content="">');
+    head.find('meta[property="og:url"]').last().attr('content', own);
+    fixes.push({ kind: 'head', field: 'og:url', value: own, source: 'the new address' });
+  }
+  if (newOrigin && allow) {
+    if (!$('meta[property="og:image"]').length) {
+      open.push({ kind: 'address', field: 'og:image', page: page.path, reason: 'c', detail: 'The page has no og:image (the picture a link preview shows). None is made up: the owner chooses one' });
+    }
+    const named = $('script[type="application/ld+json"]').toArray().some((s) => namesOriginal($(s).text(), siteHost, true));
+    if (named) {
+      open.push({ kind: 'address', field: 'json-ld', page: page.path, reason: 'c', detail: 'The page\'s structured data (JSON-LD) still names the original site\'s address: it is kept as the original wrote it. Change it by hand if it should name the new site' });
+    }
+  }
+  return { own, fixes, open };
+}
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Does this address (or, `anywhere`, any address in this text) name the original's host? */
+function namesOriginal(value, siteHost, anywhere = false) {
+  const re = new RegExp(`https?:(?:\\\\?/){2}(?:www\\.)?${escapeRe(siteHost)}(?=[/:\\s"'\\\\)\\]>?#]|$)`, 'i');
+  if (anywhere) return re.test(String(value ?? ''));
+  try {
+    return bareHost(new URL(value).hostname) === siteHost;
+  } catch {
+    return false;
+  }
+}
+
+/** A picture on the original's host, as the same file on the new site when the copy holds it; null otherwise. */
+function movedFileToNewSite(value, siteHost, newOrigin, dir) {
+  let u;
+  try {
+    u = new URL(value);
+  } catch {
+    return null;
+  }
+  if (!/^https?:$/.test(u.protocol) || bareHost(u.hostname) !== siteHost) return null;
+  let rel;
+  try {
+    rel = decodeURIComponent(u.pathname).replace(/^\/+/, '');
+  } catch {
+    return null;
+  }
+  const file = path.resolve(dir, rel);
+  if (!rel || !file.startsWith(path.resolve(dir) + path.sep)) return null;
+  try {
+    if (!statSync(file).isFile()) return null;
+  } catch {
+    return null;
+  }
+  return new URL(`${u.pathname}${u.search}`, newOrigin).href;
+}
+
 /** A canonical / og:url on the original's host, as the same page on the new site; null when it names something else. */
 function movedToNewSite(value, siteHost, newOrigin, byPath) {
   if (!newOrigin || !value) return null;
@@ -423,8 +526,7 @@ async function siteFiles({ dir, docs, newOrigin, siteName, siteUrl, fetchLlms })
     const origin = new URL(siteUrl).origin;
     const own = fetchLlms ? await fetchLlms(origin).catch(() => null) : null;
     if (own?.text) {
-      const host = bareHost(new URL(siteUrl).hostname).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const text = newOrigin ? own.text.replace(new RegExp(`https?://(?:www\\.)?${host}(?=[/\\s)\\]>"']|$)`, 'gi'), newOrigin) : own.text;
+      const text = newOrigin ? withNewSite(own.text, siteUrl, newOrigin) : own.text;
       await writeFile(path.join(dir, 'llms.txt'), text, 'utf8');
       out.written.push('llms.txt');
       out.llms = newOrigin ? "the original's, naming the new site" : "the original's, as written";
@@ -434,6 +536,27 @@ async function siteFiles({ dir, docs, newOrigin, siteName, siteUrl, fetchLlms })
     out.notes.push('No new-site address: sitemap.xml, robots.txt and llms.txt name no address and were left as lifted.');
     return out;
   }
+  const files = await addressFiles({ dir, docs, newOrigin, siteName, siteUrl });
+  const llms = out.llms ?? files.llms;
+  return { ...out, ...files, written: [...new Set([...out.written, ...files.written])], ...(llms && { llms }) };
+}
+
+/** Every full address of the original's host in a text, on the new site instead (llms.txt). */
+function withNewSite(text, siteUrl, newOrigin) {
+  const host = escapeRe(bareHost(new URL(siteUrl).hostname));
+  return text.replace(new RegExp(`https?://(?:www\\.)?${host}(?=[/\\s)\\]>"']|$)`, 'gi'), newOrigin);
+}
+
+/**
+ * The site files that name the new site's address (the full fix stage and the address pass at download use this same code):
+ * sitemap.xml of the copy's pages (noindex ones left out), robots.txt with the original's rules kept and its Host / Sitemap lines
+ * naming the new site (written when there is none), and llms.txt: the copy's own one with the original's addresses moved to the
+ * new site, else one written from the pages. Only these three files are written.
+ * @param {{ dir: string, docs: { path: string, outPath: string, $: import('cheerio').CheerioAPI, head: object }[], newOrigin: string,
+ *   siteName: string, siteUrl: string }} o  each doc's `head` = { title, description, canonical }
+ */
+export async function addressFiles({ dir, docs, newOrigin, siteName, siteUrl }) {
+  const out = { written: [] };
   const generated = crawlFiles({
     pages: docs.map((d) => ({ info: { path: d.path, outPath: d.outPath }, head: { ...d.head, meta: noindexMeta(d.$) } })),
     baseUrl: newOrigin,
@@ -443,9 +566,18 @@ async function siteFiles({ dir, docs, newOrigin, siteName, siteUrl, fetchLlms })
   await writeFile(path.join(dir, 'sitemap.xml'), file('sitemap.xml'), 'utf8');
   out.written.push('sitemap.xml');
   out.sitemap = generated.sitemap;
-  if (!(await exists(path.join(dir, 'llms.txt'))) && file('llms.txt')) {
-    await writeFile(path.join(dir, 'llms.txt'), file('llms.txt'), 'utf8');
+  const llmsFile = path.join(dir, 'llms.txt');
+  const llms = await readFile(llmsFile, 'utf8').catch(() => null);
+  if (llms == null && file('llms.txt')) {
+    await writeFile(llmsFile, file('llms.txt'), 'utf8');
     out.written.push('llms.txt');
+  } else if (llms != null) {
+    const moved = withNewSite(llms, siteUrl, newOrigin);
+    if (moved !== llms) {
+      await writeFile(llmsFile, moved, 'utf8');
+      out.written.push('llms.txt');
+      out.llms = "the copy's own, naming the new site";
+    }
   }
   // robots.txt: the original's rules are kept; its Host and Sitemap lines name the new site.
   const robotsFile = path.join(dir, 'robots.txt');

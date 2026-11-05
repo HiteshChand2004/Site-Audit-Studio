@@ -9,7 +9,7 @@
 //   review   its fixes may ask the owner for a review (each such fix carries `review: true`)
 //   apply    ($, page, ctx) → { fixed, open }: the fixes of the markup pass run in this order by copy/fixAsIs.js; the others are
 //            made there inline (they need the tree adapter, the head's shared state or the files)
-//   needs    'perf': only on a page the speed probe measured (its plan is ctx.plan)
+//   needs    'perf': only on a page the speed probe measured (its plan is ctx.plan); 'address': only with the new site's address
 //   what     for a one-attribute axe fix: what it writes (the re-check's words when the row is still open)
 // How a target is shown to be gone is the key's own (goneBy): SEO, AEO and site-file checks from the markup, axe rules with axe,
 // Lighthouse audits only at re-check time.
@@ -21,7 +21,8 @@ export const FIXES = [
   { kind: 'aria', title: 'ARIA attributes', targets: ['axe.duplicate-id', 'axe.duplicate-id-aria', 'axe.duplicate-id-active', 'axe.frame-title', 'axe.tabindex', 'axe.aria-valid-attr-value', 'axe.aria-hidden-focus'], counted: true },
   { kind: 'head', title: 'Page head', targets: [], counted: true, review: true },
   { kind: 'data', title: 'Structured data', targets: ['aeo.json-ld-schema', 'aeo.faq-schema'], counted: true },
-  { kind: 'address', title: 'Addresses moved to the new site', targets: [], counted: true },
+  // Only with the new site's address (copy/address.js); the address pass at download makes these alone (copy/addressPass.js).
+  { kind: 'address', title: 'Addresses moved to the new site', targets: [], counted: true, needs: 'address' },
   { kind: 'lang', title: 'Page language', targets: ['axe.html-has-lang', 'axe.html-lang-valid'], counted: true },
   { kind: 'viewport', title: 'Viewport tag', targets: ['lighthouse.viewport', 'axe.meta-viewport', 'crawl.meta-tags'], counted: false },
   // crawlable-anchors and link-text are SEO audits, and Lighthouse rows are made for performance and best practices only
@@ -68,8 +69,14 @@ export const FIELDS = {
   icon: { keys: ['crawl.meta-tags'], title: 'Site icon', match: (field) => field === 'icon', group: 'head:meta' },
 };
 
-/** The head tags that never show on the page: the canonical and og:url (added, or moved to the new site), the og tags, the theme colour and the icon. */
-export const HEAD_META_FIELDS = new Set(['canonical', 'og:url', 'og:title', 'og:description', 'theme-color', 'icon']);
+/**
+ * The head tags that never show on the page: the canonical and og:url (added, or moved to the new site), the og tags, the link
+ * preview pictures moved to the new site (og:image, twitter:image), the theme colour and the icon.
+ */
+export const HEAD_META_FIELDS = new Set(['canonical', 'og:url', 'og:title', 'og:description', 'og:image', 'twitter:image', 'theme-color', 'icon']);
+
+/** The fields an address writes (copy/fixAsIs.js applyAddress): all the address pass at download may change in a page. */
+export const ADDRESS_FIELDS = new Set(['canonical', 'og:url', 'og:image', 'twitter:image']);
 
 /**
  * The group a fix is retried in when its page's fixes are not invisible together (preserve/stage.js fixAndProve): its kind, but
