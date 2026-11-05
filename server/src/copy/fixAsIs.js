@@ -104,10 +104,15 @@ const paragraphsOf = ($) => $('body p').toArray().map((p) => clean($(p).text()))
  *   pass, but only the pages named here are written, with only those groups, and the site files are not written again.
  * @param {Map<string, object>|null} [o.perf]  outPath → its plan (copy/perfAsIs.js planPerf, from preserve/check.js perfProbe);
  *   a page without one gets no lcp / lazy fix. The same plan is passed to a retry, so it makes the same fixes.
- * @returns {Promise<{ pages: object[], files: object, counts: Record<string, number>, open: object[], originals: Map<string, string> }>}
+ * @param {boolean} [o.write]  false: nothing is written; the pages' fixed HTML comes back as `html` (outPath → HTML)
+ * @returns {Promise<{ pages: object[], files: object, counts: Record<string, number>, open: object[], originals: Map<string, string>, html?: Map<string, string> }>}
  *   originals: outPath → the page's HTML before its fixes (for a revert)
  */
-export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, siteName = null, fetchLlms = null, readDir = null, only = null, perf = null }) {
+export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, siteName = null, fetchLlms = null, readDir = null, only = null, perf = null, write = true }) {
+  // write: false = no page is written; the fixed HTML of each page (of the `only` pages, when given) is returned as `html`
+  // (preserve/stage.js: a page without one group of its fixes, for the "problem gone?" check). Files a fix makes beside the
+  // pages (a letter icon, a WebP) are the same bytes the first pass wrote.
+  const htmlOut = new Map();
   const siteHost = bareHost(new URL(siteUrl).hostname);
   const newOrigin = newSiteUrl ? new URL(newSiteUrl).origin : null;
   const docs = [];
@@ -374,7 +379,9 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
       }
     }
 
-    if (fixes.length && (!only || only.has(d.outPath))) {
+    if (!write) {
+      if (!only || only.has(d.outPath)) htmlOut.set(d.outPath, $.html());
+    } else if (fixes.length && (!only || only.has(d.outPath))) {
       originals.set(d.outPath, d.html);
       await writeFile(d.file, $.html(), 'utf8');
     }
@@ -383,8 +390,8 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     result.push({ path: d.path, outPath: d.outPath, fixes });
   }
 
-  const files = only ? null : await siteFiles({ dir, docs, newOrigin, siteName: name, siteUrl, fetchLlms });
-  return { pages: result, files, counts, open, originals };
+  const files = only || !write ? null : await siteFiles({ dir, docs, newOrigin, siteName: name, siteUrl, fetchLlms });
+  return { pages: result, files, counts, open, originals, ...(!write && { html: htmlOut }) };
 }
 
 /** A canonical / og:url on the original's host, as the same page on the new site; null when it names something else. */

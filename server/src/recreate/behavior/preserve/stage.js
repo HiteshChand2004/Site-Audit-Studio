@@ -19,6 +19,7 @@ import { anchorClicks, checkCopy, excludedHostsOf, fixGate, formsInCopy, NOISE_S
 import { localFileOf, namesStillUsed, PERF_KINDS, planPerf, stylesheetCandidates } from '../../../copy/perfAsIs.js';
 import { formRoutesOfCopy, formsReadmeSection } from '../../../copy/formRoutes.js';
 import { fixAsIsCopy, fixGroup, revertPage } from '../../../copy/fixAsIs.js';
+import { checkGone } from '../../../copy/fixGone.js';
 import { addressForCopy } from '../../../copy/address.js';
 import { measureServed, servedOutcome } from '../../../copy/served.js';
 import { slugFor } from '../../discover.js';
@@ -227,6 +228,9 @@ export function proven(g) {
   return Boolean(g?.invisible) && !g.error && !(g.views ?? []).some((v) => v.widthMismatch || v.scrollCapped || v.inNoisePx > 0);
 }
 
+/** A group's fixes, one per kind and field (the open items of a group undone for having no effect). */
+const uniqueFields = (fixes) => [...new Map(fixes.map((f) => [`${f.kind}|${f.field ?? ''}`, f])).values()];
+
 /** Why a look that found no change still does not prove a speed fix (see proven). */
 const whyNotProven = (g) => {
   const v = (g.views ?? []).find((x) => x.widthMismatch || x.scrollCapped || x.inNoisePx > 0);
@@ -250,7 +254,9 @@ const whyNotKept = (g) => (g.error
  * again on its own, drops what it covers: a fix is kept only when it is shown to change nothing. The fixed side is served by a
  * fresh server for every look, because a server keeps each file it has sent and a retry rewrites the page.
  */
-export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped = null, log = () => {}, fetchLlms = null, speed = true }) {
+export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped = null, log = () => {}, fetchLlms = null, speed = true, gone = checkGone }) {
+  // Every group judged by the "problem gone?" check (copy/fixGone.js): { path, group, result, keys }.
+  const goneList = [];
   await rm(gateDir, { recursive: true, force: true });
   await cp(copyDir, gateDir, { recursive: true });
   const list = pages.map((p) => ({ path: localOfOutPath(p.outPath), outPath: p.outPath, url: p.url }));
@@ -394,6 +400,39 @@ export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, n
           p.dropped = dropped;
           if (!kept.length) p.reverted = { reason: 'd', why: g.invisible ? dropped[0]?.why ?? 'not proven' : whyNotKept(g) };
         }
+        // Is the problem gone? (Step 5b, copy/fixGone.js): the markup checks each kept group targets, read from the page as lifted
+        // and as fixed, no page load. A group whose problem is still there, or that made a check worse, is undone (noEffect): the
+        // page is made again from the lifted pages with its other groups. Taking a group away from fixes the gate saw unchanged
+        // adds nothing to the page, so it is not looked at again.
+        // A page without some of its groups, made in memory from the lifted pages (nothing written): which group made a check worse.
+        const rebuild = (p, groups) => fixAsIsCopy({ dir: copyDir, readDir: gateDir, siteUrl, newSiteUrl, pages: list, ...(speed && { perf }), only: new Map([[p.outPath, new Set(groups)]]), write: false })
+          .then((again) => again.html.get(p.outPath) ?? null);
+        const verdicts = await gone({ copyDir, gateDir, pages: list, fixed: fixed.pages, rebuild });
+        for (const p of fixed.pages) {
+          const v = verdicts.get(p.outPath);
+          if (!v) continue;
+          for (const [group, x] of Object.entries(v)) {
+            if (x.result !== 'unjudged' || x.why) goneList.push({ path: p.path, group, result: x.result, keys: x.keys, ...(x.why && { why: x.why }) });
+          }
+          const bad = Object.entries(v).filter(([, x]) => x.result === 'still' || x.result === 'worse');
+          if (!bad.length) continue;
+          const badGroups = new Set(bad.map(([group]) => group));
+          const keep = [...new Set(p.fixes.map(fixGroup))].filter((x) => !badGroups.has(x));
+          const original = fixed.originals.get(p.outPath);
+          for (const [group, x] of bad) {
+            const why = x.result === 'worse' ? x.why : `fixed by the copy, but ${x.why}`;
+            (p.dropped ??= []).push({ group, reason: 'noEffect', why });
+            for (const f of uniqueFields(p.fixes.filter((f) => fixGroup(f) === group))) fixed.open.push({ kind: f.kind, ...(f.field && { field: f.field }), group, page: p.path, reason: 'noEffect', detail: why });
+          }
+          await revertPage(copyDir, p.outPath, original);
+          const made = keep.length ? await makeOnly(p, keep) : [];
+          if (made?.length) p.fixes = made;
+          else {
+            await revertPage(copyDir, p.outPath, original);
+            p.reverted = { reason: 'noEffect', why: keep.length ? `${bad[0][1].why}; the other fixes could not be made again` : bad[0][1].why };
+          }
+          log(`fixes ${p.path}: undone, no effect [${[...badGroups].join(', ')}]`);
+        }
       } finally {
         await b.close();
       }
@@ -421,6 +460,9 @@ export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, n
       // Pages that kept some of their fixes and dropped others.
       dropped: fixed.pages.filter((p) => !p.reverted && p.dropped?.length).length,
       open: [...(addressSkipped ? [{ kind: 'address', page: null, ...addressSkipped }] : []), ...fixed.open],
+      // Groups the look gate kept but the "problem gone?" check undid (reason noEffect), and every verdict it reached.
+      noEffect: fixed.pages.reduce((n, p) => n + (p.dropped ?? []).filter((d) => d.reason === 'noEffect').length, 0),
+      gone: goneList,
       files: fixed.files,
       ...(speed && { css: css.report }),
       gate,

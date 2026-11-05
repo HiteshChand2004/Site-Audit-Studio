@@ -296,7 +296,8 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
       // For the "still open" rows: whether a new-site address was written, which pages' fixes were undone, the hosts excluded by rule.
       address: report.asIs?.address ?? null,
       // report.copy.fixes.reverted lists the pages (report.asIs.fixes.reverted is only their count).
-      revertedPages: (Array.isArray(report.copy?.fixes?.reverted) ? report.copy.fixes.reverted : []).map((r) => r.page),
+      // A page undone because its fixes had no effect (Step 5b) did not change the look: its rows are told by fixOpen (our bug).
+      revertedPages: (Array.isArray(report.copy?.fixes?.reverted) ? report.copy.fixes.reverted : []).filter((r) => r.reason !== 'noEffect').map((r) => r.page),
       excludedHosts: Array.isArray(report.asIs?.excludedByRule) ? report.asIs.excludedByRule : [],
       // What the copy's own fixes left open and why (the page gave no words, the site states no colour).
       fixOpen: Array.isArray(report.asIs?.fixes?.open) ? report.asIs.fixes.open : [],

@@ -14,7 +14,7 @@
 //                    are the original's, and changing them is a change of its look (§2: contrast is never rewritten as-is);
 //   b                not decided here: a backend item or a reverted fix carries its reason from the copy run (openItems.js).
 import { REASONS } from './openItems.js';
-import { FIXES, fixOf } from './fixRegistry.js';
+import { FIELDS, FIXES, KINDS_BY_KEY, fixOf } from './fixRegistry.js';
 
 /** How much a measured amount may move before it counts as grown: bytes and times vary run to run, element counts do not. */
 const GROWTH = { element: 0.02, other: 0.1 };
@@ -119,9 +119,25 @@ function summaryOf(rows) {
   return summary;
 }
 
+/**
+ * A row whose fix the copy wrote, the look gate kept, and the "problem gone?" check undid because the problem was still there or
+ * a check got worse (Step 5b, reason noEffect in report.asIs.fixes.open): our bug, with what was still there. Null otherwise.
+ */
+function noEffectRow(item, ctx) {
+  const kinds = KINDS_BY_KEY.get(item.key ?? '') ?? [];
+  const hits = ctx.fixOpen.filter((o) => o.reason === 'noEffect' && kinds.some((k) => (k.startsWith('field:')
+    ? (o.kind === 'head' || o.kind === 'address') && FIELDS[k.slice(6)].match(o.field)
+    : o.kind === k)));
+  if (!hits.length) return null;
+  const where = hits.slice(0, 2).map((o) => `${o.page}: ${o.detail}`).join('; ');
+  return { reason: null, unexplained: true, group: 'bug', evidence: `${item.after?.detail ?? 'Still failing in the copy.'} The copy's fix did not remove the problem (${where}), so it was undone: a bug to report.` };
+}
+
 /** One item: { reason, evidence } or { reason: null, evidence, unexplained: true }. */
 function explainOne(item, ctx) {
   const key = item.key ?? '';
+  const none = noEffectRow(item, ctx);
+  if (none) return none;
   if (key === 'links.broken-new') return plainNotCopied(byParts(item.links?.new ?? [], (l) => linkPart(l, ctx), 'link'), ctx, 'links');
   if (key === 'lighthouse.errors-in-console') return plainNotCopied(byParts(consoleErrors(ctx.newLhr), (e) => requestPart(e, ctx), 'console error'), ctx, 'prefetch');
   if (key.startsWith('lighthouse-score.')) return scorePart(item, ctx);
@@ -176,6 +192,8 @@ const LOOK_RULES = new Set(['color-contrast', 'heading-order', 'page-has-heading
 function explainOpen(item, ctx) {
   const key = item.key ?? '';
   const [section, id, part] = key.split('.');
+  const none = noEffectRow(item, ctx);
+  if (none) return none;
   if (key === 'links.broken') return plainNotCopied(byParts(item.links?.open ?? [], (l) => openLinkPart(l, ctx), 'link'), ctx, 'links');
   if (section === 'lighthouse') return openLighthouse(item, id, ctx);
   if (section === 'motion') return openMotion(item, ctx);
