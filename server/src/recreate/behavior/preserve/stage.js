@@ -31,6 +31,7 @@ import { runLighthouse } from '../../../audit/lighthouse/run.js';
 import { RecreateError } from '../../errors.js';
 import { openLinkChecker } from '../../../copy/linkBrowser.js';
 import { linkCounts, linkPass } from '../../../copy/linkPass.js';
+import { addNoticePages } from '../../../copy/noticePages.js';
 import { copyChecksOf } from '../../../copy/checks.js';
 import { issueLogger } from '../../../copy/serverLog.js';
 import { LOGS_DIR } from '../../../config/paths.js';
@@ -568,6 +569,20 @@ export function addressOpenItems(fixOpen = []) {
 }
 
 /**
+ * Open items for the pages that were not copied (copy/noticePages.js): their links open a notice page in the copy. One item
+ * per page: a page that needs a server is reason b, any other (not chosen, closed by robots.txt) is the owner's choice (c).
+ */
+export function noticeOpenItems(notices) {
+  return (notices?.pages ?? []).map((n) => ({
+    page: n.path,
+    check: 'page not copied',
+    values: `linked from ${n.from.join(', ')}`,
+    tried: 'its links open a notice page of the copy that says so',
+    reason: n.reason === 'backend' ? 'backend' : 'owner',
+  }));
+}
+
+/**
  * The address stage (Step 6, ctx.asIs.addressOnly): the new site's address written into a finished copy that was made without
  * one, at download. From the finished job (`fromDir`): its fixed copy gets the address (copy/addressPass.js: files only, proved,
  * undone when the proof fails), then it is packaged as before. Nothing is lifted, fixed, pictured or measured again (no browser,
@@ -743,6 +758,15 @@ export async function asIsStage(ctx) {
 
     // A preload of a file the copy does not hold is removed before packaging, so every stack inherits it (see preloads.js).
     report.preloadsRemoved = await dropMissingPreloads(copyDir);
+    // A link to a page of the site that was not copied opens a local notice page that says so, never the live original or a
+    // 404 of the copy (copy/noticePages.js: files only). Before the link pass, so it has those links no more to check.
+    report.notices = await addNoticePages({
+      dir: copyDir,
+      pages,
+      siteUrl,
+      brokenOnOriginal: ctx.audit && !ctx.audit.isDummy ? (ctx.audit.brokenLinks?.broken ?? []).map((b) => b.url) : [],
+      siteName: new URL(siteUrl).hostname.replace(/^www\./, ''),
+    }).catch((err) => ({ error: String(err?.message ?? err).slice(0, 200), pages: [], links: 0, files: 0, left: [] }));
     // Copy my site: every link of the copy is re-checked in a real browser and the safe fixes are written into the copy
     // before it is packaged (copy/linkPass.js). The copy is otherwise left exactly as it was lifted.
     ctx.progress(0.3, 'Checking the links');
@@ -903,6 +927,7 @@ export async function asIsStage(ctx) {
     }
     // With an address: the original's structured data that still names its own address, kept as written (addressOpenItems).
     openItems.push(...addressOpenItems(report.fixes?.open));
+    openItems.push(...noticeOpenItems(report.notices));
     // What the packaged copy serves decides what counts: headers only where its own server sends them; files and fixed pages
     // that are not served are open, never fixed.
     const served = report.fixes?.served && !report.fixes.served.error ? servedOutcome(report.fixes.served) : null;
