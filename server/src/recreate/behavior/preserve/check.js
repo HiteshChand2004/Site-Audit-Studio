@@ -12,6 +12,7 @@
 import path from 'node:path';
 import { stat, readFile } from 'node:fs/promises';
 import sharp from 'sharp';
+import { AxeBuilder } from '@axe-core/playwright';
 import { decodePicture, exactDiff } from '../../verify/exact/pixels.js';
 import { scriptCandidates } from './extract.js';
 import { readRecordIndex, classifyScripts, recordBodyReader } from '../scripts.js';
@@ -140,6 +141,13 @@ export async function pictureRounds(browser, opts, sides, rounds = NOISE_SHOTS) 
       settled.forEach((r, i) => { if (r?.capped) sides[i].scrollCapped = true; });
       const taken = await Promise.all(open.map((o) => fullShot(o.page)));
       taken.forEach((png, i) => shots[i].push(png));
+      // A side's own reading of its page (the "problem gone?" axe rules, Step 5c): in the first round, after the picture, in the
+      // page already open; one side at a time. No page is opened for it.
+      if (round === 0) {
+        for (const [i, o] of open.entries()) {
+          if (sides[i].inspect) sides[i].inspected = await sides[i].inspect(o.page).catch((err) => ({ error: String(err?.message ?? err).split('\n')[0].slice(0, 160) }));
+        }
+      }
     } finally {
       for (const o of open) await o.context.close().catch(() => {});
     }
@@ -204,6 +212,21 @@ export const DECODED_BUDGET_BYTES = 512 * 1024 * 1024;
  * (Before 2026-10-23: a share of the whole page against max(0.01 %, 2 × noise), with a 24-level colour cut and the share
  * rounded to 0.01 % — it could not see a 30 x 30 px change on a tall page, or any pale change at all.)
  */
+/** How long one axe reading of the gate may take before it counts as "could not read". */
+export const AXE_GATE_MS = 30000;
+
+/** How many elements fail each of these axe rules in the page as it is now (rule → count). Only these rules run. */
+export async function axeCounts(page, rules) {
+  let timer;
+  const limit = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`axe did not finish in ${AXE_GATE_MS / 1000} s`)), AXE_GATE_MS); });
+  try {
+    const r = await Promise.race([new AxeBuilder({ page }).withRules(rules).analyze(), limit]);
+    return Object.fromEntries(rules.map((id) => [id, r.violations.find((v) => v.id === id)?.nodes.length ?? 0]));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** The widths every as-is fix is proved invisible at: a phone first (touch, mobile mode), then a computer. */
 export const GATE_WIDTHS = [375, 1440];
 
@@ -212,22 +235,33 @@ export const GATE_WIDTHS = [375, 1440];
  * is. A change at one width decides (the next is not rendered); the top-level fields are the failing width's, else the last
  * one's, as callers have always read them; `views` holds each width's verdict.
  */
-export async function fixGate(browser, fixedBase, unfixedBase, pagePath, { widths = GATE_WIDTHS } = {}) {
+export async function fixGate(browser, fixedBase, unfixedBase, pagePath, { widths = GATE_WIDTHS, axeRules = null, axeBefore = null } = {}) {
   const views = [];
   for (const width of widths) {
     const fixedErrors = [];
     const unfixedErrors = [];
+    // axeRules: these axe rules are read on both sides in the visit the gate makes anyway (the unfixed side once per page and
+    // width: axeBefore caches it, keyed by path and width). The view gets axe { width, before, after } (rule → elements failing).
+    const cached = axeBefore?.get(`${pagePath}|${width}`);
+    const read = axeRules?.length ? (page) => axeCounts(page, axeRules) : null;
     const sides = [
-      { base: fixedBase, url: `${fixedBase}${pagePath}`, errors: fixedErrors },
-      { base: unfixedBase, url: `${unfixedBase}${pagePath}`, errors: unfixedErrors },
+      { base: fixedBase, url: `${fixedBase}${pagePath}`, errors: fixedErrors, ...(read && { inspect: read }) },
+      { base: unfixedBase, url: `${unfixedBase}${pagePath}`, errors: unfixedErrors, ...(read && !cached && { inspect: read }) },
     ];
     const [fixedShots, unfixedShots] = await pictureRounds(browser, viewOf(width), sides);
     const verdict = await gateVerdict(fixedShots, unfixedShots);
     // A console error of the fixed page that no load of the unfixed page had.
     const newErrors = [...new Set(fixedErrors)].filter((e) => !unfixedErrors.some((u) => u.includes(e)));
     const invisible = verdict.changedPx === 0 && !verdict.sizeChanged && newErrors.length === 0;
+    let axe;
+    if (read) {
+      const before = cached ?? sides[1].inspected;
+      if (!cached && before && !before.error) axeBefore?.set(`${pagePath}|${width}`, before);
+      const after = sides[0].inspected;
+      axe = before?.error || after?.error ? { width, error: before?.error ?? after?.error } : { width, before, after };
+    }
     // scrollCapped: a side was never scrolled to its end (reported; the speed fixes count such a look as not conclusive).
-    views.push({ width, ...verdict, newErrors, invisible, ...(sides.some((s) => s.scrollCapped) && { scrollCapped: true }) });
+    views.push({ width, ...verdict, newErrors, invisible, ...(sides.some((s) => s.scrollCapped) && { scrollCapped: true }), ...(axe && { axe }) });
     if (!invisible) break;
   }
   const failed = views.find((v) => !v.invisible);

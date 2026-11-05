@@ -19,7 +19,7 @@ import { anchorClicks, checkCopy, excludedHostsOf, fixGate, formsInCopy, NOISE_S
 import { localFileOf, namesStillUsed, PERF_KINDS, planPerf, stylesheetCandidates } from '../../../copy/perfAsIs.js';
 import { formRoutesOfCopy, formsReadmeSection } from '../../../copy/formRoutes.js';
 import { fixAsIsCopy, fixGroup, revertPage } from '../../../copy/fixAsIs.js';
-import { checkGone } from '../../../copy/fixGone.js';
+import { axeRulesFor, checkGone, judgeAxe, mergeVerdicts } from '../../../copy/fixGone.js';
 import { addressForCopy } from '../../../copy/address.js';
 import { measureServed, servedOutcome } from '../../../copy/served.js';
 import { slugFor } from '../../discover.js';
@@ -314,13 +314,19 @@ export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, n
       // The unfixed side never changes: one server for all of it.
       const b = await serveCopy(gateDir);
       const unfixed = b.url.replace(/\/$/, '');
+      // The axe rules a page's fixes answer (Step 5c, copy/fixGone.js axeRulesFor), read in each look's own visit; the lifted
+      // side once per page and width. Every look at one group alone is kept (which group made a rule worse), and the look that
+      // kept a page's fixes (its axe verdict).
+      const axeBefore = new Map();
+      const aloneLooks = new Map();
+      const finalLook = new Map();
       const look = async (p, groups = null) => {
         let a = null;
         let g;
         try {
           a = await serveCopy(copyDir);
           const fixedBase = a.url.replace(/\/$/, '');
-          g = await fixGate(browser, fixedBase, unfixed, p.path);
+          g = await fixGate(browser, fixedBase, unfixed, p.path, { axeRules: axeRulesFor(p.fixes), axeBefore });
           // A link given a role is also clicked on both sides: invisible is not enough for something a visitor uses.
           if (g.invisible && (groups ? groups.includes('anchors') : p.fixes.some((f) => f.kind === 'anchors'))) {
             const clicks = await anchorClicks(browser, fixedBase, unfixed, p.path);
@@ -334,6 +340,7 @@ export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, n
           await a?.close();
         }
         if (groups) g.groups = groups;
+        if (groups?.length === 1 && g.views) aloneLooks.set(p.outPath, new Map([...(aloneLooks.get(p.outPath) ?? []), [groups[0], g.views]]));
         gate.push(g);
         log(`fixes ${p.path}${groups ? ` [${groups.join(', ')}]` : ''} ${JSON.stringify(g)}`);
         return g;
@@ -349,7 +356,10 @@ export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, n
           const speedGroups = groups.filter((x) => PERF_KINDS.includes(x));
           const isSpeed = (x) => speedGroups.includes(x);
           const g = await look(p);
-          if (g.invisible && !speedGroups.length) continue;
+          if (g.invisible && !speedGroups.length) {
+            finalLook.set(p.outPath, g);
+            continue;
+          }
           const original = fixed.originals.get(p.outPath);
           await revertPage(copyDir, p.outPath, original);
           const dropped = [];
@@ -373,8 +383,10 @@ export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, n
               const same = g.invisible && kept.length === groups.length;
               const t = !made?.length ? notMade(made) : same ? g : await look(p, kept);
               const ok = t.invisible && (!kept.some(isSpeed) || proven(t));
-              if (ok) p.fixes = made;
-              else if (t.invisible && kept.some(isSpeed) && kept.some((x) => !isSpeed(x))) {
+              if (ok) {
+                p.fixes = made;
+                finalLook.set(p.outPath, t);
+              } else if (t.invisible && kept.some(isSpeed) && kept.some((x) => !isSpeed(x))) {
                 // No change, but not proven strictly with the speed fixes in: those go, and the markup fixes are judged on their
                 // own by the rule they always had (C1 + C2 unchanged).
                 const markup = kept.filter((x) => !isSpeed(x));
@@ -385,6 +397,7 @@ export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, n
                 if (u.invisible) {
                   p.fixes = m;
                   kept = markup;
+                  finalLook.set(p.outPath, u);
                 } else {
                   await revertPage(copyDir, p.outPath, original);
                   dropped.push(...markup.map((group) => ({ group, reason: 'd', why: `invisible alone, not together with the other kept fixes: ${whyNotKept(u)}` })));
@@ -408,6 +421,17 @@ export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, n
         const rebuild = (p, groups) => fixAsIsCopy({ dir: copyDir, readDir: gateDir, siteUrl, newSiteUrl, pages: list, ...(speed && { perf }), only: new Map([[p.outPath, new Set(groups)]]), write: false })
           .then((again) => again.html.get(p.outPath) ?? null);
         const verdicts = await gone({ copyDir, gateDir, pages: list, fixed: fixed.pages, rebuild });
+        // Step 5c: the axe rules each group answers, from the look that kept the page's fixes (width rule: only where the lifted
+        // page failed them); merged with the markup verdict of the same group.
+        for (const p of fixed.pages) {
+          const kept = finalLook.get(p.outPath);
+          if (p.reverted || !kept?.views || !p.fixes?.length) continue;
+          const ax = judgeAxe({ fixes: p.fixes, views: kept.views, alone: aloneLooks.get(p.outPath) ?? new Map() });
+          if (!Object.keys(ax).length) continue;
+          const v = verdicts.get(p.outPath) ?? {};
+          for (const [group, x] of Object.entries(ax)) v[group] = mergeVerdicts(v[group], x);
+          verdicts.set(p.outPath, v);
+        }
         for (const p of fixed.pages) {
           const v = verdicts.get(p.outPath);
           if (!v) continue;
