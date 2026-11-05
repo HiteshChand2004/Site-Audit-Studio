@@ -2,6 +2,24 @@
 // explanations from here, so a person without a technical background reads the same simple words everywhere, and an
 // expert term (LCP, SEO, fidelity, …) always comes with an explanation. Nothing here is specific to one website.
 
+/**
+ * The download dialog that asks for the new site's address of a "Copy my site" copy made without one (Step 6). The address
+ * goes only into the copy's search tags and site files; "I don't know yet" downloads the copy exactly as it is.
+ */
+export const ADDRESS_DIALOG = {
+  title: 'Where will the new site live?',
+  text: 'Give the new site’s address so the copy’s search tags, sitemap.xml and robots.txt name it. Nothing on the pages changes.',
+  label: 'The new site’s address',
+  placeholder: 'https://www.your-site.com',
+  hint: 'It is saved on this website. The copy is updated first (about a minute), then the download starts.',
+  later: 'I don’t know yet',
+  use: 'Use this address and download',
+  empty: 'Type the new site’s address, or choose “I don’t know yet”.',
+  writing: 'Writing the new site’s address into the copy… The download starts when it is ready.',
+  failedTitle: 'The address could not be written',
+  failedText: 'The copy without the address is still here and downloads as before.',
+};
+
 /** A 0–100 score as a rating people understand. */
 export function rating(score) {
   if (score == null || Number.isNaN(score)) return { label: 'Not measured', tone: 'neutral' };

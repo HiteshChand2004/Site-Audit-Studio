@@ -168,6 +168,10 @@ export const api = {
   // { reuseCapture: true }: rebuild from the last capture (the site is not opened again).
   startRecreate: (id, options = null) => request(`/projects/${id}/recreate`, { method: 'POST', ...(options && { body: options }) }),
   // The preview of an original as-is copy: its own address on this machine (never the app's origin).
+  // The new site's address written into a finished "Copy my site" copy, at download (a new job; files only, no page changes).
+  addAddress: (id, recreateId, address) => request(`/projects/${id}/recreate`, {
+    method: 'POST', body: { mode: 'as-is', confirmed: true, addressOnly: true, recreateId, addressConfirmed: address },
+  }),
   startAsIsPreview: (id, recreateId) => request(`/projects/${id}/recreate/${recreateId}/asis-preview`, { method: 'POST' }),
   getCurrentRecreate: (id) => request(`/projects/${id}/recreate/current`),
   downloadUrl: (id, recreateId, stack) => apiUrl(`/projects/${id}/recreate/${recreateId}/download${stack ? `?stack=${encodeURIComponent(stack)}` : ''}`),
