@@ -7,7 +7,7 @@
 // shared by pages at different depths renders the same markup on each of them.
 import { emitCss, CSS_FILE, minifyCssSync, usedCustomProps } from '../css.js';
 import { headHtml, whiteSpaceByClass } from '../html.js';
-import { MOTION_FILE, MOTION_JS, MOTION_TAG } from '../motionScript.js';
+import { MOTION_FILE, MOTION_TAG, motionJsMinified } from '../motionScript.js';
 import { programJson, REPLAY_MODULE, siteAnimationsJsx } from '../anim.js';
 import { APPEAR_MODULE, siteAppearJsx } from '../../behavior/framer/emit.js';
 import { siteScriptsJsx } from '../../behavior/lift.js';
@@ -121,7 +121,7 @@ export function emitReact(ir, opts = {}) {
   files.set('src/styles/site.css', styles);
   files.set('src/page-meta.json', `${JSON.stringify(meta, null, 2)}\n`);
   for (const f of ir.files) files.set(`public/${f.path}`, f.content);
-  if (motionScript) files.set(`public/${MOTION_FILE}`, MOTION_JS);
+  if (motionScript) files.set(`public/${MOTION_FILE}`, motionJsMinified());
   if (ir.pages.some((p) => p.anim)) {
     files.set('src/anim/replay.js', REPLAY_MODULE);
     files.set('src/SiteAnimations.jsx', siteAnimationsJsx());

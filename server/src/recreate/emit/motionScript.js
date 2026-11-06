@@ -15,6 +15,8 @@
 //      for `rp` elements: the reveal repeats, like the original's).
 // It is fixed (the same for every site), reads only the document and makes no request: the safety gate allows exactly this
 // file (verify/appProfiles.js `motion`) and nothing else.
+import { transformSync } from 'esbuild';
+
 export const MOTION_FILE = 'js/motion.js';
 
 export const MOTION_JS = `(function () {
@@ -503,6 +505,17 @@ export const MOTION_JS = `(function () {
   for (var j = 0; j < videos.length; j++) seen.observe(videos[j]);
 })();
 `;
+
+let minified = null;
+/**
+ * The same script minified (esbuild, as build/minify.js minifies the plain-HTML build's copy in dist/), made once. The app stacks
+ * (React + Vite, Next.js, MERN) ship it from public/, which their bundlers copy as it is, so they ship this one; the plain-HTML
+ * build keeps the readable one in site/ and minifies its own dist/.
+ */
+export function motionJsMinified() {
+  minified ??= transformSync(MOTION_JS, { loader: 'js', minify: true, legalComments: 'none', logLevel: 'silent' }).code;
+  return minified;
+}
 
 /** Where the app stacks (React + Vite, Next.js, MERN) serve it from: the root of the site, like their assets. */
 export const MOTION_SRC = `/${MOTION_FILE}`;
