@@ -66,6 +66,42 @@ test('prohibited names (4b): plain visible text, a named or role-bearing part in
   assert.ok(!r.open.some((o) => /Plain text div/.test(o.detail)), 'text is not a failure for axe: nothing reported for it');
 });
 
+// A marquee: the element carries the name, its only text is a list hidden from screen readers. axe counts no hidden text.
+const MARQUEE = `<!doctype html><html lang="en"><head><title>Marquee</title></head><body><main>
+  <div class="marquee" aria-label="Node.js, Python, Go"><ul aria-hidden="true"><li>Node.js</li><li>Python</li><li>Go</li></ul></div>
+  <div class="mixed" aria-label="Partners"><span aria-hidden="true">★</span> Our partners</div>
+  <div class="hidden-link" aria-label="Links"><ul aria-hidden="true"><li><a href="/x">X</a></li></ul></div>
+</main></body></html>`;
+
+test('prohibited names: text under aria-hidden="true" is no text of the element, as axe counts it (a marquee is made an image; axe agrees)', { timeout: 2 * 60000 }, async () => {
+  const $ = cheerio.load(MARQUEE);
+  const r = fixProhibitedNames($, PAGE);
+  assert.equal($('.marquee').attr('role'), 'img', 'its only text is hidden: the name needs a role that takes one');
+  assert.equal($('.marquee ul').attr('aria-hidden'), 'true', 'the hidden list is left as written');
+  assert.equal($('.mixed').attr('role'), undefined, 'visible text next to hidden text: left (axe only asks for a review)');
+  assert.equal($('.hidden-link').attr('role'), undefined, 'a link inside, even a hidden one, is never made part of an image');
+  assert.deepEqual(r.fixed.map((f) => [f.tag, f.text, f.value, f.review]), [['div', 'Node.js, Python, Go', 'img', true]]);
+  assert.ok(r.open.some((o) => /holds a link, button or field/.test(o.detail)), JSON.stringify(r.open));
+
+  // axe itself, before and after, on the same page.
+  const { default: AxeBuilder } = await import('@axe-core/playwright');
+  const browser = await chromium.launch();
+  try {
+    const failing = async (html) => {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      await page.setContent(html);
+      const res = await new AxeBuilder({ page }).withRules(['aria-prohibited-attr']).analyze();
+      await context.close();
+      return res.violations.flatMap((v) => v.nodes.map((n) => n.target.join(' '))).sort();
+    };
+    assert.deepEqual(await failing(MARQUEE), ['.hidden-link', '.marquee'], 'axe fails both elements whose only text is hidden');
+    assert.deepEqual(await failing($.html()), ['.hidden-link'], 'after the fix only the one left on purpose fails');
+  } finally {
+    await browser.close();
+  }
+});
+
 test('scrollable regions: the probe\'s boxes are found at the same place and get tabindex="0" (review); others are reported', () => {
   const html = `<body><main><div class="list" id="l1">a</div><div class="other">b</div><div class="own" tabindex="-1">c</div></main></body>`;
   const plan = planPerf({ widths: [

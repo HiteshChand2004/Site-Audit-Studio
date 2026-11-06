@@ -212,7 +212,11 @@ export function fixProhibitedNames($, page) {
     const role = clean(a.role).toLowerCase().split(/\s+/)[0];
     if (role && !PROHIBITING_ROLES.has(role)) continue;
     if (!role && !NAMING_PROHIBITED.has(el.name)) continue;
-    const hasText = clean($(el).text()) || $(el).find('img[alt]').toArray().some((i) => clean(i.attribs.alt)) || $(el).find('svg title').length;
+    // Text as axe counts it: what sits under aria-hidden="true" is no text of the element (a marquee's list hidden from screen
+    // readers, named by the element's own aria-label instead).
+    const shown = $(el).clone();
+    shown.find('[aria-hidden="true"]').remove();
+    const hasText = clean(shown.text()) || shown.find('img[alt]').toArray().some((i) => clean(i.attribs.alt)) || shown.find('svg title').length;
     if (hasText) continue;
     if (role) {
       open.push({ page: page.path, reason: 'd', detail: `A ${el.name} with role="${role}" carries the name "${short(label)}", which that role does not allow: the role is the author's choice, left as it is` });
