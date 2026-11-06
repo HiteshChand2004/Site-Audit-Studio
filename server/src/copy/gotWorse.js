@@ -152,7 +152,11 @@ function explainOne(item, ctx) {
   if (/^(crawl\.(sitemap|robots)|aeo\.llms-txt|seo\.canonical-url)(\.|$)/.test(key) && ctx.address && !ctx.address.used) {
     return { reason: 'owner', evidence: `${item.after?.detail ?? 'Missing in the copy.'} No new-site address was given for this copy (${ctx.address.detail ?? 'none set'}); the copy writes sitemap.xml, robots.txt, llms.txt and canonical links only for an address of its own, since the original's name the original site's pages. Give the address when you download the copy.` };
   }
-  if (key.startsWith('lighthouse.')) return orPlanned(lighthousePart(item, key.slice('lighthouse.'.length), ctx), item);
+  if (key.startsWith('lighthouse.')) {
+    const id = key.slice('lighthouse.'.length);
+    const r = lighthousePart(item, id, ctx);
+    return orPlanned(r.unexplained ? imageRow(item, id, ctx) ?? r : r, item);
+  }
   if (key === 'axe.color-contrast') return contrastPart(ctx);
   return orPlanned(unexplained('No rule of the five reasons applies to this check on the evidence of this run.'), item);
 }
@@ -240,6 +244,60 @@ function auditUrls(lhr, id) {
 const hostsOf = (urls) => [...new Set(urls.map(hostOf).filter(Boolean))];
 const fewUrls = (urls) => urls.slice(0, 3).map((u) => { try { return new URL(u).pathname.split('/').pop() || new URL(u).hostname; } catch { return u.slice(0, 40); } }).join(', ');
 
+// Lighthouse audits that ask for a smaller file per image: what closes them is a lossy re-encode or a resized file, never the
+// same pixels. The copy keeps every image's pixels (copy/perfAsIs.js: only a lossless WebP of a PNG), so a file the copy already
+// made lossless, or the very file the original serves, is a change of its look (d). Evidence per file, from this run only.
+const IMAGE_FILE_AUDITS = new Set(['modern-image-formats', 'uses-optimized-images', 'uses-responsive-images', 'efficient-animated-content']);
+const OUR_WEBP = /\.sas-[0-9a-f]{10}\.webp$/i;
+/** A file's name without the copy's own marks (the lift's ~query hash, the WebP fix's .sas- hash) and without its extension. */
+const imageStem = (url) => {
+  let name;
+  try { name = decodeURIComponent(new URL(url, 'http://x/').pathname.split('/').pop()); } catch { return null; }
+  return name.replace(OUR_WEBP, '').replace(/\.[a-z0-9]+$/i, '').replace(/~[0-9a-f]{8}$/i, '').toLowerCase() || null;
+};
+/** The rows of an audit on both devices: url → the largest saving named for it. */
+function savingsByUrl(lhr, id) {
+  const m = new Map();
+  for (const device of ['mobile', 'desktop']) {
+    for (const row of lhr?.[device]?.audits?.[id]?.details?.items ?? []) {
+      if (typeof row.url !== 'string') continue;
+      m.set(row.url, Math.max(m.get(row.url) ?? 0, Number(row.wastedBytes) || 0));
+    }
+  }
+  return m;
+}
+
+/**
+ * An image row whose every file only a lossy or resized file could make smaller: { reason: 'look', … }, else null (the row goes
+ * on to the planned-fix rule). A file is explained when the copy's fix already made it a lossless WebP, or when the original's
+ * own audit names the same file (any host: the site or its CDN) with a saving no smaller than the copy's — the copy serves it as
+ * the original does. A PNG the fix left needs the fix's own reason for leaving it (fixOpen), else it is not explained.
+ */
+function imageRow(item, id, ctx) {
+  if (!IMAGE_FILE_AUDITS.has(id)) return null;
+  const copy = savingsByUrl(ctx.newLhr, id);
+  if (!copy.size) return null;
+  const original = [...savingsByUrl(ctx.oldLhr, id)].map(([url, bytes]) => ({ url, bytes, stem: imageStem(url) }));
+  const leftPng = ctx.fixOpen.filter((o) => o.kind === 'webp');
+  const r = byParts([...copy], ([url, bytes]) => {
+    const what = fewUrls([url]);
+    const host = hostOf(url);
+    if (/^https?:/.test(url) && host !== ctx.copyHost) return { what, reason: null, evidence: 'not a file of the copy' };
+    if (OUR_WEBP.test(url)) return { what, reason: 'look', evidence: 'already a lossless WebP the copy made with the very same pixels; only a lossy or resized file could save more, which would change the look' };
+    const stem = imageStem(url);
+    const same = original.find((o) => o.stem && o.stem === stem);
+    if (!same) return { what, reason: null, evidence: 'the original\'s report does not name this file' };
+    if (bytes > same.bytes * (1 + GROWTH.other) + 1024) return { what, reason: null, evidence: `the copy could save ${kb(bytes)} on it against the original's ${kb(same.bytes)}: the copy holds a heavier file than the original served` };
+    if (/\.png$/i.test(url)) {
+      const why = leftPng.find((o) => String(o.detail ?? '').toLowerCase().includes(stem));
+      if (!why) return { what, reason: null, evidence: 'a PNG the copy did not make a lossless WebP of, and no reason was recorded' };
+      return { what, reason: 'look', evidence: `the original serves this file (${hostOf(same.url) ?? 'its own host'}); the lossless WebP was not made (${why.detail}); only a lossy or resized file could close it, which would change the look` };
+    }
+    return { what, reason: 'look', evidence: `the original serves this file (${hostOf(same.url) ?? 'its own host'}) as the copy does; only a lossy or resized file could close it, which would change the look` };
+  }, 'image');
+  return r.unexplained ? null : { ...r, evidence: `${item.after?.detail ?? 'Still failing in the copy.'} ${r.evidence}` };
+}
+
 /** A Lighthouse audit failing on both sides. */
 function openLighthouse(item, id, ctx) {
   const urls = auditUrls(ctx.newLhr, id);
@@ -248,6 +306,8 @@ function openLighthouse(item, id, ctx) {
   if (hosts.length && foreign.length === hosts.length) {
     return { reason: 'third_party', evidence: `Everything this check names comes from ${foreign.join(', ')}: third-party code the original loads (${fewUrls(urls)}), neither the copy's nor the original's own files.` };
   }
+  const img = imageRow(item, id, ctx);
+  if (img) return img;
   if (planned(item)) return owed(item, planned(item));
   if (LH_FIXED_BY_COPY.has(id)) {
     return unexplained(`${item.after?.detail ?? 'Still failing in the copy.'} The copy's own fixer for the largest element should have handled this and did not: a bug to report.`);

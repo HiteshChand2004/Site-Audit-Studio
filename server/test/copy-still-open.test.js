@@ -134,3 +134,38 @@ test('a sitemap, robots, llms.txt or canonical row that got worse with no new-si
   assert.equal(worseOne({ key: 'crawl.sitemap', after: { detail: '/sitemap.xml → 404' } }, { address: { used: 'https://new.example.net' } }).unexplained, true);
   assert.equal(worseOne({ key: 'crawl.sitemap', after: { detail: '/sitemap.xml → 404' } }).unexplained, true, 'without address information nothing is assumed');
 });
+
+test('still open image rows: only a lossy or resized file could close them (d), on evidence per file; without evidence still owed', () => {
+  const rows = (id, list) => ({ [id]: { details: { items: list.map(([url, wastedBytes]) => ({ url, wastedBytes })) } } });
+  const row = (id, copyRows, originalRows, extra = {}) => openOne({ key: `lighthouse.${id}`, after: { detail: 'Images could be smaller' } },
+    { newLhr: { mobile: lhr(rows(id, copyRows)) }, oldLhr: { mobile: lhr(rows(id, originalRows)) }, ...extra });
+
+  // The copy already holds a lossless WebP of the original's PNG: more saving needs a lossy file.
+  const ours = row('modern-image-formats', [[`${COPY}/img/hero.sas-0123456789.webp`, 30000]], []);
+  assert.equal(ours.reason, 'look');
+  assert.match(ours.evidence, /already a lossless WebP the copy made/);
+
+  // The very file the original's CDN serves (the lift named it hero~<hash>.jpg from hero.jpg?w=800), the same saving.
+  const served = row('uses-responsive-images', [[`${COPY}/img/hero~1a2b3c4d.jpg`, 40000]], [['https://cdn.example-original.test/img/hero.jpg?w=800', 41000]]);
+  assert.equal(served.reason, 'look');
+  assert.match(served.evidence, /the original serves this file \(cdn\.example-original\.test\)/);
+  assert.match(served.evidence, /only a lossy or resized file could close it/);
+
+  // The copy could save much more than the original on the same file: it holds a heavier file. Not a look change: still owed.
+  const heavier = row('uses-responsive-images', [[`${COPY}/img/hero.jpg`, 400000]], [['https://www.example-original.test/img/hero.jpg', 41000]]);
+  assert.equal(heavier.reason, null);
+  assert.equal(heavier.group, 'missing-fixer');
+
+  // A PNG the fix left: explained only with the fix's own reason for leaving it.
+  const png = [[`${COPY}/img/logo.png`, 9000]];
+  const pngOriginal = [['https://www.example-original.test/img/logo.png', 9000]];
+  assert.equal(row('modern-image-formats', png, pngOriginal).group, 'missing-fixer', 'no reason recorded: not explained');
+  const left = row('modern-image-formats', png, pngOriginal, { fixOpen: [{ kind: 'webp', page: '/', reason: 'd', detail: '/img/logo.png is not converted to WebP: it carries gAMA' }] });
+  assert.equal(left.reason, 'look');
+  assert.match(left.evidence, /it carries gAMA/);
+
+  // One file explained, one not: the row is not explained.
+  assert.equal(row('modern-image-formats', [[`${COPY}/img/hero.sas-0123456789.webp`, 30000], [`${COPY}/img/new.jpg`, 5000]], []).group, 'missing-fixer');
+  // Not a per-file image audit: unchanged.
+  assert.equal(row('offscreen-images', [[`${COPY}/img/hero.sas-0123456789.webp`, 30000]], []).group, 'missing-fixer');
+});

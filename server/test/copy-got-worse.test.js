@@ -161,3 +161,17 @@ test('KNOWN-ISSUES.md lists every row that got worse, the unexplained ones as su
   assert.match(known.content, /## Got worse: New broken links[\s\S]*What this means: go to pages not chosen[\s\S]*Reason: c — /);
   assert.match(known.content, /## Got worse: Browser errors[\s\S]*What this means: the copy does not hold \/assets\/hero\.mp4[\s\S]*Tried: no automatic fix yet[\s\S]*Reason: UNEXPLAINED/);
 });
+
+test('an image row that got worse is a look change only when the copy serves the original\'s own file, never when it holds a heavier one', () => {
+  const rows = (id, list) => ({ [id]: { score: 0, details: { items: list.map(([url, wastedBytes]) => ({ url, wastedBytes })), overallSavingsBytes: list.reduce((s, [, b]) => s + b, 0) } } });
+  const worse = (copyRows, originalRows) => one({ key: 'lighthouse.modern-image-formats', after: { detail: 'Serve images in next-gen formats' } },
+    { newLhr: { mobile: lhr(rows('modern-image-formats', copyRows)) }, oldLhr: { mobile: lhr(rows('modern-image-formats', originalRows)) } });
+  // The copy names one more file than the original (a lossless WebP it made): the amount grew, yet every file is explained.
+  const made = worse([[`${COPY}/img/a.sas-0123456789.webp`, 20000], [`${COPY}/img/b~1a2b3c4d.jpg`, 30000]], [['https://cdn.example-original.test/img/b.jpg?w=800', 30000]]);
+  assert.equal(made.reason, 'look');
+  assert.equal(made.group, 'look');
+  // The flexibench shape: the original's CDN sent a small file, the copy holds the large one. A real gap: still owed.
+  const big = worse([[`${COPY}/img/photo.png`, 14000000]], [['https://cdn.example-original.test/img/photo.png', 73000]]);
+  assert.equal(big.reason, null);
+  assert.equal(big.group, 'missing-fixer');
+});
