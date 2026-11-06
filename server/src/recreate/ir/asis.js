@@ -20,6 +20,7 @@ import { guardAttributes } from '../fixers/html.js';
 import { addRemoved, sanitizeSvg } from '../fixers/svg.js';
 import { noticeFiles } from './index.js';
 import { relFile } from './links.js';
+import { hoverPairOnly } from './states.js';
 import { VIEW_WIDTHS } from '../views.js';
 
 // Never part of a page's markup in the copy: active content, what the head already writes, and the stylesheet owners
@@ -507,11 +508,13 @@ export function placeExtras(body, placements) {
     const at = where.get(p.anchor);
     if (!at?.parent) continue;
     const list = at.parent.children;
-    if (p.kind === 'wrap') {
+    if (p.kind === 'wrap' && !hoverPairOnly(at.parent.t, at.n.t)) {
       list.splice(list.indexOf(at.n), 1, { t: 'div', attrs: { 'data-w-hv': '', style: 'display: contents' }, children: [at.n, p.node] });
       placed++;
       continue;
     }
+    // A list item (or a table row, an option) may not get a box around it: the copy goes right after it, the card is a pair.
+    if (p.kind === 'wrap') at.n.attrs = { ...at.n.attrs, 'data-w-hrest': 'pair' };
     const chain = after.get(p.anchor) ?? [at.n];
     list.splice(list.indexOf(chain[chain.length - 1]) + 1, 0, p.node);
     chain.push(p.node);

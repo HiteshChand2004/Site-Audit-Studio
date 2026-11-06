@@ -219,6 +219,30 @@ export const MOTION_JS = `(function () {
   }
   // A card's hovered look (data-w-hv box): put in place the first time the card is pointed at or focused; the stylesheet
   // then swaps the two on :hover / :focus-within.
+  // A list item's hovered look is its next sibling (no box may stand in a list): the card is marked is-hv while the mouse is
+  // on the card or its copy, and the stylesheet swaps the two on that mark. The mouse only (the original's script answered
+  // mouseenter): showing it on focus would hide the focused item and drop the keyboard focus.
+  var pairOf = function (el) {
+    if (!el || !el.closest) return null;
+    var card = el.closest('[data-w-hrest="pair"]');
+    if (card) return card;
+    var copy = el.closest('[data-w-hcopy]');
+    var prev = copy && copy.previousElementSibling;
+    return prev && prev.getAttribute('data-w-hrest') === 'pair' ? prev : null;
+  };
+  var pairIn = function (e) {
+    var card = pairOf(e.target);
+    if (!card) return;
+    var next = card.nextElementSibling;
+    if (next && next.tagName === 'TEMPLATE' && next.getAttribute('data-w-tpl') === 'hover') card.parentNode.replaceChild(next.content, next);
+    card.classList.add('is-hv');
+  };
+  var pairOut = function (e) {
+    var card = pairOf(e.target);
+    if (card && pairOf(e.relatedTarget) !== card) card.classList.remove('is-hv');
+  };
+  document.addEventListener('pointerover', pairIn, { passive: true });
+  document.addEventListener('pointerout', pairOut, { passive: true });
   var hoverIn = function (e) {
     var box = e.target && e.target.closest ? e.target.closest('[data-w-hv]') : null;
     if (!box) return;
