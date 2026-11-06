@@ -4,8 +4,9 @@
 //   lcp    the image that is the Largest Contentful Paint at either width gets fetchpriority="high", and loses loading="lazy"
 //   lazy   an image entirely below the first screen at BOTH widths gets loading="lazy" (the gate scrolls through the page, so a
 //          lazy image that would come in late or not at all shows in its pictures)
-//   webp   a local PNG shown by an <img> is re-encoded as LOSSLESS WebP when every decoded pixel is the same, it has no colour
-//          or gamma chunk a browser would apply differently, it is not animated, and the new file is at most 90 % of the old one
+//   webp   a local PNG shown by an <img> (its src, its srcset, its <picture>'s untyped sources, all or none per image) or named
+//          in the page's own CSS is re-encoded as LOSSLESS WebP when every decoded pixel is the same, it has no colour or gamma
+//          chunk a browser would apply differently, it is not animated, and the new file is at most 90 % of the old one
 //   css    a local stylesheet loses its whitespace and comments (esbuild, whitespace only: no rule is merged, reordered or
 //          dropped), only when the browser builds the very same rules from both (cssRules, compared text for text) and every
 //          page that loads it is pictured the same (preserve/stage.js minifyAndProve)
@@ -139,6 +140,9 @@ function colourChunks(png) {
   return found;
 }
 
+/** A PNG larger than this many pixels is left as it is: decoding both files to compare them would cost too much memory. */
+export const WEBP_MAX_PIXELS = 16e6;
+
 /**
  * A lossless WebP of a PNG, or why there is none. Same pixels: both are decoded to RGBA and compared byte for byte.
  * @returns {Promise<{ data: Buffer, from: number } | { skip: string }>}
@@ -147,6 +151,8 @@ export async function losslessWebp(png) {
   if (png.length < 8 || png.toString('latin1', 1, 4) !== 'PNG') return { skip: 'not a PNG' };
   const chunks = colourChunks(png);
   if (chunks.length) return { skip: `it carries ${chunks.join(', ')} (${chunks.includes('acTL') ? 'animated' : 'colour or gamma the browser applies'})` };
+  const { width = 0, height = 0 } = await sharp(png).metadata();
+  if (width * height > WEBP_MAX_PIXELS) return { skip: `it is ${width} × ${height} pixels, more than ${WEBP_MAX_PIXELS / 1e6} million` };
   const data = await sharp(png).webp({ lossless: true, effort: 6 }).toBuffer();
   if (data.length > png.length * WEBP_MAX_SHARE) return { skip: `the WebP would be ${Math.round((data.length / png.length) * 100)} % of it` };
   const rgba = (b) => sharp(b).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
@@ -155,42 +161,123 @@ export async function losslessWebp(png) {
   return { data, from: png.length };
 }
 
+/** One srcset as its candidates, each with the text around its address kept as written (descriptors, spaces, order). */
+export function srcsetParts(srcset) {
+  return String(srcset).split(',').map((part) => {
+    const m = part.match(/^(\s*)(\S+)([\s\S]*)$/);
+    return m ? { before: m[1], url: m[2], after: m[3] } : { before: part, url: '', after: '' };
+  });
+}
+const joinSrcset = (parts) => parts.map((p) => `${p.before}${p.url}${p.after}`).join(',');
+
+/** The lossless WebP of one local PNG file of the copy, written next to it once (memo `made`), or why there is none. */
+async function webpOf(file, dir, made) {
+  let result = made.get(file);
+  if (result) return result;
+  const png = await readFile(file).catch(() => null);
+  result = png ? await losslessWebp(png).catch((err) => ({ skip: `it could not be read (${String(err?.message ?? err).slice(0, 80)})` })) : { skip: 'the file is missing' };
+  if (result.data) {
+    const name = `${path.basename(file, path.extname(file))}.sas-${createHash('sha256').update(result.data).digest('hex').slice(0, 10)}.webp`;
+    const target = path.join(path.dirname(file), name);
+    // Never over a file of the copy: a name already taken must hold exactly these bytes (a retry writing it again).
+    const there = await readFile(target).catch(() => null);
+    if (there && !there.equals(result.data)) result = { skip: `${name} already exists with other content` };
+    else {
+      if (!there) await writeFile(target, result.data);
+      result = { name, file: path.relative(dir, target).split(path.sep).join('/'), from: result.from, to: result.data.length };
+    }
+  }
+  made.set(file, result);
+  return result;
+}
+
+const isPng = (url) => /\.png$/i.test(url);
+const webpAddress = (url, name) => url.replace(/[^/]+$/, encodeURIComponent(name));
+
 /**
- * The webp fixes of one page: each <img> whose src is a local PNG (no srcset: the browser's choice is left alone) points at a
- * lossless WebP written next to it (`<name>.sas-<sha256:10>.webp`; the PNG stays, other pages, CSS or scripts may use it).
+ * The webp fixes of one page. Each local PNG an <img> can show points at a lossless WebP of it written next to it
+ * (`<name>.sas-<sha256:10>.webp`; the PNG stays: other pages, CSS or scripts may use it). That covers its src, every candidate
+ * of its srcset and of the srcsets of its <picture>'s sources: only the files change, never srcset, sizes, media, the order or
+ * the descriptors, so the browser chooses the same candidate at every width and screen density, and every candidate has the
+ * very same pixels. All or none per image: when one PNG candidate cannot be converted, none of them is. A <picture> source
+ * that names its type is left as the original has it (the type decides the browser's choice). PNGs in the page's own style
+ * attributes and <style> blocks are converted the same way; a shared stylesheet is not touched here (one page cannot prove it).
  */
 export async function fixPngImages($, page, dir, made = new Map()) {
   const fixed = [];
   const open = [];
   for (const img of staticImages($)) {
     const a = img.el.attribs;
-    if (a.srcset != null || $(img.el).closest('picture').length || !/\.png$/i.test(img.src)) continue;
-    const file = localFileOf(dir, page.outPath, img.src);
-    if (!file) continue;
-    let result = made.get(file);
-    if (!result) {
-      const png = await readFile(file).catch(() => null);
-      result = png ? await losslessWebp(png).catch((err) => ({ skip: `it could not be read (${String(err?.message ?? err).slice(0, 80)})` })) : { skip: 'the file is missing' };
-      if (result.data) {
-        const name = `${path.basename(file, path.extname(file))}.sas-${createHash('sha256').update(result.data).digest('hex').slice(0, 10)}.webp`;
-        const target = path.join(path.dirname(file), name);
-        // Never over a file of the copy: a name already taken must hold exactly these bytes (a retry writing it again).
-        const there = await readFile(target).catch(() => null);
-        if (there && !there.equals(result.data)) result = { skip: `${name} already exists with other content` };
-        else {
-          if (!there) await writeFile(target, result.data);
-          result = { name, file: path.relative(dir, target).split(path.sep).join('/'), from: result.from, to: result.data.length };
-        }
-      }
-      made.set(file, result);
+    const picture = $(img.el).closest('picture');
+    const sources = picture.length ? picture.children('source').toArray() : [];
+    /** @type {{ el: any, attr: string, url: string, parts?: object[], part?: object }[]} */
+    const slots = [{ el: img.el, attr: 'src', url: img.src }];
+    for (const el of [img.el, ...sources]) {
+      if (el.attribs.srcset == null) continue;
+      const parts = srcsetParts(el.attribs.srcset);
+      for (const part of parts) if (part.url) slots.push({ el, attr: 'srcset', url: part.url, parts, part });
     }
-    if (result.skip) {
-      open.push({ page: page.path, reason: 'd', detail: `${img.src} is not converted to WebP: ${result.skip}` });
+    const pngSlots = slots.filter((s) => isPng(s.url));
+    if (!pngSlots.length) continue;
+    const several = slots.length > 1;
+    const leave = (why) => open.push({ page: page.path, reason: 'd', detail: `${img.src}${several ? ' and its other sizes are' : ' is'} not converted to WebP: ${why}` });
+    const typed = sources.find((s) => s.attribs.type);
+    if (typed) {
+      leave(`a <source> of its <picture> names its type (${typed.attribs.type}), which decides the browser's choice`);
       continue;
     }
-    const src = img.src.replace(/[^/]+$/, encodeURIComponent(result.name));
-    a.src = src;
-    fixed.push({ field: 'img', src: img.src, value: src, file: result.file, bytes: [result.from, result.to] });
+    const files = pngSlots.map((s) => localFileOf(dir, page.outPath, s.url));
+    if (files.some((f) => !f)) {
+      // Only reported when there is something to say about it: a lone remote PNG was never a fix of this kind.
+      if (several && files.some(Boolean)) leave(`${pngSlots[files.indexOf(null)].url} is not a file of the copy`);
+      continue;
+    }
+    const results = [];
+    for (const f of files) results.push(await webpOf(f, dir, made));
+    const failed = results.findIndex((r) => r.skip);
+    if (failed >= 0) {
+      leave(several ? `${pngSlots[failed].url}: ${results[failed].skip}` : results[failed].skip);
+      continue;
+    }
+    pngSlots.forEach((s, i) => {
+      const value = webpAddress(s.url, results[i].name);
+      if (s.attr === 'src') a.src = value;
+      else s.part.url = value;
+      fixed.push({ field: 'img', ...(s.attr !== 'src' && { attr: 'srcset' }), src: s.url, value, file: results[i].file, bytes: [results[i].from, results[i].to] });
+    });
+    const srcsetSlots = pngSlots.filter((s) => s.attr === 'srcset');
+    for (const el of new Set(srcsetSlots.map((s) => s.el))) el.attribs.srcset = joinSrcset(srcsetSlots.find((s) => s.el === el).parts);
+  }
+
+  // The page's own CSS (style attributes and <style> blocks): url() of a local PNG.
+  const URL_IN_CSS = /url\(\s*(['"]?)([^'")]+\.png)\1\s*\)/gi;
+  const inCss = async (css) => {
+    let out = css;
+    for (const m of [...String(css).matchAll(URL_IN_CSS)]) {
+      const url = m[2].trim();
+      const file = localFileOf(dir, page.outPath, url);
+      if (!file) continue;
+      const r = await webpOf(file, dir, made);
+      if (r.skip) {
+        open.push({ page: page.path, reason: 'd', detail: `${url} (a background in the page's CSS) is not converted to WebP: ${r.skip}` });
+        continue;
+      }
+      const value = webpAddress(url, r.name);
+      out = out.split(m[0]).join(m[0].replace(m[2], value));
+      fixed.push({ field: 'css', src: url, value, file: r.file, bytes: [r.from, r.to] });
+    }
+    return out;
+  };
+  for (const el of $('[style]').toArray()) {
+    if ($(el).closest('noscript, template').length || !/\.png/i.test(el.attribs.style)) continue;
+    const next = await inCss(el.attribs.style);
+    if (next !== el.attribs.style) el.attribs.style = next;
+  }
+  for (const el of $('style').toArray()) {
+    const css = $(el).html() ?? '';
+    if (!/\.png/i.test(css)) continue;
+    const next = await inCss(css);
+    if (next !== css) $(el).html(next);
   }
   return { fixed, open };
 }
