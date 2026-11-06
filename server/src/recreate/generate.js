@@ -504,6 +504,10 @@ export async function generateStage(ctx) {
   if (asIs) {
     ctx.progress(0.18, 'Keeping the original markup and stylesheets');
     asis = await applyAsIs(ir, { dir: ctx.dir, site, excluded });
+    // Versions of a page kept for other widths are parked by the generated script at the width they are hidden at.
+    if (asis.variants?.parked) {
+      ir.motion = { version: MOTION_VERSION, hover: [], focus: [], reveal: [], delays: [], loops: [], widgets: [], states: 0, notices: 0, panels: 0, hoverCards: 0, scrolled: [], ...(ir.motion ?? {}), script: true };
+    }
     // The original markup's layers that play a recording become their videos too (their `vN` token was carried).
     applyEmbeds(ir, embeds);
     // The original's markup keeps each appear target's inline style as the capture read it: one still in its first pose
