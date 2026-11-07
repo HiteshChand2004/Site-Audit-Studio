@@ -10,7 +10,7 @@
 // as a warning, since React recovers by rendering the page again.
 import { launchBrowser } from '../../audit/render.js';
 import { MAX_HEIGHT, VIEWS } from '../../audit/screenshots.js';
-import { openRenderer, thumb, visualSimilarity, withBrowserRetry } from './layout.js';
+import { openRenderer, visualSimilarity, withBrowserRetry } from './layout.js';
 import { gotoLocal } from './goto.js';
 
 export const VISUAL_MIN = 0.97;
@@ -188,13 +188,10 @@ export async function compareBuilds({ referenceRoot, candidateRoot, pages, urlMa
     let done = 0;
     const tick = (msg) => progress(++done / total, msg);
 
-    // Each reference shot is kept only as the small picture the comparison reads (thumb): the full-page PNGs of every page and
-    // view were held until the last candidate page was compared.
     const reference = new Map();
     for (const p of pages) {
       for (const v of VIEWS) {
-        const { png, ...rest } = await snapshot(renderer, p.outPath, v.id, refMap);
-        reference.set(`${p.outPath}|${v.id}`, { ...rest, png: await thumb(png) });
+        reference.set(`${p.outPath}|${v.id}`, await snapshot(renderer, p.outPath, v.id, refMap));
         tick('Rendering the plain-HTML build');
       }
     }
