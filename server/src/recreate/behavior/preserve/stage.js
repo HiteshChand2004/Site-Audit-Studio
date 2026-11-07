@@ -117,7 +117,7 @@ export async function readLifted(dir) {
  * `overrides`), so a run stopped at any moment of the proof leaves every stylesheet with its original bytes. Only the files
  * proven are written, at the very end, each one whole (written beside the gate folder, outside the copy, then renamed over it).
  */
-async function minifyAndProve({ browser, copyDir, gateDir, uses, integrity, complete, measuredPages, log }) {
+async function minifyAndProve({ browser, copyDir, gateDir, uses, integrity, complete, measuredPages, log, lookGate = fixGate, guard = null }) {
   let found;
   try {
     found = await stylesheetCandidates({ dir: copyDir, uses, integrity, complete, measured: measuredPages, browser });
@@ -136,14 +136,16 @@ async function minifyAndProve({ browser, copyDir, gateDir, uses, integrity, comp
     for (const pagePath of pagesToLook) {
       let side = null;
       let g;
+      const seen = guard?.count ?? 0;
       try {
         side = await serveCopy(copyDir, { overrides });
-        g = await fixGate(browser, side.url.replace(/\/$/, ''), base, pagePath);
+        g = await lookGate(browser, side.url.replace(/\/$/, ''), base, pagePath);
       } catch (err) {
         g = { path: pagePath, invisible: false, error: String(err?.message ?? err).split('\n')[0].slice(0, 160) };
       } finally {
         await side?.close();
       }
+      if ((guard?.count ?? 0) !== seen) g = { path: pagePath, invisible: false, error: STRAY_WHY };
       const ok = proven(g);
       looks.push({ files: set.map((c) => c.rel), path: pagePath, ok, width: g.width ?? null, ...(g.error && { error: g.error }) });
       log(`stylesheets (${label}) on ${pagePath}: ${ok ? 'the same' : 'not proven the same'}`);
@@ -256,7 +258,54 @@ const whyNotKept = (g) => (g.error
  * again on its own, drops what it covers: a fix is kept only when it is shown to change nothing. The fixed side is served by a
  * fresh server for every look, because a server keeps each file it has sent and a retry rewrites the page.
  */
-export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped = null, log = () => {}, fetchLlms = null, speed = true, gone = checkGone }) {
+export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped = null, log = () => {}, fetchLlms = null, speed = true, gone = checkGone, lookGate = fixGate, proc = process }) {
+  // While the proof runs, the browser connection's stray replies (isStrayReply) are counted instead of ending the process; the
+  // page whose look or measurement saw one is not proved (its fixes are undone). Removed when the proof ends, however it ends.
+  const guard = strayReplyGuard({ proc });
+  try {
+    return await proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped, log, fetchLlms, speed, gone, lookGate, guard });
+  } finally {
+    guard.close();
+  }
+}
+
+/** Why a look or a measurement that saw a stray reply of the browser connection proves nothing. */
+const STRAY_WHY = 'the browser connection gave a reply to a request it no longer had (a Playwright race while a page closed); not proved';
+
+/**
+ * Playwright's own assertion when Chrome answers a request the session no longer tracks (CRSession._onMessage: a reply with an
+ * id and no callback, a race while a page or context closes). Thrown in Playwright's message loop, outside any promise of ours,
+ * so it reaches the process as an uncaught exception. The reply belongs to no live request (Playwright drops the same kind of
+ * reply with error -32001 silently), so nothing waits on it.
+ */
+export function isStrayReply(err) {
+  return err instanceof Error && err.message === 'Assertion error' && /CRSession\._onMessage/.test(String(err.stack ?? ''));
+}
+
+/**
+ * An `uncaughtException` listener on `proc` for the time of a proof: a stray reply (isStrayReply) is counted (`count`) and the
+ * process goes on; any other error removes the listener and is thrown again on its own (Node then ends the process as it would
+ * have without the listener). `close()` removes it.
+ * @param {{ proc?: NodeJS.EventEmitter, rethrow?: (err: unknown) => void }} [o]
+ */
+export function strayReplyGuard({ proc = process, rethrow = (err) => setImmediate(() => { throw err; }) } = {}) {
+  let count = 0;
+  const listener = (err) => {
+    if (isStrayReply(err)) {
+      count++;
+      return;
+    }
+    proc.off('uncaughtException', listener);
+    rethrow(err);
+  };
+  proc.on('uncaughtException', listener);
+  return {
+    get count() { return count; },
+    close: () => proc.off('uncaughtException', listener),
+  };
+}
+
+async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped, log, fetchLlms, speed, gone, lookGate, guard }) {
   // Every group judged by the "problem gone?" check (copy/fixGone.js): { path, group, result, keys }.
   const goneList = [];
   await rm(gateDir, { recursive: true, force: true });
@@ -274,8 +323,10 @@ export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, n
       const before = await serveCopy(gateDir);
       try {
         for (const p of list) {
+          const seen = guard.count;
           try {
             const probe = await perfProbe(browser, before.url.replace(/\/$/, ''), p.path);
+            if (guard.count !== seen) throw new Error(STRAY_WHY);
             const plan = planPerf(probe, p.path);
             perf.set(p.outPath, plan);
             perfOpen.push(...plan.open.map((o) => ({ kind: 'lcp', ...o })));
@@ -304,7 +355,7 @@ export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, n
       }
     }
     const css = speed
-      ? await minifyAndProve({ browser, copyDir, gateDir, uses, integrity, complete: measured, measuredPages: new Set(list.map((p) => p.outPath)), log })
+      ? await minifyAndProve({ browser, copyDir, gateDir, uses, integrity, complete: measured, measuredPages: new Set(list.map((p) => p.outPath)), log, lookGate, guard })
       : { open: [], report: null };
     const fixed = await fixAsIsCopy({ dir: copyDir, siteUrl, newSiteUrl, fetchLlms, pages: list, ...(speed && { perf }) });
     fixed.open.push(...perfOpen, ...css.open);
@@ -325,10 +376,11 @@ export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, n
       const look = async (p, groups = null) => {
         let a = null;
         let g;
+        const seen = guard.count;
         try {
           a = await serveCopy(copyDir);
           const fixedBase = a.url.replace(/\/$/, '');
-          g = await fixGate(browser, fixedBase, unfixed, p.path, { axeRules: axeRulesFor(p.fixes), axeBefore });
+          g = await lookGate(browser, fixedBase, unfixed, p.path, { axeRules: axeRulesFor(p.fixes), axeBefore });
           // A link given a role is also clicked on both sides: invisible is not enough for something a visitor uses.
           if (g.invisible && (groups ? groups.includes('anchors') : p.fixes.some((f) => f.kind === 'anchors'))) {
             const clicks = await anchorClicks(browser, fixedBase, unfixed, p.path);
@@ -341,6 +393,8 @@ export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, n
         } finally {
           await a?.close();
         }
+        // A stray reply of the browser connection during this look: nothing it saw is trusted (stray: the page is undone).
+        if (guard.count !== seen) g = { path: p.path, invisible: false, error: STRAY_WHY, stray: true };
         if (groups) g.groups = groups;
         if (groups?.length === 1 && g.views) aloneLooks.set(p.outPath, new Map([...(aloneLooks.get(p.outPath) ?? []), [groups[0], g.views]]));
         gate.push(g);
@@ -364,6 +418,12 @@ export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, n
           }
           const original = fixed.originals.get(p.outPath);
           await revertPage(copyDir, p.outPath, original);
+          if (g.stray) {
+            // The look was disturbed by the browser connection: the page keeps its HTML as it was, no group is tried again.
+            p.dropped = groups.map((group) => ({ group, reason: 'd', why: STRAY_WHY }));
+            p.reverted = { reason: 'd', why: STRAY_WHY };
+            continue;
+          }
           const dropped = [];
           // A first look that passed keeps its verdict for the markup groups (C1 + C2, unchanged); every group is tried alone
           // only when it failed. A page with one group was already looked at alone: that look is reused.
