@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { compareLighthousePages, decide, lighthousePageItems, lighthousePagesNote, LEAD, medianScores, pageSlug, singleRunDecides, trimReport } from '../src/reaudit/lighthousePages.js';
+import { betterThanOriginal, compareLighthousePages, decide, lighthousePageItems, lighthousePagesNote, LEAD, medianScores, pageSlug, runsOverlap, singleRunDecides, trimReport } from '../src/reaudit/lighthousePages.js';
 
 const report = (scores, { weight = 400000, lcp = 'img.hero', failing = {}, dom = 900 } = {}) => ({
   fetchTime: '2026-10-23T10:00:00Z', requestedUrl: 'x', finalDisplayedUrl: 'x', environment: { benchmarkIndex: 1200 },
@@ -189,4 +189,59 @@ test('a run Lighthouse could not score, or in which the copy rendered a blank sh
   assert.match(pass[0].title, /in the categories scored$/);
   assert.match(pass[0].after.detail, /^Accessibility 100, Best practices 96, SEO 100/);
   assert.match(lighthousePagesNote(r), /5 categories could not be scored and are not compared/);
+});
+
+test('noise only when the two sides\' runs overlap (Step 10a)', () => {
+  const runs = (...xs) => xs.map((p) => ({ scores: ALL(p) }));
+  // Saved gardener re-audit: the gap 9 is within the original's spread (79-88), but every copy run is under every original run.
+  const apart = decide(runs(79, 82, 88), runs(70, 73, 74));
+  assert.deepEqual(apart.noise, [], 'no run of the copy reaches the original\'s worst run: not noise');
+  assert.deepEqual(apart.worse, ['performance']);
+  const close = decide(runs(98, 99, 98), runs(97, 97, 97));
+  assert.deepEqual(close.worse, ['performance'], 'a gap of 1 with no overlap is worse, however small');
+  const touch = decide(runs(99, 99, 99), runs(99, 98, 98));
+  assert.deepEqual(touch.noise, ['performance'], 'the copy\'s best run equals the original\'s worst: overlap, within noise');
+  assert.ok(runsOverlap(runs(80, 90), runs(70, 80), 'performance'));
+  assert.ok(!runsOverlap(runs(80, 90), runs(70, 79), 'performance'));
+  assert.ok(!runsOverlap(runs(80), [{ scores: ALL(null) }], 'performance'), 'nothing scored on a side: no overlap');
+  // Overlap alone is not enough: the gap must still be within the runs' spread (unchanged rule).
+  const wide = decide(runs(85, 90, 90), runs(80, 80, 85));
+  assert.deepEqual(wide.worse, ['performance'], 'overlapping runs, but a gap of 10 beyond the spread of 5: worse');
+});
+
+test('betterThanOriginal: one verdict per device and category, the line says it, and a fail names the page and its cost (Step 10b)', () => {
+  const runs = (...xs) => xs.map((s) => ({ scores: s }));
+  const mode = (o, k, extra = {}) => ({ ...decide(o, k), runScores: { original: o.map((r) => r.scores), copy: k.map((r) => r.scores) }, detail: {}, ...extra });
+  const comparison = { pages: [
+    { path: '/', modes: {
+      mobile: mode(runs(ALL(80, 90, 92, 90), ALL(81, 90, 92, 90), ALL(82, 90, 92, 90)), runs(ALL(70, 95, 92, 100), ALL(71, 95, 92, 100), ALL(72, 95, 92, 100)),
+        { detail: { copyFailingByCategory: { performance: [{ id: 'unused-javascript', weight: 0 }, { id: 'largest-contentful-paint', weight: 25 }] }, failing: { original: ['unused-javascript'] }, copyAudits: {} } }),
+      desktop: mode(runs(ALL(95, 90, 92, 90)), runs(ALL(100, 96, 100, 100))),
+    } },
+    { path: '/about', modes: {
+      mobile: mode(runs(ALL(90, 90, 92, 90), ALL(91, 90, 92, 90), ALL(90, 90, 92, 90)), runs(ALL(91, 92, 92, 90), ALL(89, 92, 92, 90), ALL(90, 92, 92, 90))),
+      desktop: { error: 'run failed' },
+    } },
+  ] };
+  const b = betterThanOriginal(comparison);
+  assert.equal(b.passed, false);
+  assert.equal(b.failed, 1);
+  const pf = b.byMode.mobile.performance;
+  assert.equal(pf.status, 'fail');
+  assert.deepEqual([pf.worst.path, pf.worst.original, pf.worst.copy], ['/', 81, 71]);
+  assert.deepEqual(pf.worst.cost.map((c) => c.id), ['largest-contentful-paint', 'unused-javascript'], 'heaviest first');
+  assert.match(pf.worst.cost[1].why, /original's own JavaScript/);
+  assert.equal(b.byMode.mobile.seo.status, 'pass');
+  assert.equal(b.byMode.mobile.seo.ahead, 1, 'higher on / , equal on /about');
+  assert.equal(b.byMode.mobile['best-practices'].status, 'pass', 'equal everywhere still passes (copy >= original)');
+  assert.equal(b.byMode.desktop.performance.status, 'pass', 'a failed run on /about is not counted');
+  assert.equal(b.byMode.desktop.performance.pages, 1);
+  assert.match(b.line, /^Not yet better than the original in Lighthouse: phone 3 of 4 categories \(Performance lower: 71 against 81 on \/\); computer 4 of 4 categories\.$/);
+  // Within noise: not a fail, said so.
+  const noisy = betterThanOriginal({ pages: [{ path: '/', modes: { mobile: mode(runs(ALL(90), ALL(80), ALL(85)), runs(ALL(84), ALL(83), ALL(88))) } }] });
+  assert.equal(noisy.byMode.mobile.performance.status, 'noise');
+  assert.equal(noisy.passed, true);
+  assert.match(noisy.line, /^At least as good as the original in Lighthouse: phone 3 of 4 categories \(Performance lower within run noise: 84 against 85 on \/\)\.$/);
+  // Nothing measured: no verdict, no line.
+  assert.deepEqual(betterThanOriginal({ pages: [] }), { rule: 'copy >= original, every Lighthouse category, phone and computer', passed: null, failed: 0, byMode: {}, line: null });
 });

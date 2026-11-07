@@ -12,7 +12,7 @@ import { runLighthouse } from '../audit/lighthouse/run.js';
 import { db } from '../db/index.js';
 import { auditDir, projectDir } from '../config/paths.js';
 import { startEgressProxy } from '../security/egressProxy.js';
-import { compareLighthousePages, lighthousePageItems, lighthousePagesNote, lighthouseTargets, RUN_TIMEOUT_MS } from './lighthousePages.js';
+import { betterThanOriginal, compareLighthousePages, lighthousePageItems, lighthousePagesNote, lighthouseTargets, RUN_TIMEOUT_MS } from './lighthousePages.js';
 import { getEmitter } from '../recreate/emit/index.js';
 import { outputPages, outputRoot, reportOutputs, targetStack } from '../recreate/export/fromIr.js';
 import { servePreview } from '../recreate/preview.js';
@@ -264,6 +264,9 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
     }
     checklist.categories = CATEGORIES.filter((c) => checklist.items.some((it) => it.category === c.id));
     checklist.notes.push(lighthousePagesNote(lighthousePages));
+    // The "better than the original" rule per device and category (the same medians and noise as the rows above).
+    const better = betterThanOriginal(lighthousePages);
+    if (better.line) checklist.notes.unshift(better.line);
     checklist.lighthousePages = {
       pages: lighthousePages.pages.map((p) => ({ path: p.path, modes: Object.fromEntries(Object.entries(p.modes).map(([m, v]) => [m, v.error ? { error: v.error } : { original: v.original, copy: v.copy, worse: v.worse, noise: v.noise ?? [], unscored: v.unscored, blankRuns: v.blankRuns, runs: v.runs, accepted: v.accepted, extra: v.extra, runScores: v.runScores }])) })),
       worse: lighthousePages.worse,
@@ -277,6 +280,7 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
       refreshedOriginal: lighthousePages.refreshedOriginal ?? [],
       // Per page, mode and category: original, copy, 90 reached or not, and what fails under 90 with the reason.
       targets: lighthouseTargets(lighthousePages),
+      better,
     };
   }
   // An as-is copy: every "got worse" row carries one of the five reasons on this run's evidence, or is marked unexplained
