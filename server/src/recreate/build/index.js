@@ -37,6 +37,8 @@ export async function fixExactCopy(ctx, distDir) {
     const fixes = await fixAndProve({
       browser: renderer.browser, copyDir: distDir, gateDir: path.join(ctx.dir, 'dist-unfixed'), pages,
       siteUrl: pages[0].url, newSiteUrl: null, log: (m) => ctx.progress(0.04, String(m).slice(0, 200)),
+      // No script of the original runs in an exact copy and its CSS is minified by the build: the lighter proof (stage.js `exact`).
+      exact: true,
     });
     const { gate, ...kept } = fixes;
     return { ...kept, looks: gate.length, ms: Date.now() - started };

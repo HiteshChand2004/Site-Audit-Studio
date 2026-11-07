@@ -237,9 +237,10 @@ export const GATE_WIDTHS = [375, 1440];
  * is. A change at one width decides (the next is not rendered); the top-level fields are the failing width's, else the last
  * one's, as callers have always read them; `views` holds each width's verdict.
  */
-export async function fixGate(browser, fixedBase, unfixedBase, pagePath, { widths = GATE_WIDTHS, axeRules = null, axeBefore = null } = {}) {
-  const views = [];
-  for (const width of widths) {
+export async function fixGate(browser, fixedBase, unfixedBase, pagePath, { widths = GATE_WIDTHS, axeRules = null, axeBefore = null, parallel = false } = {}) {
+  // parallel: every width pictured at the same time (the same rounds and the same verdict per width; every width is rendered,
+  // and the first failing one in the order of `widths` decides). Else one width after the other, stopping at the first change.
+  const one = async (width) => {
     const fixedErrors = [];
     const unfixedErrors = [];
     // axeRules: these axe rules are read on both sides in the visit the gate makes anyway (the unfixed side once per page and
@@ -263,8 +264,16 @@ export async function fixGate(browser, fixedBase, unfixedBase, pagePath, { width
       axe = before?.error || after?.error ? { width, error: before?.error ?? after?.error } : { width, before, after };
     }
     // scrollCapped: a side was never scrolled to its end (reported; the speed fixes count such a look as not conclusive).
-    views.push({ width, ...verdict, newErrors, invisible, ...(sides.some((s) => s.scrollCapped) && { scrollCapped: true }), ...(axe && { axe }) });
-    if (!invisible) break;
+    return { width, ...verdict, newErrors, invisible, ...(sides.some((s) => s.scrollCapped) && { scrollCapped: true }), ...(axe && { axe }) };
+  };
+  const views = [];
+  if (parallel) views.push(...await Promise.all(widths.map(one)));
+  else {
+    for (const width of widths) {
+      const v = await one(width);
+      views.push(v);
+      if (!v.invisible) break;
+    }
   }
   const failed = views.find((v) => !v.invisible);
   return { path: pagePath, ...(failed ?? views.at(-1)), width: failed?.width ?? null, views, invisible: views.length > 0 && !failed };
@@ -281,9 +290,9 @@ export async function fixGate(browser, fixedBase, unfixedBase, pagePath, { width
  * keyboard cannot reach (axe scrollable-region-focusable), read in the same visit (no extra page load).
  * @returns {Promise<{ path: string, widths: { width: number, viewportH: number, lcp: object|null, images: object[], styles: string[], integrity: string[], scrollers: object[], scrolled: boolean }[] }>}
  */
-export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS } = {}) {
-  const out = [];
-  for (const width of widths) {
+export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS, parallel = false } = {}) {
+  // parallel: every width measured at the same time (one context each, same browser), else one after the other. Same reading.
+  const one = async (width) => {
     const opts = viewOf(width);
     const context = await isolated(browser, opts, base, []);
     try {
@@ -359,11 +368,14 @@ export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS 
       // Then down the page as a visitor scrolls (scroll.js), so a stylesheet a script loads on the way is known too. `scrolled`
       // is false when that failed or stopped at its time cap: the list of stylesheets may then be short.
       const scroll = await scrollThrough(page).catch(() => null);
-      out.push({ width, ...read, styles: [...styles], scrolled: Boolean(scroll && !scroll.capped) });
+      return { width, ...read, styles: [...styles], scrolled: Boolean(scroll && !scroll.capped) };
     } finally {
       await context.close();
     }
-  }
+  };
+  const out = [];
+  if (parallel) out.push(...await Promise.all(widths.map(one)));
+  else for (const width of widths) out.push(await one(width));
   return { path: pagePath, widths: out };
 }
 

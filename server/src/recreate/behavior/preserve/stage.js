@@ -7,6 +7,7 @@ import { cp, mkdir, rm, readFile, writeFile, readdir, rename } from 'node:fs/pro
 import { gzipSync } from 'node:zlib';
 import path from 'node:path';
 import { chromium } from 'playwright';
+import * as cheerio from 'cheerio';
 import { liftSite, localOfOutPath } from './asis.js';
 import { packLifted, servedDir } from './pack.js';
 import { buildConvertedReact, convertToReact, REACT_EXPORT_DIR, verifyConverted } from '../../convert/react.js';
@@ -258,15 +259,45 @@ const whyNotKept = (g) => (g.error
  * again on its own, drops what it covers: a fix is kept only when it is shown to change nothing. The fixed side is served by a
  * fresh server for every look, because a server keeps each file it has sent and a retry rewrites the page.
  */
-export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped = null, log = () => {}, fetchLlms = null, speed = true, gone = checkGone, lookGate = fixGate, proc = process }) {
+export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped = null, log = () => {}, fetchLlms = null, speed = true, gone = checkGone, lookGate = fixGate, proc = process, exact = false }) {
   // While the proof runs, the browser connection's stray replies (isStrayReply) are counted instead of ending the process; the
   // page whose look or measurement saw one is not proved (its fixes are undone). Removed when the proof ends, however it ends.
   const guard = strayReplyGuard({ proc });
   try {
-    return await proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped, log, fetchLlms, speed, gone, lookGate, guard });
+    return await proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped, log, fetchLlms, speed, gone, lookGate, guard, exact });
   } finally {
     guard.close();
   }
+}
+
+/**
+ * The groups whose fixes only write head tags the browser never draws (title, description, the meta tags, the structured data).
+ * Proved without pictures in an exact copy only (fixAndProve `exact`), where none of the original's scripts run and the one script
+ * the copy ships (js/motion.js) reads no head tag: nothing can bring them onto the screen. In "Copy my site" the original's own
+ * scripts run (one may print the title), so there they are looked at like every other fix.
+ */
+export const QUIET_GROUPS = new Set(['head:title', 'head:description', 'head:meta', 'data']);
+
+/** A meta tag that changes how the page is drawn (the viewport, the colour scheme) or read (http-equiv, charset). */
+const drawsMeta = (tag) => /\bhttp-equiv\s*=|\bcharset\s*=/i.test(tag)
+  || /\bname\s*=\s*["']?\s*(viewport|color-scheme|supported-color-schemes)\b/i.test(tag);
+/** A link tag that only names the page or its icon, never loads anything the page draws with. */
+const quietLink = (tag) => /\brel\s*=\s*["']?\s*(canonical|alternate|icon|shortcut icon|apple-touch-icon|apple-touch-icon-precomposed|mask-icon|manifest)\s*["']?[\s/>]/i.test(tag);
+
+/**
+ * A page's HTML without the tags nothing draws: in its head the title, the meta tags other than the ones that change the drawing
+ * (drawsMeta), the naming links (quietLink), and the white space between head tags; anywhere, the structured data scripts. Two
+ * pages with the same result differ only in what the browser never paints. Everything else is compared byte for byte.
+ */
+export function withoutUnpainted(html) {
+  const s = String(html);
+  const end = s.search(/<\/head\s*>/i);
+  const head = (end < 0 ? '' : s.slice(0, end))
+    .replace(/<title\b[^>]*>[\s\S]*?<\/title\s*>/gi, '')
+    .replace(/<meta\b[^>]*>/gi, (tag) => (drawsMeta(tag) ? tag : ''))
+    .replace(/<link\b[^>]*>/gi, (tag) => (quietLink(tag) ? '' : tag))
+    .replace(/>\s+</g, '><');
+  return `${head}${end < 0 ? s : s.slice(end)}`.replace(/<script\b[^>]*\btype\s*=\s*["']?application\/ld\+json["']?[^>]*>[\s\S]*?<\/script\s*>/gi, '');
 }
 
 /** Why a look or a measurement that saw a stray reply of the browser connection proves nothing. */
@@ -305,7 +336,7 @@ export function strayReplyGuard({ proc = process, rethrow = (err) => setImmediat
   };
 }
 
-async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped, log, fetchLlms, speed, gone, lookGate, guard }) {
+async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped, log, fetchLlms, speed, gone, lookGate, guard, exact }) {
   // Every group judged by the "problem gone?" check (copy/fixGone.js): { path, group, result, keys }.
   const goneList = [];
   await rm(gateDir, { recursive: true, force: true });
@@ -325,7 +356,8 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
         for (const p of list) {
           const seen = guard.count;
           try {
-            const probe = await perfProbe(browser, before.url.replace(/\/$/, ''), p.path);
+            // An exact copy measures both widths at the same time (two contexts in the same browser).
+            const probe = await perfProbe(browser, before.url.replace(/\/$/, ''), p.path, { parallel: exact });
             if (guard.count !== seen) throw new Error(STRAY_WHY);
             const plan = planPerf(probe, p.path);
             perf.set(p.outPath, plan);
@@ -354,7 +386,10 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
         await before.close();
       }
     }
-    const css = speed
+    // An exact copy's stylesheets were minified by its build (build/minify.js, esbuild): there is nothing to try.
+    const css = speed && exact
+      ? { open: [], report: { files: [], looks: [], skipped: 'minified by the build' } }
+      : speed
       ? await minifyAndProve({ browser, copyDir, gateDir, uses, integrity, complete: measured, measuredPages: new Set(list.map((p) => p.outPath)), log, lookGate, guard })
       : { open: [], report: null };
     const fixed = await fixAsIsCopy({ dir: copyDir, siteUrl, newSiteUrl, fetchLlms, pages: list, ...(speed && { perf }) });
@@ -363,6 +398,8 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
     const webpWritten = new Set(fixed.pages.flatMap((p) => p.fixes.filter((f) => f.kind === 'webp').map((f) => f.file)));
     const changed = fixed.pages.filter((p) => p.fixes.length);
     const gate = [];
+    // Exact copy: groups proved without a picture, and looks served by an earlier identical one (no page load).
+    const lighter = { structural: 0, reused: 0 };
     if (changed.length) {
       // The unfixed side never changes: one server for all of it.
       const b = await serveCopy(gateDir);
@@ -373,14 +410,54 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
       const axeBefore = new Map();
       const aloneLooks = new Map();
       const finalLook = new Map();
+      // A page without some of its groups, made in memory from the lifted pages (nothing written): which group made a check worse,
+      // and (exact copy) whether its head fixes change only what nothing draws.
+      const rebuild = (p, groups) => fixAsIsCopy({ dir: copyDir, readDir: gateDir, siteUrl, newSiteUrl, pages: list, ...(speed && { perf }), only: new Map([[p.outPath, new Set(groups)]]), write: false })
+        .then((again) => again.html.get(p.outPath) ?? null);
+      // Exact copy: per page, the QUIET_GROUPS whose fixes were shown to change only tags nothing draws (withoutUnpainted: the page
+      // with only those groups is, apart from those tags, byte for byte the page before its fixes). Such groups need no picture,
+      // and a look at other groups is the same picture with or without them: one look serves both (`reused`).
+      const quietOf = new Map();
+      const reused = new Map();
+      if (exact) {
+        for (const p of changed) {
+          const qs = [...new Set(p.fixes.map(fixGroup))].filter((x) => QUIET_GROUPS.has(x));
+          if (!qs.length) continue;
+          const html = await rebuild(p, qs).catch(() => null);
+          // The fixes write the page through cheerio (copy/fixAsIs.js); the page before them goes through the same parser and writer,
+          // so what is compared is the document the browser parses, not how its bytes were laid out.
+          const lifted = await readFile(path.join(gateDir, p.outPath), 'utf8').then((s) => cheerio.load(s).html(), () => null);
+          if (html != null && lifted != null && withoutUnpainted(html) === withoutUnpainted(lifted)) quietOf.set(p.outPath, new Set(qs));
+          else log(`fixes ${p.path}: the head fixes change more than tags nothing draws; they are looked at like the others`);
+        }
+      }
       const look = async (p, groups = null) => {
+        const quiet = quietOf.get(p.outPath);
+        const painted = quiet ? (groups ?? [...new Set(p.fixes.map(fixGroup))]).filter((x) => !quiet.has(x)) : null;
+        if (painted && !painted.length) {
+          // Only tags nothing draws: proved by the page itself, no picture.
+          lighter.structural++;
+          const s = { path: p.path, invisible: true, structural: true, views: [], ...(groups && { groups }) };
+          log(`fixes ${p.path}${groups ? ` [${groups.join(', ')}]` : ''}: only tags nothing draws, the rest of the page byte for byte the same`);
+          return s;
+        }
+        const key = painted ? [...painted].sort().join(',') : null;
+        const before = key ? reused.get(p.outPath)?.get(key) : null;
+        if (before) {
+          lighter.reused++;
+          const r = { ...before, ...(groups ? { groups } : {}), reused: true };
+          if (groups?.length === 1 && r.views) aloneLooks.set(p.outPath, new Map([...(aloneLooks.get(p.outPath) ?? []), [groups[0], r.views]]));
+          log(`fixes ${p.path}${groups ? ` [${groups.join(', ')}]` : ''}: the same picture as the look at [${key}] (the other groups draw nothing)`);
+          return r;
+        }
         let a = null;
         let g;
         const seen = guard.count;
         try {
           a = await serveCopy(copyDir);
           const fixedBase = a.url.replace(/\/$/, '');
-          g = await lookGate(browser, fixedBase, unfixed, p.path, { axeRules: axeRulesFor(p.fixes), axeBefore });
+          // An exact copy pictures both widths at the same time (same rounds, same verdict per width).
+          g = await lookGate(browser, fixedBase, unfixed, p.path, { axeRules: axeRulesFor(p.fixes), axeBefore, parallel: exact });
           // A link given a role is also clicked on both sides: invisible is not enough for something a visitor uses.
           if (g.invisible && (groups ? groups.includes('anchors') : p.fixes.some((f) => f.kind === 'anchors'))) {
             const clicks = await anchorClicks(browser, fixedBase, unfixed, p.path);
@@ -395,6 +472,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
         }
         // A stray reply of the browser connection during this look: nothing it saw is trusted (stray: the page is undone).
         if (guard.count !== seen) g = { path: p.path, invisible: false, error: STRAY_WHY, stray: true };
+        if (key && !g.error) reused.set(p.outPath, new Map([...(reused.get(p.outPath) ?? []), [key, g]]));
         if (groups) g.groups = groups;
         if (groups?.length === 1 && g.views) aloneLooks.set(p.outPath, new Map([...(aloneLooks.get(p.outPath) ?? []), [groups[0], g.views]]));
         gate.push(g);
@@ -479,9 +557,6 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
         // and as fixed, no page load. A group whose problem is still there, or that made a check worse, is undone (noEffect): the
         // page is made again from the lifted pages with its other groups. Taking a group away from fixes the gate saw unchanged
         // adds nothing to the page, so it is not looked at again.
-        // A page without some of its groups, made in memory from the lifted pages (nothing written): which group made a check worse.
-        const rebuild = (p, groups) => fixAsIsCopy({ dir: copyDir, readDir: gateDir, siteUrl, newSiteUrl, pages: list, ...(speed && { perf }), only: new Map([[p.outPath, new Set(groups)]]), write: false })
-          .then((again) => again.html.get(p.outPath) ?? null);
         const verdicts = await gone({ copyDir, gateDir, pages: list, fixed: fixed.pages, rebuild });
         // Step 5c: the axe rules each group answers, from the look that kept the page's fixes (width rule: only where the lifted
         // page failed them); merged with the markup verdict of the same group.
@@ -551,6 +626,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
       gone: goneList,
       files: fixed.files,
       ...(speed && { css: css.report }),
+      ...(exact && { lighter }),
       gate,
     };
   } finally {
