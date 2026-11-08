@@ -29,7 +29,6 @@
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { statSync } from 'node:fs';
 import path from 'node:path';
-import * as cheerio from 'cheerio';
 import { fixAlt, fixNames } from '../recreate/fixers/a11y.js';
 import { fixAria } from '../recreate/fixers/aria.js';
 import { fitTitle, fitDescription, pathLabel, detectLang } from '../recreate/ir/seoText.js';
@@ -43,6 +42,7 @@ import { blocksZoom, fixInvalidLang, isValidLang } from './seoA11yAsIs.js';
 import { MARKUP_PASS, emptyCounts, fixGroup } from './fixRegistry.js';
 import { fixImageLoading, fixPngImages } from './perfAsIs.js';
 import { SECURITY_HEADERS } from './securityHeaders.js';
+import { faithfulHtml, loadFaithful } from './faithfulHtml.js';
 
 const clean = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 const SKIP = new Set(['script', 'style', 'noscript', 'template']);
@@ -121,7 +121,8 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     const file = path.join(dir, p.outPath);
     const html = await readFile(path.join(readDir ?? dir, p.outPath), 'utf8').catch(() => null);
     if (html == null) continue;
-    docs.push({ ...p, file, html, $: cheerio.load(html) });
+    // With the parser's source positions: a fixed page is written back as its own bytes with only the fixes changed (faithfulHtml).
+    docs.push({ ...p, file, html, $: loadFaithful(html) });
   }
   const name = siteName || clean(docs[0]?.$('meta[property="og:site_name"]').attr('content')) || siteHost;
 
@@ -365,15 +366,22 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
       }
     }
 
+    // The page's own bytes with only the fixes' changes; when the parser's positions cannot place one, the whole page as cheerio
+    // writes it, and the page says why (`reserialized`).
+    let written = null;
     if (!write) {
-      if (!only || only.has(d.outPath)) htmlOut.set(d.outPath, $.html());
+      if (!only || only.has(d.outPath)) {
+        written = faithfulHtml($, d.html);
+        htmlOut.set(d.outPath, written.html);
+      }
     } else if (fixes.length && (!only || only.has(d.outPath))) {
       originals.set(d.outPath, d.html);
-      await writeFile(d.file, $.html(), 'utf8');
+      written = faithfulHtml($, d.html);
+      await writeFile(d.file, written.html, 'utf8');
     }
     for (const f of fixes) counts[f.kind] = (counts[f.kind] ?? 0) + 1;
     d.head = { title: finalTitle, description: finalDescription, canonical: own };
-    result.push({ path: d.path, outPath: d.outPath, fixes });
+    result.push({ path: d.path, outPath: d.outPath, fixes, ...(written && !written.faithful && { reserialized: written.why }) });
   }
 
   const files = only || !write ? null : await siteFiles({ dir, docs, newOrigin, siteName: name, siteUrl, fetchLlms });

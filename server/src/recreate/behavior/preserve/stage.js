@@ -424,10 +424,11 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
           const qs = [...new Set(p.fixes.map(fixGroup))].filter((x) => QUIET_GROUPS.has(x));
           if (!qs.length) continue;
           const html = await rebuild(p, qs).catch(() => null);
-          // The fixes write the page through cheerio (copy/fixAsIs.js); the page before them goes through the same parser and writer,
-          // so what is compared is the document the browser parses, not how its bytes were laid out.
+          // Both sides go through the same parser and writer, so what is compared is the document the browser parses, not how its
+          // bytes were laid out.
           const lifted = await readFile(path.join(gateDir, p.outPath), 'utf8').then((s) => cheerio.load(s).html(), () => null);
-          if (html != null && lifted != null && withoutUnpainted(html) === withoutUnpainted(lifted)) quietOf.set(p.outPath, new Set(qs));
+          const parsed = html == null ? null : cheerio.load(html).html();
+          if (parsed != null && lifted != null && withoutUnpainted(parsed) === withoutUnpainted(lifted)) quietOf.set(p.outPath, new Set(qs));
           else log(`fixes ${p.path}: the head fixes change more than tags nothing draws; they are looked at like the others`);
         }
       }
@@ -481,7 +482,12 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
       };
       // Only these groups on this page, made again from the lifted pages; the fixes made, or null when that failed.
       const makeOnly = (p, groups) => fixAsIsCopy({ dir: copyDir, readDir: gateDir, siteUrl, newSiteUrl, pages: list, ...(speed && { perf }), only: new Map([[p.outPath, new Set(groups)]]) })
-        .then((again) => again.pages.find((q) => q.outPath === p.outPath)?.fixes ?? [], () => null);
+        .then((again) => {
+          const q = again.pages.find((x) => x.outPath === p.outPath);
+          // The page as now written: its own bytes with only these fixes, or (said why) the whole page rewritten.
+          p.reserialized = q?.reserialized;
+          return q?.fixes ?? [];
+        }, () => null);
       const notMade = (made) => ({ invisible: false, error: made ? 'the fix is not made on its own' : 'the fix could not be made again' });
       try {
         for (const p of changed) {
@@ -613,7 +619,10 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
     }
     const counts = {};
     for (const p of fixed.pages) if (!p.reverted) for (const f of p.fixes) counts[f.kind] = (counts[f.kind] ?? 0) + 1;
+    // Fixed pages whose bytes could not be kept apart from the fixes (copy/faithfulHtml.js): written whole, with the reason.
+    const reserialized = fixed.pages.filter((p) => !p.reverted && p.fixes.length && p.reserialized).map((p) => ({ path: p.path, why: p.reserialized }));
     return {
+      ...(reserialized.length && { reserialized }),
       counts,
       total: Object.values(counts).reduce((s, n) => s + n, 0),
       pages: fixed.pages.map((p) => ({ path: p.path, fixes: p.fixes, ...(p.reverted && { reverted: p.reverted }), ...(p.dropped?.length && { dropped: p.dropped }) })),
