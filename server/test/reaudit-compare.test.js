@@ -221,6 +221,46 @@ test('CPU-timing audits: a worse local measurement is "changed (noisy locally)",
   assert.equal(c.summary.regressed, 1);
 });
 
+test('Lighthouse rows: both devices shown; bytes decide over the host\'s time; a lower grade the figures do not back is not "worse"', () => {
+  const refs = { performance: [{ id: 'unused' }, { id: 'legacy' }, { id: 'blocking' }, { id: 'lcp-el' }, { id: 'real' }] };
+  const opp = (score, ms, bytes, shown) => ({ title: shown, score, scoreDisplayMode: 'metricSavings', numericValue: ms, numericUnit: 'millisecond', displayValue: shown, metricSavings: { LCP: ms }, details: { type: 'opportunity', overallSavingsMs: ms, ...(bytes != null && { overallSavingsBytes: bytes }) } });
+  const info = (shown) => ({ title: 'LCP element', score: 1, scoreDisplayMode: 'informative', displayValue: shown });
+  const side = (d) => lhr({
+    // unused code: fewer bytes on the copy (50 -> 47 KiB), more time on the measured host (150 -> 320 ms) -> not worse
+    unused: d === 'old' ? opp(0, 150, 51200, 'Est savings of 50 KiB') : opp(0, 320, 48128, 'Est savings of 47 KiB'),
+    // legacy code: graded lower although smaller (13.7 -> 12.9 KB) -> "changed", smaller, graded lower
+    legacy: d === 'old' ? opp(0.5, 0, 13707, 'Est savings of 13 KiB') : opp(0, 220, 12917, 'Est savings of 13 KiB'),
+    // render-blocking: 0 ms to save on the copy -> nothing measured to save
+    blocking: d === 'old' ? opp(1, 0, null, '') : opp(0.5, 0, null, 'Est savings of 0 ms'),
+    // LCP element: the original's run listed it without a grade -> not "worse", still open
+    'lcp-el': d === 'old' ? info('740 ms') : opp(0.5, 300, null, '1,220 ms'),
+    // a real increase stays a regression
+    real: d === 'old' ? opp(1, 0, 1000, '') : opp(0.4, 900, 90000, 'Est savings of 88 KiB'),
+  }, refs);
+  const phone = (d) => { const l = side(d); l.audits.unused.displayValue = d === 'old' ? 'Est savings of 50 KiB' : 'Est savings of 47 KiB'; return l; };
+  const computer = (d) => { const l = side(d); l.audits.unused.displayValue = d === 'old' ? 'Est savings of 31 KiB' : 'Est savings of 29 KiB'; return l; };
+  const audit = (url) => ({ url, seo: [], aeo: [], crawl: {}, accessibility: [], brokenLinks: { broken: [] }, techStack: [], manualRebuild: [] });
+  const c = compareAudits({
+    old: { audit: audit('https://site.test/'), crawl: null, lighthouse: { mobile: phone('old'), desktop: computer('old') } },
+    next: { audit: audit('http://127.0.0.1:5100/'), crawl: null, lighthouse: { mobile: phone('new'), desktop: computer('new') } },
+    report: { pages: [] },
+    newOrigin: 'http://127.0.0.1:5100',
+  });
+  const item = (key) => c.items.find((i) => i.key === key);
+  assert.equal(item('lighthouse.unused').status, 'open', 'fewer bytes: not worse, still failing');
+  assert.equal(item('lighthouse.unused').before.detail, 'Phone: Est savings of 50 KiB · Computer: Est savings of 31 KiB', 'both devices in the row');
+  assert.equal(item('lighthouse.unused').after.detail, 'Phone: Est savings of 47 KiB · Computer: Est savings of 29 KiB');
+  assert.equal(item('lighthouse.legacy').status, 'changed');
+  assert.equal(item('lighthouse.legacy').statusLabel, 'Smaller, graded lower');
+  assert.equal(item('lighthouse.legacy').after.detail, 'Est savings of 13 KiB', 'one figure when both devices show the same');
+  assert.equal(item('lighthouse.blocking').status, 'changed');
+  assert.equal(item('lighthouse.blocking').statusLabel, 'Nothing measured to save');
+  assert.equal(item('lighthouse.lcp-el').status, 'open');
+  assert.match(item('lighthouse.lcp-el').note, /without a grade/);
+  assert.equal(item('lighthouse.lcp-el').before.detail, 'Not graded on this run');
+  assert.equal(item('lighthouse.real').status, 'regressed', 'more bytes on every device: still worse');
+});
+
 test('links: a new network-level failure is "recheck", a new HTTP error is a regression', () => {
   const audit = (url, broken) => ({ url, seo: [], aeo: [], crawl: {}, accessibility: [], brokenLinks: { broken }, techStack: [], manualRebuild: [] });
   const c = compareAudits({

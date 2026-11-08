@@ -285,6 +285,17 @@ export const useProjects = create((set, get) => ({
   },
 
   /**
+   * Writes the new site's address into a finished "Copy my site" copy (the download dialog). Unlike `recreate`, a refusal is
+   * thrown back to the dialog, which shows it under the field; on success the job is followed like any copy.
+   * @returns {Promise<string>} the new job's id
+   */
+  async addAddress(id, recreateId, address) {
+    const { job, steps } = await api.addAddress(id, recreateId, address);
+    get().attachJob('recreate', id, job, steps);
+    return job.id;
+  },
+
+  /**
    * Asks the copy that is running to stop. What it has done is kept, so the Copy step then offers to continue where it
    * stopped. The job's own SSE stream reports the end, so nothing is set here beyond the "Stopping…" message.
    */

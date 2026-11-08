@@ -12,7 +12,8 @@
 import path from 'node:path';
 import { stat, readFile } from 'node:fs/promises';
 import sharp from 'sharp';
-import { decodePicture, exactDiff } from '../../verify/exact/pixels.js';
+import { AxeBuilder } from '@axe-core/playwright';
+import { exactDiffMany } from '../../verify/exact/pixels.js';
 import { scriptCandidates } from './extract.js';
 import { readRecordIndex, classifyScripts, recordBodyReader } from '../scripts.js';
 import { freezePage, freezeTimers, holdSizeReactions } from '../../verify/exact/freeze.js';
@@ -140,6 +141,13 @@ export async function pictureRounds(browser, opts, sides, rounds = NOISE_SHOTS) 
       settled.forEach((r, i) => { if (r?.capped) sides[i].scrollCapped = true; });
       const taken = await Promise.all(open.map((o) => fullShot(o.page)));
       taken.forEach((png, i) => shots[i].push(png));
+      // A side's own reading of its page (the "problem gone?" axe rules, Step 5c): in the first round, after the picture, in the
+      // page already open; one side at a time. No page is opened for it.
+      if (round === 0) {
+        for (const [i, o] of open.entries()) {
+          if (sides[i].inspect) sides[i].inspected = await sides[i].inspect(o.page).catch((err) => ({ error: String(err?.message ?? err).split('\n')[0].slice(0, 160) }));
+        }
+      }
     } finally {
       for (const o of open) await o.context.close().catch(() => {});
     }
@@ -186,6 +194,8 @@ export const GATE_THRESHOLD = 0.05;
  * once and kept for them; a picture past this budget is read band by band in every comparison, as exactDiff does on its own.
  * Same pixels either way: only the time changes (three 1440 x 11 654 pictures a side are about 400 MB).
  */
+// (Light 3: gateVerdict no longer holds decoded pictures; it reads every picture once, band by band, with exactDiffMany. Kept
+// exported for callers that still decode a picture whole with decodePicture.)
 export const DECODED_BUDGET_BYTES = 512 * 1024 * 1024;
 
 /**
@@ -204,6 +214,21 @@ export const DECODED_BUDGET_BYTES = 512 * 1024 * 1024;
  * (Before 2026-10-23: a share of the whole page against max(0.01 %, 2 × noise), with a 24-level colour cut and the share
  * rounded to 0.01 % — it could not see a 30 x 30 px change on a tall page, or any pale change at all.)
  */
+/** How long one axe reading of the gate may take before it counts as "could not read". */
+export const AXE_GATE_MS = 30000;
+
+/** How many elements fail each of these axe rules in the page as it is now (rule → count). Only these rules run. */
+export async function axeCounts(page, rules) {
+  let timer;
+  const limit = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`axe did not finish in ${AXE_GATE_MS / 1000} s`)), AXE_GATE_MS); });
+  try {
+    const r = await Promise.race([new AxeBuilder({ page }).withRules(rules).analyze(), limit]);
+    return Object.fromEntries(rules.map((id) => [id, r.violations.find((v) => v.id === id)?.nodes.length ?? 0]));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** The widths every as-is fix is proved invisible at: a phone first (touch, mobile mode), then a computer. */
 export const GATE_WIDTHS = [375, 1440];
 
@@ -212,23 +237,43 @@ export const GATE_WIDTHS = [375, 1440];
  * is. A change at one width decides (the next is not rendered); the top-level fields are the failing width's, else the last
  * one's, as callers have always read them; `views` holds each width's verdict.
  */
-export async function fixGate(browser, fixedBase, unfixedBase, pagePath, { widths = GATE_WIDTHS } = {}) {
-  const views = [];
-  for (const width of widths) {
+export async function fixGate(browser, fixedBase, unfixedBase, pagePath, { widths = GATE_WIDTHS, axeRules = null, axeBefore = null, parallel = false } = {}) {
+  // parallel: every width pictured at the same time (the same rounds and the same verdict per width; every width is rendered,
+  // and the first failing one in the order of `widths` decides). Else one width after the other, stopping at the first change.
+  const one = async (width) => {
     const fixedErrors = [];
     const unfixedErrors = [];
+    // axeRules: these axe rules are read on both sides in the visit the gate makes anyway (the unfixed side once per page and
+    // width: axeBefore caches it, keyed by path and width). The view gets axe { width, before, after } (rule → elements failing).
+    const cached = axeBefore?.get(`${pagePath}|${width}`);
+    const read = axeRules?.length ? (page) => axeCounts(page, axeRules) : null;
     const sides = [
-      { base: fixedBase, url: `${fixedBase}${pagePath}`, errors: fixedErrors },
-      { base: unfixedBase, url: `${unfixedBase}${pagePath}`, errors: unfixedErrors },
+      { base: fixedBase, url: `${fixedBase}${pagePath}`, errors: fixedErrors, ...(read && { inspect: read }) },
+      { base: unfixedBase, url: `${unfixedBase}${pagePath}`, errors: unfixedErrors, ...(read && !cached && { inspect: read }) },
     ];
     const [fixedShots, unfixedShots] = await pictureRounds(browser, viewOf(width), sides);
     const verdict = await gateVerdict(fixedShots, unfixedShots);
     // A console error of the fixed page that no load of the unfixed page had.
     const newErrors = [...new Set(fixedErrors)].filter((e) => !unfixedErrors.some((u) => u.includes(e)));
     const invisible = verdict.changedPx === 0 && !verdict.sizeChanged && newErrors.length === 0;
+    let axe;
+    if (read) {
+      const before = cached ?? sides[1].inspected;
+      if (!cached && before && !before.error) axeBefore?.set(`${pagePath}|${width}`, before);
+      const after = sides[0].inspected;
+      axe = before?.error || after?.error ? { width, error: before?.error ?? after?.error } : { width, before, after };
+    }
     // scrollCapped: a side was never scrolled to its end (reported; the speed fixes count such a look as not conclusive).
-    views.push({ width, ...verdict, newErrors, invisible, ...(sides.some((s) => s.scrollCapped) && { scrollCapped: true }) });
-    if (!invisible) break;
+    return { width, ...verdict, newErrors, invisible, ...(sides.some((s) => s.scrollCapped) && { scrollCapped: true }), ...(axe && { axe }) };
+  };
+  const views = [];
+  if (parallel) views.push(...await Promise.all(widths.map(one)));
+  else {
+    for (const width of widths) {
+      const v = await one(width);
+      views.push(v);
+      if (!v.invisible) break;
+    }
   }
   const failed = views.find((v) => !v.invisible);
   return { path: pagePath, ...(failed ?? views.at(-1)), width: failed?.width ?? null, views, invisible: views.length > 0 && !failed };
@@ -241,12 +286,13 @@ export async function fixGate(browser, fixedBase, unfixedBase, pagePath, { width
  * names it (its src attribute as written, and its occurrence among images with that src), so copy/perfAsIs.js can find it in
  * the HTML; `total` is how many images with that src the page holds as its scripts built it. `styles` are the stylesheets of the
  * copy the page loaded, however (a link, an @import, a script), as paths on the copy's server; `integrity` the ones a <link>
- * loads with an integrity hash; `scrolled` whether the page was scrolled to its end.
- * @returns {Promise<{ path: string, widths: { width: number, viewportH: number, lcp: object|null, images: object[], styles: string[], integrity: string[], scrolled: boolean }[] }>}
+ * loads with an integrity hash; `scrolled` whether the page was scrolled to its end; `scrollers` the boxes that scroll and the
+ * keyboard cannot reach (axe scrollable-region-focusable), read in the same visit (no extra page load).
+ * @returns {Promise<{ path: string, widths: { width: number, viewportH: number, lcp: object|null, images: object[], styles: string[], integrity: string[], scrollers: object[], scrolled: boolean }[] }>}
  */
-export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS } = {}) {
-  const out = [];
-  for (const width of widths) {
+export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS, parallel = false } = {}) {
+  // parallel: every width measured at the same time (one context each, same browser), else one after the other. Same reading.
+  const one = async (width) => {
     const opts = viewOf(width);
     const context = await isolated(browser, opts, base, []);
     try {
@@ -296,16 +342,40 @@ export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS 
           ? { tag: 'img', ...nameOf(el) }
           : { tag: el.tagName.toLowerCase(), background: Boolean(e.url) }) : null;
         const integrity = [...document.querySelectorAll('link[rel~="stylesheet"][integrity]')].map((l) => { try { return new URL(l.href).pathname; } catch { return null; } }).filter(Boolean);
-        return { viewportH: window.innerHeight, lcp, images, integrity };
+        // axe scrollable-region-focusable's test (axe-core 4.13 getScroll(el, 13)): a box whose content is more than 13 px larger
+        // than it on an axis whose overflow is auto or scroll, that the keyboard cannot reach (it and everything in it out of the
+        // tab order). Named by its place under <body> (tag and index among the element children at each level) with its id and
+        // class, so copy/seoA11yAsIs.js finds the same element in the HTML or leaves it.
+        const tabbable = (e) => e.tabIndex >= 0 && !e.disabled;
+        const scrollers = [];
+        for (const el of document.querySelectorAll('body *')) {
+          if (scrollers.length >= 24) break;
+          if (/^(select|textarea)$/i.test(el.tagName)) continue;
+          const overX = el.scrollWidth > el.clientWidth + 13;
+          const overY = el.scrollHeight > el.clientHeight + 13;
+          if (!overX && !overY) continue;
+          const s = getComputedStyle(el);
+          if (!((overX && /^(auto|scroll)$/.test(s.overflowX)) || (overY && /^(auto|scroll)$/.test(s.overflowY)))) continue;
+          if (tabbable(el) || el.isContentEditable || [...el.querySelectorAll('*')].some(tabbable)) continue;
+          const r = el.getBoundingClientRect();
+          if (!(r.width > 0 && r.height > 0) || s.visibility === 'hidden') continue;
+          const path = [];
+          for (let e = el; e && e !== document.body; e = e.parentElement) path.unshift([e.tagName.toLowerCase(), [...e.parentElement.children].indexOf(e)]);
+          scrollers.push({ path, id: el.getAttribute('id'), cls: el.getAttribute('class'), text: (el.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 60) });
+        }
+        return { viewportH: window.innerHeight, lcp, images, integrity, scrollers };
       });
       // Then down the page as a visitor scrolls (scroll.js), so a stylesheet a script loads on the way is known too. `scrolled`
       // is false when that failed or stopped at its time cap: the list of stylesheets may then be short.
       const scroll = await scrollThrough(page).catch(() => null);
-      out.push({ width, ...read, styles: [...styles], scrolled: Boolean(scroll && !scroll.capped) });
+      return { width, ...read, styles: [...styles], scrolled: Boolean(scroll && !scroll.capped) };
     } finally {
       await context.close();
     }
-  }
+  };
+  const out = [];
+  if (parallel) out.push(...await Promise.all(widths.map(one)));
+  else for (const width of widths) out.push(await one(width));
   return { path: pagePath, widths: out };
 }
 
@@ -402,29 +472,22 @@ export async function anchorClicks(browser, fixedBase, unfixedBase, pagePath, { 
 export async function gateVerdict(fixedShots, unfixedShots, { threshold = GATE_THRESHOLD } = {}) {
   const fixedList = Buffer.isBuffer(fixedShots) ? [fixedShots] : fixedShots;
   if (Buffer.isBuffer(unfixedShots)) unfixedShots = [unfixedShots];
-  const pairs = [];
-  const opts = { threshold };
-  // Each picture decoded once for all the comparisons it is in (within DECODED_BUDGET_BYTES), not once per band of each.
-  const decoded = new Map();
-  let held = 0;
-  const once = async (png) => {
-    if (!Buffer.isBuffer(png)) return png;
-    if (!decoded.has(png)) {
-      const { width = 0, height = 0 } = await sharp(png, { limitInputPixels: false }).metadata();
-      let picture = png;
-      if (held + width * height * 4 <= DECODED_BUDGET_BYTES) {
-        picture = await decodePicture(png);
-        held += picture.raw.length;
-      }
-      decoded.set(png, picture);
-    }
-    return decoded.get(png);
+  // Every comparison of the verdict at once, each picture decoded once and read band by band (Light 3: exactDiffMany holds only
+  // the band in hand of each picture, where the whole decoded pictures were held before). Same pairs, same order, same results.
+  const pictures = [];
+  const indexOf = (png) => {
+    let i = pictures.indexOf(png);
+    if (i < 0) i = pictures.push(png) - 1;
+    return i;
   };
+  const same = [];
   for (const side of [fixedList, unfixedShots]) {
-    for (let i = 0; i < side.length; i++) for (let j = i + 1; j < side.length; j++) pairs.push(await exactDiff(await once(side[i]), await once(side[j]), opts));
+    for (let i = 0; i < side.length; i++) for (let j = i + 1; j < side.length; j++) same.push([indexOf(side[i]), indexOf(side[j])]);
   }
-  const crosses = [];
-  for (let i = 0; i < fixedList.length; i++) crosses.push(await exactDiff(await once(unfixedShots[i % unfixedShots.length]), await once(fixedList[i]), opts));
+  const cross = fixedList.map((png, i) => [indexOf(unfixedShots[i % unfixedShots.length]), indexOf(png)]);
+  const results = await exactDiffMany(pictures, [...same, ...cross], { threshold });
+  const pairs = results.slice(0, same.length);
+  const crosses = results.slice(same.length);
   const change = crosses[0];
   const { cols, rows } = change.blocks;
   // A block counts as changed only when every pairing shows it (the smallest count of them, so a change is never over-stated).

@@ -169,7 +169,7 @@ export function deployMd({ stack, shipped, siteName, address = null, formEndpoin
     '',
     '## Settings to set',
     '',
-    ...(address ? [`- The new site's address: \`${address}\` (search tags, sitemap and links already use it).`] : ['- The new site\'s address was not set; the search tags still name the original. Set it and copy again.']),
+    ...(address ? [`- The new site's address: \`${address}\` (search tags, sitemap and links already use it).`] : ['- The new site\'s address was not set; the search tags, sitemap and robots.txt still name the original or nothing. Give it when you download (“Where will the new site live?”): only those are rewritten, nothing on the pages changes.']),
     ...formLines({ forms, formsSaved, formEndpoint }),
     '- HTTPS is needed for the service worker and for forms to work. Every host above provides it.',
     '',

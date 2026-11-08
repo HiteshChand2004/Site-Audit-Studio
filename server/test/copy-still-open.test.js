@@ -32,9 +32,10 @@ test('"still open" rows get one of the five reasons on evidence, or UNEXPLAINED;
   });
   assert.equal(r.items.length, 1, 'the rows that got worse are as before');
   assert.equal(r.open.length, 3, 'every open row, none fixed or passing');
-  assert.deepEqual(r.open.map((o) => o.reason), ['owner', 'look', null]);
+  assert.deepEqual(r.open.map((o) => o.reason), [null, 'look', null]);
+  assert.deepEqual(r.open.map((o) => o.group), ['bug', 'look', 'missing-fixer'], 'title length: the fix exists (Step 3) and recorded no reason, so a bug; motion: its own track');
   assert.equal(r.open[2].unexplained, true, 'a motion effect the copy lost is a fix still owed, not a reason');
-  assert.deepEqual(r.openSummary, { total: 3, explained: 2, unexplained: 1, byReason: { owner: 1, look: 1 } });
+  assert.deepEqual(r.openSummary, { total: 3, explained: 1, unexplained: 2, byReason: { look: 1 }, byGroup: { bug: 1, look: 1, 'missing-fixer': 1 } });
 });
 
 test('still open: Lighthouse audits are split by what they name: third-party code (a), fixable without a visible change (UNEXPLAINED), the original\'s own code (d), the host (e) only when the copy did not grow', () => {
@@ -52,7 +53,8 @@ test('still open: Lighthouse audits are split by what they name: third-party cod
     { newLhr: { mobile: lhr(items('modern-image-formats', ['http://127.0.0.1:5555/img/hero.jpg'])) } });
   assert.equal(fixable.reason, null);
   assert.equal(fixable.unexplained, true);
-  assert.match(fixable.evidence, /fix still owed/);
+  assert.match(fixable.evidence, /Fix not built yet/);
+  assert.equal(fixable.group, 'missing-fixer');
 
   const ms = (n) => ({ 'largest-contentful-paint': { numericValue: n, numericUnit: 'millisecond', score: 0.4 } });
   const timing = openOne({ key: 'lighthouse.largest-contentful-paint', after: { detail: '4.1 s' } },
@@ -131,4 +133,39 @@ test('a sitemap, robots, llms.txt or canonical row that got worse with no new-si
   assert.equal(worseOne({ key: 'aeo.llms-txt' }, noAddress).reason, 'owner');
   assert.equal(worseOne({ key: 'crawl.sitemap', after: { detail: '/sitemap.xml → 404' } }, { address: { used: 'https://new.example.net' } }).unexplained, true);
   assert.equal(worseOne({ key: 'crawl.sitemap', after: { detail: '/sitemap.xml → 404' } }).unexplained, true, 'without address information nothing is assumed');
+});
+
+test('still open image rows: only a lossy or resized file could close them (d), on evidence per file; without evidence still owed', () => {
+  const rows = (id, list) => ({ [id]: { details: { items: list.map(([url, wastedBytes]) => ({ url, wastedBytes })) } } });
+  const row = (id, copyRows, originalRows, extra = {}) => openOne({ key: `lighthouse.${id}`, after: { detail: 'Images could be smaller' } },
+    { newLhr: { mobile: lhr(rows(id, copyRows)) }, oldLhr: { mobile: lhr(rows(id, originalRows)) }, ...extra });
+
+  // The copy already holds a lossless WebP of the original's PNG: more saving needs a lossy file.
+  const ours = row('modern-image-formats', [[`${COPY}/img/hero.sas-0123456789.webp`, 30000]], []);
+  assert.equal(ours.reason, 'look');
+  assert.match(ours.evidence, /already a lossless WebP the copy made/);
+
+  // The very file the original's CDN serves (the lift named it hero~<hash>.jpg from hero.jpg?w=800), the same saving.
+  const served = row('uses-responsive-images', [[`${COPY}/img/hero~1a2b3c4d.jpg`, 40000]], [['https://cdn.example-original.test/img/hero.jpg?w=800', 41000]]);
+  assert.equal(served.reason, 'look');
+  assert.match(served.evidence, /the original serves this file \(cdn\.example-original\.test\)/);
+  assert.match(served.evidence, /only a lossy or resized file could close it/);
+
+  // The copy could save much more than the original on the same file: it holds a heavier file. Not a look change: still owed.
+  const heavier = row('uses-responsive-images', [[`${COPY}/img/hero.jpg`, 400000]], [['https://www.example-original.test/img/hero.jpg', 41000]]);
+  assert.equal(heavier.reason, null);
+  assert.equal(heavier.group, 'missing-fixer');
+
+  // A PNG the fix left: explained only with the fix's own reason for leaving it.
+  const png = [[`${COPY}/img/logo.png`, 9000]];
+  const pngOriginal = [['https://www.example-original.test/img/logo.png', 9000]];
+  assert.equal(row('modern-image-formats', png, pngOriginal).group, 'missing-fixer', 'no reason recorded: not explained');
+  const left = row('modern-image-formats', png, pngOriginal, { fixOpen: [{ kind: 'webp', page: '/', reason: 'd', detail: '/img/logo.png is not converted to WebP: it carries gAMA' }] });
+  assert.equal(left.reason, 'look');
+  assert.match(left.evidence, /it carries gAMA/);
+
+  // One file explained, one not: the row is not explained.
+  assert.equal(row('modern-image-formats', [[`${COPY}/img/hero.sas-0123456789.webp`, 30000], [`${COPY}/img/new.jpg`, 5000]], []).group, 'missing-fixer');
+  // Not a per-file image audit: unchanged.
+  assert.equal(row('offscreen-images', [[`${COPY}/img/hero.sas-0123456789.webp`, 30000]], []).group, 'missing-fixer');
 });

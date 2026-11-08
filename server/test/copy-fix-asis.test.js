@@ -38,7 +38,7 @@ const about = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta 
 <script>document.getElementById('t').textContent = document.title;</script></body></html>`;
 
 // Everything stated: nothing to fix.
-const fine = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Contact the Acme team</title>
+const fine = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Contact the Acme team</title><meta name="theme-color" content="#c2410c"><link rel="icon" href="/favicon.ico">
 <meta name="description" content="Write to the Acme team about tools, orders and anything else you would like to know.">
 <link rel="canonical" href="${NEW}/contact"><meta property="og:title" content="Contact the Acme team">
 <meta property="og:description" content="Write to the Acme team about tools, orders and anything else you would like to know.">
@@ -81,7 +81,9 @@ test('only what is missing, duplicated or invalid is fixed; the site files name 
     assert.match(out, /<html lang="en"/);
     assert.ok(has('data', 'json-ld', 'Organization') && has('data', 'json-ld', 'WebSite') && has('data', 'json-ld', 'FAQPage (2'));
     assert.ok(has('head', 'description'), 'a missing description from the page\'s own paragraphs');
-    assert.match(out, /<title>Acme<\/title>/, 'the first page keeps its own title');
+    assert.match(out, /<title>Acme \| example-original\.test<\/title>/, 'a title under 10 characters gets the site name (the host without www.: no og:site_name)');
+    assert.ok(fixes.some((f) => f.field === 'title' && f.value === 'Acme | example-original.test'), 'the fix records that exact title');
+    assert.ok(fixes.some((f) => f.field === 'title' && f.from === 'Acme' && /too short/.test(f.source)));
 
     const aboutFixes = r.pages[1].fixes;
     assert.ok(aboutFixes.some((f) => f.field === 'title' && f.source === 'duplicate of another page' && /About us/.test(f.value)));

@@ -20,6 +20,7 @@ import { guardAttributes } from '../fixers/html.js';
 import { addRemoved, sanitizeSvg } from '../fixers/svg.js';
 import { noticeFiles } from './index.js';
 import { relFile } from './links.js';
+import { hoverPairOnly } from './states.js';
 import { VIEW_WIDTHS } from '../views.js';
 
 // Never part of a page's markup in the copy: active content, what the head already writes, and the stylesheet owners
@@ -507,11 +508,13 @@ export function placeExtras(body, placements) {
     const at = where.get(p.anchor);
     if (!at?.parent) continue;
     const list = at.parent.children;
-    if (p.kind === 'wrap') {
+    if (p.kind === 'wrap' && !hoverPairOnly(at.parent.t, at.n.t)) {
       list.splice(list.indexOf(at.n), 1, { t: 'div', attrs: { 'data-w-hv': '', style: 'display: contents' }, children: [at.n, p.node] });
       placed++;
       continue;
     }
+    // A list item (or a table row, an option) may not get a box around it: the copy goes right after it, the card is a pair.
+    if (p.kind === 'wrap') at.n.attrs = { ...at.n.attrs, 'data-w-hrest': 'pair' };
     const chain = after.get(p.anchor) ?? [at.n];
     list.splice(list.indexOf(chain[chain.length - 1]) + 1, 0, p.node);
     chain.push(p.node);
@@ -793,6 +796,38 @@ export function mergeViewBodies(bodies) {
   return { body: { ...first, children }, variants };
 }
 
+// A version smaller than this is not worth parking (fixers/perf.js MIN_LAYOUT_PART, the rebuilt pages' rule).
+const MIN_PARKED = 3;
+// Attributes of the parts the copy's script switches itself (states, messages, hover looks, panels): such a part is never
+// parked, as in the rebuilt pages (fixers/perf.js SCRIPT_OWNED).
+const SWITCHED = /^data-w-(set|i|go|note|note-of|auto|feed|hcopy|hrest|hv|one|alone|off|panel|panel-of|tpl)$/;
+
+/**
+ * Versions of an exact page kept for other widths (`data-sas-v`) stay in its markup, hidden by the width rule; marked
+ * `data-w-lay` the copy's script takes the ones hidden at the visitor's width out of the page after it loads and puts
+ * them back on a resize (js/motion.js), as it already does for a rebuilt page's layout parts and as the original's own
+ * script does with the markup it renders per width. Nothing is removed from the file: without script every version stays.
+ * @returns {number} versions marked
+ */
+export function markVersionLayouts(body) {
+  const size = (n) => (!n || 'text' in n ? 0 : 1 + (n.children ?? []).reduce((s, c) => s + size(c), 0));
+  const switched = (n) => !!n && !('text' in n) && (Boolean(n.tpl) || Object.keys(n.attrs ?? {}).some((k) => SWITCHED.test(k) || k === 'hidden') || (n.children ?? []).some(switched));
+  let marked = 0;
+  const walk = (n) => {
+    if (!n || 'text' in n) return;
+    if (n.attrs?.['data-sas-v'] && typeof n.raw !== 'string') {
+      if (size(n) >= MIN_PARKED && !switched(n)) {
+        n.attrs = { ...n.attrs, 'data-w-lay': '' };
+        marked++;
+      }
+      return;
+    }
+    for (const c of n.children ?? []) walk(c);
+  };
+  walk(body);
+  return marked;
+}
+
 /**
  * The rule that shows each version only in the width range of its views. A view's range follows the breakpoints the
  * copy already uses (ir.breakpoints: the site's own where it declared them): above the next narrower view's, up to its own.
@@ -918,6 +953,7 @@ export async function applyAsIs(ir, { dir, site, excluded = [] }) {
     }
     report.motion.versionHovers = (report.motion.versionHovers ?? 0) + shareHoverAcrossVersions(body, merged.variants);
     report.motion.extras += placeExtras(body, extras.placements);
+    if (merged.variants.size) report.variants.parked = (report.variants.parked ?? 0) + markVersionLayouts(body);
     report.motion.notCarried.unmapped += lost;
     report.unpinned += stats.unpinned;
     report.scaffolding = (report.scaffolding ?? 0) + stats.scaffolding;

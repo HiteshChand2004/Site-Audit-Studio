@@ -12,6 +12,7 @@ import { db, projectDir } from '../src/db/index.js';
 import { launchBrowser } from '../src/audit/render.js';
 import { emitSite } from '../src/recreate/emit/html.js';
 import { MOTION_JS } from '../src/recreate/emit/motionScript.js';
+import { transformSync } from 'esbuild';
 import { findShared } from '../src/recreate/emit/react/components.js';
 import { emitReact, pageName, pagePath } from '../src/recreate/emit/react/index.js';
 import { jsxNode, jsxText, propName, styleObject, svgPropName, visibleChildren } from '../src/recreate/emit/react/jsx.js';
@@ -353,7 +354,10 @@ test('real export: build, verify, equivalence with the HTML build, hydration', {
     assert.match(home, /<style>[^<]*#root\{display:contents\}[^<]*<\/style>/);
     // 4b.5: the reveal script is a plain file from the site root, loaded by every page; the safety rules let it through.
     assert.match(home, /<script src="\/js\/motion\.js" defer><\/script>/);
-    assert.equal(await readFile(path.join(project, 'dist', 'js', 'motion.js'), 'utf8'), MOTION_JS);
+    // The stack ships the script minified (Step 9a): esbuild's own result for the readable script, and clearly smaller.
+    const shippedMotion = await readFile(path.join(project, 'dist', 'js', 'motion.js'), 'utf8');
+    assert.equal(shippedMotion, transformSync(MOTION_JS, { loader: 'js', minify: true, legalComments: 'none' }).code);
+    assert.ok(shippedMotion.length < MOTION_JS.length * 0.8, `minified: ${shippedMotion.length} of ${MOTION_JS.length} characters`);
     assert.equal(await exists(path.join(project, 'dist', 'about.html')), true);
     assert.equal(await exists(path.join(project, 'dist', 'robots.txt')), true);
     assert.equal(await exists(path.join(project, 'dist', 'assets', 'images', 'a.png')), true);

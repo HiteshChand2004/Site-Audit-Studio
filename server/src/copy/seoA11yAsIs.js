@@ -8,6 +8,12 @@
 //              " about <that page's title>".
 //   headings   axe heading-order: a heading that skips a level gets aria-level. The tag stays, so the original's CSS still applies.
 //   lang       axe html-lang-valid: an <html lang> that is not a language code is replaced by the language the text shows.
+//   prohibited axe aria-prohibited-attr: an element whose tag may not carry a name (a div, span, i…) with an aria-label /
+//              aria-labelledby and no text gets role="img", so the name it already has is allowed. Review: a screen reader
+//              now announces it as an image with that name.
+//   scrollable axe scrollable-region-focusable: a box the browser measured scrolling (preserve/check.js perfProbe, the same
+//              visit as the speed plan) that the keyboard cannot reach gets tabindex="0". Review: it is a keyboard stop with no
+//              name. Nothing changes at rest; focused by keyboard, the browser draws its own focus ring around it.
 // Only reported (changing them changes how the page looks or behaves): a link to a file: address or to one that is not an
 // address, a link with no href that a script may listen to, a vague link text not in English or pointing outside the copy, a
 // heading whose own aria-level skips, a missing or zoom-blocking <meta name="viewport"> (copy/fixAsIs.js).
@@ -169,6 +175,110 @@ export function fixInvalidLang($, detected) {
   const from = clean($('html').attr('lang'));
   if (!from || isValidLang(from)) return null;
   return { from, value: detected && isValidLang(detected) ? detected : null };
+}
+
+// axe-core 4.13's tables (standards htmlElms namingProhibited; ariaRoles prohibitedAttrs): the tags with no role of their own
+// that may not be named, minus the ones whose tag says what they are (body, label, legend, caption, figcaption, dd, rp, rt), and
+// the roles that forbid a name.
+const NAMING_PROHIBITED = new Set(['abbr', 'b', 'bdi', 'bdo', 'cite', 'code', 'data', 'del', 'div', 'em', 'i', 'ins', 'kbd', 'mark', 'p',
+  'pre', 'q', 's', 'samp', 'small', 'span', 'strong', 'sub', 'sup', 'time', 'u', 'var']);
+const PROHIBITING_ROLES = new Set(['generic', 'caption', 'code', 'deletion', 'emphasis', 'insertion', 'mark', 'paragraph', 'strong', 'subscript',
+  'superscript', 'suggestion']);
+// axe does not judge an element inside a widget (its getClosestAncestorRoleType === 'widget').
+const WIDGET_ANCESTOR = 'a[href], button, input, select, textarea, summary, [role="button"], [role="link"], [role="checkbox"], [role="radio"], '
+  + '[role="switch"], [role="tab"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"], [role="slider"], '
+  + '[role="spinbutton"], [role="textbox"], [role="searchbox"], [role="combobox"], [role="gridcell"], [role="treeitem"], [role="scrollbar"]';
+// What role="img" would hide from a screen reader (an image's content is presentational).
+const INTERACTIVE_INSIDE = 'a[href], button, input, select, textarea, summary, iframe, audio[controls], video[controls], [contenteditable], [tabindex]:not([tabindex^="-"])';
+/** At most this many boxes per page get a tab stop. */
+export const MAX_SCROLLERS = 8;
+
+/**
+ * aria-prohibited-attr. axe fails a name (aria-label / aria-labelledby) on an element whose tag or role forbids one only when the
+ * element has no text (with text it asks for a review, not a failure). Such an element with no role of its own and nothing a
+ * visitor can use inside gets role="img", which takes a name: the name it already carries stays and becomes valid. Its own role
+ * (the author's choice), an element with a link, button or field inside, one holding an element with a role or name of its own,
+ * and one named only by aria-labelledby ids the page does not have are reported, not changed.
+ */
+export function fixProhibitedNames($, page) {
+  const fixed = [];
+  const open = [];
+  // Every id on the page, as written (an id may hold characters a selector would need escaped).
+  const pageIds = new Set($('[id]').toArray().map((e) => e.attribs.id));
+  for (const el of $('body').find('[aria-label], [aria-labelledby]').toArray()) {
+    const a = el.attribs;
+    const label = clean(a['aria-label']) || clean(a['aria-labelledby']);
+    if (!label || el.name.includes('-') || $(el).parents(WIDGET_ANCESTOR).length) continue;
+    const role = clean(a.role).toLowerCase().split(/\s+/)[0];
+    if (role && !PROHIBITING_ROLES.has(role)) continue;
+    if (!role && !NAMING_PROHIBITED.has(el.name)) continue;
+    // Text as axe counts it: what sits under aria-hidden="true" is no text of the element (a marquee's list hidden from screen
+    // readers, named by the element's own aria-label instead).
+    const shown = $(el).clone();
+    shown.find('[aria-hidden="true"]').remove();
+    const hasText = clean(shown.text()) || shown.find('img[alt]').toArray().some((i) => clean(i.attribs.alt)) || shown.find('svg title').length;
+    if (hasText) continue;
+    if (role) {
+      open.push({ page: page.path, reason: 'd', detail: `A ${el.name} with role="${role}" carries the name "${short(label)}", which that role does not allow: the role is the author's choice, left as it is` });
+      continue;
+    }
+    // An image's content is hidden from screen readers: a part inside with a role or a name of its own would be lost.
+    if ($(el).find('[role], [aria-label], [aria-labelledby]').length) {
+      open.push({ page: page.path, reason: 'd', detail: `A ${el.name} named "${short(label)}" holds an element with its own role or name: making it an image would hide that from screen readers, so it is left as it is` });
+      continue;
+    }
+    // A name given only by aria-labelledby whose ids are all missing: role="img" would give an image with no name.
+    if (!clean(a['aria-label'])) {
+      const ids = clean(a['aria-labelledby']).split(' ').filter(Boolean);
+      if (!ids.some((id) => pageIds.has(id))) {
+        open.push({ page: page.path, reason: 'd', detail: `A ${el.name} is named by aria-labelledby="${short(a['aria-labelledby'])}", and no element on the page has that id: left as it is` });
+        continue;
+      }
+    }
+    if ($(el).find(INTERACTIVE_INSIDE).length) {
+      open.push({ page: page.path, reason: 'd', detail: `A ${el.name} named "${short(label)}" holds a link, button or field: making it an image would hide them from screen readers, so it is left as it is` });
+      continue;
+    }
+    a.role = 'img';
+    fixed.push({ page: page.path, tag: el.name, text: short(label), field: 'role', value: 'img', from: null, review: true,
+      source: 'a name on an element with no text that may not carry one: announced now as an image with that name' });
+  }
+  return { fixed, open };
+}
+
+/**
+ * scrollable-region-focusable. Each box the probe measured (plan.scrollers) is found in the HTML at the same place under <body>
+ * (the same tag at every level, the same id and class); it gets tabindex="0", so the keyboard can reach it and scroll it. One the
+ * page's scripts moved (not found the same), one with a tabindex of its own, and those past MAX_SCROLLERS are reported.
+ */
+export function fixScrollableRegions($, page, plan) {
+  const fixed = [];
+  const open = [];
+  const body = $('body').get(0);
+  for (const s of plan?.scrollers ?? []) {
+    let el = body;
+    for (const [tag, i] of s.path) {
+      const kid = el ? $(el).children().get(i) : null;
+      el = kid && kid.name === tag ? kid : null;
+    }
+    const where = `at ${s.widths?.join(' / ') ?? '?'} px${s.text ? ` ("${short(s.text)}")` : ''}`;
+    if (!el || (el.attribs.id ?? null) !== (s.id ?? null) || (el.attribs.class ?? null) !== (s.cls ?? null)) {
+      open.push({ page: page.path, reason: 'd', detail: `A box that scrolls ${where} is built or moved by the page's scripts, so it cannot be found in the HTML: left as it is` });
+      continue;
+    }
+    if (el.attribs.tabindex != null) {
+      open.push({ page: page.path, reason: 'd', detail: `A box that scrolls ${where} has tabindex="${el.attribs.tabindex}" of its own: left as the original says` });
+      continue;
+    }
+    if (fixed.length >= MAX_SCROLLERS) {
+      open.push({ page: page.path, reason: 'c', detail: `A box that scrolls ${where}: only the first ${MAX_SCROLLERS} of a page get a keyboard stop` });
+      continue;
+    }
+    el.attribs.tabindex = '0';
+    fixed.push({ page: page.path, tag: el.name, text: short(s.text) || null, field: 'tabindex', value: '0', from: null, widths: s.widths, review: true,
+      source: 'a box that scrolls and the keyboard could not reach: now a keyboard stop (it has no name)' });
+  }
+  return { fixed, open };
 }
 
 /** Lighthouse meta-viewport: zooming blocked (user-scalable=no, or maximum-scale below 5). */

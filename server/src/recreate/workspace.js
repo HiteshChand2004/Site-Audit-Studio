@@ -122,6 +122,9 @@ export async function pruneRecreates(projectId, { keep = KEEP_RECREATES } = {}) 
     }
     const lift = asIsRows.find((r) => existsSync(path.join(recreateRoot(projectId), r.id, 'as-is', 'copy')));
     if (lift) kept.add(lift.id);
+    // A copy given its new-site address at download (behavior/preserve/stage.js addressStage) keeps the finished copy it was made
+    // from: that one stays downloadable as it was, and another address starts again from it, never from an addressed copy.
+    for (const r of asIsRows) if (kept.has(r.id) && r.report.asIs.addressedFrom) kept.add(r.report.asIs.addressedFrom);
   }
   for (const id of newestPerStack(parsed)) kept.add(id);
   const resumable = await findResumable(projectId);

@@ -8,6 +8,8 @@ import Outcome from '../../components/recreate/Outcome.jsx';
 import CopyPages from '../../components/recreate/CopyPages.jsx';
 import PageGallery from '../../components/recreate/PageGallery.jsx';
 import AsIsReport from '../../components/recreate/AsIsReport.jsx';
+import AddressDialog from '../../components/recreate/AddressDialog.jsx';
+import { ADDRESS_DIALOG } from '../../copy.js';
 import SectionCard from '../../components/common/SectionCard.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import { stackById } from '../../constants.js';
@@ -41,6 +43,19 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
   useEffect(() => {
     setDownloadError(null);
   }, [result?.recreateId, project.id]);
+  // The download dialog (Step 6): a "Copy my site" copy made without a new-site address asks for one at download. `pending` is
+  // the job writing it; its copy is downloaded once it is the latest result.
+  const addAddress = useProjects((s) => s.addAddress);
+  const [askAddress, setAskAddress] = useState(false);
+  const [pending, setPending] = useState(null);
+  const needsAddress = Boolean(result?.asIs && !result.asIs.address?.used && !result.asIs.addressedFrom);
+  const pendingFailed = pending && job?.id === pending && job.status === 'failed' ? job.error ?? '' : null;
+  useEffect(() => {
+    if (!pending || result?.recreateId !== pending) return;
+    setPending(null);
+    // The addressed copy is the latest result now: download it (the re-check it queued only reads the copy).
+    if (result.safety?.safe && outputState(result, copyStack) === 'ready') startDownload(result.recreateId);
+  }, [pending, result?.recreateId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!result) {
     return (
@@ -63,12 +78,25 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
   const zipReady = copyState === 'ready' && (copyStack === 'html' || outputs[copyStack]?.status === 'ready');
   const canDownload = Boolean(result.recreateId && result.safety?.safe && !busy && zipReady);
   async function download() {
+    if (needsAddress) return setAskAddress(true);
+    return startDownload(result.recreateId);
+  }
+  async function useAddress(address) {
+    const id = await addAddress(project.id, result.recreateId, address);
+    setPending(id);
+    setAskAddress(false);
+  }
+  function downloadAsItIs() {
+    setAskAddress(false);
+    startDownload(result.recreateId);
+  }
+  async function startDownload(recreateId) {
     setDownloading(true);
     setDownloadError(null);
     try {
-      const problem = await api.checkDownload(project.id, result.recreateId, copyStack);
+      const problem = await api.checkDownload(project.id, recreateId, copyStack);
       if (problem) setDownloadError(problem);
-      else window.location.assign(api.downloadUrl(project.id, result.recreateId, copyStack));
+      else window.location.assign(api.downloadUrl(project.id, recreateId, copyStack));
     } catch (err) {
       setDownloadError(err.message || 'Cannot reach the server.');
       await reloadRecreate(project.id).catch(() => {});
@@ -149,12 +177,19 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
           </Button>
         </div>
         {!zipReady && <p className={ws.hint}>{notReadyText}</p>}
+        {pending && pendingFailed == null && <p className={ws.hint}>{ADDRESS_DIALOG.writing}</p>}
+        {pendingFailed != null && (
+          <Alert tone="bad" title={ADDRESS_DIALOG.failedTitle}>
+            {pendingFailed} {ADDRESS_DIALOG.failedText}
+          </Alert>
+        )}
         {downloadError && (
           <Alert tone="bad" title="The download did not work">
             {downloadError}
           </Alert>
         )}
       </Card>
+      <AddressDialog open={askAddress} initial={project.target_domain ?? ''} onUse={useAddress} onLater={downloadAsItIs} onClose={() => setAskAddress(false)} />
 
       {comparison && (
         <SectionCard icon={ListChecks} title="Every check, before and after" meta="For a closer look" defaultOpen={false}>

@@ -166,11 +166,20 @@ export function expandPanels(root) {
  * the card, `data-w-hcopy`; the card is `data-w-hrest`, their box `data-w-hv`. The stylesheet shows the copy instead of
  * the card while the box is hovered or holds keyboard focus; no script. Where the card is its box's only element (a grid
  * cell) that box is used; otherwise (a menu link next to other links) a box that draws nothing is put around the two, so
- * hovering anything else never swaps it.
+ * hovering anything else never swaps it — except where no box may stand (a list item, a table row): there the copy is the
+ * card's next sibling and the card is `data-w-hrest="pair"`.
  * @returns {number} cards
  */
 // The views of the box that draws nothing around a hover card: present where the card is, display: contents.
 const hoverBoxViews = (card) => Object.fromEntries(Object.entries(card.views ?? {}).map(([v, d]) => [v, d && { rect: d.rect, hidden: !!d.hidden, style: { display: 'contents' } }]));
+
+// Elements whose parent decides what may stand between them (a list item in its list, a row in its table, an option in its
+// select), and parents that hold only such items: no box may be put between the two, even one that draws nothing — screen
+// readers and axe read a <div> inside a <ul> as a broken list.
+const ITEM_TAGS = new Set(['li', 'dt', 'dd', 'tr', 'td', 'th', 'thead', 'tbody', 'tfoot', 'caption', 'colgroup', 'col', 'option', 'optgroup']);
+const ITEM_PARENTS = new Set(['ul', 'ol', 'menu', 'dl', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'colgroup', 'select', 'optgroup', 'datalist']);
+/** A hover card that may not get a box around it: its hovered copy goes right after it instead (`data-w-hrest="pair"`). */
+export const hoverPairOnly = (parentTag, cardTag) => ITEM_TAGS.has(String(cardTag).toLowerCase()) || ITEM_PARENTS.has(String(parentTag).toLowerCase());
 
 export function expandHoverCards(root) {
   let k = 0;
@@ -196,6 +205,12 @@ export function expandHoverCards(root) {
       if (parent !== root && parent.children.filter(isElement).length === 1) {
         // The card is all its cell holds: the cell is where the mouse is.
         parent.stateAttrs = { ...parent.stateAttrs, 'data-w-hv': '' };
+        parent.children.splice(i + 1, 0, copy);
+        i++;
+      } else if (hoverPairOnly(parent.tag, n.tag)) {
+        // A list item next to other items: no box around it (it would break the list); the copy is its next sibling and the
+        // script marks the card while the mouse or focus is on either (js/motion.js), which the stylesheet swaps on.
+        n.stateAttrs['data-w-hrest'] = 'pair';
         parent.children.splice(i + 1, 0, copy);
         i++;
       } else {

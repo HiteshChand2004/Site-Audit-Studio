@@ -21,7 +21,8 @@ import { exactDiff } from '../src/recreate/verify/exact/pixels.js';
 const SITE = 'https://www.example-original.dev/';
 const ENGLISH = 'This page is about the work we do for our customers and the people who use what we make every day. '
   + 'We write about it here so that you can find out what it is, how it works and why it matters to the people who need it.';
-const head = (css) => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Gate test page title</title>
+// The page states its theme colour and icon, so each test meets only the fixes it was written for (Step 3 adds them when missing).
+const head = (css) => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Gate test page title</title><meta name="theme-color" content="#c2410c"><link rel="icon" href="data:,">
 <meta name="description" content="A page made to test which fixes are kept and which are undone, written for the gate test.">
 <style>body{margin:0;font:18px sans-serif;background:#fff}${css}</style></head>`;
 
@@ -108,7 +109,7 @@ test('a change below the first screen, in a section that only appears on scroll,
 });
 
 // A page with a part that moves by itself: a 300 x 300 canvas of random pixels, different on every load.
-const noisyPage = (markCss) => `<!doctype html><html><head><meta charset="utf-8"><title>Gate test page title</title>
+const noisyPage = (markCss) => `<!doctype html><html><head><meta charset="utf-8"><title>Gate test page title</title><meta name="theme-color" content="#c2410c"><link rel="icon" href="data:,">
     <meta name="description" content="A page made to test which fixes are kept and which are undone, written for the gate test.">
     <style>body{margin:0;font:18px sans-serif;background:#fff;height:900px;overflow:hidden}.mark{width:20px;height:20px;background:#ddd}${markCss}</style></head>
     <body><p>${ENGLISH}</p><div class="mark"></div><canvas id="c" width="300" height="300"></canvas>

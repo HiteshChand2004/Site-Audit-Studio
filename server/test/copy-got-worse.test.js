@@ -104,9 +104,51 @@ test('a check no rule covers is unexplained, and the summary counts every row', 
     ],
   });
   assert.equal(r.items.length, 2, 'only the rows that got worse, all of them');
-  assert.deepEqual(r.summary, { total: 2, explained: 1, unexplained: 1, byReason: { owner: 1 } });
+  assert.deepEqual(r.summary, { total: 2, explained: 1, unexplained: 1, byReason: { owner: 1 }, byGroup: { 'missing-fixer': 1, 'needs-info': 1 } });
   assert.equal(r.items[0].unexplained, true);
+  assert.equal(r.items[0].group, 'missing-fixer', 'motion is its own track: owed, not a bug');
   assert.match(reasonText(null), /^UNEXPLAINED/);
+});
+
+test('every row gets one of the seven groups; only what nothing explains and no planned fix covers is "our bug"', () => {
+  const r = explainWorse({
+    ...base,
+    oldLhr: { mobile: lhr({ 'unused-javascript': { score: 0, details: { overallSavingsBytes: 50000, items: [{ url: 'https://www.example-original.test/app.js' }] } } }) },
+    newLhr: { mobile: lhr({ 'unused-javascript': { score: 0, details: { overallSavingsBytes: 48000, items: [{ url: `${COPY}/app.js` }] } } }) },
+    items: [
+      { status: 'open', key: 'seo.title-tag.length', title: 'Title length', after: { detail: '/: 74 characters' } },
+      { status: 'open', key: 'crawl.meta-tags', title: 'Meta tags', after: { detail: 'theme-color ✗' } },
+      { status: 'open', key: 'axe.aria-prohibited-attr', title: 'ARIA' },
+      { status: 'open', key: 'lighthouse.modern-image-formats', title: 'Images' },
+      { status: 'open', key: 'lighthouse.prioritize-lcp-image', title: 'LCP priority' },
+      { status: 'open', key: 'lighthouse.unused-javascript', title: 'Unused JS' },
+      { status: 'open', key: 'platform.nextjs', title: 'Next.js' },
+      { status: 'open', key: 'axe.heading-order', title: 'Headings' },
+      { status: 'open', key: 'seo.canonical-url', title: 'Canonical' },
+      { status: 'open', key: 'crawl.https', title: 'HTTPS' },
+      { status: 'open', key: 'something.unknown', title: 'Unknown' },
+    ],
+  });
+  const g = Object.fromEntries(r.open.map((i) => [i.key, i.group]));
+  assert.deepEqual(g, {
+    'seo.title-tag.length': 'bug',
+    // Step 3 built the theme colour / icon fix: still missing with no reason recorded (no fixOpen) is a bug.
+    'crawl.meta-tags': 'bug',
+    // Step 4 built the role="img" fix: still failing with no reason recorded (no fixOpen) is a bug.
+    'axe.aria-prohibited-attr': 'bug',
+    'lighthouse.modern-image-formats': 'missing-fixer',
+    'lighthouse.prioritize-lcp-image': 'bug',
+    'lighthouse.unused-javascript': 'own-code',
+    'platform.nextjs': 'own-code',
+    'axe.heading-order': 'look',
+    'seo.canonical-url': 'needs-info',
+    'crawl.https': 'measurement',
+    'something.unknown': 'bug',
+  });
+  assert.match(r.open[0].evidence, /still outside the range: a bug to report/, 'the fix exists now (Step 3)');
+  assert.equal(r.openSummary.byGroup.bug, 5, 'title length + meta tags (Step 3), prohibited names (Step 4): fixes built, no reason recorded; LCP priority; unknown');
+  assert.match(reasonText(null, 'missing-fixer'), /^Fix not built yet — /);
+  assert.match(reasonText('owner', 'needs-info'), /^Needs information from you — .*\(c\)$/);
 });
 
 test('KNOWN-ISSUES.md lists every row that got worse, the unexplained ones as such', () => {
@@ -118,4 +160,18 @@ test('KNOWN-ISSUES.md lists every row that got worse, the unexplained ones as su
   const [, known] = notesEntries({ report: { baseUrl: SITE, asIs: {}, copy: { openItems: [], worse } }, stack: 'html', root: 'r', shipped });
   assert.match(known.content, /## Got worse: New broken links[\s\S]*What this means: go to pages not chosen[\s\S]*Reason: c — /);
   assert.match(known.content, /## Got worse: Browser errors[\s\S]*What this means: the copy does not hold \/assets\/hero\.mp4[\s\S]*Tried: no automatic fix yet[\s\S]*Reason: UNEXPLAINED/);
+});
+
+test('an image row that got worse is a look change only when the copy serves the original\'s own file, never when it holds a heavier one', () => {
+  const rows = (id, list) => ({ [id]: { score: 0, details: { items: list.map(([url, wastedBytes]) => ({ url, wastedBytes })), overallSavingsBytes: list.reduce((s, [, b]) => s + b, 0) } } });
+  const worse = (copyRows, originalRows) => one({ key: 'lighthouse.modern-image-formats', after: { detail: 'Serve images in next-gen formats' } },
+    { newLhr: { mobile: lhr(rows('modern-image-formats', copyRows)) }, oldLhr: { mobile: lhr(rows('modern-image-formats', originalRows)) } });
+  // The copy names one more file than the original (a lossless WebP it made): the amount grew, yet every file is explained.
+  const made = worse([[`${COPY}/img/a.sas-0123456789.webp`, 20000], [`${COPY}/img/b~1a2b3c4d.jpg`, 30000]], [['https://cdn.example-original.test/img/b.jpg?w=800', 30000]]);
+  assert.equal(made.reason, 'look');
+  assert.equal(made.group, 'look');
+  // The flexibench shape: the original's CDN sent a small file, the copy holds the large one. A real gap: still owed.
+  const big = worse([[`${COPY}/img/photo.png`, 14000000]], [['https://cdn.example-original.test/img/photo.png', 73000]]);
+  assert.equal(big.reason, null);
+  assert.equal(big.group, 'missing-fixer');
 });

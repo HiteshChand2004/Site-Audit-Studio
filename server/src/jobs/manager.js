@@ -10,6 +10,7 @@ import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { db } from '../db/index.js';
 import { holdAwake, releaseAwake } from './keepAwake.js';
+import { meterJob } from './meter.js';
 import { stripAnsi } from './ansi.js';
 import { claimQueued, heartbeat, HEARTBEAT_MS, isoAt, ownJobs } from './liveness.js';
 import { jobMaxMs, jobsPerUser, maxJobs, minFreeMB } from './limits.js';
@@ -565,6 +566,8 @@ export class JobManager extends EventEmitter {
     };
     this.#rows.progress.run('running', null, 0, job.id);
     this.#emit(job, 'progress');
+    // RAM / CPU of this job, per step (jobs/meter.js): null unless SAS_METER=1.
+    const meter = meterJob(job, this.#opts.table);
 
     // The hard limit (jobs/limits.js): the job is asked to stop like from the app; what does not end by itself within the grace
     // period loses its slot anyway, so the next job in line starts, and the row says what happened. The pipeline's own
@@ -628,6 +631,7 @@ export class JobManager extends EventEmitter {
       );
     });
 
+    meter?.stop({ status: outcome.ok ? 'done' : 'failed' });
     let ok = false;
     if (outcome.abandoned) {
       this.#finish(job, 'failed', job.hardStop);

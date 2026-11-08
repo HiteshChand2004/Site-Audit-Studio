@@ -132,6 +132,20 @@ export function medianScores(runs) {
   return out;
 }
 
+/** How far one side's runs spread in a category (max − min of the runs that scored it). */
+export function spreadOf(runs, c) {
+  const v = runs.map((r) => r.scores?.[c]).filter((x) => typeof x === 'number');
+  return v.length ? Math.max(...v) - Math.min(...v) : 0;
+}
+
+/** The two sides' runs overlap in a category: the copy's highest run is not under the original's lowest. */
+export function runsOverlap(originalRuns, copyRuns, c) {
+  const vals = (runs) => runs.map((r) => r.scores?.[c]).filter((x) => typeof x === 'number');
+  const o = vals(originalRuns);
+  const k = vals(copyRuns);
+  return o.length > 0 && k.length > 0 && Math.max(...k) >= Math.min(...o);
+}
+
 /** One run per side decides when the copy is ahead by LEAD or more in every category both sides measured. */
 export function singleRunDecides(original, copy) {
   return LH_SCORE_CATEGORIES.every((c) => {
@@ -166,8 +180,16 @@ export function decide(originalRuns, copyRuns) {
     }
     if (unscored[c]) { original[c] = null; copy[c] = null; }
   }
-  const worse = LH_SCORE_CATEGORIES.filter((c) => !unscored[c] && copy[c] < original[c]);
-  return { original, copy, worse, unscored, blankRuns: blankRuns.length, runs: { original: originalRuns.length, copy: copyRuns.length }, accepted: originalRuns.length === 1 && copyRuns.length === 1 ? 'single run' : 'median of runs' };
+  // Lower on the copy by no more than the runs themselves spread (the medians of three on each side, the gap within the larger
+  // of the two sides' max − min) AND the two sides' runs overlap (the copy's best run reaches the original's worst): within run
+  // noise, said so, not "got worse". Every copy run under every original run is worse, however much the runs spread. One run per
+  // side has no spread, so it never is noise.
+  const lower = LH_SCORE_CATEGORIES.filter((c) => !unscored[c] && copy[c] < original[c]);
+  const enough = originalRuns.length >= 1 + EXTRA_RUNS && copyRuns.length >= 1 + EXTRA_RUNS;
+  const noise = enough ? lower.filter((c) => original[c] - copy[c] <= Math.max(spreadOf(originalRuns, c), spreadOf(copyRuns, c))
+    && runsOverlap(originalRuns, copyRuns, c)) : [];
+  const worse = lower.filter((c) => !noise.includes(c));
+  return { original, copy, worse, noise, unscored, blankRuns: blankRuns.length, runs: { original: originalRuns.length, copy: copyRuns.length }, accepted: originalRuns.length === 1 && copyRuns.length === 1 ? 'single run' : 'median of runs' };
 }
 
 /**
@@ -322,8 +344,20 @@ export function lighthousePageItems(comparison) {
           note: 'Measured again, not judged: a run that could not score the page says nothing about it, and the runs that did are too few for a median of three.',
         });
       }
+      // Lower on the copy, but by less than the runs of one side differ among themselves: shown with every run, not counted as worse.
+      for (const c of m.noise ?? []) {
+        const runs = (side) => m.runScores[side].map((s) => s[c] ?? '–').join(' / ');
+        items.push({
+          key: `lighthouse-score.${mode}.${c}.${p.path}`, category: c, page: p.path,
+          title: `Lighthouse ${CATEGORY_LABEL[c]} score (${MODE_LABEL[mode]}) on ${p.path}`,
+          status: 'changed', statusLabel: 'Within run noise',
+          before: { status: 'pass', detail: `${m.original[c]} on the original (runs ${runs('original')})`, score: m.original[c] },
+          after: { status: 'warn', detail: `${m.copy[c]} on the copy (runs ${runs('copy')}) — ${basis}${load}`, score: m.copy[c] },
+          note: 'The copy\'s median is lower, but by no more than the runs of one side differ among themselves (the larger of the two sides\' highest − lowest run), and the copy\'s best run reaches the original\'s worst: within the noise of measuring on this computer, so not counted as worse. Confirm after deploying.',
+        });
+      }
       if (!m.worse.length) {
-        if (!scored.length) continue;
+        if (!scored.length || m.noise?.length) continue;
         items.push({
           key: `lighthouse-score.${mode}.all.${p.path}`, category: 'performance', page: p.path,
           title: `Lighthouse scores (${MODE_LABEL[mode]}) on ${p.path}: copy not below the original${scored.length < LH_SCORE_CATEGORIES.length ? ' in the categories scored' : ''}`,
@@ -390,6 +424,71 @@ export function lighthouseTargets(comparison) {
     }
   }
   return rows;
+}
+
+/**
+ * The "copy scores at least as well as the original" rule, one verdict per device and Lighthouse category over every page measured
+ * (the comparison's own medians and noise, nothing measured again):
+ *   pass      the copy's score is not lower than the original's on any page (`ahead`: pages where it is higher);
+ *   noise     lower on some page, but only within run noise (decide: the gap within the runs' spread and the runs overlap);
+ *   fail      lower on some page beyond the noise; `worst` names the page, both scores and the audits that cost points
+ *             on the copy, each with why it still fails;
+ *   unscored  no page could be scored in this category on this device.
+ * `passed` = no category fails on either device. `line` is the sentence the results show.
+ */
+export function betterThanOriginal(comparison) {
+  const byMode = {};
+  let failed = 0;
+  for (const mode of MODES) {
+    const cats = {};
+    for (const c of LH_SCORE_CATEGORIES) {
+      const pages = [];
+      for (const p of comparison.pages) {
+        const m = p.modes?.[mode];
+        if (!m || m.error) continue;
+        const o = m.original?.[c];
+        const k = m.copy?.[c];
+        if (o == null || k == null) { pages.push({ path: p.path, status: 'unscored' }); continue; }
+        const status = (m.worse ?? []).includes(c) ? 'fail' : (m.noise ?? []).includes(c) ? 'noise' : k > o ? 'ahead' : 'same';
+        pages.push({ path: p.path, status, original: o, copy: k, m });
+      }
+      if (!pages.length) continue;
+      const scored = pages.filter((x) => x.status !== 'unscored');
+      const pick = (s) => scored.filter((x) => x.status === s);
+      const lowest = (list) => list.slice().sort((a, b) => (a.copy - a.original) - (b.copy - b.original))[0];
+      let v;
+      if (!scored.length) v = { status: 'unscored', pages: pages.length };
+      else if (pick('fail').length) {
+        const w = lowest(pick('fail'));
+        const onOriginal = new Set(w.m.detail?.failing?.original ?? []);
+        const cost = (w.m.detail?.copyFailingByCategory?.[c] ?? []).slice().sort((a, b) => b.weight - a.weight).slice(0, 5)
+          .map((f) => ({ id: f.id, title: w.m.detail?.copyAudits?.[f.id]?.title ?? f.id, weight: f.weight, why: whyStillFailing(f.id, onOriginal.has(f.id)) }));
+        v = { status: 'fail', pages: scored.length, lower: pick('fail').length, worst: { path: w.path, original: w.original, copy: w.copy, cost } };
+        failed++;
+      } else if (pick('noise').length) {
+        const w = lowest(pick('noise'));
+        v = { status: 'noise', pages: scored.length, lower: pick('noise').length, worst: { path: w.path, original: w.original, copy: w.copy } };
+      } else v = { status: 'pass', pages: scored.length, ahead: pick('ahead').length };
+      if (scored.length < pages.length) v.unscoredPages = pages.length - scored.length;
+      cats[c] = v;
+    }
+    if (Object.keys(cats).length) byMode[mode] = cats;
+  }
+  const part = (mode) => {
+    const cats = byMode[mode];
+    const list = Object.entries(cats);
+    const ok = list.filter(([, v]) => v.status === 'pass').length;
+    const scored = list.filter(([, v]) => v.status !== 'unscored').length;
+    const extra = list.filter(([, v]) => v.status !== 'pass').map(([c, v]) => (v.status === 'unscored'
+      ? `${CATEGORY_LABEL[c]} not scored`
+      : `${CATEGORY_LABEL[c]} ${v.status === 'noise' ? 'lower within run noise' : 'lower'}: ${v.worst.copy} against ${v.worst.original} on ${v.worst.path}`));
+    return `${MODE_LABEL[mode]} ${ok} of ${scored} categor${scored === 1 ? 'y' : 'ies'}${extra.length ? ` (${extra.join('; ')})` : ''}`;
+  };
+  const modes = MODES.filter((m) => byMode[m]);
+  const line = modes.length
+    ? `${failed ? 'Not yet better than the original' : 'At least as good as the original'} in Lighthouse: ${modes.map(part).join('; ')}.`
+    : null;
+  return { rule: 'copy >= original, every Lighthouse category, phone and computer', passed: modes.length ? failed === 0 : null, failed, byMode, line };
 }
 
 /** The one line the notes carry. */
