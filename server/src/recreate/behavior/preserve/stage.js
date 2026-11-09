@@ -23,6 +23,7 @@ import { fixAsIsCopy, fixGroup, revertPage } from '../../../copy/fixAsIs.js';
 import { axeRulesFor, checkGone, judgeAxe, mergeVerdicts } from '../../../copy/fixGone.js';
 import { addressForCopy } from '../../../copy/address.js';
 import { addressPass } from '../../../copy/addressPass.js';
+import { applyApproved, FIX_MODE_DIR, PROPOSALS_FILE } from '../../../copy/fixMode.js';
 import { measureServed, servedOutcome } from '../../../copy/served.js';
 import { slugFor } from '../../discover.js';
 import { serveCopy } from './serve.js';
@@ -816,6 +817,62 @@ async function addressStage(ctx, { stack, fromDir }) {
 }
 
 /**
+ * The fix-mode stage (Step 11, ctx.asIs.fixOnly): the changes the user approved one by one (copy/fixMode.js: a text colour,
+ * a heading's level) written into a finished copy, files only, like the address stage. Only the approved proposals of the
+ * finished job's `fix-mode/proposals.json` are written; the rest never are. Proved (only those pages changed, every change in
+ * place), else the copy stays as it was and the job says why. The report lists them as changed on purpose
+ * (`asIs.changedOnPurpose`): the copy differs from the original there because the user chose it, so the look check and the
+ * re-check rows read those places as choices, not as differences. Nothing is lifted, pictured or measured again here; the
+ * re-check that follows every copy measures the result.
+ */
+async function fixStage(ctx, { stack, fromDir }) {
+  const earlier = fromDir ? await readFile(path.join(fromDir, 'report.json'), 'utf8').then(JSON.parse, () => null) : null;
+  const saved = fromDir ? await readLifted(fromDir) : null;
+  const fixedDir = fromDir ? path.join(fromDir, ASIS_DIR, 'copy') : null;
+  const stored = fromDir ? await readFile(path.join(fromDir, FIX_MODE_DIR, PROPOSALS_FILE), 'utf8').then(JSON.parse, () => null) : null;
+  if (!earlier?.asIs || !saved || !stored?.proposals) throw new RecreateError('The finished copy or its proposed changes are gone: make the copy again.');
+  const approved = Array.isArray(ctx.asIs?.approved) ? ctx.asIs.approved : [];
+  const { pages } = saved;
+  const siteUrl = pages[0].url;
+  const copyDir = path.join(ctx.dir, ASIS_DIR, 'copy');
+  const outDir = path.join(ctx.dir, 'stacks', stack);
+  ctx.report.pages = await repackPages(fromDir, pages);
+
+  ctx.progress(0.1, 'Keeping the lifted copy');
+  await mkdir(path.join(ctx.dir, ASIS_DIR), { recursive: true });
+  for (const part of ['lifted', 'baseline']) {
+    await cp(path.join(fromDir, ASIS_DIR, part), path.join(ctx.dir, ASIS_DIR, part), { recursive: true }).catch(() => {});
+  }
+  await writeFile(path.join(ctx.dir, ASIS_PAGES_FILE), `${JSON.stringify({
+    createdAt: new Date().toISOString(), pages, excludedHosts: saved.excludedHosts, lift: saved.lift, reusedFrom: path.basename(fromDir),
+  }, null, 1)}\n`, 'utf8');
+
+  ctx.progress(0.3, 'Writing the changes you approved');
+  const pass = await applyApproved({ fromDir: fixedDir, dir: copyDir, proposals: stored.proposals, approved });
+  const report = { ...earlier.asIs, createdAt: new Date().toISOString(), fixedFrom: path.basename(fromDir) };
+  const carriedOver = earlier.asIs.changedOnPurpose ?? [];
+  report.changedOnPurpose = [...carriedOver, ...pass.applied.map((p) => ({
+    id: p.id, page: p.page, kind: p.kind, selector: p.selector, change: p.change, text: p.text, approvedAt: new Date().toISOString(),
+  }))];
+  report.fixPass = { ok: pass.ok, approved: approved.length, applied: pass.applied.length, notApproved: pass.notApproved, missed: pass.missed.map((p) => p.id), ...(pass.why && { why: pass.why }) };
+  if (!pass.ok) ctx.report.warnings.push(`The approved changes were not written: ${pass.why}. The copy is unchanged.`);
+  else if (pass.missed.length) ctx.report.warnings.push(`${pass.missed.length} approved change(s) could not be placed in their page and were left out.`);
+
+  await packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report });
+  if (stack === 'nextjs') await dropBuildFolder(outDir).catch(() => {});
+  const converted = report.convert?.mode === 'converted';
+  report.forms = await formsInCopy(copyDir, pages.map((p) => p.outPath));
+  report.formRoutes = converted && report.convert.forms ? report.convert.forms : await formRoutesOfCopy(copyDir, pages);
+  report.carried = { from: path.basename(fromDir), what: 'checks, Lighthouse and safety: the approved changes are one style colour or one aria-level per element, which load nothing', changedOnPurpose: report.changedOnPurpose.length };
+  ctx.report.copy = structuredClone(earlier.copy ?? { openItems: [] });
+  ctx.report.asIs = report;
+  ctx.report.outputs[stack] = { status: 'ready', dir: path.join('stacks', stack), dist: servedDir(stack, outDir), mode: 'as-is', pages: pages.map((p) => ({ outPath: p.outPath, path: localOfOutPath(p.outPath) })) };
+  ctx.report.safety = earlier.safety ?? report.safety;
+  ctx.progress(1, pass.ok ? `${pass.applied.length} approved change(s) written` : 'The copy is unchanged');
+  return {};
+}
+
+/**
  * The as-is stage. `ctx.asIs`: { stack, pages?, fromDir?, addressOnly? } — `fromDir` is the folder of an earlier as-is job whose
  * copy is reused (a repack): its page set and lift are taken from there, and nothing is captured or lifted again. With
  * `addressOnly` it is that job's finished copy that is reused, and only the new site's address is written (addressStage).
@@ -825,6 +882,7 @@ export async function asIsStage(ctx) {
   if (!ASIS_STACKS.includes(stack)) throw new RecreateError(`The ${stack} stack has no as-is packaging.`);
   const fromDir = ctx.asIs?.fromDir ?? null;
   if (ctx.asIs?.addressOnly) return addressStage(ctx, { stack, fromDir });
+  if (ctx.asIs?.fixOnly) return fixStage(ctx, { stack, fromDir });
   const captureRoot = path.join(ctx.dir, 'capture');
   const copyDir = path.join(ctx.dir, ASIS_DIR, 'copy');
   const outDir = path.join(ctx.dir, 'stacks', stack);

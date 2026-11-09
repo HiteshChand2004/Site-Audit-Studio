@@ -315,6 +315,17 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
     // The same for every row still open (failing on both sides): a reason or UNEXPLAINED, and the counts.
     checklist.stillOpen = worse.openSummary;
   }
+  // Fix mode (Step 11): what the user approved and the copy changed on purpose (a text colour, a heading's level). The rows of
+  // those checks carry the list, so a difference from the original there reads as the user's choice, not as the copy's.
+  const onPurpose = Array.isArray(report.asIs?.changedOnPurpose) ? report.asIs.changedOnPurpose : [];
+  if (onPurpose.length) {
+    checklist.changedOnPurpose = onPurpose;
+    const ruleOf = { contrast: 'color-contrast', 'heading-level': 'heading-order' };
+    for (const item of checklist.items) {
+      const mine = onPurpose.filter((c) => String(item.key ?? '').endsWith(ruleOf[c.kind]));
+      if (mine.length) Object.assign(item, { changedOnPurpose: mine.map((c) => ({ page: c.page, text: c.text })), note: [item.note, `Changed on purpose (approved by you): ${mine.length} element(s).`].filter(Boolean).join(' ') });
+    }
+  }
   // The other rows that are not a plain pass / fix get their group too: a figure that varies or a link to check again is a
   // matter of measurement; what needs a person needs information only the owner has.
   for (const item of checklist.items) {
