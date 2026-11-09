@@ -105,7 +105,7 @@ export async function offlineCheck(browser, base, pagePath = '/') {
 }
 
 /** The window of the visual check at a width: a phone below 600 px. */
-const viewOf = (width) => {
+export const viewOf = (width) => {
   const mobile = width < 600;
   return { viewport: { width, height: mobile ? 844 : 900 }, deviceScaleFactor: 1, isMobile: mobile, hasTouch: mobile };
 };

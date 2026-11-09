@@ -1,9 +1,9 @@
 import { existsSync } from 'node:fs';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Router } from 'express';
 import { db } from '../db/index.js';
-import { ConflictError, JobLimitError } from '../jobs/manager.js';
+import { ConflictError, JobLimitError, exclusive } from '../jobs/manager.js';
 import { streamJob } from '../jobs/sse.js';
 import { PUBLIC_STEPS } from '../recreate/index.js';
 import { analysisWarnings, latestAnalysis, parseExactMode, parseTargetDomain } from '../recreate/inputs.js';
@@ -20,6 +20,12 @@ import { startAsIsPreview, stopAsIsPreview } from '../recreate/behavior/preserve
 import { asIsPagesOf } from '../recreate/behavior/preserve/asis.js';
 import { isOwner, refuseNonOwner } from '../accounts/roles.js';
 import { usableAddress } from '../copy/address.js';
+import { chromium } from 'playwright';
+import { FIX_MODE_DIR, PROPOSALS_FILE, proposalPictures, proposalsForCopy } from '../copy/fixMode.js';
+import { gateVerdict, pictureRounds, viewOf } from '../recreate/behavior/preserve/check.js';
+import { serveCopy } from '../recreate/behavior/preserve/serve.js';
+import { localOfOutPath } from '../recreate/behavior/preserve/asis.js';
+import { pageSlug } from '../reaudit/lighthousePages.js';
 
 const router = Router();
 
@@ -174,6 +180,24 @@ router.post('/:id/recreate', async (req, res) => {
       Object.assign(project, selectProject.get(project.id));
       payload.preserve = true;
       payload.asIs = { stack: done.stack ?? done.asIs.stack ?? stack, pages: lifted.pages.map((p) => p.url), from: rid, address: usable.origin, addressOnly: true };
+    } else if (req.body.fixOnly === true) {
+      // `fixOnly` (Step 11, Fix mode): the changes the user approved one by one (`approved`: proposal ids of GET
+      // …/fix-proposals) written into the finished copy `recreateId`, files only (behavior/preserve/stage.js fixStage).
+      const rid = req.body.recreateId;
+      const row = typeof rid === 'string' && UUID.test(rid) ? doneReport.get(rid, project.id) : null;
+      const done = row?.result_json ? JSON.parse(row.result_json) : null;
+      if (!done?.asIs || !existsSync(path.join(recreateDir(project.id, rid), ASIS_DIR, 'copy'))) {
+        return res.status(409).json({ error: 'There is no finished copy to change: make the copy first.' });
+      }
+      const stored = await readFile(path.join(recreateDir(project.id, rid), FIX_MODE_DIR, PROPOSALS_FILE), 'utf8').then(JSON.parse, () => null);
+      const known = new Set((stored?.proposals ?? []).map((p) => p.id));
+      const approved = Array.isArray(req.body.approved) ? [...new Set(req.body.approved)].filter((x) => typeof x === 'string') : [];
+      if (!approved.length) return res.status(400).json({ error: 'Approve at least one change.' });
+      if (approved.some((x) => !known.has(x))) return res.status(400).json({ error: 'A change you approved is not one of the proposed changes of this copy: open the list again.' });
+      const lifted = await readLifted(recreateDir(project.id, rid));
+      if (!lifted) return res.status(409).json({ error: 'The finished copy to change is gone: make the copy again.' });
+      payload.preserve = true;
+      payload.asIs = { stack: done.stack ?? done.asIs.stack ?? stack, pages: lifted.pages.map((p) => p.url), from: rid, fixOnly: true, approved };
     } else if (req.body.reuseAsIs === true) {
       // The newest finished copy that still has its lifted folder (older ones may have been removed by the retention rule).
       const source = latestAsIsSource.all(project.id).find((r) => existsSync(path.join(recreateDir(project.id, r.id), ASIS_DIR, 'copy')));
@@ -187,7 +211,7 @@ router.post('/:id/recreate', async (req, res) => {
     }
     // `addressConfirmed`: the new site's address as the user entered it for this copy (the "Copy my site" panel). Only a confirmed
     // address is written into the copy (copy/address.js); a repack or an older flow sends none, and the copy then names no address.
-    if (!payload.asIs?.addressOnly) {
+    if (!payload.asIs?.addressOnly && !payload.asIs?.fixOnly) {
       let address = null;
       if (req.body.addressConfirmed != null) {
         const parsed = parseTargetDomain(req.body.addressConfirmed);
@@ -466,6 +490,60 @@ router.post('/:id/recreate/:recreateId/asis-preview', async (req, res) => {
 router.delete('/:id/recreate/:recreateId/asis-preview', async (req, res) => {
   await stopAsIsPreview(req.params.id, req.params.recreateId);
   res.status(204).end();
+});
+
+// Fix mode (Step 11): the changes proposed for a finished "Copy my site" copy (a text colour, a heading's level), from its last
+// re-check as saved (no browser), then their before / after pictures (one browser, in the job line), then POST …/recreate
+// { mode: 'as-is', fixOnly: true, recreateId, approved } writes only the approved ones.
+async function fixModeContext(req, res) {
+  const { id, recreateId } = req.params;
+  if (!UUID.test(id) || !UUID.test(recreateId)) return void res.status(404).json({ error: 'Recreate not found.' });
+  const row = doneReport.get(recreateId, id);
+  const report = row?.result_json ? JSON.parse(row.result_json) : null;
+  if (!report?.asIs) return void res.status(409).json({ error: 'Fix mode is for a finished "Copy my site" copy.' });
+  const reaudit = JSON.parse(latestReauditOf.get(recreateId, id)?.result_json ?? 'null');
+  if (!reaudit?.reauditId) return void res.status(409).json({ error: 'Compare the copy with the original first: the proposed changes come from that check.' });
+  const folder = recreateDir(id, recreateId);
+  const lifted = await readLifted(folder);
+  if (!lifted) return void res.status(409).json({ error: 'The finished copy is gone: make the copy again.' });
+  const pages = lifted.pages.map((p) => ({ path: localOfOutPath(p.outPath), outPath: p.outPath }));
+  const stem = (p) => pageSlug(p, 'x').replace(/-[0-9a-f]{8}$/, '');
+  const data = await proposalsForCopy({ folder, reauditId: reaudit.reauditId, pages, pageSlugStem: stem });
+  return { folder, data };
+}
+
+router.get('/:id/recreate/:recreateId/fix-proposals', async (req, res) => {
+  const ctx = await fixModeContext(req, res);
+  if (ctx) res.json(ctx.data);
+});
+
+router.post('/:id/recreate/:recreateId/fix-proposals/pictures', async (req, res) => {
+  const ctx = await fixModeContext(req, res);
+  if (!ctx) return;
+  if (ctx.data.pictures) return res.json(ctx.data);
+  if (!ctx.data.proposals.length) return res.json({ ...ctx.data, pictures: {}, looks: [] });
+  // In the job line like any work that opens a browser (held for room and memory, one at a time).
+  const made = await exclusive(async () => {
+    const browser = await chromium.launch();
+    try {
+      return await proposalPictures({
+        browser, copyDir: path.join(ctx.folder, ASIS_DIR, 'copy'), workDir: path.join(ctx.folder, FIX_MODE_DIR), proposals: ctx.data.proposals,
+        serve: (dir) => serveCopy(dir), pictureRounds, gateVerdict, viewOf,
+      });
+    } finally {
+      await browser.close().catch(() => {});
+    }
+  }, { kind: 'recreate', projectId: req.params.id });
+  const data = { ...ctx.data, pictures: made.pictures, looks: made.looks };
+  await writeFile(path.join(ctx.folder, FIX_MODE_DIR, PROPOSALS_FILE), JSON.stringify(data, null, 1), 'utf8');
+  res.json(data);
+});
+
+router.get('/:id/recreate/:recreateId/fix-mode/:file', (req, res) => {
+  const { id, recreateId, file } = req.params;
+  if (!UUID.test(id) || !UUID.test(recreateId) || !/^[0-9a-f]{10}-\d{3,4}-(before|after)\.png$/.test(file)) return res.status(404).end();
+  res.set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+  res.sendFile(path.join(recreateDir(id, recreateId), FIX_MODE_DIR, file), (err) => { if (err && !res.headersSent) res.status(404).end(); });
 });
 
 router.get('/:id/recreate/:recreateId/events', (req, res) => {
