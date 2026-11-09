@@ -149,11 +149,41 @@ function sameSite(url, siteHost) {
   }
 }
 
+/** Link header parameters a `<link>` tag can carry as attributes (others, like `nopush`, mean nothing in a page). */
+const LINK_PARAMS = new Set(['as', 'crossorigin', 'type', 'media', 'fetchpriority', 'imagesrcset', 'imagesizes', 'integrity', 'referrerpolicy']);
+
+/**
+ * The preloads of a document's `Link` response header (RFC 8288): `<url>; rel=preload; as=font; crossorigin; type="font/woff2"`,
+ * comma-separated. Only `preload` and `modulepreload` (what the browser fetches at once); `preconnect` and the rest are left.
+ * @param {string} header
+ * @returns {{ href: string, rel: string, attrs: Record<string, string> }[]}
+ */
+export function headerPreloads(header) {
+  const out = [];
+  for (const m of String(header ?? '').matchAll(/<([^>]*)>((?:\s*;\s*[^;,]+(?:=(?:"[^"]*"|[^;,]*))?)*)/g)) {
+    const attrs = {};
+    let rel = '';
+    for (const p of m[2].split(';').map((s) => s.trim()).filter(Boolean)) {
+      const eq = p.indexOf('=');
+      const name = (eq < 0 ? p : p.slice(0, eq)).trim().toLowerCase();
+      const value = eq < 0 ? '' : p.slice(eq + 1).trim().replace(/^"|"$/g, '');
+      if (name === 'rel') rel = value.toLowerCase();
+      else if (LINK_PARAMS.has(name)) attrs[name] = value;
+    }
+    const kind = rel.split(/\s+/).find((r) => r === 'preload' || r === 'modulepreload');
+    if (m[1].trim() && kind) out.push({ href: m[1].trim(), rel: kind, attrs });
+  }
+  return out;
+}
+
 /** The kind a loading tag gives the file: what the download expects. */
-function kindOfTag(tag, rel = '') {
+function kindOfTag(tag, rel = '', as = '') {
   if (tag === 'script') return 'script';
   if (tag === 'link' && /stylesheet/.test(rel)) return 'style';
   if (tag === 'link' && /icon|manifest/.test(rel)) return 'icon';
+  // A preload is the kind it names: a font or a picture copied as a "script" would be read and rewritten as script text later.
+  if (tag === 'link' && /(^|\s)preload/.test(rel) && /^font$/i.test(as ?? '')) return 'font';
+  if (tag === 'link' && /(^|\s)preload/.test(rel) && /^image$/i.test(as ?? '')) return 'media';
   if (tag === 'link' && /preload|modulepreload/.test(rel)) return 'script';
   return 'media';
 }
@@ -243,6 +273,37 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
     }
   })].filter(Boolean))];
   const $ = load(html);
+  // Preloads the original host sent as a `Link` header (a framework's fonts and styles, fetched at the first byte). A static
+  // copy is served with no such header, so its fonts were found only once the stylesheet was parsed: the same page painted its
+  // text later. They are written as tags at the top of the head (after the charset), only for files the record holds (so the
+  // copy has them) and that no tag of the page already loads; the walk below localises them like any other tag. A preload
+  // only fetches earlier: nothing it names is drawn differently.
+  const tagged = new Set($('link[href]').toArray().map((el) => {
+    try {
+      return new URL($(el).attr('href').trim(), pageUrl).href.split('#')[0];
+    } catch {
+      return '';
+    }
+  }));
+  const headerTags = [];
+  for (const p of headerPreloads(doc.link)) {
+    let abs;
+    try {
+      abs = new URL(p.href, pageUrl).href.split('#')[0];
+    } catch {
+      continue;
+    }
+    if (!byUrl.has(abs) || excluded.has(abs) || tagged.has(abs)) continue;
+    tagged.add(abs);
+    const tag = $('<link>').attr('rel', p.rel).attr('href', abs);
+    for (const [k, v] of Object.entries(p.attrs)) tag.attr(k, v);
+    headerTags.push(tag);
+  }
+  if (headerTags.length) {
+    const charset = $('head meta[charset]').first();
+    if (charset.length) charset.after(headerTags);
+    else $('head').prepend(headerTags);
+  }
   /** @type {{ url: string, reason: string }[]} */
   const blockers = [];
   /** @type {{ url: string, local: string, kind: string, from: string, reason: string, sha256: string }[]} */
@@ -362,7 +423,7 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
       }
       if (abs && excluded.has(abs)) continue;
       const own = wouldDownload(raw);
-      if (own) htmlAhead.push([own, kindOfTag(tag, rel)]);
+      if (own) htmlAhead.push([own, kindOfTag(tag, rel, node.attr('as'))]);
     }
     for (const part of (node.attr('srcset') ?? '').split(',')) {
       const own = node.attr('srcset') ? wouldDownload(part.trim().split(/\s+/)[0]) : null;
@@ -382,7 +443,7 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
     const rel = node.attr('rel') ?? '';
     // A plain link (a feed, an alternate, a canonical) is not loaded: it stays as it is.
     if (tag === 'link' && !/stylesheet|icon|manifest|preload|modulepreload/.test(rel)) continue;
-    const kind = kindOfTag(tag, rel);
+    const kind = kindOfTag(tag, rel, node.attr('as'));
     if (node.attr(attr)) {
       const local = await localize(node.attr(attr), kind);
       if (local === null) {
@@ -723,5 +784,5 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   // Downloads started ahead and never asked for finish before their folder goes.
   await prefetch.settle();
   await rm(tmp, { recursive: true, force: true });
-  return { document: { url: doc.url, sha256: doc.sha }, files, removed, blockers, downloads, dropped, matchedBy, ranged };
+  return { document: { url: doc.url, sha256: doc.sha }, files, removed, blockers, downloads, dropped, matchedBy, ranged, headerPreloads: headerTags.length };
 }
