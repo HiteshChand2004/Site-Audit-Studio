@@ -22,7 +22,7 @@ import { recreateDir } from '../recreate/workspace.js';
 import { createNetPolicy, userPolicy } from '../security/netGuard.js';
 import { compareAudits, loadSide } from './compare/index.js';
 import { CATEGORIES } from './compare/rules.js';
-import { explainWorse } from '../copy/gotWorse.js';
+import { explainWorse, markOutside } from '../copy/gotWorse.js';
 import { clickBudgetFor, hoverBudgetFor, hoverFirstFor, measureNewMotion, motionItems, motionTimeFor, readOldMotion } from './motion.js';
 
 /** Thrown when a re-audit cannot run at all; the job is marked failed. */
@@ -305,6 +305,8 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
       excludedHosts: Array.isArray(report.asIs?.excludedByRule) ? report.asIs.excludedByRule : [],
       // What the copy's own fixes left open and why (the page gave no words, the site states no colour).
       fixOpen: Array.isArray(report.asIs?.fixes?.open) ? report.asIs.fixes.open : [],
+      // The site's own data addresses (answered by its server while captured): a request to one fails in a copy of files.
+      backendPaths: (report.asIs?.sameOrigin?.sameAsOriginal ?? []).filter((r) => r?.reason === 'not-an-asset' && r.path).map((r) => r.path),
     });
     const byKey = new Map([...worse.items.map((w) => ['regressed', w]), ...worse.open.map((w) => ['open', w])].map(([status, w]) => [`${status} ${w.key}`, w]));
     for (const item of checklist.items) {
@@ -314,6 +316,8 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
     checklist.gotWorse = worse.summary;
     // The same for every row still open (failing on both sides): a reason or UNEXPLAINED, and the counts.
     checklist.stillOpen = worse.openSummary;
+    // Rows that are not the tool's to change leave "got worse" / "still open" for a section of their own (copy/gotWorse.js).
+    markOutside(checklist);
   }
   // Fix mode (Step 11): what the user approved and the copy changed on purpose (a text colour, a heading's level). The rows of
   // those checks carry the list, so a difference from the original there reads as the user's choice, not as the copy's.

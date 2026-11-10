@@ -3,7 +3,7 @@ import { Card } from '../common/Surface.jsx';
 import { Pill } from '../common/Score.jsx';
 import InfoTip from '../common/InfoTip.jsx';
 import CountUp from '../common/CountUp.jsx';
-import { CHECKS, HEALTH, matchRating, RESULT_STATUS, TERMS } from '../../copy.js';
+import { CHECKS, HEALTH, matchRating, OUTSIDE, RESULT_STATUS, TERMS } from '../../copy.js';
 import { plural } from '../../format.js';
 import styles from './Outcome.module.css';
 import { stackById } from '../../constants.js';
@@ -26,12 +26,20 @@ export default function Outcome({ result, comparison }) {
   const match = result.fidelity?.score ?? null;
   const m = matchRating(match);
   const s = comparison?.summary ?? null;
-  // An as-is copy: how many "got worse" rows carry one of the five reasons, and how many none fits (server copy/gotWorse.js).
-  const worse = comparison?.gotWorse ?? null;
-  // And the same counts for its "still open" rows (failing on both sides).
-  const stillOpen = comparison?.stillOpen ?? null;
+  // Rows outside what Remastly can change (server copy/gotWorse.js markOutside) are not "got worse" / "still open": the counts
+  // (summary) leave them out, and so do the lists below. They are shown in their own calm section of the checklist.
+  const own = (comparison?.items ?? []).filter((i) => !i.outside);
+  const outsideN = comparison?.outside?.total ?? 0;
+  // An as-is copy: how many of its own "got worse" / "still open" rows carry a reason, and how many none fits.
+  const reasons = (status, all) => {
+    if (!all) return null;
+    const rows = own.filter((i) => i.status === status);
+    return { explained: rows.filter((i) => i.reason).length, unexplained: rows.filter((i) => !i.reason).length };
+  };
+  const worse = reasons('regressed', comparison?.gotWorse);
+  const stillOpen = reasons('open', comparison?.stillOpen);
   const better = s ? (s.fixed ?? 0) + (s.improved ?? 0) : 0;
-  const todo = (comparison?.items ?? []).filter((i) => i.status === 'regressed' || i.status === 'open').sort((a, b) => (a.status === 'regressed' ? 0 : 1) - (b.status === 'regressed' ? 0 : 1));
+  const todo = own.filter((i) => i.status === 'regressed' || i.status === 'open').sort((a, b) => (a.status === 'regressed' ? 0 : 1) - (b.status === 'regressed' ? 0 : 1));
   const before = comparison?.scores?.before?.mobile;
   const after = comparison?.scores?.after?.mobile;
 
@@ -72,6 +80,8 @@ export default function Outcome({ result, comparison }) {
           ))}
         </ul>
       )}
+
+      {outsideN > 0 && <p className={styles.todoDetail}>{OUTSIDE.line(outsideN)}</p>}
 
       <div className={styles.facts}>
         {match != null && (

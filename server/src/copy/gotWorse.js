@@ -56,13 +56,16 @@ const kb = (bytes) => `${Math.round(bytes / 1024)} KB`;
  * @param {object} [o.newAxe]           the copy's
  * @returns {{ items: object[], summary: { total: number, explained: number, unexplained: number, byReason: Record<string, number> } }}
  */
-export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPages = copyPages, oldLhr = {}, newLhr = {}, oldAxe = null, newAxe = null, address = null, revertedPages = [], excludedHosts = [], fixOpen = [] }) {
+export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPages = copyPages, oldLhr = {}, newLhr = {}, oldAxe = null, newAxe = null, address = null, revertedPages = [], excludedHosts = [], fixOpen = [], backendPaths = [] }) {
   const site = bareHost(new URL(siteUrl).hostname);
   const copyHost = hostOf(copyOrigin);
   const copied = new Set(copyPages.map(normPath));
   const chosen = new Set(chosenPages.map(normPath));
   // fixOpen: what the copy's own fixes left open, with why (report.asIs.fixes.open): a row they explain is not a bug.
-  const ctx = { site, copyHost, copied, chosen, oldLhr, newLhr, oldAxe, newAxe, address, revertedPages, excludedHosts, fixOpen };
+  // backendPaths: the site's own addresses that answered with data, not a file, while it was captured (report.asIs.sameOrigin:
+  // `not-an-asset`). Only the original's server can answer them; a copy of files has none, so they fail there (reason b).
+  const backend = new Set(backendPaths.map(normPath));
+  const ctx = { site, copyHost, copied, chosen, oldLhr, newLhr, oldAxe, newAxe, address, revertedPages, excludedHosts, fixOpen, backend };
   // With a new-site address, structured data the original wrote with its own address is kept as written (copy/fixAsIs.js
   // applyAddress): a structured-data row says so in plain words, whatever else explains it.
   const ldNote = fixOpen.some((o) => o.kind === 'address' && o.field === 'json-ld')
@@ -93,6 +96,53 @@ export const GROUPS = {
   impossible: { code: 'g', label: 'Not possible', text: 'No copy can do this.' },
 };
 const REASON_GROUP = { owner: 'needs-info', backend: 'needs-info', third_party: 'own-code', deploy: 'measurement', look: 'look' };
+
+/**
+ * The groups that are not the tool's to change: such a row is not a "got worse" or "still open" of the copy. It is listed in one
+ * calm section of its own ("Outside what Remastly can change") and left out of the top counts. "bug" and "missing-fixer" are the
+ * tool's own; "measurement" stays in the main list until a proof shows the gap is the test.
+ */
+export const OUTSIDE_GROUPS = new Set(['needs-info', 'look', 'own-code', 'impossible']);
+// One plain sentence per row: by its first reason when it has one, else by its group.
+const OUTSIDE_WHY = {
+  backend: 'It needs the site’s own server or backend, which a copy of the site’s files does not have.',
+  owner: 'It needs information or a choice that only the site’s owner can give; the copy does not invent it.',
+  third_party: 'It comes from code the original loads from another company, which the copy keeps as it is.',
+  look: 'Changing it would change how the original looks or behaves.',
+  'own-code': 'It comes from the original’s own code, which the copy keeps exactly as it is.',
+  'needs-info': 'It needs information or a choice that only the site’s owner can give; the copy does not invent it.',
+  impossible: 'No copy of a website can do this.',
+};
+
+/**
+ * Marks the "got worse" / "still open" rows outside what the tool can change (`outside: true`, `outsideWhy`), and takes them out
+ * of the top counts: `summary.regressed` / `summary.open` then count the tool's own rows only, `summary.outside` the rest, and
+ * `checklist.outside` says how many of each status and group. Nothing is removed: every row stays in `items`. Idempotent (an
+ * older re-check is marked when it is read). Returns the checklist.
+ */
+export function markOutside(checklist) {
+  if (!checklist?.items || checklist.outside) return checklist;
+  const out = { total: 0, regressed: 0, open: 0, byGroup: {} };
+  for (const item of checklist.items) {
+    if ((item.status !== 'regressed' && item.status !== 'open') || !OUTSIDE_GROUPS.has(item.group)) continue;
+    item.outside = true;
+    const first = String(item.reason ?? '').split('+')[0];
+    item.outsideWhy = OUTSIDE_WHY[first] ?? OUTSIDE_WHY[item.group];
+    out.total++;
+    out[item.status]++;
+    out.byGroup[item.group] = (out.byGroup[item.group] ?? 0) + 1;
+  }
+  checklist.outside = out;
+  if (checklist.summary) {
+    checklist.summary = {
+      ...checklist.summary,
+      regressed: Math.max(0, (checklist.summary.regressed ?? 0) - out.regressed),
+      open: Math.max(0, (checklist.summary.open ?? 0) - out.open),
+      outside: out.total,
+    };
+  }
+  return checklist;
+}
 
 function groupOf(ex) {
   if (ex.group) return ex.group;
@@ -536,6 +586,7 @@ function requestPart(e, ctx) {
   const host = hostOf(e.url);
   if (host !== ctx.copyHost && host !== ctx.site) return { what, reason: 'third_party', evidence: `requests to ${host}, which is neither the copy nor the original` };
   const p = pathOf(e.url);
+  if (p && ctx.backend?.has(normPath(p))) return { what, reason: 'backend', evidence: `the page asks the site's own server for data (${p}); the original's server answers it, a copy of the site's files has no server, so the request fails` };
   if (p && !hasFileExt(p) && !ctx.copied.has(p) && !ctx.chosen.has(p)) {
     return { what, reason: 'owner', notCopied: p, evidence: 'the page loading a page that was not copied, ahead of a click' };
   }
@@ -638,6 +689,8 @@ function scorePart(item, ctx) {
     const hosts = hostsOf(urls);
     const foreign = hosts.filter((h) => h !== ctx.copyHost && h !== ctx.site);
     const what = a.title ?? id;
+    const ownData = urls.filter((u) => hostOf(u) === ctx.copyHost || hostOf(u) === ctx.site).map((u) => pathOf(u)).filter((p) => p && ctx.backend?.has(normPath(p)));
+    if (urls.length && ownData.length === urls.length) return { what, reason: 'backend', evidence: `"${what}": the page asks the site's own server for data (${[...new Set(ownData)].join(', ')}), which a copy of the site's files cannot answer` };
     if (hosts.length && foreign.length === hosts.length) return { what, reason: 'third_party', evidence: `"${what}" names only ${foreign.join(', ')}: third-party code the original loads` };
     if (CONTENT_WORDS.has(id)) return { what, reason: 'owner', evidence: `"${what}": the page gives no words to fill it from; the owner writes them` };
     if (LOOK_RULES.has(id)) return { what, reason: 'look', evidence: `"${what}": the fix changes the original's own markup, colours or widgets` };
