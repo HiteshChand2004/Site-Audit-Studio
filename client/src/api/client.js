@@ -172,13 +172,6 @@ export const api = {
   addAddress: (id, recreateId, address) => request(`/projects/${id}/recreate`, {
     method: 'POST', body: { mode: 'as-is', confirmed: true, addressOnly: true, recreateId, addressConfirmed: address },
   }),
-  // Fix mode (Step 11): proposals from the last comparison, their before / after pictures, and the approved ones written.
-  getFixProposals: (id, recreateId) => request(`/projects/${id}/recreate/${recreateId}/fix-proposals`),
-  makeFixPictures: (id, recreateId) => request(`/projects/${id}/recreate/${recreateId}/fix-proposals/pictures`, { method: 'POST' }),
-  fixPictureUrl: (id, recreateId, file) => apiUrl(`/projects/${id}/recreate/${recreateId}/fix-mode/${file}`),
-  applyFixes: (id, recreateId, approved) => request(`/projects/${id}/recreate`, {
-    method: 'POST', body: { mode: 'as-is', confirmed: true, fixOnly: true, recreateId, approved },
-  }),
   startAsIsPreview: (id, recreateId) => request(`/projects/${id}/recreate/${recreateId}/asis-preview`, { method: 'POST' }),
   getCurrentRecreate: (id) => request(`/projects/${id}/recreate/current`),
   downloadUrl: (id, recreateId, stack) => apiUrl(`/projects/${id}/recreate/${recreateId}/download${stack ? `?stack=${encodeURIComponent(stack)}` : ''}`),
