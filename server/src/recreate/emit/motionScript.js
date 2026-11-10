@@ -15,6 +15,8 @@
 //      for `rp` elements: the reveal repeats, like the original's).
 // It is fixed (the same for every site), reads only the document and makes no request: the safety gate allows exactly this
 // file (verify/appProfiles.js `motion`) and nothing else.
+import { transformSync } from 'esbuild';
+
 export const MOTION_FILE = 'js/motion.js';
 
 export const MOTION_JS = `(function () {
@@ -217,6 +219,30 @@ export const MOTION_JS = `(function () {
   }
   // A card's hovered look (data-w-hv box): put in place the first time the card is pointed at or focused; the stylesheet
   // then swaps the two on :hover / :focus-within.
+  // A list item's hovered look is its next sibling (no box may stand in a list): the card is marked is-hv while the mouse is
+  // on the card or its copy, and the stylesheet swaps the two on that mark. The mouse only (the original's script answered
+  // mouseenter): showing it on focus would hide the focused item and drop the keyboard focus.
+  var pairOf = function (el) {
+    if (!el || !el.closest) return null;
+    var card = el.closest('[data-w-hrest="pair"]');
+    if (card) return card;
+    var copy = el.closest('[data-w-hcopy]');
+    var prev = copy && copy.previousElementSibling;
+    return prev && prev.getAttribute('data-w-hrest') === 'pair' ? prev : null;
+  };
+  var pairIn = function (e) {
+    var card = pairOf(e.target);
+    if (!card) return;
+    var next = card.nextElementSibling;
+    if (next && next.tagName === 'TEMPLATE' && next.getAttribute('data-w-tpl') === 'hover') card.parentNode.replaceChild(next.content, next);
+    card.classList.add('is-hv');
+  };
+  var pairOut = function (e) {
+    var card = pairOf(e.target);
+    if (card && pairOf(e.relatedTarget) !== card) card.classList.remove('is-hv');
+  };
+  document.addEventListener('pointerover', pairIn, { passive: true });
+  document.addEventListener('pointerout', pairOut, { passive: true });
   var hoverIn = function (e) {
     var box = e.target && e.target.closest ? e.target.closest('[data-w-hv]') : null;
     if (!box) return;
@@ -503,6 +529,17 @@ export const MOTION_JS = `(function () {
   for (var j = 0; j < videos.length; j++) seen.observe(videos[j]);
 })();
 `;
+
+let minified = null;
+/**
+ * The same script minified (esbuild, as build/minify.js minifies the plain-HTML build's copy in dist/), made once. The app stacks
+ * (React + Vite, Next.js, MERN) ship it from public/, which their bundlers copy as it is, so they ship this one; the plain-HTML
+ * build keeps the readable one in site/ and minifies its own dist/.
+ */
+export function motionJsMinified() {
+  minified ??= transformSync(MOTION_JS, { loader: 'js', minify: true, legalComments: 'none', logLevel: 'silent' }).code;
+  return minified;
+}
 
 /** Where the app stacks (React + Vite, Next.js, MERN) serve it from: the root of the site, like their assets. */
 export const MOTION_SRC = `/${MOTION_FILE}`;

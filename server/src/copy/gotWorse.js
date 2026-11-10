@@ -14,6 +14,7 @@
 //                    are the original's, and changing them is a change of its look (§2: contrast is never rewritten as-is);
 //   b                not decided here: a backend item or a reverted fix carries its reason from the copy run (openItems.js).
 import { REASONS } from './openItems.js';
+import { FIELDS, FIXES, KINDS_BY_KEY, fixOf } from './fixRegistry.js';
 
 /** How much a measured amount may move before it counts as grown: bytes and times vary run to run, element counts do not. */
 const GROWTH = { element: 0.02, other: 0.1 };
@@ -34,8 +35,10 @@ const hostOf = (url) => {
     return '';
   }
 };
-// A file: a name with an extension (up to 10 letters: a runtime's own formats are longer than the usual three or four).
-const hasFileExt = (p) => /\.[a-z0-9]{1,10}$/i.test(p);
+// A file: a name with an extension (up to 10 letters: a runtime's own formats are longer than the usual three or four). A page's
+// own extension (about.html, contact.php) names a page, not a file.
+const PAGE_EXT = /\.(html?|xhtml|shtml|php\d?|aspx?|jsp|cfm)$/i;
+const hasFileExt = (p) => /\.[a-z0-9]{1,10}$/i.test(p) && !PAGE_EXT.test(p);
 // An address asking for byte ranges of a file (?range=from-to[,from-to]): the original serves that file in pieces.
 const isRanged = (url) => /[?&]range=\d+-\d+(,\d+-\d+)*(&|$)/.test(String(url ?? ''));
 const kb = (bytes) => `${Math.round(bytes / 1024)} KB`;
@@ -53,13 +56,22 @@ const kb = (bytes) => `${Math.round(bytes / 1024)} KB`;
  * @param {object} [o.newAxe]           the copy's
  * @returns {{ items: object[], summary: { total: number, explained: number, unexplained: number, byReason: Record<string, number> } }}
  */
-export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPages = copyPages, oldLhr = {}, newLhr = {}, oldAxe = null, newAxe = null, address = null, revertedPages = [], excludedHosts = [] }) {
+export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPages = copyPages, oldLhr = {}, newLhr = {}, oldAxe = null, newAxe = null, address = null, revertedPages = [], excludedHosts = [], fixOpen = [] }) {
   const site = bareHost(new URL(siteUrl).hostname);
   const copyHost = hostOf(copyOrigin);
   const copied = new Set(copyPages.map(normPath));
   const chosen = new Set(chosenPages.map(normPath));
-  const ctx = { site, copyHost, copied, chosen, oldLhr, newLhr, oldAxe, newAxe, address, revertedPages, excludedHosts };
-  const pick = (item, explain) => ({ key: item.key, title: item.title, before: item.before, after: item.after, ...explain(item, ctx) });
+  // fixOpen: what the copy's own fixes left open, with why (report.asIs.fixes.open): a row they explain is not a bug.
+  const ctx = { site, copyHost, copied, chosen, oldLhr, newLhr, oldAxe, newAxe, address, revertedPages, excludedHosts, fixOpen };
+  // With a new-site address, structured data the original wrote with its own address is kept as written (copy/fixAsIs.js
+  // applyAddress): a structured-data row says so in plain words, whatever else explains it.
+  const ldNote = fixOpen.some((o) => o.kind === 'address' && o.field === 'json-ld')
+    ? ' Its structured data (JSON-LD) still names the original site\'s address: it is kept as the original wrote it.' : '';
+  const pick = (item, explain) => {
+    const ex = explain(item, ctx);
+    const note = ldNote && /^aeo\.(json-ld-schema|faq-schema)(\.|$)/.test(item.key ?? '') ? ldNote : '';
+    return { key: item.key, title: item.title, before: item.before, after: item.after, ...ex, ...(note && { evidence: `${ex.evidence ?? ''}${note}`.trim() }), group: groupOf(ex) };
+  };
   const out = items.filter((i) => i.status === 'regressed').map((item) => pick(item, explainOne));
   // "Still open" rows (failing on both sides, not fixed by the copy) are owed the same honesty (spec §5): one of the five
   // reasons on this run's evidence, or UNEXPLAINED — a fix the copy still owes.
@@ -67,9 +79,43 @@ export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPage
   return { items: out, summary: summaryOf(out), open, openSummary: summaryOf(open) };
 }
 
+/**
+ * Why a row stays, in the plan's seven groups (one per row, always): what the copy's tool could do about it. A row none of the
+ * rules explains and that no planned fix covers is "bug": it should not happen, and a test fails on it.
+ */
+export const GROUPS = {
+  bug: { code: 'a', label: 'Our bug', text: 'Nothing explains this and no fix is planned for it: it should not happen. Please report it.' },
+  'missing-fixer': { code: 'b', label: 'Fix not built yet', text: 'This can be fixed without changing the look; the tool does not do it yet.' },
+  'needs-info': { code: 'c', label: 'Needs information from you', text: 'Needs something only you know: the new site’s address, a backend, which pages to copy, or your own words.' },
+  look: { code: 'd', label: 'Would change the look', text: 'Fixing it would change how the original looks or is built.' },
+  'own-code': { code: 'e', label: 'The original’s own code', text: 'Comes from the original’s own code, scripts or embeds, which the copy keeps as they are so the site works the same.' },
+  measurement: { code: 'f', label: 'Measurement', text: 'Measured on this computer’s preview; only the real host can confirm it.' },
+  impossible: { code: 'g', label: 'Not possible', text: 'No copy can do this.' },
+};
+const REASON_GROUP = { owner: 'needs-info', backend: 'needs-info', third_party: 'own-code', deploy: 'measurement', look: 'look' };
+
+function groupOf(ex) {
+  if (ex.group) return ex.group;
+  if (!ex.reason) return 'bug';
+  const groups = [...new Set(ex.reason.split('+').map((r) => REASON_GROUP[r] ?? 'bug'))];
+  return groups.length === 1 ? groups[0] : groups.includes('bug') ? 'bug' : groups[0];
+}
+
+/**
+ * Checks a fix is planned for but not built yet (docs: PLAN-fix-pipeline): the row stays a fix still owed, with what is to come.
+ * By check key only, the same for every site.
+ */
+const PLANNED = [
+  { test: (k) => /^lighthouse\.(modern-image-formats|uses-optimized-images|uses-responsive-images|offscreen-images|efficient-animated-content|total-byte-weight|unsized-images|image-size-responsive)$/.test(k), what: 'The original\'s own smaller image files, and smaller variants proved by the look gate.' },
+  { test: (k) => k.startsWith('motion.'), what: 'Motion is a separate track: the effect is still owed.' },
+];
+const planned = (item) => PLANNED.find((p) => p.test(item.key ?? '', item));
+const owed = (item, p) => ({ reason: null, unexplained: true, group: 'missing-fixer', evidence: `${item.after?.detail ?? 'Still failing in the copy.'} Fix not built yet: ${p.what}` });
+
 function summaryOf(rows) {
-  const summary = { total: rows.length, explained: 0, unexplained: 0, byReason: {} };
+  const summary = { total: rows.length, explained: 0, unexplained: 0, byReason: {}, byGroup: {} };
   for (const i of rows) {
+    summary.byGroup[i.group] = (summary.byGroup[i.group] ?? 0) + 1;
     if (i.reason) {
       summary.explained++;
       summary.byReason[i.reason] = (summary.byReason[i.reason] ?? 0) + 1;
@@ -78,9 +124,25 @@ function summaryOf(rows) {
   return summary;
 }
 
+/**
+ * A row whose fix the copy wrote, the look gate kept, and the "problem gone?" check undid because the problem was still there or
+ * a check got worse (Step 5b, reason noEffect in report.asIs.fixes.open): our bug, with what was still there. Null otherwise.
+ */
+function noEffectRow(item, ctx) {
+  const kinds = KINDS_BY_KEY.get(item.key ?? '') ?? [];
+  const hits = ctx.fixOpen.filter((o) => o.reason === 'noEffect' && kinds.some((k) => (k.startsWith('field:')
+    ? (o.kind === 'head' || o.kind === 'address') && FIELDS[k.slice(6)].match(o.field)
+    : o.kind === k)));
+  if (!hits.length) return null;
+  const where = hits.slice(0, 2).map((o) => `${o.page}: ${o.detail}`).join('; ');
+  return { reason: null, unexplained: true, group: 'bug', evidence: `${item.after?.detail ?? 'Still failing in the copy.'} The copy's fix did not remove the problem (${where}), so it was undone: a bug to report.` };
+}
+
 /** One item: { reason, evidence } or { reason: null, evidence, unexplained: true }. */
 function explainOne(item, ctx) {
   const key = item.key ?? '';
+  const none = noEffectRow(item, ctx);
+  if (none) return none;
   if (key === 'links.broken-new') return plainNotCopied(byParts(item.links?.new ?? [], (l) => linkPart(l, ctx), 'link'), ctx, 'links');
   if (key === 'lighthouse.errors-in-console') return plainNotCopied(byParts(consoleErrors(ctx.newLhr), (e) => requestPart(e, ctx), 'console error'), ctx, 'prefetch');
   if (key.startsWith('lighthouse-score.')) return scorePart(item, ctx);
@@ -88,21 +150,27 @@ function explainOne(item, ctx) {
   // out (the original's would list pages the copy does not hold). The same evidence as the "still open" rule, for a row that
   // got worse (the original had the file, the copy has none).
   if (/^(crawl\.(sitemap|robots)|aeo\.llms-txt|seo\.canonical-url)(\.|$)/.test(key) && ctx.address && !ctx.address.used) {
-    return { reason: 'owner', evidence: `${item.after?.detail ?? 'Missing in the copy.'} No new-site address was given for this copy (${ctx.address.detail ?? 'none set'}); the copy writes sitemap.xml, robots.txt, llms.txt and canonical links only for an address of its own, since the original's name the original site's pages. Give the address and create the copy again.` };
+    return { reason: 'owner', evidence: `${item.after?.detail ?? 'Missing in the copy.'} No new-site address was given for this copy (${ctx.address.detail ?? 'none set'}); the copy writes sitemap.xml, robots.txt, llms.txt and canonical links only for an address of its own, since the original's name the original site's pages. Give the address when you download the copy.` };
   }
-  if (key.startsWith('lighthouse.')) return lighthousePart(item, key.slice('lighthouse.'.length), ctx);
+  if (key.startsWith('lighthouse.')) {
+    const id = key.slice('lighthouse.'.length);
+    const r = lighthousePart(item, id, ctx);
+    return orPlanned(r.unexplained ? imageRow(item, id, ctx) ?? r : r, item);
+  }
   if (key === 'axe.color-contrast') return contrastPart(ctx);
-  return unexplained('No rule of the five reasons applies to this check on the evidence of this run.');
+  return orPlanned(unexplained('No rule of the five reasons applies to this check on the evidence of this run.'), item);
 }
+
+/** An unexplained row a planned fix will close: said to be owed, with what is to come. */
+const orPlanned = (r, item) => (r.unexplained && planned(item) ? owed(item, planned(item)) : r);
 
 const unexplained = (evidence) => ({ reason: null, unexplained: true, evidence });
 
 // ---------- "still open" rows ----------
 
-// Lighthouse audits the user's rules say an as-is copy may fix without changing the look (image formats and sizes, preloading
-// the largest element, deferring what is not critical): an open one is a fix still owed, never a reason.
-const LH_FIXABLE = new Set(['modern-image-formats', 'uses-optimized-images', 'uses-responsive-images', 'offscreen-images',
-  'efficient-animated-content', 'prioritize-lcp-image', 'lcp-lazy-loaded', 'uses-rel-preload', 'total-byte-weight', 'unsized-images']);
+// Lighthouse audits the copy's own fixers already handle (copy/perfAsIs.js: the largest element's priority, lazy loading): one
+// still open is a fixer that did not reach the copy (our bug). The audits a fix is planned for are in PLANNED above.
+const LH_FIXED_BY_COPY = new Set(fixOf('lcp').targets.map((k) => k.slice('lighthouse.'.length)));
 // Lighthouse audits that name the original's own code or markup: an as-is copy keeps it as written (docs/COPY-MY-SITE.md §2),
 // so what they ask for — rewriting, splitting or removing the site's own files and elements — is a change of its behaviour (d).
 const LH_OWN_CODE = new Set(['unused-css-rules', 'unused-javascript', 'render-blocking-resources', 'unminified-css', 'unminified-javascript',
@@ -122,7 +190,7 @@ const CONTENT_WORDS = new Set(['image-alt', 'role-img-alt', 'input-image-alt', '
 // contrast, duplicate ids the site's own scripts may use, widgets' ARIA, tap targets, font sizes, zoom (d).
 const LOOK_RULES = new Set(['color-contrast', 'heading-order', 'page-has-heading-one', 'empty-heading', 'region', 'landmark-one-main', 'landmark-banner-is-top-level',
   'landmark-contentinfo-is-top-level', 'landmark-main-is-top-level', 'landmark-no-duplicate-banner', 'landmark-no-duplicate-contentinfo', 'landmark-no-duplicate-main',
-  'landmark-unique', 'landmark-complementary-is-top-level', 'bypass', 'list', 'listitem', 'definition-list', 'dlitem', 'nested-interactive', 'scrollable-region-focusable',
+  'landmark-unique', 'landmark-complementary-is-top-level', 'bypass', 'list', 'listitem', 'definition-list', 'dlitem', 'nested-interactive',
   'empty-table-header', 'th-has-data-cells', 'td-headers-attr', 'table-duplicate-name', 'duplicate-id', 'duplicate-id-aria', 'duplicate-id-active',
   'meta-viewport', 'meta-viewport-large', 'target-size', 'tap-targets', 'font-size', 'aria-allowed-attr', 'aria-allowed-role', 'aria-required-attr', 'aria-required-children',
   'aria-required-parent', 'aria-roles', 'aria-valid-attr', 'aria-valid-attr-value', 'aria-hidden-focus', 'aria-hidden-body', 'aria-input-field-name', 'aria-toggle-field-name',
@@ -133,12 +201,15 @@ const LOOK_RULES = new Set(['color-contrast', 'heading-order', 'page-has-heading
 function explainOpen(item, ctx) {
   const key = item.key ?? '';
   const [section, id, part] = key.split('.');
+  const none = noEffectRow(item, ctx);
+  if (none) return none;
   if (key === 'links.broken') return plainNotCopied(byParts(item.links?.open ?? [], (l) => openLinkPart(l, ctx), 'link'), ctx, 'links');
   if (section === 'lighthouse') return openLighthouse(item, id, ctx);
-  if (section === 'axe') return openRule(item, id, ctx);
   if (section === 'motion') return openMotion(item, ctx);
+  if (planned(item)) return owed(item, planned(item));
+  if (section === 'axe') return openRule(item, id, ctx);
   if (section === 'platform') {
-    return { reason: 'look', evidence: `${item.after?.detail ?? 'The platform is still detected.'} An as-is copy keeps the original's own code, this platform's included; removing it would rebuild the site, which changes how it looks and behaves.` };
+    return { reason: 'look', group: 'own-code', evidence: `${item.after?.detail ?? 'The platform is still detected.'} An as-is copy keeps the original's own code, this platform's included; removing it would rebuild the site, which changes how it looks and behaves.` };
   }
   if (section === 'seo' || section === 'aeo' || section === 'crawl') return openAnalyzer(item, id, part, ctx);
   return unexplained('No rule of the five reasons applies to this check on the evidence of this run.');
@@ -173,6 +244,60 @@ function auditUrls(lhr, id) {
 const hostsOf = (urls) => [...new Set(urls.map(hostOf).filter(Boolean))];
 const fewUrls = (urls) => urls.slice(0, 3).map((u) => { try { return new URL(u).pathname.split('/').pop() || new URL(u).hostname; } catch { return u.slice(0, 40); } }).join(', ');
 
+// Lighthouse audits that ask for a smaller file per image: what closes them is a lossy re-encode or a resized file, never the
+// same pixels. The copy keeps every image's pixels (copy/perfAsIs.js: only a lossless WebP of a PNG), so a file the copy already
+// made lossless, or the very file the original serves, is a change of its look (d). Evidence per file, from this run only.
+const IMAGE_FILE_AUDITS = new Set(['modern-image-formats', 'uses-optimized-images', 'uses-responsive-images', 'efficient-animated-content']);
+const OUR_WEBP = /\.sas-[0-9a-f]{10}\.webp$/i;
+/** A file's name without the copy's own marks (the lift's ~query hash, the WebP fix's .sas- hash) and without its extension. */
+const imageStem = (url) => {
+  let name;
+  try { name = decodeURIComponent(new URL(url, 'http://x/').pathname.split('/').pop()); } catch { return null; }
+  return name.replace(OUR_WEBP, '').replace(/\.[a-z0-9]+$/i, '').replace(/~[0-9a-f]{8}$/i, '').toLowerCase() || null;
+};
+/** The rows of an audit on both devices: url → the largest saving named for it. */
+function savingsByUrl(lhr, id) {
+  const m = new Map();
+  for (const device of ['mobile', 'desktop']) {
+    for (const row of lhr?.[device]?.audits?.[id]?.details?.items ?? []) {
+      if (typeof row.url !== 'string') continue;
+      m.set(row.url, Math.max(m.get(row.url) ?? 0, Number(row.wastedBytes) || 0));
+    }
+  }
+  return m;
+}
+
+/**
+ * An image row whose every file only a lossy or resized file could make smaller: { reason: 'look', … }, else null (the row goes
+ * on to the planned-fix rule). A file is explained when the copy's fix already made it a lossless WebP, or when the original's
+ * own audit names the same file (any host: the site or its CDN) with a saving no smaller than the copy's — the copy serves it as
+ * the original does. A PNG the fix left needs the fix's own reason for leaving it (fixOpen), else it is not explained.
+ */
+function imageRow(item, id, ctx) {
+  if (!IMAGE_FILE_AUDITS.has(id)) return null;
+  const copy = savingsByUrl(ctx.newLhr, id);
+  if (!copy.size) return null;
+  const original = [...savingsByUrl(ctx.oldLhr, id)].map(([url, bytes]) => ({ url, bytes, stem: imageStem(url) }));
+  const leftPng = ctx.fixOpen.filter((o) => o.kind === 'webp');
+  const r = byParts([...copy], ([url, bytes]) => {
+    const what = fewUrls([url]);
+    const host = hostOf(url);
+    if (/^https?:/.test(url) && host !== ctx.copyHost) return { what, reason: null, evidence: 'not a file of the copy' };
+    if (OUR_WEBP.test(url)) return { what, reason: 'look', evidence: 'already a lossless WebP the copy made with the very same pixels; only a lossy or resized file could save more, which would change the look' };
+    const stem = imageStem(url);
+    const same = original.find((o) => o.stem && o.stem === stem);
+    if (!same) return { what, reason: null, evidence: 'the original\'s report does not name this file' };
+    if (bytes > same.bytes * (1 + GROWTH.other) + 1024) return { what, reason: null, evidence: `the copy could save ${kb(bytes)} on it against the original's ${kb(same.bytes)}: the copy holds a heavier file than the original served` };
+    if (/\.png$/i.test(url)) {
+      const why = leftPng.find((o) => String(o.detail ?? '').toLowerCase().includes(stem));
+      if (!why) return { what, reason: null, evidence: 'a PNG the copy did not make a lossless WebP of, and no reason was recorded' };
+      return { what, reason: 'look', evidence: `the original serves this file (${hostOf(same.url) ?? 'its own host'}); the lossless WebP was not made (${why.detail}); only a lossy or resized file could close it, which would change the look` };
+    }
+    return { what, reason: 'look', evidence: `the original serves this file (${hostOf(same.url) ?? 'its own host'}) as the copy does; only a lossy or resized file could close it, which would change the look` };
+  }, 'image');
+  return r.unexplained ? null : { ...r, evidence: `${item.after?.detail ?? 'Still failing in the copy.'} ${r.evidence}` };
+}
+
 /** A Lighthouse audit failing on both sides. */
 function openLighthouse(item, id, ctx) {
   const urls = auditUrls(ctx.newLhr, id);
@@ -181,13 +306,17 @@ function openLighthouse(item, id, ctx) {
   if (hosts.length && foreign.length === hosts.length) {
     return { reason: 'third_party', evidence: `Everything this check names comes from ${foreign.join(', ')}: third-party code the original loads (${fewUrls(urls)}), neither the copy's nor the original's own files.` };
   }
-  if (LH_FIXABLE.has(id)) {
-    return unexplained(`${item.after?.detail ?? 'Still failing in the copy.'} This can be fixed in the copy without changing its look (image formats and sizes, preloading the largest element) through the visual gate; it was not done in this run: a fix still owed.`);
+  const img = imageRow(item, id, ctx);
+  if (img) return img;
+  if (planned(item)) return owed(item, planned(item));
+  if (LH_FIXED_BY_COPY.has(id)) {
+    return unexplained(`${item.after?.detail ?? 'Still failing in the copy.'} The copy's own fixer for the largest element should have handled this and did not: a bug to report.`);
   }
   if (LH_OWN_CODE.has(id)) {
     const own = urls.filter((u) => !/^https?:/.test(u) || hostOf(u) === ctx.copyHost || hostOf(u) === ctx.site);
     return {
       reason: 'look',
+      group: 'own-code',
       evidence: `${item.after?.detail ?? 'Still failing in the copy.'} What it names is the original's own code${own.length ? ` (${fewUrls(own)}${own.length > 3 ? ` and ${own.length - 3} more` : ''})` : ''}, kept as written in an as-is copy; rewriting, splitting or removing it changes how the page behaves.`,
     };
   }
@@ -225,9 +354,32 @@ function openRule(item, id, ctx) {
     if (r.reason) return r;
     return lookRule(item, id);
   }
+  if (ATTR_FIXES[id]) return attrFixRule(item, id, ctx);
   if (CONTENT_WORDS.has(id)) return contentWords(item, id);
   if (LOOK_RULES.has(id)) return lookRule(item, id);
   return unexplained(`${item.after?.detail ?? 'Still failing in the copy.'} No rule of the five reasons covers this accessibility check.`);
+}
+
+// axe rules an as-is copy fixes with one attribute (copy/seoA11yAsIs.js), by the kind of fix that writes it: the registry's
+// entries that say what they write (copy/fixRegistry.js).
+const ATTR_FIXES = Object.fromEntries(FIXES.filter((f) => f.what).flatMap((f) => f.targets.filter((k) => k.startsWith('axe.'))
+  .map((k) => [k.slice('axe.'.length), { kind: f.kind, what: f.what }])));
+
+/**
+ * One of those rules still failing: what the fix left open says why (an element it could not change without changing the
+ * page, reason d; a page cap, c), a fix the look gate undid is a change of the look, and anything else is a fix that did not
+ * happen (a bug).
+ */
+function attrFixRule(item, id, ctx) {
+  const { kind, what } = ATTR_FIXES[id];
+  const detail = item.after?.detail ?? 'Still failing in the copy.';
+  const left = ctx.fixOpen.filter((o) => o.kind === kind);
+  if (left.length) {
+    const says = left.slice(0, 2).map((o) => o.detail).join(' ');
+    return left.some((o) => o.reason === 'd') ? { reason: 'look', evidence: `${detail} ${says}` } : { reason: 'owner', evidence: `${detail} ${says}` };
+  }
+  if (ctx.revertedPages.length) return { reason: 'look', evidence: `${detail} The copy's fixes on ${ctx.revertedPages.slice(0, 3).join(', ')} were undone because they changed the page.` };
+  return unexplained(`${detail} The copy writes ${what} and this one still fails: a bug to report.`);
 }
 
 /** A motion row below 90 % on both sides: the copy still owes the effect, unless the parts missing belong to excluded third-party code. */
@@ -235,7 +387,7 @@ function openMotion(item, ctx) {
   if (ctx.excludedHosts.length && /excluded|third-party/i.test(item.after?.detail ?? '')) {
     return { reason: 'third_party', evidence: `${item.after?.detail} The parts missing are drawn by ${ctx.excludedHosts.join(', ')}, third-party code excluded from the copy by rule.` };
   }
-  return unexplained(`${item.after?.detail ?? 'The copy keeps fewer of these effects than the original.'} A fix still owed.`);
+  return owed(item, planned(item));
 }
 
 /** SEO, AEO and site-file checks failing on both sides. */
@@ -248,7 +400,15 @@ function openAnalyzer(item, id, part, ctx) {
   switch (id) {
     case 'title-tag':
     case 'meta-description':
-      if (part === 'length') return owner('The text is the owner\'s own; making it longer or shorter is a content choice, so an as-is copy leaves it as written.');
+      if (part === 'length') {
+        // The copy shortens a long text at a word and completes a short one from the page's own words (copy/fixAsIs.js); it says
+        // so when the page gave it nothing to use. Anything else still outside the range is a fix that did not happen.
+        const field = id === 'title-tag' ? 'title' : 'description';
+        const left = ctx.fixOpen.filter((o) => o.kind === 'head' && o.field === field);
+        if (left.length) return owner(`The page gives no words of its own to fix it from (${left.slice(0, 3).map((o) => o.page).join(', ')}): the owner writes it.`);
+        if (ctx.revertedPages.length) return look(reverted.trim());
+        return unexplained(`${detail} The copy shortens or completes the ${field} from the page's own words, and this one is still outside the range: a bug to report.`);
+      }
       if (ctx.revertedPages.length) return look(`The copy writes a missing or duplicated ${id === 'title-tag' ? 'title' : 'description'} from the page itself.${reverted}`);
       return unexplained(`${detail} The copy writes a missing or duplicated ${id === 'title-tag' ? 'title' : 'description'} from the page itself, and this one is still open: a fix still owed.`);
     case 'canonical-url':
@@ -278,7 +438,7 @@ function openAnalyzer(item, id, part, ctx) {
     case 'content-without-javascript':
       return id === 'structured-answers'
         ? owner('Whether a question on the page gets a short direct answer is the owner\'s content.')
-        : look('The original draws its text with its own script; an as-is copy keeps that script, and writing the text into the HTML as well would change how the page loads.');
+        : { ...look('The original draws its text with its own script; an as-is copy keeps that script, and writing the text into the HTML as well would change how the page loads.'), group: 'own-code' };
     case 'llms-txt':
       if (noAddress) return owner(`No new-site address was given for this copy (${ctx.address?.detail ?? 'none set'}), so no llms.txt naming its pages was written.`);
       return unexplained(`${detail} The copy writes llms.txt from its pages when an address is set: a fix still owed.`);
@@ -288,8 +448,15 @@ function openAnalyzer(item, id, part, ctx) {
     case 'robots':
       if (noAddress) return owner(`No new-site address was given for this copy (${ctx.address?.detail ?? 'none set'}), so sitemap.xml and robots.txt were left as lifted.`);
       return unexplained(`${detail} The copy writes these files when an address is set: a fix still owed.`);
-    case 'meta-tags':
-      return owner('The tags this check wants (a Twitter card, a theme colour, an icon) are brand choices; the copy adds none of its own.');
+    case 'meta-tags': {
+      // The copy adds a missing icon always and a missing theme colour whenever the site states one (copy/fixAsIs.js); a Twitter
+      // card is the owner's choice of preview.
+      const themeLeft = ctx.fixOpen.some((o) => o.kind === 'head' && o.field === 'theme-color');
+      const notDone = [/favicon ✗/.test(detail) && 'the icon', /theme-color ✗/.test(detail) && !themeLeft && 'the theme colour'].filter(Boolean);
+      if (notDone.length && !ctx.revertedPages.length) return unexplained(`${detail} The copy adds ${notDone.join(' and ')} when the page has none, and it is still missing: a bug to report.`);
+      if (notDone.length) return look(reverted.trim());
+      return owner(`${themeLeft ? 'The site states no brand colour for a theme colour; ' : ''}a Twitter card and its kind of preview are the owner's choice; the copy adds none of its own.`);
+    }
     case 'https':
       return { reason: 'deploy', evidence: 'HTTPS is the host\'s; see DEPLOY.md.' };
     default:
@@ -475,11 +642,13 @@ function scorePart(item, ctx) {
     if (CONTENT_WORDS.has(id)) return { what, reason: 'owner', evidence: `"${what}": the page gives no words to fill it from; the owner writes them` };
     if (LOOK_RULES.has(id)) return { what, reason: 'look', evidence: `"${what}": the fix changes the original's own markup, colours or widgets` };
     if (LH_OWN_CODE.has(id)) return { what, reason: 'look', evidence: `"${what}": the original's own code, kept as written` };
-    if (LH_FIXABLE.has(id)) return { what, reason: null, evidence: `"${what}" can be fixed in the copy through the visual gate; not done in this run` };
+    if (planned({ key: `lighthouse.${id}` })) return { what, reason: null, planned: true, evidence: `"${what}": fix not built yet (${planned({ key: `lighthouse.${id}` }).what})` };
     return { what, reason: null, evidence: `"${what}" fails only in the copy and no rule covers it` };
   };
   const r = byParts(onlyCopy, explain, 'check');
-  return { ...r, evidence: `${drop}: ${r.evidence}` };
+  // Every check without a reason is one a fix is planned for: the row is owed, not a bug.
+  const owedOnly = r.unexplained && (r.parts ?? []).filter((p) => !p.reason).every((p) => p.planned);
+  return { ...r, ...(owedOnly && { group: 'missing-fixer' }), evidence: `${drop}: ${r.evidence}` };
 }
 
 /** The page's largest element in one Lighthouse report: { selector, path, snippet }, or null when it named none. */
@@ -505,7 +674,9 @@ function amountOf(a) {
 const fmt = (m) => (!m ? 'none' : m.unit === 'byte' ? kb(m.value) : m.unit === 'ms' ? `${Math.round(m.value)} ms` : `${Math.round(m.value)} ${m.unit}${m.value === 1 ? '' : 's'}`);
 
 /** The reason's code and words for a report line ("c — Needs your decision …"); a joined reason lists each. */
-export function reasonText(reason) {
+export function reasonText(reason, group = null) {
+  const g = GROUPS[group];
+  if (g) return `${g.label} — ${g.text}${reason ? ` (${reason.split('+').map((r) => REASONS[r]?.code ?? r).join(' / ')})` : ''}`;
   if (!reason) return 'UNEXPLAINED — none of the five reasons fits on the evidence; this is a fix still owed.';
   return reason.split('+').map((r) => `${REASONS[r]?.code ?? r} — ${REASONS[r]?.text ?? ''}`.trim()).join(' / ');
 }

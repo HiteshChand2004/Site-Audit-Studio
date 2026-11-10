@@ -2,11 +2,10 @@
 // page at 1440 / 768 / 375. Chromium runs behind the SSRF egress proxy, like Analyze.
 // Writes capture/manifest.json and sets ctx.pages / ctx.discovery for the later steps.
 import { readFile, writeFile } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { launchBrowser, renderHtml } from '../audit/render.js';
 import { auditDir } from '../config/paths.js';
-import { maxParallel, PAGE_MB, parallelism } from '../audit/resources.js';
+import { maxParallel, PAGE_MB, parallelism, workCpus } from '../audit/resources.js';
 import { createSharedCache, sharedCacheEnabled } from '../audit/sharedCache.js';
 import { startEgressProxy } from '../security/egressProxy.js';
 import { capturePage, networkDir } from './capture/index.js';
@@ -92,7 +91,7 @@ const CPUS_PER_PAGE = 4;
  * falls back to fewer pages at once.
  * @param {{ env?: object, free?: number, cpus?: number }} [o]  overrides (tests)
  */
-export function capturePagesAtOnce({ env = process.env, free, cpus = os.cpus()?.length || 1, exact = false } = {}) {
+export function capturePagesAtOnce({ env = process.env, free, cpus = workCpus(), exact = false } = {}) {
   // One browser context per view, so the views this run captures decide what a page costs: an exact run opens a
   // fifth (views.js EXACT_ONLY_VIEWS) and fewer pages fit beside it.
   const perPage = viewsFor({ exact }).length;

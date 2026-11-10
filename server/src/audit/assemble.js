@@ -28,6 +28,7 @@ export function assembleAudit({
   blockedHosts = [],
   errors,
   siteType = null,
+  lighthouseContention = null,
 }) {
   return {
     isDummy: false,
@@ -58,6 +59,8 @@ export function assembleAudit({
     errors,
     // standard | canvas-rendered (detection/siteType.js), with the reason and the evidence. Recreate stops on canvas-rendered.
     ...(siteType && { siteType }),
+    // Other jobs running on this server while Lighthouse measured (audit/lighthouse/run.js). Absent when nothing was recorded.
+    ...(lighthouseContention && { lighthouseContention }),
     // The fix checklist is produced by re-auditing the recreated site (Phase 5). Until then it stays a sample.
     recreate: { ...buildDummyAudit(project).recreate, isDummy: true },
   };

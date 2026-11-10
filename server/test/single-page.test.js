@@ -11,7 +11,7 @@ import { db, projectDir } from '../src/db/index.js';
 import projectsRouter from '../src/routes/projects.js';
 import { runAnalysis } from '../src/audit/index.js';
 import { runRecreate, STAGES } from '../src/recreate/index.js';
-import { pageUrlOf, parsePageUrl } from '../src/recreate/inputs.js';
+import { pageLimitOf, pageUrlOf, parsePageUrl } from '../src/recreate/inputs.js';
 import { startFixtureServer } from './serve-fixture.js';
 import { seedAnalysis, seedProject } from './helpers/projects.js';
 
@@ -104,7 +104,7 @@ test('an analysis of one page reads that page only, and says so', async () => {
   }
 });
 
-test('a copy of one page captures that page only, as its start page; the rest of the site leads to notice pages', async () => {
+test('an old page_url no longer limits a copy: it covers the whole website (the "One page" option was removed)', async () => {
   const project = makeProject(`${origin}/about.html`);
   const stubs = Object.fromEntries(Object.keys(STAGES).map((key) => [key, async () => {}]));
   let seen = null;
@@ -122,8 +122,10 @@ test('a copy of one page captures that page only, as its start page; the rest of
       },
     },
   });
-  assert.deepEqual({ ...seen, pages: undefined, live: undefined }, { singlePage: `${origin}/about.html`, pageLimit: 0, allPages: false, pages: undefined, live: undefined });
-  assert.deepEqual(seen.pages, [{ url: `${origin}/about.html`, outPath: 'index.html', slug: 'index' }]);
-  assert.ok(seen.live >= 1, 'the other pages are known, and their links get a notice page');
-  assert.deepEqual(report.singlePage, { url: `${origin}/about.html`, path: '/about.html' });
+  // The project still has page_url = /about.html (database records are left as they are), and the copy ignores it.
+  assert.deepEqual({ ...seen, pages: undefined, live: undefined }, { singlePage: undefined, pageLimit: pageLimitOf(project.recreate_pages), allPages: true, pages: undefined, live: undefined });
+  assert.ok(seen.pages.length > 1, `more than one page copied (got ${seen.pages.length})`);
+  const about = seen.pages.find((p) => p.url === `${origin}/about.html`);
+  assert.equal(about?.outPath, 'about.html', 'the old page is copied as itself, not as the start page');
+  assert.equal(report.singlePage, undefined);
 });

@@ -2,6 +2,45 @@
 // explanations from here, so a person without a technical background reads the same simple words everywhere, and an
 // expert term (LCP, SEO, fidelity, …) always comes with an explanation. Nothing here is specific to one website.
 
+/**
+ * The download dialog that asks for the new site's address of a "Copy my site" copy made without one (Step 6). The address
+ * goes only into the copy's search tags and site files; "I don't know yet" downloads the copy exactly as it is.
+ */
+export const ADDRESS_DIALOG = {
+  title: 'Where will the new site live?',
+  text: 'Give the new site’s address so the copy’s search tags, sitemap.xml and robots.txt name it. Nothing on the pages changes.',
+  label: 'The new site’s address',
+  placeholder: 'https://www.your-site.com',
+  hint: 'It is saved on this website. The copy is updated first (about a minute), then the download starts.',
+  later: 'I don’t know yet',
+  use: 'Use this address and download',
+  empty: 'Type the new site’s address, or choose “I don’t know yet”.',
+  writing: 'Writing the new site’s address into the copy… The download starts when it is ready.',
+  failedTitle: 'The address could not be written',
+  failedText: 'The copy without the address is still here and downloads as before.',
+};
+
+/** Fix mode (Step 11): changes the copy proposes and makes only when you approve each one. */
+export const FIX_MODE = {
+  open: 'Review proposed fixes',
+  title: 'Changes you can approve',
+  text: 'Your copy keeps the original exactly as it is. These changes would make text easier to read and headings easier to follow. Nothing changes unless you tick it.',
+  loading: 'Reading the last comparison…',
+  pictures: 'Showing each change before and after, on a phone and on a computer…',
+  none: 'Nothing to propose: the last comparison found no faint text and no skipped heading levels that can be changed in the page.',
+  kinds: { contrast: 'Text colour', 'heading-level': 'Heading level' },
+  before: 'Now',
+  after: 'With the change',
+  notShown: 'Not shown at this size',
+  look: (px) => (px === 0 ? 'Looks exactly the same' : `${px.toLocaleString()} pixels change on this page`),
+  skipped: (n) => `${n} more finding${n === 1 ? '' : 's'} cannot be changed in the page (a script draws them, or the colours are not known).`,
+  apply: (n) => (n ? `Apply ${n} approved change${n === 1 ? '' : 's'}` : 'Tick the changes you want'),
+  cancel: 'Close',
+  applying: 'Writing the changes you approved into the copy…',
+  failedTitle: 'The changes could not be written',
+  onPurpose: (n) => `${n} change${n === 1 ? '' : 's'} made on purpose (approved by you).`,
+};
+
 /** A 0–100 score as a rating people understand. */
 export function rating(score) {
   if (score == null || Number.isNaN(score)) return { label: 'Not measured', tone: 'neutral' };
@@ -110,7 +149,17 @@ export const WORSE_REASONS = {
   look: { code: 'd', text: 'The fix would change the original’s look, animation or behaviour.' },
   deploy: { code: 'e', text: 'Can only be checked on the real host. See DEPLOY.md.' },
 };
-export const WORSE_UNEXPLAINED = 'Unexplained: none of the five reasons fits what this run measured. This still needs a fix.';
+// Why a row stays, in seven groups (mirrors server/src/copy/gotWorse.js GROUPS).
+export const ROW_GROUPS = {
+  bug: { label: 'Our bug', text: 'Nothing explains this and no fix is planned for it: it should not happen. Please report it.' },
+  'missing-fixer': { label: 'Fix not built yet', text: 'This can be fixed without changing the look; the tool does not do it yet.' },
+  'needs-info': { label: 'Needs information from you', text: 'Needs something only you know: the new site’s address, a backend, which pages to copy, or your own words.' },
+  look: { label: 'Would change the look', text: 'Fixing it would change how the original looks or is built.' },
+  'own-code': { label: 'The original’s own code', text: 'Comes from the original’s own code, scripts or embeds, which the copy keeps as they are so the site works the same.' },
+  measurement: { label: 'Measurement', text: 'Measured on this computer’s preview; only the real host can confirm it.' },
+  impossible: { label: 'Not possible', text: 'No copy can do this.' },
+};
+export const WORSE_UNEXPLAINED ='Unexplained: none of the five reasons fits what this run measured. This still needs a fix.';
 
 export const RESULT_STATUS = {
   fixed: { label: 'Fixed', explain: 'This was a problem on the original site and is solved in the copy.', tone: 'ok' },

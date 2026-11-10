@@ -154,5 +154,12 @@ async function runExport({ projectId, recreateId, stack }) {
   }
 }
 
-/** Exports `stack` from the saved IR of a completed recreate (once; an existing output is returned). */
-export const exportStack = (opts) => exclusive(() => runExport(opts));
+// The whole row: owner_id exists only once the accounts migration has run (routes/projects.js prepares it lazily for the same reason).
+const selectOwner = db.prepare('SELECT * FROM projects WHERE id = ?');
+/**
+ * Exports `stack` from the saved IR of a completed recreate (once; an existing output is returned). It waits its turn like a job:
+ * held for room and memory (a build and a browser check), after any other job on the same website, never counted against the
+ * account's own limit.
+ */
+export const exportStack = (opts) =>
+  exclusive(() => runExport(opts), { kind: 'export', projectId: opts.projectId, ownerId: selectOwner.get(opts.projectId)?.owner_id ?? null });

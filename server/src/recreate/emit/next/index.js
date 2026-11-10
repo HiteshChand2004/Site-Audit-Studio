@@ -14,7 +14,7 @@
 // - Links are plain <a> elements (full page loads, no client router), root-relative: deploy at a domain root.
 import { emitCss, usedCustomProps } from '../css.js';
 import { whiteSpaceByClass } from '../html.js';
-import { MOTION_FILE, MOTION_JS, MOTION_SRC } from '../motionScript.js';
+import { MOTION_FILE, MOTION_SRC, motionJsMinified } from '../motionScript.js';
 import { programJson, REPLAY_MODULE, siteAnimationsJsx } from '../anim.js';
 import { APPEAR_MODULE, siteAppearJsx } from '../../behavior/framer/emit.js';
 import { siteScriptsJsx } from '../../behavior/lift.js';
@@ -168,7 +168,7 @@ export function emitNext(ir) {
   files.set('app/site.css', rootUrls(css));
 
   for (const f of ir.files) files.set(`public/${f.path}`, publicFile(f, urlMap));
-  if (ir.motion?.script) files.set(`public/${MOTION_FILE}`, MOTION_JS);
+  if (ir.motion?.script) files.set(`public/${MOTION_FILE}`, motionJsMinified());
   const replays = ir.pages.some((p) => p.anim);
   if (replays) {
     files.set('anim/replay.js', REPLAY_MODULE);

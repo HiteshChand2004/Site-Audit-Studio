@@ -126,11 +126,13 @@ export function extendableTimeout(ms, onTimeout, beforeFire) {
   let end = Date.now() + ms;
   let timer = null;
   let done = false;
+  // Held while the step waits for the Lighthouse lane (recreate/index.js): no timer runs; release moves the end by the wait.
+  let held = 0;
   const arm = () => {
     clearTimeout(timer);
     // No limit: nothing is armed, so nothing can fire. (setTimeout cannot hold Infinity: Node clamps it to 1 ms, which
     // would make the step time out at once.)
-    if (!done && Number.isFinite(end)) timer = setTimeout(fire, Math.max(0, end - Date.now()));
+    if (!done && !held && Number.isFinite(end)) timer = setTimeout(fire, Math.max(0, end - Date.now()));
   };
   const fire = () => {
     beforeFire?.();
@@ -142,6 +144,15 @@ export function extendableTimeout(ms, onTimeout, beforeFire) {
   return {
     extend(extra) {
       end += extra;
+      arm();
+    },
+    hold() {
+      held++;
+      arm();
+    },
+    release(waitedMs) {
+      if (held) held--;
+      end += waitedMs;
       arm();
     },
     clear() {

@@ -51,6 +51,42 @@ export function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+/**
+ * A timer that can stop counting: `hold()` while the work waits for something shared (the Lighthouse lane), `release(ms)` when the
+ * wait ends moves its end later by the time waited. Holds nest. A non-finite `ms` arms nothing (as withTimeout). `clear()` ends it.
+ */
+export function holdableTimer(ms, onFire) {
+  let end = Date.now() + ms;
+  let held = 0;
+  let timer = null;
+  let done = false;
+  const arm = () => {
+    clearTimeout(timer);
+    timer = null;
+    if (done || held || !Number.isFinite(end)) return;
+    timer = setTimeout(() => {
+      done = true;
+      onFire();
+    }, Math.max(0, end - Date.now()));
+  };
+  arm();
+  return {
+    hold() {
+      held++;
+      arm();
+    },
+    release(waitedMs) {
+      if (held) held--;
+      end += waitedMs;
+      arm();
+    },
+    clear() {
+      done = true;
+      clearTimeout(timer);
+    },
+  };
+}
+
 // Same-site comparison that treats www.example.com and example.com as one site.
 export const siteHost = (hostname) => hostname.toLowerCase().replace(/^www\./, '');
 

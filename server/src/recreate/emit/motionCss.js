@@ -105,7 +105,10 @@ export function motionCss(m, opts) {
   // The hovered look comes in with a short fade (the original eased into it), not in one frame.
   if (m.hoverCards) {
     out.push('/* Cards shown in their hovered look while the mouse is on them */\n[data-w-hv]:not(:hover):not(:focus-within) > [data-w-hcopy],\n[data-w-hv]:is(:hover, :focus-within) > [data-w-hrest] {\n  display: none !important;\n}');
-    out.push('@media (prefers-reduced-motion: no-preference) {\n  [data-w-hv]:is(:hover, :focus-within) > [data-w-hcopy] {\n    animation: w-hover-in 300ms ease both;\n  }\n  @keyframes w-hover-in {\n    from {\n      opacity: 0;\n    }\n  }\n}');
+    // A list item has no box around it (ir/states.js hoverPairOnly): its copy is its next sibling, and js/motion.js marks the card
+    // `is-hv` while the mouse or focus is on either of the two.
+    out.push('/* List items shown in their hovered look (no box may stand in a list) */\n[data-w-hrest="pair"]:not(.is-hv) + [data-w-hcopy],\n[data-w-hrest="pair"].is-hv {\n  display: none !important;\n}');
+    out.push('@media (prefers-reduced-motion: no-preference) {\n  [data-w-hv]:is(:hover, :focus-within) > [data-w-hcopy],\n  [data-w-hrest="pair"].is-hv + [data-w-hcopy] {\n    animation: w-hover-in 300ms ease both;\n  }\n  @keyframes w-hover-in {\n    from {\n      opacity: 0;\n    }\n  }\n}');
   }
 
   // Click widgets: js/motion.js toggles `is-open` on the area (`wN`) when its control (`wt`) is clicked.

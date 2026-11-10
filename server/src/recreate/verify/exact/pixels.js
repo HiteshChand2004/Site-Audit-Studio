@@ -19,7 +19,9 @@
 // calibrated on 111 real pairs, it feeds fidelity, responsive, refine and the correction loop's judge(), and its
 // `coarse` flag is what separates real geometry from font rasterisation. Two metrics, two jobs - this one for
 // acceptance, that one for where to look.
-import { readFile } from 'node:fs/promises';
+import { readFile, open as openFile, mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import sharp from 'sharp';
 
 /** The largest possible YIQ distance, which is what `threshold` is a fraction of (pixelmatch's constant). */
@@ -201,48 +203,60 @@ export async function exactDiff(original, generated, {
   const cols = Math.ceil(width / block);
   const rows = Math.ceil(height / block);
   const counts = new Uint32Array(cols * rows);
-  let diff = 0;
-  let anti = 0;
-  let masked = 0;
   // In this band's own coordinates, and only the parts of an area that fall inside it.
   const areas = exclude
     .map((r) => ({ x0: Math.floor(r.x), y0: Math.floor(r.y - offsetY), x1: Math.ceil(r.x + r.w), y1: Math.ceil(r.y - offsetY + r.h) }))
     .filter((r) => r.y1 > 0 && r.y0 < height && r.x1 > 0 && r.x0 < width);
   const inside = (x, y) => areas.some((r) => x >= r.x0 && x < r.x1 && y >= r.y0 && y < r.y1);
 
+  const acc = { diff: 0, anti: 0, masked: 0, counts };
   for (let top = 0; top < height; top += bandRows) {
-    const rowsHere = Math.min(bandRows, height - top);
-    // A one-row halo, so the antialias test can look at the neighbours of the band's own edge rows.
-    const haloTop = Math.max(0, top - 1);
-    const haloRows = Math.min(height - haloTop, rowsHere + (top - haloTop) + 1);
-    const region = { left: 0, top: haloTop, width, height: haloRows };
+    const b = bandOf(top, height, bandRows);
+    const region = { left: 0, top: b.haloTop, width, height: b.haloRows };
     const [bufA, bufB] = await Promise.all([
       ma.band(region),
       mb.band(region),
     ]);
-    const offset = top - haloTop; // the first row of this band inside the halo
-    for (let y = offset; y < offset + rowsHere; y++) {
-      const pageY = haloTop + y;
-      for (let x = 0; x < width; x++) {
-        const pos = (y * width + x) * 4;
-        const delta = colorDelta(bufA, bufB, pos, pos);
-        if (delta === 0) continue;
-        if (Math.abs(delta) <= maxDelta) continue;
-        if (areas.length && inside(x, pageY)) {
-          masked++;
-          continue;
-        }
-        if (!includeAntialiased
-          && (antialiased(bufA, x, y, width, haloRows, bufB) || antialiased(bufB, x, y, width, haloRows, bufA))) {
-          anti++;
-          continue;
-        }
-        diff++;
-        counts[Math.floor(pageY / block) * cols + Math.floor(x / block)]++;
+    compareBand(acc, bufA, bufB, { ...b, width, maxDelta, includeAntialiased, areas, inside, cols, block });
+  }
+  return diffResult({ diff: acc.diff, anti: acc.anti, masked: acc.masked, width, height, heights: [ma.height, mb.height], widthMismatch: ma.width !== mb.width, heightOnlyOne, cols, rows, block, counts });
+}
+
+/** The rows of one band: its own rows and a one-row halo, so the antialias test can look at the neighbours of its edge rows. */
+function bandOf(top, height, bandRows) {
+  const rowsHere = Math.min(bandRows, height - top);
+  const haloTop = Math.max(0, top - 1);
+  const haloRows = Math.min(height - haloTop, rowsHere + (top - haloTop) + 1);
+  return { top, rowsHere, haloTop, haloRows, offset: top - haloTop };
+}
+
+/** One band of a comparison, added to `acc` (diff, anti, masked, counts): the one loop every comparison of pixels runs. */
+function compareBand(acc, bufA, bufB, { rowsHere, haloTop, haloRows, offset, width, maxDelta, includeAntialiased, areas, inside, cols, block }) {
+  const { counts } = acc;
+  for (let y = offset; y < offset + rowsHere; y++) {
+    const pageY = haloTop + y;
+    for (let x = 0; x < width; x++) {
+      const pos = (y * width + x) * 4;
+      const delta = colorDelta(bufA, bufB, pos, pos);
+      if (delta === 0) continue;
+      if (Math.abs(delta) <= maxDelta) continue;
+      if (areas.length && inside(x, pageY)) {
+        acc.masked++;
+        continue;
       }
+      if (!includeAntialiased
+        && (antialiased(bufA, x, y, width, haloRows, bufB) || antialiased(bufB, x, y, width, haloRows, bufA))) {
+        acc.anti++;
+        continue;
+      }
+      acc.diff++;
+      counts[Math.floor(pageY / block) * cols + Math.floor(x / block)]++;
     }
   }
+}
 
+/** exactDiff's result from its counts. */
+function diffResult({ diff, anti, masked, width, height, heights, widthMismatch, heightOnlyOne, cols, rows, block, counts }) {
   const compared = width * height;
   const total = compared + heightOnlyOne;
   return {
@@ -255,10 +269,111 @@ export async function exactDiff(original, generated, {
     total,
     width,
     height,
-    heights: [ma.height, mb.height],
+    heights,
     heightOnlyOne,
-    widthMismatch: ma.width !== mb.width,
+    widthMismatch,
     blocks: { cols, rows, px: block, counts },
+  };
+}
+
+/**
+ * Several comparisons among the same pictures, each picture decoded ONCE, in order, as a stream of rows, and every comparison
+ * made band by band as exactDiff makes it (the same bands, the same halo, the same loop: compareBand): only the band in hand
+ * of each picture is held, never a whole decoded picture. Each result is exactly exactDiff(pictures[i], pictures[j], o) for its
+ * pair [i, j]. Used by the look gate (preserve/check.js gateVerdict), whose six full-page pictures were held decoded at once.
+ * @param {(Buffer|string)[]} pictures  PNG / WebP bytes or files
+ * @param {[number, number][]} pairs     [original, generated] indexes into pictures
+ * @param {{ threshold?: number, includeAntialiased?: boolean, bandRows?: number, block?: number }} [o]
+ */
+export async function exactDiffMany(pictures, pairs, { threshold = DEFAULT_THRESHOLD, includeAntialiased = false, bandRows = BAND_ROWS, block = BLOCK_PX } = {}) {
+  const maxDelta = MAX_YIQ_DELTA * threshold * threshold;
+  const readers = [];
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'sas-rows-'));
+  try {
+    for (const [k, p] of pictures.entries()) readers.push(await rowReader(p, path.join(dir, `p${k}.v`)));
+    const jobs = pairs.map(([i, j]) => {
+      const a = readers[i];
+      const b = readers[j];
+      const width = Math.min(a.width, b.width);
+      const height = Math.min(a.height, b.height);
+      const cols = Math.ceil(width / block);
+      const rows = Math.ceil(height / block);
+      return { a, b, width, height, cols, rows, acc: { diff: 0, anti: 0, masked: 0, counts: new Uint32Array(cols * rows) } };
+    });
+    const tallest = Math.max(0, ...jobs.map((j) => j.height));
+    for (let top = 0; top < tallest; top += bandRows) {
+      // Every picture still in use is read to the last row any comparison needs for this band (its halo row included).
+      for (const r of readers) await r.readTo(Math.min(r.height, top + bandRows + 1));
+      for (const j of jobs) {
+        if (top >= j.height) continue;
+        const b = bandOf(top, j.height, bandRows);
+        compareBand(j.acc, j.a.rows(b.haloTop, b.haloRows, j.width), j.b.rows(b.haloTop, b.haloRows, j.width),
+          { ...b, width: j.width, maxDelta, includeAntialiased, areas: [], inside: () => false, cols: j.cols, block });
+      }
+      // The next band starts at top + bandRows; its halo is the row before it. Nothing above that is needed again.
+      for (const r of readers) r.dropBefore(top + bandRows - 1);
+    }
+    return jobs.map((j) => diffResult({
+      diff: j.acc.diff, anti: j.acc.anti, masked: j.acc.masked, width: j.width, height: j.height, heights: [j.a.height, j.b.height],
+      widthMismatch: j.a.width !== j.b.width, heightOnlyOne: Math.abs(j.a.height - j.b.height) * j.width, cols: j.cols, rows: j.rows, block, counts: j.acc.counts,
+    }));
+  } finally {
+    for (const r of readers) await r.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/** The size of a libvips .v file's header: its pixels follow, band-interleaved, row after row (then its metadata). */
+const VIPS_HEADER = 64;
+
+/**
+ * A picture's rows, decoded once (by the same decoder and with the same alpha channel exactDiff reads: sharp, written by libvips
+ * as it decodes into a .v file in `dir`, so the whole decoded picture is never in memory), of which only a window is kept:
+ * readTo(n) reads up to row n, rows(top, count, width) returns those rows (cut to `width` pixels), dropBefore(row) lets the
+ * rows above go. (sharp's raw stream hands the whole decoded picture over as one piece: no saving.)
+ */
+async function rowReader(input, file) {
+  const img = await open(input);
+  const { width, height } = await img.metadata();
+  const stride = width * 4;
+  await img.clone().toFile(file);
+  const fh = await openFile(file, 'r');
+  const { size } = await fh.stat();
+  if (size < VIPS_HEADER + stride * height) {
+    await fh.close();
+    throw new Error(`decoded picture ${width} x ${height} is ${size} bytes: not the RGBA rows expected`);
+  }
+  let buf = Buffer.alloc(0);
+  let first = 0; // the page row buf starts at
+  return {
+    width,
+    height,
+    async readTo(row) {
+      const end = Math.min(row, height);
+      const have = first + buf.length / stride;
+      if (end <= have) return;
+      const more = Buffer.allocUnsafe((end - have) * stride);
+      const { bytesRead } = await fh.read(more, 0, more.length, VIPS_HEADER + have * stride);
+      if (bytesRead !== more.length) throw new Error(`short read of decoded picture rows ${have}–${end}`);
+      buf = buf.length ? Buffer.concat([buf, more]) : more;
+    },
+    rows(top, count, w) {
+      const start = (top - first) * stride;
+      if (w === width) return buf.subarray(start, start + count * stride);
+      const out = Buffer.allocUnsafe(w * count * 4);
+      for (let y = 0; y < count; y++) buf.copy(out, y * w * 4, start + y * stride, start + y * stride + w * 4);
+      return out;
+    },
+    dropBefore(row) {
+      if (row <= first) return;
+      const cut = Math.min(buf.length, (row - first) * stride);
+      buf = Buffer.from(buf.subarray(cut));
+      first += cut / stride;
+    },
+    async close() {
+      buf = Buffer.alloc(0);
+      await fh.close().catch(() => {});
+    },
   };
 }
 

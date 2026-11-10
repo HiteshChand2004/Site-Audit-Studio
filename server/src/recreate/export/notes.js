@@ -36,7 +36,7 @@ export function notesEntries({ report, stack, root, shipped }) {
         values: `${w.before?.detail ?? w.before?.status ?? '-'} → ${w.after?.detail ?? w.after?.status ?? '-'}`,
         meaning: w.reasonEvidence ?? null,
         tried: w.reason ? 'nothing in the copy: this is left to you, for the reason below' : 'no automatic fix yet',
-        reason: reasonText(w.reason ?? null),
+        reason: reasonText(w.reason ?? null, w.group ?? null),
       });
     }
   }

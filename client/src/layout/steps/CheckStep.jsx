@@ -9,7 +9,7 @@ import SectionCard from '../../components/common/SectionCard.jsx';
 import { Alert } from '../../components/common/Surface.jsx';
 import AuditReport from '../../components/audit/AuditReport.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
-import PageScope, { pathOf } from '../../components/project/PageScope.jsx';
+import { pathOf } from '../../components/project/PageScope.jsx';
 import { isAnalysisActive, useProjects } from '../../store/useProjects.js';
 import { timeAgo } from '../../format.js';
 import styles from '../Panel.module.css';
@@ -121,7 +121,7 @@ export default function CheckStep({ project, audit, loading }) {
           <Globe size={14} aria-hidden="true" />
           <input className="mono" value={url} onChange={(e) => setUrl(e.target.value)} aria-label="Website address" disabled={running} />
         </label>
-        {!project.page_url && <label className={styles.pagesInput} title="How many pages the check reads (1–100)">
+        <label className={styles.pagesInput} title="How many pages the check reads (1–100)">
           <span>Pages to check</span>
           <input
             className="mono"
@@ -134,13 +134,11 @@ export default function CheckStep({ project, audit, loading }) {
             aria-label="How many pages the check reads"
             disabled={running}
           />
-        </label>}
+        </label>
         <Button type="submit" variant={audit?.isDummy ? 'primary' : 'secondary'} icon={running ? Spinner : Play} disabled={running}>
           {running ? 'Checking…' : audit?.isDummy ? 'Check now' : 'Check again'}
         </Button>
       </form>
-
-      <PageScope project={project} disabled={running} />
 
       {analysis && analysis.status !== 'done' && <AnalyzeProgress analysis={analysis} onDismiss={() => dismissAnalysis(project.id)} />}
 
@@ -167,9 +165,10 @@ export default function CheckStep({ project, audit, loading }) {
                   {' '}· speed measured on the homepage
                 </p>
               )}
-              {!audit.isDummy && (project.page_url ?? null) !== (audit.scope?.url ?? null) && (
-                <Alert tone="info" title={project.page_url ? `This report is not for ${pathOf(project.page_url)} yet` : 'This report is for one page only'}>
-                  {project.page_url ? 'Click “Check again” to check only the chosen page.' : 'Click “Check again” to check the whole website.'}
+              {/* Checks always cover the whole website now; an older report of one page says so. */}
+              {!audit.isDummy && audit.scope?.kind === 'page' && (
+                <Alert tone="info" title="This report is for one page only">
+                  Click “Check again” to check the whole website.
                 </Alert>
               )}
               {audit.errors?.length > 0 && (

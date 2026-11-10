@@ -16,6 +16,7 @@ import { db, projectDir } from '../src/db/index.js';
 import { launchBrowser } from '../src/audit/render.js';
 import { emitSite } from '../src/recreate/emit/html.js';
 import { MOTION_JS } from '../src/recreate/emit/motionScript.js';
+import { transformSync } from 'esbuild';
 import { describeForm, collectForms } from '../src/recreate/emit/mern/forms.js';
 import { emitMern } from '../src/recreate/emit/mern/index.js';
 import { writeProject } from '../src/recreate/emit/write.js';
@@ -265,7 +266,10 @@ test('real export: client verified against the HTML build, server tests run, for
     assert.equal(preview.preview.scripts, true);
     assert.equal((await fetch(`${appOrigin}${preview.preview.url}contact.html`)).status, 200);
     // 4b.5: the reveal script is part of the client build and runs under the preview's script policy.
-    assert.equal(await readFile(path.join(project, 'client', 'dist', 'js', 'motion.js'), 'utf8'), MOTION_JS);
+    // The stack ships the script minified (Step 9a): esbuild's own result for the readable script, and clearly smaller.
+    const shippedMotion = await readFile(path.join(project, 'client', 'dist', 'js', 'motion.js'), 'utf8');
+    assert.equal(shippedMotion, transformSync(MOTION_JS, { loader: 'js', minify: true, legalComments: 'none' }).code);
+    assert.ok(shippedMotion.length < MOTION_JS.length * 0.8, `minified: ${shippedMotion.length} of ${MOTION_JS.length} characters`);
     assert.match(await readFile(path.join(project, 'client', 'dist', 'index.html'), 'utf8'), /<script src="\/js\/motion\.js" defer><\/script>/);
     const browser = await launchBrowser();
     try {

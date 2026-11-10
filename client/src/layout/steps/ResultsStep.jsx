@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, FileText, ListChecks, Loader2, RotateCw, Ruler, Trophy } from 'lucide-react';
+import { Download, FileText, ListChecks, Loader2, RotateCw, Ruler, Trophy, Wand2 } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import { Alert, Card, EmptyState } from '../../components/common/Surface.jsx';
 import FixReport from '../../components/recreate/FixReport.jsx';
@@ -8,6 +8,9 @@ import Outcome from '../../components/recreate/Outcome.jsx';
 import CopyPages from '../../components/recreate/CopyPages.jsx';
 import PageGallery from '../../components/recreate/PageGallery.jsx';
 import AsIsReport from '../../components/recreate/AsIsReport.jsx';
+import AddressDialog from '../../components/recreate/AddressDialog.jsx';
+import FixModeDialog from '../../components/recreate/FixModeDialog.jsx';
+import { ADDRESS_DIALOG, FIX_MODE } from '../../copy.js';
 import SectionCard from '../../components/common/SectionCard.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import { stackById } from '../../constants.js';
@@ -41,6 +44,27 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
   useEffect(() => {
     setDownloadError(null);
   }, [result?.recreateId, project.id]);
+  // The download dialog (Step 6): a "Copy my site" copy made without a new-site address asks for one at download. `pending` is
+  // the job writing it; its copy is downloaded once it is the latest result.
+  const addAddress = useProjects((s) => s.addAddress);
+  const [askAddress, setAskAddress] = useState(false);
+  const [pending, setPending] = useState(null);
+  const needsAddress = Boolean(result?.asIs && !result.asIs.address?.used && !result.asIs.addressedFrom);
+  const pendingFailed = pending && job?.id === pending && job.status === 'failed' ? job.error ?? '' : null;
+  // Fix mode (Step 11): the changes the user approves one by one; `fixing` is the job writing them.
+  const applyFixes = useProjects((s) => s.applyFixes);
+  const [askFixes, setAskFixes] = useState(false);
+  const [fixing, setFixing] = useState(null);
+  const fixFailed = fixing && job?.id === fixing && job.status === 'failed' ? job.error ?? '' : null;
+  useEffect(() => {
+    if (fixing && result?.recreateId === fixing) setFixing(null);
+  }, [fixing, result?.recreateId]);
+  useEffect(() => {
+    if (!pending || result?.recreateId !== pending) return;
+    setPending(null);
+    // The addressed copy is the latest result now: download it (the re-check it queued only reads the copy).
+    if (result.safety?.safe && outputState(result, copyStack) === 'ready') startDownload(result.recreateId);
+  }, [pending, result?.recreateId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!result) {
     return (
@@ -63,12 +87,25 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
   const zipReady = copyState === 'ready' && (copyStack === 'html' || outputs[copyStack]?.status === 'ready');
   const canDownload = Boolean(result.recreateId && result.safety?.safe && !busy && zipReady);
   async function download() {
+    if (needsAddress) return setAskAddress(true);
+    return startDownload(result.recreateId);
+  }
+  async function useAddress(address) {
+    const id = await addAddress(project.id, result.recreateId, address);
+    setPending(id);
+    setAskAddress(false);
+  }
+  function downloadAsItIs() {
+    setAskAddress(false);
+    startDownload(result.recreateId);
+  }
+  async function startDownload(recreateId) {
     setDownloading(true);
     setDownloadError(null);
     try {
-      const problem = await api.checkDownload(project.id, result.recreateId, copyStack);
+      const problem = await api.checkDownload(project.id, recreateId, copyStack);
       if (problem) setDownloadError(problem);
-      else window.location.assign(api.downloadUrl(project.id, result.recreateId, copyStack));
+      else window.location.assign(api.downloadUrl(project.id, recreateId, copyStack));
     } catch (err) {
       setDownloadError(err.message || 'Cannot reach the server.');
       await reloadRecreate(project.id).catch(() => {});
@@ -84,6 +121,12 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
       : `This copy has no ${copyName} build to download. Make the copy again.`;
 
   const comparison = audit && !audit.isDummy && audit.recreate && !audit.recreate.isDummy ? audit.recreate : null;
+  const canFix = Boolean(result.asIs && comparison && comparison.recreateId === result.recreateId && !busy);
+  async function approveFixes(ids) {
+    const id = await applyFixes(project.id, result.recreateId, ids);
+    setFixing(id);
+    setAskFixes(false);
+  }
   const canCompare = audit?.recreate?.recreateId && !isJobActive(reauditJob);
 
   return (
@@ -99,6 +142,18 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
           onPackage={(stack) => recreate(project.id, { mode: 'as-is', confirmed: true, stack, reuseAsIs: true })}
         />
       )}
+
+      {result.asIs && (comparison || result.asIs.changedOnPurpose?.length > 0) && (
+        <div className={ws.actions}>
+          <p className={ws.hint} style={{ margin: 0 }}>
+            {result.asIs.changedOnPurpose?.length ? FIX_MODE.onPurpose(result.asIs.changedOnPurpose.length) : FIX_MODE.text}
+          </p>
+          <Button icon={Wand2} disabled={!canFix} onClick={() => setAskFixes(true)}>{FIX_MODE.open}</Button>
+        </div>
+      )}
+      {fixing && fixFailed == null && <p className={ws.hint}>{FIX_MODE.applying}</p>}
+      {fixFailed != null && <Alert tone="bad" title={FIX_MODE.failedTitle}>{fixFailed}</Alert>}
+      {canFix && <FixModeDialog open={askFixes} projectId={project.id} recreateId={result.recreateId} onApply={approveFixes} onClose={() => setAskFixes(false)} />}
 
       {result.singlePage && (
         <p className={ws.hint}>
@@ -149,12 +204,19 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
           </Button>
         </div>
         {!zipReady && <p className={ws.hint}>{notReadyText}</p>}
+        {pending && pendingFailed == null && <p className={ws.hint}>{ADDRESS_DIALOG.writing}</p>}
+        {pendingFailed != null && (
+          <Alert tone="bad" title={ADDRESS_DIALOG.failedTitle}>
+            {pendingFailed} {ADDRESS_DIALOG.failedText}
+          </Alert>
+        )}
         {downloadError && (
           <Alert tone="bad" title="The download did not work">
             {downloadError}
           </Alert>
         )}
       </Card>
+      <AddressDialog open={askAddress} initial={project.target_domain ?? ''} onUse={useAddress} onLater={downloadAsItIs} onClose={() => setAskAddress(false)} />
 
       {comparison && (
         <SectionCard icon={ListChecks} title="Every check, before and after" meta="For a closer look" defaultOpen={false}>

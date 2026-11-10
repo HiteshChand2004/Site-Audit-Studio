@@ -4,8 +4,11 @@
 // its machine, a laptop keeps the defaults. One job (a capture with four browser contexts, Lighthouse twice) uses several GB;
 // two at once took a 15 GB machine down, which is why the default is one.
 //
-//   SAS_MAX_JOBS          jobs that run at once on this server (1–8, default 1). The rest wait in line, first come first served
-//                         (jobs/manager.js). Parallel Lighthouse runs also distort each other's numbers.
+//   SAS_MAX_JOBS          jobs that run at once on this server: a whole number 1–64 (default 1, also for anything unreadable),
+//                         or `auto`: as many as the machine holds (jobs/capacity.js: CPUs, memory, container limits), at most
+//                         AUTO_MAX_JOBS. Whatever the number, a job starts only when its reservation fits next to the running
+//                         ones (jobs/manager.js); the rest wait in line. Lighthouse runs never overlap whatever this says
+//                         (audit/lighthouse/run.js), because parallel runs distort each other's numbers.
 //   SAS_JOBS_PER_USER     jobs one account may have running or waiting at once (1–20, default 1). With accounts off there is one
 //                         local user, so this is the whole queue's depth there; raise it to queue work on several sites.
 //   SAS_JOB_MAX_MINUTES   the hard time limit of one job (1–1440, default 240; 0 = none). Every pipeline has its own budget first
@@ -33,7 +36,11 @@ export function setting(raw, { min, max, def, integer = true }) {
   return n;
 }
 
-export const maxJobs = (env = process.env) => setting(env.SAS_MAX_JOBS, { min: 1, max: 8, def: 1 });
+/** The ceiling of SAS_MAX_JOBS=auto: a guard against a misread machine, not the expected number (capacity decides first). */
+export const AUTO_MAX_JOBS = 16;
+/** SAS_MAX_JOBS=auto: the machine decides how many jobs run at once. */
+export const autoJobs = (env = process.env) => String(env.SAS_MAX_JOBS ?? '').trim().toLowerCase() === 'auto';
+export const maxJobs = (env = process.env) => (autoJobs(env) ? AUTO_MAX_JOBS : setting(env.SAS_MAX_JOBS, { min: 1, max: 64, def: 1 }));
 export const jobsPerUser = (env = process.env) => setting(env.SAS_JOBS_PER_USER, { min: 1, max: 20, def: 1 });
 /** The hard limit in milliseconds, 0 = none. Minutes, fractions allowed (tests use seconds). */
 export const jobMaxMs = (env = process.env) => setting(env.SAS_JOB_MAX_MINUTES, { min: 0, max: 1440, def: 240, integer: false }) * 60000;
@@ -47,6 +54,7 @@ export function describeLimits(env = process.env) {
   const max = jobMaxMs(env);
   return {
     maxJobs: maxJobs(env),
+    ...(autoJobs(env) && { auto: true }),
     jobsPerUser: jobsPerUser(env),
     jobMaxMinutes: max ? max / 60000 : null,
     minFreeMB: minFreeMB(env) || null,

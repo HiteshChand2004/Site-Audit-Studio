@@ -32,7 +32,8 @@ import { explainFailure, watchNetwork, watchPauses } from './interruptions.js';
 import { freeMemoryMB, parallelism } from './resources.js';
 import { createSharedCache, sharedCacheEnabled } from './sharedCache.js';
 import { loadSitemaps } from './sitemap.js';
-import { limiter, withTimeout } from './util.js';
+import { holdableTimer, limiter, TimeoutError } from './util.js';
+import { onWaiting } from '../jobs/context.js';
 
 // weight = share of the progress bar; max = the step's own time limit.
 export const STEPS = [
@@ -206,7 +207,9 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
   const baseDeadline = Date.now() + timing.budgetMs;
   // Moves later (never past the interruption allowance) when time was lost to sleep or a network outage.
   let deadline = baseDeadline;
-  const maxDeadline = baseDeadline + INTERRUPTION_EXTRA_MS * timing.scale;
+  let maxDeadline = baseDeadline + INTERRUPTION_EXTRA_MS * timing.scale;
+  // The timers of a Lighthouse step that may wait for the lane (audit/lighthouse/run.js): held while the job waits, see below.
+  const laneSteps = new Set();
   const pauses = watchPauses();
   // Short network outages during a step (a DNS check every 3 s; nothing is sent to the site).
   const outages = watchNetwork(new URL(url).hostname);
@@ -241,7 +244,17 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
       return fallback;
     }
     const controller = new AbortController();
-    const abortTimer = setTimeout(() => controller.abort(), budget);
+    const abortTimer = holdableTimer(budget, () => controller.abort());
+    // The same TimeoutError withTimeout gave, from a timer that can be held while the step waits for the Lighthouse lane.
+    let overran;
+    const overrun = new Promise((_, reject) => {
+      overran = reject;
+    });
+    overrun.catch(() => {}); // read only through the race below
+    const hardTimer = holdableTimer(budget + 10000, () => overran(new TimeoutError(def.label, budget + 10000)));
+    // Only a step that waits for the Lighthouse lane stops counting while the job waits; one working beside it (links) does not.
+    const laneTimers = key.startsWith('lighthouse-') ? [abortTimer, hardTimer] : [];
+    for (const t of laneTimers) laneSteps.add(t);
     // A stop asked for while this step runs ends the step now; the next `step()` then throws.
     const onStop = () => controller.abort();
     signal?.addEventListener('abort', onStop, { once: true });
@@ -252,11 +265,13 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
       : null;
     let failure;
     try {
-      return await withTimeout(fn(controller.signal, budget), budget + 10000, def.label);
+      return await Promise.race([fn(controller.signal, budget), overrun]);
     } catch (err) {
       failure = err;
     } finally {
-      clearTimeout(abortTimer);
+      abortTimer.clear();
+      hardTimer.clear();
+      for (const t of laneTimers) laneSteps.delete(t);
       signal?.removeEventListener('abort', onStop);
       if (ticker) clearInterval(ticker);
     }
@@ -321,11 +336,30 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
   progress('fetch', 1);
 
   const proxy = await startEgressProxy(netPolicy);
+  // Waiting behind another job's Lighthouse run is not this analysis's time (jobs/context.js startWaiting): while the job waits,
+  // the waiting Lighthouse step's timers are held; when the wait ends they, the analysis deadline and its interruption allowance
+  // move later by the time waited. Lighthouse runs only inside the try below, one at a time, so waits never overlap here.
+  // Registered right before the try and removed in its finally: every way out of the analysis from here on unregisters it.
+  // Outside a job nothing listens; the job's hard limit (jobs/manager.js, capped) still bounds the whole analysis.
+  let laneWaitStart = 0;
+  const stopLaneListening = onWaiting({
+    start(at) {
+      laneWaitStart = at;
+      for (const t of laneSteps) t.hold();
+    },
+    end() {
+      const waited = Date.now() - laneWaitStart;
+      deadline += waited;
+      maxDeadline += waited;
+      for (const t of laneSteps) t.release(waited);
+    },
+  });
   try {
     const audit = await analyzeSite({ project, analysisId, maxPages, progress, errors, outDir, save, step, home, origin, proxy, skipped, seedUrls, deployOrigin, timing, linksBesideLighthouse, lighthouseRun, lighthouseBaseline, lighthouseOrigin });
     noteLowMemory(audit.errors, freeAtStart);
     return audit;
   } finally {
+    stopLaneListening();
     pauses.stop();
     outages.stop();
     await proxy.close();
@@ -469,19 +503,34 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
   // measurement host's origin for that device. Analyze never sets it.
   const lighthouseUrl = (formFactor) => (lighthouseOrigin ? new URL(new URL(home.url).pathname + new URL(home.url).search, lighthouseOrigin(formFactor)).href : home.url);
   const lighthouse = (key, formFactor, reserveMs = 0) =>
-    step(key, async (_signal, budget) => {
+    step(key, async (signal, budget) => {
       const started = Date.now();
+      // Time spent waiting in the lane is not this step's (its timers were held meanwhile): the retry and the calibration count
+      // only the time it worked. The signal lets a stopped analysis leave the lane at once; a run already going never reads it.
+      let waited = 0;
+      const spent = () => Date.now() - started - waited;
       const target = lighthouseUrl(formFactor);
-      const options = (timeout, extra) => ({ timeout, outFile: path.join(outDir, `lighthouse-${formFactor}.json`), proxy: proxy.url, ...extra });
+      const options = (timeout, extra) => ({
+        timeout,
+        outFile: path.join(outDir, `lighthouse-${formFactor}.json`),
+        proxy: proxy.url,
+        signal,
+        onAcquire: ({ waitedMs }) => {
+          waited += waitedMs;
+        },
+        ...extra,
+      });
       let result;
       try {
         result = await lighthouseRun(target, formFactor, options(budget));
       } catch (err) {
-        const left = budget - (Date.now() - started) - 3000;
+        // A stop is not a failure to try again: the run left the lane without running, and the analysis is ending.
+        if (err.stopped || signal.aborted) throw err;
+        const left = budget - spent() - 3000;
         if (/timed out/i.test(err.message) || left < LIGHTHOUSE_RETRY_MIN_MS) throw err;
         result = await lighthouseRun(target, formFactor, options(left));
       }
-      return calibrate(result, formFactor, () => budget - (Date.now() - started) - 3000, (extra, left) => lighthouseRun(target, formFactor, options(left, extra)));
+      return calibrate(result, formFactor, () => budget - spent() - 3000, (extra, left) => lighthouseRun(target, formFactor, options(left, extra)));
     }, null, { reserve: reserveMs });
   // A measurement compared with an earlier one (the re-audit against the original's analysis): when this computer is much
   // slower now than during the earlier run (Lighthouse's benchmark index, e.g. other jobs keep it busy), the simulated
@@ -549,6 +598,8 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     pageVariants: pages.filter((p) => hasQuery(p.url)).length,
     blockedHosts: proxy.blocked(),
     errors,
+    // The conditions each Lighthouse run was measured under (other jobs on this server), when the job line recorded them.
+    lighthouseContention: mobile?.contention || desktop?.contention ? { mobile: mobile?.contention ?? null, desktop: desktop?.contention ?? null } : null,
     siteType,
   });
   progress('report', 1);

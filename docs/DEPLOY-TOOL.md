@@ -33,8 +33,10 @@ everything is required, not just convenient. The marketing site's sign-in form p
     to 120 s.
   - Do not use scale-to-zero or request-time CPU limits. Jobs run in memory for 20 minutes to several hours.
   - Give Chromium a big shared-memory area (`--shm-size=1g` or `--ipc=host`). Docker's default of 64 MB crashes it.
-  - The memory gate reads `os.freemem()`. Inside a container that is the **host's** free memory, not the container's limit, so
-    set `SAS_JOB_MIN_FREE_MB` and `SAS_MAX_PARALLEL` by hand.
+  - The memory gate reads the container's own limit and use from the cgroup files (`/sys/fs/cgroup`, v2 `memory.max` /
+    `memory.current` / `cpu.max`, or v1) and takes the smaller of that and `os.freemem()` (`jobs/capacity.js`); `GET /api/health`
+    says which it used (`jobs.capacity.source`: `cgroup` or `host`). **Unsure**: tested with fixed file contents only, never inside
+    a real container, so check that field once after the first deploy. `SAS_MAX_PARALLEL` still caps browser contexts by hand.
 - **A managed load balancer / TLS in place of Caddy**: it must pass `Host`, `X-Forwarded-Proto` and `X-Forwarded-Host` through.
   The preview builds its content policy from them (`requestOrigin`). It must also not buffer `text/event-stream` (job progress is
   Server-Sent Events, with a ping every 15 s), and it must allow long responses (zips are streamed).
@@ -91,12 +93,27 @@ Playwright's Chromium. That is **probably 2–4 GB per release**. **Unsure**: I 
 | Plan | vCPU | RAM | Disk (SSD) | Settings |
 |---|---|---|---|---|
 | Minimum (launch, low traffic) | 4 dedicated | 8 GB | 100 GB | `SAS_MAX_JOBS=1` |
-| Comfortable | 8 dedicated | 16 GB | 200 GB | `SAS_MAX_JOBS=2`, later 3 |
+| Comfortable | 8 dedicated | 16 GB | 200 GB | `SAS_MAX_JOBS=1`, then `2` or `auto` after step 13 |
 
 - The other processes are small: the marketing site (**Unsure**: roughly 150–300 MB, not measured), Caddy (~50 MB) and the OS
   (~0.5 GB).
-- HANDOFF says `SAS_MAX_JOBS=2` is safe on 8 GB "by those numbers". Two jobs side by side were never measured, so start at 1 and
-  raise it only after watching memory (step 13).
+- **How several jobs share the machine** (`jobs/manager.js`, `jobs/capacity.js`). Each running job holds a reservation: Analyze
+  1500 MB, copy 2500 MB, re-audit 2000 MB, stack build 800 MB, and 2 CPU threads each (`SAS_JOB_MB_*`, `SAS_JOB_CPUS`). A job
+  starts only when (1) its reservation fits next to the running ones in total memory minus `SAS_RESERVED_MB` (default 1024) and
+  in the CPU count (a job alone always passes this), (2) the memory free right now, minus the whole reservation of every job that
+  started in the last 90 s (its browsers are still opening), covers its own reservation plus `SAS_JOB_MIN_FREE_MB` (a job alone
+  needs only the 2048 MB, as before), and (3) `SAS_MAX_JOBS` allows one more.
+  `SAS_MAX_JOBS=auto` lets (1) and (2) decide alone, at most 16. Two jobs of one website never run side by side, and the next
+  job is taken from the account with the fewest running jobs, then the oldest.
+- **Lighthouse never runs twice at once**, whatever these settings allow (`audit/lighthouse/run.js`, not a setting): two runs
+  side by side lowered phone Performance 88 → 78 in a measurement. A job waiting for its turn gets that time back on its own
+  limits (at most its own limit again in all). Each result records what else was running (`contention`).
+- Measured on the development laptop only (Windows, 12 CPU threads, 15 GB with 3.9–4.5 GB free at the start, scratch data,
+  fixture sites, `SAS_MAX_JOBS=auto`): three Analyze jobs asked for in the same second all finished. Before the memory rule in (2)
+  was tightened at most 2 ran at once (lowest free 3234 MB); with it they ran one after another, because a second Analyze needs
+  1500 + 2048 MB free next to the first. Lighthouse runs never overlapped (0 of 51 in the longest check, a three-page copy and
+  its re-audit). **Not measured**: several jobs side by side on a server or in a container, or several copies at once. Start at
+  1 and raise it only after watching memory (step 13).
 - **Prefer dedicated or "CPU-optimised" vCPUs.** Lighthouse scores move with CPU noise. The analysis calibrates the CPU slowdown to
   how busy the machine is, but on a shared, noisy vCPU original-vs-copy comparisons get less steady.
 - Add a 4 GB swap file (step 2) as a safety net against the kernel's OOM killer, not as working memory.
@@ -335,7 +352,9 @@ Notes on these values:
 - `SAS_TRUST_PROXY`: leave it unset. The default, `loopback`, believes the visitor address Caddy passes on (it runs on this
   machine) and nobody else's. Set it only when the proxy runs elsewhere (its address or subnet, e.g. `10.0.0.5`).
 - `SAS_KEEP_AWAKE`: keeping the machine awake is a laptop concern. On a server, `systemd-inhibit` is pointless.
-- `SAS_MAX_JOBS`: start at 1, see section 1.
+- `SAS_MAX_JOBS`: start at 1, see section 1. Later a number (1–64) or `auto`; leaving it out means 1. The per-job reservations
+  (`SAS_JOB_MB_ANALYZE` 1500, `SAS_JOB_MB_RECREATE` 2500, `SAS_JOB_MB_REAUDIT` 2000, `SAS_JOB_MB_EXPORT` 800, `SAS_JOB_CPUS` 2,
+  `SAS_RESERVED_MB` 1024) only matter once it is above 1; the defaults are the measured figures, so leave them out.
 - `SAS_CLEANUP_DRY_RUN`: 1 for the first days, so cleanup only logs what it would remove. Then set it to 0.
 
 **What production refuses to start with** (the log line starts with "Not starting:", and the process exits 1):
@@ -733,7 +752,10 @@ provider is probably blocking outbound 587 (see the top of this guide).
 - [ ] Run **Create the copy** on one page. The preview shows in Compare, the re-audit runs after it, and the zip downloads.
 - [ ] Build one copy as Next.js and one as React + Vite (the toolchains work).
 - [ ] Watch memory during that copy (`free -m`, or `htop`): the lowest "available" figure tells you whether `SAS_MAX_JOBS=2`
-      fits.
+      fits. In production `/api/health` leaves `jobs.capacity` out, so read the API's startup log instead:
+      `sudo journalctl -u sas-api -b | grep 'Capacity:'` shows the CPU threads, the MB for jobs (memory all jobs may be
+      counted with) and what it was read from: `(container limits)` or `(whole machine)`; in a container it must say
+      `(container limits)`.
 - [ ] `sudo systemctl restart sas-api` while a copy runs. It continues by itself within a few minutes (the
       restart-and-continue path).
 - [ ] `sudo systemctl start sas-backup` works, a backup is restored once on a scratch copy, and the off-machine copy runs.
@@ -773,8 +795,9 @@ provider is probably blocking outbound 587 (see the top of this guide).
   on a one-page copy) until retention removed the copy; the copy step now removes it once the copy is built and checked
   (`behavior/preserve/stage.js`, `convert/next.js dropBuildFolder`). The source and `out/` stay; `npm run dev` and
   `npm run build` of the download write their own.
-- **Two jobs side by side were never measured for memory.** The 2.2 GB per job is one run, and the memory gate is per start, not
-  per running job. Raise `SAS_MAX_JOBS` only after watching.
+- **Two jobs side by side were never measured on a server.** The 2.2 GB per job is one run. Each running job now holds a
+  reservation and a second one starts only with its reservation plus `SAS_JOB_MIN_FREE_MB` free (section 1), but a job that
+  uses more than its reservation is caught only by the free-memory reading. Raise `SAS_MAX_JOBS` only after watching.
 - **Waiting in line.** With one slot, the next person waits for the whole job in front: an as-is copy is about 20 minutes a page,
   and the backstop is `SAS_JOB_MAX_MINUTES` = 240. A per-plan page limit (`recreate_pages`) is the lever. See HANDOFF "The
   hold-up problem".

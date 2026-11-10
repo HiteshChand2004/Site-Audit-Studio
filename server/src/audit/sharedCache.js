@@ -62,6 +62,8 @@ export function isStorable(status, headers) {
 /** A stylesheet longer than this is not kept as text by a tap (the as-is capture reads it from the CSSOM instead). */
 export const MAX_SHEET_BYTES = 8 * 1024 * 1024;
 export const RECORD_VERSION = 1;
+/** Longest `Link` header kept for a document (a framework's preload list is a few hundred bytes to a few KB). */
+const MAX_LINK_HEADER = 8000;
 /** One recorded file larger than this is listed, not kept (a video); the whole record stops growing past the budget. */
 export const RECORD_MAX_FILE_BYTES = 40 * 1024 * 1024;
 export const RECORD_MAX_TOTAL_BYTES = Number(process.env.SAS_RECORD_MB ?? 2048) * 1024 * 1024;
@@ -144,7 +146,10 @@ export function createRecordStore(dir, { maxFileBytes = RECORD_MAX_FILE_BYTES, m
       return;
     }
     const type = ((await response.headerValue('content-type').catch(() => null)) ?? '').split(';')[0].trim().toLowerCase();
-    entries.set(url, { url, status, kind, type, sha, bytes: body.length, pages, frame: response.frame()?.parentFrame() ? 'child' : 'main' });
+    // A document's `Link` header: what the host told the browser to fetch at the first byte (preloads a framework sends as a
+    // header instead of tags). A static copy gets no header, so the lift writes these into the page (pageLift.js).
+    const link = kind === 'document' ? ((await response.headerValue('link').catch(() => null)) ?? '').slice(0, MAX_LINK_HEADER) : '';
+    entries.set(url, { url, status, kind, type, sha, bytes: body.length, pages, frame: response.frame()?.parentFrame() ? 'child' : 'main', ...(link && { link }) });
     total += body.length;
     await ensure();
     const file = path.join(files, sha);

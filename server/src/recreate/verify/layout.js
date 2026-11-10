@@ -79,6 +79,11 @@ export async function openRenderer(root) {
     contexts: launched.contexts,
     generation: 0,
     recoveries: 0,
+    // The browser itself, for a step that opens contexts of its own in it (build/index.js: the exact copy's fixes are proved
+    // in the job's browser, no second one); after a recovery it is the new one.
+    get browser() {
+      return launched.browser;
+    },
     recover: async (generation = renderer.generation) => {
       if (generation !== renderer.generation) return pending;
       pending ??= (async () => {

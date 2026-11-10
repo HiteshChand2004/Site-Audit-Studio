@@ -1,17 +1,21 @@
 // In-memory background job manager shared by Analyze, Recreate and Re-audit. All drive Chromium and are memory-heavy, so one
-// line of work serves every kind: at most SAS_MAX_JOBS run at once (default 1), the rest wait first come first served and are
-// told their place; a job starts only when enough memory is free (SAS_JOB_MIN_FREE_MB); one account has at most
-// SAS_JOBS_PER_USER jobs running or waiting; and a running job is stopped at SAS_JOB_MAX_MINUTES whatever its own budget says
-// (jobs/limits.js). Each manager allows one active job per project, mirrors state to its table, keeps the row's heartbeat
-// (jobs/liveness.js) and pushes state to SSE subscribers as events on the job id. A queued job of a server that died is put back
-// in line, same row and same place, when the next server starts (requeueJobs).
+// line of work serves every kind: at most SAS_MAX_JOBS run at once (default 1; `auto` = as many as the machine holds), and a
+// job starts only when what it is counted with (jobs/capacity.js) fits next to the running jobs and enough memory is really free
+// (SAS_JOB_MIN_FREE_MB); the rest wait and are told why. One account has at most SAS_JOBS_PER_USER jobs running or waiting,
+// and a running job is stopped at SAS_JOB_MAX_MINUTES whatever its own budget says (jobs/limits.js). Each manager allows one
+// active job per project, and jobs of different kinds on one website take turns; mirrors state to its table, keeps the row's
+// heartbeat (jobs/liveness.js) and pushes state to SSE subscribers as events on the job id. A queued job of a server that died
+// is put back in line, same row and same place, when the next server starts (requeueJobs).
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { db } from '../db/index.js';
 import { holdAwake, releaseAwake } from './keepAwake.js';
+import { meterJob } from './meter.js';
 import { stripAnsi } from './ansi.js';
 import { claimQueued, heartbeat, HEARTBEAT_MS, isoAt, ownJobs } from './liveness.js';
-import { jobMaxMs, jobsPerUser, maxJobs, memory, minFreeMB } from './limits.js';
+import { jobMaxMs, jobsPerUser, maxJobs, minFreeMB } from './limits.js';
+import { capacity, jobCpus, jobMB, KIND_OF_TABLE } from './capacity.js';
+import { onWaiting, runInJob, setLoadProvider, setShareProvider } from './context.js';
 
 const RETAIN_MS = 60000;
 /** A duration in words for a message: minutes when it is at least one, else seconds (tests run with limits of a few seconds). */
@@ -24,80 +28,217 @@ export const TIMING = {
   memoryPollMs: 5000,
   /** How long a job stopped at the hard limit may take to end by itself before its slot is given to the next job anyway. */
   hardStopGraceMs: 60000,
+  /**
+   * How long a job that just started is counted as not yet visible in the free-memory reading: its browsers are still opening,
+   * so the reading taken a moment after its start says nothing about what it will use. Within this time its reservation is
+   * taken off the reading, so two jobs can never be admitted on the same memory.
+   */
+  rampMs: 90000,
 };
 
 // ---------------------------------------------------------------------------------------------------------------- the line
-// One FIFO for every kind of work. An entry is a function to run; the entries that are jobs also carry the job and its manager,
-// so they can be told their place and be held back for memory. Order is never changed: the first in line waits for memory with
-// everything behind it (a smaller job jumping ahead would starve a large one for ever).
+// One line for every kind of work. An entry is a function to run; the entries that are jobs also carry the job and its manager,
+// so they can be told their place and be held back. Which entry is next: the one whose account has the fewest jobs running,
+// oldest first among equals; an entry whose website already has a job running waits for it (jobs of one website take turns).
+// When the next entry does not fit (not enough room or memory), nothing behind it starts (a smaller job jumping ahead would
+// starve a large one for ever).
+//
+// What a job is counted with (its reservation, jobs/capacity.js) is booked the moment it starts, before any of its browsers has
+// opened, and freed the moment it ends: two jobs can never be admitted on the same memory, whatever a reading said.
 const line = [];
-let running = 0;
+/** What the running entries are counted with: { kind, mb, cpus, startedAt, projectId, ownerId, jobId }. */
+const active = new Set();
 let memoryTimer = null;
 let lastFree = null;
 
+/**
+ * Runs `fn` when its turn comes. `meta`: { job, manager } for a job of a manager; { kind, projectId, ownerId } for other work
+ * that opens browsers or runs a build (a stack export: held for room and memory like a job, not counted against an account);
+ * nothing for work that only needs a turn (it reserves nothing and is never held for memory).
+ */
 export function exclusive(fn, meta = {}) {
   return new Promise((resolve, reject) => {
     // The computer is kept awake while any job runs or waits (a laptop that sleeps mid-job stalls it into timeouts).
-    if (running + line.length === 0) holdAwake();
-    line.push({ fn, resolve, reject, ...meta });
+    if (active.size + line.length === 0) holdAwake();
+    const kind = meta.job ? (KIND_OF_TABLE[meta.manager?.table] ?? 'recreate') : (meta.kind ?? null);
+    line.push({
+      fn,
+      resolve,
+      reject,
+      ...meta,
+      kind,
+      projectId: meta.job ? meta.job.projectId : (meta.projectId ?? null),
+      ownerId: meta.job ? (meta.job.ownerId ?? null) : (meta.ownerId ?? null),
+      mb: kind ? jobMB(kind) : 0,
+      cpus: kind ? jobCpus() : 0,
+    });
     schedule();
   });
 }
 
 /** True while any job (of any kind) is running or queued. */
-export const lockBusy = () => running + line.length > 0;
+export const lockBusy = () => active.size + line.length > 0;
 
 /** For GET /api/health and the start-up log. */
-export const queueState = () => ({ running, waiting: line.length, max: maxJobs(), ...(lastFree != null && { freeMB: Math.round(lastFree) }) });
+export const queueState = () => ({ running: active.size, waiting: line.length, max: maxJobs(), ...(lastFree != null && { freeMB: Math.round(lastFree) }) });
+
+const sum = (items, key) => items.reduce((n, a) => n + a[key], 0);
+/** Reservations of jobs started less than TIMING.rampMs ago (not yet visible in a reading), leaving out `except`. */
+const rampingMB = (except = null, now = Date.now()) => sum([...active].filter((a) => a !== except && now - a.startedAt < TIMING.rampMs), 'mb');
+
+/** The machine and what the running jobs are counted with, for GET /api/health. */
+export function capacityState() {
+  const cap = capacity.read();
+  const running = [...active];
+  return {
+    cpus: cap.cpus,
+    budgetMB: cap.budgetMB,
+    availableMB: Number.isFinite(cap.availableMB) ? Math.round(cap.availableMB) : null,
+    reservedMB: sum(running, 'mb'),
+    reservedCpus: sum(running, 'cpus'),
+    source: cap.source,
+  };
+}
+
+// A job's own share of the machine (jobs/context.js → audit/resources.js): the memory really available now minus what jobs that
+// just started will still take, never more than its own reservation; the CPU threads divided among the running jobs.
+setShareProvider((job) => {
+  if (!active.has(job)) return null;
+  const cap = capacity.read();
+  const jobs = [...active].filter((a) => a.kind).length || 1;
+  return {
+    freeMB: Math.max(0, Math.min(cap.availableMB - rampingMB(job), job.mb || Infinity)),
+    cpus: Math.max(1, Math.floor(cap.cpus / jobs)),
+  };
+});
+
+// What else runs right now, for a Lighthouse run to record the conditions it was measured under (audit/lighthouse/run.js):
+// the other jobs (their kinds) and the memory available. Plain work without a kind (a lock taken for a moment) is not a job.
+setLoadProvider((job) => {
+  const others = [...active].filter((a) => a.kind && a !== job);
+  const cap = capacity.read();
+  return {
+    otherJobs: others.length,
+    otherKinds: [...new Set(others.map((a) => a.kind))].sort(),
+    availableMB: Number.isFinite(cap.availableMB) ? Math.round(cap.availableMB) : null,
+  };
+});
 
 function schedule() {
-  while (running < maxJobs() && line.length) {
-    const head = line[0];
-    if (head.job && !memoryAllows(head)) break;
-    line.shift();
-    running++;
-    Promise.resolve()
-      .then(head.fn)
-      .then(head.resolve, head.reject)
-      .finally(() => {
-        running--;
-        if (running + line.length === 0) releaseAwake();
-        schedule();
-      });
+  for (const entry of line) entry.waitingFor = null;
+  while (line.length && active.size < maxJobs()) {
+    const i = nextIndex();
+    if (i < 0) break; // everything waiting waits for its website's running job
+    const head = line[i];
+    if (!admits(head)) break;
+    line.splice(i, 1);
+    start(head);
   }
   announce();
 }
 
+/** The index of the entry whose turn it is, or -1 when every waiting entry's website has a job running. */
+function nextIndex() {
+  const running = [...active];
+  const busySites = new Set(running.map((a) => a.projectId).filter(Boolean));
+  const runningOf = (ownerId) => running.filter((a) => a.ownerId === ownerId).length;
+  let best = -1;
+  let fewest = Infinity;
+  line.forEach((entry, i) => {
+    if (entry.projectId && busySites.has(entry.projectId)) {
+      entry.waitingFor = 'site';
+      return;
+    }
+    const n = runningOf(entry.ownerId);
+    if (n < fewest) {
+      best = i;
+      fewest = n;
+    }
+  });
+  return best;
+}
+
+function start(head) {
+  const job = { kind: head.kind, mb: head.mb, cpus: head.cpus, startedAt: Date.now(), projectId: head.projectId, ownerId: head.ownerId, jobId: head.job?.id ?? null };
+  active.add(job);
+  head.memoryWaitSince = null;
+  Promise.resolve()
+    .then(() => runInJob(job, head.fn))
+    .then(head.resolve, head.reject)
+    .finally(() => {
+      active.delete(job);
+      if (active.size + line.length === 0) releaseAwake();
+      schedule();
+    });
+}
+
 /**
- * Whether the first job in line may start now: enough memory is free, or no check is configured. A job that waited for memory
- * longer than the hard limit is taken out of the line and fails with the reason (a leak elsewhere must not stall the queue for
- * ever with no one told).
+ * Whether `entry` may start now. Work that reserves nothing only needs a turn. A job needs (1) room: what the running jobs are
+ * counted with plus its own fits the machine's memory budget and CPU threads (always true when nothing runs, so a small
+ * machine still runs one job at a time); and (2) memory really free (SAS_JOB_MIN_FREE_MB), after taking off what the jobs that
+ * just started will still take.
  */
-function memoryAllows(entry) {
+function admits(entry) {
+  if (!entry.kind) return true;
+  const cap = capacity.read();
+  const running = [...active];
+  if (running.length) {
+    const mb = sum(running, 'mb') + entry.mb;
+    const cpus = sum(running, 'cpus') + entry.cpus;
+    if (mb > cap.budgetMB || cpus > cap.cpus) {
+      entry.waitingFor = 'room';
+      tell(entry, `Waiting for room: the ${running.length === 1 ? 'job' : `${running.length} jobs`} running now use what this server can hold. Starts when one of them finishes.`, {
+        room: { reservedMB: mb - entry.mb, neededMB: entry.mb, budgetMB: cap.budgetMB, reservedCpus: cpus - entry.cpus, cpus: cap.cpus },
+      });
+      return false;
+    }
+  }
+  return memoryAllows(entry, cap);
+}
+
+/** Sets a waiting job's message and queue details, pushing them only when they changed. */
+function tell(entry, text, extra) {
+  const { job, manager } = entry;
+  if (!job || job.message === text) return;
+  job.message = text;
+  job.queue = { ...(job.queue ?? { ahead: active.size, position: 1 }), ...extra };
+  manager.emitState(job);
+}
+
+/**
+ * Whether enough memory is really free for the next job, or no check is configured. A job that waited for memory longer than
+ * the hard limit is taken out of the line and fails with the reason (a leak elsewhere must not stall the queue for ever with
+ * no one told).
+ * Next to running jobs, the job's own reservation is part of what must be free: once its browsers are open, SAS_JOB_MIN_FREE_MB
+ * must still be left. A job that would run alone needs the minimum only, exactly as before (so one job at a time, SAS_MAX_JOBS=1,
+ * starts on the same readings as without capacity, and a small machine still runs one job).
+ */
+function memoryAllows(entry, cap) {
   const need = minFreeMB();
   if (!need) return true;
-  const free = memory.free();
+  const free = cap.availableMB - rampingMB();
   lastFree = free;
-  if (!(free < need)) {
+  const beside = [...active].filter((a) => a.kind).length;
+  const needed = beside ? need + entry.mb : need;
+  if (!(free < needed)) {
     entry.memoryWaitSince = null;
     return true;
   }
-  const { job, manager } = entry;
+  entry.waitingFor = 'memory';
   entry.memoryWaitSince ??= Date.now();
   const limit = jobMaxMs();
   if (limit && Date.now() - entry.memoryWaitSince > limit) {
-    line.shift();
-    entry.reject(Object.assign(new Error(`Not started: the server had less than ${need} MB of memory free for ${humanMs(limit)} (${Math.round(free)} MB free now; SAS_JOB_MIN_FREE_MB).`), { notStarted: true }));
-    if (running + line.length === 0) releaseAwake();
+    line.splice(line.indexOf(entry), 1);
+    entry.reject(Object.assign(new Error(`Not started: the server had less than ${needed} MB of memory free for ${humanMs(limit)} (${Math.round(free)} MB free now; SAS_JOB_MIN_FREE_MB).`), { notStarted: true }));
+    if (active.size + line.length === 0) releaseAwake();
     setImmediate(schedule); // the next in line is looked at on its own pass
     return false;
   }
-  const text = `Waiting for memory: ${Math.round(free)} MB free, ${need} MB needed before a job may start. Looked at again in a few seconds.`;
-  if (job.message !== text) {
-    job.message = text;
-    job.queue = { ...(job.queue ?? { ahead: running, position: 1 }), memory: { freeMB: Math.round(free), neededMB: need } };
-    manager.emitState(job);
-  }
+  tell(entry, beside
+    ? `Waiting for memory: ${Math.round(free)} MB free, ${needed} MB needed to start next to the ${beside === 1 ? 'job' : `${beside} jobs`} running now (${entry.mb} MB for this job, ${need} MB kept free). Looked at again in a few seconds.`
+    : `Waiting for memory: ${Math.round(free)} MB free, ${need} MB needed before a job may start. Looked at again in a few seconds.`, {
+    memory: { freeMB: Math.round(free), neededMB: needed },
+  });
   if (!memoryTimer) {
     memoryTimer = setTimeout(() => {
       memoryTimer = null;
@@ -112,8 +253,12 @@ function memoryAllows(entry) {
 function announce() {
   line.forEach((entry, i) => {
     if (!entry.job) return;
-    const ahead = running + i;
-    if (i === 0 && entry.memoryWaitSince) return; // its message says what it waits for
+    if (entry.waitingFor === 'room' || entry.waitingFor === 'memory') return; // its message says what it waits for
+    if (entry.waitingFor === 'site') {
+      tell(entry, 'Waiting for the other job on this website to finish.', { ahead: active.size + i, position: i + 1 });
+      return;
+    }
+    const ahead = active.size + i;
     const text = ahead === 0
       ? 'Starting…'
       : ahead === 1
@@ -378,6 +523,7 @@ export class JobManager extends EventEmitter {
     clearInterval(job.beat);
     clearTimeout(job.limitTimer);
     clearTimeout(job.graceTimer);
+    job.stopListening?.();
     ownJobs.delete(job.id);
     job.status = status;
     if (status === 'done') {
@@ -420,27 +566,64 @@ export class JobManager extends EventEmitter {
     };
     this.#rows.progress.run('running', null, 0, job.id);
     this.#emit(job, 'progress');
+    // RAM / CPU of this job, per step (jobs/meter.js): null unless SAS_METER=1.
+    const meter = meterJob(job, this.#opts.table);
 
     // The hard limit (jobs/limits.js): the job is asked to stop like from the app; what does not end by itself within the grace
     // period loses its slot anyway, so the next job in line starts, and the row says what happened. The pipeline's own
     // cleanup (browsers, checkpoint) runs when the stop reaches it; a run that never answers is logged when it finally ends.
     const limit = jobMaxMs();
     let forced = null;
+    // Time spent waiting behind another job's Lighthouse run is not this job's work: while the job waits, the hard limit cannot
+    // expire (it is held at the latest end the cap allows), and when the wait ends the limit moves later by the time waited. At
+    // most the limit itself is given back in all (jobs/context.js startWaiting), so no job is ever held past twice its limit.
+    let limitEndsAt = Date.now() + limit;
+    let givenBack = 0;
+    let waits = 0;
+    let waitStart = 0;
+    // What the wait in progress has earned so far, within what is left of the cap.
+    const earning = () => (waits ? Math.min(Date.now() - waitStart, limit - givenBack) : 0);
     const outcome = await new Promise((resolve) => {
       forced = () => resolve({ ok: false, abandoned: true });
-      if (limit) {
-        job.limitTimer = setTimeout(() => {
-          job.hardStop = `Stopped after ${humanMs(limit)}: the time limit for one job (SAS_JOB_MAX_MINUTES). What was finished is kept.`;
-          job.message = `Stopping: the time limit for one job (${humanMs(limit)}) was reached.`;
-          this.#emit(job, 'progress');
-          job.controller.abort();
-          job.graceTimer = setTimeout(() => {
-            console.error(`[${this.#opts.table} ${job.id}] did not end ${TIMING.hardStopGraceMs / 1000} s after the hard limit; its slot is given to the next job.`);
-            forced();
-          }, TIMING.hardStopGraceMs);
-          job.graceTimer.unref();
-        }, limit);
+      const onLimit = () => {
+        const credited = givenBack + earning();
+        const waited = credited ? `, plus ${humanMs(credited)} spent waiting for Lighthouse` : '';
+        job.hardStop = credited
+          ? `Stopped after the time limit for one job (${humanMs(limit)}${waited}; SAS_JOB_MAX_MINUTES). What was finished is kept.`
+          : `Stopped after ${humanMs(limit)}: the time limit for one job (SAS_JOB_MAX_MINUTES). What was finished is kept.`;
+        job.message = `Stopping: the time limit for one job (${humanMs(limit)}${waited}) was reached.`;
+        this.#emit(job, 'progress');
+        job.controller.abort();
+        job.graceTimer = setTimeout(() => {
+          console.error(`[${this.#opts.table} ${job.id}] did not end ${TIMING.hardStopGraceMs / 1000} s after the hard limit; its slot is given to the next job.`);
+          forced();
+        }, TIMING.hardStopGraceMs);
+        job.graceTimer.unref();
+      };
+      // While a wait is in progress the timer is held at the latest end the cap allows; otherwise at the current end.
+      const arm = () => {
+        clearTimeout(job.limitTimer);
+        const end = waits ? limitEndsAt + (limit - givenBack) : limitEndsAt;
+        job.limitTimer = setTimeout(onLimit, Math.max(0, end - Date.now()));
         job.limitTimer.unref();
+      };
+      if (limit) {
+        arm();
+        job.stopListening = onWaiting({
+          start(at) {
+            if (waits++ > 0) return; // already waiting: the first start counts
+            waitStart = at;
+            if (!job.hardStop && !job.finished) arm();
+          },
+          end() {
+            if (waits === 0 || --waits > 0) return;
+            if (job.hardStop || job.finished) return;
+            const add = Math.min(Date.now() - waitStart, limit - givenBack);
+            givenBack += add;
+            limitEndsAt += add;
+            arm();
+          },
+        });
       }
       run({ job, project, payload, progress, signal: job.controller.signal }).then(
         (result) => resolve({ ok: true, result }),
@@ -448,6 +631,7 @@ export class JobManager extends EventEmitter {
       );
     });
 
+    meter?.stop({ status: outcome.ok ? 'done' : 'failed' });
     let ok = false;
     if (outcome.abandoned) {
       this.#finish(job, 'failed', job.hardStop);

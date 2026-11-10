@@ -31,7 +31,7 @@ function useElapsed(iso) {
  * Live progress of a background job (check, copy or comparison; fed by the server's event stream), in plain words:
  * what is happening now, a bar with the time so far, and the steps. Or, when it failed, why.
  */
-export default function AnalyzeProgress({ analysis, kind = 'analysis', onDismiss }) {
+export default function AnalyzeProgress({ analysis, kind = 'analysis', onDismiss, after = null }) {
   const labels = LABELS[kind];
   const elapsed = useElapsed(analysis.status === 'failed' ? null : analysis.startedAt);
 
@@ -47,7 +47,8 @@ export default function AnalyzeProgress({ analysis, kind = 'analysis', onDismiss
         }
       >
         {stripAnsi(analysis.error)}
-        <p className={styles.after}>Nothing was lost: the last finished result is still there. You can simply start it again.</p>
+        {/* `after`: what to do next when the caller knows better (a stopped copy that can continue says so instead). */}
+        <p className={styles.after}>{after ?? 'Nothing was lost: the last finished result is still there. You can simply start it again.'}</p>
       </Alert>
     );
   }

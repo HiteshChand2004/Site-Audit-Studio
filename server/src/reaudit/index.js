@@ -12,7 +12,7 @@ import { runLighthouse } from '../audit/lighthouse/run.js';
 import { db } from '../db/index.js';
 import { auditDir, projectDir } from '../config/paths.js';
 import { startEgressProxy } from '../security/egressProxy.js';
-import { compareLighthousePages, lighthousePageItems, lighthousePagesNote, RUN_TIMEOUT_MS } from './lighthousePages.js';
+import { betterThanOriginal, compareLighthousePages, lighthousePageItems, lighthousePagesNote, lighthouseTargets, RUN_TIMEOUT_MS } from './lighthousePages.js';
 import { getEmitter } from '../recreate/emit/index.js';
 import { outputPages, outputRoot, reportOutputs, targetStack } from '../recreate/export/fromIr.js';
 import { servePreview } from '../recreate/preview.js';
@@ -202,11 +202,13 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
           pages: outputPageList.map((p) => ({ path: p.path, url: asIsPages.get(p.outPath) ?? new URL(p.path, project.url).href, copyUrl: `${served.origin}${p.path}` })),
           cacheDir: path.join(projectDir(project.id), 'lighthouse-original'),
           outDir: path.join(reauditDir(project.id, recreateId, reauditId), 'lighthouse-pages'),
-          run: (url, mode, outFile) => runLighthouse(measuredUrl(url, mode), mode, { timeout: RUN_TIMEOUT_MS, outFile, proxy: proxy.url }),
+          run: (url, mode, outFile) => runLighthouse(measuredUrl(url, mode), mode, { timeout: RUN_TIMEOUT_MS, outFile, proxy: proxy.url, signal }),
           progress: (fraction, message) => progress('lighthouse-pages', fraction, message),
+          signal,
         });
         lighthousePages.network = measuredHostDescription();
       } catch (err) {
+        if (err?.stopped) throw err;
         lighthousePages = { pages: [], worse: [], unscored: [], extraRunPages: [], skipped: [], runs: { original: 0, copy: 0, reusedOriginal: 0 }, errors: [{ path: '*', mode: '*', error: String(err?.message ?? err).split('\n')[0].slice(0, 200) }] };
       } finally {
         await proxy.close().catch(() => {});
@@ -215,65 +217,7 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
     progress('lighthouse-pages', 1);
 
     progress('compare', 0);
-    const checklist = compareAudits({
-      old: await loadSide(auditDir(project.id, report.analysisId), JSON.parse(analysis.result_json)),
-      next: await loadSide(reauditDir(project.id, recreateId, reauditId), audit),
-      report,
-      newOrigin: served.origin,
-      output,
-      motion,
-    });
-    if (lighthousePages) {
-      // The per-page score rows join the checklist (a "got worse" row per page, mode and category where the copy's median is
-      // lower), the counts follow, and the notes say what was measured and which pages needed extra runs.
-      const rows = lighthousePageItems(lighthousePages);
-      checklist.items.push(...rows);
-      for (const r of rows) {
-        checklist.summary[r.status] = (checklist.summary[r.status] ?? 0) + 1;
-        checklist.summary.total++;
-      }
-      checklist.categories = CATEGORIES.filter((c) => checklist.items.some((it) => it.category === c.id));
-      checklist.notes.push(lighthousePagesNote(lighthousePages));
-      checklist.lighthousePages = {
-        pages: lighthousePages.pages.map((p) => ({ path: p.path, modes: Object.fromEntries(Object.entries(p.modes).map(([m, v]) => [m, v.error ? { error: v.error } : { original: v.original, copy: v.copy, worse: v.worse, unscored: v.unscored, blankRuns: v.blankRuns, runs: v.runs, accepted: v.accepted, extra: v.extra, runScores: v.runScores }])) })),
-        worse: lighthousePages.worse,
-        unscored: lighthousePages.unscored,
-        extraRunPages: lighthousePages.extraRunPages,
-        skipped: lighthousePages.skipped,
-        errors: lighthousePages.errors,
-        runs: lighthousePages.runs,
-        network: lighthousePages.network ?? null,
-      };
-    }
-    // An as-is copy: every "got worse" row carries one of the five reasons on this run's evidence, or is marked unexplained
-    // (copy/gotWorse.js). The rows stay where they are; the reasons are added to them, never put in their place.
-    if (isAsIs) {
-      const lhrs = async (dir) => Object.fromEntries(await Promise.all(['mobile', 'desktop'].map(async (d) => [d, await readFile(path.join(dir, `lighthouse-${d}.json`), 'utf8').then(JSON.parse, () => null)])));
-      const worse = explainWorse({
-        items: checklist.items,
-        siteUrl: project.url,
-        copyOrigin: served.origin,
-        copyPages: outputPageList.map((p) => p.path),
-        chosenPages: (report.asIs?.pages ?? []).map((p) => p.path ?? '/'),
-        oldLhr: await lhrs(auditDir(project.id, report.analysisId)),
-        newLhr: await lhrs(reauditDir(project.id, recreateId, reauditId)),
-        oldAxe: await readFile(path.join(auditDir(project.id, report.analysisId), 'axe.json'), 'utf8').then(JSON.parse, () => null),
-        newAxe: await readFile(path.join(reauditDir(project.id, recreateId, reauditId), 'axe.json'), 'utf8').then(JSON.parse, () => null),
-        // For the "still open" rows: whether a new-site address was written, which pages' fixes were undone, the hosts excluded by rule.
-        address: report.asIs?.address ?? null,
-        // report.copy.fixes.reverted lists the pages (report.asIs.fixes.reverted is only their count).
-        revertedPages: (Array.isArray(report.copy?.fixes?.reverted) ? report.copy.fixes.reverted : []).map((r) => r.page),
-        excludedHosts: Array.isArray(report.asIs?.excludedByRule) ? report.asIs.excludedByRule : [],
-      });
-      const byKey = new Map([...worse.items.map((w) => ['regressed', w]), ...worse.open.map((w) => ['open', w])].map(([status, w]) => [`${status} ${w.key}`, w]));
-      for (const item of checklist.items) {
-        const w = byKey.get(`${item.status} ${item.key}`);
-        if (w) Object.assign(item, { reason: w.reason, reasonEvidence: w.evidence, ...(w.unexplained && { unexplained: true }), ...(w.parts && { reasonParts: w.parts }) });
-      }
-      checklist.gotWorse = worse.summary;
-      // The same for every row still open (failing on both sides): a reason or UNEXPLAINED, and the counts.
-      checklist.stillOpen = worse.openSummary;
-    }
+    const checklist = await buildChecklist({ project, report, analysis, audit, recreateId, reauditId, origin: served.origin, output, outputPageList, motion, lighthousePages, isAsIs });
     progress('compare', 1);
     return {
       reauditId,
@@ -293,4 +237,101 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
     await Promise.all(Object.values(measured).map((m) => m.close().catch(() => {})));
     await served.close();
   }
+}
+
+/**
+ * The checklist of a re-audit from what it measured (no browser, no network): the comparison with the original's analysis, the
+ * per-page Lighthouse rows and, for an as-is copy, the reason of every row that got worse or stays open. Exported so a finished
+ * re-audit can be compared again from its saved files when only the comparison rules change.
+ */
+export async function buildChecklist({ project, report, analysis, audit, recreateId, reauditId, origin, output, outputPageList, motion, lighthousePages, isAsIs }) {
+  const checklist = compareAudits({
+    old: await loadSide(auditDir(project.id, report.analysisId), JSON.parse(analysis.result_json)),
+    next: await loadSide(reauditDir(project.id, recreateId, reauditId), audit),
+    report,
+    newOrigin: origin,
+    output,
+    motion,
+  });
+  if (lighthousePages) {
+    // The per-page score rows join the checklist (a "got worse" row per page, mode and category where the copy's median is
+    // lower), the counts follow, and the notes say what was measured and which pages needed extra runs.
+    const rows = lighthousePageItems(lighthousePages);
+    checklist.items.push(...rows);
+    for (const r of rows) {
+      checklist.summary[r.status] = (checklist.summary[r.status] ?? 0) + 1;
+      checklist.summary.total++;
+    }
+    checklist.categories = CATEGORIES.filter((c) => checklist.items.some((it) => it.category === c.id));
+    checklist.notes.push(lighthousePagesNote(lighthousePages));
+    // The "better than the original" rule per device and category (the same medians and noise as the rows above).
+    const better = betterThanOriginal(lighthousePages);
+    if (better.line) checklist.notes.unshift(better.line);
+    checklist.lighthousePages = {
+      pages: lighthousePages.pages.map((p) => ({ path: p.path, modes: Object.fromEntries(Object.entries(p.modes).map(([m, v]) => [m, v.error ? { error: v.error } : { original: v.original, copy: v.copy, worse: v.worse, noise: v.noise ?? [], unscored: v.unscored, blankRuns: v.blankRuns, runs: v.runs, accepted: v.accepted, extra: v.extra, runScores: v.runScores }])) })),
+      worse: lighthousePages.worse,
+      unscored: lighthousePages.unscored,
+      extraRunPages: lighthousePages.extraRunPages,
+      skipped: lighthousePages.skipped,
+      errors: lighthousePages.errors,
+      runs: lighthousePages.runs,
+      network: lighthousePages.network ?? null,
+      // Kept runs of the original that were measured again, and why (too old, a computer of another speed).
+      refreshedOriginal: lighthousePages.refreshedOriginal ?? [],
+      // Per page, mode and category: original, copy, 90 reached or not, and what fails under 90 with the reason.
+      targets: lighthouseTargets(lighthousePages),
+      better,
+    };
+  }
+  // An as-is copy: every "got worse" row carries one of the five reasons on this run's evidence, or is marked unexplained
+  // (copy/gotWorse.js). The rows stay where they are; the reasons are added to them, never put in their place.
+  if (isAsIs) {
+    const lhrs = async (dir) => Object.fromEntries(await Promise.all(['mobile', 'desktop'].map(async (d) => [d, await readFile(path.join(dir, `lighthouse-${d}.json`), 'utf8').then(JSON.parse, () => null)])));
+    const worse = explainWorse({
+      items: checklist.items,
+      siteUrl: project.url,
+      copyOrigin: origin,
+      copyPages: outputPageList.map((p) => p.path),
+      chosenPages: (report.asIs?.pages ?? []).map((p) => p.path ?? '/'),
+      oldLhr: await lhrs(auditDir(project.id, report.analysisId)),
+      newLhr: await lhrs(reauditDir(project.id, recreateId, reauditId)),
+      oldAxe: await readFile(path.join(auditDir(project.id, report.analysisId), 'axe.json'), 'utf8').then(JSON.parse, () => null),
+      newAxe: await readFile(path.join(reauditDir(project.id, recreateId, reauditId), 'axe.json'), 'utf8').then(JSON.parse, () => null),
+      // For the "still open" rows: whether a new-site address was written, which pages' fixes were undone, the hosts excluded by rule.
+      address: report.asIs?.address ?? null,
+      // report.copy.fixes.reverted lists the pages (report.asIs.fixes.reverted is only their count).
+      // A page undone because its fixes had no effect (Step 5b) did not change the look: its rows are told by fixOpen (our bug).
+      revertedPages: (Array.isArray(report.copy?.fixes?.reverted) ? report.copy.fixes.reverted : []).filter((r) => r.reason !== 'noEffect').map((r) => r.page),
+      excludedHosts: Array.isArray(report.asIs?.excludedByRule) ? report.asIs.excludedByRule : [],
+      // What the copy's own fixes left open and why (the page gave no words, the site states no colour).
+      fixOpen: Array.isArray(report.asIs?.fixes?.open) ? report.asIs.fixes.open : [],
+    });
+    const byKey = new Map([...worse.items.map((w) => ['regressed', w]), ...worse.open.map((w) => ['open', w])].map(([status, w]) => [`${status} ${w.key}`, w]));
+    for (const item of checklist.items) {
+      const w = byKey.get(`${item.status} ${item.key}`);
+      if (w) Object.assign(item, { reason: w.reason, reasonEvidence: w.evidence, group: w.group, ...(w.unexplained && { unexplained: true }), ...(w.parts && { reasonParts: w.parts }) });
+    }
+    checklist.gotWorse = worse.summary;
+    // The same for every row still open (failing on both sides): a reason or UNEXPLAINED, and the counts.
+    checklist.stillOpen = worse.openSummary;
+  }
+  // Fix mode (Step 11): what the user approved and the copy changed on purpose (a text colour, a heading's level). The rows of
+  // those checks carry the list, so a difference from the original there reads as the user's choice, not as the copy's.
+  const onPurpose = Array.isArray(report.asIs?.changedOnPurpose) ? report.asIs.changedOnPurpose : [];
+  if (onPurpose.length) {
+    checklist.changedOnPurpose = onPurpose;
+    const ruleOf = { contrast: 'color-contrast', 'heading-level': 'heading-order' };
+    for (const item of checklist.items) {
+      const mine = onPurpose.filter((c) => String(item.key ?? '').endsWith(ruleOf[c.kind]));
+      if (mine.length) Object.assign(item, { changedOnPurpose: mine.map((c) => ({ page: c.page, text: c.text })), note: [item.note, `Changed on purpose (approved by you): ${mine.length} element(s).`].filter(Boolean).join(' ') });
+    }
+  }
+  // The other rows that are not a plain pass / fix get their group too: a figure that varies or a link to check again is a
+  // matter of measurement; what needs a person needs information only the owner has.
+  for (const item of checklist.items) {
+    if (item.group) continue;
+    if (item.status === 'changed' || item.status === 'recheck') item.group = 'measurement';
+    else if (item.status === 'manual') item.group = 'needs-info';
+  }
+  return checklist;
 }

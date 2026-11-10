@@ -3,6 +3,7 @@ import { AxeBuilder } from '@axe-core/playwright';
 import { USER_AGENT } from './http.js';
 import { withTimeout } from './util.js';
 import { readSiteTypeEvidence } from '../detection/siteType.js';
+import { freezePage } from '../recreate/verify/exact/freeze.js';
 
 const VIEWPORT = { width: 1440, height: 900 };
 const AXE_LIMIT_MS = 40000;
@@ -67,7 +68,7 @@ export async function renderHtml(browser, url, { cache = null, scale = 1 } = {})
  * @param {string} url
  * @param {{ globals?: string[] }} [opts]  window paths to test, e.g. "Shopify" or "__NEXT_DATA__"
  */
-export async function renderHome(browser, url, { globals = [], cache = null, scale = 1 } = {}) {
+export async function renderHome(browser, url, { globals = [], cache = null, scale = 1, freezeForAxe = true } = {}) {
   const { context, page, response, requests } = await openPage(browser, url, { timeout: 45000 * scale, cache });
   try {
     // Scroll once so lazy-loaded sections and widgets initialise.
@@ -122,6 +123,13 @@ export async function renderHome(browser, url, { globals = [], cache = null, sca
       });
       await Promise.race([Promise.all(ending.map((a) => a.finished.catch(() => {}))), new Promise((r) => setTimeout(r, 3000))]);
     }).catch(() => {});
+    // Then every animation and transition still running is stopped the way the exact comparison stops them (repeating ones
+    // at their start and paused, one-shots finished), in this page, with no extra load. A pulse or a blink is otherwise read
+    // at whatever moment the scan lands on: a badge caught at the dim end of its pulse reads ~1:1 on one side and fine on the
+    // other. renderHome is the axe step of both sides (Analyze for the original, the re-check for the copy), so both are
+    // frozen alike. Nothing else is touched: the page is closed after the scan, and the motion checks, the look gate and
+    // Lighthouse open their own pages.
+    if (freezeForAxe) await freezePage(page).catch(() => null);
 
     let axe = null;
     let axeError = null;

@@ -11,7 +11,7 @@ import stacksRouter from './routes/stacks.js';
 import reportRouter from './routes/report.js';
 import faviconRouter from './routes/favicon.js';
 import buildRouter from './routes/build.js';
-import { lockBusy, queueState } from './jobs/manager.js';
+import { capacityState, lockBusy, queueState } from './jobs/manager.js';
 import { describeLimits } from './jobs/limits.js';
 import { awakeHeld } from './jobs/keepAwake.js';
 import { recoverStaleJobs, watchStaleJobs } from './recreate/jobs.js';
@@ -65,8 +65,10 @@ if (accountsEnabled()) {
 
 // busy: an Analyze, Recreate or Re-audit job is running or queued (the dev runner waits before restarting).
 // keepAwake: the computer is being kept awake for it (jobs/keepAwake.js).
+// capacity: what the job line sees of the machine (jobs/capacity.js); left out in production, where this route is public.
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, phase: '5', time: new Date().toISOString(), busy: lockBusy(), keepAwake: awakeHeld(), jobs: { ...queueState(), limits: describeLimits() } });
+  const capacity = process.env.NODE_ENV === 'production' ? null : capacityState();
+  res.json({ ok: true, phase: '5', time: new Date().toISOString(), busy: lockBusy(), keepAwake: awakeHeld(), jobs: { ...queueState(), limits: describeLimits(), ...(capacity && { capacity }) } });
 });
 
 if (accounts) {
@@ -114,7 +116,9 @@ app.listen(PORT, HOST, (err) => {
     process.exit(1);
   }
   const limits = describeLimits();
-  console.log(`Jobs: ${limits.maxJobs} at a time on this server, ${limits.jobsPerUser} per account, ${limits.jobMaxMinutes ? `${limits.jobMaxMinutes} min` : 'no'} hard limit, ${limits.minFreeMB ? `${limits.minFreeMB} MB` : 'no'} free memory needed to start (jobs/limits.js).`);
+  const cap = capacityState();
+  console.log(`Jobs: ${limits.auto ? `as many as the machine holds (at most ${limits.maxJobs})` : limits.maxJobs} at a time on this server, ${limits.jobsPerUser} per account, ${limits.jobMaxMinutes ? `${limits.jobMaxMinutes} min` : 'no'} hard limit, ${limits.minFreeMB ? `${limits.minFreeMB} MB` : 'no'} free memory needed to start (jobs/limits.js).`);
+  console.log(`Capacity: ${cap.cpus} CPU threads, ${cap.budgetMB} MB for jobs (${cap.source === 'cgroup' ? 'container limits' : 'whole machine'}); Lighthouse runs one at a time (jobs/capacity.js).`);
   console.log(`API ready on http://${HOST.includes(':') ? `[${HOST}]` : HOST}:${PORT}${isLoopbackHost(HOST) ? ' (this computer only)' : ' (reachable from the network)'}`);
   // Jobs a server that is gone left queued or running (their heartbeat stopped, jobs/liveness.js) are marked failed, and a
   // recreate among them continues where it stopped (recreate/checkpoint.js); then the same check keeps running. A job alive in

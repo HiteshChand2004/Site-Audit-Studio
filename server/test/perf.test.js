@@ -11,8 +11,13 @@ import { analyzeTiming, LIGHTHOUSE_RESERVE_MS, noteLowMemory, runAnalysis, stepB
 import { maxParallel, parallelism } from '../src/audit/resources.js';
 import { launchBrowser } from '../src/audit/render.js';
 import { captureScreenshots } from '../src/audit/screenshots.js';
-import { progressTracker } from '../src/jobs/manager.js';
+import { JobManager, progressTracker } from '../src/jobs/manager.js';
 import { createNetPolicy } from '../src/security/netGuard.js';
+import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { lighthouseLane, runLighthouse } from '../src/audit/lighthouse/run.js';
+import { db } from '../src/db/index.js';
+import { seedProject } from './helpers/projects.js';
 
 const exists = (p) => access(p).then(() => true, () => false);
 
@@ -276,3 +281,103 @@ test('re-audit: a computer much busier than during the original measurement repe
   });
   assert.deepEqual(calls.map((c) => c.cpuSlowdown), [null, null]);
 });
+
+const LANE_STUB = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'lighthouse-stub-worker.js');
+
+/** No memory gate for these jobs (this is about time, not memory), put back afterwards. */
+async function noMemoryGate(fn) {
+  const saved = process.env.SAS_JOB_MIN_FREE_MB;
+  process.env.SAS_JOB_MIN_FREE_MB = '0';
+  try {
+    await fn();
+  } finally {
+    if (saved === undefined) delete process.env.SAS_JOB_MIN_FREE_MB;
+    else process.env.SAS_JOB_MIN_FREE_MB = saved;
+  }
+}
+
+/**
+ * An Analyze of /links/ run as a job of the line. Its Lighthouse goes through the real lane with a stub worker (no Chrome).
+ * The first time it asks, another run (`aheadMs` long) takes the lane first, so the analysis has to wait behind it.
+ */
+function analyzeInJob(analysisId, aheadMs) {
+  const calls = [];
+  let startAhead;
+  // Chained here, outside the job: the run ahead is not the analysis's own, even though the analysis sets it off.
+  const ahead = new Promise((r) => (startAhead = r)).then(() =>
+    runLighthouse(`stub://run?ms=${aheadMs}`, 'mobile', { worker: LANE_STUB }));
+  const held = { audit: null };
+  const manager = new JobManager({
+    table: 'analyses', noun: 'a job', steps: [{ key: 'one', label: 'One', weight: 1 }], overallPct: () => 0, doneMessage: 'done', heartbeatMs: 50,
+    run: async ({ signal }) => {
+      held.audit = await runAnalysis({
+        project: { id: 'perf', url: `${origin}/links/`, name: 'perf' },
+        analysisId,
+        maxPages: 1,
+        outDir: path.join(dir, analysisId),
+        skip: ['screenshots'],
+        netPolicy: createNetPolicy({ internalPorts: [server.address().port] }),
+        progress: () => {},
+        signal,
+        lighthouseRun: async (url, formFactor, options) => {
+          const call = { formFactor, signal: options.signal, onAcquire: typeof options.onAcquire, waitedMs: null };
+          calls.push(call);
+          if (calls.length === 1) {
+            startAhead();
+            await new Promise((r) => setTimeout(r, 50)); // the run ahead now holds the lane
+          }
+          await runLighthouse('stub://run?ms=50', formFactor, {
+            ...options,
+            worker: LANE_STUB,
+            onAcquire: (w) => {
+              call.waitedMs = w.waitedMs;
+              options.onAcquire?.(w);
+            },
+          });
+          return null;
+        },
+      });
+      return held.audit;
+    },
+  });
+  const id = randomUUID();
+  seedProject(db, { id, name: 'perf-lane', url: `${origin}/links/`, stack: 'html', authorized: 1 });
+  const job = manager.start(db.prepare('SELECT * FROM projects WHERE id = ?').get(id));
+  const ended = new Promise((resolve) => manager.on(job.id, (type, snap) => (type === 'done' || type === 'failed') && resolve(snap)));
+  return { manager, job, ended, ahead, calls, held };
+}
+
+test('Analyze in a job: its Lighthouse waits in the lane behind another run, then runs; the step passes its signal and is told the wait', () =>
+  noMemoryGate(async () => {
+    const { ended, ahead, calls, held } = analyzeInJob('lane-wait', 1500);
+    const snap = await ended;
+    assert.equal(snap.status, 'done', snap.error);
+    assert.deepEqual(calls.map((c) => c.formFactor), ['mobile', 'desktop']);
+    for (const c of calls) {
+      assert.ok(c.signal instanceof AbortSignal, `${c.formFactor}: the step's signal reaches the run`);
+      assert.equal(c.onAcquire, 'function', `${c.formFactor}: the step is told how long the run waited`);
+    }
+    assert.ok(calls[0].waitedMs >= 1200, `mobile waited ${calls[0].waitedMs} ms behind the run ahead`);
+    assert.deepEqual(held.audit.errors.filter((e) => String(e.step).startsWith('lighthouse')), [], 'no Lighthouse step failed');
+    await ahead;
+    assert.deepEqual(lighthouseLane(), { running: 0, waiting: 0 });
+  }));
+
+test('Analyze in a job stopped while its Lighthouse waits: ends at once, leaves the line, the run ahead goes on', () =>
+  noMemoryGate(async () => {
+    const { manager, job, ended, ahead, calls } = analyzeInJob('lane-stop', 3000);
+    const giveUp = Date.now() + 30000;
+    // Until the run ahead holds the lane and the analysis's request waits behind it (the run ahead itself waits for a moment first).
+    const analysisWaits = () => lighthouseLane().running === 1 && lighthouseLane().waiting === 1;
+    while (!analysisWaits() && Date.now() < giveUp) await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(lighthouseLane(), { running: 1, waiting: 1 }, 'the analysis waits behind the run ahead');
+    const stoppedAt = Date.now();
+    manager.stop(job.projectId);
+    const snap = await ended;
+    assert.equal(snap.status, 'failed');
+    assert.ok(Date.now() - stoppedAt < 500, 'ended at once, not after the run ahead');
+    assert.deepEqual(lighthouseLane(), { running: 1, waiting: 0 }, 'left the line; the run ahead keeps going');
+    assert.deepEqual(calls.map((c) => c.formFactor), ['mobile'], 'no retry of the stopped run and no desktop run');
+    await ahead;
+    assert.deepEqual(lighthouseLane(), { running: 0, waiting: 0 });
+  }));
