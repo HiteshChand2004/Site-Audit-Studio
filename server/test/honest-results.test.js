@@ -4,7 +4,7 @@
 // down to the backend, not to "a page not copied" or "the original's own code".
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { markOutside, OUTSIDE_GROUPS } from '../src/copy/gotWorse.js';
+import { explainWorse, markOutside, OUTSIDE_GROUPS } from '../src/copy/gotWorse.js';
 
 const row = (key, status, group, reason = null) => ({ key, status, group, reason, title: key });
 
@@ -33,4 +33,27 @@ test('markOutside: only the tool\'s own rows stay in the counts; nothing is remo
   markOutside(checklist);
   assert.deepEqual(checklist.summary, { regressed: 2, open: 1, fixed: 1, total: 9, outside: 5 }, 'idempotent');
   assert.deepEqual([...OUTSIDE_GROUPS].sort(), ['impossible', 'look', 'needs-info', 'own-code']);
+});
+
+test('a console error from the site\'s own data address is the backend (outside), not a page left out or our bug', () => {
+  const copyOrigin = 'http://127.0.0.1:50590';
+  const errors = (paths) => ({ audits: { 'errors-in-console': { score: 0, details: { items: paths.map((p) => ({ source: 'network', description: 'Failed to load resource: the server responded with a status of 404 (Not Found)', sourceLocation: { url: `${copyOrigin}${p}` } })) } } } });
+  const input = (backendPaths) => ({
+    items: [{ key: 'lighthouse.errors-in-console', status: 'regressed', title: 'Browser errors were logged to the console', before: { status: 'pass' }, after: { status: 'fail' } }],
+    siteUrl: 'https://shop.example.com/',
+    copyOrigin,
+    copyPages: ['/', '/signin.html', '/app.html'],
+    newLhr: { mobile: errors(['/api/me']), desktop: errors(['/api/me', '/api/billing']) },
+    backendPaths,
+  });
+  const [w] = explainWorse(input(['/api/me', '/api/billing'])).items;
+  assert.equal(w.reason, 'backend', w.evidence);
+  assert.equal(w.group, 'needs-info');
+  assert.match(w.evidence, /own server for data \(\/api\/me\)/);
+  const checklist = markOutside({ items: [{ ...w, status: 'regressed' }], summary: { regressed: 1 } });
+  assert.equal(checklist.items[0].outside, true);
+  assert.equal(checklist.summary.regressed, 0);
+  // Without the capture's evidence that these addresses answer with data, the same row is not put down to a backend.
+  const [plain] = explainWorse(input([])).items;
+  assert.notEqual(plain.reason, 'backend');
 });

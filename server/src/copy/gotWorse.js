@@ -56,13 +56,16 @@ const kb = (bytes) => `${Math.round(bytes / 1024)} KB`;
  * @param {object} [o.newAxe]           the copy's
  * @returns {{ items: object[], summary: { total: number, explained: number, unexplained: number, byReason: Record<string, number> } }}
  */
-export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPages = copyPages, oldLhr = {}, newLhr = {}, oldAxe = null, newAxe = null, address = null, revertedPages = [], excludedHosts = [], fixOpen = [] }) {
+export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPages = copyPages, oldLhr = {}, newLhr = {}, oldAxe = null, newAxe = null, address = null, revertedPages = [], excludedHosts = [], fixOpen = [], backendPaths = [] }) {
   const site = bareHost(new URL(siteUrl).hostname);
   const copyHost = hostOf(copyOrigin);
   const copied = new Set(copyPages.map(normPath));
   const chosen = new Set(chosenPages.map(normPath));
   // fixOpen: what the copy's own fixes left open, with why (report.asIs.fixes.open): a row they explain is not a bug.
-  const ctx = { site, copyHost, copied, chosen, oldLhr, newLhr, oldAxe, newAxe, address, revertedPages, excludedHosts, fixOpen };
+  // backendPaths: the site's own addresses that answered with data, not a file, while it was captured (report.asIs.sameOrigin:
+  // `not-an-asset`). Only the original's server can answer them; a copy of files has none, so they fail there (reason b).
+  const backend = new Set(backendPaths.map(normPath));
+  const ctx = { site, copyHost, copied, chosen, oldLhr, newLhr, oldAxe, newAxe, address, revertedPages, excludedHosts, fixOpen, backend };
   // With a new-site address, structured data the original wrote with its own address is kept as written (copy/fixAsIs.js
   // applyAddress): a structured-data row says so in plain words, whatever else explains it.
   const ldNote = fixOpen.some((o) => o.kind === 'address' && o.field === 'json-ld')
@@ -583,6 +586,7 @@ function requestPart(e, ctx) {
   const host = hostOf(e.url);
   if (host !== ctx.copyHost && host !== ctx.site) return { what, reason: 'third_party', evidence: `requests to ${host}, which is neither the copy nor the original` };
   const p = pathOf(e.url);
+  if (p && ctx.backend?.has(normPath(p))) return { what, reason: 'backend', evidence: `the page asks the site's own server for data (${p}); the original's server answers it, a copy of the site's files has no server, so the request fails` };
   if (p && !hasFileExt(p) && !ctx.copied.has(p) && !ctx.chosen.has(p)) {
     return { what, reason: 'owner', notCopied: p, evidence: 'the page loading a page that was not copied, ahead of a click' };
   }
@@ -685,6 +689,8 @@ function scorePart(item, ctx) {
     const hosts = hostsOf(urls);
     const foreign = hosts.filter((h) => h !== ctx.copyHost && h !== ctx.site);
     const what = a.title ?? id;
+    const ownData = urls.filter((u) => hostOf(u) === ctx.copyHost || hostOf(u) === ctx.site).map((u) => pathOf(u)).filter((p) => p && ctx.backend?.has(normPath(p)));
+    if (urls.length && ownData.length === urls.length) return { what, reason: 'backend', evidence: `"${what}": the page asks the site's own server for data (${[...new Set(ownData)].join(', ')}), which a copy of the site's files cannot answer` };
     if (hosts.length && foreign.length === hosts.length) return { what, reason: 'third_party', evidence: `"${what}" names only ${foreign.join(', ')}: third-party code the original loads` };
     if (CONTENT_WORDS.has(id)) return { what, reason: 'owner', evidence: `"${what}": the page gives no words to fill it from; the owner writes them` };
     if (LOOK_RULES.has(id)) return { what, reason: 'look', evidence: `"${what}": the fix changes the original's own markup, colours or widgets` };

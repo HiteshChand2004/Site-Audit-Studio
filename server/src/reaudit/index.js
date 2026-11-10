@@ -305,6 +305,8 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
       excludedHosts: Array.isArray(report.asIs?.excludedByRule) ? report.asIs.excludedByRule : [],
       // What the copy's own fixes left open and why (the page gave no words, the site states no colour).
       fixOpen: Array.isArray(report.asIs?.fixes?.open) ? report.asIs.fixes.open : [],
+      // The site's own data addresses (answered by its server while captured): a request to one fails in a copy of files.
+      backendPaths: (report.asIs?.sameOrigin?.sameAsOriginal ?? []).filter((r) => r?.reason === 'not-an-asset' && r.path).map((r) => r.path),
     });
     const byKey = new Map([...worse.items.map((w) => ['regressed', w]), ...worse.open.map((w) => ['open', w])].map(([status, w]) => [`${status} ${w.key}`, w]));
     for (const item of checklist.items) {
