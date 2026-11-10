@@ -11,6 +11,36 @@ import { AxeBuilder } from '@axe-core/playwright';
 import { applyApproved, applyToHtml, findingsOf, parseContrastMessage, proposalPictures, proposalsFrom } from '../src/copy/fixMode.js';
 import { gateVerdict, pictureRounds, viewOf } from '../src/recreate/behavior/preserve/check.js';
 import { serveCopy } from '../src/recreate/behavior/preserve/serve.js';
+import { randomUUID } from 'node:crypto';
+import express from 'express';
+import { db } from '../src/db/index.js';
+import recreateRouter from '../src/routes/recreate.js';
+import { seedProject } from './helpers/projects.js';
+
+// Fix mode is hidden from users: every address of it answers 404, and a `fixOnly` copy is never started.
+test('the Fix mode addresses answer 404 (hidden from users)', async (t) => {
+  const projectId = randomUUID();
+  const recreateId = randomUUID();
+  const SITE = 'https://www.acme-original.dev/';
+  seedProject(db, { id: projectId, name: 'fix mode off', url: SITE, stack: 'html', authorized: 1, analysis: { url: SITE } });
+  t.after(() => db.prepare('DELETE FROM projects WHERE id = ?').run(projectId));
+  const app = express();
+  app.use(express.json());
+  app.use('/api/projects', recreateRouter);
+  const server = app.listen(0, '127.0.0.1');
+  t.after(() => server.close());
+  await new Promise((r) => server.once('listening', r));
+  const base = `http://127.0.0.1:${server.address().port}/api/projects/${projectId}/recreate`;
+  assert.equal((await fetch(`${base}/${recreateId}/fix-proposals`)).status, 404);
+  assert.equal((await fetch(`${base}/${recreateId}/fix-proposals/pictures`, { method: 'POST' })).status, 404);
+  assert.equal((await fetch(`${base}/${recreateId}/fix-mode/0123456789-1440-before.png`)).status, 404);
+  const apply = await fetch(base, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ mode: 'as-is', confirmed: true, fixOnly: true, recreateId, approved: ['x'] }),
+  });
+  assert.equal(apply.status, 404);
+  assert.equal((await apply.json()).error, 'Not found.');
+});
 
 // The copy's homepage as written (CRLF, a bare attribute, single quotes: bytes a whole-page rewrite would change).
 const HOME = `<!doctype html>\r\n<html lang="en"><head><meta charset="utf-8"><title>Fix mode</title>
