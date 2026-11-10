@@ -156,7 +156,8 @@ export default function OverviewStep({ project, audit, loading, onGo }) {
   // What needs a look: the comparison's open / worse items, else the original's problems.
   const todo = cmp
     ? (cmp.items ?? [])
-        .filter((i) => i.status === 'regressed' || i.status === 'open')
+        // Rows outside what Remastly can change are not "to do" (server copy/gotWorse.js markOutside).
+        .filter((i) => !i.outside && (i.status === 'regressed' || i.status === 'open'))
         .sort((a, b) => (a.status === 'regressed' ? 0 : 1) - (b.status === 'regressed' ? 0 : 1))
         .map((i) => ({ id: i.key, tone: RESULT_STATUS[i.status]?.tone ?? 'warn', label: RESULT_STATUS[i.status]?.label ?? i.status, title: titleOf(i), detail: i.after?.detail }))
     : problemsOf(audit).rows.map((r) => ({ id: r.id, tone: SEVERITY[r.severity]?.tone ?? 'warn', label: SEVERITY[r.severity]?.label, title: r.title, detail: r.area }));

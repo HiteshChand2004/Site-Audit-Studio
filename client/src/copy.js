@@ -140,6 +140,18 @@ export const ROW_GROUPS = {
 };
 export const WORSE_UNEXPLAINED ='Unexplained: none of the five reasons fits what this run measured. This still needs a fix.';
 
+/**
+ * Rows that are not Remastly's to change (server copy/gotWorse.js OUTSIDE_GROUPS: the original's own code, a backend, the owner's
+ * information, the look, impossible). Listed in one calm, collapsed section, never as "Got worse" / "Still open", never counted
+ * at the top. "Our bug", "Fix not built yet" and "Measurement" rows stay in the main list.
+ */
+export const OUTSIDE = {
+  title: 'Outside what Remastly can change',
+  intro: 'These differ from the original or stay as they were for reasons no copy can change: they need the site’s own server, the owner’s information, or a change to how the site looks. They are not counted as got worse or still open.',
+  tag: 'Outside our control',
+  line: (n) => `${n} more ${n === 1 ? 'thing is' : 'things are'} outside what Remastly can change (see “${OUTSIDE.title}” below).`,
+};
+
 export const RESULT_STATUS = {
   fixed: { label: 'Fixed', explain: 'This was a problem on the original site and is solved in the copy.', tone: 'ok' },
   improved: { label: 'Better', explain: 'Still not perfect, but better than on the original.', tone: 'ok' },

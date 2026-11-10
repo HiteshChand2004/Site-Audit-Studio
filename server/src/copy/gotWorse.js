@@ -94,6 +94,53 @@ export const GROUPS = {
 };
 const REASON_GROUP = { owner: 'needs-info', backend: 'needs-info', third_party: 'own-code', deploy: 'measurement', look: 'look' };
 
+/**
+ * The groups that are not the tool's to change: such a row is not a "got worse" or "still open" of the copy. It is listed in one
+ * calm section of its own ("Outside what Remastly can change") and left out of the top counts. "bug" and "missing-fixer" are the
+ * tool's own; "measurement" stays in the main list until a proof shows the gap is the test.
+ */
+export const OUTSIDE_GROUPS = new Set(['needs-info', 'look', 'own-code', 'impossible']);
+// One plain sentence per row: by its first reason when it has one, else by its group.
+const OUTSIDE_WHY = {
+  backend: 'It needs the site’s own server or backend, which a copy of the site’s files does not have.',
+  owner: 'It needs information or a choice that only the site’s owner can give; the copy does not invent it.',
+  third_party: 'It comes from code the original loads from another company, which the copy keeps as it is.',
+  look: 'Changing it would change how the original looks or behaves.',
+  'own-code': 'It comes from the original’s own code, which the copy keeps exactly as it is.',
+  'needs-info': 'It needs information or a choice that only the site’s owner can give; the copy does not invent it.',
+  impossible: 'No copy of a website can do this.',
+};
+
+/**
+ * Marks the "got worse" / "still open" rows outside what the tool can change (`outside: true`, `outsideWhy`), and takes them out
+ * of the top counts: `summary.regressed` / `summary.open` then count the tool's own rows only, `summary.outside` the rest, and
+ * `checklist.outside` says how many of each status and group. Nothing is removed: every row stays in `items`. Idempotent (an
+ * older re-check is marked when it is read). Returns the checklist.
+ */
+export function markOutside(checklist) {
+  if (!checklist?.items || checklist.outside) return checklist;
+  const out = { total: 0, regressed: 0, open: 0, byGroup: {} };
+  for (const item of checklist.items) {
+    if ((item.status !== 'regressed' && item.status !== 'open') || !OUTSIDE_GROUPS.has(item.group)) continue;
+    item.outside = true;
+    const first = String(item.reason ?? '').split('+')[0];
+    item.outsideWhy = OUTSIDE_WHY[first] ?? OUTSIDE_WHY[item.group];
+    out.total++;
+    out[item.status]++;
+    out.byGroup[item.group] = (out.byGroup[item.group] ?? 0) + 1;
+  }
+  checklist.outside = out;
+  if (checklist.summary) {
+    checklist.summary = {
+      ...checklist.summary,
+      regressed: Math.max(0, (checklist.summary.regressed ?? 0) - out.regressed),
+      open: Math.max(0, (checklist.summary.open ?? 0) - out.open),
+      outside: out.total,
+    };
+  }
+  return checklist;
+}
+
 function groupOf(ex) {
   if (ex.group) return ex.group;
   if (!ex.reason) return 'bug';
