@@ -47,6 +47,31 @@ test('SEO: seeded issues are found', () => {
   assert.equal(byTitle(seo, 'HTTPS').status, 'fail'); // fixture is http://
 });
 
+test('AEO: a heading skip mended with aria-level (as-is Fix mode) passes, and the detail says the tags still skip', () => {
+  const cards = (attr) => `<h1>Engineering Gardener</h1>${['Scans twice a day', 'Ten steps'].map((t) => `<h3${attr}>${t}</h3>`).join('')}<h2>How it works</h2><h3>Scan</h3>`;
+  const one = (body, path) => {
+    const url = `http://localhost:4100${path}`;
+    const facts = extractPage(`<!doctype html><html lang="en"><head><title>T</title></head><body>${body}</body></html>`, url);
+    return { url, status: 200, facts: { ...facts, rawTextLength: facts.textLength } };
+  };
+  const row = (p) => byTitle(analyzeAeo({ pages: [p], home: p, robots: { blockedAiCrawlers: [] }, llms: { found: false }, renderedTextLength: p.facts.textLength }), 'Heading hierarchy');
+
+  const before = one(cards(''), '/');
+  assert.equal(row(before).status, 'warn');
+  assert.doesNotMatch(row(before).detail, /aria-level/);
+
+  const after = one(cards(' aria-level="2"'), '/');
+  assert.deepEqual(after.facts.headings.map((h) => [h.level, h.aria]), [[1, undefined], [3, 2], [3, 2], [2, undefined], [3, undefined]]);
+  assert.equal(row(after).status, 'pass');
+  assert.match(row(after).detail, /for screen readers.*aria-level.*tags themselves still skip/);
+  // The tag stays the level everything else reads (one h1 counted, as before).
+  assert.equal(after.facts.headings.filter((h) => h.level === 1).length, 1);
+
+  // An aria-level that does not mend it (still a skip for screen readers) is no pass; an invalid one is ignored.
+  assert.equal(row(one(cards(' aria-level="4"'), '/')).status, 'warn');
+  assert.equal(row(one(cards(' aria-level="x"'), '/')).status, 'warn');
+});
+
 test('SEO: crawl errors item', () => {
   assert.equal(crawlErrorsItem(pages).status, 'pass');
   assert.equal(crawlErrorsItem([...pages, { url: 'http://localhost:4100/x', status: 404 }]).status, 'fail');

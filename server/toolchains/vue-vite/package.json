@@ -1,0 +1,14 @@
+{
+  "name": "sas-toolchain-vue-vite",
+  "private": true,
+  "description": "Build toolchain for the Vue + Vite stack. Installed on demand: npm run setup:toolchains -w server -- vue-vite",
+  "type": "module",
+  "dependencies": {
+    "@vitejs/plugin-vue": "6.0.10",
+    "vite": "6.3.5",
+    "vue": "3.5.44"
+  },
+  "overrides": {
+    "rollup": "4.40.2"
+  }
+}

@@ -22,6 +22,7 @@
     "mail:test": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/mail-test.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0",
     "@axe-core/playwright": "^4.13.0",
     "archiver": "^8.0.0",
     "cheerio": "^1.2.0",

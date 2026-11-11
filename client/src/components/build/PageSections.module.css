@@ -1,0 +1,89 @@
+/* The plan's pages with their sections editable in place (Build mode, Review step). */
+.pages {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.page {
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.page summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  cursor: pointer;
+}
+
+.page[open] {
+  display: grid;
+  gap: var(--sp-3);
+}
+
+.meta {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.edited {
+  padding: 1px 8px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-pill);
+  background: var(--accent-tint);
+  color: var(--accent-text);
+  font-size: var(--fs-xs);
+}
+
+.sections {
+  display: grid;
+  gap: var(--sp-4);
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.section {
+  display: grid;
+  gap: 6px;
+}
+
+.sectionHead {
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.num {
+  color: var(--accent-text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+.name {
+  height: 36px;
+  font-weight: 600;
+}
+
+/* The text grows with what is written, up to a point; it lines up under the name. */
+.text {
+  height: auto;
+  min-height: 72px;
+  max-height: 360px;
+  field-sizing: content;
+  margin-left: calc(24px + var(--sp-2));
+  padding: 8px 12px;
+  color: var(--text-2);
+  line-height: var(--lh);
+  resize: vertical;
+}
+
+@media (max-width: 640px) {
+  .text {
+    margin-left: 0;
+  }
+}

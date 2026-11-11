@@ -223,3 +223,18 @@ test('the SSE stream of a live job is only reachable under the job\'s own projec
   streamJob({ params: { id: 'B' }, on() {} }, other, manager, 'j1', () => undefined);
   assert.deepEqual([other.code, other.body], [404, { error: 'Job not found.' }]);
 });
+
+test('a job whose row says it runs but no process holds it (the server restarted) is not reported as failed', () => {
+  const manager = { get: () => null };
+  const stream = (row) => {
+    const out = [];
+    const r = { status() { return r; }, json() { return r; }, set() { return r; }, flushHeaders() {}, write(s) { out.push(s); }, end() {}, on() {} };
+    streamJob({ params: { id: 'A' }, on() {} }, r, manager, 'j1', () => row);
+    return out.map((s) => s.split('\n')[0].replace('event: ', ''));
+  };
+  // Until the stale-job pass continues it, the app keeps following it (and offers no "Try again" that would start it over).
+  assert.deepEqual(stream({ id: 'j1', status: 'running', error: null }), ['progress']);
+  assert.deepEqual(stream({ id: 'j1', status: 'queued', error: null }), ['progress']);
+  assert.deepEqual(stream({ id: 'j1', status: 'failed', error: 'x' }), ['failed']);
+  assert.deepEqual(stream({ id: 'j1', status: 'done', error: null }), ['done']);
+});

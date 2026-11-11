@@ -17,7 +17,9 @@ Sidebar (mark, "All websites" home, "Add a website", search, each site's favicon
 - Preview/security: sharp (WebP screenshots), undici (fetch with connect-time SSRF check).
 - Recreate: esbuild (minifies CSS/JS of `dist/`), html-validate (standard + document presets, offline), archiver (zip streamed on demand).
 - Build toolchains are NOT server dependencies: `server/toolchains/<id>/` (own `package.json` + committed `package-lock.json`; `node_modules` gitignored), installed on demand (`npm ci` of the lockfile) with
-  `npm run setup:toolchains -w server -- <react-vite|next|mern>`: `react-vite` (vite 6.3.5, plugin-react 4.5.0, react 19.1.0), `next` (next 15.5.27, react 19.1.9), `mern` (react-vite's + express 5.2.1, compression 1.8.2, mongodb 7.7.0).
+  `npm run setup:toolchains -w server -- <react-vite|next|mern|vue-vite|astro|sveltekit>`: `react-vite` (vite 6.3.5, plugin-react 4.5.0, react 19.1.0), `next` (next 15.5.27, react 19.1.9), `mern` (react-vite's + express 5.2.1, compression 1.8.2, mongodb 7.7.0);
+  Build mode only: `vue-vite` (vue 3.5.44, plugin-vue 6.0.10, vite 6.3.5), `astro` (astro 7.4.2, vite pinned 8.3.5), `sveltekit` (kit 3.1.0, adapter-static 4.0.0, svelte 5.57.2, vite 8.3.5; SvelteKit 3: config in vite.config.js, `#lib` via package.json `imports`).
+  Build mode's "other" stack is source only (no toolchain, no build, no preview; `checkSourceProject` requires a README).
   Generated projects pin the same versions, plus `overrides: { rollup: 4.40.2 }` (Rollup 4.64's tree-shaking took 3–5 min on a React bundle), and ship a
   `package-lock.json` per package cut from the toolchain's lockfile (`toolchains/lockfile.js writeLockfiles`; installed with `npm ci`).
 - Planned: get-port, execa.

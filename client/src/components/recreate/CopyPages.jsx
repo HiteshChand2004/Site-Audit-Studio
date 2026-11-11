@@ -1,6 +1,7 @@
 import { FileText, Link2, Wrench } from 'lucide-react';
 import { Card } from '../common/Surface.jsx';
 import { plural } from '../../format.js';
+import styles from './CopyPages.module.css';
 
 // Plain words for the link decisions of the link pass (server/src/copy/linkPass.js).
 const LINK_ACTION = {
@@ -27,6 +28,8 @@ const FIX_KIND = {
 
 // How one check reads in the table: a score (visual), a count (controls, hovers), or nothing measured.
 const cell = (v) => (v == null ? '–' : typeof v === 'number' ? String(Math.round(v)) : v);
+// A look score below the original's (100) is marked, so the pages worth a look stand out.
+const score = (v) => <span className={typeof v === 'number' && v < 100 ? styles.lower : undefined}>{cell(v)}</span>;
 
 /**
  * The per-page results of "Copy my site": how each page was made, its checks, the open items, and what the link pass did.
@@ -41,18 +44,18 @@ export default function CopyPages({ copy }) {
   const linkWork = links.filter((l) => l.action !== 'ok');
   return (
     <Card icon={FileText} title="Every page" sub={`${plural(pages.length, 'page')} in ${copy.stack}. Scores: 100 is the same as the original.`}>
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+      <div className={styles.tableWrap}>
+        <table className={styles.table}>
           <thead>
             <tr>
-              <th scope="col" style={{ textAlign: 'left' }}>Page</th>
-              <th scope="col" style={{ textAlign: 'left' }}>How it was made</th>
-              <th scope="col">Look, computer</th>
-              <th scope="col">Look, phone</th>
-              <th scope="col">Controls</th>
-              <th scope="col">Hovers</th>
-              <th scope="col">Console errors</th>
-              <th scope="col" style={{ textAlign: 'left' }}>Open</th>
+              <th scope="col">Page</th>
+              <th scope="col">Made</th>
+              <th scope="col" className={styles.num}>Look, computer</th>
+              <th scope="col" className={styles.num}>Look, phone</th>
+              <th scope="col" className={styles.num}>Controls</th>
+              <th scope="col" className={styles.num}>Hovers</th>
+              <th scope="col" className={styles.num}>Console errors</th>
+              <th scope="col">Still open</th>
             </tr>
           </thead>
           <tbody>
@@ -60,14 +63,21 @@ export default function CopyPages({ copy }) {
               const mine = open.filter((o) => o.page === p.path);
               return (
                 <tr key={p.path}>
-                  <td className="mono">{p.path}</td>
-                  <td>As it is</td>
-                  <td style={{ textAlign: 'center' }}>{cell(p.visual?.[1440])}</td>
-                  <td style={{ textAlign: 'center' }}>{cell(p.visual?.[390])}</td>
-                  <td style={{ textAlign: 'center' }}>{p.controls ? `${p.controls.same} of ${p.controls.total}` : '–'}</td>
-                  <td style={{ textAlign: 'center' }}>{p.hovers ? `${p.hovers.matched} of ${p.hovers.total}` : '–'}</td>
-                  <td style={{ textAlign: 'center' }}>{p.console}</td>
-                  <td>{mine.length ? mine.map((o) => `${o.check} (${o.values})`).join('; ') : 'Nothing open'}</td>
+                  <td className={`mono ${styles.path}`}>{p.path}</td>
+                  <td className={styles.path}>As it is</td>
+                  <td className={styles.num}>{score(p.visual?.[1440])}</td>
+                  <td className={styles.num}>{score(p.visual?.[390])}</td>
+                  <td className={styles.num}>{p.controls ? `${p.controls.same} of ${p.controls.total}` : '–'}</td>
+                  <td className={styles.num}>{p.hovers ? `${p.hovers.matched} of ${p.hovers.total}` : '–'}</td>
+                  <td className={styles.num}>{p.console}</td>
+                  <td className={styles.open}>
+                    {mine.length ? mine.map((o, i) => (
+                      <div key={i} className={styles.openItem}>
+                        <strong>{o.check.charAt(0).toUpperCase() + o.check.slice(1)}</strong>
+                        {o.values && <span className={styles.openDetail}>{o.values}</span>}
+                      </div>
+                    )) : <span className={styles.none}>Nothing</span>}
+                  </td>
                 </tr>
               );
             })}
@@ -77,9 +87,9 @@ export default function CopyPages({ copy }) {
 
       {fixes && (fixes.total > 0 || fixes.reverted.length > 0) && (
         <>
-          <h3 style={{ marginTop: 16, display: 'flex', gap: 6, alignItems: 'center' }}><Wrench size={16} aria-hidden /> Fixed in the copy</h3>
-          <p>Only fixes that change nothing a visitor sees were kept; each page was compared with itself before them.</p>
-          <ul>
+          <h3 className={styles.h}><Wrench size={16} aria-hidden /> Fixed in the copy</h3>
+          <p className={styles.lead}>Only fixes that change nothing a visitor sees were kept; each page was compared with itself before them.</p>
+          <ul className={styles.list}>
             {Object.entries(fixes.counts ?? {}).map(([kind, n]) => (
               <li key={kind}>{n} × {FIX_KIND[kind] ?? kind}</li>
             ))}
@@ -97,8 +107,8 @@ export default function CopyPages({ copy }) {
 
       {linkWork.length > 0 && (
         <>
-          <h3 style={{ marginTop: 16, display: 'flex', gap: 6, alignItems: 'center' }}><Link2 size={16} aria-hidden /> Links</h3>
-          <ul>
+          <h3 className={styles.h}><Link2 size={16} aria-hidden /> Links</h3>
+          <ul className={styles.list}>
             {linkWork.map((l) => (
               <li key={l.href}>
                 <span className="mono">{l.href}</span>: {LINK_ACTION[l.action] ?? l.action}

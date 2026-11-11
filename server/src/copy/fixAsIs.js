@@ -29,6 +29,8 @@
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { statSync } from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+import sharp from 'sharp';
 import { fixAlt, fixNames } from '../recreate/fixers/a11y.js';
 import { fixAria } from '../recreate/fixers/aria.js';
 import { fitTitle, fitDescription, pathLabel, detectLang } from '../recreate/ir/seoText.js';
@@ -164,6 +166,8 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
   let icon;
   // One WebP per PNG for the whole run, however many pages show it.
   const webpMade = new Map();
+  // The site's logo card for link previews, made once (previewPicture).
+  const pictures = new Map();
 
   for (const d of docs) {
     const { $ } = d;
@@ -295,8 +299,8 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
       fixes.push({ kind: 'head', field: prop, value, source });
     };
     // (Its fixes go into this page's list in the order they are made, the og:title / og:description between them as before.)
-    const { own } = applyAddress($, d, {
-      dir, siteHost, newOrigin, byPath, allow: allow('head:meta'), fixes, open,
+    const { own } = await applyAddress($, d, {
+      dir, siteHost, newOrigin, byPath, allow: allow('head:meta'), fixes, open, pictures,
       between: () => {
         og('og:title', finalTitle, 'the page title');
         og('og:description', finalDescription, 'the page description');
@@ -401,17 +405,20 @@ export const ADDRESS_TAGS = [
  *   - a canonical / og:url naming one of the copy's pages on the original's host moves to that page on the new site;
  *   - an og:image / twitter:image naming the original's host moves to the new site when the copy holds that very file (a picture
  *     the copy does not hold, or one given without a full address, is left as it is and listed);
- *   - a missing canonical and og:url are added (the page on the new site); a missing og:image is listed, never made up;
+ *   - a missing canonical and og:url are added (the page on the new site); a missing og:image is the original's own picture
+ *     (previewPicture: a large image the page shows, else the site's logo on a 1200 × 630 card; marked for review), listed when
+ *     the site has neither;
  *   - structured data (JSON-LD) that names the original's address is kept as the original wrote it, and listed.
  * Nothing else is touched. Without an address (`newOrigin` null) nothing is written or listed.
  * @param {import('cheerio').CheerioAPI} $  the page
  * @param {{ path: string, outPath: string }} page
  * @param {{ dir: string, siteHost: string, newOrigin: string|null, byPath: Map<string, string>, allow?: boolean, fixes?: object[],
- *   open?: object[], between?: () => void }} o  `between` runs after the moves and before og:url is added (the full stage puts
- *   og:title / og:description there, as it always has); `fixes` / `open` are the page's lists, appended to in order
- * @returns {{ own: string|null, fixes: object[], open: object[] }}  own: the page's address on the new site
+ *   open?: object[], between?: () => void, pictures?: Map<string, object|null> }} o  `between` runs after the moves and before
+ *   og:url is added (the full stage puts og:title / og:description there, as it always has); `fixes` / `open` are the page's
+ *   lists, appended to in order; `pictures`: one per run, so the logo card is made once for the site
+ * @returns {Promise<{ own: string|null, fixes: object[], open: object[] }>}  own: the page's address on the new site
  */
-export function applyAddress($, page, { dir, siteHost, newOrigin, byPath, allow = true, fixes = [], open = [], between = null }) {
+export async function applyAddress($, page, { dir, siteHost, newOrigin, byPath, allow = true, fixes = [], open = [], between = null, pictures = new Map() }) {
   const head = $('head');
   const own = newOrigin ? new URL(page.path, newOrigin).href : null;
   const canonical = $('link[rel="canonical"]').first();
@@ -458,7 +465,15 @@ export function applyAddress($, page, { dir, siteHost, newOrigin, byPath, allow 
   }
   if (newOrigin && allow) {
     if (!$('meta[property="og:image"]').length) {
-      open.push({ kind: 'address', field: 'og:image', page: page.path, reason: 'c', detail: 'The page has no og:image (the picture a link preview shows). None is made up: the owner chooses one' });
+      const picture = await previewPicture($, page, { dir, siteHost, pictures });
+      if (picture) {
+        const value = new URL(picture.file, `${newOrigin}/`).href;
+        head.append('<meta property="og:image" content="">');
+        head.find('meta[property="og:image"]').last().attr('content', value);
+        fixes.push({ kind: 'head', field: 'og:image', value, source: picture.source, review: true, ...(picture.made && { file: picture.file }) });
+      } else {
+        open.push({ kind: 'address', field: 'og:image', page: page.path, reason: 'c', detail: 'The page has no og:image (the picture a link preview shows), and it shows no large picture and the site no logo the copy holds: the owner chooses one' });
+      }
     }
     const named = $('script[type="application/ld+json"]').toArray().some((s) => namesOriginal($(s).text(), siteHost, true));
     if (named) {
@@ -503,6 +518,127 @@ function movedFileToNewSite(value, siteHost, newOrigin, dir) {
     return null;
   }
   return new URL(`${u.pathname}${u.search}`, newOrigin).href;
+}
+
+// Link-preview pictures (og:image): only what the original itself shows. Facebook's smallest picture is 200 × 200; the card is
+// the 1200 × 630 size every network shows in full.
+const PREVIEW_MIN = 200;
+const CARD = { width: 1200, height: 630, logo: 360 };
+const RASTER = /\.(png|jpe?g|webp|gif)$/i;
+
+/** The file of the copy a src / href names (from the page, or a full address on the original's host), or null. */
+function heldFile(src, page, dir, siteHost) {
+  const value = clean(src);
+  if (!value || /^data:/i.test(value)) return null;
+  try {
+    const u = new URL(value, `http://copy.local/${page.outPath}`);
+    if (u.origin !== 'http://copy.local' && !(/^https?:$/.test(u.protocol) && bareHost(u.hostname) === siteHost)) return null;
+    const rel = decodeURIComponent(u.pathname).replace(/^\/+/, '');
+    const file = path.resolve(dir, rel);
+    if (!rel || !file.startsWith(path.resolve(dir) + path.sep) || !statSync(file).isFile()) return null;
+    return path.relative(dir, file).split(path.sep).join('/');
+  } catch {
+    return null;
+  }
+}
+
+/** Every address an <img> may load: its src, then its srcset's candidates widest first. */
+function imageSources($, img) {
+  const set = clean($(img).attr('srcset')).split(/,\s+/).map((c) => c.trim().split(/\s+/)).filter((c) => c[0])
+    .sort((a, b) => (parseFloat(b[1]) || 0) - (parseFloat(a[1]) || 0)).map((c) => c[0]);
+  return [$(img).attr('src'), ...set];
+}
+
+/**
+ * The picture a link preview of this page shows, from the original only (null when it has none):
+ *   1. the first image the page shows that the copy holds, raster and at least 200 × 200 — used as it is;
+ *   2. else the site's logo — the image or drawn <svg> in a link to the homepage, else anything named "logo", else the site's own
+ *      icon (never the letter icon the copy made) — centred on a 1200 × 630 card written into the copy once for the run.
+ * A drawn logo that paints in `currentColor` is painted in the page's theme-color (else near-black): the colour the header gave
+ * it is not in the file, so the card is marked for review like every picture chosen here.
+ * @returns {Promise<{ file: string, source: string, made?: boolean }|null>}  file: from the copy's root
+ */
+async function previewPicture($, page, { dir, siteHost, pictures }) {
+  for (const img of $('body img').toArray()) {
+    for (const src of imageSources($, img)) {
+      const file = heldFile(src, page, dir, siteHost);
+      if (!file || !RASTER.test(file)) continue;
+      const meta = await sharp(path.join(dir, file)).metadata().catch(() => null);
+      if (meta?.width >= PREVIEW_MIN && meta?.height >= PREVIEW_MIN) return { file, source: 'a picture the page itself shows' };
+    }
+  }
+  if (!pictures.has('logo')) pictures.set('logo', await logoCard($, page, dir, siteHost));
+  return pictures.get('logo');
+}
+
+/** The site's logo on a 1200 × 630 card, written into the copy (null when the site has no logo the copy holds). */
+async function logoCard($, page, dir, siteHost) {
+  const colour = hexColor($('meta[name="theme-color"]').attr('content') ?? '') ?? '#111827';
+  const fromSvg = (el) => {
+    if ($(el).find('use').length) return null; // draws a symbol defined elsewhere in the page
+    const svg = $.html(el).replace(/currentColor/gi, colour);
+    return Buffer.from(/\sxmlns=/.test(svg.slice(0, svg.indexOf('>'))) ? svg : svg.replace(/^<svg/i, '<svg xmlns="http://www.w3.org/2000/svg"'));
+  };
+  const fromImg = (el) => {
+    const file = imageSources($, el).map((src) => heldFile(src, page, dir, siteHost)).find((f) => f && (RASTER.test(f) || /\.svg$/i.test(f)));
+    return file ? readFile(path.join(dir, file)).catch(() => null) : null;
+  };
+  const isHome = (a) => {
+    const href = clean($(a).attr('href'));
+    if (!href || href.startsWith('#')) return false;
+    try {
+      const u = new URL(href, `http://copy.local/${page.outPath}`);
+      const own = u.origin === 'http://copy.local' || bareHost(u.hostname) === siteHost;
+      return own && /^\/(index\.html?)?$/i.test(u.pathname);
+    } catch {
+      return false;
+    }
+  };
+  const candidates = [
+    ...$('a[href]').toArray().filter(isHome).map((a) => $(a).find('img, svg').first()).filter((el) => el.length).map((el) => [el[0], 'the site\'s logo (in its link to the homepage)']),
+    ...$('img[src*="logo" i], img[alt*="logo" i], img[class*="logo" i], svg[class*="logo" i], [class*="logo" i] img, [class*="logo" i] svg, [id*="logo" i] img, [id*="logo" i] svg')
+      .toArray().map((el) => [el, 'the site\'s logo']),
+    ...$('link[rel="apple-touch-icon" i], link[rel~="icon" i]').toArray()
+      .filter((l) => !/favicon-generated/.test($(l).attr('href') ?? '')).map((el) => [el, 'the site\'s own icon']),
+  ];
+  for (const [el, source] of candidates) {
+    const tag = el.tagName?.toLowerCase();
+    const bytes = tag === 'svg' ? fromSvg(el) : await (tag === 'link' ? (() => {
+      const file = heldFile($(el).attr('href'), page, dir, siteHost);
+      return file && !/\.ico$/i.test(file) ? readFile(path.join(dir, file)).catch(() => null) : null;
+    })() : fromImg(el));
+    const card = bytes && await cardOf(bytes).catch(() => null);
+    if (!card) continue;
+    const file = `images/og-image-${createHash('sha256').update(card).digest('hex').slice(0, 10)}.png`;
+    await mkdir(path.join(dir, 'images'), { recursive: true });
+    await writeFile(path.join(dir, file), card);
+    return { file, source: `${source}, on a 1200 × 630 card`, made: true };
+  }
+  return null;
+}
+
+/** A logo (raster or SVG bytes) centred on a 1200 × 630 card; a light logo goes on a dark card. Null when it paints nothing. */
+async function cardOf(bytes) {
+  const meta = await sharp(bytes).metadata();
+  if (!meta.width || !meta.height) return null;
+  // An SVG is drawn at the size it ends at (sharp draws it at 72 dpi unless told), a raster is never enlarged past twice its size.
+  const scale = CARD.logo / Math.max(meta.width, meta.height);
+  const input = meta.format === 'svg' ? sharp(bytes, { density: Math.min(2400, Math.max(1, 72 * scale)) }) : sharp(bytes);
+  const size = meta.format === 'svg' ? CARD.logo : Math.min(CARD.logo, Math.round(Math.max(meta.width, meta.height) * 2));
+  const { data, info } = await input.resize(size, size, { fit: 'inside' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  let painted = 0;
+  let light = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 128) continue;
+    painted++;
+    if (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2] > 220) light++;
+  }
+  if (painted < 20) return null;
+  // Dark only for a logo drawn light on nothing (a solid picture keeps its own background on white).
+  const dark = painted < info.width * info.height && light > painted / 2;
+  const logo = await sharp(data, { raw: info }).png().toBuffer();
+  return sharp({ create: { width: CARD.width, height: CARD.height, channels: 3, background: dark ? '#111827' : '#ffffff' } })
+    .composite([{ input: logo, gravity: 'center' }]).png().toBuffer();
 }
 
 /** A canonical / og:url on the original's host, as the same page on the new site; null when it names something else. */

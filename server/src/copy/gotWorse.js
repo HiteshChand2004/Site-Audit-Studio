@@ -463,14 +463,14 @@ function openAnalyzer(item, id, part, ctx) {
       return unexplained(`${detail} The copy writes a missing or duplicated ${id === 'title-tag' ? 'title' : 'description'} from the page itself, and this one is still open: a fix still owed.`);
     case 'canonical-url':
     case 'open-graph-tags':
-      if (noAddress && (id === 'canonical-url' || /og:url/.test(detail))) return owner(`No new-site address was given for this copy (${ctx.address?.detail ?? 'none set'}), so nothing in it names an address; give one and the copy writes these.`);
-      if (/og:image/.test(detail)) return owner('A link-preview picture is a brand choice; the copy adds no picture of its own.');
+      if (noAddress && (id === 'canonical-url' || /og:url|og:image/.test(detail))) return owner(`No new-site address was given for this copy (${ctx.address?.detail ?? 'none set'}), so nothing in it names an address; give one and the copy writes these.`);
+      if (/og:image/.test(detail)) return owner('The page shows no large picture and the site has no logo the copy holds, so there is nothing of the site\'s own to show in a link preview: the owner chooses one.');
       if (ctx.revertedPages.length) return look(reverted.trim());
       return unexplained(`${detail} The copy fills a missing canonical, og:title and og:description from the page; this is still open: a fix still owed.`);
     case 'headings':
       return look('Heading tags carry the site\'s own styles and scripts; changing which element is the <h1> changes the page\'s look.');
     case 'heading-hierarchy':
-      return look('Heading levels carry the site\'s own styles; renumbering them changes the page\'s look.');
+      return look('Heading levels carry the site\'s own styles; renumbering them changes the page\'s look. Fix mode gives a skipped heading its level for screen readers (aria-level) without changing its tag, and this row counts that once it is approved.');
     case 'image-alt-text':
       return contentWords(item, 'image-alt');
     case 'language':

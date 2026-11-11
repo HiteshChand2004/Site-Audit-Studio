@@ -19,6 +19,21 @@ function liftedOk(rel, content) {
 }
 
 const VITE_BUNDLE = /^\/_app\/[\w.-]+\.js$/;
+const ASTRO_BUNDLE = /^\/_astro\/[\w.-]+\.js$/;
+// SvelteKit's bundles, linked relative to the page (./_app/…, ../_app/…), and the one inline script it starts every page
+// with: the app's base taken from the page's own address, then its two entry bundles imported and started with the page's
+// nodes. Held to that exact shape (a site without load functions has no data: every node's is null).
+const SVELTEKIT_BUNDLE = /^(\.\.?\/)+_app\/immutable\/[\w./-]+\.js$/;
+const SVELTEKIT_REL = '(?:\\.\\.?\\/)+_app\\/immutable\\/entry\\/';
+const SVELTEKIT_BOOT = new RegExp([
+  '^\\{', '__sveltekit_(\\w+)=\\{base:newURL\\("\\.(?:\\.(?:\\/\\.\\.)*)?",location\\)\\.pathname\\.slice\\(0,-1\\),version:"\\d+"\\};',
+  'constelement=document\\.currentScript\\.parentElement;',
+  `import\\("${SVELTEKIT_REL}start\\.[\\w-]+\\.js"\\)\\.then\\(async\\(kit\\)=>\\{kit\\.init\\(__sveltekit_\\1\\);`,
+  `constapp=awaitimport\\("${SVELTEKIT_REL}app\\.[\\w-]+\\.js"\\);`,
+  'kit\\.start\\(app,element,\\{node_ids:\\[\\d+(?:,\\d+)*\\],data:\\[null(?:,null)*\\],form:null,error:null\\}\\);\\}\\);\\}$',
+].join(''));
+/** SvelteKit's start-up script, with white space removed (the shape is checked, not the formatting). */
+const svelteKitBoot = (/** @type {string} */ text) => SVELTEKIT_BOOT.test(text.replace(/\s+/g, ''));
 const NEXT_BUNDLE = /^\/_next\/static\/[\w./()%@~-]+\.js$/;
 // (self.__next_f = self.__next_f || []).push([...])  /  self.__next_f.push([...])
 const NEXT_PUSH = /^\s*(?:\(\s*self\.__next_f\s*=\s*self\.__next_f\s*\|\|\s*\[\]\s*\)|self\.__next_f)\.push\(([\s\S]*)\)\s*;?\s*$/;
@@ -42,7 +57,33 @@ const ANIM_FILE = /^js\/(((anim|appear)-replay|lottie-play)\.js|(anim|appear|lot
 // The app stacks (React + Vite, Next.js, MERN) serve the same file from the site root, and may carry it next to their bundles.
 const MOTION_ROOT = '/js/motion.js';
 
+// A site written by build mode's agent (buildmode/agent.js): its own scripts, as local files under js/ loaded by <script src>
+// (deferred or as modules), never inline, never from another origin; every one sink-scanned like the stacks' bundles.
+const BUILT_SCRIPT = /^(\/|(\.\.\/)*)js\/[\w-]+(\/[\w-]+)*\.m?js$/;
+
 export const APP_PROFILES = {
+  // Astro (Build mode): the site's own <script>s, bundled into /_astro/ files; nothing inline.
+  astro: {
+    bundleLink: ASTRO_BUNDLE,
+    scriptAllowed: ({ src, type, text }) => !text.trim() && type === 'module' && ASTRO_BUNDLE.test(src ?? ''),
+    jsAllow: [],
+    contentChunk: () => false,
+  },
+  sveltekit: {
+    bundleLink: SVELTEKIT_BUNDLE,
+    scriptAllowed: ({ src, type, text }) => !src && !type && svelteKitBoot(text),
+    // SvelteKit's client router loads the site's own pages' data with fetch(), like Next's. The site's own code is held to
+    // no fetch before it is built (buildmode/project.js checkSource), so a fetch in the bundles is the framework's.
+    jsAllow: ['fetch()'],
+    contentChunk: () => false,
+  },
+  built: {
+    bundleLink: BUILT_SCRIPT,
+    scriptAllowed: ({ src, type, text }) => !text.trim() && (!type || type === 'module' || type === 'text/javascript') && BUILT_SCRIPT.test(src ?? ''),
+    jsAllow: [],
+    contentChunk: () => false,
+    onlyFile: (rel) => /^js\/[\w-]+(\/[\w-]+)*\.m?js$/.test(rel),
+  },
   motion: {
     bundleLink: /$^/,
     scriptAllowed: ({ src, type, text }) => !type && (MOTION_SCRIPT.test(src ?? '') || ANIM_SCRIPT.test(src ?? '') || LIFT_SCRIPT.test(src ?? '')) && !text.trim(),

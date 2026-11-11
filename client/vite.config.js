@@ -30,6 +30,8 @@ export default defineConfig({
       '/api': 'http://127.0.0.1:4000',
       // The previews of copies: served by the API under the app's own address (server/src/recreate/previewRoute.js).
       '/preview': 'http://127.0.0.1:4000',
+      // Built sites shared with a link (Build mode's "Publish"): served by the API the same way (server/src/buildmode/publish.js).
+      '/sites': 'http://127.0.0.1:4000',
     },
   },
 });

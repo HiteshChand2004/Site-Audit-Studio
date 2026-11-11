@@ -147,7 +147,7 @@ test('on the same noisy page, a fix that changes nothing visible is kept', { tim
   assert.equal(g.width, null, 'no width failed');
 });
 
-test('a fix that shows only on a phone is caught at 375 px and undone; the computer width is not rendered', { timeout: 5 * 60000 }, async (t) => {
+test('a fix that shows only on a phone is caught at 375 px and undone (both widths pictured at once, 375 px decides)', { timeout: 5 * 60000 }, async (t) => {
   const html = `${stated('img{display:block;width:40px;height:40px}@media (max-width:600px){img[alt]{width:320px;height:160px}}')}<body>
     <h1>Gallery</h1><p>${ENGLISH}</p>${IMG}<p>Text under the picture.</p></body></html>`;
   const dir = await copyOf(t, html, withImage);
@@ -156,7 +156,7 @@ test('a fix that shows only on a phone is caught at 375 px and undone; the compu
   assert.deepEqual([...new Set(page.fixes.map((f) => f.kind))], ['alt'], 'the image is the only thing to fix');
   assert.equal(r.gate.length, 1, 'one group: no retry');
   assert.equal(r.gate[0].width, 375, JSON.stringify(r.gate[0]));
-  assert.deepEqual(r.gate[0].views.map((v) => v.width), [375], 'a change at 375 px decides');
+  assert.deepEqual(r.gate[0].views.map((v) => [v.width, v.invisible]), [[375, false], [1440, true]], 'a change at 375 px decides; 1440 px is pictured beside it');
   assert.equal(page.reverted?.reason, 'd');
   assert.match(page.reverted.why, /at 375 px/);
   assert.deepEqual(page.dropped.map((d) => d.group), ['alt']);

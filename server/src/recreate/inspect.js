@@ -7,6 +7,7 @@ import { launchBrowser, renderHtml } from '../audit/render.js';
 import { auditDir } from '../config/paths.js';
 import { maxParallel, PAGE_MB, parallelism, workCpus } from '../audit/resources.js';
 import { createSharedCache, sharedCacheEnabled } from '../audit/sharedCache.js';
+import { shareClicksEnabled } from './capture/clicks.js';
 import { startEgressProxy } from '../security/egressProxy.js';
 import { capturePage, networkDir } from './capture/index.js';
 import { discoverPages, NOT_FOUND_STATUS, probeNotFound, SKIP_LABELS } from './discover.js';
@@ -78,15 +79,22 @@ const PAGE_CAP_FACTOR = 3;
 // so a second and third page fill otherwise idle time. Kept low: the probes measure timing (transitions, autoplay, reveals) and
 // must not be starved of CPU.
 export const CAPTURE_PAGES_MAX = 3;
-// CPU threads per page captured at once (a page's views + its probes keep about this many busy at their peak).
-const CPUS_PER_PAGE = 4;
+// CPU threads per page captured at once. A page's capture mostly waits on the site (scrolling step by step, watching what changes
+// by itself, letting transitions end): measured on a 10-thread Mac (2026-11-10), two jobs capturing and checking side by side
+// kept 1–2.7 threads busy in all. At 4 a job sharing the machine with one other (5 threads) captured one page at a time: 20 pages
+// of predco.ai in 51 min.
+const CPUS_PER_PAGE = 2;
+// A job with this few threads still captures one page at a time (a 2–4-thread laptop: the probes measure timing and must not be
+// starved of CPU).
+const SMALL_SHARE_CPUS = 4;
 
 /**
  * How many pages the inspect step captures at once.
  * - SAS_CAPTURE_PAGES (1–8) fixes it; 1 = one page at a time, exactly the behaviour before page-level concurrency.
  * - SAS_MAX_PARALLEL (the cap on browser contexts, audit/resources.js) allows floor(cap / views) pages, at least 1.
  * - Else: up to CAPTURE_PAGES_MAX, one page per CPUS_PER_PAGE threads, and only as many as the free memory holds
- *   (a page = one context per view). A 2–4-thread or short-of-memory machine captures one page at a time, as before.
+ *   (a page = one context per view). A job with 2–4 threads (its share of the machine) or short of memory captures one page at a
+ *   time, as before.
  * Free memory is checked again before every extra page starts (roomForAnotherPage), so a machine that runs short mid-step
  * falls back to fewer pages at once.
  * @param {{ env?: object, free?: number, cpus?: number }} [o]  overrides (tests)
@@ -99,7 +107,7 @@ export function capturePagesAtOnce({ env = process.env, free, cpus = workCpus(),
   if (env.SAS_CAPTURE_PAGES !== undefined && env.SAS_CAPTURE_PAGES !== '' && Number.isInteger(forced) && forced >= 1 && forced <= 8) return forced;
   const cap = maxParallel(env);
   if (cap !== Infinity) return Math.max(1, Math.floor(cap / perPage));
-  const byCpu = Math.max(1, Math.floor(cpus / CPUS_PER_PAGE));
+  const byCpu = cpus <= SMALL_SHARE_CPUS ? 1 : Math.max(1, Math.floor(cpus / CPUS_PER_PAGE));
   const byMemory = parallelism({ perUnitMB: PAGE_MB * perPage, max: CAPTURE_PAGES_MAX, min: 1, cap: Infinity, ...(free !== undefined && { free }) });
   return Math.max(1, Math.min(CAPTURE_PAGES_MAX, byCpu, byMemory));
 }
@@ -174,6 +182,8 @@ export async function inspectStage(ctx) {
   };
   ctx.defer(closeBrowser);
 
+  // One record per job of what the controls of shared parts did (capture/clicks.js), unless switched off.
+  if (ctx.clickShare === undefined) ctx.clickShare = shareClicksEnabled() ? new Map() : null;
   // One cache of static files for every browser context of the job: the views of a page, the next pages, and the sweep
   // of the original at more widths (which runs after this step) load a stylesheet, script, image or font once.
   // It is also the job's one network recorder: every response of the original is kept in capture/.network/ (the
@@ -299,6 +309,8 @@ export async function inspectStage(ctx) {
         motionBudgetMs: share(MOTION_BUDGET, MOTION_BUDGET_MIN, MOTION_BUDGET),
         clickBudgetMs: share(CLICK_BUDGET, CLICK_BUDGET_MIN, MOTION_BUDGET + CLICK_BUDGET),
         cache: ctx.netCache,
+        // What the controls of parts every page shares (header, footer, cookie banner) did on an earlier page (capture/clicks.js).
+        clickShare: ctx.clickShare,
         // A run with no time limit tries a view that failed or timed out more often (capture/index.js).
         patient: Boolean(ctx.unlimited),
         // An exact copy is measured pixel for pixel, so the capture keeps what the normal one trades away.

@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import * as cheerio from 'cheerio';
+import sharp from 'sharp';
 import { addressPass } from '../src/copy/addressPass.js';
 import { fixAsIsCopy } from '../src/copy/fixAsIs.js';
 import { ADDRESS_FIELDS, HEAD_META_FIELDS, fixGroup, fixOf } from '../src/copy/fixRegistry.js';
@@ -101,7 +102,7 @@ test('the address is written into the head tags and site files that name one; no
     assert.deepEqual(open, ['/ json-ld', '/ twitter:image', '/about og:image', '/contact og:image']);
     assert.ok(r.open.every((o) => o.reason === 'c' && o.kind === 'address'));
     assert.match(r.open.find((o) => o.field === 'json-ld').detail, /still names the original site's address/);
-    assert.match(r.open.find((o) => o.page === '/contact').detail, /None is made up/);
+    assert.match(r.open.find((o) => o.page === '/contact').detail, /no large picture and the site no logo/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -175,4 +176,51 @@ test('registry: address fixes need an address, and a moved picture is a head tag
   for (const f of ADDRESS_FIELDS) assert.ok(HEAD_META_FIELDS.has(f), f);
   assert.equal(fixGroup({ kind: 'address', field: 'og:image' }), 'head:meta');
   assert.equal(fixGroup({ kind: 'address', field: 'twitter:image' }), 'head:meta');
+});
+
+test('a missing og:image is the original\'s own picture: a large image the page shows, else its logo on a card', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'sas-addr-og-'));
+  const copy = path.join(dir, 'copy');
+  const out = path.join(dir, 'out');
+  const logo = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M7 20h10"></path><path d="M12 20V6"></path></svg>';
+  const pages = [
+    { path: '/', outPath: 'index.html', url: SITE },
+    { path: '/team', outPath: 'team.html', url: `${SITE}team` },
+  ];
+  try {
+    await mkdir(path.join(copy, 'img'), { recursive: true });
+    const photo = (w, h) => sharp({ create: { width: w, height: h, channels: 3, background: '#3a7' } }).png().toBuffer();
+    await writeFile(path.join(copy, 'img', 'tiny.png'), await photo(40, 40));
+    await writeFile(path.join(copy, 'img', 'team.png'), await photo(800, 400));
+    const header = `<header><a href="/" aria-label="Acme, home">${logo}</a><a href="#how">How</a></header>`;
+    await writeFile(path.join(copy, 'index.html'), page('<title>Acme tools for builders</title><meta name="theme-color" content="#16a34a">',
+      `${header}<h1>Acme</h1><img src="img/tiny.png" alt="">`));
+    await writeFile(path.join(copy, 'team.html'), page('<title>The Acme team</title>', `${header}<img src="/img/tiny.png" alt=""><img src="img/team.png" alt="The team">`));
+
+    const r = await addressPass({ fromDir: copy, dir: out, pages, siteUrl: SITE, newSiteUrl: NEW });
+    assert.equal(r.ok, true, r.why);
+    const og = (p) => r.pages.find((x) => x.path === p).fixes.find((f) => f.field === 'og:image');
+    // The team page shows a large picture: that very file, nothing made.
+    assert.equal(og('/team').value, `${NEW}/img/team.png`);
+    assert.equal(og('/team').file, undefined);
+    assert.equal(og('/team').review, true);
+    // The homepage shows only a small one: the logo of its link to the homepage, on a 1200 × 630 card, in the theme colour.
+    const card = og('/');
+    assert.match(card.value, new RegExp(`^${NEW}/images/og-image-[0-9a-f]{10}\\.png$`));
+    assert.match(card.source, /logo \(in its link to the homepage\)/);
+    assert.equal(card.review, true);
+    const { data, info } = await sharp(path.join(out, card.file)).raw().toBuffer({ resolveWithObject: true });
+    assert.deepEqual([info.width, info.height], [1200, 630]);
+    const at = (x, y) => [...data.subarray((y * info.width + x) * info.channels, (y * info.width + x) * info.channels + 3)];
+    assert.deepEqual(at(5, 5), [255, 255, 255], 'a white card');
+    let green = 0;
+    for (let i = 0; i < data.length; i += info.channels) if (data[i] === 0x16 && data[i + 1] === 0xa3 && data[i + 2] === 0x4a) green++;
+    assert.ok(green > 1000, 'the logo is drawn in the page\'s theme colour');
+    assert.equal(cheerio.load(await readFile(path.join(out, 'index.html'), 'utf8'))('meta[property="og:image"]').attr('content'), card.value);
+    assert.equal(r.open.filter((o) => o.field === 'og:image').length, 0);
+    // The finished copy is untouched: the card is made in the addressed folder only.
+    assert.deepEqual((await readdir(copy)).sort(), ['img', 'index.html', 'team.html']);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

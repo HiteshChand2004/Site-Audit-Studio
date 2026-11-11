@@ -152,18 +152,21 @@ export function rewriteFile({ ext, text, prefix, dir, scripts, shim = true }) {
 /**
  * The router, mounted at PREVIEW_PREFIX. Needs no session: the token is the permission (previewTokens.js).
  * `shim: false` serves pages without the run-time shim (to measure what it does; never the product's setting).
- * @param {{ frameAncestors?: string[], inlineScriptHashes?: (html: string) => string[], shim?: boolean }} [o]
+ * `resolve` / `pathOf` / `missing`: the same router for another set of folders (a built site shared with a link,
+ * buildmode/publish.js, mounted at /sites): what a token serves, the public path of its root, the not-found text.
+ * @param {{ frameAncestors?: string[], inlineScriptHashes?: (html: string) => string[], shim?: boolean,
+ *   resolve?: (token: string) => any, pathOf?: (token: string) => string, missing?: string }} [o]
  */
-export function previewRouter({ frameAncestors, inlineScriptHashes = () => [], shim = true } = {}) {
+export function previewRouter({ frameAncestors, inlineScriptHashes = () => [], shim = true, resolve = resolvePreviewToken, pathOf = previewPath, missing = 'No such preview (it may have been stopped).' } = {}) {
   const router = express.Router();
   router.use('/:token', async (req, res) => {
     // A text answer of the preview's own (a 404 for a file the copy lacks) is readable from the sealed frame like a real
     // host's, so the site's script sees the status it would see anywhere, not a network error.
     const send = (status, text, extra = {}) => res.status(status).set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Access-Control-Allow-Origin': '*', ...extra }).type('text/plain').send(text);
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(405, 'Method not allowed', { Allow: 'GET, HEAD' });
-    const entry = resolvePreviewToken(req.params.token);
-    if (!entry) return send(404, 'No such preview (it may have been stopped).');
-    const prefix = previewPath(req.params.token);
+    const entry = await resolve(req.params.token);
+    if (!entry) return send(404, missing);
+    const prefix = pathOf(req.params.token);
     let raw;
     let pathname;
     try {

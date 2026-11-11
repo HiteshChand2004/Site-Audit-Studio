@@ -1,0 +1,111 @@
+/* Build mode: the owner's details and their photos and logo (BusinessDetails.jsx). */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3) var(--sp-4);
+}
+
+.wide {
+  grid-column: 1 / -1;
+}
+
+.area {
+  height: auto;
+  padding: 10px 14px;
+  line-height: var(--lh);
+  resize: vertical;
+}
+
+.problem {
+  color: var(--bad);
+  font-size: var(--fs-sm);
+}
+
+.photos {
+  display: grid;
+  gap: var(--sp-4);
+}
+
+.group {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.groupHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tile {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.thumb {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  object-fit: cover;
+}
+
+.alt {
+  min-width: 0;
+}
+
+.alt input {
+  width: 100%;
+}
+
+.pending {
+  grid-template-columns: auto 1fr;
+  min-height: 82px;
+  border-style: dashed;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.spin {
+  animation: sas-spin 900ms linear infinite;
+}
+
+.note {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.problems {
+  margin: 0;
+  padding-left: 1.1em;
+}
+
+@media (max-width: 720px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}

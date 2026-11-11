@@ -157,7 +157,7 @@ export async function settle(page, view, cap, { observe = false } = {}) {
   return { ...stats, scrolled: max };
 }
 
-async function captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs = 0, clickBudgetMs = 0, cache = null, exact = false, document = null, preserve = false }) {
+async function captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs = 0, clickBudgetMs = 0, cache = null, exact = false, document = null, preserve = false, clickShare = null }) {
   const context = await browser.newContext({
     viewport: { width: view.width, height: view.height },
     deviceScaleFactor: view.dpr,
@@ -360,7 +360,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
     // finds there (ir/motion.js, by that view's snapshot paths).
     if (!exact && NARROW_CLICK_VIEWS.includes(view.id) && clickBudgetMs > 0) {
       try {
-        const clicks = await captureClicks(page, { budgetMs: NARROW_CLICK_BUDGET_MS, limit: 8 });
+        const clicks = await captureClicks(page, { budgetMs: NARROW_CLICK_BUDGET_MS, limit: 8, shared: clickShare, view: view.id });
         await writeFile(path.join(dir, `${view.id}-clicks.json`), JSON.stringify({ version: 1, view: view.id, clicks }));
       } catch {
         // the probe of a narrow view never fails a capture
@@ -401,7 +401,7 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       let clicksError = null;
       if (clickBudgetMs > 0) {
         try {
-          found.clicks = await captureClicks(page, { budgetMs: clickBudgetMs });
+          found.clicks = await captureClicks(page, { budgetMs: clickBudgetMs, shared: clickShare, view: view.id });
           // The other states of tabs, carousels and filtered lists, onto the page snapshot (capture/states.js), and short
           // messages a click shows for a moment (capture/notices.js), side by side: both only need the click probe's result;
           // the notices are read in a fresh context of their own (a first visit), never from this page, and write only
@@ -538,9 +538,10 @@ export function dataFailures(resources = [], failed = []) {
  * @param {import('playwright').Browser} browser
  * @param {{ url: string, slug: string }} pageInfo  an entry from discoverPages()
  * @param {string} workspace  the recreate workspace folder
- * @param {{ timeout?: number, motionBudgetMs?: number, clickBudgetMs?: number, cache?: object, patient?: boolean }} [o]
+ * @param {{ timeout?: number, motionBudgetMs?: number, clickBudgetMs?: number, cache?: object, patient?: boolean, clickShare?: Map<string, object>|null }} [o]
  *   cache: the job's shared cache of static files (audit/sharedCache.js); patient: a run with no time limit, which tries a
- *   view that failed more often and also tries one that timed out (there is no remaining time for it to cost)
+ *   view that failed more often and also tries one that timed out (there is no remaining time for it to cost); clickShare:
+ *   the job's record of what the controls of shared parts did (capture/clicks.js captureClicks `shared`)
  * @returns {Promise<{ views: Record<string, object>, errors: { view: string, message: string }[] }>}
  */
 // Load failures worth one more try: the site refused or dropped the connection, which says nothing about the page.
@@ -551,7 +552,7 @@ export const motionFile = (viewId) => (viewId === 'desktop' ? 'motion.json' : `$
 // A view the site gave up on in time, rather than refusing: worth another try only when the run has no limit.
 const TIMED_OUT = /Timeout|timed out|ERR_TIMED_OUT|ERR_NETWORK_CHANGED|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED/i;
 
-export async function capturePage(browser, pageInfo, workspace, { timeout = 30000, motionBudgetMs = 0, clickBudgetMs = 0, cache = null, patient = false, exact = false, document = null, preserve = false } = {}) {
+export async function capturePage(browser, pageInfo, workspace, { timeout = 30000, motionBudgetMs = 0, clickBudgetMs = 0, cache = null, patient = false, exact = false, document = null, preserve = false, clickShare = null } = {}) {
   const dir = captureDir(workspace, pageInfo.slug);
   await mkdir(dir, { recursive: true });
   // All views side by side when the machine has the memory for the loaded pages, fewer (never under two) when it is
@@ -560,7 +561,7 @@ export async function capturePage(browser, pageInfo, workspace, { timeout = 3000
   const wanted = viewsFor({ exact });
   const atOnce = parallelism({ max: wanted.length, min: 2 });
   const results = await mapLimit(wanted, atOnce, (view) =>
-    captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, clickBudgetMs, cache, exact, document, preserve }).then((value) => ({ status: 'fulfilled', value }), (reason) => ({ status: 'rejected', reason })));
+    captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, clickBudgetMs, cache, exact, document, preserve, clickShare }).then((value) => ({ status: 'fulfilled', value }), (reason) => ({ status: 'rejected', reason })));
   const views = {};
   const errors = [];
   results.forEach((r, i) => {
@@ -583,7 +584,7 @@ export async function capturePage(browser, pageInfo, workspace, { timeout = 3000
       await new Promise((r) => setTimeout(r, RETRY_WAIT_MS * attempt));
       const view = VIEWS.find((v) => v.id === e.view);
       try {
-        views[e.view] = await captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, clickBudgetMs, cache, exact, document, preserve });
+        views[e.view] = await captureView(browser, pageInfo, view, dir, { timeout, motionBudgetMs, clickBudgetMs, cache, exact, document, preserve, clickShare });
         errors.splice(errors.indexOf(e), 1);
         retried++;
       } catch (err) {

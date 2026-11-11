@@ -142,12 +142,22 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   // counts, with the preview's token, from the sandboxed (origin "null") frame; nothing else is accepted as a report.
   const previewToken = (asIsCopy ? asIsUrl : preview?.url)?.match(PREVIEW_TOKEN)?.[1] ?? null;
   const [frameReport, setFrameReport] = useState(null);
+  // The copy's height as its own page reports it (the shim, while the copy is shown in its live frame): what lets
+  // "Scrolling together" draw the copy at full height when the run did not measure it. Not taken from the full-height
+  // frame itself, whose window is as tall as the page (a "100vh" section would make it grow without end).
+  const [reportedHeight, setReportedHeight] = useState(null);
+  const takeHeight = useRef(true);
   useEffect(() => {
     setFrameReport(null);
+    setReportedHeight(null);
     if (!previewToken) return undefined;
     const onMessage = (e) => {
       const d = e.data;
       if (e.origin !== 'null' || !d || d.sasPreview !== 1 || d.token !== previewToken) return;
+      if (typeof d.height === 'number') {
+        if (takeHeight.current && Number.isFinite(d.height) && d.height > 0) setReportedHeight((h) => Math.max(h ?? 0, Math.min(Math.round(d.height), 200000)));
+        return;
+      }
       const count = (v) => (Number.isFinite(v) && v > 0 ? Math.min(Math.round(v), 999) : 0);
       setFrameReport({ failed: count(d.failed), errors: count(d.errors), blank: d.blank === true });
     };
@@ -226,8 +236,10 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   const ready = Boolean(asIsCopy ? asIsUrl : preview?.url && preview.recreateId === result.recreateId);
   const src = ready ? `${copyUrl}${pageUrl(pageOf(result, shown, page).file)}` : null;
   const view = VIEWPORTS.find((v) => v.id === viewport)?.view;
-  const pageHeight = result?.fidelity?.pages?.find((p) => p.outPath === page)?.views?.[view]?.height?.generated ?? null;
+  const measuredHeight = result?.fidelity?.pages?.find((p) => p.outPath === page)?.views?.[view]?.height?.generated ?? null;
+  const pageHeight = measuredHeight ?? reportedHeight;
   const fullPage = sync && ready && pageHeight > 0;
+  takeHeight.current = !fullPage;
   const realOriginal = audit && !audit.isDummy;
   // Live not available (the site blocks framing, or this app's own address): say so, and what is shown instead.
   const originalNote = realOriginal ? unavailableNote(live, hasScreens) : null;
@@ -243,6 +255,12 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   const copyHasShots = Boolean(copyInfo?.slug && fidByPage.get(page)?.views);
   const copyPicture = copyMode === 'screenshot' && copyHasShots;
   const frameNote = ready && !copyPicture ? previewLimitNote(frameReport) : null;
+  // Scrolling together draws the copy at full height; until its height is known the copy cannot follow.
+  const syncNote = sync && ready && !copyPicture && !fullPage
+    ? (frameSandbox
+      ? 'Measuring how tall the copy’s page is, so both sides can scroll together…'
+      : 'This copy’s page height was not measured during the run, so it cannot scroll together with the original. Create the copy again to measure it.')
+    : null;
 
   return (
     <div className={ws.stepBody}>
@@ -349,6 +367,12 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
             <p className={styles.dummyNote} role="note">
               <Info size={13} aria-hidden="true" />
               <span>Forms need the server, which this preview does not run. In the downloaded project, run it as its README explains to try them.</span>
+            </p>
+          )}
+          {syncNote && (
+            <p className={styles.dummyNote} role="status">
+              <Info size={13} aria-hidden="true" />
+              <span>{syncNote}</span>
             </p>
           )}
           {frameNote && (

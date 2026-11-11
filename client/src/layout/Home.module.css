@@ -79,10 +79,98 @@
   line-height: 1.55;
 }
 
-.heroActions {
-  display: flex;
+/* The two ways to start, side by side and of equal weight: check a site you have, or build a new one. */
+.paths {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
   gap: var(--sp-3);
+  width: 100%;
   margin-top: var(--sp-3);
+}
+
+.paths[data-single] {
+  max-width: 420px;
+}
+
+.path {
+  display: grid;
+  grid-template-areas:
+    'icon go'
+    'text text';
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: start;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px var(--on-dark-line);
+  color: var(--on-dark-2);
+  text-align: left;
+  transition: background 200ms var(--ease), box-shadow 200ms var(--ease), transform 200ms var(--ease);
+}
+
+.path:hover {
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.7);
+  transform: translateY(-2px);
+}
+
+.path:focus-visible {
+  outline: 2px solid var(--accent-on-dark);
+  outline-offset: 2px;
+}
+
+.pathIcon {
+  grid-area: icon;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.pathText {
+  grid-area: text;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pathTitle {
+  color: var(--on-dark);
+  font-size: var(--fs-md);
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.pathSub {
+  color: var(--on-dark-2);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.pathGo {
+  grid-area: go;
+  color: var(--accent-on-dark);
+  transition: transform 200ms var(--ease);
+}
+
+.path:hover .pathGo {
+  transform: translateX(3px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .path,
+  .path:hover,
+  .path:hover .pathGo {
+    transform: none;
+    transition: none;
+  }
 }
 
 .kpis {
@@ -538,6 +626,13 @@
   color: var(--muted);
 }
 
+.emptyActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--sp-3);
+}
+
 .emptyArt {
   width: 220px;
 }
@@ -680,6 +775,23 @@
 @media (max-width: 760px) {
   .home {
     padding: var(--sp-4);
+  }
+
+  /* The title wraps by itself at this size; a forced break would leave one word on a line. */
+  .title br {
+    display: none;
+  }
+
+  /* On a phone the two ways to start read best as compact rows: icon beside the text. */
+  .path {
+    grid-template-areas: 'icon text go';
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
+    padding: 16px;
+  }
+
+  .pathGo {
+    margin-top: 11px;
   }
 
   .card[data-featured],

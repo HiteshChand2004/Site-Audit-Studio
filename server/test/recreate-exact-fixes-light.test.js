@@ -90,7 +90,7 @@ test('exact copy: head-only fixes need no picture, a look serves both combinatio
   assert.equal(r.css, undefined, 'speed: false here, so no stylesheet step at all');
 });
 
-test('"Copy my site" (not exact) still pictures every page with a fix, one width after the other', { timeout: 6 * 60000 }, async (t) => {
+test('"Copy my site" (not exact) pictures every page with a fix, both widths at once, and keeps its group retries', { timeout: 6 * 60000 }, async (t) => {
   const { dir, other } = await copyWithTwoPages(t);
   const looked = [];
   const lookGate = async (...args) => {
@@ -100,7 +100,7 @@ test('"Copy my site" (not exact) still pictures every page with a fix, one width
   const r = await fixAndProve({ browser, copyDir: dir, gateDir: `${dir}-unfixed`, pages, siteUrl: SITE, newSiteUrl: null, speed: false, lookGate });
   assert.ok(looked.some((l) => l.path === '/'), 'the homepage is pictured');
   assert.ok(looked.length > 2, 'the gallery groups are looked at one by one, as before');
-  assert.ok(looked.every((l) => !l.parallel));
+  assert.ok(looked.every((l) => l.parallel), 'both widths at the same time, as an exact copy (the same verdict: the test below)');
   assert.equal(r.lighter, undefined);
   const gallery = r.pages.find((p) => p.path === '/gallery.html');
   assert.ok((gallery.dropped ?? []).some((d) => d.group === 'alt'));

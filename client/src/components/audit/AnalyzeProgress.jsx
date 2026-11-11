@@ -8,9 +8,9 @@ import styles from './AnalyzeProgress.module.css';
 import { stripAnsi } from '../../ansi.js';
 
 const LABELS = {
-  analysis: { running: 'Checking the site', queued: 'Waiting to check the site', failed: 'The check did not finish' },
-  recreate: { running: 'Creating the copy', queued: 'Waiting to create the copy', failed: 'The copy could not be finished' },
-  reaudit: { running: 'Comparing the copy with the original', queued: 'Waiting to compare the copy', failed: 'The comparison did not finish' },
+  analysis: { running: 'Checking the site', queued: 'Waiting to check the site', failed: 'The check did not finish', unreachable: 'The check could not start' },
+  recreate: { running: 'Creating the copy', queued: 'Waiting to create the copy', failed: 'The copy could not be finished', unreachable: 'The copy could not start' },
+  reaudit: { running: 'Comparing the copy with the original', queued: 'Waiting to compare the copy', failed: 'The comparison did not finish', unreachable: 'The comparison could not start' },
 };
 
 /** "4 min 12 s" since `iso`, updated every second while shown. */
@@ -33,13 +33,16 @@ function useElapsed(iso) {
  */
 export default function AnalyzeProgress({ analysis, kind = 'analysis', onDismiss, after = null }) {
   const labels = LABELS[kind];
-  const elapsed = useElapsed(analysis.status === 'failed' ? null : analysis.startedAt);
+  const ended = analysis.status === 'failed' || analysis.status === 'unreachable';
+  const elapsed = useElapsed(ended ? null : analysis.startedAt);
 
-  if (analysis.status === 'failed') {
+  // 'unreachable': the app's server was off when it was asked to start (store/useProjects.js notStarted), so nothing ran.
+  if (ended) {
+    const unreachable = analysis.status === 'unreachable';
     return (
       <Alert
         tone="bad"
-        title={labels.failed}
+        title={unreachable ? labels.unreachable : labels.failed}
         action={
           <Button variant="ghost" size="sm" icon={X} iconOnly onClick={onDismiss}>
             Close this message
@@ -48,7 +51,7 @@ export default function AnalyzeProgress({ analysis, kind = 'analysis', onDismiss
       >
         {stripAnsi(analysis.error)}
         {/* `after`: what to do next when the caller knows better (a stopped copy that can continue says so instead). */}
-        <p className={styles.after}>{after ?? 'Nothing was lost: the last finished result is still there. You can simply start it again.'}</p>
+        <p className={styles.after}>{unreachable ? 'Nothing ran and nothing was lost: the last finished result is still there.' : after ?? 'Nothing was lost: the last finished result is still there. You can simply start it again.'}</p>
       </Alert>
     );
   }

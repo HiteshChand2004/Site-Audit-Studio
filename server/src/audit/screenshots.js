@@ -19,6 +19,8 @@ export const VIEWS = [
 
 // 8000 CSS px × DPR 2 = 16000 px, which stays under WebP's 16383 px limit.
 export const MAX_HEIGHT = 8000;
+// How long each step of the scroll-through stays put (ms): long enough for a reveal that waits for its element to be in view.
+const SCROLL_DWELL_MS = 250;
 const WEBP = { quality: 75, effort: 4 };
 
 export const SCREEN_FILE = /^(desktop|tablet|mobile)-(fold|full)\.webp$/;
@@ -30,6 +32,17 @@ export async function encode(png, file) {
   const { data, info } = await sharp(png).webp(WEBP).toBuffer({ resolveWithObject: true });
   await writeFile(file, data);
   return { width: info.width, height: info.height, bytes: info.size };
+}
+
+/** Scrolls to the top and waits until the page is there (≤ 2 s): a smooth-scroll library can override one jump. */
+async function backToTop(page) {
+  await page.evaluate(async () => {
+    const started = Date.now();
+    do {
+      window.scrollTo({ top: 0, behavior: 'instant' });
+      await new Promise((r) => setTimeout(r, 100));
+    } while (window.scrollY > 0 && Date.now() - started < 2000);
+  }).catch(() => {});
 }
 
 async function captureView(browser, url, view, dir, timeout, cache) {
@@ -47,19 +60,29 @@ async function captureView(browser, url, view, dir, timeout, cache) {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
     await waitSettled(page, { loadMs: 10000, idleMs: 4000 });
 
-    // Scroll through once so lazy images and scroll-triggered sections render, then return to the top.
-    const pageHeight = await page.evaluate(async (cap) => {
-      const step = Math.max(400, window.innerHeight);
+    // Scroll through once so lazy images and scroll-triggered sections render, then return to the top. Steps below one
+    // window, so every element passes through the view, and a dwell at each: a reveal that waits for its element to stay
+    // in view (or a throttled scroll handler) never fired at 100 ms per window, which left whole sections blank.
+    const pageHeight = await page.evaluate(async ({ cap, dwell }) => {
+      const step = Math.max(400, Math.floor(window.innerHeight * 0.85));
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
       for (let y = 0; y < document.documentElement.scrollHeight && y < cap; y += step) {
-        window.scrollTo(0, y);
-        await new Promise((r) => setTimeout(r, 100));
+        // "instant": a page with `scroll-behavior: smooth` would otherwise still be gliding when the next step comes.
+        window.scrollTo({ top: y, behavior: 'instant' });
+        await wait(dwell);
       }
-      window.scrollTo(0, 0);
+      // Entrances started on the way down end before the shot (finite animations and transitions only, bounded).
+      const ending = (document.getAnimations?.() ?? []).filter((a) => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming?.().endTime));
+      await Promise.race([Promise.all(ending.map((a) => a.finished.catch(() => {}))), wait(1500)]);
       await document.fonts?.ready;
       return Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight ?? 0);
-    }, MAX_HEIGHT);
+    }, { cap: MAX_HEIGHT, dwell: SCROLL_DWELL_MS });
+    await backToTop(page);
     await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
     await page.waitForTimeout(300);
+    // Again right before the shots: a smooth-scroll script may still have been gliding, and a full-page shot draws a
+    // sticky bar wherever the page is scrolled to (a menu bar across the middle of the picture, a gap at its top).
+    await backToTop(page);
 
     // animations "allow": "disabled" resets running animations to their start, which stacks every word of a
     // cycling headline (or every slide of a rotating banner) on top of each other. The screenshot shows the

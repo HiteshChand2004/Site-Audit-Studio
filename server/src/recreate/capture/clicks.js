@@ -15,6 +15,9 @@
 // `stay`, and only then may the copy rebuild the link as a control. A link that navigates anyway is a link: the page is
 // loaded again and the remaining controls are probed. A non-link that navigates ends the probe.
 // Elements are identified by the `path` of the DOM snapshot (body>div:1>button:0), like the other probes.
+// A part of the page an earlier page of the same job had too, exactly (the header, the footer, a cookie banner: same markup,
+// same drawn styles at the same window size), is not clicked again: what its controls did there is taken over (`shared`,
+// one per job, SAS_SHARE_CLICKS=0 = off), so the time goes to the controls of the page's own content.
 // Output: `motion.json.clicks`.
 //
 // Page functions below are self-contained (Playwright sends only their source).
@@ -129,6 +132,56 @@ function installClicks(opts) {
     return r;
   };
 
+  // The part a control belongs to, for taking over what an earlier page found (captureClicks `shared`): the header / footer /
+  // dialog holding it, else its outermost fixed or sticky bar (a cookie banner, a menu bar of plain divs), else its top-level
+  // block. Its key covers the part's whole markup and the drawn styles of every element in it at this window size, so any
+  // difference at all (an active link, another text, another layout) makes it a part of its own.
+  const blockOf = (el) => {
+    const landmark = el.closest('header, footer, [role="banner"], [role="contentinfo"], [role="dialog"], [aria-modal="true"]');
+    if (landmark && landmark !== document.body) return landmark;
+    let bar = null;
+    for (let n = el.parentElement; n && n !== document.body; n = n.parentElement) {
+      const p = getComputedStyle(n).position;
+      if (p === 'fixed' || p === 'sticky') bar = n;
+    }
+    if (bar) return bar;
+    let n = el;
+    while (n.parentElement && n.parentElement !== document.body && n.parentElement.tagName !== 'MAIN') n = n.parentElement;
+    return n;
+  };
+  const hash = (str) => {
+    let h1 = 0xdeadbeef;
+    let h2 = 0x41c6ce57;
+    for (let k = 0; k < str.length; k++) {
+      const ch = str.charCodeAt(k);
+      h1 = Math.imul(h1 ^ ch, 2654435761);
+      h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
+  };
+  const BLOCK_STYLES = ['display', 'visibility', 'position', 'opacity', 'transform', 'color', 'backgroundColor', 'fontSize', 'width', 'height', 'cursor', 'pointerEvents', 'zIndex'];
+  const blockKeys = new Map();
+  const keyOf = (block) => {
+    if (blockKeys.has(block)) return blockKeys.get(block);
+    const r = block.getBoundingClientRect();
+    // Not its distance from the top: the same footer sits lower on a longer page.
+    let text = `${innerWidth}x${innerHeight}|${Math.round(r.x)},${Math.round(r.width)},${Math.round(r.height)}|${block.outerHTML}`;
+    let k = 0;
+    for (const e of [block, ...block.querySelectorAll('*')]) {
+      if (++k > 3000) {
+        text += '|more';
+        break;
+      }
+      const cs = getComputedStyle(e);
+      text += `|${BLOCK_STYLES.map((p) => cs[p]).join(',')}`;
+    }
+    const key = `${hash(text)}:${text.length}`;
+    blockKeys.set(block, key);
+    return key;
+  };
+
   const found = [];
   const controls = [];
   const bySig = new Map();
@@ -187,14 +240,19 @@ function installClicks(opts) {
   if (found.length > limit) skipped.limit += found.splice(limit).length;
   window.__sasClick = { els: found.map((f) => f.el), base: null };
   return {
-    candidates: found.map((f, i) => ({
-      i,
-      path: pathOf(f.el),
-      tag: f.el.tagName.toLowerCase(),
-      text: (f.el.getAttribute('aria-label') || f.el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80),
-      sig: f.sig,
-      reasons: f.reasons,
-    })),
+    candidates: found.map((f, i) => {
+      const block = blockOf(f.el);
+      return {
+        i,
+        path: pathOf(f.el),
+        tag: f.el.tagName.toLowerCase(),
+        text: (f.el.getAttribute('aria-label') || f.el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80),
+        sig: f.sig,
+        reasons: f.reasons,
+        block: pathOf(block),
+        blockKey: keyOf(block),
+      };
+    }),
     groups: [...bySig.values()].filter((g) => g.count > 1),
     skipped,
   };
@@ -645,14 +703,55 @@ export function classifyClick(d, { text = '', group = null, triggerPath = null }
   return null;
 }
 
+/** Is taking over what a shared part's controls did on an earlier page on (SAS_SHARE_CLICKS=0: every page clicks all)? */
+export const shareClicksEnabled = (env = process.env) => env.SAS_SHARE_CLICKS !== '0';
+
+/** Is this path the part's own path or inside it? */
+const within = (p, block) => p === block || p.startsWith(`${block}>`);
+
+/** Every snapshot path in a widget entry (its group aside, which is the page's own). */
+function pathsOf(value, out = []) {
+  if (typeof value === 'string') {
+    if (value === 'body' || value.startsWith('body>')) out.push(value);
+  } else if (Array.isArray(value)) {
+    for (const v of value) pathsOf(v, out);
+  } else if (value && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value)) if (k !== 'group') pathsOf(v, out);
+  }
+  return out;
+}
+
+/** A copy of a widget entry with the part's paths moved from where it was to where it is on this page. */
+export function rebaseEntry(entry, from, to) {
+  const move = (v) => {
+    if (typeof v === 'string') return within(v, from) ? `${to}${v.slice(from.length)}` : v;
+    if (Array.isArray(v)) return v.map(move);
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).filter(([k]) => k !== 'group').map(([k, x]) => [k, move(x)]));
+    return v;
+  };
+  return move(entry);
+}
+
+/**
+ * What a control did, kept for the next pages of the job when it can be taken over: its widgets lie wholly inside its part
+ * (a dropdown the header holds, never a dialog appended at the end of the body, whose place differs from page to page).
+ * @param {{ entries: object[], navigated?: boolean }} outcome
+ * @returns {boolean}
+ */
+export function shareable(outcome, block) {
+  return Boolean(block) && outcome.entries.every((e) => pathsOf(e).every((p) => within(p, block)));
+}
+
 /**
  * Clicks the controls of a page (desktop view) and records what each one does. Stops at the budget, or when the page
  * leaves (a script navigated in spite of the guard).
  * @param {import('playwright').Page} page
- * @param {{ limit?: number, perSignature?: number, budgetMs?: number }} [o]
+ * @param {{ limit?: number, perSignature?: number, budgetMs?: number, shared?: Map<string, object>|null, view?: string }} [o]
+ *   shared: the job's record of what the controls of parts seen on earlier pages did (one Map per job, any view; keyed by the
+ *   view, the part's fingerprint and the control's place in it)
  * @returns {Promise<object>} `motion.json.clicks`
  */
-export async function captureClicks(page, { limit = 30, perSignature = 3, budgetMs = 10000 } = {}) {
+export async function captureClicks(page, { limit = 30, perSignature = 3, budgetMs = 10000, shared = null, view = 'desktop' } = {}) {
   const started = Date.now();
   const deadline = started + budgetMs;
   const startUrl = page.url();
@@ -660,7 +759,15 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
   const left = () => !samePage(page.url(), startUrl);
   const picked = await page.evaluate(installClicks, { limit, perSignature, hint: HINT_SOURCE });
   const probedNames = [];
-  const stats = { candidates: picked.candidates.length, probed: 0, found: 0, noChange: 0, covered: 0, notRestored: 0, left: false, timedOut: false, skipped: picked.skipped, kinds: {} };
+  const stats = { candidates: picked.candidates.length, probed: 0, found: 0, noChange: 0, covered: 0, notRestored: 0, left: false, timedOut: false, skipped: picked.skipped, kinds: {}, reused: 0 };
+  const shareKey = (c) => (shared && c.block && c.blockKey ? `${view}|${c.blockKey}|${c.path.slice(c.block.length)}` : null);
+  // What this page's probe of `c` found, for the next pages (only when it can be taken over and nothing threw).
+  const remember = (c, from, navigated = false) => {
+    const key = shareKey(c);
+    if (!key || shared.has(key)) return;
+    const outcome = { block: c.block, entries: widgets.slice(from), navigated };
+    if (shareable(outcome, c.block)) shared.set(key, outcome);
+  };
   const groupOf = new Map();
   for (const g of picked.groups) for (const p of g.paths) groupOf.set(p, g);
   // A carousel that advances on a timer changes the page in the middle of other probes (a "hover" that opened nothing, a
@@ -712,6 +819,29 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
       stats.left = true;
       break;
     }
+    // The same part, exactly, on an earlier page: what its control did there, at this page's paths, without clicking. The
+    // entries are read now (not when they were kept), so what the earlier page found after the loop (`exclusive`) is in them.
+    // Their boxes keep the earlier page's place on the screen (the same sizes): nothing uses a result's place, only sizes and
+    // distances within it.
+    const known = shareKey(c) && shared.get(shareKey(c));
+    if (known) {
+      stats.reused++;
+      if (known.navigated) {
+        stats.navigated = (stats.navigated ?? 0) + 1;
+        if (c.reasons.includes('link')) wentAway.add(c.sig);
+      }
+      if (!known.entries.length && !known.navigated) stats.noChange++;
+      for (const e of known.entries) {
+        const entry = rebaseEntry(e, known.block, c.block);
+        const group = groupOf.get(entry.trigger);
+        if (group) entry.group = { sig: group.sig, count: group.count, paths: group.paths };
+        widgets.push(entry);
+        stats.found++;
+        stats.kinds[entry.kind] = (stats.kinds[entry.kind] ?? 0) + 1;
+      }
+      continue;
+    }
+    const from = widgets.length;
     if (c.i >= 0 && (await changed(all.findIndex((x) => x.path === c.path)))) {
       if (!(await reset().catch(() => false))) {
         stats.left = true;
@@ -786,7 +916,10 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
             stats.kinds[kind.kind] = (stats.kinds[kind.kind] ?? 0) + 1;
             // A button can change something on hover and still do its real work on click ("View more" below a list):
             // it is clicked as well. Other hover controls (menu links, cards) are left after their hover.
-            if (!(c.tag === 'button' || c.reasons.includes('role:button'))) continue;
+            if (!(c.tag === 'button' || c.reasons.includes('role:button'))) {
+              remember(c, from);
+              continue;
+            }
             opensOn = 'click';
             await save();
           }
@@ -806,7 +939,10 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
         // A button whose script went to another address is the same: the page it left is loaded again.
         stats.navigated = (stats.navigated ?? 0) + 1;
         if (isLink) wentAway.add(c.sig);
-        if (await reset().catch(() => false)) continue;
+        if (await reset().catch(() => false)) {
+          remember(c, from, true);
+          continue;
+        }
         stats.left = true;
         break;
       }
@@ -817,6 +953,7 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
       const kind = classifyClick(d, { text: c.text, group: groupOf.get(c.path), triggerPath: c.path });
       if (!kind) {
         stats.noChange++;
+        remember(c, from);
         continue;
       }
       const entry = { ...kind, trigger: c.path, tag: c.tag, text: c.text, reasons: c.reasons, opensOn, change: compact(d), ...(stay != null && { stay }) };
@@ -851,6 +988,7 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
       widgets.push(entry);
       stats.found++;
       stats.kinds[kind.kind] = (stats.kinds[kind.kind] ?? 0) + 1;
+      remember(c, from);
     } catch {
       // A probe that throws (the element went away, the page navigated) is skipped; the next one decides.
       if (left()) {

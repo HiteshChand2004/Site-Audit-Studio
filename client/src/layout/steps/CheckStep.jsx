@@ -77,6 +77,9 @@ export default function CheckStep({ project, audit, loading }) {
   const update = useProjects((s) => s.update);
   const dismissAnalysis = useProjects((s) => s.dismissAnalysis);
   const running = isAnalysisActive(analysis);
+  // A website never checked shows an example report; once a check of it has failed, made-up scores next to the failure would
+  // read as that check's result, so only the failure is shown.
+  const report = audit?.isDummy && analysis?.status === 'failed' ? null : audit;
 
   const [viewport, setViewport] = useState(375);
   const [device, setDevice] = useState('mobile');
@@ -145,7 +148,7 @@ export default function CheckStep({ project, audit, loading }) {
       <div className={ws.split}>
         <div className={ws.splitMain}>
           {loading && <p className={styles.dummyNote}>Loading the report…</p>}
-          {audit && (
+          {report && (
             <>
               {audit.isDummy && (
                 <p className={styles.dummyNote}>
@@ -197,7 +200,7 @@ export default function CheckStep({ project, audit, loading }) {
         </div>
 
         <aside className={ws.splitSide} aria-label="The original site">
-          {audit && !loading && (
+          {report && !loading && (
             <nav className={ws.toc} aria-label="On this page">
               <span className="eyebrow">On this page</span>
               {TOC.map(([id, label]) => (
@@ -217,7 +220,7 @@ export default function CheckStep({ project, audit, loading }) {
             onViewportChange={changeViewport}
             fit={Boolean(realPreview)}
             toolbar={realPreview && <ModeToggle mode={mode} onChange={setMode} live={live} hasScreens={hasScreens} />}
-            overlay={previewOverlay({ audit, mode, slow })}
+            overlay={previewOverlay({ audit: report, mode, slow })}
           >
             {realPreview ? <SitePreview url={siteUrl} audit={audit} mode={mode} viewport={viewport} onSlow={setSlow} /> : <Wireframe />}
           </PreviewFrame>

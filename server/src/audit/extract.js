@@ -54,8 +54,13 @@ export function extractPage(html, pageUrl) {
     .get()
     .filter((m) => m.name);
 
+  // level: the tag's (h1 → 1); aria: the level an aria-level gives assistive technology instead (as-is Fix mode keeps the tag and
+  // sets it, copy/fixMode.js), only when it is a valid one.
   const headings = $('h1, h2, h3, h4, h5, h6')
-    .map((_, el) => ({ level: Number(el.tagName[1]), text: clean($(el).text()).slice(0, 200) }))
+    .map((_, el) => {
+      const aria = Number($(el).attr('aria-level'));
+      return { level: Number(el.tagName[1]), text: clean($(el).text()).slice(0, 200), ...(Number.isInteger(aria) && aria > 0 && { aria }) };
+    })
     .get();
 
   const questionHeadings = $('h2, h3, h4, summary, dt')

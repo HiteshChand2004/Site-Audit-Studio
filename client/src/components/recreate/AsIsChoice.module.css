@@ -43,7 +43,7 @@
 }
 
 .note {
-  color: var(--text-muted);
+  color: var(--muted);
   font-size: 0.9em;
 }
 
