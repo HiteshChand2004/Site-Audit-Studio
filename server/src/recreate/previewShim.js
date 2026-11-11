@@ -16,7 +16,8 @@ import { createHash } from 'node:crypto';
 /* The shim as a function, so it is read and checked as code; its source is what the page gets. Browser code: no modules. */
 /* eslint-disable no-var, prefer-arrow-callback, func-names */
 const shim = function () {
-  var m = location.pathname.match(/^\/preview\/([A-Za-z0-9_-]{24})(?=\/)/);
+  // A preview, or a built site shared with a link (buildmode/publish.js): the same shape of address.
+  var m = location.pathname.match(/^\/(?:preview|sites)\/([A-Za-z0-9_-]{24})(?=\/)/);
   if (!m) return;
   var PREFIX = m[0];
   // An as-is copy's form guard holds every form in the preview: nothing is sent anywhere from here (complete.js FORM_GUARD).
@@ -31,7 +32,7 @@ const shim = function () {
   var SKIP = /^(#|data:|blob:|javascript:|about:|mailto:|tel:|sms:)/i;
   function underPrefix(p) { return p === PREFIX || p.indexOf(PREFIX + '/') === 0; }
   /** An address as the copy wrote it → the same address under the preview, when it points at the app's root. */
-  function fix(v) {
+  function move(v) {
     if (typeof v !== 'string') return v;
     var s = v.trim();
     if (!s || SKIP.test(s)) return v;
@@ -39,8 +40,19 @@ const shim = function () {
     try { u = new U(s, document.baseURI); } catch (e) { return v; }
     if (u.origin !== ORIGIN || underPrefix(u.pathname)) return v;
     u.pathname = PREFIX + u.pathname;
-    stats.moved++;
     return u.href;
+  }
+  function fix(v) {
+    var r = move(v);
+    if (r !== v) stats.moved++;
+    return r;
+  }
+  /** The other way: a moved address (as the server or this shim wrote it) → as the copy wrote it, root-relative. */
+  function unmove(v) {
+    if (typeof v !== 'string') return v;
+    if (v.indexOf(ORIGIN + PREFIX + '/') === 0) return v.slice(ORIGIN.length + PREFIX.length);
+    if (v.indexOf(PREFIX + '/') === 0) return v.slice(PREFIX.length);
+    return v;
   }
   function fixSrcset(v) {
     return String(v).split(',').map(function (part) {
@@ -167,6 +179,39 @@ const shim = function () {
   var SANS = Element.prototype.setAttributeNS;
   Element.prototype.setAttribute = function (n, v) { return SA.call(this, n, fixAttrValue(n, v)); };
   Element.prototype.setAttributeNS = function (ns, n, v) { return SANS.call(this, ns, n, fixAttrValue(String(n).replace(/^.*:/, ''), v)); };
+  // The page reads its addresses back as it wrote them. A script loader that knows its chunks by their address must find
+  // "/_next/x.js", not "/preview/<token>/_next/x.js": Turbopack names a chunk after its script's src minus "/_next/" and
+  // looks for a loaded one with script[src="/_next/…"], webpack compares getAttribute('src') before loading a chunk again.
+  // Seeing the moved address, such a loader never finds what has loaded and waits for ever, without an error (a Next.js
+  // App Router page then never hydrates, and what it fades in stays invisible). So getAttribute answers with the address
+  // as written, and an attribute selector for one (querySelector, matches, closest) finds the element whose address moved.
+  var GA = Element.prototype.getAttribute;
+  Element.prototype.getAttribute = function (n) {
+    var v = GA.call(this, n);
+    if (v == null) return v;
+    var k = String(n).toLowerCase();
+    if (URL_ATTR[k]) return unmove(v);
+    if (k === 'srcset' || k === 'imagesrcset') return v.split(',').map(function (part) { return part.replace(/^(\s*)(\S+)/, function (all, sp, u) { return sp + unmove(u); }); }).join(',');
+    return v;
+  };
+  // [src="/x"], [href^='/x'] (quoted, no escapes): matches the address under the preview in either form the element can
+  // carry (root-relative as the server writes it, absolute as the setters above write it).
+  var SEL_ATTR = /\[\s*(src|href|poster|action|formaction|data|ping|cite|srcset|imagesrcset)\s*(\^?=)\s*(?:"([^"\\]*)"|'([^'\\]*)')\s*([iIsS]?)\s*\]/g;
+  function fixSelector(sel) {
+    if (typeof sel !== 'string' || sel.indexOf('[') < 0) return sel;
+    return sel.replace(SEL_ATTR, function (all, name, op, dq, sq, flag) {
+      var value = dq != null ? dq : sq;
+      var moved = move(value);
+      if (moved === value || moved.indexOf(ORIGIN) !== 0) return all;
+      var f = flag ? ' ' + flag : '';
+      return ':is([' + name + op + '"' + moved.slice(ORIGIN.length) + '"' + f + '],[' + name + op + '"' + moved + '"' + f + '])';
+    });
+  }
+  [[window.Document, 'querySelector'], [window.Document, 'querySelectorAll'], [window.DocumentFragment, 'querySelector'],
+    [window.DocumentFragment, 'querySelectorAll'], [window.Element, 'querySelector'], [window.Element, 'querySelectorAll'],
+    [window.Element, 'matches'], [window.Element, 'closest'], [window.Element, 'webkitMatchesSelector']].forEach(function (pair) {
+    if (pair[0]) wrapMethod(pair[0].prototype, pair[1], 0, fixSelector);
+  });
   function wrapHtmlSetter(proto, name) {
     var d = proto && Object.getOwnPropertyDescriptor(proto, name);
     if (!d || !d.set) return;
@@ -245,7 +290,7 @@ const shim = function () {
     for (var i = 0; i < records.length; i++) {
       var r = records[i];
       if (r.type === 'attributes') {
-        var v = r.target.getAttribute(r.attributeName);
+        var v = GA.call(r.target, r.attributeName);
         if (v != null) { var nv = fixAttrValue(r.attributeName, v); if (nv !== v) SA.call(r.target, r.attributeName, nv); }
       } else if (r.type === 'characterData') {
         var host = r.target.parentNode;
@@ -359,6 +404,27 @@ const shim = function () {
   }
   window.addEventListener('load', finish);
   setTimeout(finish, 8000);
+
+  // The page's height (a number, nothing else): the app draws the copy at full height in a box it can scroll, so
+  // "Scrolling together" works when the copy's height was not measured during the run. Sent again whenever it grows.
+  var lastHeight = 0;
+  var heightTimer = null;
+  function sendHeight() {
+    heightTimer = null;
+    var d = document.documentElement;
+    var h = Math.ceil(Math.max(d ? d.scrollHeight : 0, document.body ? document.body.scrollHeight : 0));
+    if (!(h > lastHeight) || h > 200000) return;
+    lastHeight = h;
+    try { parent.postMessage({ sasPreview: 1, token: TOKEN, height: h }, '*'); } catch (e) { /* nobody listening */ }
+  }
+  function heightLater() { if (!heightTimer) heightTimer = setTimeout(sendHeight, 250); }
+  if (window.ResizeObserver) {
+    var ro = new ResizeObserver(heightLater);
+    var watchBody = function () { ro.observe(document.documentElement); if (document.body) ro.observe(document.body); };
+    if (document.body) watchBody();
+    else document.addEventListener('DOMContentLoaded', watchBody);
+  }
+  window.addEventListener('load', heightLater);
 };
 /* eslint-enable no-var, prefer-arrow-callback, func-names */
 

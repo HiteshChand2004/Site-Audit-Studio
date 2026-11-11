@@ -19,6 +19,7 @@ import { holdDataLock } from './config/dataLock.js';
 import { runCleanup, watchCleanup } from './jobs/cleanup.js';
 import { stopAllAsIsPreviews } from './recreate/behavior/preserve/asisPreview.js';
 import { previewRouter, PREVIEW_PREFIX } from './recreate/previewRoute.js';
+import { loadPublished, PUBLISHED_PREFIX, publishedPath, resolvePublished } from './buildmode/publish.js';
 import { inlineScriptHashes } from './recreate/inlineScripts.js';
 import { foreignOriginCheck } from './security/foreignOrigin.js';
 import { accountsEnabled, bindHost, isLoopbackHost, trustProxySetting } from './config/index.js';
@@ -42,6 +43,11 @@ app.use(express.json({ limit: '1mb' }));
 app.use('/api', foreignOriginCheck);
 // The previews of copies, under the app's own address; every document sandboxed by header (recreate/previewRoute.js).
 app.use(PREVIEW_PREFIX, previewRouter({ inlineScriptHashes }));
+// Built sites shared with a link (Build mode's "Publish", buildmode/publish.js): public on purpose, so outside /api and the
+// accounts gate; served by the same router, so every document is sandboxed by header the same way and only the published
+// copy's own files are reachable.
+app.use(PUBLISHED_PREFIX, previewRouter({ inlineScriptHashes, resolve: resolvePublished, pathOf: publishedPath, missing: 'No such site (it may no longer be shared).' }));
+loadPublished().catch((e) => console.warn('Shared sites not read:', e.message));
 
 // Accounts (SAS_ACCOUNTS=1): the database must have the accounts tables (npm run db:migrate), the auth routes are mounted, and
 // every other /api route but /api/health is behind a verified session (accounts/gate.js). Off: none of this exists, as before.

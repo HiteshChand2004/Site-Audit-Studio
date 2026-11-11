@@ -1,4 +1,4 @@
-// Installs build toolchains on demand: node scripts/setup-toolchains.js [react-vite] [next] [mern] [--list]
+// Installs build toolchains on demand: node scripts/setup-toolchains.js [react-vite] [next] [mern] [vue-vite] [astro] [sveltekit] [--list]
 // Each toolchain is a folder in server/toolchains/ with its own package.json and package-lock.json; `npm ci` installs exactly
 // the lockfile (every package pinned, the ones underneath included) and install scripts are skipped. No argument = list the
 // status, which compares what is installed with the lockfile.

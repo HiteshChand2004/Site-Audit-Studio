@@ -28,6 +28,11 @@ export function streamJob(req, res, manager, jobId, loadRow) {
 
   if (!job) {
     if (row.status === 'done') send('done', { id: row.id, status: 'done' });
+    // Its row says it runs, but no process here holds it: the server restarted under it. Within a few minutes the stale-job
+    // pass (recreate/jobs.js recoverStaleJobs) marks it and a recreate continues where it stopped, so this is not an end: the
+    // app keeps following it. Answered "failed" before, the app offered "Try again" in that window, which started the copy over
+    // from its first page and kept the continuation from starting (a website runs one copy at a time).
+    else if (row.status === 'running' || row.status === 'queued') send('progress', { id: row.id, status: 'running', message: 'The server restarted: this continues in a moment' });
     else send('failed', { id: row.id, status: row.status, error: row.error || 'This job is no longer running.' });
     return res.end();
   }

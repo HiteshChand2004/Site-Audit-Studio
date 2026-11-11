@@ -1,4 +1,6 @@
-import { ArrowRight, Trophy } from 'lucide-react';
+import { useState } from 'react';
+import { ArrowRight, ChevronDown, Trophy } from 'lucide-react';
+import Button from '../common/Button.jsx';
 import { Card } from '../common/Surface.jsx';
 import { Pill } from '../common/Score.jsx';
 import InfoTip from '../common/InfoTip.jsx';
@@ -8,6 +10,7 @@ import { plural } from '../../format.js';
 import styles from './Outcome.module.css';
 import { stackById } from '../../constants.js';
 import { copiedPages } from '../../copiedPages.js';
+import { WORSE_CAUSES, worseSplit } from '../../siteData.js';
 
 // Before → after scores shown (phone measurements: most visitors).
 const SCORES = [
@@ -18,20 +21,60 @@ const SCORES = [
 
 const titleOf = (item) => CHECKS[item.title]?.title ?? CHECKS[item.title?.split(' · ')[0]]?.title ?? item.title;
 
+// Rows shown at first in each list; the rest open with "Show all".
+const FIRST_ROWS = 6;
+
+/**
+ * One list of rows, its count in the title: the ones that got worse, the ones still open on both sides, or the ones that only
+ * read worse for one reason (`explain` says why; `first` rows shown before "Show all", 0 = folded).
+ */
+function RowList({ title, tone, explain, items, first = FIRST_ROWS }) {
+  const [all, setAll] = useState(false);
+  if (!items.length) return null;
+  const shown = all ? items : items.slice(0, first);
+  return (
+    <div className={styles.todo}>
+      <p className={styles.todoTitle}>
+        <span className={styles.tone} data-tone={tone} aria-hidden="true" />
+        {title} <span className={`${styles.todoCount} tabular`}>{items.length}</span>
+      </p>
+      {explain && <p className={styles.todoExplain}>{explain}</p>}
+      <ul>
+        {shown.map((item) => (
+          <li key={item.key}>
+            <span className={styles.todoName}>{titleOf(item)}</span>
+            {item.after?.detail && (
+              <span className={`${styles.todoDetail} ${styles.oneLine}`} title={item.reasonEvidence ?? item.after.detail}>
+                {item.after.detail}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+      {items.length > first && (
+        <Button variant="ghost" size="sm" icon={ChevronDown} className={styles.more} data-open={all || undefined} aria-expanded={all} onClick={() => setAll(!all)}>
+          {all ? 'Show fewer' : first ? `Show all ${items.length}` : `Show the ${plural(items.length, 'row')}`}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 /**
  * The result in one card: a plain summary, four counts, the main scores before → after, the overall match, and the few
- * things that still need work. `comparison` is the real before / after comparison (null until it exists).
+ * rows that got worse or still need work (every one of them, the first few shown at once). `comparison` is the real before / after comparison (null until it exists).
  */
 export default function Outcome({ result, comparison }) {
   const match = result.fidelity?.score ?? null;
   const m = matchRating(match);
   const s = comparison?.summary ?? null;
-  // An as-is copy: how many "got worse" rows carry one of the five reasons, and how many none fits (server copy/gotWorse.js).
-  const worse = comparison?.gotWorse ?? null;
+  // "Got worse" split by cause: the rows the copy may really be worse on, and the ones that only read worse for a reason the
+  // run measured (an as-is copy: server copy/gotWorse.js). Only the first count as "got worse", here and everywhere.
+  const worse = worseSplit(comparison);
   // And the same counts for its "still open" rows (failing on both sides).
   const stillOpen = comparison?.stillOpen ?? null;
   const better = s ? (s.fixed ?? 0) + (s.improved ?? 0) : 0;
-  const todo = (comparison?.items ?? []).filter((i) => i.status === 'regressed' || i.status === 'open').sort((a, b) => (a.status === 'regressed' ? 0 : 1) - (b.status === 'regressed' ? 0 : 1));
+  const rowsOf = (status) => (comparison?.items ?? []).filter((i) => i.status === status);
   const before = comparison?.scores?.before?.mobile;
   const after = comparison?.scores?.after?.mobile;
 
@@ -39,12 +82,12 @@ export default function Outcome({ result, comparison }) {
   const stackName = stackById(result.stack)?.label ?? result.stack ?? '';
   const pagesN = copiedPages(result).length;
   const fixedN = s ? (s.fixed ?? 0) + (s.improved ?? 0) : 0;
-  const summaryText = `${plural(pagesN, 'page')} copied${stackName ? ` in ${stackName}` : ''} · ${result.asIs ? pagesN : 0} as-is, ${result.asIs ? 0 : pagesN} rebuilt · ${s ? `Got worse: ${s.regressed ?? 0}${worse ? ` (${worse.explained} with a reason, ${worse.unexplained} unexplained)` : ''} · Fixed: ${fixedN} · Still open: ${s.open ?? 0}${stillOpen ? ` (${stillOpen.explained} with a reason, ${stillOpen.unexplained} unexplained)` : ''}` : 'Got worse: not measured yet (the check after the copy has not finished)'}`;
+  const summaryText = `${plural(pagesN, 'page')} copied${stackName ? ` in ${stackName}` : ''} · ${result.asIs ? pagesN : 0} as-is, ${result.asIs ? 0 : pagesN} rebuilt · ${s ? `Got worse: ${worse.realCount}${worse.explained ? ` (${worse.explained} more only read worse, explained below)` : ''} · Fixed: ${fixedN} · Still open: ${s.open ?? 0}${stillOpen ? ` (${stillOpen.explained} with a reason, ${stillOpen.unexplained} unexplained)` : ''}` : 'Got worse: not measured yet (the check after the copy has not finished)'}`;
 
   const sentence = [
     `The copy has ${plural(copiedPages(result).length, 'page')}`,
     match != null ? `. How closely it matches the original: ${m.label.toLowerCase()} (${match}/100).` : '.',
-    s ? ` Compared with the original, ${plural(better, 'thing')} got better${s.regressed ? `, ${s.regressed} got worse` : ''} and ${s.open ?? 0} still need${(s.open ?? 0) === 1 ? 's' : ''} work.` : '',
+    s ? ` Compared with the original, ${plural(better, 'thing')} got better${worse.realCount ? `, ${worse.realCount} got worse` : ''} and ${s.open ?? 0} still need${(s.open ?? 0) === 1 ? 's' : ''} work.` : '',
   ].join('');
 
   return (
@@ -57,7 +100,7 @@ export default function Outcome({ result, comparison }) {
           {[
             ['better', better, RESULT_STATUS.fixed.tone, 'Better than the original', `${RESULT_STATUS.fixed.explain} Or: ${RESULT_STATUS.improved.explain.toLowerCase()}`],
             ['open', s.open ?? 0, (s.open ?? 0) ? 'warn' : 'neutral', RESULT_STATUS.open.label, RESULT_STATUS.open.explain],
-            ['regressed', s.regressed ?? 0, (s.regressed ?? 0) ? 'bad' : 'neutral', RESULT_STATUS.regressed.label, RESULT_STATUS.regressed.explain],
+            ['regressed', worse.realCount, worse.realCount ? 'bad' : 'neutral', RESULT_STATUS.regressed.label, `${RESULT_STATUS.regressed.explain}${worse.explained ? ` Not counted: ${plural(worse.explained, 'row')} that only read worse, for a reason shown below the counts.` : ''}`],
             ['manual', s.manual ?? 0, 'neutral', RESULT_STATUS.manual.label, RESULT_STATUS.manual.explain],
           ].map(([id, n, tone, label, tip]) => (
             <li key={id} data-tone={tone}>
@@ -71,6 +114,12 @@ export default function Outcome({ result, comparison }) {
             </li>
           ))}
         </ul>
+      )}
+      {s && worse.explained > 0 && (
+        <p className={styles.worseNote}>
+          {plural(worse.explained, 'more check')} only read worse, and the copy is not the cause: the reason for each is below.
+          They are not counted as “{RESULT_STATUS.regressed.label}”.
+        </p>
       )}
 
       <div className={styles.facts}>
@@ -103,27 +152,11 @@ export default function Outcome({ result, comparison }) {
           )}
       </div>
 
-      {todo.length > 0 && (
-        <div className={styles.todo}>
-          <p className={styles.todoTitle}>Still needs work</p>
-          <ul>
-            {todo.slice(0, 6).map((item) => (
-              <li key={item.key}>
-                <span className={styles.tone} data-tone={RESULT_STATUS[item.status]?.tone ?? 'warn'}>
-                  {RESULT_STATUS[item.status]?.label ?? item.status}
-                </span>
-                <span className={styles.todoName}>{titleOf(item)}</span>
-                {item.after?.detail && (
-                  <span className={`${styles.todoDetail} ${styles.oneLine}`} title={item.after.detail}>
-                    {item.after.detail}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-          {todo.length > 6 && <p className={styles.todoDetail}>and {todo.length - 6} more in “Every check, before and after” below.</p>}
-        </div>
-      )}
+      <RowList title={RESULT_STATUS.regressed.label} tone={RESULT_STATUS.regressed.tone} items={worse.real} />
+      <RowList title={RESULT_STATUS.open.label} tone={RESULT_STATUS.open.tone} items={rowsOf('open')} />
+      {Object.entries(WORSE_CAUSES).map(([group, why]) => (
+        <RowList key={group} title={why.title} tone="neutral" explain={why.text} items={worse.byReason[group] ?? []} first={group === 'measurement' ? 0 : FIRST_ROWS} />
+      ))}
     </Card>
   );
 }

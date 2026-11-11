@@ -37,16 +37,18 @@ export function parseFontCss(css) {
   return faces;
 }
 
-async function stylesheetOf(family) {
+/** Google's stylesheet for a family (the weights asked for, else its default face); null when it has none or the request failed. */
+export async function stylesheetOf(/** @type {string} */ family, weights = WEIGHTS) {
   const name = encodeURIComponent(family).replace(/%20/g, '+');
-  for (const query of [`family=${name}:wght@${WEIGHTS}`, `family=${name}`]) {
+  for (const query of [`family=${name}:wght@${weights}`, `family=${name}`]) {
     const res = await fetchPage(`https://fonts.googleapis.com/css2?${query}&display=swap`, { timeout: 15000, maxBytes: 200 * 1024, accept: CSS_ACCEPT });
     if (!res.error && res.status === 200 && res.body) return res.body;
   }
   return null;
 }
 
-async function download(url) {
+/** One font file through the guarded fetch; null when it failed or is larger than a face may be. */
+export async function download(/** @type {string} */ url) {
   const hop = await guardedFetch(url, { signal: AbortSignal.timeout(20000) });
   if (hop.error || !hop.res || hop.res.status !== 200) {
     await hop.res?.body?.cancel().catch(() => {});

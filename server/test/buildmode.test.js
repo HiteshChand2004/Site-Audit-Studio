@@ -14,8 +14,14 @@ import { composeBuild, planBuild } from '../src/buildmode/index.js';
 import { BUILD_MODEL, createLlm } from '../src/buildmode/llm.js';
 import { fetchGithubRepo, parseGithubUrl, readTar } from '../src/buildmode/github.js';
 import { checkSiteUrl, extractPage, keptStack, readLiveSite, summarizeLiveSite } from '../src/buildmode/livesite.js';
+import { AXES, attachIngredients, distance, drawIngredients, planVariety, readHistory, recordDesigns, varietyText } from '../src/buildmode/variety.js';
 import { db } from '../src/db/index.js';
 import buildRouter from '../src/routes/build.js';
+import { BUILDS_DIR, getBuild, startBuild, stopBuild } from '../src/buildmode/builds.js';
+import { BUILD_BUDGET, recordSpend, roundUsd, spentToday } from '../src/buildmode/spend.js';
+import { attachRun, createSite, getSite, listSites, siteName } from '../src/buildmode/sites.js';
+import { resolvePreviewToken, revokePreviewToken } from '../src/recreate/previewTokens.js';
+import { existsSync, readFileSync } from 'node:fs';
 import { seedProject } from './helpers/projects.js';
 
 const lib = loadLibrary();
@@ -82,7 +88,7 @@ test('the module library loads, each module once, with the modules the pipeline 
   for (const key of ['core/safety', 'task/build-new', 'task/redesign', 'task/edit', 'task/fix-audit', 'input/scratch', 'input/url', 'input/source', 'site/general']) {
     assert.ok(keys.includes(key), key);
   }
-  assert.deepEqual(STACKS, ['html', 'mern', 'nextjs', 'other', 'react-vite']);
+  assert.deepEqual(STACKS, ['astro', 'html', 'mern', 'nextjs', 'other', 'react-vite', 'sveltekit', 'vue-vite']);
   for (const m of lib.modules) assert.ok(m.body.length > 50 && m.version >= 1, m.file);
 });
 
@@ -232,10 +238,15 @@ test('another technology: named by the owner, recognised in code, kept or moved 
   assert.throws(() => checkStackName('<script>'), /name of a technology/);
 
   await assert.rejects(buildContext({ input: { kind: 'scratch' }, stack: 'other', stacks: STACKS }), /Name the technology/);
-  const scratch = await buildContext({ input: { kind: 'scratch' }, stack: 'other', stackName: 'SvelteKit', stacks: STACKS });
+  const scratch = await buildContext({ input: { kind: 'scratch' }, stack: 'other', stackName: 'Laravel (PHP)', stacks: STACKS });
   assert.equal(scratch.stack, 'other');
-  assert.equal(scratch.stackName, 'SvelteKit');
-  assert.match(scratch.text, /built in SvelteKit \(the owner's choice/);
+  assert.equal(scratch.stackName, 'Laravel (PHP)');
+  assert.match(scratch.text, /built in Laravel \(PHP\) \(the owner's choice/);
+  // A technology that has a stack of its own, typed under "other", is that stack: built, previewed and tested here.
+  for (const [name, id] of [['SvelteKit', 'sveltekit'], ['Vue 3 + Vite', 'vue-vite'], ['astro', 'astro'], ['Next.js', 'nextjs']]) {
+    const typed = await buildContext({ input: { kind: 'scratch' }, stack: 'other', stackName: name, stacks: STACKS });
+    assert.deepEqual([typed.stack, typed.stackName], [id, undefined], name);
+  }
   const picked = selectModules(lib, { task: 'build-new', site_type: 'general', goal: 'leads', quality_focus: [] }, { input: 'scratch', stack: 'other' });
   assert.ok(picked.some(({ module: m }) => m.kind === 'stack' && m.id === 'other'), 'the playbook for a technology without its own');
 
@@ -309,6 +320,117 @@ test('planBuild: two structured calls, the request decides the playbooks, and th
   assert.match(requestBlock.text, /Direction: Terracotta/);
   assert.equal(prompt.needsChoice, true, 'three directions: the owner still has to choose');
   assert.ok(prompt.modules.every((m) => m.version >= 1 && m.reason));
+});
+
+test('variety: the 3 directions share no ingredient, and every set stays away from the sites built before', () => {
+  const sets = drawIngredients();
+  assert.equal(sets.length, 3);
+  for (const axis of Object.keys(AXES)) assert.equal(new Set(sets.map((s) => s[axis])).size, 3, `${axis} differs per direction`);
+  // A history holding many earlier sites: each new set still differs from every one of them in at least 3 ingredients.
+  const used = Array.from({ length: 200 }, () => drawIngredients({ count: 1 })[0]);
+  for (let round = 0; round < 20; round++) {
+    for (const s of drawIngredients({ used })) assert.ok(Math.min(...used.map((u) => distance(s, u))) >= 3);
+  }
+});
+
+test('variety: every plan is remembered, and the next one hears its fonts and colour', async () => {
+  const file = path.join(mkdtempSync(path.join(os.tmpdir(), 'sas-variety-')), 'designs.json');
+  const [ingredients] = drawIngredients({ count: 1 });
+  await recordDesigns({ directions: [{ ...direction('Terracotta'), ingredients }, direction('No ingredients')], siteType: 'restaurant' }, file);
+  const history = await readHistory(file);
+  assert.equal(history.length, 1, 'a direction without ingredients (an existing site) is not recorded');
+  assert.deepEqual(history[0].fonts, { heading: 'Fraunces', body: 'Inter' });
+  const variety = await planVariety({ file });
+  for (const s of variety.ingredients) assert.ok(distance(s, ingredients) >= 4, 'the same owner (no accounts: everyone) gets 4 of 7 new');
+  const text = varietyText(variety);
+  assert.match(text, /Fraunces \+ Inter/);
+  assert.match(text, /#b5482b/);
+  assert.match(text, /Never use Inter, Roboto/);
+  assert.match(text, /The owner's own words come first/);
+});
+
+test('variety: one owner planning again and again gets something new every time; another owner is kept apart too', async () => {
+  const file = path.join(mkdtempSync(path.join(os.tmpdir(), 'sas-variety-')), 'designs.json');
+  /** @type {Record<string, any[]>} */
+  const offered = { a: [], b: [] };
+  for (let plan = 0; plan < 40; plan++) {
+    const owner = plan % 4 === 3 ? 'b' : 'a';
+    const { ingredients } = await planVariety({ ownerId: owner, file });
+    for (const s of ingredients) {
+      for (const earlier of offered[owner].slice(-90)) assert.ok(distance(s, earlier) >= 4, `plan ${plan}: 4 of 7 new for the same owner`);
+      for (const earlier of offered[owner === 'a' ? 'b' : 'a']) assert.ok(distance(s, earlier) >= 3, `plan ${plan}: 3 of 7 new against others`);
+    }
+    offered[owner].push(...ingredients);
+    await Promise.all([recordDesigns({ directions: ingredients.map((i, n) => ({ ...direction(`D${n}`), ingredients: i })), ownerId: owner }, file)]);
+  }
+  assert.equal((await readHistory(file)).length, 120, 'every direction of every plan is remembered');
+});
+
+test('planBuild: a new site gets its ingredients in the brief writer\'s instructions, on its directions and in the agent\'s brief', async () => {
+  const ingredients = drawIngredients();
+  const client = fakeClient();
+  const asked = [];
+  const recorded = [];
+  const result = await planBuild({ input: { kind: 'scratch' }, description: 'A website for my Italian restaurant in Pune.' }, {
+    llm: createLlm({ client }), ownerId: 'owner-1',
+    planVariety: async (o) => { asked.push(o); return { ingredients, recent: [] }; },
+    recordDesigns: async (o) => { recorded.push(o); },
+  });
+  assert.deepEqual(asked, [{ ownerId: 'owner-1' }], 'drawn for this owner');
+  assert.equal(recorded.length, 1, 'the plan is remembered as soon as it is made');
+  assert.equal(recorded[0].ownerId, 'owner-1');
+  assert.deepEqual(recorded[0].directions.map((d) => d.ingredients), ingredients);
+  assert.match(client.calls[1].system, /# Design ingredients/);
+  assert.ok(client.calls[1].system.includes(`- hero: ${ingredients[2].hero}`));
+  assert.deepEqual(result.brief.design.directions.map((d) => d.ingredients), ingredients);
+  assert.match(result.prompt.messages[0].content[1].text, /Signature \(what makes this site unlike any other/);
+  assert.ok(result.prompt.messages[0].content[1].text.includes(`- palette: ${ingredients[0].palette}`), 'the first direction by default');
+  const chosen = await composeBuild({ input: { kind: 'scratch' }, description: 'x', understanding: result.understanding, brief: result.brief, direction: 1 });
+  assert.ok(chosen.prompt.messages[0].content[1].text.includes(`- palette: ${ingredients[1].palette}`), 'the chosen direction\'s set');
+});
+
+test('Build again: the first build keeps the chosen design, every later one gets a new design for the same pages', async () => {
+  const ingredients = drawIngredients();
+  const brief = attachIngredients(BRIEF, ingredients);
+  const request = { input: { kind: 'scratch' }, stack: 'html', description: 'Italian restaurant', understanding: { ...UNDERSTANDING, task: 'build-new' }, brief, direction: 1 };
+  const prompts = [];
+  const agent = async ({ prompt, siteDir }) => {
+    prompts.push(prompt);
+    writeFileSync(path.join(siteDir, 'index.html'), '<!doctype html><title>x</title>');
+    return { checks: { ok: true, issues: [], pages: 1 }, report: { summary: 'Built.' }, turns: 1, usage: {}, model: 'fake' };
+  };
+  const fonts = async () => null;
+  const written = [];
+  // The designer's answer for a repeat build: a different direction each time.
+  const llm = createLlm({ client: { beta: { messages: { stream(params) {
+    written.push(params);
+    return { finalMessage: async () => ({ model: params.model, stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 },
+      content: [{ type: 'text', text: JSON.stringify({ ...direction(`Fresh ${written.length}`), palette: [{ role: 'primary', hex: `#00000${written.length}` }] }) }] }) };
+  } } } } });
+  const finished = async (run) => {
+    while ((run = await getBuild(run.id, 'builder')).status === 'running') await new Promise((r) => setTimeout(r, 10));
+    return run;
+  };
+
+  const first = await finished(await startBuild(request, { ownerId: 'builder', agent, fonts, deps: { llm } }));
+  assert.equal(first.status, 'done');
+  assert.equal(written.length, 0, 'the first build uses the chosen direction, no model call');
+  assert.deepEqual({ name: first.design.name, fresh: first.design.fresh }, { name: 'Nero', fresh: false });
+
+  const second = await finished(await startBuild(request, { ownerId: 'builder', agent, fonts, deps: { llm } }));
+  assert.equal(second.status, 'done');
+  assert.equal(written.length, 1);
+  assert.match(written[0].system, /must get a new design/);
+  assert.match(written[0].system, /- Nero: #b5482b/, 'told what the plan already offered');
+  assert.deepEqual({ name: second.design.name, fresh: second.design.fresh }, { name: 'Fresh 1', fresh: true });
+  assert.match(second.activity.map((a) => a.text).join('\n'), /built before: drawing a new design/);
+  assert.match(prompts[1].messages[0].content[1].text, /Direction: Fresh 1/);
+  assert.match(prompts[1].messages[0].content[1].text, /R1: Book a table button/, 'same pages and requirements');
+  for (const s of Object.values(ingredients)) assert.ok(distance(prompts[1].direction.ingredients, s) >= 3, 'fresh ingredients');
+
+  const third = await finished(await startBuild(request, { ownerId: 'builder', agent, fonts, deps: { llm } }));
+  assert.equal(third.design.name, 'Fresh 2', 'and again on the next build');
+  assert.ok(distance(prompts[2].direction.ingredients, prompts[1].direction.ingredients) >= 4, 'away from the previous build too');
 });
 
 test('composeBuild: a chosen direction and an edited brief, without any model', async () => {
@@ -463,4 +585,134 @@ test('API: modules list, request checks, and compose from a checked website (its
 
   const gone = await post('/compose', { input: { kind: 'url', projectId: 'nope' }, description: 'x', understanding: UNDERSTANDING, brief: BRIEF });
   assert.equal(gone.status, 404);
+});
+
+const put = (route, body) => fetch(`${base}${route}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+const fakeBuild = async ({ siteDir }) => {
+  writeFileSync(path.join(siteDir, 'index.html'), '<!doctype html><title>x</title>');
+  return { checks: { ok: true, issues: [], pages: 1 }, report: { summary: 'Built.' }, turns: 1, usage: {}, model: 'fake' };
+};
+const SCRATCH = { input: { kind: 'scratch' }, stack: 'html', description: 'A bakery', understanding: { ...UNDERSTANDING, task: 'build-new' }, brief: BRIEF, direction: 0 };
+const buildDone = async (run, ownerId = null) => {
+  while ((run = await getBuild(run.id, ownerId)).status === 'running') await new Promise((r) => setTimeout(r, 10));
+  return run;
+};
+
+test('a build carries its cost and its limit, adds it to the owner\'s day, and is refused once the day is used up', async () => {
+  let given;
+  const agent = async ({ siteDir, limits, onEvent }) => {
+    given = limits;
+    onEvent({ type: 'usage', usage: { output_tokens: 1000 }, costUsd: 0.25, turns: 1 });
+    onEvent({ type: 'usage', usage: { output_tokens: 3000 }, costUsd: 0.75, turns: 2 });
+    writeFileSync(path.join(siteDir, 'index.html'), '<!doctype html><title>x</title>');
+    return { checks: { ok: true, issues: [], pages: 1 }, report: { summary: 'Built.' }, turns: 2, usage: { output_tokens: 3000 }, costUsd: 0.75, model: 'claude-sonnet-5-5' };
+  };
+  const deps = { claimBuild: async () => false };
+  const run = await buildDone(await startBuild(SCRATCH, { ownerId: 'spender', agent, fonts: async () => null, deps }), 'spender');
+  assert.equal(run.status, 'done');
+  assert.equal(run.costUsd, 0.75);
+  assert.equal(run.costLimitUsd, BUILD_BUDGET.perBuildUsd);
+  assert.equal(given.usd, BUILD_BUDGET.perBuildUsd);
+  // Recorded as the answers came in, not only at the end.
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(await spentToday('spender'), 0.75);
+
+  // A day with less left than a build's limit gives the build only what is left; a used-up day refuses it.
+  await recordSpend('spender', BUILD_BUDGET.perOwnerDayUsd - 0.75 - 1);
+  const short = await buildDone(await startBuild(SCRATCH, { ownerId: 'spender', agent, fonts: async () => null, deps }), 'spender');
+  assert.ok(Math.abs(given.usd - Math.min(1, BUILD_BUDGET.perBuildUsd)) < 1e-9);
+  assert.equal(short.costLimitUsd, roundUsd(Math.min(1, BUILD_BUDGET.perBuildUsd)));
+  await recordSpend('spender', 5);
+  await assert.rejects(startBuild(SCRATCH, { ownerId: 'spender', agent, fonts: async () => null, deps }), (err) => err.status === 429 && err.code === 'daily-budget');
+});
+
+test('saved sites: what the owner typed and planned is kept, named, and only shown to its owner', async () => {
+  assert.equal(siteName({ draft: { description: 'A website for my bakery in Goa.\nWho it is for: locals' } }), 'Bakery in Goa', 'its first line, without the full stop');
+  assert.equal(siteName({ details: { name: ' Rosa Bakery ' }, draft: { description: 'x' } }), 'Rosa Bakery');
+  assert.equal(siteName({}), 'Untitled site');
+
+  const created = await post('/sites', { state: { v: 1, step: 'start', draft: { description: 'A website for my bakery in Goa' } } });
+  assert.equal(created.status, 201);
+  const site = await created.json();
+  assert.equal(site.name, 'Bakery in Goa');
+  assert.equal(site.step, 'start');
+  assert.deepEqual(site.builds, []);
+
+  const saved = await put(`/sites/${site.id}`, { state: { v: 1, step: 'review', draft: { description: 'A website for my bakery in Goa' }, details: { name: 'Rosa Bakery' }, plan: { brief: { summary: 'A warm bakery site.' } }, review: { choice: 1 } } });
+  assert.equal(saved.status, 200);
+  assert.deepEqual([(await saved.json()).name, (await getSite(site.id, null)).state.review.choice], ['Rosa Bakery', 1]);
+  const opened = await (await fetch(`${base}/sites/${site.id}`)).json();
+  assert.equal(opened.state.details.name, 'Rosa Bakery', 'the whole state comes back');
+  assert.equal(opened.summary, 'A warm bakery site.');
+
+  assert.equal((await put('/sites/00000000-0000-4000-8000-000000000000', { state: {} })).status, 404);
+  assert.equal((await post('/sites', { state: 'text' })).status, 400);
+  assert.equal((await post('/sites', { state: { big: 'x'.repeat(950 * 1024) } })).status, 413, 'too large to save is said, not cut');
+
+  const other = await createSite({ ownerId: 'someone-else', state: { draft: { description: 'Theirs' } } });
+  assert.equal(await getSite(other.id, null), null, 'another owner\'s site is not found');
+  assert.equal((await fetch(`${base}/sites/${other.id}`)).status, 404);
+  assert.ok(!(await listSites(null)).some((s) => s.id === other.id));
+  assert.ok((await listSites('someone-else')).some((s) => s.id === other.id));
+});
+
+test('saved sites: a build is listed with its site, kept past the clean-up, and found again after a restart', async () => {
+  const site = await (await post('/sites', { state: { step: 'ready', draft: { description: 'Bakery' } } })).json();
+  assert.equal(site.step, 'build', 'a site saved at the old Ready step reads as the Build step');
+  assert.equal((await post('/runs', { ...SCRATCH, siteId: '00000000-0000-4000-8000-000000000000' })).status, 404, 'an unknown site starts nothing');
+
+  // On disk from its first moment: a server restart in the middle finds it and says what happened.
+  const slow = (o) => new Promise((_resolve, reject) => {
+    o.signal.addEventListener('abort', () => reject(Object.assign(new Error('Stopped.'), { code: 'stopped' })));
+  });
+  const running = await startBuild(SCRATCH, { agent: slow, fonts: async () => null });
+  const stored = JSON.parse(readFileSync(path.join(BUILDS_DIR, running.id, 'run.json'), 'utf8'));
+  assert.equal(stored.status, 'running');
+  assert.ok(stopBuild(running.id));
+  assert.equal((await buildDone(running)).status, 'stopped');
+
+  const linked = await buildDone(await startBuild(SCRATCH, { agent: fakeBuild, fonts: async () => null }));
+  assert.ok(await attachRun(site.id, null, linked.id));
+  assert.equal(await attachRun(site.id, 'someone-else', linked.id), false);
+
+  // More builds than the clean-up keeps: the unlisted old one goes, the one the site lists stays.
+  const unlisted = await buildDone(await startBuild(SCRATCH, { agent: fakeBuild, fonts: async () => null }));
+  for (let i = 0; i < 11; i++) await buildDone(await startBuild(SCRATCH, { agent: fakeBuild, fonts: async () => null }));
+  for (let t = 0; t < 100 && existsSync(path.join(BUILDS_DIR, unlisted.id)); t++) await new Promise((r) => setTimeout(r, 20));
+  assert.ok(!existsSync(path.join(BUILDS_DIR, unlisted.id)), 'an old build no site lists is cleaned up');
+  assert.ok(existsSync(path.join(BUILDS_DIR, linked.id, 'site', 'index.html')), 'the site\'s build is kept');
+
+  const list = await (await fetch(`${base}/sites`)).json();
+  const mine = list.sites.find((s) => s.id === site.id);
+  assert.equal(mine.builds.length, 1);
+  assert.equal(mine.builds[0].id, linked.id);
+  assert.equal(mine.builds[0].status, 'done');
+  assert.equal(mine.builds[0].downloadable, true);
+  // A lasting address: it opens the preview this server holds now, so a list kept open across a restart still works.
+  assert.equal(mine.builds[0].previewUrl, `/api/build/runs/${linked.id}/preview`);
+  const opened = await fetch(`${base}/runs/${linked.id}/preview`, { redirect: 'manual' });
+  assert.equal(opened.status, 302);
+  const first = opened.headers.get('location');
+  assert.match(first, /^\/preview\/[A-Za-z0-9_-]{24}\/$/);
+  revokePreviewToken(first.split('/')[2]);
+  const again = (await fetch(`${base}/runs/${linked.id}/preview`, { redirect: 'manual' })).headers.get('location');
+  assert.notEqual(again, first, 'a preview this server no longer has is opened again');
+  assert.ok(resolvePreviewToken(again.split('/')[2]));
+  assert.equal((await fetch(`${base}/runs/00000000-0000-4000-8000-000000000000/preview`, { redirect: 'manual' })).status, 404);
+  assert.ok(!list.earlier.some((b) => b.id === linked.id), 'a site\'s build is not also an earlier build');
+  assert.ok(list.earlier.length >= 10, 'builds no site lists are still listed');
+  assert.ok(!list.earlier.some((b) => b.design?.name?.startsWith('Fresh')), 'another owner\'s builds (Build again, above) are not listed');
+
+  // Removing the site removes its builds.
+  assert.equal((await fetch(`${base}/sites/${site.id}`, { method: 'DELETE' })).status, 204);
+  assert.equal((await fetch(`${base}/sites/${site.id}`)).status, 404);
+  assert.ok(!existsSync(path.join(BUILDS_DIR, linked.id)));
+});
+
+test('API: a build that cannot start is not listed with its site', async () => {
+  const site = await (await post('/sites', { state: { step: 'ready', draft: { description: 'Bakery' } } })).json();
+  // Plain HTML is all that can be built yet: refused before anything starts, and nothing is listed.
+  const refused = await post('/runs', { ...SCRATCH, stack: 'next', siteId: site.id });
+  assert.equal(refused.status, 422);
+  assert.deepEqual((await (await fetch(`${base}/sites/${site.id}`)).json()).builds, []);
 });

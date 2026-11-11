@@ -37,6 +37,21 @@ import { addNoticePages } from '../../../copy/noticePages.js';
 import { copyChecksOf } from '../../../copy/checks.js';
 import { issueLogger } from '../../../copy/serverLog.js';
 import { LOGS_DIR } from '../../../config/paths.js';
+import { PAGE_MB, parallelism } from '../../../audit/resources.js';
+
+// Pages whose fixes are proved at the same time: a look opens both sides at both widths (4 contexts), so as many pages as the
+// job's memory holds that many for, at most FIX_PAGES_MAX (one by one, 25 pages took about 8 min each: 2026-11-10, predco.ai).
+const FIX_PAGES_MAX = 2;
+const fixPagesAtOnce = () => parallelism({ perUnitMB: PAGE_MB * 4, max: FIX_PAGES_MAX, min: 1 });
+
+/** Runs `task` for every item, at most `size` at once, each started in the items' order. */
+async function inPool(items, size, task) {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await task(items[next++]);
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(size, items.length)) }, worker));
+}
 
 /** The stacks an as-is copy can be packaged into (the plain copy and the three app stacks). */
 export const ASIS_STACKS = ['html', 'react-vite', 'nextjs', 'mern'];
@@ -458,8 +473,9 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
         try {
           a = await serveCopy(copyDir);
           const fixedBase = a.url.replace(/\/$/, '');
-          // An exact copy pictures both widths at the same time (same rounds, same verdict per width).
-          g = await lookGate(browser, fixedBase, unfixed, p.path, { axeRules: axeRulesFor(p.fixes), axeBefore, parallel: exact });
+          // Both widths pictured at the same time (same rounds, same verdict per width; the first failing width in order decides).
+          // One after the other halved nothing but the time: most looks pass, and a passing look pictures both widths anyway.
+          g = await lookGate(browser, fixedBase, unfixed, p.path, { axeRules: axeRulesFor(p.fixes), axeBefore, parallel: true });
           // A link given a role is also clicked on both sides: invisible is not enough for something a visitor uses.
           if (g.invisible && (groups ? groups.includes('anchors') : p.fixes.some((f) => f.kind === 'anchors'))) {
             const clicks = await anchorClicks(browser, fixedBase, unfixed, p.path);
@@ -491,7 +507,9 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
         }, () => null);
       const notMade = (made) => ({ invisible: false, error: made ? 'the fix is not made on its own' : 'the fix could not be made again' });
       try {
-        for (const p of changed) {
+        // Each page's fixes are proved on their own page only (its HTML, its looks; the files beside the pages are already written),
+        // so pages are proved side by side, as many as the memory holds (each look pictures both widths at once).
+        const checkPage = async (p) => {
           const groups = [...new Set(p.fixes.map(fixGroup))];
           // Speed fixes are always proved on their own, strictly (proven), even when the page passed with everything.
           const speedGroups = groups.filter((x) => PERF_KINDS.includes(x));
@@ -499,7 +517,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
           const g = await look(p);
           if (g.invisible && !speedGroups.length) {
             finalLook.set(p.outPath, g);
-            continue;
+            return;
           }
           const original = fixed.originals.get(p.outPath);
           await revertPage(copyDir, p.outPath, original);
@@ -507,7 +525,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
             // The look was disturbed by the browser connection: the page keeps its HTML as it was, no group is tried again.
             p.dropped = groups.map((group) => ({ group, reason: 'd', why: STRAY_WHY }));
             p.reverted = { reason: 'd', why: STRAY_WHY };
-            continue;
+            return;
           }
           const dropped = [];
           // A first look that passed keeps its verdict for the markup groups (C1 + C2, unchanged); every group is tried alone
@@ -559,7 +577,11 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
           } else dropped.push({ group: groups[0], reason: 'd', why: whyNotKept(g) });
           p.dropped = dropped;
           if (!kept.length) p.reverted = { reason: 'd', why: g.invisible ? dropped[0]?.why ?? 'not proven' : whyNotKept(g) };
-        }
+        };
+        await inPool(changed, fixPagesAtOnce(), checkPage);
+        // The looks in page order, as when the pages were proved one after the other.
+        const order = new Map(changed.map((p, i) => [p.path, i]));
+        gate.sort((x, y) => (order.get(x.path) ?? 0) - (order.get(y.path) ?? 0));
         // Is the problem gone? (Step 5b, copy/fixGone.js): the markup checks each kept group targets, read from the page as lifted
         // and as fixed, no page load. A group whose problem is still there, or that made a check worse, is undone (noEffect): the
         // page is made again from the lifted pages with its other groups. Taking a group away from fixes the gate saw unchanged
@@ -986,9 +1008,24 @@ export async function asIsStage(ctx) {
     // The new address is written only when usable and confirmed for this copy (copy/address.js); else none is, and that is open.
     const address = addressForCopy({ saved: newSiteOf(ctx.baseUrl, siteUrl), confirmed: ctx.asIs?.address ?? null, siteUrl });
     report.address = address.origin ? { used: address.origin } : { used: null, ...address.skipped };
+    // The check's own lines (every look's measurements) are the server's log; the app is told in words which page is being
+    // checked, and how far it is (they used to be shown as they are, raw measurements and all).
+    const fixedSeen = new Set();
+    const fixLine = (m) => {
+      const page = m.match(/^(?:fixes|speed plan) (\S+?):?(?:\s|$)/)?.[1] ?? m.match(/^stylesheets .*? on (\S+?):/)?.[1];
+      if (!page) return 'Fixing what can be fixed without changing the look';
+      if (m.startsWith('stylesheets')) return `Checking that the smaller stylesheets leave ${page} looking the same`;
+      if (m.startsWith('speed plan')) return `Measuring ${page} for faster images`;
+      fixedSeen.add(page);
+      return `Checking that the fixes leave ${page} looking the same (page ${fixedSeen.size} of ${pages.length})`;
+    };
     report.fixes = await fixAndProve({
       browser, copyDir, gateDir: path.join(ctx.dir, ASIS_DIR, 'unfixed'), pages, siteUrl,
-      newSiteUrl: address.origin, addressSkipped: address.skipped, log: (m) => ctx.progress(0.34, m), fetchLlms: fetchLlmsTxt,
+      newSiteUrl: address.origin, addressSkipped: address.skipped, fetchLlms: fetchLlmsTxt,
+      log: (m) => {
+        console.log(`[recreate ${String(ctx.recreateId ?? '').slice(0, 8)}] ${m}`);
+        ctx.progress(0.34, fixLine(m));
+      },
     });
     await packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report });
     const converted = report.convert?.mode === 'converted';

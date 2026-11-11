@@ -12,7 +12,7 @@ export const OTHER_STACK = 'other';
 const STACK_NAME = /^[\p{L}\p{N}][\p{L}\p{N} .+#/()&-]{0,59}$/u;
 // What one JSON request can carry (the API's body limit is 1 MB); a real upload of a whole repository comes with the zip step.
 export const SOURCE_LIMITS = { files: 400, bytes: 900 * 1024 };
-const DATA_TAGS = ['audit', 'source_code', 'site_content', 'build_brief', 'user_request', 'user_answers', 'understanding', 'project'];
+const DATA_TAGS = ['audit', 'source_code', 'site_content', 'build_brief', 'user_request', 'user_answers', 'understanding', 'project', 'owner_facts', 'owner_images'];
 
 export class ContextError extends Error {
   /** @param {string} message @param {number} [status] */
@@ -47,6 +47,19 @@ export function detectStack(files) {
   }
   return files.some((f) => /\.html?$/i.test(f.path)) ? 'html' : null;
 }
+
+// A technology typed under "other" that has a stack of its own: it is built (and previewed, tested) with that stack.
+const NAMED_STACKS = [
+  [/^vue(\.?js)?(\s*3)?(\s*(\+|with|and)\s*vite)?$/i, 'vue-vite'],
+  [/^astro(\.?js|\.build)?$/i, 'astro'],
+  [/^svelte\s*-?\s*kit$/i, 'sveltekit'],
+  [/^react(\.?js)?(\s*(\+|with|and)\s*vite)?$/i, 'react-vite'],
+  [/^next(\.?js)?$/i, 'nextjs'],
+  [/^mern(\s+stack)?$/i, 'mern'],
+];
+
+/** The stack a technology typed under "other" has a playbook of its own in, or null. */
+export const namedStack = (/** @type {string} */ name, /** @type {string[]} */ stacks) => NAMED_STACKS.find(([re, id]) => re.test(name.trim()) && stacks.includes(id))?.[1] ?? null;
 
 /**
  * The name of a technology the owner typed for the "other" stack, checked: a short name, not a sentence of instructions.
@@ -185,8 +198,13 @@ export async function buildContext({ input, stack, stackName, stacks, loadProjec
   const kind = input?.kind;
   if (!INPUTS.includes(kind)) throw new ContextError(`input.kind must be one of: ${INPUTS.join(', ')}.`);
   if (stack != null && !stacks.includes(stack)) throw new ContextError(`stack must be one of: ${stacks.join(', ')}.`);
-  // "other" = a technology without a playbook of its own, named by the owner.
-  const named = stack === OTHER_STACK ? checkStackName(stackName) : null;
+  // "other" = a technology without a playbook of its own, named by the owner; one that has a playbook is that stack.
+  let named = stack === OTHER_STACK ? checkStackName(stackName) : null;
+  const known = named && namedStack(named, stacks);
+  if (known) {
+    stack = known;
+    named = null;
+  }
   const nameOf = (/** @type {string} */ id, /** @type {string | null} */ name) => (id === OTHER_STACK ? `${name} (the owner's choice, not one of this tool's built-in stacks)` : id);
 
   if (kind === 'scratch') {

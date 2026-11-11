@@ -163,6 +163,13 @@ async function fetchHome(url, scale = 1) {
       'The site answered with a bot-protection challenge (for example Cloudflare). Allowlist this server or pause the challenge for the audit; Remastly does not bypass bot protection.',
     );
   }
+  // 404 / 410 at the homepage is the site's host saying there is no site at this address (unpublished, the domain no longer
+  // connected to it, or a mistyped address): nothing on our side can check it, so say what to look at.
+  if (home.status === 404 || home.status === 410) {
+    throw new AnalysisError(
+      `The homepage returned HTTP ${home.status} (page not found): the site is not published at this address, or the address is wrong. Open it in a browser to see what it shows.`,
+    );
+  }
   if (home.status >= 400) throw new AnalysisError(`The homepage returned HTTP ${home.status}.`);
   if (!isHtml(home)) throw new AnalysisError(`The URL is not an HTML page (${home.contentType || 'unknown content type'}).`);
   return home;

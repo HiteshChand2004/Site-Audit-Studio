@@ -1,0 +1,84 @@
+.tableWrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92em;
+}
+
+.table th,
+.table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+  vertical-align: top;
+}
+
+.table th {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 0.92em;
+  white-space: nowrap;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Scores and counts: one line, lined up. */
+.num {
+  text-align: center !important;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.path {
+  white-space: nowrap;
+}
+
+/* The open items: the check in a word or two, its details quieter below. */
+.open {
+  min-width: 260px;
+}
+
+.openItem + .openItem {
+  margin-top: 6px;
+}
+
+.openDetail {
+  display: block;
+  color: var(--muted);
+  font-size: 0.92em;
+  line-height: 1.45;
+}
+
+.none {
+  color: var(--muted);
+}
+
+.lower {
+  color: var(--warn, #b45309);
+}
+
+.h {
+  margin: 20px 0 6px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 1em;
+}
+
+.lead {
+  margin: 0 0 8px;
+  color: var(--muted);
+}
+
+.list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  line-height: 1.5;
+}

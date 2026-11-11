@@ -5,6 +5,7 @@ import { plural, timeAgo } from '../format.js';
 import { api } from '../api/client.js';
 import { outputsOf, outputState } from '../stacks.js';
 import { copiedPages } from '../copiedPages.js';
+import { worseSplit } from '../siteData.js';
 import { isJobActive, useProjects } from '../store/useProjects.js';
 import SiteHero from './SiteHero.jsx';
 import OverviewStep from './steps/OverviewStep.jsx';
@@ -16,35 +17,45 @@ import styles from './Workspace.module.css';
 
 const ORDER = ['overview', 'check', 'create', 'compare', 'results'];
 const pct = (job) => (Number.isFinite(job?.pct) ? ` · ${job.pct} %` : '');
+// Asked to start while the app's server was off (store/useProjects.js notStarted): nothing ran, the last result stands.
+const OFF = { tone: 'warn', status: 'Server not running' };
 
 /** Status line and mark of each section tab, from what the project has and what is running. */
 function stepStates({ audit, analysis, job, result, reauditJob }) {
   const checked = audit && !audit.isDummy;
   const summary = audit && !audit.isDummy && audit.recreate && !audit.recreate.isDummy ? audit.recreate.summary : null;
+  // Only the rows the copy may really be worse on; the ones that only read worse are explained in Results.
+  const worse = summary ? worseSplit(audit.recreate).realCount : 0;
   return {
     overview: { status: checked ? 'Everything at a glance' : 'Start here' },
     check: isJobActive(analysis)
       ? { tone: 'running', status: `Checking${pct(analysis)}` }
-      : analysis?.status === 'failed'
-        ? { tone: 'bad', status: 'The check failed' }
-        : checked
-          ? { tone: 'done', status: `Checked ${timeAgo(audit.analyzedAt)}` }
-          : { status: 'Not checked yet' },
+      : analysis?.status === 'unreachable'
+        ? OFF
+        : analysis?.status === 'failed'
+          ? { tone: 'bad', status: 'The check failed' }
+          : checked
+            ? { tone: 'done', status: `Checked ${timeAgo(audit.analyzedAt)}` }
+            : { status: 'Not checked yet' },
     create: isJobActive(job)
       ? { tone: 'running', status: `Working${pct(job)}` }
-      : job?.status === 'failed'
-        ? { tone: 'bad', status: 'Did not finish' }
-        : result
-          ? { tone: 'done', status: `${plural(copiedPages(result).length, 'page')} copied` }
-          : { status: checked ? 'Ready to start' : 'Check the site first' },
+      : job?.status === 'unreachable'
+        ? OFF
+        : job?.status === 'failed'
+          ? { tone: 'bad', status: 'Did not finish' }
+          : result
+            ? { tone: 'done', status: `${plural(copiedPages(result).length, 'page')} copied` }
+            : { status: checked ? 'Ready to start' : 'Check the site first' },
     compare: result ? { status: `${plural(copiedPages(result).length, 'page')} side by side` } : { status: 'After the copy' },
     results: isJobActive(reauditJob)
       ? { tone: 'running', status: `Comparing${pct(reauditJob)}` }
-      : summary
-        ? summary.regressed > 0
-          ? { tone: 'warn', status: `${summary.fixed ?? 0} fixed · ${summary.regressed} got worse` }
-          : { tone: 'done', status: `${summary.fixed ?? 0} fixed · ${summary.open ?? 0} still open` }
-        : { status: result ? 'Not compared yet' : 'After the copy' },
+      : reauditJob?.status === 'unreachable'
+        ? OFF
+        : summary
+          ? worse > 0
+            ? { tone: 'warn', status: `${summary.fixed ?? 0} fixed · ${worse} got worse` }
+            : { tone: 'done', status: `${summary.fixed ?? 0} fixed · ${summary.open ?? 0} still open` }
+          : { status: result ? 'Not compared yet' : 'After the copy' },
   };
 }
 
@@ -85,6 +96,12 @@ export default function Workspace({ project, audit, auditLoading, onOpenSettings
     const bar = tabsRef.current;
     if (el && bar && el.scrollTop > bar.offsetTop) el.scrollTo({ top: bar.offsetTop, behavior: 'smooth' });
   };
+  // The hero's "Create the copy": the Copy tab with its "Copy my site" panel open (CreateStep clears the request once shown).
+  const [copyAsked, setCopyAsked] = useState(false);
+  const askCopy = () => {
+    choose('create');
+    setCopyAsked(true);
+  };
 
   const openPage = (outPath) => {
     setComparePage(outPath);
@@ -123,7 +140,7 @@ export default function Workspace({ project, audit, auditLoading, onOpenSettings
   return (
     <div className={`${styles.workspace} scroll`} ref={scroller} onScroll={onScroll} data-shot-scroll>
       <div className={styles.heroWrap}>
-        {auditLoading && !audit ? <HeroSkeleton /> : <SiteHero project={project} audit={audit} onGo={choose} compact={step !== 'overview'} />}
+        {auditLoading && !audit ? <HeroSkeleton /> : <SiteHero project={project} audit={audit} onGo={choose} onCopy={askCopy} compact={step !== 'overview'} />}
       </div>
 
       <div className={styles.tabsBar} ref={tabsRef} data-stuck={stuck || undefined}>
@@ -141,7 +158,7 @@ export default function Workspace({ project, audit, auditLoading, onOpenSettings
         )}
         {step === 'overview' && <OverviewStep project={project} audit={audit} loading={auditLoading} onGo={choose} />}
         {step === 'check' && <CheckStep project={project} audit={audit} loading={auditLoading} />}
-        {step === 'create' && <CreateStep project={project} audit={audit} onOpenSettings={onOpenSettings} onGo={choose} />}
+        {step === 'create' && <CreateStep project={project} audit={audit} onOpenSettings={onOpenSettings} onGo={choose} copyAsked={copyAsked} onCopyShown={() => setCopyAsked(false)} />}
         {step === 'compare' && <CompareStep {...props} focusPage={comparePage} />}
         {step === 'results' && <ResultsStep {...props} onOpenReport={onOpenReport} onOpenPage={openPage} />}
       </div>

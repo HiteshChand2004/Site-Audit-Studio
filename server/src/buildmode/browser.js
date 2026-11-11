@@ -21,7 +21,8 @@ const LOAD_MS = 20000;
 
 /** The address of each page of the site: index.html → /, about/index.html → /about/, menu.html → /menu.html. */
 export async function sitePages(siteDir) {
-  return (await listFiles(siteDir)).filter((f) => /\.html?$/i.test(f))
+  // Not a page of the site: the not-found page, and what an app build keeps beside its bundles.
+  return (await listFiles(siteDir)).filter((f) => /\.html?$/i.test(f) && !/^(404(\/index)?\.html|_not-found\/|_next\/|_app\/)/.test(f))
     .map((f) => (f === 'index.html' ? '/' : f.endsWith('/index.html') ? `/${f.slice(0, -'index.html'.length)}` : `/${f}`))
     .sort((a, b) => (a === '/' ? -1 : b === '/' ? 1 : a.localeCompare(b)));
 }

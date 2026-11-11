@@ -174,7 +174,11 @@ test('the report, the fonts, the workspace note and what can be built', async ()
   assert.match(workspaceNote({ fonts }), /css\/fonts\.css already holds the @font-face rules for Inter[\s\S]*Georgia could not be made local/);
 
   assert.equal(unsupported({ input: { kind: 'scratch' }, stack: 'html' }), null);
-  assert.match(unsupported({ input: { kind: 'scratch' }, stack: 'nextjs' }), /Plain HTML/);
+  assert.equal(unsupported({ input: { kind: 'scratch' }, stack: 'nextjs' }), null);
+  assert.equal(unsupported({ input: { kind: 'scratch' }, stack: 'react-vite' }), null);
+  assert.equal(unsupported({ input: { kind: 'scratch' }, stack: 'mern' }), null);
+  for (const stack of ['vue-vite', 'astro', 'sveltekit', 'other']) assert.equal(unsupported({ input: { kind: 'scratch' }, stack }), null, stack);
+  assert.match(unsupported({ input: { kind: 'scratch' }, stack: 'cobol' }), /Plain HTML \/ CSS \/ JS, React \+ Vite, Next\.js, MERN, Vue \+ Vite, Astro, SvelteKit, or as source code/);
   assert.match(unsupported({ input: { kind: 'url', url: 'x' } }), /new sites/);
   const empty = tempSite();
   assert.match((await checkBuiltSite(empty)).issues.join(), /index\.html is missing/);

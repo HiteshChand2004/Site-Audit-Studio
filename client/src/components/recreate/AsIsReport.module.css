@@ -9,7 +9,7 @@
 }
 
 .note {
-  color: var(--text-muted);
+  color: var(--muted);
   font-size: 0.9em;
   margin: 6px 0;
 }
@@ -18,7 +18,13 @@
   margin: 0;
   padding-left: 18px;
   display: grid;
-  gap: 4px;
+  gap: 6px;
+  line-height: 1.5;
+}
+
+/* Which pages a line is about: quieter than what it says. */
+.pages {
+  color: var(--muted);
 }
 
 .tableWrap {

@@ -74,7 +74,7 @@ function copyBlocker({ audit, project, analyzing }) {
  * The top of a website's dashboard: who it is, a picture of it (and of the copy), the headline scores before → after,
  * what changed, and the next thing to do.
  */
-export default function SiteHero({ project, audit, onGo, compact = false }) {
+export default function SiteHero({ project, audit, onGo, onCopy, compact = false }) {
   const analysis = useProjects((s) => s.analyses[project.id]);
   const job = useProjects((s) => s.recreates[project.id]);
   const reauditJob = useProjects((s) => s.reaudits[project.id]);
@@ -173,11 +173,10 @@ export default function SiteHero({ project, audit, onGo, compact = false }) {
         size="lg"
         icon={Sparkles}
         disabled={Boolean(blocker)}
-        title={blocker ?? 'Visits every page and builds a clean copy that fixes what the check found'}
-        onClick={() => {
-          recreate(project.id);
-          onGo('create');
-        }}
+        title={blocker ?? 'Choose the technology and copy every page of the site'}
+        // The Copy tab's own start ("Copy my site"): a POST without options is a clean rebuild, which only the owner may
+        // start (server/src/accounts/roles.js); the owner keeps it under "Advanced options" there.
+        onClick={onCopy}
       >
         Create the copy
       </Button>

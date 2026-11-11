@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CheckCircle2, Columns2, Loader2, Play, RefreshCw, Settings2, Sparkles, StopCircle, Target, Trophy } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import { Alert, Card } from '../../components/common/Surface.jsx';
@@ -50,7 +50,7 @@ const COPY_STAGE_OF_STEP = { inspect: 'Capturing', sweep: 'Capturing', assets: '
 const copyStageOf = (step) => COPY_STAGE_OF_STEP[step] ?? COPY_STAGE_NAMES[0];
 
 /** Step 2: make the copy (Recreate). */
-export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
+export default function CreateStep({ project, audit, onOpenSettings, onGo, copyAsked = false, onCopyShown }) {
   const stack = stackById(project.stack);
   const analysis = useProjects((s) => s.analyses[project.id]);
   const job = useProjects((s) => s.recreates[project.id]);
@@ -84,6 +84,12 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   const stackState = outputState(result, project.stack);
   // "Copy my site": one panel (stack, address, authorisation), then the as-is copy of every page for that stack.
   const [copyOpen, setCopyOpen] = useState(false);
+  // Asked for from the dashboard hero's "Create the copy".
+  useEffect(() => {
+    if (!copyAsked) return;
+    if (!blocker && !running) setCopyOpen(true);
+    onCopyShown?.();
+  }, [copyAsked]);
   const updateProject = useProjects((s) => s.update);
   // The address is optional: without one the server writes no address into the copy and lists it as an open item.
   const startCopy = async ({ stack: chosen, address }) => {

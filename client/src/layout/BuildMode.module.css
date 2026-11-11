@@ -7,7 +7,8 @@
 
 .inner {
   display: grid;
-  gap: var(--sp-6);
+  /* One column as wide as the page, never wider: wide content (a long link, a preview) scrolls or wraps inside its card. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-5);
   max-width: 880px;
   margin: 0 auto;
@@ -111,6 +112,7 @@
 .startForm,
 .review {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-5);
 }
 
@@ -597,6 +599,19 @@
   margin-bottom: var(--sp-4);
 }
 
+/* Answers a rewritten plan was made with, above the questions. */
+.answersNote {
+  margin-bottom: var(--sp-3);
+}
+
+/* The optional way to plan again with the answers: secondary, with what it keeps and replaces said next to it. */
+.replanRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+
 .directions {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -631,41 +646,6 @@
   height: 22px;
   border-radius: 6px;
   box-shadow: inset 0 0 0 1px var(--hairline-strong);
-}
-
-.pages {
-  display: grid;
-  gap: var(--sp-2);
-}
-
-.pageItem {
-  padding: var(--sp-3) var(--sp-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-.pageItem summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 10px;
-  cursor: pointer;
-}
-
-/* What the owner gets: each page with what it is for. */
-.getList {
-  display: grid;
-  gap: var(--sp-3);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.getList li {
-  display: grid;
-  gap: 2px;
-  padding-left: var(--sp-4);
-  border-left: 2px solid var(--accent-border);
 }
 
 .lookRow {
@@ -721,6 +701,7 @@
 
 .devBody {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-4);
   padding: 0 var(--sp-6) var(--sp-6);
 }
@@ -797,7 +778,14 @@
 
   .actionBar {
     bottom: var(--sp-3);
+    flex-wrap: wrap;
     padding-left: var(--sp-4);
+  }
+
+  /* On a phone the hint gets a line of its own above the buttons instead of a sliver between them. */
+  .actionHint {
+    flex-basis: 100%;
+    order: -1;
   }
 
   .examples,
@@ -966,4 +954,154 @@
   .detailsGrid {
     grid-template-columns: 1fr;
   }
+}
+
+/* Saved sites: the bar above an open site, and the list of every site (BuildMode.jsx YourSites). */
+.siteBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2) var(--sp-4);
+  margin-bottom: calc(var(--sp-2) * -1);
+}
+
+.backLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.backLink:hover {
+  text-decoration: underline;
+}
+
+.backLink:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+.saveState {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.saveState[data-failed] {
+  color: var(--bad);
+}
+
+.siteGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--sp-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.siteCard {
+  display: grid;
+  gap: var(--sp-2);
+  align-content: start;
+  min-width: 0;
+  padding: var(--sp-5);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--elev-1);
+}
+
+.siteCardHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.siteName {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  overflow-wrap: anywhere;
+}
+
+.siteSummary {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.siteActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-4);
+  margin-top: var(--sp-2);
+}
+
+.siteActions > button:last-child {
+  margin-left: auto;
+}
+
+.smallLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.smallLink:hover {
+  text-decoration: underline;
+}
+
+.earlier {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.earlier li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2) var(--sp-4);
+  padding: var(--sp-3) 0;
+}
+
+.earlier li + li {
+  border-top: 1px solid var(--hairline);
+}
+
+.earlierText {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 260px;
+}
+
+.earlier .siteActions {
+  margin-top: 0;
 }

@@ -1,10 +1,12 @@
 ---
 id: other
 kind: stack
-version: 1
+version: 2
 title: Another technology, chosen by the owner
 ---
-The owner chose a technology this tool has no dedicated playbook for; its name is in <project>.
+The owner chose a technology this tool has no dedicated playbook for; its name is in <project>. This tool cannot install,
+build or run it: the project is delivered as source code, and a developer installs and runs it with that technology's tools.
+So plan only what that technology does well without extra services, and nothing that needs a step this tool would have to run.
 - Use that technology's current stable version, its official starter structure and tooling, and its own conventions for
   routing, components, styling and configuration, the way its documentation recommends. Never fall back to another framework.
 - It must still be a real website: every page reachable at its own address with real links between pages, and its content in

@@ -52,7 +52,7 @@ export function stagesOf({ audit, result, analysis, job, reauditJob }) {
   return {
     check: isJobActive(analysis) ? 'running' : analysis?.status === 'failed' ? 'failed' : isReal(audit) ? 'done' : 'none',
     copy: isJobActive(job) ? 'running' : job?.status === 'failed' ? 'failed' : result ? 'done' : 'none',
-    results: isJobActive(reauditJob) ? 'running' : cmp ? (cmp.summary?.regressed > 0 ? 'warn' : 'done') : 'none',
+    results: isJobActive(reauditJob) ? 'running' : cmp ? (worseSplit(cmp).realCount > 0 ? 'warn' : 'done') : 'none',
   };
 }
 
@@ -65,11 +65,45 @@ export const stagesLabel = (stages) =>
     .map(([k, name]) => `${name}: ${STATE_WORDS[stages[k]] ?? 'not yet'}`)
     .join(' · ');
 
+/**
+ * Why a "got worse" row of an as-is copy reads worse when the copy is not the cause: the groups the server's evidence puts it
+ * in (server/src/copy/gotWorse.js GROUPS), in the user's words. "bug" and "missing-fixer" are not here: those are the copy's own.
+ */
+export const WORSE_CAUSES = {
+  measurement: {
+    title: 'Only measured slower here',
+    text: 'The copy has the original’s own files and is no heavier. Its score is lower because it was measured on this computer, while the original was measured on its own fast host. Measure again once the copy is online.',
+  },
+  'needs-info': { title: 'Needs information from you', text: 'Something only you can give, such as the new site’s address (the sitemap and full links need it).' },
+  look: { title: 'Kept as the original', text: 'Changing it would change how the original looks, so the copy keeps it as it is.' },
+  'own-code': { title: 'From the original’s own code', text: 'Comes from the original’s scripts or embeds, kept as they are so the site works the same.' },
+  impossible: { title: 'Not possible in a copy', text: 'No copy can do this.' },
+};
+
+/**
+ * The "got worse" rows split by cause: `real` = the copy may really be worse (no reason found, or a fix still owed; every row
+ * of a rebuilt copy, which carries no reasons), `byReason` = rows that only read worse, keyed as WORSE_CAUSES.
+ * @param {any} comparison  audit.recreate
+ */
+export function worseSplit(comparison) {
+  const rows = (comparison?.items ?? []).filter((i) => i.status === 'regressed');
+  const real = [];
+  const byReason = {};
+  for (const row of rows) {
+    if (WORSE_CAUSES[row.group]) (byReason[row.group] ??= []).push(row);
+    else real.push(row);
+  }
+  // Only the summary arrived (an older comparison without its rows): its count, as before.
+  const realCount = rows.length ? real.length : comparison?.summary?.regressed ?? 0;
+  return { real, realCount, byReason, explained: rows.length - real.length };
+}
+
 /** Fixed / better, still open, got worse, needs a person: the four counts of the comparison, or null. */
 export function outcomeCounts(audit) {
-  const s = comparisonOf(audit)?.summary;
+  const cmp = comparisonOf(audit);
+  const s = cmp?.summary;
   if (!s) return null;
-  return { better: (s.fixed ?? 0) + (s.improved ?? 0), open: s.open ?? 0, regressed: s.regressed ?? 0, manual: s.manual ?? 0 };
+  return { better: (s.fixed ?? 0) + (s.improved ?? 0), open: s.open ?? 0, regressed: worseSplit(cmp).realCount, manual: s.manual ?? 0 };
 }
 
 /** Everything the app knows about one website right now: the open website's live state, else its overview. */

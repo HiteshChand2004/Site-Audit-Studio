@@ -94,7 +94,8 @@ test('capture concurrency: SAS_CAPTURE_PAGES fixes it, SAS_MAX_PARALLEL caps it,
   assert.equal(capturePagesAtOnce({ env: { SAS_MAX_PARALLEL: '8' }, cpus: 32, free: 1e6 }), 2, 'cap 8 contexts / 4 views');
   assert.equal(capturePagesAtOnce({ env: {}, cpus: 32, free: 1e6 }), CAPTURE_PAGES_MAX);
   assert.equal(capturePagesAtOnce({ env: {}, cpus: 4, free: 1e6 }), 1, 'a 4-thread machine stays at one page');
-  assert.equal(capturePagesAtOnce({ env: {}, cpus: 8, free: 1e6 }), 2);
+  assert.equal(capturePagesAtOnce({ env: {}, cpus: 5, free: 1e6 }), 2, 'half of a 10-thread machine (two jobs): two pages');
+  assert.equal(capturePagesAtOnce({ env: {}, cpus: 8, free: 1e6 }), CAPTURE_PAGES_MAX);
   assert.equal(capturePagesAtOnce({ env: {}, cpus: 32, free: 1000 }), 1, 'short of memory: one page');
   assert.equal(capturePagesAtOnce({ env: {}, cpus: 32, free: 1600 }), 2);
   assert.equal(roomForAnotherPage({ free: 500 }), false);

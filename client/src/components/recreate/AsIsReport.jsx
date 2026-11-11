@@ -1,11 +1,38 @@
 import { Alert, Card } from '../common/Surface.jsx';
 import Button from '../common/Button.jsx';
 import { api } from '../../api/client.js';
+import { plural } from '../../format.js';
 import { AS_IS_EXPLANATION, ASIS_STACK_CHOICES } from './AsIsChoice.jsx';
 import styles from './AsIsReport.module.css';
 
+// A share of the page that differs: one decimal is enough to read (0.5658 → 0.6 %).
+const pct = (v) => (v == null ? '—' : `${Math.round(v * 10) / 10}%`);
 const kb = (bytes) => `${Math.round((bytes ?? 0) / 1024).toLocaleString('en-US')} KB`;
 const stackName = (id) => ASIS_STACK_CHOICES.find((s) => s.id === id)?.label ?? id;
+
+/** Items that say the same thing on several pages: each once, with the pages it is on (in the order they were listed). */
+function byPages(items, keyOf) {
+  const groups = new Map();
+  for (const item of items) {
+    const key = keyOf(item);
+    const group = groups.get(key);
+    if (group) group.pages.push(item.page);
+    else groups.set(key, { item, pages: [item.page] });
+  }
+  return [...groups.values()];
+}
+
+/** "on every page (9)" when a group covers all of them, else the pages themselves. */
+function OnPages({ pages, total }) {
+  if (total > 1 && pages.length >= total) return <span className={styles.pages}>on every page ({total})</span>;
+  return (
+    <span className={styles.pages}>
+      on {pages.map((page, i) => <span key={page}>{i ? ', ' : ''}<span className="mono">{page}</span></span>)}
+    </span>
+  );
+}
+
+const formKey = (f) => [f.label, f.method, f.fields?.length, f.password, f.file, f.target, f.note].join('|');
 
 /** One page's checks as a row of short facts. */
 function PageRow({ page }) {
@@ -16,8 +43,8 @@ function PageRow({ page }) {
     <tr>
       <td className="mono">{page.path}</td>
       <td>{offline.external?.length ? <span className={styles.bad}>{offline.external.length} off the copy</span> : <span className={styles.good}>none leave the copy</span>}</td>
-      <td>{visual[1440] ?? '—'}%</td>
-      <td>{visual[390] ?? '—'}%</td>
+      <td>{pct(visual[1440])}</td>
+      <td>{pct(visual[390])}</td>
       <td>{page.hovers ? `${page.hovers.copy.changed} of ${page.hovers.original?.changed ?? '—'}` : '—'}</td>
       <td>{page.controls ? `${page.controls.copy.visible} of ${page.controls.original?.visible ?? '—'} visible` : '—'}</td>
       <td>{errors ? <span className={styles.bad}>{errors}</span> : '0'}</td>
@@ -45,32 +72,47 @@ function Converted({ convert }) {
   const s = convert.stats ?? {};
   const fallbacks = convert.fallbacks ?? [];
   const forms = convert.forms ?? [];
+  const total = s.pages ?? 0;
+  // The same part on every page (a site-wide script) is one line, not one per page; where it sits is on hover.
+  const parts = byPages(fallbacks, (f) => [f.tag, f.attribute, f.where, f.reason].join('|'));
+  const formGroups = byPages(forms, formKey);
+  // Forms usually share one explanation (where their data goes in the copy): said once under the list, not on every line.
+  const notes = [...new Set(forms.map((f) => f.note))];
+  const oneNote = notes.length === 1 ? notes[0] : null;
   return (
     <>
       <h4 className={styles.h}>Converted into code</h4>
       <p className={styles.note}>
-        {s.pages} page(s) became {s.components} component(s){s.shared ? ` (${s.shared} shared between pages)` : ''}, {s.elements} element(s) written as components.
+        {plural(s.pages, 'page')} became {plural(s.components, 'component')}{s.shared ? ` (${s.shared} shared between pages)` : ''}: {plural(s.elements, 'element')} written as component code.
         The pages are prerendered and not hydrated, so no runtime of the stack is sent to visitors.
-        {convert.urlChanges?.length ? ` ${convert.urlChanges.length} page address(es) changed to folder form (redirects are in the download).` : ''}
+        {convert.urlChanges?.length ? ` ${plural(convert.urlChanges.length, 'page address', 'page addresses')} changed to folder form (redirects are in the download).` : ''}
       </p>
-      {fallbacks.length ? (
+      {parts.length ? (
         <>
-          <p className={styles.note}>{fallbacks.length} part(s) kept as the original HTML inside their component (the page is unchanged; only these parts are not component code):</p>
+          <p className={styles.note}>Kept as the original HTML inside their component (the page looks the same; only these parts are not component code):</p>
           <ul className={styles.list}>
-            {fallbacks.slice(0, 20).map((f, i) => (
-              <li key={i}><span className="mono">{f.page}</span> · <span className="mono">&lt;{f.tag}&gt;{f.attribute ? ` ${f.attribute}` : ''}</span> at <span className="mono">{f.where}</span>: {f.reason}</li>
+            {parts.slice(0, 20).map(({ item: f, pages }, i) => (
+              <li key={i}>
+                <span className="mono" title={f.where}>&lt;{f.tag}&gt;{f.attribute ? ` ${f.attribute}` : ''}</span>: {f.reason} <OnPages pages={pages} total={total} />
+              </li>
             ))}
-            {fallbacks.length > 20 && <li>… and {fallbacks.length - 20} more (all listed in KNOWN-ISSUES.md in the download).</li>}
+            {parts.length > 20 && <li>… and {parts.length - 20} more (all listed in KNOWN-ISSUES.md in the download).</li>}
           </ul>
         </>
       ) : <p className={styles.note}>Every element of every page is component code.</p>}
       <h4 className={styles.h}>Forms, in plain words</h4>
       {forms.length ? (
-        <ul className={styles.list}>
-          {forms.map((f, i) => (
-            <li key={i}><span className="mono">{f.page}</span> · “{f.label}” ({f.method}, {f.fields.length} field(s){f.password ? ', a password' : ''}{f.file ? ', a file upload' : ''}): on the original it sent its data to {f.target}. {f.note}</li>
-          ))}
-        </ul>
+        <>
+          <ul className={styles.list}>
+            {formGroups.map(({ item: f, pages }, i) => (
+              <li key={i}>
+                “{f.label}” ({f.method}, {plural(f.fields.length, 'field')}{f.password ? ', a password' : ''}{f.file ? ', a file upload' : ''}) <OnPages pages={pages} total={total} />: on the original it sent its data to {f.target}.
+                {!oneNote && f.note && <span className={styles.pages}> {f.note}</span>}
+              </li>
+            ))}
+          </ul>
+          {oneNote && <p className={styles.note}>{oneNote}</p>}
+        </>
       ) : <p className={styles.note}>No form on the copied pages.</p>}
     </>
   );
@@ -85,7 +127,7 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
   const excluded = asIs.excludedByRule ?? [];
   const gaps = checks.flatMap((p) => (p.controls?.excludedByRule ?? []).map((c) => ({ ...c, page: p.path })));
   return (
-    <Card title="Original as-is" sub={`Packaged as ${stackName(asIs.stack)} · ${asIs.pages?.length ?? checks.length} page(s)`}>
+    <Card title="Original as-is" sub={`Packaged as ${stackName(asIs.stack)} · ${plural(asIs.pages?.length ?? checks.length, 'page')}`}>
       <p className={styles.mode}>
         <strong>Mode used:</strong> Original as-is. {AS_IS_EXPLANATION}
       </p>
@@ -132,7 +174,7 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
           <p className={styles.note}>
             The copy asks its own server for some files it did not hold. The original answered them, and the copy keeps those answers
             ({asIs.sameOrigin.mapped.length} kept; {asIs.sameOrigin.sameAsOriginal.length} the original also lacks).
-            {asIs.sameOrigin.ambiguous.length > 0 && ` ${asIs.sameOrigin.ambiguous.length} path(s) have two sizes: each size is its own file.`}
+            {asIs.sameOrigin.ambiguous.length > 0 && ` ${plural(asIs.sameOrigin.ambiguous.length, 'address', 'addresses')} ${asIs.sameOrigin.ambiguous.length === 1 ? 'has' : 'have'} two sizes: each size is its own file.`}
           </p>
           {asIs.sameOrigin.sameAsOriginal.length > 0 && (
             <ul className={styles.list}>
@@ -141,7 +183,7 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
           )}
           {asIs.ranged && (asIs.ranged.files.length > 0 || asIs.ranged.skipped.length > 0) && (
             <p className={styles.note}>
-              {asIs.ranged.files.length} file(s) the original serves in pieces are kept whole, and the copy cuts the pieces itself.
+              {plural(asIs.ranged.files.length, 'file')} the original serves in pieces {asIs.ranged.files.length === 1 ? 'is' : 'are'} kept whole, and the copy cuts the pieces itself.
               {asIs.ranged.skipped.length > 0 && ` ${asIs.ranged.skipped.length} could not be kept that way and stay as the original answers them.`}
             </p>
           )}
@@ -153,7 +195,9 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
         <>
           <h4 className={styles.h}>Forms, in plain words</h4>
           <ul className={styles.list}>
-            {asIs.formRoutes.map((f, i) => <li key={i}><span className="mono">{f.page}</span> · “{f.label}” ({f.method}): {f.note}</li>)}
+            {byPages(asIs.formRoutes, (f) => [f.label, f.method, f.note].join('|')).map(({ item: f, pages }, i) => (
+              <li key={i}>“{f.label}” ({f.method}) <OnPages pages={pages} total={asIs.pages?.length ?? checks.length} />: {f.note}</li>
+            ))}
           </ul>
         </>
       )}
@@ -174,7 +218,7 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
 
       <h4 className={styles.h}>JavaScript shipped</h4>
       <p className={styles.note}>
-        {asIs.javascript ? `${asIs.javascript.files} file(s): ${kb(asIs.javascript.bytes)}, ${kb(asIs.javascript.gzipBytes)} compressed. This is the original's own code, kept as it is.` : 'Not measured.'}
+        {asIs.javascript ? `${plural(asIs.javascript.files, 'file')}: ${kb(asIs.javascript.bytes)}, ${kb(asIs.javascript.gzipBytes)} compressed. This is the original's own code, kept as it is.` : 'Not measured.'}
       </p>
 
       <h4 className={styles.h}>Lighthouse, desktop (before and after)</h4>

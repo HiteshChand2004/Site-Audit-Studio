@@ -2,13 +2,25 @@
 // The one folder a build's agent may touch, and the file tool it works through. The agent gets the Anthropic-defined text
 // editor (view / create / str_replace / insert): every path it sends is untrusted model output, so it is resolved inside the
 // site folder and refused when it would leave it (.., absolute paths, backslashes, NUL, encoded traversal), and only text
-// files of the kinds a website needs, within WORKSPACE_LIMITS, can be written. Nothing here runs a command or reaches the
-// network.
+// files of the kinds a website needs, within WORKSPACE_LIMITS, can be written. An app stack's fixed files (its configuration,
+// package.json, the lockfile) and the build's output are not the agent's (`rules`, stacks.js). Nothing here runs a command or
+// reaches the network.
 import { mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 export const WORKSPACE_LIMITS = { files: 150, fileBytes: 300 * 1024, totalBytes: 4 * 1024 * 1024, viewChars: 60000 };
-const TEXT_FILE = /\.(html?|css|m?js|json|svg|txt|xml|webmanifest|md)$/i;
+export const TEXT_FILE = /\.(html?|css|m?jsx?|json|svg|txt|xml|webmanifest|md)$/i;
+const TEXT_KINDS = '.html, .css, .js, .jsx, .svg, .json, .txt, .xml, .webmanifest, .md';
+// Files put in the project for the agent, never written through the editor: the owner's photos (images.js), the design's fonts.
+const BINARY_FILE = /\.(webp|png|jpe?g|gif|avif|ico|woff2?|ttf|otf)$/i;
+
+/**
+ * @typedef {{ writable: (rel: string) => boolean, writableText: string, listed: (rel: string) => boolean, text?: RegExp, textText?: string }} Rules
+ *   writable: the files the agent may write; listed: the files it sees and that count toward the limits; text: the kinds of
+ *   file it may create (a website's text files when left out), textText: the same in words
+ */
+/** @type {Rules} */
+const ANY = { writable: () => true, writableText: '', listed: () => true };
 
 export class ToolError extends Error {}
 
@@ -52,9 +64,10 @@ const numbered = (/** @type {string} */ text, start = 1) => text.split('\n').map
  * message Claude can act on.
  * @param {string} root
  * @param {any} input  { command, path, file_text?, old_str?, new_str?, insert_line?, insert_text?, view_range? }
+ * @param {Rules} [rules]
  * @returns {Promise<{ text: string, changed?: { path: string, action: 'created' | 'edited' } }>}
  */
-export async function runEditor(root, input) {
+export async function runEditor(root, input, rules = ANY) {
   const command = input?.command;
   if (!['view', 'create', 'str_replace', 'insert'].includes(command)) throw new ToolError(`Unknown command: ${command}. Use view, create, str_replace or insert.`);
   const { abs, rel } = await resolveInside(root, input.path ?? '.');
@@ -62,10 +75,11 @@ export async function runEditor(root, input) {
 
   if (command === 'view') {
     if (!info || info.isDirectory()) {
-      const files = (await listFiles(root)).filter((f) => rel === '.' || f === rel || f.startsWith(`${rel}/`));
+      const files = (await listFiles(root)).filter((f) => rules.listed(f) && (rel === '.' || f === rel || f.startsWith(`${rel}/`)));
       if (!info && rel !== '.') throw new ToolError(`No such file or folder: ${rel}`);
       return { text: files.length ? `Files in ${rel === '.' ? 'the project' : rel}:\n${files.join('\n')}` : 'The project is empty.' };
     }
+    if (BINARY_FILE.test(rel)) return { text: `${rel} is an image or font file, not text: it cannot be shown. Use it by its path.` };
     const text = await readFile(abs, 'utf8');
     const lines = text.split('\n');
     const [from, to] = Array.isArray(input.view_range) ? input.view_range : [1, -1];
@@ -76,11 +90,14 @@ export async function runEditor(root, input) {
   }
 
   if (rel === '.' || info?.isDirectory()) throw new ToolError(`${rel} is a folder, not a file.`);
+  if (!rules.writable(rel)) {
+    throw new ToolError(`${rel} is part of the project's fixed setup (or the build's output) and cannot be changed. You write ${rules.writableText}.`);
+  }
 
   if (command === 'create') {
     if (typeof input.file_text !== 'string') throw new ToolError('create needs file_text.');
-    if (!TEXT_FILE.test(rel)) throw new ToolError(`Only text files a website needs can be written (.html, .css, .js, .svg, .json, .txt, .xml, .webmanifest, .md): ${rel}`);
-    await checkRoom(root, rel, Buffer.byteLength(input.file_text), Boolean(info));
+    if (!(rules.text ?? TEXT_FILE).test(rel)) throw new ToolError(`Only text files a website needs can be written (${rules.textText ?? TEXT_KINDS}): ${rel}`);
+    await checkRoom(root, rel, Buffer.byteLength(input.file_text), Boolean(info), rules);
     await mkdir(path.dirname(abs), { recursive: true });
     await writeFile(abs, input.file_text);
     return { text: `${info ? 'Overwrote' : 'Created'} ${rel}.`, changed: { path: rel, action: info ? 'edited' : 'created' } };
@@ -104,15 +121,15 @@ export async function runEditor(root, input) {
     lines.splice(at, 0, insertText);
     next = lines.join('\n');
   }
-  await checkRoom(root, rel, Buffer.byteLength(next), true);
+  await checkRoom(root, rel, Buffer.byteLength(next), true, rules);
   await writeFile(abs, next);
   return { text: `Edited ${rel}.`, changed: { path: rel, action: 'edited' } };
 }
 
-/** Refuses a write that would pass WORKSPACE_LIMITS. */
-async function checkRoom(root, rel, bytes, exists) {
+/** Refuses a write that would pass WORKSPACE_LIMITS: they count the text files the agent writes, not the photos and fonts put there for it. */
+async function checkRoom(root, rel, bytes, exists, rules) {
   if (bytes > WORKSPACE_LIMITS.fileBytes) throw new ToolError(`${rel} would be ${Math.round(bytes / 1024)} KB; one file may be at most ${WORKSPACE_LIMITS.fileBytes / 1024} KB. Split it.`);
-  const files = await listFiles(root);
+  const files = (await listFiles(root)).filter((f) => rules.listed(f) && (rules.text ?? TEXT_FILE).test(f));
   if (!exists && files.length >= WORKSPACE_LIMITS.files) throw new ToolError(`The project already has ${files.length} files, the most allowed.`);
   let total = bytes;
   for (const f of files) if (f !== rel) total += (await stat(path.join(root, f))).size;

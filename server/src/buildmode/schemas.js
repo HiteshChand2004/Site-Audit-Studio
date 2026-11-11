@@ -34,9 +34,9 @@ export function understandingSchema(library) {
   });
 }
 
-/** Step 2: the creative and technical brief the agent works from. */
-export function briefSchema() {
-  const direction = obj({
+/** One design direction: in the brief, and alone when a repeat build gets a design of its own (steps.js writeDirection). */
+export function directionSchema() {
+  return obj({
     name: str('A short evocative name for this direction'),
     palette: { type: 'array', items: obj({ role: { type: 'string', enum: ['background', 'surface', 'text', 'muted', 'primary', 'accent', 'border'] }, hex: str('#rrggbb') }) },
     fonts: obj({ heading: str('A font family available on Google Fonts or the system'), body: str('A font family available on Google Fonts or the system') }),
@@ -45,6 +45,11 @@ export function briefSchema() {
     motion: { type: 'string', enum: ['none', 'subtle', 'expressive'] },
     why: str('Why this direction fits the audience and goal'),
   });
+}
+
+/** Step 2: the creative and technical brief the agent works from. */
+export function briefSchema() {
+  const direction = directionSchema();
   return obj({
     summary: str('Two or three sentences: what will be built or changed, and why'),
     design: obj({

@@ -1,4 +1,4 @@
-import { ArrowRight, ArrowUpRight, Plus, Wand2 } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, Plus, SearchCheck, Wand2 } from 'lucide-react';
 import Button from '../components/common/Button.jsx';
 import CountUp from '../components/common/CountUp.jsx';
 import { CheckArt, CompareArt, CopyArt, EmptySiteArt, ResultsArt } from '../components/common/Illustrations.jsx';
@@ -167,7 +167,7 @@ function byActivity(projects, overviews) {
   return [...projects].sort((a, b) => hasCopy(b) - hasCopy(a) || when(b) - when(a));
 }
 
-/** Home: every website at a glance, and how the app works. */
+/** Home: the two ways to start (check a site you have, build a new one), every website at a glance, and how the app works. */
 export default function Home({ onNewProject, onBuild }) {
   const projects = useProjects((s) => s.projects);
   const loading = useProjects((s) => s.loading);
@@ -188,21 +188,35 @@ export default function Home({ onNewProject, onBuild }) {
         <div className={styles.heroText}>
           <span className="eyebrow intro">Overview</span>
           <h1 className={styles.title}>
-            Every company website,
+            Every company website,{' '}
             <br />
-            checked and rebuilt better.
+            checked, rebuilt or built new.
           </h1>
           <p className={styles.lead}>
-            Check how healthy a site is, make a clean copy that fixes what can be fixed, and compare the two before you download it.
+            Check a site you already have and get a clean copy that fixes what can be fixed, or describe a new one and have it built for you.
           </p>
-          <div className={styles.heroActions}>
-            <Button variant="primary" size="lg" icon={Plus} onClick={onNewProject}>
-              Add a website
-            </Button>
+          <div className={styles.paths} data-single={!onBuild || undefined}>
+            <button type="button" className={styles.path} onClick={onNewProject}>
+              <span className={styles.pathIcon}>
+                <SearchCheck size={20} aria-hidden="true" />
+              </span>
+              <span className={styles.pathText}>
+                <span className={styles.pathTitle}>Check a website you have</span>
+                <span className={styles.pathSub}>Add its address. We check it, then make a better copy you can compare and download.</span>
+              </span>
+              <ArrowRight size={18} className={styles.pathGo} aria-hidden="true" />
+            </button>
             {onBuild && (
-              <Button size="lg" icon={Wand2} onClick={onBuild}>
-                Build a new site
-              </Button>
+              <button type="button" className={styles.path} onClick={onBuild}>
+                <span className={styles.pathIcon}>
+                  <Wand2 size={20} aria-hidden="true" />
+                </span>
+                <span className={styles.pathText}>
+                  <span className={styles.pathTitle}>Build a new website</span>
+                  <span className={styles.pathSub}>Describe what you need. You look over the plan before anything is built.</span>
+                </span>
+                <ArrowRight size={18} className={styles.pathGo} aria-hidden="true" />
+              </button>
             )}
           </div>
         </div>
@@ -240,10 +254,17 @@ export default function Home({ onNewProject, onBuild }) {
           <div className={styles.empty}>
             <EmptySiteArt className={styles.emptyArt} />
             <h3>No websites yet</h3>
-            <p>Add the address of one of your company’s websites. The first check takes a minute or two.</p>
-            <Button variant="primary" icon={Plus} onClick={onNewProject}>
-              Add a website
-            </Button>
+            <p>Add the address of one of your company’s websites (the first check takes a minute or two), or start a new one from a description.</p>
+            <div className={styles.emptyActions}>
+              <Button variant="primary" icon={Plus} onClick={onNewProject}>
+                Add a website
+              </Button>
+              {onBuild && (
+                <Button icon={Wand2} onClick={onBuild}>
+                  Build a new website
+                </Button>
+              )}
+            </div>
           </div>
         )}
 

@@ -1,13 +1,16 @@
 import { useState } from 'react';
-import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, Check, ChevronRight, Hand, Minus, RefreshCw, RotateCw, X } from 'lucide-react';
+import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, Check, ChevronRight, Hand, Info, Minus, RefreshCw, RotateCw, X } from 'lucide-react';
 import Badge from '../common/Badge.jsx';
 import Button from '../common/Button.jsx';
 import styles from './FixReport.module.css';
 import { ROW_GROUPS, WORSE_REASONS, WORSE_UNEXPLAINED } from '../../copy.js';
+import { WORSE_CAUSES } from '../../siteData.js';
 
 // Every status the comparison can give a check, in the order rows are listed (server: reaudit/compare/rules.js).
 const STATUS = {
   regressed: { icon: ArrowDownRight, label: 'Regressed', chip: 'Regressed' },
+  // Regressed as measured, but for a reason that is not the copy (its "Why" says which): not counted as "Got worse".
+  explained: { icon: Info, label: 'Only reads worse', chip: 'Only read worse' },
   open: { icon: X, label: 'Still open', chip: 'Still open' },
   changed: { icon: Activity, label: 'Changed (noisy locally)', chip: 'Changed' },
   recheck: { icon: RefreshCw, label: 'Recheck (network error)', chip: 'Recheck' },
@@ -17,7 +20,7 @@ const STATUS = {
   na: { icon: Minus, label: 'N/A · deploy check', chip: 'N/A' },
   pass: { icon: Check, label: 'Passing', chip: 'Passing' },
 };
-const CHIPS = ['fixed', 'improved', 'open', 'regressed', 'changed', 'recheck', 'manual', 'na'];
+const CHIPS = ['fixed', 'improved', 'open', 'regressed', 'explained', 'changed', 'recheck', 'manual', 'na'];
 // A category opens on its own when it holds something to act on.
 const NEEDS_ACTION = new Set(['regressed', 'open']);
 
@@ -213,7 +216,7 @@ function Row({ item }) {
           <LinkList title="New" links={item.links?.new} />
           <LinkList title="Could not be reached on this run" links={item.links?.recheck} />
           <Evidence evidence={item.evidence} />
-          {(item.status === 'regressed' || item.status === 'open') && 'reason' in item && <WorseReason item={item} />}
+          {(item.status === 'regressed' || item.status === 'explained' || item.status === 'open') && 'reason' in item && <WorseReason item={item} />}
           {item.review && <p className={styles.review}>Text was generated from the page; check that it reads right.</p>}
           {item.note && <p className={styles.note}>{item.note}</p>}
           {item.helpUrl && (
@@ -272,7 +275,12 @@ function Category({ category, items, filter }) {
  */
 export default function FixReport({ data, busy, onReaudit }) {
   const [filter, setFilter] = useState(null);
-  const { summary = {}, items = [], categories = [], scope, notes = [] } = data;
+  const { categories = [], scope, notes = [] } = data;
+  // A regressed row the run found a reason for that is not the copy (measured on this computer, needs the new site's
+  // address…) is listed as "Only reads worse" with that reason's name, apart from the rows that really got worse, as the
+  // rest of the app counts them (siteData.js worseSplit). The counts of the chips follow the rows.
+  const items = (data.items ?? []).map((i) => (i.status === 'regressed' && WORSE_CAUSES[i.group] ? { ...i, status: 'explained', statusLabel: WORSE_CAUSES[i.group].title } : i));
+  const summary = { ...(data.summary ?? {}), ...Object.fromEntries(['regressed', 'explained'].map((s) => [s, items.filter((i) => i.status === s).length])) };
   const compared = scope?.pages?.length ?? 0;
   const outOfScope = scope?.outOfScope?.length ?? 0;
 

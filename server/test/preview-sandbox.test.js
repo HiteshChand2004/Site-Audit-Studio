@@ -48,6 +48,11 @@ const PROBE = `(async () => {
   try { r.urlCtor = new URL('/data.json', location.href).pathname; } catch (e) { r.urlCtor = 'error:' + e.name; }
   r.xhr = await new Promise((res) => { try { const x = new XMLHttpRequest(); x.open('GET', '/data.json'); x.onloadend = () => res(x.status); x.send(); } catch (e) { res('error:' + e.name); } });
   r.late = await new Promise((res) => { const s = document.createElement('script'); s.src = '/late.js'; s.onload = () => res(window.__late === true); s.onerror = () => res(false); document.head.appendChild(s); });
+  // A chunk loader reads its scripts' addresses back and looks them up by address (Turbopack, webpack).
+  r.readBack = document.querySelector('script[src="/app.js"]')?.getAttribute('src') ?? null;
+  r.readBackLate = document.querySelector('script[src^="/late.js"]')?.getAttribute('src') ?? null;
+  r.linkFound = Boolean(document.querySelector("link[rel=stylesheet][href='/styles.css']")) && Boolean(document.querySelector('link').closest('head[lang], head'));
+  r.matches = document.querySelector('a').matches('a[href="/about/"]');
   r.img = await new Promise((res) => { const d = document.createElement('div'); d.innerHTML = '<img src="/dot.png">'; document.body.appendChild(d); const i = d.firstChild; i.onload = () => res(i.naturalWidth); i.onerror = () => res('error'); if (i.complete && i.naturalWidth) res(i.naturalWidth); });
   r.mod = await import('/mod.js').then((x) => x.ok, (e) => 'error:' + e.name);
   r.dynImport = await import('/mo' + 'd.js').then((x) => x.ok, (e) => 'error:' + e.name);
@@ -249,6 +254,7 @@ test('the risk, then the fix: a copied site\'s script cannot reach the app, its 
       if (o.report) {
         await page.waitForFunction(() => window.__results.some((m) => m && m.sasPreview === 1 && m.done), null, { timeout: 15000 });
         result.report = await page.evaluate(() => window.__results.filter((m) => m && m.sasPreview === 1 && m.done).pop());
+        result.height = await page.evaluate(() => window.__results.filter((m) => m && m.sasPreview === 1 && 'height' in m).pop() ?? null);
       }
       return result;
     } finally {
@@ -294,6 +300,12 @@ test('the risk, then the fix: a copied site\'s script cannot reach the app, its 
   assert.match(after.urlCtor, /^\/preview\/[A-Za-z0-9_-]{24}\/data\.json$/, 'new URL("/x", location.href)');
   assert.equal(after.xhr, 200, 'XMLHttpRequest');
   assert.equal(after.late, true, 'a script element the page adds with src="/x"');
+  // It reads its addresses back as it wrote them, and finds an element by its address (a chunk loader that saw the moved
+  // address never found its loaded chunks: a Next.js App Router page never hydrated in the preview).
+  assert.equal(after.readBack, '/app.js', 'getAttribute("src") of a script written as src="/x", found by script[src="/x"]');
+  assert.equal(after.readBackLate, '/late.js', 'the same for a script the page added with .src = "/x"');
+  assert.equal(after.linkFound, true, 'link[href="/x"] finds the stylesheet');
+  assert.equal(after.matches, true, 'matches(\'a[href="/x/"]\')');
   assert.equal(after.img, 1, 'an image written as markup with src="/x"');
   assert.equal(after.mod, true, 'import("/mod.js") whose module imports "/dep.js" by address');
   assert.equal(after.dynImport, true, 'import() of an address built at run time (the import map, no hook can reach it)');
@@ -312,6 +324,9 @@ test('the risk, then the fix: a copied site\'s script cannot reach the app, its 
   assert.ok(after.report.failed >= 1, `the missing file counted: ${JSON.stringify(after.report)}`);
   assert.ok(after.report.moved > 0, 'addresses were moved');
   assert.deepEqual(Object.keys(after.report).sort(), ['blank', 'done', 'errors', 'failed', 'moved', 'sasPreview', 'token'], 'nothing else leaves the frame');
+  // Its height, for "Scrolling together" when the run did not measure it: a number, nothing else.
+  assert.ok(after.height?.height > 0, `the page's height reported: ${JSON.stringify(after.height)}`);
+  assert.deepEqual(Object.keys(after.height).sort(), ['height', 'sasPreview', 'token']);
   // A page whose script draws nothing: reported as blank, with what it could not load.
   const blank = await probeBlank(`${previewUrl}blank/`);
   assert.equal(blank.blank, true);
