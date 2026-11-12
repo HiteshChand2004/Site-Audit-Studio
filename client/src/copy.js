@@ -119,6 +119,26 @@ export const JOB_STEPS = {
 /** Friendly title of a job step (falls back to the server's own label). */
 export const stepTitle = (key, fallback) => JOB_STEPS[key]?.title ?? fallback ?? key;
 
+/**
+ * A job's live message in words. A server log line that reached the app as it is ("visual /about/ {…}": a copy started before the
+ * server said these in words, or a line no step words yet) becomes a sentence naming the page; any other trailing data is dropped.
+ */
+export function progressText(message) {
+  if (!message) return message;
+  const m = message.match(/^(visual|offline|fixes|speed plan|page|original) (\/\S*?):?(?:\s|$)/);
+  if (m) {
+    const [, kind, page] = m;
+    if (kind === 'visual') return `Comparing ${page} with the original`;
+    if (kind === 'offline') return `Checking that ${page} loads nothing from other sites`;
+    if (kind === 'fixes') return `Checking that the fixes leave ${page} looking the same`;
+    if (kind === 'speed plan') return `Measuring ${page} for faster images`;
+    if (kind === 'page') return `${page} checked`;
+    return `The original's ${page} did not load; the copy is still checked`;
+  }
+  // Measurements a line carries (JSON) are for the server log, not for reading.
+  return message.replace(/\s*(?:\{"|\[[{"]).*$/s, '') || message;
+}
+
 /** Results of a check, before → after (fix checklist statuses). */
 // Why a row of an as-is copy got worse (server/src/copy/openItems.js REASONS, the five reasons of "Copy my site").
 export const WORSE_REASONS = {

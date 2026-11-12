@@ -3,7 +3,7 @@ import { X } from 'lucide-react';
 import Button from '../common/Button.jsx';
 import { Alert } from '../common/Surface.jsx';
 import StepList from '../common/StepList.jsx';
-import { JOB_STEPS, stepTitle } from '../../copy.js';
+import { JOB_STEPS, progressText, stepTitle } from '../../copy.js';
 import styles from './AnalyzeProgress.module.css';
 import { stripAnsi } from '../../ansi.js';
 
@@ -64,7 +64,7 @@ export default function AnalyzeProgress({ analysis, kind = 'analysis', onDismiss
     key: s.key,
     title: stepTitle(s.key, s.label),
     explain: JOB_STEPS[s.key]?.explain,
-    detail: i === activeIndex ? analysis.message : null,
+    detail: i === activeIndex ? progressText(analysis.message) : null,
     state: activeIndex === -1 ? 'pending' : i < activeIndex ? 'done' : i === activeIndex ? 'active' : 'pending',
   }));
 

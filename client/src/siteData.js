@@ -2,6 +2,7 @@
 // jobs running for it. Pure helpers: the screens decide how to draw it. Nothing here is specific to one website.
 import { isJobActive, useProjects } from './store/useProjects.js';
 import { apiUrl } from './api/base.js';
+import { fidelityPages } from './fidelity.js';
 
 export const isReal = (audit) => Boolean(audit && !audit.isDummy);
 
@@ -23,10 +24,13 @@ export function captureShot(projectId, result, page, view = 'desktop', kind = 'f
   return apiUrl(`/projects/${projectId}/recreate/${result.recreateId}/captures/${page.slug}/${view}-${kind}.webp`);
 }
 
-/** The picture of one page of the copy (taken when its match was measured). */
+/**
+ * The picture of one page of the copy: taken when its match was measured, or, for an as-is copy, made by the server on first
+ * request (show it with components/common/RetryImg.jsx, which asks again while it is being made).
+ */
 export function copyShot(projectId, result, page = homePage(result), view = 'desktop') {
   if (!result?.recreateId || !page?.slug) return null;
-  const fid = result.fidelity?.pages?.find((p) => p.outPath === page.outPath);
+  const fid = fidelityPages(result).find((p) => p.outPath === page.outPath);
   if (!fid?.views?.[view]) return null;
   return apiUrl(`/projects/${projectId}/recreate/${result.recreateId}/fidelity/${page.slug}/${view}-full.webp`);
 }

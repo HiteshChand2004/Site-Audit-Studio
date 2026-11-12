@@ -15,10 +15,14 @@ const ACCEPT = {
   font: 'font/woff2,font/woff,font/ttf,font/otf,*/*;q=0.8',
   media: 'video/*,audio/*,*/*;q=0.8',
   stylesheet: 'text/css,*/*;q=0.1',
+  // Data the copy's own script asks its server for (an app's settings): JSON is the answer itself, a page is still none.
+  data: 'application/json,*/*;q=0.8',
 };
 
 // Error pages and API answers served in place of an asset.
 const NOT_AN_ASSET = /^(text\/html|application\/xhtml\+xml|application\/json|application\/problem\+json)$/i;
+// For `data`: a page or an error report is still not the answer asked for.
+const NOT_DATA = /^(text\/html|application\/xhtml\+xml|application\/problem\+json)$/i;
 const HTML_START = /^\s*(<!doctype html|<html[\s>]|<head[\s>]|<body[\s>])/i;
 
 export const REASONS = {
@@ -44,7 +48,7 @@ async function fromCache(url, { cache, dir, kind, maxBytes }) {
   const entry = cache?.lookup(url);
   if (!entry || entry.status !== 200 || !entry.bytes || entry.bytes > maxBytes) return null;
   const mime = (entry.headers['content-type'] || '').split(';')[0].trim().toLowerCase() || null;
-  if (mime && NOT_AN_ASSET.test(mime) && kind !== 'stylesheet') return null;
+  if (mime && (kind === 'data' ? NOT_DATA : NOT_AN_ASSET).test(mime) && kind !== 'stylesheet') return null;
   let tmp;
   try {
     const body = await readFile(entry.file);
@@ -123,7 +127,8 @@ async function attemptDownload(url, { dir, kind, maxBytes, timeout, signal, refe
   if (res.status !== 200 && !(resuming && res.status === 206)) return fail(`http-${res.status}`);
   const continued = resuming && res.status === 206;
   const mime = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase() || null;
-  if (mime && NOT_AN_ASSET.test(mime) && kind !== 'stylesheet') return fail('not-an-asset');
+  // The type is named with the refusal, so a caller may ask again for data (complete.js: an app's JSON answer).
+  if (mime && (kind === 'data' ? NOT_DATA : NOT_AN_ASSET).test(mime) && kind !== 'stylesheet') return fail('not-an-asset', { mime });
   const declared = Number(res.headers.get('content-length'));
   if (declared + (continued ? resumeFrom.bytes : 0) > maxBytes) return fail('too-large', { bytes: declared });
   if (!res.body) {

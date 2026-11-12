@@ -188,7 +188,7 @@ export default function OverviewStep({ project, audit, loading, onGo }) {
                   </figcaption>
                 </figure>
                 <figure>
-                  <BrowserShot src={copy} address="the copy" alt={`The copy of ${host}`} ratio={16 / 10} />
+                  <BrowserShot src={copy} address="the copy" alt={`The copy of ${host}`} ratio={16 / 10} retry />
                   <figcaption>
                     <i data-side="new" /> {TERMS.copy}
                   </figcaption>

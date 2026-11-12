@@ -316,7 +316,11 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
     const refused = [];
     for (const origin of origins) {
       const candidate = new URL(rel, origin).href;
-      const r = await fetchImpl(candidate, { dir: tmp, kind: 'image', maxBytes, attempts: 3 });
+      let r = await fetchImpl(candidate, { dir: tmp, kind: 'image', maxBytes, attempts: 3 });
+      // The copy's script asked its own server for data (an app's settings, /api/config) and the original answered it with
+      // JSON: that answer is what the page needs to draw, so it is kept like a file. Asked again as data, so the answer is
+      // read whole; a page or an error is still refused.
+      if (!r.ok && r.reason === 'not-an-asset' && /json/i.test(r.mime ?? '')) r = await fetchImpl(candidate, { dir: tmp, kind: 'data', maxBytes, attempts: 3 });
       if (r.ok && !/text\/html/i.test(r.mime ?? '')) return { original: candidate, res: r, refused };
       refused.push({ host: new URL(origin).hostname, reason: r.ok ? 'the original answers with a page' : r.reason });
     }

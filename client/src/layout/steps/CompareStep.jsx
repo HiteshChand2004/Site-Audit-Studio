@@ -9,12 +9,14 @@ import { api } from '../../api/client.js';
 import { apiUrl } from '../../api/base.js';
 import SitePreview, { FullPageFrame, liveAvailability, LiveFrame, ModeToggle } from '../../components/preview/SitePreview.jsx';
 import { defaultPreviewMode, unavailableNote } from '../../components/preview/framing.js';
+import { useLiveAnswer } from '../../components/preview/useLiveAnswer.js';
 import { Pill } from '../../components/common/Score.jsx';
 import { matchRating, TERMS, VIEWPORT_NAMES } from '../../copy.js';
 import { pageOf, shownStack, outputsOf } from '../../stacks.js';
 import { useProjects } from '../../store/useProjects.js';
 import { useSyncScroll } from '../useSyncScroll.js';
 import { captureShot } from '../../siteData.js';
+import { fidelityPages } from '../../fidelity.js';
 import styles from '../Panel.module.css';
 import ws from '../Workspace.module.css';
 
@@ -91,7 +93,7 @@ const SIZES = [
 /** How closely the selected page matches the original: one score and one plain verdict, plus the screen size shown. */
 function PageMatch({ fid, view }) {
   if (!fid || fid.score == null) {
-    return <p className={ws.hint}>How closely this page matches was not measured (the copy ran out of time before that check).</p>;
+    return <p className={ws.hint}>How closely this page matches was not measured for this copy.</p>;
   }
   const r = matchRating(fid.score);
   const here = fid.views?.[view]?.score;
@@ -181,18 +183,22 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
     if (previewStale) ensurePreview(project.id);
   }, [previewStale, project.id, ensurePreview]);
 
-  // The original: the homepage from the check; another page as the picture the copy step took of it (or live).
+  // The original, live or as a picture. The picture is the one the copy step took of this page, the homepage included: it was
+  // taken when the copy was made, after its own scroll-through, while the check's picture may be older (one taken before the
+  // check paused at each scroll step left the sections that fade in on scroll blank). The homepage falls back to the check's.
   const siteUrl = audit?.url ?? project.url;
   const pageInfo = result?.pages?.find((p) => p.outPath === page) ?? null;
   const otherPage = pageInfo && pageInfo.path !== '/' && pageInfo.url ? pageInfo : null;
   const originalUrl = otherPage?.url ?? siteUrl;
-  const pageShot = otherPage
-    ? (vp) => (otherPage.views?.includes(vp.view) && otherPage.slug
-      ? { viewport: { width: vp.id }, full: { url: apiUrl(`/projects/${project.id}/recreate/${result.recreateId}/captures/${otherPage.slug}/${vp.view}-full.webp`) } }
-      : null)
+  const capturedViews = pageInfo?.slug ? pageInfo.views ?? [] : [];
+  const pageShot = capturedViews.length || otherPage
+    ? (vp) => (capturedViews.includes(vp.view)
+      ? { viewport: { width: vp.id }, full: { url: apiUrl(`/projects/${project.id}/recreate/${result.recreateId}/captures/${pageInfo.slug}/${vp.view}-full.webp`) } }
+      : (!otherPage && audit?.screenshots?.views?.[vp.view]) || null)
     : undefined;
-  const live = liveAvailability(audit, originalUrl);
-  const hasScreens = otherPage ? (otherPage.views?.length ?? 0) > 0 : Boolean(audit?.screenshots);
+  // Live only when the site can be framed and answers right now (a site that is down would draw a blank frame).
+  const live = useLiveAnswer(project.id, originalUrl, liveAvailability(audit, originalUrl));
+  const hasScreens = capturedViews.length > 0 || (!otherPage && Boolean(audit?.screenshots));
   const [mode, setMode] = useState('screenshot');
   const [copyMode, setCopyMode] = useState(COPY_MODE);
   useEffect(() => {
@@ -207,7 +213,8 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
         return 'screenshot';
       });
     } else if (!sync && modeBefore.current) {
-      setMode(modeBefore.current);
+      // Back to live only if the site can still be shown live (it may have stopped answering meanwhile).
+      setMode(modeBefore.current === 'live' && !live.ok ? 'screenshot' : modeBefore.current);
       modeBefore.current = null;
     }
   }, [sync, hasScreens]);
@@ -236,21 +243,24 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   const ready = Boolean(asIsCopy ? asIsUrl : preview?.url && preview.recreateId === result.recreateId);
   const src = ready ? `${copyUrl}${pageUrl(pageOf(result, shown, page).file)}` : null;
   const view = VIEWPORTS.find((v) => v.id === viewport)?.view;
-  const measuredHeight = result?.fidelity?.pages?.find((p) => p.outPath === page)?.views?.[view]?.height?.generated ?? null;
+  const fidPages = fidelityPages(result);
+  const measuredHeight = fidPages.find((p) => p.outPath === page)?.views?.[view]?.height?.generated ?? null;
   const pageHeight = measuredHeight ?? reportedHeight;
   const fullPage = sync && ready && pageHeight > 0;
   takeHeight.current = !fullPage;
   const realOriginal = audit && !audit.isDummy;
   // Live not available (the site blocks framing, or this app's own address): say so, and what is shown instead.
   const originalNote = realOriginal ? unavailableNote(live, hasScreens) : null;
-  const fidByPage = new Map((result.fidelity?.pages ?? []).map((p) => [p.outPath, p]));
+  const fidByPage = new Map(fidPages.map((p) => [p.outPath, p]));
   const pageIndex = Math.max(0, pages.indexOf(page));
   // The copy's own pictures (taken when its match was measured), per screen size.
   const copyInfo = result.pages?.find((p) => p.outPath === page) ?? null;
   const copyPageShot = (vp) => {
-    const fv = fidByPage.get(page)?.views?.[vp.view];
+    const fid = fidByPage.get(page);
+    const fv = fid?.views?.[vp.view];
     if (!fv || !copyInfo?.slug) return null;
-    return { viewport: { width: vp.id }, full: { url: apiUrl(`/projects/${project.id}/recreate/${result.recreateId}/fidelity/${copyInfo.slug}/${vp.view}-full.webp`) } };
+    // An as-is copy's picture is made by the server on first request: the picture view asks again until it is there.
+    return { viewport: { width: vp.id }, retry: Boolean(fid.asIs), full: { url: apiUrl(`/projects/${project.id}/recreate/${result.recreateId}/fidelity/${copyInfo.slug}/${vp.view}-full.webp`) } };
   };
   const copyHasShots = Boolean(copyInfo?.slug && fidByPage.get(page)?.views);
   const copyPicture = copyMode === 'screenshot' && copyHasShots;

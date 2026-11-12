@@ -714,6 +714,15 @@ export async function baselineVisual(browser, base, copyUrl, baselinePng, { widt
   };
 }
 
+/** Runs `task` for every item, at most `size` at once, each started in the items' order. */
+export async function inPool(items, size, task) {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await task(items[next++]);
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(size, items.length)) }, worker));
+}
+
 /** A page's saved pictures: { capture?, 1440?, 390? } (a width's entry may hold several); a bare picture (bytes or a file) is the capture's. */
 const savedPictures = (b) => (!b ? {} : Buffer.isBuffer(b) || typeof b === 'string' ? { capture: b } : b);
 
@@ -723,10 +732,12 @@ const savedPictures = (b) => (!b ? {} : Buffer.isBuffer(b) || typeof b === 'stri
  *   per page path: the capture's picture and / or the original's own pictures from an earlier check, per width
  * @param {(pagePath: string, width: number, pngs: Buffer[]) => Promise<void>|void} [o.onOriginalPicture]  receives the original's
  *   pictures (NOISE_SHOTS of them) of every live comparison, to be kept as that page's baseline
+ * @param {number} [o.pagesAtOnce]  pages checked side by side (each pictures its two widths at once); the report keeps page order
  */
-export async function checkCopy({ browser, base, pages, excludedHosts = [], log = () => {}, originalReachable = true, baselines = {}, htmlBase = null, onOriginalPicture = null }) {
+export async function checkCopy({ browser, base, pages, excludedHosts = [], log = () => {}, originalReachable = true, baselines = {}, htmlBase = null, onOriginalPicture = null, pagesAtOnce = 1 }) {
   const report = { pages: [], forms: 0, needsAPerson: [], originalReachable };
-  for (const p of pages) {
+  const done = new Map();
+  const checkPage = async (p) => {
     const copyUrl = `${base}${p.path}`;
     const one = { path: p.path, original: p.url };
     one.offline = await offlineCheck(browser, base, p.path).then((r) => ({ ...r, path: p.path }));
@@ -744,35 +755,43 @@ export async function checkCopy({ browser, base, pages, excludedHosts = [], log 
         return null;
       }
     };
-    one.visual = [];
     const saved = savedPictures(baselines[p.path]);
-    for (const width of [1440, 390]) {
+    // Both widths at once (a page and its phone layout are independent); the results stay in width order.
+    const byWidth = await Promise.all([1440, 390].map(async (width) => {
+      const visual = [];
       const v = await asOriginal(`${p.url} at ${width}`, () => visualCheck(browser, base, copyUrl, p.url, width, { keepOriginal: Boolean(onOriginalPicture) }));
       if (v) {
         const { originalShots, ...measured } = v;
         if (originalShots) await onOriginalPicture(p.path, width, originalShots);
-        one.visual.push(measured);
+        visual.push(measured);
         log(`visual ${p.path} ${JSON.stringify(measured)}`);
       } else if (saved[width]) {
         // The original is not compared: the copy is compared with the original's own picture from an earlier check at this width.
-        one.visual.push(await baselineVisual(browser, base, copyUrl, saved[width], { width, kind: 'original' }));
-        log(`visual ${p.path} ${JSON.stringify(one.visual.at(-1))}`);
+        visual.push(await baselineVisual(browser, base, copyUrl, saved[width], { width, kind: 'original' }));
+        log(`visual ${p.path} ${JSON.stringify(visual.at(-1))}`);
       } else if (width === 1440 && saved.capture) {
         // Else, on the desktop, with the capture's own picture of the page (less reliable: see baselineVisual).
-        one.visual.push(await baselineVisual(browser, base, copyUrl, saved.capture, { width, kind: 'capture' }));
-        log(`visual ${p.path} ${JSON.stringify(one.visual.at(-1))}`);
+        visual.push(await baselineVisual(browser, base, copyUrl, saved.capture, { width, kind: 'capture' }));
+        log(`visual ${p.path} ${JSON.stringify(visual.at(-1))}`);
       } else if (htmlBase) {
         // The original is not compared and there is no saved picture: the copy is compared with its own Plain HTML base
         // (the same copy rendered as plain files), so the check does not skip the page.
         const v2 = await visualCheck(browser, base, copyUrl, `${htmlBase}${p.path}`, width);
-        one.visual.push({ ...v2, source: 'plain-html base' });
-        log(`visual ${p.path} ${JSON.stringify(one.visual.at(-1))}`);
+        visual.push({ ...v2, source: 'plain-html base' });
+        log(`visual ${p.path} ${JSON.stringify(visual.at(-1))}`);
       } else {
-        one.visual.push({ width, diffPct: null, note: `original not reachable: ${reason}${width === 1440 ? ' and no saved capture' : ''}` });
+        visual.push({ width, diffPct: null, note: `original not reachable: ${reason}${width === 1440 ? ' and no saved capture' : ''}` });
       }
-    }
-    const copyClicks = await clickProfile(browser, base, copyUrl, true);
-    const origClicks = await asOriginal('controls', () => clickProfile(browser, base, p.url, false));
+      return visual;
+    }));
+    one.visual = byWidth.flat();
+    // The controls and hovers of both sides at once: each profile has its own context, so none sees another's clicks.
+    const [copyClicks, origClicks, copyHover, origHover] = await Promise.all([
+      clickProfile(browser, base, copyUrl, true),
+      asOriginal('controls', () => clickProfile(browser, base, p.url, false)),
+      hoverProfile(browser, base, copyUrl, true),
+      asOriginal('hovers', () => hoverProfile(browser, base, p.url, false)),
+    ]);
     if (origClicks) {
       const mismatch = [];
       for (let i = 0; i < Math.max(copyClicks.length, origClicks.length); i++) {
@@ -784,8 +803,6 @@ export async function checkCopy({ browser, base, pages, excludedHosts = [], log 
     } else {
       one.controls = { copy: summarize(copyClicks), original: null, mismatch: [], note: `original not reachable: ${reason}` };
     }
-    const copyHover = await hoverProfile(browser, base, copyUrl, true);
-    const origHover = await asOriginal('hovers', () => hoverProfile(browser, base, p.url, false));
     if (origHover) {
       const hm = [];
       for (let i = 0; i < Math.max(copyHover.length, origHover.length); i++) {
@@ -798,9 +815,14 @@ export async function checkCopy({ browser, base, pages, excludedHosts = [], log 
       one.hovers = { copy: summarize(copyHover), original: null, mismatch: [], note: `original not reachable: ${reason}` };
     }
     one.forms = await formCheck(browser, base, copyUrl);
+    done.set(p, one);
+    log(`page ${p.path} done${reason ? ` (original: ${reason})` : ''}`);
+  };
+  await inPool(pages, pagesAtOnce, checkPage);
+  for (const p of pages) {
+    const one = done.get(p);
     report.forms += one.forms.count;
     report.pages.push(one);
-    log(`page ${p.path} done${reason ? ` (original: ${reason})` : ''}`);
   }
   return report;
 }
