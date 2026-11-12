@@ -13,6 +13,7 @@ const REASONS = {
   'capture-failed': 'The original page could not be captured when the site was copied.',
   stalled: 'The original page did not finish loading, twice, when the site was copied.',
   'time-limit': 'The original page was not copied in the time the copy had.',
+  'not-captured': 'This page was not captured when the site was copied, so it is not part of this copy.',
   'beyond-limit': 'This page was not part of the pages chosen for the copy.',
   'single-page': 'Only one page of this site was copied, and this is not that page.',
 };

@@ -5,7 +5,7 @@
 // (never the app's active preview, which moves when another project is selected). Only that port is
 // reachable on loopback: the SSRF policy of the run allows it as an internal port, and everything
 // else keeps the user policy (public addresses; loopback only with SAS_ALLOW_LOCALHOST).
-import { readFile, stat } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { makeOverallPct, runAnalysis, STEPS as AUDIT_STEPS } from '../audit/index.js';
 import { runLighthouse } from '../audit/lighthouse/run.js';
@@ -19,11 +19,12 @@ import { servePreview } from '../recreate/preview.js';
 import { serveCopy } from '../recreate/behavior/preserve/serve.js';
 import { openMeasuredHost, measuredHostDescription } from './measuredHost.js';
 import { recreateDir } from '../recreate/workspace.js';
+import { NETWORK_FAILURE_REASONS } from '../recreate/behavior/preserve/pageLift.js';
 import { createNetPolicy, userPolicy } from '../security/netGuard.js';
 import { compareAudits, loadSide } from './compare/index.js';
 import { CATEGORIES } from './compare/rules.js';
 import { explainWorse, markOutside } from '../copy/gotWorse.js';
-import { clickBudgetFor, hoverBudgetFor, hoverFirstFor, measureNewMotion, motionItems, motionTimeFor, readOldMotion } from './motion.js';
+import { clickBudgetFor, hoverBudgetFor, hoverFirstFor, jumpTargetsOf, liftedTargets, measureNewMotion, missedHovers, motionItems, motionTimeFor, readOldMotion, useLiftedBefore } from './motion.js';
 
 /** Thrown when a re-audit cannot run at all; the job is marked failed. */
 export class ReauditError extends Error {}
@@ -176,11 +177,20 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
         const targets = outputPageList.filter((p) => slugOf.has(p.outPath) && oldMotion.has(slugOf.get(p.outPath)))
           .map((p) => {
             const old = oldMotion.get(slugOf.get(p.outPath));
-            return { slug: slugOf.get(p.outPath), urlPath: p.path.replace(/^\//, ''), hoverBudgetMs: hoverBudgetFor(old), hoverFirst: hoverFirstFor(old), clickBudgetMs: clickBudgetFor(old) };
+            return { slug: slugOf.get(p.outPath), urlPath: p.path.replace(/^\//, ''), hoverBudgetMs: hoverBudgetFor(old), hoverFirst: hoverFirstFor(old), clickBudgetMs: clickBudgetFor(old), jumpTargets: jumpTargetsOf(old) };
           });
         // The time follows the pages measured (≤ 6): long pages take 40–60 s each.
         const measured = await measureNewMotion({ origin: served.origin, pages: targets, deadline: Date.now() + Math.max(150000, targets.slice(0, 6).reduce((ms, t) => ms + motionTimeFor(t), 0)) });
-        motion = { ...motionItems(oldMotion, measured.pages), failed: measured.failed, skipped: measured.skipped };
+        // An as-is copy: the original's own files, lifted offline, measured with the same probe for reveals and loops - and for
+        // the hovers the copy missed, which the hover row may leave out only when the lifted original misses them too and a
+        // request to the site's own backend failed in the copy (motionItems).
+        const missed = missedHovers(oldMotion, measured.pages);
+        const before = reportOutputs(report)[stack]?.mode === 'as-is' ? await measureLifted(folder, targets, oldMotion, missed) : null;
+        const backend = missed.size && before ? await backendPathsOf(folder, report, project.url) : null;
+        motion = { ...motionItems(oldMotion, measured.pages, { lifted: before?.measured, backend }), failed: measured.failed, skipped: measured.skipped,
+          ...(before && { before: { source: before.source, pages: before.pages, failed: before.failed, ms: before.ms } }) };
+        // What the copy's probes measured, kept with the re-check: the comparison rules can be run again later from saved files.
+        await saveNewMotion(reauditDir(project.id, recreateId, reauditId), measured, before?.measured).catch(() => {});
       } catch (err) {
         motion = { items: [], summary: null, failed: [{ slug: '*', error: String(err?.message ?? err).split('\n')[0] }], skipped: [] };
       }
@@ -283,42 +293,7 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
       better,
     };
   }
-  // An as-is copy: every "got worse" row carries one of the five reasons on this run's evidence, or is marked unexplained
-  // (copy/gotWorse.js). The rows stay where they are; the reasons are added to them, never put in their place.
-  if (isAsIs) {
-    const lhrs = async (dir) => Object.fromEntries(await Promise.all(['mobile', 'desktop'].map(async (d) => [d, await readFile(path.join(dir, `lighthouse-${d}.json`), 'utf8').then(JSON.parse, () => null)])));
-    const worse = explainWorse({
-      items: checklist.items,
-      siteUrl: project.url,
-      copyOrigin: origin,
-      copyPages: outputPageList.map((p) => p.path),
-      chosenPages: (report.asIs?.pages ?? []).map((p) => p.path ?? '/'),
-      oldLhr: await lhrs(auditDir(project.id, report.analysisId)),
-      newLhr: await lhrs(reauditDir(project.id, recreateId, reauditId)),
-      oldAxe: await readFile(path.join(auditDir(project.id, report.analysisId), 'axe.json'), 'utf8').then(JSON.parse, () => null),
-      newAxe: await readFile(path.join(reauditDir(project.id, recreateId, reauditId), 'axe.json'), 'utf8').then(JSON.parse, () => null),
-      // For the "still open" rows: whether a new-site address was written, which pages' fixes were undone, the hosts excluded by rule.
-      address: report.asIs?.address ?? null,
-      // report.copy.fixes.reverted lists the pages (report.asIs.fixes.reverted is only their count).
-      // A page undone because its fixes had no effect (Step 5b) did not change the look: its rows are told by fixOpen (our bug).
-      revertedPages: (Array.isArray(report.copy?.fixes?.reverted) ? report.copy.fixes.reverted : []).filter((r) => r.reason !== 'noEffect').map((r) => r.page),
-      excludedHosts: Array.isArray(report.asIs?.excludedByRule) ? report.asIs.excludedByRule : [],
-      // What the copy's own fixes left open and why (the page gave no words, the site states no colour).
-      fixOpen: Array.isArray(report.asIs?.fixes?.open) ? report.asIs.fixes.open : [],
-      // The site's own data addresses (answered by its server while captured): a request to one fails in a copy of files.
-      backendPaths: (report.asIs?.sameOrigin?.sameAsOriginal ?? []).filter((r) => r?.reason === 'not-an-asset' && r.path).map((r) => r.path),
-    });
-    const byKey = new Map([...worse.items.map((w) => ['regressed', w]), ...worse.open.map((w) => ['open', w])].map(([status, w]) => [`${status} ${w.key}`, w]));
-    for (const item of checklist.items) {
-      const w = byKey.get(`${item.status} ${item.key}`);
-      if (w) Object.assign(item, { reason: w.reason, reasonEvidence: w.evidence, group: w.group, ...(w.unexplained && { unexplained: true }), ...(w.parts && { reasonParts: w.parts }) });
-    }
-    checklist.gotWorse = worse.summary;
-    // The same for every row still open (failing on both sides): a reason or UNEXPLAINED, and the counts.
-    checklist.stillOpen = worse.openSummary;
-    // Rows that are not the tool's to change leave "got worse" / "still open" for a section of their own (copy/gotWorse.js).
-    markOutside(checklist);
-  }
+  if (isAsIs) await explainAsIs({ checklist, project, report, recreateId, reauditId, origin, outputPageList });
   // Fix mode (Step 11): what the user approved and the copy changed on purpose (a text colour, a heading's level). The rows of
   // those checks carry the list, so a difference from the original there reads as the user's choice, not as the copy's.
   const onPurpose = Array.isArray(report.asIs?.changedOnPurpose) ? report.asIs.changedOnPurpose : [];
@@ -336,6 +311,209 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
     if (item.group) continue;
     if (item.status === 'changed' || item.status === 'recheck') item.group = 'measurement';
     else if (item.status === 'manual') item.group = 'needs-info';
+  }
+  return checklist;
+}
+
+/**
+ * Per page of the copy's crawl (its path): { questions, faqSignals } — the question headings / summaries and the FAQ-like parts
+ * the crawl read (audit/extract.js). Null when the crawl is missing. The FAQ-schema "still open" rule reads it (copy/gotWorse.js).
+ */
+export function questionsByPageOf(crawl) {
+  const pages = Array.isArray(crawl?.pages) ? crawl.pages : Array.isArray(crawl) ? crawl : null;
+  if (!pages) return null;
+  const out = {};
+  for (const p of pages) {
+    if (!p?.url || !p.facts) continue;
+    let at;
+    try {
+      at = decodeURIComponent(new URL(p.url).pathname);
+    } catch {
+      continue;
+    }
+    out[at] = { questions: Array.isArray(p.facts.questionHeadings) ? p.facts.questionHeadings.length : NaN, faqSignals: Number(p.facts.faqSignals) || 0 };
+  }
+  return out;
+}
+
+/** The copy's measured motion of a re-check (its probes: reveal, loops, hover, clicks, feeds, pointer), per page slug. */
+export const NEW_MOTION_FILE = 'motion-new.json';
+
+/**
+ * The "before" of the reveal and loop rows of an as-is copy (motion.js useLiftedBefore): the lifted original (as-is/lifted)
+ * served offline like the copy and measured with the copy's probe. No lifted folder, or nothing measured = the capture's
+ * motion.json stays the before (null). Changes `oldMotion` in place. Never throws.
+ * @returns {Promise<{ source: 'lifted', pages: string[], failed: object[], ms: number, measured: Map<string, object> } | null>}
+ */
+export async function measureLifted(folder, targets, oldMotion, missed = null) {
+  const dir = path.join(folder, 'as-is', 'lifted');
+  if (!targets.length || !(await stat(dir).then((s) => s.isDirectory(), () => false))) return null;
+  const started = Date.now();
+  let lifted = null;
+  try {
+    lifted = await serveCopy(dir);
+    const list = liftedTargets(targets, missed);
+    const measured = await measureNewMotion({ origin: new URL(lifted.url).origin, pages: list, deadline: Date.now() + Math.max(150000, list.slice(0, 6).reduce((ms, t) => ms + motionTimeFor(t), 0)) });
+    const pages = useLiftedBefore(oldMotion, measured.pages);
+    return pages.length ? { source: 'lifted', pages, failed: measured.failed, ms: Date.now() - started, measured: measured.pages } : null;
+  } catch {
+    return null;
+  } finally {
+    await lifted?.close().catch(() => {});
+  }
+}
+
+/** Saves what measureNewMotion found on the copy (and, for an as-is copy, on the lifted original) into the re-check folder. */
+export async function saveNewMotion(dir, measured, lifted = null) {
+  await mkdir(dir, { recursive: true });
+  const body = { version: 1, savedAt: new Date().toISOString(), pages: Object.fromEntries(measured?.pages ?? []), failed: measured?.failed ?? [], skipped: measured?.skipped ?? [],
+    ...(lifted && { lifted: Object.fromEntries(lifted) }) };
+  await writeFile(path.join(dir, NEW_MOTION_FILE), `${JSON.stringify(body)}\n`, 'utf8');
+}
+
+/** The copy's measured motion saved by a re-check (slug → measured page), or null when it was not saved (an older re-check). */
+export async function readNewMotion(dir) {
+  const body = await readFile(path.join(dir, NEW_MOTION_FILE), 'utf8').then(JSON.parse, () => null);
+  return body?.pages ? new Map(Object.entries(body.pages)) : null;
+}
+
+/**
+ * The paths the original's pages asked its own servers for data (the capture's network record, capture/.network/index.json:
+ * entries of kind `data`), from the site's host or a host excluded by rule (its backend, e.g. an API on another domain). A
+ * copy of the site's files has no server to answer them: the copy's request for the same path fails (reason b).
+ * @param {{ entries?: object[] } | null} record
+ * @param {{ siteUrl: string, hosts?: string[] }} o
+ */
+export function dataPathsOf(record, { siteUrl, hosts = [] }) {
+  const bare = (h) => String(h ?? '').replace(/^www\./, '').toLowerCase();
+  let site;
+  try {
+    site = bare(new URL(siteUrl).hostname);
+  } catch {
+    return [];
+  }
+  const own = new Set([site, ...hosts.map(bare)]);
+  const out = new Set();
+  for (const e of Array.isArray(record?.entries) ? record.entries : []) {
+    if (e?.kind !== 'data' || !e.url) continue;
+    try {
+      const u = new URL(e.url);
+      if (/^https?:$/.test(u.protocol) && own.has(bare(u.hostname))) out.add(decodeURIComponent(u.pathname));
+    } catch {
+      // not an address
+    }
+  }
+  return [...out];
+}
+
+/**
+ * The site's own backend addresses for a copy: the data addresses it left as the original does (siteDataPaths) and every
+ * data address the original's pages asked its own servers for while captured (the capture's network record, dataPathsOf).
+ * The same list the "still open" reasons use (explainAsIs `backendPaths`). Never throws.
+ * @returns {Promise<Set<string>>}
+ */
+export async function backendPathsOf(folder, report, siteUrl) {
+  const record = await readFile(path.join(folder, 'capture', '.network', 'index.json'), 'utf8').then(JSON.parse, () => null);
+  const hosts = Array.isArray(report?.asIs?.excludedByRule) ? report.asIs.excludedByRule : [];
+  return new Set([...siteDataPaths(report?.asIs?.sameOrigin?.sameAsOriginal, { siteUrl, hosts }), ...dataPathsOf(record, { siteUrl, hosts })]);
+}
+
+/**
+ * The site's own data addresses among the paths the copy left as the original does (report.asIs.sameOrigin.sameAsOriginal,
+ * preserve/complete.js): its server answered data, not a file (`not-an-asset`), or asked for a sign-in (`http-401` /
+ * `http-403`). Only that server can answer them. A reason is one word when one host was asked, else one part per host
+ * ("site.com: not-an-asset; fonts.gstatic.com: http-404"): the site's own host's part decides, never another host's.
+ */
+export function siteDataPaths(sameAsOriginal, { siteUrl, hosts = [] }) {
+  const bare = (h) => String(h ?? '').trim().replace(/^www\./, '').toLowerCase();
+  let site;
+  try {
+    site = bare(new URL(siteUrl).hostname);
+  } catch {
+    return [];
+  }
+  const own = new Set([site, ...hosts.map(bare)]);
+  const isData = (reason) => reason === 'not-an-asset' || reason === 'http-401' || reason === 'http-403';
+  const out = new Set();
+  for (const r of Array.isArray(sameAsOriginal) ? sameAsOriginal : []) {
+    if (!r?.path) continue;
+    const parts = String(r.reason ?? '').split(';').map((s) => s.trim()).filter(Boolean);
+    const ok = parts.some((part) => {
+      const at = part.lastIndexOf(': ');
+      return at < 0 ? isData(part) : own.has(bare(part.slice(0, at))) && isData(part.slice(at + 2).trim());
+    });
+    if (ok) out.add(r.path);
+  }
+  return [...out];
+}
+
+/** The site's files the copy could not download while it was made because the network was down (pageLift.js). */
+export function liftNetworkFailures(report) {
+  const out = [];
+  for (const page of report?.asIs?.lift?.pages ?? []) {
+    for (const f of page?.downloads?.failedUrls ?? []) if (f?.url && NETWORK_FAILURE_REASONS.has(f.reason)) out.push({ url: f.url, reason: f.reason });
+  }
+  return out;
+}
+
+/**
+ * An as-is copy: every "got worse" row carries one of the five reasons on this run's evidence, or is marked unexplained
+ * (copy/gotWorse.js). The rows stay where they are; the reasons are added to them, never put in their place. Reads only the
+ * saved files of the original's analysis and of this re-audit, so a finished re-audit can be explained again
+ * (scripts/reexplain.js). Changes `checklist` in place.
+ */
+export async function explainAsIs({ checklist, project, report, recreateId, reauditId, origin, outputPageList }) {
+  {
+    const lhrs = async (dir) => Object.fromEntries(await Promise.all(['mobile', 'desktop'].map(async (d) => [d, await readFile(path.join(dir, `lighthouse-${d}.json`), 'utf8').then(JSON.parse, () => null)])));
+    const newCrawl = await readFile(path.join(reauditDir(project.id, recreateId, reauditId), 'crawl.json'), 'utf8').then(JSON.parse, () => null);
+    const captureRoot = path.join(recreateDir(project.id, recreateId), 'capture');
+    // The capture's network record (what the original's pages loaded) and the homepage as captured (axe checks the homepage).
+    const record = await readFile(path.join(captureRoot, '.network', 'index.json'), 'utf8').then(JSON.parse, () => null);
+    const homeSlug = (report.pages ?? []).find((p) => (p.path ?? '/') === '/')?.slug ?? 'index';
+    const originalCapture = await readFile(path.join(captureRoot, homeSlug, 'desktop.json'), 'utf8').then(JSON.parse, () => null);
+    const excludedHosts = Array.isArray(report.asIs?.excludedByRule) ? report.asIs.excludedByRule : [];
+    const worse = explainWorse({
+      items: checklist.items,
+      siteUrl: project.url,
+      copyOrigin: origin,
+      copyPages: outputPageList.map((p) => p.path),
+      chosenPages: (report.asIs?.pages ?? []).map((p) => p.path ?? '/'),
+      oldLhr: await lhrs(auditDir(project.id, report.analysisId)),
+      newLhr: await lhrs(reauditDir(project.id, recreateId, reauditId)),
+      oldAxe: await readFile(path.join(auditDir(project.id, report.analysisId), 'axe.json'), 'utf8').then(JSON.parse, () => null),
+      newAxe: await readFile(path.join(reauditDir(project.id, recreateId, reauditId), 'axe.json'), 'utf8').then(JSON.parse, () => null),
+      // For the "still open" rows: whether a new-site address was written, which pages' fixes were undone, the hosts excluded by rule.
+      address: report.asIs?.address ?? null,
+      // report.copy.fixes.reverted lists the pages (report.asIs.fixes.reverted is only their count).
+      // A page undone because its fixes had no effect (Step 5b) did not change the look: its rows are told by fixOpen (our bug).
+      revertedPages: (Array.isArray(report.copy?.fixes?.reverted) ? report.copy.fixes.reverted : []).filter((r) => r.reason !== 'noEffect').map((r) => r.page),
+      excludedHosts,
+      // What the copy's own fixes left open and why (the page gave no words, the site states no colour).
+      fixOpen: Array.isArray(report.asIs?.fixes?.open) ? report.asIs.fixes.open : [],
+      // The site's own data addresses (answered by its server while captured): a request to one fails in a copy of files.
+      // Also every data address the original's pages asked its own servers for while captured (its network record).
+      backendPaths: [
+        ...siteDataPaths(report.asIs?.sameOrigin?.sameAsOriginal, { siteUrl: project.url, hosts: excludedHosts }),
+        ...dataPathsOf(record, { siteUrl: project.url, hosts: excludedHosts }),
+      ],
+      // What the copy's crawl read of each page: an FAQ-schema row on pages with not one question is the owner's content.
+      questionsByPage: questionsByPageOf(newCrawl),
+      // Files the copy lacks because the network was down while it was made, and the original's own colours.
+      liftFailures: liftNetworkFailures(report),
+      originalCapture,
+      // Both crawls (each page's title, headings, whether its server sent an empty shell): duplicate titles a sign-in gate makes.
+      crawls: { original: await readFile(path.join(auditDir(project.id, report.analysisId), 'crawl.json'), 'utf8').then(JSON.parse, () => null), copy: newCrawl },
+    });
+    const byKey = new Map([...worse.items.map((w) => ['regressed', w]), ...worse.open.map((w) => ['open', w])].map(([status, w]) => [`${status} ${w.key}`, w]));
+    for (const item of checklist.items) {
+      const w = byKey.get(`${item.status} ${item.key}`);
+      if (w) Object.assign(item, { reason: w.reason, reasonEvidence: w.evidence, group: w.group, ...(w.unexplained && { unexplained: true }), ...(w.parts && { reasonParts: w.parts }) });
+    }
+    checklist.gotWorse = worse.summary;
+    // The same for every row still open (failing on both sides): a reason or UNEXPLAINED, and the counts.
+    checklist.stillOpen = worse.openSummary;
+    // Rows that are not the tool's to change leave "got worse" / "still open" for a section of their own (copy/gotWorse.js).
+    markOutside(checklist);
   }
   return checklist;
 }
