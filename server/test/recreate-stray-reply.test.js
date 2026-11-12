@@ -70,6 +70,11 @@ const page = (title) => `<!doctype html><html lang="en"><head><meta charset="utf
 <body><h1>${title}</h1><p>${ENGLISH}</p><img src="/images/team-photo-ab12cd34ef.png"><p>Text under the picture.</p></body></html>`;
 
 test('a stray reply during one page\'s look undoes that page only; the proof finishes; the listener is removed', { timeout: 5 * 60000 }, async (t) => {
+  // One page looked at at a time. A stray reply names no page, so when two looks are under way at once both pages are undone
+  // (on purpose: nothing it may have spoiled is trusted), and whether "the other page" overlapped would be down to timing.
+  const parallelBefore = process.env.SAS_MAX_PARALLEL;
+  process.env.SAS_MAX_PARALLEL = '1';
+  t.after(() => { if (parallelBefore === undefined) delete process.env.SAS_MAX_PARALLEL; else process.env.SAS_MAX_PARALLEL = parallelBefore; });
   const dir = await mkdtemp(path.join(os.tmpdir(), 'sas-stray-'));
   t.after(async () => { await rm(dir, { recursive: true, force: true }); await rm(`${dir}-unfixed`, { recursive: true, force: true }); });
   await mkdir(path.join(dir, 'images'), { recursive: true });
