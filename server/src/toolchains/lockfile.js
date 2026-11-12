@@ -10,7 +10,7 @@ import { LOCKFILE, toolchainDir } from './index.js';
 /** The toolchains, in the order a project's packages are looked up when the caller names none. */
 export const LOCK_TOOLCHAINS = ['react-vite', 'next', 'mern'];
 /** The toolchain each stack is built with: its lockfile is the first one a project of the stack is cut from. */
-export const STACK_TOOLCHAIN = { 'react-vite': 'react-vite', nextjs: 'next', mern: 'mern' };
+export const STACK_TOOLCHAIN = { 'react-vite': 'react-vite', nextjs: 'next', mern: 'mern', 'vue-vite': 'vue-vite', astro: 'astro', sveltekit: 'sveltekit' };
 /** Folders of a downloaded project that can hold a package of their own (the same list as the zip's, export/zip.js). */
 export const PACKAGE_ROOTS = ['', 'client', 'server'];
 

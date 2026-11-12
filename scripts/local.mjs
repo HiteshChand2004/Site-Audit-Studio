@@ -8,7 +8,7 @@
 // gate keeps it out; the code is emailed through the SMTP_* settings of server/.env, or written to the API's log when there are none.
 // Everything else comes from server/.env as usual (SAS_DATA_DIR, SAS_ALLOW_LOCALHOST…); the settings above win over it.
 //
-// Options: --verify   SAS_LOCAL_PORT (8080)   SAS_MARKETING_DIR (another copy of the marketing site; default ./website)
+// Options: --verify   SAS_LOCAL_PORT (8080)   SAS_LOCAL_APP_PORT (the tool's Vite port, 5173)   SAS_MARKETING_DIR (another copy of the marketing site; default ./website)
 // Ctrl+C stops all four.
 import { spawn, execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -22,7 +22,7 @@ const PORT = Number(process.env.SAS_LOCAL_PORT) || 8080;
 const MARKETING = path.resolve(process.env.SAS_MARKETING_DIR || path.join(ROOT, 'website'));
 const VERIFY = process.argv.includes('--verify');
 const PUBLIC = `http://localhost:${PORT}`;
-const PORTS = { api: 4000, app: 5173, site: 3000 };
+const PORTS = { api: 4000, app: Number(process.env.SAS_LOCAL_APP_PORT) || 5173, site: 3000 };
 
 const busy = (port) => new Promise((resolve) => {
   const s = net.connect({ host: 'localhost', port }, () => { s.destroy(); resolve(true); });
@@ -89,7 +89,7 @@ run('api', ROOT, ['run', 'dev', '-w', 'server'], {
   APP_ORIGIN: PUBLIC, // previews may be framed by the tool at this address
   PORT: String(PORTS.api),
 });
-run('app', ROOT, ['run', 'dev', '-w', 'client'], {});
+run('app', ROOT, ['run', 'dev', '-w', 'client', '--', '--port', String(PORTS.app)], {});
 run('site', MARKETING, ['run', 'dev', '--', '-p', String(PORTS.site)], {
   NEXT_PUBLIC_APP_URL: '/app', // where the sign-in form sends a signed-in visitor
   NEXT_PUBLIC_API_BASE: '/api', // where it posts

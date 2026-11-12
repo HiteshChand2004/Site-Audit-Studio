@@ -4,7 +4,7 @@
 // stay ordinary links to the original.
 import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { liftPage, pageKeyOf } from './pageLift.js';
+import { createNetworkRetry, liftPage, NETWORK_FAILURE_REASONS, pageDocumentOf, pageKeyOf } from './pageLift.js';
 import { completeCopy } from './complete.js';
 import { readRecordIndex } from '../scripts.js';
 
@@ -71,10 +71,20 @@ export async function liftSite({ captureRoot, pages, siteUrl, outDir, browser, e
   const pageLinks = new Map(pages.map((p) => [pageKeyOf(p.url), localOfOutPath(p.outPath)]));
   const byLocal = new Map();
   const lifts = [];
+  // One wait for the network per copy, shared by its pages (pageLift.js createNetworkRetry).
+  const networkRetry = createNetworkRetry();
+  // A page the capture never loaded has no document of its own in the record: it is not lifted (no other page's document
+  // stands in for it) and becomes a notice page "not captured" (stage.js → copy/noticePages.js). The homepage must have one.
+  const recordIndex = (await readRecordIndex(path.join(captureRoot, '.network'))) ?? { entries: [] };
+  const notCaptured = pages.filter((p, i) => i > 0 && !pageDocumentOf(recordIndex, p.url)).map((p) => ({ url: p.url, outPath: p.outPath }));
+  if (notCaptured.length) {
+    const skip = new Set(notCaptured.map((p) => p.url));
+    pages = pages.filter((p) => !skip.has(p.url));
+  }
   for (const page of pages) {
     const dir = path.dirname(path.join(outDir, page.outPath));
     await mkdir(dir, { recursive: true });
-    const lift = await liftPage({ captureRoot, pageUrl: page.url, outDir, entry: page.outPath, pageLinks });
+    const lift = await liftPage({ captureRoot, pageUrl: page.url, outDir, entry: page.outPath, pageLinks, networkRetry });
     lifts.push({ url: page.url, path: localOfOutPath(page.outPath), blockers: lift.blockers, downloads: lift.downloads, dropped: lift.dropped, removed: lift.removed, matchedBy: lift.matchedBy });
     for (const f of lift.files) if (!byLocal.has(f.local)) byLocal.set(f.local, f);
     log(`lifted ${page.url} (${lift.files.length} files, ${lift.blockers.length} blockers)`);
@@ -84,7 +94,10 @@ export async function liftSite({ captureRoot, pages, siteUrl, outDir, browser, e
   const entries = pages.map((p) => p.outPath);
   const done = await completeCopy({ browser, outDir, pageUrl: siteUrl, hosts, files, entries });
   log(`completed ${entries.length} page(s) in ${done.passes} pass(es), manifest ${Object.keys(done.manifest).length}`);
-  return { files, entries, hosts, lifts, completion: { passes: done.passes, manifest: Object.keys(done.manifest).length, log: done.log, sameOrigin: done.sameOrigin, referenced: done.referenced, ranged: done.ranged } };
+  // Build-time downloads that still failed at network level after the wait: the copy lacks files the original serves.
+  const stillFailed = new Set(lifts.flatMap((l) => (l.downloads?.failedUrls ?? []).filter((u) => NETWORK_FAILURE_REASONS.has(u.reason)).map((u) => u.url)));
+  const network = { ...networkRetry.stats, stillFailed: stillFailed.size };
+  return { files, entries, hosts, lifts, network, notCaptured, completion: { passes: done.passes, manifest: Object.keys(done.manifest).length, log: done.log, sameOrigin: done.sameOrigin, referenced: done.referenced, ranged: done.ranged } };
 }
 
 /** The lifted document of a page (for the checks and for a reader of the report). */

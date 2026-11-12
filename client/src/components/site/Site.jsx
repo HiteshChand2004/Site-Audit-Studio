@@ -6,6 +6,7 @@ import { Lock } from 'lucide-react';
 import { EmptySiteArt } from '../common/Illustrations.jsx';
 import { STAGE_NAMES, stagesLabel } from '../../siteData.js';
 import styles from './Site.module.css';
+import RetryImg from '../common/RetryImg.jsx';
 
 /** The website's own icon (read and kept by the server), or its first letter when it has none or it cannot be loaded. */
 export function SiteIcon({ project, host, size = 32 }) {
@@ -23,9 +24,10 @@ export function SiteIcon({ project, host, size = 32 }) {
 
 /**
  * A picture of a page inside a light browser frame. Shows a shimmering placeholder while it loads and a drawn empty
- * window when there is no picture (or it cannot be loaded). `ratio` is width / height of the visible area.
+ * window when there is no picture (or it cannot be loaded). `ratio` is width / height of the visible area. `retry`: a picture
+ * the server may still be making (a copy's page, siteData.js copyShot), asked again until it is there.
  */
-export function BrowserShot({ src, address, alt, ratio = 16 / 10, chrome = true, emptyText, className = '', size = 'md', position = 'top' }) {
+export function BrowserShot({ src, address, alt, ratio = 16 / 10, chrome = true, emptyText, className = '', size = 'md', position = 'top', retry = false }) {
   const [state, setState] = useState(src ? 'loading' : 'none');
   useEffect(() => setState(src ? 'loading' : 'none'), [src]);
   return (
@@ -47,7 +49,18 @@ export function BrowserShot({ src, address, alt, ratio = 16 / 10, chrome = true,
       )}
       <div className={styles.viewport} style={{ aspectRatio: ratio }}>
         {state === 'loading' && <span className={`${styles.placeholder} skeleton`} aria-hidden="true" />}
-        {src && state !== 'failed' && (
+        {src && state !== 'failed' && (retry ? (
+          <RetryImg
+            src={src}
+            alt={alt}
+            loading="lazy"
+            decoding="async"
+            style={{ objectPosition: position }}
+            data-loaded={state === 'ready' || undefined}
+            onLoad={() => setState('ready')}
+            onGiveUp={() => setState('failed')}
+          />
+        ) : (
           <img
             src={src}
             alt={alt}
@@ -58,7 +71,7 @@ export function BrowserShot({ src, address, alt, ratio = 16 / 10, chrome = true,
             onLoad={() => setState('ready')}
             onError={() => setState('failed')}
           />
-        )}
+        ))}
         {(state === 'none' || state === 'failed') && (
           <div className={styles.empty}>
             <EmptySiteArt className={styles.emptyArt} />

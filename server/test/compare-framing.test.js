@@ -2,7 +2,7 @@
 // The helpers are pure (no window, no React) so this test imports them directly from the client source.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultPreviewMode, unavailableNote } from '../../client/src/components/preview/framing.js';
+import { defaultPreviewMode, unavailableNote, withAnswer } from '../../client/src/components/preview/framing.js';
 
 const FRAMEABLE = { ok: true, why: null };
 const BLOCKED = { ok: false, why: 'The site blocks framing (X-Frame-Options: SAMEORIGIN).' };
@@ -31,4 +31,23 @@ test('without any picture the note says so', () => {
 test('an app origin opens on the picture with its own reason', () => {
   assert.equal(defaultPreviewMode(NO_APP), 'screenshot');
   assert.ok(unavailableNote(NO_APP, true).includes('This app cannot frame itself.'));
+});
+
+test('a site that does not answer right now opens on its picture, with why', () => {
+  const down = withAnswer(FRAMEABLE, { answers: false, error: 'timeout', status: 0 });
+  assert.equal(down.ok, false);
+  assert.equal(down.down, true);
+  assert.equal(defaultPreviewMode(down), 'screenshot');
+  const note = unavailableNote(down, true);
+  assert.match(note, /not answering right now: it did not answer within 8 seconds/);
+  assert.match(note, /picture taken during the check/);
+  assert.match(withAnswer(FRAMEABLE, { answers: false, error: null, status: 503 }).why, /server error \(HTTP 503\)/);
+  assert.match(withAnswer(FRAMEABLE, { answers: false, error: 'dns', status: 0 }).why, /address could not be found/);
+});
+
+test('a site that answers, or no answer yet, leaves live as it was', () => {
+  assert.equal(withAnswer(FRAMEABLE, { answers: true, error: null, status: 200 }), FRAMEABLE);
+  assert.equal(withAnswer(FRAMEABLE, null), FRAMEABLE);
+  // A site that blocks framing keeps its own reason, answering or not.
+  assert.equal(withAnswer(BLOCKED, { answers: false, error: 'timeout', status: 0 }), BLOCKED);
 });

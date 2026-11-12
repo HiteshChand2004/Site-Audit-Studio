@@ -1,0 +1,12 @@
+{
+  "name": "sas-toolchain-astro",
+  "private": true,
+  "description": "Build toolchain for the Astro stack. Installed on demand: npm run setup:toolchains -w server -- astro",
+  "type": "module",
+  "dependencies": {
+    "astro": "7.4.2"
+  },
+  "overrides": {
+    "vite": "8.3.5"
+  }
+}

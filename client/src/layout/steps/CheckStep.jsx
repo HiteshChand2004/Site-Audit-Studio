@@ -3,6 +3,7 @@ import { AlertTriangle, Clock, FileSearch, Globe, Info, Loader2, Play, ShieldAle
 import Button from '../../components/common/Button.jsx';
 import PreviewFrame, { Wireframe } from '../../components/preview/PreviewFrame.jsx';
 import SitePreview, { liveAvailability, ModeToggle } from '../../components/preview/SitePreview.jsx';
+import { useLiveAnswer } from '../../components/preview/useLiveAnswer.js';
 import HealthOverview from '../../components/audit/HealthOverview.jsx';
 import FixList from '../../components/audit/FixList.jsx';
 import SectionCard from '../../components/common/SectionCard.jsx';
@@ -21,7 +22,7 @@ const Spinner = (props) => <Loader2 {...props} className={styles.spin} />;
 const DEVICE_OF = { 1440: 'desktop', 375: 'mobile' };
 const VIEWPORT_OF = { desktop: 1440, mobile: 375 };
 
-function previewOverlay({ audit, mode, slow }) {
+function previewOverlay({ audit, mode, slow, live }) {
   if (!audit) return null;
   if (audit.isDummy) {
     return (
@@ -44,6 +45,14 @@ function previewOverlay({ audit, mode, slow }) {
       <>
         <AlertTriangle size={13} color="var(--warn)" aria-hidden="true" />
         <span title={audit.frame.notes.join(' ')}>This site may not show here · try “Picture”</span>
+      </>
+    );
+  }
+  if (live?.down) {
+    return (
+      <>
+        <AlertTriangle size={13} color="var(--warn)" aria-hidden="true" />
+        <span>{live.why} Showing the picture taken during the check.</span>
       </>
     );
   }
@@ -77,12 +86,15 @@ export default function CheckStep({ project, audit, loading }) {
   const update = useProjects((s) => s.update);
   const dismissAnalysis = useProjects((s) => s.dismissAnalysis);
   const running = isAnalysisActive(analysis);
+  // A website never checked shows an example report; once a check of it has failed, made-up scores next to the failure would
+  // read as that check's result, so only the failure is shown.
+  const report = audit?.isDummy && analysis?.status === 'failed' ? null : audit;
 
   const [viewport, setViewport] = useState(375);
   const [device, setDevice] = useState('mobile');
   const [slow, setSlow] = useState(false);
   const siteUrl = audit?.url ?? project.url;
-  const live = liveAvailability(audit, siteUrl);
+  const live = useLiveAnswer(project.id, siteUrl, liveAvailability(audit, siteUrl));
   const hasScreens = Boolean(audit?.screenshots);
   const [mode, setMode] = useState('screenshot');
   // A new analysis (or project) picks its default: live when the site can be framed.
@@ -145,7 +157,7 @@ export default function CheckStep({ project, audit, loading }) {
       <div className={ws.split}>
         <div className={ws.splitMain}>
           {loading && <p className={styles.dummyNote}>Loading the report…</p>}
-          {audit && (
+          {report && (
             <>
               {audit.isDummy && (
                 <p className={styles.dummyNote}>
@@ -197,7 +209,7 @@ export default function CheckStep({ project, audit, loading }) {
         </div>
 
         <aside className={ws.splitSide} aria-label="The original site">
-          {audit && !loading && (
+          {report && !loading && (
             <nav className={ws.toc} aria-label="On this page">
               <span className="eyebrow">On this page</span>
               {TOC.map(([id, label]) => (
@@ -217,7 +229,7 @@ export default function CheckStep({ project, audit, loading }) {
             onViewportChange={changeViewport}
             fit={Boolean(realPreview)}
             toolbar={realPreview && <ModeToggle mode={mode} onChange={setMode} live={live} hasScreens={hasScreens} />}
-            overlay={previewOverlay({ audit, mode, slow })}
+            overlay={previewOverlay({ audit: report, mode, slow, live })}
           >
             {realPreview ? <SitePreview url={siteUrl} audit={audit} mode={mode} viewport={viewport} onSlow={setSlow} /> : <Wireframe />}
           </PreviewFrame>

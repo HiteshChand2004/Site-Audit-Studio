@@ -106,16 +106,77 @@
   }
 }
 
+/* Narrow screens: the sidebar is a drawer (Sidebar.module.css), so the content gets the whole width under a compact bar
+   (menu button, mark, where you are). The app keeps the window's height, so each page scrolls in its own area as on a
+   computer and its sticky parts (section tabs, the build's action bar) keep working. */
 @media (max-width: 760px) {
   .app {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
-    height: auto;
-    min-height: 100vh;
-    overflow: visible;
+    grid-template-columns: minmax(0, 1fr);
+    height: 100vh;
+    height: 100dvh;
   }
 
   .topbar {
-    padding: 0 var(--sp-4);
+    justify-content: flex-start;
+    gap: var(--sp-2);
+    padding: 0 var(--sp-3) 0 var(--sp-2);
+  }
+
+  .crumbs {
+    flex: 1 1 auto;
+    margin-left: 2px;
+  }
+
+  .topActions {
+    margin-left: auto;
+  }
+}
+
+.menuBtn,
+.homeMark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+}
+
+.menuBtn {
+  width: 40px;
+  height: 40px;
+  color: var(--text);
+}
+
+.menuBtn:hover,
+.menuBtn[aria-expanded='true'] {
+  background: var(--surface-3);
+}
+
+.homeMark {
+  padding: 3px;
+}
+
+/* Behind the open drawer: dims the page; a click on it closes the drawer. */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 39;
+  background: var(--overlay);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 220ms var(--ease), visibility 0s linear 220ms;
+}
+
+.scrim[data-open] {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 220ms var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scrim,
+  .scrim[data-open] {
+    transition: none;
   }
 }

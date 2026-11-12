@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CheckCircle2, Columns2, Loader2, Play, RefreshCw, Settings2, Sparkles, StopCircle, Target, Trophy } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import { Alert, Card } from '../../components/common/Surface.jsx';
@@ -7,7 +7,7 @@ import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import StackOutput from '../../components/recreate/StackOutput.jsx';
 import AsIsChoice, { ASIS_STACK_CHOICES } from '../../components/recreate/AsIsChoice.jsx';
 import CopyPanel from '../../components/recreate/CopyPanel.jsx';
-import { failedAttempt } from '../../components/recreate/failedAttempt.js';
+import { failedAttempt, retryOf } from '../../components/recreate/failedAttempt.js';
 import { stripAnsi } from '../../ansi.js';
 import { BrowserShot } from '../../components/site/Site.jsx';
 import { copyShot } from '../../siteData.js';
@@ -50,7 +50,7 @@ const COPY_STAGE_OF_STEP = { inspect: 'Capturing', sweep: 'Capturing', assets: '
 const copyStageOf = (step) => COPY_STAGE_OF_STEP[step] ?? COPY_STAGE_NAMES[0];
 
 /** Step 2: make the copy (Recreate). */
-export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
+export default function CreateStep({ project, audit, onOpenSettings, onGo, copyAsked = false, onCopyShown }) {
   const stack = stackById(project.stack);
   const analysis = useProjects((s) => s.analyses[project.id]);
   const job = useProjects((s) => s.recreates[project.id]);
@@ -72,6 +72,7 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   // A copy that stopped before it finished, whose work the server kept: it can continue instead of starting over.
   const resumable = !running ? latest?.resumable ?? null : null;
   const resume = resumable ? resumeText(resumable) : null;
+  const retry = retryOf(lastOptions, isOwner);
     // "Original as-is" (a choice of pages and a stack, and a confirmation); the clean rebuild keeps its own start, unchanged.
   const [mode, setMode] = useState('clean');
   const [asIsPages, setAsIsPages] = useState([]);
@@ -84,6 +85,12 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
   const stackState = outputState(result, project.stack);
   // "Copy my site": one panel (stack, address, authorisation), then the as-is copy of every page for that stack.
   const [copyOpen, setCopyOpen] = useState(false);
+  // Asked for from the dashboard hero's "Create the copy".
+  useEffect(() => {
+    if (!copyAsked) return;
+    if (!blocker && !running) setCopyOpen(true);
+    onCopyShown?.();
+  }, [copyAsked]);
   const updateProject = useProjects((s) => s.update);
   // The address is optional: without one the server writes no address into the copy and lists it as an open item.
   const startCopy = async ({ stack: chosen, address }) => {
@@ -147,11 +154,19 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
         <Alert
           tone="bad"
           title="The copy could not be finished"
-          action={resume ? undefined : lastOptions
-            ? <Button variant="primary" icon={RefreshCw} onClick={() => recreate(project.id, lastOptions)}>Try again</Button>
-            : <Button variant="primary" icon={RefreshCw} onClick={() => recreate(project.id)}>Try again</Button>}
+          action={resume ? undefined : (
+            <Button
+              variant="primary"
+              icon={RefreshCw}
+              onClick={() => (retry.start ? recreate(project.id, retry.options) : setCopyOpen(true))}
+            >
+              Try again
+            </Button>
+          )}
         >
-          {stripAnsi(failure.reason)} {resume ? RESUME_HINT : '“Try again” starts it again with the same settings.'}
+          {stripAnsi(failure.reason)} {resume ? RESUME_HINT : retry.start
+            ? '“Try again” starts it again with the same settings.'
+            : '“Try again” opens “Copy my site” to start it again.'}
         </Alert>
       )}
 
@@ -313,7 +328,7 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo }) {
       {result && (
         <Card icon={Trophy} title="Last copy" sub={`Made ${new Date(result.createdAt).toLocaleString()} (${timeAgo(result.createdAt)})`}>
           <div className={ws.lastCopy}>
-            <BrowserShot src={copyShot(project.id, result)} address="the copy" alt="The copy's homepage" ratio={16 / 10} />
+            <BrowserShot src={copyShot(project.id, result)} address="the copy" alt="The copy's homepage" ratio={16 / 10} retry />
             <dl className={ws.miniFacts}>
               <div>
                 <dt>Pages</dt>

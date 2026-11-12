@@ -450,49 +450,39 @@
   background: var(--accent);
 }
 
-/* Stacked layout on small screens: the sidebar becomes a band above the content. */
-@media (max-width: 760px) {
-  .sidebar,
-  .sidebar[data-collapsed='true'] {
-    width: 100%;
-    max-height: 300px;
-    border-right: 0;
-    border-bottom: 1px solid var(--hairline-strong);
-  }
+/* Narrow screens: the full sidebar becomes a drawer that slides in over the page from the left, opened by the menu button
+   in the top bar (AppShell.jsx). Closed, it is off screen and hidden (also from screen readers and the Tab key). */
+.sidebar[data-drawer] {
+  --sidebar-w: min(320px, calc(100vw - 48px));
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 40;
+  width: var(--sidebar-w);
+  border-right: 1px solid var(--hairline-strong);
+  box-shadow: var(--elev-3);
+  overscroll-behavior: contain;
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition: transform 260ms var(--ease), visibility 0s linear 260ms;
+}
 
-  .sidebar[data-collapsed='false'] > * {
-    min-width: 0;
-  }
+.sidebar[data-drawer][data-open] {
+  transform: none;
+  visibility: visible;
+  transition: transform 260ms var(--ease);
+}
 
-  .sidebar[data-collapsed='true'] {
-    flex-direction: row;
-    align-items: center;
-    max-height: none;
-  }
+.sidebar[data-drawer] .navItem,
+.sidebar[data-drawer] .addBtn {
+  height: 44px;
+}
 
-  .railTop {
-    grid-auto-flow: column;
-    padding: var(--sp-2);
-  }
-
-  .railTop > svg {
-    margin: 0 4px 0 0;
-  }
-
-  .railList {
-    grid-auto-flow: column;
-    padding: var(--sp-2);
-    border-top: 0;
-    overflow-x: auto;
-  }
-
-  .railItem[data-active]::before,
-  .item[data-active]::before {
-    display: none;
-  }
-
-  .legend {
-    display: none;
+@media (prefers-reduced-motion: reduce) {
+  .sidebar[data-drawer],
+  .sidebar[data-drawer][data-open] {
+    transition: none;
   }
 }
 

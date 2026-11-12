@@ -105,6 +105,80 @@ test('captureClicks stops at its budget', async () => {
   await page.close();
 });
 
+test('a FAQ <details> far down a page with a scroll-spy nav: a second click closes it, whatever the scroll moved meanwhile', async () => {
+  const context = await browser.newContext({ viewport: { width: 1000, height: 700 } });
+  // A sticky nav whose script marks the section in view as current; the FAQ sits below the first screen, so the click scrolls
+  // it into view and the nav's mark moves (and stays moved) while the answer opens and closes.
+  await context.route('http://spy.test/**', (route) => route.fulfill({ contentType: 'text/html', body: `<!doctype html><html><body style="margin:0">
+    <header style="position:sticky;top:0;background:#fff;height:50px"><nav><a href="#one">One</a> <a href="#faq">FAQ</a></nav></header>
+    <section id="one" style="height:1600px">One</section>
+    <section id="faq" style="height:1200px"><details><summary>Will it change my code?</summary><p>Never without asking.</p></details></section>
+    <script>
+      const links = [...document.querySelectorAll('nav a')];
+      const mark = () => { const at = scrollY > 1200 ? 1 : 0; links.forEach((a, i) => (i === at ? a.setAttribute('aria-current', 'true') : a.removeAttribute('aria-current'))); };
+      addEventListener('scroll', mark, { passive: true }); mark();
+    </script></body></html>` }));
+  const page = await context.newPage();
+  await page.goto('http://spy.test/', { waitUntil: 'load' });
+  const out = await captureClicks(page, { budgetMs: 15000 });
+  const faq = out.widgets.find((w) => w.text === 'Will it change my code?');
+  assert.equal(faq?.kind, 'disclosure', JSON.stringify(out.widgets.map((w) => [w.text, w.kind])));
+  assert.equal(faq.closesOwn, 'toggle', 'the answer closes again on a second click');
+  await context.close();
+});
+
+test('a jump link (#id the page holds) is recorded as a jump with its href; a #panel link whose script opens the panel stays a control', async () => {
+  const context = await browser.newContext({ viewport: { width: 1000, height: 700 } });
+  // The skip link's scroll brings a section into view that reveals itself (what the probe sees change); the menu link names
+  // its panel but its script opens it without scrolling.
+  await context.route('http://jump.test/**', (route) => route.fulfill({ contentType: 'text/html', body: `<!doctype html><html><body style="margin:0">
+    <a href="#main" id="skip">Skip to content</a>
+    <a href="#drawer" id="menu">Menu</a>
+    <nav id="drawer" hidden><a href="/a">Page A</a></nav>
+    <div style="height:1800px">Intro</div>
+    <main id="main" style="height:1200px"><p id="late" hidden>Revealed</p></main>
+    <script>
+      new IntersectionObserver((es) => es.forEach((e) => e.isIntersecting && (document.getElementById('late').hidden = false))).observe(document.getElementById('main'));
+      document.getElementById('menu').addEventListener('click', (e) => { e.preventDefault(); const d = document.getElementById('drawer'); d.hidden = !d.hidden; });
+    </script></body></html>` }));
+  const page = await context.newPage();
+  await page.goto('http://jump.test/', { waitUntil: 'load' });
+  const out = await captureClicks(page, { budgetMs: 15000 });
+  const by = (t) => out.widgets.find((w) => w.text === t);
+  const skip = by('Skip to content');
+  assert.ok(skip, JSON.stringify(out.widgets.map((w) => [w.text, w.kind])));
+  assert.equal(skip.href, '#main');
+  assert.equal(skip.jump, true);
+  assert.equal(skip.jumpScrolled, true);
+  const menu = by('Menu');
+  assert.equal(menu?.kind, 'disclosure', JSON.stringify(out.widgets.map((w) => [w.text, w.kind])));
+  assert.equal(menu.href, '#drawer');
+  assert.equal(menu.jump, undefined, 'its script opened the panel and did not scroll: a control');
+  await context.close();
+});
+
+test('a <details> FAQ reads as a toggle whether the probe finds an answer open or closed (detailsFrom)', async () => {
+  const context = await browser.newContext({ viewport: { width: 1000, height: 700 } });
+  // The first answer starts open, the second closed: the first click closes one and opens the other, and a second click puts
+  // each back as it started. Both are the same toggle.
+  await context.route('http://faq.test/**', (route) => route.fulfill({ contentType: 'text/html', body: `<!doctype html><html><body style="margin:0">
+    <details open><summary>Do I need to write tests?</summary><p>No, never.</p></details>
+    <details><summary>Will it send real messages?</summary><p>Only to the inbox you choose.</p></details>
+    </body></html>` }));
+  const page = await context.newPage();
+  await page.goto('http://faq.test/', { waitUntil: 'load' });
+  const out = await captureClicks(page, { budgetMs: 15000 });
+  const by = (t) => out.widgets.find((w) => w.text === t);
+  const first = by('Do I need to write tests?');
+  const second = by('Will it send real messages?');
+  assert.equal(first?.detailsFrom, true, JSON.stringify(out.widgets.map((w) => [w.text, w.detailsFrom, w.closesOwn])));
+  assert.equal(first.closesOwn, 'toggle', 'open → closed → open is the toggle');
+  assert.equal(second?.detailsFrom, false);
+  assert.equal(second.closesOwn, 'toggle');
+  assert.ok(out.probedPaths.includes(first.trigger) && out.probedPaths.includes(second.trigger), 'where the probe clicked is recorded');
+  await context.close();
+});
+
 test('a top-bar link whose hover adds a menu next to it is found by hovering, never clicked', async () => {
   const context = await browser.newContext({ viewport: { width: 1000, height: 700 } });
   // A builder's menu bar: plain divs in a fixed bar; the page's script adds the menu while the mouse is on the link.

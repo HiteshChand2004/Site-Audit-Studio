@@ -410,6 +410,9 @@
   display: grid;
   gap: var(--sp-2);
   min-width: 0;
+  /* The two sides are as tall as the taller one (a note under the copy): their rows stay at the top, so the labels and
+     frames line up instead of the shorter side's rows being stretched to fill. */
+  align-content: start;
 }
 
 @media (max-width: 1100px) {

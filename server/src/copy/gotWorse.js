@@ -56,7 +56,7 @@ const kb = (bytes) => `${Math.round(bytes / 1024)} KB`;
  * @param {object} [o.newAxe]           the copy's
  * @returns {{ items: object[], summary: { total: number, explained: number, unexplained: number, byReason: Record<string, number> } }}
  */
-export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPages = copyPages, oldLhr = {}, newLhr = {}, oldAxe = null, newAxe = null, address = null, revertedPages = [], excludedHosts = [], fixOpen = [], backendPaths = [] }) {
+export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPages = copyPages, oldLhr = {}, newLhr = {}, oldAxe = null, newAxe = null, address = null, revertedPages = [], excludedHosts = [], fixOpen = [], backendPaths = [], questionsByPage = null, liftFailures = [], originalCapture = null, crawls = null }) {
   const site = bareHost(new URL(siteUrl).hostname);
   const copyHost = hostOf(copyOrigin);
   const copied = new Set(copyPages.map(normPath));
@@ -65,7 +65,19 @@ export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPage
   // backendPaths: the site's own addresses that answered with data, not a file, while it was captured (report.asIs.sameOrigin:
   // `not-an-asset`). Only the original's server can answer them; a copy of files has none, so they fail there (reason b).
   const backend = new Set(backendPaths.map(normPath));
-  const ctx = { site, copyHost, copied, chosen, oldLhr, newLhr, oldAxe, newAxe, address, revertedPages, excludedHosts, fixOpen, backend };
+  // questionsByPage: per copied page (its path), what the copy's crawl read of it: { questions, faqSignals } — the question
+  // headings and summaries (audit/extract.js questionHeadings) and the FAQ-like parts (faqSignals). Null when not known.
+  const questions = questionsByPage ? new Map(Object.entries(questionsByPage).map(([p, q]) => [normPath(p), q])) : null;
+  // liftFailures: the site's files the copy could not download while it was made because the network was down
+  // ({ url, reason }, report.asIs.lift.pages[].downloads.failedUrls with a network reason): path → reason.
+  const liftFailed = new Map();
+  for (const f of liftFailures) {
+    const p = hostOf(f?.url) === site || hostOf(f?.url) === copyHost ? pathOf(f.url) : null;
+    if (p && !liftFailed.has(p)) liftFailed.set(p, f.reason ?? 'network');
+  }
+  // originalCapture: the original homepage as captured (capture/<slug>/desktop.json): its own colours, for the contrast rule.
+  // crawls: { original, copy } = the two crawl.json files (each page's facts), for the duplicate-text rule (gatedDuplicates).
+  const ctx = { site, copyHost, copied, chosen, oldLhr, newLhr, oldAxe, newAxe, address, revertedPages, excludedHosts, fixOpen, backend, questions, liftFailed, originalCapture, crawls };
   // With a new-site address, structured data the original wrote with its own address is kept as written (copy/fixAsIs.js
   // applyAddress): a structured-data row says so in plain words, whatever else explains it.
   const ldNote = fixOpen.some((o) => o.kind === 'address' && o.field === 'json-ld')
@@ -440,6 +452,70 @@ function openMotion(item, ctx) {
   return owed(item, planned(item));
 }
 
+/**
+ * The pages an FAQ-schema row fails on (the analyzer's own rule, audit/analyzers/aeo.js: FAQ-like parts, or two question
+ * headings), when not one of them holds a single question in the copy's crawl; else null. The copy builds a FAQPage only from
+ * questions with their answers (recreate/ir/aeo.js faqPairs), so a page of titled panels ("Settings", "Printing") has nothing to
+ * mark up. Strict on purpose: one question anywhere, or a page the crawl did not read, leaves the row to the rules after it.
+ */
+function pagesWithoutQuestions(ctx) {
+  if (!ctx.questions?.size) return null;
+  const failing = [...ctx.questions].filter(([, q]) => (q?.faqSignals ?? 0) > 0 || (q?.questions ?? 0) >= 2);
+  if (!failing.length || failing.some(([, q]) => !Number.isFinite(q?.questions) || q.questions > 0)) return null;
+  return failing.map(([p]) => p);
+}
+
+// A page the server sends as an empty shell (the site's script draws all of it): the crawl rendered it and its raw HTML held next
+// to no text.
+export const SHELL_TEXT_MAX = 200;
+const crawlPages = (crawl) => (Array.isArray(crawl?.pages) ? crawl.pages : Array.isArray(crawl) ? crawl : null);
+const squash = (s) => String(s ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+/**
+ * Duplicate titles (or descriptions) that are a sign-in gate, not a text to fix: pages behind a sign-in (a dashboard, "new
+ * estimate") are empty shells the site's own script fills, and with no one signed in it shows another page instead (the sign-in
+ * page: the same title and heading). The copy ships the original's script, so it does the same; their own content needs the
+ * site's server and a signed-in visitor (reason b).
+ * Strict, so a real duplicate is never hidden. Every duplicate of the field on the copy's crawl must be such a gate - each group
+ * of pages sharing the text holds one real page (served with its content) and every other page in it is an empty shell
+ * (`rendered`, raw text ≤ SHELL_TEXT_MAX) showing that page's title AND first heading - and the original's crawl must show the
+ * same groups, gated the same way. Anything else (a page with real content, a group of shells only, a duplicate the original
+ * lacks, a crawl not read) returns null and the row stays a fix still owed.
+ * @param {{ crawls?: { original?: object, copy?: object } | null }} ctx
+ * @param {'title' | 'metaDescription'} field
+ * @returns {string | null} the evidence
+ */
+export function gatedDuplicates(ctx, field) {
+  const sides = [crawlPages(ctx.crawls?.copy), crawlPages(ctx.crawls?.original)];
+  if (sides.some((s) => !s?.length)) return null;
+  const read = (pages) => {
+    const groups = new Map();
+    for (const p of pages) {
+      const text = squash(p?.facts?.[field]);
+      const at = pathOf(p?.url ?? '');
+      if (!text || !at) continue;
+      groups.set(text, [...(groups.get(text) ?? []), { at, p }]);
+    }
+    const dups = [...groups.values()].filter((g) => g.length > 1);
+    const heading = (p) => squash(p.facts?.headings?.[0]?.text);
+    const shell = (p) => p.facts?.rendered === true && Number.isFinite(p.facts?.rawTextLength) && p.facts.rawTextLength <= SHELL_TEXT_MAX;
+    const out = [];
+    for (const g of dups) {
+      const real = g.filter((x) => !shell(x.p));
+      if (real.length !== 1 || !heading(real[0].p)) return null;
+      const shown = real[0];
+      if (!g.every((x) => x === shown || (shell(x.p) && heading(x.p) === heading(shown.p) && squash(x.p.facts?.title) === squash(shown.p.facts?.title)))) return null;
+      out.push({ shown: shown.at, shells: g.filter((x) => x !== shown).map((x) => x.at).sort() });
+    }
+    return out.length ? out.sort((a, b) => a.shown.localeCompare(b.shown)) : null;
+  };
+  const copy = read(sides[0]);
+  const original = read(sides[1]);
+  if (!copy || !original || JSON.stringify(copy) !== JSON.stringify(original)) return null;
+  const said = copy.map((g) => `${g.shells.join(', ')} show ${g.shown}`).join('; ');
+  return `These pages are empty shells the site's own script fills, and with no one signed in it shows another page instead (${said}: the same title and heading), on the original too. The copy runs the original's script unchanged; their own content needs the site's server and a signed-in visitor.`;
+}
+
 /** SEO, AEO and site-file checks failing on both sides. */
 function openAnalyzer(item, id, part, ctx) {
   const detail = item.after?.detail ?? 'Still failing in the copy.';
@@ -459,18 +535,22 @@ function openAnalyzer(item, id, part, ctx) {
         if (ctx.revertedPages.length) return look(reverted.trim());
         return unexplained(`${detail} The copy shortens or completes the ${field} from the page's own words, and this one is still outside the range: a bug to report.`);
       }
+      if (part === 'duplicate') {
+        const gate = gatedDuplicates(ctx, id === 'title-tag' ? 'title' : 'metaDescription');
+        if (gate) return { reason: 'backend', evidence: `${detail} ${gate}` };
+      }
       if (ctx.revertedPages.length) return look(`The copy writes a missing or duplicated ${id === 'title-tag' ? 'title' : 'description'} from the page itself.${reverted}`);
       return unexplained(`${detail} The copy writes a missing or duplicated ${id === 'title-tag' ? 'title' : 'description'} from the page itself, and this one is still open: a fix still owed.`);
     case 'canonical-url':
     case 'open-graph-tags':
-      if (noAddress && (id === 'canonical-url' || /og:url/.test(detail))) return owner(`No new-site address was given for this copy (${ctx.address?.detail ?? 'none set'}), so nothing in it names an address; give one and the copy writes these.`);
-      if (/og:image/.test(detail)) return owner('A link-preview picture is a brand choice; the copy adds no picture of its own.');
+      if (noAddress && (id === 'canonical-url' || /og:url|og:image/.test(detail))) return owner(`No new-site address was given for this copy (${ctx.address?.detail ?? 'none set'}), so nothing in it names an address; give one and the copy writes these.`);
+      if (/og:image/.test(detail)) return owner('The page shows no large picture and the site has no logo the copy holds, so there is nothing of the site\'s own to show in a link preview: the owner chooses one.');
       if (ctx.revertedPages.length) return look(reverted.trim());
       return unexplained(`${detail} The copy fills a missing canonical, og:title and og:description from the page; this is still open: a fix still owed.`);
     case 'headings':
       return look('Heading tags carry the site\'s own styles and scripts; changing which element is the <h1> changes the page\'s look.');
     case 'heading-hierarchy':
-      return look('Heading levels carry the site\'s own styles; renumbering them changes the page\'s look.');
+      return look('Heading levels carry the site\'s own styles; renumbering them changes the page\'s look. Fix mode gives a skipped heading its level for screen readers (aria-level) without changing its tag, and this row counts that once it is approved.');
     case 'image-alt-text':
       return contentWords(item, 'image-alt');
     case 'language':
@@ -483,6 +563,10 @@ function openAnalyzer(item, id, part, ctx) {
     case 'faq-schema':
       if (ctx.revertedPages.length) return look(`The copy adds Organization / WebSite and FAQPage data from the page itself.${reverted}`);
       if (/Invalid JSON-LD/i.test(detail)) return owner('The original\'s own structured data is invalid as written; an as-is copy keeps it, and the owner corrects it.');
+      if (id === 'faq-schema') {
+        const none = pagesWithoutQuestions(ctx);
+        if (none) return owner(`${none.length === 1 ? `The page it names (${none[0]}) shows` : `The pages it names (${none.slice(0, 3).join(', ')}${none.length > 3 ? ` and ${none.length - 3} more` : ''}) show`} collapsible or FAQ-like parts but not one question (no heading or summary ending in "?"), so there is nothing to mark up as an FAQ: a FAQPage made from them would invent questions. Whether the page has an FAQ is the owner's content.`);
+      }
       return unexplained(`${detail} The copy adds this data from the page itself and it is still open: a fix still owed.`);
     case 'structured-answers':
     case 'content-without-javascript':
@@ -590,6 +674,11 @@ function requestPart(e, ctx) {
   if (p && !hasFileExt(p) && !ctx.copied.has(p) && !ctx.chosen.has(p)) {
     return { what, reason: 'owner', notCopied: p, evidence: 'the page loading a page that was not copied, ahead of a click' };
   }
+  // A file the original serves that the copy could not download while it was made, because the network was down: a fix owed
+  // (the file can still be had), with its true cause.
+  if (p && ctx.liftFailed?.has(p)) {
+    return { what, reason: null, lostToNetwork: p, evidence: `the copy does not hold the file ${p}: the original serves it, but it could not be downloaded while the copy was made because the network was down (${ctx.liftFailed.get(p)}); scripts/refetch-missing.js or a new copy brings it` };
+  }
   if (p && isRanged(e.url)) return { what, reason: null, evidence: `the copy does not hold the file ${p}, which the original serves in pieces (a ?range= query): the copy must hold the whole file and slice it itself` };
   return { what, reason: null, evidence: hasFileExt(p ?? '') ? `the copy does not hold the file ${p}` : `${e.text}` };
 }
@@ -638,10 +727,112 @@ function lighthousePart(item, id, ctx) {
 }
 
 const contrastNodes = (axe) => ((axe?.violations ?? axe?.results?.violations ?? []).find((v) => v.id === 'color-contrast')?.nodes ?? [])
-  .map((n) => ({ target: (n.target ?? []).join(' '), colours: colourKey(n.any?.[0]?.data), html: String(n.html ?? '').slice(0, 80) }));
+  .map((n) => ({
+    target: (n.target ?? []).join(' '), colours: colourKey(n.any?.[0]?.data), html: String(n.html ?? '').slice(0, 80),
+    fullHtml: String(n.html ?? ''), fg: n.any?.[0]?.data?.fgColor ?? null, bg: n.any?.[0]?.data?.bgColor ?? null,
+  }));
 const colourKey = (d) => (d?.fgColor && d?.bgColor ? `${d.fgColor} on ${d.bgColor} (${d.contrastRatio}:1)` : null);
 
-/** Contrast: the same colours as the original's own failures, or not. */
+/** [r, g, b, a] of a CSS colour (rgb() / rgba() / #rgb / #rrggbb / #rrggbbaa), or null. */
+function rgbaOf(v) {
+  const s = String(v ?? '').trim().toLowerCase();
+  const m = s.match(/^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:[\s,/]+([\d.]+%?))?\s*\)$/);
+  if (m) return [+m[1], +m[2], +m[3], m[4] == null ? 1 : m[4].endsWith('%') ? parseFloat(m[4]) / 100 : +m[4]];
+  const h = s.match(/^#([0-9a-f]{3,8})$/)?.[1];
+  if (!h || ![3, 6, 8].includes(h.length)) return null;
+  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+  return [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16)).concat(full.length === 8 ? parseInt(full.slice(6, 8), 16) / 255 : 1);
+}
+const sameRgb = (a, b) => Boolean(a && b) && [0, 1, 2].every((i) => Math.abs(a[i] - b[i]) <= 3);
+
+/** Tag, classes and visible text of an axe node's markup (`<p class="x">Text</p>`). */
+function markupOf(html) {
+  const tag = html.match(/^<([a-z][a-z0-9-]*)/i)?.[1]?.toLowerCase() ?? null;
+  const classes = (html.match(/^<[^>]*\sclass="([^"]*)"/i)?.[1] ?? '').split(/\s+/).filter(Boolean);
+  const text = html.replace(/<[^>]*>/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\s+/g, ' ').trim();
+  return { tag, classes, text };
+}
+
+const ownText = (node) => (node.children ?? []).filter((c) => typeof c?.text === 'string').map((c) => c.text).join(' ').replace(/\s+/g, ' ').trim();
+
+/**
+ * The colours the original drew an element with, read from its capture (capture/<slug>/desktop.json, styles stored as
+ * differences from the parent): the element found by tag, classes and own text; its text colour = the nearest `color` on it or
+ * an ancestor; its background = the backgrounds from it up to the first opaque one, laid over the page's (else white).
+ * Returns [{ fg, bg }] for every match, or [] when the capture has none.
+ */
+function capturedColours(capture, { tag, classes, text }) {
+  const out = [];
+  if (!capture?.body || !text) return out;
+  const htmlBg = rgbaOf(capture.htmlStyle?.['background-color']);
+  const walk = (node, chain) => {
+    if (!node || typeof node !== 'object' || !node.tag) return;
+    const here = [...chain, node];
+    const cls = String(node.attrs?.class ?? '').split(/\s+/);
+    if (node.tag === tag && classes.every((c) => cls.includes(c)) && ownText(node) === text) {
+      const up = here.slice().reverse();
+      const fg = rgbaOf(up.find((n) => n.style?.color)?.style.color ?? capture.htmlStyle?.color ?? 'rgb(0, 0, 0)');
+      const layers = [];
+      for (const n of up) {
+        const c = rgbaOf(n.style?.['background-color']);
+        if (c && c[3] > 0) layers.push(c);
+        if (c && c[3] >= 1) break;
+      }
+      const page = htmlBg && htmlBg[3] >= 1 ? htmlBg.slice(0, 3) : [255, 255, 255];
+      // The backgrounds of a chain of elements laid over each other, up to the first opaque one, over the page's.
+      const composite = (chainUp) => {
+        const ls = [];
+        for (const n of chainUp) {
+          const c = rgbaOf(n.style?.['background-color']);
+          if (c && c[3] > 0) ls.push(c);
+          if (c && c[3] >= 1) break;
+        }
+        let b = page;
+        for (const c of ls.reverse()) b = b.map((v, i) => c[i] * c[3] + v * (1 - c[3]));
+        return b;
+      };
+      let bg = page;
+      for (const c of layers.reverse()) bg = bg.map((v, i) => c[i] * c[3] + v * (1 - c[3]));
+      // What shows through when the element, or one of its ancestors, is drawn partly transparent: the backgrounds above it.
+      const backdrops = [];
+      for (let k = 0; k < up.length; k++) {
+        const b = composite(up.slice(k + 1));
+        if (!backdrops.some((x) => x.every((v, i) => Math.abs(v - b[i]) < 0.5))) backdrops.push(b);
+      }
+      out.push({ fg, bg, backdrops });
+    }
+    for (const c of node.children ?? []) walk(c, here);
+  };
+  walk(capture.body, []);
+  return out;
+}
+
+/** How far a channel may sit from the blend: the colours are read rounded to whole numbers on both sides. */
+const FADE_ROUNDING = 1.5;
+
+/**
+ * The one opacity at which the original's own colours of an element, laid over what shows through behind it, give the copy's
+ * colours: the text AND the background with the same opacity, every channel within rounding. That is the element (or an
+ * ancestor) caught mid-fade by the check. Null when no single opacity in (0, 1) explains both, for any backdrop the capture
+ * gives (the backgrounds above the element or above one of its ancestors).
+ * @param {{ fg: number[], bg: number[], backdrops: number[][] }} c  the original's colours (capturedColours)
+ * @param {number[]} fg  the copy's text colour
+ * @param {number[]} bg  the copy's background colour
+ */
+export function fadeOpacity(c, fg, bg) {
+  for (const b of c.backdrops ?? []) {
+    const pairs = [[c.fg, fg], [c.bg, bg]].flatMap(([o, n]) => [0, 1, 2].map((i) => [o[i] - b[i], n[i] - b[i]]));
+    const dd = pairs.reduce((s, [d]) => s + d * d, 0);
+    // The text must differ from what shows through, or any opacity "fits" it.
+    if (Math.max(...[0, 1, 2].map((i) => Math.abs(c.fg[i] - b[i]))) < 20 || dd === 0) continue;
+    const a = pairs.reduce((s, [d, e]) => s + d * e, 0) / dd;
+    if (!(a > 0.02 && a < 0.98)) continue;
+    if (pairs.every(([d, e]) => Math.abs(a * d - e) <= FADE_ROUNDING)) return Math.round(a * 1000) / 1000;
+  }
+  return null;
+}
+
+/** Contrast: the same colours as the original's own failures, or the original's own colours for that element, or not. */
 function contrastPart(ctx) {
   const before = contrastNodes(ctx.oldAxe);
   const after = contrastNodes(ctx.newAxe);
@@ -649,11 +840,40 @@ function contrastPart(ctx) {
   const known = new Set(before.map((n) => n.colours).filter(Boolean));
   const seen = new Set(before.map((n) => n.target));
   const extra = after.filter((n) => !seen.has(n.target));
-  const strange = extra.filter((n) => !n.colours || !known.has(n.colours));
+  const unknown = extra.filter((n) => !n.colours || !known.has(n.colours));
+  // An as-is copy never changes a colour: an element failing only in the copy whose colours are exactly those the original
+  // drew it with (its capture) is the original's own; the original's check did not count it because it was not on screen
+  // (still hidden by the site's own reveal, or outside the view) when the check ran.
+  const ownColours = (n) => {
+    const fg = rgbaOf(n.fg);
+    const bg = rgbaOf(n.bg);
+    return Boolean(fg && bg) && capturedColours(ctx.originalCapture, markupOf(n.fullHtml)).some((c) => sameRgb(c.fg, fg) && sameRgb(c.bg, bg));
+  };
+  const own = unknown.filter(ownColours);
+  // Caught mid-fade: the same element is in the original's capture, and the copy's text and background are its colours laid
+  // over what shows through behind it with one common opacity (within rounding). Anything else stays unexplained.
+  const fadeOf = (n) => {
+    const fg = rgbaOf(n.fg);
+    const bg = rgbaOf(n.bg);
+    if (!fg || !bg) return null;
+    for (const c of capturedColours(ctx.originalCapture, markupOf(n.fullHtml))) {
+      const a = fadeOpacity(c, fg, bg);
+      if (a != null) return a;
+    }
+    return null;
+  };
+  const faded = unknown.filter((n) => !own.includes(n)).map((n) => ({ n, a: fadeOf(n) })).filter((f) => f.a != null);
+  const strange = unknown.filter((n) => !own.includes(n) && !faded.some((f) => f.n === n));
   if (strange.length) return unexplained(`${strange.length} element(s) fail with colours the original does not fail with: ${strange.slice(0, 3).map((n) => `${n.html} — ${n.colours ?? 'colours not read'}`).join('; ')}.`);
+  const ownLine = own.length
+    ? ` ${own.length} of them (${own.slice(0, 3).map((n) => `${n.html} — ${n.colours}`).join('; ')}) ${own.length === 1 ? 'has' : 'have'} exactly the colours the original draws ${own.length === 1 ? 'it' : 'them'} with (its capture); the original's check did not count ${own.length === 1 ? 'it' : 'them'} because ${own.length === 1 ? 'it was' : 'they were'} not on screen yet (hidden by the site's own reveal) when the check ran.`
+    : '';
+  const fadeLine = faded.length
+    ? ` ${faded.length} of them (${faded.slice(0, 3).map((f) => `${f.n.html} — ${f.n.colours}, the original's colours at ${Math.round(f.a * 100)} % opacity`).join('; ')}) ${faded.length === 1 ? 'was' : 'were'} caught mid-fade: text and background are the original's own colours for ${faded.length === 1 ? 'that element' : 'those elements'} (its capture), laid over what shows behind ${faded.length === 1 ? 'it' : 'them'} at one common opacity, so the check read them while the site's own entrance was still running.`
+    : '';
   return {
     reason: 'look',
-    evidence: `${after.length} elements fail against the original's ${before.length}; every one failing only in the copy has the same colours as one failing on the original (${[...new Set(extra.map((n) => n.colours))].join(', ') || 'none new'}): the count moves with what is on screen when the check runs. The colours are the original's own; changing them changes its look.`,
+    evidence: `${after.length} elements fail against the original's ${before.length}; every one failing only in the copy has the original's own colours (${[...new Set(extra.map((n) => n.colours))].join(', ') || 'none new'}): the count moves with what is on screen when the check runs.${ownLine}${fadeLine} The colours are the original's own; changing them changes its look.`,
   };
 }
 
@@ -681,7 +901,16 @@ function scorePart(item, ctx) {
       evidence: `${drop}: the same page (${kb(wb)} → ${kb(wa)}, the same largest element) scored lower from the measurement host (this computer, served with a static host's network conditions, HTTP/1.1, no CDN) than the original from its host; both sides were measured now with the same settings, so the gap is the host's. Measure it again after deploying.`,
     };
   }
-  const onlyCopy = (lp.failing?.copy ?? []).filter((id) => !(lp.failing?.original ?? []).includes(id));
+  // Only the checks of this row's category count (Max Potential First Input Delay is a speed check: it never moves a Best
+  // practices score). `failing` lists every category's; a row kept before copyFailingByCategory was recorded falls back to it.
+  const ofCategory = lp.copyFailingByCategory?.[lp.category];
+  // Such an older row: the category's own checks are the ones its saved Lighthouse report lists under it (which checks
+  // belong to a category is the same on every page), so a speed check failing on the page still never explains it.
+  const inCategory = categoryAudits(ctx.newLhr?.[lp.mode], lp.category) ?? categoryAudits(ctx.oldLhr?.[lp.mode], lp.category);
+  const copyFailing = Array.isArray(ofCategory)
+    ? ofCategory.map((f) => f.id)
+    : (lp.failing?.copy ?? []).filter((id) => !inCategory || inCategory.has(id));
+  const onlyCopy = copyFailing.filter((id) => !(lp.failing?.original ?? []).includes(id));
   if (!onlyCopy.length) return unexplained(`${drop}: the same checks fail on both sides; the score moved without a new failing check, which no reason explains.`);
   const explain = (id) => {
     const a = lp.copyAudits?.[id] ?? {};
@@ -689,6 +918,15 @@ function scorePart(item, ctx) {
     const hosts = hostsOf(urls);
     const foreign = hosts.filter((h) => h !== ctx.copyHost && h !== ctx.site);
     const what = a.title ?? id;
+    // Console errors: each failed request on its own, by the same rule as the "Browser errors" row (requestPart): a request to
+    // the site's backend, a file the copy lacks, a page not copied. Without addresses, the original's own code as before.
+    if (id === 'errors-in-console' && urls.length) {
+      const r = byParts(urls.map((url) => ({ url, text: url })), (e) => requestPart(e, ctx), 'failed request');
+      // Unexplained: the requests that do have a reason are said too, so the row reads whole.
+      const given = r.unexplained ? (r.parts ?? []).filter((p) => p.reason) : [];
+      const also = given.length ? ` The other${given.length === 1 ? '' : 's'}: ${given.slice(0, 3).map((p) => `${pathOf(p.what) ?? p.what} — ${p.evidence}`).join('; ')}.` : '';
+      return { what, reason: r.reason, evidence: `"${what}": ${r.evidence}${also}` };
+    }
     const ownData = urls.filter((u) => hostOf(u) === ctx.copyHost || hostOf(u) === ctx.site).map((u) => pathOf(u)).filter((p) => p && ctx.backend?.has(normPath(p)));
     if (urls.length && ownData.length === urls.length) return { what, reason: 'backend', evidence: `"${what}": the page asks the site's own server for data (${[...new Set(ownData)].join(', ')}), which a copy of the site's files cannot answer` };
     if (hosts.length && foreign.length === hosts.length) return { what, reason: 'third_party', evidence: `"${what}" names only ${foreign.join(', ')}: third-party code the original loads` };
@@ -702,6 +940,12 @@ function scorePart(item, ctx) {
   // Every check without a reason is one a fix is planned for: the row is owed, not a bug.
   const owedOnly = r.unexplained && (r.parts ?? []).filter((p) => !p.reason).every((p) => p.planned);
   return { ...r, ...(owedOnly && { group: 'missing-fixer' }), evidence: `${drop}: ${r.evidence}` };
+}
+
+/** The ids of the checks that count toward a category's score (weight > 0) in one Lighthouse report, or null without one. */
+export function categoryAudits(lhr, category) {
+  const refs = lhr?.categories?.[category]?.auditRefs;
+  return Array.isArray(refs) && refs.length ? new Set(refs.filter((r) => r?.id && (r.weight ?? 1) > 0).map((r) => r.id)) : null;
 }
 
 /** The page's largest element in one Lighthouse report: { selector, path, snippet }, or null when it named none. */

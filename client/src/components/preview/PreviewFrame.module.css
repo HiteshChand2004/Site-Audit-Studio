@@ -198,7 +198,9 @@
   box-shadow: var(--shadow);
   color: var(--text-2);
   font-size: var(--fs-sm);
-  white-space: nowrap;
+  width: max-content;
+  border-radius: 14px;
+  line-height: 1.4;
   backdrop-filter: blur(4px);
 }
 /* ---- Aurora polish (UI redesign) ---- */

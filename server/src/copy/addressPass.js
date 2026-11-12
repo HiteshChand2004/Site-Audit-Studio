@@ -1,12 +1,14 @@
 // The address pass at download (Step 6): the new site's address written into a finished as-is copy that was made without one.
 // It works on a fresh copy of the finished copy's folder (the finished copy is never changed) and writes only what an address
 // decides, with the same code the full fix stage uses (copy/fixAsIs.js applyAddress, addressFiles):
-//   pages  canonical, og:url (moved or added), og:image / twitter:image (moved when the copy holds the file)
+//   pages  canonical, og:url (moved or added), og:image / twitter:image (moved when the copy holds the file), a missing og:image
+//          (a large picture the page shows, else the site's logo on a card: the one new picture file an address may add)
 //   files  sitemap.xml, robots.txt, llms.txt
 // Then it proves the result before anything is packaged:
 //   1. every page is the same as before once those four tags are left out of both sides (so nothing a visitor sees changed:
 //      only <link> and <meta> tags in the head did, which are never painted);
-//   2. every other file of the copy is byte for byte the same (only the three site files may change or appear);
+//   2. every other file of the copy is byte for byte the same (only the three site files may change or appear, and the logo card
+//      an og:image names);
 //   3. every address written names the new site and a page or file the copy holds; every sitemap entry, too, and robots.txt
 //      points at the new sitemap.
 // A failed proof puts the folder back exactly as the finished copy is, and says why: the copy then names no address, and the
@@ -75,10 +77,11 @@ export async function addressPass({ fromDir, dir, pages, siteUrl, newSiteUrl, si
   const result = [];
   const open = [];
   const counts = emptyCounts();
+  const pictures = new Map();
   for (const d of docs) {
     const { $ } = d;
     const fixes = [];
-    const { own } = applyAddress($, d, { dir, siteHost, newOrigin: origin, byPath, fixes, open });
+    const { own } = await applyAddress($, d, { dir, siteHost, newOrigin: origin, byPath, fixes, open, pictures });
     d.head = { title: clean($('title').first().text()), description: clean($('meta[name="description"]').attr('content')), canonical: own };
     if (fixes.length) await writeFile(path.join(dir, d.outPath), $.html(), 'utf8');
     for (const f of fixes) counts[f.kind] = (counts[f.kind] ?? 0) + 1;
@@ -111,7 +114,8 @@ async function prove({ dir, docs, before, origin, byPath, result }) {
     if (!after.has(rel)) return `${rel} is gone`;
     if (after.get(rel) !== hash && !pageFiles.has(rel) && !ADDRESS_SITE_FILES.has(rel)) return `${rel} changed`;
   }
-  for (const rel of after.keys()) if (!before.has(rel) && !ADDRESS_SITE_FILES.has(rel)) return `${rel} appeared`;
+  const made = new Set(result.flatMap((r) => r.fixes.filter((f) => f.field === 'og:image' && f.file).map((f) => f.file)));
+  for (const rel of after.keys()) if (!before.has(rel) && !ADDRESS_SITE_FILES.has(rel) && !made.has(rel)) return `${rel} appeared`;
   // 3. Every address written names the new site and something the copy holds.
   const page = (href) => {
     const u = new URL(href);

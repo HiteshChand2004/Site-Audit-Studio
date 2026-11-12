@@ -45,23 +45,29 @@ export function analyzeAeo({ pages, home, robots, llms, renderedTextLength }) {
     else out.push(item('fail', 'FAQ schema', `FAQ-style content on ${plural(faqPages.length, 'page')} (${examples(faqPages.map((p) => pathOf(p.url)))}) has no FAQPage schema.`, faqPages.length));
   }
 
-  // Heading hierarchy
+  // Heading hierarchy. A skip an aria-level mends (the tag kept for its styles, the level set for assistive technology: as-is Fix
+  // mode) is not counted, but the detail says the tags still skip: search engines are not known to read aria-level.
   {
+    const skipsOf = (levels) => levels.filter((l, i) => i > 0 && l > levels[i - 1] + 1).length;
     let skips = 0;
+    let mended = 0;
     const where = new Set();
+    const mendedWhere = new Set();
     for (const p of pages) {
-      const levels = p.facts.headings.map((h) => h.level);
-      for (let i = 1; i < levels.length; i++) {
-        if (levels[i] > levels[i - 1] + 1) {
-          skips++;
-          where.add(pathOf(p.url));
-        }
-      }
+      const byTag = skipsOf(p.facts.headings.map((h) => h.level));
+      const byAria = skipsOf(p.facts.headings.map((h) => h.aria ?? h.level));
+      skips += byAria;
+      mended += Math.max(0, byTag - byAria);
+      if (byAria) where.add(pathOf(p.url));
+      if (byTag > byAria) mendedWhere.add(pathOf(p.url));
     }
+    const note = mended
+      ? ` ${plural(mended, 'skip')} in the tags on ${examples([...mendedWhere])} ${mended > 1 ? 'are' : 'is'} given the right level for screen readers with aria-level; the tags themselves still skip, and search engines may read those.`
+      : '';
     out.push(
       skips
-        ? item('warn', 'Heading hierarchy', `Heading levels are skipped (e.g. h2 → h4) in ${plural(skips, 'place')} on ${examples([...where])}.`, skips)
-        : item('pass', 'Heading hierarchy', 'Heading levels are nested without skips.', 0),
+        ? item('warn', 'Heading hierarchy', `Heading levels are skipped (e.g. h2 → h4) in ${plural(skips, 'place')} on ${examples([...where])}.${note}`, skips)
+        : item('pass', 'Heading hierarchy', mended ? `Heading levels are nested without skips for screen readers.${note}` : 'Heading levels are nested without skips.', 0),
     );
   }
 

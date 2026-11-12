@@ -152,6 +152,26 @@ export function frameShare(frames, i) {
 }
 
 /**
+ * The followers that came back: with the mouse back at the first point, a real follower is where it was then (within
+ * FIT_TOLERANCE_PX, or a tenth of the farthest it moved during the probe for a large one); an element moving by its own
+ * animation, which only happened to move in step with the mouse, is somewhere else in its cycle. `reads` are the probe's
+ * reads (findFollowers), `back` the centre map read with the mouse back at the first point (readCentres).
+ * @returns {{ confirmed: object[], unconfirmed: string[] }}
+ */
+export function confirmReturn(followers, reads, back) {
+  const confirmed = [];
+  const unconfirmed = [];
+  for (const f of followers) {
+    const a = reads[0]?.settled?.[f.path];
+    const b = back?.[f.path];
+    const span = a ? Math.max(0, ...reads.map((r) => r.settled?.[f.path]).filter(Boolean).map((c) => Math.hypot(c[0] - a[0], c[1] - a[1]))) : 0;
+    if (a && b && Math.hypot(b[0] - a[0], b[1] - a[1]) <= Math.max(FIT_TOLERANCE_PX, 0.1 * span)) confirmed.push(f);
+    else unconfirmed.push(f.path);
+  }
+  return { confirmed, unconfirmed };
+}
+
+/**
  * Moves the mouse over the page and returns what follows it. The mouse is put back off the page.
  * @param {import('playwright').Page} page
  * @returns {Promise<{ followers: object[], ms: number }>}
@@ -173,22 +193,29 @@ export async function capturePointer(page) {
     reads.push({ m, early, settled });
 
   }
-  const followers = findFollowers(reads, { viewport: [vp.width, vp.height] });
-  // How each follower catches up, frame by frame: the mouse jumps once more while the page records every frame.
-  if (followers.length) {
-    const sampling = page.evaluate(sampleFrames, { paths: followers.map((f) => f.path), ms: 700 }).catch(() => null);
+  const candidates = findFollowers(reads, { viewport: [vp.width, vp.height] });
+  let followers = candidates;
+  let unconfirmed = [];
+  // How each follower catches up, frame by frame: the mouse jumps once more - back to the first point - while the page
+  // records every frame. Then, settled there, each one must be back where it was at that point (confirmReturn): an element
+  // looping by itself that moved in step with the three moves by chance is not.
+  if (candidates.length) {
+    const sampling = page.evaluate(sampleFrames, { paths: candidates.map((f) => f.path), ms: 700 }).catch(() => null);
     await page.waitForTimeout(40);
-    await page.mouse.move(Math.round(vp.width * POINTS[0][0]), Math.round(vp.height * POINTS[0][1]));
+    await page.mouse.move(reads[0].m[0], reads[0].m[1]);
     const frames = await sampling;
     if (frames) {
-      followers.forEach((f, i) => {
+      candidates.forEach((f, i) => {
         const { share, tauMs } = frameShare(frames, i);
         // A follower that jumps keeps 0; one that eases gets the per-frame share and the time it amounts to.
         f.share = share;
         f.tauMs = tauMs;
       });
     }
+    await page.waitForTimeout(Math.max(0, SETTLE_MS - 740));
+    const back = await page.evaluate(readCentres, {}).catch(() => null);
+    ({ confirmed: followers, unconfirmed } = confirmReturn(candidates, reads, back));
   }
   await page.mouse.move(-20, -20).catch(() => {});
-  return { followers, ms: Date.now() - started };
+  return { followers, ...(unconfirmed.length && { unconfirmed }), ms: Date.now() - started };
 }

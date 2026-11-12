@@ -9,6 +9,8 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import * as cheerio from 'cheerio';
 import { liftSite, localOfOutPath } from './asis.js';
+import { pageDocumentOf } from './pageLift.js';
+import { readRecordIndex } from '../scripts.js';
 import { packLifted, servedDir } from './pack.js';
 import { buildConvertedReact, convertToReact, REACT_EXPORT_DIR, verifyConverted } from '../../convert/react.js';
 import { buildConverted, convertToNext, dropBuildFolder, EXPORT_DIR } from '../../convert/next.js';
@@ -16,7 +18,7 @@ import { buildConvertedMern, convertToMern, MERN_EXPORT_DIR, verifyConvertedMern
 import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
 import { writeLockfiles } from '../../../toolchains/lockfile.js';
-import { anchorClicks, checkCopy, excludedHostsOf, fixGate, formsInCopy, NOISE_SHOTS, perfProbe, probeOriginal } from './check.js';
+import { anchorClicks, checkCopy, excludedHostsOf, fixGate, formsInCopy, inPool, NOISE_SHOTS, perfProbe, probeOriginal } from './check.js';
 import { localFileOf, namesStillUsed, PERF_KINDS, planPerf, stylesheetCandidates } from '../../../copy/perfAsIs.js';
 import { formRoutesOfCopy, formsReadmeSection } from '../../../copy/formRoutes.js';
 import { fixAsIsCopy, fixGroup, revertPage } from '../../../copy/fixAsIs.js';
@@ -37,6 +39,13 @@ import { addNoticePages } from '../../../copy/noticePages.js';
 import { copyChecksOf } from '../../../copy/checks.js';
 import { issueLogger } from '../../../copy/serverLog.js';
 import { LOGS_DIR } from '../../../config/paths.js';
+import { PAGE_MB, parallelism } from '../../../audit/resources.js';
+
+// Pages whose fixes are proved at the same time: a look opens both sides at both widths (4 contexts), so as many pages as the
+// job's memory holds that many for, at most FIX_PAGES_MAX (one by one, 25 pages took about 8 min each: 2026-11-10, predco.ai).
+const FIX_PAGES_MAX = 2;
+const fixPagesAtOnce = () => parallelism({ perUnitMB: PAGE_MB * 4, max: FIX_PAGES_MAX, min: 1 });
+
 
 /** The stacks an as-is copy can be packaged into (the plain copy and the three app stacks). */
 export const ASIS_STACKS = ['html', 'react-vite', 'nextjs', 'mern'];
@@ -458,8 +467,9 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
         try {
           a = await serveCopy(copyDir);
           const fixedBase = a.url.replace(/\/$/, '');
-          // An exact copy pictures both widths at the same time (same rounds, same verdict per width).
-          g = await lookGate(browser, fixedBase, unfixed, p.path, { axeRules: axeRulesFor(p.fixes), axeBefore, parallel: exact });
+          // Both widths pictured at the same time (same rounds, same verdict per width; the first failing width in order decides).
+          // One after the other halved nothing but the time: most looks pass, and a passing look pictures both widths anyway.
+          g = await lookGate(browser, fixedBase, unfixed, p.path, { axeRules: axeRulesFor(p.fixes), axeBefore, parallel: true });
           // A link given a role is also clicked on both sides: invisible is not enough for something a visitor uses.
           if (g.invisible && (groups ? groups.includes('anchors') : p.fixes.some((f) => f.kind === 'anchors'))) {
             const clicks = await anchorClicks(browser, fixedBase, unfixed, p.path);
@@ -491,7 +501,9 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
         }, () => null);
       const notMade = (made) => ({ invisible: false, error: made ? 'the fix is not made on its own' : 'the fix could not be made again' });
       try {
-        for (const p of changed) {
+        // Each page's fixes are proved on their own page only (its HTML, its looks; the files beside the pages are already written),
+        // so pages are proved side by side, as many as the memory holds (each look pictures both widths at once).
+        const checkPage = async (p) => {
           const groups = [...new Set(p.fixes.map(fixGroup))];
           // Speed fixes are always proved on their own, strictly (proven), even when the page passed with everything.
           const speedGroups = groups.filter((x) => PERF_KINDS.includes(x));
@@ -499,7 +511,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
           const g = await look(p);
           if (g.invisible && !speedGroups.length) {
             finalLook.set(p.outPath, g);
-            continue;
+            return;
           }
           const original = fixed.originals.get(p.outPath);
           await revertPage(copyDir, p.outPath, original);
@@ -507,7 +519,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
             // The look was disturbed by the browser connection: the page keeps its HTML as it was, no group is tried again.
             p.dropped = groups.map((group) => ({ group, reason: 'd', why: STRAY_WHY }));
             p.reverted = { reason: 'd', why: STRAY_WHY };
-            continue;
+            return;
           }
           const dropped = [];
           // A first look that passed keeps its verdict for the markup groups (C1 + C2, unchanged); every group is tried alone
@@ -559,7 +571,11 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
           } else dropped.push({ group: groups[0], reason: 'd', why: whyNotKept(g) });
           p.dropped = dropped;
           if (!kept.length) p.reverted = { reason: 'd', why: g.invisible ? dropped[0]?.why ?? 'not proven' : whyNotKept(g) };
-        }
+        };
+        await inPool(changed, fixPagesAtOnce(), checkPage);
+        // The looks in page order, as when the pages were proved one after the other.
+        const order = new Map(changed.map((p, i) => [p.path, i]));
+        gate.sort((x, y) => (order.get(x.path) ?? 0) - (order.get(y.path) ?? 0));
         // Is the problem gone? (Step 5b, copy/fixGone.js): the markup checks each kept group targets, read from the page as lifted
         // and as fixed, no page load. A group whose problem is still there, or that made a check worse, is undone (noEffect): the
         // page is made again from the lifted pages with its other groups. Taking a group away from fixes the gate saw unchanged
@@ -722,8 +738,8 @@ export function noticeOpenItems(notices) {
   return (notices?.pages ?? []).map((n) => ({
     page: n.path,
     check: 'page not copied',
-    values: `linked from ${n.from.join(', ')}`,
-    tried: 'its links open a notice page of the copy that says so',
+    values: [n.reason === 'not-captured' ? 'not captured when the site was copied' : null, n.from.length ? `linked from ${n.from.join(', ')}` : null].filter(Boolean).join('; '),
+    tried: n.reason === 'not-captured' ? 'a notice page of the copy stands at its address; no other page is shown in its place' : 'its links open a notice page of the copy that says so',
     reason: n.reason === 'backend' ? 'backend' : 'owner',
   }));
 }
@@ -910,11 +926,36 @@ export async function asIsStage(ctx) {
       await rm(copyDir, { recursive: true, force: true });
       await mkdir(path.dirname(copyDir), { recursive: true });
       // The copy as it was lifted, before the fixes of that job (an older job kept only its fixed copy: that one, then).
-      const lifted = path.join(fromDir, ASIS_DIR, 'lifted');
-      const from = (await readdir(lifted).then((l) => l.length > 0, () => false)) ? lifted : path.join(fromDir, ASIS_DIR, 'copy');
+      const liftedFrom = path.join(fromDir, ASIS_DIR, 'lifted');
+      const from = (await readdir(liftedFrom).then((l) => l.length > 0, () => false)) ? liftedFrom : path.join(fromDir, ASIS_DIR, 'copy');
       await cp(from, copyDir, { recursive: true });
+      // A job lifted before uncaptured pages were left out may hold another page's document under such a page's address: the
+      // capture's record of that job decides again, and those files go (a notice page "not captured" takes their place).
+      if (!lifted.notCaptured) {
+        const record = await readRecordIndex(path.join(fromDir, 'capture', '.network')).catch(() => null);
+        const missing = record ? pages.filter((p, i) => i > 0 && !pageDocumentOf(record, p.url)).map((p) => ({ url: p.url, outPath: p.outPath })) : [];
+        if (missing.length) {
+          for (const p of missing) await rm(path.join(copyDir, p.outPath), { force: true });
+          lifted.notCaptured = missing;
+          const skip = new Set(missing.map((p) => p.url));
+          pages = pages.filter((p) => !skip.has(p.url));
+          ctx.report.pages = ctx.report.pages.filter((p) => !skip.has(p.url));
+          report.pages = report.pages.filter((p) => !skip.has(p.url));
+          ctx.report.warnings.push(`${missing.length} page(s) were not captured, so the copy has a notice page in their place: ${missing.map((p) => new URL(p.url).pathname).join(', ')}.`);
+        }
+      }
       // The baseline pictures travel with the copy: a repack needs no capture and no live site.
       await cp(path.join(fromDir, ASIS_DIR, 'baseline'), path.join(ctx.dir, ASIS_DIR, 'baseline'), { recursive: true }).catch(() => {});
+      // So do the original's pictures of each page (the page gallery and Compare show them): the job rebuilt from may be removed
+      // later (only the latest copies keep their folders), and this copy has no capture of its own.
+      for (const p of pages) {
+        const slug = slugFor(p.outPath);
+        const files = await readdir(path.join(fromDir, 'capture', slug)).catch(() => []);
+        for (const f of files.filter((n) => /^(desktop|laptop|tablet|mobile)-(fold|full)\.webp$/.test(n))) {
+          await mkdir(path.join(ctx.dir, 'capture', slug), { recursive: true });
+          await cp(path.join(fromDir, 'capture', slug, f), path.join(ctx.dir, 'capture', slug, f)).catch(() => {});
+        }
+      }
       // This job keeps the lifted copy and its page set too: a later repack takes them from here, and the retention that keeps
       // the newest finished jobs never removes the only copy of the lift.
       await mkdir(path.join(ctx.dir, ASIS_DIR), { recursive: true });
@@ -934,7 +975,20 @@ export async function asIsStage(ctx) {
         pages: lift.lifts,
         completion: lift.completion,
         hosts: lift.hosts.length,
+        network: lift.network,
       };
+      // Pages with no document of their own in the record were not lifted: they become notice pages below, never a copy of
+      // another page.
+      if (lift.notCaptured?.length) {
+        lifted.notCaptured = lift.notCaptured;
+        const skip = new Set(lift.notCaptured.map((p) => p.url));
+        pages = pages.filter((p) => !skip.has(p.url));
+        report.pages = report.pages.filter((p) => !skip.has(p.url));
+        ctx.report.warnings.push(`${lift.notCaptured.length} page(s) were not captured, so the copy has a notice page in their place: ${lift.notCaptured.map((p) => new URL(p.url).pathname).join(', ')}.`);
+      }
+      if (lift.network?.stillFailed) {
+        ctx.report.warnings.push(`${lift.network.stillFailed} file(s) the original serves could not be downloaded because the network was down while copying; they are missing from the copy. Make the copy again, or run scripts/refetch-missing.js on it.`);
+      }
       if (lift.lifts.some((l) => l.blockers?.length)) lifted.blockers = lift.lifts.flatMap((l) => l.blockers.map((b) => ({ page: l.path, ...b })));
       // The capture's own picture of each page is the baseline the checks use when the original does not answer: kept with the lift.
       await mkdir(path.join(ctx.dir, ASIS_DIR, 'baseline'), { recursive: true });
@@ -966,6 +1020,7 @@ export async function asIsStage(ctx) {
     report.notices = await addNoticePages({
       dir: copyDir,
       pages,
+      notCaptured: lifted?.notCaptured ?? [],
       siteUrl,
       brokenOnOriginal: ctx.audit && !ctx.audit.isDummy ? (ctx.audit.brokenLinks?.broken ?? []).map((b) => b.url) : [],
       siteName: new URL(siteUrl).hostname.replace(/^www\./, ''),
@@ -986,9 +1041,24 @@ export async function asIsStage(ctx) {
     // The new address is written only when usable and confirmed for this copy (copy/address.js); else none is, and that is open.
     const address = addressForCopy({ saved: newSiteOf(ctx.baseUrl, siteUrl), confirmed: ctx.asIs?.address ?? null, siteUrl });
     report.address = address.origin ? { used: address.origin } : { used: null, ...address.skipped };
+    // The check's own lines (every look's measurements) are the server's log; the app is told in words which page is being
+    // checked, and how far it is (they used to be shown as they are, raw measurements and all).
+    const fixedSeen = new Set();
+    const fixLine = (m) => {
+      const page = m.match(/^(?:fixes|speed plan) (\S+?):?(?:\s|$)/)?.[1] ?? m.match(/^stylesheets .*? on (\S+?):/)?.[1];
+      if (!page) return 'Fixing what can be fixed without changing the look';
+      if (m.startsWith('stylesheets')) return `Checking that the smaller stylesheets leave ${page} looking the same`;
+      if (m.startsWith('speed plan')) return `Measuring ${page} for faster images`;
+      fixedSeen.add(page);
+      return `Checking that the fixes leave ${page} looking the same (page ${fixedSeen.size} of ${pages.length})`;
+    };
     report.fixes = await fixAndProve({
       browser, copyDir, gateDir: path.join(ctx.dir, ASIS_DIR, 'unfixed'), pages, siteUrl,
-      newSiteUrl: address.origin, addressSkipped: address.skipped, log: (m) => ctx.progress(0.34, m), fetchLlms: fetchLlmsTxt,
+      newSiteUrl: address.origin, addressSkipped: address.skipped, fetchLlms: fetchLlmsTxt,
+      log: (m) => {
+        console.log(`[recreate ${String(ctx.recreateId ?? '').slice(0, 8)}] ${m}`);
+        ctx.progress(0.34, fixLine(m));
+      },
     });
     await packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report });
     const converted = report.convert?.mode === 'converted';
@@ -1083,10 +1153,19 @@ export async function asIsStage(ctx) {
       servers.push(plain);
       htmlBase = plain.url.replace(/\/$/, '');
     }
+    // The check's own lines (JSON measurements) go to the server log; the app shows which page is being compared.
+    const checkedPages = new Set();
+    const checkLine = (m) => {
+      const page = m.match(/^(?:offline|visual|original|page) (\S+?):?(?:\s|$)/)?.[1];
+      if (!page) return 'Running the copy and checking it';
+      if (m.startsWith('page ')) checkedPages.add(page);
+      return `Comparing the copy with the original, page by page (${checkedPages.size} of ${pages.length} done)`;
+    };
     const checks = await checkCopy({
       browser, base, excludedHosts, originalReachable, baselines, htmlBase, onOriginalPicture: keepOriginalPicture,
       pages: pages.map((p) => ({ path: localOfOutPath(p.outPath), url: p.url })),
-      log: (m) => ctx.progress(0.55, m),
+      pagesAtOnce: fixPagesAtOnce(),
+      log: (m) => { console.log(`[recreate ${String(ctx.recreateId ?? '').slice(0, 8)}] ${m}`); ctx.progress(0.55, checkLine(m)); },
     });
     report.checks = checks;
     // Outside services that serve their part only to the original's domain (domainLock.js): kept in the copy, refused there.

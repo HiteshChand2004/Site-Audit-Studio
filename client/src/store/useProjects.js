@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { api } from '../api/client.js';
+import { api, isApiDown } from '../api/client.js';
 import { fromServerUrl } from '../api/base.js';
 
 const LAST_KEY = 'wa:lastProject';
@@ -49,15 +49,55 @@ function normalizeAudit(id, audit) {
 }
 
 export const HOME = 'home';
+// Build mode, remembered like a website so a reload comes back to it.
+const BUILD = 'build';
 
 export const isJobActive = (job) => Boolean(job) && ['starting', 'queued', 'running'].includes(job.status);
 export const isAnalysisActive = isJobActive;
+
+/**
+ * A job that could not be started because the app's server is off: 'unreachable', not 'failed'. Nothing ran, so the website's
+ * marks (the sidebar, the section tabs) keep the last result instead of showing a failure; the step says the server is off.
+ */
+const notStarted = (err) => ({ status: isApiDown(err) ? 'unreachable' : 'failed', error: err.message });
 
 /**
  * Whether the person may use the owner-only options (the server's rule, accounts/roles.js, which it enforces on every request):
  * the owner role, or nobody signed in (accounts off: the single-user tool). Unknown until /auth/me answered → not yet.
  */
 export const selectIsOwner = (s) => s.me === null || s.me?.role === 'owner';
+
+const timeOf = (value) => {
+  const t = value ? new Date(value).getTime() : 0;
+  return Number.isFinite(t) ? t : 0;
+};
+
+/**
+ * The websites in the order of their work, as the sidebar lists them: one with a check, copy or comparison running first,
+ * then the most recent work (a check finished, a copy started or finished, even a failed one, a comparison, the website
+ * added or its settings changed). Pure over the store's state, so a caller memoizes it.
+ */
+export function orderByWork(s) {
+  const busy = (id) => [s.analyses[id], s.recreates[id], s.reaudits[id]].some(isJobActive);
+  const when = (p) => {
+    const audit = (s.selectedId === p.id && s.audit) || s.overviews[p.id]?.audit;
+    const copy = s.recreateResults[p.id] ?? s.overviews[p.id]?.recreate;
+    const real = audit && !audit.isDummy;
+    return Math.max(
+      timeOf(real && audit.analyzedAt),
+      timeOf(real && !audit.recreate?.isDummy && audit.recreate?.reauditedAt),
+      timeOf(copy?.result?.createdAt),
+      timeOf(copy?.last?.startedAt),
+      timeOf(copy?.last?.finishedAt),
+      timeOf(p.updated_at),
+      timeOf(p.created_at),
+    );
+  };
+  return s.projects
+    .map((p) => ({ p, busy: busy(p.id), at: when(p) }))
+    .sort((a, b) => Number(b.busy) - Number(a.busy) || b.at - a.at)
+    .map((x) => x.p);
+}
 
 export const useProjects = create((set, get) => ({
   projects: [],
@@ -79,6 +119,8 @@ export const useProjects = create((set, get) => ({
   overviews: {},
   // The signed-in account: undefined until asked, null when the API has no accounts (then everyone is the owner), else { id, email, name, role, verified }.
   me: undefined,
+  // Build mode is open (a new site from a description): the main area shows it instead of home or a website.
+  building: false,
 
   /** Who is signed in (accounts on), or null (accounts off). Asked once at start; the account menu and the owner-only options read it. */
   async loadMe() {
@@ -109,6 +151,7 @@ export const useProjects = create((set, get) => ({
       const last = recall();
       const initial = projects.find((p) => p.id === last);
       if (initial) get().select(initial.id);
+      else if (last === BUILD) get().openBuild();
     } catch (err) {
       set({ loading: false, error: err.message });
     }
@@ -116,9 +159,15 @@ export const useProjects = create((set, get) => ({
 
   /** The home overview: no website selected. */
   goHome() {
-    set({ selectedId: null, audit: null, auditLoading: false });
+    set({ selectedId: null, audit: null, auditLoading: false, building: false });
     remember(HOME);
     get().loadOverviews();
+  },
+
+  /** Opens build mode: plan a new site, or changes to one, from a description. */
+  openBuild() {
+    set({ selectedId: null, audit: null, auditLoading: false, building: true });
+    remember(BUILD);
   },
 
   /** Check + copy of every website, for the home gallery and the sidebar (read only). */
@@ -134,7 +183,7 @@ export const useProjects = create((set, get) => ({
   async select(id) {
     // Picking the open website again looks for newer work (a copy made or imported elsewhere).
     if (get().selectedId === id && get().audit) return get().refreshSelected();
-    set({ selectedId: id, audit: null, auditLoading: true });
+    set({ selectedId: id, audit: null, auditLoading: true, building: false });
     remember(id);
     await Promise.all([get().reloadAudit(id), get().reloadRecreate(id)]);
     // Reattach to jobs that are still running (after a reload or a project switch).
@@ -216,7 +265,9 @@ export const useProjects = create((set, get) => ({
           // The server queues a re-audit of the new site: follow it (and show the checklist as stale meanwhile).
           await get().followReaudit(projectId);
         }
-        if (kind !== 'recreate' && get().selectedId === projectId) await get().reloadAudit(projectId);
+        // Also when another website is open now: the sidebar and the home gallery show this one's marks from its overview,
+        // which reloadAudit refreshes (it only touches the open dashboard when this website is the one open).
+        if (kind !== 'recreate') await get().reloadAudit(projectId);
       },
       failed: (data) => {
         streams.delete(`${kind}:${projectId}`);
@@ -230,7 +281,7 @@ export const useProjects = create((set, get) => ({
           get().reloadRecreate(projectId);
           setTimeout(() => get().followRecreate(projectId).then(() => get().reloadRecreate(projectId)), 2000);
         }
-        if (kind === 'reaudit' && get().selectedId === projectId) get().reloadAudit(projectId);
+        if (kind === 'reaudit') get().reloadAudit(projectId);
       },
     });
     streams.set(`${kind}:${projectId}`, { close });
@@ -253,7 +304,7 @@ export const useProjects = create((set, get) => ({
         const current = await api.getCurrentAnalysis(id).catch(() => null);
         if (current) return get().attach(id, current.job, current.steps);
       }
-      get().setAnalysis(id, { status: 'failed', error: err.message });
+      get().setAnalysis(id, notStarted(err));
     }
   },
 
@@ -280,7 +331,7 @@ export const useProjects = create((set, get) => ({
         const current = await api.getCurrentRecreate(id).catch(() => null);
         if (current) return get().attachJob('recreate', id, current.job, current.steps);
       }
-      get().setJob('recreate', id, { status: 'failed', error: err.message });
+      get().setJob('recreate', id, notStarted(err));
     }
   },
 
@@ -326,7 +377,7 @@ export const useProjects = create((set, get) => ({
         const current = await api.getCurrentReaudit(id).catch(() => null);
         if (current) return get().attachJob('reaudit', id, current.job, current.steps);
       }
-      get().setJob('reaudit', id, { status: 'failed', error: err.message });
+      get().setJob('reaudit', id, notStarted(err));
     }
   },
 
@@ -360,12 +411,16 @@ export const useProjects = create((set, get) => ({
       closeStream(kind, id);
       get().dismissJob(kind, id);
     }
-    const projects = get().projects.filter((p) => p.id !== id);
-    set({ projects });
-    if (get().selectedId === id) {
-      set({ selectedId: null, audit: null });
-      remember(HOME);
-    }
+    const before = orderByWork(get());
+    set({ projects: get().projects.filter((p) => p.id !== id) });
+    if (get().selectedId !== id) return;
+    // The open website was deleted: the one after it in the list opens (the sidebar's order), or the one above when it was the
+    // last; none left = home. Deleting another website leaves the open one as it is.
+    const at = before.findIndex((p) => p.id === id);
+    const next = before[at + 1] ?? before[at - 1] ?? null;
+    set({ selectedId: null, audit: null });
+    if (next) await get().select(next.id);
+    else get().goHome();
   },
 }));
 

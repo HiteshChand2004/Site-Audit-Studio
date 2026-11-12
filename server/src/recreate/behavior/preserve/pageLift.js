@@ -19,6 +19,8 @@ import { rewriteHosts } from './hostRewrite.js';
 import { downloadAsset } from '../../assets/download.js';
 import { rangesOf, sliceOf, RANGED_MAX_BYTES } from './ranged.js';
 import { createPrefetch } from './prefetch.js';
+import { waitForNetwork } from '../../../audit/interruptions.js';
+import { NETWORK_WAIT_MS } from '../../interrupts.js';
 
 /** Largest file the lift downloads at build time (bytes). */
 export const LIFT_MAX_BYTES = 25 * 1024 * 1024;
@@ -30,6 +32,42 @@ export const JS_ASSET_LIMIT = 60;
 
 /** Attempts per download (the guarded download's own back-off applies between them). */
 export const LIFT_ATTEMPTS = 3;
+
+/**
+ * Download failures that say the network (or the far end's connection) failed, not the file: the address may well answer once
+ * the network is back (assets/download.js reasons). Shared by the re-check's reasons (copy/gotWorse.js) and
+ * scripts/refetch-missing.js.
+ */
+export const NETWORK_FAILURE_REASONS = new Set(['dns', 'refused', 'timeout', 'time-limit', 'reset']);
+/** The longest a whole copy waits for the network to come back for its build-time downloads, all pages together. */
+export const LIFT_NETWORK_WAIT_MS = 2 * NETWORK_WAIT_MS;
+
+/**
+ * One job's waiting for the network, shared by the pages it lifts: a build-time download that failed at network level waits
+ * for its host to answer again (each wait ≤ NETWORK_WAIT_MS, all of them ≤ maxTotalMs) and is tried once more. A network
+ * that did not come back within the time left is not waited for again, so a copy made offline loses minutes, not hours.
+ * SAS_NETWORK_WATCH=0 (the test suite, audit/interruptions.js): no waiting unless a test passes its own `wait`.
+ * @param {{ maxTotalMs?: number, wait?: typeof waitForNetwork }} [o]
+ */
+export function createNetworkRetry({ wait, maxTotalMs = !wait && process.env.SAS_NETWORK_WATCH === '0' ? 0 : LIFT_NETWORK_WAIT_MS } = {}) {
+  wait ??= waitForNetwork;
+  let spent = 0;
+  let gaveUp = false;
+  const stats = { waits: 0, waitedMs: 0, retried: 0, recovered: 0 };
+  return {
+    stats,
+    /** Waits until `url`'s host answers; true when it did (try the download again). */
+    async waitBack(url) {
+      if (gaveUp || spent >= maxTotalMs) return false;
+      stats.waits++;
+      const { back, waitedMs } = await wait(url, { until: Date.now() + Math.min(NETWORK_WAIT_MS, maxTotalMs - spent) });
+      spent += waitedMs;
+      stats.waitedMs += waitedMs;
+      if (!back) gaveUp = true;
+      return back;
+    },
+  };
+}
 
 /** The extension a file of this content type is saved under (the content, not the address, decides it). */
 const EXT_OF_TYPE = { 'image/webp': '.webp', 'image/avif': '.avif', 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/svg+xml': '.svg' };
@@ -203,14 +241,45 @@ export function pageKeyOf(url) {
   return `${u.hostname.replace(/^www\./, '')}${p}`;
 }
 
-export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fetchImpl = downloadAsset, entry = 'index.html', pageLinks = new Map() }) {
+/**
+ * The record's document of this page, and only of this page: the same address, else where the record's redirects from it lead
+ * (≤ 5 hops), else a document with the same page identity (pageKeyOf: www, trailing slash, index.html). Never another page's
+ * document: a page the capture never loaded has none, and the copy must not show the homepage in its place.
+ * @param {{ entries?: any[] }} recordIndex
+ * @param {string} pageUrl
+ * @returns {any|null}
+ */
+export function pageDocumentOf(recordIndex, pageUrl) {
+  const entries = recordIndex?.entries ?? [];
+  const bare = (u) => String(u).split('#')[0];
+  const docs = entries.filter((e) => e.kind === 'document' && e.sha && !e.redirect);
+  let url = bare(pageUrl);
+  for (let hop = 0; hop <= 5; hop++) {
+    const doc = docs.find((e) => bare(e.url) === url);
+    if (doc) return doc;
+    const moved = entries.find((e) => e.redirect && bare(e.url) === url);
+    if (!moved) break;
+    url = bare(moved.redirect);
+  }
+  const keyOf = (u) => {
+    try {
+      return pageKeyOf(u);
+    } catch {
+      return null;
+    }
+  };
+  const key = keyOf(pageUrl);
+  return (key && docs.find((e) => keyOf(e.url) === key)) ?? null;
+}
+
+export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fetchImpl = downloadAsset, entry = 'index.html', pageLinks = new Map(), networkRetry = createNetworkRetry() }) {
   const recordDir = path.join(captureRoot, '.network');
   const recordIndex = (await readRecordIndex(recordDir)) ?? { entries: [] };
   /** @type {Map<string, any>} */
   const byUrl = new Map();
   for (const e of recordIndex.entries ?? []) if (e.url && e.sha && !e.redirect) byUrl.set(e.url.split('#')[0], e);
-  const doc = recordIndex.entries.find((e) => e.kind === 'document' && e.url.split('#')[0] === pageUrl.split('#')[0]) ?? recordIndex.entries.find((e) => e.kind === 'document');
-  if (!doc) throw new Error('no document for the page in the record');
+  const doc = pageDocumentOf(recordIndex, pageUrl);
+  if (!doc) throw Object.assign(new Error(`no document for ${pageUrl} in the record: the page was not captured`), { code: 'not-captured' });
   const html = await readFile(path.join(recordDir, 'files', doc.sha), 'utf8');
   const siteHost = new URL(pageUrl).hostname.replace(/^www\./, '');
   const tmp = path.join(outDir, '.lift-tmp');
@@ -365,7 +434,14 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   const download = async (abs, kind) => {
     downloads.tried++;
     await mkdir(tmp, { recursive: true });
-    const res = await prefetch.take(`${kind}|${abs}`, abs, liftOpts(kind));
+    let res = await prefetch.take(`${kind}|${abs}`, abs, liftOpts(kind));
+    // The network dropped (not the file): wait for it to come back and try once more (createNetworkRetry).
+    if (!res.ok && NETWORK_FAILURE_REASONS.has(res.reason) && networkRetry && (await networkRetry.waitBack(abs))) {
+      networkRetry.stats.retried++;
+      downloads.retried = (downloads.retried ?? 0) + 1;
+      res = await fetchImpl(abs, liftOpts(kind));
+      if (res.ok) networkRetry.stats.recovered++;
+    }
     if (!res.ok) {
       downloads.failed++;
       downloads.failedUrls.push({ url: abs, reason: res.reason });

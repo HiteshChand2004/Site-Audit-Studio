@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
-import { liftPage } from '../src/recreate/behavior/preserve/pageLift.js';
+import { createNetworkRetry, liftPage, pageDocumentOf } from '../src/recreate/behavior/preserve/pageLift.js';
 import { serveFolder } from '../src/recreate/behavior/preserve/render.js';
 
 const sha = (/** @type {string} */ t) => createHash('sha256').update(t).digest('hex');
@@ -58,6 +58,28 @@ async function writeRecord(root) {
   await writeFile(path.join(net, 'index.json'), JSON.stringify({ version: 1, entries }));
   return root;
 }
+
+test('a page\'s document is its own: same address, its redirect, the same page identity — never another page\'s', async () => {
+  const record = { entries: [
+    { url: 'https://www.site.test/', kind: 'document', sha: 'home' },
+    { url: 'https://site.test/old', kind: 'document', redirect: 'https://site.test/new/' },
+    { url: 'https://site.test/new/', kind: 'document', sha: 'new' },
+    { url: 'https://site.test/blog/post/', kind: 'document', sha: 'post' },
+    { url: 'https://site.test/app.js', kind: 'script', sha: 'js' },
+  ] };
+  assert.equal(pageDocumentOf(record, 'https://www.site.test/#top')?.sha, 'home');
+  assert.equal(pageDocumentOf(record, 'https://site.test/old')?.sha, 'new', 'where its redirect leads');
+  assert.equal(pageDocumentOf(record, 'https://www.site.test/blog/post')?.sha, 'post', 'www and the trailing slash are the same page');
+  assert.equal(pageDocumentOf(record, 'https://site.test/company/'), null, 'not captured: no document, not the homepage\'s');
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sas-uncaptured-'));
+  try {
+    await mkdir(path.join(root, '.network', 'files'), { recursive: true });
+    await writeFile(path.join(root, '.network', 'index.json'), JSON.stringify(record));
+    await assert.rejects(liftPage({ captureRoot: root, pageUrl: 'https://site.test/company/', outDir: path.join(root, 'copy'), fetch: false }), (err) => err.code === 'not-captured');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test('the page lifted from the record runs offline: chunk, hydration, animation and hover, no request leaves the copy', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sas-lift-'));
@@ -206,6 +228,48 @@ test('inline <style> font the record lacks is downloaded from its own host, neve
     const fontAsks = asked.filter((u) => u.endsWith('/far/f.woff2'));
     assert.ok(fontAsks.length > 0, 'the font is asked for');
     assert.ok(fontAsks.every((u) => u.startsWith('https://fonts.test/')), `asked only at its own host, got ${fontAsks.join(', ')}`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a build-time download that failed because the network was down waits for it and is tried once more; a network that stays down is waited for once', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sas-netretry-'));
+  try {
+    await writeRecord(root);
+    // The network is back after the wait: the icon (not in the record) is in the copy.
+    let calls = 0;
+    const flaky = async (url, { dir }) => {
+      calls++;
+      if (calls === 1) return { ok: false, reason: 'dns', finalUrl: url };
+      const tmp = path.join(dir, 'icon.tmp');
+      await writeFile(tmp, ICON);
+      return { ok: true, tmp, sha256: sha(ICON), bytes: ICON.length, mime: 'image/svg+xml', finalUrl: url, redirects: [] };
+    };
+    const waits = [];
+    const back = createNetworkRetry({ wait: async (url) => (waits.push(url), { back: true, waitedMs: 5 }) });
+    const lift = await liftPage({ captureRoot: root, pageUrl: SITE, outDir: path.join(root, 'copy'), fetchImpl: flaky, networkRetry: back });
+    assert.ok(lift.files.some((f) => f.local === '/icon.svg'), 'the icon is in the copy');
+    assert.equal(lift.downloads.failed, 0);
+    assert.equal(lift.downloads.retried, 1);
+    assert.deepEqual(back.stats, { waits: 1, waitedMs: 5, retried: 1, recovered: 1 });
+    assert.deepEqual(waits, ['https://site.test/icon.svg']);
+
+    // The network stays down: one wait, then the copy goes on without waiting again (here: a second page of the same copy).
+    const down = createNetworkRetry({ wait: async () => ({ back: false, waitedMs: 7 }) });
+    const dead = async (url) => ({ ok: false, reason: 'dns', finalUrl: url });
+    const a = await liftPage({ captureRoot: root, pageUrl: SITE, outDir: path.join(root, 'copy-a'), fetchImpl: dead, networkRetry: down });
+    const b = await liftPage({ captureRoot: root, pageUrl: SITE, outDir: path.join(root, 'copy-b'), fetchImpl: dead, networkRetry: down });
+    assert.equal(down.stats.waits, 1, 'waited once for the whole copy');
+    assert.ok(a.downloads.failedUrls.some((f) => f.url === 'https://site.test/icon.svg' && f.reason === 'dns'));
+    assert.ok(b.downloads.failedUrls.length > 0);
+
+    // A file that is not there (404) is an answer, not the network: no wait.
+    const none = createNetworkRetry({ wait: async () => assert.fail('no wait for a 404') });
+    await liftPage({ captureRoot: root, pageUrl: SITE, outDir: path.join(root, 'copy-c'), fetchImpl: async (url) => ({ ok: false, reason: 'http-404', finalUrl: url }), networkRetry: none });
+    assert.equal(none.stats.waits, 0);
+    // The test suite (SAS_NETWORK_WATCH=0) never waits by default.
+    assert.equal(await createNetworkRetry().waitBack('https://site.test/icon.svg'), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

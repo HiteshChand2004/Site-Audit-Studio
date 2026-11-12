@@ -49,7 +49,7 @@ const exists = (f) => stat(f).then((s) => s.isFile(), () => false);
  * @returns {Promise<{ pages: { path: string, outPath: string, url: string, reason: string, from: string[] }[], links: number,
  *   files: number, left: { url: string, why: string }[] }>}
  */
-export async function addNoticePages({ dir, pages, siteUrl, brokenOnOriginal = [], siteName = null }) {
+export async function addNoticePages({ dir, pages, notCaptured = [], siteUrl, brokenOnOriginal = [], siteName = null }) {
   const site = new URL(siteUrl);
   const host = bareHost(site);
   const copied = new Set();
@@ -69,6 +69,22 @@ export async function addNoticePages({ dir, pages, siteUrl, brokenOnOriginal = [
 
   const notices = new Map(); // outPath → notice
   const left = new Map(); // url → why it keeps its link
+  // A selected page the capture never loaded (no document of its own): a notice page at its own address, linked or not.
+  /** @type {Map<string, string>} path key → its outPath */
+  const uncaptured = new Map();
+  for (const p of notCaptured) {
+    try {
+      const u = new URL(p.url);
+      const key = pathKey(u.pathname);
+      if (copied.has(key)) continue;
+      if (await exists(path.join(dir, p.outPath))) {
+        left.set(p.url, `the copy already holds ${p.outPath}`);
+        continue;
+      }
+      uncaptured.set(key, p.outPath);
+      notices.set(p.outPath, { path: u.pathname, outPath: p.outPath, url: `${site.origin}${u.pathname}`, reason: 'not-captured', from: new Set() });
+    } catch { /* not an address */ }
+  }
   let links = 0;
   let files = 0;
   for (const page of pages) {
@@ -101,7 +117,7 @@ export async function addNoticePages({ dir, pages, siteUrl, brokenOnOriginal = [
         left.set(url, 'broken on the original: the owner fixes or removes the link');
         return null;
       }
-      const outPath = outPathFor(target.pathname);
+      const outPath = uncaptured.get(key) ?? outPathFor(target.pathname);
       if (!notices.has(outPath)) {
         if (await exists(path.join(dir, outPath))) {
           left.set(url, `the copy already holds ${outPath}`);

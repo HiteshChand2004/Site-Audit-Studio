@@ -19,8 +19,8 @@ import { collectForms } from './forms.js';
 const TEMPLATE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'template');
 
 let cached;
-/** The fixed server files, as Map<project path, text>. */
-function templateFiles() {
+/** The fixed server files, as Map<project path, text> (Build mode's MERN projects start from them too: buildmode/stacks.js). */
+export function templateFiles() {
   if (cached) return cached;
   cached = new Map();
   const walk = (dir, prefix) => {

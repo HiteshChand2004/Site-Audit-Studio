@@ -7,7 +7,7 @@ import { BrowserShot } from '../../components/site/Site.jsx';
 import { hostOf, stackById } from '../../constants.js';
 import { CHECKS, matchRating, RESULT_STATUS, SEVERITY, TERMS } from '../../copy.js';
 import { plural, timeAgo } from '../../format.js';
-import { comparisonOf, copyShot, isReal, originalShot, platformOf, useSiteData } from '../../siteData.js';
+import { comparisonOf, copyShot, isReal, originalShot, platformOf, useSiteData, worseSplit } from '../../siteData.js';
 import { useProjects } from '../../store/useProjects.js';
 import { HOW } from '../Home.jsx';
 import styles from './OverviewStep.module.css';
@@ -153,12 +153,12 @@ export default function OverviewStep({ project, audit, loading, onGo }) {
   const match = result?.fidelity?.score ?? null;
   const m = matchRating(match);
 
-  // What needs a look: the comparison's open / worse items, else the original's problems.
+  // What needs a look: the comparison's worse items (only the ones the copy may really be worse on, as Results counts them)
+  // and its open ones, else the original's problems.
+  const worse = worseSplit(cmp);
   const todo = cmp
-    ? (cmp.items ?? [])
-        // Rows outside what Remastly can change are not "to do" (server copy/gotWorse.js markOutside).
-        .filter((i) => !i.outside && (i.status === 'regressed' || i.status === 'open'))
-        .sort((a, b) => (a.status === 'regressed' ? 0 : 1) - (b.status === 'regressed' ? 0 : 1))
+    // Rows outside what Remastly can change are not "to do" (server copy/gotWorse.js markOutside; worseSplit leaves them out too).
+    ? [...worse.real, ...(cmp.items ?? []).filter((i) => i.status === 'open' && !i.outside)]
         .map((i) => ({ id: i.key, tone: RESULT_STATUS[i.status]?.tone ?? 'warn', label: RESULT_STATUS[i.status]?.label ?? i.status, title: titleOf(i), detail: i.after?.detail }))
     : problemsOf(audit).rows.map((r) => ({ id: r.id, tone: SEVERITY[r.severity]?.tone ?? 'warn', label: SEVERITY[r.severity]?.label, title: r.title, detail: r.area }));
 
@@ -188,7 +188,7 @@ export default function OverviewStep({ project, audit, loading, onGo }) {
                   </figcaption>
                 </figure>
                 <figure>
-                  <BrowserShot src={copy} address="the copy" alt={`The copy of ${host}`} ratio={16 / 10} />
+                  <BrowserShot src={copy} address="the copy" alt={`The copy of ${host}`} ratio={16 / 10} retry />
                   <figcaption>
                     <i data-side="new" /> {TERMS.copy}
                   </figcaption>
@@ -239,7 +239,13 @@ export default function OverviewStep({ project, audit, loading, onGo }) {
             </ul>
           )}
           <div className={styles.cardFoot}>
-            {todo.length > 6 && <span className={styles.muted}>and {todo.length - 6} more</span>}
+            {(todo.length > 6 || worse.explained > 0) && (
+              <span className={styles.muted}>
+                {todo.length > 6 && `and ${todo.length - 6} more`}
+                {todo.length > 6 && worse.explained > 0 && ' · '}
+                {worse.explained > 0 && `${plural(worse.explained, 'check')} only read worse, not because of the copy (see Results)`}
+              </span>
+            )}
             <Button size="sm" variant="ghost" icon={cmp ? ListChecks : ArrowRight} onClick={() => onGo(cmp ? 'results' : 'check')}>
               {cmp ? 'Every check, before and after' : 'The full check'}
             </Button>

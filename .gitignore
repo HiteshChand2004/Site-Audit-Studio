@@ -24,3 +24,6 @@ website/.env*
 !website/.env.example
 # data/ above means the tool's data folder; the website keeps content in website/data/
 !website/data/
+
+# Claude Code: agent worktrees and local settings of this machine
+.claude/

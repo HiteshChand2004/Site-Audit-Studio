@@ -101,9 +101,38 @@
 }
 
 .todoTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
   margin-bottom: var(--sp-2);
   color: var(--text);
   font-weight: 650;
+}
+
+.worseNote {
+  margin: calc(-1 * var(--sp-3)) 0 var(--sp-4);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.todoExplain {
+  max-width: 72ch;
+  margin: 0 0 var(--sp-2);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.todoCount {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.more {
+  margin-top: var(--sp-2);
+}
+
+.more[data-open] svg {
+  transform: rotate(180deg);
 }
 
 .todo ul {
@@ -120,7 +149,7 @@
 
 .todo li {
   display: grid;
-  grid-template-columns: 128px auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: baseline;
   gap: var(--sp-3);
   padding: 9px 0;

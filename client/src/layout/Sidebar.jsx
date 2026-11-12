@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react';
-import { LayoutGrid, PanelLeftClose, PanelLeftOpen, Plus, Search, Trash2, X } from 'lucide-react';
+import { LayoutGrid, PanelLeftClose, PanelLeftOpen, Plus, Search, Trash2, Wand2, X } from 'lucide-react';
 import ConfirmDialog from '../components/common/ConfirmDialog.jsx';
 import Disclaimer from '../components/common/Disclaimer.jsx';
 import AccountMenu from '../components/account/AccountMenu.jsx';
 import { LogoMark } from '../components/common/Illustrations.jsx';
 import { SiteIcon, StageDots } from '../components/site/Site.jsx';
 import { useSiteData } from '../siteData.js';
-import { useProjects } from '../store/useProjects.js';
+import { orderByWork, useProjects } from '../store/useProjects.js';
 import { hostOf } from '../constants.js';
 import styles from './Sidebar.module.css';
 
@@ -67,17 +67,20 @@ function SiteItem({ project, active, onSelect, onRemove }) {
 }
 
 /** Collapsed sidebar content: a thin rail with the logo, toggle, home, Add and one icon per website. */
-function Rail({ projects, selectedId, select, goHome, onNewProject, onToggle }) {
+function Rail({ projects, selectedId, select, goHome, onNewProject, onToggle, building, openBuild }) {
   return (
     <>
       <div className={styles.railTop}>
         <LogoMark size={30} />
         <ToggleButton collapsed onToggle={onToggle} />
-        <button type="button" className={styles.iconBtn} data-active={!selectedId || undefined} onClick={goHome} aria-label="All websites" title="All websites">
+        <button type="button" className={styles.iconBtn} data-active={(!selectedId && !building) || undefined} onClick={goHome} aria-label="All websites" title="All websites">
           <LayoutGrid size={16} aria-hidden="true" />
         </button>
         <button type="button" className={`${styles.iconBtn} ${styles.railNew}`} onClick={onNewProject} aria-label="Add a website" title="Add a website">
           <Plus size={16} aria-hidden="true" />
+        </button>
+        <button type="button" className={styles.iconBtn} data-active={building || undefined} onClick={openBuild} aria-label="Build a site" title="Build a site">
+          <Wand2 size={16} aria-hidden="true" />
         </button>
       </div>
       <nav className={`${styles.railList} scroll`} aria-label="Websites">
@@ -106,10 +109,29 @@ function Rail({ projects, selectedId, select, goHome, onNewProject, onToggle }) 
   );
 }
 
-export default function Sidebar({ onNewProject, collapsed = false, onToggle }) {
-  const { projects, loading, selectedId, select, remove, goHome } = useProjects();
+/**
+ * On a computer: the sidebar, or its rail when collapsed. On a narrow screen (`drawer`): the same full sidebar as a panel
+ * that slides over the page from the menu button in the top bar (AppShell.jsx); choosing a place closes it.
+ */
+export default function Sidebar({ onNewProject, collapsed = false, onToggle, drawer = false, open = false, onClose, panelRef }) {
+  const store = useProjects();
+  const { loading, selectedId, remove, building } = store;
+  // Listed by the work on each website (running first, then the most recent), not in the order they were added.
+  const projects = useMemo(
+    () => orderByWork(store),
+    [store.projects, store.overviews, store.recreateResults, store.analyses, store.recreates, store.reaudits, store.audit, store.selectedId],
+  );
   const [query, setQuery] = useState('');
   const [toDelete, setToDelete] = useState(null);
+  // In the drawer every way to another place also closes it.
+  const andClose = (fn) => (...args) => {
+    fn?.(...args);
+    if (drawer) onClose?.();
+  };
+  const select = andClose(store.select);
+  const goHome = andClose(store.goHome);
+  const openBuild = andClose(store.openBuild);
+  const addWebsite = andClose(onNewProject);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -119,7 +141,18 @@ export default function Sidebar({ onNewProject, collapsed = false, onToggle }) {
 
   // One <aside> in both states, so its width can animate between the rail and the full sidebar.
   return (
-    <aside id="project-sidebar" className={styles.sidebar} data-collapsed={collapsed} aria-label="Websites">
+    <aside
+      ref={panelRef}
+      id="project-sidebar"
+      className={styles.sidebar}
+      data-collapsed={collapsed}
+      data-drawer={drawer || undefined}
+      data-open={(drawer && open) || undefined}
+      role={drawer ? 'dialog' : undefined}
+      aria-modal={drawer && open ? 'true' : undefined}
+      aria-label={drawer ? 'Menu' : 'Websites'}
+      inert={(drawer && !open) || undefined}
+    >
       <ConfirmDialog
         open={Boolean(toDelete)}
         onClose={() => setToDelete(null)}
@@ -134,7 +167,7 @@ export default function Sidebar({ onNewProject, collapsed = false, onToggle }) {
         </p>
       </ConfirmDialog>
       {collapsed ? (
-        <Rail projects={projects} selectedId={selectedId} select={select} goHome={goHome} onNewProject={onNewProject} onToggle={onToggle} />
+        <Rail projects={projects} selectedId={selectedId} select={select} goHome={goHome} onNewProject={onNewProject} onToggle={onToggle} building={building} openBuild={openBuild} />
       ) : (
         <>
           <div className={styles.brandRow}>
@@ -145,18 +178,28 @@ export default function Sidebar({ onNewProject, collapsed = false, onToggle }) {
                 <span className={styles.brandSub}>Audit. Fix. Rebuild.</span>
               </span>
             </button>
-            {onToggle && <ToggleButton collapsed={false} onToggle={onToggle} />}
+            {drawer ? (
+              <button type="button" className={styles.iconBtn} onClick={onClose} aria-label="Close the menu" data-drawer-close>
+                <X size={18} aria-hidden="true" />
+              </button>
+            ) : (
+              onToggle && <ToggleButton collapsed={false} onToggle={onToggle} />
+            )}
           </div>
 
           <div className={styles.top}>
-            <button type="button" className={styles.navItem} data-active={!selectedId || undefined} aria-current={!selectedId ? 'page' : undefined} onClick={goHome}>
+            <button type="button" className={styles.navItem} data-active={(!selectedId && !building) || undefined} aria-current={!selectedId && !building ? 'page' : undefined} onClick={goHome}>
               <LayoutGrid size={16} aria-hidden="true" />
               <span>All websites</span>
               <span className={`${styles.count} tabular`}>{projects.length}</span>
             </button>
-            <button type="button" className={styles.addBtn} onClick={onNewProject}>
+            <button type="button" className={styles.addBtn} onClick={addWebsite}>
               <Plus size={16} aria-hidden="true" />
               <span>Add a website</span>
+            </button>
+            <button type="button" className={styles.navItem} data-active={building || undefined} aria-current={building ? 'page' : undefined} onClick={openBuild}>
+              <Wand2 size={16} aria-hidden="true" />
+              <span>Build a site</span>
             </button>
           </div>
 

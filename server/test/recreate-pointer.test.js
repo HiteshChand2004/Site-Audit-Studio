@@ -13,7 +13,7 @@ import { launchBrowser } from '../src/audit/render.js';
 import { runRecreate, STAGES } from '../src/recreate/index.js';
 import { recreateDir } from '../src/recreate/workspace.js';
 import { servePreview } from '../src/recreate/preview.js';
-import { capturePointer, findFollowers } from '../src/recreate/capture/pointer.js';
+import { capturePointer, confirmReturn, findFollowers } from '../src/recreate/capture/pointer.js';
 import { motionItems } from '../src/reaudit/motion.js';
 import { seedProject } from './helpers/projects.js';
 
@@ -43,12 +43,36 @@ body { margin: 0; min-height: 1100px; font: 16px/1.4 Arial, sans-serif; }
   })();
 </script></body></html>`;
 
+// A box that rises steadily by its own CSS animation (no mouse code): during the probe's three moves it travels in a
+// straight line, which the least-squares fit can take for a ratio to the mouse; with the mouse back at the first point it
+// is somewhere else. The parallax blob next to it follows the mouse for real.
+const LOOP_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Loop</title><style>
+body { margin: 0; min-height: 1100px; }
+.rise { position: absolute; left: 800px; top: 300px; width: 120px; height: 60px; background: #c2410c; animation: rise 12s linear infinite; }
+@keyframes rise { from { transform: translateY(0); } to { transform: translateY(-300px); } }
+.blob { position: absolute; left: 360px; top: 380px; width: 140px; height: 140px; background: #1d4ed8; }
+.walk { position: absolute; left: 1100px; top: 200px; width: 60px; height: 60px; background: #16a34a; }
+</style></head><body><div class="rise"></div><div class="blob"></div><div class="walk"></div>
+<script>
+  // .walk only ever goes down, by a tenth of how far the mouse moved: the probe's three moves (down, then down again) fit
+  // a ratio exactly, but it does not come back when the mouse does - the case only the return check can tell apart.
+  var lastY = null, walked = 0;
+  addEventListener('mousemove', function (e) {
+    document.querySelector('.blob').style.transform = 'translate(' + (e.clientX * 0.06) + 'px, ' + (e.clientY * 0.06) + 'px)';
+    if (lastY !== null) walked += Math.abs(e.clientY - lastY) * 0.1;
+    lastY = e.clientY;
+    document.querySelector('.walk').style.transform = 'translateY(' + walked + 'px)';
+  });
+</script>
+</body></html>`;
+
 let site;
 let browser;
 const projectIds = [];
 before(async () => {
   site = createServer((req, res) => {
     if (req.url === '/') return res.writeHead(200, { 'content-type': 'text/html' }).end(PAGE);
+    if (req.url === '/loop') return res.writeHead(200, { 'content-type': 'text/html' }).end(LOOP_PAGE);
     res.writeHead(404, { 'content-type': 'text/plain' }).end('not found');
   });
   await new Promise((resolve) => { site.listen(PORT, resolve); });
@@ -73,6 +97,32 @@ test('the pure part: a constant ratio to the mouse is a follower; a move that do
   const found = findFollowers(reads);
   assert.deepEqual(found.map((f) => [f.path, f.kx, f.ky]), [['body>i:1', 1, 1]], 'a box that jumped once is not following');
   assert.equal(found[0].fixed, true);
+});
+
+test('the pure part: a follower is back where it was when the mouse is back at the first point; a loop is not', () => {
+  const read = (m, a, b) => ({ m, early: {}, settled: { 'body>i:1': a, 'body>b:1': b } });
+  const reads = [read([100, 100], [100, 100], [500, 500]), read([700, 500], [700, 500], [500, 450]), read([400, 700], [400, 700], [500, 400])];
+  const followers = [{ path: 'body>i:1' }, { path: 'body>b:1' }];
+  const { confirmed, unconfirmed } = confirmReturn(followers, reads, { 'body>i:1': [102, 99], 'body>b:1': [500, 350] });
+  assert.deepEqual(confirmed.map((f) => f.path), ['body>i:1']);
+  assert.deepEqual(unconfirmed, ['body>b:1']);
+  assert.deepEqual(confirmReturn(followers, reads, null).unconfirmed, ['body>i:1', 'body>b:1'], 'no read back = nothing confirmed');
+  // A large follower that moved 600 px may land a few px off: a tenth of its travel is allowed.
+  assert.equal(confirmReturn([{ path: 'body>i:1' }], reads, { 'body>i:1': [130, 120] }).confirmed.length, 1);
+});
+
+test('the capture does not count a box moving by its own CSS animation, and still counts the real follower', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  await page.goto(`${origin}/loop`, { waitUntil: 'load' });
+  const got = await capturePointer(page);
+  await context.close();
+  const rise = 'body>div:1';
+  assert.equal(got.followers.some((f) => f.path === rise), false, JSON.stringify(got));
+  assert.equal(got.followers.some((f) => f.path === 'body>div:3'), false, JSON.stringify(got));
+  assert.ok(got.unconfirmed?.includes('body>div:3'), `fitted the three moves, then failed to come back: ${JSON.stringify(got)}`);
+  assert.ok(got.followers.some((f) => f.path === 'body>div:2' && Math.abs(f.ky - 0.06) < 0.015), JSON.stringify(got));
+  assert.ok(got.ms < 6000, `${got.ms} ms`);
 });
 
 let captured;
