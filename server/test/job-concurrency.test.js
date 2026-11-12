@@ -1,5 +1,5 @@
-// Jobs side by side (jobs/manager.js + jobs/capacity.js): how many run is decided by the machine (no fixed number), two jobs can
-// never be admitted on the same free memory, the line is fair between accounts without starving a large job, jobs of one
+// Jobs side by side (jobs/manager.js + jobs/capacity.js): how many run is decided by the machine (no fixed number), free memory
+// never holds a job back (only the room does), the line is fair between accounts without starving a large job, jobs of one
 // website take turns, exports wait like jobs, reservations are always given back, and the work inside a job sizes itself from its
 // own share. No browser: stub runs on a fake machine (`capacity.read`).
 import { after, afterEach, before, test } from 'node:test';
@@ -104,7 +104,7 @@ after(() => {
 });
 
 test('no fixed number: with SAS_MAX_JOBS=auto as many jobs run as the machine holds (CPUs, memory budget)', async () => {
-  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 0 });
+  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20 });
   for (const [m, expected] of [
     [{ cpus: 4, budgetMB: 30000, availableMB: 30000 }, 2], // 4 threads / 2 per job
     [{ cpus: 12, budgetMB: 14000, availableMB: 14000 }, 6], // 12 / 2
@@ -121,7 +121,7 @@ test('no fixed number: with SAS_MAX_JOBS=auto as many jobs run as the machine ho
     await drain(jobs);
   }
   // A number set by the admin is a ceiling on top: SAS_MAX_JOBS=1 (production) is one at a time on any machine.
-  setEnv({ SAS_MAX_JOBS: 1, SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 0 });
+  setEnv({ SAS_MAX_JOBS: 1, SAS_JOBS_PER_USER: 20 });
   machine({ cpus: 32, budgetMB: 64000, availableMB: 64000 });
   const one = gatedManager();
   const jobs = [one.manager.start(makeProject()), one.manager.start(makeProject())];
@@ -131,78 +131,31 @@ test('no fixed number: with SAS_MAX_JOBS=auto as many jobs run as the machine ho
   await one.drain(jobs);
 });
 
-test('the memory race: jobs queued in the same moment are never admitted on one free-memory reading', async () => {
+test('free memory never holds a job back: next to running ones the next starts on any reading, as long as the room allows', async () => {
+  // A deployment that still sets the removed SAS_JOB_MIN_FREE_MB: ignored.
   setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 2048 });
-  TIMING.memoryPollMs = 20;
-  // 3500 MB really free: room for one Analyze (1500) above the 2048 gate, not two. The old gate read 3500 three times.
-  const m = machine({ cpus: 16, budgetMB: 30000, availableMB: 3500 });
+  // 100 MB free: the removed check held every job next to a running one (it wanted that job's reservation + 2048 MB free).
+  // Room for three Analyze jobs (3 × 1500 = 4500), not four.
+  machine({ cpus: 16, budgetMB: 4500, availableMB: 100 });
   const { manager, started, release } = gatedManager();
-  const [a, b, c] = [makeProject(), makeProject(), makeProject()];
-  const ja = manager.start(a);
-  const jb = manager.start(b);
-  const jc = manager.start(c);
-  await until(() => started.length === 1);
-  await sleep(80); // several polls of the same reading
-  assert.deepEqual(started, [a.id], 'one admitted; the reading has not yet seen it, its reservation is taken off');
-  assert.equal(manager.get(jb.id).message, 'Waiting for memory: 2000 MB free, 3548 MB needed to start next to the job running now (1500 MB for this job, 2048 MB kept free). Looked at again in a few seconds.');
-  assert.deepEqual(manager.get(jb.id).queue.memory, { freeMB: 2000, neededMB: 3548 });
-  assert.equal(capacityState().reservedMB, 1500, 'booked the moment it started');
-  // Its browsers are open now: the reading shows the use, and the ramp no longer counts it twice.
-  TIMING.rampMs = 0;
-  m.availableMB = 2000;
-  await sleep(80);
-  assert.deepEqual(started, [a.id], 'still no room');
-  // It ends: the memory comes back, one more starts, and again only one on that reading.
-  TIMING.rampMs = realTiming.rampMs;
-  m.availableMB = 3500;
-  release(a.id);
-  await ended(manager, ja.id);
-  await until(() => started.length === 2);
-  await sleep(80);
-  assert.deepEqual(started, [a.id, b.id]);
-  assert.equal(manager.get(jc.id).status, 'queued');
-  release(b.id);
-  await ended(manager, jb.id);
+  const [a, b, c, d] = [makeProject(), makeProject(), makeProject(), makeProject()];
+  const jobs = [a, b, c, d].map((p) => manager.start(p));
   await until(() => started.length === 3);
-  release(c.id);
-  await ended(manager, jc.id);
-  await settle();
-});
-
-test('next to a running job, the next one needs its own reservation free on top of the minimum; alone, the minimum only', async () => {
-  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 2048 });
-  TIMING.memoryPollMs = 20;
-  // The fixture check of 2026-11-01: ~3956 MB free let two Analyze jobs start (3956 − 1500 = 2456 ≥ 2048), which left 956 MB
-  // counted free once both had opened their browsers. 4000 here: the first starts alone (≥ 2048), the second does not.
-  const m = machine({ cpus: 16, budgetMB: 30000, availableMB: 4000 });
-  const { manager, started, release } = gatedManager();
-  const [a, b] = [makeProject(), makeProject()];
-  const ja = manager.start(a);
-  const jb = manager.start(b);
-  await until(() => started.length === 1);
-  await sleep(80);
-  assert.deepEqual(started, [a.id], 'the old rule would have started both on this reading');
-  assert.deepEqual(manager.get(jb.id).queue.memory, { freeMB: 2500, neededMB: 3548 });
-  // Enough for the second next to the first: 5600 − 1500 (the first, still ramping) = 4100 ≥ 1500 + 2048.
-  m.availableMB = 5600;
-  await until(() => started.length === 2);
-  assert.deepEqual(started, [a.id, b.id]);
-  release(a.id);
-  release(b.id);
-  await ended(manager, ja.id);
-  await ended(manager, jb.id);
-  // Alone again: a job needs the minimum only, as before (a small machine still runs one job; SAS_MAX_JOBS=1 is unchanged).
-  m.availableMB = 2100;
-  const c = makeProject();
-  const jc = manager.start(c);
-  await until(() => started.length === 3);
-  release(c.id);
-  await ended(manager, jc.id);
+  await sleep(40);
+  assert.deepEqual(started, [a.id, b.id, c.id], 'three side by side on 100 MB free');
+  const fourth = manager.get(jobs[3].id);
+  assert.equal(fourth.status, 'queued');
+  assert.match(fourth.message, /^Waiting for room:/, 'the fourth waits for room, never for memory');
+  assert.equal(fourth.queue.memory, undefined);
+  for (const p of [a, b, c]) release(p.id);
+  await until(() => started.length === 4);
+  release(d.id);
+  await Promise.all(jobs.map((j) => ended(manager, j.id)));
   await settle();
 });
 
 test('room: running reservations plus the next one must fit the budget; it waits, says so, and starts when one ends', async () => {
-  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 0 });
+  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20 });
   machine({ cpus: 16, budgetMB: 4000, availableMB: 64000 }); // a stale "lots free" reading cannot let the third in
   const { manager, started, release } = gatedManager();
   const jobs = [makeProject(), makeProject(), makeProject()].map((p) => manager.start(p));
@@ -230,7 +183,7 @@ test('room: running reservations plus the next one must fit the budget; it waits
 });
 
 test('two accounts run side by side; one account still cannot start a second job; the line is fair between accounts', async () => {
-  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 1, SAS_JOB_MIN_FREE_MB: 0 });
+  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 1 });
   machine({ cpus: 16, budgetMB: 30000, availableMB: 30000 });
   const { manager, started, release } = gatedManager();
   const a = manager.start(makeProject('user-a'));
@@ -245,7 +198,7 @@ test('two accounts run side by side; one account still cannot start a second job
   await settle();
 
   // Fairness: room for two. A queues three, then B queues one. When a slot frees, B (none running) goes before A's third.
-  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 5, SAS_JOB_MIN_FREE_MB: 0 });
+  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 5 });
   machine({ cpus: 4, budgetMB: 30000, availableMB: 30000 });
   const fair = gatedManager();
   const [a1, a2, a3] = [makeProject('user-a'), makeProject('user-a'), makeProject('user-a')];
@@ -263,7 +216,7 @@ test('two accounts run side by side; one account still cannot start a second job
 });
 
 test('no starving a large job: when the next one does not fit, a smaller one behind it does not jump ahead', async () => {
-  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 0 });
+  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20 });
   machine({ cpus: 16, budgetMB: 3500, availableMB: 30000 });
   const small = gatedManager('analyses');
   const large = gatedManager('recreates');
@@ -284,7 +237,7 @@ test('no starving a large job: when the next one does not fit, a smaller one beh
 });
 
 test('jobs of one website take turns; other websites go meanwhile', async () => {
-  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 0 });
+  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20 });
   machine({ cpus: 16, budgetMB: 30000, availableMB: 30000 });
   const analyses = gatedManager('analyses');
   const reaudits = gatedManager('reaudits');
@@ -306,10 +259,14 @@ test('jobs of one website take turns; other websites go meanwhile', async () => 
   await Promise.all([ended(reaudits.manager, follow.id), ended(analyses.manager, elsewhere.id)]);
 });
 
-test('an export waits like a job (room, memory, its website) and reserves while it runs; plain work only needs a turn', async () => {
-  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 2048 });
-  TIMING.memoryPollMs = 20;
-  const m = machine({ cpus: 16, budgetMB: 30000, availableMB: 1000 });
+test('an export waits like a job (room) and reserves while it runs; plain work only needs a turn', async () => {
+  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20 });
+  // Room for one Analyze (1500), not an export (800) next to it.
+  const m = machine({ cpus: 16, budgetMB: 2000, availableMB: 64000 });
+  const { manager, release } = gatedManager();
+  const busy = makeProject();
+  const check = manager.start(busy);
+  await until(() => manager.get(check.id)?.status === 'running');
   const site = makeProject();
   let exported = false;
   let inside = null;
@@ -318,13 +275,14 @@ test('an export waits like a job (room, memory, its website) and reserves while 
     inside = capacityState().reservedMB;
   }, { kind: 'export', projectId: site.id });
   await sleep(60);
-  assert.equal(exported, false, 'held for memory');
-  // Plain work (no kind) behind it waits its turn (nothing jumps the line), and is never held for memory itself.
+  assert.equal(exported, false, 'held for room');
+  // Plain work (no kind) behind it waits its turn (nothing jumps the line).
   const order = [];
   const plainDone = exclusive(async () => order.push('plain'));
   await sleep(40);
   assert.deepEqual(order, []);
-  m.availableMB = 8000;
+  release(busy.id);
+  await ended(manager, check.id);
   await done;
   await plainDone;
   assert.equal(exported, true);
@@ -339,7 +297,7 @@ test('an export waits like a job (room, memory, its website) and reserves while 
 });
 
 test('a reservation is always given back: done, failed, stopped, and a run abandoned at the hard limit', async () => {
-  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 0 });
+  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20 });
   machine({ cpus: 16, budgetMB: 30000, availableMB: 30000 });
   const ok = gatedManager();
   const broken = gatedManager('analyses', { fail: true });
@@ -357,7 +315,7 @@ test('a reservation is always given back: done, failed, stopped, and a run aband
   await until(() => capacityState().reservedMB === 0);
 
   // A run that ignores its stop: the slot and its reservation move on after the grace period.
-  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 0, SAS_JOB_MAX_MINUTES: 0.002 });
+  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20, SAS_JOB_MAX_MINUTES: 0.002 });
   TIMING.hardStopGraceMs = 40;
   const stubborn = new JobManager({
     table: 'analyses', noun: 'a job', steps: [{ key: 'one', label: 'One', weight: 1 }], overallPct: () => 0, doneMessage: 'done', heartbeatMs: 50,
@@ -369,7 +327,7 @@ test('a reservation is always given back: done, failed, stopped, and a run aband
 });
 
 test('inside a job, work sizes itself from that job\'s share: its own reservation, minus what others just started will take', async () => {
-  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 0 });
+  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20 });
   machine({ cpus: 12, budgetMB: 30000, availableMB: 10000 });
   const analyses = gatedManager('analyses');
   const copies = gatedManager('recreates');
@@ -390,7 +348,7 @@ test('inside a job, work sizes itself from that job\'s share: its own reservatio
 });
 
 test('a Lighthouse run records what else the line ran when it got its turn: other jobs, their kinds, the memory', async () => {
-  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 0 });
+  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20 });
   machine({ cpus: 12, budgetMB: 30000, availableMB: 10000 });
   const worker = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'lighthouse-stub-worker.js');
   const results = new Map();

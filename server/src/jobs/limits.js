@@ -1,6 +1,5 @@
 // @ts-check
-// How many jobs a server runs, per server and per account, how long one may take, and how much memory must be free before one
-// starts. Every number is an env setting read at call time (tests set them), host-agnostic: a hosted deployment sizes them to
+// How many jobs a server runs, per server and per account, and how long one may take. Every number is an env setting read at call time (tests set them), host-agnostic: a hosted deployment sizes them to
 // its machine, a laptop keeps the defaults. One job (a capture with four browser contexts, Lighthouse twice) uses several GB;
 // two at once took a 15 GB machine down, which is why the default is one.
 //
@@ -22,10 +21,8 @@
 //                         with one job at a time (SAS_MAX_JOBS) it is also the longest anyone waits behind one job, which is why
 //                         it is not higher (docs/HANDOFF.md, "Launch readiness"). A larger site needs the setting raised or 0,
 //                         and the job's error says so.
-//   SAS_JOB_MIN_FREE_MB   free memory a job needs before it starts (0 = no check, default 2048). Below it the job stays in line,
-//                         says why, and is looked at again every few seconds. 2 GB is what the pipeline's own rules add up to for
-//                         one job (audit/resources.js: 150 MB per browser context × 4, 300 MB kept free for the machine, and 900 MB
-//                         more before a second browser opens next to the first), with Lighthouse's own Chrome on top.
+//   SAS_JOB_MIN_FREE_MB   removed (2026-11-12): a job no longer waits for free memory before it starts. Only the room rule of
+//                         jobs/manager.js (reservations against the machine's total) holds a job back. The setting is ignored.
 import { freeMemoryMB } from '../audit/resources.js';
 
 /** @param {string | undefined} raw @param {{ min: number, max: number, def: number, integer?: boolean }} r */
@@ -44,9 +41,8 @@ export const maxJobs = (env = process.env) => (autoJobs(env) ? AUTO_MAX_JOBS : s
 export const jobsPerUser = (env = process.env) => setting(env.SAS_JOBS_PER_USER, { min: 1, max: 20, def: 1 });
 /** The hard limit in milliseconds, 0 = none. Minutes, fractions allowed (tests use seconds). */
 export const jobMaxMs = (env = process.env) => setting(env.SAS_JOB_MAX_MINUTES, { min: 0, max: 1440, def: 240, integer: false }) * 60000;
-export const minFreeMB = (env = process.env) => setting(env.SAS_JOB_MIN_FREE_MB, { min: 0, max: 1048576, def: 2048 });
 
-/** The memory reader the gate uses (tests replace `free`). macOS reports "unknown" as Infinity: never gated there. */
+/** The free-memory reader jobs/capacity.js uses for a running job's own share (tests replace `free`). macOS reports "unknown" as Infinity. */
 export const memory = { free: freeMemoryMB };
 
 /** One line for the start-up log and GET /api/health. */
@@ -57,6 +53,5 @@ export function describeLimits(env = process.env) {
     ...(autoJobs(env) && { auto: true }),
     jobsPerUser: jobsPerUser(env),
     jobMaxMinutes: max ? max / 60000 : null,
-    minFreeMB: minFreeMB(env) || null,
   };
 }

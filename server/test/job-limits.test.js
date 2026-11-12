@@ -1,11 +1,11 @@
 // Job limits (jobs/limits.js, jobs/manager.js): how many jobs run at once, one line for every kind told in plain words, one
-// account's cap, the memory gate before a start, the hard time limit, and queued jobs of a dead server put back in line in
+// account's cap, free memory never holding a start back, the hard time limit, and queued jobs of a dead server put back in line in
 // order by the next server. No browser: the managers under test run stub functions.
 import { after, afterEach, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { db } from '../src/db/index.js';
-import { AUTO_MAX_JOBS, describeLimits, jobMaxMs, jobsPerUser, maxJobs, memory, minFreeMB } from '../src/jobs/limits.js';
+import { AUTO_MAX_JOBS, describeLimits, jobMaxMs, jobsPerUser, maxJobs, memory } from '../src/jobs/limits.js';
 import { activeJobsOfUser, JobLimitError, JobManager, lockBusy, queueState, requeueJobs, TIMING } from '../src/jobs/manager.js';
 import { adoptStaleJobs, ownJobs, STALE_MS } from '../src/jobs/liveness.js';
 import { recoverStaleJobs } from '../src/recreate/jobs.js';
@@ -87,7 +87,6 @@ test('the settings: defaults, bounds, and what the health line reports', () => {
   assert.equal(maxJobs(), 1);
   assert.equal(jobsPerUser(), 1);
   assert.equal(jobMaxMs(), 240 * 60000);
-  assert.equal(minFreeMB(), 2048);
   assert.equal(maxJobs({ SAS_MAX_JOBS: '3' }), 3);
   assert.equal(maxJobs({ SAS_MAX_JOBS: '0' }), 1, 'out of range = default');
   assert.equal(maxJobs({ SAS_MAX_JOBS: '9' }), 9, 'no ceiling of 8 any more: the machine is the limit (jobs/capacity.js)');
@@ -102,13 +101,11 @@ test('the settings: defaults, bounds, and what the health line reports', () => {
   assert.equal(jobMaxMs({ SAS_JOB_MAX_MINUTES: '0' }), 0, '0 = no hard limit');
   assert.equal(jobMaxMs({ SAS_JOB_MAX_MINUTES: '0.5' }), 30000, 'fractions of a minute are allowed');
   assert.equal(jobMaxMs({ SAS_JOB_MAX_MINUTES: '2000' }), 240 * 60000);
-  assert.equal(minFreeMB({ SAS_JOB_MIN_FREE_MB: '0' }), 0, '0 = no memory check');
-  assert.equal(minFreeMB({ SAS_JOB_MIN_FREE_MB: 'lots' }), 2048);
-  assert.deepEqual(describeLimits({ SAS_JOB_MAX_MINUTES: '0', SAS_JOB_MIN_FREE_MB: '0', SAS_MAX_JOBS: '2', SAS_JOBS_PER_USER: '3' }), { maxJobs: 2, jobsPerUser: 3, jobMaxMinutes: null, minFreeMB: null });
+  assert.deepEqual(describeLimits({ SAS_JOB_MAX_MINUTES: '0', SAS_JOB_MIN_FREE_MB: '0', SAS_MAX_JOBS: '2', SAS_JOBS_PER_USER: '3' }), { maxJobs: 2, jobsPerUser: 3, jobMaxMinutes: null });
 });
 
 test('one line for every job: SAS_MAX_JOBS run at once, the rest wait in order and are told their place', async () => {
-  setEnv({ SAS_MAX_JOBS: 1, SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 0 });
+  setEnv({ SAS_MAX_JOBS: 1, SAS_JOBS_PER_USER: 20 });
   const { manager, started, release } = gatedManager();
   const [a, b, c] = [makeProject(), makeProject(), makeProject()];
   const ja = manager.start(a);
@@ -146,7 +143,7 @@ test('one line for every job: SAS_MAX_JOBS run at once, the rest wait in order a
   assert.equal(queueState().running + queueState().waiting, 0);
 
   // With two slots, two run side by side and the third waits behind both.
-  setEnv({ SAS_MAX_JOBS: 2, SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 0 });
+  setEnv({ SAS_MAX_JOBS: 2, SAS_JOBS_PER_USER: 20 });
   const two = gatedManager();
   const [d, e, f] = [makeProject(), makeProject(), makeProject()];
   const [jd, je, jf] = [two.manager.start(d), two.manager.start(e), two.manager.start(f)];
@@ -162,7 +159,7 @@ test('one line for every job: SAS_MAX_JOBS run at once, the rest wait in order a
 });
 
 test('one account has at most SAS_JOBS_PER_USER jobs running or waiting; the server\'s own follow-up jobs are not counted', async () => {
-  setEnv({ SAS_MAX_JOBS: 1, SAS_JOBS_PER_USER: 1, SAS_JOB_MIN_FREE_MB: 0 });
+  setEnv({ SAS_MAX_JOBS: 1, SAS_JOBS_PER_USER: 1 });
   const { manager, release } = gatedManager();
   const p1 = makeProject('user-1');
   const p2 = makeProject('user-1');
@@ -206,7 +203,7 @@ test('one account has at most SAS_JOBS_PER_USER jobs running or waiting; the ser
   await until(() => manager.get(local.id).status === 'running');
   release(local.projectId);
   await ended(manager, local.id);
-  setEnv({ SAS_MAX_JOBS: 1, SAS_JOBS_PER_USER: 2, SAS_JOB_MIN_FREE_MB: 0 });
+  setEnv({ SAS_MAX_JOBS: 1, SAS_JOBS_PER_USER: 2 });
   const l1 = manager.start(makeProject());
   const l2 = manager.start(makeProject());
   assert.throws(() => manager.start(makeProject()), JobLimitError, 'two allowed, the third refused');
@@ -218,47 +215,24 @@ test('one account has at most SAS_JOBS_PER_USER jobs running or waiting; the ser
   await ended(manager, l2.id);
 });
 
-test('a job starts only when enough memory is free; it waits in line and says why, and gives up after the hard limit', async () => {
+test('free memory never holds a job back: it starts on any reading, and the removed SAS_JOB_MIN_FREE_MB is ignored', async () => {
+  // A deployment that still sets the old setting: it has no effect any more (the check was removed on 2026-11-12).
   setEnv({ SAS_MAX_JOBS: 1, SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 1000 });
-  TIMING.memoryPollMs = 20;
-  memory.free = () => 500;
+  memory.free = () => 100;
   const { manager, started, release } = gatedManager();
   const p = makeProject();
   const job = manager.start(p);
-  await sleep(80);
-  assert.equal(manager.get(job.id).status, 'queued', 'held back');
-  assert.deepEqual(started, []);
-  assert.equal(manager.get(job.id).message, 'Waiting for memory: 500 MB free, 1000 MB needed before a job may start. Looked at again in a few seconds.');
-  assert.deepEqual(manager.get(job.id).queue, { ahead: 0, position: 1, memory: { freeMB: 500, neededMB: 1000 } });
-  assert.equal(queueState().freeMB, 500);
-  assert.ok(rowOf('analyses', job.id).heartbeat_at, 'alive while it waits');
-  memory.free = () => 4000;
   await until(() => manager.get(job.id).status === 'running');
+  assert.deepEqual(started, [p.id], 'started on 100 MB free');
+  assert.equal(queueState().freeMB, undefined, 'the health line reports no free-memory gate');
+  assert.equal(describeLimits().minFreeMB, undefined);
   release(p.id);
   await ended(manager, job.id);
   assert.equal(rowOf('analyses', job.id).status, 'done');
-
-  // Memory that never comes back: the job leaves the line after the hard limit with the reason, and the next one is looked at.
-  setEnv({ SAS_MAX_JOBS: 1, SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 1000, SAS_JOB_MAX_MINUTES: 0.002 });
-  memory.free = () => 100;
-  const starved = manager.start(makeProject());
-  const snap = await ended(manager, starved.id);
-  assert.equal(snap.status, 'failed');
-  assert.match(snap.error, /Not started: the server had less than 1000 MB of memory free for \d+ seconds \(100 MB free now; SAS_JOB_MIN_FREE_MB\)/);
-  assert.equal(rowOf('analyses', starved.id).status, 'failed');
-  assert.ok(!ownJobs.has(starved.id));
-  assert.equal(queueState().waiting, 0);
-
-  // No check configured: starts whatever the reading says.
-  setEnv({ SAS_MAX_JOBS: 1, SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 0 });
-  const free = manager.start(makeProject());
-  await until(() => manager.get(free.id).status === 'running');
-  release(free.projectId);
-  await ended(manager, free.id);
 });
 
 test('the hard time limit stops a running job; one that does not end by itself loses its slot after the grace period', async () => {
-  setEnv({ SAS_MAX_JOBS: 1, SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 0, SAS_JOB_MAX_MINUTES: 0.003 }); // 180 ms
+  setEnv({ SAS_MAX_JOBS: 1, SAS_JOBS_PER_USER: 20, SAS_JOB_MAX_MINUTES: 0.003 }); // 180 ms
   const polite = gatedManager('analyses', { honourStop: true });
   const p = makeProject();
   const job = polite.manager.start(p);
@@ -293,7 +267,7 @@ test('the hard time limit stops a running job; one that does not end by itself l
   stubborn.release(q2.id);
 
   // 0 = no limit: a job runs as long as it needs.
-  setEnv({ SAS_MAX_JOBS: 1, SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 0, SAS_JOB_MAX_MINUTES: 0 });
+  setEnv({ SAS_MAX_JOBS: 1, SAS_JOBS_PER_USER: 20, SAS_JOB_MAX_MINUTES: 0 });
   const free = gatedManager();
   const r = makeProject();
   const jr = free.manager.start(r);
@@ -305,7 +279,7 @@ test('the hard time limit stops a running job; one that does not end by itself l
 });
 
 test('a restart puts the dead server\'s queued jobs back in line, in order, same rows, and nothing starts twice', async () => {
-  setEnv({ SAS_MAX_JOBS: 1, SAS_JOBS_PER_USER: 20, SAS_JOB_MIN_FREE_MB: 0 });
+  setEnv({ SAS_MAX_JOBS: 1, SAS_JOBS_PER_USER: 20 });
   const { manager, started, release } = gatedManager();
   const now = Date.now();
   const stale = new Date(now - STALE_MS - 5000).toISOString();
