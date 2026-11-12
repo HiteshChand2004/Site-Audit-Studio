@@ -13,6 +13,12 @@ export const REASONS = {
   // A copy converted into code of a stack: a part the conversion could not write as a component is kept as the original HTML
   // inside its component. The page is unchanged; the part is just not JSX.
   converted: { code: 'f', text: 'Kept as the original HTML inside its component (React cannot write it exactly). The page looks and works the same; only this part is not component code.' },
+  // A converted page that keeps the original's framework runtime (recreate/behavior/preserve/runtimeFree.js): the page needs it,
+  // and it draws the original's content over the components when the page loads.
+  runtime: { code: 'g', text: 'The original’s framework code stays on this page because the page needs it to look or work the same. It draws the original’s content over the components when the page loads, so a change to them does not show on this page.' },
+  // A converted page whose framework runtime was taken out although the copy could not rebuild everything it did: the owner
+  // chose editable components over an exact copy (runtimeFree.js prefer 'editable'); what differs is listed.
+  editable: { code: 'h', text: 'The original’s framework code is taken out so that changes to the components show on this page. What only that code did, and the copy could not rebuild, is listed here.' },
 };
 
 const BACKEND = /form|login|sign-?in|payment|checkout|cart|backend|api\b/i;

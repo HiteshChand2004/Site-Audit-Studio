@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
@@ -83,11 +83,19 @@ test('the address stage writes the address into the finished copy, files only, a
   t.after(() => rm(root, { recursive: true, force: true }));
   const source = path.join(root, 'source');
   const earlier = await finishedCopy(source);
+  // What the capture recorded of the homepage (behavior/preserve/recordings.js): the about page has no recording.
+  await mkdir(path.join(source, 'capture', 'index'), { recursive: true });
+  await writeFile(path.join(source, 'capture', 'index', 'desktop.json'), '{"view":"desktop"}', 'utf8');
+  await writeFile(path.join(source, 'capture', 'index', 'motion.json'), '{"reveal":{"elements":[]}}', 'utf8');
   const before = await hashes(source);
   const ws = path.join(root, 'addressed');
   await mkdir(ws, { recursive: true });
   const ctx = { dir: ws, baseUrl: NEW, asIs: { stack: 'html', fromDir: source, address: NEW, addressOnly: true }, progress: () => {}, report: { outputs: {}, warnings: [] } };
   await asIsStage(ctx);
+  // The recordings travel with the new job (hard links), so they outlive the job it was made from.
+  const ino = async (dir) => (await stat(path.join(dir, 'capture', 'index', 'motion.json'))).ino;
+  assert.equal(await ino(ws), await ino(source), 'the recording is hard-linked into the new job');
+  assert.deepEqual({ recorded: ctx.report.asIs.recordings.recorded, missing: ctx.report.asIs.recordings.missing }, { recorded: 1, missing: ['about/index.html'] });
 
   const out = path.join(ws, 'stacks', 'html');
   const home = await readFile(path.join(out, 'index.html'), 'utf8');
