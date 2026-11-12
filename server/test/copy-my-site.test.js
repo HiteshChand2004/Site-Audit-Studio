@@ -74,11 +74,14 @@ test('open items: every reason is one of the five, and an item with none is stil
   assert.equal(reasonFor({ key: 'seo.title' }), null);
   const owed = unexplained([{ key: 'seo.title', open: true }, { key: 'hsts', open: true }, { key: 'alt', open: false }]);
   assert.deepEqual(owed.map((i) => i.key), ['seo.title'], 'an item with a reason, or not open, is not owed');
-  // The five reasons of the spec, plus the honest marker for a page not yet tried and the part a converted copy keeps as the
-  // original HTML inside its component (see openItems.js).
-  assert.equal(Object.keys(REASONS).length, 7);
+  // The five reasons of the spec, plus the honest marker for a page not yet tried, the part a converted copy keeps as the
+  // original HTML inside its component, and a converted page that keeps (g) or lost (h) the original's framework code
+  // (see openItems.js, behavior/preserve/runtimeFree.js).
+  assert.equal(Object.keys(REASONS).length, 9);
   assert.equal(REASONS.unresolved.code, '·');
   assert.equal(REASONS.converted.code, 'f');
+  assert.equal(REASONS.runtime.code, 'g');
+  assert.equal(REASONS.editable.code, 'h');
 });
 
 test('zero regressions: a change that adds a failing check is not kept; one that only keeps old failures is', () => {
