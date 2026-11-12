@@ -176,8 +176,25 @@ export const useProjects = create((set, get) => ({
   },
 
   async loadOverview(id) {
-    const [audit, recreate] = await Promise.all([api.getAudit(id).catch(() => null), api.getRecreate(id).catch(() => null)]);
+    // The website's running jobs too: after a reload the sidebar and the gallery show a check, copy or comparison that is under
+    // way on a website that is not open (before, only opening it found them).
+    const [audit, recreate] = await Promise.all([api.getAudit(id).catch(() => null), api.getRecreate(id).catch(() => null), get().followJobs(id)]);
     set({ overviews: { ...get().overviews, [id]: { audit: normalizeAudit(id, audit), recreate, loaded: true } } });
+  },
+
+  /**
+   * Follows the website's check, copy and comparison that are queued or running (after a reload, a project switch, or a job
+   * started in another tab), so its marks move whether or not it is open. A job already followed is left as it is.
+   */
+  async followJobs(id) {
+    await Promise.all(
+      Object.keys(KINDS).map(async (kind) => {
+        if (streams.has(`${kind}:${id}`)) return;
+        const current = await KINDS[kind].current(id).catch(() => null);
+        // Asked again after the wait: opening the website and loading the overviews ask at the same time.
+        if (current && !streams.has(`${kind}:${id}`)) get().attachJob(kind, id, current.job, current.steps);
+      }),
+    );
   },
 
   async select(id) {
@@ -187,11 +204,7 @@ export const useProjects = create((set, get) => ({
     remember(id);
     await Promise.all([get().reloadAudit(id), get().reloadRecreate(id)]);
     // Reattach to jobs that are still running (after a reload or a project switch).
-    for (const kind of Object.keys(KINDS)) {
-      if (streams.has(`${kind}:${id}`)) continue;
-      const current = await KINDS[kind].current(id).catch(() => null);
-      if (current) get().attachJob(kind, id, current.job, current.steps);
-    }
+    await get().followJobs(id);
   },
 
   /**
