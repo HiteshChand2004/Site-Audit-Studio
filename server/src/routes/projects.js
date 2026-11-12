@@ -10,6 +10,7 @@ import { precheckUrl } from '../security/netGuard.js';
 import { ALL_PAGES, MAX_RECREATE_PAGES, parseExactMode, parsePageUrl, parseRecreatePages, parseTargetDomain } from '../recreate/inputs.js';
 import { isOwner, refuseNonOwner } from '../accounts/roles.js';
 import { sameSite } from '../audit/util.js';
+import { fetchPage } from '../audit/http.js';
 import { stopPreview } from '../recreate/preview.js';
 import { stopAsIsPreviewsOf } from '../recreate/behavior/preserve/asisPreview.js';
 import { stackIds } from '../recreate/emit/index.js';
@@ -246,6 +247,32 @@ router.get('/:id/pages', async (req, res) => {
   }
   const pages = [...urls].map(([pathKey, url]) => ({ path: pathKey, url })).sort((a, b) => (a.path === '/' ? -1 : b.path === '/' ? 1 : a.path.localeCompare(b.path)));
   res.json({ pages: pages.slice(0, 500), pageUrl: project.page_url ?? null });
+});
+
+// Whether the original answers right now, for the app's live view of it: a site that is down draws a blank frame (the app
+// cannot see into a frame of another origin), so the app asks here first and shows the check's picture instead. Only an
+// address of the project's own site is asked, through the guarded fetch; answers are kept briefly so moving between pages
+// and screen sizes asks once.
+const LIVE_TIMEOUT_MS = 8000;
+const LIVE_KEEP_MS = 30000;
+const liveAnswers = new Map();
+export async function siteAnswers(url, fetcher = fetchPage) {
+  const r = await fetcher(url, { timeout: LIVE_TIMEOUT_MS, readBody: false });
+  if (r.error) return { answers: false, error: r.error, status: 0 };
+  // A server error is the site down too; a 4xx is a page the site itself answered.
+  return { answers: r.status < 500, error: null, status: r.status };
+}
+router.get('/:id/live', async (req, res) => {
+  const project = selectOne.get(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  const url = typeof req.query.url === 'string' && req.query.url ? req.query.url : project.url;
+  if (!sameSite(url, project.url)) return badRequest(res, 'Only an address of this website can be asked.');
+  const kept = liveAnswers.get(url);
+  if (kept && Date.now() - kept.at < LIVE_KEEP_MS) return res.json(kept.answer);
+  const answer = await siteAnswers(url).catch(() => ({ answers: false, error: 'error', status: 0 }));
+  liveAnswers.set(url, { at: Date.now(), answer });
+  if (liveAnswers.size > 500) liveAnswers.delete(liveAnswers.keys().next().value);
+  res.json(answer);
 });
 
 // audit.recreate is the fix checklist of the latest re-audit (or the sample plus the re-audit state),

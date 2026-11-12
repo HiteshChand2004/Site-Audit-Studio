@@ -7,7 +7,7 @@ import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import StackOutput from '../../components/recreate/StackOutput.jsx';
 import AsIsChoice, { ASIS_STACK_CHOICES } from '../../components/recreate/AsIsChoice.jsx';
 import CopyPanel from '../../components/recreate/CopyPanel.jsx';
-import { failedAttempt } from '../../components/recreate/failedAttempt.js';
+import { failedAttempt, retryOf } from '../../components/recreate/failedAttempt.js';
 import { stripAnsi } from '../../ansi.js';
 import { BrowserShot } from '../../components/site/Site.jsx';
 import { copyShot } from '../../siteData.js';
@@ -72,6 +72,7 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo, copyA
   // A copy that stopped before it finished, whose work the server kept: it can continue instead of starting over.
   const resumable = !running ? latest?.resumable ?? null : null;
   const resume = resumable ? resumeText(resumable) : null;
+  const retry = retryOf(lastOptions, isOwner);
     // "Original as-is" (a choice of pages and a stack, and a confirmation); the clean rebuild keeps its own start, unchanged.
   const [mode, setMode] = useState('clean');
   const [asIsPages, setAsIsPages] = useState([]);
@@ -153,11 +154,19 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo, copyA
         <Alert
           tone="bad"
           title="The copy could not be finished"
-          action={resume ? undefined : lastOptions
-            ? <Button variant="primary" icon={RefreshCw} onClick={() => recreate(project.id, lastOptions)}>Try again</Button>
-            : <Button variant="primary" icon={RefreshCw} onClick={() => recreate(project.id)}>Try again</Button>}
+          action={resume ? undefined : (
+            <Button
+              variant="primary"
+              icon={RefreshCw}
+              onClick={() => (retry.start ? recreate(project.id, retry.options) : setCopyOpen(true))}
+            >
+              Try again
+            </Button>
+          )}
         >
-          {stripAnsi(failure.reason)} {resume ? RESUME_HINT : '“Try again” starts it again with the same settings.'}
+          {stripAnsi(failure.reason)} {resume ? RESUME_HINT : retry.start
+            ? '“Try again” starts it again with the same settings.'
+            : '“Try again” opens “Copy my site” to start it again.'}
         </Alert>
       )}
 

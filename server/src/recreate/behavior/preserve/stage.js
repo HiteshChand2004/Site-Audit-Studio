@@ -16,7 +16,7 @@ import { buildConvertedMern, convertToMern, MERN_EXPORT_DIR, verifyConvertedMern
 import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
 import { writeLockfiles } from '../../../toolchains/lockfile.js';
-import { anchorClicks, checkCopy, excludedHostsOf, fixGate, formsInCopy, NOISE_SHOTS, perfProbe, probeOriginal } from './check.js';
+import { anchorClicks, checkCopy, excludedHostsOf, fixGate, formsInCopy, inPool, NOISE_SHOTS, perfProbe, probeOriginal } from './check.js';
 import { localFileOf, namesStillUsed, PERF_KINDS, planPerf, stylesheetCandidates } from '../../../copy/perfAsIs.js';
 import { formRoutesOfCopy, formsReadmeSection } from '../../../copy/formRoutes.js';
 import { fixAsIsCopy, fixGroup, revertPage } from '../../../copy/fixAsIs.js';
@@ -44,14 +44,6 @@ import { PAGE_MB, parallelism } from '../../../audit/resources.js';
 const FIX_PAGES_MAX = 2;
 const fixPagesAtOnce = () => parallelism({ perUnitMB: PAGE_MB * 4, max: FIX_PAGES_MAX, min: 1 });
 
-/** Runs `task` for every item, at most `size` at once, each started in the items' order. */
-async function inPool(items, size, task) {
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) await task(items[next++]);
-  };
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(size, items.length)) }, worker));
-}
 
 /** The stacks an as-is copy can be packaged into (the plain copy and the three app stacks). */
 export const ASIS_STACKS = ['html', 'react-vite', 'nextjs', 'mern'];
@@ -1120,10 +1112,19 @@ export async function asIsStage(ctx) {
       servers.push(plain);
       htmlBase = plain.url.replace(/\/$/, '');
     }
+    // The check's own lines (JSON measurements) go to the server log; the app shows which page is being compared.
+    const checkedPages = new Set();
+    const checkLine = (m) => {
+      const page = m.match(/^(?:offline|visual|original|page) (\S+?):?(?:\s|$)/)?.[1];
+      if (!page) return 'Running the copy and checking it';
+      if (m.startsWith('page ')) checkedPages.add(page);
+      return `Comparing the copy with the original, page by page (${checkedPages.size} of ${pages.length} done)`;
+    };
     const checks = await checkCopy({
       browser, base, excludedHosts, originalReachable, baselines, htmlBase, onOriginalPicture: keepOriginalPicture,
       pages: pages.map((p) => ({ path: localOfOutPath(p.outPath), url: p.url })),
-      log: (m) => ctx.progress(0.55, m),
+      pagesAtOnce: fixPagesAtOnce(),
+      log: (m) => { console.log(`[recreate ${String(ctx.recreateId ?? '').slice(0, 8)}] ${m}`); ctx.progress(0.55, checkLine(m)); },
     });
     report.checks = checks;
     // Outside services that serve their part only to the original's domain (domainLock.js): kept in the copy, refused there.
