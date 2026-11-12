@@ -26,6 +26,7 @@ import { gateVerdict, pictureRounds, viewOf } from '../recreate/behavior/preserv
 import { serveCopy } from '../recreate/behavior/preserve/serve.js';
 import { localOfOutPath } from '../recreate/behavior/preserve/asis.js';
 import { pageSlug } from '../reaudit/lighthousePages.js';
+import { PICTURED_VIEWS, makeCopyPicture, restoreOriginalPicture } from '../recreate/behavior/preserve/copyPictures.js';
 
 const router = Router();
 
@@ -348,14 +349,18 @@ router.get('/:id/recreate/:recreateId/captures/:slug/:file', (req, res) => {
     return res.status(404).json({ error: 'Capture not found.' });
   }
   if (!doneRecreate.get(recreateId, id)) return res.status(404).json({ error: 'Recreate not found.' });
-  res.sendFile(
-    path.join(recreateDir(id, recreateId), 'capture', slug, file),
-    { headers: { 'Content-Type': 'image/webp', 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' } },
-    (err) => {
-      if (!err || res.headersSent) return;
-      res.status(404).json({ error: 'Capture not found. Only the latest 2 recreates of a project keep their files.' });
-    },
-  );
+  const dir = recreateDir(id, recreateId);
+  const headers = { 'Content-Type': 'image/webp', 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' };
+  const notFound = () => res.status(404).json({ error: 'Capture not found. Only the latest 2 recreates of a project keep their files.' });
+  res.sendFile(path.join(dir, 'capture', slug, file), { headers }, async (err) => {
+    if (!err || res.headersSent) return;
+    // A copy rebuilt from the last visit has no capture of its own: the original's picture is made from the copy's baseline.
+    const restored = await restoreOriginalPicture(dir, slug, file).catch(() => false);
+    if (!restored) return notFound();
+    res.sendFile(path.join(dir, 'capture', slug, file), { headers }, (again) => {
+      if (again && !res.headersSent) notFound();
+    });
+  });
 });
 
 // The exact comparison's pictures: the original as it was measured (capture/<slug>/exact/) and the copy beside it,
@@ -389,6 +394,25 @@ router.get('/:id/recreate/:recreateId/exact/:slug/:file', (req, res) => {
 // Screenshots of the recreated pages and the heatmaps of the visual diff (fidelity/<slug>/<view>-{full,diff}.webp).
 const FIDELITY_FILE = /^(desktop|laptop|tablet|mobile)-(full|diff)\.webp$/;
 
+// An as-is copy's final check keeps no picture of the copy: a missing one is made on first request (copyPictures.js), and the
+// app is told to ask again shortly (202 + Retry-After) instead of being kept waiting while a browser takes it.
+const doneResult = db.prepare(`SELECT result_json FROM recreates WHERE id = ? AND project_id = ? AND status = 'done'`);
+function startCopyPicture(id, recreateId, slug, file) {
+  const view = file.match(/^(\w+)-full\.webp$/)?.[1];
+  if (!view || !PICTURED_VIEWS.has(view)) return false;
+  let result = null;
+  try {
+    result = JSON.parse(doneResult.get(recreateId, id)?.result_json ?? 'null');
+  } catch {
+    return false;
+  }
+  if (!result?.asIs) return false;
+  const page = (result.pages ?? []).find((p) => (p.slug ?? slugFor(p.outPath)) === slug);
+  if (!page?.path) return false;
+  makeCopyPicture({ dir: recreateDir(id, recreateId), slug, pagePath: page.path, view });
+  return true;
+}
+
 router.get('/:id/recreate/:recreateId/fidelity/:slug/:file', (req, res) => {
   const { id, recreateId, slug, file } = req.params;
   if (!UUID.test(id) || !UUID.test(recreateId) || !CAPTURE_SLUG.test(slug) || !FIDELITY_FILE.test(file)) {
@@ -400,6 +424,9 @@ router.get('/:id/recreate/:recreateId/fidelity/:slug/:file', (req, res) => {
     { headers: { 'Content-Type': 'image/webp', 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' } },
     (err) => {
       if (!err || res.headersSent) return;
+      if (startCopyPicture(id, recreateId, slug, file)) {
+        return res.status(202).set({ 'Retry-After': '5', 'Cache-Control': 'no-store' }).json({ making: true });
+      }
       res.status(404).json({ error: 'Image not found. Only the latest 2 recreates of a project keep their files.' });
     },
   );

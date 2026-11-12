@@ -929,6 +929,16 @@ export async function asIsStage(ctx) {
       await cp(from, copyDir, { recursive: true });
       // The baseline pictures travel with the copy: a repack needs no capture and no live site.
       await cp(path.join(fromDir, ASIS_DIR, 'baseline'), path.join(ctx.dir, ASIS_DIR, 'baseline'), { recursive: true }).catch(() => {});
+      // So do the original's pictures of each page (the page gallery and Compare show them): the job rebuilt from may be removed
+      // later (only the latest copies keep their folders), and this copy has no capture of its own.
+      for (const p of pages) {
+        const slug = slugFor(p.outPath);
+        const files = await readdir(path.join(fromDir, 'capture', slug)).catch(() => []);
+        for (const f of files.filter((n) => /^(desktop|laptop|tablet|mobile)-(fold|full)\.webp$/.test(n))) {
+          await mkdir(path.join(ctx.dir, 'capture', slug), { recursive: true });
+          await cp(path.join(fromDir, 'capture', slug, f), path.join(ctx.dir, 'capture', slug, f)).catch(() => {});
+        }
+      }
       // This job keeps the lifted copy and its page set too: a later repack takes them from here, and the retention that keeps
       // the newest finished jobs never removes the only copy of the lift.
       await mkdir(path.join(ctx.dir, ASIS_DIR), { recursive: true });

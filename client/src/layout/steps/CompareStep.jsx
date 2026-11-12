@@ -258,11 +258,11 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   const copyPageShot = (vp) => {
     const fid = fidByPage.get(page);
     const fv = fid?.views?.[vp.view];
-    // An as-is copy's check keeps no pictures of the copy, only its scores.
-    if (!fv || fid.asIs || !copyInfo?.slug) return null;
-    return { viewport: { width: vp.id }, full: { url: apiUrl(`/projects/${project.id}/recreate/${result.recreateId}/fidelity/${copyInfo.slug}/${vp.view}-full.webp`) } };
+    if (!fv || !copyInfo?.slug) return null;
+    // An as-is copy's picture is made by the server on first request: the picture view asks again until it is there.
+    return { viewport: { width: vp.id }, retry: Boolean(fid.asIs), full: { url: apiUrl(`/projects/${project.id}/recreate/${result.recreateId}/fidelity/${copyInfo.slug}/${vp.view}-full.webp`) } };
   };
-  const copyHasShots = Boolean(copyInfo?.slug && fidByPage.get(page)?.views && !fidByPage.get(page).asIs);
+  const copyHasShots = Boolean(copyInfo?.slug && fidByPage.get(page)?.views);
   const copyPicture = copyMode === 'screenshot' && copyHasShots;
   const frameNote = ready && !copyPicture ? previewLimitNote(frameReport) : null;
   // Scrolling together draws the copy at full height; until its height is known the copy cannot follow.

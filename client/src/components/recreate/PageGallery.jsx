@@ -4,6 +4,8 @@ import { Card } from '../common/Surface.jsx';
 import Button from '../common/Button.jsx';
 import { matchRating, TERMS } from '../../copy.js';
 import { captureShot, copyShot } from '../../siteData.js';
+import { fidelityPages } from '../../fidelity.js';
+import RetryImg from '../common/RetryImg.jsx';
 import styles from './PageGallery.module.css';
 
 const SHOWN = 6;
@@ -11,7 +13,7 @@ const SHOWN = 6;
 /** Every copied page as a pair of pictures (original, copy) with its match; a click opens it in Compare. */
 export default function PageGallery({ projectId, result, onOpenPage }) {
   const [all, setAll] = useState(false);
-  const fid = new Map((result.fidelity?.pages ?? []).map((p) => [p.outPath, p]));
+  const fid = new Map(fidelityPages(result).map((p) => [p.outPath, p]));
   const pages = (result.pages ?? []).filter((p) => p.slug);
   if (!pages.length) return null;
   const shown = all ? pages : pages.slice(0, SHOWN);
@@ -37,7 +39,8 @@ export default function PageGallery({ projectId, result, onOpenPage }) {
                     {before && <img src={before} alt="" loading="lazy" decoding="async" />}
                   </span>
                   <span className={styles.shot} data-side="new">
-                    {after && <img src={after} alt="" loading="lazy" decoding="async" />}
+                    {/* An as-is copy's picture is made on first request: asked again until it is there. */}
+                    {after && <RetryImg src={after} alt="" loading="lazy" decoding="async" />}
                   </span>
                 </span>
                 <span className={styles.meta}>

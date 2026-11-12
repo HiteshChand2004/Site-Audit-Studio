@@ -86,7 +86,7 @@ function SiteCard({ project, featured = false, index }) {
         )}
         {copy && (
           <div className={styles.copyInset}>
-            <BrowserShot src={copy} alt="" ratio={16 / 11} size="sm" />
+            <BrowserShot src={copy} alt="" ratio={16 / 11} size="sm" retry />
             <span className={styles.insetLabel}>The copy</span>
           </div>
         )}

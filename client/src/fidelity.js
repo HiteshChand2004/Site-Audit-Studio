@@ -10,7 +10,8 @@ const normPath = (p) => `${String(p ?? '').replace(/\/index\.html?$/i, '/').repl
 /**
  * Per copied page: { outPath, score, views: { [view]: { score, height: { generated } } }, asIs? }.
  * An as-is page's score is the share of the page that looks the same (100 − % of pixels that differ), the lower of its
- * two widths; it has no pictures of its own (`asIs: true`), only the heights the check measured.
+ * two widths (`asIs: true`). Its pictures of the copy are made by the server on first request
+ * (server/src/recreate/behavior/preserve/copyPictures.js), so they may take a moment to arrive.
  * @param {object|null} result  the copy's result
  * @returns {object[]}
  */

@@ -328,7 +328,7 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo, copyA
       {result && (
         <Card icon={Trophy} title="Last copy" sub={`Made ${new Date(result.createdAt).toLocaleString()} (${timeAgo(result.createdAt)})`}>
           <div className={ws.lastCopy}>
-            <BrowserShot src={copyShot(project.id, result)} address="the copy" alt="The copy's homepage" ratio={16 / 10} />
+            <BrowserShot src={copyShot(project.id, result)} address="the copy" alt="The copy's homepage" ratio={16 / 10} retry />
             <dl className={ws.miniFacts}>
               <div>
                 <dt>Pages</dt>

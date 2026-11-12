@@ -45,7 +45,8 @@ async function backToTop(page) {
   }).catch(() => {});
 }
 
-async function captureView(browser, url, view, dir, timeout, cache) {
+/** One view of a page: its fold and full-page pictures, `<view>-fold.webp` / `<view>-full.webp` in `dir`. */
+export async function captureView(browser, url, view, dir, timeout, cache) {
   const context = await browser.newContext({
     viewport: { width: view.width, height: view.height },
     deviceScaleFactor: view.dpr,

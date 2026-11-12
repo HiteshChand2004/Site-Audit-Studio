@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { Camera, Globe, ImageOff } from 'lucide-react';
 import { VIEWPORTS } from './PreviewFrame.jsx';
+import RetryImg from '../common/RetryImg.jsx';
 import styles from './SitePreview.module.css';
 
 const LOAD_HINT_MS = 15000;
@@ -142,7 +143,17 @@ function Screenshot({ shot, viewport, url, scrollRef }) {
       tabIndex={0}
       aria-label="Screenshot, scrollable"
     >
-      {width > 0 && (
+      {width > 0 && (shot.retry ? (
+        // A picture the server makes on first request (an as-is copy's page): asked again until it is there.
+        <RetryImg
+          className={styles.shot}
+          src={shot.full.url}
+          alt={`Screenshot of ${url} at ${shot.viewport.width}px`}
+          style={{ width, height: 'auto' }}
+          decoding="async"
+          onGiveUp={() => setFailed(true)}
+        />
+      ) : (
         <img
           className={styles.shot}
           src={shot.full.url}
@@ -153,7 +164,7 @@ function Screenshot({ shot, viewport, url, scrollRef }) {
           decoding="async"
           onError={() => setFailed(true)}
         />
-      )}
+      ))}
       {shot.truncated && width > 0 && (
         <p className={styles.truncated} style={{ width }}>
           Page continues — capture is capped at 8,000px of {shot.pageHeight.toLocaleString()}px.

@@ -265,7 +265,7 @@ export default function SiteHero({ project, audit, onGo, onCopy, compact = false
           <BrowserShot src={shot} address={host} alt={`The original ${host}, first screen on a computer`} ratio={16 / 10} size="lg" emptyText={checked ? 'No picture of this check' : 'The first check takes a picture'} />
           {copy && (
             <button type="button" className={styles.copyInset} onClick={() => onGo('compare')} aria-label="Compare the copy with the original">
-              <BrowserShot src={copy} alt="" ratio={16 / 10.5} size="sm" />
+              <BrowserShot src={copy} alt="" ratio={16 / 10.5} size="sm" retry />
               <span className={styles.insetLabel}>The copy</span>
             </button>
           )}
