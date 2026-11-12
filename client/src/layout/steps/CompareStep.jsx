@@ -183,19 +183,22 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
     if (previewStale) ensurePreview(project.id);
   }, [previewStale, project.id, ensurePreview]);
 
-  // The original: the homepage from the check; another page as the picture the copy step took of it (or live).
+  // The original, live or as a picture. The picture is the one the copy step took of this page, the homepage included: it was
+  // taken when the copy was made, after its own scroll-through, while the check's picture may be older (one taken before the
+  // check paused at each scroll step left the sections that fade in on scroll blank). The homepage falls back to the check's.
   const siteUrl = audit?.url ?? project.url;
   const pageInfo = result?.pages?.find((p) => p.outPath === page) ?? null;
   const otherPage = pageInfo && pageInfo.path !== '/' && pageInfo.url ? pageInfo : null;
   const originalUrl = otherPage?.url ?? siteUrl;
-  const pageShot = otherPage
-    ? (vp) => (otherPage.views?.includes(vp.view) && otherPage.slug
-      ? { viewport: { width: vp.id }, full: { url: apiUrl(`/projects/${project.id}/recreate/${result.recreateId}/captures/${otherPage.slug}/${vp.view}-full.webp`) } }
-      : null)
+  const capturedViews = pageInfo?.slug ? pageInfo.views ?? [] : [];
+  const pageShot = capturedViews.length || otherPage
+    ? (vp) => (capturedViews.includes(vp.view)
+      ? { viewport: { width: vp.id }, full: { url: apiUrl(`/projects/${project.id}/recreate/${result.recreateId}/captures/${pageInfo.slug}/${vp.view}-full.webp`) } }
+      : (!otherPage && audit?.screenshots?.views?.[vp.view]) || null)
     : undefined;
   // Live only when the site can be framed and answers right now (a site that is down would draw a blank frame).
   const live = useLiveAnswer(project.id, originalUrl, liveAvailability(audit, originalUrl));
-  const hasScreens = otherPage ? (otherPage.views?.length ?? 0) > 0 : Boolean(audit?.screenshots);
+  const hasScreens = capturedViews.length > 0 || (!otherPage && Boolean(audit?.screenshots));
   const [mode, setMode] = useState('screenshot');
   const [copyMode, setCopyMode] = useState(COPY_MODE);
   useEffect(() => {
