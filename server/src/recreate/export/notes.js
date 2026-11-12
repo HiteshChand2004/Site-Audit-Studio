@@ -3,6 +3,7 @@
 import { deployMd, describePackage, knownIssuesMd } from '../../copy/deploy.js';
 import { REASONS } from '../../copy/openItems.js';
 import { reasonText } from '../../copy/gotWorse.js';
+import { runtimeNotes } from '../convert/runtime.js';
 
 /**
  * @param {object} o
@@ -49,6 +50,11 @@ export function notesEntries({ report, stack, root, shipped }) {
       tried: 'converted into a component like the rest of the page; this element is kept inside it as the original HTML, so the page is unchanged',
       reason: `${REASONS.converted.code} — ${REASONS.converted.text}`,
     });
+  }
+  // A converted page that keeps the original's framework runtime: a change to its components is drawn over (runtimeFree.js).
+  for (const item of runtimeNotes(report.asIs?.convert?.runtime ?? null).items) {
+    const reason = REASONS[item.reason] ?? REASONS.runtime;
+    pages.push({ ...item, reason: `${reason.code} — ${reason.text}` });
   }
   const known = knownIssuesMd({ siteName, stack, pages });
   if (known) entries.push({ name: `${root}/KNOWN-ISSUES.md`, content: known });

@@ -74,7 +74,7 @@ async function fullShot(page) {
  * A context whose requests off the copy's own server are refused and recorded; the copy's own requests continue. The copy's
  * form guard holds every form in it (HOLD_FORMS), so a check never sends a form of another service anywhere.
  */
-async function isolated(browser, viewport, base, outside) {
+export async function isolated(browser, viewport, base, outside) {
   const context = await browser.newContext(viewport);
   await context.addInitScript(HOLD_FORMS);
   await context.route('**/*', (route) => {

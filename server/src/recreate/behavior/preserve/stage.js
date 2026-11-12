@@ -29,6 +29,9 @@ import { applyApproved, FIX_MODE_DIR, PROPOSALS_FILE } from '../../../copy/fixMo
 import { measureServed, servedOutcome } from '../../../copy/served.js';
 import { slugFor } from '../../discover.js';
 import { serveCopy } from './serve.js';
+import { runtimeFreeCopy } from './runtimeFree.js';
+import { carryRecordings, recordingsOf } from './recordings.js';
+import { runtimeNotes } from '../../convert/runtime.js';
 import { domainLockedParts, lockedItems } from './domainLock.js';
 import { fetchLlmsTxt } from '../../../audit/robots.js';
 import { runLighthouse } from '../../../audit/lighthouse/run.js';
@@ -665,7 +668,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
  * code and built (or packed as static files inside a project of the stack when that fails: a download never fails). Writes
  * report.build / convert / lockfiles. The full stage and the address stage package the same way.
  */
-async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report }) {
+async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report, browser = null }) {
   ctx.progress(0.35, 'Packaging the copy');
   await rm(outDir, { recursive: true, force: true });
   if (stack === 'html') {
@@ -694,14 +697,42 @@ async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report
     // page: same DOM, no file added). If the conversion, its build or that check fails, the copy is packaged as static files
     // inside a project of the stack instead (the earlier route), and the report says so: a download never fails.
     const conv = CONVERTERS[stack];
+    // The original's framework runtime would draw its own content over the components once a page loads: every page that is
+    // proven to do without it is converted without it (runtimeFree.js). Without a browser (the address / approved-changes
+    // stages) the decisions of the copy this one comes from are repeated.
+    const earlierRuntime = report.convert?.runtime ?? null;
+    let source = copyDir;
+    let runtime = null;
+    try {
+      ctx.progress(0.37, 'Checking that edits to the components will show on the pages');
+      const free = await runtimeFreeCopy({
+        browser, copyDir, outDir: path.join(path.dirname(copyDir), 'convert-source'), pages,
+        decided: browser ? null : earlierRuntime, pagesAtOnce: fixPagesAtOnce(),
+        // The capture's recordings (carried with every repack, recordings.js) rebuild the animations the runtime drove.
+        jobDir: ctx.dir,
+        // What wins when a page needs its runtime for something the copy cannot rebuild: the components ('editable', the
+        // default: the user chose it, 2026-11-12 — a stack is downloaded to be edited) or the look ('exact'); a repack
+        // without a browser keeps the choice its proof was made with.
+        prefer: ctx.asIs?.prefer ?? earlierRuntime?.prefer ?? 'editable',
+        log: (m) => {
+          console.log(`[recreate ${String(ctx.recreateId ?? '').slice(0, 8)}] ${m}`);
+          ctx.progress(0.38, `Checking that edits to the components will show on ${m.match(/^runtime (\S+?):/)?.[1] ?? 'the pages'}`);
+        },
+      });
+      source = free.dir;
+      runtime = free.record;
+    } catch (err) {
+      runtime = { error: String(err?.message ?? err).slice(0, 200), pages: [] };
+    }
     ctx.progress(0.4, `Converting the copy into ${conv.code} pages and components`);
     try {
-      const converted = await conv.convert({ copyDir, outDir, pages, pageUrl: siteUrl });
+      const converted = await conv.convert({ copyDir: source, outDir, pages, pageUrl: siteUrl });
       ctx.progress(0.45, `Building the ${conv.project} project`);
       const built = await conv.build(outDir);
-      const verified = conv.verify ? await conv.verify({ copyDir, outDir, pages }) : null;
+      const verified = conv.verify ? await conv.verify({ copyDir: source, outDir, pages }) : null;
       report.build = built?.steps?.map((s) => ({ label: s.label, ms: s.ms })) ?? null;
-      report.convert = { mode: 'converted', ...converted, ...(verified && { verified }) };
+      report.convert = { mode: 'converted', ...converted, ...(verified && { verified }), runtime };
+      await writeFile(path.join(outDir, 'README.md'), `${await readFile(path.join(outDir, 'README.md'), 'utf8').catch(() => '')}${runtimeNotes(runtime).readme}`, 'utf8');
     } catch (err) {
       const why = String(err?.message ?? err).slice(0, 400);
       ctx.report.warnings.push(`The copy could not be converted into ${conv.code} pages and components (${why.split('\n')[0]}); it is packaged as static files inside a ${conv.project} project instead.`);
@@ -772,6 +803,8 @@ async function addressStage(ctx, { stack, fromDir }) {
   await writeFile(path.join(ctx.dir, ASIS_PAGES_FILE), `${JSON.stringify({
     createdAt: new Date().toISOString(), pages, excludedHosts, lift: saved.lift, reusedFrom: path.basename(fromDir),
   }, null, 1)}\n`, 'utf8');
+  // The earlier job's capture (pictures, snapshots, animation recordings) travels with the copy too (recordings.js).
+  const recordings = await carryRecordings(fromDir, ctx.dir, pages);
 
   ctx.progress(0.2, 'Writing the new site\'s address');
   const address = addressForCopy({ saved: newSiteOf(ctx.baseUrl, siteUrl), confirmed: ctx.asIs?.address ?? null, siteUrl });
@@ -781,7 +814,7 @@ async function addressStage(ctx, { stack, fromDir }) {
     await rm(copyDir, { recursive: true, force: true });
     await cp(fixedDir, copyDir, { recursive: true });
   }
-  const report = { ...earlier.asIs, createdAt: new Date().toISOString(), addressedFrom: path.basename(fromDir) };
+  const report = { ...earlier.asIs, createdAt: new Date().toISOString(), addressedFrom: path.basename(fromDir), recordings };
   const fixes = structuredClone(earlier.asIs.fixes ?? { counts: {}, total: 0, pages: [], open: [], files: { written: [] } });
   if (pass?.ok) {
     report.address = { used: pass.origin, at: 'download' };
@@ -862,10 +895,12 @@ async function fixStage(ctx, { stack, fromDir }) {
   await writeFile(path.join(ctx.dir, ASIS_PAGES_FILE), `${JSON.stringify({
     createdAt: new Date().toISOString(), pages, excludedHosts: saved.excludedHosts, lift: saved.lift, reusedFrom: path.basename(fromDir),
   }, null, 1)}\n`, 'utf8');
+  // The earlier job's capture (pictures, snapshots, animation recordings) travels with the copy too (recordings.js).
+  const recordings = await carryRecordings(fromDir, ctx.dir, pages);
 
   ctx.progress(0.3, 'Writing the changes you approved');
   const pass = await applyApproved({ fromDir: fixedDir, dir: copyDir, proposals: stored.proposals, approved });
-  const report = { ...earlier.asIs, createdAt: new Date().toISOString(), fixedFrom: path.basename(fromDir) };
+  const report = { ...earlier.asIs, createdAt: new Date().toISOString(), fixedFrom: path.basename(fromDir), recordings };
   const carriedOver = earlier.asIs.changedOnPurpose ?? [];
   report.changedOnPurpose = [...carriedOver, ...pass.applied.map((p) => ({
     id: p.id, page: p.page, kind: p.kind, selector: p.selector, change: p.change, text: p.text, approvedAt: new Date().toISOString(),
@@ -946,16 +981,10 @@ export async function asIsStage(ctx) {
       }
       // The baseline pictures travel with the copy: a repack needs no capture and no live site.
       await cp(path.join(fromDir, ASIS_DIR, 'baseline'), path.join(ctx.dir, ASIS_DIR, 'baseline'), { recursive: true }).catch(() => {});
-      // So do the original's pictures of each page (the page gallery and Compare show them): the job rebuilt from may be removed
-      // later (only the latest copies keep their folders), and this copy has no capture of its own.
-      for (const p of pages) {
-        const slug = slugFor(p.outPath);
-        const files = await readdir(path.join(fromDir, 'capture', slug)).catch(() => []);
-        for (const f of files.filter((n) => /^(desktop|laptop|tablet|mobile)-(fold|full)\.webp$/.test(n))) {
-          await mkdir(path.join(ctx.dir, 'capture', slug), { recursive: true });
-          await cp(path.join(fromDir, 'capture', slug, f), path.join(ctx.dir, 'capture', slug, f)).catch(() => {});
-        }
-      }
+      // So does the earlier job's capture: the original's pictures of each page (the page gallery and Compare show them) and
+      // its snapshots and animation recordings (a converted stack rebuilds the animations from them). The job rebuilt from may
+      // be removed later (only the latest copies keep their folders), and this copy has no capture of its own (recordings.js).
+      report.recordings = await carryRecordings(fromDir, ctx.dir, pages);
       // This job keeps the lifted copy and its page set too: a later repack takes them from here, and the retention that keeps
       // the newest finished jobs never removes the only copy of the lift.
       await mkdir(path.join(ctx.dir, ASIS_DIR), { recursive: true });
@@ -1001,6 +1030,8 @@ export async function asIsStage(ctx) {
       await writeFile(path.join(ctx.dir, ASIS_PAGES_FILE), `${JSON.stringify({
         createdAt: new Date().toISOString(), pages: pages.map((p) => ({ url: p.url, outPath: p.outPath })), excludedHosts, lift: lifted,
       }, null, 1)}\n`, 'utf8');
+      // Which pages this capture recorded (snapshots and animations), for a later repack and for the converted stacks.
+      report.recordings = await recordingsOf(ctx.dir, pages);
     }
     // The copy as lifted is kept apart: the fixes below change copyDir, and a later repack starts again from this one.
     const liftedDir = path.join(ctx.dir, ASIS_DIR, 'lifted');
@@ -1060,7 +1091,7 @@ export async function asIsStage(ctx) {
         ctx.progress(0.34, fixLine(m));
       },
     });
-    await packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report });
+    await packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report, browser });
     const converted = report.convert?.mode === 'converted';
     // A converted copy run by its own server (MERN) is served by that server; a static export is static files.
     const ownServer = converted && CONVERTERS[stack].runs === 'server';
@@ -1075,7 +1106,8 @@ export async function asIsStage(ctx) {
       kind: 'form', count: waiting,
       why: ownServer ? 'it went to the original\'s own server and is one the copy\'s server does not store (a sign-in, an upload, a search, a script\'s own address); the forms list says which' : 'it went to the original\'s own server and is never sent there from the copy; connect FORM_ENDPOINT in sas-forms.json',
     }] : [];
-    report.javascript = await javascriptOf(copyDir);
+    // What a visitor downloads: a converted copy ships the pages it was converted from (their runtime taken out where proven).
+    report.javascript = await javascriptOf(converted && report.convert.runtime?.removedPages ? path.join(path.dirname(copyDir), 'convert-source') : copyDir);
 
     ctx.progress(0.55, 'Running the copy and checking it');
     let base;

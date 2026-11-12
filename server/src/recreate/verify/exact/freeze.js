@@ -90,6 +90,11 @@ function stopAnimations(max) {
         // Both sides sit at their own progress 0 while the page is at the top, and the IR does not rebuild these
         // anyway: left alone, and named as a residual.
         out.scrollLinked++;
+      } else if (animation.playState === 'paused' && !repeats) {
+        // Not moving: held where its page put it (the copy's scroll-scrubbed effects are paused animations set to the
+        // scroll position, js/motion.js). Finishing one would show its end - a progress bar full at the top of the page.
+        item.action = 'paused';
+        out.paused = (out.paused ?? 0) + 1;
       } else if (repeats) {
         // Pause first, then set the time. Setting currentTime on a *running* animation moves its start time and it
         // keeps going, so pausing afterwards captures however long the round trip took - one frame of drift, which

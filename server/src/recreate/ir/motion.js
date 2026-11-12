@@ -579,6 +579,14 @@ function traceLoop(trace) {
 }
 
 // The scale / move of a captured transform (a computed matrix, or a scale() / translate() a minifier wrote).
+/** The vertical scale of a computed 2D transform (`matrix(a, b, c, d, e, f)` → |(c, d)|); 1 when there is none. */
+export function matrixScaleY(transform) {
+  const m = /^matrix\(([^)]+)\)$/.exec(String(transform ?? '').trim());
+  if (!m) return 1;
+  const [, , c, d] = m[1].split(',').map(Number);
+  return Number.isFinite(c) && Number.isFinite(d) ? Math.round(Math.hypot(c, d) * 1000) / 1000 : 1;
+}
+
 function entrancePose(transform) {
   const t = String(transform ?? '').trim();
   if (!t || t === 'none') return null;
@@ -1104,9 +1112,19 @@ export function applyMotion(site, byPath, { owned = new Map() } = {}) {
         continue;
       }
       const base = e.samples[0];
+      // A pose that starts at no width (a progress bar: `transform: scaleX(0)` in the site's own stylesheet) cannot grow by a
+      // factor of itself, and the individual `scale` property multiplies with that transform (0 × anything = 0). Such an
+      // element gets its whole measured transform in every keyframe instead, its height kept as the capture read it (the
+      // samples hold the horizontal scale only).
+      const fromZero = e.channels.includes('scale') && Math.abs(base.scale) < 0.001;
+      const scaleY = fromZero ? matrixScaleY(node.views?.desktop?.style?.transform) : 1;
       const keyframes = e.samples.map((s) => ({
         offset: Math.round(s.at * 10000) / 100,
-        props: {
+        props: fromZero ? {
+          transform: `translate(${r1(s.x)}px, ${r1(s.y)}px) rotate(${r1(s.rot)}deg) scale(${Math.round(s.scale * 1000) / 1000}, ${scaleY})`,
+          ...(e.channels.includes('opacity') && Number.isFinite(s.opacity) && { opacity: String(s.opacity) }),
+          ...(e.channels.includes('filter') && s.filter && { filter: s.filter }),
+        } : {
           ...((e.channels.includes('x') || e.channels.includes('y')) && { translate: `${r1(s.x - base.x)}px ${r1(s.y - base.y)}px` }),
           ...(e.channels.includes('rot') && { rotate: `${r1(s.rot - base.rot)}deg` }),
           ...(e.channels.includes('scale') && { scale: String(Math.round((s.scale / (base.scale || 1)) * 1000) / 1000) }),
