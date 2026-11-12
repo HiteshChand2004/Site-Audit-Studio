@@ -223,6 +223,7 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
 
       <h4 className={styles.h}>Lighthouse, desktop (before and after)</h4>
       {after && !lh.error ? (
+        <div className={styles.tableWrap}>
         <table className={styles.table}>
           <thead>
             <tr><th /><th>Performance</th><th>SEO</th><th>Accessibility</th><th>Best practices</th></tr>
@@ -234,6 +235,7 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
             <tr><td>Copy</td><td>{after.performance}</td><td>{after.seo}</td><td>{after.accessibility}</td><td>{after.bestPractices}</td></tr>
           </tbody>
         </table>
+        </div>
       ) : (
         <p className={styles.note}>{lh.error ? `Not measured: ${lh.error}` : 'Not measured.'}</p>
       )}

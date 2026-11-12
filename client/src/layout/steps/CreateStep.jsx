@@ -130,9 +130,10 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo, copyA
           </Button>
         </div>
       )}
-      {/* A regular user's Stop, while their copy runs (the owner's own Stop stays in "Advanced options"). The server allows a stop
-          to everyone (routes/recreate.js), keeps what was finished, and the "Continue where it stopped" alert below offers to resume. */}
-      {running && !isOwner && (
+      {/* The one Stop, for everyone, while a copy runs: it sits next to the progress, never inside the closed "Advanced options"
+          (an owner did not see it there). The server allows a stop to everyone (routes/recreate.js), keeps what was finished, and
+          the "Continue where it stopped" alert below offers to resume. */}
+      {running && (
         <div className={ws.actions}>
           <Button
             icon={StopCircle}
@@ -280,15 +281,6 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo, copyA
                   ? (result ? 'Create the exact copy again' : 'Create the exact copy')
                   : (result ? 'Create the copy again' : 'Create the copy')}
           </Button>
-          {running && (
-            <Button
-              icon={StopCircle}
-              title="Stops the copy. Everything it has finished is kept, so it can carry on where it stopped."
-              onClick={() => stopRecreate(project.id)}
-            >
-              Stop
-            </Button>
-          )}
           {!project.exact_mode && !running && (
             <Button
               icon={Target}

@@ -10,6 +10,7 @@ import SectionCard from '../../components/common/SectionCard.jsx';
 import { Alert } from '../../components/common/Surface.jsx';
 import AuditReport from '../../components/audit/AuditReport.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
+import NotChecked from '../../components/audit/NotChecked.jsx';
 import { pathOf } from '../../components/project/PageScope.jsx';
 import { isAnalysisActive, useProjects } from '../../store/useProjects.js';
 import { timeAgo } from '../../format.js';
@@ -28,7 +29,7 @@ function previewOverlay({ audit, mode, slow, live }) {
     return (
       <>
         <Info size={13} aria-hidden="true" />
-        <span>Example picture — check the site to load the real one</span>
+        <span>A picture of the site appears here after the check</span>
       </>
     );
   }
@@ -86,9 +87,11 @@ export default function CheckStep({ project, audit, loading }) {
   const update = useProjects((s) => s.update);
   const dismissAnalysis = useProjects((s) => s.dismissAnalysis);
   const running = isAnalysisActive(analysis);
-  // A website never checked shows an example report; once a check of it has failed, made-up scores next to the failure would
-  // read as that check's result, so only the failure is shown.
-  const report = audit?.isDummy && analysis?.status === 'failed' ? null : audit;
+  // A website never checked has only the server's placeholder audit (invented scores): it is never shown as a report, since it
+  // would read as a real result. The step explains what the check does instead, unless a check is running.
+  const report = audit?.isDummy ? null : audit;
+  const notChecked = Boolean(audit?.isDummy) && !loading && !running;
+  const pagesToRead = Number.isInteger(Number(maxPages)) && Number(maxPages) >= 1 ? Number(maxPages) : project.max_pages ?? 25;
 
   const [viewport, setViewport] = useState(375);
   const [device, setDevice] = useState('mobile');
@@ -157,14 +160,9 @@ export default function CheckStep({ project, audit, loading }) {
       <div className={ws.split}>
         <div className={ws.splitMain}>
           {loading && <p className={styles.dummyNote}>Loading the report…</p>}
+          {notChecked && <NotChecked project={project} pages={pagesToRead} />}
           {report && (
             <>
-              {audit.isDummy && (
-                <p className={styles.dummyNote}>
-                  <Info size={13} aria-hidden="true" />
-                  Example report — click “Check now” to check the real site.
-                </p>
-              )}
               {!audit.isDummy && audit.scope?.kind === 'page' && (
                 <p className={ws.hint}>
                   Checked {timeAgo(audit.analyzedAt)} · one page only: <span className="mono">{pathOf(audit.scope.url)}</span> · speed measured on this page
@@ -229,7 +227,7 @@ export default function CheckStep({ project, audit, loading }) {
             onViewportChange={changeViewport}
             fit={Boolean(realPreview)}
             toolbar={realPreview && <ModeToggle mode={mode} onChange={setMode} live={live} hasScreens={hasScreens} />}
-            overlay={previewOverlay({ audit: report, mode, slow, live })}
+            overlay={previewOverlay({ audit, mode, slow, live })}
           >
             {realPreview ? <SitePreview url={siteUrl} audit={audit} mode={mode} viewport={viewport} onSlow={setSlow} /> : <Wireframe />}
           </PreviewFrame>
