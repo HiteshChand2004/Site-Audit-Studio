@@ -139,3 +139,35 @@ test('sections that appear on scroll are in the frozen picture, also one that hi
     await browser.close();
   }
 });
+
+test('a site that answers the second visit with "Too Many Requests": the picture is the page, never the error', { timeout: 120000 }, async (t) => {
+  // pitchlight.panscience.ai: the capture's own visit worked, the picture's second visit got {"detail":"Too Many Requests"},
+  // and that error page became the original's picture in Compare.
+  const http = await import('node:http');
+  let visits = 0;
+  const server = http.createServer((req, res) => {
+    if (req.url !== '/') return res.writeHead(404).end();
+    visits += 1;
+    if (visits > 1) {
+      res.writeHead(429, { 'content-type': 'application/json' });
+      return res.end('{"detail":"Too Many Requests"}');
+    }
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<!doctype html><body style="margin:0;background:rgb(10,20,200)"><h1 style="color:#fff">The real page</h1></body>');
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  t.after(() => new Promise((r) => server.close(r)));
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  const view = { width: 600, height: 400, dpr: 1, mobile: false };
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const page = await (await browser.newContext({ viewport: { width: 600, height: 400 } })).newPage();
+  await page.goto(url);
+  const shot = await fullShotOf(browser, page, url, view, { fallbackHeight: 400 });
+  assert.equal(visits, 2, 'the picture visited the page a second time');
+  assert.equal(shot.frozen, false);
+  assert.match(shot.reason, /429/);
+  const sharp = (await import('sharp')).default;
+  const { data } = await sharp(shot.png).extract({ left: 300, top: 300, width: 1, height: 1 }).raw().toBuffer({ resolveWithObject: true });
+  assert.deepEqual([...data.subarray(0, 3)], [10, 20, 200], 'the picture shows the page the capture loaded, not the error');
+});

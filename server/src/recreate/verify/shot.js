@@ -46,7 +46,12 @@ export async function frozenFullShot(browser, url, view, { limitMs = FROZEN_LIMI
     await context.addInitScript(holdSizeReactions);
     const shoot = async () => {
       const page = await context.newPage();
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: limitMs });
+      const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: limitMs });
+      // This is a second visit: a site that limits how often it may be asked (pitchlight.panscience.ai answers 429 with a JSON
+      // error) gives an error page here although the capture's own visit worked, and that error page became the original's
+      // picture. An error answer is never pictured; the capture's own page is (fullShotOf's fallback).
+      const status = response?.status() ?? 0;
+      if (status >= 400) throw new Error(`the second visit was answered ${status}`);
       await page.waitForLoadState('load', { timeout: LOAD_WAIT_MS }).catch(() => {});
       await page.evaluate(() => {
         document.querySelectorAll('img[loading="lazy"]').forEach((img) => { img.loading = 'eager'; });
