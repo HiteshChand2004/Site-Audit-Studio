@@ -150,8 +150,10 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo, copyA
           </Button>
         </div>
       )}
-      {/* Stop, while a copy runs: one button for the owner and every user, in the same place. The server allows a stop to everyone
-          (routes/recreate.js), keeps what was finished, and the "Continue where it stopped" alert below offers to resume. */}
+      {/* The one Stop, for the owner and every user, while a copy runs: it sits next to the progress, never inside the closed
+          "Advanced options" (an owner did not see it there). "Stopping…" and disabled from the first click (StopCopyButton). The
+          server allows a stop to everyone (routes/recreate.js), keeps what was finished, and the "Continue where it stopped"
+          alert below offers to resume. */}
       {running && (
         <div className={ws.actions}>
           <StopCopyButton stopping={Boolean(job.stopping)} onStop={() => stopRecreate(project.id)} />

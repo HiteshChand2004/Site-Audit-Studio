@@ -247,9 +247,13 @@ export const COMPLETE_VIEWPORTS = [
   { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
 ];
 
+/** File-system errors where a file and a folder want the same name (a folder needed where a file stands, or the reverse). */
+const PATH_CLASH = new Set(['EEXIST', 'ENOTDIR', 'EISDIR']);
+
 /**
  * Opens the copy until a pass downloads nothing from the original hosts, then writes sw.js. Each pass opens the copy at
  * both sizes and scrolls the whole page, so the files only a mobile layout or a scroll asks for are downloaded too.
+ * An answer that fails never ends the process: it gets an error status and is listed in `answerErrors`.
  * @param {{ browser: import('playwright').Browser, outDir: string, pageUrl: string, hosts: string[],
  *   fetchImpl?: typeof downloadAsset, passes?: number, files?: { url: string, local: string }[] }} o
  */
@@ -260,6 +264,8 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
   /** @type {Record<string, string>} */
   const manifest = Object.fromEntries(files.map((f) => [f.url, f.local]));
   const log = [];
+  // Answers that failed (each got an error status; the completion went on): kept with the result.
+  const answerErrors = [];
   const tmp = path.join(outDir, '.complete-tmp');
   await mkdir(tmp, { recursive: true });
   // Same-origin addresses the copy does not hold (its runtime asks its own server for a file: an image optimiser's output,
@@ -285,6 +291,36 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
   const bareOwner = new Map();
   const ambiguous = new Set();
   let bareChain = Promise.resolve();
+  // The bare files this completion wrote (absolute path → its pathname): the only files it may take away again.
+  /** @type {Map<string, string>} */
+  const bareFiles = new Map();
+  /**
+   * Makes the folder a file goes in. A bare file this completion wrote may stand where the folder must be (the page asked for
+   * /blog, then for /blog/post.json): that bare file goes, its path is marked ambiguous (each address keeps its own named file),
+   * and the folder is made. Found live (2026-11-13): the mkdir's EEXIST, thrown inside a route handler, ended the API process,
+   * and the resumed copy ended it again on the same page. Any other clash is thrown as before.
+   */
+  const folderFor = async (file) => {
+    const dir = path.dirname(file);
+    try {
+      await mkdir(dir, { recursive: true });
+      return;
+    } catch (err) {
+      if (!PATH_CLASH.has(err.code)) throw err;
+    }
+    for (let d = dir; d.startsWith(root + path.sep); d = path.dirname(d)) {
+      const pathname = bareFiles.get(path.resolve(d));
+      if (pathname === undefined) continue;
+      bareFiles.delete(path.resolve(d));
+      const owner = bareOwner.get(pathname);
+      bareOwner.delete(pathname);
+      ambiguous.add(pathname);
+      await rm(d, { force: true });
+      sameOrigin.ambiguous.push({ path: pathname, addresses: owner ? [owner] : [], reason: 'a folder of the same name holds other files' });
+      break;
+    }
+    await mkdir(dir, { recursive: true });
+  };
   // A request for a same-origin address the copy answers itself: a missing file, or a second address of a path whose bare file is another's.
   const needsOwnAnswer = async (u) => {
     if (await missingInCopy(u.pathname)) return true;
@@ -381,9 +417,10 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
       return route.fulfill({ status: 404, body: '' });
     }
     const local = localPathOf(original, res.mime);
-    // One step at a time: the bare file of a path is written or removed by one answer after another, never two at once.
-    await (bareChain = bareChain.then(async () => {
-      await mkdir(path.dirname(path.join(outDir, local)), { recursive: true });
+    // One step at a time: the bare file of a path is written or removed by one answer after another, never two at once. A step
+    // that fails leaves the chain usable for the next answer (a rejected chain would fail every answer after it).
+    const step = bareChain.then(async () => {
+      await folderFor(path.join(outDir, local));
       await copyFile(res.tmp, path.join(outDir, local));
       sameFile[rel] = local;
       const barePath = path.join(outDir, decodeURIComponent(u.pathname));
@@ -391,17 +428,29 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
       // A path no file system can store under its own name (a ":" in it) keeps only its safe name, which the copy's text points at.
       if (!storableAsIs(decodeURIComponent(u.pathname))) return;
       if (owner === undefined && !ambiguous.has(u.pathname)) {
-        bareOwner.set(u.pathname, rel);
-        await mkdir(path.dirname(barePath), { recursive: true });
-        await copyFile(res.tmp, barePath);
+        // The bare file is a convenience (a static host answers the path without its query). Where it cannot stand, because a
+        // folder of the same name holds other files (/blog and /blog/post), the path has no bare file: each address keeps its own.
+        try {
+          await mkdir(path.dirname(barePath), { recursive: true });
+          await copyFile(res.tmp, barePath);
+          bareOwner.set(u.pathname, rel);
+          bareFiles.set(path.resolve(barePath), u.pathname);
+        } catch (err) {
+          if (!PATH_CLASH.has(err.code)) throw err;
+          ambiguous.add(u.pathname);
+          sameOrigin.ambiguous.push({ path: u.pathname, addresses: [rel], reason: 'a folder of the same name holds other files' });
+        }
       } else if (owner !== undefined && owner !== rel) {
         // A second size of the path: the bare file would be the wrong size for one of them, so it goes for good.
         bareOwner.delete(u.pathname);
         ambiguous.add(u.pathname);
+        bareFiles.delete(path.resolve(barePath));
         await rm(barePath, { force: true });
         sameOrigin.ambiguous.push({ path: u.pathname, addresses: [owner, rel] });
       }
-    }));
+    });
+    bareChain = step.catch(() => {});
+    await step;
     const host = new URL(original).hostname;
     sameOrigin.mapped.push({ path: rel, file: local, pass, ...(host !== new URL(pageUrl).hostname && { host }) });
     log.push({ pass, sameOrigin: rel, result: 'answered from the original' });
@@ -423,6 +472,13 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
       inFlight++;
       try {
         return await answer(route);
+      } catch (err) {
+        // Nothing catches an error thrown in a route handler: Node ends the process, and every job on the server with it. One
+        // answer that failed gets an error status instead; the pass goes on, and the log and the report say why.
+        const where = route.request().url();
+        log.push({ pass, url: where, result: `answer failed: ${err?.message ?? err}` });
+        answerErrors.push({ pass, url: where, error: String(err?.message ?? err) });
+        await route.fulfill({ status: 500, body: '' }).catch(() => {});
       } finally {
         inFlight--;
         lastRequestAt = Date.now();
@@ -524,5 +580,5 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
   await writeFile(path.join(outDir, '.nojekyll'), '', 'utf8');
   for (const entry of entries) await registerServiceWorker(outDir, entry, { ranged: rangedFiles, siteUrl: pageUrl });
   await rm(tmp, { recursive: true, force: true });
-  return { passes: passesRun, manifest, log, sameOrigin, referenced, ranged };
+  return { passes: passesRun, manifest, log, sameOrigin, referenced, ranged, answerErrors };
 }

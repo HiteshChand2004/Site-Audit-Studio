@@ -3,8 +3,9 @@
 // any category, on either device).
 //
 // The measuring rule, as the user set it:
-//   - each page is run once per mode on both sides; the single run is accepted when the copy is ahead by at least LEAD points
-//     in EVERY category;
+//   - each page is run once per mode on both sides; the single run is accepted unless the copy's speed (performance) score is
+//     lower than the original's (singleRunDecides). Accessibility, Best practices and SEO read the page's code and give the
+//     same score on every run, so the first run decides them, lower or not (user, 2026-11-13: "repeat only the speed score");
 //   - otherwise both sides are run EXTRA_RUNS more times and the medians of the three decide; a copy median lower than the
 //     original's in any category is a "got worse" row (reaudit/compare: status regressed) for that page, mode and category;
 //   - the original's runs are kept per project (`lighthouse-original/`) and reused by later re-audits: a page of the original
@@ -18,8 +19,8 @@ import path from 'node:path';
 
 export const LH_SCORE_CATEGORIES = ['performance', 'accessibility', 'best-practices', 'seo'];
 export const MODES = ['mobile', 'desktop'];
-/** Points the copy must be ahead in every category for one run per side to decide. */
-export const LEAD = 5;
+/** The one category whose score moves from run to run (it times the page); the others read the page's code. */
+export const TIMED_CATEGORY = 'performance';
 /** Runs added on each side when one run does not decide (medians of 1 + EXTRA_RUNS). */
 export const EXTRA_RUNS = 2;
 /** A copy run with fewer than this share of the original's DOM elements did not render the page. */
@@ -146,14 +147,15 @@ export function runsOverlap(originalRuns, copyRuns, c) {
   return o.length > 0 && k.length > 0 && Math.max(...k) >= Math.min(...o);
 }
 
-/** One run per side decides when the copy is ahead by LEAD or more in every category both sides measured. */
+/**
+ * One run per side decides unless the copy's speed score is lower than the original's. Accessibility, Best practices and SEO
+ * come from reading the page's code, so another run gives the same score: the first run decides them, lower or not (a lower
+ * one is a real "got worse", not noise). Only the speed score moves between runs, so only a lower one is worth the medians of
+ * three. A category a run could not score decides nothing: the extra runs are taken (they may score it).
+ */
 export function singleRunDecides(original, copy) {
-  return LH_SCORE_CATEGORIES.every((c) => {
-    const o = original.scores?.[c];
-    const k = copy.scores?.[c];
-    if (o == null || k == null) return false; // a category a run could not score decides nothing: the extra runs are taken
-    return k - o >= LEAD;
-  });
+  if (LH_SCORE_CATEGORIES.some((c) => original.scores?.[c] == null || copy.scores?.[c] == null)) return false;
+  return copy.scores[TIMED_CATEGORY] >= original.scores[TIMED_CATEGORY];
 }
 
 /**
@@ -373,7 +375,7 @@ export function lighthousePageItems(comparison) {
           before: { status: 'pass', detail: `${m.original[c]} on the original`, score: m.original[c] },
           after: { status: 'fail', detail: `${m.copy[c]} on the copy — ${basis}${load}`, score: m.copy[c] },
           lighthousePage: { mode, category: c, ...m.detail, runScores: m.runScores },
-          note: 'Both sides measured on this computer with the same settings; a single run is accepted only when the copy is 5 or more points ahead in every category, else the medians of three runs per side decide.',
+          note: 'Both sides measured on this computer with the same settings; a single run is accepted unless the copy’s speed score is lower (the other scores read the page’s code and do not change between runs), else the medians of three runs per side decide.',
         });
       }
     }

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { betterThanOriginal, compareLighthousePages, decide, lighthousePageItems, lighthousePagesNote, LEAD, medianScores, pageSlug, runsOverlap, singleRunDecides, trimReport } from '../src/reaudit/lighthousePages.js';
+import { betterThanOriginal, compareLighthousePages, decide, lighthousePageItems, lighthousePagesNote, medianScores, pageSlug, runsOverlap, singleRunDecides, trimReport } from '../src/reaudit/lighthousePages.js';
 
 const report = (scores, { weight = 400000, lcp = 'img.hero', failing = {}, dom = 900 } = {}) => ({
   fetchTime: '2026-10-23T10:00:00Z', requestedUrl: 'x', finalDisplayedUrl: 'x', environment: { benchmarkIndex: 1200 },
@@ -41,12 +41,14 @@ async function dirs(t) {
   return { cacheDir: path.join(root, 'cache'), outDir: path.join(root, 'out') };
 }
 
-test('the rule: one run decides when the copy leads by 5 in every category; medians over three runs decide otherwise', () => {
+test('the rule: one run decides unless the copy\'s speed is lower; medians over three runs decide otherwise', () => {
   assert.ok(singleRunDecides({ scores: ALL(70, 90, 90, 90) }, { scores: ALL(75, 95, 95, 95) }));
-  assert.ok(!singleRunDecides({ scores: ALL(70, 90, 90, 90) }, { scores: ALL(76, 94, 95, 95) }), 'one category only 4 ahead');
-  assert.ok(!singleRunDecides({ scores: ALL(70) }, { scores: ALL(70) }));
+  assert.ok(singleRunDecides({ scores: ALL(70) }, { scores: ALL(70) }), 'the same speed: one run is enough');
+  assert.ok(singleRunDecides({ scores: ALL(70, 90, 90, 90) }, { scores: ALL(70, 90, 90, 90) }), 'an as-is copy scoring like the original (SEO 90 = 90) needs no repeat');
+  assert.ok(singleRunDecides({ scores: ALL(70, 90, 90, 90) }, { scores: ALL(72, 85, 90, 90) }), 'a lower code score (accessibility) is decided by one run: another run reads the same code');
+  assert.ok(!singleRunDecides({ scores: ALL(70, 90, 90, 90) }, { scores: ALL(69, 99, 99, 99) }), 'speed 1 lower: the medians of three decide');
   assert.ok(!singleRunDecides({ scores: { ...ALL(70, 90, 90, 90), seo: null } }, { scores: ALL(75, 95, 95, 95) }), 'a category a run could not score decides nothing: extra runs');
-  assert.equal(LEAD, 5);
+  assert.deepEqual(decide([{ scores: ALL(70, 90, 90, 90) }], [{ scores: ALL(72, 85, 90, 90) }]).worse, ['accessibility'], 'one run, a lower code score: got worse, never noise');
   assert.deepEqual(medianScores([{ scores: ALL(70) }, { scores: ALL(90) }, { scores: ALL(80) }]).performance, 80);
   assert.deepEqual(medianScores([{ scores: ALL(70) }, { scores: ALL(90) }]).performance, 80, 'an even count: the mean of the middle two');
   const v = decide([{ scores: ALL(70) }, { scores: ALL(72) }, { scores: ALL(71) }], [{ scores: ALL(69) }, { scores: ALL(80) }, { scores: ALL(70) }]);
@@ -71,7 +73,7 @@ test('trimReport keeps what a comparison needs and drops the rest; pageSlug tell
   assert.match(pageSlug('/', 'https://a.test/'), /^index-[0-9a-f]{8}$/);
 });
 
-test('compareLighthousePages: one run per side when the copy leads, three when it does not, rows per page x mode x category, the original reused next time', { timeout: 60000 }, async (t) => {
+test('compareLighthousePages: one run per side unless the copy is slower, three when it is, rows per page x mode x category, the original reused next time', { timeout: 60000 }, async (t) => {
   const { cacheDir, outDir } = await dirs(t);
   const plan = () => ({
     original: {
@@ -79,7 +81,7 @@ test('compareLighthousePages: one run per side when the copy leads, three when i
       '/about/': { mobile: [report(ALL(70, 90, 90, 90)), report(ALL(72, 90, 90, 90)), report(ALL(71, 90, 90, 90))], desktop: [report(ALL(90, 90, 90, 90))] },
     },
     copy: {
-      // Homepage: ahead by >= 5 everywhere on the phone (one run decides); on the computer accessibility 90 vs 90: three runs, copy median equal (not worse).
+      // Homepage: faster on the phone and on the computer (85 vs 80; accessibility 90 = 90 no longer asks for more runs): one run each.
       '/': { mobile: [report(ALL(70, 96, 95, 100))], desktop: [report(ALL(85, 90, 95, 95))] },
       // /about/ phone: run 1 behind, medians 70 vs 71 -> performance worse; SEO 85 vs 90 worse too.
       '/about/': { mobile: [report(ALL(69, 95, 95, 85)), report(ALL(80, 95, 95, 85)), report(ALL(70, 95, 95, 85))], desktop: [report(ALL(95, 95, 95, 95))] },
@@ -93,7 +95,8 @@ test('compareLighthousePages: one run per side when the copy leads, three when i
   assert.equal(r.pages.length, 2);
   assert.equal(r.pages[0].modes.mobile.accepted, 'single run');
   assert.deepEqual(r.pages[0].modes.mobile.runs, { original: 1, copy: 1 });
-  assert.equal(r.pages[0].modes.desktop.accepted, 'median of runs', 'accessibility 90 vs 90 is not a lead of 5');
+  assert.equal(r.pages[0].modes.desktop.accepted, 'single run', 'speed 85 vs 80 and the code scores equal: one run decides');
+  assert.deepEqual(r.pages[0].modes.desktop.runs, { original: 1, copy: 1 });
   assert.deepEqual(r.pages[0].modes.desktop.worse, []);
   assert.deepEqual(r.pages[1].modes.mobile.original, ALL(71, 90, 90, 90));
   assert.deepEqual(r.pages[1].modes.mobile.copy, ALL(70, 95, 95, 85));
@@ -101,10 +104,10 @@ test('compareLighthousePages: one run per side when the copy leads, three when i
   assert.deepEqual(r.pages[1].modes.mobile.noise, ['performance'], 'performance 70 vs 71, the copy\'s runs 69-80');
   assert.deepEqual(r.pages[1].modes.desktop.worse, []);
   assert.deepEqual(r.worse.map((w) => `${w.path} ${w.mode} ${w.category} ${w.original}>${w.copy}`), ['/about/ mobile seo 90>85']);
-  assert.deepEqual(r.extraRunPages, [{ path: '/', modes: ['desktop'] }, { path: '/about/', modes: ['mobile'] }]);
-  // Runs: / mobile 1+1, / desktop 3+3, /about mobile 3+3, /about desktop 1+1 = 8 per side.
-  assert.deepEqual(r.runs, { original: 8, copy: 8, reusedOriginal: 0 });
-  assert.equal(calls.length, 16);
+  assert.deepEqual(r.extraRunPages, [{ path: '/about/', modes: ['mobile'] }], 'only the page whose copy was slower on its first run');
+  // Runs: / mobile 1+1, / desktop 1+1, /about mobile 3+3, /about desktop 1+1 = 6 per side (8 under the old "lead by 5" rule).
+  assert.deepEqual(r.runs, { original: 6, copy: 6, reusedOriginal: 0 });
+  assert.equal(calls.length, 12);
   assert.ok(messages.some((m) => /run 2 of 3 on both sides/.test(m)));
 
   const items = lighthousePageItems(r);
@@ -119,15 +122,15 @@ test('compareLighthousePages: one run per side when the copy leads, three when i
   assert.deepEqual(items.filter((i) => i.status === 'pass').map((i) => i.key), ['lighthouse-score.mobile.all./', 'lighthouse-score.desktop.all./', 'lighthouse-score.desktop.all./about/']);
   const note = lighthousePagesNote(r);
   assert.match(note, /run on 2 pages of the copy and of the original, phone and computer/);
-  assert.match(note, /2 pages needed three runs per side \(\/ on computer; \/about\/ on phone\)/);
+  assert.match(note, /1 page needed three runs per side \(\/about\/ on phone\)/);
 
   // A second comparison (another re-audit of the same project): the original's runs come from the cache, only the copy is run.
   const again = fakeRunner(plan());
   const r2 = await compareLighthousePages({ pages, cacheDir, outDir: `${outDir}-2`, run: again.run });
-  assert.deepEqual(r2.runs, { original: 0, copy: 8, reusedOriginal: 8 });
+  assert.deepEqual(r2.runs, { original: 0, copy: 6, reusedOriginal: 6 });
   assert.ok(again.calls.every((c) => c.side === 'copy'));
-  assert.match(lighthousePagesNote(r2), /8 runs of the original reused/);
-  assert.equal((await readdir(cacheDir)).filter((f) => !f.endsWith('.full.json')).length, 8, 'one trimmed file per run of the original');
+  assert.match(lighthousePagesNote(r2), /6 runs of the original reused/);
+  assert.equal((await readdir(cacheDir)).filter((f) => !f.endsWith('.full.json')).length, 6, 'one trimmed file per run of the original');
 });
 
 test('a run that fails is listed for its page and mode, the rest is measured; past the deadline pages are skipped, not guessed', { timeout: 30000 }, async (t) => {
