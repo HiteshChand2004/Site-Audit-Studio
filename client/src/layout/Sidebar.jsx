@@ -116,10 +116,10 @@ function Rail({ projects, selectedId, select, goHome, onNewProject, onToggle, bu
 export default function Sidebar({ onNewProject, collapsed = false, onToggle, drawer = false, open = false, onClose, panelRef }) {
   const store = useProjects();
   const { loading, selectedId, remove, building } = store;
-  // Listed by the work on each website (running first, then the most recent), not in the order they were added.
+  // Websites with a task running first (latest started first); a website goes back down when its task ends.
   const projects = useMemo(
     () => orderByWork(store),
-    [store.projects, store.overviews, store.recreateResults, store.analyses, store.recreates, store.reaudits, store.audit, store.selectedId],
+    [store.projects, store.analyses, store.recreates, store.reaudits],
   );
   const [query, setQuery] = useState('');
   const [toDelete, setToDelete] = useState(null);

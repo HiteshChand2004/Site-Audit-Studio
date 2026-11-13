@@ -73,29 +73,22 @@ const timeOf = (value) => {
 };
 
 /**
- * The websites in the order of their work, as the sidebar lists them: one with a check, copy or comparison running first,
- * then the most recent work (a check finished, a copy started or finished, even a failed one, a comparison, the website
- * added or its settings changed). Pure over the store's state, so a caller memoizes it.
+ * The websites in the order of their work, as the sidebar lists them: the ones with a check, copy or comparison running first,
+ * by when that task started (latest first), then the rest by when they were added (newest first). Pure over the store's
+ * state, so a caller memoizes it.
  */
 export function orderByWork(s) {
-  const busy = (id) => [s.analyses[id], s.recreates[id], s.reaudits[id]].some(isJobActive);
-  const when = (p) => {
-    const audit = (s.selectedId === p.id && s.audit) || s.overviews[p.id]?.audit;
-    const copy = s.recreateResults[p.id] ?? s.overviews[p.id]?.recreate;
-    const real = audit && !audit.isDummy;
-    return Math.max(
-      timeOf(real && audit.analyzedAt),
-      timeOf(real && !audit.recreate?.isDummy && audit.recreate?.reauditedAt),
-      timeOf(copy?.result?.createdAt),
-      timeOf(copy?.last?.startedAt),
-      timeOf(copy?.last?.finishedAt),
-      timeOf(p.updated_at),
-      timeOf(p.created_at),
-    );
+  // A website with a check, a copy or a results check running is at the top, the one whose task started last first. When its
+  // task ends it goes back down among the others, which keep the order they were added in (newest first): a finished task
+  // does not keep a website up.
+  const started = (id) => {
+    const running = [s.analyses[id], s.recreates[id], s.reaudits[id]].filter(isJobActive);
+    // A running task whose start time is not known yet (just asked for) counts as started now.
+    return running.length ? Math.max(...running.map((j) => timeOf(j.startedAt) || Date.now())) : 0;
   };
   return s.projects
-    .map((p) => ({ p, busy: busy(p.id), at: when(p) }))
-    .sort((a, b) => Number(b.busy) - Number(a.busy) || b.at - a.at)
+    .map((p) => ({ p, started: started(p.id), added: timeOf(p.created_at) }))
+    .sort((a, b) => Number(b.started > 0) - Number(a.started > 0) || b.started - a.started || b.added - a.added)
     .map((x) => x.p);
 }
 
