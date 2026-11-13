@@ -6,6 +6,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createNetworkRetry, liftPage, NETWORK_FAILURE_REASONS, pageDocumentOf, pageKeyOf } from './pageLift.js';
 import { completeCopy } from './complete.js';
+import { refreshIntegrity } from './integrity.js';
 import { readRecordIndex } from '../scripts.js';
 import { copyPageCap } from '../../pageCap.js';
 
@@ -97,12 +98,19 @@ export async function liftSite({ captureRoot, pages, siteUrl, outDir, browser, e
   const hosts = await hostsOfRecord(captureRoot, excludedHosts);
   const files = [...byLocal.values()];
   const entries = pages.map((p) => p.outPath);
+  // Before the completion's visits too: a page whose stylesheet is refused lays out unstyled and asks for other files.
+  const integrityBefore = await refreshIntegrity(outDir);
   const done = await completeCopy({ browser, outDir, pageUrl: siteUrl, hosts, files, entries });
   log(`completed ${entries.length} page(s) in ${done.passes} pass(es), manifest ${Object.keys(done.manifest).length}`);
+  // The lift pointed the stylesheets' and scripts' addresses at the copy's files: a hash a page names for one of them is
+  // computed again from the file (integrity.js), or the browser refuses it (onfinance.ai's copy was served unstyled).
+  const integrityAfter = await refreshIntegrity(outDir);
+  const integrity = { pages: Math.max(integrityBefore.pages, integrityAfter.pages), changed: integrityBefore.changed + integrityAfter.changed };
+  if (integrity.changed) log(`integrity: ${integrity.changed} hash(es) on ${integrity.pages} page(s) computed from the copy's files`);
   // Build-time downloads that still failed at network level after the wait: the copy lacks files the original serves.
   const stillFailed = new Set(lifts.flatMap((l) => (l.downloads?.failedUrls ?? []).filter((u) => NETWORK_FAILURE_REASONS.has(u.reason)).map((u) => u.url)));
   const network = { ...networkRetry.stats, stillFailed: stillFailed.size };
-  return { files, entries, hosts, lifts, network, notCaptured, completion: { passes: done.passes, manifest: Object.keys(done.manifest).length, log: done.log, sameOrigin: done.sameOrigin, referenced: done.referenced, ranged: done.ranged } };
+  return { files, entries, hosts, lifts, network, notCaptured, integrity, completion: { passes: done.passes, manifest: Object.keys(done.manifest).length, log: done.log, sameOrigin: done.sameOrigin, referenced: done.referenced, ranged: done.ranged } };
 }
 
 /** The lifted document of a page (for the checks and for a reader of the report). */

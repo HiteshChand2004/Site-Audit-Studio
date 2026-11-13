@@ -13,6 +13,7 @@ import { liftSite, localOfOutPath } from './asis.js';
 import { pageDocumentOf } from './pageLift.js';
 import { readRecordIndex } from '../scripts.js';
 import { packLifted, servedDir } from './pack.js';
+import { refreshIntegrity } from './integrity.js';
 import { buildConvertedReact, convertToReact, REACT_EXPORT_DIR, verifyConverted } from '../../convert/react.js';
 import { buildConverted, convertToNext, dropBuildFolder, EXPORT_DIR } from '../../convert/next.js';
 import { buildConvertedMern, convertToMern, MERN_EXPORT_DIR, verifyConvertedMern } from '../../convert/mern.js';
@@ -733,6 +734,9 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
  */
 async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report, browser = null }) {
   ctx.progress(0.35, 'Packaging the copy');
+  // The integrity hashes the pages name, computed from the copy's files as they are now (integrity.js): the lift, the fixes and
+  // the address pass change files a hash was written for, and the browser refuses a file whose hash does not fit.
+  report.integrity = await refreshIntegrity(copyDir);
   await rm(outDir, { recursive: true, force: true });
   if (stack === 'html') {
     await cp(copyDir, outDir, { recursive: true });
@@ -818,6 +822,11 @@ async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report
     const built = await buildStack(stack, outDir);
     report.build = built?.steps?.map((s) => ({ label: s.label, ms: s.ms })) ?? null;
   }
+  // The pages the stack serves, once more after the conversion and the build (the same rule: a file the build changed keeps
+  // its page loading).
+  const served = path.join(outDir, servedDir(stack, outDir));
+  const after = await refreshIntegrity(served);
+  if (after.changed) report.integrity = { ...report.integrity, served: after };
   // The lockfile of every package of the project (the top, client/, server/), cut from the toolchain it was just built with:
   // `npm ci` in the download installs exactly the packages this copy was built and checked with.
   if (stack !== 'html') report.lockfiles = await writeLockfiles(outDir, { stack });
