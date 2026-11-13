@@ -6,6 +6,20 @@ export function defaultPreviewMode(live) {
   return live.ok ? 'live' : 'screenshot';
 }
 
+/**
+ * What the two sides of Compare show: both live, or both pictures — never one of each. Both are live unless the picture
+ * was chosen or the original cannot be shown live (it blocks framing, it is this app, it does not answer); then both are
+ * pictures. A copy with no picture of its own is shown live (there is nothing else to show of it).
+ * @param {'live'|'screenshot'} mode  the chosen mode (defaultPreviewMode until the viewer switches)
+ * @param {{ ok: boolean }} live  whether the original can be shown live
+ * @param {boolean} copyHasShots  whether the copy has pictures of this page
+ * @returns {{ original: 'live'|'screenshot', copy: 'live'|'screenshot' }}
+ */
+export function compareSides(mode, live, copyHasShots) {
+  const pictures = mode !== 'live' || !live.ok;
+  return { original: pictures ? 'screenshot' : 'live', copy: pictures && copyHasShots ? 'screenshot' : 'live' };
+}
+
 /** The note shown when live is not available, or null when it is (nothing to explain). */
 export function unavailableNote(live, hasScreens) {
   if (live.ok) return null;

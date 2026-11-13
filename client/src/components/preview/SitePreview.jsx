@@ -7,7 +7,7 @@ import styles from './SitePreview.module.css';
 const LOAD_HINT_MS = 15000;
 const noop = () => {};
 // The original site may need its own script to render; it runs sandboxed, never on the app origin.
-const LIVE_SANDBOX = 'allow-scripts allow-same-origin';
+export const LIVE_SANDBOX = 'allow-scripts allow-same-origin';
 
 // Framing our own app would let the page script this UI (allow-scripts + allow-same-origin).
 const APP_PORTS = new Set(['5173', '4000', '8080']); // 8080: npm run local (scripts/local.mjs)

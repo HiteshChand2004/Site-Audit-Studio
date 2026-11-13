@@ -8,7 +8,7 @@ const VIEW_OF_WIDTH = { 1440: 'desktop', 390: 'mobile' };
 const normPath = (p) => `${String(p ?? '').replace(/\/index\.html?$/i, '/').replace(/\/+$/, '')}/`;
 
 /**
- * Per copied page: { outPath, score, views: { [view]: { score, height: { generated } } }, asIs? }.
+ * Per copied page: { outPath, score, views: { [view]: { score, height: { generated, original? } } }, asIs? }.
  * An as-is page's score is the share of the page that looks the same (100 − % of pixels that differ), the lower of its
  * two widths (`asIs: true`). Its pictures of the copy are made by the server on first request
  * (server/src/recreate/behavior/preserve/copyPictures.js), so they may take a moment to arrive.
@@ -30,7 +30,7 @@ export function fidelityPages(result) {
       if (!view || !Number.isFinite(v.diffPct)) continue;
       views[view] = {
         score: Math.max(0, Math.min(100, Math.round(100 - v.diffPct))),
-        ...(v.copyHeight > 0 && { height: { generated: v.copyHeight } }),
+        ...(v.copyHeight > 0 && { height: { generated: v.copyHeight, ...(v.originalHeight > 0 && { original: v.originalHeight }) } }),
       };
     }
     const scores = Object.values(views).map((v) => v.score);

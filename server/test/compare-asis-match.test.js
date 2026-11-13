@@ -12,7 +12,7 @@ const asIsResult = {
     checks: {
       pages: [
         { path: '/', visual: [{ width: 1440, diffPct: 7.3742, copyHeight: 900 }, { width: 390, diffPct: 27.14, copyHeight: 844 }] },
-        { path: '/employers', visual: [{ width: 1440, diffPct: 0.0044, copyHeight: 6952 }, { width: 390, diffPct: 0.0111, copyHeight: 8686 }] },
+        { path: '/employers', visual: [{ width: 1440, diffPct: 0.0044, copyHeight: 6952, originalHeight: 6960 }, { width: 390, diffPct: 0.0111, copyHeight: 8686 }] },
         { path: '/not-copied/', visual: [{ width: 1440, diffPct: 0 }] },
       ],
     },
@@ -29,6 +29,9 @@ test('an as-is copy gets a match per page from its final check: the lower of its
   assert.equal(employers.score, 100);
   assert.equal(home.asIs, true, 'marked: it has no pictures of the copy');
   assert.equal(home.views.desktop.height.generated, 900, 'the measured height lets both sides scroll together');
+  // The original's height lets a live original scroll together with the copy; none measured = none given.
+  assert.equal(employers.views.desktop.height.original, 6960);
+  assert.equal(home.views.desktop.height.original, undefined);
 });
 
 test('a rebuilt copy keeps its own fidelity; a copy with neither has none', () => {
