@@ -60,3 +60,26 @@ test('an answer that fails gets an error status and is listed; the completion go
   const failed = [...result.answerErrors.map((e) => new URL(e.url).pathname), ...result.sameOrigin.sameAsOriginal.map((s) => s.path)];
   assert.ok(failed.includes('/blog'), `the broken one is reported (answer errors or left as the original): ${JSON.stringify(failed)}`);
 });
+
+test('the referenced-files step: a leftover bare file (blog) gives way to the folder /blog/hero.png needs; a named file never does, and the copy goes on', async (t) => {
+  const { fetchReferenced } = await import('../src/recreate/behavior/preserve/referenced.js');
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sas-referenced-clash-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const outDir = path.join(root, 'copy');
+  await mkdir(outDir, { recursive: true });
+  // What the completion left: the bare copy of /blog (no extension) and a named file with one.
+  await writeFile(path.join(outDir, 'blog'), '{"path":"/blog"}', 'utf8');
+  await writeFile(path.join(outDir, 'data.json'), '{}', 'utf8');
+  await writeFile(path.join(outDir, 'index.html'), '<!doctype html><img src="/blog/hero.png"><script>const x = "/data.json/thumb.png";</script>', 'utf8');
+  const fetchImpl = async (url, { dir }) => {
+    await mkdir(dir, { recursive: true });
+    const tmp = path.join(dir, `f-${Math.random().toString(36).slice(2)}.png`);
+    await writeFile(tmp, 'png-bytes', 'utf8');
+    return { ok: true, tmp, mime: 'image/png', sha256: url, bytes: 9, head: Buffer.alloc(0), finalUrl: url, redirects: [] };
+  };
+  const result = await fetchReferenced({ outDir, pageUrl: `https://${SITE}/`, originHosts: new Set([SITE]), manifest: {}, fetchImpl });
+  assert.equal(await readFile(path.join(outDir, 'blog', 'hero.png'), 'utf8'), 'png-bytes', '/blog/hero.png is in the copy');
+  assert.ok((await stat(path.join(outDir, 'blog'))).isDirectory(), 'the bare file gave way to the folder');
+  assert.ok((await stat(path.join(outDir, 'data.json'))).isFile(), 'a named file is never removed');
+  assert.ok(result.failed.some((f) => f.url.endsWith('/data.json/thumb.png')), 'the file that cannot get its folder is listed, not thrown');
+});

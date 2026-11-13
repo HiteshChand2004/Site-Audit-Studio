@@ -73,6 +73,39 @@ async function textFiles(dir) {
 }
 
 const bareHost = (h) => h.replace(/^www\./, '').toLowerCase();
+
+/** File-system errors where a file and a folder want the same name. */
+const PATH_CLASH = new Set(['EEXIST', 'ENOTDIR', 'EISDIR']);
+
+/**
+ * Makes `dir` (inside `root`). Where a file stands on the way, it gives way only when it is a bare copy of an address: a name
+ * without an extension (the files the copy names itself always have one, pageLift.js localPathOf), written so a first visit
+ * finds /blog before the worker maps it. The address keeps its named file. Returns false when the folder cannot be made.
+ * Found on prod (2026-11-13): the completion's bare `blog` made the next /blog/… file fail with EEXIST.
+ */
+async function folderFor(root, dir) {
+  try {
+    await mkdir(dir, { recursive: true });
+    return true;
+  } catch (err) {
+    if (!PATH_CLASH.has(err.code)) throw err;
+  }
+  for (let d = dir; d.startsWith(root + path.sep); d = path.dirname(d)) {
+    const st = await stat(d).catch(() => null);
+    if (!st) continue;
+    if (st.isDirectory()) break;
+    if (path.extname(d)) return false;
+    await rm(d, { force: true });
+    break;
+  }
+  try {
+    await mkdir(dir, { recursive: true });
+    return true;
+  } catch (err) {
+    if (!PATH_CLASH.has(err.code)) throw err;
+    return false;
+  }
+}
 const exists = (f) => stat(f).then(() => true, () => false);
 
 /**
@@ -108,8 +141,14 @@ export async function fetchReferenced({ outDir, pageUrl, originHosts, manifest, 
     if (!local || p === local || p.endsWith('/') || !storableAsIs(p) || !bare.startsWith(root + path.sep) || (await exists(bare))) continue;
     const from = path.resolve(root, `.${local}`);
     if (!(await exists(from))) continue;
-    await mkdir(path.dirname(bare), { recursive: true });
-    await copyFile(from, bare);
+    // The bare file is a convenience for a first visit: where a file and a folder want its name, the path goes without one.
+    if (!(await folderFor(root, path.dirname(bare)))) continue;
+    try {
+      await copyFile(from, bare);
+    } catch (err) {
+      if (!PATH_CLASH.has(err.code)) throw err;
+      continue;
+    }
     result.bare.push({ path: p, from: local });
   }
   const asked = new Set(Object.keys(manifest));
@@ -168,7 +207,13 @@ export async function fetchReferenced({ outDir, pageUrl, originHosts, manifest, 
           else result.failed.push({ url, reason: res.reason ?? 'error' });
           continue;
         }
-        await mkdir(path.dirname(w.target), { recursive: true });
+        // A file of the copy may stand where this file's folder must be (the bare `blog` of /blog, and now /blog/hero.png): a
+        // bare copy gives way; anything else leaves this one file out, listed, never failing the copy over it.
+        if (!(await folderFor(root, path.dirname(w.target)))) {
+          result.failed.push({ url, reason: 'a file of the copy has the name its folder needs' });
+          await rm(res.tmp, { force: true }).catch(() => {});
+          continue;
+        }
         await copyFile(res.tmp, w.target);
         await rm(res.tmp, { force: true }).catch(() => {});
         if (!w.sameSite) manifest[url] = w.local;
