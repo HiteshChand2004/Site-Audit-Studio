@@ -157,7 +157,8 @@ export default function OverviewStep({ project, audit, loading, onGo }) {
   // and its open ones, else the original's problems.
   const worse = worseSplit(cmp);
   const todo = cmp
-    ? [...worse.real, ...(cmp.items ?? []).filter((i) => i.status === 'open')]
+    // Rows outside what Remastly can change are not "to do" (server copy/gotWorse.js markOutside; worseSplit leaves them out too).
+    ? [...worse.real, ...(cmp.items ?? []).filter((i) => i.status === 'open' && !i.outside)]
         .map((i) => ({ id: i.key, tone: RESULT_STATUS[i.status]?.tone ?? 'warn', label: RESULT_STATUS[i.status]?.label ?? i.status, title: titleOf(i), detail: i.after?.detail }))
     : problemsOf(audit).rows.map((r) => ({ id: r.id, tone: SEVERITY[r.severity]?.tone ?? 'warn', label: SEVERITY[r.severity]?.label, title: r.title, detail: r.area }));
 

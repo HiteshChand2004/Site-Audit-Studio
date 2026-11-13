@@ -5,7 +5,7 @@ import { Card } from '../common/Surface.jsx';
 import { Pill } from '../common/Score.jsx';
 import InfoTip from '../common/InfoTip.jsx';
 import CountUp from '../common/CountUp.jsx';
-import { CHECKS, HEALTH, matchRating, RESULT_STATUS, TERMS } from '../../copy.js';
+import { CHECKS, HEALTH, matchRating, OUTSIDE, RESULT_STATUS, TERMS } from '../../copy.js';
 import { plural } from '../../format.js';
 import styles from './Outcome.module.css';
 import { stackById } from '../../constants.js';
@@ -68,13 +68,21 @@ export default function Outcome({ result, comparison }) {
   const match = result.fidelity?.score ?? null;
   const m = matchRating(match);
   const s = comparison?.summary ?? null;
+  // Rows outside what Remastly can change (server copy/gotWorse.js markOutside) are not "got worse" / "still open": the counts
+  // (summary) leave them out, and so do the lists below. They are shown in their own calm section of the checklist.
+  const own = (comparison?.items ?? []).filter((i) => !i.outside);
+  const outsideN = comparison?.outside?.total ?? 0;
   // "Got worse" split by cause: the rows the copy may really be worse on, and the ones that only read worse for a reason the
   // run measured (an as-is copy: server copy/gotWorse.js). Only the first count as "got worse", here and everywhere.
   const worse = worseSplit(comparison);
-  // And the same counts for its "still open" rows (failing on both sides).
-  const stillOpen = comparison?.stillOpen ?? null;
+  // An as-is copy: how many of its own "still open" rows carry a reason, and how many none fits.
+  const stillOpen = (() => {
+    if (!comparison?.stillOpen) return null;
+    const rows = own.filter((i) => i.status === 'open');
+    return { explained: rows.filter((i) => i.reason).length, unexplained: rows.filter((i) => !i.reason).length };
+  })();
   const better = s ? (s.fixed ?? 0) + (s.improved ?? 0) : 0;
-  const rowsOf = (status) => (comparison?.items ?? []).filter((i) => i.status === status);
+  const rowsOf = (status) => own.filter((i) => i.status === status);
   const before = comparison?.scores?.before?.mobile;
   const after = comparison?.scores?.after?.mobile;
 
@@ -121,6 +129,8 @@ export default function Outcome({ result, comparison }) {
           They are not counted as “{RESULT_STATUS.regressed.label}”.
         </p>
       )}
+
+      {outsideN > 0 && <p className={styles.todoDetail}>{OUTSIDE.line(outsideN)}</p>}
 
       <div className={styles.facts}>
         {match != null && (

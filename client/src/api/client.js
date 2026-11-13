@@ -249,13 +249,6 @@ export const api = {
   addAddress: (id, recreateId, address) => request(`/projects/${id}/recreate`, {
     method: 'POST', body: { mode: 'as-is', confirmed: true, addressOnly: true, recreateId, addressConfirmed: address },
   }),
-  // Fix mode (Step 11): proposals from the last comparison, their before / after pictures, and the approved ones written.
-  getFixProposals: (id, recreateId) => request(`/projects/${id}/recreate/${recreateId}/fix-proposals`),
-  makeFixPictures: (id, recreateId) => request(`/projects/${id}/recreate/${recreateId}/fix-proposals/pictures`, { method: 'POST' }),
-  fixPictureUrl: (id, recreateId, file) => apiUrl(`/projects/${id}/recreate/${recreateId}/fix-mode/${file}`),
-  applyFixes: (id, recreateId, approved) => request(`/projects/${id}/recreate`, {
-    method: 'POST', body: { mode: 'as-is', confirmed: true, fixOnly: true, recreateId, approved },
-  }),
   // Whether the original answers right now (a site that is down draws a blank live frame).
   siteAnswers: (id, url) => request(`/projects/${id}/live?url=${encodeURIComponent(url)}`),
   startAsIsPreview: (id, recreateId) => request(`/projects/${id}/recreate/${recreateId}/asis-preview`, { method: 'POST' }),

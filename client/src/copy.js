@@ -20,27 +20,6 @@ export const ADDRESS_DIALOG = {
   failedText: 'The copy without the address is still here and downloads as before.',
 };
 
-/** Fix mode (Step 11): changes the copy proposes and makes only when you approve each one. */
-export const FIX_MODE = {
-  open: 'Review proposed fixes',
-  title: 'Changes you can approve',
-  text: 'Your copy keeps the original exactly as it is. These changes would make text easier to read and headings easier to follow. Nothing changes unless you tick it.',
-  loading: 'Reading the last comparison…',
-  pictures: 'Showing each change before and after, on a phone and on a computer…',
-  none: 'Nothing to propose: the last comparison found no faint text and no skipped heading levels that can be changed in the page.',
-  kinds: { contrast: 'Text colour', 'heading-level': 'Heading level' },
-  before: 'Now',
-  after: 'With the change',
-  notShown: 'Not shown at this size',
-  look: (px) => (px === 0 ? 'Looks exactly the same' : `${px.toLocaleString()} pixels change on this page`),
-  skipped: (n) => `${n} more finding${n === 1 ? '' : 's'} cannot be changed in the page (a script draws them, or the colours are not known).`,
-  apply: (n) => (n ? `Apply ${n} approved change${n === 1 ? '' : 's'}` : 'Tick the changes you want'),
-  cancel: 'Close',
-  applying: 'Writing the changes you approved into the copy…',
-  failedTitle: 'The changes could not be written',
-  onPurpose: (n) => `${n} change${n === 1 ? '' : 's'} made on purpose (approved by you).`,
-};
-
 /** A 0–100 score as a rating people understand. */
 export function rating(score) {
   if (score == null || Number.isNaN(score)) return { label: 'Not measured', tone: 'neutral' };
@@ -180,6 +159,18 @@ export const ROW_GROUPS = {
   impossible: { label: 'Not possible', text: 'No copy can do this.' },
 };
 export const WORSE_UNEXPLAINED ='Unexplained: none of the five reasons fits what this run measured. This still needs a fix.';
+
+/**
+ * Rows that are not Remastly's to change (server copy/gotWorse.js OUTSIDE_GROUPS: the original's own code, a backend, the owner's
+ * information, the look, impossible). Listed in one calm, collapsed section, never as "Got worse" / "Still open", never counted
+ * at the top. "Our bug", "Fix not built yet" and "Measurement" rows stay in the main list.
+ */
+export const OUTSIDE = {
+  title: 'Outside what Remastly can change',
+  intro: 'These differ from the original or stay as they were for reasons no copy can change: they need the site’s own server, the owner’s information, or a change to how the site looks. They are not counted as got worse or still open.',
+  tag: 'Outside our control',
+  line: (n) => `${n} more ${n === 1 ? 'thing is' : 'things are'} outside what Remastly can change (see “${OUTSIDE.title}” below).`,
+};
 
 export const RESULT_STATUS = {
   fixed: { label: 'Fixed', explain: 'This was a problem on the original site and is solved in the copy.', tone: 'ok' },

@@ -9,6 +9,8 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import * as cheerio from 'cheerio';
 import { liftSite, localOfOutPath } from './asis.js';
+import { pageDocumentOf } from './pageLift.js';
+import { readRecordIndex } from '../scripts.js';
 import { packLifted, servedDir } from './pack.js';
 import { buildConvertedReact, convertToReact, REACT_EXPORT_DIR, verifyConverted } from '../../convert/react.js';
 import { buildConverted, convertToNext, dropBuildFolder, EXPORT_DIR } from '../../convert/next.js';
@@ -773,8 +775,8 @@ export function noticeOpenItems(notices) {
   return (notices?.pages ?? []).map((n) => ({
     page: n.path,
     check: 'page not copied',
-    values: `linked from ${n.from.join(', ')}`,
-    tried: 'its links open a notice page of the copy that says so',
+    values: [n.reason === 'not-captured' ? 'not captured when the site was copied' : null, n.from.length ? `linked from ${n.from.join(', ')}` : null].filter(Boolean).join('; '),
+    tried: n.reason === 'not-captured' ? 'a notice page of the copy stands at its address; no other page is shown in its place' : 'its links open a notice page of the copy that says so',
     reason: n.reason === 'backend' ? 'backend' : 'owner',
   }));
 }
@@ -965,9 +967,24 @@ export async function asIsStage(ctx) {
       await rm(copyDir, { recursive: true, force: true });
       await mkdir(path.dirname(copyDir), { recursive: true });
       // The copy as it was lifted, before the fixes of that job (an older job kept only its fixed copy: that one, then).
-      const lifted = path.join(fromDir, ASIS_DIR, 'lifted');
-      const from = (await readdir(lifted).then((l) => l.length > 0, () => false)) ? lifted : path.join(fromDir, ASIS_DIR, 'copy');
+      const liftedFrom = path.join(fromDir, ASIS_DIR, 'lifted');
+      const from = (await readdir(liftedFrom).then((l) => l.length > 0, () => false)) ? liftedFrom : path.join(fromDir, ASIS_DIR, 'copy');
       await cp(from, copyDir, { recursive: true });
+      // A job lifted before uncaptured pages were left out may hold another page's document under such a page's address: the
+      // capture's record of that job decides again, and those files go (a notice page "not captured" takes their place).
+      if (!lifted.notCaptured) {
+        const record = await readRecordIndex(path.join(fromDir, 'capture', '.network')).catch(() => null);
+        const missing = record ? pages.filter((p, i) => i > 0 && !pageDocumentOf(record, p.url)).map((p) => ({ url: p.url, outPath: p.outPath })) : [];
+        if (missing.length) {
+          for (const p of missing) await rm(path.join(copyDir, p.outPath), { force: true });
+          lifted.notCaptured = missing;
+          const skip = new Set(missing.map((p) => p.url));
+          pages = pages.filter((p) => !skip.has(p.url));
+          ctx.report.pages = ctx.report.pages.filter((p) => !skip.has(p.url));
+          report.pages = report.pages.filter((p) => !skip.has(p.url));
+          ctx.report.warnings.push(`${missing.length} page(s) were not captured, so the copy has a notice page in their place: ${missing.map((p) => new URL(p.url).pathname).join(', ')}.`);
+        }
+      }
       // The baseline pictures travel with the copy: a repack needs no capture and no live site.
       await cp(path.join(fromDir, ASIS_DIR, 'baseline'), path.join(ctx.dir, ASIS_DIR, 'baseline'), { recursive: true }).catch(() => {});
       // So does the earlier job's capture: the original's pictures of each page (the page gallery and Compare show them) and
@@ -993,7 +1010,20 @@ export async function asIsStage(ctx) {
         pages: lift.lifts,
         completion: lift.completion,
         hosts: lift.hosts.length,
+        network: lift.network,
       };
+      // Pages with no document of their own in the record were not lifted: they become notice pages below, never a copy of
+      // another page.
+      if (lift.notCaptured?.length) {
+        lifted.notCaptured = lift.notCaptured;
+        const skip = new Set(lift.notCaptured.map((p) => p.url));
+        pages = pages.filter((p) => !skip.has(p.url));
+        report.pages = report.pages.filter((p) => !skip.has(p.url));
+        ctx.report.warnings.push(`${lift.notCaptured.length} page(s) were not captured, so the copy has a notice page in their place: ${lift.notCaptured.map((p) => new URL(p.url).pathname).join(', ')}.`);
+      }
+      if (lift.network?.stillFailed) {
+        ctx.report.warnings.push(`${lift.network.stillFailed} file(s) the original serves could not be downloaded because the network was down while copying; they are missing from the copy. Make the copy again, or run scripts/refetch-missing.js on it.`);
+      }
       if (lift.lifts.some((l) => l.blockers?.length)) lifted.blockers = lift.lifts.flatMap((l) => l.blockers.map((b) => ({ page: l.path, ...b })));
       // The capture's own picture of each page is the baseline the checks use when the original does not answer: kept with the lift.
       await mkdir(path.join(ctx.dir, ASIS_DIR, 'baseline'), { recursive: true });
@@ -1027,6 +1057,7 @@ export async function asIsStage(ctx) {
     report.notices = await addNoticePages({
       dir: copyDir,
       pages,
+      notCaptured: lifted?.notCaptured ?? [],
       siteUrl,
       brokenOnOriginal: ctx.audit && !ctx.audit.isDummy ? (ctx.audit.brokenLinks?.broken ?? []).map((b) => b.url) : [],
       siteName: new URL(siteUrl).hostname.replace(/^www\./, ''),

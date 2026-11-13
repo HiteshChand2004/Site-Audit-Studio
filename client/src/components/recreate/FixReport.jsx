@@ -3,7 +3,7 @@ import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, Check, ChevronRi
 import Badge from '../common/Badge.jsx';
 import Button from '../common/Button.jsx';
 import styles from './FixReport.module.css';
-import { ROW_GROUPS, WORSE_REASONS, WORSE_UNEXPLAINED } from '../../copy.js';
+import { OUTSIDE, ROW_GROUPS, WORSE_REASONS, WORSE_UNEXPLAINED } from '../../copy.js';
 import { WORSE_CAUSES } from '../../siteData.js';
 
 // Every status the comparison can give a check, in the order rows are listed (server: reaudit/compare/rules.js).
@@ -190,16 +190,28 @@ function WorseReason({ item }) {
   );
 }
 
-function Row({ item }) {
+/** A row outside what the tool can change: a calm mark (no status colour), its group, and one plain sentence why. */
+function OutsideMark() {
+  return (
+    <span className={styles.mark} data-status="outside" role="img" aria-label={OUTSIDE.tag}>
+      <Minus size={11} strokeWidth={3} />
+    </span>
+  );
+}
+
+function Row({ item, outside = false }) {
   const meta = STATUS[item.status] ?? STATUS.open;
   return (
-    <li className={styles.row} data-status={item.status}>
+    <li className={styles.row} data-status={outside ? 'outside' : item.status}>
       <details>
         <summary>
-          <StatusMark status={item.status} />
-          <span className={styles.rowTitle}>{item.title}</span>
+          {outside ? <OutsideMark /> : <StatusMark status={item.status} />}
+          <span className={styles.rowTitle}>
+            {item.title}
+            {outside && item.outsideWhy && <span className={styles.outsideWhy}>{item.outsideWhy}</span>}
+          </span>
           {item.review && <Badge tone="warn">Review</Badge>}
-          <span className={styles.rowTag}>{item.statusLabel ?? meta.label}</span>
+          <span className={styles.rowTag}>{outside ? (ROW_GROUPS[item.group]?.label ?? OUTSIDE.tag) : (item.statusLabel ?? meta.label)}</span>
           <ChevronRight size={14} className={styles.chevron} aria-hidden="true" />
         </summary>
         <div className={styles.rowBody}>
@@ -216,7 +228,8 @@ function Row({ item }) {
           <LinkList title="New" links={item.links?.new} />
           <LinkList title="Could not be reached on this run" links={item.links?.recheck} />
           <Evidence evidence={item.evidence} />
-          {(item.status === 'regressed' || item.status === 'explained' || item.status === 'open') && 'reason' in item && <WorseReason item={item} />}
+          {!outside && (item.status === 'regressed' || item.status === 'explained' || item.status === 'open') && 'reason' in item && <WorseReason item={item} />}
+          {outside && item.reasonEvidence && <p className={styles.detail}>{item.reasonEvidence}</p>}
           {item.review && <p className={styles.review}>Text was generated from the page; check that it reads right.</p>}
           {item.note && <p className={styles.note}>{item.note}</p>}
           {item.helpUrl && (
@@ -269,6 +282,29 @@ function Category({ category, items, filter }) {
   );
 }
 
+/** Every row outside what the tool can change, in one collapsed, calm section (none is deleted, none is red). */
+function OutsideSection({ items, categories }) {
+  if (!items.length) return null;
+  const order = new Map(categories.map((c, i) => [c.id, i]));
+  const sorted = [...items].sort((a, b) => (order.get(a.category) ?? 99) - (order.get(b.category) ?? 99));
+  return (
+    <details className={styles.outside}>
+      <summary>
+        <ChevronRight size={14} className={styles.chevron} aria-hidden="true" />
+        <span className={styles.categoryLabel}>
+          {OUTSIDE.title} ({items.length})
+        </span>
+      </summary>
+      <p className={styles.outsideIntro}>{OUTSIDE.intro}</p>
+      <ul className={styles.rows}>
+        {sorted.map((item) => (
+          <Row key={`${item.status} ${item.key}`} item={item} outside />
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 /**
  * The real fix checklist (audit.recreate when it is not the sample): the original analysis compared with
  * a re-audit of the recreated site. Score strip, status chips (they filter the rows), category sections.
@@ -279,10 +315,14 @@ export default function FixReport({ data, busy, onReaudit }) {
   // A regressed row the run found a reason for that is not the copy (measured on this computer, needs the new site's
   // address…) is listed as "Only reads worse" with that reason's name, apart from the rows that really got worse, as the
   // rest of the app counts them (siteData.js worseSplit). The counts of the chips follow the rows.
-  const items = (data.items ?? []).map((i) => (i.status === 'regressed' && WORSE_CAUSES[i.group] ? { ...i, status: 'explained', statusLabel: WORSE_CAUSES[i.group].title } : i));
-  const summary = { ...(data.summary ?? {}), ...Object.fromEntries(['regressed', 'explained'].map((s) => [s, items.filter((i) => i.status === s).length])) };
+  // A row outside what the tool can change keeps its status: it is listed in its own section, not as "Only reads worse".
+  const items = (data.items ?? []).map((i) => (i.status === 'regressed' && !i.outside && WORSE_CAUSES[i.group] ? { ...i, status: 'explained', statusLabel: WORSE_CAUSES[i.group].title } : i));
+  const summary = { ...(data.summary ?? {}), ...Object.fromEntries(['regressed', 'explained'].map((s) => [s, items.filter((i) => i.status === s && !i.outside).length])) };
   const compared = scope?.pages?.length ?? 0;
   const outOfScope = scope?.outOfScope?.length ?? 0;
+  // Rows outside what the tool can change have their own section; the categories, chips and counts show the rest.
+  const outside = items.filter((i) => i.outside);
+  const own = items.filter((i) => !i.outside);
 
   return (
     <div className={styles.card}>
@@ -347,9 +387,11 @@ export default function FixReport({ data, busy, onReaudit }) {
       {/* Remounted per filter so each section opens or closes for it. */}
       <div key={filter ?? 'all'} className={styles.categories}>
         {categories.map((c) => (
-          <Category key={c.id} category={c} items={items.filter((i) => i.category === c.id)} filter={filter} />
+          <Category key={c.id} category={c} items={own.filter((i) => i.category === c.id)} filter={filter} />
         ))}
       </div>
+
+      <OutsideSection items={outside} categories={categories} />
 
       {notes.length > 0 && (
         <ul className={styles.notes}>

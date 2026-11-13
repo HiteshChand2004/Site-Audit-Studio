@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, FileText, ListChecks, Loader2, RotateCw, Ruler, Trophy, Wand2 } from 'lucide-react';
+import { Download, FileText, ListChecks, Loader2, RotateCw, Ruler, Trophy } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import { Alert, Card, EmptyState } from '../../components/common/Surface.jsx';
 import FixReport from '../../components/recreate/FixReport.jsx';
@@ -9,8 +9,7 @@ import CopyPages from '../../components/recreate/CopyPages.jsx';
 import PageGallery from '../../components/recreate/PageGallery.jsx';
 import AsIsReport from '../../components/recreate/AsIsReport.jsx';
 import AddressDialog from '../../components/recreate/AddressDialog.jsx';
-import FixModeDialog from '../../components/recreate/FixModeDialog.jsx';
-import { ADDRESS_DIALOG, FIX_MODE } from '../../copy.js';
+import { ADDRESS_DIALOG } from '../../copy.js';
 import SectionCard from '../../components/common/SectionCard.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import { stackById } from '../../constants.js';
@@ -51,14 +50,6 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
   const [pending, setPending] = useState(null);
   const needsAddress = Boolean(result?.asIs && !result.asIs.address?.used && !result.asIs.addressedFrom);
   const pendingFailed = pending && job?.id === pending && job.status === 'failed' ? job.error ?? '' : null;
-  // Fix mode (Step 11): the changes the user approves one by one; `fixing` is the job writing them.
-  const applyFixes = useProjects((s) => s.applyFixes);
-  const [askFixes, setAskFixes] = useState(false);
-  const [fixing, setFixing] = useState(null);
-  const fixFailed = fixing && job?.id === fixing && job.status === 'failed' ? job.error ?? '' : null;
-  useEffect(() => {
-    if (fixing && result?.recreateId === fixing) setFixing(null);
-  }, [fixing, result?.recreateId]);
   useEffect(() => {
     if (!pending || result?.recreateId !== pending) return;
     setPending(null);
@@ -121,12 +112,6 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
       : `This copy has no ${copyName} build to download. Make the copy again.`;
 
   const comparison = audit && !audit.isDummy && audit.recreate && !audit.recreate.isDummy ? audit.recreate : null;
-  const canFix = Boolean(result.asIs && comparison && comparison.recreateId === result.recreateId && !busy);
-  async function approveFixes(ids) {
-    const id = await applyFixes(project.id, result.recreateId, ids);
-    setFixing(id);
-    setAskFixes(false);
-  }
   const canCompare = audit?.recreate?.recreateId && !isJobActive(reauditJob);
 
   return (
@@ -142,18 +127,6 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
           onPackage={(stack) => recreate(project.id, { mode: 'as-is', confirmed: true, stack, reuseAsIs: true })}
         />
       )}
-
-      {result.asIs && (comparison || result.asIs.changedOnPurpose?.length > 0) && (
-        <div className={ws.actions}>
-          <p className={ws.hint} style={{ margin: 0 }}>
-            {result.asIs.changedOnPurpose?.length ? FIX_MODE.onPurpose(result.asIs.changedOnPurpose.length) : FIX_MODE.text}
-          </p>
-          <Button icon={Wand2} disabled={!canFix} onClick={() => setAskFixes(true)}>{FIX_MODE.open}</Button>
-        </div>
-      )}
-      {fixing && fixFailed == null && <p className={ws.hint}>{FIX_MODE.applying}</p>}
-      {fixFailed != null && <Alert tone="bad" title={FIX_MODE.failedTitle}>{fixFailed}</Alert>}
-      {canFix && <FixModeDialog open={askFixes} projectId={project.id} recreateId={result.recreateId} onApply={approveFixes} onClose={() => setAskFixes(false)} />}
 
       {result.singlePage && (
         <p className={ws.hint}>

@@ -447,7 +447,7 @@ Done on `step4-lighthouse` (worktree `../Website-Audit-step4b`, from 1006f54; fu
 - **Lighthouse on every page, both sides, both modes** (`reaudit/lighthousePages.js`, re-audit step `lighthouse-pages` before
   `compare`, as-is copies only): each copied page and the same page of the original are run now, on this computer, with the same
   settings (the copy through `serveCopy`, the original through the egress proxy; the analysis's calibrated homepage run is NOT
-  reused). One run per side decides when the copy leads by ≥ 5 in every category, else 2 more runs per side and the medians of 3
+  reused). One run per side decides unless the copy's speed score is lower (Accessibility / Best practices / SEO read the code and do not change between runs; 2026-11-13), else 2 more runs per side and the medians of 3
   decide; a copy median lower in any category = row `lighthouse-score.<mode>.<category>.<path>` (status regressed, explained by
   `scorePart`: performance → e when the page is not heavier and has the same LCP element; other categories by the checks failing
   only in the copy). The original's runs are cached per project in `lighthouse-original/` and reused by later re-audits.

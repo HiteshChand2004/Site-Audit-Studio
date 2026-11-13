@@ -100,6 +100,32 @@ test('a copy whose links all lead to copied pages is left untouched', async (t) 
   assert.equal(await readFile(path.join(dir, 'index.html'), 'utf8'), page);
 });
 
+test('a selected page that was not captured gets a "not captured" notice at its own address, linked or not', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'sas-notice-uncaptured-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  // The lift already pointed the homepage's link at the local address of the page it could not lift.
+  const home = '<!doctype html><html><body><a href="/company/">Company</a><a href="https://www.acme-original.dev/company">Company again</a></body></html>';
+  await writeFile(path.join(dir, 'index.html'), home);
+  const r = await addNoticePages({
+    dir,
+    pages: [{ url: SITE, outPath: 'index.html' }],
+    notCaptured: [{ url: `${SITE}company/`, outPath: 'company/index.html' }, { url: `${SITE}privacy-policy/`, outPath: 'privacy-policy/index.html' }],
+    siteUrl: SITE,
+  });
+  const company = r.pages.find((p) => p.outPath === 'company/index.html');
+  assert.equal(company.reason, 'not-captured');
+  assert.deepEqual(company.from, ['/'], 'both of the homepage\'s links lead to it');
+  const privacy = r.pages.find((p) => p.outPath === 'privacy-policy/index.html');
+  assert.equal(privacy.reason, 'not-captured');
+  assert.deepEqual(privacy.from, [], 'written though no copied page links to it');
+  for (const f of ['company/index.html', 'privacy-policy/index.html']) {
+    const notice = await readFile(path.join(dir, f), 'utf8');
+    assert.match(notice, /was not captured when the site was copied/);
+    assert.doesNotMatch(notice, /<script/i);
+  }
+  assert.match(await readFile(path.join(dir, 'index.html'), 'utf8'), /href="\/company\/">Company<\/a><a href="\/company\/">Company again/);
+});
+
 test('one key for the same page however its path is written', () => {
   assert.equal(pathKey('/about/'), '/about');
   assert.equal(pathKey('/About/index.html'), '/about');

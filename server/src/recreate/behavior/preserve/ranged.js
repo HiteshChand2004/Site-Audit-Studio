@@ -68,7 +68,7 @@ export function barePathOf(url) {
 export function rangeShim(ranged) {
   return "(function(){window.sasRanged=true;var R=" + JSON.stringify(ranged) + ";var F=window.fetch;var C={};"
     + "function P(q){if(!/^\\d+-\\d+(,\\d+-\\d+)*$/.test(q))return null;var o=[],p=q.split(','),i,e;for(i=0;i<p.length;i++){e=p[i].split('-');if(!(+e[1]>=+e[0]))return null;o.push([+e[0],+e[1]])}return o}"
-    + "function K(n){for(var p in R){if(n===p||n.slice(-p.length)===p)return p}return null}"
+    + "function K(n){for(var p in R){if(n===p||n.slice(-p.length)===p)return p;var f='/'+String(R[p].file||'').replace(/^\\.?\\/+/,'').split(/[?#]/)[0];if(f.length>1&&n.slice(-f.length)===f)return p}return null}"
     + "function W(k){return C[k]||(C[k]=F.call(window,R[k].file).then(function(r){if(!r.ok)throw Error(r.status);return r.arrayBuffer()}))}"
     + "window.fetch=function(i,o){try{var s=typeof i==='string'?i:(i instanceof URL?i.href:i&&i.url);var u=new URL(s,location.href);var k=u.origin===location.origin?K(u.pathname):null;var g=k&&P(u.searchParams.get('range')||'');"
     + "if(g){return W(k).then(function(b){var n=0,j,at=0;for(j=0;j<g.length;j++){if(g[j][1]>=b.byteLength)throw Error('past the end');n+=g[j][1]-g[j][0]+1}var out=new Uint8Array(n);for(j=0;j<g.length;j++){out.set(new Uint8Array(b,g[j][0],g[j][1]-g[j][0]+1),at);at+=g[j][1]-g[j][0]+1}"
@@ -83,7 +83,10 @@ function rangesOf(q) {
   for (const part of q.split(',')) { const [a, b] = part.split('-').map(Number); if (!(b >= a)) return null; out.push([a, b]); }
   return out;
 }
-function rangedKey(pathname) { return Object.keys(RANGED).find((p) => pathname === p || pathname.endsWith(p)) ?? null; }
+// The original's path, or the copy's own name of the whole file: the lift may rename a file (\`x.framercms\` → \`x.framercms.js\`),
+// and a runtime then asks for the ranges at the new name.
+function localPathOf(file) { const f = '/' + String(file || '').replace(/^\\.?\\/+/, '').split(/[?#]/)[0]; return f.length > 1 ? f : null; }
+function rangedKey(pathname) { return Object.keys(RANGED).find((p) => pathname === p || pathname.endsWith(p) || (localPathOf(RANGED[p].file) && pathname.endsWith(localPathOf(RANGED[p].file)))) ?? null; }
 async function rangedAnswer(key, ranges) {
   const r = await fetch(new URL(RANGED[key].file, self.location.origin));
   if (!r.ok) throw new Error(String(r.status));

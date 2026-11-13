@@ -51,7 +51,8 @@
   color: var(--bad);
 }
 
-.counts span {
+/* The label next to each count (only the direct one: the "i" tip inside is a span too and keeps its own display). */
+.counts li > span {
   display: inline-flex;
   align-items: center;
   gap: 4px;

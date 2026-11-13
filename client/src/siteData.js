@@ -90,7 +90,8 @@ export const WORSE_CAUSES = {
  * @param {any} comparison  audit.recreate
  */
 export function worseSplit(comparison) {
-  const rows = (comparison?.items ?? []).filter((i) => i.status === 'regressed');
+  // Rows outside what the tool can change (server copy/gotWorse.js markOutside) are neither: they have their own section.
+  const rows = (comparison?.items ?? []).filter((i) => i.status === 'regressed' && !i.outside);
   const real = [];
   const byReason = {};
   for (const row of rows) {

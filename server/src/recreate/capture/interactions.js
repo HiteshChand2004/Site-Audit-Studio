@@ -835,6 +835,27 @@ function readState(opts) {
 }
 
 /** Page function: moves the element to the middle of the screen and reports where to point the mouse. */
+/**
+ * Page function: how long the transitions and one-shot animations still running in candidate `i`'s subtree (itself, its
+ * descendants, their pseudo-elements) have left, in ms; 0 when none runs. Loops (infinite) are not counted. A child's own
+ * transition (a list item hovered, its link easing its colour) is read off the page, not guessed from declared durations:
+ * under load the timers of a fixed wait drift and the child was read part of the way.
+ */
+export function subtreeRunningMs(i) {
+  const el = window.__sasMotion?.chosen?.[i];
+  if (!el || !el.isConnected || typeof el.getAnimations !== 'function') return 0;
+  let left = 0;
+  for (const a of el.getAnimations({ subtree: true })) {
+    if (a.playState !== 'running') continue;
+    const t = a.effect?.getComputedTiming?.();
+    if (!t || !Number.isFinite(t.endTime) || !Number.isFinite(Number(a.currentTime))) continue;
+    left = Math.max(left, (t.endTime - Number(a.currentTime)) / Math.max(0.01, Math.abs(a.playbackRate || 1)));
+  }
+  return Math.max(0, Math.round(left));
+}
+// The most the probe waits for a subtree's running transitions after its own wait (subtreeRunningMs).
+export const SUBTREE_WAIT_MS = 1500;
+
 function aim(i) {
   const el = window.__sasMotion.chosen[i];
   if (!el || !el.isConnected) return null;
@@ -1223,6 +1244,18 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
     if (!timed && more > 0) {
       await page.waitForTimeout(more);
       after = (await page.evaluate(readState, args(c.i))) ?? after;
+    }
+    // Whatever still runs in the hovered subtree (a descendant's own transition the waits above did not cover, a timer that
+    // fired late on a busy page) is waited for to its end, ≤ SUBTREE_WAIT_MS, and read again.
+    if (!timed) {
+      for (let waited = 0; waited < SUBTREE_WAIT_MS && Date.now() <= hoverDeadline;) {
+        const left = await page.evaluate(subtreeRunningMs, c.i).catch(() => 0);
+        if (!left) break;
+        const step = Math.min(left + 30, SUBTREE_WAIT_MS - waited);
+        await page.waitForTimeout(step);
+        waited += step;
+        after = (await page.evaluate(readState, args(c.i))) ?? after;
+      }
     }
     let scriptedMs = null;
     let settled = true;

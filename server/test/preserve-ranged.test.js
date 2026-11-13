@@ -13,7 +13,7 @@ import { chromium } from 'playwright';
 import { liftPage } from '../src/recreate/behavior/preserve/pageLift.js';
 import { completeCopy, VISITOR_SHIM } from '../src/recreate/behavior/preserve/complete.js';
 import { serveCopy } from '../src/recreate/behavior/preserve/serve.js';
-import { rangesOf, sliceOf } from '../src/recreate/behavior/preserve/ranged.js';
+import { rangeShim, rangesOf, sliceOf, SW_RANGED_SOURCE } from '../src/recreate/behavior/preserve/ranged.js';
 
 const sha = (/** @type {string|Buffer} */ t) => createHash('sha256').update(t).digest('hex');
 const SITE = 'https://site.test/';
@@ -73,6 +73,34 @@ test('rangesOf / sliceOf: the query shape, both ends included, one piece after a
   const whole = Buffer.from('0123456789abcdef');
   assert.equal(sliceOf(whole, rangesOf('https://x.test/i?range=0-3,8-11')).toString(), '012389ab');
   assert.equal(sliceOf(whole, [{ from: 10, to: 20 }]), null, 'past the end of the file');
+});
+
+test('a ranged request at the copy\'s own (renamed) name of a kept file is sliced too, by the shim and by the worker', async () => {
+  // The lift renamed the file (x.framercms → x.framercms.js) and a runtime asks for its ranges at the new name.
+  const ranged = { '/cms/a/x-indexes.framercms': { file: '/cms/a/x-indexes.framercms.js', type: 'application/javascript' } };
+  const whole = Buffer.from(Array.from({ length: 32 }, (_, i) => i));
+  const asked = [];
+  const window = {
+    fetch: async (u) => {
+      asked.push(String(u));
+      return new Response(whole, { status: 200 });
+    },
+  };
+  new Function('window', 'location', rangeShim(ranged))(window, { href: 'http://127.0.0.1:5555/blog/post/', origin: 'http://127.0.0.1:5555' });
+  for (const at of ['/cms/a/x-indexes.framercms.js', '/cms/a/x-indexes.framercms']) {
+    const r = await window.fetch(`http://127.0.0.1:5555${at}?range=2-5,10-11`);
+    assert.deepEqual([...new Uint8Array(await r.arrayBuffer())], [2, 3, 4, 5, 10, 11], `${at} sliced`);
+  }
+  // Under a preview path too, and an unrelated address is left to the server.
+  const under = await window.fetch('http://127.0.0.1:5555/preview/tok/cms/a/x-indexes.framercms.js?range=0-1');
+  assert.deepEqual([...new Uint8Array(await under.arrayBuffer())], [0, 1]);
+  const other = await window.fetch('http://127.0.0.1:5555/cms/a/other.js?range=0-1');
+  assert.equal((await other.arrayBuffer()).byteLength, 32, 'not a kept file: the request goes on as it was');
+  const rangedKey = new Function('RANGED', `${SW_RANGED_SOURCE}; return rangedKey;`)(ranged);
+  assert.equal(rangedKey('/cms/a/x-indexes.framercms.js'), '/cms/a/x-indexes.framercms');
+  assert.equal(rangedKey('/cms/a/x-indexes.framercms'), '/cms/a/x-indexes.framercms');
+  assert.equal(rangedKey('/cms/a/other.js'), null);
+  assert.ok(asked.length > 0);
 });
 
 test('a sliced file is kept whole (from the record and from a pass) and the copy slices it on a first visit and under the worker', { timeout: 5 * 60000 }, async () => {

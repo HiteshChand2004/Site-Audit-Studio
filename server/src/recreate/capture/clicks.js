@@ -535,6 +535,16 @@ function clickAimed() {
   window.__sasClick?.aimed?.click();
 }
 
+/**
+ * Page function: whether the `<details>` the control (as last aimed at, else candidate `i`) belongs to is open; null when it
+ * is not part of one. A disclosure's own state, whatever else the page changed meanwhile.
+ */
+function detailsOpen(i) {
+  const el = window.__sasClick?.aimed ?? window.__sasClick?.els[i];
+  const d = el?.closest?.('details');
+  return d && d.isConnected ? d.open : null;
+}
+
 /** Page function: clicks candidate `i` without the mouse (a fallback when something covers it). */
 function clickIndex(i) {
   window.__sasClick?.els[i]?.click();
@@ -626,6 +636,25 @@ export function clearStay() {
  */
 export function readStay() {
   return !!(window.__sasClickGuard && window.__sasClickGuard.stay);
+}
+
+/**
+ * Page function: a link's own `href` and whether it is a jump within the page - `#<id>` naming an element the page holds (by
+ * id or `name`, or `#top`, which a browser always scrolls to) - plus the scroll position right before the click. A bare `#`
+ * is not a jump (it is the usual href of a script's control).
+ */
+export function readJump(i) {
+  const el = window.__sasClick?.els[i];
+  const a = el?.closest?.('a[href]');
+  if (!a) return null;
+  const href = (a.getAttribute('href') || '').trim();
+  return { href, target: jumpTargetExists(href, document), y: scrollY };
+  function jumpTargetExists(h, doc) {
+    if (!/^#./.test(h)) return false;
+    let id = h.slice(1);
+    try { id = decodeURIComponent(id); } catch { /* kept as written */ }
+    return !!(doc.getElementById(id) || doc.getElementsByName(id)[0] || id.toLowerCase() === 'top');
+  }
 }
 
 /** A change list without what changes by itself (`noise`: elements moving on their own, and what is inside them). */
@@ -759,6 +788,9 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
   const left = () => !samePage(page.url(), startUrl);
   const picked = await page.evaluate(installClicks, { limit, perSignature, hint: HINT_SOURCE });
   const probedNames = [];
+  // Where the probe clicked (the snapshot path of each control): an as-is copy keeps the original's markup, so the re-audit
+  // pairs a control by its path and knows which ones its own probe never reached.
+  const probedPaths = [];
   const stats = { candidates: picked.candidates.length, probed: 0, found: 0, noChange: 0, covered: 0, notRestored: 0, left: false, timedOut: false, skipped: picked.skipped, kinds: {}, reused: 0 };
   const shareKey = (c) => (shared && c.block && c.blockKey ? `${view}|${c.blockKey}|${c.path.slice(c.block.length)}` : null);
   // What this page's probe of `c` found, for the next pages (only when it can be taken over and nothing threw).
@@ -875,6 +907,7 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
     }
     stats.probed++;
     probedNames.push(c.text ?? '');
+    if (c.path) probedPaths.push(c.path);
     try {
       await page.mouse.move(-20, -20).catch(() => {});
       // After scrolling the control into view, what reacts to the scroll (a header sliding away, reveals) settles first, and
@@ -928,11 +961,25 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
       // A link is clicked like any other control (its navigation is blocked): a menu or dialog that only opens on the
       // click is found this way. Whether the page itself stayed is recorded below.
       const isLink = c.reasons.includes('link');
-      if (isLink) await page.evaluate(clearStay).catch(() => {});
+      const inPage = isLink || c.reasons.includes('anchor');
+      if (inPage) await page.evaluate(clearStay).catch(() => {});
+      const jumpFrom = inPage ? await page.evaluate(readJump, c.i).catch(() => null) : null;
+      // How a `<details>` the control belongs to stood before the click (null: not one): an answer the probe finds open closes
+      // on the first click and opens on the second, which is the same toggle as the other way round (restore, `detailsFrom`).
+      const detailsFrom = await page.evaluate(detailsOpen, c.i).catch(() => null);
       if (spot.reachable) await page.mouse.click(spot.x, spot.y);
       else await page.evaluate(clickIndex, c.i);
       await page.waitForTimeout(settleTime);
       const stay = isLink ? await page.evaluate(readStay).catch(() => false) : null;
+      // A jump within the page: `#id` of an element the page holds, followed by the browser, or suppressed by the page's script
+      // and scrolled by it (a smooth-scroll script). What changed is what the scroll brought into view (reveals, a header
+      // reacting), not anything the link controls. A `#panel` link whose script opens the panel without scrolling stays a control.
+      let jump = null;
+      if (jumpFrom?.target) {
+        const suppressed = await page.evaluate(readStay).catch(() => false);
+        const scrolled = Math.abs((await page.evaluate(() => scrollY).catch(() => jumpFrom.y)) - jumpFrom.y) > 2;
+        if (!suppressed || scrolled) jump = { scrolled };
+      }
       if (left()) {
         // A link that navigated in spite of the guard (its script went to the page itself) is a link, not a control: the
         // page is loaded again and the remaining controls are probed, instead of giving up on the page.
@@ -956,7 +1003,8 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
         remember(c, from);
         continue;
       }
-      const entry = { ...kind, trigger: c.path, tag: c.tag, text: c.text, reasons: c.reasons, opensOn, change: compact(d), ...(stay != null && { stay }) };
+      const entry = { ...kind, trigger: c.path, tag: c.tag, text: c.text, reasons: c.reasons, opensOn, change: compact(d), ...(stay != null && { stay }),
+        ...(jumpFrom?.href && { href: jumpFrom.href }), ...(jump && { jump: true, jumpScrolled: jump.scrolled }), ...(detailsFrom != null && { detailsFrom }) };
       const group = groupOf.get(c.path);
       if (group) entry.group = { sig: group.sig, count: group.count, paths: group.paths };
       // Put the page back: the same click (a toggle), then Escape, then a click outside.
@@ -969,7 +1017,7 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
         const root = common || null;
         const only = root === 'body' ? [c.path, ...kind.targets] : null;
         const open = root ? await page.evaluate(readRegion, { rootPath: root, only }).catch(() => null) : null;
-        const how = await restore(page, c, spot, read, d);
+        const how = await restore(page, c, spot, read, d, detailsFrom);
         entry.closes = how.closes;
         if (how.own) entry.closesOwn = how.own;
         if (!entry.closes) stats.notRestored++;
@@ -982,7 +1030,7 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
       } else if (kind.kind === 'tabs') {
         // A tab clicked again normally stays; a set of states drawn as copies of an area (an exact copy's FAQ) reads as
         // tabs, and closes what it opened on a second click. Only the fair reading is kept, so nothing is planned from it.
-        const how = await restore(page, c, spot, read, d);
+        const how = await restore(page, c, spot, read, d, detailsFrom);
         if (how.own) entry.closesOwn = how.own;
       }
       widgets.push(entry);
@@ -1039,7 +1087,7 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
       /* the list is left as found */
     }
   }
-  return { version: 1, view: 'desktop', widgets, groups: picked.groups, noise, probedNames, stats: { ...stats, noise: noise.length, ms: Date.now() - started } };
+  return { version: 1, view: 'desktop', widgets, groups: picked.groups, noise, probedNames, probedPaths, stats: { ...stats, noise: noise.length, ms: Date.now() - started } };
 }
 
 /**
@@ -1049,19 +1097,26 @@ export async function captureClicks(page, { limit = 30, perSignature = 3, budget
  *   is a set of states, not a plain panel), so it keeps its meaning.
  * - `own` - something the click showed or added, still open right before, is gone again. What else changed meanwhile (an
  *   element revealing itself, the other answer) neither proves nor prevents it, so the order the probe goes through the
- *   controls cannot decide it. The re-audit compares this one on both sides.
+ *   controls cannot decide it. The re-audit compares this one on both sides. A control of a `<details>` that was open and is
+ *   closed again has closed what it opened, whatever the readings say (a scroll the click caused can move other things).
+ *   With `detailsFrom` (how the `<details>` stood before the first click): the second click putting it back as it started
+ *   is the toggle, whichever way it started - an answer the probe found open (its own earlier clicks, a one-at-a-time list)
+ *   closes, then opens again, and is read the same as one it found closed.
  * @returns {Promise<{ closes: string|null, own: string|null }>}
  */
-async function restore(page, c, spot, read, opened = null) {
+async function restore(page, c, spot, read, opened = null, detailsFrom = null) {
   // Text a click rewrote (a tab replacing a panel's text in place) counts as opened too.
   const shownIn = (d) => new Set([...(d?.shown ?? []), ...(d?.added ?? []), ...(d?.text ?? [])].map((x) => x.path));
   const ownPaths = opened ? [...opened.shown, ...opened.added, ...(opened.text ?? [])].filter((x) => !x.inTrigger).map((x) => x.path) : [];
   const openBefore = ownPaths.length ? shownIn(await read(c.i).catch(() => null)) : new Set();
   const openNow = ownPaths.filter((p) => openBefore.has(p));
+  const wasOpen = await page.evaluate(detailsOpen, c.i).catch(() => null);
   const out = { closes: null, own: null };
   const check = async (how) => {
     await page.waitForTimeout(350);
     const d = await read(c.i);
+    if (!out.own && detailsFrom != null && wasOpen === !detailsFrom && (await page.evaluate(detailsOpen, c.i).catch(() => null)) === detailsFrom) out.own = how;
+    if (!out.own && detailsFrom == null && wasOpen === true && (await page.evaluate(detailsOpen, c.i).catch(() => null)) === false) out.own = how;
     if (!out.own && (openNow.length ? openNow.some((p) => !shownIn(d).has(p)) : !visibleChange(d))) out.own = how;
     if (!visibleChange(d)) out.closes = how;
     return out.closes != null;

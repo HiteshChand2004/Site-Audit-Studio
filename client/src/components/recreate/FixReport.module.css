@@ -499,3 +499,49 @@ details[open] > summary > .chevron {
 .category > summary:hover {
   background: var(--accent-tint);
 }
+
+/* ---------- outside what Remastly can change: calm, collapsed, no status colour ---------- */
+
+.outside {
+  margin-top: var(--sp-2);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.outside > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  list-style: none;
+  cursor: pointer;
+  color: var(--text-2);
+}
+
+.outside > summary::-webkit-details-marker {
+  display: none;
+}
+
+.outside > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.outsideIntro {
+  margin: 0 10px 6px;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.outsideWhy {
+  display: block;
+  margin-top: 2px;
+  font-weight: 400;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.mark[data-status='outside'] { background: var(--surface); color: var(--muted); }
+.row[data-status='outside'] .rowTitle { color: var(--text-2); }

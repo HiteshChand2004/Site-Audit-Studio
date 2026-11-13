@@ -86,6 +86,30 @@ body { margin: 0; font: 16px sans-serif }
   assert.deepEqual(css?.changes?.['background-color'], ['rgb(10, 10, 10)', 'rgb(26, 26, 255)'], JSON.stringify(found.hover));
 });
 
+// A box that changes nothing of its own: its script starts a child's transition a moment after the mouse arrives, later than
+// the declared durations say. The probe waits for what still runs in the hovered subtree, so the child is read at its end
+// value, not part of the way (a nav item's link read at 92 % on one side and 18 % on the other).
+test("a child's transition still running in the hovered subtree is read at its end", async () => {
+  const html = `<!doctype html><html><head><style>
+body { margin: 0; font: 16px sans-serif }
+.item span { display: inline-block; padding: 10px; background-color: rgb(0, 0, 0); transition: background-color 0.4s linear }
+.item span.on { background-color: rgb(0, 0, 250) }
+</style></head><body><a class="item" href="#"><span>Product</span></a>
+<script>
+const a = document.querySelector('.item'), s = a.querySelector('span');
+let t;
+a.addEventListener('mouseenter', () => { t = setTimeout(() => s.classList.add('on'), 300); });
+a.addEventListener('mouseleave', () => { clearTimeout(t); s.classList.remove('on'); });
+</script></body></html>`;
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.setContent(html);
+  const found = await captureInteractions(page, { budgetMs: 6000 });
+  await page.close();
+  const entry = found.hover.find((h) => h.tag === 'a' && h.source === 'probe');
+  const kid = entry?.kids?.find((k) => k.changes?.['background-color']);
+  assert.deepEqual(kid?.changes?.['background-color']?.[1], 'rgb(0, 0, 250)', JSON.stringify(found.hover));
+});
+
 // The re-audit measures a copy with the original's hovers known: those elements are probed first, so a budget that runs out on
 // the page's first links (which do nothing on either side) still reaches what is compared. A copy of five working script
 // hovers read as "0 of 5" because the probe spent its time on five earlier links.
