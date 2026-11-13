@@ -49,6 +49,26 @@ const COPY_STAGE_NAMES = ['Capturing', 'Copying', 'Fixing', 'Packaging', 'Checki
 const COPY_STAGE_OF_STEP = { inspect: 'Capturing', sweep: 'Capturing', assets: 'Copying', generate: 'Fixing', build: 'Packaging', preview: 'Packaging', responsive: 'Checking', reaudit: 'Checking' };
 const copyStageOf = (step) => COPY_STAGE_OF_STEP[step] ?? COPY_STAGE_NAMES[0];
 
+const Spinner = (p) => <Loader2 {...p} className={styles.spin} />;
+
+/**
+ * Stop for a running copy, the same for the owner and every user. Defined once at module level, so a progress update re-renders
+ * it in place and never replaces the element under the pointer. Disabled, with "Stopping…", from the first click until the job ends.
+ */
+function StopCopyButton({ stopping, onStop }) {
+  return (
+    <Button
+      icon={stopping ? Spinner : StopCircle}
+      disabled={stopping}
+      aria-live="polite"
+      title={stopping ? 'Stopping: what the copy has finished is being kept.' : 'Stops the copy. Everything it has finished is kept, so it can carry on where it stopped.'}
+      onClick={onStop}
+    >
+      {stopping ? 'Stopping…' : 'Stop'}
+    </Button>
+  );
+}
+
 /** Step 2: make the copy (Recreate). */
 export default function CreateStep({ project, audit, onOpenSettings, onGo, copyAsked = false, onCopyShown }) {
   const stack = stackById(project.stack);
@@ -130,17 +150,11 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo, copyA
           </Button>
         </div>
       )}
-      {/* A regular user's Stop, while their copy runs (the owner's own Stop stays in "Advanced options"). The server allows a stop
-          to everyone (routes/recreate.js), keeps what was finished, and the "Continue where it stopped" alert below offers to resume. */}
-      {running && !isOwner && (
+      {/* Stop, while a copy runs: one button for the owner and every user, in the same place. The server allows a stop to everyone
+          (routes/recreate.js), keeps what was finished, and the "Continue where it stopped" alert below offers to resume. */}
+      {running && (
         <div className={ws.actions}>
-          <Button
-            icon={StopCircle}
-            title="Stops the copy. Everything it has finished is kept, so it can carry on where it stopped."
-            onClick={() => stopRecreate(project.id)}
-          >
-            Stop
-          </Button>
+          <StopCopyButton stopping={Boolean(job.stopping)} onStop={() => stopRecreate(project.id)} />
         </div>
       )}
       <CopyPanel open={copyOpen} onClose={() => setCopyOpen(false)} project={project} onStart={startCopy} />
@@ -280,15 +294,6 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo, copyA
                   ? (result ? 'Create the exact copy again' : 'Create the exact copy')
                   : (result ? 'Create the copy again' : 'Create the copy')}
           </Button>
-          {running && (
-            <Button
-              icon={StopCircle}
-              title="Stops the copy. Everything it has finished is kept, so it can carry on where it stopped."
-              onClick={() => stopRecreate(project.id)}
-            >
-              Stop
-            </Button>
-          )}
           {!project.exact_mode && !running && (
             <Button
               icon={Target}
