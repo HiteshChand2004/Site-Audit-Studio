@@ -19,6 +19,8 @@ import { capacity, jobCpus, jobMB, KIND_OF_TABLE } from './capacity.js';
 import { onWaiting, runInJob, setLoadProvider, setShareProvider } from './context.js';
 
 const RETAIN_MS = 60000;
+/** Why a job stopped while it waited in line ended (its row's error). */
+const STOPPED_IN_LINE = 'Stopped before it started: it was stopped from the app while it waited in line. Nothing ran.';
 /** A duration in words for a message: minutes when it is at least one, else seconds (tests run with limits of a few seconds). */
 const humanMs = (ms) => (ms >= 60000 ? `${Math.round(ms / 60000)} minutes` : `${Math.round(ms / 1000)} seconds`);
 const DB_WRITE_INTERVAL = 1000;
@@ -153,6 +155,21 @@ function nextIndex() {
     }
   });
   return best;
+}
+
+/**
+ * Takes a waiting job out of the line before it ran (stopped while it waited): its promise is settled with a `notStarted`
+ * error, the jobs behind it move up, and one that waited behind it for room may start now. False when the job is not
+ * waiting (it runs, or has ended).
+ */
+function leaveLine(job, why) {
+  const i = line.findIndex((entry) => entry.job === job);
+  if (i < 0) return false;
+  const [entry] = line.splice(i, 1);
+  entry.reject(Object.assign(new Error(why), { notStarted: true }));
+  if (active.size + line.length === 0) releaseAwake();
+  schedule();
+  return true;
 }
 
 function start(head) {
@@ -417,7 +434,8 @@ export class JobManager extends EventEmitter {
       warnings,
       startedAt,
       queue: null,
-      // Asked to stop from the app (stop() below) or by the hard limit. A job that has not started yet sees it as soon as it does.
+      // Asked to stop from the app (stop() below) or by the hard limit. A job still waiting in line is not run at all: stop()
+      // takes it out of the line and ends it there.
       controller: new AbortController(),
     };
   }
@@ -437,22 +455,31 @@ export class JobManager extends EventEmitter {
     }, this.#opts.heartbeatMs ?? HEARTBEAT_MS);
     job.beat.unref();
     exclusive(() => this.#run(job, project, payload), { job, manager: this }).catch((err) => {
-      // Taken out of the line before it ran (the memory wait outlasted the hard limit): the row says why.
+      // Taken out of the line before it ran (stopped while it waited, stop() below): the row says why. stop() has ended it
+      // already; this only makes sure.
       if (err?.notStarted) this.#finish(job, 'failed', err.message);
     });
   }
 
   /**
-   * Asks the project's running or queued job to stop. The job's own run function ends it (and keeps what it can:
-   * a recreate saves its checkpoint, so the app can continue where it stopped).
+   * Asks the project's running or queued job to stop. A running job is ended by its own run function (which keeps what it
+   * can: a recreate saves its checkpoint, so the app can continue where it stopped). A job still waiting in line has done
+   * nothing yet: it leaves the line and ends at once, so it never waits for a free slot just to stop (it held "Stopping…"
+   * until one of the running jobs finished, which could take hours). Nothing of it is on disk; an earlier copy that can be
+   * continued keeps its saved workspace (recreate/workspace.js findResumable passes over a failed row without one).
    * @returns {object|null} the job, or null when nothing is running for this project
    */
   stop(projectId) {
     for (const job of this.#jobs.values()) {
       if (job.projectId !== projectId || (job.status !== 'queued' && job.status !== 'running')) continue;
       job.stopping = true;
-      job.message = 'Stopping…';
       job.controller.abort();
+      if (job.status === 'queued' && leaveLine(job, STOPPED_IN_LINE)) {
+        job.message = 'Stopped before it started.';
+        this.#finish(job, 'failed', STOPPED_IN_LINE);
+        return snapshot(job);
+      }
+      job.message = 'Stopping…';
       this.#emit(job, 'progress');
       return snapshot(job);
     }
