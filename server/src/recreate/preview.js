@@ -17,6 +17,7 @@ import { gzipSync } from 'node:zlib';
 import { APP_ORIGIN } from '../audit/frame.js';
 import { RecreateError } from './errors.js';
 import { inlineScriptHashes } from './inlineScripts.js';
+import { nextAssetFile } from './behavior/preserve/nextAssets.js';
 import { TYPES, typeExtOf } from './verify/server.js';
 import { issuePreviewToken, previewPath, revokePreviewToken } from './previewTokens.js';
 
@@ -94,7 +95,18 @@ function createPreviewServer(root, { port, frameAncestors = appOrigins(), connec
     let file = path.resolve(base, pathname.replace(/^\/+/, ''));
     if (!inside(base, file)) return send(404, 'Not found');
     try {
-      let info = await stat(file);
+      let info = await stat(file).catch(() => null);
+      // A packaged Next.js copy holds the site's /_next files in next-assets/ (nextAssets.js): answered from there, as its
+      // next.config.mjs does under next start.
+      if (!info) {
+        const held = nextAssetFile(base, pathname);
+        const heldInfo = held ? await stat(held).catch(() => null) : null;
+        if (heldInfo?.isFile()) {
+          file = held;
+          info = heldInfo;
+        }
+      }
+      if (!info) return send(404, 'Not found');
       if (info.isDirectory()) {
         // Relative links in a folder page need the trailing slash. Always a same-origin path.
         if (!raw.endsWith('/')) return send(301, 'Moved', { Location: `/${raw.replace(/^\/+/, '')}/` });

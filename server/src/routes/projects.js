@@ -47,9 +47,12 @@ function badRequest(res, message) {
 
 const selectAll = db.prepare('SELECT * FROM projects ORDER BY updated_at DESC');
 const selectOne = db.prepare('SELECT * FROM projects WHERE id = ?');
+// A new website's "Pages to check": the most a check reads (analyze.js parseMaxPages), so the first check reads the whole site
+// (user, 2026-11-13; was the column's DEFAULT 25, which stays for rows made before). The user can lower it on the Check step.
+export const DEFAULT_MAX_PAGES = 100;
 const insert = db.prepare(`
-  INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, created_at, updated_at)
-  VALUES (?, ?, ?, ?, 1, -1, ?, ?)
+  INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, max_pages, created_at, updated_at)
+  VALUES (?, ?, ?, ?, 1, -1, ${DEFAULT_MAX_PAGES}, ?, ?)
 `);
 const remove = db.prepare('DELETE FROM projects WHERE id = ?');
 

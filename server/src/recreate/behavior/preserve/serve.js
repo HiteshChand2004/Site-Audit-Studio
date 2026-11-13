@@ -8,6 +8,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { brotliCompressSync, gzipSync, constants } from 'node:zlib';
 import path from 'node:path';
 import { typeExtOf } from '../../verify/server.js';
+import { nextAssetFile } from './nextAssets.js';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
@@ -50,6 +51,10 @@ export function serveCopy(dir, { overrides = null } = {}) {
       }
       if (!isDir && (await stat(`${file}.html`).then((s) => s.isFile(), () => false))) file = `${file}.html`;
     }
+    // A packaged Next.js copy holds the site's /_next files in next-assets/ (nextAssets.js): answered from there, as its
+    // next.config.mjs does under next start.
+    const held = nextAssetFile(root, rel);
+    if (held && !(await stat(file).then((s) => s.isFile(), () => false)) && (await stat(held).then((s) => s.isFile(), () => false))) file = held;
     try {
       const ext = typeExtOf(file);
       let entry = cache.get(file);

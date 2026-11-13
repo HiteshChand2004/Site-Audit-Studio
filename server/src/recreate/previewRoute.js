@@ -19,6 +19,7 @@ import path from 'node:path';
 import { appOrigins } from './preview.js';
 import { importMapHash, injectShim, PREVIEW_SHIM_HASH, rewriteInlineScripts, rewriteJsSpecifiers } from './previewShim.js';
 import { PREVIEW_PREFIX, previewPath, resolvePreviewToken } from './previewTokens.js';
+import { nextAssetFile } from './behavior/preserve/nextAssets.js';
 import { TYPES, typeExtOf } from './verify/server.js';
 
 const inside = (base, file) => file === base || file.startsWith(base + path.sep);
@@ -181,6 +182,16 @@ export function previewRouter({ frameAncestors, inlineScriptHashes = () => [], s
     if (!inside(base, file)) return send(404, 'Not found');
     try {
       let info = await stat(file).catch(() => null);
+      // A packaged Next.js copy holds the site's /_next files in next-assets/ (nextAssets.js): answered from there, as its
+      // next.config.mjs does under next start.
+      if (!info) {
+        const held = nextAssetFile(base, pathname);
+        const heldInfo = held ? await stat(held).catch(() => null) : null;
+        if (heldInfo?.isFile()) {
+          file = held;
+          info = heldInfo;
+        }
+      }
       // A page's address in the forms a static host answers: a folder gets its slash (relative links need it), an address
       // without an extension is answered from its .html file when there is no folder ("clean URLs", as the copies' hosts do).
       if (info?.isDirectory()) {

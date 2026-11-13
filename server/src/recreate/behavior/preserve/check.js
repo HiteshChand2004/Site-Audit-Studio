@@ -10,7 +10,7 @@
 //   forms      every form is filled with a test value and submitted: nothing may leave the copy; its note is recorded
 // It measures; it never changes the copy. Browser-heavy: one page at a time.
 import path from 'node:path';
-import { stat, readFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import { AxeBuilder } from '@axe-core/playwright';
 import { exactDiffMany } from '../../verify/exact/pixels.js';
@@ -237,10 +237,73 @@ export const GATE_WIDTHS = [375, 1440];
  * is. A change at one width decides (the next is not rendered); the top-level fields are the failing width's, else the last
  * one's, as callers have always read them; `views` holds each width's verdict.
  */
-export async function fixGate(browser, fixedBase, unfixedBase, pagePath, { widths = GATE_WIDTHS, axeRules = null, axeBefore = null, parallel = false } = {}) {
+/**
+ * The pictures of the page before its fixes, kept on disk for the checks that follow (one fix proof looks at the same unfixed
+ * page again and again: every group alone, then together). Kept per page and width with the console errors of their loads and
+ * whether a load was not scrolled to its end. On disk, not in memory: three full-page pictures per width of 100 pages would not
+ * fit. `clear()` removes the folder.
+ * @param {string} dir
+ */
+export function beforePictures(dir) {
+  /** @type {Map<string, { files: string[], errors: string[], scrollCapped: boolean }>} */
+  const index = new Map();
+  let n = 0;
+  return {
+    /** @param {string} key */
+    async get(key) {
+      const e = index.get(key);
+      if (!e) return null;
+      const shots = await Promise.all(e.files.map((f) => readFile(f))).catch(() => null);
+      return shots ? { shots, errors: e.errors, scrollCapped: e.scrollCapped } : null;
+    },
+    /** @param {string} key @param {{ shots: Buffer[], errors: string[], scrollCapped: boolean }} v */
+    async set(key, { shots, errors, scrollCapped }) {
+      await mkdir(dir, { recursive: true });
+      const id = n++;
+      const files = await Promise.all(shots.map(async (png, i) => {
+        const f = path.join(dir, `${id}-${i}.png`);
+        await writeFile(f, png);
+        return f;
+      }));
+      index.set(key, { files, errors: [...errors], scrollCapped: Boolean(scrollCapped) });
+    },
+    get size() { return index.size; },
+    async clear() {
+      index.clear();
+      await rm(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+export async function fixGate(browser, fixedBase, unfixedBase, pagePath, { widths = GATE_WIDTHS, axeRules = null, axeBefore = null, parallel = false, before = null } = {}) {
   // parallel: every width pictured at the same time (the same rounds and the same verdict per width; every width is rendered,
   // and the first failing one in the order of `widths` decides). Else one width after the other, stopping at the first change.
+  // before (beforePictures): the unfixed page's pictures of an earlier look are reused, so only the fixed page is opened (user,
+  // 2026-11-13: the unchanged page was pictured again for every look). A look that finds a change with kept pictures is made
+  // again with both pages opened now, and its pictures replace the kept ones: kept pictures never decide a change on their own.
   const one = async (width) => {
+    const key = `${pagePath}|${width}`;
+    const kept = before && (!axeRules?.length || axeBefore?.has(key)) ? await before.get(key) : null;
+    if (kept) {
+      const fixedErrors = [];
+      const fixedSide = { base: fixedBase, url: `${fixedBase}${pagePath}`, errors: fixedErrors, ...(axeRules?.length && { inspect: (page) => axeCounts(page, axeRules) }) };
+      const [fixedShots] = await pictureRounds(browser, viewOf(width), [fixedSide]);
+      const verdict = await gateVerdict(fixedShots, kept.shots);
+      const newErrors = [...new Set(fixedErrors)].filter((e) => !kept.errors.some((u) => u.includes(e)));
+      const invisible = verdict.changedPx === 0 && !verdict.sizeChanged && newErrors.length === 0;
+      if (invisible) {
+        let axe;
+        if (axeRules?.length) {
+          const b = axeBefore.get(key);
+          const after = fixedSide.inspected;
+          axe = b?.error || after?.error ? { width, error: b?.error ?? after?.error } : { width, before: b, after };
+        }
+        return { width, ...verdict, newErrors, invisible, beforeReused: true, ...((fixedSide.scrollCapped || kept.scrollCapped) && { scrollCapped: true }), ...(axe && { axe }) };
+      }
+    }
+    return fresh(width, key);
+  };
+  const fresh = async (width, key) => {
     const fixedErrors = [];
     const unfixedErrors = [];
     // axeRules: these axe rules are read on both sides in the visit the gate makes anyway (the unfixed side once per page and
@@ -252,16 +315,17 @@ export async function fixGate(browser, fixedBase, unfixedBase, pagePath, { width
       { base: unfixedBase, url: `${unfixedBase}${pagePath}`, errors: unfixedErrors, ...(read && !cached && { inspect: read }) },
     ];
     const [fixedShots, unfixedShots] = await pictureRounds(browser, viewOf(width), sides);
+    if (before) await before.set(key, { shots: unfixedShots, errors: unfixedErrors, scrollCapped: Boolean(sides[1].scrollCapped) }).catch(() => {});
     const verdict = await gateVerdict(fixedShots, unfixedShots);
     // A console error of the fixed page that no load of the unfixed page had.
     const newErrors = [...new Set(fixedErrors)].filter((e) => !unfixedErrors.some((u) => u.includes(e)));
     const invisible = verdict.changedPx === 0 && !verdict.sizeChanged && newErrors.length === 0;
     let axe;
     if (read) {
-      const before = cached ?? sides[1].inspected;
-      if (!cached && before && !before.error) axeBefore?.set(`${pagePath}|${width}`, before);
+      const unfixedAxe = cached ?? sides[1].inspected;
+      if (!cached && unfixedAxe && !unfixedAxe.error) axeBefore?.set(`${pagePath}|${width}`, unfixedAxe);
       const after = sides[0].inspected;
-      axe = before?.error || after?.error ? { width, error: before?.error ?? after?.error } : { width, before, after };
+      axe = unfixedAxe?.error || after?.error ? { width, error: unfixedAxe?.error ?? after?.error } : { width, before: unfixedAxe, after };
     }
     // scrollCapped: a side was never scrolled to its end (reported; the speed fixes count such a look as not conclusive).
     return { width, ...verdict, newErrors, invisible, ...(sides.some((s) => s.scrollCapped) && { scrollCapped: true }), ...(axe && { axe }) };
