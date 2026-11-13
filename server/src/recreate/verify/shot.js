@@ -3,7 +3,7 @@
 // visual difference measured two pictures of different moments. The picture is taken on a fresh page in which the page's own
 // timers are frozen (verify/exact/freeze.js: the rotators and carousels stay on their first state), scrolled through like a
 // visitor and back at the top with what the scroll revealed kept shown (capture/index.js settle), with its CSS animations and
-// transitions settled (animations: 'disabled') and its reactions to the window's size held while the picture is taken. The copy
+// transitions settled (verify/settle.js: one clear moment of every loop, the rest finished) and its reactions to the window's size held while the picture is taken. The copy
 // is rendered with its scripts off (verify/layout.js), so its first state is already the one a frozen original shows, with
 // every section shown.
 //
@@ -12,6 +12,7 @@
 // time limit. If it still does not finish, the capture takes the normal screenshot and says so (fullShotOf).
 import { freezeTimers, holdSizeReactions } from './exact/freeze.js';
 import { settle } from '../capture/index.js';
+import { settlePage } from './settle.js';
 
 /** Settle time before the picture: the page's own entrance effects end, and the lazy images it loads are in. */
 export const SETTLE_MS = 800;
@@ -68,10 +69,12 @@ export async function frozenFullShot(browser, url, view, { limitMs = FROZEN_LIMI
       const height = Math.max(1, Math.min(await page.evaluate(() => document.documentElement.scrollHeight), maxHeight));
       // The picture grows the window to the page's height: the page's own reactions to that are held (step 1 of Copy my site).
       await page.evaluate(() => { window.__sasHoldSize = true; }).catch(() => {});
+      // Every repeating animation at one clear moment (verify/settle.js): 'disabled' showed all words of a rotator at once.
+      await settlePage(page);
       const png = await page.screenshot({
         type: 'png',
         fullPage: true,
-        animations: 'disabled',
+        animations: 'allow',
         clip: { x: 0, y: 0, width: view.width, height },
       });
       const frozen = await page.evaluate(() => (window.__sasFrozen ? { intervals: window.__sasFrozen.intervals, timeouts: window.__sasFrozen.timeouts } : null)).catch(() => null);
@@ -103,10 +106,11 @@ export async function fullShotOf(browser, page, url, view, { maxHeight = 8000, f
     return { png: shot.png, frozen: true };
   } catch (err) {
     const reason = String(err?.message ?? err).split('\n')[0].trim();
+    // The capture's page was settled by its caller (capture/index.js) before its own pictures.
     const png = await page.screenshot({
       type: 'png',
       fullPage: true,
-      animations: 'disabled',
+      animations: 'allow',
       clip: { x: 0, y: 0, width: view.width, height: Math.max(1, Math.min(fallbackHeight, maxHeight)) },
     });
     return { png, frozen: false, reason };

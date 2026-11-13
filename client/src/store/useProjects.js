@@ -213,7 +213,15 @@ export const useProjects = create((set, get) => ({
    */
   async refreshSelected() {
     const id = get().selectedId;
-    if (!id) return;
+    // Nothing open (home, build mode): the list and the gallery are what is on screen. After a failed start (the API was
+    // restarting) the whole list is asked for again, which also clears "cannot reach its server".
+    if (!id) {
+      if (get().error || !get().projects.length) return get().load();
+      return get().loadOverviews();
+    }
+    // Jobs followed again: a progress stream given up after a long outage ("Lost connection") picks the job up again.
+    get().followJobs(id);
+    if (get().error) await get().reloadAudit(id);
     const [data, audit] = await Promise.all([api.getRecreate(id).catch(() => null), api.getAudit(id).catch(() => null)]);
     if (get().selectedId !== id) return;
     const known = get().recreateResults[id];
@@ -241,13 +249,23 @@ export const useProjects = create((set, get) => ({
     set({ previews: { ...get().previews, [id]: { ...get().previews[id], ...patch } } });
   },
 
-  /** Starts (or finds) the preview server of the project's latest recreate. */
-  async ensurePreview(id) {
+  /**
+   * Starts (or finds) the preview server of the project's latest recreate. When the API cannot be reached (it is restarting)
+   * the frame shown is kept and the preview is asked for again a few times, instead of replacing it with an error.
+   */
+  async ensurePreview(id, attempt = 0) {
     get().setPreview(id, { loading: true, error: null });
     try {
       const { preview } = await api.startPreview(id);
       get().setPreview(id, { ...preview, loading: false });
     } catch (err) {
+      if (isApiDown(err) && attempt < 4) {
+        get().setPreview(id, { loading: false });
+        setTimeout(() => {
+          if (get().selectedId === id) get().ensurePreview(id, attempt + 1);
+        }, 1500 * 2 ** attempt);
+        return;
+      }
       get().setPreview(id, { url: null, loading: false, error: err.message });
     }
   },
@@ -255,7 +273,7 @@ export const useProjects = create((set, get) => ({
   async reloadAudit(id) {
     try {
       const audit = normalizeAudit(id, await api.getAudit(id));
-      if (get().selectedId === id) set({ audit, auditLoading: false });
+      if (get().selectedId === id) set({ audit, auditLoading: false, error: null });
       set({ overviews: { ...get().overviews, [id]: { ...get().overviews[id], audit, loaded: true } } });
     } catch (err) {
       if (get().selectedId === id) set({ auditLoading: false, error: err.message });

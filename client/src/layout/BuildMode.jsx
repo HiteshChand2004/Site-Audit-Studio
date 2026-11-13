@@ -883,9 +883,22 @@ function BuildStep({ runId, firstRun, onRunId, onRetry, onBack, error }) {
   const [stopError, setStopError] = useState('');
 
   // The site's build: shown again after leaving the page, a reload or a server restart; one that is gone leaves for the plan.
+  // Only a build the server says is gone (404) is forgotten: an unreachable server (restarting) is asked again, so the saved
+  // site keeps its build instead of dropping back to the plan for good.
   useEffect(() => {
-    if (!runId || run?.id === runId) return;
-    api.getBuild(runId).then(setRun).catch(() => onRunId(null));
+    if (!runId || run?.id === runId) return undefined;
+    let alive = true;
+    let timer = 0;
+    const ask = (attempt = 0) => api.getBuild(runId).then((r) => alive && setRun(r)).catch((err) => {
+      if (!alive) return;
+      if (err?.status === 404) onRunId(null);
+      else if (attempt < 6) timer = setTimeout(() => ask(attempt + 1), 1000 * 2 ** attempt);
+    });
+    ask();
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
   }, [runId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Follow a running build.
@@ -1244,18 +1257,48 @@ export default function BuildMode() {
   };
 
   // Opening Build mode: the site worked on last, where it was left; else the list when there is one; else a new site.
+  // A server that cannot be reached (restarting) is asked again; it never opens a blank site in place of the one worked on
+  // (that also forgot which site it was).
+  const [openFailed, setOpenFailed] = useState('');
+  const [openRound, setOpenRound] = useState(0);
   useEffect(() => {
-    (async () => {
-      const found = await loadList();
+    let alive = true;
+    let timer = 0;
+    const retry = (attempt, err) => {
+      if (attempt < 5) timer = setTimeout(() => open(attempt + 1), 1000 * 2 ** attempt);
+      else setOpenFailed(err?.message || 'The app could not reach its server.');
+    };
+    const open = async (attempt = 0) => {
+      let found;
+      try {
+        found = await api.listBuildSites();
+      } catch (err) {
+        if (alive) retry(attempt, err);
+        return;
+      }
+      if (!alive) return;
+      setList(found);
       const last = recallSite();
       if (last && found.sites.some((s) => s.id === last)) {
-        const site = await api.getBuildSite(last).catch(() => null);
-        if (site) return show(site.id, site.state);
+        try {
+          const site = await api.getBuildSite(last);
+          if (alive) show(site.id, site.state);
+          return;
+        } catch (err) {
+          if (!alive) return;
+          if (err?.status !== 404) return retry(attempt, err);
+        }
       }
       if (found.sites.length || found.earlier.length) setView('sites');
       else show(null, null);
-    })();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    };
+    setOpenFailed('');
+    open();
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [openRound]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const runPlan = async (body) => {
     setBusy(PLAN_MESSAGES[0]);
@@ -1393,7 +1436,11 @@ export default function BuildMode() {
           )}
         </header>
 
-        {view === 'loading' && <Card title="Opening your sites…" />}
+        {view === 'loading' && (openFailed ? (
+          <Card title="Your sites could not be opened" actions={<Button icon={RefreshCw} onClick={() => setOpenRound((n) => n + 1)}>Try again</Button>}>
+            <p>{openFailed}</p>
+          </Card>
+        ) : <Card title="Opening your sites…" />)}
         {view === 'sites' && (
           <YourSites
             list={list}

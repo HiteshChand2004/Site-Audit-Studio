@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 
 export const PREVIEW_PREFIX = '/preview';
 
-/** @typedef {{ root: string, kind: 'copy' | 'as-is', scripts: boolean | 'inline', issuedAt: string }} PreviewEntry */
+/** @typedef {{ root: string, kind: 'copy' | 'as-is' | 'original', scripts: boolean | 'inline', site?: string, issuedAt: string }} PreviewEntry */
 
 /** @type {Map<string, PreviewEntry>} */
 const entries = new Map();
@@ -17,19 +17,33 @@ export const previewPath = (token) => `${PREVIEW_PREFIX}/${token}/`;
 
 /**
  * Issues a token for a folder. kind 'copy' = a build of ours (a strict content policy on top of the sandbox);
- * 'as-is' = the original's own code, which runs with the sandbox as its boundary.
- * @param {{ root: string, kind?: 'copy' | 'as-is', scripts?: boolean | 'inline' }} o
+ * 'as-is' = the original's own code, which runs with the sandbox as its boundary; 'original' = the live site itself, fetched
+ * from `site` on each request (recreate/originalPreview.js), with the same boundary.
+ * @param {{ root: string, kind?: 'copy' | 'as-is' | 'original', scripts?: boolean | 'inline', site?: string }} o
  */
-export function issuePreviewToken({ root, kind = 'copy', scripts = false }) {
+export function issuePreviewToken({ root, kind = 'copy', scripts = false, site }) {
   const token = randomBytes(18).toString('base64url');
-  entries.set(token, { root, kind, scripts, issuedAt: new Date().toISOString() });
+  entries.set(token, { root, kind, scripts, ...(site && { site }), issuedAt: new Date().toISOString() });
   return token;
 }
 
-/** The entry of a token, or null. Only the exact token (constant shape, no prefix match) resolves. */
-export const resolvePreviewToken = (token) => (typeof token === 'string' && /^[A-Za-z0-9_-]{24}$/.test(token) ? entries.get(token) ?? null : null);
+/** @type {Map<string, number>} token → when it last served something (what keeps a preview from being stopped as idle) */
+const lastUsed = new Map();
 
-export const revokePreviewToken = (token) => entries.delete(token);
+/** The entry of a token, or null. Only the exact token (constant shape, no prefix match) resolves. Resolving is using it. */
+export const resolvePreviewToken = (token) => {
+  const entry = typeof token === 'string' && /^[A-Za-z0-9_-]{24}$/.test(token) ? entries.get(token) ?? null : null;
+  if (entry) lastUsed.set(token, Date.now());
+  return entry;
+};
+
+/** When a token last served a file (0 when never). */
+export const previewTokenUsedAt = (token) => lastUsed.get(token) ?? 0;
+
+export const revokePreviewToken = (token) => {
+  lastUsed.delete(token);
+  return entries.delete(token);
+};
 
 /** For tests: every token issued. */
 export const previewTokenCount = () => entries.size;

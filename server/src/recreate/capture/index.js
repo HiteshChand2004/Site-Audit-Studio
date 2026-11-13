@@ -2,6 +2,7 @@
 // computed styles (snapshot.js), the network resources it loaded, and fold + full-page screenshots.
 // Output per page: capture/<slug>/<view>.json and capture/<slug>/<view>-{fold,full}.webp.
 import { fullShotOf } from '../verify/shot.js';
+import { resumePage, settlePage } from '../verify/settle.js';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { USER_AGENT } from '../../audit/http.js';
@@ -307,14 +308,18 @@ async function captureView(browser, pageInfo, view, dir, { timeout, motionBudget
       lap('scroll-linked');
     }
     lap('motion');
-    const fold = await page.screenshot({ type: 'png', animations: 'disabled' });
+    // One clear moment of every repeating animation (verify/settle.js), played again after the pictures: 'disabled' showed
+    // every word of a cycling headline on top of the others.
+    await settlePage(page);
+    const fold = await page.screenshot({ type: 'png', animations: 'allow' });
     const fullHeight = Math.max(1, Math.min(snapshot.scrollHeight, MAX_HEIGHT));
     // The visual check compares this picture with the copy, so it is taken in a frozen state: a fresh page whose own timers
     // (rotators, carousels, tickers) are stopped, at the top (verify/shot.js). A page served from a document of ours (a recovery
     // page) keeps the picture of this page, which a fresh page would not have.
     const shot = document
-      ? { png: await page.screenshot({ type: 'png', fullPage: true, animations: 'disabled', clip: { x: 0, y: 0, width: view.width, height: fullHeight } }), frozen: null }
+      ? { png: await page.screenshot({ type: 'png', fullPage: true, animations: 'allow', clip: { x: 0, y: 0, width: view.width, height: fullHeight } }), frozen: null }
       : await fullShotOf(browser, page, pageInfo.url, view, { maxHeight: MAX_HEIGHT, fallbackHeight: fullHeight });
+    await resumePage(page);
     const full = shot.png;
     const [foldInfo, fullInfo] = await Promise.all([
       encode(fold, path.join(dir, `${view.id}-fold.webp`)),

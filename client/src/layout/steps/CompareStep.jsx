@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, ArrowUpDown, ChevronLeft, ChevronRight, Columns2, Info, Monitor, RotateCw, ShieldAlert, Smartphone, Tablet } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, ArrowUpDown, ChevronLeft, ChevronRight, Columns2, Info, Monitor, RotateCw, Smartphone, Tablet } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/Surface.jsx';
 import { Segmented } from '../../components/common/Tabs.jsx';
@@ -7,14 +7,14 @@ import InfoTip from '../../components/common/InfoTip.jsx';
 import PreviewFrame, { VIEWPORTS } from '../../components/preview/PreviewFrame.jsx';
 import { api } from '../../api/client.js';
 import { apiUrl } from '../../api/base.js';
-import SitePreview, { FullPageFrame, LIVE_SANDBOX, liveAvailability, LiveFrame, ModeToggle } from '../../components/preview/SitePreview.jsx';
-import { compareSides, defaultPreviewMode, unavailableNote } from '../../components/preview/framing.js';
-import { useLiveAnswer } from '../../components/preview/useLiveAnswer.js';
+import SitePreview, { FullPageFrame, LiveFrame, ModeToggle } from '../../components/preview/SitePreview.jsx';
+import { compareSides } from '../../components/preview/framing.js';
 import { Pill } from '../../components/common/Score.jsx';
 import { matchRating, TERMS, VIEWPORT_NAMES } from '../../copy.js';
 import { pageOf, shownStack, outputsOf } from '../../stacks.js';
 import { useProjects } from '../../store/useProjects.js';
-import { useSyncScroll } from '../useSyncScroll.js';
+import { useServedAddress } from '../../components/preview/useServedAddress.js';
+import { frameScroller, useSyncScroll } from '../useSyncScroll.js';
 import { captureShot } from '../../siteData.js';
 import { fidelityPages } from '../../fidelity.js';
 import styles from '../Panel.module.css';
@@ -123,36 +123,40 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   const [sync, setSync] = useState(false);
   const [oldScroller, setOldScroller] = useState(null);
   const [newScroller, setNewScroller] = useState(null);
+  const [copyFrame, setCopyFrame] = useState(null);
+  const [origFrame, setOrigFrame] = useState(null);
+  // The live original, served through the app (server/src/recreate/originalPreview.js): shown whatever framing the site
+  // allows, and scrollable together with the copy (a frame of another site cannot be scrolled by the app).
+  const { url: origBase, error: origError, retry: retryOriginal } = useServedAddress(
+    () => api.originalPreview(project.id).then((r) => r.url),
+    [project.id, project.url],
+  );
   // An original as-is copy is shown from its own address (its preview server, behavior/preserve/asisPreview.js).
   const asIsCopy = Boolean(result?.asIs);
-  const [asIsUrl, setAsIsUrl] = useState(null);
-  useEffect(() => {
-    if (!asIsCopy || !result?.recreateId) return undefined;
-    let alive = true;
-    api.startAsIsPreview(project.id, result.recreateId).then((r) => alive && setAsIsUrl(r.url)).catch(() => alive && setAsIsUrl(null));
-    return () => { alive = false; };
-  }, [asIsCopy, project.id, result?.recreateId]);
-  useSyncScroll(oldScroller, newScroller, sync);
+  // Kept current like the original's: asked again while it fails and when the tab comes back (a restart ends every preview).
+  const { url: asIsUrl, error: asIsError, retry: retryAsIs } = useServedAddress(
+    asIsCopy && result?.recreateId ? () => api.startAsIsPreview(project.id, result.recreateId).then((r) => r.url) : null,
+    [asIsCopy, project.id, result?.recreateId],
+  );
   // What the copy's own script could not do inside the preview's sealed frame: the shim the preview serves first reports
   // counts, with the preview's token, from the sandboxed (origin "null") frame; nothing else is accepted as a report.
   const previewToken = (asIsCopy ? asIsUrl : preview?.url)?.match(PREVIEW_TOKEN)?.[1] ?? null;
   const [frameReport, setFrameReport] = useState(null);
-  // The copy's height as its own page reports it (the shim, while the copy is shown in its live frame): what lets
-  // "Scrolling together" draw the copy at full height when the run did not measure it. Not taken from the full-height
-  // frame itself, whose window is as tall as the page (a "100vh" section would make it grow without end).
-  const [reportedHeight, setReportedHeight] = useState(null);
-  const takeHeight = useRef(true);
+  // "Scrolling together" moves each live frame through the preview's script (useSyncScroll.js frameScroller): both keep their
+  // own window height, so a full-screen hero looks as it does on its own host.
+  const copyScroller = useMemo(() => (copyFrame && previewToken ? frameScroller(copyFrame, previewToken) : null), [copyFrame, previewToken]);
+  const origToken = origBase?.match(PREVIEW_TOKEN)?.[1] ?? null;
+  const origScroller = useMemo(() => (origFrame && origToken ? frameScroller(origFrame, origToken) : null), [origFrame, origToken]);
+  // Each side is either its live frame or its picture; only one of the two is on screen.
+  useSyncScroll(origScroller ?? oldScroller, copyScroller ?? newScroller, sync);
   useEffect(() => {
     setFrameReport(null);
-    setReportedHeight(null);
     if (!previewToken) return undefined;
     const onMessage = (e) => {
       const d = e.data;
       if (e.origin !== 'null' || !d || d.sasPreview !== 1 || d.token !== previewToken) return;
-      if (typeof d.height === 'number') {
-        if (takeHeight.current && Number.isFinite(d.height) && d.height > 0) setReportedHeight((h) => Math.max(h ?? 0, Math.min(Math.round(d.height), 200000)));
-        return;
-      }
+      // Its height and where it is scrolled to are for "Scrolling together", not reports of what went wrong.
+      if (typeof d.height === 'number' || typeof d.scroll === 'number') return;
       const count = (v) => (Number.isFinite(v) && v > 0 ? Math.min(Math.round(v), 999) : 0);
       setFrameReport({ failed: count(d.failed), errors: count(d.errors), blank: d.blank === true });
     };
@@ -189,15 +193,22 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
       ? { viewport: { width: vp.id }, full: { url: apiUrl(`/projects/${project.id}/recreate/${result.recreateId}/captures/${pageInfo.slug}/${vp.view}-full.webp`) } }
       : (!otherPage && audit?.screenshots?.views?.[vp.view]) || null)
     : undefined;
-  // Live only when the site can be framed and answers right now (a site that is down would draw a blank frame).
-  const live = useLiveAnswer(project.id, originalUrl, liveAvailability(audit, originalUrl));
+  // The original's page under the app's address: the same path and query as on the site.
+  const origSrc = (() => {
+    if (!origBase) return null;
+    try {
+      const u = new URL(originalUrl);
+      return `${origBase}${u.pathname.replace(/^\//, '')}${u.search}`;
+    } catch {
+      return null;
+    }
+  })();
+  // Live is always a choice: when the original is not ready its box says why (and offers to try again); the copy is live either way.
+  const live = { ok: true };
   const hasScreens = capturedViews.length > 0 || (!otherPage && Boolean(audit?.screenshots));
-  // One mode for both sides (compareSides): live on both when the original can be framed, whether or not they scroll
-  // together; pictures on both when it cannot. Either side's Live / Picture switch changes both.
-  const [mode, setMode] = useState('screenshot');
-  useEffect(() => {
-    setMode(defaultPreviewMode(live));
-  }, [audit?.analysisId, originalUrl, live.ok]);
+  // One mode for both sides (compareSides): live on both, whether or not they scroll together; pictures on both when the
+  // original cannot be opened. Either side's Live / Picture switch changes both.
+  const [mode, setMode] = useState('live');
 
   if (!result) {
     return (
@@ -224,13 +235,8 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   const src = ready ? `${copyUrl}${pageUrl(pageOf(result, shown, page).file)}` : null;
   const view = VIEWPORTS.find((v) => v.id === viewport)?.view;
   const fidPages = fidelityPages(result);
-  const measuredHeight = fidPages.find((p) => p.outPath === page)?.views?.[view]?.height?.generated ?? null;
-  const pageHeight = measuredHeight ?? reportedHeight;
-  const fullPage = sync && ready && pageHeight > 0;
-  takeHeight.current = !fullPage;
+  const pageHeight = fidPages.find((p) => p.outPath === page)?.views?.[view]?.height?.generated ?? null;
   const realOriginal = audit && !audit.isDummy;
-  // Live not available (the site blocks framing, or this app's own address): say so, and what is shown instead.
-  const originalNote = realOriginal ? unavailableNote(live, hasScreens) : null;
   const fidByPage = new Map(fidPages.map((p) => [p.outPath, p]));
   const pageIndex = Math.max(0, pages.indexOf(page));
   // The copy's own pictures (taken when its match was measured), per screen size.
@@ -245,20 +251,14 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
   const copyHasShots = Boolean(copyInfo?.slug && fidByPage.get(page)?.views);
   const sides = compareSides(mode, live, copyHasShots);
   const copyPicture = sides.copy === 'screenshot';
-  // Scrolling together with the original live: the app cannot scroll a frame of another site, so the original is drawn at
-  // its full height (measured when the copy was made, or by the check for the homepage) in a box the app scrolls.
-  const originalHeight = fidByPage.get(page)?.views?.[view]?.height?.original
-    ?? (!otherPage ? audit?.screenshots?.views?.[view]?.pageHeight : null) ?? null;
-  const originalFull = sync && sides.original === 'live' && originalHeight > 0;
   const frameNote = ready && !copyPicture ? previewLimitNote(frameReport) : null;
-  // Scrolling together draws a live page at full height; until its height is known that side cannot follow.
-  const syncNote = sync && ready && !copyPicture && !fullPage
-    ? (frameSandbox
-      ? 'Measuring how tall the copy’s page is, so both sides can scroll together…'
-      : 'This copy’s page height was not measured during the run, so it cannot scroll together with the original. Create the copy again to measure it.')
-    : sync && sides.original === 'live' && !originalFull
-      ? 'How tall the original’s page is was not measured for this screen size, so the original scrolls on its own. Choose Picture to scroll both together.'
-      : null;
+  // A copy whose frame runs a script is scrolled through it, at its own window height. One that runs none (a plain build)
+  // cannot be reached: it is drawn at its full measured height in a box the app scrolls, or cannot follow at all.
+  const liveSync = sync && ready && !copyPicture && Boolean(frameSandbox);
+  const fullPage = sync && ready && !copyPicture && !frameSandbox && pageHeight > 0;
+  const syncNote = sync && ready && !copyPicture && !liveSync && !fullPage
+    ? 'This copy’s page height was not measured during the run, so it cannot scroll together with the original. Create the copy again to measure it.'
+    : null;
 
   return (
     <div className={ws.stepBody}>
@@ -316,22 +316,20 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
             onViewportChange={setViewport}
             fit={Boolean(realOriginal)}
             viewportButtons={false}
-            overlay={originalNote && (<><ShieldAlert size={13} color="var(--warn)" aria-hidden="true" /><span>{originalNote}</span></>)}
             toolbar={realOriginal && <ModeToggle mode={sides.original} onChange={setMode} live={live} hasScreens={hasScreens} />}
           >
-            {realOriginal && (originalFull ? (
-              <FullPageFrame
-                key={`${originalUrl}-${viewport}`}
-                url={originalUrl}
-                width={viewport}
-                height={originalHeight}
-                scrollRef={setOldScroller}
-                sandbox={LIVE_SANDBOX}
-                title={`Live preview of ${originalUrl}`}
-                loadingText="Loading live page…"
-              />
+            {realOriginal && (sides.original === 'live' && origSrc ? (
+              <LiveFrame key={origSrc} url={origSrc} width={viewport} sandbox="allow-scripts" frameRef={setOrigFrame} title="The original site" loadingText="Loading the original…" />
+            ) : sides.original === 'live' ? (
+              origError ? (
+                <EmptyState icon={AlertTriangle} title="The live site could not be opened" action={<Button icon={RotateCw} onClick={retryOriginal}>Try again</Button>}>
+                  {origError} Choose Picture to see the picture taken when the copy was made.
+                </EmptyState>
+              ) : (
+                <EmptyState title="Opening the live site…">The original is being opened through this app. A job running on this computer can make this slower.</EmptyState>
+              )
             ) : (
-              <SitePreview url={originalUrl} audit={audit} mode={sides.original} viewport={viewport} scrollRef={sync ? setOldScroller : undefined} pageShot={pageShot} />
+              <SitePreview url={originalUrl} audit={audit} mode="screenshot" viewport={viewport} scrollRef={sync ? setOldScroller : undefined} pageShot={pageShot} />
             ))}
           </PreviewFrame>
         </section>
@@ -353,7 +351,7 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
               <SitePreview url={src ?? 'the copy'} audit={audit} mode="screenshot" viewport={viewport} scrollRef={sync ? setNewScroller : undefined} pageShot={copyPageShot} />
             ) : fullPage ? (
               <FullPageFrame
-                key={`${preview.recreateId}-${preview.startedAt}-${page}-${viewport}`}
+                key={`${copyUrl}-${page}-${viewport}`}
                 url={src}
                 width={viewport}
                 height={pageHeight}
@@ -363,8 +361,12 @@ export default function CompareStep({ project, audit, onGoCreate, focusPage }) {
                 loadingText="Loading the copy…"
               />
             ) : ready ? (
-              <LiveFrame key={`${preview.recreateId}-${preview.startedAt}`} url={src} width={viewport} sandbox={frameSandbox} title="The new copy" loadingText="Loading the copy…" />
-            ) : preview?.error ? (
+              <LiveFrame key={copyUrl} url={src} width={viewport} sandbox={frameSandbox} title="The new copy" loadingText="Loading the copy…" frameRef={frameSandbox ? setCopyFrame : undefined} />
+            ) : asIsCopy && asIsError ? (
+              <EmptyState icon={AlertTriangle} title="The copy could not be opened" action={<Button icon={RotateCw} onClick={retryAsIs}>Try again</Button>}>
+                {asIsError}
+              </EmptyState>
+            ) : !asIsCopy && preview?.error ? (
               <EmptyState icon={AlertTriangle} title="The preview could not start" action={<Button icon={RotateCw} onClick={() => ensurePreview(project.id)}>Try again</Button>}>
                 {preview.error}
               </EmptyState>

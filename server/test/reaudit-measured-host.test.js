@@ -77,6 +77,47 @@ test('answers pass through unchanged, after the host latency, at the phone throu
   }
 });
 
+test('an answer\'s headers leave after the latency even while the link is busy with another download', async () => {
+  const up = await upstream();
+  const host = await openMeasuredHost(up.origin, 'mobile');
+  try {
+    // Four answers at once (a browser opens up to six connections): each one's headers come after the latency alone. Before,
+    // they left with the first chunk of the body, each in its turn on the link: 136 / 219 / 296 / 374 ms.
+    const t0 = Date.now();
+    const answers = await Promise.all([0, 1, 2, 3].map(() => fetch(`${host.origin}/big`).then((res) => ({ res, headersAt: Date.now() - t0 }))));
+    for (const { res } of answers) assert.equal(res.status, 200);
+    // Compared among themselves, so a busy test machine (which delays all four alike) does not decide: they come together,
+    // not one link turn (~80 ms for 16 KB at 1.6 Mbit/s) apart.
+    const at = answers.map((a) => a.headersAt);
+    assert.ok(Math.max(...at) - Math.min(...at) < 60, `headers together after the latency, not in turns on the link (${at.join(' / ')} ms)`);
+    await Promise.all(answers.map(({ res }) => res.arrayBuffer()));
+  } finally {
+    await host.close();
+    await up.close();
+  }
+});
+
+test('reset() ends what an earlier run left going, so the next run starts on an idle link', async () => {
+  const up = await upstream();
+  const host = await openMeasuredHost(up.origin, 'mobile');
+  try {
+    // A download that keeps the link for ~5 s (five /big files), its client still connected and reading.
+    const left = Promise.all([0, 1, 2, 3, 4].map(() => fetch(`${host.origin}/big`).then((r) => r.arrayBuffer()).catch(() => 'ended')));
+    await new Promise((r) => setTimeout(r, 300));
+    const busy = await timed(`${host.origin}/nowhere`);
+    assert.ok(busy.totalMs > 300, `without a reset the next answer waits behind them (${busy.totalMs} ms)`);
+    host.reset();
+    const t0 = Date.now();
+    const res = await fetch(`${host.origin}/nowhere`);
+    await res.text();
+    assert.ok(Date.now() - t0 < HOST_LATENCY_MS + 120, `after reset() an answer takes the latency alone (${Date.now() - t0} ms)`);
+    assert.ok((await left).every((x) => x === 'ended'), 'the downloads left over were ended');
+  } finally {
+    await host.close();
+    await up.close();
+  }
+});
+
 test('the computer profile is faster, and the description names every value', async () => {
   const up = await upstream();
   const host = await openMeasuredHost(up.origin, 'desktop');

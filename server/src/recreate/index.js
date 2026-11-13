@@ -17,7 +17,7 @@ import { maxParallel, parallelism } from '../audit/resources.js';
 import { TimeoutError } from '../audit/util.js';
 import { createInterrupts, extendableTimeout } from './interrupts.js';
 import { onWaiting } from '../jobs/context.js';
-import { analysisWarnings, baseUrlOf, isAllPages, latestAnalysis, pageLimitOf, SITE_PAGE_CAP } from './inputs.js';
+import { analysisWarnings, baseUrlOf, copyPageCap, isAllPages, latestAnalysis, pageLimitOf, SITE_PAGE_CAP } from './inputs.js';
 import { RecreateError } from './errors.js';
 import { CANVAS_RENDERED_MESSAGE } from '../detection/siteType.js';
 import { assetsStage } from './assets/index.js';
@@ -208,8 +208,9 @@ async function recreate({
     // (the setting still decides for an ordinary copy, and the safety cap still applies).
     // The "One page" option was removed: an old projects.page_url value no longer limits a copy to one page.
     // An as-is copy takes exactly the pages the user chose (discover.js include): as many as there are.
-    pageLimit: asIs ? asIs.pages.length : exact ? SITE_PAGE_CAP - 1 : pageLimitOf(project.recreate_pages),
-    allPages: !asIs && (exact || isAllPages(project.recreate_pages)),
+    // SAS_COPY_MAX_PAGES caps an ordinary copy (an as-is copy's pages are capped where they are chosen, asIsPagesOf).
+    pageLimit: asIs ? asIs.pages.length : exact ? SITE_PAGE_CAP - 1 : Math.min(pageLimitOf(project.recreate_pages), (copyPageCap() ?? SITE_PAGE_CAP) - 1),
+    allPages: !asIs && (exact || (isAllPages(project.recreate_pages) && copyPageCap() == null)),
     include: asIs ? new Set(asIs.pages.map((u) => pageKey(u))) : null,
     asIs,
     exact,
@@ -249,6 +250,10 @@ async function recreate({
     },
   };
   ctx.report.baseUrl = ctx.baseUrl;
+  const cap = copyPageCap();
+  if (cap != null && !asIs && !exact && pageLimitOf(project.recreate_pages) > cap - 1) {
+    ctx.report.warnings.push(`This server copies at most ${cap} pages per copy (SAS_COPY_MAX_PAGES), so the other pages of the site link to a notice page in the copy.`);
+  }
   // Without the new site's address the full addresses of the copy (canonical, sitemap, link previews, structured data)
   // can only name the original site: said plainly (the app asks for the address before a copy is made, full-site E.1).
   if (!project.target_domain) {

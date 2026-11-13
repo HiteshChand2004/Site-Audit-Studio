@@ -56,6 +56,10 @@ function createLink(kbps) {
       nextFree = start + bytes / bytesPerMs;
       return nextFree;
     },
+    /** The link is free now (nothing booked on it any more). */
+    clear() {
+      nextFree = 0;
+    },
   };
 }
 
@@ -99,6 +103,11 @@ export async function openMeasuredHost(upstreamOrigin, device, o = {}) {
           if (res.destroyed) return;
           res.writeHead(ur.statusCode, headers);
           if (req.method === 'HEAD' || !body.length) { res.end(); return; }
+          // The headers leave now, after the latency alone. Node otherwise holds them until the first chunk of the body, which
+          // waits for its turn on the shared link: the time to first byte then included every other download in flight, and
+          // Lighthouse took that queue for the server's own response time (215–327 ms estimated instead of 50) and added it to
+          // every request it simulated. Waiting on the link is transfer time, not server time.
+          res.flushHeaders();
           for (let i = 0; i < body.length && !res.destroyed; i += CHUNK) {
             const piece = body.subarray(i, Math.min(i + CHUNK, body.length));
             await sleepUntil(link.reserve(piece.length));
@@ -116,6 +125,12 @@ export async function openMeasuredHost(upstreamOrigin, device, o = {}) {
     req.pipe(up);
   });
   server.keepAliveTimeout = 5000;
+  // The connections open now: reset() ends them, so a run never shares the link with what an earlier run left behind.
+  const sockets = new Set();
+  server.on('connection', (s) => {
+    sockets.add(s);
+    s.on('close', () => sockets.delete(s));
+  });
 
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -128,6 +143,17 @@ export async function openMeasuredHost(upstreamOrigin, device, o = {}) {
     device,
     kbps,
     latencyMs,
+    /**
+     * Ends every connection and frees the link, before a run. A run that ended with large files still on their way (sankalpam.ai:
+     * megabytes of pictures on a 1.6 Mbit/s link) left them going after its browser was gone, and every later run on this host
+     * waited behind them: the same 408 KB bundle took 2.2 s at the start of one re-audit and 16.7 s an hour into it, and the
+     * copy's host, which had served one more run, was always about one bundle further behind than the original's.
+     */
+    reset() {
+      for (const s of sockets) s.destroy();
+      sockets.clear();
+      link.clear();
+    },
     close: () => new Promise((resolve) => { server.closeAllConnections?.(); server.close(() => resolve()); }),
   };
 }

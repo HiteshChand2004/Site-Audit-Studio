@@ -25,7 +25,9 @@ import { NETWORK_WAIT_MS } from '../../interrupts.js';
 /** Largest file the lift downloads at build time (bytes). */
 export const LIFT_MAX_BYTES = 25 * 1024 * 1024;
 /** What the guarded download expects for each kind of file (assets/download.js). */
-const DOWNLOAD_KIND = { media: 'media', icon: 'icon', style: 'image', script: 'image' };
+// A web app manifest is JSON, which an icon download refuses as "not an asset" (own360.ai's /manifest.json never reached the
+// copy, and every page of it asked for the missing file): it is downloaded as data, which accepts JSON.
+const DOWNLOAD_KIND = { media: 'media', icon: 'icon', manifest: 'data', style: 'image', script: 'image' };
 
 /** Most assets a page's scripts may name that the record lacks (downloaded at build time). */
 export const JS_ASSET_LIMIT = 60;
@@ -77,10 +79,18 @@ const EXT_OF_TYPE = { 'image/webp': '.webp', 'image/avif': '.avif', 'image/jpeg'
  * (a responsive variant) are two files: the query's hash is part of the name. The extension follows the content type when
  * the record (or a download) knows it, so a WebP served from a .png address is named .webp.
  */
-export function localPathOf(url, type = null) {
+export function localPathOf(url, type = null, kind = null) {
   const u = new URL(url);
   let clean = decodeURIComponent(u.pathname);
-  if (clean.endsWith('/')) clean += 'index.html';
+  if (clean.endsWith('/')) {
+    // An address ending in / is a document only when its content is one. A script or stylesheet served there (a CDN's root
+    // with a query: cdn.tailwindcss.com/?plugins=…) named index.html is served as HTML by every host, and the browser refuses
+    // to run it ("tailwind is not defined" on every page of botza's copy). Its content type names it; failing that, the tag
+    // that loads it.
+    const mime = String(type ?? '').split(';')[0].trim().toLowerCase();
+    const ext = EXT_ANY_TYPE[mime] ?? (/html/.test(mime) ? null : EXT_OF_KIND[kind]);
+    clean += ext ? `index${ext}` : 'index.html';
+  }
   if (u.search) {
     const hash = createHash('sha256').update(u.search).digest('hex').slice(0, 8);
     const dot = clean.lastIndexOf('.');
@@ -99,6 +109,21 @@ export function localPathOf(url, type = null) {
   }
   return fileSafePath(clean);
 }
+
+/** The extension of a file a tag loads as code, when its content type does not say (localPathOf). */
+const EXT_OF_KIND = { script: '.js', style: '.css' };
+/** Kinds of file a page runs or applies: an HTML page in their place breaks the page. */
+const CODE_KINDS = new Set(['script', 'style']);
+const isHtmlType = (t) => /^text\/html\b/i.test(String(t ?? '').trim());
+/**
+ * A file name that carries a build hash: a part of 8+ characters after a - . _ or ~ holding a digit or an upper-case letter
+ * (index-DdEuaEXJ.js, main.4f2a9c1b.css, favicon-32x32-R45_galS.png). A plain word (my-analytics.js, apple-touch-icon.png) is
+ * not one, and a page (.html) never is.
+ */
+export const hashedName = (name) => {
+  const m = String(name ?? '').match(/[-.~_]([A-Za-z0-9_-]{8,})\.([a-z0-9]+)$/i);
+  return !!m && !/^html?$/i.test(m[2]) && /[0-9A-Z]/.test(m[1]);
+};
 
 /** Characters no file name may hold on some system (Windows forbids them all; a decoded %2F or %5C would be a folder). */
 const UNSAFE_IN_NAME = /[<>:"\\|?*\u0000-\u001f]/g;
@@ -218,6 +243,7 @@ export function headerPreloads(header) {
 function kindOfTag(tag, rel = '', as = '') {
   if (tag === 'script') return 'script';
   if (tag === 'link' && /stylesheet/.test(rel)) return 'style';
+  if (tag === 'link' && /(^|\s)manifest(\s|$)/.test(rel)) return 'manifest';
   if (tag === 'link' && /icon|manifest/.test(rel)) return 'icon';
   // A preload is the kind it names: a font or a picture copied as a "script" would be read and rewritten as script text later.
   if (tag === 'link' && /(^|\s)preload/.test(rel) && /^font$/i.test(as ?? '')) return 'font';
@@ -272,7 +298,7 @@ export function pageDocumentOf(recordIndex, pageUrl) {
   return (key && docs.find((e) => keyOf(e.url) === key)) ?? null;
 }
 
-export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fetchImpl = downloadAsset, entry = 'index.html', pageLinks = new Map(), networkRetry = createNetworkRetry() }) {
+export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fetchImpl = downloadAsset, entry = 'index.html', pageLinks = new Map(), networkRetry = createNetworkRetry(), lifted = [] }) {
   const recordDir = path.join(captureRoot, '.network');
   const recordIndex = (await readRecordIndex(recordDir)) ?? { entries: [] };
   /** @type {Map<string, any>} */
@@ -383,10 +409,67 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   const dropped = [];
   /** @type {{ family: string, from: string }[]} faces given the recorded file of the same font */
   const matchedBy = [];
+  /** @type {{ url: string, to: string, kind: string, reason: string }[]} code addresses answered with HTML, given their real file */
+  const healed = [];
+  /**
+   * The site's own file for an address its server does not serve the file at (it answers its HTML page, or nothing): a recorded
+   * file of the same name, on the same origin, of the right type. Only a name carrying a build hash (index-DdEuaEXJ.js,
+   * favicon-32x32-R45_galS.png), so the match names the same build output, and only when exactly one distinct file has that
+   * name; null otherwise.
+   */
+  const codeTwinOf = (abs, kind) => {
+    let u;
+    try {
+      u = new URL(abs);
+    } catch {
+      return null;
+    }
+    const name = u.pathname.split('/').pop() ?? '';
+    if (!hashedName(name)) return null;
+    const found = new Map();
+    for (const e of byUrl.values()) {
+      if (e.status !== 200 || !e.sha || isHtmlType(e.type)) continue;
+      let v;
+      try {
+        v = new URL(e.url);
+      } catch {
+        continue;
+      }
+      if (v.origin !== u.origin || v.pathname === u.pathname || v.pathname.split('/').pop() !== name) continue;
+      const right = kind === 'style' ? /css/i.test(e.type ?? '') || e.kind === 'style'
+        : kind === 'script' ? /javascript|ecmascript/i.test(e.type ?? '') || e.kind === 'script'
+          : true; // an icon, a picture, a font, a manifest: any file that is not a page (checked above)
+      if (right) found.set(e.sha, e.url.split('#')[0]);
+    }
+    return found.size === 1 ? [...found.values()][0] : null;
+  };
+  /** The same, among the files earlier pages of this copy brought in (`lifted`: { url, local }): one distinct file, or null. */
+  const liftedTwinOf = (abs) => {
+    let u;
+    try {
+      u = new URL(abs);
+    } catch {
+      return null;
+    }
+    const name = u.pathname.split('/').pop() ?? '';
+    if (!hashedName(name)) return null;
+    const found = new Map();
+    for (const f of lifted) {
+      let v;
+      try {
+        v = new URL(f.url);
+      } catch {
+        continue;
+      }
+      if (v.origin !== u.origin || v.pathname === u.pathname || v.pathname.split('/').pop() !== name || !f.local) continue;
+      found.set(f.sha256 ?? f.local, f);
+    }
+    return found.size === 1 ? [...found.values()][0] : null;
+  };
 
   /** Copies one recorded file to its path on the copy. */
   const fromRecord = async (abs, entry, kind) => {
-    const local = localPathOf(abs, entry.type);
+    const local = localPathOf(abs, entry.type, kind);
     const target = path.join(outDir, local);
     await mkdir(path.dirname(target), { recursive: true });
     await copyFile(path.join(recordDir, 'files', entry.sha), target);
@@ -447,7 +530,18 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
       downloads.failedUrls.push({ url: abs, reason: res.reason });
       return null;
     }
-    const local = localPathOf(abs, res.mime);
+    // A script or stylesheet the original's server answers with an HTML page: the file of the same name the site serves
+    // elsewhere, when there is exactly one (codeTwinOf); else it is kept as the original has it, and said so.
+    if (CODE_KINDS.has(kind) && isHtmlType(res.mime)) {
+      const twin = codeTwinOf(abs, kind);
+      if (twin) {
+        healed.push({ url: abs, to: twin, kind, reason: 'the original answers this address with an HTML page; the file of the same name it serves elsewhere is used' });
+        downloads.ok++;
+        return fromRecord(twin, byUrl.get(twin), kind);
+      }
+      blockers.push({ url: abs, reason: 'the original answers this script or stylesheet with an HTML page (broken on the original too), and no file of its name was found' });
+    }
+    const local = localPathOf(abs, res.mime, kind);
     const target = path.join(outDir, local);
     await mkdir(path.dirname(target), { recursive: true });
     await copyFile(res.tmp, target);
@@ -470,10 +564,37 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
     }
     if (excluded.has(abs)) return null;
     const entry = byUrl.get(abs);
+    // The record holds an HTML page under a script's or stylesheet's address (a single-page app answering an address it does
+    // not have with its own page: ./assets/index-x.js resolved under a sub-folder). Copied as it is, that page is the copy's
+    // script, and the page stays blank (sankalpam.ai /yatra/destinations/). The site's own file of that name is used instead.
+    if (entry && CODE_KINDS.has(kind) && isHtmlType(entry.type)) {
+      const twin = codeTwinOf(abs, kind);
+      if (twin) {
+        healed.push({ url: abs, to: twin, kind, reason: 'the original answers this address with an HTML page; the file of the same name it serves elsewhere is used' });
+        return fromRecord(twin, byUrl.get(twin), kind);
+      }
+      blockers.push({ url: abs, reason: 'the original answers this script or stylesheet with an HTML page (broken on the original too), and no file of its name was found' });
+    }
     if (entry) return fromRecord(abs, entry, kind);
     if (fetch) {
       const local = await download(abs, kind);
       if (local) return local;
+    }
+    // Not in the record and not served at this address (the original answers its HTML page, or an error), but the site serves
+    // a file of the same build-hashed name elsewhere (sankalpam.ai: ./assets/favicon-32x32-R45_galS.png under /yatra/): that one,
+    // from the record, else from what an earlier page of this copy already brought in.
+    if (!entry) {
+      const why = 'the original does not serve this file at this address; the file of the same name it serves elsewhere is used';
+      const twin = codeTwinOf(abs, kind);
+      if (twin) {
+        healed.push({ url: abs, to: twin, kind, reason: why });
+        return fromRecord(twin, byUrl.get(twin), kind);
+      }
+      const earlier = liftedTwinOf(abs);
+      if (earlier) {
+        healed.push({ url: abs, to: earlier.url, kind, reason: why });
+        return earlier.local;
+      }
     }
     blockers.push({ url: abs, reason: fetch ? 'not in the record and could not be downloaded' : 'not in the network record' });
     return raw;
@@ -553,7 +674,10 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
     if (!(COPIED_KINDS.has(entry.kind) || (entry.kind === 'data' && isMediaType(entry.type))) || entry.status !== 200 || excluded.has(entry.url.split('#')[0])) continue;
     const abs = entry.url.split('#')[0];
     if (files.some((f) => f.url === abs)) continue;
-    const local = localPathOf(abs, entry.type);
+    // An HTML page recorded under a code address whose real file the copy uses (codeTwinOf) is not written there: a runtime
+    // importing that address would run the page as code.
+    if (CODE_KINDS.has(entry.kind) && isHtmlType(entry.type) && codeTwinOf(abs, entry.kind)) continue;
+    const local = localPathOf(abs, entry.type, entry.kind);
     const target = path.join(outDir, local);
     await mkdir(path.dirname(target), { recursive: true });
     await copyFile(path.join(recordDir, 'files', entry.sha), target);
@@ -624,7 +748,7 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
 
   // A web app manifest names icons the page never loads itself (the browser fetches them for the install prompt): every
   // icon it names is a file the copy uses, so it is copied or downloaded like any other.
-  for (const f of files.filter((x) => x.kind === 'icon' && /\.webmanifest$|\.json$/i.test(x.local))) {
+  for (const f of files.filter((x) => (x.kind === 'manifest' || x.kind === 'icon') && /\.webmanifest$|\.json$/i.test(x.local))) {
     const manifest = JSON.parse(await readFile(path.join(outDir, f.local), 'utf8').catch(() => 'null') ?? 'null');
     for (const icon of manifest?.icons ?? []) {
       if (!icon?.src) continue;
@@ -860,5 +984,5 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   // Downloads started ahead and never asked for finish before their folder goes.
   await prefetch.settle();
   await rm(tmp, { recursive: true, force: true });
-  return { document: { url: doc.url, sha256: doc.sha }, files, removed, blockers, downloads, dropped, matchedBy, ranged, headerPreloads: headerTags.length };
+  return { document: { url: doc.url, sha256: doc.sha }, files, removed, blockers, downloads, dropped, matchedBy, ranged, healed, headerPreloads: headerTags.length };
 }

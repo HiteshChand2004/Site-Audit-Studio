@@ -1,13 +1,13 @@
 // What a Recreate job starts from: the project's latest completed analysis and its settings.
 import { db } from '../db/index.js';
 import { sameSite } from '../audit/util.js';
+import { SITE_PAGE_CAP } from './pageCap.js';
 
 export const STALE_ANALYSIS_DAYS = 7;
 // projects.recreate_pages: pages besides the homepage, or ALL_PAGES (every page of the site, the default for new projects).
 export const ALL_PAGES = -1;
-// The most pages one recreate takes, also in "All pages" mode: a safety cap for sites with thousands of URLs. Links to pages
-// beyond it get a local notice page, never the live site.
-export const SITE_PAGE_CAP = 300;
+export { SITE_PAGE_CAP };
+export { copyPageCap } from './pageCap.js';
 export const MAX_RECREATE_PAGES = SITE_PAGE_CAP;
 
 const latestDone = db.prepare(`

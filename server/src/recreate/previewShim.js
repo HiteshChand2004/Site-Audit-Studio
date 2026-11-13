@@ -425,6 +425,31 @@ const shim = function () {
     else document.addEventListener('DOMContentLoaded', watchBody);
   }
   window.addEventListener('load', heightLater);
+
+  // "Scrolling together": the app cannot reach into this frame (another origin), so it asks with a message and is told where
+  // the page stands, as a share of the way down (0–1, a number, nothing else). The page keeps its own window height, so a
+  // full-screen section looks as it does on its own host (a frame as tall as the page stretched it over the whole page).
+  function scroller() { return document.scrollingElement || document.documentElement; }
+  function share() {
+    var el = scroller();
+    var max = el.scrollHeight - window.innerHeight;
+    return max > 0 ? Math.min(1, Math.max(0, el.scrollTop / max)) : 0;
+  }
+  var scrollFrame = 0;
+  window.addEventListener('scroll', function () {
+    if (scrollFrame) return;
+    scrollFrame = requestAnimationFrame(function () {
+      scrollFrame = 0;
+      try { parent.postMessage({ sasPreview: 1, token: TOKEN, scroll: share() }, '*'); } catch (e) { /* nobody listening */ }
+    });
+  }, { passive: true });
+  window.addEventListener('message', function (e) {
+    var d = e.data;
+    if (e.source !== parent || !d || d.sasPreview !== 1 || typeof d.scrollTo !== 'number' || !(d.scrollTo >= 0 && d.scrollTo <= 1)) return;
+    var el = scroller();
+    // 'instant' beats a page's own `scroll-behavior: smooth`, which would make the copy trail the original.
+    try { window.scrollTo({ top: d.scrollTo * Math.max(0, el.scrollHeight - window.innerHeight), behavior: 'instant' }); } catch (err) { el.scrollTop = d.scrollTo * Math.max(0, el.scrollHeight - window.innerHeight); }
+  });
 };
 /* eslint-enable no-var, prefer-arrow-callback, func-names */
 

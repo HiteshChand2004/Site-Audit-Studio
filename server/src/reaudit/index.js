@@ -205,14 +205,35 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
     let lighthousePages = null;
     if (isAsIs && !skip.some((s) => /^lighthouse/.test(s))) {
       const proxy = await startEgressProxy(netPolicy);
+      // The original measured the way the copy is: its own files as the capture lifted them (as-is/lifted), served on this
+      // computer through a measurement host of its own with the same latency and throughput. Measured live, the original came
+      // from its CDN over HTTP/2 with no host in front, the copy through the throttled HTTP/1.1 host: the two sides differed by
+      // the network alone (the same files scored 99 against 94, 86 against 77). A page with no lifted file is measured live.
+      const lifted = await openLiftedOriginal(recreateDir(project.id, recreateId)).catch(() => null);
+      // The egress proxy lets Lighthouse reach loopback only on the ports the policy names: the lifted original's too.
+      const liftedPorts = lifted ? [lifted.origin, lifted.measured.mobile.origin, lifted.measured.desktop.origin].map((o) => Number(new URL(o).port)) : [];
+      for (const port of liftedPorts) netPolicy.internalPorts.add(port);
       try {
         // The original's address of each copied page (report.asIs.pages, by output path), else the path on the site.
         const asIsPages = new Map((report.asIs?.pages ?? []).map((p) => [p.outPath, p.url]));
+        const pageList = [];
+        for (const p of outputPageList) {
+          const url = asIsPages.get(p.outPath) ?? new URL(p.path, project.url).href;
+          const own = lifted ? await lifted.pathFor(new URL(url).pathname) : null;
+          pageList.push({ path: p.path, url, copyUrl: `${served.origin}${p.path}`,
+            ...(own && { originalUrl: `${lifted.origin}${own}`, originalFrom: 'lifted', originalCacheDir: path.join(recreateDir(project.id, recreateId), 'as-is', LIFTED_RUNS_DIR) }) });
+        }
+        const hostOf = (url, mode) => (lifted && url.startsWith(lifted.origin) ? lifted.measured[mode].origin + url.slice(lifted.origin.length) : measuredUrl(url, mode));
         lighthousePages = await compareLighthousePages({
-          pages: outputPageList.map((p) => ({ path: p.path, url: asIsPages.get(p.outPath) ?? new URL(p.path, project.url).href, copyUrl: `${served.origin}${p.path}` })),
+          pages: pageList,
           cacheDir: path.join(projectDir(project.id), 'lighthouse-original'),
           outDir: path.join(reauditDir(project.id, recreateId, reauditId), 'lighthouse-pages'),
-          run: (url, mode, outFile) => runLighthouse(measuredUrl(url, mode), mode, { timeout: RUN_TIMEOUT_MS, outFile, proxy: proxy.url, signal }),
+          // Every run starts on an idle link: both sides' hosts for this device drop what an earlier run left going (measuredHost reset).
+          run: (url, mode, outFile) => {
+            measured[mode].reset();
+            lifted?.measured[mode].reset();
+            return runLighthouse(hostOf(url, mode), mode, { timeout: RUN_TIMEOUT_MS, outFile, proxy: proxy.url, signal });
+          },
           progress: (fraction, message) => progress('lighthouse-pages', fraction, message),
           signal,
         });
@@ -222,6 +243,8 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
         lighthousePages = { pages: [], worse: [], unscored: [], extraRunPages: [], skipped: [], runs: { original: 0, copy: 0, reusedOriginal: 0 }, errors: [{ path: '*', mode: '*', error: String(err?.message ?? err).split('\n')[0].slice(0, 200) }] };
       } finally {
         await proxy.close().catch(() => {});
+        await lifted?.close().catch(() => {});
+        for (const port of liftedPorts) netPolicy.internalPorts.delete(port);
       }
     }
     progress('lighthouse-pages', 1);
@@ -278,7 +301,7 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
     const better = betterThanOriginal(lighthousePages);
     if (better.line) checklist.notes.unshift(better.line);
     checklist.lighthousePages = {
-      pages: lighthousePages.pages.map((p) => ({ path: p.path, modes: Object.fromEntries(Object.entries(p.modes).map(([m, v]) => [m, v.error ? { error: v.error } : { original: v.original, copy: v.copy, worse: v.worse, noise: v.noise ?? [], unscored: v.unscored, blankRuns: v.blankRuns, runs: v.runs, accepted: v.accepted, extra: v.extra, runScores: v.runScores }])) })),
+      pages: lighthousePages.pages.map((p) => ({ path: p.path, originalFrom: p.originalFrom ?? 'live', modes: Object.fromEntries(Object.entries(p.modes).map(([m, v]) => [m, v.error ? { error: v.error } : { original: v.original, copy: v.copy, worse: v.worse, noise: v.noise ?? [], unscored: v.unscored, blankRuns: v.blankRuns, copyMissing: v.copyMissing ?? null, brokenRuns: v.brokenRuns ?? null, originalBlank: v.originalBlank ?? null, runs: v.runs, accepted: v.accepted, extra: v.extra, runScores: v.runScores }])) })),
       worse: lighthousePages.worse,
       unscored: lighthousePages.unscored,
       extraRunPages: lighthousePages.extraRunPages,
@@ -338,6 +361,55 @@ export function questionsByPageOf(crawl) {
 
 /** The copy's measured motion of a re-check (its probes: reveal, loops, hover, clicks, feeds, pointer), per page slug. */
 export const NEW_MOTION_FILE = 'motion-new.json';
+
+/** Where the lifted original's Lighthouse runs are kept, beside the lifted files (they are this copy's original, not the live site's). */
+export const LIFTED_RUNS_DIR = 'lighthouse-lifted';
+
+/**
+ * The lifted original (as-is/lifted of a recreate) served for Lighthouse: its own server and one measurement host per device,
+ * like the copy's. null when the recreate has no lifted folder (a rebuilt copy, an older one).
+ * `pathFor(pathname)` = the address of that page's document in the folder, as its server answers it without a redirect (a
+ * folder page with its slash: a redirect would cost the original's side alone a round trip), or null when it has none.
+ * @param {string} folder  the recreate's folder
+ */
+export async function openLiftedOriginal(folder) {
+  const dir = path.join(folder, 'as-is', 'lifted');
+  if (!(await stat(dir).then((s) => s.isDirectory(), () => false))) return null;
+  const served = await serveCopy(dir);
+  const origin = new URL(served.url).origin;
+  const hosts = [];
+  try {
+    const measured = { mobile: await openMeasuredHost(origin, 'mobile').then((h) => (hosts.push(h), h)), desktop: await openMeasuredHost(origin, 'desktop').then((h) => (hosts.push(h), h)) };
+    const isFile = (f) => stat(f).then((s) => s.isFile(), () => false);
+    return {
+      dir,
+      origin,
+      measured,
+      async pathFor(pathname) {
+        let rel;
+        try {
+          rel = decodeURIComponent(pathname).replace(/^\/+/, '');
+        } catch {
+          return null;
+        }
+        const file = path.resolve(dir, rel);
+        if (file !== dir && !file.startsWith(dir + path.sep)) return null;
+        if (!rel || rel.endsWith('/')) return (await isFile(path.join(file, 'index.html'))) ? pathname : null;
+        if (await isFile(path.join(file, 'index.html'))) return `${pathname}/`;
+        if (await isFile(`${file}.html`)) return pathname;
+        return /\.html?$/i.test(rel) && (await isFile(file)) ? pathname : null;
+      },
+      close: async () => {
+        await Promise.all(hosts.map((h) => h.close().catch(() => {})));
+        await served.close();
+      },
+    };
+  } catch (err) {
+    await Promise.all(hosts.map((h) => h.close().catch(() => {})));
+    await served.close().catch(() => {});
+    throw err;
+  }
+}
 
 /**
  * The "before" of the reveal and loop rows of an as-is copy (motion.js useLiftedBefore): the lifted original (as-is/lifted)

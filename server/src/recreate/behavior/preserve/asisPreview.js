@@ -3,10 +3,10 @@
 // opaque origin: nothing of the app (its cookies, storage, API) is reachable from it, and it can register no service worker.
 // Previews stop when their project is deleted, when the app shuts down, and after IDLE_MS without use.
 import { stat } from 'node:fs/promises';
-import { issuePreviewToken, previewPath, revokePreviewToken } from '../../previewTokens.js';
+import { issuePreviewToken, previewPath, previewTokenUsedAt, revokePreviewToken } from '../../previewTokens.js';
 
 export const IDLE_MS = 30 * 60 * 1000;
-/** key → { url, close, used, projectId } */
+/** key → { url, token, close, used, projectId } */
 const previews = new Map();
 const keyOf = (projectId, recreateId) => `${projectId}/${recreateId}`;
 
@@ -26,7 +26,7 @@ export async function startAsIsPreview(projectId, recreateId, copyDir) {
   if (!(await stat(copyDir).then((s) => s.isDirectory(), () => false))) throw new Error('The lifted copy of this copy is gone.');
   const token = issuePreviewToken({ root: copyDir, kind: 'as-is', scripts: true });
   const url = previewPath(token);
-  previews.set(key, { url, close: async () => { revokePreviewToken(token); }, used: Date.now(), projectId });
+  previews.set(key, { url, token, close: async () => { revokePreviewToken(token); }, used: Date.now(), projectId });
   return url;
 }
 
@@ -59,9 +59,12 @@ export async function stopAllAsIsPreviews() {
   for (const key of [...previews.keys()]) await stopOne(key);
 }
 
-/** Stops the previews nobody has used for IDLE_MS. */
+/** Stops the previews nobody has used for IDLE_MS: neither asked for nor served a page or file (someone looking at the copy
+ * in Compare keeps it running; before, only asking for it counted, so it stopped 30 minutes after it was opened). */
 export async function stopIdleAsIsPreviews(now = Date.now()) {
-  for (const [key, p] of [...previews.entries()]) if (now - p.used > IDLE_MS) await stopOne(key);
+  for (const [key, p] of [...previews.entries()]) {
+    if (now - Math.max(p.used, previewTokenUsedAt(p.token)) > IDLE_MS) await stopOne(key);
+  }
 }
 
 // Idle previews are stopped on a timer; the timer never keeps the process alive.

@@ -17,6 +17,7 @@ import { planZip, writeZip } from '../recreate/export/zip.js';
 import { RecreateError } from '../recreate/errors.js';
 import { ASIS_DIR, ASIS_STACKS, readLifted } from '../recreate/behavior/preserve/stage.js';
 import { startAsIsPreview, stopAsIsPreview } from '../recreate/behavior/preserve/asisPreview.js';
+import { originalPreview } from '../recreate/originalPreview.js';
 import { asIsPagesOf } from '../recreate/behavior/preserve/asis.js';
 import { isOwner, refuseNonOwner } from '../accounts/roles.js';
 import { usableAddress } from '../copy/address.js';
@@ -331,6 +332,21 @@ router.post('/:id/preview', async (req, res) => {
   } catch (err) {
     if (err instanceof PreviewError) return res.status(503).json({ error: err.message });
     throw err;
+  }
+});
+
+// The live original under the app's own address (recreate/originalPreview.js): Compare shows it next to the copy and
+// scrolls both together. Its own site only, fetched on request; the address is the permission, like a copy's preview.
+router.post('/:id/original-preview', (req, res) => {
+  const project = selectProject.get(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  try {
+    const out = originalPreview(project.id, project.url);
+    console.log(`[original] ${out.site} → ${out.url}`);
+    res.json(out);
+  } catch (err) {
+    console.log(`[original] ${project.url}: ${err?.message ?? err}`);
+    res.status(400).json({ error: 'This website has no address that can be shown.' });
   }
 });
 

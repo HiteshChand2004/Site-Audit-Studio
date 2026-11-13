@@ -23,8 +23,18 @@ export default function AsIsChoice({ projectId, authorized, stack, mode, onMode,
   useEffect(() => {
     if (mode !== 'as-is' || available) return;
     let alive = true;
-    api.getPages(projectId).then((r) => alive && setAvailable(r.pages ?? [])).catch(() => alive && setAvailable([]));
-    return () => { alive = false; };
+    // A failed ask is asked again shortly (an empty list would count as loaded and never be asked for again).
+    let timer = 0;
+    const ask = (attempt = 0) => api.getPages(projectId).then((r) => alive && setAvailable(r.pages ?? [])).catch(() => {
+      if (!alive) return;
+      if (attempt < 4) timer = setTimeout(() => ask(attempt + 1), 1000 * 2 ** attempt);
+      else setAvailable([]);
+    });
+    ask();
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
   }, [mode, projectId, available]);
   const home = available?.[0]?.url ?? null;
   const chosen = new Set(pages);
