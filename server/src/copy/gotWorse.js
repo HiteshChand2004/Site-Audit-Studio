@@ -14,6 +14,7 @@
 //                    are the original's, and changing them is a change of its look (§2: contrast is never rewritten as-is);
 //   b                not decided here: a backend item or a reverted fix carries its reason from the copy run (openItems.js).
 import { REASONS } from './openItems.js';
+import { errorPlace, placeKey } from './ownCodeErrors.js';
 import { FIELDS, FIXES, KINDS_BY_KEY, fixOf } from './fixRegistry.js';
 
 /** How much a measured amount may move before it counts as grown: bytes and times vary run to run, element counts do not. */
@@ -56,7 +57,7 @@ const kb = (bytes) => `${Math.round(bytes / 1024)} KB`;
  * @param {object} [o.newAxe]           the copy's
  * @returns {{ items: object[], summary: { total: number, explained: number, unexplained: number, byReason: Record<string, number> } }}
  */
-export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPages = copyPages, oldLhr = {}, newLhr = {}, oldAxe = null, newAxe = null, address = null, revertedPages = [], excludedHosts = [], fixOpen = [], backendPaths = [], questionsByPage = null, liftFailures = [], originalCapture = null, crawls = null }) {
+export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPages = copyPages, oldLhr = {}, newLhr = {}, oldAxe = null, newAxe = null, address = null, revertedPages = [], excludedHosts = [], fixOpen = [], backendPaths = [], questionsByPage = null, liftFailures = [], originalCapture = null, crawls = null, ownCode = null }) {
   const site = bareHost(new URL(siteUrl).hostname);
   const copyHost = hostOf(copyOrigin);
   const copied = new Set(copyPages.map(normPath));
@@ -77,7 +78,9 @@ export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPage
   }
   // originalCapture: the original homepage as captured (capture/<slug>/desktop.json): its own colours, for the contrast rule.
   // crawls: { original, copy } = the two crawl.json files (each page's facts), for the duplicate-text rule (gatedDuplicates).
-  const ctx = { site, copyHost, copied, chosen, oldLhr, newLhr, oldAxe, newAxe, address, revertedPages, excludedHosts, fixOpen, backend, questions, liftFailed, originalCapture, crawls };
+  // ownCode: the copy's script errors by place (copy/ownCodeErrors.js): the line each was thrown at and whether that line is
+  // word for word in the original's own pages or scripts.
+  const ctx = { site, copyHost, copied, chosen, oldLhr, newLhr, oldAxe, newAxe, address, revertedPages, excludedHosts, fixOpen, backend, questions, liftFailed, originalCapture, crawls, ownCode };
   // With a new-site address, structured data the original wrote with its own address is kept as written (copy/fixAsIs.js
   // applyAddress): a structured-data row says so in plain words, whatever else explains it.
   const ldNote = fixOpen.some((o) => o.kind === 'address' && o.field === 'json-ld')
@@ -107,7 +110,7 @@ export const GROUPS = {
   measurement: { code: 'f', label: 'Measurement', text: 'Measured on this computer’s preview; only the real host can confirm it.' },
   impossible: { code: 'g', label: 'Not possible', text: 'No copy can do this.' },
 };
-const REASON_GROUP = { owner: 'needs-info', backend: 'needs-info', third_party: 'own-code', deploy: 'measurement', look: 'look' };
+const REASON_GROUP = { owner: 'needs-info', backend: 'needs-info', third_party: 'own-code', own_code: 'own-code', deploy: 'measurement', look: 'look' };
 
 /**
  * The groups that are not the tool's to change: such a row is not a "got worse" or "still open" of the copy. It is listed in one
@@ -120,6 +123,7 @@ const OUTSIDE_WHY = {
   backend: 'It needs the site’s own server or backend, which a copy of the site’s files does not have.',
   owner: 'It needs information or a choice that only the site’s owner can give; the copy does not invent it.',
   third_party: 'It comes from code the original loads from another company, which the copy keeps as it is.',
+  own_code: 'It is an error in a script the original wrote itself, which the copy keeps exactly as it is.',
   look: 'Changing it would change how the original looks or behaves.',
   'own-code': 'It comes from the original’s own code, which the copy keeps exactly as it is.',
   'needs-info': 'It needs information or a choice that only the site’s owner can give; the copy does not invent it.',
@@ -658,7 +662,7 @@ function consoleErrors(lhr) {
     for (const i of lhr[device]?.audits?.['errors-in-console']?.details?.items ?? []) {
       const url = i.sourceLocation?.url ?? i.url ?? '';
       const k = url || i.description;
-      if (!seen.has(k)) seen.set(k, { url, text: String(i.description ?? '').slice(0, 160), source: i.source });
+      if (!seen.has(k)) seen.set(k, { url, text: String(i.description ?? '').slice(0, 160), source: i.source, place: errorPlace(i) });
     }
   }
   return [...seen.values()];
@@ -666,6 +670,12 @@ function consoleErrors(lhr) {
 
 function requestPart(e, ctx) {
   const what = e.url || e.text;
+  // A script error thrown at a line the original wrote, word for word: the original's own code, kept as it is.
+  const own = e.place ? ctx.ownCode?.get(placeKey(e.place)) : null;
+  if (own?.inOriginal) {
+    const shown = own.text.length > 90 ? `${own.text.slice(0, 90)}…` : own.text;
+    return { what, reason: 'own_code', evidence: `a script error in the original's own code, which the copy keeps as it is: line ${own.line} of the copy's ${own.file} ("${shown}") is word for word in the original's page; ${e.text}` };
+  }
   if (!e.url) return { what, reason: null, evidence: `an error of the page itself: ${e.text}` };
   const host = hostOf(e.url);
   if (host !== ctx.copyHost && host !== ctx.site) return { what, reason: 'third_party', evidence: `requests to ${host}, which is neither the copy nor the original` };

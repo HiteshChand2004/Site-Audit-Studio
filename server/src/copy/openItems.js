@@ -4,6 +4,8 @@
 export const REASONS = {
   third_party: { code: 'a', text: 'Comes from third-party code outside the copy (an embed or an external script).' },
   backend: { code: 'b', text: 'Needs a real backend or credentials you have to provide (forms, login, payments).' },
+  // An error thrown by a script the original wrote, at a line the copy keeps word for word (copy/ownCodeErrors.js).
+  own_code: { code: 'i', text: 'Comes from a script the original wrote itself, which the copy keeps exactly as it is.' },
   owner: { code: 'c', text: 'Needs your decision (pages you chose not to copy, a dead link to another site, a content or brand choice).' },
   look: { code: 'd', text: 'The fix would change the original’s look, animation or behaviour. What it would change is shown; apply it from the report if you want it.' },
   deploy: { code: 'e', text: 'Can only be checked on the real host. See DEPLOY.md.' },

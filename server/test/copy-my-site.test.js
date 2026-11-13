@@ -76,8 +76,9 @@ test('open items: every reason is one of the five, and an item with none is stil
   assert.deepEqual(owed.map((i) => i.key), ['seo.title'], 'an item with a reason, or not open, is not owed');
   // The five reasons of the spec, plus the honest marker for a page not yet tried, the part a converted copy keeps as the
   // original HTML inside its component, and a converted page that keeps (g) or lost (h) the original's framework code
-  // (see openItems.js, behavior/preserve/runtimeFree.js).
-  assert.equal(Object.keys(REASONS).length, 9);
+  // (see openItems.js, behavior/preserve/runtimeFree.js), and a script error at a line the original wrote (i, ownCodeErrors.js).
+  assert.equal(Object.keys(REASONS).length, 10);
+  assert.equal(REASONS.own_code.code, 'i');
   assert.equal(REASONS.unresolved.code, '·');
   assert.equal(REASONS.converted.code, 'f');
   assert.equal(REASONS.runtime.code, 'g');

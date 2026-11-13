@@ -24,6 +24,7 @@ import { createNetPolicy, userPolicy } from '../security/netGuard.js';
 import { compareAudits, loadSide } from './compare/index.js';
 import { CATEGORIES } from './compare/rules.js';
 import { explainWorse, markOutside } from '../copy/gotWorse.js';
+import { ownCodeErrors } from '../copy/ownCodeErrors.js';
 import { clickBudgetFor, hoverBudgetFor, hoverFirstFor, jumpTargetsOf, liftedTargets, measureNewMotion, missedHovers, motionItems, motionTimeFor, readOldMotion, useLiftedBefore } from './motion.js';
 
 /** Thrown when a re-audit cannot run at all; the job is marked failed. */
@@ -544,6 +545,14 @@ export async function explainAsIs({ checklist, project, report, recreateId, reau
     const homeSlug = (report.pages ?? []).find((p) => (p.path ?? '/') === '/')?.slug ?? 'index';
     const originalCapture = await readFile(path.join(captureRoot, homeSlug, 'desktop.json'), 'utf8').then(JSON.parse, () => null);
     const excludedHosts = Array.isArray(report.asIs?.excludedByRule) ? report.asIs.excludedByRule : [];
+    const newLhr = await lhrs(reauditDir(project.id, recreateId, reauditId));
+    // The copy's script errors: the line each was thrown at in the copy, and whether the original wrote that line.
+    const ownCode = await ownCodeErrors({
+      items: ['mobile', 'desktop'].flatMap((d) => newLhr[d]?.audits?.['errors-in-console']?.details?.items ?? []),
+      copyRoot: outputRoot(recreateDir(project.id, recreateId), report, targetStack(report, project.stack)),
+      networkDir: path.join(captureRoot, '.network'),
+      siteUrl: project.url,
+    }).catch(() => null);
     const worse = explainWorse({
       items: checklist.items,
       siteUrl: project.url,
@@ -551,7 +560,7 @@ export async function explainAsIs({ checklist, project, report, recreateId, reau
       copyPages: outputPageList.map((p) => p.path),
       chosenPages: (report.asIs?.pages ?? []).map((p) => p.path ?? '/'),
       oldLhr: await lhrs(auditDir(project.id, report.analysisId)),
-      newLhr: await lhrs(reauditDir(project.id, recreateId, reauditId)),
+      newLhr,
       oldAxe: await readFile(path.join(auditDir(project.id, report.analysisId), 'axe.json'), 'utf8').then(JSON.parse, () => null),
       newAxe: await readFile(path.join(reauditDir(project.id, recreateId, reauditId), 'axe.json'), 'utf8').then(JSON.parse, () => null),
       // For the "still open" rows: whether a new-site address was written, which pages' fixes were undone, the hosts excluded by rule.
@@ -575,6 +584,7 @@ export async function explainAsIs({ checklist, project, report, recreateId, reau
       originalCapture,
       // Both crawls (each page's title, headings, whether its server sent an empty shell): duplicate titles a sign-in gate makes.
       crawls: { original: await readFile(path.join(auditDir(project.id, report.analysisId), 'crawl.json'), 'utf8').then(JSON.parse, () => null), copy: newCrawl },
+      ownCode,
     });
     const byKey = new Map([...worse.items.map((w) => ['regressed', w]), ...worse.open.map((w) => ['open', w])].map(([status, w]) => [`${status} ${w.key}`, w]));
     for (const item of checklist.items) {
