@@ -233,6 +233,8 @@ export const FORM_GUARD = `(${formGuard.toString()})();`;
 
 /** A file the copy holds that is a picture (what an image optimiser answers). */
 const PICTURE_FILE = /\.(webp|avif|png|jpe?g|gif|svg)$/i;
+/** A file the copy holds that is a stylesheet or a script. */
+const CODE_FILE = /\.(css|m?js)$/i;
 
 /**
  * The image addresses of the site (path + query → the copy's file) whose file this page uses: the sizes of its own pictures.
@@ -245,25 +247,32 @@ const PICTURE_FILE = /\.(webp|avif|png|jpe?g|gif|svg)$/i;
 export function imageAddressesOf(html, same) {
   const out = {};
   for (const [rel, local] of Object.entries(same ?? {})) {
-    if (!rel.includes('?') || !PICTURE_FILE.test(local) || !html.includes(local)) continue;
-    out[rel] = local;
+    if (!rel.includes('?')) continue;
+    // A stylesheet or script a page's script asks for at an address with a query: a font loader builds
+    // "/css?family=Kalam:300,…" (its Google Fonts address, which the host rewrite made the copy's own). The copy holds the
+    // answer as css~<hash>.css; the bare path holds it too but without an extension, which a host serves as
+    // application/octet-stream, and the browser refuses a stylesheet of that type (onfinance.ai's copy lost its font). The
+    // page's text never names it, so it is mapped whatever the page says.
+    if (CODE_FILE.test(local) && !CODE_FILE.test(rel.split('?')[0])) out[rel] = local;
+    else if (PICTURE_FILE.test(local) && html.includes(local)) out[rel] = local;
   }
   return out;
 }
 
 /**
  * The first visit's map of image addresses (imageAddressesOf), as the page's second script: an address the page's script sets
- * on a picture (src, srcset, a preload's href / imagesrcset; by setAttribute or by property) is replaced by the copy's file
+ * on a picture, a stylesheet link or a script (src, srcset, href / imagesrcset; by setAttribute or by property) is replaced by the copy's file
+ * (a whole value first: an address may hold commas, "/css?family=Kalam:300,400"; else each part of a srcset)
  * before the browser asks for it. Every other value passes unchanged. No network, no timer.
  * @param {Record<string, string>} map
  */
 export function imageAddressShim(map) {
   return `(function(){var M=${JSON.stringify(map)};window.sasImageMap=M;`
     + "function K(u){try{var x=new URL(u,location.href);return x.origin===location.origin?x.pathname+x.search:null}catch(e){return null}}"
-    + "function T(v){if(typeof v!=='string'||v.indexOf('?')<0)return v;return v.split(',').map(function(p){var m=p.match(/^(\\s*)(\\S+)(.*)$/);if(!m)return p;var k=K(m[2]);return k&&M[k]?m[1]+M[k]+m[3]:p}).join(',')}"
+    + "function T(v){if(typeof v!=='string'||v.indexOf('?')<0)return v;var w=K(v.trim());if(w&&M[w])return M[w];return v.split(',').map(function(p){var m=p.match(/^(\\s*)(\\S+)(.*)$/);if(!m)return p;var k=K(m[2]);return k&&M[k]?m[1]+M[k]+m[3]:p}).join(',')}"
     + "var A={src:1,srcset:1,href:1,imagesrcset:1};var sa=Element.prototype.setAttribute;"
     + "Element.prototype.setAttribute=function(n,v){return sa.call(this,n,A[String(n).toLowerCase()]?T(v):v)};"
-    + "[[window.HTMLImageElement,'src'],[window.HTMLImageElement,'srcset'],[window.HTMLSourceElement,'src'],[window.HTMLSourceElement,'srcset'],[window.HTMLLinkElement,'href'],[window.HTMLLinkElement,'imageSrcset']].forEach(function(a){"
+    + "[[window.HTMLImageElement,'src'],[window.HTMLImageElement,'srcset'],[window.HTMLSourceElement,'src'],[window.HTMLSourceElement,'srcset'],[window.HTMLLinkElement,'href'],[window.HTMLLinkElement,'imageSrcset'],[window.HTMLScriptElement,'src']].forEach(function(a){"
     + "if(!a[0])return;var d=Object.getOwnPropertyDescriptor(a[0].prototype,a[1]);if(!d||!d.set)return;"
     + "Object.defineProperty(a[0].prototype,a[1],{get:d.get,set:function(v){d.set.call(this,T(v))},configurable:true,enumerable:d.enumerable})})})();";
 }

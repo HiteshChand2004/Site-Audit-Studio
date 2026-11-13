@@ -146,6 +146,7 @@ export const WORSE_REASONS = {
   backend: { code: 'b', text: 'Needs a real backend or credentials you have to provide (forms, login, payments).' },
   owner: { code: 'c', text: 'Needs your decision (pages you chose not to copy, a dead link to another site, a content or brand choice).' },
   look: { code: 'd', text: 'The fix would change the original’s look, animation or behaviour.' },
+  own_code: { code: 'i', text: 'Comes from a script the original wrote itself, which the copy keeps exactly as it is.' },
   deploy: { code: 'e', text: 'Can only be checked on the real host. See DEPLOY.md.' },
 };
 // Why a row stays, in seven groups (mirrors server/src/copy/gotWorse.js GROUPS).

@@ -152,6 +152,17 @@ export function fileSafePath(p) {
 /** Whether a decoded path can be stored under its own name (fileSafePath leaves it as it is). */
 export const storableAsIs = (p) => fileSafePath(p) === p;
 
+/**
+ * The address the copy's text writes for a file at a local path. A local path is decoded (localPathOf), and a name may hold
+ * what an address reads otherwise: Webflow names a smaller size of a picture after the picture's address, so the file is
+ * "Screenshot%202024-12-28 at 7.59.16 PM-p-500.png" with a literal "%20" in it (the original writes %2520). Written as it
+ * is, the browser decodes that %20 to a space and asks for a name the copy does not have (onfinance.ai: 7 pictures 404), and
+ * a space ends an address inside a srcset. A "%", white space, a quote, "#" and "?" are written encoded; every other
+ * character stays as it is, so a plain path is unchanged.
+ * @param {string} local  root-relative decoded path
+ */
+export const addressOf = (local) => String(local).replace(/[%\s"#?]/g, (c) => encodeURIComponent(c));
+
 /** Extensions a host serves with the right type. */
 const KNOWN_EXT = /\.(html?|m?js|css|json|svg|png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf|eot|mp4|webm|ogv|mp3|ogg|wav|m4a|wasm|txt|xml|webmanifest|map)$/i;
 /** A versioned name in a copy's text, as a runtime writes it after its parts: name.js@0.0.32 (the version then ends the name). */
@@ -555,6 +566,12 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
    * @returns {Promise<string|null|undefined>} undefined = not a URL to change
    */
   const localize = async (raw, kind) => {
+    const r = await localPathFor(raw, kind);
+    // A local path is written as an address (addressOf); an address the copy could not have is kept as the page wrote it.
+    return r && typeof r === 'object' ? r.keep : typeof r === 'string' ? addressOf(r) : r;
+  };
+  /** @returns {Promise<string|null|undefined|{ keep: string }>} the local path (decoded), or the page's own value to keep */
+  const localPathFor = async (raw, kind) => {
     if (!raw || /^(data|blob|javascript|#|mailto|tel)/i.test(raw.trim())) return undefined;
     let abs;
     try {
@@ -597,7 +614,7 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
       }
     }
     blockers.push({ url: abs, reason: fetch ? 'not in the record and could not be downloaded' : 'not in the network record' });
-    return raw;
+    return { keep: raw };
   };
 
   const LOADED = 'script[src], link[href], img[src], source[src], source[srcset], video[src], video[poster], iframe[src], img[srcset]';
@@ -726,7 +743,7 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
     ranged.files.push({ url: bare, local, bytes: whole.length, first: new URL(abs).searchParams.get('range') ?? '' });
   }
   // Inside the copied scripts, every address of a file the copy holds is its local path (raw and JSON-escaped forms).
-  const localOf = new Map(files.map((f) => [f.url, f.local]));
+  const localOf = new Map(files.map((f) => [f.url, addressOf(f.local)]));
   for (const f of files.filter((x) => x.kind === 'script')) {
     const target = path.join(outDir, f.local);
     let text = await readFile(target, 'utf8').catch(() => null);
@@ -798,7 +815,7 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
         candidates.push({ raw: m[2], fmt });
         const abs = absOf(m[2]);
         const entry = byUrl.get(abs);
-        if (entry && !excluded.has(abs)) kept.push(`url("${await fromRecord(abs, entry, 'font')}")${fmt}`);
+        if (entry && !excluded.has(abs)) kept.push(`url("${addressOf(await fromRecord(abs, entry, 'font'))}")${fmt}`);
         else dropped.push({ url: abs, family, reason: entry ? 'excluded' : 'not in the record' });
       }
       let newSrc = kept.length ? kept.join(', ') : null;
@@ -810,7 +827,7 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
           const entry = byUrl.get(abs);
           if (!entry || excluded.has(abs)) continue;
           const ext = (abs.split(/[?#]/)[0].match(/\.(woff2?|ttf|otf)$/i)?.[1] ?? '').toLowerCase();
-          newSrc = `url("${await fromRecord(abs, entry, 'font')}")${FORMAT[ext] ? ` format("${FORMAT[ext]}")` : ''}`;
+          newSrc = `url("${addressOf(await fromRecord(abs, entry, 'font'))}")${FORMAT[ext] ? ` format("${FORMAT[ext]}")` : ''}`;
           matchedBy.push({ family, from: abs });
           break;
         }
@@ -821,7 +838,7 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
           if (excluded.has(abs)) continue;
           const local = await download(abs, 'media');
           if (local) {
-            newSrc = `url("${local}")${c.fmt}`;
+            newSrc = `url("${addressOf(local)}")${c.fmt}`;
             break;
           }
         }
@@ -849,7 +866,7 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
         continue;
       }
       // The copy is served from its root, so the same root-relative path works from any stylesheet.
-      out = out.split(m[0]).join(`url("${local}")`);
+      out = out.split(m[0]).join(`url("${addressOf(local)}")`);
     }
     return out;
   }
@@ -888,7 +905,7 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
       jsDownloads++;
       const local = await download(abs, 'image');
       if (!local) continue;
-      text = text.split(raw).join(local);
+      text = text.split(raw).join(addressOf(local));
       changed = true;
     }
     if (changed) await writeFile(target, text, 'utf8');
@@ -906,7 +923,7 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
     }
     if (u.pathname.split('/').filter(Boolean).length < 2) continue;
     if (excluded.has(dir)) continue;
-    dirPrefixes.set(dir, decodeURIComponent(u.pathname));
+    dirPrefixes.set(dir, addressOf(decodeURIComponent(u.pathname)));
   }
   for (const f of files.filter((x) => x.kind === 'script')) {
     const target = path.join(outDir, f.local);
