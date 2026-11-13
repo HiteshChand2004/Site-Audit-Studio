@@ -335,7 +335,7 @@ export const useProjects = create((set, get) => ({
   async recreate(id, options = null) {
     // The request is kept: a failed copy can be tried again with the same settings (the Create step's "Try again").
     set({ lastRecreateOptions: { ...get().lastRecreateOptions, [id]: options } });
-    get().setJob('recreate', id, { status: 'starting', pct: 0, step: null, error: null, message: 'Starting…' });
+    get().setJob('recreate', id, { status: 'starting', pct: 0, step: null, error: null, message: 'Starting…', stopping: false });
     try {
       const { job, steps } = await api.startRecreate(id, options);
       get().attachJob('recreate', id, job, steps);
@@ -362,14 +362,21 @@ export const useProjects = create((set, get) => ({
 
   /**
    * Asks the copy that is running to stop. What it has done is kept, so the Copy step then offers to continue where it
-   * stopped. The job's own SSE stream reports the end, so nothing is set here beyond the "Stopping…" message.
+   * stopped. "Stopping…" shows the moment Stop is clicked (the button is then disabled), before the server answers; the job's
+   * own SSE stream carries `stopping` until it ends and reports the end.
    */
   async stopRecreate(id) {
+    const job = get().recreates[id];
+    if (job?.stopping) return;
+    const before = { stopping: Boolean(job?.stopping), message: job?.message };
+    get().setJob('recreate', id, { stopping: true, message: 'Stopping…' });
     try {
-      const { job } = await api.stopRecreate(id);
-      get().setJob('recreate', id, { status: job.status, message: job.message, pct: job.pct, step: job.step });
-    } catch {
-      // Already finished or stopped: its stream reports the real state.
+      const { job: now } = await api.stopRecreate(id);
+      get().setJob('recreate', id, { status: now.status, message: now.message, pct: now.pct, step: now.step, stopping: true });
+    } catch (err) {
+      // 409: already finished or stopped, and its stream reports the real state. Any other failure (the server did not get the
+      // request): Stop is offered again.
+      if (err?.status !== 409) get().setJob('recreate', id, before);
     }
   },
 

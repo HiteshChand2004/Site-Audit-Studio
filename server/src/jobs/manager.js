@@ -195,7 +195,7 @@ function admits(entry) {
 /** Sets a waiting job's message and queue details, pushing them only when they changed. */
 function tell(entry, text, extra) {
   const { job, manager } = entry;
-  if (!job || job.message === text) return;
+  if (!job || job.stopping || job.message === text) return;
   job.message = text;
   job.queue = { ...(job.queue ?? { ahead: active.size, position: 1 }), ...extra };
   manager.emitState(job);
@@ -280,6 +280,8 @@ const snapshot = (job) => ({
   step: job.step,
   pct: job.pct,
   message: job.message,
+  // Asked to stop and still winding down: the app shows "Stopping…" and a disabled Stop until the job ends.
+  stopping: Boolean(job.stopping),
   error: job.error,
   warnings: job.warnings,
   startedAt: job.startedAt,
@@ -444,12 +446,14 @@ export class JobManager extends EventEmitter {
 
   /**
    * Asks the project's running or queued job to stop. The job's own run function ends it (and keeps what it can:
-   * a recreate saves its checkpoint, so the app can continue where it stopped).
+   * a recreate saves its checkpoint, so the app can continue where it stopped). It answers at once; the job winds down in
+   * the background. A second request while it winds down changes nothing and gets the same job back.
    * @returns {object|null} the job, or null when nothing is running for this project
    */
   stop(projectId) {
     for (const job of this.#jobs.values()) {
       if (job.projectId !== projectId || (job.status !== 'queued' && job.status !== 'running')) continue;
+      if (job.stopping) return snapshot(job);
       job.stopping = true;
       job.message = 'Stopping…';
       job.controller.abort();
@@ -505,9 +509,12 @@ export class JobManager extends EventEmitter {
       const { step, pct } = track(reported, fraction);
       job.step = step;
       job.pct = Math.max(job.pct, pct);
-      // A step running next to the one shown reports its own messages; only the shown step's are displayed.
-      if (message && reported === step) job.message = message;
-      else if (step !== lastStep) job.message = steps.find((s) => s.key === step)?.label ?? step;
+      // A step running next to the one shown reports its own messages; only the shown step's are displayed. Once the job is
+      // stopping, a step still in flight never replaces "Stopping…" (the app would read it as a stop that did not happen).
+      if (!job.stopping) {
+        if (message && reported === step) job.message = message;
+        else if (step !== lastStep) job.message = steps.find((s) => s.key === step)?.label ?? step;
+      }
       const now = Date.now();
       if (step !== lastStep || now - lastWrite > DB_WRITE_INTERVAL) {
         this.#rows.progress.run(job.status, step, job.pct, job.id);
@@ -544,6 +551,7 @@ export class JobManager extends EventEmitter {
           ? `Stopped after the time limit for one job (${humanMs(limit)}${waited}; SAS_JOB_MAX_MINUTES). What was finished is kept.`
           : `Stopped after ${humanMs(limit)}: the time limit for one job (SAS_JOB_MAX_MINUTES). What was finished is kept.`;
         job.message = `Stopping: the time limit for one job (${humanMs(limit)}${waited}) was reached.`;
+        job.stopping = true;
         this.#emit(job, 'progress');
         job.controller.abort();
         job.graceTimer = setTimeout(() => {
