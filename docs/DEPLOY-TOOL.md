@@ -51,8 +51,9 @@ Figures come from the measured runs in `docs/HANDOFF.md` ("For the hosting discu
 
 **Memory for one job**: about **2.2 GB** used while it runs. The sankalpam as-is copy plus re-audit took free memory from 5065 MB
 to 2845 MB. The server process peaked at 702 MB RSS; the rest was Chromium and Lighthouse's Chrome. The pipeline's own rules add
-up to about 1.8 GB (`audit/resources.js`). A job does not start until `SAS_JOB_MIN_FREE_MB` (default 2048) is free. Two jobs at
-once once crashed a 15 GB laptop, in a mode that was not recorded.
+up to about 1.8 GB (`audit/resources.js`). The free-memory check before a start (`SAS_JOB_MIN_FREE_MB`) was removed on
+2026-11-12, so nothing waits for memory to come free any more. Two jobs at once once crashed a 15 GB laptop, in a mode that was
+not recorded.
 
 **A conversion build** (React + Vite or Next.js copy) is one extra Node process (`build/toolchain.js runToolchain`: `vite build`
 + prerender, or `next build` + an after-build step), with a 6-minute (Vite) / 8-minute (Next.js) limit. On the one-page nyaayai
@@ -100,17 +101,17 @@ Playwright's Chromium. That is **probably 2–4 GB per release**. **Unsure**: I 
 - **How several jobs share the machine** (`jobs/manager.js`, `jobs/capacity.js`). Each running job holds a reservation: Analyze
   1500 MB, copy 2500 MB, re-audit 2000 MB, stack build 800 MB, and 2 CPU threads each (`SAS_JOB_MB_*`, `SAS_JOB_CPUS`). A job
   starts only when (1) its reservation fits next to the running ones in total memory minus `SAS_RESERVED_MB` (default 1024) and
-  in the CPU count (a job alone always passes this), (2) the memory free right now, minus the whole reservation of every job that
-  started in the last 90 s (its browsers are still opening), covers its own reservation plus `SAS_JOB_MIN_FREE_MB` (a job alone
-  needs only the 2048 MB, as before), and (3) `SAS_MAX_JOBS` allows one more.
-  `SAS_MAX_JOBS=auto` lets (1) and (2) decide alone, at most 16. Two jobs of one website never run side by side, and the next
+  in the CPU count (a job alone always passes this), and (2) `SAS_MAX_JOBS` allows one more. The memory free at that moment is
+  not looked at: the `SAS_JOB_MIN_FREE_MB` check (free memory ≥ the job's reservation + 2048 MB next to a running job) was
+  removed on 2026-11-12, because on the hosted server it kept every second copy waiting, and the setting is ignored.
+  `SAS_MAX_JOBS=auto` lets (1) decide alone, at most 16. Two jobs of one website never run side by side, and the next
   job is taken from the account with the fewest running jobs, then the oldest.
 - **Lighthouse never runs twice at once**, whatever these settings allow (`audit/lighthouse/run.js`, not a setting): two runs
   side by side lowered phone Performance 88 → 78 in a measurement. A job waiting for its turn gets that time back on its own
   limits (at most its own limit again in all). Each result records what else was running (`contention`).
 - Measured on the development laptop only (Windows, 12 CPU threads, 15 GB with 3.9–4.5 GB free at the start, scratch data,
-  fixture sites, `SAS_MAX_JOBS=auto`): three Analyze jobs asked for in the same second all finished. Before the memory rule in (2)
-  was tightened at most 2 ran at once (lowest free 3234 MB); with it they ran one after another, because a second Analyze needs
+  fixture sites, `SAS_MAX_JOBS=auto`, with the free-memory check that has since been removed): three Analyze jobs asked for in the
+  same second all finished. Before that memory rule was tightened at most 2 ran at once (lowest free 3234 MB); with it they ran one after another, because a second Analyze needs
   1500 + 2048 MB free next to the first. Lighthouse runs never overlapped (0 of 51 in the longest check, a three-page copy and
   its re-audit). **Not measured**: several jobs side by side on a server or in a container, or several copies at once. Start at
   1 and raise it only after watching memory (step 13).
@@ -332,7 +333,6 @@ SAS_KEEP_AWAKE=0
 SAS_MAX_JOBS=1
 SAS_JOBS_PER_USER=1
 SAS_JOB_MAX_MINUTES=240
-SAS_JOB_MIN_FREE_MB=2048
 
 # --- Disk cleanup (jobs/cleanup.js) ---
 SAS_KEEP_COPIES_DAYS=30
@@ -795,9 +795,10 @@ provider is probably blocking outbound 587 (see the top of this guide).
   on a one-page copy) until retention removed the copy; the copy step now removes it once the copy is built and checked
   (`behavior/preserve/stage.js`, `convert/next.js dropBuildFolder`). The source and `out/` stay; `npm run dev` and
   `npm run build` of the download write their own.
-- **Two jobs side by side were never measured on a server.** The 2.2 GB per job is one run. Each running job now holds a
-  reservation and a second one starts only with its reservation plus `SAS_JOB_MIN_FREE_MB` free (section 1), but a job that
-  uses more than its reservation is caught only by the free-memory reading. Raise `SAS_MAX_JOBS` only after watching.
+- **Two jobs side by side were never measured on a server.** The 2.2 GB per job is one run. Each running job holds a
+  reservation counted against the machine's total (section 1); since the free-memory check was removed (2026-11-12), nothing
+  looks at what is really free before a start, so a job that uses more than its reservation is not caught. Watch memory
+  (`free -m`) while several jobs run, and lower `SAS_MAX_JOBS` if the server runs short.
 - **Waiting in line.** With one slot, the next person waits for the whole job in front: an as-is copy is about 20 minutes a page,
   and the backstop is `SAS_JOB_MAX_MINUTES` = 240. A per-plan page limit (`recreate_pages`) is the lever. See HANDOFF "The
   hold-up problem".

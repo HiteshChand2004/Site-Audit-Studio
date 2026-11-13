@@ -1,7 +1,8 @@
 // In-memory background job manager shared by Analyze, Recreate and Re-audit. All drive Chromium and are memory-heavy, so one
 // line of work serves every kind: at most SAS_MAX_JOBS run at once (default 1; `auto` = as many as the machine holds), and a
-// job starts only when what it is counted with (jobs/capacity.js) fits next to the running jobs and enough memory is really free
-// (SAS_JOB_MIN_FREE_MB); the rest wait and are told why. One account has at most SAS_JOBS_PER_USER jobs running or waiting,
+// job starts only when what it is counted with (jobs/capacity.js) fits next to the running jobs; the rest wait and are told why.
+// The memory free at the moment is not a reason to wait (that check was removed, 2026-11-12). One account has at most
+// SAS_JOBS_PER_USER jobs running or waiting,
 // and a running job is stopped at SAS_JOB_MAX_MINUTES whatever its own budget says (jobs/limits.js). Each manager allows one
 // active job per project, and jobs of different kinds on one website take turns; mirrors state to its table, keeps the row's
 // heartbeat (jobs/liveness.js) and pushes state to SSE subscribers as events on the job id. A queued job of a server that died
@@ -13,7 +14,7 @@ import { holdAwake, releaseAwake } from './keepAwake.js';
 import { meterJob } from './meter.js';
 import { stripAnsi } from './ansi.js';
 import { claimQueued, heartbeat, HEARTBEAT_MS, isoAt, ownJobs } from './liveness.js';
-import { jobMaxMs, jobsPerUser, maxJobs, minFreeMB } from './limits.js';
+import { jobMaxMs, jobsPerUser, maxJobs } from './limits.js';
 import { capacity, jobCpus, jobMB, KIND_OF_TABLE } from './capacity.js';
 import { onWaiting, runInJob, setLoadProvider, setShareProvider } from './context.js';
 
@@ -24,14 +25,12 @@ const DB_WRITE_INTERVAL = 1000;
 
 /** Waits the manager uses; tests shorten them. */
 export const TIMING = {
-  /** How often the memory gate looks again while the first job in line waits for memory. */
-  memoryPollMs: 5000,
   /** How long a job stopped at the hard limit may take to end by itself before its slot is given to the next job anyway. */
   hardStopGraceMs: 60000,
   /**
    * How long a job that just started is counted as not yet visible in the free-memory reading: its browsers are still opening,
    * so the reading taken a moment after its start says nothing about what it will use. Within this time its reservation is
-   * taken off the reading, so two jobs can never be admitted on the same memory.
+   * taken off the reading another running job sizes its own work from (setShareProvider below).
    */
   rampMs: 90000,
 };
@@ -40,16 +39,14 @@ export const TIMING = {
 // One line for every kind of work. An entry is a function to run; the entries that are jobs also carry the job and its manager,
 // so they can be told their place and be held back. Which entry is next: the one whose account has the fewest jobs running,
 // oldest first among equals; an entry whose website already has a job running waits for it (jobs of one website take turns).
-// When the next entry does not fit (not enough room or memory), nothing behind it starts (a smaller job jumping ahead would
-// starve a large one for ever).
+// When the next entry does not fit (not enough room), nothing behind it starts (a smaller job jumping ahead would starve a
+// large one for ever).
 //
 // What a job is counted with (its reservation, jobs/capacity.js) is booked the moment it starts, before any of its browsers has
-// opened, and freed the moment it ends: two jobs can never be admitted on the same memory, whatever a reading said.
+// opened, and freed the moment it ends.
 const line = [];
 /** What the running entries are counted with: { kind, mb, cpus, startedAt, projectId, ownerId, jobId }. */
 const active = new Set();
-let memoryTimer = null;
-let lastFree = null;
 
 /**
  * Runs `fn` when its turn comes. `meta`: { job, manager } for a job of a manager; { kind, projectId, ownerId } for other work
@@ -80,7 +77,7 @@ export function exclusive(fn, meta = {}) {
 export const lockBusy = () => active.size + line.length > 0;
 
 /** For GET /api/health and the start-up log. */
-export const queueState = () => ({ running: active.size, waiting: line.length, max: maxJobs(), ...(lastFree != null && { freeMB: Math.round(lastFree) }) });
+export const queueState = () => ({ running: active.size, waiting: line.length, max: maxJobs() });
 
 const sum = (items, key) => items.reduce((n, a) => n + a[key], 0);
 /** Reservations of jobs started less than TIMING.rampMs ago (not yet visible in a reading), leaving out `except`. */
@@ -161,7 +158,6 @@ function nextIndex() {
 function start(head) {
   const job = { kind: head.kind, mb: head.mb, cpus: head.cpus, startedAt: Date.now(), projectId: head.projectId, ownerId: head.ownerId, jobId: head.job?.id ?? null };
   active.add(job);
-  head.memoryWaitSince = null;
   Promise.resolve()
     .then(() => runInJob(job, head.fn))
     .then(head.resolve, head.reject)
@@ -173,10 +169,10 @@ function start(head) {
 }
 
 /**
- * Whether `entry` may start now. Work that reserves nothing only needs a turn. A job needs (1) room: what the running jobs are
+ * Whether `entry` may start now. Work that reserves nothing only needs a turn. A job needs room: what the running jobs are
  * counted with plus its own fits the machine's memory budget and CPU threads (always true when nothing runs, so a small
- * machine still runs one job at a time); and (2) memory really free (SAS_JOB_MIN_FREE_MB), after taking off what the jobs that
- * just started will still take.
+ * machine still runs one job at a time). The memory free at this moment is not looked at (the SAS_JOB_MIN_FREE_MB check was
+ * removed on 2026-11-12: on the hosted server it kept every second copy waiting).
  */
 function admits(entry) {
   if (!entry.kind) return true;
@@ -193,7 +189,7 @@ function admits(entry) {
       return false;
     }
   }
-  return memoryAllows(entry, cap);
+  return true;
 }
 
 /** Sets a waiting job's message and queue details, pushing them only when they changed. */
@@ -205,55 +201,11 @@ function tell(entry, text, extra) {
   manager.emitState(job);
 }
 
-/**
- * Whether enough memory is really free for the next job, or no check is configured. A job that waited for memory longer than
- * the hard limit is taken out of the line and fails with the reason (a leak elsewhere must not stall the queue for ever with
- * no one told).
- * Next to running jobs, the job's own reservation is part of what must be free: once its browsers are open, SAS_JOB_MIN_FREE_MB
- * must still be left. A job that would run alone needs the minimum only, exactly as before (so one job at a time, SAS_MAX_JOBS=1,
- * starts on the same readings as without capacity, and a small machine still runs one job).
- */
-function memoryAllows(entry, cap) {
-  const need = minFreeMB();
-  if (!need) return true;
-  const free = cap.availableMB - rampingMB();
-  lastFree = free;
-  const beside = [...active].filter((a) => a.kind).length;
-  const needed = beside ? need + entry.mb : need;
-  if (!(free < needed)) {
-    entry.memoryWaitSince = null;
-    return true;
-  }
-  entry.waitingFor = 'memory';
-  entry.memoryWaitSince ??= Date.now();
-  const limit = jobMaxMs();
-  if (limit && Date.now() - entry.memoryWaitSince > limit) {
-    line.splice(line.indexOf(entry), 1);
-    entry.reject(Object.assign(new Error(`Not started: the server had less than ${needed} MB of memory free for ${humanMs(limit)} (${Math.round(free)} MB free now; SAS_JOB_MIN_FREE_MB).`), { notStarted: true }));
-    if (active.size + line.length === 0) releaseAwake();
-    setImmediate(schedule); // the next in line is looked at on its own pass
-    return false;
-  }
-  tell(entry, beside
-    ? `Waiting for memory: ${Math.round(free)} MB free, ${needed} MB needed to start next to the ${beside === 1 ? 'job' : `${beside} jobs`} running now (${entry.mb} MB for this job, ${need} MB kept free). Looked at again in a few seconds.`
-    : `Waiting for memory: ${Math.round(free)} MB free, ${need} MB needed before a job may start. Looked at again in a few seconds.`, {
-    memory: { freeMB: Math.round(free), neededMB: needed },
-  });
-  if (!memoryTimer) {
-    memoryTimer = setTimeout(() => {
-      memoryTimer = null;
-      schedule();
-    }, TIMING.memoryPollMs);
-    memoryTimer.unref();
-  }
-  return false;
-}
-
 /** Tells every waiting job its place, in plain words, when it changed. */
 function announce() {
   line.forEach((entry, i) => {
     if (!entry.job) return;
-    if (entry.waitingFor === 'room' || entry.waitingFor === 'memory') return; // its message says what it waits for
+    if (entry.waitingFor === 'room') return; // its message says what it waits for
     if (entry.waitingFor === 'site') {
       tell(entry, 'Waiting for the other job on this website to finish.', { ahead: active.size + i, position: i + 1 });
       return;

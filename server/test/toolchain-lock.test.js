@@ -31,9 +31,10 @@ const packages = {
   'node_modules/@x/native-other': { version: '1.0.0', optional: true, os: [other] },
   'node_modules/@x/wasm': { version: '1.0.0', optional: true },
 };
+// fsevents is macOS's own native build: on a Mac it is this system's and must be there like @x/native-here.
 const exact = {
   'node_modules/vite': '6.3.5', 'node_modules/rollup': '4.40.2', 'node_modules/vite/node_modules/postcss': '8.5.29',
-  'node_modules/@x/native-here': '1.0.0',
+  'node_modules/@x/native-here': '1.0.0', ...(process.platform === 'darwin' && { 'node_modules/fsevents': '2.3.3' }),
 };
 
 test('installed as locked: every package at its place and version; optional builds for other systems may be absent', async () => {

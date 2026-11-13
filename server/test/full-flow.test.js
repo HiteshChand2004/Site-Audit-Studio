@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { applySchema } from '../src/db/schema.js';
 import { applyMigrations } from '../src/db/apply.js';
 import { hashPassword } from '../src/accounts/passwords.js';
+import { PREVIEW_SHIM } from '../src/recreate/previewShim.js';
 
 const SERVER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const freePort = () => new Promise((resolve) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
@@ -72,7 +73,8 @@ async function startApi(t, dataDir) {
   let out = '';
   child.stdout.on('data', (b) => { out += b; });
   child.stderr.on('data', (b) => { out += b; });
-  const exited = new Promise((resolve) => child.on('exit', resolve));
+  // A server that ends during the flow says so in its output (the requests after it only fail with "fetch failed").
+  const exited = new Promise((resolve) => child.on('exit', (code, signal) => { out += `\n[the API process ended: code ${code}, signal ${signal}]\n`; resolve(); }));
   t.after(async () => {
     if (child.exitCode === null) { child.kill(); await exited; }
   });
@@ -212,7 +214,11 @@ ${api.output().slice(-3000)}`);
   assert.equal(home.status, 200, `the preview's home page answers (${preview.json.preview.url})`);
   assert.match(home.text, /Fresh bread every morning/);
   // A converted copy is prerendered and never hydrated: the page carries no script of the stack and none of the build's leftovers.
-  if (STACKS[stack].converted) assert.ok(!/__next|data-next-head|data-sas-raw/.test(home.text) && !home.text.includes('_next/'), 'no runtime of the stack in the page');
+  // The preview's own script (previewShim.js), which every preview page gets, is not the copy's and is left out of the look.
+  if (STACKS[stack].converted) {
+    const own = home.text.split(`<script>${PREVIEW_SHIM}</script>`).join('');
+    assert.ok(!/__next|data-next-head|data-sas-raw/.test(own) && !own.includes('_next/'), 'no runtime of the stack in the page');
+  }
 
   // 6. The report, in every format.
   const json = await as('GET', `/api/projects/${id}/report?format=json`);
@@ -257,7 +263,7 @@ test('Analyze → Copy my site → re-audit → Results → Compare → report �
     try {
       await wholeFlow({ api, as, siteUrl: site.url, stack, name: `Bakery (${who}, ${stack})`, made: made[`${who} ${stack}`] });
     } catch (err) {
-      failures.push(`${who} (${stack}): ${String(err.message).split('\n')[0]}`);
+      failures.push(`${who} (${stack}): ${String(err.message).split('\n')[0]}${/fetch failed/.test(err.message) ? `\n${api.output().slice(-4000)}` : ''}`);
       // Let a job the failure left behind end before the next person starts one (one job at a time on this server).
       await sleep(3000);
     }

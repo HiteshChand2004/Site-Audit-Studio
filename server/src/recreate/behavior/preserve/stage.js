@@ -703,6 +703,9 @@ async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report
     const earlierRuntime = report.convert?.runtime ?? null;
     let source = copyDir;
     let runtime = null;
+    // The step opens and closes many pages: a stray reply of the browser connection (isStrayReply) belongs to no live request,
+    // so it is counted instead of ending the process, as during the proof.
+    const guard = browser ? strayReplyGuard() : null;
     try {
       ctx.progress(0.37, 'Checking that edits to the components will show on the pages');
       const free = await runtimeFreeCopy({
@@ -723,6 +726,9 @@ async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report
       runtime = free.record;
     } catch (err) {
       runtime = { error: String(err?.message ?? err).slice(0, 200), pages: [] };
+    } finally {
+      guard?.close();
+      if (guard?.count) console.log(`[recreate ${String(ctx.recreateId ?? '').slice(0, 8)}] runtime: ${guard.count} stray repl${guard.count === 1 ? 'y' : 'ies'} of the browser connection ignored`);
     }
     ctx.progress(0.4, `Converting the copy into ${conv.code} pages and components`);
     try {

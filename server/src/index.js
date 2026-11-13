@@ -123,7 +123,7 @@ app.listen(PORT, HOST, (err) => {
   }
   const limits = describeLimits();
   const cap = capacityState();
-  console.log(`Jobs: ${limits.auto ? `as many as the machine holds (at most ${limits.maxJobs})` : limits.maxJobs} at a time on this server, ${limits.jobsPerUser} per account, ${limits.jobMaxMinutes ? `${limits.jobMaxMinutes} min` : 'no'} hard limit, ${limits.minFreeMB ? `${limits.minFreeMB} MB` : 'no'} free memory needed to start (jobs/limits.js).`);
+  console.log(`Jobs: ${limits.auto ? `as many as the machine holds (at most ${limits.maxJobs})` : limits.maxJobs} at a time on this server, ${limits.jobsPerUser} per account, ${limits.jobMaxMinutes ? `${limits.jobMaxMinutes} min` : 'no'} hard limit (jobs/limits.js).`);
   console.log(`Capacity: ${cap.cpus} CPU threads, ${cap.budgetMB} MB for jobs (${cap.source === 'cgroup' ? 'container limits' : 'whole machine'}); Lighthouse runs one at a time (jobs/capacity.js).`);
   console.log(`API ready on http://${HOST.includes(':') ? `[${HOST}]` : HOST}:${PORT}${isLoopbackHost(HOST) ? ' (this computer only)' : ' (reachable from the network)'}`);
   // Jobs a server that is gone left queued or running (their heartbeat stopped, jobs/liveness.js) are marked failed, and a
