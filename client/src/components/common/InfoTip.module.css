@@ -42,10 +42,14 @@
   text-transform: none;
   white-space: normal;
   box-shadow: var(--shadow-lg);
+  /* A closed tip takes no room: an invisible one still widened the page next to the right edge (a sideways scroll in a
+     narrow window). `display` fades with it where the browser can (allow-discrete); elsewhere it just appears. */
+  display: none;
   opacity: 0;
   pointer-events: none;
   transform: translate(-50%, 4px);
   transition: opacity 150ms ease, transform 150ms var(--ease);
+  transition: opacity 150ms ease, transform 150ms var(--ease), display 150ms allow-discrete;
 }
 
 .tip[data-align='start'] {
@@ -62,8 +66,17 @@
 .wrap:hover .tip,
 .button:focus-visible + .tip,
 .wrap[data-open] .tip {
+  display: block;
   opacity: 1;
   transform: translate(-50%, 0);
+}
+
+@starting-style {
+  .wrap:hover .tip,
+  .button:focus-visible + .tip,
+  .wrap[data-open] .tip {
+    opacity: 0;
+  }
 }
 
 .wrap:hover .tip[data-align='start'],

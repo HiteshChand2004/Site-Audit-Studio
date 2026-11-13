@@ -132,7 +132,14 @@
 /* Inside a step */
 .stepBody {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-4);
+  min-width: 0;
+}
+
+/* A step's boxes never grow past the step (a narrow or split window): wide content, such as the as-is checks table, scrolls
+   inside its own box instead of widening the column and pushing every box, the progress box too, past the right edge. */
+.stepBody > * {
   min-width: 0;
 }
 
