@@ -259,6 +259,59 @@ test('jobs of one website take turns; other websites go meanwhile', async () => 
   await Promise.all([ended(reaudits.manager, follow.id), ended(analyses.manager, elsewhere.id)]);
 });
 
+test('a job stopped while it waits leaves the line at once: it never runs, its row says so, the jobs behind it move up', async () => {
+  // The reported case: all slots taken, a copy waiting in line, the user presses Stop. Before the fix it stayed in line as
+  // "Stopping…" until a running job ended (hours), then started only to stop.
+  setEnv({ SAS_MAX_JOBS: 1, SAS_JOBS_PER_USER: 20 });
+  machine({ cpus: 32, budgetMB: 64000, availableMB: 64000 });
+  const { manager, started, release, drain } = gatedManager('recreates');
+  const busy = manager.start(makeProject());
+  await until(() => started.length === 1);
+  const waiting = manager.start(makeProject());
+  const behind = manager.start(makeProject());
+  await until(() => manager.get(behind.id).queue?.ahead === 2);
+
+  const stopped = manager.stop(waiting.projectId);
+  assert.equal(stopped.status, 'failed', 'ended at once, not "Stopping…" in line');
+  assert.match(stopped.error, /^Stopped before it started/);
+  assert.equal(queueState().waiting, 1, 'it left the line');
+  const row = db.prepare('SELECT status, error, finished_at FROM recreates WHERE id = ?').get(waiting.id);
+  assert.equal(row.status, 'failed', 'the row is closed, so a restart does not put it back in line');
+  assert.match(row.error, /^Stopped before it started/);
+  assert.ok(row.finished_at);
+  await until(() => manager.get(behind.id).queue?.ahead === 1);
+  assert.equal(manager.get(behind.id).message, 'Next in line: starts when the job before it finishes.', 'the job behind moved up');
+  assert.equal(manager.active(waiting.projectId), null, 'nothing left to stop on that website');
+  assert.equal(manager.stop(waiting.projectId), null);
+
+  release(busy.projectId);
+  await until(() => started.length === 2);
+  assert.deepEqual(started, [busy.projectId, behind.projectId], 'the stopped job never ran');
+  // A running job is still stopped by its own run function, as before.
+  assert.equal(manager.stop(behind.projectId).message, 'Stopping…');
+  assert.match((await ended(manager, behind.id)).error, /Stopped before it finished/);
+  await drain([busy, behind]);
+});
+
+test('a stopped job that waited for room no longer holds back the smaller job behind it', async () => {
+  setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20 });
+  machine({ cpus: 16, budgetMB: 3500, availableMB: 30000 });
+  const small = gatedManager('analyses');
+  const large = gatedManager('recreates');
+  const first = small.manager.start(makeProject('x'));
+  await until(() => small.started.length === 1);
+  const copy = large.manager.start(makeProject('y')); // 2500 + 1500 > 3500: waits for room, and the next waits behind it
+  const later = small.manager.start(makeProject('z'));
+  await sleep(60);
+  assert.equal(small.manager.get(later.id).status, 'queued');
+  assert.equal(large.manager.stop(copy.projectId).status, 'failed');
+  await until(() => small.started.length === 2);
+  assert.equal(large.started.length, 0, 'the copy never ran');
+  small.release(small.started[0]);
+  small.release(small.started[1]);
+  await Promise.all([ended(small.manager, first.id), ended(small.manager, later.id)]);
+});
+
 test('an export waits like a job (room) and reserves while it runs; plain work only needs a turn', async () => {
   setEnv({ SAS_MAX_JOBS: 'auto', SAS_JOBS_PER_USER: 20 });
   // Room for one Analyze (1500), not an export (800) next to it.
