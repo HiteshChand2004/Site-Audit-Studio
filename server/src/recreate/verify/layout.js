@@ -17,6 +17,7 @@ import sharp from 'sharp';
 import { USER_AGENT } from '../../audit/http.js';
 import { launchBrowser } from '../../audit/render.js';
 import { MAX_HEIGHT, MOBILE_UA } from '../../audit/screenshots.js';
+import { settlePage } from './settle.js';
 import { contentBox } from '../ir/styles.js';
 import { RECREATE_VIEWS as VIEWS } from '../views.js';
 import { displayOf, isElement, isText } from '../ir/tree.js';
@@ -183,10 +184,12 @@ async function renderOnce(renderer, outPath, viewId, { screenshot = false, timeo
     let png = null;
     if (screenshot) {
       const width = VIEWS.find((v) => v.id === viewId).width;
+      // The same clear moment as the original's picture (verify/settle.js), so a rotator is held to one word on both sides.
+      await settlePage(page);
       png = await page.screenshot({
         type: 'png',
         fullPage: true,
-        animations: 'disabled',
+        animations: 'allow',
         clip: { x: 0, y: 0, width, height: Math.max(1, Math.min(data.scrollHeight, MAX_HEIGHT)) },
       });
     }

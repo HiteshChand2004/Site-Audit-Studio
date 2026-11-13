@@ -93,17 +93,21 @@ self.addEventListener('fetch', (event) => {
  * Adds the service worker registration to the copy's document (once).
  * @param {string} outDir
  */
-export async function registerServiceWorker(outDir, entry = 'index.html', { ranged = {}, siteUrl = null } = {}) {
+export async function registerServiceWorker(outDir, entry = 'index.html', { ranged = {}, siteUrl = null, same = {} } = {}) {
   const file = path.join(outDir, entry);
-  const $ = load(await readFile(file, 'utf8'));
+  const text = await readFile(file, 'utf8');
+  const $ = load(text);
   const inline = $('script').toArray().map((s) => $(s).html() ?? '');
   const shim = !inline.some((t) => t.includes('window.URL=S'));
   // The slicing of files the original serves in pieces, for a first visit (ranged.js); after the URL shim, before any script of the page.
   const slicing = Object.keys(ranged).length > 0 && !inline.some((t) => t.includes('sasRanged'));
+  // The image addresses this page's script may build (its pictures, at every size the copy holds), for a first visit.
+  const pictures = imageAddressesOf(text, same);
+  const images = Object.keys(pictures).length > 0 && !inline.some((t) => t.includes('sasImageMap'));
   const register = !inline.some((t) => t.includes("serviceWorker.register('/sw.js')"));
   // The marker is unique to the guard: the site's own scripts add submit listeners too.
   const guard = !inline.some((t) => t.includes('sasFormGuard'));
-  if (shim || register || guard || slicing) {
+  if (shim || register || guard || slicing || images) {
     // The shim is the first script of the document: it must replace URL before any script of the page runs, and a module
     // marked async runs as soon as it is fetched - on a fast host that is while the parser is still in the body, before an
     // inline script at its end (nyaayai: a 630 KB page whose async main module threw "Invalid base URL" in 5 of 6 Lighthouse
@@ -118,6 +122,11 @@ export async function registerServiceWorker(outDir, entry = 'index.html', { rang
       const after = $('script').filter((_, s) => ($(s).html() ?? '').includes('window.URL=S')).first();
       if (after.length) after.after(`<script>${rangeShim(ranged)}</script>`);
       else $('head').prepend(`<script>${rangeShim(ranged)}</script>`);
+    }
+    if (images) {
+      const after = $('script').filter((_, s) => ($(s).html() ?? '').includes('window.URL=S')).first();
+      if (after.length) after.after(`<script>${imageAddressShim(pictures)}</script>`);
+      else $('head').prepend(`<script>${imageAddressShim(pictures)}</script>`);
     }
     // The form guard listens on the window in the capture phase, so it is first for a submit whenever it was added; the
     // worker registration is for the next visit. Both at the end of the body, after the page's own content.
@@ -221,6 +230,43 @@ const formGuard = function () {
  *    shows a note naming where the downloaded copy sends it.
  */
 export const FORM_GUARD = `(${formGuard.toString()})();`;
+
+/** A file the copy holds that is a picture (what an image optimiser answers). */
+const PICTURE_FILE = /\.(webp|avif|png|jpe?g|gif|svg)$/i;
+
+/**
+ * The image addresses of the site (path + query → the copy's file) whose file this page uses: the sizes of its own pictures.
+ * The page's script builds these addresses itself when it draws a picture again in the browser (Next.js's image component:
+ * /_next/image?url=%2Fscreens%2Fagents.png&w=750&q=75), and the copy's server has no file at that address; the worker maps
+ * it, but only from the second visit. Only pictures this page's text names, so the map stays small (tens of entries).
+ * @param {string} html
+ * @param {Record<string, string>} same  path + query → local file
+ */
+export function imageAddressesOf(html, same) {
+  const out = {};
+  for (const [rel, local] of Object.entries(same ?? {})) {
+    if (!rel.includes('?') || !PICTURE_FILE.test(local) || !html.includes(local)) continue;
+    out[rel] = local;
+  }
+  return out;
+}
+
+/**
+ * The first visit's map of image addresses (imageAddressesOf), as the page's second script: an address the page's script sets
+ * on a picture (src, srcset, a preload's href / imagesrcset; by setAttribute or by property) is replaced by the copy's file
+ * before the browser asks for it. Every other value passes unchanged. No network, no timer.
+ * @param {Record<string, string>} map
+ */
+export function imageAddressShim(map) {
+  return `(function(){var M=${JSON.stringify(map)};window.sasImageMap=M;`
+    + "function K(u){try{var x=new URL(u,location.href);return x.origin===location.origin?x.pathname+x.search:null}catch(e){return null}}"
+    + "function T(v){if(typeof v!=='string'||v.indexOf('?')<0)return v;return v.split(',').map(function(p){var m=p.match(/^(\\s*)(\\S+)(.*)$/);if(!m)return p;var k=K(m[2]);return k&&M[k]?m[1]+M[k]+m[3]:p}).join(',')}"
+    + "var A={src:1,srcset:1,href:1,imagesrcset:1};var sa=Element.prototype.setAttribute;"
+    + "Element.prototype.setAttribute=function(n,v){return sa.call(this,n,A[String(n).toLowerCase()]?T(v):v)};"
+    + "[[window.HTMLImageElement,'src'],[window.HTMLImageElement,'srcset'],[window.HTMLSourceElement,'src'],[window.HTMLSourceElement,'srcset'],[window.HTMLLinkElement,'href'],[window.HTMLLinkElement,'imageSrcset']].forEach(function(a){"
+    + "if(!a[0])return;var d=Object.getOwnPropertyDescriptor(a[0].prototype,a[1]);if(!d||!d.set)return;"
+    + "Object.defineProperty(a[0].prototype,a[1],{get:d.get,set:function(v){d.set.call(this,T(v))},configurable:true,enumerable:d.enumerable})})})();";
+}
 
 /**
  * The host rewrite turns an absolute address of a runtime (new URL('https://<host>/x') or new URL(path, 'https://<host>/m.js'))
@@ -575,10 +621,30 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
   // fetches outside the page, a module imported after a click): fetched from the original once (referenced.js).
   const referenced = await fetchReferenced({ outDir, pageUrl, originHosts, manifest, fetchImpl });
   if (referenced.fetched.length) log.push({ referenced: referenced.fetched.length, bytes: referenced.fetched.reduce((n, x) => n + x.bytes, 0) });
+  // Every file the copy holds at an address of the site with a query (an image optimiser's output: /_next/image?url=…&w=750)
+  // answers that address too, not only the addresses a pass happened to ask for. The passes open the copy at 1440 and 390 px,
+  // so a phone of another width (Lighthouse's, 412 px at 1.75x, picks the 750 w size) asked for a size the copy holds under
+  // another name and got a 404 (own360.ai: four pages).
+  const siteHost = new URL(pageUrl).hostname.replace(/^www\./, '');
+  let completedSame = 0;
+  for (const [abs, local] of Object.entries(manifest)) {
+    let u;
+    try {
+      u = new URL(abs);
+    } catch {
+      continue;
+    }
+    if (!u.search || u.hostname.replace(/^www\./, '') !== siteHost) continue;
+    const rel = u.pathname + u.search;
+    if (sameFile[rel]) continue;
+    sameFile[rel] = local;
+    completedSame++;
+  }
+  if (completedSame) log.push({ sameFromFiles: completedSame });
   await writeFile(path.join(outDir, 'sw.js'), serviceWorkerSource(manifest, [...originHosts], sameFile, rangedFiles), 'utf8');
   // GitHub Pages (Jekyll) leaves out folders whose names start with "_" unless this empty file is there: a copy with a _next folder needs it.
   await writeFile(path.join(outDir, '.nojekyll'), '', 'utf8');
-  for (const entry of entries) await registerServiceWorker(outDir, entry, { ranged: rangedFiles, siteUrl: pageUrl });
+  for (const entry of entries) await registerServiceWorker(outDir, entry, { ranged: rangedFiles, siteUrl: pageUrl, same: sameFile });
   await rm(tmp, { recursive: true, force: true });
   return { passes: passesRun, manifest, log, sameOrigin, referenced, ranged, answerErrors };
 }

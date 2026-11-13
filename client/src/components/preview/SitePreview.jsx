@@ -70,7 +70,7 @@ function useStageSize() {
  * A page in a sandboxed iframe, rendered at its real width and scaled to the stage.
  * The NEW panel uses it with a sandbox without scripts (the recreated site has none).
  */
-export function LiveFrame({ url, width, onSlow = noop, sandbox = LIVE_SANDBOX, title = `Live preview of ${url}`, loadingText = 'Loading live page…' }) {
+export function LiveFrame({ url, width, onSlow = noop, sandbox = LIVE_SANDBOX, title = `Live preview of ${url}`, loadingText = 'Loading live page…', frameRef }) {
   const [ref, stage] = useStageSize();
   const [loaded, setLoaded] = useState(false);
 
@@ -90,6 +90,7 @@ export function LiveFrame({ url, width, onSlow = noop, sandbox = LIVE_SANDBOX, t
         <div className={styles.scaled} style={{ width: width * scale, height: stage.height }}>
           {!loaded && <div className={styles.loading}>{loadingText}</div>}
           <iframe
+            ref={frameRef}
             className={styles.iframe}
             src={url}
             title={title}
@@ -129,7 +130,7 @@ function Screenshot({ shot, viewport, url, scrollRef }) {
   if (failed) {
     return (
       <Empty icon={ImageOff} title="Screenshot not available">
-        Only the latest 3 analyses keep their screenshots. Run Analyze again to capture new ones.
+        It could not be loaded: only the latest 3 checks keep their pictures, or the server did not answer. Reload the page to try again.
       </Empty>
     );
   }
@@ -143,28 +144,22 @@ function Screenshot({ shot, viewport, url, scrollRef }) {
       tabIndex={0}
       aria-label="Screenshot, scrollable"
     >
-      {width > 0 && (shot.retry ? (
-        // A picture the server makes on first request (an as-is copy's page): asked again until it is there.
+      {width > 0 && (
+        // A picture the server makes on first request (an as-is copy's page) is asked again until it is there; any other a few
+        // times (the API restarting must not leave "Screenshot not available" for good).
         <RetryImg
           className={styles.shot}
           src={shot.full.url}
           alt={`Screenshot of ${url} at ${shot.viewport.width}px`}
+          width={shot.retry ? undefined : shot.full.width}
+          height={shot.retry ? undefined : shot.full.height}
           style={{ width, height: 'auto' }}
           decoding="async"
+          tries={shot.retry ? 36 : 3}
+          delay={shot.retry ? 5000 : 2000}
           onGiveUp={() => setFailed(true)}
         />
-      ) : (
-        <img
-          className={styles.shot}
-          src={shot.full.url}
-          alt={`Screenshot of ${url} at ${shot.viewport.width}px`}
-          width={shot.full.width}
-          height={shot.full.height}
-          style={{ width, height: 'auto' }}
-          decoding="async"
-          onError={() => setFailed(true)}
-        />
-      ))}
+      )}
       {shot.truncated && width > 0 && (
         <p className={styles.truncated} style={{ width }}>
           Page continues — capture is capped at 8,000px of {shot.pageHeight.toLocaleString()}px.

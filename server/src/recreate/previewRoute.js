@@ -20,6 +20,7 @@ import { appOrigins } from './preview.js';
 import { importMapHash, injectShim, PREVIEW_SHIM_HASH, rewriteInlineScripts, rewriteJsSpecifiers } from './previewShim.js';
 import { PREVIEW_PREFIX, previewPath, resolvePreviewToken } from './previewTokens.js';
 import { nextAssetFile } from './behavior/preserve/nextAssets.js';
+import { serveOriginal } from './originalPreview.js';
 import { TYPES, typeExtOf } from './verify/server.js';
 
 const inside = (base, file) => file === base || file.startsWith(base + path.sep);
@@ -107,7 +108,7 @@ export function requestOrigin(req) {
  * The headers of a preview response. Every document is sandboxed (no origin of its own); a build of ours also gets the
  * strict policy of recreate/preview.js, written with the visitor's origin instead of 'self' (an opaque origin has no self)
  * and naming the shim's hash besides the hashes of the page's own inline scripts — never 'unsafe-inline'.
- * @param {{ kind: 'copy' | 'as-is', scripts: boolean | 'inline', ext: string, origin: string | null, scriptHashes?: string[], frameAncestors?: string[] }} o
+ * @param {{ kind: 'copy' | 'as-is' | 'original', scripts: boolean | 'inline', ext: string, origin: string | null, scriptHashes?: string[], frameAncestors?: string[] }} o
  */
 export function previewFileHeaders({ kind, scripts, ext, origin, scriptHashes = [], frameAncestors = appOrigins() }) {
   const document = ext === '.html' || ext === '.svg';
@@ -164,7 +165,16 @@ export function previewRouter({ frameAncestors, inlineScriptHashes = () => [], s
     // A text answer of the preview's own (a 404 for a file the copy lacks) is readable from the sealed frame like a real
     // host's, so the site's script sees the status it would see anywhere, not a network error.
     const send = (status, text, extra = {}) => res.status(status).set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Access-Control-Allow-Origin': '*', ...extra }).type('text/plain').send(text);
-    if (req.method !== 'GET' && req.method !== 'HEAD') return send(405, 'Method not allowed', { Allow: 'GET, HEAD' });
+    // The check a browser makes before a request with headers of its own (Next.js fetches its pages' data with RSC headers):
+    // allowed for reading, as on a host of its own. Refused, every link the page pre-loads failed and was reported as missing.
+    if (req.method === 'OPTIONS') {
+      const asked = String(req.headers['access-control-request-headers'] ?? '').replace(/[^\w\-, ]/g, '').slice(0, 1000);
+      return res.status(204).set({
+        'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, HEAD',
+        ...(asked && { 'Access-Control-Allow-Headers': asked }), 'Access-Control-Max-Age': '600', 'Cache-Control': 'no-store',
+      }).end();
+    }
+    if (req.method !== 'GET' && req.method !== 'HEAD') return send(405, 'Method not allowed', { Allow: 'GET, HEAD, OPTIONS' });
     const entry = await resolve(req.params.token);
     if (!entry) return send(404, missing);
     const prefix = pathOf(req.params.token);
@@ -177,6 +187,18 @@ export function previewRouter({ frameAncestors, inlineScriptHashes = () => [], s
       return send(400, 'Bad request');
     }
     if (/[\0\\]/.test(pathname) || pathname.split('/').some((seg) => seg.startsWith('.'))) return send(404, 'Not found');
+    // The live original: fetched from its own site on each request (recreate/originalPreview.js).
+    if (entry.kind === 'original') {
+      try {
+        return await serveOriginal({
+          req, res, entry, prefix, raw, send,
+          rewrite: (o) => rewriteFile({ ...o, shim }),
+          headersFor: (ext) => previewFileHeaders({ kind: 'original', scripts: true, ext, origin: requestOrigin(req), frameAncestors }),
+        });
+      } catch {
+        return res.headersSent ? res.end() : send(502, 'The original site could not be shown.');
+      }
+    }
     const base = path.resolve(entry.root);
     let file = path.resolve(base, pathname.replace(/^\/+/, ''));
     if (!inside(base, file)) return send(404, 'Not found');

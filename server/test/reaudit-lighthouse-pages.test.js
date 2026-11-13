@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { betterThanOriginal, compareLighthousePages, decide, lighthousePageItems, lighthousePagesNote, medianScores, pageSlug, runsOverlap, singleRunDecides, trimReport } from '../src/reaudit/lighthousePages.js';
+import { betterThanOriginal, compareLighthousePages, decide, probeOwnFiles, lighthousePageItems, lighthousePagesNote, medianScores, pageSlug, runsOverlap, singleRunDecides, trimReport } from '../src/reaudit/lighthousePages.js';
 
 const report = (scores, { weight = 400000, lcp = 'img.hero', failing = {}, dom = 900 } = {}) => ({
   fetchTime: '2026-10-23T10:00:00Z', requestedUrl: 'x', finalDisplayedUrl: 'x', environment: { benchmarkIndex: 1200 },
@@ -131,6 +131,130 @@ test('compareLighthousePages: one run per side unless the copy is slower, three 
   assert.ok(again.calls.every((c) => c.side === 'copy'));
   assert.match(lighthousePagesNote(r2), /6 runs of the original reused/);
   assert.equal((await readdir(cacheDir)).filter((f) => !f.endsWith('.full.json')).length, 6, 'one trimmed file per run of the original');
+});
+
+test('an original with lifted files is measured from them (its own address and cache), the rest live, and the note says which', { timeout: 30000 }, async (t) => {
+  const { cacheDir, outDir } = await dirs(t);
+  const liftedCache = path.join(path.dirname(cacheDir), 'lifted-runs');
+  const asked = [];
+  const run = async (url, mode, outFile) => {
+    asked.push(url);
+    await writeFile(outFile, JSON.stringify(report(ALL(90))));
+  };
+  const pages = [
+    { path: '/', url: 'https://site.test/', copyUrl: 'http://127.0.0.1:5000/', originalUrl: 'http://127.0.0.1:6000/', originalFrom: 'lifted', originalCacheDir: liftedCache },
+    { path: '/live/', url: 'https://site.test/live/', copyUrl: 'http://127.0.0.1:5000/live/' },
+  ];
+  const r = await compareLighthousePages({ pages, cacheDir, outDir, run });
+  assert.deepEqual(r.pages.map((p) => p.originalFrom), ['lifted', 'live']);
+  assert.ok(asked.includes('http://127.0.0.1:6000/'), 'the lifted original is loaded from its own address');
+  assert.ok(!asked.includes('https://site.test/'), 'never from the live site when lifted files exist');
+  assert.ok(asked.includes('https://site.test/live/'), 'a page without lifted files is measured live');
+  assert.equal((await readdir(liftedCache)).filter((f) => !f.endsWith('.full.json')).length, 2, 'the lifted runs are kept apart (one per mode)');
+  assert.equal((await readdir(cacheDir)).filter((f) => !f.endsWith('.full.json')).length, 2, 'the live runs stay in the project cache');
+  assert.equal(r.pages[0].slug, pageSlug('/', 'https://site.test/'), 'the page keeps its identity (the original address)');
+  assert.match(lighthousePagesNote(r), /measured from its own files as captured, through the same host as the copy, on 1 of 2 pages/);
+  const all = await compareLighthousePages({ pages: [pages[0]], cacheDir, outDir: `${outDir}-2`, run });
+  assert.match(lighthousePagesNote(all), /so both sides had the same network/);
+});
+
+test('a run whose own scripts or styles did not load is not scored on that side, and the copy gets a row naming the files', () => {
+  const withRequests = (scores, url, requests) => ({ ...report(scores), finalDisplayedUrl: url, audits: { ...report(scores).audits, 'network-requests': { details: { items: requests } } } });
+  const ok = (u, type = 'Script') => ({ url: u, resourceType: type, statusCode: 200, mimeType: type === 'Script' ? 'text/javascript' : 'text/css' });
+  const copyLhr = withRequests(ALL(100, 100, 100, 100), 'http://127.0.0.1:5000/', [
+    { url: 'http://127.0.0.1:5000/_next/static/chunks/a.css', resourceType: 'Stylesheet', statusCode: 404, mimeType: 'text/plain' },
+    { url: 'http://127.0.0.1:5000/assets/index.js', resourceType: 'Script', statusCode: 200, mimeType: 'text/html' },
+    { url: 'http://127.0.0.1:5000/img/hero.webp', resourceType: 'Image', statusCode: -1, finished: true },
+    { url: 'http://127.0.0.1:5000/media/intro.mp4', resourceType: 'Media', statusCode: -1, finished: false },
+    { url: 'http://127.0.0.1:5000/api/blogs', resourceType: 'Fetch', statusCode: 404 },
+    { url: 'https://cdn.other.test/x.js', resourceType: 'Script', statusCode: 404 },
+    ok('http://127.0.0.1:5000/ok.js'),
+  ]);
+  const f = trimReport(copyLhr).ownFailures;
+  assert.equal(f.count, 3, 'the 404 stylesheet, the script answered with HTML, the image with no answer — not the data request, another host, or a video still downloading when the run ended');
+  assert.equal(f.critical, 2);
+  assert.deepEqual(f.byType, { Stylesheet: 1, Script: 1, Image: 1 });
+  assert.ok(f.sample.includes('/assets/index.js (an HTML page instead of the file)'));
+  assert.ok(f.sample.includes('/img/hero.webp (no answer)'));
+
+  const original = { ...trimReport(withRequests(ALL(68, 95, 100, 100), 'https://site.test/', [ok('https://site.test/a.css', 'Stylesheet')])) };
+  const copy = trimReport(copyLhr);
+  assert.ok(!singleRunDecides(original, copy), 'a copy missing its own scripts asks for the extra runs, however high it scored');
+  const v = decide([original, original, original], [copy, copy, copy]);
+  assert.deepEqual(v.worse, [], 'an unstyled page scoring 100 is not "better" or "worse": it is not the copy');
+  assert.match(v.unscored.performance.copy.errors[0], /2 of the copy's own script and style files did not load/);
+  assert.equal(v.copy.performance, null);
+  assert.equal(v.copyMissing.count, 3);
+  assert.equal(v.copyMissing.original, 0);
+  assert.equal(v.brokenRuns.copy, 3);
+
+  const items = lighthousePageItems({ pages: [{ path: '/', modes: { mobile: { ...v, runScores: { original: [], copy: [] }, detail: {} } } }] });
+  const row = items.find((i) => i.key === 'lighthouse-files./');
+  assert.equal(row.status, 'regressed', 'the original loaded its own files: the copy got worse');
+  assert.match(row.after.detail, /3 files \(1 stylesheet, 1 script, 1 image\) did not load in 3 of 3 runs \(phone\)/);
+  assert.ok(items.some((i) => i.status === 'recheck' && /could not be scored/.test(i.title)), 'its scores are measured again, not judged');
+
+  // A file the original misses as well is the site's own problem, kept: open, not "got worse".
+  const both = decide([copy], [copy]);
+  const kept = lighthousePageItems({ pages: [{ path: '/', modes: { mobile: { ...both, runScores: { original: [], copy: [] }, detail: {} } } }] }).find((i) => i.key === 'lighthouse-files./');
+  assert.equal(kept.status, 'open');
+});
+
+test('a run that never painted (no request list) has its own scripts and styles checked directly, and the copy gets its row', { timeout: 30000 }, async (t) => {
+  const { createServer } = await import('node:http');
+  const server = createServer((req, res) => {
+    if (req.url === '/yatra/destinations/') return res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><link rel="stylesheet" href="/yatra/assets/index-B2y0GRyK.css"><script type="module" src="/yatra/assets/index-DdEuaEXJ.js"></script><script src="/ok.js"></script><script src="/saved-as.js"></script><script src="https://cdn.other.test/x.js"></script>');
+    if (req.url === '/yatra/assets/index-DdEuaEXJ.js') return res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end('<!DOCTYPE html><html></html>');
+    if (req.url === '/ok.js') return res.writeHead(200, { 'content-type': 'text/javascript' }).end('1');
+    // An HTML page saved under a script's name: the host sends it as JavaScript, by its name.
+    if (req.url === '/saved-as.js') return res.writeHead(200, { 'content-type': 'text/javascript' }).end('\n<!DOCTYPE html><html lang="en"></html>');
+    res.writeHead(404, { 'content-type': 'text/plain' }).end('nope');
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  t.after(() => new Promise((r) => server.close(r)));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+
+  const probed = await probeOwnFiles(`${origin}/yatra/destinations/`);
+  assert.equal(probed.critical, 3, 'the bundle answered with HTML, the HTML page sent as JavaScript, the missing stylesheet; not the working script or another host');
+  assert.ok(probed.sample.includes('/saved-as.js (an HTML page instead of the file)'), 'found by its first bytes');
+  assert.ok(probed.sample.includes('/yatra/assets/index-DdEuaEXJ.js (an HTML page instead of the file)'));
+  assert.ok(probed.sample.includes('/yatra/assets/index-B2y0GRyK.css (404)'));
+  assert.equal(await probeOwnFiles('https://site.test/'), null, 'the live site is never asked');
+
+  // Through the comparison: Lighthouse gives a blank run (NO_FCP: no scores, no request list) on both sides.
+  const { cacheDir, outDir } = await dirs(t);
+  const noPaint = { ...report({ performance: null, accessibility: null, 'best-practices': null, seo: null }), runtimeError: { code: 'NO_FCP' } };
+  const run = async (url, mode, outFile) => writeFile(outFile, JSON.stringify(noPaint));
+  const pages = [{ path: '/yatra/destinations/', url: 'https://site.test/yatra/destinations', copyUrl: `${origin}/yatra/destinations/` }];
+  const r = await compareLighthousePages({ pages, cacheDir, outDir, run });
+  const m = r.pages[0].modes.mobile;
+  assert.equal(m.copyMissing.critical, 3);
+  const row = lighthousePageItems(r).find((i) => i.key === 'lighthouse-files./yatra/destinations/');
+  assert.equal(row.status, 'regressed', 'the original (live, not probed) is not known to miss them: the copy got worse');
+  assert.match(row.after.detail, /an HTML page instead of the file/);
+});
+
+test('an original that drew next to nothing is not compared: the working copy is not "worse", and the row says what happened', () => {
+  // sankalpam.ai /pratishthan/ live: 24 elements (a blank screen and a chat bar) scoring 96; the copy shows the store at 55.
+  const blankOriginal = trimReport(report(ALL(96, 92, 96, 82), { dom: 24 }));
+  const copy = trimReport(report(ALL(55, 84, 100, 82), { dom: 900 }));
+  const v = decide([blankOriginal, blankOriginal, blankOriginal], [copy, copy, copy]);
+  assert.deepEqual(v.worse, [], 'not "got worse" for showing the page');
+  assert.equal(v.original.performance, null);
+  assert.match(v.unscored.performance.original.errors[0], /the original rendered 24 elements against the copy's 900: the original page did not show/);
+  assert.deepEqual(v.originalBlank, { runs: 3, of: 3, elements: 24, copyElements: 900 });
+
+  const rows = (originalFrom) => lighthousePageItems({ pages: [{ path: '/pratishthan/', originalFrom, modes: { mobile: { ...v, runScores: { original: [], copy: [] }, detail: {} } } }] });
+  const live = rows('live').find((i) => i.key === 'lighthouse-original-blank./pratishthan/');
+  assert.equal(live.status, 'improved');
+  assert.match(live.title, /The original page did not show on \/pratishthan\/; the copy does/);
+  assert.equal(rows('live').filter((i) => i.status === 'regressed').length, 0);
+  assert.equal(rows('lifted').find((i) => i.key === 'lighthouse-original-blank./pratishthan/').status, 'recheck', 'from the captured files it may be the capture\'s fault: measured again, not claimed');
+
+  // A small page on both sides is not "blank": nothing changes.
+  const small = decide([trimReport(report(ALL(96), { dom: 40 }))], [trimReport(report(ALL(90), { dom: 45 }))]);
+  assert.equal(small.originalBlank, null);
+  assert.deepEqual(small.worse, ['performance']);
 });
 
 test('a run that fails is listed for its page and mode, the rest is measured; past the deadline pages are skipped, not guessed', { timeout: 30000 }, async (t) => {

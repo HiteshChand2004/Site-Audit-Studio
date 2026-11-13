@@ -255,6 +255,12 @@ test('the risk, then the fix: a copied site\'s script cannot reach the app, its 
         await page.waitForFunction(() => window.__results.some((m) => m && m.sasPreview === 1 && m.done), null, { timeout: 15000 });
         result.report = await page.evaluate(() => window.__results.filter((m) => m && m.sasPreview === 1 && m.done).pop());
         result.height = await page.evaluate(() => window.__results.filter((m) => m && m.sasPreview === 1 && 'height' in m).pop() ?? null);
+        // "Scrolling together": the app asks the frame to scroll to a share of the way down and is told where it stands.
+        const frame = page.frames().find((f) => f !== page.mainFrame());
+        await frame.evaluate(() => { document.body.style.minHeight = '5000px'; });
+        await page.evaluate(() => document.querySelector('iframe').contentWindow.postMessage({ sasPreview: 1, scrollTo: 0.5 }, '*'));
+        await page.waitForFunction(() => window.__results.some((m) => m && m.sasPreview === 1 && 'scroll' in m), null, { timeout: 10000 });
+        result.scroll = await page.evaluate(() => window.__results.filter((m) => m && m.sasPreview === 1 && 'scroll' in m).pop());
       }
       return result;
     } finally {
@@ -327,6 +333,9 @@ test('the risk, then the fix: a copied site\'s script cannot reach the app, its 
   // Its height, for "Scrolling together" when the run did not measure it: a number, nothing else.
   assert.ok(after.height?.height > 0, `the page's height reported: ${JSON.stringify(after.height)}`);
   assert.deepEqual(Object.keys(after.height).sort(), ['height', 'sasPreview', 'token']);
+  // Asked to scroll halfway, it scrolls there and says so: a share of the way down, nothing else.
+  assert.ok(Math.abs(after.scroll.scroll - 0.5) < 0.02, `scrolled halfway: ${JSON.stringify(after.scroll)}`);
+  assert.deepEqual(Object.keys(after.scroll).sort(), ['sasPreview', 'scroll', 'token']);
   // A page whose script draws nothing: reported as blank, with what it could not load.
   const blank = await probeBlank(`${previewUrl}blank/`);
   assert.equal(blank.blank, true);
@@ -378,6 +387,12 @@ test('the risk, then the fix: a copied site\'s script cannot reach the app, its 
     await ctx2.close();
   }
   assert.doesNotMatch((await s.call('GET', plainUrl)).text, /<script/, 'a page that runs no script gets no shim either');
+
+  // 5. The live original under the app's address (Compare): its owner gets the address, without a session nobody does.
+  const orig = await s.call('POST', `/api/projects/${s.plainId}/original-preview`, { cookie: s.cookie, body: {} });
+  assert.equal(orig.status, 200, orig.text);
+  assert.match(JSON.parse(orig.text).url, /^\/preview\/[A-Za-z0-9_-]{24}\/$/);
+  assert.notEqual((await s.call('POST', `/api/projects/${s.plainId}/original-preview`, { body: {} })).status, 200, 'no address without a session');
 
   // 5. The API's own half, without a browser: a request that says it is foreign is refused even with the real cookie.
   assert.equal((await s.call('GET', '/api/projects', { cookie: s.cookie })).status, 200, 'the app\'s own request');

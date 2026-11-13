@@ -49,7 +49,8 @@ export function BrowserShot({ src, address, alt, ratio = 16 / 10, chrome = true,
       )}
       <div className={styles.viewport} style={{ aspectRatio: ratio }}>
         {state === 'loading' && <span className={`${styles.placeholder} skeleton`} aria-hidden="true" />}
-        {src && state !== 'failed' && (retry ? (
+        {src && state !== 'failed' && (
+          // Asked again on an error: many times for a picture the server is still making, a few times for any other.
           <RetryImg
             src={src}
             alt={alt}
@@ -57,21 +58,12 @@ export function BrowserShot({ src, address, alt, ratio = 16 / 10, chrome = true,
             decoding="async"
             style={{ objectPosition: position }}
             data-loaded={state === 'ready' || undefined}
+            tries={retry ? 36 : 3}
+            delay={retry ? 5000 : 2000}
             onLoad={() => setState('ready')}
             onGiveUp={() => setState('failed')}
           />
-        ) : (
-          <img
-            src={src}
-            alt={alt}
-            loading="lazy"
-            decoding="async"
-            style={{ objectPosition: position }}
-            data-loaded={state === 'ready' || undefined}
-            onLoad={() => setState('ready')}
-            onError={() => setState('failed')}
-          />
-        ))}
+        )}
         {(state === 'none' || state === 'failed') && (
           <div className={styles.empty}>
             <EmptySiteArt className={styles.emptyArt} />

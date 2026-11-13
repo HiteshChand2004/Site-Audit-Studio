@@ -7,6 +7,7 @@ import path from 'node:path';
 import { createNetworkRetry, liftPage, NETWORK_FAILURE_REASONS, pageDocumentOf, pageKeyOf } from './pageLift.js';
 import { completeCopy } from './complete.js';
 import { readRecordIndex } from '../scripts.js';
+import { copyPageCap } from '../../pageCap.js';
 
 /** The pages of an as-is copy: addresses of this project's site, the homepage always among them; null when one is not. */
 const AS_IS_MAX_PAGES = 40;
@@ -17,7 +18,9 @@ export function asIsPagesOf(project, given) {
   } catch {
     return null;
   }
-  const list = Array.isArray(given) ? given.slice(0, AS_IS_MAX_PAGES) : [];
+  // The homepage is always one of them; SAS_COPY_MAX_PAGES (the server's cap, homepage included) can lower the limit.
+  const max = Math.min(AS_IS_MAX_PAGES, copyPageCap() ?? AS_IS_MAX_PAGES);
+  const list = Array.isArray(given) ? given : [];
   const pages = [home.href];
   for (const raw of list) {
     let u;
@@ -32,7 +35,7 @@ export function asIsPagesOf(project, given) {
     pages.push(u.href);
   }
   const seen = new Set();
-  return pages.filter((u) => (seen.has(pageKeyOf(u)) ? false : (seen.add(pageKeyOf(u)), true)));
+  return pages.filter((u) => (seen.has(pageKeyOf(u)) ? false : (seen.add(pageKeyOf(u)), true))).slice(0, max);
 }
 
 /** The copy's address of a page, from the discovery's output path: index.html → "/", about/index.html → "/about/", about.html → "/about.html". */
@@ -84,8 +87,10 @@ export async function liftSite({ captureRoot, pages, siteUrl, outDir, browser, e
   for (const page of pages) {
     const dir = path.dirname(path.join(outDir, page.outPath));
     await mkdir(dir, { recursive: true });
-    const lift = await liftPage({ captureRoot, pageUrl: page.url, outDir, entry: page.outPath, pageLinks, networkRetry });
-    lifts.push({ url: page.url, path: localOfOutPath(page.outPath), blockers: lift.blockers, downloads: lift.downloads, dropped: lift.dropped, removed: lift.removed, matchedBy: lift.matchedBy });
+    // The files earlier pages brought in (the homepage's icons, downloaded because the record never holds what the browser
+    // fetches outside the page): a later page whose address for one of them is broken can use the same file.
+    const lift = await liftPage({ captureRoot, pageUrl: page.url, outDir, entry: page.outPath, pageLinks, networkRetry, lifted: [...byLocal.values()] });
+    lifts.push({ url: page.url, path: localOfOutPath(page.outPath), blockers: lift.blockers, downloads: lift.downloads, dropped: lift.dropped, removed: lift.removed, matchedBy: lift.matchedBy, healed: lift.healed ?? [] });
     for (const f of lift.files) if (!byLocal.has(f.local)) byLocal.set(f.local, f);
     log(`lifted ${page.url} (${lift.files.length} files, ${lift.blockers.length} blockers)`);
   }

@@ -269,6 +269,8 @@ export const api = {
   subscribeReaudit: (id, reauditId, handlers) => subscribe(apiUrl(`/projects/${id}/reaudit/${reauditId}/events`), handlers),
   getPreview: (id) => request(`/projects/${id}/preview`),
   startPreview: (id) => request(`/projects/${id}/preview`, { method: 'POST' }),
+  // The live original under the app's own address (Compare shows it live and scrolls it with the copy): { url, site }.
+  originalPreview: (id) => request(`/projects/${id}/original-preview`, { method: 'POST' }),
 
   // Build mode (server/src/buildmode): the playbook library, a plan (two model calls), and the prompt again from an edited brief.
   getBuildModules: () => request('/build/modules'),

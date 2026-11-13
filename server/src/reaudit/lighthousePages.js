@@ -53,6 +53,117 @@ export function scoresOf(lhr) {
   return out;
 }
 
+/** The start of an HTML page (after a byte-order mark and white space). */
+const HTML_START = /^(﻿|\xEF\xBB\xBF)?\s*(<!doctype\s+html|<html[\s>]|<head[\s>])/i;
+/** Files of the page's own that, missing, leave a page that is not the page (no styles, no script: an empty or unstyled shell). */
+const CRITICAL_TYPES = new Set(['Stylesheet', 'Script']);
+/** The other files of the page's own whose loss is reported (the page is still drawn, with a hole). */
+const OWN_FILE_TYPES = new Set(['Stylesheet', 'Script', 'Font', 'Image', 'Media']);
+
+/**
+ * The page's own files (same origin as the page) that did not load during the run: an error answer, no answer, or a script /
+ * stylesheet answered with an HTML page (a server's fallback page: "Unexpected token '<'"). `critical` counts scripts and
+ * stylesheets: with one of them missing the run measured something other than the page (the re-audit of panscience.xyz ran
+ * with every /_next/ file answering 404, and its copy scored 100 as an unstyled page).
+ * @returns {{ count: number, critical: number, byType: Record<string, number>, sample: string[] }}
+ */
+export function ownFailuresOf(lhr) {
+  const out = { count: 0, critical: 0, byType: {}, sample: [] };
+  let origin = null;
+  try { origin = new URL(lhr?.finalDisplayedUrl ?? lhr?.finalUrl ?? '').origin; } catch { return out; }
+  for (const q of lhr?.audits?.['network-requests']?.details?.items ?? []) {
+    if (!OWN_FILE_TYPES.has(q.resourceType) || typeof q.url !== 'string') continue;
+    let at;
+    try { at = new URL(q.url); } catch { continue; }
+    if (at.origin !== origin) continue;
+    const status = q.statusCode;
+    const htmlForCode = CRITICAL_TYPES.has(q.resourceType) && /^text\/html\b/i.test(q.mimeType ?? '');
+    // No status and not finished = still downloading when Lighthouse ended its run (a large image or video on the throttled
+    // host), not a failure; no status on a finished request = it failed.
+    const noAnswer = typeof status === 'number' && status <= 0 && q.finished !== false;
+    if (!(htmlForCode || (typeof status === 'number' && status >= 400) || noAnswer)) continue;
+    out.count++;
+    out.byType[q.resourceType] = (out.byType[q.resourceType] ?? 0) + 1;
+    if (CRITICAL_TYPES.has(q.resourceType)) out.critical++;
+    if (out.sample.length < 5) out.sample.push(`${at.pathname}${htmlForCode && status < 400 ? ' (an HTML page instead of the file)' : ` (${status > 0 ? status : 'no answer'})`}`);
+  }
+  return out;
+}
+
+/**
+ * The page's own scripts and stylesheets checked directly, for a run Lighthouse ended without a list of requests (a page that
+ * never painted: NO_FCP gives no network-requests audit, so ownFailuresOf sees nothing exactly where a missing script matters
+ * most — sankalpam.ai's copy of /yatra/destinations/ loaded an HTML page as its bundle and stayed blank). The document is asked
+ * for, every same-origin <script src> and stylesheet <link> in it asked for in turn (≤ 40); an error, no answer or an HTML
+ * page in place of the file counts, as in ownFailuresOf. Only a server on this computer is asked (the copy, the lifted
+ * original), never the live site.
+ * @param {string} pageUrl
+ * @param {typeof fetch} [fetchImpl]
+ * @returns {Promise<{ count: number, critical: number, byType: Record<string, number>, sample: string[], probed: true } | null>}
+ */
+export async function probeOwnFiles(pageUrl, fetchImpl = fetch) {
+  let start;
+  try {
+    start = new URL(pageUrl);
+  } catch {
+    return null;
+  }
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(start.hostname)) return null;
+  const out = { count: 0, critical: 0, byType: {}, sample: [], probed: true };
+  let res;
+  try {
+    res = await fetchImpl(pageUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
+  } catch {
+    return null;
+  }
+  const base = res.url || pageUrl;
+  const origin = new URL(base).origin;
+  const html = await res.text().catch(() => '');
+  const refs = [];
+  for (const m of html.matchAll(/<script\b[^>]*?\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi)) refs.push(['Script', m[1]]);
+  for (const m of html.matchAll(/<link\b[^>]*>/gi)) {
+    if (!/\brel\s*=\s*["']?[^"'>]*\bstylesheet\b/i.test(m[0])) continue;
+    const href = m[0].match(/\bhref\s*=\s*["']([^"']+)["']/i);
+    if (href) refs.push(['Stylesheet', href[1]]);
+  }
+  const seen = new Set();
+  for (const [type, raw] of refs) {
+    if (seen.size >= 40) break;
+    let u;
+    try {
+      u = new URL(raw.replace(/&amp;/g, '&'), base);
+    } catch {
+      continue;
+    }
+    if (u.origin !== origin || seen.has(u.href)) continue;
+    seen.add(u.href);
+    let r = null;
+    try {
+      r = await fetchImpl(u.href, { signal: AbortSignal.timeout(15000) });
+    } catch {
+      r = null;
+    }
+    const status = r?.status ?? 0;
+    // An HTML page by its type, or by its first bytes: a host names the type from the file name, so an HTML page saved as
+    // index-DdEuaEXJ.js (an earlier copy kept what the original's server answered there) is sent as JavaScript.
+    let htmlForCode = /^text\/html\b/i.test(r?.headers.get('content-type') ?? '');
+    if (r?.body && status < 400 && !htmlForCode) {
+      const reader = r.body.getReader();
+      const first = await reader.read().catch(() => ({ value: null }));
+      htmlForCode = HTML_START.test(Buffer.from(first.value ?? []).subarray(0, 256).toString('latin1'));
+      await reader.cancel().catch(() => {});
+    } else {
+      await r?.body?.cancel().catch(() => {});
+    }
+    if (r && status < 400 && !htmlForCode) continue;
+    out.count++;
+    out.critical++;
+    out.byType[type] = (out.byType[type] ?? 0) + 1;
+    if (out.sample.length < 5) out.sample.push(`${u.pathname}${r && htmlForCode && status < 400 ? ' (an HTML page instead of the file)' : ` (${status > 0 ? status : 'no answer'})`}`);
+  }
+  return out;
+}
+
 /**
  * What a run of a page keeps (a full report is ~1 MB; a comparison needs the scores, the page's weight, its largest element and
  * the audits that fail, so a row can be explained): the shape both sides are stored and compared in.
@@ -96,6 +207,8 @@ export function trimReport(lhr) {
     // How much of a page Lighthouse saw: a copy whose script failed renders a shell of a few elements, and every score of that
     // run (a perfect accessibility score on an empty page) is about nothing.
     domElements: lhr?.audits?.['dom-size']?.numericValue ?? null,
+    // The page's own files that did not load in this run (a run missing its own scripts or styles measured something else).
+    ownFailures: ownFailuresOf(lhr),
     weightBytes: lhr?.audits?.['total-byte-weight']?.numericValue ?? null,
     lcpElement: lcp ? { selector: lcp.selector ?? null, snippet: String(lcp.snippet ?? lcp.selector ?? '').slice(0, 100) } : null,
     audits,
@@ -155,6 +268,8 @@ export function runsOverlap(originalRuns, copyRuns, c) {
  */
 export function singleRunDecides(original, copy) {
   if (LH_SCORE_CATEGORIES.some((c) => original.scores?.[c] == null || copy.scores?.[c] == null)) return false;
+  // A run that missed its own scripts or styles measured something else: the extra runs say whether it was a one-off.
+  if ((original.ownFailures?.critical ?? 0) > 0 || (copy.ownFailures?.critical ?? 0) > 0) return false;
   return copy.scores[TIMED_CATEGORY] >= original.scores[TIMED_CATEGORY];
 }
 
@@ -170,14 +285,27 @@ export function decide(originalRuns, copyRuns) {
   const originalDom = median(originalRuns.map((r) => r.domElements));
   const blank = (r) => originalDom != null && r.domElements != null && originalDom >= 50 && r.domElements < originalDom * BLANK_SHARE;
   const blankRuns = copyRuns.filter(blank);
+  // A run in which the page's own scripts or stylesheets did not load measured another page (unstyled, or a shell its script never
+  // filled): on either side, none of its scores is about the page.
+  const broken = (r) => (r.ownFailures?.critical ?? 0) > 0;
+  // The other way round: an ORIGINAL run that rendered a fraction of what the copy shows did not show the page either (the live
+  // sankalpam.ai drew 24 elements on its inner pages — a blank screen and a chat bar — while the copy showed the store). An empty
+  // page scores fast and finds nothing to fault, so comparing would call the working copy "worse".
+  const copyDom = median(copyRuns.filter((r) => !broken(r)).map((r) => r.domElements));
+  const blankOriginal = (r) => copyDom != null && r.domElements != null && copyDom >= 50 && r.domElements < copyDom * BLANK_SHARE;
+  const brokenWhy = (r, side) => `${r.ownFailures.critical} of the ${side}'s own script and style files did not load (${r.ownFailures.sample.join(', ')}): the page measured was not the ${side}`;
   // A category one run could not score on a side is not compared: a median over the runs that happened to score would pass
   // off one number as three. It is reported with the side, how many runs, and the reason.
   const unscored = {};
   for (const c of LH_SCORE_CATEGORIES) {
     for (const [side, runs] of [['original', originalRuns], ['copy', copyRuns]]) {
-      const bad = runs.filter((r) => r.scores?.[c] == null || (side === 'copy' && blank(r)));
+      const bad = runs.filter((r) => r.scores?.[c] == null || (side === 'copy' && blank(r)) || (side === 'original' && blankOriginal(r)) || broken(r));
       if (!bad.length) continue;
-      const errors = [...new Set(bad.flatMap((r) => [...(blank(r) ? [`the copy rendered ${Math.round(r.domElements)} elements against the original's ${Math.round(originalDom)}: the page did not show`] : []), ...(r.unscored?.[c] ?? [])]))].slice(0, 3);
+      const errors = [...new Set(bad.flatMap((r) => [
+        ...(broken(r) ? [brokenWhy(r, side)] : []),
+        ...(side === 'original' && blankOriginal(r) ? [`the original rendered ${Math.round(r.domElements)} elements against the copy's ${Math.round(copyDom)}: the original page did not show`] : []),
+        ...(side === 'copy' && blank(r) ? [`the copy rendered ${Math.round(r.domElements)} elements against the original's ${Math.round(originalDom)}: the page did not show`] : []),
+        ...(r.unscored?.[c] ?? [])]))].slice(0, 3);
       unscored[c] = { ...(unscored[c] ?? {}), [side]: { runs: bad.length, of: runs.length, errors } };
     }
     if (unscored[c]) { original[c] = null; copy[c] = null; }
@@ -191,7 +319,17 @@ export function decide(originalRuns, copyRuns) {
   const noise = enough ? lower.filter((c) => original[c] - copy[c] <= Math.max(spreadOf(originalRuns, c), spreadOf(copyRuns, c))
     && runsOverlap(originalRuns, copyRuns, c)) : [];
   const worse = lower.filter((c) => !noise.includes(c));
-  return { original, copy, worse, noise, unscored, blankRuns: blankRuns.length, runs: { original: originalRuns.length, copy: copyRuns.length }, accepted: originalRuns.length === 1 && copyRuns.length === 1 ? 'single run' : 'median of runs' };
+  // The copy's own files that did not load, over its runs (the most any run missed): a defect of the copy as served, reported as
+  // its own row whatever the scores (lighthousePageItems), never only as "could not be scored".
+  const worstCopy = copyRuns.filter((r) => (r.ownFailures?.count ?? 0) > 0).sort((a, b) => b.ownFailures.count - a.ownFailures.count)[0];
+  const copyMissing = worstCopy ? { ...worstCopy.ownFailures, runs: copyRuns.filter((r) => (r.ownFailures?.count ?? 0) > 0).length, of: copyRuns.length,
+    // The same files on the original's side: a file the original misses too is the site's, kept as it is.
+    original: Math.max(0, ...originalRuns.map((r) => r.ownFailures?.count ?? 0)) } : null;
+  const blankOriginalRuns = originalRuns.filter(blankOriginal);
+  const originalBlank = blankOriginalRuns.length
+    ? { runs: blankOriginalRuns.length, of: originalRuns.length, elements: Math.round(median(blankOriginalRuns.map((r) => r.domElements))), copyElements: Math.round(copyDom) }
+    : null;
+  return { original, copy, worse, noise, unscored, copyMissing, originalBlank, brokenRuns: { original: originalRuns.filter(broken).length, copy: copyRuns.filter(broken).length }, blankRuns: blankRuns.length, runs: { original: originalRuns.length, copy: copyRuns.length }, accepted: originalRuns.length === 1 && copyRuns.length === 1 ? 'single run' : 'median of runs' };
 }
 
 /**
@@ -226,9 +364,10 @@ async function readJson(file) {
  * @param {number} [o.deadline]  ms since epoch; pages not started by then are listed as skipped (what was measured is kept)
  * @returns {Promise<{ pages: object[], worse: object[], extraRunPages: object[], skipped: string[], errors: object[], runs: { original: number, copy: number, reusedOriginal: number } }>}
  */
-export async function compareLighthousePages({ pages, cacheDir, outDir, run, progress = () => {}, deadline = Infinity, signal = null }) {
+export async function compareLighthousePages({ pages, cacheDir, outDir, run, progress = () => {}, deadline = Infinity, signal = null, probe = probeOwnFiles }) {
   await mkdir(cacheDir, { recursive: true });
   await mkdir(outDir, { recursive: true });
+  for (const d of new Set(pages.map((p) => p.originalCacheDir).filter(Boolean))) await mkdir(d, { recursive: true });
   const result = { pages: [], worse: [], unscored: [], extraRunPages: [], skipped: [], errors: [], refreshedOriginal: [], runs: { original: 0, copy: 0, reusedOriginal: 0 } };
   const total = pages.length * MODES.length;
   let done = 0;
@@ -236,7 +375,8 @@ export async function compareLighthousePages({ pages, cacheDir, outDir, run, pro
   // made now (staleOriginal, against `copyRun`: the copy's run it is compared with, measured just before); else it is measured
   // again and the kept file replaced, and the reason is listed.
   const measure = async (side, p, slug, mode, n, copyRun = null) => {
-    const dir = side === 'original' ? cacheDir : outDir;
+    // An original measured from its lifted files keeps its runs apart from runs of the live site (p.originalCacheDir).
+    const dir = side === 'original' ? (p.originalCacheDir ?? cacheDir) : outDir;
     const file = runFile(dir, slug, mode, n);
     if (side === 'original') {
       const cached = await readJson(file);
@@ -250,10 +390,15 @@ export async function compareLighthousePages({ pages, cacheDir, outDir, run, pro
       }
     }
     const raw = `${file}.full.json`;
-    const summary = await run(side === 'original' ? p.url : p.copyUrl, mode, raw);
+    const summary = await run(side === 'original' ? (p.originalUrl ?? p.url) : p.copyUrl, mode, raw);
     const lhr = await readJson(raw);
     if (!lhr?.categories) throw new Error(`Lighthouse wrote no report for ${side} ${p.path} (${mode})`);
     const trimmed = trimReport(lhr);
+    // A run that ended without a list of requests (the page never painted): its own files are checked directly instead.
+    if (!(lhr.audits?.['network-requests']?.details?.items ?? []).length) {
+      const probed = await probe(side === 'original' ? (p.originalUrl ?? p.url) : p.copyUrl).catch(() => null);
+      if (probed) trimmed.ownFailures = probed;
+    }
     // Kept with the run (also in the original's cache): what else ran on this server when it was measured, and when.
     trimmed.contention = summary?.contention ?? null;
     trimmed.measuredAt = Date.now();
@@ -263,7 +408,8 @@ export async function compareLighthousePages({ pages, cacheDir, outDir, run, pro
   };
   for (const p of pages) {
     const slug = pageSlug(p.path, p.url);
-    const entry = { path: p.path, url: p.url, slug, modes: {} };
+    // originalFrom: 'lifted' = the original's own files as captured, served the way the copy is; 'live' = its site.
+    const entry = { path: p.path, url: p.url, slug, originalFrom: p.originalFrom ?? 'live', modes: {} };
     for (const mode of MODES) {
       // Stopped from the app: no further runs (each would take the Lighthouse lane from another job).
       if (signal?.aborted) throw Object.assign(new Error('Stopped before it finished.'), { stopped: true });
@@ -327,6 +473,43 @@ export async function compareLighthousePages({ pages, cacheDir, outDir, run, pro
 export function lighthousePageItems(comparison) {
   const items = [];
   for (const p of comparison.pages) {
+    // The copy's own files that did not load while it was measured: one row per page (the mode that missed the most). A copy
+    // that misses its own scripts or styles is broken as served, whatever its scores say (an unstyled page scores high).
+    const missing = Object.entries(p.modes).filter(([, m]) => m.copyMissing).sort(([, a], [, b]) => b.copyMissing.count - a.copyMissing.count)[0];
+    if (missing) {
+      const [mode, m] = missing;
+      const f = m.copyMissing;
+      const kinds = Object.entries(f.byType).map(([t, n]) => `${n} ${t.toLowerCase()}${n === 1 ? '' : 's'}`).join(', ');
+      items.push({
+        key: `lighthouse-files.${p.path}`, category: f.critical ? 'performance' : 'best-practices', page: p.path,
+        title: `The copy's own files did not load on ${p.path}`,
+        status: f.original >= f.count ? 'open' : 'regressed',
+        before: { status: f.original ? 'fail' : 'pass', detail: f.original ? `${f.original} of the original's own files did not load either` : 'the original loaded its own files' },
+        after: { status: 'fail', detail: `${f.count} file${f.count === 1 ? '' : 's'} (${kinds}) did not load in ${f.runs} of ${f.of} run${f.of === 1 ? '' : 's'} (${MODE_LABEL[mode]}): ${f.sample.join(', ')}` },
+        note: f.critical
+          ? 'Scripts or stylesheets of the copy were missing while it was measured, so its scores on this page are not compared (a page without them is not the copy). Check that the files are in the copy and served, then measure again.'
+          : 'The page was measured, with these files missing. Check that they are in the copy and served.',
+      });
+    }
+    // The original drew next to nothing while the copy showed the page: its scores are not compared (decide), and the row says
+    // why. From the live site that is the site's own fault, which the copy does not have; from the lifted files it may be the
+    // capture's, so it is measured again rather than counted.
+    const blankEntry = Object.entries(p.modes).find(([, m]) => m.originalBlank);
+    if (blankEntry) {
+      const [mode, m] = blankEntry;
+      const b = m.originalBlank;
+      const live = p.originalFrom !== 'lifted';
+      items.push({
+        key: `lighthouse-original-blank.${p.path}`, category: 'performance', page: p.path,
+        title: live ? `The original page did not show on ${p.path}; the copy does` : `The original's captured files did not show ${p.path}`,
+        status: live ? 'improved' : 'recheck',
+        before: { status: 'fail', detail: `the original rendered ${b.elements} elements (${b.runs} of ${b.of} run${b.of === 1 ? '' : 's'}, ${MODE_LABEL[mode]})${live ? ' on its live site' : ' from its captured files'}` },
+        after: { status: live ? 'pass' : 'warn', detail: `the copy rendered ${b.copyElements} elements` },
+        note: live
+          ? 'An empty page loads fast and has nothing to fault, so its scores are not compared with the copy\'s: the comparison would call the copy worse for showing the page. Open the original\'s address to see what its visitors get.'
+          : 'The original as captured drew next to nothing here while the copy shows the page, so neither side\'s scores are compared. The live site may differ: measure again.',
+      });
+    }
     for (const [mode, m] of Object.entries(p.modes)) {
       if (m.error) continue;
       const basis = `${m.accepted}${m.runs.original > 1 || m.runs.copy > 1 ? ` (${m.runs.original} of the original, ${m.runs.copy} of the copy)` : ''}`;
@@ -497,6 +680,12 @@ export function betterThanOriginal(comparison) {
 export function lighthousePagesNote(comparison) {
   const measured = comparison.pages.filter((p) => Object.values(p.modes).some((m) => !m.error)).length;
   const parts = [`Lighthouse was run on ${measured} page${measured === 1 ? '' : 's'} of the copy and of the original, phone and computer, on this computer with the same settings`];
+  const lifted = comparison.pages.filter((p) => p.originalFrom === 'lifted').length;
+  if (lifted) {
+    parts.push(lifted === comparison.pages.length
+      ? 'the original was measured from its own files as captured, served through the same measurement host as the copy, so both sides had the same network'
+      : `the original was measured from its own files as captured, through the same host as the copy, on ${lifted} of ${comparison.pages.length} pages; the rest from its live site (no captured file for them), where its own host and network differ from the copy's`);
+  }
   parts.push(comparison.extraRunPages.length
     ? `${comparison.extraRunPages.length} page${comparison.extraRunPages.length === 1 ? '' : 's'} needed three runs per side (${comparison.extraRunPages.map((p) => `${p.path} on ${p.modes.map((m) => MODE_LABEL[m]).join(' and ')}`).join('; ')})`
     : 'one run per side decided every page');

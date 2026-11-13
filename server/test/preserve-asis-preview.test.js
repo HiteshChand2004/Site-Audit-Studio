@@ -77,3 +77,16 @@ test('the app shutting down stops every preview; idle previews stop after IDLE_M
   assert.equal(asIsPreviewUrl('p5', 'c'), null, 'stopped after its idle time');
   assert.equal((await fetch(`${base}${c}`)).status, 404);
 });
+
+test('a preview someone is looking at is not idle: serving its pages counts as use', async (t) => {
+  const root = await copyFolder();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const started = Date.now();
+  const d = await startAsIsPreview('p6', 'd', root);
+  await new Promise((r) => setTimeout(r, 1100));
+  assert.equal((await fetch(`${base}${d}about/`)).status, 200, 'a page of the copy, viewed after it was opened');
+  // Past its idle time counted from when it was opened, within it counted from the page just served.
+  await stopIdleAsIsPreviews(started + IDLE_MS + 500);
+  assert.notEqual(asIsPreviewUrl('p6', 'd'), null, 'kept running while its pages are viewed');
+  await stopAsIsPreview('p6', 'd');
+});
