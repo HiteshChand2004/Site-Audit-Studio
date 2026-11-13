@@ -1,22 +1,32 @@
-import { useState } from 'react';
-import { ChevronDown, Columns2 } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { ChevronDown, ChevronUp, Columns2 } from 'lucide-react';
 import { Card } from '../common/Surface.jsx';
 import Button from '../common/Button.jsx';
 import { matchRating, TERMS } from '../../copy.js';
 import { captureShot, copyShot } from '../../siteData.js';
 import { fidelityPages } from '../../fidelity.js';
 import RetryImg from '../common/RetryImg.jsx';
+import { useGridColumns } from '../common/useGridColumns.js';
+import { FIRST_ROWS, ROWS_PER_CLICK, hasMore, shownCount } from '../../gridRows.js';
 import styles from './PageGallery.module.css';
 
-const SHOWN = 6;
-
-/** Every copied page as a pair of pictures (original, copy) with its match; a click opens it in Compare. */
+/**
+ * Every copied page as a pair of pictures (original, copy) with its match; a click opens it in Compare. Whole rows only: the
+ * number of cards follows the columns the grid has at this width (gridRows.js), so no row is left half empty.
+ */
 export default function PageGallery({ projectId, result, onOpenPage }) {
-  const [all, setAll] = useState(false);
+  const gridRef = useRef(null);
+  // Rows shown, not cards: when the window is resized the grid still ends on a full row.
+  const [rows, setRows] = useState(FIRST_ROWS);
   const fid = new Map(fidelityPages(result).map((p) => [p.outPath, p]));
   const pages = (result.pages ?? []).filter((p) => p.slug);
+  const columns = useGridColumns(gridRef, pages.length > 0);
   if (!pages.length) return null;
-  const shown = all ? pages : pages.slice(0, SHOWN);
+  const total = pages.length;
+  const more = hasMore({ total, columns, rows });
+  const cut = hasMore({ total, columns, rows: FIRST_ROWS });
+  const shown = pages.slice(0, shownCount({ total, columns, rows }));
+  const left = total - shown.length;
 
   return (
     <Card
@@ -25,7 +35,7 @@ export default function PageGallery({ projectId, result, onOpenPage }) {
       sub="The first screen of each page on a computer. Click a page to compare it closely."
       tip={TERMS.fidelity.explain}
     >
-      <ul className={styles.grid}>
+      <ul className={styles.grid} ref={gridRef}>
         {shown.map((p, i) => {
           const score = fid.get(p.outPath)?.score ?? null;
           const r = matchRating(score);
@@ -56,11 +66,18 @@ export default function PageGallery({ projectId, result, onOpenPage }) {
           );
         })}
       </ul>
-      {pages.length > SHOWN && (
+      {/* No button when every page fits in the first rows; each "Show more" adds whole rows; "Show fewer" once all are out. */}
+      {cut && (
         <div className={styles.more}>
-          <Button size="sm" variant="ghost" icon={ChevronDown} aria-expanded={all} onClick={() => setAll((a) => !a)}>
-            {all ? 'Show fewer pages' : `Show all ${pages.length} pages`}
-          </Button>
+          {more ? (
+            <Button size="sm" variant="ghost" icon={ChevronDown} aria-expanded={false} onClick={() => setRows((r) => r + ROWS_PER_CLICK)}>
+              {`Show more pages (${left} more)`}
+            </Button>
+          ) : (
+            <Button size="sm" variant="ghost" icon={ChevronUp} aria-expanded onClick={() => setRows(FIRST_ROWS)}>
+              Show fewer pages
+            </Button>
+          )}
         </div>
       )}
     </Card>
