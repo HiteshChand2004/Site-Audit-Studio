@@ -2,7 +2,7 @@
 // The helpers are pure (no window, no React) so this test imports them directly from the client source.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultPreviewMode, unavailableNote, withAnswer } from '../../client/src/components/preview/framing.js';
+import { compareSides, defaultPreviewMode, unavailableNote, withAnswer } from '../../client/src/components/preview/framing.js';
 
 const FRAMEABLE = { ok: true, why: null };
 const BLOCKED = { ok: false, why: 'The site blocks framing (X-Frame-Options: SAMEORIGIN).' };
@@ -50,4 +50,19 @@ test('a site that answers, or no answer yet, leaves live as it was', () => {
   assert.equal(withAnswer(FRAMEABLE, null), FRAMEABLE);
   // A site that blocks framing keeps its own reason, answering or not.
   assert.equal(withAnswer(BLOCKED, { answers: false, error: 'timeout', status: 0 }), BLOCKED);
+});
+
+test('Compare shows both sides live, or both as pictures — never one of each', () => {
+  // Frameable: both live by default (scrolling together or not: the mode does not depend on it).
+  assert.deepEqual(compareSides(defaultPreviewMode(FRAMEABLE), FRAMEABLE, true), { original: 'live', copy: 'live' });
+  // Blocked, this app, or down: both pictures.
+  for (const live of [BLOCKED, NO_APP, withAnswer(FRAMEABLE, { answers: false, error: 'timeout', status: 0 })]) {
+    assert.deepEqual(compareSides(defaultPreviewMode(live), live, true), { original: 'screenshot', copy: 'screenshot' });
+    // A Live switch cannot put the copy live next to a picture of the original.
+    assert.deepEqual(compareSides('live', live, true), { original: 'screenshot', copy: 'screenshot' });
+  }
+  // The viewer's Picture switch: both pictures.
+  assert.deepEqual(compareSides('screenshot', FRAMEABLE, true), { original: 'screenshot', copy: 'screenshot' });
+  // A copy with no picture of its own has only its live view.
+  assert.deepEqual(compareSides('screenshot', BLOCKED, false), { original: 'screenshot', copy: 'live' });
 });
