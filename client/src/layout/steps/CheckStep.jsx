@@ -14,6 +14,9 @@ import NotChecked from '../../components/audit/NotChecked.jsx';
 import { pathOf } from '../../components/project/PageScope.jsx';
 import { isAnalysisActive, useProjects } from '../../store/useProjects.js';
 import { timeAgo } from '../../format.js';
+
+/** A new website's "Pages to check" (the server's DEFAULT_MAX_PAGES, routes/projects.js): the most a check reads. */
+const DEFAULT_MAX_PAGES = 100;
 import styles from '../Panel.module.css';
 import ws from '../Workspace.module.css';
 
@@ -78,9 +81,9 @@ const TOC = [
 /** Step 1: check the original site (Analyze) and read its report. */
 export default function CheckStep({ project, audit, loading }) {
   const [url, setUrl] = useState(project.url);
-  const [maxPages, setMaxPages] = useState(String(project.max_pages ?? 25));
+  const [maxPages, setMaxPages] = useState(String(project.max_pages ?? DEFAULT_MAX_PAGES));
   useEffect(() => setUrl(project.url), [project.url]);
-  useEffect(() => setMaxPages(String(project.max_pages ?? 25)), [project.max_pages]);
+  useEffect(() => setMaxPages(String(project.max_pages ?? DEFAULT_MAX_PAGES)), [project.max_pages]);
 
   const analysis = useProjects((s) => s.analyses[project.id]);
   const analyze = useProjects((s) => s.analyze);
@@ -91,7 +94,7 @@ export default function CheckStep({ project, audit, loading }) {
   // would read as a real result. The step explains what the check does instead, unless a check is running.
   const report = audit?.isDummy ? null : audit;
   const notChecked = Boolean(audit?.isDummy) && !loading && !running;
-  const pagesToRead = Number.isInteger(Number(maxPages)) && Number(maxPages) >= 1 ? Number(maxPages) : project.max_pages ?? 25;
+  const pagesToRead = Number.isInteger(Number(maxPages)) && Number(maxPages) >= 1 ? Number(maxPages) : project.max_pages ?? DEFAULT_MAX_PAGES;
 
   const [viewport, setViewport] = useState(375);
   const [device, setDevice] = useState('mobile');
@@ -120,7 +123,7 @@ export default function CheckStep({ project, audit, loading }) {
     if (Number.isInteger(n) && n >= 1 && n <= 100) {
       if (n !== project.max_pages) update(project.id, { max_pages: n }).catch(() => {});
     } else {
-      setMaxPages(String(project.max_pages ?? 25));
+      setMaxPages(String(project.max_pages ?? DEFAULT_MAX_PAGES));
     }
   };
 
