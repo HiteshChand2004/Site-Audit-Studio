@@ -4,6 +4,7 @@
 // The result is recorded in the job's report with `mode: 'as-is'`, so the download, the report and the app's stacks read it
 // the same way as a clean copy.
 import { cp, mkdir, rm, readFile, writeFile, readdir, rename } from 'node:fs/promises';
+import { hashOf, openGenerateProgress } from './generateProgress.js';
 import { gzipSync } from 'node:zlib';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -16,7 +17,7 @@ import { buildConvertedMern, convertToMern, MERN_EXPORT_DIR, verifyConvertedMern
 import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
 import { writeLockfiles } from '../../../toolchains/lockfile.js';
-import { anchorClicks, checkCopy, excludedHostsOf, fixGate, formsInCopy, inPool, NOISE_SHOTS, perfProbe, probeOriginal } from './check.js';
+import { anchorClicks, beforePictures, checkCopy, excludedHostsOf, fixGate, formsInCopy, inPool, NOISE_SHOTS, perfProbe, probeOriginal } from './check.js';
 import { localFileOf, namesStillUsed, PERF_KINDS, planPerf, stylesheetCandidates } from '../../../copy/perfAsIs.js';
 import { formRoutesOfCopy, formsReadmeSection } from '../../../copy/formRoutes.js';
 import { fixAsIsCopy, fixGroup, revertPage } from '../../../copy/fixAsIs.js';
@@ -129,7 +130,7 @@ export async function readLifted(dir) {
  * `overrides`), so a run stopped at any moment of the proof leaves every stylesheet with its original bytes. Only the files
  * proven are written, at the very end, each one whole (written beside the gate folder, outside the copy, then renamed over it).
  */
-async function minifyAndProve({ browser, copyDir, gateDir, uses, integrity, complete, measuredPages, log, lookGate = fixGate, guard = null }) {
+async function minifyAndProve({ browser, copyDir, gateDir, uses, integrity, complete, measuredPages, log, lookGate = fixGate, guard = null, before = null, progress = null }) {
   let found;
   try {
     found = await stylesheetCandidates({ dir: copyDir, uses, integrity, complete, measured: measuredPages, browser });
@@ -139,6 +140,18 @@ async function minifyAndProve({ browser, copyDir, gateDir, uses, integrity, comp
   const open = found.open.map((o) => ({ kind: 'css', ...o }));
   const looks = [];
   if (!found.candidates.length) return { open, report: { files: [], looks } };
+  // A resumed job reuses the verdict reached on these very candidates (same files, same bytes, same pages) before the stop.
+  const sig = progress ? hashOf(found.candidates.map((c) => [c.rel, hashOf(c.original), [...c.pages].sort()])) : null;
+  const saved = sig ? await progress.css(sig) : null;
+  const openBefore = open.length;
+  let kept = [];
+  if (saved) {
+    const keep = new Set(saved.kept);
+    kept = found.candidates.filter((c) => keep.has(c.rel));
+    looks.push(...(saved.looks ?? []));
+    open.push(...(saved.open ?? []));
+    log(`stylesheets: the verdict reached before the stop is reused (${kept.length} of ${found.candidates.length} minified)`);
+  } else {
   const unfixed = await serveCopy(gateDir);
   const base = unfixed.url.replace(/\/$/, '');
   // Serves these candidates minified (every other file as it is on disk), then looks at every page that uses one of them.
@@ -151,13 +164,15 @@ async function minifyAndProve({ browser, copyDir, gateDir, uses, integrity, comp
       const seen = guard?.count ?? 0;
       try {
         side = await serveCopy(copyDir, { overrides });
-        g = await lookGate(browser, side.url.replace(/\/$/, ''), base, pagePath);
+        g = await lookGate(browser, side.url.replace(/\/$/, ''), base, pagePath, { before });
       } catch (err) {
         g = { path: pagePath, invisible: false, error: String(err?.message ?? err).split('\n')[0].slice(0, 160) };
       } finally {
         await side?.close();
       }
       if ((guard?.count ?? 0) !== seen) g = { path: pagePath, invisible: false, error: STRAY_WHY };
+      // A look that errored is no verdict to keep for a resume (it may be the stop itself).
+      if (g.error) brokeOff = true;
       const ok = proven(g);
       looks.push({ files: set.map((c) => c.rel), path: pagePath, ok, width: g.width ?? null, ...(g.error && { error: g.error }) });
       log(`stylesheets (${label}) on ${pagePath}: ${ok ? 'the same' : 'not proven the same'}`);
@@ -165,7 +180,8 @@ async function minifyAndProve({ browser, copyDir, gateDir, uses, integrity, comp
     }
     return { ok: true };
   };
-  let kept = [];
+  // A check that broke off (a stop, a closed browser) reached no verdict: nothing of it is saved.
+  let brokeOff = false;
   try {
     const all = await tryFiles(found.candidates, 'all');
     if (all.ok) kept = found.candidates;
@@ -181,10 +197,13 @@ async function minifyAndProve({ browser, copyDir, gateDir, uses, integrity, comp
       }
     }
   } catch (err) {
+    brokeOff = true;
     kept = [];
     open.push({ kind: 'css', page: null, reason: 'd', detail: `No stylesheet is minified: the check stopped (${String(err?.message ?? err).slice(0, 120)})` });
   } finally {
     await unfixed.close();
+  }
+  if (sig && !brokeOff) await progress.saveCss(sig, { kept: kept.map((c) => c.rel), looks, open: open.slice(openBefore) }).catch(() => {});
   }
   // Only now is anything written: each proven file whole, through a temporary file outside the copy and a rename. A file that
   // cannot be replaced keeps its original bytes: a rename that fails leaves the old file as it was, so nothing is written back
@@ -270,12 +289,12 @@ const whyNotKept = (g) => (g.error
  * again on its own, drops what it covers: a fix is kept only when it is shown to change nothing. The fixed side is served by a
  * fresh server for every look, because a server keeps each file it has sent and a retry rewrites the page.
  */
-export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped = null, log = () => {}, fetchLlms = null, speed = true, gone = checkGone, lookGate = fixGate, proc = process, exact = false }) {
+export async function fixAndProve({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped = null, log = () => {}, fetchLlms = null, speed = true, gone = checkGone, lookGate = fixGate, proc = process, exact = false, progress = null }) {
   // While the proof runs, the browser connection's stray replies (isStrayReply) are counted instead of ending the process; the
   // page whose look or measurement saw one is not proved (its fixes are undone). Removed when the proof ends, however it ends.
   const guard = strayReplyGuard({ proc });
   try {
-    return await proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped, log, fetchLlms, speed, gone, lookGate, guard, exact });
+    return await proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped, log, fetchLlms, speed, gone, lookGate, guard, exact, progress });
   } finally {
     guard.close();
   }
@@ -347,12 +366,16 @@ export function strayReplyGuard({ proc = process, rethrow = (err) => setImmediat
   };
 }
 
-async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped, log, fetchLlms, speed, gone, lookGate, guard, exact }) {
+async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUrl, addressSkipped, log, fetchLlms, speed, gone, lookGate, guard, exact, progress = null }) {
   // Every group judged by the "problem gone?" check (copy/fixGone.js): { path, group, result, keys }.
   const goneList = [];
   await rm(gateDir, { recursive: true, force: true });
   await cp(copyDir, gateDir, { recursive: true });
+  // The unfixed page's pictures, taken once per page and width and reused by every later look at that page (check.js).
+  const beforeShots = beforePictures(`${gateDir}-before`);
   const list = pages.map((p) => ({ path: localOfOutPath(p.outPath), outPath: p.outPath, url: p.url }));
+  // A saved part of this step (generateProgress.js) is used only when made from these very bytes of the lifted page.
+  const liftedSig = (outPath) => readFile(path.join(gateDir, outPath)).then((b) => hashOf(b), () => null);
   try {
     // Speed fixes (copy/perfAsIs.js), planned from the copy before any fix, measured at both gate widths. speed: false = none of
     // them, exactly as before C3 (a caller that proves only the markup fixes).
@@ -367,9 +390,13 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
         for (const p of list) {
           const seen = guard.count;
           try {
-            // An exact copy measures both widths at the same time (two contexts in the same browser).
-            const probe = await perfProbe(browser, before.url.replace(/\/$/, ''), p.path, { parallel: exact });
+            // An exact copy measures both widths at the same time (two contexts in the same browser). A resumed job reuses the
+            // probe made from the same lifted page before the stop.
+            const sig = progress ? await liftedSig(p.outPath) : null;
+            const savedProbe = sig ? await progress.perf(p.outPath, sig) : null;
+            const probe = savedProbe ?? await perfProbe(browser, before.url.replace(/\/$/, ''), p.path, { parallel: exact });
             if (guard.count !== seen) throw new Error(STRAY_WHY);
+            if (sig && !savedProbe) await progress.savePerf(p.outPath, sig, probe).catch(() => {});
             const plan = planPerf(probe, p.path);
             perf.set(p.outPath, plan);
             perfOpen.push(...plan.open.map((o) => ({ kind: 'lcp', ...o })));
@@ -401,7 +428,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
     const css = speed && exact
       ? { open: [], report: { files: [], looks: [], skipped: 'minified by the build' } }
       : speed
-      ? await minifyAndProve({ browser, copyDir, gateDir, uses, integrity, complete: measured, measuredPages: new Set(list.map((p) => p.outPath)), log, lookGate, guard })
+      ? await minifyAndProve({ browser, copyDir, gateDir, uses, integrity, complete: measured, measuredPages: new Set(list.map((p) => p.outPath)), log, lookGate, guard, before: beforeShots, progress })
       : { open: [], report: null };
     const fixed = await fixAsIsCopy({ dir: copyDir, siteUrl, newSiteUrl, fetchLlms, pages: list, ...(speed && { perf }) });
     fixed.open.push(...perfOpen, ...css.open);
@@ -470,7 +497,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
           const fixedBase = a.url.replace(/\/$/, '');
           // Both widths pictured at the same time (same rounds, same verdict per width; the first failing width in order decides).
           // One after the other halved nothing but the time: most looks pass, and a passing look pictures both widths anyway.
-          g = await lookGate(browser, fixedBase, unfixed, p.path, { axeRules: axeRulesFor(p.fixes), axeBefore, parallel: true });
+          g = await lookGate(browser, fixedBase, unfixed, p.path, { axeRules: axeRulesFor(p.fixes), axeBefore, parallel: true, before: beforeShots });
           // A link given a role is also clicked on both sides: invisible is not enough for something a visitor uses.
           if (g.invisible && (groups ? groups.includes('anchors') : p.fixes.some((f) => f.kind === 'anchors'))) {
             const clicks = await anchorClicks(browser, fixedBase, unfixed, p.path);
@@ -504,13 +531,17 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
       try {
         // Each page's fixes are proved on their own page only (its HTML, its looks; the files beside the pages are already written),
         // so pages are proved side by side, as many as the memory holds (each look pictures both widths at once).
-        const checkPage = async (p) => {
+        const checkPageNow = async (p) => {
           const groups = [...new Set(p.fixes.map(fixGroup))];
-          // Speed fixes are always proved on their own, strictly (proven), even when the page passed with everything.
+          // Speed fixes need the strict verdict (proven), never only "no change seen". A first look at every fix together that is
+          // proven keeps them all: what ships is that very page. Only a first look that is not proven tries each group alone (to
+          // find the one to drop). Before (user, 2026-11-13: "check speed fixes together"), every speed group was looked at alone
+          // even after a proven first look: up to 5 looks per page instead of 1.
           const speedGroups = groups.filter((x) => PERF_KINDS.includes(x));
           const isSpeed = (x) => speedGroups.includes(x);
           const g = await look(p);
-          if (g.invisible && !speedGroups.length) {
+          if (g.invisible && (!speedGroups.length || proven(g))) {
+            if (speedGroups.length) log(`fixes ${p.path}: every fix proven together at the first look (speed fixes included): kept, no look per group`);
             finalLook.set(p.outPath, g);
             return;
           }
@@ -572,6 +603,35 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
           } else dropped.push({ group: groups[0], reason: 'd', why: whyNotKept(g) });
           p.dropped = dropped;
           if (!kept.length) p.reverted = { reason: 'd', why: g.invisible ? dropped[0]?.why ?? 'not proven' : whyNotKept(g) };
+        };
+        // A page proven before a stop (generateProgress.js) is written back as it was finished, with its verdicts and looks, and
+        // not looked at again; a page proven now is saved once its proof is over (never one whose looks errored: no verdict).
+        const checkPage = async (p) => {
+          const sig = progress ? hashOf([await liftedSig(p.outPath), p.fixes]) : null;
+          const saved = sig ? await progress.page(p.outPath, sig) : null;
+          if (saved) {
+            const v = saved.value;
+            if (v.reverted) await revertPage(copyDir, p.outPath, fixed.originals.get(p.outPath));
+            else await writeFile(path.join(copyDir, p.outPath), saved.html);
+            p.fixes = v.fixes;
+            if (v.dropped) p.dropped = v.dropped;
+            if (v.reverted) p.reverted = v.reverted;
+            if (v.reserialized) p.reserialized = v.reserialized;
+            if (v.look) finalLook.set(p.outPath, v.look);
+            if (v.alone?.length) aloneLooks.set(p.outPath, new Map(v.alone));
+            gate.push(...(v.gate ?? []));
+            log(`fixes ${p.path}: proven before the stop, written back as it was finished`);
+            return;
+          }
+          await checkPageNow(p);
+          if (!sig) return;
+          const looks = gate.filter((g) => g.path === p.path);
+          if (looks.some((g) => g.error || g.stray)) return;
+          const html = p.reverted ? null : await readFile(path.join(copyDir, p.outPath));
+          await progress.savePage(p.outPath, sig, {
+            fixes: p.fixes, dropped: p.dropped ?? null, reverted: p.reverted ?? null, reserialized: p.reserialized ?? null,
+            look: finalLook.get(p.outPath) ?? null, alone: [...(aloneLooks.get(p.outPath) ?? new Map())], gate: looks,
+          }, html).catch(() => {});
         };
         await inPool(changed, fixPagesAtOnce(), checkPage);
         // The looks in page order, as when the pages were proved one after the other.
@@ -655,8 +715,11 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
       ...(speed && { css: css.report }),
       ...(exact && { lighter }),
       gate,
+      beforeReused: gate.reduce((n, g) => n + (g.views ?? []).filter((v) => v.beforeReused).length, 0),
+      ...(progress && { resumed: { ...progress.reused } }),
     };
   } finally {
+    await beforeShots.clear().catch(() => {});
     await rm(gateDir, { recursive: true, force: true });
   }
 }
@@ -957,6 +1020,13 @@ export async function asIsStage(ctx) {
   }
   const siteUrl = pages[0].url;
   const report = { stack, mode: 'as-is', pages: pages.map((p) => ({ url: p.url, path: localOfOutPath(p.outPath) })), createdAt: new Date().toISOString() };
+  // Progress inside this step (generateProgress.js): a job that continues a stopped one starts from the parts finished before
+  // the stop (the lift, each page's speed plan and proven fixes, the stylesheet verdict) when the same code made them.
+  const resuming = Boolean(ctx.report?.resumed?.length);
+  const progress = await openGenerateProgress(path.join(ctx.dir, ASIS_DIR, 'progress'), { resuming });
+  const liftedDirOf = path.join(ctx.dir, ASIS_DIR, 'lifted');
+  const liftKept = !fromDir && resuming && progress.liftDone(pages.map((p) => p.outPath))
+    && (await readdir(liftedDirOf).then((l) => l.length > 0, () => false)) && Boolean(await readLifted(ctx.dir));
   const browser = await chromium.launch();
   const servers = [];
   try {
@@ -980,7 +1050,20 @@ export async function asIsStage(ctx) {
       await writeFile(path.join(ctx.dir, ASIS_PAGES_FILE), `${JSON.stringify({
         createdAt: new Date().toISOString(), pages, excludedHosts, lift: lifted, reusedFrom: path.basename(fromDir),
       }, null, 1)}\n`, 'utf8');
+    } else if (liftKept) {
+      // Continued after a stop: the pages were lifted and completed before it (as-is/lifted, as-is/pages.json, the baselines),
+      // so the copy starts from that lift, as a repack does, instead of lifting again.
+      ctx.progress(0.1, 'Continuing from the pages lifted before the stop');
+      const saved = await readLifted(ctx.dir);
+      excludedHosts = saved.excludedHosts;
+      lifted = saved.lift;
+      progress.reused.lift = true;
+      await rm(copyDir, { recursive: true, force: true });
+      await cp(liftedDirOf, copyDir, { recursive: true });
+      report.recordings = await recordingsOf(ctx.dir, pages);
     } else {
+      // A lift starts: whatever lift was recorded before is no longer the one in as-is/lifted.
+      await progress.saveLift(null).catch(() => {});
       // The record is written when the job ends; the lift needs it now (every page's document), so it is saved here first.
       await ctx.netCache?.record?.save?.().catch(() => {});
       ctx.progress(0.05, 'Excluding the parts that are not the site');
@@ -1010,9 +1093,15 @@ export async function asIsStage(ctx) {
       report.recordings = await recordingsOf(ctx.dir, pages);
     }
     // The copy as lifted is kept apart: the fixes below change copyDir, and a later repack starts again from this one.
-    const liftedDir = path.join(ctx.dir, ASIS_DIR, 'lifted');
-    await rm(liftedDir, { recursive: true, force: true });
-    await cp(copyDir, liftedDir, { recursive: true });
+    // A lift reused after a stop is that folder itself: it is never written again (a stop in the middle of a rewrite would leave
+    // half a lift that the next resume would trust).
+    const liftedDir = liftedDirOf;
+    if (!liftKept) {
+      await rm(liftedDir, { recursive: true, force: true });
+      await cp(copyDir, liftedDir, { recursive: true });
+      // The lift is finished and kept: a stop from here on continues from it.
+      await progress.saveLift(pages.map((p) => p.outPath)).catch(() => {});
+    }
     report.excludedByRule = excludedHosts;
     report.lift = lifted;
     // The addresses the copy answers from the original (mapped, the same as the original, two sizes of one path): see complete.js.
@@ -1059,7 +1148,7 @@ export async function asIsStage(ctx) {
       return `Checking that the fixes leave ${page} looking the same (page ${fixedSeen.size} of ${pages.length})`;
     };
     report.fixes = await fixAndProve({
-      browser, copyDir, gateDir: path.join(ctx.dir, ASIS_DIR, 'unfixed'), pages, siteUrl,
+      browser, copyDir, gateDir: path.join(ctx.dir, ASIS_DIR, 'unfixed'), pages, siteUrl, progress,
       newSiteUrl: address.origin, addressSkipped: address.skipped, fetchLlms: fetchLlmsTxt,
       log: (m) => {
         console.log(`[recreate ${String(ctx.recreateId ?? '').slice(0, 8)}] ${m}`);
