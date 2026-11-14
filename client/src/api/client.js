@@ -249,6 +249,14 @@ export const api = {
   addAddress: (id, recreateId, address) => request(`/projects/${id}/recreate`, {
     method: 'POST', body: { mode: 'as-is', confirmed: true, addressOnly: true, recreateId, addressConfirmed: address },
   }),
+  // Fix mode ("Make text easier to read" in Results): the changes proposed from the last comparison (no browser), their
+  // before / after pictures (made once, slow), and the approved ones written into the copy (a new job, like the address).
+  getFixProposals: (id, recreateId) => request(`/projects/${id}/recreate/${recreateId}/fix-proposals`),
+  makeFixPictures: (id, recreateId) => request(`/projects/${id}/recreate/${recreateId}/fix-proposals/pictures`, { method: 'POST' }),
+  fixPictureUrl: (id, recreateId, file) => apiUrl(`/projects/${id}/recreate/${recreateId}/fix-mode/${file}`),
+  applyFixes: (id, recreateId, approved) => request(`/projects/${id}/recreate`, {
+    method: 'POST', body: { mode: 'as-is', confirmed: true, fixOnly: true, recreateId, approved },
+  }),
   // Whether the original answers right now (a site that is down draws a blank live frame).
   siteAnswers: (id, url) => request(`/projects/${id}/live?url=${encodeURIComponent(url)}`),
   startAsIsPreview: (id, recreateId) => request(`/projects/${id}/recreate/${recreateId}/asis-preview`, { method: 'POST' }),

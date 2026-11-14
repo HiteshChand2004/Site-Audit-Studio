@@ -13,6 +13,7 @@
 //      points at the new sitemap.
 // A failed proof puts the folder back exactly as the finished copy is, and says why: the copy then names no address, and the
 // rows that need one stay "Needs information from you". No browser and no page load: files only.
+import { bundledTemplate, drawnHtml, syncShellHead, withTemplate } from './bundled.js';
 import { cp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
@@ -65,7 +66,9 @@ export async function addressPass({ fromDir, dir, pages, siteUrl, newSiteUrl, si
   const docs = [];
   for (const p of pages) {
     const html = await readFile(path.join(dir, p.outPath), 'utf8').catch(() => null);
-    if (html != null) docs.push({ ...p, html, $: cheerio.load(html) });
+    // A bundled page (copy/bundled.js): the address tags go into the document its template draws, and its shell follows.
+    const template = html == null ? null : bundledTemplate(html);
+    if (html != null) docs.push({ ...p, html, ...(template && { template }), $: cheerio.load(template ? template.inner : html) });
   }
   const byPath = new Map();
   for (const d of docs) {
@@ -83,7 +86,10 @@ export async function addressPass({ fromDir, dir, pages, siteUrl, newSiteUrl, si
     const fixes = [];
     const { own } = await applyAddress($, d, { dir, siteHost, newOrigin: origin, byPath, fixes, open, pictures });
     d.head = { title: clean($('title').first().text()), description: clean($('meta[name="description"]').attr('content')), canonical: own };
-    if (fixes.length) await writeFile(path.join(dir, d.outPath), $.html(), 'utf8');
+    if (fixes.length) {
+      const drawn = $.html();
+      await writeFile(path.join(dir, d.outPath), d.template ? syncShellHead(withTemplate(d.html, d.template, drawn), drawn).html : drawn, 'utf8');
+    }
     for (const f of fixes) counts[f.kind] = (counts[f.kind] ?? 0) + 1;
     result.push({ path: d.path, outPath: d.outPath, fixes });
   }
@@ -105,7 +111,7 @@ async function prove({ dir, docs, before, origin, byPath, result }) {
   for (const d of docs) {
     const now = await readFile(path.join(dir, d.outPath), 'utf8').catch(() => null);
     if (now == null) return `${d.outPath} is gone`;
-    if (withoutAddressTags(now) !== withoutAddressTags(d.html)) return `${d.outPath} changed outside its address tags`;
+    if (withoutAddressTags(drawnHtml(now)) !== withoutAddressTags(drawnHtml(d.html))) return `${d.outPath} changed outside its address tags`;
   }
   // 2. Every other file: the same bytes; only the site files may change or appear; nothing disappears.
   const pageFiles = new Set(docs.map((d) => d.outPath.split(path.sep).join('/')));

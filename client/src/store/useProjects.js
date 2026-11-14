@@ -365,6 +365,13 @@ export const useProjects = create((set, get) => ({
    * @returns {Promise<string>} the new job's id
    */
 
+  /** Fix mode: writes the changes the user approved into the finished copy (a short job, followed like any copy). */
+  async applyFixes(id, recreateId, approved) {
+    const { job, steps } = await api.applyFixes(id, recreateId, approved);
+    get().attachJob('recreate', id, job, steps);
+    return job.id;
+  },
+
   async addAddress(id, recreateId, address) {
     const { job, steps } = await api.addAddress(id, recreateId, address);
     get().attachJob('recreate', id, job, steps);

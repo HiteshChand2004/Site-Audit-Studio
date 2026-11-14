@@ -20,6 +20,47 @@ export const ADDRESS_DIALOG = {
   failedText: 'The copy without the address is still here and downloads as before.',
 };
 
+/**
+ * Fix mode ("Make the copy easier to read", Results): changes that make the copy pass checks the original fails, but that
+ * change how a page looks a little (a text colour), so the copy makes them only when you approve each one.
+ */
+export const FIX_MODE = {
+  title: 'Make the copy easier to read',
+  sub: (contrast, headings) => [
+    contrast ? `Text is too faint to read easily in ${contrast} place${contrast === 1 ? '' : 's'}` : null,
+    headings ? `${headings} heading${headings === 1 ? ' skips' : 's skip'} a level` : null,
+  ].filter(Boolean).join(', and ') + '. The original has the same problem. You can fix it in the copy: nothing changes until you approve it.',
+  review: (n) => `Review ${n} change${n === 1 ? '' : 's'}`,
+  done: (n) => `${n} change${n === 1 ? '' : 's'} you approved ${n === 1 ? 'is' : 'are'} in this copy.`,
+  dialogTitle: 'Changes you can approve',
+  dialogText: 'Each change makes the copy pass a check the original fails. Tick the ones you want: only those are made, nothing else on the page changes.',
+  loading: 'Reading the last comparison…',
+  none: 'Nothing left to change: the last comparison found no faint text and no skipped headings that can be fixed in the page.',
+  kinds: { contrast: 'Text colour', 'heading-level': 'Heading order' },
+  now: 'Now',
+  after: 'After',
+  hard: (r) => `Hard to read (${r}:1)`,
+  easy: (r) => `Easy to read (${r}:1)`,
+  needs: (r) => `The check asks for at least ${r}:1 between the text and what is behind it.`,
+  heading: (from, to) => `Screen readers will read it as a level ${to} heading instead of level ${from}, so the page outline has no gap. Nothing visible changes.`,
+  places: (n, pages) => (n === 1 ? 'In 1 place' : `In ${n} places on ${pages} page${pages === 1 ? '' : 's'}`),
+  where: 'Where it is on the page',
+  pictures: 'Pictures of each change on the page are being made (a few minutes). You can approve without waiting.',
+  picturesFailed: 'The pictures could not be made. The colours above show the change.',
+  notShown: 'Not shown at this size',
+  phone: 'Phone',
+  computer: 'Computer',
+  selectAll: 'Select all',
+  clear: 'Clear',
+  chosen: (n, all) => `${n} of ${all} chosen`,
+  skipped: (n) => `${n} more place${n === 1 ? '' : 's'} can’t be changed here: the check could not point at one element in the page, a script draws the text after the page loads, or the text sits over a picture.`,
+  apply: (n, places) => (n ? `Apply ${n} change${n === 1 ? '' : 's'}${places > n ? ` (${places} places)` : ''}` : 'Tick the changes you want'),
+  close: 'Close',
+  applying: 'Writing the changes you approved into the copy… It is then compared with the original again.',
+  failedTitle: 'The changes could not be written',
+  failedText: 'The copy is unchanged.',
+};
+
 /** A 0–100 score as a rating people understand. */
 export function rating(score) {
   if (score == null || Number.isNaN(score)) return { label: 'Not measured', tone: 'neutral' };

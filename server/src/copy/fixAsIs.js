@@ -45,8 +45,17 @@ import { MARKUP_PASS, emptyCounts, fixGroup } from './fixRegistry.js';
 import { fixImageLoading, fixPngImages } from './perfAsIs.js';
 import { SECURITY_HEADERS } from './securityHeaders.js';
 import { faithfulHtml, loadFaithful } from './faithfulHtml.js';
+import { bundledTemplate, headOf, syncShellHead, withTemplate } from './bundled.js';
 
 const clean = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
+
+/** The visible words of a page's body: its text without what a script, a stylesheet or a template holds. */
+export function visibleText($) {
+  const body = $('body').first().clone();
+  body.find('script, style, noscript, template').remove();
+  return body.text();
+}
+
 const SKIP = new Set(['script', 'style', 'noscript', 'template']);
 const bareHost = (h) => String(h ?? '').toLowerCase().replace(/^www\./, '');
 
@@ -123,8 +132,12 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     const file = path.join(dir, p.outPath);
     const html = await readFile(path.join(readDir ?? dir, p.outPath), 'utf8').catch(() => null);
     if (html == null) continue;
+    // A bundled page (copy/bundled.js) draws the document in its template: that document is the one fixed (`html`), and the
+    // page around it (`shell`) is written back with it.
+    const template = bundledTemplate(html);
+    const drawn = template ? template.inner : html;
     // With the parser's source positions: a fixed page is written back as its own bytes with only the fixes changed (faithfulHtml).
-    docs.push({ ...p, file, html, $: loadFaithful(html) });
+    docs.push({ ...p, file, html: drawn, ...(template && { shell: html, template }), $: loadFaithful(drawn) });
   }
   const name = siteName || clean(docs[0]?.$('meta[property="og:site_name"]').attr('content')) || siteHost;
 
@@ -175,7 +188,9 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     const body = $('body').get(0);
     const root = body ? adapt($, body) : null;
     // The page's text before any fix adds to it (a link's hidden text), so the language read from it is the same in a retry.
-    const bodyText = $('body').text();
+    // Only the words a visitor reads: a stylesheet or script inside the body (a bundled page holds its fonts' CSS there) is no
+    // text, and 20 000 characters of CSS told detectLang nothing (procuredesk: no lang).
+    const bodyText = visibleText($);
     resetTextCache();
     // A retry (`only`) makes only the groups it names on its page; every other page, and a first pass, makes them all.
     const allow = (group) => !only?.has(d.outPath) || only.get(d.outPath).has(group);
@@ -225,18 +240,25 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
       }
     }
 
-    // Head: only what is missing or duplicated.
-    const head = $('head');
+    // Head: only what is missing or duplicated. A page whose head tags stand in a <helmet> block (its script moves them into the
+    // head when it draws the page: react-helmet, a bundled page's x-dc) is given them there; a tag written into <head> beside
+    // them would lose to the helmet's own when the script runs.
+    const head = headOf($);
     const h1 = clean($('body h1').first().text()) || clean($('body h2').first().text());
-    const titleEl = $('title').first();
+    // The page's own title where it stands (the head's first, else any: a title outside the head is still the page's title).
+    let titleEl = head.find('title').first();
+    if (!titleEl.length) titleEl = $('title').first();
     const title = clean(titleEl.text());
     const titleKey = title.toLowerCase();
     let finalTitle = title;
     if (allow('head:title') && (!title || seenTitle.has(titleKey))) {
       const fresh = fitTitle(h1 && h1.toLowerCase() !== titleKey ? h1 : pathLabel(d.path) || h1, name);
       if (fresh && !seenTitle.has(fresh.toLowerCase())) {
-        if (!titleEl.length) head.prepend('<title></title>');
-        head.find('title').first().text(fresh);
+        if (!titleEl.length) {
+          head.prepend('<title></title>');
+          titleEl = head.find('title').first();
+        }
+        titleEl.text(fresh);
         fixes.push({ kind: 'head', field: 'title', from: title || null, value: fresh, source: title ? 'duplicate of another page' : 'missing' });
         finalTitle = fresh;
       }
@@ -246,7 +268,7 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     if (allow('head:title') && finalTitle && finalTitle === title && outside(finalTitle, TITLE_LIMITS)) {
       const fitted = fitTitle(finalTitle, name);
       if (fitted !== finalTitle && !outside(fitted, TITLE_LIMITS) && !seenTitle.has(fitted.toLowerCase())) {
-        head.find('title').first().text(fitted);
+        titleEl.text(fitted);
         fixes.push({ kind: 'head', field: 'title', from: finalTitle, value: fitted, source: finalTitle.length > TITLE_LIMITS[1] ? 'too long: shortened' : 'too short: the site name added' });
         finalTitle = fitted;
       } else open.push({ kind: 'head', field: 'title', page: d.path, reason: 'c', detail: `The title is ${finalTitle.length} characters (10–60 wanted) and the page gives nothing to ${finalTitle.length > TITLE_LIMITS[1] ? 'shorten it to' : 'complete it with'}: the owner writes it` });
@@ -254,7 +276,8 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     // The page's own title counts as taken too: a later page with the same text is still a duplicate after this one's was fitted.
     seenTitle.add(finalTitle.toLowerCase());
     if (title) seenTitle.add(titleKey);
-    const descEl = $('meta[name="description"]').first();
+    let descEl = head.find('meta[name="description"]').first();
+    if (!descEl.length) descEl = $('meta[name="description"]').first();
     const description = clean(descEl.attr('content'));
     let finalDescription = description;
     if (allow('head:description') && (!description || seenDescription.has(description.toLowerCase()))) {
@@ -270,8 +293,11 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
         }
       }
       if (fresh && fresh.length >= 50 && !seenDescription.has(fresh.toLowerCase())) {
-        if (!descEl.length) head.append('<meta name="description" content="">');
-        head.find('meta[name="description"]').first().attr('content', fresh);
+        if (!descEl.length) {
+          head.append('<meta name="description" content="">');
+          descEl = head.find('meta[name="description"]').first();
+        }
+        descEl.attr('content', fresh);
         fixes.push({ kind: 'head', field: 'description', from: description || null, value: fresh, source: description ? 'duplicate of another page' : from });
         finalDescription = fresh;
       }
@@ -282,7 +308,7 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
       const long = finalDescription.length > DESCRIPTION_LIMITS[1];
       const fitted = fitDescription(long ? [finalDescription] : [finalDescription, ...paragraphsOf($).filter((t) => !seenDescription.has(t.toLowerCase()))]);
       if (fitted !== finalDescription && !outside(fitted, DESCRIPTION_LIMITS) && !seenDescription.has(fitted.toLowerCase())) {
-        head.find('meta[name="description"]').first().attr('content', fitted);
+        descEl.attr('content', fitted);
         fixes.push({ kind: 'head', field: 'description', from: finalDescription, value: fitted, source: long ? 'too long: cut at a word' : 'too short: completed with the page\'s own paragraphs' });
         finalDescription = fitted;
       } else open.push({ kind: 'head', field: 'description', page: d.path, reason: 'c', detail: `The description is ${finalDescription.length} characters (50–160 wanted) and the page gives no words of its own to complete it: the owner writes it` });
@@ -373,19 +399,21 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     // The page's own bytes with only the fixes' changes; when the parser's positions cannot place one, the whole page as cheerio
     // writes it, and the page says why (`reserialized`).
     let written = null;
+    // The whole page as written: a bundled page's template carries the fixed document, and its shell's head follows it.
+    const pageOf = (w) => (d.template ? syncShellHead(withTemplate(d.shell, d.template, w.html), w.html).html : w.html);
     if (!write) {
       if (!only || only.has(d.outPath)) {
         written = faithfulHtml($, d.html);
-        htmlOut.set(d.outPath, written.html);
+        htmlOut.set(d.outPath, pageOf(written));
       }
     } else if (fixes.length && (!only || only.has(d.outPath))) {
-      originals.set(d.outPath, d.html);
+      originals.set(d.outPath, d.shell ?? d.html);
       written = faithfulHtml($, d.html);
-      await writeFile(d.file, written.html, 'utf8');
+      await writeFile(d.file, pageOf(written), 'utf8');
     }
     for (const f of fixes) counts[f.kind] = (counts[f.kind] ?? 0) + 1;
     d.head = { title: finalTitle, description: finalDescription, canonical: own };
-    result.push({ path: d.path, outPath: d.outPath, fixes, ...(written && !written.faithful && { reserialized: written.why }) });
+    result.push({ path: d.path, outPath: d.outPath, fixes, ...(d.template && { bundled: true }), ...(written && !written.faithful && { reserialized: written.why }) });
   }
 
   const files = only || !write ? null : await siteFiles({ dir, docs, newOrigin, siteName: name, siteUrl, fetchLlms });
@@ -419,7 +447,7 @@ export const ADDRESS_TAGS = [
  * @returns {Promise<{ own: string|null, fixes: object[], open: object[] }>}  own: the page's address on the new site
  */
 export async function applyAddress($, page, { dir, siteHost, newOrigin, byPath, allow = true, fixes = [], open = [], between = null, pictures = new Map() }) {
-  const head = $('head');
+  const head = headOf($);
   const own = newOrigin ? new URL(page.path, newOrigin).href : null;
   const canonical = $('link[rel="canonical"]').first();
   if (canonical.length) {

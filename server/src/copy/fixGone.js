@@ -15,6 +15,7 @@
 //             with the reason, under UNATTRIBUTED)
 //   unjudged  none of its targets failed here, or none is read from the markup (axe, Lighthouse): nothing to say yet
 import { readFile } from 'node:fs/promises';
+import { drawnHtml } from './bundled.js';
 import path from 'node:path';
 import { extractPage } from '../audit/extract.js';
 import { analyzeSeo } from '../audit/analyzers/seo.js';
@@ -225,7 +226,8 @@ export function mergeVerdicts(a, b) {
  * @returns {Promise<Map<string, Record<string, object>>>}  outPath → group → verdict
  */
 export async function checkGone({ copyDir, gateDir, pages, fixed, rebuild = null }) {
-  const read = (dir, p) => readFile(path.join(dir, p.outPath), 'utf8').then((html) => ({ url: p.url, facts: extractPage(html, p.url) }), () => null);
+  // What the browser draws: a bundled page's template document (copy/bundled.js), else the page.
+  const read = (dir, p) => readFile(path.join(dir, p.outPath), 'utf8').then((html) => ({ url: p.url, facts: extractPage(drawnHtml(html), p.url) }), () => null);
   const lifted = new Map();
   const shipped = new Map();
   for (const p of pages) {
@@ -261,7 +263,7 @@ async function attribute({ v, grew, p, url, sides, order, shipped, rebuild }) {
   const readWithout = async (g) => {
     if (!without.has(g)) {
       const html = rebuild ? await rebuild(p, groups.filter((x) => x !== g)).catch(() => null) : null;
-      without.set(g, html == null ? null : { url, facts: extractPage(html, url) });
+      without.set(g, html == null ? null : { url, facts: extractPage(drawnHtml(html), url) });
     }
     return without.get(g);
   };
