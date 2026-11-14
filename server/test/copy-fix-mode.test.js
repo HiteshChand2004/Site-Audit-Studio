@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { AxeBuilder } from '@axe-core/playwright';
-import { applyApproved, applyToHtml, findingsOf, parseContrastMessage, proposalPictures, proposalsFrom } from '../src/copy/fixMode.js';
+import { applyApproved, applyToHtml, findingsOf, groupKey, parseContrastMessage, proposalPictures, proposalsFrom, representatives } from '../src/copy/fixMode.js';
 import { gateVerdict, pictureRounds, viewOf } from '../src/recreate/behavior/preserve/check.js';
 import { serveCopy } from '../src/recreate/behavior/preserve/serve.js';
 import { randomUUID } from 'node:crypto';
@@ -17,12 +17,12 @@ import { db } from '../src/db/index.js';
 import recreateRouter from '../src/routes/recreate.js';
 import { seedProject } from './helpers/projects.js';
 
-// Fix mode is hidden from users: every address of it answers 404, and a `fixOnly` copy is never started.
-test('the Fix mode addresses answer 404 (hidden from users)', async (t) => {
+// Fix mode is open to users (Results → "Make text easier to read"): with no finished copy each address says why, not 404.
+test('the Fix mode addresses answer with the reason when there is no finished copy', async (t) => {
   const projectId = randomUUID();
   const recreateId = randomUUID();
   const SITE = 'https://www.acme-original.dev/';
-  seedProject(db, { id: projectId, name: 'fix mode off', url: SITE, stack: 'html', authorized: 1, analysis: { url: SITE } });
+  seedProject(db, { id: projectId, name: 'fix mode on', url: SITE, stack: 'html', authorized: 1, analysis: { url: SITE } });
   t.after(() => db.prepare('DELETE FROM projects WHERE id = ?').run(projectId));
   const app = express();
   app.use(express.json());
@@ -31,15 +31,26 @@ test('the Fix mode addresses answer 404 (hidden from users)', async (t) => {
   t.after(() => server.close());
   await new Promise((r) => server.once('listening', r));
   const base = `http://127.0.0.1:${server.address().port}/api/projects/${projectId}/recreate`;
-  assert.equal((await fetch(`${base}/${recreateId}/fix-proposals`)).status, 404);
-  assert.equal((await fetch(`${base}/${recreateId}/fix-proposals/pictures`, { method: 'POST' })).status, 404);
-  assert.equal((await fetch(`${base}/${recreateId}/fix-mode/0123456789-1440-before.png`)).status, 404);
+  const list = await fetch(`${base}/${recreateId}/fix-proposals`);
+  assert.equal(list.status, 409);
+  assert.match((await list.json()).error, /finished "Copy my site" copy/);
+  assert.equal((await fetch(`${base}/${recreateId}/fix-proposals/pictures`, { method: 'POST' })).status, 409);
+  assert.equal((await fetch(`${base}/${recreateId}/fix-mode/0123456789-1440-before.png`)).status, 404, 'a picture that does not exist');
   const apply = await fetch(base, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ mode: 'as-is', confirmed: true, fixOnly: true, recreateId, approved: ['x'] }),
   });
-  assert.equal(apply.status, 404);
-  assert.equal((await apply.json()).error, 'Not found.');
+  assert.equal(apply.status, 409);
+  assert.match((await apply.json()).error, /no finished copy to change/);
+});
+
+test('the same change on several pages is one group, pictured once', () => {
+  const c = (id, page, from, bg, selector = '.x') => ({ id, page, kind: 'contrast', selector, change: { property: 'color', from, to: '#555555', background: bg } });
+  const list = [c('a', '/', '#999999', '#ffffff'), c('b', '/about/', '#999999', '#ffffff', '.y'), c('c', '/', '#999999', '#f0f0f0'),
+    { id: 'd', page: '/', kind: 'heading-level', selector: '#faq', change: { attribute: 'aria-level', from: 4, to: 3 } }];
+  assert.equal(groupKey(list[0]), groupKey(list[1]), 'same colours on the same background, another page and element');
+  assert.notEqual(groupKey(list[0]), groupKey(list[2]), 'another background is another change');
+  assert.deepEqual(representatives(list).map((p) => p.id), ['a', 'c', 'd']);
 });
 
 // The copy's homepage as written (CRLF, a bare attribute, single quotes: bytes a whole-page rewrite would change).

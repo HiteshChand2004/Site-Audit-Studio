@@ -22,7 +22,7 @@ import { asIsPagesOf } from '../recreate/behavior/preserve/asis.js';
 import { isOwner, refuseNonOwner } from '../accounts/roles.js';
 import { usableAddress } from '../copy/address.js';
 import { chromium } from 'playwright';
-import { FIX_MODE_DIR, PROPOSALS_FILE, proposalPictures, proposalsForCopy } from '../copy/fixMode.js';
+import { FIX_MODE_DIR, PROPOSALS_FILE, proposalPictures, proposalsForCopy, representatives } from '../copy/fixMode.js';
 import { gateVerdict, pictureRounds, viewOf } from '../recreate/behavior/preserve/check.js';
 import { serveCopy } from '../recreate/behavior/preserve/serve.js';
 import { localOfOutPath } from '../recreate/behavior/preserve/asis.js';
@@ -30,9 +30,6 @@ import { pageSlug } from '../reaudit/lighthousePages.js';
 import { PICTURED_VIEWS, makeCopyPicture, restoreOriginalPicture } from '../recreate/behavior/preserve/copyPictures.js';
 
 const router = Router();
-
-/** Fix mode (Step 11) is hidden from users: its addresses answer 404 and a `fixOnly` copy is not started. */
-const FIX_MODE_OFF = true;
 
 /**
  * The owner-only options a POST …/recreate body asks for, in words (accounts/roles.js). Ordinary users have "Copy my site":
@@ -188,8 +185,6 @@ router.post('/:id/recreate', async (req, res) => {
     } else if (req.body.fixOnly === true) {
       // `fixOnly` (Step 11, Fix mode): the changes the user approved one by one (`approved`: proposal ids of GET
       // …/fix-proposals) written into the finished copy `recreateId`, files only (behavior/preserve/stage.js fixStage).
-      // Fix mode is off for users (FIX_MODE_OFF below): the request is answered as if the feature did not exist.
-      if (FIX_MODE_OFF) return res.status(404).json({ error: 'Not found.' });
       const rid = req.body.recreateId;
       const row = typeof rid === 'string' && UUID.test(rid) ? doneReport.get(rid, project.id) : null;
       const done = row?.result_json ? JSON.parse(row.result_json) : null;
@@ -543,11 +538,6 @@ router.delete('/:id/recreate/:recreateId/asis-preview', async (req, res) => {
 // Fix mode (Step 11): the changes proposed for a finished "Copy my site" copy (a text colour, a heading's level), from its last
 // re-check as saved (no browser), then their before / after pictures (one browser, in the job line), then POST …/recreate
 // { mode: 'as-is', fixOnly: true, recreateId, approved } writes only the approved ones.
-// Off for users: every Fix mode address answers 404 (the code below is kept, not reachable while this is true).
-router.all(['/:id/recreate/:recreateId/fix-proposals', '/:id/recreate/:recreateId/fix-proposals/pictures', '/:id/recreate/:recreateId/fix-mode/:file'], (req, res, next) => {
-  if (FIX_MODE_OFF) return res.status(404).json({ error: 'Not found.' });
-  next();
-});
 async function fixModeContext(req, res) {
   const { id, recreateId } = req.params;
   if (!UUID.test(id) || !UUID.test(recreateId)) return void res.status(404).json({ error: 'Recreate not found.' });
@@ -580,7 +570,9 @@ router.post('/:id/recreate/:recreateId/fix-proposals/pictures', async (req, res)
     const browser = await chromium.launch();
     try {
       return await proposalPictures({
-        browser, copyDir: path.join(ctx.folder, ASIS_DIR, 'copy'), workDir: path.join(ctx.folder, FIX_MODE_DIR), proposals: ctx.data.proposals,
+        browser, copyDir: path.join(ctx.folder, ASIS_DIR, 'copy'), workDir: path.join(ctx.folder, FIX_MODE_DIR),
+        // One picture per group of the same change (the app shows one row per group).
+        proposals: representatives(ctx.data.proposals),
         serve: (dir) => serveCopy(dir), pictureRounds, gateVerdict, viewOf,
       });
     } finally {

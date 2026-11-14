@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, FileText, ListChecks, Loader2, RotateCw, Ruler, Trophy } from 'lucide-react';
+import { Contrast, Download, FileText, ListChecks, Loader2, RotateCw, Ruler, Trophy } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import { Alert, Card, EmptyState } from '../../components/common/Surface.jsx';
 import FixReport from '../../components/recreate/FixReport.jsx';
@@ -9,7 +9,8 @@ import CopyPages from '../../components/recreate/CopyPages.jsx';
 import PageGallery from '../../components/recreate/PageGallery.jsx';
 import AsIsReport from '../../components/recreate/AsIsReport.jsx';
 import AddressDialog from '../../components/recreate/AddressDialog.jsx';
-import { ADDRESS_DIALOG } from '../../copy.js';
+import FixModeDialog, { groupProposals } from '../../components/recreate/FixModeDialog.jsx';
+import { ADDRESS_DIALOG, FIX_MODE } from '../../copy.js';
 import SectionCard from '../../components/common/SectionCard.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import { stackById } from '../../constants.js';
@@ -50,6 +51,27 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
   const [pending, setPending] = useState(null);
   const needsAddress = Boolean(result?.asIs && !result.asIs.address?.used && !result.asIs.addressedFrom);
   const pendingFailed = pending && job?.id === pending && job.status === 'failed' ? job.error ?? '' : null;
+  // Fix mode: changes that make the copy pass checks the original fails (faint text, skipped headings), made only when the user
+  // approves each one. Proposed from the comparison of THIS copy; `fixing` is the job writing the approved ones.
+  const applyFixes = useProjects((s) => s.applyFixes);
+  const [fixes, setFixes] = useState(null);
+  const [askFixes, setAskFixes] = useState(false);
+  const [fixing, setFixing] = useState(null);
+  const fixFailed = fixing && job?.id === fixing && job.status === 'failed' ? job.error ?? '' : null;
+  const comparedId = audit && !audit.isDummy && audit.recreate && !audit.recreate.isDummy ? audit.recreate.recreateId : null;
+  const comparedAt = audit?.recreate?.reauditId ?? audit?.recreate?.finishedAt ?? null;
+  useEffect(() => {
+    setFixes(null);
+    if (!result?.asIs || !result.recreateId || comparedId !== result.recreateId) return undefined;
+    let gone = false;
+    api.getFixProposals(project.id, result.recreateId).then((d) => { if (!gone) setFixes(d); }, () => {});
+    return () => {
+      gone = true;
+    };
+  }, [project.id, result?.recreateId, result?.asIs, comparedId, comparedAt]);
+  useEffect(() => {
+    if (fixing && result?.recreateId === fixing) setFixing(null);
+  }, [fixing, result?.recreateId]);
   useEffect(() => {
     if (!pending || result?.recreateId !== pending) return;
     setPending(null);
@@ -113,6 +135,17 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
 
   const comparison = audit && !audit.isDummy && audit.recreate && !audit.recreate.isDummy ? audit.recreate : null;
   const canCompare = audit?.recreate?.recreateId && !isJobActive(reauditJob);
+  const proposals = fixes?.proposals ?? [];
+  const contrastCount = proposals.filter((p) => p.kind === 'contrast').length;
+  const headingCount = proposals.length - contrastCount;
+  const changeCount = groupProposals(proposals).length;
+  const approvedBefore = result.asIs?.changedOnPurpose?.length ?? 0;
+  const showFixes = Boolean(result.asIs && (proposals.length || approvedBefore || fixing));
+  async function approveFixes(ids) {
+    const id = await applyFixes(project.id, result.recreateId, ids);
+    setFixing(id);
+    setAskFixes(false);
+  }
 
   return (
     <div className={ws.stepBody}>
@@ -135,6 +168,30 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
       )}
       <Outcome result={result} comparison={comparison} />
       {result.copy && <CopyPages copy={result.copy} />}
+
+      {showFixes && (
+        <Card
+          icon={Contrast}
+          title={FIX_MODE.title}
+          sub={proposals.length ? FIX_MODE.sub(contrastCount, headingCount) : FIX_MODE.done(approvedBefore)}
+          actions={proposals.length > 0 && (
+            <Button variant="primary" disabled={busy || Boolean(fixing && fixFailed == null)} onClick={() => setAskFixes(true)}>
+              {FIX_MODE.review(changeCount)}
+            </Button>
+          )}
+        >
+          {proposals.length > 0 && approvedBefore > 0 && <p className={ws.hint} style={{ margin: 0 }}>{FIX_MODE.done(approvedBefore)}</p>}
+          {fixing && fixFailed == null && <p className={ws.hint} style={{ margin: 0 }}>{FIX_MODE.applying}</p>}
+          {fixFailed != null && (
+            <Alert tone="bad" title={FIX_MODE.failedTitle}>
+              {fixFailed} {FIX_MODE.failedText}
+            </Alert>
+          )}
+        </Card>
+      )}
+      {result.asIs && result.recreateId && (
+        <FixModeDialog open={askFixes} projectId={project.id} recreateId={result.recreateId} onApply={approveFixes} onClose={() => setAskFixes(false)} />
+      )}
 
       {!comparison && canCompare && (
         <Alert

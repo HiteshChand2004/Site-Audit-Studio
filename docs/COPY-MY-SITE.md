@@ -62,6 +62,8 @@ Every item left open (got worse, or still open) must name one reason:
 - **c** needs the owner's decision (dead external links, content or brand choices);
 - **d** the fix would change the original's look, animation or behaviour, breaking as-is fidelity: show what the fix would change
   and let the user apply it from the report;
+  for faint text and skipped heading levels that is Results → "Make the copy easier to read" (Fix mode), which the user approves
+  change by change (2026-11-14: the copy should beat the original, with the user's approval for anything visible);
 - **e** cannot be verified locally (depends on real hosting): noted in `DEPLOY.md`.
 
 Any fix that makes a visual, hover/control or console check worse is reverted automatically and listed under **d**.

@@ -20,6 +20,7 @@ import * as cheerio from 'cheerio';
 import sharp from 'sharp';
 import { contrast, fixColor, parseColor } from '../recreate/fixers/contrast.js';
 import { faithfulHtml, loadFaithful } from './faithfulHtml.js';
+import { bundledTemplate, drawnHtml, withTemplate } from './bundled.js';
 
 export const FIX_MODE_DIR = 'fix-mode';
 export const PROPOSALS_FILE = 'proposals.json';
@@ -119,7 +120,8 @@ export function proposalsFrom({ findings, pages }) {
       skipped.push({ ...base, why: 'the page is not in the copy' });
       continue;
     }
-    if (!loaded.has(page.path)) loaded.set(page.path, cheerio.load(page.html));
+    // The document the browser draws (a bundled page's template, copy/bundled.js): where the check found the element.
+    if (!loaded.has(page.path)) loaded.set(page.path, cheerio.load(drawnHtml(page.html)));
     const $ = loaded.get(page.path);
     const { el, why } = only($, f.selector);
     if (!el) {
@@ -220,12 +222,15 @@ function applyOne($, p) {
  * @returns {{ html: string, applied: string[], missed: string[], faithful: boolean }}
  */
 export function applyToHtml(html, proposals) {
-  const $ = loadFaithful(html);
+  // A bundled page's changes go into the document its template draws (copy/bundled.js), the rest of the page as it was.
+  const t = bundledTemplate(html);
+  const doc = t ? t.inner : html;
+  const $ = loadFaithful(doc);
   const applied = [];
   const missed = [];
   for (const p of proposals) (applyOne($, p) ? applied : missed).push(p.id);
-  const out = faithfulHtml($, html);
-  return { html: out.html, applied, missed, faithful: out.faithful };
+  const out = faithfulHtml($, doc);
+  return { html: t ? withTemplate(html, t, out.html) : out.html, applied, missed, faithful: out.faithful };
 }
 
 /** Every file under `dir` → sha256. */
@@ -280,7 +285,7 @@ export async function applyApproved({ fromDir, dir, proposals, approved }) {
   }
   for (const rel of after.keys()) if (!before.has(rel)) return reset(`${rel} appeared`);
   for (const p of applied) {
-    const $ = cheerio.load(await readFile(path.join(dir, p.outPath), 'utf8'));
+    const $ = cheerio.load(drawnHtml(await readFile(path.join(dir, p.outPath), 'utf8')));
     const { el } = only($, p.selector);
     const inPlace = el && (p.kind === 'contrast' ? (el.attr('style') ?? '').includes(`color: ${p.change.to} !important`) : el.attr('aria-level') === String(p.change.to));
     if (!inPlace) return reset(`the change "${p.text}" is not in ${p.outPath}`);
@@ -303,6 +308,20 @@ async function cropMarked(png, box, file) {
   const mark = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect x="${bx}" y="${by}" width="${bw}" height="${bh}" fill="none" stroke="#c2410c" stroke-width="2" stroke-dasharray="6 3"/></svg>`);
   await sharp(png).extract({ left, top, width, height }).composite([{ input: mark }]).png().toFile(file);
   return true;
+}
+
+/**
+ * The same change, wherever it is: a colour moved the same way on the same background (a header link on every page), or a
+ * heading level moved the same way on the same element. The app shows one row per group, and one picture per group is enough.
+ */
+export const groupKey = (p) => (p.kind === 'contrast'
+  ? `contrast|${p.change.from}|${p.change.to}|${p.change.background}`
+  : `${p.kind}|${p.selector}|${p.change.from}|${p.change.to}`);
+
+/** One proposal of each group, in order: the ones worth picturing. */
+export function representatives(proposals) {
+  const seen = new Set();
+  return proposals.filter((p) => !seen.has(groupKey(p)) && seen.add(groupKey(p)));
 }
 
 /** Most proposals pictured in one go (each costs one look per width); the rest are listed without pictures. */
