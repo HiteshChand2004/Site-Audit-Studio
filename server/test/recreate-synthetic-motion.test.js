@@ -46,13 +46,38 @@ const PAGE = `<!doctype html><html><head><style>
   plain.addEventListener('mouseleave', function () { plain.style.backgroundColor = ''; });
 </script></body></html>`;
 
+// A card whose script turns its heading white over 1.2 s, one frame at a time (as Framer's runtime does), with no transition
+// to wait for: read after the first 0.6 s, its end value was a grey on the way to white (Parchaa's cards in the Results check).
+const SLOW_PAGE = `<!doctype html><html><head><style>
+  body { margin: 0; font: 16px sans-serif }
+  .slow { display: block; width: 300px; height: 200px; margin: 40px; background: #123; color: inherit; text-decoration: none }
+  .slow h3 { margin: 0; padding: 20px; color: rgb(0, 28, 74) }
+</style></head><body>
+<a class="slow" href="#product"><h3>Slow card</h3></a>
+<script>
+  var card = document.querySelector('.slow');
+  var h3 = card.querySelector('h3');
+  var frame = null;
+  function tween(from, to, ms) {
+    cancelAnimationFrame(frame);
+    var start = performance.now();
+    (function step(now) {
+      var t = Math.min(1, Math.max(0, (now - start) / ms));
+      h3.style.color = 'rgb(' + from.map(function (v, i) { return Math.round(v + (to[i] - v) * t); }).join(', ') + ')';
+      if (t < 1) frame = requestAnimationFrame(step);
+    })(start);
+  }
+  card.addEventListener('mouseenter', function () { tween([0, 28, 74], [255, 255, 255], 1200); });
+  card.addEventListener('mouseleave', function () { cancelAnimationFrame(frame); h3.style.color = ''; });
+</script></body></html>`;
+
 let server;
 let browser;
 let url;
 before(async () => {
   server = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'text/html' });
-    res.end(PAGE);
+    res.end(req.url === '/slow' ? SLOW_PAGE : PAGE);
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   url = `http://127.0.0.1:${server.address().port}/`;
@@ -94,6 +119,45 @@ test('a script-animated box with no interactive sign of any kind is probed, and 
   const plain = byText('Plain')[0];
   assert.ok(plain?.reasons.includes('item'), 'found as one of the row');
   assert.deepEqual(plain.changes['background-color'], ['rgb(204, 204, 204)', 'rgb(200, 30, 30)']);
+});
+
+test('a script-driven hover longer than the first reads is read to its end', async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(`${url}slow`);
+  const found = await captureInteractions(page, { budgetMs: 12000, focusStops: 0 });
+  await page.close();
+  const card = found.hover.find((h) => h.source === 'probe' && h.text === 'Slow card');
+  assert.ok(card, `the card was not probed (${JSON.stringify(found.stats)})`);
+  const heading = (card.kids ?? []).find((k) => k.changes?.color);
+  assert.ok(heading, `no change of the heading measured: ${JSON.stringify(card).slice(0, 600)}`);
+  // Read after the first 0.6 s (the old DYN_STEPS limit) this was a colour about half-way to white.
+  assert.equal(heading.changes.color[1], 'rgb(255, 255, 255)', 'the end value is where the script ends, not a colour on the way');
+});
+
+test('the hover time still caps a script-driven hover that never holds still', async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(`${url}slow`);
+  // An effect that never ends: a new colour every frame while the mouse is there.
+  await page.evaluate(() => {
+    const card = document.querySelector('.slow');
+    const h3 = card.querySelector('h3');
+    let on = false;
+    card.addEventListener('mouseenter', () => {
+      on = true;
+      (function spin(now) {
+        if (!on) return;
+        h3.style.color = `rgb(${Math.round(now) % 256}, 10, 10)`;
+        requestAnimationFrame(spin);
+      })(performance.now());
+    });
+    card.addEventListener('mouseleave', () => { on = false; });
+  });
+  const t0 = Date.now();
+  const found = await captureInteractions(page, { budgetMs: 2000, maxHoverMs: 1200, focusStops: 0 });
+  await page.close();
+  // Hover time 1.2 s: the step-by-step reading stops there instead of running its 2.5 s; then only the revert wait is left.
+  assert.ok(Date.now() - t0 < 6000, `the probe took ${Date.now() - t0} ms`);
+  assert.ok(found.stats.timedOut || found.stats.scriptedUnsettled >= 1 || found.stats.probed >= 1, JSON.stringify(found.stats));
 });
 
 // A merged tree as ir/tree.js builds it (the shape recreate-motion-ir.test.js uses).
