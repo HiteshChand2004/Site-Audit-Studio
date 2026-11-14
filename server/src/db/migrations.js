@@ -112,4 +112,18 @@ export const MIGRATIONS = [
       if (!hasColumn(db, 'recreates', 'removed_at')) db.exec('ALTER TABLE recreates ADD COLUMN removed_at TEXT');
     },
   },
+  {
+    // "Pages to check" up to 150 (was 100). max_pages_chosen = 1 marks a number the user set (PATCH max_pages), so a later change
+    // of the default never moves it. Rows made before have no record of that: every project at exactly the old default (100)
+    // moves to the new one, any other number is a choice and stays. The update runs only in the run that adds the column, so a
+    // second run (or a database that already has the column from another branch) changes nothing.
+    // Not required: the code works without the column (routes/projects.js marks a choice only when it exists), and a server
+    // started on an unmigrated database keeps every project's number as it is.
+    id: '2026-11-14-check-pages-150',
+    up(db) {
+      if (hasColumn(db, 'projects', 'max_pages_chosen')) return;
+      db.exec('ALTER TABLE projects ADD COLUMN max_pages_chosen INTEGER NOT NULL DEFAULT 0');
+      db.exec('UPDATE projects SET max_pages = 150 WHERE max_pages = 100');
+    },
+  },
 ];

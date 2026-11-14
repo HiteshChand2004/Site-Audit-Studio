@@ -4,7 +4,7 @@ import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { db } from '../db/index.js';
 import { auditDir, projectDir } from '../config/paths.js';
-import { parseMaxPages } from './analyze.js';
+import { MAX_CHECK_PAGES, parseMaxPages } from './analyze.js';
 import { buildDummyAudit } from '../dummy/audit.js';
 import { precheckUrl } from '../security/netGuard.js';
 import { ALL_PAGES, MAX_RECREATE_PAGES, parseExactMode, parsePageUrl, parseRecreatePages, parseTargetDomain } from '../recreate/inputs.js';
@@ -49,7 +49,12 @@ const selectAll = db.prepare('SELECT * FROM projects ORDER BY updated_at DESC');
 const selectOne = db.prepare('SELECT * FROM projects WHERE id = ?');
 // A new website's "Pages to check": the most a check reads (analyze.js parseMaxPages), so the first check reads the whole site
 // (user, 2026-11-13; was the column's DEFAULT 25, which stays for rows made before). The user can lower it on the Check step.
-export const DEFAULT_MAX_PAGES = 100;
+// 2026-11-14: 150, with the highest allowed (db/migrations.js 2026-11-14-check-pages-150 moves projects at the old 100).
+export const DEFAULT_MAX_PAGES = MAX_CHECK_PAGES;
+// A number the user set is marked (max_pages_chosen), so a later change of the default never moves it. The column comes with a
+// migration that is not required: on a database without it nothing is marked and nothing else changes.
+const hasChosenColumn = db.prepare('PRAGMA table_info(projects)').all().some((c) => c.name === 'max_pages_chosen');
+const markChosen = hasChosenColumn ? db.prepare('UPDATE projects SET max_pages_chosen = 1 WHERE id = ?') : null;
 const insert = db.prepare(`
   INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, max_pages, created_at, updated_at)
   VALUES (?, ?, ?, ?, 1, -1, ${DEFAULT_MAX_PAGES}, ?, ?)
@@ -163,7 +168,7 @@ router.patch('/:id', (req, res) => {
   }
   if (maxPages !== undefined) {
     const parsed = parseMaxPages(maxPages);
-    if (!parsed) return badRequest(res, 'Max pages must be a whole number from 1 to 100.');
+    if (!parsed) return badRequest(res, `Max pages must be a whole number from 1 to ${MAX_CHECK_PAGES}.`);
     next.maxPages = parsed;
   }
   if (recreatePages !== undefined) {
@@ -197,6 +202,7 @@ router.patch('/:id', (req, res) => {
     next.name, next.stack, next.url, next.maxPages, next.recreatePages, next.targetDomain, next.exactMode, next.pageUrl,
     new Date().toISOString(), project.id,
   );
+  if (maxPages !== undefined) markChosen?.run(project.id);
   res.json(toProject(selectOne.get(project.id)));
 });
 
