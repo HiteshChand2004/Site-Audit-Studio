@@ -11,6 +11,7 @@ import stacksRouter from './routes/stacks.js';
 import reportRouter from './routes/report.js';
 import faviconRouter from './routes/favicon.js';
 import buildRouter from './routes/build.js';
+import { deployRouter, hostingRouter } from './routes/deploy.js';
 import { capacityState, lockBusy, queueState } from './jobs/manager.js';
 import { describeLimits } from './jobs/limits.js';
 import { awakeHeld } from './jobs/keepAwake.js';
@@ -91,6 +92,8 @@ app.use('/api/projects', recreateRouter);
 app.use('/api/projects', reauditRouter);
 app.use('/api/projects', reportRouter);
 app.use('/api/projects', faviconRouter);
+app.use('/api/projects', deployRouter);
+app.use('/api/hosting', hostingRouter);
 app.use('/api/stacks', stacksRouter);
 app.use('/api/build', buildRouter);
 

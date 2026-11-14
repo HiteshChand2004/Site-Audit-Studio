@@ -1,0 +1,140 @@
+.linkButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.linkButton:hover {
+  text-decoration: underline;
+}
+
+.accountRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.accountButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.deployRow {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--sp-3);
+}
+
+.howTo {
+  margin: 0 0 var(--sp-3);
+  padding-left: 20px;
+  display: grid;
+  gap: 4px;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.liveLine {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.liveLabel {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.liveUrl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
+.plainList {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.confirm {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--hairline-strong, var(--border));
+  border-radius: var(--radius);
+  background: var(--surface-warm, var(--surface));
+}
+
+.confirmTitle {
+  margin: 0;
+  font-weight: 600;
+}
+
+.warnings {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.warnings label {
+  align-items: flex-start;
+}
+
+.acceptNote {
+  font-weight: 600;
+}
+
+.history {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.history li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.badge {
+  font-size: var(--fs-xs, 12px);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-2, #f1f1f1);
+  color: var(--text-2);
+}
+
+.badge[data-status='ready'] {
+  background: var(--ok-tint, #e7f6ec);
+  color: var(--ok, #157f3b);
+}
+
+.badge[data-status='failed'] {
+  background: var(--bad-tint, #fdecec);
+  color: var(--bad, #b42318);
+}
+
+.historyError {
+  flex-basis: 100%;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}

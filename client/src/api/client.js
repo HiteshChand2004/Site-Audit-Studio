@@ -295,6 +295,12 @@ export const api = {
   getBuildTexts: (id) => request(`/build/runs/${id}/texts`),
   editBuild: (id, body) => request(`/build/runs/${id}/edits`, { method: 'POST', body }),
   publishBuild: (id) => request(`/build/runs/${id}/publish`, { method: 'POST' }),
+  // Go live (server/src/routes/deploy.js): the hosting account, and deploys of a finished copy to it.
+  getHosting: () => request('/hosting'),
+  connectHosting: (provider, token) => request(`/hosting/${provider}`, { method: 'PUT', body: { token } }),
+  disconnectHosting: (provider) => request(`/hosting/${provider}`, { method: 'DELETE' }),
+  getDeploy: (id) => request(`/projects/${id}/deploy`),
+  startDeploy: (id, body) => request(`/projects/${id}/deploy`, { method: 'POST', body }),
   unpublishBuild: (id) => request(`/build/runs/${id}/publish`, { method: 'DELETE' }),
   // Saved sites (server/src/buildmode/sites.js): the app's state of each site, kept on the server, with the builds made from it.
   listBuildSites: () => request('/build/sites'),

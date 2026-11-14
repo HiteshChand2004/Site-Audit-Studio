@@ -13,9 +13,10 @@ import CheckStep from './steps/CheckStep.jsx';
 import CompareStep from './steps/CompareStep.jsx';
 import CreateStep from './steps/CreateStep.jsx';
 import ResultsStep from './steps/ResultsStep.jsx';
+import GoLiveStep from './steps/GoLiveStep.jsx';
 import styles from './Workspace.module.css';
 
-const ORDER = ['overview', 'check', 'create', 'compare', 'results'];
+const ORDER = ['overview', 'check', 'create', 'compare', 'results', 'live'];
 const pct = (job) => (Number.isFinite(job?.pct) ? ` · ${job.pct} %` : '');
 // Asked to start while the app's server was off (store/useProjects.js notStarted): nothing ran, the last result stands.
 const OFF = { tone: 'warn', status: 'Server not running' };
@@ -56,6 +57,7 @@ function stepStates({ audit, analysis, job, result, reauditJob }) {
             ? { tone: 'warn', status: `${summary.fixed ?? 0} fixed · ${worse} got worse` }
             : { tone: 'done', status: `${summary.fixed ?? 0} fixed · ${summary.open ?? 0} still open` }
           : { status: result ? 'Not compared yet' : 'After the copy' },
+    live: { status: result ? 'Put it online' : 'After the copy' },
   };
 }
 
@@ -66,7 +68,7 @@ function startStep({ analysis, job }) {
   return 'overview';
 }
 
-const TAB_TITLES = { overview: 'Overview', check: 'Check', create: 'Copy', compare: 'Compare', results: 'Results' };
+const TAB_TITLES = { overview: 'Overview', check: 'Check', create: 'Copy', compare: 'Compare', results: 'Results', live: 'Go live' };
 
 /** One website: the dashboard hero, the section tabs (sticky) and the selected section. */
 export default function Workspace({ project, audit, auditLoading, onOpenSettings, onOpenReport }) {
@@ -161,6 +163,7 @@ export default function Workspace({ project, audit, auditLoading, onOpenSettings
         {step === 'create' && <CreateStep project={project} audit={audit} onOpenSettings={onOpenSettings} onGo={choose} copyAsked={copyAsked} onCopyShown={() => setCopyAsked(false)} />}
         {step === 'compare' && <CompareStep {...props} focusPage={comparePage} />}
         {step === 'results' && <ResultsStep {...props} onOpenReport={onOpenReport} onOpenPage={openPage} />}
+        {step === 'live' && <GoLiveStep project={project} onGoCreate={() => choose('create')} />}
       </div>
     </div>
   );

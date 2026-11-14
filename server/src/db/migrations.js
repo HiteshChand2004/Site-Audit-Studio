@@ -112,4 +112,49 @@ export const MIGRATIONS = [
       if (!hasColumn(db, 'recreates', 'removed_at')) db.exec('ALTER TABLE recreates ADD COLUMN removed_at TEXT');
     },
   },
+  {
+    // Go live (deploy/): a hosting account connected once per person (its access token sealed, deploy/secrets.js), and every
+    // deploy of a copy to it. Not required: nothing prepares a statement on these tables at load, and until this is applied the
+    // deploy routes answer that the database needs updating (deploy/store.js deployReady), so an older database still starts.
+    id: '2026-11-14-deploy-tables',
+    up(db) {
+      db.exec(`
+        -- owner_key: the user's id, or 'local' while accounts are off (the single-user tool). One connection per provider each.
+        CREATE TABLE IF NOT EXISTS hosting_connections (
+          id             TEXT PRIMARY KEY,
+          owner_key      TEXT NOT NULL,
+          provider       TEXT NOT NULL,
+          account_name   TEXT,
+          account_email  TEXT,
+          token_sealed   TEXT NOT NULL,
+          created_at     TEXT NOT NULL,
+          updated_at     TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS hosting_connections_owner ON hosting_connections(owner_key, provider);
+
+        CREATE TABLE IF NOT EXISTS deployments (
+          id            TEXT PRIMARY KEY,
+          project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          recreate_id   TEXT NOT NULL,
+          stack         TEXT NOT NULL,
+          provider      TEXT NOT NULL,
+          owner_key     TEXT NOT NULL,
+          site_id       TEXT,
+          site_name     TEXT,
+          deploy_id     TEXT,
+          url           TEXT,
+          deploy_url    TEXT,
+          admin_url     TEXT,
+          status        TEXT NOT NULL DEFAULT 'queued',
+          step          TEXT,
+          error         TEXT,
+          files         INTEGER,
+          bytes         INTEGER,
+          started_at    TEXT NOT NULL,
+          finished_at   TEXT
+        );
+        CREATE INDEX IF NOT EXISTS deployments_project ON deployments(project_id, started_at);
+      `);
+    },
+  },
 ];
