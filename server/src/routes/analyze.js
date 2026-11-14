@@ -9,9 +9,12 @@ const router = Router();
 const selectProject = db.prepare('SELECT * FROM projects WHERE id = ?');
 const selectAnalysis = db.prepare('SELECT id, status, error FROM analyses WHERE id = ? AND project_id = ?');
 
+/** The most pages one check reads ("Pages to check"), and the default of a new website (routes/projects.js). */
+export const MAX_CHECK_PAGES = 150;
+
 export function parseMaxPages(value) {
   const n = Number(value);
-  return Number.isInteger(n) && n >= 1 && n <= 100 ? n : null;
+  return Number.isInteger(n) && n >= 1 && n <= MAX_CHECK_PAGES ? n : null;
 }
 
 router.post('/:id/analyze', (req, res) => {
@@ -22,7 +25,7 @@ router.post('/:id/analyze', (req, res) => {
   }
   const requested = req.body?.maxPages;
   const maxPages = requested === undefined ? project.max_pages : parseMaxPages(requested);
-  if (!maxPages) return res.status(400).json({ error: 'maxPages must be a whole number from 1 to 100.' });
+  if (!maxPages) return res.status(400).json({ error: `maxPages must be a whole number from 1 to ${MAX_CHECK_PAGES}.` });
 
   try {
     // Always the whole website: the "One page" option was removed, so an old projects.page_url value is ignored here.

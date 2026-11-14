@@ -24,7 +24,7 @@ import { inlineScriptHashes } from './recreate/inlineScripts.js';
 import { foreignOriginCheck } from './security/foreignOrigin.js';
 import { accountsEnabled, bindHost, isLoopbackHost, trustProxySetting } from './config/index.js';
 import { db } from './db/index.js';
-import { pendingMigrations } from './db/apply.js';
+import { applyStartMigrations, pendingMigrations } from './db/apply.js';
 
 const PORT = Number(process.env.PORT) || 4000;
 // Who can reach the API: this computer only by default (SAS_BIND_HOST, config/index.js).
@@ -32,6 +32,14 @@ const HOST = bindHost();
 // One server per data folder (config/dataLock.js): a second one on the same app.db exits here with who holds it. Before any job
 // row is touched; the modules above only opened the database and applied its schema.
 holdDataLock({ port: PORT });
+// The small migrations the server applies by itself (db/migrations.js `onStart`): once, in one transaction. One that fails is
+// rolled back and logged; the server starts anyway, because the code works without them.
+try {
+  const applied = applyStartMigrations(db);
+  if (applied.length) console.log(`Database: applied ${applied.join(', ')}`);
+} catch (e) {
+  console.warn(`Database: not migrated at start, nothing was changed (${e.message})`);
+}
 const app = express();
 // Who the visitor is behind a reverse proxy: only the proxies SAS_TRUST_PROXY names are believed (default: one on this computer),
 // so req.ip is the real visitor for the per-address limits and nobody can choose it with X-Forwarded-For (config/index.js).

@@ -1,10 +1,9 @@
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
-import { readFile, rm } from 'node:fs/promises';
-import path from 'node:path';
+import { rm } from 'node:fs/promises';
 import { db } from '../db/index.js';
-import { auditDir, projectDir } from '../config/paths.js';
-import { parseMaxPages } from './analyze.js';
+import { projectDir } from '../config/paths.js';
+import { MAX_CHECK_PAGES, parseMaxPages } from './analyze.js';
 import { buildDummyAudit } from '../dummy/audit.js';
 import { precheckUrl } from '../security/netGuard.js';
 import { ALL_PAGES, MAX_RECREATE_PAGES, parseExactMode, parsePageUrl, parseRecreatePages, parseTargetDomain } from '../recreate/inputs.js';
@@ -15,6 +14,7 @@ import { stopPreview } from '../recreate/preview.js';
 import { stopAsIsPreviewsOf } from '../recreate/behavior/preserve/asisPreview.js';
 import { stackIds } from '../recreate/emit/index.js';
 import { recreateSection } from '../reaudit/contract.js';
+import { knownPages } from '../recreate/pageOrder.js';
 
 export const STACKS = stackIds();
 
@@ -49,7 +49,17 @@ const selectAll = db.prepare('SELECT * FROM projects ORDER BY updated_at DESC');
 const selectOne = db.prepare('SELECT * FROM projects WHERE id = ?');
 // A new website's "Pages to check": the most a check reads (analyze.js parseMaxPages), so the first check reads the whole site
 // (user, 2026-11-13; was the column's DEFAULT 25, which stays for rows made before). The user can lower it on the Check step.
-export const DEFAULT_MAX_PAGES = 100;
+// 2026-11-14: 150, with the highest allowed (db/migrations.js 2026-11-14-check-pages-150 moves projects at the old 100).
+export const DEFAULT_MAX_PAGES = MAX_CHECK_PAGES;
+// A number the user set is marked (max_pages_chosen), so a later change of the default never moves it. The column comes with a
+// migration the server applies when it starts, after this module has loaded, so the column is looked for on use: on a database
+// without it nothing is marked and nothing else changes.
+let markChosenStmt = null;
+const markChosen = (id) => {
+  markChosenStmt ??= db.prepare('PRAGMA table_info(projects)').all().some((c) => c.name === 'max_pages_chosen')
+    ? db.prepare('UPDATE projects SET max_pages_chosen = 1 WHERE id = ?') : null;
+  markChosenStmt?.run(id);
+};
 const insert = db.prepare(`
   INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, max_pages, created_at, updated_at)
   VALUES (?, ?, ?, ?, 1, -1, ${DEFAULT_MAX_PAGES}, ?, ?)
@@ -163,7 +173,7 @@ router.patch('/:id', (req, res) => {
   }
   if (maxPages !== undefined) {
     const parsed = parseMaxPages(maxPages);
-    if (!parsed) return badRequest(res, 'Max pages must be a whole number from 1 to 100.');
+    if (!parsed) return badRequest(res, `Max pages must be a whole number from 1 to ${MAX_CHECK_PAGES}.`);
     next.maxPages = parsed;
   }
   if (recreatePages !== undefined) {
@@ -197,6 +207,7 @@ router.patch('/:id', (req, res) => {
     next.name, next.stack, next.url, next.maxPages, next.recreatePages, next.targetDomain, next.exactMode, next.pageUrl,
     new Date().toISOString(), project.id,
   );
+  if (maxPages !== undefined) markChosen(project.id);
   res.json(toProject(selectOne.get(project.id)));
 });
 
@@ -221,34 +232,24 @@ const latestAudit = db.prepare(`
 // a page and are left out.
 const analysisIds = db.prepare(`SELECT id FROM analyses WHERE project_id = ? AND status = 'done' ORDER BY started_at DESC LIMIT 20`);
 const recreateRows = db.prepare(`SELECT result_json FROM recreates WHERE project_id = ? AND status = 'done' ORDER BY started_at DESC LIMIT 5`);
+/** Every page of the project the app has seen, most important first (recreate/pageOrder.js), and the order they follow. */
+export async function sitePagesOf(project) {
+  const recreateReports = recreateRows.all(project.id).map((row) => {
+    try {
+      return JSON.parse(row.result_json);
+    } catch {
+      return null; // an unreadable report adds nothing
+    }
+  });
+  return knownPages(project, { analysisIds: analysisIds.all(project.id).map((r) => r.id), recreateReports });
+}
+
 router.get('/:id/pages', async (req, res) => {
   const project = selectOne.get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found.' });
-  const urls = new Map();
-  const add = (u) => {
-    try {
-      const url = new URL(u);
-      if (url.search || !sameSite(url.href, project.url)) return;
-      url.hash = '';
-      const key = url.pathname.replace(/\/+$/, '') || '/';
-      if (!urls.has(key)) urls.set(key, url.href);
-    } catch {
-      // not an address
-    }
-  };
-  add(project.url);
-  for (const { id } of analysisIds.all(project.id)) {
-    const crawl = await readFile(path.join(auditDir(project.id, id), 'crawl.json'), 'utf8').then(JSON.parse, () => null);
-    for (const p of crawl?.pages ?? []) if (p.status >= 200 && p.status < 300) add(p.url);
-  }
-  for (const row of recreateRows.all(project.id)) {
-    try {
-      for (const p of JSON.parse(row.result_json)?.pages ?? []) if (p.url && !p.notFound) add(p.url);
-    } catch {
-      // an unreadable report adds nothing
-    }
-  }
-  const pages = [...urls].map(([pathKey, url]) => ({ path: pathKey, url })).sort((a, b) => (a.path === '/' ? -1 : b.path === '/' ? 1 : a.path.localeCompare(b.path)));
+  // Most important first (the homepage, its header / menu links, its other links, its footer links, then shallower paths):
+  // the order the as-is page picker shows and the order a page cap keeps.
+  const { pages } = await sitePagesOf(project);
   res.json({ pages: pages.slice(0, 500), pageUrl: project.page_url ?? null });
 });
 
