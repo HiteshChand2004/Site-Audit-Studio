@@ -61,6 +61,26 @@ export const FIX_MODE = {
   failedText: 'The copy is unchanged.',
 };
 
+/** The comparison (re-check) of a copy that has not finished: never run, failed, or stopped part-way and can be continued. */
+export const COMPARE_STATE = {
+  notYetTitle: 'This copy has not been compared with the original yet',
+  notYetText: 'The comparison runs the same checks on the copy and shows what got better. It takes a few minutes.',
+  failedTitle: 'The comparison did not finish',
+  failedText: (error) => `${error} Start it again to see what got better.`,
+  stoppedTitle: 'The comparison stopped before it finished',
+  kept: ({ done = [], pageRuns = 0 }) => {
+    const parts = [
+      done.includes('analysis') ? 'the checks of every page' : null,
+      done.includes('motion') ? 'the motion check' : null,
+      pageRuns ? `${pageRuns} Lighthouse run${pageRuns === 1 ? '' : 's'}` : null,
+    ].filter(Boolean);
+    return parts.length ? `What it finished is kept (${parts.join(', ')}), so continuing only measures the rest.` : 'Continuing picks up from the last finished part.';
+  },
+  compare: 'Compare now',
+  again: 'Start over',
+  resume: 'Continue where it stopped',
+};
+
 /** A 0–100 score as a rating people understand. */
 export function rating(score) {
   if (score == null || Number.isNaN(score)) return { label: 'Not measured', tone: 'neutral' };

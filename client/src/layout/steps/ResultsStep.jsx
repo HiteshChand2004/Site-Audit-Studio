@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Contrast, Download, FileText, ListChecks, Loader2, RotateCw, Ruler, Trophy } from 'lucide-react';
+import { Contrast, Download, FileText, ListChecks, Loader2, Play, RotateCw, Ruler, Trophy } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import { Alert, Card, EmptyState } from '../../components/common/Surface.jsx';
 import FixReport from '../../components/recreate/FixReport.jsx';
@@ -10,7 +10,7 @@ import PageGallery from '../../components/recreate/PageGallery.jsx';
 import AsIsReport from '../../components/recreate/AsIsReport.jsx';
 import AddressDialog from '../../components/recreate/AddressDialog.jsx';
 import FixModeDialog, { groupProposals } from '../../components/recreate/FixModeDialog.jsx';
-import { ADDRESS_DIALOG, FIX_MODE } from '../../copy.js';
+import { ADDRESS_DIALOG, COMPARE_STATE, FIX_MODE } from '../../copy.js';
 import SectionCard from '../../components/common/SectionCard.jsx';
 import AnalyzeProgress from '../../components/audit/AnalyzeProgress.jsx';
 import { stackById } from '../../constants.js';
@@ -69,6 +69,21 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
       gone = true;
     };
   }, [project.id, result?.recreateId, result?.asIs, comparedId, comparedAt]);
+  // A comparison that stopped part-way (a server restart, an error, Stop): what it finished is kept and it can be continued.
+  // Asked again whenever a comparison of this project starts or ends.
+  const [resumable, setResumable] = useState(null);
+  const reauditStatus = reauditJob?.status ?? null;
+  useEffect(() => {
+    let gone = false;
+    if (isJobActive(reauditJob)) {
+      setResumable(null);
+      return undefined;
+    }
+    api.getReauditState(project.id).then((d) => { if (!gone) setResumable(d?.resumable ?? null); }, () => {});
+    return () => {
+      gone = true;
+    };
+  }, [project.id, reauditStatus, result?.recreateId]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (fixing && result?.recreateId === fixing) setFixing(null);
   }, [fixing, result?.recreateId]);
@@ -135,6 +150,10 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
 
   const comparison = audit && !audit.isDummy && audit.recreate && !audit.recreate.isDummy ? audit.recreate : null;
   const canCompare = audit?.recreate?.recreateId && !isJobActive(reauditJob);
+  // This copy has no finished comparison (never run, failed, or stopped part-way): said at the top, with what to do.
+  const comparedThisCopy = Boolean(comparison && comparison.recreateId === result.recreateId);
+  const needsCompare = Boolean(canCompare && !comparedThisCopy);
+  const resumableHere = Boolean(resumable && resumable.recreateId === result.recreateId);
   const proposals = fixes?.proposals ?? [];
   const contrastCount = proposals.filter((p) => p.kind === 'contrast').length;
   const headingCount = proposals.length - contrastCount;
@@ -150,6 +169,29 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
   return (
     <div className={ws.stepBody}>
       {reauditJob && reauditJob.status !== 'done' && <AnalyzeProgress analysis={reauditJob} kind="reaudit" onDismiss={() => dismissJob('reaudit', project.id)} />}
+
+      {needsCompare && (
+        <Alert
+          tone={resumableHere ? 'warn' : audit.recreate.lastError ? 'bad' : 'info'}
+          title={resumableHere ? COMPARE_STATE.stoppedTitle : audit.recreate.lastError ? COMPARE_STATE.failedTitle : COMPARE_STATE.notYetTitle}
+          action={
+            <div className={ws.actions} style={{ margin: 0 }}>
+              {resumableHere && (
+                <Button variant="primary" size="sm" icon={Play} disabled={busy} onClick={() => startReaudit(project.id, { resume: true })}>
+                  {COMPARE_STATE.resume}
+                </Button>
+              )}
+              <Button variant={resumableHere ? 'secondary' : 'primary'} size="sm" icon={RotateCw} disabled={busy} onClick={() => startReaudit(project.id)}>
+                {resumableHere ? COMPARE_STATE.again : COMPARE_STATE.compare}
+              </Button>
+            </div>
+          }
+        >
+          {resumableHere
+            ? `${resumable.error ? `${resumable.error} ` : ''}${COMPARE_STATE.kept(resumable)}`
+            : audit.recreate.lastError ? COMPARE_STATE.failedText(audit.recreate.lastError) : COMPARE_STATE.notYetText}
+        </Alert>
+      )}
 
       {result.asIs && (
         <AsIsReport
@@ -191,20 +233,6 @@ export default function ResultsStep({ project, audit, onGoCreate, onOpenReport, 
       )}
       {result.asIs && result.recreateId && (
         <FixModeDialog open={askFixes} projectId={project.id} recreateId={result.recreateId} onApply={approveFixes} onClose={() => setAskFixes(false)} />
-      )}
-
-      {!comparison && canCompare && (
-        <Alert
-          tone="info"
-          title="The copy has not been compared with the original yet"
-          action={
-            <Button variant="primary" size="sm" icon={RotateCw} disabled={busy} onClick={() => startReaudit(project.id)}>
-              Compare now
-            </Button>
-          }
-        >
-          {audit.recreate.lastError ? `The last comparison failed: ${audit.recreate.lastError}` : 'Runs the same check on the copy and shows what got better. Takes a few minutes.'}
-        </Alert>
       )}
 
       <PageGallery projectId={project.id} result={result} onOpenPage={onOpenPage} />

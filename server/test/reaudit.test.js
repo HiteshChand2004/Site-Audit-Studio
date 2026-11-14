@@ -280,7 +280,7 @@ test('routes: validation, one job per project, result, stale flag, retention', {
   const noRecreate = await fetch(`${base}/${project.id}/reaudit`, { method: 'POST' });
   assert.equal(noRecreate.status, 409);
   assert.match((await noRecreate.json()).error, /Run Recreate first/);
-  assert.deepEqual(await (await fetch(`${base}/${project.id}/reaudit`)).json(), { last: null, result: null, stale: false });
+  assert.deepEqual(await (await fetch(`${base}/${project.id}/reaudit`)).json(), { last: null, result: null, stale: false, resumable: null });
 
   const analysis = await makeAnalysis(project);
   const recreateId = await makeRecreate(project, { analysis, startedAt: new Date(Date.now() - 60000).toISOString() });

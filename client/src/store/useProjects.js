@@ -405,10 +405,11 @@ export const useProjects = create((set, get) => ({
     if (get().selectedId === id) await get().reloadAudit(id);
   },
 
-  async reaudit(id) {
+  /** Starts a comparison; `{ resume: true }` continues the one that stopped before it finished, keeping what it measured. */
+  async reaudit(id, { resume = false } = {}) {
     get().setJob('reaudit', id, { status: 'starting', pct: 0, step: null, error: null, message: 'Starting…' });
     try {
-      const { job, steps } = await api.startReaudit(id);
+      const { job, steps } = await api.startReaudit(id, resume ? { resume: true } : null);
       get().attachJob('reaudit', id, job, steps);
     } catch (err) {
       if (err.status === 409 && err.data?.reauditId) {

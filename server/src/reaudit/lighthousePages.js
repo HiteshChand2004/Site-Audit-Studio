@@ -364,11 +364,11 @@ async function readJson(file) {
  * @param {number} [o.deadline]  ms since epoch; pages not started by then are listed as skipped (what was measured is kept)
  * @returns {Promise<{ pages: object[], worse: object[], extraRunPages: object[], skipped: string[], errors: object[], runs: { original: number, copy: number, reusedOriginal: number } }>}
  */
-export async function compareLighthousePages({ pages, cacheDir, outDir, run, progress = () => {}, deadline = Infinity, signal = null, probe = probeOwnFiles }) {
+export async function compareLighthousePages({ pages, cacheDir, outDir, run, progress = () => {}, deadline = Infinity, signal = null, probe = probeOwnFiles, reuseCopy = false }) {
   await mkdir(cacheDir, { recursive: true });
   await mkdir(outDir, { recursive: true });
   for (const d of new Set(pages.map((p) => p.originalCacheDir).filter(Boolean))) await mkdir(d, { recursive: true });
-  const result = { pages: [], worse: [], unscored: [], extraRunPages: [], skipped: [], errors: [], refreshedOriginal: [], runs: { original: 0, copy: 0, reusedOriginal: 0 } };
+  const result = { pages: [], worse: [], unscored: [], extraRunPages: [], skipped: [], errors: [], refreshedOriginal: [], runs: { original: 0, copy: 0, reusedOriginal: 0, ...(reuseCopy && { reusedCopy: 0 }) } };
   const total = pages.length * MODES.length;
   let done = 0;
   // One run of one side, as the trimmed report. The original's run n is taken from the cache only when it may stand in for a run
@@ -378,6 +378,14 @@ export async function compareLighthousePages({ pages, cacheDir, outDir, run, pro
     // An original measured from its lifted files keeps its runs apart from runs of the live site (p.originalCacheDir).
     const dir = side === 'original' ? (p.originalCacheDir ?? cacheDir) : outDir;
     const file = runFile(dir, slug, mode, n);
+    // A continued comparison (reaudit/checkpoint.js): a run of the copy the stopped one finished is taken as it is.
+    if (side === 'copy' && reuseCopy) {
+      const kept = await readJson(file);
+      if (kept?.scores) {
+        result.runs.reusedCopy++;
+        return kept;
+      }
+    }
     if (side === 'original') {
       const cached = await readJson(file);
       if (cached?.scores) {
