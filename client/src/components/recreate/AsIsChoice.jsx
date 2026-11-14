@@ -73,7 +73,8 @@ export default function AsIsChoice({ projectId, authorized, stack, mode, onMode,
             {available === null && <div className={styles.note}>Loading the pages…</div>}
             {available?.length === 0 && <div className={styles.note}>No page is known yet: check the site first (step 1).</div>}
             <ul>
-              {(available ?? []).slice(0, 40).map((p) => {
+              {/* Every page the app knows, most important first (the server's order, recreate/pageOrder.js). */}
+              {(available ?? []).map((p) => {
                 const isHome = p.url === home;
                 const on = isHome || chosen.has(p.url);
                 return (

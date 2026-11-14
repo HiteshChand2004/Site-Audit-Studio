@@ -2,6 +2,7 @@ import { Alert, Card } from '../common/Surface.jsx';
 import Button from '../common/Button.jsx';
 import { api } from '../../api/client.js';
 import { plural } from '../../format.js';
+import { NEEDS_BACKEND_TEXT, pageChoiceText } from '../../copy.js';
 import { AS_IS_EXPLANATION, ASIS_STACK_CHOICES } from './AsIsChoice.jsx';
 import styles from './AsIsReport.module.css';
 
@@ -9,6 +10,13 @@ import styles from './AsIsReport.module.css';
 const pct = (v) => (v == null ? '—' : `${Math.round(v * 10) / 10}%`);
 const kb = (bytes) => `${Math.round((bytes ?? 0) / 1024).toLocaleString('en-US')} KB`;
 const stackName = (id) => ASIS_STACK_CHOICES.find((s) => s.id === id)?.label ?? id;
+const pathOfUrl = (u) => {
+  try {
+    return new URL(u).pathname;
+  } catch {
+    return u;
+  }
+};
 
 /** Items that say the same thing on several pages: each once, with the pages it is on (in the order they were listed). */
 function byPages(items, keyOf) {
@@ -126,11 +134,33 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
   const after = lh.after ?? null;
   const excluded = asIs.excludedByRule ?? [];
   const gaps = checks.flatMap((p) => (p.controls?.excludedByRule ?? []).map((c) => ({ ...c, page: p.path })));
+  const choice = asIs.pageChoice ?? null;
+  const backend = (asIs.pages ?? []).filter((p) => p.needsBackend);
   return (
     <Card title="Original as-is" sub={`Packaged as ${stackName(asIs.stack)} · ${plural(asIs.pages?.length ?? checks.length, 'page')}`}>
       <p className={styles.mode}>
         <strong>Mode used:</strong> Original as-is. {AS_IS_EXPLANATION}
       </p>
+
+      {/* A page cap cut the list: said whenever it happened, with the pages left out (most important pages were kept). */}
+      {choice?.notCopiedCount > 0 && (
+        <div className={styles.note}>
+          <p>{pageChoiceText(choice)}</p>
+          <details>
+            <summary>Show the {plural(choice.notCopiedCount, 'page')}</summary>
+            <ul className={styles.list}>
+              {choice.notCopied.map((u) => <li key={u} className="mono">{pathOfUrl(u)}</li>)}
+              {choice.notCopied.length < choice.notCopiedCount && <li>…and {choice.notCopiedCount - choice.notCopied.length} more.</li>}
+            </ul>
+          </details>
+        </div>
+      )}
+      {/* Pages copied with their whole UI whose server part (sign-in, account, cart…) only the site's own server can do. */}
+      {backend.length > 0 && (
+        <p className={styles.note}>
+          {NEEDS_BACKEND_TEXT} {backend.map((p, i) => <span key={p.path}>{i ? ', ' : ''}<span className="mono">{p.path}</span></span>)}
+        </p>
+      )}
 
       {asIs.safety && !asIs.safety.safe && (
         <Alert tone="warn" title="The copy asks for something off its own server">
