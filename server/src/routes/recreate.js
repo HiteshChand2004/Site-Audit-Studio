@@ -28,6 +28,7 @@ import { serveCopy } from '../recreate/behavior/preserve/serve.js';
 import { localOfOutPath } from '../recreate/behavior/preserve/asis.js';
 import { pageSlug } from '../reaudit/lighthousePages.js';
 import { PICTURED_VIEWS, makeCopyPicture, restoreOriginalPicture } from '../recreate/behavior/preserve/copyPictures.js';
+import { withAsIsSafety } from '../copy/outsideServices.js';
 
 const router = Router();
 
@@ -283,7 +284,7 @@ router.get('/:id/recreate', async (req, res) => {
       startedAt: last.started_at,
       finishedAt: last.finished_at,
     } : null,
-    result: done ? withSlugs(JSON.parse(done.result_json)) : null,
+    result: done ? withSlugs(withAsIsSafety(JSON.parse(done.result_json))) : null,
   });
 });
 
@@ -459,7 +460,7 @@ router.get('/:id/recreate/:recreateId/download', async (req, res) => {
   if (!UUID.test(id) || !UUID.test(recreateId)) return res.status(404).json({ error: 'Recreate not found.' });
   const row = doneReport.get(recreateId, id);
   if (!row?.result_json) return res.status(404).json({ error: 'Recreate not found.' });
-  const report = JSON.parse(row.result_json);
+  const report = withAsIsSafety(JSON.parse(row.result_json));
   const stack = req.query.stack ?? report.stack;
   if (reportOutputs(report)[stack]?.status !== 'ready') {
     const have = Object.keys(reportOutputs(report)).join(', ');
@@ -467,7 +468,7 @@ router.get('/:id/recreate/:recreateId/download', async (req, res) => {
     return res.status(400).set('X-Download-Error', error).json({ error });
   }
   if (report.safety?.safe !== true) {
-    const error = 'This recreate has no passed safety check, so it cannot be downloaded. Run Recreate again.';
+    const error = report.safety?.original?.length ? 'This copy still asks the original site for some of its files, so it would break once it replaces the original. Make the copy again.' : 'This recreate has no passed safety check, so it cannot be downloaded. Run Recreate again.';
     return res.status(409).set('X-Download-Error', error).json({ error });
   }
   let plan;

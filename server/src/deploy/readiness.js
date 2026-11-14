@@ -1,9 +1,11 @@
 // @ts-check
-// Before a copy goes live: what stops it (blockers: there is nothing deployable, or it did not pass its safety check) and what
+// Before a copy goes live: what stops it (blockers: there is nothing deployable, or it did not pass its safety check: an as-is
+// copy that still asks the original site, see copy/outsideServices.js) and what
 // the owner should know first (warnings, each accepted by its id in the deploy request). The copy's goal is to be better than the
 // original, so a copy that names the original's address, got worse somewhere, was never compared, or has forms that send
 // nothing is not stopped, but it is not deployed without the owner saying they saw that.
 import { formCounts } from '../copy/formRoutes.js';
+import { outsideLine } from '../copy/outsideServices.js';
 import { markOutside } from '../copy/gotWorse.js';
 import { reportOutputs } from '../recreate/export/fromIr.js';
 import { STATIC_STACKS } from './bundle.js';
@@ -25,7 +27,21 @@ export function deployReadiness({ project, report, stack, reaudit }) {
   }
   if (reportOutputs(report)[stack]?.status !== 'ready') blockers.push({ id: 'no-output', text: `This copy has no finished ${stack} version.` });
   else if (!STATIC_STACKS.has(stack)) blockers.push({ id: 'needs-server', text: 'A MERN copy needs its own Node server and database; Netlify serves plain files only. Deploy the plain HTML, React or Next.js version, or download the MERN project.' });
-  if (report.safety?.safe !== true) blockers.push({ id: 'unsafe', text: 'This copy did not pass its safety check, so it is not published. Make the copy again.' });
+  if (report.safety?.safe !== true) {
+    const asksOriginal = report.safety?.original?.length;
+    blockers.push({ id: 'unsafe', text: asksOriginal
+      ? `This copy still asks the original site for ${asksOriginal === 1 ? 'one file' : `${asksOriginal} files`} (for example ${report.safety.original[0]}). Once the copy replaces the original, nothing answers ${asksOriginal === 1 ? 'it' : 'them'}. Make the copy again.`
+      : 'This copy did not pass its safety check, so it is not published. Make the copy again.' });
+  }
+  // Outside services the site uses (as-is copy: visitor counting, fonts, a chat widget…): kept, and confirmed by the owner.
+  const outside = report.safety?.safe === true ? (report.safety.outside ?? []) : [];
+  if (outside.length) {
+    const locked = outside.filter((o) => o.domainLocked).map((o) => o.host);
+    warnings.push({
+      id: 'outside',
+      text: `The copy still uses ${outside.length === 1 ? 'an outside service' : `${outside.length} outside services`} the original uses: ${outside.map(outsideLine).join('; ')}. They keep working on your real address.${locked.length ? ` ${locked.join(', ')} ${locked.length === 1 ? 'answers' : 'answer'} only your real address, so ${locked.length === 1 ? 'it does' : 'they do'} not show on a test address such as a netlify.app link.` : ''}`,
+    });
+  }
 
   const address = report.asIs ? (report.asIs.address?.used ?? null) : (project?.target_domain || null);
   if (!address) {

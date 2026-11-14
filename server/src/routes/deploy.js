@@ -17,6 +17,7 @@ import {
   connectionToken, deployReady, getConnection, insertDeployment, listConnections, listDeployments, MIGRATE_HINT, ownerKeyOf,
   removeConnection, saveConnection,
 } from '../deploy/store.js';
+import { withAsIsSafety } from '../copy/outsideServices.js';
 
 const UUID = /^[0-9a-f-]{36}$/i;
 const PROVIDERS = new Set(['netlify']);
@@ -70,7 +71,7 @@ const latestComparison = db.prepare(`SELECT result_json FROM reaudits WHERE recr
 /** The copy, its stack and what stands in the way, for one request. @param {any} project @param {any} q */
 function subjectOf(project, q) {
   const row = /** @type {any} */ (typeof q?.recreateId === 'string' && UUID.test(q.recreateId) ? doneCopy.get(q.recreateId, project.id) : latestDoneCopy.get(project.id));
-  const report = row?.result_json ? JSON.parse(row.result_json) : null;
+  const report = row?.result_json ? withAsIsSafety(JSON.parse(row.result_json)) : null;
   const stack = typeof q?.stack === 'string' && q.stack ? q.stack : (report ? targetStack(report, project.stack) : project.stack);
   const reauditRow = /** @type {any} */ (row ? latestComparison.get(row.id, project.id) : null);
   const reaudit = reauditRow?.result_json ? JSON.parse(reauditRow.result_json) : null;

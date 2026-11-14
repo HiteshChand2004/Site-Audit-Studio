@@ -20,6 +20,7 @@ import { buildConvertedMern, convertToMern, MERN_EXPORT_DIR, verifyConvertedMern
 import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
 import { writeLockfiles } from '../../../toolchains/lockfile.js';
+import { asIsSafety } from '../../../copy/outsideServices.js';
 import { anchorClicks, beforePictures, checkCopy, excludedHostsOf, fixGate, formsInCopy, inPool, NOISE_SHOTS, perfProbe, probeOriginal } from './check.js';
 import { localFileOf, namesStillUsed, PERF_KINDS, planPerf, stylesheetCandidates } from '../../../copy/perfAsIs.js';
 import { formRoutesOfCopy, formsReadmeSection } from '../../../copy/formRoutes.js';
@@ -1312,8 +1313,8 @@ export async function asIsStage(ctx) {
       });
     }
     if (!originalReachable) ctx.report.warnings.push('The original did not answer: the checks that compare with it say so; the copy and its download are complete.');
-    const external = checks.pages.reduce((n, p) => n + p.offline.external.length, 0);
-    report.safety = { safe: external === 0, mode: 'as-is', note: 'The original\'s own code is kept as it is; the check is that nothing leaves the copy.' };
+    // Outside services the site uses are listed; only a request to the original itself fails the copy (copy/outsideServices.js).
+    report.safety = asIsSafety(checks.pages);
 
     ctx.progress(0.9, 'Measuring with Lighthouse (desktop)');
     const lhFile = path.join(ctx.dir, ASIS_DIR, 'lighthouse-desktop.json');
@@ -1384,7 +1385,7 @@ export async function asIsStage(ctx) {
     // not the project around it. The download still takes the whole project (`dir`).
     ctx.report.outputs[stack] = { status: 'ready', dir: path.join('stacks', stack), dist: servedDir(stack, outDir), mode: 'as-is', pages: pages.map((p) => ({ outPath: p.outPath, path: localOfOutPath(p.outPath) })) };
     ctx.report.safety = report.safety;
-    if (!report.safety.safe) ctx.report.warnings.push(`The as-is copy asked for ${external} address(es) off its own server; see the checks.`);
+    if (!report.safety.safe) ctx.report.warnings.push(`The as-is copy still asks the original site for ${report.safety.original.length} address(es); once the copy is live there, nothing answers them. See the checks.`);
     ctx.progress(1, 'The as-is copy is ready');
     return {};
   } finally {
