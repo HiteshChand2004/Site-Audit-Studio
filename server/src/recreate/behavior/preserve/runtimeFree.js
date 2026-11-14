@@ -27,6 +27,7 @@
 import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { motionPlan, withRebuiltMotion } from './rebuildMotion.js';
+import { settledStyles, withoutStartStates } from './startStates.js';
 import { CONTROLS_FILE, CONTROLS_JS, planReplay, probeControls, probeScrollStates, withReplay } from './controls.js';
 import { MOTION_FILE, motionJsMinified } from '../../emit/motionScript.js';
 import path from 'node:path';
@@ -162,11 +163,16 @@ export async function motionFor({ jobDir, copyDir, pages }) {
   return { plan, file, source };
 }
 
-/** The page without its runtime, with the head the runtime left and the rebuilt animations. */
-export function freePage(html, { only = null, head = null, motion = null, outPath }) {
+/**
+ * The page without its runtime, with the head the runtime left, the start states that runtime would have animated away
+ * dropped (startStates.js; `settled` = the capture's reading of this page) and the rebuilt animations.
+ */
+export function freePage(html, { only = null, head = null, motion = null, settled = null, outPath }) {
   const stripped = withoutRuntime(html, only ? { only } : {});
   const withH = head ? withHead(stripped.html, head) : null;
   let out = withH?.html ?? stripped.html;
+  const shown = withoutStartStates(out, settled);
+  out = shown.html;
   let rebuilt = null;
   const pagePlan = motion?.plan.pages.get(outPath);
   if (pagePlan) {
@@ -174,7 +180,7 @@ export function freePage(html, { only = null, head = null, motion = null, outPat
     out = r.html;
     rebuilt = { placed: r.placed, lost: r.lost, tokens: r.tokens, notCarried: pagePlan.notCarried, ...(r.lostPaths?.length && { lostPaths: r.lostPaths.slice(0, 5) }) };
   }
-  return { html: out, stripped, head: withH?.changed ?? null, rebuilt };
+  return { html: out, stripped, head: withH?.changed ?? null, rebuilt, ...(shown.cleared && { shown: { elements: shown.cleared, declarations: shown.declarations } }) };
 }
 
 /**
@@ -182,7 +188,7 @@ export function freePage(html, { only = null, head = null, motion = null, outPat
  * runtime goes. Every difference the checks find is kept (`gaps`): with `prefer: 'editable'` (the default) the runtime goes
  * anyway and the gaps are what the owner is told the page loses; with `prefer: 'exact'` any gap keeps the runtime.
  */
-export async function decidePage({ browser, copyDir, outPath, motion = null, prefer = 'editable', log = () => {} }) {
+export async function decidePage({ browser, copyDir, outPath, motion = null, settled = null, prefer = 'editable', log = () => {} }) {
   const pagePath = localOfOutPath(outPath);
   const html = await readFile(path.join(copyDir, outPath), 'utf8');
   const runtimes = runtimesOf(html);
@@ -194,7 +200,7 @@ export async function decidePage({ browser, copyDir, outPath, motion = null, pre
   const files = motion ? { [motion.file]: motion.source } : {};
   // The page without its runtime and with the rebuilt animations, marked and read side by side with the page as it is (the
   // second reading is used only when the first loses a marker).
-  const bare = runtimes.length ? freePage(html, { motion, outPath }) : null;
+  const bare = runtimes.length ? freePage(html, { motion, settled, outPath }) : null;
   const marks = async (doc, extra = {}) => {
     const m = markEdits(doc);
     const side = await served(copyDir, { [outPath]: m.html }, extra);
@@ -206,7 +212,7 @@ export async function decidePage({ browser, copyDir, outPath, motion = null, pre
   if (!bare) return { ...record, status: 'kept', why: 'unknown' };
   if (after.lost.length >= before.lost.length) return { ...record, status: 'kept', why: 'stillOverwritten', stillOverwritten: after.lost };
   // The head as the runtime left it changes no text of the body, so the reading above holds for it too.
-  const free = freePage(html, { head: before.head, motion, outPath });
+  const free = freePage(html, { head: before.head, motion, settled, outPath });
 
   // Every button as on the original: what a click does there that it does not do here is replayed (controls.js).
   log(`runtime ${pagePath}: do the buttons work as on the original?`);
@@ -257,7 +263,7 @@ export async function decidePage({ browser, copyDir, outPath, motion = null, pre
   } finally {
     await Promise.all([asIs.close(), freeSide.close()]);
   }
-  const common = { ...(free.rebuilt && { rebuilt: free.rebuilt }), ...(replay && { replay }), ...(gaps.length && { gaps: gaps.slice(0, 8) }) };
+  const common = { ...(free.rebuilt && { rebuilt: free.rebuilt }), ...(free.shown && { shown: free.shown }), ...(replay && { replay }), ...(gaps.length && { gaps: gaps.slice(0, 8) }) };
   if (gaps.length && prefer !== 'editable') {
     const first = gaps[0];
     return { ...record, status: 'kept', why: first.kind === 'control' || first.kind === 'motion' ? 'behaviour' : 'look', detail: gaps.slice(0, 3).map((g) => g.text).join('; '), ...common };
@@ -301,10 +307,12 @@ export async function runtimeFreeCopy({ browser, copyDir, outDir, pages, decided
   const results = [];
   // The original's animations, rebuilt from what the capture recorded, go with every page whose runtime goes.
   const motion = await motionFor({ jobDir, copyDir, pages });
+  // What the capture saw of every element once the original's script had run: the start states that script would clear.
+  const settled = await settledStyles({ dir: jobDir, pages }).catch(() => new Map());
   if (browser) {
     await inPool(pages, pagesAtOnce, async (p) => {
       try {
-        results.push({ outPath: p.outPath, ...(await decidePage({ browser, copyDir, outPath: p.outPath, motion, prefer, log })) });
+        results.push({ outPath: p.outPath, ...(await decidePage({ browser, copyDir, outPath: p.outPath, motion, settled: settled.get(p.outPath), prefer, log })) });
       } catch (err) {
         results.push({ outPath: p.outPath, path: localOfOutPath(p.outPath), status: 'kept', why: 'error', detail: String(err?.message ?? err).slice(0, 200) });
       }
@@ -320,9 +328,9 @@ export async function runtimeFreeCopy({ browser, copyDir, outDir, pages, decided
       }
       const html = await readFile(path.join(copyDir, p.outPath), 'utf8');
       const head = r.head ? { title: r.head.title?.to, description: r.head.description?.to } : null;
-      const free = freePage(html, { only: r.ids, head, motion, outPath: p.outPath });
+      const free = freePage(html, { only: r.ids, head, motion, settled: settled.get(p.outPath), outPath: p.outPath });
       if (r.replay?.plan) free.html = withReplay(free.html, r.replay.plan).html;
-      results.push({ outPath: p.outPath, ...r, ...(free.rebuilt && { rebuilt: free.rebuilt }), files: free.stripped.files, html: free.html });
+      results.push({ outPath: p.outPath, ...r, ...(free.rebuilt && { rebuilt: free.rebuilt }), ...(free.shown && { shown: free.shown }), files: free.stripped.files, html: free.html });
     }
   }
   const order = new Map(pages.map((p, i) => [p.outPath, i]));
