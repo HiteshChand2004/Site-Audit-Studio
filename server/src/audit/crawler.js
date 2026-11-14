@@ -109,11 +109,15 @@ export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls 
     await Promise.race(inflight);
   }
 
+  // What was found and never read, in queue order: the crawl stopped at maxPages, or its time ran out (the signal) first.
+  const notRead = queue.map((q) => q.url);
   return {
     pages,
     skippedByRobots,
     truncated: queue.length > 0,
     aborted: Boolean(signal?.aborted),
+    notRead,
+    cutBy: !notRead.length ? null : signal?.aborted ? 'time' : 'pages',
     ...(firstQueue && { firstQueue }),
   };
 }

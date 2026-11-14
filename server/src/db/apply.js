@@ -48,6 +48,14 @@ export function applyMigrations(db, { migrations = MIGRATIONS, ...ctx } = {}) {
   }
 }
 
+/**
+ * The migrations marked `onStart`, applied by the server when it starts (src/index.js, once it holds the data folder). Each is
+ * recorded like any other, so it runs once; db:migrate skips one already applied. Same transaction and rollback as above.
+ * @param {DatabaseSync} db @param {{ migrations?: Migration[] }} [o]
+ * @returns {string[]} the ids applied (empty when nothing was pending)
+ */
+export const applyStartMigrations = (db, { migrations = MIGRATIONS } = {}) => applyMigrations(db, { migrations: migrations.filter((m) => m.onStart) });
+
 /** The table where applied migrations are recorded: it is supposed to grow by exactly the migrations applied. */
 export const MIGRATIONS_TABLE = 'schema_migrations';
 

@@ -87,10 +87,19 @@ export function extractPage(html, pageUrl) {
     })
     .get();
 
+  // `region`: the part of the page a link stands in, from the HTML's own landmarks: 'footer' (inside <footer> or
+  // role=contentinfo, a menu there included), 'header' (inside <header>, <nav>, role=banner or role=navigation), else null.
+  // The copy's page order uses it (recreate/pageOrder.js): header and menu links first, footer links after the others.
+  const regionOf = (el) => {
+    const $el = $(el);
+    if ($el.closest('footer, [role="contentinfo"]').length) return 'footer';
+    if ($el.closest('header, nav, [role="banner"], [role="navigation"]').length) return 'header';
+    return null;
+  };
   const links = $('a[href]')
     .map((_, el) => {
       const href = resolve($(el).attr('href'));
-      return href && { href, text: clean($(el).text()).slice(0, 120), internal: sameSite(href, pageUrl) };
+      return href && { href, text: clean($(el).text()).slice(0, 120), internal: sameSite(href, pageUrl), region: regionOf(el) };
     })
     .get()
     .filter(Boolean);

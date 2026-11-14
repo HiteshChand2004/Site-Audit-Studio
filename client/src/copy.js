@@ -340,3 +340,26 @@ export function resumeText(r) {
     short: 'Continue the copy',
   };
 }
+
+/** The most pages one check reads, and a new website's "Pages to check" (the server's MAX_CHECK_PAGES, routes/analyze.js). */
+export const MAX_CHECK_PAGES = 150;
+
+const pagesWord = (n) => `${n} ${n === 1 ? 'page' : 'pages'}`;
+
+/**
+ * The line of a check whose crawl was cut (audit.crawlLimit), and of a copy whose page list was (asIs.pageChoice):
+ * "Found 160 pages, read 150. 10 were not read because of the page limit."
+ * @param {{ found: number, read: number, notRead: number, cutBy: 'pages' | 'time' }} c
+ */
+export function crawlLimitText(c) {
+  const why = c.cutBy === 'time' ? 'the check ran out of time' : 'the page limit';
+  return `Found ${pagesWord(c.found)}, read ${c.read}. ${c.notRead} ${c.notRead === 1 ? 'was' : 'were'} not read because of ${why}.`;
+}
+
+/** "Found 160 pages, copied 150. These were not copied because of the page limit:" @param {{ found: number, copied: number }} c */
+export function pageChoiceText(c) {
+  return `Found ${pagesWord(c.found)}, copied ${c.copied}. ${c.found - c.copied === 1 ? 'This one was' : 'These were'} not copied because of the page limit:`;
+}
+
+/** The copied pages that need the site's own server to work (login, sign-up, account, cart…). */
+export const NEEDS_BACKEND_TEXT = 'Copied, needs a backend to work:';

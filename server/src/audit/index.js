@@ -43,6 +43,7 @@ export const STEPS = [
   // analyzeSite), so their limits do not add up. The screenshots are listed where they are awaited: the step list of the
   // app shows the earliest step still running and only ever moves forward.
   { key: 'render', label: 'Rendering + accessibility', weight: 14, max: 110000, expected: 15000 },
+  // The crawl's limit grows with the pages asked for (crawlMaxMs): 75 s up to ~100 pages, ~115 s for 150.
   { key: 'crawl', label: 'Crawling pages', weight: 18, max: 75000 },
   { key: 'links', label: 'Checking links', weight: 14, max: 50000 },
   { key: 'screenshots', label: 'Screenshots (desktop, tablet, mobile)', weight: 8, max: 80000, expected: 25000 },
@@ -51,6 +52,26 @@ export const STEPS = [
   { key: 'report', label: 'Building report', weight: 8, max: 30000 },
 ];
 export const PUBLIC_STEPS = STEPS.map(({ key, label }) => ({ key, label }));
+
+/** The crawl step's own limit for `maxPages` pages: the 75 s of STEPS for up to ~100 pages, 770 ms a page beyond (150 → 115.5 s). */
+export const CRAWL_MS_PER_PAGE = 770;
+export const crawlMaxMs = (maxPages) => Math.max(STEPS.find((s) => s.key === 'crawl').max, Math.round((Number(maxPages) || 0) * CRAWL_MS_PER_PAGE));
+
+/**
+ * What a cut crawl left unread, for the report (audit.crawlLimit): null when nothing was left. `read` counts pages like
+ * pagesCrawled (no query-string variants), and so do the addresses not read.
+ */
+export function crawlLimitOf(crawlResult, read) {
+  const urls = (crawlResult?.notRead ?? []).filter((u) => {
+    try {
+      return new URL(u).search.length <= 1;
+    } catch {
+      return false;
+    }
+  });
+  if (!urls.length) return null;
+  return { found: read + urls.length, read, notRead: urls.length, cutBy: crawlResult.cutBy === 'time' ? 'time' : 'pages', urls: urls.slice(0, 500) };
+}
 
 // Cap for one analysis (a healthy site takes about a minute; this is for slow sites and busy machines). Steps that would start
 // after it are skipped and reported.
@@ -242,7 +263,8 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
   // is back (`retried` = what happened before the second run).
   async function attempt(key, fn, fallback, reserve, retried = null) {
     const def = STEPS.find((s) => s.key === key);
-    const budget = stepBudget({ max: def.max * timing.scale, now: Date.now(), deadline, reserve });
+    const max = key === 'crawl' ? crawlMaxMs(maxPages) : def.max;
+    const budget = stepBudget({ max: max * timing.scale, now: Date.now(), deadline, reserve });
     if (budget < 5000) {
       errors.push({
         step: key,
@@ -571,6 +593,9 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     pages: allPages,
     skippedByRobots: crawlResult.skippedByRobots,
     truncated: crawlResult.truncated,
+    // Found but not read (the page limit, or the crawl's time): in queue order, and why.
+    notRead: crawlResult.notRead ?? [],
+    cutBy: crawlResult.cutBy ?? null,
     robots: { ...robots, isAllowed: undefined },
     sitemap,
     llms,
@@ -603,6 +628,7 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     // is a variant of a page, not a page of its own. The checks above still read every address.
     pagesCrawled: pages.filter((p) => !hasQuery(p.url)).length || pages.length,
     pageVariants: pages.filter((p) => hasQuery(p.url)).length,
+    crawlLimit: crawlLimitOf(crawlResult, pages.filter((p) => !hasQuery(p.url)).length || pages.length),
     blockedHosts: proxy.blocked(),
     errors,
     // The conditions each Lighthouse run was measured under (other jobs on this server), when the job line recorded them.

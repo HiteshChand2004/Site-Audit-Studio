@@ -18,7 +18,8 @@ import { RecreateError } from '../recreate/errors.js';
 import { ASIS_DIR, ASIS_STACKS, readLifted } from '../recreate/behavior/preserve/stage.js';
 import { startAsIsPreview, stopAsIsPreview } from '../recreate/behavior/preserve/asisPreview.js';
 import { originalPreview } from '../recreate/originalPreview.js';
-import { asIsPagesOf } from '../recreate/behavior/preserve/asis.js';
+import { asIsPageChoice } from '../recreate/behavior/preserve/asis.js';
+import { sitePagesOf } from './projects.js';
 import { isOwner, refuseNonOwner } from '../accounts/roles.js';
 import { usableAddress } from '../copy/address.js';
 import { chromium } from 'playwright';
@@ -153,6 +154,7 @@ router.post('/:id/recreate', async (req, res) => {
     // `reuseAsIs`: another stack from the lifted copy of the latest as-is copy (no capture, no lift again).
     let pages;
     let from = null;
+    let pageChoice = null;
     if (req.body.addressOnly === true) {
       // `addressOnly` (Step 6, the download dialog): the new site's address written into the finished copy being downloaded
       // (`recreateId`), files only (behavior/preserve/stage.js addressStage). The address is required, checked by the same rules
@@ -208,8 +210,13 @@ router.post('/:id/recreate', async (req, res) => {
       from = source.id;
       pages = lifted.pages.map((p) => p.url);
     } else {
-      pages = asIsPagesOf(project, req.body.pages);
-      if (pages === null) return res.status(400).json({ error: 'The pages must be addresses of this site (the homepage first or among them), up to 40.' });
+      // When a cap (AS_IS_MAX_PAGES, SAS_COPY_MAX_PAGES) cuts the list, the most important pages are kept (recreate/pageOrder.js),
+      // and the report says which were left out (asIs.pageChoice).
+      const { rankOf } = await sitePagesOf(project);
+      const chosen = asIsPageChoice(project, req.body.pages, rankOf);
+      if (chosen === null) return res.status(400).json({ error: 'The pages must be addresses of this site (the homepage first or among them).' });
+      pages = chosen.pages;
+      pageChoice = chosen.choice;
     }
     // `addressConfirmed`: the new site's address as the user entered it for this copy (the "Copy my site" panel). Only a confirmed
     // address is written into the copy (copy/address.js); a repack or an older flow sends none, and the copy then names no address.
@@ -221,7 +228,7 @@ router.post('/:id/recreate', async (req, res) => {
         address = parsed.value;
       }
       payload.preserve = true;
-      payload.asIs = { stack, pages, ...(from && { from }), ...(address && { address }) };
+      payload.asIs = { stack, pages, ...(from && { from }), ...(address && { address }), ...(pageChoice && { pageChoice }) };
     }
   }
 

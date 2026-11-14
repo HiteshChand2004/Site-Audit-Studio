@@ -48,4 +48,28 @@ test('maxPages caps the crawl', async () => {
   const result = await crawl({ home, maxPages: 2, robots: { isAllowed: () => true } });
   assert.equal(result.pages.length, 2);
   assert.equal(result.truncated, true);
+  // What was found and not read is named, with why: the page limit.
+  assert.equal(result.cutBy, 'pages');
+  const read = new Set(result.pages.map((p) => new URL(p.url).pathname));
+  const left = result.notRead.map((u) => new URL(u).pathname);
+  assert.ok(left.length > 0);
+  for (const p of left) assert.ok(!read.has(p), `${p} was read and is not "not read"`);
+  const full = await crawl({ home, maxPages: 10, robots: { isAllowed: () => true } });
+  assert.deepEqual(left.filter((p) => !full.pages.some((q) => new URL(q.url).pathname === p)), [], 'every address not read is a page of the site');
+  assert.deepEqual([full.notRead, full.cutBy], [[], null], 'a crawl that read everything leaves nothing');
+});
+
+test('a crawl stopped by its time names what it did not read, and says it ran out of time', async () => {
+  const { crawlLimitOf } = await import('../src/audit/index.js');
+  const home = await fetchPage(`${origin}/`);
+  const controller = new AbortController();
+  controller.abort();
+  const result = await crawl({ home, maxPages: 10, robots: { isAllowed: () => true }, signal: controller.signal });
+  assert.equal(result.pages.length, 1, 'only the homepage, already fetched');
+  assert.equal(result.cutBy, 'time');
+  assert.ok(result.notRead.length > 0);
+  const limit = crawlLimitOf(result, 1);
+  assert.deepEqual({ ...limit, urls: limit.urls.length }, { found: 1 + result.notRead.length, read: 1, notRead: result.notRead.length, cutBy: 'time', urls: result.notRead.length });
+  assert.equal(crawlLimitOf({ notRead: [], cutBy: null }, 5), null);
+  assert.equal(crawlLimitOf({ notRead: [`${origin}/a?x=1`], cutBy: 'pages' }, 5), null, 'a query-string variant is not a page');
 });

@@ -29,7 +29,7 @@ import { addressForCopy } from '../../../copy/address.js';
 import { addressPass } from '../../../copy/addressPass.js';
 import { applyApproved, FIX_MODE_DIR, PROPOSALS_FILE } from '../../../copy/fixMode.js';
 import { measureServed, servedOutcome } from '../../../copy/served.js';
-import { slugFor } from '../../discover.js';
+import { needsBackend, slugFor } from '../../discover.js';
 import { serveCopy } from './serve.js';
 import { runtimeFreeCopy } from './runtimeFree.js';
 import { carryRecordings, recordingsOf } from './recordings.js';
@@ -1025,12 +1025,24 @@ export async function asIsStage(ctx) {
     excludedHosts = saved.excludedHosts;
     lifted = { ...saved.lift, reusedFrom: path.basename(fromDir) };
     ctx.report.pages = await repackPages(fromDir, pages);
+    // The same pages as the job it repacks, so the same choice: its "found N, copied M" travels with it.
+    const earlier = await readFile(path.join(fromDir, 'report.json'), 'utf8').then(JSON.parse, () => null);
+    if (earlier?.asIs?.pageChoice && !ctx.asIs.pageChoice) ctx.asIs = { ...ctx.asIs, pageChoice: earlier.asIs.pageChoice };
   } else {
     pages = ctx.discovery?.pages ?? [];
     if (!pages.length) throw new RecreateError('No page was captured for the as-is copy.');
   }
   const siteUrl = pages[0].url;
-  const report = { stack, mode: 'as-is', pages: pages.map((p) => ({ url: p.url, path: localOfOutPath(p.outPath) })), createdAt: new Date().toISOString() };
+  // A page whose address says it needs the site's own server (login, sign-up, account, cart, checkout, admin, dashboard…) is
+  // copied with its whole UI like any page; only what needs that server does not work. That is said here, in the report,
+  // never on the page. `pageChoice`: the pages found and the ones a page cap left out (asis.js asIsPageChoice).
+  const report = {
+    stack,
+    mode: 'as-is',
+    pages: pages.map((p) => ({ url: p.url, path: localOfOutPath(p.outPath), ...(needsBackend(p.url) && { needsBackend: true }) })),
+    ...(ctx.asIs?.pageChoice && { pageChoice: ctx.asIs.pageChoice }),
+    createdAt: new Date().toISOString(),
+  };
   // Progress inside this step (generateProgress.js): a job that continues a stopped one starts from the parts finished before
   // the stop (the lift, each page's speed plan and proven fixes, the stylesheet verdict) when the same code made them.
   const resuming = Boolean(ctx.report?.resumed?.length);

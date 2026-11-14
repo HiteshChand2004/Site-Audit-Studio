@@ -9,10 +9,23 @@ import { completeCopy } from './complete.js';
 import { refreshIntegrity } from './integrity.js';
 import { readRecordIndex } from '../scripts.js';
 import { copyPageCap } from '../../pageCap.js';
+import { byImportance } from '../../pageOrder.js';
+
+/** The most pages one as-is copy takes, the homepage included (SAS_COPY_MAX_PAGES can lower it on a server). */
+export const AS_IS_MAX_PAGES = 150;
 
 /** The pages of an as-is copy: addresses of this project's site, the homepage always among them; null when one is not. */
-const AS_IS_MAX_PAGES = 40;
-export function asIsPagesOf(project, given) {
+export function asIsPagesOf(project, given, rankOf = null) {
+  return asIsPageChoice(project, given, rankOf)?.pages ?? null;
+}
+
+/**
+ * The pages of an as-is copy and what a cap left out: { pages, choice: { found, copied, max, notCopied[] } }, or null when one
+ * address is not of this site. `rankOf` (recreate/pageOrder.js importanceOf): when the cap cuts the list, the most important
+ * pages are kept (homepage, header / menu links, other homepage links, footer links, then shallower paths), whatever order the
+ * list came in; without it the list's own order decides.
+ */
+export function asIsPageChoice(project, given, rankOf = null) {
   let home;
   try {
     home = new URL(project.url);
@@ -36,7 +49,11 @@ export function asIsPagesOf(project, given) {
     pages.push(u.href);
   }
   const seen = new Set();
-  return pages.filter((u) => (seen.has(pageKeyOf(u)) ? false : (seen.add(pageKeyOf(u)), true))).slice(0, max);
+  const unique = pages.filter((u) => (seen.has(pageKeyOf(u)) ? false : (seen.add(pageKeyOf(u)), true)));
+  const ordered = rankOf && unique.length > max ? [unique[0], ...byImportance(unique.slice(1), rankOf)] : unique;
+  const kept = ordered.slice(0, max);
+  const left = ordered.slice(max);
+  return { pages: kept, choice: { found: unique.length, copied: kept.length, max, notCopied: left.slice(0, 500), notCopiedCount: left.length } };
 }
 
 /** The copy's address of a page, from the discovery's output path: index.html → "/", about/index.html → "/about/", about.html → "/about.html". */
