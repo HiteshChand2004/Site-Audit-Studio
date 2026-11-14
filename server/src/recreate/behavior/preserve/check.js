@@ -344,6 +344,76 @@ export async function fixGate(browser, fixedBase, unfixedBase, pagePath, { width
 }
 
 /**
+ * Page function: the Largest Contentful Paint element and its ancestors up to <body> (at most 12), each with its place under
+ * <body> (tag and index among the element children at each level, as the scrollers are named), whether it was seen hidden or
+ * moving while the page loaded (window.__sasHid, perfProbe's init script), whether it runs an animation that never ends, its
+ * opacity and transform now, its top on the page and its centre in the window. The element itself also carries its text, so
+ * copy/perfAsIs.js can tell it is the same element in the markup.
+ */
+function readLcpChain() {
+  const el = window.__sasLcp?.element;
+  if (!el?.isConnected || !document.body?.contains(el) || el === document.body) return [];
+  const pathOf = (node) => {
+    const p = [];
+    for (let e = node; e && e !== document.body; e = e.parentElement) {
+      if (!e.parentElement) return null;
+      p.unshift([e.tagName.toLowerCase(), [...e.parentElement.children].indexOf(e)]);
+    }
+    return p;
+  };
+  const out = [];
+  for (let n = el, depth = 0; n && n !== document.body && depth < 12; n = n.parentElement, depth++) {
+    const s = getComputedStyle(n);
+    const r = n.getBoundingClientRect();
+    out.push({
+      path: pathOf(n), tag: n.tagName.toLowerCase(), seen: Boolean(window.__sasHid?.has(n)),
+      loops: n.getAnimations().some((a) => a.effect?.getComputedTiming?.().iterations === Infinity),
+      opacity: s.opacity, transform: s.transform, top: r.top + window.scrollY, cx: r.left + r.width / 2, cy: r.top + r.height / 2,
+      ...(depth === 0 && { text: (n.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 60) }),
+    });
+  }
+  return out;
+}
+
+/** How long the probe holds the mouse over the largest element (or an ancestor) before it reads the chain again. */
+const LCP_HOVER_MS = 600;
+
+/**
+ * The largest element's chain (readLcpChain), with what would make showing it at once change the page's motion: `moving` (its
+ * opacity or transform changes while nothing is done: a loop a script drives), and at a computer width `hoverMoves` (it changes
+ * while the mouse is over the largest element or one of its ancestors: a hover, a pointer follower). The mouse is put back at
+ * the window's corner afterwards.
+ */
+async function lcpChainOf(page, width) {
+  const chain = await page.evaluate(readLcpChain).catch(() => []);
+  if (!chain.length) return chain;
+  const changed = (a, b) => a.opacity !== b.opacity || a.transform !== b.transform;
+  await page.waitForTimeout(300);
+  const again = await page.evaluate(readLcpChain).catch(() => []);
+  chain.forEach((c, i) => { if (!again[i] || changed(c, again[i])) c.moving = true; });
+  if (width < 1024) return chain;
+  const points = [];
+  for (const c of chain) {
+    if (points.length >= 4) break;
+    if (c.cx < 0 || c.cy < 0 || c.cx > width || c.cy > (page.viewportSize()?.height ?? 900)) continue;
+    if (points.some((p) => Math.hypot(p.x - c.cx, p.y - c.cy) < 20)) continue;
+    points.push({ x: c.cx, y: c.cy });
+  }
+  try {
+    for (const p of points) {
+      await page.mouse.move(p.x, p.y);
+      await page.waitForTimeout(LCP_HOVER_MS);
+      const hovered = await page.evaluate(readLcpChain).catch(() => []);
+      chain.forEach((c, i) => { if (!hovered[i] || changed(c, hovered[i])) c.hoverMoves = true; });
+    }
+  } finally {
+    await page.mouse.move(0, 0).catch(() => {});
+    await page.waitForTimeout(300).catch(() => {});
+  }
+  return chain;
+}
+
+/**
  * Where a page's images are and which element is its Largest Contentful Paint, measured on the copy BEFORE its fixes at every
  * width of GATE_WIDTHS, the way the gate opens it (same window, phone mode below 600 px, nothing off the copy's own server).
  * Read once the page has loaded and rested, scrolled to the top: what a visitor sees first. An image is named as the markup
@@ -351,8 +421,9 @@ export async function fixGate(browser, fixedBase, unfixedBase, pagePath, { width
  * the HTML; `total` is how many images with that src the page holds as its scripts built it. `styles` are the stylesheets of the
  * copy the page loaded, however (a link, an @import, a script), as paths on the copy's server; `integrity` the ones a <link>
  * loads with an integrity hash; `scrolled` whether the page was scrolled to its end; `scrollers` the boxes that scroll and the
- * keyboard cannot reach (axe scrollable-region-focusable), read in the same visit (no extra page load).
- * @returns {Promise<{ path: string, widths: { width: number, viewportH: number, lcp: object|null, images: object[], styles: string[], integrity: string[], scrollers: object[], scrolled: boolean }[] }>}
+ * keyboard cannot reach (axe scrollable-region-focusable), read in the same visit (no extra page load); `lcpChain` the largest
+ * element and its ancestors (lcpChainOf).
+ * @returns {Promise<{ path: string, widths: { width: number, viewportH: number, lcp: object|null, lcpChain: object[], images: object[], styles: string[], integrity: string[], scrollers: object[], scrolled: boolean }[] }>}
  */
 export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS, parallel = false } = {}) {
   // parallel: every width measured at the same time (one context each, same browser), else one after the other. Same reading.
@@ -366,6 +437,26 @@ export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS,
           new PerformanceObserver((list) => { const e = list.getEntries().at(-1); if (e) window.__sasLcp = e; })
             .observe({ type: 'largest-contentful-paint', buffered: true });
         } catch { /* no LCP in this browser: none is named */ }
+        // Elements seen hidden or moving while the page loads (copy/perfAsIs.js shows the largest one at once): a CSS animation
+        // or a transition of how it shows started on it, or a script wrote an opacity below 1 or a transform into its style.
+        window.__sasHid = new WeakSet();
+        const mark = (n) => { if (n?.nodeType === 1) window.__sasHid.add(n); };
+        // Only an animation that fades or moves it (its keyframes name opacity or a transform): a colour animation hides nothing.
+        const SHOWS = ['opacity', 'transform', 'translate', 'scale', 'rotate'];
+        addEventListener('animationstart', (e) => {
+          const t = e.target;
+          const anims = t?.getAnimations?.().filter((a) => a.animationName === e.animationName) ?? [];
+          if (!anims.length || anims.some((a) => (a.effect?.getKeyframes?.() ?? []).some((k) => SHOWS.some((p) => p in k)))) mark(t);
+        }, true);
+        addEventListener('transitionstart', (e) => { if (/^(opacity|transform|translate|scale|rotate|filter)$/.test(e.propertyName)) mark(e.target); }, true);
+        try {
+          new MutationObserver((ms) => {
+            for (const m of ms) {
+              const s = m.target.style;
+              if (s && ((s.opacity !== '' && Number(s.opacity) < 1) || s.transform)) mark(m.target);
+            }
+          }).observe(document, { subtree: true, attributes: true, attributeFilter: ['style'] });
+        } catch { /* nothing to observe yet: only animation events mark */ }
       });
       const page = await context.newPage();
       const styles = new Set();
@@ -429,10 +520,12 @@ export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS,
         }
         return { viewportH: window.innerHeight, lcp, images, integrity, scrollers };
       });
+      // The largest element and its ancestors, with what showing them at once would change (copy/perfAsIs.js showLcp).
+      const lcpChain = await lcpChainOf(page, width);
       // Then down the page as a visitor scrolls (scroll.js), so a stylesheet a script loads on the way is known too. `scrolled`
       // is false when that failed or stopped at its time cap: the list of stylesheets may then be short.
       const scroll = await scrollThrough(page).catch(() => null);
-      return { width, ...read, styles: [...styles], scrolled: Boolean(scroll && !scroll.capped) };
+      return { width, ...read, lcpChain, styles: [...styles], scrolled: Boolean(scroll && !scroll.capped) };
     } finally {
       await context.close();
     }

@@ -17,7 +17,8 @@ import zlib from 'node:zlib';
 import { chromium } from 'playwright';
 import sharp from 'sharp';
 import { fixAndProve } from '../src/recreate/behavior/preserve/stage.js';
-import { losslessWebp } from '../src/copy/perfAsIs.js';
+import { load } from 'cheerio';
+import { losslessWebp, planPerf, showLcp } from '../src/copy/perfAsIs.js';
 
 const SITE = 'https://www.example-original.dev/';
 const TEXT = 'This page is about the work we do for our customers and the people who use what we make every day.';
@@ -119,11 +120,74 @@ test('the largest image gets fetchpriority="high" and loses loading="lazy"; imag
   const hero = imgTag(html, '/img/hero.jpg');
   assert.match(hero, /fetchpriority="high"/);
   assert.doesNotMatch(hero, /loading=/, 'the largest image is never lazy');
+  assert.match(html, /<link rel="preload" as="image" href="\/img\/hero\.jpg" fetchpriority="high">/, 'the largest image is preloaded');
+  assert.doesNotMatch(html, /data-sas-shown/, 'nothing faded in: nothing is held shown');
   assert.match(imgTag(html, '/img/far.jpg'), /loading="lazy"/);
   for (const src of ['/img/slide.jpg', '/img/lib.jpg', '/img/twice.jpg']) assert.doesNotMatch(imgTag(html, src), /loading=|fetchpriority=/, src);
   assert.equal(r.counts.lcp, 1);
   assert.equal(r.counts.lazy, 1);
   assert.ok(r.open.some((o) => o.kind === 'lazy' && /twice\.jpg is left without lazy loading on purpose/.test(o.detail)), JSON.stringify(r.open));
+});
+
+test('the largest element a script fades in shows at once; one that floats forever or moves under the mouse keeps its motion', { timeout: 10 * 60000 }, async (t) => {
+  // Each page's largest element is a big heading. On "/" a script fades it in and slides it up after load (as Framer's runtime
+  // does: its style attribute starts it nearly invisible). On /float/ it floats up and down forever (a CSS animation). On
+  // /hover/ it fades in the same way, and grows while the mouse is over its block. The script clears what it wrote once the fade
+  // is done (an inline transform left behind would beat the page's own hover rule, and the original would not grow at all).
+  const fadeIn = `<script>addEventListener('load', function () {
+    var h = document.querySelector('h1'), t0 = performance.now();
+    (function step(now) { var k = Math.min(1, (now - t0) / 600); h.style.opacity = k < 1 ? String(0.01 + 0.99 * k) : ''; h.style.transform = k < 1 ? 'translateY(' + (40 * (1 - k)) + 'px)' : ''; if (k < 1) requestAnimationFrame(step); })(t0);
+  });</script>`;
+  const heading = (attrs = '') => `<h1${attrs}>Plain words for a fast first screen</h1>`;
+  const css = 'h1{font-size:64px;line-height:1.1;margin:40px 24px}p{font-size:14px;margin:0 24px}';
+  const dir = await siteOf(t, {
+    'index.html': `${head(css)}<body>${heading(' style="opacity:0.01;transform:translateY(40px)"')}<p>Short line.</p>${fadeIn}</body></html>`,
+    'float/index.html': `${head(`${css}h1{animation:float 3s ease-in-out infinite}@keyframes float{50%{transform:translateY(12px)}}`)}<body>${heading()}<p>Short line.</p></body></html>`,
+    'hover/index.html': `${head(`${css}.hero:hover h1{transform:scale(1.05)}`)}<body><div class="hero">${heading(' style="opacity:0.01;transform:translateY(40px)"')}</div><p>Short line.</p>${fadeIn}</body></html>`,
+  });
+  const r = await prove(dir, pagesOf('index.html', 'float/index.html', 'hover/index.html'));
+  const home = r.pages.find((p) => p.path === '/');
+  assert.equal(home.reverted, undefined, JSON.stringify(r.gate));
+  const shown = home.fixes.find((f) => f.kind === 'lcp' && f.field === 'shown');
+  assert.ok(shown, JSON.stringify(home));
+  assert.equal(shown.what, 'Main heading now shows at once, no fade-in');
+  const html = await read(dir, 'index.html');
+  assert.match(html, /<h1 style="[^"]*" data-sas-shown="0">/);
+  assert.match(html, /<style data-sas-shown(="")?>\[data-sas-shown="0"\]:not\(:hover\)\{opacity:1!important;transform:none!important\}<\/style>/);
+  // In a browser, the heading is fully shown from the first frame, while the page's script still runs its fade.
+  const page = await browser.newPage();
+  await page.route('**/*', (route) => {
+    const p = new URL(route.request().url()).pathname;
+    return readFile(path.join(dir, p.endsWith('/') ? `${p}index.html` : p)).then((body) => route.fulfill({ body, contentType: p.endsWith('/') || p.endsWith('.html') ? 'text/html' : undefined }), () => route.fulfill({ status: 404 }));
+  });
+  await page.goto(SITE, { waitUntil: 'load' });
+  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('h1')).opacity), '1');
+  await page.close();
+  for (const [p, why] of [['/float/', /keeps moving by itself/], ['/hover/', /changes when the mouse is over it/]]) {
+    const leftPage = r.pages.find((x) => x.path === p);
+    assert.ok(!leftPage.fixes.some((f) => f.field === 'shown'), `${p}: ${JSON.stringify(leftPage.fixes)}`);
+    assert.doesNotMatch(await read(dir, `${p.slice(1)}index.html`), /data-sas-shown/, p);
+    assert.ok(r.open.some((o) => o.kind === 'lcp' && o.field === 'shown' && o.page === p && why.test(o.detail)), `${p}: ${JSON.stringify(r.open)}`);
+  }
+});
+
+test('the largest element is left fading in where it would count as a scroll reveal, and the report says why', () => {
+  // Read below the first screen of a computer's window (top 1200 at 1440 px): the motion check counts its fade-in as a scroll
+  // reveal, so it keeps it. Above it (top 100), the same element is shown at once.
+  const chain = (top) => [{ path: [['h1', 0]], tag: 'h1', seen: true, loops: false, moving: false, hoverMoves: false, opacity: '1', transform: 'none', top, text: 'Big words' }];
+  const probe = (top) => ({ widths: [375, 1440].map((width) => ({ width, viewportH: 800, lcp: { tag: 'h1', background: false }, lcpChain: chain(top), images: [], scrollers: [] })) });
+  const page = { path: '/' };
+  const low = load('<html><head></head><body><h1>Big words</h1></body></html>');
+  const kept = showLcp(low, page, planPerf(probe(1200), '/'));
+  assert.deepEqual(kept.fixed, []);
+  assert.match(kept.open[0].detail, /^Main heading still fades in on \/: it starts below the first screen, where its fade-in counts as a scroll reveal/);
+  assert.doesNotMatch(low.html(), /data-sas-shown/);
+  const high = load('<html><head></head><body><h1>Big words</h1></body></html>');
+  const done = showLcp(high, page, planPerf(probe(100), '/'));
+  assert.equal(done.fixed[0].what, 'Main heading now shows at once, no fade-in');
+  assert.match(high.html(), /<h1 data-sas-shown="0">/);
+  // A text largest element is no longer reported as "loading left as the original has it": it has nothing to load.
+  assert.deepEqual(planPerf(probe(100), '/').open, []);
 });
 
 test('a page whose own CSS reacts to loading="lazy" loses only that fix, with the width it changed at', { timeout: 10 * 60000 }, async (t) => {

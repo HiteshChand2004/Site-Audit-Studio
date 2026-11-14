@@ -1,7 +1,12 @@
 // The safe performance fixes of an as-is copy (C3): only what changes how fast a page loads, never what it shows, how it is laid
 // out or what its scripts do. Every one is measured first in a real browser at 375 and 1440 px (preserve/check.js perfProbe, on
 // the copy before its fixes) and then proved like every other as-is fix (preserve/stage.js fixAndProve: fixGate at both widths).
-//   lcp    the image that is the Largest Contentful Paint at either width gets fetchpriority="high", and loses loading="lazy"
+//   lcp    the image that is the Largest Contentful Paint at either width gets fetchpriority="high", loses loading="lazy" and
+//          gets a preload in the head; and the largest element (any kind) shows at once: it and its ancestors that the page
+//          faded or slid in at load are held at their resting opacity and transform by one rule (showLcp). That changes the
+//          first moment of the page (no fade-in), so every such page is listed in plain words (`what`). It is never done to an
+//          element that would change one of the motion checks: one below the first screen (a scroll reveal there), one that
+//          loops or moves by itself, or one that changes under the mouse (a hover, a pointer follower)
 //   lazy   an image entirely below the first screen at BOTH widths gets loading="lazy" (the gate scrolls through the page, so a
 //          lazy image that would come in late or not at all shows in its pictures)
 //   webp   a local PNG shown by an <img> (its src, its srcset, its <picture>'s untyped sources, all or none per image) or named
@@ -17,6 +22,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { transform } from 'esbuild';
+import { isScrollReveal } from '../recreate/ir/motion.js';
 
 /** A local PNG is replaced only when its lossless WebP is at most this share of it. */
 export const WEBP_MAX_SHARE = 0.9;
@@ -48,11 +54,31 @@ export function staticImages($) {
 export function planPerf(probe, pagePath) {
   const open = [];
   const lcp = new Set();
+  // The largest element and its ancestors at every width, by place under <body> (showLcp).
+  const shown = new Map();
   const lazyAt = probe.widths.map(() => new Set());
   const totals = new Map();
   probe.widths.forEach((w, i) => {
     if (w.lcp?.tag === 'img' && w.lcp.src != null) lcp.add(`${w.lcp.k}|${w.lcp.src}`);
-    else if (w.lcp) open.push({ page: pagePath, reason: 'd', detail: `The largest element on the first screen at ${w.width} px is ${w.lcp.tag === 'img' ? 'an image a script sets' : `not an <img> (${w.lcp.tag}${w.lcp.background ? ', a background picture' : ''})`}: its loading is left as the original has it` });
+    // A text or a box is shown at once (showLcp) and has nothing to load; only a picture the markup does not name stays as it is.
+    else if (w.lcp && (w.lcp.tag === 'img' || w.lcp.background)) open.push({ page: pagePath, reason: 'd', detail: `The largest element on the first screen at ${w.width} px is ${w.lcp.tag === 'img' ? 'an image a script sets' : `a background picture (${w.lcp.tag})`}: its loading is left as the original has it` });
+    (w.lcpChain ?? []).forEach((c, depth) => {
+      if (!c.path) return;
+      const key = c.path.map(([tag, i]) => `${tag}:${i}`).join('>');
+      const e = shown.get(key) ?? { path: c.path, tag: c.tag, lcpTag: w.lcpChain[0].tag, text: null, seen: false, loops: false, moving: false, hoverMoves: false, scrollReveal: false, opacity: new Set(), transform: new Set(), widths: [] };
+      if (depth === 0) e.text ??= c.text ?? null;
+      e.seen ||= Boolean(c.seen);
+      e.loops ||= Boolean(c.loops);
+      e.moving ||= Boolean(c.moving);
+      e.hoverMoves ||= Boolean(c.hoverMoves);
+      // The motion check reads reveals at a computer's window (1440 x 900): an element that starts below its first screen there
+      // is counted as a scroll reveal (ir/motion.js isScrollReveal), and showing it at once would take it out of that count.
+      if (w.width >= 1024 && isScrollReveal({ trigger: { kind: 'timed' }, rect: [0, c.top] })) e.scrollReveal = true;
+      e.opacity.add(String(c.opacity));
+      e.transform.add(String(c.transform));
+      e.widths.push(w.width);
+      shown.set(key, e);
+    });
     for (const img of w.images) {
       const t = totals.get(img.src) ?? [];
       t[i] = img.total;
@@ -74,7 +100,93 @@ export function planPerf(probe, pagePath) {
       scrollers.set(key, seen);
     }
   }
-  return { lcp, lazy, totals, open, widths: probe.widths.map((w) => w.width), scrollers: [...scrollers.values()] };
+  return { lcp, lazy, totals, open, widths: probe.widths.map((w) => w.width), scrollers: [...scrollers.values()], shown: [...shown.values()] };
+}
+
+/** The largest element in plain words, from its tag: what a page owner reads in the report. */
+export function plainPart(tag) {
+  if (/^h[1-6]$/.test(tag)) return 'Main heading';
+  if (/^(img|picture|svg|video|canvas)$/.test(tag)) return 'Main picture';
+  if (/^(p|span|blockquote|li|figcaption|strong|em)$/.test(tag)) return 'Main text';
+  return 'Largest part of the first screen';
+}
+
+/** The element at a place under <body> (tag and index among the element children at each level), or null when a tag differs. */
+function elementAt($, path) {
+  let cur = $('body').get(0);
+  for (const [tag, i] of path) {
+    const kid = cur ? $(cur).children().get(i) : null;
+    if (!kid || kid.tagName?.toLowerCase() !== tag) return null;
+    cur = kid;
+  }
+  return cur;
+}
+
+/** Whether an element's own style attribute starts it hidden or out of place: an opacity below 1, or a transform. */
+function startsHidden(style = '') {
+  const decls = String(style).split(';').map((d) => d.split(':')).filter((d) => d.length > 1);
+  return decls.some(([name, ...rest]) => {
+    const prop = name.trim().toLowerCase();
+    const value = rest.join(':').replace(/!important/i, '').trim();
+    if (prop === 'opacity') return Number(value) < 1;
+    return /^(transform|translate|scale|rotate)$/.test(prop) && value !== '' && value !== 'none';
+  });
+}
+
+const flat = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
+
+/**
+ * The largest element shows at once: it and each ancestor the page started hidden or out of place (seen fading or sliding by the
+ * probe, or hidden by its own style attribute), and that rests fully shown at every width it was read at, get data-sas-shown and
+ * one rule in the head that holds them at their resting opacity (and transform, when every width rests at the same one). The
+ * rule is !important, which a CSS animation, a Web Animation and a script's inline style cannot override, and `:not(:hover)`, so
+ * a hover of the element's own still runs. Left as it is, with the reason (open): an element below the first screen at a
+ * computer's width (counted as a scroll reveal), one that loops or moves by itself, one that changes under the mouse, one that
+ * does not rest fully shown, or one the markup does not hold at that place. One fix per page, with `what` in plain words.
+ */
+export function showLcp($, page, plan) {
+  const fixed = [];
+  const open = [];
+  if (!plan?.shown?.length || $('[data-sas-shown]').length) return { fixed, open };
+  const rules = [];
+  let what = null;
+  const leave = (e, why) => open.push({ page: page.path, field: 'shown', reason: 'd', detail: `${plainPart(e.lcpTag)} still fades in on ${page.path}: ${why}` });
+  for (const e of plan.shown) {
+    const el = elementAt($, e.path);
+    const sameText = !e.text || flat($(el).text()).startsWith(e.text.slice(0, 40));
+    const hidden = e.seen || (el && startsHidden(el.attribs?.style));
+    if (!hidden) continue;
+    if (!el || !sameText) { leave(e, `the page's script changes it after load, so the markup does not say which element it is (<${e.tag}>)`); continue; }
+    if (e.scrollReveal) { leave(e, 'it starts below the first screen, where its fade-in counts as a scroll reveal; showing it at once would take it out of that count'); continue; }
+    if (e.loops || e.moving) { leave(e, 'it keeps moving by itself; holding it still would stop that motion'); continue; }
+    if (e.hoverMoves) { leave(e, 'it changes when the mouse is over it; holding it still would stop that'); continue; }
+    if (e.opacity.size !== 1 || ![...e.opacity][0] || Number([...e.opacity][0]) !== 1) { leave(e, 'it does not end fully shown, so there is no resting look to show at once'); continue; }
+    const decls = ['opacity:1!important'];
+    if (e.transform.size === 1) decls.push(`transform:${[...e.transform][0]}!important`);
+    el.attribs['data-sas-shown'] = String(rules.length);
+    rules.push(`[data-sas-shown="${rules.length}"]:not(:hover){${decls.join(';')}}`);
+    what ??= `${plainPart(e.lcpTag)} now shows at once, no fade-in`;
+  }
+  if (!rules.length) return { fixed, open };
+  const style = $('<style data-sas-shown></style>');
+  style.text(rules.join(''));
+  $('head').append(style);
+  fixed.push({ field: 'shown', what, elements: rules.length, value: rules });
+  return { fixed, open };
+}
+
+/** A <link rel="preload" as="image"> for the largest image, unless the head has one or a <picture> would choose another file. */
+function preloadImage($, img) {
+  const a = img.el.attribs;
+  if ($(img.el).closest('picture').find('source').length) return false;
+  const has = $('link[rel~="preload" i][as="image" i]').toArray().some((l) => l.attribs.href === a.src || (a.srcset && l.attribs.imagesrcset === a.srcset));
+  if (has) return false;
+  const link = $('<link>');
+  link.attr({ rel: 'preload', as: 'image', href: a.src, fetchpriority: 'high' });
+  if (a.srcset) link.attr('imagesrcset', a.srcset);
+  if (a.srcset && a.sizes) link.attr('imagesizes', a.sizes);
+  $('head').append(link);
+  return true;
 }
 
 /**
@@ -100,7 +212,8 @@ export function fixImageLoading($, page, plan, allow = { lcp: true, lazy: true }
       const was = { fetchpriority: a.fetchpriority ?? null, loading: a.loading ?? null };
       if (a.fetchpriority !== 'high') a.fetchpriority = 'high';
       if (String(a.loading).toLowerCase() === 'lazy') delete a.loading;
-      if (was.fetchpriority !== 'high' || was.loading != null && a.loading == null) fixed.push({ field: 'img', src: img.src, from: was, value: { fetchpriority: 'high', loading: a.loading ?? null } });
+      const preload = preloadImage($, img);
+      if (was.fetchpriority !== 'high' || was.loading != null && a.loading == null || preload) fixed.push({ field: 'img', src: img.src, from: was, value: { fetchpriority: 'high', loading: a.loading ?? null, ...(preload && { preload: true }) } });
     } else if (allow.lazy && plan.lazy.has(img.key) && a.loading == null) {
       if (!sameCount) {
         lazyOpen.push({ page: page.path, reason: 'd', detail: `${img.src} is left without lazy loading on purpose: a script adds more images with the same address (${live.join(' / ')} in the page, ${img.total} in its markup), so the markup cannot say which one is below the first screen` });
@@ -109,6 +222,11 @@ export function fixImageLoading($, page, plan, allow = { lcp: true, lazy: true }
       a.loading = 'lazy';
       lazyFixed.push({ field: 'img', src: img.src, value: 'lazy' });
     }
+  }
+  if (allow.lcp) {
+    const shown = showLcp($, page, plan);
+    fixed.push(...shown.fixed);
+    open.push(...shown.open);
   }
   return { lcp: { fixed, open }, lazy: { fixed: lazyFixed, open: lazyOpen } };
 }

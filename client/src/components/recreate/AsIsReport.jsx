@@ -126,6 +126,12 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
   const after = lh.after ?? null;
   const excluded = asIs.excludedByRule ?? [];
   const gaps = checks.flatMap((p) => (p.controls?.excludedByRule ?? []).map((c) => ({ ...c, page: p.path })));
+  // What the copy shows differently on purpose: the largest element that now shows at once (copy/perfAsIs.js showLcp), on the
+  // pages that kept it; and where it was left fading in, with why.
+  const lookChanges = (asIs.fixes?.pages ?? [])
+    .filter((p) => !p.reverted && !(p.dropped ?? []).some((d) => d.group === 'lcp'))
+    .flatMap((p) => (p.fixes ?? []).filter((f) => f.kind === 'lcp' && f.field === 'shown' && f.what).map((f) => ({ page: p.path, what: f.what })));
+  const keptFades = (asIs.fixes?.open ?? []).filter((o) => o.kind === 'lcp' && o.field === 'shown');
   return (
     <Card title="Original as-is" sub={`Packaged as ${stackName(asIs.stack)} · ${plural(asIs.pages?.length ?? checks.length, 'page')}`}>
       <p className={styles.mode}>
@@ -159,6 +165,27 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
         </table>
       </div>
       <p className={styles.note}>Controls: the page is clicked the same way on both sides; “visible” counts the controls the original shows.</p>
+
+      {(lookChanges.length > 0 || keptFades.length > 0) && (
+        <>
+          <h4 className={styles.h}>Changed on purpose</h4>
+          {lookChanges.length > 0 && (
+            <>
+              <ul className={styles.list}>
+                {byPages(lookChanges, (f) => f.what).map(({ item, pages }, i) => (
+                  <li key={i}>{item.what} <OnPages pages={pages} total={asIs.pages?.length ?? checks.length} />.</li>
+                ))}
+              </ul>
+              <p className={styles.note}>It is the largest part of the first screen, so the page counts as ready sooner. Once the page has loaded it looks the same as the original.</p>
+            </>
+          )}
+          {keptFades.length > 0 && (
+            <ul className={styles.list}>
+              {keptFades.map((o, i) => <li key={`${o.page}-${i}`}>{o.detail}.</li>)}
+            </ul>
+          )}
+        </>
+      )}
 
       <h4 className={styles.h}>Excluded by rule</h4>
       {excluded.length || gaps.length ? (
