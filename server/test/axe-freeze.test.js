@@ -5,7 +5,7 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { launchBrowser, renderHome } from '../src/audit/render.js';
+import { launchBrowser, renderHome, waitTextStill, TEXT_STILL_MAX_MS } from '../src/audit/render.js';
 
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Pulse</title>
 <style>
@@ -19,14 +19,39 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>
 <p class="faint">This line is hard to read on every visit.</p></main>
 </body></html>`;
 
+// A grey line that passes at full strength (#595959 on white, 7:1) and that a script fades in frame by frame - no Web
+// Animation, as Framer's runtime does it - every time the page scrolls, over 2.5 s. The scan scrolls the page first, so it
+// used to read the line half-faded (low contrast). /ticker: a line whose opacity a script changes forever.
+const fader = (forever) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Fade</title>
+<style>
+  body { background: #fff; color: #111; font: 16px/1.5 sans-serif; margin: 0; padding: 40px; }
+  .grey { color: #595959; }
+  .tall { height: 3000px; }
+</style></head><body>
+<main><h1>Plain words</h1>
+<p class="grey" id="line">This grey line is easy to read once it is shown.</p>
+<div class="tall"></div></main>
+<script>
+  var line = document.getElementById('line');
+  var start = 0;
+  function frame(now) {
+    var t = ${forever ? '((now / 400) % 1)' : 'Math.min(1, Math.max(0, (now - start) / 2500))'};
+    line.style.opacity = String(0.2 + 0.8 * t);
+    if (${forever ? 'true' : 't < 1'}) requestAnimationFrame(frame);
+  }
+  addEventListener('scroll', function () { start = performance.now(); requestAnimationFrame(frame); });
+</script></body></html>`;
+
 let server;
 let browser;
 
 before(async () => {
   server = http.createServer((req, res) => {
-    if (req.url.split('?')[0] !== '/') return void res.writeHead(404).end();
+    const p = req.url.split('?')[0];
+    const body = p === '/' ? PAGE : p === '/fade' ? fader(false) : p === '/ticker' ? fader(true) : null;
+    if (!body) return void res.writeHead(404).end();
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    res.end(PAGE);
+    res.end(body);
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   browser = await launchBrowser();
@@ -56,4 +81,31 @@ test('axe step: a pulsing badge is read at rest (no false contrast finding), a r
   // Twice the same page, frozen: the same verdict both times (the two sides of a re-check agree).
   const again = await renderHome(browser, url());
   assert.deepEqual(contrastTargets(again).sort(), targets.sort());
+});
+
+test('axe step: text a script is still fading in is read once it holds still, not half-faded', async () => {
+  // Without the wait (freezeForAxe off: the scan as it was), the line is caught on its way in.
+  const loose = await renderHome(browser, `${url()}fade`, { freezeForAxe: false });
+  assert.ok(contrastTargets(loose).some((t) => t.includes('line')), `the scan without the wait should catch the half-faded line: ${contrastTargets(loose)}`);
+  const settled = await renderHome(browser, `${url()}fade`);
+  assert.ok(!contrastTargets(settled).some((t) => t.includes('line')), `the line is read at full strength: ${contrastTargets(settled)}`);
+});
+
+test('axe step: text that never holds still is scanned after at most the cap', async () => {
+  const t0 = Date.now();
+  const loose = await renderHome(browser, `${url()}ticker`, { freezeForAxe: false });
+  const before = Date.now() - t0;
+  const t1 = Date.now();
+  const capped = await renderHome(browser, `${url()}ticker`);
+  const withWait = Date.now() - t1;
+  assert.ok(capped.axe, `the page is scanned (${capped.axeError})`);
+  assert.ok(withWait - before < TEXT_STILL_MAX_MS + 2500, `the wait stays within its cap: ${before} ms without it, ${withWait} ms with it`);
+  // The wait on its own, measured directly: it gives up at the cap and says so.
+  const page = await browser.newPage();
+  await page.goto(`${url()}ticker`);
+  await page.mouse.wheel(0, 200);
+  const r = await waitTextStill(page);
+  await page.close();
+  assert.equal(r.still, false);
+  assert.ok(r.waitedMs >= TEXT_STILL_MAX_MS && r.waitedMs < TEXT_STILL_MAX_MS + 1000, `waited ${r.waitedMs} ms`);
 });
