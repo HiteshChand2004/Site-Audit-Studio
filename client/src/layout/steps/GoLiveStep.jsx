@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CloudUpload, ExternalLink, Globe, History, KeyRound, Link2, Loader2, Rocket, Unplug } from 'lucide-react';
+import { CloudUpload, ExternalLink, Globe, History, KeyRound, Link2, Loader2, Rocket, Server, Unplug } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import Modal from '../../components/common/Modal.jsx';
 import ConfirmDialog from '../../components/common/ConfirmDialog.jsx';
@@ -25,12 +25,18 @@ function size(bytes) {
   return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
-/** Step 5: connect Netlify once, then publish the latest copy and update it after every new one. */
+/**
+ * Step 5: choose where the site goes live (Remastly hosting, set up once by the owner, or the person's own Netlify account), then
+ * publish the latest copy and update it after every new one.
+ */
 export default function GoLiveStep({ project, onGoCreate }) {
   const [data, setData] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [asking, setAsking] = useState(false);
   const [askDisconnect, setAskDisconnect] = useState(false);
+  const [askRemastly, setAskRemastly] = useState(false);
+  const [askRemoveRemastly, setAskRemoveRemastly] = useState(false);
+  const [chosen, setChosen] = useState(null);
   const [accepted, setAccepted] = useState(() => new Set());
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState(null);
@@ -55,6 +61,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
     setData(null);
     setAccepted(new Set());
     setStartError(null);
+    setChosen(null);
     load();
     return () => {
       gone.current = true;
@@ -89,6 +96,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
   }
 
   const { readiness, connection, deployments = [] } = data;
+  const remastly = data.remastly ?? { ready: false, canManage: false, account: null };
   if (readiness.blockers.some((b) => b.id === 'no-copy')) {
     return (
       <div className={ws.stepBody}>
@@ -103,14 +111,18 @@ export default function GoLiveStep({ project, onGoCreate }) {
   const stackName = stackById(data.stack).name;
   const warnings = readiness.warnings ?? [];
   const allAccepted = warnings.every((w) => accepted.has(w.id));
-  const canDeploy = Boolean(connection) && readiness.ok && allAccepted && !running && !starting;
+  // Remastly hosting when it is set up, unless the person picks their own account.
+  const target = chosen ?? (remastly.ready ? 'remastly' : 'own');
+  const placeReady = target === 'remastly' ? remastly.ready : Boolean(connection);
+  const needPlace = target === 'remastly' ? T.needRemastly : T.needConnect;
+  const canDeploy = placeReady && readiness.ok && allAccepted && !running && !starting;
   const latestFailed = latest?.status === 'failed' ? latest : null;
 
   async function deploy() {
     setStarting(true);
     setStartError(null);
     try {
-      await api.startDeploy(project.id, { recreateId: data.recreateId, stack: data.stack, accept: [...accepted] });
+      await api.startDeploy(project.id, { recreateId: data.recreateId, stack: data.stack, accept: [...accepted], target });
       await load();
     } catch (err) {
       setStartError(err.message);
@@ -118,6 +130,12 @@ export default function GoLiveStep({ project, onGoCreate }) {
     } finally {
       setStarting(false);
     }
+  }
+
+  async function removeRemastly() {
+    await api.removeRemastlyHosting().catch(() => {});
+    setAskRemoveRemastly(false);
+    await load();
   }
 
   async function disconnect() {
@@ -160,6 +178,42 @@ export default function GoLiveStep({ project, onGoCreate }) {
         </Card>
       )}
 
+      <Card icon={Server} title={T.whereTitle} sub={T.whereSub}>
+        <div className={styles.places} role="radiogroup" aria-label={T.whereTitle}>
+          <label className={styles.place} data-active={target === 'remastly' || undefined}>
+            <input type="radio" name="sas-place" checked={target === 'remastly'} onChange={() => setChosen('remastly')} disabled={running} />
+            <span className={styles.placeText}>
+              <span className={styles.placeName}>{T.remastlyOption} <span className={styles.recommended}>{T.recommended}</span></span>
+              <span className={styles.placeExplain}>{T.remastlyOptionText}</span>
+              {!remastly.ready && !remastly.canManage && <span className={styles.placeExplain}>{T.remastlyNotReady}</span>}
+            </span>
+          </label>
+          <label className={styles.place} data-active={target === 'own' || undefined}>
+            <input type="radio" name="sas-place" checked={target === 'own'} onChange={() => setChosen('own')} disabled={running} />
+            <span className={styles.placeText}>
+              <span className={styles.placeName}>{T.ownOption}</span>
+              <span className={styles.placeExplain}>{T.ownOptionText}</span>
+            </span>
+          </label>
+        </div>
+        {remastly.canManage && (
+          <div className={styles.accountRow} style={{ marginTop: 'var(--sp-3)' }}>
+            <p className={ws.hint} style={{ margin: 0 }}>{remastly.account ? T.remastlyAccount(remastly.account) : T.remastlyNotReadyOwner}</p>
+            <div className={styles.accountButtons}>
+              {remastly.ready ? (
+                <>
+                  <Button size="sm" onClick={() => setAskRemastly(true)}>{T.remastlyReplace}</Button>
+                  <Button size="sm" icon={Unplug} onClick={() => setAskRemoveRemastly(true)}>{T.remastlyRemove}</Button>
+                </>
+              ) : (
+                <Button size="sm" variant="primary" onClick={() => setAskRemastly(true)}>{T.remastlySetUp}</Button>
+              )}
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {target === 'own' && (
       <Card
         icon={KeyRound}
         title={T.accountTitle}
@@ -187,6 +241,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
           </>
         )}
       </Card>
+      )}
 
       <Card
         icon={CloudUpload}
@@ -219,7 +274,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
             </ul>
           </div>
         )}
-        {!connection && readiness.ok && <p className={ws.hint} style={{ margin: 0 }}>{T.needConnect}.</p>}
+        {!placeReady && readiness.ok && <p className={ws.hint} style={{ margin: 0 }}>{needPlace}.</p>}
         {steps && <StepList steps={steps} />}
         {/* After the confirmations, where the eye ends up once they are ticked (and never squeezing the title on a phone). */}
         <div className={styles.deployRow}>
@@ -228,7 +283,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
             icon={running || starting ? Spin : Rocket}
             disabled={!canDeploy}
             onClick={deploy}
-            title={!connection ? T.needConnect : undefined}
+            title={!placeReady ? needPlace : undefined}
           >
             {live ? T.update : T.goLive}
           </Button>
@@ -244,7 +299,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
       </Card>
 
       {live && (
-        <Alert tone="info" title={T.domainTitle}>{T.domainText}</Alert>
+        <Alert tone="info" title={T.domainTitle}>{live.hosting === 'remastly' ? T.domainTextRemastly : T.domainText}</Alert>
       )}
 
       {deployments.length > 1 && (
@@ -263,6 +318,10 @@ export default function GoLiveStep({ project, onGoCreate }) {
       )}
 
       <TokenDialog open={asking} onClose={() => setAsking(false)} onConnected={async () => { setAsking(false); await load(); }} />
+      <TokenDialog remastly open={askRemastly} onClose={() => setAskRemastly(false)} onConnected={async () => { setAskRemastly(false); setChosen(null); await load(); }} />
+      <ConfirmDialog open={askRemoveRemastly} onClose={() => setAskRemoveRemastly(false)} title={T.remastlyRemoveTitle} confirmLabel={T.remastlyRemove} danger onConfirm={removeRemastly}>
+        {T.remastlyRemoveText}
+      </ConfirmDialog>
       <ConfirmDialog open={askDisconnect} onClose={() => setAskDisconnect(false)} title={T.disconnectTitle} confirmLabel={T.disconnect} danger onConfirm={disconnect}>
         {T.disconnectText}
       </ConfirmDialog>
@@ -270,8 +329,11 @@ export default function GoLiveStep({ project, onGoCreate }) {
   );
 }
 
-/** Asks for a Netlify personal access token; the server checks it with Netlify before keeping it. */
-function TokenDialog({ open, onClose, onConnected }) {
+/**
+ * Asks for a Netlify personal access token; the server checks it with Netlify before keeping it. `remastly`: the token of
+ * Remastly's own hosting account (owner only), instead of the person's own.
+ */
+function TokenDialog({ open, onClose, onConnected, remastly = false }) {
   const [token, setToken] = useState('');
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -291,7 +353,8 @@ function TokenDialog({ open, onClose, onConnected }) {
     setSaving(true);
     setError(null);
     try {
-      await api.connectHosting('netlify', token.trim());
+      if (remastly) await api.setupRemastlyHosting(token.trim());
+      else await api.connectHosting('netlify', token.trim());
       setToken('');
       await onConnected();
     } catch (err) {
@@ -305,18 +368,18 @@ function TokenDialog({ open, onClose, onConnected }) {
     <Modal
       open={open}
       onClose={onClose}
-      title={T.dialogTitle}
-      description={T.dialogText}
+      title={remastly ? T.remastlyDialogTitle : T.dialogTitle}
+      description={remastly ? T.remastlyDialogText : T.dialogText}
       footer={
         <div style={{ display: 'flex', flexWrap: 'wrap-reverse', justifyContent: 'flex-end', gap: 'var(--sp-2)', width: '100%' }}>
           <Button onClick={onClose} disabled={saving}>Cancel</Button>
-          <Button variant="primary" type="submit" form="sas-token-form" icon={saving ? Spin : undefined} disabled={saving}>
-            {saving ? T.checking : T.connect}
+          <Button variant="primary" type="submit" form={remastly ? 'sas-remastly-token-form' : 'sas-token-form'} icon={saving ? Spin : undefined} disabled={saving}>
+            {saving ? T.checking : remastly ? T.remastlySetUp : T.connect}
           </Button>
         </div>
       }
     >
-      <form id="sas-token-form" className={form.form} onSubmit={submit} noValidate>
+      <form id={remastly ? 'sas-remastly-token-form' : 'sas-token-form'} className={form.form} onSubmit={submit} noValidate>
         <label className={form.field}>
           <span className={form.label}>{T.tokenLabel}</span>
           <input

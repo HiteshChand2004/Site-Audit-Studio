@@ -89,6 +89,12 @@ before(async () => {
   DEPLOY_LIMITS.pollMs = 20;
   const app = express();
   app.use(express.json());
+  // A signed-in person for the Remastly hosting tests: `x-test-role` = their role (none = accounts off, the local owner).
+  app.use((req, _res, next) => {
+    const role = req.headers['x-test-role'];
+    if (role) /** @type {any} */ (req).user = { id: `person-${role}`, role };
+    next();
+  });
   app.use('/api/projects', deployRouter);
   app.use('/api/hosting', hostingRouter);
   api = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
@@ -96,8 +102,9 @@ before(async () => {
 });
 after(() => { api?.close(); netlify.close(); });
 
-const call = async (method, p, body) => {
-  const res = await fetch(`${base}${p}`, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+const call = async (method, p, body, role = null) => {
+  const headers = { ...(body ? { 'content-type': 'application/json' } : {}), ...(role ? { 'x-test-role': role } : {}) };
+  const res = await fetch(`${base}${p}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
   return { status: res.status, body: await res.json() };
 };
 
@@ -123,9 +130,9 @@ async function finishedCopy({ projectId, report: extra = {}, reaudit = null, fil
   return { recreateId, dir };
 }
 
-async function waitDone(projectId) {
+async function waitDone(projectId, role = null) {
   for (let i = 0; i < 200; i++) {
-    const { body } = await call('GET', `/projects/${projectId}/deploy`);
+    const { body } = await call('GET', `/projects/${projectId}/deploy`, undefined, role);
     const last = body.deployments?.[0];
     if (last && (last.status === 'ready' || last.status === 'failed') && !body.running) return last;
     await sleep(25);
@@ -281,4 +288,63 @@ test('a deploy a stopped server left running is marked failed, not followed fore
   const after = getDeployment(d.id);
   assert.equal(after.status, 'failed');
   assert.match(after.error, /restarted/);
+});
+
+// ---- Step 1: Remastly hosting ----
+
+test('Remastly hosting: only the owner sets it up, with a token Netlify accepts; others see only that it is ready', async () => {
+  let r = await call('PUT', '/hosting/remastly', { token: GOOD }, 'user');
+  assert.equal(r.status, 403);
+  assert.equal(r.body.forbidden, 'owner');
+  r = await call('PUT', '/hosting/remastly', { token: 'nfp_wrong_token_0123456789abcdef' }, 'owner');
+  assert.equal(r.status, 400);
+  r = await call('PUT', '/hosting/remastly', { token: GOOD }, 'owner');
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.remastly, { ready: true, canManage: true, account: { ...r.body.remastly.account, provider: 'netlify', accountName: 'Site Owner' } });
+  const asUser = await call('GET', '/hosting', undefined, 'user');
+  assert.deepEqual(asUser.body.remastly, { ready: true, canManage: false, account: null });
+  assert.deepEqual(asUser.body.connections, [], 'Remastly hosting is not the person\'s own connection');
+  assert.ok(!JSON.stringify(asUser.body).includes(GOOD));
+  assert.equal((await call('DELETE', '/hosting/remastly', undefined, 'user')).status, 403);
+});
+
+test('Remastly hosting: a person with no hosting account of their own goes live on it, and keeps one site per website', async () => {
+  const project = seedProject(db, { name: 'gamma', targetDomain: 'https://gamma.test' });
+  await finishedCopy({ projectId: project.id, report: { asIs: { stack: 'html', address: { used: 'https://gamma.test' } } }, reaudit: { checklist: { items: [] } } });
+  let r = await call('GET', `/projects/${project.id}/deploy`, undefined, 'user');
+  assert.equal(r.body.connection, null);
+  assert.equal(r.body.remastly.ready, true);
+
+  const sitesBefore = fake.sites.size;
+  r = await call('POST', `/projects/${project.id}/deploy`, {}, 'user');
+  assert.equal(r.status, 202, r.body.error);
+  const first = await waitDone(project.id, 'user');
+  assert.equal(first.status, 'ready', first.error);
+  assert.equal(first.hosting, 'remastly');
+  assert.equal(first.adminUrl, null, 'the link into Remastly\'s own Netlify account is the owner\'s only');
+  assert.equal(fake.sites.size, sitesBefore + 1);
+  const owner = await call('GET', `/projects/${project.id}/deploy`, undefined, 'owner');
+  assert.match(owner.body.deployments[0].adminUrl, /^https:\/\/app\.netlify\.com\/sites\//);
+
+  assert.equal((await call('POST', `/projects/${project.id}/deploy`, {}, 'user')).status, 202);
+  const second = await waitDone(project.id, 'user');
+  assert.equal(second.status, 'ready');
+  assert.equal(fake.sites.size, sitesBefore + 1, 'the same Remastly site is updated');
+  assert.equal(second.url, first.url);
+
+  r = await call('POST', `/projects/${project.id}/deploy`, { target: 'own' }, 'user');
+  assert.equal(r.status, 400);
+  assert.equal(r.body.needsConnection, true, 'their own account was chosen and is not connected');
+});
+
+test('Remastly hosting: once it is removed, a deploy without an account of one\'s own asks to connect one', async () => {
+  assert.equal((await call('DELETE', '/hosting/remastly', undefined, 'owner')).status, 200);
+  const project = seedProject(db, { name: 'delta', targetDomain: 'https://delta.test' });
+  await finishedCopy({ projectId: project.id, report: { asIs: { stack: 'html', address: { used: 'https://delta.test' } } }, reaudit: { checklist: { items: [] } } });
+  let r = await call('POST', `/projects/${project.id}/deploy`, {}, 'user');
+  assert.equal(r.status, 400);
+  assert.equal(r.body.needsConnection, true);
+  r = await call('POST', `/projects/${project.id}/deploy`, { target: 'remastly' }, 'user');
+  assert.equal(r.status, 400);
+  assert.equal(r.body.needsRemastly, true);
 });

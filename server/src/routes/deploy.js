@@ -3,8 +3,12 @@
 //   GET    /api/hosting                       the hosting accounts connected by this person (never a token)
 //   PUT    /api/hosting/netlify { token }     connect Netlify: the token is checked with Netlify first, then kept sealed
 //   DELETE /api/hosting/netlify               forget it (nothing on Netlify changes)
+//   PUT    /api/hosting/remastly { token }    owner only: set up Remastly hosting, Remastly's own Netlify account that every
+//                                             website can be published on without an account of its own (Step 1)
+//   DELETE /api/hosting/remastly              owner only: forget it (sites already live stay online)
 //   GET    /api/projects/:id/deploy[?recreateId=&stack=]   what would be deployed, what stops it or needs a yes, past deploys
-//   POST   /api/projects/:id/deploy { recreateId?, stack?, accept?: [warning ids] }   start a deploy (202)
+//   POST   /api/projects/:id/deploy { recreateId?, stack?, accept?: [warning ids], target?: 'remastly' | 'own' }   start a
+//          deploy (202); `target` defaults to Remastly hosting when it is set up, otherwise the person's own Netlify account
 // Project routes sit behind the accounts' project gate (index.js), like every other /api/projects/:id route.
 import { Router } from 'express';
 import { db } from '../db/index.js';
@@ -15,8 +19,9 @@ import { HostingError, netlifyClient } from '../deploy/netlify.js';
 import { deployRunning, recoverDeploys, runDeploy } from '../deploy/run.js';
 import {
   connectionToken, deployReady, getConnection, insertDeployment, listConnections, listDeployments, MIGRATE_HINT, ownerKeyOf,
-  removeConnection, saveConnection,
+  REMASTLY, removeConnection, saveConnection,
 } from '../deploy/store.js';
+import { isOwner } from '../accounts/roles.js';
 import { withAsIsSafety } from '../copy/outsideServices.js';
 
 const UUID = /^[0-9a-f-]{36}$/i;
@@ -34,19 +39,60 @@ function notReady(res) {
   return true;
 }
 
+/**
+ * Remastly hosting as this person sees it: whether it is set up, whether they may set it up (the owner), and for the owner only,
+ * which account it is.
+ * @param {any} req
+ */
+function remastlyOf(req) {
+  const account = getConnection(REMASTLY, 'netlify');
+  const owner = isOwner(req);
+  return { ready: Boolean(account), canManage: owner, account: owner ? account : null };
+}
+
+/** A token as Netlify issues it; anything with spaces or far outside its length is a paste mistake. @param {any} body */
+const tokenOf = (body) => {
+  const token = typeof body?.token === 'string' ? body.token.trim() : '';
+  return TOKEN.test(token) ? token : null;
+};
+const TOKEN_HELP = 'Paste the whole personal access token from Netlify (User settings → Applications → Personal access tokens).';
+
 export const hostingRouter = Router();
 
 hostingRouter.get('/', (req, res) => {
   if (notReady(res)) return;
-  res.json({ connections: listConnections(ownerKeyOf(req)) });
+  res.json({ connections: listConnections(ownerKeyOf(req)), remastly: remastlyOf(req) });
+});
+
+// Before '/:provider', which would take "remastly" for a provider.
+hostingRouter.put('/remastly', async (req, res) => {
+  if (notReady(res)) return;
+  if (!isOwner(req)) return res.status(403).json({ error: 'Only the owner can set up Remastly hosting.', forbidden: 'owner' });
+  const token = tokenOf(req.body);
+  if (!token) return res.status(400).json({ error: TOKEN_HELP });
+  try {
+    const user = await netlifyClient(token).user();
+    saveConnection({ ownerKey: REMASTLY, provider: 'netlify', token, accountName: user.name, accountEmail: user.email });
+    res.json({ remastly: remastlyOf(req) });
+  } catch (err) {
+    if (err instanceof HostingError) return res.status(err.code === 'token' ? 400 : 502).json({ error: err.message });
+    throw err;
+  }
+});
+
+hostingRouter.delete('/remastly', (req, res) => {
+  if (notReady(res)) return;
+  if (!isOwner(req)) return res.status(403).json({ error: 'Only the owner can change Remastly hosting.', forbidden: 'owner' });
+  removeConnection(REMASTLY, 'netlify');
+  res.json({ remastly: remastlyOf(req) });
 });
 
 hostingRouter.put('/:provider', async (req, res) => {
   if (notReady(res)) return;
   const { provider } = req.params;
   if (!PROVIDERS.has(provider)) return res.status(404).json({ error: 'Only Netlify can be connected for now.' });
-  const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
-  if (!TOKEN.test(token)) return res.status(400).json({ error: 'Paste the whole personal access token from Netlify (User settings → Applications → Personal access tokens).' });
+  const token = tokenOf(req.body);
+  if (!token) return res.status(400).json({ error: TOKEN_HELP });
   try {
     const user = await netlifyClient(token).user();
     const connection = saveConnection({ ownerKey: ownerKeyOf(req), provider, token, accountName: user.name, accountEmail: user.email });
@@ -85,11 +131,14 @@ deployRouter.get('/:id/deploy', (req, res) => {
   const project = selectProject.get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found.' });
   const { recreateId, copiedAt, stack, readiness } = subjectOf(project, req.query);
+  const owner = isOwner(req);
   res.json({
     recreateId, copiedAt, stack, readiness,
     connection: getConnection(ownerKeyOf(req), 'netlify'),
+    remastly: remastlyOf(req),
     running: deployRunning(project.id),
-    deployments: listDeployments(project.id),
+    // A site on Remastly hosting is managed in Remastly's own Netlify account: only the owner gets that link.
+    deployments: listDeployments(project.id).map((d) => (d?.hosting === 'remastly' && !owner ? { ...d, adminUrl: null } : d)),
   });
 });
 
@@ -97,9 +146,16 @@ deployRouter.post('/:id/deploy', (req, res) => {
   if (notReady(res)) return;
   const project = /** @type {any} */ (selectProject.get(req.params.id));
   if (!project) return res.status(404).json({ error: 'Project not found.' });
-  const ownerKey = ownerKeyOf(req);
+  // Remastly hosting when it is set up, unless the person chose their own account.
+  const remastlyReady = Boolean(getConnection(REMASTLY, 'netlify'));
+  const target = req.body?.target === 'own' || req.body?.target === 'remastly' ? req.body.target : (remastlyReady ? 'remastly' : 'own');
+  const ownerKey = target === 'remastly' ? REMASTLY : ownerKeyOf(req);
   const token = connectionToken(ownerKey, 'netlify');
-  if (!token) return res.status(400).json({ error: 'Connect Netlify first.', needsConnection: true });
+  if (!token) {
+    return target === 'remastly'
+      ? res.status(400).json({ error: 'Remastly hosting is not set up yet. Publish on your own Netlify account, or ask the owner to set it up.', needsRemastly: true })
+      : res.status(400).json({ error: 'Connect Netlify first.', needsConnection: true });
+  }
   if (deployRunning(project.id)) return res.status(409).json({ error: 'This website is being deployed already. Wait for it to finish.' });
   const { recreateId, report, stack, readiness } = subjectOf(project, req.body);
   if (!readiness.ok) return res.status(409).json({ error: readiness.blockers[0].text, blockers: readiness.blockers });

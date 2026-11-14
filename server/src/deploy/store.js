@@ -11,6 +11,13 @@ export const deployReady = () => hasTable(db, 'deployments') && hasTable(db, 'ho
 
 export const MIGRATE_HINT = 'Going live needs a database update first. Stop the app, run "npm run db:migrate -w server" (it backs up the database and rehearses the change on a copy first), then start it again.';
 
+/**
+ * Remastly hosting (Go live, Step 1): the hosting account of Remastly itself, set up once by the owner, that every website can
+ * be published on without an account of its own. Kept as a connection like any other, under this key, which no user id can be
+ * (ids are UUIDs) and which `ownerKeyOf` never returns.
+ */
+export const REMASTLY = 'remastly';
+
 /** Whose connection: the signed-in user, or the single user of the local tool. @param {any} req */
 export const ownerKeyOf = (req) => (req?.user?.id ? String(req.user.id) : 'local');
 
@@ -71,7 +78,7 @@ export function removeConnection(ownerKey, provider) {
 export const publicDeployment = (r) => (r ? {
   id: r.id, recreateId: r.recreate_id, stack: r.stack, provider: r.provider, status: r.status, step: r.step, error: r.error,
   siteName: r.site_name, url: r.url, deployUrl: r.deploy_url, adminUrl: r.admin_url, files: r.files, bytes: r.bytes,
-  startedAt: r.started_at, finishedAt: r.finished_at,
+  startedAt: r.started_at, finishedAt: r.finished_at, hosting: r.owner_key === REMASTLY ? 'remastly' : 'own',
 } : null);
 
 /** @param {{ projectId: string, recreateId: string, stack: string, provider: string, ownerKey: string }} d */
