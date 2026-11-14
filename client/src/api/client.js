@@ -303,6 +303,9 @@ export const api = {
   removeRemastlyHosting: () => request('/hosting/remastly', { method: 'DELETE' }),
   getDeploy: (id) => request(`/projects/${id}/deploy`),
   startDeploy: (id, body) => request(`/projects/${id}/deploy`, { method: 'POST', body }),
+  getDomain: (id) => request(`/projects/${id}/domain`),
+  setDomain: (id, domain) => request(`/projects/${id}/domain`, { method: 'PUT', body: { domain } }),
+  removeDomain: (id) => request(`/projects/${id}/domain`, { method: 'DELETE' }),
   unpublishBuild: (id) => request(`/build/runs/${id}/publish`, { method: 'DELETE' }),
   // Saved sites (server/src/buildmode/sites.js): the app's state of each site, kept on the server, with the builds made from it.
   listBuildSites: () => request('/build/sites'),

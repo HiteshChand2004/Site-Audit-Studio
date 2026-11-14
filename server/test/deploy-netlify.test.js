@@ -18,6 +18,7 @@ import { deployReadiness } from '../src/deploy/readiness.js';
 import { forgetKey, keyFile, seal, unseal } from '../src/deploy/secrets.js';
 import { failInterrupted, insertDeployment, getDeployment } from '../src/deploy/store.js';
 import { deployRouter, hostingRouter } from '../src/routes/deploy.js';
+import { checkRecords, dnsConfig, domainPlan, NETLIFY_LB, parseDomain } from '../src/deploy/domain.js';
 import { seedProject } from './helpers/projects.js';
 
 const GOOD = 'nfp_good_token_0123456789abcdef';
@@ -56,11 +57,24 @@ const netlify = createServer((req, res) => {
     if (req.method === 'GET' && p === '/user') return send(200, { id: 'u1', full_name: 'Site Owner', email: 'owner@example.test' });
     if (req.method === 'POST' && p === '/sites') {
       const id = randomUUID();
-      const site = { id, name: `brave-otter-${fake.sites.size + 1}`, ssl_url: `https://brave-otter-${fake.sites.size + 1}.netlify.app`, admin_url: `https://app.netlify.com/sites/brave-otter-${fake.sites.size + 1}` };
+      const site = { id, name: `brave-otter-${fake.sites.size + 1}`, default_domain: `brave-otter-${fake.sites.size + 1}.netlify.app`, ssl_url: `https://brave-otter-${fake.sites.size + 1}.netlify.app`, admin_url: `https://app.netlify.com/sites/brave-otter-${fake.sites.size + 1}` };
       fake.sites.set(id, site);
       return send(201, site);
     }
     if (req.method === 'GET' && (m = p.match(/^\/sites\/([^/]+)$/))) return fake.sites.has(m[1]) ? send(200, fake.sites.get(m[1])) : send(404, { message: 'Not Found' });
+    if (req.method === 'PATCH' && (m = p.match(/^\/sites\/([^/]+)$/))) {
+      const site = fake.sites.get(m[1]);
+      if (!site) return send(404, { message: 'Not Found' });
+      const json = JSON.parse(body.toString() || '{}');
+      const taken = [...fake.sites.values()].some((x) => x !== site && json.custom_domain && x.custom_domain === json.custom_domain);
+      if (taken) return send(422, { errors: { custom_domain: ['custom_domain has already been taken'] } });
+      Object.assign(site, { custom_domain: json.custom_domain, domain_aliases: json.domain_aliases, ssl: false });
+      return send(200, site);
+    }
+    if (req.method === 'POST' && (m = p.match(/^\/sites\/([^/]+)\/ssl$/))) {
+      fake.sslAsked = (fake.sslAsked ?? 0) + 1;
+      return fake.sites.has(m[1]) ? send(200, { state: 'issued' }) : send(404, { message: 'Not Found' });
+    }
     if (req.method === 'POST' && (m = p.match(/^\/sites\/([^/]+)\/deploys$/))) {
       if (!fake.sites.has(m[1])) return send(404, { message: 'Not Found' });
       fake.uploads.push({ siteId: m[1], type: req.headers['content-type'], length: Number(req.headers['content-length']), received: body.length, entries: zipEntries(body) });
@@ -347,4 +361,97 @@ test('Remastly hosting: once it is removed, a deploy without an account of one\'
   r = await call('POST', `/projects/${project.id}/deploy`, { target: 'remastly' }, 'user');
   assert.equal(r.status, 400);
   assert.equal(r.body.needsRemastly, true);
+});
+
+// ---- Step 2: the owner's own domain ----
+
+test('a domain is read as the owner types it, and refused with a reason when it cannot be used', () => {
+  assert.deepEqual(parseDomain('https://WWW.Acme-Shop.com/about'), { ok: true, host: 'www.acme-shop.com', apex: 'acme-shop.com', kind: 'www' });
+  assert.deepEqual(parseDomain('acme.co.in'), { ok: true, host: 'acme.co.in', apex: 'acme.co.in', kind: 'apex' });
+  assert.deepEqual(parseDomain('shop.acme.co.in'), { ok: true, host: 'shop.acme.co.in', apex: 'acme.co.in', kind: 'sub' });
+  for (const bad of ['', 'acme', 'co.in', 'brave-otter-1.netlify.app', '127.0.0.1', 'acme.test', 'user:pw@acme.com', 'acme.com:8080', 'a_b.com']) {
+    assert.equal(parseDomain(bad).ok, false, bad);
+  }
+});
+
+test('the records: a bare domain points to Netlify\'s address, a www or other name to the site\'s own name', () => {
+  const site = 'brave-otter-9.netlify.app';
+  const apex = domainPlan(/** @type {any} */ (parseDomain('acme.com')), site);
+  assert.deepEqual(apex.records.map((r) => [r.type, r.name, r.value, r.required]), [['A', '@', NETLIFY_LB, true], ['CNAME', 'www', site, false]]);
+  assert.deepEqual([apex.primary, apex.aliases], ['acme.com', ['www.acme.com']]);
+  const www = domainPlan(/** @type {any} */ (parseDomain('www.acme.com')), site);
+  assert.deepEqual(www.records.map((r) => [r.type, r.name, r.required]), [['CNAME', 'www', true], ['A', '@', false]]);
+  const sub = domainPlan(/** @type {any} */ (parseDomain('shop.acme.co.in')), site);
+  assert.deepEqual(sub.records.map((r) => [r.type, r.name, r.host]), [['CNAME', 'shop', 'shop.acme.co.in']]);
+});
+
+/** A DNS that answers from a table: { host: { a: [...], cname: [...] } }. */
+const fakeDns = (table) => ({
+  resolve4: async (h) => { if (table[h]?.a) return table[h].a; throw Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' }); },
+  resolveCname: async (h) => { if (table[h]?.cname) return table[h].cname; throw Object.assign(new Error('ENODATA'), { code: 'ENODATA' }); },
+});
+
+test('the check: right only when the name points to the site; an old address left beside it is not right', async () => {
+  const site = 'brave-otter-9.netlify.app';
+  const records = domainPlan(/** @type {any} */ (parseDomain('www.acme.com')), site).records;
+  let checked = await checkRecords(records, { resolver: fakeDns({ 'www.acme.com': { cname: [`${site}.`] }, 'acme.com': { a: [NETLIFY_LB, '13.232.143.64'] } }) });
+  assert.deepEqual(checked.map((r) => [r.host, r.ok]), [['www.acme.com', true], ['acme.com', false]]);
+  assert.deepEqual(checked[1].found, [NETLIFY_LB, '13.232.143.64'], 'what it points to now is shown');
+  // A DNS company that flattens the CNAME answers with the site's own addresses.
+  checked = await checkRecords(records, { resolver: fakeDns({ 'www.acme.com': { a: ['3.3.3.3'] }, [site]: { a: ['3.3.3.3'] }, 'acme.com': { a: [NETLIFY_LB] } }) });
+  assert.deepEqual(checked.map((r) => r.ok), [true, true]);
+  checked = await checkRecords(records, { resolver: fakeDns({}) });
+  assert.deepEqual(checked.map((r) => [r.ok, r.found]), [[false, []], [false, []]]);
+});
+
+test('Go live: the domain is put on the live site, its records are checked, and it can be taken off', async () => {
+  const project = seedProject(db, { name: 'epsilon', url: 'https://www.epsilon-shop.com/' });
+  let r = await call('GET', `/projects/${project.id}/domain`);
+  assert.equal(r.status, 409);
+  assert.equal(r.body.notLive, true);
+
+  await finishedCopy({ projectId: project.id, report: { asIs: { stack: 'html', address: { used: 'https://www.epsilon-shop.com' } } }, reaudit: { checklist: { items: [] } } });
+  assert.equal((await call('POST', `/projects/${project.id}/deploy`, {})).status, 202);
+  const live = await waitDone(project.id);
+  assert.equal(live.status, 'ready', live.error);
+  const site = [...fake.sites.values()].find((x) => x.ssl_url === live.url);
+
+  r = await call('GET', `/projects/${project.id}/domain`);
+  assert.equal(r.body.domain, null);
+  assert.equal(r.body.suggestion, 'www.epsilon-shop.com', 'the original\'s own name is offered');
+
+  assert.equal((await call('PUT', `/projects/${project.id}/domain`, { domain: 'not a domain' })).status, 400);
+  const saved = dnsConfig.resolver;
+  dnsConfig.resolver = fakeDns({});
+  try {
+    r = await call('PUT', `/projects/${project.id}/domain`, { domain: 'www.epsilon-shop.com' });
+    assert.equal(r.status, 200, r.body.error);
+    assert.equal(site.custom_domain, 'www.epsilon-shop.com');
+    assert.deepEqual(site.domain_aliases, ['epsilon-shop.com']);
+    assert.equal(r.body.connected, false);
+    assert.deepEqual(r.body.records.map((x) => [x.type, x.name, x.value, x.ok]), [['CNAME', 'www', site.default_domain, false], ['A', '@', NETLIFY_LB, false]]);
+
+    // The owner adds the CNAME: connected, and Netlify is asked to turn the padlock on.
+    dnsConfig.resolver = fakeDns({ 'www.epsilon-shop.com': { cname: [site.default_domain] } });
+    const asked = fake.sslAsked ?? 0;
+    r = await call('GET', `/projects/${project.id}/domain`);
+    assert.equal(r.body.connected, true);
+    assert.equal(fake.sslAsked, asked + 1);
+
+    // Another website cannot take a domain one already has (Netlify refuses, its reason is shown).
+    const other = seedProject(db, { name: 'zeta' });
+    await finishedCopy({ projectId: other.id, report: { asIs: { stack: 'html', address: { used: 'https://zeta.example.com' } } }, reaudit: { checklist: { items: [] } } });
+    assert.equal((await call('POST', `/projects/${other.id}/deploy`, {})).status, 202);
+    assert.equal((await waitDone(other.id)).status, 'ready');
+    r = await call('PUT', `/projects/${other.id}/domain`, { domain: 'www.epsilon-shop.com' });
+    assert.equal(r.status, 502);
+    assert.match(r.body.error, /already been taken/);
+
+    r = await call('DELETE', `/projects/${project.id}/domain`);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.domain, null);
+    assert.equal(site.custom_domain, null);
+  } finally {
+    dnsConfig.resolver = saved;
+  }
 });

@@ -40,7 +40,9 @@ export class HostingError extends Error {
 /** Netlify's own words for a refusal, when its answer has them (no more than a sentence). */
 function reasonOf(body) {
   const text = typeof body === 'object' && body ? (body.message ?? body.error ?? body.errors) : body;
-  const s = typeof text === 'string' ? text : Array.isArray(text) ? text.join('; ') : '';
+  // { errors: { custom_domain: ['custom_domain has already been taken'] } }: the messages, one after the other.
+  const flat = text && typeof text === 'object' && !Array.isArray(text) ? Object.values(text).flat() : text;
+  const s = typeof flat === 'string' ? flat : Array.isArray(flat) ? flat.filter((x) => typeof x === 'string').join('; ') : '';
   return s.replace(/\s+/g, ' ').trim().slice(0, 200);
 }
 
@@ -118,6 +120,18 @@ export function netlifyClient(token) {
     async deployZip(siteId, file) {
       return deployOf(await call('POST', `/sites/${encodeURIComponent(siteId)}/deploys`, 'uploading the site', { file, timeout: UPLOAD_TIMEOUT_MS }));
     },
+    /**
+     * Puts the owner's domain on the site (Go live Step 2): `primary` is the address the site answers at, `aliases` the other
+     * names that lead to it. Null `primary` takes the domain off.
+     * @param {string} siteId @param {{ primary: string | null, aliases?: string[] }} d
+     */
+    async setDomain(siteId, { primary, aliases = [] }) {
+      return siteOf(await call('PATCH', `/sites/${encodeURIComponent(siteId)}`, 'connecting the domain', { json: { custom_domain: primary, domain_aliases: aliases } }));
+    },
+    /** Asks Netlify to turn the padlock (HTTPS) on now that the domain points to it; Netlify also does so by itself. @param {string} siteId */
+    async provisionSsl(siteId) {
+      return call('POST', `/sites/${encodeURIComponent(siteId)}/ssl`, 'turning on HTTPS');
+    },
     /** @param {string} deployId */
     async deploy(deployId) {
       return deployOf(await call('GET', `/deploys/${encodeURIComponent(deployId)}`, 'deploy'));
@@ -131,6 +145,12 @@ const siteOf = (s) => ({
   name: s?.name ?? null,
   url: s?.ssl_url || s?.url || null,
   adminUrl: s?.admin_url ?? null,
+  /** The site's own free address (what a CNAME points to). */
+  siteHost: s?.default_domain || (s?.name ? `${s.name}.netlify.app` : null),
+  customDomain: s?.custom_domain || null,
+  aliases: Array.isArray(s?.domain_aliases) ? s.domain_aliases : [],
+  /** Whether the padlock is on for the custom domain. */
+  ssl: Boolean(s?.ssl),
 });
 
 /** @param {any} d */

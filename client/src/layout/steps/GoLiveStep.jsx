@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CloudUpload, ExternalLink, Globe, History, KeyRound, Link2, Loader2, Rocket, Server, Unplug } from 'lucide-react';
+import { Check, CloudUpload, Copy, ExternalLink, Globe, History, KeyRound, Link2, Loader2, RefreshCw, Rocket, Server, Unplug } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import Modal from '../../components/common/Modal.jsx';
 import ConfirmDialog from '../../components/common/ConfirmDialog.jsx';
@@ -298,9 +298,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
         )}
       </Card>
 
-      {live && (
-        <Alert tone="info" title={T.domainTitle}>{live.hosting === 'remastly' ? T.domainTextRemastly : T.domainText}</Alert>
-      )}
+      {live && <DomainCard project={project} liveUrl={live.url} />}
 
       {deployments.length > 1 && (
         <SectionCard icon={History} title={T.historyTitle} meta={`${deployments.length} deploys`} defaultOpen={false}>
@@ -399,5 +397,150 @@ function TokenDialog({ open, onClose, onConnected, remastly = false }) {
         </a>
       </form>
     </Modal>
+  );
+}
+
+/** Step 2: the owner's own domain on the live site — the DNS records to add, and which are in place. */
+function DomainCard({ project, liveUrl }) {
+  const [state, setState] = useState(null);
+  const [error, setError] = useState(null);
+  const [domain, setDomain] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [askRemove, setAskRemove] = useState(false);
+
+  const load = useCallback(async () => {
+    setBusy(true);
+    try {
+      const d = await api.getDomain(project.id);
+      setState(d);
+      setError(null);
+      if (!d.domain) setDomain((cur) => cur || d.suggestion || '');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [project.id]);
+
+  // Again when a new deploy changed the live site.
+  useEffect(() => { load(); }, [load, liveUrl]);
+
+  async function connect(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      setState(await api.setDomain(project.id, domain.trim()));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    setAskRemove(false);
+    setBusy(true);
+    try {
+      setState(await api.removeDomain(project.id));
+      setError(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const records = state?.records ?? [];
+  return (
+    <Card icon={Globe} title={T.domainCardTitle} sub={T.domainCardSub}>
+      {!state && !error && <p className={ws.hint} style={{ margin: 0 }}><Spin size={14} aria-hidden="true" /> Loading…</p>}
+      {state && !state.domain && (
+        <form className={styles.domainForm} onSubmit={connect} noValidate>
+          <label className={form.field} style={{ flex: 1, minWidth: 0 }}>
+            <span className={form.label}>{T.domainLabel}</span>
+            <input
+              className={form.input}
+              value={domain}
+              onChange={(e) => setDomain(e.target.value)}
+              placeholder={T.domainPlaceholder}
+              autoComplete="off"
+              spellCheck={false}
+              inputMode="url"
+            />
+          </label>
+          <Button variant="primary" type="submit" icon={busy ? Spin : undefined} disabled={busy || !domain.trim()}>
+            {busy ? T.domainConnecting : T.domainConnect}
+          </Button>
+        </form>
+      )}
+      {state?.domain && (
+        <div className={styles.domainBody}>
+          {state.connected ? (
+            <Alert tone="ok" title={T.domainConnected(state.domain)}>{state.https ? T.domainHttpsOn : T.domainHttpsPending}</Alert>
+          ) : (
+            <>
+              <p className={ws.hint} style={{ margin: 0 }}>{T.domainWaiting}</p>
+              <p className={styles.moveNote}>{T.domainMoves(state.domain)}</p>
+            </>
+          )}
+          <div className={styles.tableWrap}>
+            <table className={styles.records}>
+              <thead>
+                <tr>
+                  <th>{T.domainCols.type}</th>
+                  <th>{T.domainCols.name}</th>
+                  <th>{T.domainCols.value}</th>
+                  <th>{T.domainCols.status}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {records.map((r) => (
+                  <tr key={`${r.type}-${r.host}`}>
+                    <td>{r.type}</td>
+                    <td><code>{r.name}</code></td>
+                    <td><span className={styles.value}><code>{r.value}</code> <CopyButton text={r.value} /></span></td>
+                    <td>
+                      <span className={styles.badge} data-status={r.ok ? 'ready' : r.required ? 'failed' : undefined}>
+                        {r.ok ? T.domainOk : r.required ? T.domainMissing : T.domainOptional}
+                      </span>
+                      {!r.ok && r.found?.length > 0 && <span className={styles.found}>{T.domainNow(r.found)}</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className={ws.hint} style={{ margin: 0 }}>{T.domainSameName} {records.some((r) => !r.required) ? T.domainOptionalNote : ''}</p>
+          <div className={styles.accountButtons}>
+            <Button size="sm" icon={busy ? Spin : RefreshCw} disabled={busy} onClick={load}>{T.domainCheck}</Button>
+            <Button size="sm" icon={Unplug} disabled={busy} onClick={() => setAskRemove(true)}>{T.domainRemove}</Button>
+          </div>
+        </div>
+      )}
+      {error && <Alert tone="bad" title="The domain could not be changed">{error}</Alert>}
+      <ConfirmDialog open={askRemove} onClose={() => setAskRemove(false)} title={T.domainRemoveTitle} confirmLabel={T.domainRemove} danger onConfirm={remove}>
+        {T.domainRemoveText}
+      </ConfirmDialog>
+    </Card>
+  );
+}
+
+/** Copies a record's value, so it is pasted at the DNS company exactly. */
+function CopyButton({ text }) {
+  const [done, setDone] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setDone(true);
+      setTimeout(() => setDone(false), 1500);
+    } catch {
+      // No clipboard (an insecure page): the value is on screen to copy by hand.
+    }
+  }
+  return (
+    <button type="button" className={styles.copy} onClick={copy} aria-label={`${T.copyValue} ${text}`}>
+      {done ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />} {done ? T.copied : T.copyValue}
+    </button>
   );
 }
