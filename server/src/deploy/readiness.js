@@ -6,6 +6,7 @@
 // nothing is not stopped, but it is not deployed without the owner saying they saw that.
 import { formCounts } from '../copy/formRoutes.js';
 import { outsideLine } from '../copy/outsideServices.js';
+import { suggestedPaths } from './passThrough.js';
 import { markOutside } from '../copy/gotWorse.js';
 import { reportOutputs } from '../recreate/export/fromIr.js';
 import { STATIC_STACKS } from './bundle.js';
@@ -14,11 +15,11 @@ import { STATIC_STACKS } from './bundle.js';
 const EXPLAINED = new Set(['measurement', 'needs-info', 'look', 'own-code', 'impossible']);
 
 /**
- * @param {{ project: any, report: any | null, stack: string, reaudit: any | null }} o
+ * @param {{ project: any, report: any | null, stack: string, reaudit: any | null, passThrough?: { paths: string[] } | null }} o
  *   `reaudit` = the latest finished comparison of this copy (its result), or null
  * @returns {{ ok: boolean, blockers: { id: string, text: string }[], warnings: { id: string, text: string }[] }}
  */
-export function deployReadiness({ project, report, stack, reaudit }) {
+export function deployReadiness({ project, report, stack, reaudit, passThrough = null }) {
   const blockers = [];
   const warnings = [];
   if (!report) {
@@ -59,6 +60,12 @@ export function deployReadiness({ project, report, stack, reaudit }) {
   const waiting = formCounts(report.asIs?.formRoutes ?? []).waiting;
   if (waiting && !report.copy?.formEndpoint) {
     warnings.push({ id: 'forms', text: `${waiting === 1 ? 'One form sends' : `${waiting} forms send`} nothing yet: on the live site, what visitors type there will not reach you until a form service is connected.` });
+  }
+  // The copy asked its own address for app paths it does not have (/api/…): on the live domain nothing answers them unless they
+  // are passed to the old app (Step 3).
+  const appPaths = suggestedPaths(report).filter((s) => !passThrough?.paths.some((p) => p === s.path || s.seen === p || (p.endsWith('/*') && s.seen.startsWith(p.slice(0, -1)))));
+  if (appPaths.length) {
+    warnings.push({ id: 'app-calls', text: `The copy asks for ${appPaths.map((s) => s.seen).slice(0, 3).join(', ')}${appPaths.length > 3 ? ' and more' : ''}, which belong${appPaths.length === 1 ? 's' : ''} to the old app. Once your domain points to the copy, ${appPaths.length === 1 ? 'it gets' : 'they get'} no answer unless you pass ${appPaths.length === 1 ? 'it' : 'them'} to the old app ("Logins and data" below).` });
   }
   return { ok: blockers.length === 0, blockers, warnings };
 }

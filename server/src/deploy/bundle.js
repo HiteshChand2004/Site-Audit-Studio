@@ -5,7 +5,7 @@
 // next.config rewrites map them back (behavior/preserve/nextAssets.js); a static host applies no such rule, so they go into the
 // zip at _next/, where the pages ask for them.
 import { createWriteStream } from 'node:fs';
-import { lstat, mkdtemp, readdir, rm, stat } from 'node:fs/promises';
+import { lstat, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { tempDir } from '../config/paths.js';
 import { outputRoot, reportOutputs } from '../recreate/export/fromIr.js';
@@ -47,9 +47,10 @@ async function listFiles(root) {
 /**
  * The files of a finished copy's output, as they will be served: [{ name, file, size, store }] with `name` the path on the site.
  * Throws DeployError (message safe to show) when this output cannot go on a static host.
- * @param {{ dir: string, report: any, stack: string }} o
+ * `redirects`: rules that go first in the site's _redirects (Go live Step 3: the paths passed to the old app), before the copy's own.
+ * @param {{ dir: string, report: any, stack: string, redirects?: string | null }} o
  */
-export async function planDeploy({ dir, report, stack }) {
+export async function planDeploy({ dir, report, stack, redirects = null }) {
   const out = reportOutputs(report)[stack];
   if (out?.status !== 'ready') throw new DeployError(`This copy has no finished ${stack} version to deploy.`);
   if (!STATIC_STACKS.has(stack)) {
@@ -69,6 +70,14 @@ export async function planDeploy({ dir, report, stack }) {
     size: f.size,
     store: STORED.test(f.rel),
   }));
+  if (redirects) {
+    const at = entries.findIndex((e) => e.name === '_redirects');
+    const own = at >= 0 ? await readFile(entries[at].file, 'utf8') : '';
+    const content = Buffer.from(`# Passed to the old app (Remastly, Go live)\n${redirects}\n${own ? `\n${own}` : ''}`);
+    const entry = { name: '_redirects', content, size: content.length, store: false };
+    if (at >= 0) entries[at] = /** @type {any} */ (entry);
+    else entries.push(/** @type {any} */ (entry));
+  }
   const bytes = entries.reduce((n, e) => n + e.size, 0);
   if (entries.length > ZIP_MAX_FILES) throw new DeployError(`This copy has ${entries.length} files; a deploy is limited to ${ZIP_MAX_FILES}.`, 413);
   if (bytes > ZIP_MAX_BYTES) throw new DeployError(`This copy is ${Math.round(bytes / 1048576)} MB; a deploy is limited to ${Math.round(ZIP_MAX_BYTES / 1048576)} MB.`, 413);

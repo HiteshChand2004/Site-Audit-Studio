@@ -4,6 +4,7 @@ import { test, after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { inflateRawSync } from 'node:zlib';
 import { mkdir, stat, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import express from 'express';
@@ -19,6 +20,7 @@ import { forgetKey, keyFile, seal, unseal } from '../src/deploy/secrets.js';
 import { failInterrupted, insertDeployment, getDeployment } from '../src/deploy/store.js';
 import { deployRouter, hostingRouter } from '../src/routes/deploy.js';
 import { checkRecords, dnsConfig, domainPlan, NETLIFY_LB, parseDomain } from '../src/deploy/domain.js';
+import { parsePaths, parseTarget, redirectsFor, suggestedPaths } from '../src/deploy/passThrough.js';
 import { seedProject } from './helpers/projects.js';
 
 const GOOD = 'nfp_good_token_0123456789abcdef';
@@ -39,6 +41,26 @@ function zipEntries(buf) {
     p += 46 + nameLen + extraLen + commentLen;
   }
   return out.sort();
+}
+
+/** One file of a zip, as text (stored or deflated). */
+function zipText(buf, name) {
+  let eocd = buf.length - 22;
+  while (eocd >= 0 && buf.readUInt32LE(eocd) !== 0x06054b50) eocd--;
+  let p = buf.readUInt32LE(eocd + 16);
+  for (let i = 0; i < buf.readUInt16LE(eocd + 10); i++) {
+    const method = buf.readUInt16LE(p + 10);
+    const size = buf.readUInt32LE(p + 20);
+    const nameLen = buf.readUInt16LE(p + 28);
+    const local = buf.readUInt32LE(p + 42);
+    if (buf.toString('utf8', p + 46, p + 46 + nameLen) === name) {
+      const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+      const data = buf.subarray(start, start + size);
+      return (method === 8 ? inflateRawSync(data) : data).toString('utf8');
+    }
+    p += 46 + nameLen + buf.readUInt16LE(p + 30) + buf.readUInt16LE(p + 32);
+  }
+  return '';
 }
 
 // ---- the stand-in Netlify ----
@@ -77,6 +99,7 @@ const netlify = createServer((req, res) => {
     }
     if (req.method === 'POST' && (m = p.match(/^\/sites\/([^/]+)\/deploys$/))) {
       if (!fake.sites.has(m[1])) return send(404, { message: 'Not Found' });
+      fake.lastZip = body;
       fake.uploads.push({ siteId: m[1], type: req.headers['content-type'], length: Number(req.headers['content-length']), received: body.length, entries: zipEntries(body) });
       const id = randomUUID();
       const failing = fake.failNextDeploy;
@@ -454,4 +477,58 @@ test('Go live: the domain is put on the live site, its records are checked, and 
   } finally {
     dnsConfig.resolver = saved;
   }
+});
+
+// ---- Step 3: logins and data passed to the old app ----
+
+test('the old app\'s address must be reachable and not the copy\'s own domain; paths must be the app\'s only', () => {
+  assert.deepEqual(parseTarget('app.acme.com/login'), { ok: true, value: 'https://app.acme.com', insecure: false });
+  assert.equal(parseTarget('http://13.232.143.64').insecure, true);
+  for (const bad of ['', 'localhost:3000', 'http://192.168.1.4', 'https://10.0.0.2', 'brave-otter-1.netlify.app']) assert.equal(parseTarget(bad).ok, false, bad);
+  assert.match(parseTarget('https://www.acme.com', ['acme.com']).error, /app\.acme\.com/);
+  assert.deepEqual(parsePaths('/api/*, login\n/api/*'), { ok: true, value: ['/api/*', '/login'] });
+  for (const bad of [[], ['/'], ['/*'], ['/a b'], ['/x/../y'], ['/api/*/more']]) assert.equal(parsePaths(bad).ok, false, JSON.stringify(bad));
+  assert.equal(redirectsFor({ target: 'https://app.acme.com', paths: ['/api/*', '/login'] }),
+    '/api/*  https://app.acme.com/api/:splat  200!\n/login  https://app.acme.com/login  200!');
+});
+
+test('app paths the copy asked its own address for are suggested; missing pages are not', () => {
+  const report = { asIs: { checks: { pages: [
+    { offline: { failed: ['404 /api/chatbot/w/cfg/1', '404 /api/v1/news?x=1', '404 /pricing', '500 /auth/session'] } },
+    { offline: { failed: ['404 /use-cases/'] } },
+  ] } } };
+  assert.deepEqual(suggestedPaths(report), [{ path: '/api/*', seen: '/api/chatbot/w/cfg/1' }, { path: '/auth/*', seen: '/auth/session' }]);
+  assert.deepEqual(suggestedPaths({}), []);
+});
+
+test('Go live: the paths go first in the deployed _redirects, before the copy\'s own rules; until then the copy is flagged', async () => {
+  const project = seedProject(db, { name: 'eta', url: 'https://www.eta-app.com/' });
+  await finishedCopy({
+    projectId: project.id,
+    files: { _redirects: '/old-page  /new-page  301\n' },
+    report: { asIs: { stack: 'html', address: { used: 'https://www.eta-app.com' }, checks: { pages: [{ path: '/', offline: { external: [], failed: ['404 /api/me'] } }] } } },
+    reaudit: { checklist: { items: [] } },
+  });
+  let r = await call('GET', `/projects/${project.id}/deploy`);
+  const flag = r.body.readiness.warnings.find((w) => w.id === 'app-calls');
+  assert.ok(flag, 'the copy\'s own /api call is pointed out');
+  assert.match(flag.text, /\/api\/me/);
+  r = await call('GET', `/projects/${project.id}/pass-through`);
+  assert.deepEqual([r.body.passThrough, r.body.suggestions], [null, [{ path: '/api/*', seen: '/api/me' }]]);
+
+  assert.equal((await call('PUT', `/projects/${project.id}/pass-through`, { target: 'www.eta-app.com', paths: ['/api/*'] })).status, 400, 'not the domain the copy goes on');
+  r = await call('PUT', `/projects/${project.id}/pass-through`, { target: 'https://app.eta-app.com', paths: ['/api/*', '/login'] });
+  assert.equal(r.status, 200, r.body.error);
+  r = await call('GET', `/projects/${project.id}/deploy`);
+  assert.equal(r.body.readiness.warnings.some((w) => w.id === 'app-calls'), false, 'passed on: nothing left to point out');
+
+  assert.equal((await call('POST', `/projects/${project.id}/deploy`, {})).status, 202);
+  assert.equal((await waitDone(project.id)).status, 'ready');
+  assert.ok(fake.uploads.at(-1).entries.includes('_redirects'));
+  const text = zipText(fake.lastZip, '_redirects');
+  assert.ok(text.includes('/api/*  https://app.eta-app.com/api/:splat  200!'), 'the rule is in the zip');
+  assert.ok(text.indexOf('https://app.eta-app.com/login') < text.indexOf('/old-page  /new-page  301'), 'before the copy\'s own rules');
+
+  r = await call('DELETE', `/projects/${project.id}/pass-through`);
+  assert.equal(r.body.passThrough, null);
 });

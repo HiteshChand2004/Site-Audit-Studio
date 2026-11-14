@@ -10,6 +10,9 @@
 //   GET    /api/projects/:id/domain           the owner's domain on the live site and whether its DNS records are in place
 //   PUT    /api/projects/:id/domain { domain }   put the domain on the live site; answers with the records to add (Step 2)
 //   DELETE /api/projects/:id/domain           take it off again (the free address keeps working)
+//   GET    /api/projects/:id/pass-through     the paths passed to the old app, and the ones the copy suggests (Step 3)
+//   PUT    /api/projects/:id/pass-through { target, paths }   save them; they apply from the next deploy
+//   DELETE /api/projects/:id/pass-through     stop passing anything on (from the next deploy)
 //   POST   /api/projects/:id/deploy { recreateId?, stack?, accept?: [warning ids], target?: 'remastly' | 'own' }   start a
 //          deploy (202); `target` defaults to Remastly hosting when it is set up, otherwise the person's own Netlify account
 // Project routes sit behind the accounts' project gate (index.js), like every other /api/projects/:id route.
@@ -26,6 +29,7 @@ import {
 } from '../deploy/store.js';
 import { isOwner } from '../accounts/roles.js';
 import { checkRecords, domainPlan, parseDomain } from '../deploy/domain.js';
+import { parsePaths, parseTarget, readPassThrough, redirectsFor, savePassThrough, suggestedPaths } from '../deploy/passThrough.js';
 import { withAsIsSafety } from '../copy/outsideServices.js';
 
 const UUID = /^[0-9a-f-]{36}$/i;
@@ -118,23 +122,23 @@ const latestDoneCopy = db.prepare(`SELECT id, finished_at, result_json FROM recr
 const doneCopy = db.prepare(`SELECT id, finished_at, result_json FROM recreates WHERE id = ? AND project_id = ? AND status = 'done' AND result_json IS NOT NULL AND removed_at IS NULL`);
 const latestComparison = db.prepare(`SELECT result_json FROM reaudits WHERE recreate_id = ? AND project_id = ? AND status = 'done' ORDER BY started_at DESC LIMIT 1`);
 
-/** The copy, its stack and what stands in the way, for one request. @param {any} project @param {any} q */
-function subjectOf(project, q) {
+/** The copy, its stack and what stands in the way, for one request. @param {any} project @param {any} q @param {any} [passThrough] */
+function subjectOf(project, q, passThrough = null) {
   const row = /** @type {any} */ (typeof q?.recreateId === 'string' && UUID.test(q.recreateId) ? doneCopy.get(q.recreateId, project.id) : latestDoneCopy.get(project.id));
   const report = row?.result_json ? withAsIsSafety(JSON.parse(row.result_json)) : null;
   const stack = typeof q?.stack === 'string' && q.stack ? q.stack : (report ? targetStack(report, project.stack) : project.stack);
   const reauditRow = /** @type {any} */ (row ? latestComparison.get(row.id, project.id) : null);
   const reaudit = reauditRow?.result_json ? JSON.parse(reauditRow.result_json) : null;
-  return { recreateId: row?.id ?? null, copiedAt: row?.finished_at ?? null, report, stack, readiness: deployReadiness({ project, report, stack, reaudit }) };
+  return { recreateId: row?.id ?? null, copiedAt: row?.finished_at ?? null, report, stack, readiness: deployReadiness({ project, report, stack, reaudit, passThrough }) };
 }
 
 export const deployRouter = Router();
 
-deployRouter.get('/:id/deploy', (req, res) => {
+deployRouter.get('/:id/deploy', async (req, res) => {
   if (notReady(res)) return;
-  const project = selectProject.get(req.params.id);
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
   if (!project) return res.status(404).json({ error: 'Project not found.' });
-  const { recreateId, copiedAt, stack, readiness } = subjectOf(project, req.query);
+  const { recreateId, copiedAt, stack, readiness } = subjectOf(project, req.query, await readPassThrough(project.id));
   const owner = isOwner(req);
   res.json({
     recreateId, copiedAt, stack, readiness,
@@ -146,7 +150,7 @@ deployRouter.get('/:id/deploy', (req, res) => {
   });
 });
 
-deployRouter.post('/:id/deploy', (req, res) => {
+deployRouter.post('/:id/deploy', async (req, res) => {
   if (notReady(res)) return;
   const project = /** @type {any} */ (selectProject.get(req.params.id));
   if (!project) return res.status(404).json({ error: 'Project not found.' });
@@ -161,7 +165,7 @@ deployRouter.post('/:id/deploy', (req, res) => {
       : res.status(400).json({ error: 'Connect Netlify first.', needsConnection: true });
   }
   if (deployRunning(project.id)) return res.status(409).json({ error: 'This website is being deployed already. Wait for it to finish.' });
-  const { recreateId, report, stack, readiness } = subjectOf(project, req.body);
+  const { recreateId, report, stack, readiness } = subjectOf(project, req.body, await readPassThrough(project.id));
   if (!readiness.ok) return res.status(409).json({ error: readiness.blockers[0].text, blockers: readiness.blockers });
   const open = unaccepted(readiness.warnings, req.body?.accept);
   if (open.length) return res.status(409).json({ error: 'Confirm what the copy still lacks before it goes live.', warnings: open, needsAccept: true });
@@ -250,4 +254,39 @@ deployRouter.delete('/:id/domain', async (req, res) => {
   } catch (err) {
     hostingFailure(res, err);
   }
+});
+
+// ---- Step 3: logins and data passed to the old app ----
+
+/** The names the old app's address may not have: the site's own (original and new). @param {any} project */
+const ownHostsOf = (project) => [project.url, project.target_domain].map((u) => { try { return new URL(u).hostname; } catch { return null; } });
+
+deployRouter.get('/:id/pass-through', async (req, res) => {
+  if (notReady(res)) return;
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  const { report } = subjectOf(project, req.query);
+  const passThrough = await readPassThrough(project.id);
+  res.json({ passThrough, rules: passThrough ? redirectsFor(passThrough) : null, suggestions: report ? suggestedPaths(report) : [] });
+});
+
+deployRouter.put('/:id/pass-through', async (req, res) => {
+  if (notReady(res)) return;
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  const target = parseTarget(req.body?.target, ownHostsOf(project));
+  if (!target.ok) return res.status(400).json({ error: target.error });
+  const paths = parsePaths(req.body?.paths);
+  if (!paths.ok) return res.status(400).json({ error: paths.error });
+  const passThrough = { target: /** @type {string} */ (target.value), paths: /** @type {string[]} */ (paths.value) };
+  await savePassThrough(project.id, passThrough);
+  res.json({ passThrough, rules: redirectsFor(passThrough), insecure: Boolean(target.insecure) });
+});
+
+deployRouter.delete('/:id/pass-through', async (req, res) => {
+  if (notReady(res)) return;
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  await savePassThrough(project.id, null);
+  res.json({ passThrough: null, rules: null });
 });

@@ -300,6 +300,8 @@ export default function GoLiveStep({ project, onGoCreate }) {
 
       {live && <DomainCard project={project} liveUrl={live.url} />}
 
+      <PassThroughCard project={project} onChange={load} />
+
       {deployments.length > 1 && (
         <SectionCard icon={History} title={T.historyTitle} meta={`${deployments.length} deploys`} defaultOpen={false}>
           <ul className={styles.history}>
@@ -542,5 +544,105 @@ function CopyButton({ text }) {
     <button type="button" className={styles.copy} onClick={copy} aria-label={`${T.copyValue} ${text}`}>
       {done ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />} {done ? T.copied : T.copyValue}
     </button>
+  );
+}
+
+/** Step 3: the old app's address and the paths passed to it on the live site (logins, dashboards, /api/…). */
+function PassThroughCard({ project, onChange }) {
+  const [state, setState] = useState(null);
+  const [editing, setEditing] = useState(false);
+  const [target, setTarget] = useState('');
+  const [paths, setPaths] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [insecure, setInsecure] = useState(false);
+  const [askRemove, setAskRemove] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const d = await api.getPassThrough(project.id);
+      setState(d);
+      setTarget(d.passThrough?.target ?? '');
+      setPaths((d.passThrough?.paths ?? d.suggestions.map((s) => s.path)).join('\n'));
+      setEditing(false);
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [project.id]);
+  useEffect(() => { load(); }, [load]);
+
+  async function save(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const d = await api.setPassThrough(project.id, { target: target.trim(), paths: paths.split('\n') });
+      setInsecure(Boolean(d.insecure));
+      await load();
+      await onChange();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    setAskRemove(false);
+    await api.removePassThrough(project.id).catch((err) => setError(err.message));
+    await load();
+    await onChange();
+  }
+
+  if (!state) return null;
+  const saved = state.passThrough;
+  const showForm = editing || (!saved && state.suggestions.length > 0);
+  return (
+    <Card icon={Link2} title={T.ptTitle} sub={T.ptSub}>
+      {saved && !editing && (
+        <div className={styles.domainBody}>
+          <p className={ws.hint} style={{ margin: 0 }}>{T.ptSaved}</p>
+          <pre className={styles.rules}>{state.rules}</pre>
+          {insecure && <Alert tone="warn" title="Not encrypted">{T.ptInsecure}</Alert>}
+          <p className={ws.hint} style={{ margin: 0 }}>{T.ptApply}</p>
+          <div className={styles.accountButtons}>
+            <Button size="sm" onClick={() => setEditing(true)}>{T.ptEdit}</Button>
+            <Button size="sm" icon={Unplug} onClick={() => setAskRemove(true)}>{T.ptRemove}</Button>
+          </div>
+        </div>
+      )}
+      {!saved && !showForm && (
+        <div className={styles.accountRow}>
+          <p className={ws.hint} style={{ margin: 0 }}>{T.ptNone}</p>
+          <Button size="sm" onClick={() => setEditing(true)}>{T.ptSet}</Button>
+        </div>
+      )}
+      {showForm && (
+        <form className={form.form} onSubmit={save} noValidate>
+          <p className={ws.hint} style={{ margin: 0 }}>{T.ptExplain}</p>
+          {state.suggestions.length > 0 && (
+            <p className={ws.hint} style={{ margin: 0 }}>
+              {T.ptSuggested} {state.suggestions.map((s) => <code key={s.path} className={styles.chip}>{s.seen}</code>)}
+            </p>
+          )}
+          <label className={form.field}>
+            <span className={form.label}>{T.ptTarget}</span>
+            <input className={form.input} value={target} onChange={(e) => setTarget(e.target.value)} placeholder={T.ptTargetPlaceholder} autoComplete="off" spellCheck={false} inputMode="url" />
+          </label>
+          <label className={form.field}>
+            <span className={form.label}>{T.ptPaths}</span>
+            <textarea className={form.input} rows={4} value={paths} onChange={(e) => setPaths(e.target.value)} placeholder={T.ptPathsPlaceholder} spellCheck={false} />
+          </label>
+          <div className={styles.accountButtons}>
+            <Button variant="primary" type="submit" icon={busy ? Spin : undefined} disabled={busy || !target.trim() || !paths.trim()}>{busy ? T.ptSaving : T.ptSave}</Button>
+            {editing && <Button onClick={() => load()} disabled={busy}>Cancel</Button>}
+          </div>
+        </form>
+      )}
+      {error && <Alert tone="bad" title="Not saved">{error}</Alert>}
+      <ConfirmDialog open={askRemove} onClose={() => setAskRemove(false)} title={T.ptRemoveTitle} confirmLabel={T.ptRemove} danger onConfirm={remove}>
+        {T.ptRemoveText}
+      </ConfirmDialog>
+    </Card>
   );
 }
