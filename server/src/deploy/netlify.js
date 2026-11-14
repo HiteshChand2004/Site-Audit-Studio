@@ -132,6 +132,10 @@ export function netlifyClient(token) {
     async provisionSsl(siteId) {
       return call('POST', `/sites/${encodeURIComponent(siteId)}/ssl`, 'turning on HTTPS');
     },
+    /** Makes an earlier deploy of the site the live one again (Go live Step 4). @param {string} siteId @param {string} deployId */
+    async restoreDeploy(siteId, deployId) {
+      return deployOf(await call('POST', `/sites/${encodeURIComponent(siteId)}/deploys/${encodeURIComponent(deployId)}/restore`, 'putting the earlier version back'));
+    },
     /** @param {string} deployId */
     async deploy(deployId) {
       return deployOf(await call('GET', `/deploys/${encodeURIComponent(deployId)}`, 'deploy'));

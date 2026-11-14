@@ -13,6 +13,7 @@
 //   GET    /api/projects/:id/pass-through     the paths passed to the old app, and the ones the copy suggests (Step 3)
 //   PUT    /api/projects/:id/pass-through { target, paths }   save them; they apply from the next deploy
 //   DELETE /api/projects/:id/pass-through     stop passing anything on (from the next deploy)
+//   POST   /api/projects/:id/deploy/:deploymentId/restore   put an earlier finished deploy back as the live one (Step 4)
 //   POST   /api/projects/:id/deploy { recreateId?, stack?, accept?: [warning ids], target?: 'remastly' | 'own' }   start a
 //          deploy (202); `target` defaults to Remastly hosting when it is set up, otherwise the person's own Netlify account
 // Project routes sit behind the accounts' project gate (index.js), like every other /api/projects/:id route.
@@ -25,7 +26,7 @@ import { HostingError, netlifyClient } from '../deploy/netlify.js';
 import { deployRunning, recoverDeploys, runDeploy } from '../deploy/run.js';
 import {
   connectionToken, deployReady, getConnection, insertDeployment, listConnections, listDeployments, MIGRATE_HINT, ownerKeyOf,
-  liveSiteOf, REMASTLY, removeConnection, saveConnection,
+  insertRestored, liveSiteOf, REMASTLY, removeConnection, restorable, saveConnection,
 } from '../deploy/store.js';
 import { isOwner } from '../accounts/roles.js';
 import { checkRecords, domainPlan, parseDomain } from '../deploy/domain.js';
@@ -289,4 +290,25 @@ deployRouter.delete('/:id/pass-through', async (req, res) => {
   if (!project) return res.status(404).json({ error: 'Project not found.' });
   await savePassThrough(project.id, null);
   res.json({ passThrough: null, rules: null });
+});
+
+// ---- Step 4: go back ----
+
+deployRouter.post('/:id/deploy/:deploymentId/restore', async (req, res) => {
+  if (notReady(res)) return;
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  if (!UUID.test(req.params.deploymentId)) return res.status(404).json({ error: 'Deploy not found.' });
+  if (deployRunning(project.id)) return res.status(409).json({ error: 'This website is being deployed right now. Wait for it to finish.' });
+  const found = restorable(project.id, req.params.deploymentId);
+  if (!found) return res.status(409).json({ error: 'Only an earlier finished deploy of the site that is live now can be put back.' });
+  const token = connectionToken(found.live.ownerKey, 'netlify');
+  if (!token) return res.status(409).json({ error: found.live.hosting === 'remastly' ? 'Remastly hosting is turned off, so nothing can be put back. Ask the owner to set it up again.' : 'The Netlify account this site is on is no longer connected. Connect it again first.' });
+  try {
+    const dep = await netlifyClient(token).restoreDeploy(found.row.site_id, found.row.deploy_id);
+    if (dep.state && dep.state !== 'ready' && dep.state !== 'unknown') return res.status(502).json({ error: `Netlify did not put it back (state "${dep.state}"). Try again.` });
+    res.json({ deployment: insertRestored(found.row) });
+  } catch (err) {
+    hostingFailure(res, err);
+  }
 });

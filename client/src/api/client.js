@@ -303,6 +303,7 @@ export const api = {
   removeRemastlyHosting: () => request('/hosting/remastly', { method: 'DELETE' }),
   getDeploy: (id) => request(`/projects/${id}/deploy`),
   startDeploy: (id, body) => request(`/projects/${id}/deploy`, { method: 'POST', body }),
+  restoreDeploy: (id, deploymentId) => request(`/projects/${id}/deploy/${deploymentId}/restore`, { method: 'POST' }),
   getPassThrough: (id) => request(`/projects/${id}/pass-through`),
   setPassThrough: (id, body) => request(`/projects/${id}/pass-through`, { method: 'PUT', body }),
   removePassThrough: (id) => request(`/projects/${id}/pass-through`, { method: 'DELETE' }),

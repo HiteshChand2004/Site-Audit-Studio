@@ -79,6 +79,7 @@ export const publicDeployment = (r) => (r ? {
   id: r.id, recreateId: r.recreate_id, stack: r.stack, provider: r.provider, status: r.status, step: r.step, error: r.error,
   siteName: r.site_name, url: r.url, deployUrl: r.deploy_url, adminUrl: r.admin_url, files: r.files, bytes: r.bytes,
   startedAt: r.started_at, finishedAt: r.finished_at, hosting: r.owner_key === REMASTLY ? 'remastly' : 'own',
+  restoredFrom: r.step === 'restored' ? true : undefined,
 } : null);
 
 /** @param {{ projectId: string, recreateId: string, stack: string, provider: string, ownerKey: string }} d */
@@ -125,6 +126,30 @@ export function liveSiteOf(projectId) {
   const row = /** @type {any} */ (stmt(`SELECT site_id, owner_key, url FROM deployments WHERE project_id = ? AND status = 'ready' AND site_id IS NOT NULL
                        ORDER BY started_at DESC LIMIT 1`).get(projectId));
   return row ? { siteId: row.site_id, ownerKey: row.owner_key, hosting: row.owner_key === REMASTLY ? 'remastly' : 'own', url: row.url } : null;
+}
+
+/**
+ * Go live Step 4: an earlier finished deploy of this website put back as the live one. It is recorded as a new deploy (step
+ * 'restored') with the earlier one's files, so the newest finished deploy is always what is live.
+ * @param {string} projectId @param {string} deploymentId
+ * @returns {{ row: any, live: any } | null}  null when it is not a finished deploy of this website on its current site
+ */
+export function restorable(projectId, deploymentId) {
+  const row = /** @type {any} */ (stmt(`SELECT * FROM deployments WHERE id = ? AND project_id = ? AND status = 'ready' AND deploy_id IS NOT NULL AND site_id IS NOT NULL`).get(deploymentId, projectId));
+  const live = liveSiteOf(projectId);
+  if (!row || !live || row.site_id !== live.siteId || row.owner_key !== live.ownerKey) return null;
+  return { row, live };
+}
+
+/** @param {any} row  the earlier deploy @returns {any} the new, live row */
+export function insertRestored(row) {
+  const id = randomUUID();
+  const at = now();
+  stmt(`INSERT INTO deployments (id, project_id, recreate_id, stack, provider, owner_key, site_id, site_name, deploy_id, url, deploy_url, admin_url,
+        status, step, files, bytes, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', 'restored', ?, ?, ?, ?)`)
+    .run(id, row.project_id, row.recreate_id, row.stack, row.provider, row.owner_key, row.site_id, row.site_name, row.deploy_id, row.url,
+      row.deploy_url, row.admin_url, row.files, row.bytes, at, at);
+  return getDeployment(id);
 }
 
 const RUNNING = "status IN ('queued', 'running')";

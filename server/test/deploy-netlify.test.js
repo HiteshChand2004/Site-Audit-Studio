@@ -93,6 +93,11 @@ const netlify = createServer((req, res) => {
       Object.assign(site, { custom_domain: json.custom_domain, domain_aliases: json.domain_aliases, ssl: false });
       return send(200, site);
     }
+    if (req.method === 'POST' && (m = p.match(/^\/sites\/([^/]+)\/deploys\/([^/]+)\/restore$/))) {
+      if (!fake.sites.has(m[1]) || !fake.deploys.has(m[2])) return send(404, { message: 'Not Found' });
+      fake.restored = { siteId: m[1], deployId: m[2] };
+      return send(200, { id: m[2], state: 'ready', ssl_url: fake.sites.get(m[1]).ssl_url });
+    }
     if (req.method === 'POST' && (m = p.match(/^\/sites\/([^/]+)\/ssl$/))) {
       fake.sslAsked = (fake.sslAsked ?? 0) + 1;
       return fake.sites.has(m[1]) ? send(200, { state: 'issued' }) : send(404, { message: 'Not Found' });
@@ -531,4 +536,34 @@ test('Go live: the paths go first in the deployed _redirects, before the copy\'s
 
   r = await call('DELETE', `/projects/${project.id}/pass-through`);
   assert.equal(r.body.passThrough, null);
+});
+
+// ---- Step 4: go back ----
+
+test('Go back: an earlier deploy is put back as the live one, and recorded as the newest', async () => {
+  const project = seedProject(db, { name: 'theta', targetDomain: 'https://theta.test' });
+  await finishedCopy({ projectId: project.id, report: { asIs: { stack: 'html', address: { used: 'https://theta.test' } } }, reaudit: { checklist: { items: [] } } });
+  assert.equal((await call('POST', `/projects/${project.id}/deploy`, {})).status, 202);
+  const first = await waitDone(project.id);
+  assert.equal((await call('POST', `/projects/${project.id}/deploy`, {})).status, 202);
+  const second = await waitDone(project.id);
+  assert.equal(second.status, 'ready');
+
+  let r = await call('POST', `/projects/${project.id}/deploy/${randomUUID()}/restore`);
+  assert.equal(r.status, 409, 'not a deploy of this website');
+  r = await call('POST', `/projects/${project.id}/deploy/${first.id}/restore`);
+  assert.equal(r.status, 200, r.body.error);
+  assert.equal(r.body.deployment.status, 'ready');
+  assert.equal(r.body.deployment.restoredFrom, true);
+  const firstRow = db.prepare('SELECT site_id, deploy_id FROM deployments WHERE id = ?').get(first.id);
+  assert.deepEqual(fake.restored, { siteId: firstRow.site_id, deployId: firstRow.deploy_id });
+  r = await call('GET', `/projects/${project.id}/deploy`);
+  assert.equal(r.body.deployments[0].id, r.body.deployments[0].restoredFrom ? r.body.deployments[0].id : null, 'the put-back version is the newest, live one');
+
+  // A deploy that failed has nothing to put back.
+  fake.failNextDeploy = true;
+  assert.equal((await call('POST', `/projects/${project.id}/deploy`, {})).status, 202);
+  const failed = await waitDone(project.id);
+  assert.equal(failed.status, 'failed');
+  assert.equal((await call('POST', `/projects/${project.id}/deploy/${failed.id}/restore`)).status, 409);
 });

@@ -37,6 +37,8 @@ export default function GoLiveStep({ project, onGoCreate }) {
   const [askRemastly, setAskRemastly] = useState(false);
   const [askRemoveRemastly, setAskRemoveRemastly] = useState(false);
   const [chosen, setChosen] = useState(null);
+  const [askRestore, setAskRestore] = useState(null);
+  const [restoreError, setRestoreError] = useState(null);
   const [accepted, setAccepted] = useState(() => new Set());
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState(null);
@@ -108,6 +110,8 @@ export default function GoLiveStep({ project, onGoCreate }) {
   }
 
   const live = deployments.find((d) => d.status === 'ready') ?? null;
+  // Earlier versions of the same live site, newest first: each can be put back (Go back).
+  const earlier = live ? deployments.filter((d) => d.status === 'ready' && d.id !== live.id && d.hosting === live.hosting && d.url === live.url && d.startedAt < live.startedAt) : [];
   const stackName = stackById(data.stack).name;
   const warnings = readiness.warnings ?? [];
   const allAccepted = warnings.every((w) => accepted.has(w.id));
@@ -130,6 +134,18 @@ export default function GoLiveStep({ project, onGoCreate }) {
     } finally {
       setStarting(false);
     }
+  }
+
+  async function restore() {
+    const d = askRestore;
+    setAskRestore(null);
+    setRestoreError(null);
+    try {
+      await api.restoreDeploy(project.id, d.id);
+    } catch (err) {
+      setRestoreError(err.message);
+    }
+    await load();
   }
 
   async function removeRemastly() {
@@ -175,6 +191,12 @@ export default function GoLiveStep({ project, onGoCreate }) {
               <Link2 size={15} aria-hidden="true" /> {live.url}
             </a>
           </p>
+          {earlier.length > 0 && !running && (
+            <div className={styles.accountButtons} style={{ marginTop: 'var(--sp-3)' }}>
+              <Button size="sm" icon={History} onClick={() => setAskRestore(earlier[0])}>{T.goBack}</Button>
+            </div>
+          )}
+          {restoreError && <Alert tone="bad" title={T.putBackFailed}>{restoreError}</Alert>}
         </Card>
       )}
 
@@ -307,9 +329,13 @@ export default function GoLiveStep({ project, onGoCreate }) {
           <ul className={styles.history}>
             {deployments.map((d) => (
               <li key={d.id}>
-                <span className={styles.badge} data-status={d.status}>{T.status[d.status] ?? d.status}</span>
+                <span className={styles.badge} data-status={d.status}>{d.restoredFrom ? T.restored : T.status[d.status] ?? d.status}</span>
                 <span>{timeAgo(d.startedAt)}</span>
                 <span className={ws.hint} style={{ margin: 0 }}>{stackById(d.stack).name}{d.files ? ` · ${d.files} files` : ''}</span>
+                {d.id === live?.id && <span className={ws.hint} style={{ margin: 0 }}>· {T.liveNow}</span>}
+                {earlier.some((e) => e.id === d.id) && !running && (
+                  <Button size="sm" onClick={() => setAskRestore(d)}>{T.putBack}</Button>
+                )}
                 {d.status === 'failed' && d.error && <span className={styles.historyError}>{d.error}</span>}
               </li>
             ))}
@@ -317,6 +343,9 @@ export default function GoLiveStep({ project, onGoCreate }) {
         </SectionCard>
       )}
 
+      <ConfirmDialog open={Boolean(askRestore)} onClose={() => setAskRestore(null)} title={T.putBackTitle} confirmLabel={T.putBack} onConfirm={restore}>
+        {askRestore ? T.putBackText(timeAgo(askRestore.startedAt)) : ''}
+      </ConfirmDialog>
       <TokenDialog open={asking} onClose={() => setAsking(false)} onConnected={async () => { setAsking(false); await load(); }} />
       <TokenDialog remastly open={askRemastly} onClose={() => setAskRemastly(false)} onConnected={async () => { setAskRemastly(false); setChosen(null); await load(); }} />
       <ConfirmDialog open={askRemoveRemastly} onClose={() => setAskRemoveRemastly(false)} title={T.remastlyRemoveTitle} confirmLabel={T.remastlyRemove} danger onConfirm={removeRemastly}>
