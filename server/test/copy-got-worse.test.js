@@ -15,6 +15,8 @@ const weight = (bytes) => ({ 'total-byte-weight': { numericValue: bytes, numeric
 const lcp = (selector, ms) => ({
   'largest-contentful-paint-element': { metricSavings: { LCP: ms }, details: { items: [{ items: [{ node: { selector, path: selector, snippet: `<${selector}>` } }] }] } },
 });
+const requests = (types) => ({ 'network-requests': { details: { items: types.map((resourceType) => ({ resourceType })) } } });
+const LOAD = ['Document', 'Stylesheet', 'Script', 'Script', 'Image'];
 
 test('links to pages that were not chosen for the copy: the owner decides (c); a page asked for, or a file, is unexplained', () => {
   const left = one({ key: 'links.broken-new', links: { new: [{ url: 'https://www.example-original.test/pricing', status: 404, foundOn: '/' }] } });
@@ -72,9 +74,28 @@ test('Lighthouse: a check whose amount did not grow is the host (e); one that gr
   assert.equal(grew.reason, null);
   assert.match(grew.evidence, /grew in the copy/);
 
-  const time = (sel, ms, w) => lhr({ ...lcp(sel, ms), ...weight(w) });
-  const host = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 480000) } });
-  assert.equal(host.reason, 'deploy', 'the same page, not heavier, only slower on the local preview');
+  const time = (sel, ms, w, load = LOAD) => lhr({ ...lcp(sel, ms), ...weight(w), ...(load ? requests(load) : {}) });
+  const host = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 495000) } });
+  assert.equal(host.reason, 'deploy', 'the same bytes, the same largest element, the same requests: only slower on the local preview');
+  assert.equal(host.group, 'measurement', 'shown as "only reads worse", not hidden');
+  assert.match(host.evidence, /0 → 650 ms/, 'both numbers');
+  assert.match(host.evidence, /488 KB → 483 KB/);
+  assert.match(host.evidence, /the same requests \(5 \(2 Script, 1 Document, 1 Stylesheet, 1 Image\)\)/);
+
+  // Strict: any one of the three that is not the same keeps the row counted, with the difference named.
+  const lighter = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 450000) } });
+  assert.equal(lighter.reason, null, 'a copy 10 % lighter is still not the same page');
+  assert.match(lighter.evidence, /weighs 439 KB against the original's 488 KB/);
+  const moreRequests = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 500000, [...LOAD, 'Fetch']) } });
+  assert.equal(moreRequests.reason, null, 'one more request: not the same load');
+  assert.match(moreRequests.evidence, /other requests than the original: 6 .*1 Fetch.* against 5/);
+  const swapped = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 500000, ['Document', 'Stylesheet', 'Script', 'Image', 'Image']) } });
+  assert.equal(swapped.reason, null, 'as many requests, of other types: not the same load');
+  const noRequests = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 500000, null) } });
+  assert.equal(noRequests.reason, null, 'requests not measured: no proof');
+  assert.match(noRequests.evidence, /requests are not in both reports/);
+  const noElement = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: lhr({ ...weight(500000), ...requests(LOAD) }) }, newLhr: { mobile: time('h1.hero', 650, 500000) } });
+  assert.equal(noElement.reason, null, 'the largest element named on one side only: no proof');
 
   const other = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('video.hero', 5000, 29e6) }, newLhr: { mobile: time('img.banner', 14000, 4e6) } });
   assert.equal(other.reason, null, 'a missing video made another element the largest: not the host');

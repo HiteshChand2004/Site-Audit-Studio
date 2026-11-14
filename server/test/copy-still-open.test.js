@@ -19,6 +19,9 @@ const lcp = (selector, ms) => ({
   'largest-contentful-paint-element': { metricSavings: { LCP: ms }, details: { items: [{ items: [{ node: { selector, path: selector, snippet: `<${selector}>` } }] }] } },
 });
 const items = (id, urls) => ({ [id]: { details: { items: urls.map((url) => ({ url })) } } });
+const requests = (types) => ({ 'network-requests': { details: { items: types.map((resourceType) => ({ resourceType })) } } });
+const LOAD = requests(['Document', 'Script', 'Image']);
+const LOAD_SUMMARY = { total: 3, byType: { Document: 1, Script: 1, Image: 1 } };
 
 test('"still open" rows get one of the five reasons on evidence, or UNEXPLAINED; the counts come with them', () => {
   const r = explainWorse({
@@ -59,8 +62,13 @@ test('still open: Lighthouse audits are split by what they name: third-party cod
 
   const ms = (n) => ({ 'largest-contentful-paint': { numericValue: n, numericUnit: 'millisecond', score: 0.4 } });
   const timing = openOne({ key: 'lighthouse.largest-contentful-paint', after: { detail: '4.1 s' } },
+    { oldLhr: { mobile: lhr({ ...ms(3000), ...weight(500000), ...lcp('img.hero', 3000), ...LOAD }) }, newLhr: { mobile: lhr({ ...ms(4000), ...weight(500000), ...lcp('img.hero', 4000), ...LOAD }) } });
+  assert.equal(timing.reason, 'deploy', 'the same bytes, the same largest element, the same requests: the local preview against a host');
+  assert.match(timing.evidence, /3000 → 4000 ms/);
+
+  const noRequests = openOne({ key: 'lighthouse.largest-contentful-paint', after: { detail: '4.1 s' } },
     { oldLhr: { mobile: lhr({ ...ms(3000), ...weight(500000), ...lcp('img.hero', 3000) }) }, newLhr: { mobile: lhr({ ...ms(4000), ...weight(500000), ...lcp('img.hero', 4000) }) } });
-  assert.equal(timing.reason, 'deploy', 'the same page, no heavier, the same largest element: the local preview against a host');
+  assert.equal(noRequests.reason, null, 'without the requests on both sides there is no proof it is the same load');
 
   const grew = openOne({ key: 'lighthouse.largest-contentful-paint', after: { detail: '4.1 s' } },
     { oldLhr: { mobile: lhr({ ...ms(3000), ...weight(500000), ...lcp('img.hero', 3000) }) }, newLhr: { mobile: lhr({ ...ms(4000), ...weight(900000), ...lcp('img.hero', 4000) }) } });
@@ -140,9 +148,13 @@ test('still open: a link broken on both sides, to another site or to a page the 
 });
 
 test('a per-page Lighthouse score row that got worse: performance is the host\'s only when the copy did not grow; the other categories follow the checks failing only in the copy', () => {
-  const score = (extra) => worseOne({ key: 'lighthouse-score.mobile.performance./', before: { score: 70 }, after: { score: 61 }, lighthousePage: { mode: 'mobile', category: 'performance', weight: { original: 500000, copy: 505000 }, lcp: { original: { selector: 'img.hero', snippet: '<img class="hero">' }, copy: { selector: 'img.hero', snippet: '<img class="hero">' } }, failing: { original: [], copy: [] }, copyAudits: {}, ...extra } });
+  const score = (extra) => worseOne({ key: 'lighthouse-score.mobile.performance./', before: { score: 70 }, after: { score: 61 }, lighthousePage: { mode: 'mobile', category: 'performance', weight: { original: 500000, copy: 505000 }, lcp: { original: { selector: 'img.hero', snippet: '<img class="hero">' }, copy: { selector: 'img.hero', snippet: '<img class="hero">' } }, requests: { original: LOAD_SUMMARY, copy: LOAD_SUMMARY }, failing: { original: [], copy: [] }, copyAudits: {}, ...extra } });
   assert.equal(score().reason, 'deploy');
   assert.match(score().evidence, /70 → 61 \(phone\)/);
+  assert.match(score().evidence, /the same page weight \(488 KB → 493 KB\).*the same requests \(3 /);
+  assert.equal(score({ requests: { original: LOAD_SUMMARY, copy: { total: 4, byType: { ...LOAD_SUMMARY.byType, Fetch: 1 } } } }).reason, null, 'other requests: unexplained');
+  assert.equal(score({ requests: undefined }).reason, null, 'requests not recorded (an older Results check): no proof');
+  assert.equal(score({ weight: { original: 500000, copy: 450000 } }).reason, null, 'lighter by 10 %: not the same page either');
   assert.equal(score({ weight: { original: 500000, copy: 800000 } }).reason, null, 'heavier: unexplained');
   assert.equal(score({ lcp: { original: { selector: 'img.hero', snippet: 'a' }, copy: { selector: 'h1', snippet: 'b' } } }).reason, null, 'another largest element: unexplained');
 
