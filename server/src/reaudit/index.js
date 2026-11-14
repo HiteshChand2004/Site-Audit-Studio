@@ -5,7 +5,7 @@
 // (never the app's active preview, which moves when another project is selected). Only that port is
 // reachable on loopback: the SSRF policy of the run allows it as an internal port, and everything
 // else keeps the user policy (public addresses; loopback only with SAS_ALLOW_LOCALHOST).
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { makeOverallPct, runAnalysis, STEPS as AUDIT_STEPS } from '../audit/index.js';
 import { runLighthouse } from '../audit/lighthouse/run.js';
@@ -19,6 +19,7 @@ import { servePreview } from '../recreate/preview.js';
 import { serveCopy } from '../recreate/behavior/preserve/serve.js';
 import { openMeasuredHost, measuredHostDescription } from './measuredHost.js';
 import { recreateDir } from '../recreate/workspace.js';
+import { adoptCheckpoint, CHECKPOINT_FILE, moveOrigins, saveCheckpoint } from './checkpoint.js';
 import { NETWORK_FAILURE_REASONS } from '../recreate/behavior/preserve/pageLift.js';
 import { createNetPolicy, userPolicy } from '../security/netGuard.js';
 import { compareAudits, loadSide } from './compare/index.js';
@@ -106,7 +107,12 @@ export async function reauditBlocker(project, recreateId) {
   return null;
 }
 
-export async function runReaudit({ project, reauditId, recreateId, progress, skip = SKIPPED_STEPS, signal = null }) {
+/**
+ * `resumeFrom`: the id of a comparison of the same copy that stopped before it finished (reaudit/checkpoint.js). Its folder
+ * becomes this one's, and the parts it finished (the analysis, the motion check, each Lighthouse run of the copy) are taken as
+ * they are; only the rest is measured.
+ */
+export async function runReaudit({ project, reauditId, recreateId, progress, skip = SKIPPED_STEPS, signal = null, resumeFrom = null }) {
   progress('serve', 0);
   const blocked = await reauditBlocker(project, recreateId);
   if (blocked) throw new ReauditError(blocked);
@@ -134,14 +140,23 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
     desktop: await openMeasuredHost(served.origin, 'desktop'),
   };
   const measuredUrl = (url, device) => (url.startsWith(served.origin) ? measured[device].origin + url.slice(served.origin.length) : url);
+  const outDir = reauditDir(project.id, recreateId, reauditId);
+  const origins = { served: served.origin, mobile: measured.mobile.origin, desktop: measured.desktop.origin };
   try {
+    // Continue where a stopped comparison of this copy left off: its finished parts, their addresses moved to this run's ports.
+    let kept = resumeFrom ? await adoptCheckpoint(reauditDir(project.id, recreateId, resumeFrom), outDir) : null;
+    if (kept) kept = await moveOrigins(outDir, kept, origins);
+    else {
+      await mkdir(outDir, { recursive: true });
+      await saveCheckpoint(outDir, { origins });
+    }
     // Pages at the URL the output serves them (a stack may move some).
     const outputPageList = outputPages(report, stack);
     const pages = outputPageList.map((p) => p.path.replace(/^\//, ''));
     const output = { stack, label: emitter?.label ?? stack, runtimes: emitter?.runtimes ?? [], pages: outputPageList, build: reportOutputs(report)[stack]?.build };
     const netPolicy = createNetPolicy({ allowLoopback: userPolicy().allowLoopback, internalPorts: [served.port, measured.mobile.port, measured.desktop.port] });
     progress('serve', 1);
-    const audit = await runAnalysis({
+    const audit = kept?.audit ? reusedAnalysis(kept.audit, skip, progress) : await runAnalysis({
       project,
       analysisId: reauditId,
       url: `${served.origin}/`,
@@ -166,11 +181,12 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
     if (signal?.aborted) throw Object.assign(new Error('Stopped before it finished.'), { stopped: true });
     // The analysis contract carries a sample checklist for the OLD site; it means nothing here.
     delete audit.recreate;
+    if (!kept?.audit) await saveCheckpoint(outDir, { audit });
 
     // Motion (4b.8): the recreated pages measured with the probes the capture ran on the original. Never fails a re-audit.
     progress('motion', 0);
-    let motion = null;
-    if (!skip.includes('motion')) {
+    let motion = kept?.motion ?? null;
+    if (!motion && !skip.includes('motion')) {
       try {
         const folder = recreateDir(project.id, recreateId);
         const oldMotion = await readOldMotion(folder, report.pages, report.exact?.excluded ?? []);
@@ -195,7 +211,10 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
       } catch (err) {
         motion = { items: [], summary: null, failed: [{ slug: '*', error: String(err?.message ?? err).split('\n')[0] }], skipped: [] };
       }
+      // Kept only when it measured something: a check that failed as a whole is tried again by a continued comparison.
+      if (!motion.failed?.some((f) => f.slug === '*')) await saveCheckpoint(outDir, { motion });
     }
+    if (signal?.aborted) throw Object.assign(new Error('Stopped before it finished.'), { stopped: true });
     progress('motion', 1);
 
     // Lighthouse on every page, both sides, both modes (an as-is copy; docs/COPY-MY-SITE.md §4). Original and copy are measured
@@ -237,6 +256,8 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
           },
           progress: (fraction, message) => progress('lighthouse-pages', fraction, message),
           signal,
+          // A continued comparison takes the copy's runs the stopped one finished (same copy, same settings).
+          reuseCopy: Boolean(kept),
         });
         lighthousePages.network = measuredHostDescription();
       } catch (err) {
@@ -253,7 +274,10 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
     progress('compare', 0);
     const checklist = await buildChecklist({ project, report, analysis, audit, recreateId, reauditId, origin: served.origin, output, outputPageList, motion, lighthousePages, isAsIs });
     progress('compare', 1);
+    // Finished: nothing is left to continue.
+    await rm(path.join(outDir, CHECKPOINT_FILE), { force: true }).catch(() => {});
     return {
+      ...(kept && { resumedFrom: resumeFrom }),
       reauditId,
       recreateId,
       analysisId: report.analysisId ?? null,
@@ -273,20 +297,36 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
   }
 }
 
+/** The analysis a stopped comparison finished, taken as it is; its steps are shown as done. */
+function reusedAnalysis(audit, skip, progress) {
+  for (const s of AUDIT_STEPS) if (!skip.includes(s.key)) progress(s.key, 1, 'Kept from the comparison that stopped');
+  return audit;
+}
+
 /**
  * The checklist of a re-audit from what it measured (no browser, no network): the comparison with the original's analysis, the
  * per-page Lighthouse rows and, for an as-is copy, the reason of every row that got worse or stays open. Exported so a finished
  * re-audit can be compared again from its saved files when only the comparison rules change.
  */
 export async function buildChecklist({ project, report, analysis, audit, recreateId, reauditId, origin, output, outputPageList, motion, lighthousePages, isAsIs }) {
+  const old = await loadSide(auditDir(project.id, report.analysisId), JSON.parse(analysis.result_json));
+  // The Lighthouse rows hold the copy (measured here, through the measured host) against the original measured the same way:
+  // its homepage from its own lifted files. The Check's run came from the live site's CDN over HTTP/2, so a row like
+  // "render-blocking resources" read 0 ms → 680 ms for the same five stylesheets (testpilot; measured alike: 890 → 690 ms).
+  const liftedHome = isAsIs ? await liftedHomeLhrs(recreateDir(project.id, recreateId)) : null;
+  if (liftedHome) old.lighthouse = { ...old.lighthouse, ...liftedHome };
   const checklist = compareAudits({
-    old: await loadSide(auditDir(project.id, report.analysisId), JSON.parse(analysis.result_json)),
+    old,
     next: await loadSide(reauditDir(project.id, recreateId, reauditId), audit),
     report,
     newOrigin: origin,
     output,
     motion,
   });
+  if (liftedHome) {
+    checklist.lighthouseBefore = { from: 'lifted', devices: Object.keys(liftedHome) };
+    checklist.notes.push(`The original's side of the Lighthouse checks (${Object.keys(liftedHome).map((d) => (d === 'mobile' ? 'phone' : 'computer')).join(' and ')}) is its homepage measured from its own files on this computer, the way the copy is measured; the scores at the top are those of the Check of the live site.`);
+  }
   if (lighthousePages) {
     // The per-page score rows join the checklist (a "got worse" row per page, mode and category where the copy's median is
     // lower), the counts follow, and the notes say what was measured and which pages needed extra runs.
@@ -358,6 +398,30 @@ export function questionsByPageOf(crawl) {
     out[at] = { questions: Array.isArray(p.facts.questionHeadings) ? p.facts.questionHeadings.length : NaN, faqSignals: Number(p.facts.faqSignals) || 0 };
   }
   return out;
+}
+
+/**
+ * The original's homepage as Lighthouse measured it from its lifted files (as-is/lighthouse-lifted, run 1 of the homepage per
+ * device, the full report), the way the copy is measured: { mobile?, desktop? }, or null when none was measured (a rebuilt
+ * copy, an older one, a re-check whose Lighthouse step was skipped). When the homepage was measured under more than one
+ * address, the newest report wins.
+ * @param {string} folder  the recreate's folder
+ */
+export async function liftedHomeLhrs(folder) {
+  const dir = path.join(folder, 'as-is', LIFTED_RUNS_DIR);
+  const names = await readdir(dir).catch(() => []);
+  const out = {};
+  for (const mode of ['mobile', 'desktop']) {
+    const re = new RegExp(`^index-[0-9a-f]{8}-${mode}-1\\.json\\.full\\.json$`);
+    let best = null;
+    for (const name of names.filter((n) => re.test(n))) {
+      const at = await stat(path.join(dir, name)).then((s) => s.mtimeMs, () => -1);
+      if (at >= 0 && (!best || at > best.at)) best = { name, at };
+    }
+    const lhr = best ? await readFile(path.join(dir, best.name), 'utf8').then((t) => JSON.parse(t)).catch(() => null) : null;
+    if (lhr?.audits && lhr.categories) out[mode] = lhr;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 /** The copy's measured motion of a re-check (its probes: reveal, loops, hover, clicks, feeds, pointer), per page slug. */
@@ -559,7 +623,8 @@ export async function explainAsIs({ checklist, project, report, recreateId, reau
       copyOrigin: origin,
       copyPages: outputPageList.map((p) => p.path),
       chosenPages: (report.asIs?.pages ?? []).map((p) => p.path ?? '/'),
-      oldLhr: await lhrs(auditDir(project.id, report.analysisId)),
+      // The original measured the way the copy is, where it was (buildChecklist says why), else the Check's live run.
+      oldLhr: { ...(await lhrs(auditDir(project.id, report.analysisId))), ...(await liftedHomeLhrs(recreateDir(project.id, recreateId))) },
       newLhr,
       oldAxe: await readFile(path.join(auditDir(project.id, report.analysisId), 'axe.json'), 'utf8').then(JSON.parse, () => null),
       newAxe: await readFile(path.join(reauditDir(project.id, recreateId, reauditId), 'axe.json'), 'utf8').then(JSON.parse, () => null),

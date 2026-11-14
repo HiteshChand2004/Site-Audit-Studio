@@ -6,6 +6,7 @@ import { ConflictError, JobLimitError } from '../jobs/manager.js';
 import { streamJob } from '../jobs/sse.js';
 import { PUBLIC_STEPS, reauditBlocker } from '../reaudit/index.js';
 import { reauditJobs, startReaudit } from '../reaudit/jobs.js';
+import { resumableReaudit } from '../reaudit/checkpoint.js';
 
 const router = Router();
 
@@ -39,8 +40,15 @@ router.post('/:id/reaudit', async (req, res) => {
     const blocked = await reauditBlocker(project, recreate.id);
     if (blocked) return res.status(409).json({ error: blocked, blocked: true });
   }
+  // { resume: true }: continue the comparison that stopped before it finished, keeping what it measured (reaudit/checkpoint.js).
+  let resumeFrom = null;
+  if (req.body?.resume === true) {
+    const resumable = await resumableReaudit(project.id);
+    if (!resumable) return res.status(409).json({ error: 'There is no stopped comparison to continue: start a new one.' });
+    resumeFrom = resumable.reauditId;
+  }
   try {
-    const job = startReaudit(project, recreate.id);
+    const job = startReaudit(project, recreate.id, { resumeFrom });
     if (!job) return res.status(409).json({ error: 'Run Recreate first: the re-audit checks the recreated site.' });
     res.status(202).json({ reauditId: job.id, ...withSteps(job) });
   } catch (err) {
@@ -56,7 +64,7 @@ router.get('/:id/reaudit/current', (req, res) => {
 
 // Latest attempt (any status) plus the result of the latest successful re-audit. `stale` is true when
 // that result is not about the latest completed recreate.
-router.get('/:id/reaudit', (req, res) => {
+router.get('/:id/reaudit', async (req, res) => {
   const { id } = req.params;
   if (!selectProject.get(id)) return res.status(404).json({ error: 'Project not found.' });
   const last = latestRow.get(id);
@@ -75,6 +83,8 @@ router.get('/:id/reaudit', (req, res) => {
     } : null,
     result,
     stale: Boolean(result && result.recreateId !== recreateId),
+    // The comparison that stopped before it finished and can be continued (POST { resume: true }), or null.
+    resumable: reauditJobs.active(id) ? null : await resumableReaudit(id),
   });
 });
 

@@ -10,6 +10,9 @@ import { overallPct, runReaudit, SKIPPED_STEPS, STEPS } from './index.js';
 
 const selectRecreate = db.prepare(`SELECT id, result_json FROM recreates WHERE id = ? AND project_id = ? AND status = 'done'`);
 const setInputs = db.prepare('UPDATE reaudits SET recreate_id = ?, analysis_id = ? WHERE id = ?');
+const latestAttempt = db.prepare(`
+  SELECT id, status FROM reaudits WHERE project_id = ? AND recreate_id = ? ORDER BY started_at DESC LIMIT 1
+`);
 const latestDone = db.prepare(`
   SELECT id FROM reaudits WHERE project_id = ? AND recreate_id = ? AND status = 'done'
   ORDER BY started_at DESC LIMIT 1
@@ -25,7 +28,7 @@ export const reauditJobs = new JobManager({
   overallPct,
   doneMessage: 'Re-audit complete',
   run: ({ job, project, payload, progress, signal }) =>
-    runReaudit({ project, reauditId: job.id, recreateId: payload.recreateId, progress, skip: JOB_OPTIONS.skip, signal }),
+    runReaudit({ project, reauditId: job.id, recreateId: payload.recreateId, progress, skip: JOB_OPTIONS.skip, signal, resumeFrom: payload.resumeFrom ?? null }),
   after: ({ project, payload }) => pruneReaudits(project.id, payload.recreateId),
 });
 
@@ -34,26 +37,30 @@ export const reauditJobs = new JobManager({
  * @throws {import('../jobs/manager.js').ConflictError} when one is already queued or running for the project
  * @returns {object|null} the job snapshot, or null when the recreate is not a completed one
  */
-export function startReaudit(project, recreateId, { system = false } = {}) {
+export function startReaudit(project, recreateId, { system = false, resumeFrom = null } = {}) {
   const row = selectRecreate.get(recreateId, project.id);
   if (!row) return null;
   const analysisId = JSON.parse(row.result_json)?.analysisId ?? null;
-  const job = reauditJobs.start(project, { recreateId }, { system });
+  // resumeFrom: a comparison of this copy that stopped before it finished (reaudit/checkpoint.js); its finished parts are kept.
+  const job = reauditJobs.start(project, { recreateId, ...(resumeFrom && { resumeFrom }) }, { system });
   setInputs.run(recreateId, analysisId, job.id);
   return { ...job, recreateId, analysisId };
 }
 
 /**
- * Keeps the raw results of the latest completed re-audit of a recreate and removes the rest
- * (failed runs included). A recreate removed by its own retention takes its re-audits with it.
+ * Keeps the raw results of the latest completed re-audit of a recreate and removes the rest (failed runs included), except
+ * the latest attempt when it stopped before finishing: its folder holds what "Continue where it stopped" takes over
+ * (reaudit/checkpoint.js). A recreate removed by its own retention takes its re-audits with it.
  */
 export async function pruneReaudits(projectId, recreateId) {
   if (!recreateId) return [];
-  const keep = latestDone.get(projectId, recreateId)?.id;
+  const done = latestDone.get(projectId, recreateId)?.id;
+  const last = latestAttempt.get(projectId, recreateId);
+  const keepSet = new Set([done, last?.status === 'failed' ? last.id : null].filter(Boolean));
   const root = path.join(recreateDir(projectId, recreateId), 'reaudit');
   const removed = [];
   for (const entry of await readdir(root, { withFileTypes: true }).catch(() => [])) {
-    if (!entry.isDirectory() || entry.name === keep) continue;
+    if (!entry.isDirectory() || keepSet.has(entry.name)) continue;
     await rm(path.join(root, entry.name), { recursive: true, force: true }).catch(() => {});
     removed.push(entry.name);
   }

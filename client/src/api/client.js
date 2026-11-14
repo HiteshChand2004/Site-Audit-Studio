@@ -272,7 +272,9 @@ export const api = {
   getRecreate: (id) => request(`/projects/${id}/recreate`),
   stopRecreate: (id) => request(`/projects/${id}/recreate/stop`, { method: 'POST' }),
   subscribeRecreate: (id, recreateId, handlers) => subscribe(apiUrl(`/projects/${id}/recreate/${recreateId}/events`), handlers),
-  startReaudit: (id) => request(`/projects/${id}/reaudit`, { method: 'POST' }),
+  startReaudit: (id, options = null) => request(`/projects/${id}/reaudit`, { method: 'POST', ...(options && { body: options }) }),
+  // The latest comparison attempt and, when it stopped before finishing, what can be continued (`resumable`).
+  getReauditState: (id) => request(`/projects/${id}/reaudit`),
   getCurrentReaudit: (id) => request(`/projects/${id}/reaudit/current`),
   subscribeReaudit: (id, reauditId, handlers) => subscribe(apiUrl(`/projects/${id}/reaudit/${reauditId}/events`), handlers),
   getPreview: (id) => request(`/projects/${id}/preview`),
