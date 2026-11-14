@@ -52,9 +52,14 @@ const selectOne = db.prepare('SELECT * FROM projects WHERE id = ?');
 // 2026-11-14: 150, with the highest allowed (db/migrations.js 2026-11-14-check-pages-150 moves projects at the old 100).
 export const DEFAULT_MAX_PAGES = MAX_CHECK_PAGES;
 // A number the user set is marked (max_pages_chosen), so a later change of the default never moves it. The column comes with a
-// migration that is not required: on a database without it nothing is marked and nothing else changes.
-const hasChosenColumn = db.prepare('PRAGMA table_info(projects)').all().some((c) => c.name === 'max_pages_chosen');
-const markChosen = hasChosenColumn ? db.prepare('UPDATE projects SET max_pages_chosen = 1 WHERE id = ?') : null;
+// migration the server applies when it starts, after this module has loaded, so the column is looked for on use: on a database
+// without it nothing is marked and nothing else changes.
+let markChosenStmt = null;
+const markChosen = (id) => {
+  markChosenStmt ??= db.prepare('PRAGMA table_info(projects)').all().some((c) => c.name === 'max_pages_chosen')
+    ? db.prepare('UPDATE projects SET max_pages_chosen = 1 WHERE id = ?') : null;
+  markChosenStmt?.run(id);
+};
 const insert = db.prepare(`
   INSERT INTO projects (id, name, url, stack, authorized, recreate_pages, max_pages, created_at, updated_at)
   VALUES (?, ?, ?, ?, 1, -1, ${DEFAULT_MAX_PAGES}, ?, ?)
@@ -202,7 +207,7 @@ router.patch('/:id', (req, res) => {
     next.name, next.stack, next.url, next.maxPages, next.recreatePages, next.targetDomain, next.exactMode, next.pageUrl,
     new Date().toISOString(), project.id,
   );
-  if (maxPages !== undefined) markChosen?.run(project.id);
+  if (maxPages !== undefined) markChosen(project.id);
   res.json(toProject(selectOne.get(project.id)));
 });
 

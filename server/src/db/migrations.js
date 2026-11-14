@@ -8,7 +8,8 @@
 // refuses an existing database where it is pending, and applies it by itself only to a database it has just created (no data).
 
 /** @typedef {{ ownerEmail?: string, now?: string }} MigrationContext */
-/** @typedef {{ id: string, required?: boolean, up: (db: import('node:sqlite').DatabaseSync, ctx: MigrationContext) => void }} Migration */
+// onStart: small and safe on any database, so the server applies it by itself when it starts (db/apply.js applyStartMigrations).
+/** @typedef {{ id: string, required?: boolean, onStart?: boolean, up:(db: import('node:sqlite').DatabaseSync, ctx: MigrationContext) => void }} Migration */
 
 import { randomUUID } from 'node:crypto';
 
@@ -115,15 +116,15 @@ export const MIGRATIONS = [
   {
     // "Pages to check" up to 150 (was 100). max_pages_chosen = 1 marks a number the user set (PATCH max_pages), so a later change
     // of the default never moves it. Rows made before have no record of that: every project at exactly the old default (100)
-    // moves to the new one, any other number is a choice and stays. The update runs only in the run that adds the column, so a
-    // second run (or a database that already has the column from another branch) changes nothing.
-    // Not required: the code works without the column (routes/projects.js marks a choice only when it exists), and a server
-    // started on an unmigrated database keeps every project's number as it is.
+    // moves to the new one, any other number is a choice and stays. A project the user set to 100 is marked, so it is never moved:
+    // running this again (or on a database that already has the column) changes nothing.
+    // Not required, and applied by the server itself when it starts (`onStart`, db/apply.js applyStartMigrations, called by
+    // src/index.js once it holds the data folder): recorded in schema_migrations, so it runs once; the deploy needs no command.
     id: '2026-11-14-check-pages-150',
+    onStart: true,
     up(db) {
-      if (hasColumn(db, 'projects', 'max_pages_chosen')) return;
-      db.exec('ALTER TABLE projects ADD COLUMN max_pages_chosen INTEGER NOT NULL DEFAULT 0');
-      db.exec('UPDATE projects SET max_pages = 150 WHERE max_pages = 100');
+      if (!hasColumn(db, 'projects', 'max_pages_chosen')) db.exec('ALTER TABLE projects ADD COLUMN max_pages_chosen INTEGER NOT NULL DEFAULT 0');
+      db.exec('UPDATE projects SET max_pages = 150 WHERE max_pages = 100 AND max_pages_chosen = 0');
     },
   },
 ];

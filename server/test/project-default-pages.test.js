@@ -8,15 +8,15 @@ import express from 'express';
 import { db } from '../src/db/index.js';
 import { applySchema } from '../src/db/schema.js';
 import { MIGRATIONS } from '../src/db/migrations.js';
-import { applyMigrations } from '../src/db/apply.js';
+import { applyStartMigrations } from '../src/db/apply.js';
 import { MAX_CHECK_PAGES, parseMaxPages } from '../src/routes/analyze.js';
 
 const PAGES_150 = MIGRATIONS.find((m) => m.id === '2026-11-14-check-pages-150');
 
-// The test database is new, so it has only the required migrations: this one is applied first, as db:migrate would, before the
-// projects route is loaded (it looks for the column when it loads).
-applyMigrations(db, { migrations: [PAGES_150] });
+// The order of a real start: the projects route is loaded first (src/index.js imports it), then the server applies its start
+// migrations. The route looks for the column when a number is set, so it marks choices from then on without a restart.
 const { default: projectsRouter, DEFAULT_MAX_PAGES } = await import('../src/routes/projects.js');
+assert.deepEqual(applyStartMigrations(db), [PAGES_150.id], 'the test database is new: it has only the required migrations');
 
 test('a new website starts with 150 pages to check, the most allowed; the user can lower it and that number is marked as chosen', async () => {
   assert.equal(MAX_CHECK_PAGES, 150);
@@ -50,21 +50,43 @@ test('a new website starts with 150 pages to check, the most allowed; the user c
   assert.deepEqual(row(), { max_pages: 150, max_pages_chosen: 1 });
 });
 
-test('the migration moves every project at exactly the old default (100) to 150, keeps any other number, and runs only once', () => {
+test('the server applies the migration when it starts: projects at exactly 100 move to 150, any other number stays, and it runs once', () => {
+  assert.equal(PAGES_150.onStart, true);
+  assert.ok(!PAGES_150.required, 'not required: a database without it still starts');
   const mem = new DatabaseSync(':memory:');
   applySchema(mem);
   const add = mem.prepare("INSERT INTO projects (id, name, url, max_pages, created_at, updated_at) VALUES (?, ?, 'https://x.dev', ?, 't', 't')");
   add.run('at-100', 'A', 100);
   add.run('at-25', 'B', 25);
   add.run('at-60', 'C', 60);
-  applyMigrations(mem, { migrations: [PAGES_150] });
   const pages = () => Object.fromEntries(mem.prepare('SELECT id, max_pages, max_pages_chosen FROM projects').all().map((r) => [r.id, [r.max_pages, r.max_pages_chosen]]));
+  const records = () => mem.prepare('SELECT id FROM schema_migrations').all().map((r) => r.id);
+  assert.deepEqual(applyStartMigrations(mem), [PAGES_150.id], 'only the start migrations, none of the others');
   assert.deepEqual(pages(), { 'at-100': [150, 0], 'at-25': [25, 0], 'at-60': [60, 0] });
-  // A project the user set to 100 afterwards is a choice: the migration's step run again (another database that already has the
-  // column) changes nothing.
+  assert.deepEqual(records(), [PAGES_150.id]);
+  // The next start: recorded, so nothing runs, even for a project the user has since set to 100 (marked).
   mem.prepare("UPDATE projects SET max_pages = 100, max_pages_chosen = 1 WHERE id = 'at-60'").run();
+  assert.deepEqual(applyStartMigrations(mem), []);
+  assert.deepEqual(pages(), { 'at-100': [150, 0], 'at-25': [25, 0], 'at-60': [100, 1] });
+  assert.deepEqual(records(), [PAGES_150.id]);
+  // Safe if run again without its record: a project the user set to 100 is a choice and stays.
   PAGES_150.up(mem, {});
   assert.deepEqual(pages(), { 'at-100': [150, 0], 'at-25': [25, 0], 'at-60': [100, 1] });
+  mem.close();
+});
+
+test('a database that already has the column (another branch, a manual run) still gets its projects at 100 moved, once', () => {
+  const mem = new DatabaseSync(':memory:');
+  applySchema(mem);
+  mem.exec('ALTER TABLE projects ADD COLUMN max_pages_chosen INTEGER NOT NULL DEFAULT 0');
+  const add = mem.prepare("INSERT INTO projects (id, name, url, max_pages, max_pages_chosen, created_at, updated_at) VALUES (?, ?, 'https://x.dev', ?, ?, 't', 't')");
+  add.run('default', 'A', 100, 0);
+  add.run('chosen', 'B', 100, 1);
+  add.run('other', 'C', 40, 0);
+  assert.deepEqual(applyStartMigrations(mem), [PAGES_150.id]);
+  const pages = () => Object.fromEntries(mem.prepare('SELECT id, max_pages FROM projects').all().map((r) => [r.id, r.max_pages]));
+  assert.deepEqual(pages(), { default: 150, chosen: 100, other: 40 });
+  assert.deepEqual(applyStartMigrations(mem), []);
   mem.close();
 });
 
