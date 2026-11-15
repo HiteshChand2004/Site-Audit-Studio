@@ -35,10 +35,21 @@ import { HostingError, netlifyClient } from '../deploy/netlify.js';
 import { deployRunning, recoverDeploys, runDeploy } from '../deploy/run.js';
 import {
   connectionToken, deployReady, getConnection, insertDeployment, listConnections, listDeployments, MIGRATE_HINT, ownerKeyOf,
-  insertRestored, liveSiteOf, REMASTLY, removeConnection, restorable, saveConnection,
+  insertRestored, liveSiteOf, REMASTLY, removeConnection, restorable, saveConnection, SERVER,
 } from '../deploy/store.js';
 import { isOwner } from '../accounts/roles.js';
 import { checkRecords, domainPlan, parseDomain } from '../deploy/domain.js';
+import { hostsOf, setHosts, switchRelease } from '../hosting/store.js';
+import { hasCertificate } from '../hosting/certs.js';
+
+/**
+ * The public address of Remastly's own server, which hosted sites' domains point to (SAS_HOSTING_IP); null = it does not host.
+ * @returns {string | null}
+ */
+const serverIp = () => {
+  const ip = (process.env.SAS_HOSTING_IP ?? '').trim();
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(ip) ? ip : null;
+};
 import { appCallsOf, parsePaths, parseTarget, readPassThrough, redirectsFor, savePassThrough, suggestedPaths, unansweredAppCalls } from '../deploy/passThrough.js';
 import { formsEndpointOf } from '../forms/connect.js';
 import { entriesCsv, importEntries, listEntries, removeEntry, removeImport, saveFormSettings } from '../forms/entries.js';
@@ -176,6 +187,7 @@ deployRouter.get('/:id/deploy', async (req, res) => {
     recreateId, copiedAt, stack, readiness,
     connection: getConnection(ownerKeyOf(req), 'netlify'),
     remastly: remastlyOf(req),
+    server: { ready: Boolean(serverIp()), ip: serverIp(), domain: (await hostsOf(project.id)).primary },
     running: deployRunning(project.id),
     // A site on Remastly hosting is managed in Remastly's own Netlify account: only the owner gets that link.
     deployments: listDeployments(project.id).map((d) => (d?.hosting === 'remastly' && !owner ? { ...d, adminUrl: null } : d)),
@@ -186,22 +198,43 @@ deployRouter.post('/:id/deploy', async (req, res) => {
   if (notReady(res)) return;
   const project = /** @type {any} */ (selectProject.get(req.params.id));
   if (!project) return res.status(404).json({ error: 'Project not found.' });
-  // Remastly hosting when it is set up, unless the person chose their own account.
+  // Remastly's own server when it is set up, else Remastly hosting on Netlify, else the person's own account; unless they chose.
   const remastlyReady = Boolean(getConnection(REMASTLY, 'netlify'));
-  const target = req.body?.target === 'own' || req.body?.target === 'remastly' ? req.body.target : (remastlyReady ? 'remastly' : 'own');
-  const ownerKey = target === 'remastly' ? REMASTLY : ownerKeyOf(req);
-  const token = connectionToken(ownerKey, 'netlify');
-  if (!token) {
-    return target === 'remastly'
-      ? res.status(400).json({ error: 'Remastly hosting is not set up yet. Publish on your own Netlify account, or ask the owner to set it up.', needsRemastly: true })
-      : res.status(400).json({ error: 'Connect Netlify first.', needsConnection: true });
-  }
+  const wanted = ['server', 'remastly', 'own'].includes(req.body?.target) ? req.body.target : null;
+  const target = wanted ?? (serverIp() ? 'server' : remastlyReady ? 'remastly' : 'own');
   if (deployRunning(project.id)) return res.status(409).json({ error: 'This website is being deployed already. Wait for it to finish.' });
+  let ownerKey;
+  let token = null;
+  if (target === 'server') {
+    const ip = serverIp();
+    if (!ip) return res.status(400).json({ error: 'Remastly\'s own server is not set up for hosting yet (SAS_HOSTING_IP). Use another place, or ask the owner.', needsServer: true });
+    ownerKey = SERVER;
+    // The site answers at its domain only: the first deploy needs one (a later one keeps it unless another is given).
+    if (req.body?.domain !== undefined) {
+      const d = parseDomain(req.body.domain);
+      if (!d.ok) return res.status(400).json({ error: d.error });
+      const plan = domainPlan(d, null, ip);
+      try {
+        await setHosts(project.id, plan.primary, plan.aliases);
+      } catch (err) {
+        return res.status(409).json({ error: /** @type {Error} */ (err).message });
+      }
+    }
+    if (!(await hostsOf(project.id)).primary) return res.status(400).json({ error: 'Type the domain this website will answer at.', needsDomain: true });
+  } else {
+    ownerKey = target === 'remastly' ? REMASTLY : ownerKeyOf(req);
+    token = connectionToken(ownerKey, 'netlify');
+    if (!token) {
+      return target === 'remastly'
+        ? res.status(400).json({ error: 'Remastly hosting is not set up yet. Publish on your own Netlify account, or ask the owner to set it up.', needsRemastly: true })
+        : res.status(400).json({ error: 'Connect Netlify first.', needsConnection: true });
+    }
+  }
   const { recreateId, report, stack, readiness } = subjectOf(project, req.body, await goLiveSetup(project.id));
   if (!readiness.ok) return res.status(409).json({ error: readiness.blockers[0].text, blockers: readiness.blockers });
   const open = unaccepted(readiness.warnings, req.body?.accept);
   if (open.length) return res.status(409).json({ error: 'Confirm what the copy still lacks before it goes live.', warnings: open, needsAccept: true });
-  const deployment = insertDeployment({ projectId: project.id, recreateId: /** @type {string} */ (recreateId), stack, provider: 'netlify', ownerKey });
+  const deployment = insertDeployment({ projectId: project.id, recreateId: /** @type {string} */ (recreateId), stack, provider: target === 'server' ? 'server' : 'netlify', ownerKey });
   if (!deployment) throw new DeployError('The deploy could not be recorded.', 500);
   runDeploy({ deployment, projectId: project.id, recreateId: /** @type {string} */ (recreateId), report, stack, token, ownerKey });
   res.status(202).json({ deployment });
@@ -223,10 +256,12 @@ function liveSiteClient(project) {
   return { live, netlify: netlifyClient(token) };
 }
 
-/** The domain on the site, the records to add, and which are in place. @param {any} project @param {any} site @param {any} netlify */
+/** The original site's own name: offered first as the domain, since a copy usually takes its place. @param {any} project */
+const originalHostOf = (project) => { try { return new URL(project.target_domain || project.url).hostname; } catch { return null; } };
+
+/** The domain on the Netlify site, the records to add, and which are in place. @param {any} project @param {any} site @param {any} netlify */
 async function domainState(project, site, netlify) {
-  const original = (() => { try { return new URL(project.target_domain || project.url).hostname; } catch { return null; } })();
-  if (!site.customDomain) return { domain: null, suggestion: original, siteHost: site.siteHost, url: site.url };
+  if (!site.customDomain) return { domain: null, suggestion: originalHostOf(project), siteHost: site.siteHost, url: site.url };
   const d = parseDomain(site.customDomain);
   if (!d.ok) return { domain: site.customDomain, records: [], connected: false, https: site.ssl, siteHost: site.siteHost, url: site.url };
   const records = await checkRecords(domainPlan(d, /** @type {string} */ (site.siteHost)).records);
@@ -234,6 +269,28 @@ async function domainState(project, site, netlify) {
   // Netlify turns the padlock on by itself once the domain points to it; asking speeds it up. A refusal changes nothing here.
   if (connected && !site.ssl) await netlify.provisionSsl(site.id).catch(() => {});
   return { domain: d.host, records, connected, https: site.ssl, siteHost: site.siteHost, url: site.url };
+}
+
+/** The same for a website on Remastly's own server: every name is an A record to the server's address. @param {any} project */
+async function serverDomainState(project) {
+  const { primary } = await hostsOf(project.id);
+  if (!primary) return { domain: null, suggestion: originalHostOf(project), url: null };
+  const d = parseDomain(primary);
+  const records = d.ok ? await checkRecords(domainPlan(d, null, serverIp()).records) : [];
+  const connected = records.length > 0 && records.filter((r) => r.required).every((r) => r.ok);
+  return { domain: primary, records, connected, https: await hasCertificate(primary), url: `https://${primary}` };
+}
+
+/**
+ * Where the live site's domain stands, wherever it is hosted; or the answer to send instead (not live, account gone).
+ * @param {any} project @returns {Promise<{ state: any } | { error: { status: number, body: any } }>}
+ */
+async function domainOf(project) {
+  const live = liveSiteOf(project.id);
+  if (live?.hosting === 'server') return { state: await serverDomainState(project) };
+  const c = liveSiteClient(project);
+  if (c.error) return { error: c.error };
+  return { state: await domainState(project, await c.netlify.site(c.live.siteId), c.netlify) };
 }
 
 /** @param {any} res @param {unknown} err */
@@ -246,11 +303,10 @@ deployRouter.get('/:id/domain', async (req, res) => {
   if (notReady(res)) return;
   const project = /** @type {any} */ (selectProject.get(req.params.id));
   if (!project) return res.status(404).json({ error: 'Project not found.' });
-  const c = liveSiteClient(project);
-  if (c.error) return res.status(c.error.status).json(c.error.body);
   try {
-    const site = await c.netlify.site(c.live.siteId);
-    res.json(await domainState(project, site, c.netlify));
+    const r = await domainOf(project);
+    if ('error' in r) return res.status(r.error.status).json(r.error.body);
+    res.json(r.state);
   } catch (err) {
     hostingFailure(res, err);
   }
@@ -262,6 +318,15 @@ deployRouter.put('/:id/domain', async (req, res) => {
   if (!project) return res.status(404).json({ error: 'Project not found.' });
   const d = parseDomain(req.body?.domain);
   if (!d.ok) return res.status(400).json({ error: d.error });
+  if (liveSiteOf(project.id)?.hosting === 'server') {
+    const plan = domainPlan(d, null, serverIp());
+    try {
+      await setHosts(project.id, plan.primary, plan.aliases);
+    } catch (err) {
+      return res.status(409).json({ error: /** @type {Error} */ (err).message });
+    }
+    return res.json(await serverDomainState(project));
+  }
   const c = liveSiteClient(project);
   if (c.error) return res.status(c.error.status).json(c.error.body);
   try {
@@ -278,6 +343,10 @@ deployRouter.delete('/:id/domain', async (req, res) => {
   if (notReady(res)) return;
   const project = /** @type {any} */ (selectProject.get(req.params.id));
   if (!project) return res.status(404).json({ error: 'Project not found.' });
+  if (liveSiteOf(project.id)?.hosting === 'server') {
+    await setHosts(project.id, null);
+    return res.json(await serverDomainState(project));
+  }
   const c = liveSiteClient(project);
   if (c.error) return res.status(c.error.status).json(c.error.body);
   try {
@@ -333,6 +402,15 @@ deployRouter.post('/:id/deploy/:deploymentId/restore', async (req, res) => {
   if (deployRunning(project.id)) return res.status(409).json({ error: 'This website is being deployed right now. Wait for it to finish.' });
   const found = restorable(project.id, req.params.deploymentId);
   if (!found) return res.status(409).json({ error: 'Only an earlier finished deploy of the site that is live now can be put back.' });
+  if (found.live.hosting === 'server') {
+    // Its release is still on disk unless it was pruned (the newest few are kept).
+    try {
+      await switchRelease(project.id, found.row.deploy_id);
+    } catch {
+      return res.status(409).json({ error: 'That version is no longer kept on the server (only the newest few are). Put back a newer one.' });
+    }
+    return res.json({ deployment: insertRestored(found.row) });
+  }
   const token = connectionToken(found.live.ownerKey, 'netlify');
   if (!token) return res.status(409).json({ error: found.live.hosting === 'remastly' ? 'Remastly hosting is turned off, so nothing can be put back. Ask the owner to set it up again.' : 'The Netlify account this site is on is no longer connected. Connect it again first.' });
   try {
@@ -439,15 +517,13 @@ deployRouter.get('/:id/switch-off', async (req, res) => {
   let domain = null;
   let domainError = null;
   if (live) {
-    const c = liveSiteClient(project);
-    if (c.error) domainError = c.error.body.error;
-    else {
-      try {
-        domain = await domainState(project, await c.netlify.site(c.live.siteId), c.netlify);
-      } catch (err) {
-        if (!(err instanceof HostingError)) throw err;
-        domainError = err.message;
-      }
+    try {
+      const r = await domainOf(project);
+      if ('error' in r) domainError = r.error.body.error;
+      else domain = r.state;
+    } catch (err) {
+      if (!(err instanceof HostingError)) throw err;
+      domainError = err.message;
     }
   }
   const row = /** @type {any} */ (latestDoneCopy.get(project.id));

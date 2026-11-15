@@ -1,5 +1,6 @@
 // @ts-check
-// One deploy of a finished copy to Netlify: package the served folder → the website's own Netlify site (made on the first deploy,
+// One deploy of a finished copy. To Remastly's own server: package the served folder → a release folder of the website, live in
+// one step (hosting/store.js). To Netlify: package the served folder → the website's own Netlify site (made on the first deploy,
 // reused after) → upload the zip → wait until Netlify says it is live. Network work only, no browser: it does not take the job
 // lock, so a copy or a comparison of another website keeps running. One deploy per website at a time. Every step is written to
 // the row, so the app follows it by asking again (GET …/deploy); a step that fails ends the deploy with a message to show.
@@ -9,7 +10,8 @@ import { HostingError, netlifyClient, PENDING_STATES } from './netlify.js';
 import { readPassThrough, redirectsFor } from './passThrough.js';
 import { formsEndpointOf } from '../forms/connect.js';
 import { snapshotForDeploy } from './snapshot.js';
-import { failInterrupted, siteOfProject, updateDeployment } from './store.js';
+import { failInterrupted, SERVER, serverReleases, siteOfProject, updateDeployment } from './store.js';
+import { hostsOf, publishRelease, pruneReleases } from '../hosting/store.js';
 
 /** Deploys this process is working on: deployment id → project id. */
 const running = new Map();
@@ -25,10 +27,13 @@ export function recoverDeploys() {
 }
 
 export const DEPLOY_LIMITS = { pollMs: 2000, waitMs: 10 * 60_000 };
+/** Releases of a website kept on Remastly's own server for Go back (the live one is always kept). */
+export const KEEP_RELEASES = 5;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * @param {{ deployment: { id: string }, projectId: string, recreateId: string, report: any, stack: string, token: string, ownerKey: string }} o
+ * @param {{ deployment: { id: string }, projectId: string, recreateId: string, report: any, stack: string, token: string | null, ownerKey: string }} o
+ *   `ownerKey` SERVER: Remastly's own server (no token); otherwise the Netlify account the token belongs to
  * @returns {Promise<void>}  never rejects: the outcome is in the row
  */
 export async function runDeploy({ deployment, projectId, recreateId, report, stack, token, ownerKey }) {
@@ -46,10 +51,19 @@ export async function runDeploy({ deployment, projectId, recreateId, report, sta
       extraFiles: snapshot?.files ?? [],
       formsEndpoint: (await formsEndpointOf(projectId)).endpoint,
     });
+    // Remastly's own server: the files go into a release folder of this website and it goes live in one step.
+    if (ownerKey === SERVER) {
+      updateDeployment(id, { files: plan.files, bytes: plan.bytes, siteId: projectId, deployId: id, step: 'upload' });
+      await publishRelease(projectId, id, plan.entries);
+      await pruneReleases(projectId, [id, ...serverReleases(projectId)], KEEP_RELEASES);
+      const { primary } = await hostsOf(projectId);
+      updateDeployment(id, { status: 'ready', step: 'done', url: primary ? `https://${primary}` : null, finishedAt: new Date().toISOString() });
+      return;
+    }
     zip = await zipToTemp(plan);
     updateDeployment(id, { files: plan.files, bytes: plan.bytes, step: 'site' });
 
-    const netlify = netlifyClient(token);
+    const netlify = netlifyClient(/** @type {string} */ (token));
     let site = null;
     const known = siteOfProject(projectId, 'netlify', ownerKey);
     if (known) {

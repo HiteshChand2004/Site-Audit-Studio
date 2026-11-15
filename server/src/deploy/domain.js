@@ -47,14 +47,15 @@ export function parseDomain(input) {
 }
 
 /**
- * What to put on the Netlify site and which DNS records the owner adds. `siteHost` = the site's own netlify.app name.
+ * Which names the site answers and which DNS records the owner adds. On Netlify, `siteHost` = the site's own netlify.app name
+ * (a CNAME to it; the bare domain to Netlify's address). On Remastly's own server, `serverIp`: every name is an A record to it.
  * `name` is what the DNS company's form asks for ("@" = the bare domain), `host` the full name it makes.
- * @param {{ host: string, apex: string, kind: 'apex' | 'www' | 'sub' }} d @param {string} siteHost
+ * @param {{ host: string, apex: string, kind: 'apex' | 'www' | 'sub' }} d @param {string | null} siteHost @param {string | null} [serverIp]
  */
-export function domainPlan(d, siteHost) {
+export function domainPlan(d, siteHost, serverIp = null) {
   const sub = (host) => (host === d.apex ? '@' : host.slice(0, -(d.apex.length + 1)));
-  const a = (host, required) => ({ type: 'A', name: sub(host), host, value: NETLIFY_LB, required });
-  const cname = (host, required) => ({ type: 'CNAME', name: sub(host), host, value: siteHost, required });
+  const a = (host, required) => ({ type: 'A', name: sub(host), host, value: serverIp ?? NETLIFY_LB, required });
+  const cname = (host, required) => (serverIp ? a(host, required) : { type: 'CNAME', name: sub(host), host, value: /** @type {string} */ (siteHost), required });
   if (d.kind === 'apex') return { primary: d.host, aliases: [`www.${d.apex}`], records: [a(d.host, true), cname(`www.${d.apex}`, false)] };
   if (d.kind === 'www') return { primary: d.host, aliases: [d.apex], records: [cname(d.host, true), a(d.apex, false)] };
   return { primary: d.host, aliases: [], records: [cname(d.host, true)] };

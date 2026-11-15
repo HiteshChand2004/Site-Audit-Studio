@@ -2,23 +2,26 @@
 // The two rule files a copy carries for its host, read the way Netlify reads them, since Remastly is now that host:
 //   _headers    response headers by path (the copy's security headers, its cache rules)
 //   _redirects  one rule per line: from  to  [status][!]
-// Only what copies and Go live write is supported: a path, or a path ending in /* (":splat" in `to` is what * matched); a `to`
+// Only what copies and Go live write is supported: a path, with * for any characters ("/api/*", "/*.html"; ":splat" in `to` is
+// what the first * matched); a `to`
 // that is a path or a full address; status 200 (a rewrite: another file, or with a full address the answer of that address),
 // 301, 302, 404; "!" = applied even when a file exists at that path (without it, a rule applies only when no file does).
 // Query conditions and other Netlify options are not read; such a line is skipped, never guessed.
 
 /** @typedef {{ from: string, to: string, status: number, force: boolean }} Rule */
 
-/** Whether `pattern` ("/a", "/a/*") takes `pathname`, and what * matched. @param {string} pattern @param {string} pathname */
+/** Whether `pattern` ("/a", "/a/*", "/*.html") takes `pathname`, and what the first * matched. @param {string} pattern @param {string} pathname */
 export function matchPath(pattern, pathname) {
-  if (pattern.endsWith('/*')) {
-    const base = pattern.slice(0, -1);
-    if (pathname.startsWith(base)) return { splat: pathname.slice(base.length) };
-    // "/a/*" takes "/a" too, as Netlify does.
-    return pathname === pattern.slice(0, -2) ? { splat: '' } : null;
-  }
-  return pattern === pathname ? { splat: '' } : null;
+  if (!pattern.includes('*')) return pattern === pathname ? { splat: '' } : null;
+  // "/a/*" takes "/a" too, as Netlify does.
+  if (pattern.endsWith('/*') && pathname === pattern.slice(0, -2)) return { splat: '' };
+  const re = new RegExp(`^${pattern.split('*').map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('(.*)')}$`);
+  const m = re.exec(pathname);
+  return m ? { splat: m[1] ?? '' } : null;
 }
+
+/** How specific a pattern is: an exact path beats any pattern with *, then the longer fixed part wins. @param {string} p */
+const specificity = (p) => (p.includes('*') ? 0 : 1_000_000) + p.replace(/\*/g, '').length;
 
 /** @param {string} text @returns {Rule[]} */
 export function parseRedirects(text) {
@@ -53,11 +56,17 @@ export function parseHeaders(text) {
   return blocks;
 }
 
-/** The headers every block matching `pathname` sets, later blocks winning. @param {ReturnType<typeof parseHeaders>} blocks @param {string} pathname */
+/**
+ * The headers every block matching `pathname` sets. Where two set the same header the more specific one wins (a copy writes
+ * "/ no-cache" before "/* cache a year": the page must not take the year); equally specific ones, the later.
+ * @param {ReturnType<typeof parseHeaders>} blocks @param {string} pathname
+ */
 export function headersFor(blocks, pathname) {
   /** @type {Record<string, string>} */
   const out = {};
-  for (const b of blocks) if (matchPath(b.path, pathname)) for (const [k, v] of b.headers) out[k] = v;
+  const matching = blocks.map((b, i) => ({ b, i })).filter(({ b }) => matchPath(b.path, pathname));
+  matching.sort((x, y) => specificity(x.b.path) - specificity(y.b.path) || x.i - y.i);
+  for (const { b } of matching) for (const [k, v] of b.headers) out[k] = v;
   return out;
 }
 

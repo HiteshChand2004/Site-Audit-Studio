@@ -17,6 +17,8 @@ import panel from '../Panel.module.css';
 import styles from './GoLiveStep.module.css';
 
 const STEP_ORDER = ['package', 'site', 'upload', 'publish'];
+// Remastly's own server has no site to make and nothing to wait for: the files are written and live in one step.
+const SERVER_STEPS = ['package', 'upload'];
 const POLL_MS = 1500;
 const isRunning = (d) => d && (d.status === 'queued' || d.status === 'running');
 const Spin = (p) => <Loader2 {...p} className={panel.spin} />;
@@ -38,6 +40,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
   const [askRemastly, setAskRemastly] = useState(false);
   const [askRemoveRemastly, setAskRemoveRemastly] = useState(false);
   const [chosen, setChosen] = useState(null);
+  const [domainInput, setDomainInput] = useState('');
   const [askRestore, setAskRestore] = useState(null);
   const [restoreError, setRestoreError] = useState(null);
   const [accepted, setAccepted] = useState(() => new Set());
@@ -65,6 +68,8 @@ export default function GoLiveStep({ project, onGoCreate }) {
     setAccepted(new Set());
     setStartError(null);
     setChosen(null);
+    // The original's own name, offered first: a copy usually takes its place.
+    try { setDomainInput(new URL(project.url).hostname); } catch { setDomainInput(''); }
     load();
     return () => {
       gone.current = true;
@@ -117,9 +122,14 @@ export default function GoLiveStep({ project, onGoCreate }) {
   const warnings = readiness.warnings ?? [];
   const allAccepted = warnings.every((w) => accepted.has(w.id));
   // Remastly hosting when it is set up, unless the person picks their own account.
-  const target = chosen ?? (remastly.ready ? 'remastly' : 'own');
-  const placeReady = target === 'remastly' ? remastly.ready : Boolean(connection);
-  const needPlace = target === 'remastly' ? T.needRemastly : T.needConnect;
+  const server = data.server ?? { ready: false, ip: null, domain: null };
+  // Remastly's own server when it is set up, then Remastly hosting on Netlify, then the person's own account; unless they chose.
+  const target = chosen ?? (server.ready ? 'server' : remastly.ready ? 'remastly' : 'own');
+  // The first deploy to the server needs the domain the site will answer at; later ones keep it.
+  const askDomain = target === 'server' && server.ready && !server.domain;
+  const placeReady = target === 'server' ? server.ready && (!askDomain || Boolean(domainInput.trim()))
+    : target === 'remastly' ? remastly.ready : Boolean(connection);
+  const needPlace = target === 'server' ? (server.ready ? T.needDomain : T.needServer) : target === 'remastly' ? T.needRemastly : T.needConnect;
   const canDeploy = placeReady && readiness.ok && allAccepted && !running && !starting;
   const latestFailed = latest?.status === 'failed' ? latest : null;
 
@@ -127,7 +137,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
     setStarting(true);
     setStartError(null);
     try {
-      await api.startDeploy(project.id, { recreateId: data.recreateId, stack: data.stack, accept: [...accepted], target });
+      await api.startDeploy(project.id, { recreateId: data.recreateId, stack: data.stack, accept: [...accepted], target, ...(askDomain && { domain: domainInput.trim() }) });
       await load();
     } catch (err) {
       setStartError(err.message);
@@ -168,8 +178,9 @@ export default function GoLiveStep({ project, onGoCreate }) {
     return next;
   });
 
-  const steps = running ? STEP_ORDER.map((key, i) => {
-    const at = STEP_ORDER.indexOf(latest?.step ?? 'package');
+  const order = latest?.hosting === 'server' ? SERVER_STEPS : STEP_ORDER;
+  const steps = running ? order.map((key, i) => {
+    const at = order.indexOf(latest?.step ?? 'package');
     return { key, ...T.steps[key], state: i < at ? 'done' : i === at ? 'active' : 'pending' };
   }) : null;
 
@@ -203,10 +214,18 @@ export default function GoLiveStep({ project, onGoCreate }) {
 
       <Card icon={Server} title={T.whereTitle} sub={T.whereSub}>
         <div className={styles.places} role="radiogroup" aria-label={T.whereTitle}>
+          <label className={styles.place} data-active={target === 'server' || undefined}>
+            <input type="radio" name="sas-place" checked={target === 'server'} onChange={() => setChosen('server')} disabled={running} />
+            <span className={styles.placeText}>
+              <span className={styles.placeName}>{T.serverOption} <span className={styles.recommended}>{T.recommended}</span></span>
+              <span className={styles.placeExplain}>{T.serverOptionText}</span>
+              {!server.ready && <span className={styles.placeExplain}>{T.serverNotReady}</span>}
+            </span>
+          </label>
           <label className={styles.place} data-active={target === 'remastly' || undefined}>
             <input type="radio" name="sas-place" checked={target === 'remastly'} onChange={() => setChosen('remastly')} disabled={running} />
             <span className={styles.placeText}>
-              <span className={styles.placeName}>{T.remastlyOption} <span className={styles.recommended}>{T.recommended}</span></span>
+              <span className={styles.placeName}>{T.remastlyOption}</span>
               <span className={styles.placeExplain}>{T.remastlyOptionText}</span>
               {!remastly.ready && !remastly.canManage && <span className={styles.placeExplain}>{T.remastlyNotReady}</span>}
             </span>
@@ -219,7 +238,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
             </span>
           </label>
         </div>
-        {remastly.canManage && (
+        {remastly.canManage && target === 'remastly' && (
           <div className={styles.accountRow} style={{ marginTop: 'var(--sp-3)' }}>
             <p className={ws.hint} style={{ margin: 0 }}>{remastly.account ? T.remastlyAccount(remastly.account) : T.remastlyNotReadyOwner}</p>
             <div className={styles.accountButtons}>
@@ -296,6 +315,13 @@ export default function GoLiveStep({ project, onGoCreate }) {
               ))}
             </ul>
           </div>
+        )}
+        {askDomain && readiness.ok && !running && (
+          <label className={form.field}>
+            <span className={form.label}>{T.serverDomainLabel}</span>
+            <input className={form.input} value={domainInput} onChange={(e) => setDomainInput(e.target.value)} placeholder={T.domainPlaceholder} autoComplete="off" spellCheck={false} inputMode="url" />
+            <span className={ws.hint} style={{ margin: 0 }}>{T.serverDomainHelp}</span>
+          </label>
         )}
         {!placeReady && readiness.ok && <p className={ws.hint} style={{ margin: 0 }}>{needPlace}.</p>}
         {steps && <StepList steps={steps} />}

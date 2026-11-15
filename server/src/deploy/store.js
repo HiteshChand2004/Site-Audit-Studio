@@ -17,6 +17,8 @@ export const MIGRATE_HINT = 'Going live needs a database update first. Stop the 
  * (ids are UUIDs) and which `ownerKeyOf` never returns.
  */
 export const REMASTLY = 'remastly';
+/** Remastly as the host (hosting/): deploys of a website to Remastly's own server, under this key; no hosting account. */
+export const SERVER = 'remastly-server';
 
 /** Whose connection: the signed-in user, or the single user of the local tool. @param {any} req */
 export const ownerKeyOf = (req) => (req?.user?.id ? String(req.user.id) : 'local');
@@ -74,11 +76,14 @@ export function removeConnection(ownerKey, provider) {
 
 // ---- deployments ----
 
+/** Where a deploy went, by its key: Remastly's own server, Remastly's Netlify account, or the person's own. @param {string} key */
+const hostingOf = (key) => (key === SERVER ? 'server' : key === REMASTLY ? 'remastly' : 'own');
+
 /** @param {any} r */
 export const publicDeployment = (r) => (r ? {
   id: r.id, recreateId: r.recreate_id, stack: r.stack, provider: r.provider, status: r.status, step: r.step, error: r.error,
   siteName: r.site_name, url: r.url, deployUrl: r.deploy_url, adminUrl: r.admin_url, files: r.files, bytes: r.bytes,
-  startedAt: r.started_at, finishedAt: r.finished_at, hosting: r.owner_key === REMASTLY ? 'remastly' : 'own',
+  startedAt: r.started_at, finishedAt: r.finished_at, hosting: hostingOf(r.owner_key),
   restoredFrom: r.step === 'restored' ? true : undefined,
 } : null);
 
@@ -125,7 +130,7 @@ export function siteOfProject(projectId, provider, ownerKey) {
 export function liveSiteOf(projectId) {
   const row = /** @type {any} */ (stmt(`SELECT site_id, owner_key, url FROM deployments WHERE project_id = ? AND status = 'ready' AND site_id IS NOT NULL
                        ORDER BY started_at DESC LIMIT 1`).get(projectId));
-  return row ? { siteId: row.site_id, ownerKey: row.owner_key, hosting: row.owner_key === REMASTLY ? 'remastly' : 'own', url: row.url } : null;
+  return row ? { siteId: row.site_id, ownerKey: row.owner_key, hosting: hostingOf(row.owner_key), url: row.url } : null;
 }
 
 /**
@@ -151,6 +156,10 @@ export function insertRestored(row) {
       row.deploy_url, row.admin_url, row.files, row.bytes, at, at);
   return getDeployment(id);
 }
+
+/** Finished deploys of a website to Remastly's own server, newest first (their releases are kept on disk). @param {string} projectId */
+export const serverReleases = (projectId) => /** @type {any[]} */ (stmt(`SELECT deploy_id FROM deployments WHERE project_id = ? AND owner_key = ? AND status = 'ready'
+  ORDER BY started_at DESC`).all(projectId, SERVER)).map((r) => r.deploy_id);
 
 const RUNNING = "status IN ('queued', 'running')";
 

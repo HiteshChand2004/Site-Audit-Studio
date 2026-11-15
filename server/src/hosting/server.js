@@ -95,11 +95,11 @@ export function sitesHandler() {
     if (!entry) return plain(res, 404, 'This domain is not hosted here.');
     const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
     // The other form of the name (with or without www) leads to the site's own address.
-    if (entry.alias) return redirect(res, 301, `${proto}://${entry.site}${url.pathname}${url.search}`);
+    if (entry.alias) return redirect(res, 301, `${proto}://${entry.primary}${url.pathname}${url.search}`);
 
     let root;
     try {
-      root = await realpath(path.join(hostingPaths.root, 'sites', entry.site, 'current'));
+      root = await realpath(path.join(hostingPaths.root, 'sites', entry.projectId, 'current'));
     } catch {
       return plain(res, 503, 'This website has no live version yet.');
     }
@@ -181,6 +181,8 @@ async function sendFile(req, res, file, status, extra, cache) {
   const accept = String(req?.headers['accept-encoding'] ?? '');
   const [body, encoding] = entry.br && /\bbr\b/.test(accept) ? [entry.br, 'br'] : entry.gz && /\bgzip\b/.test(accept) ? [entry.gz, 'gzip'] : [entry.body, null];
   if (encoding) headers['content-encoding'] = encoding;
+  // A page is always revalidated, whatever a wide rule says: after the next deploy visitors must get the new one.
+  if (typeExtOf(file) === '.html') headers['cache-control'] = 'no-cache';
   res.writeHead(status, headers).end(req?.method === 'HEAD' ? undefined : body);
 }
 

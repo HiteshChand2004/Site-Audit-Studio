@@ -27,6 +27,8 @@ import { switchOffCheck } from '../src/deploy/switchOff.js';
 import { readSnapshot, snapshotForDeploy, takeSnapshot } from '../src/deploy/snapshot.js';
 import { createNetPolicy, withNetPolicy } from '../src/security/netGuard.js';
 import { unansweredAppCalls } from '../src/deploy/passThrough.js';
+import { sitesHandler } from '../src/hosting/server.js';
+import { request as httpRequest } from 'node:http';
 import { formsPublicRouter } from '../src/routes/formsPublic.js';
 import { seedProject } from './helpers/projects.js';
 
@@ -872,5 +874,81 @@ test('Go live: the snapshot ships with the deploy before the paths passed to the
     assert.equal(zipText(fake.lastZip, '_remastly/snapshot/1.json'), '{"ok":1}');
   } finally {
     old.close();
+  }
+});
+
+// ---- Remastly as the host (its own server) ----
+
+/** One request to a sites server for `host` (fetch would drop the Host header). */
+function hostGet(server, host, p) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: '127.0.0.1', port: server.address().port, path: p, headers: { host } }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, location: res.headers.location, text: Buffer.concat(chunks).toString() }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+test('Remastly as the host: a copy goes live on its own server at its domain, comes back with Go back, keeps its domain to itself', async () => {
+  const sites = createServer(sitesHandler());
+  await new Promise((r) => sites.listen(0, '127.0.0.1', r));
+  const saved = dnsConfig.resolver;
+  try {
+    const project = seedProject(db, { name: 'pi', url: 'https://www.pi-shop.com/', targetDomain: 'https://www.pi-shop.com' });
+    const report = { asIs: { stack: 'html', address: { used: 'https://www.pi-shop.com' } } };
+    await finishedCopy({ projectId: project.id, report, reaudit: { checklist: { items: [] } }, files: { 'index.html': '<h1>First version</h1>' } });
+
+    delete process.env.SAS_HOSTING_IP;
+    let r = await call('GET', `/projects/${project.id}/deploy`);
+    assert.deepEqual(r.body.server, { ready: false, ip: null, domain: null });
+    assert.equal((await call('POST', `/projects/${project.id}/deploy`, { target: 'server' })).body.needsServer, true);
+
+    process.env.SAS_HOSTING_IP = '203.0.113.10';
+    r = await call('POST', `/projects/${project.id}/deploy`, { target: 'server' });
+    assert.deepEqual([r.status, r.body.needsDomain], [400, true], 'the first deploy needs the domain');
+    r = await call('POST', `/projects/${project.id}/deploy`, { domain: 'www.pi-shop.com' });
+    assert.equal(r.status, 202, 'Remastly\'s own server is the default once it is set up');
+    const first = await waitDone(project.id);
+    assert.deepEqual([first.status, first.hosting, first.url], ['ready', 'server', 'https://www.pi-shop.com'], first.error);
+    assert.equal((await hostGet(sites, 'www.pi-shop.com', '/')).text, '<h1>First version</h1>');
+    const alias = await hostGet(sites, 'pi-shop.com', '/about/');
+    assert.deepEqual([alias.status, alias.location], [301, 'http://www.pi-shop.com/about/']);
+
+    // The domain card: every name is an A record to the server; the padlock waits for a certificate.
+    dnsConfig.resolver = fakeDns({ 'www.pi-shop.com': { a: ['203.0.113.10'] } });
+    r = await call('GET', `/projects/${project.id}/domain`);
+    assert.deepEqual(r.body.records.map((x) => [x.type, x.name, x.value, x.required, x.ok]), [['A', 'www', '203.0.113.10', true, true], ['A', '@', '203.0.113.10', false, false]]);
+    assert.deepEqual([r.body.connected, r.body.https], [true, false]);
+
+    // A new version, then Go back to the first.
+    await finishedCopy({ projectId: project.id, report, reaudit: { checklist: { items: [] } }, files: { 'index.html': '<h1>Second version</h1>' } });
+    assert.equal((await call('POST', `/projects/${project.id}/deploy`, {})).status, 202, 'a later deploy keeps the domain');
+    assert.equal((await waitDone(project.id)).status, 'ready');
+    assert.equal((await hostGet(sites, 'www.pi-shop.com', '/')).text, '<h1>Second version</h1>');
+    r = await call('POST', `/projects/${project.id}/deploy/${first.id}/restore`);
+    assert.equal(r.status, 200, r.body.error);
+    assert.equal((await hostGet(sites, 'www.pi-shop.com', '/')).text, '<h1>First version</h1>', 'Go back');
+
+    // Another website cannot answer at this domain.
+    const other = seedProject(db, { name: 'rho' });
+    await finishedCopy({ projectId: other.id, report: { asIs: { stack: 'html', address: { used: 'https://rho.test' } } }, reaudit: { checklist: { items: [] } } });
+    r = await call('POST', `/projects/${other.id}/deploy`, { domain: 'pi-shop.com' });
+    assert.equal(r.status, 409);
+    assert.match(r.body.error, /already a domain of another website/);
+
+    // The domain can be changed and taken off.
+    r = await call('PUT', `/projects/${project.id}/domain`, { domain: 'shop.pi-shop.com' });
+    assert.equal(r.body.domain, 'shop.pi-shop.com');
+    assert.equal((await hostGet(sites, 'shop.pi-shop.com', '/')).text, '<h1>First version</h1>');
+    assert.equal((await hostGet(sites, 'www.pi-shop.com', '/')).status, 404, 'the old name is no longer answered');
+    r = await call('DELETE', `/projects/${project.id}/domain`);
+    assert.equal(r.body.domain, null);
+  } finally {
+    delete process.env.SAS_HOSTING_IP;
+    dnsConfig.resolver = saved;
+    sites.close();
   }
 });

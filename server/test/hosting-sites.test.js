@@ -12,6 +12,9 @@ import { currentRelease, hostingPaths, publishRelease, pruneReleases, setHosts, 
 import { sitesHandler } from '../src/hosting/server.js';
 
 let root;
+const P1 = '11111111-1111-4111-8111-111111111111';
+const P2 = '22222222-2222-4222-8222-222222222222';
+const P3 = '33333333-3333-4333-8333-333333333333';
 let sites;
 let old;
 const seenByOld = [];
@@ -63,12 +66,19 @@ test('the rule files are read as Netlify reads them; lines it would not apply ar
   const blocks = parseHeaders('/*\n  X-Frame-Options: DENY\n  Cache-Control: no-cache\n/assets/*\n  Cache-Control: public, max-age=31536000\n');
   assert.deepEqual(headersFor(blocks, '/assets/a.css'), { 'x-frame-options': 'DENY', 'cache-control': 'public, max-age=31536000' });
   assert.deepEqual(headersFor(blocks, '/'), { 'x-frame-options': 'DENY', 'cache-control': 'no-cache' });
+  // As a copy writes them: the page rules first, the year-long cache for everything last. The more specific rule wins.
+  const copy = parseHeaders('/\n  Cache-Control: no-cache\n/*.html\n  Cache-Control: no-cache\n/*\n  Cache-Control: public, max-age=31536000\n');
+  assert.equal(headersFor(copy, '/')['cache-control'], 'no-cache');
+  assert.equal(headersFor(copy, '/about/index.html')['cache-control'], 'no-cache');
+  assert.equal(headersFor(copy, '/css/site.css')['cache-control'], 'public, max-age=31536000');
+  assert.deepEqual(matchPath('/*.html', '/a/b.html'), { splat: 'a/b' });
+  assert.equal(matchPath('/*.html', '/a/b.css'), null);
 });
 
 test('a domain belongs to one website; another cannot take it', async () => {
-  await setHosts('p1', 'www.acme.com', ['acme.com']);
-  await assert.rejects(setHosts('p2', 'acme.com'), /already a domain of another website/);
-  await assert.rejects(setHosts('p2', '../etc'), /Not a host name/);
+  await setHosts(P1, 'www.acme.com', ['acme.com']);
+  await assert.rejects(setHosts(P2, 'acme.com'), /already a domain of another website/);
+  await assert.rejects(setHosts(P2, '../etc'), /Not a host name/);
 });
 
 const SITE = (oldPort, marker) => [
@@ -83,9 +93,9 @@ const SITE = (oldPort, marker) => [
 ];
 
 test('a hosted site is answered by its domain: pages, clean addresses, its headers, compression, its rules, its 404', async () => {
-  await setHosts('p1', 'www.acme.com', ['acme.com']);
-  await publishRelease('www.acme.com', 'r1', SITE(old.address().port, 'Version one'));
-  assert.equal(await currentRelease('www.acme.com'), 'r1');
+  await setHosts(P1, 'www.acme.com', ['acme.com']);
+  await publishRelease(P1, 'r1', SITE(old.address().port, 'Version one'));
+  assert.equal(await currentRelease(P1), 'r1');
 
   let r = await get('www.acme.com', '/', { headers: { 'accept-encoding': 'br' } });
   assert.equal(r.status, 200);
@@ -94,6 +104,8 @@ test('a hosted site is answered by its domain: pages, clean addresses, its heade
   assert.match(brotliDecompressSync(r.buf).toString(), /Version one/);
   assert.equal(r.headers.get('x-frame-options'), 'DENY', 'the copy\'s _headers');
   assert.equal(r.headers.get('content-security-policy'), "default-src 'self'");
+  assert.equal(r.headers.get('cache-control'), 'no-cache', 'a page is always revalidated');
+  assert.equal((await get('www.acme.com', '/css/site.css')).headers.get('cache-control'), 'public, max-age=0, must-revalidate');
   const etag = r.headers.get('etag');
   assert.equal((await get('www.acme.com', '/', { headers: { 'if-none-match': etag } })).status, 304, 'revalidated, not sent again');
 
@@ -130,16 +142,16 @@ test('the other form of the name leads to the site; an unknown domain is not ans
 });
 
 test('a new release goes live in one step, an earlier one comes back the same way, old ones are pruned', async () => {
-  await publishRelease('www.acme.com', 'r2', SITE(old.address().port, 'Version two'));
+  await publishRelease(P1, 'r2', SITE(old.address().port, 'Version two'));
   assert.match((await get('www.acme.com', '/')).buf.toString(), /Version two/);
-  await switchRelease('www.acme.com', 'r1');
+  await switchRelease(P1, 'r1');
   assert.match((await get('www.acme.com', '/')).buf.toString(), /Version one/, 'Go back');
-  await publishRelease('www.acme.com', 'r3', SITE(old.address().port, 'Version three'));
-  await pruneReleases('www.acme.com', ['r3', 'r2', 'r1'], 2);
-  assert.deepEqual((await readdir(path.join(root, 'sites', 'www.acme.com', 'releases'))).sort(), ['r2', 'r3']);
+  await publishRelease(P1, 'r3', SITE(old.address().port, 'Version three'));
+  await pruneReleases(P1, ['r3', 'r2', 'r1'], 2);
+  assert.deepEqual((await readdir(path.join(root, 'sites', P1, 'releases'))).sort(), ['r2', 'r3']);
 });
 
 test('a site with no live release yet says so', async () => {
-  await setHosts('p3', 'new.example.org');
+  await setHosts(P3, 'new.example.org');
   assert.equal((await get('new.example.org', '/')).status, 503);
 });
