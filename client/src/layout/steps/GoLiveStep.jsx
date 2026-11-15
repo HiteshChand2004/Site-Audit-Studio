@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, CloudUpload, Copy, Download, ExternalLink, Globe, History, Inbox, KeyRound, Link2, Loader2, RefreshCw, Rocket, Server, Trash2, Unplug, Upload } from 'lucide-react';
+import { Check, CircleCheck, CircleHelp, CircleX, CloudUpload, Power, Copy, Download, ExternalLink, Globe, History, Inbox, KeyRound, Link2, Loader2, RefreshCw, Rocket, Server, Trash2, Unplug, Upload } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import Modal from '../../components/common/Modal.jsx';
 import ConfirmDialog from '../../components/common/ConfirmDialog.jsx';
@@ -326,6 +326,8 @@ export default function GoLiveStep({ project, onGoCreate }) {
       <FormsCard project={project} onChange={load} />
 
       <PassThroughCard project={project} onChange={load} />
+
+      <SwitchOffCard project={project} />
 
       {deployments.length > 1 && (
         <SectionCard icon={History} title={T.historyTitle} meta={`${deployments.length} deploys`} defaultOpen={false}>
@@ -832,6 +834,55 @@ function FormsCard({ project, onChange }) {
       <ConfirmDialog open={Boolean(askRemove)} onClose={() => setAskRemove(null)} title={T.formsRemoveTitle} confirmLabel={T.formsRemove} danger onConfirm={remove}>
         {T.formsRemoveText}
       </ConfirmDialog>
+    </Card>
+  );
+}
+
+const OFF_ICON = { ok: CircleCheck, needs: CircleX, advice: CircleHelp };
+
+/** "Can I switch off the old server?": run on demand (it asks the host and DNS), item by item with a verdict. */
+function SwitchOffCard({ project }) {
+  const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  // A result is about one website: another website's page starts empty.
+  useEffect(() => { setResult(null); setError(null); }, [project.id]);
+
+  async function check() {
+    setBusy(true);
+    setError(null);
+    try {
+      setResult(await api.getSwitchOff(project.id));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const needs = result ? result.items.filter((i) => i.status === 'needs').length : 0;
+  return (
+    <Card icon={Power} title={T.offTitle} sub={T.offSub} actions={<Button size="sm" icon={busy ? Spin : RefreshCw} disabled={busy} onClick={check}>{busy ? T.offChecking : T.offCheck}</Button>}>
+      {result && (
+        <div className={styles.domainBody}>
+          {result.safe
+            ? <Alert tone="ok" title={T.offSafe}>{T.offSafeText}</Alert>
+            : <Alert tone="bad" title={T.offNotYet(needs)} />}
+          <ul className={styles.offItems}>
+            {result.items.map((i) => {
+              const Icon = OFF_ICON[i.status];
+              return (
+                <li key={i.id} data-status={i.status}>
+                  <Icon size={16} aria-hidden="true" />
+                  <span><strong>{T.offStatus[i.status]}:</strong> {i.text}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+      {error && <Alert tone="bad" title="Could not check">{error}</Alert>}
     </Card>
   );
 }

@@ -23,6 +23,7 @@ import { checkRecords, dnsConfig, domainPlan, NETLIFY_LB, parseDomain } from '..
 import { parsePaths, parseTarget, redirectsFor, suggestedPaths } from '../src/deploy/passThrough.js';
 import { entriesCsv, parseFormBody } from '../src/forms/entries.js';
 import { entriesFromRows, parseCsv } from '../src/forms/importCsv.js';
+import { switchOffCheck } from '../src/deploy/switchOff.js';
 import { formsPublicRouter } from '../src/routes/formsPublic.js';
 import { seedProject } from './helpers/projects.js';
 
@@ -745,4 +746,63 @@ test('Form entries: old entries are imported in date order, a second import of t
 
   assert.equal((await post('')).status, 400);
   assert.match((await post('Name\n')).body.error, /no entries/);
+});
+
+// ---- Can I switch off the old server? ----
+
+test('switch off: every reason the old server is still needed is named; a site that needs nothing of it is safe', () => {
+  const base = { live: { url: 'https://x.netlify.app' }, domain: { domain: 'acme.com', connected: true }, report: { safety: { safe: true } }, passThrough: null, appCalls: [], formsWaiting: 0, formsSaved: false, imported: 0 };
+  let r = switchOffCheck(base);
+  assert.equal(r.safe, true);
+  assert.deepEqual(r.items.map((i) => [i.id, i.status]), [['live', 'ok'], ['domain', 'ok'], ['files', 'ok'], ['app', 'ok'], ['forms', 'ok']]);
+
+  r = switchOffCheck({ ...base, live: null, domain: null });
+  assert.equal(r.safe, false);
+  assert.deepEqual(r.items.map((i) => i.id), ['live', 'files', 'app', 'forms'], 'no domain item before the copy is online');
+
+  r = switchOffCheck({ ...base, domain: { domain: 'acme.com', connected: false }, report: { safety: { safe: false, original: ['https://acme.com/a.js'] } },
+    appCalls: [{ path: '/api/*', seen: '/api/me' }], formsWaiting: 2, formsSaved: false });
+  assert.deepEqual(r.items.filter((i) => i.status === 'needs').map((i) => i.id), ['domain', 'files', 'app', 'forms']);
+  assert.match(r.items.find((i) => i.id === 'app').text, /\/api\/me/);
+  assert.equal(r.items.find((i) => i.id === 'entries').status, 'advice', 'old entries: only the owner knows');
+
+  r = switchOffCheck({ ...base, passThrough: { target: 'https://app.acme.com', paths: ['/login'] }, formsWaiting: 1, formsSaved: true, imported: 12 });
+  assert.equal(r.safe, false, 'a path still passed to the old app needs it');
+  assert.deepEqual(r.items.filter((i) => ['forms', 'entries'].includes(i.id)).map((i) => i.status), ['ok', 'ok']);
+
+  r = switchOffCheck({ ...base, domain: null, domainError: 'Remastly hosting is turned off.' });
+  assert.equal(r.items.find((i) => i.id === 'domain').status, 'needs', 'not checked is not done');
+});
+
+test('Go live: "can I switch off the old server?" follows the live site, its domain and its forms', async () => {
+  process.env.SAS_FORMS_ORIGIN = 'https://remastly.example.test';
+  const saved = dnsConfig.resolver;
+  try {
+    const project = seedProject(db, { name: 'nu', url: 'https://www.nu-shop.com/' });
+    await finishedCopy({
+      projectId: project.id,
+      report: { asIs: { stack: 'html', address: { used: 'https://www.nu-shop.com' }, formRoutes: [{ page: '/', action: '', goesTo: 'not-connected' }] } },
+      reaudit: { checklist: { items: [] } },
+    });
+    let r = await call('GET', `/projects/${project.id}/switch-off`);
+    assert.equal(r.body.safe, false);
+    assert.equal(r.body.items[0].id, 'live');
+
+    await call('PUT', `/projects/${project.id}/forms`, { enabled: true, email: false });
+    assert.equal((await call('POST', `/projects/${project.id}/deploy`, {})).status, 202);
+    assert.equal((await waitDone(project.id)).status, 'ready');
+    dnsConfig.resolver = fakeDns({});
+    await call('PUT', `/projects/${project.id}/domain`, { domain: 'www.nu-shop.com' });
+    r = await call('GET', `/projects/${project.id}/switch-off`);
+    assert.deepEqual(r.body.items.filter((i) => i.status === 'needs').map((i) => i.id), ['domain'], 'only the DNS is left');
+
+    const site = [...fake.sites.values()].find((x) => x.custom_domain === 'www.nu-shop.com');
+    dnsConfig.resolver = fakeDns({ 'www.nu-shop.com': { cname: [site.default_domain] } });
+    r = await call('GET', `/projects/${project.id}/switch-off`);
+    assert.equal(r.body.safe, true);
+    assert.equal(r.body.items.find((i) => i.id === 'entries').status, 'advice');
+  } finally {
+    dnsConfig.resolver = saved;
+    delete process.env.SAS_FORMS_ORIGIN;
+  }
 });

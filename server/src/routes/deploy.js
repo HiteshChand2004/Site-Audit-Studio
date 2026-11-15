@@ -17,6 +17,7 @@
 //   PUT    /api/projects/:id/forms { enabled?, email? }   turn saving / the email on each entry on or off (from the next deploy)
 //   GET    /api/projects/:id/forms/entries.csv   every entry, for a spreadsheet
 //   DELETE /api/projects/:id/forms/entries/:entryId   remove one entry
+//   GET    /api/projects/:id/switch-off       "Can I switch off the old server?": what of this website still needs it
 //   POST   /api/projects/:id/forms/import     (body: a CSV file) old entries from Webflow, Framer or the old site's database
 //   DELETE /api/projects/:id/forms/imports/:importId   take one import back
 //   POST   /api/projects/:id/deploy/:deploymentId/restore   put an earlier finished deploy back as the live one (Step 4)
@@ -40,6 +41,7 @@ import { parsePaths, parseTarget, readPassThrough, redirectsFor, savePassThrough
 import { formsEndpointOf } from '../forms/connect.js';
 import { entriesCsv, importEntries, listEntries, removeEntry, removeImport, saveFormSettings } from '../forms/entries.js';
 import { entriesFromRows, IMPORT_LIMITS, parseCsv } from '../forms/importCsv.js';
+import { switchOffCheck } from '../deploy/switchOff.js';
 import { formCounts } from '../copy/formRoutes.js';
 import { withAsIsSafety } from '../copy/outsideServices.js';
 
@@ -408,4 +410,39 @@ deployRouter.delete('/:id/forms/imports/:importId', async (req, res) => {
   const removed = await removeImport(project.id, req.params.importId);
   if (!removed) return res.status(404).json({ error: 'Import not found.' });
   res.json({ ...(await formsState(project)), removed });
+});
+
+// ---- Can I switch off the old server? ----
+
+deployRouter.get('/:id/switch-off', async (req, res) => {
+  if (notReady(res)) return;
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  const live = liveSiteOf(project.id);
+  // Where the domain points is asked of the host (DNS records and its site); only once the copy is online.
+  let domain = null;
+  let domainError = null;
+  if (live) {
+    const c = liveSiteClient(project);
+    if (c.error) domainError = c.error.body.error;
+    else {
+      try {
+        domain = await domainState(project, await c.netlify.site(c.live.siteId), c.netlify);
+      } catch (err) {
+        if (!(err instanceof HostingError)) throw err;
+        domainError = err.message;
+      }
+    }
+  }
+  const row = /** @type {any} */ (latestDoneCopy.get(project.id));
+  const report = row?.result_json ? withAsIsSafety(JSON.parse(row.result_json)) : null;
+  const entries = await listEntries(project.id);
+  res.json(switchOffCheck({
+    live, domain, domainError, report,
+    passThrough: await readPassThrough(project.id),
+    appCalls: report ? suggestedPaths(report) : [],
+    formsWaiting: formCounts(report?.asIs?.formRoutes ?? []).waiting,
+    formsSaved: Boolean((await formsEndpointOf(project.id)).endpoint),
+    imported: entries.filter((e) => e.importId).length,
+  }));
 });

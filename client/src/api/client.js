@@ -309,6 +309,7 @@ export const api = {
   removeFormEntry: (id, entryId) => request(`/projects/${id}/forms/entries/${entryId}`, { method: 'DELETE' }),
   importFormEntries: (id, file) => request(`/projects/${id}/forms/import`, { method: 'POST', file }),
   removeFormImport: (id, importId) => request(`/projects/${id}/forms/imports/${importId}`, { method: 'DELETE' }),
+  getSwitchOff: (id) => request(`/projects/${id}/switch-off`),
   getPassThrough: (id) => request(`/projects/${id}/pass-through`),
   setPassThrough: (id, body) => request(`/projects/${id}/pass-through`, { method: 'PUT', body }),
   removePassThrough: (id) => request(`/projects/${id}/pass-through`, { method: 'DELETE' }),
