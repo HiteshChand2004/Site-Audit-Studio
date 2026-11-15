@@ -15,11 +15,11 @@ import { STATIC_STACKS } from './bundle.js';
 const EXPLAINED = new Set(['measurement', 'needs-info', 'look', 'own-code', 'impossible']);
 
 /**
- * @param {{ project: any, report: any | null, stack: string, reaudit: any | null, passThrough?: { paths: string[] } | null }} o
+ * @param {{ project: any, report: any | null, stack: string, reaudit: any | null, passThrough?: { paths: string[] } | null, formsConnected?: boolean }} o
  *   `reaudit` = the latest finished comparison of this copy (its result), or null
  * @returns {{ ok: boolean, blockers: { id: string, text: string }[], warnings: { id: string, text: string }[] }}
  */
-export function deployReadiness({ project, report, stack, reaudit, passThrough = null }) {
+export function deployReadiness({ project, report, stack, reaudit, passThrough = null, formsConnected = false }) {
   const blockers = [];
   const warnings = [];
   if (!report) {
@@ -58,7 +58,8 @@ export function deployReadiness({ project, report, stack, reaudit, passThrough =
     if (worse) warnings.push({ id: 'worse', text: `${worse} ${worse === 1 ? 'check got' : 'checks got'} worse than the original. See "Got worse" in Results.` });
   }
   const waiting = formCounts(report.asIs?.formRoutes ?? []).waiting;
-  if (waiting && !report.copy?.formEndpoint) {
+  // Forms connected to Remastly (Form entries) are saved there from the next deploy: nothing to confirm.
+  if (waiting && !report.copy?.formEndpoint && !formsConnected) {
     warnings.push({ id: 'forms', text: `${waiting === 1 ? 'One form sends' : `${waiting} forms send`} nothing yet: on the live site, what visitors type there will not reach you until a form service is connected.` });
   }
   // The copy asked its own address for app paths it does not have (/api/…): on the live domain nothing answers them unless they

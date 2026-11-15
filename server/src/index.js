@@ -23,6 +23,7 @@ import { previewRouter, PREVIEW_PREFIX } from './recreate/previewRoute.js';
 import { loadPublished, PUBLISHED_PREFIX, publishedPath, resolvePublished } from './buildmode/publish.js';
 import { inlineScriptHashes } from './recreate/inlineScripts.js';
 import { foreignOriginCheck } from './security/foreignOrigin.js';
+import { formsPublicRouter } from './routes/formsPublic.js';
 import { accountsEnabled, bindHost, isLoopbackHost, trustProxySetting } from './config/index.js';
 import { db } from './db/index.js';
 import { pendingMigrations } from './db/apply.js';
@@ -38,6 +39,9 @@ const app = express();
 // so req.ip is the real visitor for the per-address limits and nobody can choose it with X-Forwarded-For (config/index.js).
 app.set('trust proxy', trustProxySetting().value);
 
+// Before the app's own CORS, body parsing and origin checks: live sites' visitors post their forms here, from the sites'
+// own domains (routes/formsPublic.js answers for itself).
+app.use('/api/forms', formsPublicRouter);
 app.use(cors({ origin: ['http://localhost:5173', 'http://127.0.0.1:5173'] }));
 app.use(express.json({ limit: '1mb' }));
 // Nothing that merely shares the app's address is the app: a sandboxed preview or another site (security/foreignOrigin.js).

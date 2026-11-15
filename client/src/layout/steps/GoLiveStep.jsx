@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, CloudUpload, Copy, ExternalLink, Globe, History, KeyRound, Link2, Loader2, RefreshCw, Rocket, Server, Unplug } from 'lucide-react';
+import { Check, CloudUpload, Copy, Download, ExternalLink, Globe, History, Inbox, KeyRound, Link2, Loader2, RefreshCw, Rocket, Server, Trash2, Unplug } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import Modal from '../../components/common/Modal.jsx';
 import ConfirmDialog from '../../components/common/ConfirmDialog.jsx';
@@ -11,6 +11,7 @@ import { stackById } from '../../constants.js';
 import { GO_LIVE as T } from '../../copy.js';
 import { timeAgo } from '../../format.js';
 import { api } from '../../api/client.js';
+import { apiUrl } from '../../api/base.js';
 import ws from '../Workspace.module.css';
 import panel from '../Panel.module.css';
 import styles from './GoLiveStep.module.css';
@@ -321,6 +322,8 @@ export default function GoLiveStep({ project, onGoCreate }) {
       </Card>
 
       {live && <DomainCard project={project} liveUrl={live.url} />}
+
+      <FormsCard project={project} onChange={load} />
 
       <PassThroughCard project={project} onChange={load} />
 
@@ -671,6 +674,118 @@ function PassThroughCard({ project, onChange }) {
       {error && <Alert tone="bad" title="Not saved">{error}</Alert>}
       <ConfirmDialog open={askRemove} onClose={() => setAskRemove(false)} title={T.ptRemoveTitle} confirmLabel={T.ptRemove} danger onConfirm={remove}>
         {T.ptRemoveText}
+      </ConfirmDialog>
+    </Card>
+  );
+}
+
+/** Form entries: the site's forms save to Remastly (from the next deploy), with the latest entries and a CSV of all. */
+function FormsCard({ project, onChange }) {
+  const [state, setState] = useState(null);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [askRemove, setAskRemove] = useState(null);
+
+  const load = useCallback(async () => {
+    try {
+      setState(await api.getForms(project.id));
+      setError(null);
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [project.id]);
+  useEffect(() => { load(); }, [load]);
+
+  async function change(body) {
+    setBusy(true);
+    try {
+      setState(await api.setForms(project.id, body));
+      await onChange();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    const e = askRemove;
+    setAskRemove(null);
+    try {
+      setState(await api.removeFormEntry(project.id, e.id));
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  if (!state) return error ? <Alert tone="bad" title="Form entries could not be loaded">{error}</Alert> : null;
+  if (!state.forms && !state.count && !state.enabled) {
+    return (
+      <Card icon={Inbox} title={T.formsTitle} sub={T.formsSub}>
+        <p className={ws.hint} style={{ margin: 0 }}>{T.formsNone}</p>
+      </Card>
+    );
+  }
+  return (
+    <Card icon={Inbox} title={T.formsTitle} sub={T.formsSub}>
+      <div className={styles.domainBody}>
+        {state.forms > 0 && <p className={ws.hint} style={{ margin: 0 }}>{T.formsWaiting(state.forms)}</p>}
+        <label className={form.check}>
+          <input type="checkbox" checked={state.enabled} disabled={busy} onChange={(e) => change({ enabled: e.target.checked })} />
+          <span>{T.formsSave}</span>
+        </label>
+        {state.enabled && (
+          <label className={form.check}>
+            <input type="checkbox" checked={state.email} disabled={busy} onChange={(e) => change({ email: e.target.checked })} />
+            <span>{T.formsEmail}</span>
+          </label>
+        )}
+        {state.enabled && !state.reachable && <Alert tone="warn" title="Not reachable from live sites">{T.formsUnreachable}</Alert>}
+        {state.enabled && state.reachable && <p className={ws.hint} style={{ margin: 0 }}>{T.formsApply}</p>}
+
+        <div className={styles.accountRow}>
+          <p className={styles.confirmTitle}>{T.formsCount(state.count)}</p>
+          {state.count > 0 && (
+            <a className={styles.linkButton} href={apiUrl(`/projects/${project.id}/forms/entries.csv`)} download>
+              <Download size={14} aria-hidden="true" /> {T.formsCsv}
+            </a>
+          )}
+        </div>
+        {state.count === 0 ? (
+          <p className={ws.hint} style={{ margin: 0 }}>{T.formsEmpty}</p>
+        ) : (
+          <ul className={styles.entries}>
+            {state.entries.map((e) => (
+              <li key={e.id} className={styles.entry}>
+                <div className={styles.entryHead}>
+                  <span className={ws.hint} style={{ margin: 0 }}>{timeAgo(e.at)}{e.page ? ` · ${e.page}` : ''}</span>
+                  <button type="button" className={styles.copy} onClick={() => setAskRemove(e)} aria-label={T.formsRemove}>
+                    <Trash2 size={13} aria-hidden="true" /> {T.formsRemove}
+                  </button>
+                </div>
+                <dl className={styles.fields}>
+                  {e.fields.map(([k, v], i) => (
+                    <div key={`${k}-${i}`}>
+                      <dt>{k}</dt>
+                      <dd>{v}</dd>
+                    </div>
+                  ))}
+                  {e.files?.length > 0 && (
+                    <div>
+                      <dt>{T.formsFiles}</dt>
+                      <dd>{e.files.map((f) => f.name).join(', ')}</dd>
+                    </div>
+                  )}
+                </dl>
+              </li>
+            ))}
+          </ul>
+        )}
+        {state.count > state.entries.length && <p className={ws.hint} style={{ margin: 0 }}>{T.formsShown(state.entries.length, state.count)}</p>}
+        {error && <Alert tone="bad" title="Not saved">{error}</Alert>}
+      </div>
+      <ConfirmDialog open={Boolean(askRemove)} onClose={() => setAskRemove(null)} title={T.formsRemoveTitle} confirmLabel={T.formsRemove} danger onConfirm={remove}>
+        {T.formsRemoveText}
       </ConfirmDialog>
     </Card>
   );

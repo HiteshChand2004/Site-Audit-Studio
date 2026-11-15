@@ -13,6 +13,10 @@
 //   GET    /api/projects/:id/pass-through     the paths passed to the old app, and the ones the copy suggests (Step 3)
 //   PUT    /api/projects/:id/pass-through { target, paths }   save them; they apply from the next deploy
 //   DELETE /api/projects/:id/pass-through     stop passing anything on (from the next deploy)
+//   GET    /api/projects/:id/forms            Form entries: whether the forms save to Remastly, and the latest entries
+//   PUT    /api/projects/:id/forms { enabled?, email? }   turn saving / the email on each entry on or off (from the next deploy)
+//   GET    /api/projects/:id/forms/entries.csv   every entry, for a spreadsheet
+//   DELETE /api/projects/:id/forms/entries/:entryId   remove one entry
 //   POST   /api/projects/:id/deploy/:deploymentId/restore   put an earlier finished deploy back as the live one (Step 4)
 //   POST   /api/projects/:id/deploy { recreateId?, stack?, accept?: [warning ids], target?: 'remastly' | 'own' }   start a
 //          deploy (202); `target` defaults to Remastly hosting when it is set up, otherwise the person's own Netlify account
@@ -31,6 +35,9 @@ import {
 import { isOwner } from '../accounts/roles.js';
 import { checkRecords, domainPlan, parseDomain } from '../deploy/domain.js';
 import { parsePaths, parseTarget, readPassThrough, redirectsFor, savePassThrough, suggestedPaths } from '../deploy/passThrough.js';
+import { formsEndpointOf } from '../forms/connect.js';
+import { entriesCsv, listEntries, removeEntry, saveFormSettings } from '../forms/entries.js';
+import { formCounts } from '../copy/formRoutes.js';
 import { withAsIsSafety } from '../copy/outsideServices.js';
 
 const UUID = /^[0-9a-f-]{36}$/i;
@@ -123,14 +130,17 @@ const latestDoneCopy = db.prepare(`SELECT id, finished_at, result_json FROM recr
 const doneCopy = db.prepare(`SELECT id, finished_at, result_json FROM recreates WHERE id = ? AND project_id = ? AND status = 'done' AND result_json IS NOT NULL AND removed_at IS NULL`);
 const latestComparison = db.prepare(`SELECT result_json FROM reaudits WHERE recreate_id = ? AND project_id = ? AND status = 'done' ORDER BY started_at DESC LIMIT 1`);
 
-/** The copy, its stack and what stands in the way, for one request. @param {any} project @param {any} q @param {any} [passThrough] */
-function subjectOf(project, q, passThrough = null) {
+/**
+ * The copy, its stack and what stands in the way, for one request.
+ * @param {any} project @param {any} q @param {any} [passThrough] @param {boolean} [formsConnected]
+ */
+function subjectOf(project, q, passThrough = null, formsConnected = false) {
   const row = /** @type {any} */ (typeof q?.recreateId === 'string' && UUID.test(q.recreateId) ? doneCopy.get(q.recreateId, project.id) : latestDoneCopy.get(project.id));
   const report = row?.result_json ? withAsIsSafety(JSON.parse(row.result_json)) : null;
   const stack = typeof q?.stack === 'string' && q.stack ? q.stack : (report ? targetStack(report, project.stack) : project.stack);
   const reauditRow = /** @type {any} */ (row ? latestComparison.get(row.id, project.id) : null);
   const reaudit = reauditRow?.result_json ? JSON.parse(reauditRow.result_json) : null;
-  return { recreateId: row?.id ?? null, copiedAt: row?.finished_at ?? null, report, stack, readiness: deployReadiness({ project, report, stack, reaudit, passThrough }) };
+  return { recreateId: row?.id ?? null, copiedAt: row?.finished_at ?? null, report, stack, readiness: deployReadiness({ project, report, stack, reaudit, passThrough, formsConnected }) };
 }
 
 export const deployRouter = Router();
@@ -139,7 +149,7 @@ deployRouter.get('/:id/deploy', async (req, res) => {
   if (notReady(res)) return;
   const project = /** @type {any} */ (selectProject.get(req.params.id));
   if (!project) return res.status(404).json({ error: 'Project not found.' });
-  const { recreateId, copiedAt, stack, readiness } = subjectOf(project, req.query, await readPassThrough(project.id));
+  const { recreateId, copiedAt, stack, readiness } = subjectOf(project, req.query, await readPassThrough(project.id), Boolean((await formsEndpointOf(project.id)).endpoint));
   const owner = isOwner(req);
   res.json({
     recreateId, copiedAt, stack, readiness,
@@ -166,7 +176,7 @@ deployRouter.post('/:id/deploy', async (req, res) => {
       : res.status(400).json({ error: 'Connect Netlify first.', needsConnection: true });
   }
   if (deployRunning(project.id)) return res.status(409).json({ error: 'This website is being deployed already. Wait for it to finish.' });
-  const { recreateId, report, stack, readiness } = subjectOf(project, req.body, await readPassThrough(project.id));
+  const { recreateId, report, stack, readiness } = subjectOf(project, req.body, await readPassThrough(project.id), Boolean((await formsEndpointOf(project.id)).endpoint));
   if (!readiness.ok) return res.status(409).json({ error: readiness.blockers[0].text, blockers: readiness.blockers });
   const open = unaccepted(readiness.warnings, req.body?.accept);
   if (open.length) return res.status(409).json({ error: 'Confirm what the copy still lacks before it goes live.', warnings: open, needsAccept: true });
@@ -311,4 +321,66 @@ deployRouter.post('/:id/deploy/:deploymentId/restore', async (req, res) => {
   } catch (err) {
     hostingFailure(res, err);
   }
+});
+
+// ---- Form entries saved by Remastly ----
+
+const SHOWN_ENTRIES = 50;
+
+/** What the Form entries card shows. @param {any} project */
+async function formsState(project) {
+  const state = await formsEndpointOf(project.id);
+  // The latest copy says how many of its forms sent to the original's own server (the ones saved here once connected).
+  const row = /** @type {any} */ (latestDoneCopy.get(project.id));
+  const report = row?.result_json ? JSON.parse(row.result_json) : null;
+  const entries = await listEntries(project.id);
+  return {
+    enabled: state.enabled,
+    email: state.email,
+    // Live sites can send here only when this Remastly has a public address (not a laptop's localhost).
+    reachable: state.reachable,
+    connected: Boolean(state.endpoint),
+    forms: formCounts(report?.asIs?.formRoutes ?? []).waiting,
+    count: entries.length,
+    entries: entries.slice(0, SHOWN_ENTRIES),
+  };
+}
+
+deployRouter.get('/:id/forms', async (req, res) => {
+  if (notReady(res)) return;
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  res.json(await formsState(project));
+});
+
+deployRouter.put('/:id/forms', async (req, res) => {
+  if (notReady(res)) return;
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  const change = {};
+  if (typeof req.body?.enabled === 'boolean') change.enabled = req.body.enabled;
+  if (typeof req.body?.email === 'boolean') change.email = req.body.email;
+  await saveFormSettings(project.id, change);
+  res.json(await formsState(project));
+});
+
+deployRouter.get('/:id/forms/entries.csv', async (req, res) => {
+  if (notReady(res)) return;
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  let host = 'site';
+  try { host = new URL(project.url).hostname.replace(/[^a-z0-9.-]/gi, ''); } catch { /* default */ }
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="${host}-form-entries.csv"`);
+  // A byte-order mark, so a spreadsheet reads the text as UTF-8 (names with accents, other scripts).
+  res.send(`\ufeff${entriesCsv(await listEntries(project.id))}`);
+});
+
+deployRouter.delete('/:id/forms/entries/:entryId', async (req, res) => {
+  if (notReady(res)) return;
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  if (!UUID.test(req.params.entryId)) return res.status(404).json({ error: 'Entry not found.' });
+  if (!(await removeEntry(project.id, req.params.entryId))) return res.status(404).json({ error: 'Entry not found.' });
+  res.json(await formsState(project));
 });

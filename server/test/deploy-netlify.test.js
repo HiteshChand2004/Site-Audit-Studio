@@ -21,6 +21,8 @@ import { failInterrupted, insertDeployment, getDeployment } from '../src/deploy/
 import { deployRouter, hostingRouter } from '../src/routes/deploy.js';
 import { checkRecords, dnsConfig, domainPlan, NETLIFY_LB, parseDomain } from '../src/deploy/domain.js';
 import { parsePaths, parseTarget, redirectsFor, suggestedPaths } from '../src/deploy/passThrough.js';
+import { entriesCsv, parseFormBody } from '../src/forms/entries.js';
+import { formsPublicRouter } from '../src/routes/formsPublic.js';
 import { seedProject } from './helpers/projects.js';
 
 const GOOD = 'nfp_good_token_0123456789abcdef';
@@ -130,6 +132,7 @@ before(async () => {
   hostingConfig.netlifyApi = `http://127.0.0.1:${netlify.address().port}/api/v1`;
   DEPLOY_LIMITS.pollMs = 20;
   const app = express();
+  app.use('/api/forms', formsPublicRouter);
   app.use(express.json());
   // A signed-in person for the Remastly hosting tests: `x-test-role` = their role (none = accounts off, the local owner).
   app.use((req, _res, next) => {
@@ -566,4 +569,127 @@ test('Go back: an earlier deploy is put back as the live one, and recorded as th
   const failed = await waitDone(project.id);
   assert.equal(failed.status, 'failed');
   assert.equal((await call('POST', `/projects/${project.id}/deploy/${failed.id}/restore`)).status, 409);
+});
+
+// ---- Form entries saved by Remastly ----
+
+test('a form post is read as the copy\'s form guard sends it (multipart); any other body is refused', async () => {
+  const fd = new FormData();
+  fd.append('name', 'Asha Rao');
+  fd.append('message', 'Line one\r\nLine two, with "quotes"');
+  fd.append('topics', 'a');
+  fd.append('topics', 'b');
+  fd.append('cv', new Blob(['%PDF-1.4 x'], { type: 'application/pdf' }), 'cv.pdf');
+  const req = new Request('http://x/', { method: 'POST', body: fd });
+  const body = Buffer.from(await req.arrayBuffer());
+  const parsed = parseFormBody(body, req.headers.get('content-type'));
+  assert.deepEqual(parsed.fields, [['name', 'Asha Rao'], ['message', 'Line one\r\nLine two, with "quotes"'], ['topics', 'a'], ['topics', 'b']]);
+  assert.deepEqual(parsed.files, [{ field: 'cv', name: 'cv.pdf', size: 10 }], 'a file is named, never kept');
+  assert.equal(parseFormBody(Buffer.from('a=1'), 'application/x-www-form-urlencoded'), null);
+  assert.equal(parseFormBody(Buffer.from('{"a":"1"}'), 'application/json'), null);
+  assert.equal(parseFormBody(Buffer.from('no boundary'), 'multipart/form-data'), null);
+});
+
+test('the CSV has one column per field, and a cell a spreadsheet would run as a formula is shown as text', () => {
+  const csv = entriesCsv([
+    { at: '2026-11-15T10:00:00Z', page: 'acme.com/contact', fields: [['email', 'b@x.io'], ['note', '=HYPERLINK("x")']] },
+    { at: '2026-11-14T10:00:00Z', page: 'acme.com/', fields: [['name', 'A, B'], ['email', 'a@x.io']], files: [{ name: 'cv.pdf' }] },
+  ]);
+  assert.equal(csv, 'Received,Page,name,email,note,Files\r\n'
+    + '2026-11-15T10:00:00Z,acme.com/contact,,b@x.io,"\'=HYPERLINK(""x"")",\r\n'
+    + '2026-11-14T10:00:00Z,acme.com/,"A, B",a@x.io,,cv.pdf\r\n');
+});
+
+test('Form entries: a live site\'s forms are saved by Remastly, its owner lists and downloads them, a wrong key saves nothing', async () => {
+  process.env.SAS_FORMS_ORIGIN = 'https://remastly.example.test';
+  try {
+    const project = seedProject(db, { name: 'iota', url: 'https://www.iota-shop.com/' });
+    await finishedCopy({
+      projectId: project.id,
+      files: { 'sas-forms.json': '{\n  "endpoint": "",\n  "originalHosts": ["iota-shop.com"]\n}\n' },
+      report: { asIs: { stack: 'html', address: { used: 'https://www.iota-shop.com' }, formRoutes: [{ page: '/', action: '', goesTo: 'not-connected' }] } },
+      reaudit: { checklist: { items: [] } },
+    });
+    let r = await call('GET', `/projects/${project.id}/deploy`);
+    assert.ok(r.body.readiness.warnings.some((w) => w.id === 'forms'), 'before: the form sends nothing');
+    r = await call('GET', `/projects/${project.id}/forms`);
+    assert.deepEqual([r.body.enabled, r.body.connected, r.body.forms, r.body.count], [false, false, 1, 0]);
+
+    r = await call('PUT', `/projects/${project.id}/forms`, { enabled: true });
+    assert.deepEqual([r.body.enabled, r.body.connected, r.body.reachable, r.body.email], [true, true, true, true]);
+    r = await call('GET', `/projects/${project.id}/deploy`);
+    assert.equal(r.body.readiness.warnings.some((w) => w.id === 'forms'), false, 'after: saved by Remastly, nothing to confirm');
+
+    // The deploy writes this website's address into the copy's sas-forms.json.
+    assert.equal((await call('POST', `/projects/${project.id}/deploy`, {})).status, 202);
+    assert.equal((await waitDone(project.id)).status, 'ready');
+    const config = JSON.parse(zipText(fake.lastZip, 'sas-forms.json'));
+    assert.match(config.endpoint, new RegExp(`^https://remastly\\.example\\.test/api/forms/${project.id}\\.[A-Za-z0-9_-]{16,}$`));
+    assert.deepEqual(config.originalHosts, ['iota-shop.com'], 'the rest of the settings is kept');
+    const key = config.endpoint.split('/api/forms/')[1];
+
+    // A visitor sends the form, as the copy's guard does: FormData from the site's own domain.
+    const fd = new FormData();
+    fd.append('email', 'visitor@example.com');
+    fd.append('message', 'Hello');
+    let res = await fetch(`${base}/forms/${key}`, { method: 'POST', body: fd, headers: { origin: 'https://www.iota-shop.com', referer: 'https://www.iota-shop.com/contact?utm=x' } });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('access-control-allow-origin'), '*', 'the guard can read that it worked');
+    assert.deepEqual(await res.json(), { ok: true });
+
+    // Wrong secret, an empty form.
+    res = await fetch(`${base}/forms/${project.id}.${'x'.repeat(24)}`, { method: 'POST', body: fd });
+    assert.equal(res.status, 404);
+    res = await fetch(`${base}/forms/${key}`, { method: 'POST', body: new FormData() });
+    assert.equal(res.status, 400);
+
+    r = await call('GET', `/projects/${project.id}/forms`);
+    assert.equal(r.body.count, 1);
+    const entry = r.body.entries[0];
+    assert.equal(entry.page, 'www.iota-shop.com/contact', 'the page, without its query');
+    assert.deepEqual(entry.fields, [['email', 'visitor@example.com'], ['message', 'Hello']]);
+
+    const csv = await fetch(`${base}/projects/${project.id}/forms/entries.csv`);
+    assert.match(csv.headers.get('content-disposition'), /iota-shop\.com-form-entries\.csv/);
+    assert.match(await csv.text(), /visitor@example\.com,Hello/);
+
+    r = await call('DELETE', `/projects/${project.id}/forms/entries/${entry.id}`);
+    assert.equal(r.body.count, 0);
+
+    // Saving turned off: the address stops taking entries.
+    await call('PUT', `/projects/${project.id}/forms`, { enabled: false });
+    res = await fetch(`${base}/forms/${key}`, { method: 'POST', body: fd });
+    assert.equal(res.status, 404);
+    // On again: the same address as before, so a site already live keeps working.
+    await call('PUT', `/projects/${project.id}/forms`, { enabled: true });
+    res = await fetch(`${base}/forms/${key}`, { method: 'POST', body: fd });
+    assert.equal(res.status, 200);
+  } finally {
+    delete process.env.SAS_FORMS_ORIGIN;
+  }
+});
+
+test('Form entries: one visitor cannot flood a website', async () => {
+  process.env.SAS_FORMS_ORIGIN = 'https://remastly.example.test';
+  try {
+    const project = seedProject(db, { name: 'kappa' });
+    await call('PUT', `/projects/${project.id}/forms`, { enabled: true, email: false });
+    const { readFormSettings } = await import('../src/forms/entries.js');
+    const key = `${project.id}.${(await readFormSettings(project.id)).secret}`;
+    const statuses = [];
+    for (let i = 0; i < 12; i++) {
+      const fd = new FormData();
+      fd.append('n', String(i));
+      statuses.push((await fetch(`${base}/forms/${key}`, { method: 'POST', body: fd })).status);
+    }
+    assert.deepEqual(statuses, [...Array(10).fill(200), 429, 429]);
+  } finally {
+    delete process.env.SAS_FORMS_ORIGIN;
+  }
+});
+
+test('Form entries: a Remastly on this computer only (localhost) does not connect live sites\' forms to itself', async () => {
+  const project = seedProject(db, { name: 'lambda' });
+  const r = await call('PUT', `/projects/${project.id}/forms`, { enabled: true });
+  assert.deepEqual([r.body.enabled, r.body.reachable, r.body.connected], [true, false, false]);
 });

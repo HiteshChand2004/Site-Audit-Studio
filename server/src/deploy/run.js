@@ -7,6 +7,7 @@ import { recreateDir } from '../recreate/workspace.js';
 import { planDeploy, zipToTemp } from './bundle.js';
 import { HostingError, netlifyClient, PENDING_STATES } from './netlify.js';
 import { readPassThrough, redirectsFor } from './passThrough.js';
+import { formsEndpointOf } from '../forms/connect.js';
 import { failInterrupted, siteOfProject, updateDeployment } from './store.js';
 
 /** Deploys this process is working on: deployment id → project id. */
@@ -36,7 +37,11 @@ export async function runDeploy({ deployment, projectId, recreateId, report, sta
   try {
     updateDeployment(id, { status: 'running', step: 'package' });
     const passThrough = await readPassThrough(projectId);
-    const plan = await planDeploy({ dir: recreateDir(projectId, recreateId), report, stack, redirects: passThrough ? redirectsFor(passThrough) : null });
+    const plan = await planDeploy({
+      dir: recreateDir(projectId, recreateId), report, stack,
+      redirects: passThrough ? redirectsFor(passThrough) : null,
+      formsEndpoint: (await formsEndpointOf(projectId)).endpoint,
+    });
     zip = await zipToTemp(plan);
     updateDeployment(id, { files: plan.files, bytes: plan.bytes, step: 'site' });
 

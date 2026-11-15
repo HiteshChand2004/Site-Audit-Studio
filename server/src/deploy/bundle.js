@@ -48,9 +48,11 @@ async function listFiles(root) {
  * The files of a finished copy's output, as they will be served: [{ name, file, size, store }] with `name` the path on the site.
  * Throws DeployError (message safe to show) when this output cannot go on a static host.
  * `redirects`: rules that go first in the site's _redirects (Go live Step 3: the paths passed to the old app), before the copy's own.
- * @param {{ dir: string, report: any, stack: string, redirects?: string | null }} o
+ * `formsEndpoint`: where the copy's forms send (Form entries: this website's address at Remastly), written into its
+ * sas-forms.json; null leaves the copy's own setting as it is.
+ * @param {{ dir: string, report: any, stack: string, redirects?: string | null, formsEndpoint?: string | null }} o
  */
-export async function planDeploy({ dir, report, stack, redirects = null }) {
+export async function planDeploy({ dir, report, stack, redirects = null, formsEndpoint = null }) {
   const out = reportOutputs(report)[stack];
   if (out?.status !== 'ready') throw new DeployError(`This copy has no finished ${stack} version to deploy.`);
   if (!STATIC_STACKS.has(stack)) {
@@ -77,6 +79,14 @@ export async function planDeploy({ dir, report, stack, redirects = null }) {
     const entry = { name: '_redirects', content, size: content.length, store: false };
     if (at >= 0) entries[at] = /** @type {any} */ (entry);
     else entries.push(/** @type {any} */ (entry));
+  }
+  if (formsEndpoint) {
+    const at = entries.findIndex((e) => e.name === 'sas-forms.json');
+    if (at >= 0) {
+      const own = await readFile(entries[at].file, 'utf8').then(JSON.parse, () => ({}));
+      const content = Buffer.from(`${JSON.stringify({ ...own, endpoint: formsEndpoint }, null, 2)}\n`);
+      entries[at] = /** @type {any} */ ({ name: 'sas-forms.json', content, size: content.length, store: false });
+    }
   }
   const bytes = entries.reduce((n, e) => n + e.size, 0);
   if (entries.length > ZIP_MAX_FILES) throw new DeployError(`This copy has ${entries.length} files; a deploy is limited to ${ZIP_MAX_FILES}.`, 413);
