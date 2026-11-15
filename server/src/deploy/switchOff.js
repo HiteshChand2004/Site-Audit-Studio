@@ -13,14 +13,15 @@
  *   domainError?: string | null,
  *   report: any,
  *   passThrough: { target: string, paths: string[] } | null,
- *   appCalls: { path: string, seen: string }[],
+ *   appCalls: string[],
+ *   snapshot?: { takenAt: string, count: number } | null,
  *   formsWaiting: number,
  *   formsSaved: boolean,
  *   imported: number,
  * }} o
  * @returns {{ safe: boolean, items: { id: string, status: 'ok' | 'needs' | 'advice', text: string }[] }}
  */
-export function switchOffCheck({ live, domain, domainError = null, report, passThrough, appCalls, formsWaiting, formsSaved, imported }) {
+export function switchOffCheck({ live, domain, domainError = null, report, passThrough, appCalls, snapshot = null, formsWaiting, formsSaved, imported }) {
   /** @type {{ id: string, status: 'ok' | 'needs' | 'advice', text: string }[]} */
   const items = [];
   const add = (id, status, text) => items.push({ id, status, text });
@@ -47,8 +48,10 @@ export function switchOffCheck({ live, domain, domainError = null, report, passT
   if (passThrough?.paths.length) {
     add('app', 'needs', `${passThrough.paths.join(', ')} ${passThrough.paths.length === 1 ? 'is' : 'are'} still passed to the old app at ${passThrough.target}. That app (and its database) must keep running, or move somewhere else first.`);
   } else if (appCalls.length) {
-    add('app', 'needs', `The copy asks for ${appCalls.map((c) => c.seen).slice(0, 3).join(', ')}${appCalls.length > 3 ? ' and more' : ''}, which only the old app answers (a login, data). Keep the old app running for ${appCalls.length === 1 ? 'it' : 'them'}, or have its code moved first.`);
-  } else add('app', 'ok', 'Nothing of the copy needs the old app (no login or data calls were seen).');
+    add('app', 'needs', `The copy asks for ${appCalls.slice(0, 3).join(', ')}${appCalls.length > 3 ? ' and more' : ''}, which only the old app answers. Save their content under "Content from the old server", or keep the old app running for ${appCalls.length === 1 ? 'it' : 'them'}.`);
+  } else add('app', 'ok', 'Nothing of the copy needs the old app (no login or data calls are left unanswered).');
+  // Content from a snapshot is a picture of one moment: worth saying when it was taken.
+  if (snapshot?.count) add('snapshot', 'ok', `${snapshot.count === 1 ? '1 address is' : `${snapshot.count} addresses are`} answered from the content snapshot of ${snapshot.takenAt.slice(0, 10)}; content added on the old site after that is not in it.`);
 
   // Forms that sent to the old server: saved by Remastly now, or sent nowhere.
   if (!formsWaiting) add('forms', 'ok', 'No form of the copy sent to the old server.');

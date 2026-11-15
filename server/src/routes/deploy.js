@@ -18,6 +18,8 @@
 //   GET    /api/projects/:id/forms/entries.csv   every entry, for a spreadsheet
 //   DELETE /api/projects/:id/forms/entries/:entryId   remove one entry
 //   GET    /api/projects/:id/switch-off       "Can I switch off the old server?": what of this website still needs it
+//   GET    /api/projects/:id/snapshot         the copy's data calls (/api/…) and the content snapshot of their answers
+//   POST   /api/projects/:id/snapshot         take it (again) from the old site; DELETE removes it (from the next deploy)
 //   POST   /api/projects/:id/forms/import     (body: a CSV file) old entries from Webflow, Framer or the old site's database
 //   DELETE /api/projects/:id/forms/imports/:importId   take one import back
 //   POST   /api/projects/:id/deploy/:deploymentId/restore   put an earlier finished deploy back as the live one (Step 4)
@@ -37,11 +39,12 @@ import {
 } from '../deploy/store.js';
 import { isOwner } from '../accounts/roles.js';
 import { checkRecords, domainPlan, parseDomain } from '../deploy/domain.js';
-import { parsePaths, parseTarget, readPassThrough, redirectsFor, savePassThrough, suggestedPaths } from '../deploy/passThrough.js';
+import { appCallsOf, parsePaths, parseTarget, readPassThrough, redirectsFor, savePassThrough, suggestedPaths, unansweredAppCalls } from '../deploy/passThrough.js';
 import { formsEndpointOf } from '../forms/connect.js';
 import { entriesCsv, importEntries, listEntries, removeEntry, removeImport, saveFormSettings } from '../forms/entries.js';
 import { entriesFromRows, IMPORT_LIMITS, parseCsv } from '../forms/importCsv.js';
 import { switchOffCheck } from '../deploy/switchOff.js';
+import { readSnapshot, removeSnapshot, snapshotForDeploy, takeSnapshot } from '../deploy/snapshot.js';
 import { formCounts } from '../copy/formRoutes.js';
 import { withAsIsSafety } from '../copy/outsideServices.js';
 
@@ -136,16 +139,29 @@ const doneCopy = db.prepare(`SELECT id, finished_at, result_json FROM recreates 
 const latestComparison = db.prepare(`SELECT result_json FROM reaudits WHERE recreate_id = ? AND project_id = ? AND status = 'done' ORDER BY started_at DESC LIMIT 1`);
 
 /**
- * The copy, its stack and what stands in the way, for one request.
- * @param {any} project @param {any} q @param {any} [passThrough] @param {boolean} [formsConnected]
+ * What Go live set up for this website besides the copy, which changes what still needs a yes: the paths passed to the old app,
+ * forms saved by Remastly, the content snapshot.
+ * @param {string} projectId
  */
-function subjectOf(project, q, passThrough = null, formsConnected = false) {
+async function goLiveSetup(projectId) {
+  return {
+    passThrough: await readPassThrough(projectId),
+    formsConnected: Boolean((await formsEndpointOf(projectId)).endpoint),
+    snapshotAddresses: ((await readSnapshot(projectId))?.items ?? []).map((i) => i.address),
+  };
+}
+
+/**
+ * The copy, its stack and what stands in the way, for one request.
+ * @param {any} project @param {any} q @param {Awaited<ReturnType<typeof goLiveSetup>>} [setup]
+ */
+function subjectOf(project, q, setup = { passThrough: null, formsConnected: false, snapshotAddresses: [] }) {
   const row = /** @type {any} */ (typeof q?.recreateId === 'string' && UUID.test(q.recreateId) ? doneCopy.get(q.recreateId, project.id) : latestDoneCopy.get(project.id));
   const report = row?.result_json ? withAsIsSafety(JSON.parse(row.result_json)) : null;
   const stack = typeof q?.stack === 'string' && q.stack ? q.stack : (report ? targetStack(report, project.stack) : project.stack);
   const reauditRow = /** @type {any} */ (row ? latestComparison.get(row.id, project.id) : null);
   const reaudit = reauditRow?.result_json ? JSON.parse(reauditRow.result_json) : null;
-  return { recreateId: row?.id ?? null, copiedAt: row?.finished_at ?? null, report, stack, readiness: deployReadiness({ project, report, stack, reaudit, passThrough, formsConnected }) };
+  return { recreateId: row?.id ?? null, copiedAt: row?.finished_at ?? null, report, stack, readiness: deployReadiness({ project, report, stack, reaudit, ...setup }) };
 }
 
 export const deployRouter = Router();
@@ -154,7 +170,7 @@ deployRouter.get('/:id/deploy', async (req, res) => {
   if (notReady(res)) return;
   const project = /** @type {any} */ (selectProject.get(req.params.id));
   if (!project) return res.status(404).json({ error: 'Project not found.' });
-  const { recreateId, copiedAt, stack, readiness } = subjectOf(project, req.query, await readPassThrough(project.id), Boolean((await formsEndpointOf(project.id)).endpoint));
+  const { recreateId, copiedAt, stack, readiness } = subjectOf(project, req.query, await goLiveSetup(project.id));
   const owner = isOwner(req);
   res.json({
     recreateId, copiedAt, stack, readiness,
@@ -181,7 +197,7 @@ deployRouter.post('/:id/deploy', async (req, res) => {
       : res.status(400).json({ error: 'Connect Netlify first.', needsConnection: true });
   }
   if (deployRunning(project.id)) return res.status(409).json({ error: 'This website is being deployed already. Wait for it to finish.' });
-  const { recreateId, report, stack, readiness } = subjectOf(project, req.body, await readPassThrough(project.id), Boolean((await formsEndpointOf(project.id)).endpoint));
+  const { recreateId, report, stack, readiness } = subjectOf(project, req.body, await goLiveSetup(project.id));
   if (!readiness.ok) return res.status(409).json({ error: readiness.blockers[0].text, blockers: readiness.blockers });
   const open = unaccepted(readiness.warnings, req.body?.accept);
   if (open.length) return res.status(409).json({ error: 'Confirm what the copy still lacks before it goes live.', warnings: open, needsAccept: true });
@@ -437,12 +453,53 @@ deployRouter.get('/:id/switch-off', async (req, res) => {
   const row = /** @type {any} */ (latestDoneCopy.get(project.id));
   const report = row?.result_json ? withAsIsSafety(JSON.parse(row.result_json)) : null;
   const entries = await listEntries(project.id);
+  const passThrough = await readPassThrough(project.id);
+  const snapshot = await readSnapshot(project.id);
   res.json(switchOffCheck({
-    live, domain, domainError, report,
-    passThrough: await readPassThrough(project.id),
-    appCalls: report ? suggestedPaths(report) : [],
+    live, domain, domainError, report, passThrough,
+    appCalls: unansweredAppCalls(report, { passThrough, snapshotAddresses: (snapshot?.items ?? []).map((i) => i.address) }),
+    snapshot: snapshot?.items.length ? { takenAt: snapshot.takenAt, count: snapshot.items.length } : null,
     formsWaiting: formCounts(report?.asIs?.formRoutes ?? []).waiting,
     formsSaved: Boolean((await formsEndpointOf(project.id)).endpoint),
     imported: entries.filter((e) => e.importId).length,
   }));
+});
+
+// ---- Content snapshot ----
+
+/** What the Content card shows. @param {any} project */
+async function snapshotState(project) {
+  const row = /** @type {any} */ (latestDoneCopy.get(project.id));
+  const report = row?.result_json ? JSON.parse(row.result_json) : null;
+  const snapshot = await readSnapshot(project.id);
+  return { calls: appCallsOf(report), snapshot, shadowed: (await snapshotForDeploy(project.id))?.shadowed ?? [] };
+}
+
+deployRouter.get('/:id/snapshot', async (req, res) => {
+  if (notReady(res)) return;
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  res.json(await snapshotState(project));
+});
+
+deployRouter.post('/:id/snapshot', async (req, res) => {
+  if (notReady(res)) return;
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  const { calls } = await snapshotState(project);
+  if (!calls.length) return res.status(409).json({ error: 'The copy asks the old site for no data, so there is nothing to save.' });
+  // Asked of the old app's own address when one is set (Logins and data): once the domain points to the copy, the site's own
+  // address answers with the copy, not with the old app.
+  const passThrough = await readPassThrough(project.id);
+  const origin = passThrough?.target ?? new URL(project.url).origin;
+  await takeSnapshot(project.id, origin, calls);
+  res.json(await snapshotState(project));
+});
+
+deployRouter.delete('/:id/snapshot', async (req, res) => {
+  if (notReady(res)) return;
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  await removeSnapshot(project.id);
+  res.json(await snapshotState(project));
 });

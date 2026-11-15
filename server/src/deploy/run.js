@@ -8,6 +8,7 @@ import { planDeploy, zipToTemp } from './bundle.js';
 import { HostingError, netlifyClient, PENDING_STATES } from './netlify.js';
 import { readPassThrough, redirectsFor } from './passThrough.js';
 import { formsEndpointOf } from '../forms/connect.js';
+import { snapshotForDeploy } from './snapshot.js';
 import { failInterrupted, siteOfProject, updateDeployment } from './store.js';
 
 /** Deploys this process is working on: deployment id → project id. */
@@ -37,9 +38,12 @@ export async function runDeploy({ deployment, projectId, recreateId, report, sta
   try {
     updateDeployment(id, { status: 'running', step: 'package' });
     const passThrough = await readPassThrough(projectId);
+    const snapshot = await snapshotForDeploy(projectId);
     const plan = await planDeploy({
       dir: recreateDir(projectId, recreateId), report, stack,
-      redirects: passThrough ? redirectsFor(passThrough) : null,
+      // The snapshot's rules first: an address it answers is served from it even under a path passed to the old app (/api/*).
+      redirects: [snapshot?.redirects, passThrough && redirectsFor(passThrough)].filter(Boolean).join('\n') || null,
+      extraFiles: snapshot?.files ?? [],
       formsEndpoint: (await formsEndpointOf(projectId)).endpoint,
     });
     zip = await zipToTemp(plan);

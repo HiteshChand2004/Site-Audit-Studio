@@ -281,6 +281,8 @@
 
 .chip {
   display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   margin: 2px 4px 2px 0;
   padding: 1px 8px;
   border-radius: 999px;
@@ -367,4 +369,20 @@
 
 .offItems li[data-status='advice'] svg {
   color: var(--warn, #b54708);
+}
+
+.note {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
 }

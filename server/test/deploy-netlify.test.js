@@ -24,6 +24,9 @@ import { parsePaths, parseTarget, redirectsFor, suggestedPaths } from '../src/de
 import { entriesCsv, parseFormBody } from '../src/forms/entries.js';
 import { entriesFromRows, parseCsv } from '../src/forms/importCsv.js';
 import { switchOffCheck } from '../src/deploy/switchOff.js';
+import { readSnapshot, snapshotForDeploy, takeSnapshot } from '../src/deploy/snapshot.js';
+import { createNetPolicy, withNetPolicy } from '../src/security/netGuard.js';
+import { unansweredAppCalls } from '../src/deploy/passThrough.js';
 import { formsPublicRouter } from '../src/routes/formsPublic.js';
 import { seedProject } from './helpers/projects.js';
 
@@ -761,7 +764,7 @@ test('switch off: every reason the old server is still needed is named; a site t
   assert.deepEqual(r.items.map((i) => i.id), ['live', 'files', 'app', 'forms'], 'no domain item before the copy is online');
 
   r = switchOffCheck({ ...base, domain: { domain: 'acme.com', connected: false }, report: { safety: { safe: false, original: ['https://acme.com/a.js'] } },
-    appCalls: [{ path: '/api/*', seen: '/api/me' }], formsWaiting: 2, formsSaved: false });
+    appCalls: ['/api/me'], formsWaiting: 2, formsSaved: false });
   assert.deepEqual(r.items.filter((i) => i.status === 'needs').map((i) => i.id), ['domain', 'files', 'app', 'forms']);
   assert.match(r.items.find((i) => i.id === 'app').text, /\/api\/me/);
   assert.equal(r.items.find((i) => i.id === 'entries').status, 'advice', 'old entries: only the owner knows');
@@ -804,5 +807,70 @@ test('Go live: "can I switch off the old server?" follows the live site, its dom
   } finally {
     dnsConfig.resolver = saved;
     delete process.env.SAS_FORMS_ORIGIN;
+  }
+});
+
+// ---- Content snapshot ----
+
+test('content snapshot: the old site\'s data answers are saved, a page or an error is not, and the copy serves them by path', async () => {
+  // The old site: a blog list, a news list with a query, a login page in place of data, and a missing address.
+  const old = createServer((req, res) => {
+    if (req.url === '/api/blogs') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end('[{"title":"First post"}]'); }
+    if (req.url.startsWith('/api/news')) { res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' }); return res.end(`{"q":"${req.url}"}`); }
+    if (req.url === '/api/me') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end('<form>Sign in</form>'); }
+    res.writeHead(404).end();
+  });
+  await new Promise((r) => old.listen(0, '127.0.0.1', r));
+  try {
+    const project = seedProject(db, { name: 'xi' });
+    const origin = `http://127.0.0.1:${old.address().port}`;
+    const index = await withNetPolicy(createNetPolicy({ allowLoopback: true }), () => takeSnapshot(project.id, origin, ['/api/blogs', '/api/news?page=1', '/api/news?page=2', '/api/me', '/api/gone']));
+    assert.deepEqual(index.items.map((i) => [i.address, i.contentType]), [['/api/blogs', 'application/json'], ['/api/news?page=1', 'application/json'], ['/api/news?page=2', 'application/json']]);
+    assert.deepEqual(index.failed, [{ address: '/api/me', why: 'answered with a web page, not data' }, { address: '/api/gone', why: 'answered 404' }]);
+    assert.deepEqual((await readSnapshot(project.id)).items.length, 3);
+
+    const deploy = await snapshotForDeploy(project.id);
+    assert.equal(deploy.redirects, '/api/blogs  /_remastly/snapshot/1.json  200!\n/api/news  /_remastly/snapshot/2.json  200!');
+    assert.deepEqual(deploy.shadowed, ['/api/news?page=2'], 'a host matches by path: the second query of one path is not served');
+    assert.deepEqual(deploy.files.map((f) => f.name), ['_remastly/snapshot/1.json', '_remastly/snapshot/2.json']);
+
+    // Snapshotted addresses count as answered; a path passed to the old app too.
+    const report = { asIs: { checks: { pages: [{ offline: { failed: ['404 /api/blogs', '404 /api/me', '404 /login'] } }] } } };
+    assert.deepEqual(unansweredAppCalls(report, { snapshotAddresses: ['/api/blogs'] }), ['/api/me', '/login']);
+    assert.deepEqual(unansweredAppCalls(report, { snapshotAddresses: ['/api/blogs'], passThrough: { paths: ['/login'] } }), ['/api/me']);
+  } finally {
+    old.close();
+  }
+});
+
+test('Go live: the snapshot ships with the deploy before the paths passed to the old app; the route never asks a private address', async () => {
+  const old = createServer((_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":1}'); });
+  await new Promise((r) => old.listen(0, '127.0.0.1', r));
+  try {
+    const project = seedProject(db, { name: 'omicron', url: `http://127.0.0.1:${old.address().port}/`, targetDomain: 'https://omicron.test' });
+    await finishedCopy({
+      projectId: project.id,
+      report: { asIs: { stack: 'html', address: { used: 'https://omicron.test' }, checks: { pages: [{ path: '/', offline: { external: [], failed: ['404 /api/posts'] } }] } } },
+      reaudit: { checklist: { items: [] } },
+    });
+    let r = await call('GET', `/projects/${project.id}/snapshot`);
+    assert.deepEqual([r.body.calls, r.body.snapshot], [['/api/posts'], null]);
+    // From the route the guard is the real one: the old site here is on this computer, so it is refused, not asked.
+    r = await call('POST', `/projects/${project.id}/snapshot`);
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body.snapshot.items, []);
+    assert.match(r.body.snapshot.failed[0].why, /could not be reached/);
+
+    await withNetPolicy(createNetPolicy({ allowLoopback: true }), () => takeSnapshot(project.id, `http://127.0.0.1:${old.address().port}`, ['/api/posts']));
+    r = await call('GET', `/projects/${project.id}/deploy`);
+    assert.equal(r.body.readiness.warnings.some((w) => w.id === 'app-calls'), false, 'answered by the snapshot');
+    await call('PUT', `/projects/${project.id}/pass-through`, { target: 'https://app.omicron-old.com', paths: ['/api/*'] });
+    assert.equal((await call('POST', `/projects/${project.id}/deploy`, {})).status, 202);
+    assert.equal((await waitDone(project.id)).status, 'ready');
+    const rules = zipText(fake.lastZip, '_redirects');
+    assert.ok(rules.indexOf('/api/posts  /_remastly/snapshot/1.json  200!') < rules.indexOf('/api/*  https://app.omicron-old.com'), 'the snapshot first');
+    assert.equal(zipText(fake.lastZip, '_remastly/snapshot/1.json'), '{"ok":1}');
+  } finally {
+    old.close();
   }
 });

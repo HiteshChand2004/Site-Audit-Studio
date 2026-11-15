@@ -93,22 +93,52 @@ export function redirectsFor(pt) {
 }
 
 /**
- * Paths the copy asked its own address for and did not have, that look like an app's (/api/…, /login): offered to the owner.
+ * Every address (path and query) the copy asked its own server for and did not have, whose path looks like an app's
+ * (/api/…, /login): what only the old app answered. In the order first seen.
  * @param {any} report  a finished copy's report
- * @returns {{ path: string, seen: string }[]}  `seen` = one address the copy asked for
+ * @returns {string[]}
+ */
+export function appCallsOf(report) {
+  /** @type {Set<string>} */
+  const found = new Set();
+  for (const page of report?.asIs?.checks?.pages ?? []) {
+    for (const line of page?.offline?.failed ?? []) {
+      const address = String(line).match(/^\d{3}\s+(\/[^\s#]*)/)?.[1];
+      const first = address?.split(/[/?]/)[1]?.toLowerCase();
+      if (address && first && APP_SEGMENTS.has(first)) found.add(address);
+    }
+  }
+  return [...found];
+}
+
+/**
+ * The app paths to offer the owner (one per first part: /api/*), each with one address the copy asked for (without its query).
+ * @param {any} report  a finished copy's report
+ * @returns {{ path: string, seen: string }[]}
  */
 export function suggestedPaths(report) {
   /** @type {Map<string, string>} */
   const found = new Map();
-  for (const page of report?.asIs?.checks?.pages ?? []) {
-    for (const line of page?.offline?.failed ?? []) {
-      const m = String(line).match(/^\d{3}\s+(\/[^\s?#]*)/);
-      if (!m) continue;
-      const first = m[1].split('/')[1]?.toLowerCase();
-      if (!first || !APP_SEGMENTS.has(first)) continue;
-      const p = `/${first}/*`;
-      if (!found.has(p)) found.set(p, m[1]);
-    }
+  for (const address of appCallsOf(report)) {
+    const bare = address.split('?')[0];
+    const p = `/${bare.split('/')[1].toLowerCase()}/*`;
+    if (!found.has(p)) found.set(p, bare);
   }
   return [...found].map(([p, seen]) => ({ path: p, seen }));
+}
+
+/** Whether a pass-through path ("/login", "/api/*") takes this address. @param {string} p @param {string} address */
+const takes = (p, address) => {
+  const bare = address.split('?')[0];
+  return p.endsWith('/*') ? bare.startsWith(p.slice(0, -1)) : bare === p;
+};
+
+/**
+ * The app calls nothing answers on the live site: neither the content snapshot (by exact address) nor a path passed to the
+ * old app. @param {any} report @param {{ passThrough?: { paths: string[] } | null, snapshotAddresses?: string[] }} o
+ * @returns {string[]}
+ */
+export function unansweredAppCalls(report, { passThrough = null, snapshotAddresses = [] } = {}) {
+  const snapped = new Set(snapshotAddresses);
+  return appCallsOf(report).filter((a) => !snapped.has(a) && !passThrough?.paths.some((p) => takes(p, a)));
 }

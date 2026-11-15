@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, CircleCheck, CircleHelp, CircleX, CloudUpload, Power, Copy, Download, ExternalLink, Globe, History, Inbox, KeyRound, Link2, Loader2, RefreshCw, Rocket, Server, Trash2, Unplug, Upload } from 'lucide-react';
+import { Camera, Check, CircleCheck, CircleHelp, CircleX, CloudUpload, Power, Copy, Download, ExternalLink, Globe, History, Inbox, KeyRound, Link2, Loader2, RefreshCw, Rocket, Server, Trash2, Unplug, Upload } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import Modal from '../../components/common/Modal.jsx';
 import ConfirmDialog from '../../components/common/ConfirmDialog.jsx';
@@ -324,6 +324,8 @@ export default function GoLiveStep({ project, onGoCreate }) {
       {live && <DomainCard project={project} liveUrl={live.url} />}
 
       <FormsCard project={project} onChange={load} />
+
+      <SnapshotCard project={project} onChange={load} />
 
       <PassThroughCard project={project} onChange={load} />
 
@@ -883,6 +885,76 @@ function SwitchOffCard({ project }) {
         </div>
       )}
       {error && <Alert tone="bad" title="Could not check">{error}</Alert>}
+    </Card>
+  );
+}
+
+// Long lists (a site may ask for dozens of addresses) show their first few.
+const SHOWN = 6;
+
+/** Content snapshot: the old site's answers to the copy's data calls, saved into the copy (from the next deploy). */
+function SnapshotCard({ project, onChange }) {
+  const [state, setState] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    setState(null);
+    api.getSnapshot(project.id).then(setState, (err) => setError(err.message));
+  }, [project.id]);
+
+  async function run(call) {
+    setBusy(true);
+    setError(null);
+    try {
+      setState(await call(project.id));
+      await onChange();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Nothing to show for a copy that asks the old site for no data and has no snapshot.
+  if (!state || (!state.calls.length && !state.snapshot)) return null;
+  const snap = state.snapshot;
+  return (
+    <Card icon={Camera} title={T.snapTitle} sub={T.snapSub}>
+      <div className={styles.domainBody}>
+        <div className={styles.note}>
+          {T.snapCalls}
+          <div className={styles.chips}>
+            {state.calls.slice(0, SHOWN).map((c) => <code key={c} className={styles.chip}>{c}</code>)}
+            {state.calls.length > SHOWN && <span>{T.andMore(state.calls.length - SHOWN)}</span>}
+          </div>
+        </div>
+        {snap && (
+          <>
+            {snap.items.length > 0 && <Alert tone="ok" title={T.snapTaken(snap.items.length, timeAgo(snap.takenAt))}>{T.snapMoment}</Alert>}
+            {snap.failed.length > 0 && (
+              <div className={styles.note}>
+                {T.snapFailed}
+                <ul className={styles.plainList}>
+                  {snap.failed.slice(0, SHOWN).map((f) => <li key={f.address}><code className={styles.chip}>{f.address}</code> {f.why}</li>)}
+                  {snap.failed.length > SHOWN && <li>{T.andMore(snap.failed.length - SHOWN)}</li>}
+                </ul>
+              </div>
+            )}
+            {state.shadowed.length > 0 && <p className={ws.hint} style={{ margin: 0 }}>{T.snapShadowed(state.shadowed)}</p>}
+          </>
+        )}
+        <p className={ws.hint} style={{ margin: 0 }}>{T.snapLogin}</p>
+        <div className={styles.accountButtons}>
+          {state.calls.length > 0 && (
+            <Button size="sm" variant={snap ? undefined : 'primary'} icon={busy ? Spin : Camera} disabled={busy} onClick={() => run(api.takeSnapshot)}>
+              {busy ? T.snapTaking : snap ? T.snapRetake : T.snapTake}
+            </Button>
+          )}
+          {snap && <Button size="sm" icon={Trash2} disabled={busy} onClick={() => run(api.removeSnapshot)}>{T.snapRemove}</Button>}
+        </div>
+        {error && <Alert tone="bad" title="Not saved">{error}</Alert>}
+      </div>
     </Card>
   );
 }
