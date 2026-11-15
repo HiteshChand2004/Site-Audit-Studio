@@ -10,7 +10,7 @@ import path from 'node:path';
 import { typeExtOf } from '../../verify/server.js';
 import { nextAssetFile } from './nextAssets.js';
 
-const TYPES = {
+export const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.txt': 'text/plain; charset=utf-8', '.xml': 'application/xml; charset=utf-8',
   '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.avif': 'image/avif',
@@ -20,7 +20,7 @@ const TYPES = {
 /** Files that are compressed on the way out (the rest is already compressed or binary). */
 const COMPRESSIBLE = /^\.(html|css|m?js|json|svg|txt|xml|webmanifest)$/i;
 /** Whether a file is text that is compressed on the way out (decided by its type, see typeExtOf). */
-const compressible = (file) => COMPRESSIBLE.test(typeExtOf(file));
+export const compressible = (file) => COMPRESSIBLE.test(typeExtOf(file));
 
 /**
  * Starts the server.
