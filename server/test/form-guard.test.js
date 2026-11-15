@@ -16,8 +16,9 @@ import { formCounts, formDestination, formRoute, formRoutesOfCopy, formsReadmeSe
 import { deployMd, describePackage } from '../src/copy/deploy.js';
 
 /** A page at `href` with the guard installed; settings = sas-forms.json (null = the file is missing). */
-function page({ href = 'https://new-site.example/contact/', settings = { endpoint: '', originalHosts: ['original.example'] }, held = false, settingsLate = false } = {}) {
+function page({ href = 'https://new-site.example/contact/', settings = { endpoint: '', originalHosts: ['original.example'] }, held = false, settingsLate = false, hasForm = true } = {}) {
   const sent = [];
+  const asked = { settings: 0 };
   let release;
   const late = new Promise((r) => { release = r; });
   class HTMLFormElement {
@@ -28,10 +29,12 @@ function page({ href = 'https://new-site.example/contact/', settings = { endpoin
     requestSubmit() { this.resubmitted++; }
     get note() { return this.querySelector()?.textContent ?? null; }
   }
-  const document = { createElement: () => ({ attrs: {}, style: {}, setAttribute(n, v) { this.attrs[n] = v; }, textContent: '' }) };
+  // A loaded page; `hasForm`: whether its markup holds a form.
+  const document = { readyState: 'complete', querySelector: (q) => (q === 'form' && hasForm ? {} : null), createElement: () => ({ attrs: {}, style: {}, setAttribute(n, v) { this.attrs[n] = v; }, textContent: '' }) };
   const json = (body) => ({ ok: true, json: async () => body });
   const fetch = async (url, init) => {
     if (url === '/sas-forms.json') {
+      asked.settings++;
       if (settingsLate) await late;
       return settings ? json(settings) : { ok: false };
     }
@@ -39,14 +42,20 @@ function page({ href = 'https://new-site.example/contact/', settings = { endpoin
     return { ok: true };
   };
   const listeners = [];
+  const on = {};
   const ctx = { location: new URL(href), fetch, document, HTMLFormElement, FormData: class { constructor(f) { this.form = f; } }, URL, String };
   ctx.window = ctx;
-  ctx.addEventListener = (type, fn) => listeners.push(fn);
+  ctx.addEventListener = (type, fn) => {
+    (on[type] ??= []).push(fn);
+    if (type === 'submit') listeners.push(fn);
+  };
   if (held) vm.runInNewContext(HOLD_FORMS, ctx);
   vm.runInNewContext(FORM_GUARD, ctx);
   const settle = () => new Promise((r) => setTimeout(r, 20));
   return {
-    ctx, sent, settle, release,
+    ctx, sent, settle, release, asked,
+    /** An event of `type` on the window (a field focused: `focusin` with a target inside a form). */
+    fire: (type, target) => { for (const fn of on[type] ?? []) fn({ type, target }); },
     form: (attrs) => new HTMLFormElement(attrs),
     /** Submits the form as the browser would; returns whether the browser goes on with it (not prevented). */
     async submit(form, submitter = null) {
@@ -101,6 +110,21 @@ test('held (the app\'s preview and every check): no form is sent anywhere; anoth
   const own = p.form({ action: '' });
   assert.equal(await p.submit(own), false);
   assert.deepEqual(p.sent, [{ url: '/api/forms', method: 'POST' }]);
+});
+
+test('the settings are asked for only by a page with a form, and a form drawn later asks at its first use', async () => {
+  const withForm = page();
+  await withForm.settle();
+  assert.equal(withForm.asked.settings, 1, 'a page with a form, already loaded: asked once');
+  const none = page({ hasForm: false });
+  await none.settle();
+  assert.equal(none.asked.settings, 0, 'no form on the page: no request of the copy\'s own');
+  none.fire('focusin', { closest: () => null });
+  assert.equal(none.asked.settings, 0, 'a field outside any form asks for nothing');
+  none.fire('focusin', { closest: (q) => (q === 'form' ? {} : null) });
+  none.fire('pointerdown', { closest: (q) => (q === 'form' ? {} : null) });
+  await none.settle();
+  assert.equal(none.asked.settings, 1, 'a form the script drew: asked at its first use, once');
 });
 
 test('a submit before the settings arrived: held, then sent again to its service once they say it is not the original\'s', async () => {
