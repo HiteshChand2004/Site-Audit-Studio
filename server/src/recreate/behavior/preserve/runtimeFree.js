@@ -32,6 +32,7 @@ import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { motionPlan, withRebuiltMotion } from './rebuildMotion.js';
 import { settledStyles, withoutStartStates } from './startStates.js';
+import { loadedStyleChanges, readLoadedStyles, styledPaths, withLoadedStyles } from './loadedStyles.js';
 import { CONTROLS_FILE, CONTROLS_JS, planReplay, probeControls, probeScrollStates, withReplay } from './controls.js';
 import { MOTION_FILE, motionJsMinified } from '../../emit/motionScript.js';
 import path from 'node:path';
@@ -220,10 +221,13 @@ export async function motionFor({ jobDir, copyDir, pages }) {
  * The page without its runtime, with the head the runtime left, the start states that runtime would have animated away
  * dropped (startStates.js; `settled` = the capture's reading of this page) and the rebuilt animations.
  */
-export function freePage(html, { only = null, head = null, motion = null, settled = null, outPath }) {
+export function freePage(html, { only = null, head = null, motion = null, settled = null, loaded = null, outPath }) {
   const stripped = withoutRuntime(html, only ? { only } : {});
   const withH = head ? withHead(stripped.html, head) : null;
   let out = withH?.html ?? stripped.html;
+  // The styles the runtime set after load first (loadedStyles.js); a start state they did not settle is then dropped as before.
+  const styled = withLoadedStyles(out, loaded);
+  out = styled.html;
   const shown = withoutStartStates(out, settled);
   out = shown.html;
   let rebuilt = null;
@@ -233,7 +237,7 @@ export function freePage(html, { only = null, head = null, motion = null, settle
     out = r.html;
     rebuilt = { placed: r.placed, lost: r.lost, tokens: r.tokens, notCarried: pagePlan.notCarried, ...(r.lostPaths?.length && { lostPaths: r.lostPaths.slice(0, 5) }) };
   }
-  return { html: out, stripped, head: withH?.changed ?? null, rebuilt, ...(shown.cleared && { shown: { elements: shown.cleared, declarations: shown.declarations } }) };
+  return { html: out, stripped, head: withH?.changed ?? null, rebuilt, ...(styled.written && { loadedStyles: styled.written }), ...(shown.cleared && { shown: { elements: shown.cleared, declarations: shown.declarations } }) };
 }
 
 /**
@@ -265,8 +269,30 @@ export async function decidePage({ browser, copyDir, outPath, motion = null, set
   record.overwritten = before.lost;
   if (!bare) return { ...record, status: 'kept', why: 'unknown' };
   if (after.lost.length >= before.lost.length) return { ...record, status: 'kept', why: 'stillOverwritten', stillOverwritten: after.lost };
+  // The style attributes the runtime set once the page had loaded (loadedStyles.js): read on the as-is page at the check's
+  // widths, written into the page without it, so what the runtime placed or showed (a header's current-link pill) stays so.
+  let loaded = null;
+  {
+    const a = await served(copyDir, {});
+    try {
+      const openAt = async (width) => {
+        const context = await isolated(browser, viewOf(width), a.base, []);
+        const page = await context.newPage();
+        await openAndScroll(page, `${a.base}${pagePath}`);
+        await page.waitForTimeout(SETTLE_MS);
+        return page;
+      };
+      const readings = await readLoadedStyles(openAt, GATE_WIDTHS, styledPaths(html));
+      loaded = loadedStyleChanges(html, readings);
+    } catch (err) {
+      loaded = { list: [], varies: 0, error: String(err?.message ?? err).slice(0, 160) };
+    } finally {
+      await a.close();
+    }
+  }
   // The head as the runtime left it changes no text of the body, so the reading above holds for it too.
-  const free = freePage(html, { head: before.head, motion, settled, outPath });
+  const free = freePage(html, { head: before.head, motion, settled, loaded: loaded.list, outPath });
+  record.loadedStyles = { written: free.loadedStyles ?? 0, varies: loaded.varies, list: loaded.list, ...(loaded.error && { error: loaded.error }) };
 
   // Every button as on the original: what a click does there that it does not do here is replayed (controls.js).
   log(`runtime ${pagePath}: do the buttons work as on the original?`);
@@ -411,7 +437,7 @@ export async function runtimeFreeCopy({ browser, copyDir, outDir, pages, decided
       }
       const html = await readFile(path.join(copyDir, p.outPath), 'utf8');
       const head = r.head ? { title: r.head.title?.to, description: r.head.description?.to } : null;
-      const free = freePage(html, { only: r.ids, head, motion, settled: settled.get(p.outPath), outPath: p.outPath });
+      const free = freePage(html, { only: r.ids, head, motion, settled: settled.get(p.outPath), loaded: r.loadedStyles?.list, outPath: p.outPath });
       if (r.replay?.plan) free.html = withReplay(free.html, r.replay.plan).html;
       results.push({ outPath: p.outPath, ...r, ...(free.rebuilt && { rebuilt: free.rebuilt }), ...(free.shown && { shown: free.shown }), files: free.stripped.files, html: free.html });
     }
