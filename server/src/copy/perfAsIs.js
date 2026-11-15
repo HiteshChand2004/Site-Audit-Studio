@@ -9,20 +9,25 @@
 //          loops or moves by itself, or one that changes under the mouse (a hover, a pointer follower)
 //   lazy   an image entirely below the first screen at BOTH widths gets loading="lazy" (the gate scrolls through the page, so a
 //          lazy image that would come in late or not at all shows in its pictures)
-//   webp   a local PNG shown by an <img> (its src, its srcset, its <picture>'s untyped sources, all or none per image) or named
-//          in the page's own CSS is re-encoded as LOSSLESS WebP when every decoded pixel is the same, it has no colour or gamma
-//          chunk a browser would apply differently, it is not animated, and the new file is at most 90 % of the old one
+//   webp   a local PNG or JPEG shown by an <img> (its src, its srcset, its <picture>'s untyped sources, all or none per image)
+//          or named in the page's own CSS is re-encoded as WebP when the new file is at most 90 % of the old one: a PNG as
+//          LOSSLESS WebP when every decoded pixel is the same and it has no colour or gamma chunk a browser would apply
+//          differently; when that is not smaller enough, and for every JPEG, a WebP at the lowest quality of 80 / 85 / 90 / 95
+//          whose decoded pixels show NO visible difference (YIQ distance, VISIBLE_THRESHOLD 0.03: not one pixel past it).
+//          Otherwise the original file stays, and why is recorded. Never animated, EXIF-turned or non-RGB files
 //   css    a local stylesheet loses its whitespace and comments (esbuild, whitespace only: no rule is merged, reordered or
 //          dropped), only when the browser builds the very same rules from both (cssRules, compared text for text) and every
 //          page that loads it is pictured the same (preserve/stage.js minifyAndProve)
 // Never: the original's scripts (not minified, deferred, moved or removed), font-display (text would show in another font while
-// the web font loads), lossy re-encoding or smaller variants (the pixels change), width / height attributes, preconnects.
+// the web font loads), a re-encoding with a visible difference or smaller variants (the pixels change), width / height
+// attributes, preconnects.
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { transform } from 'esbuild';
 import { isScrollReveal } from '../recreate/ir/motion.js';
+import { colorDelta, MAX_YIQ_DELTA } from '../recreate/verify/exact/pixels.js';
 
 /** A local PNG is replaced only when its lossless WebP is at most this share of it. */
 export const WEBP_MAX_SHARE = 0.9;
@@ -272,11 +277,65 @@ export async function losslessWebp(png) {
   const { width = 0, height = 0 } = await sharp(png).metadata();
   if (width * height > WEBP_MAX_PIXELS) return { skip: `it is ${width} × ${height} pixels, more than ${WEBP_MAX_PIXELS / 1e6} million` };
   const data = await sharp(png).webp({ lossless: true, effort: 6 }).toBuffer();
-  if (data.length > png.length * WEBP_MAX_SHARE) return { skip: `the WebP would be ${Math.round((data.length / png.length) * 100)} % of it` };
+  if (data.length > png.length * WEBP_MAX_SHARE) return { skip: `the lossless WebP would be ${Math.round((data.length / png.length) * 100)} % of it`, size: true };
   const rgba = (b) => sharp(b).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const [a, b] = await Promise.all([rgba(png), rgba(data)]);
   if (a.info.width !== b.info.width || a.info.height !== b.info.height || !a.data.equals(b.data)) return { skip: 'its decoded pixels are not the same' };
   return { data, from: png.length };
+}
+
+/** Qualities tried for a WebP that is not lossless, lowest first: the first with no visible difference is kept. */
+export const WEBP_QUALITIES = [80, 85, 90, 95];
+/**
+ * A pixel differs visibly when its YIQ distance passes this share of the largest possible. Stricter than pixelmatch's 0.1,
+ * which lets compression noise through (measured 2026-11-15: a WebP of random noise had no pixel past 0.1 at quality 80, while
+ * at 0.03 it had 336–5 275; a smooth photo's largest difference was 0.016 at every quality).
+ */
+export const VISIBLE_THRESHOLD = 0.03;
+
+/** How many pixels of two RGBA buffers of one size differ visibly (YIQ, VISIBLE_THRESHOLD), and the largest distance. */
+export function visibleDifference(a, b) {
+  const limit = MAX_YIQ_DELTA * VISIBLE_THRESHOLD * VISIBLE_THRESHOLD;
+  let pixels = 0;
+  let max = 0;
+  for (let k = 0; k < a.length; k += 4) {
+    const d = Math.abs(colorDelta(a, b, k, k));
+    if (d > max) max = d;
+    if (d > limit) pixels++;
+  }
+  return { pixels, share: max / MAX_YIQ_DELTA };
+}
+
+/**
+ * A WebP of a JPEG or PNG that is not lossless but shows no visible difference, or why there is none. Every quality of
+ * WEBP_QUALITIES is tried, lowest first; one is kept only when, decoded, not one pixel differs visibly from the original
+ * (visibleDifference: 0 pixels) and the file is at most WEBP_MAX_SHARE of it. A file a browser would draw differently from its
+ * decoded pixels is left alone: animated, turned by its EXIF orientation, or not in RGB (CMYK). A colour profile goes with it.
+ * @returns {Promise<{ data: Buffer, from: number, quality: number } | { skip: string }>}
+ */
+export async function visiblySameWebp(input) {
+  const meta = await sharp(input).metadata();
+  if ((meta.pages ?? 1) > 1) return { skip: 'it is animated' };
+  if (meta.orientation && meta.orientation !== 1) return { skip: 'it is turned by its EXIF orientation, which a WebP would not carry' };
+  if (meta.space && !['srgb', 'b-w', 'rgb', 'grey16', 'rgb16'].includes(meta.space)) return { skip: `its colours are ${meta.space}, not RGB` };
+  const { width = 0, height = 0 } = meta;
+  if (width * height > WEBP_MAX_PIXELS) return { skip: `it is ${width} × ${height} pixels, more than ${WEBP_MAX_PIXELS / 1e6} million` };
+  const rgba = (b) => sharp(b).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const original = await rgba(input);
+  let tried = null;
+  for (const quality of WEBP_QUALITIES) {
+    let enc = sharp(input).webp({ quality, alphaQuality: 100, effort: 6, smartSubsample: true });
+    if (meta.icc) enc = enc.keepIccProfile();
+    const data = await enc.toBuffer();
+    // A higher quality only makes the file larger: nothing above this one can be small enough either.
+    if (data.length > input.length * WEBP_MAX_SHARE) return { skip: `${tried ? `${tried}; ` : ''}the WebP at quality ${quality} would be ${Math.round((data.length / input.length) * 100)} % of it` };
+    const copy = await rgba(data);
+    if (copy.info.width !== original.info.width || copy.info.height !== original.info.height) return { skip: 'the WebP has another size' };
+    const diff = visibleDifference(original.data, copy.data);
+    if (!diff.pixels) return { data, from: input.length, quality };
+    tried = `at quality ${quality} ${diff.pixels} pixels differ visibly`;
+  }
+  return { skip: `a WebP that is not lossless would change how it looks (${tried})` };
 }
 
 /** One srcset as its candidates, each with the text around its address kept as written (descriptors, spaces, order). */
@@ -288,12 +347,23 @@ export function srcsetParts(srcset) {
 }
 const joinSrcset = (parts) => parts.map((p) => `${p.before}${p.url}${p.after}`).join(',');
 
-/** The lossless WebP of one local PNG file of the copy, written next to it once (memo `made`), or why there is none. */
+/**
+ * The WebP of one local PNG or JPEG file of the copy, written next to it once (memo `made`), or why there is none: a PNG's
+ * lossless WebP first; when that is not smaller enough, and for a JPEG, a WebP with no visible difference (visiblySameWebp).
+ */
 async function webpOf(file, dir, made) {
   let result = made.get(file);
   if (result) return result;
-  const png = await readFile(file).catch(() => null);
-  result = png ? await losslessWebp(png).catch((err) => ({ skip: `it could not be read (${String(err?.message ?? err).slice(0, 80)})` })) : { skip: 'the file is missing' };
+  const input = await readFile(file).catch(() => null);
+  const failed = (err) => ({ skip: `it could not be read (${String(err?.message ?? err).slice(0, 80)})` });
+  if (!input) result = { skip: 'the file is missing' };
+  else if (isPng(file)) {
+    result = await losslessWebp(input).catch(failed);
+    if (result.size) {
+      const visual = await visiblySameWebp(input).catch(failed);
+      result = visual.data ? visual : { skip: `${result.skip}; ${visual.skip}` };
+    }
+  } else result = await visiblySameWebp(input).catch(failed);
   if (result.data) {
     const name = `${path.basename(file, path.extname(file))}.sas-${createHash('sha256').update(result.data).digest('hex').slice(0, 10)}.webp`;
     const target = path.join(path.dirname(file), name);
@@ -302,7 +372,7 @@ async function webpOf(file, dir, made) {
     if (there && !there.equals(result.data)) result = { skip: `${name} already exists with other content` };
     else {
       if (!there) await writeFile(target, result.data);
-      result = { name, file: path.relative(dir, target).split(path.sep).join('/'), from: result.from, to: result.data.length };
+      result = { name, file: path.relative(dir, target).split(path.sep).join('/'), from: result.from, to: result.data.length, ...(result.quality && { quality: result.quality }) };
     }
   }
   made.set(file, result);
@@ -310,6 +380,8 @@ async function webpOf(file, dir, made) {
 }
 
 const isPng = (url) => /\.png$/i.test(url);
+/** The files the webp fix converts: PNG (lossless first) and JPEG (only with no visible difference). */
+const isConvertible = (url) => /\.(png|jpe?g)$/i.test(url);
 const webpAddress = (url, name) => url.replace(/[^/]+$/, encodeURIComponent(name));
 
 /**
@@ -335,7 +407,7 @@ export async function fixPngImages($, page, dir, made = new Map()) {
       const parts = srcsetParts(el.attribs.srcset);
       for (const part of parts) if (part.url) slots.push({ el, attr: 'srcset', url: part.url, parts, part });
     }
-    const pngSlots = slots.filter((s) => isPng(s.url));
+    const pngSlots = slots.filter((s) => isConvertible(s.url));
     if (!pngSlots.length) continue;
     const several = slots.length > 1;
     const leave = (why) => open.push({ page: page.path, reason: 'd', detail: `${img.src}${several ? ' and its other sizes are' : ' is'} not converted to WebP: ${why}` });
@@ -361,14 +433,14 @@ export async function fixPngImages($, page, dir, made = new Map()) {
       const value = webpAddress(s.url, results[i].name);
       if (s.attr === 'src') a.src = value;
       else s.part.url = value;
-      fixed.push({ field: 'img', ...(s.attr !== 'src' && { attr: 'srcset' }), src: s.url, value, file: results[i].file, bytes: [results[i].from, results[i].to] });
+      fixed.push({ field: 'img', ...(s.attr !== 'src' && { attr: 'srcset' }), src: s.url, value, file: results[i].file, bytes: [results[i].from, results[i].to], ...(results[i].quality && { quality: results[i].quality }) });
     });
     const srcsetSlots = pngSlots.filter((s) => s.attr === 'srcset');
     for (const el of new Set(srcsetSlots.map((s) => s.el))) el.attribs.srcset = joinSrcset(srcsetSlots.find((s) => s.el === el).parts);
   }
 
   // The page's own CSS (style attributes and <style> blocks): url() of a local PNG.
-  const URL_IN_CSS = /url\(\s*(['"]?)([^'")]+\.png)\1\s*\)/gi;
+  const URL_IN_CSS = /url\(\s*(['"]?)([^'")]+\.(?:png|jpe?g))\1\s*\)/gi;
   const inCss = async (css) => {
     let out = css;
     for (const m of [...String(css).matchAll(URL_IN_CSS)]) {
@@ -382,18 +454,18 @@ export async function fixPngImages($, page, dir, made = new Map()) {
       }
       const value = webpAddress(url, r.name);
       out = out.split(m[0]).join(m[0].replace(m[2], value));
-      fixed.push({ field: 'css', src: url, value, file: r.file, bytes: [r.from, r.to] });
+      fixed.push({ field: 'css', src: url, value, file: r.file, bytes: [r.from, r.to], ...(r.quality && { quality: r.quality }) });
     }
     return out;
   };
   for (const el of $('[style]').toArray()) {
-    if ($(el).closest('noscript, template').length || !/\.png/i.test(el.attribs.style)) continue;
+    if ($(el).closest('noscript, template').length || !/\.(png|jpe?g)/i.test(el.attribs.style)) continue;
     const next = await inCss(el.attribs.style);
     if (next !== el.attribs.style) el.attribs.style = next;
   }
   for (const el of $('style').toArray()) {
     const css = $(el).html() ?? '';
-    if (!/\.png/i.test(css)) continue;
+    if (!/\.(png|jpe?g)/i.test(css)) continue;
     const next = await inCss(css);
     if (next !== css) $(el).html(next);
   }

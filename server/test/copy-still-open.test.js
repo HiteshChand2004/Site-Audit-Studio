@@ -341,16 +341,25 @@ test('still open image rows: only a lossy or resized file could close them (d), 
   const row = (id, copyRows, originalRows, extra = {}) => openOne({ key: `lighthouse.${id}`, after: { detail: 'Images could be smaller' } },
     { newLhr: { mobile: lhr(rows(id, copyRows)) }, oldLhr: { mobile: lhr(rows(id, originalRows)) }, ...extra });
 
-  // The copy already holds a lossless WebP of the original's PNG: more saving needs a lossy file.
+  // The copy already holds a WebP of the original's file with no visible difference: more saving would change the look.
   const ours = row('modern-image-formats', [[`${COPY}/img/hero.sas-0123456789.webp`, 30000]], []);
   assert.equal(ours.reason, 'look');
-  assert.match(ours.evidence, /already a lossless WebP the copy made/);
+  assert.match(ours.evidence, /already a WebP the copy made with no visible difference/);
 
-  // The very file the original's CDN serves (the lift named it hero~<hash>.jpg from hero.jpg?w=800), the same saving.
-  const served = row('uses-responsive-images', [[`${COPY}/img/hero~1a2b3c4d.jpg`, 40000]], [['https://cdn.example-original.test/img/hero.jpg?w=800', 41000]]);
+  // The very file the original's CDN serves (the lift named it hero~<hash>.gif from hero.gif?w=800), the same saving: a file
+  // the WebP fix never converts (it may be animated).
+  const served = row('uses-responsive-images', [[`${COPY}/img/hero~1a2b3c4d.gif`, 40000]], [['https://cdn.example-original.test/img/hero.gif?w=800', 41000]]);
   assert.equal(served.reason, 'look');
   assert.match(served.evidence, /the original serves this file \(cdn\.example-original\.test\)/);
   assert.match(served.evidence, /only a lossy or resized file could close it/);
+
+  // A JPEG is converted when no pixel changes visibly: left, it is explained only with the fix's own reason.
+  const jpg = [[`${COPY}/img/hero~1a2b3c4d.jpg`, 40000]];
+  const jpgOriginal = [['https://cdn.example-original.test/img/hero.jpg?w=800', 41000]];
+  assert.equal(row('uses-responsive-images', jpg, jpgOriginal).reason, null, 'a JPEG the fix left without a reason: still owed');
+  const jpgLeft = row('uses-responsive-images', jpg, jpgOriginal, { fixOpen: [{ kind: 'webp', page: '/', reason: 'd', detail: '/img/hero~1a2b3c4d.jpg is not converted to WebP: a WebP that is not lossless would change how it looks (at quality 95 12 pixels differ visibly)' }] });
+  assert.equal(jpgLeft.reason, 'look');
+  assert.match(jpgLeft.evidence, /12 pixels differ visibly/);
 
   // The copy could save much more than the original on the same file: it holds a heavier file. Not a look change: still owed.
   const heavier = row('uses-responsive-images', [[`${COPY}/img/hero.jpg`, 400000]], [['https://www.example-original.test/img/hero.jpg', 41000]]);

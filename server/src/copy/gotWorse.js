@@ -311,9 +311,10 @@ function auditUrls(lhr, id) {
 const hostsOf = (urls) => [...new Set(urls.map(hostOf).filter(Boolean))];
 const fewUrls = (urls) => urls.slice(0, 3).map((u) => { try { return new URL(u).pathname.split('/').pop() || new URL(u).hostname; } catch { return u.slice(0, 40); } }).join(', ');
 
-// Lighthouse audits that ask for a smaller file per image: what closes them is a lossy re-encode or a resized file, never the
-// same pixels. The copy keeps every image's pixels (copy/perfAsIs.js: only a lossless WebP of a PNG), so a file the copy already
-// made lossless, or the very file the original serves, is a change of its look (d). Evidence per file, from this run only.
+// Lighthouse audits that ask for a smaller file per image. The copy converts a PNG or JPEG to WebP only with no visible
+// difference (copy/perfAsIs.js: lossless, else the lowest quality whose pixels show none), so a file the copy already made a
+// WebP of, or one the fix recorded it could not convert without a visible change, is a change of its look (d) to go further.
+// Evidence per file, from this run only.
 const IMAGE_FILE_AUDITS = new Set(['modern-image-formats', 'uses-optimized-images', 'uses-responsive-images', 'efficient-animated-content']);
 const OUR_WEBP = /\.sas-[0-9a-f]{10}\.webp$/i;
 /** A file's name without the copy's own marks (the lift's ~query hash, the WebP fix's .sas- hash) and without its extension. */
@@ -350,15 +351,15 @@ function imageRow(item, id, ctx) {
     const what = fewUrls([url]);
     const host = hostOf(url);
     if (/^https?:/.test(url) && host !== ctx.copyHost) return { what, reason: null, evidence: 'not a file of the copy' };
-    if (OUR_WEBP.test(url)) return { what, reason: 'look', evidence: 'already a lossless WebP the copy made with the very same pixels; only a lossy or resized file could save more, which would change the look' };
+    if (OUR_WEBP.test(url)) return { what, reason: 'look', evidence: 'already a WebP the copy made with no visible difference; only a smaller or more compressed file could save more, which would change the look' };
     const stem = imageStem(url);
     const same = original.find((o) => o.stem && o.stem === stem);
     if (!same) return { what, reason: null, evidence: 'the original\'s report does not name this file' };
     if (bytes > same.bytes * (1 + GROWTH.other) + 1024) return { what, reason: null, evidence: `the copy could save ${kb(bytes)} on it against the original's ${kb(same.bytes)}: the copy holds a heavier file than the original served` };
-    if (/\.png$/i.test(url)) {
+    if (/\.(png|jpe?g)$/i.test(url)) {
       const why = leftPng.find((o) => String(o.detail ?? '').toLowerCase().includes(stem));
-      if (!why) return { what, reason: null, evidence: 'a PNG the copy did not make a lossless WebP of, and no reason was recorded' };
-      return { what, reason: 'look', evidence: `the original serves this file (${hostOf(same.url) ?? 'its own host'}); the lossless WebP was not made (${why.detail}); only a lossy or resized file could close it, which would change the look` };
+      if (!why) return { what, reason: null, evidence: 'an image the copy did not make a WebP of, and no reason was recorded' };
+      return { what, reason: 'look', evidence: `the original serves this file (${hostOf(same.url) ?? 'its own host'}); no WebP was made (${why.detail}); only a file that looks different could close it` };
     }
     return { what, reason: 'look', evidence: `the original serves this file (${hostOf(same.url) ?? 'its own host'}) as the copy does; only a lossy or resized file could close it, which would change the look` };
   }, 'image');

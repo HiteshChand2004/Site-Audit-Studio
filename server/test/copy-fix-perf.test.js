@@ -84,7 +84,12 @@ const prove = (dir, pages = pagesOf('index.html'), speed = true) => fixAndProve(
 const SPEED = ['lcp', 'lazy', 'webp'];
 const kinds = (page) => (page.reverted ? [] : [...new Set(page.fixes.map((f) => f.kind))].filter((k) => SPEED.includes(k))).sort();
 const read = (dir, rel) => readFile(path.join(dir, rel), 'utf8');
-const imgTag = (html, src) => html.match(new RegExp(`<img[^>]*src="${src.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}"[^>]*>`))?.[0] ?? '';
+// An image by its address as lifted, or by the WebP the webp fix may have put in its place (`<name>.sas-<hash>.webp`).
+const escape = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+const imgTag = (html, src) => {
+  const asWebp = /\.(png|jpe?g)$/i.test(src) ? `|${escape(src.replace(/\.[a-z]+$/i, ''))}\\.sas-[0-9a-f]{10}\\.webp` : '';
+  return html.match(new RegExp(`<img[^>]*src="(?:${escape(src)}${asWebp})"[^>]*>`))?.[0] ?? '';
+};
 
 let browser;
 test.before(async () => { browser = await chromium.launch(); });
@@ -115,7 +120,9 @@ test('the largest image gets fetchpriority="high" and loses loading="lazy"; imag
   const r = await prove(dir);
   const home = r.pages.find((p) => p.path === '/');
   assert.equal(home.reverted, undefined, JSON.stringify(r.gate));
-  assert.deepEqual(kinds(home), ['lazy', 'lcp'], JSON.stringify(home));
+  assert.deepEqual(kinds(home), ['lazy', 'lcp', 'webp'], JSON.stringify(home));
+  // The plain-colour JPEGs become WebPs with no visible difference; the detailed hero would change visibly, so it keeps its file.
+  assert.deepEqual(home.fixes.filter((f) => f.kind === 'webp').map((f) => f.src).sort(), ['/img/far.jpg', '/img/lib.jpg', '/img/slide.jpg', '/img/twice.jpg']);
   const html = await read(dir, 'index.html');
   const hero = imgTag(html, '/img/hero.jpg');
   assert.match(hero, /fetchpriority="high"/);
