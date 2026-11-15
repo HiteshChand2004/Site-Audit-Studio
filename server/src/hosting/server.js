@@ -82,11 +82,12 @@ export function sitesHandler() {
     } catch {
       return plain(res, 400, 'Bad address.');
     }
-    // Let's Encrypt checking that a domain points here (hosting/certs.js wrote the answer): for any host, before the sites.
+    // Let's Encrypt checking that a domain points here: certbot wrote the answer into its webroot (HOSTING_DIR/acme). For any
+    // host, before the sites.
     if (pathname.startsWith('/.well-known/acme-challenge/')) {
       const token = pathname.slice('/.well-known/acme-challenge/'.length);
       if (!/^[A-Za-z0-9_-]+$/.test(token)) return plain(res, 404, 'Not found.');
-      const answer = await readFile(path.join(hostingPaths.root, 'acme', token), 'utf8').catch(() => null);
+      const answer = await readFile(path.join(hostingPaths.root, 'acme', '.well-known', 'acme-challenge', token), 'utf8').catch(() => null);
       return answer === null ? plain(res, 404, 'Not found.') : plain(res, 200, answer);
     }
 

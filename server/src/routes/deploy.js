@@ -39,18 +39,14 @@ import {
 } from '../deploy/store.js';
 import { isOwner } from '../accounts/roles.js';
 import { checkRecords, domainPlan, parseDomain } from '../deploy/domain.js';
-import { hostsOf, setHosts, switchRelease } from '../hosting/store.js';
-import { hasCertificate } from '../hosting/certs.js';
+import { hostingPaths, hostsOf, setHosts, switchRelease } from '../hosting/store.js';
+import { hasCertificate, refreshWantedCerts } from '../hosting/certs.js';
+import { hostingIp } from '../config/index.js';
+import { SERVER_DIR } from '../config/paths.js';
+import { serverSetup } from '../hosting/setup.js';
+import os from 'node:os';
 
-/**
- * The public address of Remastly's own server, which hosted sites' domains point to (SAS_HOSTING_IP); null = it does not host.
- * @returns {string | null}
- */
-const serverIp = () => {
-  const ip = (process.env.SAS_HOSTING_IP ?? '').trim();
-  return /^\d{1,3}(\.\d{1,3}){3}$/.test(ip) ? ip : null;
-};
-import { appCallsOf, parsePaths, parseTarget, readPassThrough, redirectsFor, savePassThrough, suggestedPaths, unansweredAppCalls } from '../deploy/passThrough.js';
+const serverIp = hostingIp;import { appCallsOf, parsePaths, parseTarget, readPassThrough, redirectsFor, savePassThrough, suggestedPaths, unansweredAppCalls } from '../deploy/passThrough.js';
 import { formsEndpointOf } from '../forms/connect.js';
 import { entriesCsv, importEntries, listEntries, removeEntry, removeImport, saveFormSettings } from '../forms/entries.js';
 import { entriesFromRows, IMPORT_LIMITS, parseCsv } from '../forms/importCsv.js';
@@ -113,6 +109,27 @@ hostingRouter.put('/remastly', async (req, res) => {
     if (err instanceof HostingError) return res.status(err.code === 'token' ? 400 : 502).json({ error: err.message });
     throw err;
   }
+});
+
+// The one-time server setup for Remastly's own hosting (hosting/setup.js), with this Remastly's real folders; owner only.
+hostingRouter.get('/server-setup', async (req, res) => {
+  if (!isOwner(req)) return res.status(403).json({ error: 'Only the owner can see the server setup.', forbidden: 'owner' });
+  const sitesPort = Number(process.env.SAS_SITES_PORT) || 4100;
+  const email = (process.env.SAS_OWNER_EMAIL ?? '').trim() || /** @type {any} */ (req).user?.email || '';
+  let setup;
+  try {
+    setup = serverSetup({
+      // A folder nginx can reach: the default one sits in the data folder, often inside a home folder nginx may not enter.
+      hostingDir: process.env.SAS_HOSTING_DIR ? hostingPaths.root : '/srv/remastly-hosting', serverDir: SERVER_DIR, node: process.execPath, user: os.userInfo().username,
+      email: email || 'owner@example.com', ip: hostingIp(), sitesPort,
+    });
+  } catch (err) {
+    return res.status(409).json({ error: /** @type {Error} */ (err).message });
+  }
+  // Whether the parts already answer: the sites server on its port, and the address Remastly gives domains.
+  const sitesServer = await fetch(`http://127.0.0.1:${sitesPort}/`, { signal: AbortSignal.timeout(2000) })
+    .then(() => true, () => false);
+  res.json({ ...setup, emailMissing: !email, status: { hostingIp: hostingIp(), sitesServer } });
 });
 
 hostingRouter.delete('/remastly', (req, res) => {
@@ -278,7 +295,10 @@ async function serverDomainState(project) {
   const d = parseDomain(primary);
   const records = d.ok ? await checkRecords(domainPlan(d, null, serverIp()).records) : [];
   const connected = records.length > 0 && records.filter((r) => r.required).every((r) => r.ok);
-  return { domain: primary, records, connected, https: await hasCertificate(primary), url: `https://${primary}` };
+  const https = await hasCertificate(primary);
+  // Pointing here and no padlock yet: listed for certbot now, not at the next timed refresh.
+  if (connected && !https) await refreshWantedCerts(/** @type {string} */ (serverIp())).catch((err) => console.warn(`[hosting] certs list: ${err.message}`));
+  return { domain: primary, records, connected, https, url: `https://${primary}` };
 }
 
 /**

@@ -41,6 +41,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
   const [askRemoveRemastly, setAskRemoveRemastly] = useState(false);
   const [chosen, setChosen] = useState(null);
   const [domainInput, setDomainInput] = useState('');
+  const [askSetup, setAskSetup] = useState(false);
   const [askRestore, setAskRestore] = useState(null);
   const [restoreError, setRestoreError] = useState(null);
   const [accepted, setAccepted] = useState(() => new Set());
@@ -220,6 +221,9 @@ export default function GoLiveStep({ project, onGoCreate }) {
               <span className={styles.placeName}>{T.serverOption} <span className={styles.recommended}>{T.recommended}</span></span>
               <span className={styles.placeExplain}>{T.serverOptionText}</span>
               {!server.ready && <span className={styles.placeExplain}>{T.serverNotReady}</span>}
+              {remastly.canManage && (
+                <span><button type="button" className={styles.copy} onClick={() => setAskSetup(true)}>{T.serverSetupButton}</button></span>
+              )}
             </span>
           </label>
           <label className={styles.place} data-active={target === 'remastly' || undefined}>
@@ -379,6 +383,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
       <ConfirmDialog open={Boolean(askRestore)} onClose={() => setAskRestore(null)} title={T.putBackTitle} confirmLabel={T.putBack} onConfirm={restore}>
         {askRestore ? T.putBackText(timeAgo(askRestore.startedAt)) : ''}
       </ConfirmDialog>
+      <ServerSetupDialog open={askSetup} onClose={() => setAskSetup(false)} />
       <TokenDialog open={asking} onClose={() => setAsking(false)} onConnected={async () => { setAsking(false); await load(); }} />
       <TokenDialog remastly open={askRemastly} onClose={() => setAskRemastly(false)} onConnected={async () => { setAskRemastly(false); setChosen(null); await load(); }} />
       <ConfirmDialog open={askRemoveRemastly} onClose={() => setAskRemoveRemastly(false)} title={T.remastlyRemoveTitle} confirmLabel={T.remastlyRemove} danger onConfirm={removeRemastly}>
@@ -982,5 +987,47 @@ function SnapshotCard({ project, onChange }) {
         {error && <Alert tone="bad" title="Not saved">{error}</Alert>}
       </div>
     </Card>
+  );
+}
+
+/** The one-time server setup for Remastly's own hosting (owner only): files and steps with this Remastly's own folders. */
+function ServerSetupDialog({ open, onClose }) {
+  const [setup, setSetup] = useState(null);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    if (!open) return;
+    setError(null);
+    api.getServerSetup().then(setSetup, (err) => setError(err.message));
+  }, [open]);
+
+  return (
+    <Modal open={open} onClose={onClose} title={T.serverSetupTitle} description={T.serverSetupIntro} footer={<Button onClick={onClose}>Close</Button>}>
+      {error && <Alert tone="bad" title="Could not load the setup">{error}</Alert>}
+      {setup && (
+        <div className={styles.domainBody}>
+          <p className={ws.hint} style={{ margin: 0 }}>{T.serverSetupStatus(setup.status)}</p>
+          {setup.emailMissing && <Alert tone="warn" title="Owner email">{T.serverSetupEmail}</Alert>}
+          <p className={styles.confirmTitle}>{T.serverSetupSteps}</p>
+          <ol className={styles.setupSteps}>
+            {setup.steps.map((s) => (
+              <li key={s.why}>
+                <span>{s.why}</span>
+                {s.command.startsWith('sudo') && <span className={styles.value}><code className={styles.rules}>{s.command}</code> <CopyButton text={s.command} /></span>}
+              </li>
+            ))}
+          </ol>
+          <p className={styles.confirmTitle}>{T.serverSetupEnv}</p>
+          <span className={styles.value}><code className={styles.rules}>{setup.env.join('\n')}</code> <CopyButton text={setup.env.join('\n')} /></span>
+          <p className={styles.confirmTitle}>{T.serverSetupFiles}</p>
+          {setup.files.map((f) => (
+            <details key={f.path} className={styles.setupFile}>
+              <summary><code>{f.path}</code> · {f.why}</summary>
+              <CopyButton text={f.content} />
+              <pre className={styles.rules}>{f.content}</pre>
+            </details>
+          ))}
+        </div>
+      )}
+    </Modal>
   );
 }

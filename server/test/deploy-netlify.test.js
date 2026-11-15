@@ -922,6 +922,10 @@ test('Remastly as the host: a copy goes live on its own server at its domain, co
     r = await call('GET', `/projects/${project.id}/domain`);
     assert.deepEqual(r.body.records.map((x) => [x.type, x.name, x.value, x.required, x.ok]), [['A', 'www', '203.0.113.10', true, true], ['A', '@', '203.0.113.10', false, false]]);
     assert.deepEqual([r.body.connected, r.body.https], [true, false]);
+    // Pointing here with no padlock yet: listed for the server's certbot timer.
+    const { hostingPaths } = await import('../src/hosting/store.js');
+    const { readFile: read } = await import('node:fs/promises');
+    assert.equal(await read(path.join(hostingPaths.root, 'certs-wanted.txt'), 'utf8'), 'www.pi-shop.com\n', 'only the name that points here');
 
     // A new version, then Go back to the first.
     await finishedCopy({ projectId: project.id, report, reaudit: { checklist: { items: [] } }, files: { 'index.html': '<h1>Second version</h1>' } });

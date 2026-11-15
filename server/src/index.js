@@ -24,7 +24,8 @@ import { loadPublished, PUBLISHED_PREFIX, publishedPath, resolvePublished } from
 import { inlineScriptHashes } from './recreate/inlineScripts.js';
 import { foreignOriginCheck } from './security/foreignOrigin.js';
 import { formsPublicRouter } from './routes/formsPublic.js';
-import { accountsEnabled, bindHost, isLoopbackHost, trustProxySetting } from './config/index.js';
+import { accountsEnabled, bindHost, hostingIp, isLoopbackHost, trustProxySetting } from './config/index.js';
+import { refreshWantedCerts } from './hosting/certs.js';
 import { db } from './db/index.js';
 import { pendingMigrations } from './db/apply.js';
 
@@ -148,4 +149,12 @@ app.listen(PORT, HOST, (err) => {
       // SAS_KEEP_COPIES_DAYS too; then every SAS_CLEANUP_HOURS (jobs/cleanup.js). SAS_CLEANUP_DRY_RUN=1 only lists.
       runCleanup().catch((e) => console.warn('[cleanup] start-up pass failed:', e.message)).finally(() => watchCleanup());
     });
+  // Hosting its own websites: every few minutes, the domains that now point here and have no padlock yet are listed for the
+  // server's certbot timer (hosting/certs.js), so a domain gets HTTPS soon after its owner changes the DNS.
+  const ip = hostingIp();
+  if (ip) {
+    const refresh = () => refreshWantedCerts(ip).catch((e) => console.warn('[hosting] certs list:', e.message));
+    refresh();
+    setInterval(refresh, 5 * 60_000).unref();
+  }
 });

@@ -299,6 +299,7 @@ export const api = {
   getHosting: () => request('/hosting'),
   connectHosting: (provider, token) => request(`/hosting/${provider}`, { method: 'PUT', body: { token } }),
   disconnectHosting: (provider) => request(`/hosting/${provider}`, { method: 'DELETE' }),
+  getServerSetup: () => request('/hosting/server-setup'),
   setupRemastlyHosting: (token) => request('/hosting/remastly', { method: 'PUT', body: { token } }),
   removeRemastlyHosting: () => request('/hosting/remastly', { method: 'DELETE' }),
   getDeploy: (id) => request(`/projects/${id}/deploy`),

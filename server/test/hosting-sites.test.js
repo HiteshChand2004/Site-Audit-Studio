@@ -134,8 +134,8 @@ test('the other form of the name leads to the site; an unknown domain is not ans
   let r = await get('acme.com', '/pricing?x=1', { headers: { 'x-forwarded-proto': 'https' } });
   assert.deepEqual([r.status, r.headers.get('location')], [301, 'https://www.acme.com/pricing?x=1']);
   assert.equal((await get('elsewhere.com', '/')).status, 404);
-  await mkdir(path.join(root, 'acme'), { recursive: true });
-  await writeFile(path.join(root, 'acme', 'tok_123-abc'), 'tok_123-abc.thumbprint');
+  await mkdir(path.join(root, 'acme', '.well-known', 'acme-challenge'), { recursive: true });
+  await writeFile(path.join(root, 'acme', '.well-known', 'acme-challenge', 'tok_123-abc'), 'tok_123-abc.thumbprint');
   r = await get('anything.com', '/.well-known/acme-challenge/tok_123-abc');
   assert.deepEqual([r.status, r.buf.toString()], [200, 'tok_123-abc.thumbprint']);
   assert.equal((await get('anything.com', '/.well-known/acme-challenge/..%2Fhosts.json')).status, 404);
@@ -154,4 +154,52 @@ test('a new release goes live in one step, an earlier one comes back the same wa
 test('a site with no live release yet says so', async () => {
   await setHosts(P3, 'new.example.org');
   assert.equal((await get('new.example.org', '/')).status, 503);
+});
+
+// ---- The one-time server setup ----
+
+test('the server setup is written with this Remastly\'s values, refuses values a shell would read, and its scripts are valid sh', async () => {
+  const { serverSetup } = await import('../src/hosting/setup.js');
+  const { execFileSync } = await import('node:child_process');
+  const v = { hostingDir: '/srv/remastly-hosting', serverDir: '/home/ubuntu/remastly/server', node: '/usr/bin/node', user: 'ubuntu', email: 'ops@example.com', ip: '13.205.53.133', sitesPort: 4100 };
+  const s = serverSetup(v);
+  const file = (p) => s.files.find((f) => f.path === p).content;
+  assert.match(file('/etc/nginx/sites-available/remastly-sites'), /ssl_certificate {5}\/srv\/remastly-hosting\/certs\/\$ssl_server_name\/fullchain\.pem;/);
+  assert.match(file('/etc/nginx/sites-available/remastly-sites'), /proxy_pass http:\/\/127\.0\.0\.1:4100;/);
+  assert.match(file('/etc/systemd/system/remastly-sites.service'), /User=ubuntu\nWorkingDirectory=\/home\/ubuntu\/remastly\/server/);
+  assert.match(file('/usr/local/sbin/remastly-certs'), /-m 'ops@example\.com'/);
+  assert.deepEqual(s.env, ['SAS_HOSTING_IP=13.205.53.133', 'SAS_HOSTING_DIR=/srv/remastly-hosting']);
+  // The two scripts root runs parse as sh.
+  for (const p of ['/usr/local/sbin/remastly-certs', '/usr/local/sbin/remastly-certs-deploy']) {
+    const tmp = path.join(root, `check-${path.basename(p)}.sh`);
+    await writeFile(tmp, file(p));
+    execFileSync('sh', ['-n', tmp]);
+  }
+  for (const bad of [{ email: "a'; rm -rf / #@x.io" }, { hostingDir: '/srv/$(reboot)' }, { user: 'root;id' }, { sitesPort: '80 ; id' }]) {
+    assert.throws(() => serverSetup({ ...v, ...bad }), /cannot be written into the setup/, JSON.stringify(bad));
+  }
+});
+
+test('the certificate script only lets plain domain names reach certbot', async () => {
+  const { serverSetup } = await import('../src/hosting/setup.js');
+  const { execFileSync } = await import('node:child_process');
+  const script = serverSetup({ hostingDir: root, serverDir: '/x', node: '/usr/bin/node', user: 'u', email: 'a@b.io', ip: null, sitesPort: 4100 })
+    .files.find((f) => f.path === '/usr/local/sbin/remastly-certs').content;
+  // certbot replaced by a stand-in that records what it was asked for; the state folder moved into the test folder.
+  const bin = path.join(root, 'bin');
+  await mkdir(bin, { recursive: true });
+  await writeFile(path.join(bin, 'certbot'), `#!/bin/sh\necho "$@" >> '${root}/certbot-calls.txt'\n`, { mode: 0o755 });
+  const runnable = script.replace('STATE=/var/lib/remastly-certs', `STATE='${root}/state'`).replace(/stat -c %Y/g, 'stat -f %m');
+  await writeFile(path.join(root, 'certs-wanted.txt'), 'good.example.com\n$(touch pwned)\nbad;name\nwww.acme.com\n');
+  await mkdir(path.join(root, 'certs', 'www.acme.com'), { recursive: true });
+  await writeFile(path.join(root, 'certs', 'www.acme.com', 'fullchain.pem'), 'x');
+  await writeFile(path.join(root, 'certs.sh'), runnable);
+  execFileSync('sh', [path.join(root, 'certs.sh')], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+  const { readFile } = await import('node:fs/promises');
+  const calls = (await readFile(path.join(root, 'certbot-calls.txt'), 'utf8')).trim().split('\n');
+  assert.equal(calls.length, 1, 'only the good name without a certificate');
+  assert.match(calls[0], /-d good\.example\.com --cert-name good\.example\.com/);
+  // A second run within the hour does not ask again (Let's Encrypt limits failed checks).
+  execFileSync('sh', [path.join(root, 'certs.sh')], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+  assert.equal((await readFile(path.join(root, 'certbot-calls.txt'), 'utf8')).trim().split('\n').length, 1);
 });
