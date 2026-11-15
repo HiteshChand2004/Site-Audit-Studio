@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Camera, Check, CircleCheck, CircleHelp, CircleX, CloudUpload, Power, Copy, Download, ExternalLink, Globe, History, Inbox, KeyRound, Link2, Loader2, RefreshCw, Rocket, Server, Trash2, Unplug, Upload } from 'lucide-react';
+import { Camera, Check, CircleCheck, CircleHelp, CircleX, CloudUpload, Power, Copy, Download, ExternalLink, Globe, History, Inbox, Link2, Loader2, RefreshCw, Rocket, Server, Trash2, Unplug, Upload } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import Modal from '../../components/common/Modal.jsx';
 import ConfirmDialog from '../../components/common/ConfirmDialog.jsx';
@@ -16,9 +16,8 @@ import ws from '../Workspace.module.css';
 import panel from '../Panel.module.css';
 import styles from './GoLiveStep.module.css';
 
-const STEP_ORDER = ['package', 'site', 'upload', 'publish'];
-// Remastly's own server has no site to make and nothing to wait for: the files are written and live in one step.
-const SERVER_STEPS = ['package', 'upload'];
+// Remastly's own server: the files are packed, then written and live in one step.
+const STEPS = ['package', 'upload'];
 const POLL_MS = 1500;
 const isRunning = (d) => d && (d.status === 'queued' || d.status === 'running');
 const Spin = (p) => <Loader2 {...p} className={panel.spin} />;
@@ -29,17 +28,12 @@ function size(bytes) {
 }
 
 /**
- * Step 5: choose where the site goes live (Remastly hosting, set up once by the owner, or the person's own Netlify account), then
- * publish the latest copy and update it after every new one.
+ * Step 5: publish the latest copy on Remastly's own server at its domain, and update it after every new one. (Sites put on Netlify
+ * before keep their link, history and Go back here; new ones go to Remastly's server only.)
  */
 export default function GoLiveStep({ project, onGoCreate }) {
   const [data, setData] = useState(null);
   const [loadError, setLoadError] = useState(null);
-  const [asking, setAsking] = useState(false);
-  const [askDisconnect, setAskDisconnect] = useState(false);
-  const [askRemastly, setAskRemastly] = useState(false);
-  const [askRemoveRemastly, setAskRemoveRemastly] = useState(false);
-  const [chosen, setChosen] = useState(null);
   const [domainInput, setDomainInput] = useState('');
   const [askSetup, setAskSetup] = useState(false);
   const [askRestore, setAskRestore] = useState(null);
@@ -68,7 +62,6 @@ export default function GoLiveStep({ project, onGoCreate }) {
     setData(null);
     setAccepted(new Set());
     setStartError(null);
-    setChosen(null);
     // The original's own name, offered first: a copy usually takes its place.
     try { setDomainInput(new URL(project.url).hostname); } catch { setDomainInput(''); }
     load();
@@ -104,8 +97,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
     );
   }
 
-  const { readiness, connection, deployments = [] } = data;
-  const remastly = data.remastly ?? { ready: false, canManage: false, account: null };
+  const { readiness, deployments = [] } = data;
   if (readiness.blockers.some((b) => b.id === 'no-copy')) {
     return (
       <div className={ws.stepBody}>
@@ -122,15 +114,11 @@ export default function GoLiveStep({ project, onGoCreate }) {
   const stackName = stackById(data.stack).name;
   const warnings = readiness.warnings ?? [];
   const allAccepted = warnings.every((w) => accepted.has(w.id));
-  // Remastly hosting when it is set up, unless the person picks their own account.
-  const server = data.server ?? { ready: false, ip: null, domain: null };
-  // Remastly's own server when it is set up, then Remastly hosting on Netlify, then the person's own account; unless they chose.
-  const target = (chosen === 'server' && !server.ready ? null : chosen) ?? (server.ready ? 'server' : remastly.ready ? 'remastly' : 'own');
-  // The first deploy to the server needs the domain the site will answer at; later ones keep it.
-  const askDomain = target === 'server' && server.ready && !server.domain;
-  const placeReady = target === 'server' ? server.ready && (!askDomain || Boolean(domainInput.trim()))
-    : target === 'remastly' ? remastly.ready : Boolean(connection);
-  const needPlace = target === 'server' ? (server.ready ? T.needDomain : T.needServer) : target === 'remastly' ? T.needRemastly : T.needConnect;
+  const server = data.server ?? { ready: false, ip: null, domain: null, canSetUp: false };
+  // The first deploy needs the domain the site will answer at; later ones keep it.
+  const askDomain = server.ready && !server.domain;
+  const placeReady = server.ready && (!askDomain || Boolean(domainInput.trim()));
+  const needPlace = server.ready ? T.needDomain : T.needServer;
   const canDeploy = placeReady && readiness.ok && allAccepted && !running && !starting;
   const latestFailed = latest?.status === 'failed' ? latest : null;
 
@@ -138,7 +126,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
     setStarting(true);
     setStartError(null);
     try {
-      await api.startDeploy(project.id, { recreateId: data.recreateId, stack: data.stack, accept: [...accepted], target, ...(askDomain && { domain: domainInput.trim() }) });
+      await api.startDeploy(project.id, { recreateId: data.recreateId, stack: data.stack, accept: [...accepted], target: 'server', ...(askDomain && { domain: domainInput.trim() }) });
       await load();
     } catch (err) {
       setStartError(err.message);
@@ -160,18 +148,6 @@ export default function GoLiveStep({ project, onGoCreate }) {
     await load();
   }
 
-  async function removeRemastly() {
-    await api.removeRemastlyHosting().catch(() => {});
-    setAskRemoveRemastly(false);
-    await load();
-  }
-
-  async function disconnect() {
-    await api.disconnectHosting('netlify').catch(() => {});
-    setAskDisconnect(false);
-    await load();
-  }
-
   const toggle = (id) => setAccepted((prev) => {
     const next = new Set(prev);
     if (next.has(id)) next.delete(id);
@@ -179,9 +155,8 @@ export default function GoLiveStep({ project, onGoCreate }) {
     return next;
   });
 
-  const order = latest?.hosting === 'server' ? SERVER_STEPS : STEP_ORDER;
-  const steps = running ? order.map((key, i) => {
-    const at = order.indexOf(latest?.step ?? 'package');
+  const steps = running ? STEPS.map((key, i) => {
+    const at = STEPS.indexOf(latest?.step ?? 'package');
     return { key, ...T.steps[key], state: i < at ? 'done' : i === at ? 'active' : 'pending' };
   }) : null;
 
@@ -214,81 +189,13 @@ export default function GoLiveStep({ project, onGoCreate }) {
       )}
 
       <Card icon={Server} title={T.whereTitle} sub={T.whereSub}>
-        <div className={styles.places} role="radiogroup" aria-label={T.whereTitle}>
-          <label className={styles.place} data-active={target === 'server' || undefined} data-off={!server.ready || undefined}>
-            {/* Not selectable until this Remastly hosts: choosing it would only grey out Go live. */}
-            <input type="radio" name="sas-place" checked={target === 'server'} onChange={() => setChosen('server')} disabled={running || !server.ready} />
-            <span className={styles.placeText}>
-              <span className={styles.placeName}>{T.serverOption} <span className={styles.recommended}>{T.recommended}</span></span>
-              <span className={styles.placeExplain}>{T.serverOptionText}</span>
-              {!server.ready && <span className={styles.placeExplain}>{T.serverNotReady}</span>}
-              {remastly.canManage && (
-                <span><button type="button" className={styles.copy} onClick={() => setAskSetup(true)}>{T.serverSetupButton}</button></span>
-              )}
-            </span>
-          </label>
-          <label className={styles.place} data-active={target === 'remastly' || undefined}>
-            <input type="radio" name="sas-place" checked={target === 'remastly'} onChange={() => setChosen('remastly')} disabled={running} />
-            <span className={styles.placeText}>
-              <span className={styles.placeName}>{T.remastlyOption}</span>
-              <span className={styles.placeExplain}>{T.remastlyOptionText}</span>
-              {!remastly.ready && !remastly.canManage && <span className={styles.placeExplain}>{T.remastlyNotReady}</span>}
-            </span>
-          </label>
-          <label className={styles.place} data-active={target === 'own' || undefined}>
-            <input type="radio" name="sas-place" checked={target === 'own'} onChange={() => setChosen('own')} disabled={running} />
-            <span className={styles.placeText}>
-              <span className={styles.placeName}>{T.ownOption}</span>
-              <span className={styles.placeExplain}>{T.ownOptionText}</span>
-            </span>
-          </label>
-        </div>
-        {remastly.canManage && target === 'remastly' && (
-          <div className={styles.accountRow} style={{ marginTop: 'var(--sp-3)' }}>
-            <p className={ws.hint} style={{ margin: 0 }}>{remastly.account ? T.remastlyAccount(remastly.account) : T.remastlyNotReadyOwner}</p>
-            <div className={styles.accountButtons}>
-              {remastly.ready ? (
-                <>
-                  <Button size="sm" onClick={() => setAskRemastly(true)}>{T.remastlyReplace}</Button>
-                  <Button size="sm" icon={Unplug} onClick={() => setAskRemoveRemastly(true)}>{T.remastlyRemove}</Button>
-                </>
-              ) : (
-                <Button size="sm" variant="primary" onClick={() => setAskRemastly(true)}>{T.remastlySetUp}</Button>
-              )}
-            </div>
+        {!server.ready && <p className={ws.hint} style={{ margin: 0 }}>{T.serverNotReady}</p>}
+        {server.canSetUp && (
+          <div className={styles.accountButtons} style={{ marginTop: server.ready ? 0 : 'var(--sp-3)' }}>
+            <Button size="sm" onClick={() => setAskSetup(true)}>{T.serverSetupButton}</Button>
           </div>
         )}
       </Card>
-
-      {target === 'own' && (
-      <Card
-        icon={KeyRound}
-        title={T.accountTitle}
-        sub={T.accountSub}
-        actions={!connection && <Button variant="primary" onClick={() => setAsking(true)}>{T.connect}</Button>}
-      >
-        {connection ? (
-          // Two buttons sit in the body, not the header: on a phone the header has no room for them beside the title.
-          <div className={styles.accountRow}>
-            <p className={ws.hint} style={{ margin: 0 }}>{T.connected(connection)}</p>
-            <div className={styles.accountButtons}>
-              <Button size="sm" onClick={() => setAsking(true)}>{T.replace}</Button>
-              <Button size="sm" icon={Unplug} onClick={() => setAskDisconnect(true)}>{T.disconnect}</Button>
-            </div>
-          </div>
-        ) : (
-          <>
-            <p className={ws.hint} style={{ marginTop: 0 }}>{T.notConnected}</p>
-            <ol className={styles.howTo}>
-              {T.howTo.map((line) => <li key={line}>{line}</li>)}
-            </ol>
-            <a className={styles.linkButton} href={T.tokenPage} target="_blank" rel="noopener noreferrer">
-              <ExternalLink size={14} aria-hidden="true" /> {T.openTokenPage}
-            </a>
-          </>
-        )}
-      </Card>
-      )}
 
       <Card
         icon={CloudUpload}
@@ -385,88 +292,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
         {askRestore ? T.putBackText(timeAgo(askRestore.startedAt)) : ''}
       </ConfirmDialog>
       <ServerSetupDialog open={askSetup} onClose={() => setAskSetup(false)} />
-      <TokenDialog open={asking} onClose={() => setAsking(false)} onConnected={async () => { setAsking(false); await load(); }} />
-      <TokenDialog remastly open={askRemastly} onClose={() => setAskRemastly(false)} onConnected={async () => { setAskRemastly(false); setChosen(null); await load(); }} />
-      <ConfirmDialog open={askRemoveRemastly} onClose={() => setAskRemoveRemastly(false)} title={T.remastlyRemoveTitle} confirmLabel={T.remastlyRemove} danger onConfirm={removeRemastly}>
-        {T.remastlyRemoveText}
-      </ConfirmDialog>
-      <ConfirmDialog open={askDisconnect} onClose={() => setAskDisconnect(false)} title={T.disconnectTitle} confirmLabel={T.disconnect} danger onConfirm={disconnect}>
-        {T.disconnectText}
-      </ConfirmDialog>
     </div>
-  );
-}
-
-/**
- * Asks for a Netlify personal access token; the server checks it with Netlify before keeping it. `remastly`: the token of
- * Remastly's own hosting account (owner only), instead of the person's own.
- */
-function TokenDialog({ open, onClose, onConnected, remastly = false }) {
-  const [token, setToken] = useState('');
-  const [error, setError] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const field = useRef(null);
-  useEffect(() => {
-    if (!open) return undefined;
-    setToken('');
-    setError(null);
-    // The native dialog focuses its first control (the ×) when it opens, after this effect: the field is focused a frame later.
-    const f = requestAnimationFrame(() => field.current?.focus());
-    return () => cancelAnimationFrame(f);
-  }, [open]);
-
-  async function submit(e) {
-    e.preventDefault();
-    if (!token.trim()) return setError(T.tokenEmpty);
-    setSaving(true);
-    setError(null);
-    try {
-      if (remastly) await api.setupRemastlyHosting(token.trim());
-      else await api.connectHosting('netlify', token.trim());
-      setToken('');
-      await onConnected();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={remastly ? T.remastlyDialogTitle : T.dialogTitle}
-      description={remastly ? T.remastlyDialogText : T.dialogText}
-      footer={
-        <div style={{ display: 'flex', flexWrap: 'wrap-reverse', justifyContent: 'flex-end', gap: 'var(--sp-2)', width: '100%' }}>
-          <Button onClick={onClose} disabled={saving}>Cancel</Button>
-          <Button variant="primary" type="submit" form={remastly ? 'sas-remastly-token-form' : 'sas-token-form'} icon={saving ? Spin : undefined} disabled={saving}>
-            {saving ? T.checking : remastly ? T.remastlySetUp : T.connect}
-          </Button>
-        </div>
-      }
-    >
-      <form id={remastly ? 'sas-remastly-token-form' : 'sas-token-form'} className={form.form} onSubmit={submit} noValidate>
-        <label className={form.field}>
-          <span className={form.label}>{T.tokenLabel}</span>
-          <input
-            className={form.input}
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            aria-invalid={error ? 'true' : undefined}
-            ref={field}
-          />
-        </label>
-        {error && <p className={form.error} role="alert" style={{ margin: 0 }}>{error}</p>}
-        <a className={styles.linkButton} href={T.tokenPage} target="_blank" rel="noopener noreferrer">
-          <ExternalLink size={14} aria-hidden="true" /> {T.openTokenPage}
-        </a>
-      </form>
-    </Modal>
   );
 }
 

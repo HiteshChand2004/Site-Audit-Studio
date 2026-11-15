@@ -204,7 +204,8 @@ deployRouter.get('/:id/deploy', async (req, res) => {
     recreateId, copiedAt, stack, readiness,
     connection: getConnection(ownerKeyOf(req), 'netlify'),
     remastly: remastlyOf(req),
-    server: { ready: Boolean(serverIp()), ip: serverIp(), domain: (await hostsOf(project.id)).primary },
+    // canSetUp: the one-time server setup is the owner's (GET /api/hosting/server-setup).
+    server: { ready: Boolean(serverIp()), ip: serverIp(), domain: (await hostsOf(project.id)).primary, canSetUp: owner },
     running: deployRunning(project.id),
     // A site on Remastly hosting is managed in Remastly's own Netlify account: only the owner gets that link.
     deployments: listDeployments(project.id).map((d) => (d?.hosting === 'remastly' && !owner ? { ...d, adminUrl: null } : d)),
