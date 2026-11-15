@@ -105,6 +105,75 @@ test('Lighthouse: a check whose amount did not grow is the host (e); one that gr
   assert.equal(heavier.reason, null);
 });
 
+// A run of a page as Lighthouse records it: what holds the first paint back (url, bytes), every request with its start, and
+// the moments it observed. pitchlight's copy (2026-11-14): the same six blocking files as the original, plus a site icon the
+// browser asked for after the page had loaded; the phone time 330 → 910 ms was read as "Our bug, other requests".
+const run = ({ origin, blocking, later = [], fcp = 680, lcpAt = 1090, load = 1180, ms = 330 }) => lhr({
+  'render-blocking-resources': { numericValue: ms, numericUnit: 'millisecond', details: { items: blocking.map(([p, bytes]) => ({ url: `${origin}${p}`, totalBytes: bytes, wastedMs: 300 })) } },
+  'network-requests': { details: { items: [
+    { url: `${origin}/`, resourceType: 'Document', networkRequestTime: 3 },
+    ...blocking.map(([p], i) => ({ url: `${origin}${p}`, resourceType: /\.css/.test(p) ? 'Stylesheet' : 'Script', networkRequestTime: 135 + i })),
+    ...later.map(([p, type, at]) => ({ url: `${origin}${p}`, resourceType: type, networkRequestTime: at })),
+  ] } },
+  metrics: { details: { items: [{ observedFirstContentfulPaint: fcp, observedLargestContentfulPaint: lcpAt, observedLoad: load }] } },
+  ...lcp('h1.hero', 0), ...weight(500000),
+});
+const BLOCKING = [['/css2~305ecc22.css', 1037], ['/static/css/tokens~e3982324.css', 1088], ['/static/css/landing~5333db55.css', 4365], ['/static/js/nav~5333db55.js', 2007]];
+const LIVE = 'https://pitch.example-original.test';
+
+test('render-blocking: judged by the files that hold the first paint back, never by what loads after it', () => {
+  const row = (oldRun, newRun) => one({ key: 'lighthouse.render-blocking-resources' }, { oldLhr: { mobile: oldRun }, newLhr: { mobile: newRun } });
+  // The same files, the icon asked for after the load: the measurement's, whatever the time.
+  const icon = row(run({ origin: COPY, blocking: BLOCKING }), run({ origin: COPY, blocking: BLOCKING, ms: 910, later: [['/icons/favicon-generated.svg', 'Other', 1182]] }));
+  assert.equal(icon.reason, 'deploy', icon.evidence);
+  assert.equal(icon.group, 'measurement');
+  assert.match(icon.evidence, /330 → 910 ms, the copy's first paint waits for the same 4 files as the original's, in the same order, none larger and none from a new host/);
+  // The live original asks a font service for its font stylesheet; the copy serves the same file from its own address: matched
+  // by name, and the copy's own host is never a new connection. A file from a host the original's first paint never waits for is.
+  const abs = (blocking, ms = 330) => lhr({ 'render-blocking-resources': { numericValue: ms, numericUnit: 'millisecond', details: { items: blocking.map(([url, totalBytes]) => ({ url, totalBytes })) } } });
+  const fonts = 'https://fonts.example-cdn.test';
+  const own = (o) => BLOCKING.slice(1).map(([p, b]) => [`${o}${p}`, b]);
+  const moved = row(abs([[`${fonts}/css2?family=Manrope`, 1100], ...own(LIVE)]), abs([[`${COPY}/css2~305ecc22.css`, 1037], ...own(COPY)], 900));
+  assert.equal(moved.reason, 'deploy', 'the font stylesheet now on the copy\'s own host: the same file, no new host');
+  const foreign = row(abs(own(LIVE)), abs([['https://widgets.other.test/w.css', 900], ...own(COPY)], 900));
+  assert.equal(foreign.reason, null);
+  assert.match(foreign.evidence, /waits for \/w\.css from widgets\.other\.test, a host the original's first paint does not wait for/);
+  // Fewer is fine; one more, a larger one, another order: the copy blocks more, named.
+  assert.equal(row(run({ origin: COPY, blocking: BLOCKING }), run({ origin: COPY, blocking: BLOCKING.slice(1), ms: 900 })).reason, 'deploy');
+  const added = row(run({ origin: COPY, blocking: BLOCKING }), run({ origin: COPY, blocking: [...BLOCKING, ['/js/sas-guard.js', 900]], ms: 900 }));
+  assert.equal(added.reason, null);
+  assert.match(added.evidence, /waits for \/js\/sas-guard\.js, which the original's does not wait for/);
+  const larger = row(run({ origin: COPY, blocking: BLOCKING }), run({ origin: COPY, blocking: BLOCKING.map(([p, b], i) => [p, i === 2 ? 17006 : b]), ms: 900 }));
+  assert.equal(larger.reason, null);
+  assert.match(larger.evidence, /landing~5333db55\.css holds the copy's first paint back with 17 KB against the original's 4 KB/);
+  const order = row(run({ origin: COPY, blocking: BLOCKING }), run({ origin: COPY, blocking: [BLOCKING[1], BLOCKING[0], ...BLOCKING.slice(2)], ms: 900 }));
+  assert.equal(order.reason, null);
+  assert.match(order.evidence, /in another order/);
+  // No list on one side: no proof.
+  assert.equal(row(lhr({}), run({ origin: COPY, blocking: BLOCKING })).reason, null);
+});
+
+test('other time rows count only the requests started by the moment they measure; a score row only those started by the load', () => {
+  const fcp = (oldRun, newRun) => one({ key: 'lighthouse.first-contentful-paint' }, { oldLhr: { mobile: oldRun }, newLhr: { mobile: newRun } });
+  const withFcp = (r, ms) => ({ ...r, audits: { ...r.audits, 'first-contentful-paint': { numericValue: ms, numericUnit: 'millisecond' } } });
+  const after = fcp(withFcp(run({ origin: COPY, blocking: BLOCKING }), 900), withFcp(run({ origin: COPY, blocking: BLOCKING, later: [['/icons/favicon-generated.svg', 'Other', 1182]] }), 1400));
+  assert.equal(after.reason, 'deploy', after.evidence);
+  assert.match(after.evidence, /the same requests started by the first paint \(5 /);
+  const before = fcp(withFcp(run({ origin: COPY, blocking: BLOCKING }), 900), withFcp(run({ origin: COPY, blocking: BLOCKING, later: [['/sas-forms.json', 'Fetch', 400]] }), 1400));
+  assert.equal(before.reason, null, 'a request started before the first paint counts');
+  assert.match(before.evidence, /other requests than the original started by the first paint: 6 .*1 Fetch/);
+
+  const score = (early) => one({
+    key: 'lighthouse-score.mobile.performance./', before: { score: 92 }, after: { score: 86 },
+    lighthousePage: { mode: 'mobile', category: 'performance', weight: { original: 500000, copy: 500000 }, lcp: { original: { selector: 'h1' }, copy: { selector: 'h1' } },
+      requests: { original: { total: 16, byType: { Script: 5 } }, copy: { total: 17, byType: { Script: 5, Other: 1 } } },
+      ...(early && { earlyRequests: { original: { total: 16, byType: { Script: 5 } }, copy: { total: 16, byType: { Script: 5 } } } }) },
+  });
+  assert.equal(score(true).reason, 'deploy');
+  assert.match(score(true).evidence, /the same requests started by the load event/);
+  assert.equal(score(false).reason, null, 'a row kept before the early requests were recorded: every request, as before');
+});
+
 test('contrast: the original\'s own colours seen more often is its look (d); a colour the original never failed with is unexplained', () => {
   const axe = (nodes) => ({ violations: [{ id: 'color-contrast', nodes: nodes.map(([target, fg]) => ({ target: [target], html: `<span class="${target}">`, any: [{ data: { fgColor: fg, bgColor: '#ffffff', contrastRatio: 3.16 } }] })) }] });
   const oldAxe = axe([['.chip:nth-child(1)', '#8b90a5'], ['.label', '#8b90a5']]);

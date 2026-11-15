@@ -169,15 +169,65 @@ export async function probeOwnFiles(pageUrl, fetchImpl = fetch) {
  * count). Null when the report has no request list (a run that never painted). What a speed row needs to say the copy loads
  * the same thing as the original (copy/gotWorse.js sameLoad).
  */
-export function requestsOf(lhr) {
+export function requestsOf(lhr, beforeMs = Infinity) {
   const items = lhr?.audits?.['network-requests']?.details?.items;
   if (!Array.isArray(items) || !items.length) return null;
   const byType = {};
+  let total = 0;
   for (const q of items) {
+    // Only the requests that started by `beforeMs` (the run's own clock, as Lighthouse records each request's start): what
+    // starts after a moment cannot have delayed it (a site icon the browser asks for once the page has loaded). A request
+    // without a recorded start is counted (nothing is assumed).
+    if (Number.isFinite(beforeMs) && Number.isFinite(q?.networkRequestTime) && q.networkRequestTime > beforeMs) continue;
     const type = String(q?.resourceType ?? 'Other');
     byType[type] = (byType[type] ?? 0) + 1;
+    total++;
   }
-  return { total: items.length, byType };
+  return { total, byType };
+}
+
+/**
+ * The requests two trimmed runs started by the later of their two load moments, counted the same way on both sides ({ original,
+ * copy }, each { total, byType }); null when either run lacks its request starts or its load moment (a run kept before they
+ * were recorded).
+ */
+export function earlyRequests(original, copy) {
+  if (!Array.isArray(original?.requestStarts) || !Array.isArray(copy?.requestStarts)) return null;
+  if (!Number.isFinite(original.observedLoad) || !Number.isFinite(copy.observedLoad) || !original.requestStarts.length || !copy.requestStarts.length) return null;
+  const cut = Math.max(original.observedLoad, copy.observedLoad);
+  const count = (starts) => {
+    const byType = {};
+    let total = 0;
+    for (const [type, at] of starts) {
+      if (Number.isFinite(at) && at > cut) continue;
+      byType[type] = (byType[type] ?? 0) + 1;
+      total++;
+    }
+    return { total, byType };
+  };
+  return { original: count(original.requestStarts), copy: count(copy.requestStarts) };
+}
+
+/** A moment the run observed (`observedFirstContentfulPaint`, `observedLoad`, …: ms on the requests' clock), or null. */
+export function observedAt(lhr, key) {
+  const v = lhr?.audits?.metrics?.details?.items?.[0]?.[key];
+  return Number.isFinite(v) ? v : null;
+}
+
+/**
+ * The files that held the first paint back in one run (render-blocking-resources, else the render-blocking insight): { url,
+ * bytes, start } each, in the order the page asked for them (each request's start, else the audit's order). Null when the run
+ * has neither audit (nothing is known); [] when it names none.
+ */
+export function blockingFilesOf(lhr) {
+  const audit = lhr?.audits?.['render-blocking-resources'] ?? lhr?.audits?.['render-blocking-insight'];
+  const items = audit?.details?.items;
+  if (!Array.isArray(items)) return null;
+  const starts = new Map((lhr?.audits?.['network-requests']?.details?.items ?? []).map((q) => [q.url, q.networkRequestTime]));
+  return items.filter((i) => typeof i?.url === 'string')
+    .map((i, n) => ({ url: i.url, bytes: Number.isFinite(i.totalBytes) ? i.totalBytes : null, start: Number.isFinite(starts.get(i.url)) ? starts.get(i.url) : null, n }))
+    .sort((a, b) => (a.start ?? Infinity) - (b.start ?? Infinity) || a.n - b.n)
+    .map(({ url, bytes, start }) => ({ url, bytes, start }));
 }
 
 /** The entries of an errors-in-console audit: { source, text, url } each (source: Lighthouse's `exception`, `network`, …). */
@@ -240,6 +290,13 @@ export function trimReport(lhr) {
     ownFailures: ownFailuresOf(lhr),
     weightBytes: lhr?.audits?.['total-byte-weight']?.numericValue ?? null,
     requests: requestsOf(lhr),
+    // Each request's type and start, and the moment the page loaded: a comparison counts the requests both sides started by the
+    // later of the two loads (earlyRequests; an icon the browser asks for after the load cannot lower a speed score). And the
+    // files that held the first paint back. What a speed row compares (copy/gotWorse.js sameLoad, sameBlocking).
+    requestStarts: (lhr?.audits?.['network-requests']?.details?.items ?? []).slice(0, 2000)
+      .map((q) => [String(q?.resourceType ?? 'Other'), Number.isFinite(q?.networkRequestTime) ? Math.round(q.networkRequestTime) : null]),
+    observedLoad: observedAt(lhr, 'observedLoad'),
+    blocking: blockingFilesOf(lhr),
     lcpElement: lcp ? { selector: lcp.selector ?? null, snippet: String(lcp.snippet ?? lcp.selector ?? '').slice(0, 100) } : null,
     audits,
     failingByCategory,
@@ -484,6 +541,7 @@ export async function compareLighthousePages({ pages, cacheDir, outDir, run, pro
             // The requests each side made (null for a run kept before they were recorded): a speed row is put down to the
             // measurement host only when they are the same (copy/gotWorse.js sameLoad).
             requests: { original: originalRuns[0].requests ?? null, copy: copyRuns[0].requests ?? null },
+            earlyRequests: earlyRequests(originalRuns[0], copyRuns[0]),
             failing: { original: Object.keys(originalRuns[0].audits), copy: Object.keys(copyRuns[0].audits) },
             copyAudits: copyRuns[0].audits,
             // Per category, what fails on the copy (its first run; null for a run kept before this was recorded).
