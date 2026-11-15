@@ -28,6 +28,9 @@ const INSPECT_MARGIN = 15000;
 // A page still being captured is abandoned this long before the limit (shorter than INSPECT_MARGIN, so a page that was
 // started in time and is merely slow still gets its chance).
 const PAGE_LIMIT_MARGIN = 5000;
+// A page set aside for time is tried again after the others only with at least this long left (or a typical page's time,
+// when that is longer), asked from the job's budget when the step's own limit is closer.
+export const LATE_PAGE_MIN_MS = 60000;
 // Time per page for the hover / focus probing of the desktop view.
 const MOTION_BUDGET = 8000;
 // Clicking menus, tabs, sliders and dialogs (full-site B.1, capture/clicks.js), after the hover probe.
@@ -355,6 +358,10 @@ export async function inspectStage(ctx) {
       notCaptured.push(info.path);
       failedPages.push({ url: info.url, source: info.source, reason: 'time-limit' });
     };
+    // A page that did not fit is not given up at once: it is tried again after the others (retryLate below), with the time the
+    // job's budget still has. The check that set it aside judges by the slowest page so far, which is a cautious guess.
+    const late = []; // { i, info }
+    const setAside = (i, info) => late.push({ i, info });
 
     // One page: captured, captured again when an outage or sleep overlapped it, then kept / reported / set aside as stalled.
     const capturePageOnce = async (info, i, at) => {
@@ -418,7 +425,7 @@ export async function inspectStage(ctx) {
       for (const [n, { i, info }] of todo.entries()) {
         if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
         if (i > 0 && Date.now() + slowest > deadline()) {
-          for (const rest of todo.slice(n)) outOfTime(rest.info);
+          for (const rest of todo.slice(n)) setAside(rest.i, rest.info);
           break;
         }
         await runPage(info, i, 0.2 + 0.75 * ((base + n) / total));
@@ -436,7 +443,7 @@ export async function inspectStage(ctx) {
         while (next < todo.length && inflight.size < atOnce) {
           if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
           if (todo[next].i > 0 && Date.now() + slowest > deadline()) {
-            for (const rest of todo.slice(next)) outOfTime(rest.info);
+            for (const rest of todo.slice(next)) setAside(rest.i, rest.info);
             next = todo.length;
             break;
           }
@@ -467,7 +474,7 @@ export async function inspectStage(ctx) {
       for (const [n, { i, info }] of stalled.entries()) {
         if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
         if (Date.now() + slowest > deadline()) {
-          for (const rest of stalled.slice(n)) outOfTime(rest.info);
+          for (const rest of stalled.slice(n)) setAside(rest.i, rest.info);
           break;
         }
         ctx.progress(0.95 + 0.05 * (n / stalled.length), `Capturing ${info.path} again (it stalled the first time)`);
@@ -482,6 +489,41 @@ export async function inspectStage(ctx) {
         slowest = Math.max(slowest, Date.now() - started);
       pageMs.push(Date.now() - started);
         keep(i, info, result);
+      }
+    }
+
+    // Pages set aside for time, tried once more now that every other page is done, one at a time (the machine is no longer
+    // shared with the other pages of this job). Each needs a typical page's time before the step's limit; when the limit is
+    // closer, the step asks for that time from the job's budget (ctx.extendStep: never past the job's own limit less what the
+    // later steps keep). Only a page that still does not fit, or that stalls on this try, is a time-limit page.
+    late.sort((a, b) => a.i - b.i);
+    report.capture.lateRetry = { setAside: late.length, captured: 0, outOfTime: 0 };
+    if (late.length && !ctx.signal.aborted) {
+      browser ??= await launchBrowser({ proxy: proxy.url });
+      for (const [n, { i, info }] of late.entries()) {
+        if (ctx.signal.aborted) throw new RecreateError('Recreate was stopped.');
+        // deadline() is the step's limit less INSPECT_MARGIN, and a capture is abandoned PAGE_LIMIT_MARGIN before the limit.
+        const need = Math.max(typicalPageMs(), LATE_PAGE_MIN_MS);
+        // Asked with PAGE_LIMIT_MARGIN to spare, so the time spent between asking and checking cannot tip the check over.
+        if (Date.now() + need > deadline()) ctx.extendStep?.(Date.now() + need + INSPECT_MARGIN + PAGE_LIMIT_MARGIN);
+        if (Date.now() + need > deadline()) {
+          for (const rest of late.slice(n)) outOfTime(rest.info);
+          report.capture.lateRetry.outOfTime += late.length - n;
+          break;
+        }
+        ctx.progress(0.95 + 0.05 * (n / late.length), `Capturing ${info.path} (it did not fit in the time earlier)`);
+        ctx.interrupts?.log?.(`inspect: ${info.path} set aside for time → captured after the other pages`);
+        const started = Date.now();
+        const result = await captureOnce(info, i);
+        if (result === null) {
+          outOfTime(info);
+          report.capture.lateRetry.outOfTime++;
+          continue;
+        }
+        slowest = Math.max(slowest, Date.now() - started);
+        pageMs.push(Date.now() - started);
+        keep(i, info, result);
+        if (captured.has(i)) report.capture.lateRetry.captured++;
       }
     }
 
@@ -544,7 +586,7 @@ export async function inspectStage(ctx) {
   const pages = [...captured.entries()].sort((a, b) => a[0] - b[0]).map(([, p]) => p);
 
   if (notCaptured.length) {
-    report.warnings.push(`${notCaptured.length} ${notCaptured.length === 1 ? 'page was' : 'pages were'} not captured within the time limit of the inspect step (${notCaptured.slice(0, 5).join(', ')}${notCaptured.length > 5 ? ', …' : ''}); links to ${notCaptured.length === 1 ? 'it' : 'them'} open a notice page in the new site (never the live site). Run Recreate again to try ${notCaptured.length === 1 ? 'it' : 'them'} once more.`);
+    report.warnings.push(`${notCaptured.length} ${notCaptured.length === 1 ? 'page was' : 'pages were'} not captured within the time limit of the inspect step, also when tried again after the other pages (${notCaptured.slice(0, 5).join(', ')}${notCaptured.length > 5 ? ', …' : ''}); links to ${notCaptured.length === 1 ? 'it' : 'them'} open a notice page in the new site (never the live site). Run Recreate again to try ${notCaptured.length === 1 ? 'it' : 'them'} once more.`);
   }
   ctx.discovery = discovery;
   ctx.pages = pages;

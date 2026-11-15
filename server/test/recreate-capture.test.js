@@ -153,15 +153,56 @@ test('near its time limit the inspect step keeps the pages captured so far inste
   const now = new Date().toISOString();
   const project = seedProject(db, { id, name: 'fixture', url: `${origin}/`, stack: 'html', authorized: 1, recreatePages: 1, analysis: true });
   const stubs = Object.fromEntries(Object.keys(STAGES).map((key) => [key, async () => {}]));
-  // The step has (almost) no time left: the homepage is still captured, the other page is not.
+  // The step has (almost) no time left and the job's budget none to give: the homepage is still captured, the other page is not.
   const inspect = (ctx) => {
     ctx.stepDeadline = Date.now() + 1000;
+    ctx.extendStep = () => ctx.stepDeadline;
     return STAGES.inspect(ctx);
   };
   const report = await runRecreate({ project, recreateId: randomUUID(), progress: () => {}, stages: { ...stubs, inspect } });
   assert.deepEqual(report.pages.map((p) => p.path), ['/']);
   assert.ok(report.discovery.linksToLive.some((l) => l.url === `${origin}/about.html` && l.reason === 'time-limit'));
-  assert.match(report.warnings.join('\n'), /1 page was not captured within the time limit of the inspect step \(\/about\.html\); links to it open a notice page in the new site/);
+  assert.match(report.warnings.join('\n'), /1 page was not captured within the time limit of the inspect step, also when tried again after the other pages \(\/about\.html\); links to it open a notice page in the new site/);
+  assert.deepEqual(report.capture.lateRetry, { setAside: 1, captured: 0, outOfTime: 1 });
+});
+
+test('a page that did not fit in the step\'s time is captured after the others when the job\'s budget has room', async () => {
+  const id = randomUUID();
+  projectIds.push(id);
+  const project = seedProject(db, { id, name: 'fixture', url: `${origin}/`, stack: 'html', authorized: 1, recreatePages: 1, analysis: true });
+  const stubs = Object.fromEntries(Object.keys(STAGES).map((key) => [key, async () => {}]));
+  const asked = [];
+  // The step's own limit is too close for a second page; the job's budget gives it the time (as ctx.extendStep does).
+  const inspect = (ctx) => {
+    ctx.stepDeadline = Date.now() + 1000;
+    ctx.extendStep = (at) => { asked.push(at); ctx.stepDeadline = Math.max(ctx.stepDeadline, at); return ctx.stepDeadline; };
+    return STAGES.inspect(ctx);
+  };
+  const report = await runRecreate({ project, recreateId: randomUUID(), progress: () => {}, stages: { ...stubs, inspect } });
+  assert.deepEqual(report.pages.map((p) => p.path), ['/', '/about.html'], 'both pages, in discovery order');
+  assert.equal(asked.length, 1, 'the time was asked for once');
+  assert.ok(!report.discovery.linksToLive.some((l) => l.reason === 'time-limit'));
+  assert.doesNotMatch(report.warnings.join('\n'), /not captured within the time limit/);
+  assert.deepEqual(report.capture.lateRetry, { setAside: 1, captured: 1, outOfTime: 0 });
+});
+
+test('ctx.extendStep moves the step in front later, never past the job\'s own limit less what the later steps keep', async () => {
+  const id = randomUUID();
+  projectIds.push(id);
+  const project = seedProject(db, { id, name: 'fixture', url: `${origin}/`, stack: 'html', authorized: 1, recreatePages: 1, analysis: true });
+  const stubs = Object.fromEntries(Object.keys(STAGES).map((key) => [key, async () => {}]));
+  let seen = null;
+  const inspect = async (ctx) => {
+    const before = ctx.stepDeadline;
+    const near = ctx.extendStep(before - 5000);
+    const far = ctx.extendStep(Date.now() + 1000 * 3600 * 24 * 30);
+    seen = { before, near, far, cap: ctx.jobDeadline - ctx.laterReserve, now: ctx.stepDeadline };
+  };
+  await runRecreate({ project, recreateId: randomUUID(), progress: () => {}, stages: { ...stubs, inspect } });
+  assert.equal(seen.near, seen.before, 'asking for less changes nothing');
+  assert.ok(seen.far <= seen.cap, `${seen.far} ≤ ${seen.cap}`);
+  assert.ok(seen.far >= seen.before);
+  assert.equal(seen.now, seen.far, 'the stage reads the new limit');
 });
 
 test('a page that stalls is abandoned before the step limit: the pages captured so far are kept, the job does not fail', async () => {
@@ -173,6 +214,7 @@ test('a page that stalls is abandoned before the step limit: the pages captured 
   // The second page never finishes. Without the page limit the step would run into its own limit and fail the whole job.
   const inspect = (ctx) => {
     ctx.stepDeadline = Date.now() + 24000;
+    ctx.extendStep = () => ctx.stepDeadline; // the job's budget has nothing to give
     ctx.capturePage = (browser, info, ...rest) => (info.path === '/about.html' ? new Promise(() => {}) : capturePage(browser, info, ...rest));
     return STAGES.inspect(ctx);
   };
@@ -181,7 +223,7 @@ test('a page that stalls is abandoned before the step limit: the pages captured 
   assert.ok(Date.now() - started < 30000, 'abandoned before the step limit');
   assert.deepEqual(report.pages.map((p) => p.path), ['/']);
   assert.ok(report.discovery.linksToLive.some((l) => l.url === `${origin}/about.html` && l.reason === 'time-limit'));
-  assert.match(report.warnings.join('\n'), /1 page was not captured within the time limit of the inspect step \(\/about\.html\)/);
+  assert.match(report.warnings.join('\n'), /1 page was not captured within the time limit of the inspect step, also when tried again after the other pages \(\/about\.html\)/);
 });
 
 test('the inspect step captures every selected page at desktop, laptop, tablet and mobile', async () => {
