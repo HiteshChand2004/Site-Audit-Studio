@@ -16,7 +16,7 @@
 import { REASONS } from './openItems.js';
 import { errorPlace, placeKey } from './ownCodeErrors.js';
 import { FIELDS, FIXES, KINDS_BY_KEY, fixOf } from './fixRegistry.js';
-import { requestsOf } from '../reaudit/lighthousePages.js';
+import { blockingFilesOf, observedAt, requestsOf } from '../reaudit/lighthousePages.js';
 
 /** How much a measured amount may move before it counts as grown: bytes and times vary run to run, element counts do not. */
 const GROWTH = { element: 0.02, other: 0.1 };
@@ -791,7 +791,7 @@ const requestsText = (r) => `${r.total} (${Object.entries(r.byType).sort((a, b) 
  * what was the same, or { ok: false, text } with the first difference.
  * @param {{ wb?: number, wa?: number, lb?: object, la?: object, rb?: object, ra?: object }} o  weight, largest element, requests
  */
-export function sameLoad({ wb, wa, lb, la, rb, ra }) {
+export function sameLoad({ wb, wa, lb, la, rb, ra, by = null }) {
   if (!Number.isFinite(wb) || !Number.isFinite(wa)) return { ok: false, text: 'the page\'s weight is not in both reports' };
   if (!lb || !la) return { ok: false, text: 'the largest element is not named in both reports' };
   if (lb.selector !== la.selector && (!lb.path || lb.path !== la.path)) return { ok: false, text: `the largest element is not the same one: the original's is ${lb.snippet}, the copy's is ${la.snippet}` };
@@ -799,8 +799,67 @@ export function sameLoad({ wb, wa, lb, la, rb, ra }) {
   if (!rb || !ra) return { ok: false, text: 'the requests are not in both reports' };
   const types = new Set([...Object.keys(rb.byType ?? {}), ...Object.keys(ra.byType ?? {})]);
   const differ = [...types].filter((t) => (rb.byType?.[t] ?? 0) !== (ra.byType?.[t] ?? 0));
-  if (rb.total !== ra.total || differ.length) return { ok: false, text: `the copy makes other requests than the original: ${requestsText(ra)} against ${requestsText(rb)}` };
-  return { ok: true, text: `the same page weight (${kb(wb)} → ${kb(wa)}), the same largest element (${la.snippet}) and the same requests (${requestsText(ra)})` };
+  // `by`: the requests were counted up to a moment (only those started by it: what starts later cannot delay it).
+  const when = by ? ` started by ${by}` : '';
+  if (rb.total !== ra.total || differ.length) return { ok: false, text: `the copy makes other requests than the original${when}: ${requestsText(ra)} against ${requestsText(rb)}` };
+  return { ok: true, text: `the same page weight (${kb(wb)} → ${kb(wa)}), the same largest element (${la.snippet}) and the same requests${when} (${requestsText(ra)})` };
+}
+
+/** The moment each timed audit measures, as the run observed it: a request started after it cannot have delayed it. */
+const OBSERVED_AT = {
+  'first-contentful-paint': ['observedFirstContentfulPaint', 'the first paint'],
+  'render-blocking-resources': ['observedFirstContentfulPaint', 'the first paint'],
+  'render-blocking-insight': ['observedFirstContentfulPaint', 'the first paint'],
+  'largest-contentful-paint': ['observedLargestContentfulPaint', 'the largest element\'s paint'],
+  'largest-contentful-paint-element': ['observedLargestContentfulPaint', 'the largest element\'s paint'],
+  'speed-index': ['observedSpeedIndex', 'the speed index'],
+};
+
+/** The audits that list the files holding the first paint back. */
+export const BLOCKING_AUDITS = new Set(['render-blocking-resources', 'render-blocking-insight']);
+
+/** A file's name without a query, an extension and the lift's ~hash: how one file is matched across hosts. */
+const fileStem = (url) => {
+  let name;
+  try { name = decodeURIComponent(new URL(url, 'http://x/').pathname.split('/').pop()); } catch { return null; }
+  return name.replace(/\.[a-z0-9]+$/i, '').replace(/~[0-9a-f]{8}$/i, '').toLowerCase() || null;
+};
+
+/**
+ * Whether the copy holds its first paint back with no more than the original does: every file that blocks the copy's first
+ * paint is one that blocks the original's (matched by file name, across hosts: the copy serves the original's font stylesheet
+ * from its own address), in the same order, none larger on the wire (SAME_WEIGHT + 1 KB for headers), and none from a host the
+ * original's blocking files do not use (a new connection). Fewer is fine. Requests that start after the first paint (an icon,
+ * a data fetch) are not in either list: they cannot delay it. Returns { ok, text }; ok: false also when a list is unknown.
+ * @param {{ url: string, bytes: number|null }[]|null} before  the original's blocking files (lighthousePages.js blockingFilesOf)
+ * @param {{ url: string, bytes: number|null }[]|null} after   the copy's
+ * @param {string} copyHost
+ */
+export function sameBlocking(before, after, copyHost) {
+  if (!Array.isArray(before) || !Array.isArray(after)) return { ok: false, text: 'the files holding the first paint back are not listed in both reports' };
+  const hosts = new Set([copyHost, ...before.map((f) => hostOf(f.url))]);
+  const name = (f) => pathOf(f.url) ?? f.url;
+  let from = 0;
+  for (const f of after) {
+    if (!hosts.has(hostOf(f.url))) return { ok: false, text: `the copy's first paint waits for ${name(f)} from ${hostOf(f.url)}, a host the original's first paint does not wait for` };
+    const stem = fileStem(f.url);
+    const at = before.findIndex((o, i) => i >= from && fileStem(o.url) === stem);
+    if (at < 0) {
+      return { ok: false, text: before.some((o) => fileStem(o.url) === stem)
+        ? `the copy asks for ${name(f)} in another order than the original among the files holding the first paint back`
+        : `the copy's first paint waits for ${name(f)}, which the original's does not wait for` };
+    }
+    const o = before[at];
+    if (Number.isFinite(f.bytes) && Number.isFinite(o.bytes) && f.bytes > o.bytes * (1 + SAME_WEIGHT) + 1024) {
+      return { ok: false, text: `${name(f)} holds the copy's first paint back with ${kb(f.bytes)} against the original's ${kb(o.bytes)}` };
+    }
+    from = at + 1;
+  }
+  const list = after.slice(0, 6).map((f) => `${name(f)}${Number.isFinite(f.bytes) ? ` ${kb(f.bytes)}` : ''}`).join(', ');
+  const count = after.length === before.length
+    ? `the copy's first paint waits for the same ${after.length} file${after.length === 1 ? '' : 's'} as the original's`
+    : `the copy's first paint waits for ${after.length} of the original's ${before.length} files`;
+  return { ok: true, text: `${count}, in the same order, none larger and none from a new host${list ? ` (${list}${after.length > 6 ? ', …' : ''})` : ''}; what starts after the first paint cannot delay it` };
 }
 
 /**
@@ -819,17 +878,31 @@ function lighthousePart(item, id, ctx) {
     const limit = (b?.value ?? 0) * (1 + (a.unit === 'element' ? GROWTH.element : GROWTH.other));
     const timeOnly = a.unit === 'ms';
     if (timeOnly) {
+      const times = `${b ? `${Math.round(b.value)} → ` : ''}${Math.round(a.value)} ms`;
+      // The time the first paint waits for its blocking files is decided by those files alone: the copy blocks no more than
+      // the original when it waits for the same files (or fewer), in the same order, none larger, none from a new host. Then
+      // a longer wait is the measurement's (the host, the computer's load), whatever else the page loads after it.
+      if (BLOCKING_AUDITS.has(id)) {
+        const blocking = sameBlocking(blockingFilesOf(ctx.oldLhr[device]), blockingFilesOf(ctx.newLhr[device]), ctx.copyHost);
+        if (!blocking.ok) return unexplained(`${device}: ${times}, and ${blocking.text}, so the copy holds its first paint back with more than the original.`);
+        rows.push(`${device}: ${times}, ${blocking.text}`);
+        continue;
+      }
       // A time has no amount of its own. The same page loading more slowly is the host; anything else the copy loads differently (more bytes, another largest
-      // element, other requests) is a different page, which no host explains.
+      // element, other requests) is a different page, which no host explains. Only the requests started by the moment the
+      // audit measures count (both sides cut at the later of the two observed moments): one that starts after it cannot delay it.
+      const [mark, label] = OBSERVED_AT[id] ?? [];
+      const cut = mark ? Math.max(observedAt(ctx.oldLhr[device], mark) ?? -1, observedAt(ctx.newLhr[device], mark) ?? -1) : -1;
+      const by = cut >= 0 && observedAt(ctx.oldLhr[device], mark) != null && observedAt(ctx.newLhr[device], mark) != null ? cut : Infinity;
       const same = sameLoad({
         wb: amountOf(ctx.oldLhr[device]?.audits?.['total-byte-weight'])?.value,
         wa: amountOf(ctx.newLhr[device]?.audits?.['total-byte-weight'])?.value,
         lb: lcpElement(ctx.oldLhr[device]),
         la: lcpElement(ctx.newLhr[device]),
-        rb: requestsOf(ctx.oldLhr[device]),
-        ra: requestsOf(ctx.newLhr[device]),
+        rb: requestsOf(ctx.oldLhr[device], by),
+        ra: requestsOf(ctx.newLhr[device], by),
+        by: Number.isFinite(by) ? label : null,
       });
-      const times = `${b ? `${Math.round(b.value)} → ` : ''}${Math.round(a.value)} ms`;
       if (!same.ok) return unexplained(`${device}: ${times}, and ${same.text}, so the time cannot be put down to the host.`);
       rows.push(`${device}: ${times}, ${same.text}`);
       continue;
@@ -1010,7 +1083,11 @@ function scorePart(item, ctx) {
   if (!lp) return unexplained('The row carries no measurement detail, so nothing could be checked.');
   const drop = `${item.before?.score ?? '?'} → ${item.after?.score ?? '?'} (${lp.mode === 'mobile' ? 'phone' : 'computer'})`;
   if (lp.category === 'performance') {
-    const same = sameLoad({ wb: lp.weight?.original, wa: lp.weight?.copy, lb: lp.lcp?.original, la: lp.lcp?.copy, rb: lp.requests?.original, ra: lp.requests?.copy });
+    // The requests started by the load event when both runs recorded them (an icon asked for after the load cannot lower the
+    // score), else every request as before.
+    const early = lp.earlyRequests?.original && lp.earlyRequests?.copy;
+    const same = sameLoad({ wb: lp.weight?.original, wa: lp.weight?.copy, lb: lp.lcp?.original, la: lp.lcp?.copy,
+      rb: early ? lp.earlyRequests.original : lp.requests?.original, ra: early ? lp.earlyRequests.copy : lp.requests?.copy, by: early ? 'the load event' : null });
     if (!same.ok) return unexplained(`${drop}: ${same.text}, so the lower score cannot be put down to the host.`);
     return {
       reason: 'deploy',

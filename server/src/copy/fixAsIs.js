@@ -345,9 +345,11 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     }
     if (allow('head:meta') && !$('link[rel~="icon" i], link[rel="apple-touch-icon" i]').length) {
       if (icon === undefined) icon = await siteIcon(dir, name, theme?.value ?? null);
-      const up = '../'.repeat(d.outPath.split('/').length - 1);
+      // Root-relative, as the copy writes every file of its own (/static/…): a path relative to the page's file broke wherever a
+      // page is served at an address deeper than its file (a converted Next.js page: about.html at /about/ asked for
+      // /about/icons/…).
       head.append('<link rel="icon" href="">');
-      head.find('link[rel="icon"]').last().attr('href', `${up}${icon.file}`);
+      head.find('link[rel="icon"]').last().attr('href', `/${icon.file}`);
       if (icon.type) head.find('link[rel="icon"]').last().attr('type', icon.type);
       fixes.push({ kind: 'head', field: 'icon', value: icon.file, source: icon.source, ...(icon.review && { review: true }) });
     }

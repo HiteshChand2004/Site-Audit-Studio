@@ -195,7 +195,20 @@ const formGuard = function () {
     if (u.host === location.host || h === bare(location.hostname) || own.indexOf(h) >= 0) return null;
     return u.hostname;
   }
-  cfg();
+  // The settings are asked for only by a page that has a form, once it has loaded (its first paint and its load never wait on
+  // the request, and a page with no form makes none), and for a form the page's script draws later, at its first use (a field
+  // focused or pressed). A submit before they are in asks for them itself (below) and sends the form once they are.
+  function soon() {
+    if (document.querySelector && document.querySelector('form')) cfg();
+  }
+  function warm(e) {
+    var t = e.target;
+    if (t && t.closest && t.closest('form')) cfg();
+  }
+  if (document.readyState === 'complete') soon();
+  else window.addEventListener('load', soon);
+  window.addEventListener('focusin', warm, true);
+  window.addEventListener('pointerdown', warm, true);
   window.addEventListener('submit', function (e) {
     var f = e.target;
     if (!(f instanceof HTMLFormElement)) return;
