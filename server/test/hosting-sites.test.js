@@ -166,6 +166,11 @@ test('the server setup is written with this Remastly\'s values, refuses values a
   const file = (p) => s.files.find((f) => f.path === p).content;
   assert.match(file('/etc/nginx/sites-available/remastly-sites'), /ssl_certificate {5}\/srv\/remastly-hosting\/certs\/\$ssl_server_name\/fullchain\.pem;/);
   assert.match(file('/etc/nginx/sites-available/remastly-sites'), /proxy_pass http:\/\/127\.0\.0\.1:4100;/);
+  // Never the server's catch-all: a server's own default_server (bare-IP scans, nameless requests) stays as it is, and no step
+  // switches another site off.
+  assert.doesNotMatch(file('/etc/nginx/sites-available/remastly-sites'), /default_server/);
+  assert.equal(file('/etc/nginx/sites-available/remastly-sites').match(/server_name ~\^\.\+\$;/g).length, 2);
+  assert.ok(!s.steps.some((x) => /sites-enabled\/default|rm -f/.test(x.command)), 'no step removes another nginx site');
   assert.match(file('/etc/systemd/system/remastly-sites.service'), /User=ubuntu\nWorkingDirectory=\/home\/ubuntu\/remastly\/server/);
   assert.match(file('/usr/local/sbin/remastly-certs'), /-m 'ops@example\.com'/);
   assert.deepEqual(s.env, ['SAS_HOSTING_IP=13.205.53.133', 'SAS_HOSTING_DIR=/srv/remastly-hosting']);
