@@ -112,7 +112,9 @@ test('icon: the site\'s own /favicon.ico (no review), else one letter icon for t
     [f] = fixesOf(r, 0, 'icon');
     assert.deepEqual([f.value, f.review], ['icons/favicon-generated.svg', true]);
     assert.match(await readFile(path.join(dir, 'icons', 'favicon-generated.svg'), 'utf8'), /^<svg[\s\S]*<\/svg>\s*$/);
-    assert.match(await readFile(path.join(dir, 'blog', 'index.html'), 'utf8'), /<link rel="icon" href="\.\.\/icons\/favicon-generated\.svg" type="image\/svg\+xml">/);
+    // Root-relative on every page, as the copy names its own files: right at whatever address a page is served.
+    assert.match(await readFile(path.join(dir, 'blog', 'index.html'), 'utf8'), /<link rel="icon" href="\/icons\/favicon-generated\.svg" type="image\/svg\+xml">/);
+    assert.match(await readFile(path.join(dir, 'index.html'), 'utf8'), /<link rel="icon" href="\/icons\/favicon-generated\.svg" type="image\/svg\+xml">/);
   } finally {
     for (const d of dirs) await rm(d, { recursive: true, force: true });
   }

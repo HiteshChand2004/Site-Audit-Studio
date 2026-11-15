@@ -165,6 +165,82 @@ export async function probeOwnFiles(pageUrl, fetchImpl = fetch) {
 }
 
 /**
+ * The requests a page made in one run, as Lighthouse's own request list counts them: { total, byType } (byType: resource type →
+ * count). Null when the report has no request list (a run that never painted). What a speed row needs to say the copy loads
+ * the same thing as the original (copy/gotWorse.js sameLoad).
+ */
+export function requestsOf(lhr, beforeMs = Infinity) {
+  const items = lhr?.audits?.['network-requests']?.details?.items;
+  if (!Array.isArray(items) || !items.length) return null;
+  const byType = {};
+  let total = 0;
+  for (const q of items) {
+    // Only the requests that started by `beforeMs` (the run's own clock, as Lighthouse records each request's start): what
+    // starts after a moment cannot have delayed it (a site icon the browser asks for once the page has loaded). A request
+    // without a recorded start is counted (nothing is assumed).
+    if (Number.isFinite(beforeMs) && Number.isFinite(q?.networkRequestTime) && q.networkRequestTime > beforeMs) continue;
+    const type = String(q?.resourceType ?? 'Other');
+    byType[type] = (byType[type] ?? 0) + 1;
+    total++;
+  }
+  return { total, byType };
+}
+
+/**
+ * The requests two trimmed runs started by the later of their two load moments, counted the same way on both sides ({ original,
+ * copy }, each { total, byType }); null when either run lacks its request starts or its load moment (a run kept before they
+ * were recorded).
+ */
+export function earlyRequests(original, copy) {
+  if (!Array.isArray(original?.requestStarts) || !Array.isArray(copy?.requestStarts)) return null;
+  if (!Number.isFinite(original.observedLoad) || !Number.isFinite(copy.observedLoad) || !original.requestStarts.length || !copy.requestStarts.length) return null;
+  const cut = Math.max(original.observedLoad, copy.observedLoad);
+  const count = (starts) => {
+    const byType = {};
+    let total = 0;
+    for (const [type, at] of starts) {
+      if (Number.isFinite(at) && at > cut) continue;
+      byType[type] = (byType[type] ?? 0) + 1;
+      total++;
+    }
+    return { total, byType };
+  };
+  return { original: count(original.requestStarts), copy: count(copy.requestStarts) };
+}
+
+/** A moment the run observed (`observedFirstContentfulPaint`, `observedLoad`, …: ms on the requests' clock), or null. */
+export function observedAt(lhr, key) {
+  const v = lhr?.audits?.metrics?.details?.items?.[0]?.[key];
+  return Number.isFinite(v) ? v : null;
+}
+
+/**
+ * The files that held the first paint back in one run (render-blocking-resources, else the render-blocking insight): { url,
+ * bytes, start } each, in the order the page asked for them (each request's start, else the audit's order). Null when the run
+ * has neither audit (nothing is known); [] when it names none.
+ */
+export function blockingFilesOf(lhr) {
+  const audit = lhr?.audits?.['render-blocking-resources'] ?? lhr?.audits?.['render-blocking-insight'];
+  const items = audit?.details?.items;
+  if (!Array.isArray(items)) return null;
+  const starts = new Map((lhr?.audits?.['network-requests']?.details?.items ?? []).map((q) => [q.url, q.networkRequestTime]));
+  return items.filter((i) => typeof i?.url === 'string')
+    .map((i, n) => ({ url: i.url, bytes: Number.isFinite(i.totalBytes) ? i.totalBytes : null, start: Number.isFinite(starts.get(i.url)) ? starts.get(i.url) : null, n }))
+    .sort((a, b) => (a.start ?? Infinity) - (b.start ?? Infinity) || a.n - b.n)
+    .map(({ url, bytes, start }) => ({ url, bytes, start }));
+}
+
+/** The entries of an errors-in-console audit: { source, text, url } each (source: Lighthouse's `exception`, `network`, …). */
+export function consoleEntries(a) {
+  const items = Array.isArray(a?.details?.items) ? a.details.items : [];
+  return items.slice(0, 20).map((i) => ({
+    source: typeof i.source === 'string' ? i.source : null,
+    text: String(i.description ?? '').split('\n')[0].slice(0, 200),
+    url: i.sourceLocation?.url ?? i.url ?? null,
+  }));
+}
+
+/**
  * What a run of a page keeps (a full report is ~1 MB; a comparison needs the scores, the page's weight, its largest element and
  * the audits that fail, so a row can be explained): the shape both sides are stored and compared in.
  */
@@ -175,7 +251,10 @@ export function trimReport(lhr) {
     audits[id] = { score: a.score, title: a.title, displayValue: a.displayValue ?? null, numericValue: a.numericValue ?? null, numericUnit: a.numericUnit ?? null,
       ...(Number.isFinite(a.details?.overallSavingsBytes) && { savingsBytes: a.details.overallSavingsBytes }),
       // details.items is a list for most audits; an insight with a checklist (document-latency-insight) keeps an object there.
-      urls: [...new Set((Array.isArray(a.details?.items) ? a.details.items : []).map((i) => i.url ?? i.source?.url ?? i.sourceLocation?.url ?? i.entity ?? null).filter((u) => typeof u === 'string'))].slice(0, 20) };
+      urls: [...new Set((Array.isArray(a.details?.items) ? a.details.items : []).map((i) => i.url ?? i.source?.url ?? i.sourceLocation?.url ?? i.entity ?? null).filter((u) => typeof u === 'string'))].slice(0, 20),
+      // The console's own entries: what kind each is (a failed request, a script that threw, a console.error) and its message,
+      // so an error thrown inside a script is not read as a request for that script.
+      ...(id === 'errors-in-console' && { errors: consoleEntries(a) }) };
   }
   const lcp = lhr?.audits?.['largest-contentful-paint-element']?.details?.items?.[0]?.items?.[0]?.node;
   // A category Lighthouse could not score (null): the audits of it that errored, with their message, so the comparison can say
@@ -210,6 +289,14 @@ export function trimReport(lhr) {
     // The page's own files that did not load in this run (a run missing its own scripts or styles measured something else).
     ownFailures: ownFailuresOf(lhr),
     weightBytes: lhr?.audits?.['total-byte-weight']?.numericValue ?? null,
+    requests: requestsOf(lhr),
+    // Each request's type and start, and the moment the page loaded: a comparison counts the requests both sides started by the
+    // later of the two loads (earlyRequests; an icon the browser asks for after the load cannot lower a speed score). And the
+    // files that held the first paint back. What a speed row compares (copy/gotWorse.js sameLoad, sameBlocking).
+    requestStarts: (lhr?.audits?.['network-requests']?.details?.items ?? []).slice(0, 2000)
+      .map((q) => [String(q?.resourceType ?? 'Other'), Number.isFinite(q?.networkRequestTime) ? Math.round(q.networkRequestTime) : null]),
+    observedLoad: observedAt(lhr, 'observedLoad'),
+    blocking: blockingFilesOf(lhr),
     lcpElement: lcp ? { selector: lcp.selector ?? null, snippet: String(lcp.snippet ?? lcp.selector ?? '').slice(0, 100) } : null,
     audits,
     failingByCategory,
@@ -354,6 +441,57 @@ async function readJson(file) {
 }
 
 /**
+ * One run of one side of a page, as the trimmed report (its full report beside it: `<file>.full.json`). The original's run n is
+ * taken from the cache only when it may stand in for a run made now (staleOriginal, against `copyRun`: the copy's run it is
+ * compared with, measured just before); else it is measured again and the kept file replaced, and the reason is listed in
+ * `result.refreshedOriginal`. `result.runs` counts what was measured and reused. A run of the copy is reused only with
+ * `reuseCopy` (a continued comparison, or runs this re-audit already made).
+ */
+export async function measureRun({ side, p, slug, mode, n, copyRun = null, cacheDir, outDir, run, probe = probeOwnFiles, reuseCopy = false, result }) {
+  // An original measured from its lifted files keeps its runs apart from runs of the live site (p.originalCacheDir).
+  const dir = side === 'original' ? (p.originalCacheDir ?? cacheDir) : outDir;
+  const file = runFile(dir, slug, mode, n);
+  // A continued comparison (reaudit/checkpoint.js): a run of the copy the stopped one finished is taken as it is.
+  if (side === 'copy' && reuseCopy) {
+    const kept = await readJson(file);
+    if (kept?.scores) {
+      result.runs.reusedCopy = (result.runs.reusedCopy ?? 0) + 1;
+      return kept;
+    }
+  }
+  if (side === 'original') {
+    const cached = await readJson(file);
+    if (cached?.scores) {
+      const why = staleOriginal(cached, copyRun);
+      if (!why) {
+        result.runs.reusedOriginal++;
+        return cached;
+      }
+      result.refreshedOriginal.push({ path: p.path, mode, run: n, reason: why });
+    }
+  }
+  const raw = `${file}.full.json`;
+  const summary = await run(side === 'original' ? (p.originalUrl ?? p.url) : p.copyUrl, mode, raw);
+  const lhr = await readJson(raw);
+  if (!lhr?.categories) throw new Error(`Lighthouse wrote no report for ${side} ${p.path} (${mode})`);
+  const trimmed = trimReport(lhr);
+  // A run that ended without a list of requests (the page never painted): its own files are checked directly instead.
+  if (!(lhr.audits?.['network-requests']?.details?.items ?? []).length) {
+    const probed = await probe(side === 'original' ? (p.originalUrl ?? p.url) : p.copyUrl).catch(() => null);
+    if (probed) trimmed.ownFailures = probed;
+  }
+  // Kept with the run (also in the original's cache): what else ran on this server when it was measured, and when.
+  trimmed.contention = summary?.contention ?? null;
+  trimmed.measuredAt = Date.now();
+  await writeFile(file, JSON.stringify(trimmed), 'utf8');
+  result.runs[side]++;
+  return trimmed;
+}
+
+/** A run's file in the original's cache or the re-audit's folder (its full report: `${runFileOf(…)}.full.json`). */
+export const runFileOf = (dir, slug, mode, n) => runFile(dir, slug, mode, n);
+
+/**
  * The comparison on every page.
  * @param {object} o
  * @param {{ path: string, url: string, copyUrl: string }[]} o.pages  the copy's pages: path, the original's address, the copy's
@@ -371,49 +509,7 @@ export async function compareLighthousePages({ pages, cacheDir, outDir, run, pro
   const result = { pages: [], worse: [], unscored: [], extraRunPages: [], skipped: [], errors: [], refreshedOriginal: [], runs: { original: 0, copy: 0, reusedOriginal: 0, ...(reuseCopy && { reusedCopy: 0 }) } };
   const total = pages.length * MODES.length;
   let done = 0;
-  // One run of one side, as the trimmed report. The original's run n is taken from the cache only when it may stand in for a run
-  // made now (staleOriginal, against `copyRun`: the copy's run it is compared with, measured just before); else it is measured
-  // again and the kept file replaced, and the reason is listed.
-  const measure = async (side, p, slug, mode, n, copyRun = null) => {
-    // An original measured from its lifted files keeps its runs apart from runs of the live site (p.originalCacheDir).
-    const dir = side === 'original' ? (p.originalCacheDir ?? cacheDir) : outDir;
-    const file = runFile(dir, slug, mode, n);
-    // A continued comparison (reaudit/checkpoint.js): a run of the copy the stopped one finished is taken as it is.
-    if (side === 'copy' && reuseCopy) {
-      const kept = await readJson(file);
-      if (kept?.scores) {
-        result.runs.reusedCopy++;
-        return kept;
-      }
-    }
-    if (side === 'original') {
-      const cached = await readJson(file);
-      if (cached?.scores) {
-        const why = staleOriginal(cached, copyRun);
-        if (!why) {
-          result.runs.reusedOriginal++;
-          return cached;
-        }
-        result.refreshedOriginal.push({ path: p.path, mode, run: n, reason: why });
-      }
-    }
-    const raw = `${file}.full.json`;
-    const summary = await run(side === 'original' ? (p.originalUrl ?? p.url) : p.copyUrl, mode, raw);
-    const lhr = await readJson(raw);
-    if (!lhr?.categories) throw new Error(`Lighthouse wrote no report for ${side} ${p.path} (${mode})`);
-    const trimmed = trimReport(lhr);
-    // A run that ended without a list of requests (the page never painted): its own files are checked directly instead.
-    if (!(lhr.audits?.['network-requests']?.details?.items ?? []).length) {
-      const probed = await probe(side === 'original' ? (p.originalUrl ?? p.url) : p.copyUrl).catch(() => null);
-      if (probed) trimmed.ownFailures = probed;
-    }
-    // Kept with the run (also in the original's cache): what else ran on this server when it was measured, and when.
-    trimmed.contention = summary?.contention ?? null;
-    trimmed.measuredAt = Date.now();
-    await writeFile(file, JSON.stringify(trimmed), 'utf8');
-    result.runs[side]++;
-    return trimmed;
-  };
+  const measure = (side, p, slug, mode, n, copyRun = null) => measureRun({ side, p, slug, mode, n, copyRun, cacheDir, outDir, run, probe, reuseCopy, result });
   for (const p of pages) {
     const slug = pageSlug(p.path, p.url);
     // originalFrom: 'lifted' = the original's own files as captured, served the way the copy is; 'live' = its site.
@@ -451,6 +547,10 @@ export async function compareLighthousePages({ pages, cacheDir, outDir, run, pro
           detail: {
             weight: { original: originalRuns[0].weightBytes, copy: copyRuns[0].weightBytes },
             lcp: { original: originalRuns[0].lcpElement, copy: copyRuns[0].lcpElement },
+            // The requests each side made (null for a run kept before they were recorded): a speed row is put down to the
+            // measurement host only when they are the same (copy/gotWorse.js sameLoad).
+            requests: { original: originalRuns[0].requests ?? null, copy: copyRuns[0].requests ?? null },
+            earlyRequests: earlyRequests(originalRuns[0], copyRuns[0]),
             failing: { original: Object.keys(originalRuns[0].audits), copy: Object.keys(copyRuns[0].audits) },
             copyAudits: copyRuns[0].audits,
             // Per category, what fails on the copy (its first run; null for a run kept before this was recorded).

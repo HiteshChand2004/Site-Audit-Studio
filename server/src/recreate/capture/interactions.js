@@ -38,6 +38,10 @@ const RULE_EXTRA = ['animation-name', 'animation-duration', 'animation-timing-fu
 // took into the copy's own transition, so a rebuilt effect arrives over the same stretch instead of in one frame.
 export const DYN_STEP_MS = 90;
 const DYN_STEPS = 6;
+// A script's hover can run longer than DYN_STEPS reads (a Framer card fades its picture in and turns its text white over
+// ~1 s, slower on a busy machine): reading goes on until two reads agree, up to DYN_MAX_MS after the pointer arrived, so the
+// end value is never a value on the way there. The page's hover time (hoverDeadline) still caps it.
+export const DYN_MAX_MS = 2500;
 // What one element asked for first may cost: aim and settle, a script-driven change read step by step, the revert wait.
 export const FIRST_MS = 2500;
 /** How long a script may take to START reacting to the pointer before the element counts as not changing on hover. */
@@ -1278,7 +1282,7 @@ export async function captureInteractions(page, { limit = 40, perSignature = 3, 
       }
       let prev = after;
       settled = false;
-      for (let step = 0; step < DYN_STEPS && Date.now() <= hoverDeadline; step++) {
+      for (let step = 0; (step < DYN_STEPS || elapsed < DYN_MAX_MS) && Date.now() <= hoverDeadline; step++) {
         await page.waitForTimeout(DYN_STEP_MS);
         elapsed += DYN_STEP_MS;
         const next = await page.evaluate(readState, args(c.i));

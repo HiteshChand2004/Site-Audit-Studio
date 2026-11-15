@@ -14,9 +14,10 @@ import NotChecked from '../../components/audit/NotChecked.jsx';
 import { pathOf } from '../../components/project/PageScope.jsx';
 import { isAnalysisActive, useProjects } from '../../store/useProjects.js';
 import { timeAgo } from '../../format.js';
+import { crawlLimitText, MAX_CHECK_PAGES } from '../../copy.js';
 
 /** A new website's "Pages to check" (the server's DEFAULT_MAX_PAGES, routes/projects.js): the most a check reads. */
-const DEFAULT_MAX_PAGES = 100;
+const DEFAULT_MAX_PAGES = MAX_CHECK_PAGES;
 import styles from '../Panel.module.css';
 import ws from '../Workspace.module.css';
 
@@ -120,7 +121,7 @@ export default function CheckStep({ project, audit, loading }) {
 
   const saveMaxPages = () => {
     const n = Number(maxPages);
-    if (Number.isInteger(n) && n >= 1 && n <= 100) {
+    if (Number.isInteger(n) && n >= 1 && n <= MAX_CHECK_PAGES) {
       if (n !== project.max_pages) update(project.id, { max_pages: n }).catch(() => {});
     } else {
       setMaxPages(String(project.max_pages ?? DEFAULT_MAX_PAGES));
@@ -139,13 +140,13 @@ export default function CheckStep({ project, audit, loading }) {
           <Globe size={14} aria-hidden="true" />
           <input className="mono" value={url} onChange={(e) => setUrl(e.target.value)} aria-label="Website address" disabled={running} />
         </label>
-        <label className={styles.pagesInput} title="How many pages the check reads (1–100)">
+        <label className={styles.pagesInput} title={`How many pages the check reads (1–${MAX_CHECK_PAGES})`}>
           <span>Pages to check</span>
           <input
             className="mono"
             type="number"
             min={1}
-            max={100}
+            max={MAX_CHECK_PAGES}
             value={maxPages}
             onChange={(e) => setMaxPages(e.target.value)}
             onBlur={saveMaxPages}
@@ -177,6 +178,21 @@ export default function CheckStep({ project, audit, loading }) {
                   {audit.pageVariants > 0 && ` (+${audit.pageVariants} ${audit.pageVariants === 1 ? 'address' : 'addresses'} with “?…” counted as the same page)`}
                   {' '}· speed measured on the homepage
                 </p>
+              )}
+              {/* The crawl was cut: said in one line whenever it happened, with the addresses not read. */}
+              {!audit.isDummy && audit.crawlLimit?.notRead > 0 && (
+                <div className={ws.hint}>
+                  <p>{crawlLimitText(audit.crawlLimit)}</p>
+                  <details>
+                    <summary>Show the {audit.crawlLimit.notRead} {audit.crawlLimit.notRead === 1 ? 'address' : 'addresses'}</summary>
+                    <ul className={ws.plainList}>
+                      {audit.crawlLimit.urls.map((u) => (
+                        <li key={u} className="mono">{pathOf(u) || u}</li>
+                      ))}
+                    </ul>
+                    {audit.crawlLimit.urls.length < audit.crawlLimit.notRead && <p>…and {audit.crawlLimit.notRead - audit.crawlLimit.urls.length} more.</p>}
+                  </details>
+                </div>
               )}
               {/* Checks always cover the whole website now; an older report of one page says so. */}
               {!audit.isDummy && audit.scope?.kind === 'page' && (

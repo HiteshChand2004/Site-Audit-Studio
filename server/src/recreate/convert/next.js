@@ -9,7 +9,9 @@
 // so the development server shows what the build ships.
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { convertSite, RAW_COMPONENT, RAW_COMPONENT_SOURCE } from './document.js';
+import * as cheerio from 'cheerio';
+import { convertSite, RAW_COMPONENT, RAW_COMPONENT_SOURCE, rewriteLinks } from './document.js';
+import { domDifference } from './react.js';
 import { planRoutes } from '../emit/next/routes.js';
 import { pinnedOverrides, pinnedVersions } from '../../toolchains/index.js';
 import { runToolchain } from '../build/toolchain.js';
@@ -204,7 +206,8 @@ const pass = (entries) => Object.fromEntries([...entries].filter(([k]) => !HOP.h
 
 /** The file of site-files/ at an address, or null. */
 async function siteFile(pathname) {
-  const file = path.join(siteFiles, pathname);
+  // A page the build ships as the copy's plain HTML (its converted markup did not hold the original's) is site-files/<route>/index.html.
+  const file = path.join(siteFiles, pathname.endsWith('/') ? pathname + 'index.html' : pathname);
   if (!file.startsWith(siteFiles + path.sep)) return null;
   return (await stat(file).catch(() => null))?.isFile() ? file : null;
 }
@@ -518,6 +521,57 @@ export const BUILD_DIR = '.next';
 /** Removes the build folder of a Next.js project (a converted or a packed copy). */
 export async function dropBuildFolder(dir) {
   await rm(path.join(dir, BUILD_DIR), { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+}
+
+/** A page of the copy with its links to moved pages at their new address, as the converted pages have them. */
+function withMovedLinks(html, linkMap) {
+  if (!Object.keys(linkMap).length) return html;
+  const $ = cheerio.load(html);
+  rewriteLinks($, linkMap);
+  // What stands before <html> (the doctype and a builder's banner comments, with their line breaks) is kept as written:
+  // cheerio writes it again without the white space, which the page's DOM keeps (domDifference reads the prolog).
+  const out = $.html();
+  const start = (s) => Math.max(0, s.search(/<html[\s>]/i));
+  return html.slice(0, start(html)) + out.slice(start(out));
+}
+
+/**
+ * Holds every built page of out/ against its as-is page: the same DOM, read as convert/react.js verifyConverted reads it
+ * (links to a moved page at its new address, as the conversion writes them). One page that differs does not cost the whole
+ * project, as it does for React + Vite: that page ships as the as-is page itself (links moved), written into site-files/ (the
+ * after-build step copies it over Next's page on every build, and `npm run dev` serves it first) and into out/ now, its page
+ * file says so, and it is listed in `plain`. A difference is what a visitor would see (motionrepo, 2026-11-15: a shared
+ * section drawn in place of another), and on a page that keeps the original's framework runtime it is also what the runtime
+ * rejects (React #418 / #423). Throws when no page holds its DOM: the copy is then packed as static files, as for React.
+ * @returns {Promise<{ pages: number, matched: number, plain: { page: string, outPath: string, difference: string }[] }>}
+ */
+export async function verifyConvertedNext({ copyDir, outDir, pages }) {
+  const plan = planRoutes(pages);
+  const linkMap = Object.fromEntries(plan.urlChanges.map((c) => [c.from, c.to]));
+  const out = path.join(outDir, EXPORT_DIR);
+  const plain = [];
+  for (const p of pages) {
+    const r = plan.byOutPath.get(p.outPath);
+    const original = withMovedLinks(await readFile(path.join(copyDir, p.outPath), 'utf8'), linkMap);
+    const converted = await readFile(path.join(out, r.nextOutPath), 'utf8').catch(() => null);
+    const difference = converted == null ? 'the build wrote no page for it' : domDifference(original, converted);
+    if (difference) plain.push({ page: r.route, outPath: p.outPath, difference: difference.slice(0, 400), original });
+  }
+  if (plain.length && plain.length === pages.length) throw new Error(`no page of the build holds the DOM of its as-is page (${plain[0].page}: ${plain[0].difference})`);
+  for (const x of plain) {
+    const r = plan.byOutPath.get(x.outPath);
+    for (const dir of [path.join(outDir, 'site-files'), out]) {
+      await mkdir(path.dirname(path.join(dir, r.nextOutPath)), { recursive: true });
+      await writeFile(path.join(dir, r.nextOutPath), x.original, 'utf8');
+    }
+    const pageFile = path.join(outDir, r.segments.length ? `pages/${r.segments.join('/')}/index.jsx` : 'pages/index.jsx');
+    const source = await readFile(pageFile, 'utf8').catch(() => null);
+    if (source != null) {
+      const why = x.difference.replace(/\s+/g, ' ').slice(0, 200);
+      await writeFile(pageFile, `// This page ships as the copy's plain HTML (site-files/${r.nextOutPath}): the markup this file renders did not hold the\n// original's DOM (${why}).\n// An edit here shows once that file is removed and the page matches.\n${source}`, 'utf8');
+    }
+  }
+  return { pages: pages.length, matched: pages.length - plain.length, plain: plain.map(({ page, outPath, difference }) => ({ page, outPath, difference })) };
 }
 
 /** Builds the converted project: `next build`, then the after-build step; out/ is the result. */

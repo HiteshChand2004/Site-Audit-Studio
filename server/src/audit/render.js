@@ -26,6 +26,48 @@ function installProbes() {
   };
 }
 
+/** How long the axe step waits at most for the visible text to hold still, and how often it looks. */
+export const TEXT_STILL_MAX_MS = 3000;
+const TEXT_STILL_STEP_MS = 150;
+
+/**
+ * Page function: what the text of the page looks like right now - for each element with text of its own (first 5000), its
+ * colour and how see-through it is (its opacity times its ancestors'), as one string.
+ */
+function textLook() {
+  const seen = new Map();
+  const eff = (el) => {
+    if (!el || el.nodeType !== 1) return 1;
+    if (seen.has(el)) return seen.get(el);
+    const o = Number(getComputedStyle(el).opacity) * eff(el.parentElement);
+    seen.set(el, o);
+    return o;
+  };
+  const out = [];
+  for (const el of document.body?.querySelectorAll('*') ?? []) {
+    if (out.length >= 5000) break;
+    if (![...el.childNodes].some((n) => n.nodeType === 3 && n.nodeValue.trim())) continue;
+    out.push(`${Math.round(eff(el) * 100)}|${getComputedStyle(el).color}`);
+  }
+  return out.join(';');
+}
+
+/**
+ * Waits until the page's text holds still (two looks TEXT_STILL_STEP_MS apart agree), at most `maxMs`.
+ * @returns {Promise<{ still: boolean, waitedMs: number }>}
+ */
+export async function waitTextStill(page, { maxMs = TEXT_STILL_MAX_MS, stepMs = TEXT_STILL_STEP_MS } = {}) {
+  const started = Date.now();
+  let prev = await page.evaluate(textLook);
+  while (Date.now() - started < maxMs) {
+    await page.waitForTimeout(stepMs);
+    const next = await page.evaluate(textLook);
+    if (next === prev) return { still: true, waitedMs: Date.now() - started };
+    prev = next;
+  }
+  return { still: false, waitedMs: Date.now() - started };
+}
+
 // cache: the job's shared cache of static files (sharedCache.js); a file another context already loaded is not downloaded again.
 async function openPage(browser, url, { timeout = 30000, cache = null } = {}) {
   const context = await browser.newContext({ viewport: VIEWPORT, userAgent: USER_AGENT, ignoreHTTPSErrors: true });
@@ -123,6 +165,11 @@ export async function renderHome(browser, url, { globals = [], cache = null, sca
       });
       await Promise.race([Promise.all(ending.map((a) => a.finished.catch(() => {}))), new Promise((r) => setTimeout(r, 3000))]);
     }).catch(() => {});
+    // A fade a script drives frame by frame (Framer's runtime, most animation libraries) is no Web Animation, so the wait
+    // above does not see it: Parchaa's texts were scanned at 45-90 % opacity and read as low contrast. The scan also waits
+    // until the visible text holds still, at most TEXT_STILL_MAX_MS; at the cap (a slider or a ticker that never stops)
+    // it scans the page as it is.
+    if (freezeForAxe) await waitTextStill(page).catch(() => null);
     // Then every animation and transition still running is stopped the way the exact comparison stops them (repeating ones
     // at their start and paused, one-shots finished), in this page, with no extra load. A pulse or a blink is otherwise read
     // at whatever moment the scan lands on: a badge caught at the dim end of its pulse reads ~1:1 on one side and fine on the

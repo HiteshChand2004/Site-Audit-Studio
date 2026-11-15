@@ -138,6 +138,28 @@ test('a section identical on several pages is one shared component; a page keeps
   assert.equal(site.stats.raw, 0);
 });
 
+test('a page\'s own section never takes the name of a shared section on the same page (the writers rename own components by their tag)', () => {
+  // The motionrepo shape: a page's own figure and a call-to-action shared by every post both carry the class "wrap". The
+  // call-to-action is named first (shared), so the figure takes "Wrap2", and the page names each component once.
+  const text = '<p>A line of text long enough to count as content.</p>'.repeat(6);
+  const cta = `<section class="wrap mt-32"><p class="text-title">See what your repository turns into.</p>${text}</section>`;
+  const post = (title, cover) => doc(`<header><a href="/">Home</a></header><main><section class="intro"><h2>${title}</h2>${text}</section>`
+    + `<figure class="wrap mt-8"><img src="/${cover}.webp" alt=""><figcaption>${cover}</figcaption>${text}</figure>${cta}</main><footer>f</footer>`);
+  const site = convertSite([{ page: '/blog/a/', html: post('A', 'cover-a') }, { page: '/blog/b/', html: post('B', 'cover-b') }]);
+  const a = site.pages[0];
+  const names = a.sections.map((s) => [s.name, s.shared]);
+  assert.ok(names.some(([n, shared]) => n === 'Wrap' && shared), JSON.stringify(names));
+  const own = a.sections.find((s) => !s.shared && /cover-a/.test(s.outer));
+  assert.notEqual(own.name, 'Wrap', 'the page\'s own figure is not named like the shared call-to-action');
+  // Every name on the page stands for exactly one section, so renaming one component (`<Name />` → `<Prefix…Name />`) never
+  // touches another.
+  const tags = [...a.pageJsx.matchAll(/<([A-Z]\w*) \/>/g)].map((m) => m[1]).filter((n) => n !== 'RawHtml');
+  const byName = new Map();
+  for (const s of a.sections) byName.set(s.name, [...(byName.get(s.name) ?? []), s.hash]);
+  for (const [n, hashes] of byName) assert.equal(new Set(hashes).size, 1, `${n} names one section`);
+  assert.deepEqual(tags, a.sections.map((s) => s.name), 'each section once, in the page order');
+});
+
 test('forms in plain words: where the original sent them and whether the copy keeps them working', () => {
   const guarded = cheerio.load(doc('<form id="contact" action="/send" method="post"><input name="email"><input type="hidden" name="t"><button>Go</button></form><script>window.sasFormGuard = 1</script>'));
   const [f] = formsOf(guarded, { page: '/contact/', pageUrl: 'https://example.com/contact.html' });

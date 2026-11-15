@@ -133,7 +133,7 @@ test('evidenceFor: a clean copy is unchanged; an as-is copy gets its own evidenc
   const asIs = asIsReport();
   assert.deepEqual(evidenceFor('lighthouse.unminified-css', asIs).evidence.map((e) => e.asIs), ['css']);
   const lcp = evidenceFor('lighthouse.prioritize-lcp-image', asIs);
-  assert.deepEqual(lcp.evidence, [{ fix: 'as-is:lcp', asIs: 'lcp', title: 'Largest image loads first', status: 'fixed', count: 2, open: 0, droppedOnPages: 0 }]);
+  assert.deepEqual(lcp.evidence, [{ fix: 'as-is:lcp', asIs: 'lcp', title: 'Largest element shows and loads first', status: 'fixed', count: 2, open: 0, droppedOnPages: 0 }]);
   assert.equal(lcp.review, false, 'a speed fix changes no text: nothing to review');
   assert.equal(evidenceFor('seo.title-tag.length', asIs).review, true);
 });

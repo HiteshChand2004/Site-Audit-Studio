@@ -13,6 +13,7 @@ import { db } from '../db/index.js';
 import { auditDir, projectDir } from '../config/paths.js';
 import { startEgressProxy } from '../security/egressProxy.js';
 import { betterThanOriginal, compareLighthousePages, lighthousePageItems, lighthousePagesNote, lighthouseTargets, RUN_TIMEOUT_MS } from './lighthousePages.js';
+import { repeatNote, repeatOf, repeatSpeedRows, speedCandidates, withMedianAudits } from './speedRepeat.js';
 import { getEmitter } from '../recreate/emit/index.js';
 import { outputPages, outputRoot, reportOutputs, targetStack } from '../recreate/export/fromIr.js';
 import { servePreview } from '../recreate/preview.js';
@@ -244,22 +245,43 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
             ...(own && { originalUrl: `${lifted.origin}${own}`, originalFrom: 'lifted', originalCacheDir: path.join(recreateDir(project.id, recreateId), 'as-is', LIFTED_RUNS_DIR) }) });
         }
         const hostOf = (url, mode) => (lifted && url.startsWith(lifted.origin) ? lifted.measured[mode].origin + url.slice(lifted.origin.length) : measuredUrl(url, mode));
+        // Every run starts on an idle link: both sides' hosts for this device drop what an earlier run left going (measuredHost reset).
+        const run = (url, mode, outFile) => {
+          measured[mode].reset();
+          lifted?.measured[mode].reset();
+          return runLighthouse(hostOf(url, mode), mode, { timeout: RUN_TIMEOUT_MS, outFile, proxy: proxy.url, signal });
+        };
+        const cacheDir = path.join(projectDir(project.id), 'lighthouse-original');
+        const runsDir = path.join(reauditDir(project.id, recreateId, reauditId), 'lighthouse-pages');
         lighthousePages = await compareLighthousePages({
           pages: pageList,
-          cacheDir: path.join(projectDir(project.id), 'lighthouse-original'),
-          outDir: path.join(reauditDir(project.id, recreateId, reauditId), 'lighthouse-pages'),
-          // Every run starts on an idle link: both sides' hosts for this device drop what an earlier run left going (measuredHost reset).
-          run: (url, mode, outFile) => {
-            measured[mode].reset();
-            lifted?.measured[mode].reset();
-            return runLighthouse(hostOf(url, mode), mode, { timeout: RUN_TIMEOUT_MS, outFile, proxy: proxy.url, signal });
-          },
+          cacheDir,
+          outDir: runsDir,
+          run,
           progress: (fraction, message) => progress('lighthouse-pages', fraction, message),
           signal,
           // A continued comparison takes the copy's runs the stopped one finished (same copy, same settings).
           reuseCopy: Boolean(kept),
         });
         lighthousePages.network = measuredHostDescription();
+        // A speed row of the homepage that one run per side turns "got worse" is measured again (speedRepeat.js): only then,
+        // only that page and device, and the runs made above count. The rows themselves are made in buildChecklist.
+        const home = pageList.find((p) => p.path === '/' && p.originalFrom === 'lifted');
+        if (home) {
+          try {
+            const sides = await checklistSides({ project, report, analysis, audit, recreateId, reauditId, isAsIs });
+            const draft = compareAudits({ old: sides.old, next: sides.next, report, newOrigin: served.origin, output, motion });
+            const candidates = speedCandidates(draft.items, sides.old.lighthouse, sides.next.lighthouse);
+            if (candidates.size) {
+              lighthousePages.speedRepeat = await repeatSpeedRows({ candidates, page: home, cacheDir, outDir: runsDir, run, signal,
+                progress: (message) => progress('lighthouse-pages', 1, message) });
+            }
+          } catch (err) {
+            if (err?.stopped) throw err;
+            // The rows are then decided by the single runs, as before; the reason is kept.
+            lighthousePages.speedRepeat = { error: String(err?.message ?? err).split('\n')[0].slice(0, 200) };
+          }
+        }
       } catch (err) {
         if (err?.stopped) throw err;
         lighthousePages = { pages: [], worse: [], unscored: [], extraRunPages: [], skipped: [], runs: { original: 0, copy: 0, reusedOriginal: 0 }, errors: [{ path: '*', mode: '*', error: String(err?.message ?? err).split('\n')[0].slice(0, 200) }] };
@@ -308,21 +330,47 @@ function reusedAnalysis(audit, skip, progress) {
  * per-page Lighthouse rows and, for an as-is copy, the reason of every row that got worse or stays open. Exported so a finished
  * re-audit can be compared again from its saved files when only the comparison rules change.
  */
-export async function buildChecklist({ project, report, analysis, audit, recreateId, reauditId, origin, output, outputPageList, motion, lighthousePages, isAsIs }) {
+/**
+ * The two sides the checklist compares: the original's analysis (its homepage Lighthouse runs from its lifted files, for an
+ * as-is copy) and this re-audit. With a speed repeat (speedRepeat.js), each side's repeated audits are its median run's.
+ */
+export async function checklistSides({ project, report, analysis, audit, recreateId, reauditId, isAsIs, speedRepeat = null }) {
   const old = await loadSide(auditDir(project.id, report.analysisId), JSON.parse(analysis.result_json));
   // The Lighthouse rows hold the copy (measured here, through the measured host) against the original measured the same way:
   // its homepage from its own lifted files. The Check's run came from the live site's CDN over HTTP/2, so a row like
   // "render-blocking resources" read 0 ms → 680 ms for the same five stylesheets (testpilot; measured alike: 890 → 690 ms).
   const liftedHome = isAsIs ? await liftedHomeLhrs(recreateDir(project.id, recreateId)) : null;
   if (liftedHome) old.lighthouse = { ...old.lighthouse, ...liftedHome };
+  const next = await loadSide(reauditDir(project.id, recreateId, reauditId), audit);
+  if (speedRepeat?.modes) {
+    old.lighthouse = withMedianAudits(old.lighthouse, speedRepeat, 'original');
+    next.lighthouse = withMedianAudits(next.lighthouse, speedRepeat, 'copy');
+  }
+  return { old, next, liftedHome };
+}
+
+export async function buildChecklist({ project, report, analysis, audit, recreateId, reauditId, origin, output, outputPageList, motion, lighthousePages, isAsIs }) {
+  const speedRepeat = lighthousePages?.speedRepeat ?? null;
+  const { old, next, liftedHome } = await checklistSides({ project, report, analysis, audit, recreateId, reauditId, isAsIs, speedRepeat });
   const checklist = compareAudits({
     old,
-    next: await loadSide(reauditDir(project.id, recreateId, reauditId), audit),
+    next,
     report,
     newOrigin: origin,
     output,
     motion,
   });
+  // The rows a speed repeat decided carry its runs (per device and side: the time, the CPU benchmark, the other jobs) and say so.
+  if (speedRepeat?.modes) {
+    for (const item of checklist.items) {
+      if (!String(item.key ?? '').startsWith('lighthouse.')) continue;
+      const rep = repeatOf(speedRepeat, item.key.slice('lighthouse.'.length));
+      if (!rep) continue;
+      item.repeat = rep;
+      item.note = [item.note, repeatNote(rep)].filter(Boolean).join(' ');
+    }
+    checklist.speedRepeat = { page: speedRepeat.page, runsPerSide: speedRepeat.runsPerSide, runs: speedRepeat.runs, errors: speedRepeat.errors, modes: Object.fromEntries(Object.entries(speedRepeat.modes).map(([m, v]) => [m, { ids: v.ids, runs: v.runs, chosen: v.chosen }])) };
+  } else if (speedRepeat?.error) checklist.speedRepeat = { error: speedRepeat.error };
   if (liftedHome) {
     checklist.lighthouseBefore = { from: 'lifted', devices: Object.keys(liftedHome) };
     checklist.notes.push(`The original's side of the Lighthouse checks (${Object.keys(liftedHome).map((d) => (d === 'mobile' ? 'phone' : 'computer')).join(' and ')}) is its homepage measured from its own files on this computer, the way the copy is measured; the scores at the top are those of the Check of the live site.`);
@@ -357,7 +405,7 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
       better,
     };
   }
-  if (isAsIs) await explainAsIs({ checklist, project, report, recreateId, reauditId, origin, outputPageList });
+  if (isAsIs) await explainAsIs({ checklist, project, report, recreateId, reauditId, origin, outputPageList, speedRepeat });
   // Fix mode (Step 11): what the user approved and the copy changed on purpose (a text colour, a heading's level). The rows of
   // those checks carry the list, so a difference from the original there reads as the user's choice, not as the copy's.
   const onPurpose = Array.isArray(report.asIs?.changedOnPurpose) ? report.asIs.changedOnPurpose : [];
@@ -599,7 +647,7 @@ export function liftNetworkFailures(report) {
  * saved files of the original's analysis and of this re-audit, so a finished re-audit can be explained again
  * (scripts/reexplain.js). Changes `checklist` in place.
  */
-export async function explainAsIs({ checklist, project, report, recreateId, reauditId, origin, outputPageList }) {
+export async function explainAsIs({ checklist, project, report, recreateId, reauditId, origin, outputPageList, speedRepeat = null }) {
   {
     const lhrs = async (dir) => Object.fromEntries(await Promise.all(['mobile', 'desktop'].map(async (d) => [d, await readFile(path.join(dir, `lighthouse-${d}.json`), 'utf8').then(JSON.parse, () => null)])));
     const newCrawl = await readFile(path.join(reauditDir(project.id, recreateId, reauditId), 'crawl.json'), 'utf8').then(JSON.parse, () => null);
@@ -623,9 +671,10 @@ export async function explainAsIs({ checklist, project, report, recreateId, reau
       copyOrigin: origin,
       copyPages: outputPageList.map((p) => p.path),
       chosenPages: (report.asIs?.pages ?? []).map((p) => p.path ?? '/'),
-      // The original measured the way the copy is, where it was (buildChecklist says why), else the Check's live run.
-      oldLhr: { ...(await lhrs(auditDir(project.id, report.analysisId))), ...(await liftedHomeLhrs(recreateDir(project.id, recreateId))) },
-      newLhr,
+      // The original measured the way the copy is, where it was (buildChecklist says why), else the Check's live run. A speed
+      // repeat's rows are explained from the median runs that decided them (speedRepeat.js), as compared.
+      oldLhr: withMedianAudits({ ...(await lhrs(auditDir(project.id, report.analysisId))), ...(await liftedHomeLhrs(recreateDir(project.id, recreateId))) }, speedRepeat, 'original'),
+      newLhr: withMedianAudits(newLhr, speedRepeat, 'copy'),
       oldAxe: await readFile(path.join(auditDir(project.id, report.analysisId), 'axe.json'), 'utf8').then(JSON.parse, () => null),
       newAxe: await readFile(path.join(reauditDir(project.id, recreateId, reauditId), 'axe.json'), 'utf8').then(JSON.parse, () => null),
       // For the "still open" rows: whether a new-site address was written, which pages' fixes were undone, the hosts excluded by rule.

@@ -14,8 +14,9 @@ import { pageDocumentOf } from './pageLift.js';
 import { readRecordIndex } from '../scripts.js';
 import { packLifted, servedDir } from './pack.js';
 import { refreshIntegrity } from './integrity.js';
+import { blockingGate, blockingWarning } from './blockingGate.js';
 import { buildConvertedReact, convertToReact, REACT_EXPORT_DIR, verifyConverted } from '../../convert/react.js';
-import { buildConverted, convertToNext, dropBuildFolder, EXPORT_DIR } from '../../convert/next.js';
+import { buildConverted, convertToNext, dropBuildFolder, EXPORT_DIR, verifyConvertedNext } from '../../convert/next.js';
 import { buildConvertedMern, convertToMern, MERN_EXPORT_DIR, verifyConvertedMern } from '../../convert/mern.js';
 import { dropMissingPreloads } from './preloads.js';
 import { buildStack, startStack } from './serveStack.js';
@@ -30,7 +31,7 @@ import { addressForCopy } from '../../../copy/address.js';
 import { addressPass } from '../../../copy/addressPass.js';
 import { applyApproved, FIX_MODE_DIR, PROPOSALS_FILE } from '../../../copy/fixMode.js';
 import { measureServed, servedOutcome } from '../../../copy/served.js';
-import { slugFor } from '../../discover.js';
+import { needsBackend, slugFor } from '../../discover.js';
 import { serveCopy } from './serve.js';
 import { runtimeFreeCopy } from './runtimeFree.js';
 import { carryRecordings, recordingsOf } from './recordings.js';
@@ -63,7 +64,7 @@ export const ASIS_STACKS = ['html', 'react-vite', 'nextjs', 'mern'];
  */
 const CONVERTERS = {
   'react-vite': { code: 'React', project: 'React + Vite', convert: convertToReact, build: buildConvertedReact, verify: verifyConverted, exportDir: REACT_EXPORT_DIR, runs: 'static' },
-  nextjs: { code: 'Next.js', project: 'Next.js', convert: convertToNext, build: buildConverted, verify: null, exportDir: EXPORT_DIR, runs: 'static' },
+  nextjs: { code: 'Next.js', project: 'Next.js', convert: convertToNext, build: buildConverted, verify: verifyConvertedNext, exportDir: EXPORT_DIR, runs: 'static' },
   mern: { code: 'React', project: 'MERN', convert: convertToMern, build: buildConvertedMern, verify: verifyConvertedMern, exportDir: MERN_EXPORT_DIR, runs: 'server' },
 };
 /** The lifted copy and its page set, kept in the job's folder: a repack for another stack starts from them. */
@@ -735,6 +736,12 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
  */
 async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report, browser = null }) {
   ctx.progress(0.35, 'Packaging the copy');
+  // No page's first paint waits for more than the original's (blockingGate.js): held against the lifted pages, what the copy
+  // added that would block is taken out, a grown or reordered file of the original's is listed. Before the hashes below.
+  report.blocking = await blockingGate({ copyDir, liftedDir: path.join(ctx.dir, ASIS_DIR, 'lifted'), pages })
+    .catch((err) => ({ error: String(err?.message ?? err).slice(0, 200) }));
+  const blockingLine = report.blocking.error ? null : blockingWarning(report.blocking);
+  if (blockingLine) ctx.report.warnings.push(blockingLine);
   // The integrity hashes the pages name, computed from the copy's files as they are now (integrity.js): the lift, the fixes and
   // the address pass change files a hash was written for, and the browser refuses a file whose hash does not fit.
   report.integrity = await refreshIntegrity(copyDir);
@@ -761,8 +768,8 @@ async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report
     ].join('\n'), 'utf8');
   } else if (CONVERTERS[stack]) {
     // The finished copy converted into real code of the stack (recreate/convert/): pages and components, prerendered and never
-    // hydrated, so no runtime is added to what the original loads (React + Vite also holds every built page against its as-is
-    // page: same DOM, no file added). If the conversion, its build or that check fails, the copy is packaged as static files
+    // hydrated, so no runtime is added to what the original loads (React + Vite and MERN also hold every built page against its
+    // as-is page: same DOM, no file added; Next.js holds each page and ships one that differs as the as-is page, listed). If the conversion, its build or that check fails, the copy is packaged as static files
     // inside a project of the stack instead (the earlier route), and the report says so: a download never fails.
     const conv = CONVERTERS[stack];
     // The original's framework runtime would draw its own content over the components once a page loads: every page that is
@@ -806,7 +813,14 @@ async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report
       const verified = conv.verify ? await conv.verify({ copyDir: source, outDir, pages }) : null;
       report.build = built?.steps?.map((s) => ({ label: s.label, ms: s.ms })) ?? null;
       report.convert = { mode: 'converted', ...converted, ...(verified && { verified }), runtime };
-      await writeFile(path.join(outDir, 'README.md'), `${await readFile(path.join(outDir, 'README.md'), 'utf8').catch(() => '')}${runtimeNotes(runtime).readme}`, 'utf8');
+      // Pages whose converted markup did not hold the original's DOM ship as the copy's plain HTML (Next.js: per page,
+      // verifyConvertedNext); the report and the README say which and why.
+      const plain = verified?.plain ?? [];
+      if (plain.length) {
+        ctx.report.warnings.push(`${plain.length} page${plain.length === 1 ? '' : 's'} of the ${conv.project} project ${plain.length === 1 ? 'ships' : 'ship'} as the copy's plain HTML, not as components: the converted markup did not match the original page (${plain.slice(0, 3).map((x) => x.page).join(', ')}${plain.length > 3 ? ', …' : ''}).`);
+      }
+      const plainNotes = plain.length ? `\n## Pages kept as plain HTML\n\nThese pages ship as the copy's HTML (\`site-files/\`), not as the components: the converted markup did not match the original page.\n\n${plain.map((x) => `- ${x.page}: ${x.difference}`).join('\n')}\n` : '';
+      await writeFile(path.join(outDir, 'README.md'), `${await readFile(path.join(outDir, 'README.md'), 'utf8').catch(() => '')}${runtimeNotes(runtime).readme}${plainNotes}`, 'utf8');
     } catch (err) {
       const why = String(err?.message ?? err).slice(0, 400);
       ctx.report.warnings.push(`The copy could not be converted into ${conv.code} pages and components (${why.split('\n')[0]}); it is packaged as static files inside a ${conv.project} project instead.`);
@@ -1026,12 +1040,24 @@ export async function asIsStage(ctx) {
     excludedHosts = saved.excludedHosts;
     lifted = { ...saved.lift, reusedFrom: path.basename(fromDir) };
     ctx.report.pages = await repackPages(fromDir, pages);
+    // The same pages as the job it repacks, so the same choice: its "found N, copied M" travels with it.
+    const earlier = await readFile(path.join(fromDir, 'report.json'), 'utf8').then(JSON.parse, () => null);
+    if (earlier?.asIs?.pageChoice && !ctx.asIs.pageChoice) ctx.asIs = { ...ctx.asIs, pageChoice: earlier.asIs.pageChoice };
   } else {
     pages = ctx.discovery?.pages ?? [];
     if (!pages.length) throw new RecreateError('No page was captured for the as-is copy.');
   }
   const siteUrl = pages[0].url;
-  const report = { stack, mode: 'as-is', pages: pages.map((p) => ({ url: p.url, path: localOfOutPath(p.outPath) })), createdAt: new Date().toISOString() };
+  // A page whose address says it needs the site's own server (login, sign-up, account, cart, checkout, admin, dashboard…) is
+  // copied with its whole UI like any page; only what needs that server does not work. That is said here, in the report,
+  // never on the page. `pageChoice`: the pages found and the ones a page cap left out (asis.js asIsPageChoice).
+  const report = {
+    stack,
+    mode: 'as-is',
+    pages: pages.map((p) => ({ url: p.url, path: localOfOutPath(p.outPath), ...(needsBackend(p.url) && { needsBackend: true }) })),
+    ...(ctx.asIs?.pageChoice && { pageChoice: ctx.asIs.pageChoice }),
+    createdAt: new Date().toISOString(),
+  };
   // Progress inside this step (generateProgress.js): a job that continues a stopped one starts from the parts finished before
   // the stop (the lift, each page's speed plan and proven fixes, the stylesheet verdict) when the same code made them.
   const resuming = Boolean(ctx.report?.resumed?.length);
@@ -1355,6 +1381,9 @@ export async function asIsStage(ctx) {
     const logOpen = issueLogger(LOGS_DIR);
     for (const o of openItems) await logOpen({ site: new URL(siteUrl).hostname, stack, ...o });
     // Every part the conversion kept as original HTML is recorded for the owner too (site, page, tag / attribute, reason).
+    for (const x of report.convert?.verified?.plain ?? []) {
+      await logOpen({ site: new URL(siteUrl).hostname, stack, page: x.page, check: 'kept as plain HTML: the converted page did not match the original', values: x.difference, tried: 'converted into components, built and held against the as-is page', reason: 'converted' });
+    }
     for (const f of report.convert?.fallbacks ?? []) {
       await logOpen({ site: new URL(siteUrl).hostname, stack, page: f.page, check: `kept as original HTML: <${f.tag}>${f.attribute ? ` ${f.attribute}` : ''} at ${f.where}`, values: f.reason, tried: 'kept as the original HTML inside its component; the page is unchanged', reason: 'converted' });
     }

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { betterThanOriginal, compareLighthousePages, decide, probeOwnFiles, lighthousePageItems, lighthousePagesNote, medianScores, pageSlug, runsOverlap, singleRunDecides, trimReport } from '../src/reaudit/lighthousePages.js';
+import { betterThanOriginal, blockingFilesOf, compareLighthousePages, decide, earlyRequests, observedAt, probeOwnFiles, lighthousePageItems, lighthousePagesNote, medianScores, pageSlug, requestsOf, runsOverlap, singleRunDecides, trimReport } from '../src/reaudit/lighthousePages.js';
 
 const report = (scores, { weight = 400000, lcp = 'img.hero', failing = {}, dom = 900 } = {}) => ({
   fetchTime: '2026-10-23T10:00:00Z', requestedUrl: 'x', finalDisplayedUrl: 'x', environment: { benchmarkIndex: 1200 },
@@ -69,8 +69,53 @@ test('trimReport keeps what a comparison needs and drops the rest; pageSlug tell
   assert.deepEqual(t.lcpElement, { selector: 'h1.title', snippet: '<h1.title>' });
   assert.deepEqual(Object.keys(t.audits), ['unused-javascript', 'other-failing'], 'failing audits with their urls; the informative one is left out');
   assert.deepEqual(t.audits['unused-javascript'].urls, ['https://cdn.example.net/a.js']);
+  assert.equal(t.audits['unused-javascript'].errors, undefined, 'only the console audit keeps its entries');
+  // The console audit keeps what each entry is, so a script that threw is not read as a request for that script.
+  const chunk = 'http://127.0.0.1:5000/_next/static/chunks/a.js';
+  const c = trimReport({ categories: {}, audits: { 'errors-in-console': { score: 0, title: 'Browser errors', details: { items: [
+    { source: 'exception', description: 'Error: Minified React error #418; visit https://react.dev/errors/418\n    at t5 (a.js:1:2)', sourceLocation: { url: chunk } },
+    { source: 'network', description: 'Failed to load resource: the server responded with a status of 404 ()', url: 'http://127.0.0.1:5000/x.png' },
+  ] } } } });
+  assert.deepEqual(c.audits['errors-in-console'].errors, [
+    { source: 'exception', text: 'Error: Minified React error #418; visit https://react.dev/errors/418', url: chunk },
+    { source: 'network', text: 'Failed to load resource: the server responded with a status of 404 ()', url: 'http://127.0.0.1:5000/x.png' },
+  ]);
+  assert.deepEqual(c.audits['errors-in-console'].urls, [chunk, 'http://127.0.0.1:5000/x.png']);
   assert.notEqual(pageSlug('/about/', 'https://a.test/about/'), pageSlug('/about/', 'https://b.test/about/'));
   assert.match(pageSlug('/', 'https://a.test/'), /^index-[0-9a-f]{8}$/);
+});
+
+test('requests counted up to a moment, and the files holding the first paint back in the order the page asked for them', () => {
+  const o = 'http://127.0.0.1:5000';
+  const lhr = { categories: {}, audits: {
+    metrics: { details: { items: [{ observedFirstContentfulPaint: 680, observedLoad: 1178 }] } },
+    'render-blocking-resources': { score: 0.5, numericValue: 330, details: { items: [{ url: `${o}/b.js`, totalBytes: 900 }, { url: `${o}/a.css`, totalBytes: 4000 }] } },
+    'network-requests': { details: { items: [
+      { url: `${o}/`, resourceType: 'Document', networkRequestTime: 3 },
+      { url: `${o}/a.css`, resourceType: 'Stylesheet', networkRequestTime: 135 },
+      { url: `${o}/b.js`, resourceType: 'Script', networkRequestTime: 143 },
+      { url: `${o}/data.json`, resourceType: 'Fetch' },
+      { url: `${o}/icons/favicon-generated.svg`, resourceType: 'Other', networkRequestTime: 1182 },
+    ] } },
+  } };
+  assert.deepEqual(requestsOf(lhr), { total: 5, byType: { Document: 1, Stylesheet: 1, Script: 1, Fetch: 1, Other: 1 } });
+  assert.deepEqual(requestsOf(lhr, 1178), { total: 4, byType: { Document: 1, Stylesheet: 1, Script: 1, Fetch: 1 } }, 'the icon started after the load; a request without a start is counted');
+  assert.equal(observedAt(lhr, 'observedFirstContentfulPaint'), 680);
+  assert.equal(observedAt(lhr, 'observedSpeedIndex'), null);
+  assert.deepEqual(blockingFilesOf(lhr), [{ url: `${o}/a.css`, bytes: 4000, start: 135 }, { url: `${o}/b.js`, bytes: 900, start: 143 }]);
+  assert.equal(blockingFilesOf({ audits: {} }), null, 'no audit: not known');
+  const t = trimReport(lhr);
+  assert.equal(t.observedLoad, 1178);
+  assert.deepEqual(t.requestStarts.at(-1), ['Other', 1182]);
+  assert.equal(t.blocking.length, 2);
+  // Both sides counted with one cut, the later of their two loads (1190 here): a picture started after its own side's load but
+  // before the other's is counted, the same moment on both sides.
+  const other = { ...t, observedLoad: 1190, requestStarts: [...t.requestStarts.slice(0, -1), ['Image', 1185]] };
+  assert.deepEqual(earlyRequests(other, t), {
+    original: { total: 5, byType: { Document: 1, Stylesheet: 1, Script: 1, Fetch: 1, Image: 1 } },
+    copy: { total: 5, byType: { Document: 1, Stylesheet: 1, Script: 1, Fetch: 1, Other: 1 } },
+  });
+  assert.equal(earlyRequests({ scores: {} }, t), null, 'a run kept before the starts were recorded: not known');
 });
 
 test('compareLighthousePages: one run per side unless the copy is slower, three when it is, rows per page x mode x category, the original reused next time', { timeout: 60000 }, async (t) => {

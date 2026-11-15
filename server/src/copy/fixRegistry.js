@@ -37,9 +37,9 @@ export const FIXES = [
     what: 'role="img" on a named element with no text', apply: ($, d) => fixProhibitedNames($, d) },
   { kind: 'scrollable', title: 'Scroll areas the keyboard can reach', targets: ['axe.scrollable-region-focusable'], counted: true, review: true, needs: 'perf',
     what: 'tabindex="0" on a box that scrolls', apply: ($, d, c) => fixScrollableRegions($, d, c.plan) },
-  { kind: 'lcp', title: 'Largest image loads first', targets: ['lighthouse.prioritize-lcp-image', 'lighthouse.lcp-lazy-loaded'], counted: true, needs: 'perf' },
+  { kind: 'lcp', title: 'Largest element shows and loads first', targets: ['lighthouse.prioritize-lcp-image', 'lighthouse.lcp-lazy-loaded'], counted: true, needs: 'perf' },
   { kind: 'lazy', title: 'Images below the first screen load later', targets: ['lighthouse.offscreen-images'], counted: true, needs: 'perf' },
-  { kind: 'webp', title: 'Lossless WebP for PNG images', targets: ['lighthouse.modern-image-formats', 'lighthouse.uses-optimized-images', 'lighthouse.total-byte-weight'], counted: true, needs: 'perf' },
+  { kind: 'webp', title: 'WebP for PNG and JPEG images, with no visible difference', targets: ['lighthouse.modern-image-formats', 'lighthouse.uses-optimized-images', 'lighthouse.total-byte-weight'], counted: true, needs: 'perf' },
   { kind: 'css', title: 'Stylesheets without whitespace', targets: ['lighthouse.unminified-css', 'lighthouse.total-byte-weight'], counted: false },
 ];
 

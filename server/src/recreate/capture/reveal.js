@@ -73,6 +73,21 @@ export function installRevealTracker(opts) {
   };
 
   // ---- observe: what is known about each reveal ---------------------------------------------------------------
+  // The layer an element moves with the window in: inside a fixed box, or a sticky box stuck to its edge right now (a header).
+  // Its page position then follows the scroll, so it never "comes into view" by scrolling (triggerOf).
+  const layerOf = (el) => {
+    for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (cs.position === 'fixed') return 'fixed';
+      if (cs.position === 'sticky') {
+        const r = n.getBoundingClientRect();
+        const top = Number.parseFloat(cs.top);
+        const bottom = Number.parseFloat(cs.bottom);
+        if ((Number.isFinite(top) && Math.abs(r.top - top) <= 1) || (Number.isFinite(bottom) && Math.abs(window.innerHeight - r.bottom - bottom) <= 1)) return 'sticky';
+      }
+    }
+    return null;
+  };
   const ensure = (el) => {
     let rec = records.get(el);
     if (!rec && records.size < MAX_TRACKED) {
@@ -80,6 +95,7 @@ export function installRevealTracker(opts) {
       rec = {
         el, step, y: Math.round(window.scrollY), prevY: Math.round(lastY), vh: window.innerHeight,
         rect: [Math.round(r.left + window.scrollX), Math.round(r.top + window.scrollY), Math.round(r.width), Math.round(r.height)],
+        layer: layerOf(el),
         anims: [],
       };
       records.set(el, rec);
@@ -276,7 +292,7 @@ export function installRevealTracker(opts) {
         return {
           path: pathOf(el), tag: el.tagName.toLowerCase(), text: (el.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 40),
           from: hiddenState.get(el) ?? null, to: revealed.get(el) ?? null,
-          step: rec.step, y: rec.y, prevY: rec.prevY, vh: rec.vh, rect: rec.rect, anims: rec.anims,
+          step: rec.step, y: rec.y, prevY: rec.prevY, vh: rec.vh, rect: rec.rect, ...(rec.layer && { layer: rec.layer }), anims: rec.anims,
           series: s?.eps.length ? s.eps[0] : null, replay: replay.has(el),
         };
       }).filter((e) => e.path);
@@ -445,12 +461,15 @@ export function comparePaths(a, b) {
 // "reveal everything on the first scroll"): it was not triggered by coming into view, and whether the capture sees it
 // before or after the timer fires depends on timing, so it is never rebuilt as a scroll reveal: one in the first screen
 // becomes a load entrance instead (ir/motion.js `rl`), one further down a reveal the visitor scrolls to (isScrollReveal).
+// An element in a layer that moves with the window (`layer`: inside a fixed box or a stuck sticky one, a header) stood where it
+// stands now before the step too: it never enters by scrolling (motionrepo, 2026-11-15: the pill marking a header's current
+// link, read at page y 1546 after a scroll, was taken for a scroll reveal). `layer` is kept on the trigger for ir/motion.js.
 export const SCROLL_REVEAL_MAX_TOP_AFTER = 1.35;
-function triggerOf(ev) {
-  const topBefore = r2((ev.rect[1] - ev.prevY) / ev.vh);
+export function triggerOf(ev) {
   const topAfter = r2((ev.rect[1] - ev.y) / ev.vh);
+  const topBefore = ev.layer ? topAfter : r2((ev.rect[1] - ev.prevY) / ev.vh);
   const entering = topBefore > 1 && topAfter <= SCROLL_REVEAL_MAX_TOP_AFTER;
-  return { kind: entering ? 'scroll' : 'timed', step: ev.step, topBefore, topAfter };
+  return { kind: entering ? 'scroll' : 'timed', step: ev.step, topBefore, topAfter, ...(ev.layer && { layer: ev.layer }) };
 }
 
 /**

@@ -15,6 +15,8 @@ const weight = (bytes) => ({ 'total-byte-weight': { numericValue: bytes, numeric
 const lcp = (selector, ms) => ({
   'largest-contentful-paint-element': { metricSavings: { LCP: ms }, details: { items: [{ items: [{ node: { selector, path: selector, snippet: `<${selector}>` } }] }] } },
 });
+const requests = (types) => ({ 'network-requests': { details: { items: types.map((resourceType) => ({ resourceType })) } } });
+const LOAD = ['Document', 'Stylesheet', 'Script', 'Script', 'Image'];
 
 test('links to pages that were not chosen for the copy: the owner decides (c); a page asked for, or a file, is unexplained', () => {
   const left = one({ key: 'links.broken-new', links: { new: [{ url: 'https://www.example-original.test/pricing', status: 404, foundOn: '/' }] } });
@@ -72,9 +74,28 @@ test('Lighthouse: a check whose amount did not grow is the host (e); one that gr
   assert.equal(grew.reason, null);
   assert.match(grew.evidence, /grew in the copy/);
 
-  const time = (sel, ms, w) => lhr({ ...lcp(sel, ms), ...weight(w) });
-  const host = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 480000) } });
-  assert.equal(host.reason, 'deploy', 'the same page, not heavier, only slower on the local preview');
+  const time = (sel, ms, w, load = LOAD) => lhr({ ...lcp(sel, ms), ...weight(w), ...(load ? requests(load) : {}) });
+  const host = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 495000) } });
+  assert.equal(host.reason, 'deploy', 'the same bytes, the same largest element, the same requests: only slower on the local preview');
+  assert.equal(host.group, 'measurement', 'shown as "only reads worse", not hidden');
+  assert.match(host.evidence, /0 → 650 ms/, 'both numbers');
+  assert.match(host.evidence, /488 KB → 483 KB/);
+  assert.match(host.evidence, /the same requests \(5 \(2 Script, 1 Document, 1 Stylesheet, 1 Image\)\)/);
+
+  // Strict: any one of the three that is not the same keeps the row counted, with the difference named.
+  const lighter = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 450000) } });
+  assert.equal(lighter.reason, null, 'a copy 10 % lighter is still not the same page');
+  assert.match(lighter.evidence, /weighs 439 KB against the original's 488 KB/);
+  const moreRequests = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 500000, [...LOAD, 'Fetch']) } });
+  assert.equal(moreRequests.reason, null, 'one more request: not the same load');
+  assert.match(moreRequests.evidence, /other requests than the original: 6 .*1 Fetch.* against 5/);
+  const swapped = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 500000, ['Document', 'Stylesheet', 'Script', 'Image', 'Image']) } });
+  assert.equal(swapped.reason, null, 'as many requests, of other types: not the same load');
+  const noRequests = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 500000, null) } });
+  assert.equal(noRequests.reason, null, 'requests not measured: no proof');
+  assert.match(noRequests.evidence, /requests are not in both reports/);
+  const noElement = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: lhr({ ...weight(500000), ...requests(LOAD) }) }, newLhr: { mobile: time('h1.hero', 650, 500000) } });
+  assert.equal(noElement.reason, null, 'the largest element named on one side only: no proof');
 
   const other = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('video.hero', 5000, 29e6) }, newLhr: { mobile: time('img.banner', 14000, 4e6) } });
   assert.equal(other.reason, null, 'a missing video made another element the largest: not the host');
@@ -82,6 +103,75 @@ test('Lighthouse: a check whose amount did not grow is the host (e); one that gr
 
   const heavier = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1', 0, 500000) }, newLhr: { mobile: time('h1', 900, 900000) } });
   assert.equal(heavier.reason, null);
+});
+
+// A run of a page as Lighthouse records it: what holds the first paint back (url, bytes), every request with its start, and
+// the moments it observed. pitchlight's copy (2026-11-14): the same six blocking files as the original, plus a site icon the
+// browser asked for after the page had loaded; the phone time 330 → 910 ms was read as "Our bug, other requests".
+const run = ({ origin, blocking, later = [], fcp = 680, lcpAt = 1090, load = 1180, ms = 330 }) => lhr({
+  'render-blocking-resources': { numericValue: ms, numericUnit: 'millisecond', details: { items: blocking.map(([p, bytes]) => ({ url: `${origin}${p}`, totalBytes: bytes, wastedMs: 300 })) } },
+  'network-requests': { details: { items: [
+    { url: `${origin}/`, resourceType: 'Document', networkRequestTime: 3 },
+    ...blocking.map(([p], i) => ({ url: `${origin}${p}`, resourceType: /\.css/.test(p) ? 'Stylesheet' : 'Script', networkRequestTime: 135 + i })),
+    ...later.map(([p, type, at]) => ({ url: `${origin}${p}`, resourceType: type, networkRequestTime: at })),
+  ] } },
+  metrics: { details: { items: [{ observedFirstContentfulPaint: fcp, observedLargestContentfulPaint: lcpAt, observedLoad: load }] } },
+  ...lcp('h1.hero', 0), ...weight(500000),
+});
+const BLOCKING = [['/css2~305ecc22.css', 1037], ['/static/css/tokens~e3982324.css', 1088], ['/static/css/landing~5333db55.css', 4365], ['/static/js/nav~5333db55.js', 2007]];
+const LIVE = 'https://pitch.example-original.test';
+
+test('render-blocking: judged by the files that hold the first paint back, never by what loads after it', () => {
+  const row = (oldRun, newRun) => one({ key: 'lighthouse.render-blocking-resources' }, { oldLhr: { mobile: oldRun }, newLhr: { mobile: newRun } });
+  // The same files, the icon asked for after the load: the measurement's, whatever the time.
+  const icon = row(run({ origin: COPY, blocking: BLOCKING }), run({ origin: COPY, blocking: BLOCKING, ms: 910, later: [['/icons/favicon-generated.svg', 'Other', 1182]] }));
+  assert.equal(icon.reason, 'deploy', icon.evidence);
+  assert.equal(icon.group, 'measurement');
+  assert.match(icon.evidence, /330 → 910 ms, the copy's first paint waits for the same 4 files as the original's, in the same order, none larger and none from a new host/);
+  // The live original asks a font service for its font stylesheet; the copy serves the same file from its own address: matched
+  // by name, and the copy's own host is never a new connection. A file from a host the original's first paint never waits for is.
+  const abs = (blocking, ms = 330) => lhr({ 'render-blocking-resources': { numericValue: ms, numericUnit: 'millisecond', details: { items: blocking.map(([url, totalBytes]) => ({ url, totalBytes })) } } });
+  const fonts = 'https://fonts.example-cdn.test';
+  const own = (o) => BLOCKING.slice(1).map(([p, b]) => [`${o}${p}`, b]);
+  const moved = row(abs([[`${fonts}/css2?family=Manrope`, 1100], ...own(LIVE)]), abs([[`${COPY}/css2~305ecc22.css`, 1037], ...own(COPY)], 900));
+  assert.equal(moved.reason, 'deploy', 'the font stylesheet now on the copy\'s own host: the same file, no new host');
+  const foreign = row(abs(own(LIVE)), abs([['https://widgets.other.test/w.css', 900], ...own(COPY)], 900));
+  assert.equal(foreign.reason, null);
+  assert.match(foreign.evidence, /waits for \/w\.css from widgets\.other\.test, a host the original's first paint does not wait for/);
+  // Fewer is fine; one more, a larger one, another order: the copy blocks more, named.
+  assert.equal(row(run({ origin: COPY, blocking: BLOCKING }), run({ origin: COPY, blocking: BLOCKING.slice(1), ms: 900 })).reason, 'deploy');
+  const added = row(run({ origin: COPY, blocking: BLOCKING }), run({ origin: COPY, blocking: [...BLOCKING, ['/js/sas-guard.js', 900]], ms: 900 }));
+  assert.equal(added.reason, null);
+  assert.match(added.evidence, /waits for \/js\/sas-guard\.js, which the original's does not wait for/);
+  const larger = row(run({ origin: COPY, blocking: BLOCKING }), run({ origin: COPY, blocking: BLOCKING.map(([p, b], i) => [p, i === 2 ? 17006 : b]), ms: 900 }));
+  assert.equal(larger.reason, null);
+  assert.match(larger.evidence, /landing~5333db55\.css holds the copy's first paint back with 17 KB against the original's 4 KB/);
+  const order = row(run({ origin: COPY, blocking: BLOCKING }), run({ origin: COPY, blocking: [BLOCKING[1], BLOCKING[0], ...BLOCKING.slice(2)], ms: 900 }));
+  assert.equal(order.reason, null);
+  assert.match(order.evidence, /in another order/);
+  // No list on one side: no proof.
+  assert.equal(row(lhr({}), run({ origin: COPY, blocking: BLOCKING })).reason, null);
+});
+
+test('other time rows count only the requests started by the moment they measure; a score row only those started by the load', () => {
+  const fcp = (oldRun, newRun) => one({ key: 'lighthouse.first-contentful-paint' }, { oldLhr: { mobile: oldRun }, newLhr: { mobile: newRun } });
+  const withFcp = (r, ms) => ({ ...r, audits: { ...r.audits, 'first-contentful-paint': { numericValue: ms, numericUnit: 'millisecond' } } });
+  const after = fcp(withFcp(run({ origin: COPY, blocking: BLOCKING }), 900), withFcp(run({ origin: COPY, blocking: BLOCKING, later: [['/icons/favicon-generated.svg', 'Other', 1182]] }), 1400));
+  assert.equal(after.reason, 'deploy', after.evidence);
+  assert.match(after.evidence, /the same requests started by the first paint \(5 /);
+  const before = fcp(withFcp(run({ origin: COPY, blocking: BLOCKING }), 900), withFcp(run({ origin: COPY, blocking: BLOCKING, later: [['/sas-forms.json', 'Fetch', 400]] }), 1400));
+  assert.equal(before.reason, null, 'a request started before the first paint counts');
+  assert.match(before.evidence, /other requests than the original started by the first paint: 6 .*1 Fetch/);
+
+  const score = (early) => one({
+    key: 'lighthouse-score.mobile.performance./', before: { score: 92 }, after: { score: 86 },
+    lighthousePage: { mode: 'mobile', category: 'performance', weight: { original: 500000, copy: 500000 }, lcp: { original: { selector: 'h1' }, copy: { selector: 'h1' } },
+      requests: { original: { total: 16, byType: { Script: 5 } }, copy: { total: 17, byType: { Script: 5, Other: 1 } } },
+      ...(early && { earlyRequests: { original: { total: 16, byType: { Script: 5 } }, copy: { total: 16, byType: { Script: 5 } } } }) },
+  });
+  assert.equal(score(true).reason, 'deploy');
+  assert.match(score(true).evidence, /the same requests started by the load event/);
+  assert.equal(score(false).reason, null, 'a row kept before the early requests were recorded: every request, as before');
 });
 
 test('contrast: the original\'s own colours seen more often is its look (d); a colour the original never failed with is unexplained', () => {
@@ -164,14 +254,72 @@ test('KNOWN-ISSUES.md lists every row that got worse, the unexplained ones as su
 
 test('an image row that got worse is a look change only when the copy serves the original\'s own file, never when it holds a heavier one', () => {
   const rows = (id, list) => ({ [id]: { score: 0, details: { items: list.map(([url, wastedBytes]) => ({ url, wastedBytes })), overallSavingsBytes: list.reduce((s, [, b]) => s + b, 0) } } });
-  const worse = (copyRows, originalRows) => one({ key: 'lighthouse.modern-image-formats', after: { detail: 'Serve images in next-gen formats' } },
-    { newLhr: { mobile: lhr(rows('modern-image-formats', copyRows)) }, oldLhr: { mobile: lhr(rows('modern-image-formats', originalRows)) } });
-  // The copy names one more file than the original (a lossless WebP it made): the amount grew, yet every file is explained.
-  const made = worse([[`${COPY}/img/a.sas-0123456789.webp`, 20000], [`${COPY}/img/b~1a2b3c4d.jpg`, 30000]], [['https://cdn.example-original.test/img/b.jpg?w=800', 30000]]);
+  const worse = (copyRows, originalRows, fixOpen = []) => one({ key: 'lighthouse.modern-image-formats', after: { detail: 'Serve images in next-gen formats' } },
+    { newLhr: { mobile: lhr(rows('modern-image-formats', copyRows)) }, oldLhr: { mobile: lhr(rows('modern-image-formats', originalRows)) }, fixOpen });
+  // The copy names one more file than the original (a WebP it made): the amount grew, yet every file is explained. A JPEG is
+  // tried as a WebP too (f4eb306), so one left as it is needs the fix's recorded reason, like a PNG.
+  const files = [[`${COPY}/img/a.sas-0123456789.webp`, 20000], [`${COPY}/img/b~1a2b3c4d.jpg`, 30000]];
+  const left = [{ kind: 'webp', page: '/', reason: 'd', detail: '/img/b~1a2b3c4d.jpg is left as it is: every WebP up to quality 95 shows a visible difference' }];
+  const made = worse(files, [['https://cdn.example-original.test/img/b.jpg?w=800', 30000]], left);
   assert.equal(made.reason, 'look');
   assert.equal(made.group, 'look');
+  const noReason = worse(files, [['https://cdn.example-original.test/img/b.jpg?w=800', 30000]]);
+  assert.equal(noReason.reason, null, 'a JPEG the fix left without saying why is not explained');
   // The flexibench shape: the original's CDN sent a small file, the copy holds the large one. A real gap: still owed.
   const big = worse([[`${COPY}/img/photo.png`, 14000000]], [['https://cdn.example-original.test/img/photo.png', 73000]]);
   assert.equal(big.reason, null);
   assert.equal(big.group, 'missing-fixer');
+});
+
+test('a script that threw is a script error, never "the copy does not hold the file"; React #418 is the framework rejecting the changed markup', () => {
+  const chunk = `${COPY}/_next/static/chunks/fd9d1056-a79584be52eb02e9.js`;
+  const thrown = (description, source = 'exception') => ({ source, description, sourceLocation: { url: chunk } });
+  const row = one({ key: 'lighthouse.errors-in-console' }, { newLhr: { mobile: lhr({ 'errors-in-console': { details: { items: [
+    thrown('Error: Minified React error #418; visit https://react.dev/errors/418 for the full message'),
+  ] } } }) } });
+  assert.equal(row.reason, null, 'a hydration error is ours to fix');
+  assert.doesNotMatch(row.evidence, /does not hold the file/);
+  assert.match(row.evidence, /React #418 \(a script error: the framework rejected the copy's changed markup \(React #418\)/);
+  assert.match(row.evidence, /thrown in \/_next\/static\/chunks\/fd9d1056-a79584be52eb02e9\.js, which the copy holds and which ran/);
+
+  const other = one({ key: 'lighthouse.errors-in-console' }, { newLhr: { mobile: lhr({ 'errors-in-console': { details: { items: [thrown('TypeError: x is undefined')] } } }) } });
+  assert.match(other.evidence, /a script error \(thrown in \/_next\/static\/chunks\/[^)]+\): TypeError: x is undefined/);
+  assert.doesNotMatch(other.evidence, /does not hold the file/);
+
+  // A per-page Best practices row: the console's entries (lighthousePages.js consoleEntries) say which is a script error; the
+  // same error thrown on several loads is one part. A row with addresses only keeps the old wording.
+  const page = (errors, urls) => one({
+    key: 'lighthouse-score.mobile.best-practices./blog/x/', before: { score: 100 }, after: { score: 96 },
+    lighthousePage: { mode: 'mobile', category: 'best-practices', failing: { original: [], copy: ['errors-in-console'] },
+      copyFailingByCategory: { 'best-practices': [{ id: 'errors-in-console', weight: 1 }] },
+      copyAudits: { 'errors-in-console': { title: 'Browser errors were logged to the console', urls, ...(errors && { errors }) } } },
+  });
+  const e418 = { source: 'exception', text: 'Error: Minified React error #418; visit https://react.dev/errors/418', url: chunk };
+  const withEntries = page([e418, e418, { source: 'exception', text: 'Error: Minified React error #423; visit https://react.dev/errors/423', url: chunk }], [chunk]);
+  assert.match(withEntries.evidence, /2 of 2 console errors have no reason: React #418 \(a script error: the framework rejected/);
+  assert.match(withEntries.evidence, /React #423/);
+  assert.doesNotMatch(withEntries.evidence, /does not hold the file/);
+  const older = page(null, [`${COPY}/img/missing.png`]);
+  assert.match(older.evidence, /failed requests have no reason: .*the copy does not hold the file \/img\/missing\.png/);
+});
+
+test('a stylesheet the browser refused: the console row names it, and hover / motion rows point at it instead of "still owed"', () => {
+  const css = `${COPY}/67767fd5/css/site.webflow.shared.d42c59d33.css`;
+  const refused = { source: 'other', description: `Failed to find a valid digest in the 'integrity' attribute for resource '${css}' with computed SHA-384 integrity 'abc'. The resource has been blocked.`, sourceLocation: { url: `${COPY}/` } };
+  const newLhr = { mobile: lhr({ 'errors-in-console': { details: { items: [refused] } } }) };
+  const consoleRow = one({ key: 'lighthouse.errors-in-console' }, { newLhr });
+  assert.match(consoleRow.evidence, /the copy holds \/67767fd5\/css\/site\.webflow\.shared\.d42c59d33\.css, but the browser refused it: its integrity hash does not match the file/);
+
+  const hover = one({ key: 'motion.hover', after: { detail: '0 of them react on the recreated site.' } }, { newLhr });
+  assert.equal(hover.group, 'bug');
+  assert.equal(hover.unexplained, true);
+  assert.doesNotMatch(hover.evidence, /separate track/);
+  assert.match(hover.evidence, /The copy's stylesheet did not load, so the page was drawn without the rules these effects are made of: \/67767fd5\/css\/site\.webflow\.shared\.d42c59d33\.css \(its integrity hash does not match the file, so the browser refused it\)/);
+
+  // A stylesheet answered with an error counts too; a refused script or a missing image does not.
+  const missing = { mobile: lhr({ 'network-requests': { details: { items: [{ url: `${COPY}/css/a.css`, resourceType: 'Stylesheet', statusCode: 404 }, { url: `${COPY}/img/b.png`, resourceType: 'Image', statusCode: 404 }] } } }) };
+  assert.match(one({ key: 'motion.reveal' }, { newLhr: missing }).evidence, /\/css\/a\.css \(it answered 404\)\. A bug to fix/);
+  const script = { mobile: lhr({ 'errors-in-console': { details: { items: [{ ...refused, description: refused.description.replace(css, `${COPY}/js/app.js`) }] } } }) };
+  assert.match(one({ key: 'motion.hover' }, { newLhr: script }).evidence, /Fix not built yet: Motion is a separate track/);
+  assert.match(one({ key: 'motion.hover' }).evidence, /Fix not built yet: Motion is a separate track/, 'with every stylesheet loaded, the effect is still owed');
 });

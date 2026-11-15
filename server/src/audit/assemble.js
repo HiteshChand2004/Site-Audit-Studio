@@ -25,6 +25,7 @@ export function assembleAudit({
   manualRebuild,
   pagesCrawled,
   pageVariants = 0,
+  crawlLimit = null,
   blockedHosts = [],
   errors,
   siteType = null,
@@ -37,6 +38,8 @@ export function assembleAudit({
     analyzedAt: new Date().toISOString(),
     pagesCrawled,
     pageVariants,
+    // The crawl was cut (the page limit or its time): { found, read, notRead, cutBy: 'pages' | 'time', urls[≤ 500] }, else null.
+    crawlLimit,
     frame,
     screenshots,
     metrics,
