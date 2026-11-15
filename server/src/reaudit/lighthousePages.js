@@ -180,6 +180,16 @@ export function requestsOf(lhr) {
   return { total: items.length, byType };
 }
 
+/** The entries of an errors-in-console audit: { source, text, url } each (source: Lighthouse's `exception`, `network`, …). */
+export function consoleEntries(a) {
+  const items = Array.isArray(a?.details?.items) ? a.details.items : [];
+  return items.slice(0, 20).map((i) => ({
+    source: typeof i.source === 'string' ? i.source : null,
+    text: String(i.description ?? '').split('\n')[0].slice(0, 200),
+    url: i.sourceLocation?.url ?? i.url ?? null,
+  }));
+}
+
 /**
  * What a run of a page keeps (a full report is ~1 MB; a comparison needs the scores, the page's weight, its largest element and
  * the audits that fail, so a row can be explained): the shape both sides are stored and compared in.
@@ -191,7 +201,10 @@ export function trimReport(lhr) {
     audits[id] = { score: a.score, title: a.title, displayValue: a.displayValue ?? null, numericValue: a.numericValue ?? null, numericUnit: a.numericUnit ?? null,
       ...(Number.isFinite(a.details?.overallSavingsBytes) && { savingsBytes: a.details.overallSavingsBytes }),
       // details.items is a list for most audits; an insight with a checklist (document-latency-insight) keeps an object there.
-      urls: [...new Set((Array.isArray(a.details?.items) ? a.details.items : []).map((i) => i.url ?? i.source?.url ?? i.sourceLocation?.url ?? i.entity ?? null).filter((u) => typeof u === 'string'))].slice(0, 20) };
+      urls: [...new Set((Array.isArray(a.details?.items) ? a.details.items : []).map((i) => i.url ?? i.source?.url ?? i.sourceLocation?.url ?? i.entity ?? null).filter((u) => typeof u === 'string'))].slice(0, 20),
+      // The console's own entries: what kind each is (a failed request, a script that threw, a console.error) and its message,
+      // so an error thrown inside a script is not read as a request for that script.
+      ...(id === 'errors-in-console' && { errors: consoleEntries(a) }) };
   }
   const lcp = lhr?.audits?.['largest-contentful-paint-element']?.details?.items?.[0]?.items?.[0]?.node;
   // A category Lighthouse could not score (null): the audits of it that errored, with their message, so the comparison can say

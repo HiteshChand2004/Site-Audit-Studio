@@ -225,6 +225,15 @@ function explainOne(item, ctx) {
     return orPlanned(r.unexplained ? imageRow(item, id, ctx) ?? r : r, item);
   }
   if (key === 'axe.color-contrast') return contrastPart(ctx);
+  // A hover, reveal or loop lives in the stylesheets: when one of the copy's own did not load, that is why the effect is gone,
+  // not motion still owed (a page drawn without its styles has nothing to hover).
+  if (key.startsWith('motion.')) {
+    const sheets = stylesheetFailures(ctx.newLhr ?? {});
+    if (sheets.length) {
+      const list = sheets.slice(0, 3).map((s) => `${pathOf(s.url) ?? s.url} (${s.why})`).join('; ');
+      return { reason: null, unexplained: true, group: 'bug', stylesheetFailed: sheets.length, evidence: `${item.after?.detail ?? 'Missing in the copy.'} The copy's stylesheet did not load, so the page was drawn without the rules these effects are made of: ${list}${sheets.length > 3 ? ` and ${sheets.length - 3} more` : ''}. A bug to fix in the copy: make the stylesheet load, then check again.` };
+    }
+  }
   return orPlanned(unexplained('No rule of the five reasons applies to this check on the evidence of this run.'), item);
 }
 
@@ -670,6 +679,75 @@ function consoleErrors(lhr) {
   return [...seen.values()];
 }
 
+/**
+ * React's hydration errors (production builds name them by number): the HTML the page arrived with is not the markup its
+ * framework draws from its own data, so the framework throws it away and draws the page again in the browser.
+ */
+const HYDRATION = /\bReact error #(418|419|421|422|423|425)\b|Hydration failed|did not match\b.*server|hydrat(ion|ing) (error|mismatch)/i;
+
+/**
+ * The words for a console entry that is a script error (Lighthouse source `exception`, or a message that names an error
+ * thrown), or null for anything else (a failed request, a console.error a script printed). A hydration error is named as the
+ * framework rejecting the copy's changed markup.
+ */
+export function scriptErrorText(e) {
+  const text = String(e?.text ?? '');
+  const thrown = e?.source === 'exception' || /^(Uncaught\s+)?(\w+)?Error\b/.test(text) || HYDRATION.test(text);
+  if (!thrown) return null;
+  const file = e.url ? pathOf(e.url) ?? e.url : null;
+  const where = file ? ` (thrown in ${file}, which the copy holds and which ran)` : '';
+  if (HYDRATION.test(text)) {
+    const n = text.match(/#(\d+)/)?.[1];
+    return `a script error: the framework rejected the copy's changed markup${n ? ` (React #${n})` : ''} — the page's HTML is not the markup its own framework draws from its data, so the framework threw it away and drew the page again in the browser${where}`;
+  }
+  return `a script error${where}: ${text.slice(0, 160)}`;
+}
+
+/** A script error's name in a list: "React #418" for React's numbered errors, else the first words of its message. */
+const shortError = (text) => {
+  const s = String(text ?? '');
+  const n = s.match(/\bReact error #(\d+)/)?.[1];
+  return n ? `React #${n}` : s.length > 80 ? `${s.slice(0, 80)}…` : s;
+};
+
+/**
+ * A console message saying the browser refused a file: { url, why, style } (style: refused as a stylesheet), or null. Chrome's
+ * words: "Failed to find a valid digest in the 'integrity' attribute for resource '<url>' …" and "Refused to apply style from
+ * '<url>' because its MIME type …".
+ */
+export function refusedFile(text) {
+  const s = String(text ?? '');
+  const integrity = s.match(/integrity' attribute for resource '([^']+)'/);
+  if (integrity) return { url: integrity[1], why: 'its integrity hash does not match the file, so the browser refused it', style: false };
+  const mime = s.match(/Refused to apply style from '([^']+)'/);
+  if (mime) return { url: mime[1], why: 'it was not served as a stylesheet, so the browser refused it', style: true };
+  return null;
+}
+
+/** Each console entry once (the same error thrown on several loads is one part). */
+const uniqueEntries = (list) => [...new Map(list.map((e) => [`${e.source}|${e.text}|${e.url}`, e])).values()];
+
+/**
+ * The copy's stylesheets that did not load in a Lighthouse report: refused for a wrong integrity hash or a wrong type (the
+ * console says so), or answered with an error (network-requests). { url, why }, each address once.
+ */
+export function stylesheetFailures(lhr) {
+  const out = new Map();
+  for (const device of ['mobile', 'desktop']) {
+    const r = lhr?.[device];
+    for (const i of r?.audits?.['errors-in-console']?.details?.items ?? []) {
+      const f = refusedFile(i.description);
+      // An integrity refusal names any file; only a stylesheet counts here (a script's is its own row).
+      if (f && (f.style || /\.css(?:[?#]|$)/i.test(f.url)) && !out.has(f.url)) out.set(f.url, f.why);
+    }
+    for (const q of r?.audits?.['network-requests']?.details?.items ?? []) {
+      if (q.resourceType !== 'Stylesheet' || !(q.statusCode >= 400) || out.has(q.url)) continue;
+      out.set(q.url, `it answered ${q.statusCode}`);
+    }
+  }
+  return [...out].map(([url, why]) => ({ url, why }));
+}
+
 function requestPart(e, ctx) {
   const what = e.url || e.text;
   // A script error thrown at a line the original wrote, word for word: the original's own code, kept as it is.
@@ -678,6 +756,12 @@ function requestPart(e, ctx) {
     const shown = own.text.length > 90 ? `${own.text.slice(0, 90)}…` : own.text;
     return { what, reason: 'own_code', evidence: `a script error in the original's own code, which the copy keeps as it is: line ${own.line} of the copy's ${own.file} ("${shown}") is word for word in the original's page; ${e.text}` };
   }
+  // A script that threw: the address is the script's, not a request that failed (the file was there and ran).
+  const thrown = scriptErrorText(e);
+  if (thrown) return { what: shortError(e.text) || what, reason: null, scriptError: true, evidence: thrown };
+  // A file the copy holds that the browser refused (its integrity hash, its type): the address the entry names is the page's.
+  const refused = refusedFile(e.text);
+  if (refused) return { what: pathOf(refused.url) ?? refused.url, reason: null, refused: true, evidence: `the copy holds ${pathOf(refused.url) ?? refused.url}, but the browser refused it: ${refused.why}` };
   if (!e.url) return { what, reason: null, evidence: `an error of the page itself: ${e.text}` };
   const host = hostOf(e.url);
   if (host !== ctx.copyHost && host !== ctx.site) return { what, reason: 'third_party', evidence: `requests to ${host}, which is neither the copy nor the original` };
@@ -952,8 +1036,11 @@ function scorePart(item, ctx) {
     const what = a.title ?? id;
     // Console errors: each failed request on its own, by the same rule as the "Browser errors" row (requestPart): a request to
     // the site's backend, a file the copy lacks, a page not copied. Without addresses, the original's own code as before.
-    if (id === 'errors-in-console' && urls.length) {
-      const r = byParts(urls.map((url) => ({ url, text: url })), (e) => requestPart(e, ctx), 'failed request');
+    // A row measured with the console's own entries (lighthousePages.js consoleEntries) says what each one is; an older row has
+    // only the addresses, read as failed requests as before.
+    const entries = Array.isArray(a.errors) && a.errors.length ? uniqueEntries(a.errors) : null;
+    if (id === 'errors-in-console' && (entries || urls.length)) {
+      const r = byParts(entries ?? urls.map((url) => ({ url, text: url })), (e) => requestPart(e, ctx), entries ? 'console error' : 'failed request');
       // Unexplained: the requests that do have a reason are said too, so the row reads whole.
       const given = r.unexplained ? (r.parts ?? []).filter((p) => p.reason) : [];
       const also = given.length ? ` The other${given.length === 1 ? '' : 's'}: ${given.slice(0, 3).map((p) => `${pathOf(p.what) ?? p.what} — ${p.evidence}`).join('; ')}.` : '';

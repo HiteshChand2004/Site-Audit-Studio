@@ -69,6 +69,18 @@ test('trimReport keeps what a comparison needs and drops the rest; pageSlug tell
   assert.deepEqual(t.lcpElement, { selector: 'h1.title', snippet: '<h1.title>' });
   assert.deepEqual(Object.keys(t.audits), ['unused-javascript', 'other-failing'], 'failing audits with their urls; the informative one is left out');
   assert.deepEqual(t.audits['unused-javascript'].urls, ['https://cdn.example.net/a.js']);
+  assert.equal(t.audits['unused-javascript'].errors, undefined, 'only the console audit keeps its entries');
+  // The console audit keeps what each entry is, so a script that threw is not read as a request for that script.
+  const chunk = 'http://127.0.0.1:5000/_next/static/chunks/a.js';
+  const c = trimReport({ categories: {}, audits: { 'errors-in-console': { score: 0, title: 'Browser errors', details: { items: [
+    { source: 'exception', description: 'Error: Minified React error #418; visit https://react.dev/errors/418\n    at t5 (a.js:1:2)', sourceLocation: { url: chunk } },
+    { source: 'network', description: 'Failed to load resource: the server responded with a status of 404 ()', url: 'http://127.0.0.1:5000/x.png' },
+  ] } } } });
+  assert.deepEqual(c.audits['errors-in-console'].errors, [
+    { source: 'exception', text: 'Error: Minified React error #418; visit https://react.dev/errors/418', url: chunk },
+    { source: 'network', text: 'Failed to load resource: the server responded with a status of 404 ()', url: 'http://127.0.0.1:5000/x.png' },
+  ]);
+  assert.deepEqual(c.audits['errors-in-console'].urls, [chunk, 'http://127.0.0.1:5000/x.png']);
   assert.notEqual(pageSlug('/about/', 'https://a.test/about/'), pageSlug('/about/', 'https://b.test/about/'));
   assert.match(pageSlug('/', 'https://a.test/'), /^index-[0-9a-f]{8}$/);
 });
