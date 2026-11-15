@@ -17,11 +17,13 @@
 //   PUT    /api/projects/:id/forms { enabled?, email? }   turn saving / the email on each entry on or off (from the next deploy)
 //   GET    /api/projects/:id/forms/entries.csv   every entry, for a spreadsheet
 //   DELETE /api/projects/:id/forms/entries/:entryId   remove one entry
+//   POST   /api/projects/:id/forms/import     (body: a CSV file) old entries from Webflow, Framer or the old site's database
+//   DELETE /api/projects/:id/forms/imports/:importId   take one import back
 //   POST   /api/projects/:id/deploy/:deploymentId/restore   put an earlier finished deploy back as the live one (Step 4)
 //   POST   /api/projects/:id/deploy { recreateId?, stack?, accept?: [warning ids], target?: 'remastly' | 'own' }   start a
 //          deploy (202); `target` defaults to Remastly hosting when it is set up, otherwise the person's own Netlify account
 // Project routes sit behind the accounts' project gate (index.js), like every other /api/projects/:id route.
-import { Router } from 'express';
+import express, { Router } from 'express';
 import { db } from '../db/index.js';
 import { targetStack } from '../recreate/export/fromIr.js';
 import { deployReadiness, unaccepted } from '../deploy/readiness.js';
@@ -36,7 +38,8 @@ import { isOwner } from '../accounts/roles.js';
 import { checkRecords, domainPlan, parseDomain } from '../deploy/domain.js';
 import { parsePaths, parseTarget, readPassThrough, redirectsFor, savePassThrough, suggestedPaths } from '../deploy/passThrough.js';
 import { formsEndpointOf } from '../forms/connect.js';
-import { entriesCsv, listEntries, removeEntry, saveFormSettings } from '../forms/entries.js';
+import { entriesCsv, importEntries, listEntries, removeEntry, removeImport, saveFormSettings } from '../forms/entries.js';
+import { entriesFromRows, IMPORT_LIMITS, parseCsv } from '../forms/importCsv.js';
 import { formCounts } from '../copy/formRoutes.js';
 import { withAsIsSafety } from '../copy/outsideServices.js';
 
@@ -383,4 +386,26 @@ deployRouter.delete('/:id/forms/entries/:entryId', async (req, res) => {
   if (!UUID.test(req.params.entryId)) return res.status(404).json({ error: 'Entry not found.' });
   if (!(await removeEntry(project.id, req.params.entryId))) return res.status(404).json({ error: 'Entry not found.' });
   res.json(await formsState(project));
+});
+
+deployRouter.post('/:id/forms/import', express.raw({ type: () => true, limit: IMPORT_LIMITS.bytes }), async (req, res) => {
+  if (notReady(res)) return;
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'Choose a CSV file to import.' });
+  const read = entriesFromRows(parseCsv(req.body.toString('utf8')));
+  if ('error' in read) return res.status(400).json({ error: read.error });
+  const kept = await importEntries(project.id, read.entries);
+  if ('full' in kept) return res.status(507).json({ error: 'This website cannot keep that many entries. Remove older ones or import a smaller file.' });
+  res.json({ ...(await formsState(project)), imported: { ...kept, dateColumn: read.dateColumn, pageColumn: read.pageColumn } });
+});
+
+deployRouter.delete('/:id/forms/imports/:importId', async (req, res) => {
+  if (notReady(res)) return;
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  if (!UUID.test(req.params.importId)) return res.status(404).json({ error: 'Import not found.' });
+  const removed = await removeImport(project.id, req.params.importId);
+  if (!removed) return res.status(404).json({ error: 'Import not found.' });
+  res.json({ ...(await formsState(project)), removed });
 });

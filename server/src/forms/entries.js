@@ -116,6 +116,9 @@ export function parseFormBody(body, contentType) {
   return { fields, files };
 }
 
+/** The fields as kept: at most FORM_LIMITS.fields, names and values cut to a sane length. @param {[string, string][]} fields */
+const keptFields = (fields) => fields.slice(0, FORM_LIMITS.fields).map(([k, v]) => [String(k).slice(0, 200), String(v).slice(0, FORM_LIMITS.valueChars)]);
+
 /**
  * Keeps one entry. Refuses (returns { full: true }) when the website already keeps FORM_LIMITS.fileBytes of entries.
  * @param {string} projectId
@@ -129,7 +132,7 @@ export async function addEntry(projectId, { page, fields, files }) {
     id: randomUUID(),
     at: new Date().toISOString(),
     page,
-    fields: fields.slice(0, FORM_LIMITS.fields).map(([k, v]) => [String(k).slice(0, 200), String(v).slice(0, FORM_LIMITS.valueChars)]),
+    fields: keptFields(fields),
     ...(files.length && { files: files.slice(0, 20) }),
   };
   await mkdir(path.dirname(file), { recursive: true });
@@ -137,7 +140,11 @@ export async function addEntry(projectId, { page, fields, files }) {
   return { entry };
 }
 
-/** Every kept entry, newest first. A line that cannot be read (a crash mid-write) is skipped. @param {string} projectId */
+/**
+ * Every kept entry, newest first by when it was sent (imported old entries are added after newer ones, so the file's order is
+ * not the time order). A line that cannot be read (a crash mid-write) is skipped.
+ * @param {string} projectId
+ */
 export async function listEntries(projectId) {
   const text = await readFile(entriesFile(projectId), 'utf8').catch(() => '');
   const out = [];
@@ -149,7 +156,8 @@ export async function listEntries(projectId) {
       // skipped
     }
   }
-  return out.reverse();
+  // Stable: entries of the same moment keep the file's order (the later one first).
+  return out.reverse().sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
 }
 
 /** Removes one entry. @param {string} projectId @param {string} id @returns {Promise<boolean>} whether it was there */
@@ -179,3 +187,46 @@ export function entriesCsv(entries) {
   return `${rows.join('\r\n')}\r\n`;
 }
 
+
+/** The same entry, whatever its id: when, where and what (an import of the same file twice adds nothing the second time). */
+const sameKey = (e) => JSON.stringify([e.at, e.page ?? null, e.fields]);
+
+/**
+ * Keeps old entries brought in from a CSV (forms/importCsv.js), marked with one import id so the whole import can be taken
+ * back. Entries already kept (the same time, page and fields) are skipped.
+ * @param {string} projectId @param {{ at: string, page: string | null, fields: [string, string][] }[]} list
+ * @returns {Promise<{ importId: string, added: number, skipped: number } | { full: true }>}
+ */
+export async function importEntries(projectId, list) {
+  const file = entriesFile(projectId);
+  const known = new Set((await listEntries(projectId)).map(sameKey));
+  const importId = randomUUID();
+  const fresh = [];
+  for (const e of list) {
+    const entry = {
+      at: e.at,
+      page: e.page,
+      fields: keptFields(e.fields),
+    };
+    const key = sameKey(entry);
+    if (known.has(key)) continue;
+    known.add(key);
+    fresh.push(JSON.stringify({ id: randomUUID(), ...entry, importId }));
+  }
+  const text = fresh.map((l) => `${l}\n`).join('');
+  const size = (await stat(file).catch(() => null))?.size ?? 0;
+  if (size + Buffer.byteLength(text) > FORM_LIMITS.fileBytes) return { full: true };
+  if (fresh.length) {
+    await mkdir(path.dirname(file), { recursive: true });
+    await appendFile(file, text);
+  }
+  return { importId, added: fresh.length, skipped: list.length - fresh.length };
+}
+
+/** Takes back one import (every entry it added). @param {string} projectId @param {string} importId @returns {Promise<number>} entries removed */
+export async function removeImport(projectId, importId) {
+  const all = await listEntries(projectId);
+  const kept = all.filter((e) => e.importId !== importId);
+  if (kept.length !== all.length) await writeAtomic(entriesFile(projectId), kept.reverse().map((e) => `${JSON.stringify(e)}\n`).join(''));
+  return all.length - kept.length;
+}

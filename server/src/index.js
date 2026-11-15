@@ -110,6 +110,10 @@ app.use((err, _req, res, _next) => {
   if (err.type === 'entity.parse.failed') {
     return res.status(400).json({ error: 'Invalid JSON body.' });
   }
+  // A body over a route's limit (a JSON body, an imported CSV): said as such, not as a server error.
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'The file or request is too large.' });
+  }
   console.error(err);
   res.status(500).json({ error: 'Server error.' });
 });

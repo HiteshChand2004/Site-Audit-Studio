@@ -22,6 +22,7 @@ import { deployRouter, hostingRouter } from '../src/routes/deploy.js';
 import { checkRecords, dnsConfig, domainPlan, NETLIFY_LB, parseDomain } from '../src/deploy/domain.js';
 import { parsePaths, parseTarget, redirectsFor, suggestedPaths } from '../src/deploy/passThrough.js';
 import { entriesCsv, parseFormBody } from '../src/forms/entries.js';
+import { entriesFromRows, parseCsv } from '../src/forms/importCsv.js';
 import { formsPublicRouter } from '../src/routes/formsPublic.js';
 import { seedProject } from './helpers/projects.js';
 
@@ -692,4 +693,56 @@ test('Form entries: a Remastly on this computer only (localhost) does not connec
   const project = seedProject(db, { name: 'lambda' });
   const r = await call('PUT', `/projects/${project.id}/forms`, { enabled: true });
   assert.deepEqual([r.body.enabled, r.body.reachable, r.body.connected], [true, false, false]);
+});
+
+// ---- Import old entries (CSV) ----
+
+test('a CSV is read with quoted commas, quotes and line breaks in cells, a BOM, Windows line ends and semicolons', () => {
+  assert.deepEqual(parseCsv('\uFEFFName,Message\r\n"Rao, Asha","Said ""hi""\r\non two lines"\r\n\r\nBo,x\r\n'),
+    [['Name', 'Message'], ['Rao, Asha', 'Said "hi"\r\non two lines'], ['Bo', 'x']]);
+  assert.deepEqual(parseCsv('Name;Amount\nAsha;1,5'), [['Name', 'Amount'], ['Asha', '1,5']], 'semicolons when the first line has no comma');
+  assert.deepEqual(parseCsv('a,b\n1,2'), [['a', 'b'], ['1', '2']], 'no line break at the end');
+});
+
+test('the date column becomes the entry\'s time only for dates that read one way; the page column its page', () => {
+  const now = '2026-11-15T00:00:00.000Z';
+  let r = entriesFromRows(parseCsv('Name,Email,Submitted at,Page URL\nAsha,a@x.io,2025-03-04T10:30:00Z,/contact\nBo,,15 Nov 2025,\n,,,'), { now });
+  assert.equal(r.dateColumn, 'Submitted at');
+  assert.equal(r.pageColumn, 'Page URL');
+  assert.deepEqual(r.entries, [
+    { at: '2025-03-04T10:30:00.000Z', page: '/contact', fields: [['Name', 'Asha'], ['Email', 'a@x.io']] },
+    { at: new Date('15 Nov 2025').toISOString(), page: null, fields: [['Name', 'Bo']] },
+  ], 'an empty row is not an entry');
+  // 03/04/2025: 3 April or March 4 — not read; kept as written, and the entry gets the import time.
+  r = entriesFromRows(parseCsv('Name,Date\nAsha,03/04/2025'), { now });
+  assert.equal(r.dateColumn, null);
+  assert.deepEqual(r.entries, [{ at: now, page: null, fields: [['Name', 'Asha'], ['Date', '03/04/2025']] }]);
+  assert.match(entriesFromRows(parseCsv('Name,Email')).error, /no entries/);
+});
+
+test('Form entries: old entries are imported in date order, a second import of the same file adds nothing, an import can be taken back', async () => {
+  const project = seedProject(db, { name: 'mu' });
+  await call('PUT', `/projects/${project.id}/forms`, { enabled: true, email: false });
+  const csv = 'Name,Email,Date\nAsha,a@x.io,2025-01-10T09:00:00Z\nBo,b@x.io,2025-06-01T09:00:00Z\n';
+  const post = (text) => fetch(`${base}/projects/${project.id}/forms/import`, { method: 'POST', headers: { 'content-type': 'text/csv' }, body: text }).then(async (r) => ({ status: r.status, body: await r.json() }));
+
+  let r = await post(csv);
+  assert.equal(r.status, 200, r.body.error);
+  assert.deepEqual([r.body.imported.added, r.body.imported.skipped, r.body.imported.dateColumn], [2, 0, 'Date']);
+  assert.deepEqual(r.body.entries.map((e) => e.fields[0][1]), ['Bo', 'Asha'], 'newest first, by their own dates');
+  assert.ok(r.body.entries.every((e) => e.importId === r.body.imported.importId));
+  const firstImport = r.body.imported.importId;
+
+  r = await post(csv);
+  assert.deepEqual([r.body.imported.added, r.body.imported.skipped, r.body.count], [0, 2, 2], 'the same file again adds nothing');
+
+  r = await post('Name,Date\nCara,2025-03-01T09:00:00Z\n');
+  assert.deepEqual(r.body.entries.map((e) => e.fields[0][1]), ['Bo', 'Cara', 'Asha']);
+
+  r = await call('DELETE', `/projects/${project.id}/forms/imports/${firstImport}`);
+  assert.equal(r.body.removed, 2);
+  assert.deepEqual(r.body.entries.map((e) => e.fields[0][1]), ['Cara']);
+
+  assert.equal((await post('')).status, 400);
+  assert.match((await post('Name\n')).body.error, /no entries/);
 });

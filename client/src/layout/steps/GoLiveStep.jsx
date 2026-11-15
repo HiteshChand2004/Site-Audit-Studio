@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, CloudUpload, Copy, Download, ExternalLink, Globe, History, Inbox, KeyRound, Link2, Loader2, RefreshCw, Rocket, Server, Trash2, Unplug } from 'lucide-react';
+import { Check, CloudUpload, Copy, Download, ExternalLink, Globe, History, Inbox, KeyRound, Link2, Loader2, RefreshCw, Rocket, Server, Trash2, Unplug, Upload } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import Modal from '../../components/common/Modal.jsx';
 import ConfirmDialog from '../../components/common/ConfirmDialog.jsx';
@@ -685,6 +685,8 @@ function FormsCard({ project, onChange }) {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [askRemove, setAskRemove] = useState(null);
+  const [imported, setImported] = useState(null);
+  const fileInput = useRef(null);
 
   const load = useCallback(async () => {
     try {
@@ -701,6 +703,36 @@ function FormsCard({ project, onChange }) {
     try {
       setState(await api.setForms(project.id, body));
       await onChange();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importFile(e) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setBusy(true);
+    setError(null);
+    setImported(null);
+    try {
+      const d = await api.importFormEntries(project.id, file);
+      setState(d);
+      setImported(d.imported);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function undoImport() {
+    setBusy(true);
+    try {
+      setState(await api.removeFormImport(project.id, imported.importId));
+      setImported(null);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -745,12 +777,22 @@ function FormsCard({ project, onChange }) {
 
         <div className={styles.accountRow}>
           <p className={styles.confirmTitle}>{T.formsCount(state.count)}</p>
-          {state.count > 0 && (
-            <a className={styles.linkButton} href={apiUrl(`/projects/${project.id}/forms/entries.csv`)} download>
-              <Download size={14} aria-hidden="true" /> {T.formsCsv}
-            </a>
-          )}
+          <div className={styles.accountButtons}>
+            <Button size="sm" icon={busy ? Spin : Upload} disabled={busy} onClick={() => fileInput.current?.click()}>
+              {busy ? T.formsImporting : T.formsImport}
+            </Button>
+            {state.count > 0 && (
+              <a className={styles.linkButton} href={apiUrl(`/projects/${project.id}/forms/entries.csv`)} download>
+                <Download size={14} aria-hidden="true" /> {T.formsCsv}
+              </a>
+            )}
+          </div>
+          <input ref={fileInput} type="file" accept=".csv,text/csv" hidden onChange={importFile} />
         </div>
+        {state.count === 0 && <p className={ws.hint} style={{ margin: 0 }}>{T.formsImportHelp}</p>}
+        {imported && (
+          <Alert tone="ok" title={T.formsImported(imported)} action={imported.added > 0 ? <Button size="sm" onClick={undoImport} disabled={busy}>{T.formsUndoImport}</Button> : undefined} />
+        )}
         {state.count === 0 ? (
           <p className={ws.hint} style={{ margin: 0 }}>{T.formsEmpty}</p>
         ) : (
@@ -758,7 +800,10 @@ function FormsCard({ project, onChange }) {
             {state.entries.map((e) => (
               <li key={e.id} className={styles.entry}>
                 <div className={styles.entryHead}>
-                  <span className={ws.hint} style={{ margin: 0 }}>{timeAgo(e.at)}{e.page ? ` · ${e.page}` : ''}</span>
+                  <span className={ws.hint} style={{ margin: 0 }}>
+                    {timeAgo(e.at)}{e.page ? ` · ${e.page}` : ''}
+                    {e.importId && <span className={styles.badge} style={{ marginLeft: 8 }}>{T.formsImportedTag}</span>}
+                  </span>
                   <button type="button" className={styles.copy} onClick={() => setAskRemove(e)} aria-label={T.formsRemove}>
                     <Trash2 size={13} aria-hidden="true" /> {T.formsRemove}
                   </button>
