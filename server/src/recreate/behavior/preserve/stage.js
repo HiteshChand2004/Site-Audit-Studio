@@ -14,6 +14,7 @@ import { pageDocumentOf } from './pageLift.js';
 import { readRecordIndex } from '../scripts.js';
 import { packLifted, servedDir } from './pack.js';
 import { refreshIntegrity } from './integrity.js';
+import { blockingGate, blockingWarning } from './blockingGate.js';
 import { buildConvertedReact, convertToReact, REACT_EXPORT_DIR, verifyConverted } from '../../convert/react.js';
 import { buildConverted, convertToNext, dropBuildFolder, EXPORT_DIR, verifyConvertedNext } from '../../convert/next.js';
 import { buildConvertedMern, convertToMern, MERN_EXPORT_DIR, verifyConvertedMern } from '../../convert/mern.js';
@@ -734,6 +735,12 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
  */
 async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report, browser = null }) {
   ctx.progress(0.35, 'Packaging the copy');
+  // No page's first paint waits for more than the original's (blockingGate.js): held against the lifted pages, what the copy
+  // added that would block is taken out, a grown or reordered file of the original's is listed. Before the hashes below.
+  report.blocking = await blockingGate({ copyDir, liftedDir: path.join(ctx.dir, ASIS_DIR, 'lifted'), pages })
+    .catch((err) => ({ error: String(err?.message ?? err).slice(0, 200) }));
+  const blockingLine = report.blocking.error ? null : blockingWarning(report.blocking);
+  if (blockingLine) ctx.report.warnings.push(blockingLine);
   // The integrity hashes the pages name, computed from the copy's files as they are now (integrity.js): the lift, the fixes and
   // the address pass change files a hash was written for, and the browser refuses a file whose hash does not fit.
   report.integrity = await refreshIntegrity(copyDir);
