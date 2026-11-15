@@ -125,7 +125,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
   // Remastly hosting when it is set up, unless the person picks their own account.
   const server = data.server ?? { ready: false, ip: null, domain: null };
   // Remastly's own server when it is set up, then Remastly hosting on Netlify, then the person's own account; unless they chose.
-  const target = chosen ?? (server.ready ? 'server' : remastly.ready ? 'remastly' : 'own');
+  const target = (chosen === 'server' && !server.ready ? null : chosen) ?? (server.ready ? 'server' : remastly.ready ? 'remastly' : 'own');
   // The first deploy to the server needs the domain the site will answer at; later ones keep it.
   const askDomain = target === 'server' && server.ready && !server.domain;
   const placeReady = target === 'server' ? server.ready && (!askDomain || Boolean(domainInput.trim()))
@@ -215,8 +215,9 @@ export default function GoLiveStep({ project, onGoCreate }) {
 
       <Card icon={Server} title={T.whereTitle} sub={T.whereSub}>
         <div className={styles.places} role="radiogroup" aria-label={T.whereTitle}>
-          <label className={styles.place} data-active={target === 'server' || undefined}>
-            <input type="radio" name="sas-place" checked={target === 'server'} onChange={() => setChosen('server')} disabled={running} />
+          <label className={styles.place} data-active={target === 'server' || undefined} data-off={!server.ready || undefined}>
+            {/* Not selectable until this Remastly hosts: choosing it would only grey out Go live. */}
+            <input type="radio" name="sas-place" checked={target === 'server'} onChange={() => setChosen('server')} disabled={running || !server.ready} />
             <span className={styles.placeText}>
               <span className={styles.placeName}>{T.serverOption} <span className={styles.recommended}>{T.recommended}</span></span>
               <span className={styles.placeExplain}>{T.serverOptionText}</span>

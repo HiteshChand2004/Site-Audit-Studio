@@ -156,7 +156,7 @@ export const GO_LIVE = {
   serverSetupSteps: 'The steps, in order',
   serverSetupEnv: 'Remastly’s settings (add to its environment, then restart it)',
   serverSetupEmail: 'No owner email is set (SAS_OWNER_EMAIL), so the certificate script uses owner@example.com. Set it first: Let’s Encrypt writes there before a certificate expires.',
-  serverNotReady: 'Not available yet: Remastly’s server is not set up for hosting (its address, SAS_HOSTING_IP).',
+  serverNotReady: 'Not available here: this Remastly does not host websites. It works on the Remastly that runs on your server (remastly.panscience.ai) once it is set up for hosting; a laptop cannot host, the internet cannot reach it. Choose a Netlify option to go live from here.',
   serverDomainLabel: 'The domain it will answer at',
   serverDomainHelp: 'Usually the original site’s own name. After it goes live, point this domain to Remastly’s server (one DNS record, shown below).',
   needServer: 'Remastly’s own server is not set up for hosting yet',

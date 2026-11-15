@@ -419,3 +419,8 @@
   max-height: 320px;
   overflow: auto;
 }
+
+.place[data-off] {
+  cursor: default;
+  opacity: 0.75;
+}
