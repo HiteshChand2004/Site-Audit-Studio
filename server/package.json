@@ -8,6 +8,7 @@
     "dev": "node scripts/dev.js",
     "start": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/index.js",
     "test": "node test/run-tests.js",
+    "sites": "node src/hosting/main.js",
     "fixture-site": "node test/serve-fixture.js",
     "setup:toolchains": "node scripts/setup-toolchains.js",
     "corpus": "node scripts/corpus.mjs",

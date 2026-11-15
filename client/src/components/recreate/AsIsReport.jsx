@@ -6,6 +6,9 @@ import { NEEDS_BACKEND_TEXT, pageChoiceText } from '../../copy.js';
 import { AS_IS_EXPLANATION, ASIS_STACK_CHOICES } from './AsIsChoice.jsx';
 import styles from './AsIsReport.module.css';
 
+// server copy/outsideServices.js outsideKind
+const OUTSIDE_KIND = { analytics: 'visitor counting', fonts: 'web fonts', service: 'a service the site uses' };
+
 // A share of the page that differs: one decimal is enough to read (0.5658 → 0.6 %).
 const pct = (v) => (v == null ? '—' : `${Math.round(v * 10) / 10}%`);
 const kb = (bytes) => `${Math.round((bytes ?? 0) / 1024).toLocaleString('en-US')} KB`;
@@ -199,8 +202,16 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
       )}
 
       {asIs.safety && !asIs.safety.safe && (
-        <Alert tone="warn" title="The copy asks for something off its own server">
-          Some request leaves the copy. The download is kept off until this is checked: see the checks below.
+        <Alert tone="warn" title="The copy still asks the original site for files">
+          {asIs.safety.original?.length
+            ? `${asIs.safety.original.length === 1 ? 'One file comes' : `${asIs.safety.original.length} files come`} from the original site (for example ${asIs.safety.original[0]}). Once the copy replaces the original, nothing answers them, so the download and Go live are kept off. Make the copy again.`
+            : 'Some request leaves the copy. The download is kept off until this is checked: see the checks below.'}
+        </Alert>
+      )}
+      {asIs.safety?.safe && asIs.safety.outside?.length > 0 && (
+        <Alert tone="info" title="Outside services the site uses">
+          The copy keeps the services the original uses; they keep working on your real address:{' '}
+          {asIs.safety.outside.map((o) => `${o.host} (${OUTSIDE_KIND[o.kind] ?? o.kind}${o.domainLocked ? ', answers only your real address' : ''})`).join('; ')}.
         </Alert>
       )}
 

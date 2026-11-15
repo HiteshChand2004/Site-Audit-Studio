@@ -30,10 +30,12 @@ export const SCORE_WEIGHTS = { sizes: 0.35, boxes: 0.25, visual: 0.4 };
 
 /**
  * A browser that crashed or was closed under us: Chromium out of memory (`Target crashed`), or its process ended. Not a
- * slow page or a broken build: the same render in a new browser usually works.
+ * slow page or a broken build: the same render in a new browser usually works. A tab opened while the browser is shutting
+ * down is refused with "Protocol error (Target.createTarget): Not supported": the same crash, seen a moment earlier (a page that
+ * started then was listed as failed and the closed browser was never replaced).
  */
 export const isBrowserCrash = (err) =>
-  /Target crashed|Page crashed|Target page, context or browser has been closed|Browser has been closed|browser has disconnected/i.test(String(err?.message ?? err));
+  /Target crashed|Page crashed|Target page, context or browser has been closed|Browser has been closed|browser has disconnected|Protocol error \(Target\.createTarget\): Not supported/i.test(String(err?.message ?? err));
 
 /** Launches Chromium with one browser context per view; every request outside `origin` is aborted. */
 async function launchContexts(origin) {

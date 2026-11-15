@@ -32,7 +32,9 @@ after(async () => {
 const crashBrowser = () => renderer.contexts.desktop.browser().close();
 
 test('crash errors are told apart from a slow or broken page', () => {
-  for (const m of ['browserContext.newPage: Target crashed ', 'page.goto: Page crashed', 'Target page, context or browser has been closed', 'browser has disconnected']) {
+  for (const m of ['browserContext.newPage: Target crashed ', 'page.goto: Page crashed', 'Target page, context or browser has been closed', 'browser has disconnected',
+    // A tab opened while the crashed browser is shutting down.
+    'browserContext.newPage: Protocol error (Target.createTarget): Not supported']) {
     assert.equal(isBrowserCrash(new Error(m)), true, m);
   }
   for (const m of ['page.goto: Timeout 15000ms exceeded.', 'net::ERR_FAILED', 'Cannot read properties of undefined']) {

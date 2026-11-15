@@ -9,6 +9,7 @@
 //   recreateRoot    <projectDir>/recreate                      every copy of the project (<recreateId>/…)
 //   BACKUPS_DIR     <DATA_DIR>/backups                         dated database backups (db/backup.js)
 //   LOGS_DIR        <DATA_DIR>                                 the admin's copy-issues.log (copy/serverLog.js)
+//   HOSTING_DIR     SAS_HOSTING_DIR, else <DATA_DIR>/hosting   websites Remastly hosts itself (hosting/store.js)
 //   tempDir()       SAS_TEMP_DIR, else the OS temp folder      throwaway folders of a job (read at call time: tests set it)
 //   TOOLCHAINS_DIR  <server>/toolchains                        the stacks' pinned build tools (not data: part of the install)
 // There is no downloads folder: a zip or a PDF is streamed from the copy's own folder and never stored.
@@ -24,6 +25,7 @@ export const DB_FILE = path.join(DATA_DIR, 'app.db');
 export const PROJECTS_DIR = path.join(DATA_DIR, 'projects');
 export const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
 export const LOGS_DIR = DATA_DIR;
+export const HOSTING_DIR = process.env.SAS_HOSTING_DIR ? path.resolve(process.env.SAS_HOSTING_DIR) : path.join(DATA_DIR, 'hosting');
 export const TOOLCHAINS_DIR = path.join(SERVER_DIR, 'toolchains');
 
 /** @param {string} projectId */

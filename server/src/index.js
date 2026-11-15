@@ -11,6 +11,7 @@ import stacksRouter from './routes/stacks.js';
 import reportRouter from './routes/report.js';
 import faviconRouter from './routes/favicon.js';
 import buildRouter from './routes/build.js';
+import { deployRouter, hostingRouter } from './routes/deploy.js';
 import { capacityState, lockBusy, queueState } from './jobs/manager.js';
 import { describeLimits } from './jobs/limits.js';
 import { awakeHeld } from './jobs/keepAwake.js';
@@ -22,7 +23,9 @@ import { previewRouter, PREVIEW_PREFIX } from './recreate/previewRoute.js';
 import { loadPublished, PUBLISHED_PREFIX, publishedPath, resolvePublished } from './buildmode/publish.js';
 import { inlineScriptHashes } from './recreate/inlineScripts.js';
 import { foreignOriginCheck } from './security/foreignOrigin.js';
-import { accountsEnabled, bindHost, isLoopbackHost, trustProxySetting } from './config/index.js';
+import { formsPublicRouter } from './routes/formsPublic.js';
+import { accountsEnabled, bindHost, hostingIp, isLoopbackHost, trustProxySetting } from './config/index.js';
+import { refreshWantedCerts } from './hosting/certs.js';
 import { db } from './db/index.js';
 import { applyStartMigrations, pendingMigrations } from './db/apply.js';
 
@@ -45,6 +48,9 @@ const app = express();
 // so req.ip is the real visitor for the per-address limits and nobody can choose it with X-Forwarded-For (config/index.js).
 app.set('trust proxy', trustProxySetting().value);
 
+// Before the app's own CORS, body parsing and origin checks: live sites' visitors post their forms here, from the sites'
+// own domains (routes/formsPublic.js answers for itself).
+app.use('/api/forms', formsPublicRouter);
 app.use(cors({ origin: ['http://localhost:5173', 'http://127.0.0.1:5173'] }));
 app.use(express.json({ limit: '1mb' }));
 // Nothing that merely shares the app's address is the app: a sandboxed preview or another site (security/foreignOrigin.js).
@@ -99,6 +105,8 @@ app.use('/api/projects', recreateRouter);
 app.use('/api/projects', reauditRouter);
 app.use('/api/projects', reportRouter);
 app.use('/api/projects', faviconRouter);
+app.use('/api/projects', deployRouter);
+app.use('/api/hosting', hostingRouter);
 app.use('/api/stacks', stacksRouter);
 app.use('/api/build', buildRouter);
 
@@ -110,6 +118,10 @@ app.use('/api', (_req, res) => {
 app.use((err, _req, res, _next) => {
   if (err.type === 'entity.parse.failed') {
     return res.status(400).json({ error: 'Invalid JSON body.' });
+  }
+  // A body over a route's limit (a JSON body, an imported CSV): said as such, not as a server error.
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'The file or request is too large.' });
   }
   console.error(err);
   res.status(500).json({ error: 'Server error.' });
@@ -145,4 +157,12 @@ app.listen(PORT, HOST, (err) => {
       // SAS_KEEP_COPIES_DAYS too; then every SAS_CLEANUP_HOURS (jobs/cleanup.js). SAS_CLEANUP_DRY_RUN=1 only lists.
       runCleanup().catch((e) => console.warn('[cleanup] start-up pass failed:', e.message)).finally(() => watchCleanup());
     });
+  // Hosting its own websites: every few minutes, the domains that now point here and have no padlock yet are listed for the
+  // server's certbot timer (hosting/certs.js), so a domain gets HTTPS soon after its owner changes the DNS.
+  const ip = hostingIp();
+  if (ip) {
+    const refresh = () => refreshWantedCerts(ip).catch((e) => console.warn('[hosting] certs list:', e.message));
+    refresh();
+    setInterval(refresh, 5 * 60_000).unref();
+  }
 });

@@ -100,6 +100,16 @@ export const devNoVerifyRequested = () => process.env.SAS_DEV_NO_VERIFY === '1';
 export const devNoVerify = () => devNoVerifyRequested() && !isProduction() && isLoopbackHost(bindHost());
 
 /** The address people open the app at. */
+/**
+ * The public address of this server when it hosts websites itself (Go live → "Remastly's own server"): what their domains point
+ * to. SAS_HOSTING_IP; null = this Remastly does not host.
+ * @returns {string | null}
+ */
+export const hostingIp = () => {
+  const ip = (process.env.SAS_HOSTING_IP ?? '').trim();
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(ip) ? ip : null;
+};
+
 export const publicOrigin = () => ((process.env.SAS_PUBLIC_ORIGIN ?? '').trim() || process.env.APP_ORIGIN || 'http://localhost:5173').replace(/\/+$/, '');
 
 /** The session cookie carries Secure. */
