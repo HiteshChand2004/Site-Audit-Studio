@@ -441,6 +441,57 @@ async function readJson(file) {
 }
 
 /**
+ * One run of one side of a page, as the trimmed report (its full report beside it: `<file>.full.json`). The original's run n is
+ * taken from the cache only when it may stand in for a run made now (staleOriginal, against `copyRun`: the copy's run it is
+ * compared with, measured just before); else it is measured again and the kept file replaced, and the reason is listed in
+ * `result.refreshedOriginal`. `result.runs` counts what was measured and reused. A run of the copy is reused only with
+ * `reuseCopy` (a continued comparison, or runs this re-audit already made).
+ */
+export async function measureRun({ side, p, slug, mode, n, copyRun = null, cacheDir, outDir, run, probe = probeOwnFiles, reuseCopy = false, result }) {
+  // An original measured from its lifted files keeps its runs apart from runs of the live site (p.originalCacheDir).
+  const dir = side === 'original' ? (p.originalCacheDir ?? cacheDir) : outDir;
+  const file = runFile(dir, slug, mode, n);
+  // A continued comparison (reaudit/checkpoint.js): a run of the copy the stopped one finished is taken as it is.
+  if (side === 'copy' && reuseCopy) {
+    const kept = await readJson(file);
+    if (kept?.scores) {
+      result.runs.reusedCopy = (result.runs.reusedCopy ?? 0) + 1;
+      return kept;
+    }
+  }
+  if (side === 'original') {
+    const cached = await readJson(file);
+    if (cached?.scores) {
+      const why = staleOriginal(cached, copyRun);
+      if (!why) {
+        result.runs.reusedOriginal++;
+        return cached;
+      }
+      result.refreshedOriginal.push({ path: p.path, mode, run: n, reason: why });
+    }
+  }
+  const raw = `${file}.full.json`;
+  const summary = await run(side === 'original' ? (p.originalUrl ?? p.url) : p.copyUrl, mode, raw);
+  const lhr = await readJson(raw);
+  if (!lhr?.categories) throw new Error(`Lighthouse wrote no report for ${side} ${p.path} (${mode})`);
+  const trimmed = trimReport(lhr);
+  // A run that ended without a list of requests (the page never painted): its own files are checked directly instead.
+  if (!(lhr.audits?.['network-requests']?.details?.items ?? []).length) {
+    const probed = await probe(side === 'original' ? (p.originalUrl ?? p.url) : p.copyUrl).catch(() => null);
+    if (probed) trimmed.ownFailures = probed;
+  }
+  // Kept with the run (also in the original's cache): what else ran on this server when it was measured, and when.
+  trimmed.contention = summary?.contention ?? null;
+  trimmed.measuredAt = Date.now();
+  await writeFile(file, JSON.stringify(trimmed), 'utf8');
+  result.runs[side]++;
+  return trimmed;
+}
+
+/** A run's file in the original's cache or the re-audit's folder (its full report: `${runFileOf(…)}.full.json`). */
+export const runFileOf = (dir, slug, mode, n) => runFile(dir, slug, mode, n);
+
+/**
  * The comparison on every page.
  * @param {object} o
  * @param {{ path: string, url: string, copyUrl: string }[]} o.pages  the copy's pages: path, the original's address, the copy's
@@ -458,49 +509,7 @@ export async function compareLighthousePages({ pages, cacheDir, outDir, run, pro
   const result = { pages: [], worse: [], unscored: [], extraRunPages: [], skipped: [], errors: [], refreshedOriginal: [], runs: { original: 0, copy: 0, reusedOriginal: 0, ...(reuseCopy && { reusedCopy: 0 }) } };
   const total = pages.length * MODES.length;
   let done = 0;
-  // One run of one side, as the trimmed report. The original's run n is taken from the cache only when it may stand in for a run
-  // made now (staleOriginal, against `copyRun`: the copy's run it is compared with, measured just before); else it is measured
-  // again and the kept file replaced, and the reason is listed.
-  const measure = async (side, p, slug, mode, n, copyRun = null) => {
-    // An original measured from its lifted files keeps its runs apart from runs of the live site (p.originalCacheDir).
-    const dir = side === 'original' ? (p.originalCacheDir ?? cacheDir) : outDir;
-    const file = runFile(dir, slug, mode, n);
-    // A continued comparison (reaudit/checkpoint.js): a run of the copy the stopped one finished is taken as it is.
-    if (side === 'copy' && reuseCopy) {
-      const kept = await readJson(file);
-      if (kept?.scores) {
-        result.runs.reusedCopy++;
-        return kept;
-      }
-    }
-    if (side === 'original') {
-      const cached = await readJson(file);
-      if (cached?.scores) {
-        const why = staleOriginal(cached, copyRun);
-        if (!why) {
-          result.runs.reusedOriginal++;
-          return cached;
-        }
-        result.refreshedOriginal.push({ path: p.path, mode, run: n, reason: why });
-      }
-    }
-    const raw = `${file}.full.json`;
-    const summary = await run(side === 'original' ? (p.originalUrl ?? p.url) : p.copyUrl, mode, raw);
-    const lhr = await readJson(raw);
-    if (!lhr?.categories) throw new Error(`Lighthouse wrote no report for ${side} ${p.path} (${mode})`);
-    const trimmed = trimReport(lhr);
-    // A run that ended without a list of requests (the page never painted): its own files are checked directly instead.
-    if (!(lhr.audits?.['network-requests']?.details?.items ?? []).length) {
-      const probed = await probe(side === 'original' ? (p.originalUrl ?? p.url) : p.copyUrl).catch(() => null);
-      if (probed) trimmed.ownFailures = probed;
-    }
-    // Kept with the run (also in the original's cache): what else ran on this server when it was measured, and when.
-    trimmed.contention = summary?.contention ?? null;
-    trimmed.measuredAt = Date.now();
-    await writeFile(file, JSON.stringify(trimmed), 'utf8');
-    result.runs[side]++;
-    return trimmed;
-  };
+  const measure = (side, p, slug, mode, n, copyRun = null) => measureRun({ side, p, slug, mode, n, copyRun, cacheDir, outDir, run, probe, reuseCopy, result });
   for (const p of pages) {
     const slug = pageSlug(p.path, p.url);
     // originalFrom: 'lifted' = the original's own files as captured, served the way the copy is; 'live' = its site.
