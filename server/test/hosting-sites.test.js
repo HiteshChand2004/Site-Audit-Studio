@@ -208,3 +208,13 @@ test('the certificate script only lets plain domain names reach certbot', async 
   execFileSync('sh', [path.join(root, 'certs.sh')], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
   assert.equal((await readFile(path.join(root, 'certbot-calls.txt'), 'utf8')).trim().split('\n').length, 1);
 });
+
+test('the setup starts the sites server from the folder that follows the live version', async () => {
+  const { stableServerDir } = await import('../src/hosting/setup.js');
+  const real = { '/srv/sas/app': '/srv/sas/releases/38d6cf5' };
+  const realpathOf = (p) => real[p] ?? null;
+  assert.equal(stableServerDir('/srv/sas/releases/38d6cf5/server', realpathOf), '/srv/sas/app/server');
+  // Not the live release (an older one answering, or no app link): the folder as it is.
+  assert.equal(stableServerDir('/srv/sas/releases/8a44aed/server', realpathOf), '/srv/sas/releases/8a44aed/server');
+  assert.equal(stableServerDir('/home/me/Site-Audit-Studio/server', realpathOf), '/home/me/Site-Audit-Studio/server');
+});

@@ -13,6 +13,22 @@
 //              (hosting/certs.js); its deploy hook copies each certificate where nginx reads it, on issue and on renewal
 //              (certbot's own timer renews them).
 
+import { realpathSync } from 'node:fs';
+
+/**
+ * The app folder a service should start from: the one that follows the live version. With release folders
+ * (<root>/releases/<id>/server, and <root>/app a link to the live release, docs/DEPLOY-TOOL.md) that is <root>/app/server, so
+ * after the next update the sites server runs the new code too; otherwise the folder as it is.
+ * @param {string} serverDir  this process's server folder (its real path)
+ * @param {(p: string) => string | null} [realpathOf]
+ */
+export function stableServerDir(serverDir, realpathOf = (p) => { try { return realpathSync(p); } catch { return null; } }) {
+  const m = serverDir.match(/^(.*)\/releases\/[^/]+\/server$/);
+  if (!m) return serverDir;
+  const app = `${m[1]}/app`;
+  return realpathOf(app) === serverDir.slice(0, -'/server'.length) ? `${app}/server` : serverDir;
+}
+
 const HOST_RE = '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$';
 
 /**
