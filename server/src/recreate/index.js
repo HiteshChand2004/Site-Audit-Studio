@@ -298,6 +298,20 @@ async function recreate({
     }
     if (front) ctx.stepDeadline = front.stepDeadline;
   };
+  // The step in front asks for its limit to move later, to `at` at most, never past the job's own limit less what the later
+  // steps keep (ctx.laterReserve): its work then uses the job's budget, not more. Returns the step's limit after it (the same
+  // when nothing could be given).
+  ctx.extendStep = (at) => {
+    const r = [...running].find((x) => x.local === front);
+    if (!r) return ctx.stepDeadline;
+    const to = Math.min(at, deadline - (ctx.laterReserve ?? 0));
+    const add = to - r.local.stepDeadline;
+    if (!Number.isFinite(add) || add <= 0) return r.local.stepDeadline;
+    r.timer.extend(add);
+    r.local.stepDeadline += add;
+    ctx.stepDeadline = r.local.stepDeadline;
+    return ctx.stepDeadline;
+  };
 
   // Steps the stopped job finished are not run again: their results are put back (an inspect step or a sweep that stopped
   // half-way continues from its saved pages instead, see inspect.js / sweep.js).

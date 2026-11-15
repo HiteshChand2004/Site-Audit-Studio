@@ -16,6 +16,7 @@
 import { REASONS } from './openItems.js';
 import { errorPlace, placeKey } from './ownCodeErrors.js';
 import { FIELDS, FIXES, KINDS_BY_KEY, fixOf } from './fixRegistry.js';
+import { requestsOf } from '../reaudit/lighthousePages.js';
 
 /** How much a measured amount may move before it counts as grown: bytes and times vary run to run, element counts do not. */
 const GROWTH = { element: 0.02, other: 0.1 };
@@ -224,6 +225,15 @@ function explainOne(item, ctx) {
     return orPlanned(r.unexplained ? imageRow(item, id, ctx) ?? r : r, item);
   }
   if (key === 'axe.color-contrast') return contrastPart(ctx);
+  // A hover, reveal or loop lives in the stylesheets: when one of the copy's own did not load, that is why the effect is gone,
+  // not motion still owed (a page drawn without its styles has nothing to hover).
+  if (key.startsWith('motion.')) {
+    const sheets = stylesheetFailures(ctx.newLhr ?? {});
+    if (sheets.length) {
+      const list = sheets.slice(0, 3).map((s) => `${pathOf(s.url) ?? s.url} (${s.why})`).join('; ');
+      return { reason: null, unexplained: true, group: 'bug', stylesheetFailed: sheets.length, evidence: `${item.after?.detail ?? 'Missing in the copy.'} The copy's stylesheet did not load, so the page was drawn without the rules these effects are made of: ${list}${sheets.length > 3 ? ` and ${sheets.length - 3} more` : ''}. A bug to fix in the copy: make the stylesheet load, then check again.` };
+    }
+  }
   return orPlanned(unexplained('No rule of the five reasons applies to this check on the evidence of this run.'), item);
 }
 
@@ -310,9 +320,10 @@ function auditUrls(lhr, id) {
 const hostsOf = (urls) => [...new Set(urls.map(hostOf).filter(Boolean))];
 const fewUrls = (urls) => urls.slice(0, 3).map((u) => { try { return new URL(u).pathname.split('/').pop() || new URL(u).hostname; } catch { return u.slice(0, 40); } }).join(', ');
 
-// Lighthouse audits that ask for a smaller file per image: what closes them is a lossy re-encode or a resized file, never the
-// same pixels. The copy keeps every image's pixels (copy/perfAsIs.js: only a lossless WebP of a PNG), so a file the copy already
-// made lossless, or the very file the original serves, is a change of its look (d). Evidence per file, from this run only.
+// Lighthouse audits that ask for a smaller file per image. The copy converts a PNG or JPEG to WebP only with no visible
+// difference (copy/perfAsIs.js: lossless, else the lowest quality whose pixels show none), so a file the copy already made a
+// WebP of, or one the fix recorded it could not convert without a visible change, is a change of its look (d) to go further.
+// Evidence per file, from this run only.
 const IMAGE_FILE_AUDITS = new Set(['modern-image-formats', 'uses-optimized-images', 'uses-responsive-images', 'efficient-animated-content']);
 const OUR_WEBP = /\.sas-[0-9a-f]{10}\.webp$/i;
 /** A file's name without the copy's own marks (the lift's ~query hash, the WebP fix's .sas- hash) and without its extension. */
@@ -349,15 +360,15 @@ function imageRow(item, id, ctx) {
     const what = fewUrls([url]);
     const host = hostOf(url);
     if (/^https?:/.test(url) && host !== ctx.copyHost) return { what, reason: null, evidence: 'not a file of the copy' };
-    if (OUR_WEBP.test(url)) return { what, reason: 'look', evidence: 'already a lossless WebP the copy made with the very same pixels; only a lossy or resized file could save more, which would change the look' };
+    if (OUR_WEBP.test(url)) return { what, reason: 'look', evidence: 'already a WebP the copy made with no visible difference; only a smaller or more compressed file could save more, which would change the look' };
     const stem = imageStem(url);
     const same = original.find((o) => o.stem && o.stem === stem);
     if (!same) return { what, reason: null, evidence: 'the original\'s report does not name this file' };
     if (bytes > same.bytes * (1 + GROWTH.other) + 1024) return { what, reason: null, evidence: `the copy could save ${kb(bytes)} on it against the original's ${kb(same.bytes)}: the copy holds a heavier file than the original served` };
-    if (/\.png$/i.test(url)) {
+    if (/\.(png|jpe?g)$/i.test(url)) {
       const why = leftPng.find((o) => String(o.detail ?? '').toLowerCase().includes(stem));
-      if (!why) return { what, reason: null, evidence: 'a PNG the copy did not make a lossless WebP of, and no reason was recorded' };
-      return { what, reason: 'look', evidence: `the original serves this file (${hostOf(same.url) ?? 'its own host'}); the lossless WebP was not made (${why.detail}); only a lossy or resized file could close it, which would change the look` };
+      if (!why) return { what, reason: null, evidence: 'an image the copy did not make a WebP of, and no reason was recorded' };
+      return { what, reason: 'look', evidence: `the original serves this file (${hostOf(same.url) ?? 'its own host'}); no WebP was made (${why.detail}); only a file that looks different could close it` };
     }
     return { what, reason: 'look', evidence: `the original serves this file (${hostOf(same.url) ?? 'its own host'}) as the copy does; only a lossy or resized file could close it, which would change the look` };
   }, 'image');
@@ -668,6 +679,75 @@ function consoleErrors(lhr) {
   return [...seen.values()];
 }
 
+/**
+ * React's hydration errors (production builds name them by number): the HTML the page arrived with is not the markup its
+ * framework draws from its own data, so the framework throws it away and draws the page again in the browser.
+ */
+const HYDRATION = /\bReact error #(418|419|421|422|423|425)\b|Hydration failed|did not match\b.*server|hydrat(ion|ing) (error|mismatch)/i;
+
+/**
+ * The words for a console entry that is a script error (Lighthouse source `exception`, or a message that names an error
+ * thrown), or null for anything else (a failed request, a console.error a script printed). A hydration error is named as the
+ * framework rejecting the copy's changed markup.
+ */
+export function scriptErrorText(e) {
+  const text = String(e?.text ?? '');
+  const thrown = e?.source === 'exception' || /^(Uncaught\s+)?(\w+)?Error\b/.test(text) || HYDRATION.test(text);
+  if (!thrown) return null;
+  const file = e.url ? pathOf(e.url) ?? e.url : null;
+  const where = file ? ` (thrown in ${file}, which the copy holds and which ran)` : '';
+  if (HYDRATION.test(text)) {
+    const n = text.match(/#(\d+)/)?.[1];
+    return `a script error: the framework rejected the copy's changed markup${n ? ` (React #${n})` : ''} — the page's HTML is not the markup its own framework draws from its data, so the framework threw it away and drew the page again in the browser${where}`;
+  }
+  return `a script error${where}: ${text.slice(0, 160)}`;
+}
+
+/** A script error's name in a list: "React #418" for React's numbered errors, else the first words of its message. */
+const shortError = (text) => {
+  const s = String(text ?? '');
+  const n = s.match(/\bReact error #(\d+)/)?.[1];
+  return n ? `React #${n}` : s.length > 80 ? `${s.slice(0, 80)}…` : s;
+};
+
+/**
+ * A console message saying the browser refused a file: { url, why, style } (style: refused as a stylesheet), or null. Chrome's
+ * words: "Failed to find a valid digest in the 'integrity' attribute for resource '<url>' …" and "Refused to apply style from
+ * '<url>' because its MIME type …".
+ */
+export function refusedFile(text) {
+  const s = String(text ?? '');
+  const integrity = s.match(/integrity' attribute for resource '([^']+)'/);
+  if (integrity) return { url: integrity[1], why: 'its integrity hash does not match the file, so the browser refused it', style: false };
+  const mime = s.match(/Refused to apply style from '([^']+)'/);
+  if (mime) return { url: mime[1], why: 'it was not served as a stylesheet, so the browser refused it', style: true };
+  return null;
+}
+
+/** Each console entry once (the same error thrown on several loads is one part). */
+const uniqueEntries = (list) => [...new Map(list.map((e) => [`${e.source}|${e.text}|${e.url}`, e])).values()];
+
+/**
+ * The copy's stylesheets that did not load in a Lighthouse report: refused for a wrong integrity hash or a wrong type (the
+ * console says so), or answered with an error (network-requests). { url, why }, each address once.
+ */
+export function stylesheetFailures(lhr) {
+  const out = new Map();
+  for (const device of ['mobile', 'desktop']) {
+    const r = lhr?.[device];
+    for (const i of r?.audits?.['errors-in-console']?.details?.items ?? []) {
+      const f = refusedFile(i.description);
+      // An integrity refusal names any file; only a stylesheet counts here (a script's is its own row).
+      if (f && (f.style || /\.css(?:[?#]|$)/i.test(f.url)) && !out.has(f.url)) out.set(f.url, f.why);
+    }
+    for (const q of r?.audits?.['network-requests']?.details?.items ?? []) {
+      if (q.resourceType !== 'Stylesheet' || !(q.statusCode >= 400) || out.has(q.url)) continue;
+      out.set(q.url, `it answered ${q.statusCode}`);
+    }
+  }
+  return [...out].map(([url, why]) => ({ url, why }));
+}
+
 function requestPart(e, ctx) {
   const what = e.url || e.text;
   // A script error thrown at a line the original wrote, word for word: the original's own code, kept as it is.
@@ -676,6 +756,12 @@ function requestPart(e, ctx) {
     const shown = own.text.length > 90 ? `${own.text.slice(0, 90)}…` : own.text;
     return { what, reason: 'own_code', evidence: `a script error in the original's own code, which the copy keeps as it is: line ${own.line} of the copy's ${own.file} ("${shown}") is word for word in the original's page; ${e.text}` };
   }
+  // A script that threw: the address is the script's, not a request that failed (the file was there and ran).
+  const thrown = scriptErrorText(e);
+  if (thrown) return { what: shortError(e.text) || what, reason: null, scriptError: true, evidence: thrown };
+  // A file the copy holds that the browser refused (its integrity hash, its type): the address the entry names is the page's.
+  const refused = refusedFile(e.text);
+  if (refused) return { what: pathOf(refused.url) ?? refused.url, reason: null, refused: true, evidence: `the copy holds ${pathOf(refused.url) ?? refused.url}, but the browser refused it: ${refused.why}` };
   if (!e.url) return { what, reason: null, evidence: `an error of the page itself: ${e.text}` };
   const host = hostOf(e.url);
   if (host !== ctx.copyHost && host !== ctx.site) return { what, reason: 'third_party', evidence: `requests to ${host}, which is neither the copy nor the original` };
@@ -693,7 +779,34 @@ function requestPart(e, ctx) {
   return { what, reason: null, evidence: hasFileExt(p ?? '') ? `the copy does not hold the file ${p}` : `${e.text}` };
 }
 
-/** A Lighthouse row: explained (deploy) only when what it measures did not grow on any device, page weight included. */
+/** How far the copy's page weight may be from the original's and still be the same page (compression and headers vary). */
+export const SAME_WEIGHT = 0.02;
+
+const requestsText = (r) => `${r.total} (${Object.entries(r.byType).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${n} ${t}`).join(', ')})`;
+
+/**
+ * A speed row (a time, or a performance score) is put down to the measurement host only when the copy loads exactly what the
+ * original loads: the same page weight (within SAME_WEIGHT), the same largest element, and the same requests (as many, of every
+ * type). Every one of the three must be measured on both sides: a missing one is no proof. Returns { ok: true, text } with
+ * what was the same, or { ok: false, text } with the first difference.
+ * @param {{ wb?: number, wa?: number, lb?: object, la?: object, rb?: object, ra?: object }} o  weight, largest element, requests
+ */
+export function sameLoad({ wb, wa, lb, la, rb, ra }) {
+  if (!Number.isFinite(wb) || !Number.isFinite(wa)) return { ok: false, text: 'the page\'s weight is not in both reports' };
+  if (!lb || !la) return { ok: false, text: 'the largest element is not named in both reports' };
+  if (lb.selector !== la.selector && (!lb.path || lb.path !== la.path)) return { ok: false, text: `the largest element is not the same one: the original's is ${lb.snippet}, the copy's is ${la.snippet}` };
+  if (Math.abs(wa - wb) > wb * SAME_WEIGHT) return { ok: false, text: `the copy's page weighs ${kb(wa)} against the original's ${kb(wb)}` };
+  if (!rb || !ra) return { ok: false, text: 'the requests are not in both reports' };
+  const types = new Set([...Object.keys(rb.byType ?? {}), ...Object.keys(ra.byType ?? {})]);
+  const differ = [...types].filter((t) => (rb.byType?.[t] ?? 0) !== (ra.byType?.[t] ?? 0));
+  if (rb.total !== ra.total || differ.length) return { ok: false, text: `the copy makes other requests than the original: ${requestsText(ra)} against ${requestsText(rb)}` };
+  return { ok: true, text: `the same page weight (${kb(wb)} → ${kb(wa)}), the same largest element (${la.snippet}) and the same requests (${requestsText(ra)})` };
+}
+
+/**
+ * A Lighthouse row: explained (deploy) only when what it measures did not grow on any device. A time (a speed row) is explained
+ * only when the copy loads exactly what the original loads (sameLoad); else it stays counted, with the difference named.
+ */
 function lighthousePart(item, id, ctx) {
   const rows = [];
   let grew = false;
@@ -706,21 +819,19 @@ function lighthousePart(item, id, ctx) {
     const limit = (b?.value ?? 0) * (1 + (a.unit === 'element' ? GROWTH.element : GROWTH.other));
     const timeOnly = a.unit === 'ms';
     if (timeOnly) {
-      // A time has no amount of its own: the page's weight decides whether the copy sends more for it to load.
-      const wb = amountOf(ctx.oldLhr[device]?.audits?.['total-byte-weight']);
-      const wa = amountOf(ctx.newLhr[device]?.audits?.['total-byte-weight']);
-      if (!wb || !wa) return unexplained(`${device}: the page's weight is not in both reports, so the time ${Math.round(a.value)} ms cannot be put down to the host.`);
-      // The same page loading more slowly is the host; a different largest element is a different page (a picture or a
-      // video the copy lacks lets another element become the largest), which no host explains.
-      const lb = lcpElement(ctx.oldLhr[device]);
-      const la = lcpElement(ctx.newLhr[device]);
-      if (lb && la && lb.selector !== la.selector && lb.path !== la.path) {
-        return unexplained(`${device}: the largest element is not the same one: the original's is ${lb.snippet}, the copy's is ${la.snippet}.`);
-      }
-      if (wa.value > wb.value * (1 + GROWTH.other)) {
-        grew = true;
-        rows.push(`${device}: ${Math.round(a.value)} ms, and the copy's page weighs ${kb(wa.value)} against the original's ${kb(wb.value)}`);
-      } else rows.push(`${device}: ${b ? `${Math.round(b.value)} → ` : ''}${Math.round(a.value)} ms, the page not heavier (${kb(wb.value)} → ${kb(wa.value)}) and the same largest element`);
+      // A time has no amount of its own. The same page loading more slowly is the host; anything else the copy loads differently (more bytes, another largest
+      // element, other requests) is a different page, which no host explains.
+      const same = sameLoad({
+        wb: amountOf(ctx.oldLhr[device]?.audits?.['total-byte-weight'])?.value,
+        wa: amountOf(ctx.newLhr[device]?.audits?.['total-byte-weight'])?.value,
+        lb: lcpElement(ctx.oldLhr[device]),
+        la: lcpElement(ctx.newLhr[device]),
+        rb: requestsOf(ctx.oldLhr[device]),
+        ra: requestsOf(ctx.newLhr[device]),
+      });
+      const times = `${b ? `${Math.round(b.value)} → ` : ''}${Math.round(a.value)} ms`;
+      if (!same.ok) return unexplained(`${device}: ${times}, and ${same.text}, so the time cannot be put down to the host.`);
+      rows.push(`${device}: ${times}, ${same.text}`);
       continue;
     }
     if (a.value > 0 && a.value > limit) {
@@ -899,16 +1010,11 @@ function scorePart(item, ctx) {
   if (!lp) return unexplained('The row carries no measurement detail, so nothing could be checked.');
   const drop = `${item.before?.score ?? '?'} → ${item.after?.score ?? '?'} (${lp.mode === 'mobile' ? 'phone' : 'computer'})`;
   if (lp.category === 'performance') {
-    const wb = lp.weight?.original;
-    const wa = lp.weight?.copy;
-    if (!Number.isFinite(wb) || !Number.isFinite(wa)) return unexplained(`${drop}: the page's weight is not in both reports, so the lower score cannot be put down to the host.`);
-    const lb = lp.lcp?.original;
-    const la = lp.lcp?.copy;
-    if (lb && la && lb.selector !== la.selector) return unexplained(`${drop}: the largest element is not the same one: the original's is ${lb.snippet}, the copy's is ${la.snippet}.`);
-    if (wa > wb * (1 + GROWTH.other)) return unexplained(`${drop}: the copy's page weighs ${kb(wa)} against the original's ${kb(wb)}; it sends more, which no host explains.`);
+    const same = sameLoad({ wb: lp.weight?.original, wa: lp.weight?.copy, lb: lp.lcp?.original, la: lp.lcp?.copy, rb: lp.requests?.original, ra: lp.requests?.copy });
+    if (!same.ok) return unexplained(`${drop}: ${same.text}, so the lower score cannot be put down to the host.`);
     return {
       reason: 'deploy',
-      evidence: `${drop}: the same page (${kb(wb)} → ${kb(wa)}, the same largest element) scored lower from the measurement host (this computer, served with a static host's network conditions, HTTP/1.1, no CDN) than the original from its host; both sides were measured now with the same settings, so the gap is the host's. Measure it again after deploying.`,
+      evidence: `${drop}: ${same.text}. The same page scored lower from the measurement host (this computer, served with a static host's network conditions, HTTP/1.1, no CDN) than the original from its host; both sides were measured now with the same settings, so the gap is the host's. Measure it again after deploying.`,
     };
   }
   // Only the checks of this row's category count (Max Potential First Input Delay is a speed check: it never moves a Best
@@ -930,8 +1036,11 @@ function scorePart(item, ctx) {
     const what = a.title ?? id;
     // Console errors: each failed request on its own, by the same rule as the "Browser errors" row (requestPart): a request to
     // the site's backend, a file the copy lacks, a page not copied. Without addresses, the original's own code as before.
-    if (id === 'errors-in-console' && urls.length) {
-      const r = byParts(urls.map((url) => ({ url, text: url })), (e) => requestPart(e, ctx), 'failed request');
+    // A row measured with the console's own entries (lighthousePages.js consoleEntries) says what each one is; an older row has
+    // only the addresses, read as failed requests as before.
+    const entries = Array.isArray(a.errors) && a.errors.length ? uniqueEntries(a.errors) : null;
+    if (id === 'errors-in-console' && (entries || urls.length)) {
+      const r = byParts(entries ?? urls.map((url) => ({ url, text: url })), (e) => requestPart(e, ctx), entries ? 'console error' : 'failed request');
       // Unexplained: the requests that do have a reason are said too, so the row reads whole.
       const given = r.unexplained ? (r.parts ?? []).filter((p) => p.reason) : [];
       const also = given.length ? ` The other${given.length === 1 ? '' : 's'}: ${given.slice(0, 3).map((p) => `${pathOf(p.what) ?? p.what} — ${p.evidence}`).join('; ')}.` : '';

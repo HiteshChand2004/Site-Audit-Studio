@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { markEdits, pruneServiceWorker, runtimeNotes, runtimesOf, withoutRuntime } from '../src/recreate/convert/runtime.js';
-import { behaviourGaps, runtimeFreeCopy, withHead } from '../src/recreate/behavior/preserve/runtimeFree.js';
+import { behaviourGaps, KEEP_FOR, motionGaps, runtimeFreeCopy, withHead } from '../src/recreate/behavior/preserve/runtimeFree.js';
 
 const NEXT_PAGE = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Home</title>
 <link rel="stylesheet" href="/_next/static/chunks/site.css">
@@ -65,6 +65,17 @@ test('the title a runtime set after load is written into the page; behaviour gap
   const free = { width: 375, moves: false, clicks: [{ i: 0, shown: true, delta: { added: [], removed: [] }, at: '/' }] };
   assert.equal(behaviourGaps(free, asIs).length, 2);
   assert.deepEqual(behaviourGaps(asIs, asIs), []);
+
+  // What the Results check counts: hovers by name, scroll reveals, elements within 5 %.
+  const withRt = { hovers: ['a|startnow', 'button|menu'], reveals: 12, elements: 900 };
+  assert.deepEqual(motionGaps(withRt, withRt), []);
+  assert.deepEqual(motionGaps({ ...withRt, elements: 940, hovers: [...withRt.hovers, 'a|extra'], reveals: 14 }, withRt), [], 'more hovers or reveals and 4 % more elements: nothing lost');
+  const lost = motionGaps({ hovers: ['button|menu'], reveals: 5, elements: 1806 }, withRt);
+  assert.deepEqual(lost.map((g) => g.kind), ['hover', 'reveal', 'elements']);
+  assert.match(lost[0].text, /1 of the 2 hover effects are gone \(“startnow”\)/);
+  assert.match(lost[1].text, /5 scroll reveals instead of 12/);
+  assert.match(lost[2].text, /1806 elements instead of 900 \(the framework's code takes out parts of it\)/);
+  assert.ok([...KEEP_FOR].every((k) => ['hover', 'reveal', 'elements', 'control'].includes(k)) && !KEEP_FOR.has('motion') && !KEEP_FOR.has('look'));
 });
 
 // A framework in miniature: its bundle draws every [data-k] element from the inline data pushes once the page has loaded (what
@@ -175,6 +186,58 @@ test('when the owner prefers editable components, a page that needs its runtime 
     assert.equal(notes.items.length, 1);
     assert.equal(notes.items[0].reason, 'editable');
     assert.match(notes.items[0].values, /the page stops changing by itself/);
+  } finally {
+    await browser.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// A runtime that also does what the Results check counts: it hovers a link from script (no CSS rule, so nothing rebuilds it),
+// and it takes out the layout this width does not show (as a builder's runtime prunes its other breakpoints' copies).
+const COUNTED = `(function(){function run(){var d={};(self.__next_f||[]).forEach(function(x){if(typeof x[1]==='string'&&x[1].charAt(0)==='{')Object.assign(d,JSON.parse(x[1]));});
+document.querySelectorAll('[data-k]').forEach(function(el){if(d[el.getAttribute('data-k')])el.textContent=d[el.getAttribute('data-k')];});
+var h=document.getElementById('hover-me');if(h){h.addEventListener('mouseenter',function(){h.style.backgroundColor='rgb(200, 30, 30)';});h.addEventListener('mouseleave',function(){h.style.backgroundColor='';});}
+var v=document.getElementById('phone-layout');if(v&&innerWidth>=768)v.remove();
+var k=document.getElementById('tick');if(k)setInterval(function(){k.textContent=String(Number(k.textContent)+1);},400);}
+if(document.readyState==='complete')setTimeout(run,50);else window.addEventListener('load',function(){setTimeout(run,50);});})();`;
+
+test('editable components preferred: a page whose runtime draws a hover or prunes a layout keeps it and says why; one that only moves by itself loses it', { timeout: 600000 }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sas-runtime-counted-'));
+  const browser = await chromium.launch();
+  try {
+    const copy = path.join(root, 'copy');
+    await mkdir(path.join(copy, '_next', 'static', 'chunks'), { recursive: true });
+    await mkdir(path.join(copy, 'hover'), { recursive: true });
+    await mkdir(path.join(copy, 'layouts'), { recursive: true });
+    await writeFile(path.join(copy, '_next', 'static', 'chunks', 'main.js'), COUNTED, 'utf8');
+    await writeFile(path.join(copy, 'site.css'), 'body{font:16px/1.5 sans-serif;margin:0;padding:24px}#hover-me{display:inline-block;padding:8px 16px}@media (min-width:768px){#phone-layout{display:none}}', 'utf8');
+    const withPart = (title, part) => page({ title }).replace('<main>', `<main>${part}`);
+    await writeFile(path.join(copy, 'hover', 'index.html'), withPart('Hover page', '<a id="hover-me" href="#start">Start now</a>'), 'utf8');
+    const items = Array.from({ length: 30 }, (_, i) => `<li><span>Phone item ${i + 1}</span></li>`).join('');
+    await writeFile(path.join(copy, 'layouts', 'index.html'), withPart('Layouts page', `<div id="phone-layout"><ul>${items}</ul></div>`), 'utf8');
+    await writeFile(path.join(copy, 'index.html'), page({ title: 'Ticker page', ticker: true }), 'utf8');
+    const pages = ['hover/index.html', 'layouts/index.html', 'index.html'].map((outPath) => ({ outPath }));
+
+    const { dir, record } = await runtimeFreeCopy({ browser, copyDir: copy, outDir: path.join(root, 'out'), pages });
+    assert.equal(record.prefer, 'editable', 'the default is unchanged');
+    const by = Object.fromEntries(record.pages.map((r) => [r.path, r]));
+    assert.equal(by['/hover/'].status, 'kept', JSON.stringify(by['/hover/']));
+    assert.deepEqual(by['/hover/'].keptFor, ['hover']);
+    assert.match(by['/hover/'].detail, /hover effects are gone \(“startnow”\)/);
+    assert.deepEqual(by['/hover/'].lost, { hovers: 1 }, 'in numbers, for the app');
+    assert.equal(by['/layouts/'].status, 'kept', JSON.stringify(by['/layouts/']));
+    assert.ok(by['/layouts/'].keptFor.includes('elements'), JSON.stringify(by['/layouts/']));
+    assert.ok(by['/layouts/'].motion.free.elements > by['/layouts/'].motion.asIs.elements, 'both counts in the report');
+    assert.ok(by['/layouts/'].lost.elements.without > by['/layouts/'].lost.elements.with);
+    // A counter the runtime keeps going is listed, not a reason to keep it.
+    assert.equal(by['/'].status, 'removed', JSON.stringify(by['/']));
+    assert.ok(by['/'].gaps.some((g) => g.kind === 'motion'));
+    assert.match(await readFile(path.join(dir, 'hover', 'index.html'), 'utf8'), /main\.js/, 'the kept page still loads its runtime');
+    assert.doesNotMatch(await readFile(path.join(dir, 'index.html'), 'utf8'), /main\.js/);
+
+    const notes = runtimeNotes(record);
+    assert.match(notes.readme, /You chose editable components, but 2 of these pages keep the framework code .*: \/hover\/, \/layouts\//);
+    assert.ok(notes.items.some((i) => i.page === '/hover/' && i.reason === 'runtime' && /hover effects are gone/.test(i.tried)));
   } finally {
     await browser.close();
     await rm(root, { recursive: true, force: true });

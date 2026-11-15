@@ -444,12 +444,20 @@ export function convertDocument(html, { page, pageUrl = null, linkMap = null, sh
 
   // The sections: the children of the host, each its own component; the page component holds what is around them.
   const componentOf = new Map();
-  const taken = new Set([RAW_COMPONENT]);
-  const sections = [];
-  planSections(bodyEl).forEach(({ el, hero }, i) => {
+  // A page's own section never takes the name of a shared component the same page uses: the stack writers name each page's
+  // own components apart from the shared files by rewriting `<Name />` in the page, which would rewrite the shared section too
+  // (motionrepo, 2026-11-15: a page's own figure and the shared call-to-action were both "Wrap", and the page drew the figure
+  // twice and the call-to-action never — the original's framework, still running there, threw React #418 over it). So the
+  // shared sections are named first, and the own ones around them.
+  const planned = planSections(bodyEl).map(({ el, hero }, i) => {
     const outer = $.html(el);
     const hash = sha(outer);
-    let name = sharedName?.(el, outer, hash) ?? null;
+    return { el, hero, i, outer, hash, sharedAs: sharedName?.(el, outer, hash) ?? null };
+  });
+  const taken = new Set([RAW_COMPONENT, ...planned.map((p) => p.sharedAs).filter(Boolean)]);
+  const sections = [];
+  planned.forEach(({ el, hero, i, outer, hash, sharedAs }) => {
+    let name = sharedAs;
     const shared = Boolean(name);
     if (!name) {
       const base = sectionName(el, i, { hero });

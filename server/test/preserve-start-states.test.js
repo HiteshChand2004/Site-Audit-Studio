@@ -90,10 +90,14 @@ test('in a browser: what the framework brought in shows without it, with and wit
     const free = await runtimeFreeCopy({ browser, copyDir: lifted, outDir: path.join(root, 'source'), pages, jobDir: job });
     const rec = free.record.pages[0];
     assert.equal(rec.status, 'removed', JSON.stringify(rec));
-    assert.deepEqual(rec.shown, { elements: 3, declarations: 6 }, JSON.stringify(rec));
+    // The style each part has once the framework ran is read on the as-is page and written (loadedStyles.js, 2026-11-15), so the
+    // capture's start-state rule finds nothing left to drop here; it still covers what that reading could not settle.
+    assert.equal(rec.loadedStyles?.written, 3, JSON.stringify(rec));
+    assert.equal(rec.loadedStyles.varies, 0);
+    assert.equal(rec.shown, undefined, 'nothing left for the capture rule');
     const out = await readFile(path.join(free.dir, 'index.html'), 'utf8');
     assert.doesNotMatch(out, /main\.js|__next_f/);
-    assert.match(out, /style="scroll-margin-top:80px"/, 'the rest of an inline style stays');
+    assert.match(out, /style="scroll-margin-top: 80px;[^"]*opacity: 1;/, 'the rest of an inline style stays, with what the framework set');
     assert.match(out, /class="ghost" style="opacity:0"/, 'hidden on the original, hidden in the copy');
 
     const s = await serveCopy(free.dir);

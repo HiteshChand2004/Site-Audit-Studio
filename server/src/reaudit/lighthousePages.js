@@ -165,6 +165,32 @@ export async function probeOwnFiles(pageUrl, fetchImpl = fetch) {
 }
 
 /**
+ * The requests a page made in one run, as Lighthouse's own request list counts them: { total, byType } (byType: resource type →
+ * count). Null when the report has no request list (a run that never painted). What a speed row needs to say the copy loads
+ * the same thing as the original (copy/gotWorse.js sameLoad).
+ */
+export function requestsOf(lhr) {
+  const items = lhr?.audits?.['network-requests']?.details?.items;
+  if (!Array.isArray(items) || !items.length) return null;
+  const byType = {};
+  for (const q of items) {
+    const type = String(q?.resourceType ?? 'Other');
+    byType[type] = (byType[type] ?? 0) + 1;
+  }
+  return { total: items.length, byType };
+}
+
+/** The entries of an errors-in-console audit: { source, text, url } each (source: Lighthouse's `exception`, `network`, …). */
+export function consoleEntries(a) {
+  const items = Array.isArray(a?.details?.items) ? a.details.items : [];
+  return items.slice(0, 20).map((i) => ({
+    source: typeof i.source === 'string' ? i.source : null,
+    text: String(i.description ?? '').split('\n')[0].slice(0, 200),
+    url: i.sourceLocation?.url ?? i.url ?? null,
+  }));
+}
+
+/**
  * What a run of a page keeps (a full report is ~1 MB; a comparison needs the scores, the page's weight, its largest element and
  * the audits that fail, so a row can be explained): the shape both sides are stored and compared in.
  */
@@ -175,7 +201,10 @@ export function trimReport(lhr) {
     audits[id] = { score: a.score, title: a.title, displayValue: a.displayValue ?? null, numericValue: a.numericValue ?? null, numericUnit: a.numericUnit ?? null,
       ...(Number.isFinite(a.details?.overallSavingsBytes) && { savingsBytes: a.details.overallSavingsBytes }),
       // details.items is a list for most audits; an insight with a checklist (document-latency-insight) keeps an object there.
-      urls: [...new Set((Array.isArray(a.details?.items) ? a.details.items : []).map((i) => i.url ?? i.source?.url ?? i.sourceLocation?.url ?? i.entity ?? null).filter((u) => typeof u === 'string'))].slice(0, 20) };
+      urls: [...new Set((Array.isArray(a.details?.items) ? a.details.items : []).map((i) => i.url ?? i.source?.url ?? i.sourceLocation?.url ?? i.entity ?? null).filter((u) => typeof u === 'string'))].slice(0, 20),
+      // The console's own entries: what kind each is (a failed request, a script that threw, a console.error) and its message,
+      // so an error thrown inside a script is not read as a request for that script.
+      ...(id === 'errors-in-console' && { errors: consoleEntries(a) }) };
   }
   const lcp = lhr?.audits?.['largest-contentful-paint-element']?.details?.items?.[0]?.items?.[0]?.node;
   // A category Lighthouse could not score (null): the audits of it that errored, with their message, so the comparison can say
@@ -210,6 +239,7 @@ export function trimReport(lhr) {
     // The page's own files that did not load in this run (a run missing its own scripts or styles measured something else).
     ownFailures: ownFailuresOf(lhr),
     weightBytes: lhr?.audits?.['total-byte-weight']?.numericValue ?? null,
+    requests: requestsOf(lhr),
     lcpElement: lcp ? { selector: lcp.selector ?? null, snippet: String(lcp.snippet ?? lcp.selector ?? '').slice(0, 100) } : null,
     audits,
     failingByCategory,
@@ -451,6 +481,9 @@ export async function compareLighthousePages({ pages, cacheDir, outDir, run, pro
           detail: {
             weight: { original: originalRuns[0].weightBytes, copy: copyRuns[0].weightBytes },
             lcp: { original: originalRuns[0].lcpElement, copy: copyRuns[0].lcpElement },
+            // The requests each side made (null for a run kept before they were recorded): a speed row is put down to the
+            // measurement host only when they are the same (copy/gotWorse.js sameLoad).
+            requests: { original: originalRuns[0].requests ?? null, copy: copyRuns[0].requests ?? null },
             failing: { original: Object.keys(originalRuns[0].audits), copy: Object.keys(copyRuns[0].audits) },
             copyAudits: copyRuns[0].audits,
             // Per category, what fails on the copy (its first run; null for a run kept before this was recorded).
