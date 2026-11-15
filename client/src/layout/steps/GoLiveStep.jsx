@@ -36,6 +36,8 @@ export default function GoLiveStep({ project, onGoCreate }) {
   const [loadError, setLoadError] = useState(null);
   const [domainInput, setDomainInput] = useState('');
   const [askSetup, setAskSetup] = useState(false);
+  // What the domain card last read: whether the site's domain points to Remastly's server (so visitors see this copy).
+  const [domainState, setDomainState] = useState(null);
   const [askRestore, setAskRestore] = useState(null);
   const [restoreError, setRestoreError] = useState(null);
   const [accepted, setAccepted] = useState(() => new Set());
@@ -62,6 +64,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
     setData(null);
     setAccepted(new Set());
     setStartError(null);
+    setDomainState(null);
     // The original's own name, offered first: a copy usually takes its place.
     try { setDomainInput(new URL(project.url).hostname); } catch { setDomainInput(''); }
     load();
@@ -155,6 +158,15 @@ export default function GoLiveStep({ project, onGoCreate }) {
     return next;
   });
 
+  // A site on Remastly's server is live only once its domain points there; until then it is ready, and the link would open
+  // whatever the domain still leads to (the original). A site live on Netlify is at its own address.
+  const onServer = live?.hosting === 'server';
+  const visible = !onServer || domainState?.connected === true;
+  const required = (domainState?.records ?? []).find((r) => r.required);
+  const notVisibleText = !domainState ? T.checkingText
+    : !domainState.domain ? T.noDomainText
+      : T.readyText(domainState.domain, required?.found ?? []);
+
   const steps = running ? STEPS.map((key, i) => {
     const at = STEPS.indexOf(latest?.step ?? 'package');
     return { key, ...T.steps[key], state: i < at ? 'done' : i === at ? 'active' : 'pending' };
@@ -165,7 +177,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
       {live && (
         <Card
           icon={Globe}
-          title={T.liveTitle}
+          title={visible ? T.liveTitle : domainState ? T.readyTitle : T.checkingTitle}
           sub={T.liveFacts({ ...live, when: timeAgo(live.finishedAt) }, size(live.bytes))}
           actions={live.adminUrl && (
             <a className={styles.linkButton} href={live.adminUrl} target="_blank" rel="noopener noreferrer">
@@ -173,12 +185,16 @@ export default function GoLiveStep({ project, onGoCreate }) {
             </a>
           )}
         >
-          <p className={styles.liveLine}>
-            <span className={styles.liveLabel}>{T.liveAt}</span>
-            <a href={live.url} target="_blank" rel="noopener noreferrer" className={styles.liveUrl}>
-              <Link2 size={15} aria-hidden="true" /> {live.url}
-            </a>
-          </p>
+          {visible ? (
+            <p className={styles.liveLine}>
+              <span className={styles.liveLabel}>{T.liveAt}</span>
+              <a href={live.url} target="_blank" rel="noopener noreferrer" className={styles.liveUrl}>
+                <Link2 size={15} aria-hidden="true" /> {live.url}
+              </a>
+            </p>
+          ) : (
+            <p className={ws.hint} style={{ margin: 0 }}>{notVisibleText}</p>
+          )}
           {earlier.length > 0 && !running && (
             <div className={styles.accountButtons} style={{ marginTop: 'var(--sp-3)' }}>
               <Button size="sm" icon={History} onClick={() => setAskRestore(earlier[0])}>{T.goBack}</Button>
@@ -259,7 +275,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
         )}
       </Card>
 
-      {live && <DomainCard project={project} liveUrl={live.url} />}
+      {live && <DomainCard project={project} liveUrl={live.url} onState={setDomainState} />}
 
       <FormsCard project={project} onChange={load} />
 
@@ -297,8 +313,10 @@ export default function GoLiveStep({ project, onGoCreate }) {
 }
 
 /** Step 2: the owner's own domain on the live site — the DNS records to add, and which are in place. */
-function DomainCard({ project, liveUrl }) {
+function DomainCard({ project, liveUrl, onState }) {
   const [state, setState] = useState(null);
+  // The live card above says "live" or "not visible yet" from this same reading.
+  useEffect(() => { if (state) onState?.(state); }, [state, onState]);
   const [error, setError] = useState(null);
   const [domain, setDomain] = useState('');
   const [busy, setBusy] = useState(false);
