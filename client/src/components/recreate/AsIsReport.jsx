@@ -65,6 +65,26 @@ function PageRow({ page }) {
  * The result of an "Original as-is" copy: the mode, the checks per page, what was excluded by rule, what needs a person, the
  * JavaScript the copy ships, and Lighthouse before and after (desktop).
  */
+/**
+ * One plain line for a page that kept the original site's own script (server behavior/preserve/runtimeFree.js decidePage):
+ * "/pricing keeps the site's own script, because without it 2 hover effects were lost".
+ */
+export function runtimeKeptLine(r) {
+  const lost = r.lost ?? {};
+  const parts = [
+    lost.hovers ? `${plural(lost.hovers, 'hover effect')} ${lost.hovers === 1 ? 'was' : 'were'} lost` : null,
+    lost.reveals ? `${plural(lost.reveals, 'scroll reveal')} ${lost.reveals === 1 ? 'was' : 'were'} lost` : null,
+    lost.controls ? `${plural(lost.controls, 'button')} answered differently` : null,
+    lost.elements ? `the page held ${lost.elements.without.toLocaleString('en')} elements instead of ${lost.elements.with.toLocaleString('en')}` : null,
+  ].filter(Boolean);
+  const why = parts.length ? `without it ${parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0]}`
+    : r.why === 'stillOverwritten' ? 'without it the page is still drawn over by another script'
+      : r.why === 'unknown' ? 'its script is not one this tool can take out'
+        : r.why === 'error' ? 'the check could not run'
+          : r.detail ? `without it ${r.detail}` : 'the page needs it';
+  return `${r.path} keeps the site's own script, because ${why}`;
+}
+
 /** A copy converted into the stack's code: what became components, what was kept as original HTML, and each form in plain words. */
 function Converted({ convert }) {
   if (convert.mode !== 'converted') {
@@ -87,6 +107,8 @@ function Converted({ convert }) {
   // Forms usually share one explanation (where their data goes in the copy): said once under the list, not on every line.
   const notes = [...new Set(forms.map((f) => f.note))];
   const oneNote = notes.length === 1 ? notes[0] : null;
+  // Pages that keep the original's own framework script (server convert.runtime): each one with why, in plain words.
+  const keptRuntime = (convert.runtime?.pages ?? []).filter((r) => r.status === 'kept');
   return (
     <>
       <h4 className={styles.h}>Converted into code</h4>
@@ -108,6 +130,14 @@ function Converted({ convert }) {
           </ul>
         </>
       ) : <p className={styles.note}>Every element of every page is component code.</p>}
+      {keptRuntime.length > 0 && (
+        <>
+          <p className={styles.note}>On {keptRuntime.length === 1 ? 'this page' : 'these pages'} a change to a component is drawn over when the page loads (the original’s content comes back):</p>
+          <ul className={styles.list}>
+            {keptRuntime.map((r) => <li key={r.path}>{runtimeKeptLine(r)}.</li>)}
+          </ul>
+        </>
+      )}
       <h4 className={styles.h}>Forms, in plain words</h4>
       {forms.length ? (
         <>

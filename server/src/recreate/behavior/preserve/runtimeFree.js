@@ -15,7 +15,11 @@
 //              - look the same at phone and computer width (fixGate: the picture rounds and the noise rule every fix of the copy
 //                is held to, and no new console error),
 //              - answer every control (button, summary, [aria-expanded], tab) the same way, clicked in turn at both widths,
-//              - keep moving by itself when the as-is page does (a carousel or a feed the runtime drove).
+//              - keep moving by itself when the as-is page does (a carousel or a feed the runtime drove),
+//              - keep what the Results check counts at computer width (motionAt: the hover effects by name, the scroll reveals,
+//                the element count within ELEMENT_SHARE), read with the Results check's own probes on both sides.
+//   With editable components preferred (the default) the runtime still goes when only the look, an error or a part that moves
+//   by itself differs (those are listed); a difference in hovers, reveals, elements or clicks (KEEP_FOR) keeps it on that page.
 //   The page's title and description as the runtime left them (metadata a framework streams in after load) are written into
 //   the page's own head first, so the page names itself as visitors saw it.
 // Any check failing keeps the page as it is (with its runtime) and says which. Nothing is guessed: a page is changed only when
@@ -36,6 +40,7 @@ import { markEdits, runtimesOf, withoutRuntime, pruneServiceWorker } from '../..
 import { fixGate, isolated, openAndScroll, textDelta, viewOf, GATE_WIDTHS, inPool } from './check.js';
 import { serveCopy } from './serve.js';
 import { localOfOutPath } from './asis.js';
+import { measureMotion } from '../../capture/measure.js';
 
 /** Wait after the scroll for a runtime that hydrates late (on idle, or a section as it comes into view). */
 export const SETTLE_MS = 1500;
@@ -123,6 +128,54 @@ export function behaviourGaps(free, asIs) {
   return gaps;
 }
 
+/** The width the motion reading is taken at (the computer view, where the Results check measures motion). */
+export const MOTION_WIDTH = 1440;
+/** Time the hover probe has on each side of one page (the same on both). */
+export const MOTION_HOVER_MS = 20000;
+/** How far the element count may move before the page counts as holding other content (a runtime prunes or adds parts). */
+export const ELEMENT_SHARE = 0.05;
+/** The differences that keep a page's runtime even when editable components are preferred: what the Results check counts. */
+export const KEEP_FOR = new Set(['hover', 'reveal', 'elements', 'control']);
+// The name the Results check pairs hovers by (reaudit/motion.js hoverKey): tag + visible text without white space.
+const hoverKey = (h) => `${h.tag}|${String(h.text ?? '').toLowerCase().replace(/\s+/g, '').slice(0, 40)}`;
+
+/**
+ * What the Results check counts of a page's motion and size, read the way it reads them (capture/measure.js), at MOTION_WIDTH:
+ * the hover effects (by name), the scroll reveals, and the page's elements (scripts, styles and templates left out).
+ * `hoverFirst`: names the probe takes first, so both sides spend their time on the same elements.
+ */
+export async function motionAt(browser, base, pagePath, { hoverFirst = [] } = {}) {
+  const context = await isolated(browser, viewOf(MOTION_WIDTH), base, []);
+  try {
+    const page = await context.newPage();
+    await page.goto(`${base}${pagePath}`, { waitUntil: 'load', timeout: 120000 });
+    await page.waitForTimeout(SETTLE_MS);
+    const elements = await page.evaluate(() => document.querySelectorAll('body *:not(script):not(style):not(link):not(noscript):not(template)').length);
+    const m = await measureMotion(page, { width: MOTION_WIDTH, height: viewOf(MOTION_WIDTH).viewport.height, budgetMs: MOTION_HOVER_MS, focus: false, hoverFirst });
+    return { elements, hovers: [...new Set((m.hover ?? []).map(hoverKey))], reveals: m.reveal?.elements?.length ?? 0 };
+  } finally {
+    await context.close();
+  }
+}
+
+/**
+ * Where the motion readings of a page with and without its runtime differ: hover effects or scroll reveals the page loses, or
+ * an element count more than ELEMENT_SHARE apart (a runtime that prunes the layouts a width does not show, or draws parts).
+ */
+export function motionGaps(free, asIs) {
+  const gaps = [];
+  const missing = asIs.hovers.filter((k) => !free.hovers.includes(k));
+  if (missing.length) {
+    const names = missing.slice(0, 3).map((k) => `“${k.split('|')[1] || k.split('|')[0]}”`).join(', ');
+    gaps.push({ kind: 'hover', width: MOTION_WIDTH, lost: missing.length, text: `at ${MOTION_WIDTH} px ${missing.length} of the ${asIs.hovers.length} hover effects are gone (${names}${missing.length > 3 ? '…' : ''})` });
+  }
+  if (free.reveals < asIs.reveals) gaps.push({ kind: 'reveal', width: MOTION_WIDTH, lost: asIs.reveals - free.reveals, text: `at ${MOTION_WIDTH} px the page has ${free.reveals} scroll reveals instead of ${asIs.reveals}` });
+  if (Math.abs(free.elements - asIs.elements) > asIs.elements * ELEMENT_SHARE) {
+    gaps.push({ kind: 'elements', width: MOTION_WIDTH, with: asIs.elements, without: free.elements, text:`at ${MOTION_WIDTH} px the page holds ${free.elements} elements instead of ${asIs.elements} (the framework's code ${free.elements > asIs.elements ? 'takes out' : 'draws'} parts of it)` });
+  }
+  return gaps;
+}
+
 /** The page's head with the title and description the runtime left (null when there is nothing to change). */
 export function withHead(html, head) {
   if (!head) return null;
@@ -186,7 +239,8 @@ export function freePage(html, { only = null, head = null, motion = null, settle
 /**
  * Decides one page (see the head of this file). Returns its record; `html` (not recorded) is the page to convert from when its
  * runtime goes. Every difference the checks find is kept (`gaps`): with `prefer: 'editable'` (the default) the runtime goes
- * anyway and the gaps are what the owner is told the page loses; with `prefer: 'exact'` any gap keeps the runtime.
+ * anyway unless a gap is one of KEEP_FOR (then `keptFor` names them), and the gaps are what the owner is told the page loses;
+ * with `prefer: 'exact'` any gap keeps the runtime.
  */
 export async function decidePage({ browser, copyDir, outPath, motion = null, settled = null, prefer = 'editable', log = () => {} }) {
   const pagePath = localOfOutPath(outPath);
@@ -244,6 +298,7 @@ export async function decidePage({ browser, copyDir, outPath, motion = null, set
 
   log(`runtime ${pagePath}: does it look and work the same without ${runtimes.map((r) => r.name).join(', ')}?`);
   const gaps = [];
+  let motionRead = null;
   const asIs = await served(copyDir, {});
   const freeSide = await served(copyDir, { [outPath]: free.html }, sideFiles);
   try {
@@ -260,13 +315,41 @@ export async function decidePage({ browser, copyDir, outPath, motion = null, set
       const newErrors = f.errors.filter((e) => !a.errors.some((x) => x.includes(e)));
       if (newErrors.length) gaps.push({ kind: 'error', width: f.width, text: `a new error on the page at ${f.width} px: ${newErrors[0]}` });
     }
+    // What the Results check counts (hover effects, scroll reveals, elements), read on both sides. Only needed when the runtime
+    // would otherwise go; the page with its runtime is read first, so the other side's hover probe starts on the same elements.
+    if (!(gaps.length && prefer !== 'editable')) {
+      log(`runtime ${pagePath}: the same hovers, reveals and elements without it?`);
+      try {
+        const a = await motionAt(browser, asIs.base, pagePath);
+        const f = await motionAt(browser, freeSide.base, pagePath, { hoverFirst: a.hovers });
+        motionRead = { asIs: { hovers: a.hovers.length, reveals: a.reveals, elements: a.elements }, free: { hovers: f.hovers.length, reveals: f.reveals, elements: f.elements } };
+        gaps.push(...motionGaps(f, a));
+      } catch (err) {
+        // Not measured is not a difference found: the page goes on as decided by the other checks, and the record says so.
+        motionRead = { error: String(err?.message ?? err).slice(0, 160) };
+      }
+    }
   } finally {
     await Promise.all([asIs.close(), freeSide.close()]);
   }
-  const common = { ...(free.rebuilt && { rebuilt: free.rebuilt }), ...(free.shown && { shown: free.shown }), ...(replay && { replay }), ...(gaps.length && { gaps: gaps.slice(0, 8) }) };
+  const common = { ...(free.rebuilt && { rebuilt: free.rebuilt }), ...(free.shown && { shown: free.shown }), ...(replay && { replay }), ...(motionRead && { motion: motionRead }), ...(gaps.length && { gaps: gaps.slice(0, 8) }) };
   if (gaps.length && prefer !== 'editable') {
     const first = gaps[0];
-    return { ...record, status: 'kept', why: first.kind === 'control' || first.kind === 'motion' ? 'behaviour' : 'look', detail: gaps.slice(0, 3).map((g) => g.text).join('; '), ...common };
+    return { ...record, status: 'kept', why: first.kind === 'look' || first.kind === 'error' ? 'look' : 'behaviour', detail: gaps.slice(0, 3).map((g) => g.text).join('; '), ...common };
+  }
+  // Editable components are preferred, but a page whose hovers, scroll reveals, element count or clicks differ without its
+  // runtime keeps it: those are what the Results check counts, so taking it out would make the copy read worse there.
+  const keep = gaps.filter((g) => KEEP_FOR.has(g.kind));
+  if (keep.length) {
+    // In numbers, for the app's one line per page: what the page loses without its runtime.
+    const elements = keep.find((g) => g.kind === 'elements');
+    const lost = {
+      ...(keep.some((g) => g.kind === 'hover') && { hovers: keep.find((g) => g.kind === 'hover').lost }),
+      ...(keep.some((g) => g.kind === 'reveal') && { reveals: keep.find((g) => g.kind === 'reveal').lost }),
+      ...(keep.some((g) => g.kind === 'control') && { controls: keep.filter((g) => g.kind === 'control').length }),
+      ...(elements && { elements: { with: elements.with, without: elements.without } }),
+    };
+    return { ...record, status: 'kept', why: 'behaviour', keptFor: [...new Set(keep.map((g) => g.kind))], lost, detail: keep.slice(0, 3).map((g) => g.text).join('; '), ...common };
   }
   return {
     ...record,
