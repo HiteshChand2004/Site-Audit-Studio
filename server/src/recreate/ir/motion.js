@@ -422,9 +422,27 @@ export function spreadToGroups(list, groups) {
  * Is this reveal one a visitor sees by scrolling to it? A scroll trigger is; so is a reveal the capture called 'timed'
  * (a timer or "reveal on the first scroll" fired while the element was still far below the screen) when the element sits
  * below the first screen: the visitor who scrolls there sees it come in. A timed one in the first screen (rotating
- * headline, page-load entrance) is not a scroll effect.
+ * headline, page-load entrance) is not a scroll effect. Neither is one in a layer that moves with the window (`trigger.layer`,
+ * capture/reveal.js: a fixed header, a stuck sticky bar): its page position follows the scroll, so it is never scrolled to.
  */
-export const isScrollReveal = (el) => el.trigger?.kind === 'scroll' || (el.trigger?.kind === 'timed' && Number(el.rect?.[1]) >= FIRST_SCREEN);
+export const isScrollReveal = (el) => !el.trigger?.layer && (el.trigger?.kind === 'scroll' || (el.trigger?.kind === 'timed' && Number(el.rect?.[1]) >= FIRST_SCREEN));
+
+/**
+ * Is a reveal's element in a box that moves with the window? The capture says so (`trigger.layer`), or, for a capture made
+ * before it recorded that, the merged tree does: the element or an ancestor is fixed on the computer view, or sticky and on
+ * the first screen (a header). `nodes`: the tree's elements by capture path.
+ */
+export function inWindowLayer(el, nodes) {
+  if (el.trigger?.layer) return true;
+  const steps = String(el.path ?? '').split('>');
+  for (let i = steps.length; i > 1; i--) {
+    const d = nodes?.get(steps.slice(0, i).join('>'))?.views?.desktop;
+    const position = d?.style?.position;
+    if (position === 'fixed') return true;
+    if (position === 'sticky' && Number(d.rect?.[1]) < FIRST_SCREEN) return true;
+  }
+  return false;
+}
 
 const specKey = (s) => JSON.stringify([s.opacity ?? null, s.translate ?? null, s.scale ?? null, s.rotate ?? null, s.filter ?? null, s.duration, s.easing]);
 
@@ -926,7 +944,10 @@ export function applyMotion(site, byPath, { owned = new Map() } = {}) {
       // Timed ones in the first screen are the page's entrance (a hero fading in as the page opens, an effect a timer or
       // the first scroll started): played once on load with CSS alone (`rl`), nothing waiting for a scroll. An element
       // that carries an animation of its own (a word rotator, a loop) keeps it - a second animation would replace it.
-      const onLoad = !isScrollReveal(el);
+      // One in a layer that moves with the window (a fixed or sticky header) is never a scroll reveal either (inWindowLayer).
+      const layered = inWindowLayer(el, nodes);
+      if (layered) stats.reveal.inLayer = (stats.reveal.inLayer ?? 0) + 1;
+      const onLoad = layered || !isScrollReveal(el);
       const node = nodes.get(el.path);
       if (!node) {
         stats.reveal.skipped.unmapped++;
