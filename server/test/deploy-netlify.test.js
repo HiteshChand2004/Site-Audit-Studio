@@ -903,7 +903,7 @@ test('Remastly as the host: a copy goes live on its own server at its domain, co
 
     delete process.env.SAS_HOSTING_IP;
     let r = await call('GET', `/projects/${project.id}/deploy`);
-    assert.deepEqual(r.body.server, { ready: false, ip: null, domain: null });
+    assert.deepEqual(r.body.server, { ready: false, ip: null, domain: null, canSetUp: true });
     assert.equal((await call('POST', `/projects/${project.id}/deploy`, { target: 'server' })).body.needsServer, true);
 
     process.env.SAS_HOSTING_IP = '203.0.113.10';
