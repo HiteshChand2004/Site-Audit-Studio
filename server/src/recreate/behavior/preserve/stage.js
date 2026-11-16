@@ -786,6 +786,8 @@ async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report
       const free = await runtimeFreeCopy({
         browser, copyDir, outDir: path.join(path.dirname(copyDir), 'convert-source'), pages,
         decided: browser ? null : earlierRuntime, pagesAtOnce: fixPagesAtOnce(),
+        // The original's own heads: the runtime putting back a title or description the copy fixed is not followed.
+        liftedDir: path.join(ctx.dir, ASIS_DIR, 'lifted'),
         // The capture's recordings (carried with every repack, recordings.js) rebuild the animations the runtime drove.
         jobDir: ctx.dir,
         // What wins when a page needs its runtime for something the copy cannot rebuild: the components ('editable', the

@@ -61,6 +61,13 @@ test('the title a runtime set after load is written into the page; behaviour gap
   assert.match(head.html, /<title>Home · Site<\/title>/);
   assert.deepEqual(head.changed, { title: { from: 'Home', to: 'Home · Site' } });
   assert.equal(withHead(NEXT_PAGE, { title: 'Home' }), null);
+  // The copy fixed a duplicated title (the file says "Home", the original's file said "Blog | Site"); the runtime only puts the
+  // original's text back from its route data: the copy's fix stays. A title the runtime sets that the original's file did not
+  // hold is still written.
+  const fixed = NEXT_PAGE.replace('<title>Home</title>', '<title>Home</title><meta name="description" content="Fixed words">');
+  const original = { title: 'Blog | Site', description: 'Same words on every page' };
+  assert.equal(withHead(fixed, { title: 'Blog | Site', description: 'Same words on every page' }, { original }), null);
+  assert.deepEqual(withHead(fixed, { title: 'Streamed title', description: null }, { original }).changed, { title: { from: 'Home', to: 'Streamed title' } });
   const asIs = { width: 375, moves: true, clicks: [{ i: 0, shown: true, delta: { added: ['Menu'], removed: [] }, at: '/' }] };
   const free = { width: 375, moves: false, clicks: [{ i: 0, shown: true, delta: { added: [], removed: [] }, at: '/' }] };
   assert.equal(behaviourGaps(free, asIs).length, 2);
@@ -75,7 +82,14 @@ test('the title a runtime set after load is written into the page; behaviour gap
   assert.match(lost[0].text, /1 of the 2 hover effects are gone \(“startnow”\)/);
   assert.match(lost[1].text, /5 scroll reveals instead of 12/);
   assert.match(lost[2].text, /1806 elements instead of 900 \(the framework's code takes out parts of it\)/);
-  assert.ok([...KEEP_FOR].every((k) => ['hover', 'reveal', 'elements', 'control'].includes(k)) && !KEEP_FOR.has('motion') && !KEEP_FOR.has('look'));
+  // Animations that keep running count too (9 on the original, none once a runtime that drove them is gone); a reading without
+  // a loop count (an older record) is no difference.
+  const loops = motionGaps({ ...withRt, loops: 0 }, { ...withRt, loops: 9 });
+  assert.deepEqual(loops.map((g) => [g.kind, g.lost]), [['loops', 9]]);
+  assert.match(loops[0].text, /0 animations keep running instead of 9/);
+  assert.deepEqual(motionGaps({ ...withRt, loops: 9 }, { ...withRt, loops: 9 }), []);
+  assert.deepEqual(motionGaps(withRt, { ...withRt, loops: 9 }), []);
+  assert.ok([...KEEP_FOR].every((k) => ['hover', 'reveal', 'loops', 'elements', 'control'].includes(k)) && KEEP_FOR.has('loops') && !KEEP_FOR.has('motion') && !KEEP_FOR.has('look'));
 });
 
 // A framework in miniature: its bundle draws every [data-k] element from the inline data pushes once the page has loaded (what

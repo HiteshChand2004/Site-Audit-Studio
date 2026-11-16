@@ -136,7 +136,7 @@ export const MOTION_HOVER_MS = 20000;
 /** How far the element count may move before the page counts as holding other content (a runtime prunes or adds parts). */
 export const ELEMENT_SHARE = 0.05;
 /** The differences that keep a page's runtime even when editable components are preferred: what the Results check counts. */
-export const KEEP_FOR = new Set(['hover', 'reveal', 'elements', 'control']);
+export const KEEP_FOR = new Set(['hover', 'reveal', 'loops', 'elements', 'control']);
 // The name the Results check pairs hovers by (reaudit/motion.js hoverKey): tag + visible text without white space.
 const hoverKey = (h) => `${h.tag}|${String(h.text ?? '').toLowerCase().replace(/\s+/g, '').slice(0, 40)}`;
 
@@ -153,7 +153,7 @@ export async function motionAt(browser, base, pagePath, { hoverFirst = [] } = {}
     await page.waitForTimeout(SETTLE_MS);
     const elements = await page.evaluate(() => document.querySelectorAll('body *:not(script):not(style):not(link):not(noscript):not(template)').length);
     const m = await measureMotion(page, { width: MOTION_WIDTH, height: viewOf(MOTION_WIDTH).viewport.height, budgetMs: MOTION_HOVER_MS, focus: false, hoverFirst });
-    return { elements, hovers: [...new Set((m.hover ?? []).map(hoverKey))], reveals: m.reveal?.elements?.length ?? 0 };
+    return { elements, hovers: [...new Set((m.hover ?? []).map(hoverKey))], reveals: m.reveal?.elements?.length ?? 0, loops: m.loops?.loops?.length ?? 0 };
   } finally {
     await context.close();
   }
@@ -171,25 +171,45 @@ export function motionGaps(free, asIs) {
     gaps.push({ kind: 'hover', width: MOTION_WIDTH, lost: missing.length, text: `at ${MOTION_WIDTH} px ${missing.length} of the ${asIs.hovers.length} hover effects are gone (${names}${missing.length > 3 ? '…' : ''})` });
   }
   if (free.reveals < asIs.reveals) gaps.push({ kind: 'reveal', width: MOTION_WIDTH, lost: asIs.reveals - free.reveals, text: `at ${MOTION_WIDTH} px the page has ${free.reveals} scroll reveals instead of ${asIs.reveals}` });
+  // Animations that keep running (the Results check's "Looping animations kept" row): a runtime that drove a ticker, a spinner
+  // or a pulse the rebuilt animations do not cover. A reading without a count (an older one) is no difference.
+  if (Number.isFinite(asIs.loops) && Number.isFinite(free.loops) && free.loops < asIs.loops) {
+    gaps.push({ kind: 'loops', width: MOTION_WIDTH, lost: asIs.loops - free.loops, text: `at ${MOTION_WIDTH} px ${free.loops} animations keep running instead of ${asIs.loops}` });
+  }
   if (Math.abs(free.elements - asIs.elements) > asIs.elements * ELEMENT_SHARE) {
     gaps.push({ kind: 'elements', width: MOTION_WIDTH, with: asIs.elements, without: free.elements, text:`at ${MOTION_WIDTH} px the page holds ${free.elements} elements instead of ${asIs.elements} (the framework's code ${free.elements > asIs.elements ? 'takes out' : 'draws'} parts of it)` });
   }
   return gaps;
 }
 
-/** The page's head with the title and description the runtime left (null when there is nothing to change). */
-export function withHead(html, head) {
+/** The title and description a page's file holds (null when the file cannot be read). */
+export async function headOfFile(file) {
+  const html = await readFile(file, 'utf8').catch(() => null);
+  if (html == null) return null;
+  const $ = cheerio.load(html);
+  const title = $('head > title').first();
+  return { title: title.length ? title.text() : null, description: $('head > meta[name="description"]').first().attr('content') ?? null };
+}
+
+/**
+ * The page's head with the title and description the runtime left (null when there is nothing to change).
+ * `original`: the title / description the original's own file held (the lifted page). A runtime that only puts that text back
+ * over one the copy wrote (a duplicate or over-long title the copy fixed, which the runtime restores from its route data) is
+ * not followed: the copy's fix stays, as it does on the as-is page.
+ */
+export function withHead(html, head, { original = null } = {}) {
   if (!head) return null;
   const $ = cheerio.load(html);
   let changed = null;
   const title = $('head > title').first();
-  if (head.title && head.title !== title.text()) {
+  const undoesFix = (runtimeValue, current, own) => own != null && runtimeValue === own && current != null && current !== own;
+  if (head.title && head.title !== title.text() && !undoesFix(head.title, title.length ? title.text() : null, original?.title ?? null)) {
     changed = { ...changed, title: { from: title.length ? title.text() : null, to: head.title } };
     if (title.length) title.text(head.title);
     else $('head').append($('<title>').text(head.title));
   }
   const desc = $('head > meta[name="description"]').first();
-  if (head.description && desc.length && head.description !== desc.attr('content')) {
+  if (head.description && desc.length && head.description !== desc.attr('content') && !undoesFix(head.description, desc.attr('content'), original?.description ?? null)) {
     changed = { ...changed, description: { from: desc.attr('content'), to: head.description } };
     desc.attr('content', head.description);
   }
@@ -221,9 +241,9 @@ export async function motionFor({ jobDir, copyDir, pages }) {
  * The page without its runtime, with the head the runtime left, the start states that runtime would have animated away
  * dropped (startStates.js; `settled` = the capture's reading of this page) and the rebuilt animations.
  */
-export function freePage(html, { only = null, head = null, motion = null, settled = null, loaded = null, outPath }) {
+export function freePage(html, { only = null, head = null, original = null, motion = null, settled = null, loaded = null, outPath }) {
   const stripped = withoutRuntime(html, only ? { only } : {});
-  const withH = head ? withHead(stripped.html, head) : null;
+  const withH = head ? withHead(stripped.html, head, { original }) : null;
   let out = withH?.html ?? stripped.html;
   // The styles the runtime set after load first (loadedStyles.js); a start state they did not settle is then dropped as before.
   const styled = withLoadedStyles(out, loaded);
@@ -246,7 +266,7 @@ export function freePage(html, { only = null, head = null, motion = null, settle
  * anyway unless a gap is one of KEEP_FOR (then `keptFor` names them), and the gaps are what the owner is told the page loses;
  * with `prefer: 'exact'` any gap keeps the runtime.
  */
-export async function decidePage({ browser, copyDir, outPath, motion = null, settled = null, prefer = 'editable', log = () => {} }) {
+export async function decidePage({ browser, copyDir, outPath, motion = null, settled = null, original = null, prefer = 'editable', log = () => {} }) {
   const pagePath = localOfOutPath(outPath);
   const html = await readFile(path.join(copyDir, outPath), 'utf8');
   const runtimes = runtimesOf(html);
@@ -291,7 +311,7 @@ export async function decidePage({ browser, copyDir, outPath, motion = null, set
     }
   }
   // The head as the runtime left it changes no text of the body, so the reading above holds for it too.
-  const free = freePage(html, { head: before.head, motion, settled, loaded: loaded.list, outPath });
+  const free = freePage(html, { head: before.head, original, motion, settled, loaded: loaded.list, outPath });
   record.loadedStyles = { written: free.loadedStyles ?? 0, varies: loaded.varies, list: loaded.list, ...(loaded.error && { error: loaded.error }) };
 
   // Every button as on the original: what a click does there that it does not do here is replayed (controls.js).
@@ -348,7 +368,7 @@ export async function decidePage({ browser, copyDir, outPath, motion = null, set
       try {
         const a = await motionAt(browser, asIs.base, pagePath);
         const f = await motionAt(browser, freeSide.base, pagePath, { hoverFirst: a.hovers });
-        motionRead = { asIs: { hovers: a.hovers.length, reveals: a.reveals, elements: a.elements }, free: { hovers: f.hovers.length, reveals: f.reveals, elements: f.elements } };
+        motionRead = { asIs: { hovers: a.hovers.length, reveals: a.reveals, loops: a.loops, elements: a.elements }, free: { hovers: f.hovers.length, reveals: f.reveals, loops: f.loops, elements: f.elements } };
         gaps.push(...motionGaps(f, a));
       } catch (err) {
         // Not measured is not a difference found: the page goes on as decided by the other checks, and the record says so.
@@ -372,6 +392,7 @@ export async function decidePage({ browser, copyDir, outPath, motion = null, set
     const lost = {
       ...(keep.some((g) => g.kind === 'hover') && { hovers: keep.find((g) => g.kind === 'hover').lost }),
       ...(keep.some((g) => g.kind === 'reveal') && { reveals: keep.find((g) => g.kind === 'reveal').lost }),
+      ...(keep.some((g) => g.kind === 'loops') && { loops: keep.find((g) => g.kind === 'loops').lost }),
       ...(keep.some((g) => g.kind === 'control') && { controls: keep.filter((g) => g.kind === 'control').length }),
       ...(elements && { elements: { with: elements.with, without: elements.without } }),
     };
@@ -410,10 +431,13 @@ const TEXT = /\.(html?|css|m?js|json|webmanifest|txt|xml|svg)$/i;
  * @param {{ pages?: object[] }|null} [o.decided]  an earlier record of this function (its `pages`)
  * @returns {Promise<{ dir: string, record: object }>}  record: { pages[], removedPages, keptPages, filesRemoved, bytesRemoved, reused? }
  */
-export async function runtimeFreeCopy({ browser, copyDir, outDir, pages, decided = null, log = () => {}, pagesAtOnce = 1, jobDir = null, prefer = 'editable' }) {
+export async function runtimeFreeCopy({ browser, copyDir, outDir, pages, decided = null, log = () => {}, pagesAtOnce = 1, jobDir = null, prefer = 'editable', liftedDir = null }) {
   await rm(outDir, { recursive: true, force: true });
   await cp(copyDir, outDir, { recursive: true });
   const results = [];
+  // The head each page's original file held (the lifted page, before the copy's fixes): a runtime that only restores it is
+  // not followed over the copy's own fix (withHead).
+  const originalHead = (outPath) => (liftedDir ? headOfFile(path.join(liftedDir, outPath)) : Promise.resolve(null));
   // The original's animations, rebuilt from what the capture recorded, go with every page whose runtime goes.
   const motion = await motionFor({ jobDir, copyDir, pages });
   // What the capture saw of every element once the original's script had run: the start states that script would clear.
@@ -421,7 +445,7 @@ export async function runtimeFreeCopy({ browser, copyDir, outDir, pages, decided
   if (browser) {
     await inPool(pages, pagesAtOnce, async (p) => {
       try {
-        results.push({ outPath: p.outPath, ...(await decidePage({ browser, copyDir, outPath: p.outPath, motion, settled: settled.get(p.outPath), prefer, log })) });
+        results.push({ outPath: p.outPath, ...(await decidePage({ browser, copyDir, outPath: p.outPath, motion, settled: settled.get(p.outPath), original: await originalHead(p.outPath), prefer, log })) });
       } catch (err) {
         results.push({ outPath: p.outPath, path: localOfOutPath(p.outPath), status: 'kept', why: 'error', detail: String(err?.message ?? err).slice(0, 200) });
       }
@@ -437,7 +461,7 @@ export async function runtimeFreeCopy({ browser, copyDir, outDir, pages, decided
       }
       const html = await readFile(path.join(copyDir, p.outPath), 'utf8');
       const head = r.head ? { title: r.head.title?.to, description: r.head.description?.to } : null;
-      const free = freePage(html, { only: r.ids, head, motion, settled: settled.get(p.outPath), loaded: r.loadedStyles?.list, outPath: p.outPath });
+      const free = freePage(html, { only: r.ids, head, original: await originalHead(p.outPath), motion, settled: settled.get(p.outPath), loaded: r.loadedStyles?.list, outPath: p.outPath });
       if (r.replay?.plan) free.html = withReplay(free.html, r.replay.plan).html;
       results.push({ outPath: p.outPath, ...r, ...(free.rebuilt && { rebuilt: free.rebuilt }), ...(free.shown && { shown: free.shown }), files: free.stripped.files, html: free.html });
     }
