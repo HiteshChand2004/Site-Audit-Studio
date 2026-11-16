@@ -91,10 +91,10 @@ async function codeFiles(dir) {
 /**
  * The settings the code reads (process.env.NAME, process.env["NAME"], import.meta.env.NAME, a destructured process.env) and
  * the ones an example settings file lists, with where each was seen.
- * @param {string} dir
+ * @param {string} dir @param {{ examplesOnly?: boolean }} [o]  examplesOnly: the example settings files only, no code
  * @returns {Promise<{ name: string, from: 'example' | 'code' | 'both', example: string | null }[]>}
  */
-export async function settingsOf(dir) {
+export async function settingsOf(dir, { examplesOnly = false } = {}) {
   /** @type {Map<string, { example: string | null, code: boolean, inExample: boolean }>} */
   const found = new Map();
   const add = (name, o) => {
@@ -108,7 +108,7 @@ export async function settingsOf(dir) {
     // The example's value is shown as a hint only when it looks like an example, not a secret someone committed.
     for (const [k, v] of Object.entries(parseEnvText(text))) add(k, { inExample: true, example: v && v.length <= 80 && !/[A-Za-z0-9+/]{32,}/.test(v) ? v : null });
   }
-  for (const file of await codeFiles(dir)) {
+  for (const file of examplesOnly ? [] : await codeFiles(dir)) {
     const s = await stat(file).catch(() => null);
     if (!s || s.size > MAX_FILE_BYTES) continue;
     const text = await readFile(file, 'utf8').catch(() => '');
@@ -150,30 +150,84 @@ export async function appPaths(dir, framework) {
   return [...out];
 }
 
+/** @param {string} file @returns {Promise<any>} */
+const readJson = (file) => readFile(file, 'utf8').then(JSON.parse, () => null);
+const exists = (file) => stat(file).then(() => true, () => false);
+// A folder name Remastly writes into a shell command: plain names only.
+const FOLDER = /^[A-Za-z0-9._@-]+(?:\/[A-Za-z0-9._@-]+)*$/;
+// Files that mark another language's app, named when no Node.js app is found.
+const OTHER_APPS = ['requirements.txt', 'pyproject.toml', 'Pipfile', 'Gemfile', 'composer.json', 'go.mod', 'Cargo.toml', 'pom.xml', 'build.gradle'];
+
+/** Whether a package.json is an app Remastly can start: Next.js, a start script, or a main file. @param {any} pkg */
+const startable = (pkg) => Boolean(pkg && (pkg.dependencies?.next || pkg.devDependencies?.next || typeof pkg.scripts?.start === 'string' || typeof pkg.main === 'string'));
+
 /**
- * How to run the app in `dir`, or an AppError saying why Remastly cannot (yet).
- * @param {string} dir  the repository's top folder
+ * What the repository holds, three levels deep: the folders with a package.json Remastly can start (the top as ''), and the
+ * marks of apps in other languages, by folder.
+ * @param {string} root
  */
-export async function findApp(dir) {
-  const pkgText = await readFile(path.join(dir, 'package.json'), 'utf8').catch(() => null);
-  if (pkgText === null) {
-    const hint = (await Promise.all(['requirements.txt', 'pyproject.toml', 'Gemfile', 'composer.json', 'go.mod'].map((f) => stat(path.join(dir, f)).then(() => f, () => null)))).find(Boolean);
-    throw new AppError(hint
-      ? `This repository is not a Node.js app (it has ${hint}). Remastly runs Node.js apps (Next.js, Express…) for now.`
-      : 'There is no package.json at the top of this repository. Remastly runs Node.js apps (Next.js, Express…) whose package.json is at the top.');
+export async function scanRepo(root) {
+  /** @type {{ folder: string, name: string | null, framework: 'next' | 'node' }[]} */
+  const apps = [];
+  /** @type {string[]} */
+  const others = [];
+  let topPackage = false;
+  const walk = async (rel, depth) => {
+    const abs = path.join(root, rel);
+    const pkg = await readJson(path.join(abs, 'package.json'));
+    if (rel === '' && pkg) topPackage = true;
+    if (startable(pkg) && (rel === '' || FOLDER.test(rel))) {
+      apps.push({ folder: rel, name: typeof pkg.name === 'string' ? pkg.name : null, framework: pkg.dependencies?.next || pkg.devDependencies?.next ? 'next' : 'node' });
+    }
+    for (const f of OTHER_APPS) if (await exists(path.join(abs, f))) others.push(rel ? `${f} in ${rel}/` : `${f} at the top`);
+    if (depth >= 3) return;
+    for (const e of (await readdir(abs, { withFileTypes: true }).catch(() => [])).sort((a, b) => a.name.localeCompare(b.name))) {
+      if (e.isDirectory() && !SKIP_DIRS.has(e.name) && !e.name.startsWith('.')) await walk(rel ? `${rel}/${e.name}` : e.name, depth + 1);
+    }
+  };
+  await walk('', 0);
+  // The top first, then the least deep; a Next.js app before others at the same depth; then by name.
+  const rank = (a) => [a.folder === '' ? 0 : 1, a.folder.split('/').length, a.framework === 'next' ? 0 : 1];
+  apps.sort((a, b) => {
+    const [x, y] = [rank(a), rank(b)];
+    const i = x.findIndex((v, k) => v !== y[k]);
+    return i >= 0 ? x[i] - y[i] : a.folder.localeCompare(b.folder);
+  });
+  return { apps, others, topPackage };
+}
+
+/**
+ * How to run the app of a repository, or an AppError saying why Remastly cannot (yet). The app may be at the top or in a
+ * folder (`folder`; none given: the top when it is an app, else the first app found). A folder inside a workspace (npm or
+ * yarn "workspaces", pnpm-workspace.yaml, or one lockfile at the top for all) is installed from the top and built and started
+ * in its folder; a folder of its own is installed, built and started there.
+ * @param {string} root  the repository's top folder @param {string} [folder]
+ */
+export async function findApp(root, folder) {
+  const { apps, others, topPackage } = await scanRepo(root);
+  if (!apps.length) {
+    const found = [...(topPackage ? ['a package.json at the top with no "start" script'] : []), ...others];
+    throw new AppError(`Remastly found no Node.js app it can start in this repository (a Next.js app, or a package.json with a "start" script)${found.length ? `. It has ${found.join(', ')}` : ''}. Remastly runs Node.js apps (Next.js, Express…) for now.`);
   }
-  let pkg;
-  try {
-    pkg = JSON.parse(pkgText);
-  } catch {
-    throw new AppError('The package.json of this repository cannot be read (it is not valid JSON).');
-  }
+  const chosen = folder === undefined || folder === null ? apps[0] : apps.find((a) => a.folder === folder);
+  if (!chosen) throw new AppError(`"${folder}" is not a folder of this repository with an app Remastly can start.`);
+  const rel = chosen.folder;
+  const dir = path.join(root, rel);
+  const pkg = await readJson(path.join(dir, 'package.json'));
+  const topPkg = rel ? await readJson(path.join(root, 'package.json')) : pkg;
   const deps = { ...pkg.dependencies, ...pkg.devDependencies };
   const framework = deps.next ? 'next' : 'node';
-  const has = (f) => stat(path.join(dir, f)).then(() => true, () => false);
   const warnings = [];
+  const locks = ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock'];
+  const hasLock = async (d) => (await Promise.all(locks.map((f) => exists(path.join(d, f))))).some(Boolean);
+  // Where packages are installed: the top of a workspace, else the app's own folder.
+  const workspace = Boolean(rel) && (Boolean(topPkg?.workspaces) || (await exists(path.join(root, 'pnpm-workspace.yaml'))) || ((await hasLock(root)) && !(await hasLock(dir))));
+  const installDir = workspace ? root : dir;
+  const has = (f) => exists(path.join(installDir, f));
+  const inFolder = (cmd) => (rel ? `cd "${rel}" && ${cmd}` : cmd);
 
-  const wantedText = pkg.engines?.node ?? (await readFile(path.join(dir, '.nvmrc'), 'utf8').catch(() => null)) ?? (await readFile(path.join(dir, '.node-version'), 'utf8').catch(() => null));
+  const versionFile = async (d) => (await readFile(path.join(d, '.nvmrc'), 'utf8').catch(() => null)) ?? (await readFile(path.join(d, '.node-version'), 'utf8').catch(() => null));
+  const wantedText = pkg.engines?.node ?? topPkg?.engines?.node ?? (await versionFile(dir)) ?? (rel ? await versionFile(root) : null);
   const wanted = nodeMajor(wantedText);
   const node = pickNode(wanted);
   if (wanted && wanted !== node) warnings.push(`The app asks for Node.js ${wanted}; it runs on Node.js ${node}, the nearest one Remastly offers.`);
@@ -188,7 +242,7 @@ export async function findApp(dir) {
   const run = pm === 'npm' ? 'npm run' : `corepack ${pm} run`;
 
   const scripts = pkg.scripts ?? {};
-  const build = typeof scripts.build === 'string' ? `${run} build` : null;
+  const build = typeof scripts.build === 'string' ? inFolder(`${run} build`) : null;
   let start = null;
   if (typeof scripts.start === 'string') start = `${run} start`;
   else if (framework === 'next') start = 'npx next start';
@@ -197,18 +251,27 @@ export async function findApp(dir) {
   if (framework === 'next' && !build) throw new AppError('This Next.js app has no "build" script in its package.json, so it cannot be prepared to run. Add "build": "next build".');
   // Inside the box the app listens where its start command says, else where PORT says (set to the same).
   const port = portIn(scripts.start ?? '') ?? 3000;
+  const settings = await settingsOf(dir);
+  // An example settings file at the top of the repository speaks for the app in its folder too.
+  if (rel) {
+    const names = new Set(settings.map((x) => x.name));
+    for (const x of await settingsOf(root, { examplesOnly: true })) if (!names.has(x.name)) settings.push(x);
+    settings.sort((a, b) => a.name.localeCompare(b.name));
+  }
 
   return {
     kind: 'node',
     framework,
     name: typeof pkg.name === 'string' ? pkg.name : null,
+    folder: rel,
+    folders: apps.map((a) => ({ folder: a.folder, name: a.name, framework: a.framework })),
     node,
     pm,
-    install,
+    install: workspace ? install : inFolder(install),
     build,
-    start,
+    start: inFolder(start),
     port,
-    settings: await settingsOf(dir),
+    settings,
     paths: await appPaths(dir, framework),
     warnings,
   };

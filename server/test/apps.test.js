@@ -142,12 +142,47 @@ test('other apps: pnpm and Express, no start, not Node.js; and the small readers
   await assert.rejects(findApp(none), (e) => e instanceof AppError && /no "start" script/.test(e.message));
   const py = path.join(dir, 'py');
   await files(py, { 'requirements.txt': 'flask' });
-  await assert.rejects(findApp(py), /not a Node\.js app \(it has requirements\.txt\)/);
+  await assert.rejects(findApp(py), /found no Node\.js app[^]*requirements\.txt at the top/);
 
   assert.deepEqual([nodeMajor('v22.3.0'), nodeMajor('>=18 <21'), nodeMajor(''), pickNode(18), pickNode(26), pickNode(null)], [22, 18, null, 20, 24, 22]);
   assert.deepEqual(parseEnvText('export A=1\nB="two words" # not a comment inside\nC=three # a comment\nKEY="-----BEGIN\nline\n-----END"\n# D=4\nE=\'x=y\''),
     { A: '1', B: 'two words', C: 'three', KEY: '-----BEGIN\nline\n-----END', E: 'x=y' });
   assert.equal(await repoRoot(path.join(dir, 'tarsrc')), path.join(dir, 'tarsrc', `riya-shop-${SHA.slice(0, 7)}`));
+});
+
+test('an app in a folder: a workspace installed from the top, a folder of its own installed there, and the choice of folder', async () => {
+  const ws = path.join(dir, 'workspace');
+  await files(ws, {
+    'package.json': JSON.stringify({ name: 'gardener', private: true, workspaces: ['apps/*'], scripts: { dev: 'turbo dev' } }),
+    'package-lock.json': '{}',
+    '.env.example': 'SESSION_SECRET=\n',
+    'apps/web/package.json': JSON.stringify({ name: 'web', dependencies: { next: '15' }, scripts: { build: 'next build', start: 'next start' } }),
+    'apps/web/app/auth/login/route.ts': 'export const GET = () => new Response(process.env.GITHUB_CLIENT_ID);',
+    'apps/api/package.json': JSON.stringify({ name: 'api', scripts: { start: 'node index.js -p 5000' } }),
+    'backend/requirements.txt': 'fastapi',
+  });
+  const web = await findApp(ws);
+  assert.deepEqual([web.folder, web.install, web.build, web.start], ['apps/web', 'npm ci', 'cd "apps/web" && npm run build', 'cd "apps/web" && npm run start'], 'installed once at the top, built and started in its folder');
+  assert.deepEqual(web.folders, [{ folder: 'apps/web', name: 'web', framework: 'next' }, { folder: 'apps/api', name: 'api', framework: 'node' }]);
+  assert.deepEqual(web.settings.map((x) => x.name), ['GITHUB_CLIENT_ID', 'SESSION_SECRET'], 'its own code, and the example at the top');
+  assert.deepEqual(web.paths, ['/api/*', '/auth/*']);
+  const apiApp = await findApp(ws, 'apps/api');
+  assert.deepEqual([apiApp.framework, apiApp.start, apiApp.port], ['node', 'cd "apps/api" && npm run start', 5000]);
+  await assert.rejects(findApp(ws, '../etc'), /not a folder of this repository/);
+
+  const split = path.join(dir, 'split');
+  await files(split, {
+    'package.json': JSON.stringify({ name: 'root', scripts: { lint: 'eslint .' } }),
+    'frontend/package.json': JSON.stringify({ dependencies: { next: '15' }, scripts: { build: 'next build', start: 'next start' } }),
+    'frontend/pnpm-lock.yaml': '',
+    'server/requirements.txt': 'flask',
+  });
+  const front = await findApp(split);
+  assert.deepEqual([front.folder, front.install, front.start], ['frontend', 'cd "frontend" && corepack pnpm install --frozen-lockfile', 'cd "frontend" && corepack pnpm run start'], 'a folder of its own');
+
+  const none = path.join(dir, 'none');
+  await files(none, { 'package.json': JSON.stringify({ scripts: { lint: 'x' } }), 'api/pyproject.toml': '' });
+  await assert.rejects(findApp(none), /package\.json at the top with no "start" script, pyproject\.toml in api\//);
 });
 
 test('GitHub: the app made from its manifest, a person\'s installations, a token for one repository to read, its code', async () => {

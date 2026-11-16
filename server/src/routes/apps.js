@@ -10,7 +10,8 @@
 //                                       before the API's own checks, since GitHub's page is another site; each answer only
 //                                       counts in the browser that started it, by a one-time cookie)
 //   GET    /api/projects/:id/app       the card: GitHub, the repository, what the app needs, its state
-//   POST   /api/projects/:id/app/repo { installationId, fullName, branch }   choose the repository (read now, nothing runs)
+//   POST   /api/projects/:id/app/repo { installationId, fullName, branch, folder? }   choose the repository (read now, nothing
+//                                       runs); folder: where the app is in it, when it holds several
 //   PUT    /api/projects/:id/app/settings { text?, values? }   the settings (a pasted .env, or single values; "" removes one)
 //   POST   /api/projects/:id/app/start   make (or update to the newest code) the app (202; GET follows it)
 //   POST   /api/projects/:id/app/use     send "Logins and data" to the app: its paths, and every address the copy has no file for
@@ -242,8 +243,10 @@ appsRouter.post('/:id/app/repo', async (req, res) => {
   if (!mine.installations.some((i) => i.id === installationId)) return res.status(403).json({ error: 'That GitHub installation is not one of yours. Connect GitHub again.' });
   const fullName = String(req.body?.fullName ?? '');
   const branch = String(req.body?.branch ?? '');
+  // The folder the app is in, when the person chose one of those Remastly found; else Remastly finds it.
+  const folder = typeof req.body?.folder === 'string' ? req.body.folder : undefined;
   try {
-    await chooseRepo(project.id, app, { installationId, fullName, branch });
+    await chooseRepo(project.id, app, { installationId, fullName, branch, ...(folder !== undefined && { folder }) });
   } catch (err) {
     return appFailure(res, err);
   }
