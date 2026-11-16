@@ -282,7 +282,8 @@ function lighthouseItems(oldLh, newLh) {
 // ---------- platform runtime ----------
 
 function platformItems(oldStack = [], newStack = [], output = null) {
-  const platforms = (stack) => stack.filter((t) => t.id && t.id !== 'custom');
+  // Custom/Unknown and Static HTML are no platform: nothing of them runs that could be left over.
+  const platforms = (stack) => stack.filter((t) => t.id && t.id !== 'custom' && t.id !== 'static');
   const newIds = new Set(platforms(newStack).map((t) => t.id));
   const kept = new Set(output?.runtimes ?? []);
   return platforms(oldStack).map((t) => (kept.has(t.id) ? {

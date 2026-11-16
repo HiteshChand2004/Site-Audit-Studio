@@ -226,7 +226,7 @@ export async function detectStack(ctx, rules = RULES) {
   return visible.sort((a, b) => rank(a) - rank(b) || b.confidence - a.confidence);
 }
 
-/** Shapes detections for the audit contract, with a Custom/Unknown entry when no platform matched. */
+/** Shapes detections for the audit contract, with a Custom/Unknown entry (Static HTML on Remastly) when no platform matched. */
 export function toTechStack(detections) {
   const list = detections.map((t) => ({
     id: t.id,
@@ -236,13 +236,10 @@ export function toTechStack(detections) {
     evidence: t.evidence,
   }));
   if (!detections.some((t) => PRIMARY.includes(t.category))) {
-    list.unshift({
-      id: 'custom',
-      name: 'Custom/Unknown',
-      category: 'custom',
-      confidence: null,
-      evidence: ['No known platform signature matched'],
-    });
+    // Served by Remastly with no framework left: finished pages, which is a known stack, not an unknown one.
+    list.unshift(detections.some((t) => t.id === 'remastly')
+      ? { id: 'static', name: 'Static HTML', category: 'custom', confidence: null, evidence: ['Served by Remastly as finished pages; no site builder or framework runs on it'] }
+      : { id: 'custom', name: 'Custom/Unknown', category: 'custom', confidence: null, evidence: ['No known platform signature matched'] });
   }
   return list;
 }

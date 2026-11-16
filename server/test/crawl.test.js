@@ -7,6 +7,7 @@ import { crawl } from '../src/audit/crawler.js';
 import { checkLinks } from '../src/audit/linkChecker.js';
 import { loadRobots } from '../src/audit/robots.js';
 import { loadSitemaps } from '../src/audit/sitemap.js';
+import { pageKey } from '../src/audit/util.js';
 
 // The fixture runs on localhost, which the SSRF guard blocks unless this dev flag is set.
 process.env.SAS_ALLOW_LOCALHOST = '1';
@@ -72,4 +73,14 @@ test('a crawl stopped by its time names what it did not read, and says it ran ou
   assert.deepEqual({ ...limit, urls: limit.urls.length }, { found: 1 + result.notRead.length, read: 1, notRead: result.notRead.length, cutBy: 'time', urls: result.notRead.length });
   assert.equal(crawlLimitOf({ notRead: [], cutBy: null }, 5), null);
   assert.equal(crawlLimitOf({ notRead: [`${origin}/a?x=1`], cutBy: 'pages' }, 5), null, 'a query-string variant is not a page');
+});
+
+test('a folder\'s index file is the folder: a homepage linked as / and /index.html is one page, as the copy has it', () => {
+  const same = (a, b) => assert.equal(pageKey(a), pageKey(b), `${a} and ${b}`);
+  same('https://procuredesk.example.com/', 'https://procuredesk.example.com/index.html');
+  same('https://www.example.com/docs/index.html', 'http://example.com/docs/');
+  same('https://example.com/docs/index.htm', 'https://example.com/docs');
+  same('https://example.com/index.html?lang=fr', 'https://example.com/?lang=fr');
+  assert.notEqual(pageKey('https://example.com/myindex.html'), pageKey('https://example.com/'));
+  assert.notEqual(pageKey('https://example.com/index.html/more'), pageKey('https://example.com/'));
 });

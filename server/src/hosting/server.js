@@ -185,6 +185,8 @@ async function sendFile(req, res, file, status, extra, cache) {
     'x-content-type-options': 'nosniff',
     etag: entry.etag,
     vary: 'Accept-Encoding',
+    // Who serves the site, as other hosts say it (server: Netlify, x-vercel-id): a Check of the live site names its host.
+    'x-hosted-by': 'Remastly',
     ...extra,
   };
   if (status === 200 && req?.headers['if-none-match'] === entry.etag) {
