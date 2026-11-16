@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { FIXES, FIELDS, KINDS_BY_KEY, MARKUP_PASS, emptyCounts, fixGroup, fixOf, goneBy } from '../src/copy/fixRegistry.js';
 
 test('counts and the markup pass keep their kinds and their order', () => {
-  assert.deepEqual(Object.keys(emptyCounts()), ['alt', 'names', 'aria', 'head', 'data', 'address', 'lang', 'anchors', 'linktext', 'headings', 'prohibited', 'scrollable', 'lcp', 'lazy', 'webp', 'size']);
+  assert.deepEqual(Object.keys(emptyCounts()), ['alt', 'names', 'aria', 'head', 'data', 'address', 'lang', 'anchors', 'linktext', 'headings', 'prohibited', 'scrollable', 'lcp', 'lazy', 'webp', 'size', 'inline']);
   assert.ok(Object.values(emptyCounts()).every((v) => v === 0));
   assert.deepEqual(MARKUP_PASS.map((f) => f.kind), ['anchors', 'linktext', 'headings', 'prohibited', 'scrollable']);
   assert.deepEqual(MARKUP_PASS.filter((f) => f.needs === 'perf').map((f) => f.kind), ['scrollable']);
@@ -14,7 +14,8 @@ test('counts and the markup pass keep their kinds and their order', () => {
 
 test('the checks each kind answers are the ones the re-check used before', () => {
   const asIs = Object.fromEntries(FIXES.filter((f) => f.targets.length).map((f) => [f.kind, f.targets]));
-  assert.deepEqual(Object.keys(asIs), ['alt', 'names', 'aria', 'data', 'lang', 'viewport', 'linktext', 'headings', 'prohibited', 'scrollable', 'lcp', 'lazy', 'webp', 'size', 'css']);
+  assert.deepEqual(Object.keys(asIs), ['alt', 'names', 'aria', 'data', 'lang', 'viewport', 'linktext', 'headings', 'prohibited', 'scrollable', 'lcp', 'lazy', 'webp', 'size', 'inline', 'css']);
+  assert.deepEqual(KINDS_BY_KEY.get('lighthouse.render-blocking-resources'), ['inline']);
   assert.deepEqual(KINDS_BY_KEY.get('axe.link-name'), ['names', 'linktext']);
   assert.deepEqual(KINDS_BY_KEY.get('crawl.meta-tags'), ['viewport', 'field:themeColor', 'field:icon']);
   assert.deepEqual(KINDS_BY_KEY.get('lighthouse.total-byte-weight'), ['webp', 'size', 'css']);
