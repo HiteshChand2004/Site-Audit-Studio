@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Camera, Check, CircleCheck, CircleHelp, CircleX, CloudUpload, Power, Copy, Download, ExternalLink, Globe, History, Inbox, Link2, Loader2, RefreshCw, Rocket, Server, Trash2, Unplug, Upload } from 'lucide-react';
+import { Archive, Camera, Check, CircleCheck, CircleHelp, CircleX, CloudUpload, Power, Copy, Download, ExternalLink, Globe, History, Inbox, Link2, Loader2, RefreshCw, Rocket, Server, Trash2, Unplug, Upload } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import Modal from '../../components/common/Modal.jsx';
 import ConfirmDialog from '../../components/common/ConfirmDialog.jsx';
@@ -38,6 +38,8 @@ export default function GoLiveStep({ project, onGoCreate }) {
   const [askSetup, setAskSetup] = useState(false);
   // What the domain card last read: whether the site's domain points to Remastly's server (so visitors see this copy).
   const [domainState, setDomainState] = useState(null);
+  // The box changes where Logins and data go: that card reads it again.
+  const [boxTick, setBoxTick] = useState(0);
   const [askRestore, setAskRestore] = useState(null);
   const [restoreError, setRestoreError] = useState(null);
   const [accepted, setAccepted] = useState(() => new Set());
@@ -205,9 +207,12 @@ export default function GoLiveStep({ project, onGoCreate }) {
       )}
 
       <Card icon={Server} title={T.whereTitle} sub={T.whereSub}>
-        {!server.ready && <p className={ws.hint} style={{ margin: 0 }}>{T.serverNotReady}</p>}
-        {server.canSetUp && (
-          <div className={styles.accountButtons} style={{ marginTop: server.ready ? 0 : 'var(--sp-3)' }}>
+        {server.ready
+          ? <p className={ws.hint} style={{ margin: 0 }}>{T.serverReady(server.ip)}</p>
+          : <p className={ws.hint} style={{ margin: 0 }}>{T.serverNotReady}</p>}
+        {/* The setup is done once; its steps are only offered while it is not. */}
+        {server.canSetUp && !server.ready && (
+          <div className={styles.accountButtons} style={{ marginTop: 'var(--sp-3)' }}>
             <Button size="sm" onClick={() => setAskSetup(true)}>{T.serverSetupButton}</Button>
           </div>
         )}
@@ -281,7 +286,9 @@ export default function GoLiveStep({ project, onGoCreate }) {
 
       <SnapshotCard project={project} onChange={load} />
 
-      <PassThroughCard project={project} onChange={load} />
+      <PassThroughCard key={boxTick} project={project} onChange={load} />
+
+      <BoxCard project={project} onChange={async () => { setBoxTick((t) => t + 1); await load(); }} />
 
       <SwitchOffCard project={project} />
 
@@ -308,6 +315,148 @@ export default function GoLiveStep({ project, onGoCreate }) {
         {askRestore ? T.putBackText(timeAgo(askRestore.startedAt)) : ''}
       </ConfirmDialog>
       <ServerSetupDialog open={askSetup} onClose={() => setAskSetup(false)} />
+    </div>
+  );
+}
+
+/**
+ * Step 2 done by Remastly: when the domain is at GoDaddy, the person connects their GoDaddy account once (an API key and
+ * secret, kept sealed on the server) and Remastly changes the records itself; what they pointed to before can be put back.
+ */
+function GoDaddyBox({ project, domain, pointsHere, onDomain }) {
+  const [card, setCard] = useState(null);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [token, setToken] = useState('');
+  // GoDaddy's older credential, until it retires it for domains (end of 2026).
+  const [withKey, setWithKey] = useState(false);
+  const [key, setKey] = useState('');
+  const [secret, setSecret] = useState('');
+  const [ask, setAsk] = useState(null);
+
+  const load = useCallback(async () => {
+    try {
+      setCard(await api.getGoDaddy(project.id));
+      setError(null);
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [project.id]);
+  // Again when the domain changes: what GoDaddy would change depends on it.
+  useEffect(() => { load(); }, [load, domain]);
+
+  async function run(fn) {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const connect = (e) => {
+    e.preventDefault();
+    run(async () => {
+      await api.connectGoDaddy(withKey ? { key: key.trim(), secret: secret.trim() } : { token: token.trim() });
+      setToken('');
+      setKey('');
+      setSecret('');
+      await load();
+    });
+  };
+  // The answer holds the domain's state too, so the records table above follows at once.
+  const change = (call) => run(async () => {
+    const r = await call(project.id);
+    setCard(r.godaddy);
+    if (r.domain) onDomain(r.domain);
+  });
+
+  if (!card) return error ? <Alert tone="bad" title="GoDaddy">{error}</Alert> : null;
+  const plan = card.plan;
+  // Always offered, never required: the records can as well be added by hand (the table above).
+  return (
+    <div className={styles.godaddy}>
+      <p className={styles.godaddyTitle}>{T.gdTitle} <span className={styles.badge}>{T.gdOptional}</span></p>
+      {pointsHere && !card.changed && <p className={ws.hint} style={{ margin: 0 }}>{T.gdInPlace}</p>}
+      {card.changed && <Alert tone="ok" title={T.gdDone(timeAgo(card.changed.at))}>{card.changed.names.join(', ')}</Alert>}
+      {!card.connected && (
+        <>
+          {card.changed ? <p className={ws.hint} style={{ margin: 0 }}>{T.gdReconnect}</p> : <p className={ws.hint} style={{ margin: 0 }}>{T.gdIntro}</p>}
+          {!withKey && <ol className={styles.howList}>{T.gdSteps.map((t) => <li key={t}>{t}</li>)}</ol>}
+          <a href={withKey ? 'https://developer.godaddy.com/keys' : 'https://developer.godaddy.com/docs/api-users/auth/how-to'} target="_blank" rel="noreferrer noopener">{T.gdKeyPage} <ExternalLink size={12} aria-hidden="true" /></a>
+          <form className={styles.domainBody} onSubmit={connect} noValidate>
+            {withKey ? (
+              <>
+                <div className={styles.godaddyFields}>
+                  <label className={form.field}>
+                    <span className={form.label}>{T.gdKey}</span>
+                    <input className={form.input} value={key} onChange={(e) => setKey(e.target.value)} autoComplete="off" spellCheck={false} />
+                  </label>
+                  <label className={form.field}>
+                    <span className={form.label}>{T.gdSecret}</span>
+                    <input className={form.input} type="password" value={secret} onChange={(e) => setSecret(e.target.value)} autoComplete="off" spellCheck={false} />
+                  </label>
+                </div>
+                <p className={ws.hint} style={{ margin: 0 }}>{T.gdKeyNote}</p>
+              </>
+            ) : (
+              <label className={form.field}>
+                <span className={form.label}>{T.gdToken}</span>
+                <input className={form.input} type="password" value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" spellCheck={false} />
+              </label>
+            )}
+            <div className={styles.accountButtons}>
+              <Button variant="primary" type="submit" icon={busy ? Spin : undefined} disabled={busy || (withKey ? !key.trim() || !secret.trim() : !token.trim())}>
+                {busy ? T.gdConnecting : T.gdConnect}
+              </Button>
+              <Button size="sm" variant="ghost" type="button" onClick={() => setWithKey((v) => !v)}>{withKey ? T.gdUseToken : T.gdUseKey}</Button>
+            </div>
+          </form>
+        </>
+      )}
+      {card.connected && (
+        <>
+          {card.problem && <Alert tone="warn" title={card.problem} />}
+          {plan?.needed && (
+            <div className={styles.tableWrap}>
+              <table className={styles.records}>
+                <thead>
+                  <tr><th>{T.gdCols.name}</th><th>{T.gdCols.now}</th><th>{T.gdCols.next}</th></tr>
+                </thead>
+                <tbody>
+                  {plan.changes.filter((c) => c.needed).map((c) => (
+                    <tr key={c.host}>
+                      <td><code>{c.host}</code></td>
+                      <td>{c.now.length ? c.now.map((n) => <code key={n} style={{ display: 'block' }}>{n}</code>) : T.gdNothing}</td>
+                      <td><code>{c.type} {c.value}</code></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className={ws.hint} style={{ margin: 0 }}>{card.source === 'server' ? T.gdFromServer(card.accounts) : T.gdConnected(card.account)}</p>
+          <div className={styles.accountButtons}>
+            {plan?.needed && (
+              <Button variant="primary" size="sm" icon={busy ? Spin : Globe} disabled={busy} onClick={() => setAsk('apply')}>{busy ? T.gdApplying : T.gdApply}</Button>
+            )}
+            {card.changed && <Button size="sm" icon={History} disabled={busy} onClick={() => setAsk('undo')}>{T.gdUndo}</Button>}
+            {/* The server's own tokens are changed in its settings, not here. */}
+            {card.source !== 'server' && (
+              <Button size="sm" icon={Unplug} disabled={busy} onClick={() => run(async () => { await api.disconnectGoDaddy(); await load(); })}>{T.gdDisconnect}</Button>
+            )}
+          </div>
+        </>
+      )}
+      {error && <Alert tone="bad" title="GoDaddy">{error}</Alert>}
+      <ConfirmDialog open={ask === 'apply'} onClose={() => setAsk(null)} title={T.gdApplyTitle} confirmLabel={T.gdApply} onConfirm={() => { setAsk(null); change(api.applyGoDaddy); }}>
+        {T.gdApplyText(domain)}
+      </ConfirmDialog>
+      <ConfirmDialog open={ask === 'undo'} onClose={() => setAsk(null)} title={T.gdUndoTitle} confirmLabel={T.gdUndo} danger onConfirm={() => { setAsk(null); change(api.undoGoDaddy); }}>
+        {T.gdUndoText}
+      </ConfirmDialog>
     </div>
   );
 }
@@ -426,6 +575,7 @@ function DomainCard({ project, liveUrl, onState }) {
             </table>
           </div>
           <p className={ws.hint} style={{ margin: 0 }}>{T.domainSameName} {records.some((r) => !r.required) ? T.domainOptionalNote : ''}</p>
+          <GoDaddyBox project={project} domain={state.domain} pointsHere={state.connected} onDomain={setState} />
           <div className={styles.accountButtons}>
             <Button size="sm" icon={busy ? Spin : RefreshCw} disabled={busy} onClick={load}>{T.domainCheck}</Button>
             <Button size="sm" icon={Unplug} disabled={busy} onClick={() => setAskRemove(true)}>{T.domainRemove}</Button>
@@ -513,12 +663,12 @@ function PassThroughCard({ project, onChange }) {
     <Card icon={Link2} title={T.ptTitle} sub={T.ptSub}>
       {saved && !editing && (
         <div className={styles.domainBody}>
-          <p className={ws.hint} style={{ margin: 0 }}>{T.ptSaved}</p>
-          <pre className={styles.rules}>{state.rules}</pre>
+          <p className={ws.hint} style={{ margin: 0 }}>{saved.box ? T.ptBoxSaved : T.ptSaved}</p>
+          <pre className={styles.rules}>{saved.box ? saved.paths.join('\n') : state.rules}</pre>
           {insecure && <Alert tone="warn" title="Not encrypted">{T.ptInsecure}</Alert>}
           <p className={ws.hint} style={{ margin: 0 }}>{T.ptApply}</p>
           <div className={styles.accountButtons}>
-            <Button size="sm" onClick={() => setEditing(true)}>{T.ptEdit}</Button>
+            {!saved.box && <Button size="sm" onClick={() => setEditing(true)}>{T.ptEdit}</Button>}
             <Button size="sm" icon={Unplug} onClick={() => setAskRemove(true)}>{T.ptRemove}</Button>
           </div>
         </div>
@@ -554,6 +704,193 @@ function PassThroughCard({ project, onChange }) {
       {error && <Alert tone="bad" title="Not saved">{error}</Alert>}
       <ConfirmDialog open={askRemove} onClose={() => setAskRemove(false)} title={T.ptRemoveTitle} confirmLabel={T.ptRemove} danger onConfirm={remove}>
         {T.ptRemoveText}
+      </ConfirmDialog>
+    </Card>
+  );
+}
+
+const BOX_STEPS = ['unpack', 'find', 'database', 'import', 'website', 'check'];
+const GB = 1024;
+
+/**
+ * Move logins and data to Remastly: the owner uploads the hosting backup of a WordPress site, Remastly runs its back office
+ * in a box (server/src/boxes/), and Logins and data go there instead of the old server.
+ */
+function BoxCard({ project, onChange }) {
+  const [card, setCard] = useState(null);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(null);
+  const [ask, setAsk] = useState(null);
+  const fileInput = useRef(null);
+
+  const load = useCallback(async () => {
+    try {
+      setCard(await api.getBox(project.id));
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [project.id]);
+  useEffect(() => { load(); }, [load]);
+
+  const status = card?.box.status;
+  // While the box is being made, its steps are followed.
+  useEffect(() => {
+    if (status !== 'starting') return undefined;
+    const t = setInterval(load, POLL_MS);
+    return () => clearInterval(t);
+  }, [status, load]);
+  const wasStarting = useRef(false);
+  useEffect(() => {
+    if (wasStarting.current && status && status !== 'starting') onChange();
+    wasStarting.current = status === 'starting';
+  }, [status, onChange]);
+
+  async function act(call) {
+    setBusy(true);
+    setError(null);
+    try {
+      setCard(await call());
+      return true;
+    } catch (err) {
+      setError(err.message);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addFiles(e) {
+    const files = [...(e.target.files ?? [])];
+    e.target.value = '';
+    setError(null);
+    for (const file of files) {
+      setUploading({ name: file.name, pct: 0 });
+      try {
+        setCard(await api.uploadBoxFile(project.id, file, (f) => setUploading({ name: file.name, pct: Math.round(f * 100) })));
+      } catch (err) {
+        setError(err.message);
+        break;
+      }
+    }
+    setUploading(null);
+  }
+
+  async function confirm() {
+    const what = ask;
+    setAsk(null);
+    if (what === 'replace') await act(() => api.startBox(project.id, true));
+    if (what === 'remove' && (await act(() => api.removeBox(project.id)))) await onChange();
+  }
+
+  if (!card) return error ? <Alert tone="bad" title="The back office could not be loaded">{error}</Alert> : null;
+  const { box } = card;
+  const hasBox = status === 'running' || status === 'stopped';
+  if (!card.available && !hasBox) {
+    return (
+      <Card icon={Archive} title={T.boxTitle} sub={T.boxSub}>
+        <p className={ws.hint} style={{ margin: 0 }}>{T.boxUnavailable}</p>
+        {card.setup && (
+          <ol className={styles.setupSteps}>
+            {card.setup.map((s) => (
+              <li key={s.why}>
+                <span>{s.why}</span>
+                {s.command && <span className={styles.value}><code className={styles.rules}>{s.command}</code> <CopyButton text={s.command} /></span>}
+              </li>
+            ))}
+          </ol>
+        )}
+      </Card>
+    );
+  }
+
+  const fileList = box.files.length > 0 && (
+    <ul className={styles.history}>
+      {box.files.map((f) => (
+        <li key={f.name}>
+          <span>{f.name}</span>
+          <span className={ws.hint} style={{ margin: 0 }}>{size(f.bytes)}</span>
+          {status !== 'starting' && (
+            <button type="button" className={styles.copy} disabled={busy || Boolean(uploading)} onClick={() => act(() => api.removeBoxFile(project.id, f.name))}>
+              <Trash2 size={13} aria-hidden="true" /> {T.boxRemoveFile}
+            </button>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+  const chooser = (label) => (
+    <>
+      <Button size="sm" icon={uploading ? Spin : Upload} disabled={busy || Boolean(uploading)} onClick={() => fileInput.current?.click()}>
+        {uploading ? T.boxUploading(uploading.name, uploading.pct) : label}
+      </Button>
+      <input ref={fileInput} type="file" multiple accept=".gz,.tgz,.tar,.zip,.sql" hidden onChange={addFiles} />
+    </>
+  );
+
+  return (
+    <Card icon={Archive} title={T.boxTitle} sub={T.boxSub}>
+      <div className={styles.domainBody}>
+        {status === 'starting' && (
+          <StepList steps={BOX_STEPS.map((k, i) => {
+            const at = BOX_STEPS.indexOf(box.step);
+            return { key: k, title: T.boxSteps[k], state: i < at ? 'done' : i === at ? 'active' : 'pending' };
+          })} />
+        )}
+
+        {hasBox && (
+          <>
+            <p className={styles.confirmTitle}>{T.boxRunningTitle}</p>
+            {box.site && <p className={ws.hint} style={{ margin: 0 }}>{T.boxFacts(box.site)}</p>}
+            {status === 'stopped' && <Alert tone="bad" title="Not running">{T.boxStopped}</Alert>}
+            {box.site?.warnings.map((w) => <Alert key={w} tone="warn" title="Check this">{w}</Alert>)}
+            {card.usedForLogins ? (
+              <p className={ws.hint} style={{ margin: 0 }}><Check size={14} aria-hidden="true" /> {T.boxUsed}</p>
+            ) : (
+              <>
+                <div className={styles.accountButtons}>
+                  <Button variant="primary" size="sm" disabled={busy} onClick={async () => { if (await act(() => api.useBox(project.id))) await onChange(); }}>{T.boxUse}</Button>
+                </div>
+                <p className={ws.hint} style={{ margin: 0 }}>{T.boxUseText}</p>
+              </>
+            )}
+            <p className={ws.hint} style={{ margin: 0 }}>{T.boxNotYet}</p>
+            {fileList}
+            <div className={styles.accountButtons}>
+              {box.files.length > 0
+                ? <Button size="sm" disabled={busy || Boolean(uploading)} onClick={() => setAsk('replace')}>{T.boxReplace}</Button>
+                : chooser(T.boxReplace)}
+              <Button size="sm" icon={Trash2} disabled={busy} onClick={() => setAsk('remove')}>{T.boxRemove}</Button>
+            </div>
+          </>
+        )}
+
+        {!hasBox && status !== 'starting' && (
+          <>
+            <p className={styles.confirmTitle}>{T.boxHowTitle}</p>
+            <ul className={styles.howList}>
+              <li>{T.boxHowCpanel}</li>
+              <li>{T.boxHowOther}</li>
+            </ul>
+            <Alert tone="warn" title="When">{T.boxTiming}</Alert>
+            {status === 'failed' && box.error && <Alert tone="bad" title={T.boxFailedTitle}>{box.error}</Alert>}
+            {fileList}
+            <div className={styles.accountButtons}>
+              {chooser(T.boxChoose)}
+              {box.files.length > 0 && (
+                <Button variant="primary" size="sm" icon={busy ? Spin : undefined} disabled={busy || Boolean(uploading)} onClick={() => act(() => api.startBox(project.id))}>
+                  {status === 'failed' ? T.boxTryAgain : T.boxStart}
+                </Button>
+              )}
+            </div>
+            <p className={ws.hint} style={{ margin: 0 }}>{T.boxFilesHelp(card.limits.files, Math.round(card.limits.uploadMB / GB))}</p>
+          </>
+        )}
+        {error && <Alert tone="bad" title="Not done">{error}</Alert>}
+      </div>
+      <ConfirmDialog open={Boolean(ask)} onClose={() => setAsk(null)} title={ask === 'remove' ? T.boxRemoveTitle : T.boxReplaceTitle}
+        confirmLabel={ask === 'remove' ? T.boxRemove : T.boxReplace} danger onConfirm={confirm}>
+        {ask === 'remove' ? T.boxRemoveText : T.boxReplaceText}
       </ConfirmDialog>
     </Card>
   );

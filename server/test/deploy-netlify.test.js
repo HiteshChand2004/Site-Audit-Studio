@@ -20,6 +20,7 @@ import { forgetKey, keyFile, seal, unseal } from '../src/deploy/secrets.js';
 import { failInterrupted, insertDeployment, getDeployment } from '../src/deploy/store.js';
 import { deployRouter, hostingRouter } from '../src/routes/deploy.js';
 import { checkRecords, dnsConfig, domainPlan, NETLIFY_LB, parseDomain } from '../src/deploy/domain.js';
+import { godaddyConfig } from '../src/deploy/godaddy.js';
 import { parsePaths, parseTarget, redirectsFor, suggestedPaths } from '../src/deploy/passThrough.js';
 import { entriesCsv, parseFormBody } from '../src/forms/entries.js';
 import { entriesFromRows, parseCsv } from '../src/forms/importCsv.js';
@@ -954,5 +955,77 @@ test('Remastly as the host: a copy goes live on its own server at its domain, co
     delete process.env.SAS_HOSTING_IP;
     dnsConfig.resolver = saved;
     sites.close();
+  }
+});
+
+test('GoDaddy accounts set on the server: the owner\'s website finds the account its domain is in; a customer never uses them', async () => {
+  // Two GoDaddy accounts, each holding one domain (the v3 API, as personal access tokens reach it).
+  const accounts = { 'Bearer tokA_aaaaaaaaaaaaaaaaaaaa': 'alpha-shop.com', 'Bearer tokB_bbbbbbbbbbbbbbbbbbbb': 'beta-shop.com' };
+  let zone = [{ id: '1', type: 'A', name: '@', data: '198.51.100.7' }, { id: '2', type: 'CNAME', name: 'www', data: '@' }, { id: '3', type: 'MX', name: '@', data: 'mx.beta-shop.com' }];
+  let next = 3;
+  const godaddy = createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      const send = (st, v) => res.writeHead(st, { 'content-type': 'application/json' }).end(v === undefined ? '' : JSON.stringify(v));
+      const owned = accounts[req.headers.authorization];
+      if (!owned) return send(401, { message: 'Unable to authenticate' });
+      const u = new URL(req.url, 'http://x');
+      const dm = u.pathname.match(/^\/v3\/domains\/domain-names\/([^/]+)$/);
+      if (dm) return dm[1] === owned ? send(200, { domain: owned, nameServers: ['ns09.domaincontrol.com'] }) : send(404, { message: 'not found' });
+      const zm = u.pathname.match(/^\/v3\/domains\/zones\/([^/]+)\/dns-records(?:\/([^/]+))?$/);
+      if (!zm || zm[1] !== owned || owned !== 'beta-shop.com') return send(404, { message: 'not found' });
+      if (req.method === 'GET') return send(200, { items: zone.filter((r) => r.type === u.searchParams.get('type') && r.name === u.searchParams.get('name')).map((r) => ({ recordId: r.id, ...r })) });
+      if (req.method === 'DELETE') { zone = zone.filter((r) => r.id !== zm[2]); return send(204); }
+      const rec = JSON.parse(body);
+      if (req.method === 'POST') { zone.push({ id: String(++next), type: rec.type, name: rec.name, data: rec.data }); return send(201, rec); }
+      zone = zone.map((r) => (r.id === zm[2] ? { id: r.id, type: rec.type, name: rec.name, data: rec.data } : r));
+      return send(200, rec);
+    });
+  });
+  await new Promise((r) => godaddy.listen(0, '127.0.0.1', r));
+  const savedApi = godaddyConfig.base;
+  const savedResolver = dnsConfig.resolver;
+  godaddyConfig.base = `http://127.0.0.1:${godaddy.address().port}`;
+  // A token GoDaddy no longer accepts is skipped, not a failure.
+  godaddyConfig.serverTokens = ['bearer expired_tok_cccccccccccc', 'bearer tokA_aaaaaaaaaaaaaaaaaaaa', 'bearer tokB_bbbbbbbbbbbbbbbbbbbb'];
+  process.env.SAS_HOSTING_IP = '203.0.113.10';
+  try {
+    const project = seedProject(db, { name: 'beta', url: 'https://beta-shop.com/', targetDomain: 'https://beta-shop.com' });
+    await finishedCopy({ projectId: project.id, report: { asIs: { stack: 'html', address: { used: 'https://beta-shop.com' } } }, reaudit: { checklist: { items: [] } } });
+    assert.equal((await call('POST', `/projects/${project.id}/deploy`, { domain: 'beta-shop.com' })).status, 202);
+    assert.equal((await waitDone(project.id)).status, 'ready');
+    dnsConfig.resolver = fakeDns({});
+
+    // A customer: the server's accounts hold the owner's domains, so they are not theirs to use.
+    let r = await call('GET', `/projects/${project.id}/domain/godaddy`, null, 'member');
+    assert.equal(r.body.connected, false);
+    r = await call('POST', `/projects/${project.id}/domain/godaddy`, null, 'member');
+    assert.equal(r.status, 409);
+    assert.equal(zone.find((x) => x.name === '@' && x.type === 'A').data, '198.51.100.7', 'nothing changed for a customer');
+
+    // The owner: the second account holds beta-shop.com; nothing was pasted.
+    r = await call('GET', `/projects/${project.id}/domain/godaddy`);
+    assert.deepEqual([r.body.connected, r.body.source, r.body.accounts, r.body.plan?.apex, r.body.plan?.needed], [true, 'server', 3, 'beta-shop.com', true], r.body.problem);
+    r = await call('POST', `/projects/${project.id}/domain/godaddy`);
+    assert.equal(r.status, 200, r.body.error);
+    assert.deepEqual(zone.map((x) => `${x.type} ${x.name} ${x.data}`).sort(), ['A @ 203.0.113.10', 'A www 203.0.113.10', 'MX @ mx.beta-shop.com']);
+    r = await call('DELETE', `/projects/${project.id}/domain/godaddy`);
+    assert.equal(r.status, 200, r.body.error);
+    assert.deepEqual(zone.map((x) => `${x.type} ${x.name} ${x.data}`).sort(), ['A @ 198.51.100.7', 'CNAME www @', 'MX @ mx.beta-shop.com']);
+
+    // A domain in none of the accounts says so.
+    const lone = seedProject(db, { name: 'gamma', url: 'https://gamma-shop.com/', targetDomain: 'https://gamma-shop.com' });
+    await finishedCopy({ projectId: lone.id, report: { asIs: { stack: 'html', address: { used: 'https://gamma-shop.com' } } }, reaudit: { checklist: { items: [] } } });
+    await call('POST', `/projects/${lone.id}/deploy`, { domain: 'gamma-shop.com' });
+    await waitDone(lone.id);
+    r = await call('GET', `/projects/${lone.id}/domain/godaddy`);
+    assert.match(r.body.problem, /not in any of the 3 GoDaddy account/);
+  } finally {
+    godaddyConfig.base = savedApi;
+    godaddyConfig.serverTokens = [];
+    dnsConfig.resolver = savedResolver;
+    delete process.env.SAS_HOSTING_IP;
+    godaddy.close();
   }
 });

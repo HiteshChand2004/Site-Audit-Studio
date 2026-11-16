@@ -360,3 +360,34 @@
   max-height: 320px;
   overflow: auto;
 }
+
+/* Where to get a backup (Move logins and data to Remastly): one line per kind of hosting panel. */
+.howList {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* The domain's records changed at GoDaddy by Remastly (DomainCard → GoDaddyBox). */
+.godaddy {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+}
+
+.godaddyTitle {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.godaddyFields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: var(--sp-3);
+}

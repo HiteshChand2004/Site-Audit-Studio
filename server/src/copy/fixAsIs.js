@@ -101,6 +101,31 @@ const ldScript = (data) => `<script type="application/ld+json">${JSON.stringify(
 /** The page's own paragraphs (text a visitor reads), for a description. */
 const paragraphsOf = ($) => $('body p').toArray().map((p) => clean($(p).text())).filter((t) => t.length >= 30);
 
+/** Other texts the page shows, for completing a short description when its paragraphs give too little (headings, list items). */
+const pageWordsOf = ($) => [...new Set($('body h1, body h2, body h3, body li, body dd, body blockquote, body figcaption').toArray()
+  .filter((e) => !$(e).closest('script, style, noscript, template, [hidden], [aria-hidden="true"]').length)
+  .map((e) => clean($(e).text())).filter((t) => t.length >= 15 && t.length <= 300))];
+
+/**
+ * The first candidate title that, fitted (fitTitle: trailing " | tagline" parts dropped, cut at a word, the site name added to a
+ * short one), is 10–60 characters and used by no other page. `anyLength` (the duplicate fix): when none fits the range, the first
+ * unique one is still better than a duplicate, and the length fix after it tries again.
+ * @param {(string|null|undefined|false)[]} candidates
+ */
+export function pickTitle(candidates, name, seen, { anyLength = false } = {}) {
+  const tried = [];
+  for (const raw of candidates) {
+    const c = clean(raw || '');
+    if (!c) continue;
+    for (const t of [fitTitle(c, name), fitTitle(`${c} | ${name}`, name), fitTitle(c, '')]) {
+      if (!t || tried.includes(t)) continue;
+      tried.push(t);
+      if (!outside(t, TITLE_LIMITS) && !seen.has(t.toLowerCase())) return t;
+    }
+  }
+  return anyLength ? tried.find((t) => !seen.has(t.toLowerCase())) ?? null : null;
+}
+
 /**
  * @param {object} o
  * @param {string} o.dir                the lifted copy (files are rewritten in place)
@@ -251,27 +276,32 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     const title = clean(titleEl.text());
     const titleKey = title.toLowerCase();
     let finalTitle = title;
-    if (allow('head:title') && (!title || seenTitle.has(titleKey))) {
-      const fresh = fitTitle(h1 && h1.toLowerCase() !== titleKey ? h1 : pathLabel(d.path) || h1, name);
-      if (fresh && !seenTitle.has(fresh.toLowerCase())) {
-        if (!titleEl.length) {
-          head.prepend('<title></title>');
-          titleEl = head.find('title').first();
-        }
-        titleEl.text(fresh);
-        fixes.push({ kind: 'head', field: 'title', from: title || null, value: fresh, source: title ? 'duplicate of another page' : 'missing' });
-        finalTitle = fresh;
+    const label = pathLabel(d.path);
+    /** @type {any} */
+    let titleFix = null;
+    const setTitle = (value, source) => {
+      if (!titleEl.length) {
+        head.prepend('<title></title>');
+        titleEl = head.find('title').first();
       }
+      titleEl.text(value);
+      // One fix per page: a title the duplicate fix wrote and the length fix then fitted is one change from the original's.
+      if (titleFix) Object.assign(titleFix, { value, source: `${titleFix.source}; ${source}` });
+      else fixes.push(titleFix = { kind: 'head', field: 'title', from: title || null, value, source });
+      finalTitle = value;
+    };
+    if (allow('head:title') && (!title || seenTitle.has(titleKey))) {
+      const fresh = pickTitle([h1 && h1.toLowerCase() !== titleKey ? h1 : null, label, h1, h1 && label && `${h1} – ${label}`, title && label && `${title} – ${label}`], name, seenTitle, { anyLength: true });
+      if (fresh) setTitle(fresh, title ? 'duplicate of another page' : 'missing');
     }
-    // Length (10–60 characters, the Analyze check): a long title loses its trailing parts (" | tagline") first, then is cut at a
-    // word; a short one gets the site name. Only the page's own words and the site name; marked for review in the report.
-    if (allow('head:title') && finalTitle && finalTitle === title && outside(finalTitle, TITLE_LIMITS)) {
-      const fitted = fitTitle(finalTitle, name);
-      if (fitted !== finalTitle && !outside(fitted, TITLE_LIMITS) && !seenTitle.has(fitted.toLowerCase())) {
-        titleEl.text(fitted);
-        fixes.push({ kind: 'head', field: 'title', from: finalTitle, value: fitted, source: finalTitle.length > TITLE_LIMITS[1] ? 'too long: shortened' : 'too short: the site name added' });
-        finalTitle = fitted;
-      } else open.push({ kind: 'head', field: 'title', page: d.path, reason: 'c', detail: `The title is ${finalTitle.length} characters (10–60 wanted) and the page gives nothing to ${finalTitle.length > TITLE_LIMITS[1] ? 'shorten it to' : 'complete it with'}: the owner writes it` });
+    // Length (10–60 characters, the Analyze check), for every title, the one the duplicate fix just wrote too: the first text that
+    // fits the range and no other page uses, from the title's own words (trailing " | tagline" parts dropped, cut at a word), the
+    // page's heading and its address, each with the site name when that is what completes it. Marked for review in the report.
+    if (allow('head:title') && finalTitle && outside(finalTitle, TITLE_LIMITS)) {
+      const was = finalTitle;
+      const fitted = pickTitle([finalTitle, h1 && `${finalTitle} – ${h1}`, label && `${finalTitle} – ${label}`, h1, label, h1 && label && `${h1} – ${label}`], name, seenTitle);
+      if (fitted && fitted !== finalTitle) setTitle(fitted, was.length > TITLE_LIMITS[1] ? 'too long: shortened' : 'too short: completed');
+      else open.push({ kind: 'head', field: 'title', page: d.path, reason: 'c', detail: `The title is ${finalTitle.length} characters (10–60 wanted) and no text of the page (its title, heading or address, with the site name) fits that range without repeating another page's: the owner writes it` });
     }
     // The page's own title counts as taken too: a later page with the same text is still a duplicate after this one's was fitted.
     seenTitle.add(finalTitle.toLowerCase());
@@ -280,6 +310,8 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     if (!descEl.length) descEl = $('meta[name="description"]').first();
     const description = clean(descEl.attr('content'));
     let finalDescription = description;
+    /** @type {any} */
+    let descFix = null;
     if (allow('head:description') && (!description || seenDescription.has(description.toLowerCase()))) {
       const own = paragraphsOf($).filter((t) => !seenDescription.has(t.toLowerCase()));
       let fresh = fitDescription(own);
@@ -298,20 +330,37 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
           descEl = head.find('meta[name="description"]').first();
         }
         descEl.attr('content', fresh);
-        fixes.push({ kind: 'head', field: 'description', from: description || null, value: fresh, source: description ? 'duplicate of another page' : from });
+        fixes.push(descFix = { kind: 'head', field: 'description', from: description || null, value: fresh, source: description ? 'duplicate of another page' : from });
         finalDescription = fresh;
       }
     }
-    // Length (50–160 characters): a long description is cut at a word; a short one is completed with the page's own paragraphs
-    // (those no other page uses). Marked for review.
-    if (allow('head:description') && finalDescription && finalDescription === description && outside(finalDescription, DESCRIPTION_LIMITS)) {
-      const long = finalDescription.length > DESCRIPTION_LIMITS[1];
-      const fitted = fitDescription(long ? [finalDescription] : [finalDescription, ...paragraphsOf($).filter((t) => !seenDescription.has(t.toLowerCase()))]);
-      if (fitted !== finalDescription && !outside(fitted, DESCRIPTION_LIMITS) && !seenDescription.has(fitted.toLowerCase())) {
+    // Length (50–160 characters), for every description, the duplicate fix's too: a long one is cut at a sentence or a word; a
+    // short one is completed with the page's own words, in this order: its paragraphs no other page uses, its heading, its title,
+    // its og:description, the other texts it shows (headings, list items). The first that fits and no other page uses. Review.
+    if (allow('head:description') && finalDescription && outside(finalDescription, DESCRIPTION_LIMITS)) {
+      const was = finalDescription;
+      const long = was.length > DESCRIPTION_LIMITS[1];
+      const own = paragraphsOf($).filter((t) => !seenDescription.has(t.toLowerCase()));
+      const summary = clean($('meta[property="og:description"]').attr('content') || $('meta[name="twitter:description"]').attr('content'));
+      const words = pageWordsOf($);
+      // The original's words always come first; the page's own words only complete them.
+      const fitted = [
+        [was],
+        [was, ...own],
+        [was, h1, ...own],
+        [was, summary],
+        [was, finalTitle, ...own],
+        [was, h1, ...own, ...words],
+        [was, finalTitle, h1, ...own, ...words],
+      ].map((parts) => fitDescription(parts.filter(Boolean)))
+        .find((t) => t && t !== was && !outside(t, DESCRIPTION_LIMITS) && !seenDescription.has(t.toLowerCase()));
+      if (fitted) {
         descEl.attr('content', fitted);
-        fixes.push({ kind: 'head', field: 'description', from: finalDescription, value: fitted, source: long ? 'too long: cut at a word' : 'too short: completed with the page\'s own paragraphs' });
+        const source = long ? 'too long: cut at a word' : 'too short: completed with the page\'s own words';
+        if (descFix) Object.assign(descFix, { value: fitted, source: `${descFix.source}; ${source}` });
+        else fixes.push({ kind: 'head', field: 'description', from: was, value: fitted, source });
         finalDescription = fitted;
-      } else open.push({ kind: 'head', field: 'description', page: d.path, reason: 'c', detail: `The description is ${finalDescription.length} characters (50–160 wanted) and the page gives no words of its own to complete it: the owner writes it` });
+      } else open.push({ kind: 'head', field: 'description', page: d.path, reason: 'c', detail: `The description is ${was.length} characters (50–160 wanted) and the page's own words (its paragraphs, heading, title and the texts it shows) give none that fits without repeating another page's: the owner writes it` });
     }
     if (finalDescription) seenDescription.add(finalDescription.toLowerCase());
     if (description) seenDescription.add(description.toLowerCase());
@@ -470,6 +519,13 @@ export async function applyAddress($, page, { dir, siteHost, newOrigin, byPath, 
       fixes.push({ kind: 'address', field: 'og:url', from: ogUrl.attr('content'), value: moved });
       ogUrl.attr('content', moved);
     }
+  }
+  // The same tags as a kept runtime's own data writes them again after load (a framework streams its head as data, e.g.
+  // ["link",{"rel":"canonical","href":"https://original/"}]): left naming the original, the page ends with two canonicals that
+  // conflict. Moved the same way; anything else in the script is left as it is.
+  if (newOrigin && allow) {
+    const inData = moveHeadData($, siteHost, newOrigin, byPath);
+    if (inData.moved) fixes.push({ kind: 'address', field: 'script-head-data', value: inData.moved, source: `the canonical / og:url the page's script writes after load (${inData.fields.join(', ')})` });
   }
   if (newOrigin && allow) {
     for (const { field, selector, attr } of ADDRESS_TAGS.filter((t) => t.field.endsWith(':image'))) {
@@ -684,6 +740,43 @@ function movedToNewSite(value, siteHost, newOrigin, byPath) {
   const p = decodeURIComponent(u.pathname);
   if (!byPath.has(p) && !byPath.has(p.replace(/\/$/, '') || '/')) return null;
   return new URL(`${u.pathname}${u.search}`, newOrigin).href;
+}
+
+// A key or value quoted in script data: `"`, or `\"` (and deeper) inside a string the script parses again.
+const Q = String.raw`\\*"`;
+/** The canonical link and og:url as script data writes them (either order of the two keys); the address is group `v`. */
+const HEAD_DATA = [
+  { field: 'canonical', re: new RegExp(String.raw`(${Q}rel${Q}\s*:\s*${Q}canonical${Q}\s*,\s*${Q}href${Q}\s*:\s*${Q})(?<v>[^"\\]+)(?=${Q})`, 'g') },
+  { field: 'canonical', re: new RegExp(String.raw`(${Q}href${Q}\s*:\s*${Q})(?<v>[^"\\]+)(?=${Q}\s*,\s*${Q}rel${Q}\s*:\s*${Q}canonical${Q})`, 'g') },
+  { field: 'og:url', re: new RegExp(String.raw`(${Q}property${Q}\s*:\s*${Q}og:url${Q}\s*,\s*${Q}content${Q}\s*:\s*${Q})(?<v>[^"\\]+)(?=${Q})`, 'g') },
+  { field: 'og:url', re: new RegExp(String.raw`(${Q}content${Q}\s*:\s*${Q})(?<v>[^"\\]+)(?=${Q}\s*,\s*${Q}property${Q}\s*:\s*${Q}og:url${Q})`, 'g') },
+];
+
+/**
+ * In the page's inline scripts (not structured data, which is kept as written): a canonical / og:url written as data and naming
+ * one of the copy's pages on the original's host moves to that page on the new site (movedToNewSite). Returns how many moved.
+ */
+export function moveHeadData($, siteHost, newOrigin, byPath) {
+  let moved = 0;
+  const fields = new Set();
+  for (const el of $('script:not([src])').toArray()) {
+    const type = String($(el).attr('type') ?? '').toLowerCase();
+    if (type === 'application/ld+json') continue;
+    const text = $(el).html();
+    if (!text || !/canonical|og:url/.test(text)) continue;
+    let out = text;
+    for (const { field, re } of HEAD_DATA) {
+      out = out.replace(re, (all, lead, v) => {
+        const to = movedToNewSite(v, siteHost, newOrigin, byPath);
+        if (!to || /["\\]/.test(to)) return all;
+        moved++;
+        fields.add(field);
+        return `${lead}${to}`;
+      });
+    }
+    if (out !== text) $(el).text(out);
+  }
+  return { moved, fields: [...fields] };
 }
 
 const exists = (f) => stat(f).then(() => true, () => false);

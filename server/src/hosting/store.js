@@ -7,6 +7,7 @@
 // Folders are by website, not by domain, so changing a website's domain only changes hosts.json.
 //   certs/<host>/                      its HTTPS certificate (hosting/certs.js), read by nginx
 //   acme/                              the answers Let's Encrypt asks for while it checks a domain
+//   boxes.json                         the port of each website's box, its back office run here (boxes/box.js): { <projectId>: { port } }
 import { copyFile, mkdir, readdir, readFile, readlink, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -62,6 +63,25 @@ export async function setHosts(projectId, primary, aliases = []) {
   }
   await writeAtomic(hostsFile(), `${JSON.stringify(hosts, null, 2)}\n`);
   return hosts;
+}
+
+// The address "Logins and data" passes to when the website's box answers them; the sites server sends it to that website's
+// own box, so it never reaches the internet (.invalid is never a real domain).
+export const BOX_TARGET = 'http://box.remastly.invalid';
+const boxesFile = () => path.join(hostingPaths.root, 'boxes.json');
+
+/** Every running box's port. @returns {Promise<Record<string, { port: number }>>} */
+export async function readBoxPorts() {
+  return readFile(boxesFile(), 'utf8').then(JSON.parse, () => ({}));
+}
+
+/** @param {string} projectId @param {number | null} port  null = the website has no box any more */
+export async function setBoxPort(projectId, port) {
+  siteDir(projectId);
+  const all = await readBoxPorts();
+  if (port) all[projectId] = { port };
+  else delete all[projectId];
+  await writeAtomic(boxesFile(), `${JSON.stringify(all, null, 2)}\n`);
 }
 
 /** The domain a website answers at (its primary) and the others that lead to it. @param {string} projectId */

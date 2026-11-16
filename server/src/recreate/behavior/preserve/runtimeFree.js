@@ -33,6 +33,7 @@ import { createHash } from 'node:crypto';
 import { motionPlan, withRebuiltMotion } from './rebuildMotion.js';
 import { settledStyles, withoutStartStates } from './startStates.js';
 import { loadedStyleChanges, readLoadedStyles, styledPaths, withLoadedStyles } from './loadedStyles.js';
+import { loadedA11yChanges, readLoadedA11y, withLoadedA11y } from './loadedA11y.js';
 import { CONTROLS_FILE, CONTROLS_JS, planReplay, probeControls, probeScrollStates, withReplay } from './controls.js';
 import { MOTION_FILE, motionJsMinified } from '../../emit/motionScript.js';
 import path from 'node:path';
@@ -248,13 +249,16 @@ export async function motionFor({ jobDir, copyDir, pages }) {
  * The page without its runtime, with the head the runtime left, the start states that runtime would have animated away
  * dropped (startStates.js; `settled` = the capture's reading of this page) and the rebuilt animations.
  */
-export function freePage(html, { only = null, head = null, original = null, motion = null, settled = null, loaded = null, outPath }) {
+export function freePage(html, { only = null, head = null, original = null, motion = null, settled = null, loaded = null, a11y = null, outPath }) {
   const stripped = withoutRuntime(html, only ? { only } : {});
   const withH = head ? withHead(stripped.html, head, { original }) : null;
   let out = withH?.html ?? stripped.html;
   // The styles the runtime set after load first (loadedStyles.js); a start state they did not settle is then dropped as before.
   const styled = withLoadedStyles(out, loaded);
   out = styled.html;
+  // The roles, names and keyboard reach the runtime gave its controls after load (loadedA11y.js): added, never changed.
+  const named = withLoadedA11y(out, a11y);
+  out = named.html;
   const shown = withoutStartStates(out, settled);
   out = shown.html;
   let rebuilt = null;
@@ -264,7 +268,7 @@ export function freePage(html, { only = null, head = null, original = null, moti
     out = r.html;
     rebuilt = { placed: r.placed, lost: r.lost, tokens: r.tokens, notCarried: pagePlan.notCarried, ...(r.lostPaths?.length && { lostPaths: r.lostPaths.slice(0, 5) }) };
   }
-  return { html: out, stripped, head: withH?.changed ?? null, rebuilt, ...(styled.written && { loadedStyles: styled.written }), ...(shown.cleared && { shown: { elements: shown.cleared, declarations: shown.declarations } }) };
+  return { html: out, stripped, head: withH?.changed ?? null, rebuilt, ...(styled.written && { loadedStyles: styled.written }), ...(named.written && { loadedA11y: { elements: named.written, attrs: named.attrs } }), ...(shown.cleared && { shown: { elements: shown.cleared, declarations: shown.declarations } }) };
 }
 
 /**
@@ -299,6 +303,8 @@ export async function decidePage({ browser, copyDir, outPath, motion = null, set
   // The style attributes the runtime set once the page had loaded (loadedStyles.js): read on the as-is page at the check's
   // widths, written into the page without it, so what the runtime placed or showed (a header's current-link pill) stays so.
   let loaded = null;
+  // And the accessibility attributes it gave the page's controls (loadedA11y.js), read the same way.
+  let a11y = null;
   {
     const a = await served(copyDir, {});
     try {
@@ -309,17 +315,25 @@ export async function decidePage({ browser, copyDir, outPath, motion = null, set
         await page.waitForTimeout(SETTLE_MS);
         return page;
       };
-      const readings = await readLoadedStyles(openAt, GATE_WIDTHS, styledPaths(html));
-      loaded = loadedStyleChanges(html, readings);
-    } catch (err) {
-      loaded = { list: [], varies: 0, error: String(err?.message ?? err).slice(0, 160) };
+      try {
+        const readings = await readLoadedStyles(openAt, GATE_WIDTHS, styledPaths(html));
+        loaded = loadedStyleChanges(html, readings);
+      } catch (err) {
+        loaded = { list: [], varies: 0, error: String(err?.message ?? err).slice(0, 160) };
+      }
+      try {
+        a11y = loadedA11yChanges(html, await readLoadedA11y(openAt, GATE_WIDTHS));
+      } catch (err) {
+        a11y = { list: [], varies: 0, refsDropped: 0, error: String(err?.message ?? err).slice(0, 160) };
+      }
     } finally {
       await a.close();
     }
   }
   // The head as the runtime left it changes no text of the body, so the reading above holds for it too.
-  const free = freePage(html, { head: before.head, original, motion, settled, loaded: loaded.list, outPath });
+  const free = freePage(html, { head: before.head, original, motion, settled, loaded: loaded.list, a11y: a11y.list, outPath });
   record.loadedStyles = { written: free.loadedStyles ?? 0, varies: loaded.varies, list: loaded.list, ...(loaded.error && { error: loaded.error }) };
+  record.loadedA11y = { elements: free.loadedA11y?.elements ?? 0, attrs: free.loadedA11y?.attrs ?? 0, varies: a11y.varies, refsDropped: a11y.refsDropped, list: a11y.list, ...(a11y.error && { error: a11y.error }) };
 
   // Every button as on the original: what a click does there that it does not do here is replayed (controls.js).
   log(`runtime ${pagePath}: do the buttons work as on the original?`);
@@ -469,7 +483,7 @@ export async function runtimeFreeCopy({ browser, copyDir, outDir, pages, decided
       }
       const html = await readFile(path.join(copyDir, p.outPath), 'utf8');
       const head = r.head ? { title: r.head.title?.to, description: r.head.description?.to } : null;
-      const free = freePage(html, { only: r.ids, head, original: await originalHead(p.outPath), motion, settled: settled.get(p.outPath), loaded: r.loadedStyles?.list, outPath: p.outPath });
+      const free = freePage(html, { only: r.ids, head, original: await originalHead(p.outPath), motion, settled: settled.get(p.outPath), loaded: r.loadedStyles?.list, a11y: r.loadedA11y?.list, outPath: p.outPath });
       if (r.replay?.plan) free.html = withReplay(free.html, r.replay.plan).html;
       results.push({ outPath: p.outPath, ...r, ...(free.rebuilt && { rebuilt: free.rebuilt }), ...(free.shown && { shown: free.shown }), files: free.stripped.files, html: free.html });
     }
