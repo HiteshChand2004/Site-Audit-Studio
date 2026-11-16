@@ -5,7 +5,10 @@ import { spawn } from 'node:child_process';
 
 const DOCKER = process.env.SAS_DOCKER || 'docker';
 
-export class DockerError extends Error {}
+export class DockerError extends Error {
+  /** @type {string} */
+  tail = '';
+}
 
 /**
  * Runs docker; its output, or a DockerError with what it said.
@@ -33,7 +36,10 @@ export function docker(args, { env = {}, input, timeoutMs = 120_000 } = {}) {
     child.on('close', (code, signal) => {
       clearTimeout(timer);
       if (code === 0) return resolve(out.trim());
-      reject(new DockerError(signal ? `docker ${args[0]} took too long and was stopped.` : (err.trim().split('\n').pop() || `docker ${args[0]} failed (${code}).`)));
+      const error = new DockerError(signal ? `docker ${args[0]} took too long and was stopped.` : (err.trim().split('\n').pop() || `docker ${args[0]} failed (${code}).`));
+      // What the command printed last (an app's install or build says there why it failed).
+      error.tail = `${out}\n${err}`.trim().split('\n').slice(-40).join('\n');
+      reject(error);
     });
   });
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Archive, Camera, Check, CircleCheck, CircleHelp, CircleX, CloudUpload, Power, Copy, Download, ExternalLink, Globe, History, Inbox, Link2, Loader2, RefreshCw, Rocket, Server, Trash2, Unplug, Upload } from 'lucide-react';
+import { Archive, Camera, Check, CircleCheck, CircleHelp, CircleX, CloudUpload, Code, Power, Copy, Download, ExternalLink, Globe, History, Inbox, Link2, Loader2, RefreshCw, Rocket, Server, Trash2, Unplug, Upload } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import Modal from '../../components/common/Modal.jsx';
 import ConfirmDialog from '../../components/common/ConfirmDialog.jsx';
@@ -289,6 +289,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
       <PassThroughCard key={boxTick} project={project} onChange={load} />
 
       <BoxCard project={project} onChange={async () => { setBoxTick((t) => t + 1); await load(); }} />
+      <AppCard project={project} onChange={async () => { setBoxTick((t) => t + 1); await load(); }} />
 
       <SwitchOffCard project={project} />
 
@@ -891,6 +892,277 @@ function BoxCard({ project, onChange }) {
       <ConfirmDialog open={Boolean(ask)} onClose={() => setAsk(null)} title={ask === 'remove' ? T.boxRemoveTitle : T.boxReplaceTitle}
         confirmLabel={ask === 'remove' ? T.boxRemove : T.boxReplace} danger onConfirm={confirm}>
         {ask === 'remove' ? T.boxRemoveText : T.boxReplaceText}
+      </ConfirmDialog>
+    </Card>
+  );
+}
+
+const APP_STEPS = ['download', 'install', 'build', 'start', 'check'];
+
+/** What GitHub sent back in the address when the app came back from it (Run my app on Remastly), read once. */
+function takeGitHubReturn() {
+  const q = new URLSearchParams(window.location.search);
+  const github = q.get('github');
+  if (!github) return null;
+  q.delete('github');
+  const message = q.get('message');
+  q.delete('message');
+  window.history.replaceState(null, '', `${window.location.pathname}${q.size ? `?${q}` : ''}${window.location.hash}`);
+  return { github, message };
+}
+
+/**
+ * Run my app on Remastly: the website's own code (from GitHub) run on Remastly's server with its settings, and "Logins and
+ * data" sent to it, so sign-in and the pages after it keep working once the old server is switched off.
+ */
+function AppCard({ project, onChange }) {
+  const [card, setCard] = useState(null);
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(() => takeGitHubReturn());
+  const [busy, setBusy] = useState(false);
+  const [repos, setRepos] = useState(null);
+  const [repoChoice, setRepoChoice] = useState('');
+  const [branch, setBranch] = useState('');
+  const [envText, setEnvText] = useState('');
+  const [askRemove, setAskRemove] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      setCard(await api.getApp(project.id));
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [project.id]);
+  useEffect(() => { load(); }, [load]);
+
+  const status = card?.app.status;
+  const connected = card?.github?.connected;
+  // The repositories to choose from, once GitHub is connected and no repository is chosen yet.
+  useEffect(() => {
+    if (!connected || status !== 'empty') return;
+    api.githubRepos().then((r) => {
+      setRepos(r);
+      if (r.repos[0]) {
+        setRepoChoice((c) => c || `${r.repos[0].installationId} ${r.repos[0].fullName}`);
+        setBranch((b) => b || r.repos[0].branch);
+      }
+    }, (err) => setError(err.message));
+  }, [connected, status]);
+  // While the app is being made, its steps are followed; the cards above follow when it is done.
+  useEffect(() => {
+    if (status !== 'starting') return undefined;
+    const t = setInterval(load, POLL_MS);
+    return () => clearInterval(t);
+  }, [status, load]);
+  const wasStarting = useRef(false);
+  useEffect(() => {
+    if (wasStarting.current && status && status !== 'starting') onChange();
+    wasStarting.current = status === 'starting';
+  }, [status, onChange]);
+
+  async function act(call) {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await call();
+      if (next?.app) setCard(next);
+      return true;
+    } catch (err) {
+      setError(err.message);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+  // To GitHub and back: Remastly answers with the address; the browser goes there.
+  const goTo = (call) => act(async () => { window.location.assign((await call()).url); });
+  async function setUpGitHub() {
+    await act(async () => {
+      const { action, manifest } = await api.setupGitHub({ returnTo: window.location.href });
+      // GitHub takes the app's description as a form posted by the browser.
+      const form = document.createElement('form');
+      form.method = 'post';
+      form.action = action;
+      const field = document.createElement('input');
+      field.type = 'hidden';
+      field.name = 'manifest';
+      field.value = manifest;
+      form.append(field);
+      document.body.append(form);
+      form.submit();
+    });
+  }
+
+  if (!card) return error ? <Alert tone="bad" title="The app card could not be loaded">{error}</Alert> : null;
+  const { app, github } = card;
+  const hasApp = status === 'running' || status === 'stopped';
+  const noticeAlert = notice && (
+    <Alert tone={notice.github === 'error' ? 'bad' : 'ok'} title="GitHub">
+      {notice.github === 'error' ? notice.message : notice.github === 'ready' ? T.appReady : notice.github === 'installed' ? T.appInstalled : T.appConnected(connected?.login ?? '')}
+    </Alert>
+  );
+
+  if (!card.available && !hasApp) {
+    return (
+      <Card icon={Code} title={T.appTitle} sub={T.appSub}>
+        <p className={ws.hint} style={{ margin: 0 }}>{T.appUnavailable}</p>
+        {card.setup && <p className={ws.hint} style={{ margin: 0 }}>{T.boxUnavailable}</p>}
+      </Card>
+    );
+  }
+
+  const settingRows = (app.app?.settings ?? []).length > 0 && (
+    <div className={styles.tableWrap}>
+      <table className={styles.records}>
+        <tbody>
+          {app.app.settings.map((s) => {
+            const set = app.settingsSet.includes(s.name);
+            return (
+              <tr key={s.name}>
+                <td><code>{s.name}</code>{s.example && <span className={styles.found}>{T.appSettingExample(s.example)}</span>}</td>
+                <td>
+                  <span className={styles.badge} data-status={set ? 'ready' : undefined}>{set ? T.appSettingSet : T.appSettingMissing}</span>
+                  {set && (
+                    <button type="button" className={styles.copy} disabled={busy} onClick={() => act(() => api.setAppSettings(project.id, { values: { [s.name]: '' } }))}>
+                      {T.appSettingRemove}
+                    </button>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  return (
+    <Card icon={Code} title={T.appTitle} sub={T.appSub}>
+      <div className={styles.domainBody}>
+        {noticeAlert}
+        {!github?.ready && (github?.canSetUp ? (
+          <>
+            <p className={ws.hint} style={{ margin: 0 }}>{T.appSetupText}</p>
+            <div className={styles.accountButtons}>
+              <Button variant="primary" size="sm" icon={busy ? Spin : undefined} disabled={busy} onClick={setUpGitHub}>{T.appSetupGitHub}</Button>
+            </div>
+          </>
+        ) : <p className={ws.hint} style={{ margin: 0 }}>{T.appNotSetUp}</p>)}
+
+        {github?.ready && !connected && (
+          <>
+            <p className={ws.hint} style={{ margin: 0 }}>{T.appConnectText}</p>
+            <div className={styles.accountButtons}>
+              <Button variant="primary" size="sm" icon={busy ? Spin : undefined} disabled={busy} onClick={() => goTo(() => api.connectGitHub({ returnTo: window.location.href }))}>{T.appConnect}</Button>
+            </div>
+          </>
+        )}
+
+        {connected && status === 'empty' && (
+          <>
+            {connected.installations.length === 0 || repos?.repos.length === 0 ? (
+              <p className={ws.hint} style={{ margin: 0 }}>{connected.installations.length === 0 ? T.appNoInstall : T.appNoRepos}</p>
+            ) : repos && (
+              <div className={styles.godaddyFields}>
+                <label className={form.field}>
+                  <span className={form.label}>{T.appRepoLabel}</span>
+                  <select className={form.input} value={repoChoice} onChange={(e) => {
+                    setRepoChoice(e.target.value);
+                    setBranch(repos.repos.find((r) => `${r.installationId} ${r.fullName}` === e.target.value)?.branch ?? '');
+                  }}>
+                    {repos.repos.map((r) => <option key={`${r.installationId} ${r.fullName}`} value={`${r.installationId} ${r.fullName}`}>{r.fullName}</option>)}
+                  </select>
+                </label>
+                <label className={form.field}>
+                  <span className={form.label}>{T.appBranchLabel}</span>
+                  <input className={form.input} value={branch} onChange={(e) => setBranch(e.target.value)} autoComplete="off" spellCheck={false} />
+                </label>
+              </div>
+            )}
+            {repos?.problems?.map((p) => <Alert key={p} tone="warn" title="GitHub">{p}</Alert>)}
+            <div className={styles.accountButtons}>
+              {repos?.repos.length > 0 && (
+                <Button variant="primary" size="sm" icon={busy ? Spin : undefined} disabled={busy || !repoChoice || !branch.trim()} onClick={() => {
+                  const [installationId, fullName] = repoChoice.split(' ');
+                  act(() => api.chooseAppRepo(project.id, { installationId: Number(installationId), fullName, branch: branch.trim() }));
+                }}>{busy ? T.appReading : T.appChooseRepo}</Button>
+              )}
+              <Button size="sm" icon={ExternalLink} disabled={busy} onClick={() => goTo(() => api.connectGitHub({ returnTo: window.location.href, install: true }))}>{T.appInstall}</Button>
+            </div>
+          </>
+        )}
+
+        {app.repo && app.app && (
+          <>
+            <p className={styles.confirmTitle}>{hasApp ? T.appRunningTitle : T.appFacts(app)}</p>
+            {hasApp && <p className={ws.hint} style={{ margin: 0 }}>{T.appFacts(app)}</p>}
+            {status === 'stopped' && <Alert tone="bad" title="Not running">{T.appStopped}</Alert>}
+            {app.app.warnings.map((w) => <Alert key={w} tone="warn" title="Check this">{w}</Alert>)}
+
+            {status === 'starting' && (
+              <>
+                <StepList steps={APP_STEPS.map((k, i) => {
+                  const at = APP_STEPS.indexOf(app.step);
+                  return { key: k, title: T.appSteps[k], state: i < at ? 'done' : i === at ? 'active' : 'pending' };
+                })} />
+                <p className={ws.hint} style={{ margin: 0 }}>{T.appStepsNote}</p>
+              </>
+            )}
+
+            {app.error && status !== 'starting' && (
+              <Alert tone={hasApp ? 'warn' : 'bad'} title={T.appFailedTitle}>
+                {app.error}
+                {app.log && (
+                  <details>
+                    <summary>{T.appLogTitle}</summary>
+                    <pre className={styles.rules} style={{ whiteSpace: 'pre-wrap', maxHeight: 260, overflow: 'auto' }}>{app.log}</pre>
+                  </details>
+                )}
+              </Alert>
+            )}
+
+            {hasApp && (card.usedForLogins ? (
+              <p className={ws.hint} style={{ margin: 0 }}><Check size={14} aria-hidden="true" /> {T.appUsed}</p>
+            ) : (
+              <>
+                <div className={styles.accountButtons}>
+                  <Button variant="primary" size="sm" disabled={busy} onClick={async () => { if (await act(() => api.useApp(project.id))) await onChange(); }}>{T.appUse}</Button>
+                </div>
+                <p className={ws.hint} style={{ margin: 0 }}>{T.appUseText(app.app.paths)}</p>
+              </>
+            ))}
+
+            {status !== 'starting' && (
+              <>
+                <p className={styles.confirmTitle}>{T.appSettingsTitle}</p>
+                <p className={ws.hint} style={{ margin: 0 }}>{T.appSettingsText}</p>
+                {settingRows}
+                {app.missing.length > 0 && <p className={ws.hint} style={{ margin: 0 }}>{T.appMissingNote(app.missing.length)}</p>}
+                <textarea className={form.input} rows={4} value={envText} onChange={(e) => setEnvText(e.target.value)} placeholder={T.appSettingsPlaceholder} autoComplete="off" spellCheck={false} style={{ fontFamily: 'var(--font-mono, monospace)' }} />
+                <p className={ws.hint} style={{ margin: 0 }}>{T.appDatabaseNote}</p>
+                <div className={styles.accountButtons}>
+                  <Button size="sm" disabled={busy || !envText.trim()} onClick={async () => { if (await act(() => api.setAppSettings(project.id, { text: envText }))) setEnvText(''); }}>{T.appSettingsSave}</Button>
+                  <Button variant="primary" size="sm" icon={busy ? Spin : Rocket} disabled={busy} onClick={() => act(() => api.startApp(project.id))}>
+                    {hasApp ? T.appUpdate : status === 'failed' ? T.appTryAgain : T.appStart}
+                  </Button>
+                  <Button size="sm" icon={Trash2} disabled={busy} onClick={() => setAskRemove(true)}>{T.appRemove}</Button>
+                </div>
+              </>
+            )}
+          </>
+        )}
+
+        {connected && (
+          <p className={ws.hint} style={{ margin: 0 }}>
+            {T.appConnected(connected.login)}{' '}
+            <button type="button" className={styles.copy} disabled={busy} onClick={() => act(async () => { await api.disconnectGitHub(); await load(); })}>{T.appDisconnect}</button>
+          </p>
+        )}
+        {error && <Alert tone="bad" title="Not done">{error}</Alert>}
+      </div>
+      <ConfirmDialog open={askRemove} onClose={() => setAskRemove(false)} title={T.appRemoveTitle} confirmLabel={T.appRemove} danger
+        onConfirm={async () => { setAskRemove(false); if (await act(() => api.removeApp(project.id))) await onChange(); }}>
+        {T.appRemoveText}
       </ConfirmDialog>
     </Card>
   );

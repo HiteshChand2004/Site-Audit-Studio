@@ -17,14 +17,21 @@ const APP_SEGMENTS = new Set(['api', '_api', 'graphql', 'auth', 'oauth', 'login'
 
 const fileOf = (projectId) => path.join(projectDir(projectId), 'golive.json');
 
-/** @param {string} projectId @returns {Promise<{ target: string, paths: string[] } | null>} */
+/**
+ * `fallback`: every address the copy has no file for goes there too (the website's app on Remastly, apps/: its pages after
+ * sign-in, its build's own files), after the copy's own rules.
+ * @typedef {{ target: string, paths: string[], fallback?: boolean }} PassThrough
+ */
+
+/** @param {string} projectId @returns {Promise<PassThrough | null>} */
 export async function readPassThrough(projectId) {
   const j = await readFile(fileOf(projectId), 'utf8').then(JSON.parse, () => null);
   const p = j?.passThrough;
-  return p && typeof p.target === 'string' && Array.isArray(p.paths) && p.paths.length ? { target: p.target, paths: p.paths } : null;
+  if (!(p && typeof p.target === 'string' && Array.isArray(p.paths) && p.paths.length)) return null;
+  return { target: p.target, paths: p.paths, ...(p.fallback === true && { fallback: true }) };
 }
 
-/** Saves (or with null, removes) the website's pass-through. @param {string} projectId @param {{ target: string, paths: string[] } | null} value */
+/** Saves (or with null, removes) the website's pass-through. @param {string} projectId @param {PassThrough | null} value */
 export async function savePassThrough(projectId, value) {
   const file = fileOf(projectId);
   const current = await readFile(file, 'utf8').then(JSON.parse, () => ({}));
@@ -91,6 +98,9 @@ export function parsePaths(input) {
 export function redirectsFor(pt) {
   return pt.paths.map((p) => (p.endsWith('/*') ? `${p}  ${pt.target}${p.slice(0, -1)}:splat  200!` : `${p}  ${pt.target}${p}  200!`)).join('\n');
 }
+
+/** The rule that sends every address the copy has no file for to the target (no "!"): it goes last. @param {PassThrough} pt */
+export const fallbackFor = (pt) => (pt.fallback ? `/*  ${pt.target}/:splat  200` : null);
 
 /**
  * Every address (path and query) the copy asked its own server for and did not have, whose path looks like an app's

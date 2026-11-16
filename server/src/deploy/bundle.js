@@ -48,12 +48,13 @@ async function listFiles(root) {
  * The files of a finished copy's output, as they will be served: [{ name, file, size, store }] with `name` the path on the site.
  * Throws DeployError (message safe to show) when this output cannot go on a static host.
  * `redirects`: rules that go first in the site's _redirects (Go live Step 3: the paths passed to the old app), before the copy's own.
+ * `lastRedirects`: rules that go after the copy's own (everything the copy has no file for, passed to the website's app).
  * `extraFiles`: files added beside the copy's own (the content snapshot: { name on the site, file on disk }).
  * `formsEndpoint`: where the copy's forms send (Form entries: this website's address at Remastly), written into its
  * sas-forms.json; null leaves the copy's own setting as it is.
- * @param {{ dir: string, report: any, stack: string, redirects?: string | null, formsEndpoint?: string | null, extraFiles?: { name: string, file: string }[] }} o
+ * @param {{ dir: string, report: any, stack: string, redirects?: string | null, lastRedirects?: string | null, formsEndpoint?: string | null, extraFiles?: { name: string, file: string }[] }} o
  */
-export async function planDeploy({ dir, report, stack, redirects = null, formsEndpoint = null, extraFiles = [] }) {
+export async function planDeploy({ dir, report, stack, redirects = null, lastRedirects = null, formsEndpoint = null, extraFiles = [] }) {
   const out = reportOutputs(report)[stack];
   if (out?.status !== 'ready') throw new DeployError(`This copy has no finished ${stack} version to deploy.`);
   if (!STATIC_STACKS.has(stack)) {
@@ -74,10 +75,10 @@ export async function planDeploy({ dir, report, stack, redirects = null, formsEn
     store: STORED.test(f.rel),
   }));
   for (const f of extraFiles) entries.push({ name: f.name, file: f.file, size: (await stat(f.file)).size, store: false });
-  if (redirects) {
+  if (redirects || lastRedirects) {
     const at = entries.findIndex((e) => e.name === '_redirects');
     const own = at >= 0 ? await readFile(entries[at].file, 'utf8') : '';
-    const content = Buffer.from(`# Remastly, Go live: the content snapshot, then the paths passed to the old app\n${redirects}\n${own ? `\n${own}` : ''}`);
+    const content = Buffer.from(`# Remastly, Go live: the content snapshot, then the paths passed to the old app\n${redirects ?? ''}\n${own ? `\n${own.replace(/\s+$/, '')}\n` : ''}${lastRedirects ? `\n# Remastly: everything else, to the website's app\n${lastRedirects}\n` : ''}`);
     const entry = { name: '_redirects', content, size: content.length, store: false };
     if (at >= 0) entries[at] = /** @type {any} */ (entry);
     else entries.push(/** @type {any} */ (entry));

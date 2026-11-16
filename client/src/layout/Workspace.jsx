@@ -61,8 +61,12 @@ function stepStates({ audit, analysis, job, result, reauditJob }) {
   };
 }
 
-/** The section a project opens on: a running job's, else the overview. */
+/** Back from GitHub (Go live → Run my app on Remastly): the address says so until the card reads it. */
+const fromGitHub = () => new URLSearchParams(window.location.search).has('github');
+
+/** The section a project opens on: Go live when coming back from GitHub, a running job's, else the overview. */
 function startStep({ analysis, job }) {
+  if (fromGitHub()) return 'live';
   if (isJobActive(job)) return 'create';
   if (isJobActive(analysis)) return 'check';
   return 'overview';
@@ -80,7 +84,7 @@ export default function Workspace({ project, audit, auditLoading, onOpenSettings
   const reloadAudit = useProjects((s) => s.reloadAudit);
   const result = latest?.result;
   const [step, setStep] = useState(() => startStep({ analysis, job }));
-  const [chosen, setChosen] = useState(false);
+  const [chosen, setChosen] = useState(fromGitHub);
   // A page picked elsewhere (Results' page pictures) that Compare opens on.
   const [comparePage, setComparePage] = useState(null);
   // Until the user picks a tab, the project opens where its work stands (jobs are found after the project loads).

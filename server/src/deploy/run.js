@@ -7,7 +7,7 @@
 import { recreateDir } from '../recreate/workspace.js';
 import { planDeploy, zipToTemp } from './bundle.js';
 import { HostingError, netlifyClient, PENDING_STATES } from './netlify.js';
-import { readPassThrough, redirectsFor } from './passThrough.js';
+import { fallbackFor, readPassThrough, redirectsFor } from './passThrough.js';
 import { formsEndpointOf } from '../forms/connect.js';
 import { snapshotForDeploy } from './snapshot.js';
 import { failInterrupted, SERVER, serverReleases, siteOfProject, updateDeployment } from './store.js';
@@ -48,6 +48,7 @@ export async function runDeploy({ deployment, projectId, recreateId, report, sta
       dir: recreateDir(projectId, recreateId), report, stack,
       // The snapshot's rules first: an address it answers is served from it even under a path passed to the old app (/api/*).
       redirects: [snapshot?.redirects, passThrough && redirectsFor(passThrough)].filter(Boolean).join('\n') || null,
+      lastRedirects: passThrough && fallbackFor(passThrough),
       extraFiles: snapshot?.files ?? [],
       formsEndpoint: (await formsEndpointOf(projectId)).endpoint,
     });
