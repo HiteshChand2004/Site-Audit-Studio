@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { FIXES, FIELDS, KINDS_BY_KEY, MARKUP_PASS, emptyCounts, fixGroup, fixOf, goneBy } from '../src/copy/fixRegistry.js';
 
 test('counts and the markup pass keep their kinds and their order', () => {
-  assert.deepEqual(Object.keys(emptyCounts()), ['alt', 'names', 'aria', 'head', 'data', 'address', 'lang', 'anchors', 'linktext', 'headings', 'prohibited', 'scrollable', 'lcp', 'lazy', 'webp']);
+  assert.deepEqual(Object.keys(emptyCounts()), ['alt', 'names', 'aria', 'head', 'data', 'address', 'lang', 'anchors', 'linktext', 'headings', 'prohibited', 'scrollable', 'lcp', 'lazy', 'webp', 'size']);
   assert.ok(Object.values(emptyCounts()).every((v) => v === 0));
   assert.deepEqual(MARKUP_PASS.map((f) => f.kind), ['anchors', 'linktext', 'headings', 'prohibited', 'scrollable']);
   assert.deepEqual(MARKUP_PASS.filter((f) => f.needs === 'perf').map((f) => f.kind), ['scrollable']);
@@ -14,10 +14,11 @@ test('counts and the markup pass keep their kinds and their order', () => {
 
 test('the checks each kind answers are the ones the re-check used before', () => {
   const asIs = Object.fromEntries(FIXES.filter((f) => f.targets.length).map((f) => [f.kind, f.targets]));
-  assert.deepEqual(Object.keys(asIs), ['alt', 'names', 'aria', 'data', 'lang', 'viewport', 'linktext', 'headings', 'prohibited', 'scrollable', 'lcp', 'lazy', 'webp', 'css']);
+  assert.deepEqual(Object.keys(asIs), ['alt', 'names', 'aria', 'data', 'lang', 'viewport', 'linktext', 'headings', 'prohibited', 'scrollable', 'lcp', 'lazy', 'webp', 'size', 'css']);
   assert.deepEqual(KINDS_BY_KEY.get('axe.link-name'), ['names', 'linktext']);
   assert.deepEqual(KINDS_BY_KEY.get('crawl.meta-tags'), ['viewport', 'field:themeColor', 'field:icon']);
-  assert.deepEqual(KINDS_BY_KEY.get('lighthouse.total-byte-weight'), ['webp', 'css']);
+  assert.deepEqual(KINDS_BY_KEY.get('lighthouse.total-byte-weight'), ['webp', 'size', 'css']);
+  assert.deepEqual(KINDS_BY_KEY.get('lighthouse.uses-responsive-images'), ['size']);
   assert.deepEqual(KINDS_BY_KEY.get('seo.title-tag.length'), ['field:title']);
   assert.deepEqual(Object.keys(FIELDS), ['title', 'description', 'canonical', 'og', 'themeColor', 'icon']);
   assert.equal(fixOf('prohibited').what, 'role="img" on a named element with no text');
