@@ -86,6 +86,8 @@ export async function knownPages(project, { analysisIds, recreateReports }) {
       const key = pathKeyOf(p.url);
       if (Number.isInteger(p.depth) && !(depthOf.get(key) <= p.depth)) depthOf.set(key, p.depth);
     }
+    // A page robots.txt closes was never read, but it is a page of the owner's site: it is offered and copied like the rest.
+    for (const u of crawl?.robotsBlocked ?? []) add(u);
   }
   for (const report of recreateReports) for (const p of report?.pages ?? []) if (p.url && !p.notFound) add(p.url);
   const rankOf = importanceOf({ homeUrl: project.url, homeLinks: homeLinks ?? [], depthOf });

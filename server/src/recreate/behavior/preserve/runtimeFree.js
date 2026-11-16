@@ -137,7 +137,7 @@ export const MOTION_HOVER_MS = 20000;
 /** How far the element count may move before the page counts as holding other content (a runtime prunes or adds parts). */
 export const ELEMENT_SHARE = 0.05;
 /** The differences that keep a page's runtime even when editable components are preferred: what the Results check counts. */
-export const KEEP_FOR = new Set(['hover', 'reveal', 'loops', 'elements', 'control']);
+export const KEEP_FOR = new Set(['hover', 'reveal', 'loops', 'feeds', 'elements', 'control']);
 // The name the Results check pairs hovers by (reaudit/motion.js hoverKey): tag + visible text without white space.
 const hoverKey = (h) => `${h.tag}|${String(h.text ?? '').toLowerCase().replace(/\s+/g, '').slice(0, 40)}`;
 
@@ -154,7 +154,9 @@ export async function motionAt(browser, base, pagePath, { hoverFirst = [] } = {}
     await page.waitForTimeout(SETTLE_MS);
     const elements = await page.evaluate(() => document.querySelectorAll('body *:not(script):not(style):not(link):not(noscript):not(template)').length);
     const m = await measureMotion(page, { width: MOTION_WIDTH, height: viewOf(MOTION_WIDTH).viewport.height, budgetMs: MOTION_HOVER_MS, focus: false, hoverFirst });
-    return { elements, hovers: [...new Set((m.hover ?? []).map(hoverKey))], reveals: m.reveal?.elements?.length ?? 0, loops: m.loops?.loops?.length ?? 0 };
+    return { elements, hovers: [...new Set((m.hover ?? []).map(hoverKey))], reveals: m.reveal?.elements?.length ?? 0, loops: m.loops?.loops?.length ?? 0,
+      // Parts that change by themselves at a steady pace (what the Results check's "Parts that change by themselves" pairs).
+      feeds: (m.feeds ?? []).filter((f) => f.ms).length };
   } finally {
     await context.close();
   }
@@ -176,6 +178,11 @@ export function motionGaps(free, asIs) {
   // or a pulse the rebuilt animations do not cover. A reading without a count (an older one) is no difference.
   if (Number.isFinite(asIs.loops) && Number.isFinite(free.loops) && free.loops < asIs.loops) {
     gaps.push({ kind: 'loops', width: MOTION_WIDTH, lost: asIs.loops - free.loops, text: `at ${MOTION_WIDTH} px ${free.loops} animations keep running instead of ${asIs.loops}` });
+  }
+  // A feed, ticker or highlight that moves on at a steady pace (the "Parts that change by themselves" row). Only this counted
+  // kind keeps the runtime: a page that merely moves in some other way the Results check does not count still loses it.
+  if (Number.isFinite(asIs.feeds) && Number.isFinite(free.feeds) && free.feeds < asIs.feeds) {
+    gaps.push({ kind: 'feeds', width: MOTION_WIDTH, lost: asIs.feeds - free.feeds, text: `at ${MOTION_WIDTH} px ${free.feeds} parts change by themselves instead of ${asIs.feeds}` });
   }
   if (Math.abs(free.elements - asIs.elements) > asIs.elements * ELEMENT_SHARE) {
     gaps.push({ kind: 'elements', width: MOTION_WIDTH, with: asIs.elements, without: free.elements, text:`at ${MOTION_WIDTH} px the page holds ${free.elements} elements instead of ${asIs.elements} (the framework's code ${free.elements > asIs.elements ? 'takes out' : 'draws'} parts of it)` });
@@ -382,7 +389,7 @@ export async function decidePage({ browser, copyDir, outPath, motion = null, set
       try {
         const a = await motionAt(browser, asIs.base, pagePath);
         const f = await motionAt(browser, freeSide.base, pagePath, { hoverFirst: a.hovers });
-        motionRead = { asIs: { hovers: a.hovers.length, reveals: a.reveals, loops: a.loops, elements: a.elements }, free: { hovers: f.hovers.length, reveals: f.reveals, loops: f.loops, elements: f.elements } };
+        motionRead = { asIs: { hovers: a.hovers.length, reveals: a.reveals, loops: a.loops, feeds: a.feeds, elements: a.elements }, free: { hovers: f.hovers.length, reveals: f.reveals, loops: f.loops, feeds: f.feeds, elements: f.elements } };
         gaps.push(...motionGaps(f, a));
       } catch (err) {
         // Not measured is not a difference found: the page goes on as decided by the other checks, and the record says so.
@@ -407,6 +414,7 @@ export async function decidePage({ browser, copyDir, outPath, motion = null, set
       ...(keep.some((g) => g.kind === 'hover') && { hovers: keep.find((g) => g.kind === 'hover').lost }),
       ...(keep.some((g) => g.kind === 'reveal') && { reveals: keep.find((g) => g.kind === 'reveal').lost }),
       ...(keep.some((g) => g.kind === 'loops') && { loops: keep.find((g) => g.kind === 'loops').lost }),
+      ...(keep.some((g) => g.kind === 'feeds') && { feeds: keep.find((g) => g.kind === 'feeds').lost }),
       ...(keep.some((g) => g.kind === 'control') && { controls: keep.filter((g) => g.kind === 'control').length }),
       ...(elements && { elements: { with: elements.with, without: elements.without } }),
     };

@@ -592,6 +592,7 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
   save('crawl.json', {
     pages: allPages,
     skippedByRobots: crawlResult.skippedByRobots,
+    robotsBlocked: crawlResult.robotsBlocked ?? [],
     truncated: crawlResult.truncated,
     // Found but not read (the page limit, or the crawl's time): in queue order, and why.
     notRead: crawlResult.notRead ?? [],
