@@ -14,8 +14,12 @@ import { createPrefetch } from './prefetch.js';
 /** The extensions of files a copy holds (pages, which have none, are never fetched this way). */
 const FILE_EXT = 'm?js|css|png|jpe?g|gif|webp|avif|svg|ico|mp4|webm|ogv|mov|mp3|ogg|wav|m4a|woff2?|ttf|otf|eot|wasm|json|webmanifest|pdf';
 const MEDIA_EXT = /\.(mp4|webm|ogv|mov|mp3|ogg|wav|m4a)$/i;
-/** A quoted root-relative address of a file ("/assets/x-1a2b.mp4", "/favicon.ico?v=2"); "//host" is not one. */
-const ROOT_REF = new RegExp(`["'\`](/(?!/)[\\w\\-./~%@+]+?\\.(?:${FILE_EXT}))(?:\\?[^"'\`\\s<>]*)?(?=\\\\?["'\`])`, 'gi');
+/**
+ * A quoted root-relative address of a file ("/assets/x-1a2b.mp4", "/favicon.ico?v=2"); "//host" is not one. Single spaces
+ * inside it count ("/Website Images/video/film.mp4": a site that names its folders with spaces writes them so in its pages,
+ * and the browser encodes them); never at its start or end, never two in a row.
+ */
+const ROOT_REF = new RegExp(`["'\`](/(?!/)[\\w\\-./~%@+]+?(?: [\\w\\-./~%@+]+?)*?\\.(?:${FILE_EXT}))(?:\\?[^"'\`\\s<>]*)?(?=\\\\?["'\`])`, 'gi');
 /** A quoted absolute address of a file. */
 const ABS_REF = new RegExp(`["'\`](https?://[\\w.-]+(?::\\d+)?/[\\w\\-./~%@+]+?\\.(?:${FILE_EXT}))(?:\\?[^"'\`\\s<>]*)?(?=\\\\?["'\`])`, 'gi');
 /** A quoted relative address in a module ("./chunk-1a2b.mjs", "../x.js"): resolved against the module's own address. */
