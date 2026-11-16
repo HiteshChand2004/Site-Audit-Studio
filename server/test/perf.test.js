@@ -7,7 +7,7 @@ import http from 'node:http';
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { analyzeTiming, LIGHTHOUSE_RESERVE_MS, noteLowMemory, runAnalysis, stepBudget, STEPS } from '../src/audit/index.js';
+import { analyzeTiming, LIGHTHOUSE_RESERVE_MS, noteLowMemory, pagesExtraMs, runAnalysis, stepBudget, STEPS } from '../src/audit/index.js';
 import { maxParallel, parallelism } from '../src/audit/resources.js';
 import { launchBrowser } from '../src/audit/render.js';
 import { captureScreenshots } from '../src/audit/screenshots.js';
@@ -113,8 +113,11 @@ test('a step never uses the time kept for the steps after it', () => {
 });
 
 test('a slow machine can give the analysis more time (SAS_TIMEOUT_SCALE, SAS_ANALYZE_MINUTES)', () => {
-  assert.deepEqual(analyzeTiming({}), { scale: 1, budgetMs: 6 * 60000, lighthouseReserveMs: LIGHTHOUSE_RESERVE_MS });
-  assert.deepEqual(analyzeTiming({ SAS_TIMEOUT_SCALE: '2' }), { scale: 2, budgetMs: 12 * 60000, lighthouseReserveMs: 2 * LIGHTHOUSE_RESERVE_MS });
+  assert.deepEqual(analyzeTiming({}), { scale: 1, budgetMs: 6 * 60000, lighthouseReserveMs: LIGHTHOUSE_RESERVE_MS, explicit: false });
+  assert.deepEqual(analyzeTiming({ SAS_TIMEOUT_SCALE: '2' }), { scale: 2, budgetMs: 12 * 60000, lighthouseReserveMs: 2 * LIGHTHOUSE_RESERVE_MS, explicit: false });
+  // A Check of many pages gets the time its crawl and link check take beyond a small site's; a total set by hand is kept.
+  assert.deepEqual([pagesExtraMs(25), pagesExtraMs(150), pagesExtraMs(300)], [0, 81000, 312000]);
+  assert.equal(analyzeTiming({ SAS_ANALYZE_MINUTES: '8' }).explicit, true);
   assert.equal(analyzeTiming({ SAS_TIMEOUT_SCALE: '1.5', SAS_ANALYZE_MINUTES: '8' }).budgetMs, 8 * 60000);
   // Out of range or not a number: the default.
   for (const v of ['0.5', '9', 'fast', '']) assert.equal(analyzeTiming({ SAS_TIMEOUT_SCALE: v }).scale, 1);

@@ -172,4 +172,14 @@ export const MIGRATIONS = [
       db.exec('UPDATE projects SET max_pages = 150 WHERE max_pages = 100 AND max_pages_chosen = 0');
     },
   },
+  {
+    // "Pages to check" up to 300 (was 150): the same move as the one above, for projects at exactly the default of 150 that
+    // nobody chose (a number set by hand is marked and stays). Also applied by the server when it starts, once.
+    id: '2026-11-16-check-pages-300',
+    onStart: true,
+    up(db) {
+      if (!hasColumn(db, 'projects', 'max_pages_chosen')) db.exec('ALTER TABLE projects ADD COLUMN max_pages_chosen INTEGER NOT NULL DEFAULT 0');
+      db.exec('UPDATE projects SET max_pages = 300 WHERE max_pages = 150 AND max_pages_chosen = 0');
+    },
+  },
 ];

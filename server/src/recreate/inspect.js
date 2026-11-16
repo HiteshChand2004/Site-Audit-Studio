@@ -1,6 +1,7 @@
 // Recreate step 1, "Inspecting pages": page discovery, then a Playwright capture of every selected
 // page at 1440 / 768 / 375. Chromium runs behind the SSRF egress proxy, like Analyze.
 // Writes capture/manifest.json and sets ctx.pages / ctx.discovery for the later steps.
+import { copyPageCap } from './pageCap.js';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { launchBrowser, renderHtml } from '../audit/render.js';
@@ -268,6 +269,13 @@ export async function inspectStage(ctx) {
 
   // The limits follow the work: every page beyond the base set extends this step, the job and the later steps (index.js).
   ctx.scaleToPages?.(discovery.pages.length);
+  // Pages found but left out by the page limit (the project's setting, or the server's SAS_COPY_MAX_PAGES): said only when
+  // some were, and how many.
+  const leftOut = (discovery.beyondLimit ?? []).filter((b) => b.reason !== 'single-page');
+  if (!resumed && leftOut.length) {
+    const cap = copyPageCap();
+    report.warnings.push(`${leftOut.length} more ${leftOut.length === 1 ? 'page was' : 'pages were'} found but not copied because of the page limit (${discovery.pages.length} copied${cap != null ? `; this server copies at most ${cap} per copy` : ''}); links to ${leftOut.length === 1 ? 'it' : 'them'} open a notice page in the copy.`);
+  }
 
   const captured = new Map(); // discovery index → page (kept in discovery order, the homepage first)
   const failedPages = [];

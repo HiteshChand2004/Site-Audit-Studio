@@ -22,8 +22,9 @@ import { RecreateError } from './errors.js';
 const BACKEND_PATH =
   /(^|\/)(log-?in|sign-?in|sign-?up|register|logout|account|my-account|cart|basket|checkout|wp-admin|wp-login\.php|admin|dashboard)(\/|\.html?$|$)/i;
 const NON_PAGE = /\.(pdf|jpe?g|png|gif|webp|avif|svg|ico|mp4|webm|mov|mp3|wav|zip|rar|7z|gz|dmg|exe|docx?|xlsx?|pptx?|csv|json|xml|txt|css|js|woff2?|ttf)$/i;
-// Enough candidates to fill the limit after skips, without crawling the whole site.
-const crawlBudget = (limit) => Math.min(60, 1 + limit * 3 + 10);
+// Enough candidates to fill the limit after skips, without crawling the whole site: three per page wanted for a few pages,
+// at most 60, and never fewer than the pages wanted (before, a copy set to 120 pages could never get more than 60).
+export const crawlBudget = (limit) => Math.max(Math.min(60, 1 + limit * 3 + 10), limit + 1 + 10);
 // "All pages": every page the crawl can reach, up to the safety cap (+ room for skipped URLs), any depth that matters.
 const ALL_PAGES_EXTRA = 50;
 const ALL_PAGES_DEPTH = 8;

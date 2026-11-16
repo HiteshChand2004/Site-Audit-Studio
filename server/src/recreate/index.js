@@ -210,7 +210,9 @@ async function recreate({
     // An as-is copy takes exactly the pages the user chose (discover.js include): as many as there are.
     // SAS_COPY_MAX_PAGES caps an ordinary copy (an as-is copy's pages are capped where they are chosen, asIsPagesOf).
     pageLimit: asIs ? asIs.pages.length : exact ? SITE_PAGE_CAP - 1 : Math.min(pageLimitOf(project.recreate_pages), (copyPageCap() ?? SITE_PAGE_CAP) - 1),
-    allPages: !asIs && (exact || (isAllPages(project.recreate_pages) && copyPageCap() == null)),
+    // "All pages" reads the whole site; the server's cap (SAS_COPY_MAX_PAGES) limits how many pages that gives (pageLimit),
+    // never turns it into a sample (with the cap set, a site of 107 pages was copied from a sample of 60).
+    allPages: !asIs && (exact || isAllPages(project.recreate_pages)),
     include: asIs ? new Set(asIs.pages.map((u) => pageKey(u))) : null,
     asIs,
     exact,
@@ -250,10 +252,6 @@ async function recreate({
     },
   };
   ctx.report.baseUrl = ctx.baseUrl;
-  const cap = copyPageCap();
-  if (cap != null && !asIs && !exact && pageLimitOf(project.recreate_pages) > cap - 1) {
-    ctx.report.warnings.push(`This server copies at most ${cap} pages per copy (SAS_COPY_MAX_PAGES), so the other pages of the site link to a notice page in the copy.`);
-  }
   // Without the new site's address the full addresses of the copy (canonical, sitemap, link previews, structured data)
   // can only name the original site: said plainly (the app asks for the address before a copy is made, full-site E.1).
   if (!project.target_domain) {

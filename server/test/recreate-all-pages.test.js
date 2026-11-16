@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { db, projectDir } from '../src/db/index.js';
 import { capturePage } from '../src/recreate/capture/index.js';
-import { discoverPages } from '../src/recreate/discover.js';
+import { crawlBudget, discoverPages } from '../src/recreate/discover.js';
 import { BASE_PAGES, runRecreate, STAGES, STEPS } from '../src/recreate/index.js';
 import { ALL_PAGES, isAllPages, pageLimitOf, SITE_PAGE_CAP } from '../src/recreate/inputs.js';
 import { userPolicy, withNetPolicy } from '../src/security/netGuard.js';
@@ -137,4 +137,8 @@ test('a page that stalls is tried once more at the end of the step, in a fresh b
   assert.deepEqual(calls, ['/', '/about.html', '/about.html']);
   assert.deepEqual(report.pages.map((p) => p.path), ['/', '/about.html']);
   assert.ok(lines.some((l) => /\/about\.html stalled the first time → captured again in a fresh browser/.test(l)), lines.join('\n'));
+});
+
+test('a sample is never smaller than the pages asked for: 3 a page for a few, at most 60, but a copy of 120 pages reads 131', () => {
+  assert.deepEqual([crawlBudget(0), crawlBudget(5), crawlBudget(20), crawlBudget(59), crawlBudget(120), crawlBudget(149)], [11, 26, 60, 70, 131, 160]);
 });

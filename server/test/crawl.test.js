@@ -4,7 +4,9 @@ import assert from 'node:assert/strict';
 import { startFixtureServer } from './serve-fixture.js';
 import { fetchPage } from '../src/audit/http.js';
 import { crawl } from '../src/audit/crawler.js';
-import { checkLinks } from '../src/audit/linkChecker.js';
+import { checkLinks, linksToCheck } from '../src/audit/linkChecker.js';
+import { createServer } from 'node:http';
+import { linksMaxMs } from '../src/audit/index.js';
 import { loadRobots } from '../src/audit/robots.js';
 import { loadSitemaps } from '../src/audit/sitemap.js';
 import { pageKey } from '../src/audit/util.js';
@@ -107,4 +109,37 @@ test('a folder\'s index file is the folder: a homepage linked as / and /index.ht
   same('https://example.com/index.html?lang=fr', 'https://example.com/?lang=fr');
   assert.notEqual(pageKey('https://example.com/myindex.html'), pageKey('https://example.com/'));
   assert.notEqual(pageKey('https://example.com/index.html/more'), pageKey('https://example.com/'));
+});
+
+test('the link check gets time for the links it asks for, and when it is stopped it keeps what it checked', async () => {
+  assert.deepEqual([linksMaxMs(0), linksMaxMs(200), linksMaxMs(306), linksMaxMs(500)], [50000, 50000, 76500, 125000]);
+
+  // A site whose /fast-N links answer at once and /slow-N ones never do (until the test ends).
+  const hanging = [];
+  const site = createServer((req, res) => {
+    if (req.url.startsWith('/slow')) return hanging.push(res);
+    res.writeHead(200).end('ok');
+  });
+  await new Promise((r) => site.listen(0, '127.0.0.1', r));
+  const o = `http://127.0.0.1:${site.address().port}`;
+  const links = [...Array.from({ length: 6 }, (_, i) => `${o}/fast-${i}`), ...Array.from({ length: 4 }, (_, i) => `${o}/slow-${i}`)];
+  const pages = [
+    { url: `${o}/`, status: 200, facts: { links: links.map((href) => ({ href })) } },
+    // A page the crawl read is not asked again.
+    { url: `${o}/fast-0`, status: 200, facts: { links: [] } },
+  ];
+  try {
+    assert.equal(linksToCheck(pages), 9, 'the 10 links less the one the crawl read');
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 1500);
+    const t = Date.now();
+    const r = await checkLinks({ pages, signal: controller.signal });
+    assert.ok(Date.now() - t < 4000, `ended soon after it was stopped (${Date.now() - t} ms), not after each slow link's own 8 s`);
+    assert.equal(r.checked, 6, 'the six fast links are kept');
+    assert.equal(r.truncated, true);
+    assert.deepEqual(r.unverified, [], 'a link stopped is not a link that timed out');
+  } finally {
+    for (const res of hanging) res.destroy();
+    site.close();
+  }
 });
