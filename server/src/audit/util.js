@@ -114,12 +114,15 @@ export function urlKey(url) {
 /**
  * Dedupe key for the pages of one site: `urlKey` without the scheme and with the site host (`www.` dropped), so
  * https://www.example.com/about and http://example.com/about/ are one page (sameSite already treats them as one site;
- * without this the crawl and the recreate visited every page of a site that links both forms twice).
+ * without this the crawl and the recreate visited every page of a site that links both forms twice). A folder's index file
+ * is the folder (/index.html = /, /docs/index.html = /docs): a server answers both with the same file, and the copy writes
+ * them to one file, so the check counted a homepage linked both ways as two pages and the copy one.
  */
 export function pageKey(url) {
   try {
     const u = new URL(urlKey(url));
-    return `${siteHost(u.hostname)}${u.port ? `:${u.port}` : ''}${u.pathname}${u.search}`;
+    const pathname = u.pathname.replace(/\/index\.html?$/i, '/').replace(/(.)\/$/, '$1');
+    return `${siteHost(u.hostname)}${u.port ? `:${u.port}` : ''}${pathname}${u.search}`;
   } catch {
     return url;
   }

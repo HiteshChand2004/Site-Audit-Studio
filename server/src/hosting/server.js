@@ -13,7 +13,7 @@ import { request } from 'undici';
 import { compressible, TYPES } from '../recreate/behavior/preserve/serve.js';
 import { typeExtOf } from '../recreate/verify/server.js';
 import { headersFor, parseHeaders, parseRedirects, ruleFor } from './rules.js';
-import { BOX_TARGET, hostingPaths, readBoxPorts, readHosts } from './store.js';
+import { answers, BOX_TARGET, hostingPaths, readBoxPorts, readHosts } from './store.js';
 
 /** Files a copy carries for its host, never sent as pages. */
 const HOST_FILES = new Set(['/_headers', '/_redirects']);
@@ -97,7 +97,9 @@ export function sitesHandler() {
     }
 
     const host = String(req.headers.host ?? '').toLowerCase().replace(/:\d+$/, '');
-    const entry = (await hosts())[host];
+    const listed = (await hosts())[host];
+    // A domain taken off is still answered until its time (its DNS is moving away).
+    const entry = answers(listed) ? listed : null;
     if (!entry) return plain(res, 404, 'This domain is not hosted here.');
     const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
     // The other form of the name (with or without www) leads to the site's own address.
@@ -183,6 +185,8 @@ async function sendFile(req, res, file, status, extra, cache) {
     'x-content-type-options': 'nosniff',
     etag: entry.etag,
     vary: 'Accept-Encoding',
+    // Who serves the site, as other hosts say it (server: Netlify, x-vercel-id): a Check of the live site names its host.
+    'x-hosted-by': 'Remastly',
     ...extra,
   };
   if (status === 200 && req?.headers['if-none-match'] === entry.etag) {

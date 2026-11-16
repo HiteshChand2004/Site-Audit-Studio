@@ -355,7 +355,9 @@ export const api = {
   removePassThrough: (id) => request(`/projects/${id}/pass-through`, { method: 'DELETE' }),
   getDomain: (id) => request(`/projects/${id}/domain`),
   setDomain: (id, domain) => request(`/projects/${id}/domain`, { method: 'PUT', body: { domain } }),
-  removeDomain: (id) => request(`/projects/${id}/domain`, { method: 'DELETE' }),
+  // body: { pointBack, ip } to point the domain back to the server it was on before (server hosting).
+  removeDomain: (id, body) => request(`/projects/${id}/domain`, { method: 'DELETE', ...(body && { body }) }),
+  domainBack: (id, ip) => request(`/projects/${id}/domain/back${ip ? `?ip=${encodeURIComponent(ip)}` : ''}`),
   // The domain's records changed at GoDaddy by Remastly, with the person's own GoDaddy token or key (kept sealed on the server).
   connectGoDaddy: (credential) => request('/hosting/godaddy', { method: 'PUT', body: credential }),
   disconnectGoDaddy: () => request('/hosting/godaddy', { method: 'DELETE' }),

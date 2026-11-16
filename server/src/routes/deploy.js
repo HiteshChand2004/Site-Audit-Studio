@@ -12,7 +12,9 @@
 //   GET    /api/projects/:id/deploy[?recreateId=&stack=]   what would be deployed, what stops it or needs a yes, past deploys
 //   GET    /api/projects/:id/domain           the owner's domain on the live site and whether its DNS records are in place
 //   PUT    /api/projects/:id/domain { domain }   put the domain on the live site; answers with the records to add (Step 2)
-//   DELETE /api/projects/:id/domain           take it off again (the free address keeps working)
+//   DELETE /api/projects/:id/domain { pointBack?, ip? }   take it off again; pointBack: when the server it was on before
+//                                             answers the site, point the domain back there (kept answered here an hour)
+//   GET    /api/projects/:id/domain/back[?ip=]   that server: its address, whether it answers, whether Remastly can point it
 //   GET    /api/projects/:id/domain/godaddy   what Remastly would change at GoDaddy for the records to be in place
 //   POST   /api/projects/:id/domain/godaddy   change them (what they pointed to before is saved); DELETE puts that back
 //   GET    /api/projects/:id/pass-through     the paths passed to the old app, and the ones the copy suggests (Step 3)
@@ -63,6 +65,7 @@ import os from 'node:os';
 
 const serverIp = hostingIp;import { appCallsOf, fallbackFor, parsePaths, parseTarget, readPassThrough, redirectsFor, savePassThrough, suggestedPaths, unansweredAppCalls } from '../deploy/passThrough.js';
 import { appState, hasApp } from '../apps/index.js';
+import { checkOldServer, minutesToKeep, parseOldIp, pointsTo, rememberBefore, rememberedIp } from '../deploy/domainBack.js';
 import { appRunning } from '../apps/run.js';
 import { formsEndpointOf } from '../forms/connect.js';
 import { entriesCsv, importEntries, listEntries, removeEntry, removeImport, saveFormSettings } from '../forms/entries.js';
@@ -276,6 +279,8 @@ deployRouter.post('/:id/deploy', async (req, res) => {
       } catch (err) {
         return res.status(409).json({ error: /** @type {Error} */ (err).message });
       }
+      // Where the domain points before anyone moves it here: where "Remove domain" can send it back.
+      await rememberBefore(project.id, d, ip).catch(() => {});
     }
     if (!(await hostsOf(project.id)).primary) return res.status(400).json({ error: 'Type the domain this website will answer at.', needsDomain: true });
   } else {
@@ -385,6 +390,7 @@ deployRouter.put('/:id/domain', async (req, res) => {
     } catch (err) {
       return res.status(409).json({ error: /** @type {Error} */ (err).message });
     }
+    await rememberBefore(project.id, d, /** @type {string} */ (serverIp())).catch(() => {});
     return res.json(await serverDomainState(project));
   }
   const c = liveSiteClient(project);
@@ -399,11 +405,89 @@ deployRouter.put('/:id/domain', async (req, res) => {
   }
 });
 
+/**
+ * The server the domain was on before Remastly: its address (typed, else what Remastly changed at GoDaddy, else what it noted
+ * when the domain was put on the site), whether it still answers the site, and whether Remastly can point the domain back
+ * itself (GoDaddy). Null when the website answers no domain.
+ * @param {any} project @param {any} req @param {unknown} [typed]
+ */
+async function oldServerOf(project, req, typed) {
+  const { primary } = await hostsOf(project.id);
+  const d = primary ? parseDomain(primary) : null;
+  if (!d?.ok) return null;
+  const saved = await readDnsChange(project.id);
+  const mine = saved?.apex === d.apex ? saved : null;
+  let ip = null;
+  let source = null;
+  if (typed !== undefined && typed !== null && typed !== '') {
+    const p = parseOldIp(typed, serverIp());
+    if (!p.ok) return { domain: d.host, error: p.error };
+    [ip, source] = [p.value, 'typed'];
+  } else if (mine?.changes.find((c) => c.host === d.host && c.needed)?.before.A?.[0]) {
+    [ip, source] = [mine.changes.find((c) => c.host === d.host).before.A[0], 'godaddy'];
+  } else if ((ip = await rememberedIp(project.id, d.host))) {
+    source = 'remembered';
+  }
+  let client = null;
+  try {
+    client = await godaddyFor(req, d.apex);
+  } catch (err) {
+    if (!(err instanceof DnsError)) throw err;
+  }
+  const plan = ip ? domainPlan(d, null, ip).records : [];
+  return {
+    d, mine, client, domain: d.host, ip, source,
+    check: ip ? await checkOldServer(ip, d.host) : null,
+    auto: Boolean(client),
+    records: plan.map(({ type, name, value }) => ({ type, name, value })),
+    hosts: plan.map((r) => r.host),
+    // Changed by hand already: the domain's own DNS servers send it there.
+    pointed: ip && !client ? await pointsTo(plan.map((r) => r.host), d.apex, ip) : false,
+  };
+}
+
+deployRouter.get('/:id/domain/back', async (req, res) => {
+  if (notReady(res)) return;
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  if (liveSiteOf(project.id)?.hosting !== 'server') return res.json({ supported: false });
+  const back = await oldServerOf(project, req, req.query.ip);
+  if (back?.error) return res.status(400).json({ error: back.error });
+  res.json(back ? { supported: true, domain: back.domain, ip: back.ip, source: back.source, check: back.check, auto: back.auto, pointed: back.pointed, records: back.records } : { supported: true, domain: null });
+});
+
 deployRouter.delete('/:id/domain', async (req, res) => {
   if (notReady(res)) return;
   const project = /** @type {any} */ (selectProject.get(req.params.id));
   if (!project) return res.status(404).json({ error: 'Project not found.' });
   if (liveSiteOf(project.id)?.hosting === 'server') {
+    // Back to the old server: only when it answers the site; then the DNS is pointed there (by Remastly at GoDaddy, else by
+    // hand) and Remastly keeps answering while the change spreads.
+    if (req.body?.pointBack === true) {
+      const back = await oldServerOf(project, req, req.body.ip);
+      if (!back) return res.status(409).json({ error: 'This website answers no domain.' });
+      if (back.error) return res.status(400).json({ error: back.error });
+      if (!back.ip) return res.status(409).json({ error: 'Type the address of the server the domain was on before.' });
+      if (!back.check?.works) return res.status(409).json({ error: `The old server ${back.ip} does not answer ${back.domain}: ${back.check?.reason}. The domain stays on Remastly.` });
+      // Changed by hand: the domain is let go only once its own DNS servers send it to the old server.
+      if (!back.client && !back.pointed) return res.status(409).json({ error: `Change these records first, at the company where ${back.domain} is; then check again.`, records: back.records });
+      // How long others may still send visitors here: the lifetime of the names' records (read before Remastly changes them).
+      const keepMinutes = await minutesToKeep(back.hosts, back.d.apex);
+      let how = 'manual';
+      if (back.client) {
+        try {
+          // What Remastly itself changed at GoDaddy is put back exactly; else the names are pointed at the old address.
+          if (back.mine && back.source !== 'typed') await undoDns(back.client, back.d.apex, back.mine.changes);
+          else await applyDns(back.client, back.d.apex, await planDns(back.client, back.d.apex, domainPlan(back.d, null, back.ip).records));
+          await forgetDnsChange(project.id);
+          how = 'godaddy';
+        } catch (err) {
+          return dnsFailure(res, err);
+        }
+      }
+      await setHosts(project.id, null, [], { keepMinutes });
+      return res.json({ ...(await serverDomainState(project)), back: { how, ip: back.ip, domain: back.domain, keepMinutes } });
+    }
     await setHosts(project.id, null);
     return res.json(await serverDomainState(project));
   }

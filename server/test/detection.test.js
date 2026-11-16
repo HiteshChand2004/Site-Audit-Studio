@@ -106,3 +106,11 @@ test('manual rebuild: denylisted trackers share one analytics item; a host\'s ow
   const titles = (await detectManualRebuild(ctx, [], render)).map((m) => m.title);
   assert.deepEqual(titles, ['Analytics and tag manager']);
 });
+
+test('a site Remastly serves: its host is named, and finished pages with no framework are Static HTML, not unknown', async () => {
+  const { detections } = await detect(CUSTOM, { headers: { 'x-hosted-by': 'Remastly' } });
+  assert.deepEqual(detections.map((t) => [t.id, t.category]), [['remastly', 'hosting']]);
+  assert.deepEqual(toTechStack(detections).map((t) => t.name), ['Static HTML', 'Remastly']);
+  // The same page elsewhere is still unknown.
+  assert.deepEqual(toTechStack((await detect(CUSTOM)).detections).map((t) => t.name), ['Custom/Unknown']);
+});

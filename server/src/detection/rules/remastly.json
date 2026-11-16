@@ -1,0 +1,20 @@
+{
+  "id": "remastly",
+  "name": "Remastly",
+  "category": "hosting",
+  "signals": [
+    {
+      "type": "header",
+      "name": "x-hosted-by",
+      "pattern": "^Remastly",
+      "weight": 0.9,
+      "label": "x-hosted-by: Remastly header"
+    }
+  ],
+  "limitations": [],
+  "cleanup": {
+    "classPatterns": [],
+    "cdnHosts": []
+  },
+  "manualRebuild": []
+}

@@ -462,6 +462,107 @@ function GoDaddyBox({ project, domain, pointsHere, onDomain }) {
   );
 }
 
+/**
+ * "Remove domain": the site stops answering at the domain on Remastly; when the server the domain was on before still answers
+ * the site, the domain can be pointed back there (by Remastly at GoDaddy, else by hand), and Remastly keeps answering while the
+ * change spreads.
+ */
+function RemoveDomainDialog({ open, project, onClose, onDone }) {
+  const [back, setBack] = useState(null);
+  const [ip, setIp] = useState('');
+  const [pointBack, setPointBack] = useState(true);
+  const [checking, setChecking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const look = useCallback(async (typed) => {
+    setChecking(true);
+    setError(null);
+    try {
+      const b = await api.domainBack(project.id, typed);
+      setBack(b);
+      if (b.ip) setIp(b.ip);
+      // Pointing back is offered ticked only when the old server answers the site.
+      setPointBack(Boolean(b.check?.works));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setChecking(false);
+    }
+  }, [project.id]);
+  useEffect(() => {
+    if (!open) return;
+    setBack(null);
+    setIp('');
+    look();
+  }, [open, look]);
+
+  async function remove() {
+    setBusy(true);
+    setError(null);
+    try {
+      const useBack = pointBack && back?.check?.works;
+      onDone(await api.removeDomain(project.id, useBack ? { pointBack: true, ip: back.ip } : undefined));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const works = back?.check?.works;
+  return (
+    <Modal open={open} onClose={busy ? () => {} : onClose} title={T.domainRemoveTitle} width={520}
+      footer={(
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button variant="dangerSolid" onClick={remove} disabled={busy || checking || !back || (pointBack && works && !back.auto && !back.pointed)}>
+            {busy ? 'Please wait…' : pointBack && works ? T.backRemoveAndPoint : T.domainRemove}
+          </Button>
+        </>
+      )}>
+      <div className={styles.domainBody}>
+        {!back && !error && <p className={ws.hint} style={{ margin: 0 }}><Spin size={14} aria-hidden="true" /> {T.backLooking}</p>}
+        {back && (!back.supported || !back.domain) && <p className={ws.hint} style={{ margin: 0 }}>{T.domainRemoveText}</p>}
+        {back?.supported && back.domain && (
+          <>
+            <p className={ws.hint} style={{ margin: 0 }}>{back.ip ? T.backBefore(back.domain, back.ip, back.source) : T.backUnknown(back.domain)}</p>
+            <form className={styles.domainForm} onSubmit={(e) => { e.preventDefault(); look(ip.trim()); }} noValidate>
+              <label className={form.field} style={{ flex: 1, minWidth: 0 }}>
+                <span className={form.label}>{T.backIpLabel}</span>
+                <input className={form.input} value={ip} onChange={(e) => setIp(e.target.value)} placeholder="13.232.143.64" inputMode="decimal" autoComplete="off" spellCheck={false} />
+              </label>
+              <Button size="sm" type="submit" icon={checking ? Spin : RefreshCw} disabled={checking || !ip.trim()}>{T.backCheck}</Button>
+            </form>
+            {back.check && (works
+              ? <Alert tone="ok" title={T.backWorks(back.ip, back.domain)} />
+              : <Alert tone="bad" title={T.backBroken(back.ip, back.domain)}>{back.check.reason}</Alert>)}
+            {works && (
+              <label className={form.check}>
+                <input type="checkbox" checked={pointBack} onChange={(e) => setPointBack(e.target.checked)} />
+                <span>{T.backPoint(back.domain, back.ip)} {back.auto ? T.backAuto : back.pointed ? T.backPointed : T.backManual}</span>
+              </label>
+            )}
+            {/* Changed by hand: the records to change, and a check that the domain's DNS shows them. */}
+            {works && pointBack && !back.auto && !back.pointed && (
+              <>
+                <ul className={styles.howList}>
+                  {back.records.map((r) => <li key={r.name}><code>{r.type} {r.name} → {r.value}</code></li>)}
+                </ul>
+                <div className={styles.accountButtons}>
+                  <Button size="sm" icon={checking ? Spin : RefreshCw} disabled={checking} onClick={() => look(back.ip)}>{T.backCheckDns}</Button>
+                </div>
+              </>
+            )}
+            {!(pointBack && works) && <Alert tone="warn" title={T.backStaysTitle}>{T.domainRemoveText}</Alert>}
+          </>
+        )}
+        {error && <Alert tone="bad" title="Not done">{error}</Alert>}
+      </div>
+    </Modal>
+  );
+}
+
 /** Step 2: the owner's own domain on the live site — the DNS records to add, and which are in place. */
 function DomainCard({ project, liveUrl, onState }) {
   const [state, setState] = useState(null);
@@ -502,18 +603,8 @@ function DomainCard({ project, liveUrl, onState }) {
     }
   }
 
-  async function remove() {
-    setAskRemove(false);
-    setBusy(true);
-    try {
-      setState(await api.removeDomain(project.id));
-      setError(null);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
+  // What "Remove domain" did with the DNS (pointed back to the old server, or the records to change by hand).
+  const [movedBack, setMovedBack] = useState(null);
 
   const records = state?.records ?? [];
   return (
@@ -583,10 +674,14 @@ function DomainCard({ project, liveUrl, onState }) {
           </div>
         </div>
       )}
+      {movedBack && (
+        <Alert tone="ok" title={T.backDoneTitle(movedBack.domain, movedBack.ip)}>
+          {movedBack.how === 'godaddy' ? T.backDoneAuto(movedBack.keepMinutes) : T.backDoneManual(movedBack.keepMinutes)}
+        </Alert>
+      )}
       {error && <Alert tone="bad" title="The domain could not be changed">{error}</Alert>}
-      <ConfirmDialog open={askRemove} onClose={() => setAskRemove(false)} title={T.domainRemoveTitle} confirmLabel={T.domainRemove} danger onConfirm={remove}>
-        {T.domainRemoveText}
-      </ConfirmDialog>
+      <RemoveDomainDialog open={askRemove} project={project} onClose={() => setAskRemove(false)}
+        onDone={(r) => { setState(r); setError(null); setMovedBack(r.back ?? null); setAskRemove(false); }} />
     </Card>
   );
 }
@@ -940,13 +1035,8 @@ function AppCard({ project, onChange }) {
   // The repositories to choose from, once GitHub is connected and no repository is chosen yet.
   useEffect(() => {
     if (!connected || status !== 'empty') return;
-    api.githubRepos().then((r) => {
-      setRepos(r);
-      if (r.repos[0]) {
-        setRepoChoice((c) => c || `${r.repos[0].installationId} ${r.repos[0].fullName}`);
-        setBranch((b) => b || r.repos[0].branch);
-      }
-    }, (err) => setError(err.message));
+    // Every repository the person's GitHub lets Remastly read, for every website: none is chosen until they choose it here.
+    api.githubRepos().then(setRepos, (err) => setError(err.message));
   }, [connected, status]);
   // While the app is being made, its steps are followed; the cards above follow when it is done.
   useEffect(() => {
@@ -1070,6 +1160,7 @@ function AppCard({ project, onChange }) {
                     setRepoChoice(e.target.value);
                     setBranch(repos.repos.find((r) => `${r.installationId} ${r.fullName}` === e.target.value)?.branch ?? '');
                   }}>
+                    <option value="">{T.appRepoNone}</option>
                     {repos.repos.map((r) => <option key={`${r.installationId} ${r.fullName}`} value={`${r.installationId} ${r.fullName}`}>{r.fullName}</option>)}
                   </select>
                 </label>
@@ -1079,6 +1170,7 @@ function AppCard({ project, onChange }) {
                 </label>
               </div>
             )}
+            {repos?.repos.length > 0 && <p className={ws.hint} style={{ margin: 0 }}>{T.appRepoHelp}</p>}
             {repos?.problems?.map((p) => <Alert key={p} tone="warn" title="GitHub">{p}</Alert>)}
             <div className={styles.accountButtons}>
               {repos?.repos.length > 0 && (

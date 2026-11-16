@@ -31,18 +31,23 @@ export async function readPassThrough(projectId) {
   return { target: p.target, paths: p.paths, ...(p.fallback === true && { fallback: true }) };
 }
 
-/** Saves (or with null, removes) the website's pass-through. @param {string} projectId @param {PassThrough | null} value */
-export async function savePassThrough(projectId, value) {
+/** Everything Go live keeps for the website in golive.json. @param {string} projectId @returns {Promise<any>} */
+export const readGoLive = (projectId) => readFile(fileOf(projectId), 'utf8').then(JSON.parse, () => ({}));
+
+/** Changes some of what golive.json keeps. @param {string} projectId @param {Record<string, unknown>} patch */
+export async function patchGoLive(projectId, patch) {
   const file = fileOf(projectId);
-  const current = await readFile(file, 'utf8').then(JSON.parse, () => ({}));
-  const next = { ...current, passThrough: value };
+  const next = { ...(await readGoLive(projectId)), ...patch };
   await mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
+  const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
   await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`);
   await rename(tmp, file);
 }
 
-const PRIVATE_V4 = /^(?:10\.|127\.|0\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/;
+/** Saves (or with null, removes) the website's pass-through. @param {string} projectId @param {PassThrough | null} value */
+export const savePassThrough = (projectId, value) => patchGoLive(projectId, { passThrough: value });
+
+export const PRIVATE_V4 = /^(?:10\.|127\.|0\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/;
 
 /**
  * The old app's address as the owner types it: its origin, or why it cannot be used. `domain` = the site's own domain, which

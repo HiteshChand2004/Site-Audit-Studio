@@ -58,7 +58,7 @@ export function summarize(audit, device) {
 export default function HealthOverview({ audit, device, onDeviceChange }) {
   const scores = audit.scores?.[device] ?? null;
   const metrics = audit.metricsByDevice?.[device] ?? (device === 'mobile' ? audit.metrics : null);
-  const primary = audit.techStack?.find((t) => t.id !== 'custom' && t.confidence != null);
+  const primary = audit.techStack?.find((t) => t.id === 'static' || (t.id !== 'custom' && t.confidence != null));
   const aeo = aeoScore(audit.aeo);
 
   return (

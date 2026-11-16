@@ -45,7 +45,8 @@ export function scoresOf(audit, device) {
 }
 
 /** The main platform the original is built with (Framer, Next.js…), or null. */
-export const platformOf = (audit) => (isReal(audit) ? audit.techStack?.find((t) => t.id !== 'custom' && t.confidence != null) ?? null : null);
+// Static HTML (a site Remastly serves as finished pages) is what the site is built with, though no signature scored it.
+export const platformOf = (audit) => (isReal(audit) ? audit.techStack?.find((t) => t.id === 'static' || (t.id !== 'custom' && t.confidence != null)) ?? null : null);
 
 /**
  * Where the website's work stands, per stage: 'done' | 'running' | 'failed' | 'warn' | 'none'.

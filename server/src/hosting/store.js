@@ -1,7 +1,8 @@
 // @ts-check
 // The websites Remastly hosts itself (Go live → "Remastly server"), on disk under HOSTING_DIR, written by the app and read by
 // the sites server (hosting/server.js, its own process):
-//   hosts.json                         every domain answered: { "<host>": { projectId, primary: "<host>", alias? } }
+//   hosts.json                         every domain answered: { "<host>": { projectId, primary: "<host>", alias?, until? } }
+//                                      (until: a domain taken off that is still answered while DNS moves it away)
 //   sites/<projectId>/releases/<id>/   one folder per deploy: the copy's files as they are served
 //   sites/<projectId>/current          a link to the release that is live; switched in one step (a deploy, Go back)
 // Folders are by website, not by domain, so changing a website's domain only changes hosts.json.
@@ -40,23 +41,39 @@ async function writeAtomic(file, text) {
   await rename(tmp, file);
 }
 
-/** @returns {Promise<Record<string, { projectId: string, primary: string, alias?: boolean }>>} */
+/** @typedef {{ projectId: string, primary: string, alias?: boolean, until?: string }} HostEntry */
+
+/** Every domain answered, those leaving included. @returns {Promise<Record<string, HostEntry>>} */
 export async function readHosts() {
   return readFile(hostsFile(), 'utf8').then(JSON.parse, () => ({}));
 }
 
+/** Whether an entry still answers: a leaving one until its time. @param {HostEntry | undefined} e */
+export const answers = (e) => Boolean(e) && (!e.until || Date.parse(e.until) > Date.now());
+
 /**
  * Answers `primary` (and `aliases`, which lead to it) for this website, in place of the domains it had before.
+ * `keepMinutes`: the domains taken off are still answered that long (the DNS is being moved back to the old server, and some
+ * visitors still reach this one); a leaving domain is no website's any more.
  * @param {string} projectId @param {string | null} primary  null = this website answers no domain any more @param {string[]} [aliases]
+ * @param {{ keepMinutes?: number }} [o]
  */
-export async function setHosts(projectId, primary, aliases = []) {
+export async function setHosts(projectId, primary, aliases = [], { keepMinutes = 0 } = {}) {
   const hosts = await readHosts();
-  for (const [h, v] of Object.entries(hosts)) if (v.projectId === projectId) delete hosts[h];
+  const until = keepMinutes > 0 ? new Date(Date.now() + keepMinutes * 60_000).toISOString() : null;
+  for (const [h, v] of Object.entries(hosts)) {
+    // Gone by now: forgotten whoever's it was.
+    if (!answers(v)) delete hosts[h];
+    else if (v.projectId === projectId) {
+      if (until && !v.until) hosts[h] = { ...v, until };
+      else delete hosts[h];
+    }
+  }
   if (primary) {
-    // A domain another website already answers is not taken from it.
+    // A domain another website already answers is not taken from it; one leaving it is.
     for (const h of [primary, ...aliases]) {
       checkHost(h);
-      if (hosts[h] && hosts[h].projectId !== projectId) throw new Error(`${h} is already a domain of another website on this server.`);
+      if (hosts[h] && hosts[h].projectId !== projectId && !hosts[h].until) throw new Error(`${h} is already a domain of another website on this server.`);
     }
     hosts[primary] = { projectId, primary };
     for (const a of aliases) hosts[a] = { projectId, primary, alias: true };
@@ -86,7 +103,8 @@ export async function setBoxPort(projectId, port) {
 
 /** The domain a website answers at (its primary) and the others that lead to it. @param {string} projectId */
 export async function hostsOf(projectId) {
-  const mine = Object.entries(await readHosts()).filter(([, v]) => v.projectId === projectId);
+  // A domain leaving the website is not its domain any more (it is only still answered for a while).
+  const mine = Object.entries(await readHosts()).filter(([, v]) => v.projectId === projectId && !v.until);
   return { primary: mine.find(([, v]) => !v.alias)?.[0] ?? null, aliases: mine.filter(([, v]) => v.alias).map(([h]) => h) };
 }
 
