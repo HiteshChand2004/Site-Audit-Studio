@@ -47,6 +47,10 @@ const PROBE = `(async () => {
   await attempt('relFetch', 'data.json');
   try { r.urlCtor = new URL('/data.json', location.href).pathname; } catch (e) { r.urlCtor = 'error:' + e.name; }
   r.xhr = await new Promise((res) => { try { const x = new XMLHttpRequest(); x.open('GET', '/data.json'); x.onloadend = () => res(x.status); x.send(); } catch (e) { res('error:' + e.name); } });
+  // A page's own data call that asks for credentials (a sign-in screen asking its server for its options).
+  await attempt('credFetch', '/data.json', { credentials: 'include' });
+  await attempt('credRequest', new Request('/data.json', { credentials: 'include' }));
+  r.credXhr = await new Promise((res) => { try { const x = new XMLHttpRequest(); x.open('GET', '/data.json'); x.withCredentials = true; x.onloadend = () => res(x.status); x.send(); } catch (e) { res('error:' + e.name); } });
   r.late = await new Promise((res) => { const s = document.createElement('script'); s.src = '/late.js'; s.onload = () => res(window.__late === true); s.onerror = () => res(false); document.head.appendChild(s); });
   // A chunk loader reads its scripts' addresses back and looks them up by address (Turbopack, webpack).
   r.readBack = document.querySelector('script[src="/app.js"]')?.getAttribute('src') ?? null;
@@ -305,6 +309,11 @@ test('the risk, then the fix: a copied site\'s script cannot reach the app, its 
   assert.deepEqual(after.relFetch, own, 'fetch("x")');
   assert.match(after.urlCtor, /^\/preview\/[A-Za-z0-9_-]{24}\/data\.json$/, 'new URL("/x", location.href)');
   assert.equal(after.xhr, 200, 'XMLHttpRequest');
+  // Asked with credentials, the browser refused the preview's `*` answer ("Failed to fetch": a sign-in page showed "Sign-in is
+  // unavailable"). Sent without them, the page gets its data; no cookie reaches the preview either way.
+  assert.deepEqual(after.credFetch, own, 'fetch("/x", { credentials: "include" })');
+  assert.deepEqual(after.credRequest, own, 'fetch(new Request("/x", { credentials: "include" }))');
+  assert.equal(after.credXhr, 200, 'XMLHttpRequest with withCredentials');
   assert.equal(after.late, true, 'a script element the page adds with src="/x"');
   // It reads its addresses back as it wrote them, and finds an element by its address (a chunk loader that saw the moved
   // address never found its loaded chunks: a Next.js App Router page never hydrated in the preview).
