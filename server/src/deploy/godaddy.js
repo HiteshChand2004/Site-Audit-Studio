@@ -7,13 +7,24 @@
 //   a personal access token (recommended; scopes domains.domain:read + domains.dns:update) → the Domains v3 API
 //   a classic key and secret (deprecated for domains through 2026)                        → the Domains v1 API
 // Either works on any account with one domain (since April 2026).
+// Where the credential comes from: what a person pasted in the app (their own, sealed), or, for the owner's websites only,
+// the server's settings (SAS_GODADDY_TOKENS: one per GoDaddy account, separated by commas or spaces), so websites whose domains
+// are in different GoDaddy accounts each find theirs. Those are read once when Remastly starts and taken out of its environment
+// at once: every program it starts (builds, browsers, Docker) inherits that environment, and none of them needs a token.
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { projectDir } from '../config/paths.js';
 
-/** Where the API is; tests point it at a stand-in. */
-export const godaddyConfig = { base: process.env.SAS_GODADDY_API || 'https://api.godaddy.com' };
+/** The server's credentials, as sealedOf keeps them ("key:secret", or a token marked as one). */
+export function readServerTokens() {
+  const raw = process.env.SAS_GODADDY_TOKENS ?? '';
+  delete process.env.SAS_GODADDY_TOKENS;
+  return raw.split(/[\s,]+/).filter(Boolean).map((t) => (t.includes(':') ? t : `bearer ${t}`));
+}
+
+/** Where the API is, and the server's credentials; tests replace both. */
+export const godaddyConfig = { base: process.env.SAS_GODADDY_API || 'https://api.godaddy.com', serverTokens: readServerTokens() };
 
 // GoDaddy's shortest time a record is kept by others (seconds): a later change, or the undo, shows soonest.
 const TTL = 600;
@@ -125,6 +136,31 @@ export function godaddyClient(sealed) {
       for (const r of await list(apex, type, name)) await call('DELETE', `${zone(apex)}/${r.recordId}`).catch(none);
     },
   };
+}
+
+/** Which of the server's credentials holds each domain, once found (the domain moves account rarely). @type {Map<string, string>} */
+const accountOf = new Map();
+
+/**
+ * The client of the server's GoDaddy account that holds this domain: each credential is asked in turn, a refusal (a wrong or
+ * expired token) only skips it. Null when none holds it.
+ * @param {string} apex
+ */
+export async function serverClientFor(apex) {
+  const known = accountOf.get(apex);
+  if (known && godaddyConfig.serverTokens.includes(known)) return godaddyClient(known);
+  for (const sealed of godaddyConfig.serverTokens) {
+    const client = godaddyClient(sealed);
+    const holds = await client.domain(apex).then(() => true, (e) => {
+      if (e instanceof DnsError && (e.notFound || e.code === 'key')) return false;
+      throw e;
+    });
+    if (holds) {
+      accountOf.set(apex, sealed);
+      return client;
+    }
+  }
+  return null;
 }
 
 /** @typedef {ReturnType<typeof godaddyClient>} GoDaddy */

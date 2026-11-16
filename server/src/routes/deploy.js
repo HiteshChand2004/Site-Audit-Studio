@@ -7,7 +7,8 @@
 //                                             website can be published on without an account of its own (Step 1)
 //   DELETE /api/hosting/remastly              owner only: forget it (sites already live stay online)
 //   PUT    /api/hosting/godaddy { token } | { key, secret }   connect this person's GoDaddy account (checked with GoDaddy, kept sealed),
-//                                             so Remastly can point their domains here itself; DELETE forgets it
+//                                             so Remastly can point their domains here itself; DELETE forgets it. For the owner,
+//                                             SAS_GODADDY_TOKENS (one per GoDaddy account) works without pasting anything
 //   GET    /api/projects/:id/deploy[?recreateId=&stack=]   what would be deployed, what stops it or needs a yes, past deploys
 //   GET    /api/projects/:id/domain           the owner's domain on the live site and whether its DNS records are in place
 //   PUT    /api/projects/:id/domain { domain }   put the domain on the live site; answers with the records to add (Step 2)
@@ -48,7 +49,7 @@ import {
 } from '../deploy/store.js';
 import { isOwner } from '../accounts/roles.js';
 import { checkRecords, domainPlan, parseDomain } from '../deploy/domain.js';
-import { applyDns, credentialOf, DnsError, forgetDnsChange, godaddyClient, planDns, readDnsChange, saveDnsChange, sealedOf, TOKEN_SCOPES, undoDns } from '../deploy/godaddy.js';
+import { applyDns, credentialOf, DnsError, forgetDnsChange, godaddyClient, godaddyConfig, planDns, readDnsChange, saveDnsChange, sealedOf, serverClientFor, TOKEN_SCOPES, undoDns } from '../deploy/godaddy.js';
 import { BOX_TARGET, hostingPaths, hostsOf, setHosts, switchRelease } from '../hosting/store.js';
 import { addUpload, BOX_LIMITS, BoxError, boxState, deleteBox, hasBox, removeUpload, startBox, WORDPRESS_PATHS } from '../boxes/index.js';
 import { boxRunning } from '../boxes/box.js';
@@ -416,28 +417,50 @@ deployRouter.delete('/:id/domain', async (req, res) => {
 
 // ---- Step 2, done by Remastly: the domain's records changed at GoDaddy ----
 
-/** This person's GoDaddy client, or null when they have not connected GoDaddy. @param {any} req */
-const godaddyOf = (req) => {
-  const token = connectionToken(ownerKeyOf(req), 'godaddy');
-  return token ? godaddyClient(token) : null;
-};
+/**
+ * Which GoDaddy credential this person uses: the one they pasted in the app, else, for the owner only, the server's settings
+ * (SAS_GODADDY_TOKENS). A customer never reaches the server's accounts: they hold the owner's own domains.
+ * @param {any} req
+ */
+function godaddySource(req) {
+  const own = getConnection(ownerKeyOf(req), 'godaddy');
+  if (own) return { kind: 'own', account: own.accountName };
+  if (isOwner(req) && godaddyConfig.serverTokens.length) return { kind: 'server', accounts: godaddyConfig.serverTokens.length };
+  return null;
+}
 
 /**
- * What the GoDaddy part of the domain card shows: whether GoDaddy is connected, what Remastly changed there before (and can
- * put back), and what it would change now; or why it cannot (the domain is not in that account, its DNS is run elsewhere).
+ * The client for this domain, or a DnsError saying why there is none.
+ * @param {any} req @param {string} apex
+ */
+async function godaddyFor(req, apex) {
+  const source = godaddySource(req);
+  if (source?.kind === 'own') return godaddyClient(/** @type {string} */ (connectionToken(ownerKeyOf(req), 'godaddy')));
+  if (source?.kind === 'server') {
+    const client = await serverClientFor(apex);
+    if (client) return client;
+    throw new DnsError(`${apex} is not in any of the ${source.accounts} GoDaddy account(s) set on this server. Add that account's token to SAS_GODADDY_TOKENS, or change the records by hand.`, 'domain');
+  }
+  throw new DnsError('Connect GoDaddy first.', 'key');
+}
+
+/**
+ * What the GoDaddy part of the domain card shows: whether GoDaddy is connected (pasted, or the server's), what Remastly
+ * changed there before (and can put back), and what it would change now; or why it cannot (the domain is in no connected
+ * account, its DNS is run elsewhere).
  * @param {any} project @param {any} req @param {any} [state]  the domain's state when the caller already read it
  */
 async function godaddyCard(project, req, state) {
   const saved = await readDnsChange(project.id);
   const changed = saved ? { at: saved.at, apex: saved.apex, names: saved.changes.filter((c) => c.needed).map((c) => c.host) } : null;
-  const connection = getConnection(ownerKeyOf(req), 'godaddy');
-  if (!connection) return { connected: false, changed };
-  const base = { connected: true, account: connection.accountName, changed };
+  const source = godaddySource(req);
+  if (!source) return { connected: false, changed };
+  const base = { connected: true, source: source.kind, account: source.kind === 'own' ? source.account : null, accounts: source.kind === 'server' ? source.accounts : null, changed };
   const current = state ?? await domainOf(project).then((r) => ('state' in r ? r.state : null));
   const d = current?.domain ? parseDomain(current.domain) : null;
   if (!d?.ok) return { ...base, plan: null };
   try {
-    const changes = await planDns(/** @type {any} */ (godaddyOf(req)), d.apex, current.records);
+    const changes = await planDns(await godaddyFor(req, d.apex), d.apex, current.records);
     return {
       ...base,
       plan: {
@@ -473,13 +496,12 @@ deployRouter.post('/:id/domain/godaddy', async (req, res) => {
   if (notReady(res)) return;
   const project = /** @type {any} */ (selectProject.get(req.params.id));
   if (!project) return res.status(404).json({ error: 'Project not found.' });
-  const client = godaddyOf(req);
-  if (!client) return res.status(409).json({ error: 'Connect GoDaddy first.' });
   const r = await domainOf(project);
   if ('error' in r) return res.status(r.error.status).json(r.error.body);
   const d = r.state.domain ? parseDomain(r.state.domain) : null;
   if (!d?.ok) return res.status(409).json({ error: 'Connect the domain to the site first.' });
   try {
+    const client = await godaddyFor(req, d.apex);
     // Read again now, not taken from the page: the records may have changed since the card was shown.
     const changes = await planDns(client, d.apex, r.state.records);
     // Saved before anything changes, so even a change that stops half way can be put back.
@@ -499,9 +521,8 @@ deployRouter.delete('/:id/domain/godaddy', async (req, res) => {
   if (!project) return res.status(404).json({ error: 'Project not found.' });
   const saved = await readDnsChange(project.id);
   if (!saved) return res.status(409).json({ error: 'Remastly has not changed anything at GoDaddy for this site.' });
-  const client = godaddyOf(req);
-  if (!client) return res.status(409).json({ error: 'Connect GoDaddy again to put the old records back.' });
   try {
+    const client = await godaddyFor(req, saved.apex);
     await undoDns(client, saved.apex, saved.changes);
     await forgetDnsChange(project.id);
     const after = await domainOf(project);
