@@ -83,6 +83,16 @@ test('a large picture gets smaller WebP copies in a srcset; src, a chosen pictur
       assert.ok((await stat(path.join(dir, f.file))).size <= (await readFile(path.join(dir, 'media', 'shot.png'))).length * 0.9);
     }
 
+    // A lazy picture below the first screen is not loaded when the probe reads the page (naturalWidth 0): still planned, and
+    // the file decides its width.
+    const $3 = load('<img src="/media/shot.png" alt="a" loading="lazy">');
+    const lazyPlan = planPerf(probe([{ src: '/media/shot.png', nw: 0 }], { '0|/media/shot.png': [[375, 343], [1440, 700]] }), '/');
+    assert.deepEqual([...lazyPlan.size.keys()], ['0|/media/shot.png']);
+    const r3 = await fixImageSizes($3, { path: '/', outPath: 'index.html' }, dir, lazyPlan);
+    assert.ok(r3.fixed.length >= 1);
+    assert.equal($3('img').attr('srcset').split(', ').at(-1), '/media/shot.png 1800w');
+    assert.equal($3('img').attr('loading'), 'lazy', 'loading stays as the page had it');
+
     // The same picture counted differently in the markup than in the page the browser built: not touched.
     const $2 = load('<img src="/media/shot.png" alt="a">');
     const r2 = await fixImageSizes($2, { path: '/', outPath: 'index.html' }, dir, plan);

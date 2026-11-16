@@ -125,8 +125,10 @@ export function planPerf(probe, pagePath) {
     for (const [key, points] of Object.entries(drawn)) {
       const seen = probe.widths.map((w) => w.images.find((im) => `${im.k}|${im.src}` === key));
       if (seen.some((x) => !x) || seen.some((x) => x.chooses || x.moves || x.lazyLib)) continue;
+      // The file's width as the probe saw it: 0 for a lazy picture not loaded yet when the page was read (it is read before
+      // scrolling). fixImageSizes reads the width from the file itself, so an unloaded picture is still planned.
       const natural = Math.max(...seen.map((x) => x.nw || 0));
-      if (!natural || points.length < 2 || points.every(([, w]) => !(w > 0))) continue;
+      if (points.length < 2 || points.every(([, w]) => !(w > 0))) continue;
       size.set(key, { natural, points });
     }
   }
