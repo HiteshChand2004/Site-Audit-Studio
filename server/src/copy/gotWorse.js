@@ -110,6 +110,7 @@ export const GROUPS = {
   'own-code': { code: 'e', label: 'The original’s own code', text: 'Comes from the original’s own code, scripts or embeds, which the copy keeps as they are so the site works the same.' },
   measurement: { code: 'f', label: 'Measurement', text: 'Measured on this computer’s preview; only the real host can confirm it.' },
   impossible: { code: 'g', label: 'Not possible', text: 'No copy can do this.' },
+  noise: { code: 'h', label: 'Run to run difference', text: 'Both sides pass and fail the same checks; one run of a side scored differently, which moved the median.' },
 };
 const REASON_GROUP = { owner: 'needs-info', backend: 'needs-info', third_party: 'own-code', own_code: 'own-code', deploy: 'measurement', look: 'look' };
 
@@ -1026,6 +1027,46 @@ export function fadeOpacity(c, fg, bg) {
   return null;
 }
 
+/**
+ * A score that is lower although no check fails on the copy that passes on the original. Lighthouse's score is the weighted
+ * share of the checks that APPLY to the page, so it moves when a check applies on one side only:
+ *  - a check that passed on the original and does not apply on the copy no longer lifts its score: the copy lacks what that check
+ *    looks at (an element, or a file the copy did not get). A real difference of the copy, named check by check;
+ *  - the first runs of both sides count the same checks and fail the same ones: their scores are the same, and the medians differ
+ *    only because another run of a side scored differently (every run's score is listed). The measurement, not the copy.
+ * Without the record of what counted (a run kept before it was recorded) it stays unexplained, as before.
+ */
+export function sameChecksPart(lp, drop) {
+  const before = lp.scored?.original?.[lp.category];
+  const after = lp.scored?.copy?.[lp.category];
+  if (!Array.isArray(before) || !Array.isArray(after)) {
+    return unexplained(`${drop}: the same checks fail on both sides; the score moved without a new failing check, which no reason explains.`);
+  }
+  const onCopy = new Set(after.map((a) => a.id));
+  const lost = before.filter((a) => !onCopy.has(a.id) && !(lp.failing?.original ?? []).includes(a.id));
+  if (lost.length) {
+    const one = lost.length === 1;
+    const names = lost.slice(0, 5).map((a) => `"${a.title}"`).join(', ');
+    return unexplained(`${drop}: no check fails only on the copy, but ${one ? 'a check that passes' : `${lost.length} checks that pass`} on the original ${one ? 'does' : 'do'} not apply on the copy, so ${one ? 'it no longer counts' : 'they no longer count'} toward its score: ${names}${lost.length > 5 ? ` and ${lost.length - 5} more` : ''}. The copy lacks what ${one ? 'it looks' : 'they look'} at on this page (an element of the original, or a file the copy did not get).`);
+  }
+  const share = (list, failing) => {
+    const total = list.reduce((s, a) => s + a.weight, 0);
+    return total ? list.filter((a) => !failing.includes(a.id)).reduce((s, a) => s + a.weight, 0) / total : null;
+  };
+  const sb = share(before, lp.failing?.original ?? []);
+  const sa = share(after, lp.failing?.copy ?? []);
+  if (sb != null && sa != null && Math.round(sb * 100) === Math.round(sa * 100)) {
+    const runs = (side) => (lp.runScores?.[side] ?? []).map((s) => s?.[lp.category]).filter((v) => typeof v === 'number');
+    const list = (side) => (runs(side).length ? runs(side).join(', ') : 'not recorded');
+    return {
+      reason: 'deploy',
+      group: 'noise',
+      evidence: `${drop}: both sides count the same checks and fail the same ones, so their first runs score the same (${Math.round(sb * 100)}). The medians differ because another run scored differently (runs of the original: ${list('original')}; of the copy: ${list('copy')}).`,
+    };
+  }
+  return unexplained(`${drop}: the same checks apply and fail on both sides, yet the first runs score ${sb == null ? '?' : Math.round(sb * 100)} and ${sa == null ? '?' : Math.round(sa * 100)}, which no reason explains.`);
+}
+
 /** Contrast: the same colours as the original's own failures, or the original's own colours for that element, or not. */
 function contrastPart(ctx) {
   const before = contrastNodes(ctx.oldAxe);
@@ -1104,7 +1145,7 @@ function scorePart(item, ctx) {
     ? ofCategory.map((f) => f.id)
     : (lp.failing?.copy ?? []).filter((id) => !inCategory || inCategory.has(id));
   const onlyCopy = copyFailing.filter((id) => !(lp.failing?.original ?? []).includes(id));
-  if (!onlyCopy.length) return unexplained(`${drop}: the same checks fail on both sides; the score moved without a new failing check, which no reason explains.`);
+  if (!onlyCopy.length) return sameChecksPart(lp, drop);
   const explain = (id) => {
     const a = lp.copyAudits?.[id] ?? {};
     const urls = (a.urls ?? []).filter((u) => /^https?:/.test(u));

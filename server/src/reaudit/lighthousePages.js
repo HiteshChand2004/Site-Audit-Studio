@@ -276,6 +276,16 @@ export function trimReport(lhr) {
       return typeof a?.score === 'number' && a.score < 0.9 && a.scoreDisplayMode !== 'informative' && a.scoreDisplayMode !== 'manual';
     }).map((r) => ({ id: r.id, weight: r.weight ?? 0 }));
   }
+  // Per category, every audit that counted toward the score (weighted, scored: not "not applicable", informative or manual). Two
+  // runs with the same failing audits can still score differently when an audit applied on one page and not on the other (a
+  // passing check that no longer applies no longer lifts the score): this says which.
+  const scoredByCategory = {};
+  for (const c of LH_SCORE_CATEGORIES) {
+    scoredByCategory[c] = (lhr?.categories?.[c]?.auditRefs ?? []).filter((r) => {
+      const a = lhr.audits?.[r.id];
+      return (r.weight ?? 0) > 0 && typeof a?.score === 'number' && a.scoreDisplayMode !== 'informative' && a.scoreDisplayMode !== 'manual';
+    }).map((r) => ({ id: r.id, weight: r.weight, title: String(lhr.audits[r.id].title ?? r.id).slice(0, 120) }));
+  }
   return {
     fetchTime: lhr?.fetchTime ?? null,
     requestedUrl: lhr?.requestedUrl ?? null,
@@ -300,6 +310,7 @@ export function trimReport(lhr) {
     lcpElement: lcp ? { selector: lcp.selector ?? null, snippet: String(lcp.snippet ?? lcp.selector ?? '').slice(0, 100) } : null,
     audits,
     failingByCategory,
+    scoredByCategory,
   };
 }
 
@@ -555,6 +566,8 @@ export async function compareLighthousePages({ pages, cacheDir, outDir, run, pro
             copyAudits: copyRuns[0].audits,
             // Per category, what fails on the copy (its first run; null for a run kept before this was recorded).
             copyFailingByCategory: copyRuns[0].failingByCategory ?? null,
+            // Per category, the audits that counted on each side (the first runs; null for a run kept before this was recorded).
+            scored: { original: originalRuns[0].scoredByCategory ?? null, copy: copyRuns[0].scoredByCategory ?? null },
           },
         };
         for (const c of verdict.worse) result.worse.push({ path: p.path, mode, category: c, original: verdict.original[c], copy: verdict.copy[c], runs: verdict.runs });
