@@ -6,6 +6,8 @@
 // It is about this website only: one old server often runs several websites, so the answer says to check each of them before
 // the server itself is switched off.
 
+import { BOX_TARGET } from '../hosting/store.js';
+
 /**
  * @param {{
  *   live: { url: string | null } | null,
@@ -13,6 +15,7 @@
  *   domainError?: string | null,
  *   report: any,
  *   passThrough: { target: string, paths: string[] } | null,
+ *   boxRunning?: boolean,
  *   appCalls: string[],
  *   snapshot?: { takenAt: string, count: number } | null,
  *   formsWaiting: number,
@@ -21,7 +24,7 @@
  * }} o
  * @returns {{ safe: boolean, items: { id: string, status: 'ok' | 'needs' | 'advice', text: string }[] }}
  */
-export function switchOffCheck({ live, domain, domainError = null, report, passThrough, appCalls, snapshot = null, formsWaiting, formsSaved, imported }) {
+export function switchOffCheck({ live, domain, domainError = null, report, passThrough, boxRunning = false, appCalls, snapshot = null, formsWaiting, formsSaved, imported }) {
   /** @type {{ id: string, status: 'ok' | 'needs' | 'advice', text: string }[]} */
   const items = [];
   const add = (id, status, text) => items.push({ id, status, text });
@@ -45,7 +48,11 @@ export function switchOffCheck({ live, domain, domainError = null, report, passT
   else add('files', 'ok', 'The copy loads nothing from the old site.');
 
   // A login, a dashboard or data calls: answered by the old app (passed through) or by nobody.
-  if (passThrough?.paths.length) {
+  if (passThrough?.paths.length && passThrough.target === BOX_TARGET) {
+    // The back office moved to Remastly (boxes/): the old server holds nothing of it any more.
+    if (boxRunning) add('app', 'ok', `${passThrough.paths.join(', ')} ${passThrough.paths.length === 1 ? 'is' : 'are'} answered by this website's back office on Remastly, with its users and data.`);
+    else add('app', 'needs', 'Logins and data go to this website\'s back office on Remastly, but it is not running. Start it again under "Move logins and data to Remastly".');
+  } else if (passThrough?.paths.length) {
     add('app', 'needs', `${passThrough.paths.join(', ')} ${passThrough.paths.length === 1 ? 'is' : 'are'} still passed to the old app at ${passThrough.target}. That app (and its database) must keep running, or move somewhere else first.`);
   } else if (appCalls.length) {
     add('app', 'needs', `The copy asks for ${appCalls.slice(0, 3).join(', ')}${appCalls.length > 3 ? ' and more' : ''}, which only the old app answers. Save their content under "Content from the old server", or keep the old app running for ${appCalls.length === 1 ? 'it' : 'them'}.`);

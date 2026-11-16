@@ -54,7 +54,7 @@ export function parseTarget(input, domains = []) {
   }
   const host = u.hostname.toLowerCase();
   if (u.username || u.password || !host.includes('.')) return { ok: false, error: 'That is not a web address. Type it like https://app.your-site.com.' };
-  if (host === 'localhost' || PRIVATE_V4.test(host) || host.startsWith('[') || host.endsWith('.local') || host.endsWith('.internal')) {
+  if (host === 'localhost' || PRIVATE_V4.test(host) || host.startsWith('[') || host.endsWith('.local') || host.endsWith('.internal') || host.endsWith('.invalid')) {
     return { ok: false, error: 'That address is only reachable inside a private network. The old app needs an address the internet can reach.' };
   }
   if (host.endsWith('.netlify.app')) return { ok: false, error: 'That is the copy\'s own address. Type the address of the old app.' };

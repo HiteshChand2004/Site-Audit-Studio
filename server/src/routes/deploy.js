@@ -6,10 +6,14 @@
 //   PUT    /api/hosting/remastly { token }    owner only: set up Remastly hosting, Remastly's own Netlify account that every
 //                                             website can be published on without an account of its own (Step 1)
 //   DELETE /api/hosting/remastly              owner only: forget it (sites already live stay online)
+//   PUT    /api/hosting/godaddy { token } | { key, secret }   connect this person's GoDaddy account (checked with GoDaddy, kept sealed),
+//                                             so Remastly can point their domains here itself; DELETE forgets it
 //   GET    /api/projects/:id/deploy[?recreateId=&stack=]   what would be deployed, what stops it or needs a yes, past deploys
 //   GET    /api/projects/:id/domain           the owner's domain on the live site and whether its DNS records are in place
 //   PUT    /api/projects/:id/domain { domain }   put the domain on the live site; answers with the records to add (Step 2)
 //   DELETE /api/projects/:id/domain           take it off again (the free address keeps working)
+//   GET    /api/projects/:id/domain/godaddy   what Remastly would change at GoDaddy for the records to be in place
+//   POST   /api/projects/:id/domain/godaddy   change them (what they pointed to before is saved); DELETE puts that back
 //   GET    /api/projects/:id/pass-through     the paths passed to the old app, and the ones the copy suggests (Step 3)
 //   PUT    /api/projects/:id/pass-through { target, paths }   save them; they apply from the next deploy
 //   DELETE /api/projects/:id/pass-through     stop passing anything on (from the next deploy)
@@ -22,6 +26,11 @@
 //   POST   /api/projects/:id/snapshot         take it (again) from the old site; DELETE removes it (from the next deploy)
 //   POST   /api/projects/:id/forms/import     (body: a CSV file) old entries from Webflow, Framer or the old site's database
 //   DELETE /api/projects/:id/forms/imports/:importId   take one import back
+//   GET    /api/projects/:id/box              "Move logins and data to Remastly": the backup uploaded, the box made from it
+//   POST   /api/projects/:id/box/files?name=  (body: one backup file) add it; DELETE /box/files/:name removes it
+//   POST   /api/projects/:id/box/start { replace? }   make the box from the files (202; GET follows it)
+//   POST   /api/projects/:id/box/use          send "Logins and data" to the box (from the next deploy)
+//   DELETE /api/projects/:id/box              remove the box with its data, and stop sending anything to it
 //   POST   /api/projects/:id/deploy/:deploymentId/restore   put an earlier finished deploy back as the live one (Step 4)
 //   POST   /api/projects/:id/deploy { recreateId?, stack?, accept?: [warning ids], target?: 'remastly' | 'own' }   start a
 //          deploy (202); `target` defaults to Remastly hosting when it is set up, otherwise the person's own Netlify account
@@ -39,7 +48,12 @@ import {
 } from '../deploy/store.js';
 import { isOwner } from '../accounts/roles.js';
 import { checkRecords, domainPlan, parseDomain } from '../deploy/domain.js';
-import { hostingPaths, hostsOf, setHosts, switchRelease } from '../hosting/store.js';
+import { applyDns, credentialOf, DnsError, forgetDnsChange, godaddyClient, planDns, readDnsChange, saveDnsChange, sealedOf, TOKEN_SCOPES, undoDns } from '../deploy/godaddy.js';
+import { BOX_TARGET, hostingPaths, hostsOf, setHosts, switchRelease } from '../hosting/store.js';
+import { addUpload, BOX_LIMITS, BoxError, boxState, deleteBox, hasBox, removeUpload, startBox, WORDPRESS_PATHS } from '../boxes/index.js';
+import { boxRunning } from '../boxes/box.js';
+import { dockerAvailable } from '../boxes/docker.js';
+import { boxSetup } from '../boxes/setup.js';
 import { hasCertificate, refreshWantedCerts } from '../hosting/certs.js';
 import { hostingIp } from '../config/index.js';
 import { SERVER_DIR } from '../config/paths.js';
@@ -137,6 +151,28 @@ hostingRouter.delete('/remastly', (req, res) => {
   if (!isOwner(req)) return res.status(403).json({ error: 'Only the owner can change Remastly hosting.', forbidden: 'owner' });
   removeConnection(REMASTLY, 'netlify');
   res.json({ remastly: remastlyOf(req) });
+});
+
+// GoDaddy: not a host but where the person's domains are, so Remastly can change their DNS records itself (deploy/godaddy.js).
+// Before '/:provider' like '/remastly'.
+hostingRouter.put('/godaddy', async (req, res) => {
+  if (notReady(res)) return;
+  const c = credentialOf(req.body);
+  if (!c) return res.status(400).json({ error: `Paste the whole personal access token from GoDaddy (with the permissions ${TOKEN_SCOPES.join(' and ')}), or a key and its secret.` });
+  try {
+    await godaddyClient(sealedOf(c)).check();
+    // The end is enough to tell two apart; the token, key or secret is never sent back.
+    const connection = saveConnection({ ownerKey: ownerKeyOf(req), provider: 'godaddy', token: sealedOf(c), accountName: `${c.kind === 'token' ? 'token' : 'key'} ending ${c.ending}` });
+    res.json({ connection });
+  } catch (err) {
+    if (err instanceof DnsError) return res.status(err.code === 'key' ? 400 : 502).json({ error: err.message });
+    throw err;
+  }
+});
+
+hostingRouter.delete('/godaddy', (req, res) => {
+  if (notReady(res)) return;
+  res.json({ removed: removeConnection(ownerKeyOf(req), 'godaddy') });
 });
 
 hostingRouter.put('/:provider', async (req, res) => {
@@ -378,6 +414,104 @@ deployRouter.delete('/:id/domain', async (req, res) => {
   }
 });
 
+// ---- Step 2, done by Remastly: the domain's records changed at GoDaddy ----
+
+/** This person's GoDaddy client, or null when they have not connected GoDaddy. @param {any} req */
+const godaddyOf = (req) => {
+  const token = connectionToken(ownerKeyOf(req), 'godaddy');
+  return token ? godaddyClient(token) : null;
+};
+
+/**
+ * What the GoDaddy part of the domain card shows: whether GoDaddy is connected, what Remastly changed there before (and can
+ * put back), and what it would change now; or why it cannot (the domain is not in that account, its DNS is run elsewhere).
+ * @param {any} project @param {any} req @param {any} [state]  the domain's state when the caller already read it
+ */
+async function godaddyCard(project, req, state) {
+  const saved = await readDnsChange(project.id);
+  const changed = saved ? { at: saved.at, apex: saved.apex, names: saved.changes.filter((c) => c.needed).map((c) => c.host) } : null;
+  const connection = getConnection(ownerKeyOf(req), 'godaddy');
+  if (!connection) return { connected: false, changed };
+  const base = { connected: true, account: connection.accountName, changed };
+  const current = state ?? await domainOf(project).then((r) => ('state' in r ? r.state : null));
+  const d = current?.domain ? parseDomain(current.domain) : null;
+  if (!d?.ok) return { ...base, plan: null };
+  try {
+    const changes = await planDns(/** @type {any} */ (godaddyOf(req)), d.apex, current.records);
+    return {
+      ...base,
+      plan: {
+        apex: d.apex,
+        needed: changes.some((c) => c.needed),
+        changes: changes.map((c) => ({ host: c.host, type: c.type, value: c.value, needed: c.needed, now: Object.entries(c.before).flatMap(([t, v]) => v.map((x) => `${t} ${x}`)) })),
+      },
+    };
+  } catch (err) {
+    if (err instanceof DnsError) return { ...base, plan: null, problem: err.message };
+    throw err;
+  }
+}
+
+/** @param {any} res @param {unknown} err */
+function dnsFailure(res, err) {
+  if (err instanceof DnsError) return res.status(err.code === 'api' ? 502 : 409).json({ error: err.message });
+  throw err;
+}
+
+deployRouter.get('/:id/domain/godaddy', async (req, res) => {
+  if (notReady(res)) return;
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  try {
+    res.json(await godaddyCard(project, req));
+  } catch (err) {
+    dnsFailure(res, err);
+  }
+});
+
+deployRouter.post('/:id/domain/godaddy', async (req, res) => {
+  if (notReady(res)) return;
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  const client = godaddyOf(req);
+  if (!client) return res.status(409).json({ error: 'Connect GoDaddy first.' });
+  const r = await domainOf(project);
+  if ('error' in r) return res.status(r.error.status).json(r.error.body);
+  const d = r.state.domain ? parseDomain(r.state.domain) : null;
+  if (!d?.ok) return res.status(409).json({ error: 'Connect the domain to the site first.' });
+  try {
+    // Read again now, not taken from the page: the records may have changed since the card was shown.
+    const changes = await planDns(client, d.apex, r.state.records);
+    // Saved before anything changes, so even a change that stops half way can be put back.
+    if (changes.some((c) => c.needed)) await saveDnsChange(project.id, d.apex, changes);
+    await applyDns(client, d.apex, changes);
+    const after = await domainOf(project);
+    const state = 'state' in after ? after.state : r.state;
+    res.json({ domain: state, godaddy: await godaddyCard(project, req, state) });
+  } catch (err) {
+    dnsFailure(res, err);
+  }
+});
+
+deployRouter.delete('/:id/domain/godaddy', async (req, res) => {
+  if (notReady(res)) return;
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  const saved = await readDnsChange(project.id);
+  if (!saved) return res.status(409).json({ error: 'Remastly has not changed anything at GoDaddy for this site.' });
+  const client = godaddyOf(req);
+  if (!client) return res.status(409).json({ error: 'Connect GoDaddy again to put the old records back.' });
+  try {
+    await undoDns(client, saved.apex, saved.changes);
+    await forgetDnsChange(project.id);
+    const after = await domainOf(project);
+    const state = 'state' in after ? after.state : null;
+    res.json({ domain: state, godaddy: await godaddyCard(project, req, state) });
+  } catch (err) {
+    dnsFailure(res, err);
+  }
+});
+
 // ---- Step 3: logins and data passed to the old app ----
 
 /** The names the old app's address may not have: the site's own (original and new). @param {any} project */
@@ -389,7 +523,11 @@ deployRouter.get('/:id/pass-through', async (req, res) => {
   if (!project) return res.status(404).json({ error: 'Project not found.' });
   const { report } = subjectOf(project, req.query);
   const passThrough = await readPassThrough(project.id);
-  res.json({ passThrough, rules: passThrough ? redirectsFor(passThrough) : null, suggestions: report ? suggestedPaths(report) : [] });
+  res.json({
+    passThrough: passThrough && { ...passThrough, box: passThrough.target === BOX_TARGET },
+    rules: passThrough ? redirectsFor(passThrough) : null,
+    suggestions: report ? suggestedPaths(report) : [],
+  });
 });
 
 deployRouter.put('/:id/pass-through', async (req, res) => {
@@ -411,6 +549,96 @@ deployRouter.delete('/:id/pass-through', async (req, res) => {
   if (!project) return res.status(404).json({ error: 'Project not found.' });
   await savePassThrough(project.id, null);
   res.json({ passThrough: null, rules: null });
+});
+
+// ---- Move logins and data to Remastly: the website's back office in a box (boxes/) ----
+
+/** The domain the box answers to: the one the live site has, else the original's. @param {any} project */
+const boxDomainOf = async (project) => (await hostsOf(project.id)).primary ?? new URL(project.url).hostname;
+
+/** What the card shows; while the server cannot run boxes, the owner sees how to set it up. @param {any} project @param {any} req */
+async function boxCard(project, req) {
+  const passThrough = await readPassThrough(project.id);
+  const available = await dockerAvailable();
+  return {
+    available,
+    setup: !available && isOwner(req) ? boxSetup({ user: os.userInfo().username }) : null,
+    box: await boxState(project.id),
+    domain: await boxDomainOf(project),
+    usedForLogins: passThrough?.target === BOX_TARGET,
+    limits: { uploadMB: Math.round(BOX_LIMITS.uploadBytes / 1024 / 1024), files: BOX_LIMITS.files },
+  };
+}
+
+/** A BoxError as the card shows it; anything else is the app's own failure. @param {any} res @param {unknown} err */
+function boxFailure(res, err) {
+  if (err instanceof BoxError) return res.status(409).json({ error: err.message });
+  throw err;
+}
+
+deployRouter.get('/:id/box', async (req, res) => {
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  res.json(await boxCard(project, req));
+});
+
+// The file is the request body, streamed to disk (a backup is gigabytes; it is never held in memory).
+deployRouter.post('/:id/box/files', async (req, res) => {
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  try {
+    await addUpload(project.id, String(req.query.name ?? ''), req, Number(req.headers['content-length']) || 0);
+  } catch (err) {
+    return boxFailure(res, err);
+  }
+  res.json(await boxCard(project, req));
+});
+
+deployRouter.delete('/:id/box/files/:name', async (req, res) => {
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  try {
+    await removeUpload(project.id, req.params.name);
+  } catch (err) {
+    return boxFailure(res, err);
+  }
+  res.json(await boxCard(project, req));
+});
+
+deployRouter.post('/:id/box/start', async (req, res) => {
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  if (!(await dockerAvailable())) return res.status(409).json({ error: 'This Remastly server cannot run back offices yet. The owner sets it up once (Go live → server setup).' });
+  try {
+    await startBox(project.id, { domain: await boxDomainOf(project), replace: req.body?.replace === true });
+  } catch (err) {
+    return boxFailure(res, err);
+  }
+  res.status(202).json(await boxCard(project, req));
+});
+
+deployRouter.post('/:id/box/use', async (req, res) => {
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  if (!(await hasBox(project.id))) return res.status(409).json({ error: 'Make the box first.' });
+  // The paths already passed on stay (an app path the owner listed), now answered by the box, with WordPress's own.
+  const before = await readPassThrough(project.id);
+  const paths = [...new Set([...WORDPRESS_PATHS, ...(before?.paths ?? [])])];
+  await savePassThrough(project.id, { target: BOX_TARGET, paths });
+  res.json(await boxCard(project, req));
+});
+
+deployRouter.delete('/:id/box', async (req, res) => {
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  try {
+    await deleteBox(project.id);
+  } catch (err) {
+    return boxFailure(res, err);
+  }
+  // Nothing answers there any more.
+  if ((await readPassThrough(project.id))?.target === BOX_TARGET) await savePassThrough(project.id, null);
+  res.json(await boxCard(project, req));
 });
 
 // ---- Step 4: go back ----
@@ -554,6 +782,7 @@ deployRouter.get('/:id/switch-off', async (req, res) => {
   const snapshot = await readSnapshot(project.id);
   res.json(switchOffCheck({
     live, domain, domainError, report, passThrough,
+    boxRunning: passThrough?.target === BOX_TARGET && (await hasBox(project.id)) && (await boxRunning(project.id)),
     appCalls: unansweredAppCalls(report, { passThrough, snapshotAddresses: (snapshot?.items ?? []).map((i) => i.address) }),
     snapshot: snapshot?.items.length ? { takenAt: snapshot.takenAt, count: snapshot.items.length } : null,
     formsWaiting: formCounts(report?.asIs?.formRoutes ?? []).waiting,
@@ -588,7 +817,7 @@ deployRouter.post('/:id/snapshot', async (req, res) => {
   // Asked of the old app's own address when one is set (Logins and data): once the domain points to the copy, the site's own
   // address answers with the copy, not with the old app.
   const passThrough = await readPassThrough(project.id);
-  const origin = passThrough?.target ?? new URL(project.url).origin;
+  const origin = passThrough && passThrough.target !== BOX_TARGET ? passThrough.target : new URL(project.url).origin;
   await takeSnapshot(project.id, origin, calls);
   res.json(await snapshotState(project));
 });

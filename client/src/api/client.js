@@ -45,6 +45,29 @@ async function request(path, { method = 'GET', body, file } = {}) {
   return data;
 }
 
+/**
+ * Sends a large file as the request body, reporting how much has gone (fetch cannot tell): onProgress(0..1). Answers and
+ * fails like request().
+ */
+function upload(path, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', apiUrl(path));
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress?.(e.loaded / e.total); };
+    xhr.onerror = () => reject(Object.assign(new Error('The upload stopped (the connection dropped). Try again.'), { status: 0 }));
+    xhr.onload = () => {
+      let data = null;
+      try { data = JSON.parse(xhr.responseText); } catch { /* not JSON: said below */ }
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(data);
+      if (signInIfAsked({ status: xhr.status }, data)) return;
+      const message = data?.error || (xhr.status === 413 ? 'The file is larger than the server accepts.' : `Upload failed (${xhr.status})`);
+      reject(Object.assign(new Error(message), { status: xhr.status, data: data ?? {} }));
+    };
+    xhr.send(file);
+  });
+}
+
 // How long a dropped progress stream keeps trying to reconnect before the job is shown as lost.
 const RECONNECT_FOR_MS = 120000;
 const RECONNECT_MAX_DELAY_MS = 10000;
@@ -309,12 +332,24 @@ export const api = {
   getSnapshot: (id) => request(`/projects/${id}/snapshot`),
   takeSnapshot: (id) => request(`/projects/${id}/snapshot`, { method: 'POST' }),
   removeSnapshot: (id) => request(`/projects/${id}/snapshot`, { method: 'DELETE' }),
+  getBox: (id) => request(`/projects/${id}/box`),
+  uploadBoxFile: (id, file, onProgress) => upload(`/projects/${id}/box/files?name=${encodeURIComponent(file.name)}`, file, onProgress),
+  removeBoxFile: (id, name) => request(`/projects/${id}/box/files/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  startBox: (id, replace = false) => request(`/projects/${id}/box/start`, { method: 'POST', body: { replace } }),
+  useBox: (id) => request(`/projects/${id}/box/use`, { method: 'POST' }),
+  removeBox: (id) => request(`/projects/${id}/box`, { method: 'DELETE' }),
   getPassThrough: (id) => request(`/projects/${id}/pass-through`),
   setPassThrough: (id, body) => request(`/projects/${id}/pass-through`, { method: 'PUT', body }),
   removePassThrough: (id) => request(`/projects/${id}/pass-through`, { method: 'DELETE' }),
   getDomain: (id) => request(`/projects/${id}/domain`),
   setDomain: (id, domain) => request(`/projects/${id}/domain`, { method: 'PUT', body: { domain } }),
   removeDomain: (id) => request(`/projects/${id}/domain`, { method: 'DELETE' }),
+  // The domain's records changed at GoDaddy by Remastly, with the person's own GoDaddy token or key (kept sealed on the server).
+  connectGoDaddy: (credential) => request('/hosting/godaddy', { method: 'PUT', body: credential }),
+  disconnectGoDaddy: () => request('/hosting/godaddy', { method: 'DELETE' }),
+  getGoDaddy: (id) => request(`/projects/${id}/domain/godaddy`),
+  applyGoDaddy: (id) => request(`/projects/${id}/domain/godaddy`, { method: 'POST' }),
+  undoGoDaddy: (id) => request(`/projects/${id}/domain/godaddy`, { method: 'DELETE' }),
   unpublishBuild: (id) => request(`/build/runs/${id}/publish`, { method: 'DELETE' }),
   // Saved sites (server/src/buildmode/sites.js): the app's state of each site, kept on the server, with the builds made from it.
   listBuildSites: () => request('/build/sites'),
