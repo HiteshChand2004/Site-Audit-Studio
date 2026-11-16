@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 export const MODULES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'modules');
 
 // The order modules appear in the system prompt: the fixed core first, then from the broadest decision to the narrowest.
-export const KIND_ORDER = ['core', 'task', 'input', 'site', 'goal', 'stack', 'quality'];
+export const KIND_ORDER = ['core', 'task', 'input', 'site', 'goal', 'stack', 'growth', 'quality'];
 
 /**
  * @typedef {{ id: string, kind: string, version: number, title: string, body: string, file: string }} BuildModule
@@ -75,7 +75,8 @@ export function loadLibrary(dir = MODULES_DIR) {
 }
 
 // Quality modules every build gets; the rest only when the request asks for them (understanding.quality_focus).
-const ALWAYS_QUALITY = ['craft', 'seo', 'accessibility', 'performance', 'aeo', 'responsive'];
+const GROWTH_GOALS = ['leads', 'sales', 'bookings'];
+const ALWAYS_QUALITY =['craft', 'seo', 'accessibility', 'performance', 'aeo', 'responsive'];
 
 /**
  * Picks the modules for one request, in prompt order, each with the reason it was picked (shown to the user and stored with the
@@ -101,6 +102,11 @@ export function selectModules(library, understanding, setup) {
   }
   add('goal', understanding.goal, `the main goal is ${understanding.goal}`);
   if (!add('stack', setup.stack, `the chosen stack is ${setup.stack}`)) throw new Error(`No stack module "${setup.stack}"`);
+  // The Growth OS playbook (modules/growth/, synced by scripts/sync-growth-playbook.mjs): for sites whose job is to bring in leads,
+  // sales or bookings (paid-ads ready). Information and credibility sites do not get it; it would only add noise.
+  if (GROWTH_GOALS.includes(understanding.goal)) {
+    for (const id of library.ids('growth')) add('growth', id, `the main goal is ${understanding.goal}, so the Growth OS playbook applies`);
+  }
   const focus = new Set(understanding.quality_focus ?? []);
   for (const id of library.ids('quality')) {
     if (ALWAYS_QUALITY.includes(id)) add('quality', id, focus.has(id) ? 'always included; also asked for' : 'always included');

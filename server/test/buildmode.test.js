@@ -112,8 +112,12 @@ test('the playbooks follow the request: kind of site, goal, stack, input and ask
   const picked = selectModules(lib, { ...UNDERSTANDING, task: 'build-new', quality_focus: ['motion'] }, { input: 'scratch', stack: 'nextjs' });
   assert.deepEqual(picked.map((p) => `${p.module.kind}/${p.module.id}`), [
     'core/safety', 'task/build-new', 'input/scratch', 'site/restaurant', 'goal/bookings', 'stack/nextjs',
+    ...lib.ids('growth').map((id) => `growth/${id}`), // a bookings site brings in enquiries, so it gets the Growth OS playbook
     'quality/accessibility', 'quality/aeo', 'quality/craft', 'quality/motion', 'quality/performance', 'quality/responsive', 'quality/seo',
   ]);
+  assert.ok(lib.ids('growth').length >= 5, 'the synced Growth OS modules are in the library (run scripts/sync-growth-playbook.mjs)');
+  const info = selectModules(lib, { task: 'build-new', site_type: 'general', goal: 'information', quality_focus: [] }, { input: 'scratch', stack: 'nextjs' });
+  assert.ok(!info.some((p) => p.module.kind === 'growth'), 'an information site does not get the growth playbook');
   const saas = selectModules(lib, { task: 'edit', site_type: 'saas', goal: 'leads', quality_focus: [] }, { input: 'source', stack: 'react-vite' });
   const ids = saas.map((p) => p.module.id);
   assert.ok(ids.includes('saas') && ids.includes('edit') && ids.includes('source') && ids.includes('leads'));
