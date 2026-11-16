@@ -43,7 +43,7 @@ import { hostingPaths, hostsOf, setHosts, switchRelease } from '../hosting/store
 import { hasCertificate, refreshWantedCerts } from '../hosting/certs.js';
 import { hostingIp } from '../config/index.js';
 import { SERVER_DIR } from '../config/paths.js';
-import { serverSetup } from '../hosting/setup.js';
+import { serverSetup, stableServerDir } from '../hosting/setup.js';
 import os from 'node:os';
 
 const serverIp = hostingIp;import { appCallsOf, parsePaths, parseTarget, readPassThrough, redirectsFor, savePassThrough, suggestedPaths, unansweredAppCalls } from '../deploy/passThrough.js';
@@ -120,7 +120,7 @@ hostingRouter.get('/server-setup', async (req, res) => {
   try {
     setup = serverSetup({
       // A folder nginx can reach: the default one sits in the data folder, often inside a home folder nginx may not enter.
-      hostingDir: process.env.SAS_HOSTING_DIR ? hostingPaths.root : '/srv/remastly-hosting', serverDir: SERVER_DIR, node: process.execPath, user: os.userInfo().username,
+      hostingDir: process.env.SAS_HOSTING_DIR ? hostingPaths.root : '/srv/remastly-hosting', serverDir: stableServerDir(SERVER_DIR), node: process.execPath, user: os.userInfo().username,
       email: email || 'owner@example.com', ip: hostingIp(), sitesPort,
     });
   } catch (err) {

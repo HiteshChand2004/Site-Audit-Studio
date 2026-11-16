@@ -4,13 +4,30 @@
 // here runs anything: the owner runs these steps once, as root, on the server.
 //
 // What it sets up, and why each part is there:
-//   nginx      every domain no other server block names → the sites server; HTTPS with the certificate of the name asked for,
+//   nginx      every named domain no other server block names → the sites server (a regex name, never `default_server`: a
+//              server's own catch-all for bare-IP scans and nameless requests stays as it is); HTTPS with the certificate of the name asked for,
 //              read per connection from HOSTING_DIR/certs/<name>/ (so a new domain needs no reload); http → https once a
 //              domain has its certificate, except Let's Encrypt's own check.
 //   sites      the sites server as a service of its own (hosting/main.js), restarted if it stops.
 //   certs      certbot, the official Let's Encrypt client, run every 5 minutes for the domains Remastly lists
 //              (hosting/certs.js); its deploy hook copies each certificate where nginx reads it, on issue and on renewal
 //              (certbot's own timer renews them).
+
+import { realpathSync } from 'node:fs';
+
+/**
+ * The app folder a service should start from: the one that follows the live version. With release folders
+ * (<root>/releases/<id>/server, and <root>/app a link to the live release, docs/DEPLOY-TOOL.md) that is <root>/app/server, so
+ * after the next update the sites server runs the new code too; otherwise the folder as it is.
+ * @param {string} serverDir  this process's server folder (its real path)
+ * @param {(p: string) => string | null} [realpathOf]
+ */
+export function stableServerDir(serverDir, realpathOf = (p) => { try { return realpathSync(p); } catch { return null; } }) {
+  const m = serverDir.match(/^(.*)\/releases\/[^/]+\/server$/);
+  if (!m) return serverDir;
+  const app = `${m[1]}/app`;
+  return realpathOf(app) === serverDir.slice(0, -'/server'.length) ? `${app}/server` : serverDir;
+}
 
 const HOST_RE = '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$';
 
@@ -31,11 +48,13 @@ export function serverSetup({ hostingDir, serverDir, node, user, email, ip, site
   plain(email, /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/, 'email');
   plain(sitesPort, /^\d{2,5}$/, 'port');
   const nginx = `# Remastly: the websites Remastly hosts itself (Go live -> "Remastly's own server").
-# Every domain no other server block names comes here; the sites server on 127.0.0.1:${sitesPort} answers the ones Remastly hosts.
+# Every named domain no other server block names comes here (an exact server_name elsewhere always wins over this pattern);
+# the sites server on 127.0.0.1:${sitesPort} answers the ones Remastly hosts. Not the default server: a request by bare IP or
+# with no name keeps going to the server's own catch-all, if it has one.
 server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    server_name _;
+    listen 80;
+    listen [::]:80;
+    server_name ~^.+$;
     location / {
         # Once a domain has its certificate, visitors go to https; Let's Encrypt's own check stays on http.
         set $to_https 0;
@@ -49,9 +68,9 @@ server {
     }
 }
 server {
-    listen 443 ssl default_server;
-    listen [::]:443 ssl default_server;
-    server_name _;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name ~^.+$;
     # The certificate of the name the visitor asked for, read on each connection: a new domain needs no reload.
     ssl_certificate     ${hostingDir}/certs/$ssl_server_name/fullchain.pem;
     ssl_certificate_key ${hostingDir}/certs/$ssl_server_name/privkey.pem;
@@ -153,7 +172,6 @@ WantedBy=timers.target
       { why: 'Install certbot (Let\'s Encrypt\'s official tool)', command: 'sudo apt-get update && sudo apt-get install -y certbot' },
       { why: 'Make the hosting folder, owned by the user Remastly runs as, readable by nginx', command: `sudo mkdir -p ${hostingDir}/acme ${hostingDir}/certs && sudo chown -R ${user} ${hostingDir} && sudo chmod 755 ${hostingDir} ${hostingDir}/acme ${hostingDir}/certs` },
       { why: 'Save the six files below (with sudo), then make the two scripts runnable', command: 'sudo chmod 755 /usr/local/sbin/remastly-certs /usr/local/sbin/remastly-certs-deploy' },
-      { why: 'Only one nginx site can catch every other domain: switch off Ubuntu\'s sample site if it is on (it does that too)', command: 'sudo rm -f /etc/nginx/sites-enabled/default' },
       { why: 'Turn the nginx part on and check it before reloading', command: 'sudo ln -sf /etc/nginx/sites-available/remastly-sites /etc/nginx/sites-enabled/remastly-sites && sudo nginx -t && sudo systemctl reload nginx' },
       { why: 'Start the sites server and the certificate timer, now and after every reboot', command: 'sudo systemctl daemon-reload && sudo systemctl enable --now remastly-sites.service remastly-certs.timer' },
       { why: 'Tell Remastly it hosts (add these two lines to its settings, then restart it)', command: 'see "Remastly\'s settings" below' },

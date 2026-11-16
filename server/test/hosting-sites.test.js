@@ -166,6 +166,11 @@ test('the server setup is written with this Remastly\'s values, refuses values a
   const file = (p) => s.files.find((f) => f.path === p).content;
   assert.match(file('/etc/nginx/sites-available/remastly-sites'), /ssl_certificate {5}\/srv\/remastly-hosting\/certs\/\$ssl_server_name\/fullchain\.pem;/);
   assert.match(file('/etc/nginx/sites-available/remastly-sites'), /proxy_pass http:\/\/127\.0\.0\.1:4100;/);
+  // Never the server's catch-all: a server's own default_server (bare-IP scans, nameless requests) stays as it is, and no step
+  // switches another site off.
+  assert.doesNotMatch(file('/etc/nginx/sites-available/remastly-sites'), /default_server/);
+  assert.equal(file('/etc/nginx/sites-available/remastly-sites').match(/server_name ~\^\.\+\$;/g).length, 2);
+  assert.ok(!s.steps.some((x) => /sites-enabled\/default|rm -f/.test(x.command)), 'no step removes another nginx site');
   assert.match(file('/etc/systemd/system/remastly-sites.service'), /User=ubuntu\nWorkingDirectory=\/home\/ubuntu\/remastly\/server/);
   assert.match(file('/usr/local/sbin/remastly-certs'), /-m 'ops@example\.com'/);
   assert.deepEqual(s.env, ['SAS_HOSTING_IP=13.205.53.133', 'SAS_HOSTING_DIR=/srv/remastly-hosting']);
@@ -202,4 +207,14 @@ test('the certificate script only lets plain domain names reach certbot', async 
   // A second run within the hour does not ask again (Let's Encrypt limits failed checks).
   execFileSync('sh', [path.join(root, 'certs.sh')], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
   assert.equal((await readFile(path.join(root, 'certbot-calls.txt'), 'utf8')).trim().split('\n').length, 1);
+});
+
+test('the setup starts the sites server from the folder that follows the live version', async () => {
+  const { stableServerDir } = await import('../src/hosting/setup.js');
+  const real = { '/srv/sas/app': '/srv/sas/releases/38d6cf5' };
+  const realpathOf = (p) => real[p] ?? null;
+  assert.equal(stableServerDir('/srv/sas/releases/38d6cf5/server', realpathOf), '/srv/sas/app/server');
+  // Not the live release (an older one answering, or no app link): the folder as it is.
+  assert.equal(stableServerDir('/srv/sas/releases/8a44aed/server', realpathOf), '/srv/sas/releases/8a44aed/server');
+  assert.equal(stableServerDir('/home/me/Site-Audit-Studio/server', realpathOf), '/home/me/Site-Audit-Studio/server');
 });

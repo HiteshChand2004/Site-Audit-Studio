@@ -139,7 +139,7 @@ export const STEPS = {
   create: { n: 2, title: 'Create the copy', short: 'Create', explain: 'Build a clean, improved copy of the site in the technology you choose.' },
   compare: { n: 3, title: 'Compare', short: 'Compare', explain: 'Look at the original and the copy side by side, page by page.' },
   results: { n: 4, title: 'Results & download', short: 'Results', explain: 'See what got better, what still needs work, and download the new site.' },
-  live: { n: 5, title: 'Go live', short: 'Go live', explain: 'Put the new site on the internet, on Remastly hosting or your own account, and update it after every new copy.' },
+  live: { n: 5, title: 'Go live', short: 'Go live', explain: 'Put the new site on the internet, hosted by Remastly at your domain, and update it after every new copy.' },
 };
 
 /** Step 5, Go live (layout/steps/GoLiveStep.jsx): deploying a finished copy to the owner's Netlify account. */
@@ -173,6 +173,11 @@ export const GO_LIVE = {
     upload: { title: 'Uploading the site', explain: 'Sending the site as one package. Large sites take a minute.' },
   },
   liveTitle: 'Your site is live',
+  checkingTitle: 'On Remastly’s server',
+  checkingText: 'Checking whether its domain points here…',
+  readyTitle: 'Ready on Remastly’s server, not visible yet',
+  readyText: (domain, found) => `Visitors of ${domain} still reach ${found.length ? `another server (${found.join(', ')})` : 'no server'}, so they see what was there before. Point its DNS record to this server (“Your own domain” below); from then on they get this copy.`,
+  noDomainText: 'It has no domain yet, so no visitor can reach it. Add one under “Your own domain” below.',
   liveAt: 'Live at',
   openNetlify: 'Manage in Netlify',
   liveFacts: (d, size) => `${d.files ?? '?'} files, ${size}. Published ${d.when}.`,
