@@ -61,7 +61,9 @@ import { SERVER_DIR } from '../config/paths.js';
 import { serverSetup, stableServerDir } from '../hosting/setup.js';
 import os from 'node:os';
 
-const serverIp = hostingIp;import { appCallsOf, parsePaths, parseTarget, readPassThrough, redirectsFor, savePassThrough, suggestedPaths, unansweredAppCalls } from '../deploy/passThrough.js';
+const serverIp = hostingIp;import { appCallsOf, fallbackFor, parsePaths, parseTarget, readPassThrough, redirectsFor, savePassThrough, suggestedPaths, unansweredAppCalls } from '../deploy/passThrough.js';
+import { appState, hasApp } from '../apps/index.js';
+import { appRunning } from '../apps/run.js';
 import { formsEndpointOf } from '../forms/connect.js';
 import { entriesCsv, importEntries, listEntries, removeEntry, removeImport, saveFormSettings } from '../forms/entries.js';
 import { entriesFromRows, IMPORT_LIMITS, parseCsv } from '../forms/importCsv.js';
@@ -546,7 +548,7 @@ deployRouter.get('/:id/pass-through', async (req, res) => {
   const passThrough = await readPassThrough(project.id);
   res.json({
     passThrough: passThrough && { ...passThrough, box: passThrough.target === BOX_TARGET },
-    rules: passThrough ? redirectsFor(passThrough) : null,
+    rules: passThrough ? [redirectsFor(passThrough), fallbackFor(passThrough)].filter(Boolean).join('\n') : null,
     suggestions: report ? suggestedPaths(report) : [],
   });
 });
@@ -630,6 +632,8 @@ deployRouter.post('/:id/box/start', async (req, res) => {
   const project = /** @type {any} */ (selectProject.get(req.params.id));
   if (!project) return res.status(404).json({ error: 'Project not found.' });
   if (!(await dockerAvailable())) return res.status(409).json({ error: 'This Remastly server cannot run back offices yet. The owner sets it up once (Go live → server setup).' });
+  // One back office per website: an app (apps/) answers it already.
+  if (['running', 'starting'].includes((await appState(project.id)).status)) return res.status(409).json({ error: 'This website already runs its own app on Remastly. Remove it first.' });
   try {
     await startBox(project.id, { domain: await boxDomainOf(project), replace: req.body?.replace === true });
   } catch (err) {
@@ -803,7 +807,8 @@ deployRouter.get('/:id/switch-off', async (req, res) => {
   const snapshot = await readSnapshot(project.id);
   res.json(switchOffCheck({
     live, domain, domainError, report, passThrough,
-    boxRunning: passThrough?.target === BOX_TARGET && (await hasBox(project.id)) && (await boxRunning(project.id)),
+    // The website's back office on Remastly: its WordPress box, or its app (apps/).
+    boxRunning: passThrough?.target === BOX_TARGET && (((await hasBox(project.id)) && (await boxRunning(project.id))) || ((await hasApp(project.id)) && (await appRunning(project.id)))),
     appCalls: unansweredAppCalls(report, { passThrough, snapshotAddresses: (snapshot?.items ?? []).map((i) => i.address) }),
     snapshot: snapshot?.items.length ? { takenAt: snapshot.takenAt, count: snapshot.items.length } : null,
     formsWaiting: formCounts(report?.asIs?.formRoutes ?? []).waiting,

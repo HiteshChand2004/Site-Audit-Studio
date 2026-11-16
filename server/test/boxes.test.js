@@ -17,7 +17,7 @@ import { DetectError, findWordPress, readWpConfig } from '../src/boxes/detect.js
 import { addUpload, BOX_LIMITS, boxState, BoxError, removeUpload, WORDPRESS_PATHS } from '../src/boxes/index.js';
 import { BOX_TARGET, hostingPaths, publishRelease, setBoxPort, setHosts } from '../src/hosting/store.js';
 import { sitesHandler } from '../src/hosting/server.js';
-import { parseTarget, redirectsFor } from '../src/deploy/passThrough.js';
+import { fallbackFor, parseTarget, redirectsFor } from '../src/deploy/passThrough.js';
 import { switchOffCheck } from '../src/deploy/switchOff.js';
 
 let dir;
@@ -189,4 +189,50 @@ test('the box\'s address is Remastly\'s own: nobody can type it as an old app, a
   assert.equal(switchOffCheck({ ...base, passThrough, boxRunning: true }).items.find((i) => i.id === 'app').status, 'ok');
   assert.equal(switchOffCheck({ ...base, passThrough, boxRunning: false }).items.find((i) => i.id === 'app').status, 'needs');
   assert.equal(switchOffCheck({ ...base, passThrough: { target: 'https://app.x', paths: ['/api/*'] } }).items.find((i) => i.id === 'app').status, 'needs');
+});
+
+test('an app on Remastly: its own paths and every address the copy has no file for go to it; the copy keeps its pages and redirects', async () => {
+  const savedRoot = hostingPaths.root;
+  hostingPaths.root = path.join(dir, 'hosting-app');
+  const seen = [];
+  const app = createServer((req, res) => {
+    seen.push(req.url);
+    res.writeHead(200, { 'content-type': 'text/plain' }).end(`app:${req.url}`);
+  });
+  await new Promise((r) => app.listen(0, '127.0.0.1', r));
+  const sites = createServer(sitesHandler());
+  await new Promise((r) => sites.listen(0, '127.0.0.1', r));
+  const get = (p) => new Promise((resolve, reject) => {
+    const req = httpRequest({ host: '127.0.0.1', port: sites.address().port, path: p, headers: { host: 'gardener.acme.test' } }, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => resolve({ status: res.statusCode, location: res.headers.location, body }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+  try {
+    const P = '77777777-7777-4777-8777-777777777777';
+    await setHosts(P, 'gardener.acme.test');
+    const pt = { target: BOX_TARGET, paths: ['/api/*', '/auth/*'], fallback: true };
+    // As a deploy writes it: the passed paths first, the copy's own rules, then everything else last.
+    await publishRelease(P, 'r1', [
+      { name: 'index.html', content: Buffer.from('<h1>copy</h1>') },
+      { name: 'about/index.html', content: Buffer.from('<h1>about</h1>') },
+      { name: 'auth/login/index.html', content: Buffer.from('<p>not part of this copy</p>') },
+      { name: '_redirects', content: Buffer.from(`${redirectsFor(pt)}\n\n/old-about  /about/  301\n\n${fallbackFor(pt)}\n`) },
+    ]);
+    await setBoxPort(P, app.address().port);
+    assert.equal((await get('/')).body, '<h1>copy</h1>');
+    assert.equal((await get('/about/')).body, '<h1>about</h1>');
+    assert.equal((await get('/auth/login')).body, 'app:/auth/login', 'the app\'s path even where the copy has a notice page');
+    assert.equal((await get('/dashboard?tab=2')).body, 'app:/dashboard?tab=2', 'a page only the app has');
+    assert.equal((await get('/_next/static/chunks/new.js')).body, 'app:/_next/static/chunks/new.js');
+    assert.deepEqual([(await get('/old-about')).status, (await get('/old-about')).location], [301, '/about/'], 'the copy\'s own redirect still wins');
+    assert.equal(fallbackFor({ target: BOX_TARGET, paths: ['/api/*'] }), null, 'nothing else is passed without it');
+  } finally {
+    app.close();
+    sites.close();
+    hostingPaths.root = savedRoot;
+  }
 });

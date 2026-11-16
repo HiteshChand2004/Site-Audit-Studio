@@ -50,8 +50,8 @@ async function patchState(projectId, patch) {
   return next;
 }
 
-/** The lowest port no other box has. @param {string} projectId */
-async function freePort(projectId) {
+/** The lowest port no other box (or app, apps/) has; the website's own when it has one. @param {string} projectId */
+export async function freePort(projectId) {
   const all = await readBoxPorts();
   if (all[projectId]) return all[projectId].port;
   const taken = new Set(Object.values(all).map((b) => b.port));

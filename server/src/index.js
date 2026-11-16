@@ -24,6 +24,7 @@ import { loadPublished, PUBLISHED_PREFIX, publishedPath, resolvePublished } from
 import { inlineScriptHashes } from './recreate/inlineScripts.js';
 import { foreignOriginCheck } from './security/foreignOrigin.js';
 import { formsPublicRouter } from './routes/formsPublic.js';
+import { appsRouter, githubReturnRouter, githubRouter } from './routes/apps.js';
 import { accountsEnabled, bindHost, hostingIp, isLoopbackHost, trustProxySetting } from './config/index.js';
 import { refreshWantedCerts } from './hosting/certs.js';
 import { db } from './db/index.js';
@@ -51,6 +52,9 @@ app.set('trust proxy', trustProxySetting().value);
 // Before the app's own CORS, body parsing and origin checks: live sites' visitors post their forms here, from the sites'
 // own domains (routes/formsPublic.js answers for itself).
 app.use('/api/forms', formsPublicRouter);
+// Where GitHub sends the browser back (Run my app on Remastly): from GitHub's own page, which the origin check below refuses;
+// each answer only counts in the browser that started it (routes/apps.js).
+app.use('/api/github', githubReturnRouter);
 app.use(cors({ origin: ['http://localhost:5173', 'http://127.0.0.1:5173'] }));
 app.use(express.json({ limit: '1mb' }));
 // Nothing that merely shares the app's address is the app: a sandboxed preview or another site (security/foreignOrigin.js).
@@ -106,6 +110,8 @@ app.use('/api/projects', reauditRouter);
 app.use('/api/projects', reportRouter);
 app.use('/api/projects', faviconRouter);
 app.use('/api/projects', deployRouter);
+app.use('/api/projects', appsRouter);
+app.use('/api/github', githubRouter);
 app.use('/api/hosting', hostingRouter);
 app.use('/api/stacks', stacksRouter);
 app.use('/api/build', buildRouter);
