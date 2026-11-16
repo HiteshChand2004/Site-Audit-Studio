@@ -374,12 +374,12 @@ function GoDaddyBox({ project, domain, pointsHere, onDomain }) {
   });
 
   if (!card) return error ? <Alert tone="bad" title="GoDaddy">{error}</Alert> : null;
-  // Already pointing here by the person's own hand: nothing for GoDaddy to do.
-  if (pointsHere && !card.changed) return null;
   const plan = card.plan;
+  // Always offered, never required: the records can as well be added by hand (the table above).
   return (
     <div className={styles.godaddy}>
-      <p className={styles.godaddyTitle}>{T.gdTitle}</p>
+      <p className={styles.godaddyTitle}>{T.gdTitle} <span className={styles.badge}>{T.gdOptional}</span></p>
+      {pointsHere && !card.changed && <p className={ws.hint} style={{ margin: 0 }}>{T.gdInPlace}</p>}
       {card.changed && <Alert tone="ok" title={T.gdDone(timeAgo(card.changed.at))}>{card.changed.names.join(', ')}</Alert>}
       {!card.connected && (
         <>
@@ -437,13 +437,16 @@ function GoDaddyBox({ project, domain, pointsHere, onDomain }) {
               </table>
             </div>
           )}
-          <p className={ws.hint} style={{ margin: 0 }}>{T.gdConnected(card.account)}</p>
+          <p className={ws.hint} style={{ margin: 0 }}>{card.source === 'server' ? T.gdFromServer(card.accounts) : T.gdConnected(card.account)}</p>
           <div className={styles.accountButtons}>
             {plan?.needed && (
               <Button variant="primary" size="sm" icon={busy ? Spin : Globe} disabled={busy} onClick={() => setAsk('apply')}>{busy ? T.gdApplying : T.gdApply}</Button>
             )}
             {card.changed && <Button size="sm" icon={History} disabled={busy} onClick={() => setAsk('undo')}>{T.gdUndo}</Button>}
-            <Button size="sm" icon={Unplug} disabled={busy} onClick={() => run(async () => { await api.disconnectGoDaddy(); await load(); })}>{T.gdDisconnect}</Button>
+            {/* The server's own tokens are changed in its settings, not here. */}
+            {card.source !== 'server' && (
+              <Button size="sm" icon={Unplug} disabled={busy} onClick={() => run(async () => { await api.disconnectGoDaddy(); await load(); })}>{T.gdDisconnect}</Button>
+            )}
           </div>
         </>
       )}

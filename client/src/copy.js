@@ -207,7 +207,9 @@ export const GO_LIVE = {
   domainRemoveTitle: 'Remove the domain from the site?',
   domainRemoveText: 'The site stops answering at this domain. Change its DNS records back too, or visitors of the domain see an error.',
   gdTitle: 'Domain at GoDaddy? Remastly can change these records for you',
-  gdIntro: 'Connect your GoDaddy account once with a token. Remastly then changes only the records above; email and every other record stay as they are, and you can put the old records back here.',
+  gdOptional: 'Optional',
+  gdInPlace: 'The records are already in place, so there is nothing to change for this site.',
+  gdIntro: 'Add the records above yourself, or connect your GoDaddy account once with a token and let Remastly do it. Remastly then changes only the records above; email and every other record stay as they are, and you can put the old records back here.',
   gdSteps: [
     'Sign in to GoDaddy with the account the domain is in, and open GoDaddy’s developer page (link below).',
     'Create a Personal Access Token. Give it only these two permissions: domains.domain:read and domains.dns:update (read the domains, change DNS). Nothing else is needed: not buying, transferring or deleting domains.',
@@ -224,6 +226,7 @@ export const GO_LIVE = {
   gdConnecting: 'Checking with GoDaddy…',
   gdConnected: (account) => `GoDaddy is connected (${account}).`,
   gdDisconnect: 'Disconnect GoDaddy',
+  gdFromServer: (n) => `GoDaddy is connected through the server’s settings (${n} account${n === 1 ? '' : 's'}); Remastly uses the one this domain is in.`,
   gdCols: { name: 'Name', now: 'Points to now', next: 'Will point to' },
   gdNothing: 'nothing',
   gdApply: 'Change them at GoDaddy',

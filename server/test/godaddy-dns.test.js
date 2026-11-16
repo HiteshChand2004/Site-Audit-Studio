@@ -4,7 +4,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { applyDns, credentialOf, DnsError, forgetDnsChange, godaddyClient, godaddyConfig, planDns, readDnsChange, saveDnsChange, sealedOf, undoDns } from '../src/deploy/godaddy.js';
+import { applyDns, credentialOf, DnsError, forgetDnsChange, godaddyClient, godaddyConfig, planDns, readDnsChange, readServerTokens, saveDnsChange, sealedOf, undoDns } from '../src/deploy/godaddy.js';
 import { domainPlan, parseDomain } from '../src/deploy/domain.js';
 
 const KEY = 'dLP4testkey_1234';
@@ -169,3 +169,10 @@ test(`${kind}: a second change keeps the first "before", so the undo goes back t
   assert.equal(await readDnsChange(P), null);
 });
 }
+
+test('tokens set on the server: one per account, read once and taken out of the environment', () => {
+  process.env.SAS_GODADDY_TOKENS = ` ${PAT}, ${KEY}:${SECRET}\n second.token-value_9999 `;
+  assert.deepEqual(readServerTokens(), [`bearer ${PAT}`, `${KEY}:${SECRET}`, 'bearer second.token-value_9999']);
+  assert.equal(process.env.SAS_GODADDY_TOKENS, undefined, 'nothing Remastly starts inherits them');
+  assert.deepEqual(readServerTokens(), []);
+});
