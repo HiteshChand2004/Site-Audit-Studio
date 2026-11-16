@@ -136,7 +136,7 @@ process.once('SIGINT', shutdown);
 process.once('SIGTERM', shutdown);
 
 // Express 5 passes listen errors (such as a port conflict) to this callback.
-app.listen(PORT, HOST, (err) => {
+const server = app.listen(PORT, HOST, (err) => {
   if (err) {
     console.error(err.code === 'EADDRINUSE' ? `Port ${PORT} is already in use. Stop the other server or set PORT.` : err);
     process.exit(1);
@@ -166,3 +166,7 @@ app.listen(PORT, HOST, (err) => {
     setInterval(refresh, 5 * 60_000).unref();
   }
 });
+// A whole request may take up to 2 hours to arrive (Node's default is 5 minutes): a website's backup is gigabytes, uploaded
+// from an ordinary connection (Go live → Move logins and data). Slow senders that hold a connection are still cut by the
+// headers timeout here and by nginx in front.
+server.requestTimeout = 2 * 60 * 60_000;

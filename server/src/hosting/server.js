@@ -3,7 +3,8 @@
 // (hosting/main.js) on 127.0.0.1, behind nginx, so restarting the app or a heavy copy job never takes the sites down.
 // For each request: which website the domain is (hosts.json), then the copy's rules as Netlify applied them (hosting/rules.js:
 // _redirects before and after the files, _headers on every answer), then the file, compressed when it is text.
-// Paths passed to the old app (Go live → Logins and data) are fetched from it and sent back as they came.
+// Paths passed to the old app (Go live → Logins and data) are fetched from it and sent back as they came; when the website's
+// back office runs here in a box (boxes/box.js), from the box, under the website's own domain.
 import { createServer } from 'node:http';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -12,23 +13,26 @@ import { request } from 'undici';
 import { compressible, TYPES } from '../recreate/behavior/preserve/serve.js';
 import { typeExtOf } from '../recreate/verify/server.js';
 import { headersFor, parseHeaders, parseRedirects, ruleFor } from './rules.js';
-import { hostingPaths, readHosts } from './store.js';
+import { BOX_TARGET, hostingPaths, readBoxPorts, readHosts } from './store.js';
 
 /** Files a copy carries for its host, never sent as pages. */
 const HOST_FILES = new Set(['/_headers', '/_redirects']);
 // Request headers not passed on to the old app: the connection's own (RFC 9110 §7.6.1) and the ones set again below.
 const HOP = new Set(['connection', 'keep-alive', 'proxy-connection', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host']);
 
-/** hosts.json, read again whenever it changed (a cheap stat per request), so a new domain or deploy shows at once. */
-function hostsReader() {
+/**
+ * A file of the hosting folder, read again whenever it changed (a cheap stat per request), so a new domain, deploy or box
+ * shows at once. @param {string} name @param {() => Promise<Record<string, any>>} read
+ */
+function fileReader(name, read) {
   let seen = -1;
   /** @type {Promise<Record<string, any>>} */
   let current = Promise.resolve({});
   return async () => {
-    const mtime = (await stat(path.join(hostingPaths.root, 'hosts.json')).catch(() => null))?.mtimeMs ?? 0;
+    const mtime = (await stat(path.join(hostingPaths.root, name)).catch(() => null))?.mtimeMs ?? 0;
     if (mtime !== seen) {
       seen = mtime;
-      current = readHosts();
+      current = read();
     }
     return current;
   };
@@ -70,7 +74,8 @@ async function findFile(root, rel) {
  * @returns {(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => Promise<void>}
  */
 export function sitesHandler() {
-  const hosts = hostsReader();
+  const hosts = fileReader('hosts.json', readHosts);
+  const boxes = fileReader('boxes.json', readBoxPorts);
   const release = releaseCache();
 
   /** @type {(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => Promise<void>} */
@@ -110,6 +115,11 @@ export function sitesHandler() {
     const apply = async (hit) => {
       const { rule, to } = hit;
       if (rule.status === 301 || rule.status === 302) return redirect(res, rule.status, `${to}${url.search}`);
+      if (to.startsWith(`${BOX_TARGET}/`)) {
+        const port = (await boxes())[entry.projectId]?.port;
+        if (!port) return plain(res, 503, 'This website\'s back office is not running.');
+        return proxy(req, res, `http://127.0.0.1:${port}${to.slice(BOX_TARGET.length)}${url.search}`, { box: true });
+      }
       if (/^https?:\/\//.test(to)) return proxy(req, res, `${to}${url.search}`);
       const target = await findFile(root, to.split('?')[0]);
       if (!target?.file) return notFound(res, root, site);
@@ -187,11 +197,17 @@ async function sendFile(req, res, file, status, extra, cache) {
   res.writeHead(status, headers).end(req?.method === 'HEAD' ? undefined : body);
 }
 
-/** Passes the request to the old app and its answer back, as it came (Go live → Logins and data). */
-async function proxy(req, res, target) {
+/**
+ * Passes the request to the old app and its answer back, as it came (Go live → Logins and data). A box is asked under the
+ * website's own domain (`box`): WordPress answers only to the address it was set up for.
+ * @param {import('node:http').IncomingMessage} req @param {import('node:http').ServerResponse} res @param {string} target
+ * @param {{ box?: boolean }} [o]
+ */
+async function proxy(req, res, target, { box = false } = {}) {
   /** @type {Record<string, string>} */
   const headers = {};
   for (const [k, v] of Object.entries(req.headers)) if (!HOP.has(k) && typeof v === 'string') headers[k] = v;
+  if (box) headers.host = String(req.headers.host ?? '');
   headers['x-forwarded-for'] = [req.headers['x-forwarded-for'], req.socket.remoteAddress].filter(Boolean).join(', ');
   headers['x-forwarded-host'] = String(req.headers.host ?? '');
   try {
@@ -209,7 +225,7 @@ async function proxy(req, res, target) {
     for await (const chunk of answer.body) res.write(chunk);
     res.end();
   } catch {
-    if (!res.headersSent) plain(res, 502, 'The old app did not answer.');
+    if (!res.headersSent) plain(res, 502, box ? 'This website\'s back office did not answer.' : 'The old app did not answer.');
     else res.destroy();
   }
 }
