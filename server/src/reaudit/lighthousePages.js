@@ -276,6 +276,24 @@ export function trimReport(lhr) {
       return typeof a?.score === 'number' && a.score < 0.9 && a.scoreDisplayMode !== 'informative' && a.scoreDisplayMode !== 'manual';
     }).map((r) => ({ id: r.id, weight: r.weight ?? 0 }));
   }
+  // Per category, every audit that counted toward the score (weighted, scored: not "not applicable", informative or manual). Two
+  // runs with the same failing audits can still score differently when an audit applied on one page and not on the other (a
+  // passing check that no longer applies no longer lifts the score): this says which.
+  const scoredByCategory = {};
+  for (const c of LH_SCORE_CATEGORIES) {
+    scoredByCategory[c] = (lhr?.categories?.[c]?.auditRefs ?? []).filter((r) => {
+      const a = lhr.audits?.[r.id];
+      return (r.weight ?? 0) > 0 && typeof a?.score === 'number' && a.scoreDisplayMode !== 'informative' && a.scoreDisplayMode !== 'manual';
+    }).map((r) => ({ id: r.id, weight: r.weight, title: String(lhr.audits[r.id].title ?? r.id).slice(0, 120) }));
+  }
+  // Per category, the weighted audits that do not apply to this page (nothing of the kind on it): the other half of why two
+  // pages with the same failing audits can score differently.
+  const notApplicableByCategory = {};
+  for (const c of LH_SCORE_CATEGORIES) {
+    notApplicableByCategory[c] = (lhr?.categories?.[c]?.auditRefs ?? [])
+      .filter((r) => (r.weight ?? 0) > 0 && lhr.audits?.[r.id]?.scoreDisplayMode === 'notApplicable')
+      .map((r) => r.id);
+  }
   return {
     fetchTime: lhr?.fetchTime ?? null,
     requestedUrl: lhr?.requestedUrl ?? null,
@@ -300,6 +318,8 @@ export function trimReport(lhr) {
     lcpElement: lcp ? { selector: lcp.selector ?? null, snippet: String(lcp.snippet ?? lcp.selector ?? '').slice(0, 100) } : null,
     audits,
     failingByCategory,
+    scoredByCategory,
+    notApplicableByCategory,
   };
 }
 
@@ -453,16 +473,16 @@ export async function measureRun({ side, p, slug, mode, n, copyRun = null, cache
   const file = runFile(dir, slug, mode, n);
   // A continued comparison (reaudit/checkpoint.js): a run of the copy the stopped one finished is taken as it is.
   if (side === 'copy' && reuseCopy) {
-    const kept = await readJson(file);
+    const kept = await completedRecord(await readJson(file), file);
     if (kept?.scores) {
       result.runs.reusedCopy = (result.runs.reusedCopy ?? 0) + 1;
       return kept;
     }
   }
   if (side === 'original') {
-    const cached = await readJson(file);
+    const cached = await completedRecord(await readJson(file), file);
     if (cached?.scores) {
-      const why = staleOriginal(cached, copyRun);
+      const why = staleOriginal(cached, copyRun) ?? (cached.scoredByCategory ? null : 'it was kept before the record of which checks count toward each score, and its full report is gone');
       if (!why) {
         result.runs.reusedOriginal++;
         return cached;
@@ -486,6 +506,27 @@ export async function measureRun({ side, p, slug, mode, n, copyRun = null, cache
   await writeFile(file, JSON.stringify(trimmed), 'utf8');
   result.runs[side]++;
   return trimmed;
+}
+
+/**
+ * A kept run from before a record was added to the trimmed report (which checks count toward each score, what fails per
+ * category, how many elements Lighthouse saw): completed from the full report kept beside it, so a reused run explains a score
+ * as well as one measured now. Without the full report the run is returned as it is (the caller decides whether it may stand).
+ * Only missing fields are filled; nothing the run recorded is changed, and the kept file itself is left as it is.
+ */
+export async function completedRecord(kept, file) {
+  if (!kept?.scores || (kept.scoredByCategory && kept.failingByCategory && kept.notApplicableByCategory && 'domElements' in kept)) return kept;
+  const lhr = await readJson(`${file}.full.json`);
+  if (!lhr?.categories) return kept;
+  const full = trimReport(lhr);
+  return {
+    ...kept,
+    scoredByCategory: kept.scoredByCategory ?? full.scoredByCategory,
+    failingByCategory: kept.failingByCategory ?? full.failingByCategory,
+    domElements: kept.domElements ?? full.domElements,
+    notApplicableByCategory: kept.notApplicableByCategory ?? full.notApplicableByCategory,
+    completedFromFull: true,
+  };
 }
 
 /** A run's file in the original's cache or the re-audit's folder (its full report: `${runFileOf(…)}.full.json`). */
@@ -555,6 +596,12 @@ export async function compareLighthousePages({ pages, cacheDir, outDir, run, pro
             copyAudits: copyRuns[0].audits,
             // Per category, what fails on the copy (its first run; null for a run kept before this was recorded).
             copyFailingByCategory: copyRuns[0].failingByCategory ?? null,
+            // Per category, the audits that counted on each side (the first runs; null for a run kept before this was recorded).
+            scored: { original: originalRuns[0].scoredByCategory ?? null, copy: copyRuns[0].scoredByCategory ?? null },
+            // How many elements each side's page had when Lighthouse saw it (a page measured nearly empty counts few checks).
+            elements: { original: originalRuns[0].domElements ?? null, copy: copyRuns[0].domElements ?? null },
+            // Per category, the audits each side lists that do not apply to its page (scoreDisplayMode notApplicable).
+            notApplicable: { original: originalRuns[0].notApplicableByCategory ?? null, copy: copyRuns[0].notApplicableByCategory ?? null },
           },
         };
         for (const c of verdict.worse) result.worse.push({ path: p.path, mode, category: c, original: verdict.original[c], copy: verdict.copy[c], runs: verdict.runs });

@@ -69,6 +69,56 @@ test('missing files are fetched once, chains of modules followed, renamed files 
   }
 });
 
+test('documents a page links to are files of the site: an e-book, a sheet, an archive', () => {
+  const html = '<a href="/media/sample-ideal-gases.epub">Read</a><a href="/files/plan.docx">Plan</a><a href="https://www.example-original.test/data/rates.xlsx">Rates</a><a href="/dl/kit.zip">Kit</a>';
+  const got = referencedAddresses(html, { fileUrl: null, pageUrl: SITE });
+  for (const p of ['/media/sample-ideal-gases.epub', '/files/plan.docx', '/data/rates.xlsx', '/dl/kit.zip']) {
+    assert.ok(got.includes(`https://www.example-original.test${p}`), `${p} is fetched like any file of the site`);
+  }
+});
+
+test('a page whose Next.js runtime stays gets the data file that runtime asks for; other pages and files get none', async () => {
+  const { routerPayloads } = await import('../src/recreate/behavior/preserve/referenced.js');
+  const root = path.join(os.tmpdir(), 'sas-copy');
+  const next = '<script>(self.__next_f=self.__next_f||[]).push([0])</script><script>self.__next_f.push([1,"x"])</script>';
+  assert.deepEqual(routerPayloads(path.join(root, 'index.html'), root, next, SITE), ['https://www.example-original.test/index.txt']);
+  assert.deepEqual(routerPayloads(path.join(root, 'features', 'index.html'), root, next, SITE), ['https://www.example-original.test/features/index.txt']);
+  assert.deepEqual(routerPayloads(path.join(root, 'about.html'), root, next, SITE), ['https://www.example-original.test/about.txt']);
+  assert.deepEqual(routerPayloads(path.join(root, 'plain', 'index.html'), root, '<h1>No framework</h1>', SITE), [], 'no runtime, nothing asked');
+  assert.deepEqual(routerPayloads(path.join(root, '_next', 'static', 'chunks', 'app.js'), root, next, SITE), [], 'only pages');
+
+  // Through the whole pass: fetched once from the original and stored at the path a static host answers for any ?_rsc=.
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'sas-rsc-'));
+  try {
+    await mkdir(path.join(dir, 'features'), { recursive: true });
+    await mkdir(path.join(dir, 'gone'), { recursive: true });
+    await writeFile(path.join(dir, 'index.html'), next);
+    await writeFile(path.join(dir, 'features', 'index.html'), next);
+    await writeFile(path.join(dir, 'gone', 'index.html'), next);
+    const answers = {
+      'https://www.example-original.test/index.txt': '0:["home"]',
+      'https://www.example-original.test/features/index.txt': '0:["features"]',
+    };
+    const asked = [];
+    const fetchImpl = async (url, { dir: tmp }) => {
+      asked.push(url);
+      const body = answers[url];
+      if (body == null) return { ok: false, reason: 'http-404' };
+      const f = path.join(tmp, `t${asked.length}`);
+      await writeFile(f, body);
+      return { ok: true, tmp: f, bytes: body.length };
+    };
+    const r = await fetchReferenced({ outDir: dir, pageUrl: SITE, originHosts: new Set(['example-original.test']), manifest: {}, fetchImpl });
+    assert.equal(await readFile(path.join(dir, 'features', 'index.txt'), 'utf8'), '0:["features"]');
+    assert.equal(await readFile(path.join(dir, 'index.txt'), 'utf8'), '0:["home"]');
+    assert.equal(r.notOnOriginal, 1, 'a page the original serves no data file for is counted, never listed');
+    assert.deepEqual(r.failed, []);
+    assert.equal(new Set(asked).size, asked.length, 'each data file asked once');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('the original\'s own llms.txt is kept, naming the new site only where it named the original', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'sas-llms-'));
   try {

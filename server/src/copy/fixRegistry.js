@@ -40,6 +40,7 @@ export const FIXES = [
   { kind: 'lcp', title: 'Largest element shows and loads first', targets: ['lighthouse.prioritize-lcp-image', 'lighthouse.lcp-lazy-loaded'], counted: true, needs: 'perf' },
   { kind: 'lazy', title: 'Images below the first screen load later', targets: ['lighthouse.offscreen-images'], counted: true, needs: 'perf' },
   { kind: 'webp', title: 'WebP for PNG and JPEG images, with no visible difference', targets: ['lighthouse.modern-image-formats', 'lighthouse.uses-optimized-images', 'lighthouse.total-byte-weight'], counted: true, needs: 'perf' },
+  { kind: 'size', title: 'Smaller copies of large images, with no visible difference', targets: ['lighthouse.uses-responsive-images', 'lighthouse.total-byte-weight'], counted: true, needs: 'perf' },
   { kind: 'css', title: 'Stylesheets without whitespace', targets: ['lighthouse.unminified-css', 'lighthouse.total-byte-weight'], counted: false },
 ];
 

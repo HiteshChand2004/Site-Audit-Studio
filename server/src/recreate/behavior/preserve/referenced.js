@@ -12,10 +12,16 @@ import { localPathOf, storableAsIs } from './pageLift.js';
 import { createPrefetch } from './prefetch.js';
 
 /** The extensions of files a copy holds (pages, which have none, are never fetched this way). */
-const FILE_EXT = 'm?js|css|png|jpe?g|gif|webp|avif|svg|ico|mp4|webm|ogv|mov|mp3|ogg|wav|m4a|woff2?|ttf|otf|eot|wasm|json|webmanifest|pdf';
+// Documents a page links to (an e-book, a sheet, an archive) are files of the site too: the same list the rebuild downloads
+// (assets/collect.js linkedFileKind 'document'). Without them a link that worked on the original is a 404 in the copy.
+const FILE_EXT = 'm?js|css|png|jpe?g|gif|webp|avif|svg|ico|mp4|webm|ogv|mov|mp3|ogg|wav|m4a|woff2?|ttf|otf|eot|wasm|json|webmanifest|pdf|docx?|xlsx?|pptx?|odt|ods|odp|rtf|csv|epub|zip|rar|7z|gz|tgz';
 const MEDIA_EXT = /\.(mp4|webm|ogv|mov|mp3|ogg|wav|m4a)$/i;
-/** A quoted root-relative address of a file ("/assets/x-1a2b.mp4", "/favicon.ico?v=2"); "//host" is not one. */
-const ROOT_REF = new RegExp(`["'\`](/(?!/)[\\w\\-./~%@+]+?\\.(?:${FILE_EXT}))(?:\\?[^"'\`\\s<>]*)?(?=\\\\?["'\`])`, 'gi');
+/**
+ * A quoted root-relative address of a file ("/assets/x-1a2b.mp4", "/favicon.ico?v=2"); "//host" is not one. Single spaces
+ * inside it count ("/Website Images/video/film.mp4": a site that names its folders with spaces writes them so in its pages,
+ * and the browser encodes them); never at its start or end, never two in a row.
+ */
+const ROOT_REF = new RegExp(`["'\`](/(?!/)[\\w\\-./~%@+]+?(?: [\\w\\-./~%@+]+?)*?\\.(?:${FILE_EXT}))(?:\\?[^"'\`\\s<>]*)?(?=\\\\?["'\`])`, 'gi');
 /** A quoted absolute address of a file. */
 const ABS_REF = new RegExp(`["'\`](https?://[\\w.-]+(?::\\d+)?/[\\w\\-./~%@+]+?\\.(?:${FILE_EXT}))(?:\\?[^"'\`\\s<>]*)?(?=\\\\?["'\`])`, 'gi');
 /** A quoted relative address in a module ("./chunk-1a2b.mjs", "../x.js"): resolved against the module's own address. */
@@ -56,6 +62,33 @@ export function referencedAddresses(text, { fileUrl, pageUrl }) {
     for (const m of text.matchAll(META_URL_REF)) add(m[1], fileUrl);
   }
   return [...out];
+}
+
+/** A page that carries a Next.js App Router runtime: its inline scripts push the page's data into self.__next_f. */
+const NEXT_APP_RUNTIME = /self\.__next_f\s*(?:=|\.push)/;
+
+/**
+ * The data file a kept Next.js runtime asks for when it moves to (or prefetches) this page, on a statically exported site:
+ * "/features/" → "/features/index.txt", "/about" (about.html) → "/about.txt", "/" → "/index.txt", always with a ?_rsc= query
+ * a static host ignores. Nothing for any other file or any page without that runtime. The original decides: a site that does
+ * not serve it answers 404 (counted, never listed) or its page (not a file: refused by the download).
+ * @param {string} file  absolute path of a file of the copy
+ * @param {string} root  the copy's folder
+ * @param {string} text  the file's content
+ * @param {string} pageUrl  the original homepage
+ * @returns {string[]}
+ */
+export function routerPayloads(file, root, text, pageUrl) {
+  if (!/\.html?$/i.test(file) || !NEXT_APP_RUNTIME.test(text)) return [];
+  const rel = path.relative(root, file).split(path.sep).join('/');
+  if (rel.startsWith('..')) return [];
+  const route = rel.replace(/(^|\/)index\.html?$/i, '$1').replace(/\.html?$/i, '');
+  const payload = route === '' || route.endsWith('/') ? `/${route}index.txt` : `/${route}.txt`;
+  try {
+    return [new URL(payload, new URL(pageUrl).origin).href];
+  } catch {
+    return [];
+  }
 }
 
 async function textFiles(dir) {
@@ -160,7 +193,9 @@ export async function fetchReferenced({ outDir, pageUrl, originHosts, manifest, 
       const wanted = new Map();
       for (const file of await textFiles(root)) {
         const text = await readFile(file, 'utf8').catch(() => '');
-        for (const url of referencedAddresses(text, { fileUrl: localOfFile.get(file) ?? null, pageUrl })) {
+        // What the file names, and for a page whose Next.js runtime stays, the data file that runtime asks for (routerPayloads).
+        const named = [...referencedAddresses(text, { fileUrl: localOfFile.get(file) ?? null, pageUrl }), ...routerPayloads(file, root, text, pageUrl)];
+        for (const url of named) {
           if (asked.has(url)) continue;
           const u = new URL(url);
           if (!originHosts.has(bareHost(u.hostname))) continue;

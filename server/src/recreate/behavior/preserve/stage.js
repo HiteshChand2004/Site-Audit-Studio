@@ -438,7 +438,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
     const fixed = await fixAsIsCopy({ dir: copyDir, siteUrl, newSiteUrl, fetchLlms, pages: list, ...(speed && { perf }) });
     fixed.open.push(...perfOpen, ...css.open);
     // Every WebP the first pass wrote: the ones no kept fix points at are removed at the end (never a file of the original).
-    const webpWritten = new Set(fixed.pages.flatMap((p) => p.fixes.filter((f) => f.kind === 'webp').map((f) => f.file)));
+    const webpWritten = new Set(fixed.pages.flatMap((p) => p.fixes.filter((f) => f.kind === 'webp' || f.kind === 'size').map((f) => f.file)));
     const changed = fixed.pages.filter((p) => p.fixes.length);
     const gate = [];
     // Exact copy: groups proved without a picture, and looks served by an earlier identical one (no page load).
@@ -689,7 +689,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
     }
     // A WebP no kept fix uses is removed, but only one the fixes wrote (".sas-" in its name, not in the copy before the fixes)
     // and only when no file of the copy still names it.
-    const webpKept = new Set(fixed.pages.filter((p) => !p.reverted).flatMap((p) => p.fixes.filter((f) => f.kind === 'webp').map((f) => f.file)));
+    const webpKept = new Set(fixed.pages.filter((p) => !p.reverted).flatMap((p) => p.fixes.filter((f) => f.kind === 'webp' || f.kind === 'size').map((f) => f.file)));
     const unused = [];
     for (const f of webpWritten) {
       if (webpKept.has(f) || !path.basename(f).includes('.sas-')) continue;
@@ -786,6 +786,8 @@ async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report
       const free = await runtimeFreeCopy({
         browser, copyDir, outDir: path.join(path.dirname(copyDir), 'convert-source'), pages,
         decided: browser ? null : earlierRuntime, pagesAtOnce: fixPagesAtOnce(),
+        // The original's own heads: the runtime putting back a title or description the copy fixed is not followed.
+        liftedDir: path.join(ctx.dir, ASIS_DIR, 'lifted'),
         // The capture's recordings (carried with every repack, recordings.js) rebuild the animations the runtime drove.
         jobDir: ctx.dir,
         // What wins when a page needs its runtime for something the copy cannot rebuild: the components ('editable', the

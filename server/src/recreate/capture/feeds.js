@@ -183,12 +183,15 @@ export async function nextUpdate({ path, timeoutMs, quietMs, burstGap }) {
 
 /**
  * Only measures: the parts of a page that change by themselves and their pace, nothing recorded (the re-audit of a copy).
- * @returns {Promise<{ path: string, ms: number }[]>}
+ * An area that changed without a steady pace is returned too, with `reason` instead of `ms` and how often it changed, so a
+ * comparison can say why the copy's part is not the original's ("changes at no steady pace", "stopped changing") instead of
+ * reading it as no change at all.
+ * @returns {Promise<({ path: string, ms: number, changes: number } | { path: string, reason: string, changes: number })[]>}
  */
 export async function measureFeeds(page) {
   await page.mouse.move(-20, -20).catch(() => {});
   const seen = await page.evaluate(watchMutations, { ms: WATCH_MS, moreMs: WATCH_MORE_MS, burstGap: BURST_GAP_MS });
-  return seen.areas.map((a) => ({ path: a.path, ...paceOf(a.times, seen.watchedMs) })).filter((a) => a.ms);
+  return seen.areas.map((a) => ({ path: a.path, changes: a.times.length, ...paceOf(a.times, seen.watchedMs) })).filter((a) => a.ms || a.changes > 0);
 }
 
 /** The node of a snapshot tree at `path`, or null. */

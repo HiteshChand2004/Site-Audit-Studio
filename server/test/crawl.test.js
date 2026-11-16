@@ -44,6 +44,30 @@ test('crawl finds the pages and the link check finds the seeded broken links', a
   assert.equal(links.broken.find((b) => b.url.endsWith('/team/missing')).foundOn, '/about.html');
 });
 
+test('a page robots.txt closes is not read, but its address is kept, and the page list offers it to a copy', async () => {
+  const home = await fetchPage(`${origin}/`);
+  const closed = (u) => new URL(u).pathname === '/about.html';
+  const result = await crawl({ home, maxPages: 10, robots: { isAllowed: (u) => !closed(u) } });
+  assert.ok(!result.pages.some((p) => closed(p.url)), 'the Check does not read it');
+  assert.equal(result.skippedByRobots, 1);
+  assert.deepEqual(result.robotsBlocked.map((u) => new URL(u).pathname), ['/about.html']);
+
+  // What the Check saves (crawl.json) is what the page list of "Copy my site" is made of.
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  const path = (await import('node:path')).default;
+  const { auditDir } = await import('../src/config/paths.js');
+  const { knownPages } = await import('../src/recreate/pageOrder.js');
+  const project = { id: 'robots-closed', url: `${origin}/` };
+  await mkdir(auditDir(project.id, 'a1'), { recursive: true });
+  await writeFile(path.join(auditDir(project.id, 'a1'), 'crawl.json'), JSON.stringify({ pages: result.pages, robotsBlocked: result.robotsBlocked }));
+  const { pages } = await knownPages(project, { analysisIds: ['a1'], recreateReports: [] });
+  assert.ok(pages.some((p) => p.path === '/about.html'), 'the closed page is offered');
+  // A Check saved before the list existed offers what it read, as before.
+  await writeFile(path.join(auditDir(project.id, 'a1'), 'crawl.json'), JSON.stringify({ pages: result.pages }));
+  const before = await knownPages(project, { analysisIds: ['a1'], recreateReports: [] });
+  assert.ok(!before.pages.some((p) => p.path === '/about.html'));
+});
+
 test('maxPages caps the crawl', async () => {
   const home = await fetchPage(`${origin}/`);
   const result = await crawl({ home, maxPages: 2, robots: { isAllowed: () => true } });

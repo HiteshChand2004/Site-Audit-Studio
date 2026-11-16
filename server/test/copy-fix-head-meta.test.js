@@ -64,6 +64,55 @@ test('a short description is completed from the page\'s own paragraph; with no w
   }
 });
 
+test('every title and description lands inside its range from the page\'s own words, the duplicate fix\'s too, and none repeats another page\'s', async () => {
+  const dup = 'Community | Acme';
+  const longHeading = 'How our community of small support teams shares the replies that worked for them';
+  const pages = [
+    { path: '/', outPath: 'index.html', url: SITE },
+    { path: '/community/first-steps/', outPath: 'community/first-steps/index.html', url: `${SITE}community/first-steps/` },
+    { path: '/community/replies/', outPath: 'community/replies/index.html', url: `${SITE}community/replies/` },
+    { path: '/tiny/', outPath: 'tiny/index.html', url: `${SITE}tiny/` },
+  ];
+  const dir = await site({
+    'index.html': page({ title: dup, description: LONG_PARA }),
+    // A duplicate title whose heading is longer than 60: the duplicate fix wrote it, the length fix must fit it.
+    'community/first-steps/index.html': page({ title: dup, description: 'Ideas.', body: `<h1>${longHeading}</h1><ul><li>Answer the question your customer asked first</li><li>Keep one thread per customer problem</li></ul>` }),
+    // The same heading on a second page: its fitted title would repeat the first one's, so another of its words is used.
+    'community/replies/index.html': page({ title: dup, description: LONG_PARA.replace('Our', 'Their'), body: `<h1>${longHeading}</h1><p>${LONG_PARA.replace('Our', 'Their')}</p>` }),
+    // A title too short, with a site name too long to add whole.
+    'tiny/index.html': page({ title: 'Hi', description: LONG_PARA.replace('Our', 'Your'), body: '<h1>Hi</h1>' }),
+  });
+  try {
+    const r = await fixAsIsCopy({ dir, pages, siteUrl: SITE, siteName: 'Acme, the friendliest support toolkit for small teams everywhere' });
+    const titles = r.pages.map((p, i) => fixesOf(r, i, 'title').at(-1)?.value ?? null);
+    for (const [i, t] of titles.entries()) if (t) assert.ok(t.length >= 10 && t.length <= 60, `page ${i}: ${t}`);
+    assert.equal(fixesOf(r, 1, 'title').length, 1, 'one change per page, however many steps made it');
+    assert.ok(titles[1].startsWith('How our community'), titles[1]);
+    assert.notEqual(titles[2]?.toLowerCase(), titles[1].toLowerCase(), 'never the same as another page\'s');
+    assert.ok(titles[3] && titles[3].startsWith('Hi'), `a short title is completed: ${titles[3]}`);
+    const [d] = fixesOf(r, 1, 'description');
+    assert.ok(d && d.value.length >= 50 && d.value.length <= 160, JSON.stringify(d));
+    assert.match(d.value, /^Ideas\. How our community/, 'the original\'s words first, completed with the page\'s own heading');
+    const lengthOpen = r.open.filter((o) => o.kind === 'head' && ['title', 'description'].includes(o.field));
+    assert.deepEqual(lengthOpen, [], 'every title and description was brought inside its range');
+    // A page whose only words are a short heading and a short paragraph: completed from its list items, the last words it shows.
+    const dir2 = await site({
+      'index.html': page({ title: 'Acme small team tools', description: LONG_PARA }),
+      'blog/index.html': page({ title: 'The Acme blog', description: 'Short.', body: '<h1>Blog</h1><ul><li>Answer the question your customer asked first</li><li>Keep one thread per customer problem</li></ul>' }),
+    });
+    try {
+      const r2 = await fixAsIsCopy({ dir: dir2, pages: PAGES, siteUrl: SITE });
+      const [d2] = fixesOf(r2, 1, 'description');
+      assert.ok(d2 && d2.value.length >= 50 && d2.value.length <= 160, JSON.stringify(d2));
+      assert.match(d2.value, /Answer the question your customer asked first/);
+    } finally {
+      await rm(dir2, { recursive: true, force: true });
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('theme-color: the manifest\'s own value (no review), else the links\' and buttons\' colour (review), else open; never over one already there', async () => {
   const css = 'body{color:#222;background:#fff} a.cta, .btn{background-color:#c2410c;color:#fff} .note{background:#eee} button{background:rgb(194, 65, 12)}';
   const dirs = [];

@@ -28,6 +28,8 @@ export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls 
   const seen = new Set();
   const queue = [];
   let skippedByRobots = 0;
+  // Pages robots.txt closes: not read by the Check, but still pages of the site (a copy opens them with its browser).
+  const robotsBlocked = [];
 
   // With `only`: each page's place in the first queue as a crawl without `only` would build it (homepage links, seeds and
   // sitemap are all queued before the first fetch, and pages start in queue order), so the caller can tell which of the
@@ -47,6 +49,7 @@ export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls 
     seen.add(key);
     if (!robots.isAllowed(url)) {
       skippedByRobots++;
+      if (robotsBlocked.length < 500) robotsBlocked.push(url);
       return;
     }
     queue.push({ url, depth });
@@ -114,6 +117,7 @@ export async function crawl({ home, maxPages, maxDepth = 3, robots, sitemapUrls 
   return {
     pages,
     skippedByRobots,
+    robotsBlocked,
     truncated: queue.length > 0,
     aborted: Boolean(signal?.aborted),
     notRead,

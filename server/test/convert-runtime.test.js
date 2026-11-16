@@ -61,6 +61,13 @@ test('the title a runtime set after load is written into the page; behaviour gap
   assert.match(head.html, /<title>Home · Site<\/title>/);
   assert.deepEqual(head.changed, { title: { from: 'Home', to: 'Home · Site' } });
   assert.equal(withHead(NEXT_PAGE, { title: 'Home' }), null);
+  // The copy fixed a duplicated title (the file says "Home", the original's file said "Blog | Site"); the runtime only puts the
+  // original's text back from its route data: the copy's fix stays. A title the runtime sets that the original's file did not
+  // hold is still written.
+  const fixed = NEXT_PAGE.replace('<title>Home</title>', '<title>Home</title><meta name="description" content="Fixed words">');
+  const original = { title: 'Blog | Site', description: 'Same words on every page' };
+  assert.equal(withHead(fixed, { title: 'Blog | Site', description: 'Same words on every page' }, { original }), null);
+  assert.deepEqual(withHead(fixed, { title: 'Streamed title', description: null }, { original }).changed, { title: { from: 'Home', to: 'Streamed title' } });
   const asIs = { width: 375, moves: true, clicks: [{ i: 0, shown: true, delta: { added: ['Menu'], removed: [] }, at: '/' }] };
   const free = { width: 375, moves: false, clicks: [{ i: 0, shown: true, delta: { added: [], removed: [] }, at: '/' }] };
   assert.equal(behaviourGaps(free, asIs).length, 2);
@@ -75,7 +82,19 @@ test('the title a runtime set after load is written into the page; behaviour gap
   assert.match(lost[0].text, /1 of the 2 hover effects are gone \(“startnow”\)/);
   assert.match(lost[1].text, /5 scroll reveals instead of 12/);
   assert.match(lost[2].text, /1806 elements instead of 900 \(the framework's code takes out parts of it\)/);
-  assert.ok([...KEEP_FOR].every((k) => ['hover', 'reveal', 'elements', 'control'].includes(k)) && !KEEP_FOR.has('motion') && !KEEP_FOR.has('look'));
+  // Animations that keep running count too (9 on the original, none once a runtime that drove them is gone); a reading without
+  // a loop count (an older record) is no difference.
+  const loops = motionGaps({ ...withRt, loops: 0 }, { ...withRt, loops: 9 });
+  assert.deepEqual(loops.map((g) => [g.kind, g.lost]), [['loops', 9]]);
+  assert.match(loops[0].text, /0 animations keep running instead of 9/);
+  assert.deepEqual(motionGaps({ ...withRt, loops: 9 }, { ...withRt, loops: 9 }), []);
+  assert.deepEqual(motionGaps(withRt, { ...withRt, loops: 9 }), []);
+  // A part that changes by itself at a steady pace (a feed) counts the same way.
+  const feeds = motionGaps({ ...withRt, feeds: 0 }, { ...withRt, feeds: 1 });
+  assert.deepEqual(feeds.map((g) => [g.kind, g.lost]), [['feeds', 1]]);
+  assert.match(feeds[0].text, /0 parts change by themselves instead of 1/);
+  assert.deepEqual(motionGaps(withRt, { ...withRt, feeds: 1 }), []);
+  assert.ok([...KEEP_FOR].every((k) => ['hover', 'reveal', 'loops', 'feeds', 'elements', 'control'].includes(k)) && KEEP_FOR.has('loops') && KEEP_FOR.has('feeds') && !KEEP_FOR.has('motion') && !KEEP_FOR.has('look'));
 });
 
 // A framework in miniature: its bundle draws every [data-k] element from the inline data pushes once the page has loaded (what
@@ -166,7 +185,10 @@ test('in a browser (prefer exact): a page that does without its runtime loses it
   }
 });
 
-test('when the owner prefers editable components, a page that needs its runtime loses it anyway and says what it loses', { timeout: 300000 }, async () => {
+// User decision (2026-11-16): animations matter more than editable components. A part that changes by itself at a steady pace
+// (a ticker, a feed) is what the Results check's "Parts that change by themselves" row counts, so a page whose runtime drives
+// one keeps that runtime even with editable components preferred (before: it lost the runtime and the part stood still).
+test('editable components preferred: a page whose runtime drives a ticker keeps it and says why', { timeout: 300000 }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sas-runtime-editable-'));
   const browser = await chromium.launch();
   try {
@@ -177,15 +199,15 @@ test('when the owner prefers editable components, a page that needs its runtime 
     await writeFile(path.join(copy, 'index.html'), page({ title: 'Ticker page', ticker: true }), 'utf8');
     const { dir, record } = await runtimeFreeCopy({ browser, copyDir: copy, outDir: path.join(root, 'out'), pages: [{ outPath: 'index.html' }], prefer: 'editable' });
     const r = record.pages[0];
-    assert.equal(r.status, 'removed', JSON.stringify(r));
-    assert.ok(r.gaps.some((g) => g.kind === 'motion'), JSON.stringify(r.gaps));
+    assert.equal(r.status, 'kept', JSON.stringify(r));
+    assert.deepEqual(r.keptFor, ['feeds'], JSON.stringify(r));
+    assert.deepEqual(r.lost, { feeds: 1 }, 'in numbers, for the app');
+    assert.match(r.detail, /0 parts change by themselves instead of 1/);
     assert.equal(record.prefer, 'editable');
-    assert.doesNotMatch(await readFile(path.join(dir, 'index.html'), 'utf8'), /main\.js/);
+    assert.match(await readFile(path.join(dir, 'index.html'), 'utf8'), /main\.js/, 'the ticker keeps running on the runtime');
     const notes = runtimeNotes(record);
-    assert.match(notes.readme, /you chose the components over an exact copy/);
-    assert.equal(notes.items.length, 1);
-    assert.equal(notes.items[0].reason, 'editable');
-    assert.match(notes.items[0].values, /the page stops changing by itself/);
+    assert.match(notes.readme, /this page keeps the framework code .*parts that change by themselves.*: \/\./);
+    assert.ok(notes.items.some((i) => i.page === '/' && i.reason === 'runtime'), JSON.stringify(notes.items));
   } finally {
     await browser.close();
     await rm(root, { recursive: true, force: true });
@@ -201,7 +223,7 @@ var v=document.getElementById('phone-layout');if(v&&innerWidth>=768)v.remove();
 var k=document.getElementById('tick');if(k)setInterval(function(){k.textContent=String(Number(k.textContent)+1);},400);}
 if(document.readyState==='complete')setTimeout(run,50);else window.addEventListener('load',function(){setTimeout(run,50);});})();`;
 
-test('editable components preferred: a page whose runtime draws a hover or prunes a layout keeps it and says why; one that only moves by itself loses it', { timeout: 600000 }, async () => {
+test('editable components preferred: a page whose runtime draws a hover, prunes a layout or drives a ticker keeps it and says why', { timeout: 600000 }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sas-runtime-counted-'));
   const browser = await chromium.launch();
   try {
@@ -229,14 +251,14 @@ test('editable components preferred: a page whose runtime draws a hover or prune
     assert.ok(by['/layouts/'].keptFor.includes('elements'), JSON.stringify(by['/layouts/']));
     assert.ok(by['/layouts/'].motion.free.elements > by['/layouts/'].motion.asIs.elements, 'both counts in the report');
     assert.ok(by['/layouts/'].lost.elements.without > by['/layouts/'].lost.elements.with);
-    // A counter the runtime keeps going is listed, not a reason to keep it.
-    assert.equal(by['/'].status, 'removed', JSON.stringify(by['/']));
-    assert.ok(by['/'].gaps.some((g) => g.kind === 'motion'));
+    // A counter the runtime keeps going at a steady pace is a part that changes by itself: it keeps the runtime too.
+    assert.equal(by['/'].status, 'kept', JSON.stringify(by['/']));
+    assert.ok(by['/'].keptFor.includes('feeds'), JSON.stringify(by['/']));
     assert.match(await readFile(path.join(dir, 'hover', 'index.html'), 'utf8'), /main\.js/, 'the kept page still loads its runtime');
-    assert.doesNotMatch(await readFile(path.join(dir, 'index.html'), 'utf8'), /main\.js/);
+    assert.match(await readFile(path.join(dir, 'index.html'), 'utf8'), /main\.js/);
 
     const notes = runtimeNotes(record);
-    assert.match(notes.readme, /You chose editable components, but 2 of these pages keep the framework code .*: \/hover\/, \/layouts\//);
+    assert.match(notes.readme, /You chose editable components, but 3 of these pages keep the framework code .*: \/hover\/, \/layouts\/, \//);
     assert.ok(notes.items.some((i) => i.page === '/hover/' && i.reason === 'runtime' && /hover effects are gone/.test(i.tried)));
   } finally {
     await browser.close();

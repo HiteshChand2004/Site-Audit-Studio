@@ -10,7 +10,7 @@ import path from 'node:path';
 import * as cheerio from 'cheerio';
 import sharp from 'sharp';
 import { addressPass } from '../src/copy/addressPass.js';
-import { fixAsIsCopy } from '../src/copy/fixAsIs.js';
+import { fixAsIsCopy, moveHeadData } from '../src/copy/fixAsIs.js';
 import { ADDRESS_FIELDS, HEAD_META_FIELDS, fixGroup, fixOf } from '../src/copy/fixRegistry.js';
 
 const SITE = 'https://www.acme-old.dev/';
@@ -223,4 +223,27 @@ test('a missing og:image is the original\'s own picture: a large image the page 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('a canonical / og:url a kept runtime writes again from its own data moves too, so the page never ends with two that conflict', () => {
+  // As a framework streams its head (escaped once inside a string the script parses), and as plain data.
+  const streamed = String.raw`self.__next_f.push([1,"[\"$\",\"link\",\"15\",{\"rel\":\"canonical\",\"href\":\"https://acme-old.dev\"}],[\"$\",\"meta\",\"3\",{\"property\":\"og:url\",\"content\":\"https://www.acme-old.dev/about\"}],[\"$\",\"a\",null,{\"href\":\"https://www.acme-old.dev/about\"}]"])`;
+  const plain = 'window.__HEAD = [{"href":"https://www.acme-old.dev/contact","rel":"canonical"},{"rel":"canonical","href":"https://www.acme-old.dev/not-copied"}];';
+  const ld = '{"@context":"https://schema.org","@type":"WebPage","url":"https://www.acme-old.dev/","rel":"canonical","href":"https://www.acme-old.dev/"}';
+  const $ = cheerio.load(`<html><head><script>${streamed}</script><script>${plain}</script><script type="application/ld+json">${ld}</script></head><body></body></html>`);
+  const byPath = new Map(PAGES.map((p) => [p.path, p.outPath]));
+  const r = moveHeadData($, 'acme-old.dev', NEW, byPath);
+  assert.equal(r.moved, 3);
+  assert.deepEqual(r.fields.sort(), ['canonical', 'og:url']);
+  const [s1, s2, s3] = $('script').toArray().map((e) => $(e).html());
+  assert.ok(s1.includes(String.raw`{\"rel\":\"canonical\",\"href\":\"https://www.acme-new.dev/\"}`), s1);
+  assert.ok(s1.includes(String.raw`{\"property\":\"og:url\",\"content\":\"https://www.acme-new.dev/about\"}`), s1);
+  assert.ok(s1.includes(String.raw`{\"href\":\"https://www.acme-old.dev/about\"}`), 'a plain link in the data is not a head tag: left as it is');
+  assert.ok(s2.includes('{"href":"https://www.acme-new.dev/contact","rel":"canonical"}'), s2);
+  assert.ok(s2.includes('"https://www.acme-old.dev/not-copied"'), 'a page the copy does not hold is left as it is');
+  assert.equal(s3, ld, 'structured data is kept as the original wrote it');
+  // The script is still the same script: it parses, and the serialised page keeps it raw (no entities).
+  assert.doesNotThrow(() => new Function(s1));
+  assert.doesNotThrow(() => new Function(s2));
+  assert.ok(!$.html().includes('&quot;'));
 });

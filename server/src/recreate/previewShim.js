@@ -137,12 +137,22 @@ const shim = function () {
   wrapCtor('Worker', 0);
   wrapCtor('SharedWorker', 0);
   wrapCtor('EventSource', 0);
+  // A request to the preview that asks for credentials (`credentials: 'include'`, `withCredentials`) is sent without them.
+  // From this opaque origin every request is cross-origin, the preview answers `Access-Control-Allow-Origin: *`, and the
+  // browser refuses a credentialed response under `*`: the page's own data call ("/api/auth/options") failed with "Failed to
+  // fetch" although the preview had answered. No cookie reaches the preview anyway (the original's are dropped on the way,
+  // an opaque origin has none), so nothing is lost; requests to other hosts are left as the page made them.
   var F = window.fetch;
   if (typeof F === 'function') {
     window.fetch = function (input, init) {
       var asked = typeof input === 'string' ? input : input instanceof U ? input.href : input && typeof input.url === 'string' ? input.url : '';
       if (typeof input === 'string' || input instanceof U) input = fix(String(input));
       else if (input && typeof input.url === 'string' && Rq) { var f = fix(input.url); if (f !== input.url) input = new Rq(f, input); }
+      var target = typeof input === 'string' ? input : input && typeof input.url === 'string' ? input.url : '';
+      if (sameApp(target)) {
+        if (init && init.credentials === 'include') init = Object.assign({}, init, { credentials: 'omit' });
+        else if (input && typeof input === 'object' && input.credentials === 'include' && Rq) input = new Rq(input, { credentials: 'omit' });
+      }
       var p = F.call(this, input, init);
       p.then(function (res) { if (!res.ok && sameApp(res.url)) failed(res.url, 'fetch ' + res.status); }, function () { if (sameApp(fix(asked))) failed(asked, 'fetch'); });
       return p;
@@ -156,7 +166,14 @@ const shim = function () {
     var target = args[1];
     x.addEventListener('loadend', function () { if (x.status >= 400 && sameApp(fix(target))) failed(target, 'xhr ' + x.status); });
     x.addEventListener('error', function () { if (sameApp(fix(target))) failed(target, 'xhr'); });
+    x.__sasSameApp = sameApp(target);
     return XO.apply(this, args);
+  };
+  // The same for XMLHttpRequest: `withCredentials` is dropped for a request to the preview just before it is sent.
+  var XS = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function () {
+    if (this.__sasSameApp && this.withCredentials) { try { this.withCredentials = false; } catch (e) { /* sent as the page set it */ } }
+    return XS.apply(this, arguments);
   };
   if (navigator.sendBeacon) {
     var SB = navigator.sendBeacon;

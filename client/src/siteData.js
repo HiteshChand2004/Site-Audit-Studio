@@ -83,6 +83,7 @@ export const WORSE_CAUSES = {
   look: { title: 'Kept as the original', text: 'Changing it would change how the original looks, so the copy keeps it as it is.' },
   'own-code': { title: 'From the original’s own code', text: 'Comes from the original’s scripts or embeds, kept as they are so the site works the same.' },
   impossible: { title: 'Not possible in a copy', text: 'No copy can do this.' },
+  noise: { title: 'Only reads lower in one run', text: 'Both sides pass and fail exactly the same checks, so their scores are the same; one measurement of a side came out differently, which moved the middle value. The runs are listed on the row.' },
 };
 
 /**
