@@ -94,18 +94,37 @@ function analyzerItems(oldRows, newRows) {
 
 // ---------- accessibility (axe, homepage) ----------
 
-function axeItems(oldRows = [], newRows = []) {
+/**
+ * Whether a side's accessibility scan produced a result. A scan that failed or ran out of time leaves an empty list, which
+ * must not read as "No violations": the audit then records the failure (`Accessibility scan failed: …`) or the render
+ * step's own failure / skip under `errors`. A side with violations listed was scanned, whatever else went wrong.
+ */
+export function axeScanned(audit) {
+  if ((audit?.accessibility ?? []).length) return true;
+  return !(audit?.errors ?? []).some((e) => e?.step === 'render' || /accessibility scan/i.test(e?.message ?? ''));
+}
+
+export function axeItems(oldRows = [], newRows = [], { oldScanned = true, newScanned = true } = {}) {
   const byId = (rows) => new Map(rows.map((r) => [r.id, r]));
   const o = byId(oldRows);
   const n = byId(newRows);
   const side = (r) => (r ? { status: 'fail', detail: `${plural(r.count, 'element')} (${r.impact})`, count: r.count, impact: r.impact, rank: rankOfImpact(r.impact) } : { status: 'pass', detail: 'No violations', count: 0, rank: 0 });
+  // One side not scanned: its empty list is "not checked", so a rule failing on the other side is neither a regression nor a
+  // fix. The number that was measured stays on the row; the row asks for the check to be run again.
+  const unscanned = { status: 'unknown', detail: 'Not checked: the accessibility scan did not finish on this side', count: null };
+  const missing = !oldScanned ? 'the original' : !newScanned ? 'the copy' : null;
   return [...new Set([...o.keys(), ...n.keys()])].map((id) => ({
     key: `axe.${id}`,
     category: 'accessibility',
     title: (n.get(id) ?? o.get(id)).title,
     helpUrl: (n.get(id) ?? o.get(id)).helpUrl ?? null,
-    before: side(o.get(id)),
-    after: side(n.get(id)),
+    before: oldScanned ? side(o.get(id)) : unscanned,
+    after: newScanned ? side(n.get(id)) : unscanned,
+    ...(missing && {
+      preset: 'recheck',
+      statusLabel: `Not checked on ${missing}`,
+      note: `The accessibility scan of ${missing} did not finish (it failed or ran out of time), so this rule could not be compared. ${missing === 'the original' ? 'Run Check again, then Re-audit.' : 'Run Re-audit again.'}`,
+    }),
   }));
 }
 
@@ -484,7 +503,7 @@ export function compareAudits({ old, next, report, newOrigin, output = null, mot
   const raw = [
     ...lighthouseItems(oldLh, newLh),
     ...analyzerItems(oldRows, newRows),
-    ...axeItems(old.audit.accessibility, next.audit.accessibility),
+    ...axeItems(old.audit.accessibility, next.audit.accessibility, { oldScanned: axeScanned(old.audit), newScanned: axeScanned(next.audit) }),
     ...linkItems({ oldLinks: old.audit.brokenLinks, newLinks: next.audit.brokenLinks, oldScopeLinks, map }),
     ...platformItems(old.audit.techStack, next.audit.techStack, output),
     ...scriptItem(old.lighthouse, next.lighthouse, output),

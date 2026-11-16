@@ -24,6 +24,14 @@ import { NETWORK_WAIT_MS } from '../../interrupts.js';
 
 /** Largest file the lift downloads at build time (bytes). */
 export const LIFT_MAX_BYTES = 25 * 1024 * 1024;
+/**
+ * Largest picture, video or sound the lift downloads (bytes): a site's own video is part of the page (an "about" film the page
+ * shows with preload="none", which no visit ever asks for, so only the lift brings it), and 25 MB left a 32 MB one out — the
+ * copy then named a file it did not have (a 404). The same limit as a file the copy's text names (referenced.js).
+ */
+export const LIFT_MEDIA_MAX_BYTES = 250 * 1024 * 1024;
+/** A large download is given up only after this long with no byte arriving, not after a fixed time (assets/download.js idleMs). */
+const LIFT_MEDIA_IDLE_MS = 20000;
 /** What the guarded download expects for each kind of file (assets/download.js). */
 // A web app manifest is JSON, which an icon download refuses as "not an asset" (own360.ai's /manifest.json never reached the
 // copy, and every page of it asked for the missing file): it is downloaded as data, which accepts JSON.
@@ -422,6 +430,8 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   const matchedBy = [];
   /** @type {{ url: string, to: string, kind: string, reason: string }[]} code addresses answered with HTML, given their real file */
   const healed = [];
+  /** @type {{ url: string, kind: string }[]} files the copy could not get, named by the original's full address (never a 404) */
+  const keptRemote = [];
   /**
    * The site's own file for an address its server does not serve the file at (it answers its HTML page, or nothing): a recorded
    * file of the same name, on the same origin, of the right type. Only a name carrying a build hash (index-DdEuaEXJ.js,
@@ -491,7 +501,9 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   // The downloads each walk below will certainly make are started ahead of it, several at once (prefetch.js); the walk takes
   // each answer where it asks for it, so names, the file list and its order are those of a walk that fetched one by one.
   const prefetch = createPrefetch(fetchImpl);
-  const liftOpts = (kind) => ({ dir: tmp, kind: DOWNLOAD_KIND[kind] ?? 'image', maxBytes: LIFT_MAX_BYTES, attempts: LIFT_ATTEMPTS });
+  const liftOpts = (kind) => (kind === 'media'
+    ? { dir: tmp, kind: 'media', maxBytes: LIFT_MEDIA_MAX_BYTES, idleMs: LIFT_MEDIA_IDLE_MS, attempts: LIFT_ATTEMPTS }
+    : { dir: tmp, kind: DOWNLOAD_KIND[kind] ?? 'image', maxBytes: LIFT_MAX_BYTES, attempts: LIFT_ATTEMPTS });
   const startAhead = async (list) => {
     if (!fetch || !list.length) return;
     await mkdir(tmp, { recursive: true });
@@ -614,6 +626,14 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
       }
     }
     blockers.push({ url: abs, reason: fetch ? 'not in the record and could not be downloaded' : 'not in the network record' });
+    // A picture, video, sound or icon the copy could not get: the page's own value is an address on the page's site
+    // ("/media/film.mp4"), which on the copy's host names a file the copy does not have (a 404 the original never had). The
+    // original's full address is written instead, so the file still loads from the original. A script or stylesheet keeps the
+    // page's value: code from another host would run under other rules.
+    if (!CODE_KINDS.has(kind) && /^https?:/i.test(abs) && !/^https?:/i.test(raw.trim())) {
+      keptRemote.push({ url: abs, kind });
+      return { keep: abs };
+    }
     return { keep: raw };
   };
 
@@ -1001,5 +1021,5 @@ export async function liftPage({ captureRoot, pageUrl, outDir, fetch = true, fet
   // Downloads started ahead and never asked for finish before their folder goes.
   await prefetch.settle();
   await rm(tmp, { recursive: true, force: true });
-  return { document: { url: doc.url, sha256: doc.sha }, files, removed, blockers, downloads, dropped, matchedBy, ranged, healed, headerPreloads: headerTags.length };
+  return { document: { url: doc.url, sha256: doc.sha }, files, removed, blockers, downloads, dropped, matchedBy, ranged, healed, keptRemote, headerPreloads: headerTags.length };
 }

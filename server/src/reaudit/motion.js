@@ -757,6 +757,47 @@ export function detailsRead(was, now) {
 }
 
 const tone = (ratio) => (ratio >= 0.9 ? 'pass' : ratio >= 0.5 ? 'open' : 'regressed');
+/**
+ * Parts that change by themselves (capture/feeds.js), original against copy, page by page. Each original part is paired with
+ * one of the copy that changes at about the same pace (within max(150 ms, 25 %)); failing that, with the part at the same
+ * place on the copy's page (its path). A part at the same place that still changes at a steady pace is kept, its other pace
+ * said; one that changes without a steady pace, stopped, or does not change at all is not kept, and why is said for it, so a
+ * missing part never reads as a bare 0.
+ */
+export function compareFeeds(slugs, oldPages, newPages) {
+  const out = { before: 0, kept: 0, paces: [], differences: [] };
+  for (const slug of slugs) {
+    const was = oldPages.get(slug)?.feeds?.areas ?? [];
+    const now = [...(newPages.get(slug)?.feeds ?? [])];
+    out.before += was.length;
+    const left = [];
+    for (const a of was) {
+      const i = now.findIndex((b) => b.ms && Math.abs(b.ms - a.ms) <= Math.max(150, a.ms * 0.25));
+      if (i < 0) {
+        left.push(a);
+        continue;
+      }
+      out.kept++;
+      out.paces.push(`${now[i].ms} ms (original ${a.ms} ms)`);
+      now.splice(i, 1);
+    }
+    for (const a of left) {
+      const i = a.path ? now.findIndex((b) => b.path === a.path) : -1;
+      const b = i < 0 ? null : now.splice(i, 1)[0];
+      if (b?.ms) {
+        out.kept++;
+        out.paces.push(`${b.ms} ms (original ${a.ms} ms: another pace)`);
+        continue;
+      }
+      const diff = b
+        ? `changes on the copy (${plural(b.changes ?? 0, 'update')} while watched) but ${b.reason ?? 'not at a steady pace'}; the original changes every ${a.ms} ms`
+        : `does not change on the copy; the original changes every ${a.ms} ms`;
+      out.differences.push({ page: slug, element: a.path ?? '(unknown place)', diff: [diff] });
+    }
+  }
+  return out;
+}
+
 const row = (key, title, ratio, before, after, note) => ({
   key, category: 'motion', title, preset: tone(ratio),
   before: { status: 'pass', detail: before.detail, count: before.count },
@@ -916,25 +957,17 @@ export function motionItems(oldPages, newPages, { lifted = null, backend = null 
   // Parts that change by themselves (capture/feeds.js): each one the original had is paired with one of the copy that
   // changes at about the same pace (within max(150 ms, 25 %)) - the copy must keep changing after it loaded, not only
   // show the moment the capture caught.
-  const feeds = { before: 0, kept: 0, paces: [] };
-  for (const slug of both) {
-    const was = oldPages.get(slug)?.feeds?.areas ?? [];
-    const now = [...(newPages.get(slug)?.feeds ?? [])];
-    feeds.before += was.length;
-    for (const a of was) {
-      const i = now.findIndex((b) => Math.abs(b.ms - a.ms) <= Math.max(150, a.ms * 0.25));
-      if (i < 0) continue;
-      feeds.kept++;
-      feeds.paces.push(`${now[i].ms} ms (original ${a.ms} ms)`);
-      now.splice(i, 1);
-    }
-  }
+  const feeds = compareFeeds(both, oldPages, newPages);
   if (feeds.before) {
     const ratio = feeds.kept / feeds.before;
-    items.push(row('motion.feeds', 'Parts that change by themselves kept', ratio,
-      { detail: `${plural(feeds.before, 'part')} of the page change on their own (a feed, a ticker, a highlight that moves on).`, count: feeds.before },
-      { detail: `${feeds.kept} of them keep changing on the recreated site${feeds.paces.length ? `: every ${feeds.paces.slice(0, 3).join(', ')}` : ''}.`, count: feeds.kept },
-      'The copy replays the updates the capture saw, in order, and starts over after the last one: it is not live data.'));
+    const why = feeds.differences.slice(0, 3).map((d) => `${d.page} ${d.element}: ${d.diff[0]}`).join('; ');
+    items.push({
+      ...row('motion.feeds', 'Parts that change by themselves kept', ratio,
+        { detail: `${plural(feeds.before, 'part')} of the page change on their own (a feed, a ticker, a highlight that moves on).`, count: feeds.before },
+        { detail: `${feeds.kept} of them keep changing on the recreated site${feeds.paces.length ? `: every ${feeds.paces.slice(0, 3).join(', ')}` : ''}.${why ? ` Not kept: ${why}.` : ''}`, count: feeds.kept },
+        'The copy replays the updates the capture saw, in order, and starts over after the last one: it is not live data.'),
+      ...(feeds.differences.length && { differences: feeds.differences }),
+    });
   }
   // Elements that follow the mouse (capture/pointer.js): each original follower needs one in the copy with the same ratio to
   // the mouse's moves (within max(0.05, 25 %)) and, where it eases, a time constant within max(60 ms, 40 %).
