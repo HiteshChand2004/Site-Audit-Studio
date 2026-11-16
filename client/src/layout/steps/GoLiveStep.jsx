@@ -1006,7 +1006,7 @@ function AppCard({ project, onChange }) {
     return (
       <Card icon={Code} title={T.appTitle} sub={T.appSub}>
         <p className={ws.hint} style={{ margin: 0 }}>{T.appUnavailable}</p>
-        {card.setup && <p className={ws.hint} style={{ margin: 0 }}>{T.boxUnavailable}</p>}
+        {card.setup && <p className={ws.hint} style={{ margin: 0 }}>{T.appSetupAbove}</p>}
       </Card>
     );
   }
@@ -1097,6 +1097,17 @@ function AppCard({ project, onChange }) {
             <p className={styles.confirmTitle}>{hasApp ? T.appRunningTitle : T.appFacts(app)}</p>
             {hasApp && <p className={ws.hint} style={{ margin: 0 }}>{T.appFacts(app)}</p>}
             {status === 'stopped' && <Alert tone="bad" title="Not running">{T.appStopped}</Alert>}
+            {/* A repository with several apps (a frontend and a backend, a workspace): which one runs here. */}
+            {app.app.folders?.length > 1 && status !== 'starting' && (
+              <label className={form.field}>
+                <span className={form.label}>{T.appFolderLabel}</span>
+                <select className={form.input} value={app.app.folder} disabled={busy}
+                  onChange={(e) => act(() => api.chooseAppRepo(project.id, { installationId: app.repo.installationId, fullName: app.repo.fullName, branch: app.repo.branch, folder: e.target.value }))}>
+                  {app.app.folders.map((f) => <option key={f.folder} value={f.folder}>{`${f.folder || T.appFolderTop}${f.framework === 'next' ? ' (Next.js)' : ''}`}</option>)}
+                </select>
+                <span className={ws.hint} style={{ margin: 0 }}>{T.appFolderHelp}</span>
+              </label>
+            )}
             {app.app.warnings.map((w) => <Alert key={w} tone="warn" title="Check this">{w}</Alert>)}
 
             {status === 'starting' && (

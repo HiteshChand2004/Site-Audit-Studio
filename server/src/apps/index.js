@@ -73,7 +73,8 @@ export const hasApp = async (projectId) => (await readState(projectId)).status =
 /**
  * Downloads a repository and reads what it needs (nothing is run). Saved as the website's app when Remastly can run it.
  * @param {string} projectId @param {any} ghApp  Remastly's GitHub app (its credentials)
- * @param {{ installationId: number, fullName: string, branch: string }} repo
+ * @param {{ installationId: number, fullName: string, branch: string, folder?: string | null }} repo  folder: where the app is
+ *   in the repository ('' = the top); none = found by Remastly
  */
 async function fetchCode(projectId, ghApp, repo) {
   const work = path.join(dirOf(projectId), 'work');
@@ -84,12 +85,12 @@ async function fetchCode(projectId, ghApp, repo) {
   await unpack(archive, path.join(work, 'code'));
   await rm(archive, { force: true });
   const root = await repoRoot(path.join(work, 'code'));
-  return { work, root, commit, app: await findApp(root) };
+  return { work, root, commit, app: await findApp(root, repo.folder) };
 }
 
 /**
  * The repository the website's app comes from: read now, so the card can list the settings it needs before it runs.
- * @param {string} projectId @param {any} ghApp @param {{ installationId: number, fullName: string, branch: string }} repo
+ * @param {string} projectId @param {any} ghApp @param {{ installationId: number, fullName: string, branch: string, folder?: string }} repo
  */
 export async function chooseRepo(projectId, ghApp, repo) {
   if (making.has(projectId)) throw new AppError('The app is being made right now. Wait for it to finish.');
@@ -103,7 +104,8 @@ export async function chooseRepo(projectId, ghApp, repo) {
     work = got.work;
     const next = await patchState(projectId, {
       status: state.status === 'running' ? 'running' : 'ready', step: null, error: null,
-      repo: { ...repo, commit: got.commit }, app: got.app,
+      // The folder found is kept, so the next version is read from the same place.
+      repo: { ...repo, folder: got.app.folder, commit: got.commit }, app: got.app,
     });
     return next;
   } finally {
