@@ -86,6 +86,9 @@ export async function knownPages(project, { analysisIds, recreateReports }) {
       const key = pathKeyOf(p.url);
       if (Number.isInteger(p.depth) && !(depthOf.get(key) <= p.depth)) depthOf.set(key, p.depth);
     }
+    // Found by the Check but not read (its page limit or its time ran out): pages of the site all the same. The copy visits
+    // every page itself, so it takes them too; before, a Check of 10 pages limited the copy to those 10.
+    for (const u of crawl?.notRead ?? []) add(u);
     // A page robots.txt closes was never read, but it is a page of the owner's site: it is offered and copied like the rest.
     for (const u of crawl?.robotsBlocked ?? []) add(u);
   }

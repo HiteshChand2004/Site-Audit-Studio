@@ -4,7 +4,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { extractPage } from '../src/audit/extract.js';
-import { byImportance, importanceOf } from '../src/recreate/pageOrder.js';
+import { byImportance, importanceOf, knownPages } from '../src/recreate/pageOrder.js';
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { auditDir } from '../src/config/paths.js';
 import { AS_IS_MAX_PAGES, asIsPageChoice, asIsPagesOf } from '../src/recreate/behavior/preserve/asis.js';
 import { needsBackend } from '../src/recreate/discover.js';
 
@@ -95,4 +98,22 @@ test('backend pages are pages of the copy like any other, only flagged', (t) => 
   const { pages } = asIsPageChoice({ url: HOME }, asked);
   assert.equal(pages.length, 9, 'none is left out');
   assert.deepEqual(pages.filter((u) => needsBackend(u)).map((u) => new URL(u).pathname), asked.slice(0, 7));
+});
+
+test('the copy\'s pages include those the Check found but did not read (its page limit), not only the ones it read', async () => {
+  const project = { id: '3c3c3c3c-3c3c-4c3c-8c3c-3c3c3c3c3c3c', url: 'https://www.parchaa.example.com/' };
+  const dir = auditDir(project.id, 'a1');
+  await mkdir(dir, { recursive: true });
+  // A Check limited to 3 pages that found 5 more, one of them on another site and one only a query variant.
+  await writeFile(path.join(dir, 'crawl.json'), JSON.stringify({
+    pages: [
+      { url: 'https://www.parchaa.example.com/', status: 200, depth: 0, facts: { links: [] } },
+      { url: 'https://www.parchaa.example.com/doctors', status: 200, depth: 1 },
+      { url: 'https://www.parchaa.example.com/gone', status: 404, depth: 1 },
+    ],
+    notRead: ['https://www.parchaa.example.com/clinics', 'https://www.parchaa.example.com/blog/post-1', 'https://parchaa.example.com/doctors/', 'https://elsewhere.example.org/x', 'https://www.parchaa.example.com/search?q=a'],
+    cutBy: 'pages',
+  }));
+  const { pages } = await knownPages(project, { analysisIds: ['a1'], recreateReports: [] });
+  assert.deepEqual(pages.map((p) => p.path).sort(), ['/', '/blog/post-1', '/clinics', '/doctors'].sort(), 'unread pages of the site are in; another site, a query variant, a duplicate and a page that answered 404 are not');
 });
