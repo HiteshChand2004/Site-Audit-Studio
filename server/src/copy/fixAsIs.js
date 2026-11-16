@@ -520,6 +520,13 @@ export async function applyAddress($, page, { dir, siteHost, newOrigin, byPath, 
       ogUrl.attr('content', moved);
     }
   }
+  // The same tags as a kept runtime's own data writes them again after load (a framework streams its head as data, e.g.
+  // ["link",{"rel":"canonical","href":"https://original/"}]): left naming the original, the page ends with two canonicals that
+  // conflict. Moved the same way; anything else in the script is left as it is.
+  if (newOrigin && allow) {
+    const inData = moveHeadData($, siteHost, newOrigin, byPath);
+    if (inData.moved) fixes.push({ kind: 'address', field: 'script-head-data', value: inData.moved, source: `the canonical / og:url the page's script writes after load (${inData.fields.join(', ')})` });
+  }
   if (newOrigin && allow) {
     for (const { field, selector, attr } of ADDRESS_TAGS.filter((t) => t.field.endsWith(':image'))) {
       const el = $(selector).first();
@@ -733,6 +740,43 @@ function movedToNewSite(value, siteHost, newOrigin, byPath) {
   const p = decodeURIComponent(u.pathname);
   if (!byPath.has(p) && !byPath.has(p.replace(/\/$/, '') || '/')) return null;
   return new URL(`${u.pathname}${u.search}`, newOrigin).href;
+}
+
+// A key or value quoted in script data: `"`, or `\"` (and deeper) inside a string the script parses again.
+const Q = String.raw`\\*"`;
+/** The canonical link and og:url as script data writes them (either order of the two keys); the address is group `v`. */
+const HEAD_DATA = [
+  { field: 'canonical', re: new RegExp(String.raw`(${Q}rel${Q}\s*:\s*${Q}canonical${Q}\s*,\s*${Q}href${Q}\s*:\s*${Q})(?<v>[^"\\]+)(?=${Q})`, 'g') },
+  { field: 'canonical', re: new RegExp(String.raw`(${Q}href${Q}\s*:\s*${Q})(?<v>[^"\\]+)(?=${Q}\s*,\s*${Q}rel${Q}\s*:\s*${Q}canonical${Q})`, 'g') },
+  { field: 'og:url', re: new RegExp(String.raw`(${Q}property${Q}\s*:\s*${Q}og:url${Q}\s*,\s*${Q}content${Q}\s*:\s*${Q})(?<v>[^"\\]+)(?=${Q})`, 'g') },
+  { field: 'og:url', re: new RegExp(String.raw`(${Q}content${Q}\s*:\s*${Q})(?<v>[^"\\]+)(?=${Q}\s*,\s*${Q}property${Q}\s*:\s*${Q}og:url${Q})`, 'g') },
+];
+
+/**
+ * In the page's inline scripts (not structured data, which is kept as written): a canonical / og:url written as data and naming
+ * one of the copy's pages on the original's host moves to that page on the new site (movedToNewSite). Returns how many moved.
+ */
+export function moveHeadData($, siteHost, newOrigin, byPath) {
+  let moved = 0;
+  const fields = new Set();
+  for (const el of $('script:not([src])').toArray()) {
+    const type = String($(el).attr('type') ?? '').toLowerCase();
+    if (type === 'application/ld+json') continue;
+    const text = $(el).html();
+    if (!text || !/canonical|og:url/.test(text)) continue;
+    let out = text;
+    for (const { field, re } of HEAD_DATA) {
+      out = out.replace(re, (all, lead, v) => {
+        const to = movedToNewSite(v, siteHost, newOrigin, byPath);
+        if (!to || /["\\]/.test(to)) return all;
+        moved++;
+        fields.add(field);
+        return `${lead}${to}`;
+      });
+    }
+    if (out !== text) $(el).text(out);
+  }
+  return { moved, fields: [...fields] };
 }
 
 const exists = (f) => stat(f).then(() => true, () => false);
