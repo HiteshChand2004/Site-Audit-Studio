@@ -22,7 +22,7 @@ import { computeFrame } from './frame.js';
 import { fetchPage, isBotChallenge, isHtml } from './http.js';
 import { CANVAS_RENDERED_MESSAGE, classifySiteType } from '../detection/siteType.js';
 import { runLighthouse } from './lighthouse/run.js';
-import { checkLinks } from './linkChecker.js';
+import { checkLinks, linksToCheck } from './linkChecker.js';
 import { launchBrowser, renderHome, renderHtml } from './render.js';
 import { loadLlmsTxt, loadRobots, parseRobots } from './robots.js';
 import { captureScreenshots, VIEWS } from './screenshots.js';
@@ -43,7 +43,7 @@ export const STEPS = [
   // analyzeSite), so their limits do not add up. The screenshots are listed where they are awaited: the step list of the
   // app shows the earliest step still running and only ever moves forward.
   { key: 'render', label: 'Rendering + accessibility', weight: 14, max: 110000, expected: 15000 },
-  // The crawl's limit grows with the pages asked for (crawlMaxMs): 75 s up to ~100 pages, ~115 s for 150.
+  // The crawl's limit grows with the pages asked for (crawlMaxMs): 75 s up to ~100 pages, ~115 s for 150, ~231 s for 300.
   { key: 'crawl', label: 'Crawling pages', weight: 18, max: 75000 },
   { key: 'links', label: 'Checking links', weight: 14, max: 50000 },
   { key: 'screenshots', label: 'Screenshots (desktop, tablet, mobile)', weight: 8, max: 80000, expected: 25000 },
@@ -53,9 +53,25 @@ export const STEPS = [
 ];
 export const PUBLIC_STEPS = STEPS.map(({ key, label }) => ({ key, label }));
 
-/** The crawl step's own limit for `maxPages` pages: the 75 s of STEPS for up to ~100 pages, 770 ms a page beyond (150 → 115.5 s). */
+/** The crawl step's own limit for `maxPages` pages: the 75 s of STEPS for up to ~100 pages, 770 ms a page beyond (150 → 115.5 s, 300 → 231 s). */
 export const CRAWL_MS_PER_PAGE = 770;
 export const crawlMaxMs = (maxPages) => Math.max(STEPS.find((s) => s.key === 'crawl').max, Math.round((Number(maxPages) || 0) * CRAWL_MS_PER_PAGE));
+
+/**
+ * The link check's own limit for `count` links to ask for: the 50 s of STEPS for up to 200 links, 250 ms a link beyond (306 →
+ * 77 s, 500 → 125 s). A link answers in about half a second and four of one site are asked at once; the rest is for slow ones.
+ * Like every step it never takes the time kept for Lighthouse, and it returns what it checked when it runs out.
+ */
+export const LINK_MS = 250;
+/**
+ * Time a Check of many pages gets on top of the total (TOTAL_BUDGET_MS): what its crawl takes beyond a small site's, and as much
+ * again for its link check, which grows with it (150 pages → +81 s, 300 → +312 s). Without it the steps before Lighthouse
+ * (which keeps its own reserve) were cut short on a large site.
+ * @param {number} maxPages
+ */
+export const pagesExtraMs = (maxPages) => 2 * Math.max(0, crawlMaxMs(maxPages) - STEPS.find((s) => s.key === 'crawl').max);
+
+export const linksMaxMs = (count) => Math.max(STEPS.find((s) => s.key === 'links').max, Math.round((Number(count) || 0) * LINK_MS));
 
 /**
  * What a cut crawl left unread, for the report (audit.crawlLimit): null when nothing was left. `read` counts pages like
@@ -107,8 +123,10 @@ export function analyzeTiming(env = process.env) {
   const s = Number(env.SAS_TIMEOUT_SCALE);
   const scale = Number.isFinite(s) && s >= 1 && s <= 4 ? s : 1;
   const m = Number(env.SAS_ANALYZE_MINUTES);
-  const budgetMs = Number.isFinite(m) && m >= 1 && m <= 30 ? m * 60000 : Math.round(TOTAL_BUDGET_MS * scale);
-  return { scale, budgetMs, lighthouseReserveMs: Math.round(LIGHTHOUSE_RESERVE_MS * scale) };
+  // `explicit`: SAS_ANALYZE_MINUTES set the total itself, so it is not grown for a large site.
+  const explicit = Number.isFinite(m) && m >= 1 && m <= 30;
+  const budgetMs = explicit ? m * 60000 : Math.round(TOTAL_BUDGET_MS * scale);
+  return { scale, budgetMs, lighthouseReserveMs: Math.round(LIGHTHOUSE_RESERVE_MS * scale), explicit };
 }
 
 /** Time a step may use: its own limit, but never the time kept for the steps that must still run after it. */
@@ -232,7 +250,8 @@ export function runAnalysis({ netPolicy = userPolicy(), ...opts }) {
 async function analyze({ project, analysisId, maxPages, progress, netPolicy, url = project.url, outDir: dir, skip = [], seedUrls = [], deployOrigin = null, linksBesideLighthouse = false, lighthouseRun = runLighthouse, lighthouseBaseline = null, lighthouseOrigin = null, signal = null }) {
   const timing = analyzeTiming();
   const freeAtStart = freeMemoryMB();
-  const baseDeadline = Date.now() + timing.budgetMs;
+  // A large site gets the time its crawl and link check take beyond a small one's (pagesExtraMs), unless the total was set.
+  const baseDeadline = Date.now() + timing.budgetMs + (timing.explicit ? 0 : Math.round(pagesExtraMs(maxPages) * timing.scale));
   // Moves later (never past the interruption allowance) when time was lost to sleep or a network outage.
   let deadline = baseDeadline;
   let maxDeadline = baseDeadline + INTERRUPTION_EXTRA_MS * timing.scale;
@@ -250,20 +269,21 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
   // Runs one step with its time limit. Failures are recorded and the pipeline continues with `fallback`.
   // A step the caller skips returns `fallback` without an error or progress.
   // `reserve`: time that must stay for the steps after this one (Lighthouse); this step gets what is left of its own limit.
-  async function step(key, fn, fallback = null, { reserve = 0 } = {}) {
+  // `maxMs`: the step's own limit when it depends on the site (the link check: how many links it asks for), else STEPS'.
+  async function step(key, fn, fallback = null, { reserve = 0, maxMs = null } = {}) {
     if (skipped.has(key)) return fallback;
     if (signal?.aborted) throw stopError();
     progress(key, 0);
-    const result = await attempt(key, fn, fallback, reserve);
+    const result = await attempt(key, fn, fallback, reserve, null, maxMs);
     progress(key, 1);
     return result;
   }
 
   // One run of a step. A failure that the computer's sleep or a network outage explains gets one more run once the network
   // is back (`retried` = what happened before the second run).
-  async function attempt(key, fn, fallback, reserve, retried = null) {
+  async function attempt(key, fn, fallback, reserve, retried = null, maxMs = null) {
     const def = STEPS.find((s) => s.key === key);
-    const max = key === 'crawl' ? crawlMaxMs(maxPages) : def.max;
+    const max = maxMs ?? (key === 'crawl' ? crawlMaxMs(maxPages) : def.max);
     const budget = stepBudget({ max: max * timing.scale, now: Date.now(), deadline, reserve });
     if (budget < 5000) {
       errors.push({
@@ -310,7 +330,7 @@ async function analyze({ project, analysisId, maxPages, progress, netPolicy, url
       const explained = await recover(key, failure.message, started, { remaining: deadline - started });
       if (explained?.retry) {
         progress(key, 0, `${def.label}: trying again (${causeText(explained)})`);
-        return attempt(key, fn, fallback, reserve, explained);
+        return attempt(key, fn, fallback, reserve, explained, maxMs);
       }
       retried = explained;
     }
@@ -498,11 +518,12 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
       crawlResult = { pages: [{ url: home.url, status: home.status, depth: 0, facts: { ...facts, rawTextLength: facts.textLength } }], skippedByRobots: 0 };
     }
     // 5. Links: plain HTTP, so it runs while the last screenshots are still being taken.
+    // Its time follows the links it will ask for (linksMaxMs), known now the crawl is done.
     linksTask = step(
       'links',
       (signal) => checkLinks({ pages: crawlResult.pages, signal, onProgress: (done, total) => progress('links', done / total, `Checked ${done} of ${total} links`) }),
       { checked: 0, total: 0, broken: [], unverified: [] },
-      reserve,
+      { ...reserve, maxMs: linksMaxMs(linksToCheck(crawlResult.pages)) },
     );
     shots = await shotsTask;
     for (const e of shots?.errors ?? []) errors.push({ step: 'screenshots', message: `${e.view}: ${e.message}` });

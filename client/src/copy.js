@@ -619,7 +619,7 @@ export function resumeText(r) {
 }
 
 /** The most pages one check reads, and a new website's "Pages to check" (the server's MAX_CHECK_PAGES, routes/analyze.js). */
-export const MAX_CHECK_PAGES = 150;
+export const MAX_CHECK_PAGES = 300;
 
 const pagesWord = (n) => `${n} ${n === 1 ? 'page' : 'pages'}`;
 

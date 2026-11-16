@@ -10,7 +10,7 @@ const selectProject = db.prepare('SELECT * FROM projects WHERE id = ?');
 const selectAnalysis = db.prepare('SELECT id, status, error FROM analyses WHERE id = ? AND project_id = ?');
 
 /** The most pages one check reads ("Pages to check"), and the default of a new website (routes/projects.js). */
-export const MAX_CHECK_PAGES = 150;
+export const MAX_CHECK_PAGES = 300;
 
 export function parseMaxPages(value) {
   const n = Number(value);

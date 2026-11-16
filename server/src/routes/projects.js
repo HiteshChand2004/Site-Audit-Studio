@@ -50,6 +50,7 @@ const selectOne = db.prepare('SELECT * FROM projects WHERE id = ?');
 // A new website's "Pages to check": the most a check reads (analyze.js parseMaxPages), so the first check reads the whole site
 // (user, 2026-11-13; was the column's DEFAULT 25, which stays for rows made before). The user can lower it on the Check step.
 // 2026-11-14: 150, with the highest allowed (db/migrations.js 2026-11-14-check-pages-150 moves projects at the old 100).
+// 2026-11-16: 300 (2026-11-16-check-pages-300 moves projects at the old 150 the same way).
 export const DEFAULT_MAX_PAGES = MAX_CHECK_PAGES;
 // A number the user set is marked (max_pages_chosen), so a later change of the default never moves it. The column comes with a
 // migration the server applies when it starts, after this module has loaded, so the column is looked for on use: on a database
