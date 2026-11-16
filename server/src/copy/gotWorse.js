@@ -326,7 +326,7 @@ const fewUrls = (urls) => urls.slice(0, 3).map((u) => { try { return new URL(u).
 // WebP of, or one the fix recorded it could not convert without a visible change, is a change of its look (d) to go further.
 // Evidence per file, from this run only.
 const IMAGE_FILE_AUDITS = new Set(['modern-image-formats', 'uses-optimized-images', 'uses-responsive-images', 'efficient-animated-content']);
-const OUR_WEBP = /\.sas-[0-9a-f]{10}\.webp$/i;
+const OUR_WEBP = /\.sas-(?:w\d+-)?[0-9a-f]{10}\.webp$/i;
 /** A file's name without the copy's own marks (the lift's ~query hash, the WebP fix's .sas- hash) and without its extension. */
 const imageStem = (url) => {
   let name;
@@ -366,6 +366,11 @@ function imageRow(item, id, ctx) {
     const same = original.find((o) => o.stem && o.stem === stem);
     if (!same) return { what, reason: null, evidence: 'the original\'s report does not name this file' };
     if (bytes > same.bytes * (1 + GROWTH.other) + 1024) return { what, reason: null, evidence: `the copy could save ${kb(bytes)} on it against the original's ${kb(same.bytes)}: the copy holds a heavier file than the original served` };
+    if (id === 'uses-responsive-images') {
+      // The size fix's own reason for leaving this picture with its one file, when it recorded one.
+      const left = ctx.fixOpen.find((o) => o.kind === 'size' && String(o.detail ?? '').toLowerCase().includes(stem));
+      if (left) return { what, reason: 'look', evidence: `no smaller copy was made (${left.detail}); only a file that looks different could close it` };
+    }
     if (/\.(png|jpe?g)$/i.test(url)) {
       const why = leftPng.find((o) => String(o.detail ?? '').toLowerCase().includes(stem));
       if (!why) return { what, reason: null, evidence: 'an image the copy did not make a WebP of, and no reason was recorded' };

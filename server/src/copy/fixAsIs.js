@@ -42,7 +42,7 @@ import { resetTextCache } from '../recreate/ir/tree.js';
 import { HEADERS_FILE as CACHE_HEADERS } from '../recreate/behavior/preserve/pack.js';
 import { blocksZoom, fixInvalidLang, isValidLang } from './seoA11yAsIs.js';
 import { MARKUP_PASS, emptyCounts, fixGroup } from './fixRegistry.js';
-import { fixImageLoading, fixPngImages } from './perfAsIs.js';
+import { fixImageLoading, fixImageSizes, fixPngImages } from './perfAsIs.js';
 import { SECURITY_HEADERS } from './securityHeaders.js';
 import { faithfulHtml, loadFaithful } from './faithfulHtml.js';
 import { bundledTemplate, headOf, syncShellHead, withTemplate } from './bundled.js';
@@ -204,6 +204,8 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
   let icon;
   // One WebP per PNG for the whole run, however many pages show it.
   const webpMade = new Map();
+  // One set of smaller copies per picture and width for the whole run.
+  const sizeMade = new Map();
   // The site's logo card for link previews, made once (previewPicture).
   const pictures = new Map();
 
@@ -258,6 +260,12 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
       }
       // Only on a page the probe measured (its plan): a caller that proves the markup fixes alone, or a page that could not be
       // measured, gets no image rewritten either.
+      // Smaller copies first: the WebP pass then converts the original file in the new srcset like any other candidate.
+      if (perf?.has(d.outPath) && allow('size')) {
+        const size = await fixImageSizes($, d, dir, perf.get(d.outPath), sizeMade);
+        for (const f of size.fixed) fixes.push({ kind: 'size', ...f });
+        open.push(...size.open.map((o) => ({ kind: 'size', ...o })));
+      }
       if (perf?.has(d.outPath) && allow('webp')) {
         const webp = await fixPngImages($, d, dir, webpMade);
         for (const f of webp.fixed) fixes.push({ kind: 'webp', ...f });

@@ -18,9 +18,13 @@
 //   css    a local stylesheet loses its whitespace and comments (esbuild, whitespace only: no rule is merged, reordered or
 //          dropped), only when the browser builds the very same rules from both (cssRules, compared text for text) and every
 //          page that loads it is pictured the same (preserve/stage.js minifyAndProve)
+//   size   a picture whose file is wider than it is ever drawn (read at window widths 320–1920, perfProbe drawnWidths) gets WebP
+//          copies at smaller widths, each with no visible difference from the file resized to that width, offered in a new
+//          srcset with the file itself as the widest and a `sizes` never smaller than where it is drawn (sizesAttr): the browser
+//          draws it at the same size and a sharp screen still takes the larger file (user, 2026-11-16: Lighthouse "Properly size
+//          images" must be solved). Never a picture that already chooses among files, moves or changes size, or is animated.
 // Never: the original's scripts (not minified, deferred, moved or removed), font-display (text would show in another font while
-// the web font loads), a re-encoding with a visible difference or smaller variants (the pixels change), width / height
-// attributes, preconnects.
+// the web font loads), a re-encoding with a visible difference, width / height attributes, preconnects.
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -105,7 +109,136 @@ export function planPerf(probe, pagePath) {
       scrollers.set(key, seen);
     }
   }
-  return { lcp, lazy, totals, open, widths: probe.widths.map((w) => w.width), scrollers: [...scrollers.values()], shown: [...shown.values()] };
+  // Pictures that may get smaller copies (fixImageSizes): named the same at every width the probe read, drawn at every window
+  // width of the computer's reading (drawn), never choosing among files already, never moving or changing size, with a known
+  // file width. Anything else is left as it is.
+  const size = new Map();
+  const drawn = probe.widths.find((w) => w.drawn)?.drawn ?? null;
+  if (drawn) {
+    for (const [key, points] of Object.entries(drawn)) {
+      const seen = probe.widths.map((w) => w.images.find((im) => `${im.k}|${im.src}` === key));
+      if (seen.some((x) => !x) || seen.some((x) => x.chooses || x.moves || x.lazyLib)) continue;
+      const natural = Math.max(...seen.map((x) => x.nw || 0));
+      if (!natural || points.length < 2 || points.every(([, w]) => !(w > 0))) continue;
+      size.set(key, { natural, points });
+    }
+  }
+  return { lcp, lazy, totals, open, size, widths: probe.widths.map((w) => w.width), scrollers: [...scrollers.values()], shown: [...shown.values()] };
+}
+
+/**
+ * A `sizes` value no smaller than the picture is drawn at ANY window width, from its drawn widths at a few: up to the first
+ * width read, the width drawn there; between two widths read, the larger of the drawn width at the upper one and the lower
+ * one's grown in proportion to the window (a picture never grows faster than its window); past the last, its share of the
+ * window. Too large is safe (a larger file than needed), too small would blur the picture, so every step rounds up.
+ * @param {[number, number][]} points  [window width, drawn width]
+ */
+export function sizesAttr(points) {
+  const p = [...points].filter(([vw]) => vw > 0).sort((a, b) => a[0] - b[0]);
+  if (!p.length) return null;
+  const parts = [`(max-width: ${p[0][0]}px) ${Math.max(1, p[0][1])}px`];
+  for (let i = 1; i < p.length; i++) {
+    const [lo, dLo] = p[i - 1];
+    const [hi, dHi] = p[i];
+    parts.push(`(max-width: ${hi}px) ${Math.max(1, Math.ceil(Math.max(dLo * (hi / lo), dHi)))}px`);
+  }
+  const [last, dLast] = p.at(-1);
+  parts.push(`${Math.max(1, Math.ceil((dLast / last) * 100))}vw`);
+  return parts.join(', ');
+}
+
+/** The widths a smaller copy of a picture may have; only those well below the file's own width are made. */
+export const VARIANT_WIDTHS = [320, 480, 640, 800, 1024, 1280, 1600, 1920, 2560];
+/** A smaller copy is made only below this share of the file's own width, and kept only at most WEBP_MAX_SHARE of its bytes. */
+export const VARIANT_MAX_SHARE = 0.85;
+
+/** The largest drawn width `sizes` names for a picture (the widest it may need, at one pixel per CSS pixel). */
+const largestDrawn = (points) => Math.max(...points.map(([, w]) => w), 1);
+
+/**
+ * One smaller copy of a local picture, `width` pixels wide, written next to it once (memo `made`), or why there is none: the
+ * file resized (lanczos3, as a browser draws it smaller), then encoded as WebP only when, decoded, not one pixel differs visibly
+ * from the resized picture (visiblySameWebp), and only when it is at most WEBP_MAX_SHARE of the original file.
+ */
+async function variantOf(file, width, dir, made) {
+  const memo = `${file}|${width}`;
+  if (made.has(memo)) return made.get(memo);
+  let result;
+  try {
+    const input = await readFile(file);
+    const meta = await sharp(input).metadata();
+    if ((meta.pages ?? 1) > 1) result = { skip: 'it is animated' };
+    else if (meta.orientation && meta.orientation !== 1) result = { skip: 'it is turned by its EXIF orientation' };
+    else if (!meta.width || width >= meta.width * VARIANT_MAX_SHARE) result = { skip: `it is ${meta.width} pixels wide: no smaller copy of ${width} is worth making` };
+    else {
+      let resize = sharp(input).resize({ width, kernel: 'lanczos3', withoutEnlargement: true });
+      if (meta.icc) resize = resize.keepIccProfile();
+      const resized = await resize.png().toBuffer();
+      const webp = await visiblySameWebp(resized);
+      if (!webp.data) result = { skip: webp.skip };
+      else if (webp.data.length > input.length * WEBP_MAX_SHARE) result = { skip: `a ${width} px copy would be ${Math.round((webp.data.length / input.length) * 100)} % of the file` };
+      else {
+        const name = `${path.basename(file, path.extname(file))}.sas-w${width}-${createHash('sha256').update(webp.data).digest('hex').slice(0, 10)}.webp`;
+        const target = path.join(path.dirname(file), name);
+        const there = await readFile(target).catch(() => null);
+        if (there && !there.equals(webp.data)) result = { skip: `${name} already exists with other content` };
+        else {
+          if (!there) await writeFile(target, webp.data);
+          result = { name, width, file: path.relative(dir, target).split(path.sep).join('/'), from: input.length, to: webp.data.length, quality: webp.quality };
+        }
+      }
+    }
+  } catch (err) {
+    result = { skip: `it could not be read (${String(err?.message ?? err).slice(0, 80)})` };
+  }
+  made.set(memo, result);
+  return result;
+}
+
+/**
+ * Smaller copies of the large pictures of one page (Lighthouse "Properly size images"). For a picture the plan allows
+ * (planPerf `size`: drawn at every window width, not choosing among files, not moving), a local PNG, JPEG or WebP whose file is
+ * wider than it is ever drawn: WebP copies at VARIANT_WIDTHS below its own width (each with no visible difference, variantOf),
+ * offered with the file itself as the widest in a new srcset, and a `sizes` never smaller than where it is drawn (sizesAttr).
+ * The browser then takes the smallest file that covers the picture at its screen density, so a sharp screen still gets the
+ * larger file. src stays as it was. Only when the page names that picture as often as the probe saw it, at every width.
+ */
+export async function fixImageSizes($, page, dir, plan, made = new Map()) {
+  const fixed = [];
+  const open = [];
+  if (!plan?.size?.size) return { fixed, open };
+  for (const img of staticImages($)) {
+    const info = plan.size.get(img.key);
+    if (!info) continue;
+    const a = img.el.attribs;
+    if (a.srcset != null || $(img.el).closest('picture').length) continue;
+    if (!(plan.totals.get(img.src) ?? []).every((t) => t === img.total)) continue;
+    if (!/\.(png|jpe?g|webp)$/i.test(img.src.split(/[?#]/)[0])) continue;
+    const file = localFileOf(dir, page.outPath, img.src);
+    if (!file) continue;
+    const need = largestDrawn(info.points);
+    // From the bytes, never sharp(path): on Windows that keeps the file open and the workspace could not be removed.
+    const natural = await readFile(file).then((b) => sharp(b).metadata()).then((m) => m.width ?? 0, () => 0);
+    if (!natural || natural <= need) continue;
+    const widths = VARIANT_WIDTHS.filter((w) => w < natural * VARIANT_MAX_SHARE && w >= Math.min(...info.points.map(([, d]) => d).filter((d) => d > 0), need));
+    const variants = [];
+    let why = null;
+    for (const w of widths) {
+      const r = await variantOf(file, w, dir, made);
+      if (r.skip) why ??= r.skip;
+      else variants.push(r);
+    }
+    if (!variants.length) {
+      if (why) open.push({ page: page.path, reason: 'd', detail: `${img.src} keeps its one file (${natural} px wide, drawn at most ${need} px): ${why}` });
+      continue;
+    }
+    const sizes = sizesAttr(info.points);
+    if (!sizes) continue;
+    a.srcset = [...variants.map((v) => `${webpAddress(img.src, v.name)} ${v.width}w`), `${img.src} ${natural}w`].join(', ');
+    a.sizes = sizes;
+    for (const v of variants) fixed.push({ field: 'img', attr: 'srcset', src: img.src, value: webpAddress(img.src, v.name), file: v.file, width: v.width, bytes: [v.from, v.to], quality: v.quality });
+  }
+  return { fixed, open };
 }
 
 /** The largest element in plain words, from its tag: what a page owner reads in the report. */
@@ -585,4 +718,4 @@ export async function stylesheetCandidates({ dir, uses, integrity = new Set(), c
 }
 
 /** What every fix of C3 is, in the report's words (kept short: the report lists each one). */
-export const PERF_KINDS = ['lcp', 'lazy', 'webp'];
+export const PERF_KINDS = ['lcp', 'lazy', 'webp', 'size'];

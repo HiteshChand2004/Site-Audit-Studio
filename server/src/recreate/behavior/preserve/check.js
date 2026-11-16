@@ -425,6 +425,32 @@ async function lcpChainOf(page, width) {
  * element and its ancestors (lcpChainOf).
  * @returns {Promise<{ path: string, widths: { width: number, viewportH: number, lcp: object|null, lcpChain: object[], images: object[], styles: string[], integrity: string[], scrollers: object[], scrolled: boolean }[] }>}
  */
+/** The window widths a picture's drawn width is read at (perfProbe drawnWidths): a small phone to a large screen. */
+export const DRAWN_WIDTHS = [320, 375, 480, 640, 768, 1024, 1280, 1440, 1920];
+
+/**
+ * How wide every picture of the page is drawn at each of DRAWN_WIDTHS: { "<k>|<src>": [[windowWidth, drawnWidth], …] }, named
+ * as perfProbe names images (src and occurrence). The window is resized in place, each width read once its layout settled.
+ */
+async function drawnWidths(page, height) {
+  const out = {};
+  for (const vw of DRAWN_WIDTHS) {
+    await page.setViewportSize({ width: vw, height });
+    await page.waitForTimeout(250);
+    const read = await page.evaluate(() => {
+      const seen = new Map();
+      return [...document.images].filter((i) => i.getAttribute('src') != null).map((img) => {
+        const src = img.getAttribute('src');
+        const k = seen.get(src) ?? 0;
+        seen.set(src, k + 1);
+        return [`${k}|${src}`, Math.ceil(img.getBoundingClientRect().width)];
+      });
+    });
+    for (const [key, w] of read) (out[key] ??= []).push([vw, w]);
+  }
+  return out;
+}
+
 export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS, parallel = false } = {}) {
   // parallel: every width measured at the same time (one context each, same browser), else one after the other. Same reading.
   const one = async (width) => {
@@ -489,6 +515,13 @@ export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS,
             inScroller: scroller(img),
             lazyLib: img.getAttributeNames().some((n) => /^(data-src|data-srcset|data-lazy|data-lazy-src|data-original|data-bg)$/.test(n)),
             loading: img.getAttribute('loading'), fetchpriority: img.getAttribute('fetchpriority'),
+            // For smaller copies of a large picture (copy/perfAsIs.js fixImageSizes): its file's own width, whether the page
+            // already chooses among files (srcset, <picture>), and whether it moves or changes size (a transform, an animation,
+            // a transition of its size or transform): such a picture is left as it is.
+            nw: img.naturalWidth || 0,
+            chooses: img.hasAttribute('srcset') || img.parentElement?.tagName === 'PICTURE',
+            moves: s.transform !== 'none' || img.getAnimations().length > 0
+              || (/(^|,\s*)(all|transform|scale|width|height|max-width)(\s*,|$)/.test(s.transitionProperty) && s.transitionDuration.split(',').some((d) => parseFloat(d) > 0)),
           };
         });
         const e = window.__sasLcp;
@@ -525,7 +558,10 @@ export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS,
       // Then down the page as a visitor scrolls (scroll.js), so a stylesheet a script loads on the way is known too. `scrolled`
       // is false when that failed or stopped at its time cap: the list of stylesheets may then be short.
       const scroll = await scrollThrough(page).catch(() => null);
-      return { width, ...read, lcpChain, styles: [...styles], scrolled: Boolean(scroll && !scroll.capped) };
+      // At a computer's width only, last (it changes the window): how wide each picture is drawn at every width from a small
+      // phone to a large screen, so a smaller copy is never chosen where the picture is drawn larger (copy/perfAsIs.js sizesAttr).
+      const drawn = !opts.isMobile ? await drawnWidths(page, opts.viewport.height).catch(() => null) : null;
+      return { width, ...read, lcpChain, styles: [...styles], scrolled: Boolean(scroll && !scroll.capped), ...(drawn && { drawn }) };
     } finally {
       await context.close();
     }
