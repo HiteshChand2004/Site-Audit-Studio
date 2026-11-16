@@ -240,7 +240,7 @@ export function runtimeNotes(record) {
       lines.push('', `These pages keep the original's framework code because they need it. On them, a change to a component is drawn over when the page loads (the original's content comes back); KNOWN-ISSUES.md lists them:`, '');
       for (const r of kept) lines.push(`- ${r.path}: ${(WHY[r.why] ?? WHY.unknown)(r)}.`);
       const forCounts = kept.filter((r) => r.keptFor?.length);
-      if (forCounts.length) lines.push('', `You chose editable components, but ${forCounts.length === 1 ? 'this page keeps' : `${forCounts.length} of these pages keep`} the framework code because without it ${forCounts.length === 1 ? 'it loses' : 'they lose'} hover effects, scroll reveals or working buttons, or ${forCounts.length === 1 ? 'holds' : 'hold'} other content (the framework takes out or draws parts of the page): ${forCounts.map((r) => r.path).join(', ')}.`);
+      if (forCounts.length) lines.push('', `You chose editable components, but ${forCounts.length === 1 ? 'this page keeps' : `${forCounts.length} of these pages keep`} the framework code because without it ${forCounts.length === 1 ? 'it loses' : 'they lose'} hover effects, scroll reveals, running animations, parts that change by themselves or working buttons, or ${forCounts.length === 1 ? 'holds' : 'hold'} other content (the framework takes out or draws parts of the page): ${forCounts.map((r) => r.path).join(', ')}.`);
     }
     if (drawn.length) {
       lines.push('', `${drawn.map((r) => r.path).join(', ')}: the original's script draws all of the page's content after it loads, so its components hold none of it.`);
