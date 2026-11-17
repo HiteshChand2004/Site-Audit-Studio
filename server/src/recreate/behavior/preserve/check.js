@@ -379,6 +379,22 @@ function readLcpChain() {
 const LCP_HOVER_MS = 600;
 
 /**
+ * The probe names the largest element once it has stopped changing: a part the page's script shows after load (a reveal after
+ * hydration) becomes the largest element seconds later, and Lighthouse names that one (indikaai: the logo at 0.2 s, the hero's
+ * text at 2.5 s, read at 1.5 s before). Read once no new entry came for LCP_QUIET_MS, at most LCP_MAX_WAIT_MS after load.
+ */
+export const LCP_QUIET_MS = 3000;
+export const LCP_MAX_WAIT_MS = 8000;
+async function lcpSettled(page) {
+  const start = Date.now();
+  while (Date.now() - start < LCP_MAX_WAIT_MS) {
+    const quiet = await page.evaluate(() => performance.now() - (window.__sasLcp?.startTime ?? 0)).catch(() => Infinity);
+    if (quiet >= LCP_QUIET_MS) return;
+    await page.waitForTimeout(250);
+  }
+}
+
+/**
  * The largest element's chain (readLcpChain), with what would make showing it at once change the page's motion: `moving` (its
  * opacity or transform changes while nothing is done: a loop a script drives), and at a computer width `hoverMoves` (it changes
  * while the mouse is over the largest element or one of its ancestors: a hover, a pointer follower). The mouse is put back at
@@ -489,6 +505,7 @@ export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS,
       page.on('response', (r) => { if (r.request().resourceType() === 'stylesheet' && r.url().startsWith(base)) styles.add(new URL(r.url()).pathname); });
       await page.goto(`${base}${pagePath}`, { waitUntil: 'load', timeout: 120000 });
       await page.waitForTimeout(1500);
+      await lcpSettled(page);
       await page.evaluate(() => window.scrollTo(0, 0));
       const read = await page.evaluate(() => {
         const nameOf = (img) => {
