@@ -105,6 +105,15 @@ export function planPerf(probe, pagePath) {
   });
   // Below the first screen at EVERY width, and never the largest element at any.
   const lazy = new Set([...lazyAt[0] ?? []].filter((key) => lazyAt.every((s) => s.has(key)) && !lcp.has(key)));
+  // By address: every image with that address in the built page may load late, at every width. A builder writes one version
+  // of a part per breakpoint and its script removes the others (nyaayai: 7 images with one address in the markup, 3 in the
+  // page), so which markup image survives is unknown; they all fetch one file, so fixImageLoading may make the fix to all.
+  const lcpSrc = new Set([...lcp].map((key) => key.slice(key.indexOf('|') + 1)));
+  const lazySrc = new Set();
+  for (const src of totals.keys()) {
+    if (lcpSrc.has(src)) continue;
+    if (probe.widths.every((w, i) => w.images.filter((im) => im.src === src).every((im) => lazyAt[i].has(`${im.k}|${im.src}`)))) lazySrc.add(src);
+  }
   // Boxes that scroll at ANY width and the keyboard cannot reach (copy/seoA11yAsIs.js fixScrollableRegions): one entry per
   // element, with the widths it scrolls at.
   const scrollers = new Map();
@@ -132,7 +141,7 @@ export function planPerf(probe, pagePath) {
       size.set(key, { natural, points });
     }
   }
-  return { lcp, lazy, totals, open, size, widths: probe.widths.map((w) => w.width), scrollers: [...scrollers.values()], shown: [...shown.values()] };
+  return { lcp, lcpSrc, lazy, lazySrc, totals, open, size, widths: probe.widths.map((w) => w.width), scrollers: [...scrollers.values()], shown: [...shown.values()] };
 }
 
 /**
@@ -349,10 +358,13 @@ export function fixImageLoading($, page, plan, allow = { lcp: true, lazy: true }
   for (const img of staticImages($)) {
     const live = plan.totals.get(img.src) ?? [];
     const sameCount = plan.widths.every((_, i) => live[i] === img.total);
+    // Fewer images with this address in the built page than in the markup: the page's script removed some. The fix is made by
+    // address (one file), never when a script adds images (then the markup cannot say which one is where).
+    const fewer = !sameCount && plan.widths.every((_, i) => (live[i] ?? 0) <= img.total);
     const a = img.el.attribs;
-    if (plan.lcp.has(img.key)) {
+    if (plan.lcp.has(img.key) || fewer && plan.lcpSrc?.has(img.src)) {
       if (!allow.lcp) continue;
-      if (!sameCount) {
+      if (!sameCount && !fewer) {
         open.push({ page: page.path, reason: 'd', detail: `The largest image (${img.src}) appears ${live.join(' / ')} time(s) in the page as its scripts build it and ${img.total} in its markup: not touched` });
         continue;
       }
@@ -361,13 +373,11 @@ export function fixImageLoading($, page, plan, allow = { lcp: true, lazy: true }
       if (String(a.loading).toLowerCase() === 'lazy') delete a.loading;
       const preload = preloadImage($, img);
       if (was.fetchpriority !== 'high' || was.loading != null && a.loading == null || preload) fixed.push({ field: 'img', src: img.src, from: was, value: { fetchpriority: 'high', loading: a.loading ?? null, ...(preload && { preload: true }) } });
-    } else if (allow.lazy && plan.lazy.has(img.key) && a.loading == null) {
-      if (!sameCount) {
-        lazyOpen.push({ page: page.path, reason: 'd', detail: `${img.src} is left without lazy loading on purpose: a script adds more images with the same address (${live.join(' / ')} in the page, ${img.total} in its markup), so the markup cannot say which one is below the first screen` });
-        continue;
-      }
+    } else if (allow.lazy && a.loading == null && (sameCount ? plan.lazy.has(img.key) : fewer && plan.lazySrc?.has(img.src))) {
       a.loading = 'lazy';
       lazyFixed.push({ field: 'img', src: img.src, value: 'lazy' });
+    } else if (allow.lazy && a.loading == null && !sameCount && plan.lazy.has(img.key)) {
+      lazyOpen.push({ page: page.path, reason: 'd', detail: `${img.src} is left without lazy loading on purpose: the page's script changes how many images use this address (${live.join(' / ')} in the page, ${img.total} in its markup), so the markup cannot say which one is below the first screen` });
     }
   }
   if (allow.lcp) {
