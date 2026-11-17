@@ -82,6 +82,12 @@ test('Lighthouse: a check whose amount did not grow is the host (e); one that gr
   assert.match(host.evidence, /488 KB → 483 KB/);
   assert.match(host.evidence, /the same requests \(5 \(2 Script, 1 Document, 1 Stylesheet, 1 Image\)\)/);
 
+  // A time no longer than the original's needs no proof: the largest element unnamed on the copy (makememo: 0 → 0 ms on a
+  // computer, 5410 → 5460 ms on a phone) is still the original's own time.
+  const notSlower = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 5410, 500000), desktop: time('h1.hero', 0, 500000) }, newLhr: { mobile: lhr({ ...lcp(null, 5460), ...weight(500000) }), desktop: lhr({ ...lcp(null, 0), ...weight(500000) }) } });
+  assert.equal(notSlower.reason, 'deploy', 'not slower than the original on either device');
+  assert.match(notSlower.evidence, /mobile: 5410 → 5460 ms, no slower than the original; desktop: 0 → 0 ms, no slower than the original/);
+
   // Strict: any one of the three that is not the same keeps the row counted, with the difference named.
   const lighter = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 450000) } });
   assert.equal(lighter.reason, null, 'a copy 10 % lighter is still not the same page');

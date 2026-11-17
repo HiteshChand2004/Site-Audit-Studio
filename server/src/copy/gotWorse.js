@@ -890,6 +890,11 @@ function lighthousePart(item, id, ctx) {
     const timeOnly = a.unit === 'ms';
     if (timeOnly) {
       const times = `${b ? `${Math.round(b.value)} → ` : ''}${Math.round(a.value)} ms`;
+      // A time no longer than the original's (within GROWTH.other) needs no proof of the same load: the copy is not slower.
+      if (b && a.value <= b.value * (1 + GROWTH.other)) {
+        rows.push(`${device}: ${times}, no slower than the original`);
+        continue;
+      }
       // The time the first paint waits for its blocking files is decided by those files alone: the copy blocks no more than
       // the original when it waits for the same files (or fewer), in the same order, none larger, none from a new host. Then
       // a longer wait is the measurement's (the host, the computer's load), whatever else the page loads after it.
