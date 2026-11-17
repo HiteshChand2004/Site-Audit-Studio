@@ -24,6 +24,7 @@ import { writeLockfiles } from '../../../toolchains/lockfile.js';
 import { asIsSafety } from '../../../copy/outsideServices.js';
 import { anchorClicks, beforePictures, checkCopy, excludedHostsOf, fixGate, formsInCopy, inPool, NOISE_SHOTS, perfProbe, probeOriginal } from './check.js';
 import { localFileOf, namesStillUsed, PERF_KINDS, planPerf, stylesheetCandidates } from '../../../copy/perfAsIs.js';
+import { planTailwind } from '../../../copy/tailwindAsIs.js';
 import { formRoutesOfCopy, formsReadmeSection } from '../../../copy/formRoutes.js';
 import { fixAsIsCopy, fixGroup, revertPage } from '../../../copy/fixAsIs.js';
 import { axeRulesFor, checkGone, judgeAxe, mergeVerdicts } from '../../../copy/fixGone.js';
@@ -430,16 +431,30 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
         await before.close();
       }
     }
+    // Tailwind's in-browser compiler (copy/tailwindAsIs.js): the CSS it writes, built once for the whole copy (every page's classes
+    // and its scripts' words) in one file every page links instead; each page is then proved by the look gate like any other fix.
+    let tailwind = null;
+    if (speed && !exact) {
+      const seen = guard.count;
+      try {
+        const tw = await planTailwind({ browser, copyDir, pages: list, log });
+        if (guard.count !== seen) throw new Error(STRAY_WHY);
+        tailwind = tw.plan;
+        perfOpen.push(...tw.open);
+      } catch (err) {
+        perfOpen.push({ kind: 'tailwind', page: '/', reason: 'd', detail: `Tailwind's in-browser compiler stays: its CSS could not be built (${String(err?.message ?? err).split('\n')[0].slice(0, 120)})` });
+      }
+    }
     // An exact copy's stylesheets were minified by its build (build/minify.js, esbuild): there is nothing to try.
     const css = speed && exact
       ? { open: [], report: { files: [], looks: [], skipped: 'minified by the build' } }
       : speed
       ? await minifyAndProve({ browser, copyDir, gateDir, uses, integrity, complete: measured, measuredPages: new Set(list.map((p) => p.outPath)), log, lookGate, guard, before: beforeShots, progress })
       : { open: [], report: null };
-    const fixed = await fixAsIsCopy({ dir: copyDir, siteUrl, newSiteUrl, fetchLlms, pages: list, ...(speed && { perf }) });
+    const fixed = await fixAsIsCopy({ dir: copyDir, siteUrl, newSiteUrl, fetchLlms, pages: list, ...(speed && { perf, tailwind }) });
     fixed.open.push(...perfOpen, ...css.open);
     // Every WebP the first pass wrote: the ones no kept fix points at are removed at the end (never a file of the original).
-    const webpWritten = new Set(fixed.pages.flatMap((p) => p.fixes.filter((f) => f.kind === 'webp' || f.kind === 'size').map((f) => f.file).filter(Boolean)));
+    const webpWritten = new Set(fixed.pages.flatMap((p) => p.fixes.filter((f) => f.kind === 'webp' || f.kind === 'size' || f.kind === 'tailwind').map((f) => f.file).filter(Boolean)));
     const changed = fixed.pages.filter((p) => p.fixes.length);
     const gate = [];
     // Exact copy: groups proved without a picture, and looks served by an earlier identical one (no page load).
@@ -456,7 +471,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
       const finalLook = new Map();
       // A page without some of its groups, made in memory from the lifted pages (nothing written): which group made a check worse,
       // and (exact copy) whether its head fixes change only what nothing draws.
-      const rebuild = (p, groups) => fixAsIsCopy({ dir: copyDir, readDir: gateDir, siteUrl, newSiteUrl, pages: list, ...(speed && { perf }), only: new Map([[p.outPath, new Set(groups)]]), write: false })
+      const rebuild = (p, groups) => fixAsIsCopy({ dir: copyDir, readDir: gateDir, siteUrl, newSiteUrl, pages: list, ...(speed && { perf, tailwind }), only: new Map([[p.outPath, new Set(groups)]]), write: false })
         .then((again) => again.html.get(p.outPath) ?? null);
       // Exact copy: per page, the QUIET_GROUPS whose fixes were shown to change only tags nothing draws (withoutUnpainted: the page
       // with only those groups is, apart from those tags, byte for byte the page before its fixes). Such groups need no picture,
@@ -526,7 +541,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
         return g;
       };
       // Only these groups on this page, made again from the lifted pages; the fixes made, or null when that failed.
-      const makeOnly = (p, groups) => fixAsIsCopy({ dir: copyDir, readDir: gateDir, siteUrl, newSiteUrl, pages: list, ...(speed && { perf }), only: new Map([[p.outPath, new Set(groups)]]) })
+      const makeOnly = (p, groups) => fixAsIsCopy({ dir: copyDir, readDir: gateDir, siteUrl, newSiteUrl, pages: list, ...(speed && { perf, tailwind }), only: new Map([[p.outPath, new Set(groups)]]) })
         .then((again) => {
           const q = again.pages.find((x) => x.outPath === p.outPath);
           // The page as now written: its own bytes with only these fixes, or (said why) the whole page rewritten.
@@ -690,7 +705,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
     }
     // A WebP no kept fix uses is removed, but only one the fixes wrote (".sas-" in its name, not in the copy before the fixes)
     // and only when no file of the copy still names it.
-    const webpKept = new Set(fixed.pages.filter((p) => !p.reverted).flatMap((p) => p.fixes.filter((f) => f.kind === 'webp' || f.kind === 'size').map((f) => f.file).filter(Boolean)));
+    const webpKept = new Set(fixed.pages.filter((p) => !p.reverted).flatMap((p) => p.fixes.filter((f) => f.kind === 'webp' || f.kind === 'size' || f.kind === 'tailwind').map((f) => f.file).filter(Boolean)));
     const unused = [];
     for (const f of webpWritten) {
       if (webpKept.has(f) || !path.basename(f).includes('.sas-')) continue;

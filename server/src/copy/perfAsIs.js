@@ -868,4 +868,4 @@ export async function inlineStylesheets($, page, dir, scriptText = (f) => readFi
 }
 
 /** What every fix of C3 is, in the report's words (kept short: the report lists each one). */
-export const PERF_KINDS = ['lcp', 'lazy', 'webp', 'size', 'inline'];
+export const PERF_KINDS = ['lcp', 'lazy', 'webp', 'size', 'tailwind', 'inline'];
