@@ -23,9 +23,40 @@ export const RAW_COMPONENT_SOURCE = `// An element the conversion kept as the or
 // The markup travels base64-encoded in an inert <template>, which the after-build step unwraps (decoding it), so the
 // page's DOM is the original's and no escaping rule of React can change a byte of it. A comment of the page travels the same
 // way (the comment prop): React cannot write one, and a site rendered with React reads its comments back as hydration markers.
+//
+// In the browser (a page React hydrates) the component stands for the element the page already holds: the same tag, its
+// inner HTML as it is, so hydration finds what it expects and changes nothing. Should React draw it itself (a difference
+// elsewhere made it draw the page again), it is replaced once by the exact original markup, before any of the original's
+// scripts run. A comment draws nothing in the browser: React passes over comments when it hydrates.
+import { createElement, useLayoutEffect, useRef } from 'react';
+
+const SERVER = typeof document === 'undefined';
+const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
+const decode = (b64) => new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
+const parse = (html) => {
+  const t = document.createElement('template');
+  t.innerHTML = html;
+  return t.content.firstElementChild;
+};
+
 export default function ${RAW_COMPONENT}({ b64, comment }) {
-  if (comment !== undefined) return <template data-sas-comment={comment} />;
-  return <template data-sas-raw={b64} />;
+  const ref = useRef(null);
+  const html = !SERVER && b64 !== undefined ? decode(b64) : null;
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || html == null || el.outerHTML === html) return;
+    const exact = parse(html);
+    if (exact) el.replaceWith(exact);
+  }, []);
+  if (comment !== undefined) return SERVER ? <template data-sas-comment={comment} /> : null;
+  if (SERVER) return <template data-sas-raw={b64} />;
+  const el = parse(html);
+  if (!el) return null;
+  return createElement(el.localName, {
+    ref,
+    suppressHydrationWarning: true,
+    ...(VOID.has(el.localName) ? {} : { dangerouslySetInnerHTML: { __html: el.innerHTML } }),
+  });
 }
 `;
 

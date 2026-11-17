@@ -2,7 +2,7 @@
 // server, the forms in MongoDB) and built with the pinned toolchain, with no browser. The fixture site stands in for a finished
 // as-is copy (with the copy's form guard and sas-forms.json), plus one page of forms of every kind and the original's own files
 // at the addresses the server and Vite keep for themselves. Checked: client/dist holds the DOM of every as-is page and the
-// copy's files byte for byte (sas-forms.json wired), nothing that runs is added; which forms are wired and why the others are
+// copy's files byte for byte (sas-forms.json wired), nothing that runs is added but React at /_react/; which forms are wired and why the others are
 // not, in plain words; the server answers like a static host with the original's files first and stores the wired forms;
 // `npm run dev` serves every page byte for byte as the build does, and the forms; DEPLOY.md names only what the package has.
 // The browser proof against the original is convert-mern.test.js.
@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildConvertedMern, convertToMern, FORMS_ENDPOINT, formDestination, MERN_EXPORT_DIR, planForms, verifyConvertedMern } from '../src/recreate/convert/mern.js';
-import { routeOf } from '../src/recreate/convert/react.js';
+import { routeOf, withoutReact } from '../src/recreate/convert/react.js';
 import { FORM_GUARD } from '../src/recreate/behavior/preserve/complete.js';
 import { SECURITY_HEADERS } from '../src/copy/securityHeaders.js';
 import { matchForm, pageFilesOf } from '../src/recreate/convert/mern/server/match.js';
@@ -198,19 +198,22 @@ test('the forms: own-server ones wired to the copy\'s server, the others left as
 });
 
 test('client/dist holds the DOM of every as-is page and the copy\'s files, with sas-forms.json sending to the copy\'s server', { timeout: 10 * 60000 }, async () => {
-  assert.deepEqual(built.steps.map((s) => s.label), ['vite build --ssr', 'prerender']);
+  assert.deepEqual(built.steps.map((s) => s.label), ['vite build', 'vite build --ssr', 'prerender']);
   const v = await verifyConvertedMern({ copyDir, outDir, pages });
   assert.equal(v.pages, pages.length);
-  assert.deepEqual(v.added, [], 'nothing the copy does not have but the pages and _headers');
+  assert.ok(v.added.length && v.added.every((f) => f.startsWith('_react/')), `nothing the copy does not have but React under /_react/: ${v.added}`);
   const dist = path.join(outDir, MERN_EXPORT_DIR);
   assert.deepEqual(JSON.parse(await readFile(path.join(dist, 'sas-forms.json'), 'utf8')), { endpoint: FORMS_ENDPOINT });
   assert.equal(await readFile(path.join(copyDir, 'sas-forms.json'), 'utf8'), '{\n  "endpoint": ""\n}\n', 'the copy itself is not changed');
   assert.equal(await readFile(path.join(outDir, 'client', 'public', 'sas-forms.json'), 'utf8'), await readFile(path.join(dist, 'sas-forms.json'), 'utf8'));
   const copyJs = (await listFiles(copyDir)).filter((f) => /\.m?js$/.test(f)).sort();
-  assert.deepEqual((await listFiles(dist)).filter((f) => /\.m?js$/.test(f)).sort(), copyJs, 'no JavaScript but the copy\'s own');
+  const js = (await listFiles(dist)).filter((f) => /\.m?js$/.test(f));
+  assert.deepEqual(js.filter((f) => !f.startsWith('_react/')).sort(), copyJs, 'the copy\'s own JavaScript, plus React at /_react/');
+  assert.ok(js.some((f) => f.startsWith('_react/')), 'React for the browser is shipped');
   for (const p of pages) {
     const html = await readFile(path.join(dist, p.outPath), 'utf8');
-    assert.doesNotMatch(html, /data-sas-raw|data-sas-comment|sas-render-start|type="module"/, p.outPath);
+    assert.doesNotMatch(html, /data-sas-raw|data-sas-comment|sas-render-start/, p.outPath);
+    assert.doesNotMatch(withoutReact(html), /type="module"/, `${p.outPath}: no module script but React's`);
   }
   // A tampered build is refused, as for React + Vite.
   const file = path.join(dist, 'forms.html');
@@ -354,7 +357,8 @@ test('npm run dev shows every page byte for byte as the build ships it, the orig
     assert.ok(res, `the dev server answered: ${out.slice(-500)}`);
     const dist = path.join(outDir, MERN_EXPORT_DIR);
     for (const p of pages) {
-      const builtPage = await readFile(path.join(dist, p.outPath), 'utf8');
+      // What the build wrote without React's loading tags: npm run dev serves the plain page, its scripts running as they are.
+      const builtPage = withoutReact(await readFile(path.join(dist, p.outPath), 'utf8'));
       for (const address of new Set([routeOf(p.outPath), `/${p.outPath}`, routeOf(p.outPath).replace(/\.html$/, '')])) {
         const page = await fetch(`${dev}${address}`);
         assert.equal(page.status, 200, `${address}: ${out.slice(-800)}`);

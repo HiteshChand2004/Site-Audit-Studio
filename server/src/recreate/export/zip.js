@@ -172,11 +172,11 @@ export function writeZip(plan, out) {
   });
 }
 
-// The project's own installed packages and build output are never part of the zip: node_modules, .ssr, .next, dist and out
-// directly inside one of the project's own packages (the project, its client/ or its server/, each with its package.json).
+// The project's own installed packages and build output are never part of the zip: node_modules, .ssr, .client (the browser's
+// React before scripts/prerender.mjs copies it into dist/), .next, dist and out directly inside one of the project's own packages (the project, its client/ or its server/, each with its package.json).
 // Nowhere else: a copy keeps the original's files at the paths the original served them, and an original may serve
 // /node_modules/… or /dist/… (inside public/, site-files/, or the folder of a plain HTML copy, which has no package.json).
-const PROJECT_OWN = new Set(['node_modules', '.ssr', '.next', 'dist', 'out']);
+const PROJECT_OWN = new Set(['node_modules', '.ssr', '.client', '.next', 'dist', 'out']);
 const PACKAGE_ROOTS = ['', 'client', 'server'];
 
 /**
