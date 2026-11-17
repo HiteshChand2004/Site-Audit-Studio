@@ -7,8 +7,8 @@ import styles from './AsIsChoice.module.css';
 /** The stacks an as-is copy can be packaged into (the server's ASIS_STACKS). */
 export const ASIS_STACK_CHOICES = [
   { id: 'html', label: 'Plain HTML', note: 'Static files; runs on any host.' },
-  { id: 'react-vite', label: 'React + Vite', note: 'Real React code: the copy converted into pages and components, prerendered to HTML. Not one byte of React is added to what the original loads.' },
-  { id: 'nextjs', label: 'Next.js', note: 'Real Next.js code: the copy converted into pages and components (static export). Nothing is added to what the original loads.' },
+  { id: 'react-vite', label: 'React + Vite', note: 'Real React code: the copy converted into pages and components, prerendered to HTML and run by React in the browser, so the live site is a React site. A page React cannot hold ships as plain HTML.' },
+  { id: 'nextjs', label: 'Next.js', note: 'Real Next.js code: the copy converted into pages and components (static export), run by Next.js in the browser, so the live site is a Next.js site. A page Next.js cannot hold ships as plain HTML.' },
   { id: 'mern', label: 'MERN', note: 'Real React code (the same conversion as React + Vite) served by an Express server: the forms that went to the original site are saved in MongoDB, so they work without it.' },
 ];
 

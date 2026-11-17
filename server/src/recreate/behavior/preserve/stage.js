@@ -768,9 +768,11 @@ async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report
       formsReadmeSection(await formRoutesOfCopy(copyDir, pages)),
     ].join('\n'), 'utf8');
   } else if (CONVERTERS[stack]) {
-    // The finished copy converted into real code of the stack (recreate/convert/): pages and components, prerendered and never
-    // hydrated, so no runtime is added to what the original loads (React + Vite and MERN also hold every built page against its
-    // as-is page: same DOM, no file added; Next.js holds each page and ships one that differs as the as-is page, listed). If the conversion, its build or that check fails, the copy is packaged as static files
+    // The finished copy converted into real code of the stack (recreate/convert/): pages and components, prerendered and run
+    // by the stack's runtime in the browser (React hydrates them, Next.js holds them), so the live copy is a site of that stack.
+    // Every built page is held against its as-is page once the runtime's tags are set aside (same DOM; Next.js ships one that
+    // differs as the as-is page, listed), and in a browser with the runtime (runtimeHold.js: a page it cannot hold ships
+    // without it). If the conversion, its build or that check fails, the copy is packaged as static files
     // inside a project of the stack instead (the earlier route), and the report says so: a download never fails.
     const conv = CONVERTERS[stack];
     // The original's framework runtime would draw its own content over the components once a page loads: every page that is

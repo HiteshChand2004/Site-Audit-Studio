@@ -1,5 +1,5 @@
 // The as-is copy converted into a MERN project: client/ is the React + Vite conversion (recreate/convert/react.js, used as
-// it is: every page a React page made of components, prerendered, never hydrated, the original's scripts kept), server/ is an
+// it is: every page a React page made of components, prerendered and hydrated by React, the original's scripts run after it), server/ is an
 // Express server that serves the built client exactly as a static host serves the React build (the copy's files first, at
 // every address, the reserved ones included) and stores the site's forms in MongoDB.
 //
@@ -242,7 +242,8 @@ A copy of ${slug.replace(/-/g, '.')} made with Remastly, converted into a MERN p
 
 - \`client/\` is a React + Vite project: every page is a React page made of components (\`client/src/components/\`, one per
   section of a page; the ones several pages share are one file), with the original's own stylesheets and scripts kept as they
-  are (\`client/public/\`). The pages are prerendered to HTML and not hydrated: no React code is sent to the visitor.
+  are (\`client/public/\`). The pages are prerendered to HTML and hydrated by React in the browser; a page React could not
+  hold is listed in \`client/scripts/no-runtime.json\` and ships as plain HTML.
 - \`server/\` is an Express server: it serves the built client the way a static host does (the copy's own files first, at
   every address) and stores the site's forms in MongoDB.
 
