@@ -134,6 +134,10 @@ export async function renderHome(browser, url, { globals = [], cache = null, sca
       };
       return {
         foundGlobals: names.filter(lookup),
+        // React holds the page: hydrateRoot / createRoot mark their container (__reactContainer$…), and every element React
+        // drew carries __reactFiber$… — true for any React site in a real browser, whatever its bundle is named.
+        reactRoot: [document, document.documentElement, document.body, document.getElementById('root'), document.getElementById('__next'), document.body?.firstElementChild]
+          .some((n) => n && Object.keys(n).some((k) => k.startsWith('__reactContainer$') || k.startsWith('__reactFiber$'))),
         textLength: (document.body?.innerText || '').replace(/\s+/g, ' ').trim().length,
         webgl: Boolean(window.__sasWebgl),
         canvasCount: document.querySelectorAll('canvas').length,

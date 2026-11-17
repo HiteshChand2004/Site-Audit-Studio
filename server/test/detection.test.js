@@ -38,6 +38,20 @@ test('every rule file is valid and has a unique id', () => {
   }
 });
 
+test('React is found when it holds the page in the browser, whatever its bundle is named; not without it', async () => {
+  // A prerendered page hydrated by React from a hashed bundle: no data-reactroot, no React file name, no global.
+  const html = '<!doctype html><html><head><script type="module" src="/_react/assets/entry-client-BtSb4eYu.js"></script></head><body><h1>Hello</h1></body></html>';
+  const render = (reactRoot) => ({ scripts: ['https://acme.test/_react/assets/entry-client-BtSb4eYu.js'], requests: [], cookies: [], foundGlobals: [], reactRoot });
+  const held = (await detect(html, { render: render(true) })).detections;
+  assert.equal(held[0]?.id, 'react', JSON.stringify(held));
+  assert.ok(held[0].evidence.some((e) => /React holds the page/.test(e)), JSON.stringify(held[0].evidence));
+  assert.ok(!(await detect(html, { render: render(false) })).detections.some((d) => d.id === 'react'), 'no React root: not React');
+  // Next.js stays Next.js: React is excluded by it, as before.
+  const next = await detect('<!doctype html><html><head><script src="/_next/static/chunks/main-app.js" async></script></head><body></body></html>', { render: { ...render(true), foundGlobals: ['__next_f'] } });
+  assert.equal(next.detections[0]?.id, 'nextjs');
+  assert.ok(!next.detections.some((d) => d.id === 'react'));
+});
+
 test('detects WordPress with version and high confidence', async () => {
   const { detections } = await detect(WORDPRESS);
   assert.equal(detections[0].id, 'wordpress');

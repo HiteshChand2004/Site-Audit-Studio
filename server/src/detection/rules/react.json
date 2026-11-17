@@ -11,6 +11,11 @@
   ],
   "signals": [
     {
+      "type": "reactRoot",
+      "weight": 0.7,
+      "label": "React holds the page (hydrated root in the browser)"
+    },
+    {
       "type": "dom",
       "selector": "[data-reactroot]",
       "weight": 0.6,
