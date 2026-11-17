@@ -2,7 +2,8 @@
 // browser: the fixture site stands in for a finished as-is copy, plus one page of the cases React writes differently (an
 // inline handler on <body>, a meta and an async script in the body, images React would preload, form controls with defaults,
 // style objects, entities, a custom element, noscript, a template, an odd doctype). Checked: every built page holds the DOM
-// of its as-is page (verifyConverted), not one script or stylesheet is added, the copy's files are byte for byte the same,
+// of its as-is page once React's loading tags are set aside (verifyConverted), nothing is added but React under /_react/, the
+// copy's files are byte for byte the same,
 // what was kept as original HTML is listed with where and why, forms are described, and the development server renders the
 // pages from the components. The browser proof against the original is convert-react.test.js.
 import { test, before, after } from 'node:test';
@@ -13,7 +14,7 @@ import { cp, mkdir, mkdtemp, readdir, readFile, rm, rmdir, symlink, unlink, writ
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildConvertedReact, convertToReact, doctypeOf, domDifference, pageComponentName, REACT_EXPORT_DIR, routeOf, verifyConverted } from '../src/recreate/convert/react.js';
+import { buildConvertedReact, CLIENT_BASE, convertToReact, doctypeOf, domDifference, pageComponentName, REACT_EXPORT_DIR, routeOf, verifyConverted, withoutReact } from '../src/recreate/convert/react.js';
 import { toolchainDir, toolchainStatus } from '../src/toolchains/index.js';
 
 const FIXTURE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'recreate-site');
@@ -127,19 +128,22 @@ test('addresses and names: pages keep their addresses, components are named from
 });
 
 test('every built page holds the DOM of its as-is page; nothing but the pages is new in dist/', { timeout: 10 * 60000 }, async () => {
-  assert.deepEqual(built.steps.map((s) => s.label), ['vite build --ssr', 'prerender']);
+  assert.deepEqual(built.steps.map((s) => s.label), ['vite build', 'vite build --ssr', 'prerender']);
   const v = await verifyConverted({ copyDir, outDir, pages });
   assert.equal(v.pages, pages.length);
-  assert.deepEqual(v.added, [], 'no file the copy does not have, except the pages and _headers');
+  assert.ok(v.added.length && v.added.every((f) => f.startsWith(`${CLIENT_BASE}/`)), `nothing new but React under /${CLIENT_BASE}/: ${v.added}`);
   const dist = path.join(outDir, REACT_EXPORT_DIR);
   const distFiles = await listFiles(dist);
-  // No JavaScript at all but the copy's own scripts: not one byte of React reaches a visitor.
+  // The copy's own scripts, byte for byte, plus React and the components at /_react/ (the page is hydrated).
   const copyJs = (await listFiles(copyDir)).filter((f) => /\.m?js$/.test(f)).sort();
-  assert.deepEqual(distFiles.filter((f) => /\.m?js$/.test(f)).sort(), copyJs);
+  const js = distFiles.filter((f) => /\.m?js$/.test(f));
+  assert.deepEqual(js.filter((f) => !f.startsWith(`${CLIENT_BASE}/`)).sort(), copyJs);
+  assert.ok(js.some((f) => f.startsWith(`${CLIENT_BASE}/`)), 'React for the browser is shipped');
   for (const p of pages) {
     const html = await readFile(path.join(dist, p.outPath), 'utf8');
     assert.doesNotMatch(html, /data-sas-raw|data-sas-comment|sas-render-start|rel="preload" as="image"/, `${p.outPath}: no conversion marker or React preload hint left`);
-    assert.doesNotMatch(html, /type="module"|modulepreload/, `${p.outPath}: no module script`);
+    assert.match(html, /<script type="module" src="\/_react\/[^"]+" data-sas-boot=""/, `${p.outPath}: React takes the page over`);
+    assert.doesNotMatch(withoutReact(html), /type="module"|modulepreload/, `${p.outPath}: no module script but React's`);
   }
   const edge = await readFile(path.join(dist, 'edge.html'), 'utf8');
   assert.ok(edge.startsWith('<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">\n<!-- Published by a builder: "banner" & date -->\n<html'),
@@ -150,7 +154,8 @@ test('every built page holds the DOM of its as-is page; nothing but the pages is
   assert.match(edge, /<body class="edge" onload="window.loaded = 1">/, 'a <body> attribute React cannot write is written as it was');
   assert.match(edge, /<button type="button" onclick="window.clicked = \(window.clicked \|\| 0\) \+ 1">Click<\/button>/, 'the inline handler is the original HTML');
   assert.match(edge, /<head><meta charSet="utf-8"\/><!-- head comment --><title>/, 'the head keeps the original order, its comment included');
-  assert.match(edge, /<\/main>\s*<script src="hover.js" async=""><\/script>\s*<footer/, 'the async script stands where the original has it');
+  assert.match(edge, /<\/main>\s*<script type="text\/sas-later" data-sas-type="" src="hover.js" async=""><\/script>\s*<footer/, 'the async script stands where the original has it, waiting for React');
+  assert.match(withoutReact(edge), /<\/main>\s*<script src="hover.js" async=""><\/script>\s*<footer/, 'with its own type once React has taken the page over');
 });
 
 test('a difference in the built DOM is caught, named, and fails the check', async () => {
@@ -216,11 +221,11 @@ test('npm run dev shows every page exactly as the build ships it and serves the 
     }
     assert.ok(res, `the dev server answered: ${out.slice(-500)}`);
     assert.equal(res.status, 200);
-    // Every page, at its address and at its file: byte for byte what the build wrote (the same rendering and finishing code,
-    // no Vite client, no React code, the prolog and the comments put back).
+    // Every page, at its address and at its file: byte for byte what the build wrote without React's loading tags (the same
+    // rendering and finishing code, no Vite client, the original's scripts with their own types, the prolog and the comments put back).
     const dist = path.join(outDir, REACT_EXPORT_DIR);
     for (const p of pages) {
-      const builtPage = await readFile(path.join(dist, p.outPath), 'utf8');
+      const builtPage = withoutReact(await readFile(path.join(dist, p.outPath), 'utf8'));
       for (const address of new Set([new URL(p.url).pathname, `/${p.outPath}`])) {
         const page = await fetch(`${dev}${address}`);
         assert.equal(page.status, 200, `${address}: ${out.slice(-800)}`);

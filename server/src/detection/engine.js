@@ -68,6 +68,7 @@ export function buildContext({ headers = {}, rawHtml = '', render = null, assets
     requests: [...new Set([...requests, ...recorded.map((e) => e.url)])],
     cookies: render?.cookies ?? [],
     globals: new Set(render?.foundGlobals ?? []),
+    reactRoot: Boolean(render?.reactRoot),
     origin,
     probes: new Map(),
     scriptEntries: recorded,
@@ -158,6 +159,9 @@ export async function matchSignal(signal, ctx) {
       return ctx.globals.has(signal.name) ? [signal.name] : null;
     case 'dom':
       return ctx.$(signal.selector).length ? [signal.selector] : null;
+    case 'reactRoot':
+      // Read in a real browser (audit/render.js): React's own marks on the element it took over.
+      return ctx.reactRoot ? ['React holds the page'] : null;
     case 'endpoint':
       return probeEndpoint(ctx, signal);
     case 'scriptBody':

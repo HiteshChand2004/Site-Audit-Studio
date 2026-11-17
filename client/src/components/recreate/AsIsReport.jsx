@@ -112,12 +112,14 @@ function Converted({ convert }) {
   const oneNote = notes.length === 1 ? notes[0] : null;
   // Pages that keep the original's own framework script (server convert.runtime): each one with why, in plain words.
   const keptRuntime = (convert.runtime?.pages ?? []).filter((r) => r.status === 'kept');
+  // Pages the stack's runtime could not hold in the browser (server convert.runtimeHeld): they ship without it.
+  const withoutRuntime = convert.runtimeHeld?.dropped ?? [];
   return (
     <>
       <h4 className={styles.h}>Converted into code</h4>
       <p className={styles.note}>
         {plural(s.pages, 'page')} became {plural(s.components, 'component')}{s.shared ? ` (${s.shared} shared between pages)` : ''}: {plural(s.elements, 'element')} written as component code.
-        The pages are prerendered and not hydrated, so no runtime of the stack is sent to visitors.
+        The pages are prerendered and run by the stack in the browser (its runtime is part of what visitors load).
         {convert.urlChanges?.length ? ` ${plural(convert.urlChanges.length, 'page address', 'page addresses')} changed to folder form (redirects are in the download).` : ''}
       </p>
       {parts.length ? (
@@ -138,6 +140,14 @@ function Converted({ convert }) {
           <p className={styles.note}>On {keptRuntime.length === 1 ? 'this page' : 'these pages'} a change to a component is drawn over when the page loads (the original’s content comes back):</p>
           <ul className={styles.list}>
             {keptRuntime.map((r) => <li key={r.path}>{runtimeKeptLine(r)}.</li>)}
+          </ul>
+        </>
+      )}
+      {withoutRuntime.length > 0 && (
+        <>
+          <p className={styles.note}>{withoutRuntime.length === 1 ? 'This page ships' : 'These pages ship'} without the runtime (it could not hold {withoutRuntime.length === 1 ? 'it' : 'them'} in the browser; {withoutRuntime.length === 1 ? 'it looks and works' : 'they look and work'} the same):</p>
+          <ul className={styles.list}>
+            {withoutRuntime.map((d) => <li key={d.page}><span className="mono">{d.page}</span>: {d.why}.</li>)}
           </ul>
         </>
       )}

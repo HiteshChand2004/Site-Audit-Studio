@@ -1,5 +1,5 @@
 // The as-is copy converted into a MERN project: client/ is the React + Vite conversion (recreate/convert/react.js, used as
-// it is: every page a React page made of components, prerendered, never hydrated, the original's scripts kept), server/ is an
+// it is: every page a React page made of components, prerendered and hydrated by React, the original's scripts run after it), server/ is an
 // Express server that serves the built client exactly as a static host serves the React build (the copy's files first, at
 // every address, the reserved ones included) and stores the site's forms in MongoDB.
 //
@@ -231,7 +231,7 @@ export async function convertToMern({ copyDir, outDir, pages, pageUrl }) {
     engines: { node: '>=20' },
     dependencies: { express: v.express, mongodb: v.mongodb },
   }, null, 2)}\n`);
-  await put('.gitignore', `node_modules\n${MERN_CLIENT_DIR}/node_modules\n${MERN_CLIENT_DIR}/dist\n${MERN_CLIENT_DIR}/.ssr\n${MERN_CLIENT_DIR}/.vite\n.env\n`);
+  await put('.gitignore', `node_modules\n${MERN_CLIENT_DIR}/node_modules\n${MERN_CLIENT_DIR}/dist\n${MERN_CLIENT_DIR}/.ssr\n${MERN_CLIENT_DIR}/.client\n${MERN_CLIENT_DIR}/.vite\n.env\n`);
   await put('.env.example', '# Where form submissions are stored. Without it the site is served and the form endpoint answers 503.\nMONGODB_URI=\n# FORMS_DB=site\n# FORMS_COLLECTION=submissions\n# PORT=3000\n# TRUST_PROXY=true\n');
 
   const wired = plan.report.filter((f) => f.wired);
@@ -242,7 +242,8 @@ A copy of ${slug.replace(/-/g, '.')} made with Remastly, converted into a MERN p
 
 - \`client/\` is a React + Vite project: every page is a React page made of components (\`client/src/components/\`, one per
   section of a page; the ones several pages share are one file), with the original's own stylesheets and scripts kept as they
-  are (\`client/public/\`). The pages are prerendered to HTML and not hydrated: no React code is sent to the visitor.
+  are (\`client/public/\`). The pages are prerendered to HTML and hydrated by React in the browser; a page React could not
+  hold is listed in \`client/scripts/no-runtime.json\` and ships as plain HTML.
 - \`server/\` is an Express server: it serves the built client the way a static host does (the copy's own files first, at
   every address) and stores the site's forms in MongoDB.
 
@@ -292,7 +293,7 @@ server answers too. The pages themselves are the original's, unchanged.` : ''}${
 async function clientSteps(clientDir) {
   const pkg = JSON.parse(await readFile(path.join(clientDir, 'package.json'), 'utf8'));
   return String(pkg.scripts?.build ?? '').split('&&').map((c) => c.trim().split(/\s+/)).filter((w) => w[0]).map((w) => {
-    if (w[0] === 'vite') return { label: w.slice(0, 3).join(' '), args: w };
+    if (w[0] === 'vite') return { label: w.slice(0, 3).filter((a) => a !== '--outDir').join(' '), args: w };
     if (w[0] === 'node') return { label: w[1].replace(/^scripts\/|\.m?js$/g, ''), args: w.slice(1) };
     throw new Error(`the client's build runs "${w.join(' ')}", which the MERN toolchain cannot run`);
   });

@@ -6,10 +6,10 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, rmdir, symlink, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, rmdir, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { buildConverted, convertToNext, EXPORT_DIR, verifyConvertedNext } from '../src/recreate/convert/next.js';
+import { buildConverted, convertToNext, EXPORT_DIR, finishPageModule, verifyConvertedNext } from '../src/recreate/convert/next.js';
 import { domDifference } from '../src/recreate/convert/react.js';
 import { freePort } from '../src/recreate/behavior/preserve/serveStack.js';
 import { toolchainDir, toolchainStatus } from '../src/toolchains/index.js';
@@ -84,7 +84,10 @@ test('a page that does not hold it ships as the as-is page, its page file says s
     assert.equal(domDifference(PAGES['blog/post/index.html'].split('href="/about.html').join('href="/about/'), html), null, file);
     assert.equal(domDifference(plain, html), null);
   }
-  assert.match(await readFile(path.join(outDir, 'pages', 'blog', 'post', 'index.jsx'), 'utf8'), /^\/\/ This page ships as the copy's plain HTML \(site-files\/blog\/post\/index\.html\)/);
+  const groups = (await readdir(path.join(outDir, 'app'))).filter((n) => /^\(p-.+\)$/.test(n));
+  const pageFile = (await Promise.all(groups.map((g) => path.join(outDir, 'app', g, 'blog', 'post', 'page.jsx')).map((f) => stat(f).then(() => f, () => null)))).find(Boolean);
+  assert.ok(pageFile, 'the post has its page file');
+  assert.match(await readFile(pageFile, 'utf8'), /^\/\/ This page ships as the copy's plain HTML \(site-files\/blog\/post\/index\.html\)/);
   // The other pages stay the converted ones.
   assert.equal(await readFile(path.join(outDir, 'site-files', 'index.html'), 'utf8').catch(() => null), null);
 });
@@ -116,11 +119,14 @@ test('npm run dev shows the plain-kept page, and the converted pages as before',
   assert.equal(post.status, 200);
   assert.match(post.headers.get('content-type') ?? '', /text\/html/);
   assert.equal(await post.text(), await readFile(path.join(outDir, 'site-files', 'blog', 'post', 'index.html'), 'utf8'), 'the plain page, byte for byte');
-  // A converted page is still Next's, finished as the build finishes it: the same DOM as out/.
+  // A converted page is still Next's, finished as the build finishes it: the same DOM as out/ once Next's own tags (its
+  // development scripts in dev, its build's in out/) are set aside.
+  const { withoutNext } = await finishPageModule();
+  const anyNext = { has: (u) => u.startsWith('/_next/') };
   for (const [route, rel] of [['/', 'index.html'], ['/about/', 'about/index.html']]) {
     const r = await fetch(`${devUrl}${route}`);
     assert.equal(r.status, 200, route);
-    assert.equal(domDifference(await exported(rel), await r.text()), null, `${route} in dev is the page out/ ships`);
+    assert.equal(domDifference(withoutNext(await exported(rel), anyNext), withoutNext(await r.text(), anyNext)), null, `${route} in dev is the page out/ ships`);
   }
 });
 
