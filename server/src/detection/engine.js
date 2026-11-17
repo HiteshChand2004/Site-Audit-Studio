@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as cheerio from 'cheerio';
 import { fetchPage } from '../audit/http.js';
+import { extractPage, looksClientRendered } from '../audit/extract.js';
 
 const RULES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'rules');
 const PRIMARY = ['builder', 'cms', 'ecommerce', 'framework'];
@@ -226,8 +227,27 @@ export async function detectStack(ctx, rules = RULES) {
   return visible.sort((a, b) => rank(a) - rank(b) || b.confidence - a.confidence);
 }
 
-/** Shapes detections for the audit contract, with a Custom/Unknown entry (Static HTML on Remastly) when no platform matched. */
-export function toTechStack(detections) {
+// Static HTML: the homepage's content arrives in the HTML the server sends (not drawn by a script).
+export const STATIC_RAW_SHARE = 0.6;
+
+/**
+ * True when the homepage's content is in the server's HTML: the discovery rule does not call it script-built (enough text,
+ * no empty app mount, no <noscript> asking for JavaScript) and the rendered page holds no much more text than that HTML.
+ * @param {{ rawHtml: string, url?: string, renderedTextLength?: number|null }} o
+ */
+export function isStaticHtml({ rawHtml, url, renderedTextLength = null }) {
+  if (!rawHtml) return false;
+  const facts = extractPage(rawHtml, url);
+  if (looksClientRendered(facts, rawHtml)) return false;
+  if (renderedTextLength != null && facts.textLength < STATIC_RAW_SHARE * renderedTextLength) return false;
+  return true;
+}
+
+/**
+ * Shapes detections for the audit contract. When no platform matched, the first entry is Static HTML (Remastly serves it,
+ * or `staticHtml`: the content is in the server's HTML, see isStaticHtml), else Custom/Unknown.
+ */
+export function toTechStack(detections, { staticHtml = false } = {}) {
   const list = detections.map((t) => ({
     id: t.id,
     name: t.version ? `${t.name} ${t.version}` : t.name,
@@ -236,9 +256,12 @@ export function toTechStack(detections) {
     evidence: t.evidence,
   }));
   if (!detections.some((t) => PRIMARY.includes(t.category))) {
-    // Served by Remastly with no framework left: finished pages, which is a known stack, not an unknown one.
-    list.unshift(detections.some((t) => t.id === 'remastly')
-      ? { id: 'static', name: 'Static HTML', category: 'custom', confidence: null, evidence: ['Served by Remastly as finished pages; no site builder or framework runs on it'] }
+    // Finished pages (served by Remastly, or content in the server's HTML) are a known stack, not an unknown one.
+    const remastly = detections.some((t) => t.id === 'remastly');
+    list.unshift(remastly || staticHtml
+      ? { id: 'static', name: 'Static HTML', category: 'custom', confidence: null, evidence: [remastly
+        ? 'Served by Remastly as finished pages; no site builder or framework runs on it'
+        : 'The content is in the HTML the server sends; no site builder, CMS or framework was found'] }
       : { id: 'custom', name: 'Custom/Unknown', category: 'custom', confidence: null, evidence: ['No known platform signature matched'] });
   }
   return list;
