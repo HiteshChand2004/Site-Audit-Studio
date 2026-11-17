@@ -36,7 +36,7 @@ test('library and runtime rules load beside the platforms without changing them'
     assert.ok(LIBRARY_RULES.some((r) => r.id === id), `library rule ${id}`);
   }
   assert.ok(RULES.every((r) => !r.kind), 'the platform list (techStack, CDN hosts, class patterns) holds platforms only');
-  assert.equal(RULES.length, 15);
+  assert.equal(RULES.length, 16);
   assert.ok(globalNames().includes('gsap'), 'the renderer probes library globals too');
 });
 
