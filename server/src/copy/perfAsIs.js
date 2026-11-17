@@ -31,7 +31,7 @@
 //          runtime may look for its <link>)
 // Never: the original's scripts (not minified, deferred, moved or removed), font-display (text would show in another font while
 // the web font loads), a re-encoding with a visible difference, width / height attributes, preconnects.
-import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { access, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
@@ -141,7 +141,26 @@ export function planPerf(probe, pagePath) {
       size.set(key, { natural, points });
     }
   }
-  return { lcp, lcpSrc, lazy, lazySrc, totals, open, size, widths: probe.widths.map((w) => w.width), scrollers: [...scrollers.values()], shown: [...shown.values()] };
+  // Pictures that already choose among their own files (srcset): the `sizes` they tell the browser may be far larger than where
+  // they are drawn (a builder's 100vw for a card), so it takes a larger file than it needs. By address, from every image with
+  // that address in the built page: the widest drawn at each window width, never moving, never a lazy-loading library's.
+  const sizesBySrc = new Map();
+  if (drawn) {
+    const at = new Map();
+    for (const [key, points] of Object.entries(drawn)) {
+      const src = key.slice(key.indexOf('|') + 1);
+      const m = at.get(src) ?? new Map();
+      for (const [vw, d] of points) m.set(vw, Math.max(m.get(vw) ?? 0, d || 0));
+      at.set(src, m);
+    }
+    for (const [src, m] of at) {
+      const seen = probe.widths.flatMap((w) => w.images.filter((im) => im.src === src));
+      if (!seen.length || seen.some((x) => !x.chooses || x.moves || x.lazyLib)) continue;
+      const points = [...m].sort((a, b) => a[0] - b[0]);
+      if (points.length >= 2 && points.some(([, d]) => d > 0)) sizesBySrc.set(src, points);
+    }
+  }
+  return { lcp, lcpSrc, lazy, lazySrc, totals, open, size, sizesBySrc, widths: probe.widths.map((w) => w.width), scrollers: [...scrollers.values()], shown: [...shown.values()] };
 }
 
 /**
@@ -224,12 +243,18 @@ async function variantOf(file, width, dir, made) {
 export async function fixImageSizes($, page, dir, plan, made = new Map()) {
   const fixed = [];
   const open = [];
-  if (!plan?.size?.size) return { fixed, open };
+  if (!plan?.size?.size && !plan?.sizesBySrc?.size) return { fixed, open };
   for (const img of staticImages($)) {
-    const info = plan.size.get(img.key);
-    if (!info) continue;
     const a = img.el.attribs;
-    if (a.srcset != null || $(img.el).closest('picture').length) continue;
+    if (a.srcset != null) {
+      const r = await fixSizesAttr($, img, page, dir, plan.sizesBySrc?.get(img.src));
+      if (r?.fixed) fixed.push(r.fixed);
+      if (r?.open) open.push(r.open);
+      continue;
+    }
+    const info = plan.size?.get(img.key);
+    if (!info) continue;
+    if ($(img.el).closest('picture').length) continue;
     if (!(plan.totals.get(img.src) ?? []).every((t) => t === img.total)) continue;
     if (!/\.(png|jpe?g|webp)$/i.test(img.src.split(/[?#]/)[0])) continue;
     const file = localFileOf(dir, page.outPath, img.src);
@@ -257,6 +282,39 @@ export async function fixImageSizes($, page, dir, plan, made = new Map()) {
     for (const v of variants) fixed.push({ field: 'img', attr: 'srcset', src: img.src, value: webpAddress(img.src, v.name), file: v.file, width: v.width, bytes: [v.from, v.to], quality: v.quality });
   }
   return { fixed, open };
+}
+
+/** The smallest file of a srcset is reported when it is wider than this share above the widest the picture is drawn. */
+export const SIZES_OPEN_SHARE = 1.15;
+
+/**
+ * A picture that already chooses among its own files gets a `sizes` no smaller than where it is drawn (sizesAttr), so the
+ * browser takes the smallest of ITS files that covers it; files, src and srcset stay as written. Only `w` candidates (a `x`
+ * srcset ignores sizes), never inside <picture>, never `sizes="auto"`, and only when every candidate file is in the copy.
+ */
+async function fixSizesAttr($, img, page, dir, points) {
+  if (!points || $(img.el).closest('picture').length) return null;
+  const a = img.el.attribs;
+  if (/^\s*auto\b/i.test(a.sizes ?? '')) return null;
+  const parts = srcsetParts(a.srcset).filter((p) => p.url);
+  if (!parts.length) return null;
+  const widths = parts.map((p) => p.after.trim().match(/^(\d+)w$/i)?.[1]).map(Number);
+  if (widths.some((w) => !(w > 0))) return null;
+  for (const p of parts) {
+    const file = localFileOf(dir, page.outPath, p.url);
+    if (!file || !(await access(file).then(() => true, () => false))) return null;
+  }
+  const sizes = sizesAttr(points);
+  if (!sizes) return null;
+  const need = largestDrawn(points);
+  const smallest = Math.min(...widths);
+  const open = smallest > need * SIZES_OPEN_SHARE
+    ? { page: page.path, reason: 'd', detail: `${img.src}: the smallest file it offers is ${smallest} px wide, drawn at most ${need} px` }
+    : null;
+  if (a.sizes === sizes) return { open };
+  const from = a.sizes ?? null;
+  a.sizes = sizes;
+  return { fixed: { field: 'img', attr: 'sizes', src: img.src, from, value: sizes }, open };
 }
 
 /** The largest element in plain words, from its tag: what a page owner reads in the report. */
