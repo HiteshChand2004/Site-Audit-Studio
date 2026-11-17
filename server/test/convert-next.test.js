@@ -1,8 +1,10 @@
 // The fixture site converted into a Next.js project (recreate/convert/next.js), built, served as the static export it is, and
 // held against the ORIGINAL with the as-is copy's own rulers (behavior/preserve/check.js checkCopy: the visual gate with its
-// noise map at 1440 and 390, clicks, hovers, console errors, forms), plus: the same DOM as the original (equivalence.js
-// domSignature, scripts off), not one script added (the pages are prerendered and never hydrated), every link answered, and
-// Lighthouse through the measurement host never lower than the original's. One browser, one page at a time.
+// noise map at 1440 and 390, clicks, hovers, console errors, forms), plus: the same DOM as the original once Next's own tags
+// are set aside (equivalence.js domSignature, scripts off), Next.js in the page (App Router, hydrated, nothing redrawn), the
+// original's scripts running after it, every link answered, and Lighthouse through the measurement host never lower than the
+// original's, Performance aside, where Next's own JavaScript may cost at most PERF_COST points (user, 2026-11-16). One
+// browser, one page at a time.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -11,7 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { startFixtureServer } from './serve-fixture.js';
-import { buildConverted, convertToNext, EXPORT_DIR } from '../src/recreate/convert/next.js';
+import { buildConverted, convertToNext, EXPORT_DIR, finishPageModule } from '../src/recreate/convert/next.js';
 import { serveCopy } from '../src/recreate/behavior/preserve/serve.js';
 import { checkCopy } from '../src/recreate/behavior/preserve/check.js';
 import { domSignature, firstDifference } from '../src/recreate/verify/equivalence.js';
@@ -83,7 +85,12 @@ after(async () => {
 const routeOf = (outPath) => result.routes.find((r) => r.outPath === outPath)?.route ?? `/${outPath}`;
 const base = () => served.url.replace(/\/$/, '');
 
-test('the conversion: components per section, shared header and footer, the fallbacks named, no runtime script in the export', { timeout: 10 * 60000 }, async () => {
+/** The built page of an as-is page. */
+const builtFile = (outPath) => path.join(root, 'nextjs', EXPORT_DIR, routeOf(outPath) === '/' ? 'index.html' : `${routeOf(outPath).replace(/^\/|\/$/g, '')}/index.html`);
+/** Next's own files of this build (the fixture has no /_next/ of its own). */
+const oursOf = async () => new Set((await listFiles(path.join(root, 'nextjs', EXPORT_DIR, '_next'))).map((f) => `/_next/${f}`));
+
+test('the conversion: components per section, shared header and footer, the fallbacks named, Next.js in every page', { timeout: 10 * 60000 }, async () => {
   assert.equal(result.stats.pages, pages.length);
   assert.ok(result.shared.includes('SiteHeader') && result.shared.includes('SiteFooter'), `shared: ${result.shared}`);
   assert.ok(result.stats.components > pages.length, 'more components than pages: the sections are split');
@@ -91,24 +98,41 @@ test('the conversion: components per section, shared header and footer, the fall
   assert.deepEqual(result.fallbacks.map((f) => [f.page, f.tag, f.attribute]), [['/work/', 'svg', 'onload'], ['/work/', 'button', 'onclick']]);
   assert.ok(result.fallbacks.every((f) => /inline event handler/.test(f.reason) && f.where.startsWith('body')));
   const out = path.join(root, 'nextjs', EXPORT_DIR);
-  assert.equal(await stat(path.join(out, '_next')).then(() => true, () => false), false, 'no Next.js build folder: nothing references it');
+  assert.equal(await stat(path.join(out, '_next')).then(() => true, () => false), true, 'Next.js\'s runtime is shipped');
+  const { withoutNext } = await finishPageModule();
+  const ours = await oursOf();
   for (const p of pages) {
     const original = await readFile(path.join(copyDir, p.outPath), 'utf8');
-    const file = path.join(out, routeOf(p.outPath) === '/' ? 'index.html' : `${routeOf(p.outPath).replace(/^\/|\/$/g, '')}/index.html`);
-    const converted = await readFile(file, 'utf8');
+    const converted = await readFile(builtFile(p.outPath), 'utf8');
     const scripts = (s) => (s.match(/<script\b/gi) ?? []).length;
-    assert.equal(scripts(converted), scripts(original), `${p.outPath}: the same number of scripts, none of the stack's`);
-    assert.ok(!/__next|data-next-head|_next\/|data-n-css|data-sas-raw|data-sas-comment/.test(converted), `${p.outPath}: no artefact of the build left`);
+    assert.match(converted, /<script src="\/_next\/static\/chunks\/[^"]+\.js" async=""><\/script>/, `${p.outPath}: Next.js loads from /_next/`);
+    assert.match(converted, /self\.__next_f/, `${p.outPath}: Next.js's page data`);
+    // Every script of the original waits for Next (its own type kept in data-sas-type); none runs before it.
+    const own = (converted.match(/<script\b[^>]*>/gi) ?? []).filter((t) => !/ src="\/_next\/|^<script>$|application\/ld\+json/.test(t));
+    assert.ok(own.every((t) => /type="text\/sas-later"/.test(t)), `${p.outPath}: ${own.find((t) => !/text\/sas-later/.test(t))}`);
+    const plainPage = withoutNext(converted, ours);
+    assert.equal(scripts(plainPage), scripts(original), `${p.outPath}: the original's scripts, once Next's are set aside`);
+    // Next's page data (self.__next_f) names the layout's props; the page itself must hold no artefact.
+    const markup = converted.replace(/<script>\(?self\.__next_f[\s\S]*?<\/script>/g, '');
+    assert.ok(!/data-sas-raw|data-sas-comment|data-sas-prolog/.test(markup), `${p.outPath}: no artefact of the conversion left: ${/[\s\S]{0,120}data-sas-(?:raw|comment|prolog)[\s\S]{0,120}/.exec(markup)?.[0]}`);
     assert.match(converted, /<html lang="en"/, `${p.outPath}: the html attributes are the original's`);
-    assert.ok(!converted.includes('data-sas-prolog'), `${p.outPath}: no artefact of the build left`);
-    if (p.outPath === 'index.html') assert.ok(converted.startsWith(`<!DOCTYPE html>${PROLOG}<html `), converted.slice(0, 160));
-    else assert.match(converted, /^<!DOCTYPE html><html /, `${p.outPath}: nothing before <html> where the original has nothing`);
+    // Next's build-id comment after the doctype is Next's own, like its scripts.
+    if (p.outPath === 'index.html') assert.ok(converted.startsWith(`<!DOCTYPE html><!--sas-->${PROLOG}<html `), converted.slice(0, 160));
+    else assert.match(converted, /^<!DOCTYPE html><!--sas--><html /, `${p.outPath}: nothing before <html> but Next's build id where the original has nothing`);
   }
-  // The project is real code: a page imports its components, and the shared header is one file.
+  // The project is real code: a page imports its components, and the shared header is one file. Each page is a route group
+  // of its own, its layout the page's own <html>, <head> and <body>.
   // (The home page's header differs from the others' - its own component; a blog post uses the shared one.)
-  const about = await readFile(path.join(root, 'nextjs', 'pages', 'blog', 'first-post', 'index.jsx'), 'utf8');
+  const groups = (await readdir(path.join(root, 'nextjs', 'app'))).filter((n) => /^\(p-.+\)$/.test(n));
+  assert.equal(groups.length, pages.length, `one route group per page: ${groups}`);
+  const group = (await Promise.all(groups.map(async (g) => (await stat(path.join(root, 'nextjs', 'app', g, 'blog', 'first-post', 'page.jsx')).then(() => g, () => null))))).find(Boolean);
+  assert.ok(group, 'the blog post has its page file');
+  const about = await readFile(path.join(root, 'nextjs', 'app', group, 'blog', 'first-post', 'page.jsx'), 'utf8');
   assert.ok(about.includes("import SiteHeader from '@/components/SiteHeader.jsx'"), about.slice(0, 300));
-  assert.match(about, /unstable_runtimeJS: false/);
+  const layout = await readFile(path.join(root, 'nextjs', 'app', group, 'layout.jsx'), 'utf8');
+  assert.match(layout, /<html [^>]*suppressHydrationWarning>/);
+  assert.match(layout, /<RunLater \/>/, 'the original\'s scripts are started once Next holds the page');
+  assert.deepEqual(JSON.parse(await readFile(path.join(root, 'nextjs', 'scripts', 'no-runtime.json'), 'utf8')), [], 'no page of the fixture has a runtime of its own');
   const header = await readFile(path.join(root, 'nextjs', 'src', 'components', 'SiteHeader.jsx'), 'utf8');
   assert.match(header, /className="site-header"/);
   // The forms, in plain words.
@@ -116,10 +140,18 @@ test('the conversion: components per section, shared header and footer, the fall
   assert.ok(work && /another service/.test(work.target) && work.worksWithoutOriginal === false, JSON.stringify(work));
 });
 
-test('the same DOM as the original on every page (scripts off; moved pages mapped), and every link answered', { timeout: 10 * 60000 }, async () => {
+test('the same DOM as the original on every page once Next\'s tags are set aside (scripts off; moved pages mapped), and every link answered', { timeout: 10 * 60000 }, async () => {
   const context = await browser.newContext({ javaScriptEnabled: false });
   try {
     const page = await context.newPage();
+    // The copy's pages as the browser would hold them without Next (withoutNext): what is left must be the original's DOM.
+    const { withoutNext } = await finishPageModule();
+    const ours = await oursOf();
+    await page.route(`${base()}/**`, async (route) => {
+      const res = await route.fetch();
+      if (!/text\/html/.test(res.headers()['content-type'] ?? '')) return route.fulfill({ response: res });
+      return route.fulfill({ response: res, body: withoutNext(await res.text(), ours) });
+    });
     const moves = { paths: Object.fromEntries(result.urlChanges.map((c) => [c.from, c.to])), absolute: {} };
     for (const p of pages) {
       // The signature writes every address in full: the two servers' origins are read as one.
@@ -152,6 +184,74 @@ test('the same DOM as the original on every page (scripts off; moved pages mappe
   }
 });
 
+test('Next.js holds every page: hydrated without an error, nothing redrawn, nothing asked the original does not ask but Next', { timeout: 10 * 60000 }, async () => {
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage();
+    for (const p of pages) {
+      const errors = [];
+      const onConsole = (m) => { if (m.type() === 'error' && /hydrat|#418|#423|#425/i.test(m.text())) errors.push(m.text().slice(0, 200)); };
+      const onError = (e) => { if (/hydrat|#418|#423|#425/i.test(e.message)) errors.push(e.message.slice(0, 200)); };
+      page.on('console', onConsole);
+      page.on('pageerror', onError);
+      const asked = { original: new Set(), copy: new Set() };
+      const listen = (side, origin) => (req) => { if (req.url().startsWith(origin)) asked[side].add(new URL(req.url()).pathname); };
+      let on = listen('original', ORIGIN);
+      page.on('request', on);
+      await page.goto(p.url, { waitUntil: 'networkidle' });
+      page.off('request', on);
+      on = listen('copy', base());
+      page.on('request', on);
+      await page.goto(`${base()}${routeOf(p.outPath)}`, { waitUntil: 'domcontentloaded' });
+      await page.evaluate(() => { window.__sasFirst = document.querySelector('body > :not(script):not([hidden])'); });
+      await page.waitForLoadState('networkidle');
+      await page.waitForTimeout(800);
+      page.off('request', on);
+      page.off('console', onConsole);
+      page.off('pageerror', onError);
+      const r = await page.evaluate(() => ({
+        next: Boolean(window.next),
+        hydrated: Object.keys(document.documentElement).some((k) => k.startsWith('__react')),
+        same: window.__sasFirst === document.querySelector('body > :not(script):not([hidden])'),
+      }));
+      assert.ok(r.next && r.hydrated, `${p.outPath}: Next.js holds the page (${JSON.stringify(r)})`);
+      assert.ok(r.same, `${p.outPath}: the page the server wrote is the one kept (nothing redrawn)`);
+      assert.deepEqual(errors, [], `${p.outPath}: no hydration error`);
+      // The copy's own address of the page (a moved page: /blog/first-post/ for blog/first-post.html) is not an extra ask.
+      const extra = [...asked.copy].filter((u) => !asked.original.has(u) && u !== routeOf(p.outPath));
+      assert.deepEqual(extra.filter((u) => !u.startsWith('/_next/')), [], `${p.outPath}: nothing asked the original does not ask, Next aside`);
+    }
+  } finally {
+    await context.close();
+  }
+});
+
+test('the original\'s scripts run in the copy: the inline handler, the reveal and the hover script', { timeout: 5 * 60000 }, async () => {
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage();
+    // What the page's scripts leave in the DOM after a scroll through and a click, read the same way on both sides; the
+    // scripts themselves, Next's route announcer and an empty <div hidden> are not the page's content.
+    const state = async (url) => {
+      await page.goto(url, { waitUntil: 'networkidle' });
+      for (let y = 0; y < 4000; y += 400) { await page.mouse.wheel(0, 400); await page.waitForTimeout(80); }
+      const button = page.locator('button[onclick]').first();
+      if (await button.count()) await button.click().catch(() => {});
+      await page.waitForTimeout(600);
+      return page.evaluate(() => [...document.querySelectorAll('body *')]
+        .filter((e) => e.tagName !== 'SCRIPT' && !e.closest('next-route-announcer') && !(e.hidden && !e.children.length && !e.textContent))
+        .map((e) => `${e.tagName}.${e.className?.baseVal ?? e.className}|${getComputedStyle(e).opacity}|${e.getAttribute('aria-expanded') ?? ''}`));
+    };
+    for (const p of pages) {
+      const a = await state(p.url);
+      const b = await state(`${base()}${routeOf(p.outPath)}`);
+      assert.deepEqual(b, a, `${p.outPath}: the page's scripts leave the same state`);
+    }
+  } finally {
+    await context.close();
+  }
+});
+
 test('held against the original with the as-is rulers: visual gate at 1440 and 390, clicks, hovers, console errors', { timeout: 15 * 60000 }, async () => {
   const checks = await checkCopy({
     browser, base: base(), excludedHosts: [], originalReachable: true,
@@ -170,7 +270,10 @@ test('held against the original with the as-is rulers: visual gate at 1440 and 3
   }
 });
 
-test('Lighthouse through the measurement host: the converted copy is never lower than the original (medians of three)', { timeout: 20 * 60000 }, async () => {
+/** What Next's own JavaScript may cost the Performance score (user, 2026-11-16: a live copy is a real Next.js site). */
+const PERF_COST = 5;
+
+test('Lighthouse through the measurement host: the converted copy is never lower than the original (medians of three), Next\'s cost aside', { timeout: 20 * 60000 }, async () => {
   const originalHost = await openMeasuredHost(ORIGIN, 'desktop');
   const copyHost = await openMeasuredHost(base(), 'desktop');
   const CATEGORIES = ['performance', 'seo', 'accessibility', 'best-practices'];
@@ -187,7 +290,7 @@ test('Lighthouse through the measurement host: the converted copy is never lower
     for (const cat of CATEGORIES) {
       const a = median(runs.original.map((r) => r[cat]));
       const b = median(runs.converted.map((r) => r[cat]));
-      assert.ok(b >= a, cat + ': original median ' + a + ' ' + JSON.stringify(runs.original.map((r) => r[cat])) + ', converted median ' + b + ' ' + JSON.stringify(runs.converted.map((r) => r[cat])));
+      assert.ok(b >= a - (cat === 'performance' ? PERF_COST : 0), cat + ': original median ' + a + ' ' + JSON.stringify(runs.original.map((r) => r[cat])) + ', converted median ' + b + ' ' + JSON.stringify(runs.converted.map((r) => r[cat])));
     }
   } finally {
     await originalHost.close();

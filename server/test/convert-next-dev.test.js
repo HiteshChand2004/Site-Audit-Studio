@@ -2,7 +2,9 @@
 // fonts and images live under /_next/, an address the converted project's stack reserves for itself. `next dev` answers every
 // /_next/ address itself, so the development server showed such a copy unstyled while the build (whose after-build step copies
 // site-files/ into out/) was right. Here both are run: `npm run dev` (scripts/dev.mjs) must serve every one of the original's
-// /_next/ files and every page exactly as `npm run build` ships it, and both must look and behave like the original.
+// /_next/ files and every page as `npm run build` ships it (a page keeping the original's own App Router runtime byte for
+// byte, with none of ours; the other with Next's development runtime in place of the build's), and both must look and behave
+// like the original.
 // The home page is built the way the App Router builds (stylesheets under chunks/ with data-precedence, async scripts,
 // self.__next_f), /about/ the way the Pages Router does (data-next-head metas, <noscript data-n-css>, <div id="__next">,
 // __NEXT_DATA__): tags that look like the ones Next adds to the converted pages and must stay the original's.
@@ -15,7 +17,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import sharp from 'sharp';
-import { buildConverted, convertToNext, EXPORT_DIR } from '../src/recreate/convert/next.js';
+import { buildConverted, convertToNext, EXPORT_DIR, finishPageModule } from '../src/recreate/convert/next.js';
+import { domDifference } from '../src/recreate/convert/react.js';
 import { serveCopy } from '../src/recreate/behavior/preserve/serve.js';
 import { domSignature, firstDifference } from '../src/recreate/verify/equivalence.js';
 import { toolchainDir, toolchainStatus } from '../src/toolchains/index.js';
@@ -50,6 +53,8 @@ let devLog = '';
 let browser;
 
 const nextFiles = () => Object.keys(FILES).filter((f) => f.startsWith('_next/')).concat('_next/static/media/brand-s.p.4f2a.woff2');
+/** Next's own addresses: every /_next/ address but the original's own files. */
+const oursNext = { has: (u) => u.startsWith('/_next/') && !nextFiles().includes(u.slice(1)) };
 const exportFile = (route) => path.join(outDir, EXPORT_DIR, route === '/' ? 'index.html' : `${route.replace(/^\/|\/$/g, '')}/index.html`);
 
 async function waitForDev(ms) {
@@ -125,14 +130,25 @@ test('the original\'s /_next/ files answer in development and in the build, byte
   }
 });
 
-test('npm run dev serves every page exactly as npm run build ships it: the original\'s Next.js markers kept, Next\'s own gone', { timeout: 5 * 60000 }, async () => {
+test('npm run dev serves every page as npm run build ships it: the original\'s Next.js markers kept, ours where the page takes it', { timeout: 5 * 60000 }, async () => {
+  // The home page keeps the original's own App Router runtime (self.__next_f): it ships without ours, in development too,
+  // byte for byte. /about/ (the original's Pages Router markup) runs our Next.js: its development form in dev, the build's in
+  // out/, and the same page once each side's Next tags are set aside.
+  assert.deepEqual(JSON.parse(await readFile(path.join(outDir, 'scripts', 'no-runtime.json'), 'utf8')), ['/']);
+  const { withoutNext } = await finishPageModule();
   for (const route of ROUTES) {
     const shipped = await readFile(exportFile(route), 'utf8');
     const r = await fetch(`${DEV}${route}`);
     assert.equal(r.status, 200, route);
     const served = await r.text();
-    assert.equal(served, shipped, `${route}: the page in development differs from the build`);
-    assert.ok(!/data-next-hide-fouc|react-refresh|_buildManifest|"buildId":"development"|\/_next\/static\/chunks\/webpack\.js/.test(served), `${route}: no development runtime`);
+    if (route === '/') {
+      assert.equal(served, shipped, `${route}: the page in development differs from the build`);
+      assert.ok(!/data-next-hide-fouc|react-refresh|_buildManifest|"buildId":"development"|\/_next\/static\/chunks\/webpack|webpackChunk_sas/.test(served), `${route}: no runtime of ours`);
+    } else {
+      assert.match(shipped, /<script src="\/_next\/static\/chunks\/[^"]+" async=""><\/script>/, `${route}: Next.js in the build`);
+      assert.match(served, /\/_next\/static\/chunks\/webpack\.js/, `${route}: Next.js's development runtime in dev`);
+      assert.equal(domDifference(withoutNext(shipped, oursNext), withoutNext(served, oursNext)), null, `${route}: dev and build hold the same page`);
+    }
   }
   const about = await readFile(exportFile('/about/'), 'utf8');
   // The original's own tags that look like Next's stay, once each, where the original has them.
@@ -155,6 +171,17 @@ test('in a browser: development, build and original have the same DOM, styles an
     const signatures = {};
     try {
       const page = await off.newPage();
+      // Build and dev without Next's own tags (withoutNext): what is left must be the original's DOM.
+      const { withoutNext } = await finishPageModule();
+      // A page listed in no-runtime.json already ships without Next's tags: set aside again, its own would go.
+      const noRuntime = new Set(JSON.parse(await readFile(path.join(outDir, 'scripts', 'no-runtime.json'), 'utf8')));
+      for (const base of [sides.build, sides.dev]) {
+        await page.route(`${base}/**`, async (r) => {
+          const res = await r.fetch();
+          if (!/text\/html/.test(res.headers()['content-type'] ?? '') || noRuntime.has(new URL(r.request().url()).pathname)) return r.fulfill({ response: res });
+          return r.fulfill({ response: res, body: withoutNext(await res.text(), oursNext) });
+        });
+      }
       for (const [side, base] of Object.entries(sides)) {
         await page.goto(`${base}${route}`, { waitUntil: 'load' });
         // The signature writes every address in full: the three servers' origins are read as one.

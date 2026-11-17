@@ -7,7 +7,8 @@ import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, rmdir, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { BUILD_DIR, buildConverted, convertToNext, dropBuildFolder, EXPORT_DIR } from '../src/recreate/convert/next.js';
+import { BUILD_DIR, buildConverted, convertToNext, dropBuildFolder, EXPORT_DIR, finishPageModule } from '../src/recreate/convert/next.js';
+import { domDifference } from '../src/recreate/convert/react.js';
 import { freePort } from '../src/recreate/behavior/preserve/serveStack.js';
 import { toolchainDir, toolchainStatus } from '../src/toolchains/index.js';
 
@@ -78,10 +79,13 @@ test('npm run dev without .next serves every page exactly as out/ ships it', { t
     if (Date.now() > end) throw new Error(`npm run dev did not answer: ${devLog.slice(-2000)}`);
     await new Promise((r) => setTimeout(r, 500));
   }
+  // The same page once Next's own tags are set aside (its development runtime in dev, the build's in out/).
+  const { withoutNext } = await finishPageModule();
+  const anyNext = { has: (u) => u.startsWith('/_next/') };
   for (const [route, file] of Object.entries(ROUTES)) {
     const r = await fetch(`${devUrl}${route}`);
     assert.equal(r.status, 200, route);
-    assert.equal(await r.text(), await exported(file), `${route}: development = the shipped page`);
+    assert.equal(domDifference(withoutNext(await exported(file), anyNext), withoutNext(await r.text(), anyNext)), null, `${route}: development = the shipped page`);
   }
 });
 
@@ -98,5 +102,10 @@ test('npm run build without .next writes the same out/ again', { timeout: 8 * 60
   await dropBuildFolder(outDir);
   await rm(path.join(outDir, EXPORT_DIR), { recursive: true, force: true });
   await buildConverted(outDir, { timeoutMs: 6 * 60000 });
-  for (const [f, html] of Object.entries(shipped)) assert.equal(await exported(f), html, `${f}: rebuilt the same`);
+  for (const [f, html] of Object.entries(shipped)) {
+    const again = await exported(f);
+    let at = 0;
+    while (at < html.length && html[at] === again[at]) at += 1;
+    assert.equal(again, html, `${f}: rebuilt the same (first difference at ${at}: ${JSON.stringify(html.slice(Math.max(0, at - 60), at + 100))} vs ${JSON.stringify(again.slice(Math.max(0, at - 60), at + 100))})`);
+  }
 });

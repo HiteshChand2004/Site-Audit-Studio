@@ -313,6 +313,9 @@ const dist = path.join(root, 'dist');
 const client = path.join(root, '${CLIENT_DIR}');
 const { routes, render } = await import(pathToFileURL(path.join(root, '${SSR_DIR}', 'entry-server.js')).href);
 const manifest = JSON.parse(await readFile(path.join(client, '.vite', 'manifest.json'), 'utf8'));
+// Pages React could not hold when the copy was checked in a browser (a hydration error, or the page drawn again): they ship
+// as plain HTML, their own scripts running as written.
+const noRuntime = new Set(JSON.parse(await readFile(path.join(root, 'scripts', 'no-runtime.json'), 'utf8').catch(() => '[]')));
 if (existsSync(path.join(root, 'public', '${CLIENT_BASE}'))) throw new Error('public/${CLIENT_BASE} exists: the site already has files where React would go');
 
 await rm(dist, { recursive: true, force: true });
@@ -322,9 +325,9 @@ await cp(client, path.join(dist, '${CLIENT_BASE}'), { recursive: true, filter: (
 for (const route of routes) {
   const file = path.join(dist, route.file);
   await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, render(route, manifest), 'utf8');
+  await writeFile(file, render(route, noRuntime.has(route.path) ? null : manifest), 'utf8');
 }
-console.log('prerender: ' + routes.length + ' page(s) written to dist/');
+console.log('prerender: ' + routes.length + ' page(s) written to dist/' + (noRuntime.size ? ' (' + noRuntime.size + ' without React)' : ''));
 `;
 
 /** `npm run dev`, shipped with the project: the pages rendered from the components on each request, exactly as the build writes them. */
@@ -549,6 +552,8 @@ export async function convertToReact({ copyDir, outDir, pages, pageUrl }) {
   await put('src/finish-page.js', FINISH_PAGE_SOURCE);
   await put('scripts/prerender.mjs', PRERENDER_SOURCE);
   await put('scripts/dev.mjs', DEV_SOURCE);
+  // Pages that ship without React (runtimeHold.js fills it when a page breaks under React); none to begin with.
+  await put('scripts/no-runtime.json', '[]\n');
 
   // The copy's files: public/ (copied into dist/ unchanged by the prerender), except the page documents (the pages render them).
   const copyFiles = await listFiles(copyDir);

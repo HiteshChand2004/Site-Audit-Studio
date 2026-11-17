@@ -129,13 +129,13 @@ function zipNames(buf) {
 const STACKS = {
   html: { served: '', project: ['README.md', 'index.html'] },
   // Converted into React pages and components (recreate/convert/react.js): the page is src/pages/Home.jsx, not a file of public/.
-  'react-vite': { served: 'dist', project: ['package.json', 'vite.config.js', 'src/entry-server.jsx', 'src/routes.js', 'src/pages/Home.jsx', 'scripts/prerender.mjs', 'scripts/dev.mjs', 'public/_headers', 'README.md'], absent: ['public/index.html', 'dist/index.html'], converted: true },
+  'react-vite': { served: 'dist', project: ['package.json', 'vite.config.js', 'src/entry-server.jsx', 'src/routes.js', 'src/pages/Home.jsx', 'scripts/prerender.mjs', 'scripts/dev.mjs', 'scripts/no-runtime.json', 'public/_headers', 'README.md'], absent: ['public/index.html', 'dist/index.html'], converted: true },
   // Next.js: the copy converted into pages and components (recreate/convert/next.js), a static export served from out/; the
   // project ships the source (out/ is written by its own build, as DEPLOY.md says).
-  nextjs: { served: 'out', project: ['package.json', 'next.config.mjs', 'pages/index.jsx', 'pages/_document.jsx', 'src/documents.js', 'scripts/after-build.mjs', 'README.md'], converted: true },
+  nextjs: { served: 'out', project: ['package.json', 'next.config.mjs', 'app/(p-Home)/layout.jsx', 'app/(p-Home)/page.jsx', 'src/components/RunLater.jsx', 'src/run-scripts.js', 'scripts/after-build.mjs', 'scripts/no-runtime.json', 'README.md'], converted: true },
   // MERN: the React + Vite conversion as client/ (built by the project's own `npm run build`) and the Express server, which
   // serves client/dist and stores the forms that went to the original's own server (recreate/convert/mern.js).
-  mern: { served: 'client/dist', project: ['package.json', 'server/src/index.js', 'server/src/app.js', 'server/src/dev.js', 'server/forms.json', 'client/package.json', 'client/src/routes.js', 'client/src/pages/Home.jsx', 'client/scripts/prerender.mjs', 'README.md'], absent: ['client/dist/index.html', 'client/public/index.html'], converted: true },
+  mern: { served: 'client/dist', project: ['package.json', 'server/src/index.js', 'server/src/app.js', 'server/src/dev.js', 'server/forms.json', 'client/package.json', 'client/src/routes.js', 'client/src/pages/Home.jsx', 'client/scripts/prerender.mjs', 'client/scripts/no-runtime.json', 'README.md'], absent: ['client/dist/index.html', 'client/public/index.html'], converted: true },
 };
 
 /** One person's whole path; returns the project id. */
@@ -213,11 +213,13 @@ ${api.output().slice(-3000)}`);
   const home = await as('GET', preview.json.preview.url);
   assert.equal(home.status, 200, `the preview's home page answers (${preview.json.preview.url})`);
   assert.match(home.text, /Fresh bread every morning/);
-  // A converted copy is prerendered and never hydrated: the page carries no script of the stack and none of the build's leftovers.
-  // The preview's own script (previewShim.js), which every preview page gets, is not the copy's and is left out of the look.
+  // A converted copy is the chosen stack in the browser (user, 2026-11-16): the page loads that stack's runtime (React from
+  // /_react/, Next.js from /_next/) and carries none of the conversion's leftovers. The preview's own script (previewShim.js),
+  // which every preview page gets, is not the copy's and is left out of the look.
   if (STACKS[stack].converted) {
     const own = home.text.split(`<script>${PREVIEW_SHIM}</script>`).join('');
-    assert.ok(!/__next|data-next-head|data-sas-raw/.test(own) && !own.includes('_next/'), 'no runtime of the stack in the page');
+    assert.ok(!/data-sas-raw|data-sas-comment|data-sas-prolog/.test(own), 'no leftover of the conversion in the page');
+    assert.match(own, stack === 'nextjs' ? /<script src="[^"]*\/_next\/static\/chunks\/[^"]+" async=""><\/script>/ : /<script type="module" src="[^"]*\/_react\/[^"]+" data-sas-boot=""/, `the ${stack} runtime is in the page`);
   }
 
   // 6. The report, in every format.

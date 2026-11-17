@@ -34,6 +34,7 @@ import { measureServed, servedOutcome } from '../../../copy/served.js';
 import { needsBackend, slugFor } from '../../discover.js';
 import { serveCopy } from './serve.js';
 import { runtimeFreeCopy } from './runtimeFree.js';
+import { holdRuntime } from '../../convert/runtimeHold.js';
 import { carryRecordings, recordingsOf } from './recordings.js';
 import { runtimeNotes } from '../../convert/runtime.js';
 import { domainLockedParts, lockedItems } from './domainLock.js';
@@ -776,6 +777,7 @@ async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report
     // proven to do without it is converted without it (runtimeFree.js). Without a browser (the address / approved-changes
     // stages) the decisions of the copy this one comes from are repeated.
     const earlierRuntime = report.convert?.runtime ?? null;
+    const earlierHeld = browser ? null : report.convert?.runtimeHeld ?? null;
     let source = copyDir;
     let runtime = null;
     // The step opens and closes many pages: a stray reply of the browser connection (isStrayReply) belongs to no live request,
@@ -813,8 +815,19 @@ async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report
       ctx.progress(0.45, `Building the ${conv.project} project`);
       const built = await conv.build(outDir);
       const verified = conv.verify ? await conv.verify({ copyDir: source, outDir, pages }) : null;
+      // The stack's runtime is held against every page in a browser: a page it cannot hold (a hydration error, the page drawn
+      // again) ships without it, listed in scripts/no-runtime.json (runtimeHold.js). Without a browser the earlier decision is
+      // repeated. A failing check never fails the download: every page keeps its runtime and the report says so.
+      ctx.progress(0.47, `Checking that ${conv.code} holds every page`);
+      const held = await holdRuntime({
+        browser, stack, outDir, pages, skip: (verified?.plain ?? []).map((x) => x.page), decided: earlierHeld,
+        log: (m) => console.log(`[recreate ${String(ctx.recreateId ?? '').slice(0, 8)}] ${m}`),
+      }).catch((err) => ({ error: String(err?.message ?? err).slice(0, 200), dropped: [] }));
       report.build = built?.steps?.map((s) => ({ label: s.label, ms: s.ms })) ?? null;
-      report.convert = { mode: 'converted', ...converted, ...(verified && { verified }), runtime };
+      report.convert = { mode: 'converted', ...converted, ...(verified && { verified }), runtime, ...(held && { runtimeHeld: held }) };
+      if (held?.dropped?.length) {
+        ctx.report.warnings.push(`${held.dropped.length} page${held.dropped.length === 1 ? '' : 's'} of the ${conv.project} project ${held.dropped.length === 1 ? 'ships' : 'ship'} without the ${conv.code} runtime: it could not hold ${held.dropped.length === 1 ? 'it' : 'them'} in the browser (${held.dropped.slice(0, 3).map((x) => x.page).join(', ')}${held.dropped.length > 3 ? ', …' : ''}). ${held.dropped.length === 1 ? 'It looks' : 'They look'} and work${held.dropped.length === 1 ? 's' : ''} the same.`);
+      }
       // Pages whose converted markup did not hold the original's DOM ship as the copy's plain HTML (Next.js: per page,
       // verifyConvertedNext); the report and the README say which and why.
       const plain = verified?.plain ?? [];
@@ -822,7 +835,8 @@ async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report
         ctx.report.warnings.push(`${plain.length} page${plain.length === 1 ? '' : 's'} of the ${conv.project} project ${plain.length === 1 ? 'ships' : 'ship'} as the copy's plain HTML, not as components: the converted markup did not match the original page (${plain.slice(0, 3).map((x) => x.page).join(', ')}${plain.length > 3 ? ', …' : ''}).`);
       }
       const plainNotes = plain.length ? `\n## Pages kept as plain HTML\n\nThese pages ship as the copy's HTML (\`site-files/\`), not as the components: the converted markup did not match the original page.\n\n${plain.map((x) => `- ${x.page}: ${x.difference}`).join('\n')}\n` : '';
-      await writeFile(path.join(outDir, 'README.md'), `${await readFile(path.join(outDir, 'README.md'), 'utf8').catch(() => '')}${runtimeNotes(runtime).readme}${plainNotes}`, 'utf8');
+      const heldNotes = held?.dropped?.length ? `\n## Pages without the ${conv.code} runtime\n\nThese pages are built from their components but ship without the ${conv.code} runtime (listed in \`scripts/no-runtime.json\`): it could not hold them in the browser when the copy was checked. They look and work the same; their own scripts run as written. Remove a page from the list once its cause is fixed, and build again.\n\n${held.dropped.map((x) => `- ${x.page}: ${x.why}`).join('\n')}\n` : '';
+      await writeFile(path.join(outDir, 'README.md'), `${await readFile(path.join(outDir, 'README.md'), 'utf8').catch(() => '')}${runtimeNotes(runtime).readme}${plainNotes}${heldNotes}`, 'utf8');
     } catch (err) {
       const why = String(err?.message ?? err).slice(0, 400);
       ctx.report.warnings.push(`The copy could not be converted into ${conv.code} pages and components (${why.split('\n')[0]}); it is packaged as static files inside a ${conv.project} project instead.`);
@@ -1385,6 +1399,9 @@ export async function asIsStage(ctx) {
     // Every part the conversion kept as original HTML is recorded for the owner too (site, page, tag / attribute, reason).
     for (const x of report.convert?.verified?.plain ?? []) {
       await logOpen({ site: new URL(siteUrl).hostname, stack, page: x.page, check: 'kept as plain HTML: the converted page did not match the original', values: x.difference, tried: 'converted into components, built and held against the as-is page', reason: 'converted' });
+    }
+    for (const x of report.convert?.runtimeHeld?.dropped ?? []) {
+      await logOpen({ site: new URL(siteUrl).hostname, stack, page: x.page, check: 'shipped without the stack\'s runtime: it could not hold the page in the browser', values: x.why, tried: 'built from its components and checked in a browser with the runtime; the page is unchanged without it', reason: 'converted' });
     }
     for (const f of report.convert?.fallbacks ?? []) {
       await logOpen({ site: new URL(siteUrl).hostname, stack, page: f.page, check: `kept as original HTML: <${f.tag}>${f.attribute ? ` ${f.attribute}` : ''} at ${f.where}`, values: f.reason, tried: 'kept as the original HTML inside its component; the page is unchanged', reason: 'converted' });
