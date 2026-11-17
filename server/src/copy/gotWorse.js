@@ -326,7 +326,8 @@ const fewUrls = (urls) => urls.slice(0, 3).map((u) => { try { return new URL(u).
 // WebP of, or one the fix recorded it could not convert without a visible change, is a change of its look (d) to go further.
 // Evidence per file, from this run only.
 const IMAGE_FILE_AUDITS = new Set(['modern-image-formats', 'uses-optimized-images', 'uses-responsive-images', 'efficient-animated-content']);
-const OUR_WEBP = /\.sas-(?:w\d+-)?[0-9a-f]{10}\.webp$/i;
+// The size fix keeps a smaller copy as a PNG when no WebP of it shows no visible difference (.sas-w<width>-<hash>.png).
+const OUR_WEBP = /\.sas-(?:(?:w\d+-)?[0-9a-f]{10}\.webp|w\d+-[0-9a-f]{10}\.png)$/i;
 /** A file's name without the copy's own marks (the lift's ~query hash, the WebP fix's .sas- hash) and without its extension. */
 const imageStem = (url) => {
   let name;
@@ -361,7 +362,7 @@ function imageRow(item, id, ctx) {
     const what = fewUrls([url]);
     const host = hostOf(url);
     if (/^https?:/.test(url) && host !== ctx.copyHost) return { what, reason: null, evidence: 'not a file of the copy' };
-    if (OUR_WEBP.test(url)) return { what, reason: 'look', evidence: 'already a WebP the copy made with no visible difference; only a smaller or more compressed file could save more, which would change the look' };
+    if (OUR_WEBP.test(url)) return { what, reason: 'look', evidence: `already ${/\.png$/i.test(url) ? 'a smaller copy (a PNG of the very pixels the browser draws)' : 'a WebP'} the copy made with no visible difference; only a smaller or more compressed file could save more, which would change the look` };
     const stem = imageStem(url);
     const same = original.find((o) => o.stem && o.stem === stem);
     if (!same) return { what, reason: null, evidence: 'the original\'s report does not name this file' };

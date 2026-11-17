@@ -212,16 +212,23 @@ async function variantOf(file, width, dir, made) {
       if (meta.icc) resize = resize.keepIccProfile();
       const resized = await resize.png().toBuffer();
       const webp = await visiblySameWebp(resized);
-      if (!webp.data) result = { skip: webp.skip };
-      else if (webp.data.length > input.length * WEBP_MAX_SHARE) result = { skip: `a ${width} px copy would be ${Math.round((webp.data.length / input.length) * 100)} % of the file` };
+      // No WebP without a visible difference: for a PNG the resized picture itself, kept as a PNG, is exactly the pixels the
+      // browser draws when it shows the file smaller (lossless). Only when the browser takes its colours as they are: a gamma,
+      // colour-profile or animation chunk would be lost in the smaller copy.
+      const png = !webp.data && isPng(file) && !colourChunks(input).length
+        ? await sharp(resized).png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer()
+        : null;
+      const out = webp.data ?? png;
+      if (!out) result = { skip: webp.skip };
+      else if (out.length > input.length * WEBP_MAX_SHARE) result = { skip: `a ${width} px copy would be ${Math.round((out.length / input.length) * 100)} % of the file` };
       else {
-        const name = `${path.basename(file, path.extname(file))}.sas-w${width}-${createHash('sha256').update(webp.data).digest('hex').slice(0, 10)}.webp`;
+        const name = `${path.basename(file, path.extname(file))}.sas-w${width}-${createHash('sha256').update(out).digest('hex').slice(0, 10)}.${png ? 'png' : 'webp'}`;
         const target = path.join(path.dirname(file), name);
         const there = await readFile(target).catch(() => null);
-        if (there && !there.equals(webp.data)) result = { skip: `${name} already exists with other content` };
+        if (there && !there.equals(out)) result = { skip: `${name} already exists with other content` };
         else {
-          if (!there) await writeFile(target, webp.data);
-          result = { name, width, file: path.relative(dir, target).split(path.sep).join('/'), from: input.length, to: webp.data.length, quality: webp.quality };
+          if (!there) await writeFile(target, out);
+          result = { name, width, file: path.relative(dir, target).split(path.sep).join('/'), from: input.length, to: out.length, ...(webp.quality && { quality: webp.quality }), ...(png && { format: 'png' }) };
         }
       }
     }
