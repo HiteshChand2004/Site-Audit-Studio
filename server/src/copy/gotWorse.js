@@ -804,11 +804,16 @@ export function sameLoad({ wb, wa, lb, la, rb, ra, by = null }) {
   if (Math.abs(wa - wb) > wb * SAME_WEIGHT) return { ok: false, text: `the copy's page weighs ${kb(wa)} against the original's ${kb(wb)}` };
   if (!rb || !ra) return { ok: false, text: 'the requests are not in both reports' };
   const types = new Set([...Object.keys(rb.byType ?? {}), ...Object.keys(ra.byType ?? {})]);
-  const differ = [...types].filter((t) => (rb.byType?.[t] ?? 0) !== (ra.byType?.[t] ?? 0));
+  // Fewer is not another page: a copy that makes no more requests of any type than the original (some of the original's never
+  // start, e.g. its analytics) cannot be held back by what it loads. One more of any type is still a different load.
+  const more = [...types].filter((t) => (ra.byType?.[t] ?? 0) > (rb.byType?.[t] ?? 0));
   // `by`: the requests were counted up to a moment (only those started by it: what starts later cannot delay it).
   const when = by ? ` started by ${by}` : '';
-  if (rb.total !== ra.total || differ.length) return { ok: false, text: `the copy makes other requests than the original${when}: ${requestsText(ra)} against ${requestsText(rb)}` };
-  return { ok: true, text: `the same page weight (${kb(wb)} → ${kb(wa)}), the same largest element (${la.snippet}) and the same requests${when} (${requestsText(ra)})` };
+  if (ra.total > rb.total || more.length) return { ok: false, text: `the copy makes other requests than the original${when}: ${requestsText(ra)} against ${requestsText(rb)}` };
+  const reqs = ra.total === rb.total
+    ? `the same requests${when} (${requestsText(ra)})`
+    : `fewer requests${when} and none more of any type (${requestsText(ra)} against the original's ${requestsText(rb)})`;
+  return { ok: true, text: `the same page weight (${kb(wb)} → ${kb(wa)}), the same largest element (${la.snippet}) and ${reqs}` };
 }
 
 /** The moment each timed audit measures, as the run observed it: a request started after it cannot have delayed it. */

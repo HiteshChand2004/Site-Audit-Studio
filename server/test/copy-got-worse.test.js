@@ -89,6 +89,9 @@ test('Lighthouse: a check whose amount did not grow is the host (e); one that gr
   const moreRequests = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 500000, [...LOAD, 'Fetch']) } });
   assert.equal(moreRequests.reason, null, 'one more request: not the same load');
   assert.match(moreRequests.evidence, /other requests than the original: 6 .*1 Fetch.* against 5/);
+  const fewer = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000, [...LOAD, 'Fetch', 'Other']) }, newLhr: { mobile: time('h1.hero', 650, 500000) } });
+  assert.equal(fewer.reason, 'deploy', 'fewer requests and none more of any type: the copy loads no more than the original');
+  assert.match(fewer.evidence, /fewer requests and none more of any type \(5 .* against the original's 7 /);
   const swapped = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 500000, ['Document', 'Stylesheet', 'Script', 'Image', 'Image']) } });
   assert.equal(swapped.reason, null, 'as many requests, of other types: not the same load');
   const noRequests = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 500000, null) } });
