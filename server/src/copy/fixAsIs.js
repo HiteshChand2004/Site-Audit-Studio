@@ -42,7 +42,7 @@ import { resetTextCache } from '../recreate/ir/tree.js';
 import { HEADERS_FILE as CACHE_HEADERS } from '../recreate/behavior/preserve/pack.js';
 import { blocksZoom, fixInvalidLang, isValidLang } from './seoA11yAsIs.js';
 import { MARKUP_PASS, emptyCounts, fixGroup } from './fixRegistry.js';
-import { fixImageLoading, fixImageSizes, fixPngImages } from './perfAsIs.js';
+import { fixImageLoading, fixImageSizes, fixPngImages, inlineStylesheets } from './perfAsIs.js';
 import { SECURITY_HEADERS } from './securityHeaders.js';
 import { faithfulHtml, loadFaithful } from './faithfulHtml.js';
 import { bundledTemplate, headOf, syncShellHead, withTemplate } from './bundled.js';
@@ -270,6 +270,11 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
         const webp = await fixPngImages($, d, dir, webpMade);
         for (const f of webp.fixed) fixes.push({ kind: 'webp', ...f });
         open.push(...webp.open.map((o) => ({ kind: 'webp', ...o })));
+      }
+      if (perf?.has(d.outPath) && allow('inline')) {
+        const inline = await inlineStylesheets($, d, dir);
+        for (const f of inline.fixed) fixes.push({ kind: 'inline', ...f });
+        open.push(...inline.open.map((o) => ({ kind: 'inline', ...o })));
       }
     }
 

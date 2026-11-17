@@ -23,11 +23,18 @@
 //          srcset with the file itself as the widest and a `sizes` never smaller than where it is drawn (sizesAttr): the browser
 //          draws it at the same size and a sharp screen still takes the larger file (user, 2026-11-16: Lighthouse "Properly size
 //          images" must be solved). Never a picture that already chooses among files, moves or changes size, or is animated.
+//   inline a small local stylesheet the page's first paint waits for is written into the page as a <style> where its <link>
+//          stood (same place in the cascade, url()s made to point from the page), so nothing is fetched before the first paint
+//          (motionrepo, 2026-11-16: the largest text waited 2.6 s for one 35 KB sheet queued behind the font preloads). The file
+//          stays in the copy. Never a sheet with an integrity hash, an @import, a media list that does not block, one too large
+//          (INLINE_MAX_BYTES / INLINE_MAX_GZIP, INLINE_PAGE_GZIP a page), or one a script of the page names (a framework's
+//          runtime may look for its <link>)
 // Never: the original's scripts (not minified, deferred, moved or removed), font-display (text would show in another font while
 // the web font loads), a re-encoding with a visible difference, width / height attributes, preconnects.
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import sharp from 'sharp';
 import { transform } from 'esbuild';
 import { isScrollReveal } from '../recreate/ir/motion.js';
@@ -118,8 +125,10 @@ export function planPerf(probe, pagePath) {
     for (const [key, points] of Object.entries(drawn)) {
       const seen = probe.widths.map((w) => w.images.find((im) => `${im.k}|${im.src}` === key));
       if (seen.some((x) => !x) || seen.some((x) => x.chooses || x.moves || x.lazyLib)) continue;
+      // The file's width as the probe saw it: 0 for a lazy picture not loaded yet when the page was read (it is read before
+      // scrolling). fixImageSizes reads the width from the file itself, so an unloaded picture is still planned.
       const natural = Math.max(...seen.map((x) => x.nw || 0));
-      if (!natural || points.length < 2 || points.every(([, w]) => !(w > 0))) continue;
+      if (points.length < 2 || points.every(([, w]) => !(w > 0))) continue;
       size.set(key, { natural, points });
     }
   }
@@ -717,5 +726,78 @@ export async function stylesheetCandidates({ dir, uses, integrity = new Set(), c
   return { candidates, open };
 }
 
+/** A stylesheet larger than this (bytes as written, or gzip) stays a file: written into every page it would cost more than it saves. */
+export const INLINE_MAX_BYTES = 64 * 1024;
+export const INLINE_MAX_GZIP = 16 * 1024;
+/** At most this much stylesheet text (gzip) is written into one page. */
+export const INLINE_PAGE_GZIP = 24 * 1024;
+
+/** A stylesheet's media that the first paint waits for (none, all, screen). */
+const blocksPaint = (m) => !m || /^\s*(all|screen)\s*$/i.test(m);
+/** A script type a browser runs (classic or module); a data block is not a script. */
+const runsAsScript = (t) => !t || /^(module|(text|application)\/(javascript|ecmascript|x-javascript))$/i.test(t.trim());
+
+/**
+ * The url()s of a stylesheet moved from the copy folder `fromDir` into a page in `pageDir` ('/'-separated, '' for the root): a
+ * relative address is made relative to the page; a root-relative one, another host, data: and #fragment stay as written.
+ */
+export function rebaseCssUrls(css, fromDir, pageDir) {
+  return css.replace(/url\(\s*(['"]?)([^'")]+?)\1\s*\)/gi, (all, q, ref) => {
+    if (/^([a-z][a-z0-9+.-]*:|\/|#)/i.test(ref)) return all;
+    const target = path.posix.normalize(path.posix.join(fromDir || '.', ref));
+    if (target.startsWith('..')) return all;
+    const rel = path.posix.relative(pageDir || '.', target) || '.';
+    return `url(${q}${rel}${q})`;
+  });
+}
+
+/**
+ * The inline fix on one page's parsed markup: each small local stylesheet its first paint waits for is written into the page
+ * where its <link> stood. Reads the files from `dir`, writes nothing to disk; `scriptText(file)` reads a local script.
+ */
+export async function inlineStylesheets($, page, dir, scriptText = (f) => readFile(f, 'utf8').catch(() => '')) {
+  const fixed = [];
+  const open = [];
+  const links = $('head link[rel~="stylesheet" i]').toArray()
+    .filter((l) => !$(l).closest('template, noscript').length && !/\balternate\b/i.test(l.attribs.rel) && l.attribs.disabled === undefined);
+  if (!links.length) return { fixed, open };
+  // What the page's scripts say (inline text and local files): a sheet a script names stays a file.
+  const said = [];
+  for (const s of $('script').toArray()) {
+    if (!runsAsScript(s.attribs['data-sas-type'] ?? s.attribs.type)) continue;
+    if (s.attribs.src) {
+      const f = localFileOf(dir, page.outPath, s.attribs.src);
+      if (f) said.push(await scriptText(f));
+    } else said.push($(s).text());
+  }
+  const pageDir = path.posix.dirname(page.outPath) === '.' ? '' : path.posix.dirname(page.outPath);
+  let pageGzip = 0;
+  for (const link of links) {
+    const href = link.attribs.href;
+    const leave = (why) => open.push({ page: page.path, field: 'inline', reason: 'd', detail: `${href} stays a file on ${page.path}: ${why}` });
+    if (!blocksPaint(link.attribs.media)) continue;
+    const file = localFileOf(dir, page.outPath, href);
+    if (!file) continue;
+    const css = await readFile(file, 'utf8').catch(() => null);
+    if (css == null) continue;
+    if (link.attribs.integrity) { leave('it is loaded with an integrity hash'); continue; }
+    if (said.some((t) => t.includes(path.basename(file)))) { leave('a script of the page names it, and may look for its <link>'); continue; }
+    if (/@import\b/i.test(css)) { leave('it imports another stylesheet'); continue; }
+    if (/<\/style/i.test(css)) { leave('its text would end a <style> block'); continue; }
+    const gz = gzipSync(css).length;
+    if (Buffer.byteLength(css) > INLINE_MAX_BYTES || gz > INLINE_MAX_GZIP) { leave('it is too large to write into every page'); continue; }
+    if (pageGzip + gz > INLINE_PAGE_GZIP) { leave('the page already holds as much stylesheet text as it should'); continue; }
+    const fromDir = path.relative(dir, path.dirname(file)).split(path.sep).join('/');
+    const style = $('<style></style>');
+    style.attr('data-sas-inline', href);
+    if (link.attribs.media) style.attr('media', link.attribs.media);
+    style.text(rebaseCssUrls(css, fromDir, pageDir));
+    $(link).replaceWith(style);
+    pageGzip += gz;
+    fixed.push({ field: 'inline', src: href, file: path.relative(dir, file).split(path.sep).join('/'), bytes: Buffer.byteLength(css), gzip: gz });
+  }
+  return { fixed, open };
+}
+
 /** What every fix of C3 is, in the report's words (kept short: the report lists each one). */
-export const PERF_KINDS = ['lcp', 'lazy', 'webp', 'size'];
+export const PERF_KINDS = ['lcp', 'lazy', 'webp', 'size', 'inline'];
