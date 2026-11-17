@@ -110,14 +110,21 @@ test('a module file without a proper header is refused', () => {
 
 test('the playbooks follow the request: kind of site, goal, stack, input and asked-for quality areas', () => {
   const picked = selectModules(lib, { ...UNDERSTANDING, task: 'build-new', quality_focus: ['motion'] }, { input: 'scratch', stack: 'nextjs' });
+  // A restaurant with the goal "bookings" is NOT a business-to-business site: it gets no Growth OS playbook.
   assert.deepEqual(picked.map((p) => `${p.module.kind}/${p.module.id}`), [
     'core/safety', 'task/build-new', 'input/scratch', 'site/restaurant', 'goal/bookings', 'stack/nextjs',
-    ...lib.ids('growth').map((id) => `growth/${id}`), // a bookings site brings in enquiries, so it gets the Growth OS playbook
     'quality/accessibility', 'quality/aeo', 'quality/craft', 'quality/motion', 'quality/performance', 'quality/responsive', 'quality/seo',
   ]);
+  const growthOf = (u) => selectModules(lib, { task: 'build-new', quality_focus: [], ...u }, { input: 'scratch', stack: 'nextjs' }).filter((p) => p.module.kind === 'growth');
   assert.ok(lib.ids('growth').length >= 5, 'the synced Growth OS modules are in the library (run scripts/sync-growth-playbook.mjs)');
-  const info = selectModules(lib, { task: 'build-new', site_type: 'general', goal: 'information', quality_focus: [] }, { input: 'scratch', stack: 'nextjs' });
-  assert.ok(!info.some((p) => p.module.kind === 'growth'), 'an information site does not get the growth playbook');
+  assert.equal(growthOf({ site_type: 'saas', goal: 'leads' }).length, lib.ids('growth').length, 'a SaaS lead-generation site gets all of them');
+  assert.equal(growthOf({ site_type: 'agency', goal: 'sales' }).length, lib.ids('growth').length);
+  assert.equal(growthOf({ site_type: 'spaceport', goal: 'leads' }).length, lib.ids('growth').length, 'an unknown kind of site is treated as general');
+  for (const site_type of ['restaurant', 'ecommerce', 'local-service', 'blog', 'portfolio']) {
+    assert.equal(growthOf({ site_type, goal: 'bookings' }).length, 0, `${site_type} gets no growth playbook`);
+  }
+  assert.equal(growthOf({ site_type: 'general', goal: 'information' }).length, 0, 'an information site gets none either');
+  assert.match(growthOf({ site_type: 'saas', goal: 'leads' })[0].reason, /saas site whose main goal is leads/);
   const saas = selectModules(lib, { task: 'edit', site_type: 'saas', goal: 'leads', quality_focus: [] }, { input: 'source', stack: 'react-vite' });
   const ids = saas.map((p) => p.module.id);
   assert.ok(ids.includes('saas') && ids.includes('edit') && ids.includes('source') && ids.includes('leads'));

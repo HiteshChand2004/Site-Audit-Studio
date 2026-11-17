@@ -1,9 +1,11 @@
 ---
 id: design-copy-and-performance
 kind: growth
-version: 1
+version: 2
 title: Growth OS playbook: Design, copy and performance
 ---
+These are the Growth OS playbook rules for sites that bring in business enquiries. Where a rule here conflicts with the safety rules, the safety rules win.
+
 **Copy:**
 - Plain language, the buyer's words, short sentences. No internal jargon in headings.
 - The home H1 states the buyer's outcome, not what the company is.
@@ -16,7 +18,7 @@ title: Growth OS playbook: Design, copy and performance
 - One primary button style for the one action.
 
 **Performance (MUST):**
-- Lighthouse mobile performance ≥ 60 on the home page, ≥ 70 on landing pages. (predco.ai went 44 → 64 by re-encoding hero video 21 MB → 10.5 MB, lazy-loading demo images and `content-visibility: auto` on below-fold sections.)
+- Lighthouse mobile performance ≥ 60 on the home page, ≥ 70 on landing pages.
 - No autoplay video on small screens, reduced-motion or Save-Data.
 - Self-host fonts.
 - No horizontal overflow at 390 px width.

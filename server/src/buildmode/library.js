@@ -74,9 +74,14 @@ export function loadLibrary(dir = MODULES_DIR) {
   };
 }
 
-// Quality modules every build gets; the rest only when the request asks for them (understanding.quality_focus).
+// The Growth OS playbook is written for business-to-business companies (a buyer weighs a provider, fills in an enquiry form).
+// It goes to a build only when BOTH hold: the goal brings in enquiries or sales, and the site is the kind of business it fits.
+// A restaurant, a shop or a local clinic with the goal "bookings" does not get it: most of its rules would not make sense there.
 const GROWTH_GOALS = ['leads', 'sales', 'bookings'];
-const ALWAYS_QUALITY =['craft', 'seo', 'accessibility', 'performance', 'aeo', 'responsive'];
+const GROWTH_SITE_TYPES = ['saas', 'agency', 'general'];
+
+// Quality modules every build gets; the rest only when the request asks for them (understanding.quality_focus).
+const ALWAYS_QUALITY = ['craft', 'seo', 'accessibility', 'performance', 'aeo', 'responsive'];
 
 /**
  * Picks the modules for one request, in prompt order, each with the reason it was picked (shown to the user and stored with the
@@ -103,9 +108,10 @@ export function selectModules(library, understanding, setup) {
   add('goal', understanding.goal, `the main goal is ${understanding.goal}`);
   if (!add('stack', setup.stack, `the chosen stack is ${setup.stack}`)) throw new Error(`No stack module "${setup.stack}"`);
   // The Growth OS playbook (modules/growth/, synced by scripts/sync-growth-playbook.mjs): for sites whose job is to bring in leads,
-  // sales or bookings (paid-ads ready). Information and credibility sites do not get it; it would only add noise.
-  if (GROWTH_GOALS.includes(understanding.goal)) {
-    for (const id of library.ids('growth')) add('growth', id, `the main goal is ${understanding.goal}, so the Growth OS playbook applies`);
+  // sales or bookings (paid-ads ready) AND are a kind of business it fits. Anything else would only get noise (GROWTH_SITE_TYPES).
+  const siteType = library.get('site', understanding.site_type) ? understanding.site_type : 'general';
+  if (GROWTH_GOALS.includes(understanding.goal) && GROWTH_SITE_TYPES.includes(siteType)) {
+    for (const id of library.ids('growth')) add('growth', id, `a ${siteType} site whose main goal is ${understanding.goal}, so the Growth OS playbook applies`);
   }
   const focus = new Set(understanding.quality_focus ?? []);
   for (const id of library.ids('quality')) {

@@ -1,15 +1,17 @@
 ---
 id: landing-page-anatomy
 kind: growth
-version: 1
+version: 2
 title: Growth OS playbook: Landing-page anatomy (solution, use-case and ad pages)
 ---
+These are the Growth OS playbook rules for sites that bring in business enquiries. Where a rule here conflicts with the safety rules, the safety rules win.
+
 Build every landing page in this order:
 
 | Block | Rule |
 |---|---|
-| **Page title (`<title>`)** | MUST be ≤ 60 characters, the buyer's search phrase first, brand last. e.g. "Video Smoke Detection and Fire Detection on CCTV \| PredCo" |
-| **H1** | The buyer's problem or outcome in their words. e.g. "Never miss a compliance clause in a tender." |
+| **Page title (`<title>`)** | MUST be ≤ 60 characters, the buyer's search phrase first, brand last. |
+| **H1** | The buyer's problem or outcome in their words. |
 | **Answer paragraph** | 40–60 words that directly answer the search. Quotable on its own. |
 | **First-screen proof** | 3 short proof items under the lede (certifications, deployments, recognitions) from the claims registry. |
 | **Form or CTA in the first screen** | On ad landing pages, the form sits beside the answer above the fold. |
@@ -21,5 +23,3 @@ Build every landing page in this order:
 | **Regional block** (if multi-country) | The rules/standards that apply in each target country (e.g. OSHA 29 CFR 1910.178 for US, Factories Act for India). |
 | **One CTA** | The same primary action everywhere. No competing buttons. |
 | **Mobile sticky CTA** | A bottom bar with the primary action on phones. |
-
-**Evidence:** pages rebuilt in this order (fire & smoke, restricted zone, tender) reached Google page 1 within 14 days of going live, with zero ad spend, and produced the first inbound leads (Tata Power via the fire & smoke page; Vinayak Jewels via the safety pages).
