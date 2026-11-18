@@ -196,6 +196,31 @@ test('full: verdict, gauges with Better / Same / Worse in words, outcome donut a
   has('<img src="data:image/png;base64,iVBORw0KGgo=" alt="">', 'the site\'s icon as the logo');
 });
 
+test('next steps follow what each row asks for: what the copy can still fix (got worse first), then what you must give', () => {
+  const row = (key, title, status, action) => ({ key, category: 'performance', title, status, action, before: { status: 'warn' }, after: { status: 'fail' } });
+  const render = (items, actions) => renderReportHtml({
+    generatedAt: now(), project: { name: 'X', url: 'https://x.test/' }, analyzed: true, recreate: RECREATE, images: { old: {}, new: {} },
+    audit: { ...AUDIT, recreate: { isDummy: false, status: 'done', reauditedAt: '2026-09-30T12:00:00.000Z', stale: false, items, actions, summary: {}, scores: null, metrics: null, scope: null, categories: [] } },
+  });
+  const html = render([
+    row('seo.meta-description.length', 'Meta description: length', 'open', 'fix'),
+    row('lighthouse.unused-css-rules', 'Reduce unused CSS', 'regressed', 'fix'),
+    row('axe.color-contrast', 'Elements must meet minimum color contrast ratio thresholds', 'open', 'kept'),
+    row('lighthouse.largest-contentful-paint', 'Largest Contentful Paint', 'changed', 'deploy'),
+    row('crawl.sitemap', 'Sitemap', 'open', 'person'),
+  ], { fix: 2, kept: 1, deploy: 1, person: 1 });
+  const step = html.match(/Fix the 2 checks the copy can still fix: ([^<.]+)\./);
+  assert.ok(step, 'the fix step');
+  assert.match(step[1], /^unused styling code/, 'the row that got worse comes first');
+  assert.match(html, /Give what only you know for 1 check: /);
+  assert.doesNotMatch(html.match(/<ol class="next">.*?<\/ol>/s)[0], /contrast/, 'a row kept like the original is no step');
+  const calm = render([
+    row('axe.color-contrast', 'Elements must meet minimum color contrast ratio thresholds', 'open', 'kept'),
+    row('lighthouse.largest-contentful-paint', 'Largest Contentful Paint', 'changed', 'deploy'),
+  ], { fix: 0, kept: 1, deploy: 1, person: 0 });
+  assert.match(calm, /Nothing the copy can still fix: put it online and check the 1 thing that can only be confirmed there\./);
+});
+
 test('the logo is read from the project\'s saved icon; anything that is not an image is ignored', async () => {
   const id = makeProject('Logo Co', 'https://logo.example/');
   const dir = projectDir(id);

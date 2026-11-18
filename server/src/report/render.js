@@ -185,6 +185,18 @@ function nextSteps(f) {
   else if (!c) steps.push(cs?.status === 'running' || cs?.status === 'queued' ? 'The comparison with the original is running; download the report again when it has finished.' : 'Compare the copy with the original (Re-audit in the app) to see what got better.');
   else {
     if (c.stale) steps.push('Compare again: the copy changed after this comparison was made.');
+    if (c.actions) {
+      // By what each row asks for (copy/gotWorse.js markActions): what the copy can still fix first (got worse before still
+      // open), then what only the owner can give; what is kept as the original or confirmed after deploying is no step.
+      const names = (rows) => listWords(rows.slice(0, 3).map((i) => plainName(i).name.toLowerCase()));
+      const fix = c.items.filter((i) => i.action === 'fix').sort((x, y) => (x.status === 'regressed' ? 0 : 1) - (y.status === 'regressed' ? 0 : 1));
+      if (fix.length) steps.push(`Fix the ${plural(fix.length, 'check')} the copy can still fix: ${names(fix)}.`);
+      const person = c.items.filter((i) => i.action === 'person');
+      if (person.length) steps.push(`Give what only you know for ${plural(person.length, 'check')}: ${names(person)}.`);
+      const deploy = c.actions.deploy ?? 0;
+      if (!steps.length) steps.push(`Nothing the copy can still fix: put it online${deploy ? ` and check the ${plural(deploy, 'thing')} that can only be confirmed there` : ' and check its speed again there'}.`);
+      return steps.slice(0, 3);
+    }
     const worse = c.items.filter((i) => i.status === 'regressed');
     if (worse.length) steps.push(`Look at the ${plural(worse.length, 'check')} that got worse: ${listWords(worse.slice(0, 3).map((i) => plainName(i).name.toLowerCase()))}.`);
   }
