@@ -52,7 +52,7 @@ const LOAD_WAIT = 20000;
 // How far down the page the scroll-through goes. The screenshot stops at MAX_HEIGHT (8000 px), but the scroll must
 // not: below that nothing loaded its lazy images and no scroll-reveal fired, so a tall page was captured with its
 // lower sections empty or at opacity 0. The 80-step loop in settle() is the real bound (a step is 0.85 screens).
-const SCROLL_CAP = 4 * MAX_HEIGHT;
+export const SCROLL_CAP = 4 * MAX_HEIGHT;
 
 // Scrolls through the page so lazy images and scroll-triggered sections load, waits for pending
 // images and fonts, then returns to the top (settle, below). The scrolling is real input (the mouse
