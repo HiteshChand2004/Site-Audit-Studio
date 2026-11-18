@@ -5,6 +5,7 @@
 // belong to it (passed to it instead of the copy).
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { githubRoles, githubUseOf } from './appGithub.js';
 
 export class AppError extends Error {}
 
@@ -258,6 +259,8 @@ export async function findApp(root, folder) {
     for (const x of await settingsOf(root, { examplesOnly: true })) if (!names.has(x.name)) settings.push(x);
     settings.sort((a, b) => a.name.localeCompare(b.name));
   }
+  // An app that signs in to GitHub as a GitHub App of its own: what it does there, for the permissions its app is made with.
+  const github = githubRoles(settings.map((s) => s.name)) ? await githubUseOf(dir, await codeFiles(dir)) : null;
 
   return {
     kind: 'node',
@@ -273,6 +276,7 @@ export async function findApp(root, folder) {
     port,
     settings,
     paths: await appPaths(dir, framework),
+    github,
     warnings,
   };
 }

@@ -15,6 +15,7 @@ import { ArchiveError, unpack } from '../boxes/archive.js';
 import { BOX_LIMITS, freePort } from '../boxes/index.js';
 import { DockerError } from '../boxes/docker.js';
 import { AppError, findApp, parseEnvText, repoRoot } from './detect.js';
+import { githubRoles } from './appGithub.js';
 import { downloadRepository, GitHubError } from './github.js';
 import { appRunning, removeApp, runApp } from './run.js';
 
@@ -43,6 +44,21 @@ async function patchState(projectId, patch) {
 /** The settings as kept: names → values. @param {any} state @returns {Record<string, string>} */
 const settingsOf = (state) => (state.settings ? JSON.parse(unseal(state.settings)) : {});
 
+/**
+ * The GitHub App made for the website's app, as GitHub handed it over (with its key), plus where it was installed and which
+ * settings it filled; kept sealed like the settings. @param {any} state
+ * @returns {{ id: number, slug: string, pem: string, htmlUrl: string, installationId?: number, account?: string, filled?: string[] } | null}
+ */
+const githubAppOf = (state) => (state.githubApp ? JSON.parse(unseal(state.githubApp)) : null);
+
+/** The GitHub App made for the website's app, or null. @param {string} projectId */
+export const appGithubApp = async (projectId) => githubAppOf(await readState(projectId));
+
+/** Keeps (null: forgets) the GitHub App made for the website's app. @param {string} projectId @param {object | null} value */
+export async function keepAppGithubApp(projectId, value) {
+  await patchState(projectId, { githubApp: value ? seal(JSON.stringify(value)) : null });
+}
+
 /** Apps being made now, by website. @type {Map<string, Promise<void>>} */
 const making = new Map();
 
@@ -59,9 +75,14 @@ export async function appState(projectId) {
   const set = Object.keys(settingsOf(state));
   const read = (state.app?.settings ?? []).map((s) => s.name);
   const missing = read.filter((n) => !set.includes(n));
-  const { settings: _sealed, ...shown } = state;
+  const { settings: _sealed, githubApp: _sealedApp, ...shown } = state;
+  const ownApp = githubAppOf(state);
   return {
     ...shown,
+    // The GitHub App made for this app (apps/appGithub.js): never its key; whether it is installed, and where.
+    githubApp: ownApp && { slug: ownApp.slug, htmlUrl: ownApp.htmlUrl, account: ownApp.account ?? null, installed: Boolean(ownApp.installationId), filled: ownApp.filled ?? [] },
+    // Which settings are the app's GitHub App's (null: the code signs in to GitHub as no app of its own).
+    githubRoles: githubRoles(read),
     status: state.status === 'running' && !running ? 'stopped' : state.status,
     settingsSet: set,
     // The settings the code reads that have no value yet.
