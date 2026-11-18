@@ -6,7 +6,19 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import * as cheerio from 'cheerio';
-import { inlineStylesheets, rebaseCssUrls, INLINE_MAX_BYTES } from '../src/copy/perfAsIs.js';
+import { gzipSync } from 'node:zlib';
+import { inlineStylesheets, rebaseCssUrls, INLINE_MAX_BYTES, INLINE_MAX_GZIP } from '../src/copy/perfAsIs.js';
+
+/** A stylesheet of rules with varied names and colours, just past `gzipKB` KB once gzipped. */
+function sheetOfGzip(gzipKB, seed) {
+  let s = seed;
+  const rnd = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s.toString(16).padStart(8, '0'); };
+  let css = '';
+  while (true) {
+    for (let i = 0; i < 200; i++) css += `.c${rnd()}{color:#${rnd().slice(0, 6)};margin:${s % 37}px}`;
+    if (gzipSync(css).length >= gzipKB * 1024) return css;
+  }
+}
 
 async function site(files) {
   const dir = await mkdtemp(path.join(tmpdir(), 'sas-inline-'));
@@ -46,6 +58,23 @@ test('a small blocking sheet is written into the page in its place, url()s from 
     assert.match($.html(), /url\(\.\.\/img\/a\.png\)/);
     assert.match($.html(), /p>a\{color:blue\}/, 'the text is written as it is, nothing escaped');
     assert.equal($('link[href="/css/late.css"]').length, 1, 'a sheet that does not block stays');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a framework\'s pair of first-paint sheets (14 KB + 18 KB gzip) both go into the page; one past the limit stays a file', async () => {
+  // own360's Next.js build: 0fspgkgshvx6t.css (14 KB) and 093xbxg.cd3f4.css (18 KB); the larger stayed a file at a 16 KB limit.
+  const big = sheetOfGzip(INLINE_MAX_GZIP / 1024 + 1, 3);
+  const dir = await site({ 'a.css': sheetOfGzip(14, 1), 'b.css': sheetOfGzip(18, 2), 'huge.css': big });
+  try {
+    assert.ok(Buffer.byteLength(big) <= INLINE_MAX_BYTES, 'past the gzip limit only, so that is the rule tested');
+    const $ = cheerio.load('<html><head><link rel="stylesheet" href="/a.css"><link rel="stylesheet" href="/b.css"><link rel="stylesheet" href="/huge.css"></head><body></body></html>');
+    const r = await inlineStylesheets($, { path: '/', outPath: 'index.html' }, dir);
+    assert.deepEqual(r.fixed.map((f) => f.file).sort(), ['a.css', 'b.css']);
+    assert.equal($('style[data-sas-inline]').length, 2);
+    assert.equal($('link[href="/huge.css"]').length, 1);
+    assert.match(r.open.map((o) => o.detail).join('\n'), /huge\.css .*too large/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

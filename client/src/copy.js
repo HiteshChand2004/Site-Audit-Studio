@@ -522,6 +522,7 @@ export const WORSE_REASONS = {
   look: { code: 'd', text: 'The fix would change the original’s look, animation or behaviour.' },
   own_code: { code: 'i', text: 'Comes from a script the original wrote itself, which the copy keeps exactly as it is.' },
   deploy: { code: 'e', text: 'Can only be checked on the real host. See DEPLOY.md.' },
+  changed: { code: 'j', text: 'The original itself loads this now: it changed after it was checked. Check the site again to compare with what it loads today.' },
 };
 // Why a row stays, in seven groups (mirrors server/src/copy/gotWorse.js GROUPS).
 export const ROW_GROUPS = {

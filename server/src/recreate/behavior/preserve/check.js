@@ -146,6 +146,9 @@ export async function pictureRounds(browser, opts, sides, rounds = NOISE_SHOTS) 
       if (round === 0) {
         for (const [i, o] of open.entries()) {
           if (sides[i].inspect) sides[i].inspected = await sides[i].inspect(o.page).catch((err) => ({ error: String(err?.message ?? err).split('\n')[0].slice(0, 160) }));
+          // `rects`: where the elements this selector names are drawn, in the picture's own pixels (page coordinates, the
+          // gate's windows have a device scale of 1). Null when it could not be read: no box is then taken as "touched".
+          if (sides[i].rects) sides[i].touched = await readRects(o.page, sides[i].rects).catch(() => null);
         }
       }
     } finally {
@@ -178,6 +181,18 @@ export async function visualCheck(browser, base, copyUrl, originalUrl, width, { 
     ...(keepOriginal && { originalShots }),
   };
 }
+
+/**
+ * The elements the largest-element fix (copy/perfAsIs.js showLcp) shows at once. Its rule applies to them alone and sets only
+ * how they are drawn (opacity, transform, visibility), so it moves nothing else on the page.
+ */
+export const TOUCHED_BY_LCP = '[data-sas-shown]:not(style)';
+
+/** The page boxes ({ x, y, w, h }, CSS px) of the visible elements a selector names. */
+export const readRects = (page, selector) => page.evaluate((sel) => [...document.querySelectorAll(sel)].map((e) => {
+  const r = e.getBoundingClientRect();
+  return { x: r.left + scrollX, y: r.top + scrollY, w: r.width, h: r.height };
+}).filter((r) => r.w > 0 && r.h > 0), selector);
 
 /** How many pictures the gate takes of each side (fixed, unfixed): every pair on one side shows where the page moves by itself. */
 export const NOISE_SHOTS = 3;
@@ -286,9 +301,9 @@ export async function fixGate(browser, fixedBase, unfixedBase, pagePath, { width
     const kept = before && (!axeRules?.length || axeBefore?.has(key)) ? await before.get(key) : null;
     if (kept) {
       const fixedErrors = [];
-      const fixedSide = { base: fixedBase, url: `${fixedBase}${pagePath}`, errors: fixedErrors, ...(axeRules?.length && { inspect: (page) => axeCounts(page, axeRules) }) };
+      const fixedSide = { base: fixedBase, url: `${fixedBase}${pagePath}`, errors: fixedErrors, rects: TOUCHED_BY_LCP, ...(axeRules?.length && { inspect: (page) => axeCounts(page, axeRules) }) };
       const [fixedShots] = await pictureRounds(browser, viewOf(width), [fixedSide]);
-      const verdict = await gateVerdict(fixedShots, kept.shots);
+      const verdict = await gateVerdict(fixedShots, kept.shots, { touched: fixedSide.touched });
       const newErrors = [...new Set(fixedErrors)].filter((e) => !kept.errors.some((u) => u.includes(e)));
       const invisible = verdict.changedPx === 0 && !verdict.sizeChanged && newErrors.length === 0;
       if (invisible) {
@@ -311,12 +326,12 @@ export async function fixGate(browser, fixedBase, unfixedBase, pagePath, { width
     const cached = axeBefore?.get(`${pagePath}|${width}`);
     const read = axeRules?.length ? (page) => axeCounts(page, axeRules) : null;
     const sides = [
-      { base: fixedBase, url: `${fixedBase}${pagePath}`, errors: fixedErrors, ...(read && { inspect: read }) },
+      { base: fixedBase, url: `${fixedBase}${pagePath}`, errors: fixedErrors, rects: TOUCHED_BY_LCP, ...(read && { inspect: read }) },
       { base: unfixedBase, url: `${unfixedBase}${pagePath}`, errors: unfixedErrors, ...(read && !cached && { inspect: read }) },
     ];
     const [fixedShots, unfixedShots] = await pictureRounds(browser, viewOf(width), sides);
     if (before) await before.set(key, { shots: unfixedShots, errors: unfixedErrors, scrollCapped: Boolean(sides[1].scrollCapped) }).catch(() => {});
-    const verdict = await gateVerdict(fixedShots, unfixedShots);
+    const verdict = await gateVerdict(fixedShots, unfixedShots, { touched: sides[0].touched });
     // A console error of the fixed page that no load of the unfixed page had.
     const newErrors = [...new Set(fixedErrors)].filter((e) => !unfixedErrors.some((u) => u.includes(e)));
     const invisible = verdict.changedPx === 0 && !verdict.sizeChanged && newErrors.length === 0;
@@ -377,6 +392,22 @@ function readLcpChain() {
 
 /** How long the probe holds the mouse over the largest element (or an ancestor) before it reads the chain again. */
 const LCP_HOVER_MS = 600;
+
+/**
+ * The probe names the largest element once it has stopped changing: a part the page's script shows after load (a reveal after
+ * hydration) becomes the largest element seconds later, and Lighthouse names that one (indikaai: the logo at 0.2 s, the hero's
+ * text at 2.5 s, read at 1.5 s before). Read once no new entry came for LCP_QUIET_MS, at most LCP_MAX_WAIT_MS after load.
+ */
+export const LCP_QUIET_MS = 3000;
+export const LCP_MAX_WAIT_MS = 8000;
+async function lcpSettled(page) {
+  const start = Date.now();
+  while (Date.now() - start < LCP_MAX_WAIT_MS) {
+    const quiet = await page.evaluate(() => performance.now() - (window.__sasLcp?.startTime ?? 0)).catch(() => Infinity);
+    if (quiet >= LCP_QUIET_MS) return;
+    await page.waitForTimeout(250);
+  }
+}
 
 /**
  * The largest element's chain (readLcpChain), with what would make showing it at once change the page's motion: `moving` (its
@@ -483,12 +514,42 @@ export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS,
             }
           }).observe(document, { subtree: true, attributes: true, attributeFilter: ['style'] });
         } catch { /* nothing to observe yet: only animation events mark */ }
+        // Picture addresses a script writes after the document was parsed (a runtime drawing the page again from its own
+        // data): a WebP or a smaller copy of such a picture would be downloaded besides the file the script asks for again
+        // (copy/perfAsIs.js leaves it as it is).
+        window.__sasScriptSrc = new Set();
+        let parsed = false;
+        addEventListener('DOMContentLoaded', () => { parsed = true; }, { once: true });
+        const noteImg = (el) => {
+          if (!parsed || !/^(IMG|SOURCE)$/.test(el?.tagName ?? '')) return;
+          const src = el.getAttribute('src');
+          if (src) window.__sasScriptSrc.add(src);
+          for (const c of (el.getAttribute('srcset') ?? '').split(',')) {
+            const u = c.trim().split(/\s+/)[0];
+            if (u) window.__sasScriptSrc.add(u);
+          }
+        };
+        try {
+          new MutationObserver((ms) => {
+            for (const m of ms) {
+              if (m.type === 'attributes') noteImg(m.target);
+              else {
+                for (const n of m.addedNodes) {
+                  if (n.nodeType !== 1) continue;
+                  noteImg(n);
+                  n.querySelectorAll?.('img, source').forEach(noteImg);
+                }
+              }
+            }
+          }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['src', 'srcset'] });
+        } catch { /* nothing to observe: no picture is counted as drawn by a script */ }
       });
       const page = await context.newPage();
       const styles = new Set();
       page.on('response', (r) => { if (r.request().resourceType() === 'stylesheet' && r.url().startsWith(base)) styles.add(new URL(r.url()).pathname); });
       await page.goto(`${base}${pagePath}`, { waitUntil: 'load', timeout: 120000 });
       await page.waitForTimeout(1500);
+      await lcpSettled(page);
       await page.evaluate(() => window.scrollTo(0, 0));
       const read = await page.evaluate(() => {
         const nameOf = (img) => {
@@ -551,7 +612,7 @@ export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS,
           for (let e = el; e && e !== document.body; e = e.parentElement) path.unshift([e.tagName.toLowerCase(), [...e.parentElement.children].indexOf(e)]);
           scrollers.push({ path, id: el.getAttribute('id'), cls: el.getAttribute('class'), text: (el.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 60) });
         }
-        return { viewportH: window.innerHeight, lcp, images, integrity, scrollers };
+        return { viewportH: window.innerHeight, lcp, images, integrity, scrollers, scriptSrc: [...(window.__sasScriptSrc ?? [])] };
       });
       // The largest element and its ancestors, with what showing them at once would change (copy/perfAsIs.js showLcp).
       const lcpChain = await lcpChainOf(page, width);
@@ -660,9 +721,12 @@ export async function anchorClicks(browser, fixedBase, unfixedBase, pagePath, { 
  * @param {Buffer[]} fixedShots  side A (the fixed page, or the copy): PNGs (a single Buffer is taken as one picture)
  * @param {Buffer[]} unfixedShots  side B (the unfixed page, or the original): PNGs; with one picture only, the noise map comes
  *   from side A alone (a saved baseline has no second picture)
- * @param {{ threshold?: number }} [o]  the ruler's colour threshold (GATE_THRESHOLD)
+ * @param {{ threshold?: number, touched?: { x: number, y: number, w: number, h: number }[] | null }} [o]  the ruler's colour
+ *   threshold (GATE_THRESHOLD); `touched`: the boxes of the elements a fix acts on (TOUCHED_BY_LCP, read on side A). The verdict
+ *   then also says how much of inNoisePx lies on them (inNoiseTouchedPx, the boxes widened by NOISE_MARGIN_BLOCKS). Without it
+ *   (or when it could not be read) all of inNoisePx is counted as touched: nothing unknown is ever set aside.
  */
-export async function gateVerdict(fixedShots, unfixedShots, { threshold = GATE_THRESHOLD } = {}) {
+export async function gateVerdict(fixedShots, unfixedShots, { threshold = GATE_THRESHOLD, touched = null } = {}) {
   const fixedList = Buffer.isBuffer(fixedShots) ? [fixedShots] : fixedShots;
   if (Buffer.isBuffer(unfixedShots)) unfixedShots = [unfixedShots];
   // Every comparison of the verdict at once, each picture decoded once and read band by band (Light 3: exactDiffMany holds only
@@ -706,18 +770,37 @@ export async function gateVerdict(fixedShots, unfixedShots, { threshold = GATE_T
       }
     }
   }
+  // The blocks the touched boxes cover, widened like the noise map (null: not known, every block counts as touched). A page
+  // whose size changes between its own loads has no fixed place for anything: its boxes are not trusted either.
+  let onTouched = null;
+  if (Array.isArray(touched) && !unstable) {
+    onTouched = new Uint8Array(cols * rows);
+    const px = change.blocks.px || 8;
+    for (const r of touched) {
+      const x0 = Math.max(0, Math.floor(r.x / px) - NOISE_MARGIN_BLOCKS);
+      const y0 = Math.max(0, Math.floor(r.y / px) - NOISE_MARGIN_BLOCKS);
+      const x1 = Math.min(cols - 1, Math.floor((r.x + r.w) / px) + NOISE_MARGIN_BLOCKS);
+      const y1 = Math.min(rows - 1, Math.floor((r.y + r.h) / px) + NOISE_MARGIN_BLOCKS);
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) onTouched[y * cols + x] = 1;
+    }
+  }
   let changedPx = 0;
   let inNoisePx = 0;
+  let inNoiseTouchedPx = 0;
   for (let i = 0; i < sometimes.length; i++) {
     if (!sometimes[i]) continue;
     if (!noisy[i] && counts[i]) changedPx += counts[i];
-    else inNoisePx += sometimes[i];
+    else {
+      inNoisePx += sometimes[i];
+      if (!onTouched || onTouched[i]) inNoiseTouchedPx += sometimes[i];
+    }
   }
   const noiseBlocks = noisy.reduce((n, v) => n + v, 0);
   const pct = (px) => (change.compared ? Math.round((px / change.compared) * 1e6) / 1e4 : 0);
   return {
     changedPx, // pixels that differ where the page does not move by itself: > 0 means a visible change
     inNoisePx, // pixels that differ where it does: cannot be judged, reported
+    inNoiseTouchedPx, // the part of inNoisePx on the boxes of `touched` (all of it when no boxes were given)
     changedPct: pct(changedPx), // the same two as a share of the compared pixels, to 4 decimals of a percent
     inNoisePct: pct(inNoisePx),
     noiseShare: Math.round((noiseBlocks / (cols * rows || 1)) * 1e4) / 1e2, // % of the page that moves by itself

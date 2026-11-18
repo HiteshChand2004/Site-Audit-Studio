@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import sharp from 'sharp';
-import { fixAndProve } from '../src/recreate/behavior/preserve/stage.js';
+import { fixAndProve, proven } from '../src/recreate/behavior/preserve/stage.js';
 import { fixGate, gateVerdict } from '../src/recreate/behavior/preserve/check.js';
 import { serveCopy } from '../src/recreate/behavior/preserve/serve.js';
 import { exactDiff } from '../src/recreate/verify/exact/pixels.js';
@@ -245,4 +245,28 @@ test('gateVerdict: a page whose own height changes between loads is all noise, a
   const once = await gateVerdict([await shot(200, true), await shot(200), await shot(200)], [await shot(200), await shot(200), await shot(200)]);
   assert.equal(once.changedPx, 0);
   assert.ok(once.inNoisePx >= 16, 'but it is counted, not dropped');
+});
+
+test('the largest-element fix: noise far from the elements it shows does not hold it back; noise on them, or unknown boxes, still do', async () => {
+  // A drawing that animates by itself at (80, 150); the fixed heading sits at (10, 10). (testpilot: a hero illustration with
+  // endless animations beside the h1 kept the h1 fading in on three pages.)
+  const shot = (dot) => sharp({ create: { width: 120, height: 200, channels: 3, background: '#fff' } })
+    .composite(dot ? [{ input: { create: { width: 6, height: 6, channels: 3, background: '#000' } }, left: 80, top: 150 }] : []).png().toBuffer();
+  const fixed = [await shot(true), await shot(false), await shot(false)];
+  const unfixed = [await shot(false), await shot(true), await shot(false)];
+  const far = await gateVerdict(fixed, unfixed, { touched: [{ x: 10, y: 10, w: 40, h: 20 }] });
+  assert.equal(far.changedPx, 0);
+  assert.ok(far.inNoisePx > 0, JSON.stringify(far));
+  assert.equal(far.inNoiseTouchedPx, 0, 'the moving drawing is not on the heading');
+  const on = await gateVerdict(fixed, unfixed, { touched: [{ x: 70, y: 140, w: 30, h: 30 }] });
+  assert.equal(on.inNoiseTouchedPx, on.inNoisePx, 'noise on a shown element still counts');
+  const unknown = await gateVerdict(fixed, unfixed);
+  assert.equal(unknown.inNoiseTouchedPx, unknown.inNoisePx, 'no boxes read: every pixel counts as touched');
+
+  const look = (v) => ({ invisible: true, views: [{ width: 375, changedPx: 0, ...v }, { width: 1440, changedPx: 0, inNoisePx: 0, inNoiseTouchedPx: 0 }] });
+  assert.equal(proven(look(far), ['lcp']), true, 'only the largest-element fix: kept');
+  assert.equal(proven(look(far), ['lcp', 'lazy']), false, 'lazy loading can change any place: the strict rule');
+  assert.equal(proven(look(far)), false, 'no speed groups named: the strict rule');
+  assert.equal(proven(look(on), ['lcp']), false);
+  assert.equal(proven(look({ inNoisePx: 500 }), ['lcp']), false, 'a saved look without the touched count stays strict');
 });

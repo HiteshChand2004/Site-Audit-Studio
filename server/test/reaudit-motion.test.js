@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { backendFailures, compareClicks, hoverBudgetFor, hoverFirstFor, jumpTargetsOf, liftedTargets, markJumps, measureNewMotion, missedHovers, motionItems, motionTimeFor, movesByItself, PAGE_BUDGET_MS, pairHovers, readOldMotion, selfMovingFromSnapshot, summarize, useLiftedBefore, withoutChildHovers } from '../src/reaudit/motion.js';
+import { backendFailures, compareClicks, selfChangingPaths, hoverBudgetFor, hoverFirstFor, jumpTargetsOf, liftedTargets, markJumps, measureNewMotion, missedHovers, motionItems, motionTimeFor, movesByItself, PAGE_BUDGET_MS, pairHovers, readOldMotion, selfMovingFromSnapshot, summarize, useLiftedBefore, withoutChildHovers } from '../src/reaudit/motion.js';
 import { serveCopy } from '../src/recreate/behavior/preserve/serve.js';
 import { FIRST_MS } from '../src/recreate/capture/interactions.js';
 import { loopsTimeFor, LOOPS_MAX_MS, scrollStepsFor } from '../src/recreate/capture/loops.js';
@@ -622,4 +622,29 @@ test("an as-is copy's reveals and loops are measured on the lifted original with
   } finally {
     await rm(folder, { recursive: true, force: true });
   }
+});
+
+test('click comparison: dots of a carousel that moves on by itself are judged only on what does not depend on the moment', () => {
+  // panscience.xyz: the venture dots switch slides that also move on every ~5 s. The copy's probe clicked "Go to Botza" while
+  // Botza was on show (nothing changed), and on the original a click outside "closed" Choice AI because the slide moved on.
+  const ROW = 'body>main:1>section:6>div:2>div:1';
+  const AREA = 'body>main:1>section:6>div:1';
+  const dot = (n, text, extra = {}) => ({ kind: 'tabs', tag: 'button', text, trigger: `${ROW}>button:${n}`, targets: [`${AREA}>div:${n}`], change: { shown: [{ path: `${AREA}>div:${n}` }] }, ...extra });
+  const feeds = { areas: [], skipped: [{ path: AREA, reason: 'changed once or twice' }, { path: 'body>footer:1', reason: 'no change' }] };
+  assert.deepEqual(selfChangingPaths(feeds), [AREA], 'an area that never changed is not one');
+  const self = selfChangingPaths(feeds);
+  const was = [dot(1, 'Go to Botza'), dot(2, 'Go to Choice AI', { closesOwn: 'outside' })];
+  const now = [dot(2, 'Go to Choice AI', { closesOwn: null })];
+  const probed = [`${ROW}>button:1`, `${ROW}>button:2`];
+  const rows = compareClicks(was, now, ['Go to Botza', 'Go to Choice AI'], null, probed, self);
+  assert.deepEqual(rows.map((r) => [r.selfChanging ?? false, r.diff]), [[true, []], [true, []]]);
+
+  // Without the evidence, the same readings stay differences, as before.
+  assert.deepEqual(compareClicks(was, now, ['Go to Botza', 'Go to Choice AI'], null, probed).map((r) => r.diff.length), [1, 1]);
+  // No dot of the row works on the copy: the carousel is broken, and that is still said.
+  assert.deepEqual(compareClicks(was.slice(0, 1), [], ['Go to Botza'], null, probed, self)[0].diff, ['does nothing in the copy']);
+  // A second click is no matter of the moment: still compared.
+  const toggle = compareClicks([dot(2, 'Go to Choice AI', { closesOwn: 'toggle' })], [dot(2, 'Go to Choice AI', { closesOwn: null })], null, null, null, self)[0];
+  assert.equal(toggle.selfChanging, undefined);
+  assert.match(toggle.diff[0], /a second click does not close/);
 });

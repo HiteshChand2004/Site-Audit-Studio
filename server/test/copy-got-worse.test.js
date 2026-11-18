@@ -82,6 +82,12 @@ test('Lighthouse: a check whose amount did not grow is the host (e); one that gr
   assert.match(host.evidence, /488 KB → 483 KB/);
   assert.match(host.evidence, /the same requests \(5 \(2 Script, 1 Document, 1 Stylesheet, 1 Image\)\)/);
 
+  // A time no longer than the original's needs no proof: the largest element unnamed on the copy (makememo: 0 → 0 ms on a
+  // computer, 5410 → 5460 ms on a phone) is still the original's own time.
+  const notSlower = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 5410, 500000), desktop: time('h1.hero', 0, 500000) }, newLhr: { mobile: lhr({ ...lcp(null, 5460), ...weight(500000) }), desktop: lhr({ ...lcp(null, 0), ...weight(500000) }) } });
+  assert.equal(notSlower.reason, 'deploy', 'not slower than the original on either device');
+  assert.match(notSlower.evidence, /mobile: 5410 → 5460 ms, no slower than the original; desktop: 0 → 0 ms, no slower than the original/);
+
   // Strict: any one of the three that is not the same keeps the row counted, with the difference named.
   const lighter = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 450000) } });
   assert.equal(lighter.reason, null, 'a copy 10 % lighter is still not the same page');
@@ -89,6 +95,9 @@ test('Lighthouse: a check whose amount did not grow is the host (e); one that gr
   const moreRequests = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 500000, [...LOAD, 'Fetch']) } });
   assert.equal(moreRequests.reason, null, 'one more request: not the same load');
   assert.match(moreRequests.evidence, /other requests than the original: 6 .*1 Fetch.* against 5/);
+  const fewer = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000, [...LOAD, 'Fetch', 'Other']) }, newLhr: { mobile: time('h1.hero', 650, 500000) } });
+  assert.equal(fewer.reason, 'deploy', 'fewer requests and none more of any type: the copy loads no more than the original');
+  assert.match(fewer.evidence, /fewer requests and none more of any type \(5 .* against the original's 7 /);
   const swapped = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 500000, ['Document', 'Stylesheet', 'Script', 'Image', 'Image']) } });
   assert.equal(swapped.reason, null, 'as many requests, of other types: not the same load');
   const noRequests = one({ key: 'lighthouse.largest-contentful-paint-element' }, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 500000, null) } });
@@ -322,4 +331,53 @@ test('a stylesheet the browser refused: the console row names it, and hover / mo
   const script = { mobile: lhr({ 'errors-in-console': { details: { items: [{ ...refused, description: refused.description.replace(css, `${COPY}/js/app.js`) }] } } }) };
   assert.match(one({ key: 'motion.hover' }, { newLhr: script }).evidence, /Fix not built yet: Motion is a separate track/);
   assert.match(one({ key: 'motion.hover' }).evidence, /Fix not built yet: Motion is a separate track/, 'with every stylesheet loaded, the effect is still owed');
+});
+
+test('Defer offscreen images: the same files the original loads are the host\'s (its long tasks moved); another file is not explained', () => {
+  const CDN = 'https://cdn.example-original.test/site';
+  const image = (url, bytes) => ({ url, resourceType: 'Image', resourceSize: bytes, transferSize: bytes });
+  const side = (requests, flagged, lastTask) => ({
+    mobile: lhr({
+      'network-requests': { details: { items: requests } },
+      'long-tasks': { details: { items: [{ startTime: 100 }, { startTime: lastTask }] } },
+      'offscreen-images': { details: { overallSavingsBytes: flagged.reduce((n, [, b]) => n + b, 0), items: flagged.map(([url, b]) => ({ url, wastedBytes: b })) } },
+    }),
+  });
+  const oldLhr = side([image(`${CDN}/a_shape3.png`, 10688), image(`${CDN}/a_shape4.png`, 5533)], [], 300);
+  const newLhr = side([image(`${COPY}/site/a_shape3.png`, 10688), image(`${COPY}/site/a_shape4.png`, 5533)], [[`${COPY}/site/a_shape3.png`, 9935], [`${COPY}/site/a_shape4.png`, 5533]], 2100);
+  const host = one({ key: 'lighthouse.offscreen-images' }, { oldLhr, newLhr });
+  assert.equal(host.reason, 'deploy');
+  assert.match(host.evidence, /the original requests this very file \(10 KB\) while it loads, as the copy does/);
+  assert.match(host.evidence, /mobile: last long task at 300 → 2100 ms/);
+
+  const extra = side([image(`${COPY}/site/a_shape3.png`, 10688), image(`${COPY}/site/new.png`, 8000)], [[`${COPY}/site/new.png`, 8000]], 2100);
+  const other = one({ key: 'lighthouse.offscreen-images' }, { oldLhr, newLhr: extra });
+  assert.notEqual(other.reason, 'deploy', 'a file the original does not load is a different page');
+
+  const heavier = side([image(`${COPY}/site/a_shape3.png`, 40000)], [[`${COPY}/site/a_shape3.png`, 39000]], 2100);
+  assert.notEqual(one({ key: 'lighthouse.offscreen-images' }, { oldLhr, newLhr: heavier }).reason, 'deploy', 'a heavier file is not the original\'s');
+});
+
+test('files the copy loads that the original\'s check did not, but the original loaded when the copy was made: the original changed', () => {
+  // panscience.xyz: Google Analytics and a new build's chunk were added to the original after the check it is compared with.
+  const reqs = (origin, paths) => ({ 'network-requests': { details: { items: paths.map((p) => ({ url: /^https?:/.test(p) ? p : `${origin}${p}`, resourceType: 'Script' })) } } });
+  const unused = (bytes) => ({ 'unused-javascript': { score: 0, details: { overallSavingsBytes: bytes, items: [] } } });
+  const GTAG = 'https://www.googletagmanager.com/gtag/js?id=G-X1';
+  const oldLhr = { mobile: lhr({ ...unused(20000), ...reqs('https://example-original.test', ['/', '/_next/a.js']) }) };
+  const newLhr = { mobile: lhr({ ...unused(90000), ...reqs(COPY, ['/', '/_next/a.js', '/_next/b.js', GTAG]) }) };
+  const row = (capturedUrls) => one({ key: 'lighthouse.unused-javascript' }, { oldLhr, newLhr, capturedUrls });
+
+  const changed = row(['https://www.example-original.test/', 'https://www.example-original.test/_next/a.js', 'https://www.example-original.test/_next/b.js', GTAG]);
+  assert.equal(changed.reason, 'changed');
+  assert.match(changed.evidence, /2 files the original's check did not/);
+  assert.match(changed.evidence, /googletagmanager\.com\/gtag\/js/);
+  assert.match(reasonText('changed'), /changed after it was checked/);
+
+  const ownFile = row(['https://www.example-original.test/_next/b.js', GTAG].slice(1));
+  assert.equal(ownFile.reason, null, 'a file the original did not load while captured is the copy\'s own: still unexplained');
+  assert.equal(ownFile.unexplained, true);
+
+  const noRecord = row([]);
+  assert.equal(noRecord.reason, null, 'no network record: nothing to prove it with');
+  assert.equal(noRecord.unexplained, true);
 });

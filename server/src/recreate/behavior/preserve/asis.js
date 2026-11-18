@@ -113,11 +113,25 @@ export async function liftSite({ captureRoot, pages, siteUrl, outDir, browser, e
     log(`lifted ${page.url} (${lift.files.length} files, ${lift.blockers.length} blockers)`);
   }
   const hosts = await hostsOfRecord(captureRoot, excludedHosts);
+  // The data the original answered while it was captured (a FAQ, a product list read by the page's own script): kept at its
+  // address by the completion, so the copy draws what the original drew. Only GET answers of 200 with JSON (the record keeps
+  // no other method), from the hosts the copy asks.
+  const hostSet = new Set(hosts);
+  const hostOf = (u) => {
+    try {
+      return new URL(u).hostname.replace(/^www\./, '');
+    } catch {
+      return '';
+    }
+  };
+  const recorded = (recordIndex.entries ?? [])
+    .filter((e) => e.kind === 'data' && e.status === 200 && e.sha && /json/i.test(e.type ?? '') && hostSet.has(hostOf(e.url)))
+    .map((e) => ({ url: e.url.split('#')[0], body: path.join(captureRoot, '.network', 'files', e.sha), type: e.type }));
   const files = [...byLocal.values()];
   const entries = pages.map((p) => p.outPath);
   // Before the completion's visits too: a page whose stylesheet is refused lays out unstyled and asks for other files.
   const integrityBefore = await refreshIntegrity(outDir);
-  const done = await completeCopy({ browser, outDir, pageUrl: siteUrl, hosts, files, entries });
+  const done = await completeCopy({ browser, outDir, pageUrl: siteUrl, hosts, files, entries, recorded });
   log(`completed ${entries.length} page(s) in ${done.passes} pass(es), manifest ${Object.keys(done.manifest).length}`);
   // The lift pointed the stylesheets' and scripts' addresses at the copy's files: a hash a page names for one of them is
   // computed again from the file (integrity.js), or the browser refuses it (onfinance.ai's copy was served unstyled).

@@ -197,6 +197,28 @@ test('the largest element is left fading in where it would count as a scroll rev
   assert.deepEqual(planPerf(probe(100), '/').open, []);
 });
 
+test('a heading whose letters a script is still rolling when read is the same element; another text at that place is not', () => {
+  // aakalan: the hero's letters are rolled by a script, read as "Price what gets built.Price what ge63 61₹980"; the markup holds
+  // "Price what gets built." twice (a label for screen readers, then the letters). Same place, same start: shown at once.
+  const chain = (text) => [{ path: [['h1', 0]], tag: 'h1', seen: true, loops: false, moving: false, hoverMoves: false, opacity: '1', transform: 'none', top: 100, text }];
+  const probe = (text) => ({ widths: [375, 1440].map((width) => ({ width, viewportH: 800, lcp: { tag: 'h1', background: false }, lcpChain: chain(text), images: [], scrollers: [] })) });
+  const markup = '<html><head></head><body><h1><span>Price what gets built.</span><span aria-hidden="true">Price what gets built.</span></h1></body></html>';
+  const rolled = load(markup);
+  const done = showLcp(rolled, { path: '/' }, planPerf(probe('Price what gets built.Price what ge63 61₹980'), '/'));
+  assert.equal(done.fixed[0]?.what, 'Main heading now shows at once, no fade-in');
+  assert.match(rolled.html(), /<h1 data-sas-shown="0">/);
+  // A different text at that place (a script put another element there): left as it is, with the reason.
+  const other = load(markup);
+  const kept = showLcp(other, { path: '/' }, planPerf(probe('Book a demo with our team today'), '/'));
+  assert.deepEqual(kept.fixed, []);
+  assert.match(kept.open[0].detail, /the markup does not say which element it is/);
+  // A short reading must agree in full: three letters in common is no proof.
+  const short = load('<html><head></head><body><h1>Pricing</h1></body></html>');
+  assert.deepEqual(showLcp(short, { path: '/' }, planPerf(probe('Pri'), '/')).fixed.length, 1, 'a reading the markup starts with, whole');
+  const shortOther = load('<html><head></head><body><h1>Prime time</h1></body></html>');
+  assert.deepEqual(showLcp(shortOther, { path: '/' }, planPerf(probe('Pricing plans'), '/')).fixed, []);
+});
+
 test('a page whose own CSS reacts to loading="lazy" loses only that fix, with the width it changed at', { timeout: 10 * 60000 }, async (t) => {
   // The site gives lazy images a frame: adding the attribute draws a border far down the page. The largest image is untouched
   // by that rule, so its fix stays.

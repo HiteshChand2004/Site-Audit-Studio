@@ -31,7 +31,7 @@
 //          runtime may look for its <link>)
 // Never: the original's scripts (not minified, deferred, moved or removed), font-display (text would show in another font while
 // the web font loads), a re-encoding with a visible difference, width / height attributes, preconnects.
-import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { access, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
@@ -105,6 +105,15 @@ export function planPerf(probe, pagePath) {
   });
   // Below the first screen at EVERY width, and never the largest element at any.
   const lazy = new Set([...lazyAt[0] ?? []].filter((key) => lazyAt.every((s) => s.has(key)) && !lcp.has(key)));
+  // By address: every image with that address in the built page may load late, at every width. A builder writes one version
+  // of a part per breakpoint and its script removes the others (nyaayai: 7 images with one address in the markup, 3 in the
+  // page), so which markup image survives is unknown; they all fetch one file, so fixImageLoading may make the fix to all.
+  const lcpSrc = new Set([...lcp].map((key) => key.slice(key.indexOf('|') + 1)));
+  const lazySrc = new Set();
+  for (const src of totals.keys()) {
+    if (lcpSrc.has(src)) continue;
+    if (probe.widths.every((w, i) => w.images.filter((im) => im.src === src).every((im) => lazyAt[i].has(`${im.k}|${im.src}`)))) lazySrc.add(src);
+  }
   // Boxes that scroll at ANY width and the keyboard cannot reach (copy/seoA11yAsIs.js fixScrollableRegions): one entry per
   // element, with the widths it scrolls at.
   const scrollers = new Map();
@@ -132,8 +141,32 @@ export function planPerf(probe, pagePath) {
       size.set(key, { natural, points });
     }
   }
-  return { lcp, lazy, totals, open, size, widths: probe.widths.map((w) => w.width), scrollers: [...scrollers.values()], shown: [...shown.values()] };
+  // Pictures that already choose among their own files (srcset): the `sizes` they tell the browser may be far larger than where
+  // they are drawn (a builder's 100vw for a card), so it takes a larger file than it needs. By address, from every image with
+  // that address in the built page: the widest drawn at each window width, never moving, never a lazy-loading library's.
+  const sizesBySrc = new Map();
+  if (drawn) {
+    const at = new Map();
+    for (const [key, points] of Object.entries(drawn)) {
+      const src = key.slice(key.indexOf('|') + 1);
+      const m = at.get(src) ?? new Map();
+      for (const [vw, d] of points) m.set(vw, Math.max(m.get(vw) ?? 0, d || 0));
+      at.set(src, m);
+    }
+    for (const [src, m] of at) {
+      const seen = probe.widths.flatMap((w) => w.images.filter((im) => im.src === src));
+      if (!seen.length || seen.some((x) => !x.chooses || x.moves || x.lazyLib)) continue;
+      const points = [...m].sort((a, b) => a[0] - b[0]);
+      if (points.length >= 2 && points.some(([, d]) => d > 0)) sizesBySrc.set(src, points);
+    }
+  }
+  // Picture addresses the page's own script wrote after load, at any width (perfProbe): they keep their files.
+  const scriptDrawn = new Set(probe.widths.flatMap((w) => w.scriptSrc ?? []));
+  return { lcp, lcpSrc, lazy, lazySrc, totals, open, size, sizesBySrc, widths: probe.widths.map((w) => w.width), scrollers: [...scrollers.values()], shown: [...shown.values()], scriptDrawn };
 }
+
+/** Why a picture the page's own script draws again keeps its file (fixImageSizes, fixPngImages). */
+const scriptDrawnOpen = (page, src) => ({ page: page.path, reason: 'd', detail: `${src} keeps its file: the page's own script draws it again by this address after load, so another file would be downloaded besides it` });
 
 /**
  * A `sizes` value no smaller than the picture is drawn at ANY window width, from its drawn widths at a few: up to the first
@@ -184,16 +217,23 @@ async function variantOf(file, width, dir, made) {
       if (meta.icc) resize = resize.keepIccProfile();
       const resized = await resize.png().toBuffer();
       const webp = await visiblySameWebp(resized);
-      if (!webp.data) result = { skip: webp.skip };
-      else if (webp.data.length > input.length * WEBP_MAX_SHARE) result = { skip: `a ${width} px copy would be ${Math.round((webp.data.length / input.length) * 100)} % of the file` };
+      // No WebP without a visible difference: for a PNG the resized picture itself, kept as a PNG, is exactly the pixels the
+      // browser draws when it shows the file smaller (lossless). Only when the browser takes its colours as they are: a gamma,
+      // colour-profile or animation chunk would be lost in the smaller copy.
+      const png = !webp.data && isPng(file) && !colourChunks(input).length
+        ? await sharp(resized).png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer()
+        : null;
+      const out = webp.data ?? png;
+      if (!out) result = { skip: webp.skip };
+      else if (out.length > input.length * WEBP_MAX_SHARE) result = { skip: `a ${width} px copy would be ${Math.round((out.length / input.length) * 100)} % of the file` };
       else {
-        const name = `${path.basename(file, path.extname(file))}.sas-w${width}-${createHash('sha256').update(webp.data).digest('hex').slice(0, 10)}.webp`;
+        const name = `${path.basename(file, path.extname(file))}.sas-w${width}-${createHash('sha256').update(out).digest('hex').slice(0, 10)}.${png ? 'png' : 'webp'}`;
         const target = path.join(path.dirname(file), name);
         const there = await readFile(target).catch(() => null);
-        if (there && !there.equals(webp.data)) result = { skip: `${name} already exists with other content` };
+        if (there && !there.equals(out)) result = { skip: `${name} already exists with other content` };
         else {
-          if (!there) await writeFile(target, webp.data);
-          result = { name, width, file: path.relative(dir, target).split(path.sep).join('/'), from: input.length, to: webp.data.length, quality: webp.quality };
+          if (!there) await writeFile(target, out);
+          result = { name, width, file: path.relative(dir, target).split(path.sep).join('/'), from: input.length, to: out.length, ...(webp.quality && { quality: webp.quality }), ...(png && { format: 'png' }) };
         }
       }
     }
@@ -215,12 +255,22 @@ async function variantOf(file, width, dir, made) {
 export async function fixImageSizes($, page, dir, plan, made = new Map()) {
   const fixed = [];
   const open = [];
-  if (!plan?.size?.size) return { fixed, open };
+  if (!plan?.size?.size && !plan?.sizesBySrc?.size) return { fixed, open };
   for (const img of staticImages($)) {
-    const info = plan.size.get(img.key);
-    if (!info) continue;
     const a = img.el.attribs;
-    if (a.srcset != null || $(img.el).closest('picture').length) continue;
+    if (plan.scriptDrawn?.has(img.src)) {
+      open.push(scriptDrawnOpen(page, img.src));
+      continue;
+    }
+    if (a.srcset != null) {
+      const r = await fixSizesAttr($, img, page, dir, plan.sizesBySrc?.get(img.src));
+      if (r?.fixed) fixed.push(r.fixed);
+      if (r?.open) open.push(r.open);
+      continue;
+    }
+    const info = plan.size?.get(img.key);
+    if (!info) continue;
+    if ($(img.el).closest('picture').length) continue;
     if (!(plan.totals.get(img.src) ?? []).every((t) => t === img.total)) continue;
     if (!/\.(png|jpe?g|webp)$/i.test(img.src.split(/[?#]/)[0])) continue;
     const file = localFileOf(dir, page.outPath, img.src);
@@ -248,6 +298,39 @@ export async function fixImageSizes($, page, dir, plan, made = new Map()) {
     for (const v of variants) fixed.push({ field: 'img', attr: 'srcset', src: img.src, value: webpAddress(img.src, v.name), file: v.file, width: v.width, bytes: [v.from, v.to], quality: v.quality });
   }
   return { fixed, open };
+}
+
+/** The smallest file of a srcset is reported when it is wider than this share above the widest the picture is drawn. */
+export const SIZES_OPEN_SHARE = 1.15;
+
+/**
+ * A picture that already chooses among its own files gets a `sizes` no smaller than where it is drawn (sizesAttr), so the
+ * browser takes the smallest of ITS files that covers it; files, src and srcset stay as written. Only `w` candidates (a `x`
+ * srcset ignores sizes), never inside <picture>, never `sizes="auto"`, and only when every candidate file is in the copy.
+ */
+async function fixSizesAttr($, img, page, dir, points) {
+  if (!points || $(img.el).closest('picture').length) return null;
+  const a = img.el.attribs;
+  if (/^\s*auto\b/i.test(a.sizes ?? '')) return null;
+  const parts = srcsetParts(a.srcset).filter((p) => p.url);
+  if (!parts.length) return null;
+  const widths = parts.map((p) => p.after.trim().match(/^(\d+)w$/i)?.[1]).map(Number);
+  if (widths.some((w) => !(w > 0))) return null;
+  for (const p of parts) {
+    const file = localFileOf(dir, page.outPath, p.url);
+    if (!file || !(await access(file).then(() => true, () => false))) return null;
+  }
+  const sizes = sizesAttr(points);
+  if (!sizes) return null;
+  const need = largestDrawn(points);
+  const smallest = Math.min(...widths);
+  const open = smallest > need * SIZES_OPEN_SHARE
+    ? { page: page.path, reason: 'd', detail: `${img.src}: the smallest file it offers is ${smallest} px wide, drawn at most ${need} px` }
+    : null;
+  if (a.sizes === sizes) return { open };
+  const from = a.sizes ?? null;
+  a.sizes = sizes;
+  return { fixed: { field: 'img', attr: 'sizes', src: img.src, from, value: sizes }, open };
 }
 
 /** The largest element in plain words, from its tag: what a page owner reads in the report. */
@@ -281,6 +364,15 @@ function startsHidden(style = '') {
 }
 
 const flat = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
+/** How many leading characters two texts share. */
+const sharedStart = (a, b) => {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i;
+};
+/** Characters at the start that, at the same place, make it the same element (a script may still be rolling the rest of its
+ * letters when the probe reads it). */
+export const SAME_START = 20;
 
 /**
  * The largest element shows at once: it and each ancestor the page started hidden or out of place (seen fading or sliding by the
@@ -300,7 +392,10 @@ export function showLcp($, page, plan) {
   const leave = (e, why) => open.push({ page: page.path, field: 'shown', reason: 'd', detail: `${plainPart(e.lcpTag)} still fades in on ${page.path}: ${why}` });
   for (const e of plan.shown) {
     const el = elementAt($, e.path);
-    const sameText = !e.text || flat($(el).text()).startsWith(e.text.slice(0, 40));
+    // The same element at that place: its text starts like the probe's reading. A text a script rolls letter by letter
+    // (aakalan's heading read as "Price what gets built.Price what ge63 61₹980") is still that element when the start agrees.
+    const markup = flat($(el).text());
+    const sameText = !e.text || markup.startsWith(e.text.slice(0, 40)) || sharedStart(markup, flat(e.text)) >= Math.min(SAME_START, flat(e.text).length);
     const hidden = e.seen || (el && startsHidden(el.attribs?.style));
     if (!hidden) continue;
     if (!el || !sameText) { leave(e, `the page's script changes it after load, so the markup does not say which element it is (<${e.tag}>)`); continue; }
@@ -349,10 +444,13 @@ export function fixImageLoading($, page, plan, allow = { lcp: true, lazy: true }
   for (const img of staticImages($)) {
     const live = plan.totals.get(img.src) ?? [];
     const sameCount = plan.widths.every((_, i) => live[i] === img.total);
+    // Fewer images with this address in the built page than in the markup: the page's script removed some. The fix is made by
+    // address (one file), never when a script adds images (then the markup cannot say which one is where).
+    const fewer = !sameCount && plan.widths.every((_, i) => (live[i] ?? 0) <= img.total);
     const a = img.el.attribs;
-    if (plan.lcp.has(img.key)) {
+    if (plan.lcp.has(img.key) || fewer && plan.lcpSrc?.has(img.src)) {
       if (!allow.lcp) continue;
-      if (!sameCount) {
+      if (!sameCount && !fewer) {
         open.push({ page: page.path, reason: 'd', detail: `The largest image (${img.src}) appears ${live.join(' / ')} time(s) in the page as its scripts build it and ${img.total} in its markup: not touched` });
         continue;
       }
@@ -361,13 +459,11 @@ export function fixImageLoading($, page, plan, allow = { lcp: true, lazy: true }
       if (String(a.loading).toLowerCase() === 'lazy') delete a.loading;
       const preload = preloadImage($, img);
       if (was.fetchpriority !== 'high' || was.loading != null && a.loading == null || preload) fixed.push({ field: 'img', src: img.src, from: was, value: { fetchpriority: 'high', loading: a.loading ?? null, ...(preload && { preload: true }) } });
-    } else if (allow.lazy && plan.lazy.has(img.key) && a.loading == null) {
-      if (!sameCount) {
-        lazyOpen.push({ page: page.path, reason: 'd', detail: `${img.src} is left without lazy loading on purpose: a script adds more images with the same address (${live.join(' / ')} in the page, ${img.total} in its markup), so the markup cannot say which one is below the first screen` });
-        continue;
-      }
+    } else if (allow.lazy && a.loading == null && (sameCount ? plan.lazy.has(img.key) : fewer && plan.lazySrc?.has(img.src))) {
       a.loading = 'lazy';
       lazyFixed.push({ field: 'img', src: img.src, value: 'lazy' });
+    } else if (allow.lazy && a.loading == null && !sameCount && plan.lazy.has(img.key)) {
+      lazyOpen.push({ page: page.path, reason: 'd', detail: `${img.src} is left without lazy loading on purpose: the page's script changes how many images use this address (${live.join(' / ')} in the page, ${img.total} in its markup), so the markup cannot say which one is below the first screen` });
     }
   }
   if (allow.lcp) {
@@ -409,20 +505,46 @@ function colourChunks(png) {
 export const WEBP_MAX_PIXELS = 16e6;
 
 /**
- * A lossless WebP of a PNG, or why there is none. Same pixels: both are decoded to RGBA and compared byte for byte.
+ * Two RGBA buffers hold the same picture: every value equal, except that a pixel fully transparent on both sides is the same
+ * whatever colour it hides. The browser draws none of it (measured 2026-11-17: Chrome draws a PNG and the same PNG with other
+ * hidden colours identically, at its own size, enlarged and reduced); lossless WebP clears those colours to save bytes.
+ */
+export function sameVisiblePixels(a, b) {
+  if (a.length !== b.length) return false;
+  if (a.equals(b)) return true;
+  for (let k = 0; k < a.length; k += 4) {
+    if (a[k + 3] === 0 && b[k + 3] === 0) continue;
+    if (a[k] !== b[k] || a[k + 1] !== b[k + 1] || a[k + 2] !== b[k + 2] || a[k + 3] !== b[k + 3]) return false;
+  }
+  return true;
+}
+
+/**
+ * A lossless WebP of a PNG, or why there is none. Same pixels: both are decoded to RGBA and compared (sameVisiblePixels). A
+ * colour profile (iCCP) goes into the WebP and must arrive there byte for byte, so the browser draws both alike; gamma and
+ * chromaticity chunks never go (Chrome draws even an sRGB-valued gAMA + cHRM pair up to 6 levels apart from the same pixels
+ * without them, measured 2026-11-17), nor does an animation.
  * @returns {Promise<{ data: Buffer, from: number } | { skip: string }>}
  */
 export async function losslessWebp(png) {
   if (png.length < 8 || png.toString('latin1', 1, 4) !== 'PNG') return { skip: 'not a PNG' };
   const chunks = colourChunks(png);
-  if (chunks.length) return { skip: `it carries ${chunks.join(', ')} (${chunks.includes('acTL') ? 'animated' : 'colour or gamma the browser applies'})` };
-  const { width = 0, height = 0 } = await sharp(png).metadata();
+  const lost = chunks.filter((c) => c !== 'iCCP');
+  if (lost.length) return { skip: `it carries ${lost.join(', ')} (${lost.includes('acTL') ? 'animated' : 'colour or gamma the browser applies'})` };
+  const profile = chunks.includes('iCCP');
+  const { width = 0, height = 0, icc } = await sharp(png).metadata();
   if (width * height > WEBP_MAX_PIXELS) return { skip: `it is ${width} × ${height} pixels, more than ${WEBP_MAX_PIXELS / 1e6} million` };
-  const data = await sharp(png).webp({ lossless: true, effort: 6 }).toBuffer();
+  let enc = sharp(png);
+  if (profile) enc = enc.keepIccProfile();
+  const data = await enc.webp({ lossless: true, effort: 6 }).toBuffer();
   if (data.length > png.length * WEBP_MAX_SHARE) return { skip: `the lossless WebP would be ${Math.round((data.length / png.length) * 100)} % of it`, size: true };
+  if (profile) {
+    const kept = (await sharp(data).metadata()).icc;
+    if (!icc || !kept || !icc.equals(kept)) return { skip: 'its colour profile would not go into the WebP unchanged' };
+  }
   const rgba = (b) => sharp(b).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const [a, b] = await Promise.all([rgba(png), rgba(data)]);
-  if (a.info.width !== b.info.width || a.info.height !== b.info.height || !a.data.equals(b.data)) return { skip: 'its decoded pixels are not the same' };
+  if (a.info.width !== b.info.width || a.info.height !== b.info.height || !sameVisiblePixels(a.data, b.data)) return { skip: 'its decoded pixels are not the same' };
   return { data, from: png.length };
 }
 
@@ -535,7 +657,7 @@ const webpAddress = (url, name) => url.replace(/[^/]+$/, encodeURIComponent(name
  * that names its type is left as the original has it (the type decides the browser's choice). PNGs in the page's own style
  * attributes and <style> blocks are converted the same way; a shared stylesheet is not touched here (one page cannot prove it).
  */
-export async function fixPngImages($, page, dir, made = new Map()) {
+export async function fixPngImages($, page, dir, made = new Map(), plan = null) {
   const fixed = [];
   const open = [];
   for (const img of staticImages($)) {
@@ -551,6 +673,10 @@ export async function fixPngImages($, page, dir, made = new Map()) {
     }
     const pngSlots = slots.filter((s) => isConvertible(s.url));
     if (!pngSlots.length) continue;
+    if (slots.some((s) => plan?.scriptDrawn?.has(s.url))) {
+      open.push(scriptDrawnOpen(page, img.src));
+      continue;
+    }
     const several = slots.length > 1;
     const leave = (why) => open.push({ page: page.path, reason: 'd', detail: `${img.src}${several ? ' and its other sizes are' : ' is'} not converted to WebP: ${why}` });
     const typed = sources.find((s) => s.attribs.type);
@@ -726,11 +852,15 @@ export async function stylesheetCandidates({ dir, uses, integrity = new Set(), c
   return { candidates, open };
 }
 
-/** A stylesheet larger than this (bytes as written, or gzip) stays a file: written into every page it would cost more than it saves. */
-export const INLINE_MAX_BYTES = 64 * 1024;
-export const INLINE_MAX_GZIP = 16 * 1024;
+/**
+ * A stylesheet larger than this (bytes as written, or gzip) stays a file: written into every page it would cost more than it saves.
+ * Sized so a framework's usual pair of first-paint sheets (own360's Next.js build: 14 KB + 18 KB gzip, ~110 KB as written) both
+ * go into the page: past 16 KB the larger one stayed a file and the first paint still waited for it.
+ */
+export const INLINE_MAX_BYTES = 160 * 1024;
+export const INLINE_MAX_GZIP = 24 * 1024;
 /** At most this much stylesheet text (gzip) is written into one page. */
-export const INLINE_PAGE_GZIP = 24 * 1024;
+export const INLINE_PAGE_GZIP = 40 * 1024;
 
 /** A stylesheet's media that the first paint waits for (none, all, screen). */
 const blocksPaint = (m) => !m || /^\s*(all|screen)\s*$/i.test(m);
@@ -800,4 +930,4 @@ export async function inlineStylesheets($, page, dir, scriptText = (f) => readFi
 }
 
 /** What every fix of C3 is, in the report's words (kept short: the report lists each one). */
-export const PERF_KINDS = ['lcp', 'lazy', 'webp', 'size', 'inline'];
+export const PERF_KINDS = ['lcp', 'lazy', 'webp', 'size', 'tailwind', 'inline'];

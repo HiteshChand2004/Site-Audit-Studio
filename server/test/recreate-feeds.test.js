@@ -98,6 +98,10 @@ test('the pace of an area: steady updates are a timer; too fast, irregular, stop
   assert.match(paceOf([0, 600, 1200, 1800], 9000).reason, /stopped/);
   assert.match(paceOf([0, 100, 1500, 1700, 5000], 5200).reason, /no steady pace/);
   assert.match(paceOf([0, 600], 900).reason, /once or twice/);
+  // One update in two steps (a row leaves, the new one comes ~0.5 s later), every 2 s: the pace is the whole cycle.
+  assert.deepEqual(paceOf([0, 480, 2000, 2480, 4000, 4480, 6000], 6300), { ms: 2000, steps: 2, stepMs: 480 });
+  assert.deepEqual(paceOf([263, 732, 2251, 2730, 4251, 4731, 6246, 6732], 7000), { ms: 2000, steps: 2, stepMs: 480 }, 'as read on a live site');
+  assert.match(paceOf([0, 480, 2000, 2480, 4000], 9000).reason, /stopped/);
   assert.equal(nodeAt({ tag: 'body', path: 'body', children: [{ tag: 'ul', path: 'body>ul:1', children: [] }] }, 'body>ul:1').tag, 'ul');
 });
 

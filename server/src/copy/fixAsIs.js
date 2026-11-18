@@ -43,6 +43,7 @@ import { HEADERS_FILE as CACHE_HEADERS } from '../recreate/behavior/preserve/pac
 import { blocksZoom, fixInvalidLang, isValidLang } from './seoA11yAsIs.js';
 import { MARKUP_PASS, emptyCounts, fixGroup } from './fixRegistry.js';
 import { fixImageLoading, fixImageSizes, fixPngImages, inlineStylesheets } from './perfAsIs.js';
+import { replaceTailwindPlay } from './tailwindAsIs.js';
 import { SECURITY_HEADERS } from './securityHeaders.js';
 import { faithfulHtml, loadFaithful } from './faithfulHtml.js';
 import { bundledTemplate, headOf, syncShellHead, withTemplate } from './bundled.js';
@@ -145,7 +146,7 @@ export function pickTitle(candidates, name, seen, { anyLength = false } = {}) {
  * @returns {Promise<{ pages: object[], files: object, counts: Record<string, number>, open: object[], originals: Map<string, string>, html?: Map<string, string> }>}
  *   originals: outPath → the page's HTML before its fixes (for a revert)
  */
-export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, siteName = null, fetchLlms = null, readDir = null, only = null, perf = null, write = true }) {
+export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, siteName = null, fetchLlms = null, readDir = null, only = null, perf = null, tailwind = null, write = true }) {
   // write: false = no page is written; the fixed HTML of each page (of the `only` pages, when given) is returned as `html`
   // (preserve/stage.js: a page without one group of its fixes, for the "problem gone?" check). Files a fix makes beside the
   // pages (a letter icon, a WebP) are the same bytes the first pass wrote.
@@ -267,9 +268,16 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
         open.push(...size.open.map((o) => ({ kind: 'size', ...o })));
       }
       if (perf?.has(d.outPath) && allow('webp')) {
-        const webp = await fixPngImages($, d, dir, webpMade);
+        const webp = await fixPngImages($, d, dir, webpMade, perf.get(d.outPath));
         for (const f of webp.fixed) fixes.push({ kind: 'webp', ...f });
         open.push(...webp.open.map((o) => ({ kind: 'webp', ...o })));
+      }
+      // Tailwind's in-browser compiler out, the CSS it writes in (copy/tailwindAsIs.js): before the inline pass, which may then
+      // write that stylesheet into the page like any other small one.
+      if (perf?.has(d.outPath) && tailwind && allow('tailwind')) {
+        const tw = replaceTailwindPlay($, d, dir, tailwind);
+        for (const f of tw.fixed) fixes.push({ kind: 'tailwind', ...f });
+        open.push(...tw.open.map((o) => ({ kind: 'tailwind', ...o })));
       }
       if (perf?.has(d.outPath) && allow('inline')) {
         const inline = await inlineStylesheets($, d, dir);

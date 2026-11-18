@@ -68,6 +68,27 @@ export async function waitTextStill(page, { maxMs = TEXT_STILL_MAX_MS, stepMs = 
   return { still: false, waitedMs: Date.now() - started };
 }
 
+/**
+ * Page function: from now on, an animation or transition that ends is finished as soon as it starts, on an element the page
+ * puts in (checked on the next frame, so one waiting out its delay counts too) or on one that starts moving; animations that
+ * never end (loops, spinners) keep running. Nothing already on the page is touched.
+ */
+export function settleNewAnimations() {
+  const finish = (el, subtree) => {
+    for (const a of el?.getAnimations?.({ subtree }) ?? []) {
+      const t = a.effect?.getComputedTiming?.();
+      if (t && Number.isFinite(t.endTime)) { try { a.finish(); } catch { /* a paused one at no time: left */ } }
+    }
+  };
+  const event = (e) => finish(e.target, false);
+  document.addEventListener('animationstart', event, true);
+  document.addEventListener('transitionrun', event, true);
+  new MutationObserver((ms) => {
+    const added = ms.flatMap((m) => [...m.addedNodes].filter((n) => n.nodeType === 1));
+    if (added.length) requestAnimationFrame(() => { for (const n of added) finish(n, true); });
+  }).observe(document.body ?? document.documentElement, { subtree: true, childList: true });
+}
+
 // cache: the job's shared cache of static files (sharedCache.js); a file another context already loaded is not downloaded again.
 async function openPage(browser, url, { timeout = 30000, cache = null } = {}) {
   const context = await browser.newContext({ viewport: VIEWPORT, userAgent: USER_AGENT, ignoreHTTPSErrors: true });
@@ -181,6 +202,10 @@ export async function renderHome(browser, url, { globals = [], cache = null, sca
     // frozen alike. Nothing else is touched: the page is closed after the scan, and the motion checks, the look gate and
     // Lighthouse open their own pages.
     if (freezeForAxe) await freezePage(page).catch(() => null);
+    // The page's timers keep running: a part that changes by itself (a feed adding a row every few seconds) puts in new
+    // elements that fade in while axe scans, and a row caught half-faded reads as low contrast (flexibench: #c9c9c9). From
+    // now on, every animation or transition that ends is finished as it starts; endless ones are left running.
+    if (freezeForAxe) await page.evaluate(settleNewAnimations).catch(() => null);
 
     let axe = null;
     let axeError = null;

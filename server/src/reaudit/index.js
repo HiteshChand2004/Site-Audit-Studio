@@ -699,6 +699,9 @@ export async function explainAsIs({ checklist, project, report, recreateId, reau
       // Both crawls (each page's title, headings, whether its server sent an empty shell): duplicate titles a sign-in gate makes.
       crawls: { original: await readFile(path.join(auditDir(project.id, report.analysisId), 'crawl.json'), 'utf8').then(JSON.parse, () => null), copy: newCrawl },
       ownCode,
+      // Every address the original loaded while the copy was made: a file the copy loads that the original's check did not,
+      // but the original loaded then, means the original changed after it was checked.
+      capturedUrls: [...(record?.entries ?? []), ...(record?.unreproducible ?? [])].map((e) => e?.url).filter(Boolean),
     });
     const byKey = new Map([...worse.items.map((w) => ['regressed', w]), ...worse.open.map((w) => ['open', w])].map(([status, w]) => [`${status} ${w.key}`, w]));
     for (const item of checklist.items) {
