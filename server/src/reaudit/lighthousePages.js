@@ -340,6 +340,28 @@ export function staleOriginal(kept, copyRun, now = Date.now()) {
   return null;
 }
 
+/**
+ * The homepage's scores from the runs both sides made one after the other on this computer (medians when there were extra
+ * runs), per device, in the shape of an analysis' scores ({ performance, accessibility, bestPractices, seo }); null without a
+ * measured homepage. The scores at the top then compare like with like: the Check of the live site was made on another day, on
+ * a computer that may have been faster or slower (gardener: benchmark ~1500 then, 450–950 while the copy was measured).
+ */
+export function pairedHomeScores(comparison) {
+  const home = comparison?.pages?.find((p) => p.path === '/');
+  if (!home) return null;
+  const shape = (s) => ({ performance: s.performance, accessibility: s.accessibility, bestPractices: s['best-practices'], seo: s.seo });
+  const before = {};
+  const after = {};
+  for (const mode of MODES) {
+    const m = home.modes?.[mode];
+    if (!m || m.error || m.original?.performance == null || m.copy?.performance == null) continue;
+    before[mode] = shape(m.original);
+    after[mode] = shape(m.copy);
+  }
+  const devices = Object.keys(before);
+  return devices.length ? { before, after, devices, originalFrom: home.originalFrom ?? 'live' } : null;
+}
+
 export const median = (xs) => {
   const s = xs.filter((x) => typeof x === 'number').sort((a, b) => a - b);
   if (!s.length) return null;

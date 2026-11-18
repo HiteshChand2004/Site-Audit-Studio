@@ -12,7 +12,7 @@ import { runLighthouse } from '../audit/lighthouse/run.js';
 import { db } from '../db/index.js';
 import { auditDir, projectDir } from '../config/paths.js';
 import { startEgressProxy } from '../security/egressProxy.js';
-import { betterThanOriginal, compareLighthousePages, lighthousePageItems, lighthousePagesNote, lighthouseTargets, RUN_TIMEOUT_MS } from './lighthousePages.js';
+import { betterThanOriginal, compareLighthousePages, lighthousePageItems, lighthousePagesNote, lighthouseTargets, pairedHomeScores, RUN_TIMEOUT_MS } from './lighthousePages.js';
 import { repeatNote, repeatOf, repeatSpeedRows, speedCandidates, withMedianAudits } from './speedRepeat.js';
 import { getEmitter } from '../recreate/emit/index.js';
 import { outputPages, outputRoot, reportOutputs, targetStack } from '../recreate/export/fromIr.js';
@@ -373,7 +373,7 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
   } else if (speedRepeat?.error) checklist.speedRepeat = { error: speedRepeat.error };
   if (liftedHome) {
     checklist.lighthouseBefore = { from: 'lifted', devices: Object.keys(liftedHome) };
-    checklist.notes.push(`The original's side of the Lighthouse checks (${Object.keys(liftedHome).map((d) => (d === 'mobile' ? 'phone' : 'computer')).join(' and ')}) is its homepage measured from its own files on this computer, the way the copy is measured; the scores at the top are those of the Check of the live site.`);
+    checklist.notes.push(`The original's side of the Lighthouse checks (${Object.keys(liftedHome).map((d) => (d === 'mobile' ? 'phone' : 'computer')).join(' and ')}) is its homepage measured from its own files on this computer, the way the copy is measured.`);
   }
   if (lighthousePages) {
     // The per-page score rows join the checklist (a "got worse" row per page, mode and category where the copy's median is
@@ -404,6 +404,18 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
       targets: lighthouseTargets(lighthousePages),
       better,
     };
+    // The scores at the top, per device the homepage was measured on: both sides one after the other on this computer. The
+    // Check of the live site (another day, maybe another computer speed) is kept for reference.
+    const paired = pairedHomeScores(lighthousePages);
+    if (paired) {
+      checklist.scoresCheck = checklist.scores;
+      checklist.scores = {
+        before: { ...(checklist.scores?.before ?? {}), ...paired.before },
+        after: { ...(checklist.scores?.after ?? {}), ...paired.after },
+      };
+      checklist.scoresPaired = paired.devices;
+      checklist.notes.unshift(`The scores at the top are the homepage's, the original and the copy measured one after the other on this computer (${paired.devices.map((d) => (d === 'mobile' ? 'phone' : 'computer')).join(' and ')}); the Check of the live site was made on another day and is kept for reference.`);
+    }
   }
   if (isAsIs) await explainAsIs({ checklist, project, report, recreateId, reauditId, origin, outputPageList, speedRepeat });
   // Fix mode (Step 11): what the user approved and the copy changed on purpose (a text colour, a heading's level). The rows of

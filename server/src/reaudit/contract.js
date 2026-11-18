@@ -99,6 +99,10 @@ export function recreateSection(project, audit) {
     version: c.version ?? null,
     summary: c.summary ?? null,
     scores: c.scores ?? null,
+    // The devices whose scores above are the homepage measured on both sides together (reaudit/lighthousePages.js
+    // pairedHomeScores), and the Check of the live site's scores they replaced, kept for reference; null when not paired.
+    scoresPaired: c.scoresPaired ?? null,
+    scoresCheck: c.scoresCheck ?? null,
     metrics: c.metrics ?? null,
     categories: c.categories ?? [],
     items: c.items ?? [],
