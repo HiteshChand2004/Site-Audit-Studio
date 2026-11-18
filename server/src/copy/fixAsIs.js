@@ -268,7 +268,7 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
         open.push(...size.open.map((o) => ({ kind: 'size', ...o })));
       }
       if (perf?.has(d.outPath) && allow('webp')) {
-        const webp = await fixPngImages($, d, dir, webpMade);
+        const webp = await fixPngImages($, d, dir, webpMade, perf.get(d.outPath));
         for (const f of webp.fixed) fixes.push({ kind: 'webp', ...f });
         open.push(...webp.open.map((o) => ({ kind: 'webp', ...o })));
       }

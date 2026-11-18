@@ -5,7 +5,7 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { launchBrowser, renderHome, waitTextStill, TEXT_STILL_MAX_MS } from '../src/audit/render.js';
+import { launchBrowser, renderHome, settleNewAnimations, waitTextStill, TEXT_STILL_MAX_MS } from '../src/audit/render.js';
 
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Pulse</title>
 <style>
@@ -89,6 +89,34 @@ test('axe step: text a script is still fading in is read once it holds still, no
   assert.ok(contrastTargets(loose).some((t) => t.includes('line')), `the scan without the wait should catch the half-faded line: ${contrastTargets(loose)}`);
   const settled = await renderHome(browser, `${url()}fade`);
   assert.ok(!contrastTargets(settled).some((t) => t.includes('line')), `the line is read at full strength: ${contrastTargets(settled)}`);
+});
+
+test('axe step: a row a feed puts in while the scan runs is read shown, not half-faded; a spinner keeps turning', async () => {
+  // flexibench: the hero feed adds a row every 2.4 s whose fade-in axe caught half-way (#c9c9c9 on white). After
+  // settleNewAnimations, a row put in (also one still waiting out its delay) shows at once; an endless animation runs on.
+  const page = await browser.newPage();
+  await page.setContent(`<style>
+    @keyframes row-in { from { opacity: 0 } to { opacity: 1 } }
+    @keyframes spin { to { transform: rotate(360deg) } }
+    .row { color: #595959; animation: row-in 2s ease-out both; }
+    .late { animation-delay: 1s; }
+    .spin { width: 10px; height: 10px; animation: spin 1s linear infinite; }
+  </style><main id="feed"></main>`);
+  await page.evaluate(settleNewAnimations);
+  await page.evaluate(() => {
+    const feed = document.getElementById('feed');
+    feed.insertAdjacentHTML('beforeend', '<p class="row" id="r1">New row</p><p class="row late" id="r2">Later row</p><div class="spin" id="s"></div>');
+  });
+  await page.waitForTimeout(200);
+  const read = await page.evaluate(() => ({
+    r1: getComputedStyle(document.getElementById('r1')).opacity,
+    r2: getComputedStyle(document.getElementById('r2')).opacity,
+    spin: document.getElementById('s').getAnimations().map((a) => a.playState),
+  }));
+  await page.close();
+  assert.equal(read.r1, '1', 'the new row is shown at once');
+  assert.equal(read.r2, '1', 'a row waiting out its delay too');
+  assert.deepEqual(read.spin, ['running'], 'the spinner keeps turning');
 });
 
 test('axe step: text that never holds still is scanned after at most the cap', async () => {

@@ -499,6 +499,35 @@ export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS,
             }
           }).observe(document, { subtree: true, attributes: true, attributeFilter: ['style'] });
         } catch { /* nothing to observe yet: only animation events mark */ }
+        // Picture addresses a script writes after the document was parsed (a runtime drawing the page again from its own
+        // data): a WebP or a smaller copy of such a picture would be downloaded besides the file the script asks for again
+        // (copy/perfAsIs.js leaves it as it is).
+        window.__sasScriptSrc = new Set();
+        let parsed = false;
+        addEventListener('DOMContentLoaded', () => { parsed = true; }, { once: true });
+        const noteImg = (el) => {
+          if (!parsed || !/^(IMG|SOURCE)$/.test(el?.tagName ?? '')) return;
+          const src = el.getAttribute('src');
+          if (src) window.__sasScriptSrc.add(src);
+          for (const c of (el.getAttribute('srcset') ?? '').split(',')) {
+            const u = c.trim().split(/\s+/)[0];
+            if (u) window.__sasScriptSrc.add(u);
+          }
+        };
+        try {
+          new MutationObserver((ms) => {
+            for (const m of ms) {
+              if (m.type === 'attributes') noteImg(m.target);
+              else {
+                for (const n of m.addedNodes) {
+                  if (n.nodeType !== 1) continue;
+                  noteImg(n);
+                  n.querySelectorAll?.('img, source').forEach(noteImg);
+                }
+              }
+            }
+          }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['src', 'srcset'] });
+        } catch { /* nothing to observe: no picture is counted as drawn by a script */ }
       });
       const page = await context.newPage();
       const styles = new Set();
@@ -568,7 +597,7 @@ export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS,
           for (let e = el; e && e !== document.body; e = e.parentElement) path.unshift([e.tagName.toLowerCase(), [...e.parentElement.children].indexOf(e)]);
           scrollers.push({ path, id: el.getAttribute('id'), cls: el.getAttribute('class'), text: (el.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 60) });
         }
-        return { viewportH: window.innerHeight, lcp, images, integrity, scrollers };
+        return { viewportH: window.innerHeight, lcp, images, integrity, scrollers, scriptSrc: [...(window.__sasScriptSrc ?? [])] };
       });
       // The largest element and its ancestors, with what showing them at once would change (copy/perfAsIs.js showLcp).
       const lcpChain = await lcpChainOf(page, width);

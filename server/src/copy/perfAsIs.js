@@ -160,8 +160,13 @@ export function planPerf(probe, pagePath) {
       if (points.length >= 2 && points.some(([, d]) => d > 0)) sizesBySrc.set(src, points);
     }
   }
-  return { lcp, lcpSrc, lazy, lazySrc, totals, open, size, sizesBySrc, widths: probe.widths.map((w) => w.width), scrollers: [...scrollers.values()], shown: [...shown.values()] };
+  // Picture addresses the page's own script wrote after load, at any width (perfProbe): they keep their files.
+  const scriptDrawn = new Set(probe.widths.flatMap((w) => w.scriptSrc ?? []));
+  return { lcp, lcpSrc, lazy, lazySrc, totals, open, size, sizesBySrc, widths: probe.widths.map((w) => w.width), scrollers: [...scrollers.values()], shown: [...shown.values()], scriptDrawn };
 }
+
+/** Why a picture the page's own script draws again keeps its file (fixImageSizes, fixPngImages). */
+const scriptDrawnOpen = (page, src) => ({ page: page.path, reason: 'd', detail: `${src} keeps its file: the page's own script draws it again by this address after load, so another file would be downloaded besides it` });
 
 /**
  * A `sizes` value no smaller than the picture is drawn at ANY window width, from its drawn widths at a few: up to the first
@@ -253,6 +258,10 @@ export async function fixImageSizes($, page, dir, plan, made = new Map()) {
   if (!plan?.size?.size && !plan?.sizesBySrc?.size) return { fixed, open };
   for (const img of staticImages($)) {
     const a = img.el.attribs;
+    if (plan.scriptDrawn?.has(img.src)) {
+      open.push(scriptDrawnOpen(page, img.src));
+      continue;
+    }
     if (a.srcset != null) {
       const r = await fixSizesAttr($, img, page, dir, plan.sizesBySrc?.get(img.src));
       if (r?.fixed) fixed.push(r.fixed);
@@ -636,7 +645,7 @@ const webpAddress = (url, name) => url.replace(/[^/]+$/, encodeURIComponent(name
  * that names its type is left as the original has it (the type decides the browser's choice). PNGs in the page's own style
  * attributes and <style> blocks are converted the same way; a shared stylesheet is not touched here (one page cannot prove it).
  */
-export async function fixPngImages($, page, dir, made = new Map()) {
+export async function fixPngImages($, page, dir, made = new Map(), plan = null) {
   const fixed = [];
   const open = [];
   for (const img of staticImages($)) {
@@ -652,6 +661,10 @@ export async function fixPngImages($, page, dir, made = new Map()) {
     }
     const pngSlots = slots.filter((s) => isConvertible(s.url));
     if (!pngSlots.length) continue;
+    if (slots.some((s) => plan?.scriptDrawn?.has(s.url))) {
+      open.push(scriptDrawnOpen(page, img.src));
+      continue;
+    }
     const several = slots.length > 1;
     const leave = (why) => open.push({ page: page.path, reason: 'd', detail: `${img.src}${several ? ' and its other sizes are' : ' is'} not converted to WebP: ${why}` });
     const typed = sources.find((s) => s.attribs.type);
@@ -827,11 +840,15 @@ export async function stylesheetCandidates({ dir, uses, integrity = new Set(), c
   return { candidates, open };
 }
 
-/** A stylesheet larger than this (bytes as written, or gzip) stays a file: written into every page it would cost more than it saves. */
-export const INLINE_MAX_BYTES = 64 * 1024;
-export const INLINE_MAX_GZIP = 16 * 1024;
+/**
+ * A stylesheet larger than this (bytes as written, or gzip) stays a file: written into every page it would cost more than it saves.
+ * Sized so a framework's usual pair of first-paint sheets (own360's Next.js build: 14 KB + 18 KB gzip, ~110 KB as written) both
+ * go into the page: past 16 KB the larger one stayed a file and the first paint still waited for it.
+ */
+export const INLINE_MAX_BYTES = 160 * 1024;
+export const INLINE_MAX_GZIP = 24 * 1024;
 /** At most this much stylesheet text (gzip) is written into one page. */
-export const INLINE_PAGE_GZIP = 24 * 1024;
+export const INLINE_PAGE_GZIP = 40 * 1024;
 
 /** A stylesheet's media that the first paint waits for (none, all, screen). */
 const blocksPaint = (m) => !m || /^\s*(all|screen)\s*$/i.test(m);
