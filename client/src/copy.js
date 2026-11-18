@@ -548,6 +548,14 @@ export const OUTSIDE = {
   line: (n) => `${n} more ${n === 1 ? 'thing is' : 'things are'} outside what Remastly can change (see “${OUTSIDE.title}” below).`,
 };
 
+/** What a row of the comparison asks for (server copy/gotWorse.js actionOf). */
+export const ACTIONS = {
+  fix: { label: 'Copy can fix', line: 'the copy can still fix', tone: 'bad', explain: 'Nothing outside the copy explains it: the copy should do this. These are what is left to fix.' },
+  kept: { label: 'Kept like the original', line: 'kept like the original', tone: 'neutral', explain: 'The copy keeps this exactly as the original has it, on purpose: changing it would change how the site looks or works.' },
+  deploy: { label: 'Confirm after deploy', line: 'to confirm after deploying', tone: 'neutral', explain: 'Measured on this computer’s preview; only the real host can confirm it. Check again once the copy is online.' },
+  person: { label: 'Needs a person', line: 'need you', tone: 'warn', explain: 'Needs something only you can give: the new site’s address, a backend, or your own words.' },
+};
+
 export const RESULT_STATUS = {
   fixed: { label: 'Fixed', explain: 'This was a problem on the original site and is solved in the copy.', tone: 'ok' },
   improved: { label: 'Better', explain: 'Still not perfect, but better than on the original.', tone: 'ok' },
