@@ -390,7 +390,7 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
     const better = betterThanOriginal(lighthousePages);
     if (better.line) checklist.notes.unshift(better.line);
     checklist.lighthousePages = {
-      pages: lighthousePages.pages.map((p) => ({ path: p.path, originalFrom: p.originalFrom ?? 'live', modes: Object.fromEntries(Object.entries(p.modes).map(([m, v]) => [m, v.error ? { error: v.error } : { original: v.original, copy: v.copy, worse: v.worse, noise: v.noise ?? [], unscored: v.unscored, blankRuns: v.blankRuns, copyMissing: v.copyMissing ?? null, brokenRuns: v.brokenRuns ?? null, originalBlank: v.originalBlank ?? null, runs: v.runs, accepted: v.accepted, extra: v.extra, runScores: v.runScores }])) })),
+      pages: lighthousePages.pages.map((p) => ({ path: p.path, originalFrom: p.originalFrom ?? 'live', modes: Object.fromEntries(Object.entries(p.modes).map(([m, v]) => [m, v.error ? { error: v.error } : { original: v.original, copy: v.copy, worse: v.worse, noise: v.noise ?? [], slower: v.slower ?? [], cpu: v.cpu ?? null, unscored: v.unscored, blankRuns: v.blankRuns, copyMissing: v.copyMissing ?? null, brokenRuns: v.brokenRuns ?? null, originalBlank: v.originalBlank ?? null, runs: v.runs, accepted: v.accepted, extra: v.extra, runScores: v.runScores }])) })),
       worse: lighthousePages.worse,
       unscored: lighthousePages.unscored,
       extraRunPages: lighthousePages.extraRunPages,

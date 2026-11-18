@@ -447,7 +447,15 @@ export function decide(originalRuns, copyRuns) {
   const enough = originalRuns.length >= 1 + EXTRA_RUNS && copyRuns.length >= 1 + EXTRA_RUNS;
   const noise = enough ? lower.filter((c) => original[c] - copy[c] <= Math.max(spreadOf(originalRuns, c), spreadOf(copyRuns, c))
     && runsOverlap(originalRuns, copyRuns, c)) : [];
-  const worse = lower.filter((c) => !noise.includes(c));
+  const lowerBeyondNoise = lower.filter((c) => !noise.includes(c));
+  // The speed score lower while the copy's runs were made on a computer more than BENCHMARK_TOLERANCE slower (medians of the
+  // benchmark index): the gap says how busy the computer was, not how the copy loads. Only the timed category; the others come
+  // from reading the page's code and no computer speed changes them.
+  const bench = (runs) => median(runs.map((r) => r.benchmarkIndex));
+  const cpu = { original: bench(originalRuns), copy: bench(copyRuns) };
+  const slower = lowerBeyondNoise.includes(TIMED_CATEGORY) && cpu.copy < cpu.original && slowerShare(cpu.original, cpu.copy) > BENCHMARK_TOLERANCE
+    ? [TIMED_CATEGORY] : [];
+  const worse = lowerBeyondNoise.filter((c) => !slower.includes(c));
   // The copy's own files that did not load, over its runs (the most any run missed): a defect of the copy as served, reported as
   // its own row whatever the scores (lighthousePageItems), never only as "could not be scored".
   const worstCopy = copyRuns.filter((r) => (r.ownFailures?.count ?? 0) > 0).sort((a, b) => b.ownFailures.count - a.ownFailures.count)[0];
@@ -458,16 +466,21 @@ export function decide(originalRuns, copyRuns) {
   const originalBlank = blankOriginalRuns.length
     ? { runs: blankOriginalRuns.length, of: originalRuns.length, elements: Math.round(median(blankOriginalRuns.map((r) => r.domElements))), copyElements: Math.round(copyDom) }
     : null;
-  return { original, copy, worse, noise, unscored, copyMissing, originalBlank, brokenRuns: { original: originalRuns.filter(broken).length, copy: copyRuns.filter(broken).length }, blankRuns: blankRuns.length, runs: { original: originalRuns.length, copy: copyRuns.length }, accepted: originalRuns.length === 1 && copyRuns.length === 1 ? 'single run' : 'median of runs' };
+  return { original, copy, worse, noise, slower, cpu, unscored, copyMissing, originalBlank, brokenRuns: { original: originalRuns.filter(broken).length, copy: copyRuns.filter(broken).length }, blankRuns: blankRuns.length, runs: { original: originalRuns.length, copy: copyRuns.length }, accepted: originalRuns.length === 1 && copyRuns.length === 1 ? 'single run' : 'median of runs' };
 }
 
 /**
- * Two runs measured under different load: other jobs ran during one and not the same number during the other. Unknown on
+ * Two runs measured under different load: other jobs ran during one and not the same number during the other, or the computer
+ * itself ran more than BENCHMARK_TOLERANCE slower during one (Lighthouse's benchmark index: other work kept it busy). Unknown on
  * either side (a run of the original cached before this was recorded) decides nothing.
  */
 export function unevenLoad(a, b) {
-  return a?.contention != null && b?.contention != null && a.contention.otherJobs !== b.contention.otherJobs;
+  if (a?.contention != null && b?.contention != null && a.contention.otherJobs !== b.contention.otherJobs) return true;
+  return slowerShare(a?.benchmarkIndex, b?.benchmarkIndex) > BENCHMARK_TOLERANCE;
 }
+
+/** How much slower the slower of two benchmark indexes is (0 = the same; 0 when either is unknown). */
+export const slowerShare = (a, b) => (a > 0 && b > 0 ? Math.abs(a - b) / Math.max(a, b) : 0);
 
 /** The most other jobs any of these runs was measured beside; null when none of them recorded it. */
 const mostOthers = (runs) => {
@@ -718,8 +731,19 @@ export function lighthousePageItems(comparison) {
           note: 'The copy\'s median is lower, but by no more than the runs of one side differ among themselves (the larger of the two sides\' highest − lowest run), and the copy\'s best run reaches the original\'s worst: within the noise of measuring on this computer, so not counted as worse. Confirm after deploying.',
         });
       }
+      // Lower speed score while the copy's runs were made on a computer more than 25 % slower: not counted as worse.
+      for (const c of m.slower ?? []) {
+        items.push({
+          key: `lighthouse-score.${mode}.${c}.${p.path}`, category: c, page: p.path,
+          title: `Lighthouse ${CATEGORY_LABEL[c]} score (${MODE_LABEL[mode]}) on ${p.path}`,
+          status: 'changed', statusLabel: 'Measured on a slower computer',
+          before: { status: 'pass', detail: `${m.original[c]} on the original (computer speed ${Math.round(m.cpu.original)})`, score: m.original[c] },
+          after: { status: 'warn', detail: `${m.copy[c]} on the copy (computer speed ${Math.round(m.cpu.copy)}) — ${basis}${load}`, score: m.copy[c] },
+          note: 'The copy was measured while this computer ran more than 25 % slower than for the original, so the lower speed score says how busy the computer was, not how the copy loads. Not counted as worse. Confirm after deploying.',
+        });
+      }
       if (!m.worse.length) {
-        if (!scored.length || m.noise?.length) continue;
+        if (!scored.length || m.noise?.length || m.slower?.length) continue;
         items.push({
           key: `lighthouse-score.${mode}.all.${p.path}`, category: 'performance', page: p.path,
           title: `Lighthouse scores (${MODE_LABEL[mode]}) on ${p.path}: copy not below the original${scored.length < LH_SCORE_CATEGORIES.length ? ' in the categories scored' : ''}`,
@@ -811,7 +835,7 @@ export function betterThanOriginal(comparison) {
         const o = m.original?.[c];
         const k = m.copy?.[c];
         if (o == null || k == null) { pages.push({ path: p.path, status: 'unscored' }); continue; }
-        const status = (m.worse ?? []).includes(c) ? 'fail' : (m.noise ?? []).includes(c) ? 'noise' : k > o ? 'ahead' : 'same';
+        const status = (m.worse ?? []).includes(c) ? 'fail' : (m.noise ?? []).includes(c) || (m.slower ?? []).includes(c) ? 'noise' : k > o ? 'ahead' : 'same';
         pages.push({ path: p.path, status, original: o, copy: k, m });
       }
       if (!pages.length) continue;
