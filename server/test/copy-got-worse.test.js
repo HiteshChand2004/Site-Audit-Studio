@@ -357,3 +357,27 @@ test('Defer offscreen images: the same files the original loads are the host\'s 
   const heavier = side([image(`${COPY}/site/a_shape3.png`, 40000)], [[`${COPY}/site/a_shape3.png`, 39000]], 2100);
   assert.notEqual(one({ key: 'lighthouse.offscreen-images' }, { oldLhr, newLhr: heavier }).reason, 'deploy', 'a heavier file is not the original\'s');
 });
+
+test('files the copy loads that the original\'s check did not, but the original loaded when the copy was made: the original changed', () => {
+  // panscience.xyz: Google Analytics and a new build's chunk were added to the original after the check it is compared with.
+  const reqs = (origin, paths) => ({ 'network-requests': { details: { items: paths.map((p) => ({ url: /^https?:/.test(p) ? p : `${origin}${p}`, resourceType: 'Script' })) } } });
+  const unused = (bytes) => ({ 'unused-javascript': { score: 0, details: { overallSavingsBytes: bytes, items: [] } } });
+  const GTAG = 'https://www.googletagmanager.com/gtag/js?id=G-X1';
+  const oldLhr = { mobile: lhr({ ...unused(20000), ...reqs('https://example-original.test', ['/', '/_next/a.js']) }) };
+  const newLhr = { mobile: lhr({ ...unused(90000), ...reqs(COPY, ['/', '/_next/a.js', '/_next/b.js', GTAG]) }) };
+  const row = (capturedUrls) => one({ key: 'lighthouse.unused-javascript' }, { oldLhr, newLhr, capturedUrls });
+
+  const changed = row(['https://www.example-original.test/', 'https://www.example-original.test/_next/a.js', 'https://www.example-original.test/_next/b.js', GTAG]);
+  assert.equal(changed.reason, 'changed');
+  assert.match(changed.evidence, /2 files the original's check did not/);
+  assert.match(changed.evidence, /googletagmanager\.com\/gtag\/js/);
+  assert.match(reasonText('changed'), /changed after it was checked/);
+
+  const ownFile = row(['https://www.example-original.test/_next/b.js', GTAG].slice(1));
+  assert.equal(ownFile.reason, null, 'a file the original did not load while captured is the copy\'s own: still unexplained');
+  assert.equal(ownFile.unexplained, true);
+
+  const noRecord = row([]);
+  assert.equal(noRecord.reason, null, 'no network record: nothing to prove it with');
+  assert.equal(noRecord.unexplained, true);
+});

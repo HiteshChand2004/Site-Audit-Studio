@@ -58,7 +58,7 @@ const kb = (bytes) => `${Math.round(bytes / 1024)} KB`;
  * @param {object} [o.newAxe]           the copy's
  * @returns {{ items: object[], summary: { total: number, explained: number, unexplained: number, byReason: Record<string, number> } }}
  */
-export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPages = copyPages, oldLhr = {}, newLhr = {}, oldAxe = null, newAxe = null, address = null, revertedPages = [], excludedHosts = [], fixOpen = [], backendPaths = [], questionsByPage = null, liftFailures = [], originalCapture = null, crawls = null, ownCode = null }) {
+export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPages = copyPages, oldLhr = {}, newLhr = {}, oldAxe = null, newAxe = null, address = null, revertedPages = [], excludedHosts = [], fixOpen = [], backendPaths = [], questionsByPage = null, liftFailures = [], originalCapture = null, crawls = null, ownCode = null, capturedUrls = [] }) {
   const site = bareHost(new URL(siteUrl).hostname);
   const copyHost = hostOf(copyOrigin);
   const copied = new Set(copyPages.map(normPath));
@@ -81,7 +81,10 @@ export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPage
   // crawls: { original, copy } = the two crawl.json files (each page's facts), for the duplicate-text rule (gatedDuplicates).
   // ownCode: the copy's script errors by place (copy/ownCodeErrors.js): the line each was thrown at and whether that line is
   // word for word in the original's own pages or scripts.
-  const ctx = { site, copyHost, copied, chosen, oldLhr, newLhr, oldAxe, newAxe, address, revertedPages, excludedHosts, fixOpen, backend, questions, liftFailed, originalCapture, crawls, ownCode };
+  // capturedUrls: every address the original's pages loaded while the copy was made (the capture's network record), so a row
+  // made of files the original itself loads by then is told apart from the copy's own (sinceCheck).
+  const captured = new Set(capturedUrls.map((u) => siteKey(u, { site, copyHost })).filter(Boolean));
+  const ctx = { site, copyHost, copied, chosen, oldLhr, newLhr, oldAxe, newAxe, address, revertedPages, excludedHosts, fixOpen, backend, questions, liftFailed, originalCapture, crawls, ownCode, captured };
   // With a new-site address, structured data the original wrote with its own address is kept as written (copy/fixAsIs.js
   // applyAddress): a structured-data row says so in plain words, whatever else explains it.
   const ldNote = fixOpen.some((o) => o.kind === 'address' && o.field === 'json-ld')
@@ -112,7 +115,7 @@ export const GROUPS = {
   impossible: { code: 'g', label: 'Not possible', text: 'No copy can do this.' },
   noise: { code: 'h', label: 'Run to run difference', text: 'Both sides pass and fail the same checks; one run of a side scored differently, which moved the median.' },
 };
-const REASON_GROUP = { owner: 'needs-info', backend: 'needs-info', third_party: 'own-code', own_code: 'own-code', deploy: 'measurement', look: 'look' };
+const REASON_GROUP = { owner: 'needs-info', backend: 'needs-info', third_party: 'own-code', own_code: 'own-code', deploy: 'measurement', changed: 'measurement', look: 'look' };
 
 /**
  * The groups that are not the tool's to change: such a row is not a "got worse" or "still open" of the copy. It is listed in one
@@ -213,7 +216,7 @@ function explainOne(item, ctx) {
   if (none) return none;
   if (key === 'links.broken-new') return plainNotCopied(byParts(item.links?.new ?? [], (l) => linkPart(l, ctx), 'link'), ctx, 'links');
   if (key === 'lighthouse.errors-in-console') return plainNotCopied(byParts(consoleErrors(ctx.newLhr), (e) => requestPart(e, ctx), 'console error'), ctx, 'prefetch');
-  if (key.startsWith('lighthouse-score.')) return scorePart(item, ctx);
+  if (key.startsWith('lighthouse-score.')) return sinceCheck(scorePart(item, ctx), ctx);
   // The site files and links that name an address: the copy writes them for an address of its own, and without one leaves them
   // out (the original's would list pages the copy does not hold). The same evidence as the "still open" rule, for a row that
   // got worse (the original had the file, the copy has none).
@@ -223,7 +226,7 @@ function explainOne(item, ctx) {
   if (key.startsWith('lighthouse.')) {
     const id = key.slice('lighthouse.'.length);
     const r = lighthousePart(item, id, ctx);
-    return orPlanned(r.unexplained ? imageRow(item, id, ctx) ?? r : r, item);
+    return sinceCheck(orPlanned(r.unexplained ? imageRow(item, id, ctx) ?? r : r, item), ctx);
   }
   if (key === 'axe.color-contrast') return contrastPart(ctx);
   // A hover, reveal or loop lives in the stylesheets: when one of the copy's own did not load, that is why the effect is gone,
@@ -235,7 +238,55 @@ function explainOne(item, ctx) {
       return { reason: null, unexplained: true, group: 'bug', stylesheetFailed: sheets.length, evidence: `${item.after?.detail ?? 'Missing in the copy.'} The copy's stylesheet did not load, so the page was drawn without the rules these effects are made of: ${list}${sheets.length > 3 ? ` and ${sheets.length - 3} more` : ''}. A bug to fix in the copy: make the stylesheet load, then check again.` };
     }
   }
-  return orPlanned(unexplained('No rule of the five reasons applies to this check on the evidence of this run.'), item);
+  return sinceCheck(orPlanned(unexplained('No rule of the five reasons applies to this check on the evidence of this run.'), item), ctx);
+}
+
+/** A request's key on the original site: its host without www (the copy's host read as the site's), path and query. */
+function siteKey(url, { site, copyHost }) {
+  try {
+    const u = new URL(url);
+    if (!/^https?:$/.test(u.protocol)) return null;
+    const host = bareHost(u.hostname);
+    return `${host === copyHost ? site : host}${u.pathname}${u.search}`;
+  } catch {
+    return null;
+  }
+}
+
+const requestUrls = (lhr) => (lhr?.audits?.['network-requests']?.details?.items ?? []).map((q) => q?.url).filter((u) => /^https?:/.test(u ?? ''));
+
+/**
+ * The files the copy loads that the original's check did not, when the original itself loaded every one of them while the
+ * copy was made (the capture's network record): the original changed after its check, or its check saw less of it
+ * (panscience.xyz: Google Analytics, 178 KB, and a new build's chunks, added after the check the copy is compared with).
+ * Null when there are none, when the record or the check's requests are missing, or when any of them is the copy's own.
+ */
+function addedSinceCheck(ctx) {
+  if (!ctx.captured?.size) return null;
+  const devices = ['mobile', 'desktop'];
+  const old = new Set(devices.flatMap((d) => requestUrls(ctx.oldLhr?.[d])).map((u) => siteKey(u, ctx)).filter(Boolean));
+  if (!old.size) return null;
+  const extra = new Map();
+  for (const d of devices) {
+    for (const u of requestUrls(ctx.newLhr?.[d])) {
+      const k = siteKey(u, ctx);
+      if (k && !old.has(k)) extra.set(k, u);
+    }
+  }
+  if (!extra.size || [...extra.keys()].some((k) => !ctx.captured.has(k))) return null;
+  return [...extra.keys()];
+}
+
+/** An unexplained row the original's own change makes: reason `changed` (a measurement against an older original), else as it was. */
+function sinceCheck(r, ctx) {
+  if (!r?.unexplained) return r;
+  const added = addedSinceCheck(ctx);
+  if (!added) return r;
+  const few = added.slice(0, 3).map((k) => k.length > 70 ? `${k.slice(0, 67)}…` : k).join(', ');
+  return {
+    reason: 'changed',
+    evidence: `The copy loads ${added.length} file${added.length === 1 ? '' : 's'} the original's check did not (${few}${added.length > 3 ? `, and ${added.length - 3} more` : ''}), and the original loaded every one of them when the copy was made: it changed after it was checked, or its check saw less of it. Check the site again; the comparison then uses what it loads today.`,
+  };
 }
 
 /** An unexplained row a planned fix will close: said to be owed, with what is to come. */
