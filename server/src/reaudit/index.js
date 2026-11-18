@@ -719,6 +719,15 @@ export async function explainAsIs({ checklist, project, report, recreateId, reau
     for (const item of checklist.items) {
       const w = byKey.get(`${item.status} ${item.key}`);
       if (w) Object.assign(item, { reason: w.reason, reasonEvidence: w.evidence, group: w.group, ...(w.unexplained && { unexplained: true }), ...(w.parts && { reasonParts: w.parts }) });
+      // Proven the same load (same weight, largest element and requests, or the same blocking files): only the timing moved,
+      // so the row is not "got worse" of the copy. It stays listed, as changed, with its evidence.
+      if (w?.proof === 'same-load' && item.status === 'regressed') {
+        Object.assign(item, { status: 'changed', statusLabel: 'Same load, measured slower', wasStatus: 'regressed', proof: 'same-load' });
+        if (checklist.summary) {
+          checklist.summary.regressed = Math.max(0, (checklist.summary.regressed ?? 0) - 1);
+          checklist.summary.changed = (checklist.summary.changed ?? 0) + 1;
+        }
+      }
     }
     checklist.gotWorse = worse.summary;
     // The same for every row still open (failing on both sides): a reason or UNEXPLAINED, and the counts.

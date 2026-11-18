@@ -183,6 +183,30 @@ test('other time rows count only the requests started by the moment they measure
   assert.equal(score(false).reason, null, 'a row kept before the early requests were recorded: every request, as before');
 });
 
+test('proof of the same load: only a time row proven on every device, or a speed score on the same load, carries it', () => {
+  const time = (sel, ms, w, load = LOAD) => lhr({ ...lcp(sel, ms), ...weight(w), ...(load ? requests(load) : {}) });
+  const key = { key: 'lighthouse.largest-contentful-paint-element' };
+  // The same bytes, element and requests, only slower: proven.
+  const same = one(key, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 495000) } });
+  assert.equal(same.proof, 'same-load');
+  // Heavier: no reason and no proof.
+  const heavier = one(key, { oldLhr: { mobile: time('h1', 0, 500000) }, newLhr: { mobile: time('h1', 900, 900000) } });
+  assert.equal(heavier.proof, undefined);
+  // An amount that did not grow is still the host (deploy), but bytes are no proof that only the timing moved.
+  const bytes = (n) => ({ 'unused-javascript': { details: { overallSavingsBytes: n }, score: 0 } });
+  const amount = one({ key: 'lighthouse.unused-javascript' }, { oldLhr: { mobile: lhr(bytes(67000)) }, newLhr: { mobile: lhr(bytes(23000)) } });
+  assert.equal(amount.reason, 'deploy');
+  assert.equal(amount.proof, undefined);
+  // A performance score on the same load: proven; on another load: not.
+  const score = (copyTotal) => one({
+    key: 'lighthouse-score.mobile.performance./', before: { score: 92 }, after: { score: 86 },
+    lighthousePage: { mode: 'mobile', category: 'performance', weight: { original: 500000, copy: 500000 }, lcp: { original: { selector: 'h1' }, copy: { selector: 'h1' } },
+      requests: { original: { total: 16, byType: { Script: 16 } }, copy: { total: copyTotal, byType: { Script: copyTotal } } } },
+  });
+  assert.equal(score(16).proof, 'same-load');
+  assert.equal(score(18).proof, undefined);
+});
+
 test('contrast: the original\'s own colours seen more often is its look (d); a colour the original never failed with is unexplained', () => {
   const axe = (nodes) => ({ violations: [{ id: 'color-contrast', nodes: nodes.map(([target, fg]) => ({ target: [target], html: `<span class="${target}">`, any: [{ data: { fgColor: fg, bgColor: '#ffffff', contrastRatio: 3.16 } }] })) }] });
   const oldAxe = axe([['.chip:nth-child(1)', '#8b90a5'], ['.label', '#8b90a5']]);

@@ -988,6 +988,7 @@ function lighthousePart(item, id, ctx) {
   const rows = [];
   let grew = false;
   let measured = 0;
+  let timed = 0;
   for (const device of ['mobile', 'desktop']) {
     const b = amountOf(ctx.oldLhr[device]?.audits?.[id]);
     const a = amountOf(ctx.newLhr[device]?.audits?.[id]);
@@ -996,6 +997,7 @@ function lighthousePart(item, id, ctx) {
     const limit = (b?.value ?? 0) * (1 + (a.unit === 'element' ? GROWTH.element : GROWTH.other));
     const timeOnly = a.unit === 'ms';
     if (timeOnly) {
+      timed++;
       const times = `${b ? `${Math.round(b.value)} → ` : ''}${Math.round(a.value)} ms`;
       // A time no longer than the original's (within GROWTH.other) needs no proof of the same load: the copy is not slower.
       if (b && a.value <= b.value * (1 + GROWTH.other)) {
@@ -1039,6 +1041,8 @@ function lighthousePart(item, id, ctx) {
   if (grew) return unexplained(`What the check measures grew in the copy (${rows.join('; ')}).`);
   return {
     reason: 'deploy',
+    // Every device measured was a time row, and each one proven (no slower, the same blocking files, or the same load).
+    ...(timed === measured && { proof: 'same-load' }),
     evidence: `What the check measures did not grow in the copy (${rows.join('; ')}); only its score moved, with the simulated load time of the measurement host (this computer, served with a static host's network conditions, HTTP/1.1, no CDN) where the original was measured on its own host. Measure it again after deploying.`,
   };
 }
@@ -1281,6 +1285,7 @@ function scorePart(item, ctx) {
     if (!same.ok) return unexplained(`${drop}: ${same.text}, so the lower score cannot be put down to the host.`);
     return {
       reason: 'deploy',
+      proof: 'same-load',
       evidence: `${drop}: ${same.text}. The same page scored lower from the measurement host (this computer, served with a static host's network conditions, HTTP/1.1, no CDN) than the original from its host; both sides were measured now with the same settings, so the gap is the host's. Measure it again after deploying.`,
     };
   }
