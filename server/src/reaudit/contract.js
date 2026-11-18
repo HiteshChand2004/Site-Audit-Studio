@@ -17,7 +17,7 @@
 import { db } from '../db/index.js';
 import { buildDummyAudit } from '../dummy/audit.js';
 import { targetStack } from '../recreate/export/fromIr.js';
-import { markOutside } from '../copy/gotWorse.js';
+import { markActions, markOutside } from '../copy/gotWorse.js';
 import { reauditJobs } from './jobs.js';
 
 const latestDoneRecreate = db.prepare(`
@@ -73,7 +73,7 @@ export function recreateSection(project, audit) {
 
   const result = JSON.parse(done.result_json);
   // A re-check stored before the "outside" rule is marked when it is read (copy/gotWorse.js markOutside, idempotent).
-  const c = markOutside(result.checklist ?? {});
+  const c = markActions(markOutside(result.checklist ?? {}));
   const staleReasons = [];
   if (result.recreateId !== recreateId) staleReasons.push('recreate');
   if (audit?.analysisId && result.analysisId && audit.analysisId !== result.analysisId) staleReasons.push('analysis');
@@ -115,6 +115,8 @@ export function recreateSection(project, audit) {
     stillOpen: c.stillOpen ?? null,
     // Rows outside what the tool can change: { total, regressed, open, byGroup } (they are not in summary.regressed / .open).
     outside: c.outside ?? null,
+    // { fix, kept, deploy, person }: how many rows ask for each (copy/gotWorse.js markActions).
+    actions: c.actions ?? null,
     // An as-is copy: Lighthouse on every page, both sides, both modes (reaudit/lighthousePages.js), else null.
     lighthousePages: c.lighthousePages ?? null,
     // Motion measured on both sides (4b.8): { pages, reveal, hover, loops, failed, skipped } or null.

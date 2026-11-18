@@ -17,6 +17,7 @@ import { REASONS } from './openItems.js';
 import { errorPlace, placeKey } from './ownCodeErrors.js';
 import { FIELDS, FIXES, KINDS_BY_KEY, fixOf } from './fixRegistry.js';
 import { blockingFilesOf, observedAt, requestsOf } from '../reaudit/lighthousePages.js';
+import { DEPLOY_CHECKS } from '../reaudit/compare/rules.js';
 
 /** How much a measured amount may move before it counts as grown: bytes and times vary run to run, element counts do not. */
 const GROWTH = { element: 0.02, other: 0.1 };
@@ -128,6 +129,51 @@ export function applyReasons(checklist, worse) {
   checklist.gotWorse = worse.summary;
   // The same for every row still open (failing on both sides): a reason or UNEXPLAINED, and the counts.
   checklist.stillOpen = worse.openSummary;
+  return checklist;
+}
+
+/** The four things a row can ask for, in the user's words (the app's copy.js mirrors them). */
+export const ACTIONS = {
+  fix: 'Copy can fix',
+  kept: 'Kept like the original',
+  deploy: 'Confirm after deploy',
+  person: 'Needs a person',
+};
+const ACTION_OF_GROUP = {
+  bug: 'fix', 'missing-fixer': 'fix',
+  look: 'kept', 'own-code': 'kept',
+  measurement: 'deploy', noise: 'deploy',
+  'needs-info': 'person', impossible: 'person',
+};
+
+/**
+ * What a row asks for: 'fix' | 'kept' | 'deploy' | 'person', or null for a row that needs nothing (fixed, improved, passing,
+ * or not measured). By its group when it has one; else by its status: a row still failing with no reason is the copy's to fix,
+ * a figure that varies or a link to check again is confirmed after deploying, a manual row needs a person.
+ */
+export function actionOf(item) {
+  if (['fixed', 'improved', 'pass'].includes(item.status)) return null;
+  if (item.status === 'na') return DEPLOY_CHECKS.has(item.key) ? 'deploy' : null;
+  if (ACTION_OF_GROUP[item.group]) return ACTION_OF_GROUP[item.group];
+  if (item.status === 'regressed' || item.status === 'open') return 'fix';
+  if (item.status === 'changed' || item.status === 'recheck') return 'deploy';
+  if (item.status === 'manual') return 'person';
+  return null;
+}
+
+/**
+ * Puts `action` on every row that asks for something and counts them in `checklist.actions` = { fix, kept, deploy, person }.
+ * Recomputed on every call (idempotent), so a re-check stored before this rule gets it when it is read. Nothing is removed and
+ * no status changes. Returns the checklist.
+ */
+export function markActions(checklist) {
+  if (!checklist?.items) return checklist;
+  const counts = { fix: 0, kept: 0, deploy: 0, person: 0 };
+  for (const item of checklist.items) {
+    const action = actionOf(item);
+    if (action) { item.action = action; counts[action]++; } else delete item.action;
+  }
+  checklist.actions = counts;
   return checklist;
 }
 

@@ -25,7 +25,7 @@ import { NETWORK_FAILURE_REASONS } from '../recreate/behavior/preserve/pageLift.
 import { createNetPolicy, userPolicy } from '../security/netGuard.js';
 import { compareAudits, loadSide } from './compare/index.js';
 import { CATEGORIES } from './compare/rules.js';
-import { applyReasons, explainWorse, markOutside } from '../copy/gotWorse.js';
+import { applyReasons, explainWorse, markActions, markOutside } from '../copy/gotWorse.js';
 import { ownCodeErrors } from '../copy/ownCodeErrors.js';
 import { clickBudgetFor, hoverBudgetFor, hoverFirstFor, jumpTargetsOf, liftedTargets, measureNewMotion, missedHovers, motionItems, motionTimeFor, readOldMotion, useLiftedBefore } from './motion.js';
 
@@ -436,6 +436,9 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
     if (item.status === 'changed' || item.status === 'recheck') item.group = 'measurement';
     else if (item.status === 'manual') item.group = 'needs-info';
   }
+  // One of four things each row asks for (copy/gotWorse.js markActions): what the copy can still fix, what is kept as the
+  // original, what is confirmed after deploying, what needs a person.
+  markActions(checklist);
   return checklist;
 }
 

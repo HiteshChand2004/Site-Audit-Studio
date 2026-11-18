@@ -2,7 +2,7 @@
 // measured, and a row no rule backs is marked unexplained, never given a reason by default, never left out.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyReasons, explainWorse, reasonText } from '../src/copy/gotWorse.js';
+import { actionOf, applyReasons, explainWorse, markActions, reasonText } from '../src/copy/gotWorse.js';
 import { notesEntries } from '../src/recreate/export/notes.js';
 
 const SITE = 'https://www.example-original.test/';
@@ -236,6 +236,32 @@ test('applyReasons: a row proven the same load leaves "got worse" as changed; th
   assert.equal(checklist.gotWorse, worse.summary);
   applyReasons(checklist, worse);
   assert.deepEqual(checklist.summary, { regressed: 2, changed: 2 }, 'a second call moves nothing again');
+});
+
+test('markActions: every row that asks for something gets one of four actions, counted; the rest get none', () => {
+  const rows = [
+    ['a', 'regressed', 'bug', 'fix'],
+    ['b', 'open', undefined, 'fix'],
+    ['c', 'open', 'missing-fixer', 'fix'],
+    ['d', 'regressed', 'look', 'kept'],
+    ['e', 'open', 'own-code', 'kept'],
+    ['f', 'regressed', 'measurement', 'deploy'],
+    ['g', 'changed', undefined, 'deploy'],
+    ['lighthouse.uses-http2', 'na', undefined, 'deploy'],
+    ['h', 'regressed', 'needs-info', 'person'],
+    ['i', 'manual', undefined, 'person'],
+    ['j', 'fixed', undefined, null],
+    ['k', 'pass', undefined, null],
+    ['l', 'na', undefined, null],
+  ].map(([key, status, group, want]) => ({ key, status, ...(group && { group }), want }));
+  for (const r of rows) assert.equal(actionOf(r), r.want, `${r.key} ${r.status} ${r.group ?? ''}`);
+  const checklist = { items: rows.map(({ want, ...r }) => ({ ...r, ...(r.key === 'j' && { action: 'fix' }) })) };
+  markActions(checklist);
+  assert.deepEqual(checklist.actions, { fix: 3, kept: 2, deploy: 3, person: 2 });
+  assert.equal(checklist.items.find((i) => i.key === 'j').action, undefined, 'a stale action is removed');
+  assert.deepEqual(checklist.items.map((i) => i.status), rows.map((r) => r.status), 'no status changes');
+  markActions(checklist);
+  assert.deepEqual(checklist.actions, { fix: 3, kept: 2, deploy: 3, person: 2 }, 'a second call counts the same');
 });
 
 test('contrast: the original\'s own colours seen more often is its look (d); a colour the original never failed with is unexplained', () => {
