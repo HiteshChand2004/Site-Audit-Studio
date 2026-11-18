@@ -346,6 +346,60 @@ function savingsByUrl(lhr, id) {
   return m;
 }
 
+/** The images one side's page requested while it loaded (both devices): file name stem → the largest size seen. */
+function imagesLoaded(lhr) {
+  const m = new Map();
+  for (const device of ['mobile', 'desktop']) {
+    for (const r of lhr?.[device]?.audits?.['network-requests']?.details?.items ?? []) {
+      if (r.resourceType !== 'Image' || typeof r.url !== 'string') continue;
+      const stem = imageStem(r.url);
+      const bytes = Number(r.resourceSize) || Number(r.transferSize) || 0;
+      if (stem) m.set(stem, Math.max(m.get(stem) ?? 0, bytes));
+    }
+  }
+  return m;
+}
+
+/** When one side's last long task started (ms from navigation, the run's own trace), or null. */
+function lastLongTask(lhr) {
+  const starts = (lhr?.audits?.['long-tasks']?.details?.items ?? []).map((t) => Number(t.startTime)).filter(Number.isFinite);
+  return starts.length ? Math.round(Math.max(...starts)) : null;
+}
+
+/**
+ * "Defer offscreen images". Lighthouse names an offscreen image only when its request started before the page's last long
+ * task (offscreen-images.js, filterLanternResults / filterObservedResults), so the very same image, loaded the very same way,
+ * is named on a computer whose main thread runs later. The row is the measurement host's when the original requests every
+ * file it names too, while it loads, at no smaller a size: the copy loads what the original loads, only its long tasks moved.
+ * A file the original does not load, or loads smaller, is a different page: not explained here.
+ */
+function offscreenRow(item, ctx) {
+  const copy = savingsByUrl(ctx.newLhr, 'offscreen-images');
+  if (!copy.size) return null;
+  const original = imagesLoaded(ctx.oldLhr);
+  const copySizes = imagesLoaded(ctx.newLhr);
+  const r = byParts([...copy], ([url]) => {
+    const what = fewUrls([url]);
+    if (/^https?:/.test(url) && hostOf(url) !== ctx.copyHost) return { what, reason: null, evidence: 'not a file of the copy' };
+    const stem = imageStem(url);
+    if (!stem || !original.has(stem)) return { what, reason: null, evidence: 'the original does not request this file while it loads' };
+    const was = original.get(stem);
+    const now = copySizes.get(stem) ?? 0;
+    if (now > was * (1 + SAME_WEIGHT) + 1024) return { what, reason: null, evidence: `the copy loads ${kb(now)} of it against the original's ${kb(was)}` };
+    return { what, reason: 'deploy', evidence: `the original requests this very file (${kb(was)}) while it loads, as the copy does` };
+  }, 'image');
+  if (r.unexplained) return null;
+  const tasks = ['mobile', 'desktop'].map((d) => {
+    const b = lastLongTask(ctx.oldLhr[d]);
+    const a = lastLongTask(ctx.newLhr[d]);
+    return b != null || a != null ? `${d}: last long task at ${b ?? 'none'} → ${a ?? 'none'} ms` : null;
+  }).filter(Boolean);
+  return {
+    ...r,
+    evidence: `${item.after?.detail ?? 'Named in the copy.'} ${r.evidence} Lighthouse names an offscreen image only when it was requested before the page's last long task, which falls later on a busier computer${tasks.length ? ` (${tasks.join('; ')})` : ''}: the measurement host, not the copy. Measure it again after deploying.`,
+  };
+}
+
 /**
  * An image row whose every file only a lossy or resized file could make smaller: { reason: 'look', … }, else null (the row goes
  * on to the planned-fix rule). A file is explained when the copy's fix already made it a lossless WebP, or when the original's
@@ -353,6 +407,7 @@ function savingsByUrl(lhr, id) {
  * the original does. A PNG the fix left needs the fix's own reason for leaving it (fixOpen), else it is not explained.
  */
 function imageRow(item, id, ctx) {
+  if (id === 'offscreen-images') return offscreenRow(item, ctx);
   if (!IMAGE_FILE_AUDITS.has(id)) return null;
   const copy = savingsByUrl(ctx.newLhr, id);
   if (!copy.size) return null;

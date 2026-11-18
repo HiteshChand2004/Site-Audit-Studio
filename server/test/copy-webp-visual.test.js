@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
 import * as cheerio from 'cheerio';
-import { fixPngImages, losslessWebp, visibleDifference, visiblySameWebp, WEBP_MAX_SHARE } from '../src/copy/perfAsIs.js';
+import { fixPngImages, losslessWebp, sameVisiblePixels, visibleDifference, visiblySameWebp, WEBP_MAX_SHARE } from '../src/copy/perfAsIs.js';
 
 /** A smooth photo-like picture (gradients): a JPEG saved at quality 100 is far larger than its WebP needs to be. */
 const smooth = (w, h) => {
@@ -88,4 +88,44 @@ test('fixPngImages: a page\'s JPEG (src and srcset) points at its WebP, the JPEG
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('a pixel fully transparent on both sides is the same whatever colour it hides; any visible value is not', () => {
+  const a = Buffer.from([10, 20, 30, 0, 1, 2, 3, 255]);
+  assert.ok(sameVisiblePixels(a, Buffer.from([0, 0, 0, 0, 1, 2, 3, 255])), 'only a hidden colour differs');
+  assert.ok(!sameVisiblePixels(a, Buffer.from([10, 20, 30, 1, 1, 2, 3, 255])), 'an alpha of 1 is drawn');
+  assert.ok(!sameVisiblePixels(a, Buffer.from([10, 20, 30, 0, 1, 2, 4, 255])), 'a visible pixel changed');
+});
+
+test('lossless WebP: hidden colours under transparent pixels may go; a colour profile goes with it byte for byte', async () => {
+  // Left half fully transparent over random colours (what a background remover leaves), right half an opaque gradient.
+  const w = 240;
+  const h = 160;
+  const px = Buffer.alloc(w * h * 4);
+  let s = 11;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const k = (y * w + x) * 4;
+      if (x < w / 2) {
+        for (let c = 0; c < 3; c++) { s = (s * 1103515245 + 12345) & 0x7fffffff; px[k + c] = s >> 16 & 255; }
+        px[k + 3] = 0;
+      } else {
+        px[k] = Math.round((x / w) * 200); px[k + 1] = Math.round((y / h) * 200); px[k + 2] = 90; px[k + 3] = 255;
+      }
+    }
+  }
+  const png = await sharp(px, { raw: { width: w, height: h, channels: 4 } }).png({ compressionLevel: 0 }).toBuffer();
+  const r = await losslessWebp(png);
+  assert.ok(r.data, `converted: ${r.skip ?? ''}`);
+  const raw = (b) => sharp(b).ensureAlpha().raw().toBuffer();
+  const [a, b] = [await raw(png), await raw(r.data)];
+  assert.ok(!a.equals(b), 'the WebP does not keep the hidden colours: the case this rule is for');
+  assert.ok(sameVisiblePixels(a, b));
+
+  const tagged = await sharp(png).withIccProfile('p3').png({ compressionLevel: 0 }).toBuffer();
+  assert.ok(tagged.includes(Buffer.from('iCCP')), 'the fixture carries a colour profile');
+  const p = await losslessWebp(tagged);
+  assert.ok(p.data, `converted: ${p.skip ?? ''}`);
+  const [from, to] = [(await sharp(tagged).metadata()).icc, (await sharp(p.data).metadata()).icc];
+  assert.ok(from && to && from.equals(to), 'the very same profile in the WebP');
 });

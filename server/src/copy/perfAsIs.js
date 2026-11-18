@@ -484,20 +484,46 @@ function colourChunks(png) {
 export const WEBP_MAX_PIXELS = 16e6;
 
 /**
- * A lossless WebP of a PNG, or why there is none. Same pixels: both are decoded to RGBA and compared byte for byte.
+ * Two RGBA buffers hold the same picture: every value equal, except that a pixel fully transparent on both sides is the same
+ * whatever colour it hides. The browser draws none of it (measured 2026-11-17: Chrome draws a PNG and the same PNG with other
+ * hidden colours identically, at its own size, enlarged and reduced); lossless WebP clears those colours to save bytes.
+ */
+export function sameVisiblePixels(a, b) {
+  if (a.length !== b.length) return false;
+  if (a.equals(b)) return true;
+  for (let k = 0; k < a.length; k += 4) {
+    if (a[k + 3] === 0 && b[k + 3] === 0) continue;
+    if (a[k] !== b[k] || a[k + 1] !== b[k + 1] || a[k + 2] !== b[k + 2] || a[k + 3] !== b[k + 3]) return false;
+  }
+  return true;
+}
+
+/**
+ * A lossless WebP of a PNG, or why there is none. Same pixels: both are decoded to RGBA and compared (sameVisiblePixels). A
+ * colour profile (iCCP) goes into the WebP and must arrive there byte for byte, so the browser draws both alike; gamma and
+ * chromaticity chunks never go (Chrome draws even an sRGB-valued gAMA + cHRM pair up to 6 levels apart from the same pixels
+ * without them, measured 2026-11-17), nor does an animation.
  * @returns {Promise<{ data: Buffer, from: number } | { skip: string }>}
  */
 export async function losslessWebp(png) {
   if (png.length < 8 || png.toString('latin1', 1, 4) !== 'PNG') return { skip: 'not a PNG' };
   const chunks = colourChunks(png);
-  if (chunks.length) return { skip: `it carries ${chunks.join(', ')} (${chunks.includes('acTL') ? 'animated' : 'colour or gamma the browser applies'})` };
-  const { width = 0, height = 0 } = await sharp(png).metadata();
+  const lost = chunks.filter((c) => c !== 'iCCP');
+  if (lost.length) return { skip: `it carries ${lost.join(', ')} (${lost.includes('acTL') ? 'animated' : 'colour or gamma the browser applies'})` };
+  const profile = chunks.includes('iCCP');
+  const { width = 0, height = 0, icc } = await sharp(png).metadata();
   if (width * height > WEBP_MAX_PIXELS) return { skip: `it is ${width} × ${height} pixels, more than ${WEBP_MAX_PIXELS / 1e6} million` };
-  const data = await sharp(png).webp({ lossless: true, effort: 6 }).toBuffer();
+  let enc = sharp(png);
+  if (profile) enc = enc.keepIccProfile();
+  const data = await enc.webp({ lossless: true, effort: 6 }).toBuffer();
   if (data.length > png.length * WEBP_MAX_SHARE) return { skip: `the lossless WebP would be ${Math.round((data.length / png.length) * 100)} % of it`, size: true };
+  if (profile) {
+    const kept = (await sharp(data).metadata()).icc;
+    if (!icc || !kept || !icc.equals(kept)) return { skip: 'its colour profile would not go into the WebP unchanged' };
+  }
   const rgba = (b) => sharp(b).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const [a, b] = await Promise.all([rgba(png), rgba(data)]);
-  if (a.info.width !== b.info.width || a.info.height !== b.info.height || !a.data.equals(b.data)) return { skip: 'its decoded pixels are not the same' };
+  if (a.info.width !== b.info.width || a.info.height !== b.info.height || !sameVisiblePixels(a.data, b.data)) return { skip: 'its decoded pixels are not the same' };
   return { data, from: png.length };
 }
 

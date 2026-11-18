@@ -332,3 +332,28 @@ test('a stylesheet the browser refused: the console row names it, and hover / mo
   assert.match(one({ key: 'motion.hover' }, { newLhr: script }).evidence, /Fix not built yet: Motion is a separate track/);
   assert.match(one({ key: 'motion.hover' }).evidence, /Fix not built yet: Motion is a separate track/, 'with every stylesheet loaded, the effect is still owed');
 });
+
+test('Defer offscreen images: the same files the original loads are the host\'s (its long tasks moved); another file is not explained', () => {
+  const CDN = 'https://cdn.example-original.test/site';
+  const image = (url, bytes) => ({ url, resourceType: 'Image', resourceSize: bytes, transferSize: bytes });
+  const side = (requests, flagged, lastTask) => ({
+    mobile: lhr({
+      'network-requests': { details: { items: requests } },
+      'long-tasks': { details: { items: [{ startTime: 100 }, { startTime: lastTask }] } },
+      'offscreen-images': { details: { overallSavingsBytes: flagged.reduce((n, [, b]) => n + b, 0), items: flagged.map(([url, b]) => ({ url, wastedBytes: b })) } },
+    }),
+  });
+  const oldLhr = side([image(`${CDN}/a_shape3.png`, 10688), image(`${CDN}/a_shape4.png`, 5533)], [], 300);
+  const newLhr = side([image(`${COPY}/site/a_shape3.png`, 10688), image(`${COPY}/site/a_shape4.png`, 5533)], [[`${COPY}/site/a_shape3.png`, 9935], [`${COPY}/site/a_shape4.png`, 5533]], 2100);
+  const host = one({ key: 'lighthouse.offscreen-images' }, { oldLhr, newLhr });
+  assert.equal(host.reason, 'deploy');
+  assert.match(host.evidence, /the original requests this very file \(10 KB\) while it loads, as the copy does/);
+  assert.match(host.evidence, /mobile: last long task at 300 → 2100 ms/);
+
+  const extra = side([image(`${COPY}/site/a_shape3.png`, 10688), image(`${COPY}/site/new.png`, 8000)], [[`${COPY}/site/new.png`, 8000]], 2100);
+  const other = one({ key: 'lighthouse.offscreen-images' }, { oldLhr, newLhr: extra });
+  assert.notEqual(other.reason, 'deploy', 'a file the original does not load is a different page');
+
+  const heavier = side([image(`${COPY}/site/a_shape3.png`, 40000)], [[`${COPY}/site/a_shape3.png`, 39000]], 2100);
+  assert.notEqual(one({ key: 'lighthouse.offscreen-images' }, { oldLhr, newLhr: heavier }).reason, 'deploy', 'a heavier file is not the original\'s');
+});
