@@ -364,6 +364,15 @@ function startsHidden(style = '') {
 }
 
 const flat = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
+/** How many leading characters two texts share. */
+const sharedStart = (a, b) => {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i;
+};
+/** Characters at the start that, at the same place, make it the same element (a script may still be rolling the rest of its
+ * letters when the probe reads it). */
+export const SAME_START = 20;
 
 /**
  * The largest element shows at once: it and each ancestor the page started hidden or out of place (seen fading or sliding by the
@@ -383,7 +392,10 @@ export function showLcp($, page, plan) {
   const leave = (e, why) => open.push({ page: page.path, field: 'shown', reason: 'd', detail: `${plainPart(e.lcpTag)} still fades in on ${page.path}: ${why}` });
   for (const e of plan.shown) {
     const el = elementAt($, e.path);
-    const sameText = !e.text || flat($(el).text()).startsWith(e.text.slice(0, 40));
+    // The same element at that place: its text starts like the probe's reading. A text a script rolls letter by letter
+    // (aakalan's heading read as "Price what gets built.Price what ge63 61₹980") is still that element when the start agrees.
+    const markup = flat($(el).text());
+    const sameText = !e.text || markup.startsWith(e.text.slice(0, 40)) || sharedStart(markup, flat(e.text)) >= Math.min(SAME_START, flat(e.text).length);
     const hidden = e.seen || (el && startsHidden(el.attribs?.style));
     if (!hidden) continue;
     if (!el || !sameText) { leave(e, `the page's script changes it after load, so the markup does not say which element it is (<${e.tag}>)`); continue; }
