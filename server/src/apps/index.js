@@ -57,13 +57,19 @@ export async function appState(projectId) {
   }
   const running = state.status === 'running' ? await appRunning(projectId) : false;
   const set = Object.keys(settingsOf(state));
+  const read = (state.app?.settings ?? []).map((s) => s.name);
+  const missing = read.filter((n) => !set.includes(n));
   const { settings: _sealed, ...shown } = state;
   return {
     ...shown,
     status: state.status === 'running' && !running ? 'stopped' : state.status,
     settingsSet: set,
     // The settings the code reads that have no value yet.
-    missing: (state.app?.settings ?? []).map((s) => s.name).filter((n) => !set.includes(n)),
+    missing,
+    // Settings with a value that the code was not seen reading: often pasted from another project's .env.
+    unused: set.filter((n) => !read.includes(n)),
+    // The missing settings the app named in its last output: why it stopped (e.g. "Missing required configuration: GITHUB_APP_ID").
+    stoppedFor: state.log ? missing.filter((n) => new RegExp(`\\b${n}\\b`).test(state.log)) : [],
   };
 }
 
@@ -114,25 +120,50 @@ export async function chooseRepo(projectId, ghApp, repo) {
 }
 
 /**
- * Adds settings (a pasted .env, or single values); an empty value removes one.
+ * Adds settings (a pasted .env, or single values). A single value "" removes that setting (the card's Remove); a pasted line
+ * with no value is skipped and named back, since "NAME=" in a paste is a value not filled in, not a removal.
  * @param {string} projectId @param {{ text?: string, values?: Record<string, string> }} input
+ * @returns {Promise<{ saved: string[], empty: string[] }>}  what this save stored, and the pasted names it skipped
  */
 export async function setSettings(projectId, { text, values }) {
   const state = await readState(projectId);
   if (state.status === 'empty') throw new AppError('Choose the repository first.');
   const current = settingsOf(state);
-  const incoming = { ...(text ? parseEnvText(text) : {}), ...(values ?? {}) };
+  const pasted = Object.entries(text ? parseEnvText(text) : {});
+  const empty = pasted.filter(([, v]) => v === '').map(([k]) => k);
+  const incoming = { ...Object.fromEntries(pasted.filter(([, v]) => v !== '')), ...(values ?? {}) };
+  const saved = [];
   for (const [k, v] of Object.entries(incoming)) {
     if (!NAME.test(k)) throw new AppError(`"${k}" is not a setting name (letters, digits and _).`);
     if (BOX_SETTINGS.has(k)) continue;
     if (typeof v !== 'string' || Buffer.byteLength(v) > APP_LIMITS.valueBytes) throw new AppError(`The value of ${k} is too long.`);
     if (v === '') delete current[k];
-    else current[k] = v;
+    else {
+      current[k] = v;
+      saved.push(k);
+    }
   }
   if (Object.keys(current).length > APP_LIMITS.settings) throw new AppError(`At most ${APP_LIMITS.settings} settings.`);
   await patchState(projectId, { settings: Object.keys(current).length ? seal(JSON.stringify(current)) : null });
-  return appState(projectId);
+  return { saved, empty };
 }
+
+/**
+ * Settings copied from the old server (apps/oldServer.js): only the names the app's code reads are kept, so another program's
+ * PATH or HOME, or a setting of another app in the same file, never becomes one of this app's settings.
+ * @param {string} projectId @param {Record<string, string>} found  every setting in the file or program read
+ * @returns {Promise<{ saved: string[], empty: string[], left: number }>}  left: how many were not read by the code (names kept back)
+ */
+export async function copySettings(projectId, found) {
+  const read = new Set(((await readState(projectId)).app?.settings ?? []).map((s) => s.name));
+  const own = Object.entries(found).filter(([k]) => read.has(k));
+  // An empty value there is a setting not filled in on the old server either: named back, never a removal here.
+  const { saved } = await setSettings(projectId, { values: Object.fromEntries(own.filter(([, v]) => v !== '')) });
+  return { saved, empty: own.filter(([, v]) => v === '').map(([k]) => k), left: Object.keys(found).length - own.length };
+}
+
+/** The names the app's code reads, for ranking what the old server holds. @param {string} projectId */
+export const settingNames = async (projectId) => ((await readState(projectId)).app?.settings ?? []).map((s) => s.name);
 
 /**
  * Makes the app from the newest code of its branch, in the background (the card follows appState). When a version already

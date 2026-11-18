@@ -202,6 +202,23 @@
   color: var(--accent);
 }
 
+/* One settings file or running program found on the old server, chosen by its radio button. */
+.sourceItem {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  overflow-wrap: anywhere;
+}
+
+/* A setting's value typed in its row: one line to start with, taller when dragged (a private key). */
+.settingValue {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  font-family: var(--font-mono, monospace);
+  resize: vertical;
+}
+
 .found {
   display: block;
   margin-top: 4px;
