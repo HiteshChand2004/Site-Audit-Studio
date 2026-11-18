@@ -35,7 +35,7 @@ export function analysisWarnings(analysis, now = Date.now()) {
   return warnings;
 }
 
-/** Pages besides the homepage (0–300), or 'all' / -1 = every page of the site. */
+/** Pages besides the homepage (0–1499), or 'all' / -1 = every page of the site. */
 export function parseRecreatePages(value) {
   if (value === 'all') return ALL_PAGES;
   const n = Number(value);

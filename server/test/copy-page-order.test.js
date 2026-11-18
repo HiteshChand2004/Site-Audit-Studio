@@ -1,4 +1,4 @@
-// An as-is copy takes up to 300 pages (SAS_COPY_MAX_PAGES can lower it). When a cap cuts the list, the most important pages are
+// An as-is copy takes up to 1500 pages (SAS_COPY_MAX_PAGES can lower it). When a cap cuts the list, the most important pages are
 // kept: the homepage, its header / menu links, its other links, its footer links, then shallower paths; the report names the
 // pages left out. Links carry the part of the page they stand in (audit/extract.js), from the HTML's own landmarks only.
 import { test } from 'node:test';
@@ -65,14 +65,14 @@ test('a Check made before links had a region keeps the homepage links in page or
   assert.deepEqual(byImportance(pages, rankOf).map((u) => new URL(u).pathname), ['/about', '/features', '/privacy', '/zeta']);
 });
 
-test('an as-is copy takes up to 300 pages; a cap keeps the most important ones and records what it left out', (t) => {
+test('an as-is copy takes up to 1500 pages; a cap keeps the most important ones and records what it left out', (t) => {
   withCap(t, null);
-  assert.equal(AS_IS_MAX_PAGES, 300);
+  assert.equal(AS_IS_MAX_PAGES, 1500);
   const project = { url: HOME };
-  const many = Array.from({ length: 400 }, (_, i) => `/p${String(i).padStart(3, '0')}`);
+  const many = Array.from({ length: 1600 }, (_, i) => `/p${String(i).padStart(3, '0')}`);
   const all = asIsPageChoice(project, many);
-  assert.equal(all.pages.length, 300, 'the homepage and 299 more');
-  assert.deepEqual({ ...all.choice, notCopied: all.choice.notCopied.length }, { found: 401, copied: 300, max: 300, notCopied: 101, notCopiedCount: 101 });
+  assert.equal(all.pages.length, 1500, 'the homepage and 1499 more');
+  assert.deepEqual({ ...all.choice, notCopied: all.choice.notCopied.length }, { found: 1601, copied: 1500, max: 1500, notCopied: 101, notCopiedCount: 101 });
 
   const { links } = extractPage(HTML, HOME);
   const rankOf = importanceOf({ homeUrl: HOME, homeLinks: links });

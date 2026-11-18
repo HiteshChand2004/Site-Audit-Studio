@@ -53,7 +53,17 @@ import { PAGE_MB, parallelism } from '../../../audit/resources.js';
 // Pages whose fixes are proved at the same time: a look opens both sides at both widths (4 contexts), so as many pages as the
 // job's memory holds that many for, at most FIX_PAGES_MAX (one by one, 25 pages took about 8 min each: 2026-11-10, predco.ai).
 const FIX_PAGES_MAX = 2;
-const fixPagesAtOnce = () => parallelism({ perUnitMB: PAGE_MB * 4, max: FIX_PAGES_MAX, min: 1 });
+/**
+ * SAS_FIX_PAGES (1–8) fixes it, as SAS_CAPTURE_PAGES does for visiting the pages: for a large server copying large sites. The
+ * memory rule cannot give more than about 3 there, because a job plans with the memory it is counted with (SAS_JOB_MB_RECREATE,
+ * 2500 MB), and each page here takes four contexts.
+ */
+export function fixPagesAtOnce(env = process.env) {
+  const raw = String(env.SAS_FIX_PAGES ?? '').trim();
+  const forced = Number(raw);
+  if (raw !== '' && Number.isInteger(forced) && forced >= 1 && forced <= 8) return forced;
+  return parallelism({ perUnitMB: PAGE_MB * 4, max: FIX_PAGES_MAX, min: 1 });
+}
 
 
 /** The stacks an as-is copy can be packaged into (the plain copy and the three app stacks). */

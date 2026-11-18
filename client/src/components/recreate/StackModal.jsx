@@ -8,7 +8,7 @@ import styles from './StackModal.module.css';
 import form from '../common/Form.module.css';
 
 // Pages besides the homepage when a limit is set; -1 = every page of the site (the default, up to the server's safety cap).
-const MAX_PAGES = 300;
+const MAX_PAGES = 1500;
 const ALL_PAGES = -1;
 const isAll = (v) => v == null || v === ALL_PAGES;
 

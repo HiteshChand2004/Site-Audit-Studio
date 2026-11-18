@@ -12,7 +12,7 @@ import { copyPageCap } from '../../pageCap.js';
 import { byImportance } from '../../pageOrder.js';
 
 /** The most pages one as-is copy takes, the homepage included (SAS_COPY_MAX_PAGES can lower it on a server). */
-export const AS_IS_MAX_PAGES = 300;
+export const AS_IS_MAX_PAGES = 1500;
 
 /** The pages of an as-is copy: addresses of this project's site, the homepage always among them; null when one is not. */
 export function asIsPagesOf(project, given, rankOf = null) {
