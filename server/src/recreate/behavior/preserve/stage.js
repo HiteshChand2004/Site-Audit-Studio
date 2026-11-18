@@ -265,17 +265,24 @@ export function newSiteOf(baseUrl, siteUrl) {
  * A speed fix (lcp, lazy, webp, css) is kept only on a look that is conclusive, not merely one that found no change: no error,
  * at every width the same picture size, no side left unscrolled (a lazy image further down was never pictured), and nothing
  * that differed only sometimes or where the page moves by itself (inNoisePx: such pixels cannot be judged either way).
+ * `speed`: the speed groups the look holds. When the largest-element fix is the only one, such pixels decide only where they lie
+ * on the elements it shows at once (inNoiseTouchedPx): its rule acts on those elements alone and moves nothing else, so an
+ * illustration animating forever beside a heading no longer keeps the heading fading in (testpilot: three pages lost the fix to
+ * 76 332 px of its hero drawing at 375 px). Lazy loading, WebP, sizes and CSS can change any place of a page: for them, and for
+ * a look that did not read the boxes, every such pixel still decides.
  */
-export function proven(g) {
-  return Boolean(g?.invisible) && !g.error && !(g.views ?? []).some((v) => v.widthMismatch || v.scrollCapped || v.inNoisePx > 0);
+const onlyLcp = (speed) => Boolean(speed?.length) && speed.every((x) => x === 'lcp');
+const undecided = (v, speed) => v.inNoisePx > 0 && !(onlyLcp(speed) && v.inNoiseTouchedPx === 0);
+export function proven(g, speed = null) {
+  return Boolean(g?.invisible) && !g.error && !(g.views ?? []).some((v) => v.widthMismatch || v.scrollCapped || undecided(v, speed));
 }
 
 /** A group's fixes, one per kind and field (the open items of a group undone for having no effect). */
 const uniqueFields = (fixes) => [...new Map(fixes.map((f) => [`${f.kind}|${f.field ?? ''}`, f])).values()];
 
 /** Why a look that found no change still does not prove a speed fix (see proven). */
-const whyNotProven = (g) => {
-  const v = (g.views ?? []).find((x) => x.widthMismatch || x.scrollCapped || x.inNoisePx > 0);
+const whyNotProven = (g, speed = null) => {
+  const v = (g.views ?? []).find((x) => x.widthMismatch || x.scrollCapped || undecided(x, speed));
   if (!v) return 'the check could not prove it unchanged';
   return `the check could not prove it unchanged at ${v.width} px (${v.scrollCapped ? 'the page was not scrolled to its end' : v.widthMismatch ? 'the pictures were not the same width' : `${v.inNoisePx} px differed where the page moves by itself`})`;
 };
@@ -561,7 +568,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
           const speedGroups = groups.filter((x) => PERF_KINDS.includes(x));
           const isSpeed = (x) => speedGroups.includes(x);
           const g = await look(p);
-          if (g.invisible && (!speedGroups.length || proven(g))) {
+          if (g.invisible && (!speedGroups.length || proven(g, speedGroups))) {
             if (speedGroups.length) log(`fixes ${p.path}: every fix proven together at the first look (speed fixes included): kept, no look per group`);
             finalLook.set(p.outPath, g);
             return;
@@ -584,9 +591,9 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
               const made = groups.length === 1 ? p.fixes : await makeOnly(p, [group]);
               const k = groups.length === 1 ? g : made?.length ? await look(p, [group]) : notMade(made);
               await revertPage(copyDir, p.outPath, original);
-              const ok = isSpeed(group) ? proven(k) : k.invisible;
+              const ok = isSpeed(group) ? proven(k, [group]) : k.invisible;
               if (ok) kept.push(group);
-              else dropped.push({ group, reason: 'd', why: k.invisible ? whyNotProven(k) : whyNotKept(k) });
+              else dropped.push({ group, reason: 'd', why: k.invisible ? whyNotProven(k, [group]) : whyNotKept(k) });
             }
             if (kept.length) {
               // Fixes invisible alone can still show together (a rule that needs both): one more look at them all, unless they
@@ -594,7 +601,8 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
               const made = await makeOnly(p, kept);
               const same = g.invisible && kept.length === groups.length;
               const t = !made?.length ? notMade(made) : same ? g : await look(p, kept);
-              const ok = t.invisible && (!kept.some(isSpeed) || proven(t));
+              const keptSpeed = kept.filter(isSpeed);
+              const ok = t.invisible && (!keptSpeed.length || proven(t, keptSpeed));
               if (ok) {
                 p.fixes = made;
                 finalLook.set(p.outPath, t);
@@ -602,7 +610,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
                 // No change, but not proven strictly with the speed fixes in: those go, and the markup fixes are judged on their
                 // own by the rule they always had (C1 + C2 unchanged).
                 const markup = kept.filter((x) => !isSpeed(x));
-                dropped.push(...kept.filter(isSpeed).map((group) => ({ group, reason: 'd', why: `not proven together with the other fixes: ${whyNotProven(t)}` })));
+                dropped.push(...kept.filter(isSpeed).map((group) => ({ group, reason: 'd', why: `not proven together with the other fixes: ${whyNotProven(t, keptSpeed)}` })));
                 await revertPage(copyDir, p.outPath, original);
                 const m = await makeOnly(p, markup);
                 const u = m?.length ? await look(p, markup) : notMade(m);
@@ -617,7 +625,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
                 }
               } else {
                 await revertPage(copyDir, p.outPath, original);
-                dropped.push(...kept.map((group) => ({ group, reason: 'd', why: `invisible alone, not together with the other kept fixes: ${t.invisible ? whyNotProven(t) : whyNotKept(t)}` })));
+                dropped.push(...kept.map((group) => ({ group, reason: 'd', why: `invisible alone, not together with the other kept fixes: ${t.invisible ? whyNotProven(t, keptSpeed) : whyNotKept(t)}` })));
                 kept = [];
               }
             }
