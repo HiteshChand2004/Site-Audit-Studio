@@ -9,7 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 import express from 'express';
 import { db, projectDir } from '../src/db/index.js';
-import { checkpointPath, clearFidelity, MAX_AUTO_RESUMES, readCheckpoint } from '../src/recreate/checkpoint.js';
+import { checkpointPath, clearFidelity, idleAutoResumes, MAX_AUTO_RESUMES, openCheckpoint, readCheckpoint, workDone } from '../src/recreate/checkpoint.js';
 import { RecreateError, runRecreate, STAGES } from '../src/recreate/index.js';
 import { autoResume, recreateJobs, resumeInterruptedRecreates } from '../src/recreate/jobs.js';
 import { findResumable, pruneRecreates, recreateDir, tmpDir } from '../src/recreate/workspace.js';
@@ -203,12 +203,13 @@ test('a Recreate interrupted by a server restart continues by itself when the se
     assert.equal(report.resumed[0].pagesReused, 1);
     assert.equal(second.n.captures.length, 2);
     assert.match(db.prepare('SELECT error FROM recreates WHERE id = ?').get(stopped).error, /continues where it stopped/);
-    // At most a few times in a row: work already continued automatically MAX_AUTO_RESUMES times is left to the user.
+    // A few times in a row WITHOUT new work: continued automatically MAX_AUTO_RESUMES times with nothing finished since is
+    // left to the user (a page that crashes the server every time).
     // (Another project: the finished job's cleanup prunes stray workspaces of its own project while this runs.)
     const other = makeProject(2);
     const tired = randomUUID();
     await mkdir(tmpDir(other.id, tired), { recursive: true });
-    await writeFile(checkpointPath(tmpDir(other.id, tired)), JSON.stringify({ ...cp, autoResumes: MAX_AUTO_RESUMES }));
+    await writeFile(checkpointPath(tmpDir(other.id, tired)), JSON.stringify({ ...cp, autoResumes: MAX_AUTO_RESUMES, workAtResume: workDone(cp) }));
     assert.deepEqual(await resumeInterruptedRecreates([{ id: tired, project_id: other.id }]), []);
     // A time-limit stop continues by itself only when that attempt got further.
     await writeFile(checkpointPath(tmpDir(other.id, tired)), JSON.stringify({ ...cp, stopped: { reason: 'time-limit', progressed: false } }));
@@ -216,6 +217,29 @@ test('a Recreate interrupted by a server restart continues by itself when the se
   } finally {
     Object.assign(STAGES, savedStages);
   }
+});
+
+test('restarts continue a copy as often as it makes progress; restarts with no new work stop it', () => {
+  const at = (pages) => ({ discovery: { pages: [{}, {}, {}] }, pages: Object.fromEntries(pages.map((i) => [i, { slug: `p${i}` }])) });
+  const dir = path.join(os.tmpdir(), `sas-resume-${randomUUID()}`);
+  // Many restarts, each after a new finished page: the count never grows, so the copy always continues.
+  let saved = at([0]);
+  for (let n = 1; n <= 10; n++) {
+    saved = openCheckpoint(dir, { recreateId: randomUUID(), saved, auto: true }).data;
+    assert.equal(saved.autoResumes, 1);
+    saved = { ...saved, pages: { ...saved.pages, [n]: { slug: `p${n}` } } };
+    assert.equal(idleAutoResumes(saved), 0, `restart ${n}: progress made, nothing counted`);
+  }
+  // Restarts with no new work in between (a page that crashes the server): counted, and the limit is reached.
+  let stuck = at([0]);
+  for (let n = 1; n <= MAX_AUTO_RESUMES; n++) stuck = openCheckpoint(dir, { recreateId: randomUUID(), saved: stuck, auto: true }).data;
+  assert.equal(idleAutoResumes(stuck), MAX_AUTO_RESUMES);
+  // One more finished page starts the count over.
+  assert.equal(idleAutoResumes({ ...stuck, pages: { ...stuck.pages, 1: { slug: 'p1' } } }), 0);
+  // A manual continue starts it over too.
+  assert.equal(openCheckpoint(dir, { recreateId: randomUUID(), saved: stuck, auto: false }).data.autoResumes, 0);
+  // A checkpoint written before this rule (no workAtResume) is allowed one more automatic continue.
+  assert.equal(idleAutoResumes({ ...at([0]), autoResumes: 2 }), 0);
 });
 
 test('a newer successful recreate removes the kept work; until then retention keeps it', { timeout: TEST_TIMEOUT }, async () => {
