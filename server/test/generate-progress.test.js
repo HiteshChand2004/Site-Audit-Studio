@@ -36,12 +36,34 @@ test('the progress store: a part is used only for the same code and the same lif
   assert.equal(String((await b.page('index.html', 'sig-1')).html), '<html>fixed</html>');
   assert.equal(await b.page('index.html', 'sig-2'), null, 'another lifted page: not reused');
   assert.deepEqual(await b.perf('index.html', 'sig-1'), { lcp: 1 });
-  assert.deepEqual(b.reused, { lift: false, perf: 1, css: false, pages: 1 });
+  assert.deepEqual(b.reused, { lift: false, perf: 1, css: false, pages: 1, carried: 0 });
   const c = await openGenerateProgress(dir, { resuming: true, code: 'release-2' });
   assert.ok(!c.liftDone(['index.html', 'about.html']), 'another release: nothing is reused');
   assert.equal(await c.page('index.html', 'sig-1'), null);
   const fresh = await openGenerateProgress(dir, { resuming: false, code: 'release-2' });
   assert.equal(await fresh.perf('index.html', 'sig-1'), null, 'a job that does not continue another starts empty');
+});
+
+test('a repack carries the earlier copy\'s proven pages, whatever code wrote them, for the same page and fixes only', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sas-progress-carry-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const earlierDir = path.join(root, 'earlier', 'progress');
+  const earlier = await openGenerateProgress(earlierDir, { resuming: false, code: 'release-1' });
+  await earlier.savePage('index.html', 'sig-1', { fixes: [{ kind: 'head' }] }, '<html>fixed</html>');
+  await earlier.savePage('about.html', 'sig-a', { fixes: [{ kind: 'label' }] }, '<html>about</html>');
+  await earlier.savePerf('index.html', 'sig-1', { lcp: 1 });
+  const next = await openGenerateProgress(path.join(root, 'next', 'progress'), { resuming: false, code: 'release-2', carryFrom: earlierDir });
+  const same = await next.page('index.html', 'sig-1');
+  assert.equal(String(same.html), '<html>fixed</html>', 'the same lifted page and fixes under another release: proven already');
+  assert.equal(same.carried, true);
+  assert.equal(await next.page('about.html', 'sig-b'), null, 'today\'s code makes other fixes for it: proved again');
+  assert.equal(await next.perf('index.html', 'sig-1'), null, 'the speed plan is not carried');
+  assert.deepEqual(next.reused, { lift: false, perf: 0, css: false, pages: 1, carried: 1 });
+  await next.savePage('index.html', 'sig-1', { fixes: [] }, '<html>now</html>');
+  assert.equal((await next.page('index.html', 'sig-1')).carried, false, 'proved by this job: no longer the earlier copy\'s');
+  // Nothing to carry from: a fresh job, as before.
+  const fresh = await openGenerateProgress(path.join(root, 'fresh', 'progress'), { resuming: false, code: 'release-2', carryFrom: path.join(root, 'none') });
+  assert.equal(await fresh.page('index.html', 'sig-1'), null);
 });
 
 test('a resumed proof writes back each page as it was finished and looks at none of them again', { timeout: 10 * 60000 }, async (t) => {
