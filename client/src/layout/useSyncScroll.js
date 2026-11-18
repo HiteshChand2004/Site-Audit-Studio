@@ -64,6 +64,13 @@ const asScroller = (x) => (x && typeof x.listen === 'function' ? x : x ? boxScro
 const ECHO = 0.002;
 
 /**
+ * How long the side the person scrolls keeps the lead after its last move. A live frame reports where a write put it a few
+ * frames later, when newer writes have gone out, so its echo no longer matches the last write; inside this window the
+ * follower's reports are ignored instead of being taken for the person and pulling the leader back.
+ */
+const LEAD_MS = 150;
+
+/**
  * While `enabled`, scrolling either side scrolls the other to the same share of its own height, so both show the same part
  * of the page even when they are drawn at different sizes. When turned on (or when a side is replaced or reloads), the
  * second side is aligned to the first.
@@ -77,16 +84,19 @@ export function useSyncScroll(a, b, enabled) {
     if (!enabled || !A || !B) return undefined;
     // What was last written to each side: its own scroll report of that value is not a move of the person.
     const written = new Map();
-    let frame = 0;
+    let leader = null;
+    let ledAt = 0;
     const move = (from, to) => (share) => {
+      const now = performance.now();
+      if (leader && leader !== from && now - ledAt < LEAD_MS) return;
       const mine = written.get(from);
       if (mine != null && Math.abs(share - mine) < ECHO) return;
       written.delete(from);
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        written.set(to, share);
-        to.write(share);
-      });
+      leader = from;
+      ledAt = now;
+      // Written at once: each report already comes at most once a frame.
+      written.set(to, share);
+      to.write(share);
     };
     const align = () => {
       const share = A.read();
@@ -99,7 +109,6 @@ export function useSyncScroll(a, b, enabled) {
     return () => {
       offA();
       offB();
-      cancelAnimationFrame(frame);
     };
   }, [a, b, enabled]);
 }

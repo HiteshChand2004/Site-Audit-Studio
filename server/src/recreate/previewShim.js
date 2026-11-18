@@ -452,13 +452,10 @@ const shim = function () {
     var max = el.scrollHeight - window.innerHeight;
     return max > 0 ? Math.min(1, Math.max(0, el.scrollTop / max)) : 0;
   }
-  var scrollFrame = 0;
+  // Told at once: the browser fires `scroll` at most once a frame already, so waiting for another frame only made the other
+  // side trail by one more.
   window.addEventListener('scroll', function () {
-    if (scrollFrame) return;
-    scrollFrame = requestAnimationFrame(function () {
-      scrollFrame = 0;
-      try { parent.postMessage({ sasPreview: 1, token: TOKEN, scroll: share() }, '*'); } catch (e) { /* nobody listening */ }
-    });
+    try { parent.postMessage({ sasPreview: 1, token: TOKEN, scroll: share() }, '*'); } catch (e) { /* nobody listening */ }
   }, { passive: true });
   window.addEventListener('message', function (e) {
     var d = e.data;
