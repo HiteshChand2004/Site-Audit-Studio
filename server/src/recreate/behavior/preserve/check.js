@@ -366,7 +366,51 @@ export async function fixGate(browser, fixedBase, unfixedBase, pagePath, { width
  * copy/perfAsIs.js can tell it is the same element in the markup.
  */
 function readLcpChain() {
-  const el = window.__sasLcp?.element;
+  // On a fast machine a part that fades in is drawn first at opacity 0 and the browser never names it; Lighthouse's slowed phone
+  // names it once it shows (interlister: the header's "InterLister", 1760 px², here; with the CPU 4x slower, the hero's faded-in
+  // line, 4288 px², at 1.6 s). So the text block or picture inside a part seen fading or sliding in (window.__sasHidAll) that, now
+  // fully shown, covers more of the first screen than the browser's own choice, is taken instead.
+  const faded = () => {
+    const vw = innerWidth;
+    const vh = innerHeight;
+    const area = (r) => Math.max(0, Math.min(r.right, vw) - Math.max(r.left, 0)) * Math.max(0, Math.min(r.bottom, vh) - Math.max(r.top, 0));
+    const shown = (n) => {
+      for (let e = n; e && e !== document.documentElement; e = e.parentElement) {
+        const s = getComputedStyle(e);
+        if (Number(s.opacity) < 1 || s.visibility !== 'visible') return false;
+      }
+      return true;
+    };
+    // A text belongs to its nearest ancestor that is not inline, as the browser counts it.
+    const blockOf = (t) => {
+      let e = t.parentElement;
+      while (e && e !== document.body && /^(inline|contents)$/.test(getComputedStyle(e).display)) e = e.parentElement;
+      return e;
+    };
+    const sizes = new Map();
+    const seenText = new Set();
+    for (const m of window.__sasHidAll ?? []) {
+      if (!m.isConnected || !document.body?.contains(m)) continue;
+      for (const p of [m, ...m.querySelectorAll('img, video, svg')]) {
+        if (/^(img|video|svg)$/i.test(p.tagName)) sizes.set(p, area(p.getBoundingClientRect()));
+      }
+      const walk = document.createTreeWalker(m, NodeFilter.SHOW_TEXT);
+      for (let t = walk.nextNode(); t; t = walk.nextNode()) {
+        if (seenText.has(t) || !t.textContent.trim()) continue;
+        seenText.add(t);
+        const b = blockOf(t);
+        if (!b || b === document.body) continue;
+        const r = document.createRange();
+        r.selectNodeContents(t);
+        sizes.set(b, (sizes.get(b) ?? 0) + area(r.getBoundingClientRect()));
+      }
+    }
+    let best = null;
+    let most = window.__sasLcp?.size ?? 0;
+    for (const [n, a] of sizes) if (a > most && shown(n)) { best = n; most = a; }
+    return best;
+  };
+  const el = faded() ?? window.__sasLcp?.element;
   if (!el?.isConnected || !document.body?.contains(el) || el === document.body) return [];
   const pathOf = (node) => {
     const p = [];
@@ -497,7 +541,9 @@ export async function perfProbe(browser, base, pagePath, { widths = GATE_WIDTHS,
         // Elements seen hidden or moving while the page loads (copy/perfAsIs.js shows the largest one at once): a CSS animation
         // or a transition of how it shows started on it, or a script wrote an opacity below 1 or a transform into its style.
         window.__sasHid = new WeakSet();
-        const mark = (n) => { if (n?.nodeType === 1) window.__sasHid.add(n); };
+        // The same elements in a list, so readLcpChain can look through them (a WeakSet cannot be walked).
+        window.__sasHidAll = [];
+        const mark = (n) => { if (n?.nodeType === 1 && !window.__sasHid.has(n)) { window.__sasHid.add(n); window.__sasHidAll.push(n); } };
         // Only an animation that fades or moves it (its keyframes name opacity or a transform): a colour animation hides nothing.
         const SHOWS = ['opacity', 'transform', 'translate', 'scale', 'rotate'];
         addEventListener('animationstart', (e) => {
