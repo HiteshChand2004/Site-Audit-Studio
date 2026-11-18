@@ -12,7 +12,12 @@
 //   GET    /api/projects/:id/app       the card: GitHub, the repository, what the app needs, its state
 //   POST   /api/projects/:id/app/repo { installationId, fullName, branch, folder? }   choose the repository (read now, nothing
 //                                       runs); folder: where the app is in it, when it holds several
-//   PUT    /api/projects/:id/app/settings { text?, values? }   the settings (a pasted .env, or single values; "" removes one)
+//   PUT    /api/projects/:id/app/settings { text?, values? }   the settings (a pasted .env, or single values; "" removes one);
+//                                       answers the card with saved: { saved, empty } (empty: pasted lines with no value, skipped)
+//   POST   /api/projects/:id/app/old-server/find { host, port?, username, password | privateKey [, passphrase] }
+//                                       sign in to the old server over SSH: its settings files and running apps, names only
+//   POST   /api/projects/:id/app/old-server/copy { …the same login, source: { kind: 'file', path } | { kind: 'program', pid } }
+//                                       copy that source's settings the code reads; answers the card with saved: { saved, empty, left }
 //   POST   /api/projects/:id/app/start   make (or update to the newest code) the app (202; GET follows it)
 //   POST   /api/projects/:id/app/use     send "Logins and data" to the app: its paths, and every address the copy has no file for
 //   DELETE /api/projects/:id/app         remove the app, its files and settings
@@ -29,7 +34,9 @@ import { boxState } from '../boxes/index.js';
 import { dockerAvailable } from '../boxes/docker.js';
 import { boxSetup } from '../boxes/setup.js';
 import { appManifest, authorizeUrl, convertManifest, githubConfig, GitHubError, installationsOf, installUrl, repositoriesOf } from '../apps/github.js';
-import { AppError, appState, chooseRepo, deleteApp, hasApp, setSettings, startApp } from '../apps/index.js';
+import { AppError, appState, chooseRepo, copySettings, deleteApp, hasApp, setSettings, settingNames, startApp } from '../apps/index.js';
+import { findSettings, loginOf, OldServerError, readSettings } from '../apps/oldServer.js';
+import { parseEnvText } from '../apps/detect.js';
 
 const selectProject = db.prepare('SELECT * FROM projects WHERE id = ?');
 
@@ -215,6 +222,12 @@ function appFailure(res, err) {
   throw err;
 }
 
+/** A failure reading the old server, said as the card shows it. @param {any} res @param {unknown} err */
+function oldServerFailure(res, err) {
+  if (err instanceof OldServerError || err instanceof AppError) return res.status(409).json({ error: err.message });
+  throw err;
+}
+
 /** @param {any} req @param {any} res */
 const projectOf = (req, res) => {
   const project = /** @type {any} */ (selectProject.get(req.params.id));
@@ -258,12 +271,39 @@ appsRouter.put('/:id/app/settings', async (req, res) => {
   if (!project) return;
   const values = req.body?.values && typeof req.body.values === 'object' ? req.body.values : undefined;
   const text = typeof req.body?.text === 'string' ? req.body.text : undefined;
+  let saved;
   try {
-    await setSettings(project.id, { text, values });
+    saved = await setSettings(project.id, { text, values });
   } catch (err) {
     return appFailure(res, err);
   }
-  res.json(await appCard(project, req));
+  res.json({ ...(await appCard(project, req)), saved });
+});
+
+// "Copy settings from the old server": the login comes with each ask and is used for that one SSH visit only, never kept.
+appsRouter.post('/:id/app/old-server/find', async (req, res) => {
+  const project = projectOf(req, res);
+  if (!project) return;
+  try {
+    const wanted = await settingNames(project.id);
+    if (!wanted.length) return res.status(409).json({ error: 'Choose the repository first, so Remastly knows which settings the app reads.' });
+    res.json(await findSettings(loginOf(req.body), wanted));
+  } catch (err) {
+    oldServerFailure(res, err);
+  }
+});
+
+appsRouter.post('/:id/app/old-server/copy', async (req, res) => {
+  const project = projectOf(req, res);
+  if (!project) return;
+  let saved;
+  try {
+    if (!(await settingNames(project.id)).length) return res.status(409).json({ error: 'Choose the repository first, so Remastly knows which settings the app reads.' });
+    saved = await copySettings(project.id, await readSettings(loginOf(req.body), req.body?.source, parseEnvText));
+  } catch (err) {
+    return oldServerFailure(res, err);
+  }
+  res.json({ ...(await appCard(project, req)), saved });
 });
 
 appsRouter.post('/:id/app/start', async (req, res) => {

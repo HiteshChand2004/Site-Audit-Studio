@@ -6,7 +6,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createVerify, generateKeyPairSync } from 'node:crypto';
-import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
@@ -260,6 +260,18 @@ test('the routes: GitHub set up once by the owner, connected per person in their
   assert.ok(!JSON.stringify(r.body).includes('very-secret-value'), 'a value never comes back');
   r = await call('PUT', `/projects/${project.id}/app/settings`, { body: { values: { GITHUB_CLIENT_ID: '' } }, ...riya });
   assert.deepEqual(r.body.app.settingsSet, ['GITHUB_CLIENT_SECRET']);
+  // A pasted line with nothing after "=" is a value not filled in: skipped and named back, never a removal.
+  r = await call('PUT', `/projects/${project.id}/app/settings`, { body: { text: 'GITHUB_CLIENT_SECRET=\nRAZORPAY_KEY_ID=rzp', values: { SESSION_KEY: 's1' } }, ...riya });
+  assert.deepEqual(r.body.saved, { saved: ['RAZORPAY_KEY_ID', 'SESSION_KEY'], empty: ['GITHUB_CLIENT_SECRET'] });
+  assert.deepEqual(r.body.app.settingsSet, ['GITHUB_CLIENT_SECRET', 'RAZORPAY_KEY_ID', 'SESSION_KEY'], 'the empty line removed nothing');
+  assert.deepEqual(r.body.app.unused, ['RAZORPAY_KEY_ID'], 'a setting the code never reads is named');
+  // The app's last output naming a missing setting says why it stopped.
+  const stateFile = path.join(process.env.SAS_DATA_DIR, 'projects', project.id, 'app', 'state.json');
+  const kept = JSON.parse(await readFile(stateFile, 'utf8'));
+  await writeFile(stateFile, JSON.stringify({ ...kept, status: 'failed', log: 'Error: Missing required configuration: DATABASE_URL\n  at start' }));
+  r = await call('GET', `/projects/${project.id}/app`, riya);
+  assert.deepEqual(r.body.app.stoppedFor, ['DATABASE_URL']);
+  await writeFile(stateFile, JSON.stringify(kept));
   // Nothing of the download stays behind.
   assert.deepEqual(await readdir(path.join(process.env.SAS_DATA_DIR, 'projects', project.id, 'app')), ['state.json']);
   assert.equal((await call('DELETE', `/projects/${project.id}/app`, riya)).body.app.status, 'empty');
