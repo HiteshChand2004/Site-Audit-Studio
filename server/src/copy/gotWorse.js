@@ -105,6 +105,32 @@ export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPage
  * Why a row stays, in the plan's seven groups (one per row, always): what the copy's tool could do about it. A row none of the
  * rules explains and that no planned fix covers is "bug": it should not happen, and a test fails on it.
  */
+/**
+ * Puts explainWorse's reasons on the checklist's rows (never in their place) and takes a row proven the same load out of
+ * "got worse": status changed, "Same load, measured slower", wasStatus regressed, summary moved. Changes `checklist` in place;
+ * a second call changes nothing more (a row already moved is no longer "regressed", so it matches no reason).
+ */
+export function applyReasons(checklist, worse) {
+  const byKey = new Map([...worse.items.map((w) => ['regressed', w]), ...worse.open.map((w) => ['open', w])].map(([status, w]) => [`${status} ${w.key}`, w]));
+  for (const item of checklist.items) {
+    const w = byKey.get(`${item.status} ${item.key}`);
+    if (w) Object.assign(item, { reason: w.reason, reasonEvidence: w.evidence, group: w.group, ...(w.unexplained && { unexplained: true }), ...(w.parts && { reasonParts: w.parts }) });
+    // Proven the same load (same weight, largest element and requests, or the same blocking files): only the timing moved,
+    // so the row is not "got worse" of the copy. It stays listed, as changed, with its evidence.
+    if (w?.proof === 'same-load' && item.status === 'regressed') {
+      Object.assign(item, { status: 'changed', statusLabel: 'Same load, measured slower', wasStatus: 'regressed', proof: 'same-load' });
+      if (checklist.summary) {
+        checklist.summary.regressed = Math.max(0, (checklist.summary.regressed ?? 0) - 1);
+        checklist.summary.changed = (checklist.summary.changed ?? 0) + 1;
+      }
+    }
+  }
+  checklist.gotWorse = worse.summary;
+  // The same for every row still open (failing on both sides): a reason or UNEXPLAINED, and the counts.
+  checklist.stillOpen = worse.openSummary;
+  return checklist;
+}
+
 export const GROUPS = {
   bug: { code: 'a', label: 'Our bug', text: 'Nothing explains this and no fix is planned for it: it should not happen. Please report it.' },
   'missing-fixer': { code: 'b', label: 'Fix not built yet', text: 'This can be fixed without changing the look; the tool does not do it yet.' },

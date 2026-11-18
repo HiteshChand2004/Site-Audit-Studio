@@ -2,7 +2,7 @@
 // measured, and a row no rule backs is marked unexplained, never given a reason by default, never left out.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { explainWorse, reasonText } from '../src/copy/gotWorse.js';
+import { applyReasons, explainWorse, reasonText } from '../src/copy/gotWorse.js';
 import { notesEntries } from '../src/recreate/export/notes.js';
 
 const SITE = 'https://www.example-original.test/';
@@ -205,6 +205,37 @@ test('proof of the same load: only a time row proven on every device, or a speed
   });
   assert.equal(score(16).proof, 'same-load');
   assert.equal(score(18).proof, undefined);
+});
+
+test('applyReasons: a row proven the same load leaves "got worse" as changed; the others keep their status; a second call changes nothing', () => {
+  const unused = (js, css) => ({
+    'unused-javascript': { details: { overallSavingsBytes: js }, score: 0 },
+    'unused-css-rules': { details: { overallSavingsBytes: css }, score: 0 },
+  });
+  const oldLhr = { mobile: lhr({ ...lcp('h1.hero', 0), ...weight(500000), ...requests(LOAD), ...unused(20000, 67000) }) };
+  const newLhr = { mobile: lhr({ ...lcp('h1.hero', 650), ...weight(495000), ...requests(LOAD), ...unused(90000, 23000) }) };
+  const rows = () => [
+    { key: 'lighthouse.largest-contentful-paint-element', status: 'regressed', title: 'LCP' },
+    { key: 'lighthouse.unused-javascript', status: 'regressed', title: 'Unused JS' },
+    { key: 'lighthouse.unused-css-rules', status: 'regressed', title: 'Unused CSS' },
+  ];
+  const checklist = { items: rows(), summary: { regressed: 3, changed: 1 } };
+  const worse = explainWorse({ ...base, oldLhr, newLhr, items: rows() });
+  applyReasons(checklist, worse);
+  const [time, grew, amount] = checklist.items;
+  assert.equal(time.status, 'changed', 'the same bytes, element and requests: only the timing moved');
+  assert.equal(time.statusLabel, 'Same load, measured slower');
+  assert.equal(time.wasStatus, 'regressed');
+  assert.equal(time.group, 'measurement');
+  assert.match(time.reasonEvidence, /0 → 650 ms/);
+  assert.equal(grew.status, 'regressed', 'what it measures grew: still got worse');
+  assert.equal(grew.unexplained, true);
+  assert.equal(amount.status, 'regressed', 'an amount that did not grow is the host, but no proof that only timing moved');
+  assert.equal(amount.reason, 'deploy');
+  assert.deepEqual(checklist.summary, { regressed: 2, changed: 2 });
+  assert.equal(checklist.gotWorse, worse.summary);
+  applyReasons(checklist, worse);
+  assert.deepEqual(checklist.summary, { regressed: 2, changed: 2 }, 'a second call moves nothing again');
 });
 
 test('contrast: the original\'s own colours seen more often is its look (d); a colour the original never failed with is unexplained', () => {

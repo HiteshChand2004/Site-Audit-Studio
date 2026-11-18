@@ -25,7 +25,7 @@ import { NETWORK_FAILURE_REASONS } from '../recreate/behavior/preserve/pageLift.
 import { createNetPolicy, userPolicy } from '../security/netGuard.js';
 import { compareAudits, loadSide } from './compare/index.js';
 import { CATEGORIES } from './compare/rules.js';
-import { explainWorse, markOutside } from '../copy/gotWorse.js';
+import { applyReasons, explainWorse, markOutside } from '../copy/gotWorse.js';
 import { ownCodeErrors } from '../copy/ownCodeErrors.js';
 import { clickBudgetFor, hoverBudgetFor, hoverFirstFor, jumpTargetsOf, liftedTargets, measureNewMotion, missedHovers, motionItems, motionTimeFor, readOldMotion, useLiftedBefore } from './motion.js';
 
@@ -715,23 +715,8 @@ export async function explainAsIs({ checklist, project, report, recreateId, reau
       // but the original loaded then, means the original changed after it was checked.
       capturedUrls: [...(record?.entries ?? []), ...(record?.unreproducible ?? [])].map((e) => e?.url).filter(Boolean),
     });
-    const byKey = new Map([...worse.items.map((w) => ['regressed', w]), ...worse.open.map((w) => ['open', w])].map(([status, w]) => [`${status} ${w.key}`, w]));
-    for (const item of checklist.items) {
-      const w = byKey.get(`${item.status} ${item.key}`);
-      if (w) Object.assign(item, { reason: w.reason, reasonEvidence: w.evidence, group: w.group, ...(w.unexplained && { unexplained: true }), ...(w.parts && { reasonParts: w.parts }) });
-      // Proven the same load (same weight, largest element and requests, or the same blocking files): only the timing moved,
-      // so the row is not "got worse" of the copy. It stays listed, as changed, with its evidence.
-      if (w?.proof === 'same-load' && item.status === 'regressed') {
-        Object.assign(item, { status: 'changed', statusLabel: 'Same load, measured slower', wasStatus: 'regressed', proof: 'same-load' });
-        if (checklist.summary) {
-          checklist.summary.regressed = Math.max(0, (checklist.summary.regressed ?? 0) - 1);
-          checklist.summary.changed = (checklist.summary.changed ?? 0) + 1;
-        }
-      }
-    }
-    checklist.gotWorse = worse.summary;
-    // The same for every row still open (failing on both sides): a reason or UNEXPLAINED, and the counts.
-    checklist.stillOpen = worse.openSummary;
+    // The reasons on the rows; a row proven the same load leaves "got worse" (copy/gotWorse.js applyReasons).
+    applyReasons(checklist, worse);
     // Rows that are not the tool's to change leave "got worse" / "still open" for a section of their own (copy/gotWorse.js).
     markOutside(checklist);
   }
