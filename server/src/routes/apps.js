@@ -18,6 +18,12 @@
 //                                       sign in to the old server over SSH: its settings files and running apps, names only
 //   POST   /api/projects/:id/app/old-server/copy { …the same login, source: { kind: 'file', path } | { kind: 'program', pid } }
 //                                       copy that source's settings the code reads; answers the card with saved: { saved, empty, left }
+//   POST   /api/projects/:id/app/github-app { org?, permissions, events?, webhookUrl?, returnTo }   make the app's own GitHub
+//                                       App (the form for GitHub, as for Remastly's app); GitHub sends the browser back to
+//                                       /api/github/created, on to install it, then to /api/github/installed: the settings
+//                                       the code reads for its ID, key, installation… are filled (apps/appGithub.js)
+//   POST   /api/projects/:id/app/github-app/install { returnTo }   install it (again)
+//   DELETE /api/projects/:id/app/github-app   forget it here (it stays on GitHub)
 //   POST   /api/projects/:id/app/start   make (or update to the newest code) the app (202; GET follows it)
 //   POST   /api/projects/:id/app/use     send "Logins and data" to the app: its paths, and every address the copy has no file for
 //   DELETE /api/projects/:id/app         remove the app, its files and settings
@@ -33,8 +39,9 @@ import { BOX_TARGET, hostsOf } from '../hosting/store.js';
 import { boxState } from '../boxes/index.js';
 import { dockerAvailable } from '../boxes/docker.js';
 import { boxSetup } from '../boxes/setup.js';
-import { appManifest, authorizeUrl, convertManifest, githubConfig, GitHubError, installationsOf, installUrl, repositoriesOf } from '../apps/github.js';
-import { AppError, appState, chooseRepo, copySettings, deleteApp, hasApp, setSettings, settingNames, startApp } from '../apps/index.js';
+import { appManifest, authorizeUrl, convertManifest, githubConfig, GitHubError, installationOf, installationsOf, installUrl, repositoriesOf } from '../apps/github.js';
+import { AppError, appGithubApp, appState, chooseRepo, copySettings, deleteApp, hasApp, keepAppGithubApp, setSettings, settingNames, startApp } from '../apps/index.js';
+import { appGithubManifest, checkedPermissions, EVENTS, valuesFor } from '../apps/appGithub.js';
 import { findSettings, loginOf, OldServerError, readSettings } from '../apps/oldServer.js';
 import { parseEnvText } from '../apps/detect.js';
 
@@ -103,6 +110,7 @@ export const githubReturnRouter = Router();
 
 githubReturnRouter.get('/created', async (req, res) => {
   const trip = endTrip(req, res);
+  if (trip?.kind === 'app-create') return appGithubCreated(req, res, trip);
   if (!trip || trip.kind !== 'create') return res.redirect(302, withQuery(`${publicOrigin()}/app/`, { github: 'error', message: 'This GitHub setup was not started here, or took longer than 10 minutes. Start it again.' }));
   try {
     const app = await convertManifest(String(req.query.code ?? ''));
@@ -127,6 +135,48 @@ githubReturnRouter.get('/callback', async (req, res) => {
     res.redirect(302, withQuery(back, { github: 'connected' }));
   } catch (err) {
     if (!(err instanceof GitHubError)) throw err;
+    res.redirect(302, withQuery(back, { github: 'error', message: err.message }));
+  }
+});
+
+// ---- the GitHub App of a website's app (apps/appGithub.js): made, then installed, then its settings filled ----
+
+/**
+ * GitHub made the app: its ID, key, client and webhook secret fill the settings the code reads for them, the app is kept (sealed,
+ * for the installation check), and the person goes straight on to install it.
+ * @param {any} req @param {any} res @param {any} trip
+ */
+async function appGithubCreated(req, res, trip) {
+  try {
+    const made = await convertManifest(String(req.query.code ?? ''), 'making the app’s GitHub App');
+    const values = valuesFor((await appState(trip.projectId)).githubRoles ?? {}, made);
+    await keepAppGithubApp(trip.projectId, { id: made.id, slug: made.slug, pem: made.pem, htmlUrl: made.htmlUrl, filled: Object.keys(values) });
+    await setSettings(trip.projectId, { values });
+    res.redirect(302, installUrl(made, startTrip(res, { kind: 'app-install', projectId: trip.projectId, returnTo: trip.returnTo })));
+  } catch (err) {
+    if (!(err instanceof GitHubError) && !(err instanceof AppError)) throw err;
+    res.redirect(302, withQuery(trip.returnTo, { github: 'error', message: err.message }));
+  }
+}
+
+// GitHub's setup address for a website app's GitHub App: where it was installed, checked with GitHub as the app itself.
+githubReturnRouter.get('/installed', async (req, res) => {
+  const trip = endTrip(req, res);
+  const back = trip?.returnTo ?? `${publicOrigin()}/app/`;
+  if (!trip || trip.kind !== 'app-install') return res.redirect(302, withQuery(back, { github: 'error', message: 'This installation was not started here, or took longer than 10 minutes. Use “Install it” on the app’s card.' }));
+  try {
+    const own = await appGithubApp(trip.projectId);
+    if (!own) throw new AppError('The app’s GitHub App is no longer known here. Make it again.');
+    const installationId = Number(req.query.installation_id);
+    if (!Number.isSafeInteger(installationId) || installationId <= 0) throw new AppError('GitHub did not say where the app was installed. Use “Install it” on the app’s card.');
+    const inst = await installationOf(own, installationId);
+    const state = await appState(trip.projectId);
+    const values = valuesFor(state.githubRoles ?? {}, { installationId: inst.id, account: inst.account }, state.settingsSet);
+    await setSettings(trip.projectId, { values });
+    await keepAppGithubApp(trip.projectId, { ...own, installationId: inst.id, account: inst.account, filled: [...new Set([...(own.filled ?? []), ...Object.keys(values)])] });
+    res.redirect(302, withQuery(back, { github: 'app-made' }));
+  } catch (err) {
+    if (!(err instanceof GitHubError) && !(err instanceof AppError)) throw err;
     res.redirect(302, withQuery(back, { github: 'error', message: err.message }));
   }
 });
@@ -304,6 +354,51 @@ appsRouter.post('/:id/app/old-server/copy', async (req, res) => {
     return oldServerFailure(res, err);
   }
   res.json({ ...(await appCard(project, req)), saved });
+});
+
+// "Make its GitHub App": the browser posts the manifest to GitHub (as for Remastly's own app); GitHub's way back is above.
+appsRouter.post('/:id/app/github-app', async (req, res) => {
+  const project = projectOf(req, res);
+  if (!project) return;
+  const state = await appState(project.id);
+  const roles = state.githubRoles;
+  if (!roles) return res.status(409).json({ error: 'This app’s code reads no GitHub App ID and private key, so it needs no GitHub App of its own.' });
+  if (state.githubApp) return res.status(409).json({ error: `A GitHub App was already made for this app (${state.githubApp.slug}). Forget it here first to make another.` });
+  const org = typeof req.body?.org === 'string' ? req.body.org.trim() : '';
+  if (org && !/^[A-Za-z0-9-]{1,39}$/.test(org)) return res.status(400).json({ error: 'That is not a GitHub organization name.' });
+  let webhookUrl = null;
+  const hook = typeof req.body?.webhookUrl === 'string' ? req.body.webhookUrl.trim() : '';
+  if (hook && roles.webhookSecret.length) {
+    try {
+      const u = new URL(hook);
+      if (u.protocol !== 'https:' || hook.length > 500) throw new Error();
+      webhookUrl = u.toString();
+    } catch {
+      return res.status(400).json({ error: 'The webhook address must be a full https:// address.' });
+    }
+  }
+  const events = Array.isArray(req.body?.events) ? [...new Set(req.body.events.filter((e) => EVENTS.includes(e)))] : [];
+  const manifest = appGithubManifest({ origin: publicOrigin(), domain: await domainOf(project), name: state.app?.name ?? null, permissions: checkedPermissions(req.body?.permissions), events, webhookUrl });
+  const tripState = startTrip(res, { kind: 'app-create', projectId: project.id, returnTo: returnOf(req.body?.returnTo) });
+  const page = org ? `${githubConfig.web}/organizations/${org}/settings/apps/new` : `${githubConfig.web}/settings/apps/new`;
+  res.json({ action: `${page}?${new URLSearchParams({ state: tripState })}`, manifest: JSON.stringify(manifest) });
+});
+
+// Install the app's GitHub App (again): when the person left GitHub before installing it.
+appsRouter.post('/:id/app/github-app/install', async (req, res) => {
+  const project = projectOf(req, res);
+  if (!project) return;
+  const own = await appGithubApp(project.id);
+  if (!own) return res.status(409).json({ error: 'Make the app’s GitHub App first.' });
+  res.json({ url: installUrl(own, startTrip(res, { kind: 'app-install', projectId: project.id, returnTo: returnOf(req.body?.returnTo) })) });
+});
+
+// Forget the app's GitHub App here (it stays on GitHub, where its owner deletes it); the settings it filled stay too.
+appsRouter.delete('/:id/app/github-app', async (req, res) => {
+  const project = projectOf(req, res);
+  if (!project) return;
+  await keepAppGithubApp(project.id, null);
+  res.json(await appCard(project, req));
 });
 
 appsRouter.post('/:id/app/start', async (req, res) => {

@@ -68,14 +68,24 @@ async function call(url, { what, ...init }) {
 }
 
 /**
- * The app's credentials, from the code GitHub gave back once it made the app.
- * @param {string} code
- * @returns {Promise<{ id: number, slug: string, clientId: string, clientSecret: string, pem: string, htmlUrl: string }>}
+ * The app's credentials, from the code GitHub gave back once it made the app (Remastly's own, or a website app's: `what`).
+ * @param {string} code @param {string} [what]
+ * @returns {Promise<{ id: number, slug: string, clientId: string, clientSecret: string, pem: string, htmlUrl: string, webhookSecret: string | null }>}
  */
-export async function convertManifest(code) {
+export async function convertManifest(code, what = 'creating the Remastly app') {
   if (!/^[A-Za-z0-9_-]{1,100}$/.test(code)) throw new GitHubError('GitHub sent back an unexpected code.');
-  const j = await call(`${githubConfig.api}/app-manifests/${code}/conversions`, { method: 'POST', what: 'creating the Remastly app' });
-  return { id: j.id, slug: j.slug, clientId: j.client_id, clientSecret: j.client_secret, pem: j.pem, htmlUrl: j.html_url };
+  const j = await call(`${githubConfig.api}/app-manifests/${code}/conversions`, { method: 'POST', what });
+  return { id: j.id, slug: j.slug, clientId: j.client_id, clientSecret: j.client_secret, pem: j.pem, htmlUrl: j.html_url, webhookSecret: j.webhook_secret ?? null };
+}
+
+/**
+ * Who an installation of an app is on, asked as the app itself: GitHub answers only for the app's own installations, so a
+ * number sent back through the browser is proven to be one.
+ * @param {{ id: number, pem: string }} app @param {number} installationId
+ */
+export async function installationOf(app, installationId) {
+  const j = await call(`${githubConfig.api}/app/installations/${Number(installationId)}`, { headers: { authorization: `Bearer ${appJwt(app)}` }, what: 'checking where the app was installed' });
+  return { id: Number(j.id), account: String(j.account?.login ?? '') };
 }
 
 /** The app's own sign-in to GitHub (a JWT signed with its private key, valid 9 minutes). @param {{ id: number, pem: string }} app */

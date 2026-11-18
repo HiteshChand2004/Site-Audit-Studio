@@ -16,6 +16,8 @@ import ws from '../Workspace.module.css';
 import panel from '../Panel.module.css';
 import styles from './GoLiveStep.module.css';
 import OldServerImport from './OldServerImport.jsx';
+import AppGithubMaker from './AppGithubMaker.jsx';
+import AppSettings from './AppSettings.jsx';
 
 // Remastly's own server: the files are packed, then written and live in one step.
 const STEPS = ['package', 'upload'];
@@ -1019,9 +1021,6 @@ function AppCard({ project, onChange }) {
   const [repos, setRepos] = useState(null);
   const [repoChoice, setRepoChoice] = useState('');
   const [branch, setBranch] = useState('');
-  const [envText, setEnvText] = useState('');
-  // Values typed next to a setting's name, by name, until saved.
-  const [rowValues, setRowValues] = useState({});
   // What the last save stored and skipped ({ saved, empty }), until the next action.
   const [saved, setSaved] = useState(null);
   const [askRemove, setAskRemove] = useState(false);
@@ -1094,7 +1093,7 @@ function AppCard({ project, onChange }) {
   const hasApp = status === 'running' || status === 'stopped';
   const noticeAlert = notice && (
     <Alert tone={notice.github === 'error' ? 'bad' : 'ok'} title="GitHub">
-      {notice.github === 'error' ? notice.message : notice.github === 'ready' ? T.appReady : notice.github === 'installed' ? T.appInstalled : T.appConnected(connected?.login ?? '')}
+      {notice.github === 'error' ? notice.message : notice.github === 'ready' ? T.appReady : notice.github === 'installed' ? T.appInstalled : notice.github === 'app-made' ? T.appGithubMade : T.appConnected(connected?.login ?? '')}
     </Alert>
   );
 
@@ -1107,58 +1106,17 @@ function AppCard({ project, onChange }) {
     );
   }
 
-  // The values typed in the rows, trimmed; empty ones are not sent (an empty value would remove the setting).
-  const filled = Object.fromEntries(Object.entries(rowValues).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
-  async function saveSettings() {
+  /** Saves the rows' values (AppSettings); the card says what was stored. @param {Record<string, string>} values */
+  async function saveSettings(values) {
     let result = null;
     const ok = await act(async () => {
-      const next = await api.setAppSettings(project.id, { text: envText, values: filled });
+      const next = await api.setAppSettings(project.id, { values });
       result = next.saved;
       return next;
     });
-    if (ok) {
-      setEnvText('');
-      setRowValues({});
-      setSaved(result);
-    }
+    if (ok) setSaved(result);
+    return ok;
   }
-  // Every setting the code reads, then the ones with a value the code was not seen reading (so they can be removed).
-  const rows = [...(app.app?.settings ?? []), ...(app.unused ?? []).map((name) => ({ name, unused: true }))];
-  const settingRows = rows.length > 0 && (
-    <div className={styles.tableWrap}>
-      <table className={styles.records}>
-        <tbody>
-          {rows.map((s) => {
-            const set = app.settingsSet.includes(s.name);
-            const stopped = app.stoppedFor?.includes(s.name);
-            return (
-              <tr key={s.name}>
-                <td>
-                  <code>{s.name}</code>{s.example && <span className={styles.found}>{T.appSettingExample(s.example)}</span>}
-                  {/* A textarea, not an input: an input drops the line breaks of a pasted private key. */}
-                  {!set && (
-                    <textarea className={`${form.input} ${styles.settingValue}`} rows={1} value={rowValues[s.name] ?? ''} disabled={busy}
-                      aria-label={T.appSettingValue(s.name)} autoComplete="off" spellCheck={false}
-                      onChange={(e) => setRowValues((v) => ({ ...v, [s.name]: e.target.value }))} />
-                  )}
-                </td>
-                <td>
-                  <span className={styles.badge} data-status={s.unused ? undefined : set ? 'ready' : stopped ? 'failed' : undefined}>
-                    {s.unused ? T.appSettingUnused : set ? T.appSettingSet : T.appSettingMissing}
-                  </span>
-                  {set && (
-                    <button type="button" className={styles.copy} disabled={busy} onClick={() => act(() => api.setAppSettings(project.id, { values: { [s.name]: '' } }))}>
-                      {T.appSettingRemove}
-                    </button>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
 
   return (
     <Card icon={Code} title={T.appTitle} sub={T.appSub}>
@@ -1274,17 +1232,17 @@ function AppCard({ project, onChange }) {
               <>
                 <p className={styles.confirmTitle}>{T.appSettingsTitle}</p>
                 <p className={ws.hint} style={{ margin: 0 }}>{T.appSettingsText}</p>
-                {settingRows}
-                {app.missing.length > 0 && <p className={ws.hint} style={{ margin: 0 }}>{T.appMissingNote(app.missing.length)}</p>}
-                {app.unused?.length > 0 && <Alert tone="warn" title="Check this">{T.appUnusedNote(app.unused)}</Alert>}
-                <OldServerImport project={project} wanted={app.app.settings?.length ?? 0} onCopied={(next) => { setCard(next); setSaved(next.saved); }} />
-                <textarea className={form.input} rows={4} value={envText} onChange={(e) => setEnvText(e.target.value)} placeholder={T.appSettingsPlaceholder} autoComplete="off" spellCheck={false} style={{ fontFamily: 'var(--font-mono, monospace)' }} />
-                <p className={ws.hint} style={{ margin: 0 }}>{T.appDatabaseNote}</p>
+                <AppSettings app={app} busy={busy} onSave={saveSettings}
+                  onRemove={(name) => act(() => api.setAppSettings(project.id, { values: { [name]: '' } }))} />
                 {saved && (
                   <Alert tone={saved.saved.length && !saved.empty.length ? 'ok' : 'warn'} title={T.appSavedTitle(saved)}>{T.appSaved(saved)}</Alert>
                 )}
+                {app.missing.length > 0 && <p className={ws.hint} style={{ margin: 0 }}>{T.appMissingNote(app.missing.length)}</p>}
+                {app.unused?.length > 0 && <Alert tone="warn" title="Check this">{T.appUnusedNote(app.unused)}</Alert>}
+                <AppGithubMaker project={project} app={app} domain={card.domain} onChange={setCard} />
+                <OldServerImport project={project} wanted={app.app.settings?.length ?? 0} onCopied={(next) => { setCard(next); setSaved(next.saved); }} />
+                <p className={ws.hint} style={{ margin: 0 }}>{T.appDatabaseNote}</p>
                 <div className={styles.accountButtons}>
-                  <Button size="sm" disabled={busy || (!envText.trim() && !Object.keys(filled).length)} onClick={saveSettings}>{T.appSettingsSave}</Button>
                   <Button variant="primary" size="sm" icon={busy ? Spin : Rocket} disabled={busy} onClick={() => act(() => api.startApp(project.id))}>
                     {hasApp ? T.appUpdate : status === 'failed' ? T.appTryAgain : T.appStart}
                   </Button>

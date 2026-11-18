@@ -210,13 +210,105 @@
   overflow-wrap: anywhere;
 }
 
-/* A setting's value typed in its row: one line to start with, taller when dragged (a private key). */
-.settingValue {
+/* The app's settings as Key / Value rows; on a phone the three parts stack. */
+.envTable {
+  display: grid;
+  grid-template-columns: minmax(150px, 2fr) minmax(0, 3fr) auto;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+/* Every row shares the table's three columns, so keys, values and buttons line up from row to row. */
+.envTable > * {
+  grid-column: 1 / -1;
+}
+
+.envRow {
+  display: grid;
+  grid-template-columns: subgrid;
+  gap: var(--sp-2) var(--sp-3);
+  align-items: start;
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--hairline, var(--border));
+}
+
+.envHead {
+  font-size: var(--fs-xs, 12px);
+  font-weight: 600;
+  color: var(--text-2);
+  padding-bottom: 4px;
+}
+
+.envName {
   display: block;
   width: 100%;
-  margin-top: 6px;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+code.envName {
+  padding: 7px 0;
+}
+
+/* One line to start with; a private key makes it taller, and it can be dragged taller. */
+.envValue {
+  display: block;
+  width: 100%;
+  /* The input style's fixed one-line height would cut a pasted key off: the box follows its rows instead. */
+  height: auto;
+  min-height: 42px;
+  padding: 10px 14px;
+  line-height: 1.4;
   font-family: var(--font-mono, monospace);
   resize: vertical;
+}
+
+.envHidden {
+  display: block;
+  padding: 7px 0;
+  color: var(--text-2);
+  letter-spacing: 0.02em;
+}
+
+.envActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 5px;
+}
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--hairline-strong, var(--border));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.iconButton:hover {
+  color: var(--text);
+}
+
+@media (max-width: 640px) {
+  .envTable,
+  .envRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .envHead {
+    display: none;
+  }
+
+  .envActions {
+    justify-content: flex-start;
+  }
 }
 
 .found {
