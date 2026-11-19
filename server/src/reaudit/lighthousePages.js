@@ -598,6 +598,7 @@ export async function compareLighthousePages({ pages, cacheDir, outDir, run, pro
         continue;
       }
       progress(done / total, `Lighthouse (${MODE_LABEL[mode]}) on ${p.path}: original and copy`);
+      const t0 = Date.now();
       try {
         // The copy first: its run tells whether a kept run of the original was made on a computer as fast as now.
         const copyRuns = [await measure('copy', p, slug, mode, 1)];
@@ -616,6 +617,8 @@ export async function compareLighthousePages({ pages, cacheDir, outDir, run, pro
         const verdict = decide(originalRuns, copyRuns);
         entry.modes[mode] = {
           ...verdict, extra, uneven,
+          // How long this page's runs on this device took, both sides and any extra runs (ms): measured only.
+          ms: Date.now() - t0,
           // The most other jobs any run of each side was measured beside (null: not recorded).
           contention: { original: mostOthers(originalRuns), copy: mostOthers(copyRuns) },
           runScores: { original: originalRuns.map((r) => r.scores), copy: copyRuns.map((r) => r.scores) },
