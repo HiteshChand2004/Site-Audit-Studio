@@ -9,7 +9,7 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import { fixAndProve } from '../src/recreate/behavior/preserve/stage.js';
 import { fixGate } from '../src/recreate/behavior/preserve/check.js';
-import { openGenerateProgress } from '../src/recreate/behavior/preserve/generateProgress.js';
+import { codeIdOf, openGenerateProgress } from '../src/recreate/behavior/preserve/generateProgress.js';
 
 const SITE = 'https://www.example-original.dev/';
 const ENGLISH = 'This page is about the work we do for our customers and the people who use what we make every day. '
@@ -23,6 +23,37 @@ let browser;
 test.before(async () => { browser = await chromium.launch(); });
 test.after(async () => { await browser.close(); });
 
+test('the code id is the code the step runs: the same files in another release folder keep it; a change to them, to a data file beside them or to the lockfile ends it; a change elsewhere does not', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'sas-codeid-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const release = async (name) => {
+    const root = path.join(dir, name, 'server');
+    await mkdir(path.join(root, 'src', 'step'), { recursive: true });
+    await mkdir(path.join(root, 'src', 'other'), { recursive: true });
+    await writeFile(path.join(root, 'src', 'step', 'stage.js'), "import { a } from './a.js';\nexport { b } from '../shared/b.js';\nconst c = await import('./c.js');\n");
+    await mkdir(path.join(root, 'src', 'shared'), { recursive: true });
+    await writeFile(path.join(root, 'src', 'step', 'a.js'), 'export const a = 1;');
+    await writeFile(path.join(root, 'src', 'step', 'c.js'), 'export const c = 1;');
+    await writeFile(path.join(root, 'src', 'shared', 'b.js'), 'export const b = 1;');
+    await writeFile(path.join(root, 'src', 'step', 'rules.json'), '{}');
+    await writeFile(path.join(root, 'src', 'other', 'routes.js'), 'export const r = 1;');
+    await writeFile(path.join(dir, name, 'package-lock.json'), '{}');
+    return root;
+  };
+  const idOf = (root) => codeIdOf(path.join(root, 'src', 'step', 'stage.js'), path.join(root, '..', 'package-lock.json'), root);
+  const one = await release('main-1');
+  const two = await release('main-2');
+  const first = idOf(one);
+  assert.match(first, /^code-[0-9a-f]{32}$/);
+  assert.equal(idOf(two), first, 'another release folder with the same code');
+  await writeFile(path.join(two, 'src', 'other', 'routes.js'), 'export const r = 2;');
+  assert.equal(idOf(two), first, 'a file the step never imports');
+  for (const [rel, text] of [['src/shared/b.js', 'export const b = 2;'], ['src/step/c.js', 'export const c = 2;'], ['src/step/rules.json', '{"x":1}'], ['../package-lock.json', '{"v":2}']]) {
+    const before = idOf(two);
+    await writeFile(path.join(two, rel), text);
+    assert.notEqual(idOf(two), before, `a change to ${rel}`);
+  }
+});
 test('the progress store: a part is used only for the same code and the same lifted page', async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'sas-progress-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
@@ -36,7 +67,7 @@ test('the progress store: a part is used only for the same code and the same lif
   assert.equal(String((await b.page('index.html', 'sig-1')).html), '<html>fixed</html>');
   assert.equal(await b.page('index.html', 'sig-2'), null, 'another lifted page: not reused');
   assert.deepEqual(await b.perf('index.html', 'sig-1'), { lcp: 1 });
-  assert.deepEqual(b.reused, { lift: false, perf: 1, css: false, pages: 1, carried: 0 });
+  assert.deepEqual(b.reused, { lift: false, perf: 1, css: false, pages: 1, carried: 0, links: 0, runtime: 0, package: 0, checks: 0, locked: 0, lighthouse: 0 });
   const c = await openGenerateProgress(dir, { resuming: true, code: 'release-2' });
   assert.ok(!c.liftDone(['index.html', 'about.html']), 'another release: nothing is reused');
   assert.equal(await c.page('index.html', 'sig-1'), null);
@@ -58,7 +89,7 @@ test('a repack carries the earlier copy\'s proven pages, whatever code wrote the
   assert.equal(same.carried, true);
   assert.equal(await next.page('about.html', 'sig-b'), null, 'today\'s code makes other fixes for it: proved again');
   assert.equal(await next.perf('index.html', 'sig-1'), null, 'the speed plan is not carried');
-  assert.deepEqual(next.reused, { lift: false, perf: 0, css: false, pages: 1, carried: 1 });
+  assert.deepEqual(next.reused, { lift: false, perf: 0, css: false, pages: 1, carried: 1, links: 0, runtime: 0, package: 0, checks: 0, locked: 0, lighthouse: 0 });
   await next.savePage('index.html', 'sig-1', { fixes: [] }, '<html>now</html>');
   assert.equal((await next.page('index.html', 'sig-1')).carried, false, 'proved by this job: no longer the earlier copy\'s');
   // Nothing to carry from: a fresh job, as before.

@@ -19,10 +19,16 @@ import path from 'node:path';
 export const CHECKPOINT_FILE = 'checkpoint.json';
 // A stopped job's work is kept this long (and only the latest one per project: workspace.js pruneRecreates).
 export const RESUMABLE_DAYS = 7;
-// A job that stopped on its own (a server restart, the time limit) continues by itself as often as it keeps making progress:
-// only this many automatic continues in a row WITHOUT any new finished work are allowed, so a page that crashes the
-// server every time cannot restart it forever (a manual "continue" starts the count over too).
-export const MAX_AUTO_RESUMES = 3;
+// A job that stopped on its own (a server restart, the time limit) continues by itself as often as it keeps making progress
+// (main, 2026-11-18), and by default however many times in a row it makes none (user, 2026-11-18: no limit). A server can set
+// one again with SAS_MAX_AUTO_RESUMES: that many automatic continues in a row WITHOUT new finished work end it (3 stops a page
+// that crashes the server every time). A manual "continue" starts the count over.
+/** Automatic continues in a row with no new work allowed: Infinity unless SAS_MAX_AUTO_RESUMES sets a whole number from 1. */
+export function maxAutoResumes(env = process.env) {
+  const raw = String(env.SAS_MAX_AUTO_RESUMES ?? '').trim();
+  const n = Number(raw);
+  return raw !== '' && Number.isInteger(n) && n >= 1 ? n : Infinity;
+}
 
 /** How much finished work a checkpoint holds: pages, sweep pages, kept steps, exact comparisons, the corrections. */
 export const workDone = (data) =>

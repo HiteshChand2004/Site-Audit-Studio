@@ -3,8 +3,10 @@
 // as-is/, packages the chosen stack, builds and runs it, checks it (check.js) and measures it once with Lighthouse on desktop.
 // The result is recorded in the job's report with `mode: 'as-is'`, so the download, the report and the app's stacks read it
 // the same way as a clean copy.
-import { cp, mkdir, rm, readFile, writeFile, readdir, rename } from 'node:fs/promises';
-import { hashOf, openGenerateProgress } from './generateProgress.js';
+import { cp, mkdir, rm, readFile, writeFile, readdir, rename, stat } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { hashOf, hashTree, openGenerateProgress } from './generateProgress.js';
+import { linkTree } from '../../replay.js';
 import { gzipSync } from 'node:zlib';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -768,7 +770,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
  * code and built (or packed as static files inside a project of the stack when that fails: a download never fails). Writes
  * report.build / convert / lockfiles. The full stage and the address stage package the same way.
  */
-async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report, browser = null }) {
+async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report, browser = null, progress = null }) {
   ctx.progress(0.35, 'Packaging the copy');
   // No page's first paint waits for more than the original's (blockingGate.js): held against the lifted pages, what the copy
   // added that would block is taken out, a grown or reordered file of the original's is listed. Before the hashes below.
@@ -823,6 +825,8 @@ async function packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report
       const free = await runtimeFreeCopy({
         browser, copyDir, outDir: path.join(path.dirname(copyDir), 'convert-source'), pages,
         decided: browser ? null : earlierRuntime, pagesAtOnce: fixPagesAtOnce(),
+        // Each page's decision is saved as it is reached: a resumed job decides only the pages it had not reached.
+        saved: browser && progress ? { get: (outPath, sig) => progress.part('runtime', outPath, sig), put: (outPath, sig, r) => progress.savePart('runtime', outPath, sig, r) } : null,
         // The original's own heads: the runtime putting back a title or description the copy fixed is not followed.
         liftedDir: path.join(ctx.dir, ASIS_DIR, 'lifted'),
         // The capture's recordings (carried with every repack, recordings.js) rebuild the animations the runtime drove.
@@ -1246,9 +1250,20 @@ export async function asIsStage(ctx) {
     // before it is packaged (copy/linkPass.js). The copy is otherwise left exactly as it was lifted.
     ctx.progress(0.3, 'Checking the links');
     const linkChecker = await openLinkChecker().catch((err) => ({ error: String(err.message ?? err).slice(0, 200) }));
+    // What the checker found is saved address by address: a resumed job asks only the addresses it had not asked yet, and the
+    // pass then writes the same fixes into the same copy.
+    const checker = linkChecker.check ? {
+      check: async (url) => {
+        const kept = await progress.part('links', url, 'link');
+        if (kept) return kept;
+        const found = await linkChecker.check(url);
+        await progress.savePart('links', url, 'link', found).catch(() => {});
+        return found;
+      },
+    } : null;
     try {
-      report.links = linkChecker.check
-        ? await linkPass({ dir: copyDir, originalUrl: siteUrl, pages: pages.map((p) => ({ path: localOfOutPath(p.outPath) })), checker: linkChecker })
+      report.links = checker
+        ? await linkPass({ dir: copyDir, originalUrl: siteUrl, pages: pages.map((p) => ({ path: localOfOutPath(p.outPath) })), checker })
         : { error: linkChecker.error, links: [], changed: 0, files: 0, skippedForTime: 0 };
     } finally {
       await linkChecker.close?.();
@@ -1277,7 +1292,34 @@ export async function asIsStage(ctx) {
         ctx.progress(0.34, fixLine(m));
       },
     });
-    await packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report, browser });
+    // Packaging, kept: a resumed job whose copy is byte for byte the one it was packaged from takes the packaged copy and the
+    // stack as they were (hard links of folders/<id>), instead of converting and building again.
+    const packageSig = hashOf([await hashTree(copyDir), stack, ctx.asIs?.prefer ?? 'editable']);
+    const packed = await progress.part('package', stack, packageSig);
+    let packageId;
+    if (packed && await stat(path.join(progress.folder(packed.id), 'out')).then(() => true, () => false)) {
+      ctx.progress(0.45, 'Continuing from the copy packaged before the stop');
+      packageId = packed.id;
+      for (const [name, dir] of [['copy', copyDir], ['out', outDir], ['convert-source', path.join(path.dirname(copyDir), 'convert-source')]]) {
+        const kept = path.join(progress.folder(packageId), name);
+        if (!(await stat(kept).then(() => true, () => false))) continue;
+        await rm(dir, { recursive: true, force: true });
+        await linkTree(kept, dir);
+      }
+      Object.assign(report, packed.report);
+      ctx.report.warnings.push(...packed.warnings);
+    } else {
+      const warningsBefore = ctx.report.warnings.length;
+      await packageCopy({ ctx, stack, copyDir, outDir, pages, siteUrl, report, browser, progress });
+      packageId = randomBytes(8).toString('hex');
+      const keep = progress.folder(packageId);
+      await rm(keep, { recursive: true, force: true });
+      for (const [name, dir] of [['copy', copyDir], ['out', outDir], ['convert-source', path.join(path.dirname(copyDir), 'convert-source')]]) {
+        if (await stat(dir).then(() => true, () => false)) await linkTree(dir, path.join(keep, name));
+      }
+      const parts = Object.fromEntries(['blocking', 'integrity', 'build', 'convert', 'lockfiles'].filter((k) => k in report).map((k) => [k, report[k]]));
+      await progress.savePart('package', stack, packageSig, { id: packageId, report: parts, warnings: ctx.report.warnings.slice(warningsBefore) }).catch(() => {});
+    }
     const converted = report.convert?.mode === 'converted';
     // A converted copy run by its own server (MERN) is served by that server; a static export is static files.
     const ownServer = converted && CONVERTERS[stack].runs === 'server';
@@ -1383,15 +1425,25 @@ export async function asIsStage(ctx) {
       browser, base, excludedHosts, originalReachable, baselines, htmlBase, onOriginalPicture: keepOriginalPicture,
       pages: pages.map((p) => ({ path: localOfOutPath(p.outPath), url: p.url })),
       pagesAtOnce: fixPagesAtOnce(),
+      // Each page's comparison is saved once it is done, for this packaged copy: a resumed job compares only the pages left.
+      resume: { get: (pagePath) => progress.part('checks', pagePath, packageId), put: (pagePath, one) => progress.savePart('checks', pagePath, packageId, one) },
       log: (m) => { console.log(`[recreate ${String(ctx.recreateId ?? '').slice(0, 8)}] ${m}`); ctx.progress(0.55, checkLine(m)); },
     });
     report.checks = checks;
     // Outside services that serve their part only to the original's domain (domainLock.js): kept in the copy, refused there.
     for (const p of checks.pages) {
+      const kept = await progress.part('locked', p.path, packageId);
+      if (kept) {
+        p.domainLocked = kept.parts;
+        continue;
+      }
+      let failed = false;
       p.domainLocked = await domainLockedParts(browser, base, p.path, p.original).catch((err) => {
+        failed = true;
         ctx.progress(0.56, `outside services ${p.path}: ${String(err?.message ?? err).slice(0, 160)}`);
         return [];
       });
+      if (!failed) await progress.savePart('locked', p.path, packageId, { parts: p.domainLocked }).catch(() => {});
     }
     if (!originalReachable) ctx.report.warnings.push('The original did not answer: the checks that compare with it say so; the copy and its download are complete.');
     // Outside services the site uses are listed; only a request to the original itself fails the copy (copy/outsideServices.js).
@@ -1400,12 +1452,17 @@ export async function asIsStage(ctx) {
     ctx.progress(0.9, 'Measuring with Lighthouse (desktop)');
     const lhFile = path.join(ctx.dir, ASIS_DIR, 'lighthouse-desktop.json');
     await mkdir(path.dirname(lhFile), { recursive: true });
-    try {
-      const summary = await runLighthouse(`${base}/`, 'desktop', { timeout: 240000, outFile: lhFile, signal: ctx.signal });
-      const j = JSON.parse(await readFile(lhFile, 'utf8'));
-      report.lighthouse = { after: scoresOf(j), ...(summary?.contention && { contention: summary.contention }) };
-    } catch (err) {
-      report.lighthouse = { error: String(err.message ?? err).slice(0, 200) };
+    const measured = await progress.part('lighthouse', 'desktop', packageId);
+    if (measured) report.lighthouse = measured;
+    else {
+      try {
+        const summary = await runLighthouse(`${base}/`, 'desktop', { timeout: 240000, outFile: lhFile, signal: ctx.signal });
+        const j = JSON.parse(await readFile(lhFile, 'utf8'));
+        report.lighthouse = { after: scoresOf(j), ...(summary?.contention && { contention: summary.contention }) };
+        await progress.savePart('lighthouse', 'desktop', packageId, report.lighthouse).catch(() => {});
+      } catch (err) {
+        report.lighthouse = { error: String(err.message ?? err).slice(0, 200) };
+      }
     }
     // "Before" is the original's own Lighthouse result from the project's Check (never a stand-in): null until a Check ran.
     const checked = ctx.audit && !ctx.audit.isDummy ? ctx.audit.scores?.desktop ?? null : null;
@@ -1467,6 +1524,8 @@ export async function asIsStage(ctx) {
         headers: served ? { applied: served.applied, takeEffect: report.fixes.served.takeEffect } : null,
       } : null,
     };
+    // What a resumed job took from before the stop, part by part (none on a first run).
+    if (resuming) report.resumedParts = { ...progress.reused };
     ctx.report.asIs = report;
     // dist: the folder of the project that answers `/` (after the build above), so the preview and the re-audit serve the copy,
     // not the project around it. The download still takes the whole project (`dir`).

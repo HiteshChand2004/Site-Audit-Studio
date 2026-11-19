@@ -9,7 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 import express from 'express';
 import { db, projectDir } from '../src/db/index.js';
-import { checkpointPath, clearFidelity, idleAutoResumes, MAX_AUTO_RESUMES, openCheckpoint, readCheckpoint, workDone } from '../src/recreate/checkpoint.js';
+import { checkpointPath, clearFidelity, idleAutoResumes, maxAutoResumes, openCheckpoint, readCheckpoint, workDone } from '../src/recreate/checkpoint.js';
 import { RecreateError, runRecreate, STAGES } from '../src/recreate/index.js';
 import { autoResume, recreateJobs, resumeInterruptedRecreates } from '../src/recreate/jobs.js';
 import { findResumable, pruneRecreates, recreateDir, tmpDir } from '../src/recreate/workspace.js';
@@ -203,14 +203,22 @@ test('a Recreate interrupted by a server restart continues by itself when the se
     assert.equal(report.resumed[0].pagesReused, 1);
     assert.equal(second.n.captures.length, 2);
     assert.match(db.prepare('SELECT error FROM recreates WHERE id = ?').get(stopped).error, /continues where it stopped/);
-    // A few times in a row WITHOUT new work: continued automatically MAX_AUTO_RESUMES times with nothing finished since is
-    // left to the user (a page that crashes the server every time).
+    // No limit unless the server sets one; with SAS_MAX_AUTO_RESUMES=3, continued automatically 3 times with nothing finished
+    // since is left to the user (a page that crashes the server every time).
     // (Another project: the finished job's cleanup prunes stray workspaces of its own project while this runs.)
+    assert.equal(maxAutoResumes({}), Infinity);
+    assert.equal(maxAutoResumes({ SAS_MAX_AUTO_RESUMES: '0' }), Infinity);
+    assert.equal(maxAutoResumes({ SAS_MAX_AUTO_RESUMES: '2' }), 2);
     const other = makeProject(2);
     const tired = randomUUID();
     await mkdir(tmpDir(other.id, tired), { recursive: true });
-    await writeFile(checkpointPath(tmpDir(other.id, tired)), JSON.stringify({ ...cp, autoResumes: MAX_AUTO_RESUMES, workAtResume: workDone(cp) }));
-    assert.deepEqual(await resumeInterruptedRecreates([{ id: tired, project_id: other.id }]), []);
+    await writeFile(checkpointPath(tmpDir(other.id, tired)), JSON.stringify({ ...cp, autoResumes: 3, workAtResume: workDone(cp) }));
+    process.env.SAS_MAX_AUTO_RESUMES = '3';
+    try {
+      assert.deepEqual(await resumeInterruptedRecreates([{ id: tired, project_id: other.id }]), []);
+    } finally {
+      delete process.env.SAS_MAX_AUTO_RESUMES;
+    }
     // A time-limit stop continues by itself only when that attempt got further.
     await writeFile(checkpointPath(tmpDir(other.id, tired)), JSON.stringify({ ...cp, stopped: { reason: 'time-limit', progressed: false } }));
     assert.equal(await autoResume(other, tired, 'time-limit'), null);
@@ -230,10 +238,11 @@ test('restarts continue a copy as often as it makes progress; restarts with no n
     saved = { ...saved, pages: { ...saved.pages, [n]: { slug: `p${n}` } } };
     assert.equal(idleAutoResumes(saved), 0, `restart ${n}: progress made, nothing counted`);
   }
-  // Restarts with no new work in between (a page that crashes the server): counted, and the limit is reached.
+  // Restarts with no new work in between (a page that crashes the server): counted, so a limit set with
+  // SAS_MAX_AUTO_RESUMES is reached (none is set by default).
   let stuck = at([0]);
-  for (let n = 1; n <= MAX_AUTO_RESUMES; n++) stuck = openCheckpoint(dir, { recreateId: randomUUID(), saved: stuck, auto: true }).data;
-  assert.equal(idleAutoResumes(stuck), MAX_AUTO_RESUMES);
+  for (let n = 1; n <= 3; n++) stuck = openCheckpoint(dir, { recreateId: randomUUID(), saved: stuck, auto: true }).data;
+  assert.equal(idleAutoResumes(stuck), 3);
   // One more finished page starts the count over.
   assert.equal(idleAutoResumes({ ...stuck, pages: { ...stuck.pages, 1: { slug: 'p1' } } }), 0);
   // A manual continue starts it over too.
