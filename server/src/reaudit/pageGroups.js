@@ -7,18 +7,24 @@ export function groupMin(env = process.env) {
   return Number.isInteger(n) && n >= 2 ? n : null;
 }
 
-/** A page's shape: its body's tags (6 levels; a run of equal sibling tags counts once) and its stylesheet / script files. */
+/** A page with less visible text than this is a shell its script fills (its HTML says nothing of its layout): measured alone. */
+export const MIN_TEXT = 200;
+const SKIP = ['script', 'style', 'noscript', 'template'];
+
+/**
+ * A page's shape: which tags each element of its body holds (4 levels; the set, not the order or count, so two posts with
+ * their paragraphs and headings in another order are one shape) and its stylesheet / script files. A shell (little text) has
+ * no shape (null): it is measured on its own.
+ */
 export function pageShape(html) {
   const $ = cheerio.load(html);
+  const text = $('body').clone().find(SKIP.join(',')).remove().end().text().replace(/\s+/g, ' ').trim().length;
+  if (text < MIN_TEXT) return null;
   const walk = (el, depth) => {
-    if (!el || depth > 6) return '';
-    const kids = $(el).children().toArray().filter((k) => !['script', 'style', 'noscript', 'template'].includes(k.tagName));
-    const parts = [];
-    for (const k of kids) {
-      const s = k.tagName === 'svg' ? 'svg' : `${k.tagName}(${walk(k, depth + 1)})`;
-      if (parts.at(-1) !== s) parts.push(s);
-    }
-    return parts.join(',');
+    if (!el || depth > 4) return '';
+    const set = new Set();
+    for (const k of $(el).children().toArray()) if (!SKIP.includes(k.tagName)) set.add(k.tagName === 'svg' ? 'svg' : `${k.tagName}(${walk(k, depth + 1)})`);
+    return [...set].sort().join(',');
   };
   const files = [
     ...$('link[rel~=stylesheet][href]').map((_, e) => $(e).attr('href').split('?')[0]).get(),
