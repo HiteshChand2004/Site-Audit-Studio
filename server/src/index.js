@@ -11,6 +11,7 @@ import stacksRouter from './routes/stacks.js';
 import reportRouter from './routes/report.js';
 import faviconRouter from './routes/favicon.js';
 import buildRouter from './routes/build.js';
+import batchFixesRouter from './routes/batchFixes.js';
 import { deployRouter, hostingRouter } from './routes/deploy.js';
 import { capacityState, lockBusy, queueState } from './jobs/manager.js';
 import { describeLimits } from './jobs/limits.js';
@@ -115,6 +116,7 @@ app.use('/api/github', githubRouter);
 app.use('/api/hosting', hostingRouter);
 app.use('/api/stacks', stacksRouter);
 app.use('/api/build', buildRouter);
+app.use('/api/batch-fixes', batchFixesRouter);
 
 app.use('/api', (_req, res) => {
   res.status(404).json({ error: 'Route not found.' });
