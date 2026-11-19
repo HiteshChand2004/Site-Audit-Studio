@@ -7,6 +7,7 @@ import { cp, mkdir, rm, readFile, writeFile, readdir, rename, stat } from 'node:
 import { randomBytes } from 'node:crypto';
 import { hashOf, hashTree, openGenerateProgress } from './generateProgress.js';
 import { linkTree } from '../../replay.js';
+import { partClock } from './timings.js';
 import { gzipSync } from 'node:zlib';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -476,6 +477,8 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
     const webpWritten = new Set(fixed.pages.flatMap((p) => p.fixes.filter((f) => f.kind === 'webp' || f.kind === 'size' || f.kind === 'tailwind').map((f) => f.file).filter(Boolean)));
     const changed = fixed.pages.filter((p) => p.fixes.length);
     const gate = [];
+    // How long each page's proof took (ms; a page written back from before a stop takes next to nothing): measured only.
+    const msByPage = {};
     // Exact copy: groups proved without a picture, and looks served by an earlier identical one (no page load).
     const lighter = { structural: 0, reused: 0 };
     if (changed.length) {
@@ -674,7 +677,14 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
             look: finalLook.get(p.outPath) ?? null, alone: [...(aloneLooks.get(p.outPath) ?? new Map())], gate: looks,
           }, html).catch(() => {});
         };
-        await inPool(changed, fixPagesAtOnce(), checkPage);
+        await inPool(changed, fixPagesAtOnce(), async (p) => {
+          const t0 = Date.now();
+          try {
+            await checkPage(p);
+          } finally {
+            msByPage[p.path] = Date.now() - t0;
+          }
+        });
         // The looks in page order, as when the pages were proved one after the other.
         const order = new Map(changed.map((p, i) => [p.path, i]));
         gate.sort((x, y) => (order.get(x.path) ?? 0) - (order.get(y.path) ?? 0));
@@ -745,6 +755,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
       counts,
       total: Object.values(counts).reduce((s, n) => s + n, 0),
       pages: fixed.pages.map((p) => ({ path: p.path, fixes: p.fixes, ...(p.reverted && { reverted: p.reverted }), ...(p.dropped?.length && { dropped: p.dropped }) })),
+      ms: msByPage,
       reverted: fixed.pages.filter((p) => p.reverted).length,
       // Pages that kept some of their fixes and dropped others.
       dropped: fixed.pages.filter((p) => !p.reverted && p.dropped?.length).length,
@@ -1126,7 +1137,10 @@ export async function asIsStage(ctx) {
     && (await readdir(liftedDirOf).then((l) => l.length > 0, () => false)) && Boolean(await readLifted(ctx.dir));
   const browser = await chromium.launch();
   const servers = [];
+  // How long each part took (timings.js): measured only, in report.timings.
+  const clock = partClock();
   try {
+    clock.start('lift');
     if (fromDir) {
       ctx.progress(0.1, 'Reusing the lifted copy');
       await rm(copyDir, { recursive: true, force: true });
@@ -1249,6 +1263,7 @@ export async function asIsStage(ctx) {
     // Copy my site: every link of the copy is re-checked in a real browser and the safe fixes are written into the copy
     // before it is packaged (copy/linkPass.js). The copy is otherwise left exactly as it was lifted.
     ctx.progress(0.3, 'Checking the links');
+    clock.start('links');
     const linkChecker = await openLinkChecker().catch((err) => ({ error: String(err.message ?? err).slice(0, 200) }));
     // What the checker found is saved address by address: a resumed job asks only the addresses it had not asked yet, and the
     // pass then writes the same fixes into the same copy.
@@ -1270,6 +1285,7 @@ export async function asIsStage(ctx) {
     }
     // Copy my site §2: the fixes that change neither the look nor the behaviour, each page proven unchanged by them.
     ctx.progress(0.33, 'Fixing what can be fixed without changing the look');
+    clock.start('fixes');
     // The new address is written only when usable and confirmed for this copy (copy/address.js); else none is, and that is open.
     const address = addressForCopy({ saved: newSiteOf(ctx.baseUrl, siteUrl), confirmed: ctx.asIs?.address ?? null, siteUrl });
     report.address = address.origin ? { used: address.origin } : { used: null, ...address.skipped };
@@ -1294,6 +1310,7 @@ export async function asIsStage(ctx) {
     });
     // Packaging, kept: a resumed job whose copy is byte for byte the one it was packaged from takes the packaged copy and the
     // stack as they were (hard links of folders/<id>), instead of converting and building again.
+    clock.start('package');
     const packageSig = hashOf([await hashTree(copyDir), stack, ctx.asIs?.prefer ?? 'editable']);
     const packed = await progress.part('package', stack, packageSig);
     let packageId;
@@ -1338,6 +1355,7 @@ export async function asIsStage(ctx) {
     report.javascript = await javascriptOf(converted && report.convert.runtime?.removedPages ? path.join(path.dirname(copyDir), 'convert-source') : copyDir);
 
     ctx.progress(0.55, 'Running the copy and checking it');
+    clock.start('checks');
     let base;
     if (stack === 'html') {
       const served = await serveCopy(copyDir);
@@ -1450,6 +1468,7 @@ export async function asIsStage(ctx) {
     report.safety = asIsSafety(checks.pages);
 
     ctx.progress(0.9, 'Measuring with Lighthouse (desktop)');
+    clock.start('lighthouse');
     const lhFile = path.join(ctx.dir, ASIS_DIR, 'lighthouse-desktop.json');
     await mkdir(path.dirname(lhFile), { recursive: true });
     const measured = await progress.part('lighthouse', 'desktop', packageId);
@@ -1467,6 +1486,7 @@ export async function asIsStage(ctx) {
     // "Before" is the original's own Lighthouse result from the project's Check (never a stand-in): null until a Check ran.
     const checked = ctx.audit && !ctx.audit.isDummy ? ctx.audit.scores?.desktop ?? null : null;
     report.lighthouse = { ...report.lighthouse, before: checked };
+    clock.start('report');
 
     // Copy my site: the per-page checks, the open items and the server log (docs/COPY-MY-SITE.md §1, §5, §1h).
     const copyPages = copyChecksOf(checks.pages, { copy: report.lighthouse?.after ?? null, original: null });
@@ -1526,6 +1546,7 @@ export async function asIsStage(ctx) {
     };
     // What a resumed job took from before the stop, part by part (none on a first run).
     if (resuming) report.resumedParts = { ...progress.reused };
+    report.timings = clock.done();
     ctx.report.asIs = report;
     // dist: the folder of the project that answers `/` (after the build above), so the preview and the re-audit serve the copy,
     // not the project around it. The download still takes the whole project (`dir`).

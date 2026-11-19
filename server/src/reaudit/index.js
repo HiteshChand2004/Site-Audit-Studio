@@ -13,6 +13,7 @@ import { db } from '../db/index.js';
 import { auditDir, projectDir } from '../config/paths.js';
 import { startEgressProxy } from '../security/egressProxy.js';
 import { betterThanOriginal, compareLighthousePages, lighthousePageItems, lighthousePagesNote, lighthouseTargets, pairedHomeScores, RUN_TIMEOUT_MS } from './lighthousePages.js';
+import { groupMin, pageShape, planGroups } from './pageGroups.js';
 import { repeatNote, repeatOf, repeatSpeedRows, speedCandidates, withMedianAudits } from './speedRepeat.js';
 import { getEmitter } from '../recreate/emit/index.js';
 import { outputPages, outputRoot, reportOutputs, targetStack } from '../recreate/export/fromIr.js';
@@ -244,6 +245,18 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
           pageList.push({ path: p.path, url, copyUrl: `${served.origin}${p.path}`,
             ...(own && { originalUrl: `${lifted.origin}${own}`, originalFrom: 'lifted', originalCacheDir: path.join(recreateDir(project.id, recreateId), 'as-is', LIFTED_RUNS_DIR) }) });
         }
+        // Page groups (pageGroups.js, off unless SAS_PAGE_GROUPS_MIN is set): pages of the same shape are measured through the
+        // first two of them; the homepage, and a page whose lifted file cannot be read, always on their own.
+        const min = groupMin();
+        let groups = null;
+        if (min && pageList.length >= min) {
+          const liftedDir = path.join(recreateDir(project.id, recreateId), 'as-is', 'lifted');
+          const shapes = new Map();
+          for (const p of outputPageList) shapes.set(p.path, await readFile(path.join(liftedDir, p.outPath), 'utf8').then(pageShape, () => null));
+          const plan = planGroups(pageList, (p) => shapes.get(p.path));
+          groups = { min, groups: plan.groups, measured: plan.measure.length, through: plan.through };
+          pageList.splice(0, pageList.length, ...plan.measure);
+        }
         const hostOf = (url, mode) => (lifted && url.startsWith(lifted.origin) ? lifted.measured[mode].origin + url.slice(lifted.origin.length) : measuredUrl(url, mode));
         // Every run starts on an idle link: both sides' hosts for this device drop what an earlier run left going (measuredHost reset).
         const run = (url, mode, outFile) => {
@@ -263,6 +276,7 @@ export async function runReaudit({ project, reauditId, recreateId, progress, ski
           // A continued comparison takes the copy's runs the stopped one finished (same copy, same settings).
           reuseCopy: Boolean(kept),
         });
+        if (groups) lighthousePages.groups = groups;
         lighthousePages.network = measuredHostDescription();
         // A speed row of the homepage that one run per side turns "got worse" is measured again (speedRepeat.js): only then,
         // only that page and device, and the runs made above count. The rows themselves are made in buildChecklist.
@@ -386,11 +400,14 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
     }
     checklist.categories = CATEGORIES.filter((c) => checklist.items.some((it) => it.category === c.id));
     checklist.notes.push(lighthousePagesNote(lighthousePages));
+    const g = lighthousePages.groups;
+    if (g?.through.length) checklist.notes.push(`${g.through.length} page${g.through.length === 1 ? ' was' : 's were'} not measured with Lighthouse on their own: each has the same layout and files as a page that was (page groups, ${g.groups} group${g.groups === 1 ? '' : 's'})`);
     // The "better than the original" rule per device and category (the same medians and noise as the rows above).
     const better = betterThanOriginal(lighthousePages);
     if (better.line) checklist.notes.unshift(better.line);
     checklist.lighthousePages = {
-      pages: lighthousePages.pages.map((p) => ({ path: p.path, originalFrom: p.originalFrom ?? 'live', modes: Object.fromEntries(Object.entries(p.modes).map(([m, v]) => [m, v.error ? { error: v.error } : { original: v.original, copy: v.copy, worse: v.worse, noise: v.noise ?? [], slower: v.slower ?? [], cpu: v.cpu ?? null, unscored: v.unscored, blankRuns: v.blankRuns, copyMissing: v.copyMissing ?? null, brokenRuns: v.brokenRuns ?? null, originalBlank: v.originalBlank ?? null, runs: v.runs, accepted: v.accepted, extra: v.extra, runScores: v.runScores }])) })),
+      pages: lighthousePages.pages.map((p) => ({ path: p.path, originalFrom: p.originalFrom ?? 'live', modes: Object.fromEntries(Object.entries(p.modes).map(([m, v]) => [m, v.error ? { error: v.error } : { original: v.original, copy: v.copy, worse: v.worse, noise: v.noise ?? [], slower: v.slower ?? [], cpu: v.cpu ?? null, unscored: v.unscored, blankRuns: v.blankRuns, copyMissing: v.copyMissing ?? null, brokenRuns: v.brokenRuns ?? null, originalBlank: v.originalBlank ?? null, runs: v.runs, accepted: v.accepted, extra: v.extra, runScores: v.runScores, ms: v.ms ?? null }])) })),
+      groups: lighthousePages.groups ?? null,
       worse: lighthousePages.worse,
       unscored: lighthousePages.unscored,
       extraRunPages: lighthousePages.extraRunPages,

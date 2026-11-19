@@ -1067,6 +1067,7 @@ export async function checkCopy({ browser, base, pages, excludedHosts = [], log 
       log(`page ${p.path} done (compared before the stop)`);
       return;
     }
+    const t0 = Date.now();
     const copyUrl = `${base}${p.path}`;
     const one = { path: p.path, original: p.url };
     one.offline = await offlineCheck(browser, base, p.path).then((r) => ({ ...r, path: p.path }));
@@ -1144,6 +1145,8 @@ export async function checkCopy({ browser, base, pages, excludedHosts = [], log 
       one.hovers = { copy: summarize(copyHover), original: null, mismatch: [], note: `original not reachable: ${reason}` };
     }
     one.forms = await formCheck(browser, base, copyUrl);
+    // How long this page's comparison took (ms): measured only.
+    one.ms = Date.now() - t0;
     done.set(p, one);
     if (resume) await resume.put(p.path, one).catch(() => {});
     log(`page ${p.path} done${reason ? ` (original: ${reason})` : ''}`);
