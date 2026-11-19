@@ -9,7 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 import express from 'express';
 import { db, projectDir } from '../src/db/index.js';
-import { checkpointPath, clearFidelity, MAX_AUTO_RESUMES, readCheckpoint } from '../src/recreate/checkpoint.js';
+import { checkpointPath, clearFidelity, maxAutoResumes, readCheckpoint } from '../src/recreate/checkpoint.js';
 import { RecreateError, runRecreate, STAGES } from '../src/recreate/index.js';
 import { autoResume, recreateJobs, resumeInterruptedRecreates } from '../src/recreate/jobs.js';
 import { findResumable, pruneRecreates, recreateDir, tmpDir } from '../src/recreate/workspace.js';
@@ -203,13 +203,21 @@ test('a Recreate interrupted by a server restart continues by itself when the se
     assert.equal(report.resumed[0].pagesReused, 1);
     assert.equal(second.n.captures.length, 2);
     assert.match(db.prepare('SELECT error FROM recreates WHERE id = ?').get(stopped).error, /continues where it stopped/);
-    // At most a few times in a row: work already continued automatically MAX_AUTO_RESUMES times is left to the user.
+    // No limit unless the server sets one: SAS_MAX_AUTO_RESUMES=2 leaves work already continued twice in a row to the user.
     // (Another project: the finished job's cleanup prunes stray workspaces of its own project while this runs.)
+    assert.equal(maxAutoResumes({}), Infinity);
+    assert.equal(maxAutoResumes({ SAS_MAX_AUTO_RESUMES: '0' }), Infinity);
+    assert.equal(maxAutoResumes({ SAS_MAX_AUTO_RESUMES: '2' }), 2);
     const other = makeProject(2);
     const tired = randomUUID();
     await mkdir(tmpDir(other.id, tired), { recursive: true });
-    await writeFile(checkpointPath(tmpDir(other.id, tired)), JSON.stringify({ ...cp, autoResumes: MAX_AUTO_RESUMES }));
-    assert.deepEqual(await resumeInterruptedRecreates([{ id: tired, project_id: other.id }]), []);
+    await writeFile(checkpointPath(tmpDir(other.id, tired)), JSON.stringify({ ...cp, autoResumes: 2 }));
+    process.env.SAS_MAX_AUTO_RESUMES = '2';
+    try {
+      assert.deepEqual(await resumeInterruptedRecreates([{ id: tired, project_id: other.id }]), []);
+    } finally {
+      delete process.env.SAS_MAX_AUTO_RESUMES;
+    }
     // A time-limit stop continues by itself only when that attempt got further.
     await writeFile(checkpointPath(tmpDir(other.id, tired)), JSON.stringify({ ...cp, stopped: { reason: 'time-limit', progressed: false } }));
     assert.equal(await autoResume(other, tired, 'time-limit'), null);

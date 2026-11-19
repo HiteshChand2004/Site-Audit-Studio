@@ -453,7 +453,7 @@ const TEXT = /\.(html?|css|m?js|json|webmanifest|txt|xml|svg)$/i;
  * @param {{ pages?: object[] }|null} [o.decided]  an earlier record of this function (its `pages`)
  * @returns {Promise<{ dir: string, record: object }>}  record: { pages[], removedPages, keptPages, filesRemoved, bytesRemoved, reused? }
  */
-export async function runtimeFreeCopy({ browser, copyDir, outDir, pages, decided = null, log = () => {}, pagesAtOnce = 1, jobDir = null, prefer = 'editable', liftedDir = null }) {
+export async function runtimeFreeCopy({ browser, copyDir, outDir, pages, decided = null, log = () => {}, pagesAtOnce = 1, jobDir = null, prefer = 'editable', liftedDir = null, saved = null }) {
   await rm(outDir, { recursive: true, force: true });
   await cp(copyDir, outDir, { recursive: true });
   const results = [];
@@ -467,7 +467,17 @@ export async function runtimeFreeCopy({ browser, copyDir, outDir, pages, decided
   if (browser) {
     await inPool(pages, pagesAtOnce, async (p) => {
       try {
-        results.push({ outPath: p.outPath, ...(await decidePage({ browser, copyDir, outPath: p.outPath, motion, settled: settled.get(p.outPath), original: await originalHead(p.outPath), prefer, log })) });
+        // A decision saved before a stop (`saved`) is used when it was made from this very page with the same preference.
+        const sig = saved ? createHash('sha256').update(await readFile(path.join(copyDir, p.outPath))).update(`\0${prefer}`).digest('hex') : null;
+        const kept = sig ? await saved.get(p.outPath, sig) : null;
+        if (kept) {
+          results.push(kept);
+          log(`runtime ${localOfOutPath(p.outPath)}: decided before the stop (${kept.status})`);
+          return;
+        }
+        const r = { outPath: p.outPath, ...(await decidePage({ browser, copyDir, outPath: p.outPath, motion, settled: settled.get(p.outPath), original: await originalHead(p.outPath), prefer, log })) };
+        results.push(r);
+        if (sig) await saved.put(p.outPath, sig, r).catch(() => {});
       } catch (err) {
         results.push({ outPath: p.outPath, path: localOfOutPath(p.outPath), status: 'kept', why: 'error', detail: String(err?.message ?? err).slice(0, 200) });
       }

@@ -927,10 +927,17 @@ const savedPictures = (b) => (!b ? {} : Buffer.isBuffer(b) || typeof b === 'stri
  *   pictures (NOISE_SHOTS of them) of every live comparison, to be kept as that page's baseline
  * @param {number} [o.pagesAtOnce]  pages checked side by side (each pictures its two widths at once); the report keeps page order
  */
-export async function checkCopy({ browser, base, pages, excludedHosts = [], log = () => {}, originalReachable = true, baselines = {}, htmlBase = null, onOriginalPicture = null, pagesAtOnce = 1 }) {
+export async function checkCopy({ browser, base, pages, excludedHosts = [], log = () => {}, originalReachable = true, baselines = {}, htmlBase = null, onOriginalPicture = null, pagesAtOnce = 1, resume = null }) {
   const report = { pages: [], forms: 0, needsAPerson: [], originalReachable };
   const done = new Map();
   const checkPage = async (p) => {
+    // A page compared before a stop (`resume`, for this same packaged copy) is not compared again.
+    const kept = resume ? await resume.get(p.path) : null;
+    if (kept) {
+      done.set(p, kept);
+      log(`page ${p.path} done (compared before the stop)`);
+      return;
+    }
     const copyUrl = `${base}${p.path}`;
     const one = { path: p.path, original: p.url };
     one.offline = await offlineCheck(browser, base, p.path).then((r) => ({ ...r, path: p.path }));
@@ -1009,6 +1016,7 @@ export async function checkCopy({ browser, base, pages, excludedHosts = [], log 
     }
     one.forms = await formCheck(browser, base, copyUrl);
     done.set(p, one);
+    if (resume) await resume.put(p.path, one).catch(() => {});
     log(`page ${p.path} done${reason ? ` (original: ${reason})` : ''}`);
   };
   await inPool(pages, pagesAtOnce, checkPage);

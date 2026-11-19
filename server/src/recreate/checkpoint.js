@@ -19,8 +19,14 @@ import path from 'node:path';
 export const CHECKPOINT_FILE = 'checkpoint.json';
 // A stopped job's work is kept this long (and only the latest one per project: workspace.js pruneRecreates).
 export const RESUMABLE_DAYS = 7;
-// A job that stopped on its own (a server restart, the time limit) continues by itself at most this many times in a row.
-export const MAX_AUTO_RESUMES = 2;
+// A job that stopped on its own (a server restart, the time limit) continues by itself, as many times as it takes (user,
+// 2026-11-18: no limit; it was 2 in a row). SAS_MAX_AUTO_RESUMES (a whole number from 1) sets a limit on a server again.
+/** How many times in a row a stopped job continues by itself: Infinity unless SAS_MAX_AUTO_RESUMES sets a number. */
+export function maxAutoResumes(env = process.env) {
+  const raw = String(env.SAS_MAX_AUTO_RESUMES ?? '').trim();
+  const n = Number(raw);
+  return raw !== '' && Number.isInteger(n) && n >= 1 ? n : Infinity;
+}
 // The steps whose results are kept; the ones after them run again on a resume.
 export const REUSABLE_STEPS = ['inspect', 'sweep', 'assets'];
 // What each kept step leaves on the job context, and the report keys it sets (arrays it appends to are kept as appended).
