@@ -599,6 +599,14 @@ export const OUTSIDE = {
   line: (n) => `${n} more ${n === 1 ? 'thing is' : 'things are'} outside what Remastly can change (see “${OUTSIDE.title}” below).`,
 };
 
+/** What a row of the comparison asks for (server copy/gotWorse.js actionOf). */
+export const ACTIONS = {
+  fix: { label: 'Copy can fix', line: 'the copy can still fix', tone: 'bad', explain: 'Nothing outside the copy explains it: the copy should do this. These are what is left to fix.' },
+  kept: { label: 'Kept like the original', line: 'kept like the original', tone: 'neutral', explain: 'The copy keeps this exactly as the original has it, on purpose: changing it would change how the site looks or works.' },
+  deploy: { label: 'Confirm after deploy', line: 'to confirm after deploying', tone: 'neutral', explain: 'Measured on this computer’s preview; only the real host can confirm it. Check again once the copy is online.' },
+  person: { label: 'Needs a person', line: 'need you', tone: 'warn', explain: 'Needs something only you can give: the new site’s address, a backend, or your own words.' },
+};
+
 export const RESULT_STATUS = {
   fixed: { label: 'Fixed', explain: 'This was a problem on the original site and is solved in the copy.', tone: 'ok' },
   improved: { label: 'Better', explain: 'Still not perfect, but better than on the original.', tone: 'ok' },
@@ -728,3 +736,18 @@ export function pageChoiceText(c) {
 
 /** The copied pages that need the site's own server to work (login, sign-up, account, cart…). */
 export const NEEDS_BACKEND_TEXT = 'Copied, needs a backend to work:';
+
+/** Home: "Apply the latest fixes" to every site at once (server recreate/batchFixes.js). */
+export const BATCH_FIXES = {
+  title: 'Apply the latest fixes to every site',
+  sub: 'Each site with an original copy is fixed again with today’s fixes, without visiting it again, then compared with the original. Several sites run at once; one slot always stays free for your own work.',
+  confirm: (n) => `Fix ${n} ${n === 1 ? 'site' : 'sites'} again? They run a few at a time, and the rest wait their turn. You can stop at any time; the sites already running finish.`,
+  states: {
+    waiting: 'Waiting for a free slot',
+    running: 'Applying the fixes',
+    done: 'Done',
+    failed: 'Did not finish',
+    skipped: 'Skipped',
+    'not-started': 'Not started (stopped)',
+  },
+};

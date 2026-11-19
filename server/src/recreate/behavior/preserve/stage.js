@@ -659,7 +659,7 @@ async function proveFixes({ browser, copyDir, gateDir, pages, siteUrl, newSiteUr
             if (v.look) finalLook.set(p.outPath, v.look);
             if (v.alone?.length) aloneLooks.set(p.outPath, new Map(v.alone));
             gate.push(...(v.gate ?? []));
-            log(`fixes ${p.path}: proven before the stop, written back as it was finished`);
+            log(`fixes ${p.path}: ${saved.carried ? 'proven by the earlier copy for the same lifted page and the same fixes' : 'proven before the stop'}, written back as it was finished`);
             return;
           }
           await checkPageNow(p);
@@ -1112,7 +1112,11 @@ export async function asIsStage(ctx) {
   // Progress inside this step (generateProgress.js): a job that continues a stopped one starts from the parts finished before
   // the stop (the lift, each page's speed plan and proven fixes, the stylesheet verdict) when the same code made them.
   const resuming = Boolean(ctx.report?.resumed?.length);
-  const progress = await openGenerateProgress(path.join(ctx.dir, ASIS_DIR, 'progress'), { resuming });
+  // A repack carries the earlier copy's proven pages (generateProgress.js carryFrom): a page whose lifted bytes and fixes are
+  // the same as then is written back without being looked at again.
+  const progress = await openGenerateProgress(path.join(ctx.dir, ASIS_DIR, 'progress'), {
+    resuming, carryFrom: fromDir ? path.join(fromDir, ASIS_DIR, 'progress') : null,
+  });
   const liftedDirOf = path.join(ctx.dir, ASIS_DIR, 'lifted');
   const liftKept = !fromDir && resuming && progress.liftDone(pages.map((p) => p.outPath))
     && (await readdir(liftedDirOf).then((l) => l.length > 0, () => false)) && Boolean(await readLifted(ctx.dir));

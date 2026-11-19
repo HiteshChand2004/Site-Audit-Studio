@@ -1,0 +1,8 @@
+.counts { color: var(--muted); font-size: var(--fs-sm); margin-bottom: var(--sp-3); }
+.sites { display: grid; gap: var(--sp-1); max-height: 260px; overflow: auto; }
+.sites li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--sp-1) var(--sp-3); padding: var(--sp-2) 0; border-top: 1px solid var(--hairline); font-size: var(--fs-sm); min-width: 0; }
+.name { color: var(--text); font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+.state { color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
+.sites li[data-state='running'] .state { color: var(--accent); }
+.sites li[data-state='failed'] .state { color: var(--bad); }
+.sites li[data-state='done'] .state { color: var(--ok); }

@@ -3,7 +3,7 @@ import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, Check, ChevronRi
 import Badge from '../common/Badge.jsx';
 import Button from '../common/Button.jsx';
 import styles from './FixReport.module.css';
-import { OUTSIDE, ROW_GROUPS, WORSE_REASONS, WORSE_UNEXPLAINED } from '../../copy.js';
+import { ACTIONS, OUTSIDE, ROW_GROUPS, WORSE_REASONS, WORSE_UNEXPLAINED } from '../../copy.js';
 import { WORSE_CAUSES } from '../../siteData.js';
 
 // Every status the comparison can give a check, in the order rows are listed (server: reaudit/compare/rules.js).
@@ -211,6 +211,7 @@ function Row({ item, outside = false }) {
             {outside && item.outsideWhy && <span className={styles.outsideWhy}>{item.outsideWhy}</span>}
           </span>
           {item.review && <Badge tone="warn">Review</Badge>}
+          {ACTIONS[item.action] && <Badge tone={ACTIONS[item.action].tone}>{ACTIONS[item.action].label}</Badge>}
           <span className={styles.rowTag}>{outside ? (ROW_GROUPS[item.group]?.label ?? OUTSIDE.tag) : (item.statusLabel ?? meta.label)}</span>
           <ChevronRight size={14} className={styles.chevron} aria-hidden="true" />
         </summary>
@@ -243,12 +244,12 @@ function Row({ item, outside = false }) {
   );
 }
 
-function Category({ category, items, filter }) {
-  const shown = items.filter((i) => (filter ? i.status === filter : i.status !== 'pass'));
-  const passing = filter ? [] : items.filter((i) => i.status === 'pass');
+function Category({ category, items, filter, action }) {
+  const shown = items.filter((i) => (filter ? i.status === filter : i.status !== 'pass') && (!action || i.action === action));
+  const passing = filter || action ? [] : items.filter((i) => i.status === 'pass');
   if (!shown.length && !passing.length) return null;
   const counts = CHIPS.map((s) => [s, items.filter((i) => i.status === s).length]).filter(([, n]) => n);
-  const open = Boolean(filter) || items.some((i) => NEEDS_ACTION.has(i.status));
+  const open = Boolean(filter || action) || items.some((i) => NEEDS_ACTION.has(i.status));
   return (
     <details className={styles.category} open={open}>
       <summary>
@@ -311,6 +312,8 @@ function OutsideSection({ items, categories }) {
  */
 export default function FixReport({ data, busy, onReaudit }) {
   const [filter, setFilter] = useState(null);
+  // What the rows ask for (server markActions): a second filter, with the status one or alone.
+  const [action, setAction] = useState(null);
   const { categories = [], scope, notes = [] } = data;
   // A regressed row the run found a reason for that is not the copy (measured on this computer, needs the new site's
   // address…) is listed as "Only reads worse" with that reason's name, apart from the rows that really got worse, as the
@@ -321,7 +324,7 @@ export default function FixReport({ data, busy, onReaudit }) {
   const compared = scope?.pages?.length ?? 0;
   const outOfScope = scope?.outOfScope?.length ?? 0;
   // Rows outside what the tool can change have their own section; the categories, chips and counts show the rest.
-  const outside = items.filter((i) => i.outside);
+  const outside = items.filter((i) => i.outside && (!action || i.action === action));
   const own = items.filter((i) => !i.outside);
 
   return (
@@ -377,17 +380,29 @@ export default function FixReport({ data, busy, onReaudit }) {
             </button>
           ) : null,
         )}
-        {filter && (
-          <button type="button" className={styles.clear} onClick={() => setFilter(null)}>
+        {(filter || action) && (
+          <button type="button" className={styles.clear} onClick={() => { setFilter(null); setAction(null); }}>
             Show all
           </button>
         )}
       </div>
 
+      {data.actions && (
+        <div className={styles.chips} role="group" aria-label="Filter by what it asks for">
+          {Object.entries(ACTIONS).map(([a, meta]) =>
+            data.actions[a] ? (
+              <button key={a} type="button" className={styles.chip} aria-pressed={action === a} title={meta.explain} onClick={() => setAction(action === a ? null : a)}>
+                <span className="mono">{data.actions[a]}</span> {meta.label}
+              </button>
+            ) : null,
+          )}
+        </div>
+      )}
+
       {/* Remounted per filter so each section opens or closes for it. */}
-      <div key={filter ?? 'all'} className={styles.categories}>
+      <div key={`${filter ?? 'all'} ${action ?? 'all'}`} className={styles.categories}>
         {categories.map((c) => (
-          <Category key={c.id} category={c} items={own.filter((i) => i.category === c.id)} filter={filter} />
+          <Category key={c.id} category={c} items={own.filter((i) => i.category === c.id)} filter={filter} action={action} />
         ))}
       </div>
 

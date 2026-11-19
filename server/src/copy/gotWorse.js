@@ -17,6 +17,7 @@ import { REASONS } from './openItems.js';
 import { errorPlace, placeKey } from './ownCodeErrors.js';
 import { FIELDS, FIXES, KINDS_BY_KEY, fixOf } from './fixRegistry.js';
 import { blockingFilesOf, observedAt, requestsOf } from '../reaudit/lighthousePages.js';
+import { DEPLOY_CHECKS } from '../reaudit/compare/rules.js';
 
 /** How much a measured amount may move before it counts as grown: bytes and times vary run to run, element counts do not. */
 const GROWTH = { element: 0.02, other: 0.1 };
@@ -105,6 +106,77 @@ export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPage
  * Why a row stays, in the plan's seven groups (one per row, always): what the copy's tool could do about it. A row none of the
  * rules explains and that no planned fix covers is "bug": it should not happen, and a test fails on it.
  */
+/**
+ * Puts explainWorse's reasons on the checklist's rows (never in their place) and takes a row proven the same load out of
+ * "got worse": status changed, "Same load, measured slower", wasStatus regressed, summary moved. Changes `checklist` in place;
+ * a second call changes nothing more (a row already moved is no longer "regressed", so it matches no reason).
+ */
+export function applyReasons(checklist, worse) {
+  const byKey = new Map([...worse.items.map((w) => ['regressed', w]), ...worse.open.map((w) => ['open', w])].map(([status, w]) => [`${status} ${w.key}`, w]));
+  for (const item of checklist.items) {
+    const w = byKey.get(`${item.status} ${item.key}`);
+    if (w) Object.assign(item, { reason: w.reason, reasonEvidence: w.evidence, group: w.group, ...(w.unexplained && { unexplained: true }), ...(w.parts && { reasonParts: w.parts }) });
+    // Proven the same load (same weight, largest element and requests, or the same blocking files): only the timing moved,
+    // so the row is not "got worse" of the copy. It stays listed, as changed, with its evidence.
+    if (w?.proof === 'same-load' && item.status === 'regressed') {
+      Object.assign(item, { status: 'changed', statusLabel: 'Same load, measured slower', wasStatus: 'regressed', proof: 'same-load' });
+      if (checklist.summary) {
+        checklist.summary.regressed = Math.max(0, (checklist.summary.regressed ?? 0) - 1);
+        checklist.summary.changed = (checklist.summary.changed ?? 0) + 1;
+      }
+    }
+  }
+  checklist.gotWorse = worse.summary;
+  // The same for every row still open (failing on both sides): a reason or UNEXPLAINED, and the counts.
+  checklist.stillOpen = worse.openSummary;
+  return checklist;
+}
+
+/** The four things a row can ask for, in the user's words (the app's copy.js mirrors them). */
+export const ACTIONS = {
+  fix: 'Copy can fix',
+  kept: 'Kept like the original',
+  deploy: 'Confirm after deploy',
+  person: 'Needs a person',
+};
+const ACTION_OF_GROUP = {
+  bug: 'fix', 'missing-fixer': 'fix',
+  look: 'kept', 'own-code': 'kept',
+  measurement: 'deploy', noise: 'deploy',
+  'needs-info': 'person', impossible: 'person',
+};
+
+/**
+ * What a row asks for: 'fix' | 'kept' | 'deploy' | 'person', or null for a row that needs nothing (fixed, improved, passing,
+ * or not measured). By its group when it has one; else by its status: a row still failing with no reason is the copy's to fix,
+ * a figure that varies or a link to check again is confirmed after deploying, a manual row needs a person.
+ */
+export function actionOf(item) {
+  if (['fixed', 'improved', 'pass'].includes(item.status)) return null;
+  if (item.status === 'na') return DEPLOY_CHECKS.has(item.key) ? 'deploy' : null;
+  if (ACTION_OF_GROUP[item.group]) return ACTION_OF_GROUP[item.group];
+  if (item.status === 'regressed' || item.status === 'open') return 'fix';
+  if (item.status === 'changed' || item.status === 'recheck') return 'deploy';
+  if (item.status === 'manual') return 'person';
+  return null;
+}
+
+/**
+ * Puts `action` on every row that asks for something and counts them in `checklist.actions` = { fix, kept, deploy, person }.
+ * Recomputed on every call (idempotent), so a re-check stored before this rule gets it when it is read. Nothing is removed and
+ * no status changes. Returns the checklist.
+ */
+export function markActions(checklist) {
+  if (!checklist?.items) return checklist;
+  const counts = { fix: 0, kept: 0, deploy: 0, person: 0 };
+  for (const item of checklist.items) {
+    const action = actionOf(item);
+    if (action) { item.action = action; counts[action]++; } else delete item.action;
+  }
+  checklist.actions = counts;
+  return checklist;
+}
+
 export const GROUPS = {
   bug: { code: 'a', label: 'Our bug', text: 'Nothing explains this and no fix is planned for it: it should not happen. Please report it.' },
   'missing-fixer': { code: 'b', label: 'Fix not built yet', text: 'This can be fixed without changing the look; the tool does not do it yet.' },
@@ -988,6 +1060,7 @@ function lighthousePart(item, id, ctx) {
   const rows = [];
   let grew = false;
   let measured = 0;
+  let timed = 0;
   for (const device of ['mobile', 'desktop']) {
     const b = amountOf(ctx.oldLhr[device]?.audits?.[id]);
     const a = amountOf(ctx.newLhr[device]?.audits?.[id]);
@@ -996,6 +1069,7 @@ function lighthousePart(item, id, ctx) {
     const limit = (b?.value ?? 0) * (1 + (a.unit === 'element' ? GROWTH.element : GROWTH.other));
     const timeOnly = a.unit === 'ms';
     if (timeOnly) {
+      timed++;
       const times = `${b ? `${Math.round(b.value)} → ` : ''}${Math.round(a.value)} ms`;
       // A time no longer than the original's (within GROWTH.other) needs no proof of the same load: the copy is not slower.
       if (b && a.value <= b.value * (1 + GROWTH.other)) {
@@ -1039,6 +1113,8 @@ function lighthousePart(item, id, ctx) {
   if (grew) return unexplained(`What the check measures grew in the copy (${rows.join('; ')}).`);
   return {
     reason: 'deploy',
+    // Every device measured was a time row, and each one proven (no slower, the same blocking files, or the same load).
+    ...(timed === measured && { proof: 'same-load' }),
     evidence: `What the check measures did not grow in the copy (${rows.join('; ')}); only its score moved, with the simulated load time of the measurement host (this computer, served with a static host's network conditions, HTTP/1.1, no CDN) where the original was measured on its own host. Measure it again after deploying.`,
   };
 }
@@ -1281,6 +1357,7 @@ function scorePart(item, ctx) {
     if (!same.ok) return unexplained(`${drop}: ${same.text}, so the lower score cannot be put down to the host.`);
     return {
       reason: 'deploy',
+      proof: 'same-load',
       evidence: `${drop}: ${same.text}. The same page scored lower from the measurement host (this computer, served with a static host's network conditions, HTTP/1.1, no CDN) than the original from its host; both sides were measured now with the same settings, so the gap is the host's. Measure it again after deploying.`,
     };
   }

@@ -10,7 +10,7 @@
 // whole through a temporary file and a rename, so a stop in the middle of a write leaves the part absent, never half there.
 // A fresh job starts empty; a resumed job whose code changed (a deploy between the stop and the resume) starts empty too.
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { SERVER_DIR } from '../../../config/paths.js';
 
@@ -34,17 +34,26 @@ const readJson = (file) => readFile(file, 'utf8').then(JSON.parse, () => null);
 
 /**
  * @param {string} dir  <job>/as-is/progress
- * @param {{ resuming: boolean, code?: string }} o  resuming: this job continues a stopped one (its parts may be used)
+ * @param {{ resuming: boolean, code?: string, carryFrom?: string|null }} o  resuming: this job continues a stopped one (its parts
+ *   may be used); carryFrom: the progress folder of the copy a repack starts from (its proven pages may be used)
  */
-export async function openGenerateProgress(dir, { resuming, code = CODE_ID }) {
+export async function openGenerateProgress(dir, { resuming, code = CODE_ID, carryFrom = null }) {
   const meta = resuming ? await readJson(path.join(dir, 'meta.json')) : null;
   const usable = Boolean(meta && meta.code === code);
   if (!usable) await rm(dir, { recursive: true, force: true });
   let state = usable ? meta : { code, lift: null };
   const saveMeta = () => writeWhole(path.join(dir, 'meta.json'), JSON.stringify(state));
   if (!usable) await saveMeta();
-  /** What a resume reused, for the report. */
-  const reused = { lift: false, perf: 0, css: false, pages: 0 };
+  // A repack (reuseAsIs) carries the earlier copy's proven pages, whatever code wrote them: a part is used only for the same
+  // lifted page AND the same fixes made by today's code (the key of pages/), so a page a new fix changes is proved again.
+  // The speed plans and the stylesheet verdict are not carried: today's code makes them again.
+  const carried = new Set();
+  if (!usable && carryFrom) {
+    await cp(path.join(carryFrom, 'pages'), path.join(dir, 'pages'), { recursive: true }).catch(() => {});
+    for (const f of await readdir(path.join(dir, 'pages')).catch(() => [])) if (f.endsWith('.json')) carried.add(f.slice(0, -5));
+  }
+  /** What a resume (or a repack's carried pages) reused, for the report. */
+  const reused = { lift: false, perf: 0, css: false, pages: 0, carried: 0 };
   return {
     reused,
     /** The lift finished with these pages (outPaths, in order): a resume with the same pages starts from as-is/lifted. */
@@ -77,11 +86,14 @@ export async function openGenerateProgress(dir, { resuming, code = CODE_ID }) {
       const html = v.value?.reverted ? null : await readFile(path.join(dir, 'pages', `${k}.html`)).catch(() => undefined);
       if (html === undefined) return null;
       reused.pages++;
-      return { value: v.value, html };
+      if (carried.has(k)) reused.carried++;
+      return { value: v.value, html, carried: carried.has(k) };
     },
     /** The page HTML first, then the record that points at it: a record is never there without its page. */
     savePage: async (outPath, sig, value, html) => {
       const k = keyOf(outPath);
+      // Proved by this job now: no longer the earlier copy's.
+      carried.delete(k);
       if (html != null) await writeWhole(path.join(dir, 'pages', `${k}.html`), html);
       await writeWhole(path.join(dir, 'pages', `${k}.json`), JSON.stringify({ sig, value }));
     },

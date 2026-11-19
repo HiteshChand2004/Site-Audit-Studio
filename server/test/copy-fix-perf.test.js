@@ -178,6 +178,26 @@ test('the largest element a script fades in shows at once; one that floats forev
   }
 });
 
+test('a hero text a CSS animation fades in is the largest element, not the small header text drawn first', { timeout: 10 * 60000 }, async (t) => {
+  // On a fast machine the faded-in text is drawn first at opacity 0 and the browser names only the header's word; Lighthouse's
+  // slowed phone names the hero text once it shows (interlister). The fix must land on the hero text.
+  const css = 'header{position:fixed;top:0;left:0;right:0;padding:8px 16px;font-size:14px;background:#fff}'
+    + '.rise{animation:rise 1.1s cubic-bezier(.16,1,.3,1) both}@keyframes rise{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:none}}'
+    + 'p.hero{font-size:30px;line-height:1.3;margin:80px 24px 0}';
+  const dir = await siteOf(t, {
+    'index.html': `${head(css)}<body><header><span>Brand</span></header><main><p class="hero rise">${TEXT}</p></main></body></html>`,
+  });
+  const r = await prove(dir);
+  const home = r.pages.find((p) => p.path === '/');
+  assert.equal(home.reverted, undefined, JSON.stringify(r.gate));
+  const shown = home.fixes.find((f) => f.kind === 'lcp' && f.field === 'shown');
+  assert.ok(shown, JSON.stringify({ fixes: home.fixes, open: r.open }));
+  assert.equal(shown.what, 'Main text now shows at once, no fade-in');
+  const html = await read(dir, 'index.html');
+  assert.match(html, /<p class="hero rise" data-sas-shown="0">/);
+  assert.doesNotMatch(html, /<span data-sas-shown/);
+});
+
 test('the largest element is left fading in where it would count as a scroll reveal, and the report says why', () => {
   // Read below the first screen of a computer's window (top 1200 at 1440 px): the motion check counts its fade-in as a scroll
   // reveal, so it keeps it. Above it (top 100), the same element is shown at once.

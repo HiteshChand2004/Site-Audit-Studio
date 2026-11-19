@@ -10,7 +10,7 @@ import path from 'node:path';
 import * as cheerio from 'cheerio';
 import sharp from 'sharp';
 import { addressPass } from '../src/copy/addressPass.js';
-import { fixAsIsCopy, moveHeadData } from '../src/copy/fixAsIs.js';
+import { fixAsIsCopy, followHeadText, moveHeadData } from '../src/copy/fixAsIs.js';
 import { ADDRESS_FIELDS, HEAD_META_FIELDS, fixGroup, fixOf } from '../src/copy/fixRegistry.js';
 
 const SITE = 'https://www.acme-old.dev/';
@@ -246,4 +246,48 @@ test('a canonical / og:url a kept runtime writes again from its own data moves t
   assert.doesNotThrow(() => new Function(s1));
   assert.doesNotThrow(() => new Function(s2));
   assert.ok(!$.html().includes('&quot;'));
+});
+
+test('a fixed title / description is written into the data a kept runtime writes the head from, so the browser keeps the fix', async () => {
+  // interlister: /login and /sign-up share a title and a description. The copy gave /sign-up its own, but its runtime wrote the
+  // original's again after load (["$","title","0",{"children":"…"}]), so the re-check still read a duplicate.
+  const data = (title, desc) => String.raw`self.__next_f.push([1,"d:[[\"$\",\"title\",\"0\",{\"children\":\"${title}\"}],[\"$\",\"meta\",\"1\",{\"name\":\"description\",\"content\":\"${desc}\"}],[\"$\",\"p\",null,{\"children\":\"${title}\"}]]"])`;
+  const TITLE = 'Acme — Account';
+  const DESC = 'Centralized account platform for builders';
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'sas-headdata-'));
+  try {
+    const pages = [
+      { path: '/', outPath: 'index.html', url: SITE },
+      { path: '/login', outPath: 'login.html', url: `${SITE}login` },
+      { path: '/sign-up', outPath: 'sign-up.html', url: `${SITE}sign-up` },
+    ];
+    await writeFile(path.join(dir, 'index.html'), page('<title>Acme tools for every builder</title><meta name="description" content="Acme makes the tools builders use every day, from the first sketch to the last screw.">', '<h1>Acme</h1><p>We make tools.</p>'));
+    for (const [file, h1] of [['login.html', 'Sign in'], ['sign-up.html', 'Sign up']]) {
+      await writeFile(path.join(dir, file), page(`<title>${TITLE}</title><meta name="description" content="${DESC}">`, `<h1>${h1}</h1><script>${data(TITLE, DESC)}</script>`));
+    }
+    const r = await fixAsIsCopy({ dir, pages, siteUrl: SITE, write: false });
+    const signUp = cheerio.load(r.html.get('sign-up.html'));
+    const title = signUp('title').text();
+    const desc = signUp('meta[name="description"]').attr('content');
+    assert.notEqual(title, TITLE, 'the duplicate title is fixed in the head');
+    assert.notEqual(desc, DESC, 'the duplicate description is fixed in the head');
+    const script = signUp('script').html();
+    assert.ok(script.includes(String.raw`{\"children\":\"${title}\"}],[\"$\",\"meta\"`), script);
+    assert.ok(script.includes(String.raw`{\"name\":\"description\",\"content\":\"${desc}\"}`), script);
+    assert.ok(script.includes(String.raw`[\"$\",\"p\",null,{\"children\":\"${TITLE}\"}]`), 'the same words shown on the page are not the head: left as they are');
+    assert.doesNotThrow(() => new Function(script));
+    const fixes = r.pages.find((p) => p.outPath === 'sign-up.html').fixes;
+    assert.equal(fixes.find((f) => f.field === 'title').inScriptData, 1, 'part of the title fix (one gate group), not a fix of its own');
+    assert.equal(fixes.find((f) => f.field === 'description').inScriptData, 1);
+    // The first of the two pages keeps its own title, and its data is untouched.
+    assert.ok(cheerio.load(r.html.get('login.html'))('script').html().includes(String.raw`{\"children\":\"${TITLE}\"}`));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('followHeadText leaves a script alone when the text would need escaping, or is not the head', () => {
+  const $ = cheerio.load(String.raw`<html><head><script>self.__next_f.push([1,"[\"$\",\"title\",\"0\",{\"children\":\"Say \\\"hi\\\"\"}]"])</script><script type="application/ld+json">{"name":"description","content":"Old words"}</script></head></html>`);
+  assert.deepEqual(followHeadText($, { title: ['Say "hi"', 'Hello'], description: ['Old words', 'New words'] }), {});
+  assert.ok($('script[type="application/ld+json"]').html().includes('Old words'));
 });

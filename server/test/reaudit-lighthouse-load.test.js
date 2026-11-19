@@ -38,6 +38,54 @@ test('unevenLoad: different counts of other jobs are uneven; an unknown side dec
   assert.equal(unevenLoad(at(1), at(1)), false);
   assert.equal(unevenLoad({}, at(1)), false);
   assert.equal(unevenLoad(at(0), { contention: null }), false);
+  // The same number of jobs, but the computer itself ran at half speed during one side's run.
+  assert.equal(unevenLoad({ ...at(0), benchmarkIndex: 1000 }, { ...at(0), benchmarkIndex: 500 }), true);
+  assert.equal(unevenLoad({ ...at(0), benchmarkIndex: 1000 }, { ...at(0), benchmarkIndex: 900 }), false);
+  assert.equal(unevenLoad({ benchmarkIndex: 1000 }, {}), false, 'an unknown speed decides nothing');
+});
+
+/** A fake run where each side has its own computer speed and category scores (0–100), no other jobs. */
+const benchRun = (sides, calls) => async (url, mode, outFile) => {
+  const side = url === page.url ? 'original' : 'copy';
+  calls.push(`${side} ${mode}`);
+  const { bench, scores } = sides[side];
+  await writeFile(outFile, JSON.stringify({
+    categories: Object.fromEntries(Object.entries(scores).map(([c, s]) => [c, { score: s / 100 }])),
+    audits: { 'dom-size': { score: 1, numericValue: 300 } },
+    environment: { benchmarkIndex: bench },
+  }));
+  return { contention: { otherJobs: 0, otherKinds: [], availableMB: 8000 } };
+};
+const all = (n, over = {}) => ({ performance: n, accessibility: n, 'best-practices': n, seo: n, ...over });
+
+test('copy measured on a computer half as fast: its lower speed score is "measured on a slower computer", other categories still count', async () => {
+  const calls = [];
+  const result = await compare(benchRun({
+    original: { bench: 1000, scores: all(90) },
+    copy: { bench: 500, scores: all(90, { performance: 60, accessibility: 80 }) },
+  }, calls));
+  assert.equal(calls.length, 12, 'different computer speed = uneven: three runs per side');
+  for (const m of Object.values(result.pages[0].modes)) {
+    assert.deepEqual(m.slower, ['performance']);
+    assert.deepEqual(m.worse, ['accessibility'], 'accessibility does not depend on computer speed');
+    assert.deepEqual(m.cpu, { original: 1000, copy: 500 });
+  }
+  const rows = lighthousePageItems(result);
+  const slow = rows.filter((r) => r.statusLabel === 'Measured on a slower computer');
+  assert.equal(slow.length, 2, 'one per device');
+  assert.ok(slow.every((r) => r.status === 'changed' && r.category === 'performance' && /computer speed 500/.test(r.after.detail)));
+  assert.ok(rows.some((r) => r.category === 'accessibility' && r.status === 'regressed'), JSON.stringify(rows.map((r) => [r.key, r.status])));
+});
+
+test('the same computer speed on both sides: a lower speed score stays worse', async () => {
+  const result = await compare(benchRun({
+    original: { bench: 1000, scores: all(90) },
+    copy: { bench: 950, scores: all(90, { performance: 60 }) },
+  }, []));
+  for (const m of Object.values(result.pages[0].modes)) {
+    assert.deepEqual(m.slower, []);
+    assert.ok(m.worse.includes('performance'));
+  }
 });
 
 test('same load on both sides: a pair where the copy leads everywhere still decides alone, as before', async () => {
@@ -77,7 +125,8 @@ test('a cached run of the original with no load reading: the old rule decides (o
     for (const mode of ['mobile', 'desktop']) {
       // Fresh and measured on a computer as fast as the copy's run (benchmark 1000): it may stand in (lighthousePages.js
       // staleOriginal); only its load reading is missing, which is what this test is about.
-      await writeFile(path.join(cacheDir, `${slug}-${mode}-1.json`), JSON.stringify({ scores: { performance: 80, accessibility: 80, 'best-practices': 80, seo: 80 }, domElements: 300, audits: {}, measuredAt: Date.now(), benchmarkIndex: 1000 }));
+      await writeFile(path.join(cacheDir, `${slug}-${mode}-1.json`), JSON.stringify({ scores: { performance: 80, accessibility: 80, 'best-practices': 80, seo: 80 }, domElements: 300, audits: {}, measuredAt: Date.now(), benchmarkIndex: 1000,
+        scoredByCategory: { performance: [], accessibility: [], 'best-practices': [], seo: [] } }));
     }
   });
   assert.deepEqual(calls, ['copy mobile', 'copy desktop'], 'the original came from the cache; one copy run each');
