@@ -294,6 +294,9 @@ export const api = {
   },
   getRecreate: (id) => request(`/projects/${id}/recreate`),
   stopRecreate: (id) => request(`/projects/${id}/recreate/stop`, { method: 'POST' }),
+  getBatchFixes: () => request('/batch-fixes'),
+  startBatchFixes: (body) => request('/batch-fixes', { method: 'POST', body }),
+  stopBatchFixes: () => request('/batch-fixes', { method: 'DELETE' }),
   subscribeRecreate: (id, recreateId, handlers) => subscribe(apiUrl(`/projects/${id}/recreate/${recreateId}/events`), handlers),
   startReaudit: (id, options = null) => request(`/projects/${id}/reaudit`, { method: 'POST', ...(options && { body: options }) }),
   // The latest comparison attempt and, when it stopped before finishing, what can be continued (`resumable`).

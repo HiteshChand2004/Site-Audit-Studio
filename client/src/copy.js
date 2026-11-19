@@ -685,3 +685,18 @@ export function pageChoiceText(c) {
 
 /** The copied pages that need the site's own server to work (login, sign-up, account, cart…). */
 export const NEEDS_BACKEND_TEXT = 'Copied, needs a backend to work:';
+
+/** Home: "Apply the latest fixes" to every site at once (server recreate/batchFixes.js). */
+export const BATCH_FIXES = {
+  title: 'Apply the latest fixes to every site',
+  sub: 'Each site with an original copy is fixed again with today’s fixes, without visiting it again, then compared with the original. Several sites run at once; one slot always stays free for your own work.',
+  confirm: (n) => `Fix ${n} ${n === 1 ? 'site' : 'sites'} again? They run a few at a time, and the rest wait their turn. You can stop at any time; the sites already running finish.`,
+  states: {
+    waiting: 'Waiting for a free slot',
+    running: 'Applying the fixes',
+    done: 'Done',
+    failed: 'Did not finish',
+    skipped: 'Skipped',
+    'not-started': 'Not started (stopped)',
+  },
+};

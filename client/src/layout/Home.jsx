@@ -10,6 +10,7 @@ import { copyShot, isReal, originalShot, outcomeCounts, platformOf, scoresOf, us
 import { useProjects } from '../store/useProjects.js';
 import styles from './Home.module.css';
 import { copiedPages } from '../copiedPages.js';
+import BatchFixes from '../components/site/BatchFixes.jsx';
 
 /** The four stages of the app, drawn. */
 export const HOW = [
@@ -229,6 +230,10 @@ export default function Home({ onNewProject, onBuild }) {
           ))}
         </dl>
       </section>
+
+      <div className={styles.section}>
+        <BatchFixes />
+      </div>
 
       <section className={styles.section} aria-labelledby="home-sites">
         <header className={styles.sectionHead}>
