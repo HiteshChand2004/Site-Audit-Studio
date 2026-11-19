@@ -12,7 +12,7 @@ import { runLighthouse } from '../audit/lighthouse/run.js';
 import { db } from '../db/index.js';
 import { auditDir, projectDir } from '../config/paths.js';
 import { startEgressProxy } from '../security/egressProxy.js';
-import { betterThanOriginal, compareLighthousePages, lighthousePageItems, lighthousePagesNote, lighthouseTargets, RUN_TIMEOUT_MS } from './lighthousePages.js';
+import { betterThanOriginal, compareLighthousePages, lighthousePageItems, lighthousePagesNote, lighthouseTargets, pairedHomeScores, RUN_TIMEOUT_MS } from './lighthousePages.js';
 import { repeatNote, repeatOf, repeatSpeedRows, speedCandidates, withMedianAudits } from './speedRepeat.js';
 import { getEmitter } from '../recreate/emit/index.js';
 import { outputPages, outputRoot, reportOutputs, targetStack } from '../recreate/export/fromIr.js';
@@ -25,7 +25,7 @@ import { NETWORK_FAILURE_REASONS } from '../recreate/behavior/preserve/pageLift.
 import { createNetPolicy, userPolicy } from '../security/netGuard.js';
 import { compareAudits, loadSide } from './compare/index.js';
 import { CATEGORIES } from './compare/rules.js';
-import { explainWorse, markOutside } from '../copy/gotWorse.js';
+import { applyReasons, explainWorse, markActions, markOutside } from '../copy/gotWorse.js';
 import { ownCodeErrors } from '../copy/ownCodeErrors.js';
 import { clickBudgetFor, hoverBudgetFor, hoverFirstFor, jumpTargetsOf, liftedTargets, measureNewMotion, missedHovers, motionItems, motionTimeFor, readOldMotion, useLiftedBefore } from './motion.js';
 
@@ -373,7 +373,7 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
   } else if (speedRepeat?.error) checklist.speedRepeat = { error: speedRepeat.error };
   if (liftedHome) {
     checklist.lighthouseBefore = { from: 'lifted', devices: Object.keys(liftedHome) };
-    checklist.notes.push(`The original's side of the Lighthouse checks (${Object.keys(liftedHome).map((d) => (d === 'mobile' ? 'phone' : 'computer')).join(' and ')}) is its homepage measured from its own files on this computer, the way the copy is measured; the scores at the top are those of the Check of the live site.`);
+    checklist.notes.push(`The original's side of the Lighthouse checks (${Object.keys(liftedHome).map((d) => (d === 'mobile' ? 'phone' : 'computer')).join(' and ')}) is its homepage measured from its own files on this computer, the way the copy is measured.`);
   }
   if (lighthousePages) {
     // The per-page score rows join the checklist (a "got worse" row per page, mode and category where the copy's median is
@@ -390,7 +390,7 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
     const better = betterThanOriginal(lighthousePages);
     if (better.line) checklist.notes.unshift(better.line);
     checklist.lighthousePages = {
-      pages: lighthousePages.pages.map((p) => ({ path: p.path, originalFrom: p.originalFrom ?? 'live', modes: Object.fromEntries(Object.entries(p.modes).map(([m, v]) => [m, v.error ? { error: v.error } : { original: v.original, copy: v.copy, worse: v.worse, noise: v.noise ?? [], unscored: v.unscored, blankRuns: v.blankRuns, copyMissing: v.copyMissing ?? null, brokenRuns: v.brokenRuns ?? null, originalBlank: v.originalBlank ?? null, runs: v.runs, accepted: v.accepted, extra: v.extra, runScores: v.runScores }])) })),
+      pages: lighthousePages.pages.map((p) => ({ path: p.path, originalFrom: p.originalFrom ?? 'live', modes: Object.fromEntries(Object.entries(p.modes).map(([m, v]) => [m, v.error ? { error: v.error } : { original: v.original, copy: v.copy, worse: v.worse, noise: v.noise ?? [], slower: v.slower ?? [], cpu: v.cpu ?? null, unscored: v.unscored, blankRuns: v.blankRuns, copyMissing: v.copyMissing ?? null, brokenRuns: v.brokenRuns ?? null, originalBlank: v.originalBlank ?? null, runs: v.runs, accepted: v.accepted, extra: v.extra, runScores: v.runScores }])) })),
       worse: lighthousePages.worse,
       unscored: lighthousePages.unscored,
       extraRunPages: lighthousePages.extraRunPages,
@@ -404,6 +404,18 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
       targets: lighthouseTargets(lighthousePages),
       better,
     };
+    // The scores at the top, per device the homepage was measured on: both sides one after the other on this computer. The
+    // Check of the live site (another day, maybe another computer speed) is kept for reference.
+    const paired = pairedHomeScores(lighthousePages);
+    if (paired) {
+      checklist.scoresCheck = checklist.scores;
+      checklist.scores = {
+        before: { ...(checklist.scores?.before ?? {}), ...paired.before },
+        after: { ...(checklist.scores?.after ?? {}), ...paired.after },
+      };
+      checklist.scoresPaired = paired.devices;
+      checklist.notes.unshift(`The scores at the top are the homepage's, the original and the copy measured one after the other on this computer (${paired.devices.map((d) => (d === 'mobile' ? 'phone' : 'computer')).join(' and ')}); the Check of the live site was made on another day and is kept for reference.`);
+    }
   }
   if (isAsIs) await explainAsIs({ checklist, project, report, recreateId, reauditId, origin, outputPageList, speedRepeat });
   // Fix mode (Step 11): what the user approved and the copy changed on purpose (a text colour, a heading's level). The rows of
@@ -424,6 +436,9 @@ export async function buildChecklist({ project, report, analysis, audit, recreat
     if (item.status === 'changed' || item.status === 'recheck') item.group = 'measurement';
     else if (item.status === 'manual') item.group = 'needs-info';
   }
+  // One of four things each row asks for (copy/gotWorse.js markActions): what the copy can still fix, what is kept as the
+  // original, what is confirmed after deploying, what needs a person.
+  markActions(checklist);
   return checklist;
 }
 
@@ -703,14 +718,8 @@ export async function explainAsIs({ checklist, project, report, recreateId, reau
       // but the original loaded then, means the original changed after it was checked.
       capturedUrls: [...(record?.entries ?? []), ...(record?.unreproducible ?? [])].map((e) => e?.url).filter(Boolean),
     });
-    const byKey = new Map([...worse.items.map((w) => ['regressed', w]), ...worse.open.map((w) => ['open', w])].map(([status, w]) => [`${status} ${w.key}`, w]));
-    for (const item of checklist.items) {
-      const w = byKey.get(`${item.status} ${item.key}`);
-      if (w) Object.assign(item, { reason: w.reason, reasonEvidence: w.evidence, group: w.group, ...(w.unexplained && { unexplained: true }), ...(w.parts && { reasonParts: w.parts }) });
-    }
-    checklist.gotWorse = worse.summary;
-    // The same for every row still open (failing on both sides): a reason or UNEXPLAINED, and the counts.
-    checklist.stillOpen = worse.openSummary;
+    // The reasons on the rows; a row proven the same load leaves "got worse" (copy/gotWorse.js applyReasons).
+    applyReasons(checklist, worse);
     // Rows that are not the tool's to change leave "got worse" / "still open" for a section of their own (copy/gotWorse.js).
     markOutside(checklist);
   }

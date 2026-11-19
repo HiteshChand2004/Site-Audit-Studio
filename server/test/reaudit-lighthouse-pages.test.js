@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { betterThanOriginal, blockingFilesOf, compareLighthousePages, decide, earlyRequests, observedAt, probeOwnFiles, lighthousePageItems, lighthousePagesNote, medianScores, pageSlug, requestsOf, runsOverlap, singleRunDecides, trimReport } from '../src/reaudit/lighthousePages.js';
+import { betterThanOriginal, blockingFilesOf, compareLighthousePages, decide, earlyRequests, observedAt, probeOwnFiles, lighthousePageItems, lighthousePagesNote, medianScores, pageSlug, pairedHomeScores, requestsOf, runsOverlap, singleRunDecides, trimReport } from '../src/reaudit/lighthousePages.js';
 
 const report = (scores, { weight = 400000, lcp = 'img.hero', failing = {}, dom = 900 } = {}) => ({
   fetchTime: '2026-10-23T10:00:00Z', requestedUrl: 'x', finalDisplayedUrl: 'x', environment: { benchmarkIndex: 1200 },
@@ -416,4 +416,26 @@ test('betterThanOriginal: one verdict per device and category, the line says it,
   assert.match(noisy.line, /^At least as good as the original in Lighthouse: phone 3 of 4 categories \(Performance lower within run noise: 84 against 85 on \/\)\.$/);
   // Nothing measured: no verdict, no line.
   assert.deepEqual(betterThanOriginal({ pages: [] }), { rule: 'copy >= original, every Lighthouse category, phone and computer', passed: null, failed: 0, byMode: {}, line: null });
+});
+
+test('the scores at the top come from the homepage measured on both sides together, per device it was measured on', () => {
+  const s = (performance, accessibility, bp, seo) => ({ performance, accessibility, 'best-practices': bp, seo });
+  const comparison = { pages: [
+    { path: '/about', modes: { mobile: { original: s(10, 10, 10, 10), copy: s(11, 11, 11, 11) } } },
+    { path: '/', originalFrom: 'lifted', modes: {
+      mobile: { original: s(56, 90, 96, 100), copy: s(54, 92, 96, 100) },
+      desktop: { error: 'Lighthouse wrote no report' },
+    } },
+  ] };
+  assert.deepEqual(pairedHomeScores(comparison), {
+    before: { mobile: { performance: 56, accessibility: 90, bestPractices: 96, seo: 100 } },
+    after: { mobile: { performance: 54, accessibility: 92, bestPractices: 96, seo: 100 } },
+    devices: ['mobile'],
+    originalFrom: 'lifted',
+  });
+  // A device whose speed was not scored on one side is left to the Check's scores.
+  assert.equal(pairedHomeScores({ pages: [{ path: '/', modes: { mobile: { original: s(null, 90, 96, 100), copy: s(54, 92, 96, 100) } } }] }), null);
+  // No homepage measured: nothing to pair.
+  assert.equal(pairedHomeScores({ pages: [comparison.pages[0]] }), null);
+  assert.equal(pairedHomeScores(null), null);
 });

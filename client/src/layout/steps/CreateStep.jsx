@@ -201,18 +201,18 @@ export default function CreateStep({ project, audit, onOpenSettings, onGo, copyA
       )}
 
       <div className={result ? ws.twoCol : undefined}>
-      {/* An ordinary user's one way to copy again without opening the site: the same lifted copy, packaged again (the server
-          allows `reuseAsIs` to everyone; the clean pipeline's replay and everything under "Advanced options" are the owner's). */}
-      {!isOwner && result?.asIs && !running && (
-        <Card icon={RefreshCw} title="Rebuild from the last visit" sub={`Rebuilds the copy from what was saved on ${new Date(result.createdAt).toLocaleDateString()}, without opening the site again. It shows the site as it was then; for today's site, use “Copy my site”.`}>
+      {/* For everyone with an as-is copy: the same lifted copy, with today's fixes applied again and compared again, without
+          opening the site (`reuseAsIs`, the same stack). After a fix lands in the tool, this is how a copy gets it. */}
+      {result?.asIs && !running && (
+        <Card icon={RefreshCw} title="Apply the latest fixes" sub={`Applies today's fixes again to the copy saved on ${new Date(result.createdAt).toLocaleDateString()}, without opening the site again, then compares it with the original again. It shows the site as it was then; for today's site, use “Copy my site”.`}>
           <div className={ws.actions}>
             <Button
               icon={RefreshCw}
               disabled={Boolean(blocker)}
-              title={blocker ?? 'Reuses the saved copy of the site, so it reflects the site as it was then.'}
+              title={blocker ?? 'Reuses the saved copy of the site (no new visit), so it reflects the site as it was then, with the latest fixes.'}
               onClick={() => recreate(project.id, { mode: 'as-is', confirmed: true, stack: result.asIs.stack, reuseAsIs: true })}
             >
-              Rebuild from the last visit
+              Apply the latest fixes
             </Button>
           </div>
         </Card>

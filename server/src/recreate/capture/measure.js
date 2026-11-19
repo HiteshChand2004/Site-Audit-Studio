@@ -3,7 +3,7 @@
 // with the very same yardstick (reaudit/motion.js). The page must be loaded with JavaScript on.
 import { captureClicks } from './clicks.js';
 import { captureInteractions } from './interactions.js';
-import { settle } from './index.js';
+import { SCROLL_CAP, settle } from './index.js';
 import { captureLoops } from './loops.js';
 import { measureFeeds } from './feeds.js';
 import { capturePointer } from './pointer.js';
@@ -14,9 +14,13 @@ import { processReveal } from './reveal.js';
  * @param {{ width?: number, height?: number, budgetMs?: number, cap?: number, focus?: boolean, clickBudgetMs?: number }} [o]  `focus:
  *   false` leaves out the Tab walk (the hover probe keeps the same time); `clickBudgetMs` > 0 runs the click probe last (it
  *   changes the page), the same probe the capture ran, so what each control does can be compared with the original's.
+ * `cap`: how far down the scroll-through goes, by default as far as the capture went on the original (SCROLL_CAP). It was 8000
+ *   px: on a taller page what lies below was never scrolled to, so its reveals never fired and its controls stayed hidden
+ *   (interlister: a FAQ at 19 188 px of a 21 373 px page — the copy's click probe found none of its questions, the original's
+ *   found all three).
  * @returns {Promise<{ reveal: object, loops: object, hover: object[], focus: object[], stats: object }>}
  */
-export async function measureMotion(page, { width = 1440, height = 900, budgetMs = 6000, cap = 8000, focus = true, clickBudgetMs = 0, hoverFirst = [] } = {}) {
+export async function measureMotion(page, { width = 1440, height = 900, budgetMs = 6000, cap = SCROLL_CAP, focus = true, clickBudgetMs = 0, hoverFirst = [] } = {}) {
   const { events } = await settle(page, { width, height }, cap, { observe: true });
   await page.waitForTimeout(300);
   const loops = await captureLoops(page);

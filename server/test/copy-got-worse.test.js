@@ -2,7 +2,7 @@
 // measured, and a row no rule backs is marked unexplained, never given a reason by default, never left out.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { explainWorse, reasonText } from '../src/copy/gotWorse.js';
+import { actionOf, applyReasons, explainWorse, markActions, reasonText } from '../src/copy/gotWorse.js';
 import { notesEntries } from '../src/recreate/export/notes.js';
 
 const SITE = 'https://www.example-original.test/';
@@ -181,6 +181,87 @@ test('other time rows count only the requests started by the moment they measure
   assert.equal(score(true).reason, 'deploy');
   assert.match(score(true).evidence, /the same requests started by the load event/);
   assert.equal(score(false).reason, null, 'a row kept before the early requests were recorded: every request, as before');
+});
+
+test('proof of the same load: only a time row proven on every device, or a speed score on the same load, carries it', () => {
+  const time = (sel, ms, w, load = LOAD) => lhr({ ...lcp(sel, ms), ...weight(w), ...(load ? requests(load) : {}) });
+  const key = { key: 'lighthouse.largest-contentful-paint-element' };
+  // The same bytes, element and requests, only slower: proven.
+  const same = one(key, { oldLhr: { mobile: time('h1.hero', 0, 500000) }, newLhr: { mobile: time('h1.hero', 650, 495000) } });
+  assert.equal(same.proof, 'same-load');
+  // Heavier: no reason and no proof.
+  const heavier = one(key, { oldLhr: { mobile: time('h1', 0, 500000) }, newLhr: { mobile: time('h1', 900, 900000) } });
+  assert.equal(heavier.proof, undefined);
+  // An amount that did not grow is still the host (deploy), but bytes are no proof that only the timing moved.
+  const bytes = (n) => ({ 'unused-javascript': { details: { overallSavingsBytes: n }, score: 0 } });
+  const amount = one({ key: 'lighthouse.unused-javascript' }, { oldLhr: { mobile: lhr(bytes(67000)) }, newLhr: { mobile: lhr(bytes(23000)) } });
+  assert.equal(amount.reason, 'deploy');
+  assert.equal(amount.proof, undefined);
+  // A performance score on the same load: proven; on another load: not.
+  const score = (copyTotal) => one({
+    key: 'lighthouse-score.mobile.performance./', before: { score: 92 }, after: { score: 86 },
+    lighthousePage: { mode: 'mobile', category: 'performance', weight: { original: 500000, copy: 500000 }, lcp: { original: { selector: 'h1' }, copy: { selector: 'h1' } },
+      requests: { original: { total: 16, byType: { Script: 16 } }, copy: { total: copyTotal, byType: { Script: copyTotal } } } },
+  });
+  assert.equal(score(16).proof, 'same-load');
+  assert.equal(score(18).proof, undefined);
+});
+
+test('applyReasons: a row proven the same load leaves "got worse" as changed; the others keep their status; a second call changes nothing', () => {
+  const unused = (js, css) => ({
+    'unused-javascript': { details: { overallSavingsBytes: js }, score: 0 },
+    'unused-css-rules': { details: { overallSavingsBytes: css }, score: 0 },
+  });
+  const oldLhr = { mobile: lhr({ ...lcp('h1.hero', 0), ...weight(500000), ...requests(LOAD), ...unused(20000, 67000) }) };
+  const newLhr = { mobile: lhr({ ...lcp('h1.hero', 650), ...weight(495000), ...requests(LOAD), ...unused(90000, 23000) }) };
+  const rows = () => [
+    { key: 'lighthouse.largest-contentful-paint-element', status: 'regressed', title: 'LCP' },
+    { key: 'lighthouse.unused-javascript', status: 'regressed', title: 'Unused JS' },
+    { key: 'lighthouse.unused-css-rules', status: 'regressed', title: 'Unused CSS' },
+  ];
+  const checklist = { items: rows(), summary: { regressed: 3, changed: 1 } };
+  const worse = explainWorse({ ...base, oldLhr, newLhr, items: rows() });
+  applyReasons(checklist, worse);
+  const [time, grew, amount] = checklist.items;
+  assert.equal(time.status, 'changed', 'the same bytes, element and requests: only the timing moved');
+  assert.equal(time.statusLabel, 'Same load, measured slower');
+  assert.equal(time.wasStatus, 'regressed');
+  assert.equal(time.group, 'measurement');
+  assert.match(time.reasonEvidence, /0 → 650 ms/);
+  assert.equal(grew.status, 'regressed', 'what it measures grew: still got worse');
+  assert.equal(grew.unexplained, true);
+  assert.equal(amount.status, 'regressed', 'an amount that did not grow is the host, but no proof that only timing moved');
+  assert.equal(amount.reason, 'deploy');
+  assert.deepEqual(checklist.summary, { regressed: 2, changed: 2 });
+  assert.equal(checklist.gotWorse, worse.summary);
+  applyReasons(checklist, worse);
+  assert.deepEqual(checklist.summary, { regressed: 2, changed: 2 }, 'a second call moves nothing again');
+});
+
+test('markActions: every row that asks for something gets one of four actions, counted; the rest get none', () => {
+  const rows = [
+    ['a', 'regressed', 'bug', 'fix'],
+    ['b', 'open', undefined, 'fix'],
+    ['c', 'open', 'missing-fixer', 'fix'],
+    ['d', 'regressed', 'look', 'kept'],
+    ['e', 'open', 'own-code', 'kept'],
+    ['f', 'regressed', 'measurement', 'deploy'],
+    ['g', 'changed', undefined, 'deploy'],
+    ['lighthouse.uses-http2', 'na', undefined, 'deploy'],
+    ['h', 'regressed', 'needs-info', 'person'],
+    ['i', 'manual', undefined, 'person'],
+    ['j', 'fixed', undefined, null],
+    ['k', 'pass', undefined, null],
+    ['l', 'na', undefined, null],
+  ].map(([key, status, group, want]) => ({ key, status, ...(group && { group }), want }));
+  for (const r of rows) assert.equal(actionOf(r), r.want, `${r.key} ${r.status} ${r.group ?? ''}`);
+  const checklist = { items: rows.map(({ want, ...r }) => ({ ...r, ...(r.key === 'j' && { action: 'fix' }) })) };
+  markActions(checklist);
+  assert.deepEqual(checklist.actions, { fix: 3, kept: 2, deploy: 3, person: 2 });
+  assert.equal(checklist.items.find((i) => i.key === 'j').action, undefined, 'a stale action is removed');
+  assert.deepEqual(checklist.items.map((i) => i.status), rows.map((r) => r.status), 'no status changes');
+  markActions(checklist);
+  assert.deepEqual(checklist.actions, { fix: 3, kept: 2, deploy: 3, person: 2 }, 'a second call counts the same');
 });
 
 test('contrast: the original\'s own colours seen more often is its look (d); a colour the original never failed with is unexplained', () => {

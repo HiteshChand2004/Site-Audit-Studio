@@ -385,6 +385,14 @@ export async function fixAsIsCopy({ dir, pages, siteUrl, newSiteUrl = null, site
     }
     if (finalDescription) seenDescription.add(finalDescription.toLowerCase());
     if (description) seenDescription.add(description.toLowerCase());
+    // A kept runtime writes its head again after load from its own data (["$","title","0",{"children":"…"}]): left as the original
+    // wrote it, the fixed title / description is replaced in the browser by the original's (interlister: /sign-up showed
+    // "Interlister — Marketplace Sync" again, the duplicate the fix had removed). The data follows the fix; it is part of that fix.
+    const followed = followHeadText($, { title: [title, finalTitle], description: [description, finalDescription] });
+    for (const field of ['title', 'description']) {
+      const fix = followed[field] && fixes.find((f) => f.kind === 'head' && f.field === field);
+      if (fix) fix.inScriptData = followed[field];
+    }
 
     // Addresses (applyAddress, shared with the address pass at download, copy/addressPass.js): a canonical / og:url / og:image
     // naming the original moves to the new site, a missing canonical / og:url is added (only with an address).
@@ -798,6 +806,45 @@ export function moveHeadData($, siteHost, newOrigin, byPath) {
     if (out !== text) $(el).text(out);
   }
   return { moved, fields: [...fields] };
+}
+
+/** The title and the description as script data writes them, for one exact text (group `v`). */
+const headTextData = (field, text) => {
+  const v = `(?<v>${escapeRe(text)})`;
+  if (field === 'title') return [new RegExp(String.raw`(${Q}title${Q}\s*,\s*${Q}[^"\\]*${Q}\s*,\s*\{\s*${Q}children${Q}\s*:\s*${Q})${v}(?=${Q})`, 'g')];
+  return [
+    new RegExp(String.raw`(${Q}name${Q}\s*:\s*${Q}description${Q}\s*,\s*${Q}content${Q}\s*:\s*${Q})${v}(?=${Q})`, 'g'),
+    new RegExp(String.raw`(${Q}content${Q}\s*:\s*${Q})${v}(?=${Q}\s*,\s*${Q}name${Q}\s*:\s*${Q}description${Q})`, 'g'),
+  ];
+};
+
+/**
+ * In the page's inline scripts (not structured data): the title / description a kept runtime writes after load, when it is
+ * exactly the text the copy changed, becomes the copy's text. Only plain texts (no quote, backslash or "<": anything that would
+ * need escaping inside the script is left as it is). `changes`: field → [original, copy's]. Returns field → places changed.
+ */
+export function followHeadText($, changes) {
+  const out = {};
+  const todo = Object.entries(changes).filter(([, [from, to]]) => from && to && from !== to && ![from, to].some((t) => /["\\<]/.test(t)));
+  if (!todo.length) return out;
+  for (const el of $('script:not([src])').toArray()) {
+    const type = String($(el).attr('type') ?? '').toLowerCase();
+    if (type === 'application/ld+json') continue;
+    const text = $(el).html();
+    if (!text) continue;
+    let next = text;
+    for (const [field, [from, to]] of todo) {
+      if (!next.includes(from)) continue;
+      for (const re of headTextData(field, from)) {
+        next = next.replace(re, (all, lead) => {
+          out[field] = (out[field] ?? 0) + 1;
+          return `${lead}${to}`;
+        });
+      }
+    }
+    if (next !== text) $(el).text(next);
+  }
+  return out;
 }
 
 const exists = (f) => stat(f).then(() => true, () => false);

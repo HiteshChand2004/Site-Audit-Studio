@@ -39,7 +39,9 @@ export function copyShot(projectId, result, page = homePage(result), view = 'des
 export function scoresOf(audit, device) {
   const cmp = comparisonOf(audit);
   return {
-    before: (isReal(audit) ? audit.scores?.[device] : null) ?? cmp?.scores?.before?.[device] ?? null,
+    // Measured beside the copy on the same computer when the comparison has it (scoresPaired), else the Check of the live site.
+    before: (cmp?.scoresPaired?.includes(device) ? cmp.scores?.before?.[device] : null)
+      ?? (isReal(audit) ? audit.scores?.[device] : null) ?? cmp?.scores?.before?.[device] ?? null,
     after: cmp?.scores?.after?.[device] ?? null,
   };
 }

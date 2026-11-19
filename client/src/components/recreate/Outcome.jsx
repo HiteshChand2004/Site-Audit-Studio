@@ -5,7 +5,7 @@ import { Card } from '../common/Surface.jsx';
 import { Pill } from '../common/Score.jsx';
 import InfoTip from '../common/InfoTip.jsx';
 import CountUp from '../common/CountUp.jsx';
-import { CHECKS, HEALTH, matchRating, OUTSIDE, RESULT_STATUS, TERMS } from '../../copy.js';
+import { ACTIONS, CHECKS, HEALTH, matchRating, OUTSIDE, RESULT_STATUS, TERMS } from '../../copy.js';
 import { plural } from '../../format.js';
 import styles from './Outcome.module.css';
 import { stackById } from '../../constants.js';
@@ -83,6 +83,9 @@ export default function Outcome({ result, comparison }) {
   })();
   const better = s ? (s.fixed ?? 0) + (s.improved ?? 0) : 0;
   const rowsOf = (status) => own.filter((i) => i.status === status);
+  // What is left, by what each row asks for (server markActions): only the actions that have rows.
+  const actions = comparison?.actions ?? null;
+  const actionText = actions && Object.keys(ACTIONS).filter((a) => actions[a]).map((a) => `${actions[a]} ${ACTIONS[a].line}`).join(' · ');
   const before = comparison?.scores?.before?.mobile;
   const after = comparison?.scores?.after?.mobile;
 
@@ -131,6 +134,7 @@ export default function Outcome({ result, comparison }) {
       )}
 
       {outsideN > 0 && <p className={styles.todoDetail}>{OUTSIDE.line(outsideN)}</p>}
+      {actionText && <p className={styles.todoDetail}>What is left: {actionText}.</p>}
 
       <div className={styles.facts}>
         {match != null && (
