@@ -13,7 +13,7 @@ import { replayStages } from './replay.js';
 import { getEmitter } from './emit/index.js';
 import { exportStack, outputRoot, targetStack } from './export/fromIr.js';
 import { activePreview, startPreview } from './preview.js';
-import { maxAutoResumes, readCheckpoint } from './checkpoint.js';
+import { idleAutoResumes, maxAutoResumes, readCheckpoint } from './checkpoint.js';
 import { analysisWarnings, isExactMode, latestAnalysis } from './inputs.js';
 import { pruneRecreates, recreateDir, tmpDir } from './workspace.js';
 import { sweepJobScratch } from '../jobs/cleanup.js';
@@ -82,7 +82,8 @@ const noteResumed = db.prepare('UPDATE recreates SET error = ? WHERE id = ?');
 
 /**
  * Continues a stopped recreate by itself when it stopped for a reason a new try can get past (`restart`: the server
- * stopped while it ran; `time-limit`: its budget ran out after it made progress), as many times in a row as SAS_MAX_AUTO_RESUMES allows (no limit unless it is set).
+ * stopped while it ran; `time-limit`: its budget ran out after it made progress), as often as it keeps finishing new work,
+ * and with no limit on continues without new work unless SAS_MAX_AUTO_RESUMES sets one.
  * @returns {Promise<object|null>} the new job
  */
 /** How the stopped recreate was started ({ exact, unlimited }, from its checkpoint), or null when it did not say. */
@@ -94,7 +95,7 @@ export async function resumeMode(projectId, recreateId) {
 export async function autoResume(project, recreateId, reason) {
   if (!project?.authorized) return null;
   const checkpoint = await readCheckpoint(tmpDir(project.id, recreateId));
-  if (!checkpoint?.discovery?.pages?.length || (checkpoint.autoResumes ?? 0) >= maxAutoResumes()) return null;
+  if (!checkpoint?.discovery?.pages?.length || idleAutoResumes(checkpoint) >= maxAutoResumes()) return null;
   if (reason === 'time-limit' && !(checkpoint.stopped?.reason === 'time-limit' && checkpoint.stopped.progressed)) return null;
   if (reason === 'restart' && checkpoint.stopped) return null; // it stopped on its own before the restart
   try {

@@ -646,14 +646,24 @@ export function clickDifferences(was, now, closesRead = true) {
 export const scrollOnlyClick = (w) => w?.tag === 'a' && (w.reasons ?? []).includes('anchor')
   && !(w.change?.shown?.length || w.change?.hidden?.length || w.change?.added?.length || w.change?.text?.length);
 
+/** Areas the original's feeds probe saw change by themselves: kept as a feed, or skipped (too few updates, too slow, …). */
+export const selfChangingPaths = (feeds) => [
+  ...(feeds?.areas ?? []).map((a) => a.path),
+  ...(feeds?.skipped ?? []).filter((s) => s.reason !== 'no change').map((s) => s.path),
+].filter(Boolean);
+const within = (p, area) => p === area || String(p).startsWith(`${area}>`);
+const parentPath = (p) => String(p ?? '').replace(/>[^>]*$/, '');
+
 /**
  * Pairs every control of the original with the copy's control of the same name that behaves most alike.
  * A jump link (`jump`: `#id` of an element on the page, capture/clicks.js or markJumps) is no click interaction: what its
  * click changed is what the scroll brought into view. It is left out on both sides (`leftOut: 'jump'`) - as long as the copy's
  * page still holds its target (`targetsNow`, id → present, measureNewMotion). A target the copy lost is a real "does nothing";
  * a target nobody checked (an older measurement) is not counted (`unchecked`).
+ * A control that switches a part changing by itself (`selfChanging`: selfChangingPaths of the original's feeds probe) is judged
+ * only on what does not depend on the moment it was clicked (`selfChanging` on the row when nothing else is left).
  */
-export function compareClicks(oldWidgets = [], newWidgets = [], probedNames = null, targetsNow = null, probedPaths = null) {
+export function compareClicks(oldWidgets = [], newWidgets = [], probedNames = null, targetsNow = null, probedPaths = null, selfChanging = []) {
   // A control the copy's probe never reached (its time ran out, or it probed other equal controls instead) is not checked:
   // that is no evidence the copy's control does nothing. How many controls of each name the copy's probe clicked: that many of
   // the original's controls of the name can be judged, and no more - one "Learn more" probed is not every "Learn more" probed.
@@ -688,6 +698,16 @@ export function compareClicks(oldWidgets = [], newWidgets = [], probedNames = nu
     const row = { was, now, diff: clickDifferences(was, now, detailsRead(was, now)) };
     // A FAQ answer's second click read before the probe knew how the answer started: not a verdict (detailsRead).
     if (now && !detailsRead(was, now) && was.tag === 'summary' && (was.closesOwn ?? was.closes) !== (now.closesOwn ?? now.closes)) row.detailsUnread = true;
+    // A control that switches a part changing by itself (a carousel that moves on, panscience.xyz's venture dots): what its
+    // click shows depends on the moment. "A click outside / Escape closes it" on the original was the part moving on; "does
+    // nothing" on the copy is the item already on show, when the copy's probe found another control of the same row working.
+    // Neither is a verdict; a second click, or a row of controls none of which works on the copy, still is.
+    if ((was.targets ?? []).some((t) => selfChanging.some((a) => within(t, a)))) {
+      const rowWorks = newWidgets.some((w) => w.trigger && w.trigger !== was.trigger && parentPath(w.trigger) === parentPath(was.trigger));
+      const kept = row.diff.filter((d) => !/^(a click outside|Escape) does not close/.test(d) && !(rowWorks && d === 'does nothing in the copy'));
+      if (kept.length < row.diff.length && !kept.length) row.selfChanging = true;
+      row.diff = kept;
+    }
     return row;
   };
   const rowOf = new Map();
@@ -910,16 +930,21 @@ export function motionItems(oldPages, newPages, { lifted = null, backend = null 
     });
   }
   // Clicks: every control the original's click probe found is clicked on the copy the same way, and the two compared.
-  const clicks = { total: 0, same: 0, differences: [], unchecked: 0, detailsUnread: 0, jumps: 0, notChecked: [] };
+  const clicks = { total: 0, same: 0, differences: [], unchecked: 0, detailsUnread: 0, selfChanging: 0, jumps: 0, notChecked: [] };
   const named = (r) => `${r.was.tag ?? ''} "${String(r.was.text ?? '').slice(0, 30)}"`;
   for (const slug of both) {
     const was = oldPages.get(slug)?.clicks?.widgets ?? [];
     const nowClicks = newPages.get(slug)?.clicks;
     const now = nowClicks?.widgets;
     if (!was.length || !now) continue; // not measured on the copy: no verdict either way
-    for (const r of compareClicks(was, now, nowClicks?.probedNames ?? null, newPages.get(slug)?.jumpTargets ?? null, nowClicks?.probedPaths ?? null)) {
+    for (const r of compareClicks(was, now, nowClicks?.probedNames ?? null, newPages.get(slug)?.jumpTargets ?? null, nowClicks?.probedPaths ?? null, selfChangingPaths(oldPages.get(slug)?.feeds))) {
       if (r.leftOut === 'jump') {
         clicks.jumps++;
+        continue;
+      }
+      if (r.selfChanging) {
+        clicks.selfChanging++;
+        if (clicks.notChecked.length < 12) clicks.notChecked.push({ page: slug, element: named(r), why: 'changes by itself' });
         continue;
       }
       // Not checked: no verdict, but never hidden - counted and named in the row.
@@ -934,23 +959,25 @@ export function motionItems(oldPages, newPages, { lifted = null, backend = null 
       else if (clicks.differences.length < 12) clicks.differences.push({ page: slug, element: named(r), kind: r.was.kind, diff: r.diff });
     }
   }
-  if (clicks.total || clicks.unchecked || clicks.detailsUnread) {
+  if (clicks.total || clicks.unchecked || clicks.detailsUnread || clicks.selfChanging) {
     // Nothing checked at all is no pass: the row stays open, saying why.
     const ratio = clicks.total ? clicks.same / clicks.total : 0.5;
     const shown = clicks.differences.slice(0, 3).map((d) => `${d.element}: ${d.diff[0]}`).join('; ');
     const unread = [
       clicks.unchecked ? `${clicks.unchecked} not checked (the probe ran out of time)` : null,
       clicks.detailsUnread ? `${clicks.detailsUnread} FAQ ${clicks.detailsUnread === 1 ? 'answer' : 'answers'} open in the copy but ${clicks.detailsUnread === 1 ? 'its' : 'their'} second click not checked (the reading depends on whether the answer was open when the probe reached it)` : null,
+      clicks.selfChanging ? `${clicks.selfChanging} not judged (the part ${clicks.selfChanging === 1 ? 'it switches' : 'they switch'} changes by itself, so what a click shows depends on the moment)` : null,
     ].filter(Boolean).join('; ');
+    const counted = clicks.total + clicks.unchecked + clicks.detailsUnread + clicks.selfChanging;
     items.push({
       ...row('motion.clicks', 'Click interactions kept', ratio,
-        { detail: `${plural(clicks.total + clicks.unchecked + clicks.detailsUnread, 'control')} open, switch or move something when clicked (menus, FAQ answers, tabs, dialogs, …).`, count: clicks.total + clicks.unchecked + clicks.detailsUnread },
+        { detail: `${plural(counted, 'control')} open, switch or move something when clicked (menus, FAQ answers, tabs, dialogs, …).`, count: counted },
         { detail: `${clicks.total ? `${clicks.same} of the ${clicks.total} checked do the same on the recreated site, and close again the same way.` : 'None could be checked on the recreated site.'}${shown ? ` Differs: ${shown}.` : ''}${unread ? ` ${unread[0].toUpperCase()}${unread.slice(1)}.` : ''}`, count: clicks.same },
         [unread ? `${unread[0].toUpperCase()}${unread.slice(1)}: not counted either way.` : null,
           clicks.jumps ? `${plural(clicks.jumps, 'link')} that only jump to a place on the same page left out (the place is on the copy's page too).` : null]
           .filter(Boolean).join(' ') || null),
       differences: clicks.differences,
-      ...(clicks.notChecked.length && { notChecked: clicks.notChecked, unchecked: clicks.unchecked + clicks.detailsUnread }),
+      ...(clicks.notChecked.length && { notChecked: clicks.notChecked, unchecked: clicks.unchecked + clicks.detailsUnread + clicks.selfChanging }),
       ...(clicks.jumps && { jumps: clicks.jumps }),
     });
   }

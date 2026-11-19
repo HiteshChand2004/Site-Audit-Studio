@@ -7,7 +7,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { auditDir } from '../config/paths.js';
-import { buildContext, detectStack, globalNames, toTechStack } from '../detection/engine.js';
+import { buildContext, detectStack, globalNames, isStaticHtml, toTechStack } from '../detection/engine.js';
 import { detectManualRebuild } from '../detection/manual.js';
 import { analyzeA11y } from './analyzers/a11y.js';
 import { analyzeAeo } from './analyzers/aeo.js';
@@ -638,7 +638,7 @@ async function analyzeSite({ project, analysisId, maxPages, progress, errors, ou
     metrics: buildMetrics(mobile, 'mobile'),
     metricsByDevice: { mobile: buildMetrics(mobile, 'mobile'), desktop: buildMetrics(desktop, 'desktop') },
     scores: buildScores(mobile, desktop),
-    techStack: toTechStack(detections),
+    techStack: toTechStack(detections, { staticHtml: isStaticHtml({ rawHtml: home.body, url: home.url, renderedTextLength: render?.textLength ?? null }) }),
     weaknesses: buildWeaknesses(detections, mobile),
     seo: [...analyzeSeo(pages, homePage), crawlErrorsItem(allPages)],
     aeo: analyzeAeo({ pages, home: homePage, robots, llms, renderedTextLength: render?.textLength ?? null }),

@@ -1,8 +1,10 @@
 // The as-is copy converted into a React + Vite project: every page a React page made of the components convert/document.js
 // produces, the original's stylesheets and scripts kept, the copy's other files in public/. The pages are prerendered with
-// react-dom/server and never hydrated: the build writes plain HTML into dist/ and not one byte of React reaches a visitor (the
-// server bundle Vite builds for the prerender lives in .ssr/, which is never deployed). The original's own scripts run as they
-// do on any HTML page, so the copy loads exactly what the as-is copy loads and cannot lose a Lighthouse point to a runtime.
+// react-dom/server and hydrated in the browser (user, 2026-11-16: a live copy must be a React site a visitor can inspect and the
+// analysis can detect): every page loads React and its own components from /_react/ (src/entry-client.jsx, one chunk per page),
+// React takes over the body the server wrote, and only then do the original's own scripts run, in their order
+// (src/run-scripts.js). They wait with type="text/sas-later" (laterScripts) so that React finds the page exactly as it was
+// written and never draws over what a script changed. The cost is React's own JavaScript (~60 KB gzipped) on every page.
 //
 // Page addresses do not change: a page the copy has as about.html is dist/about.html, about/index.html stays a folder page.
 //
@@ -27,6 +29,10 @@ import { pascal } from '../emit/react/components.js';
 export const REACT_EXPORT_DIR = 'dist';
 /** Where Vite writes the server bundle the prerender runs (a dot folder: never deployed, never zipped). */
 const SSR_DIR = '.ssr';
+/** Where Vite writes the browser's bundle (React, the client entry, one chunk per page) before the prerender copies it. */
+const CLIENT_DIR = '.client';
+/** The folder of dist/ the browser's React is served from (/_react/…). */
+export const CLIENT_BASE = '_react';
 const DEFAULT_DOCTYPE = '<!DOCTYPE html>';
 
 const hostSlug = (pageUrl) => {
@@ -51,6 +57,47 @@ export function pageComponentName(outPath) {
 /** The page's own doctype, as written (a page without one is written with the HTML5 doctype, which is what a browser assumes). */
 export function doctypeOf(html) {
   return /^﻿?\s*(<!doctype[^>]*>)/i.exec(html)?.[1] ?? DEFAULT_DOCTYPE;
+}
+
+/** The type a script that waits for React is given; its own type stays in data-sas-type (empty = none). */
+export const LATER_TYPE = 'text/sas-later';
+/** The types a browser runs as script (an empty or missing type is JavaScript). */
+const RUNS = /^(?:|module|(?:text|application)\/(?:x-)?(?:java|ecma)script|text\/javascript1\.[0-5]|text\/jscript|text\/livescript)$/i;
+
+/** Where an open tag that starts at `start` ends (the index of its '>'), quotes respected; -1 when it never closes. */
+function openTagEnd(html, start) {
+  let quote = null;
+  for (let i = start + 1; i < html.length; i++) {
+    const c = html[i];
+    if (quote) { if (c === quote) quote = null; } else if (c === '"' || c === "'") quote = c;
+    else if (c === '>') return i;
+  }
+  return -1;
+}
+
+/**
+ * The page with every script the browser would run made to wait for React: `type="text/sas-later" data-sas-type="<its own
+ * type>"` written first in its open tag (an HTML parser keeps the first of two equal attributes, so its own type no longer
+ * counts and nothing else of the tag changes). The client entry runs them, in their order, once React has taken the page
+ * (src/run-scripts.js). A JSON-LD block, an import map or a template's script (inert anyway) is left as it is. Only the open
+ * tags are touched, found by a real HTML parser: a "<script" inside a script's text or a comment is never mistaken for one.
+ */
+export function laterScripts(html) {
+  const $ = cheerio.load(html, { xml: false, xmlMode: false, withStartIndices: true, _useHtmlParser2: true });
+  const at = [];
+  $('script').each((_, el) => {
+    if ($(el).parents('template, noscript').length) return;
+    const own = String(el.attribs?.type ?? '').trim();
+    if (!RUNS.test(own) || el.startIndex == null) return;
+    at.push({ start: el.startIndex, own: el.attribs?.type ?? '' });
+  });
+  let out = html;
+  for (const { start, own } of at.sort((a, b) => b.start - a.start)) {
+    if (!/^<script\b/i.test(out.slice(start, start + 7)) || openTagEnd(out, start) < 0) continue;
+    const value = own.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    out = `${out.slice(0, start + 7)} type="${LATER_TYPE}" data-sas-type="${value}"${out.slice(start + 7)}`;
+  }
+  return out;
 }
 
 /** Every file under a folder, as '/'-separated paths relative to it. */
@@ -93,22 +140,48 @@ export function finishPage({ doctype, prolog, html }) {
 
 /** The server entry: renders one page to its finished HTML (shipped with the project; the prerender and the dev server use it). */
 export const ENTRY_SERVER_SOURCE = `// Renders one page of the site to the HTML a visitor gets. Used at build time (scripts/prerender.mjs) and by the development
-// server (scripts/dev.mjs); never sent to the browser: the pages are not hydrated, so no React code runs for a visitor.
+// server (scripts/dev.mjs). In the build every page also loads React (src/entry-client.jsx, from /_react/), which takes over
+// the body the server wrote (hydration) and then runs the original's own scripts in their order (src/run-scripts.js).
 import { createElement, Children, Fragment } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderToStaticMarkup, renderToString } from 'react-dom/server';
 import { finishPage } from './finish-page.js';
 import { routes } from './routes.js';
 
 export { routes };
 
 // React 19 puts what it hoists (preload hints for images) in front of the markup. Rendered after a marker element, the page's
-// own markup is whatever follows the marker, exactly where the components put it.
+// own markup is whatever follows the marker, exactly where the components put it. The body is rendered with renderToString:
+// its markers between two texts (<!-- -->) are what hydration reads the page by.
 const MARK = 'sas-render-start';
 function inPlace(node) {
-  const html = renderToStaticMarkup(createElement(Fragment, null, createElement(MARK), node));
+  const html = renderToString(createElement(Fragment, null, createElement(MARK), node));
   const tag = '<' + MARK + '></' + MARK + '>';
   return html.slice(html.indexOf(tag) + tag.length);
 }
+
+// Where the browser's React lives in the built site, and the module that starts it (keys of Vite's manifest).
+const BASE = '/_react/';
+const ENTRY = 'src/entry-client.jsx';
+/** The tags that load React for a page: the client entry (it names the page), and a preload of every module it needs. */
+function bootTags(manifest, route) {
+  const entry = manifest[ENTRY];
+  if (!entry) throw new Error('the client build has no ' + ENTRY);
+  const files = [];
+  const seen = new Set();
+  const walk = (key) => {
+    const chunk = manifest[key];
+    if (!chunk || seen.has(key)) return;
+    seen.add(key);
+    if (chunk.file !== entry.file) files.push(chunk.file);
+    for (const k of chunk.imports ?? []) walk(k);
+  };
+  for (const k of entry.imports ?? []) walk(k);
+  walk('src/pages/' + route.name + '.jsx');
+  return '<script type="module" src="' + BASE + entry.file + '" data-sas-boot="" data-page="' + escapeAttr(route.name) + '"></script>'
+    + files.map((f) => '<link rel="modulepreload" href="' + BASE + f + '" data-sas-boot="">').join('');
+}
+// Without React in the browser (npm run dev), every script gets its own type back and runs as on any page.
+const ownTypes = (html) => html.replace(/ type="text\\/sas-later" data-sas-type="([^"]*)"/g, (all, type) => (type ? ' type="' + type + '"' : ''));
 
 // The head is rendered one element at a time, so React keeps the original's order (it would move the charset and viewport
 // metas and the stylesheets otherwise).
@@ -126,36 +199,135 @@ function attrs(props, raw) {
   return own + Object.entries(raw ?? {}).map(([k, v]) => ' ' + k + '="' + escapeAttr(v) + '"').join('');
 }
 
-/** The finished HTML of a route (src/finish-page.js puts back what React cannot write). */
-export function render(route) {
+/**
+ * The finished HTML of a route (src/finish-page.js puts back what React cannot write). manifest = Vite's manifest of the client
+ * build: the page loads React and is hydrated; none (npm run dev): a plain page, its scripts running as they are.
+ */
+export function render(route, manifest = null) {
   const { Page, document: d } = route;
   const body = inPlace(createElement(Page));
-  const html = '<html' + attrs(d.html, d.htmlRaw) + '><head>' + headHtml(d.head) + '</head><body' + attrs(d.body, d.bodyRaw) + '>' + body + '</body></html>';
-  return finishPage({ doctype: d.doctype, prolog: d.prolog, html });
+  const boot = manifest ? bootTags(manifest, route) : '';
+  const html = '<html' + attrs(d.html, d.htmlRaw) + '><head>' + headHtml(d.head) + boot + '</head><body' + attrs(d.body, d.bodyRaw) + '>' + body + '</body></html>';
+  const page = finishPage({ doctype: d.doctype, prolog: d.prolog, html });
+  return manifest ? page : ownTypes(page);
+}
+`;
+
+/** The browser's entry: React takes over the page the server wrote, then the original's own scripts run (in the build only). */
+export const ENTRY_CLIENT_SOURCE = `// Runs in the browser on every page of the built site. React takes over the body the server wrote (hydrateRoot: the same
+// components, so nothing is drawn again), then the original's own scripts run, in their order (src/run-scripts.js): they
+// waited (type text/sas-later) so that React found the page exactly as the server wrote it. Each page loads only its own
+// components (one chunk per page). Whatever happens to React, the page's scripts still run (at the latest after 5 s).
+import { useEffect } from 'react';
+import { hydrateRoot } from 'react-dom/client';
+import { runOriginalScripts } from './run-scripts.js';
+
+const pages = import.meta.glob('./pages/*.jsx');
+const name = document.querySelector('script[data-sas-boot]')?.dataset.page;
+const load = pages['./pages/' + name + '.jsx'];
+
+function Ready({ children }) {
+  useEffect(() => { runOriginalScripts(); }, []);
+  return children;
+}
+
+setTimeout(runOriginalScripts, 5000);
+if (!load) runOriginalScripts();
+else {
+  load().then(({ default: Page }) => {
+    // A difference React finds is not an error of the page: it draws that part again, before any original script runs.
+    hydrateRoot(document.body, <Ready><Page /></Ready>, { onRecoverableError: () => {} });
+  }, () => runOriginalScripts());
+}
+`;
+
+/** Runs the original's scripts once React has the page: in their order, then the page-ready events they may wait for. */
+export const RUN_SCRIPTS_SOURCE = `// The original's own scripts, run once React has taken over the page (src/entry-client.jsx). In the built HTML they wait with
+// type="text/sas-later" (their own type in data-sas-type). Each is put back as a script the browser runs, at its own place:
+//  1. async scripts start at once (they never waited for anything);
+//  2. the other classic scripts, one after the other, each external one loaded before the next starts (as the parser runs them);
+//  3. then defer and module scripts, in their order;
+//  4. then DOMContentLoaded (and load, when the page has loaded already) once more, for the scripts that listen for them: the
+//     browser sent them before these scripts were running.
+// While they run, document.write writes where the script stands instead of replacing the page (it would, after the page
+// has loaded).
+const LATER = 'text/sas-later';
+let started = false;
+
+function put(old) {
+  return new Promise((resolve) => {
+    // The same kind of element where it stands (a script inside an SVG is an SVG script).
+    const s = document.createElementNS(old.namespaceURI, old.localName);
+    for (const { name, value } of [...old.attributes]) if (name !== 'type' && name !== 'data-sas-type') s.setAttribute(name, value);
+    const type = old.getAttribute('data-sas-type');
+    if (type) s.setAttribute('type', type);
+    const external = s.hasAttribute('src') || s.hasAttribute('href') || s.hasAttribute('xlink:href');
+    if (external && !old.hasAttribute('async') && 'async' in s) s.async = false;
+    if (!external) s.textContent = old.textContent;
+    const done = () => resolve();
+    if (external) { s.addEventListener('load', done); s.addEventListener('error', done); }
+    old.replaceWith(s);
+    if (!external) setTimeout(done, 0);
+  });
+}
+
+async function run() {
+  if (document.readyState === 'loading') await new Promise((r) => document.addEventListener('DOMContentLoaded', r, { once: true }));
+  const waiting = [...document.querySelectorAll('script[type="' + LATER + '"]')];
+  const kind = (s) => (s.hasAttribute('async') && s.hasAttribute('src') ? 'async'
+    : s.getAttribute('data-sas-type') === 'module' || (s.hasAttribute('defer') && s.hasAttribute('src')) ? 'later' : 'now');
+  const write = document.write;
+  const writeln = document.writeln;
+  document.write = (...parts) => { const at = document.currentScript; if (at) at.insertAdjacentHTML('beforebegin', parts.join('')); };
+  document.writeln = (...parts) => document.write(...parts, '\\n');
+  try {
+    for (const s of waiting.filter((s) => kind(s) === 'async')) put(s);
+    for (const s of waiting.filter((s) => kind(s) === 'now')) await put(s);
+    for (const s of waiting.filter((s) => kind(s) === 'later')) await put(s);
+  } finally {
+    document.write = write;
+    document.writeln = writeln;
+  }
+  document.dispatchEvent(new Event('DOMContentLoaded', { bubbles: true }));
+  if (document.readyState === 'complete') window.dispatchEvent(new Event('load'));
+}
+
+export function runOriginalScripts() {
+  if (started) return;
+  started = true;
+  run().catch((err) => console.error(err));
 }
 `;
 
 /** The prerender, run by `npm run build` after the server bundle: dist/ = public/ + one HTML file per page. */
-export const PRERENDER_SOURCE = `// Runs after \`vite build --ssr\`: writes the finished site into dist/ — the files of public/ as they are, and every page as
-// HTML rendered from its components. Nothing else: no JavaScript of React or of this project goes into dist/.
-import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
+export const PRERENDER_SOURCE = `// Runs after \`vite build\` (the browser's React, into ${CLIENT_DIR}/) and \`vite build --ssr\`: writes the finished site into
+// dist/ — the files of public/ as they are, the browser's React and components at /${CLIENT_BASE}/, and every page as HTML
+// rendered from its components, loading React to take it over.
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const root = process.cwd();
 const dist = path.join(root, 'dist');
+const client = path.join(root, '${CLIENT_DIR}');
 const { routes, render } = await import(pathToFileURL(path.join(root, '${SSR_DIR}', 'entry-server.js')).href);
+const manifest = JSON.parse(await readFile(path.join(client, '.vite', 'manifest.json'), 'utf8'));
+// Pages React could not hold when the copy was checked in a browser (a hydration error, or the page drawn again): they ship
+// as plain HTML, their own scripts running as written.
+const noRuntime = new Set(JSON.parse(await readFile(path.join(root, 'scripts', 'no-runtime.json'), 'utf8').catch(() => '[]')));
+if (existsSync(path.join(root, 'public', '${CLIENT_BASE}'))) throw new Error('public/${CLIENT_BASE} exists: the site already has files where React would go');
 
 await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
 if (existsSync(path.join(root, 'public'))) await cp(path.join(root, 'public'), dist, { recursive: true });
+await cp(client, path.join(dist, '${CLIENT_BASE}'), { recursive: true, filter: (f) => path.basename(f) !== '.vite' });
 for (const route of routes) {
   const file = path.join(dist, route.file);
   await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, render(route), 'utf8');
+  await writeFile(file, render(route, noRuntime.has(route.path) ? null : manifest), 'utf8');
 }
-console.log('prerender: ' + routes.length + ' page(s) written to dist/');
+console.log('prerender: ' + routes.length + ' page(s) written to dist/' + (noRuntime.size ? ' (' + noRuntime.size + ' without React)' : ''));
 `;
 
 /** `npm run dev`, shipped with the project: the pages rendered from the components on each request, exactly as the build writes them. */
@@ -283,7 +455,8 @@ const HEADERS_FILE = `/
 export async function convertToReact({ copyDir, outDir, pages, pageUrl }) {
   const docs = [];
   for (const p of pages) {
-    const html = await readFile(path.join(copyDir, p.outPath), 'utf8');
+    // The original's scripts wait for React (laterScripts): React must find the page as the server wrote it.
+    const html = laterScripts(await readFile(path.join(copyDir, p.outPath), 'utf8'));
     docs.push({ page: routeOf(p.outPath), html, pageUrl: p.url, outPath: p.outPath, doctype: doctypeOf(html) });
   }
   const site = convertSite(docs.map((d) => ({ page: d.page, html: d.html, pageUrl: d.pageUrl })));
@@ -332,8 +505,8 @@ export async function convertToReact({ copyDir, outDir, pages, pageUrl }) {
       ...[...new Set(used)].sort().map((n) => `import ${n} from '../components/${n}.jsx';`),
       ...(pageRaw ? [`import ${RAW_COMPONENT} from '../components/${RAW_COMPONENT}.jsx';`] : []),
       '',
-      `// The page ${d.page}: prerendered to dist/${d.outPath} and never hydrated (no React code is sent with it); the original's own`,
-      '// scripts run as they do on any HTML page.',
+      `// The page ${d.page}: prerendered to dist/${d.outPath} and hydrated in the browser (src/entry-client.jsx); the original's own`,
+      '// scripts (type="text/sas-later") run after React has taken over the page, in their order.',
       `export default function ${pageName}() {`,
       '  return (',
       '    <>',
@@ -369,14 +542,18 @@ export async function convertToReact({ copyDir, outDir, pages, pageUrl }) {
     ...routeLines.map((r) => `import ${r.pageName}, { document as ${r.pageName}Document } from './pages/${r.pageName}.jsx';`),
     '',
     'export const routes = [',
-    ...routeLines.map((r) => `  { path: ${JSON.stringify(r.path)}, file: ${JSON.stringify(r.file)}, Page: ${r.pageName}, document: ${r.pageName}Document },`),
+    ...routeLines.map((r) => `  { path: ${JSON.stringify(r.path)}, file: ${JSON.stringify(r.file)}, name: ${JSON.stringify(r.pageName)}, Page: ${r.pageName}, document: ${r.pageName}Document },`),
     '];',
     '',
   ].join('\n'));
   await put('src/entry-server.jsx', ENTRY_SERVER_SOURCE);
+  await put('src/entry-client.jsx', ENTRY_CLIENT_SOURCE);
+  await put('src/run-scripts.js', RUN_SCRIPTS_SOURCE);
   await put('src/finish-page.js', FINISH_PAGE_SOURCE);
   await put('scripts/prerender.mjs', PRERENDER_SOURCE);
   await put('scripts/dev.mjs', DEV_SOURCE);
+  // Pages that ship without React (runtimeHold.js fills it when a page breaks under React); none to begin with.
+  await put('scripts/no-runtime.json', '[]\n');
 
   // The copy's files: public/ (copied into dist/ unchanged by the prerender), except the page documents (the pages render them).
   const copyFiles = await listFiles(copyDir);
@@ -398,8 +575,8 @@ export async function convertToReact({ copyDir, outDir, pages, pageUrl }) {
     name: `${slug}-site`, private: true, version: '0.0.0', type: 'module',
     scripts: {
       dev: 'node scripts/dev.mjs',
-      build: `vite build --ssr src/entry-server.jsx --outDir ${SSR_DIR} && node scripts/prerender.mjs`,
-      preview: 'vite preview --port 4173',
+      build: `vite build --outDir ${CLIENT_DIR} && vite build --ssr src/entry-server.jsx --outDir ${SSR_DIR} && node scripts/prerender.mjs`,
+      preview: 'vite preview --port 4173 --base /',
     },
     dependencies: { react: v.react, 'react-dom': v['react-dom'] },
     devDependencies: { vite: v.vite, '@vitejs/plugin-react': v['@vitejs/plugin-react'] },
@@ -408,25 +585,31 @@ export async function convertToReact({ copyDir, outDir, pages, pageUrl }) {
   await put('vite.config.js', `import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-// The site is prerendered: \`npm run build\` bundles src/entry-server.jsx for Node (into ${SSR_DIR}/, never deployed) and
-// scripts/prerender.mjs writes every page as HTML into dist/, next to the files of public/. vite preview serves dist/.
+// \`npm run build\`: \`vite build --outDir ${CLIENT_DIR}\` bundles the browser's React and components (src/entry-client.jsx, one
+// chunk per page) for /${CLIENT_BASE}/; \`vite build --ssr\` bundles src/entry-server.jsx for Node (into ${SSR_DIR}/, never deployed);
+// scripts/prerender.mjs writes every page as HTML into dist/, next to the files of public/ and ${CLIENT_BASE}/. build.outDir below
+// names that finished site, which is what \`npm run preview\` (vite preview --base /) serves.
 export default defineConfig({
   plugins: [react()],
   publicDir: 'public',
+  base: '/${CLIENT_BASE}/',
   // Vite's own cache stays in the project (not inside node_modules).
   cacheDir: '.vite',
-  build: { outDir: 'dist', copyPublicDir: false, emptyOutDir: true },
+  build: { outDir: '${REACT_EXPORT_DIR}', manifest: true, copyPublicDir: false, emptyOutDir: true, rollupOptions: { input: 'src/entry-client.jsx' } },
   preview: { headers: { 'Cache-Control': 'no-cache' } },
 });
 `);
-  await put('.gitignore', `node_modules\n${SSR_DIR}\n.vite\ndist\n`);
+  await put('.gitignore', `node_modules\n${SSR_DIR}\n${CLIENT_DIR}\n.vite\ndist\n`);
   const fallbackCount = site.fallbacks.length;
   await put('README.md', `# ${slug} — React + Vite
 
 A copy of ${slug.replace(/-/g, '.')} made with Remastly, converted into a React + Vite project: every page is a React page
 made of components (\`src/components/\`, one per section of the page; the ones several pages share are one file), with the
-original's own stylesheets and scripts kept as they are (\`public/\`). The pages are prerendered to HTML and not hydrated: no
-React code is sent to the visitor, so nothing is added to what the original loads.
+original's own stylesheets and scripts kept as they are (\`public/\`). The pages are prerendered to HTML and hydrated in the
+browser: every page loads React and its own components from \`/${CLIENT_BASE}/\` (\`src/entry-client.jsx\`), React takes over the
+page, and then the original's scripts run in their order (\`src/run-scripts.js\`). In the components those scripts carry
+\`type="text/sas-later"\` (their own type in \`data-sas-type\`): that is what makes them wait for React. Keep it on a script you
+add that should run after React; \`npm run dev\` shows the pages without React in the browser, the scripts running as they are.
 
 ## Install, run, build
 
@@ -487,6 +670,7 @@ export async function buildConvertedReact(dir, { timeoutMs = 6 * 60000, signal }
   return runToolchain({
     dir, toolchain: 'react-vite', timeoutMs, signal,
     steps: [
+      { label: 'vite build', args: ['vite', 'build', '--outDir', CLIENT_DIR] },
       { label: 'vite build --ssr', args: ['vite', 'build', '--ssr', 'src/entry-server.jsx', '--outDir', SSR_DIR] },
       { label: 'prerender', args: ['scripts/prerender.mjs'] },
     ],
@@ -516,6 +700,8 @@ function canonical(html) {
     const flush = () => { if (text && !(quiet && !text.trim())) out.push(`${where} #text ${JSON.stringify(text)}`); text = ''; };
     for (const n of node.children ?? []) {
       if (n.type === 'text') { text += n.data; continue; }
+      // React's marker between two texts (<!-- -->, for hydration) draws nothing: the texts around it are read as one, on both sides.
+      if (n.type === 'comment' && n.data === ' ') continue;
       if (n.type === 'comment' && /^>html>(head|body)/.test(where)) { flush(); out.push(`${where} #comment ${JSON.stringify(n.data)}`); continue; }
       if (n.type !== 'tag' && n.type !== 'script' && n.type !== 'style') continue;
       flush();
@@ -533,6 +719,17 @@ function canonical(html) {
   };
   walk($.root().get(0), '', true);
   return out;
+}
+
+/**
+ * A built page without what React adds to it: the tags that load React (data-sas-boot, written by src/entry-server.jsx) and
+ * the waiting type of the original's scripts (text/sas-later → its own type). What is left must be the as-is page.
+ */
+export function withoutReact(html) {
+  return html
+    .replace(/<script type="module" src="[^"]*" data-sas-boot="" data-page="[^"]*"><\/script>/g, '')
+    .replace(/<link rel="modulepreload" href="[^"]*" data-sas-boot="">/g, '')
+    .replace(new RegExp(` type="${LATER_TYPE.replace('/', '\\/')}" data-sas-type="([^"]*)"`, 'g'), (all, type) => (type ? ` type="${type}"` : ''));
 }
 
 /** The first difference between two documents, in words; null when they hold the same DOM. */
@@ -557,7 +754,7 @@ export async function verifyConverted({ copyDir, outDir, pages }) {
     const original = await readFile(path.join(copyDir, p.outPath), 'utf8');
     const converted = await readFile(path.join(dist, p.outPath), 'utf8').catch(() => null);
     if (converted == null) throw new Error(`the build wrote no ${p.outPath}`);
-    const diff = domDifference(original, converted);
+    const diff = domDifference(original, withoutReact(converted));
     if (diff) throw new Error(`${p.outPath} is not the as-is page: ${diff}`);
   }
   const copyFiles = new Set(await listFiles(copyDir));
@@ -574,8 +771,10 @@ export async function verifyConverted({ copyDir, outDir, pages }) {
     const [x, y] = await Promise.all([readFile(path.join(copyDir, rel)), readFile(path.join(dist, rel))]);
     if (!x.equals(y)) throw new Error(`dist/${rel} is not the copy's file`);
   }
-  const code = added.filter((f) => /\.(m?js|css|wasm)$/i.test(f));
+  // The only code the build may add is React and the components, under /_react/.
+  const code = added.filter((f) => /\.(m?js|css|wasm)$/i.test(f) && !f.startsWith(`${CLIENT_BASE}/`));
   if (code.length) throw new Error(`the build added code the copy does not have: ${code.slice(0, 5).join(', ')}`);
+  if (!added.some((f) => f.startsWith(`${CLIENT_BASE}/`) && /\.js$/i.test(f))) throw new Error(`the build wrote no React for the browser (dist/${CLIENT_BASE}/)`);
   for (const rel of pageSet) if (!(await stat(path.join(dist, rel)).then((s) => s.isFile(), () => false))) throw new Error(`dist/${rel} is missing`);
   return { pages: pages.length, files, added };
 }

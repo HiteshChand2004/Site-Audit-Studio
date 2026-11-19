@@ -325,7 +325,7 @@ const PATH_CLASH = new Set(['EEXIST', 'ENOTDIR', 'EISDIR']);
  * @param {{ browser: import('playwright').Browser, outDir: string, pageUrl: string, hosts: string[],
  *   fetchImpl?: typeof downloadAsset, passes?: number, files?: { url: string, local: string }[] }} o
  */
-export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl = downloadAsset, passes = COMPLETE_PASSES, files = [], entries = ['index.html'] }) {
+export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl = downloadAsset, passes = COMPLETE_PASSES, files = [], entries = ['index.html'], recorded = [] }) {
   const originHosts = new Set(hosts.map((h) => h.replace(/^www\./, '')));
   // Every file the lift already copied is served by the worker too: its address maps to its local file, so a request for
   // it (a chunk the page imports by address) is answered from the copy, never refused as "not in this copy".
@@ -471,25 +471,18 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
     await route.fulfill({ status: 200, body, contentType: rangedFiles[key].type ?? 'application/octet-stream' });
     return true;
   };
-  const answerSameOrigin = async (route, url, pass) => {
-    const u = new URL(url);
+  /**
+   * One answer of the original for an address of the copy's own server: its file, the worker's map, and the bare path (no
+   * query) for a first visit with no worker yet. `from`: 'pass' (asked of the original now) or 'record' (the capture's answer).
+   */
+  const keepAnswer = async (u, original, body, mime, pass, from = 'pass') => {
     const rel = u.pathname + u.search;
-    if (sameFile[rel]) return route.fulfill({ path: path.join(outDir, sameFile[rel]) });
-    if (sameFailed.has(rel)) return route.fulfill({ status: 404, body: '' });
-    const { original, res, refused } = await askOriginal(rel);
-    if (!original) {
-      // Every original host answers an error (or a page): the copy leaves the address as the original does, and says so.
-      const reason = refused.length === 1 ? refused[0].reason : refused.map((r) => `${r.host}: ${r.reason}`).join('; ');
-      sameFailed.set(rel, reason);
-      sameOrigin.sameAsOriginal.push({ path: rel, reason, pass });
-      return route.fulfill({ status: 404, body: '' });
-    }
-    const local = localPathOf(original, res.mime);
+    const local = localPathOf(original, mime);
     // One step at a time: the bare file of a path is written or removed by one answer after another, never two at once. A step
     // that fails leaves the chain usable for the next answer (a rejected chain would fail every answer after it).
     const step = bareChain.then(async () => {
       await folderFor(path.join(outDir, local));
-      await copyFile(res.tmp, path.join(outDir, local));
+      await copyFile(body, path.join(outDir, local));
       sameFile[rel] = local;
       const barePath = path.join(outDir, decodeURIComponent(u.pathname));
       const owner = bareOwner.get(u.pathname);
@@ -500,7 +493,7 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
         // folder of the same name holds other files (/blog and /blog/post), the path has no bare file: each address keeps its own.
         try {
           await mkdir(path.dirname(barePath), { recursive: true });
-          await copyFile(res.tmp, barePath);
+          await copyFile(body, barePath);
           bareOwner.set(u.pathname, rel);
           bareFiles.set(path.resolve(barePath), u.pathname);
         } catch (err) {
@@ -520,10 +513,45 @@ export async function completeCopy({ browser, outDir, pageUrl, hosts, fetchImpl 
     bareChain = step.catch(() => {});
     await step;
     const host = new URL(original).hostname;
-    sameOrigin.mapped.push({ path: rel, file: local, pass, ...(host !== new URL(pageUrl).hostname && { host }) });
+    sameOrigin.mapped.push({ path: rel, file: local, pass, ...(from !== 'pass' && { from }), ...(host !== new URL(pageUrl).hostname && { host }) });
+    return local;
+  };
+  const answerSameOrigin = async (route, url, pass) => {
+    const u = new URL(url);
+    const rel = u.pathname + u.search;
+    if (sameFile[rel]) return route.fulfill({ path: path.join(outDir, sameFile[rel]) });
+    if (sameFailed.has(rel)) return route.fulfill({ status: 404, body: '' });
+    const { original, res, refused } = await askOriginal(rel);
+    if (!original) {
+      // Every original host answers an error (or a page): the copy leaves the address as the original does, and says so.
+      const reason = refused.length === 1 ? refused[0].reason : refused.map((r) => `${r.host}: ${r.reason}`).join('; ');
+      sameFailed.set(rel, reason);
+      sameOrigin.sameAsOriginal.push({ path: rel, reason, pass });
+      return route.fulfill({ status: 404, body: '' });
+    }
+    const local = await keepAnswer(u, original, res.tmp, res.mime, pass);
     log.push({ pass, sameOrigin: rel, result: 'answered from the original' });
     return route.fulfill({ path: path.join(outDir, local) });
   };
+  // The data the original answered while it was captured (asis.js liftSite: GET, 200, JSON, from the copy's hosts), kept
+  // first, so the copy draws what the original drew (botza: a FAQ page's question came from its API, which answers nothing
+  // without the page's token, so the copy drew no heading). The first answer of an address wins; the passes then find the
+  // files in the copy and ask the original for nothing.
+  for (const r of recorded) {
+    let u;
+    try {
+      u = new URL(r.url);
+    } catch {
+      continue;
+    }
+    if (!originHosts.has(u.hostname.replace(/^www\./, '')) || sameFile[u.pathname + u.search]) continue;
+    try {
+      await keepAnswer(u, r.url, r.body, r.type ?? null, 0, 'record');
+      manifest[r.url] = sameFile[u.pathname + u.search];
+    } catch (err) {
+      log.push({ recorded: r.url, result: `not kept: ${err?.message ?? err}` });
+    }
+  }
   let passesRun = 0;
   for (let pass = 1; pass <= passes; pass++) {
     passesRun = pass;

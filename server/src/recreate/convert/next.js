@@ -1,17 +1,21 @@
-// The as-is copy converted into a Next.js project (Pages Router, static export): every page a Next.js page made of the
+// The as-is copy converted into a Next.js project (App Router, static export): every page a Next.js page made of the
 // components convert/document.js produces, the original's stylesheets and scripts kept, the copy's other files in public/.
-// The pages are prerendered and never hydrated: `unstable_runtimeJS: false` leaves every byte of the Next.js runtime out of
-// the exported pages (the original's scripts keep running as in any HTML page, and no script is added that could cost a
-// Lighthouse point). A short after-build step (scripts/after-build.mjs, shipped and run by `npm run build`) then makes the
-// export the copy's own pages: Next's <div id="__next"> wrapper, its own charset / viewport metas and its <noscript> go,
-// raw fallbacks are unwrapped, and the files Next reserves in public/ (the copy's own _next folder) are put into out/.
-// `npm run dev` (scripts/dev.mjs) serves those reserved files too and finishes each page the same way (scripts/finish-page.mjs),
-// so the development server shows what the build ships.
+// The pages run Next.js in the browser (user, 2026-11-16: the live copy is the chosen stack, seen in its code and by an
+// analysis): Next hydrates the whole document the server wrote (each page is its own root layout, app/(p-<page>)/layout.jsx,
+// with the original's <html>, <head> and <body>), then the original's own scripts run, in their order (src/run-scripts.js,
+// started by src/components/RunLater.jsx): they wait as type="text/sas-later" until then, so Next finds the page exactly as
+// the server wrote it. Next's chunks use a global of their own (webpackChunk_sas), so an original built with Next.js keeps
+// its own. A page whose original keeps its own App Router runtime (self.__next_f) cannot hold a second one: it ships without
+// ours (scripts/no-runtime.json), as before.
+// A short after-build step (scripts/after-build.mjs, shipped and run by `npm run build`) then makes the export the copy's own
+// pages: raw fallbacks are unwrapped, the attributes React cannot write are written, and the files Next reserves in public/
+// (the copy's own _next folder) are put into out/. `npm run dev` (scripts/dev.mjs) serves those reserved files too and
+// finishes each page the same way (scripts/finish-page.mjs), so the development server shows what the build ships.
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import * as cheerio from 'cheerio';
 import { convertSite, RAW_COMPONENT, RAW_COMPONENT_SOURCE, rewriteLinks } from './document.js';
-import { domDifference } from './react.js';
+import { domDifference, LATER_TYPE, laterScripts, RUN_SCRIPTS_SOURCE } from './react.js';
 import { planRoutes } from '../emit/next/routes.js';
 import { pinnedOverrides, pinnedVersions } from '../../toolchains/index.js';
 import { runToolchain } from '../build/toolchain.js';
@@ -55,46 +59,59 @@ function componentFile(name, jsx, { usesRaw }) {
 /** How a page Next rendered becomes the copy's own page, shared by the after-build step and the development server. */
 export const FINISH_PAGE_SOURCE = `// How a page Next rendered becomes the copy's own page. scripts/after-build.mjs applies it to every page of out/ and
 // scripts/dev.mjs to every page the development server renders, so \`npm run dev\` shows what \`npm run build\` ships.
-//  1. Next wraps a page's markup in <div id="__next"> and adds its own charset and viewport metas and a <noscript>; the pages
-//     have their own, so the wrapper is unwrapped and those tags removed (the page's DOM is then the original's). Next's
-//     charset meta stays only on a page that has none of its own.
-//  2. An element the conversion kept as original HTML (RawHtml: an inert <template data-sas-raw>) is unwrapped.
-//  3. Attributes of <html> / <body> React could not write (data-sas-raw-attrs) are written, and the comments the original has
+//  1. An element the conversion kept as original HTML (RawHtml: an inert <template data-sas-raw>) is unwrapped: Next then
+//     finds that element where the component stands (the component draws the same tag in the browser).
+//  2. Attributes of <html> / <body> React could not write (data-sas-raw-attrs) are written, and the comments the original has
 //     between its doctype and <html> (data-sas-prolog) are put back there.
-//  4. React 19 adds <link rel="preload" as="image"> hints of its own for some images; the page's head already says what it
+//  3. React 19 adds <link rel="preload" as="image"> hints of its own for some images; the page's head already says what it
 //     preloads, so every image preload the original page does not have (scripts/own-preloads.json, per route) is removed.
-// The development server ignores \`unstable_runtimeJS: false\` and adds its runtime: dropDevRuntime removes it first (the
-// scripts it writes after the page's head, the style hiding the body until they run, its data and refresh scripts after the
-// page), so a page in development is never hydrated either.
+// Next's own tags stay: they are what runs Next in the browser (its scripts and data), and what it expects to find when it
+// takes the page over (its charset and viewport metas first in the head, an empty <div hidden> first in the body, a pair of
+// empty markers after the page). withoutNext takes them out again, for a page that ships without Next in the browser
+// (scripts/no-runtime.json) and to hold a page against its original.
 export const decode = (s) => s.replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 const attrValue = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 
-function unwrapNext(html) {
-  const open = '<div id="__next">';
-  const i = html.indexOf(open);
-  const end = html.lastIndexOf('</div></body>');
-  if (i < 0 || end < i) return html;
-  return html.slice(0, i) + html.slice(i + open.length, end) + html.slice(end + '</div>'.length);
-}
-// Next's own tags stand at known places: its charset and viewport metas come first in the head (before the page's own of the
-// same kind), its <noscript data-n-css> after the page's own head. A page of an original built with Next.js has tags that look
-// the same (data-next-head, data-n-css), so only Next's places are touched and the original's tags stay.
-const NEXT_CHARSET = '<meta charSet="utf-8" data-next-head=""/>';
-const NEXT_VIEWPORT = '<meta name="viewport" content="width=device-width" data-next-head=""/>';
-const N_CSS = '<noscript data-n-css=""></noscript>';
+const NEXT_CHARSET = '<meta charSet="utf-8"/>';
+const NEXT_VIEWPORT = '<meta name="viewport" content="width=device-width, initial-scale=1"/>';
+const NEXT_HOLDER = '<div hidden=""><!--$--><!--/$--></div>';
+const LATER = '${LATER_TYPE}';
 const headEnd = (html) => { const i = html.indexOf('</head>'); return i < 0 ? html.length : i; };
-const dropFirst = (html, tag) => {
-  const i = html.indexOf(tag);
-  return i < 0 || i > headEnd(html) ? html : html.slice(0, i) + html.slice(i + tag.length);
+const dropFirst = (html, tag, from = 0, to = headEnd(html)) => {
+  const i = html.indexOf(tag, from);
+  return i < 0 || i > to ? html : html.slice(0, i) + html.slice(i + tag.length);
 };
-function dropNextHead(html) {
-  const nextCharset = html.slice(0, headEnd(html)).includes(NEXT_CHARSET);
-  html = dropFirst(dropFirst(html, NEXT_CHARSET), NEXT_VIEWPORT);
-  const at = html.lastIndexOf(N_CSS, headEnd(html));
-  if (at >= 0) html = html.slice(0, at) + html.slice(at + N_CSS.length);
-  // Next's charset meta stays only on a page that has none of its own.
-  if (nextCharset && !/<meta[^>]*\\bcharset=/i.test(html.slice(0, headEnd(html)))) html = html.replace(/<head([^>]*)>/, '<head$1><meta charset="utf-8"/>');
-  return html;
+
+/**
+ * A page without what Next adds to it in the browser: its scripts and the preloads of its files (\`ours\`: the addresses of
+ * Next's own files of this build, /_next/…), its data scripts (self.__next_f, never one of the original's: those still wait
+ * as ${LATER_TYPE}), its charset / viewport metas, the empty <div hidden> first in the body and the empty markers after the
+ * page; then the original's scripts get their own type back. What is left is the copy's page.
+ */
+export function withoutNext(html, ours) {
+  const own = (src) => ours.has(decode(src).split(/[?#]/)[0]);
+  const before = html;
+  html = html.replace(/<script\\b([^>]*)><\\/script>/g, (tag, attrs) => {
+    const src = / src="([^"]*)"/.exec(attrs)?.[1];
+    return src && !attrs.includes(' type="' + LATER + '"') && own(src) ? '' : tag;
+  });
+  html = html.replace(/<link\\b[^>]*>/g, (tag) => {
+    const href = / href="([^"]*)"/.exec(tag)?.[1];
+    return href && / rel="preload"/.test(tag) && / as="script"/.test(tag) && own(href) ? '' : tag;
+  });
+  html = html.replace(/<script>\\(?self\\.__next_f[\\s\\S]*?<\\/script>/g, '');
+  // Next writes its build id as a comment right after the doctype ('sas' in the build, 'development' in dev).
+  html = html.replace(/^(<!DOCTYPE html>)<!--(?:sas|development)-->/i, '$1');
+  // Nothing of Next's was found: the page is already without it (set aside once), so its own charset / viewport stay.
+  if (html === before) return html;
+  // Next's charset meta goes only where the page has one of its own.
+  const noCharset = dropFirst(html, NEXT_CHARSET);
+  if (/<meta[^>]*\\bcharset=/i.test(noCharset.slice(0, headEnd(noCharset)))) html = noCharset;
+  html = dropFirst(html, NEXT_VIEWPORT);
+  const body = html.search(/<body[\\s>]/);
+  if (body >= 0) html = dropFirst(html, NEXT_HOLDER, body, html.indexOf('>', body) + 1);
+  html = html.replace(/<!--\\$--><!--\\/\\$-->(\\s*<\\/body>)/, '$1');
+  return html.replace(new RegExp(' type="' + LATER.replace('/', '\\\\/') + '" data-sas-type="([^"]*)"', 'g'), (all, type) => (type ? ' type="' + type + '"' : ''));
 }
 const unwrapRaw = (html) => html.replace(/<template data-sas-raw="([A-Za-z0-9+/=]*)"><\\/template>/g, (all, b64) => Buffer.from(b64, 'base64').toString('utf8'))
   .replace(/<template data-sas-comment="([^"]*)"><\\/template>/g, (all, text) => '<!--' + decode(text) + '-->');
@@ -113,39 +130,31 @@ const rawAttrs = (html) => html.replace(/<(html|body)([^>]*) data-sas-raw-attrs=
 });
 
 /** A page as Next rendered it (out/) -> the copy's page; ownPreloads: the image preloads the original page has. */
-export const finishPage = (html, ownPreloads) => dropAddedPreloads(prolog(rawAttrs(unwrapRaw(dropNextHead(unwrapNext(html))))), ownPreloads);
-
-/** What the development server adds to a page and the build does not: its runtime (Next writes it after the page's own head and body). */
-export function dropDevRuntime(html) {
-  // In the head: what follows Next's <noscript data-n-css> (its scripts), and the style hiding the body until they run.
-  const at = html.lastIndexOf(N_CSS, headEnd(html));
-  if (at >= 0) html = html.slice(0, at + N_CSS.length) + html.slice(headEnd(html));
-  html = html.replace(/<style data-next-hide-fouc="true">[\\s\\S]*?<\\/style>/, '').replace(/<noscript data-next-hide-fouc="true">[\\s\\S]*?<\\/noscript>/, '');
-  // After the body's wrapper: its data and refresh scripts (the page's own scripts are all inside the wrapper).
-  return html.replace(/<\\/div>(?:<script\\b[^>]*>(?:(?!<\\/script>)[\\s\\S])*<\\/script>)+(<\\/body>\\s*<\\/html>\\s*)$/, '</div>$1');
-}
+export const finishPage = (html, ownPreloads) => dropAddedPreloads(prolog(rawAttrs(unwrapRaw(html))), ownPreloads);
 `;
 
 /** The after-build step, shipped with the project (see the head of this file). */
 export const AFTER_BUILD_SOURCE = `// Runs after \`next build\` (output: 'export'): makes out/ the copy's own pages.
-//  1. Every page is finished by scripts/finish-page.mjs (Next's wrapper, metas and <noscript> out, the parts kept as original
-//     HTML unwrapped, the <html> / <body> attributes and the comments before <html> written, React's own image preloads out).
-//  2. Next's own _next folder (build manifests no page references, since no page carries the runtime) is removed when nothing
-//     references it, then site-files/ (what Next reserves in public/, such as the copy's own _next folder, and its own 404
-//     page) is copied into out/.
+//  1. Every page is finished by scripts/finish-page.mjs (the parts kept as original HTML unwrapped, the <html> / <body>
+//     attributes and the comments before <html> written, React's own image preloads out).
+//  2. A page that ships without Next in the browser (scripts/no-runtime.json: its original keeps an App Router runtime of its
+//     own, which a second one would break) loses Next's scripts and tags again (withoutNext), so its own scripts run as written.
+//  3. Next's own _next folder is removed when no page references it, then site-files/ (what Next reserves in public/, such as
+//     the copy's own _next folder, and its own 404 page) is copied into out/.
 import { cp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { finishPage } from './finish-page.mjs';
+import { finishPage, withoutNext } from './finish-page.mjs';
 
 const out = path.resolve('out');
 const siteFiles = path.resolve('site-files');
 const ownPreloads = JSON.parse(await readFile(path.resolve('scripts/own-preloads.json'), 'utf8').catch(() => '{}'));
+const noRuntime = new Set(JSON.parse(await readFile(path.resolve('scripts/no-runtime.json'), 'utf8').catch(() => '[]')));
 
-async function* htmlFiles(dir) {
-  for (const e of await readdir(dir, { withFileTypes: true })) {
+async function* files(dir, test) {
+  for (const e of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
     const p = path.join(dir, e.name);
-    if (e.isDirectory()) yield* htmlFiles(p);
-    else if (e.name.endsWith('.html')) yield p;
+    if (e.isDirectory()) yield* files(p, test);
+    else if (test(e.name)) yield p;
   }
 }
 // The route of an exported file: out/about/index.html -> /about/, out/index.html -> /, out/404.html -> /404.html.
@@ -153,11 +162,15 @@ const routeOf = (file) => {
   const rel = path.relative(out, file).split(path.sep).join('/');
   return rel === 'index.html' ? '/' : rel.endsWith('/index.html') ? '/' + rel.slice(0, -'index.html'.length) : '/' + rel;
 };
+// Next's own files of this build (before site-files/, which may hold the original's own /_next/ files, is copied in).
+const ours = new Set();
+for await (const file of files(path.join(out, '_next'), () => true)) ours.add('/' + path.relative(out, file).split(path.sep).join('/'));
 
 let referencesNext = false;
-for await (const file of htmlFiles(out)) {
+for await (const file of files(out, (n) => n.endsWith('.html'))) {
   const html = await readFile(file, 'utf8');
-  const fixed = finishPage(html, ownPreloads[routeOf(file)]);
+  let fixed = finishPage(html, ownPreloads[routeOf(file)]);
+  if (noRuntime.has(routeOf(file))) fixed = withoutNext(fixed, ours);
   if (fixed !== html) await writeFile(file, fixed, 'utf8');
   if (fixed.includes('/_next/')) referencesNext = true;
 }
@@ -171,21 +184,34 @@ export const DEV_SERVER_SOURCE = `// \`npm run dev\`: Next's development server,
 //  - site-files/ (what Next reserves in public/, such as the original's own /_next/ folder when the original was itself built
 //    with Next.js) is served first: \`next dev\` answers every /_next/ address itself, so the original's stylesheets, scripts
 //    and fonts there would not be found and the page would show unstyled.
-//  - Every page is finished as the build finishes it (scripts/finish-page.mjs) and Next's development runtime is left out, so
-//    a page is never hydrated, as in out/. Pages are compiled on request: an edit shows when the page is loaded again.
+//  - Every page is finished as the build finishes it (scripts/finish-page.mjs), and Next runs in the browser as in out/, in
+//    its development form (an edit to a component shows at once; Next's live-update connection is passed through). A page
+//    listed in scripts/no-runtime.json gets none of Next's tags, as in out/.
+//    Pages are compiled on request: an edit shows when the page is loaded again.
 // PORT (default 3000) and HOST (default localhost) choose the address.
 import http from 'node:http';
 import { createReadStream } from 'node:fs';
-import { readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import next from 'next';
-import { dropDevRuntime, finishPage } from './finish-page.mjs';
+import { finishPage, withoutNext } from './finish-page.mjs';
 
 const port = Number(process.env.PORT) || 3000;
 const hostname = process.env.HOST || 'localhost';
 const siteFiles = path.resolve('site-files');
 const ownPreloads = JSON.parse(await readFile(path.resolve('scripts/own-preloads.json'), 'utf8').catch(() => '{}'));
+const noRuntime = new Set(JSON.parse(await readFile(path.resolve('scripts/no-runtime.json'), 'utf8').catch(() => '[]')));
+// The original's own /_next/ files (site-files/_next): every other /_next/ address is Next's.
+const originalNext = new Set();
+async function listOwn(dir, rel) {
+  for (const e of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    if (e.isDirectory()) await listOwn(path.join(dir, e.name), rel + '/' + e.name);
+    else originalNext.add(rel + '/' + e.name);
+  }
+}
+await listOwn(path.join(siteFiles, '_next'), '/_next');
+const nextsOwn = { has: (address) => address.startsWith('/_next/') && !originalNext.has(address) };
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8', '.json': 'application/json', '.map': 'application/json', '.txt': 'text/plain; charset=utf-8',
@@ -197,6 +223,7 @@ const TYPES = {
 const app = next({ dev: true, dir: process.cwd() });
 await app.prepare();
 const handle = app.getRequestHandler();
+const upgrade = app.getUpgradeHandler();
 // Next answers on an address of its own on this machine; the server below asks it and finishes what it sends.
 const inner = http.createServer((req, res) => handle(req, res));
 await new Promise((resolve) => inner.listen(0, '127.0.0.1', resolve));
@@ -234,7 +261,8 @@ http.createServer(async (req, res) => {
     const notFound = answer.status === 404 && html && read ? await siteFile('/404.html') : null;
     if (notFound) return sendFile(req, res, notFound, 404);
     if (html) {
-      const page = finishPage(dropDevRuntime(await answer.text()), ownPreloads[pathname]);
+      let page = finishPage(await answer.text(), ownPreloads[pathname]);
+      if (noRuntime.has(pathname)) page = withoutNext(page, nextsOwn);
       res.writeHead(answer.status, { ...pass(answer.headers), 'cache-control': 'no-store' });
       return res.end(req.method === 'HEAD' ? undefined : page);
     }
@@ -246,7 +274,34 @@ http.createServer(async (req, res) => {
     if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
     res.end('Internal error: see the terminal.');
   }
-}).listen(port, hostname, () => console.log(\`> Ready on http://\${hostname}:\${port} (the pages as the build ships them)\`));
+})
+  // Next's live-update connection (/_next/webpack-hmr) is a WebSocket: handed to Next as it is.
+  .on('upgrade', (req, socket, head) => upgrade(req, socket, head))
+  .listen(port, hostname, () => console.log(\`> Ready on http://\${hostname}:\${port} (the pages as the build ships them)\`));
+`;
+
+/** The route group that holds one page and its root layout: app/(p-Home)/layout.jsx, app/(p-About)/about/page.jsx. */
+export const groupOf = (pageName) => `p-${pageName}`;
+
+/** Starts the original's scripts once Next has taken the page over (at the latest after 5 s, whatever happens to Next). */
+export const RUN_LATER_SOURCE = `'use client';
+// The original's own scripts wait (type text/sas-later) until Next has taken the page over, so that it finds the page as the
+// server wrote it; then they run, in their order (src/run-scripts.js). Whatever happens to Next, they run after 5 s.
+import { useEffect } from 'react';
+import { runOriginalScripts } from '../run-scripts.js';
+
+if (typeof window !== 'undefined') setTimeout(runOriginalScripts, 5000);
+
+export default function RunLater() {
+  useEffect(() => { runOriginalScripts(); }, []);
+  return null;
+}
+`;
+
+/** The project's own 404 page when the copy has none: plain HTML, no script. */
+const NOT_FOUND_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Page not found</title></head>
+<body style="font-family: system-ui, sans-serif; padding: 48px 24px"><main><h1>Page not found</h1><p><a href="/">Back to the home page</a></p></main></body></html>
 `;
 
 /** The import lines of a component list, relative to the file's folder. */
@@ -268,8 +323,11 @@ export async function convertToNext({ copyDir, outDir, pages, pageUrl }) {
   const docs = [];
   for (const p of pages) {
     const route = plan.byOutPath.get(p.outPath);
-    const html = await readFile(path.join(copyDir, p.outPath), 'utf8');
-    docs.push({ page: route.route, html, pageUrl: p.url, outPath: p.outPath, route });
+    const own = await readFile(path.join(copyDir, p.outPath), 'utf8');
+    // The original's scripts wait for Next (laterScripts): Next must find the page as the server wrote it. A page that keeps
+    // an App Router runtime of its own shares the name its data goes by (self.__next_f): it ships without ours.
+    const html = laterScripts(own);
+    docs.push({ page: route.route, html, pageUrl: p.url, outPath: p.outPath, route, ownRuntime: /self\.__next_f\b/.test(own) });
   }
   const site = convertSite(docs.map((d) => ({ page: d.page, html: d.html, pageUrl: d.pageUrl })), { linkMap });
   // The image preloads each page has of its own (React 19 adds hints of its own; the build step keeps only these).
@@ -288,7 +346,7 @@ export async function convertToNext({ copyDir, outDir, pages, pageUrl }) {
   };
 
   // Components: the shared ones once, a page's own ones under a name no other file takes.
-  const taken = new Set([RAW_COMPONENT, 'Document']);
+  const taken = new Set([RAW_COMPONENT, 'Document', 'RunLater', 'Layout']);
   let anyRaw = false;
   for (const s of site.shared) {
     taken.add(s.name);
@@ -296,7 +354,7 @@ export async function convertToNext({ copyDir, outDir, pages, pageUrl }) {
     await put(`src/components/${s.name}.jsx`, componentFile(s.name, s.jsx, { usesRaw: s.usesRaw }));
   }
   const pageNames = new Set();
-  const pageFiles = [];
+  const noRuntime = [];
   for (const [i, c] of site.pages.entries()) {
     const d = docs[i];
     let pageName = pageComponentName(d.outPath);
@@ -316,14 +374,13 @@ export async function convertToNext({ copyDir, outDir, pages, pageUrl }) {
       await put(`src/components/${name}.jsx`, componentFile(name, s.jsx, { usesRaw: s.usesRaw }));
     }
     anyRaw ||= c.pageUsesRaw || c.headUsesRaw;
-    const segments = d.route.segments;
-    const pageFile = segments.length ? `pages/${segments.join('/')}/index.jsx` : 'pages/index.jsx';
+    // Each page is a root layout of its own (a route group per page): its own <html>, <head> and <body>, as the original
+    // has them. Moving from one page to another loads the next page, as on the original (every link is a plain <a>).
+    const group = groupOf(pageName);
+    const dir = [`app/(${group})`, ...d.route.segments].join('/');
     const lines = [
       ...(used.length ? [imports([...new Set(used)].sort(), '@/components')] : []),
       ...(c.pageUsesRaw ? [`import ${RAW_COMPONENT} from '@/components/${RAW_COMPONENT}.jsx';`] : []),
-      '',
-      '// Prerendered and never hydrated: no Next.js runtime is sent with this page; the original\'s own scripts run as they do on any HTML page.',
-      'export const config = { unstable_runtimeJS: false, unstable_JsPreload: false };',
       '',
       `export default function ${pageName}() {`,
       '  return (',
@@ -334,79 +391,46 @@ export async function convertToNext({ copyDir, outDir, pages, pageUrl }) {
       '}',
       '',
     ];
-    await put(pageFile, lines.filter((l, i, a) => !(l === '' && a[i - 1] === '')).join('\n'));
-    // The page's document: <html> and <body> attributes and the head, for pages/_document.jsx.
-    const docLines = [
-      ...(c.headUsesRaw ? [`import ${RAW_COMPONENT} from '../components/${RAW_COMPONENT}.jsx';`, ''] : []),
-      `// The <html>, <body> and <head> of ${d.page} as the original has them (pages/_document.jsx renders them for this route).`,
-      'export default {',
-      `  html: ${JSON.stringify(c.html.props)},`,
-      `  htmlRaw: ${JSON.stringify(c.html.raw)},`,
-      `  prolog: ${JSON.stringify(c.prolog)},`,
-      `  body: ${JSON.stringify(c.body.props)},`,
-      `  bodyRaw: ${JSON.stringify(c.body.raw)},`,
-      '  head: () => (',
-      '    <>',
-      indent(c.headJsx, 6),
-      '    </>',
-      '  ),',
-      '};',
+    await put(`${dir}/page.jsx`, lines.filter((l, i, a) => !(l === '' && a[i - 1] === '')).join('\n'));
+    const rawAttrs = (o) => (Object.keys(o).length ? ` data-sas-raw-attrs={${JSON.stringify(JSON.stringify(o))}}` : '');
+    const layoutLines = [
+      `import RunLater from '@/components/RunLater.jsx';`,
+      ...(c.headUsesRaw ? [`import ${RAW_COMPONENT} from '@/components/${RAW_COMPONENT}.jsx';`] : []),
+      '',
+      `// The <html>, <head> and <body> of ${d.page} as the original has them. React cannot write a few attributes (an inline`,
+      '// onload on <body>, for one): they travel in data-sas-raw-attrs and the after-build step writes them; the comments before',
+      '// <html> travel in data-sas-prolog. RunLater starts the original\'s own scripts once Next has taken the page over.',
+      `const HTML = ${JSON.stringify(c.html.props)};`,
+      `const BODY = ${JSON.stringify(c.body.props)};`,
+      '',
+      'export default function Layout({ children }) {',
+      '  return (',
+      `    <html {...HTML}${rawAttrs(c.html.raw)}${c.prolog ? ` data-sas-prolog={${JSON.stringify(c.prolog)}}` : ''} suppressHydrationWarning>`,
+      '      <head>',
+      indent(c.headJsx, 8),
+      '      </head>',
+      `      <body {...BODY}${rawAttrs(c.body.raw)} suppressHydrationWarning>`,
+      '        {children}',
+      '        <RunLater />',
+      '      </body>',
+      '    </html>',
+      '  );',
+      '}',
       '',
     ];
-    await put(`src/documents/${pageName}.jsx`, docLines.join('\n'));
-    pageFiles.push({ pageName, route: d.route.route, key: d.route.route === '/' ? '/' : d.route.route.replace(/\/$/, '') });
+    await put(`app/(${group})/layout.jsx`, layoutLines.join('\n'));
+    if (d.ownRuntime) noRuntime.push(d.route.route);
   }
-  if (anyRaw) await put(`src/components/${RAW_COMPONENT}.jsx`, RAW_COMPONENT_SOURCE);
+  // RawHtml draws in the browser (it holds a hook): a client component in the App Router.
+  if (anyRaw) await put(`src/components/${RAW_COMPONENT}.jsx`, `'use client';\n\n${RAW_COMPONENT_SOURCE}`);
+  await put('src/components/RunLater.jsx', RUN_LATER_SOURCE);
+  await put('src/run-scripts.js', RUN_SCRIPTS_SOURCE);
+  await put('scripts/no-runtime.json', `${JSON.stringify(noRuntime, null, 2)}\n`);
 
-  await put('src/documents.js', [
-    '// One document per route: pages/_document.jsx picks the one of the page being rendered.',
-    ...pageFiles.map((p) => `import ${p.pageName} from './documents/${p.pageName}.jsx';`),
-    '',
-    'export const documents = {',
-    ...pageFiles.map((p) => `  ${JSON.stringify(p.key)}: ${p.pageName},`),
-    '};',
-    '',
-  ].join('\n'));
-
-  await put('pages/_document.jsx', `import { Html, Head, Main, NextScript } from 'next/document';
-import { documents } from '../src/documents.js';
-
-// The <html>, <head> and <body> of each page are the original's (src/documents/*). React cannot write a few attributes
-// (an inline onload on <body>, for one): they travel in data-sas-raw-attrs and the after-build step writes them. The comments
-// before <html> travel in data-sas-prolog and are written back in front of it.
-const rawAttrs = (o) => (Object.keys(o).length ? JSON.stringify(o) : undefined);
-
-export default function Document(props) {
-  const page = props.__NEXT_DATA__.page;
-  const d = documents[page] ?? documents['/'] ?? { html: {}, htmlRaw: {}, prolog: null, body: {}, bodyRaw: {}, head: () => null };
-  return (
-    <Html {...d.html} data-sas-raw-attrs={rawAttrs(d.htmlRaw)} data-sas-prolog={d.prolog ?? undefined}>
-      <Head>{d.head()}</Head>
-      <body {...d.body} data-sas-raw-attrs={rawAttrs(d.bodyRaw)}>
-        <Main />
-        <NextScript />
-      </body>
-    </Html>
-  );
-}
-`);
-
-  // The copy's own 404 page wins after the build (site-files); without one, a plain page of this project, with no runtime either.
+  // The copy's own 404 page wins after the build (site-files); without one, a plain page of this project, with no script.
   const copyFiles = await listFiles(copyDir);
   const pageSet = new Set(pages.map((p) => p.outPath));
-  if (!copyFiles.includes('404.html')) {
-    await put('pages/404.jsx', `export const config = { unstable_runtimeJS: false, unstable_JsPreload: false };
-
-export default function NotFound() {
-  return (
-    <main style={{ fontFamily: 'system-ui, sans-serif', padding: '48px 24px' }}>
-      <h1>Page not found</h1>
-      <p><a href="/">Back to the home page</a></p>
-    </main>
-  );
-}
-`);
-  }
+  if (!copyFiles.includes('404.html')) await put('site-files/404.html', NOT_FOUND_PAGE);
 
   // The copy's files: public/ (Next copies it into out/ unchanged), except the page documents (the pages render them) and
   // what Next reserves (site-files/, copied into out/ after the build).
@@ -441,6 +465,25 @@ const nextConfig = {
   reactStrictMode: false,
   images: { unoptimized: true },
   eslint: { ignoreDuringBuilds: true },
+  // Next writes its build id into every page: a fixed one, so building the same source again writes the same out/.
+  generateBuildId: async () => 'sas',
+  // Next's chunks register under a global of their own, so an original built with Next.js (its /_next/ files are kept)
+  // keeps its own and the two never load into each other.
+  webpack(config, { isServer, dev }) {
+    config.output.chunkLoadingGlobal = 'webpackChunk_sas';
+    config.output.uniqueName = 'sas';
+    // The browser's part of the project's own code (RunLater, RawHtml, the script runner) is one chunk of its own: shared by
+    // every page's layout, it would otherwise sit in each layout's chunk, and Next would point a page at whichever layout's
+    // copy it met first - a different file on each build.
+    const split = config.optimization?.splitChunks;
+    if (!isServer && !dev && split) {
+      split.cacheGroups = { ...split.cacheGroups, sas: { test: /[\\\\/]src[\\\\/](components|run-scripts)/, name: 'sas-components', chunks: 'all', priority: 50, enforce: true } };
+    }
+    // Two page layouts whose browser parts are the same make two identical chunks; webpack would merge them into one file
+    // named after either layout (a different one on each build). Each layout keeps its own.
+    if (!isServer && !dev) config.optimization.mergeDuplicateChunks = false;
+    return config;
+  },
 };
 
 export default nextConfig;
@@ -454,10 +497,13 @@ export default nextConfig;
   const fallbackCount = site.fallbacks.length;
   await put('README.md', `# ${slug} — Next.js
 
-A copy of ${slug.replace(/-/g, '.')} made with Remastly, converted into a Next.js project (Pages Router, static export): every
+A copy of ${slug.replace(/-/g, '.')} made with Remastly, converted into a Next.js project (App Router, static export): every
 page is a Next.js page made of components (\`src/components/\`, one per section of the page; the ones several pages share are
-one file), with the original's own stylesheets and scripts kept as they are (\`public/\`). The pages are prerendered and not
-hydrated: no Next.js runtime is sent to the visitor, so nothing is added to what the original loads.
+one file), with the original's own stylesheets and scripts kept as they are (\`public/\`). The pages are prerendered and then
+hydrated by Next.js in the browser (its runtime is in \`/_next/\`), so the live site is a real Next.js site. The original's own
+scripts wait in the page (\`type="text/sas-later"\`) and run once React has taken the page over (\`src/run-scripts.js\`).
+A page whose original was already built with Next.js's App Router keeps that runtime and gets none of ours
+(\`scripts/no-runtime.json\`): two Next.js runtimes on one page would fight over it.
 
 ## Install, run, build
 
@@ -475,10 +521,11 @@ an edit shows when the page is loaded again. \`PORT\` and \`HOST\` choose the ad
 
 ## What the build step does
 
-\`scripts/after-build.mjs\` runs after \`next build\`: it unwraps Next's \`<div id="__next">\`, removes the charset / viewport
-metas and the \`<noscript>\` Next adds (the pages have their own), unwraps the parts kept as original HTML (below), writes the
-few \`<html>\` / \`<body>\` attributes React cannot, and copies \`site-files/\` (what Next reserves in \`public/\`, such as a
-\`_next\` folder of the original) into \`out/\`. Deploy \`out/\` as a static site.
+\`scripts/after-build.mjs\` runs after \`next build\`: it unwraps the parts kept as original HTML (below), writes the few
+\`<html>\` / \`<body>\` attributes and the comments before \`<html>\` React cannot, drops the preloads Next adds that the
+original did not have, removes our Next.js runtime from the pages listed in \`scripts/no-runtime.json\`, and copies
+\`site-files/\` (what Next reserves in \`public/\`, such as a \`_next\` folder of the original) into \`out/\`. Deploy \`out/\` as
+a static site.
 
 ## Parts kept as the original HTML
 
@@ -494,8 +541,8 @@ ${site.forms.length ? site.forms.map((f) => `- "${f.label}" on ${f.page} (${f.me
 
 ## Contents
 
-- \`pages/\`: one file per page (\`pages/about/index.jsx\` → \`/about/\`), each importing its components; \`pages/_document.jsx\` renders each page's own \`<html>\`, \`<head>\` and \`<body>\` (\`src/documents/\`).
-- \`src/components/\`: the sections (header, main parts, footer), one per file; \`RawHtml.jsx\` carries the parts kept as original HTML.
+- \`app/\`: one route group per page (\`app/(p-About)/about/page.jsx\` → \`/about/\`), its \`layout.jsx\` rendering that page's own \`<html>\`, \`<head>\` and \`<body>\`, its \`page.jsx\` importing the page's components.
+- \`src/components/\`: the sections (header, main parts, footer), one per file; \`RawHtml.jsx\` carries the parts kept as original HTML; \`RunLater.jsx\` runs the original's scripts once the page is hydrated (\`src/run-scripts.js\`).
 - \`public/\`: the copy's files as the original served them (stylesheets, scripts, images, fonts, sw.js, robots.txt, sas-forms.json). Nothing is renamed or bundled.
 - \`site-files/\`: files Next does not allow in \`public/\`, copied into \`out/\` by the build step and served first by \`npm run dev\`.
 - \`scripts/\`: \`finish-page.mjs\` (how a rendered page becomes the copy's page), \`after-build.mjs\` (applies it to \`out/\`), \`dev.mjs\` (the development server).
@@ -535,6 +582,23 @@ function withMovedLinks(html, linkMap) {
   return html.slice(0, start(html)) + out.slice(start(out));
 }
 
+/** The shipped scripts/finish-page.mjs as a module of this process (it imports nothing), for withoutNext. */
+let finishPageLoaded = null;
+export function finishPageModule() {
+  finishPageLoaded ??= import(`data:text/javascript;base64,${Buffer.from(FINISH_PAGE_SOURCE).toString('base64')}`);
+  return finishPageLoaded;
+}
+
+/** The page file of a route: app/(p-<page>)/<segments>/page.jsx (one route group per page; a route is one group's). */
+async function appPageFile(outDir, segments) {
+  for (const e of await readdir(path.join(outDir, 'app'), { withFileTypes: true }).catch(() => [])) {
+    if (!e.isDirectory() || !/^\(.+\)$/.test(e.name)) continue;
+    const file = path.join(outDir, 'app', e.name, ...segments, 'page.jsx');
+    if (await stat(file).then((s) => s.isFile(), () => false)) return file;
+  }
+  return null;
+}
+
 /**
  * Holds every built page of out/ against its as-is page: the same DOM, read as convert/react.js verifyConverted reads it
  * (links to a moved page at its new address, as the conversion writes them). One page that differs does not cost the whole
@@ -549,11 +613,18 @@ export async function verifyConvertedNext({ copyDir, outDir, pages }) {
   const plan = planRoutes(pages);
   const linkMap = Object.fromEntries(plan.urlChanges.map((c) => [c.from, c.to]));
   const out = path.join(outDir, EXPORT_DIR);
+  // Next's own files of this build: what out/_next holds beyond the original's own /_next/ files (site-files/_next).
+  const originalNext = new Set((await listFiles(path.join(outDir, 'site-files', '_next'))).map((f) => `/_next/${f}`));
+  const ours = new Set((await listFiles(path.join(out, '_next'))).map((f) => `/_next/${f}`).filter((f) => !originalNext.has(f)));
+  // Pages built without Next in the browser were already stripped by the after-build step.
+  const noRuntime = new Set(JSON.parse(await readFile(path.join(outDir, 'scripts', 'no-runtime.json'), 'utf8').catch(() => '[]')));
+  const { withoutNext } = await finishPageModule();
   const plain = [];
   for (const p of pages) {
     const r = plan.byOutPath.get(p.outPath);
     const original = withMovedLinks(await readFile(path.join(copyDir, p.outPath), 'utf8'), linkMap);
-    const converted = await readFile(path.join(out, r.nextOutPath), 'utf8').catch(() => null);
+    const built = await readFile(path.join(out, r.nextOutPath), 'utf8').catch(() => null);
+    const converted = built == null || noRuntime.has(r.route) ? built : withoutNext(built, ours);
     const difference = converted == null ? 'the build wrote no page for it' : domDifference(original, converted);
     if (difference) plain.push({ page: r.route, outPath: p.outPath, difference: difference.slice(0, 400), original });
   }
@@ -564,8 +635,8 @@ export async function verifyConvertedNext({ copyDir, outDir, pages }) {
       await mkdir(path.dirname(path.join(dir, r.nextOutPath)), { recursive: true });
       await writeFile(path.join(dir, r.nextOutPath), x.original, 'utf8');
     }
-    const pageFile = path.join(outDir, r.segments.length ? `pages/${r.segments.join('/')}/index.jsx` : 'pages/index.jsx');
-    const source = await readFile(pageFile, 'utf8').catch(() => null);
+    const pageFile = await appPageFile(outDir, r.segments);
+    const source = pageFile ? await readFile(pageFile, 'utf8').catch(() => null) : null;
     if (source != null) {
       const why = x.difference.replace(/\s+/g, ' ').slice(0, 200);
       await writeFile(pageFile, `// This page ships as the copy's plain HTML (site-files/${r.nextOutPath}): the markup this file renders did not hold the\n// original's DOM (${why}).\n// An edit here shows once that file is removed and the page matches.\n${source}`, 'utf8');

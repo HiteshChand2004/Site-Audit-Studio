@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildContext, detectStack, loadRules, toTechStack } from '../src/detection/engine.js';
+import { buildContext, detectStack, isStaticHtml, loadRules, toTechStack } from '../src/detection/engine.js';
 import { detectManualRebuild } from '../src/detection/manual.js';
 
 // Port 9 on localhost refuses immediately, so endpoint probes fail fast and offline.
@@ -36,6 +36,20 @@ test('every rule file is valid and has a unique id', () => {
   for (const r of rules) {
     for (const s of r.signals) assert.ok(s.weight > 0 && s.weight < 1, `${r.id}: weight must be between 0 and 1`);
   }
+});
+
+test('React is found when it holds the page in the browser, whatever its bundle is named; not without it', async () => {
+  // A prerendered page hydrated by React from a hashed bundle: no data-reactroot, no React file name, no global.
+  const html = '<!doctype html><html><head><script type="module" src="/_react/assets/entry-client-BtSb4eYu.js"></script></head><body><h1>Hello</h1></body></html>';
+  const render = (reactRoot) => ({ scripts: ['https://acme.test/_react/assets/entry-client-BtSb4eYu.js'], requests: [], cookies: [], foundGlobals: [], reactRoot });
+  const held = (await detect(html, { render: render(true) })).detections;
+  assert.equal(held[0]?.id, 'react', JSON.stringify(held));
+  assert.ok(held[0].evidence.some((e) => /React holds the page/.test(e)), JSON.stringify(held[0].evidence));
+  assert.ok(!(await detect(html, { render: render(false) })).detections.some((d) => d.id === 'react'), 'no React root: not React');
+  // Next.js stays Next.js: React is excluded by it, as before.
+  const next = await detect('<!doctype html><html><head><script src="/_next/static/chunks/main-app.js" async></script></head><body></body></html>', { render: { ...render(true), foundGlobals: ['__next_f'] } });
+  assert.equal(next.detections[0]?.id, 'nextjs');
+  assert.ok(!next.detections.some((d) => d.id === 'react'));
 });
 
 test('detects WordPress with version and high confidence', async () => {
@@ -113,4 +127,43 @@ test('a site Remastly serves: its host is named, and finished pages with no fram
   assert.deepEqual(toTechStack(detections).map((t) => t.name), ['Static HTML', 'Remastly']);
   // The same page elsewhere is still unknown.
   assert.deepEqual(toTechStack((await detect(CUSTOM)).detections).map((t) => t.name), ['Custom/Unknown']);
+});
+
+const PARAGRAPH = 'We build hand-written pages for small teams. Every page is plain HTML and CSS, served as it is written, with no site builder and no framework behind it. ';
+const PLAIN_SITE = `<!doctype html><html lang="en"><head><title>Acme studio</title><link rel="stylesheet" href="/css/style.css"></head><body>
+  <header><nav><a href="/">Home</a><a href="/about.html">About</a><a href="/contact.html">Contact</a></nav></header>
+  <main><h1>Acme studio</h1><p>${PARAGRAPH}</p><p>${PARAGRAPH}</p></main><footer><p>Acme studio</p></footer></body></html>`;
+const SHELL = `<!doctype html><html><head><title>App</title><script type="module" src="/assets/index-3f2a.js"></script></head>
+  <body><div id="root"></div></body></html>`;
+const stackOf = async (html, renderedTextLength = null) => {
+  const { detections } = await detect(html);
+  return toTechStack(detections, { staticHtml: isStaticHtml({ rawHtml: html, url: 'https://acme.test/', renderedTextLength }) });
+};
+
+test('a site written in plain HTML (content in the server\'s HTML, no platform) is Static HTML', async () => {
+  const stack = await stackOf(PLAIN_SITE);
+  assert.equal(stack[0].id, 'static');
+  assert.equal(stack[0].name, 'Static HTML');
+  assert.match(stack[0].evidence[0], /HTML the server sends/);
+  // Rendered text about the same as the server's: still static.
+  assert.equal((await stackOf(PLAIN_SITE, 420))[0].id, 'static');
+});
+
+test('content a script adds after load keeps the page Custom/Unknown', async () => {
+  const stack = await stackOf(PLAIN_SITE, 5000);
+  assert.equal(stack[0].id, 'custom');
+});
+
+test('an empty app mount (script-built shell) is never Static HTML', async () => {
+  assert.equal(isStaticHtml({ rawHtml: SHELL, url: 'https://acme.test/' }), false);
+  // The #root shell is React's (react.json); with no rule matching it would be Custom/Unknown.
+  assert.ok(!(await stackOf(SHELL)).some((t) => t.id === 'static'));
+  assert.equal(toTechStack([], { staticHtml: isStaticHtml({ rawHtml: SHELL, url: 'https://acme.test/' }) })[0].id, 'custom');
+});
+
+test('a detected platform wins over Static HTML', async () => {
+  const { detections } = await detect(WORDPRESS);
+  const stack = toTechStack(detections, { staticHtml: true });
+  assert.equal(stack[0].id, 'wordpress');
+  assert.ok(!stack.some((t) => t.id === 'static' || t.id === 'custom'));
 });

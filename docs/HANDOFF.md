@@ -626,6 +626,14 @@ a `<meta>` / `<title>` / `<link>` / `<base>` standing in the body and an `async`
 step unwraps, so the DOM is the original's byte for byte and no React escaping rule can touch it. Every fallback is recorded.
 Tests: `test/convert-document.test.js` (7).
 
+> **Changed 2026-11-17 (branch `live-stack-runtime`):** the Next.js writer below is replaced by the App Router with the real
+> runtime. Each page is a route group of its own (`app/(p-<Page>)/layout.jsx` = its `<html>` / `<head>` / `<body>`, `page.jsx`
+> beside it); Next.js hydrates every page; the original's scripts wait as `text/sas-later` and run once Next holds the page
+> (`src/components/RunLater.jsx`, `src/run-scripts.js`). A page whose original keeps an App Router runtime of its own is listed in
+> `scripts/no-runtime.json` and ships without ours. After the build every page is opened in a browser (`convert/runtimeHold.js`):
+> one the runtime cannot hold (hydration error, drawn again, runtime not started, errors only with it) is added to that list and
+> ships as plain HTML. The paragraph below is the history.
+
 **Next.js writer — `server/src/recreate/convert/next.js`.** Pages Router + `output: 'export'` + `trailingSlash: true`, every page
 `export const config = { unstable_runtimeJS: false, unstable_JsPreload: false }` → **the exported pages carry no Next.js script at all**
 (no `__NEXT_DATA__`, no `_next/` tag): prerendered, never hydrated, the original's own scripts run as on any HTML page. That is the
@@ -723,7 +731,10 @@ Scratch data `C:/Users/urvas/Downloads/sas-work/nyaayai-next-data` (copied from 
   `src/routes.js`, `src/entry-server.jsx` (renders a page: body after a marker so React 19's image preload hints fall away, head
   one element at a time so React keeps its order), `src/finish-page.js` (puts back RawHtml parts, the page's comments
   (`data-sas-comment`) and the prolog before `<html>`), `scripts/prerender.mjs` (`dist/` = `public/` + the pages), `scripts/dev.mjs`.
-  Pages keep their addresses (no `urlChanges`). Prerendered, never hydrated: `dist/` holds no React code. `verifyConverted`
+  Pages keep their addresses (no `urlChanges`). Prerendered, never hydrated: `dist/` holds no React code (**changed
+  2026-11-17, branch `live-stack-runtime`**: pages are now hydrated by React from `/_react/`, the original's scripts run after it;
+  a page React cannot hold in the browser is listed in `scripts/no-runtime.json` and the prerender writes it as plain HTML;
+  `convert/runtimeHold.js`). `verifyConverted`
   (no browser) holds every built page against its as-is page — elements, attributes, text, the comments of head and body, the
   prolog — and refuses any added script / stylesheet; a failure packages the copy as before (`report.convert.mode 'packed'`).
 - `npm run dev` = Vite used **only** to load the components (`ssrLoadModule`, no client, `hmr` / `ws` off, no dependency scan,

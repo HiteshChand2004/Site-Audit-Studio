@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { load } from 'cheerio';
 import sharp from 'sharp';
 import { fixImageSizes, planPerf, sizesAttr } from '../src/copy/perfAsIs.js';
@@ -83,11 +84,74 @@ test('a large picture gets smaller WebP copies in a srcset; src, a chosen pictur
       assert.ok((await stat(path.join(dir, f.file))).size <= (await readFile(path.join(dir, 'media', 'shot.png'))).length * 0.9);
     }
 
+    // A lazy picture below the first screen is not loaded when the probe reads the page (naturalWidth 0): still planned, and
+    // the file decides its width.
+    const $3 = load('<img src="/media/shot.png" alt="a" loading="lazy">');
+    const lazyPlan = planPerf(probe([{ src: '/media/shot.png', nw: 0 }], { '0|/media/shot.png': [[375, 343], [1440, 700]] }), '/');
+    assert.deepEqual([...lazyPlan.size.keys()], ['0|/media/shot.png']);
+    const r3 = await fixImageSizes($3, { path: '/', outPath: 'index.html' }, dir, lazyPlan);
+    assert.ok(r3.fixed.length >= 1);
+    assert.equal($3('img').attr('srcset').split(', ').at(-1), '/media/shot.png 1800w');
+    assert.equal($3('img').attr('loading'), 'lazy', 'loading stays as the page had it');
+
     // The same picture counted differently in the markup than in the page the browser built: not touched.
     const $2 = load('<img src="/media/shot.png" alt="a">');
     const r2 = await fixImageSizes($2, { path: '/', outPath: 'index.html' }, dir, plan);
     assert.equal(r2.fixed.length, 0);
     assert.equal($2('img').attr('srcset'), undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+/** A picture of random pixels: no WebP of it, at any quality tried, is without a visible difference. */
+async function noise(w, h) {
+  const raw = Buffer.alloc(w * h * 3);
+  for (let i = 0; i < raw.length; i++) raw[i] = Math.floor(Math.random() * 256);
+  return sharp(raw, { raw: { width: w, height: h, channels: 3 } }).png({ compressionLevel: 0 }).toBuffer();
+}
+
+/** The PNG with a gAMA chunk put right after its IHDR (a gamma the browser applies when it draws it). */
+function withGamma(png) {
+  const data = Buffer.alloc(4);
+  data.writeUInt32BE(45455);
+  const body = Buffer.concat([Buffer.from('gAMA', 'latin1'), data]);
+  const chunk = Buffer.alloc(12 + data.length);
+  chunk.writeUInt32BE(data.length, 0);
+  body.copy(chunk, 4);
+  chunk.writeUInt32BE(zlib.crc32(body), 8 + data.length);
+  const ihdrEnd = 8 + 12 + png.readUInt32BE(8);
+  return Buffer.concat([png.subarray(0, ihdrEnd), chunk, png.subarray(ihdrEnd)]);
+}
+
+test('a PNG no WebP keeps the look of gets smaller PNG copies with the very pixels of the resize; one with a gamma gets none', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'sas-sizes-png-'));
+  try {
+    await mkdir(path.join(dir, 'media'), { recursive: true });
+    const input = await noise(1200, 600);
+    await writeFile(path.join(dir, 'media', 'grain.png'), input);
+    await writeFile(path.join(dir, 'media', 'gamma.png'), withGamma(input));
+    const $ = load('<img src="/media/grain.png" alt="a"><img src="/media/gamma.png" alt="b">');
+    const drawn = { '0|/media/grain.png': [[375, 343], [1440, 700]], '0|/media/gamma.png': [[375, 343], [1440, 700]] };
+    const plan = planPerf(probe([{ src: '/media/grain.png', nw: 1200 }, { src: '/media/gamma.png', nw: 1200 }], drawn), '/');
+    const r = await fixImageSizes($, { path: '/', outPath: 'index.html' }, dir, plan);
+
+    const parts = $('img').eq(0).attr('srcset').split(', ');
+    assert.equal(parts.at(-1), '/media/grain.png 1200w');
+    for (const p of parts.slice(0, -1)) assert.match(p, /^\/media\/grain\.sas-w\d+-[0-9a-f]{10}\.png \d+w$/);
+    const grain = r.fixed.filter((f) => f.src === '/media/grain.png');
+    assert.ok(grain.length >= 1);
+    const rgba = (b) => sharp(b).ensureAlpha().raw().toBuffer();
+    for (const f of grain) {
+      const made = await readFile(path.join(dir, f.file));
+      assert.equal((await sharp(made).metadata()).format, 'png');
+      const resized = await sharp(input).resize({ width: f.width, kernel: 'lanczos3' }).png().toBuffer();
+      assert.ok((await rgba(made)).equals(await rgba(resized)), `${f.file}: the very pixels of the resize`);
+      assert.ok(made.length <= input.length * 0.9);
+    }
+
+    assert.equal($('img').eq(1).attr('srcset'), undefined, 'a gamma the browser applies would be lost: one file');
+    assert.ok(r.open.some((o) => /gamma\.png keeps its one file/.test(o.detail)));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

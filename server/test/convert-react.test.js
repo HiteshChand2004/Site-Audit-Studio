@@ -1,9 +1,10 @@
 // The fixture site converted into a React + Vite project (recreate/convert/react.js), built, served by its own server (vite
 // the static files of dist/, as "Copy my site" serves it) and held against the ORIGINAL with the as-is copy's own rulers (behavior/preserve/check.js
 // checkCopy: the visual gate with its noise map at 1440 and 390, clicks, hovers, console errors, forms), plus: the same DOM as the
-// original (equivalence.js domSignature, scripts off), not one script added (the pages are prerendered and never hydrated), every
-// link answered, the original's scripts still running (hovers, animations, clicks), and Lighthouse through the measurement host
-// never lower than the original's, on phone and computer. One browser, one page at a time. The no-browser half is
+// original (equivalence.js domSignature, scripts off), one script added (React, which hydrates the page from /_react/), every
+// link answered, React in the page, the original's scripts still running (hovers, animations, clicks), and Lighthouse through
+// the measurement host never lower than the original's on phone and computer, Performance aside, where React's own JavaScript
+// may cost at most PERF_COST points (user, 2026-11-16). One browser, one page at a time. The no-browser half is
 // convert-react-build.test.js.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -100,7 +101,7 @@ after(async () => {
   if (root) await rm(root, { recursive: true, force: true }).catch(() => {});
 });
 
-test('the conversion: components per section, the fallbacks named, the same scripts as the original and no other', async () => {
+test('the conversion: components per section, the fallbacks named, the original\'s scripts and React\'s one', async () => {
   assert.equal(result.stats.pages, pages.length);
   assert.ok(result.stats.components > pages.length, 'the pages are split into sections');
   // The fixture's /work page carries two inline handlers: those elements are kept as the original HTML, each with its reason.
@@ -112,13 +113,17 @@ test('the conversion: components per section, the fallbacks named, the same scri
     const scripts = (s) => (s.match(/<script\b/gi) ?? []).length;
     // The page's own doctype as written, then the comments before <html> exactly as the original has them.
     if (p.outPath === 'index.html') assert.ok(converted.startsWith(`<!doctype html>${PROLOG}<html `), converted.slice(0, 160));
-    assert.equal(scripts(converted), scripts(original), `${p.outPath}: the same number of scripts, none of React's`);
+    assert.equal(scripts(converted), scripts(original) + 1, `${p.outPath}: the original's scripts and React's one`);
+    assert.match(converted, /<script type="module" src="\/_react\/assets\/[^"]+\.js" data-sas-boot="" data-page="[A-Za-z0-9]+"><\/script>/, `${p.outPath}: React loads from /_react/`);
+    // Every script of the original waits for React (its own type kept in data-sas-type); none runs before it.
+    const own = (converted.match(/<script\b[^>]*>/gi) ?? []).filter((t) => !/data-sas-boot|application\/ld\+json/.test(t));
+    assert.ok(own.every((t) => /type="text\/sas-later"/.test(t)), `${p.outPath}: ${own.find((t) => !/text\/sas-later/.test(t))}`);
   }
   const work = result.forms.find((f) => f.page === '/work.html');
   assert.ok(!work || work.target, 'a form is described in words');
 });
 
-test('in a browser: the same DOM as the original on every page (scripts off), no React in the page, every link answered', { timeout: 10 * 60000 }, async () => {
+test('in a browser: the same DOM as the original on every page (scripts off), React in the page, every link answered', { timeout: 10 * 60000 }, async () => {
   const context = await browser.newContext({ javaScriptEnabled: false });
   try {
     const page = await context.newPage();
@@ -149,8 +154,10 @@ test('in a browser: the same DOM as the original on every page (scripts off), no
       await page.goto(`${base()}${routeOf(p.outPath)}`, { waitUntil: 'networkidle' });
       page.off('request', on);
       const extra = [...asked.copy].filter((u) => !asked.original.has(u));
-      assert.deepEqual(extra, [], `${p.outPath}: the copy asks for nothing the original does not`);
-      assert.equal(await page.evaluate(() => Boolean(window.React || window.__REACT_DEVTOOLS_GLOBAL_HOOK__?.renderers?.size || document.querySelector('[data-reactroot]'))), false, `${p.outPath}: no React in the page`);
+      assert.deepEqual(extra.filter((u) => !u.startsWith('/_react/')), [], `${p.outPath}: the copy asks for nothing the original does not, React aside`);
+      assert.ok(extra.some((u) => u.startsWith('/_react/assets/')), `${p.outPath}: React is loaded`);
+      // React took the page over: the body is its root.
+      assert.equal(await page.evaluate(() => Object.keys(document.body).some((k) => k.startsWith('__reactContainer$'))), true, `${p.outPath}: React holds the page`);
       // Every same-site link of the page answers (a link the fixture itself left dead is a 404 on both sides).
       const hrefs = await page.$$eval('a[href]', (as) => as.map((a) => a.getAttribute('href')));
       for (const h of hrefs) {
@@ -226,7 +233,10 @@ test('the original\'s scripts run in the copy: the inline handler, the reveal an
 /** The median of a list of numbers. */
 const median = (xs) => [...xs].sort((x, y) => x - y)[Math.floor(xs.length / 2)];
 
-test('Lighthouse through the measurement host, phone and computer: the converted copy is never lower than the original', { timeout: 40 * 60000 }, async () => {
+/** What React's own JavaScript may cost the Performance score (user, 2026-11-16: a live copy is a real React site). */
+const PERF_COST = 5;
+
+test('Lighthouse through the measurement host, phone and computer: the converted copy is never lower than the original, React\'s cost aside', { timeout: 40 * 60000 }, async () => {
   for (const device of ['desktop', 'mobile']) {
     const originalHost = await openMeasuredHost(ORIGIN, device);
     const copyHost = await openMeasuredHost(base(), device);
@@ -243,7 +253,7 @@ test('Lighthouse through the measurement host, phone and computer: the converted
       for (const cat of ['performance', 'seo', 'accessibility', 'best-practices']) {
         const a = median(scores.original.map((s) => s[cat]));
         const b = median(scores.converted.map((s) => s[cat]));
-        assert.ok(b >= a, `${device} ${cat}: original ${a}, converted ${b} (runs: ${JSON.stringify(scores)})`);
+        assert.ok(b >= a - (cat === 'performance' ? PERF_COST : 0), `${device} ${cat}: original ${a}, converted ${b} (runs: ${JSON.stringify(scores)})`);
       }
     } finally {
       await originalHost.close();

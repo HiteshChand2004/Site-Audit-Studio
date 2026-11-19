@@ -216,13 +216,36 @@ export function nodeAt(body, path) {
  */
 export function paceOf(times, watchedMs) {
   if (times.length < 3) return { reason: times.length ? 'changed once or twice' : 'no change' };
-  const gaps = times.slice(1).map((t, i) => t - times[i]).sort((a, b) => a - b);
+  const inOrder = times.slice(1).map((t, i) => t - times[i]);
+  const gaps = [...inOrder].sort((a, b) => a - b);
   const median = gaps[Math.floor(gaps.length / 2)];
   if (median < MIN_INTERVAL_MS) return { reason: `changes every ${Math.round(median)} ms (typing or counting, too fast to rebuild as states)` };
   const steady = gaps.filter((g) => Math.abs(g - median) <= median * 0.4).length / gaps.length;
-  if (steady < 0.6) return { reason: 'changes at no steady pace' };
+  if (steady < 0.6) {
+    // One update made of two steps (an old row leaves, the new one comes ~0.5 s later): the gaps alternate short / long,
+    // each steady on its own, and their sum is the pace.
+    const two = twoStepPace(inOrder);
+    if (!two) return { reason: 'changes at no steady pace' };
+    if (watchedMs - times[times.length - 1] > two.ms * 1.5) return { reason: 'stopped changing (an entrance, not a timer)' };
+    return two;
+  }
   if (watchedMs - times[times.length - 1] > median * 2.5) return { reason: 'stopped changing (an entrance, not a timer)' };
   return { ms: Math.round(median / 10) * 10 };
+}
+
+/**
+ * Gaps (in order) that alternate between two steady lengths, each within 25 % of its own median, at least two of each: one
+ * update in two steps. { ms: their sum, steps: 2, stepMs: the shorter }, or null.
+ */
+export function twoStepPace(gaps) {
+  if (gaps.length < 4) return null;
+  const mid = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+  const sides = [gaps.filter((_, i) => i % 2 === 0), gaps.filter((_, i) => i % 2 === 1)];
+  const medians = sides.map(mid);
+  if (!sides.every((xs, k) => xs.length >= 2 && xs.every((g) => Math.abs(g - medians[k]) <= medians[k] * 0.25))) return null;
+  const period = medians[0] + medians[1];
+  if (period < MIN_INTERVAL_MS) return null;
+  return { ms: Math.round(period / 10) * 10, steps: 2, stepMs: Math.round(Math.min(...medians)) };
 }
 
 /**
@@ -269,7 +292,7 @@ export async function captureFeeds(page, body, { budgetMs = 30000, skip = [] } =
     let cycle = false;
     let replays = 0;
     for (let k = 1; k <= MAX_STATES && Date.now() + a.pace.ms * 3 < deadline; k++) {
-      const update = await page.evaluate(nextUpdate, { path: a.path, timeoutMs: a.pace.ms * 3, quietMs: Math.min(400, a.pace.ms / 3), burstGap: BURST_GAP_MS }).catch(() => null);
+      const update = await page.evaluate(nextUpdate, { path: a.path, timeoutMs: a.pace.ms * 3, quietMs: Math.max(Math.min(400, a.pace.ms / 3), a.pace.stepMs ? a.pace.stepMs + BURST_GAP_MS : 0), burstGap: BURST_GAP_MS }).catch(() => null);
       if (!update) break;
       times.push(update.t);
       if (update.replayed) replays++;

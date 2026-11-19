@@ -58,7 +58,7 @@ const kb = (bytes) => `${Math.round(bytes / 1024)} KB`;
  * @param {object} [o.newAxe]           the copy's
  * @returns {{ items: object[], summary: { total: number, explained: number, unexplained: number, byReason: Record<string, number> } }}
  */
-export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPages = copyPages, oldLhr = {}, newLhr = {}, oldAxe = null, newAxe = null, address = null, revertedPages = [], excludedHosts = [], fixOpen = [], backendPaths = [], questionsByPage = null, liftFailures = [], originalCapture = null, crawls = null, ownCode = null }) {
+export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPages = copyPages, oldLhr = {}, newLhr = {}, oldAxe = null, newAxe = null, address = null, revertedPages = [], excludedHosts = [], fixOpen = [], backendPaths = [], questionsByPage = null, liftFailures = [], originalCapture = null, crawls = null, ownCode = null, capturedUrls = [] }) {
   const site = bareHost(new URL(siteUrl).hostname);
   const copyHost = hostOf(copyOrigin);
   const copied = new Set(copyPages.map(normPath));
@@ -81,7 +81,10 @@ export function explainWorse({ items, siteUrl, copyOrigin, copyPages, chosenPage
   // crawls: { original, copy } = the two crawl.json files (each page's facts), for the duplicate-text rule (gatedDuplicates).
   // ownCode: the copy's script errors by place (copy/ownCodeErrors.js): the line each was thrown at and whether that line is
   // word for word in the original's own pages or scripts.
-  const ctx = { site, copyHost, copied, chosen, oldLhr, newLhr, oldAxe, newAxe, address, revertedPages, excludedHosts, fixOpen, backend, questions, liftFailed, originalCapture, crawls, ownCode };
+  // capturedUrls: every address the original's pages loaded while the copy was made (the capture's network record), so a row
+  // made of files the original itself loads by then is told apart from the copy's own (sinceCheck).
+  const captured = new Set(capturedUrls.map((u) => siteKey(u, { site, copyHost })).filter(Boolean));
+  const ctx = { site, copyHost, copied, chosen, oldLhr, newLhr, oldAxe, newAxe, address, revertedPages, excludedHosts, fixOpen, backend, questions, liftFailed, originalCapture, crawls, ownCode, captured };
   // With a new-site address, structured data the original wrote with its own address is kept as written (copy/fixAsIs.js
   // applyAddress): a structured-data row says so in plain words, whatever else explains it.
   const ldNote = fixOpen.some((o) => o.kind === 'address' && o.field === 'json-ld')
@@ -112,7 +115,7 @@ export const GROUPS = {
   impossible: { code: 'g', label: 'Not possible', text: 'No copy can do this.' },
   noise: { code: 'h', label: 'Run to run difference', text: 'Both sides pass and fail the same checks; one run of a side scored differently, which moved the median.' },
 };
-const REASON_GROUP = { owner: 'needs-info', backend: 'needs-info', third_party: 'own-code', own_code: 'own-code', deploy: 'measurement', look: 'look' };
+const REASON_GROUP = { owner: 'needs-info', backend: 'needs-info', third_party: 'own-code', own_code: 'own-code', deploy: 'measurement', changed: 'measurement', look: 'look' };
 
 /**
  * The groups that are not the tool's to change: such a row is not a "got worse" or "still open" of the copy. It is listed in one
@@ -213,7 +216,7 @@ function explainOne(item, ctx) {
   if (none) return none;
   if (key === 'links.broken-new') return plainNotCopied(byParts(item.links?.new ?? [], (l) => linkPart(l, ctx), 'link'), ctx, 'links');
   if (key === 'lighthouse.errors-in-console') return plainNotCopied(byParts(consoleErrors(ctx.newLhr), (e) => requestPart(e, ctx), 'console error'), ctx, 'prefetch');
-  if (key.startsWith('lighthouse-score.')) return scorePart(item, ctx);
+  if (key.startsWith('lighthouse-score.')) return sinceCheck(scorePart(item, ctx), ctx);
   // The site files and links that name an address: the copy writes them for an address of its own, and without one leaves them
   // out (the original's would list pages the copy does not hold). The same evidence as the "still open" rule, for a row that
   // got worse (the original had the file, the copy has none).
@@ -223,7 +226,7 @@ function explainOne(item, ctx) {
   if (key.startsWith('lighthouse.')) {
     const id = key.slice('lighthouse.'.length);
     const r = lighthousePart(item, id, ctx);
-    return orPlanned(r.unexplained ? imageRow(item, id, ctx) ?? r : r, item);
+    return sinceCheck(orPlanned(r.unexplained ? imageRow(item, id, ctx) ?? r : r, item), ctx);
   }
   if (key === 'axe.color-contrast') return contrastPart(ctx);
   // A hover, reveal or loop lives in the stylesheets: when one of the copy's own did not load, that is why the effect is gone,
@@ -235,7 +238,55 @@ function explainOne(item, ctx) {
       return { reason: null, unexplained: true, group: 'bug', stylesheetFailed: sheets.length, evidence: `${item.after?.detail ?? 'Missing in the copy.'} The copy's stylesheet did not load, so the page was drawn without the rules these effects are made of: ${list}${sheets.length > 3 ? ` and ${sheets.length - 3} more` : ''}. A bug to fix in the copy: make the stylesheet load, then check again.` };
     }
   }
-  return orPlanned(unexplained('No rule of the five reasons applies to this check on the evidence of this run.'), item);
+  return sinceCheck(orPlanned(unexplained('No rule of the five reasons applies to this check on the evidence of this run.'), item), ctx);
+}
+
+/** A request's key on the original site: its host without www (the copy's host read as the site's), path and query. */
+function siteKey(url, { site, copyHost }) {
+  try {
+    const u = new URL(url);
+    if (!/^https?:$/.test(u.protocol)) return null;
+    const host = bareHost(u.hostname);
+    return `${host === copyHost ? site : host}${u.pathname}${u.search}`;
+  } catch {
+    return null;
+  }
+}
+
+const requestUrls = (lhr) => (lhr?.audits?.['network-requests']?.details?.items ?? []).map((q) => q?.url).filter((u) => /^https?:/.test(u ?? ''));
+
+/**
+ * The files the copy loads that the original's check did not, when the original itself loaded every one of them while the
+ * copy was made (the capture's network record): the original changed after its check, or its check saw less of it
+ * (panscience.xyz: Google Analytics, 178 KB, and a new build's chunks, added after the check the copy is compared with).
+ * Null when there are none, when the record or the check's requests are missing, or when any of them is the copy's own.
+ */
+function addedSinceCheck(ctx) {
+  if (!ctx.captured?.size) return null;
+  const devices = ['mobile', 'desktop'];
+  const old = new Set(devices.flatMap((d) => requestUrls(ctx.oldLhr?.[d])).map((u) => siteKey(u, ctx)).filter(Boolean));
+  if (!old.size) return null;
+  const extra = new Map();
+  for (const d of devices) {
+    for (const u of requestUrls(ctx.newLhr?.[d])) {
+      const k = siteKey(u, ctx);
+      if (k && !old.has(k)) extra.set(k, u);
+    }
+  }
+  if (!extra.size || [...extra.keys()].some((k) => !ctx.captured.has(k))) return null;
+  return [...extra.keys()];
+}
+
+/** An unexplained row the original's own change makes: reason `changed` (a measurement against an older original), else as it was. */
+function sinceCheck(r, ctx) {
+  if (!r?.unexplained) return r;
+  const added = addedSinceCheck(ctx);
+  if (!added) return r;
+  const few = added.slice(0, 3).map((k) => k.length > 70 ? `${k.slice(0, 67)}…` : k).join(', ');
+  return {
+    reason: 'changed',
+    evidence: `The copy loads ${added.length} file${added.length === 1 ? '' : 's'} the original's check did not (${few}${added.length > 3 ? `, and ${added.length - 3} more` : ''}), and the original loaded every one of them when the copy was made: it changed after it was checked, or its check saw less of it. Check the site again; the comparison then uses what it loads today.`,
+  };
 }
 
 /** An unexplained row a planned fix will close: said to be owed, with what is to come. */
@@ -326,7 +377,8 @@ const fewUrls = (urls) => urls.slice(0, 3).map((u) => { try { return new URL(u).
 // WebP of, or one the fix recorded it could not convert without a visible change, is a change of its look (d) to go further.
 // Evidence per file, from this run only.
 const IMAGE_FILE_AUDITS = new Set(['modern-image-formats', 'uses-optimized-images', 'uses-responsive-images', 'efficient-animated-content']);
-const OUR_WEBP = /\.sas-(?:w\d+-)?[0-9a-f]{10}\.webp$/i;
+// The size fix keeps a smaller copy as a PNG when no WebP of it shows no visible difference (.sas-w<width>-<hash>.png).
+const OUR_WEBP = /\.sas-(?:(?:w\d+-)?[0-9a-f]{10}\.webp|w\d+-[0-9a-f]{10}\.png)$/i;
 /** A file's name without the copy's own marks (the lift's ~query hash, the WebP fix's .sas- hash) and without its extension. */
 const imageStem = (url) => {
   let name;
@@ -345,6 +397,60 @@ function savingsByUrl(lhr, id) {
   return m;
 }
 
+/** The images one side's page requested while it loaded (both devices): file name stem → the largest size seen. */
+function imagesLoaded(lhr) {
+  const m = new Map();
+  for (const device of ['mobile', 'desktop']) {
+    for (const r of lhr?.[device]?.audits?.['network-requests']?.details?.items ?? []) {
+      if (r.resourceType !== 'Image' || typeof r.url !== 'string') continue;
+      const stem = imageStem(r.url);
+      const bytes = Number(r.resourceSize) || Number(r.transferSize) || 0;
+      if (stem) m.set(stem, Math.max(m.get(stem) ?? 0, bytes));
+    }
+  }
+  return m;
+}
+
+/** When one side's last long task started (ms from navigation, the run's own trace), or null. */
+function lastLongTask(lhr) {
+  const starts = (lhr?.audits?.['long-tasks']?.details?.items ?? []).map((t) => Number(t.startTime)).filter(Number.isFinite);
+  return starts.length ? Math.round(Math.max(...starts)) : null;
+}
+
+/**
+ * "Defer offscreen images". Lighthouse names an offscreen image only when its request started before the page's last long
+ * task (offscreen-images.js, filterLanternResults / filterObservedResults), so the very same image, loaded the very same way,
+ * is named on a computer whose main thread runs later. The row is the measurement host's when the original requests every
+ * file it names too, while it loads, at no smaller a size: the copy loads what the original loads, only its long tasks moved.
+ * A file the original does not load, or loads smaller, is a different page: not explained here.
+ */
+function offscreenRow(item, ctx) {
+  const copy = savingsByUrl(ctx.newLhr, 'offscreen-images');
+  if (!copy.size) return null;
+  const original = imagesLoaded(ctx.oldLhr);
+  const copySizes = imagesLoaded(ctx.newLhr);
+  const r = byParts([...copy], ([url]) => {
+    const what = fewUrls([url]);
+    if (/^https?:/.test(url) && hostOf(url) !== ctx.copyHost) return { what, reason: null, evidence: 'not a file of the copy' };
+    const stem = imageStem(url);
+    if (!stem || !original.has(stem)) return { what, reason: null, evidence: 'the original does not request this file while it loads' };
+    const was = original.get(stem);
+    const now = copySizes.get(stem) ?? 0;
+    if (now > was * (1 + SAME_WEIGHT) + 1024) return { what, reason: null, evidence: `the copy loads ${kb(now)} of it against the original's ${kb(was)}` };
+    return { what, reason: 'deploy', evidence: `the original requests this very file (${kb(was)}) while it loads, as the copy does` };
+  }, 'image');
+  if (r.unexplained) return null;
+  const tasks = ['mobile', 'desktop'].map((d) => {
+    const b = lastLongTask(ctx.oldLhr[d]);
+    const a = lastLongTask(ctx.newLhr[d]);
+    return b != null || a != null ? `${d}: last long task at ${b ?? 'none'} → ${a ?? 'none'} ms` : null;
+  }).filter(Boolean);
+  return {
+    ...r,
+    evidence: `${item.after?.detail ?? 'Named in the copy.'} ${r.evidence} Lighthouse names an offscreen image only when it was requested before the page's last long task, which falls later on a busier computer${tasks.length ? ` (${tasks.join('; ')})` : ''}: the measurement host, not the copy. Measure it again after deploying.`,
+  };
+}
+
 /**
  * An image row whose every file only a lossy or resized file could make smaller: { reason: 'look', … }, else null (the row goes
  * on to the planned-fix rule). A file is explained when the copy's fix already made it a lossless WebP, or when the original's
@@ -352,6 +458,7 @@ function savingsByUrl(lhr, id) {
  * the original does. A PNG the fix left needs the fix's own reason for leaving it (fixOpen), else it is not explained.
  */
 function imageRow(item, id, ctx) {
+  if (id === 'offscreen-images') return offscreenRow(item, ctx);
   if (!IMAGE_FILE_AUDITS.has(id)) return null;
   const copy = savingsByUrl(ctx.newLhr, id);
   if (!copy.size) return null;
@@ -361,7 +468,7 @@ function imageRow(item, id, ctx) {
     const what = fewUrls([url]);
     const host = hostOf(url);
     if (/^https?:/.test(url) && host !== ctx.copyHost) return { what, reason: null, evidence: 'not a file of the copy' };
-    if (OUR_WEBP.test(url)) return { what, reason: 'look', evidence: 'already a WebP the copy made with no visible difference; only a smaller or more compressed file could save more, which would change the look' };
+    if (OUR_WEBP.test(url)) return { what, reason: 'look', evidence: `already ${/\.png$/i.test(url) ? 'a smaller copy (a PNG of the very pixels the browser draws)' : 'a WebP'} the copy made with no visible difference; only a smaller or more compressed file could save more, which would change the look` };
     const stem = imageStem(url);
     const same = original.find((o) => o.stem && o.stem === stem);
     if (!same) return { what, reason: null, evidence: 'the original\'s report does not name this file' };
@@ -804,11 +911,16 @@ export function sameLoad({ wb, wa, lb, la, rb, ra, by = null }) {
   if (Math.abs(wa - wb) > wb * SAME_WEIGHT) return { ok: false, text: `the copy's page weighs ${kb(wa)} against the original's ${kb(wb)}` };
   if (!rb || !ra) return { ok: false, text: 'the requests are not in both reports' };
   const types = new Set([...Object.keys(rb.byType ?? {}), ...Object.keys(ra.byType ?? {})]);
-  const differ = [...types].filter((t) => (rb.byType?.[t] ?? 0) !== (ra.byType?.[t] ?? 0));
+  // Fewer is not another page: a copy that makes no more requests of any type than the original (some of the original's never
+  // start, e.g. its analytics) cannot be held back by what it loads. One more of any type is still a different load.
+  const more = [...types].filter((t) => (ra.byType?.[t] ?? 0) > (rb.byType?.[t] ?? 0));
   // `by`: the requests were counted up to a moment (only those started by it: what starts later cannot delay it).
   const when = by ? ` started by ${by}` : '';
-  if (rb.total !== ra.total || differ.length) return { ok: false, text: `the copy makes other requests than the original${when}: ${requestsText(ra)} against ${requestsText(rb)}` };
-  return { ok: true, text: `the same page weight (${kb(wb)} → ${kb(wa)}), the same largest element (${la.snippet}) and the same requests${when} (${requestsText(ra)})` };
+  if (ra.total > rb.total || more.length) return { ok: false, text: `the copy makes other requests than the original${when}: ${requestsText(ra)} against ${requestsText(rb)}` };
+  const reqs = ra.total === rb.total
+    ? `the same requests${when} (${requestsText(ra)})`
+    : `fewer requests${when} and none more of any type (${requestsText(ra)} against the original's ${requestsText(rb)})`;
+  return { ok: true, text: `the same page weight (${kb(wb)} → ${kb(wa)}), the same largest element (${la.snippet}) and ${reqs}` };
 }
 
 /** The moment each timed audit measures, as the run observed it: a request started after it cannot have delayed it. */
@@ -885,6 +997,11 @@ function lighthousePart(item, id, ctx) {
     const timeOnly = a.unit === 'ms';
     if (timeOnly) {
       const times = `${b ? `${Math.round(b.value)} → ` : ''}${Math.round(a.value)} ms`;
+      // A time no longer than the original's (within GROWTH.other) needs no proof of the same load: the copy is not slower.
+      if (b && a.value <= b.value * (1 + GROWTH.other)) {
+        rows.push(`${device}: ${times}, no slower than the original`);
+        continue;
+      }
       // The time the first paint waits for its blocking files is decided by those files alone: the copy blocks no more than
       // the original when it waits for the same files (or fewer), in the same order, none larger, none from a new host. Then
       // a longer wait is the measurement's (the host, the computer's load), whatever else the page loads after it.
