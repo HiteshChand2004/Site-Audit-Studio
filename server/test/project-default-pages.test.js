@@ -14,7 +14,8 @@ import { MAX_CHECK_PAGES, parseMaxPages } from '../src/routes/analyze.js';
 const PAGES_150 = MIGRATIONS.find((m) => m.id === '2026-11-14-check-pages-150');
 const PAGES_300 = MIGRATIONS.find((m) => m.id === '2026-11-16-check-pages-300');
 const PAGES_1500 = MIGRATIONS.find((m) => m.id === '2026-11-18-check-pages-1500');
-const START = [PAGES_150.id, PAGES_300.id, PAGES_1500.id];
+// The change tables for Growth OS (src/changes/) are a start migration too, applied after these.
+const START = [PAGES_150.id, PAGES_300.id, PAGES_1500.id, '2026-11-20-change-requests'];
 
 // The order of a real start: the projects route is loaded first (src/index.js imports it), then the server applies its start
 // migrations. The route looks for the column when a number is set, so it marks choices from then on without a restart.

@@ -32,6 +32,8 @@ export default defineConfig({
       '/preview': 'http://127.0.0.1:4000',
       // Built sites shared with a link (Build mode's "Publish"): served by the API the same way (server/src/buildmode/publish.js).
       '/sites': 'http://127.0.0.1:4000',
+      // A website's changes published on this Remastly (Growth OS → Changes, server/src/changes/publish.js).
+      '/live': 'http://127.0.0.1:4000',
     },
   },
 });

@@ -192,4 +192,60 @@ export const MIGRATIONS = [
       db.exec('UPDATE projects SET max_pages = 1500 WHERE max_pages = 300 AND max_pages_chosen = 0');
     },
   },
+  {
+    // Changes asked by Growth OS (docs/GROWTHOS-INTEGRATION.md, server/src/changes/): one row per request, and where each website's
+    // locally published version lives. New tables only; nothing prepares a statement on them at load (changes/store.js asks
+    // changesReady()), so the server applies it itself when it starts.
+    id: '2026-11-20-change-requests',
+    onStart: true,
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS change_requests (
+          id             TEXT PRIMARY KEY,
+          request_id     TEXT NOT NULL,
+          source         TEXT NOT NULL DEFAULT 'growth-os',
+          project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          type           TEXT NOT NULL,
+          page           TEXT,
+          payload_json   TEXT NOT NULL,
+          callback_url   TEXT,
+          status         TEXT NOT NULL DEFAULT 'received',
+          step           TEXT,
+          message        TEXT,
+          base_recreate  TEXT,
+          base_change    TEXT,
+          result_json    TEXT,
+          preview_url    TEXT,
+          live_url       TEXT,
+          decided_by     TEXT,
+          decided_at     TEXT,
+          published_at   TEXT,
+          deployment_id  TEXT,
+          created_at     TEXT NOT NULL,
+          updated_at     TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS change_requests_request ON change_requests(source, request_id);
+        CREATE INDEX IF NOT EXISTS change_requests_project ON change_requests(project_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS change_callbacks (
+          id             TEXT PRIMARY KEY,
+          change_id      TEXT NOT NULL REFERENCES change_requests(id) ON DELETE CASCADE,
+          status         TEXT NOT NULL,
+          http_status    INTEGER,
+          error          TEXT,
+          attempts       INTEGER NOT NULL DEFAULT 0,
+          at             TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS change_callbacks_change ON change_callbacks(change_id, at);
+
+        CREATE TABLE IF NOT EXISTS change_live (
+          project_id     TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+          slug           TEXT NOT NULL,
+          change_id      TEXT NOT NULL,
+          published_at   TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS change_live_slug ON change_live(slug);
+      `);
+    },
+  },
 ];

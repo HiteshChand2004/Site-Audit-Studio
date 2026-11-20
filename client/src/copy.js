@@ -142,6 +142,63 @@ export const STEPS = {
   live: { n: 5, title: 'Go live', short: 'Go live', explain: 'Put the new site on the internet, hosted by Remastly at your domain, and update it after every new copy.' },
 };
 
+/** Changes asked by Growth OS (layout/steps/ChangesStep.jsx, server/src/changes/, docs/GROWTHOS-INTEGRATION.md). */
+export const CHANGES = {
+  title: 'Changes from Growth OS',
+  sub: 'Pages and fixes Growth OS asked for. Remastly makes each one on its copy of the site and checks it. Nothing goes live until you approve it here.',
+  notLinkedTitle: 'Growth OS is not linked',
+  notLinked: 'Set SAS_GROWTHOS_KEY, SAS_GROWTHOS_SECRET and SAS_GROWTHOS_URL in server/.env and restart Remastly (docs/GROWTHOS-INTEGRATION.md).',
+  noSecret: 'SAS_GROWTHOS_SECRET is not set, so Growth OS is not told what happened to its changes.',
+  notReady: 'The database has no change tables yet. Restart Remastly once: it adds them by itself.',
+  whereLive: (t) => (t === 'local' ? 'Approved changes go live on this Remastly (a local address, for testing)'
+    : t === 'server' ? 'Approved changes go live on Remastly’s server, at the website’s domain'
+      : t === 'netlify' ? 'Approved changes go live on the website’s Netlify site'
+        : t?.error ? `Approved changes cannot go live yet: ${t.error}` : 'Where approved changes go live is not known yet'),
+  waiting: (n) => `${n} waiting for your approval`,
+  emptyTitle: 'Nothing from Growth OS yet',
+  empty: 'When someone presses “Send to Remastly” on a page draft in Growth OS, it shows up here.',
+  types: {
+    'page.create': 'New page', 'page.improve': 'Better page', 'meta.title': 'Page title', 'meta.description': 'Page description',
+    'image.alt': 'Picture descriptions', 'form.shorten': 'Shorter form', 'tracking.ga4': 'Google Analytics tag',
+  },
+  fixLine: (c) => (c.fix?.title ?? c.fix?.description ?? (c.fix?.measurementId ? `Add ${c.fix.measurementId} to every page`
+    : c.fix?.remove ? `Remove the fields ${c.fix.remove.join(', ')}` : c.fix?.items ? `${c.fix.items.length} picture description(s)` : 'A change')),
+  everyPage: 'every page',
+  forSearch: (q) => `For the buyer search “${q}”`,
+  status: {
+    received: { label: 'Waiting its turn', tone: 'info' },
+    building: { label: 'Being made', tone: 'info' },
+    ready: { label: 'Waiting for your approval', tone: 'accent' },
+    publishing: { label: 'Going live', tone: 'info' },
+    published: { label: 'Live', tone: 'ok' },
+    rejected: { label: 'Turned down', tone: 'neutral' },
+    failed: { label: 'Could not be made', tone: 'bad' },
+    cancelled: { label: 'Cancelled by Growth OS', tone: 'neutral' },
+  },
+  madeBy: (c) => {
+    const who = c.by?.ai ? `Words by the AI (Claude ${c.by.model ?? ''}${c.by.ms ? `, ${Math.round(c.by.ms / 1000)} s` : ''})` : 'Words placed by Remastly (no AI)';
+    if (c.template?.single) return `${who}, in the site's homepage used as the template (its top and the parts that fit the draft)`;
+    return c.template ? `${who} in the site's own template for ${c.template.folder} pages (worked out from ${c.template.from.join(' and ')})` : `${who}, in the look of the site's page ${c.neighbour ?? ''}`.trim();
+  },
+  designLine: (d) => `design check against ${d.neighbour}: ${d.passed} of ${d.of} passed`,
+  score: 'Page checks',
+  newPage: 'new',
+  check: 'Check',
+  before: 'Before',
+  after: 'After',
+  computer: 'On a computer',
+  phone: 'On a phone',
+  shotAlt: (where, page) => `The changed page ${page} ${where === 'phone' ? 'on a phone' : 'on a computer'}`,
+  openPreview: 'Open the preview',
+  openLive: 'Open the live page',
+  approve: 'Approve and publish',
+  reject: 'Turn down',
+  rejectWhy: 'Why (Growth OS is told)',
+  rejectPlaceholder: 'For example: the picture does not fit',
+  rejectConfirm: 'Turn it down',
+  keep: 'Keep it',
+};
+
 /** Step 5, Go live (layout/steps/GoLiveStep.jsx): deploying a finished copy to the owner's Netlify account. */
 export const GO_LIVE = {
   whereTitle: 'Where it goes live',

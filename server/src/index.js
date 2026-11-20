@@ -29,6 +29,11 @@ import { appsRouter, githubReturnRouter, githubRouter } from './routes/apps.js';
 import { accountsEnabled, bindHost, hostingIp, isLoopbackHost, trustProxySetting } from './config/index.js';
 import { refreshWantedCerts } from './hosting/certs.js';
 import { db } from './db/index.js';
+import { extRouter } from './routes/ext.js';
+import { changesRouter } from './routes/changes.js';
+import { LIVE_PREFIX, livePath, resolveLive } from './changes/publish.js';
+import { recoverChanges } from './changes/worker.js';
+import { changesReady } from './changes/store.js';
 import { applyStartMigrations, pendingMigrations } from './db/apply.js';
 
 const PORT = Number(process.env.PORT) || 4000;
@@ -56,6 +61,8 @@ app.use('/api/forms', formsPublicRouter);
 // Where GitHub sends the browser back (Run my app on Remastly): from GitHub's own page, which the origin check below refuses;
 // each answer only counts in the browser that started it (routes/apps.js).
 app.use('/api/github', githubReturnRouter);
+// Growth OS, server to server with its key (docs/GROWTHOS-INTEGRATION.md): before the browser-facing checks and the accounts gate.
+app.use('/api/ext/v1', extRouter);
 app.use(cors({ origin: ['http://localhost:5173', 'http://127.0.0.1:5173'] }));
 app.use(express.json({ limit: '1mb' }));
 // Nothing that merely shares the app's address is the app: a sandboxed preview or another site (security/foreignOrigin.js).
@@ -67,6 +74,8 @@ app.use(PREVIEW_PREFIX, previewRouter({ inlineScriptHashes }));
 // copy's own files are reachable.
 app.use(PUBLISHED_PREFIX, previewRouter({ inlineScriptHashes, resolve: resolvePublished, pathOf: publishedPath, missing: 'No such site (it may no longer be shared).' }));
 loadPublished().catch((e) => console.warn('Shared sites not read:', e.message));
+// A website's changes published on this Remastly itself (no hosting set up: changes/publish.js), the same sandboxed way.
+app.use(LIVE_PREFIX, previewRouter({ inlineScriptHashes, resolve: resolveLive, pathOf: livePath, missing: 'No such site.' }));
 
 // Accounts (SAS_ACCOUNTS=1): the database must have the accounts tables (npm run db:migrate), the auth routes are mounted, and
 // every other /api route but /api/health is behind a verified session (accounts/gate.js). Off: none of this exists, as before.
@@ -112,6 +121,7 @@ app.use('/api/projects', reportRouter);
 app.use('/api/projects', faviconRouter);
 app.use('/api/projects', deployRouter);
 app.use('/api/projects', appsRouter);
+app.use('/api/projects', changesRouter);
 app.use('/api/github', githubRouter);
 app.use('/api/hosting', hostingRouter);
 app.use('/api/stacks', stacksRouter);
@@ -165,6 +175,8 @@ const server = app.listen(PORT, HOST, (err) => {
       // SAS_KEEP_COPIES_DAYS too; then every SAS_CLEANUP_HOURS (jobs/cleanup.js). SAS_CLEANUP_DRY_RUN=1 only lists.
       runCleanup().catch((e) => console.warn('[cleanup] start-up pass failed:', e.message)).finally(() => watchCleanup());
     });
+  // Changes asked by Growth OS that a stopped server left half-made are taken up again (changes/worker.js).
+  if (changesReady()) recoverChanges();
   // Hosting its own websites: every few minutes, the domains that now point here and have no padlock yet are listed for the
   // server's certbot timer (hosting/certs.js), so a domain gets HTTPS soon after its owner changes the DNS.
   const ip = hostingIp();
