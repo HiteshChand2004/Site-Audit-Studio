@@ -662,7 +662,7 @@ function DomainCard({ project, liveUrl, onState }) {
                       <span className={styles.badge} data-status={r.ok ? 'ready' : r.required ? 'failed' : undefined}>
                         {r.ok ? T.domainOk : r.required ? T.domainMissing : T.domainOptional}
                       </span>
-                      {!r.ok && r.found?.length > 0 && <span className={styles.found}>{T.domainNow(r.found)}</span>}
+                      {!r.ok && r.found?.length > 0 && <span className={styles.found}>{T.domainNow(r.found, r.source)}</span>}
                     </td>
                   </tr>
                 ))}

@@ -442,7 +442,7 @@ async function oldServerOf(project, req, typed) {
     records: plan.map(({ type, name, value }) => ({ type, name, value })),
     hosts: plan.map((r) => r.host),
     // Changed by hand already: the domain's own DNS servers send it there.
-    pointed: ip && !client ? await pointsTo(plan.map((r) => r.host), d.apex, ip) : false,
+    pointed: ip && !client ? await pointsTo(plan.map((r) => r.host), ip) : false,
   };
 }
 
@@ -472,7 +472,7 @@ deployRouter.delete('/:id/domain', async (req, res) => {
       // Changed by hand: the domain is let go only once its own DNS servers send it to the old server.
       if (!back.client && !back.pointed) return res.status(409).json({ error: `Change these records first, at the company where ${back.domain} is; then check again.`, records: back.records });
       // How long others may still send visitors here: the lifetime of the names' records (read before Remastly changes them).
-      const keepMinutes = await minutesToKeep(back.hosts, back.d.apex);
+      const keepMinutes = await minutesToKeep(back.hosts);
       let how = 'manual';
       if (back.client) {
         try {

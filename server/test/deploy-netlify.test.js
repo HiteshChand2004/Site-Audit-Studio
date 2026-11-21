@@ -426,8 +426,7 @@ test('the records: a bare domain points to Netlify\'s address, a www or other na
 
 /** A DNS that answers from a table: { host: { a: [...], cname: [...] } }. */
 const fakeDns = (table) => ({
-  resolve4: async (h) => { if (table[h]?.a) return table[h].a; throw Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' }); },
-  resolveCname: async (h) => { if (table[h]?.cname) return table[h].cname; throw Object.assign(new Error('ENODATA'), { code: 'ENODATA' }); },
+  lookup: async (h) => ({ addresses: table[h]?.a ?? [], ttl: null, cnames: table[h]?.cname ?? [], source: 'authoritative' }),
 });
 
 test('the check: right only when the name points to the site; an old address left beside it is not right', async () => {
