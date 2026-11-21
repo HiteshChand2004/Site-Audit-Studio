@@ -59,6 +59,8 @@ export function viewChange(row) {
     by: result.by ?? null,
     neighbour: result.neighbour ?? null,
     design: result.design ?? null,
+    // when its checks and pictures were taken again ("Check again"); the pictures' address changes with it
+    checkedAt: result.checkedAt ?? null,
     decidedBy: row.decided_by,
     decidedAt: row.decided_at,
     publishedAt: row.published_at,
@@ -70,6 +72,10 @@ export function viewChange(row) {
 
 /** @param {string} id */
 export const changeRow = (id) => /** @type {any} */ (stmt('SELECT * FROM change_requests WHERE id = ?').get(id)) ?? null;
+
+/** The change whose saved preview address holds this token (a link handed out before the server restarted). */
+export const changeByPreviewToken = (/** @type {string} */ token) => /** @type {any} */ (
+  stmt("SELECT * FROM change_requests WHERE preview_url IS NOT NULL AND instr(preview_url, ?) > 0 LIMIT 1").get(`/preview/${token}/`)) ?? null;
 /** @param {string} source @param {string} requestId */
 export const changeByRequest = (source, requestId) => /** @type {any} */ (stmt('SELECT * FROM change_requests WHERE source = ? AND request_id = ?').get(source, requestId)) ?? null;
 /** @param {string} projectId */

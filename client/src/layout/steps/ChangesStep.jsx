@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, CircleCheck, CircleX, ExternalLink, Inbox, Loader2, Minus, Rocket, X } from 'lucide-react';
+import { Check, CircleCheck, CircleX, ExternalLink, Inbox, Loader2, Minus, RefreshCw, Rocket, RotateCcw, X } from 'lucide-react';
 import Button from '../../components/common/Button.jsx';
 import Badge from '../../components/common/Badge.jsx';
 import { Alert, Card, EmptyState } from '../../components/common/Surface.jsx';
@@ -56,7 +56,9 @@ function ChangeCard({ projectId, change, onChanged }) {
       setWorking(false);
     }
   };
-  const shot = (name) => apiUrl(`/projects/${projectId}/changes/${change.id}/shots/${name}.webp`);
+  // the pictures' address changes when they are taken again, so the browser shows the new ones
+  const shot = (name) => apiUrl(`/projects/${projectId}/changes/${change.id}/shots/${name}.webp${change.checkedAt ? `?v=${encodeURIComponent(change.checkedAt)}` : ''}`);
+  const rechecking = Boolean(change.step) && /again/i.test(change.step);
   return (
     <article className={styles.change}>
       <header className={styles.changeHead}>
@@ -128,6 +130,12 @@ function ChangeCard({ projectId, change, onChanged }) {
             <Button variant="ghost" icon={CircleX} disabled={working} onClick={() => setAsking(true)}>{T.reject}</Button>
           </>
         )}
+        {(change.status === 'ready' || change.status === 'published') && !asking && (
+          <Button variant="ghost" icon={rechecking ? Spin : RefreshCw} disabled={working || rechecking} title={T.checkAgainHelp} onClick={() => decide(() => api.recheckChange(projectId, change.id))}>{T.checkAgain}</Button>
+        )}
+        {['ready', 'failed', 'rejected'].includes(change.status) && !asking && (
+          <Button variant="ghost" icon={RotateCcw} disabled={working || rechecking} title={T.makeAgainHelp} onClick={() => decide(() => api.remakeChange(projectId, change.id))}>{T.makeAgain}</Button>
+        )}
       </div>
       {asking && (
         <form className={styles.reject} onSubmit={(e) => { e.preventDefault(); decide(() => api.rejectChange(projectId, change.id, reason)); }}>
@@ -168,7 +176,7 @@ export default function ChangesStep({ project }) {
   }, [load]);
 
   // Faster while something is being made or going live.
-  const busy = data?.changes?.some((c) => BUSY.has(c.status));
+  const busy = data?.changes?.some((c) => BUSY.has(c.status) || Boolean(c.step));
   useEffect(() => {
     const t = setInterval(load, busy ? 2000 : 10000);
     return () => clearInterval(t);

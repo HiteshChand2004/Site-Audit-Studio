@@ -391,7 +391,10 @@ export function fillTemplate(root, entry, { dropEmpty = false, defaults = {} } =
       const empty = typeof v !== 'string' || !v.trim();
       if (empty) missing.push(`${scope}${n.id}`);
       if (empty && dropEmpty) return '';
-      const text = esc(typeof v === 'string' ? v : '');
+      // a stylesheet's or a script's own text is code: written as it is (escaping turned `a > b` and quotes into entities),
+      // only a closing tag inside it made harmless
+      const code = /^(style|script)$/i.test(n.el.tag);
+      const text = code ? String(v ?? '').replace(/<\/(style|script)/gi, '<\\/$1') : esc(typeof v === 'string' ? v : '');
       if (n.el.tag === '#text') return text;
       return open(n.el, e, scope) + text + close(n.el);
     }
