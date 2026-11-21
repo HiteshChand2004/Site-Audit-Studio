@@ -1,0 +1,333 @@
+/* ---------- Media: blog list and post (content from Botza CMS) ---------- */
+
+.post-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: var(--sp-5);
+}
+
+.post-card {
+  overflow: hidden;
+}
+
+.post-card__link {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  color: inherit;
+  text-decoration: none;
+}
+
+.post-card__media {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border);
+  background: var(--accent-tint);
+}
+
+.post-card__media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 500ms var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .post-card:hover .post-card__media img {
+    transform: scale(1.03);
+  }
+}
+
+.post-card__placeholder {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  background: radial-gradient(120% 90% at 20% 10%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 60%), var(--surface-2);
+  color: color-mix(in srgb, var(--accent) 55%, transparent);
+  font-family: var(--font-serif);
+  font-size: clamp(3.5rem, 6vw, 5rem);
+  line-height: 1;
+}
+
+.post-card__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-5);
+}
+
+.post-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.post-card__title {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-start;
+  justify-content: space-between;
+  font-family: var(--font-serif);
+  font-size: clamp(1.375rem, 1.2rem + 0.5vw, 1.625rem);
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.post-card__title svg {
+  flex-shrink: 0;
+  margin-top: 4px;
+  color: var(--accent);
+}
+
+.post-card__excerpt {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-2);
+  line-height: 1.6;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.post-card__author {
+  margin-top: auto;
+  padding-top: var(--sp-2);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.post-empty {
+  padding: var(--sp-8) 0;
+  text-align: center;
+}
+
+/* ---------- One post ---------- */
+.post {
+  padding: clamp(112px, 12vw, 160px) 0 var(--section-y);
+}
+
+.post__head {
+  max-width: calc(760px + 2 * var(--gutter));
+}
+
+.post__back {
+  display: flex;
+  width: fit-content;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: var(--sp-6);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.post__back:hover {
+  color: var(--text);
+}
+
+.post__title {
+  margin: var(--sp-3) 0 var(--sp-4);
+  font-family: var(--font-serif);
+  font-size: var(--fs-d3);
+  font-weight: 500;
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+.post__lead {
+  margin-bottom: var(--sp-4);
+}
+
+.post__hero {
+  max-width: calc(1000px + 2 * var(--gutter));
+  margin-top: var(--sp-7);
+}
+
+.post__hero img {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  object-fit: cover;
+}
+
+/* Rich text from the CMS: plain tags (and the CMS's own cms-* classes, which sit on the same tags). */
+.prose {
+  max-width: 760px;
+  margin: var(--sp-7) auto 0;
+  color: var(--text-2);
+  font-size: 1.0625rem;
+  line-height: 1.75;
+  overflow-wrap: break-word;
+}
+
+.prose > :first-child {
+  margin-top: 0;
+}
+
+.prose p,
+.prose ul,
+.prose ol,
+.prose blockquote,
+.prose pre,
+.prose figure,
+.prose table,
+.prose .cms-table-wrapper {
+  margin: 0 0 1.25em;
+}
+
+.prose h2,
+.prose h3,
+.prose h4,
+.prose h5,
+.prose h6 {
+  margin: 2em 0 0.6em;
+  color: var(--text);
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+}
+
+.prose h2 {
+  font-family: var(--font-serif);
+  font-size: clamp(1.625rem, 1.4rem + 0.8vw, 2rem);
+  font-weight: 500;
+}
+
+.prose h3 {
+  font-size: 1.3rem;
+  font-weight: 600;
+}
+
+.prose h4,
+.prose h5,
+.prose h6 {
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.prose strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.prose a {
+  color: var(--accent-strong);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-underline-offset: 3px;
+}
+
+.prose a:hover {
+  text-decoration-color: currentColor;
+}
+
+.prose ul,
+.prose ol {
+  padding-left: 1.4em;
+}
+
+.prose ul {
+  list-style: disc;
+}
+
+.prose ol {
+  list-style: decimal;
+}
+
+.prose li {
+  margin: 0.35em 0;
+  padding-left: 0.25em;
+}
+
+.prose li::marker {
+  color: var(--accent);
+}
+
+.prose blockquote {
+  padding: var(--sp-4) var(--sp-5);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: var(--accent-tint);
+  color: var(--text);
+  font-family: var(--font-serif);
+  font-size: 1.2rem;
+  line-height: 1.5;
+}
+
+.prose blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+.prose code {
+  padding: 0.15em 0.4em;
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-size: 0.9em;
+}
+
+.prose pre {
+  padding: var(--sp-4) var(--sp-5);
+  overflow-x: auto;
+  border-radius: var(--r-sm);
+  background: #111827;
+  color: #e5e7eb;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.prose pre code {
+  padding: 0;
+  background: none;
+}
+
+.prose img,
+.prose video {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--r-sm);
+}
+
+.prose figcaption {
+  margin-top: var(--sp-2);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+.prose .cms-table-wrapper {
+  overflow-x: auto;
+}
+
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.prose th,
+.prose td {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.prose th {
+  background: var(--surface-2);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.prose hr {
+  margin: 2.5em 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
