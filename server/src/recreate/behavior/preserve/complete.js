@@ -227,6 +227,10 @@ const formGuard = function () {
       note(f, 'Sending…');
       return fetch(end, { method: 'POST', body: new FormData(f) }).then(function (r) {
         note(f, r.ok ? 'Thank you. Your message was sent.' : 'The form could not be sent.');
+        // Saved by the server: the page is told, with the form's name only (deploy/tracking.js sends it to Google Analytics).
+        if (r.ok) {
+          try { f.dispatchEvent(new CustomEvent('sas:form-sent', { bubbles: true, detail: { form: f.getAttribute('name') || f.id || 'contact' } })); } catch (x) { /* an old browser: no event */ }
+        }
       }, function () { note(f, 'The form could not be sent.'); });
     });
   }, true);

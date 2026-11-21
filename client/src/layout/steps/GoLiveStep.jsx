@@ -287,6 +287,8 @@ export default function GoLiveStep({ project, onGoCreate }) {
 
       <FormsCard project={project} onChange={load} />
 
+      <TrackingCard project={project} />
+
       <SnapshotCard project={project} onChange={load} />
 
       <PassThroughCard key={boxTick} project={project} onChange={load} />
@@ -1270,6 +1272,81 @@ function AppCard({ project, onChange }) {
 }
 
 /** Form entries: the site's forms save to Remastly (from the next deploy), with the latest entries and a CSV of all. */
+/**
+ * Tracking & scripts (server deploy/tracking.js): the website's Google Analytics 4 ID, put on every page at each deploy. Saving
+ * changes nothing live; the card says what the live site carries since its last deploy and whether a deploy is due.
+ */
+function TrackingCard({ project }) {
+  const [state, setState] = useState(null);
+  const [draft, setDraft] = useState('');
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let gone = false;
+    api.getTracking(project.id).then((s) => {
+      if (gone) return;
+      setState(s);
+      setDraft(s.ga4 ?? '');
+    }, (err) => !gone && setError(err.message));
+    return () => { gone = true; };
+  }, [project.id]);
+
+  async function save(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const s = await api.setTracking(project.id, { ga4: draft.trim() });
+      setState(s);
+      setDraft(s.ga4 ?? '');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!state) return error ? <Alert tone="bad" title="Tracking could not be loaded">{error}</Alert> : null;
+  const live = state.live?.ga4 ? state.live : null;
+  const changed = draft.trim().toUpperCase() !== (state.ga4 ?? '');
+  return (
+    <Card icon={Code} title={T.trackingTitle} sub={T.trackingSub}>
+      <form className={styles.domainBody} onSubmit={save}>
+        <label className={form.field}>
+          <span className={form.label}>{T.trackingGa4}</span>
+          <div className={styles.accountRow}>
+            <input
+              className={form.input}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="G-AB12CD34EF"
+              spellCheck={false}
+              autoComplete="off"
+              aria-invalid={error ? 'true' : undefined}
+            />
+            <Button size="sm" type="submit" disabled={busy || !changed} icon={busy ? Spin : undefined}>{T.trackingSave}</Button>
+          </div>
+          <span className={ws.hint} style={{ margin: 0 }}>{T.trackingGa4Help}</span>
+        </label>
+        {state.ga4 && state.pending && <Alert tone="warn" title={T.trackingNotLive} />}
+        {!state.ga4 && live && <Alert tone="warn" title={T.trackingRemovedNext} />}
+        {live && !state.pending && (
+          <>
+            <p className={ws.hint} style={{ margin: 0 }}>{T.trackingLive(live)}</p>
+            {live.removed > 0 && <p className={ws.hint} style={{ margin: 0 }}>{T.trackingRemoved(live.removed)}</p>}
+            {live.otherIds?.length > 0 && (
+              <Alert tone="warn" title={T.trackingOtherIds([...new Set(live.otherIds.flatMap((o) => o.ids))].join(', '))} />
+            )}
+          </>
+        )}
+        {state.ga4 && <p className={ws.hint} style={{ margin: 0 }}>{T.trackingLeads}</p>}
+        {error && <Alert tone="bad" title="Not saved">{error}</Alert>}
+      </form>
+    </Card>
+  );
+}
+
 function FormsCard({ project, onChange }) {
   const [state, setState] = useState(null);
   const [error, setError] = useState(null);

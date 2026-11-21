@@ -7,6 +7,7 @@ import path from 'node:path';
 import { stat } from 'node:fs/promises';
 import { htmlFiles, newPageFile, pageFile, readText, servedPath, writeFresh } from './site.js';
 import { templateImprove, templatePage } from './fromTemplate.js';
+import { allowGoogleTag as allowGoogleInPolicy } from '../deploy/tracking.js';
 
 export class ApplyError extends Error {
   /** @param {string} message */
@@ -362,16 +363,7 @@ const GA_FILE = 'remastly-ga4.js';
 async function allowGoogleTag(root) {
   const text = await readText(root, '_headers').catch(() => null);
   if (!text || !/Content-Security-Policy/i.test(text)) return false;
-  const HOSTS = { 'script-src': 'https://www.googletagmanager.com', 'connect-src': 'https://*.google-analytics.com https://*.analytics.google.com https://www.googletagmanager.com', 'img-src': 'https://*.google-analytics.com https://www.googletagmanager.com' };
-  const next = text.replace(/(Content-Security-Policy:\s*)([^\n]+)/gi, (_, head, policy) => {
-    let p = policy;
-    for (const [dir, hosts] of Object.entries(HOSTS)) {
-      const re = new RegExp(`(^|;\\s*)${dir}\\s+([^;]*)`, 'i');
-      if (re.test(p)) p = p.replace(re, (m, a, v) => (v.includes('googletagmanager') || v.includes('google-analytics') ? m : `${a}${dir} ${v.trim()} ${hosts}`));
-      else p = `${p.trim().replace(/;?$/, ';')} ${dir} 'self' ${hosts}`;
-    }
-    return `${head}${p}`;
-  });
+  const next = allowGoogleInPolicy(text);
   if (next === text) return false;
   await writeFresh(path.join(root, '_headers'), next);
   return true;
