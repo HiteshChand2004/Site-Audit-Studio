@@ -128,10 +128,12 @@ export async function runEditor(root, input, rules = ANY) {
 
 /** Refuses a write that would pass WORKSPACE_LIMITS: they count the text files the agent writes, not the photos and fonts put there for it. */
 async function checkRoom(root, rel, bytes, exists, rules) {
-  if (bytes > WORKSPACE_LIMITS.fileBytes) throw new ToolError(`${rel} would be ${Math.round(bytes / 1024)} KB; one file may be at most ${WORKSPACE_LIMITS.fileBytes / 1024} KB. Split it.`);
+  // An existing site starts from its own size (seed.js): its room is measured from there, not from an empty project.
+  const lim = { ...WORKSPACE_LIMITS, ...rules.limits };
+  if (bytes > lim.fileBytes) throw new ToolError(`${rel} would be ${Math.round(bytes / 1024)} KB; one file may be at most ${Math.round(lim.fileBytes / 1024)} KB. Split it.`);
   const files = (await listFiles(root)).filter((f) => rules.listed(f) && (rules.text ?? TEXT_FILE).test(f));
-  if (!exists && files.length >= WORKSPACE_LIMITS.files) throw new ToolError(`The project already has ${files.length} files, the most allowed.`);
+  if (!exists && files.length >= lim.files) throw new ToolError(`The project already has ${files.length} files, the most allowed.`);
   let total = bytes;
   for (const f of files) if (f !== rel) total += (await stat(path.join(root, f))).size;
-  if (total > WORKSPACE_LIMITS.totalBytes) throw new ToolError(`The project would pass ${WORKSPACE_LIMITS.totalBytes / 1024 / 1024} MB of text. Keep files lean.`);
+  if (total > lim.totalBytes) throw new ToolError(`The project would pass ${Math.round(lim.totalBytes / 1024 / 1024)} MB of text. Keep files lean.`);
 }

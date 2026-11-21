@@ -214,7 +214,7 @@ export async function editSite(id, ownerId, body, { build = buildProject, check 
         const built = await build({ stack, dir, tmp: path.join(runDirOf(run.id), 'tmp-edit') });
         if (!built.ok) throw new BuildError(`The site could not be built with this change, so nothing was changed. ${built.problems[0] ?? ''}`.trim(), 422);
       }
-      result = await check(out, { app: stack.safety });
+      result = await check(out, { app: stack.safety, own: run.ownScripts ?? null });
       if (!result.ok) throw new BuildError(`With this change the site would not pass its checks, so nothing was changed. ${result.issues[0] ?? ''}`.trim(), 422);
       if (kind === 'text' && !(await pageBlocks(out, /** @type {string} */ (page))).some((b) => b.text === to)) {
         throw new BuildError('The page did not show the new text after the change, so nothing was changed.', 422);

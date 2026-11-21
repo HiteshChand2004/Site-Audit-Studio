@@ -61,17 +61,18 @@ export async function planBuild(request, deps = {}) {
   await checkDailyBudget(ownerId);
   // The owner's own facts (the details form, their photos): data for both model steps, and always among the plan's facts.
   const facts = ownerFacts(details, images);
-  const context = await buildContext({ input: request.input, stack: request.stack, stackName: request.stackName, stacks: lib.ids('stack'), loadProject: deps.loadProject, fetchGithub: deps.fetchGithub, readSite: deps.readSite });
+  const context = await buildContext({ input: request.input, stack: request.stack, stackName: request.stackName, stacks: lib.ids('stack'), loadProject: deps.loadProject, fetchGithub: deps.fetchGithub, readSite: deps.readSite, findSite: deps.findSite });
   const llm = deps.llm ?? createLlm();
   const step1 = await understand({ llm, library: lib, context, description, answers, facts });
   await recordSpend(ownerId, costOf(step1.usage, step1.model));
   step1.understanding.facts = withOwnerFacts(step1.understanding.facts, facts);
   const selected = selectModules(lib, step1.understanding, { input: context.input, stack: context.stack });
-  const variety = step1.understanding.task === 'build-new' ? await (deps.planVariety ?? planVariety)({ ownerId }) : undefined;
+  // A redesign may turn out to ask for a new look (writeBrief decides from the request): it gets ingredients too.
+  const variety = step1.understanding.task === 'build-new' || step1.understanding.task === 'redesign' ? await (deps.planVariety ?? planVariety)({ ownerId }) : undefined;
   const step2 = await writeBrief({ llm, selected, context, understanding: step1.understanding, description, answers, facts, variety });
   await recordSpend(ownerId, costOf(step2.usage, step2.model));
   // Every direction offered is remembered, built or not, so the next plan (this owner's or anyone's) looks different again.
-  if (variety) await (deps.recordDesigns ?? recordDesigns)({ directions: step2.brief.design?.directions, siteType: step1.understanding.site_type, ownerId }).catch(() => {});
+  if (variety && (step1.understanding.task === 'build-new' || step2.brief.design?.mode === 'new')) await (deps.recordDesigns ?? recordDesigns)({ directions: step2.brief.design?.directions, siteType: step1.understanding.site_type, ownerId }).catch(() => {});
   const prompt = composePrompt({ selected, context, understanding: step1.understanding, brief: step2.brief, description, answers });
   return {
     setup: { input: context.input, stack: context.stack, ...(context.stackName && { stackName: context.stackName }), stackSource: context.stackSource, site: context.site },
@@ -91,14 +92,18 @@ export async function planBuild(request, deps = {}) {
 export async function composeBuild(request, deps = {}) {
   const lib = deps.library ?? library();
   const { description, answers } = checkRequest(request);
-  const context = await buildContext({ input: request.input, stack: request.stack, stackName: request.stackName, stacks: lib.ids('stack'), loadProject: deps.loadProject, fetchGithub: deps.fetchGithub, readSite: deps.readSite });
+  const context = await buildContext({ input: request.input, stack: request.stack, stackName: request.stackName, stacks: lib.ids('stack'), loadProject: deps.loadProject, fetchGithub: deps.fetchGithub, readSite: deps.readSite, findSite: deps.findSite });
   const understanding = checkUnderstanding(request.understanding, lib);
   if (context.input === 'scratch' && understanding.task !== 'build-new') throw new ComposeError('A site built from scratch has the task build-new.');
   if (context.input !== 'scratch' && understanding.task === 'build-new') throw new ComposeError('An existing site cannot have the task build-new.');
   const brief = checkBrief(request.brief);
   const selected = selectModules(lib, understanding, { input: context.input, stack: context.stack });
-  return {
+  const composed = {
     setup: { input: context.input, stack: context.stack, ...(context.stackName && { stackName: context.stackName }), stackSource: context.stackSource, site: context.site },
     prompt: composePrompt({ selected, context, understanding, brief, description, direction: request.direction, answers }),
   };
+  // For the build only (builds.js): what the project starts from and what it is measured against; never in the JSON answer.
+  Object.defineProperty(composed, 'seed', { value: /** @type {any} */ (context).seed ?? null, enumerable: false });
+  Object.defineProperty(composed, 'baseline', { value: /** @type {any} */ (context).baseline ?? null, enumerable: false });
+  return composed;
 }

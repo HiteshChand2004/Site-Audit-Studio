@@ -211,7 +211,13 @@ export default function AsIsReport({ asIs, outputs, projectId, asIsOutputs = {},
         </p>
       )}
 
-      {asIs.safety && !asIs.safety.safe && (
+      {asIs.liftOnly && (
+        <Alert tone="info" title="Made as the starting point of a build">
+          These pages were copied for Build a site, which checks and fixes the finished site itself. This copy was not checked on
+          its own: make the copy again here if you want it checked and ready to download.
+        </Alert>
+      )}
+      {!asIs.liftOnly && asIs.safety && !asIs.safety.safe && (
         <Alert tone="warn" title="The copy still asks the original site for files">
           {asIs.safety.original?.length
             ? `${asIs.safety.original.length === 1 ? 'One file comes' : `${asIs.safety.original.length} files come`} from the original site (for example ${asIs.safety.original[0]}). Once the copy replaces the original, nothing answers them, so the download and Go live are kept off. Make the copy again.`

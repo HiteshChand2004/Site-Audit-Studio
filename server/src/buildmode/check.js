@@ -4,20 +4,25 @@
 // (every page and file present, internal links and references resolve, the HTML parses without emitter-level errors). The
 // agent runs them itself through its check_site tool before it finishes, and the job runs them once more at the end. An app
 // stack is checked on its built site (dist/, out/) with its framework's rules: only its own bundles may run (appProfiles.js).
+// A site that started from an existing one keeps its own scripts (seed.js ownScripts / allowOwnScripts).
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { scanSite } from '../recreate/verify/safety.js';
 import { verifySite } from '../recreate/verify/site.js';
+import { allowOwnScripts } from './seed.js';
 
 const MAX_LISTED = 25;
 
 /**
  * @param {string} siteDir  the built site
- * @param {{ app?: 'built' | 'vite' | 'next' | 'astro' | 'sveltekit' }} [o]  the safety profile of the stack (stacks.js)
+ * @param {{ app?: 'built' | 'vite' | 'next' | 'astro' | 'sveltekit', own?: { scripts: string[], files: string[], sinks: Record<string, string[]> } | null }} [o]
+ *   app: the safety profile of the stack (stacks.js); own: the scripts of the existing site the build started from (seed.js
+ *   ownScripts), which the site keeps: they are not counted, while every script the agent adds is checked as in a new site
  * @returns {Promise<{ ok: boolean, issues: string[], pages: number, safety: any, verify: any }>}
  */
-export async function checkBuiltSite(siteDir, { app = 'built' } = {}) {
-  const [safety, verify] = await Promise.all([scanSite(siteDir, { app }), verifySite(siteDir, { expected: ['index.html'] })]);
+export async function checkBuiltSite(siteDir, { app = 'built', own = null } = {}) {
+  const allow = allowOwnScripts(own ? { own } : null);
+  const [safety, verify] = await Promise.all([scanSite(siteDir, { app, allow }), verifySite(siteDir, { expected: ['index.html'] })]);
   const issues = [
     ...safety.issues.map((i) => `${i.file}: ${i.detail}`),
     ...verify.missingFiles.map((f) => `${f} is missing`),

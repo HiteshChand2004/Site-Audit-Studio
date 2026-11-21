@@ -124,6 +124,24 @@ export function renderBrief(/** @type {any} */ brief, /** @type {any} */ underst
 }
 
 /**
+ * How a rebuild of an existing site with a new look starts (the brief's design mode is new): the old look is replaced, not patched, while the site's
+ * content and working features stay. A page that runs the site's own application (its scripts reach into the page by ids and
+ * classes) keeps that structure and is restyled; a content page is laid out anew.
+ */
+const REDESIGN_START = [
+  'This site already exists and the request asks for a new design: build it in the design direction of the brief. First read it: <site_content>',
+  'and <source_code> above, and the files in the project with the tools.',
+  'Then give every page the new design. Do not patch the old look: write new stylesheets for the new direction and rewrite each',
+  'content page\'s markup with the new layout (create the file anew where most of it changes). Keep each page\'s address, every',
+  'word and fact, the links, the pictures, the forms and the head\'s title and description, unless the brief changes them.',
+  'Pages that run the site\'s own application (a tool, a dashboard, sign-in: their scripts select elements by id, class or',
+  'data attribute) must keep working: keep every element, id, class and attribute those scripts use, keep their script tags,',
+  'and give them the new look through the stylesheets. Never change the site\'s own script files unless the brief asks.',
+  'Look at the result on phone and desktop and compare it with the old design: a visitor must see a clearly new design.',
+  'Then work through the requirements.',
+].join(' ');
+
+/**
  * The agent prompt for one request, ready for the Messages API (system blocks + the first user message), plus a record of
  * which module versions shaped it.
  * @param {{ selected: { module: BuildModule, reason: string }[], context: { text: string }, understanding: any, brief: any,
@@ -142,7 +160,8 @@ export function composePrompt({ selected, context, understanding, brief, descrip
       { type: 'text', text: context.text, cache_control: { type: 'ephemeral' } },
       { type: 'text', text: `${request}\n\n${understanding.task === 'build-new'
         ? 'Build it now. Start by reading what is in the project, then work through the requirements.'
-        : 'This site already exists. Before changing anything, read it: <site_content> and <source_code> above, and the files in the project with the tools. Then do the work the brief asks for, keeping everything it does not change, and work through the requirements.'}` },
+        : brief.design?.mode === 'new' ? REDESIGN_START
+          : 'This site already exists. Before changing anything, read it: <site_content> and <source_code> above, and the files in the project with the tools. Then do the work the brief asks for, keeping everything it does not change, and work through the requirements.'}` },
     ],
   }];
   return {

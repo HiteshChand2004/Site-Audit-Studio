@@ -55,7 +55,7 @@ export function briefSchema() {
     design: obj({
       mode: { type: 'string', enum: ['new', 'keep-existing', 'evolve-existing'] },
       existing_notes: str('For existing sites: the design system observed and what to keep; empty for new sites'),
-      directions: { type: 'array', items: direction, description: 'New sites: 3 clearly different directions. Otherwise 0 or 1.' },
+      directions: { type: 'array', items: direction, description: 'New sites, and existing sites the owner chose to redesign: 3 clearly different directions. Otherwise 0 or 1.' },
     }),
     pages: { type: 'array', items: obj({
       path: str('URL path'),
