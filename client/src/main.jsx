@@ -7,6 +7,10 @@ import '@fontsource/jetbrains-mono/500.css';
 import './styles/tokens.css';
 import './styles/global.css';
 import App from './App.jsx';
+import { takeBuildSiteLink } from './buildLink.js';
+
+// /app/?buildSite=<id> from Growth OS: open that saved site in Build mode (buildLink.js)
+takeBuildSiteLink();
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

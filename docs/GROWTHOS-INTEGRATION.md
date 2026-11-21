@@ -78,6 +78,26 @@ The request as in the callbacks below.
 ### `POST /api/ext/v1/change-requests/:id/cancel`
 Cancels one that is not published yet.
 
+### Website prompt for Build mode: `POST /api/ext/v1/site-briefs`
+Growth OS (Buyers → Moves → "Website prompt for Remastly") writes ONE prompt for a whole website from its insights. Remastly
+saves it as a **saved site of Build mode** for the owner of that website here: "An existing website" → "Its live site", the
+site's own technology kept, the prompt as the description, exactly as if the owner had typed it. Nothing is planned or built:
+the owner opens it (`openUrl`, or Build mode's list of sites), reads it and presses **Continue** as for any site they describe.
+```json
+{ "requestId": "growthos:predco:site-plan:2026-11-21T16:51:13.759Z", "site": { "url": "https://www.predco.ai", "projectId": null },
+  "prompt": "Website: https://www.predco.ai/ (Next.js). Task: targeted edits … (at most 8,000 characters)", "context": { "venture": "predco" } }
+```
+`201` (made) or `200` (the same `requestId` again: the site already made) with
+`{ id, requestId, status, step, openUrl, previewUrl, publishedUrl, message, createdAt, updatedAt }`;
+`openUrl` = `<SAS_PUBLIC_ORIGIN>/app/?buildSite=<id>` (the app opens that saved site in Build mode, `client/src/buildLink.js`).
+`404` when no website here has that address (add it in Remastly first); `400` for an empty prompt, one over 8,000 characters or
+no `requestId`. With accounts on, the site belongs to the website's owner (`projects.owner_id`), so only they see it.
+
+### `GET /api/ext/v1/site-briefs/:id`
+Where it stands: `status` `described` (waiting for Continue) → `planned` (plan made, build not started) → `building` → `built`
+(`previewUrl`) / `stopped` / `failed` (`message`). Only sites Growth OS sent are answered (`404` for an owner's own sites).
+Code: `server/src/buildmode/briefs.js`, routes in `server/src/routes/ext.js`. Test: `growthos-site-briefs.test.js`.
+
 ## Callbacks (Remastly → Growth OS)
 
 `POST <callbackUrl>` (only under `SAS_GROWTHOS_URL`), JSON, at every status change, retried 3 times (2 s, 10 s, 30 s).
