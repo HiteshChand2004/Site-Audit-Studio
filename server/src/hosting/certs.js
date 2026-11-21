@@ -21,23 +21,27 @@ export async function hasCertificate(host) {
   return stat(path.join(certDir(host), 'fullchain.pem')).then((s) => s.isFile(), () => false);
 }
 
-/** Whether `host` points to this server in DNS (every A record is the server's address). @param {string} host @param {string} ip */
+/**
+ * Whether `host` points to this server (every address is the server's) as its own DNS servers answer now, not as this machine's
+ * DNS cache remembers it: a domain is listed as soon as its owner changes it. @param {string} host @param {string} ip
+ */
 async function pointsHere(host, ip) {
-  const found = await dnsConfig.resolver.resolve4(host).catch(() => []);
-  return found.length > 0 && found.every((a) => a === ip);
+  const { addresses } = await dnsConfig.resolver.lookup(host);
+  return addresses.length > 0 && addresses.every((a) => a === ip);
 }
 
 /**
  * Writes the list of domains certbot should get a certificate for: every hosted domain that points here and has none yet.
- * Run after a domain check and every few minutes (index.js), so a domain gets its padlock soon after its DNS is changed.
+ * Run after a domain check and every few minutes (index.js), so a domain gets its padlock soon after its DNS is changed: the
+ * server's remastly-certs timer reads the list within 5 minutes (Remastly runs without root, so it cannot start that run).
  * @param {string} ip  this server's public address (SAS_HOSTING_IP)
  * @returns {Promise<string[]>} the domains listed
  */
 export async function refreshWantedCerts(ip) {
-  const wanted = [];
-  for (const host of Object.keys(await readHosts()).sort()) {
-    if (!(await hasCertificate(host)) && (await pointsHere(host, ip))) wanted.push(host);
-  }
+  const hosts = Object.keys(await readHosts()).sort();
+  // All at once: a domain whose DNS servers do not answer takes seconds, and the domain card waits for this.
+  const ready = await Promise.all(hosts.map(async (h) => !(await hasCertificate(h)) && (await pointsHere(h, ip))));
+  const wanted = hosts.filter((_, i) => ready[i]);
   const text = wanted.map((h) => `${h}\n`).join('');
   // Rewritten only when it changes: the timer on the server reads it every few minutes.
   if ((await readFile(wantedFile(), 'utf8').catch(() => null)) !== text) {
