@@ -1,9 +1,9 @@
 // @ts-check
 // Go live, Step 2: the owner's own domain on the live site. The domain is put on the website's Netlify site (Netlify keeps it
 // and turns the padlock on once the domain points there); the owner adds the DNS records this file names at the company where
-// the domain is registered; Go live checks them with DNS and says which are in place. Nothing here changes DNS: only the owner
-// can, so a domain is never moved without them.
-import { Resolver } from 'node:dns/promises';
+// the domain is registered; Go live checks them with the domain's own DNS servers (deploy/authority.js) and says which are in
+// place. Nothing here changes DNS: only the owner can, so a domain is never moved without them.
+import { lookup } from './authority.js';
 
 /** Netlify's load balancer: the address the bare domain (no www) points to (Netlify's docs, "apex domain"). */
 export const NETLIFY_LB = '75.2.60.5';
@@ -61,32 +61,26 @@ export function domainPlan(d, siteHost, serverIp = null) {
   return { primary: d.host, aliases: [], records: [cname(d.host, true)] };
 }
 
-/** How names are looked up; tests replace `resolver`. */
+/** How names are looked up: as the domain's own DNS servers answer now (deploy/authority.js). Tests replace `resolver`. */
 export const dnsConfig = {
-  /** @type {{ resolve4: (h: string) => Promise<string[]>, resolveCname: (h: string) => Promise<string[]> }} */
-  resolver: (() => {
-    const r = new Resolver({ timeout: 4000, tries: 1 });
-    return { resolve4: (h) => r.resolve4(h), resolveCname: (h) => r.resolveCname(h) };
-  })(),
+  /** @type {{ lookup: typeof lookup }} */
+  resolver: { lookup },
 };
 
-const quiet = (p) => p.then((v) => v, () => []);
-
 /**
- * Each record with what DNS answers today: `ok` when the name points where it should; `found` = what it points to now (empty when
- * it does not exist). A CNAME is also right when the name answers with the site's own addresses (a DNS company that flattens it).
+ * Each record with what the domain's own DNS servers answer now: `ok` when the name points where it should; `found` = what it
+ * points to (its CNAMEs, else its addresses; empty when it does not exist); `source` = who answered (deploy/authority.js). A
+ * CNAME is also right when the name answers with the site's own addresses (a DNS company that flattens it).
  * @param {{ type: string, host: string, value: string, required: boolean }[]} records
  */
 export async function checkRecords(records, { resolver = dnsConfig.resolver } = {}) {
   return Promise.all(records.map(async (r) => {
-    if (r.type === 'A') {
-      const found = await quiet(resolver.resolve4(r.host));
-      return { ...r, found, ok: found.length > 0 && found.every((ip) => ip === r.value) };
-    }
-    const cnames = (await quiet(resolver.resolveCname(r.host))).map((c) => c.toLowerCase().replace(/\.$/, ''));
-    if (cnames.length) return { ...r, found: cnames, ok: cnames.includes(r.value) };
-    const [mine, target] = await Promise.all([quiet(resolver.resolve4(r.host)), quiet(resolver.resolve4(r.value))]);
-    const ok = mine.length > 0 && target.length > 0 && mine.every((ip) => target.includes(ip));
-    return { ...r, found: mine, ok };
+    const name = await resolver.lookup(r.host);
+    if (r.type === 'A') return { ...r, found: name.addresses, source: name.source, ok: name.addresses.length > 0 && name.addresses.every((ip) => ip === r.value) };
+    const cnames = name.cnames.map((c) => c.toLowerCase().replace(/\.$/, ''));
+    if (cnames.length) return { ...r, found: cnames, source: name.source, ok: cnames.includes(r.value) };
+    const target = await resolver.lookup(r.value);
+    const ok = name.addresses.length > 0 && target.addresses.length > 0 && name.addresses.every((ip) => target.addresses.includes(ip));
+    return { ...r, found: name.addresses, source: name.source, ok };
   }));
 }
