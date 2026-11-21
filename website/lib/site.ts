@@ -16,6 +16,7 @@ export const NAV = [
   { href: '/how-it-works', label: 'How it works' },
   { href: '/pricing', label: 'Pricing' },
   { href: '/faq', label: 'FAQ' },
+  { href: '/media', label: 'Media' },
   { href: '/about', label: 'About' },
 ];
 
@@ -33,6 +34,7 @@ export const FOOTER_NAV = [
     title: 'Company',
     links: [
       { href: '/about', label: 'About' },
+      { href: '/media', label: 'Media' },
       { href: '/faq', label: 'FAQ' },
       { href: '/contact', label: 'Contact' },
     ],
