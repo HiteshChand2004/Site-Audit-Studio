@@ -53,7 +53,7 @@ import {
 } from '../deploy/store.js';
 import { isOwner } from '../accounts/roles.js';
 import { checkRecords, domainPlan, parseDomain } from '../deploy/domain.js';
-import { applyDns, credentialOf, DnsError, forgetDnsChange, godaddyClient, godaddyConfig, planDns, readDnsChange, saveDnsChange, sealedOf, serverClientFor, TOKEN_SCOPES, undoDns } from '../deploy/godaddy.js';
+import { applyDns, changedTypes, credentialOf, DnsError, forgetDnsChange, godaddyClient, godaddyConfig, planDns, readDnsChange, saveDnsChange, sealedOf, serverClientFor, TOKEN_SCOPES, undoDns } from '../deploy/godaddy.js';
 import { BOX_TARGET, hostingPaths, hostsOf, setHosts, switchRelease } from '../hosting/store.js';
 import { addUpload, BOX_LIMITS, BoxError, boxState, deleteBox, hasBox, removeUpload, startBox, WORDPRESS_PATHS } from '../boxes/index.js';
 import { boxRunning } from '../boxes/box.js';
@@ -482,8 +482,12 @@ deployRouter.delete('/:id/domain', async (req, res) => {
       if (back.client) {
         try {
           // What Remastly itself changed at GoDaddy is put back exactly; else the names are pointed at the old address.
-          if (back.mine && back.source !== 'typed') await undoDns(back.client, back.d.apex, back.mine.changes);
-          else await applyDns(back.client, back.d.apex, await planDns(back.client, back.d.apex, domainPlan(back.d, null, back.ip).records));
+          try {
+            if (back.mine && back.source !== 'typed') await undoDns(back.client, back.d.apex, back.mine.changes);
+            else await applyDns(back.client, back.d.apex, await planDns(back.client, back.d.apex, domainPlan(back.d, null, back.ip).records));
+          } finally {
+            plans.delete(project.id);
+          }
           await forgetDnsChange(project.id);
           how = 'godaddy';
         } catch (err) {
@@ -535,6 +539,12 @@ async function godaddyFor(req, apex) {
   throw new DnsError('Connect GoDaddy first.', 'key');
 }
 
+// The card's plan, kept a little while per website: a reload or "Check again" does not ask GoDaddy for every record again.
+// Kept with what it was read for (who asks, through which account, the domain and its records); a change made here clears it.
+const PLAN_MS = 20_000;
+/** @type {Map<string, { key: string, until: number, changes: import('../deploy/godaddy.js').Change[] }>} */
+const plans = new Map();
+
 /**
  * What the GoDaddy part of the domain card shows: whether GoDaddy is connected (pasted, or the server's), what Remastly
  * changed there before (and can put back), and what it would change now; or why it cannot (the domain is in no connected
@@ -543,7 +553,7 @@ async function godaddyFor(req, apex) {
  */
 async function godaddyCard(project, req, state) {
   const saved = await readDnsChange(project.id);
-  const changed = saved ? { at: saved.at, apex: saved.apex, names: saved.changes.filter((c) => c.needed).map((c) => c.host) } : null;
+  const changed = saved ? { at: saved.at, apex: saved.apex, names: saved.changes.filter((c) => changedTypes(c).length).map((c) => c.host) } : null;
   const source = godaddySource(req);
   if (!source) return { connected: false, changed };
   const base = { connected: true, source: source.kind, account: source.kind === 'own' ? source.account : null, accounts: source.kind === 'server' ? source.accounts : null, changed };
@@ -551,7 +561,13 @@ async function godaddyCard(project, req, state) {
   const d = current?.domain ? parseDomain(current.domain) : null;
   if (!d?.ok) return { ...base, plan: null };
   try {
-    const changes = await planDns(await godaddyFor(req, d.apex), d.apex, current.records);
+    const key = JSON.stringify([ownerKeyOf(req), source, d.apex, current.records]);
+    let kept = plans.get(project.id);
+    if (kept?.key !== key || kept.until < Date.now()) {
+      kept = { key, changes: await planDns(await godaddyFor(req, d.apex), d.apex, current.records), until: Date.now() + PLAN_MS };
+      plans.set(project.id, kept);
+    }
+    const { changes } = kept;
     return {
       ...base,
       plan: {
@@ -595,9 +611,12 @@ deployRouter.post('/:id/domain/godaddy', async (req, res) => {
     const client = await godaddyFor(req, d.apex);
     // Read again now, not taken from the page: the records may have changed since the card was shown.
     const changes = await planDns(client, d.apex, r.state.records);
-    // Saved before anything changes, so even a change that stops half way can be put back.
-    if (changes.some((c) => c.needed)) await saveDnsChange(project.id, d.apex, changes);
-    await applyDns(client, d.apex, changes);
+    // Saved as each step starts, so a change that stops half way is put back exactly.
+    try {
+      await applyDns(client, d.apex, changes, (all) => saveDnsChange(project.id, d.apex, all));
+    } finally {
+      plans.delete(project.id);
+    }
     const after = await domainOf(project);
     const state = 'state' in after ? after.state : r.state;
     res.json({ domain: state, godaddy: await godaddyCard(project, req, state) });
@@ -614,7 +633,11 @@ deployRouter.delete('/:id/domain/godaddy', async (req, res) => {
   if (!saved) return res.status(409).json({ error: 'Remastly has not changed anything at GoDaddy for this site.' });
   try {
     const client = await godaddyFor(req, saved.apex);
-    await undoDns(client, saved.apex, saved.changes);
+    try {
+      await undoDns(client, saved.apex, saved.changes);
+    } finally {
+      plans.delete(project.id);
+    }
     await forgetDnsChange(project.id);
     const after = await domainOf(project);
     const state = 'state' in after ? after.state : null;

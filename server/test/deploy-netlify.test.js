@@ -963,10 +963,12 @@ test('GoDaddy accounts set on the server: the owner\'s website finds the account
   const accounts = { 'Bearer tokA_aaaaaaaaaaaaaaaaaaaa': 'alpha-shop.com', 'Bearer tokB_bbbbbbbbbbbbbbbbbbbb': 'beta-shop.com' };
   let zone = [{ id: '1', type: 'A', name: '@', data: '198.51.100.7' }, { id: '2', type: 'CNAME', name: 'www', data: '@' }, { id: '3', type: 'MX', name: '@', data: 'mx.beta-shop.com' }];
   let next = 3;
+  let asked = 0;
   const godaddy = createServer((req, res) => {
     let body = '';
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
+      asked += 1;
       const send = (st, v) => res.writeHead(st, { 'content-type': 'application/json' }).end(v === undefined ? '' : JSON.stringify(v));
       const owned = accounts[req.headers.authorization];
       if (!owned) return send(401, { message: 'Unable to authenticate' });
@@ -1007,12 +1009,24 @@ test('GoDaddy accounts set on the server: the owner\'s website finds the account
     // The owner: the second account holds beta-shop.com; nothing was pasted.
     r = await call('GET', `/projects/${project.id}/domain/godaddy`);
     assert.deepEqual([r.body.connected, r.body.source, r.body.accounts, r.body.plan?.apex, r.body.plan?.needed], [true, 'server', 3, 'beta-shop.com', true], r.body.problem);
+    // A reload (or "Check again") soon after asks GoDaddy nothing: the plan is kept a little while.
+    let before = asked;
+    const again = await call('GET', `/projects/${project.id}/domain/godaddy`);
+    assert.deepEqual(again.body, r.body);
+    assert.equal(asked, before, 'no request to GoDaddy');
     r = await call('POST', `/projects/${project.id}/domain/godaddy`);
     assert.equal(r.status, 200, r.body.error);
     assert.deepEqual(zone.map((x) => `${x.type} ${x.name} ${x.data}`).sort(), ['A @ 203.0.113.10', 'A www 203.0.113.10', 'MX @ mx.beta-shop.com']);
+    // The change clears what was kept: the card shows the records as they are now.
+    assert.equal(r.body.godaddy.plan.needed, false);
+    assert.deepEqual(r.body.godaddy.changed.names, ['beta-shop.com', 'www.beta-shop.com']);
     r = await call('DELETE', `/projects/${project.id}/domain/godaddy`);
     assert.equal(r.status, 200, r.body.error);
     assert.deepEqual(zone.map((x) => `${x.type} ${x.name} ${x.data}`).sort(), ['A @ 198.51.100.7', 'CNAME www @', 'MX @ mx.beta-shop.com']);
+    assert.equal(r.body.godaddy.plan.needed, true);
+    before = asked;
+    assert.equal((await call('GET', `/projects/${project.id}/domain/godaddy`)).body.plan.needed, true);
+    assert.equal(asked, before, 'the card after the undo is the one kept');
 
     // A domain in none of the accounts says so.
     const lone = seedProject(db, { name: 'gamma', url: 'https://gamma-shop.com/', targetDomain: 'https://gamma-shop.com' });
