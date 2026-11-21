@@ -113,6 +113,12 @@ export async function getSite(/** @type {string} */ id, /** @type {string | null
   return owns(site, ownerId) ? site : null;
 }
 
+/** A site whoever owns it: only for the Growth OS link (routes/ext.js, behind its key), which checks it is a site it sent. */
+export async function siteById(/** @type {string} */ id) {
+  await writing.get(id)?.catch(() => {});
+  return read(id);
+}
+
 /** Every site of an owner (the latest MAX_SITES), the one worked on last first. */
 export async function listSites(/** @type {string | null} */ ownerId) {
   const files = (await readdir(SITES_DIR).catch(() => [])).filter((f) => f.endsWith('.json'));

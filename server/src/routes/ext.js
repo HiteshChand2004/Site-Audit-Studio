@@ -8,6 +8,7 @@ import { ContractError, parseChangeRequest } from '../changes/contract.js';
 import { findProject, resolveBase, SiteError } from '../changes/site.js';
 import { changeRow, changesReady, viewChange } from '../changes/store.js';
 import { cancelChange, DecisionError, previewOf, submitChange } from '../changes/worker.js';
+import { BriefError, briefView, sentBrief, submitBrief } from '../buildmode/briefs.js';
 
 export const extRouter = Router();
 extRouter.use(express.json({ limit: '256kb' }));
@@ -79,5 +80,27 @@ extRouter.post('/change-requests/:id/cancel', (req, res) => {
   } catch (err) {
     if (err instanceof DecisionError) return res.status(err.status).json({ error: err.message });
     throw err;
+  }
+});
+
+// ---- Website prompts for Build mode (buildmode/briefs.js): one prompt for a whole website becomes a saved site of Build mode
+// for the website's owner, described and waiting; the owner opens it (openUrl) and presses Continue. Nothing is planned or built here.
+extRouter.post('/site-briefs', async (req, res, next) => {
+  try {
+    const { site, existing } = await submitBrief(req.body);
+    res.status(existing ? 200 : 201).json(await briefView(site));
+  } catch (err) {
+    if (err instanceof BriefError) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+extRouter.get('/site-briefs/:id', async (req, res, next) => {
+  try {
+    const site = await sentBrief(req.params.id);
+    if (!site) return res.status(404).json({ error: 'No such website prompt.' });
+    res.json(await briefView(site));
+  } catch (err) {
+    next(err);
   }
 });
