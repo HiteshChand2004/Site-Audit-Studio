@@ -1029,3 +1029,66 @@ test('GoDaddy accounts set on the server: the owner\'s website finds the account
     godaddy.close();
   }
 });
+
+// ---- Tracking & scripts: the website's GA4 tag on every page of every deploy (deploy/tracking.js) ----
+
+test('Tracking: the GA4 ID is set per website, refused when wrong or another website\'s, and goes live on every page at the next deploy', async () => {
+  const project = seedProject(db, { name: 'iota', targetDomain: 'https://iota.test' });
+  const stale = '<script async src="https://www.googletagmanager.com/gtag/js?id=G-VQNBQW9KKL"></script>';
+  const { dir } = await finishedCopy({
+    projectId: project.id,
+    report: { asIs: { stack: 'html', address: { used: 'https://iota.test' } } },
+    reaudit: { checklist: { items: [] } },
+    files: {
+      'index.html': `<!doctype html><html><head><title>Home</title>${stale}</head><body><h1>Home</h1></body></html>`,
+      '404.html': '<!doctype html><HTML><HEAD data-x="1"><title>Not found</title></HEAD><body>Gone</body></HTML>',
+      _headers: "/*\n  Content-Security-Policy: default-src 'self'; script-src 'self'; img-src 'self' data:\n",
+    },
+  });
+  let r = await call('GET', `/projects/${project.id}/tracking`);
+  assert.deepEqual(r.body, { ga4: null, live: null, pending: false });
+  assert.equal((await call('PUT', `/projects/${project.id}/tracking`, { ga4: 'UA-1234-1' })).status, 400);
+  assert.equal((await call('PUT', `/projects/${project.id}/tracking`, { ga4: 'G-XXXXXXXXXX' })).status, 400, 'a placeholder is not an ID');
+  r = await call('PUT', `/projects/${project.id}/tracking`, { ga4: ' g-pqnx7xnqbz ' });
+  assert.deepEqual([r.status, r.body.ga4, r.body.pending], [200, 'G-PQNX7XNQBZ', true], 'saved; not live until a deploy');
+  const other = seedProject(db, { name: 'kappa' });
+  r = await call('PUT', `/projects/${other.id}/tracking`, { ga4: 'G-PQNX7XNQBZ' });
+  assert.equal(r.status, 409, 'one ID, one website');
+  assert.doesNotMatch(r.body.error, /iota/, 'the other website is not named');
+
+  assert.equal((await call('POST', `/projects/${project.id}/deploy`, {})).status, 202);
+  assert.equal((await waitDone(project.id)).status, 'ready');
+  const home = zipText(fake.lastZip, 'index.html');
+  const notFound = zipText(fake.lastZip, '404.html');
+  for (const page of [home, notFound, zipText(fake.lastZip, 'about/index.html')]) {
+    assert.equal(page.split('gtag/js?id=G-PQNX7XNQBZ').length - 1, 1, 'the ID exactly once on every page');
+    assert.ok(page.includes('<script src="/remastly-tracking.js"></script>'));
+  }
+  assert.ok(!home.includes('G-VQNBQW9KKL'), 'the old shared tag is gone');
+  assert.ok(notFound.includes('<HEAD data-x="1">\n<!-- remastly:tracking:start -->'));
+  assert.match(zipText(fake.lastZip, 'remastly-tracking.js'), /gtag\('config', 'G-PQNX7XNQBZ'\)/);
+  assert.match(zipText(fake.lastZip, '_headers'), /script-src 'self' https:\/\/www\.googletagmanager\.com/);
+  // The copy's own files are as they were.
+  assert.ok((await readFile(path.join(dir, 'stacks', 'html', 'index.html'), 'utf8')).includes(stale));
+
+  r = await call('GET', `/projects/${project.id}/tracking`);
+  assert.deepEqual([r.body.pending, r.body.live.ga4, r.body.live.pages, r.body.live.removed, r.body.live.policy], [false, 'G-PQNX7XNQBZ', 3, 1, true]);
+
+  // Cleared: the next deploy carries no tag, and the card says the live site has none.
+  await call('PUT', `/projects/${project.id}/tracking`, { ga4: '' });
+  assert.equal((await call('POST', `/projects/${project.id}/deploy`, {})).status, 202);
+  assert.equal((await waitDone(project.id)).status, 'ready');
+  assert.ok(!zipText(fake.lastZip, 'index.html').includes('remastly:tracking'));
+  assert.ok(!zipEntries(fake.lastZip).includes('remastly-tracking.js'));
+  r = await call('GET', `/projects/${project.id}/tracking`);
+  assert.deepEqual([r.body.ga4, r.body.live, r.body.pending], [null, null, false]);
+});
+
+test('Tracking: a deploy with no ID set sends every page exactly as the copy has it', async () => {
+  const project = seedProject(db, { name: 'lambda' });
+  const { dir } = await finishedCopy({ projectId: project.id });
+  const report = { pages: [{ outPath: 'index.html' }], outputs: { html: { status: 'ready', mode: 'as-is', dir: 'stacks/html', dist: '' } } };
+  const plan = await planDeploy({ dir, report, stack: 'html', tracking: { ga4: null } });
+  assert.equal(plan.tracking, null);
+  assert.ok(plan.entries.every((e) => e.file), 'every entry is the copy\'s own file');
+});

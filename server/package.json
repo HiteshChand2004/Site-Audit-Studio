@@ -19,6 +19,7 @@
     "db:rehearse": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/db-rehearse.mjs",
     "db:migrate": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/db-migrate.mjs",
     "accounts": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/accounts.mjs",
+    "tracking:set": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/set-tracking.mjs",
     "cleanup": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/cleanup.mjs",
     "mail:test": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env scripts/mail-test.mjs"
   },

@@ -23,6 +23,8 @@
 //   GET    /api/projects/:id/forms            Form entries: whether the forms save to Remastly, and the latest entries
 //   PUT    /api/projects/:id/forms { enabled?, email? }   turn saving / the email on each entry on or off (from the next deploy)
 //   GET    /api/projects/:id/forms/entries.csv   every entry, for a spreadsheet
+//   GET    /api/projects/:id/tracking          Tracking & scripts: the GA4 ID set, what the live site carries, whether a deploy is due
+//   PUT    /api/projects/:id/tracking { ga4 }  set (G-…) or clear ("" / null) it; on every page from the next deploy (deploy/tracking.js)
 //   DELETE /api/projects/:id/forms/entries/:entryId   remove one entry
 //   GET    /api/projects/:id/switch-off       "Can I switch off the old server?": what of this website still needs it
 //   GET    /api/projects/:id/snapshot         the copy's data calls (/api/…) and the content snapshot of their answers
@@ -71,6 +73,8 @@ import { formsEndpointOf } from '../forms/connect.js';
 import { entriesCsv, importEntries, listEntries, removeEntry, removeImport, saveFormSettings } from '../forms/entries.js';
 import { entriesFromRows, IMPORT_LIMITS, parseCsv } from '../forms/importCsv.js';
 import { switchOffCheck } from '../deploy/switchOff.js';
+import { patchGoLive, readGoLive } from '../deploy/passThrough.js';
+import { parseGa4Id, trackingOf } from '../deploy/tracking.js';
 import { readSnapshot, removeSnapshot, snapshotForDeploy, takeSnapshot } from '../deploy/snapshot.js';
 import { formCounts } from '../copy/formRoutes.js';
 import { withAsIsSafety } from '../copy/outsideServices.js';
@@ -204,6 +208,7 @@ hostingRouter.delete('/:provider', (req, res) => {
 });
 
 const selectProject = db.prepare('SELECT * FROM projects WHERE id = ?');
+const selectProjectIds = db.prepare('SELECT id FROM projects');
 const latestDoneCopy = db.prepare(`SELECT id, finished_at, result_json FROM recreates WHERE project_id = ? AND status = 'done' AND result_json IS NOT NULL AND removed_at IS NULL ORDER BY started_at DESC LIMIT 1`);
 const doneCopy = db.prepare(`SELECT id, finished_at, result_json FROM recreates WHERE id = ? AND project_id = ? AND status = 'done' AND result_json IS NOT NULL AND removed_at IS NULL`);
 const latestComparison = db.prepare(`SELECT result_json FROM reaudits WHERE recreate_id = ? AND project_id = ? AND status = 'done' ORDER BY started_at DESC LIMIT 1`);
@@ -819,6 +824,41 @@ deployRouter.put('/:id/forms', async (req, res) => {
   if (typeof req.body?.email === 'boolean') change.email = req.body.email;
   await saveFormSettings(project.id, change);
   res.json(await formsState(project));
+});
+
+// ---- Tracking & scripts: the website's Google Analytics 4 tag, put on every page at each deploy (deploy/tracking.js) ----
+
+/** The card's state: the ID set, and what the live site carries since its last deploy (a later change waits for the next). */
+async function trackingState(/** @type {string} */ projectId) {
+  const goLive = await readGoLive(projectId);
+  const { ga4 } = trackingOf(goLive);
+  const live = goLive.trackingLive ?? null;
+  return { ga4, live, pending: (live?.ga4 ?? null) !== ga4 };
+}
+
+deployRouter.get('/:id/tracking', async (req, res) => {
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  res.json(await trackingState(project.id));
+});
+
+deployRouter.put('/:id/tracking', async (req, res) => {
+  const project = /** @type {any} */ (selectProject.get(req.params.id));
+  if (!project) return res.status(404).json({ error: 'Project not found.' });
+  const parsed = parseGa4Id(req.body?.ga4);
+  if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+  // One website, one ID: another website already using it would mix the two sites' visits.
+  // (Not named: the person may not have access to that website.)
+  if (parsed.value) {
+    for (const { id } of /** @type {{ id: string }[]} */ (selectProjectIds.all())) {
+      if (id !== project.id && trackingOf(await readGoLive(id)).ga4 === parsed.value) {
+        return res.status(409).json({ error: `${parsed.value} is already the Google Analytics ID of another website in Remastly. Each website needs its own.` });
+      }
+    }
+  }
+  const goLive = await readGoLive(project.id);
+  await patchGoLive(project.id, { tracking: { ...(goLive.tracking ?? {}), ga4: parsed.value } });
+  res.json(await trackingState(project.id));
 });
 
 deployRouter.get('/:id/forms/entries.csv', async (req, res) => {

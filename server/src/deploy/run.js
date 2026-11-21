@@ -7,7 +7,8 @@
 import { recreateDir } from '../recreate/workspace.js';
 import { planDeploy, zipToTemp } from './bundle.js';
 import { HostingError, netlifyClient, PENDING_STATES } from './netlify.js';
-import { fallbackFor, readPassThrough, redirectsFor } from './passThrough.js';
+import { fallbackFor, patchGoLive, readGoLive, readPassThrough, redirectsFor } from './passThrough.js';
+import { trackingOf } from './tracking.js';
 import { formsEndpointOf } from '../forms/connect.js';
 import { snapshotForDeploy } from './snapshot.js';
 import { failInterrupted, SERVER, serverReleases, siteOfProject, updateDeployment } from './store.js';
@@ -52,7 +53,11 @@ export async function runDeploy({ deployment, projectId, recreateId, report, sta
       lastRedirects: passThrough && fallbackFor(passThrough),
       extraFiles: snapshot?.files ?? [],
       formsEndpoint: (await formsEndpointOf(projectId)).endpoint,
+      // Go live → Tracking & scripts: the website's GA4 tag on every page (deploy/tracking.js).
+      tracking: trackingOf(await readGoLive(projectId)),
     });
+    // What the live site carries once this deploy is done (the Tracking & scripts card shows it; null: no tag went live).
+    const trackingLive = () => patchGoLive(projectId, { trackingLive: plan.tracking ? { ...plan.tracking, deploymentId: id, at: new Date().toISOString() } : null }).catch(() => {});
     // Remastly's own server: the files go into a release folder of this website and it goes live in one step.
     if (ownerKey === SERVER) {
       updateDeployment(id, { files: plan.files, bytes: plan.bytes, siteId: projectId, deployId: id, step: 'upload' });
@@ -60,6 +65,7 @@ export async function runDeploy({ deployment, projectId, recreateId, report, sta
       await pruneReleases(projectId, [id, ...serverReleases(projectId)], KEEP_RELEASES);
       const { primary } = await hostsOf(projectId);
       updateDeployment(id, { status: 'ready', step: 'done', url: primary ? `https://${primary}` : null, finishedAt: new Date().toISOString() });
+      await trackingLive();
       return;
     }
     zip = await zipToTemp(plan);
@@ -88,6 +94,7 @@ export async function runDeploy({ deployment, projectId, recreateId, report, sta
     }
     if (dep.state !== 'ready') throw new HostingError(`Netlify could not publish the site${dep.error ? `: ${dep.error}` : ` (state "${dep.state}")`}.`, { code: 'deploy-error' });
     updateDeployment(id, { status: 'ready', step: 'done', url: site.url ?? dep.url, deployUrl: dep.deployUrl, finishedAt: new Date().toISOString() });
+    await trackingLive();
   } catch (err) {
     const known = err instanceof HostingError || /** @type {any} */ (err)?.name === 'DeployError';
     if (!known) console.error(`[deploy ${id}]`, err);

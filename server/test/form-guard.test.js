@@ -204,3 +204,21 @@ test('where each form goes, in words, for the report, the README and DEPLOY.md',
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('a form the server saved tells the page (sas:form-sent, the form\'s name only); a refused or failed one does not', async () => {
+  const p = page({ settings: { endpoint: '/api/forms/key', originalHosts: ['original.example'] } });
+  class CustomEvent { constructor(type, init) { this.type = type; this.detail = init?.detail; } }
+  p.ctx.CustomEvent = CustomEvent;
+  const told = [];
+  const formOf = (attrs) => Object.assign(p.form(attrs), { dispatchEvent: (e) => told.push(JSON.parse(JSON.stringify({ type: e.type, detail: e.detail }))) });
+  await p.submit(formOf({ name: 'demo-request', action: '' }));
+  assert.deepEqual(told, [{ type: 'sas:form-sent', detail: { form: 'demo-request' } }]);
+  // The server refuses (a full store, a rate limit), or the network fails: nothing.
+  p.ctx.fetch = async (url) => (url === '/sas-forms.json' ? { ok: true, json: async () => ({ endpoint: '/api/forms/key' }) } : { ok: false, status: 507 });
+  const refused = formOf({ action: '' });
+  await p.submit(refused);
+  assert.equal(refused.note, 'The form could not be sent.');
+  p.ctx.fetch = async (url) => (url === '/sas-forms.json' ? { ok: true, json: async () => ({ endpoint: '/api/forms/key' }) } : Promise.reject(new Error('offline')));
+  await p.submit(formOf({ action: '' }));
+  assert.equal(told.length, 1, 'only the saved form told the page');
+});

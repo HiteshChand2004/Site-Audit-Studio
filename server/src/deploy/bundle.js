@@ -11,6 +11,7 @@ import { tempDir } from '../config/paths.js';
 import { outputRoot, reportOutputs } from '../recreate/export/fromIr.js';
 import { writeZip, ZIP_MAX_BYTES, ZIP_MAX_FILES } from '../recreate/export/zip.js';
 import { NEXT_ASSETS_DIR } from '../recreate/behavior/preserve/nextAssets.js';
+import { TRACKING_FILE, allowGoogleTag, injectTracking, trackingScript } from './tracking.js';
 
 export class DeployError extends Error {
   /** @param {string} message  safe to show @param {number} [status] */
@@ -52,9 +53,11 @@ async function listFiles(root) {
  * `extraFiles`: files added beside the copy's own (the content snapshot: { name on the site, file on disk }).
  * `formsEndpoint`: where the copy's forms send (Form entries: this website's address at Remastly), written into its
  * sas-forms.json; null leaves the copy's own setting as it is.
- * @param {{ dir: string, report: any, stack: string, redirects?: string | null, lastRedirects?: string | null, formsEndpoint?: string | null, extraFiles?: { name: string, file: string }[] }} o
+ * `tracking`: the website's Tracking & scripts (deploy/tracking.js); with a GA4 ID every page gets the tag (the result's
+ * `tracking` says how many, and what else it found); null or no ID leaves every page as it is.
+ * @param {{ dir: string, report: any, stack: string, redirects?: string | null, lastRedirects?: string | null, formsEndpoint?: string | null, extraFiles?: { name: string, file: string }[], tracking?: { ga4: string | null } | null }} o
  */
-export async function planDeploy({ dir, report, stack, redirects = null, lastRedirects = null, formsEndpoint = null, extraFiles = [] }) {
+export async function planDeploy({ dir, report, stack, redirects = null, lastRedirects = null, formsEndpoint = null, extraFiles = [], tracking = null }) {
   const out = reportOutputs(report)[stack];
   if (out?.status !== 'ready') throw new DeployError(`This copy has no finished ${stack} version to deploy.`);
   if (!STATIC_STACKS.has(stack)) {
@@ -91,10 +94,54 @@ export async function planDeploy({ dir, report, stack, redirects = null, lastRed
       entries[at] = /** @type {any} */ ({ name: 'sas-forms.json', content, size: content.length, store: false });
     }
   }
+  const tracked = tracking?.ga4 ? await withTracking(entries, tracking) : null;
   const bytes = entries.reduce((n, e) => n + e.size, 0);
   if (entries.length > ZIP_MAX_FILES) throw new DeployError(`This copy has ${entries.length} files; a deploy is limited to ${ZIP_MAX_FILES}.`, 413);
   if (bytes > ZIP_MAX_BYTES) throw new DeployError(`This copy is ${Math.round(bytes / 1048576)} MB; a deploy is limited to ${Math.round(ZIP_MAX_BYTES / 1048576)} MB.`, 413);
-  return { entries, bytes, files: entries.length, movedNextAssets: moveNext };
+  return { entries, bytes, files: entries.length, movedNextAssets: moveNext, tracking: tracked };
+}
+
+/** An entry with new content in place of its file (the copy's own file is never changed). */
+const contentEntry = (/** @type {string} */ name, /** @type {string} */ text) => {
+  const content = Buffer.from(text);
+  return /** @type {any} */ ({ name, content, size: content.length, store: false });
+};
+const entryText = (/** @type {any} */ e) => (e.content ? Promise.resolve(e.content.toString('utf8')) : readFile(e.file, 'utf8'));
+
+/**
+ * The website's tracking (Go live → Tracking & scripts, deploy/tracking.js) on every page of the deploy, its setup file, and
+ * Google's hosts in the site's security policy when it has one. Changes the entries in place.
+ * @param {any[]} entries
+ * @param {{ ga4: string }} tracking
+ * @returns {Promise<{ ga4: string, pages: number, removed: number, configSet: number, formGuards: number, otherIds: { page: string, ids: string[] }[], policy: boolean }>}
+ */
+async function withTracking(entries, tracking) {
+  const out = { ga4: tracking.ga4, pages: 0, removed: 0, configSet: 0, formGuards: 0, otherIds: /** @type {{ page: string, ids: string[] }[]} */ ([]), policy: false };
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (!/\.html?$/i.test(e.name)) continue;
+    const page = injectTracking(await entryText(e), tracking);
+    out.pages++;
+    out.removed += page.removed;
+    out.configSet += page.configSet;
+    if (page.formGuard) out.formGuards++;
+    if (page.otherIds.length) out.otherIds.push({ page: e.name, ids: page.otherIds });
+    if (page.changed) entries[i] = contentEntry(e.name, page.html);
+  }
+  const setup = contentEntry(TRACKING_FILE, trackingScript(tracking.ga4));
+  const at = entries.findIndex((e) => e.name === TRACKING_FILE);
+  if (at >= 0) entries[at] = setup;
+  else entries.push(setup);
+  const h = entries.findIndex((e) => e.name === '_headers');
+  if (h >= 0) {
+    const text = await entryText(entries[h]);
+    const next = allowGoogleTag(text);
+    if (next !== text) {
+      entries[h] = contentEntry('_headers', next);
+      out.policy = true;
+    }
+  }
+  return out;
 }
 
 /**
